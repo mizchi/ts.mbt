@@ -1,6 +1,7 @@
 // JSDoc parser white-box tests.
 
-using @test { assert_eq }
+///|
+using @test {assert_eq}
 
 ///|
 test "jsdoc: plain `/* */` returns None" {

@@ -37,12 +37,12 @@ fn mbti_js_link_find_matching(
 fn parse_mbti_public_function_name(
   line : String,
 ) -> String? raise MbtiJsLinkConfigError {
-  let trimmed = line.trim().to_string()
+  let trimmed = line.trim().to_owned()
   let mut rest = match trimmed {
     _ if trimmed.has_prefix("pub async fn") =>
-      trimmed["pub async fn".length():trimmed.length()].to_string()
+      trimmed["pub async fn".length():trimmed.length()].to_owned()
     _ if trimmed.has_prefix("pub fn") =>
-      trimmed["pub fn".length():trimmed.length()].to_string()
+      trimmed["pub fn".length():trimmed.length()].to_owned()
     _ => return None
   }
   if rest == "" {
@@ -50,7 +50,7 @@ fn parse_mbti_public_function_name(
   }
   if rest.has_prefix("[") {
     match mbti_js_link_find_matching(rest, 0, '[', ']') {
-      Some(close_idx) => rest = rest[close_idx + 1:rest.length()].to_string()
+      Some(close_idx) => rest = rest[close_idx + 1:rest.length()].to_owned()
       None =>
         raise MbtiJsLinkConfigError::ParseError(
           "unclosed type parameter list in mbti function: \{trimmed}",
@@ -64,7 +64,7 @@ fn parse_mbti_public_function_name(
   }
   match rest.find("(") {
     Some(open_idx) if open_idx >= name_start => {
-      let raw_name = rest[name_start:open_idx].trim().to_string()
+      let raw_name = rest[name_start:open_idx].trim().to_owned()
       if raw_name == "" {
         raise MbtiJsLinkConfigError::ParseError(
           "missing function name in mbti declaration: \{trimmed}",
@@ -89,7 +89,7 @@ fn collect_mbti_public_free_function_names(
 ) -> Array[String] raise MbtiJsLinkConfigError {
   let names : Array[String] = []
   for line in source.split("\n") {
-    match parse_mbti_public_function_name(line.to_string()) {
+    match parse_mbti_public_function_name(line.to_owned()) {
       Some(name) => if !names.contains(name) { names.push(name) }
       None => ()
     }

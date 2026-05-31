@@ -241,7 +241,6 @@ fn Lexer::peek_next(self : Lexer) -> Char? {
   }
 }
 
-
 ///|
 // / statement
 fn Lexer::advance(self : Lexer) -> Char? {

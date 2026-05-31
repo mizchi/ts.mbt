@@ -1,4 +1,3 @@
-
 ///|
 let resolver_base_path : String = "fixtures/resolver/project/src/app.ts"
 

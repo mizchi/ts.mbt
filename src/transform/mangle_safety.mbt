@@ -75,12 +75,12 @@ pub fn collect_externally_visible_props(
     // reference them by their desugared names. Exclude them from the
     // escaped-property set so the property mangler can still shorten them
     // even when the containing object is transitively exported.
-    if not(is_internal_marker_prop(k)) {
+    if !(is_internal_marker_prop(k)) {
       reserved[k] = true
     }
   }
   for k in reserved_obs.keys() {
-    if not(is_internal_marker_prop(k)) {
+    if !(is_internal_marker_prop(k)) {
       reserved[k] = true
     }
   }
@@ -202,7 +202,7 @@ fn collect_props_on_external_stmt(
       if is_external_chain(t, externals) {
         match idx {
           StringLit(s) => out[s] = true
-          _ => if not(is_known_numeric) { out["*"] = true }
+          _ => if !(is_known_numeric) { out["*"] = true }
         }
       }
       collect_props_on_external_expr(t, externals, out, numeric_names)
@@ -385,7 +385,7 @@ fn collect_props_on_external_expr(
       if is_external_chain(recv, externals) {
         match idx {
           StringLit(s) => out[s] = true
-          _ => if not(is_known_numeric) { out["*"] = true }
+          _ => if !(is_known_numeric) { out["*"] = true }
         }
       }
       collect_props_on_external_expr(recv, externals, out, numeric_names)
@@ -418,7 +418,7 @@ fn collect_props_on_external_expr(
       if is_external_chain(recv, externals) {
         match idx {
           StringLit(s) => out[s] = true
-          _ => if not(is_known_numeric) { out["*"] = true }
+          _ => if !(is_known_numeric) { out["*"] = true }
         }
       }
       collect_props_on_external_expr(recv, externals, out, numeric_names)
@@ -653,7 +653,7 @@ fn collect_reflection_sinks_expr(
             // and use the wildcard for anything dynamic.
             for a in args {
               collect_object_literal_keys(a, out)
-              if not(arg_is_literal_or_known(a)) {
+              if !(arg_is_literal_or_known(a)) {
                 out["*"] = true
               }
             }

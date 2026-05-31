@@ -25,7 +25,7 @@ pub fn type_fold_block(block : @ast.TsBlock) -> @ast.TsBlock {
   // checks, or a switch on a literal-string union. If none of those
   // are present, the full recursive walk would do nothing useful;
   // skip it and avoid the cost on bundles that don't need it.
-  if not(block_needs_type_fold(block)) {
+  if !(block_needs_type_fold(block)) {
     return block
   }
   let scope : Map[String, @ast.TsType] = {}
@@ -834,7 +834,7 @@ fn try_typeof_fold(
   let equal = actual == lit
   match op {
     BinEq | AbstractEq => Some(equal)
-    BinNe | AbstractNe => Some(not(equal))
+    BinNe | AbstractNe => Some(!(equal))
     _ => None
   }
 }
@@ -900,7 +900,7 @@ fn drop_exhaustive_default(
     }
   }
   for l in literals {
-    if not(covered.contains(l)) {
+    if !(covered.contains(l)) {
       return cases
     }
   }
@@ -934,7 +934,7 @@ fn try_null_check_fold(
       let is_equal = rhs_kind == "undefined"
       return match op {
         BinEq | AbstractEq => Some(is_equal)
-        BinNe | AbstractNe => Some(not(is_equal))
+        BinNe | AbstractNe => Some(!(is_equal))
         _ => None
       }
     }

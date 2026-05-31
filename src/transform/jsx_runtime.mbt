@@ -158,7 +158,7 @@ pub fn extract_jsx_pragmas(source : String, base : JsxConfig) -> JsxConfig {
 fn apply_pragmas_from_text(text : String, cfg : JsxConfig) -> JsxConfig {
   let mut out = cfg
   for raw_line in text.split("\n") {
-    let line_str = raw_line.to_string()
+    let line_str = raw_line.to_owned()
     let trimmed = trim_jsdoc_line(line_str)
     match read_pragma(trimmed, "@jsxRuntime") {
       Some(v) => out = out.with_runtime(v)
@@ -186,9 +186,9 @@ fn apply_pragmas_from_text(text : String, cfg : JsxConfig) -> JsxConfig {
 /// Strip a leading `*` and surrounding whitespace from a JSDoc-style
 /// comment line.
 fn trim_jsdoc_line(line : String) -> String {
-  let t = line.trim().to_string()
+  let t = line.trim().to_owned()
   if t.has_prefix("*") {
-    t.substring(start=1, end=t.length()).to_string().trim().to_string()
+    t.substring(start=1, end=t.length()).to_string().trim().to_owned()
   } else {
     t
   }
@@ -212,13 +212,13 @@ fn read_pragma(line : String, pragma_name : String) -> String? {
   if head != ' ' && head != '\t' {
     return None
   }
-  let value = rest.trim().to_string()
+  let value = rest.trim().to_owned()
   if value.length() == 0 {
     return None
   }
   // Take the first whitespace-delimited token.
   match value.find(" ") {
-    Some(idx) => Some(value.substring(start=0, end=idx).to_string())
+    Some(idx) => Some(value.[0:idx].to_owned())
     None => Some(value)
   }
 }

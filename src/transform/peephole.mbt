@@ -299,7 +299,7 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
       let ep = peep_expr(e, ctx)
       // `return undefined` / `return void 0` → `return` (saves bytes).
       match ep {
-        Var("undefined") if not(ctx.undefined_shadowed) => Return(None)
+        Var("undefined") if !(ctx.undefined_shadowed) => Return(None)
         UnaryOp(@ast.TsUnaryOp::Void, _) => Return(None)
         _ => Return(Some(ep))
       }
@@ -521,7 +521,7 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
             Some(Return(_)) | Some(Throw(_)) => true
             _ => false
           }
-          let is_non_fall_through = not(has_bare_break) && last_is_terminator
+          let is_non_fall_through = !(has_bare_break) && last_is_terminator
           if is_non_fall_through {
             let if_stmt = peep_stmt(
               If(BinOp(@ast.TsBinOp::BinEq, ep, case_e), case_body, None),
@@ -541,7 +541,7 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
             Some(Return(_)) | Some(Throw(_)) => true
             _ => false
           }
-          let is_non_fall_through = not(has_bare_break2) && last_is_term2
+          let is_non_fall_through = !(has_bare_break2) && last_is_term2
           if is_non_fall_through {
             let if_stmt = peep_stmt(
               If(
@@ -1029,7 +1029,7 @@ fn peep_decl_rhs(
         ret,
         @ast.TsArrowBody::ArrowBlock(blk),
         is_async
-      ) if not(block_uses_super(blk) || block_uses_this(blk)) =>
+      ) if !(block_uses_super(blk) || block_uses_this(blk)) =>
         @ast.TsExpr::FuncExpr({
           name: "",
           type_params: [],
@@ -1197,7 +1197,7 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       // evaluates to the same value in 2 fewer bytes than the
       // identifier reference, with the bonus that it can't be
       // shadowed by a local binding to something else.
-      if name == "undefined" && not(ctx.undefined_shadowed) {
+      if name == "undefined" && !(ctx.undefined_shadowed) {
         UnaryOp(Void, IntLit(0))
       } else {
         expr
@@ -1495,7 +1495,7 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
             BinOp(@ast.TsBinOp::AbstractNe, check_x, NullLit) => {
               let is_void_else = match e_val {
                 UnaryOp(@ast.TsUnaryOp::Void, _) => true
-                Var("undefined") if not(ctx.undefined_shadowed) => true
+                Var("undefined") if !(ctx.undefined_shadowed) => true
                 _ => false
               }
               if exprs_eq(check_x, t_val) {
@@ -1534,7 +1534,7 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
             BinOp(@ast.TsBinOp::AbstractEq, check_x, NullLit) => {
               let is_void_then = match t_val {
                 UnaryOp(@ast.TsUnaryOp::Void, _) => true
-                Var("undefined") if not(ctx.undefined_shadowed) => true
+                Var("undefined") if !(ctx.undefined_shadowed) => true
                 _ => false
               }
               if exprs_eq(check_x, e_val) {
@@ -1830,7 +1830,7 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         let is_null_this = match new_args[0] {
           @ast.TsExpr::NullLit => true
           @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _) => true
-          @ast.TsExpr::Var("undefined") if not(ctx.undefined_shadowed) => true
+          @ast.TsExpr::Var("undefined") if !(ctx.undefined_shadowed) => true
           _ => false
         }
         if is_null_this {
@@ -1850,7 +1850,7 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         let is_null_this = match new_args[0] {
           @ast.TsExpr::NullLit => true
           @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _) => true
-          @ast.TsExpr::Var("undefined") if not(ctx.undefined_shadowed) => true
+          @ast.TsExpr::Var("undefined") if !(ctx.undefined_shadowed) => true
           _ => false
         }
         if is_null_this {
@@ -1874,7 +1874,7 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         @ast.TsExpr::Var("super") => true
         _ => false
       }
-      if m == "toString" && new_args.length() == 0 && not(is_super_recv) {
+      if m == "toString" && new_args.length() == 0 && !(is_super_recv) {
         return BinOp(@ast.TsBinOp::Add, StringLit(""), recv_p)
       }
       MethodCall(recv_p, m, new_args)
@@ -2041,11 +2041,11 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       // `try_emit_function_decl` from emitting a real function declaration
       // and break forward references.  Also guard against empty-body
       // functions used as constructor bases (arrows lack `.prototype`).
-      let can_arrow = not(f.is_generator) &&
+      let can_arrow = !(f.is_generator) &&
         f.name == "" &&
-        not(folded.stmts.is_empty()) &&
-        not(block_references_name(folded, "this")) &&
-        not(block_references_name(folded, "arguments"))
+        !(folded.stmts.is_empty()) &&
+        !(block_references_name(folded, "this")) &&
+        !(block_references_name(folded, "arguments"))
       if can_arrow {
         let arrow_body = match folded.stmts {
           [Return(Some(inner))] => @ast.TsArrowBody::ArrowExpr(inner)

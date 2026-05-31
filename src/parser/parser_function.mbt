@@ -491,15 +491,11 @@ fn translate_jsdoc_function_type(s : String) -> String? {
       } else if c == ')' || c == '>' || c == ']' || c == '}' {
         depth2 = depth2 - 1
       } else if c == ',' && depth2 == 0 {
-        params.push(
-          params_str[start2:j].to_owned().trim().to_owned(),
-        )
+        params.push(params_str[start2:j].to_owned().trim().to_owned())
         start2 = j + 1
       }
     }
-    params.push(
-      params_str[start2:].to_owned().trim().to_owned(),
-    )
+    params.push(params_str[start2:].to_owned().trim().to_owned())
   }
   // Build `(_0: P0, _1: P1, ...) => R`.
   let mut ts_params = ""
@@ -1480,8 +1476,6 @@ fn Parser::skip_until_semicolon(self : Parser) -> Unit {
     }
   }
 }
-
-
 
 ///|
 fn type_alias_object_fields_to_interface(

@@ -408,7 +408,7 @@ async fn mtsc_load_bundle_files(
           namespaces: [],
           enums: [],
           module_augmentations: [],
-    top_level_stmts: [],
+          top_level_stmts: [],
         }
     }
     for n in @transform.type_declared_property_names(module_) {
@@ -604,7 +604,7 @@ async fn main {
           namespaces: [],
           enums: [],
           module_augmentations: [],
-    top_level_stmts: [],
+          top_level_stmts: [],
         })
         let local_names : Array[String] = []
         for ex in block.exports {
@@ -703,7 +703,7 @@ async fn main {
             namespaces: [],
             enums: [],
             module_augmentations: [],
-    top_level_stmts: [],
+            top_level_stmts: [],
           })
           // Filter exports through the entry's `@internal` set so
           // anything tagged `/** @internal */` is invisible to

@@ -908,7 +908,12 @@ fn Resolver::lookup_field_core(
             _ => None
           }
       } noraise {
-        idx => if idx >= 0 && idx < items.length() { Some(items[idx]) } else { None }
+        idx =>
+          if idx >= 0 && idx < items.length() {
+            Some(items[idx])
+          } else {
+            None
+          }
       }
     String_ | Literal(_) => string_prototype_member(field)
     // Field access on a union is only safe when *every* member
@@ -2482,8 +2487,7 @@ fn infer_expr(
       }
       // Nullable receiver: strip null/undefined members and retry so
       // `(arr | null).map(...)` still resolves the method return type.
-      match
-        resolver.lookup_method_sig(prune_nullish(resolver, recv_ty), meth) {
+      match resolver.lookup_method_sig(prune_nullish(resolver, recv_ty), meth) {
         Some((_params, ret)) => {
           for a in args {
             let _ = infer_expr(env, resolver, a)
@@ -4883,7 +4887,6 @@ fn narrow_keep(ty : @ast.TsType, pred : (@ast.TsType) -> Bool) -> @ast.TsType {
   union_of(kept)
 }
 
-
 ///|
 fn type_eq(a : @ast.TsType, b : @ast.TsType) -> Bool {
   a == b
@@ -5475,7 +5478,12 @@ fn index_into_type(
         try @string.parse_int(inner) catch {
           _ => return @ast.TsType::Any
         } noraise {
-          i => if i >= 0 && i < items.length() { return items[i] } else { return @ast.TsType::Any }
+          i =>
+            if i >= 0 && i < items.length() {
+              return items[i]
+            } else {
+              return @ast.TsType::Any
+            }
         }
       _ => return @ast.TsType::Any
     }
@@ -6451,8 +6459,17 @@ fn check_call_args_in_expr(
       let inferred = infer_expr(env, ctx.resolver, inner)
       let concrete = fn(t : @ast.TsType) -> Bool {
         match t {
-          Number | String_ | Boolean | BigInt | Null | Undefined | Void
-          | Never | NumberLiteral(_) | BooleanLiteral(_) | Literal(_)
+          Number
+          | String_
+          | Boolean
+          | BigInt
+          | Null
+          | Undefined
+          | Void
+          | Never
+          | NumberLiteral(_)
+          | BooleanLiteral(_)
+          | Literal(_)
           | BigIntLiteral(_) => true
           _ => false
         }

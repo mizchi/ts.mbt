@@ -166,20 +166,20 @@ fn parse_moonbit_namespace_import_line(line : String) -> (String, String)? {
   if part_list.length() != 2 {
     return None
   }
-  let ns_alias = part_list[0][prefix.length():].trim().to_string()
+  let ns_alias = part_list[0][prefix.length():].trim().to_owned()
   if ns_alias == "" {
     return None
   }
-  let mut module_spec = part_list[1].trim().to_string()
+  let mut module_spec = part_list[1].trim().to_owned()
   if module_spec.has_suffix(";") {
-    module_spec = module_spec[:module_spec.length() - 1].to_string()
+    module_spec = module_spec[:module_spec.length() - 1].to_owned()
   }
   if module_spec.length() >= 2 &&
     (
       (module_spec.has_prefix("\"") && module_spec.has_suffix("\"")) ||
       (module_spec.has_prefix("'") && module_spec.has_suffix("'"))
     ) {
-    module_spec = module_spec[1:module_spec.length() - 1].to_string()
+    module_spec = module_spec[1:module_spec.length() - 1].to_owned()
   }
   if module_spec == "" {
     return None
@@ -189,7 +189,7 @@ fn parse_moonbit_namespace_import_line(line : String) -> (String, String)? {
 
 ///|
 fn parse_named_type_import_line(line : String) -> (Array[String], String)? {
-  let trimmed = line.trim().to_string()
+  let trimmed = line.trim().to_owned()
   let prefix = "import type {"
   if !trimmed.has_prefix(prefix) {
     return None
@@ -201,30 +201,30 @@ fn parse_named_type_import_line(line : String) -> (Array[String], String)? {
   if part_list.length() != 2 {
     return None
   }
-  let names_src = part_list[0][prefix.length():].trim().to_string()
+  let names_src = part_list[0][prefix.length():].trim().to_owned()
   if !names_src.has_suffix("}") {
     return None
   }
-  let raw_names = names_src[:names_src.length() - 1].trim().to_string()
+  let raw_names = names_src[:names_src.length() - 1].trim().to_owned()
   let names : Array[String] = []
   if raw_names != "" {
     for part in raw_names.split(",") {
-      let name = part.trim().to_string()
+      let name = part.trim().to_owned()
       if name != "" && !names.contains(name) {
         names.push(name)
       }
     }
   }
-  let mut module_spec = part_list[1].trim().to_string()
+  let mut module_spec = part_list[1].trim().to_owned()
   if module_spec.has_suffix(";") {
-    module_spec = module_spec[:module_spec.length() - 1].to_string()
+    module_spec = module_spec[:module_spec.length() - 1].to_owned()
   }
   if module_spec.length() >= 2 &&
     (
       (module_spec.has_prefix("\"") && module_spec.has_suffix("\"")) ||
       (module_spec.has_prefix("'") && module_spec.has_suffix("'"))
     ) {
-    module_spec = module_spec[1:module_spec.length() - 1].to_string()
+    module_spec = module_spec[1:module_spec.length() - 1].to_owned()
   }
   if module_spec == "" {
     return None
@@ -262,7 +262,7 @@ fn collect_moonbit_namespace_imports(
 ///|
 fn has_prefix_at(source : String, prefix : String, start : Int) -> Bool {
   start + prefix.length() <= source.length() &&
-  source[start:start + prefix.length()].to_string() == prefix
+  source[start:start + prefix.length()].to_owned() == prefix
 }
 
 ///|
@@ -304,13 +304,13 @@ fn split_top_level_type_args(source : String) -> Array[String] {
       '{' => brace += 1
       '}' => brace -= 1
       ',' if angle == 0 && paren == 0 && bracket == 0 && brace == 0 => {
-        args.push(source[start:i].trim().to_string())
+        args.push(source[start:i].trim().to_owned())
         start = i + 1
       }
       _ => ()
     }
   }
-  args.push(source[start:source.length()].trim().to_string())
+  args.push(source[start:source.length()].trim().to_owned())
   args
 }
 
@@ -341,7 +341,7 @@ fn compact_ascii_space(source : String) -> String {
       last_was_space = false
     }
   }
-  buf.to_string().trim().to_string()
+  buf.to_string().trim().to_owned()
 }
 
 ///|
@@ -370,9 +370,9 @@ fn strip_block_comments(source : String) -> String {
 
 ///|
 fn strip_leading_union_bar(source : String) -> String {
-  let trimmed = source.trim().to_string()
+  let trimmed = source.trim().to_owned()
   if trimmed.has_prefix("|") {
-    trimmed[1:trimmed.length()].trim().to_string()
+    trimmed[1:trimmed.length()].trim().to_owned()
   } else {
     trimmed
   }
@@ -444,7 +444,7 @@ fn dirname(path : String) -> String {
   let normalized = normalize_path(path)
   match normalized.rev_find("/") {
     Some(0) => "/"
-    Some(idx) => normalized[:idx].to_string()
+    Some(idx) => normalized[:idx].to_owned()
     None => "."
   }
 }
@@ -470,15 +470,15 @@ fn parse_export_type_alias_line(
   }
   match line.find("=") {
     Some(eq_idx) => {
-      let left = line[prefix.length():eq_idx].trim().to_string()
-      let mut right = line[eq_idx + 1:line.length()].trim().to_string()
+      let left = line[prefix.length():eq_idx].trim().to_owned()
+      let mut right = line[eq_idx + 1:line.length()].trim().to_owned()
       if right.has_suffix(";") {
-        right = right[:right.length() - 1].trim().to_string()
+        right = right[:right.length() - 1].trim().to_owned()
       }
       match left.find("<") {
         Some(lt_idx) if left.has_suffix(">") => {
-          let name = left[:lt_idx].trim().to_string()
-          let params_src = left[lt_idx + 1:left.length() - 1].to_string()
+          let name = left[:lt_idx].trim().to_owned()
+          let params_src = left[lt_idx + 1:left.length() - 1].to_owned()
           let params = split_top_level_type_args(params_src)
           Some((name, params, right))
         }
@@ -500,7 +500,7 @@ fn collect_export_type_alias_blocks(source : String) -> Array[String] {
   let mut angle_depth = 0
   for line_view in source.split("\n") {
     let line = line_view.to_string()
-    let trimmed = line.trim().to_string()
+    let trimmed = line.trim().to_owned()
     if !collecting {
       if trimmed.has_prefix("export type ") {
         current.push(line)
@@ -587,7 +587,7 @@ fn collect_export_interface_blocks(source : String) -> Array[String] {
   let mut seen_open = false
   for line_view in source.split("\n") {
     let line = line_view.to_string()
-    let trimmed = line.trim().to_string()
+    let trimmed = line.trim().to_owned()
     if !collecting {
       if trimmed.has_prefix("export interface ") {
         current.push(line)
@@ -665,7 +665,7 @@ fn normalize_object_type_body(source : String) -> String {
 fn render_intersection_types(parts : Array[String]) -> String {
   let normalized_parts : Array[String] = []
   for part in parts {
-    let trimmed = part.trim().to_string()
+    let trimmed = part.trim().to_owned()
     if trimmed != "" && !normalized_parts.contains(trimmed) {
       normalized_parts.push(trimmed)
     }
@@ -692,12 +692,12 @@ fn parse_export_interface_block(block : String) -> InterfaceExpansion? {
             .trim()
             .to_string()
           let body = normalize_object_type_body(
-            normalized[open_idx:close_idx + 1].to_string(),
+            normalized[open_idx:close_idx + 1].to_owned(),
           )
           let extends_keyword = " extends "
           let (header, extends_refs) = match header_src.find(extends_keyword) {
             Some(extends_idx) => {
-              let base_header = header_src[:extends_idx].trim().to_string()
+              let base_header = header_src[:extends_idx].trim().to_owned()
               let parents_src = header_src[extends_idx +
                 extends_keyword.length():header_src.length()]
                 .trim()
@@ -713,8 +713,8 @@ fn parse_export_interface_block(block : String) -> InterfaceExpansion? {
           }
           match header.find("<") {
             Some(lt_idx) if header.has_suffix(">") => {
-              let name = header[:lt_idx].trim().to_string()
-              let params_src = header[lt_idx + 1:header.length() - 1].to_string()
+              let name = header[:lt_idx].trim().to_owned()
+              let params_src = header[lt_idx + 1:header.length() - 1].to_owned()
               let params = split_top_level_type_args(params_src)
               Some({ name, type_params: params, extends_refs, body })
             }
@@ -778,7 +778,7 @@ fn expand_known_alias_refs(
     if end_ < source.length() && char_at(source, end_) == '<' {
       match find_matching_type_args_end(source, end_) {
         Some(args_end) => {
-          let args_src = source[end_ + 1:args_end - 1].to_string()
+          let args_src = source[end_ + 1:args_end - 1].to_owned()
           let normalized_args : Array[String] = []
           for arg in split_top_level_type_args(args_src) {
             normalized_args.push(expand_known_alias_refs(arg, rules))
@@ -997,7 +997,7 @@ fn replace_prefixed_type_refs(
     if after_name < source.length() && char_at(source, after_name) == '<' {
       match find_matching_type_args_end(source, after_name) {
         Some(end_) => {
-          let args_src = source[after_name + 1:end_ - 1].to_string()
+          let args_src = source[after_name + 1:end_ - 1].to_owned()
           let normalized_args : Array[String] = []
           for arg in split_top_level_type_args(args_src) {
             normalized_args.push(

@@ -399,13 +399,13 @@ fn binding_carries_nested_values(sym : Symbol) -> Bool {
     match d.init {
       Some(@ast.TsExpr::ObjectLit(entries)) =>
         for ent in entries {
-          if not(is_leaf_value(ent.1)) {
+          if !(is_leaf_value(ent.1)) {
             return true
           }
         }
       Some(@ast.TsExpr::ArrayLit(items)) =>
         for it in items {
-          if not(is_leaf_value(it)) {
+          if !(is_leaf_value(it)) {
             return true
           }
         }

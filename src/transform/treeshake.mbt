@@ -189,7 +189,7 @@ fn treeshake_flat_block(block : @ast.TsBlock) -> @ast.TsBlock {
       // Drop pure-expression statements at the root level — they
       // have no observable effect even though they aren't decls.
       match stmt {
-        Expr(e) => not(is_pure_init(e))
+        Expr(e) => !(is_pure_init(e))
         _ => true
       }
     }
@@ -221,7 +221,7 @@ fn is_pure_init(expr : @ast.TsExpr) -> Bool {
     | NativeClassExpr(_, _) => true
     ArrayLit(items) => {
       for e in items {
-        if not(is_pure_init(e)) {
+        if !(is_pure_init(e)) {
           return false
         }
       }
@@ -229,7 +229,7 @@ fn is_pure_init(expr : @ast.TsExpr) -> Bool {
     }
     ObjectLit(entries) => {
       for ent in entries {
-        if not(is_pure_init(ent.1)) {
+        if !(is_pure_init(ent.1)) {
           return false
         }
       }
@@ -245,7 +245,7 @@ fn is_pure_init(expr : @ast.TsExpr) -> Bool {
     // is pure (the tag-less form just concatenates strings).
     TemplateLiteral(_, exprs) => {
       for e in exprs {
-        if not(is_pure_init(e)) {
+        if !(is_pure_init(e)) {
           return false
         }
       }

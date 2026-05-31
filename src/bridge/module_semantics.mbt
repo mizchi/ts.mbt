@@ -618,7 +618,7 @@ fn scaffold_unsupported_decl_note_text(note : String) -> String? {
   if !note.has_prefix(prefix) {
     return None
   }
-  let body = note[prefix.length():].to_string()
+  let body = note[prefix.length():].to_owned()
   if body.contains("ambiguous re-export") {
     return None
   }
@@ -628,8 +628,8 @@ fn scaffold_unsupported_decl_note_text(note : String) -> String? {
   }
   match body.find(": ") {
     Some(idx) => {
-      let export_name = body[:idx].to_string()
-      let reason = body[idx + 2:].to_string()
+      let export_name = body[:idx].to_owned()
+      let reason = body[idx + 2:].to_owned()
       Some("\{export_name} (\{reason})")
     }
     None => Some(body)

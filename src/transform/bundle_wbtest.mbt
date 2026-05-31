@@ -1033,7 +1033,7 @@ test "@internal: tagged exports vanish from the published .d.ts" {
   let module_ = @parser.parse_module_from_source_with_const_values(src, {})
   let local : Array[String] = []
   for ex in block.exports {
-    if not(block.internal_names.contains(ex.local_name)) {
+    if !(block.internal_names.contains(ex.local_name)) {
       local.push(ex.local_name)
     }
   }
@@ -1762,7 +1762,7 @@ test "iife_class_lift: closure var referencing class name emitted after class (#
       let parts = out.js.split("class Foo").collect()
       if parts.length() >= 2 {
         // The part before "class Foo" must not contain "_proto".
-        assert_false(parts[0].to_string().contains("_proto"))
+        assert_false(parts[0].to_owned().contains("_proto"))
       }
     }
     Err(e) => fail("bundle error: \{e}")

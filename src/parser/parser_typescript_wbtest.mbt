@@ -1,6 +1,5 @@
 // test
 
-
 ///|
 /// Convert interface to JSON format matching TypeScript oracle output
 fn interface_to_json(iface : @ast.TsInterface) -> String {
@@ -672,7 +671,9 @@ async test "checker: smoke-run against TypeScript conformance test corpus" {
       // accordingly — using `from_source` would default `allow_jsx = true`
       // and reject the cast.
       let allow_jsx = path.has_suffix(".tsx")
-      let module_ = try Parser::from_source_with_jsx(content, allow_jsx).parse_module() catch {
+      let module_ = try
+        Parser::from_source_with_jsx(content, allow_jsx).parse_module()
+      catch {
         err => {
           parse_failures.push(path + ": \{err}")
           continue
@@ -764,7 +765,9 @@ async test "parser: smoke-run against the entire TypeScript repo source" {
       None => "(root)"
     }
     let prev = per_dir.get(bucket).unwrap_or((0, 0))
-    let module_ = try Parser::from_source_with_jsx(content, false).parse_module() catch {
+    let module_ = try
+      Parser::from_source_with_jsx(content, false).parse_module()
+    catch {
       err => {
         parse_failures.push(path + ": \{err}")
         per_dir[bucket] = (prev.0 + 1, prev.1)
@@ -856,7 +859,9 @@ async test "parser: smoke-run against the TypeScript compiler source" {
     total += 1
     let path = dir + "/" + name
     let content = @fs.read_file(path).text() catch { _ => continue }
-    let module_ = try Parser::from_source_with_jsx(content, false).parse_module() catch {
+    let module_ = try
+      Parser::from_source_with_jsx(content, false).parse_module()
+    catch {
       err => {
         parse_failures.push(name + ": \{err}")
         continue

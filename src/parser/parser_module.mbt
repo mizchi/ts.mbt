@@ -54,7 +54,6 @@ fn Parser::next_temp(self : Parser, prefix : String) -> String {
   prefix + idx.to_string()
 }
 
-
 ///|
 /// Same as `parse_named_imports`, but additionally reports whether each
 /// specifier was prefixed with `type` (`import { type X, Y }`). The two
@@ -620,10 +619,12 @@ fn Parser::parse_namespace_decl_with_mode(
           body_source,
           self.allow_jsx,
         )
-        try runtime_parser.parse_module_with_seeded_const_values_internal(
-          {},
-          false,
-        ) catch {
+        try
+          runtime_parser.parse_module_with_seeded_const_values_internal(
+            {},
+            false,
+          )
+        catch {
           _ => {
             let ambient_parser = Parser::from_source_with_jsx(
               body_source,

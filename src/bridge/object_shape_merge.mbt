@@ -75,7 +75,7 @@ fn object_shape_compact_ascii_space(source : String) -> String {
       last_was_space = false
     }
   }
-  buf.to_string().trim().to_string()
+  buf.to_string().trim().to_owned()
 }
 
 ///|
@@ -119,19 +119,19 @@ fn object_shape_split_top_level_by_char(
       _ => ()
     }
     if c == delimiter && angle == 0 && paren == 0 && bracket == 0 && brace == 0 {
-      parts.push(source[start:i].trim().to_string())
+      parts.push(source[start:i].trim().to_owned())
       start = i + 1
     }
   }
-  parts.push(source[start:source.length()].trim().to_string())
+  parts.push(source[start:source.length()].trim().to_owned())
   parts
 }
 
 ///|
 fn object_shape_trim_object_type_body(source : String) -> String {
-  let trimmed = source.trim().to_string()
+  let trimmed = source.trim().to_owned()
   if trimmed.has_prefix("{") && trimmed.has_suffix("}") && trimmed.length() >= 2 {
-    trimmed[1:trimmed.length() - 1].trim().to_string()
+    trimmed[1:trimmed.length() - 1].trim().to_owned()
   } else {
     trimmed
   }
@@ -139,9 +139,9 @@ fn object_shape_trim_object_type_body(source : String) -> String {
 
 ///|
 fn object_shape_strip_trailing_semicolon(source : String) -> String {
-  let trimmed = source.trim().to_string()
+  let trimmed = source.trim().to_owned()
   if trimmed.has_suffix(";") {
-    trimmed[:trimmed.length() - 1].trim().to_string()
+    trimmed[:trimmed.length() - 1].trim().to_owned()
   } else {
     trimmed
   }
@@ -171,7 +171,7 @@ fn object_shape_skip_leading_member_modifiers(source : String) -> Int {
 
 ///|
 fn object_shape_member_info(member_src : String) -> (String, Bool)? {
-  let trimmed = member_src.trim().to_string()
+  let trimmed = member_src.trim().to_owned()
   if trimmed == "" {
     return None
   }
@@ -210,13 +210,13 @@ fn can_merge_object_shapes(bodies : Array[String]) -> Bool {
   let seen_members : Array[String] = []
   let seen_property_members : Array[Bool] = []
   for body in bodies {
-    let trimmed = body.trim().to_string()
+    let trimmed = body.trim().to_owned()
     if !trimmed.has_prefix("{") || !trimmed.has_suffix("}") {
       return false
     }
     let inner = object_shape_trim_object_type_body(trimmed)
     for member_src in object_shape_split_top_level_by_char(inner, ';') {
-      let normalized_member = member_src.trim().to_string()
+      let normalized_member = member_src.trim().to_owned()
       if normalized_member == "" {
         continue
       }

@@ -1803,9 +1803,7 @@ fn Parser::skip_jsx_braces_in_source(self : Parser, idx : Int) -> Int {
 ///|
 /// Returns the embedded `{expr}` sub-expressions so callers can wrap
 /// them in a `JsxElement(...)` AST node.
-fn Parser::parse_jsx_element_expr(
-  self : Parser,
-) -> @ast.TsExpr {
+fn Parser::parse_jsx_element_expr(self : Parser) -> @ast.TsExpr {
   if self.src.length() == 0 {
     self.skip_jsx_element_tokens()
     return @ast.TsExpr::JsxElement("", [], [])
