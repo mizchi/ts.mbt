@@ -31,6 +31,184 @@ fn is_array_like_iterable_name(name : String) -> Bool {
 }
 
 ///|
+// Position of the single `Rest(...)` element inside a tuple, if any. TS
+// allows at most one variadic element per tuple type (e.g. `[A, ...B[], C]`).
+fn tuple_rest_index(items : Array[@ast.TsType]) -> Int? {
+  for i in 0..<items.length() {
+    match items[i] {
+      Rest(_) => return Some(i)
+      _ => ()
+    }
+  }
+  None
+}
+
+///|
+// Element type a variadic tuple slot iterates over. `Rest(Array(T))` and
+// `Rest(Tuple(...))` are the parser shapes; we strip the outer `Rest` and
+// (for arrays) one level of element wrapping. Returns `None` when the
+// inner shape is not a plain array — in that case we can't widen middle
+// elements against it.
+fn rest_element_type(t : @ast.TsType) -> @ast.TsType? {
+  match t {
+    Rest(Array(inner)) => Some(inner)
+    Rest(Applied(name, [inner])) =>
+      if is_array_like_iterable_name(name) || name == "Array" {
+        Some(inner)
+      } else {
+        None
+      }
+    _ => None
+  }
+}
+
+///|
+// TS tuple assignability with variadic-element support. The variadic
+// element may appear at any single position in either tuple; we handle
+// the common cases by aligning the fixed prefix/suffix of both sides and
+// distributing leftover source elements against the target's rest slot.
+fn tuple_assignable(
+  s_items : Array[@ast.TsType],
+  t_items : Array[@ast.TsType],
+  bivariant_params : Bool,
+) -> Bool {
+  let s_rest = tuple_rest_index(s_items)
+  let t_rest = tuple_rest_index(t_items)
+  match (s_rest, t_rest) {
+    (None, None) => {
+      if s_items.length() != t_items.length() {
+        return false
+      }
+      for i in 0..<s_items.length() {
+        if !is_assignable_to_inner(s_items[i], t_items[i], bivariant_params) {
+          return false
+        }
+      }
+      true
+    }
+    (None, Some(ri)) => {
+      // Fixed-length source flowing into a variadic target slot.
+      let prefix = ri
+      let suffix = t_items.length() - ri - 1
+      if s_items.length() < prefix + suffix {
+        return false
+      }
+      for i in 0..<prefix {
+        if !is_assignable_to_inner(s_items[i], t_items[i], bivariant_params) {
+          return false
+        }
+      }
+      for i in 0..<suffix {
+        let s_idx = s_items.length() - suffix + i
+        let t_idx = ri + 1 + i
+        if !is_assignable_to_inner(
+            s_items[s_idx],
+            t_items[t_idx],
+            bivariant_params,
+          ) {
+          return false
+        }
+      }
+      match rest_element_type(t_items[ri]) {
+        Some(rest_inner) =>
+          for i in prefix..<(s_items.length() - suffix) {
+            if !is_assignable_to_inner(s_items[i], rest_inner, bivariant_params) {
+              return false
+            }
+          }
+        None =>
+          // Rest slot is not a plain array — only safe when no source
+          // elements need to be distributed into it.
+          if s_items.length() != prefix + suffix {
+            return false
+          }
+      }
+      true
+    }
+    (Some(ri), Some(rj)) => {
+      // Both sides variadic. Require matching prefix/suffix lengths and
+      // identical rest position so the existing pointwise rule applies.
+      if s_items.length() != t_items.length() || ri != rj {
+        return false
+      }
+      for i in 0..<s_items.length() {
+        if !is_assignable_to_inner(s_items[i], t_items[i], bivariant_params) {
+          return false
+        }
+      }
+      true
+    }
+    (Some(_), None) =>
+      // Variadic source flowing into a fixed target: source length is
+      // unknown at the type level, so we conservatively reject. Real TS
+      // would allow this when the variadic slot resolves to a fixed
+      // tuple, but the parser already flattens those.
+      false
+  }
+}
+
+///|
+// TS function-parameter arity rule: source may declare fewer parameters
+// than target (caller-side extras are simply ignored by the source
+// implementation). If source ends with a `Rest(...)` parameter, source
+// can absorb any number of trailing args ≥ its fixed prefix length.
+// Per-position variance is contravariant in strict mode, bivariant when
+// requested.
+fn func_params_assignable(
+  s_params : Array[@ast.TsType],
+  t_params : Array[@ast.TsType],
+  bivariant_params : Bool,
+) -> Bool {
+  let s_len = s_params.length()
+  let t_len = t_params.length()
+  let s_trailing_rest = s_len > 0 &&
+    (match s_params[s_len - 1] {
+      Rest(_) => true
+      _ => false
+    })
+  let s_fixed = if s_trailing_rest { s_len - 1 } else { s_len }
+  if s_trailing_rest {
+    if t_len < s_fixed {
+      return false
+    }
+  } else if t_len < s_len {
+    return false
+  }
+  let shared = if s_trailing_rest { t_len.min(s_fixed) } else { s_len }
+  fn variance_ok(a, b) {
+    if bivariant_params {
+      is_assignable_to_inner(a, b, bivariant_params) ||
+      is_assignable_to_inner(b, a, bivariant_params)
+    } else {
+      is_assignable_to_inner(b, a, bivariant_params)
+    }
+  }
+
+  for i in 0..<shared {
+    if !variance_ok(s_params[i], t_params[i]) {
+      return false
+    }
+  }
+  // Source has a trailing rest: target's tail params must each flow into
+  // the rest's element type (contravariantly). When the rest is not a
+  // plain array, only an exact-length match is safe.
+  if s_trailing_rest {
+    let rest_slot = s_params[s_len - 1]
+    let rest_elem = rest_element_type(rest_slot)
+    match rest_elem {
+      Some(elem) =>
+        for i in s_fixed..<t_len {
+          if !variance_ok(elem, t_params[i]) {
+            return false
+          }
+        }
+      None => if t_len != s_fixed { return false }
+    }
+  }
+  true
+}
+
+///|
 pub fn is_assignable_to_bivariant(
   source : @ast.TsType,
   target : @ast.TsType,
@@ -170,17 +348,8 @@ fn is_assignable_to_inner(
       } else {
         false
       }
-    (Tuple(s_items), Tuple(t_items)) => {
-      if s_items.length() != t_items.length() {
-        return false
-      }
-      for i in 0..<s_items.length() {
-        if !is_assignable_to_inner(s_items[i], t_items[i], bivariant_params) {
-          return false
-        }
-      }
-      return true
-    }
+    (Tuple(s_items), Tuple(t_items)) =>
+      tuple_assignable(s_items, t_items, bivariant_params)
     // Rest parameter types: `...args: T[]` — delegate to the inner array type.
     (Rest(s), Rest(t)) => is_assignable_to_inner(s, t, bivariant_params)
     (Rest(s), Array(t)) => is_assignable_to_inner(s, t, bivariant_params)
@@ -217,21 +386,8 @@ fn is_assignable_to_inner(
       is_assignable_to_inner(s_ret, t_ret, bivariant_params)
     }
     (Func(s_params, s_ret), Func(t_params, t_ret)) => {
-      if s_params.length() != t_params.length() {
+      if !func_params_assignable(s_params, t_params, bivariant_params) {
         return false
-      }
-      // Contravariant params (strict): target's param must flow into source's
-      // param. Bivariant: either direction is acceptable.
-      for i in 0..<s_params.length() {
-        let ok = if bivariant_params {
-          is_assignable_to_inner(s_params[i], t_params[i], bivariant_params) ||
-          is_assignable_to_inner(t_params[i], s_params[i], bivariant_params)
-        } else {
-          is_assignable_to_inner(t_params[i], s_params[i], bivariant_params)
-        }
-        if !ok {
-          return false
-        }
       }
       // Covariant return.
       is_assignable_to_inner(s_ret, t_ret, bivariant_params)

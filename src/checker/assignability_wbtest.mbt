@@ -101,19 +101,136 @@ test "is_assignable_to: tuples require matching length and assignable elements" 
 }
 
 ///|
+// TS: `[string, number, number]` is assignable to `[string, ...number[]]`
+// and `[string]` is assignable to `[string, ...number[]]` (rest may be
+// empty). Fixed-length sources flow into variadic targets when prefix /
+// suffix shapes line up and middle elements fit the rest's element type.
+test "is_assignable_to: fixed tuple flows into variadic target" {
+  // Prefix only.
+  assert_true(
+    is_assignable_to(
+      Tuple([String_, Number, Number]),
+      Tuple([String_, Rest(Array(Number))]),
+    ),
+  )
+  // Empty rest is allowed.
+  assert_true(
+    is_assignable_to(Tuple([String_]), Tuple([String_, Rest(Array(Number))])),
+  )
+  // Prefix + suffix with middle elements flowing into rest.
+  assert_true(
+    is_assignable_to(
+      Tuple([String_, Number, Number, Boolean]),
+      Tuple([String_, Rest(Array(Number)), Boolean]),
+    ),
+  )
+  // Source too short for the fixed prefix/suffix.
+  assert_false(
+    is_assignable_to(
+      Tuple([String_]),
+      Tuple([String_, Rest(Array(Number)), Boolean]),
+    ),
+  )
+  // Middle element type mismatch.
+  assert_false(
+    is_assignable_to(
+      Tuple([String_, Boolean, Boolean]),
+      Tuple([String_, Rest(Array(Number))]),
+    ),
+  )
+}
+
+///|
+// Variadic-to-variadic: same prefix/suffix and matching rest position
+// reduces to the existing pointwise rule, so `Rest(Array(T))` matches
+// `Rest(Array(T))` directly.
+test "is_assignable_to: same-shape variadic tuples are assignable" {
+  assert_true(
+    is_assignable_to(
+      Tuple([String_, Rest(Array(Number))]),
+      Tuple([String_, Rest(Array(Number))]),
+    ),
+  )
+  // Differing rest positions: not handled (would require alignment).
+  assert_false(
+    is_assignable_to(
+      Tuple([String_, Rest(Array(Number))]),
+      Tuple([Rest(Array(Number)), String_]),
+    ),
+  )
+}
+
+///|
+// Variadic source flowing into a fixed-length target: source could have
+// any number of elements at the type level, so this is rejected.
+test "is_assignable_to: variadic source does not flow into fixed target" {
+  assert_false(
+    is_assignable_to(
+      Tuple([String_, Rest(Array(Number))]),
+      Tuple([String_, Number]),
+    ),
+  )
+}
+
+///|
 test "is_assignable_to: functions are contravariant in params, covariant in return" {
   // (x: any) => string is assignable to (x: string) => string
   // because any → string flows in (param contravariance: target's string narrower than source's any)
   assert_true(is_assignable_to(Func([Any], String_), Func([String_], String_)))
   // (x: string) => string is assignable to (x: string) => any (return covariance)
   assert_true(is_assignable_to(Func([String_], String_), Func([String_], Any)))
-  // arity mismatch
+  // Source declares more params than target: rejected because the
+  // target's caller won't supply enough arguments.
   assert_false(
     is_assignable_to(Func([String_, Number], String_), Func([String_], String_)),
   )
   // return mismatch
   assert_false(
     is_assignable_to(Func([String_], String_), Func([String_], Number)),
+  )
+}
+
+///|
+// TS allows source to declare fewer parameters than target — the source
+// implementation simply ignores trailing arguments. This is a common
+// pattern for callbacks like `arr.map(x => x * 2)` where the predicate
+// ignores the `(_, index, array)` extras.
+test "is_assignable_to: source with fewer params flows into wider target" {
+  assert_true(
+    is_assignable_to(Func([String_], String_), Func([String_, Number], String_)),
+  )
+  // Zero-param source flows into any-arity target.
+  assert_true(is_assignable_to(Func([], Void), Func([String_, Number], Void)))
+  // Param at the shared position still has to be contravariant: target's
+  // `string` can't flow into source's `number`.
+  assert_false(
+    is_assignable_to(Func([Number], Void), Func([String_, Number], Void)),
+  )
+}
+
+///|
+// Function source with a trailing `Rest(...)` parameter can absorb any
+// number of trailing target args ≥ its fixed prefix.
+test "is_assignable_to: source rest param absorbs target tail" {
+  assert_true(
+    is_assignable_to(
+      Func([String_, Rest(Array(Number))], Void),
+      Func([String_, Number, Number, Number], Void),
+    ),
+  )
+  // Target tail element fails contravariance against rest's element type.
+  assert_false(
+    is_assignable_to(
+      Func([String_, Rest(Array(Number))], Void),
+      Func([String_, Boolean], Void),
+    ),
+  )
+  // Empty tail is fine — rest can be empty.
+  assert_true(
+    is_assignable_to(
+      Func([String_, Rest(Array(Number))], Void),
+      Func([String_], Void),
+    ),
   )
 }
 

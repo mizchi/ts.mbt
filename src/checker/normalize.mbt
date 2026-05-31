@@ -46,6 +46,35 @@ pub fn simplify_union(members : Array[@ast.TsType]) -> Array[@ast.TsType] {
       _ => ()
     }
   }
+  // TS normalizes `true | false` to `boolean`: when both literal values
+  // are present, replace the pair with the `Boolean` primitive so the
+  // subsumption pass below can drop any remaining literal companions.
+  let mut has_true = false
+  let mut has_false = false
+  for m in flattened {
+    match m {
+      BooleanLiteral(true) => has_true = true
+      BooleanLiteral(false) => has_false = true
+      _ => ()
+    }
+  }
+  let flattened = if has_true && has_false {
+    let collapsed : Array[@ast.TsType] = []
+    let mut inserted_boolean = false
+    for m in flattened {
+      match m {
+        BooleanLiteral(_) =>
+          if !inserted_boolean {
+            collapsed.push(Boolean)
+            inserted_boolean = true
+          }
+        _ => collapsed.push(m)
+      }
+    }
+    collapsed
+  } else {
+    flattened
+  }
   let kept : Array[@ast.TsType] = []
   for m in flattened {
     let mut subsumed = false
