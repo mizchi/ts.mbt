@@ -793,7 +793,27 @@ fn sg_visit_stmt(w : SgWalker, stmt : @ast.TsStmt) -> Unit {
       }
       for m in decl.methods {
         match m.body {
-          Some(b) => sg_visit_block_in_new_scope(w, b, Function)
+          Some(b) => {
+            // Class methods declare their params as Symbols inside a
+            // fresh Function scope so the type-aware passes (e.g.
+            // External-observation narrowing via the param
+            // annotation) see them the same way they see arrow /
+            // function-decl params.
+            let outer = w.current_scope
+            w.current_scope = sg_new_scope(w.g, Some(outer), Function)
+            for p in m.params {
+              let pid = sg_declare(w.g, w.current_scope, p.0, Param, false)
+              match p.1 {
+                @ast.TsType::Any => ()
+                ty => w.g.symbols[pid].ts_type = ty
+              }
+            }
+            sg_declare_block_bindings(w.g, b, w.current_scope, {})
+            for s in b.stmts {
+              sg_visit_stmt(w, s)
+            }
+            w.current_scope = outer
+          }
           None => ()
         }
       }
@@ -1211,7 +1231,27 @@ fn sg_visit_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
       }
       for m in decl.methods {
         match m.body {
-          Some(b) => sg_visit_block_in_new_scope(w, b, Function)
+          Some(b) => {
+            // Class methods declare their params as Symbols inside a
+            // fresh Function scope so the type-aware passes (e.g.
+            // External-observation narrowing via the param
+            // annotation) see them the same way they see arrow /
+            // function-decl params.
+            let outer = w.current_scope
+            w.current_scope = sg_new_scope(w.g, Some(outer), Function)
+            for p in m.params {
+              let pid = sg_declare(w.g, w.current_scope, p.0, Param, false)
+              match p.1 {
+                @ast.TsType::Any => ()
+                ty => w.g.symbols[pid].ts_type = ty
+              }
+            }
+            sg_declare_block_bindings(w.g, b, w.current_scope, {})
+            for s in b.stmts {
+              sg_visit_stmt(w, s)
+            }
+            w.current_scope = outer
+          }
           None => ()
         }
       }

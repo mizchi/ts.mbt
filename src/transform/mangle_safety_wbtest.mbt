@@ -281,6 +281,30 @@ test "safety: typed function parameter unlocks unrelated property mangling" {
 }
 
 ///|
+// Phase 1.6 — class method parameters get the same External-narrowing
+// treatment as standalone function / arrow parameters. A `class Foo {
+// handle(props: {…}) { sink(props) } }` previously fell off the
+// type-aware path because class method params weren't declared as
+// Symbols at all; they are now.
+test "phase4: typed class method parameter narrows external escape" {
+  let block = @parser.parse_block_from_source(
+    (
+      #|class Handler {
+      #|  handle(p: { aaa: number; bbb: number }) { sink(p); }
+      #|}
+      #|new Handler().handle({ aaa: 1, bbb: 2 });
+      #|
+    ),
+  )
+  let externals : Map[String, Bool] = {}
+  externals["sink"] = true
+  let result = collect_externally_visible_props(block, externals)
+  assert_true(result.contains("aaa"))
+  assert_true(result.contains("bbb"))
+  assert_false(result.contains("*"))
+}
+
+///|
 // Phase 2 — external-chain dynamic write with a literal-typed index
 // variable. `react[k] = v` where `k: "useState" | "useEffect"` only
 // affects those two members, so reserve those keys instead of the
