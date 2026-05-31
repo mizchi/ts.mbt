@@ -886,13 +886,34 @@ fn collect_shape_cliques_in_stmt(
     }
     NativeClassStmt(decl, ctor) => {
       // Class body: every property + method + setter/getter name on
-      // the same class instance is on the same shape clique.
+      // the same class instance is on the same shape clique. We also
+      // sweep the constructor and method bodies for `this.X` accesses
+      // — TS class field syntax (`alpha = 1`) lowers to constructor
+      // PropAssigns, so without this walk the class clique would miss
+      // every field that doesn't appear in `decl.properties`.
       let class_keys : Array[String] = []
+      let seen : Map[String, Bool] = {}
+      let push_key = fn(n : String) {
+        if !seen.contains(n) {
+          seen[n] = true
+          class_keys.push(n)
+        }
+      }
       for p in decl.properties {
-        class_keys.push(p.name)
+        push_key(p.name)
       }
       for m in decl.methods {
-        class_keys.push(m.name)
+        push_key(m.name)
+      }
+      match ctor {
+        Some(f) => collect_this_member_names_in_block(f.body, push_key)
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) => collect_this_member_names_in_block(b, push_key)
+          None => ()
+        }
       }
       emit(class_keys)
       match decl.base_expr {
@@ -1029,11 +1050,28 @@ fn collect_shape_cliques_in_expr(
       }
     NativeClassExpr(decl, ctor) => {
       let class_keys : Array[String] = []
+      let seen : Map[String, Bool] = {}
+      let push_key = fn(n : String) {
+        if !seen.contains(n) {
+          seen[n] = true
+          class_keys.push(n)
+        }
+      }
       for p in decl.properties {
-        class_keys.push(p.name)
+        push_key(p.name)
       }
       for m in decl.methods {
-        class_keys.push(m.name)
+        push_key(m.name)
+      }
+      match ctor {
+        Some(f) => collect_this_member_names_in_block(f.body, push_key)
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) => collect_this_member_names_in_block(b, push_key)
+          None => ()
+        }
       }
       emit(class_keys)
       match decl.base_expr {
@@ -1054,6 +1092,208 @@ fn collect_shape_cliques_in_expr(
         collect_shape_cliques_in_expr(sf.1, emit)
       }
     }
+    _ => ()
+  }
+}
+
+///|
+// Walk a block body collecting every `this.X` / `this[X]` /
+// `this.X(…)` access — both reads and writes. Used by the class
+// shape-clique builder so TS class field syntax (`field = init`) that
+// the parser lowers into the constructor body still feeds into the
+// per-class conflict set.
+fn collect_this_member_names_in_block(
+  block : @ast.TsBlock,
+  emit : (String) -> Unit,
+) -> Unit {
+  for s in block.stmts {
+    collect_this_member_names_in_stmt(s, emit)
+  }
+}
+
+///|
+fn collect_this_member_names_in_stmt(
+  stmt : @ast.TsStmt,
+  emit : (String) -> Unit,
+) -> Unit {
+  match stmt {
+    Var(_, _, e)
+    | Let(_, _, e)
+    | Const(_, _, e)
+    | Expr(e)
+    | Assign(_, e)
+    | CompoundAssign(_, _, e)
+    | Throw(e) => collect_this_member_names_in_expr(e, emit)
+    Return(Some(e)) => collect_this_member_names_in_expr(e, emit)
+    Return(None) | Empty | Debugger | Break(_) | Continue(_) => ()
+    IndexAssign(t, idx, v) => {
+      collect_this_member_names_in_expr(t, emit)
+      collect_this_member_names_in_expr(idx, emit)
+      collect_this_member_names_in_expr(v, emit)
+    }
+    PropAssign(t, name, v) => {
+      match t {
+        @ast.TsExpr::Var("this") => emit(name)
+        _ => collect_this_member_names_in_expr(t, emit)
+      }
+      collect_this_member_names_in_expr(v, emit)
+    }
+    If(c, t, e) => {
+      collect_this_member_names_in_expr(c, emit)
+      collect_this_member_names_in_block(t, emit)
+      match e {
+        Some(b) => collect_this_member_names_in_block(b, emit)
+        None => ()
+      }
+    }
+    While(c, b) | DoWhile(c, b) | With(c, b) => {
+      collect_this_member_names_in_expr(c, emit)
+      collect_this_member_names_in_block(b, emit)
+    }
+    For(init, cond, update, body) => {
+      match init {
+        Some(s) => collect_this_member_names_in_stmt(s, emit)
+        None => ()
+      }
+      match cond {
+        Some(e) => collect_this_member_names_in_expr(e, emit)
+        None => ()
+      }
+      match update {
+        Some(s) => collect_this_member_names_in_stmt(s, emit)
+        None => ()
+      }
+      collect_this_member_names_in_block(body, emit)
+    }
+    ForOf(_, _, _, iter, body)
+    | ForAwaitOf(_, _, _, iter, body)
+    | ForIn(_, _, _, iter, body) => {
+      collect_this_member_names_in_expr(iter, emit)
+      collect_this_member_names_in_block(body, emit)
+    }
+    Switch(e, cases) => {
+      collect_this_member_names_in_expr(e, emit)
+      for c in cases {
+        match c.test_expr {
+          Some(te) => collect_this_member_names_in_expr(te, emit)
+          None => ()
+        }
+        collect_this_member_names_in_block(c.body, emit)
+      }
+    }
+    Try(b, _, cb, fb) => {
+      collect_this_member_names_in_block(b, emit)
+      match cb {
+        Some(blk) => collect_this_member_names_in_block(blk, emit)
+        None => ()
+      }
+      match fb {
+        Some(blk) => collect_this_member_names_in_block(blk, emit)
+        None => ()
+      }
+    }
+    Label(_, inner) => collect_this_member_names_in_stmt(inner, emit)
+    Block(b) => collect_this_member_names_in_block(b, emit)
+    // Nested class bodies have their own `this` — skip; the outer
+    // shape-clique pass will descend into them separately.
+    NativeClassStmt(_, _) => ()
+  }
+}
+
+///|
+fn collect_this_member_names_in_expr(
+  expr : @ast.TsExpr,
+  emit : (String) -> Unit,
+) -> Unit {
+  match expr {
+    PropAccess(recv, name) => {
+      match recv {
+        @ast.TsExpr::Var("this") => emit(name)
+        _ => collect_this_member_names_in_expr(recv, emit)
+      }
+    }
+    MethodCall(recv, name, args) => {
+      match recv {
+        @ast.TsExpr::Var("this") => emit(name)
+        _ => collect_this_member_names_in_expr(recv, emit)
+      }
+      for a in args {
+        collect_this_member_names_in_expr(a, emit)
+      }
+    }
+    BinOp(_, l, r) => {
+      collect_this_member_names_in_expr(l, emit)
+      collect_this_member_names_in_expr(r, emit)
+    }
+    UnaryOp(_, inner)
+    | Spread(inner)
+    | Await(inner)
+    | NonNull(inner)
+    | OptionalChain(inner)
+    | PureCall(inner)
+    | YieldStar(inner) => collect_this_member_names_in_expr(inner, emit)
+    Cond(c, t, e) => {
+      collect_this_member_names_in_expr(c, emit)
+      collect_this_member_names_in_expr(t, emit)
+      collect_this_member_names_in_expr(e, emit)
+    }
+    Seq(l, r) => {
+      collect_this_member_names_in_expr(l, emit)
+      collect_this_member_names_in_expr(r, emit)
+    }
+    IndexAccess(recv, idx) => {
+      collect_this_member_names_in_expr(recv, emit)
+      collect_this_member_names_in_expr(idx, emit)
+    }
+    Call(_, args) | New(_, args) =>
+      for a in args {
+        collect_this_member_names_in_expr(a, emit)
+      }
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      collect_this_member_names_in_expr(callee, emit)
+      for a in args {
+        collect_this_member_names_in_expr(a, emit)
+      }
+    }
+    ArrayLit(items) =>
+      for i in items {
+        collect_this_member_names_in_expr(i, emit)
+      }
+    ObjectLit(entries) =>
+      for ent in entries {
+        collect_this_member_names_in_expr(ent.1, emit)
+      }
+    AssignExpr(_, v) => collect_this_member_names_in_expr(v, emit)
+    CompoundAssignExpr(t, _, v) => {
+      collect_this_member_names_in_expr(t, emit)
+      collect_this_member_names_in_expr(v, emit)
+    }
+    PropAssignExpr(t, name, v) => {
+      match t {
+        @ast.TsExpr::Var("this") => emit(name)
+        _ => collect_this_member_names_in_expr(t, emit)
+      }
+      collect_this_member_names_in_expr(v, emit)
+    }
+    IndexAssignExpr(t, idx, v) => {
+      collect_this_member_names_in_expr(t, emit)
+      collect_this_member_names_in_expr(idx, emit)
+      collect_this_member_names_in_expr(v, emit)
+    }
+    TemplateLiteral(_, exprs) =>
+      for e in exprs {
+        collect_this_member_names_in_expr(e, emit)
+      }
+    TaggedTemplate(tag, _, _, exprs) => {
+      collect_this_member_names_in_expr(tag, emit)
+      for e in exprs {
+        collect_this_member_names_in_expr(e, emit)
+      }
+    }
+    // Nested function / arrow / class bodies have their own `this`;
+    // skip their interiors here.
+    ArrowFunc(_, _, _, _) | FuncExpr(_) | NativeClassExpr(_, _) => ()
+    // Leaves and unhandled forms — no `this` member to extract.
     _ => ()
   }
 }
