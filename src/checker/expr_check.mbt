@@ -2990,6 +2990,14 @@ fn check_expr_against(
       )
       return
     }
+    // Ternary: check each branch against the expected type individually.
+    // This catches `cond ? "ok" : 42` against `string` — without this the
+    // inferred type is `string | number` and the union check may be too wide.
+    (Cond(_, then_, else_), _) => {
+      check_expr_against(env, then_, expected, ctx, sub_path + " (then)")
+      check_expr_against(env, else_, expected, ctx, sub_path + " (else)")
+      return
+    }
     // Contextual typing for array literals: `[a, b]` against a tuple type
     // `[T1, T2]` checks each element against the corresponding slot. Without
     // this hop the array literal would infer as `Array<elem>` and fail

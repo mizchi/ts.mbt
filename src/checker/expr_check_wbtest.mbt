@@ -5419,3 +5419,54 @@ test "expr_check: object destructuring with correct type is ok" {
   let issues = check_module_function_bodies(module_)
   assert_eq(issues.length(), 0)
 }
+
+///|
+test "expr_check: ternary with wrong branch type is flagged" {
+  // `cond ? "ok" : 42` against `string` — 42 is not string.
+  let src =
+    #|function f(cond: boolean): string {
+    #|  return cond ? "ok" : 42;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let found = issues.iter().any(fn(i) {
+        i.message.contains("string") || i.message.contains("number")
+      })
+      assert_true(found)
+    }
+    None => fail("function not found")
+  }
+}
+
+///|
+test "expr_check: ternary with compatible branch types is ok" {
+  let src =
+    #|function f(cond: boolean): string {
+    #|  return cond ? "yes" : "no";
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      assert_eq(issues.length(), 0)
+    }
+    None => fail("function not found")
+  }
+}
+
+///|
+test "expr_check: typeof string var compared to 'number' is flagged" {
+  // `typeof s === "number"` where s: string — typeof always returns "string".
+  let src =
+    #|function f(s: string): boolean {
+    #|  return typeof s === "number";
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let found = issues.iter().any(fn(i) { i.message.contains("always be false") })
+      assert_true(found)
+    }
+    None => fail("function not found")
+  }
+}
