@@ -1257,6 +1257,56 @@ test "switch-exhaustive: default throw drops when union is fully covered" {
 }
 
 ///|
+// `switch (s.kind)` over a discriminated-union typed binding drops
+// the `default: throw …` arm when every variant's `kind` literal
+// is covered. The discriminant type is computed by
+// `IndexedAccess(Shape, "kind")` → distributes over the union →
+// `Union(["circle", "square"])` after checker simplification.
+test "switch-exhaustive: tag-field access on discriminated union drops default" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "type Shape = { kind: \"circle\"; r: number } | { kind: \"square\"; side: number };\n" +
+      "function area(s: Shape): number {\n" +
+      "  switch (s.kind) {\n" +
+      "    case \"circle\": return s.r * s.r;\n" +
+      "    case \"square\": return s.side * s.side;\n" +
+      "    default: throw new Error(\"unreachable\");\n" +
+      "  }\n" +
+      "}\n" +
+      "console.log(area({ kind: \"circle\", r: 3 }));\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_false(out.js.contains("unreachable"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "switch-exhaustive: tag-field access keeps default when non-exhaustive" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "type Shape = { kind: \"circle\"; r: number } | { kind: \"square\"; side: number };\n" +
+      "function area(s: Shape): number {\n" +
+      "  switch (s.kind) {\n" +
+      "    case \"circle\": return 1;\n" +
+      "    default: throw new Error(\"unreachable\");\n" +
+      "  }\n" +
+      "}\n" +
+      "console.log(area({ kind: \"circle\", r: 3 }));\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_true(out.js.contains("unreachable"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "switch-exhaustive: non-exhaustive case set keeps the default" {
   let files = vfs([
     (

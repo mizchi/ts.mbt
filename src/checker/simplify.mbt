@@ -659,6 +659,24 @@ fn simplify_indexed_access(t : @ast.TsType) -> @ast.TsType {
           }
           Any
         }
+        // `(A | B)[K]` distributes to `A[K] | B[K]` (TS rule). The
+        // resolved members feed `simplify_union` so duplicate /
+        // subsumed literals collapse — common after distributing
+        // `Shape[K]` over a discriminated-union alias.
+        Union(members) => {
+          let parts : Array[@ast.TsType] = []
+          for m in members {
+            parts.push(simplify_indexed_access(IndexedAccess(m, key)))
+          }
+          let collapsed = simplify_union(parts)
+          if collapsed.length() == 0 {
+            Never
+          } else if collapsed.length() == 1 {
+            collapsed[0]
+          } else {
+            Union(collapsed)
+          }
+        }
         _ => Any
       }
     }

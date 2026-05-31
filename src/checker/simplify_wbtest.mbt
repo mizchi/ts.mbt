@@ -27,6 +27,33 @@ test "simplify_type: leaves unresolvable IndexedAccess as Any" {
 }
 
 ///|
+// `(A | B)[K]` distributes to `A[K] | B[K]` (TS rule). For a
+// discriminated union over a single literal tag this collapses
+// to the union of tag values.
+test "simplify_type: distributes IndexedAccess over a union base" {
+  // type Shape = { kind: "circle" } | { kind: "square" };
+  // Shape["kind"]  ≡  "circle" | "square"
+  let shape : @ast.TsType = Union([
+    Object([(Literal("kind"), Literal("circle"))]),
+    Object([(Literal("kind"), Literal("square"))]),
+  ])
+  let t : @ast.TsType = IndexedAccess(shape, Literal("kind"))
+  assert_eq(simplify_type(t), Union([Literal("circle"), Literal("square")]))
+}
+
+///|
+// A union of two members carrying the same tag value collapses
+// to a single literal (subsumption inside `simplify_union`).
+test "simplify_type: union-indexed access dedups identical tag literals" {
+  let shape : @ast.TsType = Union([
+    Object([(Literal("kind"), Literal("a"))]),
+    Object([(Literal("kind"), Literal("a"))]),
+  ])
+  let t : @ast.TsType = IndexedAccess(shape, Literal("kind"))
+  assert_eq(simplify_type(t), Literal("a"))
+}
+
+///|
 test "simplify_type: recurses into compound types" {
   // Array<Union(String_, String_)> ⇒ Array<String_>
   let t : @ast.TsType = Array(Union([String_, String_]))

@@ -499,7 +499,7 @@ pub fn bundle_modules(
     // type annotation. Runs BEFORE the regular fold so the
     // resulting `BoolLit(true/false)` feeds into dead-branch
     // elimination.
-    combined = type_fold_block(combined)
+    combined = type_fold_block(combined, type_aliases=combined_type_aliases)
     // Order: fold -> treeshake -> mangle -> inline -> peephole.
     // Fold turns dead `if (false)` branches into nothing and
     // identity arithmetic into a single operand; treeshake then

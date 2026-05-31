@@ -19,7 +19,10 @@
 // out of scope for this pass.
 
 ///|
-pub fn type_fold_block(block : @ast.TsBlock) -> @ast.TsBlock {
+pub fn type_fold_block(
+  block : @ast.TsBlock,
+  type_aliases? : Array[@ast.TsTypeAlias] = [],
+) -> @ast.TsBlock {
   // Cheap pre-scan: type-fold only does work when something it can
   // act on appears in the block — `typeof` comparisons, `=== null`
   // checks, or a switch on a literal-string union. If none of those
@@ -29,7 +32,37 @@ pub fn type_fold_block(block : @ast.TsBlock) -> @ast.TsBlock {
     return block
   }
   let scope : Map[String, @ast.TsType] = {}
-  type_fold_block_in(block, scope)
+  let alias_table : Map[String, @ast.TsType] = {}
+  for ta in type_aliases {
+    // Only non-generic aliases participate in eager Named-resolution.
+    // Generic ones (`Foo<T> = …`) need parameter substitution that the
+    // simpler type_fold path doesn't model — they stay as `Named(…)`
+    // and the existing fallbacks apply.
+    if ta.type_params.length() == 0 {
+      alias_table[ta.name] = ta.type_
+    }
+  }
+  type_fold_block_in(block, scope, alias_table)
+}
+
+///|
+// Resolve a `Named(name)` against the type-alias table, chasing one
+// level deep. Returns the alias body when the lookup succeeds, the
+// original type otherwise. Used at scope-insertion sites so the
+// downstream walkers see the structural form of user-declared
+// discriminated unions / interfaces.
+fn resolve_alias(
+  ty : @ast.TsType,
+  aliases : Map[String, @ast.TsType],
+) -> @ast.TsType {
+  match ty {
+    Named(name) =>
+      match aliases.get(name) {
+        Some(body) => body
+        None => ty
+      }
+    _ => ty
+  }
 }
 
 ///|
@@ -315,6 +348,7 @@ fn expr_needs_type_fold(expr : @ast.TsExpr) -> Bool {
 fn type_fold_block_in(
   block : @ast.TsBlock,
   scope : Map[String, @ast.TsType],
+  aliases : Map[String, @ast.TsType],
 ) -> @ast.TsBlock {
   // Each block introduces a fresh layer — we just copy-extend
   // the parent scope so we don't pollute siblings.
@@ -325,7 +359,7 @@ fn type_fold_block_in(
   }
   let stmts : Array[@ast.TsStmt] = []
   for s in block.stmts {
-    stmts.push(type_fold_stmt(s, local_))
+    stmts.push(type_fold_stmt(s, local_, aliases))
   }
   { stmts, stmt_positions: block.stmt_positions }
 }
@@ -334,10 +368,11 @@ fn type_fold_block_in(
 fn type_fold_stmt(
   stmt : @ast.TsStmt,
   scope : Map[String, @ast.TsType],
+  aliases : Map[String, @ast.TsType],
 ) -> @ast.TsStmt {
   match stmt {
     Var(b, t, e) | Let(b, t, e) | Const(b, t, e) => {
-      let new_init = type_fold_expr(e, scope)
+      let new_init = type_fold_expr(e, scope, aliases)
       // Record the binding's type if it's a simple identifier
       // and the annotation is one we can reason about.
       // When there's no annotation (Any), infer from the RHS literal.
@@ -362,129 +397,146 @@ fn type_fold_stmt(
         _ => stmt
       }
     }
-    Assign(n, e) => Assign(n, type_fold_expr(e, scope))
-    CompoundAssign(n, op, e) => CompoundAssign(n, op, type_fold_expr(e, scope))
+    Assign(n, e) => Assign(n, type_fold_expr(e, scope, aliases))
+    CompoundAssign(n, op, e) =>
+      CompoundAssign(n, op, type_fold_expr(e, scope, aliases))
     IndexAssign(t, idx, v) =>
       IndexAssign(
-        type_fold_expr(t, scope),
-        type_fold_expr(idx, scope),
-        type_fold_expr(v, scope),
+        type_fold_expr(t, scope, aliases),
+        type_fold_expr(idx, scope, aliases),
+        type_fold_expr(v, scope, aliases),
       )
     PropAssign(t, p, v) =>
-      PropAssign(type_fold_expr(t, scope), p, type_fold_expr(v, scope))
-    Expr(e) => Expr(type_fold_expr(e, scope))
-    Return(Some(e)) => Return(Some(type_fold_expr(e, scope)))
+      PropAssign(
+        type_fold_expr(t, scope, aliases),
+        p,
+        type_fold_expr(v, scope, aliases),
+      )
+    Expr(e) => Expr(type_fold_expr(e, scope, aliases))
+    Return(Some(e)) => Return(Some(type_fold_expr(e, scope, aliases)))
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => stmt
-    Throw(e) => Throw(type_fold_expr(e, scope))
+    Throw(e) => Throw(type_fold_expr(e, scope, aliases))
     If(c, t, e) =>
       If(
-        type_fold_expr(c, scope),
-        type_fold_block_in(t, scope),
+        type_fold_expr(c, scope, aliases),
+        type_fold_block_in(t, scope, aliases),
         match e {
-          Some(b) => Some(type_fold_block_in(b, scope))
+          Some(b) => Some(type_fold_block_in(b, scope, aliases))
           None => None
         },
       )
     While(c, body) =>
-      While(type_fold_expr(c, scope), type_fold_block_in(body, scope))
+      While(
+        type_fold_expr(c, scope, aliases),
+        type_fold_block_in(body, scope, aliases),
+      )
     DoWhile(c, body) =>
-      DoWhile(type_fold_expr(c, scope), type_fold_block_in(body, scope))
+      DoWhile(
+        type_fold_expr(c, scope, aliases),
+        type_fold_block_in(body, scope, aliases),
+      )
     With(c, body) =>
-      With(type_fold_expr(c, scope), type_fold_block_in(body, scope))
+      With(
+        type_fold_expr(c, scope, aliases),
+        type_fold_block_in(body, scope, aliases),
+      )
     For(init, cond, update, body) =>
       For(
         match init {
-          Some(s) => Some(type_fold_stmt(s, scope))
+          Some(s) => Some(type_fold_stmt(s, scope, aliases))
           None => None
         },
         match cond {
-          Some(e) => Some(type_fold_expr(e, scope))
+          Some(e) => Some(type_fold_expr(e, scope, aliases))
           None => None
         },
         match update {
-          Some(s) => Some(type_fold_stmt(s, scope))
+          Some(s) => Some(type_fold_stmt(s, scope, aliases))
           None => None
         },
-        type_fold_block_in(body, scope),
+        type_fold_block_in(body, scope, aliases),
       )
     ForOf(k, b, t, iter, body) =>
       ForOf(
         k,
         b,
         t,
-        type_fold_expr(iter, scope),
-        type_fold_block_in(body, scope),
+        type_fold_expr(iter, scope, aliases),
+        type_fold_block_in(body, scope, aliases),
       )
     ForAwaitOf(k, b, t, iter, body) =>
       ForAwaitOf(
         k,
         b,
         t,
-        type_fold_expr(iter, scope),
-        type_fold_block_in(body, scope),
+        type_fold_expr(iter, scope, aliases),
+        type_fold_block_in(body, scope, aliases),
       )
     ForIn(k, b, t, iter, body) =>
       ForIn(
         k,
         b,
         t,
-        type_fold_expr(iter, scope),
-        type_fold_block_in(body, scope),
+        type_fold_expr(iter, scope, aliases),
+        type_fold_block_in(body, scope, aliases),
       )
     Switch(e, cases) => {
       let new_cases : Array[@ast.TsSwitchCase] = []
       for c in cases {
         new_cases.push({
           test_expr: match c.test_expr {
-            Some(te) => Some(type_fold_expr(te, scope))
+            Some(te) => Some(type_fold_expr(te, scope, aliases))
             None => None
           },
-          body: type_fold_block_in(c.body, scope),
+          body: type_fold_block_in(c.body, scope, aliases),
         })
       }
-      let folded_e = type_fold_expr(e, scope)
+      let folded_e = type_fold_expr(e, scope, aliases)
       // Exhaustive-default drop: when the discriminant's static
       // type is a closed string-literal union, every literal is
       // covered by a `case`, and the `default:` body is the
       // unreachable-assertion shape (`[Throw(...)]`), the default
       // can be dropped — TS guarantees it never fires.
-      let pruned_cases = drop_exhaustive_default(folded_e, new_cases, scope)
+      let pruned_cases = drop_exhaustive_default(
+        folded_e, new_cases, scope, aliases,
+      )
       Switch(folded_e, pruned_cases)
     }
     Try(b, bnd, cb, fb) =>
       Try(
-        type_fold_block_in(b, scope),
+        type_fold_block_in(b, scope, aliases),
         bnd,
         match cb {
-          Some(blk) => Some(type_fold_block_in(blk, scope))
+          Some(blk) => Some(type_fold_block_in(blk, scope, aliases))
           None => None
         },
         match fb {
-          Some(blk) => Some(type_fold_block_in(blk, scope))
+          Some(blk) => Some(type_fold_block_in(blk, scope, aliases))
           None => None
         },
       )
-    Label(name, inner) => Label(name, type_fold_stmt(inner, scope))
-    Block(b) => Block(type_fold_block_in(b, scope))
+    Label(name, inner) => Label(name, type_fold_stmt(inner, scope, aliases))
+    Block(b) => Block(type_fold_block_in(b, scope, aliases))
     NativeClassStmt(decl, ctor) => {
       let new_ctor = match ctor {
-        Some(f) => Some({ ..f, body: type_fold_block_in(f.body, scope) })
+        Some(f) =>
+          Some({ ..f, body: type_fold_block_in(f.body, scope, aliases) })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
       for m in decl.methods {
         let new_body = match m.body {
-          Some(b) => Some(type_fold_block_in(b, scope))
+          Some(b) => Some(type_fold_block_in(b, scope, aliases))
           None => None
         }
         new_methods.push({ ..m, body: new_body })
       }
       let new_static_fields : Array[(String, @ast.TsExpr)] = []
       for sf in decl.static_field_inits {
-        new_static_fields.push((sf.0, type_fold_expr(sf.1, scope)))
+        new_static_fields.push((sf.0, type_fold_expr(sf.1, scope, aliases)))
       }
       let new_base_expr = match decl.base_expr {
-        Some(b) => Some(type_fold_expr(b, scope))
+        Some(b) => Some(type_fold_expr(b, scope, aliases))
         None => None
       }
       NativeClassStmt(
@@ -504,6 +556,7 @@ fn type_fold_stmt(
 fn type_fold_expr(
   expr : @ast.TsExpr,
   scope : Map[String, @ast.TsType],
+  aliases : Map[String, @ast.TsType],
 ) -> @ast.TsExpr {
   match expr {
     // typeof X === "literal" / typeof X !== "literal"
@@ -551,85 +604,104 @@ fn type_fold_expr(
         _ => BinOp(@ast.TsBinOp::Add, StringLit(""), Var(x_name))
       }
     BinOp(op, l, r) =>
-      BinOp(op, type_fold_expr(l, scope), type_fold_expr(r, scope))
-    UnaryOp(op, inner) => UnaryOp(op, type_fold_expr(inner, scope))
+      BinOp(
+        op,
+        type_fold_expr(l, scope, aliases),
+        type_fold_expr(r, scope, aliases),
+      )
+    UnaryOp(op, inner) => UnaryOp(op, type_fold_expr(inner, scope, aliases))
     Cond(c, t, e) =>
       Cond(
-        type_fold_expr(c, scope),
-        type_fold_expr(t, scope),
-        type_fold_expr(e, scope),
+        type_fold_expr(c, scope, aliases),
+        type_fold_expr(t, scope, aliases),
+        type_fold_expr(e, scope, aliases),
       )
     Call(n, args) => {
       let new_args : Array[@ast.TsExpr] = []
       for a in args {
-        new_args.push(type_fold_expr(a, scope))
+        new_args.push(type_fold_expr(a, scope, aliases))
       }
       Call(n, new_args)
     }
     CallExpr(callee, args) => {
       let new_args : Array[@ast.TsExpr] = []
       for a in args {
-        new_args.push(type_fold_expr(a, scope))
+        new_args.push(type_fold_expr(a, scope, aliases))
       }
-      CallExpr(type_fold_expr(callee, scope), new_args)
+      CallExpr(type_fold_expr(callee, scope, aliases), new_args)
     }
     MethodCall(recv, m, args) => {
       let new_args : Array[@ast.TsExpr] = []
       for a in args {
-        new_args.push(type_fold_expr(a, scope))
+        new_args.push(type_fold_expr(a, scope, aliases))
       }
-      MethodCall(type_fold_expr(recv, scope), m, new_args)
+      MethodCall(type_fold_expr(recv, scope, aliases), m, new_args)
     }
     New(n, args) => {
       let new_args : Array[@ast.TsExpr] = []
       for a in args {
-        new_args.push(type_fold_expr(a, scope))
+        new_args.push(type_fold_expr(a, scope, aliases))
       }
       New(n, new_args)
     }
     NewExpr(callee, args) => {
       let new_args : Array[@ast.TsExpr] = []
       for a in args {
-        new_args.push(type_fold_expr(a, scope))
+        new_args.push(type_fold_expr(a, scope, aliases))
       }
-      NewExpr(type_fold_expr(callee, scope), new_args)
+      NewExpr(type_fold_expr(callee, scope, aliases), new_args)
     }
-    PropAccess(recv, p) => PropAccess(type_fold_expr(recv, scope), p)
+    PropAccess(recv, p) => PropAccess(type_fold_expr(recv, scope, aliases), p)
     IndexAccess(recv, idx) =>
-      IndexAccess(type_fold_expr(recv, scope), type_fold_expr(idx, scope))
+      IndexAccess(
+        type_fold_expr(recv, scope, aliases),
+        type_fold_expr(idx, scope, aliases),
+      )
     ArrayLit(items) => {
       let new_items : Array[@ast.TsExpr] = []
       for i in items {
-        new_items.push(type_fold_expr(i, scope))
+        new_items.push(type_fold_expr(i, scope, aliases))
       }
       ArrayLit(new_items)
     }
     ObjectLit(entries) => {
       let new_entries : Array[(String, @ast.TsExpr)] = []
       for ent in entries {
-        new_entries.push((ent.0, type_fold_expr(ent.1, scope)))
+        new_entries.push((ent.0, type_fold_expr(ent.1, scope, aliases)))
       }
       ObjectLit(new_entries)
     }
-    Spread(inner) => Spread(type_fold_expr(inner, scope))
-    Yield(Some(inner)) => Yield(Some(type_fold_expr(inner, scope)))
-    YieldStar(inner) => YieldStar(type_fold_expr(inner, scope))
-    Await(inner) => Await(type_fold_expr(inner, scope))
-    Seq(a, b) => Seq(type_fold_expr(a, scope), type_fold_expr(b, scope))
-    AssignExpr(n, v) => AssignExpr(n, type_fold_expr(v, scope))
-    AssignPattern(b, v) => AssignPattern(b, type_fold_expr(v, scope))
+    Spread(inner) => Spread(type_fold_expr(inner, scope, aliases))
+    Yield(Some(inner)) => Yield(Some(type_fold_expr(inner, scope, aliases)))
+    YieldStar(inner) => YieldStar(type_fold_expr(inner, scope, aliases))
+    Await(inner) => Await(type_fold_expr(inner, scope, aliases))
+    Seq(a, b) =>
+      Seq(type_fold_expr(a, scope, aliases), type_fold_expr(b, scope, aliases))
+    AssignExpr(n, v) => AssignExpr(n, type_fold_expr(v, scope, aliases))
+    AssignPattern(b, v) => AssignPattern(b, type_fold_expr(v, scope, aliases))
     PropAssignExpr(recv, p, v) =>
-      PropAssignExpr(type_fold_expr(recv, scope), p, type_fold_expr(v, scope))
+      PropAssignExpr(
+        type_fold_expr(recv, scope, aliases),
+        p,
+        type_fold_expr(v, scope, aliases),
+      )
     IndexAssignExpr(recv, idx, v) =>
       IndexAssignExpr(
-        type_fold_expr(recv, scope),
-        type_fold_expr(idx, scope),
-        type_fold_expr(v, scope),
+        type_fold_expr(recv, scope, aliases),
+        type_fold_expr(idx, scope, aliases),
+        type_fold_expr(v, scope, aliases),
       )
     CompoundAssignExpr(t, op, v) =>
-      CompoundAssignExpr(type_fold_expr(t, scope), op, type_fold_expr(v, scope))
+      CompoundAssignExpr(
+        type_fold_expr(t, scope, aliases),
+        op,
+        type_fold_expr(v, scope, aliases),
+      )
     ComputedProp(k, v) =>
-      ComputedProp(type_fold_expr(k, scope), type_fold_expr(v, scope))
+      ComputedProp(
+        type_fold_expr(k, scope, aliases),
+        type_fold_expr(v, scope, aliases),
+      )
     ArrowFunc(params, ret, body, is_async) => {
       let local_ : Map[String, @ast.TsType] = {}
       for entry in scope {
@@ -645,9 +717,10 @@ fn type_fold_expr(
         }
       }
       let new_body = match body {
-        ArrowExpr(e) => @ast.TsArrowBody::ArrowExpr(type_fold_expr(e, local_))
+        ArrowExpr(e) =>
+          @ast.TsArrowBody::ArrowExpr(type_fold_expr(e, local_, aliases))
         ArrowBlock(b) =>
-          @ast.TsArrowBody::ArrowBlock(type_fold_block_in(b, local_))
+          @ast.TsArrowBody::ArrowBlock(type_fold_block_in(b, local_, aliases))
       }
       ArrowFunc(params, ret, new_body, is_async)
     }
@@ -665,53 +738,59 @@ fn type_fold_expr(
           local_[p.name] = p.type_
         }
       }
-      FuncExpr({ ..f, body: type_fold_block_in(f.body, local_) })
+      FuncExpr({ ..f, body: type_fold_block_in(f.body, local_, aliases) })
     }
     DynamicImport(spec, opts) => {
       let opts_f = match opts {
-        Some(o) => Some(type_fold_expr(o, scope))
+        Some(o) => Some(type_fold_expr(o, scope, aliases))
         None => None
       }
-      DynamicImport(type_fold_expr(spec, scope), opts_f)
+      DynamicImport(type_fold_expr(spec, scope, aliases), opts_f)
     }
     TaggedTemplate(tag, raw, cooked, exprs) => {
       let new_exprs : Array[@ast.TsExpr] = []
       for e in exprs {
-        new_exprs.push(type_fold_expr(e, scope))
+        new_exprs.push(type_fold_expr(e, scope, aliases))
       }
-      TaggedTemplate(type_fold_expr(tag, scope), raw, cooked, new_exprs)
+      TaggedTemplate(
+        type_fold_expr(tag, scope, aliases),
+        raw,
+        cooked,
+        new_exprs,
+      )
     }
     TemplateLiteral(parts, exprs) => {
       let new_exprs : Array[@ast.TsExpr] = []
       for e in exprs {
-        new_exprs.push(type_fold_expr(e, scope))
+        new_exprs.push(type_fold_expr(e, scope, aliases))
       }
       TemplateLiteral(parts, new_exprs)
     }
-    As(inner, ty) => As(type_fold_expr(inner, scope), ty)
-    Satisfies(inner, ty) => Satisfies(type_fold_expr(inner, scope), ty)
-    NonNull(inner) => NonNull(type_fold_expr(inner, scope))
-    OptionalChain(inner) => OptionalChain(type_fold_expr(inner, scope))
-    PureCall(inner) => PureCall(type_fold_expr(inner, scope))
+    As(inner, ty) => As(type_fold_expr(inner, scope, aliases), ty)
+    Satisfies(inner, ty) => Satisfies(type_fold_expr(inner, scope, aliases), ty)
+    NonNull(inner) => NonNull(type_fold_expr(inner, scope, aliases))
+    OptionalChain(inner) => OptionalChain(type_fold_expr(inner, scope, aliases))
+    PureCall(inner) => PureCall(type_fold_expr(inner, scope, aliases))
     NativeClassExpr(decl, ctor) => {
       let new_ctor = match ctor {
-        Some(f) => Some({ ..f, body: type_fold_block_in(f.body, scope) })
+        Some(f) =>
+          Some({ ..f, body: type_fold_block_in(f.body, scope, aliases) })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
       for m in decl.methods {
         let new_body = match m.body {
-          Some(b) => Some(type_fold_block_in(b, scope))
+          Some(b) => Some(type_fold_block_in(b, scope, aliases))
           None => None
         }
         new_methods.push({ ..m, body: new_body })
       }
       let new_static_fields : Array[(String, @ast.TsExpr)] = []
       for sf in decl.static_field_inits {
-        new_static_fields.push((sf.0, type_fold_expr(sf.1, scope)))
+        new_static_fields.push((sf.0, type_fold_expr(sf.1, scope, aliases)))
       }
       let new_base_expr = match decl.base_expr {
-        Some(b) => Some(type_fold_expr(b, scope))
+        Some(b) => Some(type_fold_expr(b, scope, aliases))
         None => None
       }
       NativeClassExpr(
@@ -751,6 +830,15 @@ fn is_useful_type(ty : @ast.TsType) -> Bool {
       }
       true
     }
+    // Object / Struct / Named shapes power the PropAccess
+    // discriminant path in `drop_exhaustive_default`: a
+    // `switch (s.kind)` over `s: Shape` reads the tag-field
+    // type from the binding's annotation, then checker's
+    // `simplify_indexed_access` distributes over the union to
+    // produce the literal cases. Their presence in `scope` is
+    // inert for the typeof / null-check / `+ ""` foldings —
+    // those paths check primitive shapes and bail otherwise.
+    Object(_) | Struct(_, _) | Named(_) => true
     _ => false
   }
 }
@@ -848,6 +936,7 @@ fn drop_exhaustive_default(
   disc : @ast.TsExpr,
   cases : Array[@ast.TsSwitchCase],
   scope : Map[String, @ast.TsType],
+  aliases : Map[String, @ast.TsType],
 ) -> Array[@ast.TsSwitchCase] {
   if cases.length() == 0 {
     return cases
@@ -868,17 +957,34 @@ fn drop_exhaustive_default(
     Throw(_) => ()
     _ => return cases
   }
-  // Discriminant must be a tracked variable carrying a literal-
-  // string union annotation.
-  let name = match disc {
-    Var(n) => n
+  // Discriminant types we can decide on:
+  //   - `Var(name)` with name carrying a literal-string union
+  //     annotation (the original "tag variable" case).
+  //   - `PropAccess(Var(name), field)` where name's annotation is
+  //     a discriminated union and `field` is the tag — the new
+  //     checker's `simplify_indexed_access` distributes over the
+  //     union to produce the exact literal set after resolving the
+  //     binding's `Named` annotation through the alias table.
+  let raw_ty = match disc {
+    Var(n) =>
+      match scope.get(n) {
+        Some(t) => resolve_alias(t, aliases)
+        None => return cases
+      }
+    PropAccess(Var(n), field) =>
+      match scope.get(n) {
+        Some(t) => {
+          let resolved = resolve_alias(t, aliases)
+          @checker.simplify_type(
+            @ast.TsType::IndexedAccess(resolved, Literal(field)),
+          )
+        }
+        None => return cases
+      }
     _ => return cases
   }
-  let ty = match scope.get(name) {
-    Some(t) => t
-    None => return cases
-  }
-  let literals = match ty {
+  let literals = match raw_ty {
+    Literal(s) => [s]
     Union(parts) => {
       let out : Array[String] = []
       for p in parts {
