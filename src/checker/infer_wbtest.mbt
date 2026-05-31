@@ -111,19 +111,20 @@ test "match_infer_pattern: variadic Parameters<F> captures rest-tail tuple" {
 }
 
 ///|
-test "match_infer_pattern: `infer X extends Bound` allows undecidable source" {
+test "match_infer_pattern: `infer X extends Bound` rejects undecidable source" {
   // Source is an opaque `Named("Foo")`; bound is `Date`. The relation
-  // is undecidable, so we optimistically bind — the substitution path
-  // can retry once `Foo` is resolved.
+  // is undecidable, so strict-mode matching rejects the bind and lets
+  // the surrounding conditional pick its false branch — rather than
+  // silently widening the inferred type beyond the bound.
   let bindings : Map[String, @ast.TsType] = {}
-  assert_true(
+  assert_false(
     match_infer_pattern(
       Named("Foo"),
       infer_marker_with_bound("T", Named("Date")),
       bindings,
     ),
   )
-  @test.assert_eq(bindings.get("T"), Some(Named("Foo")))
+  @test.assert_eq(bindings.get("T"), None)
 }
 
 ///|

@@ -52,16 +52,15 @@ pub fn match_infer_pattern(
 ) -> Bool {
   match infer_marker_name(pattern) {
     Some(name) => {
-      // `infer X extends Bound` only binds when `source extends Bound`.
-      // Undecidable cases (`None`) optimistically allow the bind so
-      // generic callers can retry after substitution; definitive
-      // `Some(false)` rejects the bind so the surrounding conditional
-      // can pick its false branch.
+      // `infer X extends Bound` only binds when `source` is provably
+      // assignable to `Bound`. TS strict mode treats an undecidable
+      // `extends` as a non-match so the surrounding conditional can
+      // pick its false branch instead of silently widening the bound.
       match infer_marker_bound(pattern) {
         Some(bound) =>
           match extends_decision(source, bound) {
-            Some(false) => return false
-            _ => ()
+            Some(true) => ()
+            _ => return false
           }
         None => ()
       }
