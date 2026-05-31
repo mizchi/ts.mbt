@@ -5862,6 +5862,19 @@ test "expr_check: valid TS patterns are not false-positives" {
         #|}
       ),
     ),
+    // Arrays / tuples are iterable: assignable to `Iterable<T>` and friends.
+    (
+      "array-is-iterable",
+      (
+        #|function h(xs: number[]): Iterable<number> {
+        #|  return xs;
+        #|}
+        #|function* g(): Generator<number> {
+        #|  const arr: number[] = [1, 2, 3];
+        #|  yield* arr;
+        #|}
+      ),
+    ),
     // Literal values assign to literal / literal-union targets — the literal
     // type must not be widened before the assignability check.
     (

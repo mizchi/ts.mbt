@@ -16,6 +16,21 @@ pub fn is_assignable_to(source : @ast.TsType, target : @ast.TsType) -> Bool {
 }
 
 ///|
+// Single-type-argument generic names whose element type an array satisfies:
+// `T[]` is assignable to each of these when the element types are compatible.
+fn is_array_like_iterable_name(name : String) -> Bool {
+  match name {
+    "Iterable"
+    | "IterableIterator"
+    | "ArrayLike"
+    | "ReadonlyArray"
+    | "ConcatArray"
+    | "RelativeIndexable" => true
+    _ => false
+  }
+}
+
+///|
 pub fn is_assignable_to_bivariant(
   source : @ast.TsType,
   target : @ast.TsType,
@@ -133,9 +148,30 @@ fn is_assignable_to_inner(
     (NumberLiteral(_), Number) => true
     (BigIntLiteral(_), BigInt) => true
     (BooleanLiteral(_), Boolean) => true
+    // Arrays / typed arrays are iterable: `T[]` is assignable to
+    // `Iterable<T>` / `IterableIterator<T>` / `ArrayLike<T>` and the
+    // `ReadonlyArray<T>` form. Element type is covariant.
+    (Array(s_inner), Applied(t_name, [t_inner])) =>
+      if is_array_like_iterable_name(t_name) {
+        is_assignable_to_inner(s_inner, t_inner, bivariant_params)
+      } else {
+        false
+      }
+    (Array(s_inner), Applied("ReadonlyArray", [t_inner])) =>
+      is_assignable_to_inner(s_inner, t_inner, bivariant_params)
     // Compound covariance/contravariance.
     (Array(s_inner), Array(t_inner)) =>
       is_assignable_to_inner(s_inner, t_inner, bivariant_params)
+    // Tuples are iterable: `[A, B]` is assignable to `Iterable<A | B>` etc.
+    // The element type is the union of the tuple's slot types.
+    (Tuple(s_items), Applied(t_name, [t_inner])) =>
+      if is_array_like_iterable_name(t_name) {
+        s_items
+        .iter()
+        .all(fn(it) { is_assignable_to_inner(it, t_inner, bivariant_params) })
+      } else {
+        false
+      }
     (Tuple(s_items), Tuple(t_items)) => {
       if s_items.length() != t_items.length() {
         return false
