@@ -282,6 +282,7 @@ fn parse_module_or_empty(src : String) -> @ast.TsModule {
         namespaces: [],
         enums: [],
         module_augmentations: [],
+    top_level_stmts: [],
       }
   }
 }

@@ -10,6 +10,7 @@ fn empty_module() -> @ast.TsModule {
     namespaces: [],
     enums: [],
     module_augmentations: [],
+    top_level_stmts: [],
   }
 }
 

@@ -413,6 +413,7 @@ async fn load_decl_module_info(
           namespaces: [],
           enums: [],
           module_augmentations: [],
+    top_level_stmts: [],
         }
       }
   }
@@ -9081,6 +9082,7 @@ pub async fn emit_moonbit_decl_from_entry_path(
     namespaces: [],
     enums,
     module_augmentations: [],
+    top_level_stmts: [],
   }
   // Run the checker over the final module shape and surface anything it
   // catches as a generator-level note. The emit pipeline is internally

@@ -3186,6 +3186,20 @@ fn check_expr_against(
       }
       return
     }
+    // `Readonly<T[]>` contextual typing — delegate to element checking on
+    // the inner array type so `['a', 'b'] as Readonly<string[]>` works.
+    (ArrayLit(items), Applied("Readonly", [Array(elem)])) => {
+      for i, item in items {
+        check_expr_against(
+          env,
+          item,
+          elem,
+          ctx,
+          sub_path + "[" + i.to_string() + "]",
+        )
+      }
+      return
+    }
     _ => ()
   }
   // Contextual typing for object literals against a struct / interface /
@@ -3266,6 +3280,19 @@ fn check_expr_against(
   // correctly assigns to `string` without a false mismatch.
   let inferred_u = ctx.resolver.unwrap(inferred)
   let expected_u = ctx.resolver.unwrap(expected)
+  // If the expected type is a `Named` reference that the resolver can't expand
+  // (e.g. a generic type parameter like `T`, or a qualified name like
+  // `Intl.NumberFormatPartTypes` that isn't in the module's declaration list),
+  // skip the assignability check rather than emit a false positive.
+  match expected_u {
+    Named(n) =>
+      if ctx.resolver.type_aliases.get(n) is None &&
+        ctx.resolver.interfaces.get(n) is None &&
+        ctx.resolver.classes.get(n) is None {
+        return
+      }
+    _ => ()
+  }
   if !is_assignable_to(inferred_u, expected_u) {
     // Display the widened form of the inferred type (`number` rather than the
     // precise `42`) so the message reads naturally; the precise literal was
@@ -6875,6 +6902,27 @@ pub fn check_module_function_bodies(
         }
         None => ()
       }
+    }
+  }
+  // Top-level statements (const/let/var with explicit type annotations).
+  // Walk them in a module-scope env so local names resolve correctly.
+  if module_.top_level_stmts.length() > 0 {
+    let top_ctx : CheckCtx = {
+      path_prefix: "top-level",
+      return_type: @ast.TsType::Void,
+      yield_type: @ast.TsType::Any,
+      resolver,
+      issues: [],
+    }
+    let env = ExprEnv::new()
+    for v in module_.values {
+      env.bind(v.name, v.type_)
+    }
+    for stmt in module_.top_level_stmts {
+      check_stmt(env, stmt, top_ctx)
+    }
+    for issue in top_ctx.issues {
+      all.push(issue)
     }
   }
   all
