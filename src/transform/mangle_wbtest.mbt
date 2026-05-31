@@ -396,6 +396,61 @@ test "mangle: shape-coloring keeps class fields and methods distinct" {
 }
 
 ///|
+
+///|
+// Arrow functions capture `this` from the enclosing scope. A field
+// that's only touched inside an arrow inside a class method is still
+// part of the surrounding class's shape — skipping the arrow body
+// would let shape-coloring collapse it onto a sibling field.
+test "mangle: shape-coloring walks arrows for captured this" {
+  let cfg = ManglerConfig::default()
+    .with_mangle_properties(true)
+    .with_mangle_properties_shape_color(true)
+  let src =
+    #|class Widget {
+    #|  constructor() {
+    #|    this.beta = 2;
+    #|  }
+    #|  init() { (() => { this.alpha = 1; })(); }
+    #|}
+    #|const w = new Widget();
+    #|w.init();
+    #|sink(w.beta);
+  let block = try @parser.parse_block_from_source(src) catch {
+    e => {
+      fail("parse error: \{e}")
+      return
+    }
+  } noraise {
+    b => b
+  }
+  let lifted = iife_class_lift_block(block)
+  let mangled = mangle_block(lifted, cfg)
+  let e = Emitter::new()
+  for s in mangled.stmts {
+    emit_stmt(e, s)
+    e.nl()
+  }
+  let js = e.to_string()
+  assert_false(js.contains("alpha"))
+  assert_false(js.contains("beta"))
+  let shorts : Map[String, Bool] = {}
+  for c in "abcdefghijklmnopqrstuvwxyz" {
+    let probe = "." + c.to_string()
+    if js.contains(probe) {
+      shorts[c.to_string()] = true
+    }
+  }
+  let _ = shorts.remove("p")
+  // alpha (arrow-captured) + beta (direct) + init (method) must use
+  // three distinct short names.
+  assert_true(
+    shorts.length() >= 3,
+    msg="expected >= 3 short names, got \{shorts.length()} — js: \{js}",
+  )
+}
+
+///|
 test "mangle: shape-coloring catches Symbol PropReceiver conflicts" {
   let cfg = ManglerConfig::default()
     .with_mangle_properties(true)

@@ -1289,9 +1289,16 @@ fn collect_this_member_names_in_expr(
         collect_this_member_names_in_expr(e, emit)
       }
     }
-    // Nested function / arrow / class bodies have their own `this`;
-    // skip their interiors here.
-    ArrowFunc(_, _, _, _) | FuncExpr(_) | NativeClassExpr(_, _) => ()
+    // Arrow functions inherit `this` from the enclosing scope, so a
+    // `this.X` access inside an arrow inside a class method still
+    // refers to the surrounding class instance — keep walking. Only
+    // `FuncExpr` and `NativeClassExpr` introduce their own `this`.
+    ArrowFunc(_, _, body, _) =>
+      match body {
+        ArrowExpr(e) => collect_this_member_names_in_expr(e, emit)
+        ArrowBlock(b) => collect_this_member_names_in_block(b, emit)
+      }
+    FuncExpr(_) | NativeClassExpr(_, _) => ()
     // Leaves and unhandled forms — no `this` member to extract.
     _ => ()
   }
