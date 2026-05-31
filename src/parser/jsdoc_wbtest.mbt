@@ -1,5 +1,7 @@
 // JSDoc parser white-box tests.
 
+using @test { assert_eq }
+
 ///|
 test "jsdoc: plain `/* */` returns None" {
   let r = parse_jsdoc_block("/* not a jsdoc */")

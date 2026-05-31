@@ -240,7 +240,7 @@ fn mangle_private_name(name : String, brand : String) -> String {
     // identifier (`__brand__#field`). The brand prefix already
     // gives uniqueness for access control; the `#` was only
     // meaningful in the source-level private-field syntax.
-    brand + "__" + name.substring(start=1, end=name.length()).to_string()
+    brand + "__" + name[1:].to_owned()
   } else {
     name
   }
@@ -336,155 +336,6 @@ fn Parser::parse_class_base_name(self : Parser) -> String raise ParseError {
     return "<expr-base>"
   }
   full_name
-}
-
-///|
-/// Map a contextual-keyword token to the identifier name it would
-/// have if it appeared in an identifier position (e.g. `Declare` ->
-/// `Some("declare")`). Plain identifiers and non-keyword tokens
-/// return `None`. Used at heritage clause / similar positions where
-/// Wrap a hoisted static-field initializer so its `this` references
-/// resolve to the class (matching ES static-init semantics) once the
-/// initializer evaluates at module scope. Generates
-/// `(function() { return init }).call(class_name)`. Arrow `this`
-/// captures the wrapping function's `this`, so any
-/// `(props) => this.foo` inside the init still sees the class.
-fn wrap_static_field_init_with_this(
-  init : @ast.TsExpr,
-  class_name : String,
-) -> @ast.TsExpr {
-  if not(expr_contains_this(init)) {
-    return init
-  }
-  let inner_func : @ast.TsFunc = {
-    name: "",
-    type_params: [],
-    params: [],
-    return_type: @ast.TsType::Any,
-    body: { stmts: [Return(Some(init))], stmt_positions: [] },
-    const_type_params: [],
-    is_generator: false,
-    is_async: false,
-  }
-  @ast.TsExpr::MethodCall(@ast.TsExpr::FuncExpr(inner_func), "call", [
-    @ast.TsExpr::Var(class_name),
-  ])
-}
-
-///|
-/// Heuristic check: does the expression mention `this` outside a
-/// nested non-arrow function? A `this` inside an arrow counts; a
-/// `this` inside a `function() {…}` doesn't because functions
-/// shadow `this`. Used to skip the static-field wrap when no
-/// rebinding is needed.
-fn expr_contains_this(e : @ast.TsExpr) -> Bool {
-  match e {
-    Var("this") => true
-    FuncExpr(_) => false
-    Var(_) => false
-    NumberLit(_) | IntLit(_) | BigIntLit(_) | BoolLit(_) | StringLit(_) => false
-    Call(_, args) | New(_, args) => {
-      for a in args {
-        if expr_contains_this(a) {
-          return true
-        }
-      }
-      false
-    }
-    CallExpr(callee, args) | NewExpr(callee, args) => {
-      if expr_contains_this(callee) {
-        return true
-      }
-      for a in args {
-        if expr_contains_this(a) {
-          return true
-        }
-      }
-      false
-    }
-    MethodCall(recv, _, args) => {
-      if expr_contains_this(recv) {
-        return true
-      }
-      for a in args {
-        if expr_contains_this(a) {
-          return true
-        }
-      }
-      false
-    }
-    PropAccess(recv, _) => expr_contains_this(recv)
-    IndexAccess(recv, idx) =>
-      expr_contains_this(recv) || expr_contains_this(idx)
-    BinOp(_, l, r) | Seq(l, r) => expr_contains_this(l) || expr_contains_this(r)
-    Cond(c, t, els) =>
-      expr_contains_this(c) || expr_contains_this(t) || expr_contains_this(els)
-    UnaryOp(_, v)
-    | NonNull(v)
-    | OptionalChain(v)
-    | Await(v)
-    | Spread(v)
-    | PureCall(v)
-    | YieldStar(v) => expr_contains_this(v)
-    Yield(opt) =>
-      match opt {
-        Some(v) => expr_contains_this(v)
-        None => false
-      }
-    As(v, _) | Satisfies(v, _) => expr_contains_this(v)
-    AssignExpr(_, v) => expr_contains_this(v)
-    CompoundAssignExpr(t, _, v) =>
-      expr_contains_this(t) || expr_contains_this(v)
-    AssignPattern(_, v) => expr_contains_this(v)
-    PropAssignExpr(recv, _, v) =>
-      expr_contains_this(recv) || expr_contains_this(v)
-    IndexAssignExpr(recv, idx, v) =>
-      expr_contains_this(recv) ||
-      expr_contains_this(idx) ||
-      expr_contains_this(v)
-    ComputedProp(k, v) => expr_contains_this(k) || expr_contains_this(v)
-    ArrayLit(items) => {
-      for i in items {
-        if expr_contains_this(i) {
-          return true
-        }
-      }
-      false
-    }
-    ObjectLit(entries) => {
-      for ent in entries {
-        if expr_contains_this(ent.1) {
-          return true
-        }
-      }
-      false
-    }
-    ArrowFunc(_, _, body, _) =>
-      match body {
-        ArrowExpr(ee) => expr_contains_this(ee)
-        ArrowBlock(_) => true
-      }
-    TaggedTemplate(tag, _, _, exprs) => {
-      if expr_contains_this(tag) {
-        return true
-      }
-      for ee in exprs {
-        if expr_contains_this(ee) {
-          return true
-        }
-      }
-      false
-    }
-    TemplateLiteral(_, exprs) => {
-      for ee in exprs {
-        if expr_contains_this(ee) {
-          return true
-        }
-      }
-      false
-    }
-    _ => true
-  }
 }
 
 ///|
@@ -826,9 +677,11 @@ fn inject_assigns_after_super_in_stmt(
 //   DecoratorMemberExpression ::= '(' Expression ')'
 //                              | IdentifierReference ('.' IdentifierName)*
 fn Parser::skip_decorator(self : Parser) -> Unit {
-  match (try? self.parse_decorator_expr()) {
-    Ok(Some(expr)) => self.pending_decorators.push(expr)
+  try self.parse_decorator_expr() catch {
     _ => ()
+  } noraise {
+    Some(expr) => self.pending_decorators.push(expr)
+    None => ()
   }
 }
 
@@ -1125,7 +978,7 @@ fn Parser::parse_class_body(
         let mut super_inserted = false
         for s in body.stmts {
           new_stmts.push(s)
-          if not(super_inserted) && self.is_super_call_stmt(s) {
+          if !super_inserted && self.is_super_call_stmt(s) {
             for n in property_names {
               new_stmts.push(
                 PropAssign(@ast.TsExpr::Var("this"), n, @ast.TsExpr::Var(n)),
@@ -1134,7 +987,7 @@ fn Parser::parse_class_body(
             super_inserted = true
           }
         }
-        if not(super_inserted) {
+        if !super_inserted {
           let prepended : Array[@ast.TsStmt] = []
           for n in property_names {
             prepended.push(
@@ -1285,7 +1138,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       for element in elements {
         match element {
           Field(is_static, Name(field_name), _, Some(init)) =>
-            if not(is_static) {
+            if !is_static {
               field_assigns.push(
                 PropAssign(@ast.TsExpr::Var("this"), field_name, init),
               )
@@ -1863,7 +1716,7 @@ fn Parser::parse_class_decl_with_abstract(
       for element in elements {
         match element {
           Field(is_static, Name(field_name), _, Some(init)) =>
-            if not(is_static) {
+            if !is_static {
               field_assigns.push(
                 PropAssign(@ast.TsExpr::Var("this"), field_name, init),
               )

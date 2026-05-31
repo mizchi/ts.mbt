@@ -22,21 +22,6 @@ fn Parser::parse_asserted_exponent(
 }
 
 ///|
-fn Parser::consume_trailing_assertions(self : Parser) -> Bool raise ParseError {
-  // Consume `as` / `satisfies` chain without wrapping. Returns true when at
-  // least one assertion was consumed. Prefer `consume_trailing_assertions_wrap`
-  // for the parsed expression form so the assertion survives into the AST.
-  let mut had_assertion = false
-  while self.match_(As) ||
-        self.match_ident("as") ||
-        self.match_ident("satisfies") {
-    had_assertion = true
-    let _ = self.parse_type()
-  }
-  had_assertion
-}
-
-///|
 /// Consume trailing `as T` / `satisfies T` assertions and return the
 /// wrapped expression (`As(...)` / `Satisfies(...)`). The boolean indicates
 /// whether anything was consumed so callers can chain further `as`-aware
@@ -1422,7 +1407,7 @@ fn Parser::parse_jsx_opening_tag(
       break
     }
   }
-  let tag = self.src[tag_start:i].to_string()
+  let tag = self.src[tag_start:i].to_owned()
   // Attributes loop.
   while i < self.src.length() {
     let c = self.src[i].to_int().unsafe_to_char()
@@ -1437,7 +1422,7 @@ fn Parser::parse_jsx_opening_tag(
     if c == '{' {
       let end = self.skip_jsx_braces_in_source(i)
       if end > i + 1 {
-        let inner = self.src[i + 1:end - 1].to_string()
+        let inner = self.src[i + 1:end - 1].to_owned()
         let trimmed = inner.trim()
         if trimmed.length() > 0 {
           attr_embeds = attr_embeds + 1
@@ -1466,7 +1451,7 @@ fn Parser::parse_jsx_opening_tag(
       // Couldn't lex a name — break to avoid an infinite loop.
       break
     }
-    let attr_name = self.src[name_start:i].to_string()
+    let attr_name = self.src[name_start:i].to_owned()
     // Skip whitespace.
     while i < self.src.length() {
       let wc = self.src[i].to_int().unsafe_to_char()
@@ -1491,21 +1476,22 @@ fn Parser::parse_jsx_opening_tag(
         let vc = self.src[i].to_int().unsafe_to_char()
         if vc == '{' {
           let end = self.skip_jsx_braces_in_source(i)
-          let inner = self.src[i + 1:end - 1].to_string()
+          let inner = self.src[i + 1:end - 1].to_owned()
           let trimmed = inner.trim()
           if trimmed.length() > 0 {
             let payload_str = if trimmed.has_prefix("...") {
-              trimmed[3:].to_string().trim().to_string()
+              trimmed[3:].to_owned().trim().to_owned()
             } else {
-              trimmed.to_string()
+              trimmed.to_owned()
             }
             let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
-            match (try? sub.parse_expr()) {
-              Ok(e) => {
+            try sub.parse_expr() catch {
+              _ => attrs.push((attr_name, None))
+            } noraise {
+              e => {
                 attrs.push((attr_name, Some(e)))
                 attr_embeds = attr_embeds + 1
               }
-              Err(_) => attrs.push((attr_name, None))
             }
           } else {
             attrs.push((attr_name, None))
@@ -1519,7 +1505,7 @@ fn Parser::parse_jsx_opening_tag(
                 self.src[i].to_int().unsafe_to_char() != quote {
             i += 1
           }
-          let raw = self.src[str_start:i].to_string()
+          let raw = self.src[str_start:i].to_owned()
           attrs.push((attr_name, Some(@ast.TsExpr::StringLit(raw))))
           if i < self.src.length() {
             i += 1
@@ -1559,21 +1545,22 @@ fn Parser::scan_jsx_source_end_with_embeds(
       // Capture the source between `{` and the matching `}` and try to
       // parse it as a TS expression. Empty braces (`{}`) are ignored.
       if end > i + 1 {
-        let inner = self.src[i + 1:end - 1].to_string()
+        let inner = self.src[i + 1:end - 1].to_owned()
         let trimmed = inner.trim()
         if trimmed.length() > 0 {
           // Spread-attribute syntax `{...expr}` and child-spread
           // `{...arr}` show up as a leading `...`; strip it before
           // parsing.
           let payload_str = if trimmed.has_prefix("...") {
-            trimmed[3:].to_string().trim().to_string()
+            trimmed[3:].to_owned().trim().to_owned()
           } else {
-            trimmed.to_string()
+            trimmed.to_owned()
           }
           let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
-          match (try? sub.parse_expr()) {
-            Ok(e) => embeds.push(e)
-            Err(_) => ()
+          try sub.parse_expr() catch {
+            _ => ()
+          } noraise {
+            e => embeds.push(e)
           }
         }
       }
@@ -1643,21 +1630,22 @@ fn Parser::scan_jsx_source_end_with_embeds(
           } else if inner == '{' {
             let end = self.skip_jsx_braces_in_source(i)
             if end > i + 1 {
-              let inner_src = self.src[i + 1:end - 1].to_string()
+              let inner_src = self.src[i + 1:end - 1].to_owned()
               let trimmed = inner_src.trim()
               if trimmed.length() > 0 {
                 let payload_str = if trimmed.has_prefix("...") {
-                  trimmed[3:].to_string().trim().to_string()
+                  trimmed[3:].to_owned().trim().to_owned()
                 } else {
-                  trimmed.to_string()
+                  trimmed.to_owned()
                 }
                 let sub = Parser::from_source_with_jsx(
                   payload_str,
                   self.allow_jsx,
                 )
-                match (try? sub.parse_expr()) {
-                  Ok(e) => embeds.push(e)
-                  Err(_) => ()
+                try sub.parse_expr() catch {
+                  _ => ()
+                } noraise {
+                  e => embeds.push(e)
                 }
               }
             }
@@ -1681,106 +1669,6 @@ fn Parser::scan_jsx_source_end_with_embeds(
     }
   }
   (i, embeds)
-}
-
-///|
-fn Parser::scan_jsx_source_end(self : Parser, start : Int) -> Int {
-  let mut i = start
-  let mut depth = 0
-  while i < self.src.length() {
-    let c = self.src[i].to_int().unsafe_to_char()
-    if c == '{' {
-      i = self.skip_jsx_braces_in_source(i)
-      continue
-    }
-    if c != '<' {
-      i += 1
-      continue
-    }
-    if i + 2 < self.src.length() &&
-      self.src[i + 1].to_int().unsafe_to_char() == '/' &&
-      self.src[i + 2].to_int().unsafe_to_char() == '>' {
-      i += 3
-      if depth > 0 {
-        depth -= 1
-      }
-      if depth == 0 {
-        break
-      }
-      continue
-    }
-    if i + 1 < self.src.length() &&
-      self.src[i + 1].to_int().unsafe_to_char() == '>' {
-      depth += 1
-      i += 2
-      continue
-    }
-    if i + 1 < self.src.length() &&
-      self.src[i + 1].to_int().unsafe_to_char() == '/' {
-      i += 2
-      while i < self.src.length() &&
-            self.src[i].to_int().unsafe_to_char() != '>' {
-        i += 1
-      }
-      if i < self.src.length() {
-        i += 1
-      }
-      if depth > 0 {
-        depth -= 1
-      }
-      if depth == 0 {
-        break
-      }
-      continue
-    }
-
-    depth += 1
-    i += 1
-    let mut quote : Char? = None
-    while i < self.src.length() {
-      let inner = self.src[i].to_int().unsafe_to_char()
-      match quote {
-        Some(q) => {
-          if inner == '\\' {
-            i += 2
-            continue
-          }
-          if inner == q {
-            quote = None
-          }
-          i += 1
-        }
-        None =>
-          if inner == '"' || inner == '\'' || inner == '`' {
-            quote = Some(inner)
-            i += 1
-          } else if inner == '{' {
-            i = self.skip_jsx_braces_in_source(i)
-          } else if inner == '/' &&
-            i + 1 < self.src.length() &&
-            self.src[i + 1].to_int().unsafe_to_char() == '>' {
-            i += 2
-            depth -= 1
-            break
-          } else if inner == '>' {
-            i += 1
-            break
-          } else {
-            i += 1
-          }
-      }
-    }
-    if depth == 0 {
-      break
-    }
-  }
-  i
-}
-
-///|
-fn Parser::try_skip_parenthesized_jsx_expr(self : Parser) -> Bool {
-  let (ok, _) = self.try_parse_parenthesized_jsx_expr()
-  ok
 }
 
 ///|
@@ -1913,23 +1801,11 @@ fn Parser::skip_jsx_braces_in_source(self : Parser, idx : Int) -> Int {
 }
 
 ///|
-fn Parser::skip_jsx_element(self : Parser) -> Unit {
-  if self.src.length() == 0 {
-    self.skip_jsx_element_tokens()
-    return
-  }
-  let i = self.scan_jsx_source_end(self.peek().pos)
-  self.advance_to_source_pos(i)
-}
-
-///|
-/// Same as `skip_jsx_element` but returns the embedded `{expr}` sub-
-/// expressions so callers can wrap them in a `JsxElement(...)` AST
-/// node. Call sites that want a real AST should prefer this over
-/// `skip_jsx_element + Var("__jsx__")`.
+/// Returns the embedded `{expr}` sub-expressions so callers can wrap
+/// them in a `JsxElement(...)` AST node.
 fn Parser::parse_jsx_element_expr(
   self : Parser,
-) -> @ast.TsExpr raise ParseError {
+) -> @ast.TsExpr {
   if self.src.length() == 0 {
     self.skip_jsx_element_tokens()
     return @ast.TsExpr::JsxElement("", [], [])
@@ -2061,7 +1937,7 @@ fn Parser::parse_jsx_opening_header(
       break
     }
   }
-  let tag = self.src[name_start:i].to_string()
+  let tag = self.src[name_start:i].to_owned()
   let mut self_close = false
   // Explicit generic type arguments `<Box<string> .../>`. Skip the
   // balanced angle brackets so the rest of the attribute loop sees the
@@ -2110,14 +1986,15 @@ fn Parser::parse_jsx_opening_header(
       // Spread attribute `{...expr}` — capture as ("", Some(expr)).
       let end = self.skip_jsx_braces_in_source(i)
       if end > i + 1 {
-        let inner_src = self.src[i + 1:end - 1].to_string()
+        let inner_src = self.src[i + 1:end - 1].to_owned()
         let trimmed = inner_src.trim()
         if trimmed.length() > 0 && trimmed.has_prefix("...") {
-          let payload_str = trimmed[3:].to_string().trim().to_string()
+          let payload_str = trimmed[3:].to_owned().trim().to_owned()
           let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
-          match (try? sub.parse_expr()) {
-            Ok(e) => attrs.push(("", Some(e)))
-            Err(_) => ()
+          try sub.parse_expr() catch {
+            _ => ()
+          } noraise {
+            e => attrs.push(("", Some(e)))
           }
         }
       }
@@ -2143,7 +2020,7 @@ fn Parser::parse_jsx_opening_header(
     if i == name_start {
       break
     }
-    let attr_name = self.src[name_start:i].to_string()
+    let attr_name = self.src[name_start:i].to_owned()
     while i < self.src.length() {
       let wc = self.src[i].to_int().unsafe_to_char()
       if wc == ' ' || wc == '\t' || wc == '\n' || wc == '\r' {
@@ -2166,18 +2043,19 @@ fn Parser::parse_jsx_opening_header(
         let vc = self.src[i].to_int().unsafe_to_char()
         if vc == '{' {
           let end = self.skip_jsx_braces_in_source(i)
-          let inner_src = self.src[i + 1:end - 1].to_string()
+          let inner_src = self.src[i + 1:end - 1].to_owned()
           let trimmed = inner_src.trim()
           if trimmed.length() > 0 {
             let payload_str = if trimmed.has_prefix("...") {
-              trimmed[3:].to_string().trim().to_string()
+              trimmed[3:].to_owned().trim().to_owned()
             } else {
-              trimmed.to_string()
+              trimmed.to_owned()
             }
             let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
-            match (try? sub.parse_expr()) {
-              Ok(e) => attrs.push((attr_name, Some(e)))
-              Err(_) => attrs.push((attr_name, None))
+            try sub.parse_expr() catch {
+              _ => attrs.push((attr_name, None))
+            } noraise {
+              e => attrs.push((attr_name, Some(e)))
             }
           } else {
             attrs.push((attr_name, None))
@@ -2191,7 +2069,7 @@ fn Parser::parse_jsx_opening_header(
                 self.src[i].to_int().unsafe_to_char() != quote {
             i += 1
           }
-          let raw = self.src[str_start:i].to_string()
+          let raw = self.src[str_start:i].to_owned()
           attrs.push((attr_name, Some(@ast.TsExpr::StringLit(raw))))
           if i < self.src.length() {
             i += 1
@@ -2224,7 +2102,7 @@ fn Parser::parse_jsx_children(
   let mut text_start = i
   let flush_text = fn(end_idx) {
     if end_idx > text_start {
-      let raw = self.src[text_start:end_idx].to_string()
+      let raw = self.src[text_start:end_idx].to_owned()
       let trimmed = raw.trim()
       if trimmed.length() > 0 {
         children.push(@ast.TsExpr::StringLit(raw))
@@ -2255,18 +2133,19 @@ fn Parser::parse_jsx_children(
     if c == '{' {
       flush_text(i)
       let end = self.skip_jsx_braces_in_source(i)
-      let inner_src = self.src[i + 1:end - 1].to_string()
+      let inner_src = self.src[i + 1:end - 1].to_owned()
       let trimmed = inner_src.trim()
       if trimmed.length() > 0 {
         let payload_str = if trimmed.has_prefix("...") {
-          trimmed[3:].to_string().trim().to_string()
+          trimmed[3:].to_owned().trim().to_owned()
         } else {
-          trimmed.to_string()
+          trimmed.to_owned()
         }
         let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
-        match (try? sub.parse_expr()) {
-          Ok(e) => children.push(e)
-          Err(_) => ()
+        try sub.parse_expr() catch {
+          _ => ()
+        } noraise {
+          e => children.push(e)
         }
       }
       i = end
@@ -2318,7 +2197,7 @@ fn Parser::skip_jsx_closing_tag(
       break
     }
   }
-  let closing_name = self.src[name_start:i].to_string()
+  let closing_name = self.src[name_start:i].to_owned()
   if closing_name != tag {
     return None
   }
@@ -2585,7 +2464,7 @@ fn Parser::parse_angle_bracket_type_assertion_from_source(
   if type_end < type_start {
     raise ParseError("Expected Gt, got \{self.peek().kind}")
   }
-  let type_src = self.src[type_start:type_end].to_string()
+  let type_src = self.src[type_start:type_end].to_owned()
   let type_parser = Parser::from_source_with_jsx(type_src, false)
   let _ = type_parser.parse_type()
   self.advance_to_source_pos(end_pos)

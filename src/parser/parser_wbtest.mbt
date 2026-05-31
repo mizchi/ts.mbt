@@ -200,7 +200,7 @@ test "parser: parse for stmt" {
       match update {
         Some(Assign("i", BinOp(Add, Var("i"), IntLit(1))))
         | Some(Expr(AssignExpr("i", BinOp(Add, Var("i"), IntLit(1))))) => ()
-        _ => fail("unexpected update: \{update}")
+        _ => fail("unexpected update: " + @debug.to_string(update))
       }
       assert_eq(body.stmts.length(), 1)
     }
@@ -2023,18 +2023,20 @@ test "parser: interface field name can be a fractional number" {
   // `interface I { 1.0: T; }` — the lexer emits `Number(1.0)` for the key.
   // Previously only `Int(n)` was accepted, raising "Expected field name".
   let src = "interface I { 1.0: number; 2: string; }"
-  match (try? Parser::from_source(src).parse_module()) {
-    Ok(_) => ()
-    Err(e) => fail("parse error: \{e}")
+  try Parser::from_source(src).parse_module() catch {
+    e => fail("parse error: \{e}")
+  } noraise {
+    _ => ()
   }
 }
 
 ///|
 test "parser: class can `extends null`" {
   let src = "class C extends null { x = 1; }"
-  match (try? Parser::from_source(src).parse_module()) {
-    Ok(_) => ()
-    Err(e) => fail("parse error: \{e}")
+  try Parser::from_source(src).parse_module() catch {
+    e => fail("parse error: \{e}")
+  } noraise {
+    _ => ()
   }
 }
 
@@ -2047,8 +2049,10 @@ test "parser: `using` declaration lowers to const + try-finally" {
     #|  using d1 = { [Symbol.dispose]() {} };
     #|  using d2 = null;
     #|}
-  match (try? Parser::from_source(src).parse_module()) {
-    Ok(m) => {
+  try Parser::from_source(src).parse_module() catch {
+    e => fail("parse error: \{e}")
+  } noraise {
+    m => {
       // f is in m.funcs
       let func = m.funcs.iter().filter(fn(f) { f.name == "f" }).next()
       let func_body = match func {
@@ -2068,7 +2072,6 @@ test "parser: `using` declaration lowers to const + try-finally" {
         _ => fail("expected Try with finally for d1")
       }
     }
-    Err(e) => fail("parse error: \{e}")
   }
 }
 
@@ -2078,9 +2081,10 @@ test "parser: `await using` declaration parses as a let binding" {
     #|async function f() {
     #|  await using d1 = { [Symbol.asyncDispose]() {} };
     #|}
-  match (try? Parser::from_source(src).parse_module()) {
-    Ok(_) => ()
-    Err(e) => fail("parse error: \{e}")
+  try Parser::from_source(src).parse_module() catch {
+    e => fail("parse error: \{e}")
+  } noraise {
+    _ => ()
   }
 }
 
@@ -2090,9 +2094,10 @@ test "parser: `for (using x of arr)` parses as a for-of loop" {
     #|function f() {
     #|  for (using d of [null, undefined]) { /* body */ }
     #|}
-  match (try? Parser::from_source(src).parse_module()) {
-    Ok(_) => ()
-    Err(e) => fail("parse error: \{e}")
+  try Parser::from_source(src).parse_module() catch {
+    e => fail("parse error: \{e}")
+  } noraise {
+    _ => ()
   }
 }
 
@@ -2100,9 +2105,10 @@ test "parser: `for (using x of arr)` parses as a for-of loop" {
 test "parser: nested anonymous class expression as base" {
   // `let C = class extends class extends class { a = 1 } { b = 2 } { c = 3 };`
   let src = "let C = class extends class extends class { a = 1 } { b = 2 } { c = 3 };"
-  match (try? Parser::from_source(src).parse_module()) {
-    Ok(_) => ()
-    Err(e) => fail("parse error: \{e}")
+  try Parser::from_source(src).parse_module() catch {
+    e => fail("parse error: \{e}")
+  } noraise {
+    _ => ()
   }
 }
 
@@ -2114,9 +2120,10 @@ test "parser: class extends with optional chain in base name" {
   let src =
     #|namespace A { export class B {} }
     #|class C extends A?.B {}
-  match (try? Parser::from_source(src).parse_module()) {
-    Ok(_) => ()
-    Err(e) => fail("parse error: \{e}")
+  try Parser::from_source(src).parse_module() catch {
+    e => fail("parse error: \{e}")
+  } noraise {
+    _ => ()
   }
 }
 
@@ -2133,9 +2140,10 @@ test "parser: super assignment / super.method() inside static initializer" {
     #|  static z5 = super.a = 0;
     #|  static z6 = super.a += 1;
     #|}
-  match (try? Parser::from_source(src).parse_module()) {
-    Ok(_) => ()
-    Err(e) => fail("parse error: \{e}")
+  try Parser::from_source(src).parse_module() catch {
+    e => fail("parse error: \{e}")
+  } noraise {
+    _ => ()
   }
 }
 
@@ -2148,9 +2156,10 @@ test "parser: `using` followed by newline is still a reference" {
     #|  using
     #|  x;
     #|}
-  match (try? Parser::from_source(src).parse_module()) {
-    Ok(_) => ()
-    Err(e) => fail("parse error: \{e}")
+  try Parser::from_source(src).parse_module() catch {
+    e => fail("parse error: \{e}")
+  } noraise {
+    _ => ()
   }
 }
 
@@ -2166,9 +2175,10 @@ test "parser: object literal as destructuring-assignment LHS in static field" {
     #|class C extends B {
     #|    static z13 = { ...super.a } = { x: 0 };
     #|}
-  match (try? Parser::from_source(src).parse_module()) {
-    Ok(_) => ()
-    Err(e) => fail("parse error: \{e}")
+  try Parser::from_source(src).parse_module() catch {
+    e => fail("parse error: \{e}")
+  } noraise {
+    _ => ()
   }
 }
 
@@ -2183,18 +2193,20 @@ test "parser: array literal as destructuring-assignment LHS" {
     #|}
   // We don't care about super in a function context; parse only checks
   // the structural shape.
-  match (try? Parser::from_source(src).parse_module()) {
-    Ok(_) => ()
-    Err(e) => fail("parse error: \{e}")
+  try Parser::from_source(src).parse_module() catch {
+    e => fail("parse error: \{e}")
+  } noraise {
+    _ => ()
   }
 }
 
 ///|
 test "parser: parse interface call-signature with type predicate return" {
   let src = "interface I1 { (p1: A): p1 is C; }"
-  match (try? Parser::from_source(src).parse_module()) {
-    Ok(_) => ()
-    Err(e) => fail("parse error: \{e}")
+  try Parser::from_source(src).parse_module() catch {
+    e => fail("parse error: \{e}")
+  } noraise {
+    _ => ()
   }
 }
 
@@ -2204,9 +2216,10 @@ test "parser: declare function tolerates missing return type" {
   // implicit `void`; we parse it as `Any` so the checker can fall
   // through gracefully.
   let src = "declare function acceptingBoolean(a: boolean);"
-  match (try? Parser::from_source(src).parse_module()) {
-    Ok(_) => ()
-    Err(e) => fail("parse error: \{e}")
+  try Parser::from_source(src).parse_module() catch {
+    e => fail("parse error: \{e}")
+  } noraise {
+    _ => ()
   }
 }
 
@@ -2216,9 +2229,10 @@ test "parser: arrow function type with untyped parameter" {
   // The parser previously chose the parenthesized-type fallback, leaving
   // the trailing `=>` dangling. Now it treats the missing colon as `Any`.
   let src = "declare function f(g: (item) => item is A);"
-  match (try? Parser::from_source(src).parse_module()) {
-    Ok(_) => ()
-    Err(e) => fail("parse error: \{e}")
+  try Parser::from_source(src).parse_module() catch {
+    e => fail("parse error: \{e}")
+  } noraise {
+    _ => ()
   }
 }
 
@@ -2233,9 +2247,10 @@ test "parser: ASI before `else` keyword" {
     #|  else
     #|    return 0
     #|}
-  match (try? Parser::from_source(src).parse_module()) {
-    Ok(_) => ()
-    Err(e) => fail("parse error: \{e}")
+  try Parser::from_source(src).parse_module() catch {
+    e => fail("parse error: \{e}")
+  } noraise {
+    _ => ()
   }
 }
 

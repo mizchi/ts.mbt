@@ -201,12 +201,13 @@ async test "bench parser: TypeScript lib files (file IO)" {
   ]
   let prepared : Array[(String, String)] = []
   for path in candidates {
-    match (try? @fs.read_file(path)) {
-      Ok(data) => {
+    try @fs.read_file(path) catch {
+      _ => ()
+    } noraise {
+      data => {
         let text = data.text()
         prepared.push((path, text))
       }
-      Err(_) => ()
     }
   }
   if prepared.length() == 0 {

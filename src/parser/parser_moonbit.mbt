@@ -121,7 +121,7 @@ fn lower_leading_ascii(name : String) -> String {
   }
   let first = name[0].unsafe_to_char()
   if first >= 'A' && first <= 'Z' {
-    (first.to_int() + 32).unsafe_to_char().to_string() + name[1:].to_string()
+    (first.to_int() + 32).unsafe_to_char().to_string() + name[1:].to_owned()
   } else {
     name
   }
@@ -190,13 +190,13 @@ fn moonbit_type_identifier(name : String, fallback : String) -> String {
     prefix += "Underscore"
     idx += 1
   }
-  let core = sanitized[idx:sanitized.length()].to_string()
+  let core = sanitized[idx:].to_owned()
   if core == "" {
     return fallback
   }
   let first = core[0].unsafe_to_char()
   let normalized_core = if first >= 'a' && first <= 'z' {
-    (first.to_int() - 32).unsafe_to_char().to_string() + core[1:].to_string()
+    (first.to_int() - 32).unsafe_to_char().to_string() + core[1:].to_owned()
   } else {
     core
   }
@@ -1064,7 +1064,7 @@ fn trim_underscores(name : String) -> String {
   while end_ > start && name[end_ - 1].unsafe_to_char() == '_' {
     end_ -= 1
   }
-  name[start:end_].to_string()
+  name[start:end_].to_owned()
 }
 
 ///|
