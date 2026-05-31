@@ -267,6 +267,104 @@ test "mangle: properties stay untouched by default (mangle_properties=false)" {
 }
 
 ///|
+// EXPERIMENTAL shape-coloring rename: properties that never co-occur
+// on the same shape may share a short name. Two distinct objects
+// with disjoint key sets should collapse into a single short-name
+// pool — packelyze-style.
+test "mangle: shape-coloring rename shares short names across disjoint shapes" {
+  let cfg = ManglerConfig::default()
+    .with_mangle_properties(true)
+    .with_mangle_properties_shape_color(true)
+  let src =
+    #|const point = { xCoord: 1, yCoord: 2 };
+    #|const event = { msgType: "click", msgPayload: null };
+    #|sink(point.xCoord, point.yCoord, event.msgType, event.msgPayload);
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      // The four original names disappear...
+      assert_false(js.contains("xCoord"))
+      assert_false(js.contains("yCoord"))
+      assert_false(js.contains("msgType"))
+      assert_false(js.contains("msgPayload"))
+      // ...and the rename pool reuses short names across the two
+      // disjoint shapes: only TWO distinct short names suffice.
+      // (Default global-cohort rename would have needed four.)
+      let single_char_names : Map[String, Bool] = {}
+      for c in "abcdefghijklmnopqrstuvwxyz" {
+        let probe = "." + c.to_string()
+        if js.contains(probe) {
+          single_char_names[c.to_string()] = true
+        }
+      }
+      // Strict expectation: <= 2 short names emitted for the four
+      // properties, because { xCoord, yCoord } and { msgType,
+      // msgPayload } are disjoint cliques.
+      assert_true(single_char_names.length() <= 2)
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+// Within the same object literal, every key pair conflicts — the
+// shape-coloring pass MUST keep them distinct.
+test "mangle: shape-coloring keeps co-occurring keys distinct" {
+  let cfg = ManglerConfig::default()
+    .with_mangle_properties(true)
+    .with_mangle_properties_shape_color(true)
+  let src =
+    #|const p = { xCoord: 1, yCoord: 2 };
+    #|sink(p.xCoord + p.yCoord);
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      assert_false(js.contains("xCoord"))
+      assert_false(js.contains("yCoord"))
+      // The shortened keys must still be distinct — fishing them
+      // out: the object literal must carry TWO entries.
+      let single_char_names : Map[String, Bool] = {}
+      for c in "abcdefghijklmnopqrstuvwxyz" {
+        let probe = "." + c.to_string()
+        if js.contains(probe) {
+          single_char_names[c.to_string()] = true
+        }
+      }
+      assert_true(single_char_names.length() >= 2)
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+// When a Symbol's PropReceiver uses both keys (`obj.foo; obj.bar`)
+// the conflict graph adds them even without a containing object
+// literal — the type information that bound `obj` carries the
+// shape.
+test "mangle: shape-coloring catches Symbol PropReceiver conflicts" {
+  let cfg = ManglerConfig::default()
+    .with_mangle_properties(true)
+    .with_mangle_properties_shape_color(true)
+  let src =
+    #|function go(o) { return sink(o.alpha, o.beta); }
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      assert_false(js.contains("alpha"))
+      assert_false(js.contains("beta"))
+      // `alpha` and `beta` are on the same `o`; they must NOT
+      // share a short name.
+      let shorts : Map[String, Bool] = {}
+      for c in "abcdefghijklmnopqrstuvwxyz" {
+        let probe = "." + c.to_string()
+        if js.contains(probe) {
+          shorts[c.to_string()] = true
+        }
+      }
+      assert_true(shorts.length() >= 2)
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
 test "mangle: opt-in property mangling renames non-reserved keys" {
   // With `with_mangle_properties(true)`, every property key that's
   // not in the reserved set gets renamed. Built-ins like `length` /
