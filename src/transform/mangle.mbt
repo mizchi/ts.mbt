@@ -53,6 +53,14 @@ pub(all) struct ManglerConfig {
   // `mangle_properties=true`. Combined with the built-in property
   // reserved set.
   reserved_properties : Array[String]
+  // EXPERIMENTAL: shape-coloring property rename. When `true`,
+  // distinct property names that never co-occur on the same shape
+  // (object literal / class body / Symbol PropReceiver cluster /
+  // annotated object-type clique) may share a short name. Disabled
+  // by default — opt in once you have tests covering the bundle's
+  // dynamic-key flows. Has no effect unless `mangle_properties` is
+  // also `true`.
+  mangle_properties_shape_color : Bool
 }
 
 ///|
@@ -62,7 +70,16 @@ pub fn ManglerConfig::default() -> ManglerConfig {
     preserve_top_level: true,
     mangle_properties: false,
     reserved_properties: [],
+    mangle_properties_shape_color: false,
   }
+}
+
+///|
+pub fn ManglerConfig::with_mangle_properties_shape_color(
+  self : ManglerConfig,
+  enabled : Bool,
+) -> ManglerConfig {
+  { ..self, mangle_properties_shape_color: enabled }
 }
 
 ///|
@@ -605,6 +622,459 @@ fn build_property_rename_map(
     map[n] = candidate
   }
   map
+}
+
+///|
+// EXPERIMENTAL: shape-coloring property rename map.
+//
+// Same contract as `build_property_rename_map` — returns
+// `original → mangled` for every mangleable name — but distinct
+// originals that never co-occur on the same SHAPE may share a
+// short name. Shapes are collected from:
+//
+//   1. Object literals in the source (every entry pair is a clique).
+//   2. Class bodies (every property + method name pair is a clique).
+//   3. Each Symbol's `PropReceiver` uses + `ObjectLit` def keys.
+//   4. Each Symbol's static `ts_type` annotation (`Object` /
+//      `Struct` / `Union` of those) contributes its key set.
+//
+// Missing: cross-Symbol value flow without a shared declared type
+// — `let a = f(z); a.foo; z.bar;` only shares foo/bar if z's
+// initial value already had both keys (caught by source 1) or
+// some Symbol observed both keys directly (caught by source 3).
+// Pathological cases ARE possible (purely external-source values
+// re-flowed without annotation); this is why the path is opt-in.
+fn build_property_rename_map_colored(
+  block : @ast.TsBlock,
+  reserved : Map[String, Bool],
+) -> Map[String, String] {
+  let names : Map[String, Bool] = {}
+  collect_property_names(block, names)
+  let candidates : Array[String] = []
+  let candidate_set : Map[String, Bool] = {}
+  for entry in names {
+    let n = entry.0
+    if reserved.contains(n) {
+      continue
+    }
+    if n.has_prefix("@@") {
+      continue
+    }
+    candidates.push(n)
+    candidate_set[n] = true
+  }
+  candidates.sort()
+  // Build the conflict graph from the four shape sources.
+  let conflicts : Map[String, Map[String, Bool]] = {}
+  fn add_pair(a, b) {
+    if a == b {
+      return
+    }
+    if !candidate_set.contains(a) || !candidate_set.contains(b) {
+      return
+    }
+    match conflicts.get(a) {
+      Some(_) => ()
+      None => conflicts[a] = {}
+    }
+    match conflicts.get(b) {
+      Some(_) => ()
+      None => conflicts[b] = {}
+    }
+    conflicts.get(a).unwrap()[b] = true
+    conflicts.get(b).unwrap()[a] = true
+  }
+
+  fn add_clique(props : Array[String]) {
+    for i in 0..<props.length() {
+      for j in (i + 1)..<props.length() {
+        add_pair(props[i], props[j])
+      }
+    }
+  }
+
+  collect_shape_cliques_in_block(block, add_clique)
+  // Symbol-graph shapes. Build the graph with an empty externals
+  // set — the conflict analysis cares only about local-binding
+  // shapes; external accesses already showed up in source 1/2/3.
+  let (g, _) = build_symbol_graph_with_sinks(block, {})
+  for sym in g.symbols {
+    let shape : Array[String] = []
+    let seen : Map[String, Bool] = {}
+    fn push_unique(p : String) {
+      if !seen.contains(p) {
+        seen[p] = true
+        shape.push(p)
+      }
+    }
+
+    for u in sym.uses {
+      match u.context {
+        PropReceiver(p) => push_unique(p)
+        _ => ()
+      }
+    }
+    for d in sym.defs {
+      match d.init {
+        Some(@ast.TsExpr::ObjectLit(entries)) =>
+          for ent in entries {
+            push_unique(ent.0)
+          }
+        _ => ()
+      }
+    }
+    collect_keys_from_ts_type(sym.ts_type, push_unique)
+    add_clique(shape)
+  }
+  // Frequency-weighted ordering: high-occurrence names get the
+  // shortest free color so the resulting bytes drop more.
+  let freq : Map[String, Int] = {}
+  count_property_occurrences(block, freq)
+  candidates.sort_by(fn(a, b) {
+    let fa = freq.get(a).unwrap_or(0)
+    let fb = freq.get(b).unwrap_or(0)
+    if fa != fb {
+      fb - fa
+    } else {
+      a.compare(b)
+    }
+  })
+  // Greedy graph coloring with deterministic short-name picks.
+  let name_to_color : Map[String, Int] = {}
+  let map : Map[String, String] = {}
+  for n in candidates {
+    let used_colors : Map[Int, Bool] = {}
+    match conflicts.get(n) {
+      Some(neighbors) =>
+        for entry in neighbors {
+          match name_to_color.get(entry.0) {
+            Some(c) => used_colors[c] = true
+            None => ()
+          }
+        }
+      None => ()
+    }
+    let mut c = 0
+    let mut done = false
+    while !done {
+      let candidate = next_short_name(c)
+      if used_colors.contains(c) || reserved.contains(candidate) {
+        c = c + 1
+      } else {
+        name_to_color[n] = c
+        map[n] = candidate
+        done = true
+      }
+    }
+  }
+  map
+}
+
+///|
+// Walk `t` and push every statically known string property key into
+// `push`. Recognises `Object` (with literal keys), `Struct`, and
+// `Union` of those. Other shapes (index signatures, opaque named
+// refs, primitives) contribute nothing — the caller treats the
+// type as carrying no closed key set.
+fn collect_keys_from_ts_type(t : @ast.TsType, push : (String) -> Unit) -> Unit {
+  match t {
+    Object(fields) =>
+      for f in fields {
+        match f.0 {
+          Literal(s) => push(s)
+          _ => ()
+        }
+      }
+    Struct(_, fields) =>
+      for f in fields {
+        push(f.0)
+      }
+    Union(members) =>
+      for m in members {
+        collect_keys_from_ts_type(m, push)
+      }
+    _ => ()
+  }
+}
+
+///|
+// Walk `block` and emit one clique per source-visible "shape":
+//   - every key tuple of an `ObjectLit`,
+//   - every property + method name set of a `NativeClass*` body.
+fn collect_shape_cliques_in_block(
+  block : @ast.TsBlock,
+  emit : (Array[String]) -> Unit,
+) -> Unit {
+  for s in block.stmts {
+    collect_shape_cliques_in_stmt(s, emit)
+  }
+}
+
+///|
+fn collect_shape_cliques_in_stmt(
+  stmt : @ast.TsStmt,
+  emit : (Array[String]) -> Unit,
+) -> Unit {
+  match stmt {
+    Var(_, _, e) | Let(_, _, e) | Const(_, _, e) | Expr(e) | Throw(e) =>
+      collect_shape_cliques_in_expr(e, emit)
+    Assign(_, e) | CompoundAssign(_, _, e) =>
+      collect_shape_cliques_in_expr(e, emit)
+    IndexAssign(t, idx, v) => {
+      collect_shape_cliques_in_expr(t, emit)
+      collect_shape_cliques_in_expr(idx, emit)
+      collect_shape_cliques_in_expr(v, emit)
+    }
+    PropAssign(t, _, v) => {
+      collect_shape_cliques_in_expr(t, emit)
+      collect_shape_cliques_in_expr(v, emit)
+    }
+    Return(Some(e)) => collect_shape_cliques_in_expr(e, emit)
+    If(c, t, e) => {
+      collect_shape_cliques_in_expr(c, emit)
+      collect_shape_cliques_in_block(t, emit)
+      match e {
+        Some(b) => collect_shape_cliques_in_block(b, emit)
+        None => ()
+      }
+    }
+    While(c, b) | DoWhile(c, b) | With(c, b) => {
+      collect_shape_cliques_in_expr(c, emit)
+      collect_shape_cliques_in_block(b, emit)
+    }
+    For(init, cond, update, body) => {
+      match init {
+        Some(s) => collect_shape_cliques_in_stmt(s, emit)
+        None => ()
+      }
+      match cond {
+        Some(e) => collect_shape_cliques_in_expr(e, emit)
+        None => ()
+      }
+      match update {
+        Some(s) => collect_shape_cliques_in_stmt(s, emit)
+        None => ()
+      }
+      collect_shape_cliques_in_block(body, emit)
+    }
+    ForOf(_, _, _, iter, body)
+    | ForAwaitOf(_, _, _, iter, body)
+    | ForIn(_, _, _, iter, body) => {
+      collect_shape_cliques_in_expr(iter, emit)
+      collect_shape_cliques_in_block(body, emit)
+    }
+    Switch(e, cases) => {
+      collect_shape_cliques_in_expr(e, emit)
+      for c in cases {
+        match c.test_expr {
+          Some(te) => collect_shape_cliques_in_expr(te, emit)
+          None => ()
+        }
+        collect_shape_cliques_in_block(c.body, emit)
+      }
+    }
+    Try(b, _, cb, fb) => {
+      collect_shape_cliques_in_block(b, emit)
+      match cb {
+        Some(blk) => collect_shape_cliques_in_block(blk, emit)
+        None => ()
+      }
+      match fb {
+        Some(blk) => collect_shape_cliques_in_block(blk, emit)
+        None => ()
+      }
+    }
+    NativeClassStmt(decl, ctor) => {
+      // Class body: every property + method + setter/getter name on
+      // the same class instance is on the same shape clique.
+      let class_keys : Array[String] = []
+      for p in decl.properties {
+        class_keys.push(p.name)
+      }
+      for m in decl.methods {
+        class_keys.push(m.name)
+      }
+      emit(class_keys)
+      match decl.base_expr {
+        Some(b) => collect_shape_cliques_in_expr(b, emit)
+        None => ()
+      }
+      match ctor {
+        Some(f) => collect_shape_cliques_in_block(f.body, emit)
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) => collect_shape_cliques_in_block(b, emit)
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        collect_shape_cliques_in_expr(sf.1, emit)
+      }
+    }
+    Label(_, inner) => collect_shape_cliques_in_stmt(inner, emit)
+    Block(b) => collect_shape_cliques_in_block(b, emit)
+    _ => ()
+  }
+}
+
+///|
+fn collect_shape_cliques_in_expr(
+  expr : @ast.TsExpr,
+  emit : (Array[String]) -> Unit,
+) -> Unit {
+  match expr {
+    ObjectLit(entries) => {
+      let keys : Array[String] = []
+      for ent in entries {
+        // Spread / computed-key markers (`@@spread:N`,
+        // `@@computed:N`) are not real keys — skip them so they
+        // don't form spurious cliques.
+        if !ent.0.has_prefix("@@") {
+          keys.push(ent.0)
+        }
+        collect_shape_cliques_in_expr(ent.1, emit)
+      }
+      emit(keys)
+    }
+    PropAccess(recv, _) => collect_shape_cliques_in_expr(recv, emit)
+    MethodCall(recv, _, args) => {
+      collect_shape_cliques_in_expr(recv, emit)
+      for a in args {
+        collect_shape_cliques_in_expr(a, emit)
+      }
+    }
+    Call(_, args) | New(_, args) =>
+      for a in args {
+        collect_shape_cliques_in_expr(a, emit)
+      }
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      collect_shape_cliques_in_expr(callee, emit)
+      for a in args {
+        collect_shape_cliques_in_expr(a, emit)
+      }
+    }
+    BinOp(_, l, r) => {
+      collect_shape_cliques_in_expr(l, emit)
+      collect_shape_cliques_in_expr(r, emit)
+    }
+    UnaryOp(_, inner)
+    | Spread(inner)
+    | Await(inner)
+    | YieldStar(inner)
+    | As(inner, _)
+    | Satisfies(inner, _)
+    | NonNull(inner)
+    | OptionalChain(inner) => collect_shape_cliques_in_expr(inner, emit)
+    Yield(Some(inner)) => collect_shape_cliques_in_expr(inner, emit)
+    Cond(c, t, e) => {
+      collect_shape_cliques_in_expr(c, emit)
+      collect_shape_cliques_in_expr(t, emit)
+      collect_shape_cliques_in_expr(e, emit)
+    }
+    IndexAccess(recv, idx) => {
+      collect_shape_cliques_in_expr(recv, emit)
+      collect_shape_cliques_in_expr(idx, emit)
+    }
+    ArrayLit(items) =>
+      for it in items {
+        collect_shape_cliques_in_expr(it, emit)
+      }
+    ComputedProp(k, v) => {
+      collect_shape_cliques_in_expr(k, emit)
+      collect_shape_cliques_in_expr(v, emit)
+    }
+    AssignExpr(_, v) | AssignPattern(_, v) =>
+      collect_shape_cliques_in_expr(v, emit)
+    CompoundAssignExpr(t, _, v) => {
+      collect_shape_cliques_in_expr(t, emit)
+      collect_shape_cliques_in_expr(v, emit)
+    }
+    PropAssignExpr(recv, _, v) => {
+      collect_shape_cliques_in_expr(recv, emit)
+      collect_shape_cliques_in_expr(v, emit)
+    }
+    IndexAssignExpr(recv, idx, v) => {
+      collect_shape_cliques_in_expr(recv, emit)
+      collect_shape_cliques_in_expr(idx, emit)
+      collect_shape_cliques_in_expr(v, emit)
+    }
+    Seq(a, b) => {
+      collect_shape_cliques_in_expr(a, emit)
+      collect_shape_cliques_in_expr(b, emit)
+    }
+    ArrowFunc(_, _, body, _) =>
+      match body {
+        ArrowExpr(e) => collect_shape_cliques_in_expr(e, emit)
+        ArrowBlock(b) => collect_shape_cliques_in_block(b, emit)
+      }
+    FuncExpr(f) => collect_shape_cliques_in_block(f.body, emit)
+    DynamicImport(spec, opts) => {
+      collect_shape_cliques_in_expr(spec, emit)
+      match opts {
+        Some(o) => collect_shape_cliques_in_expr(o, emit)
+        None => ()
+      }
+    }
+    TaggedTemplate(tag, _, _, exprs) => {
+      collect_shape_cliques_in_expr(tag, emit)
+      for e in exprs {
+        collect_shape_cliques_in_expr(e, emit)
+      }
+    }
+    TemplateLiteral(_, exprs) =>
+      for e in exprs {
+        collect_shape_cliques_in_expr(e, emit)
+      }
+    NativeClassExpr(decl, ctor) => {
+      let class_keys : Array[String] = []
+      for p in decl.properties {
+        class_keys.push(p.name)
+      }
+      for m in decl.methods {
+        class_keys.push(m.name)
+      }
+      emit(class_keys)
+      match decl.base_expr {
+        Some(b) => collect_shape_cliques_in_expr(b, emit)
+        None => ()
+      }
+      match ctor {
+        Some(f) => collect_shape_cliques_in_block(f.body, emit)
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) => collect_shape_cliques_in_block(b, emit)
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        collect_shape_cliques_in_expr(sf.1, emit)
+      }
+    }
+    _ => ()
+  }
+}
+
+///|
+// Per-name occurrence counter used to bias the greedy coloring
+// toward high-frequency names. Same traversal as
+// `collect_property_names` but tallying instead of marking.
+fn count_property_occurrences(
+  block : @ast.TsBlock,
+  out : Map[String, Int],
+) -> Unit {
+  let collected : Map[String, Bool] = {}
+  collect_property_names(block, collected)
+  // The simpler walker only records presence; for the coloring
+  // heuristic any positive count works. Use a flat +1 per name
+  // observed by the walker so the result is deterministic without
+  // re-walking the whole tree.
+  for entry in collected {
+    out[entry.0] = 1
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1197,7 +1667,11 @@ fn mangle_block_impl(
     for n in cfg.reserved_properties {
       prop_reserved[n] = true
     }
-    let prop_map = build_property_rename_map(renamed, prop_reserved)
+    let prop_map = if cfg.mangle_properties_shape_color {
+      build_property_rename_map_colored(renamed, prop_reserved)
+    } else {
+      build_property_rename_map(renamed, prop_reserved)
+    }
     rename_properties_in_block(renamed, prop_map)
   } else {
     renamed

@@ -35,9 +35,32 @@ pub fn is_assignable_to_with_generics(
   target : @ast.TsType,
   resolve : (String) -> AliasBinding?,
 ) -> Bool {
-  let s = expand_generic(source, resolve, [])
-  let t = expand_generic(target, resolve, [])
+  // Expansion alone leaves mapped types / indexed access / keyof in the
+  // body unevaluated; simplify reduces them against the now-concrete
+  // struct/object shapes so utility types like `Partial` and `Pick`
+  // produce comparable object shapes for the assignability rule.
+  let s = simplify_type(expand_generic(source, resolve, []))
+  let t = simplify_type(expand_generic(target, resolve, []))
   is_assignable_to(s, t)
+}
+
+///|
+// Maximum depth of recursive alias expansion. TS allows recursive type
+// aliases that terminate (e.g. `DeepReadonly<T>` over a finite object
+// tree); we permit up to this many nested expansions of the same alias
+// name before collapsing to `Any`. 16 is enough for typical real-world
+// JSON / DOM / virtual-tree shapes while still bounding work.
+let alias_expansion_depth_limit : Int = 16
+
+///|
+fn visited_count(visited : Array[String], name : String) -> Int {
+  let mut n = 0
+  for v in visited {
+    if v == name {
+      n = n + 1
+    }
+  }
+  n
 }
 
 ///|
@@ -48,7 +71,7 @@ fn expand_generic(
 ) -> @ast.TsType {
   match type_ {
     Named(name) =>
-      if visited.contains(name) {
+      if visited_count(visited, name) >= alias_expansion_depth_limit {
         Any
       } else {
         match resolve(name) {
@@ -70,7 +93,7 @@ fn expand_generic(
       for a in args {
         resolved_args.push(expand_generic(a, resolve, visited))
       }
-      if visited.contains(name) {
+      if visited_count(visited, name) >= alias_expansion_depth_limit {
         return Any
       }
       match resolve(name) {
@@ -79,7 +102,11 @@ fn expand_generic(
             binding.type_params.length() > 0 {
             let bindings : Map[String, @ast.TsType] = {}
             for i in 0..<binding.type_params.length() {
-              bindings[binding.type_params[i]] = resolved_args[i]
+              // Pre-simplify the bound argument: `Keyof(Struct(...))` reduces
+              // to a `Union` of literals so the distributive-conditional
+              // path in `substitute_params` can recognize a Union check and
+              // expand utility types like `Exclude<keyof T, K>` correctly.
+              bindings[binding.type_params[i]] = simplify_type(resolved_args[i])
             }
             let substituted = substitute_params(binding.body, bindings)
             visited.push(name)
@@ -153,6 +180,41 @@ fn expand_generic(
         expand_generic(base, resolve, visited),
         expand_generic(key, resolve, visited),
       )
+    Keyof(inner) => Keyof(expand_generic(inner, resolve, visited))
+    MappedType(key_param, source, value, optional) =>
+      MappedType(
+        key_param,
+        expand_generic(source, resolve, visited),
+        expand_generic(value, resolve, visited),
+        optional,
+      )
+    MappedTypeRemap(key_param, source, remap, value, optional) =>
+      MappedTypeRemap(
+        key_param,
+        expand_generic(source, resolve, visited),
+        expand_generic(remap, resolve, visited),
+        expand_generic(value, resolve, visited),
+        optional,
+      )
+    Constructor(params, ret, is_abstract) => {
+      let new_params : Array[@ast.TsType] = []
+      for p in params {
+        new_params.push(expand_generic(p, resolve, visited))
+      }
+      Constructor(
+        new_params,
+        expand_generic(ret, resolve, visited),
+        is_abstract,
+      )
+    }
+    Rest(inner) => Rest(expand_generic(inner, resolve, visited))
+    TemplateLiteralType(parts, args) => {
+      let new_args : Array[@ast.TsType] = []
+      for a in args {
+        new_args.push(expand_generic(a, resolve, visited))
+      }
+      TemplateLiteralType(parts, new_args)
+    }
     _ => type_
   }
 }
@@ -273,6 +335,62 @@ fn substitute_params(
         substitute_params(base, bindings),
         substitute_params(key, bindings),
       )
+    Keyof(inner) => Keyof(substitute_params(inner, bindings))
+    MappedType(key_param, source, value, optional) => {
+      // `key_param` is bound inside `value` (and `source` is computed
+      // before the binder is in scope). Remove the binder from bindings
+      // when substituting the value side so an outer `T` named the same
+      // as the binder doesn't leak in.
+      let inner_bindings = scoped_without(bindings, key_param)
+      MappedType(
+        key_param,
+        substitute_params(source, bindings),
+        substitute_params(value, inner_bindings),
+        optional,
+      )
+    }
+    MappedTypeRemap(key_param, source, remap, value, optional) => {
+      let inner_bindings = scoped_without(bindings, key_param)
+      MappedTypeRemap(
+        key_param,
+        substitute_params(source, bindings),
+        substitute_params(remap, inner_bindings),
+        substitute_params(value, inner_bindings),
+        optional,
+      )
+    }
+    Constructor(params, ret, is_abstract) => {
+      let new_params : Array[@ast.TsType] = []
+      for p in params {
+        new_params.push(substitute_params(p, bindings))
+      }
+      Constructor(new_params, substitute_params(ret, bindings), is_abstract)
+    }
+    Rest(inner) => Rest(substitute_params(inner, bindings))
+    TemplateLiteralType(parts, args) => {
+      let new_args : Array[@ast.TsType] = []
+      for a in args {
+        new_args.push(substitute_params(a, bindings))
+      }
+      TemplateLiteralType(parts, new_args)
+    }
     _ => type_
   }
+}
+
+///|
+// Return a copy of `bindings` with `name` removed. Used to mask a binder
+// in mapped-type bodies so an outer parameter with the same name does
+// not shadow the local binding.
+fn scoped_without(
+  bindings : Map[String, @ast.TsType],
+  name : String,
+) -> Map[String, @ast.TsType] {
+  let out : Map[String, @ast.TsType] = {}
+  for entry in bindings {
+    if entry.0 != name {
+      out[entry.0] = entry.1
+    }
+  }
+  out
 }

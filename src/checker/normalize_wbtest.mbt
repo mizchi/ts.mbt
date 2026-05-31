@@ -167,6 +167,41 @@ test "type_contains_named: looks through union members only" {
 }
 
 ///|
+// TS normalizes `true | false` to `boolean`. The pair has no subsumption
+// relation, so collapsing requires a dedicated pass before subsumption.
+test "simplify_union: collapses true | false to boolean" {
+  let raw : Array[@ast.TsType] = [BooleanLiteral(true), BooleanLiteral(false)]
+  let simplified = simplify_union(raw)
+  assert_eq(simplified.length(), 1)
+  assert_eq(simplified[0], Boolean)
+}
+
+///|
+test "simplify_union: true | false | string collapses to boolean | string" {
+  let raw : Array[@ast.TsType] = [
+    BooleanLiteral(true),
+    String_,
+    BooleanLiteral(false),
+  ]
+  let simplified = simplify_union(raw)
+  assert_eq(simplified.length(), 2)
+  assert_true(simplified.contains(Boolean))
+  assert_true(simplified.contains(String_))
+}
+
+///|
+test "simplify_union: boolean primitive already present absorbs both literals" {
+  let raw : Array[@ast.TsType] = [
+    BooleanLiteral(true),
+    Boolean,
+    BooleanLiteral(false),
+  ]
+  let simplified = simplify_union(raw)
+  assert_eq(simplified.length(), 1)
+  assert_eq(simplified[0], Boolean)
+}
+
+///|
 test "simplify_union: deeply nested unions are flattened" {
   let raw : Array[@ast.TsType] = [
     Union([Union([String_, Number]), Boolean]),

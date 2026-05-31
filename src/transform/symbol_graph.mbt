@@ -124,6 +124,15 @@ pub(all) struct Symbol {
   // arrow body. Closure-captured bindings can outlive the
   // declaring frame, so Phase 3 treats them conservatively.
   mut captured_by_closure : Bool
+  // Static TypeScript type of the binding when one was supplied
+  // (let/const/var annotation, function parameter annotation).
+  // Defaults to `Any` when no useful type was recorded — that
+  // matches "no type info" and downstream narrowing falls back to
+  // the wildcard. Type-aware reservation passes
+  // (`reserved_props_from_observability` in `flow_analysis.mbt`)
+  // consult this to skip the External-observation wildcard when
+  // the type's key set is statically bounded.
+  mut ts_type : @ast.TsType
 } derive(Debug)
 
 ///|
@@ -373,6 +382,7 @@ fn sg_declare(
         reassign_rhs: [],
         reassigned: false,
         captured_by_closure: false,
+        ts_type: @ast.TsType::Any,
       })
       g.by_name[key] = id
       g.scopes[target_scope].declared.push(id)
@@ -429,29 +439,32 @@ fn sg_declare_stmt_bindings(
   external_local_names : Map[String, Bool],
 ) -> Unit {
   match stmt {
-    Var(b, _, init) => {
+    Var(b, t, init) => {
       let is_funcdecl = match init {
         @ast.TsExpr::FuncExpr(_) => true
         _ => false
       }
       let kind = if is_funcdecl { FuncDecl } else { Var }
       sg_declare_binding(g, b, scope, kind, external_local_names)
+      sg_record_binding_type(g, b, scope, kind, t)
     }
-    Let(b, _, init) => {
+    Let(b, t, init) => {
       let is_funcdecl = match init {
         @ast.TsExpr::FuncExpr(_) => true
         _ => false
       }
       let kind = if is_funcdecl { FuncDecl } else { Let }
       sg_declare_binding(g, b, scope, kind, external_local_names)
+      sg_record_binding_type(g, b, scope, kind, t)
     }
-    Const(b, _, init) => {
+    Const(b, t, init) => {
       let is_funcdecl = match init {
         @ast.TsExpr::FuncExpr(_) => true
         _ => false
       }
       let kind = if is_funcdecl { FuncDecl } else { Const }
       sg_declare_binding(g, b, scope, kind, external_local_names)
+      sg_record_binding_type(g, b, scope, kind, t)
     }
     NativeClassStmt(decl, _) =>
       if decl.name != "" {
@@ -495,6 +508,45 @@ fn is_multi_decl_wrapper(block : @ast.TsBlock) -> Bool {
     }
   }
   true
+}
+
+///|
+// Stamp the static TypeScript type onto the symbol just declared
+// for binding `b` in `scope`. No-op for opaque (`Any`) annotations
+// and for destructuring patterns we can't decompose cleanly — the
+// downstream narrowing pass treats the missing entry as "no type
+// info" and falls back to the existing wildcard behaviour.
+//
+// The lookup mirrors `sg_declare`'s target-scope rule: `Var`
+// hoists to the enclosing function frame, the others stay in
+// `scope`. Without that mirroring the `Var` case looks up against
+// the wrong key and silently misses the symbol.
+fn sg_record_binding_type(
+  g : SymbolGraph,
+  b : @ast.TsBinding,
+  scope : ScopeId,
+  kind : SymbolKind,
+  ty : @ast.TsType,
+) -> Unit {
+  match ty {
+    @ast.TsType::Any => return
+    _ => ()
+  }
+  match b {
+    @ast.TsBinding::Ident(n) => {
+      let target_scope = if kind == Var {
+        var_host_scope(g, scope)
+      } else {
+        scope
+      }
+      let key = scope_name_key(target_scope, n)
+      match g.by_name.get(key) {
+        Some(id) => g.symbols[id].ts_type = ty
+        None => ()
+      }
+    }
+    _ => ()
+  }
 }
 
 ///|
@@ -741,7 +793,27 @@ fn sg_visit_stmt(w : SgWalker, stmt : @ast.TsStmt) -> Unit {
       }
       for m in decl.methods {
         match m.body {
-          Some(b) => sg_visit_block_in_new_scope(w, b, Function)
+          Some(b) => {
+            // Class methods declare their params as Symbols inside a
+            // fresh Function scope so the type-aware passes (e.g.
+            // External-observation narrowing via the param
+            // annotation) see them the same way they see arrow /
+            // function-decl params.
+            let outer = w.current_scope
+            w.current_scope = sg_new_scope(w.g, Some(outer), Function)
+            for p in m.params {
+              let pid = sg_declare(w.g, w.current_scope, p.0, Param, false)
+              match p.1 {
+                @ast.TsType::Any => ()
+                ty => w.g.symbols[pid].ts_type = ty
+              }
+            }
+            sg_declare_block_bindings(w.g, b, w.current_scope, {})
+            for s in b.stmts {
+              sg_visit_stmt(w, s)
+            }
+            w.current_scope = outer
+          }
           None => ()
         }
       }
@@ -1111,7 +1183,11 @@ fn sg_visit_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
       // returns / throws don't add func-return edges.
       w.enclosing_func = None
       for p in params {
-        let _ = sg_declare(w.g, w.current_scope, p.name, Param, false)
+        let pid = sg_declare(w.g, w.current_scope, p.name, Param, false)
+        match p.type_ {
+          @ast.TsType::Any => ()
+          ty => w.g.symbols[pid].ts_type = ty
+        }
       }
       match body {
         ArrowExpr(e) => sg_visit_expr(w, e)
@@ -1155,7 +1231,27 @@ fn sg_visit_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
       }
       for m in decl.methods {
         match m.body {
-          Some(b) => sg_visit_block_in_new_scope(w, b, Function)
+          Some(b) => {
+            // Class methods declare their params as Symbols inside a
+            // fresh Function scope so the type-aware passes (e.g.
+            // External-observation narrowing via the param
+            // annotation) see them the same way they see arrow /
+            // function-decl params.
+            let outer = w.current_scope
+            w.current_scope = sg_new_scope(w.g, Some(outer), Function)
+            for p in m.params {
+              let pid = sg_declare(w.g, w.current_scope, p.0, Param, false)
+              match p.1 {
+                @ast.TsType::Any => ()
+                ty => w.g.symbols[pid].ts_type = ty
+              }
+            }
+            sg_declare_block_bindings(w.g, b, w.current_scope, {})
+            for s in b.stmts {
+              sg_visit_stmt(w, s)
+            }
+            w.current_scope = outer
+          }
           None => ()
         }
       }
@@ -1206,6 +1302,10 @@ fn sg_visit_function_body(w : SgWalker, f : @ast.TsFunc) -> Unit {
   let param_ids : Array[SymbolId] = []
   for p in f.params {
     let pid = sg_declare(w.g, w.current_scope, p.name, Param, false)
+    match p.type_ {
+      @ast.TsType::Any => ()
+      ty => w.g.symbols[pid].ts_type = ty
+    }
     param_ids.push(pid)
   }
   // Pre-register the FuncInfo entry so `Return(Some(e))` inside

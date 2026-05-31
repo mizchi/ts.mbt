@@ -403,6 +403,7 @@ fn emit_type(buf : StringBuilder, ty : @ast.TsType) -> Unit {
     Symbol => buf.write_string("symbol")
     UniqueSymbol(_) => buf.write_string("unique symbol")
     Any => buf.write_string("any")
+    Unknown => buf.write_string("unknown")
     Never => buf.write_string("never")
     Null => buf.write_string("null")
     Undefined => buf.write_string("undefined")

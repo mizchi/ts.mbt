@@ -1,11 +1,7 @@
 // Standard TypeScript utility-type definitions encoded as `AliasBinding`s the
 // resolver-aware checker can consume directly. Built on the distributive
-// conditional + infer pattern matcher.
-//
-// Excluded for now (require AST features we do not model):
-//   Partial / Required / Readonly  — mapped types
-//   Pick / Omit                    — keyof + mapped
-//   ConstructorParameters / InstanceType — class signature distinction
+// conditional + infer pattern matcher plus `MappedType` / `Keyof` /
+// `IndexedAccess` for the property-shape utilities.
 //
 // Use:
 //   let resolve = fn(name) { standard_utility_types().get(name) }
@@ -131,6 +127,76 @@ pub fn standard_utility_types() -> Map[String, AliasBinding] {
       Named("R"),
       Any,
     ),
+  }
+
+  // type Partial<T> = { [P in keyof T]?: T[P] }
+  // The mapped-type evaluator (`simplify_mapped_type`) reads
+  // `Keyof(Struct(...))` and produces one field per literal key.
+  table["Partial"] = {
+    type_params: ["T"],
+    body: MappedType(
+      "P",
+      Keyof(Named("T")),
+      IndexedAccess(Named("T"), Named("P")),
+      true,
+    ),
+  }
+
+  // type Required<T> = { [P in keyof T]-?: T[P] }
+  // The `-?` modifier strips `undefined` from the value. We model this
+  // by NOT setting the optional flag and relying on the value side
+  // staying as-is; for fields that were already optional (`T | undefined`)
+  // the structural compatibility check accepts the narrower target. The
+  // mapped-type evaluator does not perform `undefined` removal, so the
+  // behavior matches TS only for non-optional sources. Marked here so
+  // bridge / checker passes can recognize the canonical shape.
+  table["Required"] = {
+    type_params: ["T"],
+    body: MappedType(
+      "P",
+      Keyof(Named("T")),
+      IndexedAccess(Named("T"), Named("P")),
+      false,
+    ),
+  }
+
+  // type Readonly<T> = { readonly [P in keyof T]: T[P] }
+  // `readonly` is not part of our structural model, so this is the
+  // identity mapped type. Matches the bridge's existing treatment.
+  table["Readonly"] = {
+    type_params: ["T"],
+    body: MappedType(
+      "P",
+      Keyof(Named("T")),
+      IndexedAccess(Named("T"), Named("P")),
+      false,
+    ),
+  }
+
+  // type Pick<T, K extends keyof T> = { [P in K]: T[P] }
+  table["Pick"] = {
+    type_params: ["T", "K"],
+    body: MappedType(
+      "P",
+      Named("K"),
+      IndexedAccess(Named("T"), Named("P")),
+      false,
+    ),
+  }
+
+  // type Record<K extends keyof any, T> = { [P in K]: T }
+  table["Record"] = {
+    type_params: ["K", "T"],
+    body: MappedType("P", Named("K"), Named("T"), false),
+  }
+
+  // type Omit<T, K extends keyof any> = Pick<T, Exclude<keyof T, K>>
+  table["Omit"] = {
+    type_params: ["T", "K"],
+    body: Applied("Pick", [
+      Named("T"),
+      Applied("Exclude", [Keyof(Named("T")), Named("K")]),
+    ]),
   }
   table
 }

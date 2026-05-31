@@ -91,3 +91,117 @@ test "standard_utility_types: Awaited passes non-promise through" {
   let target : @ast.TsType = Applied("Awaited", [String_])
   assert_true(is_assignable_to_with_generics(String_, target, resolve))
 }
+
+///|
+// Partial<T> = { [P in keyof T]?: T[P] } — every field becomes optional.
+// In TS this means each field's type widens to `T[P] | undefined` and
+// missing fields are accepted by the assignability rule.
+test "standard_utility_types: Partial widens every field with undefined" {
+  let resolve = standard_resolver()
+  let user : @ast.TsType = Struct("User", [("name", String_), ("age", Number)])
+  let partial : @ast.TsType = Applied("Partial", [user])
+  // Exact widened shape is assignable.
+  assert_true(
+    is_assignable_to_with_generics(
+      Object([
+        (Literal("name"), Union([String_, Undefined])),
+        (Literal("age"), Union([Number, Undefined])),
+      ]),
+      partial,
+      resolve,
+    ),
+  )
+  // Non-optional field types still flow into the optional target — `string`
+  // is a subtype of `string | undefined`.
+  assert_true(
+    is_assignable_to_with_generics(
+      Object([(Literal("name"), String_), (Literal("age"), Number)]),
+      partial,
+      resolve,
+    ),
+  )
+  // A wrong field type is rejected.
+  assert_false(
+    is_assignable_to_with_generics(
+      Object([(Literal("name"), Number), (Literal("age"), Number)]),
+      partial,
+      resolve,
+    ),
+  )
+}
+
+///|
+// Pick<T, K> = { [P in K]: T[P] } — restricts to the named keys.
+test "standard_utility_types: Pick keeps only the named fields" {
+  let resolve = standard_resolver()
+  let user : @ast.TsType = Struct("User", [
+    ("name", String_),
+    ("age", Number),
+    ("admin", Boolean),
+  ])
+  let pick : @ast.TsType = Applied("Pick", [
+    user,
+    Union([Literal("name"), Literal("age")]),
+  ])
+  // `{ name: string, age: number }` satisfies the pick.
+  assert_true(
+    is_assignable_to_with_generics(
+      Object([(Literal("name"), String_), (Literal("age"), Number)]),
+      pick,
+      resolve,
+    ),
+  )
+  // Missing a picked field is rejected.
+  assert_false(
+    is_assignable_to_with_generics(
+      Object([(Literal("name"), String_)]),
+      pick,
+      resolve,
+    ),
+  )
+}
+
+///|
+// Record<K, V> = { [P in K]: V }
+test "standard_utility_types: Record produces an object keyed by the union" {
+  let resolve = standard_resolver()
+  let rec : @ast.TsType = Applied("Record", [
+    Union([Literal("a"), Literal("b")]),
+    Number,
+  ])
+  assert_true(
+    is_assignable_to_with_generics(
+      Object([(Literal("a"), Number), (Literal("b"), Number)]),
+      rec,
+      resolve,
+    ),
+  )
+  // Wrong value type fails.
+  assert_false(
+    is_assignable_to_with_generics(
+      Object([(Literal("a"), String_), (Literal("b"), String_)]),
+      rec,
+      resolve,
+    ),
+  )
+}
+
+///|
+// Omit<T, K> = Pick<T, Exclude<keyof T, K>> — restricts to non-excluded keys.
+test "standard_utility_types: Omit drops the named fields" {
+  let resolve = standard_resolver()
+  let user : @ast.TsType = Struct("User", [
+    ("name", String_),
+    ("age", Number),
+    ("admin", Boolean),
+  ])
+  let omit : @ast.TsType = Applied("Omit", [user, Literal("admin")])
+  // `{ name, age }` is the expected remaining shape.
+  assert_true(
+    is_assignable_to_with_generics(
+      Object([(Literal("name"), String_), (Literal("age"), Number)]),
+      omit,
+      resolve,
+    ),
+  )
+}

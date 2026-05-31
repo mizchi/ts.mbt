@@ -5964,7 +5964,7 @@ test "parser: parse array field followed by index signature on next line" {
   assert_eq(module_.interfaces[0].fields[0].0, "crit")
   assert_eq(module_.interfaces[0].index_signatures.length(), 1)
   assert_eq(module_.interfaces[0].index_signatures[0].0, @ast.TsType::String_)
-  assert_eq(module_.interfaces[0].index_signatures[0].1, @ast.TsType::Any)
+  assert_eq(module_.interfaces[0].index_signatures[0].1, @ast.TsType::Unknown)
 }
 
 ///|
