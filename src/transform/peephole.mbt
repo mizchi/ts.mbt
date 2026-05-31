@@ -784,14 +784,6 @@ fn block_ends_with_terminator(b : @ast.TsBlock) -> Bool {
 }
 
 ///|
-fn arrow_body_uses_super(body : @ast.TsArrowBody) -> Bool {
-  match body {
-    @ast.TsArrowBody::ArrowExpr(inner) => expr_uses_super(inner)
-    @ast.TsArrowBody::ArrowBlock(blk) => block_uses_super(blk)
-  }
-}
-
-///|
 fn arrow_body_uses_this(body : @ast.TsArrowBody) -> Bool {
   match body {
     @ast.TsArrowBody::ArrowExpr(inner) => expr_uses_this(inner)
@@ -2343,42 +2335,6 @@ fn fold_null_undef_and(l : @ast.TsExpr, r : @ast.TsExpr) -> @ast.TsExpr? {
 ///|
 /// `x && x.prop` → `x?.prop`, `x && x[k]` → `x?.[k]`, etc.
 /// TypeScript emits `&&` chains for optional access when targeting
-/// older ES versions (pre-ES2020). Only folds bare-Var guards whose
-/// rhs receiver is the same name.
-fn fold_and_optional_chain(lp : @ast.TsExpr, rp : @ast.TsExpr) -> @ast.TsExpr {
-  match lp {
-    @ast.TsExpr::Var(guard_n) =>
-      match rp {
-        @ast.TsExpr::PropAccess(@ast.TsExpr::Var(recv_n), prop) =>
-          if guard_n == recv_n {
-            @ast.TsExpr::OptionalChain(
-              @ast.TsExpr::PropAccess(@ast.TsExpr::Var(guard_n), prop),
-            )
-          } else {
-            @ast.TsExpr::BinOp(@ast.TsBinOp::And, lp, rp)
-          }
-        @ast.TsExpr::IndexAccess(@ast.TsExpr::Var(recv_n), idx) =>
-          if guard_n == recv_n {
-            @ast.TsExpr::OptionalChain(
-              @ast.TsExpr::IndexAccess(@ast.TsExpr::Var(guard_n), idx),
-            )
-          } else {
-            @ast.TsExpr::BinOp(@ast.TsBinOp::And, lp, rp)
-          }
-        @ast.TsExpr::MethodCall(@ast.TsExpr::Var(recv_n), method, args) =>
-          if guard_n == recv_n {
-            @ast.TsExpr::OptionalChain(
-              @ast.TsExpr::MethodCall(@ast.TsExpr::Var(guard_n), method, args),
-            )
-          } else {
-            @ast.TsExpr::BinOp(@ast.TsBinOp::And, lp, rp)
-          }
-        _ => @ast.TsExpr::BinOp(@ast.TsBinOp::And, lp, rp)
-      }
-    _ => @ast.TsExpr::BinOp(@ast.TsBinOp::And, lp, rp)
-  }
-}
-
 ///|
 /// Returns true when an expression is guaranteed to be boolean-typed:
 /// comparisons, `instanceof`, `in`, and logical-not. Used by the

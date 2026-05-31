@@ -81,20 +81,6 @@ fn block_always_exits(block : @ast.TsBlock) -> Bool {
 }
 
 ///|
-/// If `block` is exactly `{ EXPR; }` (one expression statement),
-/// return `Some(EXPR)`. Otherwise `None`.
-fn single_expr_stmt(block : @ast.TsBlock) -> @ast.TsExpr? {
-  if block.stmts.length() == 1 {
-    match block.stmts[0] {
-      Expr(e) => Some(e)
-      _ => None
-    }
-  } else {
-    None
-  }
-}
-
-///|
 /// Strip a trailing `return;` from an already-folded function body.
 /// A bare `return` at the end of a function is the implicit fall-through
 /// — it adds bytes without changing behavior, so we drop it.
@@ -1158,8 +1144,10 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
             match arg {
               NumberLit(_) | IntLit(_) => arg
               StringLit(s) =>
-                match (try? @strconv.parse_double(s)) {
-                  Ok(n) => {
+                try @string.parse_double(s) catch {
+                  _ => Call(name, new_args)
+                } noraise {
+                  n => {
                     let as_int = n.to_int()
                     if as_int.to_double() == n {
                       IntLit(as_int)
@@ -1167,7 +1155,6 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
                       NumberLit(n)
                     }
                   }
-                  Err(_) => Call(name, new_args)
                 }
               BoolLit(true) => IntLit(1)
               BoolLit(false) => IntLit(0)
@@ -1191,8 +1178,10 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
           "parseFloat" =>
             match arg {
               StringLit(s) =>
-                match (try? @strconv.parse_double(s)) {
-                  Ok(n) => {
+                try @string.parse_double(s) catch {
+                  _ => Call(name, new_args)
+                } noraise {
+                  n => {
                     let as_int = n.to_int()
                     if as_int.to_double() == n {
                       IntLit(as_int)
@@ -1200,7 +1189,6 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
                       NumberLit(n)
                     }
                   }
-                  Err(_) => Call(name, new_args)
                 }
               _ => Call(name, new_args)
             }
@@ -1684,7 +1672,7 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
 /// operations implementable without a floating-point math library.
 fn fold_math_call(
   recv : @ast.TsExpr,
-  method : String,
+  method_ : String,
   args : Array[@ast.TsExpr],
 ) -> @ast.TsExpr? {
   match recv {
@@ -1692,7 +1680,7 @@ fn fold_math_call(
     Var("Object") => {
       // `Object.keys({a:1,b:2})` → `["a","b"]` etc.
       if args.length() == 1 {
-        match (method, args[0]) {
+        match (method_, args[0]) {
           ("keys", ObjectLit(entries)) => {
             let keys : Array[@ast.TsExpr] = []
             for ent in entries {
@@ -1760,7 +1748,7 @@ fn fold_math_call(
       // `Object.assign({}, src1, src2, ...)` → merged object literal
       // when the first argument is `{}` and every source is a pure
       // object literal. Later sources shadow earlier ones (last-write wins).
-      if method == "assign" && args.length() >= 1 {
+      if method_ == "assign" && args.length() >= 1 {
         match args[0] {
           ObjectLit([]) => {
             let merged : Array[(String, @ast.TsExpr)] = []
@@ -1799,7 +1787,7 @@ fn fold_math_call(
     }
     Var("Array") => {
       // `Array.isArray(literal)` → bool
-      if method == "isArray" && args.length() == 1 {
+      if method_ == "isArray" && args.length() == 1 {
         match args[0] {
           ArrayLit(_) => return Some(BoolLit(true))
           IntLit(_)
@@ -1815,7 +1803,7 @@ fn fold_math_call(
       }
       // `Array.from([1,2,3])` → `[1,2,3]` (shallow copy of literal is
       // identical for all purely-literal elements).
-      if method == "from" && args.length() == 1 {
+      if method_ == "from" && args.length() == 1 {
         match args[0] {
           ArrayLit(items) => {
             let mut all_pure = true
@@ -1833,7 +1821,7 @@ fn fold_math_call(
         }
       }
       // `Array.of(a, b, c)` → `[a, b, c]` (identity for pure args).
-      if method == "of" {
+      if method_ == "of" {
         let mut all_pure = true
         for a in args {
           if !(is_pure_value(a)) {
@@ -1849,13 +1837,13 @@ fn fold_math_call(
     }
     Var("String") => {
       // `String.fromCharCode(65)` → `"A"` for single-char literal args.
-      if method == "fromCharCode" && args.length() >= 1 {
+      if method_ == "fromCharCode" && args.length() >= 1 {
         let buf = StringBuilder::new()
         let mut all_lit = true
         for arg in args {
           match arg {
             IntLit(n) if n >= 0 && n <= 65535 => {
-              let ch = Char::from_int(n)
+              let ch = n.unsafe_to_char()
               buf.write_char(ch)
             }
             _ => {
@@ -1872,7 +1860,7 @@ fn fold_math_call(
     }
     Var("Number") => {
       if args.length() == 1 {
-        match (method, args[0]) {
+        match (method_, args[0]) {
           ("isFinite", IntLit(_)) | ("isFinite", NumberLit(_)) =>
             return Some(BoolLit(true))
           ("isInteger", IntLit(_)) => return Some(BoolLit(true))
@@ -1884,8 +1872,10 @@ fn fold_math_call(
           ("isNaN", NumberLit(_)) => return Some(BoolLit(false))
           // `Number.parseFloat(s)` === `parseFloat(s)` — delegate.
           ("parseFloat", StringLit(s)) =>
-            match (try? @strconv.parse_double(s)) {
-              Ok(n) => {
+            try @string.parse_double(s) catch {
+              _ => ()
+            } noraise {
+              n => {
                 let as_int = n.to_int()
                 return Some(
                   if as_int.to_double() == n {
@@ -1895,7 +1885,6 @@ fn fold_math_call(
                   },
                 )
               }
-              Err(_) => ()
             }
           // `Number.parseInt(s)` === `parseInt(s)`.
           ("parseInt", StringLit(s)) =>
@@ -1908,7 +1897,7 @@ fn fold_math_call(
       }
       // `Number.parseInt(s, radix)` with explicit radix.
       if args.length() == 2 {
-        match (method, args[0], args[1]) {
+        match (method_, args[0], args[1]) {
           ("parseInt", StringLit(s), IntLit(radix)) if radix >= 2 && radix <= 36 =>
             match parse_int_radix(s.trim().to_owned(), radix) {
               Some(n) => return Some(IntLit(n))
@@ -1920,7 +1909,7 @@ fn fold_math_call(
       return None
     }
     Var("JSON") => {
-      if method == "stringify" && args.length() == 1 {
+      if method_ == "stringify" && args.length() == 1 {
         // `JSON.stringify(literal)` → string literal for simple primitives.
         // Only fold when the result is unambiguous and matches V8/SpiderMonkey.
         let s = match args[0] {
@@ -1978,7 +1967,7 @@ fn fold_math_call(
       NumberLit(n)
     }
   }
-  match method {
+  match method_ {
     "abs" =>
       if args.length() == 1 {
         match as_float(args[0]) {
@@ -2048,7 +2037,7 @@ fn fold_math_call(
           Some(n) => {
             // JS Math.round uses "round half away from zero" for positive,
             // and "round half up" (toward +Inf) — i.e. .5 rounds up.
-            let result = match method {
+            let result = match method_ {
               "floor" => n.floor()
               "ceil" => n.ceil()
               "round" => (n + 0.5).floor() // .5 rounds toward +Inf
@@ -2100,10 +2089,10 @@ fn fold_math_call(
 /// Fold `.toString()` / `.valueOf()` on numeric, boolean, and null literals.
 fn fold_scalar_method(
   recv : @ast.TsExpr,
-  method : String,
+  method_ : String,
   args : Array[@ast.TsExpr],
 ) -> @ast.TsExpr? {
-  match method {
+  match method_ {
     "toString" =>
       match args.length() {
         0 =>
@@ -2139,18 +2128,18 @@ fn fold_scalar_method(
 /// Fold String-literal method calls with constant arguments.
 fn fold_string_method(
   recv : @ast.TsExpr,
-  method : String,
+  method_ : String,
   args : Array[@ast.TsExpr],
 ) -> @ast.TsExpr? {
   let s = match recv {
     StringLit(s) => s
     _ => return None
   }
-  match method {
+  match method_ {
     "toUpperCase" | "toLowerCase" if args.length() == 0 =>
       Some(
         StringLit(
-          if method == "toUpperCase" {
+          if method_ == "toUpperCase" {
             s.to_upper()
           } else {
             s.to_lower()
@@ -2159,9 +2148,9 @@ fn fold_string_method(
       )
     "trim" | "trimStart" | "trimEnd" if args.length() == 0 => {
       // Use simple whitespace trimming.
-      let trimmed = match method {
-        "trimStart" => s.trim_start().to_string()
-        "trimEnd" => s.trim_end().to_string()
+      let trimmed = match method_ {
+        "trimStart" => s.trim_start().to_owned()
+        "trimEnd" => s.trim_end().to_owned()
         _ => s.trim().to_owned()
       }
       Some(StringLit(trimmed))
@@ -2171,7 +2160,7 @@ fn fold_string_method(
         StringLit(pat) =>
           Some(
             BoolLit(
-              match method {
+              match method_ {
                 "includes" => s.contains(pat)
                 "startsWith" => s.has_prefix(pat)
                 _ => s.has_suffix(pat)
@@ -2193,7 +2182,7 @@ fn fold_string_method(
       match args[0] {
         IntLit(i) =>
           if i >= 0 && i < s.length() {
-            Some(StringLit(s.[i:i + 1].to_owned()))
+            Some(StringLit(s[i:i + 1].to_owned()))
           } else {
             Some(StringLit(""))
           }
@@ -2226,7 +2215,7 @@ fn fold_string_method(
           match args[0] {
             IntLit(start) => {
               let s0 = resolve(start)
-              Some(StringLit(s.substring(start=s0).to_string()))
+              Some(StringLit(s[s0:].to_owned()))
             }
             _ => None
           }
@@ -2238,7 +2227,7 @@ fn fold_string_method(
               if s0 >= e0 {
                 Some(StringLit(""))
               } else {
-                Some(StringLit(s.[s0:e0].to_owned()))
+                Some(StringLit(s[s0:e0].to_owned()))
               }
             }
             _ => None
@@ -2254,7 +2243,7 @@ fn fold_string_method(
         1 =>
           match args[0] {
             IntLit(start) =>
-              Some(StringLit(s.substring(start=clamp(start)).to_string()))
+              Some(StringLit(s[clamp(start):].to_owned()))
             _ => None
           }
         2 =>
@@ -2268,7 +2257,7 @@ fn fold_string_method(
               if lo >= hi {
                 Some(StringLit(""))
               } else {
-                Some(StringLit(s.[lo:hi].to_owned()))
+                Some(StringLit(s[lo:hi].to_owned()))
               }
             }
             _ => None
@@ -2283,7 +2272,7 @@ fn fold_string_method(
           let len = s.length()
           let idx = if i < 0 { len + i } else { i }
           if idx >= 0 && idx < len {
-            Some(StringLit(s.[idx:idx + 1].to_owned()))
+            Some(StringLit(s[idx:idx + 1].to_owned()))
           } else {
             // `undefined` in JS — we can't return a meaningful value.
             None
@@ -2329,7 +2318,7 @@ fn fold_string_method(
         let mut i = 0
         while i < needed {
           result = result +
-            pad.[i % pad_len:i % pad_len + 1].to_owned()
+            pad[i % pad_len:i % pad_len + 1].to_owned()
           i = i + 1
         }
         Some(StringLit(result + s))
@@ -2361,7 +2350,7 @@ fn fold_string_method(
         let mut i = 0
         while i < needed {
           result = result +
-            pad.[i % pad_len:i % pad_len + 1].to_owned()
+            pad[i % pad_len:i % pad_len + 1].to_owned()
           i = i + 1
         }
         Some(StringLit(result))
@@ -2375,7 +2364,7 @@ fn fold_string_method(
           let parts = s.split(sep)
           let items : Array[@ast.TsExpr] = []
           for p in parts {
-            items.push(StringLit(p.to_string()))
+            items.push(StringLit(p.to_owned()))
           }
           Some(ArrayLit(items))
         }
@@ -2388,8 +2377,8 @@ fn fold_string_method(
         (StringLit(pat), StringLit(rep)) =>
           match s.find(pat) {
             Some(idx) => {
-              let before = s.substring(end=idx).to_string()
-              let after = s.substring(start=idx + pat.length()).to_string()
+              let before = s[:idx].to_owned()
+              let after = s[idx + pat.length():].to_owned()
               Some(StringLit(before + rep + after))
             }
             None => Some(StringLit(s))
@@ -2402,7 +2391,7 @@ fn fold_string_method(
         (StringLit(pat), StringLit(rep)) if pat.length() > 0 => {
           let parts : Array[String] = []
           for p in s.split(pat) {
-            parts.push(p.to_string())
+            parts.push(p.to_owned())
           }
           Some(StringLit(parts.join(rep)))
         }
@@ -2416,14 +2405,14 @@ fn fold_string_method(
 /// Fold Array-literal method calls with constant arguments.
 fn fold_array_method(
   recv : @ast.TsExpr,
-  method : String,
+  method_ : String,
   args : Array[@ast.TsExpr],
 ) -> @ast.TsExpr? {
   let items = match recv {
     ArrayLit(items) => items
     _ => return None
   }
-  match method {
+  match method_ {
     "length" if args.length() == 0 => Some(IntLit(items.length()))
     "join" => {
       // `[a,b,c].join(sep)` → string literal when all items are literals.
@@ -3033,9 +3022,6 @@ fn fold_binop(
     (Sub, NumberLit(a), IntLit(b)) => NumberLit(a - b.to_double())
     (Mul, IntLit(a), NumberLit(b)) => NumberLit(a.to_double() * b)
     (Mul, NumberLit(a), IntLit(b)) => NumberLit(a * b.to_double())
-    // Integer-producing integer division (non-exact results folded to float)
-    (Div, IntLit(a), IntLit(b)) if b != 0 && a % b != 0 =>
-      NumberLit(a.to_double() / b.to_double())
     // String concatenation of two string literals.
     (Add, StringLit(a), StringLit(b)) => StringLit(a + b)
     // JS string coercion: `"str" + number` / `number + "str"` → string.
@@ -3214,9 +3200,9 @@ fn fold_binop(
     (BitAnd, IntLit(a), IntLit(b)) => IntLit(a.land(b))
     (BitOr, IntLit(a), IntLit(b)) => IntLit(a.lor(b))
     (BitXor, IntLit(a), IntLit(b)) => IntLit(a.lxor(b))
-    (Shl, IntLit(a), IntLit(b)) => IntLit(a.lsl(b))
-    (Shr, IntLit(a), IntLit(b)) => IntLit(a.asr(b))
-    (UShr, IntLit(a), IntLit(b)) => IntLit(a.lsr(b))
+    (Shl, IntLit(a), IntLit(b)) => IntLit(a << b)
+    (Shr, IntLit(a), IntLit(b)) => IntLit(a >> b)
+    (UShr, IntLit(a), IntLit(b)) => IntLit((a.reinterpret_as_uint() >> b).reinterpret_as_int())
     // `x & 0` → `0` (annihilator). Safe to fold only when the other operand
     // is pure — we can't drop a call with side effects.
     (BitAnd, _, IntLit(0)) if is_pure_value(l) => IntLit(0)
@@ -3438,7 +3424,7 @@ fn format_int_radix(n : Int, radix : Int) -> String {
   let buf : Array[Char] = []
   let mut m = n
   while m > 0 {
-    buf.push(Char::from_int(digits[m % radix].to_int()))
+    buf.push(digits[m % radix].to_int().unsafe_to_char())
     m = m / radix
   }
   let sb = StringBuilder::new()

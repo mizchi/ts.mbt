@@ -599,8 +599,8 @@ fn resolve_export_with_visited(
   //    source module first. Only when the local doesn't trace back
   //    to an import do we read the rename map for this module.
   match find_export_local(m.export_specs, export_name) {
-    Some(local) =>
-      match find_import_source(m, local) {
+    Some(local_) =>
+      match find_import_source(m, local_) {
         Some(srcref) =>
           return resolve_export_with_visited(
             modules,
@@ -612,7 +612,7 @@ fn resolve_export_with_visited(
           )
         None => {
           let renames = rename_per_module.get(module_path).unwrap_or({})
-          return Some(renames.get(local).unwrap_or(local))
+          return Some(renames.get(local_).unwrap_or(local_))
         }
       }
     None => ()
@@ -754,7 +754,7 @@ fn enumerate_wildcard_reexports(
         if !(props.contains(ns_name)) {
           let dep_ns = namespace_local_renames.get(dep_path).unwrap_or({})
           match dep_ns.get(ns_name) {
-            Some(local) => props[ns_name] = local
+            Some(local_) => props[ns_name] = local_
             None => ()
           }
         }
@@ -1666,8 +1666,8 @@ fn substitute_dotted_name(
   if dot < 0 {
     return map.get(name).unwrap_or(name)
   }
-  let head = name.[0:dot].to_owned()
-  let tail = name.substring(start=dot + 1, end=name.length()).to_string()
+  let head = name[0:dot].to_owned()
+  let tail = name[dot + 1:].to_owned()
   // Multi-segment dotted names: only the first lookup matters for
   // namespace resolution; further segments stay as property accesses
   // on the resolved binding. e.g. `A.B.C` with `ns["A"]["B"]` mapping
@@ -1676,7 +1676,7 @@ fn substitute_dotted_name(
   let first_prop = if after_first_dot < 0 {
     tail
   } else {
-    tail.[0:after_first_dot].to_owned()
+    tail[0:after_first_dot].to_owned()
   }
   match ns.get(head) {
     Some(props) =>
@@ -1685,10 +1685,7 @@ fn substitute_dotted_name(
           if after_first_dot < 0 {
             return resolved
           } else {
-            return resolved +
-              tail
-              .substring(start=after_first_dot, end=tail.length())
-              .to_string()
+            return resolved + tail[after_first_dot:].to_owned()
           }
         None => ()
       }

@@ -363,7 +363,7 @@ fn vendor_safe_pkg_dir(name : String) -> String {
 fn default_runtime_module_spec(pkg_spec : String) -> String {
   let prefix = "@types/"
   if pkg_spec.has_prefix(prefix) {
-    pkg_spec[prefix.length():pkg_spec.length()].to_string()
+    pkg_spec[prefix.length():pkg_spec.length()].to_owned()
   } else {
     pkg_spec
   }

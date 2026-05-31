@@ -65,23 +65,25 @@ pub fn build_enum_inline_table(
       }
     }
     let mut next_numeric : Int = 0
-    for member in decl.members {
-      let value_expr : @ast.TsExpr? = match member.value {
+    for member_ in decl.members {
+      let value_expr : @ast.TsExpr? = match member_.value {
         Some(@ast.TsEnumMemberValue::Number(s)) =>
-          match (try? @strconv.parse_int(s)) {
-            Ok(i) => {
-              next_numeric = i + 1
-              Some(@ast.TsExpr::IntLit(i))
-            }
-            Err(_) =>
+          try @string.parse_int(s) catch {
+            _ =>
               Some(
                 @ast.TsExpr::NumberLit(
-                  match (try? @strconv.parse_double(s)) {
-                    Ok(d) => d
-                    Err(_) => 0.0
+                  try @string.parse_double(s) catch {
+                    _ => 0.0
+                  } noraise {
+                    d => d
                   },
                 ),
               )
+          } noraise {
+            i => {
+              next_numeric = i + 1
+              Some(@ast.TsExpr::IntLit(i))
+            }
           }
         Some(@ast.TsEnumMemberValue::String(s)) =>
           Some(@ast.TsExpr::StringLit(s))
@@ -95,7 +97,7 @@ pub fn build_enum_inline_table(
         }
       }
       match value_expr {
-        Some(v) => out[decl.name + "." + member.name] = v
+        Some(v) => out[decl.name + "." + member_.name] = v
         None => ()
       }
     }
@@ -293,18 +295,18 @@ fn inline_const_enums_expr(
   table : Map[String, @ast.TsExpr],
 ) -> @ast.TsExpr {
   match expr {
-    PropAccess(Var(enum_name), member) =>
-      match table.get(enum_name + "." + member) {
+    PropAccess(Var(enum_name), member_) =>
+      match table.get(enum_name + "." + member_) {
         Some(v) => v
-        None => PropAccess(@ast.TsExpr::Var(enum_name), member)
+        None => PropAccess(@ast.TsExpr::Var(enum_name), member_)
       }
-    IndexAccess(Var(enum_name), StringLit(member)) =>
-      match table.get(enum_name + "." + member) {
+    IndexAccess(Var(enum_name), StringLit(member_)) =>
+      match table.get(enum_name + "." + member_) {
         Some(v) => v
         None =>
           IndexAccess(
             @ast.TsExpr::Var(enum_name),
-            @ast.TsExpr::StringLit(member),
+            @ast.TsExpr::StringLit(member_),
           )
       }
     PropAccess(recv, name) =>

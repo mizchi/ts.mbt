@@ -15,8 +15,8 @@ test "bundle: single-file entry round-trips through the bundler" {
   let files = vfs([("entry.ts", "const x = 1;\nconst y = 2;\n")])
   match bundle_modules(files, "entry.ts", BundleOptions::default()) {
     Ok(out) => {
-      assert_eq(out.modules.length(), 1)
-      assert_eq(out.modules[0], "entry.ts")
+      @test.assert_eq(out.modules.length(), 1)
+      @test.assert_eq(out.modules[0], "entry.ts")
       assert_true(out.js.contains("const x"))
       assert_true(out.js.contains("const y"))
       assert_true(out.js.contains("// ===== entry.ts ====="))
@@ -33,7 +33,7 @@ test "bundle: two-file dependency emits deepest module first" {
   ])
   match bundle_modules(files, "entry.ts", BundleOptions::default()) {
     Ok(out) => {
-      assert_eq(out.modules, ["lib.ts", "entry.ts"])
+      @test.assert_eq(out.modules, ["lib.ts", "entry.ts"])
       // Both modules show up in the bundle, lib first.
       let lib_idx = match out.js.find("// ===== lib.ts =====") {
         Some(i) => i
@@ -78,8 +78,8 @@ test "bundle: type-only imports are dropped from the output" {
   match bundle_modules(files, "entry.ts", BundleOptions::default()) {
     Ok(out) => {
       // No bundle section for the types-only module — it gets pruned.
-      assert_eq(out.modules.length(), 1)
-      assert_eq(out.modules[0], "entry.ts")
+      @test.assert_eq(out.modules.length(), 1)
+      @test.assert_eq(out.modules[0], "entry.ts")
       assert_false(out.js.contains("// ===== types.ts ====="))
     }
     Err(e) => fail("bundle error: \{e}")
@@ -105,13 +105,13 @@ test "bundle: diamond dependency visits the shared module once" {
   ])
   match bundle_modules(files, "entry.ts", BundleOptions::default()) {
     Ok(out) => {
-      assert_eq(out.modules.length(), 4)
-      assert_eq(out.modules[0], "shared.ts")
+      @test.assert_eq(out.modules.length(), 4)
+      @test.assert_eq(out.modules[0], "shared.ts")
       assert_true(
         (out.modules[1] == "a.ts" && out.modules[2] == "b.ts") ||
         (out.modules[1] == "b.ts" && out.modules[2] == "a.ts"),
       )
-      assert_eq(out.modules[3], "entry.ts")
+      @test.assert_eq(out.modules[3], "entry.ts")
       // The shared module body must appear exactly once.
       let mut first = 0
       match out.js.find("export const shared") {
@@ -121,9 +121,7 @@ test "bundle: diamond dependency visits the shared module once" {
       let mut count = 0
       let mut search_from = 0
       while search_from < out.js.length() {
-        let slice = out.js
-          .substring(start=search_from, end=out.js.length())
-          .to_string()
+        let slice = out.js[search_from:].to_owned()
         match slice.find("const shared = 42") {
           Some(idx) => {
             count = count + 1
@@ -132,7 +130,7 @@ test "bundle: diamond dependency visits the shared module once" {
           None => break
         }
       }
-      assert_eq(count, 1)
+      @test.assert_eq(count, 1)
     }
     Err(e) => fail("bundle error: \{e}")
   }
@@ -161,7 +159,7 @@ test "bundle: relative paths resolve through ./ and ../" {
   ])
   match bundle_modules(files, "src/entry.ts", BundleOptions::default()) {
     Ok(out) => {
-      assert_eq(out.modules.length(), 3)
+      @test.assert_eq(out.modules.length(), 3)
       assert_true(out.modules.contains("src/lib.ts"))
       assert_true(out.modules.contains("shared.ts"))
       assert_true(out.modules.contains("src/entry.ts"))
@@ -220,7 +218,7 @@ test "bundle: mangle folds modules into one scope and renames everything" {
       assert_false(out.js.contains("// ===== "))
       // `console` stays put — it's in the built-in reserved set.
       assert_true(out.js.contains("console.log"))
-      assert_eq(out.modules.length(), 2)
+      @test.assert_eq(out.modules.length(), 2)
     }
     Err(e) => fail("bundle error: \{e}")
   }
@@ -280,7 +278,7 @@ test "bundle: cyclic imports don't stack-overflow" {
       assert_true(out.js.contains("const A"))
       assert_true(out.js.contains("const B"))
       // Both modules show up in the output.
-      assert_eq(out.modules.length(), 2)
+      @test.assert_eq(out.modules.length(), 2)
     }
     Err(e) => fail("bundle error: \{e}")
   }
@@ -859,12 +857,7 @@ test "sourcemap: mangle path emits per-stmt mappings via encoded positions" {
           let mappings_pos = sm.find("\"mappings\":\"")
           let mappings = match mappings_pos {
             Some(idx) =>
-              sm
-              .substring(
-                start=idx + "\"mappings\":\"".length(),
-                end=sm.length(),
-              )
-              .to_string()
+              sm[idx + "\"mappings\":\"".length():].to_owned()
             None => ""
           }
           assert_true(mappings.length() > 5)
@@ -1031,13 +1024,13 @@ test "@internal: tagged exports vanish from the published .d.ts" {
     "export function start(p: Public): void {}\n"
   let block = @parser.parse_module_block_from_source(src)
   let module_ = @parser.parse_module_from_source_with_const_values(src, {})
-  let local : Array[String] = []
+  let local_ : Array[String] = []
   for ex in block.exports {
     if !(block.internal_names.contains(ex.local_name)) {
-      local.push(ex.local_name)
+      local_.push(ex.local_name)
     }
   }
-  let dts = emit_entry_dts(module_, local, {})
+  let dts = emit_entry_dts(module_, local_, {})
   // Public surface survives, marked internal disappears.
   assert_true(dts.contains("export interface Public"))
   assert_true(dts.contains("function start"))

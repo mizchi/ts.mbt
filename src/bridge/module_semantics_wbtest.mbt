@@ -81,15 +81,13 @@ async test "bridge: collect MoonBit TS scaffold unsupported exports reports only
   let namespace_unsupported = collect_moonbit_ts_scaffold_unsupported_exports(
     "fixtures/resolver/project/types/ns-entry.d.ts",
   )
-  inspect(namespace_unsupported, content="[]")
+  @test.assert_eq("[" + namespace_unsupported.join(", ") + "]", "[]")
   let ambiguous_unsupported = collect_moonbit_ts_scaffold_unsupported_exports(
     "fixtures/resolver/project/types/ambiguous-entry.d.ts",
   )
-  inspect(
-    ambiguous_unsupported,
-    content=(
-      #|[Shared (ambiguous re-export: fixtures/resolver/project/types/ambiguous-a.d.ts, fixtures/resolver/project/types/ambiguous-b.d.ts)]
-    ),
+  @test.assert_eq(
+    "[" + ambiguous_unsupported.join(", ") + "]",
+    "[Shared (ambiguous re-export: fixtures/resolver/project/types/ambiguous-a.d.ts, fixtures/resolver/project/types/ambiguous-b.d.ts)]"
   )
 }
 
@@ -121,22 +119,22 @@ async test "bridge: resolve type export surface through package exports subpath"
   match find_resolved_export(exports, "FeatureOptions") {
     Some(export_) => {
       assert_true(export_.kind == ResolvedExportKind::NamedReExport)
-      assert_eq(
+      @test.assert_eq(
         export_.source_path,
         "fixtures/resolver/project/node_modules/pkg-subpath/dist/feature.d.ts",
       )
-      assert_eq(export_.local_name, Some("FeatureOptions"))
+      @test.assert_eq(export_.local_name, Some("FeatureOptions"))
     }
     None => fail("expected FeatureOptions export")
   }
   match find_resolved_export(exports, "executeFeature") {
     Some(export_) => {
       assert_true(export_.kind == ResolvedExportKind::NamedReExport)
-      assert_eq(
+      @test.assert_eq(
         export_.source_path,
         "fixtures/resolver/project/node_modules/pkg-subpath/dist/feature.d.ts",
       )
-      assert_eq(export_.local_name, Some("runFeature"))
+      @test.assert_eq(export_.local_name, Some("runFeature"))
     }
     None => fail("expected executeFeature export")
   }
@@ -148,22 +146,22 @@ async test "bridge: resolve type export surface through package exports wildcard
   match find_resolved_export(exports, "PatternOptions") {
     Some(export_) => {
       assert_true(export_.kind == ResolvedExportKind::NamedReExport)
-      assert_eq(
+      @test.assert_eq(
         export_.source_path,
         "fixtures/resolver/project/node_modules/pkg-exports-pattern/dist/feature/util.d.ts",
       )
-      assert_eq(export_.local_name, Some("PatternOptions"))
+      @test.assert_eq(export_.local_name, Some("PatternOptions"))
     }
     None => fail("expected PatternOptions export")
   }
   match find_resolved_export(exports, "createPattern") {
     Some(export_) => {
       assert_true(export_.kind == ResolvedExportKind::NamedReExport)
-      assert_eq(
+      @test.assert_eq(
         export_.source_path,
         "fixtures/resolver/project/node_modules/pkg-exports-pattern/dist/feature/util.d.ts",
       )
-      assert_eq(export_.local_name, Some("buildPattern"))
+      @test.assert_eq(export_.local_name, Some("buildPattern"))
     }
     None => fail("expected createPattern export")
   }
@@ -177,22 +175,22 @@ async test "bridge: resolve type export surface through package exports array fa
   match find_resolved_export(exports, "ArrayPatternOptions") {
     Some(export_) => {
       assert_true(export_.kind == ResolvedExportKind::NamedReExport)
-      assert_eq(
+      @test.assert_eq(
         export_.source_path,
         "fixtures/resolver/project/node_modules/pkg-exports-array/dist/feature/util.d.ts",
       )
-      assert_eq(export_.local_name, Some("ArrayPatternOptions"))
+      @test.assert_eq(export_.local_name, Some("ArrayPatternOptions"))
     }
     None => fail("expected ArrayPatternOptions export")
   }
   match find_resolved_export(exports, "createArrayPattern") {
     Some(export_) => {
       assert_true(export_.kind == ResolvedExportKind::NamedReExport)
-      assert_eq(
+      @test.assert_eq(
         export_.source_path,
         "fixtures/resolver/project/node_modules/pkg-exports-array/dist/feature/util.d.ts",
       )
-      assert_eq(export_.local_name, Some("buildArrayPattern"))
+      @test.assert_eq(export_.local_name, Some("buildArrayPattern"))
     }
     None => fail("expected createArrayPattern export")
   }
@@ -204,22 +202,22 @@ async test "bridge: resolve type export surface through package barrel reexports
   match find_resolved_export(exports, "BarrelOptions") {
     Some(export_) => {
       assert_true(export_.kind == ResolvedExportKind::NamedReExport)
-      assert_eq(
+      @test.assert_eq(
         export_.source_path,
         "fixtures/resolver/project/node_modules/pkg-barrel/dist/internal.d.ts",
       )
-      assert_eq(export_.local_name, Some("BarrelOptions"))
+      @test.assert_eq(export_.local_name, Some("BarrelOptions"))
     }
     None => fail("expected BarrelOptions export")
   }
   match find_resolved_export(exports, "createBarrel") {
     Some(export_) => {
       assert_true(export_.kind == ResolvedExportKind::NamedReExport)
-      assert_eq(
+      @test.assert_eq(
         export_.source_path,
         "fixtures/resolver/project/node_modules/pkg-barrel/dist/internal.d.ts",
       )
-      assert_eq(export_.local_name, Some("buildBarrel"))
+      @test.assert_eq(export_.local_name, Some("buildBarrel"))
     }
     None => fail("expected createBarrel export")
   }
@@ -228,27 +226,27 @@ async test "bridge: resolve type export surface through package barrel reexports
 ///|
 async test "bridge: type module graph skips non-exported opaque package imports" {
   let graph = load_type_module_graph(semantics_neverthrow_like_type_entry_path)
-  assert_eq(graph.entry_path, semantics_neverthrow_like_type_entry_path)
-  assert_eq(graph.modules.length(), 1)
+  @test.assert_eq(graph.entry_path, semantics_neverthrow_like_type_entry_path)
+  @test.assert_eq(graph.modules.length(), 1)
   let module_ = graph.modules[0]
-  assert_eq(module_.path, semantics_neverthrow_like_type_entry_path)
-  assert_eq(module_.imports.length(), 1)
+  @test.assert_eq(module_.path, semantics_neverthrow_like_type_entry_path)
+  @test.assert_eq(module_.imports.length(), 1)
   let import_ = module_.imports[0]
-  assert_eq(import_.specifier, "neverthrow-like")
-  assert_eq(import_.resolved_path, "")
+  @test.assert_eq(import_.specifier, "neverthrow-like")
+  @test.assert_eq(import_.resolved_path, "")
 }
 
 ///|
 async test "bridge: type module graph keeps minimal opaque package imports unresolved" {
   let graph = load_type_module_graph(semantics_opaque_package_type_entry_path)
-  assert_eq(graph.entry_path, semantics_opaque_package_type_entry_path)
-  assert_eq(graph.modules.length(), 1)
+  @test.assert_eq(graph.entry_path, semantics_opaque_package_type_entry_path)
+  @test.assert_eq(graph.modules.length(), 1)
   let module_ = graph.modules[0]
-  assert_eq(module_.path, semantics_opaque_package_type_entry_path)
-  assert_eq(module_.imports.length(), 1)
+  @test.assert_eq(module_.path, semantics_opaque_package_type_entry_path)
+  @test.assert_eq(module_.imports.length(), 1)
   let import_ = module_.imports[0]
-  assert_eq(import_.specifier, "pkg-types")
-  assert_eq(import_.resolved_path, "")
+  @test.assert_eq(import_.specifier, "pkg-types")
+  @test.assert_eq(import_.resolved_path, "")
 }
 
 ///|
@@ -266,21 +264,21 @@ async test "bridge: unresolved bare reexports do not fail type export surface re
   }
   match find_resolved_export(exports, "LocalOptions") {
     Some(export_) => {
-      assert_eq(
+      @test.assert_eq(
         export_.source_path,
         semantics_unresolved_bare_reexport_entry_path,
       )
-      assert_eq(export_.local_name, Some("LocalOptions"))
+      @test.assert_eq(export_.local_name, Some("LocalOptions"))
     }
     None => fail("expected LocalOptions export")
   }
   match find_resolved_export(exports, "createOptions") {
     Some(export_) => {
-      assert_eq(
+      @test.assert_eq(
         export_.source_path,
         semantics_unresolved_bare_reexport_entry_path,
       )
-      assert_eq(export_.local_name, Some("createOptions"))
+      @test.assert_eq(export_.local_name, Some("createOptions"))
     }
     None => fail("expected createOptions export")
   }
@@ -291,8 +289,8 @@ async test "bridge: resolve type export surface from namespace export assignment
   let exports = resolve_type_export_surface(semantics_export_equals_entry_path)
   match find_resolved_export(exports, "default") {
     Some(export_) => {
-      assert_eq(export_.source_path, semantics_export_equals_entry_path)
-      assert_eq(export_.local_name, Some("semver"))
+      @test.assert_eq(export_.source_path, semantics_export_equals_entry_path)
+      @test.assert_eq(export_.local_name, Some("semver"))
       assert_true(export_.kind == ResolvedExportKind::Local)
     }
     None => fail("expected default export")
@@ -304,8 +302,8 @@ async test "bridge: resolve type export surface from import-equals export assign
   let exports = resolve_type_export_surface(semantics_import_equals_entry_path)
   match find_resolved_export(exports, "default") {
     Some(export_) => {
-      assert_eq(export_.source_path, semantics_import_equals_entry_path)
-      assert_eq(export_.local_name, Some("pkg"))
+      @test.assert_eq(export_.source_path, semantics_import_equals_entry_path)
+      @test.assert_eq(export_.local_name, Some("pkg"))
       assert_true(export_.kind == ResolvedExportKind::Local)
     }
     None => fail("expected default export")
@@ -328,11 +326,11 @@ async test "bridge: star reexports of the same imported binding are not ambiguou
   match find_resolved_export(exports, "shared") {
     Some(export_) => {
       assert_false(export_.kind == ResolvedExportKind::Ambiguous)
-      assert_eq(
+      @test.assert_eq(
         export_.source_path,
         semantics_imported_same_source_reexport_shared_path,
       )
-      assert_eq(export_.local_name, Some("shared"))
+      @test.assert_eq(export_.local_name, Some("shared"))
     }
     None => fail("expected shared export")
   }

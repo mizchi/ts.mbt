@@ -619,20 +619,6 @@ pub fn reserve_props_from_sink(
 }
 
 ///|
-fn unique_symbol_by_name(g : SymbolGraph, name : String) -> SymbolId? {
-  let mut hit : SymbolId? = None
-  for s in g.symbols {
-    if s.name == name {
-      if hit is Some(_) {
-        return None
-      }
-      hit = Some(s.id)
-    }
-  }
-  hit
-}
-
-///|
 /// Is this binding safe to treat as "we can confidently enumerate
 /// every property the sink could observe"?
 ///

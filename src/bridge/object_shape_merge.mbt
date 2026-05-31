@@ -263,7 +263,7 @@ fn merge_object_shapes(bodies : Array[String]) -> String {
       for member_src in object_shape_split_top_level_by_char(inner, ';') {
         let trimmed = object_shape_strip_trailing_semicolon(member_src)
           .trim()
-          .to_string()
+          .to_owned()
         if trimmed == "" {
           continue
         }

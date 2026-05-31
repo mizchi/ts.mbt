@@ -4,8 +4,10 @@
 
 ///|
 fn parse_function_named(src : String, name : String) -> @ast.TsFunc? {
-  match (try? @parser.parse_module_from_source_with_const_values(src, {})) {
-    Ok(module_) => {
+  try @parser.parse_module_from_source_with_const_values(src, {}) catch {
+    _ => None
+  } noraise {
+    module_ => {
       for f in module_.funcs {
         if f.name == name {
           return Some(f)
@@ -13,7 +15,6 @@ fn parse_function_named(src : String, name : String) -> @ast.TsFunc? {
       }
       None
     }
-    Err(_) => None
   }
 }
 
@@ -27,7 +28,7 @@ test "expr_check: const initializer assignable to declared type" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      assert_eq(issues.length(), 0)
+      @test.assert_eq(issues.length(), 0)
     }
     None => fail("function f not found")
   }
@@ -42,7 +43,7 @@ test "expr_check: const initializer with wrong primitive type" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      assert_eq(issues.length(), 1)
+      @test.assert_eq(issues.length(), 1)
       let issue = issues[0]
       assert_true(issue.path.contains("function f"))
       assert_true(issue.path.contains("binding `x`"))
@@ -62,7 +63,7 @@ test "expr_check: missing return value for non-void return type" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      assert_eq(issues.length(), 1)
+      @test.assert_eq(issues.length(), 1)
       assert_true(issues[0].path.contains("return"))
     }
     None => fail("function f not found")
@@ -78,7 +79,7 @@ test "expr_check: return value with wrong type" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      assert_eq(issues.length(), 1)
+      @test.assert_eq(issues.length(), 1)
       assert_true(issues[0].message.contains("number"))
       assert_true(issues[0].message.contains("string"))
     }
@@ -95,7 +96,7 @@ test "expr_check: return value matching declared type passes" {
   match parse_function_named(src, "add") {
     Some(f) => {
       let issues = check_function_body(f)
-      assert_eq(issues.length(), 0)
+      @test.assert_eq(issues.length(), 0)
     }
     None => fail("function add not found")
   }
@@ -110,7 +111,7 @@ test "expr_check: void return tolerates bare return" {
   match parse_function_named(src, "log") {
     Some(f) => {
       let issues = check_function_body(f)
-      assert_eq(issues.length(), 0)
+      @test.assert_eq(issues.length(), 0)
     }
     None => fail("function log not found")
   }
@@ -127,7 +128,7 @@ test "expr_check: silently accepts unknown identifier as any" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      assert_eq(issues.length(), 0)
+      @test.assert_eq(issues.length(), 0)
     }
     None => fail("function f not found")
   }
@@ -144,7 +145,7 @@ test "expr_check: unannotated function return skips return-type checks" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      assert_eq(issues.length(), 0)
+      @test.assert_eq(issues.length(), 0)
     }
     None => fail("function f not found")
   }
@@ -159,7 +160,7 @@ test "expr_check: parameter binding seeds the env" {
   match parse_function_named(src, "takesStr") {
     Some(f) => {
       let issues = check_function_body(f)
-      assert_eq(issues.length(), 1)
+      @test.assert_eq(issues.length(), 1)
       assert_true(issues[0].message.contains("number"))
       assert_true(issues[0].message.contains("string"))
     }
@@ -183,7 +184,7 @@ test "expr_check: nested block scope strips inner bindings on exit" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      assert_eq(issues.length(), 0)
+      @test.assert_eq(issues.length(), 0)
     }
     None => fail("function f not found")
   }
@@ -198,7 +199,7 @@ test "expr_check: typeof expression infers as string" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      assert_eq(issues.length(), 0)
+      @test.assert_eq(issues.length(), 0)
     }
     None => fail("function f not found")
   }
@@ -213,7 +214,7 @@ test "expr_check: numeric binop result is number" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      assert_eq(issues.length(), 1)
+      @test.assert_eq(issues.length(), 1)
       assert_true(issues[0].message.contains("string"))
     }
     None => fail("function f not found")
@@ -229,7 +230,7 @@ test "expr_check: string `+` operand is string" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      assert_eq(issues.length(), 0)
+      @test.assert_eq(issues.length(), 0)
     }
     None => fail("function f not found")
   }
@@ -241,16 +242,16 @@ test "expr_check: check_module_function_bodies walks all top-level funcs" {
     #|function a(): number { return "x"; }
     #|function b(): string { return 1; }
     #|function c(): number { return 1; }
-  let module_ = match
-    (try? @parser.parse_module_from_source_with_const_values(src, {})) {
-    Ok(m) => m
-    Err(e) => {
+  let module_ = try @parser.parse_module_from_source_with_const_values(src, {}) catch {
+    e => {
       fail("parse failed: \{e}")
       return
     }
+  } noraise {
+    m => m
   }
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 2)
+  @test.assert_eq(issues.length(), 2)
   let mut saw_a = false
   let mut saw_b = false
   for i in issues {
@@ -267,9 +268,8 @@ test "expr_check: check_module_function_bodies walks all top-level funcs" {
 
 ///|
 fn parse_module_or_empty(src : String) -> @ast.TsModule {
-  match (try? @parser.parse_module_from_source_with_const_values(src, {})) {
-    Ok(m) => m
-    Err(_) =>
+  try @parser.parse_module_from_source_with_const_values(src, {}) catch {
+    _ =>
       // Empty fallback — the test's subsequent assertions will fail loudly
       // if parsing failed unexpectedly.
       {
@@ -284,6 +284,8 @@ fn parse_module_or_empty(src : String) -> @ast.TsModule {
         module_augmentations: [],
         top_level_stmts: [],
       }
+  } noraise {
+    m => m
   }
 }
 
@@ -344,7 +346,7 @@ test "expr_check: interface property access correct usage passes" {
     #|function getX(p: Point): number { return p.x; }
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -387,7 +389,7 @@ test "expr_check: async function body returns inner T not Promise<T>" {
     #|async function f(): Promise<number> { return 1; }
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -459,7 +461,7 @@ test "expr_check: typeof narrowing accepts compatible branch" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -662,7 +664,7 @@ test "expr_check: compound += on string allows any rhs (concat)" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -676,7 +678,7 @@ test "expr_check: null narrowing — x !== null lets x be returned as non-null" 
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -707,7 +709,7 @@ test "expr_check: undefined narrowing via x !== undefined" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -721,7 +723,7 @@ test "expr_check: truthy narrowing strips null/undefined in then branch" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -736,7 +738,7 @@ test "expr_check: instanceof narrowing keeps the asserted class type" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -750,7 +752,7 @@ test "expr_check: literal narrowing on string union" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -764,7 +766,7 @@ test "expr_check: literal narrowing — else branch excludes matched literal" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -778,7 +780,7 @@ test "expr_check: && compound narrowing applies both effects" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -808,7 +810,7 @@ test "expr_check: complete return path on number function passes" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -836,7 +838,7 @@ test "expr_check: void return type does not trigger missing-return" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -938,7 +940,7 @@ test "expr_check: for-of element type matches return type passes" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      assert_eq(issues.length(), 0)
+      @test.assert_eq(issues.length(), 0)
     }
     None => fail("function f not found")
   }
@@ -1033,7 +1035,7 @@ test "expr_check: switch case body sees narrowed scrutinee passes" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      assert_eq(issues.length(), 0)
+      @test.assert_eq(issues.length(), 0)
     }
     None => fail("function f not found")
   }
@@ -1212,7 +1214,7 @@ test "expr_check: switch case discriminant on obj.kind narrows obj" {
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
   // Should NOT produce any issue: each case body sees the right shape.
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -1250,7 +1252,7 @@ test "expr_check: in operator narrows union by key presence" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -1265,7 +1267,7 @@ test "expr_check: switch on number literal union narrows scrutinee" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -1281,7 +1283,7 @@ test "expr_check: switch default narrows away matched literal cases" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -1298,7 +1300,7 @@ test "expr_check: `??` result strips null/undefined from lhs" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      assert_eq(issues.length(), 0)
+      @test.assert_eq(issues.length(), 0)
     }
     None => fail("function f not found")
   }
@@ -1357,7 +1359,7 @@ test "expr_check: contextual typing — well-typed arrow passes" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -1426,7 +1428,7 @@ test "expr_check: `x as T` narrows expression to T" {
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
   // `As(String_, Number)` — no overlap — exactly 1 issue.
-  assert_eq(issues.length(), 1)
+  @test.assert_eq(issues.length(), 1)
 }
 
 ///|
@@ -1461,7 +1463,7 @@ test "expr_check: `x!` strips null/undefined" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -1493,7 +1495,7 @@ test "expr_check: `a?.b ?? \"default\"` strips undefined via coalesce" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -1507,7 +1509,7 @@ test "expr_check: `x satisfies T` preserves inferred type" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      assert_eq(issues.length(), 0)
+      @test.assert_eq(issues.length(), 0)
     }
     None => fail("function f not found")
   }
@@ -1571,7 +1573,7 @@ test "expr_check: type predicate narrows arg in then-branch" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -1588,7 +1590,7 @@ test "expr_check: type predicate else-branch excludes the asserted type" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -1605,7 +1607,7 @@ test "expr_check: type predicate result type is Boolean for callers" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -1621,7 +1623,7 @@ test "expr_check: type predicate with non-matching arg name does not crash" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -1638,7 +1640,7 @@ test "expr_check: identity function call instantiates T to arg type" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -1690,7 +1692,7 @@ test "expr_check: generic over an array elem passes when type matches" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -1724,7 +1726,7 @@ test "expr_check: two-param generic inference" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -1743,7 +1745,7 @@ test "expr_check: array literal contextually types against tuple target" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -1801,7 +1803,7 @@ test "expr_check: `declare function f<T>(...)` participates in inference" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -1818,7 +1820,7 @@ test "expr_check: `declare function` predicate narrows the argument" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -1836,7 +1838,7 @@ test "expr_check: object literal against interface — well typed passes" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -1890,7 +1892,7 @@ test "expr_check: object literal allows missing optional field" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -1923,7 +1925,7 @@ test "expr_check: object literal honours interface extends chain" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -1941,7 +1943,7 @@ test "expr_check: generic interface field is specialised at use site" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -2059,7 +2061,7 @@ test "expr_check: generic class instance field specialises at use site" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -2107,7 +2109,7 @@ test "expr_check: generic class method return is specialised" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -2122,7 +2124,7 @@ test "expr_check: two-param generic class field selection" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -2367,7 +2369,7 @@ test "expr_check: arrow return type annotation flows into Func result" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -2518,7 +2520,7 @@ test "expr_check: promise.then flattens nested Promise<Promise<U>>" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -2746,7 +2748,7 @@ test "expr_check: extends with concrete type arg specialises inherited field" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -2779,7 +2781,7 @@ test "expr_check: generic extends propagates outer type arg" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -3285,7 +3287,7 @@ test "expr_check: prop !== undefined narrows obj.prop inside then-branch" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -3300,7 +3302,7 @@ test "expr_check: prop !== null narrows obj.prop inside then-branch" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -3365,7 +3367,7 @@ test "expr_check: typeof obj.prop === 'string' narrows prop access" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -3400,7 +3402,7 @@ test "expr_check: truthy `if (obj.prop)` strips null/undefined" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -3415,7 +3417,7 @@ test "expr_check: obj.prop instanceof TypeError narrows" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -3431,7 +3433,7 @@ test "expr_check: typeof obj.prop literal narrows in compound `&&`" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -3452,7 +3454,7 @@ test "expr_check: nested obj.a.b !== undefined narrows the deep access" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -3468,7 +3470,7 @@ test "expr_check: typeof nested prop access narrows" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -3484,7 +3486,7 @@ test "expr_check: truthy nested obj.a.b strips undefined" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -3501,7 +3503,7 @@ test "expr_check: deeply nested (3-level) prop narrowing" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -3516,7 +3518,7 @@ test "expr_check: nested instanceof on prop chain narrows" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -3540,7 +3542,7 @@ test "expr_check: discriminant narrowing on `obj.shape.kind === \"…\"`" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -3555,7 +3557,7 @@ test "expr_check: literal-union narrowing on `obj.prop`" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -3572,7 +3574,7 @@ test "expr_check: early-return narrowing on `obj.prop !== undefined`" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -3588,7 +3590,7 @@ test "expr_check: early-return narrowing on nested prop access" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -3610,7 +3612,7 @@ test "expr_check: arr[0] !== undefined narrows the indexed access" {
   // Arrays' element type is `string` in our model (no implicit
   // `T | undefined`), so the unguarded path also passes. Either way,
   // no spurious issue should fire.
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -3626,7 +3628,7 @@ test "expr_check: tuple slot narrowing — `t[0] !== null`" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -3640,7 +3642,7 @@ test "expr_check: typeof arr[0] === \"string\" narrows" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -3655,7 +3657,7 @@ test "expr_check: truthy `if (arr[0])` narrowing" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -3670,7 +3672,7 @@ test "expr_check: nested `obj.arr[0]` narrowing" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -3688,7 +3690,7 @@ test "expr_check: string index signature resolves dotted access" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -3700,7 +3702,7 @@ test "expr_check: string index signature resolves bracket access" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -3731,7 +3733,7 @@ test "expr_check: named field overrides index signature" {
   let issues = check_module_function_bodies(module_)
   // The named `tag: string` should take precedence over the index
   // signature fallback.
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -3743,7 +3745,7 @@ test "expr_check: generic interface with index signature substitutes V" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -3760,7 +3762,7 @@ test "expr_check: Record<string, number> resolves field as V" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -3808,7 +3810,7 @@ test "expr_check: Partial<T> in object literal allows missing fields" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -3820,7 +3822,7 @@ test "expr_check: Required<T> strips undefined" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -3832,7 +3834,7 @@ test "expr_check: Readonly<T> passes fields through" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -3844,7 +3846,7 @@ test "expr_check: Pick<T, K> keeps only listed fields" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -3876,7 +3878,7 @@ test "expr_check: Omit<T, K> excludes listed fields" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -3933,7 +3935,7 @@ test "expr_check: class method body with correct return passes" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -3967,7 +3969,7 @@ test "expr_check: declare-class method has no body to check" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -4021,7 +4023,7 @@ test "expr_check: JSX with no embedded calls produces no issues" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -4075,7 +4077,7 @@ test "expr_check: JSX attribute well-typed passes" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -4126,7 +4128,7 @@ test "expr_check: JSX optional prop can be omitted" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -4158,7 +4160,7 @@ test "expr_check: JSX HTML tag skips prop validation" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -4171,7 +4173,7 @@ test "expr_check: JSX boolean attribute satisfies a boolean prop" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -4192,7 +4194,7 @@ test "expr_check: JSX text children pass through cleanly" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -4243,7 +4245,7 @@ test "expr_check: nested HTML inside component children skips inner validation" 
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -4261,7 +4263,7 @@ test "expr_check: JSX children string prop accepts a text child" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -4327,7 +4329,7 @@ test "expr_check: JSX children any prop accepts anything" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -4348,7 +4350,7 @@ test "expr_check: generic component infers T from items attribute" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -4381,7 +4383,7 @@ test "expr_check: generic component picks up T from required attribute" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -4422,7 +4424,7 @@ test "expr_check: JSX spread of compatible props passes" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -4480,7 +4482,7 @@ test "expr_check: JSX spread plus explicit override type-checks" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -4495,7 +4497,7 @@ test "expr_check: JSX spread feeds generic component inference" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -4514,7 +4516,7 @@ test "expr_check: JSX key on a component without a key prop is accepted" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -4527,7 +4529,7 @@ test "expr_check: JSX ref on a component without a ref prop is accepted" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -4546,7 +4548,7 @@ test "expr_check: compatible render-prop function child passes" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -4580,7 +4582,7 @@ test "expr_check: JSX member-expression component resolves via namespace" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -4653,7 +4655,7 @@ test "expr_check: asserts predicate narrows arg for subsequent stmts (typed)" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -4696,7 +4698,7 @@ test "expr_check: `<const T>` skips literal widening in JSX inference" {
   // The harness validates that the body typechecks without surfacing
   // a literal-vs-string mismatch on the JSX prop side.
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -4715,7 +4717,7 @@ test "expr_check: namespace+class static-side merge — namespace fn callable" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -4729,7 +4731,7 @@ test "expr_check: class static method resolves through `ClassName.method`" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -4750,7 +4752,7 @@ test "expr_check: switch on `obj.kind` default narrows to remaining union" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -4762,7 +4764,7 @@ test "expr_check: generator yield matching element type — clean" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -4793,7 +4795,7 @@ test "expr_check: class index signature `[k: string]: T` resolves lookups" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -4808,7 +4810,7 @@ test "expr_check: JSX with explicit generic type args parses + type-checks" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -4825,7 +4827,7 @@ test "expr_check: interface declaration merging unions members" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -4864,7 +4866,7 @@ test "expr_check: truthy asserts strips null / undefined from operand" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -5095,7 +5097,7 @@ test "expr_check: array index with variable — infers element type" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      assert_eq(issues.length(), 0)
+      @test.assert_eq(issues.length(), 0)
     }
     None => fail("function f not found")
   }
@@ -5111,7 +5113,7 @@ test "expr_check: Array<T> generic — index yields element type" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      assert_eq(issues.length(), 0)
+      @test.assert_eq(issues.length(), 0)
     }
     None => fail("function f not found")
   }
@@ -5130,7 +5132,7 @@ test "expr_check: new Var(args) infers class instance type" {
   let issues = check_module_function_bodies(module_)
   // No return-type mismatch: new Foo() should resolve to Foo, not Any.
   let return_issues = issues.filter(fn(i) { i.path.contains("return") })
-  assert_eq(return_issues.length(), 0)
+  @test.assert_eq(return_issues.length(), 0)
 }
 
 ///|
@@ -5143,7 +5145,7 @@ test "expr_check: index signature variable key — returns value type" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      assert_eq(issues.length(), 0)
+      @test.assert_eq(issues.length(), 0)
     }
     None => fail("function f not found")
   }
@@ -5177,7 +5179,7 @@ test "expr_check: arithmetic on number is allowed" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      assert_eq(issues.length(), 0)
+      @test.assert_eq(issues.length(), 0)
     }
     None => fail("function not found")
   }
@@ -5212,7 +5214,7 @@ test "expr_check: calling a function is allowed" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -5261,7 +5263,7 @@ test "expr_check: for-of with correct element type annotation is ok" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      assert_eq(issues.length(), 0)
+      @test.assert_eq(issues.length(), 0)
     }
     None => fail("function not found")
   }
@@ -5311,7 +5313,7 @@ test "expr_check: strict equality on same types is ok" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      assert_eq(issues.length(), 0)
+      @test.assert_eq(issues.length(), 0)
     }
     None => fail("function not found")
   }
@@ -5345,7 +5347,7 @@ test "expr_check: index access on array is allowed" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      assert_eq(issues.length(), 0)
+      @test.assert_eq(issues.length(), 0)
     }
     None => fail("function not found")
   }
@@ -5361,7 +5363,7 @@ test "expr_check: index access on string is allowed" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      assert_eq(issues.length(), 0)
+      @test.assert_eq(issues.length(), 0)
     }
     None => fail("function not found")
   }
@@ -5414,7 +5416,7 @@ test "expr_check: unary minus on number is allowed" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      assert_eq(issues.length(), 0)
+      @test.assert_eq(issues.length(), 0)
     }
     None => fail("function not found")
   }
@@ -5449,7 +5451,7 @@ test "expr_check: object destructuring with correct type is ok" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -5482,7 +5484,7 @@ test "expr_check: ternary with compatible branch types is ok" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      assert_eq(issues.length(), 0)
+      @test.assert_eq(issues.length(), 0)
     }
     None => fail("function not found")
   }
@@ -5542,7 +5544,7 @@ test "expr_check: switch case with matching type is ok" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      assert_eq(issues.length(), 0)
+      @test.assert_eq(issues.length(), 0)
     }
     None => fail("function not found")
   }
@@ -5571,7 +5573,7 @@ test "expr_check: assigning to existing property is ok" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -5596,7 +5598,7 @@ test "expr_check: calling existing method on interface is ok" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  assert_eq(issues.length(), 0)
+  @test.assert_eq(issues.length(), 0)
 }
 
 ///|
@@ -5933,5 +5935,5 @@ test "expr_check: valid TS patterns are not false-positives" {
       fps = fps + 1
     }
   }
-  assert_eq(fps, 0)
+  @test.assert_eq(fps, 0)
 }

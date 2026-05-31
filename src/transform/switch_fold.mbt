@@ -125,7 +125,7 @@ fn try_extract_switch_fold(f : @ast.TsFunc) -> SwitchFoldEntry? {
       }
       None =>
         // `default:` arm — accept exactly one.
-        if default_expr.is_empty() {
+        if default_expr is None {
           if c.body.stmts.length() != 1 {
             return None
           }

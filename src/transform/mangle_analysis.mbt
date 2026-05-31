@@ -324,18 +324,20 @@ pub fn mangle_source_with_auto_reserve(
   base : ManglerConfig,
 ) -> Result[String, String] {
   let parser = @parser.Parser::from_source(source)
-  let block = match (try? parser.parse_module_block()) {
-    Ok(b) => b
-    Err(e) => return Err("parse error: \{e}")
+  let block = try parser.parse_module_block() catch {
+    e => return Err("parse error: \{e}")
+  } noraise {
+    b => b
   }
   // Re-parse via the lower-level `parse_module` so we get the
   // declaration tables (`TsModule.interfaces` / `.classes` etc.)
   // alongside the runtime stmts. The two parses are independent;
   // the parser keeps no global state between calls.
   let parser2 = @parser.Parser::from_source(source)
-  let module_ = match (try? parser2.parse_module()) {
-    Ok(m) => m
-    Err(e) => return Err("parse error: \{e}")
+  let module_ = try parser2.parse_module() catch {
+    e => return Err("parse error: \{e}")
+  } noraise {
+    m => m
   }
   let cfg = auto_reserve_from_module(block, module_, base)
   let mangled = mangle_block(block.block, cfg)

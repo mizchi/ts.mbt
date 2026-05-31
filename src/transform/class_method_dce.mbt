@@ -180,33 +180,6 @@ fn collect_iife_body_accesses(
 }
 
 ///|
-/// Detects the IIFE-lowered class shape at the top level:
-///   `let X = function () { … return X; }();`
-fn has_any_iife_class(block : @ast.TsBlock) -> Bool {
-  for s in block.stmts {
-    match s {
-      Var(
-        @ast.TsBinding::Ident(_),
-        _,
-        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(_), args)
-      )
-      | Let(
-        @ast.TsBinding::Ident(_),
-        _,
-        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(_), args)
-      )
-      | Const(
-        @ast.TsBinding::Ident(_),
-        _,
-        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(_), args)
-      ) => if args.length() == 0 { return true }
-      _ => ()
-    }
-  }
-  false
-}
-
-///|
 fn has_any_native_class(block : @ast.TsBlock) -> Bool {
   for s in block.stmts {
     if stmt_has_native_class(s) {

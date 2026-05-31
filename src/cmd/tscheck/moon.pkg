@@ -1,6 +1,7 @@
 import {
   "moonbitlang/async",
   "moonbitlang/core/env",
+  "moonbitlang/core/string",
   "mizchi/x/fs",
   "mizchi/ts/parser",
   "mizchi/ts/checker",

@@ -16,10 +16,6 @@
 
 ///|
 priv struct DeclEntry {
-  name : String
-  // Index into the block's `stmts` array — preserves original order
-  // when we re-emit the kept declarations.
-  index : Int
   // Names referenced by the rhs of this declaration. Computed once
   // and cached so the BFS doesn't re-walk function bodies.
   refs : Map[String, Bool]
@@ -72,7 +68,7 @@ fn treeshake_flat_block(block : @ast.TsBlock) -> @ast.TsBlock {
           let refs : Map[String, Bool] = {}
           collect_var_refs_in_expr(rhs, refs)
           decl_by_name[name] = decls.length()
-          decls.push({ name, index: i, refs })
+          decls.push({ refs, })
           is_decl[i] = true
         }
       // Native class declarations (`class Foo { … }`) are a
@@ -127,7 +123,7 @@ fn treeshake_flat_block(block : @ast.TsBlock) -> @ast.TsBlock {
           collect_var_refs_in_expr(sf.1, refs)
         }
         decl_by_name[decl.name] = decls.length()
-        decls.push({ name: decl.name, index: i, refs })
+        decls.push({ refs, })
         is_decl[i] = true
       }
       _ => ()

@@ -318,14 +318,14 @@ fn type_fold_block_in(
 ) -> @ast.TsBlock {
   // Each block introduces a fresh layer — we just copy-extend
   // the parent scope so we don't pollute siblings.
-  let local : Map[String, @ast.TsType] = {}
+  let local_ : Map[String, @ast.TsType] = {}
   for entry in scope {
     let (k, v) = entry
-    local[k] = v
+    local_[k] = v
   }
   let stmts : Array[@ast.TsStmt] = []
   for s in block.stmts {
-    stmts.push(type_fold_stmt(s, local))
+    stmts.push(type_fold_stmt(s, local_))
   }
   { stmts, stmt_positions: block.stmt_positions }
 }
@@ -631,41 +631,41 @@ fn type_fold_expr(
     ComputedProp(k, v) =>
       ComputedProp(type_fold_expr(k, scope), type_fold_expr(v, scope))
     ArrowFunc(params, ret, body, is_async) => {
-      let local : Map[String, @ast.TsType] = {}
+      let local_ : Map[String, @ast.TsType] = {}
       for entry in scope {
-        local[entry.0] = entry.1
+        local_[entry.0] = entry.1
       }
       for p in params {
         // Parameters always shadow outer bindings with the same name.
         // Remove any outer type first so the outer type is not used
         // inside the function body when the param has no annotation.
-        local.remove(p.name)
+        local_.remove(p.name)
         if is_useful_type(p.type_) {
-          local[p.name] = p.type_
+          local_[p.name] = p.type_
         }
       }
       let new_body = match body {
-        ArrowExpr(e) => @ast.TsArrowBody::ArrowExpr(type_fold_expr(e, local))
+        ArrowExpr(e) => @ast.TsArrowBody::ArrowExpr(type_fold_expr(e, local_))
         ArrowBlock(b) =>
-          @ast.TsArrowBody::ArrowBlock(type_fold_block_in(b, local))
+          @ast.TsArrowBody::ArrowBlock(type_fold_block_in(b, local_))
       }
       ArrowFunc(params, ret, new_body, is_async)
     }
     FuncExpr(f) => {
-      let local : Map[String, @ast.TsType] = {}
+      let local_ : Map[String, @ast.TsType] = {}
       for entry in scope {
-        local[entry.0] = entry.1
+        local_[entry.0] = entry.1
       }
       for p in f.params {
         // Parameters always shadow outer bindings with the same name.
         // Remove any outer type first so the outer type is not used
         // inside the function body when the param has no annotation.
-        local.remove(p.name)
+        local_.remove(p.name)
         if is_useful_type(p.type_) {
-          local[p.name] = p.type_
+          local_[p.name] = p.type_
         }
       }
-      FuncExpr({ ..f, body: type_fold_block_in(f.body, local) })
+      FuncExpr({ ..f, body: type_fold_block_in(f.body, local_) })
     }
     DynamicImport(spec, opts) => {
       let opts_f = match opts {

@@ -38,8 +38,8 @@ fn collect_property_names_from_module(
       collect_property_names_from_type(field.1, out)
     }
   }
-  for alias in module_.type_aliases {
-    collect_property_names_from_type(alias.type_, out)
+  for alias_ in module_.type_aliases {
+    collect_property_names_from_type(alias_.type_, out)
   }
   for cls in module_.classes {
     for prop in cls.properties {

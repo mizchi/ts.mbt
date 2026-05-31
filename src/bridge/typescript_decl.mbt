@@ -161,7 +161,7 @@ fn parse_moonbit_namespace_import_line(line : String) -> (String, String)? {
   }
   let part_list : Array[String] = []
   for part in line.split(" from ") {
-    part_list.push(part.to_string())
+    part_list.push(part.to_owned())
   }
   if part_list.length() != 2 {
     return None
@@ -196,7 +196,7 @@ fn parse_named_type_import_line(line : String) -> (Array[String], String)? {
   }
   let part_list : Array[String] = []
   for part in trimmed.split(" from ") {
-    part_list.push(part.to_string())
+    part_list.push(part.to_owned())
   }
   if part_list.length() != 2 {
     return None
@@ -238,7 +238,7 @@ fn collect_moonbit_namespace_imports(
 ) -> Array[(String, String)] {
   let imports : Array[(String, String)] = []
   for line_view in source.split("\n") {
-    match parse_moonbit_namespace_import_line(line_view.to_string()) {
+    match parse_moonbit_namespace_import_line(line_view.to_owned()) {
       Some(parsed) => {
         let (ns_alias, module_spec) = parsed
         let mut already_seen = false
@@ -396,7 +396,7 @@ fn normalize_path(path : String) -> String {
   let is_abs = path.has_prefix("/")
   let parts : Array[String] = []
   for part_view in path.split("/") {
-    let part = part_view.to_string()
+    let part = part_view.to_owned()
     if part == "" {
       if is_abs && parts.length() == 0 {
         parts.push("")
@@ -499,7 +499,7 @@ fn collect_export_type_alias_blocks(source : String) -> Array[String] {
   let mut brace_depth = 0
   let mut angle_depth = 0
   for line_view in source.split("\n") {
-    let line = line_view.to_string()
+    let line = line_view.to_owned()
     let trimmed = line.trim().to_owned()
     if !collecting {
       if trimmed.has_prefix("export type ") {
@@ -586,7 +586,7 @@ fn collect_export_interface_blocks(source : String) -> Array[String] {
   let mut brace_depth = 0
   let mut seen_open = false
   for line_view in source.split("\n") {
-    let line = line_view.to_string()
+    let line = line_view.to_owned()
     let trimmed = line.trim().to_owned()
     if !collecting {
       if trimmed.has_prefix("export interface ") {
@@ -690,7 +690,7 @@ fn parse_export_interface_block(block : String) -> InterfaceExpansion? {
         Some(close_idx) if close_idx > open_idx => {
           let header_src = normalized[prefix.length():open_idx]
             .trim()
-            .to_string()
+            .to_owned()
           let body = normalize_object_type_body(
             normalized[open_idx:close_idx + 1].to_owned(),
           )
@@ -701,7 +701,7 @@ fn parse_export_interface_block(block : String) -> InterfaceExpansion? {
               let parents_src = header_src[extends_idx +
                 extends_keyword.length():header_src.length()]
                 .trim()
-                .to_string()
+                .to_owned()
               let parents = if parents_src == "" {
                 []
               } else {
@@ -742,7 +742,7 @@ fn expand_interface_expansion_body(
     )
     let parent_body = expand_known_alias_refs(substituted_ref, rules)
       .trim()
-      .to_string()
+      .to_owned()
     if parent_body != "" {
       expanded_parts.push(parent_body)
     }
@@ -1114,7 +1114,7 @@ fn rebuild_moonbit_imports(
     )
   }
   for line_view in source.split("\n") {
-    let line = line_view.to_string()
+    let line = line_view.to_owned()
     match parse_moonbit_namespace_import_line(line) {
       Some((line_alias, _)) if line_alias == ns_alias =>
         match replacement_line {
@@ -1148,7 +1148,7 @@ fn merge_named_type_imports(source : String) -> String {
   let module_names : Array[Array[String]] = []
   let module_positions : Array[Int] = []
   for line_view in source.split("\n") {
-    let line = line_view.to_string()
+    let line = line_view.to_owned()
     match parse_named_type_import_line(line) {
       Some((names, module_spec)) => {
         let mut found_idx = None

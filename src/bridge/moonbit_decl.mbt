@@ -335,7 +335,7 @@ fn decl_to_pascal_case(name : String) -> String {
   let parts = snake.split("_")
   let mut result = ""
   for part_view in parts {
-    let part = part_view.to_string()
+    let part = part_view.to_owned()
     if part == "" {
       continue
     }

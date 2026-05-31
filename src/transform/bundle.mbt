@@ -176,8 +176,6 @@ pub(all) struct BundleOutput {
 
 ///|
 priv struct ModuleNode {
-  // Virtual path of the module.
-  path : String
   // Original source text (kept for sourcesContent).
   source : String
   // Parsed module body — runtime stmts after JSX lowering.
@@ -236,7 +234,7 @@ fn resolve_relative(from_path : String, specifier : String) -> String? {
 ///|
 fn dirname(path : String) -> String {
   match path.rev_find("/") {
-    Some(idx) => path.[0:idx].to_owned()
+    Some(idx) => path[0:idx].to_owned()
     None => ""
   }
 }
@@ -273,7 +271,7 @@ fn resolve_with_extensions(
 fn normalize_path(path : String) -> String {
   let parts : Array[String] = []
   for part in path.split("/") {
-    let p = part.to_string()
+    let p = part.to_owned()
     if p == "" || p == "." {
       continue
     }
@@ -810,9 +808,10 @@ fn load_module_graph(
   // stream. JSX lowering happens here too so the per-module pragma
   // / config gets resolved against the right source text.
   let parser = @parser.Parser::from_source(source)
-  let mb = match (try? parser.parse_module_block()) {
-    Ok(b) => b
-    Err(e) => return Err("parse \{path}: \{e}")
+  let mb = try parser.parse_module_block() catch {
+    e => return Err("parse \{path}: \{e}")
+  } noraise {
+    b => b
   }
   // Reuse the per-file JSX pragma extractor so each module honors
   // its own `/** @jsxImportSource ... */` etc.
@@ -855,7 +854,6 @@ fn load_module_graph(
   // sort and emit only need the path → ModuleNode mapping to exist
   // during walking.
   modules[path] = {
-    path,
     source,
     block: lowered,
     resolved_imports: {},
@@ -985,7 +983,6 @@ fn load_module_graph(
   // Finalize the entry with the resolved-imports map populated.
   let cjs_exports_var = detect_cjs_exports_var(lowered)
   modules[path] = {
-    path,
     source,
     block: lowered,
     resolved_imports: resolved,
@@ -1167,13 +1164,13 @@ fn emit_entry_exports(
     if spec.export_name == "default" {
       continue
     }
-    let local = renames.get(spec.local_name).unwrap_or(spec.local_name)
-    named.push((local, spec.export_name))
+    let local_ = renames.get(spec.local_name).unwrap_or(spec.local_name)
+    named.push((local_, spec.export_name))
   }
   match default_local {
-    Some(local) => {
+    Some(local_) => {
       e.write("export default ")
-      e.write(local)
+      e.write(local_)
       e.semi()
       e.nl()
     }

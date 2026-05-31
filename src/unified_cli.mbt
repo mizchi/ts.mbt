@@ -125,11 +125,11 @@ fn parse_unified_tsmbt_options(
       _ => ()
     }
     if arg.has_prefix("--input=") {
-      input = Some(arg["--input=".length():arg.length()].to_string())
+      input = Some(arg["--input=".length():arg.length()].to_owned())
     } else if arg.has_prefix("--out=") {
-      out = Some(arg["--out=".length():arg.length()].to_string())
+      out = Some(arg["--out=".length():arg.length()].to_owned())
     } else if arg.has_prefix("--direction=") {
-      let value = arg["--direction=".length():arg.length()].to_string()
+      let value = arg["--direction=".length():arg.length()].to_owned()
       match parse_tsmbt_direction(value) {
         Some(parsed) => direction = parsed
         None =>
@@ -142,23 +142,23 @@ fn parse_unified_tsmbt_options(
       }
     } else if arg.has_prefix("--module-spec=") {
       module_spec = Some(
-        arg["--module-spec=".length():arg.length()].to_string(),
+        arg["--module-spec=".length():arg.length()].to_owned(),
       )
     } else if arg.has_prefix("--runtime-module=") {
       module_spec = Some(
-        arg["--runtime-module=".length():arg.length()].to_string(),
+        arg["--runtime-module=".length():arg.length()].to_owned(),
       )
     } else if arg.has_prefix("--import-rewrites=") {
       import_rewrite_path = Some(
-        arg["--import-rewrites=".length():arg.length()].to_string(),
+        arg["--import-rewrites=".length():arg.length()].to_owned(),
       )
     } else if arg.has_prefix("--import-rewrite=") {
       import_rewrite_path = Some(
-        arg["--import-rewrite=".length():arg.length()].to_string(),
+        arg["--import-rewrite=".length():arg.length()].to_owned(),
       )
     } else if arg.has_prefix("--diagnostics=") {
       diagnostics_path = Some(
-        arg["--diagnostics=".length():arg.length()].to_string(),
+        arg["--diagnostics=".length():arg.length()].to_owned(),
       )
     } else if !arg.has_prefix("-") && input is None {
       input = Some(arg)
@@ -238,13 +238,13 @@ async fn collect_pkg_generated_mbti_files(
 ///|
 fn parse_mbti_package_name_from_source(source : String) -> String? {
   for line_view in source.split("\n") {
-    let line = line_view.trim().to_string()
+    let line = line_view.trim().to_owned()
     if !line.has_prefix("package \"") {
       continue
     }
-    let rest = line["package \"".length():line.length()].to_string()
+    let rest = line["package \"".length():line.length()].to_owned()
     match rest.find("\"") {
-      Some(end_idx) => return Some(rest[:end_idx].to_string())
+      Some(end_idx) => return Some(rest[:end_idx].to_owned())
       None => ()
     }
   }
@@ -280,7 +280,7 @@ async fn ghq_module_name_candidate_repo_paths(
 ) -> Array[String] {
   let paths : Array[String] = []
   let owner = match input.find("/") {
-    Some(sep_idx) => input[:sep_idx].to_string()
+    Some(sep_idx) => input[:sep_idx].to_owned()
     None => return paths
   }
   let owner_root = main_join_path(github_root, owner)
@@ -325,7 +325,7 @@ async fn ghq_module_name_candidate_repo_paths(
 async fn infer_ghq_github_root_from_cwd() -> String? {
   let cwd = @fs.realpath(".") catch { _ => "." }
   match cwd.find("/ghq/github.com/") {
-    Some(idx) => Some(cwd[:idx + "/ghq/github.com".length()].to_string())
+    Some(idx) => Some(cwd[:idx + "/ghq/github.com".length()].to_owned())
     None => None
   }
 }
@@ -574,7 +574,7 @@ fn collect_unified_jsvalue_fallbacks_from_source(
 ) -> Unit {
   let mut line_no = 1
   for line_view in source.split("\n") {
-    let line = line_view.trim().to_string()
+    let line = line_view.trim().to_owned()
     if unified_jsvalue_line_is_fallback(line) {
       out.push("\{relative_path}:\{line_no}: \{line}")
     }

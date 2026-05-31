@@ -266,7 +266,7 @@ fn bridge_to_pascal_case(name : String) -> String {
   let snake = bridge_to_snake_case(name)
   let mut result = ""
   for part_view in snake.split("_") {
-    let part = part_view.to_string()
+    let part = part_view.to_owned()
     if part == "" {
       continue
     }
@@ -446,7 +446,7 @@ fn parse_bridge_public_type_name_line(line : String) -> String? {
 fn collect_bridge_public_type_names(bridge_mbti : String) -> Array[String] {
   let names : Array[String] = []
   for line_view in bridge_mbti.split("\n") {
-    let line = line_view.to_string().trim().to_owned()
+    let line = line_view.to_owned().trim().to_owned()
     match parse_bridge_public_type_name_line(line) {
       Some(name) => if !names.contains(name) { names.push(name) }
       None => ()
@@ -504,7 +504,7 @@ fn bridge_struct_decl_arity(bridge_mbt : String, name : String) -> Int {
     "pub(all) struct ", "pub struct ", "pub(all) enum ", "pub enum ", "pub type ",
   ]
   for line_view in bridge_mbt.split("\n") {
-    let line = line_view.to_string().trim().to_owned()
+    let line = line_view.to_owned().trim().to_owned()
     for prefix in prefixes {
       if !line.has_prefix(prefix) {
         continue
@@ -549,7 +549,7 @@ fn bridge_struct_decl_arity(bridge_mbt : String, name : String) -> Int {
 fn collect_bridge_implemented_type_names(bridge_mbt : String) -> Array[String] {
   let names : Array[String] = []
   for line_view in bridge_mbt.split("\n") {
-    let line = line_view.to_string().trim().to_owned()
+    let line = line_view.to_owned().trim().to_owned()
     match parse_bridge_implemented_type_name_line(line) {
       Some(name) => if !names.contains(name) { names.push(name) }
       None => ()
@@ -606,7 +606,7 @@ fn collect_bridge_struct_decls(bridge_mbt : String) -> Array[BridgeStructDecl] {
   let mut current_type_param_suffix = ""
   let mut fields : Array[String] = []
   for line_view in bridge_mbt.split("\n") {
-    let line = line_view.to_string().trim().to_owned()
+    let line = line_view.to_owned().trim().to_owned()
     match current_name {
       Some(name) =>
         if line == "}" {
@@ -673,7 +673,7 @@ fn expose_bridge_struct_decls_in_mbti(
   }
   let lines : Array[String] = []
   for line_view in bridge_mbti.split("\n") {
-    let line = line_view.to_string()
+    let line = line_view.to_owned()
     let trimmed = line.trim().to_owned()
     match parse_bridge_public_type_name_line(trimmed) {
       Some(name) =>
@@ -740,7 +740,7 @@ fn collect_bridge_type_guard_helpers(
   let helpers : Array[BridgeTypeGuardHelper] = []
   let seen_helpers : Array[String] = []
   for line_view in bridge_mbti.split("\n") {
-    let line = line_view.to_string().trim().to_owned()
+    let line = line_view.to_owned().trim().to_owned()
     match parse_bridge_top_level_fn_decl_line(line) {
       Some(fn_decl) => {
         if fn_decl.return_type != "Bool" {
@@ -798,7 +798,7 @@ fn add_bridge_ergonomic_helper_decls(
 ) -> String {
   let mut next_bridge_mbti = bridge_mbti
   for line_view in bridge_mbt.split("\n") {
-    let line = line_view.to_string().trim().to_owned()
+    let line = line_view.to_owned().trim().to_owned()
     match parse_bridge_pub_extern_fn_decl_line(line) {
       Some(fn_decl) => {
         let helper_decl = "declare pub fn \{fn_decl.public_name}(\{fn_decl.params_src}) -> \{fn_decl.return_type}"
@@ -1116,7 +1116,7 @@ fn inject_bridge_public_type_aliases(
     next_bridge_mbt,
   )
   for line_view in bridge_mbti.split("\n") {
-    let line = line_view.to_string().trim().to_owned()
+    let line = line_view.to_owned().trim().to_owned()
     if line.has_prefix("pub type ") && line.contains(" = ") {
       match parse_bridge_implemented_type_name_line(line) {
         Some(type_name) =>
@@ -1149,7 +1149,7 @@ fn add_bridge_public_wrappers(
   )
   let wrappers : Array[String] = []
   for line_view in bridge_mbti.split("\n") {
-    let line = line_view.to_string().trim().to_owned()
+    let line = line_view.to_owned().trim().to_owned()
     match parse_bridge_top_level_fn_decl_line(line) {
       Some(fn_decl) => {
         let base_internal_name = bridge_value_fn_name(fn_decl.public_name)

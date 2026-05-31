@@ -46,21 +46,7 @@ priv struct Emitter {
   // pretty mode `semi()` writes through directly and this flag
   // stays false.
   mut pending_semi : Bool
-  // Tracks the most recently emitted top-level token kind so we can
-  // suppress optional whitespace in minify mode (e.g. drop the
-  // space between `return` and a following `{` / `[` / string /
-  // template literal).
-  mut last_token : LastTok
 }
-
-///|
-priv enum LastTok {
-  Other
-  // Most recent text emitted was an identifier or keyword whose
-  // next-byte separator depends on the upcoming token (e.g.
-  // `return`, `typeof`, `delete`).
-  Word
-} derive(Eq)
 
 ///|
 fn Emitter::new(pretty? : Bool = true) -> Emitter {
@@ -73,7 +59,6 @@ fn Emitter::new(pretty? : Bool = true) -> Emitter {
     smap: None,
     line_index: LineIndex::new(""),
     pending_semi: false,
-    last_token: LastTok::Other,
   }
 }
 
@@ -111,7 +96,7 @@ fn Emitter::to_string(self : Emitter) -> String {
   }
   let s = self.buf.to_string()
   if !(self.pretty) && s.has_suffix(";") {
-    s.substring(end=s.length() - 1).to_string()
+    s[0:s.length() - 1].to_owned()
   } else {
     s
   }
@@ -123,7 +108,6 @@ fn Emitter::write(self : Emitter, s : String) -> Unit {
     self.flush_semi()
   }
   self.buf.write_string(s)
-  self.last_token = LastTok::Other
   // Update the output position counter so the source-map builder can
   // pin emit-side coordinates without reparsing the buffer.
   for c in s {
@@ -153,7 +137,6 @@ fn Emitter::word(self : Emitter, s : String) -> Unit {
       self.out_col = self.out_col + 1
     }
   }
-  self.last_token = LastTok::Word
 }
 
 ///|
@@ -302,14 +285,15 @@ pub fn transform_source_full(
   // declarations even though the parser's stmt-level path drops
   // their runtime stmts. Falls back to the plain block parse if
   // the source isn't a module-shaped fragment.
-  let (block, positions, enums) = match
-    (try? @parser.parse_module_block_from_source(source)) {
-    Ok(mb) => (mb.block, mb.block.stmt_positions, mb.enums)
-    Err(_) =>
-      match (try? @parser.parse_block_from_source_with_positions(source)) {
-        Ok(pair) => (pair.0, pair.1, [])
-        Err(e) => return Err("parse error: \{e}")
+  let (block, positions, enums) = try @parser.parse_module_block_from_source(source) catch {
+    _ =>
+      try @parser.parse_block_from_source_with_positions(source) catch {
+        e => return Err("parse error: \{e}")
+      } noraise {
+        pair => (pair.0, pair.1, [])
       }
+  } noraise {
+    mb => (mb.block, mb.block.stmt_positions, mb.enums)
   }
   let cfg = extract_jsx_pragmas(source, base)
   let (lowered_jsx, runtime_refs) = lower_block_with_runtime_imports(cfg, block)
@@ -861,7 +845,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       // so the JS output actually wires up the accessor.
       if prop.has_prefix("@@get:") || prop.has_prefix("@@set:") {
         let accessor = if prop.has_prefix("@@get:") { "get" } else { "set" }
-        let real_name = prop.substring(start=6, end=prop.length()).to_string()
+        let real_name = prop[6:].to_owned()
         e.write("Object.defineProperty(")
         emit_expr(e, recv, 0)
         e.write(",")
@@ -1584,7 +1568,7 @@ fn emit_binding(e : Emitter, binding : @ast.TsBinding) -> Unit {
         let _ = written_key
         // Distinguish bare `{ key }` shorthand vs. `{ key: alias }`.
         match prop.binding {
-          Ident(local) if local == prop.key => ()
+          Ident(local_) if local_ == prop.key => ()
           _ => {
             e.write(":")
             e.space()
@@ -1885,7 +1869,7 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
             // accessor actually installs as a getter/setter rather
             // than as a plain string-keyed property.
             let accessor = if key.has_prefix("@@get:") { "get" } else { "set" }
-            let real_name = key.substring(start=6, end=key.length()).to_string()
+            let real_name = key[6:].to_owned()
             e.write(accessor)
             e.write(" ")
             emit_object_key(e, real_name)
@@ -1903,7 +1887,7 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
           (key, ArrowFunc(params, _, body, _)) if key.has_prefix("@@get:") ||
             key.has_prefix("@@set:") => {
             let accessor = if key.has_prefix("@@get:") { "get" } else { "set" }
-            let real_name = key.substring(start=6, end=key.length()).to_string()
+            let real_name = key[6:].to_owned()
             e.write(accessor)
             e.write(" ")
             emit_object_key(e, real_name)
@@ -2096,10 +2080,10 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
       }
       emit_args(e, args)
     }
-    MethodCall(recv, method, args) => {
+    MethodCall(recv, method_, args) => {
       emit_expr(e, recv, 18)
       e.write(".")
-      e.write(strip_internal_prop_marker(method))
+      e.write(strip_internal_prop_marker(method_))
       emit_args(e, args)
     }
     AssignExpr(name, value) => {
@@ -2302,7 +2286,7 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
           emit_expr(e, idx, 0)
           e.write("]")
         }
-        MethodCall(recv, method, args) => {
+        MethodCall(recv, method_, args) => {
           // `recv.method?.(args)` — the `?.` is on the CALL, not on
           // the property access. The parser produces
           // `OptionalChain(MethodCall(...))` only from this source
@@ -2310,7 +2294,7 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
           // the `?.` between the property and the call args.
           emit_expr(e, recv, 18)
           e.write(".")
-          e.write(strip_internal_prop_marker(method))
+          e.write(strip_internal_prop_marker(method_))
           e.write("?.")
           emit_args(e, args)
         }
@@ -3129,7 +3113,7 @@ fn is_js_reserved_word(s : String) -> Bool {
 /// marker — strip it before emit.
 fn strip_internal_prop_marker(name : String) -> String {
   if name.has_prefix("@@define:") {
-    name.substring(start=9, end=name.length()).to_string()
+    name[9:].to_owned()
   } else {
     name
   }
@@ -3445,38 +3429,39 @@ fn minify_number(n : Double) -> String {
   let mut best = standard
   // Drop trailing ".0" (integer-valued doubles): 1.0 → 1
   if standard.has_suffix(".0") {
-    let shorter = standard
-      .substring(start=0, end=standard.length() - 2)
-      .to_string()
+    let shorter = standard[0:standard.length() - 2].to_owned()
     // Verify lossless round-trip.
-    match (try? @strconv.parse_double(shorter)) {
-      Ok(back) =>
+    try @string.parse_double(shorter) catch {
+      _ => ()
+    } noraise {
+      back =>
         if back == n && shorter.length() < best.length() {
           best = shorter
         }
-      Err(_) => ()
     }
   }
   // Drop leading zero from "0.NNN": 0.5 → .5
   if standard.has_prefix("0.") {
-    let shorter = standard.substring(start=1).to_string()
-    match (try? @strconv.parse_double(shorter)) {
-      Ok(back) =>
+    let shorter = standard[1:].to_owned()
+    try @string.parse_double(shorter) catch {
+      _ => ()
+    } noraise {
+      back =>
         if back == n && shorter.length() < best.length() {
           best = shorter
         }
-      Err(_) => ()
     }
   }
   // Drop leading zero from "-0.NNN": -0.5 → -.5
   if standard.has_prefix("-0.") {
-    let shorter = "-" + standard.substring(start=2).to_string()
-    match (try? @strconv.parse_double(shorter)) {
-      Ok(back) =>
+    let shorter = "-" + standard[2:].to_owned()
+    try @string.parse_double(shorter) catch {
+      _ => ()
+    } noraise {
+      back =>
         if back == n && shorter.length() < best.length() {
           best = shorter
         }
-      Err(_) => ()
     }
   }
   // Scientific notation for integers with trailing zeros: 1000000 → 1e6.
@@ -3499,9 +3484,10 @@ fn minify_number(n : Double) -> String {
       } else {
         mantissa.to_string() + "e" + exp.to_string()
       }
-      match (try? @strconv.parse_double(sci)) {
-        Ok(back) => if back == n && sci.length() < best.length() { best = sci }
-        Err(_) => ()
+      try @string.parse_double(sci) catch {
+        _ => ()
+      } noraise {
+        back => if back == n && sci.length() < best.length() { best = sci }
       }
     }
   }
@@ -3552,7 +3538,7 @@ fn emit_native_class(
     Some(func) =>
       !(e.pretty) &&
       decl.base_names.is_empty() &&
-      decl.base_expr.is_empty() &&
+      decl.base_expr is None &&
       func.params.is_empty() &&
       func.body.stmts.is_empty() &&
       !(func.is_async) &&

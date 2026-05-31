@@ -2628,7 +2628,7 @@ async test "bridge: indexed access T[\"k\"] resolves to the field type in mbti" 
     .split("interface UIMatch")
     .nth(1)
     .unwrap_or_default()
-    .to_string()
+    .to_owned()
   assert_false(ui_match_block.contains("params : JSValue"))
   assert_false(ui_match_block.contains("params : JSValue"))
   assert_true(ui_match_block.contains("params : ParamsLike"))

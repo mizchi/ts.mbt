@@ -35,7 +35,6 @@ priv enum AsConstShape {
 
 ///|
 priv struct AsConstCandidate {
-  name : String
   shape : AsConstShape
   mut disqualified : Bool
 }
@@ -48,7 +47,7 @@ pub fn as_const_inline_block(block : @ast.TsBlock) -> @ast.TsBlock {
     match stmt {
       Const(@ast.TsBinding::Ident(name), _, e) =>
         match extract_as_const_shape(e) {
-          Some(shape) => candidates[name] = { name, shape, disqualified: false }
+          Some(shape) => candidates[name] = { shape, disqualified: false }
           None => ()
         }
       _ => ()

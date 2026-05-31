@@ -3896,7 +3896,7 @@ fn ffi_runtime_export_member_names(
     Some(index) => {
       let suffix = runtime_export_name[index + 1:].to_owned()
       for part_view in suffix.split(".") {
-        let part = part_view.to_string()
+        let part = part_view.to_owned()
         if part != "" {
           members.push(part)
         }

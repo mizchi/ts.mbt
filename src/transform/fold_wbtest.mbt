@@ -1379,7 +1379,7 @@ test "fold: uninit let + assign merges to initialized let" {
   assert_true(out.contains("let x"))
   assert_true(out.contains("42"))
   // No standalone assignment statement (just one line total)
-  assert_true(out.trim_space().split("\n").collect().length() == 1)
+  assert_true(out.trim().split("\n").collect().length() == 1)
 }
 
 ///|

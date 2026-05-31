@@ -182,16 +182,6 @@ fn lookup_unique_symbol(g : SymbolGraph, name : String) -> SymbolId? {
   hit
 }
 
-///|
-fn is_flow_node_numeric(node : FlowNode, numeric : Map[SymbolId, Bool]) -> Bool {
-  match node {
-    Literal(LitNumeric) => true
-    Literal(_) => false
-    SymVal(id) => numeric.contains(id)
-    _ => false
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Graph-aware version of the existing `is_index_known_numeric`
 // check used by `mangle_safety.collect_props_on_external_expr`.

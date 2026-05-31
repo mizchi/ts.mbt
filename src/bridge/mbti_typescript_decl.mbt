@@ -520,7 +520,7 @@ fn strip_mbti_derive_suffix(source : String) -> String {
 fn infer_mbti_import_alias_name(module_spec : String) -> String {
   let mut alias_name = ""
   for part in module_spec.split("/") {
-    alias_name = part.to_string()
+    alias_name = part.to_owned()
   }
   alias_name
 }
@@ -915,7 +915,7 @@ fn parse_mbti_imports(source : String) -> Array[MbtiImportRef] {
 fn collect_mbti_omitted_autolink_members(source : String) -> Array[String] {
   let members : Array[String] = []
   for line_view in source.split("\n") {
-    let line = line_view.to_string()
+    let line = line_view.to_owned()
     match strip_mbti_public_prefix(line, "fn") {
       Some(rest) =>
         match rest.find("(") {
@@ -2150,7 +2150,7 @@ fn mbti_local_package_segments(
   }
   let segments : Array[String] = []
   for part_view in suffix.split("/") {
-    let part = part_view.to_string()
+    let part = part_view.to_owned()
     if part != "" {
       segments.push(part)
     }
@@ -2210,7 +2210,7 @@ fn sanitize_npm_package_segment(segment : String, fallback : String) -> String {
 fn mbti_root_package_npm_name(root_package_name : String) -> String {
   let segments : Array[String] = []
   for part_view in root_package_name.split("/") {
-    let part = part_view.to_string()
+    let part = part_view.to_owned()
     if part != "" {
       segments.push(part)
     }
@@ -2583,7 +2583,7 @@ fn translate_mbti_type(
       let left = function_source[:arrow_idx].trim().to_owned()
       let right = function_source[arrow_idx + 2:function_source.length()]
         .trim()
-        .to_string()
+        .to_owned()
       let params_src = if left.has_prefix("(") && left.has_suffix(")") {
         left[1:left.length() - 1].to_owned()
       } else {
@@ -2612,7 +2612,7 @@ fn translate_mbti_type(
   if function_source.has_suffix("?") {
     let inner = function_source[:function_source.length() - 1]
       .trim()
-      .to_string()
+      .to_owned()
     let normalized_inner = translate_mbti_type(
       inner, imports, used_aliases, owner_name, owner_type_params,
     )
@@ -3272,7 +3272,7 @@ fn mbti_effect_error_ts_type(
   }
   let error_src = effect_suffix["raise".length():effect_suffix.length()]
     .trim()
-    .to_string()
+    .to_owned()
   if error_src == "" {
     Some("Error")
   } else {
@@ -3601,9 +3601,9 @@ fn collect_marker_bounds_from_decl(
       seen_prefix = true
       continue
     }
-    let clause = take_ts_extends_clause(part_view.to_string())
+    let clause = take_ts_extends_clause(part_view.to_owned())
     for comma_part_view in clause.split(",") {
-      let comma_part = comma_part_view.to_string()
+      let comma_part = comma_part_view.to_owned()
       for amp_part_view in comma_part.split("&") {
         let name = amp_part_view.trim().to_owned()
         if is_unqualified_marker_bound_name(name) {
@@ -4037,7 +4037,7 @@ fn parse_mbti_impl_decl(line : String) -> MbtiImplDecl? {
       let trait_name = trimmed[:for_idx].trim().to_owned()
       let owner_src = trimmed[for_idx + " for ".length():trimmed.length()]
         .trim()
-        .to_string()
+        .to_owned()
       let owner_name = match owner_src.find("[") {
         Some(idx) => owner_src[:idx].trim().to_owned()
         None => owner_src
@@ -4961,7 +4961,7 @@ fn strip_runtime_inaccessible_typescript_members(
   let mut in_interface = false
   let mut in_namespace = false
   for line_view in source.split("\n") {
-    let line = line_view.to_string()
+    let line = line_view.to_owned()
     let trimmed = line.trim().to_owned()
     if in_namespace {
       if trimmed == "}" {

@@ -440,8 +440,8 @@ fn collect_props_in_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit {
       out[name] = true
       collect_props_in_expr(recv, out)
     }
-    MethodCall(recv, method, args) => {
-      out[method] = true
+    MethodCall(recv, method_, args) => {
+      out[method_] = true
       collect_props_in_expr(recv, out)
       for a in args {
         collect_props_in_expr(a, out)
@@ -1809,14 +1809,14 @@ fn rename_expr(expr : @ast.TsExpr, scope : ScopeFrame) -> @ast.TsExpr {
       }
       NewExpr(rename_expr(callee, scope), new_args)
     }
-    MethodCall(recv, method, args) => {
+    MethodCall(recv, method_, args) => {
       let new_args : Array[@ast.TsExpr] = []
       for a in args {
         new_args.push(rename_expr(a, scope))
       }
       // Property name is left untouched — property mangling is a
       // separate pass that needs type info to be safe.
-      MethodCall(rename_expr(recv, scope), method, new_args)
+      MethodCall(rename_expr(recv, scope), method_, new_args)
     }
     PropAccess(recv, name) => PropAccess(rename_expr(recv, scope), name)
     IndexAccess(recv, idx) =>
@@ -2017,7 +2017,7 @@ fn rename_binding_lhs(
 /// job of `rename_properties_in_class_decl`.
 fn rename_dotted_base_name(name : String, scope : ScopeFrame) -> String {
   match name.find(".") {
-    Some(i) => scope.resolve(name.substring(end=i)) + name.substring(start=i)
+    Some(i) => scope.resolve(name[0:i].to_owned()) + name[i:].to_owned()
     None => scope.resolve(name)
   }
 }
@@ -2026,8 +2026,8 @@ fn rename_dotted_base_name(name : String, scope : ScopeFrame) -> String {
 fn is_define_prop_call(recv : @ast.TsExpr, meth : String) -> Bool {
   match recv {
     @ast.TsExpr::Var("Object") =>
-      method == "defineProperty" || method == "defineProperties"
-    @ast.TsExpr::Var("Reflect") => method == "defineProperty"
+      meth == "defineProperty" || meth == "defineProperties"
+    @ast.TsExpr::Var("Reflect") => meth == "defineProperty"
     _ => false
   }
 }
@@ -2416,7 +2416,7 @@ fn rename_properties_in_expr(
         rename_properties_in_expr(recv, prop_map),
         rename_prop_key(name, prop_map),
       )
-    MethodCall(recv, method, args) => {
+    MethodCall(recv, method_, args) => {
       let new_args : Array[@ast.TsExpr] = []
       // `Object.defineProperty(obj, "key", desc)` / `Reflect.defineProperty(obj, "key", desc)`:
       // the second argument names a property that the runtime
@@ -2426,7 +2426,7 @@ fn rename_properties_in_expr(
       // stored under its original name but read under the mangled
       // one, surfacing as `Cannot read properties of undefined`
       // in `_zod`-style instance brands.
-      let renames_define_prop_key = is_define_prop_call(recv, method) &&
+      let renames_define_prop_key = is_define_prop_call(recv, method_) &&
         args.length() >= 2
       for i, a in args {
         if i == 1 && renames_define_prop_key {
@@ -2443,7 +2443,7 @@ fn rename_properties_in_expr(
       }
       MethodCall(
         rename_properties_in_expr(recv, prop_map),
-        rename_prop_key(method, prop_map),
+        rename_prop_key(method_, prop_map),
         new_args,
       )
     }

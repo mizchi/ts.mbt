@@ -581,9 +581,7 @@ fn scan_stmt_for_impure_getters(
         match inner {
           PropAssign(_, prop, value) =>
             if prop.has_prefix("@@get:") {
-              let getter_name = prop
-                .substring(start=6, end=prop.length())
-                .to_string()
+              let getter_name = prop[6:].to_owned()
               let unwrapped = match value {
                 Var(_) =>
                   // The getter function landed in a temp let
@@ -644,9 +642,9 @@ fn walk_inner_class_getters(
 /// the reference doesn't resolve to a function-expr binding.
 fn find_temp_getter_body(
   stmts : Array[@ast.TsStmt],
-  ref : @ast.TsExpr,
+  ref_ : @ast.TsExpr,
 ) -> @ast.TsExpr? {
-  match ref {
+  match ref_ {
     Var(name) => {
       for s in stmts {
         match s {

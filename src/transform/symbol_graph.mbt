@@ -35,10 +35,10 @@
 // them as "value crosses the bundle boundary".
 
 ///|
-pub typealias SymbolId = Int
+pub type SymbolId = Int
 
 ///|
-pub typealias ScopeId = Int
+pub type ScopeId = Int
 
 ///|
 pub(all) struct SymbolGraph {

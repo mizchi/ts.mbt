@@ -10,7 +10,7 @@ fn wbtest_join_path(base : String, child : String) -> String {
 ///|
 fn wbtest_basename(path : String) -> String {
   match path.rev_find("/") {
-    Some(idx) => path[idx + 1:path.length()].to_string()
+    Some(idx) => path[idx + 1:path.length()].to_owned()
     None => path
   }
 }
@@ -180,11 +180,11 @@ test "parse_unified_tsmbt_options accepts input out and direction flags" {
   ]
   match parse_unified_tsmbt_options(args, 1) {
     (Some(options), None) => {
-      assert_eq(options.input, Some("mizchi/foo"))
-      assert_eq(options.out, Some("dist"))
+      @test.assert_eq(options.input, Some("mizchi/foo"))
+      @test.assert_eq(options.out, Some("dist"))
       assert_true(options.direction is TsmbtDirection::MbtToTs)
-      assert_eq(options.import_rewrite_path, Some("rewrites.json"))
-      assert_eq(options.diagnostics_path, Some("dist/diagnostics.md"))
+      @test.assert_eq(options.import_rewrite_path, Some("rewrites.json"))
+      @test.assert_eq(options.diagnostics_path, Some("dist/diagnostics.md"))
       assert_true(options.strict)
       assert_false(options.facade)
     }
@@ -201,12 +201,12 @@ test "parse_unified_tsmbt_options accepts positional generate args and equals fl
   ]
   match parse_unified_tsmbt_options(args, 2) {
     (Some(options), None) => {
-      assert_eq(options.input, Some("neverthrow"))
-      assert_eq(options.out, Some("dist/generated"))
+      @test.assert_eq(options.input, Some("neverthrow"))
+      @test.assert_eq(options.out, Some("dist/generated"))
       assert_true(options.direction is TsmbtDirection::TsToMbt)
-      assert_eq(options.module_spec, Some("/runtime/neverthrow.js"))
-      assert_eq(options.import_rewrite_path, Some("rewrites.json"))
-      assert_eq(options.diagnostics_path, Some("dist/diagnostics.md"))
+      @test.assert_eq(options.module_spec, Some("/runtime/neverthrow.js"))
+      @test.assert_eq(options.import_rewrite_path, Some("rewrites.json"))
+      @test.assert_eq(options.diagnostics_path, Some("dist/diagnostics.md"))
       assert_false(options.strict)
       assert_true(options.facade)
     }
@@ -244,7 +244,7 @@ async test "run_mbt_to_ts_unified_cli rejects --direction mismatch" {
 async test "resolve_unified_mbt_input_path finds package name in generated mbti files" {
   match resolve_unified_mbt_input_path("examples/counter") {
     Some(path) =>
-      assert_eq(
+      @test.assert_eq(
         path, "examples/moonbit-to-typescript/counter/pkg.generated.mbti",
       )
     None => fail("expected examples/counter pkg.generated.mbti")
@@ -374,7 +374,7 @@ test "rewrite_moonbit_js_runtime_text patches identity externs" {
   let actual = rewrite_moonbit_js_runtime_text(
     source, "glue.js.map", "index.js.map",
   )
-  assert_eq(
+  @test.assert_eq(
     actual, "const cast = (x) => x;\nconst cast2 = (x) => x;\n//# sourceMappingURL=index.js.map\n",
   )
 }
@@ -417,7 +417,7 @@ async test "emit_unified_tsmbt_scaffold emits MoonBit to TypeScript scaffold fro
   let package_json = @fs.read_file(wbtest_join_path(root, "package.json")).text() catch {
     e => fail("failed to read unified package.json: \{e}")
   }
-  assert_eq(
+  @test.assert_eq(
     wbtest_relative_file_snapshot(root),
     [
       "index.js", "index.d.ts", "index.js.map", "package.json", "child/index.js",
@@ -460,13 +460,13 @@ async test "emit_unified_tsmbt_scaffold emits TypeScript to MoonBit scaffold" {
   ).text() catch {
     e => fail("failed to read unified TS diagnostics: \{e}")
   }
-  assert_eq(
+  @test.assert_eq(
     wbtest_relative_file_snapshot(root),
     [
       "moon.pkg", "bridge.js", "bridge.mbt", "bridge.mbti", "package.json", "SCAFFOLD_DIAGNOSTICS.md",
     ].join("\n"),
   )
-  assert_eq(moon_pkg, "")
+  @test.assert_eq(moon_pkg, "")
   // The neverthrow-like fixture has directly-callable runtime exports,
   // so the bridge.mbt extern lines pull from `/runtime/neverthrow-like.js`
   // rather than going through a `__ts_mbt_*` helper indirection.
@@ -524,11 +524,9 @@ test "unified JSValue diagnostics ignore shared declarations" {
     ].join("\n"),
     out,
   )
-  inspect(
-    out,
-    content=(
-      #|[bridge.mbti:3: declare pub fn parse(input : String) -> JSValue, bridge.mbt:3: pub extern "js" fn parse(input : String) -> JSValue = "parse"]
-    ),
+  @test.assert_eq(
+    "[" + out.join(", ") + "]",
+    "[bridge.mbti:3: declare pub fn parse(input : String) -> JSValue, bridge.mbt:3: pub extern \"js\" fn parse(input : String) -> JSValue = \"parse\"]",
   )
 }
 
@@ -1187,11 +1185,11 @@ async test "emit_moonbit_bridge_texts generates decl, ffi, and bridge snippets" 
       return
     }
   }
-  assert_eq(
+  @test.assert_eq(
     bundle.entry_path,
     "fixtures/resolver/project/types/runtime-function-entry.ts",
   )
-  assert_eq(bundle.module_spec, "/runtime/runtime-function.js")
+  @test.assert_eq(bundle.module_spec, "/runtime/runtime-function.js")
   assert_true(
     bundle.decl_mbt.contains(
       "declare pub fn scalePoint(point : RuntimePoint, factor : Double) -> RuntimePoint",
@@ -1305,7 +1303,7 @@ async test "emit_moonbit_bridge_package writes package files to output dir" {
       return
     }
   }
-  assert_eq(pkg_json, "")
+  @test.assert_eq(pkg_json, "")
   assert_true(bridge_mbti.contains("declare pub fn scalePoint("))
   assert_true(
     bridge_mbt.contains(
@@ -5616,7 +5614,7 @@ async test "collect_moonbit_ts_scaffold_unsupported_exports ignores namespace ex
       return
     }
   }
-  assert_eq(unsupported.length(), 0)
+  @test.assert_eq(unsupported.length(), 0)
 }
 
 ///|
@@ -5780,13 +5778,13 @@ test "compute_vendor_root: missing source field falls back to module root, not s
   // `<root>/internal/generated/...`. A `<root>/src/internal/generated/...`
   // fallback would be invisible to the consumer's `moon build`.
   let mod_json = "{ \"name\": \"acme/app\", \"version\": \"0.0.0\" }"
-  assert_eq(compute_vendor_root("/proj", mod_json), "/proj/internal/generated")
+  @test.assert_eq(compute_vendor_root("/proj", mod_json), "/proj/internal/generated")
 }
 
 ///|
 test "compute_vendor_root: explicit source=src nests under src/" {
   let mod_json = "{ \"name\": \"acme/app\", \"source\": \"src\" }"
-  assert_eq(
+  @test.assert_eq(
     compute_vendor_root("/proj", mod_json),
     "/proj/src/internal/generated",
   )
@@ -5795,19 +5793,19 @@ test "compute_vendor_root: explicit source=src nests under src/" {
 ///|
 test "compute_vendor_root: explicit source=. matches missing-source behavior" {
   let mod_json = "{ \"name\": \"acme/app\", \"source\": \".\" }"
-  assert_eq(compute_vendor_root("/proj", mod_json), "/proj/internal/generated")
+  @test.assert_eq(compute_vendor_root("/proj", mod_json), "/proj/internal/generated")
 }
 
 ///|
 test "compute_vendor_root: empty source string is treated as module root" {
   let mod_json = "{ \"name\": \"acme/app\", \"source\": \"\" }"
-  assert_eq(compute_vendor_root("/proj", mod_json), "/proj/internal/generated")
+  @test.assert_eq(compute_vendor_root("/proj", mod_json), "/proj/internal/generated")
 }
 
 ///|
 test "compute_vendor_root: nested source path stacks under module root" {
   let mod_json = "{ \"name\": \"acme/app\", \"source\": \"packages/lib\" }"
-  assert_eq(
+  @test.assert_eq(
     compute_vendor_root("/proj", mod_json),
     "/proj/packages/lib/internal/generated",
   )

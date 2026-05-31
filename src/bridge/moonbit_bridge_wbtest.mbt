@@ -11,11 +11,11 @@ async test "bridge: emit MoonBit TS bridge bundle from runtime entry" {
       return
     }
   }
-  assert_eq(
+  @test.assert_eq(
     bundle.entry_path,
     "fixtures/resolver/project/types/runtime-function-entry.ts",
   )
-  assert_eq(bundle.module_spec, "/runtime/runtime-function.js")
+  @test.assert_eq(bundle.module_spec, "/runtime/runtime-function.js")
   assert_true(
     bundle.decl_mbt.contains(
       "declare pub fn scalePoint(point : RuntimePoint, factor : Double) -> RuntimePoint",
@@ -1042,9 +1042,9 @@ test "bridge: bridge top-level fn parser keeps function-typed parameters intact"
   let line = "declare pub fn forEachLeadingCommentRange(text : String, pos : Double, cb : (Double, Double, CommentKind, Bool) -> U) -> U?"
   match parse_bridge_top_level_fn_decl_line(line) {
     Some(decl) => {
-      assert_eq(decl.public_name, "forEachLeadingCommentRange")
-      assert_eq(decl.arg_names, ["text", "pos", "cb"])
-      assert_eq(
+      @test.assert_eq(decl.public_name, "forEachLeadingCommentRange")
+      @test.assert_eq(decl.arg_names, ["text", "pos", "cb"])
+      @test.assert_eq(
         decl.params_src,
         "text : String, pos : Double, cb : (Double, Double, CommentKind, Bool) -> U",
       )

@@ -30,8 +30,10 @@ async fn main {
       verbose = true
     } else if arg == "--iters" && i + 1 < argv.length() {
       i = i + 1
-      iters = match (try? @strconv.parse_int(argv[i])) {
-        Ok(n) if n > 0 => n
+      iters = try @string.parse_int(argv[i]) catch {
+        _ => 1
+      } noraise {
+        n if n > 0 => n
         _ => 1
       }
     } else {
