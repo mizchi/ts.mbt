@@ -5391,3 +5391,31 @@ test "expr_check: unary minus on number is allowed" {
     None => fail("function not found")
   }
 }
+
+///|
+test "expr_check: object destructuring with type annotation mismatch is flagged" {
+  // `const { x }: { x: string } = { x: 42 }` — number where string expected.
+  let src =
+    #|interface Config { x: string }
+    #|function f(): void {
+    #|  const { x }: Config = { x: 42 };
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let found = issues.iter().any(fn(i) {
+    i.message.contains("destructuring") || i.message.contains("string") || i.message.contains("number")
+  })
+  assert_true(found)
+}
+
+///|
+test "expr_check: object destructuring with correct type is ok" {
+  let src =
+    #|interface Config { x: string }
+    #|function f(): void {
+    #|  const { x }: Config = { x: "hello" };
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}

@@ -5516,6 +5516,9 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
     | Let(@ast.TsBinding::Array(ab), declared, init)
     | Const(@ast.TsBinding::Array(ab), declared, init) => {
       check_call_args_in_expr(env, init, ctx)
+      if is_checkable(declared) {
+        check_expr_against(env, init, declared, ctx, "destructuring init")
+      }
       let source_ty = if is_checkable(declared) {
         declared
       } else {
@@ -5527,6 +5530,9 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
     | Let(@ast.TsBinding::Object(ob), declared, init)
     | Const(@ast.TsBinding::Object(ob), declared, init) => {
       check_call_args_in_expr(env, init, ctx)
+      if is_checkable(declared) {
+        check_expr_against(env, init, declared, ctx, "destructuring init")
+      }
       let source_ty = if is_checkable(declared) {
         declared
       } else {
