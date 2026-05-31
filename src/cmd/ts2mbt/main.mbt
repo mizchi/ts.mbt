@@ -88,9 +88,7 @@ fn parse_vendor_args(
       continue
     }
     if arg.has_prefix("--module-spec=") {
-      module_spec = Some(
-        arg["--module-spec=".length():arg.length()].to_owned(),
-      )
+      module_spec = Some(arg["--module-spec=".length():arg.length()].to_owned())
       idx += 1
       continue
     }

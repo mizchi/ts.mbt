@@ -351,7 +351,7 @@ pub fn bundle_modules(
   // free variable in the consumer.
   let link_renames = link_module_graph(modules, order, external_imports)
   let mut mangle_export_renames : Map[String, String] = {}
-  let e = Emitter::new(pretty=!(opts.minify))
+  let e = Emitter::new(pretty=!opts.minify)
   if opts.with_sourcemap {
     e.smap = Some(SourceMapBuilder::new())
   }
@@ -456,7 +456,7 @@ pub fn bundle_modules(
     // Type-predicate inline.
     {
       let predicates = build_predicate_table(combined)
-      if !(predicates.entries.is_empty()) {
+      if !predicates.entries.is_empty() {
         combined = inline_predicates(combined, predicates)
       }
     }
@@ -465,7 +465,7 @@ pub fn bundle_modules(
     // function whose first param is a closed string-literal union.
     {
       let sw = build_switch_fold_table(combined)
-      if !(sw.entries.is_empty()) {
+      if !sw.entries.is_empty() {
         combined = switch_fold(combined, sw)
       }
     }
@@ -558,7 +558,7 @@ pub fn bundle_modules(
           let collected : Map[String, Bool] = {}
           collect_property_names(combined, collected)
           for n in collected.keys() {
-            if !(is_internal_marker_property(n)) {
+            if !is_internal_marker_property(n) {
               extra_reserved.push(n)
             }
           }
@@ -634,7 +634,7 @@ pub fn bundle_modules(
       combined.stmts.length()
     // In minify mode without source-maps, use the merged-decl emitter so
     // `let a=1;let b=2;` collapses to `let a=1,b=2;` at the top level.
-    if opts.minify && !(opts.with_sourcemap) {
+    if opts.minify && !opts.with_sourcemap {
       emit_stmts_merged(e, combined.stmts)
     } else {
       for i, s in combined.stmts {
@@ -697,7 +697,7 @@ pub fn bundle_modules(
       // dozens of KB later, inside the first multi-line template
       // literal) — turning the rest of the module's parse into
       // dead text.
-      if !(opts.minify) {
+      if !opts.minify {
         e.write("// ===== ")
         e.write(path)
         e.write(" =====")

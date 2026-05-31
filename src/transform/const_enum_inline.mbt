@@ -46,13 +46,13 @@ pub fn build_enum_inline_table(
     if decl.is_declare {
       continue
     }
-    if !(decl.is_const) && !(include_non_const) {
+    if !decl.is_const && !include_non_const {
       continue
     }
     // Non-const enums can carry computed initializers. We can
     // only inline when every member resolves to a literal — bail
     // out otherwise so accesses fall back to runtime lookup.
-    if !(decl.is_const) {
+    if !decl.is_const {
       let mut all_literal = true
       for m in decl.members {
         if m.is_computed {
@@ -60,7 +60,7 @@ pub fn build_enum_inline_table(
           break
         }
       }
-      if !(all_literal) {
+      if !all_literal {
         continue
       }
     }

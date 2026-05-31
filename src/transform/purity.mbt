@@ -139,7 +139,7 @@ pub fn analyze_purity_with(
       match kind {
         PureWalkEvent::SideEffect => directly_impure = true
         PureWalkEvent::Calls(target) =>
-          if !(called_seen.contains(target)) {
+          if !called_seen.contains(target) {
             called_seen[target] = true
             called.push(target)
           }
@@ -158,7 +158,7 @@ pub fn analyze_purity_with(
     // annotated function trusted to be pure stays out of the
     // impure set even when its body calls into externally-
     // declared APIs the analyzer can't see through.
-    if flag && !(assumed_pure.contains(name)) {
+    if flag && !assumed_pure.contains(name) {
       impure[name] = true
     }
   }
@@ -199,7 +199,7 @@ pub fn analyze_purity_with(
   let pure : Map[String, Bool] = {}
   for entry in direct_impure {
     let (name, _) = entry
-    if !(impure.contains(name)) {
+    if !impure.contains(name) {
       pure[name] = true
     }
   }
@@ -271,13 +271,13 @@ fn walk_stmt_for_purity(
       // Local `let`s reassigned inside the function don't
       // technically escape, but at this scope-tracking depth we
       // play conservative: flag any assignment.
-      if !(inside_func) {
+      if !inside_func {
         yield_(SideEffect)
       }
       walk_expr_for_purity(e, inside_func, yield_)
     }
     IndexAssign(target, idx, val) => {
-      if !(inside_func) {
+      if !inside_func {
         yield_(SideEffect)
       }
       walk_expr_for_purity(target, inside_func, yield_)
@@ -285,13 +285,13 @@ fn walk_stmt_for_purity(
       walk_expr_for_purity(val, inside_func, yield_)
     }
     PropAssign(target, _, val) => {
-      if !(inside_func) {
+      if !inside_func {
         yield_(SideEffect)
       }
       walk_expr_for_purity(target, inside_func, yield_)
       walk_expr_for_purity(val, inside_func, yield_)
     }
-    Throw(_) => if !(inside_func) { yield_(SideEffect) }
+    Throw(_) => if !inside_func { yield_(SideEffect) }
     Var(_, _, e) | Let(_, _, e) | Const(_, _, e) | Expr(e) =>
       walk_expr_for_purity(e, inside_func, yield_)
     Return(Some(e)) => walk_expr_for_purity(e, inside_func, yield_)
@@ -363,7 +363,7 @@ fn walk_expr_for_purity(
 ) -> Unit {
   match expr {
     Call(name, args) => {
-      if !(inside_func) {
+      if !inside_func {
         yield_(Calls(name))
       }
       for a in args {
@@ -375,7 +375,7 @@ fn walk_expr_for_purity(
       // current scope. (Inside a nested closure, the impurity
       // applies to the closure, not the surrounding function;
       // the `inside_func` guard skips the report.)
-      if !(inside_func) {
+      if !inside_func {
         yield_(SideEffect)
       }
       walk_expr_for_purity(callee, inside_func, yield_)
@@ -384,7 +384,7 @@ fn walk_expr_for_purity(
       }
     }
     New(_, args) | NewExpr(_, args) => {
-      if !(inside_func) {
+      if !inside_func {
         yield_(SideEffect)
       }
       for a in args {
@@ -399,7 +399,7 @@ fn walk_expr_for_purity(
         Var(name) => pure_global_methods.contains(name)
         _ => false
       }
-      if !(recv_pure) && !(inside_func) {
+      if !recv_pure && !inside_func {
         yield_(SideEffect)
       }
       walk_expr_for_purity(recv, inside_func, yield_)
@@ -408,13 +408,13 @@ fn walk_expr_for_purity(
       }
     }
     Await(inner) | YieldStar(inner) => {
-      if !(inside_func) {
+      if !inside_func {
         yield_(SideEffect)
       }
       walk_expr_for_purity(inner, inside_func, yield_)
     }
     Yield(opt) => {
-      if !(inside_func) {
+      if !inside_func {
         yield_(SideEffect)
       }
       match opt {
@@ -423,33 +423,33 @@ fn walk_expr_for_purity(
       }
     }
     AssignExpr(_, v) => {
-      if !(inside_func) {
+      if !inside_func {
         yield_(SideEffect)
       }
       walk_expr_for_purity(v, inside_func, yield_)
     }
     CompoundAssignExpr(t, _, v) => {
-      if !(inside_func) {
+      if !inside_func {
         yield_(SideEffect)
       }
       walk_expr_for_purity(t, inside_func, yield_)
       walk_expr_for_purity(v, inside_func, yield_)
     }
     AssignPattern(_, v) => {
-      if !(inside_func) {
+      if !inside_func {
         yield_(SideEffect)
       }
       walk_expr_for_purity(v, inside_func, yield_)
     }
     PropAssignExpr(recv, _, v) => {
-      if !(inside_func) {
+      if !inside_func {
         yield_(SideEffect)
       }
       walk_expr_for_purity(recv, inside_func, yield_)
       walk_expr_for_purity(v, inside_func, yield_)
     }
     IndexAssignExpr(recv, idx, v) => {
-      if !(inside_func) {
+      if !inside_func {
         yield_(SideEffect)
       }
       walk_expr_for_purity(recv, inside_func, yield_)
@@ -460,7 +460,7 @@ fn walk_expr_for_purity(
       // `++` / `--` / `delete` mutate.
       match op {
         PreInc | PreDec | PostInc | PostDec | Delete =>
-          if !(inside_func) {
+          if !inside_func {
             yield_(SideEffect)
           }
         _ => ()
@@ -514,7 +514,7 @@ fn walk_expr_for_purity(
       }
     FuncExpr(f) => walk_block_for_purity(f.body, true, yield_)
     DynamicImport(spec, opts) => {
-      if !(inside_func) {
+      if !inside_func {
         yield_(SideEffect)
       }
       walk_expr_for_purity(spec, inside_func, yield_)
@@ -525,7 +525,7 @@ fn walk_expr_for_purity(
     }
     TaggedTemplate(tag, _, _, exprs) => {
       // Tag function is called — same as a regular call.
-      if !(inside_func) {
+      if !inside_func {
         yield_(SideEffect)
       }
       walk_expr_for_purity(tag, inside_func, yield_)
@@ -688,8 +688,8 @@ fn check_getter_purity(
         }
       Calls(name) =>
         if reason is None &&
-          !(pure_global_functions.contains(name)) &&
-          !(assumed_pure.contains(name)) {
+          !pure_global_functions.contains(name) &&
+          !assumed_pure.contains(name) {
           reason = Some("calls `\{name}` (potentially impure)")
         }
     }
@@ -711,7 +711,7 @@ fn is_primitive_immutable(ty : @ast.TsType) -> Bool {
         return false
       }
       for p in parts {
-        if !(is_primitive_immutable(p)) {
+        if !is_primitive_immutable(p) {
           return false
         }
       }
@@ -739,7 +739,7 @@ fn is_signature_pure_func(f : @ast.TsFunc) -> Bool {
     return false
   }
   for p in f.params {
-    if !(is_primitive_immutable(p.type_)) {
+    if !is_primitive_immutable(p.type_) {
       return false
     }
   }
@@ -757,7 +757,7 @@ fn signature_pure_block(
   locals : Map[String, Bool],
 ) -> Bool {
   for s in block.stmts {
-    if !(signature_pure_stmt(s, locals)) {
+    if !signature_pure_stmt(s, locals) {
       return false
     }
   }
@@ -770,7 +770,7 @@ fn signature_pure_stmt(stmt : @ast.TsStmt, locals : Map[String, Bool]) -> Bool {
     Var(@ast.TsBinding::Ident(name), _, e)
     | Let(@ast.TsBinding::Ident(name), _, e)
     | Const(@ast.TsBinding::Ident(name), _, e) => {
-      if !(signature_pure_expr(e, locals)) {
+      if !signature_pure_expr(e, locals) {
         return false
       }
       locals[name] = true
@@ -791,10 +791,10 @@ fn signature_pure_stmt(stmt : @ast.TsStmt, locals : Map[String, Bool]) -> Bool {
     // (caller sees the exception). Conservative: forbid.
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => true
     If(c, t, e) => {
-      if !(signature_pure_expr(c, locals)) {
+      if !signature_pure_expr(c, locals) {
         return false
       }
-      if !(signature_pure_block(t, locals)) {
+      if !signature_pure_block(t, locals) {
         return false
       }
       match e {
@@ -808,7 +808,7 @@ fn signature_pure_stmt(stmt : @ast.TsStmt, locals : Map[String, Bool]) -> Bool {
     For(init, cond, update, body) => {
       let _ = match init {
         Some(s) =>
-          if !(signature_pure_stmt(s, locals)) {
+          if !signature_pure_stmt(s, locals) {
             return false
           } else {
             ()
@@ -817,7 +817,7 @@ fn signature_pure_stmt(stmt : @ast.TsStmt, locals : Map[String, Bool]) -> Bool {
       }
       let _ = match cond {
         Some(e) =>
-          if !(signature_pure_expr(e, locals)) {
+          if !signature_pure_expr(e, locals) {
             return false
           } else {
             ()
@@ -826,7 +826,7 @@ fn signature_pure_stmt(stmt : @ast.TsStmt, locals : Map[String, Bool]) -> Bool {
       }
       let _ = match update {
         Some(s) =>
-          if !(signature_pure_stmt(s, locals)) {
+          if !signature_pure_stmt(s, locals) {
             return false
           } else {
             ()
@@ -839,15 +839,15 @@ fn signature_pure_stmt(stmt : @ast.TsStmt, locals : Map[String, Bool]) -> Bool {
       // Iterating non-primitives — bail.
       false
     Switch(e, cases) => {
-      if !(signature_pure_expr(e, locals)) {
+      if !signature_pure_expr(e, locals) {
         return false
       }
       for c in cases {
         match c.test_expr {
-          Some(te) => if !(signature_pure_expr(te, locals)) { return false }
+          Some(te) => if !signature_pure_expr(te, locals) { return false }
           None => ()
         }
-        if !(signature_pure_block(c.body, locals)) {
+        if !signature_pure_block(c.body, locals) {
           return false
         }
       }
@@ -885,7 +885,7 @@ fn signature_pure_expr(expr : @ast.TsExpr, locals : Map[String, Bool]) -> Bool {
       // for unknowns.
       let _ = name
       for a in args {
-        if !(signature_pure_expr(a, locals)) {
+        if !signature_pure_expr(a, locals) {
           return false
         }
       }
@@ -896,11 +896,11 @@ fn signature_pure_expr(expr : @ast.TsExpr, locals : Map[String, Bool]) -> Bool {
         Var(n) => pure_global_methods.contains(n)
         _ => false
       }
-      if !(recv_ok) {
+      if !recv_ok {
         return false
       }
       for a in args {
-        if !(signature_pure_expr(a, locals)) {
+        if !signature_pure_expr(a, locals) {
           return false
         }
       }
@@ -912,7 +912,7 @@ fn signature_pure_expr(expr : @ast.TsExpr, locals : Map[String, Bool]) -> Bool {
       signature_pure_expr(recv, locals) && signature_pure_expr(idx, locals)
     ArrayLit(items) => {
       for i in items {
-        if !(signature_pure_expr(i, locals)) {
+        if !signature_pure_expr(i, locals) {
           return false
         }
       }
@@ -920,7 +920,7 @@ fn signature_pure_expr(expr : @ast.TsExpr, locals : Map[String, Bool]) -> Bool {
     }
     ObjectLit(entries) => {
       for ent in entries {
-        if !(signature_pure_expr(ent.1, locals)) {
+        if !signature_pure_expr(ent.1, locals) {
           return false
         }
       }
@@ -929,7 +929,7 @@ fn signature_pure_expr(expr : @ast.TsExpr, locals : Map[String, Bool]) -> Bool {
     Spread(_) => false
     TemplateLiteral(_, exprs) => {
       for e in exprs {
-        if !(signature_pure_expr(e, locals)) {
+        if !signature_pure_expr(e, locals) {
           return false
         }
       }

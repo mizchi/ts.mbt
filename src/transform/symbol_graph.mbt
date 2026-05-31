@@ -388,7 +388,7 @@ fn sg_declare(
 fn var_host_scope(g : SymbolGraph, from : ScopeId) -> ScopeId {
   let mut cur = from
   let mut done = false
-  while !(done) {
+  while !done {
     let s = g.scopes[cur]
     match s.kind {
       Function | Module => done = true

@@ -79,7 +79,7 @@ test "minify emit: trailing ; before } is dropped" {
   // The trailing `;` before `}` should be elided in minify mode. Arrow concise form
   // won't have braces at all, so check that either form is correct.
   assert_true(
-    out.contains("return") && !(out.contains("return x+1;}")),
+    out.contains("return") && !out.contains("return x+1;}"),
     msg="expected trailing ; dropped before }, got: \{out}",
   )
 }

@@ -104,7 +104,10 @@ test "match_infer_pattern: variadic Parameters<F> captures rest-tail tuple" {
   let source : @ast.TsType = Func([String_, Rest(Array(Number))], Void)
   let pattern : @ast.TsType = Func([Array(infer_marker("P"))], Any)
   assert_true(match_infer_pattern(source, pattern, bindings))
-  @test.assert_eq(bindings.get("P"), Some(Tuple([String_, Rest(Array(Number))])))
+  @test.assert_eq(
+    bindings.get("P"),
+    Some(Tuple([String_, Rest(Array(Number))])),
+  )
 }
 
 ///|

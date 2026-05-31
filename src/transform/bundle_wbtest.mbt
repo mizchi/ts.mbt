@@ -856,8 +856,7 @@ test "sourcemap: mangle path emits per-stmt mappings via encoded positions" {
           // populated.
           let mappings_pos = sm.find("\"mappings\":\"")
           let mappings = match mappings_pos {
-            Some(idx) =>
-              sm[idx + "\"mappings\":\"".length():].to_owned()
+            Some(idx) => sm[idx + "\"mappings\":\"".length():].to_owned()
             None => ""
           }
           assert_true(mappings.length() > 5)
@@ -1026,7 +1025,7 @@ test "@internal: tagged exports vanish from the published .d.ts" {
   let module_ = @parser.parse_module_from_source_with_const_values(src, {})
   let local_ : Array[String] = []
   for ex in block.exports {
-    if !(block.internal_names.contains(ex.local_name)) {
+    if !block.internal_names.contains(ex.local_name) {
       local_.push(ex.local_name)
     }
   }

@@ -470,7 +470,7 @@ pub fn reserve_props_from_sink(
       match lookup_symbol_in_scope(graph, scope, name) {
         Some(id) => {
           let sym = graph.symbols[id]
-          if !(is_sink_arg_locally_observable(sym, graph)) {
+          if !is_sink_arg_locally_observable(sym, graph) {
             out["*"] = true
             return
           }
@@ -680,7 +680,7 @@ fn binding_exposes_nested_objects(sym : Symbol) -> Bool {
     match d.init {
       Some(@ast.TsExpr::ObjectLit(entries)) =>
         for ent in entries {
-          if !(is_pure_scalar_literal(ent.1)) {
+          if !is_pure_scalar_literal(ent.1) {
             return true
           }
         }

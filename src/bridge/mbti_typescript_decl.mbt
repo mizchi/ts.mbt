@@ -2257,8 +2257,7 @@ fn package_file_exists(
 ///|
 fn mbti_runtime_js_path_for_decl_path(relative_path : String) -> String {
   if relative_path.has_suffix(".d.ts") {
-    relative_path[:relative_path.length() - ".d.ts".length()].to_owned() +
-    ".js"
+    relative_path[:relative_path.length() - ".d.ts".length()].to_owned() + ".js"
   } else {
     relative_path
   }
@@ -2610,9 +2609,7 @@ fn translate_mbti_type(
     None => ()
   }
   if function_source.has_suffix("?") {
-    let inner = function_source[:function_source.length() - 1]
-      .trim()
-      .to_owned()
+    let inner = function_source[:function_source.length() - 1].trim().to_owned()
     let normalized_inner = translate_mbti_type(
       inner, imports, used_aliases, owner_name, owner_type_params,
     )

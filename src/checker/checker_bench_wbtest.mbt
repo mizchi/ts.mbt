@@ -399,7 +399,9 @@ async test "bench checker: TypeScript compiler source (file IO)" {
       data => {
         let text = data.text()
         let allow_jsx = path.has_suffix(".tsx")
-        try @parser.Parser::from_source_with_jsx(text, allow_jsx).parse_module() catch {
+        try
+          @parser.Parser::from_source_with_jsx(text, allow_jsx).parse_module()
+        catch {
           _ => ()
         } noraise {
           module_ => prepared.push((path, text.length(), module_))

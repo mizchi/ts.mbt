@@ -93,10 +93,10 @@ pub fn tag_rewrite_block(
     if any_sink_arg_taints_k(sink_args, k, lit_set, k_bindings) {
       continue
     }
-    if !(check_prop_uses_safe(block, k, literals)) {
+    if !check_prop_uses_safe(block, k, literals) {
       continue
     }
-    if !(check_object_literals_safe(block, k, literals)) {
+    if !check_object_literals_safe(block, k, literals) {
       continue
     }
     let id_map : Map[String, Int] = {}
@@ -838,7 +838,7 @@ fn collect_discriminated_unions(
               seen[s] = true
             }
             for s in literals {
-              if !(seen.contains(s)) {
+              if !seen.contains(s) {
                 seen[s] = true
                 existing.push(s)
               }
@@ -906,7 +906,7 @@ fn find_common_string_discriminant(
   for fields in per_part {
     match fields.get(k) {
       Some(lit) =>
-        if !(seen.contains(lit)) {
+        if !seen.contains(lit) {
           seen[lit] = true
           literals.push(lit)
         }
@@ -1222,7 +1222,7 @@ fn check_prop_uses_safe(
     lit_set[s] = true
   }
   for s in block.stmts {
-    if !(prop_uses_safe_stmt(s, k, lit_set, false)) {
+    if !prop_uses_safe_stmt(s, k, lit_set, false) {
       return false
     }
   }
@@ -1255,18 +1255,18 @@ fn prop_uses_safe_stmt(
       prop_uses_safe_expr(t, k, lits, false) &&
       prop_uses_safe_expr(v, k, lits, false)
     If(c, t, e) => {
-      if !(prop_uses_safe_expr(c, k, lits, false)) {
+      if !prop_uses_safe_expr(c, k, lits, false) {
         return false
       }
       for s in t.stmts {
-        if !(prop_uses_safe_stmt(s, k, lits, false)) {
+        if !prop_uses_safe_stmt(s, k, lits, false) {
           return false
         }
       }
       match e {
         Some(b) =>
           for s in b.stmts {
-            if !(prop_uses_safe_stmt(s, k, lits, false)) {
+            if !prop_uses_safe_stmt(s, k, lits, false) {
               return false
             }
           }
@@ -1275,11 +1275,11 @@ fn prop_uses_safe_stmt(
       true
     }
     While(c, body) | DoWhile(c, body) | With(c, body) => {
-      if !(prop_uses_safe_expr(c, k, lits, false)) {
+      if !prop_uses_safe_expr(c, k, lits, false) {
         return false
       }
       for s in body.stmts {
-        if !(prop_uses_safe_stmt(s, k, lits, false)) {
+        if !prop_uses_safe_stmt(s, k, lits, false) {
           return false
         }
       }
@@ -1290,36 +1290,36 @@ fn prop_uses_safe_stmt(
         Some(s) => prop_uses_safe_stmt(s, k, lits, false)
         None => true
       }
-      if !(init_ok) {
+      if !init_ok {
         return false
       }
       let cond_ok = match cond {
         Some(e) => prop_uses_safe_expr(e, k, lits, false)
         None => true
       }
-      if !(cond_ok) {
+      if !cond_ok {
         return false
       }
       let upd_ok = match update {
         Some(s) => prop_uses_safe_stmt(s, k, lits, false)
         None => true
       }
-      if !(upd_ok) {
+      if !upd_ok {
         return false
       }
       for s in body.stmts {
-        if !(prop_uses_safe_stmt(s, k, lits, false)) {
+        if !prop_uses_safe_stmt(s, k, lits, false) {
           return false
         }
       }
       true
     }
     ForOf(_, _, _, iter, body) | ForAwaitOf(_, _, _, iter, body) => {
-      if !(prop_uses_safe_expr(iter, k, lits, false)) {
+      if !prop_uses_safe_expr(iter, k, lits, false) {
         return false
       }
       for s in body.stmts {
-        if !(prop_uses_safe_stmt(s, k, lits, false)) {
+        if !prop_uses_safe_stmt(s, k, lits, false) {
           return false
         }
       }
@@ -1344,13 +1344,13 @@ fn prop_uses_safe_stmt(
           IndexAccess(r, _) => r
           _ => return false
         }
-        if !(prop_uses_safe_expr(recv, k, lits, false)) {
+        if !prop_uses_safe_expr(recv, k, lits, false) {
           return false
         }
         for c in cases {
           match c.test_expr {
             Some(@ast.TsExpr::StringLit(s)) =>
-              if !(lits.contains(s)) {
+              if !lits.contains(s) {
                 return false
               }
             // Existing int labels (idempotency) and `default:` arms
@@ -1360,26 +1360,26 @@ fn prop_uses_safe_stmt(
             None => ()
           }
           for s in c.body.stmts {
-            if !(prop_uses_safe_stmt(s, k, lits, false)) {
+            if !prop_uses_safe_stmt(s, k, lits, false) {
               return false
             }
           }
         }
         return true
       }
-      if !(prop_uses_safe_expr(e, k, lits, false)) {
+      if !prop_uses_safe_expr(e, k, lits, false) {
         return false
       }
       for c in cases {
         match c.test_expr {
           Some(te) =>
-            if !(prop_uses_safe_expr(te, k, lits, false)) {
+            if !prop_uses_safe_expr(te, k, lits, false) {
               return false
             }
           None => ()
         }
         for s in c.body.stmts {
-          if !(prop_uses_safe_stmt(s, k, lits, false)) {
+          if !prop_uses_safe_stmt(s, k, lits, false) {
             return false
           }
         }
@@ -1388,14 +1388,14 @@ fn prop_uses_safe_stmt(
     }
     Try(b, _, cb, fb) => {
       for s in b.stmts {
-        if !(prop_uses_safe_stmt(s, k, lits, false)) {
+        if !prop_uses_safe_stmt(s, k, lits, false) {
           return false
         }
       }
       let cb_ok = match cb {
         Some(blk) => {
           for s in blk.stmts {
-            if !(prop_uses_safe_stmt(s, k, lits, false)) {
+            if !prop_uses_safe_stmt(s, k, lits, false) {
               return false
             }
           }
@@ -1403,13 +1403,13 @@ fn prop_uses_safe_stmt(
         }
         None => true
       }
-      if !(cb_ok) {
+      if !cb_ok {
         return false
       }
       match fb {
         Some(blk) => {
           for s in blk.stmts {
-            if !(prop_uses_safe_stmt(s, k, lits, false)) {
+            if !prop_uses_safe_stmt(s, k, lits, false) {
               return false
             }
           }
@@ -1421,7 +1421,7 @@ fn prop_uses_safe_stmt(
     Label(_, inner) => prop_uses_safe_stmt(inner, k, lits, false)
     Block(b) =>
       for s in b.stmts {
-        if !(prop_uses_safe_stmt(s, k, lits, false)) {
+        if !prop_uses_safe_stmt(s, k, lits, false) {
           return false
         }
       } nobreak {
@@ -1431,7 +1431,7 @@ fn prop_uses_safe_stmt(
       match ctor {
         Some(f) =>
           for s in f.body.stmts {
-            if !(prop_uses_safe_stmt(s, k, lits, false)) {
+            if !prop_uses_safe_stmt(s, k, lits, false) {
               return false
             }
           }
@@ -1441,7 +1441,7 @@ fn prop_uses_safe_stmt(
         match m.body {
           Some(b) =>
             for s in b.stmts {
-              if !(prop_uses_safe_stmt(s, k, lits, false)) {
+              if !prop_uses_safe_stmt(s, k, lits, false) {
                 return false
               }
             }
@@ -1449,7 +1449,7 @@ fn prop_uses_safe_stmt(
         }
       }
       for sf in decl.static_field_inits {
-        if !(prop_uses_safe_expr(sf.1, k, lits, false)) {
+        if !prop_uses_safe_expr(sf.1, k, lits, false) {
           return false
         }
       }
@@ -1522,29 +1522,29 @@ fn prop_uses_safe_expr(
       prop_uses_safe_expr(e, k, lits, false)
     Call(_, args) | New(_, args) => {
       for a in args {
-        if !(prop_uses_safe_expr(a, k, lits, false)) {
+        if !prop_uses_safe_expr(a, k, lits, false) {
           return false
         }
       }
       true
     }
     CallExpr(callee, args) | NewExpr(callee, args) => {
-      if !(prop_uses_safe_expr(callee, k, lits, false)) {
+      if !prop_uses_safe_expr(callee, k, lits, false) {
         return false
       }
       for a in args {
-        if !(prop_uses_safe_expr(a, k, lits, false)) {
+        if !prop_uses_safe_expr(a, k, lits, false) {
           return false
         }
       }
       true
     }
     MethodCall(recv, _, args) => {
-      if !(prop_uses_safe_expr(recv, k, lits, false)) {
+      if !prop_uses_safe_expr(recv, k, lits, false) {
         return false
       }
       for a in args {
-        if !(prop_uses_safe_expr(a, k, lits, false)) {
+        if !prop_uses_safe_expr(a, k, lits, false) {
           return false
         }
       }
@@ -1552,7 +1552,7 @@ fn prop_uses_safe_expr(
     }
     ArrayLit(items) => {
       for i in items {
-        if !(prop_uses_safe_expr(i, k, lits, false)) {
+        if !prop_uses_safe_expr(i, k, lits, false) {
           return false
         }
       }
@@ -1560,7 +1560,7 @@ fn prop_uses_safe_expr(
     }
     ObjectLit(entries) => {
       for ent in entries {
-        if !(prop_uses_safe_expr(ent.1, k, lits, false)) {
+        if !prop_uses_safe_expr(ent.1, k, lits, false) {
           return false
         }
       }
@@ -1584,7 +1584,7 @@ fn prop_uses_safe_expr(
         ArrowExpr(e) => prop_uses_safe_expr(e, k, lits, false)
         ArrowBlock(b) => {
           for s in b.stmts {
-            if !(prop_uses_safe_stmt(s, k, lits, false)) {
+            if !prop_uses_safe_stmt(s, k, lits, false) {
               return false
             }
           }
@@ -1593,14 +1593,14 @@ fn prop_uses_safe_expr(
       }
     FuncExpr(f) =>
       for s in f.body.stmts {
-        if !(prop_uses_safe_stmt(s, k, lits, false)) {
+        if !prop_uses_safe_stmt(s, k, lits, false) {
           return false
         }
       } nobreak {
         true
       }
     DynamicImport(spec, opts) => {
-      if !(prop_uses_safe_expr(spec, k, lits, false)) {
+      if !prop_uses_safe_expr(spec, k, lits, false) {
         return false
       }
       match opts {
@@ -1654,7 +1654,7 @@ fn check_object_literals_safe(
     lit_set[s] = true
   }
   for s in block.stmts {
-    if !(object_literals_safe_stmt(s, k, lit_set)) {
+    if !object_literals_safe_stmt(s, k, lit_set) {
       return false
     }
   }
@@ -1685,18 +1685,18 @@ fn object_literals_safe_stmt(
       object_literals_safe_expr(t, k, lits) &&
       object_literals_safe_expr(v, k, lits)
     If(c, t, e) => {
-      if !(object_literals_safe_expr(c, k, lits)) {
+      if !object_literals_safe_expr(c, k, lits) {
         return false
       }
       for s in t.stmts {
-        if !(object_literals_safe_stmt(s, k, lits)) {
+        if !object_literals_safe_stmt(s, k, lits) {
           return false
         }
       }
       match e {
         Some(b) =>
           for s in b.stmts {
-            if !(object_literals_safe_stmt(s, k, lits)) {
+            if !object_literals_safe_stmt(s, k, lits) {
               return false
             }
           }
@@ -1705,11 +1705,11 @@ fn object_literals_safe_stmt(
       true
     }
     While(c, body) | DoWhile(c, body) | With(c, body) => {
-      if !(object_literals_safe_expr(c, k, lits)) {
+      if !object_literals_safe_expr(c, k, lits) {
         return false
       }
       for s in body.stmts {
-        if !(object_literals_safe_stmt(s, k, lits)) {
+        if !object_literals_safe_stmt(s, k, lits) {
           return false
         }
       }
@@ -1720,25 +1720,25 @@ fn object_literals_safe_stmt(
         Some(s) => object_literals_safe_stmt(s, k, lits)
         None => true
       }
-      if !(init_ok) {
+      if !init_ok {
         return false
       }
       let cond_ok = match cond {
         Some(e) => object_literals_safe_expr(e, k, lits)
         None => true
       }
-      if !(cond_ok) {
+      if !cond_ok {
         return false
       }
       let upd_ok = match update {
         Some(s) => object_literals_safe_stmt(s, k, lits)
         None => true
       }
-      if !(upd_ok) {
+      if !upd_ok {
         return false
       }
       for s in body.stmts {
-        if !(object_literals_safe_stmt(s, k, lits)) {
+        if !object_literals_safe_stmt(s, k, lits) {
           return false
         }
       }
@@ -1747,30 +1747,30 @@ fn object_literals_safe_stmt(
     ForOf(_, _, _, iter, body)
     | ForAwaitOf(_, _, _, iter, body)
     | ForIn(_, _, _, iter, body) => {
-      if !(object_literals_safe_expr(iter, k, lits)) {
+      if !object_literals_safe_expr(iter, k, lits) {
         return false
       }
       for s in body.stmts {
-        if !(object_literals_safe_stmt(s, k, lits)) {
+        if !object_literals_safe_stmt(s, k, lits) {
           return false
         }
       }
       true
     }
     Switch(e, cases) => {
-      if !(object_literals_safe_expr(e, k, lits)) {
+      if !object_literals_safe_expr(e, k, lits) {
         return false
       }
       for c in cases {
         match c.test_expr {
           Some(te) =>
-            if !(object_literals_safe_expr(te, k, lits)) {
+            if !object_literals_safe_expr(te, k, lits) {
               return false
             }
           None => ()
         }
         for s in c.body.stmts {
-          if !(object_literals_safe_stmt(s, k, lits)) {
+          if !object_literals_safe_stmt(s, k, lits) {
             return false
           }
         }
@@ -1779,14 +1779,14 @@ fn object_literals_safe_stmt(
     }
     Try(b, _, cb, fb) => {
       for s in b.stmts {
-        if !(object_literals_safe_stmt(s, k, lits)) {
+        if !object_literals_safe_stmt(s, k, lits) {
           return false
         }
       }
       let cb_ok = match cb {
         Some(blk) => {
           for s in blk.stmts {
-            if !(object_literals_safe_stmt(s, k, lits)) {
+            if !object_literals_safe_stmt(s, k, lits) {
               return false
             }
           }
@@ -1794,13 +1794,13 @@ fn object_literals_safe_stmt(
         }
         None => true
       }
-      if !(cb_ok) {
+      if !cb_ok {
         return false
       }
       match fb {
         Some(blk) => {
           for s in blk.stmts {
-            if !(object_literals_safe_stmt(s, k, lits)) {
+            if !object_literals_safe_stmt(s, k, lits) {
               return false
             }
           }
@@ -1812,7 +1812,7 @@ fn object_literals_safe_stmt(
     Label(_, inner) => object_literals_safe_stmt(inner, k, lits)
     Block(b) =>
       for s in b.stmts {
-        if !(object_literals_safe_stmt(s, k, lits)) {
+        if !object_literals_safe_stmt(s, k, lits) {
           return false
         }
       } nobreak {
@@ -1822,7 +1822,7 @@ fn object_literals_safe_stmt(
       match ctor {
         Some(f) =>
           for s in f.body.stmts {
-            if !(object_literals_safe_stmt(s, k, lits)) {
+            if !object_literals_safe_stmt(s, k, lits) {
               return false
             }
           }
@@ -1832,7 +1832,7 @@ fn object_literals_safe_stmt(
         match m.body {
           Some(b) =>
             for s in b.stmts {
-              if !(object_literals_safe_stmt(s, k, lits)) {
+              if !object_literals_safe_stmt(s, k, lits) {
                 return false
               }
             }
@@ -1840,7 +1840,7 @@ fn object_literals_safe_stmt(
         }
       }
       for sf in decl.static_field_inits {
-        if !(object_literals_safe_expr(sf.1, k, lits)) {
+        if !object_literals_safe_expr(sf.1, k, lits) {
           return false
         }
       }
@@ -1861,13 +1861,13 @@ fn object_literals_safe_expr(
         if ent.0 == k {
           // Must be a string literal in the union's set.
           match ent.1 {
-            StringLit(s) => if !(lits.contains(s)) { return false }
+            StringLit(s) => if !lits.contains(s) { return false }
             // Existing int form is idempotent.
             IntLit(_) | NumberLit(_) => ()
             _ => return false
           }
         }
-        if !(object_literals_safe_expr(ent.1, k, lits)) {
+        if !object_literals_safe_expr(ent.1, k, lits) {
           return false
         }
       }
@@ -1893,29 +1893,29 @@ fn object_literals_safe_expr(
       object_literals_safe_expr(idx, k, lits)
     Call(_, args) | New(_, args) => {
       for a in args {
-        if !(object_literals_safe_expr(a, k, lits)) {
+        if !object_literals_safe_expr(a, k, lits) {
           return false
         }
       }
       true
     }
     CallExpr(callee, args) | NewExpr(callee, args) => {
-      if !(object_literals_safe_expr(callee, k, lits)) {
+      if !object_literals_safe_expr(callee, k, lits) {
         return false
       }
       for a in args {
-        if !(object_literals_safe_expr(a, k, lits)) {
+        if !object_literals_safe_expr(a, k, lits) {
           return false
         }
       }
       true
     }
     MethodCall(recv, _, args) => {
-      if !(object_literals_safe_expr(recv, k, lits)) {
+      if !object_literals_safe_expr(recv, k, lits) {
         return false
       }
       for a in args {
-        if !(object_literals_safe_expr(a, k, lits)) {
+        if !object_literals_safe_expr(a, k, lits) {
           return false
         }
       }
@@ -1923,7 +1923,7 @@ fn object_literals_safe_expr(
     }
     ArrayLit(items) => {
       for i in items {
-        if !(object_literals_safe_expr(i, k, lits)) {
+        if !object_literals_safe_expr(i, k, lits) {
           return false
         }
       }
@@ -1946,7 +1946,7 @@ fn object_literals_safe_expr(
         ArrowExpr(e) => object_literals_safe_expr(e, k, lits)
         ArrowBlock(b) => {
           for s in b.stmts {
-            if !(object_literals_safe_stmt(s, k, lits)) {
+            if !object_literals_safe_stmt(s, k, lits) {
               return false
             }
           }
@@ -1955,14 +1955,14 @@ fn object_literals_safe_expr(
       }
     FuncExpr(f) =>
       for s in f.body.stmts {
-        if !(object_literals_safe_stmt(s, k, lits)) {
+        if !object_literals_safe_stmt(s, k, lits) {
           return false
         }
       } nobreak {
         true
       }
     DynamicImport(spec, opts) => {
-      if !(object_literals_safe_expr(spec, k, lits)) {
+      if !object_literals_safe_expr(spec, k, lits) {
         return false
       }
       match opts {
@@ -1971,11 +1971,11 @@ fn object_literals_safe_expr(
       }
     }
     TaggedTemplate(tag, _, _, exprs) => {
-      if !(object_literals_safe_expr(tag, k, lits)) {
+      if !object_literals_safe_expr(tag, k, lits) {
         return false
       }
       for e in exprs {
-        if !(object_literals_safe_expr(e, k, lits)) {
+        if !object_literals_safe_expr(e, k, lits) {
           return false
         }
       }
@@ -1983,7 +1983,7 @@ fn object_literals_safe_expr(
     }
     TemplateLiteral(_, exprs) => {
       for e in exprs {
-        if !(object_literals_safe_expr(e, k, lits)) {
+        if !object_literals_safe_expr(e, k, lits) {
           return false
         }
       }

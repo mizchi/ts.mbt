@@ -87,7 +87,7 @@ async test "bridge: collect MoonBit TS scaffold unsupported exports reports only
   )
   @test.assert_eq(
     "[" + ambiguous_unsupported.join(", ") + "]",
-    "[Shared (ambiguous re-export: fixtures/resolver/project/types/ambiguous-a.d.ts, fixtures/resolver/project/types/ambiguous-b.d.ts)]"
+    "[Shared (ambiguous re-export: fixtures/resolver/project/types/ambiguous-a.d.ts, fixtures/resolver/project/types/ambiguous-b.d.ts)]",
   )
 }
 

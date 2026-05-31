@@ -94,7 +94,7 @@ fn link_module_graph(
     let module_renames : Map[String, String] = {}
     let names = collect_top_level_decl_names(m.block)
     for name in names {
-      if !(taken.contains(name)) {
+      if !taken.contains(name) {
         taken[name] = true
       } else {
         // Collision — invent a unique form.
@@ -114,7 +114,7 @@ fn link_module_graph(
       }
       match imp.namespace_binding {
         Some(ns_local) => {
-          let final_name = if !(taken.contains(ns_local)) {
+          let final_name = if !taken.contains(ns_local) {
             taken[ns_local] = true
             ns_local
           } else {
@@ -140,8 +140,8 @@ fn link_module_graph(
       }
       match re.kind {
         @ast.TsReExportKind::Namespace(ns_local) =>
-          if !(ns_locals.contains(ns_local)) {
-            let final_name = if !(taken.contains(ns_local)) {
+          if !ns_locals.contains(ns_local) {
+            let final_name = if !taken.contains(ns_local) {
               taken[ns_local] = true
               ns_local
             } else {
@@ -278,7 +278,7 @@ fn link_module_graph(
             props,
             {},
           )
-          if !(props.is_empty()) {
+          if !props.is_empty() {
             namespace_subs[ns_local] = props
           }
         }
@@ -336,7 +336,7 @@ fn link_module_graph(
     }
     import_subs[path] = subs
     namespace_subs_per_module[path] = namespace_subs
-    if !(cjs_prop_subs.is_empty()) {
+    if !cjs_prop_subs.is_empty() {
       cjs_prop_subs_per_module[path] = cjs_prop_subs
     }
   }
@@ -369,7 +369,7 @@ fn link_module_graph(
       }
     }
     let has_cjs_subs = cjs_prop_subs_per_module.contains(path)
-    if combined_map.is_empty() && ns_subs.is_empty() && !(has_cjs_subs) {
+    if combined_map.is_empty() && ns_subs.is_empty() && !has_cjs_subs {
       continue
     }
     // Detect `ns.X -> resolved` substitutions whose target `resolved`
@@ -542,7 +542,7 @@ fn mint_unique_name(
   let mut n = start_counter
   while true {
     let candidate = base + "$" + n.to_string()
-    if !(taken.contains(candidate)) {
+    if !taken.contains(candidate) {
       return candidate
     }
     n = n + 1
@@ -712,7 +712,7 @@ fn enumerate_wildcard_reexports(
           if spec.export_name == "default" {
             continue
           }
-          if !(props.contains(spec.export_name)) {
+          if !props.contains(spec.export_name) {
             match
               resolve_export(
                 modules,
@@ -737,7 +737,7 @@ fn enumerate_wildcard_reexports(
         for it in items {
           let imported = it.0
           let exported = it.1
-          if !(props.contains(exported)) {
+          if !props.contains(exported) {
             match
               resolve_export(
                 modules, rename_per_module, namespace_local_renames, dep_path, imported,
@@ -751,7 +751,7 @@ fn enumerate_wildcard_reexports(
         // `export * as ns from "./X"` inside a wildcard chain
         // contributes `ns` as a key. Its value is the synthesized
         // namespace-object binding in the source module.
-        if !(props.contains(ns_name)) {
+        if !props.contains(ns_name) {
           let dep_ns = namespace_local_renames.get(dep_path).unwrap_or({})
           match dep_ns.get(ns_name) {
             Some(local_) => props[ns_name] = local_
@@ -1406,7 +1406,7 @@ fn shadow_map_for_params(
   }
   let out : Map[String, String] = {}
   for entry in map {
-    if !(names.contains(entry.0)) {
+    if !names.contains(entry.0) {
       out[entry.0] = entry.1
     }
   }
@@ -1432,7 +1432,7 @@ fn shadow_ns_for_params(
   }
   let out : Map[String, Map[String, String]] = {}
   for entry in ns {
-    if !(names.contains(entry.0)) {
+    if !names.contains(entry.0) {
       out[entry.0] = entry.1
     }
   }
@@ -1458,7 +1458,7 @@ fn shadow_map_for_method_params(
   }
   let out : Map[String, String] = {}
   for entry in map {
-    if !(names.contains(entry.0)) {
+    if !names.contains(entry.0) {
       out[entry.0] = entry.1
     }
   }
@@ -1484,7 +1484,7 @@ fn shadow_ns_for_method_params(
   }
   let out : Map[String, Map[String, String]] = {}
   for entry in ns {
-    if !(names.contains(entry.0)) {
+    if !names.contains(entry.0) {
       out[entry.0] = entry.1
     }
   }

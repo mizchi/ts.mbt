@@ -1168,11 +1168,11 @@ fn mangle_block_impl(
       Let(@ast.TsBinding::Ident(name), _, _)
       | Const(@ast.TsBinding::Ident(name), _, _)
       | Var(@ast.TsBinding::Ident(name), _, _) =>
-        if !(root.renames.contains(name)) {
+        if !root.renames.contains(name) {
           let _ = root.bind(name, reserved)
         }
       NativeClassStmt(decl, _) =>
-        if decl.name != "" && !(root.renames.contains(decl.name)) {
+        if decl.name != "" && !root.renames.contains(decl.name) {
           let _ = root.bind(decl.name, reserved)
         }
       _ => ()
@@ -1670,11 +1670,11 @@ fn rename_block_inline_in(
       match s {
         Let(@ast.TsBinding::Ident(name), _, _)
         | Const(@ast.TsBinding::Ident(name), _, _) =>
-          if !(scope.renames.contains(name)) {
+          if !scope.renames.contains(name) {
             let _ = scope.bind(name, reserved)
           }
         NativeClassStmt(decl, _) =>
-          if decl.name != "" && !(scope.renames.contains(decl.name)) {
+          if decl.name != "" && !scope.renames.contains(decl.name) {
             let _ = scope.bind(decl.name, reserved)
           }
         // Synthetic multi-decl blocks (e.g. `let a = 1, b = 2`) are wrapped

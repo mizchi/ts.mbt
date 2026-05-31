@@ -5778,7 +5778,10 @@ test "compute_vendor_root: missing source field falls back to module root, not s
   // `<root>/internal/generated/...`. A `<root>/src/internal/generated/...`
   // fallback would be invisible to the consumer's `moon build`.
   let mod_json = "{ \"name\": \"acme/app\", \"version\": \"0.0.0\" }"
-  @test.assert_eq(compute_vendor_root("/proj", mod_json), "/proj/internal/generated")
+  @test.assert_eq(
+    compute_vendor_root("/proj", mod_json),
+    "/proj/internal/generated",
+  )
 }
 
 ///|
@@ -5793,13 +5796,19 @@ test "compute_vendor_root: explicit source=src nests under src/" {
 ///|
 test "compute_vendor_root: explicit source=. matches missing-source behavior" {
   let mod_json = "{ \"name\": \"acme/app\", \"source\": \".\" }"
-  @test.assert_eq(compute_vendor_root("/proj", mod_json), "/proj/internal/generated")
+  @test.assert_eq(
+    compute_vendor_root("/proj", mod_json),
+    "/proj/internal/generated",
+  )
 }
 
 ///|
 test "compute_vendor_root: empty source string is treated as module root" {
   let mod_json = "{ \"name\": \"acme/app\", \"source\": \"\" }"
-  @test.assert_eq(compute_vendor_root("/proj", mod_json), "/proj/internal/generated")
+  @test.assert_eq(
+    compute_vendor_root("/proj", mod_json),
+    "/proj/internal/generated",
+  )
 }
 
 ///|

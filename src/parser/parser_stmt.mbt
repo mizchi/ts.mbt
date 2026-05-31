@@ -929,7 +929,6 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
     // so the disposal semantics survive in the emitted JS.
     let is_using = self.is_using_declaration_start()
     let is_await_using = if !is_using {
-
       self.is_await_using_declaration_start()
     } else {
       false

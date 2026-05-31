@@ -61,7 +61,7 @@ pub fn infer_numeric_symbols(g : SymbolGraph) -> Map[SymbolId, Bool] {
       for d in sym.defs {
         match d.init {
           Some(e) =>
-            if !(is_expr_numeric(e, g, numeric)) {
+            if !is_expr_numeric(e, g, numeric) {
               all_numeric = false
               break
             }
@@ -82,18 +82,18 @@ pub fn infer_numeric_symbols(g : SymbolGraph) -> Map[SymbolId, Bool] {
       // This converges in one round instead of relying on the outer
       // fixed-point loop to catch `i` referencing itself.
       if all_numeric && sym.reassigned {
-        let tentative_added = !(numeric.contains(sym.id))
+        let tentative_added = !numeric.contains(sym.id)
         if tentative_added {
           numeric[sym.id] = true
         }
         let mut all_rhs_numeric = true
         for rhs in sym.reassign_rhs {
-          if !(is_expr_numeric(rhs, g, numeric)) {
+          if !is_expr_numeric(rhs, g, numeric) {
             all_rhs_numeric = false
             break
           }
         }
-        if !(all_rhs_numeric) {
+        if !all_rhs_numeric {
           if tentative_added {
             // Drop the speculative entry so we don't poison
             // other symbols' analyses later in the round.

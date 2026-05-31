@@ -42,23 +42,35 @@ test "extends_decision: distinct primitives report false definitively" {
 ///|
 test "extends_decision: unknown for non-primitive nominal types without info" {
   @test.assert_eq(extends_decision(Named("Foo"), Named("Bar")), None)
-  @test.assert_eq(extends_decision(Applied("Box", [String_]), Named("Foo")), None)
+  @test.assert_eq(
+    extends_decision(Applied("Box", [String_]), Named("Foo")),
+    None,
+  )
 }
 
 ///|
 test "extends_decision: target union — short-circuit on a confirmed match" {
-  @test.assert_eq(extends_decision(String_, Union([String_, Number])), Some(true))
+  @test.assert_eq(
+    extends_decision(String_, Union([String_, Number])),
+    Some(true),
+  )
 }
 
 ///|
 test "extends_decision: target union — all branches definitely false" {
-  @test.assert_eq(extends_decision(Boolean, Union([String_, Number])), Some(false))
+  @test.assert_eq(
+    extends_decision(Boolean, Union([String_, Number])),
+    Some(false),
+  )
 }
 
 ///|
 test "extends_decision: target union — propagates unknown" {
   // Boolean vs Named("Foo") is unknown ⇒ overall is unknown.
-  @test.assert_eq(extends_decision(Boolean, Union([String_, Named("Foo")])), None)
+  @test.assert_eq(
+    extends_decision(Boolean, Union([String_, Named("Foo")])),
+    None,
+  )
 }
 
 ///|
@@ -67,12 +79,18 @@ test "extends_decision: source union — every branch must extend" {
     extends_decision(Union([Literal("a"), Literal("b")]), String_),
     Some(true),
   )
-  @test.assert_eq(extends_decision(Union([String_, Number]), String_), Some(false))
+  @test.assert_eq(
+    extends_decision(Union([String_, Number]), String_),
+    Some(false),
+  )
 }
 
 ///|
 test "extends_decision: source union — propagates unknown" {
-  @test.assert_eq(extends_decision(Union([String_, Named("Foo")]), String_), None)
+  @test.assert_eq(
+    extends_decision(Union([String_, Named("Foo")]), String_),
+    None,
+  )
 }
 
 ///|
@@ -80,8 +98,14 @@ test "extends_decision_with: resolves names then decides" {
   // type ID = string;  ID extends string ⇒ true.
   let table : Map[String, @ast.TsType] = { "ID": String_ }
   let resolve = fn(name) { table.get(name) }
-  @test.assert_eq(extends_decision_with(Named("ID"), String_, resolve), Some(true))
-  @test.assert_eq(extends_decision_with(Named("ID"), Number, resolve), Some(false))
+  @test.assert_eq(
+    extends_decision_with(Named("ID"), String_, resolve),
+    Some(true),
+  )
+  @test.assert_eq(
+    extends_decision_with(Named("ID"), Number, resolve),
+    Some(false),
+  )
 }
 
 ///|

@@ -141,9 +141,7 @@ fn parse_unified_tsmbt_options(
           )
       }
     } else if arg.has_prefix("--module-spec=") {
-      module_spec = Some(
-        arg["--module-spec=".length():arg.length()].to_owned(),
-      )
+      module_spec = Some(arg["--module-spec=".length():arg.length()].to_owned())
     } else if arg.has_prefix("--runtime-module=") {
       module_spec = Some(
         arg["--runtime-module=".length():arg.length()].to_owned(),

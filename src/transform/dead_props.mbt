@@ -779,7 +779,7 @@ fn is_value_pure(expr : @ast.TsExpr) -> Bool {
     Cond(c, t, e) => is_value_pure(c) && is_value_pure(t) && is_value_pure(e)
     ArrayLit(items) => {
       for it in items {
-        if !(is_value_pure(it)) {
+        if !is_value_pure(it) {
           return false
         }
       }
@@ -787,7 +787,7 @@ fn is_value_pure(expr : @ast.TsExpr) -> Bool {
     }
     ObjectLit(entries) => {
       for ent in entries {
-        if !(is_value_pure(ent.1)) {
+        if !is_value_pure(ent.1) {
           return false
         }
       }

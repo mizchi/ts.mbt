@@ -242,7 +242,9 @@ test "expr_check: check_module_function_bodies walks all top-level funcs" {
     #|function a(): number { return "x"; }
     #|function b(): string { return 1; }
     #|function c(): number { return 1; }
-  let module_ = try @parser.parse_module_from_source_with_const_values(src, {}) catch {
+  let module_ = try
+    @parser.parse_module_from_source_with_const_values(src, {})
+  catch {
     e => {
       fail("parse failed: \{e}")
       return

@@ -63,15 +63,15 @@ fn try_lift_iife_class_into(
   // CallExpr(FuncExpr(f), []))`.
   match stmt {
     Var(b, t, e) =>
-      if !(try_lift_iife_value(b, e, out)) {
+      if !try_lift_iife_value(b, e, out) {
         out.push(Var(b, t, e))
       }
     Let(b, t, e) =>
-      if !(try_lift_iife_value(b, e, out)) {
+      if !try_lift_iife_value(b, e, out) {
         out.push(Let(b, t, e))
       }
     Const(b, t, e) =>
-      if !(try_lift_iife_value(b, e, out)) {
+      if !try_lift_iife_value(b, e, out) {
         out.push(Const(b, t, e))
       }
     _ => out.push(stmt)
@@ -183,7 +183,7 @@ fn try_lift_iife_value(
       }
     }
   }
-  if !(saw_return) {
+  if !saw_return {
     return false
   }
   // Merge instance + static methods (preserves order: instance
@@ -397,7 +397,7 @@ fn classify_iife_body_stmt(
     // side effect (function assigned to another object's property)
     // that is safe to emit after the class declaration.
     PropAssign(@ast.TsExpr::Var(n), prop_name, @ast.TsExpr::FuncExpr(f)) =>
-      if n == class_name && !(is_class_metadata_key(prop_name)) {
+      if n == class_name && !is_class_metadata_key(prop_name) {
         StaticMethod(method_decl_from_func(prop_name, f, true))
       } else if n == class_name {
         Skipped
