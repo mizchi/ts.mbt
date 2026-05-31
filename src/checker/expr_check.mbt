@@ -5968,7 +5968,22 @@ fn check_call_args_in_expr(
       check_call_args_in_expr(env, r, ctx)
       check_binop_operands(env, op, l, r, ctx)
     }
-    UnaryOp(_, inner) => check_call_args_in_expr(env, inner, ctx)
+    UnaryOp(op, inner) => {
+      check_call_args_in_expr(env, inner, ctx)
+      match op {
+        Neg | Plus | BitwiseNot => {
+          let inner_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, inner))
+          if is_checkable(inner_ty) && !is_arithmetic_compatible(inner_ty) {
+            record(
+              ctx,
+              "unary op",
+              "operand `\{type_display(inner_ty)}` is not a valid number type",
+            )
+          }
+        }
+        _ => ()
+      }
+    }
     Cond(c, t, e) => {
       check_call_args_in_expr(env, c, ctx)
       check_call_args_in_expr(env, t, ctx)

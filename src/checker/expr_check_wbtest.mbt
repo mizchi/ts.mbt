@@ -5342,3 +5342,52 @@ test "expr_check: index access on string is allowed" {
     None => fail("function not found")
   }
 }
+
+///|
+test "expr_check: comparing different string literals with === is flagged" {
+  // `"world" === "hello"` — these are different literals, always false.
+  let src =
+    #|function f(s: "world"): boolean {
+    #|  return s === "hello";
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let found = issues.iter().any(fn(i) { i.message.contains("always be false") })
+      assert_true(found)
+    }
+    None => fail("function not found")
+  }
+}
+
+///|
+test "expr_check: unary minus on string is flagged" {
+  // `-"str"` — negation requires a numeric operand.
+  let src =
+    #|function f(s: string): number {
+    #|  return -s;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let found = issues.iter().any(fn(i) { i.message.contains("not a valid number type") })
+      assert_true(found)
+    }
+    None => fail("function not found")
+  }
+}
+
+///|
+test "expr_check: unary minus on number is allowed" {
+  let src =
+    #|function f(n: number): number {
+    #|  return -n;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      assert_eq(issues.length(), 0)
+    }
+    None => fail("function not found")
+  }
+}
