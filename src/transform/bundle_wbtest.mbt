@@ -1119,6 +1119,48 @@ test "type-fold: typeof check on typed parameter folds to bool" {
 }
 
 ///|
+// `typeof obj === "object"` over an object-typed parameter folds
+// to `true`. The wrapper `if` then collapses to its body.
+test "type-fold: typeof object check on typed parameter folds to bool" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "function f(o: { a: number; b: number }): number {\n" +
+      "  if (typeof o === \"object\") return o.a + o.b;\n" +
+      "  return 0;\n" +
+      "}\n" +
+      "console.log(f({ a: 1, b: 2 }));\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_true(out.js.contains("return o.a + o.b"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+// `typeof f === "function"` over a function-typed parameter folds
+// to `true`.
+test "type-fold: typeof function check on typed callback folds to bool" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "function call(f: () => number): number {\n" +
+      "  if (typeof f === \"function\") return f();\n" +
+      "  return 0;\n" +
+      "}\n" +
+      "console.log(call(() => 7));\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_true(out.js.contains("return f();"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "switch-fold: literal-union dispatch arm substitutes at call site" {
   let files = vfs([
     (

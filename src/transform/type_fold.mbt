@@ -831,14 +831,20 @@ fn is_useful_type(ty : @ast.TsType) -> Bool {
       true
     }
     // Object / Struct / Named shapes power the PropAccess
-    // discriminant path in `drop_exhaustive_default`: a
-    // `switch (s.kind)` over `s: Shape` reads the tag-field
-    // type from the binding's annotation, then checker's
-    // `simplify_indexed_access` distributes over the union to
-    // produce the literal cases. Their presence in `scope` is
-    // inert for the typeof / null-check / `+ ""` foldings —
-    // those paths check primitive shapes and bail otherwise.
-    Object(_) | Struct(_, _) | Named(_) => true
+    // discriminant path in `drop_exhaustive_default`. Func /
+    // Constructor / Array / Tuple / Null also flow into
+    // `typeof_of_type` so `typeof callback === "function"` /
+    // `typeof arr === "object"` fold against typed bindings.
+    // The non-typeof foldings (null-check, `+ ""`, etc.) check
+    // specific primitive shapes and bail on these structurally.
+    Object(_)
+    | Struct(_, _)
+    | Named(_)
+    | Func(_, _)
+    | Constructor(_, _, _)
+    | Array(_)
+    | Tuple(_)
+    | Null => true
     _ => false
   }
 }
@@ -897,6 +903,15 @@ fn typeof_of_type(ty : @ast.TsType) -> String? {
     Symbol => Some("symbol")
     // `typeof undefined` is "undefined" at runtime.
     Undefined | Void => Some("undefined")
+    // Plain object shapes are uniformly "object" at runtime. A
+    // `Func` would be "function" but we don't see those as
+    // value-side annotations here.
+    Object(_) | Struct(_, _) => Some("object")
+    Func(_, _) | Constructor(_, _, _) => Some("function")
+    // `null` is special: `typeof null === "object"` (the original
+    // JS bug we honour). `Array` is `"object"` too.
+    Null => Some("object")
+    Array(_) | Tuple(_) => Some("object")
     _ => None
   }
 }
