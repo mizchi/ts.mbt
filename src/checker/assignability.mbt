@@ -157,8 +157,6 @@ fn is_assignable_to_inner(
       } else {
         false
       }
-    (Array(s_inner), Applied("ReadonlyArray", [t_inner])) =>
-      is_assignable_to_inner(s_inner, t_inner, bivariant_params)
     // Compound covariance/contravariance.
     (Array(s_inner), Array(t_inner)) =>
       is_assignable_to_inner(s_inner, t_inner, bivariant_params)

@@ -350,9 +350,9 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
           keep_going = false
         } else {
           match self.type_aliases.get(n) {
-            Some(alias) => {
+            Some(aliased) => {
               seen[n] = true
-              cur = alias.type_
+              cur = aliased.type_
             }
             None => keep_going = false
           }
@@ -362,20 +362,20 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
           keep_going = false
         } else {
           match self.type_aliases.get(n) {
-            Some(alias) if alias.type_params.length() > 0 => {
+            Some(aliased) if aliased.type_params.length() > 0 => {
               seen[n] = true
               let bindings : Map[String, @ast.TsType] = {}
-              let limit = if args.length() < alias.type_params.length() {
+              let limit = if args.length() < aliased.type_params.length() {
                 args.length()
               } else {
-                alias.type_params.length()
+                aliased.type_params.length()
               }
               let mut i = 0
               while i < limit {
-                bindings[alias.type_params[i]] = args[i]
+                bindings[aliased.type_params[i]] = args[i]
                 i = i + 1
               }
-              cur = substitute_params(alias.type_, bindings)
+              cur = substitute_params(aliased.type_, bindings)
             }
             _ => keep_going = false
           }
@@ -901,13 +901,14 @@ fn Resolver::lookup_field_core(
     Func(params, ret) => func_prototype_member(params, ret, field)
     Tuple(items) =>
       // Numeric field on a tuple → that element type.
-      match (try? @strconv.parse_int(field)) {
-        Ok(idx) if idx >= 0 && idx < items.length() => Some(items[idx])
+      try @string.parse_int(field) catch {
         _ =>
           match field {
             "length" => Some(@ast.TsType::Number)
             _ => None
           }
+      } noraise {
+        idx => if idx >= 0 && idx < items.length() { Some(items[idx]) } else { None }
       }
     String_ | Literal(_) => string_prototype_member(field)
     // Field access on a union is only safe when *every* member
@@ -926,7 +927,7 @@ fn Resolver::lookup_field_core(
       }
       if parts.length() == 0 {
         None
-      } else if not(any_missing) {
+      } else if !any_missing {
         // Every member has the field — return the tight union.
         if parts.length() == 1 {
           Some(parts[0])
@@ -1537,13 +1538,13 @@ fn typed_array_extra_member(field : String) -> @ast.TsType? {
 /// `check_call_args_in_expr` validates argument types; the result type
 /// of generic-shaped statics (e.g. `Object.entries<T>`) is handled by
 /// `global_static_method_special` at the call site.
-fn global_namespace_method(namespace : String, method : String) -> @ast.TsType? {
+fn global_namespace_method(ns : String, meth : String) -> @ast.TsType? {
   let s = @ast.TsType::String_
   let n = @ast.TsType::Number
   let b = @ast.TsType::Boolean
   let any = @ast.TsType::Any
   let str_arr = @ast.TsType::Array(s)
-  match (namespace, method) {
+  match (ns, meth) {
     // Object.*
     ("Object", "keys") => Some(@ast.TsType::Func([any], str_arr))
     ("Object", "values") =>
@@ -1678,11 +1679,11 @@ fn global_namespace_method(namespace : String, method : String) -> @ast.TsType? 
 fn global_static_method_special(
   env : ExprEnv,
   resolver : Resolver,
-  namespace : String,
-  method : String,
+  ns : String,
+  meth : String,
   args : Array[@ast.TsExpr],
 ) -> @ast.TsType? {
-  match (namespace, method, args) {
+  match (ns, meth, args) {
     // `Promise.resolve(value)` — yields `Promise<typeof value>`. If
     // the value is itself a promise, flatten one level.
     ("Promise", "resolve", [v]) => {
@@ -1823,9 +1824,9 @@ fn Resolver::lookup_class_field(
 fn Resolver::lookup_method_sig(
   self : Resolver,
   recv : @ast.TsType,
-  method : String,
+  meth : String,
 ) -> (Array[@ast.TsType], @ast.TsType)? {
-  match self.lookup_field(recv, method) {
+  match self.lookup_field(recv, meth) {
     Some(Func(ps, ret)) => Some((ps, ret))
     _ => None
   }
@@ -1976,22 +1977,6 @@ fn is_nullable_type(ty : @ast.TsType) -> Bool {
       // patterns and are handled by the existing optional-field machinery.
       !has_non_nullish
     }
-    _ => false
-  }
-}
-
-///|
-fn is_numeric_type(ty : @ast.TsType) -> Bool {
-  match ty {
-    Number | Int | NumberLiteral(_) => true
-    _ => false
-  }
-}
-
-///|
-fn is_string_type(ty : @ast.TsType) -> Bool {
-  match ty {
-    String_ | Literal(_) | TemplateLiteralType(_, _) => true
     _ => false
   }
 }
@@ -2173,8 +2158,8 @@ fn check_binop_operands(
       }
       let lt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, l))
       let rt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, r))
-      if not(is_typeof(l)) &&
-        not(is_typeof(r)) &&
+      if !is_typeof(l) &&
+        !is_typeof(r) &&
         is_checkable(lt) &&
         is_checkable(rt) &&
         !types_can_overlap(lt, rt) {
@@ -2366,7 +2351,7 @@ fn infer_expr(
               // Try just the last segment (unqualified name) as fallback.
               match key.rev_find(".") {
                 Some(dot) => {
-                  let short = key[dot + 1:key.length()].to_string()
+                  let short = key[dot + 1:key.length()].to_owned()
                   match resolver.classes.get(short) {
                     Some(_) => @ast.TsType::Named(short)
                     None => @ast.TsType::Any
@@ -2383,20 +2368,20 @@ fn infer_expr(
       }
       instance_ty
     }
-    MethodCall(receiver, method, args) => {
+    MethodCall(receiver, meth, args) => {
       // Static namespace dispatch: `Object.keys(...)`, `Math.max(...)`,
       // `Promise.resolve(...)` etc. — recognise the receiver by its bare
       // identifier rather than its inferred type so we don't depend on
       // ambient globals being declared.
       match receiver {
         Var(name) =>
-          match global_namespace_method(name, method) {
+          match global_namespace_method(name, meth) {
             Some(sig) =>
               // Apply per-method generic-style inference for the chosen
               // static method, falling back to the conventional `Func`
               // shape when no special path applies.
               match
-                global_static_method_special(env, resolver, name, method, args) {
+                global_static_method_special(env, resolver, name, meth, args) {
                 Some(special_ret) => {
                   // Walk args for nested call-site checks.
                   for a in args {
@@ -2425,7 +2410,7 @@ fn infer_expr(
       // type instead of the synthetic `Any` slot returned by
       // `array_prototype_member`.
       let elem_opt = array_element_type(resolver, recv_ty)
-      match (elem_opt, method, args) {
+      match (elem_opt, meth, args) {
         (Some(elem), "map", [cb]) => {
           let cb_ret = infer_arrow_body_with_params(env, resolver, cb, [
             elem,
@@ -2480,7 +2465,7 @@ fn infer_expr(
         Applied("Promise", [t]) | Applied("PromiseLike", [t]) => Some(t)
         _ => None
       }
-      match (promise_inner_opt, method, args) {
+      match (promise_inner_opt, meth, args) {
         (Some(inner), "then", [cb]) => {
           let cb_ret = infer_arrow_body_with_params(env, resolver, cb, [inner])
           let flattened = match cb_ret {
@@ -2498,7 +2483,7 @@ fn infer_expr(
       // Nullable receiver: strip null/undefined members and retry so
       // `(arr | null).map(...)` still resolves the method return type.
       match
-        resolver.lookup_method_sig(prune_nullish(resolver, recv_ty), method) {
+        resolver.lookup_method_sig(prune_nullish(resolver, recv_ty), meth) {
         Some((_params, ret)) => {
           for a in args {
             let _ = infer_expr(env, resolver, a)
@@ -3098,7 +3083,7 @@ fn infer_typeof_type(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType {
           Literal(s) => s
           _ => "string"
         }
-        if not(seen.contains(key)) {
+        if !seen.contains(key) {
           seen[key] = true
           tags.push(tag)
         }
@@ -3735,7 +3720,7 @@ fn check_object_lit_against_target(
   let declared = collect_declared_fields(target, resolver)
   let provided : Map[String, Bool] = {}
   for entry in entries {
-    if not(entry.0.has_prefix("@@spread:")) {
+    if !entry.0.has_prefix("@@spread:") {
       provided[entry.0] = true
     }
   }
@@ -3809,7 +3794,7 @@ fn collect_declared_fields(
           match resolver.classes.get(n) {
             Some(cls) => {
               for p in cls.properties {
-                if not(p.is_static) {
+                if !p.is_static {
                   out.push((p.name, p.type_))
                 }
               }
@@ -3821,6 +3806,32 @@ fn collect_declared_fields(
             }
             None => ()
           }
+      }
+    // Utility-type field collection so object-literal contextual typing
+    // (missing-required / excess-property) honours the same rules.
+    Applied("Partial", [t]) =>
+      for f in collect_declared_fields(t, resolver) {
+        out.push((f.0, narrow_union(f.1, @ast.TsType::Undefined)))
+      }
+    Applied("Required", [t]) =>
+      for f in collect_declared_fields(t, resolver) {
+        out.push((f.0, non_nullable(f.1)))
+      }
+    Applied("Readonly", [t]) =>
+      for f in collect_declared_fields(t, resolver) {
+        out.push(f)
+      }
+    Applied("Pick", [t, keys]) =>
+      for f in collect_declared_fields(t, resolver) {
+        if utility_keys_include(keys, f.0) {
+          out.push(f)
+        }
+      }
+    Applied("Omit", [t, keys]) =>
+      for f in collect_declared_fields(t, resolver) {
+        if !utility_keys_include(keys, f.0) {
+          out.push(f)
+        }
       }
     // Generic interface application: substitute type parameters before
     // returning each field type. `extends` chain isn't yet specialised —
@@ -3880,7 +3891,7 @@ fn collect_declared_fields(
                 i = i + 1
               }
               for p in cls.properties {
-                if not(p.is_static) {
+                if !p.is_static {
                   out.push((p.name, substitute_params(p.type_, bindings)))
                 }
               }
@@ -3892,32 +3903,6 @@ fn collect_declared_fields(
             }
             None => ()
           }
-      }
-    // Utility-type field collection so object-literal contextual typing
-    // (missing-required / excess-property) honours the same rules.
-    Applied("Partial", [t]) =>
-      for f in collect_declared_fields(t, resolver) {
-        out.push((f.0, narrow_union(f.1, @ast.TsType::Undefined)))
-      }
-    Applied("Required", [t]) =>
-      for f in collect_declared_fields(t, resolver) {
-        out.push((f.0, non_nullable(f.1)))
-      }
-    Applied("Readonly", [t]) =>
-      for f in collect_declared_fields(t, resolver) {
-        out.push(f)
-      }
-    Applied("Pick", [t, keys]) =>
-      for f in collect_declared_fields(t, resolver) {
-        if utility_keys_include(keys, f.0) {
-          out.push(f)
-        }
-      }
-    Applied("Omit", [t, keys]) =>
-      for f in collect_declared_fields(t, resolver) {
-        if !utility_keys_include(keys, f.0) {
-          out.push(f)
-        }
       }
     // Intersection: a value of `A & B` has all properties of both A and B.
     Intersection(parts) =>
@@ -3945,7 +3930,7 @@ fn collect_declared_fields(
           }
           let to_remove : Array[String] = []
           for key in common {
-            if not(member_map.contains(key.0)) {
+            if !member_map.contains(key.0) {
               to_remove.push(key.0)
             }
           }
@@ -4871,13 +4856,6 @@ fn narrow_keep(ty : @ast.TsType, pred : (@ast.TsType) -> Bool) -> @ast.TsType {
   union_of(kept)
 }
 
-///|
-fn is_null_or_undefined(t : @ast.TsType) -> Bool {
-  match t {
-    Null | Undefined => true
-    _ => false
-  }
-}
 
 ///|
 fn type_eq(a : @ast.TsType, b : @ast.TsType) -> Bool {
@@ -5297,28 +5275,6 @@ fn apply_method_type_predicate_narrowing(
 /// defaulting to `Any`.
 
 ///|
-/// Resolve the current type of a `name.prop` access — first via any
-/// narrowing binding under the synthetic `name.prop` env key, then via
-/// the receiver's structural shape.
-fn prop_access_current_type(
-  env : ExprEnv,
-  resolver : Resolver,
-  name : String,
-  prop : String,
-) -> @ast.TsType {
-  match env.lookup(name + "." + prop) {
-    Some(t) => t
-    None => {
-      let recv_ty = env_lookup_full(env, resolver, name)
-      match resolver.lookup_field(recv_ty, prop) {
-        Some(t) => t
-        None => @ast.TsType::Any
-      }
-    }
-  }
-}
-
-///|
 /// Flatten a `Var(...)` / `PropAccess(...)` / literal-`IndexAccess(...)`
 /// chain into a dotted key for the narrowing env. Returns `None` when
 /// the chain bottoms out at anything other than `Var(name)`.
@@ -5386,8 +5342,8 @@ fn narrowing_current_type(
   if key.length() > 0 && key[key.length() - 1] == ']' {
     match key.rev_find("[") {
       Some(open_idx) => {
-        let prefix = key[:open_idx].to_string()
-        let inner = key[open_idx + 1:key.length() - 1].to_string()
+        let prefix = key[:open_idx].to_owned()
+        let inner = key[open_idx + 1:key.length() - 1].to_owned()
         let prefix_ty = narrowing_current_type(env, resolver, prefix)
         let elem = index_into_type(resolver, prefix_ty, inner)
         return elem
@@ -5397,8 +5353,8 @@ fn narrowing_current_type(
   }
   match key.rev_find(".") {
     Some(idx) => {
-      let prefix = key[:idx].to_string()
-      let leaf = key[idx + 1:].to_string()
+      let prefix = key[:idx].to_owned()
+      let leaf = key[idx + 1:].to_owned()
       // Recursively resolve the prefix's current type, then read the
       // leaf field from the resolver. This lets `c.a.b` go through
       // `narrowing_current_type("c.a") -> field "b"`.
@@ -5427,7 +5383,7 @@ fn index_signature_value(
   signatures : Array[(@ast.TsType, @ast.TsType)],
   field : String,
 ) -> @ast.TsType? {
-  let is_numeric = (try? @strconv.parse_int(field)) is Ok(_)
+  let is_numeric = (try? @string.parse_int(field)) is Ok(_)
   let mut numeric_value : @ast.TsType? = None
   let mut string_value : @ast.TsType? = None
   for sig in signatures {
@@ -5476,22 +5432,23 @@ fn index_into_type(
   // Quoted string key — strip the surrounding quotes and run a field
   // lookup so `m["k"]` resolves through the object / interface shape.
   if inner.length() >= 2 && inner[0] == '"' && inner[inner.length() - 1] == '"' {
-    let key = inner[1:inner.length() - 1].to_string()
+    let key = inner[1:inner.length() - 1].to_owned()
     return match resolver.lookup_field(shape, key) {
       Some(t) => t
       None => @ast.TsType::Any
     }
   }
   // Numeric index — read tuple slot or array element.
-  let idx = (try? @strconv.parse_int(inner)) is Ok(_)
+  let idx = (try? @string.parse_int(inner)) is Ok(_)
   if idx {
     match shape {
       Array(elem) => return elem
       Applied("Array", [elem]) | Applied("ReadonlyArray", [elem]) => return elem
       Tuple(items) =>
-        match (try? @strconv.parse_int(inner)) {
-          Ok(i) if i >= 0 && i < items.length() => return items[i]
+        try @string.parse_int(inner) catch {
           _ => return @ast.TsType::Any
+        } noraise {
+          i => if i >= 0 && i < items.length() { return items[i] } else { return @ast.TsType::Any }
         }
       _ => return @ast.TsType::Any
     }
@@ -6159,12 +6116,12 @@ fn check_call_args_in_expr(
         check_call_args_in_expr(env, a, ctx)
       }
     }
-    MethodCall(receiver, method, args) => {
+    MethodCall(receiver, meth, args) => {
       // Static-namespace dispatch: `Math.max(...)`, `JSON.stringify(...)`.
       // Recognised by the bare-identifier shape of the receiver.
       let static_params : Array[@ast.TsType]? = match receiver {
         Var(name) =>
-          match global_namespace_method(name, method) {
+          match global_namespace_method(name, meth) {
             Some(Func(params, _)) => Some(params)
             _ => None
           }
@@ -6172,20 +6129,20 @@ fn check_call_args_in_expr(
       }
       match static_params {
         Some(params) =>
-          check_arguments(env, params, args, ctx, "call `\{method}`")
+          check_arguments(env, params, args, ctx, "call `\{meth}`")
         None => {
           let recv_ty = infer_expr(env, ctx.resolver, receiver)
           if is_nullable_type(recv_ty) {
             record(
               ctx,
-              "call `\{method}`",
-              "cannot call `.\{method}()` — receiver may be null or undefined",
+              "call `\{meth}`",
+              "cannot call `.\{meth}()` — receiver may be null or undefined",
             )
           } else {
             let pruned = prune_nullish(ctx.resolver, recv_ty)
-            match ctx.resolver.lookup_method_sig(pruned, method) {
+            match ctx.resolver.lookup_method_sig(pruned, meth) {
               Some((params, _)) =>
-                check_arguments(env, params, args, ctx, "call `\{method}`")
+                check_arguments(env, params, args, ctx, "call `\{meth}`")
               None =>
                 // If the receiver has a concrete shape and we can't find the
                 // method, flag it — but be conservative and skip Any/primitives
@@ -6193,11 +6150,11 @@ fn check_call_args_in_expr(
                 match ctx.resolver.unwrap(pruned) {
                   Named(_) | Applied(_, _) | Object(_) | Struct(_, _) =>
                     if is_checkable(pruned) &&
-                      ctx.resolver.lookup_field(pruned, method) is None {
+                      ctx.resolver.lookup_field(pruned, meth) is None {
                       record(
                         ctx,
-                        "call `\{method}`",
-                        "method `\{method}` does not exist on `\{type_display(pruned)}`",
+                        "call `\{meth}`",
+                        "method `\{meth}` does not exist on `\{type_display(pruned)}`",
                       )
                     }
                   _ => ()
@@ -6475,8 +6432,8 @@ fn check_call_args_in_expr(
       }
       if concrete(inferred) &&
         concrete(asserted) &&
-        not(is_assignable_to(inferred, asserted)) &&
-        not(is_assignable_to(asserted, inferred)) {
+        !is_assignable_to(inferred, asserted) &&
+        !is_assignable_to(asserted, inferred) {
         record(
           ctx,
           "as",
@@ -6529,14 +6486,14 @@ fn check_call_args_in_expr(
 /// nested misses are left to the recursive `check_call_args_in_expr`.
 fn check_jsx_key_in_map(child : @ast.TsExpr, ctx : CheckCtx) -> Unit {
   match child {
-    MethodCall(_, method, args) =>
-      if method == "map" && args.length() >= 1 {
+    MethodCall(_, meth, args) =>
+      if meth == "map" && args.length() >= 1 {
         walk_map_callback_for_key(args[0], ctx)
       }
     CallExpr(callee, args) =>
       match callee {
-        PropAccess(_, method) =>
-          if method == "map" && args.length() >= 1 {
+        PropAccess(_, meth) =>
+          if meth == "map" && args.length() >= 1 {
             walk_map_callback_for_key(args[0], ctx)
           }
         _ => ()
@@ -6889,11 +6846,11 @@ pub fn check_module_function_bodies(
   // function name embeds the class + method names so any reported
   // issues point at the source location.
   for cls in module_.classes {
-    for method in cls.methods {
-      match method.body {
+    for meth in cls.methods {
+      match meth.body {
         Some(body) => {
           let params : Array[@ast.TsParam] = []
-          for p in method.params {
+          for p in meth.params {
             params.push({
               name: p.0,
               binding: None,
@@ -6903,10 +6860,10 @@ pub fn check_module_function_bodies(
             })
           }
           let synth : @ast.TsFunc = {
-            name: cls.name + "." + method.name,
-            type_params: method.type_params,
+            name: cls.name + "." + meth.name,
+            type_params: meth.type_params,
             params,
-            return_type: method.return_type,
+            return_type: meth.return_type,
             body,
             const_type_params: [],
             is_generator: false,
