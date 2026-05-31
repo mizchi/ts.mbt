@@ -5507,3 +5507,55 @@ test "expr_check: switch case with matching type is ok" {
     None => fail("function not found")
   }
 }
+
+///|
+test "expr_check: assigning to non-existent property is flagged" {
+  // `obj.typo = 1` where interface has no `typo` field.
+  let src =
+    #|interface Point { x: number; y: number }
+    #|function f(p: Point): void {
+    #|  p.typo = 42;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let found = issues.iter().any(fn(i) { i.message.contains("does not exist") })
+  assert_true(found)
+}
+
+///|
+test "expr_check: assigning to existing property is ok" {
+  let src =
+    #|interface Point { x: number; y: number }
+    #|function f(p: Point): void {
+    #|  p.x = 10;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: calling non-existent method on interface is flagged" {
+  let src =
+    #|interface Greeter { greet(): void }
+    #|function f(g: Greeter): void {
+    #|  g.farewell();
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let found = issues.iter().any(fn(i) { i.message.contains("does not exist") })
+  assert_true(found)
+}
+
+///|
+test "expr_check: calling existing method on interface is ok" {
+  let src =
+    #|interface Greeter { greet(): void }
+    #|function f(g: Greeter): void {
+    #|  g.greet();
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+

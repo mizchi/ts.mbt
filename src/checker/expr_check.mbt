@@ -5585,7 +5585,18 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       match ctx.resolver.lookup_field(recv_ty, prop) {
         Some(target_ty) =>
           check_expr_against(env, value, target_ty, ctx, "assign `.\{prop}`")
-        None => ()
+        None =>
+          if is_checkable(recv_ty) && !is_nullable_type(recv_ty) {
+            match ctx.resolver.unwrap(recv_ty) {
+              Object(_) | Struct(_, _) | Named(_) | Applied(_, _) =>
+                record(
+                  ctx,
+                  "assign `.\{prop}`",
+                  "property `\{prop}` does not exist on `\{type_display(recv_ty)}`",
+                )
+              _ => ()
+            }
+          }
       }
     }
     IndexAssign(recv, idx, value) => {
@@ -5957,13 +5968,26 @@ fn check_call_args_in_expr(
               "cannot call `.\{method}()` — receiver may be null or undefined",
             )
           } else {
-            match ctx.resolver.lookup_method_sig(
-              prune_nullish(ctx.resolver, recv_ty),
-              method,
-            ) {
+            let pruned = prune_nullish(ctx.resolver, recv_ty)
+            match ctx.resolver.lookup_method_sig(pruned, method) {
               Some((params, _)) =>
                 check_arguments(env, params, args, ctx, "call `\{method}`")
-              None => ()
+              None =>
+                // If the receiver has a concrete shape and we can't find the
+                // method, flag it — but be conservative and skip Any/primitives
+                // (which have many built-in methods we don't model).
+                match ctx.resolver.unwrap(pruned) {
+                  Named(_) | Applied(_, _) | Object(_) | Struct(_, _) =>
+                    if is_checkable(pruned) &&
+                      ctx.resolver.lookup_field(pruned, method) is None {
+                      record(
+                        ctx,
+                        "call `\{method}`",
+                        "method `\{method}` does not exist on `\{type_display(pruned)}`",
+                      )
+                    }
+                  _ => ()
+                }
             }
           }
         }
@@ -6132,7 +6156,18 @@ fn check_call_args_in_expr(
       match ctx.resolver.lookup_field(recv_ty, prop) {
         Some(target_ty) =>
           check_expr_against(env, v, target_ty, ctx, "assign `.\{prop}`")
-        None => ()
+        None =>
+          if is_checkable(recv_ty) && !is_nullable_type(recv_ty) {
+            match ctx.resolver.unwrap(recv_ty) {
+              Object(_) | Struct(_, _) | Named(_) | Applied(_, _) =>
+                record(
+                  ctx,
+                  "assign `.\{prop}`",
+                  "property `\{prop}` does not exist on `\{type_display(recv_ty)}`",
+                )
+              _ => ()
+            }
+          }
       }
     }
     IndexAssignExpr(recv, idx, v) => {
