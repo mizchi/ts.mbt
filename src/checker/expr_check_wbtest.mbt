@@ -5854,6 +5854,23 @@ test "expr_check: valid TS patterns are not false-positives" {
         #|}
       ),
     ),
+    // Inherited members resolve through the `extends` chain — accessing a
+    // base-class field / method on a derived-class value is valid.
+    (
+      "inherited-class-member-access",
+      (
+        #|class A {
+        #|  x: string = "";
+        #|  f(): string { return ""; }
+        #|}
+        #|class B extends A {
+        #|  y: string = "";
+        #|}
+        #|function g(b: B): string {
+        #|  return b.x + b.f() + b.y;
+        #|}
+      ),
+    ),
     // Discriminated-union property access after switch narrowing.
     (
       "discriminated-union-switch-access",

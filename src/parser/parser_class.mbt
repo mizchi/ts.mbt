@@ -1958,6 +1958,11 @@ fn Parser::parse_class_decl_with_abstract(
         ..decorated,
         static_field_inits,
       }
+      // Re-publish the fully-built decl (with `base_names` / `base_expr` /
+      // statics) so `take_last_runtime_class_decl` — used by the module
+      // collector — sees the heritage clause. The earlier assignment at the
+      // top of this function recorded only the base-less `runtime_decl`.
+      self.last_runtime_class_decl = Some(decorated_with_statics)
       return NativeClassStmt(decorated_with_statics, ctor_func)
     }
     None => ()
