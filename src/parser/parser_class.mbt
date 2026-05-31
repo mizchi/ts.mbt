@@ -1097,6 +1097,12 @@ fn Parser::parse_class_body(
       }
       let body = if self.match_(Semicolon) {
         @ast.TsBlock::{ stmts: [], stmt_positions: [] }
+      } else if !self.check(LBrace) {
+        // Overload signature with no body and no trailing `;` (relying on
+        // ASI) — e.g. `constructor(y: any)` followed on the next line by the
+        // implementation `constructor(x: number) {}`. Treat it as a bodyless
+        // signature; we don't enforce overload/implementation pairing.
+        @ast.TsBlock::{ stmts: [], stmt_positions: [] }
       } else {
         // Save and set function context for method body
         let prev_generator = self.in_generator

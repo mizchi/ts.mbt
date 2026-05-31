@@ -2320,6 +2320,36 @@ test "parser: retain class-level decorators in TsClassDecl" {
 }
 
 ///|
+test "parser: dynamic import `import(...)` in statement and value position" {
+  let src =
+    #|import("side-effect-only");
+    #|const p = import("mod");
+    #|function load(path: string) { return import(path); }
+  let _module = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+}
+
+///|
+test "parser: constructor overload signature without trailing semicolon" {
+  let src =
+    #|class C {
+    #|  constructor(y: any)
+    #|  constructor(x: number) {}
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.classes.length(), 1)
+}
+
+///|
 test "parser: decorated class expression `(@dec class C {})`" {
   let src =
     #|const C = (@dec class Inner {

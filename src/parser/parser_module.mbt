@@ -3124,8 +3124,14 @@ fn Parser::parse_module_with_seeded_const_values_internal(
           }
         k => raise ParseError("Expected Function, got \{k}")
       }
-    } else if self.check(Import) {
+    } else if self.check(Import) &&
+      self.peek_at(1).kind != LParen &&
+      self.peek_at(1).kind != Dot {
       self.parse_import_stmt()
+    } else if self.check(Import) {
+      // `import(...)` (dynamic import) / `import.meta` in statement position —
+      // parse as an expression statement rather than an import declaration.
+      let _ = self.parse_stmt()
     } else if self.check(Export) {
       self.parse_export_stmt(
         funcs, interfaces, type_aliases, imports, values, classes, namespaces, enums,
