@@ -2617,6 +2617,19 @@ fn Parser::parse_angle_bracket_type_assertion_with_tokens(
 fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
   let tok = self.peek()
   match tok.kind {
+    // Decorated class expression: `(@dec class C { … })`. Consume the
+    // decorator list into `pending_decorators`, then parse the class
+    // expression — `parse_class_stub` drains the pending decorators onto the
+    // resulting declaration via `take_pending_decorators`.
+    At => {
+      while self.check(At) {
+        self.skip_decorator()
+      }
+      if !self.check(Class) {
+        raise ParseError("Expected class after decorator in expression")
+      }
+      self.parse_class_stub()
+    }
     Class => self.parse_class_stub()
     Lt =>
       if self.is_generic_arrow_function() {

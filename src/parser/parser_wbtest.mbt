@@ -2320,6 +2320,22 @@ test "parser: retain class-level decorators in TsClassDecl" {
 }
 
 ///|
+test "parser: decorated class expression `(@dec class C {})`" {
+  let src =
+    #|const C = (@dec class Inner {
+    #|  m(): number { return 1; }
+    #|});
+  // The decorated class expression must parse without error. Previously the
+  // `@` in expression position raised `Unexpected token: At`.
+  let _module = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+}
+
+///|
 test "parser: retain `declare module \"X\" { ... }` as augmentation entry" {
   let src =
     #|declare module "express" {
