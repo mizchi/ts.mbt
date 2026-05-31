@@ -1926,6 +1926,81 @@ fn is_checkable(ty : @ast.TsType) -> Bool {
 }
 
 ///|
+fn is_nullable_type(ty : @ast.TsType) -> Bool {
+  match ty {
+    Null | Undefined => true
+    Union(members) => {
+      let has_non_nullish = members.iter().any(fn(m) {
+        match m {
+          Null | Undefined => false
+          _ => true
+        }
+      })
+      // Only flag as "nullable" when ALL members are null/undefined (i.e., the
+      // type IS null/undefined). Unions like `string | null` are common valid
+      // patterns and are handled by the existing optional-field machinery.
+      !has_non_nullish
+    }
+    _ => false
+  }
+}
+
+///|
+fn is_numeric_type(ty : @ast.TsType) -> Bool {
+  match ty {
+    Number | Int | NumberLiteral(_) => true
+    _ => false
+  }
+}
+
+///|
+fn is_string_type(ty : @ast.TsType) -> Bool {
+  match ty {
+    String_ | Literal(_) | TemplateLiteralType(_, _) => true
+    _ => false
+  }
+}
+
+///|
+fn is_arithmetic_compatible(ty : @ast.TsType) -> Bool {
+  match ty {
+    Number | Int | NumberLiteral(_) | BigInt | BigIntLiteral(_) | Any => true
+    _ => false
+  }
+}
+
+///|
+fn check_binop_operands(
+  env : ExprEnv,
+  op : @ast.TsBinOp,
+  l : @ast.TsExpr,
+  r : @ast.TsExpr,
+  ctx : CheckCtx,
+) -> Unit {
+  match op {
+    Sub | Mul | Div | Mod | Pow | Shl | Shr | UShr | BitAnd | BitOr | BitXor => {
+      let lt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, l))
+      let rt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, r))
+      if is_checkable(lt) && !is_arithmetic_compatible(lt) {
+        record(
+          ctx,
+          "binary op",
+          "left operand `\{type_display(lt)}` is not a valid number type",
+        )
+      }
+      if is_checkable(rt) && !is_arithmetic_compatible(rt) {
+        record(
+          ctx,
+          "binary op",
+          "right operand `\{type_display(rt)}` is not a valid number type",
+        )
+      }
+    }
+    _ => ()
+  }
+}
+
+///|
 fn wrap_async_return(is_async : Bool, ret : @ast.TsType) -> @ast.TsType {
   if !is_async {
     return ret
@@ -5704,7 +5779,16 @@ fn check_call_args_in_expr(
             "call `\{name}`",
           )
         }
-        _ => ()
+        Constructor(_, _, _) => ()
+        Any | Never => ()
+        other =>
+          if is_checkable(other) {
+            record(
+              ctx,
+              "call `\{name}`",
+              "`\{type_display(other)}` is not callable",
+            )
+          }
       }
       for a in args {
         check_call_args_in_expr(env, a, ctx)
@@ -5714,7 +5798,16 @@ fn check_call_args_in_expr(
       let callee_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, callee))
       match callee_ty {
         Func(params, _) => check_arguments(env, params, args, ctx, "call")
-        _ => ()
+        Constructor(_, _, _) => ()
+        Any | Never => ()
+        other =>
+          if is_checkable(other) {
+            record(
+              ctx,
+              "call",
+              "`\{type_display(other)}` is not callable",
+            )
+          }
       }
       check_call_args_in_expr(env, callee, ctx)
       for a in args {
@@ -5737,13 +5830,21 @@ fn check_call_args_in_expr(
           check_arguments(env, params, args, ctx, "call `\{method}`")
         None => {
           let recv_ty = infer_expr(env, ctx.resolver, receiver)
-          match ctx.resolver.lookup_method_sig(
-            prune_nullish(ctx.resolver, recv_ty),
-            method,
-          ) {
-            Some((params, _)) =>
-              check_arguments(env, params, args, ctx, "call `\{method}`")
-            None => ()
+          if is_nullable_type(recv_ty) {
+            record(
+              ctx,
+              "call `\{method}`",
+              "cannot call `.\{method}()` — receiver may be null or undefined",
+            )
+          } else {
+            match ctx.resolver.lookup_method_sig(
+              prune_nullish(ctx.resolver, recv_ty),
+              method,
+            ) {
+              Some((params, _)) =>
+                check_arguments(env, params, args, ctx, "call `\{method}`")
+              None => ()
+            }
           }
         }
       }
@@ -5771,9 +5872,10 @@ fn check_call_args_in_expr(
         check_call_args_in_expr(env, a, ctx)
       }
     }
-    BinOp(_, l, r) => {
+    BinOp(op, l, r) => {
       check_call_args_in_expr(env, l, ctx)
       check_call_args_in_expr(env, r, ctx)
+      check_binop_operands(env, op, l, r, ctx)
     }
     UnaryOp(_, inner) => check_call_args_in_expr(env, inner, ctx)
     Cond(c, t, e) => {
@@ -5837,7 +5939,14 @@ fn check_call_args_in_expr(
         _ => ()
       }
       let recv_ty = infer_expr(env, ctx.resolver, recv)
-      if is_checkable(recv_ty) &&
+      // Null/undefined receiver: `.foo` on `null | undefined` is a runtime error.
+      if is_nullable_type(recv_ty) {
+        record(
+          ctx,
+          "PropAccess `.\{prop}`",
+          "cannot access `.\{prop}` — receiver may be null or undefined",
+        )
+      } else if is_checkable(recv_ty) &&
         !(ctx.resolver.lookup_field(recv_ty, prop) is Some(_)) {
         record(
           ctx,

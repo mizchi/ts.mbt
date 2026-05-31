@@ -5004,6 +5004,32 @@ test "expr_check: deliberate type violations are detected" {
         #|}
       ),
     ),
+    (
+      "arithmetic-on-string",
+      (
+        #|function f(x: string): number {
+        #|  return x - 1;
+        #|}
+      ),
+    ),
+    (
+      "call-non-function",
+      (
+        #|function f(): void {
+        #|  const x: number = 5;
+        #|  x();
+        #|}
+      ),
+    ),
+    (
+      "method-call-on-null",
+      (
+        #|function f(): string {
+        #|  const x: null = null;
+        #|  return x.toString();
+        #|}
+      ),
+    ),
   ]
   let mut misses = 0
   for c in cases {
@@ -5082,5 +5108,85 @@ test "expr_check: index signature variable key — returns value type" {
       assert_eq(issues.length(), 0)
     }
     None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: arithmetic on string is flagged" {
+  // `"str" - 1` should be an error — strings are not valid for subtraction.
+  let src =
+    #|function f(x: string): number {
+    #|  return x - 1;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let found = issues.iter().any(fn(i) { i.message.contains("not a valid number type") })
+      assert_true(found)
+    }
+    None => fail("function not found")
+  }
+}
+
+///|
+test "expr_check: arithmetic on number is allowed" {
+  let src =
+    #|function f(x: number, y: number): number {
+    #|  return x - y;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      assert_eq(issues.length(), 0)
+    }
+    None => fail("function not found")
+  }
+}
+
+///|
+test "expr_check: calling a non-function is flagged" {
+  // `const x = 5; x()` — x is number, not callable.
+  let src =
+    #|function f(): void {
+    #|  const x: number = 5;
+    #|  x();
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let found = issues.iter().any(fn(i) { i.message.contains("not callable") })
+      assert_true(found)
+    }
+    None => fail("function not found")
+  }
+}
+
+///|
+test "expr_check: calling a function is allowed" {
+  let src =
+    #|function add(x: number, y: number): number { return x + y; }
+    #|function f(): number {
+    #|  return add(1, 2);
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: null.prop access is flagged" {
+  // Accessing a property on `null` directly is a runtime error.
+  let src =
+    #|function f(): string {
+    #|  const x: null = null;
+    #|  return x.toString();
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let found = issues.iter().any(fn(i) { i.message.contains("null or undefined") })
+      assert_true(found)
+    }
+    None => fail("function not found")
   }
 }
