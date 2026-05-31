@@ -1970,6 +1970,40 @@ fn is_arithmetic_compatible(ty : @ast.TsType) -> Bool {
 }
 
 ///|
+// Returns true when two types might share a common value at runtime —
+// used to detect comparisons like `number === string` that are always false.
+// Conservative: returns true (allows) when either side is Any, Never, a
+// union/intersection, a named reference, or an object shape (those are
+// structural and could overlap via subtypes).
+fn types_can_overlap(a : @ast.TsType, b : @ast.TsType) -> Bool {
+  match (a, b) {
+    (Any, _) | (_, Any) => true
+    (Never, _) | (_, Never) => true
+    (Union(_), _) | (_, Union(_)) => true
+    (Intersection(_), _) | (_, Intersection(_)) => true
+    (Named(_), _) | (_, Named(_)) => true
+    (Applied(_, _), _) | (_, Applied(_, _)) => true
+    (Object(_), _) | (_, Object(_)) => true
+    (Struct(_, _), _) | (_, Struct(_, _)) => true
+    // Same primitive families overlap with each other and their literals.
+    (Number, Number) | (Number, NumberLiteral(_)) | (NumberLiteral(_), Number) => true
+    (NumberLiteral(a_), NumberLiteral(b_)) => a_ == b_
+    (String_, String_) | (String_, Literal(_)) | (Literal(_), String_) => true
+    (Literal(a_), Literal(b_)) => a_ == b_
+    (Boolean, Boolean)
+    | (Boolean, BooleanLiteral(_))
+    | (BooleanLiteral(_), Boolean) => true
+    (BooleanLiteral(a_), BooleanLiteral(b_)) => a_ == b_
+    (BigInt, BigInt)
+    | (BigInt, BigIntLiteral(_))
+    | (BigIntLiteral(_), BigInt) => true
+    (Null, Null) | (Undefined, Undefined) => true
+    // Cross-family primitives never overlap.
+    _ => false
+  }
+}
+
+///|
 fn check_binop_operands(
   env : ExprEnv,
   op : @ast.TsBinOp,
@@ -1993,6 +2027,21 @@ fn check_binop_operands(
           ctx,
           "binary op",
           "right operand `\{type_display(rt)}` is not a valid number type",
+        )
+      }
+    }
+    // Strict equality: comparing two types with no overlap is always false.
+    // e.g., `someNumber === "hello"` or `true === 42`.
+    BinEq | BinNe => {
+      let lt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, l))
+      let rt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, r))
+      if is_checkable(lt) &&
+        is_checkable(rt) &&
+        !types_can_overlap(lt, rt) {
+        record(
+          ctx,
+          "strict equality",
+          "comparing `\{type_display(lt)}` and `\{type_display(rt)}` with === will always be false",
         )
       }
     }
@@ -5599,11 +5648,24 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
     }
     ForOf(_, binding, declared, iter, body) => {
       check_call_args_in_expr(env, iter, ctx)
+      let iter_ty = infer_expr(env, ctx.resolver, iter)
+      let inferred_elem = for_of_element_type(ctx.resolver, iter_ty)
       let elem_ty = if is_checkable(declared) {
+        // Validate the declared annotation against the actual element type.
+        if is_checkable(inferred_elem) &&
+          !is_assignable_to(
+            ctx.resolver.unwrap(inferred_elem),
+            ctx.resolver.unwrap(declared),
+          ) {
+          record(
+            ctx,
+            "for-of binding",
+            "declared `\{type_display(declared)}` but iterable yields `\{type_display(inferred_elem)}`",
+          )
+        }
         declared
       } else {
-        let iter_ty = infer_expr(env, ctx.resolver, iter)
-        for_of_element_type(ctx.resolver, iter_ty)
+        inferred_elem
       }
       let pre = env.full_snapshot()
       bind_pattern(env, ctx, binding, elem_ty)
@@ -5612,14 +5674,24 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
     }
     ForAwaitOf(_, binding, declared, iter, body) => {
       check_call_args_in_expr(env, iter, ctx)
+      let iter_ty = infer_expr(env, ctx.resolver, iter)
+      let unwrapped = unwrap_async_return(true, iter_ty)
+      let inferred_elem = for_of_element_type(ctx.resolver, unwrapped)
       let elem_ty = if is_checkable(declared) {
+        if is_checkable(inferred_elem) &&
+          !is_assignable_to(
+            ctx.resolver.unwrap(inferred_elem),
+            ctx.resolver.unwrap(declared),
+          ) {
+          record(
+            ctx,
+            "for-await-of binding",
+            "declared `\{type_display(declared)}` but iterable yields `\{type_display(inferred_elem)}`",
+          )
+        }
         declared
       } else {
-        let iter_ty = infer_expr(env, ctx.resolver, iter)
-        // `for await (const x of asyncIter)` — unwrap `Promise<T>` and treat
-        // the inner type as the iterable.
-        let unwrapped = unwrap_async_return(true, iter_ty)
-        for_of_element_type(ctx.resolver, unwrapped)
+        inferred_elem
       }
       let pre = env.full_snapshot()
       bind_pattern(env, ctx, binding, elem_ty)
@@ -5627,12 +5699,18 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       env.restore_from(pre)
     }
     ForIn(_, binding, declared, iter, body) => {
-      // `for (key in obj)` — `key` is always `string` in TS; honor an
-      // explicit annotation if the source pinned a narrower form.
+      // `for (key in obj)` — `key` is always `string` in JS/TS.
+      // A declared type that doesn't accept `string` is an error.
       check_call_args_in_expr(env, iter, ctx)
-      let key_ty = if is_checkable(declared) {
-        declared
-      } else {
+      if is_checkable(declared) &&
+        !is_assignable_to(@ast.TsType::String_, ctx.resolver.unwrap(declared)) {
+        record(
+          ctx,
+          "for-in binding",
+          "for-in key is always `string`, but declared as `\{type_display(declared)}`",
+        )
+      }
+      let key_ty = if is_checkable(declared) { declared } else {
         @ast.TsType::String_
       }
       let pre = env.full_snapshot()

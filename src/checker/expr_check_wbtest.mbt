@@ -5030,6 +5030,30 @@ test "expr_check: deliberate type violations are detected" {
         #|}
       ),
     ),
+    (
+      "for-of-wrong-element-type",
+      (
+        #|function f(arr: string[]): void {
+        #|  for (const x: number of arr) { }
+        #|}
+      ),
+    ),
+    (
+      "for-in-number-key",
+      (
+        #|function f(obj: Record<string, number>): void {
+        #|  for (const k: number in obj) { }
+        #|}
+      ),
+    ),
+    (
+      "strict-equality-incompatible",
+      (
+        #|function f(n: number): boolean {
+        #|  return n === "hello";
+        #|}
+      ),
+    ),
   ]
   let mut misses = 0
   for c in cases {
@@ -5186,6 +5210,86 @@ test "expr_check: null.prop access is flagged" {
       let issues = check_function_body(f)
       let found = issues.iter().any(fn(i) { i.message.contains("null or undefined") })
       assert_true(found)
+    }
+    None => fail("function not found")
+  }
+}
+
+///|
+test "expr_check: for-of with wrong element type annotation is flagged" {
+  // `for (const x: number of stringArr)` — string[] yields string, not number.
+  let src =
+    #|function f(arr: string[]): void {
+    #|  for (const x: number of arr) { }
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let found = issues.iter().any(fn(i) { i.message.contains("yields") })
+      assert_true(found)
+    }
+    None => fail("function not found")
+  }
+}
+
+///|
+test "expr_check: for-of with correct element type annotation is ok" {
+  let src =
+    #|function f(arr: string[]): void {
+    #|  for (const x: string of arr) { }
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      assert_eq(issues.length(), 0)
+    }
+    None => fail("function not found")
+  }
+}
+
+///|
+test "expr_check: for-in key is always string — number annotation is flagged" {
+  let src =
+    #|function f(obj: Record<string, number>): void {
+    #|  for (const k: number in obj) { }
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let found = issues.iter().any(fn(i) { i.message.contains("for-in key") })
+      assert_true(found)
+    }
+    None => fail("function not found")
+  }
+}
+
+///|
+test "expr_check: strict equality on incompatible types is flagged" {
+  // `n === "hello"` where n: number — this is always false.
+  let src =
+    #|function f(n: number): boolean {
+    #|  return n === "hello";
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let found = issues.iter().any(fn(i) { i.message.contains("always be false") })
+      assert_true(found)
+    }
+    None => fail("function not found")
+  }
+}
+
+///|
+test "expr_check: strict equality on same types is ok" {
+  let src =
+    #|function f(n: number): boolean {
+    #|  return n === 42;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      assert_eq(issues.length(), 0)
     }
     None => fail("function not found")
   }
