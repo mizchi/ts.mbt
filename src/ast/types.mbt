@@ -18,7 +18,11 @@ pub(all) enum TsType {
   // not. Bridge emit still lowers the type to `Symbol` / `JSValue`.
   UniqueSymbol(String)
   // Special types
-  Any // unknown/any
+  Any // TS `any` — bidirectional escape hatch (flows to and from anything).
+  // TS `unknown` — the safe top type. Everything is assignable to it, but
+  // it can only flow into `Unknown` / `Any` until narrowed. Distinct from
+  // `Any` so the checker can enforce the narrowing requirement.
+  Unknown
   Never // bottom type (no value)
   Null // null
   Undefined // undefined

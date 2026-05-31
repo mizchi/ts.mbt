@@ -209,6 +209,215 @@ fn func_params_assignable(
 }
 
 ///|
+// Set of strings a placeholder type can produce, used to decide whether a
+// concrete substring satisfies the placeholder. `None` means "any string
+// fits" (e.g. when the placeholder is `string` or a numeric primitive in a
+// stringified position); `Some([...])` enumerates the exact accepted
+// substrings. The caller decides which.
+fn template_arg_accepts_substring(arg : @ast.TsType, sub : String) -> Bool {
+  match arg {
+    String_ => true
+    Number => is_number_string(sub)
+    BigInt => is_bigint_string(sub)
+    Boolean => sub == "true" || sub == "false"
+    Literal(name) => sub == name
+    NumberLiteral(name) => sub == name
+    BigIntLiteral(name) => sub == name
+    BooleanLiteral(true) => sub == "true"
+    BooleanLiteral(false) => sub == "false"
+    Union(members) => {
+      for m in members {
+        if template_arg_accepts_substring(m, sub) {
+          return true
+        }
+      }
+      false
+    }
+    _ =>
+      // Unknown / opaque type — conservatively accept so we don't reject a
+      // template that might be compatible after substitution.
+      true
+  }
+}
+
+///|
+fn is_number_string(s : String) -> Bool {
+  if s.length() == 0 {
+    return false
+  }
+  let mut seen_digit = false
+  let mut seen_dot = false
+  for i in 0..<s.length() {
+    let c = s[i].to_int().unsafe_to_char()
+    if c >= '0' && c <= '9' {
+      seen_digit = true
+    } else if c == '.' && !seen_dot {
+      seen_dot = true
+    } else if (c == '-' || c == '+') && i == 0 {
+      ()
+    } else {
+      return false
+    }
+  }
+  seen_digit
+}
+
+///|
+fn is_bigint_string(s : String) -> Bool {
+  if s.length() == 0 {
+    return false
+  }
+  for i in 0..<s.length() {
+    let c = s[i].to_int().unsafe_to_char()
+    if c >= '0' && c <= '9' {
+      ()
+    } else if (c == '-' || c == '+') && i == 0 {
+      ()
+    } else {
+      return false
+    }
+  }
+  true
+}
+
+///|
+// Try to match a concrete string against a TemplateLiteralType pattern.
+// parts.length() == args.length() + 1; the pattern is
+//   parts[0] · ⟨arg[0]⟩ · parts[1] · ⟨arg[1]⟩ · ... · parts[N]
+// Matching greedily finds prefix / suffix bounds per part and verifies the
+// intervening substring is accepted by each placeholder type.
+fn literal_matches_template(
+  name : String,
+  parts : Array[String],
+  args : Array[@ast.TsType],
+  _bivariant_params : Bool,
+) -> Bool {
+  match try_match_literal_template(name, 0, parts, 0, args) {
+    Some(_) => true
+    None => false
+  }
+}
+
+///|
+// Recursive descent over template parts. Returns `Some(remaining_index)` on
+// success so callers can confirm the whole input was consumed.
+fn try_match_literal_template(
+  name : String,
+  pos : Int,
+  parts : Array[String],
+  arg_idx : Int,
+  args : Array[@ast.TsType],
+) -> Int? {
+  let part = parts[arg_idx]
+  // Source must contain `part` starting at `pos`.
+  if pos + part.length() > name.length() {
+    return None
+  }
+  for i in 0..<part.length() {
+    if name[pos + i] != part[i] {
+      return None
+    }
+  }
+  let after_part = pos + part.length()
+  if arg_idx >= args.length() {
+    // No more placeholders: the rest of `name` must be empty.
+    return if after_part == name.length() { Some(after_part) } else { None }
+  }
+  // Greedy/backtracking: try each split point in [after_part, end_for_next_part]
+  // and see whether the gap text satisfies args[arg_idx] AND the remaining
+  // string parses for the rest of the pattern.
+  let next_part = parts[arg_idx + 1]
+  let last_search = name.length() - next_part.length()
+  if last_search < after_part {
+    return None
+  }
+  for split in after_part..<=last_search {
+    let buf = StringBuilder::new()
+    for i in after_part..<split {
+      buf.write_char(name[i].to_int().unsafe_to_char())
+    }
+    let gap = buf.to_string()
+    if template_arg_accepts_substring(args[arg_idx], gap) {
+      match try_match_literal_template(name, split, parts, arg_idx + 1, args) {
+        Some(end) => return Some(end)
+        None => ()
+      }
+    }
+  }
+  None
+}
+
+///|
+// A template literal type can produce the single literal `name` iff the
+// template is structurally equivalent to that literal: all parts concatenate
+// to `name` and all placeholders are unit (singleton literal) types.
+fn template_produces_single(
+  parts : Array[String],
+  args : Array[@ast.TsType],
+  name : String,
+) -> Bool {
+  let buf = StringBuilder::new()
+  for i in 0..<parts.length() {
+    buf.write_string(parts[i])
+    if i < args.length() {
+      match args[i] {
+        Literal(s) | NumberLiteral(s) | BigIntLiteral(s) => buf.write_string(s)
+        BooleanLiteral(true) => buf.write_string("true")
+        BooleanLiteral(false) => buf.write_string("false")
+        _ => return false
+      }
+    }
+  }
+  buf.to_string() == name
+}
+
+///|
+// Two TemplateLiteralType compatibility. The conservative branch (matching
+// parts arrays) is the common case; for differing parts we attempt to match
+// the source's structure against the target by combining adjacent literal
+// parts where possible.
+fn template_assignable(
+  s_parts : Array[String],
+  s_args : Array[@ast.TsType],
+  t_parts : Array[String],
+  t_args : Array[@ast.TsType],
+  bivariant_params : Bool,
+) -> Bool {
+  if s_parts == t_parts && s_args.length() == t_args.length() {
+    for i in 0..<s_args.length() {
+      if !is_assignable_to_inner(s_args[i], t_args[i], bivariant_params) {
+        return false
+      }
+    }
+    return true
+  }
+  // Differing parts: source assignable to target iff target's first/last
+  // literal anchors are a prefix/suffix of source's first/last literal
+  // anchors AND the source produces no string violating target's
+  // placeholders. We approximate by enforcing prefix/suffix match.
+  if s_parts.length() == 0 || t_parts.length() == 0 {
+    return false
+  }
+  let s_first = s_parts[0]
+  let t_first = t_parts[0]
+  let s_last = s_parts[s_parts.length() - 1]
+  let t_last = t_parts[t_parts.length() - 1]
+  if !s_first.has_prefix(t_first) || !s_last.has_suffix(t_last) {
+    return false
+  }
+  // For the conservative TS-aligned approximation: when target has a
+  // single placeholder of the widest stringifiable type (`string`), any
+  // template with matching anchors fits. Otherwise we punt.
+  if t_args.length() == 1 {
+    match t_args[0] {
+      String_ => return true
+      _ => ()
+    }
+  }
+  false
+}
+
+///|
 pub fn is_assignable_to_bivariant(
   source : @ast.TsType,
   target : @ast.TsType,
@@ -243,6 +452,18 @@ fn is_assignable_to_inner(
   }
   match source {
     Any => return true
+    _ => ()
+  }
+  // `unknown` is the safe top type: every source flows into it, but it
+  // only flows out to `unknown` itself (and `any`, which was already
+  // handled above). This is what gives `unknown` its narrowing
+  // discipline relative to `any`.
+  match target {
+    Unknown => return true
+    _ => ()
+  }
+  match source {
+    Unknown => return false
     _ => ()
   }
   // `never` is the bottom type: anything accepts it as a source.
@@ -305,24 +526,22 @@ fn is_assignable_to_inner(
   match (source, target) {
     // Literal subtyping: each literal kind narrows its primitive companion.
     (Literal(_), String_) => true
-    // Template literal types are a subtype of string (and of each other when
-    // they resolve to the same string set, which we approximate as true when
-    // both are TemplateLiteralType — a conservative over-approximation).
+    // Template literal types are a subtype of string. Two TemplateLiteralType
+    // values are compatible when the source's set of producible strings is a
+    // subset of the target's: we check by matching part literals position-wise
+    // and verifying each placeholder's source type flows into the target's.
     (TemplateLiteralType(_, _), String_) => true
-    (TemplateLiteralType(_, _), Literal(_)) => false
+    (TemplateLiteralType(s_parts, s_args), Literal(name)) =>
+      // Source produces multiple strings; the only way it fits a single
+      // literal is if every placeholder is itself a literal matching at
+      // the right offset. Reuse the literal->template matcher symmetrically.
+      template_produces_single(s_parts, s_args, name)
+    (Literal(name), TemplateLiteralType(t_parts, t_args)) =>
+      // String literal matches a template pattern iff prefix/suffix line up
+      // and each placeholder-bounded gap satisfies the placeholder's type.
+      literal_matches_template(name, t_parts, t_args, bivariant_params)
     (TemplateLiteralType(s_parts, s_args), TemplateLiteralType(t_parts, t_args)) =>
-      s_parts == t_parts &&
-      s_args.length() == t_args.length() &&
-      ({
-        let mut ok = true
-        for i in 0..<s_args.length() {
-          if !is_assignable_to_inner(s_args[i], t_args[i], bivariant_params) {
-            ok = false
-            break
-          }
-        }
-        ok
-      })
+      template_assignable(s_parts, s_args, t_parts, t_args, bivariant_params)
     (NumberLiteral(_), Number) => true
     (BigIntLiteral(_), BigInt) => true
     (BooleanLiteral(_), Boolean) => true
@@ -331,6 +550,32 @@ fn is_assignable_to_inner(
     // `ReadonlyArray<T>` form. Element type is covariant.
     (Array(s_inner), Applied(t_name, [t_inner])) =>
       if is_array_like_iterable_name(t_name) {
+        is_assignable_to_inner(s_inner, t_inner, bivariant_params)
+      } else {
+        false
+      }
+    // `Array<T>` (Applied form) and `T[]` (Array form) are interchangeable
+    // in TS. Treat `Applied("Array", [T])` as the canonical array on the
+    // source side too, so it flows into `Array(U)` and into the other
+    // iterable-named target types.
+    (Applied("Array", [s_inner]), Array(t_inner)) =>
+      is_assignable_to_inner(s_inner, t_inner, bivariant_params)
+    // Readonly arrays / iterable protocol types: when the source is named
+    // with one of the array-like iterable names, allow it to flow into any
+    // other array-like iterable name (element type covariant). Excludes
+    // `Array` itself from the source side to preserve readonly→mutable
+    // rejection (that's the TS rule we care about).
+    (Applied(s_name, [s_inner]), Applied(t_name, [t_inner])) =>
+      if s_name == t_name {
+        is_assignable_to_inner(s_inner, t_inner, bivariant_params)
+      } else if is_array_like_iterable_name(s_name) &&
+        is_array_like_iterable_name(t_name) &&
+        // Mutable→readonly is fine; readonly→mutable is not. `Array`
+        // doesn't appear in `is_array_like_iterable_name`, so a
+        // mutable source named `Applied("Array", ...)` lands in the
+        // preceding `(Applied("Array", ...), Array(...))` branch and
+        // never reaches here.
+        t_name != "Array" {
         is_assignable_to_inner(s_inner, t_inner, bivariant_params)
       } else {
         false
@@ -437,6 +682,50 @@ fn struct_fields_to_object(
 }
 
 ///|
+// True when the key represents an index signature rather than a named
+// property. TS supports `string`, `number`, and `symbol` keyed index
+// signatures (and the parser may also surface `Literal("__index__")`
+// shapes — those are unrelated and not handled here).
+fn is_index_signature_key(key : @ast.TsType) -> Bool {
+  match key {
+    String_ | Number | Symbol => true
+    _ => false
+  }
+}
+
+///|
+// Pull out the value type of an index signature on `key_kind` if `fields`
+// declares one. Returns `None` when no matching signature exists.
+fn find_index_signature(
+  fields : Array[(@ast.TsType, @ast.TsType)],
+  key_kind : @ast.TsType,
+) -> @ast.TsType? {
+  for f in fields {
+    if f.0 == key_kind {
+      return Some(f.1)
+    }
+  }
+  None
+}
+
+///|
+// Which index-signature bucket a literal key falls into. TS coerces
+// numeric-string literal keys (`"0"`, `"42"`) into the number-index
+// signature when one exists; otherwise the string-index signature.
+fn literal_key_index_bucket(key : @ast.TsType) -> @ast.TsType? {
+  match key {
+    Literal(name) =>
+      if is_number_string(name) {
+        Some(Number)
+      } else {
+        Some(String_)
+      }
+    NumberLiteral(_) => Some(Number)
+    _ => None
+  }
+}
+
+///|
 fn is_object_assignable_inner(
   s_fields : Array[(@ast.TsType, @ast.TsType)],
   t_fields : Array[(@ast.TsType, @ast.TsType)],
@@ -444,6 +733,25 @@ fn is_object_assignable_inner(
 ) -> Bool {
   for t_field in t_fields {
     let (t_key, t_type) = t_field
+    if is_index_signature_key(t_key) {
+      // Every source field of a matching kind must satisfy the signature.
+      for s_field in s_fields {
+        let (s_key, s_type) = s_field
+        let bucket = if is_index_signature_key(s_key) {
+          Some(s_key)
+        } else {
+          literal_key_index_bucket(s_key)
+        }
+        match bucket {
+          Some(k) if k == t_key =>
+            if !is_assignable_to_inner(s_type, t_type, bivariant_params) {
+              return false
+            }
+          _ => ()
+        }
+      }
+      continue
+    }
     let mut matched = false
     for s_field in s_fields {
       let (s_key, s_type) = s_field
@@ -455,12 +763,33 @@ fn is_object_assignable_inner(
         break
       }
     }
-    if !matched {
-      // A target field whose type accepts `undefined` (the desugaring of
-      // `x?: T`) tolerates the source missing that field entirely.
-      if !type_accepts_undefined(t_type) {
-        return false
-      }
+    if matched {
+      continue
+    }
+    // No exact source field — try matching against a source index signature
+    // of the appropriate bucket. `{ [k: string]: number }` is assignable to
+    // `{ foo: number }` because the indexer guarantees the named key, too.
+    let bucket = literal_key_index_bucket(t_key)
+    let source_index_value = match bucket {
+      Some(Number) =>
+        match find_index_signature(s_fields, Number) {
+          Some(v) => Some(v)
+          None => find_index_signature(s_fields, String_)
+        }
+      Some(String_) => find_index_signature(s_fields, String_)
+      _ => None
+    }
+    match source_index_value {
+      Some(v) =>
+        if is_assignable_to_inner(v, t_type, bivariant_params) {
+          continue
+        }
+      None => ()
+    }
+    // A target field whose type accepts `undefined` (the desugaring of
+    // `x?: T`) tolerates the source missing that field entirely.
+    if !type_accepts_undefined(t_type) {
+      return false
     }
   }
   true

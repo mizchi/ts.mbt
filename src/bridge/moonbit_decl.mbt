@@ -3254,6 +3254,7 @@ fn utility_record_type_suffix(type_ : @ast.TsType) -> String {
     BigInt => "BigInt"
     Symbol => "Symbol"
     Any => "Any"
+    Unknown => "Unknown"
     Never => "Never"
     Null => "Null"
     Undefined => "Undefined"
@@ -7760,6 +7761,10 @@ fn decl_type_widening_score(type_ : @ast.TsType) -> Int {
   }
   match type_ {
     Any => 100
+    // `unknown` is structurally the safest top — semantically it scores
+    // as wide as `any` for the bridge's overload-collapse heuristic
+    // (both indicate the user opted out of a concrete signature).
+    Unknown => 100
     Func(params, return_type) => {
       let mut score = 40 + decl_type_widening_score(return_type)
       for param in params {

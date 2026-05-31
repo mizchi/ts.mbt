@@ -45,6 +45,25 @@ pub fn is_assignable_to_with_generics(
 }
 
 ///|
+// Maximum depth of recursive alias expansion. TS allows recursive type
+// aliases that terminate (e.g. `DeepReadonly<T>` over a finite object
+// tree); we permit up to this many nested expansions of the same alias
+// name before collapsing to `Any`. 16 is enough for typical real-world
+// JSON / DOM / virtual-tree shapes while still bounding work.
+let alias_expansion_depth_limit : Int = 16
+
+///|
+fn visited_count(visited : Array[String], name : String) -> Int {
+  let mut n = 0
+  for v in visited {
+    if v == name {
+      n = n + 1
+    }
+  }
+  n
+}
+
+///|
 fn expand_generic(
   type_ : @ast.TsType,
   resolve : (String) -> AliasBinding?,
@@ -52,7 +71,7 @@ fn expand_generic(
 ) -> @ast.TsType {
   match type_ {
     Named(name) =>
-      if visited.contains(name) {
+      if visited_count(visited, name) >= alias_expansion_depth_limit {
         Any
       } else {
         match resolve(name) {
@@ -74,7 +93,7 @@ fn expand_generic(
       for a in args {
         resolved_args.push(expand_generic(a, resolve, visited))
       }
-      if visited.contains(name) {
+      if visited_count(visited, name) >= alias_expansion_depth_limit {
         return Any
       }
       match resolve(name) {

@@ -22,6 +22,21 @@ test "is_assignable_to: any flows in both directions" {
 }
 
 ///|
+// `unknown` is the safe top type — every source flows in but it only
+// flows out to itself (and `any`). This is what distinguishes it from
+// `any` semantically.
+test "is_assignable_to: unknown accepts everything but flows out only to unknown/any" {
+  assert_true(is_assignable_to(String_, Unknown))
+  assert_true(is_assignable_to(Number, Unknown))
+  assert_true(is_assignable_to(Object([(Literal("x"), Number)]), Unknown))
+  assert_true(is_assignable_to(Unknown, Unknown))
+  assert_true(is_assignable_to(Unknown, Any))
+  // `unknown` does not flow into a concrete type without narrowing.
+  assert_false(is_assignable_to(Unknown, String_))
+  assert_false(is_assignable_to(Unknown, Object([(Literal("x"), Number)])))
+}
+
+///|
 test "is_assignable_to: never is assignable to anything but only never accepts never" {
   assert_true(is_assignable_to(Never, String_))
   assert_true(is_assignable_to(Never, Number))
@@ -232,6 +247,96 @@ test "is_assignable_to: source rest param absorbs target tail" {
       Func([String_], Void),
     ),
   )
+}
+
+///|
+// Template literal type membership: a string literal source flows into a
+// template target when prefix/suffix line up and each placeholder accepts
+// the gap. Mirrors TS:
+//   const x: `pre_${string}` = "pre_xyz"        // OK
+//   const y: `${number}px` = "10px"             // OK
+//   const z: `${number}px` = "abcpx"            // error
+test "is_assignable_to: literal source flows into template pattern" {
+  // Prefix + open string placeholder.
+  assert_true(
+    is_assignable_to(
+      Literal("pre_xyz"),
+      TemplateLiteralType(["pre_", ""], [String_]),
+    ),
+  )
+  // Numeric placeholder accepts a numeric substring.
+  assert_true(
+    is_assignable_to(Literal("10px"), TemplateLiteralType(["", "px"], [Number])),
+  )
+  // Numeric placeholder rejects a non-numeric substring.
+  assert_false(
+    is_assignable_to(
+      Literal("abcpx"),
+      TemplateLiteralType(["", "px"], [Number]),
+    ),
+  )
+  // Prefix mismatch.
+  assert_false(
+    is_assignable_to(
+      Literal("post_xyz"),
+      TemplateLiteralType(["pre_", ""], [String_]),
+    ),
+  )
+}
+
+///|
+// Index signatures: `{ [k: string]: V }` on the target accepts any source
+// named field whose type satisfies V; on the source it satisfies any
+// target named field of the same value type. Numeric-literal keys flow
+// into a `Number` index when the target has one.
+test "is_assignable_to: index signatures accept named properties" {
+  // `{ x: number, y: number }` → `{ [k: string]: number }`
+  let any_string_to_number : @ast.TsType = Object([(String_, Number)])
+  assert_true(
+    is_assignable_to(
+      Object([(Literal("x"), Number), (Literal("y"), Number)]),
+      any_string_to_number,
+    ),
+  )
+  // Mismatched value type is rejected.
+  assert_false(
+    is_assignable_to(Object([(Literal("x"), String_)]), any_string_to_number),
+  )
+  // Source index signature flows into target named property of same type.
+  assert_true(
+    is_assignable_to(any_string_to_number, Object([(Literal("x"), Number)])),
+  )
+  // Numeric-literal keys land in the number bucket.
+  assert_true(
+    is_assignable_to(
+      Object([(Literal("0"), String_), (Literal("1"), String_)]),
+      Object([(Number, String_)]),
+    ),
+  )
+}
+
+///|
+// Readonly arrays: TS allows `T[] → ReadonlyArray<T>` but not the
+// reverse. The Applied form of `Array<T>` is interchangeable with the
+// `T[]` form.
+test "is_assignable_to: readonly array variance" {
+  // Mutable into readonly is fine.
+  assert_true(
+    is_assignable_to(Array(Number), Applied("ReadonlyArray", [Number])),
+  )
+  // Readonly into mutable is rejected.
+  assert_false(
+    is_assignable_to(Applied("ReadonlyArray", [Number]), Array(Number)),
+  )
+  // Readonly into Iterable is fine (covariant element).
+  assert_true(
+    is_assignable_to(
+      Applied("ReadonlyArray", [Number]),
+      Applied("Iterable", [Number]),
+    ),
+  )
+  // `Array<T>` (Applied) flows into `T[]` (Array variant).
+  assert_true(is_assignable_to(Applied("Array", [Number]), Array(Number)))
 }
 
 ///|
