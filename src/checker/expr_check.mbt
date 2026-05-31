@@ -3266,7 +3266,14 @@ fn check_expr_against(
   if !is_checkable(expected) {
     return
   }
-  let inferred = infer_expr(env, ctx.resolver, expr)
+  // For a literal expression use its precise literal type so a literal-union
+  // target (`const x: 0 | 1 | 2 = 1`) sees `1` rather than the widened
+  // `number`. The literal is still assignable to the widened primitive, so
+  // this never weakens primitive-vs-primitive mismatch detection.
+  let inferred = match precise_literal_type(expr) {
+    Some(lit) => lit
+    None => infer_expr(env, ctx.resolver, expr)
+  }
   if !is_checkable(inferred) {
     return
   }
@@ -3275,7 +3282,11 @@ fn check_expr_against(
   let inferred_u = ctx.resolver.unwrap(inferred)
   let expected_u = ctx.resolver.unwrap(expected)
   if !is_assignable_to(inferred_u, expected_u) {
-    let detail = "expected `\{type_display(expected)}` but got `\{type_display(inferred)}`"
+    // Display the widened form of the inferred type (`number` rather than the
+    // precise `42`) so the message reads naturally; the precise literal was
+    // only needed for the assignability decision above.
+    let shown = widen_literal(inferred_u)
+    let detail = "expected `\{type_display(expected)}` but got `\{type_display(shown)}`"
     record(ctx, sub_path, detail)
   }
 }
@@ -3361,6 +3372,24 @@ fn check_array_lit_against_tuple(
 /// `1` → `number`, `true` → `boolean`. Used by JSX generic inference
 /// so type parameters don't collapse to a too-narrow literal type the
 /// user clearly didn't intend.
+// Map a literal *expression* to its precise literal *type* (`1` ->
+// `NumberLiteral("1")`, `true` -> `BooleanLiteral(true)`, `"a"` ->
+// `Literal("a")`). `infer_expr` widens these to `number` / `boolean` /
+// `string`, which makes assignability against a literal-union target
+// (`const x: 0 | 1 | 2 = 1`) spuriously fail. Returns `None` for non-literal
+// expressions.
+fn precise_literal_type(e : @ast.TsExpr) -> @ast.TsType? {
+  match e {
+    IntLit(i) => Some(@ast.TsType::NumberLiteral(i.to_string()))
+    NumberLit(d) => Some(@ast.TsType::NumberLiteral(d.to_string()))
+    BoolLit(b) => Some(@ast.TsType::BooleanLiteral(b))
+    StringLit(s) => Some(@ast.TsType::Literal(s))
+    BigIntLit(s) => Some(@ast.TsType::BigIntLiteral(s))
+    _ => None
+  }
+}
+
+///|
 fn widen_literal(t : @ast.TsType) -> @ast.TsType {
   match t {
     Literal(_) => @ast.TsType::String_
@@ -6675,12 +6704,9 @@ fn switch_covers_union(
       // so coverage of numeric / boolean discriminated unions would be missed.
       Some(e) =>
         labels.push(
-          match e {
-            IntLit(i) => @ast.TsType::NumberLiteral(i.to_string())
-            NumberLit(d) => @ast.TsType::NumberLiteral(d.to_string())
-            BoolLit(b) => @ast.TsType::BooleanLiteral(b)
-            StringLit(s) => @ast.TsType::Literal(s)
-            _ => resolver.unwrap(infer_expr(env, resolver, e))
+          match precise_literal_type(e) {
+            Some(lit) => lit
+            None => resolver.unwrap(infer_expr(env, resolver, e))
           },
         )
       None => ()

@@ -5059,6 +5059,14 @@ test "expr_check: deliberate type violations are detected" {
         #|}
       ),
     ),
+    (
+      "literal-out-of-union",
+      (
+        #|function f(): void {
+        #|  const e: 0 | 1 = 5;
+        #|}
+      ),
+    ),
   ]
   let mut misses = 0
   for c in cases {
@@ -5851,6 +5859,19 @@ test "expr_check: valid TS patterns are not false-positives" {
       (
         #|function f(s: string): boolean {
         #|  return typeof s === "number";
+        #|}
+      ),
+    ),
+    // Literal values assign to literal / literal-union targets — the literal
+    // type must not be widened before the assignability check.
+    (
+      "literal-to-literal-union",
+      (
+        #|function f(): void {
+        #|  const a: 0 | 1 | 2 = 1;
+        #|  const b: 1 = 1;
+        #|  const c: true = true;
+        #|  const d: "x" | "y" = "x";
         #|}
       ),
     ),
