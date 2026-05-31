@@ -5470,3 +5470,40 @@ test "expr_check: typeof string var compared to 'number' is flagged" {
     None => fail("function not found")
   }
 }
+
+///|
+test "expr_check: switch case type mismatch is flagged" {
+  // `switch(n: number) { case "hello": }` — string can never match number.
+  let src =
+    #|function f(n: number): void {
+    #|  switch (n) {
+    #|    case "hello": break;
+    #|  }
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let found = issues.iter().any(fn(i) { i.message.contains("can never match") })
+      assert_true(found)
+    }
+    None => fail("function not found")
+  }
+}
+
+///|
+test "expr_check: switch case with matching type is ok" {
+  let src =
+    #|function f(n: number): void {
+    #|  switch (n) {
+    #|    case 42: break;
+    #|    case 0: break;
+    #|  }
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      assert_eq(issues.length(), 0)
+    }
+    None => fail("function not found")
+  }
+}

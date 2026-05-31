@@ -5760,9 +5760,24 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         PropAccess(Var(name), prop) => Some((name, prop))
         _ => None
       }
+      let scrutinee_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, scrutinee))
       for case_ in cases {
         match case_.test_expr {
-          Some(e) => check_call_args_in_expr(env, e, ctx)
+          Some(e) => {
+            check_call_args_in_expr(env, e, ctx)
+            // Validate that the case test value could plausibly equal the
+            // scrutinee — catch `switch(n: number) { case "hello": }`.
+            let case_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, e))
+            if is_checkable(scrutinee_ty) &&
+              is_checkable(case_ty) &&
+              !types_can_overlap(scrutinee_ty, case_ty) {
+              record(
+                ctx,
+                "switch case",
+                "case value `\{type_display(case_ty)}` can never match scrutinee `\{type_display(scrutinee_ty)}`",
+              )
+            }
+          }
           None => ()
         }
         let pre = env.full_snapshot()
