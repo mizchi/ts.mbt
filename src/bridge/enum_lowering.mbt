@@ -135,7 +135,7 @@ fn enum_lowering_apply_string_intrinsic(
     return Some(value)
   }
   let head = value[0].unsafe_to_char()
-  let rest = value[1:].to_string()
+  let rest = value[1:].to_owned()
   match intrinsic {
     "Capitalize" =>
       if head >= 'a' && head <= 'z' {

@@ -4,3 +4,8 @@ import {
   "mizchi/ts/ast",
   "mizchi/ts/parser",
 }
+
+import {
+  "moonbitlang/core/debug",
+  "moonbitlang/core/test",
+} for "wbtest"

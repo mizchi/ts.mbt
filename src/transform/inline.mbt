@@ -516,8 +516,8 @@ fn try_inline(
     if j == i || j == i + 1 {
       continue
     }
-    let (local, nested) = count_var_uses_stmt(input[j], name, 0, 0, false)
-    if local != 0 || nested != 0 {
+    let (local_, nested) = count_var_uses_stmt(input[j], name, 0, 0, false)
+    if local_ != 0 || nested != 0 {
       return false
     }
   }
@@ -840,11 +840,11 @@ fn substitute_expr(
 fn count_var_uses_stmt(
   stmt : @ast.TsStmt,
   name : String,
-  local : Int,
+  local_ : Int,
   nested : Int,
   inside_func : Bool,
 ) -> (Int, Int) {
-  let mut l = local
+  let mut l = local_
   let mut n = nested
   match stmt {
     Var(_, _, e) | Let(_, _, e) | Const(_, _, e) => {
@@ -1068,11 +1068,11 @@ fn count_var_uses_block(
 fn count_var_uses_expr(
   expr : @ast.TsExpr,
   name : String,
-  local : Int,
+  local_ : Int,
   nested : Int,
   inside_func : Bool,
 ) -> (Int, Int) {
-  let mut l = local
+  let mut l = local_
   let mut n = nested
   match expr {
     Var(v) => if v == name { if inside_func { n = n + 1 } else { l = l + 1 } }

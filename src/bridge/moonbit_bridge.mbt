@@ -102,7 +102,7 @@ fn bridge_trim_underscores(name : String) -> String {
   while end_ > start && name[end_ - 1].unsafe_to_char() == '_' {
     end_ -= 1
   }
-  name[start:end_].to_string()
+  name[start:end_].to_owned()
 }
 
 ///|
@@ -220,7 +220,7 @@ fn bridge_split_top_level_commas(source : String) -> Array[String] {
   let mut brace_depth = 0
   for c in source {
     if c == ',' && paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 {
-      parts.push(current.trim().to_string())
+      parts.push(current.trim().to_owned())
       current = ""
       continue
     }
@@ -245,7 +245,7 @@ fn bridge_split_top_level_commas(source : String) -> Array[String] {
       }
     }
   }
-  let tail = current.trim().to_string()
+  let tail = current.trim().to_owned()
   if tail != "" || source.trim() != "" {
     parts.push(tail)
   }
@@ -266,12 +266,12 @@ fn bridge_to_pascal_case(name : String) -> String {
   let snake = bridge_to_snake_case(name)
   let mut result = ""
   for part_view in snake.split("_") {
-    let part = part_view.to_string()
+    let part = part_view.to_owned()
     if part == "" {
       continue
     }
     let head = bridge_to_upper_ascii(part[0].unsafe_to_char()).to_string()
-    result += head + part[1:].to_string()
+    result += head + part[1:].to_owned()
   }
   result
 }
@@ -282,7 +282,7 @@ fn parse_bridge_top_level_fn_decl_line(line : String) -> BridgeTopLevelFnDecl? {
   if !line.has_prefix(prefix) {
     return None
   }
-  let rest = line[prefix.length():].to_string()
+  let rest = line[prefix.length():].to_owned()
   let open = rest.find("(")
   let close = rest.rev_find(")")
   match open {
@@ -292,16 +292,16 @@ fn parse_bridge_top_level_fn_decl_line(line : String) -> BridgeTopLevelFnDecl? {
           if close_index < open_index {
             return None
           }
-          let public_name = rest[:open_index].to_string().trim().to_string()
+          let public_name = rest[:open_index].to_owned().trim().to_owned()
           if public_name.contains("::") {
             return None
           }
-          let params_src = rest[open_index + 1:close_index].to_string()
-          let after = rest[close_index + 1:].to_string().trim().to_string()
+          let params_src = rest[open_index + 1:close_index].to_owned()
+          let after = rest[close_index + 1:].to_owned().trim().to_owned()
           if !after.has_prefix("->") {
             return None
           }
-          let return_type = after[2:].to_string().trim().to_string()
+          let return_type = after[2:].to_owned().trim().to_owned()
           let arg_names : Array[String] = []
           if params_src.trim() != "" {
             for item in bridge_split_top_level_commas(params_src) {
@@ -310,7 +310,7 @@ fn parse_bridge_top_level_fn_decl_line(line : String) -> BridgeTopLevelFnDecl? {
               }
               match item.find(":") {
                 Some(index) =>
-                  arg_names.push(item[:index].to_string().trim().to_string())
+                  arg_names.push(item[:index].to_owned().trim().to_owned())
                 None => arg_names.push(item)
               }
             }
@@ -329,7 +329,7 @@ fn parse_bridge_pub_extern_fn_decl_line(line : String) -> BridgeTopLevelFnDecl? 
   if !line.has_prefix(prefix) {
     return None
   }
-  let rest = line[prefix.length():].to_string()
+  let rest = line[prefix.length():].to_owned()
   let open = rest.find("(")
   let close = rest.rev_find(")")
   match open {
@@ -339,18 +339,18 @@ fn parse_bridge_pub_extern_fn_decl_line(line : String) -> BridgeTopLevelFnDecl? 
           if close_index < open_index {
             return None
           }
-          let public_name = rest[:open_index].to_string().trim().to_string()
+          let public_name = rest[:open_index].to_owned().trim().to_owned()
           if public_name.contains("::") {
             return None
           }
-          let params_src = rest[open_index + 1:close_index].to_string()
-          let after = rest[close_index + 1:].to_string().trim().to_string()
+          let params_src = rest[open_index + 1:close_index].to_owned()
+          let after = rest[close_index + 1:].to_owned().trim().to_owned()
           if !after.has_prefix("->") {
             return None
           }
-          let return_src = after[2:].to_string().trim().to_string()
+          let return_src = after[2:].to_owned().trim().to_owned()
           let return_type = match return_src.find("=") {
-            Some(index) => return_src[:index].to_string().trim().to_string()
+            Some(index) => return_src[:index].to_owned().trim().to_owned()
             None => return_src
           }
           if return_type == "" {
@@ -364,7 +364,7 @@ fn parse_bridge_pub_extern_fn_decl_line(line : String) -> BridgeTopLevelFnDecl? 
               }
               match item.find(":") {
                 Some(index) =>
-                  arg_names.push(item[:index].to_string().trim().to_string())
+                  arg_names.push(item[:index].to_owned().trim().to_owned())
                 None => arg_names.push(item)
               }
             }
@@ -384,13 +384,13 @@ fn parse_bridge_param_decls(params_src : String) -> Array[BridgeParamDecl] {
     return decls
   }
   for item in bridge_split_top_level_commas(params_src) {
-    let trimmed = item.trim().to_string()
+    let trimmed = item.trim().to_owned()
     if trimmed == "" {
       continue
     }
     match trimmed.find(":") {
       Some(index) => {
-        let type_name = trimmed[index + 1:].to_string().trim().to_string()
+        let type_name = trimmed[index + 1:].to_owned().trim().to_owned()
         decls.push({ type_name, })
       }
       None => decls.push({ type_name: "" })
@@ -403,7 +403,7 @@ fn parse_bridge_param_decls(params_src : String) -> Array[BridgeParamDecl] {
 fn parse_bridge_public_type_name_line(line : String) -> String? {
   let prefix = "declare pub type "
   let rest = if line.has_prefix(prefix) {
-    line[prefix.length():].to_string().trim().to_string()
+    line[prefix.length():].to_owned().trim().to_owned()
   } else {
     let struct_prefixes = [
       "pub(all) struct ", "pub struct ", "pub(all) enum ", "pub enum ",
@@ -412,7 +412,7 @@ fn parse_bridge_public_type_name_line(line : String) -> String? {
     for struct_prefix in struct_prefixes {
       if line.has_prefix(struct_prefix) {
         parsed = Some(
-          line[struct_prefix.length():].to_string().trim().to_string(),
+          line[struct_prefix.length():].to_owned().trim().to_owned(),
         )
         break
       }
@@ -434,7 +434,7 @@ fn parse_bridge_public_type_name_line(line : String) -> String? {
     Some(idx) => if idx < end_ { end_ = idx }
     None => ()
   }
-  let type_name = rest[:end_].to_string().trim().to_string()
+  let type_name = rest[:end_].to_owned().trim().to_owned()
   if type_name == "" {
     None
   } else {
@@ -446,7 +446,7 @@ fn parse_bridge_public_type_name_line(line : String) -> String? {
 fn collect_bridge_public_type_names(bridge_mbti : String) -> Array[String] {
   let names : Array[String] = []
   for line_view in bridge_mbti.split("\n") {
-    let line = line_view.to_string().trim().to_string()
+    let line = line_view.to_owned().trim().to_owned()
     match parse_bridge_public_type_name_line(line) {
       Some(name) => if !names.contains(name) { names.push(name) }
       None => ()
@@ -465,7 +465,7 @@ fn parse_bridge_implemented_type_name_line(line : String) -> String? {
     if !line.has_prefix(prefix) {
       continue
     }
-    let rest = line[prefix.length():].to_string().trim().to_string()
+    let rest = line[prefix.length():].to_owned().trim().to_owned()
     if rest == "" {
       continue
     }
@@ -486,7 +486,7 @@ fn parse_bridge_implemented_type_name_line(line : String) -> String? {
       Some(idx) => if idx < end_ { end_ = idx }
       None => ()
     }
-    let type_name = rest[:end_].to_string().trim().to_string()
+    let type_name = rest[:end_].to_owned().trim().to_owned()
     if type_name != "" {
       return Some(type_name)
     }
@@ -504,16 +504,16 @@ fn bridge_struct_decl_arity(bridge_mbt : String, name : String) -> Int {
     "pub(all) struct ", "pub struct ", "pub(all) enum ", "pub enum ", "pub type ",
   ]
   for line_view in bridge_mbt.split("\n") {
-    let line = line_view.to_string().trim().to_string()
+    let line = line_view.to_owned().trim().to_owned()
     for prefix in prefixes {
       if !line.has_prefix(prefix) {
         continue
       }
-      let rest = line[prefix.length():].to_string().trim().to_string()
+      let rest = line[prefix.length():].to_owned().trim().to_owned()
       if !rest.has_prefix(name) {
         continue
       }
-      let after = rest[name.length():].to_string()
+      let after = rest[name.length():].to_owned()
       if after == "" ||
         after[0].to_int() == ' '.to_int() ||
         after[0].to_int() == '{'.to_int() ||
@@ -549,7 +549,7 @@ fn bridge_struct_decl_arity(bridge_mbt : String, name : String) -> Int {
 fn collect_bridge_implemented_type_names(bridge_mbt : String) -> Array[String] {
   let names : Array[String] = []
   for line_view in bridge_mbt.split("\n") {
-    let line = line_view.to_string().trim().to_string()
+    let line = line_view.to_owned().trim().to_owned()
     match parse_bridge_implemented_type_name_line(line) {
       Some(name) => if !names.contains(name) { names.push(name) }
       None => ()
@@ -565,7 +565,7 @@ fn parse_bridge_struct_header_line(line : String) -> (String, String)? {
     if !line.has_prefix(prefix) {
       continue
     }
-    let rest = line[prefix.length():].to_string().trim().to_string()
+    let rest = line[prefix.length():].to_owned().trim().to_owned()
     if rest == "" {
       continue
     }
@@ -582,12 +582,12 @@ fn parse_bridge_struct_header_line(line : String) -> (String, String)? {
       Some(idx) => if idx < end_ { end_ = idx }
       None => ()
     }
-    let name = rest[:end_].to_string().trim().to_string()
+    let name = rest[:end_].to_owned().trim().to_owned()
     let type_param_suffix = match rest.find("[") {
       Some(start) if start < rest.length() =>
         match rest.find("]") {
           Some(end_param) if end_param > start =>
-            rest[start:end_param + 1].to_string()
+            rest[start:end_param + 1].to_owned()
           _ => ""
         }
       _ => ""
@@ -606,7 +606,7 @@ fn collect_bridge_struct_decls(bridge_mbt : String) -> Array[BridgeStructDecl] {
   let mut current_type_param_suffix = ""
   let mut fields : Array[String] = []
   for line_view in bridge_mbt.split("\n") {
-    let line = line_view.to_string().trim().to_string()
+    let line = line_view.to_owned().trim().to_owned()
     match current_name {
       Some(name) =>
         if line == "}" {
@@ -673,8 +673,8 @@ fn expose_bridge_struct_decls_in_mbti(
   }
   let lines : Array[String] = []
   for line_view in bridge_mbti.split("\n") {
-    let line = line_view.to_string()
-    let trimmed = line.trim().to_string()
+    let line = line_view.to_owned()
+    let trimmed = line.trim().to_owned()
     match parse_bridge_public_type_name_line(trimmed) {
       Some(name) =>
         match find_bridge_struct_decl(struct_decls, name) {
@@ -693,22 +693,22 @@ fn parse_bridge_first_param_type(params_src : String) -> String? {
     return None
   }
   let first_param_src = match params_src.find(",") {
-    Some(index) => params_src[:index].to_string()
+    Some(index) => params_src[:index].to_owned()
     None => params_src
   }
-  let first_param = first_param_src.trim().to_string()
+  let first_param = first_param_src.trim().to_owned()
   match first_param.find(":") {
     Some(index) => {
-      let type_src = first_param[index + 1:].to_string().trim().to_string()
+      let type_src = first_param[index + 1:].to_owned().trim().to_owned()
       if type_src == "" {
         return None
       }
       let normalized = if type_src.has_suffix("?") {
-        type_src[:type_src.length() - 1].to_string()
+        type_src[:type_src.length() - 1].to_owned()
       } else {
         type_src
       }
-      Some(normalized.trim().to_string())
+      Some(normalized.trim().to_owned())
     }
     None => None
   }
@@ -722,7 +722,7 @@ fn bridge_type_guard_target_name(
   if !public_name.has_prefix("is") || public_name.length() <= 2 {
     return None
   }
-  let target_name = public_name[2:].to_string()
+  let target_name = public_name[2:].to_owned()
   if type_names.contains(target_name) {
     Some(target_name)
   } else {
@@ -740,7 +740,7 @@ fn collect_bridge_type_guard_helpers(
   let helpers : Array[BridgeTypeGuardHelper] = []
   let seen_helpers : Array[String] = []
   for line_view in bridge_mbti.split("\n") {
-    let line = line_view.to_string().trim().to_string()
+    let line = line_view.to_owned().trim().to_owned()
     match parse_bridge_top_level_fn_decl_line(line) {
       Some(fn_decl) => {
         if fn_decl.return_type != "Bool" {
@@ -798,7 +798,7 @@ fn add_bridge_ergonomic_helper_decls(
 ) -> String {
   let mut next_bridge_mbti = bridge_mbti
   for line_view in bridge_mbt.split("\n") {
-    let line = line_view.to_string().trim().to_string()
+    let line = line_view.to_owned().trim().to_owned()
     match parse_bridge_pub_extern_fn_decl_line(line) {
       Some(fn_decl) => {
         let helper_decl = "declare pub fn \{fn_decl.public_name}(\{fn_decl.params_src}) -> \{fn_decl.return_type}"
@@ -920,7 +920,7 @@ fn find_bridge_enum_converter(
   converters : Array[BridgeEnumConverter],
   type_name : String,
 ) -> BridgeEnumConverter? {
-  let normalized = type_name.trim().to_string()
+  let normalized = type_name.trim().to_owned()
   for converter in converters {
     if converter.type_name == normalized {
       return Some(converter)
@@ -931,11 +931,11 @@ fn find_bridge_enum_converter(
 
 ///|
 fn bridge_type_optional_base_name(type_name : String) -> String? {
-  let trimmed = type_name.trim().to_string()
+  let trimmed = type_name.trim().to_owned()
   if !trimmed.has_suffix("?") {
     return None
   }
-  let base = trimmed[:trimmed.length() - 1].to_string().trim().to_string()
+  let base = trimmed[:trimmed.length() - 1].to_owned().trim().to_owned()
   if base == "" {
     None
   } else {
@@ -1116,7 +1116,7 @@ fn inject_bridge_public_type_aliases(
     next_bridge_mbt,
   )
   for line_view in bridge_mbti.split("\n") {
-    let line = line_view.to_string().trim().to_string()
+    let line = line_view.to_owned().trim().to_owned()
     if line.has_prefix("pub type ") && line.contains(" = ") {
       match parse_bridge_implemented_type_name_line(line) {
         Some(type_name) =>
@@ -1149,7 +1149,7 @@ fn add_bridge_public_wrappers(
   )
   let wrappers : Array[String] = []
   for line_view in bridge_mbti.split("\n") {
-    let line = line_view.to_string().trim().to_string()
+    let line = line_view.to_owned().trim().to_owned()
     match parse_bridge_top_level_fn_decl_line(line) {
       Some(fn_decl) => {
         let base_internal_name = bridge_value_fn_name(fn_decl.public_name)

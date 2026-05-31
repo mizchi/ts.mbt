@@ -16,6 +16,21 @@ pub fn is_assignable_to(source : @ast.TsType, target : @ast.TsType) -> Bool {
 }
 
 ///|
+// Single-type-argument generic names whose element type an array satisfies:
+// `T[]` is assignable to each of these when the element types are compatible.
+fn is_array_like_iterable_name(name : String) -> Bool {
+  match name {
+    "Iterable"
+    | "IterableIterator"
+    | "ArrayLike"
+    | "ReadonlyArray"
+    | "ConcatArray"
+    | "RelativeIndexable" => true
+    _ => false
+  }
+}
+
+///|
 pub fn is_assignable_to_bivariant(
   source : @ast.TsType,
   target : @ast.TsType,
@@ -112,12 +127,49 @@ fn is_assignable_to_inner(
   match (source, target) {
     // Literal subtyping: each literal kind narrows its primitive companion.
     (Literal(_), String_) => true
+    // Template literal types are a subtype of string (and of each other when
+    // they resolve to the same string set, which we approximate as true when
+    // both are TemplateLiteralType — a conservative over-approximation).
+    (TemplateLiteralType(_, _), String_) => true
+    (TemplateLiteralType(_, _), Literal(_)) => false
+    (TemplateLiteralType(s_parts, s_args), TemplateLiteralType(t_parts, t_args)) =>
+      s_parts == t_parts &&
+      s_args.length() == t_args.length() &&
+      ({
+        let mut ok = true
+        for i in 0..<s_args.length() {
+          if !is_assignable_to_inner(s_args[i], t_args[i], bivariant_params) {
+            ok = false
+            break
+          }
+        }
+        ok
+      })
     (NumberLiteral(_), Number) => true
     (BigIntLiteral(_), BigInt) => true
     (BooleanLiteral(_), Boolean) => true
+    // Arrays / typed arrays are iterable: `T[]` is assignable to
+    // `Iterable<T>` / `IterableIterator<T>` / `ArrayLike<T>` and the
+    // `ReadonlyArray<T>` form. Element type is covariant.
+    (Array(s_inner), Applied(t_name, [t_inner])) =>
+      if is_array_like_iterable_name(t_name) {
+        is_assignable_to_inner(s_inner, t_inner, bivariant_params)
+      } else {
+        false
+      }
     // Compound covariance/contravariance.
     (Array(s_inner), Array(t_inner)) =>
       is_assignable_to_inner(s_inner, t_inner, bivariant_params)
+    // Tuples are iterable: `[A, B]` is assignable to `Iterable<A | B>` etc.
+    // The element type is the union of the tuple's slot types.
+    (Tuple(s_items), Applied(t_name, [t_inner])) =>
+      if is_array_like_iterable_name(t_name) {
+        s_items
+        .iter()
+        .all(fn(it) { is_assignable_to_inner(it, t_inner, bivariant_params) })
+      } else {
+        false
+      }
     (Tuple(s_items), Tuple(t_items)) => {
       if s_items.length() != t_items.length() {
         return false
@@ -128,6 +180,41 @@ fn is_assignable_to_inner(
         }
       }
       return true
+    }
+    // Rest parameter types: `...args: T[]` — delegate to the inner array type.
+    (Rest(s), Rest(t)) => is_assignable_to_inner(s, t, bivariant_params)
+    (Rest(s), Array(t)) => is_assignable_to_inner(s, t, bivariant_params)
+    (Array(s), Rest(t)) => is_assignable_to_inner(s, t, bivariant_params)
+    // Constructor types: `new (...) => T`. Abstract constructors are a
+    // subtype of non-abstract constructors (conservative approximation).
+    (Constructor(s_params, s_ret, _), Constructor(t_params, t_ret, _)) => {
+      if s_params.length() != t_params.length() {
+        return false
+      }
+      for i in 0..<s_params.length() {
+        let ok = if bivariant_params {
+          is_assignable_to_inner(s_params[i], t_params[i], bivariant_params) ||
+          is_assignable_to_inner(t_params[i], s_params[i], bivariant_params)
+        } else {
+          is_assignable_to_inner(t_params[i], s_params[i], bivariant_params)
+        }
+        if !ok {
+          return false
+        }
+      }
+      is_assignable_to_inner(s_ret, t_ret, bivariant_params)
+    }
+    // A constructor type is callable as a function (via Reflect.construct etc.)
+    (Constructor(s_params, s_ret, _), Func(t_params, t_ret)) => {
+      if s_params.length() != t_params.length() {
+        return false
+      }
+      for i in 0..<s_params.length() {
+        if !is_assignable_to_inner(t_params[i], s_params[i], bivariant_params) {
+          return false
+        }
+      }
+      is_assignable_to_inner(s_ret, t_ret, bivariant_params)
     }
     (Func(s_params, s_ret), Func(t_params, t_ret)) => {
       if s_params.length() != t_params.length() {
@@ -151,6 +238,20 @@ fn is_assignable_to_inner(
     }
     (Object(s_fields), Object(t_fields)) =>
       is_object_assignable_inner(s_fields, t_fields, bivariant_params)
+    // Struct types are structurally compatible with Object types and each other.
+    (Struct(_, s_fields), Struct(_, t_fields)) => {
+      let s_obj = struct_fields_to_object(s_fields)
+      let t_obj = struct_fields_to_object(t_fields)
+      is_object_assignable_inner(s_obj, t_obj, bivariant_params)
+    }
+    (Struct(_, s_fields), Object(t_fields)) => {
+      let s_obj = struct_fields_to_object(s_fields)
+      is_object_assignable_inner(s_obj, t_fields, bivariant_params)
+    }
+    (Object(s_fields), Struct(_, t_fields)) => {
+      let t_obj = struct_fields_to_object(t_fields)
+      is_object_assignable_inner(s_fields, t_obj, bivariant_params)
+    }
     // Named/applied references are nominal: only equal names match.
     (Named(a), Named(b)) => a == b
     (Applied(a, args_a), Applied(b, args_b)) => {
@@ -166,6 +267,17 @@ fn is_assignable_to_inner(
     }
     _ => false
   }
+}
+
+///|
+fn struct_fields_to_object(
+  fields : Array[(String, @ast.TsType)],
+) -> Array[(@ast.TsType, @ast.TsType)] {
+  let out : Array[(@ast.TsType, @ast.TsType)] = []
+  for f in fields {
+    out.push((@ast.TsType::Literal(f.0), f.1))
+  }
+  out
 }
 
 ///|

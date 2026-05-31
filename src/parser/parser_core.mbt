@@ -356,32 +356,6 @@ fn Parser::consume_semicolon(self : Parser) -> Unit raise ParseError {
 }
 
 ///|
-fn Parser::has_line_terminator_between_positions(
-  self : Parser,
-  start_pos : Int,
-  end_pos : Int,
-) -> Bool {
-  if self.src == "" {
-    return false
-  }
-  let mut i = start_pos
-  let limit = if end_pos <= self.src.length() {
-    end_pos
-  } else {
-    self.src.length()
-  }
-  while i < limit {
-    let ch = self.src[i]
-    // JavaScript line terminators: LF, CR, LS (U+2028), PS (U+2029)
-    if ch == '\n' || ch == '\r' || ch == '\u2028' || ch == '\u2029' {
-      return true
-    }
-    i += 1
-  }
-  false
-}
-
-///|
 fn Parser::has_line_terminator_after(self : Parser) -> Bool {
   let next = self.pos + 1
   if next >= self.tokens.length() {

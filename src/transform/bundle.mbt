@@ -176,8 +176,6 @@ pub(all) struct BundleOutput {
 
 ///|
 priv struct ModuleNode {
-  // Virtual path of the module.
-  path : String
   // Original source text (kept for sourcesContent).
   source : String
   // Parsed module body — runtime stmts after JSX lowering.
@@ -236,7 +234,7 @@ fn resolve_relative(from_path : String, specifier : String) -> String? {
 ///|
 fn dirname(path : String) -> String {
   match path.rev_find("/") {
-    Some(idx) => path.substring(start=0, end=idx).to_string()
+    Some(idx) => path[0:idx].to_owned()
     None => ""
   }
 }
@@ -273,7 +271,7 @@ fn resolve_with_extensions(
 fn normalize_path(path : String) -> String {
   let parts : Array[String] = []
   for part in path.split("/") {
-    let p = part.to_string()
+    let p = part.to_owned()
     if p == "" || p == "." {
       continue
     }
@@ -353,7 +351,7 @@ pub fn bundle_modules(
   // free variable in the consumer.
   let link_renames = link_module_graph(modules, order, external_imports)
   let mut mangle_export_renames : Map[String, String] = {}
-  let e = Emitter::new(pretty=not(opts.minify))
+  let e = Emitter::new(pretty=!opts.minify)
   if opts.with_sourcemap {
     e.smap = Some(SourceMapBuilder::new())
   }
@@ -458,7 +456,7 @@ pub fn bundle_modules(
     // Type-predicate inline.
     {
       let predicates = build_predicate_table(combined)
-      if not(predicates.entries.is_empty()) {
+      if !predicates.entries.is_empty() {
         combined = inline_predicates(combined, predicates)
       }
     }
@@ -467,7 +465,7 @@ pub fn bundle_modules(
     // function whose first param is a closed string-literal union.
     {
       let sw = build_switch_fold_table(combined)
-      if not(sw.entries.is_empty()) {
+      if !sw.entries.is_empty() {
         combined = switch_fold(combined, sw)
       }
     }
@@ -560,7 +558,7 @@ pub fn bundle_modules(
           let collected : Map[String, Bool] = {}
           collect_property_names(combined, collected)
           for n in collected.keys() {
-            if not(is_internal_marker_property(n)) {
+            if !is_internal_marker_property(n) {
               extra_reserved.push(n)
             }
           }
@@ -636,7 +634,7 @@ pub fn bundle_modules(
       combined.stmts.length()
     // In minify mode without source-maps, use the merged-decl emitter so
     // `let a=1;let b=2;` collapses to `let a=1,b=2;` at the top level.
-    if opts.minify && not(opts.with_sourcemap) {
+    if opts.minify && !opts.with_sourcemap {
       emit_stmts_merged(e, combined.stmts)
     } else {
       for i, s in combined.stmts {
@@ -699,7 +697,7 @@ pub fn bundle_modules(
       // dozens of KB later, inside the first multi-line template
       // literal) — turning the rest of the module's parse into
       // dead text.
-      if not(opts.minify) {
+      if !opts.minify {
         e.write("// ===== ")
         e.write(path)
         e.write(" =====")
@@ -810,9 +808,10 @@ fn load_module_graph(
   // stream. JSX lowering happens here too so the per-module pragma
   // / config gets resolved against the right source text.
   let parser = @parser.Parser::from_source(source)
-  let mb = match (try? parser.parse_module_block()) {
-    Ok(b) => b
-    Err(e) => return Err("parse \{path}: \{e}")
+  let mb = try parser.parse_module_block() catch {
+    e => return Err("parse \{path}: \{e}")
+  } noraise {
+    b => b
   }
   // Reuse the per-file JSX pragma extractor so each module honors
   // its own `/** @jsxImportSource ... */` etc.
@@ -855,7 +854,6 @@ fn load_module_graph(
   // sort and emit only need the path → ModuleNode mapping to exist
   // during walking.
   modules[path] = {
-    path,
     source,
     block: lowered,
     resolved_imports: {},
@@ -985,7 +983,6 @@ fn load_module_graph(
   // Finalize the entry with the resolved-imports map populated.
   let cjs_exports_var = detect_cjs_exports_var(lowered)
   modules[path] = {
-    path,
     source,
     block: lowered,
     resolved_imports: resolved,
@@ -1167,13 +1164,13 @@ fn emit_entry_exports(
     if spec.export_name == "default" {
       continue
     }
-    let local = renames.get(spec.local_name).unwrap_or(spec.local_name)
-    named.push((local, spec.export_name))
+    let local_ = renames.get(spec.local_name).unwrap_or(spec.local_name)
+    named.push((local_, spec.export_name))
   }
   match default_local {
-    Some(local) => {
+    Some(local_) => {
       e.write("export default ")
-      e.write(local)
+      e.write(local_)
       e.semi()
       e.nl()
     }

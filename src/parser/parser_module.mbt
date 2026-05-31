@@ -55,14 +55,6 @@ fn Parser::next_temp(self : Parser, prefix : String) -> String {
 }
 
 ///|
-fn Parser::parse_named_imports(
-  self : Parser,
-) -> Array[(String, String)] raise ParseError {
-  let (items, _) = self.parse_named_imports_with_type_flags()
-  items
-}
-
-///|
 /// Same as `parse_named_imports`, but additionally reports whether each
 /// specifier was prefixed with `type` (`import { type X, Y }`). The two
 /// arrays are aligned positionally.
@@ -137,6 +129,7 @@ fn empty_ts_module() -> @ast.TsModule {
     namespaces: [],
     enums: [],
     module_augmentations: [],
+    top_level_stmts: [],
   }
 }
 
@@ -329,25 +322,27 @@ pub fn lower_enum_decl_to_runtime_stmts(
     Var(@ast.TsBinding::Ident(decl.name), @ast.TsType::Any, ObjectLit([])),
   )
   let mut next_numeric : Int = 0
-  for member in decl.members {
-    let value_expr : @ast.TsExpr? = match member.value {
+  for mem in decl.members {
+    let value_expr : @ast.TsExpr? = match mem.value {
       Some(@ast.TsEnumMemberValue::Number(s)) =>
-        match (try? @strconv.parse_int(s)) {
-          Ok(i) => {
-            next_numeric = i + 1
-            Some(@ast.TsExpr::IntLit(i))
-          }
-          Err(_) =>
+        try @string.parse_int(s) catch {
+          _ =>
             // Float / hex / negative / etc — fall back to `0.0`
             // for auto-increment (rare in practice).
             Some(
               @ast.TsExpr::NumberLit(
-                match (try? @strconv.parse_double(s)) {
-                  Ok(d) => d
-                  Err(_) => 0.0
+                try @string.parse_double(s) catch {
+                  _ => 0.0
+                } noraise {
+                  d => d
                 },
               ),
             )
+        } noraise {
+          i => {
+            next_numeric = i + 1
+            Some(@ast.TsExpr::IntLit(i))
+          }
         }
       Some(@ast.TsEnumMemberValue::String(s)) => Some(@ast.TsExpr::StringLit(s))
       Some(@ast.TsEnumMemberValue::BigInt(s)) => Some(@ast.TsExpr::BigIntLit(s))
@@ -363,7 +358,7 @@ pub fn lower_enum_decl_to_runtime_stmts(
         out.push(
           IndexAssign(
             @ast.TsExpr::Var(decl.name),
-            @ast.TsExpr::StringLit(member.name),
+            @ast.TsExpr::StringLit(mem.name),
             v,
           ),
         )
@@ -374,7 +369,7 @@ pub fn lower_enum_decl_to_runtime_stmts(
               IndexAssign(
                 @ast.TsExpr::Var(decl.name),
                 v,
-                @ast.TsExpr::StringLit(member.name),
+                @ast.TsExpr::StringLit(mem.name),
               ),
             )
           _ => ()
@@ -415,7 +410,7 @@ fn Parser::parse_declaration_block_source(
   if body_end_pos <= brace_start_pos + 1 {
     ""
   } else {
-    self.src[brace_start_pos + 1:body_end_pos].to_string()
+    self.src[brace_start_pos + 1:body_end_pos].to_owned()
   }
 }
 
@@ -571,8 +566,19 @@ fn Parser::parse_namespace_decl_with_mode(
   }
   let _ = self.advance()
   if keyword == "global" {
-    self.skip_declaration_block()
-    return Some((None, None))
+    // `declare global { ... }` — ambient global augmentation. Parse the
+    // block as a mini-module and expose declarations as a synthetic
+    // namespace so downstream resolvers can see augmented globals.
+    if self.check(LBrace) {
+      let body_source = self.parse_declaration_block_source()
+      let augmented = parse_ambient_external_module_source(body_source)
+      let ns : @ast.TsNamespaceDecl = { name: "<global>", module_: augmented }
+      return Some((None, Some(ns)))
+    } else {
+      // bare `global` without a block — just skip to semicolon
+      self.skip_until_semicolon()
+      return Some((None, None))
+    }
   }
   let name = if self.is_qualified_type_name_part(0) {
     Some(self.parse_binding_ident())
@@ -613,13 +619,13 @@ fn Parser::parse_namespace_decl_with_mode(
           body_source,
           self.allow_jsx,
         )
-        match
-          (try? runtime_parser.parse_module_with_seeded_const_values_internal(
+        try
+          runtime_parser.parse_module_with_seeded_const_values_internal(
             {},
             false,
-          )) {
-          Ok(module_) => module_
-          Err(_) => {
+          )
+        catch {
+          _ => {
             let ambient_parser = Parser::from_source_with_jsx(
               body_source,
               self.allow_jsx,
@@ -629,6 +635,8 @@ fn Parser::parse_namespace_decl_with_mode(
               true,
             )
           }
+        } noraise {
+          module_ => module_
         }
       }
       let next_namespace : @ast.TsNamespaceDecl = { name, module_ }
@@ -2360,19 +2368,17 @@ fn Parser::parse_export_decl_for_module(
     }
     _ => ()
   }
-  if self.check(Const) &&
-    (match self.peek_at(1).kind {
-      Ident(name) => name == "enum"
-      _ => false
-    }) {
-    self.skip_declaration_block()
+  if self.is_const_enum_decl_start() {
+    let enum_ = self.parse_const_enum_decl(false)
+    exports.push({ local_name: enum_.name, export_name: enum_.name })
     return (stmts, exports, reexports)
   }
   if (match self.peek().kind {
       Ident(name) => name == "enum"
       _ => false
     }) {
-    self.skip_declaration_block()
+    let enum_ = self.parse_enum_decl_after_enum_keyword(false, false)
+    exports.push({ local_name: enum_.name, export_name: enum_.name })
     return (stmts, exports, reexports)
   }
   let is_declare = match self.peek().kind {
@@ -2413,6 +2419,15 @@ fn Parser::parse_export_decl_for_module(
         return (stmts, exports, reexports)
       }
       Var | Let | Const => {
+        let _ = self.advance()
+        let values = self.parse_declare_values()
+        for value in values {
+          exports.push({ local_name: value.name, export_name: value.name })
+        }
+        return (stmts, exports, reexports)
+      }
+      Ident("using") => {
+        // `export declare using x: T` — treat like `const` declaration
         let _ = self.advance()
         let values = self.parse_declare_values()
         for value in values {
@@ -2616,7 +2631,7 @@ fn Parser::is_ambient_export_value_decl(self : Parser) -> Bool {
   // we accept the ambient interpretation for `const` even outside
   // `.d.ts` mode. `var` / `let` get the runtime path so the actual
   // declaration emits.
-  if not(self.in_ambient_module) {
+  if !self.in_ambient_module {
     match self.peek_at(0).kind {
       Const => ()
       _ => return false
@@ -2832,6 +2847,14 @@ fn Parser::parse_export_stmt(
           values.push(value)
         }
       }
+      Ident("using") => {
+        // `declare using x: T` — treat like `const` declaration
+        let _ = self.advance()
+        let parsed_values = self.parse_declare_values()
+        for value in parsed_values {
+          values.push(value)
+        }
+      }
       Interface => interfaces.push(self.parse_interface())
       Class => classes.push(self.parse_declare_class(false))
       Type => {
@@ -2973,6 +2996,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
   let namespaces : Array[@ast.TsNamespaceDecl] = []
   let enums : Array[@ast.TsEnumDecl] = []
   let module_augmentations : Array[(String, @ast.TsModule)] = []
+  let top_level_stmts : Array[@ast.TsStmt] = []
   let const_values : Map[String, @ast.TsExpr] = {}
   for entry in seeded_const_values {
     const_values[entry.0] = entry.1
@@ -3098,8 +3122,14 @@ fn Parser::parse_module_with_seeded_const_values_internal(
           }
         k => raise ParseError("Expected Function, got \{k}")
       }
-    } else if self.check(Import) {
+    } else if self.check(Import) &&
+      self.peek_at(1).kind != LParen &&
+      self.peek_at(1).kind != Dot {
       self.parse_import_stmt()
+    } else if self.check(Import) {
+      // `import(...)` (dynamic import) / `import.meta` in statement position —
+      // parse as an expression statement rather than an import declaration.
+      let _ = self.parse_stmt()
     } else if self.check(Export) {
       self.parse_export_stmt(
         funcs, interfaces, type_aliases, imports, values, classes, namespaces, enums,
@@ -3147,8 +3177,10 @@ fn Parser::parse_module_with_seeded_const_values_internal(
       } else if self.check(Const) {
         let stmt = self.parse_stmt()
         collect_static_const_exprs_from_stmt(stmt, const_values)
+        top_level_stmts.push(stmt)
       } else {
-        let _ = self.parse_stmt()
+        let stmt = self.parse_stmt()
+        top_level_stmts.push(stmt)
       }
     } else if !ambient_decls {
       // Real TS / JS modules can contain ordinary top-level statements:
@@ -3163,6 +3195,25 @@ fn Parser::parse_module_with_seeded_const_values_internal(
       )
     }
   }
+  // Merge type aliases collected from function-body / block-level `type T = …`
+  // declarations into the module's type-alias pool. These are erased at
+  // runtime but the checker needs them to resolve Named(T) references inside
+  // those bodies. Module-level declarations (already in `type_aliases`) take
+  // priority: only add a collected alias if the name isn't already registered.
+  let seen_aliases : Map[String, Bool] = {}
+  for ta in type_aliases {
+    seen_aliases[ta.name] = true
+  }
+  for ta in self.collected_type_aliases {
+    if !seen_aliases.contains(ta.name) {
+      type_aliases.push(ta)
+      seen_aliases[ta.name] = true
+      match type_alias_to_interface(ta) {
+        Some(iface) => interfaces.push(iface)
+        None => ()
+      }
+    }
+  }
   {
     funcs,
     interfaces,
@@ -3173,6 +3224,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
     namespaces,
     enums,
     module_augmentations,
+    top_level_stmts,
   }
 }
 
@@ -3299,7 +3351,7 @@ fn Parser::parse_module_block_with_const_values(
         Class => {
           let _ = self.parse_declare_class(false)
         }
-        Type => self.skip_type_alias()
+        Type => self.collected_type_aliases.push(self.parse_type_alias())
         Ident(name) =>
           if name == "abstract" && self.peek_at(1).kind == Class {
             let _ = self.parse_declare_class_with_optional_abstract()

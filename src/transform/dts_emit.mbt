@@ -289,7 +289,7 @@ fn emit_function_decl(buf : StringBuilder, f : @ast.TsFunc) -> Unit {
     }
     let (is_optional, ty) = unwrap_optional_field_type(p.type_)
     buf.write_string(p.name)
-    if is_optional && not(p.is_rest) {
+    if is_optional && !p.is_rest {
       buf.write_string("?")
     }
     buf.write_string(": ")
@@ -317,7 +317,7 @@ fn unwrap_optional_field_type(ty : @ast.TsType) -> (Bool, @ast.TsType) {
           _ => rest.push(p)
         }
       }
-      if not(has_undefined) || rest.length() == 0 {
+      if !has_undefined || rest.length() == 0 {
         return (false, ty)
       }
       if rest.length() == 1 {

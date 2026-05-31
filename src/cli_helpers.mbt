@@ -72,20 +72,20 @@ pub fn cli_clean_error(message : String) -> String {
   match message.find(marker) {
     None => message
     Some(start_idx) => {
-      let prefix = message[:start_idx].to_string()
+      let prefix = message[:start_idx].to_owned()
       let body_start = start_idx + marker.length()
-      let after = message[body_start:message.length()].to_string()
+      let after = message[body_start:message.length()].to_owned()
       // The body looks like:
       //   <syscall>: \"<path>\": <reason>")
       // Strip the trailing `")` and pull the trailing reason after the
       // last `\": `.
       let trimmed = if after.has_suffix("\")") {
-        after[:after.length() - 2].to_string()
+        after[:after.length() - 2].to_owned()
       } else {
         after
       }
       let reason = match trimmed.rev_find("\\\": ") {
-        Some(idx) => trimmed[idx + 4:trimmed.length()].to_string()
+        Some(idx) => trimmed[idx + 4:trimmed.length()].to_owned()
         None => trimmed
       }
       prefix + reason

@@ -242,17 +242,6 @@ fn Lexer::peek_next(self : Lexer) -> Char? {
 }
 
 ///|
-// / positionget
-fn Lexer::peek_byte(self : Lexer, offset : Int) -> Int? {
-  let idx = self.pos + offset
-  if idx >= self.src.length() || idx < 0 {
-    None
-  } else {
-    Some(self.src[idx].to_int())
-  }
-}
-
-///|
 // / statement
 fn Lexer::advance(self : Lexer) -> Char? {
   let c = self.peek()
@@ -392,9 +381,7 @@ fn Lexer::skip_whitespace(self : Lexer) -> Unit {
             // inline `@__PURE__` marker); JSDoc `/** … */` goes
             // through the structured parser so individual tags
             // are queryable downstream.
-            let comment_text = self.src
-              .substring(start=comment_start, end=self.pos)
-              .to_string()
+            let comment_text = self.src[comment_start:self.pos].to_owned()
             // Quick-and-cheap markers — these still drive the
             // existing `pure_marker_positions` /
             // `internal_marker_positions` tables for callers that
@@ -680,9 +667,9 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
   }
   let raw = if is_bigint {
     let end = if self.pos > start { self.pos - 1 } else { self.pos }
-    self.src[start:end].to_string()
+    self.src[start:end].to_owned()
   } else {
-    self.src[start:self.pos].to_string()
+    self.src[start:self.pos].to_owned()
   }
   let s = if has_sep {
     let cleaned = StringBuilder::new()
@@ -751,14 +738,14 @@ fn Lexer::scan_ident(self : Lexer) -> TokenKind {
   if self.pos < len && self.src[self.pos].to_int() == '\\'.to_int() {
     return self.scan_ident_with_escapes(start)
   }
-  let s = self.src[start:self.pos].to_string()
+  let s = self.src[start:self.pos].to_owned()
   classify_ident_or_keyword(s)
 }
 
 ///|
 fn Lexer::scan_ident_with_escapes(self : Lexer, start : Int) -> TokenKind {
   let buf = StringBuilder::new()
-  buf.write_string(self.src[start:self.pos].to_string())
+  buf.write_string(self.src[start:self.pos].to_owned())
   while true {
     match self.peek() {
       Some(c) =>
@@ -1031,10 +1018,10 @@ fn Lexer::scan_private_ident(self : Lexer) -> TokenKind {
     }
   }
   if self.pos >= len || self.src[self.pos].to_int() != '\\'.to_int() {
-    return PrivateIdent(self.src[start:self.pos].to_string())
+    return PrivateIdent(self.src[start:self.pos].to_owned())
   }
   let buf = StringBuilder::new()
-  buf.write_string(self.src[start:self.pos].to_string())
+  buf.write_string(self.src[start:self.pos].to_owned())
   while true {
     match self.peek() {
       Some(c) =>
@@ -1123,7 +1110,7 @@ fn Lexer::scan_string(self : Lexer, quote : Char) -> TokenKind {
   while self.pos < len {
     let b = self.src[self.pos].to_int()
     if b == quote_int {
-      let value = self.src[start:self.pos].to_string()
+      let value = self.src[start:self.pos].to_owned()
       self.pos += 1
       return Str(value)
     }
@@ -1136,7 +1123,7 @@ fn Lexer::scan_string(self : Lexer, quote : Char) -> TokenKind {
     self.pos += 1
   }
   let buf = StringBuilder::new()
-  buf.write_string(self.src[start:self.pos].to_string())
+  buf.write_string(self.src[start:self.pos].to_owned())
   while true {
     match self.peek() {
       None => break // (errorsimplehandle)
@@ -1423,7 +1410,7 @@ fn Lexer::scan_template_expr_source(self : Lexer) -> String {
     }
   }
   let end = if self.pos > 0 { self.pos - 1 } else { 0 }
-  self.src[start:end].to_string()
+  self.src[start:end].to_owned()
 }
 
 ///|

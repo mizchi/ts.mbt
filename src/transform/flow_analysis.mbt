@@ -45,7 +45,7 @@ pub(all) enum Observability {
   /// fully-dynamic sink. All names escape — equivalent to the
   /// wildcard `*` reservation.
   External
-} derive(Eq, Show)
+} derive(Eq, Debug)
 
 ///|
 /// Lattice join: max of the two arguments according to the
@@ -388,70 +388,6 @@ fn collect_direct_props(sym : Symbol, out : Map[String, Bool]) -> Unit {
       _ => ()
     }
   }
-}
-
-///|
-fn binding_carries_nested_values(sym : Symbol) -> Bool {
-  // ObjectLit with non-scalar values, or any init we couldn't
-  // classify as a pure leaf, means the value tree extends past
-  // this binding — recursive observation could reach further.
-  for d in sym.defs {
-    match d.init {
-      Some(@ast.TsExpr::ObjectLit(entries)) =>
-        for ent in entries {
-          if not(is_leaf_value(ent.1)) {
-            return true
-          }
-        }
-      Some(@ast.TsExpr::ArrayLit(items)) =>
-        for it in items {
-          if not(is_leaf_value(it)) {
-            return true
-          }
-        }
-      Some(@ast.TsExpr::Call(_, _))
-      | Some(@ast.TsExpr::CallExpr(_, _))
-      | Some(@ast.TsExpr::MethodCall(_, _, _))
-      | Some(@ast.TsExpr::New(_, _))
-      | Some(@ast.TsExpr::NewExpr(_, _))
-      | Some(@ast.TsExpr::PropAccess(_, _))
-      | Some(@ast.TsExpr::IndexAccess(_, _)) => return true
-      _ => ()
-    }
-  }
-  false
-}
-
-///|
-fn is_leaf_value(expr : @ast.TsExpr) -> Bool {
-  match expr {
-    NumberLit(_)
-    | IntLit(_)
-    | BigIntLit(_)
-    | BoolLit(_)
-    | StringLit(_)
-    | NullLit
-    | ArrayHole => true
-    _ => false
-  }
-}
-
-///|
-/// True when the binding's declaration site initialises it from an
-/// object literal — the shape `bundle_link.synthesize_namespace_bindings_for`
-/// emits for `import * as ns` namespace stand-ins. Used by the
-/// observability reservation to distinguish "this External value
-/// was actually a linker-synthesised namespace whose member set
-/// we can see" from "this External value came from outside the
-/// bundle and could expose any property name".
-fn binding_has_object_literal_init(sym : Symbol) -> Bool {
-  for d in sym.defs {
-    match d.init {
-      Some(@ast.TsExpr::ObjectLit(_)) => return true
-      _ => ()
-    }
-  }
-  false
 }
 
 ///|

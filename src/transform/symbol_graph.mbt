@@ -35,10 +35,10 @@
 // them as "value crosses the bundle boundary".
 
 ///|
-pub typealias Int as SymbolId
+pub type SymbolId = Int
 
 ///|
-pub typealias Int as ScopeId
+pub type ScopeId = Int
 
 ///|
 pub(all) struct SymbolGraph {
@@ -77,7 +77,7 @@ pub(all) struct FuncInfo {
   // observability landing on this function's return value back
   // to these sources.
   returns : Array[FlowNode]
-} derive(Show)
+} derive(Debug)
 
 ///|
 pub(all) struct Scope {
@@ -94,7 +94,7 @@ pub(all) enum ScopeKind {
   Function
   Block
   Catch
-} derive(Eq, Show)
+} derive(Eq, Debug)
 
 ///|
 pub(all) struct Symbol {
@@ -124,7 +124,7 @@ pub(all) struct Symbol {
   // arrow body. Closure-captured bindings can outlive the
   // declaring frame, so Phase 3 treats them conservatively.
   mut captured_by_closure : Bool
-} derive(Show)
+} derive(Debug)
 
 ///|
 pub(all) enum SymbolKind {
@@ -138,18 +138,18 @@ pub(all) enum SymbolKind {
   ImportNamed
   Catch
   ClassDecl
-} derive(Eq, Show)
+} derive(Eq, Debug)
 
 ///|
 pub(all) struct Def {
   init : @ast.TsExpr?
-} derive(Show)
+} derive(Debug)
 
 ///|
 pub(all) struct Use {
   scope_id : ScopeId
   context : UseContext
-} derive(Show)
+} derive(Debug)
 
 ///|
 pub(all) enum UseContext {
@@ -181,13 +181,13 @@ pub(all) enum UseContext {
   PropAssignRHS
   // `obj[k] = x` — same for index assignment.
   IndexAssignRHS
-} derive(Show)
+} derive(Debug)
 
 ///|
 pub(all) struct FlowEdge {
   from : FlowNode
   to : FlowNode
-} derive(Show)
+} derive(Debug)
 
 ///|
 /// A point in the data-flow graph.
@@ -212,7 +212,7 @@ pub(all) enum FlowNode {
   // Couldn't statically determine the source (computed call,
   // dynamic property, etc.). Phase 3 must treat as External.
   Unknown
-} derive(Show)
+} derive(Debug)
 
 ///|
 pub(all) enum LiteralKind {
@@ -222,7 +222,7 @@ pub(all) enum LiteralKind {
   LitNull // NullLit / Undefined
   LitObject // ObjectLit / ArrayLit / function expression
   LitOther // anything else we don't classify
-} derive(Eq, Show)
+} derive(Eq, Debug)
 
 // ---------------------------------------------------------------------------
 // Construction
@@ -388,7 +388,7 @@ fn sg_declare(
 fn var_host_scope(g : SymbolGraph, from : ScopeId) -> ScopeId {
   let mut cur = from
   let mut done = false
-  while not(done) {
+  while !done {
     let s = g.scopes[cur]
     match s.kind {
       Function | Module => done = true

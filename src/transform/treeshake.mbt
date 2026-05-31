@@ -16,10 +16,6 @@
 
 ///|
 priv struct DeclEntry {
-  name : String
-  // Index into the block's `stmts` array — preserves original order
-  // when we re-emit the kept declarations.
-  index : Int
   // Names referenced by the rhs of this declaration. Computed once
   // and cached so the BFS doesn't re-walk function bodies.
   refs : Map[String, Bool]
@@ -72,7 +68,7 @@ fn treeshake_flat_block(block : @ast.TsBlock) -> @ast.TsBlock {
           let refs : Map[String, Bool] = {}
           collect_var_refs_in_expr(rhs, refs)
           decl_by_name[name] = decls.length()
-          decls.push({ name, index: i, refs })
+          decls.push({ refs, })
           is_decl[i] = true
         }
       // Native class declarations (`class Foo { … }`) are a
@@ -127,7 +123,7 @@ fn treeshake_flat_block(block : @ast.TsBlock) -> @ast.TsBlock {
           collect_var_refs_in_expr(sf.1, refs)
         }
         decl_by_name[decl.name] = decls.length()
-        decls.push({ name: decl.name, index: i, refs })
+        decls.push({ refs, })
         is_decl[i] = true
       }
       _ => ()
@@ -189,7 +185,7 @@ fn treeshake_flat_block(block : @ast.TsBlock) -> @ast.TsBlock {
       // Drop pure-expression statements at the root level — they
       // have no observable effect even though they aren't decls.
       match stmt {
-        Expr(e) => not(is_pure_init(e))
+        Expr(e) => !is_pure_init(e)
         _ => true
       }
     }
@@ -221,7 +217,7 @@ fn is_pure_init(expr : @ast.TsExpr) -> Bool {
     | NativeClassExpr(_, _) => true
     ArrayLit(items) => {
       for e in items {
-        if not(is_pure_init(e)) {
+        if !is_pure_init(e) {
           return false
         }
       }
@@ -229,7 +225,7 @@ fn is_pure_init(expr : @ast.TsExpr) -> Bool {
     }
     ObjectLit(entries) => {
       for ent in entries {
-        if not(is_pure_init(ent.1)) {
+        if !is_pure_init(ent.1) {
           return false
         }
       }
@@ -245,7 +241,7 @@ fn is_pure_init(expr : @ast.TsExpr) -> Bool {
     // is pure (the tag-less form just concatenates strings).
     TemplateLiteral(_, exprs) => {
       for e in exprs {
-        if not(is_pure_init(e)) {
+        if !is_pure_init(e) {
           return false
         }
       }

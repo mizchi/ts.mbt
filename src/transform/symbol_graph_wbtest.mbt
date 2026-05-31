@@ -34,12 +34,12 @@ fn symbol_by_name(g : SymbolGraph, scope : ScopeId, name : String) -> Symbol? {
 ///|
 test "symbol_graph: top-level let declares a binding in the module scope" {
   let g = build_graph("let x = 1; x + 2;")
-  assert_eq(g.scopes.length(), 1) // module only
-  assert_eq(g.scopes[0].kind, Module)
+  @test.assert_eq(g.scopes.length(), 1) // module only
+  @test.assert_eq(g.scopes[0].kind, Module)
   let x = symbol_by_name(g, 0, "x").unwrap()
-  assert_eq(x.kind, Let)
+  @test.assert_eq(x.kind, Let)
   // Two appearances: the `x + 2` reads `x`.
-  assert_eq(x.uses.length(), 1)
+  @test.assert_eq(x.uses.length(), 1)
 }
 
 ///|
@@ -62,7 +62,7 @@ test "symbol_graph: var hoists into the enclosing function scope" {
   // Use the function's scope (the immediate child of module).
   let func_scope = g.scopes.iter().find_first(s => s.kind is Function).unwrap()
   let inner = symbol_by_name(g, func_scope.id, "inner").unwrap()
-  assert_eq(inner.kind, Var)
+  @test.assert_eq(inner.kind, Var)
   // The `return inner` is a Read use.
   assert_true(inner.uses.length() >= 1)
   let _ = f
@@ -137,7 +137,7 @@ test "symbol_graph: PropReceiver use context records the property name" {
       _ => ()
     }
   }
-  assert_eq(props.length(), 2)
+  @test.assert_eq(props.length(), 2)
   assert_true(props.contains("foo"))
   assert_true(props.contains("bar"))
 }
@@ -232,5 +232,5 @@ test "symbol_graph: multi-declarator wrapper Block doesn't open a new scope" {
       block_scopes_in_func = block_scopes_in_func + 1
     }
   }
-  assert_eq(block_scopes_in_func, 0)
+  @test.assert_eq(block_scopes_in_func, 0)
 }

@@ -53,3 +53,6 @@ test262.list.txt
 # Generated test262 files
 test262.allowlist.txt
 test262.skiplist.txt
+
+# Generated tsmbt glue directories
+examples/**/__tsmbt_glue__*/

@@ -98,6 +98,7 @@ test "module_alias_resolver: combines parsed aliases with stdlib utilities" {
     namespaces: [],
     enums: [],
     module_augmentations: [],
+    top_level_stmts: [],
   }
   let resolve = module_alias_resolver(m)
   // Module-defined alias resolves.
@@ -130,6 +131,7 @@ test "module_alias_resolver: include_standard=false omits stdlib" {
     namespaces: [],
     enums: [],
     module_augmentations: [],
+    top_level_stmts: [],
   }
   let resolve = module_alias_resolver(m, include_standard=false)
   // NonNullable not in scope → stays nominal Applied. Number is not assignable
@@ -164,6 +166,7 @@ test "module_alias_resolver: module aliases shadow stdlib on name clash" {
     namespaces: [],
     enums: [],
     module_augmentations: [],
+    top_level_stmts: [],
   }
   let resolve = module_alias_resolver(m)
   // Per the override, NonNullable<anything> ≡ string.

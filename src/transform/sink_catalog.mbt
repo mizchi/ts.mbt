@@ -470,7 +470,7 @@ pub fn reserve_props_from_sink(
       match lookup_symbol_in_scope(graph, scope, name) {
         Some(id) => {
           let sym = graph.symbols[id]
-          if not(is_sink_arg_locally_observable(sym, graph)) {
+          if !is_sink_arg_locally_observable(sym, graph) {
             out["*"] = true
             return
           }
@@ -619,20 +619,6 @@ pub fn reserve_props_from_sink(
 }
 
 ///|
-fn unique_symbol_by_name(g : SymbolGraph, name : String) -> SymbolId? {
-  let mut hit : SymbolId? = None
-  for s in g.symbols {
-    if s.name == name {
-      if hit is Some(_) {
-        return None
-      }
-      hit = Some(s.id)
-    }
-  }
-  hit
-}
-
-///|
 /// Is this binding safe to treat as "we can confidently enumerate
 /// every property the sink could observe"?
 ///
@@ -694,7 +680,7 @@ fn binding_exposes_nested_objects(sym : Symbol) -> Bool {
     match d.init {
       Some(@ast.TsExpr::ObjectLit(entries)) =>
         for ent in entries {
-          if not(is_pure_scalar_literal(ent.1)) {
+          if !is_pure_scalar_literal(ent.1) {
             return true
           }
         }

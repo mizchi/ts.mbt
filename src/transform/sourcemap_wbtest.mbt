@@ -3,13 +3,13 @@
 ///|
 test "sourcemap: vlq_encode round-trips small integers" {
   // Spot-check against well-known base64 VLQ encodings.
-  assert_eq(vlq_encode(0), "A")
-  assert_eq(vlq_encode(1), "C")
-  assert_eq(vlq_encode(-1), "D")
-  assert_eq(vlq_encode(16), "gB")
-  assert_eq(vlq_encode(-16), "hB")
+  @test.assert_eq(vlq_encode(0), "A")
+  @test.assert_eq(vlq_encode(1), "C")
+  @test.assert_eq(vlq_encode(-1), "D")
+  @test.assert_eq(vlq_encode(16), "gB")
+  @test.assert_eq(vlq_encode(-16), "hB")
   // Sanity on a larger value: 1234 → VLQ digits 36, 45, 2 → "ktC".
-  assert_eq(vlq_encode(1234), "ktC")
+  @test.assert_eq(vlq_encode(1234), "ktC")
 }
 
 ///|
@@ -19,11 +19,11 @@ test "sourcemap: LineIndex maps byte offsets to (line, col)" {
   //    0 1 2 3 4 5
   //   line 0 starts at 0, line 1 at 2, line 2 at 5.
   let idx = LineIndex::new("a\nbc\nd")
-  assert_eq(idx.position(0), Position::new(0, 0))
-  assert_eq(idx.position(1), Position::new(0, 1))
-  assert_eq(idx.position(2), Position::new(1, 0))
-  assert_eq(idx.position(3), Position::new(1, 1))
-  assert_eq(idx.position(5), Position::new(2, 0))
+  @test.assert_eq(idx.position(0), Position::new(0, 0))
+  @test.assert_eq(idx.position(1), Position::new(0, 1))
+  @test.assert_eq(idx.position(2), Position::new(1, 0))
+  @test.assert_eq(idx.position(3), Position::new(1, 1))
+  @test.assert_eq(idx.position(5), Position::new(2, 0))
 }
 
 ///|
@@ -32,10 +32,10 @@ test "sourcemap: LineIndex handles `\\r\\n` as one newline" {
   //  0 1 2 3 4 5
   // After `\r\n` (2 bytes) the next line starts at byte 4.
   let idx = LineIndex::new("ab\r\ncd")
-  assert_eq(idx.position(0), Position::new(0, 0))
-  assert_eq(idx.position(1), Position::new(0, 1))
-  assert_eq(idx.position(4), Position::new(1, 0))
-  assert_eq(idx.position(5), Position::new(1, 1))
+  @test.assert_eq(idx.position(0), Position::new(0, 0))
+  @test.assert_eq(idx.position(1), Position::new(0, 1))
+  @test.assert_eq(idx.position(4), Position::new(1, 0))
+  @test.assert_eq(idx.position(5), Position::new(1, 1))
 }
 
 ///|
@@ -104,9 +104,7 @@ test "sourcemap: transform_source_full emits per-statement mappings" {
             Some(i) => i + "\"mappings\":\"".length()
             None => 0
           }
-          let after = json
-            .substring(start=mappings_start_idx, end=json.length())
-            .to_string()
+          let after = json[mappings_start_idx:].to_owned()
           // Count semicolons in the mappings field (rough check).
           let mut semis = 0
           for c in after {
@@ -152,9 +150,7 @@ test "sourcemap: nested block statements get per-statement mappings" {
             Some(i) => i + "\"mappings\":\"".length()
             None => 0
           }
-          let after = json
-            .substring(start=mappings_start_idx, end=json.length())
-            .to_string()
+          let after = json[mappings_start_idx:].to_owned()
           let mut semis = 0
           for c in after {
             if c == ';' {

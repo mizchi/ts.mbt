@@ -183,7 +183,7 @@ async test "parser: compare heredoc vs file content" {
   let parts : Array[String] = []
   for i, line in lines {
     if i >= 1558 && i < 1570 {
-      parts.push(line.to_string())
+      parts.push(line.to_owned())
     }
   }
   let file_section = parts.join("\n")
@@ -317,7 +317,7 @@ async test "parser: compare interface fields with TypeScript oracle" {
   let symbol_ctor = field_names.get("SymbolConstructor")
   match symbol_ctor {
     Some(fields) => {
-      println("SymbolConstructor fields: \{fields}")
+      println("SymbolConstructor fields: " + @debug.to_string(fields))
       assert_true(fields.contains("prototype"))
       assert_true(fields.contains("for"))
       assert_true(fields.contains("keyFor"))
@@ -369,7 +369,7 @@ async test "parser: compare es5 interface fields" {
         }
       }
       if missing.length() > 0 {
-        println("Array interface missing fields: \{missing}")
+        println("Array interface missing fields: " + @debug.to_string(missing))
       }
       // At least these core methods should be present
       assert_true(fields.contains("length"))
@@ -515,7 +515,7 @@ async test "parser: validate interface structure against TypeScript" {
         names.push(iface.name)
       }
       names.sort()
-      println("Found interfaces: \{names}")
+      println("Found interfaces: " + @debug.to_string(names))
     }
   }
 }
@@ -525,7 +525,7 @@ async fn collect_ts_source_files(dir : String) -> Array[String] {
   let kind = @fs.kind(dir, follow_symlink=false) catch {
     _ => @fs.FileKind::Unknown
   }
-  if not(kind is @fs.FileKind::Directory) {
+  if !(kind is @fs.FileKind::Directory) {
     return []
   }
   let entries = @fs.readdir(
@@ -538,7 +538,7 @@ async fn collect_ts_source_files(dir : String) -> Array[String] {
   }
   let files : Array[String] = []
   for name in entries {
-    if name.has_suffix(".ts") && not(name.has_suffix(".d.ts")) {
+    if name.has_suffix(".ts") && !name.has_suffix(".d.ts") {
       files.push(dir + "/" + name)
     }
   }
@@ -554,7 +554,7 @@ async fn collect_ts_source_files_recursive(dir : String) -> Array[String] {
   let kind = @fs.kind(dir, follow_symlink=false) catch {
     _ => @fs.FileKind::Unknown
   }
-  if not(kind is @fs.FileKind::Directory) {
+  if !(kind is @fs.FileKind::Directory) {
     return []
   }
   let entries = @fs.readdir(
@@ -568,7 +568,7 @@ async fn collect_ts_source_files_recursive(dir : String) -> Array[String] {
   let files : Array[String] = []
   for name in entries {
     let path = dir + "/" + name
-    if name.has_suffix(".ts") && not(name.has_suffix(".d.ts")) {
+    if name.has_suffix(".ts") && !name.has_suffix(".d.ts") {
       files.push(path)
     } else {
       let sub_kind = @fs.kind(path, follow_symlink=false) catch {
@@ -601,9 +601,10 @@ async test "parser: parse TypeScript compiler/services/server .ts sources" {
     for path in files {
       total += 1
       let content = @fs.read_file(path).text() catch { _ => continue }
-      match (try? Parser::from_source(content).parse_module()) {
-        Ok(_) => ()
-        Err(err) => failures.push(path + ": \{err}")
+      try Parser::from_source(content).parse_module() catch {
+        err => failures.push(path + ": \{err}")
+      } noraise {
+        _ => ()
       }
     }
   }
@@ -670,24 +671,24 @@ async test "checker: smoke-run against TypeScript conformance test corpus" {
       // accordingly — using `from_source` would default `allow_jsx = true`
       // and reject the cast.
       let allow_jsx = path.has_suffix(".tsx")
-      let module_ = match
-        (try? Parser::from_source_with_jsx(content, allow_jsx).parse_module()) {
-        Ok(m) => {
-          parsed += 1
-          m
-        }
-        Err(err) => {
+      let module_ = try
+        Parser::from_source_with_jsx(content, allow_jsx).parse_module()
+      catch {
+        err => {
           parse_failures.push(path + ": \{err}")
           continue
+        }
+      } noraise {
+        m => {
+          parsed += 1
+          m
         }
       }
       // The checker must not panic on any well-parsed module. We don't
       // care about the issue count — TS conformance programs often
       // intentionally produce errors.
-      match (try? @checker.check_module_function_bodies(module_)) {
-        Ok(_) => checked += 1
-        Err(err) => check_crashes.push(path + ": \{err}")
-      }
+      let _ = @checker.check_module_function_bodies(module_)
+      checked += 1
     }
   }
   if total == 0 {
@@ -756,31 +757,31 @@ async test "parser: smoke-run against the entire TypeScript repo source" {
           arr.push(p)
         }
         if arr.length() >= 3 {
-          arr[2].to_string()
+          arr[2].to_owned()
         } else {
           "(other)"
         }
       }
       None => "(root)"
     }
-    let prev = per_dir.get(bucket).or((0, 0))
-    let module_ = match
-      (try? Parser::from_source_with_jsx(content, false).parse_module()) {
-      Ok(m) => {
-        parsed += 1
-        per_dir[bucket] = (prev.0 + 1, prev.1 + 1)
-        m
-      }
-      Err(err) => {
+    let prev = per_dir.get(bucket).unwrap_or((0, 0))
+    let module_ = try
+      Parser::from_source_with_jsx(content, false).parse_module()
+    catch {
+      err => {
         parse_failures.push(path + ": \{err}")
         per_dir[bucket] = (prev.0 + 1, prev.1)
         continue
       }
+    } noraise {
+      m => {
+        parsed += 1
+        per_dir[bucket] = (prev.0 + 1, prev.1 + 1)
+        m
+      }
     }
-    match (try? @checker.check_module_function_bodies(module_)) {
-      Ok(_) => checked += 1
-      Err(err) => check_crashes.push(path + ": \{err}")
-    }
+    let _ = @checker.check_module_function_bodies(module_)
+    checked += 1
   }
   if total == 0 {
     println("skip: no .ts sources found under \{root}")
@@ -796,7 +797,7 @@ async test "parser: smoke-run against the entire TypeScript repo source" {
   }
   buckets.sort()
   for bucket in buckets {
-    let (t, p) = per_dir.get(bucket).or((0, 0))
+    let (t, p) = per_dir.get(bucket).unwrap_or((0, 0))
     println("  \{bucket}: \{p}/\{t}")
   }
   if check_crashes.length() > 0 {
@@ -858,21 +859,21 @@ async test "parser: smoke-run against the TypeScript compiler source" {
     total += 1
     let path = dir + "/" + name
     let content = @fs.read_file(path).text() catch { _ => continue }
-    let module_ = match
-      (try? Parser::from_source_with_jsx(content, false).parse_module()) {
-      Ok(m) => {
-        parsed += 1
-        m
-      }
-      Err(err) => {
+    let module_ = try
+      Parser::from_source_with_jsx(content, false).parse_module()
+    catch {
+      err => {
         parse_failures.push(name + ": \{err}")
         continue
       }
+    } noraise {
+      m => {
+        parsed += 1
+        m
+      }
     }
-    match (try? @checker.check_module_function_bodies(module_)) {
-      Ok(_) => checked += 1
-      Err(err) => check_crashes.push(name + ": \{err}")
-    }
+    let _ = @checker.check_module_function_bodies(module_)
+    checked += 1
   }
   println(
     "TypeScript compiler source: total=\{total} parsed=\{parsed} checked=\{checked}",

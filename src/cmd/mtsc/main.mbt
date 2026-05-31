@@ -174,7 +174,7 @@ fn mtsc_parse_args(argv : Array[String]) -> Result[MtscOptions, String] {
           return Err("missing value for --external")
         }
         for raw in argv[i + 1].split(",") {
-          let spec = raw.to_string().trim().to_string()
+          let spec = raw.to_owned().trim().to_owned()
           if spec != "" {
             opts.externals[spec] = true
           }
@@ -280,7 +280,7 @@ fn string_to_utf8_bytes(s : String) -> Bytes {
           done = true
         }
       }
-      if not(done) {
+      if !done {
         // Unpaired high surrogate → U+FFFD replacement (`EF BF BD`).
         arr.push((0xEF : Int).to_byte())
         arr.push((0xBF : Int).to_byte())
@@ -317,7 +317,7 @@ async fn write_text(path : String, content : String) -> Bool {
 ///|
 fn mtsc_dirname(path : String) -> String {
   match path.rev_find("/") {
-    Some(i) => path.substring(start=0, end=i).to_string()
+    Some(i) => path[0:i].to_owned()
     None => ""
   }
 }
@@ -337,7 +337,7 @@ fn mtsc_join_path(dir : String, child : String) -> String {
 fn mtsc_normalize(path : String) -> String {
   let parts : Array[String] = []
   for part in path.split("/") {
-    let p = part.to_string()
+    let p = part.to_owned()
     if p == "" || p == "." {
       continue
     }
@@ -383,7 +383,7 @@ async fn mtsc_load_bundle_files(
       e => return Err("read error \{resolved}: \{e}")
     }
     files[resolved] = source
-    if disk_path != resolved && not(files.contains(disk_path)) {
+    if disk_path != resolved && !files.contains(disk_path) {
       files[disk_path] = source
     }
     let mb = @parser.Parser::from_source(source).parse_module_block() catch {
@@ -408,6 +408,7 @@ async fn mtsc_load_bundle_files(
           namespaces: [],
           enums: [],
           module_augmentations: [],
+          top_level_stmts: [],
         }
     }
     for n in @transform.type_declared_property_names(module_) {
@@ -603,6 +604,7 @@ async fn main {
           namespaces: [],
           enums: [],
           module_augmentations: [],
+          top_level_stmts: [],
         })
         let local_names : Array[String] = []
         for ex in block.exports {
@@ -645,7 +647,7 @@ async fn main {
         let js = match out.sourcemap {
           Some(_) => {
             let base = match path.rev_find("/") {
-              Some(i) => path[i + 1:path.length()].to_string()
+              Some(i) => path[i + 1:path.length()].to_owned()
               None => path
             }
             out.js + "\n//# sourceMappingURL=" + base + ".map\n"
@@ -667,7 +669,7 @@ async fn main {
           // `.d.ts` so `bundle.js` becomes `bundle.d.ts` rather
           // than `bundle.js.d.ts`.
           let dts_path = if path.has_suffix(".js") {
-            path.substring(start=0, end=path.length() - 3).to_string() + ".d.ts"
+            path[0:path.length() - 3].to_owned() + ".d.ts"
           } else {
             path + ".d.ts"
           }
@@ -701,6 +703,7 @@ async fn main {
             namespaces: [],
             enums: [],
             module_augmentations: [],
+            top_level_stmts: [],
           })
           // Filter exports through the entry's `@internal` set so
           // anything tagged `/** @internal */` is invisible to
@@ -708,7 +711,7 @@ async fn main {
           // bundle still ships the runtime binding.
           let local_names : Array[String] = []
           for ex in entry_block.exports {
-            if not(entry_block.internal_names.contains(ex.local_name)) {
+            if !entry_block.internal_names.contains(ex.local_name) {
               local_names.push(ex.local_name)
             }
           }
@@ -750,7 +753,7 @@ async fn main {
   let js = match (out.sourcemap, opts.out) {
     (Some(_), Some(p)) => {
       let base = match p.rev_find("/") {
-        Some(i) => p[i + 1:p.length()].to_string()
+        Some(i) => p[i + 1:p.length()].to_owned()
         None => p
       }
       out.js + "\n//# sourceMappingURL=" + base + ".map\n"

@@ -61,7 +61,7 @@ pub fn infer_numeric_symbols(g : SymbolGraph) -> Map[SymbolId, Bool] {
       for d in sym.defs {
         match d.init {
           Some(e) =>
-            if not(is_expr_numeric(e, g, numeric)) {
+            if !is_expr_numeric(e, g, numeric) {
               all_numeric = false
               break
             }
@@ -82,18 +82,18 @@ pub fn infer_numeric_symbols(g : SymbolGraph) -> Map[SymbolId, Bool] {
       // This converges in one round instead of relying on the outer
       // fixed-point loop to catch `i` referencing itself.
       if all_numeric && sym.reassigned {
-        let tentative_added = not(numeric.contains(sym.id))
+        let tentative_added = !numeric.contains(sym.id)
         if tentative_added {
           numeric[sym.id] = true
         }
         let mut all_rhs_numeric = true
         for rhs in sym.reassign_rhs {
-          if not(is_expr_numeric(rhs, g, numeric)) {
+          if !is_expr_numeric(rhs, g, numeric) {
             all_rhs_numeric = false
             break
           }
         }
-        if not(all_rhs_numeric) {
+        if !all_rhs_numeric {
           if tentative_added {
             // Drop the speculative entry so we don't poison
             // other symbols' analyses later in the round.
@@ -182,16 +182,6 @@ fn lookup_unique_symbol(g : SymbolGraph, name : String) -> SymbolId? {
   hit
 }
 
-///|
-fn is_flow_node_numeric(node : FlowNode, numeric : Map[SymbolId, Bool]) -> Bool {
-  match node {
-    Literal(LitNumeric) => true
-    Literal(_) => false
-    SymVal(id) => numeric.contains(id)
-    _ => false
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Graph-aware version of the existing `is_index_known_numeric`
 // check used by `mangle_safety.collect_props_on_external_expr`.
@@ -226,11 +216,11 @@ pub fn numeric_name_set(
 ) -> Map[String, Bool] {
   let counts : Map[String, Int] = {}
   for s in g.symbols {
-    counts[s.name] = counts.get(s.name).or(0) + 1
+    counts[s.name] = counts.get(s.name).unwrap_or(0) + 1
   }
   let out : Map[String, Bool] = {}
   for s in g.symbols {
-    if numeric.contains(s.id) && counts.get(s.name).or(0) == 1 {
+    if numeric.contains(s.id) && counts.get(s.name).unwrap_or(0) == 1 {
       out[s.name] = true
     }
   }

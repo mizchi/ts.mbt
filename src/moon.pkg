@@ -9,7 +9,9 @@ import {
 
 import {
   "moonbitlang/async",
+  "moonbitlang/core/debug",
   "moonbitlang/core/env",
+  "moonbitlang/core/test",
   "mizchi/ts/ast",
   "mizchi/ts/checker",
 } for "wbtest"

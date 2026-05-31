@@ -47,14 +47,16 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
     // `let` declaration for parsing — the auto-disposal semantics don't
     // affect the type-level shape.
     Ident("using") if self.is_using_declaration_start() => {
+      let kw_pos = self.peek().pos
       let _ = self.advance()
-      self.parse_var_like(VarKind::Let)
+      self.parse_var_like(VarKind::Let, kw_pos)
     }
     Ident("await") if self.peek_at(1).kind is Ident("using") &&
       self.is_await_using_declaration_start() => {
+      let kw_pos = self.peek().pos
       let _ = self.advance() // `await`
       let _ = self.advance() // `using`
-      self.parse_var_like(VarKind::Let)
+      self.parse_var_like(VarKind::Let, kw_pos)
     }
     Const =>
       match self.peek_at(1).kind {
@@ -87,10 +89,12 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
     }
     Type if self.peek_at(1).kind is Ident(_) => {
       // `type Foo = …` / `type Foo<…> = …` — type alias decl.
+      // Type aliases are erased at runtime; collect them so the
+      // checker / bridge passes can still resolve the name.
       // Other follow-ups (`type.foo = …`, `type[i] = …`, `type()`,
       // `type;`) leave `type` as a plain identifier so the
       // expression-statement parser below picks it up.
-      self.skip_type_alias()
+      self.collected_type_aliases.push(self.parse_type_alias())
       Empty
     }
     _ if self.is_namespace_decl_start() => {
@@ -229,33 +233,41 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
 ///|
 // / let statement (type)
 fn Parser::parse_let(self : Parser) -> @ast.TsStmt raise ParseError {
+  let kw_pos = self.peek().pos
   let _ = self.expect(Let)
-  self.parse_var_like(VarKind::Let)
+  self.parse_var_like(VarKind::Let, kw_pos)
 }
 
 ///|
 // / const statement (type)
 fn Parser::parse_const(self : Parser) -> @ast.TsStmt raise ParseError {
+  let kw_pos = self.peek().pos
   let _ = self.expect(Const)
-  self.parse_var_like(VarKind::Const)
+  self.parse_var_like(VarKind::Const, kw_pos)
 }
 
 ///|
 fn Parser::parse_var(self : Parser) -> @ast.TsStmt raise ParseError {
+  let kw_pos = self.peek().pos
   let _ = self.expect(Var)
-  self.parse_var_like(VarKind::Var)
+  self.parse_var_like(VarKind::Var, kw_pos)
 }
 
 ///|
 fn Parser::parse_var_like(
   self : Parser,
   kind : VarKind,
+  kw_pos : Int,
 ) -> @ast.TsStmt raise ParseError {
   let binding = self.parse_binding_pattern()
   let type_ = self.parse_var_decl_type()
   let stmts = self.parse_var_decl_list_from(binding, type_, kind)
   self.consume_semicolon()
-  self.merge_decl_stmts(stmts)
+  let merged = self.merge_decl_stmts(stmts)
+  // If there is a single simple-ident declarator whose initializer is an
+  // arrow-function or function-expression, apply JSDoc param/return overlays
+  // using the var/let/const keyword position (where the JSDoc block sits).
+  apply_jsdoc_var_func_overlay(self.jsdoc_at_pos, merged, kw_pos)
 }
 
 ///|
@@ -916,7 +928,7 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
     // `const x = expr; try { ...rest } finally { x[Symbol.dispose]?.() }`
     // so the disposal semantics survive in the emitted JS.
     let is_using = self.is_using_declaration_start()
-    let is_await_using = if not(is_using) {
+    let is_await_using = if !is_using {
       self.is_await_using_declaration_start()
     } else {
       false
@@ -936,8 +948,8 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
       } else {
         @ast.TsType::Any
       }
-      let _ = self.expect(Assign)
-      let init = self.parse_assign_expr()
+      let _ = self.expect(Eq)
+      let init = self.parse_expr()
       let _ = self.match_(Semicolon)
       // Parse the remaining statements in this block into the try body.
       let rest_stmts : Array[@ast.TsStmt] = []
@@ -1199,5 +1211,61 @@ fn strip_lvalue_wrappers(expr : @ast.TsExpr) -> @ast.TsExpr {
     | @ast.TsExpr::Satisfies(inner, _)
     | @ast.TsExpr::NonNull(inner) => strip_lvalue_wrappers(inner)
     _ => expr
+  }
+}
+
+///|
+/// Apply JSDoc param/return type overlays to a `let`/`const`/`var` declarator
+/// whose initializer is an arrow-function or function-expression.  The JSDoc
+/// block is looked up by the keyword position (`let`/`const`/`var` token pos)
+/// because that is where the comment sits in the source.
+fn apply_jsdoc_func_init_overlay(
+  jsdoc_at_pos : Map[Int, JsdocBlock],
+  kw_pos : Int,
+  init : @ast.TsExpr,
+) -> @ast.TsExpr {
+  match init {
+    @ast.TsExpr::ArrowFunc(params, ret, body, is_async) => {
+      let p2 = apply_jsdoc_param_overlay(jsdoc_at_pos, kw_pos, params)
+      let r2 = apply_jsdoc_return_overlay(jsdoc_at_pos, kw_pos, ret)
+      @ast.TsExpr::ArrowFunc(p2, r2, body, is_async)
+    }
+    @ast.TsExpr::FuncExpr(f) => {
+      let p2 = apply_jsdoc_param_overlay(jsdoc_at_pos, kw_pos, f.params)
+      let r2 = apply_jsdoc_return_overlay(jsdoc_at_pos, kw_pos, f.return_type)
+      @ast.TsExpr::FuncExpr({ ..f, params: p2, return_type: r2 })
+    }
+    _ => init
+  }
+}
+
+///|
+/// Apply JSDoc param/return type overlays to a `let`/`const`/`var` declarator
+/// whose initializer is an arrow-function or function-expression.
+fn apply_jsdoc_var_func_overlay(
+  jsdoc_at_pos : Map[Int, JsdocBlock],
+  stmt : @ast.TsStmt,
+  kw_pos : Int,
+) -> @ast.TsStmt {
+  match stmt {
+    @ast.TsStmt::Const(binding, ty, init) =>
+      @ast.TsStmt::Const(
+        binding,
+        ty,
+        apply_jsdoc_func_init_overlay(jsdoc_at_pos, kw_pos, init),
+      )
+    @ast.TsStmt::Let(binding, ty, init) =>
+      @ast.TsStmt::Let(
+        binding,
+        ty,
+        apply_jsdoc_func_init_overlay(jsdoc_at_pos, kw_pos, init),
+      )
+    @ast.TsStmt::Var(binding, ty, init) =>
+      @ast.TsStmt::Var(
+        binding,
+        ty,
+        apply_jsdoc_func_init_overlay(jsdoc_at_pos, kw_pos, init),
+      )
+    _ => stmt
   }
 }

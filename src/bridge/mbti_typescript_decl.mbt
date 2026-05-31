@@ -176,7 +176,7 @@ fn mbti_trim_underscores(name : String) -> String {
   while end_ > start && mbti_char_at(name, end_ - 1) == '_' {
     end_ -= 1
   }
-  name[start:end_].to_string()
+  name[start:end_].to_owned()
 }
 
 ///|
@@ -242,11 +242,11 @@ fn mbti_is_generated_param_name(name : String) -> Bool {
 /// shapes the heuristic doesn't know about, in which case callers stick
 /// with the numbered fallback.
 fn mbti_heuristic_param_name(ty_src : String) -> String? {
-  let trimmed = ty_src.trim().to_string()
+  let trimmed = ty_src.trim().to_owned()
   // Strip optional/`undefined` tail so `string | undefined` and `string`
   // map to the same heuristic slot.
   let core_ty = if trimmed.has_suffix(" | undefined") {
-    trimmed[:trimmed.length() - " | undefined".length()].trim().to_string()
+    trimmed[:trimmed.length() - " | undefined".length()].trim().to_owned()
   } else {
     trimmed
   }
@@ -350,7 +350,7 @@ fn sanitize_ts_identifier(name : String, fallback : String) -> String {
   // through to autolink_glue / moon.pkg.json / runtime JS exports
   // because `sanitize_ts_identifier` is the shared name source.
   if result.has_suffix("_") {
-    let stripped = result[:result.length() - 1].to_string()
+    let stripped = result[:result.length() - 1].to_owned()
     let ts_renamed = mbti_typescript_reserved_rename(stripped)
     if ts_renamed != "" {
       return ts_renamed
@@ -501,9 +501,9 @@ fn mbti_moonbit_only_reserved_rename(word : String) -> String {
 
 ///|
 fn trim_trailing_comma_or_semicolon(source : String) -> String {
-  let mut result = source.trim().to_string()
+  let mut result = source.trim().to_owned()
   while result.has_suffix(",") || result.has_suffix(";") {
-    result = result[:result.length() - 1].trim().to_string()
+    result = result[:result.length() - 1].trim().to_owned()
   }
   result
 }
@@ -511,8 +511,8 @@ fn trim_trailing_comma_or_semicolon(source : String) -> String {
 ///|
 fn strip_mbti_derive_suffix(source : String) -> String {
   match source.find(" derive(") {
-    Some(derive_idx) => source[:derive_idx].trim().to_string()
-    None => source.trim().to_string()
+    Some(derive_idx) => source[:derive_idx].trim().to_owned()
+    None => source.trim().to_owned()
   }
 }
 
@@ -520,7 +520,7 @@ fn strip_mbti_derive_suffix(source : String) -> String {
 fn infer_mbti_import_alias_name(module_spec : String) -> String {
   let mut alias_name = ""
   for part in module_spec.split("/") {
-    alias_name = part.to_string()
+    alias_name = part.to_owned()
   }
   alias_name
 }
@@ -533,17 +533,17 @@ fn parse_mbti_import_line(line : String) -> ParsedMbtiImportLine? {
   match line[1:line.length()].find("\"") {
     Some(relative_end) => {
       let closing_idx = relative_end + 1
-      let module_spec = line[1:closing_idx].to_string()
+      let module_spec = line[1:closing_idx].to_owned()
       if module_spec == "" {
         return None
       }
       let rest = if closing_idx + 1 < line.length() {
-        line[closing_idx + 1:line.length()].trim().to_string()
+        line[closing_idx + 1:line.length()].trim().to_owned()
       } else {
         ""
       }
       let alias_name = if rest.has_prefix("@") {
-        let explicit_alias = rest[1:rest.length()].trim().to_string()
+        let explicit_alias = rest[1:rest.length()].trim().to_owned()
         if explicit_alias != "" {
           explicit_alias
         } else {
@@ -574,15 +574,15 @@ fn mbti_public_generic_prefixes(keyword : String) -> Array[String] {
 
 ///|
 fn strip_mbti_public_prefix(line : String, keyword : String) -> String? {
-  let trimmed = line.trim().to_string()
+  let trimmed = line.trim().to_owned()
   for prefix in mbti_public_prefixes(keyword) {
     if trimmed.has_prefix(prefix) {
-      return Some(trimmed[prefix.length():trimmed.length()].to_string())
+      return Some(trimmed[prefix.length():trimmed.length()].to_owned())
     }
   }
   for prefix in mbti_public_generic_prefixes(keyword) {
     if trimmed.has_prefix(prefix + "[") {
-      return Some(trimmed[prefix.length():trimmed.length()].to_string())
+      return Some(trimmed[prefix.length():trimmed.length()].to_owned())
     }
   }
   None
@@ -590,7 +590,7 @@ fn strip_mbti_public_prefix(line : String, keyword : String) -> String? {
 
 ///|
 fn strip_mbti_impl_prefix(line : String) -> String? {
-  let trimmed = line.trim().to_string()
+  let trimmed = line.trim().to_owned()
   if !trimmed.has_prefix("pub impl") {
     return None
   }
@@ -604,7 +604,7 @@ fn strip_mbti_impl_prefix(line : String) -> String? {
   while idx < trimmed.length() && mbti_char_at(trimmed, idx) == ' ' {
     idx += 1
   }
-  Some(trimmed[idx:trimmed.length()].to_string())
+  Some(trimmed[idx:trimmed.length()].to_owned())
 }
 
 ///|
@@ -634,13 +634,13 @@ fn split_top_level_items(source : String) -> Array[String] {
           angle -= 1
         }
       ',' if paren == 0 && bracket == 0 && brace == 0 && angle == 0 => {
-        parts.push(source[start:i].trim().to_string())
+        parts.push(source[start:i].trim().to_owned())
         start = i + 1
       }
       _ => ()
     }
   }
-  let tail = source[start:source.length()].trim().to_string()
+  let tail = source[start:source.length()].trim().to_owned()
   if tail != "" {
     parts.push(tail)
   }
@@ -664,13 +664,13 @@ fn split_top_level_plus_items(source : String) -> Array[String] {
       '{' => brace += 1
       '}' => brace -= 1
       '+' if paren == 0 && bracket == 0 && brace == 0 => {
-        parts.push(source[start:i].trim().to_string())
+        parts.push(source[start:i].trim().to_owned())
         start = i + 1
       }
       _ => ()
     }
   }
-  let tail = source[start:source.length()].trim().to_string()
+  let tail = source[start:source.length()].trim().to_owned()
   if tail != "" {
     parts.push(tail)
   }
@@ -749,7 +749,7 @@ fn is_mbti_effect_marker_at(
   if keyword_end > source.length() {
     return false
   }
-  if source[keyword_start:keyword_end].to_string() != keyword {
+  if source[keyword_start:keyword_end].to_owned() != keyword {
     return false
   }
   if keyword_end >= source.length() {
@@ -786,32 +786,32 @@ fn find_top_level_effect_marker(source : String) -> Int? {
 
 ///|
 fn strip_mbti_top_level_effect(source : String) -> String {
-  let trimmed = source.trim().to_string()
+  let trimmed = source.trim().to_owned()
   match find_top_level_effect_marker(trimmed) {
-    Some(effect_idx) => trimmed[:effect_idx].trim().to_string()
+    Some(effect_idx) => trimmed[:effect_idx].trim().to_owned()
     None => trimmed
   }
 }
 
 ///|
 fn mbti_top_level_effect_suffix(source : String) -> String {
-  let trimmed = source.trim().to_string()
+  let trimmed = source.trim().to_owned()
   match find_top_level_effect_marker(trimmed) {
-    Some(effect_idx) => trimmed[effect_idx:trimmed.length()].trim().to_string()
+    Some(effect_idx) => trimmed[effect_idx:trimmed.length()].trim().to_owned()
     None => ""
   }
 }
 
 ///|
 fn mbti_return_source_with_effect_from_function_line(line : String) -> String {
-  let trimmed = line.trim().to_string()
+  let trimmed = line.trim().to_owned()
   match trimmed.find("(") {
     Some(open_idx) =>
       match find_matching(trimmed, open_idx, '(', ')') {
         Some(close_idx) => {
-          let rest = trimmed[close_idx + 1:trimmed.length()].trim().to_string()
+          let rest = trimmed[close_idx + 1:trimmed.length()].trim().to_owned()
           if rest.has_prefix("->") {
-            rest[2:rest.length()].trim().to_string()
+            rest[2:rest.length()].trim().to_owned()
           } else {
             ""
           }
@@ -850,11 +850,11 @@ fn parse_type_params(
     if raw == "" {
       continue
     }
-    let trimmed = raw.trim().to_string()
+    let trimmed = raw.trim().to_owned()
     match trimmed.find(":") {
       Some(idx) => {
-        let name = trimmed[:idx].trim().to_string()
-        let extends_src = trimmed[idx + 1:trimmed.length()].trim().to_string()
+        let name = trimmed[:idx].trim().to_owned()
+        let extends_src = trimmed[idx + 1:trimmed.length()].trim().to_owned()
         let bound_parts = split_top_level_plus_items(extends_src)
         let rendered_bounds : Array[String] = []
         for bound_part in bound_parts {
@@ -885,7 +885,7 @@ fn parse_mbti_imports(source : String) -> Array[MbtiImportRef] {
   let imports : Array[MbtiImportRef] = []
   let mut collecting = false
   for line_view in source.split("\n") {
-    let trimmed = line_view.trim().to_string()
+    let trimmed = line_view.trim().to_owned()
     if !collecting {
       if trimmed == "import {" {
         collecting = true
@@ -915,7 +915,7 @@ fn parse_mbti_imports(source : String) -> Array[MbtiImportRef] {
 fn collect_mbti_omitted_autolink_members(source : String) -> Array[String] {
   let members : Array[String] = []
   for line_view in source.split("\n") {
-    let line = line_view.to_string()
+    let line = line_view.to_owned()
     match strip_mbti_public_prefix(line, "fn") {
       Some(rest) =>
         match rest.find("(") {
@@ -923,11 +923,11 @@ fn collect_mbti_omitted_autolink_members(source : String) -> Array[String] {
             let name = if rest.has_prefix("[") {
               match rest.find("]") {
                 Some(close_idx) =>
-                  rest[close_idx + 1:open_idx].trim().to_string()
-                None => rest[:open_idx].trim().to_string()
+                  rest[close_idx + 1:open_idx].trim().to_owned()
+                None => rest[:open_idx].trim().to_owned()
               }
             } else {
-              rest[:open_idx].trim().to_string()
+              rest[:open_idx].trim().to_owned()
             }
             if (name.contains("::") || rest.has_prefix("[")) &&
               !members.contains(name) {
@@ -958,7 +958,7 @@ fn collect_runtime_inaccessible_free_function_names(
   }
   let names : Array[String] = []
   for line_view in source.split("\n") {
-    let trimmed = line_view.trim().to_string()
+    let trimmed = line_view.trim().to_owned()
     let parsed = parse_mbti_function_signature(trimmed, imports, used_aliases) catch {
       _ => None
     }
@@ -1014,14 +1014,14 @@ fn collect_runtime_inaccessible_free_function_names(
 ///|
 fn parse_mbti_package_name(source : String) -> String? {
   for line_view in source.split("\n") {
-    let trimmed = line_view.trim().to_string()
+    let trimmed = line_view.trim().to_owned()
     if !trimmed.has_prefix("package \"") {
       continue
     }
-    let rest = trimmed["package \"".length():trimmed.length()].to_string()
+    let rest = trimmed["package \"".length():trimmed.length()].to_owned()
     match rest.find("\"") {
       Some(end_idx) => {
-        let package_name = rest[:end_idx].to_string()
+        let package_name = rest[:end_idx].to_owned()
         if package_name != "" {
           return Some(package_name)
         }
@@ -1079,23 +1079,23 @@ fn parse_mbti_raw_facade_params(
   let params : Array[MbtiRawFacadeParam] = []
   let mut idx = 0
   for raw in split_top_level_items(source) {
-    let trimmed = raw.trim().to_string()
+    let trimmed = raw.trim().to_owned()
     if trimmed == "" {
       continue
     }
     match trimmed.find(":") {
       Some(colon_idx) => {
-        let raw_name = trimmed[:colon_idx].trim().to_string()
+        let raw_name = trimmed[:colon_idx].trim().to_owned()
         let optional = raw_name.has_suffix("?")
         let name = if idx == 0 && trimmed.has_prefix("Self") {
           "self"
         } else if optional {
-          raw_name[:raw_name.length() - 1].trim().to_string()
+          raw_name[:raw_name.length() - 1].trim().to_owned()
         } else {
           raw_name
         }
         let ty_src = replace_mbti_self_refs(
-          trimmed[colon_idx + 1:trimmed.length()].trim().to_string(),
+          trimmed[colon_idx + 1:trimmed.length()].trim().to_owned(),
           owner_name,
         )
         params.push({ name, ty_src, optional })
@@ -1202,7 +1202,7 @@ fn mbti_qualify_root_type_refs_for_glue(
             mbti_is_identifier_continue(mbti_char_at(source, idx)) {
         idx += 1
       }
-      let ident = source[start:idx].to_string()
+      let ident = source[start:idx].to_owned()
       let prev = if start > 0 {
         Some(mbti_char_at(source, start - 1))
       } else {
@@ -1248,9 +1248,9 @@ fn render_mbt_glue_params(
 
 ///|
 fn mbti_strip_borrow_prefix(source : String) -> String {
-  let trimmed = source.trim().to_string()
+  let trimmed = source.trim().to_owned()
   if trimmed.has_prefix("&") {
-    trimmed[1:trimmed.length()].trim().to_string()
+    trimmed[1:trimmed.length()].trim().to_owned()
   } else {
     trimmed
   }
@@ -1271,7 +1271,7 @@ fn mbti_render_js_boundary_glue_param_type(
     return "Bytes"
   }
   if unborrowed.has_prefix("ArrayView[") {
-    let inner = unborrowed["ArrayView[".length():unborrowed.length() - 1].to_string()
+    let inner = unborrowed["ArrayView[".length():unborrowed.length() - 1].to_owned()
     let rendered_inner = mbti_qualify_root_type_refs_for_glue(
       inner, local_type_names, type_param_names, source_alias,
     )
@@ -1329,7 +1329,7 @@ fn render_mbt_glue_method_tail_call_args(
 
 ///|
 fn render_mbt_raw_type_param_suffix_from_line(line : String) -> String {
-  let trimmed = line.trim().to_string()
+  let trimmed = line.trim().to_owned()
   let mut idx = if trimmed.has_prefix("pub async fn") {
     "pub async fn".length()
   } else if trimmed.has_prefix("pub fn") && !trimmed.has_prefix("pub fn(") {
@@ -1342,7 +1342,7 @@ fn render_mbt_raw_type_param_suffix_from_line(line : String) -> String {
   }
   if idx < trimmed.length() && mbti_char_at(trimmed, idx) == '[' {
     match find_matching(trimmed, idx, '[', ']') {
-      Some(end_idx) => trimmed[idx:end_idx + 1].to_string()
+      Some(end_idx) => trimmed[idx:end_idx + 1].to_owned()
       None => ""
     }
   } else {
@@ -1359,12 +1359,12 @@ fn collect_root_mbti_local_type_params(
   let type_params_by_name : Map[String, Array[MbtiTypeParam]] = {}
   let lines : Array[String] = []
   for line in source.split("\n") {
-    lines.push(line.to_string())
+    lines.push(line.to_owned())
   }
   let mut idx = 0
   while idx < lines.length() {
     let line = lines[idx]
-    let trimmed = line.trim().to_string()
+    let trimmed = line.trim().to_owned()
     if trimmed.has_prefix("pub struct ") ||
       trimmed.has_prefix("pub(all) struct ") {
       let (block, next_idx) = collect_mbti_decl_block(lines, idx)
@@ -1411,7 +1411,7 @@ fn collect_root_mbti_local_trait_names(
   let used_aliases : Array[String] = []
   let names : Array[String] = []
   for line in source.split("\n") {
-    let trimmed = line.trim().to_string()
+    let trimmed = line.trim().to_owned()
     if trimmed.has_prefix("pub trait ") ||
       trimmed.has_prefix("pub(all) trait ") ||
       trimmed.has_prefix("pub(open) trait ") {
@@ -1434,7 +1434,7 @@ fn parse_private_mbti_type_name(
   if !trimmed.has_prefix(keyword + " ") {
     return None
   }
-  let header = trimmed[keyword.length() + 1:trimmed.length()].trim().to_string()
+  let header = trimmed[keyword.length() + 1:trimmed.length()].trim().to_owned()
   match parse_mbti_type_name_and_params(header, imports, used_aliases) {
     Some((name, _)) => Some(name)
     None => None
@@ -1449,7 +1449,7 @@ fn collect_root_mbti_private_type_names(
   let used_aliases : Array[String] = []
   let names : Array[String] = []
   for line in source.split("\n") {
-    let trimmed = line.trim().to_string()
+    let trimmed = line.trim().to_owned()
     if trimmed == "" || trimmed.has_prefix("//") {
       continue
     }
@@ -1491,7 +1491,7 @@ fn mbti_type_source_mentions_private_local_type(
             mbti_is_identifier_continue(mbti_char_at(source, idx)) {
         idx += 1
       }
-      let ident = source[start:idx].to_string()
+      let ident = source[start:idx].to_owned()
       let prev = if start > 0 {
         Some(mbti_char_at(source, start - 1))
       } else {
@@ -1561,7 +1561,7 @@ fn collect_mbti_autolink_glue_decls(
   let decls : Array[MbtiAutolinkGlueDecl] = []
   let free_function_names : Array[String] = []
   for line_view in source.split("\n") {
-    let trimmed = line_view.trim().to_string()
+    let trimmed = line_view.trim().to_owned()
     match parse_mbti_function_signature(trimmed, imports, used_aliases) {
       Some(signature) => {
         let (
@@ -2001,7 +2001,7 @@ fn mbti_join_path(base : String, child : String) -> String {
 fn mbti_dirname(path : String) -> String {
   match path.rev_find("/") {
     Some(0) => "/"
-    Some(idx) => path[:idx].to_string()
+    Some(idx) => path[:idx].to_owned()
     None => "."
   }
 }
@@ -2036,7 +2036,7 @@ fn collect_mbti_fully_qualified_package_refs(source : String) -> Array[String] {
       mbti_char_at(source, end_) != '.' {
       continue
     }
-    let package_name = source[start:end_].to_string()
+    let package_name = source[start:end_].to_owned()
     if package_name.contains("/") && !refs.contains(package_name) {
       refs.push(package_name)
     }
@@ -2144,13 +2144,13 @@ fn mbti_local_package_segments(
   if !package_name.has_prefix(prefix) {
     return None
   }
-  let suffix = package_name[prefix.length():package_name.length()].to_string()
+  let suffix = package_name[prefix.length():package_name.length()].to_owned()
   if suffix == "" {
     return Some([])
   }
   let segments : Array[String] = []
   for part_view in suffix.split("/") {
-    let part = part_view.to_string()
+    let part = part_view.to_owned()
     if part != "" {
       segments.push(part)
     }
@@ -2177,7 +2177,7 @@ fn trim_edge_char(source : String, target : Char) -> String {
   while end_ > start && mbti_char_at(source, end_ - 1) == target {
     end_ -= 1
   }
-  source[start:end_].to_string()
+  source[start:end_].to_owned()
 }
 
 ///|
@@ -2210,7 +2210,7 @@ fn sanitize_npm_package_segment(segment : String, fallback : String) -> String {
 fn mbti_root_package_npm_name(root_package_name : String) -> String {
   let segments : Array[String] = []
   for part_view in root_package_name.split("/") {
-    let part = part_view.to_string()
+    let part = part_view.to_owned()
     if part != "" {
       segments.push(part)
     }
@@ -2238,7 +2238,7 @@ fn mbti_export_key_from_relative_path(relative_path : String) -> String? {
     return None
   }
   let export_path = relative_path[:relative_path.length() -
-  "/index.d.ts".length()].to_string()
+  "/index.d.ts".length()].to_owned()
   if export_path == "" {
     Some(".")
   } else {
@@ -2257,8 +2257,7 @@ fn package_file_exists(
 ///|
 fn mbti_runtime_js_path_for_decl_path(relative_path : String) -> String {
   if relative_path.has_suffix(".d.ts") {
-    relative_path[:relative_path.length() - ".d.ts".length()].to_string() +
-    ".js"
+    relative_path[:relative_path.length() - ".d.ts".length()].to_owned() + ".js"
   } else {
     relative_path
   }
@@ -2394,20 +2393,20 @@ fn parse_mbti_params(
   let used_names : Array[String] = []
   let mut idx = 0
   for raw in raw_items {
-    let trimmed = raw.trim().to_string()
+    let trimmed = raw.trim().to_owned()
     if trimmed == "" {
       continue
     }
     match trimmed.find(":") {
       Some(colon_idx) => {
-        let raw_name = trimmed[:colon_idx].trim().to_string()
+        let raw_name = trimmed[:colon_idx].trim().to_owned()
         let name = if raw_name.has_suffix("?") {
-          raw_name[:raw_name.length() - 1].trim().to_string()
+          raw_name[:raw_name.length() - 1].trim().to_owned()
         } else {
           raw_name
         }
         let ty = translate_mbti_type(
-          trimmed[colon_idx + 1:trimmed.length()].trim().to_string(),
+          trimmed[colon_idx + 1:trimmed.length()].trim().to_owned(),
           imports,
           used_aliases,
           owner_name,
@@ -2533,10 +2532,10 @@ fn translate_named_type(
       if name.has_prefix("@") {
         match name.find(".") {
           Some(dot_idx) => {
-            let alias_name = name[1:dot_idx].to_string()
+            let alias_name = name[1:dot_idx].to_owned()
             mbti_push_unique_string(used_aliases, alias_name)
             let ts_alias = lookup_import_ts_alias(imports, alias_name)
-            let rest = name[dot_idx + 1:name.length()].to_string()
+            let rest = name[dot_idx + 1:name.length()].to_owned()
             if args.length() > 0 {
               let joined_args = args.join(", ")
               "\{ts_alias}.\{rest}<\{joined_args}>"
@@ -2568,24 +2567,24 @@ fn translate_mbti_type(
     return ""
   }
   if trimmed.has_prefix("&") {
-    let borrowed_inner = trimmed[1:trimmed.length()].trim().to_string()
+    let borrowed_inner = trimmed[1:trimmed.length()].trim().to_owned()
     return translate_mbti_type(
       borrowed_inner, imports, used_aliases, owner_name, owner_type_params,
     )
   }
   let (function_source, is_async_function) = if trimmed.has_prefix("async ") {
-    (trimmed["async ".length():trimmed.length()].trim().to_string(), true)
+    (trimmed["async ".length():trimmed.length()].trim().to_owned(), true)
   } else {
     (trimmed, false)
   }
   match find_top_level_arrow(function_source) {
     Some(arrow_idx) => {
-      let left = function_source[:arrow_idx].trim().to_string()
+      let left = function_source[:arrow_idx].trim().to_owned()
       let right = function_source[arrow_idx + 2:function_source.length()]
         .trim()
-        .to_string()
+        .to_owned()
       let params_src = if left.has_prefix("(") && left.has_suffix(")") {
-        left[1:left.length() - 1].to_string()
+        left[1:left.length() - 1].to_owned()
       } else {
         left
       }
@@ -2610,9 +2609,7 @@ fn translate_mbti_type(
     None => ()
   }
   if function_source.has_suffix("?") {
-    let inner = function_source[:function_source.length() - 1]
-      .trim()
-      .to_string()
+    let inner = function_source[:function_source.length() - 1].trim().to_owned()
     let normalized_inner = translate_mbti_type(
       inner, imports, used_aliases, owner_name, owner_type_params,
     )
@@ -2623,7 +2620,7 @@ fn translate_mbti_type(
   }
   let trimmed = function_source
   if trimmed.has_prefix("(") && trimmed.has_suffix(")") {
-    let inner = trimmed[1:trimmed.length() - 1].to_string()
+    let inner = trimmed[1:trimmed.length() - 1].to_owned()
     let items = split_top_level_items(inner)
     if items.length() > 1 {
       let rendered : Array[String] = []
@@ -2643,8 +2640,8 @@ fn translate_mbti_type(
   }
   match trimmed.find("[") {
     Some(idx) if trimmed.has_suffix("]") => {
-      let name = trimmed[:idx].trim().to_string()
-      let args_src = trimmed[idx + 1:trimmed.length() - 1].to_string()
+      let name = trimmed[:idx].trim().to_owned()
+      let args_src = trimmed[idx + 1:trimmed.length() - 1].to_owned()
       translate_named_type(
         name,
         Some(args_src),
@@ -2672,7 +2669,7 @@ fn parse_mbti_function_signature(
   imports : Array[MbtiImportRef],
   used_aliases : Array[String],
 ) -> (String?, String, Array[MbtiTypeParam], String, String, Bool)? raise MbtiTypescriptDeclError {
-  let trimmed = line.trim().to_string()
+  let trimmed = line.trim().to_owned()
   let mut idx = 0
   let is_async = if trimmed.has_prefix("pub async fn") {
     idx = "pub async fn".length()
@@ -2687,7 +2684,7 @@ fn parse_mbti_function_signature(
   if idx < trimmed.length() && mbti_char_at(trimmed, idx) == '[' {
     match find_matching(trimmed, idx, '[', ']') {
       Some(end_idx) => {
-        let params_src = trimmed[idx + 1:end_idx].to_string()
+        let params_src = trimmed[idx + 1:end_idx].to_owned()
         for param in parse_type_params(params_src, imports, used_aliases) {
           type_params.push(param)
         }
@@ -2703,14 +2700,14 @@ fn parse_mbti_function_signature(
     Some(open_idx) if open_idx >= idx =>
       match find_matching(trimmed, open_idx, '(', ')') {
         Some(close_idx) => {
-          let raw_name = trimmed[idx:open_idx].trim().to_string()
-          let params_src = trimmed[open_idx + 1:close_idx].to_string()
-          let rest = trimmed[close_idx + 1:trimmed.length()].trim().to_string()
+          let raw_name = trimmed[idx:open_idx].trim().to_owned()
+          let params_src = trimmed[open_idx + 1:close_idx].to_owned()
+          let rest = trimmed[close_idx + 1:trimmed.length()].trim().to_owned()
           if !rest.has_prefix("->") {
             return None
           }
           let return_ty = strip_mbti_top_level_effect(
-            rest[2:rest.length()].trim().to_string(),
+            rest[2:rest.length()].trim().to_owned(),
           )
           // The raw name may carry a method-level type-parameter list, e.g.
           // `map[U]` inside `pub fn[T] Box::map[U](Self[T], (T) -> U) -> Box[U]`.
@@ -2721,12 +2718,12 @@ fn parse_mbti_function_signature(
             Some(bracket_idx) =>
               match find_matching(raw_name, bracket_idx, '[', ']') {
                 Some(close_idx) => {
-                  let inner = raw_name[bracket_idx + 1:close_idx].to_string()
+                  let inner = raw_name[bracket_idx + 1:close_idx].to_owned()
                   for p in parse_type_params(inner, imports, used_aliases) {
                     type_params.push(p)
                   }
-                  raw_name[:bracket_idx].to_string() +
-                  raw_name[close_idx + 1:raw_name.length()].to_string()
+                  raw_name[:bracket_idx].to_owned() +
+                  raw_name[close_idx + 1:raw_name.length()].to_owned()
                 }
                 None => raw_name
               }
@@ -2736,8 +2733,8 @@ fn parse_mbti_function_signature(
             Some(sep_idx) =>
               Some(
                 (
-                  Some(cleaned_name[:sep_idx].to_string()),
-                  cleaned_name[sep_idx + 2:cleaned_name.length()].to_string(),
+                  Some(cleaned_name[:sep_idx].to_owned()),
+                  cleaned_name[sep_idx + 2:cleaned_name.length()].to_owned(),
                   type_params,
                   params_src,
                   return_ty,
@@ -2771,11 +2768,11 @@ fn parse_mbti_type_name_and_params(
 ) -> (String, Array[MbtiTypeParam])? raise MbtiTypescriptDeclError {
   let mut header = strip_mbti_derive_suffix(source)
   match header.find("{") {
-    Some(open_idx) => header = header[:open_idx].trim().to_string()
+    Some(open_idx) => header = header[:open_idx].trim().to_owned()
     None => ()
   }
   match find_top_level_tuple_payload_open(header) {
-    Some(open_idx) => header = header[:open_idx].trim().to_string()
+    Some(open_idx) => header = header[:open_idx].trim().to_owned()
     None => ()
   }
   if header == "" {
@@ -2783,9 +2780,9 @@ fn parse_mbti_type_name_and_params(
   }
   match header.find("[") {
     Some(idx) if header.has_suffix("]") => {
-      let name = header[:idx].trim().to_string()
+      let name = header[:idx].trim().to_owned()
       let params = parse_type_params(
-        header[idx + 1:header.length() - 1].to_string(),
+        header[idx + 1:header.length() - 1].to_owned(),
         imports,
         used_aliases,
       )
@@ -2862,11 +2859,11 @@ fn parse_tuple_struct_fields(
     Some(open_idx) =>
       match find_matching(header, open_idx, '(', ')') {
         Some(close_idx) => {
-          let rest = header[close_idx + 1:header.length()].trim().to_string()
+          let rest = header[close_idx + 1:header.length()].trim().to_owned()
           if rest != "" {
             return None
           }
-          let payload_src = header[open_idx + 1:close_idx].to_string()
+          let payload_src = header[open_idx + 1:close_idx].to_owned()
           let fields = parse_variant_payload(
             payload_src, imports, used_aliases, owner_name, owner_type_params,
           )
@@ -2906,7 +2903,7 @@ fn parse_struct_block_decl(
       let field_lines : Array[String] = []
       for idx in 1..<lines.length() {
         let trimmed = trim_trailing_comma_or_semicolon(
-          lines[idx].trim().to_string(),
+          lines[idx].trim().to_owned(),
         )
         if trimmed == "" || trimmed == "}" {
           continue
@@ -2916,12 +2913,12 @@ fn parse_struct_block_decl(
         }
         match trimmed.find(":") {
           Some(colon_idx) => {
-            let mut field_name = trimmed[:colon_idx].trim().to_string()
+            let mut field_name = trimmed[:colon_idx].trim().to_owned()
             if field_name.has_prefix("mut ") {
-              field_name = field_name[4:field_name.length()].trim().to_string()
+              field_name = field_name[4:field_name.length()].trim().to_owned()
             }
             let field_ty = translate_mbti_type(
-              trimmed[colon_idx + 1:trimmed.length()].trim().to_string(),
+              trimmed[colon_idx + 1:trimmed.length()].trim().to_owned(),
               imports,
               used_aliases,
               Some(name),
@@ -2953,20 +2950,20 @@ fn parse_variant_payload(
   let fields : Array[String] = []
   let mut positional_index = 0
   for item in split_top_level_items(payload_src) {
-    let trimmed = item.trim().to_string()
+    let trimmed = item.trim().to_owned()
     if trimmed == "" {
       continue
     }
     match trimmed.find(":") {
       Some(colon_idx) => {
-        let raw_name = trimmed[:colon_idx].trim().to_string()
+        let raw_name = trimmed[:colon_idx].trim().to_owned()
         let field_name = if raw_name.has_suffix("~") {
-          raw_name[:raw_name.length() - 1].trim().to_string()
+          raw_name[:raw_name.length() - 1].trim().to_owned()
         } else {
           raw_name
         }
         let field_ty = translate_mbti_type(
-          trimmed[colon_idx + 1:trimmed.length()].trim().to_string(),
+          trimmed[colon_idx + 1:trimmed.length()].trim().to_owned(),
           imports,
           used_aliases,
           Some(owner_name),
@@ -3009,15 +3006,15 @@ fn parse_enum_like_block_decl(
       let variant_names : Array[String] = []
       for idx in 1..<lines.length() {
         let trimmed = trim_trailing_comma_or_semicolon(
-          lines[idx].trim().to_string(),
+          lines[idx].trim().to_owned(),
         )
         if trimmed == "" || trimmed == "}" || trimmed.has_prefix("}") {
           continue
         }
         match trimmed.find("(") {
           Some(open_idx) if trimmed.has_suffix(")") => {
-            let variant_name = trimmed[:open_idx].trim().to_string()
-            let payload_src = trimmed[open_idx + 1:trimmed.length() - 1].to_string()
+            let variant_name = trimmed[:open_idx].trim().to_owned()
+            let payload_src = trimmed[open_idx + 1:trimmed.length() - 1].to_owned()
             let fields = parse_variant_payload(
               payload_src, imports, used_aliases, name, owner_type_param_names,
             )
@@ -3055,9 +3052,9 @@ fn parse_type_alias_decl_source(
   let decl_src = strip_mbti_derive_suffix(decl_source)
   match decl_src.find("=") {
     Some(eq_idx) => {
-      let left = decl_src[:eq_idx].trim().to_string()
+      let left = decl_src[:eq_idx].trim().to_owned()
       let right = trim_trailing_comma_or_semicolon(
-        decl_src[eq_idx + 1:decl_src.length()].trim().to_string(),
+        decl_src[eq_idx + 1:decl_src.length()].trim().to_owned(),
       )
       let (name, type_params) = match
         parse_mbti_type_name_and_params(left, imports, used_aliases) {
@@ -3102,13 +3099,13 @@ fn parse_private_type_alias_decl(
   imports : Array[MbtiImportRef],
   used_aliases : Array[String],
 ) -> MbtiTypeAliasDecl? raise MbtiTypescriptDeclError {
-  let trimmed = line.trim().to_string()
+  let trimmed = line.trim().to_owned()
   if !trimmed.has_prefix("type ") {
     return None
   }
   Some(
     parse_type_alias_decl_source(
-      trimmed["type ".length():trimmed.length()].to_string(),
+      trimmed["type ".length():trimmed.length()].to_owned(),
       line,
       imports,
       used_aliases,
@@ -3129,7 +3126,7 @@ fn parse_trait_block_decl(
       let methods : Array[String] = []
       for idx in 1..<lines.length() {
         let trimmed = trim_trailing_comma_or_semicolon(
-          lines[idx].trim().to_string(),
+          lines[idx].trim().to_owned(),
         )
         if trimmed == "" || trimmed == "}" || trimmed.has_prefix("}") {
           continue
@@ -3272,7 +3269,7 @@ fn mbti_effect_error_ts_type(
   }
   let error_src = effect_suffix["raise".length():effect_suffix.length()]
     .trim()
-    .to_string()
+    .to_owned()
   if error_src == "" {
     Some("Error")
   } else {
@@ -3312,7 +3309,7 @@ fn struct_decl_has_field_name(
   let field_prefix = field_name + ":"
   let optional_field_prefix = field_name + "?:"
   for field_decl in struct_decl.fields {
-    let trimmed = field_decl.trim().to_string()
+    let trimmed = field_decl.trim().to_owned()
     if trimmed.has_prefix(field_prefix) ||
       trimmed.has_prefix(optional_field_prefix) {
       return true
@@ -3338,7 +3335,7 @@ fn contains_unqualified_result_type_ref(source : String) -> Bool {
     return false
   }
   for idx = 0; idx + needle.length() <= source.length(); idx = idx + 1 {
-    if source[idx:idx + needle.length()].to_string() != needle {
+    if source[idx:idx + needle.length()].to_owned() != needle {
       continue
     }
     if idx == 0 {
@@ -3358,7 +3355,7 @@ fn contains_unqualified_type_name(source : String, type_name : String) -> Bool {
     return false
   }
   for idx = 0; idx + type_name.length() <= source.length(); idx = idx + 1 {
-    if source[idx:idx + type_name.length()].to_string() != type_name {
+    if source[idx:idx + type_name.length()].to_owned() != type_name {
       continue
     }
     if idx > 0 {
@@ -3519,10 +3516,10 @@ fn rewrite_mbti_glue_import_alias_refs(
             mbti_is_identifier_continue(mbti_char_at(source, end_)) {
         end_ += 1
       }
-      let alias_name = source[start:end_].to_string()
+      let alias_name = source[start:end_].to_owned()
       match rewrites.get(alias_name) {
         Some(rewritten_alias) => rewritten += "@\{rewritten_alias}"
-        None => rewritten += source[idx:end_].to_string()
+        None => rewritten += source[idx:end_].to_owned()
       }
       idx = end_
     } else {
@@ -3580,14 +3577,14 @@ fn take_ts_extends_clause(source : String) -> String {
         if angle > 0 {
           angle -= 1
         } else if !saw_angle {
-          return source[:idx].trim().to_string()
+          return source[:idx].trim().to_owned()
         }
       '{' | '(' | ')' | ';' | '\n' if angle == 0 =>
-        return source[:idx].trim().to_string()
+        return source[:idx].trim().to_owned()
       _ => ()
     }
   }
-  source.trim().to_string()
+  source.trim().to_owned()
 }
 
 ///|
@@ -3601,11 +3598,11 @@ fn collect_marker_bounds_from_decl(
       seen_prefix = true
       continue
     }
-    let clause = take_ts_extends_clause(part_view.to_string())
+    let clause = take_ts_extends_clause(part_view.to_owned())
     for comma_part_view in clause.split(",") {
-      let comma_part = comma_part_view.to_string()
+      let comma_part = comma_part_view.to_owned()
       for amp_part_view in comma_part.split("&") {
-        let name = amp_part_view.trim().to_string()
+        let name = amp_part_view.trim().to_owned()
         if is_unqualified_marker_bound_name(name) {
           mbti_push_unique_ts_name(order, name)
         }
@@ -3770,9 +3767,9 @@ fn flatten_instance_method_decl(
   owner_type_param_suffix : String,
   method_decl : String,
 ) -> String? {
-  let trimmed = method_decl.trim().to_string()
+  let trimmed = method_decl.trim().to_owned()
   let stripped = if trimmed.has_suffix(";") {
-    trimmed[:trimmed.length() - 1].to_string()
+    trimmed[:trimmed.length() - 1].to_owned()
   } else {
     trimmed
   }
@@ -3780,11 +3777,11 @@ fn flatten_instance_method_decl(
     Some(idx) => idx
     None => return None
   }
-  let head = stripped[:paren_idx].to_string()
-  let rest = stripped[paren_idx:stripped.length()].to_string()
+  let head = stripped[:paren_idx].to_owned()
+  let rest = stripped[paren_idx:stripped.length()].to_owned()
   let (raw_name, method_tp_suffix) = match head.find("<") {
     Some(lt_idx) =>
-      (head[:lt_idx].to_string(), head[lt_idx:head.length()].to_string())
+      (head[:lt_idx].to_owned(), head[lt_idx:head.length()].to_owned())
     None => (head, "")
   }
   let merged_tp = merge_type_param_suffixes(
@@ -3793,9 +3790,9 @@ fn flatten_instance_method_decl(
   let self_ty = "\{owner_name}\{owner_type_param_suffix}"
   // `rest` always starts with `(`. Insert the `self` parameter as the
   // first argument and drop the leading `(` we replaced.
-  let after_paren = rest[1:rest.length()].to_string()
+  let after_paren = rest[1:rest.length()].to_owned()
   let new_rest = if after_paren.has_prefix(")") {
-    "(self : \{self_ty})" + after_paren[1:after_paren.length()].to_string()
+    "(self : \{self_ty})" + after_paren[1:after_paren.length()].to_owned()
   } else {
     "(self : \{self_ty}, " + after_paren
   }
@@ -3810,8 +3807,8 @@ fn merge_type_param_suffixes(owner : String, method_tp : String) -> String {
   if method_tp == "" {
     return owner
   }
-  let owner_inner = owner[1:owner.length() - 1].to_string()
-  let method_inner = method_tp[1:method_tp.length() - 1].to_string()
+  let owner_inner = owner[1:owner.length() - 1].to_owned()
+  let method_inner = method_tp[1:method_tp.length() - 1].to_owned()
   "<\{owner_inner}, \{method_inner}>"
 }
 
@@ -4015,7 +4012,7 @@ fn render_namespace_decl(name : String, members : Array[String]) -> String {
   let lines : Array[String] = []
   for member_decl in members {
     if member_decl.has_prefix("function ") {
-      let rest = member_decl["function ".length():member_decl.length()].to_string()
+      let rest = member_decl["function ".length():member_decl.length()].to_owned()
       lines.push("export function \{name}_\{rest}")
     } else {
       // Defensive: anything that didn't come through the static-member
@@ -4034,12 +4031,12 @@ fn parse_mbti_impl_decl(line : String) -> MbtiImplDecl? {
   }
   match trimmed.find(" for ") {
     Some(for_idx) => {
-      let trait_name = trimmed[:for_idx].trim().to_string()
+      let trait_name = trimmed[:for_idx].trim().to_owned()
       let owner_src = trimmed[for_idx + " for ".length():trimmed.length()]
         .trim()
-        .to_string()
+        .to_owned()
       let owner_name = match owner_src.find("[") {
-        Some(idx) => owner_src[:idx].trim().to_string()
+        Some(idx) => owner_src[:idx].trim().to_owned()
         None => owner_src
       }
       Some({ trait_name, owner_name })
@@ -4056,9 +4053,9 @@ fn parse_mbti_derive_trait_names(line : String) -> Array[String] {
       let open_idx = derive_idx + "derive".length()
       match find_matching(line, open_idx, '(', ')') {
         Some(close_idx) => {
-          let inner = line[open_idx + 1:close_idx].to_string()
+          let inner = line[open_idx + 1:close_idx].to_owned()
           for item in split_top_level_items(inner) {
-            let trimmed = item.trim().to_string()
+            let trimmed = item.trim().to_owned()
             if trimmed != "" {
               traits.push(trimmed)
             }
@@ -4083,11 +4080,11 @@ fn parse_local_marker_trait_decl(
   }
   match raw_trait_name.find("[") {
     Some(idx) if raw_trait_name.has_suffix("]") => {
-      let name = raw_trait_name[:idx].trim().to_string()
+      let name = raw_trait_name[:idx].trim().to_owned()
       if name == "" {
         return None
       }
-      let args_src = raw_trait_name[idx + 1:raw_trait_name.length() - 1].to_string()
+      let args_src = raw_trait_name[idx + 1:raw_trait_name.length() - 1].to_owned()
       let arity = split_top_level_items(args_src).length()
       Some({ name, arity })
     }
@@ -4229,12 +4226,12 @@ fn parse_mbti_to_typescript_with_import_rewrites(
   let impl_decls : Array[MbtiImplDecl] = []
   let lines : Array[String] = []
   for line in source.split("\n") {
-    lines.push(line.to_string())
+    lines.push(line.to_owned())
   }
   let mut idx = 0
   while idx < lines.length() {
     let line = lines[idx]
-    let trimmed = line.trim().to_string()
+    let trimmed = line.trim().to_owned()
     if trimmed == "" || trimmed.has_prefix("//") {
       idx += 1
       continue
@@ -4901,10 +4898,10 @@ pub async fn emit_typescript_package_bundle_from_mbti_path_with_import_rewrites(
 
 ///|
 fn ts_decl_line_is_runtime_inaccessible_method(line : String) -> Bool {
-  let trimmed = line.trim().to_string()
+  let trimmed = line.trim().to_owned()
   match trimmed.find("(") {
     Some(paren_idx) => {
-      let before = trimmed[:paren_idx].to_string()
+      let before = trimmed[:paren_idx].to_owned()
       !before.contains(":") && trimmed.has_suffix(";")
     }
     None => false
@@ -4913,13 +4910,13 @@ fn ts_decl_line_is_runtime_inaccessible_method(line : String) -> Bool {
 
 ///|
 fn ts_decl_line_is_runtime_inaccessible_function(line : String) -> Bool {
-  let trimmed = line.trim().to_string()
+  let trimmed = line.trim().to_owned()
   if !trimmed.has_prefix("export function ") {
     return false
   }
   match trimmed.find("(") {
     Some(paren_idx) => {
-      let before = trimmed[:paren_idx].to_string()
+      let before = trimmed[:paren_idx].to_owned()
       before.contains("<") && before.contains(">")
     }
     None => false
@@ -4928,12 +4925,12 @@ fn ts_decl_line_is_runtime_inaccessible_function(line : String) -> Bool {
 
 ///|
 fn ts_decl_export_function_name(line : String) -> String? {
-  let trimmed = line.trim().to_string()
+  let trimmed = line.trim().to_owned()
   let prefix = "export function "
   if !trimmed.has_prefix(prefix) {
     return None
   }
-  let rest = trimmed[prefix.length():trimmed.length()].to_string()
+  let rest = trimmed[prefix.length():trimmed.length()].to_owned()
   let mut end_idx = rest.length()
   match rest.find("(") {
     Some(idx) => end_idx = idx
@@ -4943,7 +4940,7 @@ fn ts_decl_export_function_name(line : String) -> String? {
     Some(idx) if idx < end_idx => end_idx = idx
     _ => ()
   }
-  let name = rest[:end_idx].trim().to_string()
+  let name = rest[:end_idx].trim().to_owned()
   if name == "" {
     None
   } else {
@@ -4961,8 +4958,8 @@ fn strip_runtime_inaccessible_typescript_members(
   let mut in_interface = false
   let mut in_namespace = false
   for line_view in source.split("\n") {
-    let line = line_view.to_string()
-    let trimmed = line.trim().to_string()
+    let line = line_view.to_owned()
+    let trimmed = line.trim().to_owned()
     if in_namespace {
       if trimmed == "}" {
         in_namespace = false
@@ -5016,7 +5013,7 @@ fn strip_runtime_inaccessible_typescript_members(
 /// instance-method and static-method flattenings produced by mbt-to-ts
 /// emission so they can be filtered against the runtime export set.
 fn ts_decl_line_is_flat_method_export(line : String) -> Bool {
-  let trimmed = line.trim().to_string()
+  let trimmed = line.trim().to_owned()
   if !trimmed.has_prefix("export function ") {
     return false
   }
@@ -5111,8 +5108,8 @@ fn render_runtime_reexport_js(
   for item in export_items {
     match item.find(" as ") {
       Some(alias_idx) => {
-        let runtime_name = item[:alias_idx].trim().to_string()
-        let export_name = item[alias_idx + 4:item.length()].trim().to_string()
+        let runtime_name = item[:alias_idx].trim().to_owned()
+        let export_name = item[alias_idx + 4:item.length()].trim().to_owned()
         lines.push("export const \{export_name} = __tsmbtRoot.\{runtime_name};")
       }
       None => lines.push("export const \{item} = __tsmbtRoot.\{item};")

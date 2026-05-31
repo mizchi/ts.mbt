@@ -352,7 +352,7 @@ test "bench checker: Resolver build (500 interfaces)" (it : @bench.T) {
   }
   it.bench(fn() {
     let r = Resolver::from_module(module_)
-    it.keep(r.interfaces.size())
+    it.keep(r.interfaces.length())
   })
 }
 
@@ -393,17 +393,20 @@ async test "bench checker: TypeScript compiler source (file IO)" {
   // can report throughput.
   let prepared : Array[(String, Int, @ast.TsModule)] = []
   for path in candidates {
-    match (try? @fs.read_file(path)) {
-      Ok(data) => {
+    try @fs.read_file(path) catch {
+      _ => ()
+    } noraise {
+      data => {
         let text = data.text()
         let allow_jsx = path.has_suffix(".tsx")
-        match
-          (try? @parser.Parser::from_source_with_jsx(text, allow_jsx).parse_module()) {
-          Ok(module_) => prepared.push((path, text.length(), module_))
-          Err(_) => ()
+        try
+          @parser.Parser::from_source_with_jsx(text, allow_jsx).parse_module()
+        catch {
+          _ => ()
+        } noraise {
+          module_ => prepared.push((path, text.length(), module_))
         }
       }
-      Err(_) => ()
     }
   }
   if prepared.length() == 0 {
@@ -428,7 +431,7 @@ async test "bench checker: TypeScript compiler source (file IO)" {
     })
     bencher.bench(name="resolv " + path, count=5, fn() {
       let r = Resolver::from_module(module_)
-      bencher.keep(r.interfaces.size())
+      bencher.keep(r.interfaces.length())
     })
   }
   println(bencher.dump_summaries())

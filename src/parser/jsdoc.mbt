@@ -63,7 +63,7 @@ pub fn parse_jsdoc_block(text : String) -> JsdocBlock? {
   // Must start with `/**` and end with `*/`. Single-asterisk
   // `/* … */` comments aren't JSDoc; we still scan them for
   // inline `@__PURE__` markers separately.
-  if not(text.has_prefix("/**")) {
+  if !text.has_prefix("/**") {
     return None
   }
   let body_start = 3
@@ -75,7 +75,7 @@ pub fn parse_jsdoc_block(text : String) -> JsdocBlock? {
   if body_end <= body_start {
     return None
   }
-  let raw = text.substring(start=body_start, end=body_end).to_string()
+  let raw = text[body_start:body_end].to_owned()
   // Strip the leading `*` (with optional space) on each line —
   // standard JSDoc convention puts a `*` at column 0 of every
   // continuation line. Without this we'd leak `*` chars into
@@ -90,27 +90,24 @@ pub fn parse_jsdoc_block(text : String) -> JsdocBlock? {
   let mut current_tag_content : Array[String] = []
   let mut in_description = true
   for line_view in cleaned.split("\n") {
-    let line = line_view.to_string()
+    let line = line_view.to_owned()
     let trimmed = line.trim_start()
     if trimmed.has_prefix("@") {
       // Flush whatever we were collecting.
-      if not(in_description) {
+      if !in_description {
         tags.push(
           interpret_tag(
             current_tag_name,
-            current_tag_content.join("\n").trim_end().to_string(),
+            current_tag_content.join("\n").trim_end().to_owned(),
           ),
         )
       } else if description != "" {
-        description = description.trim_end().to_string()
+        description = description.trim_end().to_owned()
       }
       in_description = false
       // Split into tag name + rest. Tag name is `[a-zA-Z_]+` or
       // the special `__PURE__` / `__NO_SIDE_EFFECTS__` marker.
-      let trimmed_str = trimmed.to_string()
-      let rest = trimmed_str
-        .substring(start=1, end=trimmed_str.length())
-        .to_string()
+      let rest = trimmed[1:].to_owned()
       let (name, body) = split_tag_head(rest)
       current_tag_name = name
       current_tag_content = [body]
@@ -124,15 +121,15 @@ pub fn parse_jsdoc_block(text : String) -> JsdocBlock? {
     }
   }
   // Flush the trailing tag.
-  if not(in_description) {
+  if !in_description {
     tags.push(
       interpret_tag(
         current_tag_name,
-        current_tag_content.join("\n").trim_end().to_string(),
+        current_tag_content.join("\n").trim_end().to_owned(),
       ),
     )
   }
-  let block : JsdocBlock = { description: description.trim().to_string(), tags }
+  let block : JsdocBlock = { description: description.trim().to_owned(), tags }
   if block.is_empty() {
     None
   } else {
@@ -144,12 +141,12 @@ pub fn parse_jsdoc_block(text : String) -> JsdocBlock? {
 fn strip_jsdoc_line_prefixes(s : String) -> String {
   let out : Array[String] = []
   for line_view in s.split("\n") {
-    let line = line_view.to_string()
-    let trimmed = line.trim_start().to_string()
+    let line = line_view.to_owned()
+    let trimmed = line.trim_start().to_owned()
     let cleaned = if trimmed.has_prefix("* ") {
-      trimmed.substring(start=2, end=trimmed.length()).to_string()
+      trimmed[2:].to_owned()
     } else if trimmed.has_prefix("*") {
-      trimmed.substring(start=1, end=trimmed.length()).to_string()
+      trimmed[1:].to_owned()
     } else {
       line
     }
@@ -177,12 +174,8 @@ fn split_tag_head(s : String) -> (String, String) {
   if i == 0 {
     return ("", s)
   }
-  let name = s.substring(start=0, end=i).to_string()
-  let rest = s
-    .substring(start=i, end=s.length())
-    .to_string()
-    .trim_start()
-    .to_string()
+  let name = s[0:i].to_owned()
+  let rest = s[i:].to_owned().trim_start().to_owned()
   (name, rest)
 }
 
@@ -233,7 +226,7 @@ fn interpret_tag(name : String, content : String) -> JsdocTag {
 /// `(Some(inner), rest)` when the input starts with `{…}`,
 /// `(None, s)` otherwise. Nested braces are supported.
 fn extract_brace_type(s : String) -> (String?, String) {
-  let trimmed = s.trim_start().to_string()
+  let trimmed = s.trim_start().to_owned()
   if trimmed.length() == 0 || trimmed[0] != '{' {
     return (None, trimmed)
   }
@@ -246,16 +239,8 @@ fn extract_brace_type(s : String) -> (String?, String) {
     } else if c == '}' {
       depth = depth - 1
       if depth == 0 {
-        let inner = trimmed
-          .substring(start=1, end=i)
-          .to_string()
-          .trim()
-          .to_string()
-        let rest = trimmed
-          .substring(start=i + 1, end=trimmed.length())
-          .to_string()
-          .trim_start()
-          .to_string()
+        let inner = trimmed[1:i].to_owned().trim().to_owned()
+        let rest = trimmed[i + 1:].to_owned().trim_start().to_owned()
         return (Some(inner), rest)
       }
     }
@@ -268,7 +253,7 @@ fn extract_brace_type(s : String) -> (String?, String) {
 /// Split off the first whitespace-delimited word — useful for
 /// `@param TYPE NAME description` shapes.
 fn split_first_word(s : String) -> (String, String) {
-  let trimmed = s.trim_start().to_string()
+  let trimmed = s.trim_start().to_owned()
   let mut i = 0
   while i < trimmed.length() {
     let c = trimmed[i]
@@ -280,21 +265,13 @@ fn split_first_word(s : String) -> (String, String) {
   if i == 0 {
     return ("", trimmed)
   }
-  let head = trimmed.substring(start=0, end=i).to_string()
-  let mut rest = trimmed
-    .substring(start=i, end=trimmed.length())
-    .to_string()
-    .trim_start()
-    .to_string()
+  let head = trimmed[0:i].to_owned()
+  let mut rest = trimmed[i:].to_owned().trim_start().to_owned()
   // The convention `@param name - description` uses a leading `-`
   // between the name and the description — strip it so the
   // description doesn't end up with a stray dash.
   if rest.has_prefix("-") {
-    rest = rest
-      .substring(start=1, end=rest.length())
-      .to_string()
-      .trim_start()
-      .to_string()
+    rest = rest[1:].to_owned().trim_start().to_owned()
   }
   (head, rest)
 }

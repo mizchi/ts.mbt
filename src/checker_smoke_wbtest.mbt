@@ -13,7 +13,7 @@ test "checker: bridge_smoke double-entry has no unresolved type references" {
   }
   let unresolved = @checker.unresolved_type_references(module_)
   if unresolved.length() != 0 {
-    fail("Unexpected unresolved references: \{unresolved}")
+    fail("Unexpected unresolved references: " + unresolved.join(", "))
   }
 }
 
@@ -34,7 +34,7 @@ test "checker: enum decl shadows references to its own name" {
   }
   let unresolved = @checker.unresolved_type_references(module_)
   if unresolved.length() != 0 {
-    fail("Unexpected unresolved references: \{unresolved}")
+    fail("Unexpected unresolved references: " + unresolved.join(", "))
   }
 }
 
@@ -52,10 +52,10 @@ test "checker: detects truly missing type references" {
   // Either Inner is reported, or the parser preemptively widens it to
   // something well-known. Whichever happens, the test surfaces it.
   if unresolved.length() != 1 {
-    fail("Expected exactly one unresolved name, got: \{unresolved}")
+    fail("Expected exactly one unresolved name, got: " + unresolved.join(", "))
   }
   if unresolved[0] != "Inner" {
-    fail("Expected unresolved name to be Inner, got: \{unresolved[0]}")
+    fail("Expected unresolved name to be Inner, got: " + unresolved[0])
   }
 }
 
@@ -77,7 +77,7 @@ test "checker: nested generic params in interfaces are recognised in scope" {
   }
   let unresolved = @checker.unresolved_type_references(module_)
   if unresolved.length() != 0 {
-    fail("Unexpected unresolved references: \{unresolved}")
+    fail("Unexpected unresolved references: " + unresolved.join(", "))
   }
 }
 
@@ -99,7 +99,7 @@ test "checker: ambient class declarations satisfy unresolved-reference check" {
   }
   let unresolved = @checker.unresolved_type_references(module_)
   if unresolved.length() != 0 {
-    fail("Unexpected unresolved references: \{unresolved}")
+    fail("Unexpected unresolved references: " + unresolved.join(", "))
   }
 }
 
@@ -117,7 +117,7 @@ test "checker: type alias chains parse cleanly" {
   }
   let unresolved = @checker.unresolved_type_references(module_)
   if unresolved.length() != 0 {
-    fail("Unexpected unresolved references: \{unresolved}")
+    fail("Unexpected unresolved references: " + unresolved.join(", "))
   }
 }
 
@@ -196,7 +196,10 @@ test "checker: check_module on parsed fixtures stays clean" {
     let report = @checker.check_module(module_)
     if report.issues.length() != 0 {
       let names = report.issues.map(fn(i) { i.name })
-      fail("check_module surfaced unexpected issues for fixture: \{names}")
+      fail(
+        "check_module surfaced unexpected issues for fixture: " +
+        names.join(", "),
+      )
     }
   }
 }
@@ -248,7 +251,7 @@ test "checker: simplify_union flattens redundant alias substitution result" {
   // After substitution Pair<string> ⇒ string | string ⇒ should collapse.
   let after_substitution : Array[@ast.TsType] = [String_, String_, Number]
   let simplified = @checker.simplify_union(after_substitution)
-  assert_eq(simplified.length(), 2)
+  @test.assert_eq(simplified.length(), 2)
   assert_true(simplified.contains(String_))
   assert_true(simplified.contains(Number))
 }

@@ -124,7 +124,7 @@ pub fn extract_jsx_pragmas(source : String, base : JsxConfig) -> JsxConfig {
         while end < len && source[end] != '\n' {
           end = end + 1
         }
-        let body = source.substring(start~, end~).to_string()
+        let body = source[start:end].to_owned()
         cfg = apply_pragmas_from_text(body, cfg)
         i = end
         continue
@@ -139,7 +139,7 @@ pub fn extract_jsx_pragmas(source : String, base : JsxConfig) -> JsxConfig {
           }
           end = end + 1
         }
-        let body = source.substring(start~, end~).to_string()
+        let body = source[start:end].to_owned()
         cfg = apply_pragmas_from_text(body, cfg)
         i = end + 2
         continue
@@ -158,7 +158,7 @@ pub fn extract_jsx_pragmas(source : String, base : JsxConfig) -> JsxConfig {
 fn apply_pragmas_from_text(text : String, cfg : JsxConfig) -> JsxConfig {
   let mut out = cfg
   for raw_line in text.split("\n") {
-    let line_str = raw_line.to_string()
+    let line_str = raw_line.to_owned()
     let trimmed = trim_jsdoc_line(line_str)
     match read_pragma(trimmed, "@jsxRuntime") {
       Some(v) => out = out.with_runtime(v)
@@ -186,9 +186,9 @@ fn apply_pragmas_from_text(text : String, cfg : JsxConfig) -> JsxConfig {
 /// Strip a leading `*` and surrounding whitespace from a JSDoc-style
 /// comment line.
 fn trim_jsdoc_line(line : String) -> String {
-  let t = line.trim().to_string()
+  let t = line.trim().to_owned()
   if t.has_prefix("*") {
-    t.substring(start=1, end=t.length()).to_string().trim().to_string()
+    t[1:t.length()].trim().to_owned()
   } else {
     t
   }
@@ -202,9 +202,7 @@ fn read_pragma(line : String, pragma_name : String) -> String? {
   if !line.has_prefix(pragma_name) {
     return None
   }
-  let rest = line
-    .substring(start=pragma_name.length(), end=line.length())
-    .to_string()
+  let rest = line[pragma_name.length():line.length()].to_owned()
   if rest.length() == 0 {
     return None
   }
@@ -212,13 +210,13 @@ fn read_pragma(line : String, pragma_name : String) -> String? {
   if head != ' ' && head != '\t' {
     return None
   }
-  let value = rest.trim().to_string()
+  let value = rest.trim().to_owned()
   if value.length() == 0 {
     return None
   }
   // Take the first whitespace-delimited token.
   match value.find(" ") {
-    Some(idx) => Some(value.substring(start=0, end=idx).to_string())
+    Some(idx) => Some(value[0:idx].to_owned())
     None => Some(value)
   }
 }
@@ -333,7 +331,7 @@ fn parse_dotted_var(name : String) -> @ast.TsExpr {
   let parts = name.split(".")
   let arr : Array[String] = []
   for p in parts {
-    arr.push(p.to_string())
+    arr.push(p.to_owned())
   }
   if arr.length() == 0 {
     return @ast.TsExpr::Var(name)

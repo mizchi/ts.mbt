@@ -35,7 +35,6 @@ priv enum AsConstShape {
 
 ///|
 priv struct AsConstCandidate {
-  name : String
   shape : AsConstShape
   mut disqualified : Bool
 }
@@ -48,7 +47,7 @@ pub fn as_const_inline_block(block : @ast.TsBlock) -> @ast.TsBlock {
     match stmt {
       Const(@ast.TsBinding::Ident(name), _, e) =>
         match extract_as_const_shape(e) {
-          Some(shape) => candidates[name] = { name, shape, disqualified: false }
+          Some(shape) => candidates[name] = { shape, disqualified: false }
           None => ()
         }
       _ => ()
@@ -67,7 +66,7 @@ pub fn as_const_inline_block(block : @ast.TsBlock) -> @ast.TsBlock {
   // 3. Filter to survivors.
   let survivors : Map[String, AsConstCandidate] = {}
   for entry in candidates {
-    if not(entry.1.disqualified) {
+    if !entry.1.disqualified {
       survivors[entry.0] = entry.1
     }
   }
@@ -95,7 +94,7 @@ fn extract_as_const_shape(expr : @ast.TsExpr) -> AsConstShape? {
     ArrayLit(items) => {
       let out : Array[@ast.TsExpr] = []
       for it in items {
-        if not(is_scalar_literal(it)) {
+        if !is_scalar_literal(it) {
           return None
         }
         out.push(it)
@@ -105,7 +104,7 @@ fn extract_as_const_shape(expr : @ast.TsExpr) -> AsConstShape? {
     ObjectLit(entries) => {
       let m : Map[String, @ast.TsExpr] = {}
       for ent in entries {
-        if not(is_scalar_literal(ent.1)) {
+        if !is_scalar_literal(ent.1) {
           return None
         }
         m[ent.0] = ent.1

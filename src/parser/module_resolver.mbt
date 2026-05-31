@@ -51,7 +51,7 @@ fn json_parse_string(src : String, start : Int) -> (String, Int) {
         't' => buf.write_char('\t')
         'u' =>
           if i + 5 < src.length() {
-            let hex = src[i + 2:i + 6].to_string()
+            let hex = src[i + 2:i + 6].to_owned()
             let code = @string.parse_int(hex, base=16) catch { _ => -1 }
             if code >= 0 && code <= 0x10FFFF {
               buf.write_char(code.unsafe_to_char())
@@ -126,11 +126,11 @@ fn scan_json_value(src : String, start : Int) -> (JsonFieldValue, Int) {
   }
   if c == '{' {
     let end_ = scan_json_compound(src, i, '{', '}')
-    return (Object(src[i:end_].to_string()), end_)
+    return (Object(src[i:end_].to_owned()), end_)
   }
   if c == '[' {
     let end_ = scan_json_compound(src, i, '[', ']')
-    return (Array(src[i:end_].to_string()), end_)
+    return (Array(src[i:end_].to_owned()), end_)
   }
   let mut end_ = i
   while end_ < src.length() {
@@ -366,7 +366,7 @@ fn parse_json_string_array_at(
   if start >= end_ || char_at(src, start) != '[' {
     return []
   }
-  parse_json_string_array(src[start:end_].to_string())
+  parse_json_string_array(src[start:end_].to_owned())
 }
 
 ///|
@@ -459,7 +459,7 @@ fn normalize_path(path : String) -> String {
   let is_abs = path.has_prefix("/")
   let parts : Array[String] = []
   for part_view in path.split("/") {
-    let part = part_view.to_string()
+    let part = part_view.to_owned()
     if part == "" {
       if is_abs && parts.length() == 0 {
         parts.push("")
@@ -506,11 +506,11 @@ fn normalize_path(path : String) -> String {
 fn apply_single_wildcard(pattern : String, replacement : String) -> String {
   match pattern.find("*") {
     Some(idx) => {
-      let prefix = if idx == 0 { "" } else { pattern[:idx].to_string() }
+      let prefix = if idx == 0 { "" } else { pattern[:idx].to_owned() }
       let suffix = if idx + 1 >= pattern.length() {
         ""
       } else {
-        pattern[idx + 1:pattern.length()].to_string()
+        pattern[idx + 1:].to_owned()
       }
       prefix + replacement + suffix
     }
@@ -522,7 +522,7 @@ fn apply_single_wildcard(pattern : String, replacement : String) -> String {
 fn split_slash_parts(path : String) -> Array[String] {
   let parts : Array[String] = []
   for part in path.split("/") {
-    parts.push(part.to_string())
+    parts.push(part.to_owned())
   }
   parts
 }
@@ -544,7 +544,7 @@ fn dirname(path : String) -> String {
   let normalized = normalize_path(path)
   match normalized.rev_find("/") {
     Some(0) => "/"
-    Some(idx) => normalized[:idx].to_string()
+    Some(idx) => normalized[:idx].to_owned()
     None => "."
   }
 }
@@ -571,7 +571,7 @@ fn is_runtime_js_path(path : String) -> Bool {
 
 ///|
 fn strip_suffix(path : String, suffix : String) -> String {
-  path[:path.length() - suffix.length()].to_string()
+  path[:path.length() - suffix.length()].to_owned()
 }
 
 ///|
@@ -812,7 +812,7 @@ fn resolve_conditional_mapping_targets(
 fn split_package_specifier(specifier : String) -> (String, String) {
   let parts : Array[String] = []
   for part in specifier.split("/") {
-    parts.push(part.to_string())
+    parts.push(part.to_owned())
   }
   if specifier.has_prefix("@") {
     if parts.length() < 2 {
@@ -847,12 +847,12 @@ fn types_package_name(package_name : String) -> String? {
   if package_name.has_prefix("@") {
     let parts : Array[String] = []
     for part in package_name.split("/") {
-      parts.push(part.to_string())
+      parts.push(part.to_owned())
     }
     if parts.length() < 2 {
       return None
     }
-    return Some("@types/" + parts[0][1:].to_string() + "__" + parts[1])
+    return Some("@types/" + parts[0][1:].to_owned() + "__" + parts[1])
   }
   Some("@types/" + package_name)
 }
@@ -1229,7 +1229,7 @@ async fn resolve_node_builtin_type_specifier(
   base_path : String,
   specifier : String,
 ) -> String? {
-  let builtin_path = specifier["node:".length():].to_string()
+  let builtin_path = specifier["node:".length():].to_owned()
   if builtin_path == "" {
     return None
   }

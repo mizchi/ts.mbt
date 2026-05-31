@@ -197,7 +197,7 @@ fn ffi_lower_leading_ascii(name : String) -> String {
   }
   let first = name[0].unsafe_to_char()
   if first >= 'A' && first <= 'Z' {
-    (first.to_int() + 32).unsafe_to_char().to_string() + name[1:].to_string()
+    (first.to_int() + 32).unsafe_to_char().to_string() + name[1:].to_owned()
   } else {
     name
   }
@@ -227,7 +227,7 @@ fn ffi_trim_underscores(name : String) -> String {
   while end_ > start && name[end_ - 1].unsafe_to_char() == '_' {
     end_ -= 1
   }
-  name[start:end_].to_string()
+  name[start:end_].to_owned()
 }
 
 ///|
@@ -276,13 +276,13 @@ fn ffi_type_identifier(name : String, fallback : String) -> String {
     prefix += "Underscore"
     idx += 1
   }
-  let core = sanitized[idx:sanitized.length()].to_string()
+  let core = sanitized[idx:sanitized.length()].to_owned()
   if core == "" {
     return fallback
   }
   let first = core[0].unsafe_to_char()
   let normalized_core = if first >= 'a' && first <= 'z' {
-    ffi_to_upper_ascii(first).to_string() + core[1:].to_string()
+    ffi_to_upper_ascii(first).to_string() + core[1:].to_owned()
   } else {
     core
   }
@@ -519,7 +519,7 @@ fn ffi_pascal_case(name : String) -> String {
   let first = name[0].to_int().unsafe_to_char()
   if first >= 'a' && first <= 'z' {
     let upper = (first.to_int() - 32).unsafe_to_char()
-    upper.to_string() + name[1:].to_string()
+    upper.to_string() + name[1:].to_owned()
   } else {
     name
   }
@@ -1190,7 +1190,7 @@ fn ffi_replace_this_token(rendered : String, owner_name : String) -> String {
   result = result.replace(old="-> This\n", new="-> " + owner_name + "\n")
   result = result.replace(old="-> This)", new="-> " + owner_name + ")")
   if result.has_suffix("-> This") {
-    result = result[:result.length() - 7].to_string() + "-> " + owner_name
+    result = result[:result.length() - 7].to_owned() + "-> " + owner_name
   }
   result
 }
@@ -3882,7 +3882,7 @@ fn ffi_bridge_import_key(export_name : String, is_namespace : Bool) -> String {
 ///|
 fn ffi_runtime_export_root_name(runtime_export_name : String) -> String {
   match runtime_export_name.find(".") {
-    Some(index) => runtime_export_name[:index].to_string()
+    Some(index) => runtime_export_name[:index].to_owned()
     None => runtime_export_name
   }
 }
@@ -3894,9 +3894,9 @@ fn ffi_runtime_export_member_names(
   let members : Array[String] = []
   match runtime_export_name.find(".") {
     Some(index) => {
-      let suffix = runtime_export_name[index + 1:].to_string()
+      let suffix = runtime_export_name[index + 1:].to_owned()
       for part_view in suffix.split(".") {
-        let part = part_view.to_string()
+        let part = part_view.to_owned()
         if part != "" {
           members.push(part)
         }
@@ -4090,10 +4090,10 @@ fn bridge_namespace_import_roots_for_export_equals(
 ) -> Array[String] {
   let roots : Array[String] = []
   let module_basename = match module_spec.rev_find("/") {
-    Some(idx) => module_spec[idx + 1:].to_string()
+    Some(idx) => module_spec[idx + 1:].to_owned()
     None =>
       match module_spec.rev_find(":") {
-        Some(idx) => module_spec[idx + 1:].to_string()
+        Some(idx) => module_spec[idx + 1:].to_owned()
         None => module_spec
       }
   }

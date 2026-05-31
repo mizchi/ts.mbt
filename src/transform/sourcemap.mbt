@@ -23,7 +23,7 @@
 pub(all) struct Position {
   line : Int // 0-indexed
   column : Int // 0-indexed
-} derive(Eq, Show)
+} derive(Eq, Debug)
 
 ///|
 pub fn Position::new(line : Int, column : Int) -> Position {
@@ -101,13 +101,13 @@ let vlq_base64_chars : String = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstu
 pub fn vlq_encode(value : Int) -> String {
   let buf = StringBuilder::new()
   // Move the sign bit to bit 0 of the resulting unsigned integer.
-  let mut v = if value < 0 { (-value).lsl(1).lor(1) } else { value.lsl(1) }
+  let mut v = if value < 0 { (-value << 1).lor(1) } else { value << 1 }
   if v == 0 {
     return "A"
   }
   while v != 0 {
     let mut digit = v.land(0x1f)
-    v = v.lsr(5)
+    v = (v.reinterpret_as_uint() >> 5).reinterpret_as_int()
     if v != 0 {
       digit = digit.lor(0x20)
     }

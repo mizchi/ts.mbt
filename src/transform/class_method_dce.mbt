@@ -47,7 +47,7 @@ pub fn class_method_dce_block(block : @ast.TsBlock) -> @ast.TsBlock {
   //    NativeClassStmt/Expr AND no IIFE-lowered class. (The IIFE
   //    pattern is `let X = function () { … return X; }();`.)
   let iife_classes = collect_iife_class_names(block)
-  if not(has_any_native_class(block)) && iife_classes.is_empty() {
+  if !has_any_native_class(block) && iife_classes.is_empty() {
     return block
   }
   // 2. Bundle-wide reflection / dynamic-access scan. Any hit aborts.
@@ -177,33 +177,6 @@ fn collect_iife_body_accesses(
       _ => collect_static_accesses_stmt(s, out)
     }
   }
-}
-
-///|
-/// Detects the IIFE-lowered class shape at the top level:
-///   `let X = function () { … return X; }();`
-fn has_any_iife_class(block : @ast.TsBlock) -> Bool {
-  for s in block.stmts {
-    match s {
-      Var(
-        @ast.TsBinding::Ident(_),
-        _,
-        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(_), args)
-      )
-      | Let(
-        @ast.TsBinding::Ident(_),
-        _,
-        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(_), args)
-      )
-      | Const(
-        @ast.TsBinding::Ident(_),
-        _,
-        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(_), args)
-      ) => if args.length() == 0 { return true }
-      _ => ()
-    }
-  }
-  false
 }
 
 ///|
@@ -434,7 +407,7 @@ fn stmt_has_method_sniff(stmt : @ast.TsStmt) -> Bool {
       // not to the prototype, so prototype-method DCE is still safe.
       // `Foo.prototype[key] = val` (dynamic prototype augmentation) IS
       // a sink and correctly falls through to `return true`.
-      if not(is_static_index_for_method_dce(idx)) {
+      if !is_static_index_for_method_dce(idx) {
         match t {
           @ast.TsExpr::Var("this") => ()
           _ => return true
@@ -570,7 +543,7 @@ fn expr_has_method_sniff(expr : @ast.TsExpr) -> Bool {
     IndexAccess(recv, idx) =>
       expr_has_method_sniff(recv) || expr_has_method_sniff(idx)
     IndexAssignExpr(recv, idx, v) => {
-      if not(is_static_index_for_method_dce(idx)) {
+      if !is_static_index_for_method_dce(idx) {
         match recv {
           @ast.TsExpr::Var("this") => ()
           _ => return true
@@ -1020,7 +993,7 @@ fn iife_method_assignment_is_dead(
     ) =>
       if n == class_name &&
         method_name != "constructor" &&
-        not(accessed.contains(method_name)) {
+        !accessed.contains(method_name) {
         true
       } else {
         false
@@ -1037,7 +1010,7 @@ fn iife_method_assignment_is_dead(
     ) =>
       if n == class_name &&
         method_name != "constructor" &&
-        not(accessed.contains(method_name)) {
+        !accessed.contains(method_name) {
         true
       } else {
         false
@@ -1052,7 +1025,7 @@ fn iife_method_assignment_is_dead(
     ) =>
       if n == class_name &&
         method_name != "constructor" &&
-        not(accessed.contains(method_name)) {
+        !accessed.contains(method_name) {
         true
       } else {
         false
@@ -1069,7 +1042,7 @@ fn iife_method_assignment_is_dead(
     ) =>
       if n == class_name &&
         method_name != "constructor" &&
-        not(accessed.contains(method_name)) {
+        !accessed.contains(method_name) {
         true
       } else {
         false

@@ -4,9 +4,10 @@
 
 ///|
 fn mangle_to_js(src : String, cfg : ManglerConfig) -> Result[String, String] {
-  let block = match (try? @parser.parse_block_from_source(src)) {
-    Ok(b) => b
-    Err(e) => return Err("parse error: \{e}")
+  let block = try @parser.parse_block_from_source(src) catch {
+    e => return Err("parse error: \{e}")
+  } noraise {
+    b => b
   }
   let mangled = mangle_block(block, cfg)
   let e = Emitter::new()
@@ -409,15 +410,12 @@ test "mangle: method calls follow the property rename" {
       let mut occurrences = 0
       let mut from_idx = 0
       while from_idx < js.length() {
-        let slice = js.substring(start=from_idx, end=js.length()).to_string()
+        let slice = js[from_idx:].to_owned()
         match slice.find(".") {
           Some(i) => {
             // Skip the `.` and look for `(` after a single char.
             if from_idx + i + 2 < js.length() &&
-              js
-              .substring(start=from_idx + i + 2, end=from_idx + i + 3)
-              .to_string() ==
-              "(" {
+              js[from_idx + i + 2:from_idx + i + 3].to_owned() == "(" {
               occurrences = occurrences + 1
             }
             from_idx = from_idx + i + 1
@@ -463,7 +461,7 @@ test "mangle: block-scoped let in separate if arms can share short names" {
         let mut occurrences = 0
         let mut from_idx = 0
         while from_idx < js.length() {
-          let slice = js.substring(start=from_idx, end=js.length()).to_string()
+          let slice = js[from_idx:].to_owned()
           match slice.find(needle) {
             Some(i) => {
               occurrences = occurrences + 1
@@ -546,7 +544,7 @@ test "mangle: nested while bodies open their own block frame" {
       let mut occurrences = 0
       let mut from_idx = 0
       while from_idx < js.length() {
-        let slice = js.substring(start=from_idx, end=js.length()).to_string()
+        let slice = js[from_idx:].to_owned()
         match slice.find("let a") {
           Some(i) => {
             occurrences = occurrences + 1
@@ -679,7 +677,7 @@ test "mangle: name short-name generator avoids reserved single-letter clashes" {
       let mut count = 0
       let mut from_idx = 0
       while from_idx < js.length() {
-        let slice = js.substring(start=from_idx, end=js.length()).to_string()
+        let slice = js[from_idx:].to_owned()
         match slice.find("const a =") {
           Some(i) => {
             count = count + 1
@@ -688,7 +686,7 @@ test "mangle: name short-name generator avoids reserved single-letter clashes" {
           None => break
         }
       }
-      assert_eq(count, 0)
+      @test.assert_eq(count, 0)
     }
     Err(e) => fail("\{e}")
   }

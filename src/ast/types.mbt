@@ -690,6 +690,9 @@ pub(all) struct TsModule {
   // aliases / values into the matching module lookup so user code that
   // imports from `"foo"` sees the augmented shape.
   module_augmentations : Array[(String, TsModule)]
+  // Top-level executable statements (const/let/var with type annotations,
+  // class expressions, etc.) from non-ambient modules. Empty for .d.ts files.
+  top_level_stmts : Array[TsStmt]
 } derive(Debug)
 
 ///|

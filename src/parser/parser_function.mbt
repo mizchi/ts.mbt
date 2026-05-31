@@ -350,7 +350,7 @@ fn apply_jsdoc_param_overlay(
       Any => true
       _ => false
     }
-    if not(needs_overlay) {
+    if !needs_overlay {
       out.push(p)
       continue
     }
@@ -414,18 +414,14 @@ fn try_parse_jsdoc_type(raw : String) -> @ast.TsType? {
 /// shapes; unrecognized syntax is left alone (the downstream parse
 /// will simply fail and the overlay falls back to `Any`).
 fn translate_jsdoc_type(raw : String) -> String {
-  let s = raw.trim().to_string()
+  let s = raw.trim().to_owned()
   // `*` → `any`
   if s == "*" {
     return "any"
   }
   // `?T` → `T | null` for any type expression.
   if s.has_prefix("?") {
-    let inner = s
-      .substring(start=1, end=s.length())
-      .to_string()
-      .trim()
-      .to_string()
+    let inner = s[1:].to_owned().trim().to_owned()
     if inner.length() > 0 {
       return "(\{inner} | null)"
     }
@@ -433,16 +429,20 @@ fn translate_jsdoc_type(raw : String) -> String {
   // `!T` → `T` (strip the non-null marker; TS lacks a 1:1 syntax
   // and `NonNullable<T>` is more invasive than warranted here).
   if s.has_prefix("!") {
-    let inner = s
-      .substring(start=1, end=s.length())
-      .to_string()
-      .trim()
-      .to_string()
+    let inner = s[1:].to_owned().trim().to_owned()
     return inner
   }
   // `Object<K, V>` → `Record<K, V>`.
   if s.has_prefix("Object<") {
-    return "Record" + s.substring(start=6, end=s.length()).to_string()
+    return "Record" + s[6:].to_owned()
+  }
+  // `function(T1, T2): R` → `(_0: T1, _1: T2) => R`
+  // `function(): R` → `() => R`
+  if s.has_prefix("function(") {
+    match translate_jsdoc_function_type(s) {
+      Some(ts) => return ts
+      None => ()
+    }
   }
   // `function(T1, T2): R` → `(_0: T1, _1: T2) => R`
   // `function(): R` → `() => R`
@@ -479,11 +479,11 @@ fn translate_jsdoc_function_type(s : String) -> String? {
   if depth != 0 {
     return None
   }
-  let params_str = s.substring(start=start, end=i).to_string().trim().to_string()
+  let params_str = s[start:i].to_owned().trim().to_owned()
   // Everything after `)` — optionally `: ReturnType`.
-  let rest = s.substring(start=i + 1, end=len).to_string().trim().to_string()
+  let rest = s[i + 1:len].to_owned().trim().to_owned()
   let return_type = if rest.has_prefix(":") {
-    rest.substring(start=1, end=rest.length()).to_string().trim().to_string()
+    rest[1:].to_owned().trim().to_owned()
   } else {
     "any"
   }
@@ -499,11 +499,11 @@ fn translate_jsdoc_function_type(s : String) -> String? {
       } else if c == ')' || c == '>' || c == ']' || c == '}' {
         depth2 = depth2 - 1
       } else if c == ',' && depth2 == 0 {
-        params.push(params_str.substring(start=start2, end=j).to_string().trim().to_string())
+        params.push(params_str[start2:j].to_owned().trim().to_owned())
         start2 = j + 1
       }
     }
-    params.push(params_str.substring(start=start2, end=params_str.length()).to_string().trim().to_string())
+    params.push(params_str[start2:].to_owned().trim().to_owned())
   }
   // Build `(_0: P0, _1: P1, ...) => R`.
   let mut ts_params = ""
@@ -514,25 +514,6 @@ fn translate_jsdoc_function_type(s : String) -> String? {
     ts_params = ts_params + "_\{k}: \{p}"
   }
   Some("(\{ts_params}) => \{return_type}")
-}
-
-///|
-fn is_simple_type_ident(s : String) -> Bool {
-  if s.length() == 0 {
-    return false
-  }
-  for i in 0..<s.length() {
-    let c = s[i]
-    let ok = (c >= 'a' && c <= 'z') ||
-      (c >= 'A' && c <= 'Z') ||
-      (c >= '0' && c <= '9') ||
-      c == '_' ||
-      c == '$'
-    if not(ok) {
-      return false
-    }
-  }
-  true
 }
 
 ///|
@@ -888,13 +869,6 @@ fn Parser::restore_local_type_param_bounds(
   while self.local_type_param_bounds.length() > old_len {
     let _ = self.local_type_param_bounds.pop()
   }
-}
-
-///|
-/// Parse simple `extends` names while still skipping complex generic clauses.
-fn Parser::parse_extends_names_until_body(self : Parser) -> Array[String] {
-  let (names, _) = self.parse_extends_clause_until_body()
-  names
 }
 
 ///|
@@ -1376,50 +1350,6 @@ pub fn Parser::parse_interface(
         let _ = self.advance()
         "interface"
       }
-      Class => {
-        let _ = self.advance()
-        "class"
-      }
-      Const => {
-        let _ = self.advance()
-        "const"
-      }
-      Var => {
-        let _ = self.advance()
-        "var"
-      }
-      Let => {
-        let _ = self.advance()
-        "let"
-      }
-      New => {
-        let _ = self.advance()
-        "new"
-      }
-      Try => {
-        let _ = self.advance()
-        "try"
-      }
-      Catch => {
-        let _ = self.advance()
-        "catch"
-      }
-      Throw => {
-        let _ = self.advance()
-        "throw"
-      }
-      Finally => {
-        let _ = self.advance()
-        "finally"
-      }
-      Extends => {
-        let _ = self.advance()
-        "extends"
-      }
-      Function => {
-        let _ = self.advance()
-        "function"
-      }
       k =>
         raise ParseError("Expected field name at \{self.peek().pos}, got \{k}")
     }
@@ -1548,89 +1478,6 @@ fn Parser::skip_until_semicolon(self : Parser) -> Unit {
         paren_depth -= 1
         let _ = self.advance()
       }
-      _ => {
-        let _ = self.advance()
-      }
-    }
-  }
-}
-
-///|
-fn Parser::is_top_level_decl_start_token(self : Parser) -> Bool {
-  match self.peek().kind {
-    Var
-    | Let
-    | Const
-    | Class
-    | Import
-    | Export
-    | Declare
-    | Interface
-    | Type
-    | Function => true
-    Ident(name) =>
-      name == "abstract" ||
-      name == "namespace" ||
-      name == "module" ||
-      name == "global" ||
-      name == "enum" ||
-      name == "class"
-    _ => false
-  }
-}
-
-///|
-/// Skip type alias: type Name<T> = ...;
-fn Parser::skip_type_alias(self : Parser) -> Unit {
-  let _ = self.advance() // consume 'type'
-  // Skip until semicolon, handling nested braces and angle brackets
-  let mut brace_depth = 0
-  let mut angle_depth = 0
-  while !self.check(Eof) {
-    match self.peek().kind {
-      LBrace => {
-        brace_depth += 1
-        let _ = self.advance()
-      }
-      RBrace => {
-        if brace_depth == 0 && angle_depth <= 0 {
-          break
-        }
-        brace_depth -= 1
-        let _ = self.advance()
-        if brace_depth < 0 {
-          break
-        }
-      }
-      Lt => {
-        angle_depth += 1
-        let _ = self.advance()
-      }
-      Gt => {
-        angle_depth -= 1
-        let _ = self.advance()
-      }
-      GtGt => {
-        // >> counts as two >
-        angle_depth -= 2
-        let _ = self.advance()
-      }
-      GtGtGt => {
-        // >>> counts as three >
-        angle_depth -= 3
-        let _ = self.advance()
-      }
-      Semicolon => {
-        if brace_depth == 0 && angle_depth <= 0 {
-          let _ = self.advance()
-          break
-        }
-        let _ = self.advance()
-      }
-      _ if brace_depth == 0 &&
-        angle_depth <= 0 &&
-        self.has_line_terminator_before() &&
-        self.is_top_level_decl_start_token() => break
       _ => {
         let _ = self.advance()
       }

@@ -127,7 +127,7 @@ fn decl_apply_string_intrinsic_to_value(
     return Some(value)
   }
   let head = value[0].unsafe_to_char()
-  let rest = value[1:].to_string()
+  let rest = value[1:].to_owned()
   match intrinsic {
     "Capitalize" =>
       if head >= 'a' && head <= 'z' {
@@ -302,7 +302,7 @@ fn decl_trim_underscores(name : String) -> String {
   while end_ > start && name[end_ - 1].unsafe_to_char() == '_' {
     end_ -= 1
   }
-  name[start:end_].to_string()
+  name[start:end_].to_owned()
 }
 
 ///|
@@ -335,12 +335,12 @@ fn decl_to_pascal_case(name : String) -> String {
   let parts = snake.split("_")
   let mut result = ""
   for part_view in parts {
-    let part = part_view.to_string()
+    let part = part_view.to_owned()
     if part == "" {
       continue
     }
     result += decl_to_upper_ascii(part[0].unsafe_to_char()).to_string() +
-      part[1:].to_string()
+      part[1:].to_owned()
   }
   decl_sanitize_identifier(result, "OpaqueType")
 }
@@ -413,6 +413,7 @@ async fn load_decl_module_info(
           namespaces: [],
           enums: [],
           module_augmentations: [],
+          top_level_stmts: [],
         }
       }
   }
@@ -744,8 +745,8 @@ fn resolve_named_to_alias_body(
   let dot_pos = name.find(".")
   match dot_pos {
     Some(pos) => {
-      let head = name[0:pos].to_string()
-      let tail = name[pos + 1:].to_string()
+      let head = name[0:pos].to_owned()
+      let tail = name[pos + 1:].to_owned()
       match resolve_namespace_alias_module(info, modules, head) {
         Some(target_info) => {
           let next_visited : Array[String] = []
@@ -1408,7 +1409,7 @@ fn decl_to_camel_case(name : String) -> String {
     return pascal
   }
   decl_to_lower_ascii(pascal[0].unsafe_to_char()).to_string() +
-  pascal[1:].to_string()
+  pascal[1:].to_owned()
 }
 
 ///|
@@ -4022,8 +4023,8 @@ fn redirect_qualified_named(
     Named(name) =>
       match name.find(".") {
         Some(pos) => {
-          let head = name[0:pos].to_string()
-          let tail = name[pos + 1:].to_string()
+          let head = name[0:pos].to_owned()
+          let tail = name[pos + 1:].to_owned()
           match resolve_namespace_alias_module(info, modules, head) {
             Some(target_info) => (target_info, Named(tail))
             None => (info, source)
@@ -9081,6 +9082,7 @@ pub async fn emit_moonbit_decl_from_entry_path(
     namespaces: [],
     enums,
     module_augmentations: [],
+    top_level_stmts: [],
   }
   // Run the checker over the final module shape and surface anything it
   // catches as a generator-level note. The emit pipeline is internally

@@ -125,7 +125,7 @@ fn try_extract_switch_fold(f : @ast.TsFunc) -> SwitchFoldEntry? {
       }
       None =>
         // `default:` arm — accept exactly one.
-        if default_expr.is_empty() {
+        if default_expr is None {
           if c.body.stmts.length() != 1 {
             return None
           }
@@ -144,14 +144,14 @@ fn try_extract_switch_fold(f : @ast.TsFunc) -> SwitchFoldEntry? {
   match default_expr {
     Some(d) =>
       for l in literals {
-        if not(arms.contains(l)) {
+        if !arms.contains(l) {
           arms[l] = d
         }
       }
     None =>
       // No default: every literal must have an explicit arm.
       for l in literals {
-        if not(arms.contains(l)) {
+        if !arms.contains(l) {
           return None
         }
       }
@@ -560,7 +560,7 @@ fn try_fold_call(
     if i == entry.switch_param_index {
       continue
     }
-    if not(is_trivially_substitutable(args[i])) {
+    if !is_trivially_substitutable(args[i]) {
       return None
     }
   }

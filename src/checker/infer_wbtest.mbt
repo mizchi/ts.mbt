@@ -7,14 +7,14 @@ fn infer_marker(name : String) -> @ast.TsType {
 test "match_infer_pattern: identical types match without bindings" {
   let bindings : Map[String, @ast.TsType] = {}
   assert_true(match_infer_pattern(String_, String_, bindings))
-  assert_eq(bindings.length(), 0)
+  @test.assert_eq(bindings.length(), 0)
 }
 
 ///|
 test "match_infer_pattern: bare infer captures source" {
   let bindings : Map[String, @ast.TsType] = {}
   assert_true(match_infer_pattern(String_, infer_marker("U"), bindings))
-  assert_eq(bindings.get("U"), Some(String_))
+  @test.assert_eq(bindings.get("U"), Some(String_))
 }
 
 ///|
@@ -23,7 +23,7 @@ test "match_infer_pattern: Promise<infer U> binds U to inner" {
   let pattern : @ast.TsType = Applied("Promise", [infer_marker("U")])
   let source : @ast.TsType = Applied("Promise", [String_])
   assert_true(match_infer_pattern(source, pattern, bindings))
-  assert_eq(bindings.get("U"), Some(String_))
+  @test.assert_eq(bindings.get("U"), Some(String_))
 }
 
 ///|
@@ -32,7 +32,7 @@ test "match_infer_pattern: array element infer" {
   let pattern : @ast.TsType = Array(infer_marker("E"))
   let source : @ast.TsType = Array(Number)
   assert_true(match_infer_pattern(source, pattern, bindings))
-  assert_eq(bindings.get("E"), Some(Number))
+  @test.assert_eq(bindings.get("E"), Some(Number))
 }
 
 ///|
@@ -42,8 +42,8 @@ test "match_infer_pattern: function param/return infer" {
   let pattern : @ast.TsType = Func([infer_marker("A")], infer_marker("R"))
   let source : @ast.TsType = Func([String_], Number)
   assert_true(match_infer_pattern(source, pattern, bindings))
-  assert_eq(bindings.get("A"), Some(String_))
-  assert_eq(bindings.get("R"), Some(Number))
+  @test.assert_eq(bindings.get("A"), Some(String_))
+  @test.assert_eq(bindings.get("R"), Some(Number))
 }
 
 ///|
@@ -77,7 +77,7 @@ test "match_infer_pattern: `infer X extends Bound` rejects disjoint source" {
   assert_false(
     match_infer_pattern(Number, infer_marker_with_bound("T", String_), bindings),
   )
-  assert_eq(bindings.length(), 0)
+  @test.assert_eq(bindings.length(), 0)
 }
 
 ///|
@@ -91,7 +91,7 @@ test "match_infer_pattern: `infer X extends Bound` accepts matching source" {
       bindings,
     ),
   )
-  assert_eq(bindings.get("T"), Some(Literal("a")))
+  @test.assert_eq(bindings.get("T"), Some(Literal("a")))
 }
 
 ///|
@@ -104,7 +104,10 @@ test "match_infer_pattern: variadic Parameters<F> captures rest-tail tuple" {
   let source : @ast.TsType = Func([String_, Rest(Array(Number))], Void)
   let pattern : @ast.TsType = Func([Array(infer_marker("P"))], Any)
   assert_true(match_infer_pattern(source, pattern, bindings))
-  assert_eq(bindings.get("P"), Some(Tuple([String_, Rest(Array(Number))])))
+  @test.assert_eq(
+    bindings.get("P"),
+    Some(Tuple([String_, Rest(Array(Number))])),
+  )
 }
 
 ///|
@@ -120,7 +123,7 @@ test "match_infer_pattern: `infer X extends Bound` allows undecidable source" {
       bindings,
     ),
   )
-  assert_eq(bindings.get("T"), Some(Named("Foo")))
+  @test.assert_eq(bindings.get("T"), Some(Named("Foo")))
 }
 
 ///|
@@ -133,7 +136,7 @@ test "match_infer_pattern: union pattern picks the matching branch" {
   ])
   let source : @ast.TsType = Applied("Promise", [String_])
   assert_true(match_infer_pattern(source, pattern, bindings))
-  assert_eq(bindings.get("U"), Some(String_))
+  @test.assert_eq(bindings.get("U"), Some(String_))
 }
 
 ///|
@@ -141,7 +144,7 @@ test "substitute_inferred_type: replaces Named with binding" {
   let bindings : Map[String, @ast.TsType] = { "U": Number }
   let body : @ast.TsType = Array(Named("U"))
   let result = substitute_inferred_type(body, bindings)
-  assert_eq(result, Array(Number))
+  @test.assert_eq(result, Array(Number))
 }
 
 ///|
@@ -150,7 +153,7 @@ test "match_infer_pattern: rest pattern (...args: any[]) accepts any arity" {
   let pattern : @ast.TsType = Func([Array(Any)], infer_marker("R"))
   let source : @ast.TsType = Func([String_, Number, Boolean], Named("Date"))
   assert_true(match_infer_pattern(source, pattern, bindings))
-  assert_eq(bindings.get("R"), Some(Named("Date")))
+  @test.assert_eq(bindings.get("R"), Some(Named("Date")))
 }
 
 ///|
@@ -160,7 +163,7 @@ test "match_infer_pattern: rest pattern captures params as Tuple" {
   let pattern : @ast.TsType = Func([Array(infer_marker("P"))], Any)
   let source : @ast.TsType = Func([String_, Number], Void)
   assert_true(match_infer_pattern(source, pattern, bindings))
-  assert_eq(bindings.get("P"), Some(Tuple([String_, Number])))
+  @test.assert_eq(bindings.get("P"), Some(Tuple([String_, Number])))
 }
 
 ///|
@@ -169,7 +172,7 @@ test "match_infer_pattern: rest pattern with no source params still matches" {
   let pattern : @ast.TsType = Func([Array(Any)], infer_marker("R"))
   let source : @ast.TsType = Func([], String_)
   assert_true(match_infer_pattern(source, pattern, bindings))
-  assert_eq(bindings.get("R"), Some(String_))
+  @test.assert_eq(bindings.get("R"), Some(String_))
 }
 
 ///|
@@ -181,7 +184,7 @@ test "match_infer_pattern: object pattern { value: infer V }" {
     (Literal("extra"), String_),
   ])
   assert_true(match_infer_pattern(source, pattern, bindings))
-  assert_eq(bindings.get("V"), Some(Number))
+  @test.assert_eq(bindings.get("V"), Some(Number))
 }
 
 ///|
@@ -196,7 +199,7 @@ test "match_infer_pattern: object pattern requires every field to match" {
     (Literal("kind"), Literal("ok")),
   ])
   assert_true(match_infer_pattern(source, pattern, bindings))
-  assert_eq(bindings.get("V"), Some(Number))
+  @test.assert_eq(bindings.get("V"), Some(Number))
 }
 
 ///|
@@ -220,7 +223,7 @@ test "match_infer_pattern: intersection pattern matches against intersection" {
   ])
   let source : @ast.TsType = Intersection([Named("A"), Applied("B", [String_])])
   assert_true(match_infer_pattern(source, pattern, bindings))
-  assert_eq(bindings.get("X"), Some(String_))
+  @test.assert_eq(bindings.get("X"), Some(String_))
 }
 
 ///|
@@ -228,5 +231,5 @@ test "substitute_inferred_type: leaves non-bound names alone" {
   let bindings : Map[String, @ast.TsType] = { "U": Number }
   let body : @ast.TsType = Named("V")
   let result = substitute_inferred_type(body, bindings)
-  assert_eq(result, Named("V"))
+  @test.assert_eq(result, Named("V"))
 }

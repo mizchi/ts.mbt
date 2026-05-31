@@ -63,15 +63,15 @@ fn try_lift_iife_class_into(
   // CallExpr(FuncExpr(f), []))`.
   match stmt {
     Var(b, t, e) =>
-      if not(try_lift_iife_value(b, e, out)) {
+      if !try_lift_iife_value(b, e, out) {
         out.push(Var(b, t, e))
       }
     Let(b, t, e) =>
-      if not(try_lift_iife_value(b, e, out)) {
+      if !try_lift_iife_value(b, e, out) {
         out.push(Let(b, t, e))
       }
     Const(b, t, e) =>
-      if not(try_lift_iife_value(b, e, out)) {
+      if !try_lift_iife_value(b, e, out) {
         out.push(Const(b, t, e))
       }
     _ => out.push(stmt)
@@ -183,7 +183,7 @@ fn try_lift_iife_value(
       }
     }
   }
-  if not(saw_return) {
+  if !saw_return {
     return false
   }
   // Merge instance + static methods (preserves order: instance
@@ -364,9 +364,9 @@ fn classify_iife_body_stmt(
     ) if n == class_name &&
       (marker_key.has_prefix("@@get:") || marker_key.has_prefix("@@set:")) => {
       let (kind, prop_name) = if marker_key.has_prefix("@@get:") {
-        ("get", marker_key.substring(start=6))
+        ("get", marker_key[6:].to_owned())
       } else {
-        ("set", marker_key.substring(start=6))
+        ("set", marker_key[6:].to_owned())
       }
       match accessor_funcs.get(accessor_tmp) {
         Some(f) => Method(method_decl_from_func_accessor(prop_name, f, kind))
@@ -397,7 +397,7 @@ fn classify_iife_body_stmt(
     // side effect (function assigned to another object's property)
     // that is safe to emit after the class declaration.
     PropAssign(@ast.TsExpr::Var(n), prop_name, @ast.TsExpr::FuncExpr(f)) =>
-      if n == class_name && not(is_class_metadata_key(prop_name)) {
+      if n == class_name && !is_class_metadata_key(prop_name) {
         StaticMethod(method_decl_from_func(prop_name, f, true))
       } else if n == class_name {
         Skipped
@@ -444,21 +444,6 @@ fn classify_iife_body_stmt(
     // Prototype-chain setup for `extends` — skip all of these forms:
     // `ClassName.prototype.__proto__ = _Super.prototype`
     // `ClassName.__proto__ = _Super`
-    // `ClassName.prototype.__proto__ = _Super.prototype` /
-    // `ClassName.__proto__ = _Super` — prototype chain wiring.
-    // For non-class-name targets: prototype-chain setup for another
-    // class, safe to emit after our class as a side effect.
-    PropAssign(
-      @ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), "prototype"),
-      "__proto__",
-      _
-    )
-    | PropAssign(@ast.TsExpr::Var(n), "__proto__", _) =>
-      if n == class_name {
-        Skipped
-      } else {
-        Extra(stmt)
-      }
     // `_inheritsLoose(ClassName, _Super)` / `_inherits(ClassName, _Super)` /
     // `__extends(ClassName, _Super)` (TypeScript emitted helper)
     Expr(@ast.TsExpr::CallExpr(@ast.TsExpr::Var(fn_name), args)) =>

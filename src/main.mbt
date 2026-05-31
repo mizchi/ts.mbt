@@ -168,7 +168,7 @@ async fn load_typescript_import_rewrite_map(
 fn main_dirname(path : String) -> String {
   match path.rev_find("/") {
     Some(0) => "/"
-    Some(idx) => path[:idx].to_string()
+    Some(idx) => path[:idx].to_owned()
     None => "."
   }
 }
@@ -283,7 +283,7 @@ fn sanitize_glue_dir_part(source : String) -> String {
       rendered += "_"
     }
   }
-  let trimmed = rendered.trim(chars="_").to_string()
+  let trimmed = rendered.trim(chars="_").to_owned()
   if trimmed == "" {
     "package"
   } else {
@@ -332,7 +332,7 @@ fn strip_dir_prefix(root : String, path : String) -> String? {
   }
   let prefix = if root.has_suffix("/") { root } else { root + "/" }
   if path.has_prefix(prefix) {
-    Some(path[prefix.length():path.length()].to_string())
+    Some(path[prefix.length():path.length()].to_owned())
   } else {
     None
   }
@@ -496,16 +496,16 @@ fn collect_async_js_export_modes_from_glue(
 ) -> Map[String, Bool] {
   let modes : Map[String, Bool] = {}
   for line_view in glue_mbt.split("\n") {
-    let trimmed = line_view.trim().to_string()
+    let trimmed = line_view.trim().to_owned()
     if !trimmed.has_prefix("pub async fn ") {
       continue
     }
     let rest = trimmed["pub async fn ".length():trimmed.length()]
       .trim()
-      .to_string()
+      .to_owned()
     match rest.find("(") {
       Some(open_idx) => {
-        let name = rest[:open_idx].trim().to_string()
+        let name = rest[:open_idx].trim().to_owned()
         if name != "" {
           modes[name] = trimmed.contains(" raise")
         }
@@ -578,24 +578,24 @@ fn rewrite_async_js_exports(
   let async_exports : Array[(String, String, Bool)] = []
   let mut inserted_wrappers = false
   for line_view in source.split("\n") {
-    let line = line_view.to_string()
-    let trimmed = line.trim().to_string()
+    let line = line_view.to_owned()
+    let trimmed = line.trim().to_owned()
     if trimmed.has_prefix("export {") && trimmed.contains(" as ") {
       match (line.find("{"), line.rev_find("}")) {
         (Some(open_idx), Some(close_idx)) if close_idx > open_idx => {
-          let inner = line[open_idx + 1:close_idx].to_string()
+          let inner = line[open_idx + 1:close_idx].to_owned()
           let kept_specs : Array[String] = []
           for raw_spec in inner.split(",") {
-            let spec = raw_spec.trim().to_string()
+            let spec = raw_spec.trim().to_owned()
             if spec == "" {
               continue
             }
             match spec.find(" as ") {
               Some(as_idx) => {
-                let local_name = spec[:as_idx].trim().to_string()
+                let local_name = spec[:as_idx].trim().to_owned()
                 let export_name = spec[as_idx + " as ".length():spec.length()]
                   .trim()
-                  .to_string()
+                  .to_owned()
                 match async_modes.get(export_name) {
                   Some(preserve_result) =>
                     async_exports.push(
@@ -1029,7 +1029,7 @@ pub async fn emit_moonbit_bridge_package(
 ///|
 fn scaffold_diagnostic_export_name(item : String) -> String {
   match item.find(" (") {
-    Some(idx) => item[:idx].to_string()
+    Some(idx) => item[:idx].to_owned()
     None => item
   }
 }
@@ -1212,8 +1212,8 @@ fn split_scoped_specifier(specifier : String) -> (String, String)? {
   match specifier.find("/") {
     None => None
     Some(idx) => {
-      let scope = specifier[:idx].to_string()
-      let name = specifier[idx + 1:specifier.length()].to_string()
+      let scope = specifier[:idx].to_owned()
+      let name = specifier[idx + 1:specifier.length()].to_owned()
       Some((scope, name))
     }
   }
@@ -1293,7 +1293,7 @@ async fn ensure_bridge_node_modules_link(
 fn relative_path_between(from_rel : String, to_rel : String) -> String {
   let from_parts = split_path_segments(from_rel)
   let to_parts = split_path_segments(to_rel)
-  let from_dir = from_parts[:from_parts.length() - 1].to_array()
+  let from_dir = from_parts[:from_parts.length() - 1].to_owned()
   let mut common = 0
   let limit = if from_dir.length() < to_parts.length() {
     from_dir.length()
@@ -1325,7 +1325,7 @@ fn relative_path_between(from_rel : String, to_rel : String) -> String {
 fn split_path_segments(path : String) -> Array[String] {
   let segments : Array[String] = []
   for chunk in path.split("/") {
-    let s = chunk.to_string()
+    let s = chunk.to_owned()
     if s != "" && s != "." {
       segments.push(s)
     }
@@ -1346,7 +1346,7 @@ fn split_path_segments(path : String) -> Array[String] {
 /// `require("@tsmbt-bridge/<slug>")` from any depth.
 fn default_bridge_bare_specifier(output_dir : String) -> String {
   let basename = match output_dir.rev_find("/") {
-    Some(idx) => output_dir[idx + 1:output_dir.length()].to_string()
+    Some(idx) => output_dir[idx + 1:output_dir.length()].to_owned()
     None => output_dir
   }
   let mut slug = ""
@@ -1411,7 +1411,7 @@ fn rewrite_bridge_package_module_path(
     escape_moonbit_module_path(bridge_js_path) +
     "\")"
   for line_view in bridge_mbt.split("\n") {
-    let line = line_view.to_string()
+    let line = line_view.to_owned()
     if bridge_binding_needs_generated_module(line) {
       rewritten.push(module_decl)
     }
@@ -1441,7 +1441,7 @@ fn bridge_package_split_top_level_blocks(source : String) -> Array[String] {
   let blocks : Array[String] = []
   let mut current : Array[String] = []
   for line_view in source.split("\n") {
-    let line = line_view.to_string()
+    let line = line_view.to_owned()
     if line.trim() == "" {
       if current.length() > 0 {
         blocks.push(current.join("\n"))

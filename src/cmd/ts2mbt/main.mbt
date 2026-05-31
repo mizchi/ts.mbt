@@ -88,14 +88,12 @@ fn parse_vendor_args(
       continue
     }
     if arg.has_prefix("--module-spec=") {
-      module_spec = Some(
-        arg["--module-spec=".length():arg.length()].to_string(),
-      )
+      module_spec = Some(arg["--module-spec=".length():arg.length()].to_owned())
       idx += 1
       continue
     }
     if arg.has_prefix("--out=") {
-      out_dir = Some(arg["--out=".length():arg.length()].to_string())
+      out_dir = Some(arg["--out=".length():arg.length()].to_owned())
       idx += 1
       continue
     }
@@ -161,12 +159,12 @@ fn parse_sync_args(args : Array[String], start : Int) -> (String?, String?) {
       continue
     }
     if arg.has_prefix("--package-json=") {
-      pkg_json = Some(arg["--package-json=".length():arg.length()].to_string())
+      pkg_json = Some(arg["--package-json=".length():arg.length()].to_owned())
       idx += 1
       continue
     }
     if arg.has_prefix("--out=") {
-      out_dir = Some(arg["--out=".length():arg.length()].to_string())
+      out_dir = Some(arg["--out=".length():arg.length()].to_owned())
       idx += 1
       continue
     }
