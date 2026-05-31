@@ -1163,7 +1163,11 @@ fn sg_visit_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
       // returns / throws don't add func-return edges.
       w.enclosing_func = None
       for p in params {
-        let _ = sg_declare(w.g, w.current_scope, p.name, Param, false)
+        let pid = sg_declare(w.g, w.current_scope, p.name, Param, false)
+        match p.type_ {
+          @ast.TsType::Any => ()
+          ty => w.g.symbols[pid].ts_type = ty
+        }
       }
       match body {
         ArrowExpr(e) => sg_visit_expr(w, e)
@@ -1258,6 +1262,10 @@ fn sg_visit_function_body(w : SgWalker, f : @ast.TsFunc) -> Unit {
   let param_ids : Array[SymbolId] = []
   for p in f.params {
     let pid = sg_declare(w.g, w.current_scope, p.name, Param, false)
+    match p.type_ {
+      @ast.TsType::Any => ()
+      ty => w.g.symbols[pid].ts_type = ty
+    }
     param_ids.push(pid)
   }
   // Pre-register the FuncInfo entry so `Return(Some(e))` inside

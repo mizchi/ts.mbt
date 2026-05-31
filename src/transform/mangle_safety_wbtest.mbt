@@ -169,6 +169,81 @@ test "safety: external call arg with typed annotation unlocks unrelated mangling
 }
 
 ///|
+// Phase 1.5 — function parameter annotations participate in the same
+// External narrowing. A typed parameter handed to an external callee
+// reserves only the type's declared keys instead of `*`.
+test "phase4: typed function parameter narrows external escape" {
+  let block = @parser.parse_block_from_source(
+    (
+      #|function f(p: { aaa: number; bbb: number }) { sink(p); }
+      #|f({ aaa: 1, bbb: 2 });
+      #|const other = { ccc: 3 };
+      #|console.log(other);
+      #|
+    ),
+  )
+  let externals : Map[String, Bool] = {}
+  externals["sink"] = true
+  let result = collect_externally_visible_props(block, externals)
+  assert_true(result.contains("aaa"))
+  assert_true(result.contains("bbb"))
+  assert_false(result.contains("*"))
+}
+
+///|
+// Arrow-function parameters get the same treatment.
+test "phase4: typed arrow parameter narrows external escape" {
+  let block = @parser.parse_block_from_source(
+    (
+      #|const f = (p: { kkk: string }) => sink(p);
+      #|f({ kkk: "x" });
+      #|
+    ),
+  )
+  let externals : Map[String, Bool] = {}
+  externals["sink"] = true
+  let result = collect_externally_visible_props(block, externals)
+  assert_true(result.contains("kkk"))
+  assert_false(result.contains("*"))
+}
+
+///|
+// End-to-end: a React-style `props`-typed parameter that flows
+// through to an external callee no longer suppresses property
+// mangling for unrelated bindings in the bundle.
+test "safety: typed function parameter unlocks unrelated property mangling" {
+  let files = safety_vfs([
+    (
+      "entry.ts",
+      (
+        #|import { sink } from "external-thing";
+        #|function handle(props: { aaa: number; bbb: number }) {
+        #|  sink(props);
+        #|}
+        #|handle({ aaa: 1, bbb: 2 });
+        #|const other = { internalParamProp: 99 };
+        #|console.log(other.internalParamProp);
+        #|
+      ),
+    ),
+  ])
+  let opts = BundleOptions::default()
+    .with_mangle(true)
+    .with_mangle_properties(true)
+    .with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("aaa"))
+      assert_true(out.js.contains("bbb"))
+      // `internalParamProp` was reserved via the wildcard before the
+      // parameter annotation got plumbed; it now shrinks.
+      assert_false(out.js.contains("internalParamProp"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 // Phase 4 narrowing of External observability via TypeScript annotation:
 // when a typed local flows to an external callee, the wildcard fallback
 // was previously unconditional — any annotation with a closed key set
