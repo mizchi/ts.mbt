@@ -604,6 +604,26 @@ fn Resolver::lookup_field(
 }
 
 ///|
+// True when `recv` is (or unwraps to) a union in which at least one member
+// declares `field`.  `lookup_field` on a union returns `None` unless *every*
+// member has the field, which produces false "does not exist" diagnostics on
+// discriminated unions where flow-narrowing (a `switch`/`if` on the
+// discriminant) would make the access valid.  The PropAccess existence check
+// uses this to stay silent in that situation — we can't model the narrowing,
+// so we trust the partial match.
+fn Resolver::field_on_any_union_member(
+  self : Resolver,
+  recv : @ast.TsType,
+  field : String,
+) -> Bool {
+  match self.unwrap(recv) {
+    Union(items) =>
+      items.iter().any(fn(it) { self.lookup_field(it, field) is Some(_) })
+    _ => false
+  }
+}
+
+///|
 fn Resolver::lookup_field_core(
   self : Resolver,
   recv : @ast.TsType,
@@ -1977,9 +1997,29 @@ fn is_string_type(ty : @ast.TsType) -> Bool {
 }
 
 ///|
-fn is_arithmetic_compatible(ty : @ast.TsType) -> Bool {
+// Returns true only for types that can NEVER participate in numeric
+// arithmetic (`-`, `*`, `/`, bit ops, …), so the "not a valid number type"
+// diagnostic stays free of false positives.  Mirrors `is_definitely_not_callable`:
+// permissive for Named / Applied (could be a numeric enum or branded number),
+// Union / Intersection (could be a numeric-literal union like `0 | 1 | 2`),
+// and unresolved type-level forms.  Only concrete non-numeric primitives and
+// object-like shapes are flagged.
+fn is_definitely_not_arithmetic(ty : @ast.TsType) -> Bool {
   match ty {
-    Number | Int | NumberLiteral(_) | BigInt | BigIntLiteral(_) | Any => true
+    String_
+    | Literal(_)
+    | Boolean
+    | BooleanLiteral(_)
+    | Void
+    | Null
+    | Undefined
+    | Symbol
+    | Object(_)
+    | Struct(_, _)
+    | Array(_)
+    | Tuple(_)
+    | TemplateLiteralType(_, _)
+    | Func(_, _) => true
     _ => false
   }
 }
@@ -2037,14 +2077,24 @@ fn object_prototype_member(field : String) -> @ast.TsType? {
 }
 
 ///|
-fn is_indexable_type(ty : @ast.TsType) -> Bool {
+// Returns true only for types that can NEVER be indexed with `x[i]`, so the
+// "cannot index into" diagnostic stays free of false positives.  Permissive
+// for every object-like / named / abstract type-level form (mapped types,
+// keyof, indexed-access, conditional types are all indexable in valid TS);
+// only concrete non-indexable primitives are flagged.
+fn is_definitely_not_indexable(ty : @ast.TsType) -> Bool {
   match ty {
-    Array(_) | Tuple(_) | String_ | Literal(_) | Any | Never => true
-    Applied("Array", _) | Applied("ReadonlyArray", _) => true
-    Applied("Record", _) | Applied("Map", _) => true
-    Object(_) | Struct(_, _) => true
-    Named(_) | Applied(_, _) => true
-    Union(members) => members.iter().any(fn(m) { is_indexable_type(m) })
+    Number
+    | Int
+    | NumberLiteral(_)
+    | Boolean
+    | BooleanLiteral(_)
+    | BigInt
+    | BigIntLiteral(_)
+    | Symbol
+    | Void
+    | Null
+    | Undefined => true
     _ => false
   }
 }
@@ -2092,14 +2142,14 @@ fn check_binop_operands(
     Sub | Mul | Div | Mod | Pow | Shl | Shr | UShr | BitAnd | BitOr | BitXor => {
       let lt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, l))
       let rt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, r))
-      if is_checkable(lt) && !is_arithmetic_compatible(lt) {
+      if is_checkable(lt) && is_definitely_not_arithmetic(lt) {
         record(
           ctx,
           "binary op",
           "left operand `\{type_display(lt)}` is not a valid number type",
         )
       }
-      if is_checkable(rt) && !is_arithmetic_compatible(rt) {
+      if is_checkable(rt) && is_definitely_not_arithmetic(rt) {
         record(
           ctx,
           "binary op",
@@ -2110,9 +2160,24 @@ fn check_binop_operands(
     // Strict equality: comparing two types with no overlap is always false.
     // e.g., `someNumber === "hello"` or `true === 42`.
     BinEq | BinNe => {
+      // `typeof x === "..."` is a narrowing idiom: TypeScript treats the
+      // result of `typeof` as the full string-literal union of tags, so the
+      // comparison always overlaps and is never an error — even when the
+      // operand's static type makes the result statically determinable.
+      // Skip the overlap check entirely when either side is a `typeof`.
+      let is_typeof = fn(e : @ast.TsExpr) -> Bool {
+        match e {
+          UnaryOp(Typeof, _) => true
+          _ => false
+        }
+      }
       let lt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, l))
       let rt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, r))
-      if is_checkable(lt) && is_checkable(rt) && !types_can_overlap(lt, rt) {
+      if not(is_typeof(l)) &&
+        not(is_typeof(r)) &&
+        is_checkable(lt) &&
+        is_checkable(rt) &&
+        !types_can_overlap(lt, rt) {
         record(
           ctx,
           "strict equality",
@@ -6148,7 +6213,7 @@ fn check_call_args_in_expr(
           let inner_ty = ctx.resolver.unwrap(
             infer_expr(env, ctx.resolver, inner),
           )
-          if is_checkable(inner_ty) && !is_arithmetic_compatible(inner_ty) {
+          if is_checkable(inner_ty) && is_definitely_not_arithmetic(inner_ty) {
             record(
               ctx,
               "unary op",
@@ -6232,7 +6297,13 @@ fn check_call_args_in_expr(
         // the non-nullish part of `T | null` (e.g. accessed via `a?.b`) still
         // exists. The pure-null case is handled by the branch above.
         !(ctx.resolver.lookup_field(prune_nullish(ctx.resolver, recv_ty), prop)
-        is Some(_)) {
+        is Some(_)) &&
+        // Discriminated unions: when at least one member has the field the
+        // access is valid under flow-narrowing we can't model. Stay silent.
+        !ctx.resolver.field_on_any_union_member(
+          prune_nullish(ctx.resolver, recv_ty),
+          prop,
+        ) {
         record(
           ctx,
           "PropAccess `.\{prop}`",
@@ -6244,7 +6315,7 @@ fn check_call_args_in_expr(
       check_call_args_in_expr(env, recv, ctx)
       check_call_args_in_expr(env, idx, ctx)
       let recv_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, recv))
-      if is_checkable(recv_ty) && !is_indexable_type(recv_ty) {
+      if is_checkable(recv_ty) && is_definitely_not_indexable(recv_ty) {
         record(
           ctx,
           "index access",
@@ -6598,7 +6669,20 @@ fn switch_covers_union(
   let labels : Array[@ast.TsType] = []
   for c in cases {
     match c.test_expr {
-      Some(e) => labels.push(resolver.unwrap(infer_expr(env, resolver, e)))
+      // Map a case-label literal expression to its *precise* literal type.
+      // `infer_expr` widens `0` to `number` and `true` to `boolean`, which
+      // would never equal the literal union members (`0 | 1`, `true | false`),
+      // so coverage of numeric / boolean discriminated unions would be missed.
+      Some(e) =>
+        labels.push(
+          match e {
+            IntLit(i) => @ast.TsType::NumberLiteral(i.to_string())
+            NumberLit(d) => @ast.TsType::NumberLiteral(d.to_string())
+            BoolLit(b) => @ast.TsType::BooleanLiteral(b)
+            StringLit(s) => @ast.TsType::Literal(s)
+            _ => resolver.unwrap(infer_expr(env, resolver, e))
+          },
+        )
       None => ()
     }
   }

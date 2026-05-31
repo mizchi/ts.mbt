@@ -4882,16 +4882,12 @@ test "expr_check: deliberate type violations are detected" {
         #|}
       ),
     ),
-    (
-      "wrong-return-tagged-union",
-      (
-        #|interface A { kind: "a"; a: number }
-        #|interface B { kind: "b"; b: string }
-        #|function f(s: A | B): string {
-        #|  return s.a;
-        #|}
-      ),
-    ),
+    // NOTE: `s.a` on an un-narrowed `A | B` is a TS error, but detecting it
+    // without flagging the (far more common) *narrowed* discriminated-union
+    // access — e.g. `case "a": return s.a;` inside a switch on `s.kind` — would
+    // require flow analysis we don't model. We deliberately suppress the union
+    // partial-member case to keep precision high, so this is a known
+    // false-negative rather than a detected violation.
     (
       "wrong-call-arg-arity",
       (
@@ -5484,8 +5480,10 @@ test "expr_check: ternary with compatible branch types is ok" {
 }
 
 ///|
-test "expr_check: typeof string var compared to 'number' is flagged" {
-  // `typeof s === "number"` where s: string — typeof always returns "string".
+test "expr_check: typeof comparison is never flagged as always-false" {
+  // `typeof s === "number"` — TypeScript treats the result of `typeof` as the
+  // full string-literal union of tags, so the comparison always overlaps and
+  // is never reported, matching tsc (no error 2367 on typeof guards).
   let src =
     #|function f(s: string): boolean {
     #|  return typeof s === "number";
@@ -5496,7 +5494,7 @@ test "expr_check: typeof string var compared to 'number' is flagged" {
       let found = issues
         .iter()
         .any(fn(i) { i.message.contains("always be false") })
-      assert_true(found)
+      assert_false(found)
     }
     None => fail("function not found")
   }
@@ -5824,6 +5822,48 @@ test "expr_check: valid TS patterns are not false-positives" {
       (
         #|function f(n: number): string {
         #|  return n as unknown as string;
+        #|}
+      ),
+    ),
+    // Arithmetic on numeric enums and numeric-literal unions is valid — the
+    // operand check must not flag them (regression guard for the conformance
+    // precision fixes).
+    (
+      "enum-arithmetic",
+      (
+        #|enum E { A, B, C }
+        #|function f(e: E): number {
+        #|  return e * 2;
+        #|}
+      ),
+    ),
+    (
+      "numeric-literal-union-arithmetic",
+      (
+        #|function f(x: 0 | 1 | 2): number {
+        #|  return x - 1;
+        #|}
+      ),
+    ),
+    // `typeof x === "..."` is always allowed, even when statically decidable.
+    (
+      "typeof-mismatch-not-flagged",
+      (
+        #|function f(s: string): boolean {
+        #|  return typeof s === "number";
+        #|}
+      ),
+    ),
+    // Discriminated-union property access after switch narrowing.
+    (
+      "discriminated-union-switch-access",
+      (
+        #|type Item = { kind: true; a: string } | { kind: false; b: string };
+        #|function f(x: Item): string {
+        #|  switch (x.kind) {
+        #|    case true: return x.a;
+        #|    case false: return x.b;
+        #|  }
         #|}
       ),
     ),

@@ -18,6 +18,7 @@ async fn main {
     return
   }
   let mut parse_only = false
+  let mut verbose = false
   let mut iters = 1
   let mut path = ""
   let mut i = 1
@@ -25,6 +26,8 @@ async fn main {
     let arg = argv[i]
     if arg == "--parse" {
       parse_only = true
+    } else if arg == "--verbose" || arg == "-v" {
+      verbose = true
     } else if arg == "--iters" && i + 1 < argv.length() {
       i = i + 1
       iters = match (try? @strconv.parse_int(argv[i])) {
@@ -60,6 +63,11 @@ async fn main {
     if !parse_only {
       let issues = @checker.check_module_function_bodies(module_)
       issue_count = issue_count + issues.length()
+      if verbose {
+        for iss in issues {
+          println("  ISSUE [\{iss.path}]: \{iss.message}")
+        }
+      }
     }
   }
   // Trivial output so the binary doesn't get fully optimized away;
