@@ -354,21 +354,85 @@ pub fn reserved_props_from_observability(
       DirectProps => collect_direct_props(sym, out)
       RecursiveProps => collect_direct_props(sym, out)
       External =>
-        // Conservative wildcard for external escapes. Phase 5
-        // tried relaxing this with the expanded builtin
-        // reserved list, but zod still trips on bindings whose
-        // prop surface isn't fully covered by PropReceiver
-        // uses + literal-init keys (function parameters that
-        // re-flow through `Object.defineProperty(kg, "q", …)`
-        // and similar dynamic patterns). Until a sharper
-        // taint walk lands, keep the wildcard here. The
-        // Const+ObjectLit pre-pass still catches the linker
-        // synthesised namespace case so most observable shapes
-        // don't depend on this fallback.
-        out["*"] = true
+        // External escapes default to the wildcard because we
+        // can't statically know what the foreign callee inspects.
+        // BUT when the binding carries a TypeScript annotation
+        // with a closed key set (interface / object literal type
+        // / union of those), the consumer can only legally read
+        // those names — anything beyond that would already be a
+        // type error. Reserve just those keys instead of the
+        // wildcard so internal-only properties (renamed by the
+        // type-graph walk in Phase 1) stay manglable.
+        //
+        // Falls through to `*` when the binding has no useful
+        // annotation, is index-signature shaped, or references
+        // an opaque named type. The Const+ObjectLit pre-pass
+        // still catches the linker-synthesised namespace case
+        // independently of this fallback.
+        match type_observed_keys(sym.ts_type) {
+          Some(keys) => {
+            for k in keys {
+              out[k] = true
+            }
+            // Also include any PropReceiver-observed names —
+            // they're real uses the caller might depend on.
+            collect_direct_props(sym, out)
+          }
+          None => out["*"] = true
+        }
     }
   }
   out
+}
+
+///|
+// Closed set of property keys observed when a value of type `t`
+// flows to an external boundary. Mirrors the structural rule used
+// in the checker: a concrete `Struct`, `Object` of all-literal
+// keys, or a `Union` of such carries a bounded key set; anything
+// else (index signatures, opaque `Named` references, `Any`,
+// generic shapes) admits unbounded keys and the caller must keep
+// the wildcard.
+fn type_observed_keys(t : @ast.TsType) -> Array[String]? {
+  match t {
+    Struct(_, fields) => {
+      let out : Array[String] = []
+      for f in fields {
+        if !out.contains(f.0) {
+          out.push(f.0)
+        }
+      }
+      Some(out)
+    }
+    Object(fields) => {
+      let out : Array[String] = []
+      for f in fields {
+        match f.0 {
+          Literal(s) => if !out.contains(s) { out.push(s) }
+          // String / Number / Symbol keys are index signatures —
+          // the key set is unbounded at the type level.
+          _ => return None
+        }
+      }
+      Some(out)
+    }
+    Union(members) => {
+      let combined : Array[String] = []
+      for m in members {
+        match type_observed_keys(m) {
+          Some(keys) =>
+            for k in keys {
+              if !combined.contains(k) {
+                combined.push(k)
+              }
+            }
+          None => return None
+        }
+      }
+      Some(combined)
+    }
+    _ => None
+  }
 }
 
 ///|

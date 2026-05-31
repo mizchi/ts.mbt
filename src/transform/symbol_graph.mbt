@@ -124,6 +124,15 @@ pub(all) struct Symbol {
   // arrow body. Closure-captured bindings can outlive the
   // declaring frame, so Phase 3 treats them conservatively.
   mut captured_by_closure : Bool
+  // Static TypeScript type of the binding when one was supplied
+  // (let/const/var annotation, function parameter annotation).
+  // Defaults to `Any` when no useful type was recorded — that
+  // matches "no type info" and downstream narrowing falls back to
+  // the wildcard. Type-aware reservation passes
+  // (`reserved_props_from_observability` in `flow_analysis.mbt`)
+  // consult this to skip the External-observation wildcard when
+  // the type's key set is statically bounded.
+  mut ts_type : @ast.TsType
 } derive(Debug)
 
 ///|
@@ -373,6 +382,7 @@ fn sg_declare(
         reassign_rhs: [],
         reassigned: false,
         captured_by_closure: false,
+        ts_type: @ast.TsType::Any,
       })
       g.by_name[key] = id
       g.scopes[target_scope].declared.push(id)
@@ -429,29 +439,32 @@ fn sg_declare_stmt_bindings(
   external_local_names : Map[String, Bool],
 ) -> Unit {
   match stmt {
-    Var(b, _, init) => {
+    Var(b, t, init) => {
       let is_funcdecl = match init {
         @ast.TsExpr::FuncExpr(_) => true
         _ => false
       }
       let kind = if is_funcdecl { FuncDecl } else { Var }
       sg_declare_binding(g, b, scope, kind, external_local_names)
+      sg_record_binding_type(g, b, scope, kind, t)
     }
-    Let(b, _, init) => {
+    Let(b, t, init) => {
       let is_funcdecl = match init {
         @ast.TsExpr::FuncExpr(_) => true
         _ => false
       }
       let kind = if is_funcdecl { FuncDecl } else { Let }
       sg_declare_binding(g, b, scope, kind, external_local_names)
+      sg_record_binding_type(g, b, scope, kind, t)
     }
-    Const(b, _, init) => {
+    Const(b, t, init) => {
       let is_funcdecl = match init {
         @ast.TsExpr::FuncExpr(_) => true
         _ => false
       }
       let kind = if is_funcdecl { FuncDecl } else { Const }
       sg_declare_binding(g, b, scope, kind, external_local_names)
+      sg_record_binding_type(g, b, scope, kind, t)
     }
     NativeClassStmt(decl, _) =>
       if decl.name != "" {
@@ -495,6 +508,45 @@ fn is_multi_decl_wrapper(block : @ast.TsBlock) -> Bool {
     }
   }
   true
+}
+
+///|
+// Stamp the static TypeScript type onto the symbol just declared
+// for binding `b` in `scope`. No-op for opaque (`Any`) annotations
+// and for destructuring patterns we can't decompose cleanly — the
+// downstream narrowing pass treats the missing entry as "no type
+// info" and falls back to the existing wildcard behaviour.
+//
+// The lookup mirrors `sg_declare`'s target-scope rule: `Var`
+// hoists to the enclosing function frame, the others stay in
+// `scope`. Without that mirroring the `Var` case looks up against
+// the wrong key and silently misses the symbol.
+fn sg_record_binding_type(
+  g : SymbolGraph,
+  b : @ast.TsBinding,
+  scope : ScopeId,
+  kind : SymbolKind,
+  ty : @ast.TsType,
+) -> Unit {
+  match ty {
+    @ast.TsType::Any => return
+    _ => ()
+  }
+  match b {
+    @ast.TsBinding::Ident(n) => {
+      let target_scope = if kind == Var {
+        var_host_scope(g, scope)
+      } else {
+        scope
+      }
+      let key = scope_name_key(target_scope, n)
+      match g.by_name.get(key) {
+        Some(id) => g.symbols[id].ts_type = ty
+        None => ()
+      }
+    }
+    _ => ()
+  }
 }
 
 ///|

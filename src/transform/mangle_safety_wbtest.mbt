@@ -132,6 +132,106 @@ test "phase3: local object literal handed to Object.keys reserves only its own k
 }
 
 ///|
+// End-to-end: a typed local flowing to an external import previously
+// suppressed property mangling for the whole bundle (wildcard `*`).
+// With type-driven External narrowing the typed local's keys stay
+// reserved (consumer-visible) but unrelated internal properties
+// shrink to short slots.
+test "safety: external call arg with typed annotation unlocks unrelated mangling" {
+  let files = safety_vfs([
+    (
+      "entry.ts",
+      (
+        #|import { sink } from "external-thing";
+        #|const obj: { aaa: number; bbb: number } = { aaa: 1, bbb: 2 };
+        #|sink(obj);
+        #|const other = { internalProp: 3 };
+        #|console.log(other.internalProp);
+        #|
+      ),
+    ),
+  ])
+  let opts = BundleOptions::default()
+    .with_mangle(true)
+    .with_mangle_properties(true)
+    .with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // Typed external arg's keys remain visible.
+      assert_true(out.js.contains("aaa"))
+      assert_true(out.js.contains("bbb"))
+      // Internal-only `internalProp` is now manglable — the previous
+      // unconditional `*` would have preserved it.
+      assert_false(out.js.contains("internalProp"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+// Phase 4 narrowing of External observability via TypeScript annotation:
+// when a typed local flows to an external callee, the wildcard fallback
+// was previously unconditional — any annotation with a closed key set
+// (interface / object literal type / union of those) now reserves
+// exactly those keys, so unrelated internal properties remain
+// mangle-eligible.
+test "phase4: External call arg narrows via static type annotation" {
+  let block = @parser.parse_block_from_source(
+    (
+      #|const obj: { aaa: number; bbb: number } = { aaa: 1, bbb: 2 };
+      #|sink(obj);
+      #|const other = { ccc: 3 };
+      #|console.log(other);
+      #|
+    ),
+  )
+  let externals : Map[String, Bool] = {}
+  externals["sink"] = true
+  let result = collect_externally_visible_props(block, externals)
+  // Type-driven keys are reserved.
+  assert_true(result.contains("aaa"))
+  assert_true(result.contains("bbb"))
+  // No wildcard — unrelated `ccc` stays manglable.
+  assert_false(result.contains("*"))
+}
+
+///|
+// Without a TypeScript annotation we cannot statically bound the
+// external-callee's observation, so the wildcard fallback still
+// fires. This pins down the conservative path.
+test "phase4: External call arg keeps wildcard when type is missing" {
+  let block = @parser.parse_block_from_source(
+    (
+      #|const obj = { aaa: 1, bbb: 2 };
+      #|sink(obj);
+      #|
+    ),
+  )
+  let externals : Map[String, Bool] = {}
+  externals["sink"] = true
+  let result = collect_externally_visible_props(block, externals)
+  assert_true(result.contains("*"))
+}
+
+///|
+// An index-signature-typed binding has an unbounded key set at the
+// type level, so the wildcard fallback must remain in place even
+// when the annotation is present.
+test "phase4: External call arg keeps wildcard for index-signature type" {
+  let block = @parser.parse_block_from_source(
+    (
+      #|const obj: { [k: string]: number } = { aaa: 1 };
+      #|sink(obj);
+      #|
+    ),
+  )
+  let externals : Map[String, Bool] = {}
+  externals["sink"] = true
+  let result = collect_externally_visible_props(block, externals)
+  assert_true(result.contains("*"))
+}
+
+///|
 test "phase3: parameter handed to Object.keys does NOT reserve outside literal" {
   // `f(obj)` — `obj` is a parameter, no def. Without flow info
   // we can't see the literal `{a: 1}` reaching it, so the
