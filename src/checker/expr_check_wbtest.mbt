@@ -1413,9 +1413,10 @@ test "expr_check: contextual typing respects explicit param annotation" {
 
 ///|
 test "expr_check: `x as T` narrows expression to T" {
-  // `obj.unknown as number` overrides the access result (which would
-  // otherwise be `Any`) — making the return-type check fail because we
-  // also pass through `infer_expr` on the cast result.
+  // `b.value as number` asserts a string to number — no overlap, so one
+  // diagnostic is emitted.  The return-type check does NOT fire separately
+  // because the result type of the cast is `number`, which satisfies the
+  // declared return type.
   let src =
     #|interface Bag { value: string }
     #|function f(b: Bag): number {
@@ -1423,8 +1424,8 @@ test "expr_check: `x as T` narrows expression to T" {
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  // `As(_, Number)` matches declared `number` → no issue.
-  assert_eq(issues.length(), 0)
+  // `As(String_, Number)` — no overlap — exactly 1 issue.
+  assert_eq(issues.length(), 1)
 }
 
 ///|
@@ -5054,6 +5055,14 @@ test "expr_check: deliberate type violations are detected" {
         #|}
       ),
     ),
+    (
+      "as-no-overlap",
+      (
+        #|function f(n: number): string {
+        #|  return n as string;
+        #|}
+      ),
+    ),
   ]
   let mut misses = 0
   for c in cases {
@@ -5799,6 +5808,22 @@ test "expr_check: valid TS patterns are not false-positives" {
         #|function f(p: P): number {
         #|  const { x, y } = p;
         #|  return x + y;
+        #|}
+      ),
+    ),
+    (
+      "as-widening",
+      (
+        #|function f(n: number): number | string {
+        #|  return n as number | string;
+        #|}
+      ),
+    ),
+    (
+      "as-unknown",
+      (
+        #|function f(n: number): string {
+        #|  return n as unknown as string;
         #|}
       ),
     ),

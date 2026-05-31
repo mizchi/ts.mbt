@@ -6357,7 +6357,34 @@ fn check_call_args_in_expr(
     // New AST wrappers: recurse into the inner expression so call-site
     // checks inside `(call(badArg) as T)` / `call(badArg)!` / `obj?.m()`
     // still fire.
-    As(inner, _) | NonNull(inner) | OptionalChain(inner) =>
+    As(inner, asserted) => {
+      check_call_args_in_expr(env, inner, ctx)
+      // Validate `x as T`: if neither direction is assignable the assertion
+      // is always wrong (e.g. `5 as string`).
+      // We only flag when both sides are concrete primitive-ish types so we
+      // don't accidentally fire on generic type parameters or opaque named
+      // types that we can't fully resolve here.
+      let inferred = infer_expr(env, ctx.resolver, inner)
+      let concrete = fn(t : @ast.TsType) -> Bool {
+        match t {
+          Number | String_ | Boolean | BigInt | Null | Undefined | Void
+          | Never | NumberLiteral(_) | BooleanLiteral(_) | Literal(_)
+          | BigIntLiteral(_) => true
+          _ => false
+        }
+      }
+      if concrete(inferred) &&
+        concrete(asserted) &&
+        not(is_assignable_to(inferred, asserted)) &&
+        not(is_assignable_to(asserted, inferred)) {
+        record(
+          ctx,
+          "as",
+          "Type '\{type_display(inferred)}' cannot be asserted to type '\{type_display(asserted)}' (no overlap)",
+        )
+      }
+    }
+    NonNull(inner) | OptionalChain(inner) =>
       check_call_args_in_expr(env, inner, ctx)
     Satisfies(inner, ty) => {
       check_call_args_in_expr(env, inner, ctx)
