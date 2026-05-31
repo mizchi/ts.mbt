@@ -479,7 +479,7 @@ fn translate_jsdoc_function_type(s : String) -> String? {
   if depth != 0 {
     return None
   }
-  let params_str = s.substring(start=start, end=i).to_string().trim().to_string()
+  let params_str = s.substring(start~, end=i).to_string().trim().to_string()
   // Everything after `)` — optionally `: ReturnType`.
   let rest = s.substring(start=i + 1, end=len).to_string().trim().to_string()
   let return_type = if rest.has_prefix(":") {
@@ -499,11 +499,23 @@ fn translate_jsdoc_function_type(s : String) -> String? {
       } else if c == ')' || c == '>' || c == ']' || c == '}' {
         depth2 = depth2 - 1
       } else if c == ',' && depth2 == 0 {
-        params.push(params_str.substring(start=start2, end=j).to_string().trim().to_string())
+        params.push(
+          params_str
+          .substring(start=start2, end=j)
+          .to_string()
+          .trim()
+          .to_string(),
+        )
         start2 = j + 1
       }
     }
-    params.push(params_str.substring(start=start2, end=params_str.length()).to_string().trim().to_string())
+    params.push(
+      params_str
+      .substring(start=start2, end=params_str.length())
+      .to_string()
+      .trim()
+      .to_string(),
+    )
   }
   // Build `(_0: P0, _1: P1, ...) => R`.
   let mut ts_params = ""

@@ -169,8 +169,7 @@ fn Resolver::ingest_module(
         Some(@ast.TsEnumMemberValue::Number(s)) => @ast.TsType::NumberLiteral(s)
         Some(@ast.TsEnumMemberValue::String(s)) => @ast.TsType::Literal(s)
         Some(@ast.TsEnumMemberValue::BigInt(s)) => @ast.TsType::Literal(s)
-        Some(@ast.TsEnumMemberValue::Bool(b)) =>
-          @ast.TsType::BooleanLiteral(b)
+        Some(@ast.TsEnumMemberValue::Bool(b)) => @ast.TsType::BooleanLiteral(b)
         None => @ast.TsType::Number
       }
       r.globals[prefix + e.name + "." + m.name] = val_ty
@@ -577,12 +576,7 @@ fn array_prototype_member(elem : @ast.TsType, field : String) -> @ast.TsType? {
         ),
       )
     "toSpliced" =>
-      Some(
-        @ast.TsType::Func(
-          [@ast.TsType::Number, @ast.TsType::Number],
-          arr_t,
-        ),
-      )
+      Some(@ast.TsType::Func([@ast.TsType::Number, @ast.TsType::Number], arr_t))
     "with" => Some(@ast.TsType::Func([@ast.TsType::Number, elem], arr_t))
     _ => None
   }
@@ -590,6 +584,27 @@ fn array_prototype_member(elem : @ast.TsType, field : String) -> @ast.TsType? {
 
 ///|
 fn Resolver::lookup_field(
+  self : Resolver,
+  recv : @ast.TsType,
+  field : String,
+) -> @ast.TsType? {
+  match self.lookup_field_core(recv, field) {
+    Some(t) => Some(t)
+    None =>
+      // Object-like receivers inherit Object.prototype members
+      // (toString / hasOwnProperty / valueOf / …). Fall back to those so
+      // they don't surface as missing-property diagnostics. Primitives have
+      // their own prototype dispatchers and don't need this hop.
+      match self.unwrap(recv) {
+        Named(_) | Applied(_, _) | Object(_) | Struct(_, _) =>
+          object_prototype_member(field)
+        _ => None
+      }
+  }
+}
+
+///|
+fn Resolver::lookup_field_core(
   self : Resolver,
   recv : @ast.TsType,
   field : String,
@@ -988,11 +1003,10 @@ fn collect_index_sigs(
         }
         None =>
           match resolver.classes.get(n) {
-            Some(cls) => {
+            Some(cls) =>
               for sig in cls.index_signatures {
                 out.push(sig)
               }
-            }
             None => ()
           }
       }
@@ -1041,11 +1055,10 @@ fn collect_index_sigs(
         }
         None =>
           match resolver.classes.get(n) {
-            Some(cls) => {
+            Some(cls) =>
               for sig in cls.index_signatures {
                 out.push(sig)
               }
-            }
             None => ()
           }
       }
@@ -1930,12 +1943,14 @@ fn is_nullable_type(ty : @ast.TsType) -> Bool {
   match ty {
     Null | Undefined => true
     Union(members) => {
-      let has_non_nullish = members.iter().any(fn(m) {
-        match m {
-          Null | Undefined => false
-          _ => true
-        }
-      })
+      let has_non_nullish = members
+        .iter()
+        .any(fn(m) {
+          match m {
+            Null | Undefined => false
+            _ => true
+          }
+        })
       // Only flag as "nullable" when ALL members are null/undefined (i.e., the
       // type IS null/undefined). Unions like `string | null` are common valid
       // patterns and are handled by the existing optional-field machinery.
@@ -1975,6 +1990,53 @@ fn is_arithmetic_compatible(ty : @ast.TsType) -> Bool {
 // Conservative: returns true (allows) when either side is Any, Never, a
 // union/intersection, a named reference, or an object shape (those are
 // structural and could overlap via subtypes).
+// Returns true only for types that can never have a call signature, so the
+// "not callable" diagnostic stays free of false positives. Permissive for
+// Named / Applied (interfaces may carry call signatures), Union / Intersection
+// (overload sets), and unresolved type-level forms.
+fn is_definitely_not_callable(ty : @ast.TsType) -> Bool {
+  match ty {
+    Number
+    | Int
+    | NumberLiteral(_)
+    | String_
+    | Literal(_)
+    | Boolean
+    | BooleanLiteral(_)
+    | BigInt
+    | BigIntLiteral(_)
+    | Symbol
+    | Void
+    | Null
+    | Undefined
+    | Object(_)
+    | Struct(_, _)
+    | Array(_)
+    | Tuple(_)
+    | TemplateLiteralType(_, _) => true
+    _ => false
+  }
+}
+
+///|
+// Object.prototype members inherited by every object-like type. Returns the
+// member's type for the standard set, or `None` for anything else. Used as a
+// lookup fallback so `obj.toString()` / `obj.hasOwnProperty(...)` resolve on
+// interfaces, object literals, and structs without false "does not exist"
+// diagnostics.
+fn object_prototype_member(field : String) -> @ast.TsType? {
+  match field {
+    "toString" | "toLocaleString" =>
+      Some(@ast.TsType::Func([], @ast.TsType::String_))
+    "hasOwnProperty" | "isPrototypeOf" | "propertyIsEnumerable" =>
+      Some(@ast.TsType::Func([@ast.TsType::Any], @ast.TsType::Boolean))
+    "valueOf" => Some(@ast.TsType::Func([], @ast.TsType::Any))
+    "constructor" => Some(@ast.TsType::Any)
+    _ => None
+  }
+}
+
+///|
 fn is_indexable_type(ty : @ast.TsType) -> Bool {
   match ty {
     Array(_) | Tuple(_) | String_ | Literal(_) | Any | Never => true
@@ -1999,7 +2061,9 @@ fn types_can_overlap(a : @ast.TsType, b : @ast.TsType) -> Bool {
     (Object(_), _) | (_, Object(_)) => true
     (Struct(_, _), _) | (_, Struct(_, _)) => true
     // Same primitive families overlap with each other and their literals.
-    (Number, Number) | (Number, NumberLiteral(_)) | (NumberLiteral(_), Number) => true
+    (Number, Number)
+    | (Number, NumberLiteral(_))
+    | (NumberLiteral(_), Number) => true
     (NumberLiteral(a_), NumberLiteral(b_)) => a_ == b_
     (String_, String_) | (String_, Literal(_)) | (Literal(_), String_) => true
     (Literal(a_), Literal(b_)) => a_ == b_
@@ -2048,9 +2112,7 @@ fn check_binop_operands(
     BinEq | BinNe => {
       let lt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, l))
       let rt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, r))
-      if is_checkable(lt) &&
-        is_checkable(rt) &&
-        !types_can_overlap(lt, rt) {
+      if is_checkable(lt) && is_checkable(rt) && !types_can_overlap(lt, rt) {
         record(
           ctx,
           "strict equality",
@@ -2370,7 +2432,8 @@ fn infer_expr(
       }
       // Nullable receiver: strip null/undefined members and retry so
       // `(arr | null).map(...)` still resolves the method return type.
-      match resolver.lookup_method_sig(prune_nullish(resolver, recv_ty), method) {
+      match
+        resolver.lookup_method_sig(prune_nullish(resolver, recv_ty), method) {
         Some((_params, ret)) => {
           for a in args {
             let _ = infer_expr(env, resolver, a)
@@ -2402,7 +2465,9 @@ fn infer_expr(
     // the expression-statement result is `any`.
     Yield(operand_opt) => {
       match operand_opt {
-        Some(e) => { let _ = infer_expr(env, resolver, e) }
+        Some(e) => {
+          let _ = infer_expr(env, resolver, e)
+        }
         None => ()
       }
       @ast.TsType::Any
@@ -2729,14 +2794,41 @@ fn infer_call(
     // Reduce conditional types in the return position so `NonNullable<T>`,
     // `Awaited<T>` etc. evaluate to concrete types when possible.
     Func(_, ret) => reduce_conditional(ret)
-    // Union of callable types: return the union of each branch's return type.
+    // Union of callable types (overload set): resolve to the overload whose
+    // arity and parameter types accept the supplied arguments, and return that
+    // overload's return type. Falls back to the union of every branch's return
+    // type when no signature matches precisely (so an overloaded call site
+    // doesn't widen to an imprecise union for the common matching case).
     Union(parts) => {
+      let arg_types : Array[@ast.TsType] = []
+      for a in args {
+        arg_types.push(resolver.unwrap(infer_expr(env, resolver, a)))
+      }
       let rets : Array[@ast.TsType] = []
       for part in parts {
         match resolver.unwrap(part) {
-          Func(_, TypePredicate(_, _)) => rets.push(@ast.TsType::Boolean)
-          Func(_, AssertsPredicate(_, _)) => rets.push(@ast.TsType::Void)
-          Func(_, ret) => rets.push(reduce_conditional(ret))
+          Func(params, ret) => {
+            let r = match ret {
+              TypePredicate(_, _) => @ast.TsType::Boolean
+              AssertsPredicate(_, _) => @ast.TsType::Void
+              _ => reduce_conditional(ret)
+            }
+            rets.push(r)
+            // Best-effort overload match: same arity, every argument
+            // assignable to the corresponding parameter.
+            if params.length() == arg_types.length() {
+              let mut ok = true
+              for i in 0..<params.length() {
+                if !is_assignable_to(arg_types[i], params[i]) {
+                  ok = false
+                  break
+                }
+              }
+              if ok {
+                return r
+              }
+            }
+          }
           _ => return @ast.TsType::Any
         }
       }
@@ -2865,6 +2957,12 @@ fn infer_binop(
         // String concat — either side is a string-shaped type.
         (String_, _) | (_, String_) | (Literal(_), _) | (_, Literal(_)) =>
           @ast.TsType::String_
+        // `bigint + bigint` stays bigint (mixing with number is a type error,
+        // surfaced separately by the operand check).
+        (BigInt, BigInt)
+        | (BigInt, BigIntLiteral(_))
+        | (BigIntLiteral(_), BigInt)
+        | (BigIntLiteral(_), BigIntLiteral(_)) => @ast.TsType::BigInt
         (Number, Number) | (Number, Int) | (Int, Number) | (Int, Int) =>
           @ast.TsType::Number
         (NumberLiteral(_), _) | (_, NumberLiteral(_)) => @ast.TsType::Number
@@ -2872,7 +2970,14 @@ fn infer_binop(
         _ => @ast.TsType::Number
       }
     Sub | Mul | Div | Mod | Pow | Shl | Shr | UShr | BitAnd | BitOr | BitXor =>
-      @ast.TsType::Number
+      // `bigint OP bigint` yields bigint; everything else collapses to number.
+      match (l, r) {
+        (BigInt, BigInt)
+        | (BigInt, BigIntLiteral(_))
+        | (BigIntLiteral(_), BigInt)
+        | (BigIntLiteral(_), BigIntLiteral(_)) => @ast.TsType::BigInt
+        _ => @ast.TsType::Number
+      }
     BinEq
     | BinNe
     | AbstractEq
@@ -3009,7 +3114,11 @@ fn check_expr_against(
     (ArrayLit(items), Array(elem)) => {
       for i, item in items {
         check_expr_against(
-          env, item, elem, ctx, sub_path + "[" + i.to_string() + "]",
+          env,
+          item,
+          elem,
+          ctx,
+          sub_path + "[" + i.to_string() + "]",
         )
       }
       return
@@ -3018,7 +3127,11 @@ fn check_expr_against(
     | (ArrayLit(items), Applied("ReadonlyArray", [elem])) => {
       for i, item in items {
         check_expr_against(
-          env, item, elem, ctx, sub_path + "[" + i.to_string() + "]",
+          env,
+          item,
+          elem,
+          ctx,
+          sub_path + "[" + i.to_string() + "]",
         )
       }
       return
@@ -3720,7 +3833,7 @@ fn collect_declared_fields(
         }
       }
     // Union: only fields present on every member are accessible.
-    Union(parts) => {
+    Union(parts) =>
       if parts.length() == 0 {
         ()
       } else {
@@ -3751,7 +3864,6 @@ fn collect_declared_fields(
           out.push((entry.0, entry.1))
         }
       }
-    }
     _ => ()
   }
   out
@@ -4269,7 +4381,11 @@ fn bind_object_pattern(
             if member_types.length() == 0 {
               @ast.TsType::Any
             } else if member_types.length() == 1 {
-              if all_found { member_types[0] } else { narrow_union(member_types[0], @ast.TsType::Undefined) }
+              if all_found {
+                member_types[0]
+              } else {
+                narrow_union(member_types[0], @ast.TsType::Undefined)
+              }
             } else {
               let acc = member_types[0]
               let mut u = acc
@@ -4278,7 +4394,11 @@ fn bind_object_pattern(
                 u = narrow_union(u, member_types[i])
                 i = i + 1
               }
-              if all_found { u } else { narrow_union(u, @ast.TsType::Undefined) }
+              if all_found {
+                u
+              } else {
+                narrow_union(u, @ast.TsType::Undefined)
+              }
             }
           }
           // Non-union source with no matching field: the property is absent,
@@ -4758,10 +4878,14 @@ fn collect_narrowing(
       }
     // Sequence expression: only the final value matters for narrowing.
     Seq(_, right) =>
-      collect_narrowing(env, resolver, right, then_binds, else_binds, then_sense)
+      collect_narrowing(
+        env, resolver, right, then_binds, else_binds, then_sense,
+      )
     // Await is transparent to narrowing: `if (await x instanceof C)` narrows x.
     Await(inner) =>
-      collect_narrowing(env, resolver, inner, then_binds, else_binds, then_sense)
+      collect_narrowing(
+        env, resolver, inner, then_binds, else_binds, then_sense,
+      )
     UnaryOp(Not, inner) =>
       collect_narrowing(
         env,
@@ -5748,7 +5872,9 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           "for-in key is always `string`, but declared as `\{type_display(declared)}`",
         )
       }
-      let key_ty = if is_checkable(declared) { declared } else {
+      let key_ty = if is_checkable(declared) {
+        declared
+      } else {
         @ast.TsType::String_
       }
       let pre = env.full_snapshot()
@@ -5771,7 +5897,9 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         PropAccess(Var(name), prop) => Some((name, prop))
         _ => None
       }
-      let scrutinee_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, scrutinee))
+      let scrutinee_ty = ctx.resolver.unwrap(
+        infer_expr(env, ctx.resolver, scrutinee),
+      )
       for case_ in cases {
         match case_.test_expr {
           Some(e) => {
@@ -5910,10 +6038,8 @@ fn check_call_args_in_expr(
             "call `\{name}`",
           )
         }
-        Constructor(_, _, _) => ()
-        Any | Never => ()
         other =>
-          if is_checkable(other) {
+          if is_definitely_not_callable(other) {
             record(
               ctx,
               "call `\{name}`",
@@ -5929,15 +6055,9 @@ fn check_call_args_in_expr(
       let callee_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, callee))
       match callee_ty {
         Func(params, _) => check_arguments(env, params, args, ctx, "call")
-        Constructor(_, _, _) => ()
-        Any | Never => ()
         other =>
-          if is_checkable(other) {
-            record(
-              ctx,
-              "call",
-              "`\{type_display(other)}` is not callable",
-            )
+          if is_definitely_not_callable(other) {
+            record(ctx, "call", "`\{type_display(other)}` is not callable")
           }
       }
       check_call_args_in_expr(env, callee, ctx)
@@ -6025,7 +6145,9 @@ fn check_call_args_in_expr(
       check_call_args_in_expr(env, inner, ctx)
       match op {
         Neg | Plus | BitwiseNot => {
-          let inner_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, inner))
+          let inner_ty = ctx.resolver.unwrap(
+            infer_expr(env, ctx.resolver, inner),
+          )
           if is_checkable(inner_ty) && !is_arithmetic_compatible(inner_ty) {
             record(
               ctx,
@@ -6106,7 +6228,11 @@ fn check_call_args_in_expr(
           "cannot access `.\{prop}` — receiver may be null or undefined",
         )
       } else if is_checkable(recv_ty) &&
-        !(ctx.resolver.lookup_field(recv_ty, prop) is Some(_)) {
+        // Prune null/undefined before the existence lookup: a field declared on
+        // the non-nullish part of `T | null` (e.g. accessed via `a?.b`) still
+        // exists. The pure-null case is handled by the branch above.
+        !(ctx.resolver.lookup_field(prune_nullish(ctx.resolver, recv_ty), prop)
+        is Some(_)) {
         record(
           ctx,
           "PropAccess `.\{prop}`",
@@ -6351,6 +6477,120 @@ fn block_always_exits(block : @ast.TsBlock) -> Bool {
 }
 
 ///|
+/// Resolver-aware variant of `block_always_exits` used by the missing-return
+/// analysis. Identical to the structural form except that a `switch` without a
+/// `default:` clause can still count as exhaustive when its case labels cover
+/// every member of the scrutinee's literal-union type (mirroring TypeScript's
+/// exhaustiveness narrowing).
+fn block_always_exits_with(
+  block : @ast.TsBlock,
+  env : ExprEnv,
+  resolver : Resolver,
+) -> Bool {
+  for stmt in block.stmts {
+    if stmt_always_exits_with(stmt, env, resolver) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn stmt_always_exits_with(
+  stmt : @ast.TsStmt,
+  env : ExprEnv,
+  resolver : Resolver,
+) -> Bool {
+  match stmt {
+    Return(_) | Throw(_) => true
+    If(_, then_b, Some(else_b)) =>
+      block_always_exits_with(then_b, env, resolver) &&
+      block_always_exits_with(else_b, env, resolver)
+    Block(b) => block_always_exits_with(b, env, resolver)
+    Try(try_b, _, catch_b_opt, _) => {
+      let try_exits = block_always_exits_with(try_b, env, resolver)
+      let catch_exits = match catch_b_opt {
+        Some(cb) => block_always_exits_with(cb, env, resolver)
+        None => false
+      }
+      try_exits && catch_exits
+    }
+    Label(_, inner) => stmt_always_exits_with(inner, env, resolver)
+    Switch(scrutinee, cases) => {
+      // Every case body must exit.
+      for c in cases {
+        if !block_always_exits_with(c.body, env, resolver) {
+          return false
+        }
+      }
+      let mut has_default = false
+      for c in cases {
+        match c.test_expr {
+          None => has_default = true
+          _ => ()
+        }
+      }
+      if has_default {
+        return true
+      }
+      // No default: exhaustive only if the case labels cover the scrutinee's
+      // literal-union type.
+      switch_covers_union(scrutinee, cases, env, resolver)
+    }
+    _ => false
+  }
+}
+
+///|
+/// True when the `switch` case labels cover every member of the scrutinee's
+/// literal-union type. Conservative: returns false unless the scrutinee
+/// resolves to a union (or single literal) of literal types and every member
+/// has a matching `case` label.
+fn switch_covers_union(
+  scrutinee : @ast.TsExpr,
+  cases : Array[@ast.TsSwitchCase],
+  env : ExprEnv,
+  resolver : Resolver,
+) -> Bool {
+  let members : Array[@ast.TsType] = match
+    resolver.unwrap(infer_expr(env, resolver, scrutinee)) {
+    Union(parts) => parts
+    other =>
+      match other {
+        Literal(_) | NumberLiteral(_) | BooleanLiteral(_) => [other]
+        _ => return false
+      }
+  }
+  // Every member must be a literal type for coverage to be decidable.
+  for m in members {
+    match m {
+      Literal(_) | NumberLiteral(_) | BooleanLiteral(_) => ()
+      _ => return false
+    }
+  }
+  let labels : Array[@ast.TsType] = []
+  for c in cases {
+    match c.test_expr {
+      Some(e) => labels.push(resolver.unwrap(infer_expr(env, resolver, e)))
+      None => ()
+    }
+  }
+  for m in members {
+    let mut covered = false
+    for l in labels {
+      if l == m {
+        covered = true
+        break
+      }
+    }
+    if !covered {
+      return false
+    }
+  }
+  true
+}
+
+///|
 fn stmt_always_exits(stmt : @ast.TsStmt) -> Bool {
   match stmt {
     Return(_) | Throw(_) => true
@@ -6482,7 +6722,7 @@ fn check_function_body_with(
     is_checkable(body_return) &&
     !is_assignable_to(@ast.TsType::Undefined, body_return) &&
     !is_assignable_to(@ast.TsType::Void, body_return) &&
-    !block_always_exits(func.body) {
+    !block_always_exits_with(func.body, env, resolver) {
     issues.push({
       path: "function " + func.name,
       message: "not all paths return a `\{type_display(body_return)}`",

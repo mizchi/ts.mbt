@@ -1250,15 +1250,21 @@ fn apply_jsdoc_var_func_overlay(
   match stmt {
     @ast.TsStmt::Const(binding, ty, init) =>
       @ast.TsStmt::Const(
-        binding, ty, apply_jsdoc_func_init_overlay(jsdoc_at_pos, kw_pos, init),
+        binding,
+        ty,
+        apply_jsdoc_func_init_overlay(jsdoc_at_pos, kw_pos, init),
       )
     @ast.TsStmt::Let(binding, ty, init) =>
       @ast.TsStmt::Let(
-        binding, ty, apply_jsdoc_func_init_overlay(jsdoc_at_pos, kw_pos, init),
+        binding,
+        ty,
+        apply_jsdoc_func_init_overlay(jsdoc_at_pos, kw_pos, init),
       )
     @ast.TsStmt::Var(binding, ty, init) =>
       @ast.TsStmt::Var(
-        binding, ty, apply_jsdoc_func_init_overlay(jsdoc_at_pos, kw_pos, init),
+        binding,
+        ty,
+        apply_jsdoc_func_init_overlay(jsdoc_at_pos, kw_pos, init),
       )
     _ => stmt
   }

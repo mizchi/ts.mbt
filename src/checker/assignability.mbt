@@ -120,7 +120,7 @@ fn is_assignable_to_inner(
     (TemplateLiteralType(s_parts, s_args), TemplateLiteralType(t_parts, t_args)) =>
       s_parts == t_parts &&
       s_args.length() == t_args.length() &&
-      {
+      ({
         let mut ok = true
         for i in 0..<s_args.length() {
           if !is_assignable_to_inner(s_args[i], t_args[i], bivariant_params) {
@@ -129,7 +129,7 @@ fn is_assignable_to_inner(
           }
         }
         ok
-      }
+      })
     (NumberLiteral(_), Number) => true
     (BigIntLiteral(_), BigInt) => true
     (BooleanLiteral(_), Boolean) => true

@@ -5145,7 +5145,9 @@ test "expr_check: arithmetic on string is flagged" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      let found = issues.iter().any(fn(i) { i.message.contains("not a valid number type") })
+      let found = issues
+        .iter()
+        .any(fn(i) { i.message.contains("not a valid number type") })
       assert_true(found)
     }
     None => fail("function not found")
@@ -5178,7 +5180,9 @@ test "expr_check: calling a non-function is flagged" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      let found = issues.iter().any(fn(i) { i.message.contains("not callable") })
+      let found = issues
+        .iter()
+        .any(fn(i) { i.message.contains("not callable") })
       assert_true(found)
     }
     None => fail("function not found")
@@ -5208,7 +5212,9 @@ test "expr_check: null.prop access is flagged" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      let found = issues.iter().any(fn(i) { i.message.contains("null or undefined") })
+      let found = issues
+        .iter()
+        .any(fn(i) { i.message.contains("null or undefined") })
       assert_true(found)
     }
     None => fail("function not found")
@@ -5273,7 +5279,9 @@ test "expr_check: strict equality on incompatible types is flagged" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      let found = issues.iter().any(fn(i) { i.message.contains("always be false") })
+      let found = issues
+        .iter()
+        .any(fn(i) { i.message.contains("always be false") })
       assert_true(found)
     }
     None => fail("function not found")
@@ -5305,7 +5313,9 @@ test "expr_check: index access on non-indexable type is flagged" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      let found = issues.iter().any(fn(i) { i.message.contains("cannot index") })
+      let found = issues
+        .iter()
+        .any(fn(i) { i.message.contains("cannot index") })
       assert_true(found)
     }
     None => fail("function not found")
@@ -5353,7 +5363,9 @@ test "expr_check: comparing different string literals with === is flagged" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      let found = issues.iter().any(fn(i) { i.message.contains("always be false") })
+      let found = issues
+        .iter()
+        .any(fn(i) { i.message.contains("always be false") })
       assert_true(found)
     }
     None => fail("function not found")
@@ -5370,7 +5382,9 @@ test "expr_check: unary minus on string is flagged" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      let found = issues.iter().any(fn(i) { i.message.contains("not a valid number type") })
+      let found = issues
+        .iter()
+        .any(fn(i) { i.message.contains("not a valid number type") })
       assert_true(found)
     }
     None => fail("function not found")
@@ -5402,9 +5416,13 @@ test "expr_check: object destructuring with type annotation mismatch is flagged"
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  let found = issues.iter().any(fn(i) {
-    i.message.contains("destructuring") || i.message.contains("string") || i.message.contains("number")
-  })
+  let found = issues
+    .iter()
+    .any(fn(i) {
+      i.message.contains("destructuring") ||
+      i.message.contains("string") ||
+      i.message.contains("number")
+    })
   assert_true(found)
 }
 
@@ -5430,9 +5448,11 @@ test "expr_check: ternary with wrong branch type is flagged" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      let found = issues.iter().any(fn(i) {
-        i.message.contains("string") || i.message.contains("number")
-      })
+      let found = issues
+        .iter()
+        .any(fn(i) {
+          i.message.contains("string") || i.message.contains("number")
+        })
       assert_true(found)
     }
     None => fail("function not found")
@@ -5464,7 +5484,9 @@ test "expr_check: typeof string var compared to 'number' is flagged" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      let found = issues.iter().any(fn(i) { i.message.contains("always be false") })
+      let found = issues
+        .iter()
+        .any(fn(i) { i.message.contains("always be false") })
       assert_true(found)
     }
     None => fail("function not found")
@@ -5483,7 +5505,9 @@ test "expr_check: switch case type mismatch is flagged" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      let found = issues.iter().any(fn(i) { i.message.contains("can never match") })
+      let found = issues
+        .iter()
+        .any(fn(i) { i.message.contains("can never match") })
       assert_true(found)
     }
     None => fail("function not found")
@@ -5559,3 +5583,238 @@ test "expr_check: calling existing method on interface is ok" {
   assert_eq(issues.length(), 0)
 }
 
+///|
+test "expr_check: valid TS patterns are not false-positives" {
+  let cases : Array[(String, String)] = [
+    (
+      "generic-arith",
+      (
+        #|function f<T extends number>(x: T): number {
+        #|  return x - 1;
+        #|}
+      ),
+    ),
+    (
+      "overload-call",
+      (
+        #|function g(x: number): number;
+        #|function g(x: string): string;
+        #|function g(x: any): any { return x; }
+        #|function h(): number {
+        #|  return g(1);
+        #|}
+      ),
+    ),
+    (
+      "interface-toString",
+      (
+        #|interface Greeter { greet(): void }
+        #|function f(x: Greeter): string {
+        #|  return x.toString();
+        #|}
+      ),
+    ),
+    (
+      "interface-hasOwnProperty",
+      (
+        #|interface Bag { name: string }
+        #|function f(b: Bag): boolean {
+        #|  return b.hasOwnProperty("name");
+        #|}
+      ),
+    ),
+    (
+      "type-param-prop",
+      (
+        #|function f<T>(x: T): T {
+        #|  return x;
+        #|}
+      ),
+    ),
+    (
+      "enum-compare",
+      (
+        #|enum Color { Red, Green }
+        #|function f(c: Color): boolean {
+        #|  return c === Color.Red;
+        #|}
+      ),
+    ),
+    (
+      "compare-to-null",
+      (
+        #|function f(x: string | null): boolean {
+        #|  return x === null;
+        #|}
+      ),
+    ),
+    (
+      "index-sig-assign",
+      (
+        #|interface Dict { [k: string]: number }
+        #|function f(d: Dict): void {
+        #|  d.foo = 1;
+        #|}
+      ),
+    ),
+    (
+      "number-literal-eq",
+      (
+        #|function f(n: number): boolean {
+        #|  return n === 0;
+        #|}
+      ),
+    ),
+    (
+      "string-concat-plus",
+      (
+        #|function f(s: string): string {
+        #|  return s + "!";
+        #|}
+      ),
+    ),
+    (
+      "narrowed-union-arith",
+      (
+        #|function f(x: string | number): number {
+        #|  if (typeof x === "number") {
+        #|    return x - 1;
+        #|  }
+        #|  return 0;
+        #|}
+      ),
+    ),
+    (
+      "bigint-arith",
+      (
+        #|function f(a: bigint, b: bigint): bigint {
+        #|  return a * b;
+        #|}
+      ),
+    ),
+    (
+      "optional-chain-method",
+      (
+        #|interface Bag { name: string }
+        #|function f(b: Bag | null): string {
+        #|  return b?.name ?? "default";
+        #|}
+      ),
+    ),
+    (
+      "enum-switch",
+      (
+        #|enum Color { Red, Green, Blue }
+        #|function f(c: Color): number {
+        #|  switch (c) {
+        #|    case Color.Red: return 1;
+        #|    case Color.Green: return 2;
+        #|    default: return 0;
+        #|  }
+        #|}
+      ),
+    ),
+    (
+      "string-switch",
+      (
+        #|function f(s: "a" | "b"): number {
+        #|  switch (s) {
+        #|    case "a": return 1;
+        #|    case "b": return 2;
+        #|  }
+        #|}
+      ),
+    ),
+    (
+      "array-index-assign",
+      (
+        #|function f(xs: number[]): void {
+        #|  xs[0] = 42;
+        #|}
+      ),
+    ),
+    (
+      "nested-prop-assign",
+      (
+        #|interface Inner { value: number }
+        #|interface Outer { inner: Inner }
+        #|function f(o: Outer): void {
+        #|  o.inner.value = 10;
+        #|}
+      ),
+    ),
+    (
+      "ternary-union-result",
+      (
+        #|function f(cond: boolean): string | number {
+        #|  return cond ? "yes" : 42;
+        #|}
+      ),
+    ),
+    (
+      "class-method-call",
+      (
+        #|class Counter { inc(): void {} }
+        #|function f(c: Counter): void {
+        #|  c.inc();
+        #|}
+      ),
+    ),
+    (
+      "generic-array-method",
+      (
+        #|function f<T>(xs: T[]): number {
+        #|  return xs.length;
+        #|}
+      ),
+    ),
+    (
+      "compare-undefined",
+      (
+        #|function f(x: number | undefined): boolean {
+        #|  return x === undefined;
+        #|}
+      ),
+    ),
+    (
+      "unary-not-anything",
+      (
+        #|function f(x: string): boolean {
+        #|  return !x;
+        #|}
+      ),
+    ),
+    (
+      "typeof-string-eq",
+      (
+        #|function f(x: unknown): boolean {
+        #|  return typeof x === "string";
+        #|}
+      ),
+    ),
+    (
+      "destructure-no-annotation",
+      (
+        #|interface P { x: number; y: number }
+        #|function f(p: P): number {
+        #|  const { x, y } = p;
+        #|  return x + y;
+        #|}
+      ),
+    ),
+  ]
+  let mut fps = 0
+  for c in cases {
+    let (label, src) = c
+    let module_ = parse_module_or_empty(src)
+    let issues = check_module_function_bodies(module_)
+    if issues.length() != 0 {
+      println("FALSE POSITIVE [\{label}]:")
+      for i in issues {
+        println("    \{i.path} — \{i.message}")
+      }
+      fps = fps + 1
+    }
+  }
+  assert_eq(fps, 0)
+}
