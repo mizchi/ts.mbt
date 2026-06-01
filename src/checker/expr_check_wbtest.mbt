@@ -5034,11 +5034,15 @@ test "expr_check: deliberate type violations are detected" {
       ),
     ),
     (
-      "null-passed-to-number-param",
+      // A literal `null` argument is intentionally NOT a violation here:
+      // absent a strict-null-checks signal we model the non-strict default
+      // where `null` is assignable to every type. A wrong *primitive*
+      // argument is still a violation in either mode.
+      "string-passed-to-number-param",
       (
         #|function acceptsNumber(x: number): void {}
         #|function f(): void {
-        #|  acceptsNumber(null);
+        #|  acceptsNumber("hello");
         #|}
       ),
     ),

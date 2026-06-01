@@ -1263,6 +1263,7 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-01 (T0)    143/487 (29 %)      243/319 (76 %, 76 FP)
 2026-06-01 (T1)    144/487 (30 %)      243/319 (76 %, 76 FP)
 2026-06-01 (T2)    212/487 (44 %)      217/319 (68 %, 102 FP)
+2026-06-01 (T3)    207/487 (42 %)      232/319 (73 %, 87 FP)
 ```
 
 - T0: starting point.
@@ -1273,6 +1274,15 @@ conformance sources (`.errors.txt` baseline = ground truth):
   Recall jumped +47 %; precision dropped 8 pt because untyped DOM /
   Node globals at module scope now produce more "method does not
   exist" / argument-count diagnostics.
+- T3: + non-strict null assignability (a *literal* `null` / `undefined`
+  source is assignable to any target, matching `@strict: false`) and
+  + string-literal bracket access on primitives (`x["charAt"](0)`,
+  `n["toExponential"]()`) no longer flag "cannot index into" /
+  "is not callable". FP −15 (102 → 87). Recall −5: the only regressions
+  are the strict-mode null tests (`undefinedAssignableToEveryType`,
+  `validNullAssignments`) where null/undefined assignment *is* the
+  baseline error — an accepted strict-vs-non-strict trade-off given we
+  have no per-file strict signal. Net +10 correct verdicts.
 
 Per-directory breakdown (`recall_hit / recall_miss / precision_hit /
 precision_miss`):
@@ -1325,9 +1335,19 @@ precision_miss`):
   return rather than reporting "no such method". Fixes
   `propertyAccessOnTypeParameterWithoutConstraints.ts` and the related
   `WithConstraints*` variants (~3-5 false positives).
-- [ ] Handle negative numeric literal types (`var v: -123 = -123`) —
-  parser currently widens, causing literal-type checks to false-positive
-  in `literal/literalTypes2.ts` and `enumLiteralTypes{1,2}.ts`.
+- [x] Handle negative numeric literal types (`var v: -123 = -123`) —
+  `precise_literal_type` now narrows `UnaryOp(Neg, …)` to its negative
+  literal type (commit `d5517a5`).
+- [x] Non-strict null/undefined assignability: a literal `null` /
+  `undefined` source assigns to any target (T3). Cleared the
+  `expected X but got null` FP cluster (`nullAssignableToEveryType`,
+  `objectTypesIdentityWithCallSignatures*`, etc.).
+- [x] String-literal bracket access on primitives
+  (`x["charAt"]`, `n["toExponential"]`, `b["toString"]`) reaches a
+  prototype member by name — no longer flagged "cannot index into" /
+  "is not callable" (T3). Cleared `stringPropertyAccess`,
+  `numberPropertyAccess`, `booleanPropertyAccess`, and the
+  `extend{String,Number,Boolean}Interface` cases.
 - [ ] Computed property keys in `in`-operator narrowing
   (`const a = 'a'; if (a in c) { ... }`). False positives in
   `controlFlow/controlFlowInOperator.ts`.

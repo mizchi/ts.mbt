@@ -795,6 +795,57 @@ test "checker: duplicate parameter / type parameter names" {
 }
 
 ///|
+test "checker: null / undefined are assignable to every type (non-strict)" {
+  // Without `strictNullChecks` (the conformance default, and the mode we
+  // assume absent a per-file signal) `null` / `undefined` assign to any
+  // target. Make sure those initializers never false-flag.
+  let src =
+    #|function f() {
+    #|  var b: number = null;
+    #|  var c: string = undefined;
+    #|  var d: boolean = null;
+    #|  var e: number[] = null;
+    #|  var g: () => number = undefined;
+    #|}
+  let module_ = Parser::from_source(src).parse_module()
+  let issues = @checker.check_module_function_bodies(module_)
+  for i in issues {
+    if i.message.contains("but got `null`") ||
+      i.message.contains("but got `undefined`") {
+      println("unexpected: \{i.path}: \{i.message}")
+      fail(
+        "got unexpected null/undefined assignability error in non-strict mode",
+      )
+    }
+  }
+}
+
+///|
+test "checker: string-literal bracket access on a primitive is silent" {
+  // `x["charAt"](0)` / `n["toExponential"]()` reach a prototype member by
+  // name — valid on primitives — so neither "cannot index into" nor
+  // "is not callable" should fire.
+  let src =
+    #|function f() {
+    #|  var s = "";
+    #|  var n = 1;
+    #|  var bl = true;
+    #|  var a = s["charAt"](0);
+    #|  var b = n["toExponential"]();
+    #|  var c = bl["toString"]();
+    #|}
+  let module_ = Parser::from_source(src).parse_module()
+  let issues = @checker.check_module_function_bodies(module_)
+  for i in issues {
+    if i.message.contains("cannot index into") ||
+      i.message.contains("is not callable") {
+      println("unexpected: \{i.path}: \{i.message}")
+      fail("got unexpected index/callable error on primitive bracket access")
+    }
+  }
+}
+
+///|
 /// Strip the parent directory and the `.ts` / `.tsx` suffix off a path.
 /// `tests/cases/conformance/foo/bar/Baz.ts` -> `Baz`.
 fn ts_case_basename(path : String) -> String {
@@ -927,20 +978,22 @@ async test "checker: accuracy against TypeScript conformance baselines" {
   // as accuracy improves; loosen only with justification.
   //
   // Recall floor: of the baseline-positive cases, we currently detect
-  // ~43 % (top-level assignment / call checks added 2026-06-01).
-  // Set the floor at 38 % to flag a drop of >5 percentage points; a
-  // real recall regression should easily blow past that.
+  // ~42 % (top-level assignment / call checks added 2026-06-01; non-strict
+  // null assignability gave back a few strict-mode null tests). Set the
+  // floor at 38 % to flag a drop of >4 percentage points; a real recall
+  // regression should easily blow past that.
   if with_baseline > 0 && recall_hit * 100 < with_baseline * 38 {
     fail(
       "recall floor breached: \{recall_hit}/\{with_baseline} baseline-positive cases caught (< 38 %)",
     )
   }
-  // Precision floor: we currently false-positive on ~32 % of clean
-  // cases. Set the cap at 36 % so a new false-positive class shows up
-  // as a test failure rather than silently widening the gap.
-  if without_baseline > 0 && precision_miss * 100 > without_baseline * 36 {
+  // Precision floor: we currently false-positive on ~27 % of clean cases
+  // (non-strict null assignability + primitive bracket-access silencing
+  // cleared the prior ~32 %). Set the cap at 30 % so a new false-positive
+  // class shows up as a test failure rather than silently widening the gap.
+  if without_baseline > 0 && precision_miss * 100 > without_baseline * 30 {
     fail(
-      "precision floor breached: \{precision_miss}/\{without_baseline} clean cases reported as failing (> 36 %)",
+      "precision floor breached: \{precision_miss}/\{without_baseline} clean cases reported as failing (> 30 %)",
     )
   }
 }

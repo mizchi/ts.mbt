@@ -2074,6 +2074,20 @@ fn object_prototype_member(field : String) -> @ast.TsType? {
 }
 
 ///|
+// True when the expression is a literal `null` / `undefined` source — the
+// only forms that are universally assignable under non-strict null checks.
+// `undefined` parses as `Var("undefined")`; `void <expr>` (e.g. `void 0`)
+// also evaluates to `undefined`.
+fn is_null_or_undefined_literal_expr(expr : @ast.TsExpr) -> Bool {
+  match expr {
+    NullLit => true
+    Var("undefined") => true
+    UnaryOp(Void, _) => true
+    _ => false
+  }
+}
+
+///|
 // Returns true only for types that can NEVER be indexed with `x[i]`, so the
 // "cannot index into" diagnostic stays free of false positives.  Permissive
 // for every object-like / named / abstract type-level form (mapped types,
@@ -2925,6 +2939,22 @@ fn infer_index(
   // Unwrap type aliases before dispatch so `type Arr = string[]` resolves
   // correctly for both `Array(elem)` and `Applied("Array", [elem])` shapes.
   let recv = resolver.unwrap(recv)
+  // `prim["methodName"]` reaches a prototype member we don't model (e.g.
+  // `"".charAt`, `(1).toExponential`). Yield `Any` so a following call
+  // (`x["charAt"](0)`) isn't flagged as "string is not callable".
+  match (recv, idx_expr) {
+    (
+      String_
+      | Literal(_)
+      | Number
+      | Int
+      | NumberLiteral(_)
+      | Boolean
+      | BooleanLiteral(_),
+      StringLit(_),
+    ) => return @ast.TsType::Any
+    _ => ()
+  }
   match recv {
     Array(elem) => elem
     // `Array<T>` / `ReadonlyArray<T>` generic form — numeric index yields T.
@@ -3294,6 +3324,17 @@ fn check_expr_against(
   // correctly assigns to `string` without a false mismatch.
   let inferred_u = ctx.resolver.unwrap(inferred)
   let expected_u = ctx.resolver.unwrap(expected)
+  // Without `strictNullChecks`, a literal `null` / `undefined` is assignable
+  // to every type (`var b: number = null`). The conformance corpus runs
+  // largely under `@strict: false` and we have no per-file strict-mode
+  // signal, so treat a *literal* null/undefined source as universally
+  // assignable. This is intentionally narrower than "inferred type is
+  // Null/Undefined": a value merely narrowed to `undefined` (e.g. an
+  // optional property in its else-branch) is still checked, matching the
+  // checker's existing optional-tracking behaviour.
+  if is_null_or_undefined_literal_expr(expr) {
+    return
+  }
   // If the expected type is a `Named` reference that the resolver can't expand
   // (e.g. a generic type parameter like `T`, or a qualified name like
   // `Intl.NumberFormatPartTypes` that isn't in the module's declaration list),
@@ -6363,7 +6404,14 @@ fn check_call_args_in_expr(
       check_call_args_in_expr(env, recv, ctx)
       check_call_args_in_expr(env, idx, ctx)
       let recv_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, recv))
-      if is_checkable(recv_ty) && is_definitely_not_indexable(recv_ty) {
+      // `x["charAt"]` / `n["toExponential"]` reaches a prototype member by
+      // name — valid even on primitives — so a string-literal key is never
+      // an "cannot index into" error. Only flag genuine numeric / dynamic
+      // indexing into a non-indexable primitive.
+      let string_keyed = idx is StringLit(_)
+      if is_checkable(recv_ty) &&
+        is_definitely_not_indexable(recv_ty) &&
+        !string_keyed {
         record(
           ctx,
           "index access",
