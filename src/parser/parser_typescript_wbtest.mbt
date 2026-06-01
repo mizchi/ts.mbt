@@ -744,6 +744,27 @@ test "checker: bare unconstrained type parameter access is silent" {
 }
 
 ///|
+test "checker: negative-numeric literal types accept negative literal exprs" {
+  // `var v: -123 = -123` parses the RHS as `UnaryOp(Neg, IntLit(123))`,
+  // and TypeScript narrows that to the literal type `-123`. Make sure
+  // `precise_literal_type` follows the same path so the literal-
+  // tightened assignment doesn't false-flag.
+  let src =
+    #|function f() {
+    #|  var v: -123 = -123;
+    #|  let l: -1 = -1;
+    #|}
+  let module_ = Parser::from_source(src).parse_module()
+  let issues = @checker.check_module_function_bodies(module_)
+  for i in issues {
+    if i.message.contains("expected `-") {
+      println("unexpected: \{i.path}: \{i.message}")
+      fail("got unexpected literal-mismatch error on negative numeric literal")
+    }
+  }
+}
+
+///|
 test "checker: duplicate parameter / type parameter names" {
   let src =
     #|class C<T, T> { }

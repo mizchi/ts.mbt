@@ -3411,6 +3411,16 @@ fn precise_literal_type(e : @ast.TsExpr) -> @ast.TsType? {
     BoolLit(b) => Some(@ast.TsType::BooleanLiteral(b))
     StringLit(s) => Some(@ast.TsType::Literal(s))
     BigIntLit(s) => Some(@ast.TsType::BigIntLiteral(s))
+    // Negative-number literal: `-123` parses as a unary-minus on the
+    // integer literal `123`. TypeScript treats the result as the literal
+    // type `-123` (matching `var x: -123 = -123`), so surface it here so
+    // the literal-tighten path in `check_expr_against` accepts the
+    // narrowed assignment.
+    UnaryOp(Neg, IntLit(i)) =>
+      Some(@ast.TsType::NumberLiteral("-" + i.to_string()))
+    UnaryOp(Neg, NumberLit(d)) =>
+      Some(@ast.TsType::NumberLiteral("-" + d.to_string()))
+    UnaryOp(Neg, BigIntLit(s)) => Some(@ast.TsType::BigIntLiteral("-" + s))
     _ => None
   }
 }
