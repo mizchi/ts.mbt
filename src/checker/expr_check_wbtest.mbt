@@ -467,6 +467,57 @@ test "expr_check: typeof narrowing accepts compatible branch" {
 }
 
 ///|
+test "expr_check: typeof on array operand narrows to \"object\"" {
+  let src =
+    #|function f(xs: number[]): "object" {
+    #|  return typeof xs;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  @test.assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: typeof on bigint operand narrows to \"bigint\"" {
+  let src =
+    #|function f(x: bigint): "bigint" {
+    #|  return typeof x;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  @test.assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: typeof on function operand narrows to \"function\"" {
+  let src =
+    #|function f(fn: (x: number) => number): "function" {
+    #|  return typeof fn;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  @test.assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: typeof on string|number returns \"string\"|\"number\" union" {
+  let src =
+    #|function f(v: string | number): "boolean" {
+    #|  return typeof v;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  // typeof v: "string" | "number", not assignable to "boolean".
+  let mut found = false
+  for i in issues {
+    if i.message.contains("boolean") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
 test "expr_check: new ClassName returns instance type and checks ctor args" {
   let src =
     #|class Point { constructor(x: number, y: number) {} }

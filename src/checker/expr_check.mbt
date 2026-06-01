@@ -3075,9 +3075,12 @@ fn infer_typeof_type(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType {
     String_ | Literal(_) => lit("string")
     Number | Int | NumberLiteral(_) => lit("number")
     Boolean | BooleanLiteral(_) => lit("boolean")
+    BigInt | BigIntLiteral(_) => lit("bigint")
+    Symbol | UniqueSymbol(_) => lit("symbol")
     Null => lit("object")
-    Undefined => lit("undefined")
-    Func(_, _) => lit("function")
+    Array(_) | Tuple(_) | Object(_) | Struct(_, _) => lit("object")
+    Undefined | Void => lit("undefined")
+    Func(_, _) | Constructor(_, _, _) => lit("function")
     Union(parts) => {
       let seen : Map[String, Bool] = {}
       let tags : Array[@ast.TsType] = []
