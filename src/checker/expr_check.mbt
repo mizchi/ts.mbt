@@ -7113,6 +7113,7 @@ fn check_module_decl_signatures(module_ : @ast.TsModule) -> Array[ExprIssue] {
       names.push(p.name)
     }
     check_dup_param_names("function \{func.name}", names, issues)
+    check_func_rest_params("function \{func.name}", func.params, issues)
   }
   // Ambient `declare function` imports.
   for imp in module_.imports {
@@ -7134,6 +7135,7 @@ fn check_module_decl_signatures(module_ : @ast.TsModule) -> Array[ExprIssue] {
         names.push(p.0)
       }
       check_dup_param_names(path, names, issues)
+      check_method_rest_params(path, meth, issues)
     }
   }
   // Interfaces.
@@ -7145,6 +7147,76 @@ fn check_module_decl_signatures(module_ : @ast.TsModule) -> Array[ExprIssue] {
     check_dup_type_params("type \{ta.name}", ta.type_params, issues)
   }
   issues
+}
+
+///|
+/// A rest parameter (`...x: T`) requires `T` to be an array, tuple, or any.
+/// Anything else is `TS2370: A rest parameter must be of an array type`.
+fn check_func_rest_params(
+  path : String,
+  params : Array[@ast.TsParam],
+  issues : Array[ExprIssue],
+) -> Unit {
+  let mut i = 0
+  while i < params.length() {
+    let p = params[i]
+    if p.is_rest {
+      if !is_valid_rest_param_type(p.type_) {
+        issues.push({
+          path,
+          message: "rest parameter `\{p.name}` must be of an array type",
+        })
+      }
+      if i + 1 < params.length() {
+        issues.push({
+          path,
+          message: "rest parameter `\{p.name}` must be last in the parameter list",
+        })
+      }
+    }
+    i = i + 1
+  }
+}
+
+///|
+fn check_method_rest_params(
+  path : String,
+  meth : @ast.TsClassMethodDecl,
+  issues : Array[ExprIssue],
+) -> Unit {
+  let mut i = 0
+  while i < meth.params.length() && i < meth.param_is_rest.length() {
+    if meth.param_is_rest[i] {
+      let pname = meth.params[i].0
+      let ptype = meth.params[i].1
+      if !is_valid_rest_param_type(ptype) {
+        issues.push({
+          path,
+          message: "rest parameter `\{pname}` must be of an array type",
+        })
+      }
+      if i + 1 < meth.params.length() {
+        issues.push({
+          path,
+          message: "rest parameter `\{pname}` must be last in the parameter list",
+        })
+      }
+    }
+    i = i + 1
+  }
+}
+
+///|
+fn is_valid_rest_param_type(ty : @ast.TsType) -> Bool {
+  match ty {
+    Array(_) => true
+    Tuple(_) => true
+    Applied("Array", _) | Applied("ReadonlyArray", _) => true
+    // Unannotated rest (`...args`) parses as `Any` — TS treats this as
+    // `any[]`, valid.
+    Any => true
+    _ => false
+  }
 }
 
 ///|

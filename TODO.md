@@ -1265,6 +1265,7 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-01 (T2)    212/487 (44 %)      217/319 (68 %, 102 FP)
 2026-06-01 (T3)    207/487 (42 %)      232/319 (73 %, 87 FP)
 2026-06-01 (T4)    205/487 (42 %)      241/319 (76 %, 78 FP)
+2026-06-01 (T5)    207/487 (43 %)      241/319 (76 %, 78 FP)
 ```
 
 - T0: starting point.
@@ -1297,6 +1298,13 @@ conformance sources (`.errors.txt` baseline = ground truth):
     a function-typed variable / method / call-signature with a trailing
     optional omitted is not an arity error. Cleared
     callSignaturesWithOptionalParameters.
+- T5: + rest-parameter shape lints (TS2370 / TS1014):
+  - A rest parameter (`...x: T`) must be typed as an array, tuple, or
+    `Array<T>` / `ReadonlyArray<T>` (or `any`). Otherwise emit
+    "rest parameter must be of an array type".
+  - A rest parameter must be the last positional parameter.
+  - Caught on top-level functions, `declare function` imports, and
+    class methods. Cleared `restParametersOfNonArrayTypes` and friends.
 
 Per-directory breakdown (`recall_hit / recall_miss / precision_hit /
 precision_miss`):

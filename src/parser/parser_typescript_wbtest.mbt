@@ -765,6 +765,40 @@ test "checker: negative-numeric literal types accept negative literal exprs" {
 }
 
 ///|
+test "checker: rest parameters must be array / tuple type and last" {
+  // TS2370: rest param needs an array-ish annotation.
+  // TS1014: rest param must be last in the list.
+  let src =
+    #|function f(...x: string) { }
+    #|function g(...x: number, ...y: number) { }
+    #|class C {
+    #|  foo(...x: C) { }
+    #|  bar(...x: number[], ...y: string) { }
+    #|}
+  let module_ = Parser::from_source(src).parse_module()
+  let issues = @checker.check_module_function_bodies(module_)
+  let mut rest_type_errs = 0
+  let mut rest_last_errs = 0
+  for i in issues {
+    if i.message.contains("must be of an array type") {
+      rest_type_errs += 1
+    } else if i.message.contains("must be last in the parameter list") {
+      rest_last_errs += 1
+    }
+  }
+  // Type errors: f.x:string, g.x:number, g.y:number, C.foo.x:C, C.bar.y:string
+  // → 5 type errors. Last errors: g.x (not last), C.bar.x (not last) → 2.
+  if rest_type_errs != 5 || rest_last_errs != 2 {
+    for i in issues {
+      println("  \{i.path}: \{i.message}")
+    }
+    fail(
+      "expected rest_type_errs=5 rest_last_errs=2, got rest_type_errs=\{rest_type_errs} rest_last_errs=\{rest_last_errs}",
+    )
+  }
+}
+
+///|
 test "checker: duplicate parameter / type parameter names" {
   let src =
     #|class C<T, T> { }
