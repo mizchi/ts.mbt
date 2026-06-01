@@ -310,6 +310,38 @@ fn required_arity(params : Array[@ast.TsParam]) -> Int {
 }
 
 ///|
+/// Minimum argument count derivable from parameter *types* alone (no rich
+/// `TsParam` metadata). A trailing parameter whose type accepts `undefined`
+/// (the `x?: T` -> `T | undefined` widening) is optional and omittable.
+fn required_arity_from_types(params : Array[@ast.TsType]) -> Int {
+  let mut last_required = 0
+  let mut i = 0
+  while i < params.length() {
+    if !type_accepts_undefined_param(params[i]) {
+      last_required = i + 1
+    }
+    i = i + 1
+  }
+  last_required
+}
+
+///|
+fn type_accepts_undefined_param(ty : @ast.TsType) -> Bool {
+  match ty {
+    Undefined => true
+    Union(parts) => {
+      for part in parts {
+        if part is Undefined {
+          return true
+        }
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+///|
 fn param_is_optional(p : @ast.TsParam) -> Bool {
   if p.is_rest {
     return true
@@ -3335,6 +3367,15 @@ fn check_expr_against(
   if is_null_or_undefined_literal_expr(expr) {
     return
   }
+  // A `never` target almost always shows up as the `assertNever(x: never)`
+  // exhaustiveness idiom, where `x` has been flow-narrowed to `never` by an
+  // exhaustive switch / if-chain. We don't model flow narrowing, so the
+  // argument still looks like its declared union (`0 | 1 | 2`) and would
+  // false-flag against `never`. Skip the check rather than emit a positive
+  // on every exhaustiveness assertion.
+  if expected_u is Never {
+    return
+  }
   // If the expected type is a `Named` reference that the resolver can't expand
   // (e.g. a generic type parameter like `T`, or a qualified name like
   // `Intl.NumberFormatPartTypes` that isn't in the module's declaration list),
@@ -4349,7 +4390,14 @@ fn check_arguments_with_sig(
       let max_ = if has_rest { -1 } else { ps.length() }
       (min_, max_)
     }
-    None => (params.length(), params.length())
+    None =>
+      // No rich `TsParam` metadata (e.g. calling a value typed as
+      // `Func([...], _)` — a variable, method, or call-signature). We can
+      // still recover optionality from the parameter *types*: the parser
+      // widens `x?: T` to `T | undefined`, so a trailing param whose type
+      // accepts `undefined` is omittable. This drives the min count down
+      // without needing the declaration's `TsParam` list.
+      (required_arity_from_types(params), params.length())
   }
   if !has_spread {
     let n = args.length()

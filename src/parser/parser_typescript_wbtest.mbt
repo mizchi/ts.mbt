@@ -987,13 +987,14 @@ async test "checker: accuracy against TypeScript conformance baselines" {
       "recall floor breached: \{recall_hit}/\{with_baseline} baseline-positive cases caught (< 38 %)",
     )
   }
-  // Precision floor: we currently false-positive on ~27 % of clean cases
-  // (non-strict null assignability + primitive bracket-access silencing
-  // cleared the prior ~32 %). Set the cap at 30 % so a new false-positive
+  // Precision floor: we currently false-positive on ~25 % of clean cases
+  // (non-strict null assignability + primitive bracket access + `never`
+  // target / `true | false` union / type-derived optional-arity silencing
+  // cleared the prior ~32 %). Set the cap at 28 % so a new false-positive
   // class shows up as a test failure rather than silently widening the gap.
-  if without_baseline > 0 && precision_miss * 100 > without_baseline * 30 {
+  if without_baseline > 0 && precision_miss * 100 > without_baseline * 28 {
     fail(
-      "precision floor breached: \{precision_miss}/\{without_baseline} clean cases reported as failing (> 30 %)",
+      "precision floor breached: \{precision_miss}/\{without_baseline} clean cases reported as failing (> 28 %)",
     )
   }
 }

@@ -3393,6 +3393,71 @@ test "expr_check: prop !== undefined else-branch keeps original type" {
 }
 
 ///|
+test "expr_check: assertNever(x) exhaustiveness idiom is silent" {
+  // After an exhaustive switch, `x` is flow-narrowed to `never`, so
+  // `assertNever(x)` is valid. We don't model flow narrowing, so the arg
+  // still looks like `0 | 1 | 2`; a `never` target must not false-flag.
+  let src =
+    #|function assertNever(x: never): never { throw new Error(); }
+    #|type Tag = 0 | 1 | 2;
+    #|function f(x: Tag): string {
+    #|  switch (x) {
+    #|    case 0: return "a";
+    #|    case 1: return "b";
+    #|    case 2: return "c";
+    #|  }
+    #|  return assertNever(x);
+    #|}
+  let module_ = parse_module_or_empty(src)
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("never") {
+      println("unexpected: \{i.path}: \{i.message}")
+      fail("got unexpected `never`-target mismatch on assertNever idiom")
+    }
+  }
+}
+
+///|
+test "expr_check: boolean assigns to a `true | false` union target" {
+  // `true | false` is exactly `boolean`, so `boolean` (and either literal)
+  // flows into a union covering both literals without a mismatch.
+  let src =
+    #|function f(a: true | false, b: boolean) {
+    #|  a = b;
+    #|  b = a;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("true | false") ||
+      i.message.contains("but got `boolean`") {
+      println("unexpected: \{i.path}: \{i.message}")
+      fail("got unexpected boolean-vs-(true|false) mismatch")
+    }
+  }
+}
+
+///|
+test "expr_check: trailing `T | undefined` param is omittable without a sig" {
+  // Calling a value typed as `Func([number | undefined], _)` (a variable,
+  // not a declaration) gives no rich `TsParam` metadata. Optionality is
+  // recovered from the parameter type, so `f()` is not an arity error.
+  let src =
+    #|var f = function (x?: number) { };
+    #|var g = (x: number, y?: number) => { };
+    #|f();
+    #|f(1);
+    #|g(1);
+    #|g(1, 2);
+  let module_ = parse_module_or_empty(src)
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("argument(s), got") {
+      println("unexpected: \{i.path}: \{i.message}")
+      fail("got unexpected arity error on omittable optional parameter")
+    }
+  }
+}
+
+///|
 test "expr_check: instanceof TypeError narrows a caught error" {
   // `catch (e)` binds `e` as `any`; the instanceof check narrows it to
   // `TypeError` inside the then-branch so `.message` resolves through

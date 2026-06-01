@@ -1264,6 +1264,7 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-01 (T1)    144/487 (30 %)      243/319 (76 %, 76 FP)
 2026-06-01 (T2)    212/487 (44 %)      217/319 (68 %, 102 FP)
 2026-06-01 (T3)    207/487 (42 %)      232/319 (73 %, 87 FP)
+2026-06-01 (T4)    205/487 (42 %)      241/319 (76 %, 78 FP)
 ```
 
 - T0: starting point.
@@ -1283,6 +1284,19 @@ conformance sources (`.errors.txt` baseline = ground truth):
   `validNullAssignments`) where null/undefined assignment *is* the
   baseline error — an accepted strict-vs-non-strict trade-off given we
   have no per-file strict signal. Net +10 correct verdicts.
+- T4: + three more precision fixes (FP 87 -> 78, recall −2):
+  - `never` target accepts any source (the `assertNever(x: never)`
+    exhaustiveness idiom flow-narrows `x` to `never`, which we can't
+    model). Cleared numericLiteralTypes{1,2}, enumLiteralTypes{1,2},
+    stringEnumLiteralTypes{1,2}.
+  - `true | false` (a union covering both boolean literals) accepts
+    `boolean` as a source — they are the same type. Cleared the
+    booleanLiteralTypes{1,2} `expected true | false but got boolean`.
+  - Optional arity recovered from parameter *types* (`x?: T` widens to
+    `T | undefined`) when no rich `TsParam` sig is available, so calling
+    a function-typed variable / method / call-signature with a trailing
+    optional omitted is not an arity error. Cleared
+    callSignaturesWithOptionalParameters.
 
 Per-directory breakdown (`recall_hit / recall_miss / precision_hit /
 precision_miss`):
