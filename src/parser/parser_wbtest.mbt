@@ -6728,6 +6728,16 @@ test "parser: parse bigint primitive type" {
 }
 
 ///|
+test "parser: parse symbol primitive type" {
+  let src = "export type S = symbol;"
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected symbol primitive type to parse: \{e}")
+  }
+  assert_eq(module_.type_aliases.length(), 1)
+  assert_eq(module_.type_aliases[0].type_, @ast.TsType::Symbol)
+}
+
+///|
 test "parser: parse generic curried function return type" {
   let src =
     #|export declare function ap<F extends URIS2, G extends URIS>(
