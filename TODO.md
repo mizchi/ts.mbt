@@ -1255,12 +1255,24 @@ runtime-bridge impact):
 
 Baseline accuracy gate is now live at
 `src/parser/parser_typescript_wbtest.mbt:checker: accuracy against
-TypeScript conformance baselines`. Initial measurement against 822
+TypeScript conformance baselines`. Measurements against 822
 conformance sources (`.errors.txt` baseline = ground truth):
 
 ```
-parsed=806/822 | recall=143/487 (29 %) | precision=243/319 (76 %, 76 false-positives)
+                   recall              precision (clean cases)
+2026-06-01 (T0)    143/487 (29 %)      243/319 (76 %, 76 FP)
+2026-06-01 (T1)    144/487 (30 %)      243/319 (76 %, 76 FP)
+2026-06-01 (T2)    212/487 (44 %)      217/319 (68 %, 102 FP)
 ```
+
+- T0: starting point.
+- T1: + duplicate parameter / type-parameter lints, + bare-`T`
+  property-access silencing (commit `99fed36`).
+- T2: + parser preserves top-level expression statements so calls
+  and `t = a;` style assignments are checked against declared types.
+  Recall jumped +47 %; precision dropped 8 pt because untyped DOM /
+  Node globals at module scope now produce more "method does not
+  exist" / argument-count diagnostics.
 
 Per-directory breakdown (`recall_hit / recall_miss / precision_hit /
 precision_miss`):
