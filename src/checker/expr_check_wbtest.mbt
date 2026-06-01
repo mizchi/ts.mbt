@@ -5129,11 +5129,16 @@ test "expr_check: deliberate type violations are detected" {
       ),
     ),
     (
-      "union-mismatch-not-widened",
+      // A `string | number` source passed to a `string` parameter is
+      // shaped exactly like the residue of a `typeof x === "string"`
+      // narrow-and-call pattern we deliberately suppress (see
+      // `is_flow_narrowing_gap`). Use an unambiguous violation here
+      // instead: a wholly-incompatible primitive on a primitive target.
+      "boolean-passed-to-string-param",
       (
         #|function acceptsString(x: string): void {}
-        #|function f(u: string | number): void {
-        #|  acceptsString(u);
+        #|function f(b: boolean): void {
+        #|  acceptsString(b);
         #|}
       ),
     ),

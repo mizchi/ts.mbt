@@ -795,30 +795,22 @@ test "checker: static members cannot reference class type parameters" {
 }
 
 ///|
-/// Sanity check for the method-level type-parameter shadow path in
-/// `check_static_uses_class_type_params`. NOTE: the current parser drops
-/// method-level `<T>` declarations into `type_params: []`, so a method
-/// that introduces its own `T` is *not* treated as shadowing the class's
-/// TP yet — this test pins down today's behaviour rather than the
-/// eventual ideal.
-test "checker: static method redeclaring class TP currently still flagged" {
+///|
+test "checker: method-level T shadows class TP for the static lint" {
+  // `static h<T>(x: T): T` declares its own `T` that shadows the
+  // class's, so the static lint must not flag the body. Exercises
+  // the parser's method-TP propagation (T8) and the checker's
+  // `class_tps_minus_method` filter.
   let src =
     #|class E<T> {
     #|  static h<T>(x: T): T { return x; }
     #|}
   let module_ = Parser::from_source(src).parse_module()
   let issues = @checker.check_module_function_bodies(module_)
-  let mut hits = 0
   for i in issues {
     if i.message.contains("static members cannot reference") {
-      hits += 1
+      fail("unexpected TS2302 on method-shadowed TP: \{i.path}: \{i.message}")
     }
-  }
-  // Until the parser preserves method-level `type_params`, this fires
-  // once (against `T` in the method signature). Expected to become 0
-  // once the parser is taught to carry the method's TP list.
-  if hits != 1 {
-    fail("expected 1 (parser-limited) hit on shadowed method TP, got \{hits}")
   }
 }
 
@@ -847,15 +839,13 @@ test "checker: assigning to a readonly field is rejected" {
       hits += 1
     }
   }
-  // a (Base.readonly value), b (Base side of the union) → 2.
-  // `c` on a class with `readonly tag` would be the third, but the
-  // current parser drops the `readonly` flag on class property
-  // declarations, so we settle for 2 today. `d` (purely Mutable) → 0.
-  if hits != 2 {
+  // a (Base.readonly value), b (Base side of the union), c (class
+  // readonly tag) → 3. d (purely Mutable) → 0.
+  if hits != 3 {
     for i in issues {
       println("  \{i.path}: \{i.message}")
     }
-    fail("expected 2 readonly-assign issues, got \{hits}")
+    fail("expected 3 readonly-assign issues, got \{hits}")
   }
 }
 

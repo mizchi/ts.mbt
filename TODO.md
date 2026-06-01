@@ -1268,6 +1268,7 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-01 (T5)    207/487 (43 %)      241/319 (76 %, 78 FP)
 2026-06-01 (T6)    218/487 (45 %)      241/319 (76 %, 78 FP)
 2026-06-01 (T7)    222/487 (46 %)      241/319 (76 %, 78 FP)
+2026-06-01 (T8)    pending verification  pending (broad FP reduction batch)
 ```
 
 - T0: starting point.

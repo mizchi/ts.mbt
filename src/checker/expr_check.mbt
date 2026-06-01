@@ -287,6 +287,23 @@ fn Resolver::ingest_module(
     // recursive ingest; the qualified key is what lookup_class_field
     // would walk through.)
   }
+  // Top-level `var` / `let` / `const` decls with an explicit type
+  // annotation should be visible via `typeof <name>` from inside the
+  // module. `module_.values` covers ambient `declare var`s; this loop
+  // covers the rest by pulling typed bindings out of `top_level_stmts`.
+  for stmt in module_.top_level_stmts {
+    match stmt {
+      Var(Ident(name), ty, _) | Let(Ident(name), ty, _) | Const(Ident(name), ty, _) =>
+        if is_checkable(ty) {
+          let key = prefix + name
+          // Don't shadow an existing entry (e.g. from `declare var`).
+          if !(r.globals.get(key) is Some(_)) {
+            r.globals[key] = ty
+          }
+        }
+      _ => ()
+    }
+  }
 }
 
 ///|
@@ -958,9 +975,27 @@ fn Resolver::lookup_field_core(
           }
       }
     Object(entries) => {
+      // Named-property lookup first — `Literal("foo")` keyed entry.
       for entry in entries {
         match entry.0 {
           Literal(name) if name == field => return Some(entry.1)
+          _ => ()
+        }
+      }
+      // Index-signature fallback: an entry keyed by the bare primitive
+      // shape (`String_` / `Number`) acts as `[k: string]: V`. Honour it
+      // so a type-alias `{ foo: number; [k: string]: V }` returns `V`
+      // for non-declared keys instead of producing a missing-field
+      // diagnostic.
+      let field_is_numeric = (try? @string.parse_int(field)) is Ok(_)
+      for entry in entries {
+        match entry.0 {
+          String_ => return Some(entry.1)
+          Number | Int =>
+            // Numeric index signatures only match numeric keys.
+            if field_is_numeric {
+              return Some(entry.1)
+            }
           _ => ()
         }
       }
@@ -2592,7 +2627,12 @@ fn infer_expr(
           for a in args {
             let _ = infer_expr(env, resolver, a)
           }
-          ret
+          // `this`-typed return: when an interface / class method is
+          // declared as `m(): this` (or wrapped in `this & T` etc.),
+          // substitute the receiver in for `this` so the chain
+          // `t.self().me()` keeps the receiver shape instead of leaking
+          // a bare `Named("this")` reference into downstream checks.
+          substitute_this_type(ret, recv_ty)
         }
         None => {
           for a in args {
@@ -3447,6 +3487,25 @@ fn check_expr_against(
       is_structurally_assignable_named(expected_u, inferred_u, ctx.resolver) {
       return
     }
+    // Class inheritance: `Derived is_a Base` when `class Derived extends
+    // Base`. The resolver-free `is_assignable_to` is nominal so a pure
+    // subtype assignment was previously flagged. Walk the source's class
+    // base chain to accept assignments through inheritance.
+    if assignable_through_class_chain(inferred_u, expected_u, ctx.resolver) {
+      return
+    }
+    // Flow-narrowing gap suppression: when the source is a union strictly
+    // containing the target (target ⊂ source) and the surplus members
+    // are exactly the kind of primitives a `typeof` / `=== null` /
+    // `instanceof` guard normally removes (`string` / `number` /
+    // `boolean` / `bigint` / `null` / `undefined`), we don't have the
+    // flow context to know whether a guard already narrowed the source.
+    // Stay silent rather than emit a "expected number | boolean but got
+    // string | number | boolean" mismatch that's almost always a
+    // narrowing-gap rather than a real error.
+    if is_flow_narrowing_gap(inferred_u, expected_u) {
+      return
+    }
     // Display the widened form of the inferred type (`number` rather than the
     // precise `42`) so the message reads naturally; the precise literal was
     // only needed for the assignability decision above.
@@ -3492,6 +3551,235 @@ fn is_structurally_assignable_named(
     }
   }
   true
+}
+
+///|
+/// Substitute every `Named("this")` reference inside `ty` with `recv` —
+/// the receiver type at a method call site. Mirrors TypeScript's `this`
+/// type semantics: an interface method declared `m(): this` returns the
+/// receiver's static type, so chained calls preserve that shape.
+fn substitute_this_type(
+  ty : @ast.TsType,
+  recv : @ast.TsType,
+) -> @ast.TsType {
+  match ty {
+    Named("this") => recv
+    Array(inner) => Array(substitute_this_type(inner, recv))
+    Tuple(parts) => {
+      let new_parts : Array[@ast.TsType] = []
+      for p in parts {
+        new_parts.push(substitute_this_type(p, recv))
+      }
+      Tuple(new_parts)
+    }
+    Union(parts) => {
+      let new_parts : Array[@ast.TsType] = []
+      for p in parts {
+        new_parts.push(substitute_this_type(p, recv))
+      }
+      Union(new_parts)
+    }
+    Intersection(parts) => {
+      let new_parts : Array[@ast.TsType] = []
+      for p in parts {
+        new_parts.push(substitute_this_type(p, recv))
+      }
+      Intersection(new_parts)
+    }
+    Applied(name, args) => {
+      let new_args : Array[@ast.TsType] = []
+      for a in args {
+        new_args.push(substitute_this_type(a, recv))
+      }
+      Applied(name, new_args)
+    }
+    Func(params, ret) => {
+      let new_params : Array[@ast.TsType] = []
+      for p in params {
+        new_params.push(substitute_this_type(p, recv))
+      }
+      Func(new_params, substitute_this_type(ret, recv))
+    }
+    Object(entries) => {
+      let new_entries : Array[(@ast.TsType, @ast.TsType)] = []
+      for e in entries {
+        new_entries.push((
+          substitute_this_type(e.0, recv),
+          substitute_this_type(e.1, recv),
+        ))
+      }
+      Object(new_entries)
+    }
+    _ => ty
+  }
+}
+
+///|
+/// True when `source` is a class whose base chain reaches `target` —
+/// i.e. `class Source extends ... extends Target`. The chain walk also
+/// honours `extends_names` on interfaces so `interface ChildI extends
+/// ParentI` flows through. Recurses on union / intersection members so
+/// `Derived | Base` still assigns to `Base`.
+fn assignable_through_class_chain(
+  source : @ast.TsType,
+  target : @ast.TsType,
+  resolver : Resolver,
+) -> Bool {
+  let src = resolver.unwrap(source)
+  let tgt = resolver.unwrap(target)
+  match (src, tgt) {
+    (Union(members), _) => {
+      for m in members {
+        if !assignable_through_class_chain(m, tgt, resolver) {
+          return false
+        }
+      }
+      true
+    }
+    (_, Union(members)) => {
+      for m in members {
+        if assignable_through_class_chain(src, m, resolver) {
+          return true
+        }
+      }
+      false
+    }
+    (Named(s_name), Named(t_name)) | (Applied(s_name, _), Named(t_name)) =>
+      class_or_interface_inherits(s_name, t_name, resolver, [])
+    (Named(s_name), Applied(t_name, _)) | (Applied(s_name, _), Applied(t_name, _)) =>
+      class_or_interface_inherits(s_name, t_name, resolver, [])
+    // Same-shape primitive / `null` / `undefined` matches so a union
+    // walk like `Foo | null → Object | null` succeeds (the class chain
+    // handles Foo→Object; this branch handles Null→Null).
+    _ => is_assignable_to(src, tgt)
+  }
+}
+
+///|
+fn class_or_interface_inherits(
+  src_name : String,
+  tgt_name : String,
+  resolver : Resolver,
+  visited : Array[String],
+) -> Bool {
+  if src_name == tgt_name {
+    return true
+  }
+  // Every class / interface implicitly extends `Object` (and `{}`).
+  // Recognise this universal supertype so a downcast like `Foo |
+  // null → Object | null` is accepted without an explicit base.
+  if tgt_name == "Object" || tgt_name == "{}" {
+    return true
+  }
+  if visited.contains(src_name) {
+    return false
+  }
+  visited.push(src_name)
+  match resolver.classes.get(src_name) {
+    Some(cls) =>
+      for base in cls.base_names {
+        if class_or_interface_inherits(base, tgt_name, resolver, visited) {
+          return true
+        }
+      }
+    None => ()
+  }
+  match resolver.interfaces.get(src_name) {
+    Some(iface) =>
+      for base in iface.extends_names {
+        if class_or_interface_inherits(base, tgt_name, resolver, visited) {
+          return true
+        }
+      }
+    None => ()
+  }
+  false
+}
+
+///|
+/// True when `source` is a union strictly containing `target` (every
+/// target member exists in source) and the surplus source members are
+/// all narrowable primitives — i.e. exactly the residue a `typeof` /
+/// `=== null` / `=== undefined` / `instanceof` flow guard would have
+/// removed. We don't model flow narrowing, so this pattern is almost
+/// always a guard-aware reassignment that we can't see.
+fn is_flow_narrowing_gap(
+  source : @ast.TsType,
+  target : @ast.TsType,
+) -> Bool {
+  let src_members = union_members(source)
+  if src_members.length() <= 1 {
+    return false
+  }
+  let tgt_members = union_members(target)
+  if tgt_members.length() == 0 {
+    return false
+  }
+  // Every target member must appear in source.
+  for t in tgt_members {
+    let mut found = false
+    for s in src_members {
+      if type_eq(t, s) {
+        found = true
+        break
+      }
+    }
+    if !found {
+      return false
+    }
+  }
+  // The surplus source members (those not in target) must all be the
+  // narrowable primitives a guard would remove.
+  let mut had_surplus = false
+  for s in src_members {
+    let mut in_target = false
+    for t in tgt_members {
+      if type_eq(s, t) {
+        in_target = true
+        break
+      }
+    }
+    if !in_target {
+      had_surplus = true
+      if !is_narrowable_primitive(s) {
+        return false
+      }
+    }
+  }
+  had_surplus
+}
+
+///|
+fn union_members(ty : @ast.TsType) -> Array[@ast.TsType] {
+  match ty {
+    Union(items) => items
+    _ => [ty]
+  }
+}
+
+///|
+fn is_narrowable_primitive(ty : @ast.TsType) -> Bool {
+  match ty {
+    String_
+    | Number
+    | Int
+    | Boolean
+    | BigInt
+    | Symbol
+    | Null
+    | Undefined
+    | Literal(_)
+    | NumberLiteral(_)
+    | BooleanLiteral(_)
+    | BigIntLiteral(_) => true
+    // `instanceof C` / `Animal is Cat` narrows out a class / interface
+    // member from a union. Treat a `Named` / `Applied` surplus the same
+    // way as a primitive surplus: without flow context we can't see the
+    // guard, so suppression is the safer call. `Object` likewise
+    // surfaces as a "fell-back to base" residue in typeguard chains.
+    Named(_) | Applied(_, _) => true
+    _ => false
+  }
 }
 
 ///|
@@ -3935,6 +4223,13 @@ fn check_object_lit_against_target(
   ctx : CheckCtx,
   sub_path : String,
 ) -> Unit {
+  // When the target is a bare in-scope type parameter (`T extends Foo`),
+  // we don't know the concrete shape — TS allows objects with additional
+  // properties because the actual instantiation may be a wider type.
+  // Suppress the entire excess-property check in that case.
+  if is_in_scope_type_param(ctx, target) {
+    return
+  }
   // Per-field type checks for each provided key.
   for entry in entries {
     let key = entry.0
@@ -5251,32 +5546,48 @@ fn collect_narrowing(
             (Some(key), Some(class_name)) => {
               let cur = narrowing_current_type(env, resolver, key)
               let class_ty = @ast.TsType::Named(class_name)
-              let then_ty = narrow_keep(cur, fn(v) {
+              // `v instanceof C` keeps every union member whose class
+              // chain reaches `C` — so `instanceof Object` keeps `Date`
+              // (Date extends Object) and `instanceof Animal` keeps a
+              // declared subclass. Falls back to nominal name match
+              // when the resolver doesn't know `v`.
+              let matches = fn(v : @ast.TsType) -> Bool {
                 match v {
-                  Named(n) => n == class_name
+                  Named(n) | Applied(n, _) =>
+                    n == class_name ||
+                    class_or_interface_inherits(n, class_name, resolver, [])
                   _ => false
                 }
-              })
+              }
+              let then_ty = narrow_keep(cur, matches)
               let then_resolved = match then_ty {
                 Never => class_ty
                 _ => then_ty
               }
               pair_pos.push((key, then_resolved))
-              let else_ty = narrow_remove(cur, fn(v) {
-                match v {
-                  Named(n) => n == class_name
-                  _ => false
-                }
-              })
+              let else_ty = narrow_remove(cur, matches)
               pair_neg.push((key, else_ty))
             }
             _ => ()
           }
         }
         // `"key" in obj` — narrow `obj`'s union to members that own `key`.
-        In =>
-          match (left, right) {
-            (StringLit(key), Var(name)) => {
+        In => {
+          // `"a" in v` / `a in v` (a is a const-bound string literal) /
+          // `<expr> in v` — resolve the key expression to a literal
+          // string when possible. Const-typed `Var(name)` resolves via
+          // the env / globals; bare string literals match directly.
+          let key_opt : String? = match left {
+            StringLit(k) => Some(k)
+            Var(n) =>
+              match env_lookup_full(env, resolver, n) {
+                Literal(s) => Some(s)
+                _ => None
+              }
+            _ => None
+          }
+          match (key_opt, right) {
+            (Some(key), Var(name)) => {
               let cur = env_lookup_full(env, resolver, name)
               let then_ty = narrow_keep(cur, fn(v) {
                 resolver.lookup_field(v, key) is Some(_)
@@ -5292,6 +5603,7 @@ fn collect_narrowing(
             }
             _ => ()
           }
+        }
         _ => ()
       }
     }
@@ -6729,8 +7041,35 @@ fn check_call_args_in_expr(
         )
       }
     }
-    NonNull(inner) | OptionalChain(inner) =>
-      check_call_args_in_expr(env, inner, ctx)
+    NonNull(inner) => check_call_args_in_expr(env, inner, ctx)
+    // Optional chain (`a?.b…`) handles the nullishness for us. Surface
+    // call-arg / type-position checks on the inner expression, but skip
+    // the inner PropAccess's "may be null or undefined" diagnostic by
+    // peeling one chain step ourselves before recursing.
+    OptionalChain(inner) =>
+      match inner {
+        PropAccess(recv, prop) => {
+          // Walk the receiver for any nested issues, then run the
+          // property-existence check against the *pruned* receiver
+          // type so we don't double-flag on the explicit optional
+          // chain.
+          check_call_args_in_expr(env, recv, ctx)
+          let recv_ty = ctx.resolver.unwrap(
+            prune_nullish(ctx.resolver, infer_expr(env, ctx.resolver, recv)),
+          )
+          if is_checkable(recv_ty) &&
+            !is_in_scope_type_param(ctx, recv_ty) &&
+            !(ctx.resolver.lookup_field(recv_ty, prop) is Some(_)) &&
+            !ctx.resolver.field_on_any_union_member(recv_ty, prop) {
+            record(
+              ctx,
+              "PropAccess `?.\{prop}`",
+              "property `\{prop}` does not exist on `\{type_display(recv_ty)}`",
+            )
+          }
+        }
+        _ => check_call_args_in_expr(env, inner, ctx)
+      }
     Satisfies(inner, ty) => {
       check_call_args_in_expr(env, inner, ctx)
       // `x satisfies T` — verify the operand is assignable to `T`.
@@ -7501,6 +7840,19 @@ fn is_valid_rest_param_type(ty : @ast.TsType) -> Bool {
     Array(_) => true
     Tuple(_) => true
     Applied("Array", _) | Applied("ReadonlyArray", _) => true
+    // Type alias / interface reference (`...args: SomeTuple`). We don't
+    // resolve through the resolver here (the decl-signature pass is
+    // resolver-free), so treat any `Named` / `Applied` shape as valid
+    // and let real array-shape mismatches surface elsewhere.
+    Named(_) | Applied(_, _) => true
+    // Indexed-access / generic-construct types (`T[K]`, `Parameters<F>`,
+    // `keyof X`, conditional / mapped types). We can't resolve their
+    // surface shape without the resolver; accept rather than false-flag.
+    IndexedAccess(_, _) => true
+    Keyof(_) => true
+    Conditional(_, _, _, _) => true
+    MappedType(_, _, _, _) | MappedTypeRemap(_, _, _, _, _) => true
+    Union(_) | Intersection(_) => true
     // Unannotated rest (`...args`) parses as `Any` — TS treats this as
     // `any[]`, valid.
     Any => true
