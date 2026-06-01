@@ -500,6 +500,17 @@ test "expr_check: typeof on function operand narrows to \"function\"" {
 }
 
 ///|
+test "expr_check: typeof on symbol operand narrows to \"symbol\"" {
+  let src =
+    #|function f(s: symbol): "symbol" {
+    #|  return typeof s;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  @test.assert_eq(issues.length(), 0)
+}
+
+///|
 test "expr_check: typeof on string|number returns \"string\"|\"number\" union" {
   let src =
     #|function f(v: string | number): "boolean" {

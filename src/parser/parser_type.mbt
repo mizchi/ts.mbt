@@ -694,6 +694,8 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
         self.parse_named_type_tail(name)
       } else if name == "unknown" {
         Unknown
+      } else if name == "symbol" {
+        Symbol
       } else {
         Any
       }
