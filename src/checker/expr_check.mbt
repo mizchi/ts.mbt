@@ -3554,62 +3554,17 @@ fn is_structurally_assignable_named(
 }
 
 ///|
-/// Substitute every `Named("this")` reference inside `ty` with `recv` —
-/// the receiver type at a method call site. Mirrors TypeScript's `this`
-/// type semantics: an interface method declared `m(): this` returns the
-/// receiver's static type, so chained calls preserve that shape.
+/// Substitute the special `Named("this")` reference at the top level of
+/// `ty` with `recv`. We deliberately don't recurse into composite types
+/// here -- the common case (`m(): this` on an interface) returns the
+/// bare `Named("this")` directly, and chasing it through generics would
+/// require a much more invasive walk for limited additional payoff.
 fn substitute_this_type(
   ty : @ast.TsType,
   recv : @ast.TsType,
 ) -> @ast.TsType {
   match ty {
     Named("this") => recv
-    Array(inner) => Array(substitute_this_type(inner, recv))
-    Tuple(parts) => {
-      let new_parts : Array[@ast.TsType] = []
-      for p in parts {
-        new_parts.push(substitute_this_type(p, recv))
-      }
-      Tuple(new_parts)
-    }
-    Union(parts) => {
-      let new_parts : Array[@ast.TsType] = []
-      for p in parts {
-        new_parts.push(substitute_this_type(p, recv))
-      }
-      Union(new_parts)
-    }
-    Intersection(parts) => {
-      let new_parts : Array[@ast.TsType] = []
-      for p in parts {
-        new_parts.push(substitute_this_type(p, recv))
-      }
-      Intersection(new_parts)
-    }
-    Applied(name, args) => {
-      let new_args : Array[@ast.TsType] = []
-      for a in args {
-        new_args.push(substitute_this_type(a, recv))
-      }
-      Applied(name, new_args)
-    }
-    Func(params, ret) => {
-      let new_params : Array[@ast.TsType] = []
-      for p in params {
-        new_params.push(substitute_this_type(p, recv))
-      }
-      Func(new_params, substitute_this_type(ret, recv))
-    }
-    Object(entries) => {
-      let new_entries : Array[(@ast.TsType, @ast.TsType)] = []
-      for e in entries {
-        new_entries.push((
-          substitute_this_type(e.0, recv),
-          substitute_this_type(e.1, recv),
-        ))
-      }
-      Object(new_entries)
-    }
     _ => ty
   }
 }
