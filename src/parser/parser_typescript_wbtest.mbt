@@ -765,6 +765,67 @@ test "checker: negative-numeric literal types accept negative literal exprs" {
 }
 
 ///|
+test "checker: structurally equivalent classes assign in either direction" {
+  // Two distinct classes with identical public shape (TS is structural)
+  // assign both ways. The strict `is_assignable_to` rule is nominal, so
+  // a structural-equivalence fallback in the checker silences these.
+  let src =
+    #|class S { foo: string; }
+    #|class T { foo: string; }
+    #|interface I2 { foo: string; }
+    #|declare var s: S;
+    #|declare var t: T;
+    #|declare var i2: I2;
+    #|s = t;
+    #|t = s;
+    #|s = i2;
+    #|i2 = s;
+  let module_ = Parser::from_source(src).parse_module()
+  let issues = @checker.check_module_function_bodies(module_)
+  for i in issues {
+    if i.message.contains("expected") {
+      println("unexpected: \{i.path}: \{i.message}")
+      fail(
+        "got unexpected mismatch on structurally-equivalent class / interface",
+      )
+    }
+  }
+}
+
+///|
+test "checker: namespace bodies are walked with parent-scope types visible" {
+  // Inner namespace references `Base` defined in its parent — TypeScript
+  // resolves this through lexical scoping. The layered resolver path
+  // surfaces the parent's classes / interfaces at bare names inside the
+  // child so this assignment can be type-checked.
+  let src =
+    #|namespace Outer {
+    #|  class Base { foo: string; }
+    #|  namespace Inner {
+    #|    declare var b: Base;
+    #|    declare var n: number;
+    #|    b = n;
+    #|  }
+    #|}
+  let module_ = Parser::from_source(src).parse_module()
+  let issues = @checker.check_module_function_bodies(module_)
+  let mut found = false
+  for i in issues {
+    if i.message.contains("expected `Base`") {
+      found = true
+    }
+  }
+  if !found {
+    for i in issues {
+      println("  \{i.path}: \{i.message}")
+    }
+    fail(
+      "expected a `Base`-vs-`number` mismatch from inside the nested namespace",
+    )
+  }
+}
+
+///|
 test "checker: rest parameters must be array / tuple type and last" {
   // TS2370: rest param needs an array-ish annotation.
   // TS1014: rest param must be last in the list.
@@ -1012,13 +1073,13 @@ async test "checker: accuracy against TypeScript conformance baselines" {
   // as accuracy improves; loosen only with justification.
   //
   // Recall floor: of the baseline-positive cases, we currently detect
-  // ~42 % (top-level assignment / call checks added 2026-06-01; non-strict
-  // null assignability gave back a few strict-mode null tests). Set the
-  // floor at 38 % to flag a drop of >4 percentage points; a real recall
-  // regression should easily blow past that.
-  if with_baseline > 0 && recall_hit * 100 < with_baseline * 38 {
+  // ~44 % (top-level assignment / call checks added 2026-06-01; the
+  // namespace-recursion layered-resolver work in T6 lifted this from
+  // ~42 % once nested namespace bodies were walked with parent-scope
+  // types visible). Set the floor at 40 % to flag a drop of >4 points.
+  if with_baseline > 0 && recall_hit * 100 < with_baseline * 40 {
     fail(
-      "recall floor breached: \{recall_hit}/\{with_baseline} baseline-positive cases caught (< 38 %)",
+      "recall floor breached: \{recall_hit}/\{with_baseline} baseline-positive cases caught (< 40 %)",
     )
   }
   // Precision floor: we currently false-positive on ~25 % of clean cases

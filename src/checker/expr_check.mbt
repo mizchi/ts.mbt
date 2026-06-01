@@ -3390,12 +3390,77 @@ fn check_expr_against(
     _ => ()
   }
   if !is_assignable_to(inferred_u, expected_u) {
+    // Class / interface references are nominal in `is_assignable_to`
+    // (Named(A) == Named(B) iff A == B), but TypeScript types are
+    // structural: two distinct classes / interfaces with the same
+    // public member shape assign in either direction. We require
+    // *bidirectional* structural compatibility so that pure subtype
+    // mismatches (target has fields source lacks) still get flagged.
+    if is_structurally_assignable_named(inferred_u, expected_u, ctx.resolver) &&
+      is_structurally_assignable_named(expected_u, inferred_u, ctx.resolver) {
+      return
+    }
     // Display the widened form of the inferred type (`number` rather than the
     // precise `42`) so the message reads naturally; the precise literal was
     // only needed for the assignability decision above.
     let shown = widen_literal(inferred_u)
     let detail = "expected `\{type_display(expected)}` but got `\{type_display(shown)}`"
     record(ctx, sub_path, detail)
+  }
+}
+
+///|
+/// Structural fallback for class / interface references: when both sides
+/// resolve via the resolver, accept the assignment iff every required
+/// field of the target appears on the source with an assignable type.
+/// Optional / missing-on-source fields, getters/setters, index
+/// signatures, and call signatures are all conservatively ignored —
+/// we only need to *prove* assignability here, not to disprove it
+/// (the negative case falls through to the existing diagnostic).
+fn is_structurally_assignable_named(
+  source : @ast.TsType,
+  target : @ast.TsType,
+  resolver : Resolver,
+) -> Bool {
+  // Only engage when both sides resolve as class / interface shapes.
+  // `lookup_field` returns `None` for opaque receivers, so this filter
+  // also weeds out unresolvable references (generic type parameters,
+  // qualified names) without false promotion.
+  if !is_named_decl(source, resolver) || !is_named_decl(target, resolver) {
+    return false
+  }
+  let target_fields = collect_declared_fields(target, resolver)
+  if target_fields.length() == 0 {
+    return false
+  }
+  for f in target_fields {
+    let key = f.0
+    let want = f.1
+    match resolver.lookup_field(source, key) {
+      Some(have) =>
+        if !is_assignable_to(resolver.unwrap(have), resolver.unwrap(want)) {
+          return false
+        }
+      None => return false
+    }
+  }
+  true
+}
+
+///|
+fn is_named_decl(ty : @ast.TsType, resolver : Resolver) -> Bool {
+  match resolver.unwrap(ty) {
+    Named(n) =>
+      resolver.interfaces.get(n) is Some(_) ||
+      resolver.classes.get(n) is Some(_)
+    Applied(n, _) =>
+      resolver.interfaces.get(n) is Some(_) ||
+      resolver.classes.get(n) is Some(_)
+    // Object / struct literal shapes carry their fields directly and
+    // can participate in the structural equivalence check too — they're
+    // the source side of `var a: {foo: string}; s = a` patterns.
+    Object(_) | Struct(_, _) => true
+    _ => false
   }
 }
 
@@ -7003,7 +7068,32 @@ fn check_function_body_with(
 pub fn check_module_function_bodies(
   module_ : @ast.TsModule,
 ) -> Array[ExprIssue] {
-  let resolver = Resolver::from_module(module_)
+  check_module_function_bodies_layered(module_, [])
+}
+
+///|
+/// Body of `check_module_function_bodies` parameterized by the chain of
+/// enclosing ancestor modules. When `outer_modules` is empty this is the
+/// public entry point and we use `Resolver::from_module` (which preserves
+/// `Outer.Inner.Foo` prefixed registration for namespace member access).
+/// For nested namespaces we build a layered resolver instead: ancestors
+/// are ingested first at bare names so inner code can reference
+/// outer-scope types unqualified (the way TypeScript scoping works),
+/// then this module is ingested to shadow on top.
+fn check_module_function_bodies_layered(
+  module_ : @ast.TsModule,
+  outer_modules : Array[@ast.TsModule],
+) -> Array[ExprIssue] {
+  let resolver = if outer_modules.length() == 0 {
+    Resolver::from_module(module_)
+  } else {
+    let r = Resolver::empty()
+    for o in outer_modules {
+      Resolver::ingest_module(r, o, "")
+    }
+    Resolver::ingest_module(r, module_, "")
+    r
+  }
   let all : Array[ExprIssue] = []
   for func in module_.funcs {
     for issue in check_function_body_with(func, resolver) {
@@ -7080,6 +7170,27 @@ pub fn check_module_function_bodies(
   }
   for issue in check_module_decl_signatures(module_) {
     all.push(issue)
+  }
+  // Recurse into namespace bodies. Each level threads its own ancestor
+  // chain so a nested namespace can reference parent-scope types by their
+  // bare name (TypeScript scoping). Synthetic `<global>` blocks
+  // (`declare global { ... }`) belong to the surrounding scope; we still
+  // walk their bodies but don't prefix the diagnostic path.
+  let next_outers : Array[@ast.TsModule] = []
+  for o in outer_modules {
+    next_outers.push(o)
+  }
+  next_outers.push(module_)
+  for ns in module_.namespaces {
+    let issues = check_module_function_bodies_layered(ns.module_, next_outers)
+    let prefix = if ns.name == "<global>" {
+      "declare global"
+    } else {
+      "namespace \{ns.name}"
+    }
+    for issue in issues {
+      all.push({ path: "\{prefix} > \{issue.path}", message: issue.message })
+    }
   }
   all
 }

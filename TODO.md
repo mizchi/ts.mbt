@@ -1266,6 +1266,7 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-01 (T3)    207/487 (42 %)      232/319 (73 %, 87 FP)
 2026-06-01 (T4)    205/487 (42 %)      241/319 (76 %, 78 FP)
 2026-06-01 (T5)    207/487 (43 %)      241/319 (76 %, 78 FP)
+2026-06-01 (T6)    218/487 (45 %)      241/319 (76 %, 78 FP)
 ```
 
 - T0: starting point.
@@ -1305,6 +1306,22 @@ conformance sources (`.errors.txt` baseline = ground truth):
   - A rest parameter must be the last positional parameter.
   - Caught on top-level functions, `declare function` imports, and
     class methods. Cleared `restParametersOfNonArrayTypes` and friends.
+- T6: + namespace body walking with layered resolver, + structural
+  class / interface equivalence (recall +11, FP unchanged):
+  - `check_module_function_bodies` now recurses into namespace bodies.
+    Each level builds a layered resolver that ingests ancestor modules
+    at empty prefix first, so inner code references parent-scope types
+    (`Base`, `Derived`, …) by their bare names — TypeScript scoping.
+    Cleared most of `typeRelationships/assignmentCompatibility/*` that
+    wrap declarations in `namespace Errors { ... }`.
+  - `is_assignable_to` is nominal on `Named(A)` vs `Named(B)`, but TS
+    types are structural. A bidirectional structural-equivalence
+    fallback now silences self-mismatch on class-vs-class /
+    class-vs-interface / class-vs-object-literal pairs that share the
+    same public member shape. Pure subtype mismatches still get
+    flagged because the rule requires equivalence both ways.
+
+  Ratchets the recall floor 38 % -> 40 % (5+ point safety margin).
 
 Per-directory breakdown (`recall_hit / recall_miss / precision_hit /
 precision_miss`):
