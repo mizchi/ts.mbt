@@ -656,6 +656,53 @@ fn Resolver::field_on_any_union_member(
 }
 
 ///|
+
+///|
+/// True when assigning to `recv.field` is forbidden because the field is
+/// declared `readonly` on a reachable interface/class member. For a union
+/// receiver, *any* member with the readonly bit set is enough — the value
+/// could be that variant at runtime. We're conservative: only flag when
+/// at least one resolved shape on the receiver explicitly carries the
+/// readonly marker; unresolvable shapes stay silent.
+fn is_readonly_field(
+  resolver : Resolver,
+  recv : @ast.TsType,
+  field : String,
+) -> Bool {
+  let candidates : Array[@ast.TsType] = []
+  match resolver.unwrap(recv) {
+    Union(members) | Intersection(members) =>
+      for m in members {
+        candidates.push(m)
+      }
+    other => candidates.push(other)
+  }
+  for ty in candidates {
+    match ty {
+      Named(n) | Applied(n, _) =>
+        match resolver.interfaces.get(n) {
+          Some(iface) =>
+            if iface.readonly_fields.contains(field) {
+              return true
+            }
+          None =>
+            match resolver.classes.get(n) {
+              Some(cls) =>
+                for p in cls.properties {
+                  if p.name == field && p.is_readonly {
+                    return true
+                  }
+                }
+              None => ()
+            }
+        }
+      _ => ()
+    }
+  }
+  false
+}
+
+///|
 fn Resolver::lookup_field_core(
   self : Resolver,
   recv : @ast.TsType,
@@ -6559,6 +6606,13 @@ fn check_call_args_in_expr(
       check_call_args_in_expr(env, recv, ctx)
       check_call_args_in_expr(env, v, ctx)
       let recv_ty = infer_expr(env, ctx.resolver, recv)
+      if is_readonly_field(ctx.resolver, recv_ty, prop) {
+        record(
+          ctx,
+          "assign `.\{prop}`",
+          "cannot assign to `\{prop}` because it is read-only",
+        )
+      }
       match ctx.resolver.lookup_field(recv_ty, prop) {
         Some(target_ty) =>
           check_expr_against(env, v, target_ty, ctx, "assign `.\{prop}`")
@@ -7238,6 +7292,9 @@ fn check_module_decl_signatures(module_ : @ast.TsModule) -> Array[ExprIssue] {
   // Classes — own type-param list, plus methods.
   for cls in module_.classes {
     check_dup_type_params("class \{cls.name}", cls.type_params, issues)
+    if cls.type_params.length() > 0 {
+      check_static_uses_class_type_params(cls, issues)
+    }
     for meth in cls.methods {
       let path = "class \{cls.name} > \{meth.name}"
       check_dup_type_params(path, meth.type_params, issues)
@@ -7258,6 +7315,127 @@ fn check_module_decl_signatures(module_ : @ast.TsModule) -> Array[ExprIssue] {
     check_dup_type_params("type \{ta.name}", ta.type_params, issues)
   }
   issues
+}
+
+///|
+/// TS2302: a `static` member (property or method) cannot reference any of
+/// the enclosing class's type parameters. Class TPs are an instance-side
+/// notion; the static side doesn't carry a binding for them. Walks every
+/// type-position on each static member and flags references back to any
+/// of the class's TPs.
+fn check_static_uses_class_type_params(
+  cls : @ast.TsClassDecl,
+  issues : Array[ExprIssue],
+) -> Unit {
+  for p in cls.properties {
+    if p.is_static && type_references_any(p.type_, cls.type_params) {
+      issues.push({
+        path: "class \{cls.name} > static \{p.name}",
+        message: "static members cannot reference class type parameters",
+      })
+    }
+  }
+  for m in cls.methods {
+    if !m.is_static {
+      continue
+    }
+    let path = "class \{cls.name} > static \{m.name}"
+    // Method-level type parameters shadow the class's, so exclude them
+    // from the offending set when scanning a method's signature.
+    let class_tps_minus_method : Array[String] = []
+    for tp in cls.type_params {
+      if !m.type_params.contains(tp) {
+        class_tps_minus_method.push(tp)
+      }
+    }
+    if class_tps_minus_method.length() == 0 {
+      continue
+    }
+    if type_references_any(m.return_type, class_tps_minus_method) {
+      issues.push({
+        path,
+        message: "static members cannot reference class type parameters",
+      })
+      continue
+    }
+    let mut flagged = false
+    for prm in m.params {
+      if type_references_any(prm.1, class_tps_minus_method) {
+        issues.push({
+          path,
+          message: "static members cannot reference class type parameters",
+        })
+        flagged = true
+        break
+      }
+    }
+    let _ = flagged
+  }
+}
+
+///|
+/// True when `ty` (or anything nested inside it) is `Named(n)` for some
+/// `n` in `names`. Walks all structural type variants so a reference
+/// through `Array<T>`, `T | undefined`, `Record<string, T>`, tuples,
+/// object literals, function types, etc. is caught.
+fn type_references_any(ty : @ast.TsType, names : Array[String]) -> Bool {
+  if names.length() == 0 {
+    return false
+  }
+  match ty {
+    Named(n) => names.contains(n)
+    Applied(_, args) => {
+      for a in args {
+        if type_references_any(a, names) {
+          return true
+        }
+      }
+      false
+    }
+    Array(inner) => type_references_any(inner, names)
+    Union(parts) | Intersection(parts) => {
+      for p in parts {
+        if type_references_any(p, names) {
+          return true
+        }
+      }
+      false
+    }
+    Tuple(parts) => {
+      for p in parts {
+        if type_references_any(p, names) {
+          return true
+        }
+      }
+      false
+    }
+    Func(params, ret) => {
+      for p in params {
+        if type_references_any(p, names) {
+          return true
+        }
+      }
+      type_references_any(ret, names)
+    }
+    Object(fields) => {
+      for f in fields {
+        if type_references_any(f.0, names) || type_references_any(f.1, names) {
+          return true
+        }
+      }
+      false
+    }
+    Struct(_, fields) => {
+      for f in fields {
+        if type_references_any(f.1, names) {
+          return true
+        }
+      }
+      false
+    }
+    Rest(inner) => type_references_any(inner, names)
+    _ => false
+  }
 }
 
 ///|

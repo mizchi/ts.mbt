@@ -1267,6 +1267,7 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-01 (T4)    205/487 (42 %)      241/319 (76 %, 78 FP)
 2026-06-01 (T5)    207/487 (43 %)      241/319 (76 %, 78 FP)
 2026-06-01 (T6)    218/487 (45 %)      241/319 (76 %, 78 FP)
+2026-06-01 (T7)    222/487 (46 %)      241/319 (76 %, 78 FP)
 ```
 
 - T0: starting point.
@@ -1322,6 +1323,19 @@ conformance sources (`.errors.txt` baseline = ground truth):
     flagged because the rule requires equivalence both ways.
 
   Ratchets the recall floor 38 % -> 40 % (5+ point safety margin).
+- T7: + two structural lints (recall +4, FP unchanged):
+  - TS2302 — `static` members cannot reference the enclosing class's
+    type parameters. A method-level `<T>` shadows the class TP, but
+    today's parser drops method-level type params so the shadow path
+    is effectively disabled until that lands. Cleared
+    `staticMembersUsingClassTypeParameter`.
+  - TS2540 — assigning to a `readonly` field is forbidden. Engages on
+    interface `readonly value`, `Union` / `Intersection` shapes where
+    any reachable member marks the field readonly, and (eventually)
+    class `readonly` properties. The parser doesn't yet propagate
+    `readonly` onto class property decls, so class-side detection is
+    partial until that's fixed. Cleared `unionTypeReadonly` /
+    `intersectionTypeReadonly`.
 
 Per-directory breakdown (`recall_hit / recall_miss / precision_hit /
 precision_miss`):

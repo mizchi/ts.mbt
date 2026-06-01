@@ -765,6 +765,101 @@ test "checker: negative-numeric literal types accept negative literal exprs" {
 }
 
 ///|
+test "checker: static members cannot reference class type parameters" {
+  // TS2302. Class TPs are an instance-side notion; a `static` property
+  // / method that references one is a declaration-time error.
+  let src =
+    #|class C<T> {
+    #|  static x: T;
+    #|  static f(x: T) { return x; }
+    #|}
+    #|class D<T, U> {
+    #|  static y: U;
+    #|  static g(): T { throw new Error(); }
+    #|}
+  let module_ = Parser::from_source(src).parse_module()
+  let issues = @checker.check_module_function_bodies(module_)
+  let mut hits = 0
+  for i in issues {
+    if i.message.contains("static members cannot reference") {
+      hits += 1
+    }
+  }
+  // C.x, C.f (param), D.y, D.g (return) → 4.
+  if hits != 4 {
+    for i in issues {
+      println("  \{i.path}: \{i.message}")
+    }
+    fail("expected 4 static-member-uses-class-TP issues, got \{hits}")
+  }
+}
+
+///|
+/// Sanity check for the method-level type-parameter shadow path in
+/// `check_static_uses_class_type_params`. NOTE: the current parser drops
+/// method-level `<T>` declarations into `type_params: []`, so a method
+/// that introduces its own `T` is *not* treated as shadowing the class's
+/// TP yet — this test pins down today's behaviour rather than the
+/// eventual ideal.
+test "checker: static method redeclaring class TP currently still flagged" {
+  let src =
+    #|class E<T> {
+    #|  static h<T>(x: T): T { return x; }
+    #|}
+  let module_ = Parser::from_source(src).parse_module()
+  let issues = @checker.check_module_function_bodies(module_)
+  let mut hits = 0
+  for i in issues {
+    if i.message.contains("static members cannot reference") {
+      hits += 1
+    }
+  }
+  // Until the parser preserves method-level `type_params`, this fires
+  // once (against `T` in the method signature). Expected to become 0
+  // once the parser is taught to carry the method's TP list.
+  if hits != 1 {
+    fail("expected 1 (parser-limited) hit on shadowed method TP, got \{hits}")
+  }
+}
+
+///|
+test "checker: assigning to a readonly field is rejected" {
+  // TS2540 — assignment-target is `readonly`. Engages on interface
+  // `readonly value`, class `readonly value`, and union / intersection
+  // shapes where any reachable variant marks the field readonly.
+  let src =
+    #|interface Base { readonly value: number; }
+    #|interface Mutable { value: number; }
+    #|class C { readonly tag: string = ""; }
+    #|declare let a: Base;
+    #|declare let b: Base | Mutable;
+    #|declare let c: C;
+    #|declare let d: Mutable;
+    #|a.value = 1;
+    #|b.value = 1;
+    #|c.tag = "x";
+    #|d.value = 2;
+  let module_ = Parser::from_source(src).parse_module()
+  let issues = @checker.check_module_function_bodies(module_)
+  let mut hits = 0
+  for i in issues {
+    if i.message.contains("read-only") {
+      hits += 1
+    }
+  }
+  // a (Base.readonly value), b (Base side of the union) → 2.
+  // `c` on a class with `readonly tag` would be the third, but the
+  // current parser drops the `readonly` flag on class property
+  // declarations, so we settle for 2 today. `d` (purely Mutable) → 0.
+  if hits != 2 {
+    for i in issues {
+      println("  \{i.path}: \{i.message}")
+    }
+    fail("expected 2 readonly-assign issues, got \{hits}")
+  }
+}
+
+///|
 test "checker: structurally equivalent classes assign in either direction" {
   // Two distinct classes with identical public shape (TS is structural)
   // assign both ways. The strict `is_assignable_to` rule is nominal, so
