@@ -1372,6 +1372,52 @@ test "switch-exhaustive: non-exhaustive case set keeps the default" {
 }
 
 ///|
+// Two modules declare `type Shape = …` with different bodies. Module
+// a's switch covers two of its three variants and falls through to
+// `default: throw` (genuinely reachable for the third variant). Module
+// b's narrower alias would, if the cross-module alias table resolved
+// "Shape" by bare name, make a's switch look exhaustive and drop the
+// reachable default. Verify the default arm is preserved.
+test "switch-exhaustive: ambiguous cross-module alias names stay unresolved" {
+  let files = vfs([
+    (
+      "a.ts",
+      "export type Shape = { kind: \"a\" | \"b\" | \"c\" };\n" +
+      "export function fA(s: Shape): string {\n" +
+      "  switch (s.kind) {\n" +
+      "    case \"a\": return \"A\";\n" +
+      "    case \"b\": return \"B\";\n" +
+      "    default: throw new Error(\"unreachable_a\");\n" +
+      "  }\n" +
+      "}\n",
+    ),
+    (
+      "b.ts",
+      "export type Shape = { kind: \"a\" | \"b\" };\n" +
+      "export function fB(s: Shape): string {\n" +
+      "  switch (s.kind) {\n" +
+      "    case \"a\": return \"a\";\n" +
+      "    case \"b\": return \"b\";\n" +
+      "  }\n" +
+      "  return \"\";\n" +
+      "}\n",
+    ),
+    (
+      "entry.ts",
+      "import { fA } from \"./a\";\n" +
+      "import { fB } from \"./b\";\n" +
+      "console.log(fA({ kind: \"c\" }));\n" +
+      "console.log(fB({ kind: \"a\" }));\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_true(out.js.contains("unreachable_a"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "tag-rewrite: discriminated union string tags become integers" {
   let files = vfs([
     (

@@ -33,13 +33,31 @@ pub fn type_fold_block(
   }
   let scope : Map[String, @ast.TsType] = {}
   let alias_table : Map[String, @ast.TsType] = {}
+  // Cross-module bundles can contribute multiple aliases sharing one
+  // name (e.g. two modules each declaring `type Shape = …`). Keying by
+  // bare name picks the last writer wholesale and could narrow an
+  // earlier module's switch, dropping a reachable `default` arm. When
+  // names collide with different bodies, drop the entry so resolution
+  // falls back to `Named(n)` and the folder stays conservative.
+  let ambiguous_alias : Map[String, Unit] = {}
   for ta in type_aliases {
     // Only non-generic aliases participate in eager Named-resolution.
     // Generic ones (`Foo<T> = …`) need parameter substitution that the
     // simpler type_fold path doesn't model — they stay as `Named(…)`
     // and the existing fallbacks apply.
-    if ta.type_params.length() == 0 {
-      alias_table[ta.name] = ta.type_
+    if ta.type_params.length() != 0 {
+      continue
+    }
+    if ambiguous_alias.contains(ta.name) {
+      continue
+    }
+    match alias_table.get(ta.name) {
+      Some(existing) =>
+        if existing != ta.type_ {
+          let _ = alias_table.remove(ta.name)
+          ambiguous_alias[ta.name] = ()
+        }
+      None => alias_table[ta.name] = ta.type_
     }
   }
   type_fold_block_in(block, scope, alias_table)

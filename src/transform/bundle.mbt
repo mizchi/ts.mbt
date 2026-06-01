@@ -48,6 +48,12 @@ pub(all) struct BundleOptions {
   // When `true` (and `mangle == true`), also rename non-reserved
   // property keys via the opt-in property-mangling path.
   mangle_properties : Bool
+  // When `true` (and `mangle_properties == true`), use the
+  // shape-coloring property-rename strategy: distinct names that
+  // never co-occur on the same shape share short slots. Opt-in
+  // because soundness in the face of cross-Symbol value flow without
+  // expression-level type propagation isn't yet established.
+  mangle_properties_shape_color : Bool
   // When `true`, drop top-level declarations that nothing reachable
   // from a side-effect statement references. Requires the merged-
   // block emit path, so the bundler forces single-scope folding
@@ -82,6 +88,7 @@ pub fn BundleOptions::default() -> BundleOptions {
     with_sourcemap: false,
     mangle: false,
     mangle_properties: false,
+    mangle_properties_shape_color: false,
     treeshake: false,
     minify: false,
     fold: false,
@@ -136,6 +143,21 @@ pub fn BundleOptions::with_mangle_properties(
   m : Bool,
 ) -> BundleOptions {
   { ..self, mangle_properties: m, mangle: self.mangle || m }
+}
+
+///|
+pub fn BundleOptions::with_mangle_properties_shape_color(
+  self : BundleOptions,
+  m : Bool,
+) -> BundleOptions {
+  // Implies property mangling: shape-color is a property-rename
+  // strategy, not a separate pass.
+  {
+    ..self,
+    mangle_properties_shape_color: m,
+    mangle_properties: self.mangle_properties || m,
+    mangle: self.mangle || m,
+  }
 }
 
 ///|
@@ -592,6 +614,7 @@ pub fn bundle_modules(
       }
       let mangler_cfg = ManglerConfig::default()
         .with_mangle_properties(effective_mangle_props)
+        .with_mangle_properties_shape_color(opts.mangle_properties_shape_color)
         .with_reserved_properties(extra_reserved)
         .with_reserved(external_reserved)
         // The bundle has no public ABI of its own — every binding

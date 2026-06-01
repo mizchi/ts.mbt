@@ -58,6 +58,7 @@ priv struct MtscOptions {
   externals : Map[String, Bool]
   mut mangle : Bool
   mut mangle_properties : Bool
+  mut mangle_properties_shape_color : Bool
   mut sourcemap : Bool
   mut jsx_runtime : String?
   mut jsx_import_source : String?
@@ -81,6 +82,7 @@ fn mtsc_options_new() -> MtscOptions {
     externals: {},
     mangle: false,
     mangle_properties: false,
+    mangle_properties_shape_color: false,
     sourcemap: false,
     jsx_runtime: None,
     jsx_import_source: None,
@@ -126,6 +128,9 @@ fn mtsc_print_usage() -> Unit {
   )
   println("  --mangle                  Rename non-exported local identifiers")
   println("  --mangle-properties       Also rename non-reserved property keys")
+  println(
+    "  --mangle-properties-shape-color  Use shape-coloring property rename (opt-in, experimental)",
+  )
   println("  --sourcemap               Emit <out>.map alongside the JS output")
   println("  --jsx-runtime <mode>      `automatic` (default) or `classic`")
   println("  --jsx-import-source <pkg> Override the jsx-runtime import source")
@@ -186,6 +191,11 @@ fn mtsc_parse_args(argv : Array[String]) -> Result[MtscOptions, String] {
       "--mangle-properties" => {
         opts.mangle = true
         opts.mangle_properties = true
+      }
+      "--mangle-properties-shape-color" => {
+        opts.mangle = true
+        opts.mangle_properties = true
+        opts.mangle_properties_shape_color = true
       }
       "--sourcemap" => opts.sourcemap = true
       "--jsx-runtime" => {
@@ -622,6 +632,7 @@ async fn main {
     let bundle_opts = @transform.BundleOptions::default()
       .with_mangle(opts.mangle)
       .with_mangle_properties(opts.mangle_properties)
+      .with_mangle_properties_shape_color(opts.mangle_properties_shape_color)
       .with_sourcemap(opts.sourcemap)
       .with_treeshake(opts.treeshake)
       .with_minify(opts.minify)
