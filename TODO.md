@@ -1250,3 +1250,85 @@ runtime-bridge impact):
 - [ ] `JSX.LibraryManagedAttributes` / `defaultProps` — React 19
   deprecates the underlying pattern; modern components use default
   parameter values which we already cover.
+
+## Conformance Recall / Precision Push (2026-06-01)
+
+Baseline accuracy gate is now live at
+`src/parser/parser_typescript_wbtest.mbt:checker: accuracy against
+TypeScript conformance baselines`. Initial measurement against 822
+conformance sources (`.errors.txt` baseline = ground truth):
+
+```
+parsed=806/822 | recall=143/487 (29 %) | precision=243/319 (76 %, 76 false-positives)
+```
+
+Per-directory breakdown (`recall_hit / recall_miss / precision_hit /
+precision_miss`):
+
+- `types/typeRelationships`: 32 / 137 / 77 / 17 — biggest single bucket
+- `expressions/typeGuards`: 11 / 32 /  13 /  7
+- `types/objectTypeLiteral`:  5 / 26 /  19 /  1
+- `types/primitives`:         8 / 15 /   6 /  6
+- `types/specifyingTypes`:    3 / 15 /   9 /  1
+- `types/typeParameters`:    11 / 13 /  11 /  9
+- `types/union`:              6 / 13 /   4 /  2
+- `types/literal`:           12 / 12 /   7 / 13
+- `types/tuple`:             11 / 11 /  10 /  1
+- `controlFlow`:             13 / 10 /  25 /  7
+- `types/typeAliases`:        2 /  9 /   3 /  1
+- `types/contextualTypes`:    0 /  9 /   5 /  3
+- `types/nonPrimitive`:       2 /  9 /   5 /  0
+
+### Recall pushes (target: 29 % -> 40 %)
+
+- [ ] Validate duplicate parameter names on functions / methods / call
+  signatures. Covers `objectTypeLiteral/callSignatures/...DuplicateParameters`
+  and similar method/interface variants (estimated 8-12 recall cases).
+- [ ] Validate duplicate type-parameter names on functions / classes /
+  interfaces / call signatures (`<T, T>`). Trivial detection; covers
+  `typesWithDuplicateTypeParameters.ts` and friends (estimated 2-4
+  cases).
+- [ ] Detect self-constrained type parameters (`T extends T`,
+  indirect cycles `T extends U, U extends T`). Covers
+  `typeParameterDirectlyConstrainedToItself.ts` /
+  `typeParameterIndirectlyConstrainedToItself.ts` (estimated 2-4 cases).
+- [ ] Validate type-argument counts on call expressions, `new`
+  expressions, and named type references. Covers
+  `callNonGenericFunctionWithTypeArguments.ts`,
+  `callGenericFunctionWithZeroTypeArguments.ts`,
+  `instantiateGenericClassWithWrongNumberOfTypeArguments.ts`, etc.
+  (estimated 10-15 recall cases across `typeArgumentLists/`).
+- [ ] Run `is_assignable_to` on top-level and function-body `=`
+  assignments (currently only used at call-site / declaration init).
+  `typeRelationships/assignmentCompatibility/*` is dominated by
+  `t = s;` patterns; this is the single biggest recall lever (137
+  recall-miss cases share this directory).
+- [ ] Static-property-init / definite-assignment-assertion checks on
+  classes. `controlFlow/definiteAssignmentAssertions.ts` and class
+  property cases.
+
+### Precision pushes (target: 76 % false-positive rate -> reduce to <15 %)
+
+- [ ] Treat method calls on unconstrained type parameters as `unknown`
+  return rather than reporting "no such method". Fixes
+  `propertyAccessOnTypeParameterWithoutConstraints.ts` and the related
+  `WithConstraints*` variants (~3-5 false positives).
+- [ ] Handle negative numeric literal types (`var v: -123 = -123`) —
+  parser currently widens, causing literal-type checks to false-positive
+  in `literal/literalTypes2.ts` and `enumLiteralTypes{1,2}.ts`.
+- [ ] Computed property keys in `in`-operator narrowing
+  (`const a = 'a'; if (a in c) { ... }`). False positives in
+  `controlFlow/controlFlowInOperator.ts`.
+- [ ] Contextual function-type inference for `T extends (x: string) =>
+  string` constraints when the arg is a bare arrow without annotations.
+  False positives in `functionConstraintSatisfaction3.ts` and
+  `wrappedAndRecursiveConstraints{2,3}.ts`.
+
+### Process
+
+- Floors stay at recall >= 25 % and precision-miss <= 28 % until a
+  batch lands; ratchet to recall >= 35 % and precision-miss <= 20 %
+  after the first wave of recall improvements ships.
+- Each batch commits per-directory breakdown numbers in the commit body
+  so regressions can be triaged without rerunning the full corpus.
+

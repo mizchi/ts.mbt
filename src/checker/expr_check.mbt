@@ -1939,6 +1939,13 @@ priv struct CheckCtx {
   yield_type : @ast.TsType
   resolver : Resolver
   issues : Array[ExprIssue]
+  // Type-parameter names that are in scope where the checker is running
+  // (function generics, surrounding class generics, etc.). Used to avoid
+  // false "method does not exist on `T`" diagnostics: TypeScript treats
+  // a bare type parameter as having `object`'s API, so we only flag
+  // property / method misses on named types that are *not* type
+  // parameters at this point.
+  in_scope_type_params : Array[String]
 }
 
 ///|
@@ -4183,6 +4190,7 @@ fn check_arrow_with_context(
         yield_type: @ast.TsType::Any,
         resolver: ctx.resolver,
         issues: ctx.issues,
+        in_scope_type_params: ctx.in_scope_type_params,
       }
       for stmt in block.stmts {
         check_stmt(env, stmt, inner_ctx)
@@ -4233,6 +4241,7 @@ fn check_funcexpr_with_context(
     yield_type: @ast.TsType::Any,
     resolver: ctx.resolver,
     issues: ctx.issues,
+    in_scope_type_params: ctx.in_scope_type_params,
   }
   let _ = sub_path
   for stmt in f.body.stmts {
@@ -5799,7 +5808,9 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         Some(target_ty) =>
           check_expr_against(env, value, target_ty, ctx, "assign `.\{prop}`")
         None =>
-          if is_checkable(recv_ty) && !is_nullable_type(recv_ty) {
+          if is_checkable(recv_ty) &&
+            !is_nullable_type(recv_ty) &&
+            !is_in_scope_type_param(ctx, recv_ty) {
             match ctx.resolver.unwrap(recv_ty) {
               Object(_) | Struct(_, _) | Named(_) | Applied(_, _) =>
                 record(
@@ -6188,6 +6199,7 @@ fn check_call_args_in_expr(
                 match ctx.resolver.unwrap(pruned) {
                   Named(_) | Applied(_, _) | Object(_) | Struct(_, _) =>
                     if is_checkable(pruned) &&
+                      !is_in_scope_type_param(ctx, pruned) &&
                       ctx.resolver.lookup_field(pruned, meth) is None {
                       record(
                         ctx,
@@ -6294,6 +6306,7 @@ fn check_call_args_in_expr(
                   // Fall through to the general lookup below.
                   let recv_ty = infer_expr(env, ctx.resolver, recv)
                   if is_checkable(recv_ty) &&
+                    !is_in_scope_type_param(ctx, recv_ty) &&
                     !(ctx.resolver.lookup_field(recv_ty, prop) is Some(_)) {
                     record(
                       ctx,
@@ -6317,6 +6330,7 @@ fn check_call_args_in_expr(
           "cannot access `.\{prop}` — receiver may be null or undefined",
         )
       } else if is_checkable(recv_ty) &&
+        !is_in_scope_type_param(ctx, recv_ty) &&
         // Prune null/undefined before the existence lookup: a field declared on
         // the non-nullish part of `T | null` (e.g. accessed via `a?.b`) still
         // exists. The pure-null case is handled by the branch above.
@@ -6378,7 +6392,9 @@ fn check_call_args_in_expr(
         Some(target_ty) =>
           check_expr_against(env, v, target_ty, ctx, "assign `.\{prop}`")
         None =>
-          if is_checkable(recv_ty) && !is_nullable_type(recv_ty) {
+          if is_checkable(recv_ty) &&
+            !is_nullable_type(recv_ty) &&
+            !is_in_scope_type_param(ctx, recv_ty) {
             match ctx.resolver.unwrap(recv_ty) {
               Object(_) | Struct(_, _) | Named(_) | Applied(_, _) =>
                 record(
@@ -6840,6 +6856,7 @@ fn check_function_body_with(
     yield_type,
     resolver,
     issues,
+    in_scope_type_params: func.type_params,
   }
   // Default-parameter expression must be assignable to the parameter's
   // (possibly optional-widened) type.
@@ -6906,9 +6923,18 @@ pub fn check_module_function_bodies(
               default: None,
             })
           }
+          // Merge class-level + method-level type parameters so the body
+          // sees the same in-scope generics that TypeScript does.
+          let merged_tparams : Array[String] = []
+          for tp in cls.type_params {
+            merged_tparams.push(tp)
+          }
+          for tp in meth.type_params {
+            merged_tparams.push(tp)
+          }
           let synth : @ast.TsFunc = {
             name: cls.name + "." + meth.name,
-            type_params: meth.type_params,
+            type_params: merged_tparams,
             params,
             return_type: meth.return_type,
             body,
@@ -6933,6 +6959,7 @@ pub fn check_module_function_bodies(
       yield_type: @ast.TsType::Any,
       resolver,
       issues: [],
+      in_scope_type_params: [],
     }
     let env = ExprEnv::new()
     for v in module_.values {
@@ -6945,5 +6972,123 @@ pub fn check_module_function_bodies(
       all.push(issue)
     }
   }
+  for issue in check_module_decl_signatures(module_) {
+    all.push(issue)
+  }
   all
+}
+
+///|
+/// True when `ty` (after alias-unwrap) is a bare reference to a type
+/// parameter that is currently in scope. TypeScript treats unconstrained
+/// type parameters as having `object`'s method surface, so property /
+/// method existence checks should stay silent for these.
+fn is_in_scope_type_param(ctx : CheckCtx, ty : @ast.TsType) -> Bool {
+  if ctx.in_scope_type_params.length() == 0 {
+    return false
+  }
+  match ctx.resolver.unwrap(ty) {
+    Named(n) => ctx.in_scope_type_params.contains(n)
+    _ => false
+  }
+}
+
+///|
+/// Module-level signature lint: duplicate parameter names, duplicate
+/// type-parameter names, and other decl-shape errors that TypeScript
+/// reports without needing flow / body analysis.
+fn check_module_decl_signatures(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  // Top-level functions.
+  for func in module_.funcs {
+    check_dup_type_params("function \{func.name}", func.type_params, issues)
+    let names : Array[String] = []
+    for p in func.params {
+      names.push(p.name)
+    }
+    check_dup_param_names("function \{func.name}", names, issues)
+  }
+  // Ambient `declare function` imports.
+  for imp in module_.imports {
+    check_dup_type_params("function \{imp.name}", imp.type_params, issues)
+    let names : Array[String] = []
+    for p in imp.params {
+      names.push(p.0)
+    }
+    check_dup_param_names("function \{imp.name}", names, issues)
+  }
+  // Classes — own type-param list, plus methods.
+  for cls in module_.classes {
+    check_dup_type_params("class \{cls.name}", cls.type_params, issues)
+    for meth in cls.methods {
+      let path = "class \{cls.name} > \{meth.name}"
+      check_dup_type_params(path, meth.type_params, issues)
+      let names : Array[String] = []
+      for p in meth.params {
+        names.push(p.0)
+      }
+      check_dup_param_names(path, names, issues)
+    }
+  }
+  // Interfaces.
+  for iface in module_.interfaces {
+    check_dup_type_params("interface \{iface.name}", iface.type_params, issues)
+  }
+  // Type aliases.
+  for ta in module_.type_aliases {
+    check_dup_type_params("type \{ta.name}", ta.type_params, issues)
+  }
+  issues
+}
+
+///|
+fn check_dup_type_params(
+  path : String,
+  type_params : Array[String],
+  issues : Array[ExprIssue],
+) -> Unit {
+  if type_params.length() < 2 {
+    return
+  }
+  let seen : Array[String] = []
+  let reported : Array[String] = []
+  for name in type_params {
+    if seen.contains(name) {
+      if !reported.contains(name) {
+        reported.push(name)
+        issues.push({ path, message: "duplicate type parameter `\{name}`" })
+      }
+    } else {
+      seen.push(name)
+    }
+  }
+}
+
+///|
+fn check_dup_param_names(
+  path : String,
+  names : Array[String],
+  issues : Array[ExprIssue],
+) -> Unit {
+  if names.length() < 2 {
+    return
+  }
+  let seen : Array[String] = []
+  let reported : Array[String] = []
+  for name in names {
+    // TypeScript treats binding-pattern parameters (which our parser
+    // sometimes labels with a synthesized empty / `<pattern>` name)
+    // separately, so only flag duplicates on real identifiers.
+    if name == "" || name.has_prefix("<") {
+      continue
+    }
+    if seen.contains(name) {
+      if !reported.contains(name) {
+        reported.push(name)
+        issues.push({ path, message: "duplicate parameter name `\{name}`" })
+      }
+    } else {
+      seen.push(name)
+    }
+  }
 }

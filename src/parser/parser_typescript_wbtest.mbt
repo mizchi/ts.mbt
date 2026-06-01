@@ -720,6 +720,60 @@ async test "checker: smoke-run against TypeScript conformance test corpus" {
 }
 
 ///|
+test "checker: bare unconstrained type parameter access is silent" {
+  // TypeScript allows method/property access on an unconstrained type
+  // parameter — it has `object`'s API by default. Make sure we don't
+  // false-flag these.
+  let src =
+    #|class C<T> {
+    #|    f() {
+    #|        var x: T;
+    #|        return x.toString();
+    #|    }
+    #|}
+  let module_ = Parser::from_source(src).parse_module()
+  let issues = @checker.check_module_function_bodies(module_)
+  for i in issues {
+    if i.message.has_prefix("method ") || i.message.has_prefix("property ") {
+      println("unexpected: \{i.path}: \{i.message}")
+      fail(
+        "got unexpected method/property error on unconstrained type parameter",
+      )
+    }
+  }
+}
+
+///|
+test "checker: duplicate parameter / type parameter names" {
+  let src =
+    #|class C<T, T> { }
+    #|interface I<T, T> { }
+    #|function f<T, T>() { }
+    #|function g(x: number, x: string) { return x; }
+  let module_ = Parser::from_source(src).parse_module()
+  let issues = @checker.check_module_function_bodies(module_)
+  // Expect one duplicate-type-param issue per of class C / interface I /
+  // function f, plus one duplicate-param-name on function g.
+  let mut dup_tp = 0
+  let mut dup_param = 0
+  for i in issues {
+    if i.message.has_prefix("duplicate type parameter") {
+      dup_tp += 1
+    } else if i.message.has_prefix("duplicate parameter name") {
+      dup_param += 1
+    }
+  }
+  if dup_tp != 3 || dup_param != 1 {
+    for i in issues {
+      println("  \{i.path}: \{i.message}")
+    }
+    fail(
+      "expected dup_tp=3 dup_param=1, got dup_tp=\{dup_tp} dup_param=\{dup_param}",
+    )
+  }
+}
+
+///|
 /// Strip the parent directory and the `.ts` / `.tsx` suffix off a path.
 /// `tests/cases/conformance/foo/bar/Baz.ts` -> `Baz`.
 fn ts_case_basename(path : String) -> String {
@@ -791,8 +845,13 @@ async test "checker: accuracy against TypeScript conformance baselines" {
   let mut recall_miss = 0
   let mut precision_hit = 0
   let mut precision_miss = 0
+  let per_dir : Map[String, (Int, Int, Int, Int)] = {}
   for dir in dirs {
     let files = collect_ts_source_files_recursive(dir)
+    let mut d_rh = 0
+    let mut d_rm = 0
+    let mut d_ph = 0
+    let mut d_pm = 0
     for path in files {
       total += 1
       let content = @fs.read_file(path).text() catch { _ => continue }
@@ -813,15 +872,26 @@ async test "checker: accuracy against TypeScript conformance baselines" {
       if issues.length() > 0 {
         if has_baseline {
           recall_hit += 1
+          d_rh += 1
         } else {
           precision_miss += 1
+          d_pm += 1
         }
       } else if has_baseline {
         recall_miss += 1
+        d_rm += 1
       } else {
         precision_hit += 1
+        d_ph += 1
       }
     }
+    per_dir[dir] = (d_rh, d_rm, d_ph, d_pm)
+  }
+  println(
+    "=== per-directory breakdown (recall_hit / recall_miss / precision_hit / precision_miss) ===",
+  )
+  for kv in per_dir {
+    println("  \{kv.0}: \{kv.1.0} / \{kv.1.1} / \{kv.1.2} / \{kv.1.3}")
   }
   if total == 0 {
     println("skip: no .ts sources found in pinned conformance corpus")
