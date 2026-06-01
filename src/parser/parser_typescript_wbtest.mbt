@@ -720,6 +720,140 @@ async test "checker: smoke-run against TypeScript conformance test corpus" {
 }
 
 ///|
+/// Strip the parent directory and the `.ts` / `.tsx` suffix off a path.
+/// `tests/cases/conformance/foo/bar/Baz.ts` -> `Baz`.
+fn ts_case_basename(path : String) -> String {
+  let parts = path.split("/")
+  let arr : Array[StringView] = []
+  for p in parts {
+    arr.push(p)
+  }
+  let mut name = if arr.length() == 0 {
+    path
+  } else {
+    arr[arr.length() - 1].to_owned()
+  }
+  if name.has_suffix(".tsx") {
+    name = name[:name.length() - 4].to_owned()
+  } else if name.has_suffix(".ts") {
+    name = name[:name.length() - 3].to_owned()
+  }
+  name
+}
+
+///|
+async fn baseline_errors_txt_exists(case_name : String) -> Bool {
+  let path = "typescript/tests/baselines/reference/" + case_name + ".errors.txt"
+  let kind = @fs.kind(path, follow_symlink=false) catch {
+    _ => @fs.FileKind::Unknown
+  }
+  kind is @fs.FileKind::Regular
+}
+
+///|
+/// Cross-check the checker's accuracy against the TypeScript test corpus.
+///
+/// The corpus convention is:
+///   - `tests/cases/conformance/.../<name>.ts` is the source.
+///   - `tests/baselines/reference/<name>.errors.txt` exists iff `tsc`
+///     reports at least one error on that source.
+///
+/// So for each parsed source we can sort the outcome into a 2x2 table:
+///   ┌────────────────┬──────────────┬──────────────┐
+///   │                │ baseline yes │ baseline no  │
+///   ├────────────────┼──────────────┼──────────────┤
+///   │ our issues > 0 │ recall hit   │ false pos.   │
+///   │ our issues = 0 │ recall miss  │ precision hit│
+///   └────────────────┴──────────────┴──────────────┘
+///
+/// The two "miss" columns are the failure side. The thresholds below are
+/// generous initial gates so the test starts useful without immediately
+/// failing on the (large) recall gap that exists today. Tighten them as
+/// the checker improves.
+async test "checker: accuracy against TypeScript conformance baselines" {
+  let dirs = [
+    "typescript/tests/cases/conformance/types/typeParameters", "typescript/tests/cases/conformance/controlFlow",
+    "typescript/tests/cases/conformance/expressions/typeGuards", "typescript/tests/cases/conformance/types/typeGuards",
+    "typescript/tests/cases/conformance/types/union", "typescript/tests/cases/conformance/types/intersection",
+    "typescript/tests/cases/conformance/types/tuple", "typescript/tests/cases/conformance/types/literal",
+    "typescript/tests/cases/conformance/types/conditional", "typescript/tests/cases/conformance/types/never",
+    "typescript/tests/cases/conformance/types/unknown", "typescript/tests/cases/conformance/types/any",
+    "typescript/tests/cases/conformance/types/keyof", "typescript/tests/cases/conformance/types/typeAliases",
+    "typescript/tests/cases/conformance/types/objectTypeLiteral", "typescript/tests/cases/conformance/types/primitives",
+    "typescript/tests/cases/conformance/types/stringLiteral", "typescript/tests/cases/conformance/types/uniqueSymbol",
+    "typescript/tests/cases/conformance/types/rest", "typescript/tests/cases/conformance/types/specifyingTypes",
+    "typescript/tests/cases/conformance/types/contextualTypes", "typescript/tests/cases/conformance/types/namedTypes",
+    "typescript/tests/cases/conformance/types/typeRelationships", "typescript/tests/cases/conformance/types/nonPrimitive",
+  ]
+  let mut total = 0
+  let mut parsed = 0
+  let mut recall_hit = 0
+  let mut recall_miss = 0
+  let mut precision_hit = 0
+  let mut precision_miss = 0
+  for dir in dirs {
+    let files = collect_ts_source_files_recursive(dir)
+    for path in files {
+      total += 1
+      let content = @fs.read_file(path).text() catch { _ => continue }
+      let allow_jsx = path.has_suffix(".tsx")
+      let module_ = try
+        Parser::from_source_with_jsx(content, allow_jsx).parse_module()
+      catch {
+        _ => continue
+      } noraise {
+        m => {
+          parsed += 1
+          m
+        }
+      }
+      let case_name = ts_case_basename(path)
+      let has_baseline = baseline_errors_txt_exists(case_name)
+      let issues = @checker.check_module_function_bodies(module_)
+      if issues.length() > 0 {
+        if has_baseline {
+          recall_hit += 1
+        } else {
+          precision_miss += 1
+        }
+      } else if has_baseline {
+        recall_miss += 1
+      } else {
+        precision_hit += 1
+      }
+    }
+  }
+  if total == 0 {
+    println("skip: no .ts sources found in pinned conformance corpus")
+    return
+  }
+  let with_baseline = recall_hit + recall_miss
+  let without_baseline = precision_hit + precision_miss
+  println(
+    "baseline accuracy: parsed=\{parsed}/\{total} | recall=\{recall_hit}/\{with_baseline} | precision=\{precision_hit}/\{without_baseline} (false-positives=\{precision_miss})",
+  )
+  // Regression gates calibrated against today's measurements. Tighten
+  // as accuracy improves; loosen only with justification.
+  //
+  // Recall floor: of the baseline-positive cases, we currently detect
+  // ~29 %. Set the floor at 25 % to flag a drop of >4 percentage
+  // points. A real recall regression should easily blow past that.
+  if with_baseline > 0 && recall_hit * 100 < with_baseline * 25 {
+    fail(
+      "recall floor breached: \{recall_hit}/\{with_baseline} baseline-positive cases caught (< 25 %)",
+    )
+  }
+  // Precision floor: we currently false-positive on ~24 % of clean
+  // cases. Set the cap at 28 % so a new false-positive class shows up
+  // as a test failure rather than silently widening the gap.
+  if without_baseline > 0 && precision_miss * 100 > without_baseline * 28 {
+    fail(
+      "precision floor breached: \{precision_miss}/\{without_baseline} clean cases reported as failing (> 28 %)",
+    )
+  }
+}
+
+///|
 async test "parser: smoke-run against the entire TypeScript repo source" {
   // Broader sweep than `typescript/src/compiler` — walks the full
   // `typescript/src` tree (compiler + services + server + harness +
