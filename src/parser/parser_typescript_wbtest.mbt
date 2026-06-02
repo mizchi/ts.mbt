@@ -795,6 +795,7 @@ test "checker: static members cannot reference class type parameters" {
 }
 
 ///|
+
 ///|
 test "checker: method-level T shadows class TP for the static lint" {
   // `static h<T>(x: T): T` declares its own `T` that shadows the

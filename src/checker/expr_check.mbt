@@ -293,7 +293,9 @@ fn Resolver::ingest_module(
   // covers the rest by pulling typed bindings out of `top_level_stmts`.
   for stmt in module_.top_level_stmts {
     match stmt {
-      Var(Ident(name), ty, _) | Let(Ident(name), ty, _) | Const(Ident(name), ty, _) =>
+      Var(Ident(name), ty, _)
+      | Let(Ident(name), ty, _)
+      | Const(Ident(name), ty, _) =>
         if is_checkable(ty) {
           let key = prefix + name
           // Don't shadow an existing entry (e.g. from `declare var`).
@@ -3559,10 +3561,7 @@ fn is_structurally_assignable_named(
 /// here -- the common case (`m(): this` on an interface) returns the
 /// bare `Named("this")` directly, and chasing it through generics would
 /// require a much more invasive walk for limited additional payoff.
-fn substitute_this_type(
-  ty : @ast.TsType,
-  recv : @ast.TsType,
-) -> @ast.TsType {
+fn substitute_this_type(ty : @ast.TsType, recv : @ast.TsType) -> @ast.TsType {
   match ty {
     Named("this") => recv
     _ => ty
@@ -3601,7 +3600,8 @@ fn assignable_through_class_chain(
     }
     (Named(s_name), Named(t_name)) | (Applied(s_name, _), Named(t_name)) =>
       class_or_interface_inherits(s_name, t_name, resolver, [])
-    (Named(s_name), Applied(t_name, _)) | (Applied(s_name, _), Applied(t_name, _)) =>
+    (Named(s_name), Applied(t_name, _))
+    | (Applied(s_name, _), Applied(t_name, _)) =>
       class_or_interface_inherits(s_name, t_name, resolver, [])
     // Same-shape primitive / `null` / `undefined` matches so a union
     // walk like `Foo | null → Object | null` succeeds (the class chain
@@ -3658,10 +3658,7 @@ fn class_or_interface_inherits(
 /// `=== null` / `=== undefined` / `instanceof` flow guard would have
 /// removed. We don't model flow narrowing, so this pattern is almost
 /// always a guard-aware reassignment that we can't see.
-fn is_flow_narrowing_gap(
-  source : @ast.TsType,
-  target : @ast.TsType,
-) -> Bool {
+fn is_flow_narrowing_gap(source : @ast.TsType, target : @ast.TsType) -> Bool {
   let src_members = union_members(source)
   if src_members.length() <= 1 {
     return false
