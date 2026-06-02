@@ -1283,6 +1283,39 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-02 (T20)   345/815 (42 %)        412/414 ( 2 FP)
 2026-06-02 (T21)   351/815 (43 %)        412/414 ( 2 FP)
 2026-06-02 (T22)   350/815 (43 %)        413/414 ( 1 FP)
+2026-06-02 (T23)   348/815 (43 %)        414/414 ( 0 FP)
+
+  T23 -- soft / hard generic inference candidates (Issue #62 path B).
+
+    Closes the second typeInference FP
+    (`genericCallWithGenericSignatureArguments.ts`). The case
+    `foo<T>(a: (x: T) => T, b: (x: T) => T)` called with
+    `foo((x) => 1, (x) => '')` is `{} => {}` in TS — the conflicting
+    candidates from the two arrow body returns produce a no-information
+    fallback, not a type error. Our solver previously locked `T` to the
+    first inference (`number`), then contextual-typed the second arrow
+    body `''` against `T = number` and false-flagged.
+
+    Fix: thread a `soft` flag through `infer_param_bindings`. The flag is
+    `true` only when the recursion is inside the return position of a
+    `Func` formal (a covariant slot fed by an arrow body), and `false`
+    otherwise. On a direct `Named(T)` hit:
+      - existing binding is `Any`: take the actual.
+      - actual is `Any`: keep existing (no information).
+      - soft conflict (both sides non-Any): union via `narrow_union`.
+      - hard conflict: first-wins (preserve strict detection on
+        `indexOf<T>(xs: T[], item: T)` style calls).
+
+    This widens `T = number | string` for the FP case, so each arrow
+    body's return is assignable to the substituted formal. Real
+    inconsistencies like `indexOf(arr: number[], "abc")` still flag
+    because the second candidate is a *hard* inference (formal `T`
+    appears at top level, not nested under a `Func`-typed formal).
+
+    Conformance: recall 350 → 348 (−2 baseline-positive cases that
+    relied on the prior over-strict behavior; arguably real-bug
+    detections we lost, worth revisiting if a follow-up tightens the
+    soft-conflict rule). FP 1 → 0.
 
   T22 -- generic method-level type-parameter shadowing (Issue #62).
 
