@@ -3478,6 +3478,16 @@ fn check_expr_against(
       }
     _ => ()
   }
+  // Mirror the above on the *source* side: if the inferred type contains
+  // an unresolvable `Named(n)` anywhere (a generic TP we lost track of,
+  // a `this`-typed return, a qualified namespace member the resolver
+  // doesn't know about), our diagnostic would just render `expected X
+  // but got <something we can't display>` — the user can't act on it
+  // and the rate of real-bug coverage at these points is near zero
+  // since the source side is already abstract.
+  if type_contains_unresolved_named(inferred_u, ctx.resolver) {
+    return
+  }
   if !is_assignable_to(inferred_u, expected_u) {
     // Class / interface references are nominal in `is_assignable_to`
     // (Named(A) == Named(B) iff A == B), but TypeScript types are
@@ -3730,6 +3740,45 @@ fn is_narrowable_primitive(ty : @ast.TsType) -> Bool {
     // guard, so suppression is the safer call. `Object` likewise
     // surfaces as a "fell-back to base" residue in typeguard chains.
     Named(_) | Applied(_, _) => true
+    _ => false
+  }
+}
+
+///|
+/// True when `ty` (or anything nested inside) contains a `Named(n)` /
+/// `Applied(n, …)` reference the resolver can't expand to an interface,
+/// class, or type alias. Used to suppress assignment-mismatch diagnostics
+/// whose source or target is opaque -- those almost always come from a
+/// generic / `this`-type / qualified-namespace gap we don't model, not
+/// from a real user-visible bug we could surface usefully. `Named("this")`
+/// always counts as unresolved here (the `this` type isn't a declaration).
+fn type_contains_unresolved_named(
+  ty : @ast.TsType,
+  resolver : Resolver,
+) -> Bool {
+  match ty {
+    Named("this") => true
+    Named(n) | Applied(n, _) =>
+      resolver.type_aliases.get(n) is None &&
+      resolver.interfaces.get(n) is None &&
+      resolver.classes.get(n) is None
+    Array(inner) => type_contains_unresolved_named(inner, resolver)
+    Union(parts) | Intersection(parts) | Tuple(parts) => {
+      for p in parts {
+        if type_contains_unresolved_named(p, resolver) {
+          return true
+        }
+      }
+      false
+    }
+    Func(params, ret) => {
+      for p in params {
+        if type_contains_unresolved_named(p, resolver) {
+          return true
+        }
+      }
+      type_contains_unresolved_named(ret, resolver)
+    }
     _ => false
   }
 }
@@ -6675,7 +6724,13 @@ fn check_call_args_in_expr(
                   Named(_) | Applied(_, _) | Object(_) | Struct(_, _) =>
                     if is_checkable(pruned) &&
                       !is_in_scope_type_param(ctx, pruned) &&
-                      ctx.resolver.lookup_field(pruned, meth) is None {
+                      ctx.resolver.lookup_field(pruned, meth) is None &&
+                      // Same opaque-shape guard as the property-existence
+                      // check: when the receiver contains an unresolvable
+                      // Named ref (this-type, in-scope TP we lost track
+                      // of, qualified-namespace member), the resulting
+                      // diagnostic is uninformative -- stay silent.
+                      !type_contains_unresolved_named(pruned, ctx.resolver) {
                       record(
                         ctx,
                         "call `\{meth}`",
@@ -6816,7 +6871,14 @@ fn check_call_args_in_expr(
         !ctx.resolver.field_on_any_union_member(
           prune_nullish(ctx.resolver, recv_ty),
           prop,
-        ) {
+        ) &&
+        // Suppress when the receiver shape contains an unresolvable Named
+        // ref (`this`, an in-scope generic, a qualified-namespace name
+        // the resolver doesn't expand). The diagnostic would just render
+        // the opaque shape with no actionable detail and almost always
+        // comes from a generic / `this`-type / flow-narrowing gap we
+        // don't model.
+        !type_contains_unresolved_named(recv_ty, ctx.resolver) {
         record(
           ctx,
           "PropAccess `.\{prop}`",
