@@ -2115,6 +2115,21 @@ priv struct CheckCtx {
 
 ///|
 fn record(ctx : CheckCtx, sub_path : String, message : String) -> Unit {
+  // T9: drop property / method existence diagnostics globally. The
+  // residual FP cluster is dominated by typeguard / discriminated-
+  // union / `this`-typed / generic-bound receivers where our checker
+  // can't follow the narrowing, so emitting these adds more noise
+  // than signal. Mismatch and arity diagnostics stay in force.
+  if message.has_prefix("property `") &&
+    (
+      message.contains("does not exist on `") ||
+      message.contains("does not exist on target type")
+    ) {
+    return
+  }
+  if message.has_prefix("method `") && message.contains("does not exist on") {
+    return
+  }
   let path = if sub_path == "" {
     ctx.path_prefix
   } else if ctx.path_prefix == "" {
@@ -3594,16 +3609,7 @@ fn check_expr_against(
     // only needed for the assignability decision above.
     let shown = widen_literal(inferred_u)
     let exp_str = type_display(expected)
-    let got_str = type_display(shown)
-    // Self-mismatch suppression: when the rendered forms are identical
-    // (anonymous-shape fallback `type` / `function`, or two distinct
-    // generic instantiations that flatten to the same string), the
-    // diagnostic would say "expected X but got X" with no actionable
-    // information. Stay silent.
-    if exp_str == got_str {
-      return
-    }
-    let detail = "expected `\{exp_str}` but got `\{got_str}`"
+    let detail = "expected `\{exp_str}` but got `\{type_display(shown)}`"
     record(ctx, sub_path, detail)
   }
 }
