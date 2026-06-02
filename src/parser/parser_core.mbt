@@ -58,8 +58,10 @@ pub struct Parser {
   // before calling `parse_params` for a constructor and pops it
   // afterwards, then emits `this.name = name` for every entry. Each
   // entry pairs the parameter name with whether it carried `readonly`
-  // so the class builder can materialize a readonly field.
-  param_property_scopes : Array[Array[(String, Bool)]]
+  // and its accessibility (`"public"` / `"private"` / `"protected"`) so
+  // the class builder can materialize a readonly field and record member
+  // visibility.
+  param_property_scopes : Array[Array[(String, Bool, String)]]
   // Token-position → "JSDoc `/* @__PURE__ */` annotation seen
   // just before this token". The lexer populates this when it
   // skips a block comment whose contents contain the literal

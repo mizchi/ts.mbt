@@ -1006,7 +1006,7 @@ fn Parser::parse_class_body(
       } else {
         []
       }
-      let param_props : Array[(String, Bool)] = if is_constructor_method {
+      let param_props : Array[(String, Bool, String)] = if is_constructor_method {
         let last = self.param_property_scopes.length() - 1
         let collected = self.param_property_scopes[last]
         let _ = self.param_property_scopes.pop()
@@ -1100,7 +1100,7 @@ fn Parser::parse_class_body(
         // flows in through the synthesized `this.x = x` assign (the class
         // has a constructor, so TS2564 already skips it).
         for pp in param_props {
-          let (pp_name, pp_readonly) = pp
+          let (pp_name, pp_readonly, pp_visibility) = pp
           let mut pp_type : @ast.TsType = Any
           for p in func.params {
             if p.name == pp_name {
@@ -1111,6 +1111,13 @@ fn Parser::parse_class_body(
           elements.push(
             Field(false, Name(pp_name), pp_type, None, pp_readonly, false),
           )
+          // A `private` / `protected` parameter property contributes the
+          // same accessibility as a normal member declaration.
+          if pp_visibility == "private" {
+            private_members.push(pp_name)
+          } else if pp_visibility == "protected" {
+            protected_members.push(pp_name)
+          }
         }
       } else {
         elements.push(Method(is_static, key, accessor_kind, func))

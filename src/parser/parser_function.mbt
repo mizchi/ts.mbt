@@ -57,15 +57,17 @@ fn Parser::skip_param_decorators(self : Parser) -> Unit raise ParseError {
 }
 
 ///|
-fn Parser::skip_param_modifiers(self : Parser) -> (Bool, Bool) {
-  // Returns `(is_parameter_property, is_readonly)`. The first is `true`
-  // when at least one TS-only parameter modifier (`public` / `private`
-  // / `protected` / `readonly`) was consumed (constructor-parameter
-  // callers use it to synthesize `this.x = x` assigns — the "parameter
-  // property" shortcut); the second is `true` when `readonly` was among
-  // them, so the class builder can materialize a readonly field.
+fn Parser::skip_param_modifiers(self : Parser) -> (Bool, Bool, String) {
+  // Returns `(is_parameter_property, is_readonly, visibility)`. The first
+  // is `true` when at least one TS-only parameter modifier (`public` /
+  // `private` / `protected` / `readonly`) was consumed; `is_readonly` is
+  // `true` when `readonly` was among them; `visibility` is the
+  // accessibility keyword seen (`"private"` / `"protected"`, else
+  // `"public"`). Constructor-parameter callers use these to materialize
+  // the corresponding class field with the right readonly / visibility.
   let mut saw_property_modifier = false
   let mut saw_readonly = false
+  let mut visibility = "public"
   let mut has_modifier = true
   while has_modifier {
     has_modifier = false
@@ -97,6 +99,9 @@ fn Parser::skip_param_modifiers(self : Parser) -> (Bool, Bool) {
             if name == "readonly" {
               saw_readonly = true
             }
+            if name == "private" || name == "protected" {
+              visibility = name
+            }
             let _ = self.advance()
             has_modifier = true
           }
@@ -105,7 +110,7 @@ fn Parser::skip_param_modifiers(self : Parser) -> (Bool, Bool) {
       _ => ()
     }
   }
-  (saw_property_modifier, saw_readonly)
+  (saw_property_modifier, saw_readonly, visibility)
 }
 
 ///|
@@ -130,17 +135,20 @@ fn wrap_optional_ts_type(type_ : @ast.TsType) -> @ast.TsType {
 // / parameter
 fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
   self.skip_param_decorators()
-  let (is_param_property, is_readonly_param) = self.skip_param_modifiers()
+  let (is_param_property, is_readonly_param, visibility_param) = self.skip_param_modifiers()
   let is_rest = self.match_ellipsis()
   let binding = self.parse_binding_pattern()
   let name = self.binding_first_name(binding)
-  // Record the name (and its `readonly`-ness) so the surrounding
-  // constructor parser can synthesize `this.name = name` field assigns
-  // and materialize the corresponding class field. Only constructor-
-  // param parsing pushes a slot, so non-constructor params are no-ops.
+  // Record the name (with its `readonly`-ness and visibility) so the
+  // surrounding constructor parser can synthesize `this.name = name`
+  // field assigns and materialize the corresponding class field. Only
+  // constructor-param parsing pushes a slot, so non-constructor params
+  // are no-ops.
   if is_param_property && self.param_property_scopes.length() > 0 {
     let top = self.param_property_scopes.length() - 1
-    self.param_property_scopes[top].push((name, is_readonly_param))
+    self.param_property_scopes[top].push(
+      (name, is_readonly_param, visibility_param),
+    )
   }
   let is_optional = self.match_(Question)
   // type ()
