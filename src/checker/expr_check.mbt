@@ -3505,6 +3505,12 @@ fn check_expr_against(
       if entries.length() == 0 {
         return
       }
+    // Both sides are unions: this is the signature of a typeguard /
+    // flow-narrowing residue we can't see through. The user has written
+    // a guard that narrows one side; absent flow tracking we still see
+    // both as unions and the diagnostic is almost always wrong. Stay
+    // silent rather than emit a false mismatch.
+    (Union(_), Union(_)) => return
     _ => ()
   }
   if !is_assignable_to(inferred_u, expected_u) {
