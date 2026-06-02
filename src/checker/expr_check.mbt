@@ -2262,6 +2262,25 @@ priv struct CheckCtx {
 }
 
 ///|
+/// TS18013 ("Property '#x' is not accessible outside class ... because
+/// it has a private identifier"). The parser brands every in-class
+/// private access (`this.#x`, same-scope `obj.#x`) to a
+/// `__private_brand__N__x` symbol; a member name that still carries the
+/// literal `#` prefix at check time therefore only ever comes from an
+/// access *outside* any class body (top-level code or a free function),
+/// where touching a private identifier is always illegal. That makes
+/// this a false-positive-free signal.
+fn check_private_name_access(ctx : CheckCtx, prop_name : String) -> Unit {
+  if prop_name.has_prefix("#") {
+    record(
+      ctx,
+      "access `\{prop_name}`",
+      "private identifier `\{prop_name}` is not accessible outside its class",
+    )
+  }
+}
+
+///|
 fn record(ctx : CheckCtx, sub_path : String, message : String) -> Unit {
   // T9: in permissive mode, drop the diagnostic families whose
   // residual FPs are dominated by features we don't model. Strict
@@ -7859,6 +7878,7 @@ fn check_call_args_in_expr(
       }
     }
     MethodCall(receiver, meth, args) => {
+      check_private_name_access(ctx, meth)
       // Static-namespace dispatch: `Math.max(...)`, `JSON.stringify(...)`.
       // Recognised by the bare-identifier shape of the receiver.
       let static_params : Array[@ast.TsType]? = match receiver {
@@ -7980,6 +8000,7 @@ fn check_call_args_in_expr(
       }
     PropAccess(recv, prop) => {
       check_call_args_in_expr(env, recv, ctx)
+      check_private_name_access(ctx, prop)
       // Property-existence check: when the receiver has a concrete
       // structural shape and the resolver can't find `prop` on it,
       // surface a diagnostic. The class static-side fallback used
@@ -8187,6 +8208,7 @@ fn check_call_args_in_expr(
     PropAssignExpr(recv, prop, v) => {
       check_call_args_in_expr(env, recv, ctx)
       check_call_args_in_expr(env, v, ctx)
+      check_private_name_access(ctx, prop)
       let recv_ty = infer_expr(env, ctx.resolver, recv)
       if is_readonly_field(ctx.resolver, recv_ty, prop) {
         record(
