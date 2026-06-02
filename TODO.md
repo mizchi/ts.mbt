@@ -1280,6 +1280,21 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-02 (T17)   278/572 (49 %)        329/334 ( 5 FP)
 2026-06-02 (T18)   279/572 (49 %)        329/334 ( 5 FP)
 2026-06-02 (T19)   278/572 (49 %)        332/334 ( 2 FP)
+2026-06-02 (T20)   345/815 (42 %)        412/414 ( 2 FP)
+
+  T20 -- corpus expansion + index-sig TS2564 fix.
+
+    Added five conformance subdirs (classDeclarations,
+    constructorDeclarations, classExpressions, indexMemberDeclarations,
+    members) — 323 new files. Single emerging FP
+    (`indexersInClassType.ts`) traced to the parser silently dropping
+    `[key: T]: V` index signatures, leaving the TS2564 check to flag
+    `1: Date` / `'a': {}` declarations that TS treats as covered.
+
+    Fix: add `IndexSig` to the parser-internal `ClassElement` enum,
+    record an `Any -> Any` placeholder in
+    `decl.index_signatures` per detected index signature, and short-
+    circuit the TS2564 check on any class that has one.
 
   T19 -- close three FPs.
 
