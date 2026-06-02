@@ -3233,6 +3233,95 @@ fn is_definitely_not_indexable(ty : @ast.TsType) -> Bool {
 }
 
 ///|
+
+///|
+/// The exact set of integer values an enum declares, or `None` when any
+/// member's value isn't a plain integer literal (computed members make
+/// the set unknown, so callers must stay conservative).
+fn enum_integer_values(decl : @ast.TsEnumDecl) -> Array[Int]? {
+  let values : Array[Int] = []
+  for m in decl.members {
+    match m.value {
+      Some(Number(s)) => {
+        let n = @string.parse_int(s) catch { _ => return None }
+        values.push(n)
+      }
+      _ => return None
+    }
+  }
+  if values.length() == 0 {
+    return None
+  }
+  Some(values)
+}
+
+///|
+/// The integer value of a literal expression / type, if it is one.
+fn expr_integer_literal(e : @ast.TsExpr, t : @ast.TsType) -> Int? {
+  match e {
+    IntLit(n) => Some(n)
+    NumberLit(d) =>
+      if d == d.to_int().to_double() {
+        Some(d.to_int())
+      } else {
+        None
+      }
+    _ =>
+      match t {
+        NumberLiteral(s) => Some(@string.parse_int(s)) catch { _ => None }
+        _ => None
+      }
+  }
+}
+
+///|
+/// TS2367 helper: when one operand is a numeric-enum type and the other
+/// a numeric literal that is not one of the enum's members, the `===` /
+/// `!==` can never be true. Returns the rendered `` `E` and `n` ``
+/// fragment to embed in the diagnostic, or `None` when it doesn't apply.
+fn enum_numeric_literal_disjoint(
+  resolver : Resolver,
+  lt : @ast.TsType,
+  l : @ast.TsExpr,
+  rt : @ast.TsType,
+  r : @ast.TsExpr,
+) -> String? {
+  fn check(
+    en_ty : @ast.TsType,
+    lit_e : @ast.TsExpr,
+    lit_t : @ast.TsType,
+  ) -> String? {
+    let name = match en_ty {
+      Named(n) => n
+      _ => return None
+    }
+    let decl = match resolver.enums.get(name) {
+      Some(d) => d
+      None => return None
+    }
+    let values = match enum_integer_values(decl) {
+      Some(v) => v
+      None => return None
+    }
+    let lit = match expr_integer_literal(lit_e, lit_t) {
+      Some(n) => n
+      None => return None
+    }
+    if values.contains(lit) {
+      None
+    } else {
+      Some("`\{name}` and `\{lit}`")
+    }
+  }
+
+  match check(lt, r, rt) {
+    Some(s) => return Some(s)
+    None => ()
+  }
+  check(rt, l, lt)
+}
+
+///|
 fn types_can_overlap(a : @ast.TsType, b : @ast.TsType) -> Bool {
   match (a, b) {
     (Any, _) | (_, Any) => true
@@ -3316,6 +3405,20 @@ fn check_binop_operands(
           "strict equality",
           "comparing `\{type_display(lt)}` and `\{type_display(rt)}` with === will always be false",
         )
+      } else if !is_typeof(l) && !is_typeof(r) {
+        // TS2367 for a numeric-enum-typed operand compared against a
+        // numeric literal that is not one of the enum's members. Only
+        // fires when *every* member has a known integer value (so the
+        // member set is exact) -- computed members bail out.
+        match enum_numeric_literal_disjoint(ctx.resolver, lt, l, rt, r) {
+          Some(rendered) =>
+            record(
+              ctx,
+              "strict equality",
+              "comparing \{rendered} will always be false",
+            )
+          None => ()
+        }
       }
     }
     // Loose equality (`==` / `!=`): TypeScript also reports TS2367 for
