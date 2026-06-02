@@ -2389,7 +2389,97 @@ fn is_reliable_mismatch_pair(exp : String, got : String) -> Bool {
   if is_simple_shape_type(exp) && is_reliable_mismatch_type(got) {
     return true
   }
+  // Simple-shape vs simple-shape: both render as `T[]`, `{...}`, or
+  // `(...) => T`. When neither carries `|`/`<` (filtered above), the
+  // structural mismatch is concrete enough to keep. Excludes cases
+  // where either side carries the bare-`type` token (substitution
+  // residue) since that's our checker's "I don't know" rendering.
+  if is_simple_shape_type(exp) &&
+    is_simple_shape_type(got) &&
+    !has_type_residue_token(exp) &&
+    !has_type_residue_token(got) {
+    return true
+  }
   false
+}
+
+///|
+/// True when the rendered shape contains a `type` token that came
+/// from our `type_display` fallback. We bail on these because the
+/// fallback hides the real shape (mapped type, unresolved generic,
+/// etc.) and the strict checker is likely to compare two distinct
+/// shapes incorrectly.
+fn has_type_residue_token(s : String) -> Bool {
+  // Word boundaries: `type` surrounded by non-identifier chars.
+  let bytes = s.to_array()
+  let mut i = 0
+  while i + 3 < bytes.length() {
+    if bytes[i] == 't' &&
+      bytes[i + 1] == 'y' &&
+      bytes[i + 2] == 'p' &&
+      bytes[i + 3] == 'e' {
+      let before_ok = i == 0 || !is_ident_char(bytes[i - 1])
+      let after_idx = i + 4
+      let after_ok = after_idx >= bytes.length() ||
+        !is_ident_char(bytes[after_idx])
+      if before_ok && after_ok {
+        return true
+      }
+    }
+    i = i + 1
+  }
+  false
+}
+
+///|
+fn is_ident_char(c : Char) -> Bool {
+  (c >= 'a' && c <= 'z') ||
+  (c >= 'A' && c <= 'Z') ||
+  (c >= '0' && c <= '9') ||
+  c == '_' ||
+  c == '$'
+}
+
+///|
+/// True if `s` starts with an ASCII uppercase letter. Used to gate
+/// `keyof X` / `typeof X` admission on a Named type (class /
+/// interface / alias name); excludes `keyof any` / `keyof unknown`
+/// which collapse to wide property-key unions in TS.
+fn starts_uppercase(s : String) -> Bool {
+  if s.length() == 0 {
+    return false
+  }
+  let c = s[0]
+  c >= 'A' && c <= 'Z'
+}
+
+///|
+/// True if `s` is a non-empty identifier (head: letter/_/$, rest:
+/// identifier chars). Distinct from `is_bare_identifier`, which adds
+/// a length-3 + lowercase requirement to filter type-param names —
+/// here we want even `A` / `B` admitted when the caller's context
+/// already rules out type-parameter confusion (e.g. `keyof A`).
+fn is_named_identifier(s : String) -> Bool {
+  if s.length() == 0 {
+    return false
+  }
+  let bytes = s.to_array()
+  let head = bytes[0]
+  let head_ok = (head >= 'a' && head <= 'z') ||
+    (head >= 'A' && head <= 'Z') ||
+    head == '_' ||
+    head == '$'
+  if !head_ok {
+    return false
+  }
+  let mut i = 1
+  while i < bytes.length() {
+    if !is_ident_char(bytes[i]) {
+      return false
+    }
+    i = i + 1
+  }
+  true
 }
 
 ///|
@@ -2521,6 +2611,25 @@ fn is_reliable_mismatch_type(s : String) -> Bool {
     // shapes where we can't be confident about reliability.
     "type" | "function" => return false
     _ => ()
+  }
+  // `keyof <Named>` -- only when the inner type is a user-defined
+  // Named (uppercase initial, identifier-shaped). `keyof any` /
+  // `keyof unknown` widen to all property-key primitives so a string
+  // source IS assignable and the diagnostic would be a false positive.
+  // Single-letter Named (`A`, `B`) is allowed since it's a concrete
+  // type alias / class in the failing fixtures.
+  if s.has_prefix("keyof ") {
+    let inner = s[6:].to_owned()
+    if is_named_identifier(inner) && starts_uppercase(inner) {
+      return true
+    }
+  }
+  // `typeof <Named>` -- same shape, same filter.
+  if s.has_prefix("typeof ") {
+    let inner = s[7:].to_owned()
+    if is_named_identifier(inner) && starts_uppercase(inner) {
+      return true
+    }
   }
   // Bare identifier: a single Named type (e.g. `C`, `I`, `Point`).
   // These come from interface / class / type-alias references. When
@@ -5615,7 +5724,13 @@ fn type_display(ty : @ast.TsType) -> String {
       }
       parts.join(" & ")
     }
-    Func(_, _) => "function"
+    Func(params, ret) => {
+      let parts : Array[String] = []
+      for p in params {
+        parts.push(type_display(p))
+      }
+      "(" + parts.join(", ") + ") => " + type_display(ret)
+    }
     Tuple(items) => {
       let parts : Array[String] = []
       for a in items {
@@ -5623,6 +5738,28 @@ fn type_display(ty : @ast.TsType) -> String {
       }
       "[" + parts.join(", ") + "]"
     }
+    // `typeof X.Y` -- distinguish so two distinct query results don't
+    // both flatten to `type`. The checker won't equate these because
+    // their value sources differ, so structural mismatch is real.
+    TypeOf(name) => "typeof " + name
+    // `T[K]` indexed access. Render concisely; opening `[` already
+    // marks this as compound for the permissive filter.
+    IndexedAccess(target, idx) =>
+      type_display(target) + "[" + type_display(idx) + "]"
+    // `keyof T` -- distinct shape, useful for mismatch messages.
+    Keyof(inner) => "keyof " + type_display(inner)
+    // `unique symbol` -- the literal `unique symbol` text matches the
+    // source so messages look right.
+    UniqueSymbol(_) => "unique symbol"
+    // Object literal type: leave as the generic `type` label.
+    // Rendering the field-name list (`{toString}`) backfired by
+    // introducing false positives on object-spread (`{ ...source }`),
+    // where the inferred shape only sees one or two field names but
+    // TS sees the full set. The improvement made `expected Test2 but
+    // got type` reachable but at the cost of a real FP.
+    Object(_) => "type"
+    Struct(name, _) => name
+    Constructor(_, ret, _) => "new (...) => " + type_display(ret)
     _ => "type"
   }
 }

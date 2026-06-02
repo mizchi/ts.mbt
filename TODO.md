@@ -1281,6 +1281,30 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-02 (T18)   279/572 (49 %)        329/334 ( 5 FP)
 2026-06-02 (T19)   278/572 (49 %)        332/334 ( 2 FP)
 2026-06-02 (T20)   345/815 (42 %)        412/414 ( 2 FP)
+2026-06-02 (T21)   351/815 (43 %)        412/414 ( 2 FP)
+
+  T21 -- `type_display` improvements + permissive filter extensions.
+
+    Renderings: render `TypeOf(name)` as `typeof name`,
+    `IndexedAccess(t, i)` as `t[i]`, `Keyof(t)` as `keyof t`,
+    `UniqueSymbol` as `unique symbol`, `Struct(name, ...)` as `name`,
+    `Constructor(_, ret, _)` as `new (...) => ret`, and `Func(params,
+    ret)` as `(p1, p2, ...) => ret`. `Object(...)` deliberately
+    stays `type` because rendering field names introduced a false
+    positive on object-spread inference.
+
+    Filter extensions:
+      - `is_reliable_mismatch_pair` now admits simple-shape vs
+        simple-shape when neither side carries the `type` residue
+        token (catches `(number) => number` vs
+        `(number, number) => number` style arity mismatches on
+        function shapes).
+      - `is_reliable_mismatch_type` admits `keyof <Named>` and
+        `typeof <Named>` when the inner identifier starts with
+        uppercase (rules out `keyof any` / `keyof unknown`, which
+        widen to all property-key primitives).
+
+    +6 recall (345 → 351), 0 new FP.
 
   T20 -- corpus expansion + index-sig TS2564 fix.
 
