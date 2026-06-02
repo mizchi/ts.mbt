@@ -2244,9 +2244,29 @@ fn is_permissively_suppressed(sub_path : String, message : String) -> Bool {
       message.contains("does not exist on target type") ||
       message.contains("is required by")
     ) {
+    // Carve out a narrow exception: when the receiver renders as a
+    // bare primitive type (`number`, `string`, `boolean`, `bigint`),
+    // missing-property is a reliable signal — prototype dispatch
+    // covers the legitimate uses (`(1).toString()`, `"x".charAt(0)`)
+    // via `prim["method"]` lookup, so a remaining miss is a real bug.
+    if message.contains("does not exist on `number`") ||
+      message.contains("does not exist on `string`") ||
+      message.contains("does not exist on `boolean`") ||
+      message.contains("does not exist on `bigint`") {
+      return false
+    }
     return true
   }
   if message.has_prefix("method `") && message.contains("does not exist on") {
+    // Same carve-out as the property branch: bare-primitive receiver
+    // produces a reliable missing-method signal because prototype
+    // dispatch covers the genuine uses already.
+    if message.contains("does not exist on `number`") ||
+      message.contains("does not exist on `string`") ||
+      message.contains("does not exist on `boolean`") ||
+      message.contains("does not exist on `bigint`") {
+      return false
+    }
     return true
   }
   if message.contains("argument(s), got ") {
