@@ -8486,6 +8486,11 @@ fn check_module_function_bodies_layered(
     ) {
     all.push(issue)
   }
+  if strict_root.use_define_for_class_fields {
+    for issue in check_class_property_init_order(module_) {
+      all.push(issue)
+    }
+  }
   // Recurse into namespace bodies. Each level threads its own ancestor
   // chain so a nested namespace can reference parent-scope types by their
   // bare name (TypeScript scoping). Synthetic `<global>` blocks
@@ -8597,6 +8602,223 @@ fn check_native_class_property_initializers(
     }
   }
   issues
+}
+
+///|
+/// TS2728 ("Property 'X' is used before its initialization"). Instance
+/// field initializers run in declaration order; referencing `this.Y`
+/// from `X`'s initializer before `Y` itself has been initialized is a
+/// real error because the runtime read sees `undefined` regardless of
+/// `Y`'s declared type.
+///
+/// We rely on `decl.instance_field_inits` (parser-populated in source
+/// order) and walk each init expression for `this.<name>` references.
+/// A reference is flagged when the referenced name is also an init in
+/// the list at a later index — references to methods, getters/setters,
+/// constructor params, or fields without initializers are not flagged.
+fn check_class_property_init_order(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for decl in module_.classes {
+    if decl.is_declare {
+      continue
+    }
+    if decl.instance_field_inits.length() == 0 {
+      continue
+    }
+    // Set of non-static field names declared on the class. We use this
+    // to distinguish a reference to a class field (potential TS2729
+    // candidate) from a reference to a method, accessor, or external
+    // member. Methods are recorded via `decl.methods`; bare property
+    // entries with `is_accessor`/`get`/`set` are recorded by upserting
+    // through `properties` but synthesized methods (which include
+    // getters/setters) are listed in `decl.methods` and we exclude
+    // their names from the field set so `this.m1()` -> a method call
+    // isn't flagged.
+    let field_names : Map[String, Unit] = {}
+    for prop in decl.properties {
+      if !prop.is_static && !prop.is_accessor {
+        field_names[prop.name] = ()
+      }
+    }
+    // Constructor parameter properties (`constructor(public foo: T)`)
+    // declare `this.foo` slots that are written *during* the constructor
+    // body — i.e. after every instance-field initializer has already
+    // run. Treat their names as fields so a field-init that reads
+    // `this.foo` before the constructor runs is reported.
+    match decl.constructor_params {
+      Some(params) =>
+        for entry in params {
+          field_names[entry.0] = ()
+        }
+      None => ()
+    }
+    for m in decl.methods {
+      // Methods + accessors live in `properties` AND `methods`. The
+      // method's presence overrides the field interpretation -- the
+      // slot's value is a stable function reference once the class is
+      // defined, so reading `this.m` from a field init is fine.
+      if !m.is_static {
+        let _ = field_names.remove(m.name)
+      }
+    }
+    // Walk inits in source order. The set of *already initialized*
+    // names grows as we go; a reference to `this.X` where X is a known
+    // field but not yet in `inited` is the TS2729 signal.
+    let inited : Map[String, Unit] = {}
+    for entry in decl.instance_field_inits {
+      let (name, init_expr) = entry
+      collect_this_refs_for_uninit_field(
+        init_expr,
+        field_names,
+        inited,
+        decl.name,
+        issues,
+      )
+      inited[name] = ()
+    }
+  }
+  issues
+}
+
+///|
+/// Walk `expr` and emit a TS2729 issue for every `this.<name>` access
+/// where `<name>` is a non-static, non-method field declared on the
+/// class but not yet present in `inited`. Function-bodies (arrow /
+/// FuncExpr) and getter/setter callbacks are intentionally NOT
+/// traversed because their bodies execute lazily, after class setup.
+fn collect_this_refs_for_uninit_field(
+  expr : @ast.TsExpr,
+  field_names : Map[String, Unit],
+  inited : Map[String, Unit],
+  class_name : String,
+  issues : Array[ExprIssue],
+) -> Unit {
+  match expr {
+    PropAccess(Var("this"), name) =>
+      if field_names.contains(name) && !inited.contains(name) {
+        issues.push({
+          path: "class \{class_name}",
+          message: "property `\{name}` is used before its initialization",
+        })
+      }
+    PropAccess(inner, _) =>
+      collect_this_refs_for_uninit_field(
+        inner, field_names, inited, class_name, issues,
+      )
+    IndexAccess(recv, idx) => {
+      collect_this_refs_for_uninit_field(
+        recv, field_names, inited, class_name, issues,
+      )
+      collect_this_refs_for_uninit_field(
+        idx, field_names, inited, class_name, issues,
+      )
+    }
+    Call(_, args) =>
+      for a in args {
+        collect_this_refs_for_uninit_field(
+          a, field_names, inited, class_name, issues,
+        )
+      }
+    CallExpr(callee, args) => {
+      collect_this_refs_for_uninit_field(
+        callee, field_names, inited, class_name, issues,
+      )
+      for a in args {
+        collect_this_refs_for_uninit_field(
+          a, field_names, inited, class_name, issues,
+        )
+      }
+    }
+    MethodCall(recv, name, args) => {
+      if recv is Var("this") &&
+        field_names.contains(name) &&
+        !inited.contains(name) {
+        // `this.m3()` where m3 is a field-typed function (`m3 =
+        // function(){}`) that hasn't been initialized yet.
+        issues.push({
+          path: "class \{class_name}",
+          message: "property `\{name}` is used before its initialization",
+        })
+      } else if !(recv is Var("this")) {
+        collect_this_refs_for_uninit_field(
+          recv, field_names, inited, class_name, issues,
+        )
+      }
+      for a in args {
+        collect_this_refs_for_uninit_field(
+          a, field_names, inited, class_name, issues,
+        )
+      }
+    }
+    New(_, args) =>
+      for a in args {
+        collect_this_refs_for_uninit_field(
+          a, field_names, inited, class_name, issues,
+        )
+      }
+    NewExpr(callee, args) => {
+      collect_this_refs_for_uninit_field(
+        callee, field_names, inited, class_name, issues,
+      )
+      for a in args {
+        collect_this_refs_for_uninit_field(
+          a, field_names, inited, class_name, issues,
+        )
+      }
+    }
+    BinOp(_, l, r) => {
+      collect_this_refs_for_uninit_field(
+        l, field_names, inited, class_name, issues,
+      )
+      collect_this_refs_for_uninit_field(
+        r, field_names, inited, class_name, issues,
+      )
+    }
+    UnaryOp(_, inner) =>
+      collect_this_refs_for_uninit_field(
+        inner, field_names, inited, class_name, issues,
+      )
+    Cond(c, t, e) => {
+      collect_this_refs_for_uninit_field(
+        c, field_names, inited, class_name, issues,
+      )
+      collect_this_refs_for_uninit_field(
+        t, field_names, inited, class_name, issues,
+      )
+      collect_this_refs_for_uninit_field(
+        e, field_names, inited, class_name, issues,
+      )
+    }
+    Seq(l, r) => {
+      collect_this_refs_for_uninit_field(
+        l, field_names, inited, class_name, issues,
+      )
+      collect_this_refs_for_uninit_field(
+        r, field_names, inited, class_name, issues,
+      )
+    }
+    ArrayLit(items) =>
+      for it in items {
+        collect_this_refs_for_uninit_field(
+          it, field_names, inited, class_name, issues,
+        )
+      }
+    ObjectLit(entries) =>
+      for entry in entries {
+        collect_this_refs_for_uninit_field(
+          entry.1,
+          field_names,
+          inited,
+          class_name,
+          issues,
+        )
+      }
+    Spread(inner) =>
+      collect_this_refs_for_uninit_field(
+        inner, field_names, inited, class_name, issues,
+      )
+    _ => ()
+  }
 }
 
 ///|

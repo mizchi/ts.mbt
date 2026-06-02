@@ -2383,6 +2383,7 @@ fn Parser::parse_declare_class(
     base_names,
     base_expr: None,
     static_field_inits: [],
+    instance_field_inits: [],
     constructor_params,
     properties,
     methods,

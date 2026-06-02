@@ -50,6 +50,7 @@ fn build_runtime_class_decl(
 ) -> @ast.TsClassDecl {
   let properties : Array[@ast.TsClassPropertyDecl] = []
   let methods : Array[@ast.TsClassMethodDecl] = []
+  let instance_field_inits : Array[(String, @ast.TsExpr)] = []
   let constructor_params = match ctor_opt {
     Some(ctor) => {
       let params : Array[(String, @ast.TsType)] = []
@@ -80,6 +81,12 @@ fn build_runtime_class_decl(
             has_initializer: init is Some(_),
             has_definite_assertion,
           })
+          if !is_static {
+            match init {
+              Some(expr) => instance_field_inits.push((field_name, expr))
+              None => ()
+            }
+          }
         }
       Method(is_static, Name(method_name), accessor_kind, func) =>
         if is_public_runtime_class_member_name(method_name) {
@@ -199,6 +206,7 @@ fn build_runtime_class_decl(
     base_names: [],
     base_expr: None,
     static_field_inits: [],
+    instance_field_inits,
     constructor_params,
     properties,
     methods,
@@ -1231,16 +1239,22 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       // which previously broke scope: the IIFE's `this` isn't the
       // class, and the Block trapped the class declaration itself.
       let static_field_inits : Array[(String, @ast.TsExpr)] = []
+      let instance_field_inits : Array[(String, @ast.TsExpr)] = []
       for element in elements {
         match element {
           Field(true, Name(static_name), _, Some(init), _, _) =>
             static_field_inits.push((static_name, init))
+          Field(false, Name(field_name), _, Some(init), _, _) =>
+            if is_public_runtime_class_member_name(field_name) {
+              instance_field_inits.push((field_name, init))
+            }
           _ => ()
         }
       }
       let decorated_with_statics : @ast.TsClassDecl = {
         ..decorated,
         static_field_inits,
+        instance_field_inits,
       }
       return NativeClassExpr(decorated_with_statics, ctor_func)
     }
@@ -1275,6 +1289,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     base_names: runtime_decl.base_names,
     base_expr: runtime_decl.base_expr,
     static_field_inits: runtime_decl.static_field_inits,
+    instance_field_inits: runtime_decl.instance_field_inits,
     constructor_params: runtime_decl.constructor_params,
     properties: runtime_decl.properties,
     methods: runtime_decl.methods,
@@ -1840,16 +1855,22 @@ fn Parser::parse_class_decl_with_abstract(
       // `Block` would trap the binding in block scope and break
       // forward references from sibling top-level code).
       let static_field_inits : Array[(String, @ast.TsExpr)] = []
+      let instance_field_inits : Array[(String, @ast.TsExpr)] = []
       for element in elements {
         match element {
           Field(true, Name(static_name), _, Some(init), _, _) =>
             static_field_inits.push((static_name, init))
+          Field(false, Name(field_name), _, Some(init), _, _) =>
+            if is_public_runtime_class_member_name(field_name) {
+              instance_field_inits.push((field_name, init))
+            }
           _ => ()
         }
       }
       let decorated_with_statics : @ast.TsClassDecl = {
         ..decorated,
         static_field_inits,
+        instance_field_inits,
       }
       // Re-publish the fully-built decl (with `base_names` / `base_expr` /
       // statics) so `take_last_runtime_class_decl` — used by the module

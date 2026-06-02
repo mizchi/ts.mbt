@@ -1277,6 +1277,40 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-02 (T14)   233/512 (46 %)        307/310 ( 3 FP)
 2026-06-02 (T15)   247/512 (48 %)        308/310 ( 2 FP)
 2026-06-02 (T16)   260/512 (51 %)        307/310 ( 3 FP)
+2026-06-02 (T17)   278/572 (49 %)        329/334 ( 5 FP)
+
+  T17 -- TS2729 ("Property is used before its initialization") +
+  corpus expansion. Closes Issue #60.
+
+    1. AST: add `instance_field_inits` to `TsClassDecl` carrying
+       `(name, init_expr)` pairs in source order. Parser populates
+       from `Field(false, Name(...), _, Some(init), …)` elements in
+       all three NativeClass paths plus the IIFE-class fallback.
+
+    2. AST: add `use_define_for_class_fields` to `TsModule`. Detected
+       from `// @useDefineForClassFields: true` directives or an
+       `@target: es2022`/`esnext`-only directive; older / unset
+       defaults to false (assignment-in-constructor semantics, where
+       TS2729 does not apply because field inits interleave with
+       constructor parameter-property assigns).
+
+    3. Checker: `check_class_property_init_order` walks each
+       `instance_field_inits` entry in source order, tracking an
+       `inited` set of names already initialized. A `this.X` /
+       `this.X()` reference where X is a non-static, non-method field
+       (or a constructor parameter property name) not yet in `inited`
+       emits the diagnostic. Arrow bodies / `FuncExpr` aren't walked
+       because they execute lazily.
+
+    4. Harness: add `classes/propertyMemberDeclarations` to the pinned
+       conformance dirs. Adds 84 files; net +12 from pre-existing
+       checks (TS2564, mismatch, etc.) and +6 from the new TS2729
+       check.
+
+    Total: corpus 822 → 906, recall 260 → 278 (+18), FP 3 → 5 (+2,
+    both pre-existing TS2564 patterns surfaced by the wider corpus —
+    none introduced by the TS2729 check, thanks to the
+    `use_define_for_class_fields` gate).
 
   T16 -- four permissive-filter relaxations targeting compound-shape
   TS2322 (Issue #65 path A). All gated by the rendered diagnostic

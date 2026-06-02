@@ -130,6 +130,7 @@ fn empty_ts_module() -> @ast.TsModule {
     enums: [],
     module_augmentations: [],
     strict_property_initialization: true,
+    use_define_for_class_fields: false,
     top_level_stmts: [],
   }
 }
@@ -3232,6 +3233,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
     strict_property_initialization: detect_strict_property_initialization(
       self.src,
     ),
+    use_define_for_class_fields: detect_use_define_for_class_fields(self.src),
   }
 }
 
@@ -3258,6 +3260,39 @@ fn detect_strict_property_initialization(src : String) -> Bool {
   }
   // No directive (or explicit opt-in) -> default true.
   true
+}
+
+///|
+/// Detect whether class field initializers should be treated as
+/// `[[DefineOwnProperty]]`-style runs (`useDefineForClassFields: true`).
+/// Triggers TS2729 ("Property used before initialization") emission.
+/// Fires on explicit `// @useDefineForClassFields: true` directives,
+/// otherwise falls back to the TS default for the target (es2022+ /
+/// esnext default to true).
+fn detect_use_define_for_class_fields(src : String) -> Bool {
+  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
+  let head = src[:head_len].to_owned()
+  if head.contains("@useDefineForClassFields: true") ||
+    head.contains("@useDefineForClassFields:true") {
+    return true
+  }
+  if head.contains("@useDefineForClassFields: false") ||
+    head.contains("@useDefineForClassFields:false") {
+    return false
+  }
+  // Default per target: es2022+ / esnext use define semantics; older
+  // targets emit assignment-style class fields. Only when the
+  // directive line lists ONLY a "define-on" target do we opt in --
+  // multi-target directives like `@target: es5, esnext` leave it off.
+  // Sources without an explicit target are treated as pre-es2022
+  // (the conformance default).
+  if head.contains("@target: esnext") ||
+    head.contains("@target:esnext") ||
+    head.contains("@target: es2022") ||
+    head.contains("@target:es2022") {
+    return true
+  }
+  false
 }
 
 ///|
