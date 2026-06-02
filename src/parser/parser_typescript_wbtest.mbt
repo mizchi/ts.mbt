@@ -1161,24 +1161,24 @@ async test "checker: accuracy against TypeScript conformance baselines" {
   // Regression gates calibrated against today's measurements. Tighten
   // as accuracy improves; loosen only with justification.
   //
-  // Recall floor: of the baseline-positive cases, we currently detect
-  // ~44 % (top-level assignment / call checks added 2026-06-01; the
-  // namespace-recursion layered-resolver work in T6 lifted this from
-  // ~42 % once nested namespace bodies were walked with parent-scope
-  // types visible). Set the floor at 40 % to flag a drop of >4 points.
-  if with_baseline > 0 && recall_hit * 100 < with_baseline * 40 {
+  // Recall floor: T8's flow-narrowing-gap + Union-vs-Union + opaque-receiver
+  // suppressions trade some recall for the FP cuts (we lose legitimate
+  // detection on cases that look like typeguard residue, downcasts
+  // through opaque receivers, etc.). Drop the floor from 40 % to 32 %
+  // to absorb that, while still catching a ~10-point drop from a real
+  // regression. Tighten back up as flow narrowing lands and we can be
+  // more surgical about suppression.
+  if with_baseline > 0 && recall_hit * 100 < with_baseline * 32 {
     fail(
-      "recall floor breached: \{recall_hit}/\{with_baseline} baseline-positive cases caught (< 40 %)",
+      "recall floor breached: \{recall_hit}/\{with_baseline} baseline-positive cases caught (< 32 %)",
     )
   }
-  // Precision floor: we currently false-positive on ~25 % of clean cases
-  // (non-strict null assignability + primitive bracket access + `never`
-  // target / `true | false` union / type-derived optional-arity silencing
-  // cleared the prior ~32 %). Set the cap at 28 % so a new false-positive
-  // class shows up as a test failure rather than silently widening the gap.
-  if without_baseline > 0 && precision_miss * 100 > without_baseline * 28 {
+  // Precision floor: T8 batch (~9 suppression rules across union /
+  // opaque / Applied / self-mismatch / Object{} target) targets a
+  // substantial reduction from the prior 25 % cap. Tighten to 15 %.
+  if without_baseline > 0 && precision_miss * 100 > without_baseline * 15 {
     fail(
-      "precision floor breached: \{precision_miss}/\{without_baseline} clean cases reported as failing (> 28 %)",
+      "precision floor breached: \{precision_miss}/\{without_baseline} clean cases reported as failing (> 15 %)",
     )
   }
 }
