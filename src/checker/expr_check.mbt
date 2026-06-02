@@ -2145,8 +2145,25 @@ fn record(ctx : CheckCtx, sub_path : String, message : String) -> Unit {
 /// never-return paths. These are the families dominated by gaps we
 /// don't model (flow narrowing, user-defined typeguards, generic
 /// inference, builtin optional-arg signatures).
+///
+/// Narrow exception: a mismatch where *both* sides parse as a
+/// "simple" type (primitive / literal / `T[]` / single Named) is
+/// reliable enough to keep -- those cases are picked up by the
+/// strict mode anyway and contribute recall without inflating FP.
 fn is_permissively_suppressed(message : String) -> Bool {
   if message.has_prefix("expected `") && message.contains("but got `") {
+    // Restore primitive-vs-primitive (and a few other reliable
+    // shapes) so the strict diagnostic isn't fully lost in
+    // permissive mode -- the common `var x: number = "hello"` style
+    // mistake is a clean signal we can keep.
+    match extract_mismatch_types(message) {
+      Some((exp, got)) =>
+        if is_reliable_mismatch_pair(exp, got) &&
+          !is_widening_direction_mismatch(exp, got) {
+          return false
+        }
+      None => ()
+    }
     return true
   }
   if message.has_prefix("property `") &&
@@ -2188,6 +2205,167 @@ fn is_permissively_suppressed(message : String) -> Bool {
     return true
   }
   false
+}
+
+///|
+/// Pull the rendered "expected" and "got" types out of a
+/// `expected `X` but got `Y`` mismatch message. Returns `None` when
+/// the message doesn't match that exact shape.
+fn extract_mismatch_types(message : String) -> (String, String)? {
+  // `expected `<exp>` but got `<got>`
+  let exp_start = match message.find("expected `") {
+    Some(i) => i + "expected `".length()
+    None => return None
+  }
+  let rest_after_exp_start = message[exp_start:].to_owned()
+  let exp_end_rel = match rest_after_exp_start.find("` but got `") {
+    Some(i) => i
+    None => return None
+  }
+  let exp = rest_after_exp_start[:exp_end_rel].to_owned()
+  let got_start_in_rest = exp_end_rel + "` but got `".length()
+  let after_got_start = rest_after_exp_start[got_start_in_rest:].to_owned()
+  let got_end_rel = match after_got_start.find("`") {
+    Some(i) => i
+    None => return None
+  }
+  let got = after_got_start[:got_end_rel].to_owned()
+  Some((exp, got))
+}
+
+///|
+/// True when both rendered type strings are "reliable" -- specifically
+/// the primitive / literal / single-named shapes where our checker's
+/// strict mismatch decision is not muddied by generics, flow
+/// narrowing, or anonymous-shape flattening. Used by the permissive
+/// filter to keep `var x: number = "hello"`-style mismatches.
+fn is_reliable_mismatch_pair(exp : String, got : String) -> Bool {
+  is_reliable_mismatch_type(exp) && is_reliable_mismatch_type(got)
+}
+
+///|
+/// A mismatch where the source is the widened primitive of the
+/// target's literal type -- e.g. `expected "ABC" (string) but got
+/// string`, `expected 123 but got number`, `expected true but got
+/// boolean`. TS accepts these (the literal initializer collapses to
+/// the wider type at the use site without narrowing), so they show
+/// up as FPs in our checker. The reverse direction (`expected
+/// string but got "ABC"`) is *not* widening -- it's the kind of
+/// mismatch we *do* want to catch.
+fn is_widening_direction_mismatch(exp : String, got : String) -> Bool {
+  // String literal "X" -> string
+  if got == "string" && exp.has_prefix("\"") && exp.has_suffix("\" (string)") {
+    return true
+  }
+  // Numeric literal 123 -> number
+  if got == "number" && is_numeric_literal_display(exp) {
+    return true
+  }
+  // Boolean literal true/false -> boolean
+  if got == "boolean" && (exp == "true" || exp == "false") {
+    return true
+  }
+  // BigInt literal 5n -> bigint
+  if got == "bigint" &&
+    exp.has_suffix("n") &&
+    exp.length() > 1 &&
+    is_numeric_literal_display(exp[:exp.length() - 1].to_owned()) {
+    return true
+  }
+  // void target accepts any source: a callback like `(x) => x.foo()`
+  // returning `boolean` passed to `forEach` (`(v) => void`) is fine
+  // because the return value is discarded at the call site. TS
+  // accepts these; we treat the mismatch as widening-direction.
+  if exp == "void" {
+    return true
+  }
+  false
+}
+
+///|
+fn is_reliable_mismatch_type(s : String) -> Bool {
+  // Compound forms (unions / intersections / generics / arrays /
+  // tuples / function types) are exactly the cases where flow
+  // narrowing or generic-substitution gaps produce FPs. Bail before
+  // the simple-shape checks below.
+  if s.contains("|") ||
+    s.contains("&") ||
+    s.contains("<") ||
+    s.contains("[") ||
+    s.contains("{") ||
+    s.contains(",") {
+    return false
+  }
+  // Bare primitives / literals
+  match s {
+    "number"
+    | "int"
+    | "string"
+    | "boolean"
+    | "void"
+    | "null"
+    | "undefined"
+    | "bigint"
+    | "symbol"
+    | "any"
+    | "never"
+    | "true"
+    | "false"
+    | "object" => return true
+    _ => ()
+  }
+  // String literal types: `"foo" (string)` exactly (no embedded
+  // newlines, no compound suffix). The strict `"X" (string)` match
+  // -- no trailing characters -- keeps multi-line / interpolated
+  // template-literal residue out.
+  if s.has_prefix("\"") && s.has_suffix("\" (string)") {
+    return true
+  }
+  // Numeric literal types: a bare digit string (possibly negative,
+  // possibly with a decimal point). type_display emits these raw.
+  if is_numeric_literal_display(s) {
+    return true
+  }
+  // BigInt literal: digits with a trailing `n`.
+  if s.has_suffix("n") && s.length() > 1 {
+    let body = s[:s.length() - 1].to_owned()
+    if is_numeric_literal_display(body) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn is_numeric_literal_display(s : String) -> Bool {
+  if s.length() == 0 {
+    return false
+  }
+  let bytes = s.to_array()
+  let mut i = 0
+  if bytes[0] == '-' {
+    i = 1
+    if bytes.length() == 1 {
+      return false
+    }
+  }
+  let mut seen_digit = false
+  let mut seen_dot = false
+  while i < bytes.length() {
+    let c = bytes[i]
+    if c == '.' {
+      if seen_dot {
+        return false
+      }
+      seen_dot = true
+    } else if c >= '0' && c <= '9' {
+      seen_digit = true
+    } else {
+      return false
+    }
+    i = i + 1
+  }
+  seen_digit
 }
 
 ///|
