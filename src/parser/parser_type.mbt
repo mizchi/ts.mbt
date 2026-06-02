@@ -422,6 +422,162 @@ fn Parser::try_parse_simple_object_type(self : Parser) -> @ast.TsType? {
 }
 
 ///|
+/// Parse an object type literal that may include method signatures
+/// (`m(x): T`), call signatures (`(x): T`), construct signatures
+/// (`new (x): T`), index signatures (`[k: K]: V`), and ordinary
+/// properties, producing an `Object`. Index signatures are kept (keyed
+/// by the key type, with an `Any` value) so the "any key" meaning
+/// survives; call / construct signatures use the `<call>` / `<new>`
+/// sentinel keys the rest of the toolchain already uses. Returns `None`
+/// (and restores the cursor) on any shape this parser doesn't
+/// recognise, so the caller can fall back to the legacy skip-to-`Any`
+/// path with no behavioural regression.
+fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
+  if !self.check(LBrace) {
+    return None
+  }
+  let saved_pos = self.pos
+  let fields : Array[(@ast.TsType, @ast.TsType)] = []
+  try {
+    let _ = self.expect(LBrace)
+    while !self.check(Eof) && !self.check(RBrace) {
+      // Skip a leading `readonly` modifier (only meaningful for emit).
+      if self.can_consume_interface_readonly_modifier() {
+        let _ = self.advance()
+      }
+      let field_name : String = match self.peek().kind {
+        LParen => "<call>"
+        Lt => {
+          self.skip_type_params()
+          "<call>"
+        }
+        New => {
+          let _ = self.advance()
+          "<new>"
+        }
+        LBracket => {
+          // Index signature `[k: K]: V`. The checker / mangle passes
+          // encode these inside `Object` as a field keyed by the *key
+          // type itself* (`String_` / `Number` / `Symbol`, recognised by
+          // `is_index_signature_key`), so preserve it that way rather
+          // than dropping it (which would erase the "any key" meaning
+          // mangle-safety relies on). Anything that isn't the canonical
+          // `[ident: Type]: Type` shape (computed keys, etc.) falls back.
+          let _ = self.advance()
+          let is_index_sig = match self.peek().kind {
+            Ident(_) => self.peek_at(1).kind == Colon
+            _ => false
+          }
+          if !is_index_sig {
+            self.pos = saved_pos
+            return None
+          }
+          let _ = self.advance() // index name
+          let _ = self.expect(Colon)
+          let key_type = self.parse_type()
+          let _ = self.expect(RBracket)
+          let _ = self.match_(Question)
+          // Consume the value type to advance the cursor, but record the
+          // signature with an `Any` value. Keeping the index signature
+          // (key typed `String_` / `Number`) preserves the "any key"
+          // meaning the mangle-safety and TS2454 passes need; widening
+          // the value to `Any` keeps us from driving value-assignability
+          // checks off an anonymous index signature, where our checker's
+          // object-literal getter modelling (`get x()` rendered as
+          // `() => T`) would otherwise produce spurious mismatches.
+          if self.check(Colon) {
+            let _ = self.advance()
+            let _ = self.parse_type()
+          }
+          fields.push((key_type, @ast.TsType::Any))
+          let _ = self.match_(Semicolon) || self.match_(Comma)
+          continue
+        }
+        Ident(n) => {
+          let _ = self.advance()
+          n
+        }
+        Str(s) => {
+          let _ = self.advance()
+          s
+        }
+        Int(n) => {
+          let _ = self.advance()
+          n.to_string()
+        }
+        Number(d) => {
+          let _ = self.advance()
+          d.to_string()
+        }
+        // Any other leading token (keyword-named members, etc.) is left
+        // to the conservative fallback rather than risking a misparse.
+        _ => {
+          self.pos = saved_pos
+          return None
+        }
+      }
+      // Generic method type parameters `<T>` — recorded nowhere on an
+      // anonymous object, so just skip them.
+      let _ = self.parse_type_param_names_and_bounds()
+      let is_optional = self.match_(Question)
+      if self.check(LParen) {
+        // Method / call / construct signature.
+        let _ = self.advance()
+        let method_params = self.parse_params()
+        let _ = self.expect(RParen)
+        let return_type = if self.check(Colon) {
+          let _ = self.advance()
+          self.parse_type()
+        } else {
+          @ast.TsType::Void
+        }
+        let param_types : Array[@ast.TsType] = []
+        for param in method_params {
+          param_types.push(param.type_)
+        }
+        let field_type = @ast.TsType::Func(param_types, return_type)
+        fields.push(
+          (
+            Literal(field_name),
+            if is_optional {
+              wrap_optional_ts_type(field_type)
+            } else {
+              field_type
+            },
+          ),
+        )
+      } else if self.check(Colon) {
+        // Ordinary property.
+        let _ = self.advance()
+        let field_type = self.parse_type()
+        fields.push(
+          (
+            Literal(field_name),
+            if is_optional {
+              wrap_optional_ts_type(field_type)
+            } else {
+              field_type
+            },
+          ),
+        )
+      } else {
+        // No `:` and no `(` — not a member shape we handle; fall back.
+        self.pos = saved_pos
+        return None
+      }
+      let _ = self.match_(Semicolon) || self.match_(Comma)
+    }
+    let _ = self.expect(RBrace)
+    Some(Object(fields))
+  } catch {
+    _ => {
+      self.pos = saved_pos
+      None
+    }
+  }
+}
+
+///|
 fn Parser::try_parse_simple_type_args(self : Parser) -> Array[@ast.TsType]? {
   if !self.check(Lt) {
     return None
@@ -739,10 +895,19 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
     LBrace =>
       match self.try_parse_simple_object_type() {
         Some(type_) => type_
-        None => {
-          self.skip_object_type()
-          Any
-        }
+        None =>
+          // Fuller path: object type literals that carry method / call /
+          // construct / index signatures (`{ m(x): T; (x): U }`), which
+          // the simple parser can't handle. Falls back to the historical
+          // skip-to-`Any` on anything unexpected so behaviour is only
+          // ever widened, never regressed.
+          match self.try_parse_object_type_with_members() {
+            Some(type_) => type_
+            None => {
+              self.skip_object_type()
+              Any
+            }
+          }
       }
     // Tuple type: [T, U]
     LBracket => self.parse_tuple_type()
