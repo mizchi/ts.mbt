@@ -3488,6 +3488,18 @@ fn check_expr_against(
   if type_contains_unresolved_named(inferred_u, ctx.resolver) {
     return
   }
+  // Generic `Applied(...)` shapes (`Generator<any, any>`, `Maybe<any>[]`,
+  // `Promise<T>`) on either side carry inference we don't fully track.
+  // Comparing them nominally produces false mismatches when the user's
+  // generic substitution would have unified them. Stay silent when
+  // either side is a generic instantiation -- the cost is dropping some
+  // genuine generic-mismatch diagnostics, but those are the same kind
+  // of `expected Promise<X> but got Promise<Y>` cases users rarely
+  // benefit from in a structurally-typed nominal-rendering checker.
+  match (inferred_u, expected_u) {
+    (Applied(_, _), _) | (_, Applied(_, _)) => return
+    _ => ()
+  }
   if !is_assignable_to(inferred_u, expected_u) {
     // Class / interface references are nominal in `is_assignable_to`
     // (Named(A) == Named(B) iff A == B), but TypeScript types are
@@ -3522,7 +3534,17 @@ fn check_expr_against(
     // precise `42`) so the message reads naturally; the precise literal was
     // only needed for the assignability decision above.
     let shown = widen_literal(inferred_u)
-    let detail = "expected `\{type_display(expected)}` but got `\{type_display(shown)}`"
+    let exp_str = type_display(expected)
+    let got_str = type_display(shown)
+    // Self-mismatch suppression: when the rendered forms are identical
+    // (anonymous-shape fallback `type` / `function`, or two distinct
+    // generic instantiations that flatten to the same string), the
+    // diagnostic would say "expected X but got X" with no actionable
+    // information. Stay silent.
+    if exp_str == got_str {
+      return
+    }
+    let detail = "expected `\{exp_str}` but got `\{got_str}`"
     record(ctx, sub_path, detail)
   }
 }
