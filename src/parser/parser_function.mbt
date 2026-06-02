@@ -1078,6 +1078,7 @@ pub fn Parser::parse_interface(
   let fields : Array[(String, @ast.TsType)] = []
   let readonly_fields : Array[String] = []
   let index_signatures : Array[(@ast.TsType, @ast.TsType)] = []
+  let method_type_params : Array[(String, Array[String])] = []
   while !self.check(RBrace) && !self.check(Eof) {
     // Skip readonly modifier
     let mut is_readonly_field = false
@@ -1353,8 +1354,11 @@ pub fn Parser::parse_interface(
       k =>
         raise ParseError("Expected field name at \{self.peek().pos}, got \{k}")
     }
-    // Skip method type parameters <T>
-    self.skip_type_params()
+    // Capture method-level type parameters `<T>` so the checker can keep
+    // a generic method's shadowing type parameter distinct from the
+    // interface's own. (Only meaningful for method signatures; harmless
+    // on properties, which never carry `<...>`.)
+    let (m_type_params, _) = self.parse_type_param_names_and_bounds()
     // Check for optional marker ?
     let is_optional = self.match_(Question)
     // Method signature: name(...): T or name<T>(...): U
@@ -1385,6 +1389,9 @@ pub fn Parser::parse_interface(
             },
           ),
         )
+        if m_type_params.length() > 0 {
+          method_type_params.push((field_name, m_type_params))
+        }
       }
     } else if self.check(Colon) {
       // Property: name: T
@@ -1436,6 +1443,7 @@ pub fn Parser::parse_interface(
     fields,
     readonly_fields,
     index_signatures,
+    method_type_params,
   }
 }
 
@@ -1510,6 +1518,7 @@ fn type_alias_object_fields_to_interface(
         fields: iface_fields,
         readonly_fields: [],
         index_signatures: [],
+        method_type_params: [],
       })
     }
     _ => None

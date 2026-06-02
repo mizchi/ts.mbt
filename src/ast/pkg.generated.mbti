@@ -67,6 +67,7 @@ pub impl Show for TsBindingElem
 
 pub(all) struct TsBlock {
   stmts : Array[TsStmt]
+  stmt_positions : Array[Int]
 } derive(@debug.Debug)
 pub impl Show for TsBlock
 
@@ -74,6 +75,9 @@ pub(all) struct TsClassDecl {
   name : String
   type_params : Array[String]
   base_names : Array[String]
+  base_expr : TsExpr?
+  static_field_inits : Array[(String, TsExpr)]
+  instance_field_inits : Array[(String, TsExpr)]
   constructor_params : Array[(String, TsType)]?
   properties : Array[TsClassPropertyDecl]
   methods : Array[TsClassMethodDecl]
@@ -90,9 +94,15 @@ pub(all) struct TsClassMethodDecl {
   type_params : Array[String]
   type_param_bounds : Array[(String, TsType)]
   params : Array[(String, TsType)]
+  param_defaults : Array[TsExpr?]
+  param_is_rest : Array[Bool]
   return_type : TsType
   is_static : Bool
   body : TsBlock?
+  accessor : String
+  key_expr : TsExpr?
+  is_async : Bool
+  is_generator : Bool
 } derive(@debug.Debug)
 pub impl Show for TsClassMethodDecl
 
@@ -186,6 +196,8 @@ pub(all) enum TsExpr {
   Seq(TsExpr, TsExpr)
   ArrowFunc(Array[TsParam], TsType, TsArrowBody, Bool)
   FuncExpr(TsFunc)
+  PureCall(TsExpr)
+  NativeClassExpr(TsClassDecl, TsFunc?)
   Yield(TsExpr?)
   YieldStar(TsExpr)
   Await(TsExpr)
@@ -250,6 +262,7 @@ pub(all) struct TsInterface {
   fields : Array[(String, TsType)]
   readonly_fields : Array[String]
   index_signatures : Array[(TsType, TsType)]
+  method_type_params : Array[(String, Array[String])]
 } derive(@debug.Debug)
 pub impl Show for TsInterface
 
@@ -263,7 +276,9 @@ pub(all) struct TsModule {
   namespaces : Array[TsNamespaceDecl]
   enums : Array[TsEnumDecl]
   module_augmentations : Array[(String, TsModule)]
+  top_level_stmts : Array[TsStmt]
   strict_property_initialization : Bool
+  use_define_for_class_fields : Bool
 } derive(@debug.Debug)
 pub impl Show for TsModule
 
@@ -273,6 +288,10 @@ pub(all) struct TsModuleBlock {
   exports : Array[TsExportSpec]
   reexports : Array[TsReExportSpec]
   enums : Array[TsEnumDecl]
+  internal_names : Map[String, Bool]
+  deprecations : Map[String, String]
+  pure_declarations : Map[String, Bool]
+  type_aliases : Array[TsTypeAlias]
 } derive(@debug.Debug)
 pub impl Show for TsModuleBlock
 
@@ -343,6 +362,7 @@ pub(all) enum TsStmt {
   Debugger
   Label(String, TsStmt)
   Block(TsBlock)
+  NativeClassStmt(TsClassDecl, TsFunc?)
   Break(String?)
   Continue(String?)
 } derive(@debug.Debug)
@@ -364,6 +384,7 @@ pub(all) enum TsType {
   Symbol
   UniqueSymbol(String)
   Any
+  Unknown
   Never
   Null
   Undefined

@@ -2700,6 +2700,7 @@ fn props_with_children_named_interface_spec(
           fields,
         ),
         index_signatures: origin.iface.index_signatures,
+        method_type_params: [],
       })
     }
     None => None
@@ -2749,6 +2750,7 @@ fn props_with_children_interface_spec(
         fields,
         readonly_fields: [],
         index_signatures: [],
+        method_type_params: [],
       })
     }
     _ =>
@@ -2863,6 +2865,7 @@ fn component_props_with_ref_interface_spec(
               fields,
             ),
             index_signatures: origin.iface.index_signatures,
+            method_type_params: [],
           })
         }
         None => None
@@ -3027,6 +3030,7 @@ fn utility_mapped_interface_spec(
           readonly_fields_for_fields(origin.iface.readonly_fields, fields)
         },
         index_signatures: origin.iface.index_signatures,
+        method_type_params: [],
       })
     }
     None => None
@@ -3089,6 +3093,7 @@ fn utility_projection_interface_spec(
           fields,
         ),
         index_signatures: [],
+        method_type_params: [],
       })
     }
     None => None
@@ -3891,6 +3896,7 @@ fn type_alias_record_to_interface_fields(
     fields,
     readonly_fields: [],
     index_signatures: [],
+    method_type_params: [],
   })
 }
 
@@ -3980,6 +3986,7 @@ fn project_interface_fields(
     fields,
     readonly_fields: readonly_fields_for_fields(iface.readonly_fields, fields),
     index_signatures: [],
+    method_type_params: [],
   })
 }
 
@@ -4009,6 +4016,7 @@ fn map_interface_fields(
       readonly_fields_for_fields(iface.readonly_fields, fields)
     },
     index_signatures: iface.index_signatures,
+    method_type_params: [],
   })
 }
 
@@ -4072,6 +4080,7 @@ fn type_alias_object_to_interface(
         fields: iface_fields,
         readonly_fields: [],
         index_signatures: [],
+        method_type_params: [],
       })
     }
     _ => None
@@ -5393,6 +5402,7 @@ fn tuple_result_interface_spec(
           fields,
           readonly_fields: [],
           index_signatures: [],
+          method_type_params: [],
         },
       })
     }
@@ -5439,6 +5449,7 @@ fn inline_object_result_interface_spec(
           fields: iface_fields,
           readonly_fields: [],
           index_signatures: [],
+          method_type_params: [],
         },
       })
     None => None
@@ -5794,6 +5805,7 @@ fn normalize_specialized_node_interfaces(
       ],
       readonly_fields: [],
       index_signatures: [],
+      method_type_params: [],
     })
   }
   if needs_crypto_helpers {
@@ -5806,6 +5818,7 @@ fn normalize_specialized_node_interfaces(
         fields: [("plaintextLength", @ast.TsType::Number)],
         readonly_fields: [],
         index_signatures: [],
+        method_type_params: [],
       })
     }
     if !exported_names.contains("GenerateKeyOptions") {
@@ -5817,6 +5830,7 @@ fn normalize_specialized_node_interfaces(
         fields: [("length", @ast.TsType::Number)],
         readonly_fields: [],
         index_signatures: [],
+        method_type_params: [],
       })
     }
     if !exported_names.contains("DiffieHellmanOptions") {
@@ -5831,6 +5845,7 @@ fn normalize_specialized_node_interfaces(
         ],
         readonly_fields: [],
         index_signatures: [],
+        method_type_params: [],
       })
     }
   }
@@ -5847,6 +5862,7 @@ fn normalize_specialized_node_interfaces(
       ],
       readonly_fields: [],
       index_signatures: [],
+      method_type_params: [],
     })
   }
   interfaces
@@ -5966,6 +5982,7 @@ fn clone_resolved_interface_origin(
     fields,
     readonly_fields: readonly_fields_for_fields(readonly_fields, fields),
     index_signatures: origin.iface.index_signatures,
+    method_type_params: [],
   }
 }
 
@@ -6310,6 +6327,7 @@ fn clone_exported_interface(
     fields,
     readonly_fields: readonly_fields_for_fields(readonly_fields, fields),
     index_signatures: exported.iface.index_signatures,
+    method_type_params: [],
   }
 }
 

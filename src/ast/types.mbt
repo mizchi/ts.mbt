@@ -511,6 +511,13 @@ pub(all) struct TsInterface {
   // `op_get` / `op_set` accessors without conflating them with regular
   // named fields. Empty for interfaces with no index signature.
   index_signatures : Array[(TsType, TsType)]
+  // Method-level generic type parameters keyed by field name: a generic
+  // method `foo<T>(...)` records `("foo", ["T"])`. The checker consults
+  // this so the interface's own type-argument substitution does not
+  // capture a method's *shadowing* type parameter (`interface I<T> { m<T>
+  // (x: T): T }` — the `m`-level `T` is fresh, unrelated to `I`'s `T`).
+  // Empty for interfaces with no generic methods.
+  method_type_params : Array[(String, Array[String])]
 } derive(Debug)
 
 ///|
