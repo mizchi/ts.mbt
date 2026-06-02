@@ -63,7 +63,7 @@ async fn main {
     }
     module_count = module_count + module_.funcs.length()
     if !parse_only {
-      let issues = @checker.check_module_function_bodies(module_)
+      let issues = @checker.check_module_function_bodies_permissive(module_)
       issue_count = issue_count + issues.length()
       if verbose {
         for iss in issues {
