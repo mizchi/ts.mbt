@@ -3701,8 +3701,13 @@ fn infer_binop(
     // `a && b` — when `a` is truthy the result is `b`; otherwise the falsy
     // `a`. Conservative: union both sides.
     And => narrow_union(l, r)
-    // `a || b` — when `a` is truthy the result is `a`; otherwise `b`.
-    Or => narrow_union(l, r)
+    // `a || b` — when `a` is truthy the result is `a`; otherwise `b`. TS
+    // narrows the truthy branch by stripping always-falsy variants from
+    // `l` (null / undefined are the practically-relevant ones here, since
+    // we don't model literal-value falsiness for primitives like
+    // `0` / `""` / `false`). Matches the common `x || default` pattern
+    // where `x: T | undefined` and `default: T` produce `T`.
+    Or => narrow_union(non_nullable(l), r)
     // `a ?? b` — `b` is only evaluated when `a` is null/undefined, so the
     // result strips nullish from `a` and unions with `b`'s type.
     Coalesce => narrow_union(non_nullable(l), r)
@@ -8063,9 +8068,6 @@ fn check_function_body_with(
     return issues
   }
   let env = ExprEnv::new()
-  for p in func.params {
-    env.bind(p.name, p.type_)
-  }
   // Inside an async function body, `return x` returns the inner type — the
   // wrapping `Promise<T>` is what the *caller* sees. So we unwrap once for
   // the body-level return check.
@@ -8111,6 +8113,21 @@ fn check_function_body_with(
     permissive,
     unassigned: {},
     strict_property_init,
+  }
+  // Bind parameter names into the environment. Destructured params
+  // (`function f({ a, b }: T)` / `function f([a, b]: T[])`) carry a
+  // `TsBinding::Object` / `TsBinding::Array` and need pattern walking
+  // so the inner names point at the field/element types — not the
+  // whole parameter type.
+  for p in func.params {
+    match p.binding {
+      Some(@ast.TsBinding::Object(_)) | Some(@ast.TsBinding::Array(_)) =>
+        match p.binding {
+          Some(b) => bind_pattern(env, ctx, b, p.type_)
+          None => env.bind(p.name, p.type_)
+        }
+      _ => env.bind(p.name, p.type_)
+    }
   }
   // Default-parameter expression must be assignable to the parameter's
   // (possibly optional-widened) type.

@@ -6073,3 +6073,131 @@ test "expr_check: valid TS patterns are not false-positives" {
   }
   @test.assert_eq(fps, 0)
 }
+
+///|
+/// Minimal: destructuring param's array field, then index it.
+test "expr_check: minimal — destructure array field, index it" {
+  let src =
+    #|interface Edit { caption: string; }
+    #|interface Input { edits: Edit[]; index: number; }
+    #|function f({ edits, index }: Input): string {
+    #|  return edits[index].caption;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  if issues.length() != 0 {
+    println("MINIMAL A UNEXPECTED:")
+    for i in issues {
+      println("  \{i.path} -> \{i.message}")
+    }
+  }
+  @test.assert_eq(issues.length(), 0)
+}
+
+///|
+/// Add nested destructuring on result of index.
+test "expr_check: nested destructure on index result" {
+  let src =
+    #|interface Edit { caption: string; }
+    #|interface Input { edits: Edit[]; index: number; }
+    #|function f({ edits, index }: Input): string {
+    #|  const { caption } = edits[index];
+    #|  return caption;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  if issues.length() != 0 {
+    println("MINIMAL B UNEXPECTED:")
+    for i in issues {
+      println("  \{i.path} -> \{i.message}")
+    }
+  }
+  @test.assert_eq(issues.length(), 0)
+}
+
+///|
+/// Test with explicit parameter type (no destructuring at param) — does it still fail?
+test "expr_check: nested destructure on index result (no param destructure)" {
+  let src =
+    #|interface Edit { caption: string; }
+    #|interface Input { edits: Edit[]; index: number; }
+    #|function f(input: Input): string {
+    #|  const { caption } = input.edits[input.index];
+    #|  return caption;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  if issues.length() != 0 {
+    println("MINIMAL B2 UNEXPECTED:")
+    for i in issues {
+      println("  \{i.path} -> \{i.message}")
+    }
+  }
+  @test.assert_eq(issues.length(), 0)
+}
+
+///|
+/// Test with intermediate let binding.
+test "expr_check: nested destructure with let intermediate" {
+  let src =
+    #|interface Edit { caption: string; }
+    #|interface Input { edits: Edit[]; index: number; }
+    #|function f({ edits, index }: Input): string {
+    #|  const e = edits[index];
+    #|  const { caption } = e;
+    #|  return caption;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  if issues.length() != 0 {
+    println("MINIMAL B3 UNEXPECTED:")
+    for i in issues {
+      println("  \{i.path} -> \{i.message}")
+    }
+  }
+  @test.assert_eq(issues.length(), 0)
+}
+
+///|
+/// Regression: controlFlowElementAccessNoCrash1.ts. `edits` is bound via
+/// destructuring of an interface field typed `readonly TestTscEdit[]`.
+/// Indexing it should yield `TestTscEdit`, and a nested destructuring
+/// `{ caption }` from that should yield `caption: string` rather than
+/// `undefined`.
+test "expr_check: nested destructuring through array index from interface field" {
+  let src =
+    #|interface TestTscEdit {
+    #|  caption: string;
+    #|  commandLineArgs?: readonly string[];
+    #|}
+    #|interface TestTscCompile {
+    #|  subScenario: string;
+    #|  commandLineArgs: readonly string[];
+    #|}
+    #|interface VerifyTscEditDiscrepanciesInput {
+    #|  index: number;
+    #|  edits: readonly TestTscEdit[];
+    #|  commandLineArgs: TestTscCompile["commandLineArgs"];
+    #|}
+    #|function testTscCompile(input: TestTscCompile) {}
+    #|function verifyTscEditDiscrepancies({
+    #|  index,
+    #|  edits,
+    #|  commandLineArgs,
+    #|}: VerifyTscEditDiscrepanciesInput) {
+    #|  const { caption } = edits[index];
+    #|  testTscCompile({
+    #|    subScenario: caption,
+    #|    commandLineArgs: edits[index].commandLineArgs || commandLineArgs,
+    #|  });
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  if issues.length() != 0 {
+    println("UNEXPECTED ISSUES:")
+    for i in issues {
+      println("  \{i.path} -> \{i.message}")
+    }
+  }
+  @test.assert_eq(issues.length(), 0)
+}
