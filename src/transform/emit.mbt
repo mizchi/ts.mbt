@@ -472,7 +472,8 @@ fn emit_block(e : Emitter, block : @ast.TsBlock) -> Unit {
                   emit_binding(e, b)
                   let is_undef_init = match init {
                     @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _) => true
-                    @ast.TsExpr::Var("undefined") => true
+                    @ast.TsExpr::Var("undefined") | Var("__ts_no_init__") =>
+                      true
                     _ => false
                   }
                   if !is_undef_init {
@@ -582,7 +583,8 @@ fn emit_stmts_merged(e : Emitter, stmts : Array[@ast.TsStmt]) -> Unit {
                   emit_binding(e, b)
                   let is_undef_init = match init {
                     @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _) => true
-                    @ast.TsExpr::Var("undefined") => true
+                    @ast.TsExpr::Var("undefined") | Var("__ts_no_init__") =>
+                      true
                     _ => false
                   }
                   if !is_undef_init {
@@ -731,7 +733,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       emit_binding(e, binding)
       let is_undef_init = match init {
         UnaryOp(@ast.TsUnaryOp::Void, _) => true
-        Var("undefined") => true
+        Var("undefined") | Var("__ts_no_init__") => true
         _ => false
       }
       if !e.pretty && is_undef_init {
@@ -755,7 +757,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       // from the parser for uninitialized declarations.
       let is_undef_init = match init {
         UnaryOp(@ast.TsUnaryOp::Void, _) => true
-        Var("undefined") => true
+        Var("undefined") | Var("__ts_no_init__") => true
         _ => false
       }
       if !e.pretty && is_undef_init {
@@ -785,7 +787,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       // initializers can be dropped (plain `let x` is equivalent).
       let is_undef_init = match init {
         UnaryOp(@ast.TsUnaryOp::Void, _) => true
-        Var("undefined") => true
+        Var("undefined") | Var("__ts_no_init__") => true
         _ => false
       }
       if !e.pretty && is_undef_init {
@@ -1337,7 +1339,7 @@ fn try_emit_multi_decl_inline(e : Emitter, block : @ast.TsBlock) -> Bool {
         // above), so dropping a `= void 0` initializer is safe for all kinds.
         let is_undef_init = match init {
           UnaryOp(@ast.TsUnaryOp::Void, _) => true
-          Var("undefined") => true
+          Var("undefined") | Var("__ts_no_init__") => true
           _ => false
         }
         if !e.pretty && is_undef_init {

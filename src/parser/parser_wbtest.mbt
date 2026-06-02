@@ -216,7 +216,7 @@ test "parser: parse for stmt with uninitialized let" {
   let stmt = parser.parse_stmt()
   match stmt {
     For(
-      Some(Let(@ast.TsBinding::Ident("i"), Any, Var("undefined"))),
+      Some(Let(@ast.TsBinding::Ident("i"), Any, Var("__ts_no_init__"))),
       Some(BinOp(BinLt, Var("i"), IntLit(10))),
       _,
       body
@@ -239,7 +239,7 @@ test "parser: parse for stmt with multi-let" {
         _ => fail("unexpected init[0]: \{init_block.stmts[0]}")
       }
       match init_block.stmts[1] {
-        Let(@ast.TsBinding::Ident("j"), Any, Var("undefined")) => ()
+        Let(@ast.TsBinding::Ident("j"), Any, Var("__ts_no_init__")) => ()
         _ => fail("unexpected init[1]: \{init_block.stmts[1]}")
       }
     }
@@ -255,7 +255,7 @@ test "parser: parse let with multiple declarators" {
     Block(block) => {
       assert_eq(block.stmts.length(), 2)
       match block.stmts[0] {
-        Let(@ast.TsBinding::Ident("a"), Any, Var("undefined")) => ()
+        Let(@ast.TsBinding::Ident("a"), Any, Var("__ts_no_init__")) => ()
         _ => fail("unexpected decl[0]: \{block.stmts[0]}")
       }
       match block.stmts[1] {

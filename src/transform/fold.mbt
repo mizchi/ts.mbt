@@ -578,10 +578,16 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
           let out_len = out.length()
           let merged = if out_len > 0 {
             match out[out_len - 1] {
-              Let(@ast.TsBinding::Ident(ln), _, @ast.TsExpr::Var("undefined"))
-              | Var(@ast.TsBinding::Ident(ln), _, @ast.TsExpr::Var("undefined")) if ln ==
-                n &&
-                !expr_free_refs_name(rhs_f, n) => true
+              Let(
+                @ast.TsBinding::Ident(ln),
+                _,
+                @ast.TsExpr::Var("undefined" | "__ts_no_init__")
+              )
+              | Var(
+                @ast.TsBinding::Ident(ln),
+                _,
+                @ast.TsExpr::Var("undefined" | "__ts_no_init__")
+              ) if ln == n && !expr_free_refs_name(rhs_f, n) => true
               _ => false
             }
           } else {
@@ -653,11 +659,15 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
             let out_len = out.length()
             let merged = if out_len > 0 {
               match out[out_len - 1] {
-                Let(@ast.TsBinding::Ident(ln), _, @ast.TsExpr::Var("undefined"))
+                Let(
+                  @ast.TsBinding::Ident(ln),
+                  _,
+                  @ast.TsExpr::Var("undefined" | "__ts_no_init__")
+                )
                 | Var(
                   @ast.TsBinding::Ident(ln),
                   _,
-                  @ast.TsExpr::Var("undefined")
+                  @ast.TsExpr::Var("undefined" | "__ts_no_init__")
                 ) if ln == n && !expr_free_refs_name(v, n) => true
                 _ => false
               }
