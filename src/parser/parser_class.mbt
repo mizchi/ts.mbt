@@ -987,7 +987,7 @@ fn Parser::parse_class_body(
       } else {
         []
       }
-      let property_names : Array[String] = if is_constructor_method {
+      let param_props : Array[(String, Bool)] = if is_constructor_method {
         let last = self.param_property_scopes.length() - 1
         let collected = self.param_property_scopes[last]
         let _ = self.param_property_scopes.pop()
@@ -1026,15 +1026,19 @@ fn Parser::parse_class_body(
       // Inject `this.name = name` assigns for every parameter
       // property at the TOP of the constructor body — after `super(…)`
       // when there is one. Vanilla TS semantics.
-      let body = if property_names.length() > 0 {
+      let body = if param_props.length() > 0 {
         let new_stmts : Array[@ast.TsStmt] = []
         let mut super_inserted = false
         for s in body.stmts {
           new_stmts.push(s)
           if !super_inserted && self.is_super_call_stmt(s) {
-            for n in property_names {
+            for pp in param_props {
               new_stmts.push(
-                PropAssign(@ast.TsExpr::Var("this"), n, @ast.TsExpr::Var(n)),
+                PropAssign(
+                  @ast.TsExpr::Var("this"),
+                  pp.0,
+                  @ast.TsExpr::Var(pp.0),
+                ),
               )
             }
             super_inserted = true
@@ -1042,9 +1046,9 @@ fn Parser::parse_class_body(
         }
         if !super_inserted {
           let prepended : Array[@ast.TsStmt] = []
-          for n in property_names {
+          for pp in param_props {
             prepended.push(
-              PropAssign(@ast.TsExpr::Var("this"), n, @ast.TsExpr::Var(n)),
+              PropAssign(@ast.TsExpr::Var("this"), pp.0, @ast.TsExpr::Var(pp.0)),
             )
           }
           for s in new_stmts {
@@ -1069,6 +1073,26 @@ fn Parser::parse_class_body(
       }
       if accessor_kind is None && key is Name("constructor") && !is_static {
         ctor = Some(func)
+        // Materialize TS "parameter properties" (`constructor(readonly x:
+        // T)`) as real instance fields so the checker can see them — this
+        // makes `new C(...).x` resolve and lets the readonly assignment
+        // check (TS2540) fire. The field carries the `readonly` modifier
+        // captured during param parsing; `init` is `None` since the value
+        // flows in through the synthesized `this.x = x` assign (the class
+        // has a constructor, so TS2564 already skips it).
+        for pp in param_props {
+          let (pp_name, pp_readonly) = pp
+          let mut pp_type : @ast.TsType = Any
+          for p in func.params {
+            if p.name == pp_name {
+              pp_type = p.type_
+              break
+            }
+          }
+          elements.push(
+            Field(false, Name(pp_name), pp_type, None, pp_readonly, false),
+          )
+        }
       } else {
         elements.push(Method(is_static, key, accessor_kind, func))
       }
