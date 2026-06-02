@@ -3498,6 +3498,13 @@ fn check_expr_against(
   // benefit from in a structurally-typed nominal-rendering checker.
   match (inferred_u, expected_u) {
     (Applied(_, _), _) | (_, Applied(_, _)) => return
+    // Target `Object` / `{}` / empty Object literal accepts anything in
+    // TypeScript -- it's the universal supertype. Skip the mismatch.
+    (_, Named("Object")) | (_, Named("object")) => return
+    (_, Object(entries)) =>
+      if entries.length() == 0 {
+        return
+      }
     _ => ()
   }
   if !is_assignable_to(inferred_u, expected_u) {
