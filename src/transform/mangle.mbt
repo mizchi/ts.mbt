@@ -2842,6 +2842,7 @@ fn rename_class_decl_idents(
     static_field_inits: new_static_inits,
     methods: new_methods,
     decorators: new_decorators,
+    is_declare: false,
   }
 }
 

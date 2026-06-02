@@ -7,10 +7,12 @@ priv enum ClassKey {
 ///|
 priv enum ClassElement {
   Method(Bool, ClassKey, String?, @ast.TsFunc)
-  // `Field(is_static, key, type, init, is_readonly)` — the `readonly`
-  // modifier (`class C { readonly x: T }`) is captured so downstream
-  // structural checks can flag `c.x = …` as TS2540.
-  Field(Bool, ClassKey, @ast.TsType, @ast.TsExpr?, Bool)
+  // `Field(is_static, key, type, init, is_readonly, has_definite_assertion)`
+  // — the `readonly` modifier (`class C { readonly x: T }`) is captured
+  // so downstream structural checks can flag `c.x = …` as TS2540; the
+  // `has_definite_assertion` flag (`class C { x!: T }`) feeds the
+  // strict-property-initialization check (TS2564) in the checker.
+  Field(Bool, ClassKey, @ast.TsType, @ast.TsExpr?, Bool, Bool)
   StaticBlock(@ast.TsBlock)
 }
 
@@ -60,7 +62,14 @@ fn build_runtime_class_decl(
   }
   for element in elements {
     match element {
-      Field(is_static, Name(field_name), field_type, _, is_readonly) =>
+      Field(
+        is_static,
+        Name(field_name),
+        field_type,
+        init,
+        is_readonly,
+        has_definite_assertion
+      ) =>
         if is_public_runtime_class_member_name(field_name) {
           upsert_class_property(properties, {
             name: field_name,
@@ -68,6 +77,8 @@ fn build_runtime_class_decl(
             is_static,
             is_readonly,
             is_accessor: false,
+            has_initializer: init is Some(_),
+            has_definite_assertion,
           })
         }
       Method(is_static, Name(method_name), accessor_kind, func) =>
@@ -115,6 +126,8 @@ fn build_runtime_class_decl(
                 is_static,
                 is_readonly: true,
                 is_accessor: false,
+                has_initializer: false,
+                has_definite_assertion: false,
               })
             Some("set") => {
               let setter_type = if func.params.length() > 0 {
@@ -128,6 +141,8 @@ fn build_runtime_class_decl(
                 is_static,
                 is_readonly: false,
                 is_accessor: false,
+                has_initializer: false,
+                has_definite_assertion: false,
               })
             }
             _ => ()
@@ -194,6 +209,7 @@ fn build_runtime_class_decl(
     // `Parser::take_pending_decorators` after build returns; the
     // builder is parser-agnostic so it leaves the slot empty.
     decorators: [],
+    is_declare: false,
   }
 }
 
@@ -208,7 +224,7 @@ fn Parser::take_last_runtime_class_decl(self : Parser) -> @ast.TsClassDecl? {
 fn has_static_private_elements(elements : Array[ClassElement]) -> Bool {
   for element in elements {
     match element {
-      Field(is_static, Name(name), _, _, _)
+      Field(is_static, Name(name), _, _, _, _)
       | Method(is_static, Name(name), _, _) =>
         // Check for static private members
         if is_static && (name.has_prefix("#") || name.contains("__#")) {
@@ -224,7 +240,7 @@ fn has_static_private_elements(elements : Array[ClassElement]) -> Bool {
 fn has_instance_private_elements(elements : Array[ClassElement]) -> Bool {
   for element in elements {
     match element {
-      Field(is_static, Name(name), _, _, _)
+      Field(is_static, Name(name), _, _, _, _)
       | Method(is_static, Name(name), _, _) =>
         // Check for instance (non-static) private members
         if !is_static && (name.has_prefix("#") || name.contains("__#")) {
@@ -912,7 +928,7 @@ fn Parser::parse_class_body(
     let key = self.parse_class_method_key()
     let method_name = class_key_name(key)
     let is_optional = self.match_(Question)
-    let _ = self.match_(Bang)
+    let has_definite_assertion = self.match_(Bang)
     let mut local_type_param_bound_len = self.local_type_param_bounds.length()
     let mut method_type_param_names : Array[String] = []
     if self.check(Lt) {
@@ -1048,7 +1064,11 @@ fn Parser::parse_class_body(
         None
       }
       let _ = self.match_(Semicolon)
-      elements.push(Field(is_static, key, field_type, init, is_readonly_field))
+      elements.push(
+        Field(
+          is_static, key, field_type, init, is_readonly_field, has_definite_assertion,
+        ),
+      )
     }
   }
   let _ = self.expect(RBrace)
@@ -1140,6 +1160,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
         base_names: [base_name],
         base_expr: pending_base_expr,
         decorators: self.take_pending_decorators(),
+        is_declare: false,
       }
       self.last_runtime_class_decl = Some(decorated)
       // Add field initializers to the constructor body so `class
@@ -1148,7 +1169,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       let field_assigns : Array[@ast.TsStmt] = []
       for element in elements {
         match element {
-          Field(is_static, Name(field_name), _, Some(init), _) =>
+          Field(is_static, Name(field_name), _, Some(init), _, _) =>
             if !is_static {
               field_assigns.push(
                 PropAssign(@ast.TsExpr::Var("this"), field_name, init),
@@ -1212,7 +1233,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       let static_field_inits : Array[(String, @ast.TsExpr)] = []
       for element in elements {
         match element {
-          Field(true, Name(static_name), _, Some(init), _) =>
+          Field(true, Name(static_name), _, Some(init), _, _) =>
             static_field_inits.push((static_name, init))
           _ => ()
         }
@@ -1261,6 +1282,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     is_abstract: runtime_decl.is_abstract,
     is_constructible: runtime_decl.is_constructible,
     decorators: self.take_pending_decorators(),
+    is_declare: false,
   }
   self.last_runtime_class_decl = Some(decorated)
   let instance_assigns : Array[@ast.TsStmt] = []
@@ -1277,7 +1299,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   // First pass: collect all computed keys and generate temp variables
   for element in elements {
     match element {
-      Field(_, key, _, _, _) | Method(_, key, _, _) =>
+      Field(_, key, _, _, _, _) | Method(_, key, _, _) =>
         match key {
           Name(_) => key_temps.push(None)
           Computed(key_expr) => {
@@ -1297,7 +1319,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   // Second pass: generate instance field assignments (for non-static fields)
   for idx, element in elements {
     match element {
-      Field(is_static, key, _, init_opt, _) =>
+      Field(is_static, key, _, init_opt, _, _) =>
         if !is_static {
           let init = match init_opt {
             Some(expr) => expr
@@ -1591,7 +1613,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
           }
         }
       }
-      Field(is_static, key, _, init_opt, _) => {
+      Field(is_static, key, _, init_opt, _, _) => {
         let init = match init_opt {
           Some(expr) => expr
           None => @ast.TsExpr::Var("undefined")
@@ -1726,7 +1748,7 @@ fn Parser::parse_class_decl_with_abstract(
       let field_assigns : Array[@ast.TsStmt] = []
       for element in elements {
         match element {
-          Field(is_static, Name(field_name), _, Some(init), _) =>
+          Field(is_static, Name(field_name), _, Some(init), _, _) =>
             if !is_static {
               field_assigns.push(
                 PropAssign(@ast.TsExpr::Var("this"), field_name, init),
@@ -1809,6 +1831,7 @@ fn Parser::parse_class_decl_with_abstract(
         base_names: [base_name],
         base_expr: pending_base_expr2,
         decorators: self.take_pending_decorators(),
+        is_declare: false,
       }
       // Static field initializers: stash them on the AST so the
       // emit pass restores them as `static foo = init;` inside the
@@ -1819,7 +1842,7 @@ fn Parser::parse_class_decl_with_abstract(
       let static_field_inits : Array[(String, @ast.TsExpr)] = []
       for element in elements {
         match element {
-          Field(true, Name(static_name), _, Some(init), _) =>
+          Field(true, Name(static_name), _, Some(init), _, _) =>
             static_field_inits.push((static_name, init))
           _ => ()
         }
@@ -1851,7 +1874,7 @@ fn Parser::parse_class_decl_with_abstract(
   // First pass: collect all computed keys and generate temp variables
   for element in elements {
     match element {
-      Field(_, key, _, _, _) | Method(_, key, _, _) =>
+      Field(_, key, _, _, _, _) | Method(_, key, _, _) =>
         match key {
           Name(_) => key_temps.push(None)
           Computed(key_expr) => {
@@ -1871,7 +1894,7 @@ fn Parser::parse_class_decl_with_abstract(
   // Second pass: generate instance field assignments (for non-static fields)
   for idx, element in elements {
     match element {
-      Field(is_static, key, _, init_opt, _) =>
+      Field(is_static, key, _, init_opt, _, _) =>
         if !is_static {
           let init = match init_opt {
             Some(expr) => expr
@@ -2165,7 +2188,7 @@ fn Parser::parse_class_decl_with_abstract(
           }
         }
       }
-      Field(is_static, key, _, init_opt, _) => {
+      Field(is_static, key, _, init_opt, _, _) => {
         let init = match init_opt {
           Some(expr) => expr
           None => @ast.TsExpr::Var("undefined")

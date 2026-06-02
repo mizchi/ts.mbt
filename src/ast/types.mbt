@@ -558,6 +558,18 @@ pub(all) struct TsClassPropertyDecl {
   // getter/setter, so the checker treats it like a normal property
   // but the flag is retained for downstream tooling.
   is_accessor : Bool
+  // True when the source declared an `=` initializer for this field
+  // (`class C { x = 5 }` / `class C { x: T = expr }`). Used by the
+  // checker to detect the strict-property-initialization error
+  // TS2564 ("Property 'X' has no initializer and is not definitely
+  // assigned in the constructor"). Defaults to false on synthesised
+  // properties (getters/setters wrapped as fields, downstream-built
+  // ones) -- only the real parser sites set it true.
+  has_initializer : Bool
+  // True when the source carried a definite-assignment assertion
+  // (`class C { x!: T }`). Suppresses TS2564 for the field even
+  // when there is no initializer or constructor assignment.
+  has_definite_assertion : Bool
 } derive(Debug)
 
 ///|
@@ -643,6 +655,11 @@ pub(all) struct TsClassDecl {
   // tooling (NestJS / TypeORM-style scanners) can inspect them; the
   // checker does not currently interpret them.
   decorators : Array[TsExpr]
+  // True for ambient `declare class` declarations and false for
+  // native runtime `class` declarations. Used by the checker to
+  // gate strict-property-initialization (TS2564) -- TS itself does
+  // not raise TS2564 for ambient declarations.
+  is_declare : Bool
 } derive(Debug)
 
 ///|
@@ -697,6 +714,14 @@ pub(all) struct TsModule {
   // Top-level executable statements (const/let/var with type annotations,
   // class expressions, etc.) from non-ambient modules. Empty for .d.ts files.
   top_level_stmts : Array[TsStmt]
+  // True when the source should be checked under
+  // `strictPropertyInitialization`. The conformance test corpus uses
+  // `// @strict: false` / `// @strict: true` header directives to opt
+  // out of / into strict mode; the parser scans the file prefix and
+  // sets this accordingly. Default is `true` (matches the
+  // conformance harness baseline default, which has TS2564 emissions
+  // for files without an explicit `@strict` directive).
+  strict_property_initialization : Bool
 } derive(Debug)
 
 ///|

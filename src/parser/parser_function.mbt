@@ -2139,6 +2139,8 @@ fn upsert_class_property(
         is_static: existing.is_static,
         is_readonly: existing.is_readonly && property.is_readonly,
         is_accessor: false,
+        has_initializer: false,
+        has_definite_assertion: false,
       }
       return
     }
@@ -2252,7 +2254,7 @@ fn Parser::parse_declare_class(
     // Definite-assignment assertion (`foo!: T`) on a class field. Also
     // tolerate a stray `!` after a method name even though that is not
     // standard syntax, mirroring how the runtime class parser handles it.
-    let _ = self.match_(Bang)
+    let has_definite_assertion = self.match_(Bang)
     let mut local_type_param_bound_len = self.local_type_param_bounds.length()
     let mut method_type_params : Array[String] = []
     let mut method_type_param_bounds : Array[(String, @ast.TsType)] = []
@@ -2284,6 +2286,8 @@ fn Parser::parse_declare_class(
                 is_static,
                 is_readonly: true,
                 is_accessor: false,
+                has_initializer: false,
+                has_definite_assertion: false,
               })
             Some("set") if is_public => {
               let setter_type = if params.length() > 0 {
@@ -2298,6 +2302,8 @@ fn Parser::parse_declare_class(
                 is_static,
                 is_readonly: false,
                 is_accessor: false,
+                has_initializer: false,
+                has_definite_assertion: false,
               })
             }
             _ =>
@@ -2340,8 +2346,11 @@ fn Parser::parse_declare_class(
     if self.match_(Colon) {
       property_type = self.parse_type()
     }
-    if self.match_(Eq) {
+    let has_initializer = if self.match_(Eq) {
       let _ = self.parse_assignment()
+      true
+    } else {
+      false
     }
     self.consume_semicolon()
     match member_name {
@@ -2352,6 +2361,8 @@ fn Parser::parse_declare_class(
           is_static,
           is_readonly,
           is_accessor,
+          has_initializer,
+          has_definite_assertion,
         })
       _ => ()
     }
@@ -2379,5 +2390,6 @@ fn Parser::parse_declare_class(
     is_abstract,
     is_constructible,
     decorators: self.take_pending_decorators(),
+    is_declare: true,
   }
 }

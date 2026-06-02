@@ -2125,7 +2125,7 @@ fn record(ctx : CheckCtx, sub_path : String, message : String) -> Unit {
   // T9: in permissive mode, drop the diagnostic families whose
   // residual FPs are dominated by features we don't model. Strict
   // mode (the unit-test path) keeps every emission.
-  if ctx.permissive && is_permissively_suppressed(message) {
+  if ctx.permissive && is_permissively_suppressed(sub_path, message) {
     return
   }
   let path = if sub_path == "" {
@@ -2150,7 +2150,7 @@ fn record(ctx : CheckCtx, sub_path : String, message : String) -> Unit {
 /// "simple" type (primitive / literal / `T[]` / single Named) is
 /// reliable enough to keep -- those cases are picked up by the
 /// strict mode anyway and contribute recall without inflating FP.
-fn is_permissively_suppressed(message : String) -> Bool {
+fn is_permissively_suppressed(sub_path : String, message : String) -> Bool {
   if message.has_prefix("expected `") && message.contains("but got `") {
     // Restore primitive-vs-primitive (and a few other reliable
     // shapes) so the strict diagnostic isn't fully lost in
@@ -2159,7 +2159,8 @@ fn is_permissively_suppressed(message : String) -> Bool {
     match extract_mismatch_types(message) {
       Some((exp, got)) =>
         if is_reliable_mismatch_pair(exp, got) &&
-          !is_widening_direction_mismatch(exp, got) {
+          !is_widening_direction_mismatch(exp, got) &&
+          !is_rest_param_residue(sub_path, exp, got) {
           return false
         }
       None => ()
@@ -2240,7 +2241,75 @@ fn extract_mismatch_types(message : String) -> (String, String)? {
 /// narrowing, or anonymous-shape flattening. Used by the permissive
 /// filter to keep `var x: number = "hello"`-style mismatches.
 fn is_reliable_mismatch_pair(exp : String, got : String) -> Bool {
-  is_reliable_mismatch_type(exp) && is_reliable_mismatch_type(got)
+  // Pure primitive-vs-primitive: well-tested in is_assignable_to.
+  if is_reliable_mismatch_type(exp) && is_reliable_mismatch_type(got) {
+    return true
+  }
+  // Primitive-vs-shape and shape-vs-primitive: an obvious category
+  // mismatch (`number = [1, "a"]`, `string[] = 5`). TS flags these
+  // and our assignability gets them right. We still suppress when
+  // either side contains `|` (union -> flow narrowing residue) or
+  // `<` (generic application -> inference residue).
+  if exp.contains("|") || got.contains("|") {
+    return false
+  }
+  if exp.contains("<") || got.contains("<") {
+    return false
+  }
+  if is_reliable_mismatch_type(exp) && is_simple_shape_type(got) {
+    return true
+  }
+  if is_simple_shape_type(exp) && is_reliable_mismatch_type(got) {
+    return true
+  }
+  false
+}
+
+///|
+/// True when a `expected T[] but got T` mismatch comes from a call
+/// argument and the `got` type is exactly the element type of `exp`.
+/// This is the residue from calling a function value typed as
+/// `(...args: T[]) => U` -- our `TsType::Func` doesn't carry rest
+/// metadata, so we treat the trailing arg as needing `T[]` instead
+/// of `T`. TS accepts these.
+fn is_rest_param_residue(sub_path : String, exp : String, got : String) -> Bool {
+  if !sub_path.contains("call ") || !sub_path.contains(" arg[") {
+    return false
+  }
+  if !exp.has_suffix("[]") {
+    return false
+  }
+  let elem = exp[:exp.length() - 2].to_owned()
+  elem == got
+}
+
+///|
+/// A "simple shape": `T[]`, `[A,B,...]`, `{...}`, or `(...) => T`,
+/// where the inner parts may themselves be compound. Used by
+/// `is_reliable_mismatch_pair` to admit primitive-vs-shape mismatches
+/// through the permissive filter (the categories are obviously
+/// disjoint -- a primitive is never assignable to an array / tuple /
+/// object / function and vice versa).
+fn is_simple_shape_type(s : String) -> Bool {
+  // T[] (array)
+  if s.has_suffix("[]") {
+    return true
+  }
+  // Tuples (`[A, B, ...]`) are excluded: generic-rest substitution
+  // gaps render leftover type-parameter names as bare identifiers
+  // inside the brackets (`[number, string, type]`), producing FPs
+  // in `genericRestParameters2` and similar. The other shapes below
+  // don't suffer from this because they're either header-marked
+  // (`T[]`, `(...) => T`) or fully enclosing (`{...}`).
+  // { ... } (object literal type) — leading `{`
+  if s.has_prefix("{") && s.has_suffix("}") {
+    return true
+  }
+  // (...) => T (function type)
+  if s.has_prefix("(") && s.contains(") => ") {
+    return true
+  }
+  false
 }
 
 ///|
@@ -7918,6 +7987,24 @@ fn check_module_function_bodies_layered(
   for issue in check_module_decl_signatures(module_) {
     all.push(issue)
   }
+  // Walk class field initialisation. Namespaced classes need to
+  // inherit the *top-level* file's `strict_property_initialization`
+  // flag (the directive `// @strict: false` only appears on the
+  // surrounding source, never on a namespace's synthesised module),
+  // so we consult the outer-most module when one exists.
+  let strict_root = if outer_modules.length() > 0 {
+    outer_modules[0]
+  } else {
+    module_
+  }
+  for
+    issue in check_native_class_property_initializers(
+      module_,
+      resolver,
+      strict_root.strict_property_initialization,
+    ) {
+    all.push(issue)
+  }
   // Recurse into namespace bodies. Each level threads its own ancestor
   // chain so a nested namespace can reference parent-scope types by their
   // bare name (TypeScript scoping). Synthetic `<global>` blocks
@@ -7959,6 +8046,76 @@ fn is_in_scope_type_param(ctx : CheckCtx, ty : @ast.TsType) -> Bool {
     Named(n) => ctx.in_scope_type_params.contains(n)
     _ => false
   }
+}
+
+///|
+/// TS2564 ("Property 'X' has no initializer and is not definitely
+/// assigned in the constructor") for native (runtime) class
+/// declarations. We catch the common shape where the class has no
+/// constructor at all and the field has neither an `=` initializer
+/// nor a `!` definite-assignment assertion, and the declared type
+/// doesn't already accept `undefined`. The constructor-body-walk
+/// variant (which would also catch `class C { x: T; constructor() {
+/// this.x = ...; } }`) requires CFA over constructor bodies and is
+/// deferred -- 91 of 93 TS2564 cases in the conformance corpus have
+/// no constructor at all.
+fn check_native_class_property_initializers(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+  strict_property_init : Bool,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  // The strict-property-initialization check is off in this file
+  // (per a `// @strict: false` / `// @strictPropertyInitialization:
+  // false` header directive). Skip TS2564 entirely.
+  if !strict_property_init {
+    return issues
+  }
+  for decl in module_.classes {
+    // Ambient `declare class` decls don't get strict-init checking
+    // -- TS itself only enforces it on runtime class bodies.
+    if decl.is_declare {
+      continue
+    }
+    // Skip when the class declares a constructor: its body might
+    // assign `this.x` and we don't model the constructor body in the
+    // TsClassDecl form (only the parameter list survives). A false
+    // negative here is much better than the false positive of
+    // claiming an initialised field is uninitialised.
+    match decl.constructor_params {
+      Some(_) => continue
+      None => ()
+    }
+    for prop in decl.properties {
+      // Static fields are subject to a separate initialisation rule
+      // in TS (`static x: T;` without `=`) and the runtime path
+      // captures `static x = expr;` in `static_field_inits` -- skip
+      // for now since it's a much smaller cluster and overlaps the
+      // common case.
+      if prop.is_static {
+        continue
+      }
+      if prop.has_initializer || prop.has_definite_assertion {
+        continue
+      }
+      // Skip when the declared type already accepts `undefined`
+      // (`x?: T` is wrapped to `T | undefined` by the parser, and
+      // `x: T | undefined` matches the same predicate).
+      if type_accepts_undefined(resolver.unwrap(prop.type_)) {
+        continue
+      }
+      // Skip when the declared type is `any` -- `class C { x; }`
+      // (no annotation) is fine in TS without strict mode.
+      if prop.type_ is Any {
+        continue
+      }
+      issues.push({
+        path: "class \{decl.name}",
+        message: "property `\{prop.name}` has no initializer and is not definitely assigned",
+      })
+    }
+  }
+  issues
 }
 
 ///|

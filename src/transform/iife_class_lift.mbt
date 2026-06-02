@@ -233,6 +233,7 @@ fn try_lift_iife_value(
     is_constructible: true,
     index_signatures: [],
     decorators: [],
+    is_declare: false,
   }
   // Emit closure-variable declarations before the class so the class
   // body can still close over them.
