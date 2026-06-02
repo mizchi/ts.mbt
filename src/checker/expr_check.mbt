@@ -9011,6 +9011,41 @@ fn check_module_function_bodies_layered(
       }
     }
   }
+  // Class field initializers (`class C { x = expr; static y = expr }`).
+  // These were previously never walked, so member-access checks (e.g.
+  // accessing another class's `private`/`protected` member from an
+  // initializer) were missed. Walk each under a class-scoped path so the
+  // accessibility check resolves the enclosing class correctly.
+  for cls in module_.classes {
+    if cls.static_field_inits.length() == 0 &&
+      cls.instance_field_inits.length() == 0 {
+      continue
+    }
+    let field_ctx : CheckCtx = {
+      path_prefix: "function \{cls.name}.<field-init>",
+      return_type: @ast.TsType::Void,
+      yield_type: @ast.TsType::Any,
+      resolver,
+      issues: [],
+      in_scope_type_params: cls.type_params,
+      permissive,
+      unassigned: {},
+      strict_property_init,
+    }
+    let env = ExprEnv::new()
+    for v in module_.values {
+      env.bind(v.name, v.type_)
+    }
+    for entry in cls.static_field_inits {
+      check_call_args_in_expr(env, entry.1, field_ctx)
+    }
+    for entry in cls.instance_field_inits {
+      check_call_args_in_expr(env, entry.1, field_ctx)
+    }
+    for issue in field_ctx.issues {
+      all.push(issue)
+    }
+  }
   // Top-level statements (const/let/var with explicit type annotations).
   // Walk them in a module-scope env so local names resolve correctly.
   if module_.top_level_stmts.length() > 0 {
