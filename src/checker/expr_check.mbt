@@ -2125,7 +2125,7 @@ fn record(ctx : CheckCtx, sub_path : String, message : String) -> Unit {
   // T9: in permissive mode, drop the diagnostic families whose
   // residual FPs are dominated by features we don't model. Strict
   // mode (the unit-test path) keeps every emission.
-  if ctx.permissive && is_permissively_suppressed(message) {
+  if ctx.permissive && is_permissively_suppressed(sub_path, message) {
     return
   }
   let path = if sub_path == "" {
@@ -2150,7 +2150,7 @@ fn record(ctx : CheckCtx, sub_path : String, message : String) -> Unit {
 /// "simple" type (primitive / literal / `T[]` / single Named) is
 /// reliable enough to keep -- those cases are picked up by the
 /// strict mode anyway and contribute recall without inflating FP.
-fn is_permissively_suppressed(message : String) -> Bool {
+fn is_permissively_suppressed(sub_path : String, message : String) -> Bool {
   if message.has_prefix("expected `") && message.contains("but got `") {
     // Restore primitive-vs-primitive (and a few other reliable
     // shapes) so the strict diagnostic isn't fully lost in
@@ -2159,7 +2159,8 @@ fn is_permissively_suppressed(message : String) -> Bool {
     match extract_mismatch_types(message) {
       Some((exp, got)) =>
         if is_reliable_mismatch_pair(exp, got) &&
-          !is_widening_direction_mismatch(exp, got) {
+          !is_widening_direction_mismatch(exp, got) &&
+          !is_rest_param_residue(sub_path, exp, got) {
           return false
         }
       None => ()
@@ -2240,7 +2241,75 @@ fn extract_mismatch_types(message : String) -> (String, String)? {
 /// narrowing, or anonymous-shape flattening. Used by the permissive
 /// filter to keep `var x: number = "hello"`-style mismatches.
 fn is_reliable_mismatch_pair(exp : String, got : String) -> Bool {
-  is_reliable_mismatch_type(exp) && is_reliable_mismatch_type(got)
+  // Pure primitive-vs-primitive: well-tested in is_assignable_to.
+  if is_reliable_mismatch_type(exp) && is_reliable_mismatch_type(got) {
+    return true
+  }
+  // Primitive-vs-shape and shape-vs-primitive: an obvious category
+  // mismatch (`number = [1, "a"]`, `string[] = 5`). TS flags these
+  // and our assignability gets them right. We still suppress when
+  // either side contains `|` (union -> flow narrowing residue) or
+  // `<` (generic application -> inference residue).
+  if exp.contains("|") || got.contains("|") {
+    return false
+  }
+  if exp.contains("<") || got.contains("<") {
+    return false
+  }
+  if is_reliable_mismatch_type(exp) && is_simple_shape_type(got) {
+    return true
+  }
+  if is_simple_shape_type(exp) && is_reliable_mismatch_type(got) {
+    return true
+  }
+  false
+}
+
+///|
+/// True when a `expected T[] but got T` mismatch comes from a call
+/// argument and the `got` type is exactly the element type of `exp`.
+/// This is the residue from calling a function value typed as
+/// `(...args: T[]) => U` -- our `TsType::Func` doesn't carry rest
+/// metadata, so we treat the trailing arg as needing `T[]` instead
+/// of `T`. TS accepts these.
+fn is_rest_param_residue(sub_path : String, exp : String, got : String) -> Bool {
+  if !sub_path.contains("call ") || !sub_path.contains(" arg[") {
+    return false
+  }
+  if !exp.has_suffix("[]") {
+    return false
+  }
+  let elem = exp[:exp.length() - 2].to_owned()
+  elem == got
+}
+
+///|
+/// A "simple shape": `T[]`, `[A,B,...]`, `{...}`, or `(...) => T`,
+/// where the inner parts may themselves be compound. Used by
+/// `is_reliable_mismatch_pair` to admit primitive-vs-shape mismatches
+/// through the permissive filter (the categories are obviously
+/// disjoint -- a primitive is never assignable to an array / tuple /
+/// object / function and vice versa).
+fn is_simple_shape_type(s : String) -> Bool {
+  // T[] (array)
+  if s.has_suffix("[]") {
+    return true
+  }
+  // Tuples (`[A, B, ...]`) are excluded: generic-rest substitution
+  // gaps render leftover type-parameter names as bare identifiers
+  // inside the brackets (`[number, string, type]`), producing FPs
+  // in `genericRestParameters2` and similar. The other shapes below
+  // don't suffer from this because they're either header-marked
+  // (`T[]`, `(...) => T`) or fully enclosing (`{...}`).
+  // { ... } (object literal type) — leading `{`
+  if s.has_prefix("{") && s.has_suffix("}") {
+    return true
+  }
+  // (...) => T (function type)
+  if s.has_prefix("(") && s.contains(") => ") {
+    return true
+  }
+  false
 }
 
 ///|

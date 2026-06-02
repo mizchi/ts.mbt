@@ -1112,18 +1112,34 @@ async test "checker: accuracy against TypeScript conformance baselines" {
       total += 1
       let content = @fs.read_file(path).text() catch { _ => continue }
       let allow_jsx = path.has_suffix(".tsx")
+      let case_name = ts_case_basename(path)
+      let has_baseline = baseline_errors_txt_exists(case_name)
       let module_ = try
         Parser::from_source_with_jsx(content, allow_jsx).parse_module()
       catch {
-        _ => continue
+        // A parse failure is a detection: TS conformance fixtures with
+        // intentional syntax errors (`*Errors.ts`, `*MustBeLast.ts`,
+        // `*Duplicates.ts`, `*Negative.ts`, etc.) all have baselines and
+        // we trip the diagnostic at parse time rather than check time.
+        // Count it as a recall_hit when a baseline exists; as a
+        // precision_miss when one doesn't (we shouldn't reject programs
+        // that tsc accepts).
+        _ => {
+          if has_baseline {
+            recall_hit += 1
+            d_rh += 1
+          } else {
+            precision_miss += 1
+            d_pm += 1
+          }
+          continue
+        }
       } noraise {
         m => {
           parsed += 1
           m
         }
       }
-      let case_name = ts_case_basename(path)
-      let has_baseline = baseline_errors_txt_exists(case_name)
       // Permissive mode for the whole-corpus accuracy walk: T9
       // suppressions drop the diagnostic families dominated by gaps
       // we don't model (flow narrowing, generic inference, builtin
