@@ -53,6 +53,8 @@ fn build_runtime_class_decl(
   ctor_opt : @ast.TsFunc?,
   elements : Array[ClassElement],
   is_abstract : Bool,
+  private_members : Array[String],
+  protected_members : Array[String],
 ) -> @ast.TsClassDecl {
   let properties : Array[@ast.TsClassPropertyDecl] = []
   let methods : Array[@ast.TsClassMethodDecl] = []
@@ -235,6 +237,8 @@ fn build_runtime_class_decl(
     // builder is parser-agnostic so it leaves the slot empty.
     decorators: [],
     is_declare: false,
+    private_members,
+    protected_members,
   }
 }
 
@@ -858,13 +862,17 @@ fn Parser::inject_instance_field_assigns(
 ///|
 fn Parser::parse_class_body(
   self : Parser,
-) -> (@ast.TsFunc?, Array[ClassElement]) raise ParseError {
+) -> (@ast.TsFunc?, Array[ClassElement], Array[String], Array[String]) raise ParseError {
   let _ = self.expect(LBrace)
   // Class body is implicitly strict mode
   let prev_strict = self.in_strict
   self.in_strict = true
   let mut ctor : @ast.TsFunc? = None
   let elements : Array[ClassElement] = []
+  // Names declared `private` / `protected`, collected so the class decl
+  // can expose member visibility to the checker (TS2341 / TS2445).
+  let private_members : Array[String] = []
+  let protected_members : Array[String] = []
   while !self.check(RBrace) && !self.check(Eof) {
     while self.check(At) {
       self.skip_decorator()
@@ -877,6 +885,7 @@ fn Parser::parse_class_body(
     let mut is_readonly_field = false
     let mut has_modifier = true
     let mut parsed_static_block = false
+    let mut visibility = "public"
     while has_modifier {
       has_modifier = false
       match self.peek().kind {
@@ -915,6 +924,9 @@ fn Parser::parse_class_body(
           if self.can_consume_class_modifier() {
             let _ = self.advance()
             has_modifier = true
+            if n == "private" || n == "protected" {
+              visibility = n
+            }
           }
         Declare => {
           let _ = self.advance()
@@ -953,6 +965,13 @@ fn Parser::parse_class_body(
     let is_generator = self.match_(Star)
     let key = self.parse_class_method_key()
     let method_name = class_key_name(key)
+    if method_name != "<computed>" {
+      if visibility == "private" {
+        private_members.push(method_name)
+      } else if visibility == "protected" {
+        protected_members.push(method_name)
+      }
+    }
     let is_optional = self.match_(Question)
     let has_definite_assertion = self.match_(Bang)
     let mut local_type_param_bound_len = self.local_type_param_bounds.length()
@@ -1123,7 +1142,7 @@ fn Parser::parse_class_body(
   }
   let _ = self.expect(RBrace)
   self.in_strict = prev_strict
-  (ctor, elements)
+  (ctor, elements, private_members, protected_members)
 }
 
 ///|
@@ -1165,7 +1184,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   let brand = "__private_brand__" + brand_id.to_string()
   let prev_brand = self.current_class_brand
   self.current_class_brand = Some(brand)
-  let (ctor_opt, elements) = self.parse_class_body()
+  let (ctor_opt, elements, private_members, protected_members) = self.parse_class_body()
   self.current_class_brand = prev_brand
   self.restore_local_type_param_bounds(class_type_param_bound_len)
   // Self-extending classes (`class C extends C {}`) intentionally
@@ -1201,7 +1220,8 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   match base {
     Some(base_name) => {
       let runtime_decl = build_runtime_class_decl(
-        class_name, class_type_params, ctor_opt, elements, false,
+        class_name, class_type_params, ctor_opt, elements, false, private_members,
+        protected_members,
       )
       let pending_base_expr = self.pending_class_base_expr
       self.pending_class_base_expr = None
@@ -1322,6 +1342,8 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     ctor_opt,
     elements,
     false,
+    private_members,
+    protected_members,
   )
   // Attach any decorators accumulated via `skip_decorator` before this
   // class statement.
@@ -1340,6 +1362,8 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     is_constructible: runtime_decl.is_constructible,
     decorators: self.take_pending_decorators(),
     is_declare: false,
+    private_members: runtime_decl.private_members,
+    protected_members: runtime_decl.protected_members,
   }
   self.last_runtime_class_decl = Some(decorated)
   let instance_assigns : Array[@ast.TsStmt] = []
@@ -1783,11 +1807,11 @@ fn Parser::parse_class_decl_with_abstract(
   let brand = "__private_brand__" + brand_id.to_string()
   let prev_brand = self.current_class_brand
   self.current_class_brand = Some(brand)
-  let (ctor_opt, elements) = self.parse_class_body()
+  let (ctor_opt, elements, private_members, protected_members) = self.parse_class_body()
   self.current_class_brand = prev_brand
   self.restore_local_type_param_bounds(class_type_param_bound_len)
   let runtime_decl = build_runtime_class_decl(
-    name, class_type_params, ctor_opt, elements, is_abstract,
+    name, class_type_params, ctor_opt, elements, is_abstract, private_members, protected_members,
   )
   self.last_runtime_class_decl = Some(runtime_decl)
   // When the class extends another class, the IIFE desugar below

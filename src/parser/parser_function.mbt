@@ -2181,6 +2181,8 @@ fn Parser::parse_declare_class(
   let _ = self.expect(LBrace)
   let properties : Array[@ast.TsClassPropertyDecl] = []
   let methods : Array[@ast.TsClassMethodDecl] = []
+  let private_members : Array[String] = []
+  let protected_members : Array[String] = []
   let index_signatures : Array[(@ast.TsType, @ast.TsType)] = []
   let mut constructor_params : Array[(String, @ast.TsType)]? = None
   let mut saw_public_constructor = false
@@ -2205,6 +2207,7 @@ fn Parser::parse_declare_class(
     let mut is_static = false
     let mut is_readonly = false
     let mut is_public = true
+    let mut visibility = "public"
     let mut is_accessor = false
     let mut has_modifier = true
     while has_modifier {
@@ -2245,6 +2248,7 @@ fn Parser::parse_declare_class(
           }
           if mod == "private" || mod == "protected" {
             is_public = false
+            visibility = mod
           }
           has_modifier = true
         }
@@ -2263,6 +2267,15 @@ fn Parser::parse_declare_class(
       _ => ()
     }
     let member_name = self.parse_declare_class_member_name()
+    match member_name {
+      Some(n) =>
+        if visibility == "private" {
+          private_members.push(n)
+        } else if visibility == "protected" {
+          protected_members.push(n)
+        }
+      None => ()
+    }
     let _ = self.match_(Question)
     // Definite-assignment assertion (`foo!: T`) on a class field. Also
     // tolerate a stray `!` after a method name even though that is not
@@ -2405,5 +2418,7 @@ fn Parser::parse_declare_class(
     is_constructible,
     decorators: self.take_pending_decorators(),
     is_declare: true,
+    private_members,
+    protected_members,
   }
 }

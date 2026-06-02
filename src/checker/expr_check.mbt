@@ -2281,6 +2281,120 @@ fn check_private_name_access(ctx : CheckCtx, prop_name : String) -> Unit {
 }
 
 ///|
+/// The class whose body the checker is currently inside, derived from
+/// `path_prefix`. Class-method bodies are walked under a synthesized
+/// `"<Class>.<method>"` path (optionally prefixed with `namespace X > `
+/// for nested namespaces); free functions and top-level statements have
+/// no `"."`, so they yield `None` ("not inside a class body").
+fn current_enclosing_class(path_prefix : String) -> String? {
+  // Drop any `namespace … > ` / `declare global > ` prefix segments.
+  let tail = match path_prefix.rev_find("> ") {
+    Some(i) => path_prefix[i + 2:].to_owned()
+    None => path_prefix
+  }
+  // Function bodies are walked under `"function <name>"`; class methods
+  // synthesize `<name>` as `"<Class>.<method>"`, so strip the leading
+  // `"function "` before splitting on `.`.
+  let tail = if tail.has_prefix("function ") {
+    tail["function ".length():].to_owned()
+  } else {
+    tail
+  }
+  match tail.find(".") {
+    Some(i) => Some(tail[:i].to_owned())
+    None => None
+  }
+}
+
+///|
+/// True when `sub` is `base` or transitively extends it, walking the
+/// declared `base_names` chain through the resolver's class table.
+fn class_extends(resolver : Resolver, sub : String, base : String) -> Bool {
+  if sub == base {
+    return true
+  }
+  let mut current = sub
+  let mut depth = 0
+  while depth < 32 {
+    depth = depth + 1
+    match resolver.classes.get(current) {
+      Some(decl) => {
+        if decl.base_names.contains(base) {
+          return true
+        }
+        if decl.base_names.length() == 0 {
+          return false
+        }
+        current = decl.base_names[0]
+      }
+      None => return false
+    }
+  }
+  false
+}
+
+///|
+/// TS2341 / TS2445: accessing a `private` / `protected` class member from
+/// outside the scope that's allowed to see it. The receiver's class is
+/// resolved (instance type or a static `Class.member` reference); a
+/// `private` member is legal only inside the exact declaring class, a
+/// `protected` member inside that class or a subclass. `this` / `super`
+/// receivers are always same-instance and never flagged.
+fn check_member_accessibility(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  recv : @ast.TsExpr,
+  prop : String,
+) -> Unit {
+  match recv {
+    Var("this") | Var("super") => return
+    _ => ()
+  }
+  // Resolve the receiver to a declared class name: a bare `Var` naming a
+  // class is a static-side access; otherwise infer the instance type.
+  let class_name = match recv {
+    Var(n) if ctx.resolver.classes.get(n) is Some(_) => n
+    _ =>
+      match ctx.resolver.unwrap(infer_expr(env, ctx.resolver, recv)) {
+        Named(n) => n
+        Applied(n, _) => n
+        _ => return
+      }
+  }
+  let decl = match ctx.resolver.classes.get(class_name) {
+    Some(d) => d
+    None => return
+  }
+  let is_private = decl.private_members.contains(prop)
+  let is_protected = decl.protected_members.contains(prop)
+  if !(is_private || is_protected) {
+    return
+  }
+  let enclosing = current_enclosing_class(ctx.path_prefix)
+  if is_private {
+    if enclosing != Some(class_name) {
+      record(
+        ctx,
+        "access `.\{prop}`",
+        "property `\{prop}` is private and only accessible within class `\{class_name}`",
+      )
+    }
+  } else {
+    let allowed = match enclosing {
+      Some(cc) => class_extends(ctx.resolver, cc, class_name)
+      None => false
+    }
+    if !allowed {
+      record(
+        ctx,
+        "access `.\{prop}`",
+        "property `\{prop}` is protected and only accessible within class `\{class_name}` and its subclasses",
+      )
+    }
+  }
+}
+
+///|
 fn record(ctx : CheckCtx, sub_path : String, message : String) -> Unit {
   // T9: in permissive mode, drop the diagnostic families whose
   // residual FPs are dominated by features we don't model. Strict
@@ -7879,6 +7993,7 @@ fn check_call_args_in_expr(
     }
     MethodCall(receiver, meth, args) => {
       check_private_name_access(ctx, meth)
+      check_member_accessibility(env, ctx, receiver, meth)
       // Static-namespace dispatch: `Math.max(...)`, `JSON.stringify(...)`.
       // Recognised by the bare-identifier shape of the receiver.
       let static_params : Array[@ast.TsType]? = match receiver {
@@ -8001,6 +8116,7 @@ fn check_call_args_in_expr(
     PropAccess(recv, prop) => {
       check_call_args_in_expr(env, recv, ctx)
       check_private_name_access(ctx, prop)
+      check_member_accessibility(env, ctx, recv, prop)
       // Property-existence check: when the receiver has a concrete
       // structural shape and the resolver can't find `prop` on it,
       // surface a diagnostic. The class static-side fallback used
@@ -8209,6 +8325,7 @@ fn check_call_args_in_expr(
       check_call_args_in_expr(env, recv, ctx)
       check_call_args_in_expr(env, v, ctx)
       check_private_name_access(ctx, prop)
+      check_member_accessibility(env, ctx, recv, prop)
       let recv_ty = infer_expr(env, ctx.resolver, recv)
       if is_readonly_field(ctx.resolver, recv_ty, prop) {
         record(

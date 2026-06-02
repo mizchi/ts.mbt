@@ -675,6 +675,13 @@ pub(all) struct TsClassDecl {
   // gate strict-property-initialization (TS2564) -- TS itself does
   // not raise TS2564 for ambient declarations.
   is_declare : Bool
+  // Names of members (fields, methods, accessors, parameter properties)
+  // declared with a `private` / `protected` accessibility modifier.
+  // Kept as parallel name lists rather than per-member flags so the
+  // checker can answer "is `X` private/protected on this class?" without
+  // changing the member-decl structs. Empty for fully-public classes.
+  private_members : Array[String]
+  protected_members : Array[String]
 } derive(Debug)
 
 ///|
