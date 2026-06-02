@@ -296,7 +296,11 @@ fn Resolver::ingest_module(
       Var(Ident(name), ty, _)
       | Let(Ident(name), ty, _)
       | Const(Ident(name), ty, _) =>
-        if is_checkable(ty) {
+        // Skip any type that mentions `typeof` anywhere -- registering
+        // `var d: typeof e` would create a cycle as soon as another
+        // `var e: typeof d` lands beside it (the conformance corpus has
+        // exactly that shape in `recursiveTypesWithTypeof.ts`).
+        if is_checkable(ty) && !type_contains_typeof(ty) {
           let key = prefix + name
           // Don't shadow an existing entry (e.g. from `declare var`).
           if !(r.globals.get(key) is Some(_)) {
@@ -305,6 +309,51 @@ fn Resolver::ingest_module(
         }
       _ => ()
     }
+  }
+}
+
+///|
+/// True when `ty` contains a `TypeOf(_)` reference anywhere in its
+/// structure. Used by the top-level globals ingestion to skip
+/// `typeof`-referencing declarations -- registering them risks
+/// resolver cycles (e.g. `var d: typeof e; var e: typeof d`).
+fn type_contains_typeof(ty : @ast.TsType) -> Bool {
+  match ty {
+    TypeOf(_) => true
+    Array(inner) => type_contains_typeof(inner)
+    Union(parts) | Intersection(parts) | Tuple(parts) => {
+      for p in parts {
+        if type_contains_typeof(p) {
+          return true
+        }
+      }
+      false
+    }
+    Applied(_, args) => {
+      for a in args {
+        if type_contains_typeof(a) {
+          return true
+        }
+      }
+      false
+    }
+    Func(params, ret) => {
+      for p in params {
+        if type_contains_typeof(p) {
+          return true
+        }
+      }
+      type_contains_typeof(ret)
+    }
+    Object(entries) => {
+      for e in entries {
+        if type_contains_typeof(e.0) || type_contains_typeof(e.1) {
+          return true
+        }
+      }
+      false
+    }
+    _ => false
   }
 }
 

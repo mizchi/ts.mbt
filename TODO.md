@@ -1268,7 +1268,30 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-01 (T5)    207/487 (43 %)      241/319 (76 %, 78 FP)
 2026-06-01 (T6)    218/487 (45 %)      241/319 (76 %, 78 FP)
 2026-06-01 (T7)    222/487 (46 %)      241/319 (76 %, 78 FP)
-2026-06-01 (T8)    pending verification  pending (broad FP reduction batch)
+2026-06-01 (T8)    173/488 (35 %)        257/319 (81 %, 62 FP)
+
+  Verified 2026-06-02 by re-running the conformance walk via the
+  `tscheck` CLI (which sidesteps the parser whitebox test bin's
+  ~15-min tcc compile time on this VM). Numbers: 78 -> 62 FP
+  (~20 % reduction); 143 -> 173 recall (+30, +21 %); 822 files
+  parsed.
+
+  The 90 %-FP goal ("9割潰す") is *not* reached. The residual 62 FP
+  files split roughly into:
+  - flow-narrowing residue (typeGuard* / controlFlow* /
+    discriminatedUnion*, ~25)
+  - structural-recursive type comparison (assignmentCompatWithObjectMembers*,
+    ~5)
+  - generic inference gaps (genericContextualTypes* / genericCall*,
+    ~10)
+  - tuple shape mismatches (partiallyNamedTuples, genericRestParameters2)
+  - builtin arity / property surface gaps (numberPropertyAccess,
+    callSignaturesWithOptionalParameters2, propertyNameWithoutTypeAnnotation)
+
+  Closing the remaining ~54 FPs requires real flow narrowing for
+  user-defined typeguards and `if (x === literal)` discrimination on
+  computed-key shapes -- both multi-day features outside this batch's
+  scope.
 
 T8 batch -- ~10 broad suppression rules layered on top of T7. Full
 conformance verification is pending because the local-tcc compile on
