@@ -415,6 +415,7 @@ async fn load_decl_module_info(
           module_augmentations: [],
           top_level_stmts: [],
           strict_property_initialization: true,
+          use_define_for_class_fields: false,
         }
       }
   }
@@ -8883,6 +8884,7 @@ fn clone_exported_class(
     base_names: [],
     base_expr: None,
     static_field_inits: [],
+    instance_field_inits: [],
     constructor_params,
     properties,
     methods,
@@ -9094,6 +9096,7 @@ pub async fn emit_moonbit_decl_from_entry_path(
     module_augmentations: [],
     top_level_stmts: [],
     strict_property_initialization: true,
+    use_define_for_class_fields: false,
   }
   // Run the checker over the final module shape and surface anything it
   // catches as a generator-level note. The emit pipeline is internally

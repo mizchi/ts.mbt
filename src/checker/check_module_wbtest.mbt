@@ -11,6 +11,7 @@ fn empty_module_for_check() -> @ast.TsModule {
     enums: [],
     module_augmentations: [],
     strict_property_initialization: true,
+    use_define_for_class_fields: false,
     top_level_stmts: [],
   }
 }
@@ -135,6 +136,7 @@ test "check_module: detects duplicate class instance properties" {
     base_names: [],
     base_expr: None,
     static_field_inits: [],
+    instance_field_inits: [],
     constructor_params: None,
     properties: [
       {
@@ -178,6 +180,7 @@ test "check_module: instance and static with same name is OK" {
     base_names: [],
     base_expr: None,
     static_field_inits: [],
+    instance_field_inits: [],
     constructor_params: None,
     properties: [
       {

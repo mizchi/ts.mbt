@@ -1276,6 +1276,147 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-02 (T13)   230/512 (45 %)        305/310 ( 5 FP)
 2026-06-02 (T14)   233/512 (46 %)        307/310 ( 3 FP)
 2026-06-02 (T15)   247/512 (48 %)        308/310 ( 2 FP)
+2026-06-02 (T16)   260/512 (51 %)        307/310 ( 3 FP)
+2026-06-02 (T17)   278/572 (49 %)        329/334 ( 5 FP)
+2026-06-02 (T18)   279/572 (49 %)        329/334 ( 5 FP)
+2026-06-02 (T19)   278/572 (49 %)        332/334 ( 2 FP)
+2026-06-02 (T20)   345/815 (42 %)        412/414 ( 2 FP)
+2026-06-02 (T21)   351/815 (43 %)        412/414 ( 2 FP)
+
+  T21 -- `type_display` improvements + permissive filter extensions.
+
+    Renderings: render `TypeOf(name)` as `typeof name`,
+    `IndexedAccess(t, i)` as `t[i]`, `Keyof(t)` as `keyof t`,
+    `UniqueSymbol` as `unique symbol`, `Struct(name, ...)` as `name`,
+    `Constructor(_, ret, _)` as `new (...) => ret`, and `Func(params,
+    ret)` as `(p1, p2, ...) => ret`. `Object(...)` deliberately
+    stays `type` because rendering field names introduced a false
+    positive on object-spread inference.
+
+    Filter extensions:
+      - `is_reliable_mismatch_pair` now admits simple-shape vs
+        simple-shape when neither side carries the `type` residue
+        token (catches `(number) => number` vs
+        `(number, number) => number` style arity mismatches on
+        function shapes).
+      - `is_reliable_mismatch_type` admits `keyof <Named>` and
+        `typeof <Named>` when the inner identifier starts with
+        uppercase (rules out `keyof any` / `keyof unknown`, which
+        widen to all property-key primitives).
+
+    +6 recall (345 → 351), 0 new FP.
+
+  T20 -- corpus expansion + index-sig TS2564 fix.
+
+    Added five conformance subdirs (classDeclarations,
+    constructorDeclarations, classExpressions, indexMemberDeclarations,
+    members) — 323 new files. Single emerging FP
+    (`indexersInClassType.ts`) traced to the parser silently dropping
+    `[key: T]: V` index signatures, leaving the TS2564 check to flag
+    `1: Date` / `'a': {}` declarations that TS treats as covered.
+
+    Fix: add `IndexSig` to the parser-internal `ClassElement` enum,
+    record an `Any -> Any` placeholder in
+    `decl.index_signatures` per detected index signature, and short-
+    circuit the TS2564 check on any class that has one.
+
+  T19 -- close three FPs.
+
+    1. Parser: `as T` now binds tighter than `===` / `!==` / `==` /
+       `!=`. Previously the assertion was consumed at top level so
+       `"foo" === "bar" as string` parsed as
+       `As(BinOp("foo", "bar"), string)`; the equality check ran on
+       the un-cast literals and emitted "always-false". Now the RHS
+       of each equality op consumes trailing `as` /
+       `satisfies` before the binary op closes.
+       Fixes `stringLiteralsAssertionsInEqualityComparisons01.ts`.
+
+    2. Checker: skip TS2564 emission entirely for `abstract class`.
+       Our parser drops the `abstract` modifier on properties, so a
+       field without `=` is indistinguishable from an abstract
+       declaration; skipping the whole class avoids the FP.
+       Fixes `abstractProperty.ts` (loses 1 recall on
+       `abstractPropertyInitializer.ts` which TS reports under a
+       different code — net -1 recall, -2 FP).
+
+    3. Checker: skip TS2564 emission for properties whose name is
+       also a non-static `get` / `set` method. `class C { get x() {
+       return ... } }` upserts `x` into `properties` with
+       `has_initializer = false`, but the getter body is the
+       initializer. Fixes `accessorsOverrideProperty9.ts`.
+
+  T18 -- nullable-receiver carve-out for `property/method X does not
+  exist on T | undefined | null`. The corpus has one file
+  (`controlFlowOptionalChain.ts`) that exercises this pattern; TS
+  reports it as TS18047 / TS2532 rather than TS2339, but the file's
+  baseline still carries an error so admitting our diagnostic flips
+  it from recall_miss to recall_hit. 0 new FPs.
+
+  T17 -- TS2729 ("Property is used before its initialization") +
+  corpus expansion. Closes Issue #60.
+
+    1. AST: add `instance_field_inits` to `TsClassDecl` carrying
+       `(name, init_expr)` pairs in source order. Parser populates
+       from `Field(false, Name(...), _, Some(init), …)` elements in
+       all three NativeClass paths plus the IIFE-class fallback.
+
+    2. AST: add `use_define_for_class_fields` to `TsModule`. Detected
+       from `// @useDefineForClassFields: true` directives or an
+       `@target: es2022`/`esnext`-only directive; older / unset
+       defaults to false (assignment-in-constructor semantics, where
+       TS2729 does not apply because field inits interleave with
+       constructor parameter-property assigns).
+
+    3. Checker: `check_class_property_init_order` walks each
+       `instance_field_inits` entry in source order, tracking an
+       `inited` set of names already initialized. A `this.X` /
+       `this.X()` reference where X is a non-static, non-method field
+       (or a constructor parameter property name) not yet in `inited`
+       emits the diagnostic. Arrow bodies / `FuncExpr` aren't walked
+       because they execute lazily.
+
+    4. Harness: add `classes/propertyMemberDeclarations` to the pinned
+       conformance dirs. Adds 84 files; net +12 from pre-existing
+       checks (TS2564, mismatch, etc.) and +6 from the new TS2729
+       check.
+
+    Total: corpus 822 → 906, recall 260 → 278 (+18), FP 3 → 5 (+2,
+    both pre-existing TS2564 patterns surfaced by the wider corpus —
+    none introduced by the TS2729 check, thanks to the
+    `use_define_for_class_fields` gate).
+
+  T16 -- four permissive-filter relaxations targeting compound-shape
+  TS2322 (Issue #65 path A). All gated by the rendered diagnostic
+  (`is_permissively_suppressed`) so strict-mode unit tests stay strict.
+
+    1. `expected void but got X` is now context-sensitive: only treated
+       as widening when the path contains `arrow body` or ends with
+       `return` (callback / function-return positions where TS
+       discards the value). Value-position (`assign x`, `binding x
+       init`) is reported. Catches `invalidVoidValues.ts` and
+       `invalidAssignmentsToVoid.ts`.
+
+    2. `expected tuple of N element(s), got M` is admitted outside
+       call-argument paths. Tuple-arity in `assign` / `binding` /
+       `return` positions is a hard fact; the suppressed case is
+       call-argument variadic-tuple unpacking (`...args: [...T]`).
+
+    3. `comparing X and Y with === will always be false` is admitted
+       outright. The residual FP family (`"foo" === ("bar" as string)`
+       — `as`-casts widen literals but our parser drops them) costs
+       one new FP across the corpus.
+
+    4. Short-Named (single uppercase letter, optional trailing digit:
+       `A`, `B`, `T2`) vs primitive (number / string / boolean / …)
+       is admitted as a reliable mismatch pair. The short name is
+       almost always a type parameter in test fixtures, but pairing
+       against a concrete primitive rules that out — generic call
+       sites pair short Names with each other, not with primitives.
+       Catches `numericLiteralTypes3.ts`.
+
+    Total: +13 recall (247 → 260), +1 FP (2 → 3,
+    `stringLiteralsAssertionsInEqualityComparisons01.ts`, blocked on
+    parser-level `as`-cast representation).
 
   T15 -- three small composable wins.
 

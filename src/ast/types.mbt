@@ -639,6 +639,14 @@ pub(all) struct TsClassDecl {
   // inside the class body so the binding is part of the class
   // scope rather than a post-declaration assignment.
   static_field_inits : Array[(String, TsExpr)]
+  // Instance field initializers (`class X { foo = expr; }`). Populated
+  // in declaration order so the checker can validate that an initializer
+  // does not reference `this.bar` before `bar` has its own initializer
+  // (TS2728, "Property 'X' is used before its initialization"). Only
+  // populated for runtime classes by the parser; transforms ignore it
+  // since the runtime path lowers these inits into the constructor body
+  // separately, but keep an empty array to satisfy literal construction.
+  instance_field_inits : Array[(String, TsExpr)]
   constructor_params : Array[(String, TsType)]?
   properties : Array[TsClassPropertyDecl]
   methods : Array[TsClassMethodDecl]
@@ -722,6 +730,15 @@ pub(all) struct TsModule {
   // conformance harness baseline default, which has TS2564 emissions
   // for files without an explicit `@strict` directive).
   strict_property_initialization : Bool
+  // True when class field initializers should be assumed to run via
+  // ES2022 `[[DefineOwnProperty]]` semantics. This affects TS2729
+  // ("property used before initialization") because the older
+  // assignment-in-constructor semantics interleave field inits with
+  // constructor parameter-property assigns, so a field reading a
+  // param-property name isn't a use-before-init under that model.
+  // Detected from `// @useDefineForClassFields: true` directives or
+  // an `@target: es2022`/`esnext` directive (the TS default).
+  use_define_for_class_fields : Bool
 } derive(Debug)
 
 ///|
