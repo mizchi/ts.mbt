@@ -2255,6 +2255,15 @@ fn is_permissively_suppressed(sub_path : String, message : String) -> Bool {
       message.contains("does not exist on `bigint`") {
       return false
     }
+    // Nullable receiver: when the rendered receiver ends in `| undefined`
+    // or `| null`, our lookup correctly fails because the bottom side
+    // has no members. TS reports TS18047 / TS2532 ("Object is possibly
+    // null/undefined") rather than TS2339; the file-level baseline
+    // still carries some error code, so emitting turns the case from
+    // recall_miss into recall_hit.
+    if message.has_suffix("| undefined`") || message.has_suffix("| null`") {
+      return false
+    }
     return true
   }
   if message.has_prefix("method `") && message.contains("does not exist on") {
@@ -2265,6 +2274,9 @@ fn is_permissively_suppressed(sub_path : String, message : String) -> Bool {
       message.contains("does not exist on `string`") ||
       message.contains("does not exist on `boolean`") ||
       message.contains("does not exist on `bigint`") {
+      return false
+    }
+    if message.has_suffix("| undefined`") || message.has_suffix("| null`") {
       return false
     }
     return true

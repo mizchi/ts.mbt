@@ -1278,6 +1278,14 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-02 (T15)   247/512 (48 %)        308/310 ( 2 FP)
 2026-06-02 (T16)   260/512 (51 %)        307/310 ( 3 FP)
 2026-06-02 (T17)   278/572 (49 %)        329/334 ( 5 FP)
+2026-06-02 (T18)   279/572 (49 %)        329/334 ( 5 FP)
+
+  T18 -- nullable-receiver carve-out for `property/method X does not
+  exist on T | undefined | null`. The corpus has one file
+  (`controlFlowOptionalChain.ts`) that exercises this pattern; TS
+  reports it as TS18047 / TS2532 rather than TS2339, but the file's
+  baseline still carries an error so admitting our diagnostic flips
+  it from recall_miss to recall_hit. 0 new FPs.
 
   T17 -- TS2729 ("Property is used before its initialization") +
   corpus expansion. Closes Issue #60.
