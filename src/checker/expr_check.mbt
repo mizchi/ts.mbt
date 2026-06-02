@@ -2613,6 +2613,24 @@ fn is_reliable_mismatch_pair(exp : String, got : String) -> Bool {
   if is_reliable_mismatch_type(exp) && is_reliable_mismatch_type(got) {
     return true
   }
+  // Assigning a single bare primitive into a union of primitives /
+  // literals whose members are all of a *different* family (`string |
+  // undefined` <- `number`): the source is already concrete, so no flow
+  // narrowing can rescue it, and the family-disjointness rules out our
+  // literal-widening blind spot (`123 | 456` <- `number`, where the
+  // source is really a literal we over-widened). Restricted to a union
+  // *target* with an atom *source* — a union *source* is flow-narrowing
+  // residue and stays suppressed by the blanket `|` bail below.
+  if is_reliable_primitive_union(exp) &&
+    is_bare_primitive(got) &&
+    got != "any" &&
+    got != "unknown" &&
+    got != "never" &&
+    got != "object" &&
+    got != "void" &&
+    !primitive_union_contains_family(exp, primitive_family(got)) {
+    return true
+  }
   // Single-letter Named (`A`, `B`, `C`) vs primitive: short-identifier
   // names usually denote type parameters (T, U, K) but a primitive on the
   // other side rules that out — TS-style type parameters are never
@@ -2978,6 +2996,80 @@ fn is_short_named_identifier(s : String) -> Bool {
   }
   let tail = bytes[1]
   tail >= '0' && tail <= '9'
+}
+
+///|
+/// True when `s` renders as a union (`A | B | ...`) whose every member is
+/// a bare primitive or a string / numeric literal. Used by the permissive
+/// mismatch filter: assignability into such a union is exact membership,
+/// so a mismatch is reliable even though the blanket `|` bail would
+/// otherwise drop it. Bails on any compound marker that would break the
+/// naive ` | ` split (`&`, generics, function / object / array shapes).
+fn is_reliable_primitive_union(s : String) -> Bool {
+  if !s.contains(" | ") {
+    return false
+  }
+  if s.contains("&") ||
+    s.contains("<") ||
+    s.contains("(") ||
+    s.contains("{") ||
+    s.contains("[") ||
+    s.contains("=>") {
+    return false
+  }
+  let mut count = 0
+  for part in s.split(" | ") {
+    let p = part.to_owned()
+    let ok = (is_bare_primitive(p) && p != "any" && p != "unknown") ||
+      is_numeric_literal_display(p) ||
+      (p.has_prefix("\"") && p.has_suffix("\" (string)"))
+    if !ok {
+      return false
+    }
+    count = count + 1
+  }
+  count >= 2
+}
+
+///|
+/// Coarse primitive family of a rendered atom (`"number"` / `"string"` /
+/// `"boolean"` / `"bigint"` / `"null"` / `"undefined"` / `"symbol"`),
+/// folding literals into their base family. `""` for anything else.
+fn primitive_family(s : String) -> String {
+  match s {
+    "number" | "int" => "number"
+    "string" => "string"
+    "boolean" | "true" | "false" => "boolean"
+    "bigint" => "bigint"
+    "null" => "null"
+    "undefined" => "undefined"
+    "symbol" => "symbol"
+    _ =>
+      if is_numeric_literal_display(s) {
+        "number"
+      } else if s.has_prefix("\"") && s.has_suffix("\" (string)") {
+        "string"
+      } else {
+        ""
+      }
+  }
+}
+
+///|
+/// True when any member of the primitive/literal union `s` shares
+/// `family`. Used to keep the union-target mismatch carve-out away from
+/// our literal-widening blind spot (a widened `number` source against a
+/// numeric-literal union member).
+fn primitive_union_contains_family(s : String, family : String) -> Bool {
+  if family == "" {
+    return true
+  }
+  for part in s.split(" | ") {
+    if primitive_family(part.to_owned()) == family {
+      return true
+    }
+  }
+  false
 }
 
 ///|
