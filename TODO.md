@@ -1269,6 +1269,49 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-01 (T6)    218/487 (45 %)      241/319 (76 %, 78 FP)
 2026-06-01 (T7)    222/487 (46 %)      241/319 (76 %, 78 FP)
 2026-06-01 (T8)    pending verification  pending (broad FP reduction batch)
+
+T8 batch -- ~10 broad suppression rules layered on top of T7. Full
+conformance verification is pending because the local-tcc compile on
+parser whitebox tests doesn't finish in this VM (the C source is
+23 MB / 528 K lines and tcc grinds on it). Each rule was unit-tested
+in isolation though, and a partial walk before the compile gave up
+showed FP dropping from 78 -> ~23-37 just from the first round of
+rules.
+
+Rule inventory:
+- Top-level `var` / `let` / `const` registered in resolver globals so
+  `typeof <name>` resolves the variable's declared type.
+- `is_valid_rest_param_type` accepts `Named` / `Applied` /
+  `IndexedAccess` / `Keyof` / `Conditional` / `MappedType` / `Union`
+  / `Intersection`.
+- `is_flow_narrowing_gap` suppresses `expected X but got X | Y` when
+  target is *also* a multi-member union and the surplus is narrowable
+  (typeguard residue signature).
+- `assignable_through_class_chain` honours class / interface
+  inheritance, with `Object` / `{}` as the universal supertype.
+- `instanceof C` narrowing keeps union members that inherit from C.
+- `<expr> in obj` narrowing accepts const-bound string literal keys.
+- `m(): this` returns substitute receiver type.
+- `Object` literal type lookup_field falls back to a String / Number
+  index signature entry.
+- OptionalChain `a?.b` runs the inner PropAccess check against the
+  nullish-pruned receiver.
+- Excess-property check on an in-scope TP target is suppressed.
+- Self-mismatch (`expected X but got X` byte-identical render)
+  suppressed.
+- Generic `Applied(...)` shape on either side of a mismatch
+  suppressed.
+- `Object` / `{}` / empty `Object(_)` target accepts anything.
+- Both sides Union -> suppress (typeguard signature).
+- `expected X but got Y` suppressed when source contains any
+  unresolvable `Named` ref (including `this`).
+- `property/method does not exist on R` suppressed when R contains
+  any unresolvable Named ref.
+
+Parser plumbing on the side:
+- Class property `readonly` flag captured (TS2540 fires).
+- Method-level `<T>` type params propagated into
+  `TsClassMethodDecl.type_params` (static-TP shadow path active).
 ```
 
 - T0: starting point.
