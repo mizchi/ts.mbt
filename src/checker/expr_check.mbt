@@ -3688,13 +3688,19 @@ fn infer_expr(
 /// from `type_params`, bind it to `actual`. Compound shapes (Array,
 /// Tuple, Func, Applied, Union…) are walked structurally so type
 /// parameters embedded inside them get bound from the matching position
-/// in `actual`. First binding wins; later occurrences are only honored
-/// if the existing binding was `Any`.
+/// in `actual`. The `soft` flag is `true` when the recursion is currently
+/// inside the return position of a `Func` formal — that is, a covariant
+/// inference candidate coming from an arrow's body type. Multiple
+/// soft candidates for the same parameter are unioned (best-common-type
+/// approximation), but a hard inference (top-level `T`, `T[]`, etc.)
+/// retains the first-wins semantics so real argument-type mismatches
+/// still surface as diagnostics.
 fn infer_param_bindings(
   type_params : Array[String],
   formal : @ast.TsType,
   actual : @ast.TsType,
   bindings : Map[String, @ast.TsType],
+  soft : Bool,
 ) -> Unit {
   // Direct hit: formal is exactly a type parameter we're solving for.
   match formal {
@@ -3702,7 +3708,15 @@ fn infer_param_bindings(
       if type_params.contains(name) {
         match bindings.get(name) {
           Some(Any) | None => bindings[name] = actual
-          Some(_) => () // first concrete binding wins
+          Some(existing) =>
+            // `soft` widens; hard inferences keep the first concrete
+            // binding so the per-arg assignability check catches a real
+            // mismatch (e.g. `indexOf(arr: number[], "abc")`). Any-actual
+            // contributes no information.
+            match actual {
+              Any => ()
+              _ => if soft { bindings[name] = narrow_union(existing, actual) }
+            }
         }
         return
       }
@@ -3711,16 +3725,22 @@ fn infer_param_bindings(
   // Structural matching — peel matching outer shapes.
   match (formal, actual) {
     (Array(f_elem), Array(a_elem)) =>
-      infer_param_bindings(type_params, f_elem, a_elem, bindings)
+      infer_param_bindings(type_params, f_elem, a_elem, bindings, soft)
     (Array(f_elem), Applied("Array", a_args)) if a_args.length() == 1 =>
-      infer_param_bindings(type_params, f_elem, a_args[0], bindings)
+      infer_param_bindings(type_params, f_elem, a_args[0], bindings, soft)
     (Applied("Array", f_args), Array(a_elem)) if f_args.length() == 1 =>
-      infer_param_bindings(type_params, f_args[0], a_elem, bindings)
+      infer_param_bindings(type_params, f_args[0], a_elem, bindings, soft)
     (Applied(f_name, f_args), Applied(a_name, a_args)) =>
       if f_name == a_name && f_args.length() == a_args.length() {
         let mut i = 0
         while i < f_args.length() {
-          infer_param_bindings(type_params, f_args[i], a_args[i], bindings)
+          infer_param_bindings(
+            type_params,
+            f_args[i],
+            a_args[i],
+            bindings,
+            soft,
+          )
           i = i + 1
         }
       }
@@ -3732,11 +3752,22 @@ fn infer_param_bindings(
       }
       let mut i = 0
       while i < n {
-        infer_param_bindings(type_params, f_items[i], a_items[i], bindings)
+        infer_param_bindings(
+          type_params,
+          f_items[i],
+          a_items[i],
+          bindings,
+          soft,
+        )
         i = i + 1
       }
     }
     (Func(f_params, f_ret), Func(a_params, a_ret)) => {
+      // Param positions: keep the surrounding softness (a contravariant
+      // slot under an arrow doesn't get a covariance bonus). Return
+      // position: mark `soft = true` so multiple unannotated arrows
+      // contributing different body return types union instead of
+      // first-wins.
       let n = if f_params.length() < a_params.length() {
         f_params.length()
       } else {
@@ -3744,10 +3775,16 @@ fn infer_param_bindings(
       }
       let mut i = 0
       while i < n {
-        infer_param_bindings(type_params, f_params[i], a_params[i], bindings)
+        infer_param_bindings(
+          type_params,
+          f_params[i],
+          a_params[i],
+          bindings,
+          soft,
+        )
         i = i + 1
       }
-      infer_param_bindings(type_params, f_ret, a_ret, bindings)
+      infer_param_bindings(type_params, f_ret, a_ret, bindings, true)
     }
     (Union(f_parts), _) =>
       // Best-effort: try the first part that isn't a bare type parameter
@@ -3757,7 +3794,7 @@ fn infer_param_bindings(
         match part {
           Named(n) if type_params.contains(n) => continue
           _ => {
-            infer_param_bindings(type_params, part, actual, bindings)
+            infer_param_bindings(type_params, part, actual, bindings, soft)
             return
           }
         }
@@ -3789,7 +3826,7 @@ fn solve_generic_bindings(
   let mut i = 0
   while i < n {
     let actual = infer_expr(env, resolver, args[i])
-    infer_param_bindings(type_params, params[i], actual, bindings)
+    infer_param_bindings(type_params, params[i], actual, bindings, false)
     i = i + 1
   }
   bindings
@@ -4927,6 +4964,7 @@ fn check_jsx_attrs(
                     formal,
                     maybe_widen(sf.1),
                     bindings,
+                    false,
                   )
                 None => ()
               }
@@ -4946,6 +4984,7 @@ fn check_jsx_attrs(
                   formal,
                   maybe_widen(actual),
                   bindings,
+                  false,
                 )
               }
               None => ()
