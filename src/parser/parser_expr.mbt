@@ -170,17 +170,29 @@ fn Parser::parse_asserted_equality(
 ) -> @ast.TsExpr raise ParseError {
   let mut left = self.parse_asserted_comparison(left)
   while true {
+    // TS lets `as T` / `satisfies T` bind tighter than the equality
+    // operators (they sit at unary precedence in the spec), so
+    // `"foo" === "bar" as string` is `"foo" === ("bar" as string)`
+    // — not `("foo" === "bar") as string`. Consume the trailing
+    // assertion on the right operand here so the binary-op AST
+    // mirrors that grouping. Without this, our "always-false"
+    // overlap diagnostic compares two string literals and reports
+    // a false positive on the cast-widened RHS.
+    let consume_rhs_assertion = fn(right : @ast.TsExpr) -> @ast.TsExpr raise ParseError {
+      let (_, wrapped) = self.consume_trailing_assertions_wrap(right)
+      wrapped
+    }
     if self.match_(EqEqEq) {
-      let right = self.parse_comparison()
+      let right = consume_rhs_assertion(self.parse_comparison())
       left = BinOp(BinEq, left, right)
     } else if self.match_(BangEqEq) {
-      let right = self.parse_comparison()
+      let right = consume_rhs_assertion(self.parse_comparison())
       left = BinOp(BinNe, left, right)
     } else if self.match_(EqEq) {
-      let right = self.parse_comparison()
+      let right = consume_rhs_assertion(self.parse_comparison())
       left = BinOp(AbstractEq, left, right)
     } else if self.match_(BangEq) {
-      let right = self.parse_comparison()
+      let right = consume_rhs_assertion(self.parse_comparison())
       left = BinOp(AbstractNe, left, right)
     } else {
       break
@@ -775,17 +787,26 @@ fn Parser::parse_bit_and(self : Parser) -> @ast.TsExpr raise ParseError {
 fn Parser::parse_equality(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut left = self.parse_comparison()
   while true {
+    // `as T` / `satisfies T` sit at unary precedence in the TS spec,
+    // so `a === b as T` is `a === (b as T)`. Without consuming the
+    // assertion here the AST would wrap the whole equality and our
+    // "always-false" overlap diagnostic would compare the un-cast
+    // literals (`"foo" === ("bar" as string)`).
+    let consume_rhs_assertion = fn(right : @ast.TsExpr) -> @ast.TsExpr raise ParseError {
+      let (_, wrapped) = self.consume_trailing_assertions_wrap(right)
+      wrapped
+    }
     if self.match_(EqEqEq) {
-      let right = self.parse_comparison()
+      let right = consume_rhs_assertion(self.parse_comparison())
       left = BinOp(BinEq, left, right)
     } else if self.match_(BangEqEq) {
-      let right = self.parse_comparison()
+      let right = consume_rhs_assertion(self.parse_comparison())
       left = BinOp(BinNe, left, right)
     } else if self.match_(EqEq) {
-      let right = self.parse_comparison()
+      let right = consume_rhs_assertion(self.parse_comparison())
       left = BinOp(AbstractEq, left, right)
     } else if self.match_(BangEq) {
-      let right = self.parse_comparison()
+      let right = consume_rhs_assertion(self.parse_comparison())
       left = BinOp(AbstractNe, left, right)
     } else {
       break

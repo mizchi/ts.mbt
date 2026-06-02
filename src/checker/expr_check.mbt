@@ -8575,6 +8575,15 @@ fn check_native_class_property_initializers(
     if decl.is_declare {
       continue
     }
+    // Abstract classes can declare `abstract x: T` fields that
+    // subclasses must implement. Our parser drops the `abstract`
+    // modifier on properties, so we can't distinguish a truly-
+    // unassigned concrete field from an abstract one. Skipping the
+    // whole abstract class is a conservative trade -- TS itself
+    // applies the check only to concrete-field shapes.
+    if decl.is_abstract {
+      continue
+    }
     // Skip when the class declares a constructor: its body might
     // assign `this.x` and we don't model the constructor body in the
     // TsClassDecl form (only the parameter list survives). A false
@@ -8584,6 +8593,16 @@ fn check_native_class_property_initializers(
       Some(_) => continue
       None => ()
     }
+    // Build a set of names backed by a getter/setter method so we can
+    // skip them below. `class C { get x() {…} }` upserts `x` into
+    // `decl.properties` with `has_initializer = false`, but TS treats
+    // the getter body as the initializer.
+    let accessor_names : Map[String, Unit] = {}
+    for m in decl.methods {
+      if !m.is_static && (m.accessor == "get" || m.accessor == "set") {
+        accessor_names[m.name] = ()
+      }
+    }
     for prop in decl.properties {
       // Static fields are subject to a separate initialisation rule
       // in TS (`static x: T;` without `=`) and the runtime path
@@ -8591,6 +8610,9 @@ fn check_native_class_property_initializers(
       // for now since it's a much smaller cluster and overlaps the
       // common case.
       if prop.is_static {
+        continue
+      }
+      if accessor_names.contains(prop.name) {
         continue
       }
       if prop.has_initializer || prop.has_definite_assertion {
