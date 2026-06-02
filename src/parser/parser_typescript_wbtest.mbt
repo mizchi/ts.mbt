@@ -1123,7 +1123,9 @@ async test "checker: accuracy against TypeScript conformance baselines" {
     "typescript/tests/cases/conformance/types/rest", "typescript/tests/cases/conformance/types/specifyingTypes",
     "typescript/tests/cases/conformance/types/contextualTypes", "typescript/tests/cases/conformance/types/namedTypes",
     "typescript/tests/cases/conformance/types/typeRelationships", "typescript/tests/cases/conformance/types/nonPrimitive",
-    "typescript/tests/cases/conformance/classes/propertyMemberDeclarations",
+    "typescript/tests/cases/conformance/classes/propertyMemberDeclarations", "typescript/tests/cases/conformance/classes/classDeclarations",
+    "typescript/tests/cases/conformance/classes/constructorDeclarations", "typescript/tests/cases/conformance/classes/classExpressions",
+    "typescript/tests/cases/conformance/classes/indexMemberDeclarations", "typescript/tests/cases/conformance/classes/members",
   ]
   let mut total = 0
   let mut parsed = 0

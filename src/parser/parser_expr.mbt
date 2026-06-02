@@ -178,7 +178,9 @@ fn Parser::parse_asserted_equality(
     // mirrors that grouping. Without this, our "always-false"
     // overlap diagnostic compares two string literals and reports
     // a false positive on the cast-widened RHS.
-    let consume_rhs_assertion = fn(right : @ast.TsExpr) -> @ast.TsExpr raise ParseError {
+    let consume_rhs_assertion = fn(
+      right : @ast.TsExpr,
+    ) -> @ast.TsExpr raise ParseError {
       let (_, wrapped) = self.consume_trailing_assertions_wrap(right)
       wrapped
     }
@@ -792,7 +794,9 @@ fn Parser::parse_equality(self : Parser) -> @ast.TsExpr raise ParseError {
     // assertion here the AST would wrap the whole equality and our
     // "always-false" overlap diagnostic would compare the un-cast
     // literals (`"foo" === ("bar" as string)`).
-    let consume_rhs_assertion = fn(right : @ast.TsExpr) -> @ast.TsExpr raise ParseError {
+    let consume_rhs_assertion = fn(
+      right : @ast.TsExpr,
+    ) -> @ast.TsExpr raise ParseError {
       let (_, wrapped) = self.consume_trailing_assertions_wrap(right)
       wrapped
     }

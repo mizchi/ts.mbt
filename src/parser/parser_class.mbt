@@ -14,6 +14,12 @@ priv enum ClassElement {
   // strict-property-initialization check (TS2564) in the checker.
   Field(Bool, ClassKey, @ast.TsType, @ast.TsExpr?, Bool, Bool)
   StaticBlock(@ast.TsBlock)
+  // Marker for `[k: KeyType]: ValueType` index signatures. The body is
+  // skipped (we don't model index access through the class type), but
+  // the presence of any index signature opts the class out of strict-
+  // property-initialization (TS2564) because every concrete field is
+  // implicitly covered by the indexer.
+  IndexSig
 }
 
 ///|
@@ -200,6 +206,17 @@ fn build_runtime_class_decl(
       _ => ()
     }
   }
+  // Track index-signature presence so the TS2564 check can opt-out
+  // (an indexer implicitly types every concrete field). We don't
+  // model index lookups against class instances, so the value is an
+  // `Any` -> `Any` placeholder -- only the length matters for the
+  // skip predicate.
+  let index_signatures : Array[(@ast.TsType, @ast.TsType)] = []
+  for element in elements {
+    if element is IndexSig {
+      index_signatures.push((@ast.TsType::Any, @ast.TsType::Any))
+    }
+  }
   {
     name,
     type_params,
@@ -210,7 +227,7 @@ fn build_runtime_class_decl(
     constructor_params,
     properties,
     methods,
-    index_signatures: [],
+    index_signatures,
     is_abstract,
     is_constructible: !is_abstract,
     // Decorators on runtime classes are attached by the caller via
@@ -910,6 +927,7 @@ fn Parser::parse_class_body(
       continue // Continue to next class element
     }
     if self.try_skip_class_index_signature() {
+      elements.push(IndexSig)
       continue
     }
     let mut accessor_kind : String? = None
@@ -1328,6 +1346,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
           }
         }
       StaticBlock(_) => key_temps.push(None) // Placeholder to keep indices aligned
+      IndexSig => key_temps.push(None)
     }
   }
 
@@ -1683,6 +1702,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
         ])
         stmts.push(Expr(call_expr))
       }
+      IndexSig => ()
     }
   }
   stmts.push(Return(Some(@ast.TsExpr::Var(tmp_name))))
@@ -1909,6 +1929,7 @@ fn Parser::parse_class_decl_with_abstract(
           }
         }
       StaticBlock(_) => key_temps.push(None) // Placeholder to keep indices aligned
+      IndexSig => key_temps.push(None)
     }
   }
 
@@ -2262,6 +2283,7 @@ fn Parser::parse_class_decl_with_abstract(
         ])
         stmts.push(Expr(call_expr))
       }
+      IndexSig => ()
     }
   }
   if stmts.length() == 1 {

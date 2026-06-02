@@ -8584,6 +8584,15 @@ fn check_native_class_property_initializers(
     if decl.is_abstract {
       continue
     }
+    // Index signatures (`class C { [k: string]: T }`) implicitly
+    // type every property, so a bare `1: Date` / `'a': {}`
+    // declaration is satisfied without an `=` initializer. Our
+    // assignability layer doesn't reconcile these against
+    // individual `properties` entries, so the conservative trade
+    // is to skip TS2564 for any class that has one.
+    if decl.index_signatures.length() > 0 {
+      continue
+    }
     // Skip when the class declares a constructor: its body might
     // assign `this.x` and we don't model the constructor body in the
     // TsClassDecl form (only the parameter list survives). A false
