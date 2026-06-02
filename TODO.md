@@ -1275,6 +1275,44 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-02 (T12)   166/512 (32 %)        305/310 ( 5 FP)
 2026-06-02 (T13)   230/512 (45 %)        305/310 ( 5 FP)
 2026-06-02 (T14)   233/512 (46 %)        307/310 ( 3 FP)
+2026-06-02 (T15)   247/512 (48 %)        308/310 ( 2 FP)
+
+  T15 -- three small composable wins.
+
+    1. Param destructure: `check_function_body_with` walked
+       `func.params` and bound `p.name -> p.type_`, treating
+       `function f({ a, b }: T)` as binding the synthesized first
+       name of the pattern to the full `T`. Inside the body `a`, `b`
+       then looked up as `Any`. Now: when `p.binding` is a
+       `TsBinding::Object` / `TsBinding::Array`, walk via
+       `bind_pattern` so inner names point at per-field /
+       per-element types.
+
+    2. `||` narrowing: `Or => narrow_union(l, r)` ignored short-
+       circuit semantics, so `(T | undefined) || T` typed as
+       `T | undefined`. Switched to
+       `narrow_union(non_nullable(l), r)`.
+
+    3. Type-guard intersection: `apply_type_predicate_narrowing`
+       fell back to `target` when `narrow_keep` reduced to `Never`,
+       which happens when `cur` is a single Named that isn't
+       structurally assignable to `target` (e.g.
+       `function hasLegs(x: Beast): x is Legged` where Legged is a
+       narrower shape than Beast). TS narrows to `cur & target`,
+       not just `target` — preserving the source-type association.
+
+    4. Bare-Named admission in the permissive filter, with a 3-char
+       + lowercase guard to exclude conventional type-parameter
+       names (`T`, `S2`).
+
+    5. Property / method missing on a bare-primitive receiver
+       (`number` / `string` / `boolean` / `bigint`) is admitted —
+       prototype dispatch covers the genuine uses, so a remaining
+       miss is real.
+
+    Together: +14 recall, -1 FP (controlFlowElementAccessNoCrash1
+    cleared; intersection narrowing prevented a new typeGuards FP).
+    Both remaining FPs are Issue #62 territory.
 
   T14 -- restore-declared-on-assignment fix for flow narrowing. The
   checker now tracks the *declared* type of a variable separately
