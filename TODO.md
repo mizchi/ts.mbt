@@ -1282,6 +1282,36 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-02 (T19)   278/572 (49 %)        332/334 ( 2 FP)
 2026-06-02 (T20)   345/815 (42 %)        412/414 ( 2 FP)
 2026-06-02 (T21)   351/815 (43 %)        412/414 ( 2 FP)
+2026-06-02 (T22)   350/815 (43 %)        413/414 ( 1 FP)
+
+  T22 -- generic method-level type-parameter shadowing (Issue #62).
+
+    Root cause: `interface I<T> { m<T>(x: T): T }` and `class C<T> {
+    m<T>(x: T) {} }` redeclare `T` at the method boundary — a fresh
+    type variable unrelated to the enclosing `I`/`C`'s instantiated
+    `T`. When resolving `i.m(...)` / `c.m(...)`, the resolver was
+    substituting the receiver's type argument into the method's
+    parameters, so `i.m3(true, 1)` on `I<string, number>` checked
+    `boolean` against the instantiated `string` and false-flagged.
+
+    Fix:
+      - AST: `TsInterface` gains `method_type_params : Array[(String,
+        Array[String])]` (per-method generic names, keyed by field).
+      - Parser: capture the method's `<...>` names instead of skipping
+        them when building interface members.
+      - Checker (`lookup_field_core`): both the class-method arm and the
+        interface `Applied(n, args)` arm now drop a method's own type
+        parameters from the substitution map before substituting, so the
+        method's shadowing generics stay as bare `Named(...)` (which the
+        assignability check then leaves unconstrained).
+
+    Clears the `genericCallTypeArgumentInference.ts` FP (FP 2 → 1).
+    The remaining typeInference FP
+    (`genericCallWithGenericSignatureArguments.ts`) needs best-common-
+    type inference across multiple callback arguments — deferred. The
+    -1 recall is a coincidental class-generic-method detection in a
+    baseline-positive file that the (correct) shadowing fix now
+    suppresses.
 
   T21 -- `type_display` improvements + permissive filter extensions.
 

@@ -29,6 +29,7 @@ fn iface(
     fields,
     readonly_fields: [],
     index_signatures: [],
+    method_type_params: [],
   }
 }
 
@@ -103,6 +104,7 @@ test "validate_module: ignores generic parameters in scope" {
     fields: [("value", Named("T"))],
     readonly_fields: [],
     index_signatures: [],
+    method_type_params: [],
   })
   let unresolved = unresolved_type_references(mod)
   assert_eq(unresolved.length(), 0)

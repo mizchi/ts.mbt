@@ -21,6 +21,8 @@ pub fn check_module(@ast.TsModule) -> TypeCheckReport
 
 pub fn check_module_function_bodies(@ast.TsModule) -> Array[ExprIssue]
 
+pub fn check_module_function_bodies_permissive(@ast.TsModule) -> Array[ExprIssue]
+
 pub fn classify_optional_like_union(@ast.TsType) -> (@ast.TsType, Bool)?
 
 pub fn classify_transparent_intersection(@ast.TsType) -> @ast.TsType?

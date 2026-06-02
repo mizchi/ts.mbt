@@ -118,6 +118,13 @@ fn merge_interfaces(
   for sig in b.index_signatures {
     index_signatures.push(sig)
   }
+  let method_type_params : Array[(String, Array[String])] = []
+  for mtp in a.method_type_params {
+    method_type_params.push(mtp)
+  }
+  for mtp in b.method_type_params {
+    method_type_params.push(mtp)
+  }
   // Type parameters: use `a`'s. TS requires them to match across
   // declarations, so it shouldn't matter which we pick.
   {
@@ -128,6 +135,7 @@ fn merge_interfaces(
     fields,
     readonly_fields,
     index_signatures,
+    method_type_params,
   }
 }
 
@@ -683,6 +691,41 @@ fn array_prototype_member(elem : @ast.TsType, field : String) -> @ast.TsType? {
 }
 
 ///|
+/// Return a copy of `bindings` with the named field's method-level type
+/// parameters removed, so a generic method's shadowing type variable
+/// (`interface I<T> { m<T>(x: T): T }`) is left unsubstituted instead of
+/// being captured by the interface's instantiated `T`. When the field has
+/// no recorded method generics the original map is returned unchanged.
+fn scoped_bindings_for_method(
+  bindings : Map[String, @ast.TsType],
+  method_type_params : Array[(String, Array[String])],
+  field : String,
+) -> Map[String, @ast.TsType] {
+  let mut shadowed : Array[String]? = None
+  for mtp in method_type_params {
+    if mtp.0 == field {
+      shadowed = Some(mtp.1)
+      break
+    }
+  }
+  match shadowed {
+    None => bindings
+    Some(names) => {
+      if names.length() == 0 {
+        return bindings
+      }
+      let scoped : Map[String, @ast.TsType] = {}
+      for kv in bindings {
+        if !names.contains(kv.0) {
+          scoped[kv.0] = kv.1
+        }
+      }
+      scoped
+    }
+  }
+}
+
+///|
 fn Resolver::lookup_field(
   self : Resolver,
   recv : @ast.TsType,
@@ -942,7 +985,16 @@ fn Resolver::lookup_field_core(
           }
           for f in iface.fields {
             if f.0 == field {
-              return Some(substitute_params(f.1, bindings))
+              // Method-level generics shadow the interface's type params:
+              // drop any shadowed names so a generic method keeps its own
+              // fresh type variable rather than resolving it to the
+              // interface's instantiated argument.
+              let scoped = scoped_bindings_for_method(
+                bindings,
+                iface.method_type_params,
+                field,
+              )
+              return Some(substitute_params(f.1, scoped))
             }
           }
           let mut j = 0
@@ -1002,14 +1054,32 @@ fn Resolver::lookup_field_core(
               }
               for m in cls.methods {
                 if m.name == field && !m.is_static {
+                  // Method-level type parameters shadow the class's: a
+                  // `foo3<T>(t: T, u: U)` declares a fresh `T` that is
+                  // unrelated to the class's instantiated `T`. Drop any
+                  // shadowed names from the substitution map so the method's
+                  // own generics stay as bare `Named(...)` references (which
+                  // the assignability check then leaves unconstrained)
+                  // instead of being resolved to the class's type argument.
+                  let method_bindings = if m.type_params.length() > 0 {
+                    let scoped : Map[String, @ast.TsType] = {}
+                    for kv in bindings {
+                      if !m.type_params.contains(kv.0) {
+                        scoped[kv.0] = kv.1
+                      }
+                    }
+                    scoped
+                  } else {
+                    bindings
+                  }
                   let param_types : Array[@ast.TsType] = []
                   for mp in m.params {
-                    param_types.push(substitute_params(mp.1, bindings))
+                    param_types.push(substitute_params(mp.1, method_bindings))
                   }
                   return Some(
                     @ast.TsType::Func(
                       param_types,
-                      substitute_params(m.return_type, bindings),
+                      substitute_params(m.return_type, method_bindings),
                     ),
                   )
                 }
