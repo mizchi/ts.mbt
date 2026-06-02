@@ -2452,7 +2452,21 @@ fn is_reliable_mismatch_type(s : String) -> Bool {
     | "true"
     | "false"
     | "object" => return true
+    // `type` is the fallback string from `type_display` for Object /
+    // Struct / Null / NumberLiteral / BooleanLiteral etc. — opaque
+    // shapes where we can't be confident about reliability.
+    "type" | "function" => return false
     _ => ()
+  }
+  // Bare identifier: a single Named type (e.g. `C`, `I`, `Point`).
+  // These come from interface / class / type-alias references. When
+  // both sides of a mismatch render as a bare identifier, it's a
+  // clean Named-vs-Named comparison that strict assignability gets
+  // right (no flow narrowing, no generic inference, no anonymous
+  // shapes to flatten). Conservative shape check: first char is a
+  // letter or `_`, rest are alphanumeric or `_`.
+  if s.length() > 0 && is_bare_identifier(s) {
+    return true
   }
   // String literal types: `"foo" (string)` exactly (no embedded
   // newlines, no compound suffix). The strict `"X" (string)` match
@@ -2474,6 +2488,49 @@ fn is_reliable_mismatch_type(s : String) -> Bool {
     }
   }
   false
+}
+
+///|
+/// True when `s` is a bare identifier that is *unlikely* to be a type
+/// parameter name. Conventional type parameters in TS test fixtures are
+/// short uppercase forms (`T`, `U`, `K`, `V`, `S2`, `T2`); concrete
+/// class/interface/alias names almost always contain a lowercase letter
+/// (`Beast`, `Point`, `Promise`) or are at least 3+ chars. Used by
+/// `is_reliable_mismatch_type` to admit Named-vs-Named mismatches
+/// (e.g. `expected `Beast` but got `Legged``) through the permissive
+/// filter without unleashing Type-parameter-vs-Type-parameter false
+/// positives from generic call sites.
+fn is_bare_identifier(s : String) -> Bool {
+  if s.length() < 3 {
+    return false
+  }
+  let bytes = s.to_array()
+  let head = bytes[0]
+  let head_ok = (head >= 'a' && head <= 'z') ||
+    (head >= 'A' && head <= 'Z') ||
+    head == '_' ||
+    head == '$'
+  if !head_ok {
+    return false
+  }
+  let mut i = 1
+  let mut has_lower = head >= 'a' && head <= 'z'
+  while i < bytes.length() {
+    let c = bytes[i]
+    let ok = (c >= 'a' && c <= 'z') ||
+      (c >= 'A' && c <= 'Z') ||
+      (c >= '0' && c <= '9') ||
+      c == '_' ||
+      c == '$'
+    if !ok {
+      return false
+    }
+    if c >= 'a' && c <= 'z' {
+      has_lower = true
+    }
+    i = i + 1
+  }
+  has_lower
 }
 
 ///|
@@ -6230,11 +6287,20 @@ fn apply_type_predicate_narrowing(
   match args[idx] {
     Var(arg_name) => {
       let cur = env_lookup_full(env, resolver, arg_name)
-      // Positive: narrow to T. If `keep` produces Never (e.g. cur is Any),
-      // fall back to target.
+      // Positive: narrow to T. If `keep` produces Never (e.g. cur is a
+      // single Named that isn't assignable to `target` but the source
+      // type genuinely supports the predicate, like
+      // `function hasLegs(x: Beast): x is Legged`), fall back to the
+      // intersection `cur & target` — TS narrows to that intersection,
+      // not just to `target`, so subsequent calls expecting `cur` still
+      // accept the narrowed value.
       let then_ty = narrow_keep(cur, fn(v) { is_assignable_to(v, target) })
       let then_resolved = match then_ty {
-        Never => target
+        Never =>
+          match cur {
+            Any => target
+            _ => @ast.TsType::Intersection([cur, target])
+          }
         _ => then_ty
       }
       pair_pos.push((arg_name, then_resolved))
