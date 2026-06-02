@@ -9743,6 +9743,51 @@ fn check_interface_extends_compat(
       }
     }
   }
+  // TS2411 ("Property 'X' of type 'T' is not assignable to 'string' index
+  // type 'V'"): when a declaration carries an object-typed index
+  // signature, a scalar-typed named property can never satisfy it. Same
+  // reliable scalar-vs-object shape as the extends check above -- we stay
+  // silent on Named-vs-Named (subtype-dependent) to avoid false positives.
+  fn check_index_props(
+    index_sigs : Array[(@ast.TsType, @ast.TsType)],
+    fields : Array[(String, @ast.TsType)],
+    owner : String,
+  ) -> Unit {
+    for sig in index_sigs {
+      if !is_object_shaped(sig.1) {
+        continue
+      }
+      for f in fields {
+        if is_scalar(f.1) {
+          issues.push({
+            path: owner,
+            message: "property `\{f.0}` of type `\{type_display(f.1)}` is not assignable to index type `\{type_display(sig.1)}`",
+          })
+        }
+      }
+    }
+  }
+
+  for iface in module_.interfaces {
+    if iface.type_params.length() == 0 {
+      check_index_props(
+        iface.index_signatures,
+        iface.fields,
+        "interface \{iface.name}",
+      )
+    }
+  }
+  for c in module_.classes {
+    if c.type_params.length() == 0 {
+      let fields : Array[(String, @ast.TsType)] = []
+      for p in c.properties {
+        if !p.is_static {
+          fields.push((p.name, p.type_))
+        }
+      }
+      check_index_props(c.index_signatures, fields, "class \{c.name}")
+    }
+  }
   issues
 }
 
