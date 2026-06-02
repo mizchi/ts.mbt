@@ -3709,7 +3709,11 @@ fn is_flow_narrowing_gap(source : @ast.TsType, target : @ast.TsType) -> Bool {
     return false
   }
   let tgt_members = union_members(target)
-  if tgt_members.length() == 0 {
+  // Require target to also be a multi-member union -- this is the
+  // exact shape of typeguard residue (`X | Y | Z -> X | Y`). A single
+  // primitive target (e.g. `string | undefined -> string` after
+  // `arr.pop()`) is a legitimate user error we should keep flagging.
+  if tgt_members.length() <= 1 {
     return false
   }
   // Every target member must appear in source.
