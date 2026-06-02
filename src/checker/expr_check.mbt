@@ -3185,7 +3185,67 @@ fn check_binop_operands(
         )
       }
     }
+    // Loose equality (`==` / `!=`): TypeScript also reports TS2367 for
+    // operands whose types have no overlap. `==` coerces *across*
+    // primitive families (`0 == ""`, `1 == "1"`), so we only flag when
+    // both operands are in the *same* primitive family -- there the
+    // abstract-equality result matches strict equality and "no overlap"
+    // (e.g. `"foo" == "bar"`, `x /* : "foo" */ == "bar"`) is reliably
+    // always-false.
+    AbstractEq | AbstractNe => {
+      let is_typeof = fn(e : @ast.TsExpr) -> Bool {
+        match e {
+          UnaryOp(Typeof, _) => true
+          _ => false
+        }
+      }
+      // Both operands written as bare literal constants is exactly where
+      // a dropped type assertion (`"x" == (<any>"y")`, `... == ("y" as
+      // string)`) leaves behind a spurious literal-vs-literal shape, so
+      // skip that pair. Real always-false comparisons in the corpus pair
+      // a literal-typed *variable* with a literal, which is still flagged.
+      let is_literal_const = fn(e : @ast.TsExpr) -> Bool {
+        match e {
+          StringLit(_) | NumberLit(_) | IntLit(_) | BoolLit(_) | BigIntLit(_) =>
+            true
+          _ => false
+        }
+      }
+      let lt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, l))
+      let rt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, r))
+      match (equality_primitive_family(lt), equality_primitive_family(rt)) {
+        (Some(fa), Some(fb)) =>
+          if fa == fb &&
+            !(is_literal_const(l) && is_literal_const(r)) &&
+            !is_typeof(l) &&
+            !is_typeof(r) &&
+            !types_can_overlap(lt, rt) {
+            record(
+              ctx,
+              "loose equality",
+              "comparing `\{type_display(lt)}` and `\{type_display(rt)}` with == will always be false",
+            )
+          }
+        _ => ()
+      }
+    }
     _ => ()
+  }
+}
+
+///|
+/// The primitive family of `t` for abstract-equality (`==`) overlap
+/// analysis: `string` / `number` / `boolean` / `bigint`, including the
+/// matching literal forms. Returns `None` for anything else (objects,
+/// named references, unions, `null` / `undefined`, etc.) where `==`
+/// coercion or structural shape makes a "no overlap" call unsafe.
+fn equality_primitive_family(t : @ast.TsType) -> String? {
+  match t {
+    String_ | Literal(_) | TemplateLiteralType(_, _) => Some("string")
+    Number | Int | NumberLiteral(_) => Some("number")
+    Boolean | BooleanLiteral(_) => Some("boolean")
+    BigInt | BigIntLiteral(_) => Some("bigint")
+    _ => None
   }
 }
 
@@ -8012,7 +8072,19 @@ fn check_call_args_in_expr(
       // TS2493 ("Tuple type has no element at index N"): a fixed-length
       // tuple indexed by an out-of-range numeric literal. Tuples that
       // carry a `...rest` element accept any index, so we skip those.
-      match recv_ty {
+      // Tuple length is a property of the *declared* type, so for a bare
+      // variable receiver consult the declared slot rather than the
+      // flow-narrowed type (`t = [a, b]` would otherwise erase the tuple
+      // shape down to an array literal and hide the out-of-range access).
+      let tuple_ty = match recv {
+        Var(name) =>
+          match env.lookup_declared(name) {
+            Some(d) => ctx.resolver.unwrap(d)
+            None => recv_ty
+          }
+        _ => recv_ty
+      }
+      match tuple_ty {
         Tuple(items) => {
           let mut has_rest = false
           for it in items {
@@ -8037,7 +8109,7 @@ fn check_call_args_in_expr(
                   record(
                     ctx,
                     "index access",
-                    "tuple type `\{type_display(recv_ty)}` has no element at index \{n}",
+                    "tuple type `\{type_display(tuple_ty)}` has no element at index \{n}",
                   )
                 }
               None => ()
