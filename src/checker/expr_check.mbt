@@ -7781,6 +7781,16 @@ fn check_call_args_in_expr(
 ) -> Unit {
   match expr {
     Call(name, args) => {
+      // TS2454: invoking an as-yet-unassigned variable (`var f: T; f()`)
+      // reads it before assignment, same as a bare reference.
+      if name != "__ts_no_init__" && ctx.unassigned.get(name) is Some(_) {
+        record(
+          ctx,
+          "use `\{name}`",
+          "variable `\{name}` is used before being assigned",
+        )
+        let _ = ctx.unassigned.remove(name)
+      }
       let callee_ty = match env.lookup(name) {
         Some(t) => t
         None =>
