@@ -7,7 +7,10 @@ priv enum ClassKey {
 ///|
 priv enum ClassElement {
   Method(Bool, ClassKey, String?, @ast.TsFunc)
-  Field(Bool, ClassKey, @ast.TsType, @ast.TsExpr?)
+  // `Field(is_static, key, type, init, is_readonly)` — the `readonly`
+  // modifier (`class C { readonly x: T }`) is captured so downstream
+  // structural checks can flag `c.x = …` as TS2540.
+  Field(Bool, ClassKey, @ast.TsType, @ast.TsExpr?, Bool)
   StaticBlock(@ast.TsBlock)
 }
 
@@ -57,13 +60,13 @@ fn build_runtime_class_decl(
   }
   for element in elements {
     match element {
-      Field(is_static, Name(field_name), field_type, _) =>
+      Field(is_static, Name(field_name), field_type, _, is_readonly) =>
         if is_public_runtime_class_member_name(field_name) {
           upsert_class_property(properties, {
             name: field_name,
             type_: field_type,
             is_static,
-            is_readonly: false,
+            is_readonly,
             is_accessor: false,
           })
         }
@@ -87,7 +90,7 @@ fn build_runtime_class_decl(
           }
           methods.push({
             name: method_name,
-            type_params: [],
+            type_params: func.type_params,
             type_param_bounds: [],
             params,
             param_defaults,
@@ -154,7 +157,7 @@ fn build_runtime_class_decl(
         }
         methods.push({
           name: "<computed>",
-          type_params: [],
+          type_params: func.type_params,
           type_param_bounds: [],
           params,
           param_defaults,
@@ -205,7 +208,7 @@ fn Parser::take_last_runtime_class_decl(self : Parser) -> @ast.TsClassDecl? {
 fn has_static_private_elements(elements : Array[ClassElement]) -> Bool {
   for element in elements {
     match element {
-      Field(is_static, Name(name), _, _)
+      Field(is_static, Name(name), _, _, _)
       | Method(is_static, Name(name), _, _) =>
         // Check for static private members
         if is_static && (name.has_prefix("#") || name.contains("__#")) {
@@ -221,7 +224,7 @@ fn has_static_private_elements(elements : Array[ClassElement]) -> Bool {
 fn has_instance_private_elements(elements : Array[ClassElement]) -> Bool {
   for element in elements {
     match element {
-      Field(is_static, Name(name), _, _)
+      Field(is_static, Name(name), _, _, _)
       | Method(is_static, Name(name), _, _) =>
         // Check for instance (non-static) private members
         if !is_static && (name.has_prefix("#") || name.contains("__#")) {
@@ -830,6 +833,7 @@ fn Parser::parse_class_body(
     }
     let mut is_static = false
     let mut is_async_method = false
+    let mut is_readonly_field = false
     let mut has_modifier = true
     let mut parsed_static_block = false
     while has_modifier {
@@ -854,10 +858,15 @@ fn Parser::parse_class_body(
             is_async_method = true
             has_modifier = true
           }
+        Ident(n) if n == "readonly" =>
+          if self.can_consume_class_modifier() {
+            let _ = self.advance()
+            is_readonly_field = true
+            has_modifier = true
+          }
         Ident(n) if n == "public" ||
           n == "private" ||
           n == "protected" ||
-          n == "readonly" ||
           n == "abstract" ||
           n == "override" ||
           n == "declare" ||
@@ -905,8 +914,10 @@ fn Parser::parse_class_body(
     let is_optional = self.match_(Question)
     let _ = self.match_(Bang)
     let mut local_type_param_bound_len = self.local_type_param_bounds.length()
+    let mut method_type_param_names : Array[String] = []
     if self.check(Lt) {
-      let (_, type_param_bounds) = self.parse_type_param_names_and_bounds()
+      let (names, type_param_bounds) = self.parse_type_param_names_and_bounds()
+      method_type_param_names = names
       local_type_param_bound_len = self.push_local_type_param_bounds(
         type_param_bounds,
       )
@@ -1006,7 +1017,7 @@ fn Parser::parse_class_body(
       }
       let func : @ast.TsFunc = {
         name: method_name,
-        type_params: [],
+        type_params: method_type_param_names,
         const_type_params: [],
         params,
         return_type,
@@ -1037,7 +1048,7 @@ fn Parser::parse_class_body(
         None
       }
       let _ = self.match_(Semicolon)
-      elements.push(Field(is_static, key, field_type, init))
+      elements.push(Field(is_static, key, field_type, init, is_readonly_field))
     }
   }
   let _ = self.expect(RBrace)
@@ -1137,7 +1148,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       let field_assigns : Array[@ast.TsStmt] = []
       for element in elements {
         match element {
-          Field(is_static, Name(field_name), _, Some(init)) =>
+          Field(is_static, Name(field_name), _, Some(init), _) =>
             if !is_static {
               field_assigns.push(
                 PropAssign(@ast.TsExpr::Var("this"), field_name, init),
@@ -1201,7 +1212,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       let static_field_inits : Array[(String, @ast.TsExpr)] = []
       for element in elements {
         match element {
-          Field(true, Name(static_name), _, Some(init)) =>
+          Field(true, Name(static_name), _, Some(init), _) =>
             static_field_inits.push((static_name, init))
           _ => ()
         }
@@ -1266,7 +1277,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   // First pass: collect all computed keys and generate temp variables
   for element in elements {
     match element {
-      Field(_, key, _, _) | Method(_, key, _, _) =>
+      Field(_, key, _, _, _) | Method(_, key, _, _) =>
         match key {
           Name(_) => key_temps.push(None)
           Computed(key_expr) => {
@@ -1286,7 +1297,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   // Second pass: generate instance field assignments (for non-static fields)
   for idx, element in elements {
     match element {
-      Field(is_static, key, _, init_opt) =>
+      Field(is_static, key, _, init_opt, _) =>
         if !is_static {
           let init = match init_opt {
             Some(expr) => expr
@@ -1580,7 +1591,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
           }
         }
       }
-      Field(is_static, key, _, init_opt) => {
+      Field(is_static, key, _, init_opt, _) => {
         let init = match init_opt {
           Some(expr) => expr
           None => @ast.TsExpr::Var("undefined")
@@ -1715,7 +1726,7 @@ fn Parser::parse_class_decl_with_abstract(
       let field_assigns : Array[@ast.TsStmt] = []
       for element in elements {
         match element {
-          Field(is_static, Name(field_name), _, Some(init)) =>
+          Field(is_static, Name(field_name), _, Some(init), _) =>
             if !is_static {
               field_assigns.push(
                 PropAssign(@ast.TsExpr::Var("this"), field_name, init),
@@ -1808,7 +1819,7 @@ fn Parser::parse_class_decl_with_abstract(
       let static_field_inits : Array[(String, @ast.TsExpr)] = []
       for element in elements {
         match element {
-          Field(true, Name(static_name), _, Some(init)) =>
+          Field(true, Name(static_name), _, Some(init), _) =>
             static_field_inits.push((static_name, init))
           _ => ()
         }
@@ -1840,7 +1851,7 @@ fn Parser::parse_class_decl_with_abstract(
   // First pass: collect all computed keys and generate temp variables
   for element in elements {
     match element {
-      Field(_, key, _, _) | Method(_, key, _, _) =>
+      Field(_, key, _, _, _) | Method(_, key, _, _) =>
         match key {
           Name(_) => key_temps.push(None)
           Computed(key_expr) => {
@@ -1860,7 +1871,7 @@ fn Parser::parse_class_decl_with_abstract(
   // Second pass: generate instance field assignments (for non-static fields)
   for idx, element in elements {
     match element {
-      Field(is_static, key, _, init_opt) =>
+      Field(is_static, key, _, init_opt, _) =>
         if !is_static {
           let init = match init_opt {
             Some(expr) => expr
@@ -2154,7 +2165,7 @@ fn Parser::parse_class_decl_with_abstract(
           }
         }
       }
-      Field(is_static, key, _, init_opt) => {
+      Field(is_static, key, _, init_opt, _) => {
         let init = match init_opt {
           Some(expr) => expr
           None => @ast.TsExpr::Var("undefined")

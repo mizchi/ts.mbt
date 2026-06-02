@@ -479,6 +479,28 @@ fn is_assignable_to_inner(
           return true
         }
       }
+      // `true | false` is exactly `boolean`: a union covering both boolean
+      // literals accepts `boolean` (and either literal) as a source. Without
+      // this, `var a: true | false = b /* boolean */` false-flags.
+      let mut has_true = false
+      let mut has_false = false
+      for m in members {
+        match m {
+          BooleanLiteral(true) => has_true = true
+          BooleanLiteral(false) => has_false = true
+          Boolean => {
+            has_true = true
+            has_false = true
+          }
+          _ => ()
+        }
+      }
+      if has_true && has_false {
+        match source {
+          Boolean | BooleanLiteral(_) => return true
+          _ => ()
+        }
+      }
       // Fall through to source-side handling below for unions on the source.
       match source {
         Union(_) => ()

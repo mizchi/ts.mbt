@@ -3187,8 +3187,11 @@ fn Parser::parse_module_with_seeded_const_values_internal(
       // `if (...) {}`, expression statements (`foo();`), bare blocks
       // (`{ ... }` used for scoped local types), assignments, etc.
       // Delegate to the statement parser; it raises a ParseError for
-      // anything genuinely malformed.
-      let _ = self.parse_stmt()
+      // anything genuinely malformed. Retain the parsed statement so
+      // the checker can validate calls, assignments, and other
+      // expression-level patterns against the declared types.
+      let stmt = self.parse_stmt()
+      top_level_stmts.push(stmt)
     } else {
       raise ParseError(
         "Expected function, interface, declare, import, or export declaration",
