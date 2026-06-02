@@ -3501,10 +3501,7 @@ fn check_expr_against(
     // Target `Object` / `{}` / empty Object literal accepts anything in
     // TypeScript -- it's the universal supertype. Skip the mismatch.
     (_, Named("Object")) | (_, Named("object")) => return
-    (_, Object(entries)) =>
-      if entries.length() == 0 {
-        return
-      }
+    (_, Object(entries)) => if entries.length() == 0 { return }
     // Both sides are unions: this is the signature of a typeguard /
     // flow-narrowing residue we can't see through. The user has written
     // a guard that narrows one side; absent flow tracking we still see
