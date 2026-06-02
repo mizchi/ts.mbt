@@ -1276,6 +1276,40 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-02 (T13)   230/512 (45 %)        305/310 ( 5 FP)
 2026-06-02 (T14)   233/512 (46 %)        307/310 ( 3 FP)
 2026-06-02 (T15)   247/512 (48 %)        308/310 ( 2 FP)
+2026-06-02 (T16)   260/512 (51 %)        307/310 ( 3 FP)
+
+  T16 -- four permissive-filter relaxations targeting compound-shape
+  TS2322 (Issue #65 path A). All gated by the rendered diagnostic
+  (`is_permissively_suppressed`) so strict-mode unit tests stay strict.
+
+    1. `expected void but got X` is now context-sensitive: only treated
+       as widening when the path contains `arrow body` or ends with
+       `return` (callback / function-return positions where TS
+       discards the value). Value-position (`assign x`, `binding x
+       init`) is reported. Catches `invalidVoidValues.ts` and
+       `invalidAssignmentsToVoid.ts`.
+
+    2. `expected tuple of N element(s), got M` is admitted outside
+       call-argument paths. Tuple-arity in `assign` / `binding` /
+       `return` positions is a hard fact; the suppressed case is
+       call-argument variadic-tuple unpacking (`...args: [...T]`).
+
+    3. `comparing X and Y with === will always be false` is admitted
+       outright. The residual FP family (`"foo" === ("bar" as string)`
+       — `as`-casts widen literals but our parser drops them) costs
+       one new FP across the corpus.
+
+    4. Short-Named (single uppercase letter, optional trailing digit:
+       `A`, `B`, `T2`) vs primitive (number / string / boolean / …)
+       is admitted as a reliable mismatch pair. The short name is
+       almost always a type parameter in test fixtures, but pairing
+       against a concrete primitive rules that out — generic call
+       sites pair short Names with each other, not with primitives.
+       Catches `numericLiteralTypes3.ts`.
+
+    Total: +13 recall (247 → 260), +1 FP (2 → 3,
+    `stringLiteralsAssertionsInEqualityComparisons01.ts`, blocked on
+    parser-level `as`-cast representation).
 
   T15 -- three small composable wins.
 

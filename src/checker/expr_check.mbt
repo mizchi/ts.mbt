@@ -2230,7 +2230,7 @@ fn is_permissively_suppressed(sub_path : String, message : String) -> Bool {
     match extract_mismatch_types(message) {
       Some((exp, got)) =>
         if is_reliable_mismatch_pair(exp, got) &&
-          !is_widening_direction_mismatch(exp, got) &&
+          !is_widening_direction_mismatch(sub_path, exp, got) &&
           !is_rest_param_residue(sub_path, exp, got) {
           return false
         }
@@ -2280,11 +2280,24 @@ fn is_permissively_suppressed(sub_path : String, message : String) -> Bool {
     return true
   }
   if message.contains("expected tuple of ") {
-    return true
+    // Tuple-arity mismatches are reliable in value-position (assign /
+    // binding) — both sides are concrete tuples and the count is a
+    // hard fact. Suppress only in call-argument paths, where variadic-
+    // tuple parameters (`...args: [...T]`) make the apparent arity
+    // wrong (the call site unpacks a tuple of unknown length).
+    if sub_path.contains("call ") && sub_path.contains(" arg[") {
+      return true
+    }
+    return false
   }
   if message.has_prefix("comparing `") &&
     message.contains("will always be false") {
-    return true
+    // Always-false equality on disjoint literal / value sets is a
+    // reliable signal: `"foo" === "bar"`, `typeof x === "null"`. The
+    // residual FP comes from `as`-cast widening (`"foo" === ("bar"
+    // as string)`), which our parser drops — we accept that single
+    // FP family rather than suppress the entire diagnostic.
+    return false
   }
   if message.has_prefix("Type '") &&
     message.contains("cannot be asserted to type") {
@@ -2334,6 +2347,17 @@ fn extract_mismatch_types(message : String) -> (String, String)? {
 fn is_reliable_mismatch_pair(exp : String, got : String) -> Bool {
   // Pure primitive-vs-primitive: well-tested in is_assignable_to.
   if is_reliable_mismatch_type(exp) && is_reliable_mismatch_type(got) {
+    return true
+  }
+  // Single-letter Named (`A`, `B`, `C`) vs primitive: short-identifier
+  // names usually denote type parameters (T, U, K) but a primitive on the
+  // other side rules that out — TS-style type parameters are never
+  // structurally compared against primitives at an assignment site
+  // without an explicit constraint, and the failing case (`let b: B = 5`,
+  // where `B` is a literal-union alias) is exactly the kind of error we
+  // want to flag.
+  if (is_short_named_identifier(exp) && is_bare_primitive(got)) ||
+    (is_bare_primitive(exp) && is_short_named_identifier(got)) {
     return true
   }
   // Primitive-vs-shape and shape-vs-primitive: an obvious category
@@ -2412,7 +2436,11 @@ fn is_simple_shape_type(s : String) -> Bool {
 /// up as FPs in our checker. The reverse direction (`expected
 /// string but got "ABC"`) is *not* widening -- it's the kind of
 /// mismatch we *do* want to catch.
-fn is_widening_direction_mismatch(exp : String, got : String) -> Bool {
+fn is_widening_direction_mismatch(
+  sub_path : String,
+  exp : String,
+  got : String,
+) -> Bool {
   // String literal "X" -> string
   if got == "string" && exp.has_prefix("\"") && exp.has_suffix("\" (string)") {
     return true
@@ -2432,11 +2460,15 @@ fn is_widening_direction_mismatch(exp : String, got : String) -> Bool {
     is_numeric_literal_display(exp[:exp.length() - 1].to_owned()) {
     return true
   }
-  // void target accepts any source: a callback like `(x) => x.foo()`
-  // returning `boolean` passed to `forEach` (`(v) => void`) is fine
-  // because the return value is discarded at the call site. TS
-  // accepts these; we treat the mismatch as widening-direction.
-  if exp == "void" {
+  // void target accepts any source ONLY in callback-return / function-return
+  // positions: a callback like `(x) => x.foo()` returning `boolean` passed
+  // to `forEach` (`(v) => void`) is fine because the return value is
+  // discarded. But `let x: void; x = 1` is a real TS error — the value-
+  // position assignment isn't covered by the discard rule. Distinguish by
+  // path: arrow-body / return contexts are callback-shaped, everything
+  // else (assign / binding) is value-position.
+  if exp == "void" &&
+    (sub_path.contains("arrow body") || sub_path.has_suffix("return")) {
     return true
   }
   false
@@ -2551,6 +2583,50 @@ fn is_bare_identifier(s : String) -> Bool {
     i = i + 1
   }
   has_lower
+}
+
+///|
+/// A short uppercase Named (1-2 chars, optional trailing digit): `A`, `B`,
+/// `T2`, `S2`. Used together with `is_bare_primitive` to admit mismatches
+/// where one side is a short Named alias / interface name and the other
+/// is a concrete primitive — the failing case (`let b: B = 5`) is a real
+/// error and the primitive side rules out generic-inference residue.
+fn is_short_named_identifier(s : String) -> Bool {
+  if s.length() == 0 || s.length() > 2 {
+    return false
+  }
+  let bytes = s.to_array()
+  let head = bytes[0]
+  if !(head >= 'A' && head <= 'Z') {
+    return false
+  }
+  if s.length() == 1 {
+    return true
+  }
+  let tail = bytes[1]
+  tail >= '0' && tail <= '9'
+}
+
+///|
+/// True for the rendered name of a bare TS primitive (no compound shape).
+fn is_bare_primitive(s : String) -> Bool {
+  match s {
+    "number"
+    | "int"
+    | "string"
+    | "boolean"
+    | "bigint"
+    | "symbol"
+    | "null"
+    | "undefined"
+    | "void"
+    | "any"
+    | "never"
+    | "true"
+    | "false"
+    | "object" => true
+    _ => false
+  }
 }
 
 ///|
