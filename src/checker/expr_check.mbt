@@ -2034,16 +2034,54 @@ fn Resolver::lookup_constructor(
 ///|
 priv struct ExprEnv {
   vars : Map[String, @ast.TsType]
+  // Declared types -- captured at the original `let x: T;` /
+  // function-parameter binding site and never overwritten by
+  // narrowing. Assignments are checked against this rather than the
+  // (possibly narrowed) `vars[name]`: `let x: string | number; x =
+  // "hi";` followed by `x = 5;` is valid in TS even after `x` was
+  // narrowed to `string`, because the assignment target stays at the
+  // declared union.
+  declared : Map[String, @ast.TsType]
 }
 
 ///|
 fn ExprEnv::new() -> ExprEnv {
-  { vars: {} }
+  { vars: {}, declared: {} }
 }
 
 ///|
 fn ExprEnv::bind(self : ExprEnv, name : String, ty : @ast.TsType) -> Unit {
   self.vars[name] = ty
+  // First write wins for `declared` -- subsequent narrowing rewrites
+  // only `vars`. `declare_type` is the explicit alternative when the
+  // caller wants to set / reset the declared slot deliberately.
+  if !self.declared.contains(name) {
+    self.declared[name] = ty
+  }
+}
+
+///|
+/// Narrowing-only write: update the current type in `vars` without
+/// touching `declared`. Used by post-assignment narrowing
+/// (`x = "hi"; x;` narrows `x` to `string`) and by analyse_narrowing
+/// to avoid promoting a narrowed type into the assignment target.
+fn ExprEnv::narrow(self : ExprEnv, name : String, ty : @ast.TsType) -> Unit {
+  self.vars[name] = ty
+}
+
+///|
+/// Set the declared (assignment-target) type for `name` explicitly,
+/// overriding any previous binding. Used by the function-body walker
+/// at parameter bind time and by the let/var/const walker for the
+/// initial declaration -- both of which set the declared slot to
+/// the source-annotated type, which is then preserved through any
+/// narrowing rewrites in `vars`.
+fn ExprEnv::declare_type(
+  self : ExprEnv,
+  name : String,
+  ty : @ast.TsType,
+) -> Unit {
+  self.declared[name] = ty
 }
 
 ///|
@@ -2052,9 +2090,22 @@ fn ExprEnv::lookup(self : ExprEnv, name : String) -> @ast.TsType? {
 }
 
 ///|
+/// Look up the *declared* type for `name` -- i.e. the type the
+/// variable was bound with at its declaration site, ignoring any
+/// later flow narrowing. Returns `None` when no declared entry
+/// exists, so callers can fall back to a different source (e.g.
+/// `resolver.globals` for module-level variables) rather than
+/// silently using the narrowed type.
+fn ExprEnv::lookup_declared(self : ExprEnv, name : String) -> @ast.TsType? {
+  self.declared.get(name)
+}
+
+///|
 /// Capture a snapshot of `(name, type)` pairs currently in the env so we can
 /// fully restore — including overwritten bindings — when a block exits. Used
-/// for both lexical scope and narrowing.
+/// for both lexical scope and narrowing. The snapshot covers `vars`
+/// only; the matching `declared` entries are walked in step on
+/// restore so a nested `let x: T;` doesn't leak its declared slot.
 fn ExprEnv::full_snapshot(self : ExprEnv) -> Array[(String, @ast.TsType)] {
   let entries : Array[(String, @ast.TsType)] = []
   for entry in self.vars {
@@ -2080,6 +2131,10 @@ fn ExprEnv::restore_from(
   }
   for n in to_remove {
     let _ = self.vars.remove(n)
+    // Drop the matching declared slot too: a name that wasn't in
+    // `vars` at snapshot time was introduced after, so its declared
+    // entry was also introduced after and must go.
+    let _ = self.declared.remove(n)
   }
   for entry in snap {
     self.vars[entry.0] = entry.1
@@ -6740,6 +6795,13 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         infer_expr(env, ctx.resolver, init)
       }
       env.bind(name, bound_type)
+      // Make sure the *declared* slot reflects the source annotation
+      // (which `bind` set on first write -- subsequent narrowing
+      // mutates `vars` only). When the declared annotation was
+      // checkable the binding above already pinned declared to it;
+      // when not, we leave declared as the inferred-from-init type
+      // since that's what TS widens to anyway.
+      env.declare_type(name, bound_type)
       // TS2454: parser-synthesised `Var("__ts_no_init__")` marker means
       // `let x: T;` / `var x: T;` with no `=` initializer. Track the
       // binding as unassigned so later references can be flagged. Only
@@ -6805,10 +6867,31 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
     }
     Assign(name, e) => {
       check_call_args_in_expr(env, e, ctx)
-      match env.lookup(name) {
+      // Assignment target is the *declared* type, not the (possibly
+      // narrowed) current type. `let x: string | number; x = "hi";
+      // x = 5;` is valid in TS even after `x` was narrowed to
+      // `string` -- the assignment site uses the union. For
+      // module-level variables not in this function's local env,
+      // fall back to the resolver's globals (where top-level
+      // `let x: T;` was registered).
+      let target = match env.lookup_declared(name) {
+        Some(t) => Some(t)
+        None => ctx.resolver.globals.get(name)
+      }
+      match target {
         Some(target_ty) =>
           check_expr_against(env, e, target_ty, ctx, "assign `\{name}`")
         None => ()
+      }
+      // After a successful assignment, the variable's effective type
+      // becomes the assigned expression's inferred type (TS narrows
+      // by assignment). Use `narrow` instead of `bind` so the
+      // declared slot stays at the original annotation -- otherwise
+      // a later `x = otherValue;` would be checked against this
+      // narrowed type instead of the union.
+      let new_ty = infer_expr(env, ctx.resolver, e)
+      if is_checkable(new_ty) {
+        env.narrow(name, new_ty)
       }
       // TS2454: this assignment counts; the variable is no longer
       // "used before being assigned".
@@ -6818,8 +6901,10 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       check_call_args_in_expr(env, e, ctx)
       // For arithmetic compound ops, the right-hand operand must be numeric
       // if the variable is numeric. We delegate to `infer_binop` to derive
-      // the equivalent simple assignment's required type.
-      match env.lookup(name) {
+      // the equivalent simple assignment's required type. Targets the
+      // declared type (see `Assign` above) so a compound assignment
+      // after narrowing still accepts the full declared union.
+      match env.lookup_declared(name) {
         Some(target_ty) =>
           check_compound_assign(env, target_ty, op, e, ctx, name)
         None => ()
@@ -6938,7 +7023,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       check_block(env, body, ctx)
       env.restore_from(pre)
     }
-    ForOf(_, binding, declared, iter, body) => {
+    ForOf(kind, binding, declared, iter, body) => {
       check_call_args_in_expr(env, iter, ctx)
       let iter_ty = infer_expr(env, ctx.resolver, iter)
       let inferred_elem = for_of_element_type(ctx.resolver, iter_ty)
@@ -6968,7 +7053,18 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         }
         _ => ()
       }
-      bind_pattern(env, ctx, binding, elem_ty)
+      // Assignment-form `for (x of obj)` (no `let`/`var`/`const`) reuses
+      // the outer-scope variable -- narrow it for the loop body
+      // instead of re-declaring (which would otherwise pin the
+      // declared slot to the iterable element type and reject
+      // any later wider-typed assignments inside the body).
+      match (kind, binding) {
+        (@ast.TsForOfKind::Assign, @ast.TsBinding::Ident(n)) =>
+          if is_checkable(elem_ty) {
+            env.narrow(n, elem_ty)
+          }
+        _ => bind_pattern(env, ctx, binding, elem_ty)
+      }
       check_block(env, body, ctx)
       env.restore_from(pre)
     }
@@ -7436,10 +7532,25 @@ fn check_call_args_in_expr(
     }
     AssignExpr(name, v) => {
       check_call_args_in_expr(env, v, ctx)
-      match env.lookup(name) {
+      // Assignment target is the *declared* type, not the narrowed
+      // current type (same reasoning as the stmt-level `Assign`
+      // case above). Falls back to `resolver.globals` for module-
+      // level variables not in this scope's local env.
+      let target = match env.lookup_declared(name) {
+        Some(t) => Some(t)
+        None => ctx.resolver.globals.get(name)
+      }
+      match target {
         Some(target_ty) =>
           check_expr_against(env, v, target_ty, ctx, "assign `\{name}`")
         None => ()
+      }
+      // Narrow-by-assignment: the variable's effective type now
+      // reflects the assigned value's type. Narrowing-only -- don't
+      // touch the declared slot.
+      let new_ty = infer_expr(env, ctx.resolver, v)
+      if is_checkable(new_ty) {
+        env.narrow(name, new_ty)
       }
       // TS2454: clear the unassigned marker now that the variable
       // has a concrete assignment.
@@ -7458,7 +7569,7 @@ fn check_call_args_in_expr(
       }
       match target {
         Var(name) =>
-          match env.lookup(name) {
+          match env.lookup_declared(name) {
             Some(target_ty) =>
               check_compound_assign(env, target_ty, op, v, ctx, name)
             None => ()
