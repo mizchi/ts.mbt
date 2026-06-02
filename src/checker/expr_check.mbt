@@ -2118,6 +2118,22 @@ priv struct CheckCtx {
   // `check_module_function_bodies` entry leaves it false so unit
   // tests keep asserting on those diagnostics.
   permissive : Bool
+  // TS2454 ("Variable 'x' is used before being assigned") tracking
+  // set. Names declared with `let x: T;` / `var x: T;` (no `=`
+  // initializer, identified by the parser's `Var("__ts_no_init__")`
+  // sentinel init) and whose declared type doesn't already accept
+  // `undefined` are added here at the declaration site. A subsequent
+  // `Assign(name, _)` removes the entry; a `Var(name)` reference
+  // while the name is still in the set emits the diagnostic and
+  // removes the entry (one report per variable is enough).
+  unassigned : Map[String, Bool]
+  // Strict-mode flag derived from the source file's
+  // `// @strict: ...` / `// @strictPropertyInitialization: ...` /
+  // `// @strictNullChecks: ...` header directives. Gates TS2454
+  // (use-before-assign) and TS2564 (no initializer) emission.
+  // True by default to match the tsc baseline behaviour for the
+  // conformance corpus.
+  strict_property_init : Bool
 }
 
 ///|
@@ -2555,10 +2571,58 @@ fn object_prototype_member(field : String) -> @ast.TsType? {
 // only forms that are universally assignable under non-strict null checks.
 // `undefined` parses as `Var("undefined")`; `void <expr>` (e.g. `void 0`)
 // also evaluates to `undefined`.
+
+///|
+/// Recursively walk a binding pattern and clear every named slot
+/// from the TS2454 unassigned set. Used by the destructuring-
+/// assignment walker so `[a, b] = expr` / `{x: y} = expr` register
+/// as assignments for use-before-assign tracking.
+fn clear_unassigned_in_binding(
+  ctx : CheckCtx,
+  binding : @ast.TsBinding,
+) -> Unit {
+  match binding {
+    @ast.TsBinding::Ident(n) => {
+      let _ = ctx.unassigned.remove(n)
+    }
+    @ast.TsBinding::Array(ab) => {
+      for it in ab.items {
+        match it {
+          Some(elem) => clear_unassigned_in_binding(ctx, elem.binding)
+          None => ()
+        }
+      }
+      match ab.rest {
+        Some(r) => clear_unassigned_in_binding(ctx, r)
+        None => ()
+      }
+    }
+    @ast.TsBinding::Object(ob) => {
+      for prop in ob.props {
+        clear_unassigned_in_binding(ctx, prop.binding)
+      }
+      match ob.rest {
+        Some(name) => {
+          let _ = ctx.unassigned.remove(name)
+        }
+        None => ()
+      }
+    }
+    @ast.TsBinding::Target(_) => ()
+  }
+}
+
+///|
 fn is_null_or_undefined_literal_expr(expr : @ast.TsExpr) -> Bool {
   match expr {
     NullLit => true
     Var("undefined") => true
+    // Parser-synthesised sentinel for `let x;` / `var x;` -- treat
+    // it as `undefined` for assignability purposes (the binding-init
+    // check shouldn't trip on a no-init declaration), but the TS2454
+    // walker pattern-matches the same sentinel separately to emit
+    // "used before being assigned".
+    Var("__ts_no_init__") => true
     UnaryOp(Void, _) => true
     _ => false
   }
@@ -2719,6 +2783,24 @@ fn infer_expr(
     StringLit(s) => @ast.TsType::Literal(s)
     NullLit => @ast.TsType::Null
     ArrayHole => @ast.TsType::Undefined
+    // Parser-synthesised sentinel for `let x;` / `var x;`. Treat
+    // the same as the legacy `Var("undefined")` for inference: when
+    // the var carries a declared type, the binding-init path uses
+    // that; when not (`is_checkable(declared) == false`), the
+    // inferred type collapses to `Any` (env.lookup fails, the global
+    // table has no entry, fallback returns `Any`) -- matching the
+    // checker's pre-sentinel behaviour. The TS2454 walker
+    // pattern-matches the sentinel name directly at the stmt level
+    // rather than going through inference.
+    Var("__ts_no_init__") =>
+      match env.lookup("undefined") {
+        Some(ty) => ty
+        None =>
+          match resolver.globals.get("undefined") {
+            Some(ty) => ty
+            None => @ast.TsType::Any
+          }
+      }
     Var(name) =>
       match env.lookup(name) {
         Some(ty) => ty
@@ -5080,6 +5162,8 @@ fn check_arrow_with_context(
         issues: ctx.issues,
         in_scope_type_params: ctx.in_scope_type_params,
         permissive: ctx.permissive,
+        unassigned: ctx.unassigned,
+        strict_property_init: ctx.strict_property_init,
       }
       for stmt in block.stmts {
         check_stmt(env, stmt, inner_ctx)
@@ -5132,6 +5216,8 @@ fn check_funcexpr_with_context(
     issues: ctx.issues,
     in_scope_type_params: ctx.in_scope_type_params,
     permissive: ctx.permissive,
+    unassigned: ctx.unassigned,
+    strict_property_init: ctx.strict_property_init,
   }
   let _ = sub_path
   for stmt in f.body.stmts {
@@ -6654,6 +6740,28 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         infer_expr(env, ctx.resolver, init)
       }
       env.bind(name, bound_type)
+      // TS2454: parser-synthesised `Var("__ts_no_init__")` marker means
+      // `let x: T;` / `var x: T;` with no `=` initializer. Track the
+      // binding as unassigned so later references can be flagged. Only
+      // do this when the declared type doesn't already accept
+      // `undefined` (otherwise the read of an unassigned `x` is well
+      // -typed) and when it's checkable (no annotation = `Any`, which
+      // TS doesn't flag either).
+      match init {
+        Var("__ts_no_init__") =>
+          // TS2454 fires only under strict-null-checks (TS treats
+          // `let x: number;` as `x: number | undefined` otherwise).
+          // The conformance corpus uses the same `// @strict: false`
+          // / `// @strictPropertyInitialization: false` opt-out
+          // directives we already track for TS2564 -- reuse the
+          // module flag.
+          if is_checkable(declared) &&
+            !type_accepts_undefined(declared) &&
+            ctx.strict_property_init {
+            ctx.unassigned[name] = true
+          }
+        _ => ()
+      }
       check_expr_against(env, init, declared, ctx, "binding `\{name}` init")
     }
     Var(@ast.TsBinding::Array(ab), declared, init)
@@ -6702,6 +6810,9 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           check_expr_against(env, e, target_ty, ctx, "assign `\{name}`")
         None => ()
       }
+      // TS2454: this assignment counts; the variable is no longer
+      // "used before being assigned".
+      let _ = ctx.unassigned.remove(name)
     }
     CompoundAssign(name, op, e) => {
       check_call_args_in_expr(env, e, ctx)
@@ -6713,6 +6824,11 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           check_compound_assign(env, target_ty, op, e, ctx, name)
         None => ()
       }
+      // TS2454: a compound assignment (`x += …`) reads x first, but
+      // that read is the same use-before-assign hazard. The walker
+      // already records the read via `check_call_args_in_expr` on the
+      // RHS; after this stmt the variable is unambiguously assigned.
+      let _ = ctx.unassigned.remove(name)
     }
     PropAssign(recv, prop, value) => {
       check_call_args_in_expr(env, recv, ctx)
@@ -6844,6 +6960,14 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         inferred_elem
       }
       let pre = env.full_snapshot()
+      // TS2454: same reasoning as for-in — the loop variable is
+      // assigned each iteration, so reused declarations clear.
+      match binding {
+        @ast.TsBinding::Ident(n) => {
+          let _ = ctx.unassigned.remove(n)
+        }
+        _ => ()
+      }
       bind_pattern(env, ctx, binding, elem_ty)
       check_block(env, body, ctx)
       env.restore_from(pre)
@@ -6870,6 +6994,12 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         inferred_elem
       }
       let pre = env.full_snapshot()
+      match binding {
+        @ast.TsBinding::Ident(n) => {
+          let _ = ctx.unassigned.remove(n)
+        }
+        _ => ()
+      }
       bind_pattern(env, ctx, binding, elem_ty)
       check_block(env, body, ctx)
       env.restore_from(pre)
@@ -6892,6 +7022,15 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         @ast.TsType::String_
       }
       let pre = env.full_snapshot()
+      // TS2454: the loop binding is *assigned* each iteration, so a
+      // previously-declared `let k: T;` reused as the for-in target
+      // (`for (k in obj) ...`) shouldn't trip use-before-assign.
+      match binding {
+        @ast.TsBinding::Ident(n) => {
+          let _ = ctx.unassigned.remove(n)
+        }
+        _ => ()
+      }
       bind_pattern(env, ctx, binding, key_ty)
       check_block(env, body, ctx)
       env.restore_from(pre)
@@ -7302,10 +7441,21 @@ fn check_call_args_in_expr(
           check_expr_against(env, v, target_ty, ctx, "assign `\{name}`")
         None => ()
       }
+      // TS2454: clear the unassigned marker now that the variable
+      // has a concrete assignment.
+      let _ = ctx.unassigned.remove(name)
     }
     CompoundAssignExpr(target, op, v) => {
       check_call_args_in_expr(env, target, ctx)
       check_call_args_in_expr(env, v, ctx)
+      // TS2454: a compound assignment (`x += …`) settles `x` after
+      // the rhs walk above (which still flags the implicit read).
+      match target {
+        Var(name) => {
+          let _ = ctx.unassigned.remove(name)
+        }
+        _ => ()
+      }
       match target {
         Var(name) =>
           match env.lookup(name) {
@@ -7316,8 +7466,14 @@ fn check_call_args_in_expr(
         _ => ()
       }
     }
-    AssignPattern(_, v) | Spread(v) | Await(v) =>
+    AssignPattern(binding, v) => {
       check_call_args_in_expr(env, v, ctx)
+      // TS2454: a destructuring assignment pattern (`[a, b] = …` /
+      // `{x, y} = …`) writes every named binding inside. Clear them
+      // from the unassigned set so subsequent reads don't trip.
+      clear_unassigned_in_binding(ctx, binding)
+    }
+    Spread(v) | Await(v) => check_call_args_in_expr(env, v, ctx)
     PropAssignExpr(recv, prop, v) => {
       check_call_args_in_expr(env, recv, ctx)
       check_call_args_in_expr(env, v, ctx)
@@ -7505,6 +7661,20 @@ fn check_call_args_in_expr(
         check_jsx_key_in_map(c, ctx)
       }
     }
+    // TS2454: a bare identifier reference. If the name is in the
+    // unassigned set (parser-synthesised `let x: T;` with no `=`),
+    // emit the diagnostic and clear the entry so we only fire once
+    // per variable. Skips the parser's no-init sentinel itself
+    // (which appears as the rhs of the synthesised init).
+    Var(name) =>
+      if name != "__ts_no_init__" && ctx.unassigned.get(name) is Some(_) {
+        record(
+          ctx,
+          "use `\{name}`",
+          "variable `\{name}` is used before being assigned",
+        )
+        let _ = ctx.unassigned.remove(name)
+      }
     _ => ()
   }
 }
@@ -7767,7 +7937,7 @@ fn stmt_always_exits(stmt : @ast.TsStmt) -> Bool {
 /// from the surrounding module (or an empty resolver when called in
 /// isolation).
 pub fn check_function_body(func : @ast.TsFunc) -> Array[ExprIssue] {
-  check_function_body_with(func, Resolver::empty(), false)
+  check_function_body_with(func, Resolver::empty(), false, true)
 }
 
 ///|
@@ -7775,6 +7945,7 @@ fn check_function_body_with(
   func : @ast.TsFunc,
   resolver : Resolver,
   permissive : Bool,
+  strict_property_init : Bool,
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   if func.body.stmts.length() == 0 {
@@ -7827,6 +7998,8 @@ fn check_function_body_with(
     issues,
     in_scope_type_params: func.type_params,
     permissive,
+    unassigned: {},
+    strict_property_init,
   }
   // Default-parameter expression must be assignable to the parameter's
   // (possibly optional-widened) type.
@@ -7909,9 +8082,22 @@ fn check_module_function_bodies_layered(
     Resolver::ingest_module(r, module_, "")
     r
   }
+  // Strict-mode flag comes from the *outermost* (top-level) module's
+  // header directive; namespace-nested modules don't carry their own
+  // `@strict: ...` directive, so they inherit. Reuses the same root
+  // lookup that TS2564 already does below.
+  let strict_root = if outer_modules.length() > 0 {
+    outer_modules[0]
+  } else {
+    module_
+  }
+  let strict_property_init = strict_root.strict_property_initialization
   let all : Array[ExprIssue] = []
   for func in module_.funcs {
-    for issue in check_function_body_with(func, resolver, permissive) {
+    for
+      issue in check_function_body_with(
+        func, resolver, permissive, strict_property_init,
+      ) {
       all.push(issue)
     }
   }
@@ -7953,7 +8139,10 @@ fn check_module_function_bodies_layered(
             is_generator: false,
             is_async: false,
           }
-          for issue in check_function_body_with(synth, resolver, permissive) {
+          for
+            issue in check_function_body_with(
+              synth, resolver, permissive, strict_property_init,
+            ) {
             all.push(issue)
           }
         }
@@ -7972,6 +8161,8 @@ fn check_module_function_bodies_layered(
       issues: [],
       in_scope_type_params: [],
       permissive,
+      unassigned: {},
+      strict_property_init,
     }
     let env = ExprEnv::new()
     for v in module_.values {

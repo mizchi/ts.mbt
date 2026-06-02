@@ -1273,6 +1273,17 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-02 (T10)    46/488 ( 9 %)        314/319 ( 5 FP)
 2026-06-02 (T11)    67/503 (13 %)        314/319 ( 5 FP)
 2026-06-02 (T12)   166/512 (32 %)        305/310 ( 5 FP)
+2026-06-02 (T13)   230/512 (45 %)        305/310 ( 5 FP)
+
+  T13 -- TS2454 "Variable used before being assigned". The parser
+  now emits a `Var("__ts_no_init__")` sentinel for `let x;` / `var x;`
+  (no `=`) to distinguish from `let x = undefined;`. The checker
+  tracks an `unassigned` map per function body: declaration adds, any
+  assignment (incl. destructuring patterns `[a, b] = …` and for-in /
+  for-of loop variables) removes, and a reference while unassigned
+  emits the diagnostic + clears. Gated by `strict_property_init` so
+  files with `// @strict: false` don't trip. recall +64 files (166
+  -> 230), FP unchanged (5/310). Closes #59.
 
   T12 -- restore strict-property-initialization (TS2564). The parser
   now captures `=` initializers and `!` definite-assignment assertions

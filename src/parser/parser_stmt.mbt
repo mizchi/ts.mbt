@@ -1188,7 +1188,17 @@ fn Parser::parse_var_decl_item(
         raise ParseError("const declaration requires an initializer")
       }
       match binding {
-        @ast.TsBinding::Ident(_) => @ast.TsExpr::Var("undefined")
+        // Parser-synthesised sentinel for `let x;` / `var x;`
+        // (declaration without `=` initializer). Semantically `x` is
+        // `undefined` at the binding site, but TS distinguishes
+        // "explicitly assigned undefined" (`let x = undefined;`,
+        // which is a real assignment) from "no initializer" (TS2454
+        // candidate). The checker pattern-matches this exact sentinel
+        // name to recover the distinction without an AST-level
+        // option-vs-required change. The name is intentionally a
+        // double-underscore form that cannot be written by user code
+        // because the lexer rejects identifiers starting with `__ts_`.
+        @ast.TsBinding::Ident(_) => @ast.TsExpr::Var("__ts_no_init__")
         _ =>
           raise ParseError("Destructuring declaration requires an initializer")
       }

@@ -820,7 +820,10 @@ fn is_object_assignable_inner(
 ///|
 fn type_accepts_undefined(t : @ast.TsType) -> Bool {
   match t {
-    Undefined | Any => true
+    // `void`-typed variables hold only `undefined` (same shape as
+    // `undefined` for assignment purposes), so `let x: void;`
+    // shouldn't trip TS2454 / TS2564.
+    Undefined | Any | Void => true
     Union(members) => {
       for m in members {
         if type_accepts_undefined(m) {
