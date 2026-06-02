@@ -414,6 +414,7 @@ async fn load_decl_module_info(
           enums: [],
           module_augmentations: [],
           top_level_stmts: [],
+          strict_property_initialization: true,
         }
       }
   }
@@ -2228,6 +2229,7 @@ fn collect_exported_decls(
               is_constructible: false,
               index_signatures: [],
               decorators: [],
+              is_declare: false,
             },
           })
         } else {
@@ -8501,6 +8503,8 @@ fn clone_class_property_in_scope(
     is_static: class_property.is_static,
     is_readonly: class_property.is_readonly,
     is_accessor: false,
+    has_initializer: false,
+    has_definite_assertion: false,
   }
 }
 
@@ -8886,6 +8890,7 @@ fn clone_exported_class(
     is_constructible: exported.class_.is_constructible,
     index_signatures: [],
     decorators: [],
+    is_declare: false,
   }
 }
 
@@ -9088,6 +9093,7 @@ pub async fn emit_moonbit_decl_from_entry_path(
     enums,
     module_augmentations: [],
     top_level_stmts: [],
+    strict_property_initialization: true,
   }
   // Run the checker over the final module shape and surface anything it
   // catches as a generator-level note. The emit pipeline is internally

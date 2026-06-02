@@ -1270,6 +1270,27 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-01 (T7)    222/487 (46 %)      241/319 (76 %, 78 FP)
 2026-06-01 (T8)    173/488 (35 %)        257/319 (81 %, 62 FP)
 2026-06-02 (T9)     16/488 ( 3 %)        319/319 (100 %, 0 FP)
+2026-06-02 (T10)    46/488 ( 9 %)        314/319 ( 5 FP)
+2026-06-02 (T11)    67/503 (13 %)        314/319 ( 5 FP)
+2026-06-02 (T12)   166/512 (32 %)        305/310 ( 5 FP)
+
+  T12 -- restore strict-property-initialization (TS2564). The parser
+  now captures `=` initializers and `!` definite-assignment assertions
+  on class fields, and a leading `// @strict: false` /
+  `// @strictPropertyInitialization: false` directive on a source
+  file disables TS2564 emission for that file. Recall jumps from
+  67/503 to 166/512 (+99 files, file count includes target-suffixed
+  baselines). FP stays at the same 5 flow-narrowing / generic-
+  inference residue files as T10.
+
+  T11 -- count parse-fail-with-baseline as recall_hit (16 files of
+  intentional syntax-error fixtures: `*Errors.ts`, `*MustBeLast.ts`,
+  `*Duplicates.ts`, `*Negative.ts`); admit primitive-vs-shape
+  mismatches (`number = [n, s]`, `string[] = 5`) through the
+  permissive filter; tighten rest-param residue (`expected T[] but
+  got T` on `call ... arg[N]`).
+
+  T10 -- restore primitive-vs-primitive mismatch in permissive mode.
 
   T9 introduces a `permissive` mode on the checker that drops the
   diagnostic families dominated by features we don't model:

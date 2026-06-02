@@ -129,6 +129,7 @@ fn empty_ts_module() -> @ast.TsModule {
     namespaces: [],
     enums: [],
     module_augmentations: [],
+    strict_property_initialization: true,
     top_level_stmts: [],
   }
 }
@@ -3228,7 +3229,35 @@ fn Parser::parse_module_with_seeded_const_values_internal(
     enums,
     module_augmentations,
     top_level_stmts,
+    strict_property_initialization: detect_strict_property_initialization(
+      self.src,
+    ),
   }
+}
+
+///|
+/// Scan the file's leading TS-test header directives (`// @strict:
+/// false`, `// @strictPropertyInitialization: false`,
+/// `// @useDefineForClassFields: true`) to decide whether the
+/// strict-property-initialization check (TS2564) should fire. The
+/// conformance corpus uses these directives to opt individual test
+/// files in or out of strict mode. Default is `true`: the tsc-
+/// generated baselines for files *without* a directive include
+/// TS2564, so emitting matches the baseline.
+fn detect_strict_property_initialization(src : String) -> Bool {
+  // Only scan the first ~1 KB; directives always live at the top.
+  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
+  let head = src[:head_len].to_owned()
+  // Explicit opt-outs.
+  if head.contains("@strict: false") || head.contains("@strict:false") {
+    return false
+  }
+  if head.contains("@strictPropertyInitialization: false") ||
+    head.contains("@strictPropertyInitialization:false") {
+    return false
+  }
+  // No directive (or explicit opt-in) -> default true.
+  true
 }
 
 ///|

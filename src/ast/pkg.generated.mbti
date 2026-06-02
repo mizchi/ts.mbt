@@ -81,6 +81,7 @@ pub(all) struct TsClassDecl {
   is_constructible : Bool
   index_signatures : Array[(TsType, TsType)]
   decorators : Array[TsExpr]
+  is_declare : Bool
 } derive(@debug.Debug)
 pub impl Show for TsClassDecl
 
@@ -101,6 +102,8 @@ pub(all) struct TsClassPropertyDecl {
   is_static : Bool
   is_readonly : Bool
   is_accessor : Bool
+  has_initializer : Bool
+  has_definite_assertion : Bool
 } derive(@debug.Debug)
 pub impl Show for TsClassPropertyDecl
 
@@ -260,6 +263,7 @@ pub(all) struct TsModule {
   namespaces : Array[TsNamespaceDecl]
   enums : Array[TsEnumDecl]
   module_augmentations : Array[(String, TsModule)]
+  strict_property_initialization : Bool
 } derive(@debug.Debug)
 pub impl Show for TsModule
 

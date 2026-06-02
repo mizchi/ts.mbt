@@ -1052,12 +1052,40 @@ fn ts_case_basename(path : String) -> String {
 }
 
 ///|
-async fn baseline_errors_txt_exists(case_name : String) -> Bool {
-  let path = "typescript/tests/baselines/reference/" + case_name + ".errors.txt"
-  let kind = @fs.kind(path, follow_symlink=false) catch {
-    _ => @fs.FileKind::Unknown
+
+///|
+/// Build a one-shot index of `.errors.txt` baseline filenames. The
+/// accuracy walk hits 822 source files; doing a per-file `readdir` on
+/// the 9.7 K-entry baseline directory would burn seconds. The
+/// returned map (used as a set) carries both bare basenames (`foo`)
+/// and target-/config-suffixed ones (`foo(target=es5)`), each
+/// stripped of the `.errors.txt` extension so callers can probe with
+/// either form.
+async fn collect_baseline_basenames() -> Map[String, Bool] {
+  let dir = "typescript/tests/baselines/reference"
+  let entries = @fs.readdir(
+    dir,
+    include_hidden=false,
+    include_special=false,
+    sort=false,
+  ) catch {
+    _ => []
   }
-  kind is @fs.FileKind::Regular
+  let suffix = ".errors.txt"
+  let set : Map[String, Bool] = {}
+  for name in entries {
+    if name.has_suffix(suffix) {
+      let stem = name[:name.length() - suffix.length()].to_owned()
+      // Strip the trailing `(...)` config-suffix when present so
+      // bare-name lookups also hit target-specific baselines.
+      match stem.find("(") {
+        Some(i) => set[stem[:i].to_owned()] = true
+        None => ()
+      }
+      set[stem] = true
+    }
+  }
+  set
 }
 
 ///|
@@ -1081,6 +1109,7 @@ async fn baseline_errors_txt_exists(case_name : String) -> Bool {
 /// failing on the (large) recall gap that exists today. Tighten them as
 /// the checker improves.
 async test "checker: accuracy against TypeScript conformance baselines" {
+  let baseline_index = collect_baseline_basenames()
   let dirs = [
     "typescript/tests/cases/conformance/types/typeParameters", "typescript/tests/cases/conformance/controlFlow",
     "typescript/tests/cases/conformance/expressions/typeGuards", "typescript/tests/cases/conformance/types/typeGuards",
@@ -1113,7 +1142,7 @@ async test "checker: accuracy against TypeScript conformance baselines" {
       let content = @fs.read_file(path).text() catch { _ => continue }
       let allow_jsx = path.has_suffix(".tsx")
       let case_name = ts_case_basename(path)
-      let has_baseline = baseline_errors_txt_exists(case_name)
+      let has_baseline = baseline_index.contains(case_name)
       let module_ = try
         Parser::from_source_with_jsx(content, allow_jsx).parse_module()
       catch {
@@ -1181,21 +1210,22 @@ async test "checker: accuracy against TypeScript conformance baselines" {
   // Regression gates calibrated against today's measurements. Tighten
   // as accuracy improves; loosen only with justification.
   //
-  // Recall floor: T9 permissive-mode suppressions trade nearly all
-  // recall for the FP elimination required by the "9割潰す" goal.
-  // Measured 2026-06-02 via `tscheck`: recall is 16 / 488 ≈ 3 %.
-  // Floor at 2 % so a genuine pipeline regression (parser stops
-  // producing modules, etc.) still trips; the recall *quality* is
-  // governed by the strict diagnostics that unit tests still pin.
-  if with_baseline > 0 && recall_hit * 100 < with_baseline * 2 {
+  // Recall floor: T11 adds TS2564 (class-field definite-assignment) +
+  // counts parse-fail-with-baseline as a detection + admits primitive
+  // -vs- shape mismatches through the permissive filter. Measured
+  // 2026-06-02 via `tscheck` (with target-suffix baseline detection):
+  // recall is 166 / 512 ≈ 32 %. Floor at 20 % so a genuine pipeline
+  // regression (parser stops producing modules, parse-fail counting
+  // turns off, TS2564 emission disappears) trips immediately.
+  if with_baseline > 0 && recall_hit * 100 < with_baseline * 20 {
     fail(
-      "recall floor breached: \{recall_hit}/\{with_baseline} baseline-positive cases caught (< 2 %)",
+      "recall floor breached: \{recall_hit}/\{with_baseline} baseline-positive cases caught (< 20 %)",
     )
   }
-  // Precision floor: T9 permissive mode hits FP = 0 / 319 (verified
-  // 2026-06-02 via the `tscheck` CLI walking the same corpus -- the
-  // "9割潰す" goal). Cap at 5 % so a regression that re-introduces
-  // even a few false positives trips immediately.
+  // Precision floor: residual 5 / 310 FPs (1.6 %). All five are flow-
+  // narrowing / generic-inference gaps -- multi-day features. Cap at
+  // 5 % so a single new pattern re-introducing several FPs trips
+  // immediately.
   if without_baseline > 0 && precision_miss * 100 > without_baseline * 5 {
     fail(
       "precision floor breached: \{precision_miss}/\{without_baseline} clean cases reported as failing (> 5 %)",

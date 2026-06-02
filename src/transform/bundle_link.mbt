@@ -1108,6 +1108,7 @@ fn substitute_var_names_in_stmt(
         static_field_inits: new_static_inits,
         methods: new_methods,
         decorators: new_decorators,
+        is_declare: false,
       }
       let new_ctor = match ctor_body {
         Some(f) => {
@@ -1366,6 +1367,7 @@ fn substitute_var_names_in_expr(
         static_field_inits: new_static_inits,
         methods: new_methods,
         decorators: new_decorators,
+        is_declare: false,
       }
       let new_ctor = match ctor_body {
         Some(f) => {

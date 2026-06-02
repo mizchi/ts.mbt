@@ -284,6 +284,7 @@ fn parse_module_or_empty(src : String) -> @ast.TsModule {
         namespaces: [],
         enums: [],
         module_augmentations: [],
+        strict_property_initialization: true,
         top_level_stmts: [],
       }
   } noraise {

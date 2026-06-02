@@ -7987,6 +7987,24 @@ fn check_module_function_bodies_layered(
   for issue in check_module_decl_signatures(module_) {
     all.push(issue)
   }
+  // Walk class field initialisation. Namespaced classes need to
+  // inherit the *top-level* file's `strict_property_initialization`
+  // flag (the directive `// @strict: false` only appears on the
+  // surrounding source, never on a namespace's synthesised module),
+  // so we consult the outer-most module when one exists.
+  let strict_root = if outer_modules.length() > 0 {
+    outer_modules[0]
+  } else {
+    module_
+  }
+  for
+    issue in check_native_class_property_initializers(
+      module_,
+      resolver,
+      strict_root.strict_property_initialization,
+    ) {
+    all.push(issue)
+  }
   // Recurse into namespace bodies. Each level threads its own ancestor
   // chain so a nested namespace can reference parent-scope types by their
   // bare name (TypeScript scoping). Synthetic `<global>` blocks
@@ -8028,6 +8046,76 @@ fn is_in_scope_type_param(ctx : CheckCtx, ty : @ast.TsType) -> Bool {
     Named(n) => ctx.in_scope_type_params.contains(n)
     _ => false
   }
+}
+
+///|
+/// TS2564 ("Property 'X' has no initializer and is not definitely
+/// assigned in the constructor") for native (runtime) class
+/// declarations. We catch the common shape where the class has no
+/// constructor at all and the field has neither an `=` initializer
+/// nor a `!` definite-assignment assertion, and the declared type
+/// doesn't already accept `undefined`. The constructor-body-walk
+/// variant (which would also catch `class C { x: T; constructor() {
+/// this.x = ...; } }`) requires CFA over constructor bodies and is
+/// deferred -- 91 of 93 TS2564 cases in the conformance corpus have
+/// no constructor at all.
+fn check_native_class_property_initializers(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+  strict_property_init : Bool,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  // The strict-property-initialization check is off in this file
+  // (per a `// @strict: false` / `// @strictPropertyInitialization:
+  // false` header directive). Skip TS2564 entirely.
+  if !strict_property_init {
+    return issues
+  }
+  for decl in module_.classes {
+    // Ambient `declare class` decls don't get strict-init checking
+    // -- TS itself only enforces it on runtime class bodies.
+    if decl.is_declare {
+      continue
+    }
+    // Skip when the class declares a constructor: its body might
+    // assign `this.x` and we don't model the constructor body in the
+    // TsClassDecl form (only the parameter list survives). A false
+    // negative here is much better than the false positive of
+    // claiming an initialised field is uninitialised.
+    match decl.constructor_params {
+      Some(_) => continue
+      None => ()
+    }
+    for prop in decl.properties {
+      // Static fields are subject to a separate initialisation rule
+      // in TS (`static x: T;` without `=`) and the runtime path
+      // captures `static x = expr;` in `static_field_inits` -- skip
+      // for now since it's a much smaller cluster and overlaps the
+      // common case.
+      if prop.is_static {
+        continue
+      }
+      if prop.has_initializer || prop.has_definite_assertion {
+        continue
+      }
+      // Skip when the declared type already accepts `undefined`
+      // (`x?: T` is wrapped to `T | undefined` by the parser, and
+      // `x: T | undefined` matches the same predicate).
+      if type_accepts_undefined(resolver.unwrap(prop.type_)) {
+        continue
+      }
+      // Skip when the declared type is `any` -- `class C { x; }`
+      // (no annotation) is fine in TS without strict mode.
+      if prop.type_ is Any {
+        continue
+      }
+      issues.push({
+        path: "class \{decl.name}",
+        message: "property `\{prop.name}` has no initializer and is not definitely assigned",
+      })
+    }
+  }
+  issues
 }
 
 ///|
