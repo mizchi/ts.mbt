@@ -2280,6 +2280,55 @@ fn record(ctx : CheckCtx, sub_path : String, message : String) -> Unit {
 }
 
 ///|
+/// Resolve the class name targeted by `new <callee>(...)` when the
+/// callee is a bare identifier or a dotted member path. Returns `None`
+/// for any other callee shape (call results, parenthesised expressions,
+/// etc.) where the constructed type isn't a statically-named class.
+fn new_callee_class_name(callee : @ast.TsExpr) -> String? {
+  match callee {
+    Var(n) => Some(n)
+    PropAccess(inner, prop) =>
+      match new_callee_class_name(inner) {
+        Some(prefix) => Some(prefix + "." + prop)
+        None => None
+      }
+    _ => None
+  }
+}
+
+///|
+/// TS2511 ("Cannot create an instance of an abstract class"): when
+/// `new X` names a class declared `abstract`, the construction is
+/// illegal. Only fires on a direct class reference -- constructing a
+/// `typeof AbstractClass`-typed value is a separate (legal) case TS
+/// allows, and we don't resolve those here.
+fn check_abstract_instantiation(ctx : CheckCtx, class_name : String) -> Unit {
+  let decl = match ctx.resolver.classes.get(class_name) {
+    Some(d) => d
+    None =>
+      // Fall back to the unqualified tail of a dotted reference.
+      match class_name.rev_find(".") {
+        Some(dot) =>
+          match
+            ctx.resolver.classes.get(
+              class_name[dot + 1:class_name.length()].to_owned(),
+            ) {
+            Some(d) => d
+            None => return
+          }
+        None => return
+      }
+  }
+  if decl.is_abstract {
+    record(
+      ctx,
+      "new `\{class_name}`",
+      "cannot create an instance of abstract class `\{class_name}`",
+    )
+  }
+}
+
+///|
 /// True when the diagnostic message belongs to a family suppressed
 /// under `permissive` mode -- mismatch, property / method existence,
 /// arity, callable / index, equality / assertion, and CFA-dependent
@@ -7798,7 +7847,8 @@ fn check_call_args_in_expr(
         check_call_args_in_expr(env, a, ctx)
       }
     }
-    New(class_name, args) =>
+    New(class_name, args) => {
+      check_abstract_instantiation(ctx, class_name)
       match ctx.resolver.lookup_constructor(class_name) {
         Some(params) => {
           check_arguments(env, params, args, ctx, "new `\{class_name}`")
@@ -7811,7 +7861,12 @@ fn check_call_args_in_expr(
             check_call_args_in_expr(env, a, ctx)
           }
       }
+    }
     NewExpr(callee, args) => {
+      match new_callee_class_name(callee) {
+        Some(name) => check_abstract_instantiation(ctx, name)
+        None => ()
+      }
       check_call_args_in_expr(env, callee, ctx)
       for a in args {
         check_call_args_in_expr(env, a, ctx)
@@ -7953,6 +8008,43 @@ fn check_call_args_in_expr(
           "index access",
           "cannot index into `\{type_display(recv_ty)}`",
         )
+      }
+      // TS2493 ("Tuple type has no element at index N"): a fixed-length
+      // tuple indexed by an out-of-range numeric literal. Tuples that
+      // carry a `...rest` element accept any index, so we skip those.
+      match recv_ty {
+        Tuple(items) => {
+          let mut has_rest = false
+          for it in items {
+            if it is Rest(_) {
+              has_rest = true
+            }
+          }
+          if !has_rest {
+            let idx_lit = match idx {
+              IntLit(n) => Some(n)
+              NumberLit(d) =>
+                if d >= 0.0 && d == d.to_int().to_double() {
+                  Some(d.to_int())
+                } else {
+                  None
+                }
+              _ => None
+            }
+            match idx_lit {
+              Some(n) =>
+                if n >= 0 && n >= items.length() {
+                  record(
+                    ctx,
+                    "index access",
+                    "tuple type `\{type_display(recv_ty)}` has no element at index \{n}",
+                  )
+                }
+              None => ()
+            }
+          }
+        }
+        _ => ()
       }
     }
     AssignExpr(name, v) => {
@@ -8749,6 +8841,26 @@ fn check_module_function_bodies_layered(
       all.push(issue)
     }
   }
+  // Object-shaped names visible from outer scopes (a nested namespace's
+  // interface can `extends` a member typed by a top-level interface).
+  let outer_object_names : Map[String, Unit] = {}
+  for o in outer_modules {
+    for iface in o.interfaces {
+      outer_object_names[iface.name] = ()
+    }
+    for c in o.classes {
+      outer_object_names[c.name] = ()
+    }
+  }
+  for
+    issue in check_class_member_structure(
+      module_,
+      resolver,
+      strict_root.use_define_for_class_fields,
+      outer_object_names,
+    ) {
+    all.push(issue)
+  }
   // Recurse into namespace bodies. Each level threads its own ancestor
   // chain so a nested namespace can reference parent-scope types by their
   // bare name (TypeScript scoping). Synthetic `<global>` blocks
@@ -8891,6 +9003,341 @@ fn check_native_class_property_initializers(
     }
   }
   issues
+}
+
+///|
+/// Structural class-member checks that need only declaration shape (no
+/// flow / expression inference):
+///
+///   - TS2300 / TS2393 ("Duplicate identifier" / "Duplicate function
+///     implementation"): two `get x()` accessors or two `set x(v)`
+///     accessors with the same name and static-ness in one class body.
+///
+///   - TS2610 ("'X' is defined as a property in class but is overridden
+///     here as an accessor") / TS2611 ("'X' is defined as an accessor in
+///     class but is overridden here as a property"): a subclass member
+///     changes the get/set-vs-data shape of an inherited member. TS only
+///     reports these under `useDefineForClassFields`, so we gate on that
+///     flag to stay false-positive-free.
+fn check_class_member_structure(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+  use_define_for_class_fields : Bool,
+  outer_object_names : Map[String, Unit],
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for decl in module_.classes {
+    // --- Duplicate get / set accessors within the same class body. ---
+    // Key by "name|static" so an instance and a static accessor of the
+    // same name don't collide. A computed key (`name == "<computed>"`)
+    // can't be statically compared, so skip it.
+    let get_seen : Map[String, Unit] = {}
+    let set_seen : Map[String, Unit] = {}
+    let reported_dup : Map[String, Unit] = {}
+    for m in decl.methods {
+      if m.name == "<computed>" {
+        continue
+      }
+      if m.accessor != "get" && m.accessor != "set" {
+        continue
+      }
+      let key = "\{m.name}|\{m.is_static}"
+      let seen = if m.accessor == "get" { get_seen } else { set_seen }
+      if seen.contains(key) {
+        if !reported_dup.contains(key) {
+          reported_dup[key] = ()
+          issues.push({
+            path: "class \{decl.name}",
+            message: "duplicate identifier `\{m.name}`",
+          })
+        }
+      } else {
+        seen[key] = ()
+      }
+    }
+    // --- Duplicate regular-method implementations + field/method name
+    // clashes (TS2393 / TS2300). Overload signatures (`body == None`)
+    // legally share a name, so only count methods that carry a body.
+    let bodied_method : Map[String, Unit] = {}
+    let regular_method : Map[String, Unit] = {}
+    for m in decl.methods {
+      if m.name == "<computed>" || m.accessor != "" {
+        continue
+      }
+      let key = "\{m.name}|\{m.is_static}"
+      regular_method[key] = ()
+      match m.body {
+        Some(_) => {
+          if bodied_method.contains(key) && !reported_dup.contains(key) {
+            reported_dup[key] = ()
+            issues.push({
+              path: "class \{decl.name}",
+              message: "duplicate identifier `\{m.name}`",
+            })
+          }
+          bodied_method[key] = ()
+        }
+        None => ()
+      }
+    }
+    // A data field whose name collides with a regular method of the
+    // same static-ness is a duplicate identifier. Auto-accessor /
+    // get-set-backed property names are excluded (the upsert merges
+    // them into `properties`, so they can't be told apart from a real
+    // field there).
+    let field_accessors = class_instance_accessor_names(decl)
+    for prop in decl.properties {
+      if prop.is_accessor {
+        continue
+      }
+      let key = "\{prop.name}|\{prop.is_static}"
+      if field_accessors.contains(prop.name) {
+        continue
+      }
+      if regular_method.contains(key) && !reported_dup.contains(key) {
+        reported_dup[key] = ()
+        issues.push({
+          path: "class \{decl.name}",
+          message: "duplicate identifier `\{prop.name}`",
+        })
+      }
+    }
+    // --- property <-> accessor override against the direct base class. ---
+    // Skip when the (auto-)accessor / property override target is the
+    // subclass itself rather than concrete inherited state.
+    if use_define_for_class_fields && decl.base_names.length() > 0 {
+      let base = match resolver.classes.get(decl.base_names[0]) {
+        Some(b) => Some(b)
+        None =>
+          match decl.base_names[0].rev_find(".") {
+            Some(dot) =>
+              resolver.classes.get(
+                decl.base_names[0][dot + 1:decl.base_names[0].length()].to_owned(),
+              )
+            None => None
+          }
+      }
+      match base {
+        // An abstract base may declare `abstract x` / `abstract accessor
+        // a` members that a subclass legally implements with either a
+        // field or an accessor; our parser drops the `abstract` modifier
+        // on members, so we can't tell those apart -- skip abstract bases
+        // entirely to stay false-positive-free.
+        Some(base) if !base.is_abstract => {
+          let base_accessors = class_instance_accessor_names(base)
+          let base_fields = class_instance_field_names(base, base_accessors)
+          let this_accessors = class_instance_accessor_names(decl)
+          let this_fields = class_instance_field_names(decl, this_accessors)
+          // TS2610: this declares a data property that the base declared
+          // as an accessor.
+          for name, _ in this_fields {
+            if base_accessors.contains(name) {
+              issues.push({
+                path: "class \{decl.name}",
+                message: "`\{name}` is defined as a property but overridden as an accessor",
+              })
+            }
+          }
+          // TS2611: this declares an accessor that the base declared as a
+          // data property.
+          for name, _ in this_accessors {
+            if base_fields.contains(name) {
+              issues.push({
+                path: "class \{decl.name}",
+                message: "`\{name}` is defined as an accessor but overridden as a property",
+              })
+            }
+          }
+        }
+        _ => ()
+      }
+    }
+  }
+  for issue in check_interface_extends_compat(module_, outer_object_names) {
+    issues.push(issue)
+  }
+  issues
+}
+
+///|
+/// TS2430 ("Interface incorrectly extends interface"): a derived
+/// interface redeclares an inherited member with an incompatible shape.
+/// We report only the two reliably-detectable shapes (no structural
+/// assignability needed, so no false positives):
+///
+///   - optionality: the base member is required but the derived one is
+///     optional (`Foo?: T` over `Foo: T`), which weakens the contract.
+///
+///   - a clear scalar-vs-object category clash: the derived member is a
+///     primitive / literal where the base declared an object-shaped
+///     interface / class / object-literal type. A primitive can never
+///     satisfy an object member, so this is always an error.
+///
+/// Generic interfaces (and generic bases) are skipped -- substituting
+/// `extends Foo<T>` correctly needs the full generic machinery, and the
+/// conservative miss is preferable to a substitution-shaped FP.
+fn check_interface_extends_compat(
+  module_ : @ast.TsModule,
+  outer_object_names : Map[String, Unit],
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  // Index declared interfaces by name (non-generic only).
+  let iface_by_name : Map[String, @ast.TsInterface] = {}
+  for iface in module_.interfaces {
+    if iface.type_params.length() == 0 {
+      iface_by_name[iface.name] = iface
+    }
+  }
+  // Object-shaped declared names (interfaces or classes) -- used to
+  // confirm a base member type really is object-shaped before flagging a
+  // scalar override against it. Seeded with outer-scope names so a
+  // namespaced interface extending a member typed by a top-level
+  // interface is still recognised.
+  let object_shaped : Map[String, Unit] = {}
+  for name, _ in outer_object_names {
+    object_shaped[name] = ()
+  }
+  for iface in module_.interfaces {
+    object_shaped[iface.name] = ()
+  }
+  for c in module_.classes {
+    object_shaped[c.name] = ()
+  }
+  // Strip a trailing `| undefined` / `| null` (the parser's encoding of
+  // `x?: T`) so the scalar-vs-object comparison sees the payload type.
+  fn strip_optional(t : @ast.TsType) -> @ast.TsType {
+    match t {
+      Union(members) => {
+        let rest : Array[@ast.TsType] = []
+        for m in members {
+          if !(m is Undefined) && !(m is Null) {
+            rest.push(m)
+          }
+        }
+        if rest.length() == 1 {
+          rest[0]
+        } else {
+          t
+        }
+      }
+      _ => t
+    }
+  }
+  fn is_scalar(t : @ast.TsType) -> Bool {
+    match t {
+      Number
+      | Int
+      | Boolean
+      | String_
+      | BigInt
+      | Symbol
+      | Literal(_)
+      | NumberLiteral(_)
+      | BigIntLiteral(_)
+      | BooleanLiteral(_) => true
+      _ => false
+    }
+  }
+  fn is_object_shaped(t : @ast.TsType) -> Bool {
+    match t {
+      Object(_) | Struct(_, _) => true
+      Named(n) => object_shaped.contains(n)
+      Applied(n, _) => object_shaped.contains(n)
+      _ => false
+    }
+  }
+  for iface in module_.interfaces {
+    if iface.type_params.length() > 0 {
+      continue
+    }
+    if iface.extends_names.length() == 0 {
+      continue
+    }
+    for bi, base_name in iface.extends_names {
+      // Skip bases supplied with type arguments (`extends Foo<X>`).
+      if bi < iface.extends_args.length() && iface.extends_args[bi].length() > 0 {
+        continue
+      }
+      let base = match iface_by_name.get(base_name) {
+        Some(b) => b
+        None => continue
+      }
+      // Base field name -> (type, accepts-undefined).
+      let base_fields : Map[String, @ast.TsType] = {}
+      for f in base.fields {
+        base_fields[f.0] = f.1
+      }
+      for df in iface.fields {
+        match base_fields.get(df.0) {
+          Some(btype) => {
+            let d_optional = type_accepts_undefined(df.1)
+            let b_optional = type_accepts_undefined(btype)
+            // Optionality weakening: derived optional over required base.
+            let d_payload = strip_optional(df.1)
+            let b_payload = strip_optional(btype)
+            if is_scalar(d_payload) && is_object_shaped(b_payload) {
+              issues.push({
+                path: "interface \{iface.name}",
+                message: "interface incorrectly extends `\{base_name}`: property `\{df.0}` of type `\{type_display(df.1)}` is not assignable to the base type `\{type_display(btype)}`",
+              })
+            } else if d_optional && !b_optional {
+              issues.push({
+                path: "interface \{iface.name}",
+                message: "interface incorrectly extends `\{base_name}`: property `\{df.0}` is optional but required in the base",
+              })
+            }
+          }
+          None => ()
+        }
+      }
+    }
+  }
+  issues
+}
+
+///|
+/// Names of a class's non-static get/set accessors.
+fn class_instance_accessor_names(decl : @ast.TsClassDecl) -> Map[String, Unit] {
+  let names : Map[String, Unit] = {}
+  for m in decl.methods {
+    if !m.is_static && (m.accessor == "get" || m.accessor == "set") {
+      names[m.name] = ()
+    }
+  }
+  // Stage-3 auto-accessor fields (`accessor x = ...`) are accessor-like,
+  // not data properties -- track them on the accessor side.
+  for prop in decl.properties {
+    if !prop.is_static && prop.is_accessor {
+      names[prop.name] = ()
+    }
+  }
+  names
+}
+
+///|
+/// Names of a class's non-static data fields -- `properties` entries
+/// that are not actually backed by an accessor (getters/setters are
+/// upserted into `properties` by the parser, so they are filtered out
+/// via the supplied accessor-name set, and auto-accessor fields are
+/// excluded too).
+fn class_instance_field_names(
+  decl : @ast.TsClassDecl,
+  accessors : Map[String, Unit],
+) -> Map[String, Unit] {
+  let names : Map[String, Unit] = {}
+  for prop in decl.properties {
+    if prop.is_static {
+      continue
+    }
+    if prop.is_accessor {
+      continue
+    }
+    if accessors.contains(prop.name) {
+      continue
+    }
+    names[prop.name] = ()
+  }
+  names
 }
 
 ///|
