@@ -638,6 +638,47 @@ fn collect_bridge_struct_decls(bridge_mbt : String) -> Array[BridgeStructDecl] {
 }
 
 ///|
+/// Collect the public-interface form of each index-signature accessor
+/// (`op_get` / `op_set`) emitted into `bridge.mbt`, keyed by the struct's
+/// type name. The FFI side renders these as
+/// `pub extern "js" fn Foo::op_get(...) -> V? = #| <js body>`; the `.mbti`
+/// form drops the `extern "js"` keyword and the trailing JS body so the
+/// generated contract advertises that `Foo` supports `foo[key]` indexing
+/// instead of presenting a bare, seemingly field-less struct.
+fn collect_bridge_index_accessor_mbti(
+  bridge_mbt : String,
+) -> Map[String, Array[String]] {
+  let marker = "pub extern \"js\" fn "
+  let result : Map[String, Array[String]] = {}
+  for line_view in bridge_mbt.split("\n") {
+    let trimmed = line_view.to_owned().trim().to_owned()
+    if !trimmed.has_prefix(marker) {
+      continue
+    }
+    if !(trimmed.contains("::op_get(") || trimmed.contains("::op_set(")) {
+      continue
+    }
+    let rest = trimmed[marker.length():].to_owned()
+    let name = match rest.find("::") {
+      Some(idx) => rest[:idx].to_owned()
+      None => continue
+    }
+    // Drop the trailing ` =` that precedes the multi-line `#|` JS body.
+    let mut sig = rest.trim().to_owned()
+    if sig.has_suffix("=") {
+      sig = sig[:sig.length() - 1].to_owned().trim().to_owned()
+    }
+    let mbti_line = "pub fn \{sig}"
+    let entry = result.get(name).unwrap_or([])
+    if !entry.contains(mbti_line) {
+      entry.push(mbti_line)
+    }
+    result[name] = entry
+  }
+  result
+}
+
+///|
 fn find_bridge_struct_decl(
   decls : Array[BridgeStructDecl],
   name : String,
@@ -671,6 +712,7 @@ fn expose_bridge_struct_decls_in_mbti(
   if struct_decls.is_empty() {
     return bridge_mbti
   }
+  let accessors = collect_bridge_index_accessor_mbti(bridge_mbt)
   let lines : Array[String] = []
   for line_view in bridge_mbti.split("\n") {
     let line = line_view.to_owned()
@@ -678,7 +720,17 @@ fn expose_bridge_struct_decls_in_mbti(
     match parse_bridge_public_type_name_line(trimmed) {
       Some(name) =>
         match find_bridge_struct_decl(struct_decls, name) {
-          Some(decl) => lines.push(render_bridge_struct_mbti_decl(decl))
+          Some(decl) => {
+            let mut rendered = render_bridge_struct_mbti_decl(decl)
+            match accessors.get(name) {
+              Some(accessor_lines) =>
+                for accessor in accessor_lines {
+                  rendered = rendered + "\n\n///|\n" + accessor
+                }
+              None => ()
+            }
+            lines.push(rendered)
+          }
           None => lines.push(line)
         }
       None => lines.push(line)

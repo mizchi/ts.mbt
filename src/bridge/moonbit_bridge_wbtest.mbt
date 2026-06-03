@@ -1059,3 +1059,41 @@ test "bridge: bridge top-level fn parser keeps function-typed parameters intact"
     None => fail("expected function declaration to parse")
   }
 }
+
+///|
+test "bridge mbti: index-signature accessors are exposed in the interface" {
+  // `.mbt` carries the struct plus its `op_get` / `op_set` externs; the
+  // `.mbti` only had a `declare pub type` placeholder. The exposer must
+  // surface the public accessor signatures so the generated contract shows
+  // that the record supports `dict[key]` indexing.
+  let bridge_mbt =
+    #|#warnings("-9")
+    #|pub(all) struct Dict {
+    #|}
+    #|
+    #|pub extern "js" fn Dict::op_get(self : Dict, key : String) -> Double? =
+    #|  #| (self, key) => { const v = self[key]; return v === undefined ? null : v; }
+    #|
+    #|pub extern "js" fn Dict::op_set(self : Dict, key : String, value : Double) -> Unit =
+    #|  #| (self, key, value) => { self[key] = value; }
+  let bridge_mbti =
+    #|///|
+    #|/// TS interface Dict
+    #|declare pub type Dict
+  let exposed = expose_bridge_struct_decls_in_mbti(bridge_mbti, bridge_mbt)
+  assert_true(exposed.contains("pub(all) struct Dict {"))
+  assert_true(
+    exposed.contains(
+      "pub fn Dict::op_get(self : Dict, key : String) -> Double?",
+    ),
+  )
+  assert_true(
+    exposed.contains(
+      "pub fn Dict::op_set(self : Dict, key : String, value : Double) -> Unit",
+    ),
+  )
+  // The JS body and the `extern "js"` keyword must not leak into the
+  // interface form.
+  assert_false(exposed.contains("extern"))
+  assert_false(exposed.contains("self[key]"))
+}
