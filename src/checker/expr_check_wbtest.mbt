@@ -6317,3 +6317,47 @@ test "expr_check: a spread element in an array literal is not a scalar item" {
   })
   @test.assert_eq(elem_issues.length(), 0)
 }
+
+///|
+test "expr_check: an interface extending Array is a valid array target" {
+  // `interface NumList extends Array<number> {}` is structurally an array,
+  // so an array literal of numbers assigns without complaint.
+  let src =
+    #|interface NumList extends Array<number> {}
+    #|function f(): NumList {
+    #|  return [1, 2, 3];
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  @test.assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: a constructor rest parameter checks against the element type" {
+  // `constructor(label: string, ...nums: number[])` — extra args are
+  // numbers; a valid `new` must not be flagged, a wrong-typed one must.
+  let ok =
+    #|class B {
+    #|  constructor(label: string, ...nums: number[]) {}
+    #|}
+    #|function f(): void {
+    #|  let b = new B("x", 1, 2, 3);
+    #|}
+  let issues_ok = check_module_function_bodies(parse_module_or_empty(ok))
+  @test.assert_eq(
+    issues_ok.filter(fn(i) { i.path.contains("arg[") }).length(),
+    0,
+  )
+  let bad =
+    #|class B {
+    #|  constructor(label: string, ...nums: number[]) {}
+    #|}
+    #|function f(): void {
+    #|  let b = new B("x", 1, "bad");
+    #|}
+  let issues_bad = check_module_function_bodies(parse_module_or_empty(bad))
+  @test.assert_eq(
+    issues_bad.filter(fn(i) { i.path.contains("arg[") }).length(),
+    1,
+  )
+}

@@ -467,7 +467,18 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
               seen[n] = true
               cur = aliased.type_
             }
-            None => keep_going = false
+            None =>
+              // A pure array-alias interface (`interface I extends Array<T>
+              // {}` / `ReadonlyArray<T>`, no own members) is structurally an
+              // array — resolve it so array-literal contextual typing and
+              // assignability see the element type.
+              match interface_pure_array_element(self, n) {
+                Some(elem) => {
+                  seen[n] = true
+                  cur = Array(elem)
+                }
+                None => keep_going = false
+              }
           }
         }
       Applied(n, args) =>
@@ -2064,6 +2075,34 @@ fn Resolver::lookup_class_field(
 }
 
 ///|
+/// Element type of a "pure array-alias" interface: one whose only content is
+/// `extends Array<T>` (or `ReadonlyArray<T>`) with no own fields or index
+/// signatures. Returns `None` for interfaces that add members (those are not
+/// interchangeable with a plain array) or that extend anything else.
+fn interface_pure_array_element(
+  resolver : Resolver,
+  name : String,
+) -> @ast.TsType? {
+  match resolver.interfaces.get(name) {
+    Some(iface) =>
+      if iface.fields.length() == 0 &&
+        iface.index_signatures.length() == 0 &&
+        iface.extends_names.length() == 1 &&
+        iface.extends_args.length() == 1 &&
+        (
+          iface.extends_names[0] == "Array" ||
+          iface.extends_names[0] == "ReadonlyArray"
+        ) &&
+        iface.extends_args[0].length() == 1 {
+        Some(iface.extends_args[0][0])
+      } else {
+        None
+      }
+    None => None
+  }
+}
+
+///|
 /// Look up a method's `(params, return)` signature. Returns `None` when the
 /// receiver shape is opaque.
 fn Resolver::lookup_method_sig(
@@ -2096,6 +2135,41 @@ fn Resolver::lookup_constructor(
           Some(types)
         }
         None => Some([])
+      }
+    None => None
+  }
+}
+
+///|
+/// Rich constructor signature (`TsParam` list carrying the rest-parameter
+/// flag) for `class_name`, so a `new` call validates each variadic argument
+/// against the element type instead of the whole array. Returns `None` for
+/// an unknown class; `Some([])` for a class with no declared constructor.
+fn Resolver::lookup_constructor_sig(
+  self : Resolver,
+  class_name : String,
+) -> (Array[@ast.TsType], Array[@ast.TsParam])? {
+  match self.classes.get(class_name) {
+    Some(cls) =>
+      match cls.constructor_params {
+        Some(params) => {
+          let types : Array[@ast.TsType] = []
+          let sig : Array[@ast.TsParam] = []
+          for idx, p in params {
+            types.push(p.1)
+            let is_rest = idx < cls.constructor_param_is_rest.length() &&
+              cls.constructor_param_is_rest[idx]
+            sig.push({
+              name: p.0,
+              binding: None,
+              is_rest,
+              type_: p.1,
+              default: None,
+            })
+          }
+          Some((types, sig))
+        }
+        None => Some(([], []))
       }
     None => None
   }
@@ -8286,9 +8360,16 @@ fn check_call_args_in_expr(
     }
     New(class_name, args) => {
       check_abstract_instantiation(ctx, class_name)
-      match ctx.resolver.lookup_constructor(class_name) {
-        Some(params) => {
-          check_arguments(env, params, args, ctx, "new `\{class_name}`")
+      match ctx.resolver.lookup_constructor_sig(class_name) {
+        Some((params, sig)) => {
+          check_arguments_with_sig(
+            env,
+            params,
+            Some(sig),
+            args,
+            ctx,
+            "new `\{class_name}`",
+          )
           for a in args {
             check_call_args_in_expr(env, a, ctx)
           }

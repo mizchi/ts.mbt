@@ -517,3 +517,12 @@ test "is_assignable_to: symbol index signature accepts a symbol-keyed source" {
   let bad : @ast.TsType = Object([(Symbol, String_)])
   assert_false(is_assignable_to(bad, target))
 }
+
+///|
+test "is_assignable_to: a primitive flows into its boxed wrapper" {
+  // `number` is assignable to `Number`, but not the reverse.
+  assert_true(is_assignable_to(Number, Named("Number")))
+  assert_true(is_assignable_to(String_, Named("String")))
+  assert_true(is_assignable_to(Boolean, Named("Boolean")))
+  assert_false(is_assignable_to(Named("Number"), Number))
+}

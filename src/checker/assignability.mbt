@@ -580,6 +580,15 @@ fn is_assignable_to_inner(
     (NumberLiteral(_), Number) => true
     (BigIntLiteral(_), BigInt) => true
     (BooleanLiteral(_), Boolean) => true
+    // A primitive is assignable to its boxed wrapper interface (`number`
+    // flows into `Number`, `string` into `String`, etc.). The reverse does
+    // not hold and is intentionally omitted. Literals reach the wrappers
+    // transitively via their primitive companion above.
+    (Number | NumberLiteral(_), Named("Number")) => true
+    (String_ | Literal(_), Named("String")) => true
+    (Boolean | BooleanLiteral(_), Named("Boolean")) => true
+    (BigInt | BigIntLiteral(_), Named("BigInt")) => true
+    (Symbol, Named("Symbol")) => true
     // Arrays / typed arrays are iterable: `T[]` is assignable to
     // `Iterable<T>` / `IterableIterator<T>` / `ArrayLike<T>` and the
     // `ReadonlyArray<T>` form. Element type is covariant.

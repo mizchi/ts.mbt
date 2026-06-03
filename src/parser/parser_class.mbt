@@ -59,11 +59,13 @@ fn build_runtime_class_decl(
   let properties : Array[@ast.TsClassPropertyDecl] = []
   let methods : Array[@ast.TsClassMethodDecl] = []
   let instance_field_inits : Array[(String, @ast.TsExpr)] = []
+  let constructor_param_is_rest : Array[Bool] = []
   let constructor_params = match ctor_opt {
     Some(ctor) => {
       let params : Array[(String, @ast.TsType)] = []
       for index, param in ctor.params {
         params.push((runtime_class_param_name(param, index), param.type_))
+        constructor_param_is_rest.push(param.is_rest)
       }
       Some(params)
     }
@@ -227,6 +229,7 @@ fn build_runtime_class_decl(
     static_field_inits: [],
     instance_field_inits,
     constructor_params,
+    constructor_param_is_rest,
     properties,
     methods,
     index_signatures,
@@ -1362,6 +1365,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     static_field_inits: runtime_decl.static_field_inits,
     instance_field_inits: runtime_decl.instance_field_inits,
     constructor_params: runtime_decl.constructor_params,
+    constructor_param_is_rest: runtime_decl.constructor_param_is_rest,
     properties: runtime_decl.properties,
     methods: runtime_decl.methods,
     index_signatures: runtime_decl.index_signatures,

@@ -139,6 +139,7 @@ test "check_module: detects duplicate class instance properties" {
     static_field_inits: [],
     instance_field_inits: [],
     constructor_params: None,
+    constructor_param_is_rest: [],
     properties: [
       {
         name: "value",
@@ -185,6 +186,7 @@ test "check_module: instance and static with same name is OK" {
     static_field_inits: [],
     instance_field_inits: [],
     constructor_params: None,
+    constructor_param_is_rest: [],
     properties: [
       {
         name: "value",

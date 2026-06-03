@@ -659,6 +659,10 @@ pub(all) struct TsClassDecl {
   // separately, but keep an empty array to satisfy literal construction.
   instance_field_inits : Array[(String, TsExpr)]
   constructor_params : Array[(String, TsType)]?
+  // Positionally aligned with `constructor_params`: true when the parameter
+  // is a rest parameter (`constructor(...args: T[])`). Empty array means
+  // "no rest params", so producers that don't populate it stay correct.
+  constructor_param_is_rest : Array[Bool]
   properties : Array[TsClassPropertyDecl]
   methods : Array[TsClassMethodDecl]
   is_abstract : Bool

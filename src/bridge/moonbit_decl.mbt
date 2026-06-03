@@ -2225,6 +2225,7 @@ fn collect_exported_decls(
             class_: {
               ..exported.class_,
               constructor_params: None,
+              constructor_param_is_rest: [],
               properties,
               methods,
               is_constructible: false,
@@ -8967,6 +8968,7 @@ fn clone_exported_class(
     static_field_inits: [],
     instance_field_inits: [],
     constructor_params,
+    constructor_param_is_rest: exported.class_.constructor_param_is_rest,
     properties,
     methods,
     is_abstract: exported.class_.is_abstract,
