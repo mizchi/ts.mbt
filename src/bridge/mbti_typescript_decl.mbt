@@ -2367,45 +2367,65 @@ fn lookup_import_module_spec(
 }
 
 ///|
-/// Map a qualified core-stdlib type (`@bigint.BigInt`, `@set.Set[T]`) onto its
-/// native TypeScript counterpart, matching on the resolved module spec rather
-/// than the (renamable) namespace alias. These types have no `.d.ts` module to
-/// import from, so the default `import type * as set from "moonbitlang/core/..."`
-/// reference does not resolve; lowering them here keeps the emitted output in
-/// line with how the bare `Set` / `Int64` forms already translate.
+fn mbti_ts_map_of(args : Array[String]) -> String {
+  if args.length() == 2 {
+    "Map<\{args[0]}, \{args[1]}>"
+  } else {
+    "Map<unknown, unknown>"
+  }
+}
+
+///|
+fn mbti_ts_set_of(args : Array[String]) -> String {
+  if args.length() == 1 {
+    "Set<\{args[0]}>"
+  } else {
+    "Set<unknown>"
+  }
+}
+
+///|
+fn mbti_ts_array_of(args : Array[String]) -> String {
+  if args.length() == 1 {
+    "Array<\{args[0]}>"
+  } else {
+    "Array<unknown>"
+  }
+}
+
+///|
+/// Map a qualified core-stdlib type (`@bigint.BigInt`, `@set.Set[T]`,
+/// `@hashmap.HashMap[K, V]`, ...) onto its native TypeScript counterpart,
+/// matching on the resolved module spec rather than the (renamable) namespace
+/// alias. These types have no `.d.ts` module to import from, so the default
+/// `import type * as set from "moonbitlang/core/..."` reference does not
+/// resolve; lowering them here keeps the emitted output in line with how the
+/// bare `Set` / `Map` / `Int64` forms already translate. The associative and
+/// sequence containers map to the structurally-equivalent TS `Map` / `Set` /
+/// `Array` shapes (the ordering guarantee of the sorted variants is a runtime
+/// property that has no TypeScript counterpart either way).
 fn mbti_stdlib_native_ts_type(
   imports : Array[MbtiImportRef],
   alias_name : String,
   type_name : String,
   args : Array[String],
 ) -> String? {
-  match lookup_import_module_spec(imports, alias_name) {
-    Some("moonbitlang/core/bigint") =>
-      if type_name == "BigInt" {
-        Some("bigint")
+  match (lookup_import_module_spec(imports, alias_name), type_name) {
+    (Some("moonbitlang/core/bigint"), "BigInt") => Some("bigint")
+    (Some("moonbitlang/core/ref"), "Ref") =>
+      if args.length() == 1 {
+        Some("{ val: \{args[0]} }")
       } else {
-        None
+        Some("{ val: unknown }")
       }
-    Some("moonbitlang/core/set") =>
-      if type_name == "Set" {
-        if args.length() == 1 {
-          Some("Set<\{args[0]}>")
-        } else {
-          Some("Set<unknown>")
-        }
-      } else {
-        None
-      }
-    Some("moonbitlang/core/ref") =>
-      if type_name == "Ref" {
-        if args.length() == 1 {
-          Some("{ val: \{args[0]} }")
-        } else {
-          Some("{ val: unknown }")
-        }
-      } else {
-        None
-      }
+    (Some("moonbitlang/core/set"), "Set") => Some(mbti_ts_set_of(args))
+    (Some("moonbitlang/core/hashset"), "HashSet") => Some(mbti_ts_set_of(args))
+    (Some("moonbitlang/core/sorted_set"), "SortedSet") =>
+      Some(mbti_ts_set_of(args))
+    (Some("moonbitlang/core/hashmap"), "HashMap") => Some(mbti_ts_map_of(args))
+    (Some("moonbitlang/core/sorted_map"), "SortedMap") =>
+      Some(mbti_ts_map_of(args))
+    (Some("moonbitlang/core/deque"), "Deque") => Some(mbti_ts_array_of(args))
     _ => None
   }
 }
