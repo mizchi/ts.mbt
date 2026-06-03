@@ -109,3 +109,34 @@ test "validate_module: ignores generic parameters in scope" {
   let unresolved = unresolved_type_references(mod)
   assert_eq(unresolved.length(), 0)
 }
+
+///|
+test "validate_module: ignores generic parameters of declared functions" {
+  let mod = empty_module()
+  // declare function identity<T>(x: T): T -- `T` is in scope, not unresolved.
+  mod.imports.push({
+    name: "identity",
+    module_: "m",
+    type_params: ["T"],
+    params: [("x", Named("T"))],
+    return_type: Named("T"),
+  })
+  let unresolved = unresolved_type_references(mod)
+  assert_eq(unresolved.length(), 0)
+}
+
+///|
+test "validate_module: still surfaces genuinely undeclared function refs" {
+  let mod = empty_module()
+  // declare function f<T>(x: T): Missing -- `T` resolves, `Missing` does not.
+  mod.imports.push({
+    name: "f",
+    module_: "m",
+    type_params: ["T"],
+    params: [("x", Named("T"))],
+    return_type: Named("Missing"),
+  })
+  let unresolved = unresolved_type_references(mod)
+  assert_eq(unresolved.length(), 1)
+  assert_eq(unresolved[0], "Missing")
+}
