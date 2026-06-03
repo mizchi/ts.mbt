@@ -1794,6 +1794,15 @@ async test "bridge: emit MoonBit declarations from callback APIs with synthetic 
   assert_false(actual.contains("declare pub type JSValue"))
   assert_false(actual.contains("Unsupported export emitEvent"))
   assert_false(actual.contains("Unsupported export maybeEmit"))
+  // The synthetic callback types are emitted as opaque companions on
+  // purpose, so the post-synthesis checker must not flag them as unresolved
+  // type references (the note is reserved for genuinely missing types).
+  assert_false(
+    actual.contains("Unresolved type reference EmitEventListenerCallback"),
+  )
+  assert_false(
+    actual.contains("Unresolved type reference MaybeEmitListenerCallback"),
+  )
 }
 
 ///|
