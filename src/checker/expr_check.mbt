@@ -2136,6 +2136,163 @@ fn Resolver::lookup_method_sig(
 }
 
 ///|
+/// True when `name` is assigned somewhere inside a class static
+/// initialization block (`class C { static { name = ... } }`). Such blocks
+/// run eagerly at class-definition time, so an outer `let name;` they assign
+/// must not be reported as TS2454 (used-before-assigned) -- top-level class
+/// declarations live in `module_.classes` rather than the statement stream,
+/// so the per-statement assignment tracking never sees these writes.
+fn Resolver::name_assigned_in_static_block(
+  self : Resolver,
+  name : String,
+) -> Bool {
+  for _, cls in self.classes {
+    for block in cls.static_blocks {
+      if block_assigns_name(block, name) {
+        return true
+      }
+    }
+  }
+  false
+}
+
+///|
+fn block_assigns_name(block : @ast.TsBlock, name : String) -> Bool {
+  for stmt in block.stmts {
+    if stmt_assigns_name(stmt, name) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn stmt_assigns_name(stmt : @ast.TsStmt, name : String) -> Bool {
+  match stmt {
+    Assign(n, _) | CompoundAssign(n, _, _) => n == name
+    Expr(e) => expr_assigns_name(e, name)
+    Block(b) => block_assigns_name(b, name)
+    If(_, then_, else_) =>
+      block_assigns_name(then_, name) ||
+      (match else_ {
+        Some(b) => block_assigns_name(b, name)
+        None => false
+      })
+    While(_, body) | DoWhile(_, body) | With(_, body) =>
+      block_assigns_name(body, name)
+    Try(b, _, catch_, finally_) =>
+      block_assigns_name(b, name) ||
+      (match catch_ {
+        Some(c) => block_assigns_name(c, name)
+        None => false
+      }) ||
+      (match finally_ {
+        Some(f) => block_assigns_name(f, name)
+        None => false
+      })
+    Label(_, inner) => stmt_assigns_name(inner, name)
+    _ => false
+  }
+}
+
+///|
+fn expr_assigns_name(expr : @ast.TsExpr, name : String) -> Bool {
+  match expr {
+    AssignExpr(n, _) | CompoundAssignExpr(Var(n), _, _) => n == name
+    Seq(a, b) => expr_assigns_name(a, name) || expr_assigns_name(b, name)
+    _ => false
+  }
+}
+
+///|
+/// Resolve an overloaded class method (`foo(x: 'a'): A; foo(x: 'b'): B;
+/// foo(x: string): C`) to the return type of the first signature whose
+/// parameters accept the given argument types. `lookup_method_sig` only
+/// surfaces the first signature, so this is consulted first for receivers
+/// that resolve to a class with more than one signature of the name.
+/// Returns `None` when the receiver isn't such a class, the method has a
+/// single signature, or no signature matches (callers fall back to the
+/// existing single-signature path).
+fn Resolver::resolve_method_overload(
+  self : Resolver,
+  recv : @ast.TsType,
+  meth : String,
+  arg_types : Array[@ast.TsType],
+) -> @ast.TsType? {
+  // Collect the candidate signatures of `meth` as `(params, return)` pairs,
+  // in declaration order. A class method may be overloaded across several
+  // declarations; an object / interface type expresses overloads as repeated
+  // fields of the same name.
+  let candidates : Array[(Array[@ast.TsType], @ast.TsType)] = []
+  match self.unwrap(recv) {
+    Named(n) | Applied(n, _) =>
+      match self.classes.get(n) {
+        Some(cls) => {
+          // Overload *signatures* (no body) are the callable surface in TS;
+          // the implementation signature (with a body) is not, so prefer the
+          // former when both are present.
+          let sig_only : Array[@ast.TsClassMethodDecl] = []
+          let all : Array[@ast.TsClassMethodDecl] = []
+          for m in cls.methods {
+            if m.name == meth && !m.is_static {
+              all.push(m)
+              if m.body is None {
+                sig_only.push(m)
+              }
+            }
+          }
+          let chosen = if sig_only.length() > 0 { sig_only } else { all }
+          for m in chosen {
+            let ps : Array[@ast.TsType] = []
+            for p in m.params {
+              ps.push(p.1)
+            }
+            candidates.push((ps, m.return_type))
+          }
+        }
+        None => ()
+      }
+    Object(fields) =>
+      for f in fields {
+        match (f.0, f.1) {
+          (Literal(k), Func(ps, ret)) if k == meth => candidates.push((ps, ret))
+          _ => ()
+        }
+      }
+    Struct(_, fields) =>
+      for f in fields {
+        match f.1 {
+          Func(ps, ret) => if f.0 == meth { candidates.push((ps, ret)) }
+          _ => ()
+        }
+      }
+    _ => ()
+  }
+  // Only meaningful for an overload set: a single signature is already
+  // handled by the first-match `lookup_method_sig` path.
+  if candidates.length() <= 1 {
+    return None
+  }
+  for c in candidates {
+    let (params, ret) = c
+    if params.length() != arg_types.length() {
+      continue
+    }
+    let mut ok = true
+    for i in 0..<arg_types.length() {
+      if !is_assignable_to(arg_types[i], params[i]) {
+        ok = false
+        break
+      }
+    }
+    if ok {
+      return Some(ret)
+    }
+  }
+  None
+}
+
+///|
 /// Look up the constructor parameter types for a class. Returns `None` when
 /// the class is unknown or has no declared constructor (the latter falls back
 /// to a zero-arg signature, mirroring TS semantics).
@@ -3815,7 +3972,12 @@ fn infer_expr(
         match callee_ty {
           Func(params, ret) => {
             let bindings = solve_generic_bindings(
-              env, resolver, type_params, params, args,
+              env,
+              resolver,
+              type_params,
+              params,
+              args,
+              resolver.signatures.get(name),
             )
             for a in args {
               let _ = infer_expr(env, resolver, a)
@@ -3828,6 +3990,29 @@ fn infer_expr(
       infer_call(env, resolver, callee_ty, args)
     }
     CallExpr(callee, args) => {
+      // Overload resolution for a member call `recv.m(args)` represented as
+      // `CallExpr(PropAccess(recv, m), args)`: pick the overload whose
+      // parameters accept the argument types before falling back to the
+      // first-signature `infer_call` path.
+      match callee {
+        PropAccess(recv, meth) => {
+          let recv_ty = infer_expr(env, resolver, recv)
+          let arg_types : Array[@ast.TsType] = []
+          for a in args {
+            arg_types.push(infer_expr(env, resolver, a))
+          }
+          match
+            resolver.resolve_method_overload(
+              prune_nullish(resolver, recv_ty),
+              meth,
+              arg_types,
+            ) {
+            Some(ret) => return substitute_this_type(ret, recv_ty)
+            None => ()
+          }
+        }
+        _ => ()
+      }
       let callee_ty = infer_expr(env, resolver, callee)
       infer_call(env, resolver, callee_ty, args)
     }
@@ -3999,9 +4184,23 @@ fn infer_expr(
           return @ast.TsType::Applied("Promise", [inner])
         _ => ()
       }
+      // Overload resolution: a class method with multiple signatures
+      // (`foo(x: 'a'): A; foo(x: 'b'): B`) resolves to the first signature
+      // whose parameters accept the argument types. The single-signature
+      // `lookup_method_sig` below only sees the first overload, so try the
+      // full set first.
+      let pruned_recv = prune_nullish(resolver, recv_ty)
+      let arg_types : Array[@ast.TsType] = []
+      for a in args {
+        arg_types.push(infer_expr(env, resolver, a))
+      }
+      match resolver.resolve_method_overload(pruned_recv, meth, arg_types) {
+        Some(ret) => return substitute_this_type(ret, recv_ty)
+        None => ()
+      }
       // Nullable receiver: strip null/undefined members and retry so
       // `(arr | null).map(...)` still resolves the method return type.
-      match resolver.lookup_method_sig(prune_nullish(resolver, recv_ty), meth) {
+      match resolver.lookup_method_sig(pruned_recv, meth) {
         Some((_params, ret)) => {
           for a in args {
             let _ = infer_expr(env, resolver, a)
@@ -4352,23 +4551,69 @@ fn solve_generic_bindings(
   type_params : Array[String],
   params : Array[@ast.TsType],
   args : Array[@ast.TsExpr],
+  sig : Array[@ast.TsParam]?,
 ) -> Map[String, @ast.TsType] {
   let bindings : Map[String, @ast.TsType] = {}
   for tp in type_params {
     bindings[tp] = @ast.TsType::Any
   }
-  let n = if args.length() < params.length() {
-    args.length()
-  } else {
-    params.length()
+  fn is_rest_at(i : Int) -> Bool {
+    if params[i] is Rest(_) {
+      return true
+    }
+    match sig {
+      Some(s) => i < s.length() && s[i].is_rest
+      None => false
+    }
   }
+
   let mut i = 0
-  while i < n {
-    let actual = infer_expr(env, resolver, args[i])
-    infer_param_bindings(type_params, params[i], actual, bindings, false)
+  while i < params.length() {
+    if is_rest_at(i) {
+      // Variadic tail (`...args: T[]`): each individual argument has the
+      // element type `T`, not the whole `T[]`. Unify every remaining
+      // argument against the element type so `foo([true], [false])` infers
+      // `T = boolean[]` (not `boolean`). A spread argument supplies the
+      // whole array, so unify it against the rest array type instead.
+      let rest_arr = match params[i] {
+        Rest(inner) => inner
+        other => other
+      }
+      let elem = rest_param_element(params[i])
+      while i < args.length() {
+        let actual = infer_expr(env, resolver, args[i])
+        match args[i] {
+          Spread(_) =>
+            infer_param_bindings(type_params, rest_arr, actual, bindings, true)
+          _ => infer_param_bindings(type_params, elem, actual, bindings, true)
+        }
+        i = i + 1
+      }
+      break
+    }
+    if i < args.length() {
+      let actual = infer_expr(env, resolver, args[i])
+      infer_param_bindings(type_params, params[i], actual, bindings, false)
+    }
     i = i + 1
   }
   bindings
+}
+
+///|
+/// Element type of a rest parameter's declared type: `...args: T[]` is stored
+/// as `Rest(Array(T))` (module functions) or bare `Array(T)` (`declare`
+/// imports). Both yield `T`; non-array shapes are returned unchanged.
+fn rest_param_element(t : @ast.TsType) -> @ast.TsType {
+  let inner = match t {
+    Rest(x) => x
+    other => other
+  }
+  match inner {
+    Array(e) => e
+    Applied("Array", [e]) | Applied("ReadonlyArray", [e]) => e
+    other => other
+  }
 }
 
 ///|
@@ -6550,6 +6795,44 @@ fn type_display(ty : @ast.TsType) -> String {
 // ---------------------------------------------------------------------------
 
 ///|
+/// Fold a destructuring default (`let [x = d] = ...`, `let { x = d } = ...`)
+/// into the element / property type: the default supplies the value when the
+/// source element is `undefined`, so the binding's type drops `undefined`
+/// and gains the default's (widened) type. Matches TS, where `let [x = 0] =
+/// arr` types `x` as the element type with `undefined` replaced by `number`.
+fn apply_binding_default(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  ty : @ast.TsType,
+  default : @ast.TsExpr?,
+) -> @ast.TsType {
+  match default {
+    None => ty
+    Some(d) => {
+      let default_ty = widen_literal(infer_expr(env, ctx.resolver, d))
+      match ty {
+        Undefined | Any => default_ty
+        Union(members) => {
+          let kept : Array[@ast.TsType] = []
+          for m in members {
+            if !(m is Undefined) {
+              kept.push(m)
+            }
+          }
+          kept.push(default_ty)
+          if kept.length() == 1 {
+            kept[0]
+          } else {
+            @ast.TsType::Union(kept)
+          }
+        }
+        _ => ty
+      }
+    }
+  }
+}
+
+///|
 fn bind_array_pattern(
   env : ExprEnv,
   ctx : CheckCtx,
@@ -6574,6 +6857,7 @@ fn bind_array_pattern(
           // Unknown iterable shape: infer undefined (element may not exist).
           _ => @ast.TsType::Undefined
         }
+        let elem_ty = apply_binding_default(env, ctx, elem_ty, elem.default)
         bind_pattern(env, ctx, elem.binding, elem_ty)
       }
       None => ()
@@ -6654,6 +6938,7 @@ fn bind_object_pattern(
           _ => @ast.TsType::Undefined
         }
     }
+    let field_ty = apply_binding_default(env, ctx, field_ty, prop.default)
     bind_pattern(env, ctx, prop.binding, field_ty)
   }
 }
@@ -7916,7 +8201,8 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           // module flag.
           if is_checkable(declared) &&
             !type_accepts_undefined(declared) &&
-            ctx.strict_property_init {
+            ctx.strict_property_init &&
+            !ctx.resolver.name_assigned_in_static_block(name) {
             ctx.unassigned[name] = true
           }
         _ => ()
@@ -8315,7 +8601,16 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
     Block(b) => check_block(env, b, ctx)
     Label(_, inner) => check_stmt(env, inner, ctx)
     Empty | Break(_) | Continue(_) | Debugger => ()
-    NativeClassStmt(_, _) => ()
+    NativeClassStmt(decl, _) =>
+      // A class declaration's static initialization blocks run eagerly at
+      // definition time, so an assignment to an outer variable inside one
+      // (`let foo; class C { static { foo = 1 } }`) definitely assigns it.
+      // Walk the blocks so the TS2454 (use-before-assigned) set is cleared;
+      // checking them under the surrounding scope also surfaces any nested
+      // errors.
+      for block in decl.static_blocks {
+        check_block(env, block, ctx)
+      }
   }
 }
 
@@ -8366,6 +8661,7 @@ fn check_call_args_in_expr(
               type_params,
               params,
               args,
+              sig,
             )
             substitute_params_array(params, bindings)
           } else {

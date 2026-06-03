@@ -216,9 +216,14 @@ fn build_runtime_class_decl(
   // `Any` -> `Any` placeholder -- only the length matters for the
   // skip predicate.
   let index_signatures : Array[(@ast.TsType, @ast.TsType)] = []
+  let static_blocks : Array[@ast.TsBlock] = []
   for element in elements {
     if element is IndexSig {
       index_signatures.push((@ast.TsType::Any, @ast.TsType::Any))
+    }
+    match element {
+      StaticBlock(block) => static_blocks.push(block)
+      _ => ()
     }
   }
   {
@@ -227,6 +232,7 @@ fn build_runtime_class_decl(
     base_names: [],
     base_expr: None,
     static_field_inits: [],
+    static_blocks,
     instance_field_inits,
     constructor_params,
     constructor_param_is_rest,
@@ -1377,6 +1383,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     base_names: runtime_decl.base_names,
     base_expr: runtime_decl.base_expr,
     static_field_inits: runtime_decl.static_field_inits,
+    static_blocks: runtime_decl.static_blocks,
     instance_field_inits: runtime_decl.instance_field_inits,
     constructor_params: runtime_decl.constructor_params,
     constructor_param_is_rest: runtime_decl.constructor_param_is_rest,

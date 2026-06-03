@@ -226,6 +226,7 @@ fn try_lift_iife_value(
     base_names,
     base_expr,
     static_field_inits,
+    static_blocks: [],
     instance_field_inits: [],
     constructor_params: None,
     constructor_param_is_rest: [],

@@ -8966,6 +8966,7 @@ fn clone_exported_class(
     base_names: [],
     base_expr: None,
     static_field_inits: [],
+    static_blocks: [],
     instance_field_inits: [],
     constructor_params,
     constructor_param_is_rest: exported.class_.constructor_param_is_rest,
