@@ -2354,6 +2354,53 @@ fn lookup_import_ts_alias(
 }
 
 ///|
+fn lookup_import_module_spec(
+  imports : Array[MbtiImportRef],
+  alias_name : String,
+) -> String? {
+  for import_ref in imports {
+    if import_ref.alias_name == alias_name {
+      return Some(import_ref.module_spec)
+    }
+  }
+  None
+}
+
+///|
+/// Map a qualified core-stdlib type (`@bigint.BigInt`, `@set.Set[T]`) onto its
+/// native TypeScript counterpart, matching on the resolved module spec rather
+/// than the (renamable) namespace alias. These types have no `.d.ts` module to
+/// import from, so the default `import type * as set from "moonbitlang/core/..."`
+/// reference does not resolve; lowering them here keeps the emitted output in
+/// line with how the bare `Set` / `Int64` forms already translate.
+fn mbti_stdlib_native_ts_type(
+  imports : Array[MbtiImportRef],
+  alias_name : String,
+  type_name : String,
+  args : Array[String],
+) -> String? {
+  match lookup_import_module_spec(imports, alias_name) {
+    Some("moonbitlang/core/bigint") =>
+      if type_name == "BigInt" {
+        Some("bigint")
+      } else {
+        None
+      }
+    Some("moonbitlang/core/set") =>
+      if type_name == "Set" {
+        if args.length() == 1 {
+          Some("Set<\{args[0]}>")
+        } else {
+          Some("Set<unknown>")
+        }
+      } else {
+        None
+      }
+    _ => None
+  }
+}
+
+///|
 fn collect_used_import_refs(
   imports : Array[MbtiImportRef],
   used_aliases : Array[String],
@@ -2541,14 +2588,22 @@ fn translate_named_type(
         match name.find(".") {
           Some(dot_idx) => {
             let alias_name = name[1:dot_idx].to_owned()
-            mbti_push_unique_string(used_aliases, alias_name)
-            let ts_alias = lookup_import_ts_alias(imports, alias_name)
             let rest = name[dot_idx + 1:name.length()].to_owned()
-            if args.length() > 0 {
-              let joined_args = args.join(", ")
-              "\{ts_alias}.\{rest}<\{joined_args}>"
-            } else {
-              "\{ts_alias}.\{rest}"
+            match mbti_stdlib_native_ts_type(imports, alias_name, rest, args) {
+              // Known core-stdlib type with a native TS equivalent: emit it
+              // directly and leave the namespace alias unused so no dangling
+              // `import type * as ... from "moonbitlang/core/..."` is produced.
+              Some(native) => native
+              None => {
+                mbti_push_unique_string(used_aliases, alias_name)
+                let ts_alias = lookup_import_ts_alias(imports, alias_name)
+                if args.length() > 0 {
+                  let joined_args = args.join(", ")
+                  "\{ts_alias}.\{rest}<\{joined_args}>"
+                } else {
+                  "\{ts_alias}.\{rest}"
+                }
+              }
             }
           }
           None => name
