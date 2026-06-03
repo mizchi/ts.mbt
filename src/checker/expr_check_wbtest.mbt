@@ -118,12 +118,37 @@ test "expr_check: void return tolerates bare return" {
 }
 
 ///|
-test "expr_check: silently accepts unknown identifier as any" {
-  // Real-world `.ts` files rely on untyped globals; we must not flag them.
+test "expr_check: flags a reference to an undefined name (TS2304)" {
+  // An identifier that is declared nowhere and is not a standard ambient
+  // global is a "cannot find name" error.
   let src =
     #|function f(): void {
     #|  const x: number = globalCounter;
     #|  return;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      @test.assert_eq(issues.length(), 1)
+      assert_true(
+        issues[0].message.contains("cannot find name `globalCounter`"),
+      )
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: standard ambient globals are not flagged" {
+  // `console` / `Math` / `Promise` etc. are declared by the standard
+  // libraries, so a reference to one is never a "cannot find name" error.
+  let src =
+    #|function f() {
+    #|  const a = console
+    #|  const b = Math
+    #|  const c = Promise
+    #|  const d = JSON
+    #|  return a
     #|}
   match parse_function_named(src, "f") {
     Some(f) => {
@@ -145,7 +170,13 @@ test "expr_check: unannotated function return skips return-type checks" {
   match parse_function_named(src, "f") {
     Some(f) => {
       let issues = check_function_body(f)
-      @test.assert_eq(issues.length(), 0)
+      let mut msgs = ""
+      for i in issues {
+        msgs += " [" + i.path + " | " + i.message + "]"
+      }
+      if issues.length() != 0 {
+        fail("expected 0 issues, got:" + msgs)
+      }
     }
     None => fail("function f not found")
   }
