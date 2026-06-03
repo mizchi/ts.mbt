@@ -225,11 +225,16 @@ fn Resolver::ingest_module(
     // signature path used by `apply_type_predicate_narrowing` can map
     // the predicate's parameter name to an argument index.
     let synth_params : Array[@ast.TsParam] = []
-    for p in imp.params {
+    for idx, p in imp.params {
+      // Preserve the rest-parameter flag (`...args: T[]`) so the call
+      // checker compares each variadic argument against the element type
+      // rather than the whole array. `param_is_rest` is positionally
+      // aligned with `params`; an empty array means "no rest params".
+      let is_rest = idx < imp.param_is_rest.length() && imp.param_is_rest[idx]
       synth_params.push({
         name: p.0,
         binding: None,
-        is_rest: false,
+        is_rest,
         type_: p.1,
         default: None,
       })
@@ -6197,8 +6202,18 @@ fn check_arguments_with_sig(
   }
   let rest_elem_type : @ast.TsType = if rest_index >= 0 &&
     rest_index < params.length() {
-    match params[rest_index] {
+    // The rest slot may arrive as a bare array, an `Applied("Array", …)` /
+    // iterable, a tuple, or any of those wrapped in the `Rest(...)` variadic
+    // marker (the `module_.funcs` builder wraps rest params that way).
+    // Unwrap one `Rest` layer first, then read the element type.
+    let slot = match params[rest_index] {
+      Rest(inner) => inner
+      other => other
+    }
+    match slot {
       Array(elem) => elem
+      Applied("Array", [elem]) => elem
+      Applied(n, [elem]) if is_array_like_iterable_name(n) => elem
       // `...args: [string, number]` — rest is typed as a tuple; each
       // individual rest argument is the union of all tuple element types.
       Tuple(parts) if parts.length() > 0 => {

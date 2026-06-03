@@ -119,6 +119,7 @@ test "validate_module: ignores generic parameters of declared functions" {
     module_: "m",
     type_params: ["T"],
     params: [("x", Named("T"))],
+    param_is_rest: [],
     return_type: Named("T"),
   })
   let unresolved = unresolved_type_references(mod)
@@ -134,6 +135,7 @@ test "validate_module: still surfaces genuinely undeclared function refs" {
     module_: "m",
     type_params: ["T"],
     params: [("x", Named("T"))],
+    param_is_rest: [],
     return_type: Named("Missing"),
   })
   let unresolved = unresolved_type_references(mod)

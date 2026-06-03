@@ -6230,3 +6230,32 @@ test "expr_check: assigning to a mutable array element is fine" {
   })
   @test.assert_eq(readonly_issues.length(), 0)
 }
+
+///|
+test "expr_check: rest-parameter args are checked against the element type" {
+  // `...keys: number[]` — each individual argument is a `number`, not the
+  // whole array. A valid call must not be flagged.
+  let src =
+    #|declare function collect(label: string, ...nums: number[]): void;
+    #|function f(): void {
+    #|  collect("x", 1, 2, 3);
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let arg_issues = issues.filter(fn(i) { i.path.contains("arg[") })
+  @test.assert_eq(arg_issues.length(), 0)
+}
+
+///|
+test "expr_check: a wrong-typed rest argument is still flagged" {
+  // The element type is `number`, so a string vararg is a genuine error.
+  let src =
+    #|declare function collect(label: string, ...nums: number[]): void;
+    #|function f(): void {
+    #|  collect("x", 1, "bad", 3);
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let arg_issues = issues.filter(fn(i) { i.path.contains("arg[") })
+  @test.assert_eq(arg_issues.length(), 1)
+}

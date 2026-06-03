@@ -543,6 +543,10 @@ pub(all) struct TsImport {
   // generic ambient declarations.
   type_params : Array[String]
   params : Array[(String, TsType)] // parameter (name, type)
+  // Positionally aligned with `params`: true when the parameter is a rest
+  // parameter (`...name: T[]`). An empty array means "no rest params", so
+  // older producers that don't populate it stay correct by default.
+  param_is_rest : Array[Bool]
   return_type : TsType // return valuetype
 } derive(Debug)
 

@@ -6427,6 +6427,9 @@ fn clone_exported_import(
     module_: exported.import_.module_,
     type_params: exported.import_.type_params,
     params,
+    // `params` is rebuilt positionally from the source import, so the
+    // original rest-parameter flags stay aligned.
+    param_is_rest: exported.import_.param_is_rest,
     return_type: rewrite_inline_result_return_type(
       exported.export_name,
       return_type,
