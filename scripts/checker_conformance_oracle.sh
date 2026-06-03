@@ -63,7 +63,11 @@ fp_files=()
 
 while IFS= read -r f; do
   # Multi-file cases need a project graph the single-file CLI lacks.
-  grep -q "@filename" "$f" 2>/dev/null && continue
+  # The `@Filename:` directive is case-insensitive in the TS test
+  # harness (`@filename`, `@Filename`, `@FileName` all occur), so match
+  # it that way -- otherwise a capitalised variant slips through and the
+  # concatenated multi-file blob gets classified as if it were one file.
+  grep -qi "@filename" "$f" 2>/dev/null && continue
   base=$(basename "$f" .ts)
   # A case run under multiple settings emits suffixed baselines such as
   # `foo(target=es5).errors.txt`, so match the bare name and any

@@ -650,6 +650,12 @@ pub(all) struct TsClassDecl {
   // inside the class body so the binding is part of the class
   // scope rather than a post-declaration assignment.
   static_field_inits : Array[(String, TsExpr)]
+  // Static initialization blocks (`class X { static { ... } }`) in source
+  // order. They execute eagerly at class-definition time, so the checker's
+  // definite-assignment (TS2454) pass treats an assignment to an outer
+  // variable inside a static block as assigning it. Only populated for
+  // runtime classes by the parser; empty elsewhere.
+  static_blocks : Array[TsBlock]
   // Instance field initializers (`class X { foo = expr; }`). Populated
   // in declaration order so the checker can validate that an initializer
   // does not reference `this.bar` before `bar` has its own initializer

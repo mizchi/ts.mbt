@@ -172,9 +172,21 @@ fn func_params_assignable(
       return false
     }
   } else if t_len < s_len {
-    return false
+    // A source function may declare more parameters than the target so
+    // long as each surplus trailing parameter is elidable. TS treats a
+    // `void` (or `undefined`-accepting) parameter as omittable, so e.g.
+    // `(a: void) => void` is assignable to `() => void`.
+    for i in t_len..<s_len {
+      if !type_accepts_undefined(s_params[i]) {
+        return false
+      }
+    }
   }
-  let shared = if s_trailing_rest { t_len.min(s_fixed) } else { s_len }
+  let shared = if s_trailing_rest {
+    t_len.min(s_fixed)
+  } else {
+    s_len.min(t_len)
+  }
   fn variance_ok(a, b) {
     if bivariant_params {
       is_assignable_to_inner(a, b, bivariant_params) ||

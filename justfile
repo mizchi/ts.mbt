@@ -118,7 +118,7 @@ checker-conformance-oracle *ARGS:
 # documented standing FP count.
 verify-checker-soundness:
     moon build --target native
-    bash scripts/checker_conformance_oracle.sh --max-fp 13
+    bash scripts/checker_conformance_oracle.sh --max-fp 0
 
 # Full CI check
 ci: fmt check test verify-mbti-dts verify-scaffolds verify-generated-fixtures verify-examples verify-checker-soundness

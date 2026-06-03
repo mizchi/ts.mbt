@@ -2194,6 +2194,7 @@ fn Parser::parse_declare_class(
   let private_members : Array[String] = []
   let protected_members : Array[String] = []
   let index_signatures : Array[(@ast.TsType, @ast.TsType)] = []
+  let static_blocks : Array[@ast.TsBlock] = []
   let mut constructor_params : Array[(String, @ast.TsType)]? = None
   let mut saw_public_constructor = false
   let mut saw_nonpublic_constructor = false
@@ -2264,6 +2265,13 @@ fn Parser::parse_declare_class(
         }
         _ => ()
       }
+    }
+    // Static initialization block: `static { ... }`. Captured so the
+    // checker's definite-assignment pass can see assignments to outer
+    // variables (these blocks run at class-definition time).
+    if is_static && self.check(LBrace) {
+      static_blocks.push(self.parse_block())
+      continue
     }
     let mut accessor_kind : String? = None
     match self.peek().kind {
@@ -2419,6 +2427,7 @@ fn Parser::parse_declare_class(
     base_names,
     base_expr: None,
     static_field_inits: [],
+    static_blocks,
     instance_field_inits: [],
     constructor_params,
     // The ambient `declare class` param parser does not surface rest flags;

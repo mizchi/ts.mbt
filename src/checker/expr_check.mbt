@@ -510,6 +510,25 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
           Some(resolved) => cur = resolved
           None => keep_going = false
         }
+      // `keyof typeof Enum` — the type of the enum object has the member
+      // names as its keys, so `keyof typeof Color` resolves to the union
+      // of member-name string literals (`"Red" | "Green" | ...`). This
+      // also covers `const enum`s, whose members aren't exposed as
+      // structural object fields.
+      Keyof(TypeOf(enum_name)) if self.enums.get(enum_name) is Some(_) => {
+        let decl = self.enums.get(enum_name).unwrap()
+        let keys : Array[@ast.TsType] = []
+        for m in decl.members {
+          keys.push(@ast.TsType::Literal(m.name))
+        }
+        if keys.length() == 0 {
+          keep_going = false
+        } else if keys.length() == 1 {
+          cur = keys[0]
+        } else {
+          cur = @ast.TsType::Union(keys)
+        }
+      }
       // `keyof T` where T is a Named interface/class — extract the union of
       // field names so `keyof MyInterface` resolves to a string literal union.
       Keyof(inner) => {
@@ -2114,6 +2133,163 @@ fn Resolver::lookup_method_sig(
     Some(Func(ps, ret)) => Some((ps, ret))
     _ => None
   }
+}
+
+///|
+/// True when `name` is assigned somewhere inside a class static
+/// initialization block (`class C { static { name = ... } }`). Such blocks
+/// run eagerly at class-definition time, so an outer `let name;` they assign
+/// must not be reported as TS2454 (used-before-assigned) -- top-level class
+/// declarations live in `module_.classes` rather than the statement stream,
+/// so the per-statement assignment tracking never sees these writes.
+fn Resolver::name_assigned_in_static_block(
+  self : Resolver,
+  name : String,
+) -> Bool {
+  for _, cls in self.classes {
+    for block in cls.static_blocks {
+      if block_assigns_name(block, name) {
+        return true
+      }
+    }
+  }
+  false
+}
+
+///|
+fn block_assigns_name(block : @ast.TsBlock, name : String) -> Bool {
+  for stmt in block.stmts {
+    if stmt_assigns_name(stmt, name) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn stmt_assigns_name(stmt : @ast.TsStmt, name : String) -> Bool {
+  match stmt {
+    Assign(n, _) | CompoundAssign(n, _, _) => n == name
+    Expr(e) => expr_assigns_name(e, name)
+    Block(b) => block_assigns_name(b, name)
+    If(_, then_, else_) =>
+      block_assigns_name(then_, name) ||
+      (match else_ {
+        Some(b) => block_assigns_name(b, name)
+        None => false
+      })
+    While(_, body) | DoWhile(_, body) | With(_, body) =>
+      block_assigns_name(body, name)
+    Try(b, _, catch_, finally_) =>
+      block_assigns_name(b, name) ||
+      (match catch_ {
+        Some(c) => block_assigns_name(c, name)
+        None => false
+      }) ||
+      (match finally_ {
+        Some(f) => block_assigns_name(f, name)
+        None => false
+      })
+    Label(_, inner) => stmt_assigns_name(inner, name)
+    _ => false
+  }
+}
+
+///|
+fn expr_assigns_name(expr : @ast.TsExpr, name : String) -> Bool {
+  match expr {
+    AssignExpr(n, _) | CompoundAssignExpr(Var(n), _, _) => n == name
+    Seq(a, b) => expr_assigns_name(a, name) || expr_assigns_name(b, name)
+    _ => false
+  }
+}
+
+///|
+/// Resolve an overloaded class method (`foo(x: 'a'): A; foo(x: 'b'): B;
+/// foo(x: string): C`) to the return type of the first signature whose
+/// parameters accept the given argument types. `lookup_method_sig` only
+/// surfaces the first signature, so this is consulted first for receivers
+/// that resolve to a class with more than one signature of the name.
+/// Returns `None` when the receiver isn't such a class, the method has a
+/// single signature, or no signature matches (callers fall back to the
+/// existing single-signature path).
+fn Resolver::resolve_method_overload(
+  self : Resolver,
+  recv : @ast.TsType,
+  meth : String,
+  arg_types : Array[@ast.TsType],
+) -> @ast.TsType? {
+  // Collect the candidate signatures of `meth` as `(params, return)` pairs,
+  // in declaration order. A class method may be overloaded across several
+  // declarations; an object / interface type expresses overloads as repeated
+  // fields of the same name.
+  let candidates : Array[(Array[@ast.TsType], @ast.TsType)] = []
+  match self.unwrap(recv) {
+    Named(n) | Applied(n, _) =>
+      match self.classes.get(n) {
+        Some(cls) => {
+          // Overload *signatures* (no body) are the callable surface in TS;
+          // the implementation signature (with a body) is not, so prefer the
+          // former when both are present.
+          let sig_only : Array[@ast.TsClassMethodDecl] = []
+          let all : Array[@ast.TsClassMethodDecl] = []
+          for m in cls.methods {
+            if m.name == meth && !m.is_static {
+              all.push(m)
+              if m.body is None {
+                sig_only.push(m)
+              }
+            }
+          }
+          let chosen = if sig_only.length() > 0 { sig_only } else { all }
+          for m in chosen {
+            let ps : Array[@ast.TsType] = []
+            for p in m.params {
+              ps.push(p.1)
+            }
+            candidates.push((ps, m.return_type))
+          }
+        }
+        None => ()
+      }
+    Object(fields) =>
+      for f in fields {
+        match (f.0, f.1) {
+          (Literal(k), Func(ps, ret)) if k == meth => candidates.push((ps, ret))
+          _ => ()
+        }
+      }
+    Struct(_, fields) =>
+      for f in fields {
+        match f.1 {
+          Func(ps, ret) => if f.0 == meth { candidates.push((ps, ret)) }
+          _ => ()
+        }
+      }
+    _ => ()
+  }
+  // Only meaningful for an overload set: a single signature is already
+  // handled by the first-match `lookup_method_sig` path.
+  if candidates.length() <= 1 {
+    return None
+  }
+  for c in candidates {
+    let (params, ret) = c
+    if params.length() != arg_types.length() {
+      continue
+    }
+    let mut ok = true
+    for i in 0..<arg_types.length() {
+      if !is_assignable_to(arg_types[i], params[i]) {
+        ok = false
+        break
+      }
+    }
+    if ok {
+      return Some(ret)
+    }
+  }
+  None
 }
 
 ///|
@@ -3796,7 +3972,12 @@ fn infer_expr(
         match callee_ty {
           Func(params, ret) => {
             let bindings = solve_generic_bindings(
-              env, resolver, type_params, params, args,
+              env,
+              resolver,
+              type_params,
+              params,
+              args,
+              resolver.signatures.get(name),
             )
             for a in args {
               let _ = infer_expr(env, resolver, a)
@@ -3809,6 +3990,29 @@ fn infer_expr(
       infer_call(env, resolver, callee_ty, args)
     }
     CallExpr(callee, args) => {
+      // Overload resolution for a member call `recv.m(args)` represented as
+      // `CallExpr(PropAccess(recv, m), args)`: pick the overload whose
+      // parameters accept the argument types before falling back to the
+      // first-signature `infer_call` path.
+      match callee {
+        PropAccess(recv, meth) => {
+          let recv_ty = infer_expr(env, resolver, recv)
+          let arg_types : Array[@ast.TsType] = []
+          for a in args {
+            arg_types.push(infer_expr(env, resolver, a))
+          }
+          match
+            resolver.resolve_method_overload(
+              prune_nullish(resolver, recv_ty),
+              meth,
+              arg_types,
+            ) {
+            Some(ret) => return substitute_this_type(ret, recv_ty)
+            None => ()
+          }
+        }
+        _ => ()
+      }
       let callee_ty = infer_expr(env, resolver, callee)
       infer_call(env, resolver, callee_ty, args)
     }
@@ -3980,9 +4184,23 @@ fn infer_expr(
           return @ast.TsType::Applied("Promise", [inner])
         _ => ()
       }
+      // Overload resolution: a class method with multiple signatures
+      // (`foo(x: 'a'): A; foo(x: 'b'): B`) resolves to the first signature
+      // whose parameters accept the argument types. The single-signature
+      // `lookup_method_sig` below only sees the first overload, so try the
+      // full set first.
+      let pruned_recv = prune_nullish(resolver, recv_ty)
+      let arg_types : Array[@ast.TsType] = []
+      for a in args {
+        arg_types.push(infer_expr(env, resolver, a))
+      }
+      match resolver.resolve_method_overload(pruned_recv, meth, arg_types) {
+        Some(ret) => return substitute_this_type(ret, recv_ty)
+        None => ()
+      }
       // Nullable receiver: strip null/undefined members and retry so
       // `(arr | null).map(...)` still resolves the method return type.
-      match resolver.lookup_method_sig(prune_nullish(resolver, recv_ty), meth) {
+      match resolver.lookup_method_sig(pruned_recv, meth) {
         Some((_params, ret)) => {
           for a in args {
             let _ = infer_expr(env, resolver, a)
@@ -4333,23 +4551,69 @@ fn solve_generic_bindings(
   type_params : Array[String],
   params : Array[@ast.TsType],
   args : Array[@ast.TsExpr],
+  sig : Array[@ast.TsParam]?,
 ) -> Map[String, @ast.TsType] {
   let bindings : Map[String, @ast.TsType] = {}
   for tp in type_params {
     bindings[tp] = @ast.TsType::Any
   }
-  let n = if args.length() < params.length() {
-    args.length()
-  } else {
-    params.length()
+  fn is_rest_at(i : Int) -> Bool {
+    if params[i] is Rest(_) {
+      return true
+    }
+    match sig {
+      Some(s) => i < s.length() && s[i].is_rest
+      None => false
+    }
   }
+
   let mut i = 0
-  while i < n {
-    let actual = infer_expr(env, resolver, args[i])
-    infer_param_bindings(type_params, params[i], actual, bindings, false)
+  while i < params.length() {
+    if is_rest_at(i) {
+      // Variadic tail (`...args: T[]`): each individual argument has the
+      // element type `T`, not the whole `T[]`. Unify every remaining
+      // argument against the element type so `foo([true], [false])` infers
+      // `T = boolean[]` (not `boolean`). A spread argument supplies the
+      // whole array, so unify it against the rest array type instead.
+      let rest_arr = match params[i] {
+        Rest(inner) => inner
+        other => other
+      }
+      let elem = rest_param_element(params[i])
+      while i < args.length() {
+        let actual = infer_expr(env, resolver, args[i])
+        match args[i] {
+          Spread(_) =>
+            infer_param_bindings(type_params, rest_arr, actual, bindings, true)
+          _ => infer_param_bindings(type_params, elem, actual, bindings, true)
+        }
+        i = i + 1
+      }
+      break
+    }
+    if i < args.length() {
+      let actual = infer_expr(env, resolver, args[i])
+      infer_param_bindings(type_params, params[i], actual, bindings, false)
+    }
     i = i + 1
   }
   bindings
+}
+
+///|
+/// Element type of a rest parameter's declared type: `...args: T[]` is stored
+/// as `Rest(Array(T))` (module functions) or bare `Array(T)` (`declare`
+/// imports). Both yield `T`; non-array shapes are returned unchanged.
+fn rest_param_element(t : @ast.TsType) -> @ast.TsType {
+  let inner = match t {
+    Rest(x) => x
+    other => other
+  }
+  match inner {
+    Array(e) => e
+    Applied("Array", [e]) | Applied("ReadonlyArray", [e]) => e
+    other => other
+  }
 }
 
 ///|
@@ -4680,6 +4944,56 @@ fn narrow_union(a : @ast.TsType, b : @ast.TsType) -> @ast.TsType {
 // ---------------------------------------------------------------------------
 
 ///|
+/// Extract the bare call signature (`<call>`) from a callable object /
+/// interface type: `interface I { (): T }` / `type F = { (x): T }`. A
+/// function value assigned to such a type is checked against this
+/// signature, so we surface it and bypass the structural-object path
+/// (which has no function rule and would report a spurious `expected I
+/// but got () => T`). Returns the call signature's `Func`, or `None`
+/// when the type carries no call signature.
+///
+/// Restricted to types with *exactly one* call signature: an overload
+/// set (`{ (x: T): string; (x: T, y?: T): string }`) is not contextually
+/// applied to a passed lambda by TS, so routing through one arbitrary
+/// arm would push the wrong parameter / return types into the body.
+fn Resolver::object_call_signature(
+  self : Resolver,
+  t : @ast.TsType,
+) -> @ast.TsType? {
+  let mut found : @ast.TsType? = None
+  let mut count = 0
+  match t {
+    Object(fields) =>
+      for f in fields {
+        match f.0 {
+          Literal(k) if k == "<call>" => {
+            found = Some(f.1)
+            count = count + 1
+          }
+          _ => ()
+        }
+      }
+    Named(n) =>
+      match self.interfaces.get(n) {
+        Some(iface) =>
+          for f in iface.fields {
+            if f.0 == "<call>" {
+              found = Some(f.1)
+              count = count + 1
+            }
+          }
+        None => ()
+      }
+    _ => ()
+  }
+  if count == 1 {
+    found
+  } else {
+    None
+  }
+}
+
+///|
 fn check_expr_against(
   env : ExprEnv,
   expr : @ast.TsExpr,
@@ -4698,6 +5012,31 @@ fn check_expr_against(
   // x + 1)` flows the element type into `x` so the body's `x + 1` is
   // properly typed instead of falling through to `Any`.
   let expected_shape = ctx.resolver.unwrap(expected)
+  // A call-signature interface / object type (`interface I { (): T }`,
+  // `type F = { (x): T }`) is callable. Route a function / arrow value
+  // through that call signature so it gets contextual typing and skips
+  // the structural object-assignability path (which has no function
+  // rule and would otherwise report a spurious `expected I but got
+  // () => T`).
+  match ctx.resolver.object_call_signature(expected_shape) {
+    Some(Func(formal_params, formal_ret)) =>
+      match expr {
+        ArrowFunc(arrow_params, _declared_ret, body, is_async) => {
+          check_arrow_with_context(
+            env, arrow_params, body, is_async, formal_params, formal_ret, ctx, sub_path,
+          )
+          return
+        }
+        FuncExpr(f) => {
+          check_funcexpr_with_context(
+            env, f, formal_params, formal_ret, ctx, sub_path,
+          )
+          return
+        }
+        _ => ()
+      }
+    _ => ()
+  }
   match (expr, expected_shape) {
     (
       ArrowFunc(arrow_params, _declared_ret, body, is_async),
@@ -6093,6 +6432,7 @@ fn check_arrow_with_context(
   for entry in outer.full_snapshot() {
     env.bind(entry.0, entry.1)
   }
+  let param_names : Array[String] = []
   let mut i = 0
   while i < arrow_params.length() {
     let p = arrow_params[i]
@@ -6106,32 +6446,54 @@ fn check_arrow_with_context(
       p.type_
     }
     env.bind(p.name, ty)
+    param_names.push(p.name)
     i = i + 1
+  }
+  // A parameter shadows any same-named outer binding, so the body must not
+  // see it as "used before assigned" (TS2454) — the parameter is bound and
+  // assigned on entry. The flat `unassigned` map is name-keyed with no scope
+  // tracking, so clone it minus the parameter names for the body walk.
+  let inner_ctx : CheckCtx = {
+    path_prefix: ctx.path_prefix,
+    return_type: unwrap_async_return(is_async, formal_ret),
+    yield_type: @ast.TsType::Any,
+    resolver: ctx.resolver,
+    issues: ctx.issues,
+    in_scope_type_params: ctx.in_scope_type_params,
+    permissive: ctx.permissive,
+    unassigned: unassigned_without(ctx.unassigned, param_names),
+    strict_property_init: ctx.strict_property_init,
   }
   match body {
     ArrowExpr(e) => {
       let want = unwrap_async_return(is_async, formal_ret)
-      check_expr_against(env, e, want, ctx, "\{sub_path} arrow body")
+      check_expr_against(env, e, want, inner_ctx, "\{sub_path} arrow body")
     }
-    ArrowBlock(block) => {
+    ArrowBlock(block) =>
       // Recheck the block with the new env and the formal_ret as the
       // expected return type.
-      let inner_ctx : CheckCtx = {
-        path_prefix: ctx.path_prefix,
-        return_type: unwrap_async_return(is_async, formal_ret),
-        yield_type: @ast.TsType::Any,
-        resolver: ctx.resolver,
-        issues: ctx.issues,
-        in_scope_type_params: ctx.in_scope_type_params,
-        permissive: ctx.permissive,
-        unassigned: ctx.unassigned,
-        strict_property_init: ctx.strict_property_init,
-      }
       for stmt in block.stmts {
         check_stmt(env, stmt, inner_ctx)
       }
-    }
   }
+}
+
+///|
+/// Clone an `unassigned` (TS2454) tracking map, dropping the given names —
+/// used when entering an inner function / arrow scope whose parameters
+/// shadow outer bindings of the same name.
+fn unassigned_without(
+  src : Map[String, Bool],
+  names : Array[String],
+) -> Map[String, Bool] {
+  let m : Map[String, Bool] = {}
+  for k, v in src {
+    m[k] = v
+  }
+  for n in names {
+    let _ = m.remove(n)
+  }
+  m
 }
 
 ///|
@@ -6150,6 +6512,7 @@ fn check_funcexpr_with_context(
   for entry in outer.full_snapshot() {
     env.bind(entry.0, entry.1)
   }
+  let param_names : Array[String] = []
   let mut i = 0
   while i < f.params.length() {
     let p = f.params[i]
@@ -6161,6 +6524,7 @@ fn check_funcexpr_with_context(
       p.type_
     }
     env.bind(p.name, ty)
+    param_names.push(p.name)
     i = i + 1
   }
   // Prefer the function's own annotated return type when present; fall back
@@ -6178,7 +6542,8 @@ fn check_funcexpr_with_context(
     issues: ctx.issues,
     in_scope_type_params: ctx.in_scope_type_params,
     permissive: ctx.permissive,
-    unassigned: ctx.unassigned,
+    // Parameters shadow outer bindings — drop them from the TS2454 set.
+    unassigned: unassigned_without(ctx.unassigned, param_names),
     strict_property_init: ctx.strict_property_init,
   }
   let _ = sub_path
@@ -6430,6 +6795,44 @@ fn type_display(ty : @ast.TsType) -> String {
 // ---------------------------------------------------------------------------
 
 ///|
+/// Fold a destructuring default (`let [x = d] = ...`, `let { x = d } = ...`)
+/// into the element / property type: the default supplies the value when the
+/// source element is `undefined`, so the binding's type drops `undefined`
+/// and gains the default's (widened) type. Matches TS, where `let [x = 0] =
+/// arr` types `x` as the element type with `undefined` replaced by `number`.
+fn apply_binding_default(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  ty : @ast.TsType,
+  default : @ast.TsExpr?,
+) -> @ast.TsType {
+  match default {
+    None => ty
+    Some(d) => {
+      let default_ty = widen_literal(infer_expr(env, ctx.resolver, d))
+      match ty {
+        Undefined | Any => default_ty
+        Union(members) => {
+          let kept : Array[@ast.TsType] = []
+          for m in members {
+            if !(m is Undefined) {
+              kept.push(m)
+            }
+          }
+          kept.push(default_ty)
+          if kept.length() == 1 {
+            kept[0]
+          } else {
+            @ast.TsType::Union(kept)
+          }
+        }
+        _ => ty
+      }
+    }
+  }
+}
+
+///|
 fn bind_array_pattern(
   env : ExprEnv,
   ctx : CheckCtx,
@@ -6454,6 +6857,7 @@ fn bind_array_pattern(
           // Unknown iterable shape: infer undefined (element may not exist).
           _ => @ast.TsType::Undefined
         }
+        let elem_ty = apply_binding_default(env, ctx, elem_ty, elem.default)
         bind_pattern(env, ctx, elem.binding, elem_ty)
       }
       None => ()
@@ -6534,6 +6938,7 @@ fn bind_object_pattern(
           _ => @ast.TsType::Undefined
         }
     }
+    let field_ty = apply_binding_default(env, ctx, field_ty, prop.default)
     bind_pattern(env, ctx, prop.binding, field_ty)
   }
 }
@@ -7796,7 +8201,8 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           // module flag.
           if is_checkable(declared) &&
             !type_accepts_undefined(declared) &&
-            ctx.strict_property_init {
+            ctx.strict_property_init &&
+            !ctx.resolver.name_assigned_in_static_block(name) {
             ctx.unassigned[name] = true
           }
         _ => ()
@@ -8195,7 +8601,16 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
     Block(b) => check_block(env, b, ctx)
     Label(_, inner) => check_stmt(env, inner, ctx)
     Empty | Break(_) | Continue(_) | Debugger => ()
-    NativeClassStmt(_, _) => ()
+    NativeClassStmt(decl, _) =>
+      // A class declaration's static initialization blocks run eagerly at
+      // definition time, so an assignment to an outer variable inside one
+      // (`let foo; class C { static { foo = 1 } }`) definitely assigns it.
+      // Walk the blocks so the TS2454 (use-before-assigned) set is cleared;
+      // checking them under the surrounding scope also surfaces any nested
+      // errors.
+      for block in decl.static_blocks {
+        check_block(env, block, ctx)
+      }
   }
 }
 
@@ -8246,6 +8661,7 @@ fn check_call_args_in_expr(
               type_params,
               params,
               args,
+              sig,
             )
             substitute_params_array(params, bindings)
           } else {
@@ -9168,9 +9584,28 @@ fn check_function_body_with(
   } else {
     @ast.TsType::Any
   }
+  // For a generator, a `return x` statement yields the iterator's
+  // `TReturn` slot, not the declared iterator type itself: checking the
+  // returned value against `Generator<T, TReturn, ...>` / `IterableIterator<T>`
+  // / a named `Iterator`-extending interface is a false positive. Extract
+  // the `TReturn` arm where the ambient shape exposes it (`Generator` /
+  // `AsyncGenerator` / `Iterator` / `AsyncIterator` second type arg) and
+  // otherwise fall back to `Any` so the return-value check is skipped --
+  // the iterator type is never itself a valid target for the value.
+  let effective_return : @ast.TsType = if func.is_generator {
+    match func.return_type {
+      Applied("Generator", args)
+      | Applied("AsyncGenerator", args)
+      | Applied("Iterator", args)
+      | Applied("AsyncIterator", args) if args.length() >= 2 => args[1]
+      _ => @ast.TsType::Any
+    }
+  } else {
+    body_return
+  }
   let ctx : CheckCtx = {
     path_prefix: "function " + func.name,
-    return_type: body_return,
+    return_type: effective_return,
     yield_type,
     resolver,
     issues,
