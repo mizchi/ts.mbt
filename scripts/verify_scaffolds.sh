@@ -56,6 +56,7 @@ verify_typescript_scaffold_fixture() {
     "module": "esnext",
     "moduleResolution": "bundler",
     "baseUrl": ".",
+    "ignoreDeprecations": "6.0",
     "lib": ["es2020"]
   },
   "files": [
@@ -134,6 +135,7 @@ verify_typescript_facade_scaffold_fixture() {
     "module": "esnext",
     "moduleResolution": "bundler",
     "baseUrl": ".",
+    "ignoreDeprecations": "6.0",
     "lib": ["es2020"]
   },
   "files": [
@@ -220,6 +222,7 @@ EOF
     "module": "esnext",
     "moduleResolution": "bundler",
     "baseUrl": ".",
+    "ignoreDeprecations": "6.0",
     "lib": ["es2020"]
   },
   "files": [
@@ -311,6 +314,7 @@ EOF
     "module": "esnext",
     "moduleResolution": "bundler",
     "baseUrl": ".",
+    "ignoreDeprecations": "6.0",
     "lib": ["es2020"]
   },
   "files": [
