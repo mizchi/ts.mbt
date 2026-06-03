@@ -6230,8 +6230,31 @@ fn check_arguments_with_sig(
   } else {
     @ast.TsType::Any
   }
+  // A spread argument (`foo(...arr)`) distributes an unknown number of
+  // values across the remaining parameters, so positional matching is
+  // unreliable from the first spread onward — checking the array against a
+  // scalar parameter would wrongly report `expected string but got
+  // string[]`. Type-check the positions *before* the first spread; the
+  // spread operand itself (and everything after) is still validated for
+  // internal errors by the `check_call_args_in_expr` recursion at the call
+  // site.
+  let first_spread : Int = {
+    let mut idx = -1
+    let mut j = 0
+    while j < args.length() {
+      if args[j] is Spread(_) {
+        idx = j
+        break
+      }
+      j = j + 1
+    }
+    idx
+  }
   let mut i = 0
   while i < args.length() {
+    if first_spread >= 0 && i >= first_spread {
+      break
+    }
     let sub_path = "\{call_path} arg[\{i}]"
     if rest_index >= 0 && i >= rest_index {
       check_expr_against(env, args[i], rest_elem_type, ctx, sub_path)
@@ -8295,11 +8318,33 @@ fn check_call_args_in_expr(
     UnaryOp(op, inner) => {
       check_call_args_in_expr(env, inner, ctx)
       match op {
-        Neg | Plus | BitwiseNot => {
+        Neg | BitwiseNot => {
           let inner_ty = ctx.resolver.unwrap(
             infer_expr(env, ctx.resolver, inner),
           )
           if is_checkable(inner_ty) && is_definitely_not_arithmetic(inner_ty) {
+            record(
+              ctx,
+              "unary op",
+              "operand `\{type_display(inner_ty)}` is not a valid number type",
+            )
+          }
+        }
+        // Unary `+` is the explicit numeric-coercion operator, so TypeScript
+        // accepts string operands (`+"5"`, `+templateString`, `+forInKey`)
+        // as well as number / bigint / any. Only operands that cannot
+        // coerce at all (objects, arrays, …) are flagged.
+        Plus => {
+          let inner_ty = ctx.resolver.unwrap(
+            infer_expr(env, ctx.resolver, inner),
+          )
+          let is_stringish = match inner_ty {
+            String_ | Literal(_) => true
+            _ => false
+          }
+          if is_checkable(inner_ty) &&
+            is_definitely_not_arithmetic(inner_ty) &&
+            !is_stringish {
             record(
               ctx,
               "unary op",

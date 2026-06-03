@@ -6259,3 +6259,45 @@ test "expr_check: a wrong-typed rest argument is still flagged" {
   let arg_issues = issues.filter(fn(i) { i.path.contains("arg[") })
   @test.assert_eq(arg_issues.length(), 1)
 }
+
+///|
+test "expr_check: a spread argument is not matched positionally" {
+  // `foo(...arr)` distributes; the array must not be compared to a scalar
+  // parameter (which would wrongly report `expected string but got
+  // string[]`).
+  let src =
+    #|declare function foo(a: string, b: string, c: string): void;
+    #|function f(arr: string[]): void {
+    #|  foo(...arr);
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let arg_issues = issues.filter(fn(i) { i.path.contains("arg[") })
+  @test.assert_eq(arg_issues.length(), 0)
+}
+
+///|
+test "expr_check: unary plus accepts a string operand" {
+  // `+s` is the explicit numeric coercion — valid on a string in TS.
+  let src =
+    #|function f(s: string): number {
+    #|  return +s;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let unary = issues.filter(fn(i) { i.message.contains("valid number type") })
+  @test.assert_eq(unary.length(), 0)
+}
+
+///|
+test "expr_check: unary minus still rejects a string operand" {
+  // Unlike `+`, unary `-` requires a numeric operand.
+  let src =
+    #|function f(s: string): number {
+    #|  return -s;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let unary = issues.filter(fn(i) { i.message.contains("valid number type") })
+  @test.assert_eq(unary.length(), 1)
+}
