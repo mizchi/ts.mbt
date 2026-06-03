@@ -4653,42 +4653,18 @@ fn check_expr_against(
       return
     }
     (ArrayLit(items), Array(elem)) => {
-      for i, item in items {
-        check_expr_against(
-          env,
-          item,
-          elem,
-          ctx,
-          sub_path + "[" + i.to_string() + "]",
-        )
-      }
+      check_array_lit_elements_against(env, items, elem, ctx, sub_path)
       return
     }
     (ArrayLit(items), Applied("Array", [elem]))
     | (ArrayLit(items), Applied("ReadonlyArray", [elem])) => {
-      for i, item in items {
-        check_expr_against(
-          env,
-          item,
-          elem,
-          ctx,
-          sub_path + "[" + i.to_string() + "]",
-        )
-      }
+      check_array_lit_elements_against(env, items, elem, ctx, sub_path)
       return
     }
     // `Readonly<T[]>` contextual typing — delegate to element checking on
     // the inner array type so `['a', 'b'] as Readonly<string[]>` works.
     (ArrayLit(items), Applied("Readonly", [Array(elem)])) => {
-      for i, item in items {
-        check_expr_against(
-          env,
-          item,
-          elem,
-          ctx,
-          sub_path + "[" + i.to_string() + "]",
-        )
-      }
+      check_array_lit_elements_against(env, items, elem, ctx, sub_path)
       return
     }
     _ => ()
@@ -5159,6 +5135,29 @@ fn is_named_decl(ty : @ast.TsType, resolver : Resolver) -> Bool {
 /// (more literal entries than tuple slots, or vice versa) emit an arity
 /// issue; trailing `Spread(...)` entries waive the arity check the same way
 /// they do for call-site arguments.
+/// Check each element of an array literal against the array's element type
+/// `elem`. A `Spread(e)` element contributes `e`'s *elements*, not `e`
+/// itself, so it is checked against `elem[]` (e.g. `[...nums]` where `nums:
+/// number[]` is valid for `number[]`) rather than against the scalar `elem`,
+/// which would wrongly report `expected number but got number[]`.
+fn check_array_lit_elements_against(
+  env : ExprEnv,
+  items : Array[@ast.TsExpr],
+  elem : @ast.TsType,
+  ctx : CheckCtx,
+  sub_path : String,
+) -> Unit {
+  for i, item in items {
+    let item_path = sub_path + "[" + i.to_string() + "]"
+    match item {
+      Spread(inner) =>
+        check_expr_against(env, inner, Array(elem), ctx, item_path)
+      _ => check_expr_against(env, item, elem, ctx, item_path)
+    }
+  }
+}
+
+///|
 fn check_array_lit_against_tuple(
   env : ExprEnv,
   items : Array[@ast.TsExpr],

@@ -6301,3 +6301,19 @@ test "expr_check: unary minus still rejects a string operand" {
   let unary = issues.filter(fn(i) { i.message.contains("valid number type") })
   @test.assert_eq(unary.length(), 1)
 }
+
+///|
+test "expr_check: a spread element in an array literal is not a scalar item" {
+  // `[...nums]` where `nums: number[]` is a valid `number[]`; the spread
+  // contributes elements, so it must not be compared to the scalar `number`.
+  let src =
+    #|function f(nums: number[]): number[] {
+    #|  return [0, ...nums, 9];
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let elem_issues = issues.filter(fn(i) {
+    i.path.contains("init") || i.path.contains("[")
+  })
+  @test.assert_eq(elem_issues.length(), 0)
+}
