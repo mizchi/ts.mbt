@@ -57,13 +57,17 @@ fn Parser::skip_param_decorators(self : Parser) -> Unit raise ParseError {
 }
 
 ///|
-fn Parser::skip_param_modifiers(self : Parser) -> Bool {
-  // Returns `true` when at least one TS-only parameter modifier
-  // (`public` / `private` / `protected` / `readonly` / `override`)
-  // was consumed. Constructor-parameter callers use the flag to
-  // synthesize `this.x = x` assigns — the so-called "parameter
-  // property" TS shortcut.
+fn Parser::skip_param_modifiers(self : Parser) -> (Bool, Bool, String) {
+  // Returns `(is_parameter_property, is_readonly, visibility)`. The first
+  // is `true` when at least one TS-only parameter modifier (`public` /
+  // `private` / `protected` / `readonly`) was consumed; `is_readonly` is
+  // `true` when `readonly` was among them; `visibility` is the
+  // accessibility keyword seen (`"private"` / `"protected"`, else
+  // `"public"`). Constructor-parameter callers use these to materialize
+  // the corresponding class field with the right readonly / visibility.
   let mut saw_property_modifier = false
+  let mut saw_readonly = false
+  let mut visibility = "public"
   let mut has_modifier = true
   while has_modifier {
     has_modifier = false
@@ -92,6 +96,12 @@ fn Parser::skip_param_modifiers(self : Parser) -> Bool {
             if name != "override" {
               saw_property_modifier = true
             }
+            if name == "readonly" {
+              saw_readonly = true
+            }
+            if name == "private" || name == "protected" {
+              visibility = name
+            }
             let _ = self.advance()
             has_modifier = true
           }
@@ -100,7 +110,7 @@ fn Parser::skip_param_modifiers(self : Parser) -> Bool {
       _ => ()
     }
   }
-  saw_property_modifier
+  (saw_property_modifier, saw_readonly, visibility)
 }
 
 ///|
@@ -125,18 +135,20 @@ fn wrap_optional_ts_type(type_ : @ast.TsType) -> @ast.TsType {
 // / parameter
 fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
   self.skip_param_decorators()
-  let is_param_property = self.skip_param_modifiers()
+  let (is_param_property, is_readonly_param, visibility_param) = self.skip_param_modifiers()
   let is_rest = self.match_ellipsis()
   let binding = self.parse_binding_pattern()
   let name = self.binding_first_name(binding)
-  // Record the name so the surrounding constructor parser can
-  // synthesize `this.name = name` field assigns. The collector is
-  // a stack-of-slots managed by `enter_param_property_scope` /
-  // `exit_param_property_scope`; only constructor-param parsing
-  // pushes a slot, so non-constructor params are no-ops.
+  // Record the name (with its `readonly`-ness and visibility) so the
+  // surrounding constructor parser can synthesize `this.name = name`
+  // field assigns and materialize the corresponding class field. Only
+  // constructor-param parsing pushes a slot, so non-constructor params
+  // are no-ops.
   if is_param_property && self.param_property_scopes.length() > 0 {
     let top = self.param_property_scopes.length() - 1
-    self.param_property_scopes[top].push(name)
+    self.param_property_scopes[top].push(
+      (name, is_readonly_param, visibility_param),
+    )
   }
   let is_optional = self.match_(Question)
   // type ()
@@ -2177,6 +2189,8 @@ fn Parser::parse_declare_class(
   let _ = self.expect(LBrace)
   let properties : Array[@ast.TsClassPropertyDecl] = []
   let methods : Array[@ast.TsClassMethodDecl] = []
+  let private_members : Array[String] = []
+  let protected_members : Array[String] = []
   let index_signatures : Array[(@ast.TsType, @ast.TsType)] = []
   let mut constructor_params : Array[(String, @ast.TsType)]? = None
   let mut saw_public_constructor = false
@@ -2201,6 +2215,7 @@ fn Parser::parse_declare_class(
     let mut is_static = false
     let mut is_readonly = false
     let mut is_public = true
+    let mut visibility = "public"
     let mut is_accessor = false
     let mut has_modifier = true
     while has_modifier {
@@ -2241,6 +2256,7 @@ fn Parser::parse_declare_class(
           }
           if mod == "private" || mod == "protected" {
             is_public = false
+            visibility = mod
           }
           has_modifier = true
         }
@@ -2259,6 +2275,15 @@ fn Parser::parse_declare_class(
       _ => ()
     }
     let member_name = self.parse_declare_class_member_name()
+    match member_name {
+      Some(n) =>
+        if visibility == "private" {
+          private_members.push(n)
+        } else if visibility == "protected" {
+          protected_members.push(n)
+        }
+      None => ()
+    }
     let _ = self.match_(Question)
     // Definite-assignment assertion (`foo!: T`) on a class field. Also
     // tolerate a stray `!` after a method name even though that is not
@@ -2401,5 +2426,7 @@ fn Parser::parse_declare_class(
     is_constructible,
     decorators: self.take_pending_decorators(),
     is_declare: true,
+    private_members,
+    protected_members,
   }
 }

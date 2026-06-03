@@ -235,6 +235,8 @@ fn try_lift_iife_value(
     index_signatures: [],
     decorators: [],
     is_declare: false,
+    private_members: [],
+    protected_members: [],
   }
   // Emit closure-variable declarations before the class so the class
   // body can still close over them.

@@ -2262,6 +2262,139 @@ priv struct CheckCtx {
 }
 
 ///|
+/// TS18013 ("Property '#x' is not accessible outside class ... because
+/// it has a private identifier"). The parser brands every in-class
+/// private access (`this.#x`, same-scope `obj.#x`) to a
+/// `__private_brand__N__x` symbol; a member name that still carries the
+/// literal `#` prefix at check time therefore only ever comes from an
+/// access *outside* any class body (top-level code or a free function),
+/// where touching a private identifier is always illegal. That makes
+/// this a false-positive-free signal.
+fn check_private_name_access(ctx : CheckCtx, prop_name : String) -> Unit {
+  if prop_name.has_prefix("#") {
+    record(
+      ctx,
+      "access `\{prop_name}`",
+      "private identifier `\{prop_name}` is not accessible outside its class",
+    )
+  }
+}
+
+///|
+/// The class whose body the checker is currently inside, derived from
+/// `path_prefix`. Class-method bodies are walked under a synthesized
+/// `"<Class>.<method>"` path (optionally prefixed with `namespace X > `
+/// for nested namespaces); free functions and top-level statements have
+/// no `"."`, so they yield `None` ("not inside a class body").
+fn current_enclosing_class(path_prefix : String) -> String? {
+  // Drop any `namespace … > ` / `declare global > ` prefix segments.
+  let tail = match path_prefix.rev_find("> ") {
+    Some(i) => path_prefix[i + 2:].to_owned()
+    None => path_prefix
+  }
+  // Function bodies are walked under `"function <name>"`; class methods
+  // synthesize `<name>` as `"<Class>.<method>"`, so strip the leading
+  // `"function "` before splitting on `.`.
+  let tail = if tail.has_prefix("function ") {
+    tail["function ".length():].to_owned()
+  } else {
+    tail
+  }
+  match tail.find(".") {
+    Some(i) => Some(tail[:i].to_owned())
+    None => None
+  }
+}
+
+///|
+/// True when `sub` is `base` or transitively extends it, walking the
+/// declared `base_names` chain through the resolver's class table.
+fn class_extends(resolver : Resolver, sub : String, base : String) -> Bool {
+  if sub == base {
+    return true
+  }
+  let mut current = sub
+  let mut depth = 0
+  while depth < 32 {
+    depth = depth + 1
+    match resolver.classes.get(current) {
+      Some(decl) => {
+        if decl.base_names.contains(base) {
+          return true
+        }
+        if decl.base_names.length() == 0 {
+          return false
+        }
+        current = decl.base_names[0]
+      }
+      None => return false
+    }
+  }
+  false
+}
+
+///|
+/// TS2341 / TS2445: accessing a `private` / `protected` class member from
+/// outside the scope that's allowed to see it. The receiver's class is
+/// resolved (instance type or a static `Class.member` reference); a
+/// `private` member is legal only inside the exact declaring class, a
+/// `protected` member inside that class or a subclass. `this` / `super`
+/// receivers are always same-instance and never flagged.
+fn check_member_accessibility(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  recv : @ast.TsExpr,
+  prop : String,
+) -> Unit {
+  match recv {
+    Var("this") | Var("super") => return
+    _ => ()
+  }
+  // Resolve the receiver to a declared class name: a bare `Var` naming a
+  // class is a static-side access; otherwise infer the instance type.
+  let class_name = match recv {
+    Var(n) if ctx.resolver.classes.get(n) is Some(_) => n
+    _ =>
+      match ctx.resolver.unwrap(infer_expr(env, ctx.resolver, recv)) {
+        Named(n) => n
+        Applied(n, _) => n
+        _ => return
+      }
+  }
+  let decl = match ctx.resolver.classes.get(class_name) {
+    Some(d) => d
+    None => return
+  }
+  let is_private = decl.private_members.contains(prop)
+  let is_protected = decl.protected_members.contains(prop)
+  if !(is_private || is_protected) {
+    return
+  }
+  let enclosing = current_enclosing_class(ctx.path_prefix)
+  if is_private {
+    if enclosing != Some(class_name) {
+      record(
+        ctx,
+        "access `.\{prop}`",
+        "property `\{prop}` is private and only accessible within class `\{class_name}`",
+      )
+    }
+  } else {
+    let allowed = match enclosing {
+      Some(cc) => class_extends(ctx.resolver, cc, class_name)
+      None => false
+    }
+    if !allowed {
+      record(
+        ctx,
+        "access `.\{prop}`",
+        "property `\{prop}` is protected and only accessible within class `\{class_name}` and its subclasses",
+      )
+    }
+  }
+}
+
+///|
 fn record(ctx : CheckCtx, sub_path : String, message : String) -> Unit {
   // T9: in permissive mode, drop the diagnostic families whose
   // residual FPs are dominated by features we don't model. Strict
@@ -2478,6 +2611,24 @@ fn extract_mismatch_types(message : String) -> (String, String)? {
 fn is_reliable_mismatch_pair(exp : String, got : String) -> Bool {
   // Pure primitive-vs-primitive: well-tested in is_assignable_to.
   if is_reliable_mismatch_type(exp) && is_reliable_mismatch_type(got) {
+    return true
+  }
+  // Assigning a single bare primitive into a union of primitives /
+  // literals whose members are all of a *different* family (`string |
+  // undefined` <- `number`): the source is already concrete, so no flow
+  // narrowing can rescue it, and the family-disjointness rules out our
+  // literal-widening blind spot (`123 | 456` <- `number`, where the
+  // source is really a literal we over-widened). Restricted to a union
+  // *target* with an atom *source* — a union *source* is flow-narrowing
+  // residue and stays suppressed by the blanket `|` bail below.
+  if is_reliable_primitive_union(exp) &&
+    is_bare_primitive(got) &&
+    got != "any" &&
+    got != "unknown" &&
+    got != "never" &&
+    got != "object" &&
+    got != "void" &&
+    !primitive_union_contains_family(exp, primitive_family(got)) {
     return true
   }
   // Single-letter Named (`A`, `B`, `C`) vs primitive: short-identifier
@@ -2848,6 +2999,80 @@ fn is_short_named_identifier(s : String) -> Bool {
 }
 
 ///|
+/// True when `s` renders as a union (`A | B | ...`) whose every member is
+/// a bare primitive or a string / numeric literal. Used by the permissive
+/// mismatch filter: assignability into such a union is exact membership,
+/// so a mismatch is reliable even though the blanket `|` bail would
+/// otherwise drop it. Bails on any compound marker that would break the
+/// naive ` | ` split (`&`, generics, function / object / array shapes).
+fn is_reliable_primitive_union(s : String) -> Bool {
+  if !s.contains(" | ") {
+    return false
+  }
+  if s.contains("&") ||
+    s.contains("<") ||
+    s.contains("(") ||
+    s.contains("{") ||
+    s.contains("[") ||
+    s.contains("=>") {
+    return false
+  }
+  let mut count = 0
+  for part in s.split(" | ") {
+    let p = part.to_owned()
+    let ok = (is_bare_primitive(p) && p != "any" && p != "unknown") ||
+      is_numeric_literal_display(p) ||
+      (p.has_prefix("\"") && p.has_suffix("\" (string)"))
+    if !ok {
+      return false
+    }
+    count = count + 1
+  }
+  count >= 2
+}
+
+///|
+/// Coarse primitive family of a rendered atom (`"number"` / `"string"` /
+/// `"boolean"` / `"bigint"` / `"null"` / `"undefined"` / `"symbol"`),
+/// folding literals into their base family. `""` for anything else.
+fn primitive_family(s : String) -> String {
+  match s {
+    "number" | "int" => "number"
+    "string" => "string"
+    "boolean" | "true" | "false" => "boolean"
+    "bigint" => "bigint"
+    "null" => "null"
+    "undefined" => "undefined"
+    "symbol" => "symbol"
+    _ =>
+      if is_numeric_literal_display(s) {
+        "number"
+      } else if s.has_prefix("\"") && s.has_suffix("\" (string)") {
+        "string"
+      } else {
+        ""
+      }
+  }
+}
+
+///|
+/// True when any member of the primitive/literal union `s` shares
+/// `family`. Used to keep the union-target mismatch carve-out away from
+/// our literal-widening blind spot (a widened `number` source against a
+/// numeric-literal union member).
+fn primitive_union_contains_family(s : String, family : String) -> Bool {
+  if family == "" {
+    return true
+  }
+  for part in s.split(" | ") {
+    if primitive_family(part.to_owned()) == family {
+      return true
+    }
+  }
+  false
+}
+
+///|
 /// True for the rendered name of a bare TS primitive (no compound shape).
 fn is_bare_primitive(s : String) -> Bool {
   match s {
@@ -3100,6 +3325,95 @@ fn is_definitely_not_indexable(ty : @ast.TsType) -> Bool {
 }
 
 ///|
+
+///|
+/// The exact set of integer values an enum declares, or `None` when any
+/// member's value isn't a plain integer literal (computed members make
+/// the set unknown, so callers must stay conservative).
+fn enum_integer_values(decl : @ast.TsEnumDecl) -> Array[Int]? {
+  let values : Array[Int] = []
+  for m in decl.members {
+    match m.value {
+      Some(Number(s)) => {
+        let n = @string.parse_int(s) catch { _ => return None }
+        values.push(n)
+      }
+      _ => return None
+    }
+  }
+  if values.length() == 0 {
+    return None
+  }
+  Some(values)
+}
+
+///|
+/// The integer value of a literal expression / type, if it is one.
+fn expr_integer_literal(e : @ast.TsExpr, t : @ast.TsType) -> Int? {
+  match e {
+    IntLit(n) => Some(n)
+    NumberLit(d) =>
+      if d == d.to_int().to_double() {
+        Some(d.to_int())
+      } else {
+        None
+      }
+    _ =>
+      match t {
+        NumberLiteral(s) => Some(@string.parse_int(s)) catch { _ => None }
+        _ => None
+      }
+  }
+}
+
+///|
+/// TS2367 helper: when one operand is a numeric-enum type and the other
+/// a numeric literal that is not one of the enum's members, the `===` /
+/// `!==` can never be true. Returns the rendered `` `E` and `n` ``
+/// fragment to embed in the diagnostic, or `None` when it doesn't apply.
+fn enum_numeric_literal_disjoint(
+  resolver : Resolver,
+  lt : @ast.TsType,
+  l : @ast.TsExpr,
+  rt : @ast.TsType,
+  r : @ast.TsExpr,
+) -> String? {
+  fn check(
+    en_ty : @ast.TsType,
+    lit_e : @ast.TsExpr,
+    lit_t : @ast.TsType,
+  ) -> String? {
+    let name = match en_ty {
+      Named(n) => n
+      _ => return None
+    }
+    let decl = match resolver.enums.get(name) {
+      Some(d) => d
+      None => return None
+    }
+    let values = match enum_integer_values(decl) {
+      Some(v) => v
+      None => return None
+    }
+    let lit = match expr_integer_literal(lit_e, lit_t) {
+      Some(n) => n
+      None => return None
+    }
+    if values.contains(lit) {
+      None
+    } else {
+      Some("`\{name}` and `\{lit}`")
+    }
+  }
+
+  match check(lt, r, rt) {
+    Some(s) => return Some(s)
+    None => ()
+  }
+  check(rt, l, lt)
+}
+
+///|
 fn types_can_overlap(a : @ast.TsType, b : @ast.TsType) -> Bool {
   match (a, b) {
     (Any, _) | (_, Any) => true
@@ -3183,6 +3497,20 @@ fn check_binop_operands(
           "strict equality",
           "comparing `\{type_display(lt)}` and `\{type_display(rt)}` with === will always be false",
         )
+      } else if !is_typeof(l) && !is_typeof(r) {
+        // TS2367 for a numeric-enum-typed operand compared against a
+        // numeric literal that is not one of the enum's members. Only
+        // fires when *every* member has a known integer value (so the
+        // member set is exact) -- computed members bail out.
+        match enum_numeric_literal_disjoint(ctx.resolver, lt, l, rt, r) {
+          Some(rendered) =>
+            record(
+              ctx,
+              "strict equality",
+              "comparing \{rendered} will always be false",
+            )
+          None => ()
+        }
       }
     }
     // Loose equality (`==` / `!=`): TypeScript also reports TS2367 for
@@ -7859,6 +8187,8 @@ fn check_call_args_in_expr(
       }
     }
     MethodCall(receiver, meth, args) => {
+      check_private_name_access(ctx, meth)
+      check_member_accessibility(env, ctx, receiver, meth)
       // Static-namespace dispatch: `Math.max(...)`, `JSON.stringify(...)`.
       // Recognised by the bare-identifier shape of the receiver.
       let static_params : Array[@ast.TsType]? = match receiver {
@@ -7980,6 +8310,8 @@ fn check_call_args_in_expr(
       }
     PropAccess(recv, prop) => {
       check_call_args_in_expr(env, recv, ctx)
+      check_private_name_access(ctx, prop)
+      check_member_accessibility(env, ctx, recv, prop)
       // Property-existence check: when the receiver has a concrete
       // structural shape and the resolver can't find `prop` on it,
       // surface a diagnostic. The class static-side fallback used
@@ -8187,6 +8519,8 @@ fn check_call_args_in_expr(
     PropAssignExpr(recv, prop, v) => {
       check_call_args_in_expr(env, recv, ctx)
       check_call_args_in_expr(env, v, ctx)
+      check_private_name_access(ctx, prop)
+      check_member_accessibility(env, ctx, recv, prop)
       let recv_ty = infer_expr(env, ctx.resolver, recv)
       if is_readonly_field(ctx.resolver, recv_ty, prop) {
         record(
@@ -8872,6 +9206,41 @@ fn check_module_function_bodies_layered(
       }
     }
   }
+  // Class field initializers (`class C { x = expr; static y = expr }`).
+  // These were previously never walked, so member-access checks (e.g.
+  // accessing another class's `private`/`protected` member from an
+  // initializer) were missed. Walk each under a class-scoped path so the
+  // accessibility check resolves the enclosing class correctly.
+  for cls in module_.classes {
+    if cls.static_field_inits.length() == 0 &&
+      cls.instance_field_inits.length() == 0 {
+      continue
+    }
+    let field_ctx : CheckCtx = {
+      path_prefix: "function \{cls.name}.<field-init>",
+      return_type: @ast.TsType::Void,
+      yield_type: @ast.TsType::Any,
+      resolver,
+      issues: [],
+      in_scope_type_params: cls.type_params,
+      permissive,
+      unassigned: {},
+      strict_property_init,
+    }
+    let env = ExprEnv::new()
+    for v in module_.values {
+      env.bind(v.name, v.type_)
+    }
+    for entry in cls.static_field_inits {
+      check_call_args_in_expr(env, entry.1, field_ctx)
+    }
+    for entry in cls.instance_field_inits {
+      check_call_args_in_expr(env, entry.1, field_ctx)
+    }
+    for issue in field_ctx.issues {
+      all.push(issue)
+    }
+  }
   // Top-level statements (const/let/var with explicit type annotations).
   // Walk them in a module-scope env so local names resolve correctly.
   if module_.top_level_stmts.length() > 0 {
@@ -9372,6 +9741,51 @@ fn check_interface_extends_compat(
           None => ()
         }
       }
+    }
+  }
+  // TS2411 ("Property 'X' of type 'T' is not assignable to 'string' index
+  // type 'V'"): when a declaration carries an object-typed index
+  // signature, a scalar-typed named property can never satisfy it. Same
+  // reliable scalar-vs-object shape as the extends check above -- we stay
+  // silent on Named-vs-Named (subtype-dependent) to avoid false positives.
+  fn check_index_props(
+    index_sigs : Array[(@ast.TsType, @ast.TsType)],
+    fields : Array[(String, @ast.TsType)],
+    owner : String,
+  ) -> Unit {
+    for sig in index_sigs {
+      if !is_object_shaped(sig.1) {
+        continue
+      }
+      for f in fields {
+        if is_scalar(f.1) {
+          issues.push({
+            path: owner,
+            message: "property `\{f.0}` of type `\{type_display(f.1)}` is not assignable to index type `\{type_display(sig.1)}`",
+          })
+        }
+      }
+    }
+  }
+
+  for iface in module_.interfaces {
+    if iface.type_params.length() == 0 {
+      check_index_props(
+        iface.index_signatures,
+        iface.fields,
+        "interface \{iface.name}",
+      )
+    }
+  }
+  for c in module_.classes {
+    if c.type_params.length() == 0 {
+      let fields : Array[(String, @ast.TsType)] = []
+      for p in c.properties {
+        if !p.is_static {
+          fields.push((p.name, p.type_))
+        }
+      }
+      check_index_props(c.index_signatures, fields, "class \{c.name}")
     }
   }
   issues

@@ -8911,6 +8911,8 @@ fn clone_exported_class(
     index_signatures: [],
     decorators: [],
     is_declare: false,
+    private_members: exported.class_.private_members,
+    protected_members: exported.class_.protected_members,
   }
 }
 

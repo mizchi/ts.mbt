@@ -36,7 +36,14 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Moon update
-        run: moon update
+        # `moon update` clones the registry index (needed for dependency
+        # resolution) and then downloads `symbols.zip` (IDE/autocomplete
+        # metadata only). The latter intermittently 403s from its CDN and
+        # makes `moon update` exit non-zero *after* the index is already
+        # in place, which would skip the entire test suite. Swallow the
+        # failure here — a genuine index/resolution problem still surfaces
+        # at the `Moon check` / `Moon test` steps below.
+        run: moon update || true
 
       - name: Moon fmt check
         run: moon fmt --check
