@@ -26,17 +26,18 @@ pub fn unresolved_type_references(module_ : @ast.TsModule) -> Array[String] {
     check_type(ta.type_, scope, acc)
   }
   for f in module_.funcs {
-    let scope = declared
+    let scope = scope_with(declared, f.type_params)
     for param in f.params {
       check_type(param.type_, scope, acc)
     }
     check_type(f.return_type, scope, acc)
   }
   for i in module_.imports {
+    let scope = scope_with(declared, i.type_params)
     for param in i.params {
-      check_type(param.1, declared, acc)
+      check_type(param.1, scope, acc)
     }
-    check_type(i.return_type, declared, acc)
+    check_type(i.return_type, scope, acc)
   }
   for v in module_.values {
     check_type(v.type_, declared, acc)
