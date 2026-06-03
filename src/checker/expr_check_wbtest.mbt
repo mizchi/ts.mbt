@@ -325,6 +325,39 @@ fn parse_module_or_empty(src : String) -> @ast.TsModule {
 }
 
 ///|
+test "expr_check: flags duplicate enum member and interface field (TS2300)" {
+  let src =
+    #|enum E { A, B, A }
+    #|interface I { a: number; a: string }
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mut saw_enum = false
+  let mut saw_iface = false
+  for i in issues {
+    if i.message.contains("duplicate identifier `A`") {
+      saw_enum = true
+    }
+    if i.message.contains("duplicate identifier `a`") {
+      saw_iface = true
+    }
+  }
+  assert_true(saw_enum)
+  assert_true(saw_iface)
+}
+
+///|
+test "expr_check: same-name interface method overloads are not duplicates" {
+  // `foo(): void; foo(x): void` are legal overloads, not TS2300.
+  let src =
+    #|interface I { foo(): void; foo(x: number): void; bar: number }
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  for i in issues {
+    assert_true(!i.message.contains("duplicate identifier"))
+  }
+}
+
+///|
 test "expr_check: argument count mismatch on top-level function call" {
   let src =
     #|function add(a: number, b: number): number { return a + b; }
