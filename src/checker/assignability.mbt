@@ -533,9 +533,22 @@ fn is_assignable_to_inner(
     }
     _ => ()
   }
-  // Source intersection: at least one component must satisfy the target.
+  // Source intersection. When every component is an object-like type we
+  // merge their properties into one shape first — TS treats `{a} & {b}` as
+  // the combined `{a, b}`, which is assignable to a merged target the
+  // per-component fallback below cannot express. Both checks only ever
+  // return `true`; a definite `false` is deferred to the end, so neither
+  // rule can introduce a false positive.
   match source {
     Intersection(members) => {
+      match merge_object_intersection(members) {
+        Some(merged) =>
+          if is_assignable_to_inner(merged, target, bivariant_params) {
+            return true
+          }
+        None => ()
+      }
+      // Fallback: at least one component on its own satisfies the target.
       for m in members {
         if is_assignable_to_inner(m, target, bivariant_params) {
           return true
@@ -690,6 +703,48 @@ fn is_assignable_to_inner(
     }
     _ => false
   }
+}
+
+///|
+// Object-like field list for an `Object`/`Struct`, or `None` for anything
+// that is not a property bag (so an intersection containing a primitive or
+// named reference declines the merge and uses the per-component rule).
+fn object_like_fields(t : @ast.TsType) -> Array[(@ast.TsType, @ast.TsType)]? {
+  match t {
+    Object(fields) => Some(fields)
+    Struct(_, fields) => Some(struct_fields_to_object(fields))
+    _ => None
+  }
+}
+
+///|
+// Merge an intersection of object-like members into a single object shape.
+// Returns `None` unless every member is object-like. Overlapping keys take
+// the intersection of their value types, matching how TS combines
+// properties shared across an `&`.
+fn merge_object_intersection(members : Array[@ast.TsType]) -> @ast.TsType? {
+  let merged : Array[(@ast.TsType, @ast.TsType)] = []
+  for m in members {
+    match object_like_fields(m) {
+      Some(fields) =>
+        for f in fields {
+          let (key, value) = f
+          let mut found = false
+          for i in 0..<merged.length() {
+            if merged[i].0 == key {
+              merged[i] = (key, Intersection([merged[i].1, value]))
+              found = true
+              break
+            }
+          }
+          if !found {
+            merged.push((key, value))
+          }
+        }
+      None => return None
+    }
+  }
+  Some(Object(merged))
 }
 
 ///|

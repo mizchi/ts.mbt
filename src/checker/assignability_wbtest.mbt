@@ -468,3 +468,40 @@ test "is_assignable_to: applied generics match by name and argument assignabilit
   // Box<string> is not assignable to Box<number>.
   assert_false(is_assignable_to(s, Applied("Box", [Number])))
 }
+
+///|
+test "is_assignable_to: source object intersection merges into a combined shape" {
+  // `{a: string} & {b: number}` is assignable to `{a: string, b: number}` —
+  // TS merges the members, which the old per-component rule could not.
+  let s : @ast.TsType = Intersection([
+    Struct("A", [("a", String_)]),
+    Struct("B", [("b", Number)]),
+  ])
+  let t : @ast.TsType = Struct("AB", [("a", String_), ("b", Number)])
+  assert_true(is_assignable_to(s, t))
+  // The merged shape also still satisfies either single member.
+  assert_true(is_assignable_to(s, Struct("A", [("a", String_)])))
+  // A field the merge does not provide is still rejected.
+  assert_false(is_assignable_to(s, Struct("C", [("c", Boolean)])))
+}
+
+///|
+test "is_assignable_to: object-literal intersection merges too" {
+  let s : @ast.TsType = Intersection([
+    Object([(Literal("x"), Number)]),
+    Object([(Literal("y"), String_)]),
+  ])
+  let t : @ast.TsType = Object([(Literal("x"), Number), (Literal("y"), String_)])
+  assert_true(is_assignable_to(s, t))
+}
+
+///|
+test "is_assignable_to: intersection with a non-object member declines the merge" {
+  // `{a: string} & number` is not an object bag; the per-component fallback
+  // applies, so it flows into `number` but not into `{a: string, b: number}`.
+  let s : @ast.TsType = Intersection([Struct("A", [("a", String_)]), Number])
+  assert_true(is_assignable_to(s, Number))
+  assert_false(
+    is_assignable_to(s, Struct("AB", [("a", String_), ("b", Number)])),
+  )
+}
