@@ -103,6 +103,14 @@ verify-realworld-typescript:
 bridge-quality:
     bash scripts/bridge_quality_report.sh
 
+# Correlate the checker against the TypeScript conformance error baselines.
+# Reports agreement (TP), expected misses (subset checker), and — the
+# signal that matters — false positives where TS accepts but we flag.
+# Requires `moon build --target native` and the populated `typescript`
+# submodule. Opt-in (not part of `ci`).
+checker-conformance-oracle *ARGS:
+    bash scripts/checker_conformance_oracle.sh {{ARGS}}
+
 # Full CI check
 ci: fmt check test verify-mbti-dts verify-scaffolds verify-generated-fixtures verify-examples
 
