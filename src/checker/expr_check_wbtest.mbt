@@ -6361,3 +6361,36 @@ test "expr_check: a constructor rest parameter checks against the element type" 
     1,
   )
 }
+
+///|
+test "expr_check: for-of destructuring pattern assigns its bound names" {
+  // `for ([k, v] of entries)` assigns k and v each iteration — using them
+  // in the body must not trip use-before-assignment.
+  let src =
+    #|function f(entries: [string, number][]): void {
+    #|  let k: string, v: number;
+    #|  for ([k, v] of entries) {
+    #|    k;
+    #|    v;
+    #|  }
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let uba = issues.filter(fn(i) {
+    i.message.contains("used before being assigned")
+  })
+  @test.assert_eq(uba.length(), 0)
+}
+
+///|
+test "expr_check: a tag typed any yields any from a tagged template" {
+  // `f` `...` ` where `f: any` produces `any`, so member access is fine.
+  let src =
+    #|function f(tag: any): void {
+    #|  tag`abc`.member;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let prop = issues.filter(fn(i) { i.message.contains("does not exist") })
+  @test.assert_eq(prop.length(), 0)
+}

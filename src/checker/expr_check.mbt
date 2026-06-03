@@ -4165,8 +4165,12 @@ fn infer_expr(
       // is the return type of `tag` when it's a known function — this
       // is what library helpers like `gql\`...\`` / `css\`...\`` /
       // `sql\`...\`` rely on for end-to-end typing.
-      match infer_expr(env, resolver, tag) {
+      match resolver.unwrap(infer_expr(env, resolver, tag)) {
         Func(_, ret) => ret
+        // A tag typed `any` produces `any` (calling `any` yields `any`), so
+        // member access on the result must not be flagged. Anything else
+        // falls back to the cooked-string type.
+        Any => @ast.TsType::Any
         _ => @ast.TsType::String_
       }
     TemplateLiteral(_, _) => @ast.TsType::String_
@@ -8018,14 +8022,10 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         inferred_elem
       }
       let pre = env.full_snapshot()
-      // TS2454: same reasoning as for-in — the loop variable is
-      // assigned each iteration, so reused declarations clear.
-      match binding {
-        @ast.TsBinding::Ident(n) => {
-          let _ = ctx.unassigned.remove(n)
-        }
-        _ => ()
-      }
+      // TS2454: same reasoning as for-in — the loop variable is assigned
+      // each iteration, so reused declarations clear. A destructuring
+      // pattern (`for ([k, v] of …)`) assigns every name it binds.
+      clear_unassigned_in_binding(ctx, binding)
       // Assignment-form `for (x of obj)` (no `let`/`var`/`const`) reuses
       // the outer-scope variable -- narrow it for the loop body
       // instead of re-declaring (which would otherwise pin the
@@ -8063,12 +8063,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         inferred_elem
       }
       let pre = env.full_snapshot()
-      match binding {
-        @ast.TsBinding::Ident(n) => {
-          let _ = ctx.unassigned.remove(n)
-        }
-        _ => ()
-      }
+      clear_unassigned_in_binding(ctx, binding)
       bind_pattern(env, ctx, binding, elem_ty)
       check_block(env, body, ctx)
       env.restore_from(pre)
@@ -8094,12 +8089,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // TS2454: the loop binding is *assigned* each iteration, so a
       // previously-declared `let k: T;` reused as the for-in target
       // (`for (k in obj) ...`) shouldn't trip use-before-assign.
-      match binding {
-        @ast.TsBinding::Ident(n) => {
-          let _ = ctx.unassigned.remove(n)
-        }
-        _ => ()
-      }
+      clear_unassigned_in_binding(ctx, binding)
       bind_pattern(env, ctx, binding, key_ty)
       check_block(env, body, ctx)
       env.restore_from(pre)
