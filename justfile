@@ -103,8 +103,25 @@ verify-realworld-typescript:
 bridge-quality:
     bash scripts/bridge_quality_report.sh
 
+# Correlate the checker against the TypeScript conformance error baselines.
+# Reports agreement (TP), expected misses (subset checker), and — the
+# signal that matters — false positives where TS accepts but we flag.
+# Requires `moon build --target native` and the populated `typescript`
+# submodule. Opt-in (not part of `ci`).
+checker-conformance-oracle *ARGS:
+    bash scripts/checker_conformance_oracle.sh {{ARGS}}
+
+# Soundness gate: build the native binary and fail if the checker reports
+# more conformance false positives than the current budget. The oracle
+# script skips cleanly when the `typescript` submodule isn't populated, so
+# this is safe to run anywhere. Keep the budget in lockstep with the
+# documented standing FP count.
+verify-checker-soundness:
+    moon build --target native
+    bash scripts/checker_conformance_oracle.sh --max-fp 13
+
 # Full CI check
-ci: fmt check test verify-mbti-dts verify-scaffolds verify-generated-fixtures verify-examples
+ci: fmt check test verify-mbti-dts verify-scaffolds verify-generated-fixtures verify-examples verify-checker-soundness
 
 # Update dependencies
 update:

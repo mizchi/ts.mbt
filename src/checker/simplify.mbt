@@ -168,6 +168,11 @@ pub fn simplify_type(type_ : @ast.TsType) -> @ast.TsType {
     MappedType(_, _, _, _) => simplify_mapped_type(recursed)
     MappedTypeRemap(_, _, _, _, _) => simplify_mapped_type_remap(recursed)
     TemplateLiteralType(_, _) => simplify_template_literal(recursed)
+    Applied(name, args) =>
+      match simplify_string_intrinsic(name, args) {
+        Some(t) => t
+        None => recursed
+      }
     _ => recursed
   }
 }
@@ -519,6 +524,55 @@ fn apply_string_intrinsic(intrinsic : String, value : String) -> String? {
       }
     "Uppercase" => Some(value.to_upper())
     "Lowercase" => Some(value.to_lower())
+    _ => None
+  }
+}
+
+///|
+/// Recognize the four TypeScript intrinsic string-mapping type names.
+fn is_string_intrinsic_name(name : String) -> Bool {
+  name == "Uppercase" ||
+  name == "Lowercase" ||
+  name == "Capitalize" ||
+  name == "Uncapitalize"
+}
+
+///|
+/// Simplify a standalone intrinsic string-mapping application such as
+/// `Uppercase<"foo">` -> `"FOO"` or `Capitalize<"a" | "b">` -> `"A" | "B"`.
+/// Distributes over a finite union of literals exactly like TypeScript.
+/// Returns `None` when the argument is not a finite literal set so the
+/// caller keeps the original `Applied(...)` for a later retry. Outside of
+/// template-literal interpolation this is the only place a bare
+/// `Uppercase<...>` etc. gets folded.
+fn simplify_string_intrinsic(
+  name : String,
+  args : Array[@ast.TsType],
+) -> @ast.TsType? {
+  if !is_string_intrinsic_name(name) {
+    return None
+  }
+  match args {
+    [arg] =>
+      match resolve_literal_value_set(arg) {
+        Some(values) => {
+          let mapped : Array[@ast.TsType] = []
+          for v in values {
+            match apply_string_intrinsic(name, v) {
+              Some(new_v) => mapped.push(Literal(new_v))
+              None => return None
+            }
+          }
+          if mapped.length() == 0 {
+            Some(Never)
+          } else if mapped.length() == 1 {
+            Some(mapped[0])
+          } else {
+            Some(Union(mapped))
+          }
+        }
+        None => None
+      }
     _ => None
   }
 }

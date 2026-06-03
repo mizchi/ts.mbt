@@ -6202,3 +6202,195 @@ test "expr_check: nested destructuring through array index from interface field"
   }
   @test.assert_eq(issues.length(), 0)
 }
+
+///|
+test "expr_check: assigning to a ReadonlyArray element is a read-only error" {
+  let src =
+    #|function f(a: ReadonlyArray<number>): void {
+    #|  a[0] = 5;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let readonly_issues = issues.filter(fn(i) {
+    i.message.contains("only permits reading")
+  })
+  @test.assert_eq(readonly_issues.length(), 1)
+}
+
+///|
+test "expr_check: assigning to a mutable array element is fine" {
+  let src =
+    #|function f(a: number[]): void {
+    #|  a[0] = 5;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let readonly_issues = issues.filter(fn(i) {
+    i.message.contains("only permits reading")
+  })
+  @test.assert_eq(readonly_issues.length(), 0)
+}
+
+///|
+test "expr_check: rest-parameter args are checked against the element type" {
+  // `...keys: number[]` — each individual argument is a `number`, not the
+  // whole array. A valid call must not be flagged.
+  let src =
+    #|declare function collect(label: string, ...nums: number[]): void;
+    #|function f(): void {
+    #|  collect("x", 1, 2, 3);
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let arg_issues = issues.filter(fn(i) { i.path.contains("arg[") })
+  @test.assert_eq(arg_issues.length(), 0)
+}
+
+///|
+test "expr_check: a wrong-typed rest argument is still flagged" {
+  // The element type is `number`, so a string vararg is a genuine error.
+  let src =
+    #|declare function collect(label: string, ...nums: number[]): void;
+    #|function f(): void {
+    #|  collect("x", 1, "bad", 3);
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let arg_issues = issues.filter(fn(i) { i.path.contains("arg[") })
+  @test.assert_eq(arg_issues.length(), 1)
+}
+
+///|
+test "expr_check: a spread argument is not matched positionally" {
+  // `foo(...arr)` distributes; the array must not be compared to a scalar
+  // parameter (which would wrongly report `expected string but got
+  // string[]`).
+  let src =
+    #|declare function foo(a: string, b: string, c: string): void;
+    #|function f(arr: string[]): void {
+    #|  foo(...arr);
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let arg_issues = issues.filter(fn(i) { i.path.contains("arg[") })
+  @test.assert_eq(arg_issues.length(), 0)
+}
+
+///|
+test "expr_check: unary plus accepts a string operand" {
+  // `+s` is the explicit numeric coercion — valid on a string in TS.
+  let src =
+    #|function f(s: string): number {
+    #|  return +s;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let unary = issues.filter(fn(i) { i.message.contains("valid number type") })
+  @test.assert_eq(unary.length(), 0)
+}
+
+///|
+test "expr_check: unary minus still rejects a string operand" {
+  // Unlike `+`, unary `-` requires a numeric operand.
+  let src =
+    #|function f(s: string): number {
+    #|  return -s;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let unary = issues.filter(fn(i) { i.message.contains("valid number type") })
+  @test.assert_eq(unary.length(), 1)
+}
+
+///|
+test "expr_check: a spread element in an array literal is not a scalar item" {
+  // `[...nums]` where `nums: number[]` is a valid `number[]`; the spread
+  // contributes elements, so it must not be compared to the scalar `number`.
+  let src =
+    #|function f(nums: number[]): number[] {
+    #|  return [0, ...nums, 9];
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let elem_issues = issues.filter(fn(i) {
+    i.path.contains("init") || i.path.contains("[")
+  })
+  @test.assert_eq(elem_issues.length(), 0)
+}
+
+///|
+test "expr_check: an interface extending Array is a valid array target" {
+  // `interface NumList extends Array<number> {}` is structurally an array,
+  // so an array literal of numbers assigns without complaint.
+  let src =
+    #|interface NumList extends Array<number> {}
+    #|function f(): NumList {
+    #|  return [1, 2, 3];
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  @test.assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: a constructor rest parameter checks against the element type" {
+  // `constructor(label: string, ...nums: number[])` — extra args are
+  // numbers; a valid `new` must not be flagged, a wrong-typed one must.
+  let ok =
+    #|class B {
+    #|  constructor(label: string, ...nums: number[]) {}
+    #|}
+    #|function f(): void {
+    #|  let b = new B("x", 1, 2, 3);
+    #|}
+  let issues_ok = check_module_function_bodies(parse_module_or_empty(ok))
+  @test.assert_eq(
+    issues_ok.filter(fn(i) { i.path.contains("arg[") }).length(),
+    0,
+  )
+  let bad =
+    #|class B {
+    #|  constructor(label: string, ...nums: number[]) {}
+    #|}
+    #|function f(): void {
+    #|  let b = new B("x", 1, "bad");
+    #|}
+  let issues_bad = check_module_function_bodies(parse_module_or_empty(bad))
+  @test.assert_eq(
+    issues_bad.filter(fn(i) { i.path.contains("arg[") }).length(),
+    1,
+  )
+}
+
+///|
+test "expr_check: for-of destructuring pattern assigns its bound names" {
+  // `for ([k, v] of entries)` assigns k and v each iteration — using them
+  // in the body must not trip use-before-assignment.
+  let src =
+    #|function f(entries: [string, number][]): void {
+    #|  let k: string, v: number;
+    #|  for ([k, v] of entries) {
+    #|    k;
+    #|    v;
+    #|  }
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let uba = issues.filter(fn(i) {
+    i.message.contains("used before being assigned")
+  })
+  @test.assert_eq(uba.length(), 0)
+}
+
+///|
+test "expr_check: a tag typed any yields any from a tagged template" {
+  // `f` `...` ` where `f: any` produces `any`, so member access is fine.
+  let src =
+    #|function f(tag: any): void {
+    #|  tag`abc`.member;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let prop = issues.filter(fn(i) { i.message.contains("does not exist") })
+  @test.assert_eq(prop.length(), 0)
+}

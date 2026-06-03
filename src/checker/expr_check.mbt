@@ -225,11 +225,16 @@ fn Resolver::ingest_module(
     // signature path used by `apply_type_predicate_narrowing` can map
     // the predicate's parameter name to an argument index.
     let synth_params : Array[@ast.TsParam] = []
-    for p in imp.params {
+    for idx, p in imp.params {
+      // Preserve the rest-parameter flag (`...args: T[]`) so the call
+      // checker compares each variadic argument against the element type
+      // rather than the whole array. `param_is_rest` is positionally
+      // aligned with `params`; an empty array means "no rest params".
+      let is_rest = idx < imp.param_is_rest.length() && imp.param_is_rest[idx]
       synth_params.push({
         name: p.0,
         binding: None,
-        is_rest: false,
+        is_rest,
         type_: p.1,
         default: None,
       })
@@ -462,7 +467,18 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
               seen[n] = true
               cur = aliased.type_
             }
-            None => keep_going = false
+            None =>
+              // A pure array-alias interface (`interface I extends Array<T>
+              // {}` / `ReadonlyArray<T>`, no own members) is structurally an
+              // array — resolve it so array-literal contextual typing and
+              // assignability see the element type.
+              match interface_pure_array_element(self, n) {
+                Some(elem) => {
+                  seen[n] = true
+                  cur = Array(elem)
+                }
+                None => keep_going = false
+              }
           }
         }
       Applied(n, args) =>
@@ -2059,6 +2075,34 @@ fn Resolver::lookup_class_field(
 }
 
 ///|
+/// Element type of a "pure array-alias" interface: one whose only content is
+/// `extends Array<T>` (or `ReadonlyArray<T>`) with no own fields or index
+/// signatures. Returns `None` for interfaces that add members (those are not
+/// interchangeable with a plain array) or that extend anything else.
+fn interface_pure_array_element(
+  resolver : Resolver,
+  name : String,
+) -> @ast.TsType? {
+  match resolver.interfaces.get(name) {
+    Some(iface) =>
+      if iface.fields.length() == 0 &&
+        iface.index_signatures.length() == 0 &&
+        iface.extends_names.length() == 1 &&
+        iface.extends_args.length() == 1 &&
+        (
+          iface.extends_names[0] == "Array" ||
+          iface.extends_names[0] == "ReadonlyArray"
+        ) &&
+        iface.extends_args[0].length() == 1 {
+        Some(iface.extends_args[0][0])
+      } else {
+        None
+      }
+    None => None
+  }
+}
+
+///|
 /// Look up a method's `(params, return)` signature. Returns `None` when the
 /// receiver shape is opaque.
 fn Resolver::lookup_method_sig(
@@ -2091,6 +2135,41 @@ fn Resolver::lookup_constructor(
           Some(types)
         }
         None => Some([])
+      }
+    None => None
+  }
+}
+
+///|
+/// Rich constructor signature (`TsParam` list carrying the rest-parameter
+/// flag) for `class_name`, so a `new` call validates each variadic argument
+/// against the element type instead of the whole array. Returns `None` for
+/// an unknown class; `Some([])` for a class with no declared constructor.
+fn Resolver::lookup_constructor_sig(
+  self : Resolver,
+  class_name : String,
+) -> (Array[@ast.TsType], Array[@ast.TsParam])? {
+  match self.classes.get(class_name) {
+    Some(cls) =>
+      match cls.constructor_params {
+        Some(params) => {
+          let types : Array[@ast.TsType] = []
+          let sig : Array[@ast.TsParam] = []
+          for idx, p in params {
+            types.push(p.1)
+            let is_rest = idx < cls.constructor_param_is_rest.length() &&
+              cls.constructor_param_is_rest[idx]
+            sig.push({
+              name: p.0,
+              binding: None,
+              is_rest,
+              type_: p.1,
+              default: None,
+            })
+          }
+          Some((types, sig))
+        }
+        None => Some(([], []))
       }
     None => None
   }
@@ -4086,8 +4165,12 @@ fn infer_expr(
       // is the return type of `tag` when it's a known function — this
       // is what library helpers like `gql\`...\`` / `css\`...\`` /
       // `sql\`...\`` rely on for end-to-end typing.
-      match infer_expr(env, resolver, tag) {
+      match resolver.unwrap(infer_expr(env, resolver, tag)) {
         Func(_, ret) => ret
+        // A tag typed `any` produces `any` (calling `any` yields `any`), so
+        // member access on the result must not be flagged. Anything else
+        // falls back to the cooked-string type.
+        Any => @ast.TsType::Any
         _ => @ast.TsType::String_
       }
     TemplateLiteral(_, _) => @ast.TsType::String_
@@ -4648,42 +4731,18 @@ fn check_expr_against(
       return
     }
     (ArrayLit(items), Array(elem)) => {
-      for i, item in items {
-        check_expr_against(
-          env,
-          item,
-          elem,
-          ctx,
-          sub_path + "[" + i.to_string() + "]",
-        )
-      }
+      check_array_lit_elements_against(env, items, elem, ctx, sub_path)
       return
     }
     (ArrayLit(items), Applied("Array", [elem]))
     | (ArrayLit(items), Applied("ReadonlyArray", [elem])) => {
-      for i, item in items {
-        check_expr_against(
-          env,
-          item,
-          elem,
-          ctx,
-          sub_path + "[" + i.to_string() + "]",
-        )
-      }
+      check_array_lit_elements_against(env, items, elem, ctx, sub_path)
       return
     }
     // `Readonly<T[]>` contextual typing — delegate to element checking on
     // the inner array type so `['a', 'b'] as Readonly<string[]>` works.
     (ArrayLit(items), Applied("Readonly", [Array(elem)])) => {
-      for i, item in items {
-        check_expr_against(
-          env,
-          item,
-          elem,
-          ctx,
-          sub_path + "[" + i.to_string() + "]",
-        )
-      }
+      check_array_lit_elements_against(env, items, elem, ctx, sub_path)
       return
     }
     _ => ()
@@ -5154,6 +5213,29 @@ fn is_named_decl(ty : @ast.TsType, resolver : Resolver) -> Bool {
 /// (more literal entries than tuple slots, or vice versa) emit an arity
 /// issue; trailing `Spread(...)` entries waive the arity check the same way
 /// they do for call-site arguments.
+/// Check each element of an array literal against the array's element type
+/// `elem`. A `Spread(e)` element contributes `e`'s *elements*, not `e`
+/// itself, so it is checked against `elem[]` (e.g. `[...nums]` where `nums:
+/// number[]` is valid for `number[]`) rather than against the scalar `elem`,
+/// which would wrongly report `expected number but got number[]`.
+fn check_array_lit_elements_against(
+  env : ExprEnv,
+  items : Array[@ast.TsExpr],
+  elem : @ast.TsType,
+  ctx : CheckCtx,
+  sub_path : String,
+) -> Unit {
+  for i, item in items {
+    let item_path = sub_path + "[" + i.to_string() + "]"
+    match item {
+      Spread(inner) =>
+        check_expr_against(env, inner, Array(elem), ctx, item_path)
+      _ => check_expr_against(env, item, elem, ctx, item_path)
+    }
+  }
+}
+
+///|
 fn check_array_lit_against_tuple(
   env : ExprEnv,
   items : Array[@ast.TsExpr],
@@ -6197,8 +6279,18 @@ fn check_arguments_with_sig(
   }
   let rest_elem_type : @ast.TsType = if rest_index >= 0 &&
     rest_index < params.length() {
-    match params[rest_index] {
+    // The rest slot may arrive as a bare array, an `Applied("Array", …)` /
+    // iterable, a tuple, or any of those wrapped in the `Rest(...)` variadic
+    // marker (the `module_.funcs` builder wraps rest params that way).
+    // Unwrap one `Rest` layer first, then read the element type.
+    let slot = match params[rest_index] {
+      Rest(inner) => inner
+      other => other
+    }
+    match slot {
       Array(elem) => elem
+      Applied("Array", [elem]) => elem
+      Applied(n, [elem]) if is_array_like_iterable_name(n) => elem
       // `...args: [string, number]` — rest is typed as a tuple; each
       // individual rest argument is the union of all tuple element types.
       Tuple(parts) if parts.length() > 0 => {
@@ -6215,8 +6307,31 @@ fn check_arguments_with_sig(
   } else {
     @ast.TsType::Any
   }
+  // A spread argument (`foo(...arr)`) distributes an unknown number of
+  // values across the remaining parameters, so positional matching is
+  // unreliable from the first spread onward — checking the array against a
+  // scalar parameter would wrongly report `expected string but got
+  // string[]`. Type-check the positions *before* the first spread; the
+  // spread operand itself (and everything after) is still validated for
+  // internal errors by the `check_call_args_in_expr` recursion at the call
+  // site.
+  let first_spread : Int = {
+    let mut idx = -1
+    let mut j = 0
+    while j < args.length() {
+      if args[j] is Spread(_) {
+        idx = j
+        break
+      }
+      j = j + 1
+    }
+    idx
+  }
   let mut i = 0
   while i < args.length() {
+    if first_spread >= 0 && i >= first_spread {
+      break
+    }
     let sub_path = "\{call_path} arg[\{i}]"
     if rest_index >= 0 && i >= rest_index {
       check_expr_against(env, args[i], rest_elem_type, ctx, sub_path)
@@ -7907,14 +8022,10 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         inferred_elem
       }
       let pre = env.full_snapshot()
-      // TS2454: same reasoning as for-in — the loop variable is
-      // assigned each iteration, so reused declarations clear.
-      match binding {
-        @ast.TsBinding::Ident(n) => {
-          let _ = ctx.unassigned.remove(n)
-        }
-        _ => ()
-      }
+      // TS2454: same reasoning as for-in — the loop variable is assigned
+      // each iteration, so reused declarations clear. A destructuring
+      // pattern (`for ([k, v] of …)`) assigns every name it binds.
+      clear_unassigned_in_binding(ctx, binding)
       // Assignment-form `for (x of obj)` (no `let`/`var`/`const`) reuses
       // the outer-scope variable -- narrow it for the loop body
       // instead of re-declaring (which would otherwise pin the
@@ -7952,12 +8063,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         inferred_elem
       }
       let pre = env.full_snapshot()
-      match binding {
-        @ast.TsBinding::Ident(n) => {
-          let _ = ctx.unassigned.remove(n)
-        }
-        _ => ()
-      }
+      clear_unassigned_in_binding(ctx, binding)
       bind_pattern(env, ctx, binding, elem_ty)
       check_block(env, body, ctx)
       env.restore_from(pre)
@@ -7983,12 +8089,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // TS2454: the loop binding is *assigned* each iteration, so a
       // previously-declared `let k: T;` reused as the for-in target
       // (`for (k in obj) ...`) shouldn't trip use-before-assign.
-      match binding {
-        @ast.TsBinding::Ident(n) => {
-          let _ = ctx.unassigned.remove(n)
-        }
-        _ => ()
-      }
+      clear_unassigned_in_binding(ctx, binding)
       bind_pattern(env, ctx, binding, key_ty)
       check_block(env, body, ctx)
       env.restore_from(pre)
@@ -8249,9 +8350,16 @@ fn check_call_args_in_expr(
     }
     New(class_name, args) => {
       check_abstract_instantiation(ctx, class_name)
-      match ctx.resolver.lookup_constructor(class_name) {
-        Some(params) => {
-          check_arguments(env, params, args, ctx, "new `\{class_name}`")
+      match ctx.resolver.lookup_constructor_sig(class_name) {
+        Some((params, sig)) => {
+          check_arguments_with_sig(
+            env,
+            params,
+            Some(sig),
+            args,
+            ctx,
+            "new `\{class_name}`",
+          )
           for a in args {
             check_call_args_in_expr(env, a, ctx)
           }
@@ -8280,11 +8388,33 @@ fn check_call_args_in_expr(
     UnaryOp(op, inner) => {
       check_call_args_in_expr(env, inner, ctx)
       match op {
-        Neg | Plus | BitwiseNot => {
+        Neg | BitwiseNot => {
           let inner_ty = ctx.resolver.unwrap(
             infer_expr(env, ctx.resolver, inner),
           )
           if is_checkable(inner_ty) && is_definitely_not_arithmetic(inner_ty) {
+            record(
+              ctx,
+              "unary op",
+              "operand `\{type_display(inner_ty)}` is not a valid number type",
+            )
+          }
+        }
+        // Unary `+` is the explicit numeric-coercion operator, so TypeScript
+        // accepts string operands (`+"5"`, `+templateString`, `+forInKey`)
+        // as well as number / bigint / any. Only operands that cannot
+        // coerce at all (objects, arrays, …) are flagged.
+        Plus => {
+          let inner_ty = ctx.resolver.unwrap(
+            infer_expr(env, ctx.resolver, inner),
+          )
+          let is_stringish = match inner_ty {
+            String_ | Literal(_) => true
+            _ => false
+          }
+          if is_checkable(inner_ty) &&
+            is_definitely_not_arithmetic(inner_ty) &&
+            !is_stringish {
             record(
               ctx,
               "unary op",
@@ -8553,7 +8683,14 @@ fn check_call_args_in_expr(
       check_call_args_in_expr(env, idx, ctx)
       check_call_args_in_expr(env, v, ctx)
       let recv_ty = infer_expr(env, ctx.resolver, recv)
-      match recv_ty {
+      match ctx.resolver.unwrap(recv_ty) {
+        // `ReadonlyArray<T>` (and the `readonly [...]` tuple form, when it
+        // survives as such) permits reads only — element assignment is a
+        // type error in TypeScript (TS2542).
+        Applied("ReadonlyArray", _) =>
+          record(
+            ctx, "assign element", "index signature in a `ReadonlyArray` only permits reading",
+          )
         Array(elem) =>
           check_expr_against(env, v, elem, ctx, "assign array element")
         Tuple(items) =>

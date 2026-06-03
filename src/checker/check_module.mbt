@@ -10,6 +10,7 @@ pub(all) enum TypeIssueKind {
   DuplicateDeclaration
   CircularTypeAlias
   TypeAliasArityMismatch
+  TypeParameterConstraintViolation
   InterfaceFieldDuplicate
   EnumMemberDuplicate
   InterfaceExtendsCycle
@@ -245,7 +246,229 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
     let scope : Array[String] = []
     check_arity(v.type_, scope, arities, issues)
   }
+
+  // 6. Generic type-parameter constraint violations: every
+  //    `Applied(Name, args)` that resolves to a top-level type alias
+  //    declared with `<P extends Bound>` must supply an argument that
+  //    satisfies `Bound`. We use the three-valued `extends_decision`
+  //    relation (TS's own constraint check) and only flag a *definite*
+  //    `Some(false)` — opaque / nominal / unresolved shapes report
+  //    `None` and stay silent, so external references and type-parameter
+  //    forwarding never produce a false positive.
+  let alias_params : Map[String, Array[String]] = {}
+  let alias_bounds : Map[String, Array[(String, @ast.TsType)]] = {}
+  let non_generic_alias_bodies : Map[String, @ast.TsType] = {}
+  for ta in module_.type_aliases {
+    if ta.type_param_bounds.length() > 0 {
+      alias_params[ta.name] = ta.type_params
+      alias_bounds[ta.name] = ta.type_param_bounds
+    }
+    // A non-generic alias can stand in for its body when deciding the
+    // constraint relation (`type MyStr = string` lets `Foo<MyStr>`
+    // satisfy `P extends string`). Generic aliases are left opaque.
+    if ta.type_params.length() == 0 {
+      non_generic_alias_bodies[ta.name] = ta.type_
+    }
+  }
+  let resolve = fn(name : String) -> @ast.TsType? {
+    non_generic_alias_bodies.get(name)
+  }
+  if alias_bounds.length() > 0 {
+    for iface in module_.interfaces {
+      let scope = scope_with_iface_params(iface)
+      for field in iface.fields {
+        check_constraints(
+          field.1,
+          scope,
+          alias_params,
+          alias_bounds,
+          resolve,
+          issues,
+        )
+      }
+    }
+    for ta in module_.type_aliases {
+      check_constraints(
+        ta.type_,
+        ta.type_params,
+        alias_params,
+        alias_bounds,
+        resolve,
+        issues,
+      )
+    }
+    for f in module_.funcs {
+      for p in f.params {
+        check_constraints(
+          p.type_,
+          [],
+          alias_params,
+          alias_bounds,
+          resolve,
+          issues,
+        )
+      }
+      check_constraints(
+        f.return_type,
+        [],
+        alias_params,
+        alias_bounds,
+        resolve,
+        issues,
+      )
+    }
+    for v in module_.values {
+      check_constraints(
+        v.type_,
+        [],
+        alias_params,
+        alias_bounds,
+        resolve,
+        issues,
+      )
+    }
+  }
   { issues, }
+}
+
+///|
+// Walk a type looking for `Applied(name, args)` references to a generic
+// type alias declared with `extends` bounds, and flag arguments that
+// definitely violate their parameter's constraint. Mirrors
+// `check_arity`'s traversal so every nested type position is covered.
+fn check_constraints(
+  type_ : @ast.TsType,
+  scope : Array[String],
+  alias_params : Map[String, Array[String]],
+  alias_bounds : Map[String, Array[(String, @ast.TsType)]],
+  resolve : (String) -> @ast.TsType?,
+  issues : Array[TypeIssue],
+) -> Unit {
+  match type_ {
+    Applied(name, args) => {
+      if !scope.contains(name) {
+        match (alias_params.get(name), alias_bounds.get(name)) {
+          (Some(params), Some(bounds)) =>
+            // Only check when the supplied arity matches the declared
+            // parameters; arity mismatches are reported separately and
+            // would make the positional substitution below meaningless.
+            if params.length() == args.length() {
+              for pair in bounds {
+                let (pname, bound) = pair
+                // Locate the constrained parameter's position so we can
+                // pull the matching argument.
+                let mut idx = -1
+                for i in 0..<params.length() {
+                  if params[i] == pname {
+                    idx = i
+                    break
+                  }
+                }
+                if idx >= 0 {
+                  // Substitute every parameter with its argument inside the
+                  // bound so dependent constraints like `K extends keyof T`
+                  // are evaluated against the concrete `T`.
+                  let mut substituted = bound
+                  for i in 0..<params.length() {
+                    substituted = substitute_named(
+                      substituted,
+                      params[i],
+                      args[i],
+                    )
+                  }
+                  let target = simplify_type(substituted)
+                  let arg = simplify_type(args[idx])
+                  match extends_decision_with(arg, target, resolve) {
+                    Some(false) => {
+                      let issue_name = "\{name}<\{pname}>"
+                      let already = issues
+                        .iter()
+                        .any(fn(i) {
+                          i.kind == TypeParameterConstraintViolation &&
+                          i.name == issue_name
+                        })
+                      if !already {
+                        issues.push({
+                          kind: TypeParameterConstraintViolation,
+                          name: issue_name,
+                          detail: "type argument does not satisfy the `\{pname}` constraint",
+                        })
+                      }
+                    }
+                    _ => ()
+                  }
+                }
+              }
+            }
+          _ => ()
+        }
+      }
+      for a in args {
+        check_constraints(a, scope, alias_params, alias_bounds, resolve, issues)
+      }
+    }
+    Array(inner) =>
+      check_constraints(
+        inner, scope, alias_params, alias_bounds, resolve, issues,
+      )
+    Tuple(items) =>
+      for it in items {
+        check_constraints(
+          it, scope, alias_params, alias_bounds, resolve, issues,
+        )
+      }
+    Object(fields) =>
+      for f in fields {
+        check_constraints(
+          f.0,
+          scope,
+          alias_params,
+          alias_bounds,
+          resolve,
+          issues,
+        )
+        check_constraints(
+          f.1,
+          scope,
+          alias_params,
+          alias_bounds,
+          resolve,
+          issues,
+        )
+      }
+    Struct(_, fields) =>
+      for f in fields {
+        check_constraints(
+          f.1,
+          scope,
+          alias_params,
+          alias_bounds,
+          resolve,
+          issues,
+        )
+      }
+    Func(params, ret) => {
+      for p in params {
+        check_constraints(p, scope, alias_params, alias_bounds, resolve, issues)
+      }
+      check_constraints(ret, scope, alias_params, alias_bounds, resolve, issues)
+    }
+    Union(items) | Intersection(items) =>
+      for m in items {
+        check_constraints(m, scope, alias_params, alias_bounds, resolve, issues)
+      }
+    Conditional(c, e, t, f) => {
+      check_constraints(c, scope, alias_params, alias_bounds, resolve, issues)
+      check_constraints(e, scope, alias_params, alias_bounds, resolve, issues)
+      check_constraints(t, scope, alias_params, alias_bounds, resolve, issues)
+      check_constraints(f, scope, alias_params, alias_bounds, resolve, issues)
+    }
+    IndexedAccess(b, k) => {
+      check_constraints(b, scope, alias_params, alias_bounds, resolve, issues)
+      check_constraints(k, scope, alias_params, alias_bounds, resolve, issues)
+    }
+    _ => ()
+  }
 }
 
 ///|

@@ -139,6 +139,7 @@ test "check_module: detects duplicate class instance properties" {
     static_field_inits: [],
     instance_field_inits: [],
     constructor_params: None,
+    constructor_param_is_rest: [],
     properties: [
       {
         name: "value",
@@ -185,6 +186,7 @@ test "check_module: instance and static with same name is OK" {
     static_field_inits: [],
     instance_field_inits: [],
     constructor_params: None,
+    constructor_param_is_rest: [],
     properties: [
       {
         name: "value",
@@ -388,4 +390,133 @@ test "check_module: alias body containing union of named is not a cycle if all t
   )
   let report = check_module(m)
   assert_eq(report.issues.length(), 0)
+}
+
+///|
+fn alias_with_bounds_for_check(
+  name : String,
+  type_params : Array[String],
+  bounds : Array[(String, @ast.TsType)],
+  body : @ast.TsType,
+) -> @ast.TsTypeAlias {
+  { name, type_params, type_param_bounds: bounds, type_: body }
+}
+
+///|
+test "check_module: flags a type argument that violates an extends bound" {
+  let m = empty_module_for_check()
+  // type Box<T extends string> = { v: T }
+  m.type_aliases.push(
+    alias_with_bounds_for_check(
+      "Box",
+      ["T"],
+      [("T", String_)],
+      Struct("Box", [("v", Named("T"))]),
+    ),
+  )
+  // type Use = Box<number>  — number does not extend string
+  m.type_aliases.push(alias_for_check("Use", [], Applied("Box", [Number])))
+  let report = check_module(m)
+  let violations = report.of_kind(TypeParameterConstraintViolation)
+  assert_eq(violations.length(), 1)
+  assert_eq(violations[0].name, "Box<T>")
+}
+
+///|
+test "check_module: a satisfied extends bound produces no violation" {
+  let m = empty_module_for_check()
+  m.type_aliases.push(
+    alias_with_bounds_for_check(
+      "Box",
+      ["T"],
+      [("T", String_)],
+      Struct("Box", [("v", Named("T"))]),
+    ),
+  )
+  // type Use = Box<"hi">  — string literal extends string
+  m.type_aliases.push(
+    alias_for_check("Use", [], Applied("Box", [Literal("hi")])),
+  )
+  let report = check_module(m)
+  assert_eq(report.count_of_kind(TypeParameterConstraintViolation), 0)
+}
+
+///|
+test "check_module: opaque type argument never trips the constraint check" {
+  let m = empty_module_for_check()
+  m.type_aliases.push(
+    alias_with_bounds_for_check(
+      "Box",
+      ["T"],
+      [("T", String_)],
+      Struct("Box", [("v", Named("T"))]),
+    ),
+  )
+  // type Use = Box<External>  — unresolved nominal arg ⇒ undecidable ⇒ silent
+  m.type_aliases.push(
+    alias_for_check("Use", [], Applied("Box", [Named("External")])),
+  )
+  let report = check_module(m)
+  assert_eq(report.count_of_kind(TypeParameterConstraintViolation), 0)
+}
+
+///|
+test "check_module: a non-generic alias resolves through to satisfy a bound" {
+  let m = empty_module_for_check()
+  m.type_aliases.push(
+    alias_with_bounds_for_check(
+      "Box",
+      ["T"],
+      [("T", String_)],
+      Struct("Box", [("v", Named("T"))]),
+    ),
+  )
+  // type MyStr = string;  type Use = Box<MyStr>
+  m.type_aliases.push(alias_for_check("MyStr", [], String_))
+  m.type_aliases.push(
+    alias_for_check("Use", [], Applied("Box", [Named("MyStr")])),
+  )
+  let report = check_module(m)
+  assert_eq(report.count_of_kind(TypeParameterConstraintViolation), 0)
+}
+
+///|
+test "check_module: a parameter forwarded within scope is not flagged" {
+  let m = empty_module_for_check()
+  m.type_aliases.push(
+    alias_with_bounds_for_check(
+      "Box",
+      ["T"],
+      [("T", String_)],
+      Struct("Box", [("v", Named("T"))]),
+    ),
+  )
+  // type Wrap<U> = Box<U>  — U is in scope, so the constraint is deferred
+  // to Wrap's own use sites rather than flagged here.
+  m.type_aliases.push(
+    alias_with_bounds_for_check("Wrap", ["U"], [], Applied("Box", [Named("U")])),
+  )
+  let report = check_module(m)
+  assert_eq(report.count_of_kind(TypeParameterConstraintViolation), 0)
+}
+
+///|
+test "check_module: dependent bound is evaluated against the concrete argument" {
+  let m = empty_module_for_check()
+  // type Rel<T, K extends T> = ...  used as Rel<string, number>
+  m.type_aliases.push(
+    alias_with_bounds_for_check(
+      "Rel",
+      ["T", "K"],
+      [("K", Named("T"))],
+      Struct("Rel", [("k", Named("K"))]),
+    ),
+  )
+  m.type_aliases.push(
+    alias_for_check("Use", [], Applied("Rel", [String_, Number])),
+  )
+  let report = check_module(m)
+  let violations = report.of_kind(TypeParameterConstraintViolation)
+  assert_eq(violations.length(), 1)
+  assert_eq(violations[0].name, "Rel<K>")
 }

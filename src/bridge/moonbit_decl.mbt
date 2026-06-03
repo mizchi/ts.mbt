@@ -2225,6 +2225,7 @@ fn collect_exported_decls(
             class_: {
               ..exported.class_,
               constructor_params: None,
+              constructor_param_is_rest: [],
               properties,
               methods,
               is_constructible: false,
@@ -6427,6 +6428,9 @@ fn clone_exported_import(
     module_: exported.import_.module_,
     type_params: exported.import_.type_params,
     params,
+    // `params` is rebuilt positionally from the source import, so the
+    // original rest-parameter flags stay aligned.
+    param_is_rest: exported.import_.param_is_rest,
     return_type: rewrite_inline_result_return_type(
       exported.export_name,
       return_type,
@@ -8964,6 +8968,7 @@ fn clone_exported_class(
     static_field_inits: [],
     instance_field_inits: [],
     constructor_params,
+    constructor_param_is_rest: exported.class_.constructor_param_is_rest,
     properties,
     methods,
     is_abstract: exported.class_.is_abstract,
@@ -9202,6 +9207,7 @@ pub async fn emit_moonbit_decl_from_entry_path(
       DuplicateDeclaration => "Duplicate top-level name"
       CircularTypeAlias => "Circular type alias"
       TypeAliasArityMismatch => "Type alias arity mismatch"
+      TypeParameterConstraintViolation => "Type parameter constraint violation"
       InterfaceFieldDuplicate => "Duplicate interface field"
       EnumMemberDuplicate => "Duplicate enum member"
       InterfaceExtendsCycle => "Interface extends cycle"

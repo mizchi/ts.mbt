@@ -1715,9 +1715,10 @@ pub fn Parser::parse_declare_function(
   // parameter
   let _ = self.expect(LParen)
   let params : Array[(String, @ast.TsType)] = []
+  let param_is_rest : Array[Bool] = []
   while !self.check(RParen) && !self.check(Eof) {
     // Handle rest parameter: ...name
-    let _ = self.match_ellipsis()
+    let is_rest = self.match_ellipsis()
     let param_name = self.parse_declare_param_name()
     // Handle optional parameter: name?
     let is_optional = self.match_(Question)
@@ -1741,6 +1742,7 @@ pub fn Parser::parse_declare_function(
     // `function f(this, ...)`, which Node rejects as a syntax error.
     if !(param_name == "this" && params.length() == 0) {
       params.push((param_name, computed_param_type))
+      param_is_rest.push(is_rest)
     }
     if self.check(Comma) {
       let _ = self.advance()
@@ -1759,7 +1761,7 @@ pub fn Parser::parse_declare_function(
   }
   self.restore_local_type_param_bounds(local_type_param_bound_len)
   self.consume_semicolon()
-  { name, module_: "env", type_params, params, return_type }
+  { name, module_: "env", type_params, params, param_is_rest, return_type }
 }
 
 ///|
@@ -2419,6 +2421,9 @@ fn Parser::parse_declare_class(
     static_field_inits: [],
     instance_field_inits: [],
     constructor_params,
+    // The ambient `declare class` param parser does not surface rest flags;
+    // leave empty (rest detection just no-ops for these).
+    constructor_param_is_rest: [],
     properties,
     methods,
     index_signatures,

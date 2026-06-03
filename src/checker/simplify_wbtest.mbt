@@ -385,3 +385,41 @@ test "simplify_type: template literal preserved when arg is opaque" {
   let t : @ast.TsType = TemplateLiteralType(["prefix-", ""], [Named("T")])
   assert_eq(simplify_type(t), t)
 }
+
+///|
+test "simplify_type: folds standalone Uppercase over a literal" {
+  // `Uppercase<'foo'>` ⇒ `'FOO'`
+  let t : @ast.TsType = Applied("Uppercase", [Literal("foo")])
+  assert_eq(simplify_type(t), Literal("FOO"))
+}
+
+///|
+test "simplify_type: folds standalone Capitalize over a literal" {
+  let t : @ast.TsType = Applied("Capitalize", [Literal("red")])
+  assert_eq(simplify_type(t), Literal("Red"))
+}
+
+///|
+test "simplify_type: distributes a string intrinsic over a literal union" {
+  // `Uppercase<'a' | 'b'>` ⇒ `'A' | 'B'`
+  let t : @ast.TsType = Applied("Uppercase", [
+    Union([Literal("a"), Literal("b")]),
+  ])
+  assert_eq(simplify_type(t), Union([Literal("A"), Literal("B")]))
+}
+
+///|
+test "simplify_type: nests string intrinsics" {
+  // `Uppercase<Lowercase<'FoO'>>` ⇒ `'FOO'`
+  let t : @ast.TsType = Applied("Uppercase", [
+    Applied("Lowercase", [Literal("FoO")]),
+  ])
+  assert_eq(simplify_type(t), Literal("FOO"))
+}
+
+///|
+test "simplify_type: keeps string intrinsic opaque when arg is not a literal" {
+  // `Uppercase<T>` for opaque `T` stays put for a later retry.
+  let t : @ast.TsType = Applied("Uppercase", [Named("T")])
+  assert_eq(simplify_type(t), t)
+}
