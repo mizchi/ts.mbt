@@ -44,6 +44,14 @@ priv struct Resolver {
   // Enum declarations keyed by name so `Color.Red` resolves to the member's
   // literal value type rather than falling through to Any.
   enums : Map[String, @ast.TsEnumDecl]
+  // Every value-binding name introduced anywhere in the module tree
+  // (functions, classes, enums, imports, params, `var`/`let`/`const`
+  // bindings incl. destructuring, catch params, loop variables). A
+  // hoisting / forward-reference backstop for the TS2304 ("Cannot find
+  // name") check: a referenced identifier present here is declared
+  // *somewhere*, so it is never flagged even if the per-scope `env` hasn't
+  // bound it yet at the reference site.
+  declared_value_names : Map[String, Bool]
 }
 
 ///|
@@ -57,6 +65,7 @@ fn Resolver::empty() -> Resolver {
     func_type_params: {},
     func_const_type_params: {},
     enums: {},
+    declared_value_names: {},
   }
 }
 
@@ -143,7 +152,293 @@ fn merge_interfaces(
 fn Resolver::from_module(module_ : @ast.TsModule) -> Resolver {
   let r = Resolver::empty()
   Resolver::ingest_module(r, module_, "")
+  collect_module_value_names(module_, r.declared_value_names)
   r
+}
+
+///|
+/// Collect every value-binding name introduced in `module_` (and nested
+/// namespaces) into `out`. Backstop for the TS2304 check — see
+/// `Resolver::declared_value_names`.
+fn collect_module_value_names(
+  module_ : @ast.TsModule,
+  out : Map[String, Bool],
+) -> Unit {
+  for f in module_.funcs {
+    out[f.name] = true
+    for p in f.params {
+      collect_param_value_names(p, out)
+    }
+    collect_block_value_names(f.body, out)
+  }
+  for imp in module_.imports {
+    out[imp.name] = true
+  }
+  for v in module_.values {
+    out[v.name] = true
+  }
+  for e in module_.enums {
+    out[e.name] = true
+  }
+  for c in module_.classes {
+    out[c.name] = true
+    collect_class_body_value_names(c, out)
+  }
+  for ns in module_.namespaces {
+    out[ns.name] = true
+    collect_module_value_names(ns.module_, out)
+  }
+  for stmt in module_.top_level_stmts {
+    collect_stmt_value_names(stmt, out)
+  }
+}
+
+///|
+/// Collect binding names introduced inside a class body: method / accessor
+/// parameters and bodies, and field / static-block initializer expressions.
+fn collect_class_body_value_names(
+  c : @ast.TsClassDecl,
+  out : Map[String, Bool],
+) -> Unit {
+  for m in c.methods {
+    for p in m.params {
+      out[p.0] = true
+    }
+    match m.body {
+      Some(b) => collect_block_value_names(b, out)
+      None => ()
+    }
+  }
+  for blk in c.static_blocks {
+    collect_block_value_names(blk, out)
+  }
+  for fi in c.instance_field_inits {
+    collect_expr_value_names(fi.1, out)
+  }
+  for fi in c.static_field_inits {
+    collect_expr_value_names(fi.1, out)
+  }
+}
+
+///|
+fn collect_param_value_names(p : @ast.TsParam, out : Map[String, Bool]) -> Unit {
+  if p.name != "" {
+    out[p.name] = true
+  }
+  match p.binding {
+    Some(b) => collect_binding_value_names(b, out)
+    None => ()
+  }
+  match p.default {
+    Some(d) => collect_expr_value_names(d, out)
+    None => ()
+  }
+}
+
+///|
+fn collect_binding_value_names(
+  b : @ast.TsBinding,
+  out : Map[String, Bool],
+) -> Unit {
+  match b {
+    Ident(n) => out[n] = true
+    Array(ab) => {
+      for item in ab.items {
+        match item {
+          Some(elem) => collect_binding_value_names(elem.binding, out)
+          None => ()
+        }
+      }
+      match ab.rest {
+        Some(r) => collect_binding_value_names(r, out)
+        None => ()
+      }
+    }
+    Object(ob) => {
+      for prop in ob.props {
+        collect_binding_value_names(prop.binding, out)
+      }
+      match ob.rest {
+        Some(n) => out[n] = true
+        None => ()
+      }
+    }
+    Target(_) => ()
+  }
+}
+
+///|
+/// Walk a statement collecting introduced binding names, recursing into
+/// nested blocks, control flow, and function / arrow bodies.
+fn collect_stmt_value_names(
+  stmt : @ast.TsStmt,
+  out : Map[String, Bool],
+) -> Unit {
+  match stmt {
+    Var(b, _, init) | Let(b, _, init) | Const(b, _, init) => {
+      collect_binding_value_names(b, out)
+      collect_expr_value_names(init, out)
+    }
+    Expr(e) | Throw(e) => collect_expr_value_names(e, out)
+    Return(opt) =>
+      match opt {
+        Some(e) => collect_expr_value_names(e, out)
+        None => ()
+      }
+    Assign(_, e) | CompoundAssign(_, _, e) => collect_expr_value_names(e, out)
+    If(c, then_, else_) => {
+      collect_expr_value_names(c, out)
+      collect_block_value_names(then_, out)
+      match else_ {
+        Some(b) => collect_block_value_names(b, out)
+        None => ()
+      }
+    }
+    While(c, body) | DoWhile(c, body) | With(c, body) => {
+      collect_expr_value_names(c, out)
+      collect_block_value_names(body, out)
+    }
+    For(init, _, update, body) => {
+      match init {
+        Some(s) => collect_stmt_value_names(s, out)
+        None => ()
+      }
+      match update {
+        Some(s) => collect_stmt_value_names(s, out)
+        None => ()
+      }
+      collect_block_value_names(body, out)
+    }
+    ForOf(_, b, _, e, body)
+    | ForAwaitOf(_, b, _, e, body)
+    | ForIn(_, b, _, e, body) => {
+      collect_binding_value_names(b, out)
+      collect_expr_value_names(e, out)
+      collect_block_value_names(body, out)
+    }
+    Switch(e, cases) => {
+      collect_expr_value_names(e, out)
+      for c in cases {
+        collect_block_value_names(c.body, out)
+      }
+    }
+    Try(b, catch_binding, catch_, finally_) => {
+      collect_block_value_names(b, out)
+      match catch_binding {
+        Some(cb) => collect_binding_value_names(cb, out)
+        None => ()
+      }
+      match catch_ {
+        Some(cb) => collect_block_value_names(cb, out)
+        None => ()
+      }
+      match finally_ {
+        Some(fb) => collect_block_value_names(fb, out)
+        None => ()
+      }
+    }
+    Block(b) => collect_block_value_names(b, out)
+    Label(_, inner) => collect_stmt_value_names(inner, out)
+    NativeClassStmt(decl, _) => {
+      out[decl.name] = true
+      for blk in decl.static_blocks {
+        collect_block_value_names(blk, out)
+      }
+    }
+    _ => ()
+  }
+}
+
+///|
+fn collect_block_value_names(
+  block : @ast.TsBlock,
+  out : Map[String, Bool],
+) -> Unit {
+  for s in block.stmts {
+    collect_stmt_value_names(s, out)
+  }
+}
+
+///|
+/// Walk an expression collecting binding names introduced by nested
+/// function / arrow / class expressions.
+fn collect_expr_value_names(
+  expr : @ast.TsExpr,
+  out : Map[String, Bool],
+) -> Unit {
+  match expr {
+    FuncExpr(f) => {
+      if f.name != "" {
+        out[f.name] = true
+      }
+      for p in f.params {
+        collect_param_value_names(p, out)
+      }
+      for s in f.body.stmts {
+        collect_stmt_value_names(s, out)
+      }
+    }
+    NativeClassExpr(decl, _) => {
+      if decl.name != "" {
+        out[decl.name] = true
+      }
+      for blk in decl.static_blocks {
+        collect_block_value_names(blk, out)
+      }
+    }
+    ArrowFunc(params, _, body, _) => {
+      for p in params {
+        collect_param_value_names(p, out)
+      }
+      match body {
+        ArrowExpr(e) => collect_expr_value_names(e, out)
+        ArrowBlock(b) => collect_block_value_names(b, out)
+      }
+    }
+    Call(_, args) | New(_, args) =>
+      for a in args {
+        collect_expr_value_names(a, out)
+      }
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      collect_expr_value_names(callee, out)
+      for a in args {
+        collect_expr_value_names(a, out)
+      }
+    }
+    MethodCall(recv, _, args) => {
+      collect_expr_value_names(recv, out)
+      for a in args {
+        collect_expr_value_names(a, out)
+      }
+    }
+    BinOp(_, l, r) | Seq(l, r) => {
+      collect_expr_value_names(l, out)
+      collect_expr_value_names(r, out)
+    }
+    UnaryOp(_, e)
+    | Spread(e)
+    | Await(e)
+    | NonNull(e)
+    | OptionalChain(e)
+    | As(e, _)
+    | PropAccess(e, _) => collect_expr_value_names(e, out)
+    Cond(c, t, e) => {
+      collect_expr_value_names(c, out)
+      collect_expr_value_names(t, out)
+      collect_expr_value_names(e, out)
+    }
+    ArrayLit(items) =>
+      for it in items {
+        collect_expr_value_names(it, out)
+      }
+    ObjectLit(entries) =>
+      for ent in entries {
+        collect_expr_value_names(ent.1, out)
+      }
+    AssignExpr(_, v) | AssignPattern(_, v) | CompoundAssignExpr(_, _, v) =>
+      collect_expr_value_names(v, out)
+    _ => ()
+  }
 }
 
 ///|
@@ -8618,6 +8913,91 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
 /// Walk `expr` for call sites and validate their arguments against the
 /// callee's declared parameter types. Pure inference is also run to populate
 /// inferred subtypes / surface compound issues.
+
+///|
+/// Language keywords / pseudo-values that surface as bare identifiers in the
+/// AST (`this`, `super`, `arguments`, …) and contextual keywords the parser
+/// can hand back as a `Var` in ambiguous positions (`new.target`,
+/// `yield`-in-template, `let`-as-name). Never a TS2304 ("Cannot find name").
+fn is_pseudo_value_keyword(name : String) -> Bool {
+  match name {
+    "this"
+    | "super"
+    | "arguments"
+    | "undefined"
+    | "null"
+    | "true"
+    | "false"
+    | "void"
+    | "globalThis"
+    | "eval"
+    | "new"
+    | "yield"
+    | "await"
+    | "let"
+    | "async"
+    | "of"
+    | "as"
+    | "from"
+    | "get"
+    | "set" => true
+    _ => false
+  }
+}
+
+///|
+fn is_ascii_ident_start_name(name : String) -> Bool {
+  for c in name {
+    return (c >= 'a' && c <= 'z') ||
+      (c >= 'A' && c <= 'Z') ||
+      c == '_' ||
+      c == '$'
+  }
+  false
+}
+
+///|
+/// TS2304 ("Cannot find name 'X'"): a value-position identifier bound in no
+/// scope we track, not declared anywhere in the module, and not a standard
+/// ambient global. The `declared_value_names` backstop means hoisting /
+/// forward references never trip this; `is_lib_global_value` (generated from
+/// the TypeScript standard libraries) covers ambient runtime globals.
+fn check_undefined_name(env : ExprEnv, ctx : CheckCtx, name : String) -> Unit {
+  if name == "__ts_no_init__" {
+    return
+  }
+  // Only plain ASCII-identifier references. Filters lexer artifacts (a
+  // leading UTF-8 BOM is otherwise tokenised as an identifier) and
+  // unicode-named bindings we don't cheaply reason about — a missed
+  // diagnostic there beats a false positive.
+  if !is_ascii_ident_start_name(name) {
+    return
+  }
+  if is_pseudo_value_keyword(name) || is_lib_global_value(name) {
+    return
+  }
+  if env.lookup(name) is Some(_) {
+    return
+  }
+  if ctx.resolver.globals.get(name) is Some(_) {
+    return
+  }
+  if ctx.resolver.declared_value_names.get(name) is Some(_) {
+    return
+  }
+  if ctx.resolver.classes.get(name) is Some(_) {
+    return
+  }
+  if ctx.resolver.enums.get(name) is Some(_) {
+    return
+  }
+  if ctx.in_scope_type_params.contains(name) {
+    return
+  }
+  record(ctx, "use `\{name}`", "cannot find name `\{name}`")
+}
+
+///|
 fn check_call_args_in_expr(
   env : ExprEnv,
   expr : @ast.TsExpr,
@@ -8625,6 +9005,8 @@ fn check_call_args_in_expr(
 ) -> Unit {
   match expr {
     Call(name, args) => {
+      // TS2304: calling a name declared nowhere and not a standard global.
+      check_undefined_name(env, ctx, name)
       // TS2454: invoking an as-yet-unassigned variable (`var f: T; f()`)
       // reads it before assignment, same as a bare reference.
       if name != "__ts_no_init__" && ctx.unassigned.get(name) is Some(_) {
@@ -9263,7 +9645,7 @@ fn check_call_args_in_expr(
     // emit the diagnostic and clear the entry so we only fire once
     // per variable. Skips the parser's no-init sentinel itself
     // (which appears as the rhs of the synthesised init).
-    Var(name) =>
+    Var(name) => {
       if name != "__ts_no_init__" && ctx.unassigned.get(name) is Some(_) {
         record(
           ctx,
@@ -9272,6 +9654,8 @@ fn check_call_args_in_expr(
         )
         let _ = ctx.unassigned.remove(name)
       }
+      check_undefined_name(env, ctx, name)
+    }
     _ => ()
   }
 }
@@ -9534,7 +9918,15 @@ fn stmt_always_exits(stmt : @ast.TsStmt) -> Bool {
 /// from the surrounding module (or an empty resolver when called in
 /// isolation).
 pub fn check_function_body(func : @ast.TsFunc) -> Array[ExprIssue] {
-  check_function_body_with(func, Resolver::empty(), false, true)
+  // Seed the TS2304 backstop with the function's own parameter / local
+  // binding names so a standalone check matches the module-level path
+  // (which collects `declared_value_names` across the whole tree).
+  let resolver = Resolver::empty()
+  for p in func.params {
+    collect_param_value_names(p, resolver.declared_value_names)
+  }
+  collect_block_value_names(func.body, resolver.declared_value_names)
+  check_function_body_with(func, resolver, false, true)
 }
 
 ///|
@@ -9708,6 +10100,12 @@ fn check_module_function_bodies_layered(
       Resolver::ingest_module(r, o, "")
     }
     Resolver::ingest_module(r, module_, "")
+    // TS2304 backstop: collect declared value names from the *outermost*
+    // module, which recurses into every nested namespace. This lets code
+    // inside a namespace reference outer-scope (and sibling-namespace)
+    // bindings unqualified without tripping a "cannot find name" false
+    // positive. `from_module` already does this for the top-level entry.
+    collect_module_value_names(outer_modules[0], r.declared_value_names)
     r
   }
   // Strict-mode flag comes from the *outermost* (top-level) module's
