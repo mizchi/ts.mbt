@@ -9546,6 +9546,9 @@ fn check_call_args_in_expr(
     // still fire.
     As(inner, asserted) => {
       check_call_args_in_expr(env, inner, ctx)
+      // TS2300: an object type-literal in the asserted type (`<{a;a}>x`,
+      // `x as { a; a }`) with duplicate property names.
+      collect_type_dup_issues(asserted, ctx.path_prefix, ctx.issues)
       // Validate `x as T`: if neither direction is assignable the assertion
       // is always wrong (e.g. `5 as string`).
       // We only flag when both sides are concrete primitive-ish types so we
@@ -10136,6 +10139,35 @@ fn check_structural_duplicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
         message: "duplicate identifier `\{name}`",
       })
     }
+    // Nested object type-literals inside field types.
+    for f in iface.fields {
+      collect_type_dup_issues(f.1, "interface \{iface.name}", issues)
+    }
+  }
+  // Object type-literals in other declaration positions: alias bodies,
+  // function/import params and returns, ambient value types. A directly
+  // object-bodied alias (`type T = { ... }`) is synthesized into an
+  // interface by the parser, so the interface walk above already covers it
+  // (and its nested literals) -- skip it here to avoid a double report.
+  for ta in module_.type_aliases {
+    if !(ta.type_ is Object(_)) {
+      collect_type_dup_issues(ta.type_, "type \{ta.name}", issues)
+    }
+  }
+  for f in module_.funcs {
+    for p in f.params {
+      collect_type_dup_issues(p.type_, "function \{f.name}", issues)
+    }
+    collect_type_dup_issues(f.return_type, "function \{f.name}", issues)
+  }
+  for imp in module_.imports {
+    for p in imp.params {
+      collect_type_dup_issues(p.1, "function \{imp.name}", issues)
+    }
+    collect_type_dup_issues(imp.return_type, "function \{imp.name}", issues)
+  }
+  for v in module_.values {
+    collect_type_dup_issues(v.type_, "value \{v.name}", issues)
   }
   issues
 }
@@ -10181,6 +10213,66 @@ fn member_name_duplicates(
     }
   }
   dups
+}
+
+///|
+/// Walk a type, flagging TS2300 duplicate property names in every object
+/// type-literal it contains (`{ a: X; a: Y }`, including nested / parameter /
+/// return / element positions). Method-overload and signature-sentinel
+/// exclusions match `member_name_duplicates`. Purely structural — no
+/// resolution — so no false positives on resolvable input.
+fn collect_type_dup_issues(
+  ty : @ast.TsType,
+  label : String,
+  issues : Array[ExprIssue],
+) -> Unit {
+  match ty {
+    Object(fields) => {
+      let named : Array[(String, @ast.TsType)] = []
+      for f in fields {
+        match f.0 {
+          Literal(n) => named.push((n, f.1))
+          _ => ()
+        }
+      }
+      for name in member_name_duplicates(named) {
+        issues.push({ path: label, message: "duplicate identifier `\{name}`" })
+      }
+      for f in fields {
+        collect_type_dup_issues(f.1, label, issues)
+      }
+    }
+    Array(e) | Rest(e) | Keyof(e) => collect_type_dup_issues(e, label, issues)
+    Tuple(items) =>
+      for it in items {
+        collect_type_dup_issues(it, label, issues)
+      }
+    Func(params, ret) | Constructor(params, ret, _) => {
+      for p in params {
+        collect_type_dup_issues(p, label, issues)
+      }
+      collect_type_dup_issues(ret, label, issues)
+    }
+    Union(ms) | Intersection(ms) =>
+      for m in ms {
+        collect_type_dup_issues(m, label, issues)
+      }
+    Applied(_, args) =>
+      for a in args {
+        collect_type_dup_issues(a, label, issues)
+      }
+    IndexedAccess(b, k) => {
+      collect_type_dup_issues(b, label, issues)
+      collect_type_dup_issues(k, label, issues)
+    }
+    Conditional(a, b, x, y) => {
+      collect_type_dup_issues(a, label, issues)
+      collect_type_dup_issues(b, label, issues)
+      collect_type_dup_issues(x, label, issues)
+      collect_type_dup_issues(y, label, issues)
+    }
+    _ => ()
+  }
 }
 
 ///|

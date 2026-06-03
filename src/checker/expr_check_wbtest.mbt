@@ -346,6 +346,28 @@ test "expr_check: flags duplicate enum member and interface field (TS2300)" {
 }
 
 ///|
+test "expr_check: flags duplicate fields in an object type-literal" {
+  // A parameter / `as` type-literal with a repeated property name is TS2300.
+  let src =
+    #|function g(o: { a: number; a: string }): void {}
+    #|function h(): void { let v = {} as { b: 1; b: 2 } }
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mut saw_a = false
+  let mut saw_b = false
+  for i in issues {
+    if i.message.contains("duplicate identifier `a`") {
+      saw_a = true
+    }
+    if i.message.contains("duplicate identifier `b`") {
+      saw_b = true
+    }
+  }
+  assert_true(saw_a)
+  assert_true(saw_b)
+}
+
+///|
 test "expr_check: same-name interface method overloads are not duplicates" {
   // `foo(): void; foo(x): void` are legal overloads, not TS2300.
   let src =
