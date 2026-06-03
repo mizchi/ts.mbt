@@ -10087,6 +10087,103 @@ pub fn check_module_function_bodies_permissive(
 /// are ingested first at bare names so inner code can reference
 /// outer-scope types unqualified (the way TypeScript scoping works),
 /// then this module is ingested to shadow on top.
+
+///|
+/// True for the interface-member sentinel keys the parser uses for call /
+/// construct / computed / index signatures, which are not real named members
+/// and may legitimately repeat.
+fn is_signature_sentinel(name : String) -> Bool {
+  name == "<call>" ||
+  name == "<new>" ||
+  name == "<computed>" ||
+  name == "<index_signature>"
+}
+
+///|
+/// TS2300 ("Duplicate identifier") for the structurally-unambiguous cases:
+/// an enum that lists the same member name twice, and an interface that
+/// declares the same field name twice. Same-name *method* signatures are
+/// legal overloads, so an interface name is only flagged when at least one
+/// occurrence is a non-method (property) field; signature sentinels are
+/// skipped. Both are decided from declaration shape alone — no type
+/// resolution — so they carry no false-positive risk on resolvable input.
+fn check_structural_duplicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for e in module_.enums {
+    let seen : Map[String, Bool] = {}
+    let reported : Map[String, Bool] = {}
+    for em in e.members {
+      if seen.get(em.name) is Some(_) {
+        if !(reported.get(em.name) is Some(_)) {
+          reported[em.name] = true
+          issues.push({
+            path: "enum \{e.name}",
+            message: "duplicate identifier `\{em.name}`",
+          })
+        }
+      } else {
+        seen[em.name] = true
+      }
+    }
+  }
+  // An object type-literal alias body (`type T = { a: X; a: Y }`) is
+  // synthesized into an interface by the parser, so the interface loop
+  // below already covers it -- no separate type-alias pass is needed.
+  for iface in module_.interfaces {
+    for name in member_name_duplicates(iface.fields) {
+      issues.push({
+        path: "interface \{iface.name}",
+        message: "duplicate identifier `\{name}`",
+      })
+    }
+  }
+  issues
+}
+
+///|
+/// Names that appear more than once in a member list where at least one
+/// occurrence is a non-method (property) field. All-method repeats are legal
+/// overloads, and signature sentinels (`<call>` / `<new>` / …) are skipped.
+fn member_name_duplicates(
+  fields : Array[(String, @ast.TsType)],
+) -> Array[String] {
+  let count : Map[String, Int] = {}
+  let has_property : Map[String, Bool] = {}
+  let order : Array[String] = []
+  for f in fields {
+    let name = f.0
+    if is_signature_sentinel(name) {
+      continue
+    }
+    match count.get(name) {
+      Some(n) => count[name] = n + 1
+      None => {
+        count[name] = 1
+        order.push(name)
+      }
+    }
+    let is_method = match f.1 {
+      Func(_, _) => true
+      _ => false
+    }
+    if !is_method {
+      has_property[name] = true
+    }
+  }
+  let dups : Array[String] = []
+  for name in order {
+    let n = match count.get(name) {
+      Some(v) => v
+      None => 0
+    }
+    if n >= 2 && has_property.get(name) is Some(_) {
+      dups.push(name)
+    }
+  }
+  dups
+}
+
+///|
 fn check_module_function_bodies_layered(
   module_ : @ast.TsModule,
   outer_modules : Array[@ast.TsModule],
@@ -10237,6 +10334,9 @@ fn check_module_function_bodies_layered(
     }
   }
   for issue in check_module_decl_signatures(module_) {
+    all.push(issue)
+  }
+  for issue in check_structural_duplicates(module_) {
     all.push(issue)
   }
   // Walk class field initialisation. Namespaced classes need to
