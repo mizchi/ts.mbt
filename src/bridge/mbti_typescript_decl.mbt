@@ -2396,6 +2396,16 @@ fn mbti_stdlib_native_ts_type(
       } else {
         None
       }
+    Some("moonbitlang/core/ref") =>
+      if type_name == "Ref" {
+        if args.length() == 1 {
+          Some("{ val: \{args[0]} }")
+        } else {
+          Some("{ val: unknown }")
+        }
+      } else {
+        None
+      }
     _ => None
   }
 }
@@ -2569,6 +2579,10 @@ fn translate_named_type(
       } else {
         "{ val: unknown }"
       }
+    // `Failure` is MoonBit's builtin error raised by `fail(..)`. It has no TS
+    // declaration, so an unqualified `raise Failure` would reference an
+    // undefined name; map it to the global `Error` like a bare `raise` does.
+    "Failure" => "Error"
     "Self" =>
       match owner_name {
         Some(type_name) =>
