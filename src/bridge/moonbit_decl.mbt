@@ -6369,13 +6369,10 @@ fn clone_exported_import(
   canonical_types : Map[String, String],
 ) -> @ast.TsImport {
   let params : Array[(String, @ast.TsType)] = []
-  let callback_owner_name = if exported.source_export_name == "" ||
-    exported.source_export_name == "default" ||
-    exported.source_export_name.has_prefix("default.") {
-    exported.export_name
-  } else {
-    exported.source_export_name
-  }
+  let callback_owner_name = decl_callback_owner_name(
+    exported.export_name,
+    exported.source_export_name,
+  )
   for param_index, param in exported.import_.params {
     let (param_name, param_type) = param
     let lowered = lower_react_utility_type(
@@ -7690,6 +7687,72 @@ fn decl_inline_callback_type_name(
 }
 
 ///|
+/// Owner name used when synthesizing inline-callback type names. A renamed
+/// re-export keeps its original source name; default / unnamed exports fall
+/// back to the public export name. Shared by the import / func cloners and
+/// by `decl_collect_synthetic_callback_type_names` so the reconstructed set
+/// of synthetic names cannot drift from the names actually emitted.
+fn decl_callback_owner_name(
+  export_name : String,
+  source_export_name : String,
+) -> String {
+  if source_export_name == "" ||
+    source_export_name == "default" ||
+    source_export_name.has_prefix("default.") {
+    export_name
+  } else {
+    source_export_name
+  }
+}
+
+///|
+/// Reconstruct the set of synthetic inline-callback type names that the decl
+/// emitter injects for callback-typed parameters (e.g. `OnEachFnCallback`
+/// for `onEach(items, fn)`). These are emitted as opaque `declare pub type`
+/// companions on purpose, so the post-synthesis checker must not report them
+/// as "unresolved type references". Replaying the pure synthesizer over the
+/// same `(owner, param, index)` inputs keeps this set exact; genuinely
+/// missing references never collide because they don't match the
+/// `<Owner><Param>Callback` shape.
+fn decl_collect_synthetic_callback_type_names(
+  imports : Array[ExportedImportDecl],
+  funcs : Array[ExportedFuncDecl],
+) -> Array[String] {
+  let names : Array[String] = []
+  for exported in imports {
+    let owner = decl_callback_owner_name(
+      exported.export_name,
+      exported.source_export_name,
+    )
+    for idx, param in exported.import_.params {
+      match decl_synthetic_callback_type_for_param(owner, param.0, idx) {
+        Some(@ast.TsType::Named(name)) =>
+          if !names.contains(name) {
+            names.push(name)
+          }
+        _ => ()
+      }
+    }
+  }
+  for exported in funcs {
+    let owner = decl_callback_owner_name(
+      exported.export_name,
+      exported.source_export_name,
+    )
+    for idx, param in exported.func.params {
+      match decl_synthetic_callback_type_for_param(owner, param.name, idx) {
+        Some(@ast.TsType::Named(name)) =>
+          if !names.contains(name) {
+            names.push(name)
+          }
+        _ => ()
+      }
+    }
+  }
+  names
+}
+
+///|
 fn decl_synthetic_callback_type_for_param(
   owner_name : String,
   param_name : String,
@@ -8192,13 +8255,10 @@ fn clone_exported_func(
   canonical_types : Map[String, String],
 ) -> @ast.TsFunc {
   let params : Array[@ast.TsParam] = []
-  let callback_owner_name = if exported.source_export_name == "" ||
-    exported.source_export_name == "default" ||
-    exported.source_export_name.has_prefix("default.") {
-    exported.export_name
-  } else {
-    exported.source_export_name
-  }
+  let callback_owner_name = decl_callback_owner_name(
+    exported.export_name,
+    exported.source_export_name,
+  )
   for param_index, param in exported.func.params {
     let lowered = lower_react_utility_type(
       info,
@@ -9123,9 +9183,18 @@ pub async fn emit_moonbit_decl_from_entry_path(
   // expected to produce well-formed output; any warnings here flag a real
   // issue in bridge synthesis.
   let report = @checker.check_module(emitted_module)
+  // Names the emitter deliberately introduces as opaque companions are not
+  // genuine unresolved references: tagged-union case payloads, plus the
+  // synthetic inline-callback parameter types (`<Owner><Param>Callback`).
+  let synthetic_callback_type_names = decl_collect_synthetic_callback_type_names(
+    emitted_exported_imports, emitted_exported_funcs,
+  )
   for issue in report.issues {
     if issue.kind is UnresolvedReference &&
-      tagged_union_declared_names.contains(issue.name) {
+      (
+        tagged_union_declared_names.contains(issue.name) ||
+        synthetic_callback_type_names.contains(issue.name)
+      ) {
       continue
     }
     let prefix = match issue.kind {
