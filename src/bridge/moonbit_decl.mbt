@@ -9202,6 +9202,7 @@ pub async fn emit_moonbit_decl_from_entry_path(
       DuplicateDeclaration => "Duplicate top-level name"
       CircularTypeAlias => "Circular type alias"
       TypeAliasArityMismatch => "Type alias arity mismatch"
+      TypeParameterConstraintViolation => "Type parameter constraint violation"
       InterfaceFieldDuplicate => "Duplicate interface field"
       EnumMemberDuplicate => "Duplicate enum member"
       InterfaceExtendsCycle => "Interface extends cycle"

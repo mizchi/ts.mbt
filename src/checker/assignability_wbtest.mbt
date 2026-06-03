@@ -505,3 +505,15 @@ test "is_assignable_to: intersection with a non-object member declines the merge
     is_assignable_to(s, Struct("AB", [("a", String_), ("b", Number)])),
   )
 }
+
+///|
+test "is_assignable_to: symbol index signature accepts a symbol-keyed source" {
+  // `{ [k: symbol]: number }` is satisfied by a source whose symbol
+  // index signature carries a compatible value type.
+  let target : @ast.TsType = Object([(Symbol, Number)])
+  let ok : @ast.TsType = Object([(Symbol, NumberLiteral("1"))])
+  assert_true(is_assignable_to(ok, target))
+  // A symbol index signature whose value type does not fit is rejected.
+  let bad : @ast.TsType = Object([(Symbol, String_)])
+  assert_false(is_assignable_to(bad, target))
+}

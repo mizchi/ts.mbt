@@ -6202,3 +6202,31 @@ test "expr_check: nested destructuring through array index from interface field"
   }
   @test.assert_eq(issues.length(), 0)
 }
+
+///|
+test "expr_check: assigning to a ReadonlyArray element is a read-only error" {
+  let src =
+    #|function f(a: ReadonlyArray<number>): void {
+    #|  a[0] = 5;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let readonly_issues = issues.filter(fn(i) {
+    i.message.contains("only permits reading")
+  })
+  @test.assert_eq(readonly_issues.length(), 1)
+}
+
+///|
+test "expr_check: assigning to a mutable array element is fine" {
+  let src =
+    #|function f(a: number[]): void {
+    #|  a[0] = 5;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let readonly_issues = issues.filter(fn(i) {
+    i.message.contains("only permits reading")
+  })
+  @test.assert_eq(readonly_issues.length(), 0)
+}

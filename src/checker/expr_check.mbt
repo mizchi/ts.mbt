@@ -8553,7 +8553,14 @@ fn check_call_args_in_expr(
       check_call_args_in_expr(env, idx, ctx)
       check_call_args_in_expr(env, v, ctx)
       let recv_ty = infer_expr(env, ctx.resolver, recv)
-      match recv_ty {
+      match ctx.resolver.unwrap(recv_ty) {
+        // `ReadonlyArray<T>` (and the `readonly [...]` tuple form, when it
+        // survives as such) permits reads only — element assignment is a
+        // type error in TypeScript (TS2542).
+        Applied("ReadonlyArray", _) =>
+          record(
+            ctx, "assign element", "index signature in a `ReadonlyArray` only permits reading",
+          )
         Array(elem) =>
           check_expr_against(env, v, elem, ctx, "assign array element")
         Tuple(items) =>
