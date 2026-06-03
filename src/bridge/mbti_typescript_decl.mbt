@@ -2508,6 +2508,14 @@ fn translate_named_type(
       } else {
         "Iterable<unknown>"
       }
+    // `Iter2[K, V]` is a lazy iterator of key/value pairs; the faithful TS
+    // shape is an iterable of `[K, V]` tuples (TypeScript has no `Iter2`).
+    "Iter2" =>
+      if args.length() == 2 {
+        "Iterable<[\{args[0]}, \{args[1]}]>"
+      } else {
+        "Iterable<unknown>"
+      }
     "Ref" =>
       if args.length() == 1 {
         "{ val: \{args[0]} }"
@@ -2613,6 +2621,12 @@ fn translate_mbti_type(
     let normalized_inner = translate_mbti_type(
       inner, imports, used_aliases, owner_name, owner_type_params,
     )
+    // Nested optionals (`Int??`) collapse to a single `| undefined`. TypeScript
+    // treats `T | undefined | undefined` as `T | undefined`, so drop the
+    // redundant tail rather than emitting it again.
+    if normalized_inner.has_suffix("| undefined") {
+      return normalized_inner
+    }
     if normalized_inner.contains("=>") {
       return "(\{normalized_inner}) | undefined"
     }
