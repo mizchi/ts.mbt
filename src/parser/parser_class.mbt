@@ -888,6 +888,7 @@ fn Parser::parse_class_body(
     let mut is_readonly_field = false
     let mut has_modifier = true
     let mut parsed_static_block = false
+    let mut has_declare = false
     let mut visibility = "public"
     while has_modifier {
       has_modifier = false
@@ -930,10 +931,14 @@ fn Parser::parse_class_body(
             if n == "private" || n == "protected" {
               visibility = n
             }
+            if n == "declare" {
+              has_declare = true
+            }
           }
         Declare => {
           let _ = self.advance()
           has_modifier = true
+          has_declare = true
         }
         _ => ()
       }
@@ -1143,9 +1148,18 @@ fn Parser::parse_class_body(
         None
       }
       let _ = self.match_(Semicolon)
+      // A `declare` field (`class C { declare x: T }`) is ambiently
+      // typed and emits no runtime code, so TS never applies strict
+      // property initialization (TS2564) to it. Fold it into the
+      // definite-assignment flag, which suppresses that check.
       elements.push(
         Field(
-          is_static, key, field_type, init, is_readonly_field, has_definite_assertion,
+          is_static,
+          key,
+          field_type,
+          init,
+          is_readonly_field,
+          has_definite_assertion || has_declare,
         ),
       )
     }

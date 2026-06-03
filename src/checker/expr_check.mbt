@@ -510,6 +510,25 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
           Some(resolved) => cur = resolved
           None => keep_going = false
         }
+      // `keyof typeof Enum` — the type of the enum object has the member
+      // names as its keys, so `keyof typeof Color` resolves to the union
+      // of member-name string literals (`"Red" | "Green" | ...`). This
+      // also covers `const enum`s, whose members aren't exposed as
+      // structural object fields.
+      Keyof(TypeOf(enum_name)) if self.enums.get(enum_name) is Some(_) => {
+        let decl = self.enums.get(enum_name).unwrap()
+        let keys : Array[@ast.TsType] = []
+        for m in decl.members {
+          keys.push(@ast.TsType::Literal(m.name))
+        }
+        if keys.length() == 0 {
+          keep_going = false
+        } else if keys.length() == 1 {
+          cur = keys[0]
+        } else {
+          cur = @ast.TsType::Union(keys)
+        }
+      }
       // `keyof T` where T is a Named interface/class — extract the union of
       // field names so `keyof MyInterface` resolves to a string literal union.
       Keyof(inner) => {
@@ -4680,6 +4699,56 @@ fn narrow_union(a : @ast.TsType, b : @ast.TsType) -> @ast.TsType {
 // ---------------------------------------------------------------------------
 
 ///|
+/// Extract the bare call signature (`<call>`) from a callable object /
+/// interface type: `interface I { (): T }` / `type F = { (x): T }`. A
+/// function value assigned to such a type is checked against this
+/// signature, so we surface it and bypass the structural-object path
+/// (which has no function rule and would report a spurious `expected I
+/// but got () => T`). Returns the call signature's `Func`, or `None`
+/// when the type carries no call signature.
+///
+/// Restricted to types with *exactly one* call signature: an overload
+/// set (`{ (x: T): string; (x: T, y?: T): string }`) is not contextually
+/// applied to a passed lambda by TS, so routing through one arbitrary
+/// arm would push the wrong parameter / return types into the body.
+fn Resolver::object_call_signature(
+  self : Resolver,
+  t : @ast.TsType,
+) -> @ast.TsType? {
+  let mut found : @ast.TsType? = None
+  let mut count = 0
+  match t {
+    Object(fields) =>
+      for f in fields {
+        match f.0 {
+          Literal(k) if k == "<call>" => {
+            found = Some(f.1)
+            count = count + 1
+          }
+          _ => ()
+        }
+      }
+    Named(n) =>
+      match self.interfaces.get(n) {
+        Some(iface) =>
+          for f in iface.fields {
+            if f.0 == "<call>" {
+              found = Some(f.1)
+              count = count + 1
+            }
+          }
+        None => ()
+      }
+    _ => ()
+  }
+  if count == 1 {
+    found
+  } else {
+    None
+  }
+}
+
+///|
 fn check_expr_against(
   env : ExprEnv,
   expr : @ast.TsExpr,
@@ -4698,6 +4767,31 @@ fn check_expr_against(
   // x + 1)` flows the element type into `x` so the body's `x + 1` is
   // properly typed instead of falling through to `Any`.
   let expected_shape = ctx.resolver.unwrap(expected)
+  // A call-signature interface / object type (`interface I { (): T }`,
+  // `type F = { (x): T }`) is callable. Route a function / arrow value
+  // through that call signature so it gets contextual typing and skips
+  // the structural object-assignability path (which has no function
+  // rule and would otherwise report a spurious `expected I but got
+  // () => T`).
+  match ctx.resolver.object_call_signature(expected_shape) {
+    Some(Func(formal_params, formal_ret)) =>
+      match expr {
+        ArrowFunc(arrow_params, _declared_ret, body, is_async) => {
+          check_arrow_with_context(
+            env, arrow_params, body, is_async, formal_params, formal_ret, ctx, sub_path,
+          )
+          return
+        }
+        FuncExpr(f) => {
+          check_funcexpr_with_context(
+            env, f, formal_params, formal_ret, ctx, sub_path,
+          )
+          return
+        }
+        _ => ()
+      }
+    _ => ()
+  }
   match (expr, expected_shape) {
     (
       ArrowFunc(arrow_params, _declared_ret, body, is_async),
@@ -6093,6 +6187,7 @@ fn check_arrow_with_context(
   for entry in outer.full_snapshot() {
     env.bind(entry.0, entry.1)
   }
+  let param_names : Array[String] = []
   let mut i = 0
   while i < arrow_params.length() {
     let p = arrow_params[i]
@@ -6106,32 +6201,54 @@ fn check_arrow_with_context(
       p.type_
     }
     env.bind(p.name, ty)
+    param_names.push(p.name)
     i = i + 1
+  }
+  // A parameter shadows any same-named outer binding, so the body must not
+  // see it as "used before assigned" (TS2454) — the parameter is bound and
+  // assigned on entry. The flat `unassigned` map is name-keyed with no scope
+  // tracking, so clone it minus the parameter names for the body walk.
+  let inner_ctx : CheckCtx = {
+    path_prefix: ctx.path_prefix,
+    return_type: unwrap_async_return(is_async, formal_ret),
+    yield_type: @ast.TsType::Any,
+    resolver: ctx.resolver,
+    issues: ctx.issues,
+    in_scope_type_params: ctx.in_scope_type_params,
+    permissive: ctx.permissive,
+    unassigned: unassigned_without(ctx.unassigned, param_names),
+    strict_property_init: ctx.strict_property_init,
   }
   match body {
     ArrowExpr(e) => {
       let want = unwrap_async_return(is_async, formal_ret)
-      check_expr_against(env, e, want, ctx, "\{sub_path} arrow body")
+      check_expr_against(env, e, want, inner_ctx, "\{sub_path} arrow body")
     }
-    ArrowBlock(block) => {
+    ArrowBlock(block) =>
       // Recheck the block with the new env and the formal_ret as the
       // expected return type.
-      let inner_ctx : CheckCtx = {
-        path_prefix: ctx.path_prefix,
-        return_type: unwrap_async_return(is_async, formal_ret),
-        yield_type: @ast.TsType::Any,
-        resolver: ctx.resolver,
-        issues: ctx.issues,
-        in_scope_type_params: ctx.in_scope_type_params,
-        permissive: ctx.permissive,
-        unassigned: ctx.unassigned,
-        strict_property_init: ctx.strict_property_init,
-      }
       for stmt in block.stmts {
         check_stmt(env, stmt, inner_ctx)
       }
-    }
   }
+}
+
+///|
+/// Clone an `unassigned` (TS2454) tracking map, dropping the given names —
+/// used when entering an inner function / arrow scope whose parameters
+/// shadow outer bindings of the same name.
+fn unassigned_without(
+  src : Map[String, Bool],
+  names : Array[String],
+) -> Map[String, Bool] {
+  let m : Map[String, Bool] = {}
+  for k, v in src {
+    m[k] = v
+  }
+  for n in names {
+    let _ = m.remove(n)
+  }
+  m
 }
 
 ///|
@@ -6150,6 +6267,7 @@ fn check_funcexpr_with_context(
   for entry in outer.full_snapshot() {
     env.bind(entry.0, entry.1)
   }
+  let param_names : Array[String] = []
   let mut i = 0
   while i < f.params.length() {
     let p = f.params[i]
@@ -6161,6 +6279,7 @@ fn check_funcexpr_with_context(
       p.type_
     }
     env.bind(p.name, ty)
+    param_names.push(p.name)
     i = i + 1
   }
   // Prefer the function's own annotated return type when present; fall back
@@ -6178,7 +6297,8 @@ fn check_funcexpr_with_context(
     issues: ctx.issues,
     in_scope_type_params: ctx.in_scope_type_params,
     permissive: ctx.permissive,
-    unassigned: ctx.unassigned,
+    // Parameters shadow outer bindings — drop them from the TS2454 set.
+    unassigned: unassigned_without(ctx.unassigned, param_names),
     strict_property_init: ctx.strict_property_init,
   }
   let _ = sub_path
@@ -9168,9 +9288,28 @@ fn check_function_body_with(
   } else {
     @ast.TsType::Any
   }
+  // For a generator, a `return x` statement yields the iterator's
+  // `TReturn` slot, not the declared iterator type itself: checking the
+  // returned value against `Generator<T, TReturn, ...>` / `IterableIterator<T>`
+  // / a named `Iterator`-extending interface is a false positive. Extract
+  // the `TReturn` arm where the ambient shape exposes it (`Generator` /
+  // `AsyncGenerator` / `Iterator` / `AsyncIterator` second type arg) and
+  // otherwise fall back to `Any` so the return-value check is skipped --
+  // the iterator type is never itself a valid target for the value.
+  let effective_return : @ast.TsType = if func.is_generator {
+    match func.return_type {
+      Applied("Generator", args)
+      | Applied("AsyncGenerator", args)
+      | Applied("Iterator", args)
+      | Applied("AsyncIterator", args) if args.length() >= 2 => args[1]
+      _ => @ast.TsType::Any
+    }
+  } else {
+    body_return
+  }
   let ctx : CheckCtx = {
     path_prefix: "function " + func.name,
-    return_type: body_return,
+    return_type: effective_return,
     yield_type,
     resolver,
     issues,
