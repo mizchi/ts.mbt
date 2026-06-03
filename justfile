@@ -61,6 +61,7 @@ verify-mbti-dts:
         "module": "esnext",
         "moduleResolution": "bundler",
         "baseUrl": ".",
+        "ignoreDeprecations": "6.0",
         "lib": ["es2020"]
       },
       "files": [

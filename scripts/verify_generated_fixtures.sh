@@ -89,6 +89,7 @@ EOF
     "module": "esnext",
     "moduleResolution": "bundler",
     "baseUrl": ".",
+    "ignoreDeprecations": "6.0",
     "lib": ["es2020"]
   },
   "include": ["**/*.d.ts"]

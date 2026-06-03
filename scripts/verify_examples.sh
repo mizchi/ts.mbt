@@ -35,6 +35,7 @@ verify_moonbit_to_typescript_example() {
     "module": "esnext",
     "moduleResolution": "bundler",
     "baseUrl": ".",
+    "ignoreDeprecations": "6.0",
     "lib": ["es2020"]
   },
   "files": [

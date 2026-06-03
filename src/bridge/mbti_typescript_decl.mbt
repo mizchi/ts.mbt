@@ -2354,6 +2354,83 @@ fn lookup_import_ts_alias(
 }
 
 ///|
+fn lookup_import_module_spec(
+  imports : Array[MbtiImportRef],
+  alias_name : String,
+) -> String? {
+  for import_ref in imports {
+    if import_ref.alias_name == alias_name {
+      return Some(import_ref.module_spec)
+    }
+  }
+  None
+}
+
+///|
+fn mbti_ts_map_of(args : Array[String]) -> String {
+  if args.length() == 2 {
+    "Map<\{args[0]}, \{args[1]}>"
+  } else {
+    "Map<unknown, unknown>"
+  }
+}
+
+///|
+fn mbti_ts_set_of(args : Array[String]) -> String {
+  if args.length() == 1 {
+    "Set<\{args[0]}>"
+  } else {
+    "Set<unknown>"
+  }
+}
+
+///|
+fn mbti_ts_array_of(args : Array[String]) -> String {
+  if args.length() == 1 {
+    "Array<\{args[0]}>"
+  } else {
+    "Array<unknown>"
+  }
+}
+
+///|
+/// Map a qualified core-stdlib type (`@bigint.BigInt`, `@set.Set[T]`,
+/// `@hashmap.HashMap[K, V]`, ...) onto its native TypeScript counterpart,
+/// matching on the resolved module spec rather than the (renamable) namespace
+/// alias. These types have no `.d.ts` module to import from, so the default
+/// `import type * as set from "moonbitlang/core/..."` reference does not
+/// resolve; lowering them here keeps the emitted output in line with how the
+/// bare `Set` / `Map` / `Int64` forms already translate. The associative and
+/// sequence containers map to the structurally-equivalent TS `Map` / `Set` /
+/// `Array` shapes (the ordering guarantee of the sorted variants is a runtime
+/// property that has no TypeScript counterpart either way).
+fn mbti_stdlib_native_ts_type(
+  imports : Array[MbtiImportRef],
+  alias_name : String,
+  type_name : String,
+  args : Array[String],
+) -> String? {
+  match (lookup_import_module_spec(imports, alias_name), type_name) {
+    (Some("moonbitlang/core/bigint"), "BigInt") => Some("bigint")
+    (Some("moonbitlang/core/ref"), "Ref") =>
+      if args.length() == 1 {
+        Some("{ val: \{args[0]} }")
+      } else {
+        Some("{ val: unknown }")
+      }
+    (Some("moonbitlang/core/set"), "Set") => Some(mbti_ts_set_of(args))
+    (Some("moonbitlang/core/hashset"), "HashSet") => Some(mbti_ts_set_of(args))
+    (Some("moonbitlang/core/sorted_set"), "SortedSet") =>
+      Some(mbti_ts_set_of(args))
+    (Some("moonbitlang/core/hashmap"), "HashMap") => Some(mbti_ts_map_of(args))
+    (Some("moonbitlang/core/sorted_map"), "SortedMap") =>
+      Some(mbti_ts_map_of(args))
+    (Some("moonbitlang/core/deque"), "Deque") => Some(mbti_ts_array_of(args))
+    _ => None
+  }
+}
+
+///|
 fn collect_used_import_refs(
   imports : Array[MbtiImportRef],
   used_aliases : Array[String],
@@ -2508,12 +2585,24 @@ fn translate_named_type(
       } else {
         "Iterable<unknown>"
       }
+    // `Iter2[K, V]` is a lazy iterator of key/value pairs; the faithful TS
+    // shape is an iterable of `[K, V]` tuples (TypeScript has no `Iter2`).
+    "Iter2" =>
+      if args.length() == 2 {
+        "Iterable<[\{args[0]}, \{args[1]}]>"
+      } else {
+        "Iterable<unknown>"
+      }
     "Ref" =>
       if args.length() == 1 {
         "{ val: \{args[0]} }"
       } else {
         "{ val: unknown }"
       }
+    // `Failure` is MoonBit's builtin error raised by `fail(..)`. It has no TS
+    // declaration, so an unqualified `raise Failure` would reference an
+    // undefined name; map it to the global `Error` like a bare `raise` does.
+    "Failure" => "Error"
     "Self" =>
       match owner_name {
         Some(type_name) =>
@@ -2533,14 +2622,22 @@ fn translate_named_type(
         match name.find(".") {
           Some(dot_idx) => {
             let alias_name = name[1:dot_idx].to_owned()
-            mbti_push_unique_string(used_aliases, alias_name)
-            let ts_alias = lookup_import_ts_alias(imports, alias_name)
             let rest = name[dot_idx + 1:name.length()].to_owned()
-            if args.length() > 0 {
-              let joined_args = args.join(", ")
-              "\{ts_alias}.\{rest}<\{joined_args}>"
-            } else {
-              "\{ts_alias}.\{rest}"
+            match mbti_stdlib_native_ts_type(imports, alias_name, rest, args) {
+              // Known core-stdlib type with a native TS equivalent: emit it
+              // directly and leave the namespace alias unused so no dangling
+              // `import type * as ... from "moonbitlang/core/..."` is produced.
+              Some(native) => native
+              None => {
+                mbti_push_unique_string(used_aliases, alias_name)
+                let ts_alias = lookup_import_ts_alias(imports, alias_name)
+                if args.length() > 0 {
+                  let joined_args = args.join(", ")
+                  "\{ts_alias}.\{rest}<\{joined_args}>"
+                } else {
+                  "\{ts_alias}.\{rest}"
+                }
+              }
             }
           }
           None => name
@@ -2613,6 +2710,12 @@ fn translate_mbti_type(
     let normalized_inner = translate_mbti_type(
       inner, imports, used_aliases, owner_name, owner_type_params,
     )
+    // Nested optionals (`Int??`) collapse to a single `| undefined`. TypeScript
+    // treats `T | undefined | undefined` as `T | undefined`, so drop the
+    // redundant tail rather than emitting it again.
+    if normalized_inner.has_suffix("| undefined") {
+      return normalized_inner
+    }
     if normalized_inner.contains("=>") {
       return "(\{normalized_inner}) | undefined"
     }
