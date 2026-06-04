@@ -2640,7 +2640,14 @@ fn Resolver::lookup_constructor_sig(
           }
           Some((types, sig))
         }
-        None => Some(([], []))
+        // No explicit constructor. With no base class the constructor is the
+        // implicit zero-arg one, so its arity is known exactly. With a base
+        // (named or expression heritage) the constructor is *inherited*, and
+        // we don't resolve the base's parameter list here -- return `None` so
+        // the call site skips arity / argument checks rather than assuming
+        // zero parameters (which would be a false positive on `new Derived(x)`
+        // when the base takes `x`).
+        None => if cls.base_names.length() == 0 { Some(([], [])) } else { None }
       }
     None => None
   }
@@ -3084,6 +3091,16 @@ fn is_permissively_suppressed(sub_path : String, message : String) -> Bool {
     return true
   }
   if message.contains("argument(s), got ") {
+    // Constructor-call arity (`new C(...)`) is reliable in permissive mode:
+    // `lookup_constructor_sig` only yields a signature for a user class whose
+    // parameter list is known exactly (an explicit constructor, or the
+    // implicit zero-arg constructor of a base-less class -- inherited and
+    // unknown constructors return `None` and never reach here). Function-call
+    // arity stays suppressed (overloads / optional / builtin signatures we
+    // don't fully model make it false-positive-prone).
+    if sub_path.contains("new `") {
+      return false
+    }
     return true
   }
   if message.contains("is not callable") {
