@@ -351,6 +351,42 @@ test "expr_check: permissive flags constructor arity for a base-less class" {
 }
 
 ///|
+test "expr_check: permissive flags direct call arity for top-level functions" {
+  // A rest-free top-level function declaration has an exact arity, reliable
+  // even in permissive mode. A rest-bearing function is not flagged.
+  let src =
+    #|function add(a: number, b: number): number { return a + b }
+    #|function variadic(a: number, ...rest: number[]): void {}
+    #|function caller(): void {
+    #|  add(1)
+    #|  variadic()
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies_permissive(module_)
+  let mut saw_add = false
+  for i in issues {
+    if i.path.contains("call `add`") && i.message.contains("argument(s), got 1") {
+      saw_add = true
+    }
+    assert_true(!i.path.contains("call `variadic`"))
+  }
+  assert_true(saw_add)
+}
+
+///|
+test "expr_check: a leading this parameter is not counted as an argument" {
+  // `function f(this: T, a)` takes one real argument; `f(1)` is valid.
+  let src =
+    #|function f(this: { x: number }, a: number): void {}
+    #|function caller(): void { f(1) }
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  for i in issues {
+    assert_true(!i.message.contains("argument(s)"))
+  }
+}
+
+///|
 test "expr_check: flags duplicate enum member and interface field (TS2300)" {
   let src =
     #|enum E { A, B, A }
