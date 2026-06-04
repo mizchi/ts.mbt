@@ -325,6 +325,32 @@ fn parse_module_or_empty(src : String) -> @ast.TsModule {
 }
 
 ///|
+test "expr_check: permissive flags constructor arity for a base-less class" {
+  // `new C(arg)` where C has no base and no (or a known) constructor is a
+  // reliable arity error even in permissive mode. A derived class whose
+  // constructor is inherited must NOT be flagged (the base may take args).
+  let src =
+    #|class C { x = 1 }
+    #|class B { constructor(a: number) {} }
+    #|class D extends B {}
+    #|function f(): void {
+    #|  let c = new C(null)
+    #|  let d = new D(5)
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies_permissive(module_)
+  let mut saw_c = false
+  for i in issues {
+    if i.path.contains("new `C`") && i.message.contains("argument(s), got 1") {
+      saw_c = true
+    }
+    // The inherited-constructor call must never be flagged.
+    assert_true(!i.path.contains("new `D`"))
+  }
+  assert_true(saw_c)
+}
+
+///|
 test "expr_check: flags duplicate enum member and interface field (TS2300)" {
   let src =
     #|enum E { A, B, A }
