@@ -485,14 +485,23 @@ fn Resolver::ingest_module(
     r.globals[prefix + v.name] = v.type_
   }
   for imp in module_.imports {
+    // Drop a leading `this` parameter (`declare function f(this: T, a)`): it
+    // declares the callee's `this` type, not an argument position.
+    let this_start = if imp.params.length() > 0 && imp.params[0].0 == "this" {
+      1
+    } else {
+      0
+    }
     let param_types : Array[@ast.TsType] = []
-    for p in imp.params {
+    let mut pi = this_start
+    while pi < imp.params.length() {
       // `declare function`'s params come from `(name, type)` pairs without
       // a rest flag, so each entry is taken as-is. A surface-level rest
       // declaration like `(...args: T[])` shows up as `Array(T)` here
       // already; the rest pattern path in `match_infer_pattern` handles
       // single-Array-param shapes without needing an explicit Rest.
-      param_types.push(p.1)
+      param_types.push(imp.params[pi].1)
+      pi = pi + 1
     }
     let new_sig = @ast.TsType::Func(param_types, imp.return_type)
     // When multiple `declare function f(...)` overloads share the same name,
@@ -520,12 +529,14 @@ fn Resolver::ingest_module(
     // signature path used by `apply_type_predicate_narrowing` can map
     // the predicate's parameter name to an argument index.
     let synth_params : Array[@ast.TsParam] = []
-    for idx, p in imp.params {
+    let mut si = this_start
+    while si < imp.params.length() {
+      let p = imp.params[si]
       // Preserve the rest-parameter flag (`...args: T[]`) so the call
       // checker compares each variadic argument against the element type
       // rather than the whole array. `param_is_rest` is positionally
-      // aligned with `params`; an empty array means "no rest params".
-      let is_rest = idx < imp.param_is_rest.length() && imp.param_is_rest[idx]
+      // aligned with the original `params`, so index with `si`.
+      let is_rest = si < imp.param_is_rest.length() && imp.param_is_rest[si]
       synth_params.push({
         name: p.0,
         binding: None,
@@ -533,12 +544,24 @@ fn Resolver::ingest_module(
         type_: p.1,
         default: None,
       })
+      si = si + 1
     }
     r.signatures[prefix + imp.name] = synth_params
   }
   for f in module_.funcs {
+    // A leading `this` parameter (`function f(this: T, a)`) declares the
+    // callee's `this` type, not an argument position, so drop it from the
+    // arity / signature model -- otherwise argument-count and per-argument
+    // checks are off by one.
+    let effective_params : Array[@ast.TsParam] = []
+    for idx, p in f.params {
+      if idx == 0 && p.name == "this" {
+        continue
+      }
+      effective_params.push(p)
+    }
     let param_types : Array[@ast.TsType] = []
-    for p in f.params {
+    for p in effective_params {
       // Preserve rest-parameter information so `Parameters<F>` sees the
       // variadic tail. `function f(a: string, ...rest: number[])` -> the
       // last param type becomes `Rest(Array(Number))` so the resulting
@@ -567,7 +590,7 @@ fn Resolver::ingest_module(
       }
       _ => r.globals[func_key] = new_func_sig
     }
-    r.signatures[prefix + f.name] = f.params
+    r.signatures[prefix + f.name] = effective_params
     r.func_type_params[prefix + f.name] = f.type_params
     r.func_const_type_params[prefix + f.name] = f.const_type_params
   }
@@ -2970,6 +2993,25 @@ fn record(ctx : CheckCtx, sub_path : String, message : String) -> Unit {
 }
 
 ///|
+/// Like `record`, but bypasses the permissive-mode suppression filter. Used
+/// for diagnostics the caller has already established are reliable in
+/// permissive mode (e.g. constructor / direct-function-call arity).
+fn record_unfiltered(
+  ctx : CheckCtx,
+  sub_path : String,
+  message : String,
+) -> Unit {
+  let path = if sub_path == "" {
+    ctx.path_prefix
+  } else if ctx.path_prefix == "" {
+    sub_path
+  } else {
+    ctx.path_prefix + " > " + sub_path
+  }
+  ctx.issues.push({ path, message })
+}
+
+///|
 /// Resolve the class name targeted by `new <callee>(...)` when the
 /// callee is a bare identifier or a dotted member path. Returns `None`
 /// for any other callee shape (call results, parenthesised expressions,
@@ -3091,16 +3133,11 @@ fn is_permissively_suppressed(sub_path : String, message : String) -> Bool {
     return true
   }
   if message.contains("argument(s), got ") {
-    // Constructor-call arity (`new C(...)`) is reliable in permissive mode:
-    // `lookup_constructor_sig` only yields a signature for a user class whose
-    // parameter list is known exactly (an explicit constructor, or the
-    // implicit zero-arg constructor of a base-less class -- inherited and
-    // unknown constructors return `None` and never reach here). Function-call
-    // arity stays suppressed (overloads / optional / builtin signatures we
-    // don't fully model make it false-positive-prone).
-    if sub_path.contains("new `") {
-      return false
-    }
+    // Arity diagnostics are suppressed by default in permissive mode
+    // (overloads / optional / builtin signatures we don't fully model make
+    // them false-positive-prone). The reliable cases -- constructor calls
+    // and direct calls to rest-free top-level function declarations -- are
+    // emitted via `record_unfiltered`, so they never reach this filter.
     return true
   }
   if message.contains("is not callable") {
@@ -6890,6 +6927,7 @@ fn check_arguments_with_sig(
   args : Array[@ast.TsExpr],
   ctx : CheckCtx,
   call_path : String,
+  arity_reliable? : Bool = false,
 ) -> Unit {
   // Spread arguments make positional matching unreliable — just type-check
   // each argument and skip count enforcement.
@@ -6934,7 +6972,16 @@ fn check_arguments_with_sig(
       } else {
         "\{min_arity}-\{max_arity}"
       }
-      record(ctx, call_path, "expected \{expect_str} argument(s), got \{n}")
+      let msg = "expected \{expect_str} argument(s), got \{n}"
+      // When the caller vouches that the signature is exact (a constructor
+      // with a known parameter list, or a direct call to a rest-free
+      // top-level function declaration), the arity diagnostic is reliable
+      // and bypasses the permissive suppression that otherwise drops it.
+      if arity_reliable {
+        record_unfiltered(ctx, call_path, msg)
+      } else {
+        record(ctx, call_path, msg)
+      }
     }
   }
   // Per-position assignability check. Rest-position args (at and beyond the
@@ -9066,6 +9113,25 @@ fn check_call_args_in_expr(
           } else {
             params
           }
+          // A direct call to a top-level function *declaration* (present in
+          // `signatures`) with no rest parameter has an exact, reliable
+          // arity -- safe to report even in permissive mode. Call-signature
+          // -typed variables, inferred function values, and rest-bearing
+          // signatures are not in `signatures` (or carry a rest) and stay
+          // suppressed. (`this` parameters are stripped during resolver
+          // construction, so they no longer skew the count.)
+          let arity_reliable = match sig {
+            Some(ps) => {
+              let mut ok = true
+              for p in ps {
+                if p.is_rest {
+                  ok = false
+                }
+              }
+              ok
+            }
+            None => false
+          }
           check_arguments_with_sig(
             env,
             substituted_params,
@@ -9073,6 +9139,7 @@ fn check_call_args_in_expr(
             args,
             ctx,
             "call `\{name}`",
+            arity_reliable~,
           )
         }
         other =>
@@ -9174,6 +9241,7 @@ fn check_call_args_in_expr(
             args,
             ctx,
             "new `\{class_name}`",
+            arity_reliable=true,
           )
           for a in args {
             check_call_args_in_expr(env, a, ctx)
