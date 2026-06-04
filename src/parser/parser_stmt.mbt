@@ -1026,6 +1026,14 @@ fn Parser::is_let_identifier_expr_start(self : Parser) -> Bool {
       if next == LBracket {
         return false
       }
+      // `let <identifier>` / `let {` is always a lexical declaration — two
+      // identifiers can't form an expression, so a line terminator between
+      // `let` and the binding name does NOT trigger ASI (`let\nx` declares
+      // `x`). Only treat `let` as a free identifier reference when what
+      // follows cannot begin a binding.
+      if next is Ident(_) || next == LBrace {
+        return false
+      }
       if next == Semicolon || next == RBrace || next == Eof {
         return true
       }
