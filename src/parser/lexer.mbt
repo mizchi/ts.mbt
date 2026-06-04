@@ -727,7 +727,12 @@ fn Lexer::scan_ident(self : Lexer) -> TokenKind {
       (b >= 'A'.to_int() && b <= 'Z'.to_int()) ||
       (b >= '0'.to_int() && b <= '9'.to_int()) ||
       b == '_'.to_int() ||
-      b == '$'.to_int() {
+      b == '$'.to_int() ||
+      // Non-ASCII identifier characters (CJK, accented letters, …). TS uses
+      // the Unicode ID_Continue set; we over-approximate with "any code unit
+      // >= 0x80" so a unicode-named identifier scans as a single token
+      // instead of fragmenting into per-character tokens.
+      b >= 0x80 {
       self.pos += 1
     } else {
       break
@@ -2450,7 +2455,18 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
           self.enqueue_template_tokens(pos)
           return self.next_token()
         }
-        _ => Ident(c.to_string())
+        _ =>
+          // A non-ASCII character starts a unicode identifier (CJK, accented
+          // letters, …): back up and scan the whole run as one identifier
+          // token rather than emitting a single-character `Ident`, which
+          // would fragment `var café = 1` into pieces. ASCII characters that
+          // reach here are genuinely unknown and keep the legacy fallback.
+          if c.to_int() >= 0x80 {
+            self.pos -= 1
+            self.scan_ident()
+          } else {
+            Ident(c.to_string())
+          }
       }
       self.allow_regex = next_allow_regex(self.allow_regex, kind)
       { kind, pos, has_newline_before: has_newline }

@@ -114,19 +114,11 @@ checker-conformance-oracle *ARGS:
 # Soundness gate: build the native binary and fail if the checker reports
 # more conformance false positives than the current budget. The oracle
 # script skips cleanly when the `typescript` submodule isn't populated, so
-# this is safe to run anywhere. Keep the budget in lockstep with the
-# documented standing FP count.
-#
-# The standing budget is 3. All three are pre-existing *parser* limitations
-# surfaced by the TS2304 ("cannot find name") check, not checker-logic
-# bugs: an `import x = Y` alias the parser discards
-# (internalModules/.../importStatements), an ASI-split `let\nx`
-# (VariableDeclaration12_es6), and a unicode identifier the lexer fragments
-# (parserUnicode2). Each is a tracked parser gap to close separately; the
-# gate fences the count so it can't grow.
+# this is safe to run anywhere. The budget is 0: the checker reports no
+# false positives on the conformance corpus.
 verify-checker-soundness:
     moon build --target native
-    bash scripts/checker_conformance_oracle.sh --max-fp 3
+    bash scripts/checker_conformance_oracle.sh --max-fp 0
 
 # Full CI check
 ci: fmt check test verify-mbti-dts verify-scaffolds verify-generated-fixtures verify-examples verify-checker-soundness

@@ -312,11 +312,14 @@ test "parser: let destructuring requires initializer" {
 }
 
 ///|
-test "parser: parse let expr statement with newline" {
+test "parser: let followed by identifier across a newline is a declaration" {
+  // `let <identifier>` is a lexical declaration even with an intervening
+  // line terminator -- two identifiers can't form an expression, so ASI
+  // does not split `let` off as a standalone reference.
   let parser = Parser::from_source("let\nx = 1;")
   let stmt = parser.parse_stmt()
   match stmt {
-    Expr(Var("let")) => ()
+    Let(@ast.TsBinding::Ident("x"), _, IntLit(1)) => ()
     _ => fail("unexpected result: \{stmt}")
   }
 }

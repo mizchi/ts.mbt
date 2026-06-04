@@ -3127,7 +3127,20 @@ fn Parser::parse_module_with_seeded_const_values_internal(
     } else if self.check(Import) &&
       self.peek_at(1).kind != LParen &&
       self.peek_at(1).kind != Dot {
+      // `import a = Ns;` (import-equals alias) declares a value-level binding
+      // `a`. `parse_import_stmt` consumes but discards it, so capture the
+      // alias name first and record it as a value so references resolve
+      // (otherwise it reads as an undefined identifier).
+      let import_equals_alias = match
+        (self.peek_at(1).kind, self.peek_at(2).kind) {
+        (Ident(n), Eq) => Some(n)
+        _ => None
+      }
       self.parse_import_stmt()
+      match import_equals_alias {
+        Some(n) => values.push({ name: n, type_: @ast.TsType::Any })
+        None => ()
+      }
     } else if self.check(Import) {
       // `import(...)` (dynamic import) / `import.meta` in statement position —
       // parse as an expression statement rather than an import declaration.
