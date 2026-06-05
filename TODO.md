@@ -1294,6 +1294,7 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-05 (T31)   500/815 (61 %)        407/414 ( 7 FP)
 2026-06-05 (T32)   532/815 (65 %)        386/414 (28 FP)
 2026-06-05 (T33)   532/815 (65 %)        387/414 (27 FP)
+2026-06-05 (T34)   532/815 (65 %)        389/414 (25 FP)
 
   Policy shift (T30 onward): the goal is TypeScript compatibility, not a
   zero-false-positive score. Recall AND false positives are both tracked as
@@ -1307,6 +1308,21 @@ conformance sources (`.errors.txt` baseline = ground truth):
   Note: the T24 starting point (433/815) is higher than the T23 row
   because the TS2554 constructor/function-arity commits (PRs #84-#86)
   landed after the T23 measurement without refreshing this table.
+
+  T34 -- union/destructuring flow narrowing (two real-machinery fixes).
+
+    - `||` typeguard else-branch: `collect_narrowing` only handled `||`
+      under a negation, so `if (typeof x === "a" || typeof x === "b") {}
+      else { ... }` left `x` unnarrowed in the else. The else holds when
+      both disjuncts are false; narrow by the first's false-side then the
+      second's (composed via a scratch env), yielding the discriminant
+      residue removal. Clears typeGuardOfFormExpr1OrExpr2.
+    - `a && b` result type: was `typeof a | typeof b`; now
+      `(falsy subset of a) | typeof b`. Always-truthy operands (object /
+      class / array / function) have an empty falsy subset, so
+      `(x: Beast) && cond` is `boolean`. Clears typeGuardIntersectionTypes
+      predicate bodies.
+    recall steady 532, FP 27 -> 25. Both net-positive, no recall loss.
 
   T33 -- co-inductive structural assignability for recursive named types.
 
