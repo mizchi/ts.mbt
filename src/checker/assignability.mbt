@@ -690,6 +690,14 @@ fn is_assignable_to_inner(
       if !func_params_assignable(s_params, t_params, bivariant_params) {
         return false
       }
+      // TS's "void-returning function" rule: a function returning any type
+      // is assignable to one whose return type is `void`, because a caller
+      // that expects a void callback ignores the returned value. So
+      // `() => number` is assignable to `() => void` (e.g. an arrow body
+      // passed to `Array.forEach`).
+      if t_ret is Void {
+        return true
+      }
       // Covariant return.
       is_assignable_to_inner(s_ret, t_ret, bivariant_params)
     }

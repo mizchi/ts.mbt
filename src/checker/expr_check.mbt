@@ -6811,7 +6811,15 @@ fn check_arrow_with_context(
   match body {
     ArrowExpr(e) => {
       let want = unwrap_async_return(is_async, formal_ret)
-      check_expr_against(env, e, want, inner_ctx, "\{sub_path} arrow body")
+      // Void-returning callback rule (matches tsc): when the contextual
+      // return type is `void`, the callback's body value is ignored, so any
+      // expression is allowed -- `run(() => 42)` for `run(cb: () => void)`
+      // is not an error. Still walk the body for nested call-argument checks.
+      if want is Void {
+        check_call_args_in_expr(env, e, inner_ctx)
+      } else {
+        check_expr_against(env, e, want, inner_ctx, "\{sub_path} arrow body")
+      }
     }
     ArrowBlock(block) =>
       // Recheck the block with the new env and the formal_ret as the

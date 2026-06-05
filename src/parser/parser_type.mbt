@@ -386,12 +386,21 @@ fn Parser::try_parse_simple_object_type(self : Parser) -> @ast.TsType? {
       None => ()
     }
     while !self.check(Eof) && !self.check(RBrace) {
-      let field_name = match self.advance().kind {
-        Ident(name) => name
-        _ => {
+      // Accept identifiers *and* keyword tokens as property names
+      // (`{ type: T }`, `{ default: U }`, …). `type` is the canonical
+      // discriminated-union discriminant, so rejecting it here dropped the
+      // whole object type and produced spurious "property does not exist"
+      // diagnostics. `parse_property_name_token` handles every keyword the
+      // interface parser does and raises on a genuine non-name token (call
+      // / construct / index signatures, string/number literal names), which
+      // the enclosing `try` turns into a clean fall-through to the fuller
+      // member parser.
+      let field_name = match self.peek().kind {
+        LParen | Lt | New | LBracket | Str(_) | Number(_) | Int(_) => {
           self.pos = saved_pos
           return None
         }
+        _ => self.parse_property_name_token()
       }
       let _ = self.match_(Question)
       let _ = self.expect(Colon)
