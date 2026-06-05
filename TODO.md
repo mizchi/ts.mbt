@@ -1292,6 +1292,7 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-05 (T29)   484/815 (59 %)        414/414 ( 0 FP)
 2026-06-05 (T30)   500/815 (61 %)        406/414 ( 8 FP)
 2026-06-05 (T31)   500/815 (61 %)        407/414 ( 7 FP)
+2026-06-05 (T32)   532/815 (65 %)        386/414 (28 FP)
 
   Policy shift (T30 onward): the goal is TypeScript compatibility, not a
   zero-false-positive score. Recall AND false positives are both tracked as
@@ -1305,6 +1306,23 @@ conformance sources (`.errors.txt` baseline = ground truth):
   Note: the T24 starting point (433/815) is higher than the T23 row
   because the TS2554 constructor/function-arity commits (PRs #84-#86)
   landed after the T23 measurement without refreshing this table.
+
+  T32 -- emit all renderable type mismatches + `keyof any` fix.
+
+    Policy escalation (owner directive: "FP may exceed the gate; we must
+    recognize wrong things as wrong"). Two parts:
+      - `keyof any` is `string | number | symbol`; normalize `Keyof(Any)`
+        in `simplify_keyof` and `is_assignable_to_inner` so primitives flow
+        into a `keyof any` position. A genuine checker bug (we were wrong).
+      - `is_reliable_mismatch_pair` now admits *any renderable* mismatch
+        (unions / generics included), suppressing only `type`-residue pairs
+        (where `type_display` failed, so the checker -- not tsc -- is likely
+        wrong) plus the widening / rest residue carve-outs.
+    Regression gates reframed as catastrophe nets: recall floor 20 % ->
+    45 %, precision cap 5 % -> 20 % (FP tracked, not minimized). The
+    residual ~28 FPs are generic-inference / flow-narrowing / contextual-
+    typing gaps -- the next hard machinery to build.
+    recall 500 -> 532 (65 %), FP 7 -> 28.
 
   T31 -- `this is T` type-guard receiver narrowing.
 

@@ -222,6 +222,10 @@ fn simplify_keyof(t : @ast.TsType) -> @ast.TsType {
             Union(keys)
           }
         }
+        // `keyof any` is `string | number | symbol` (every possible
+        // property key). Resolving it lets primitives flow into a
+        // `keyof any` position without a spurious mismatch.
+        Any => Union([String_, Number, Symbol])
         _ => t
       }
     _ => t

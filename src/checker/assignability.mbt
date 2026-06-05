@@ -454,6 +454,17 @@ fn is_assignable_to_inner(
   // Conditional types pick a branch when `extends` is decidable.
   let source = reduce_conditional(source)
   let target = reduce_conditional(target)
+  // `keyof any` is the union of all property-key types
+  // (`string | number | symbol`); normalize both sides so primitives flow
+  // into a `keyof any` position.
+  let normalize_keyof_any = fn(t : @ast.TsType) -> @ast.TsType {
+    match t {
+      Keyof(Any) => Union([String_, Number, Symbol])
+      _ => t
+    }
+  }
+  let source = normalize_keyof_any(source)
+  let target = normalize_keyof_any(target)
   if source == target {
     return true
   }

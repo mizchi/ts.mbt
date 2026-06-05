@@ -3074,10 +3074,13 @@ fn check_abstract_instantiation(ctx : CheckCtx, class_name : String) -> Unit {
 /// strict mode anyway and contribute recall without inflating FP.
 fn is_permissively_suppressed(sub_path : String, message : String) -> Bool {
   if message.has_prefix("expected `") && message.contains("but got `") {
-    // Restore primitive-vs-primitive (and a few other reliable
-    // shapes) so the strict diagnostic isn't fully lost in
-    // permissive mode -- the common `var x: number = "hello"` style
-    // mistake is a clean signal we can keep.
+    // Compatibility goal: a type mismatch is a real TS error, so emit it
+    // even when the shapes involve unions / generics rather than only the
+    // narrow "reliable" primitive subset (see `is_reliable_mismatch_pair`,
+    // which now admits any renderable pair). We still suppress where *we*
+    // are likely to be wrong, never tsc: a `type` residue token (our
+    // `type_display` couldn't render the shape), widening-direction
+    // residue, and rest-parameter residue.
     match extract_mismatch_types(message) {
       Some((exp, got)) =>
         if is_reliable_mismatch_pair(exp, got) &&
@@ -3246,35 +3249,20 @@ fn is_reliable_mismatch_pair(exp : String, got : String) -> Bool {
     (is_bare_primitive(exp) && is_short_named_identifier(got)) {
     return true
   }
-  // Primitive-vs-shape and shape-vs-primitive: an obvious category
-  // mismatch (`number = [1, "a"]`, `string[] = 5`). TS flags these
-  // and our assignability gets them right. We still suppress when
-  // either side contains `|` (union -> flow narrowing residue) or
-  // `<` (generic application -> inference residue).
-  if exp.contains("|") || got.contains("|") {
-    return false
-  }
-  if exp.contains("<") || got.contains("<") {
-    return false
-  }
   if is_reliable_mismatch_type(exp) && is_simple_shape_type(got) {
     return true
   }
   if is_simple_shape_type(exp) && is_reliable_mismatch_type(got) {
     return true
   }
-  // Simple-shape vs simple-shape: both render as `T[]`, `{...}`, or
-  // `(...) => T`. When neither carries `|`/`<` (filtered above), the
-  // structural mismatch is concrete enough to keep. Excludes cases
-  // where either side carries the bare-`type` token (substitution
-  // residue) since that's our checker's "I don't know" rendering.
-  if is_simple_shape_type(exp) &&
-    is_simple_shape_type(got) &&
-    !has_type_residue_token(exp) &&
-    !has_type_residue_token(got) {
-    return true
-  }
-  false
+  // Compatibility goal: admit every *renderable* mismatch -- a type
+  // mismatch is a real TS error even when the shapes are unions or generic
+  // applications. The only pairs we still treat as unreliable are those
+  // carrying the `type` residue token, which means our `type_display`
+  // couldn't render the shape (mapped type / unresolved generic): we can't
+  // claim a mismatch on a type we can't even print, and that is the family
+  // where the checker is the one likely to be wrong rather than tsc.
+  !has_type_residue_token(exp) && !has_type_residue_token(got)
 }
 
 ///|
