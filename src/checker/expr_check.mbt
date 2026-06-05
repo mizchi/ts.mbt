@@ -7829,9 +7829,26 @@ fn collect_narrowing(
   match cond {
     BinOp(And, l, r) =>
       if then_sense {
-        // Both sub-conditions must hold in the then-branch.
-        collect_narrowing(env, resolver, l, then_binds, else_binds, true)
-        collect_narrowing(env, resolver, r, then_binds, else_binds, true)
+        // `if (l && r) { /* l true AND r true */ }`. Both hold in the
+        // then-branch, composed: narrow by l-true *then* r-true so the
+        // second condition sees the first's narrowing (mirrors the `||`
+        // else-branch). This is the `typeof x !== "a" && typeof x !== "b"`
+        // residue -- the then-branch removes both "a" and "b" from x. The
+        // else-branch of `&&` is a union (`!l | (l & !r)`) we can't narrow
+        // cleanly, so leave else_binds untouched.
+        let lo = analyze_narrowing(env, resolver, l)
+        for b in lo.then_binds {
+          then_binds.push(b)
+        }
+        let snap = env.full_snapshot()
+        for b in lo.then_binds {
+          env.bind(b.0, b.1)
+        }
+        let ro = analyze_narrowing(env, resolver, r)
+        env.restore_from(snap)
+        for b in ro.then_binds {
+          then_binds.push(b)
+        }
       }
     BinOp(Or, l, r) =>
       if !then_sense {
