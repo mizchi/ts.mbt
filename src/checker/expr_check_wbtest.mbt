@@ -6699,6 +6699,44 @@ test "expr_check: mixed scalar|object index value stays silent on objects (TS241
 }
 
 ///|
+test "expr_check: duplicate string/number index signatures are flagged (TS2374)" {
+  // Two string index signatures (and, separately, two numeric ones) on a
+  // single object type are always an error. One string + one numeric is
+  // legal and must stay silent.
+  let src =
+    #|interface Dup {
+    #|  [x: string]: string;
+    #|  [y: string]: string;
+    #|}
+    #|class DupNum {
+    #|  [x: number]: string;
+    #|  [y: number]: string;
+    #|}
+    #|interface Ok {
+    #|  [x: string]: string;
+    #|  [y: number]: string;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let dup = issues.filter(fn(i) {
+    i.message.contains("duplicate index signature")
+  })
+  let lines = dup.map(fn(i) { "\{i.path}: \{i.message}" })
+  assert_true(
+    lines
+    .iter()
+    .any(fn(m) { m.contains("interface Dup") && m.contains("`string`") }),
+  )
+  assert_true(
+    lines
+    .iter()
+    .any(fn(m) { m.contains("class DupNum") && m.contains("`number`") }),
+  )
+  // The mixed string+number interface is legal -- never flagged.
+  assert_true(!lines.iter().any(fn(m) { m.contains("interface Ok") }))
+}
+
+///|
 test "expr_check: deprecated @target es5 directive is flagged (TS5107)" {
   let src =
     #|// @target: esnext, es2015, es5

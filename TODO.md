@@ -1300,6 +1300,16 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-05 (T37)   533/815 (65 %)        394/414 (20 FP)
 2026-06-05 (T38)   535/815 (66 %)        394/414 (20 FP)
 2026-06-05 (T39)   536/815 (66 %)        394/414 (20 FP)
+2026-06-05 (T40)   538/815 (66 %)        394/414 (20 FP)
+
+  T40 -- duplicate index signatures (TS2374).
+
+    A single object type (interface or class body) may declare at most one
+    string index signature and at most one numeric index signature; two of
+    the same key kind is always an error. Counted from declaration shape
+    alone -- no resolution, generic decls included (the rule is independent
+    of type arguments) -- so it is false-positive-free. recall 536 -> 538,
+    FP steady 20 (clears multiple{String,Numeric}Indexers).
 
   T39 -- TS2411 over scalar-union index values + generic interfaces.
 

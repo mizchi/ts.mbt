@@ -10477,6 +10477,50 @@ fn check_structural_duplicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
 }
 
 ///|
+/// TS2374 ("Duplicate index signature for type 'string' / 'number'"): a
+/// single object type (interface or class body) may declare at most one
+/// string index signature and at most one numeric index signature. Two of
+/// the same key kind is always an error in TypeScript, so this is decided
+/// from declaration shape alone -- no resolution -- and carries no
+/// false-positive risk. Generic interfaces / classes are included since the
+/// rule is independent of any type argument.
+fn check_duplicate_index_signatures(
+  module_ : @ast.TsModule,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  fn scan(label : String, sigs : Array[(@ast.TsType, @ast.TsType)]) -> Unit {
+    let mut string_keys = 0
+    let mut number_keys = 0
+    for sig in sigs {
+      match sig.0 {
+        String_ => string_keys += 1
+        Number | Int => number_keys += 1
+        _ => ()
+      }
+    }
+    if string_keys >= 2 {
+      issues.push({
+        path: label,
+        message: "duplicate index signature for type `string`",
+      })
+    }
+    if number_keys >= 2 {
+      issues.push({
+        path: label,
+        message: "duplicate index signature for type `number`",
+      })
+    }
+  }
+  for iface in module_.interfaces {
+    scan("interface \{iface.name}", iface.index_signatures)
+  }
+  for c in module_.classes {
+    scan("class \{c.name}", c.index_signatures)
+  }
+  issues
+}
+
+///|
 /// Names that appear more than once in a member list where at least one
 /// occurrence is a non-method (property) field. All-method repeats are legal
 /// overloads, and signature sentinels (`<call>` / `<new>` / …) are skipped.
@@ -10783,6 +10827,9 @@ fn check_module_function_bodies_layered(
     all.push(issue)
   }
   for issue in check_structural_duplicates(module_) {
+    all.push(issue)
+  }
+  for issue in check_duplicate_index_signatures(module_) {
     all.push(issue)
   }
   // Walk class field initialisation. Namespaced classes need to
