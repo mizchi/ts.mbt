@@ -669,6 +669,13 @@ pub(all) struct TsClassDecl {
   // is a rest parameter (`constructor(...args: T[])`). Empty array means
   // "no rest params", so producers that don't populate it stay correct.
   constructor_param_is_rest : Array[Bool]
+  // Positionally aligned with `constructor_params`: the default-value
+  // initializer for each parameter (`constructor(x: string = 1)`), or
+  // `None` when the parameter has no default. Empty / short arrays mean
+  // "no defaults". The checker validates each default against its
+  // parameter's declared type (TS2322) the same way it does for free
+  // functions and methods.
+  constructor_param_defaults : Array[TsExpr?]
   properties : Array[TsClassPropertyDecl]
   methods : Array[TsClassMethodDecl]
   is_abstract : Bool

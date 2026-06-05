@@ -6770,3 +6770,26 @@ test "expr_check: angle-bracket cast widens operand type, no false TS2367" {
   let af = issues.filter(fn(i) { i.message.contains("always be false") })
   @test.assert_eq(af.length(), 0)
 }
+
+///|
+test "expr_check: parameter default must match annotation (TS2322)" {
+  // Default initializers are validated against the parameter's declared
+  // type for free functions (even with an empty body), methods, and
+  // constructors. A matching default must never be flagged.
+  let src =
+    #|function f(x: string = 1): void {}
+    #|class C {
+    #|  m(y: number = "no"): void {}
+    #|  constructor(z: boolean = 3) {}
+    #|}
+    #|function ok(a: string = "yes"): void {}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let defs = issues.filter(fn(i) { i.path.contains("default") })
+  let names = defs.map(fn(i) { i.path })
+  assert_true(names.iter().any(fn(p) { p.contains("`x`") }))
+  assert_true(names.iter().any(fn(p) { p.contains("`y`") }))
+  assert_true(names.iter().any(fn(p) { p.contains("`z`") }))
+  // The valid default `a: string = "yes"` must not be flagged.
+  assert_true(!names.iter().any(fn(p) { p.contains("`a`") }))
+}
