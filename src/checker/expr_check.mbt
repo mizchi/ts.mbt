@@ -3115,7 +3115,7 @@ fn is_permissively_suppressed(sub_path : String, message : String) -> Bool {
     if message.has_suffix("| undefined`") || message.has_suffix("| null`") {
       return false
     }
-    return true
+    return false
   }
   if message.has_prefix("method `") && message.contains("does not exist on") {
     // Same carve-out as the property branch: bare-primitive receiver
@@ -3130,7 +3130,7 @@ fn is_permissively_suppressed(sub_path : String, message : String) -> Bool {
     if message.has_suffix("| undefined`") || message.has_suffix("| null`") {
       return false
     }
-    return true
+    return false
   }
   if message.contains("argument(s), got ") {
     // Arity diagnostics are suppressed by default in permissive mode
