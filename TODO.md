@@ -1286,10 +1286,24 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-02 (T23)   348/815 (43 %)        414/414 ( 0 FP)
 2026-06-05 (T24)   435/815 (53 %)        414/414 ( 0 FP)
 2026-06-05 (T25)   473/815 (58 %)        414/414 ( 0 FP)
+2026-06-05 (T26)   476/815 (58 %)        414/414 ( 0 FP)
 
   Note: the T24 starting point (433/815) is higher than the T23 row
   because the TS2554 constructor/function-arity commits (PRs #84-#86)
   landed after the T23 measurement without refreshing this table.
+
+  T26 -- surface module-level cycle / arity validation in the body pass.
+
+    The accuracy walk only runs `check_module_function_bodies`, so the
+    `check_module` structural validation never counted toward recall. A
+    strict FP-safe whitelist (`CircularTypeAlias`, `InterfaceExtendsCycle`,
+    `TypeAliasArityMismatch`) is now wired into the top-level body pass.
+    The remaining kinds were measured and rejected: admitting
+    `InterfaceFieldDuplicate` / `TypeParameterConstraintViolation` etc.
+    cost 12 precision FPs for +7 recall (the structural duplicate pass
+    mis-reads call / construct / method overloads as duplicate fields, and
+    the constraint check false-flags `infer` / forwarded bounds). +3
+    recall (473 -> 476), 0 FP.
 
   T25 -- deprecated `@target` directives (TS5107).
 
