@@ -1290,10 +1290,37 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-05 (T27)   480/815 (59 %)        414/414 ( 0 FP)
 2026-06-05 (T28)   483/815 (59 %)        414/414 ( 0 FP)
 2026-06-05 (T29)   484/815 (59 %)        414/414 ( 0 FP)
+2026-06-05 (T30)   500/815 (61 %)        406/414 ( 8 FP)
+
+  Policy shift (T30 onward): the goal is TypeScript compatibility, not a
+  zero-false-positive score. Recall AND false positives are both tracked as
+  KPIs; a small, bounded FP rate (cap 5 %) is accepted when emitting a core
+  TS diagnostic family moves us closer to tsc. The strict-mode view (emit
+  everything the checker detects) is the fidelity yardstick: as of T30 it is
+  recall 563/815, precision 350/414 (64 FP). The remaining gap to tsc is
+  flow-narrowing depth, generic inference, union/overload signature
+  resolution, and contextual typing -- the hard machinery to build next.
 
   Note: the T24 starting point (433/815) is higher than the T23 row
   because the TS2554 constructor/function-arity commits (PRs #84-#86)
   landed after the T23 measurement without refreshing this table.
+
+  T30 -- compatibility shift: emit TS2339 + discriminated-union / void fixes.
+
+    Reframed the goal from zero-FP to tsc compatibility. Two correctness
+    fixes plus a policy change:
+      - Parser: object-type-literal property names now accept keyword
+        tokens via `parse_property_name_token`. A property named `type`
+        (the canonical discriminated-union discriminant) previously dropped
+        the whole object type, producing spurious "property does not exist"
+        diagnostics on every field.
+      - Checker: the void-returning-function rule (`() => number` assignable
+        to `() => void`, and callback bodies against a contextual `void`
+        return) now matches tsc.
+      - Policy: the property / method `does not exist` family (TS2339) is
+        emitted in the permissive conformance walk instead of being
+        suppressed. +16 recall for 8 residual flow-narrowing-gap FPs.
+    recall 484 -> 500, precision 414 -> 406 (8 FP).
 
   T29 -- validate parameter default initializers everywhere (TS2322).
 
