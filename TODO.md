@@ -1289,10 +1289,27 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-05 (T26)   476/815 (58 %)        414/414 ( 0 FP)
 2026-06-05 (T27)   480/815 (59 %)        414/414 ( 0 FP)
 2026-06-05 (T28)   483/815 (59 %)        414/414 ( 0 FP)
+2026-06-05 (T29)   484/815 (59 %)        414/414 ( 0 FP)
 
   Note: the T24 starting point (433/815) is higher than the T23 row
   because the TS2554 constructor/function-arity commits (PRs #84-#86)
   landed after the T23 measurement without refreshing this table.
+
+  T29 -- validate parameter default initializers everywhere (TS2322).
+
+    First step into the TS2322/2339/2345 frontier. A thorough analysis
+    showed filter-widening has no FP-safe win there (every recoverable
+    shape -- `void`-returning-callback leniency, identical-render construct
+    signatures, tuple-vs-array, literal-widening unions -- shares structure
+    with genuine strict false positives driven by flow-narrowing / generic
+    inference, which the project deliberately doesn't model). The one
+    clean, sound detection gap was parameter-default-vs-annotation: the
+    check previously ran only for free functions with a non-empty body.
+    Extended to bodiless functions, methods (bodiless + bodied), and
+    constructors (new `TsClassDecl.constructor_param_defaults`). +1 recall
+    (483 -> 484), 0 FP. The free-function / method coverage is recall-
+    neutral on the walked corpus but is a genuine correctness gain for
+    real `.ts` inputs.
 
   T28 -- distinct-literal loose equality + `<T>` cast type preservation.
 
