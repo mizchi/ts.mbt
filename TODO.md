@@ -1298,6 +1298,16 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-05 (T35)   532/815 (65 %)        393/414 (21 FP)
 2026-06-05 (T36)   532/815 (65 %)        394/414 (20 FP)
 2026-06-05 (T37)   533/815 (65 %)        394/414 (20 FP)
+2026-06-05 (T38)   535/815 (66 %)        394/414 (20 FP)
+
+  T38 -- incompatible index signatures in interface-extends (TS2430).
+
+    A derived index signature's value must be assignable to the base's
+    same-keyed index value: `interface B extends A { [x: string]: Base }`
+    over `interface A { [x: string]: Derived }` is incompatible (Base lacks
+    Derived's members). Decided structurally, gated to plain named-decl
+    values (generic `A<T>` index cases stay unflagged). recall 533 -> 535,
+    FP steady 20 (clears subtypingWith{String,Numeric}Indexer2).
 
   T37 -- structural detection of incompatible interface-extends (TS2430).
 
