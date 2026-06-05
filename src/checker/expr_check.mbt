@@ -5719,10 +5719,15 @@ fn struct_assignable_named_rec(
           return false
         }
       }
-      None => {
-        let _ = visited.pop()
-        return false
-      }
+      None =>
+        // A field missing on the source is only a failure when the target
+        // field is *required*. An optional target field (`bar?: T`, encoded
+        // as a `| undefined` type) may be absent on the source -- TS allows
+        // `s2 = t2` when `t2` simply omits `s2`'s optional members.
+        if !type_accepts_undefined(want) {
+          let _ = visited.pop()
+          return false
+        }
     }
   }
   let _ = visited.pop()
