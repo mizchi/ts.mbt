@@ -2489,9 +2489,12 @@ fn Parser::parse_angle_bracket_type_assertion_from_source(
   }
   let type_src = self.src[type_start:type_end].to_owned()
   let type_parser = Parser::from_source_with_jsx(type_src, false)
-  let _ = type_parser.parse_type()
+  let ty = type_parser.parse_type()
   self.advance_to_source_pos(end_pos)
-  self.parse_unary()
+  // Preserve the asserted type as an `As` node (same shape as `expr as T`)
+  // so downstream inference widens to the asserted type rather than the
+  // inner expression's narrower type (e.g. `<any>"x"` is `any`, not `"x"`).
+  @ast.TsExpr::As(self.parse_unary(), ty)
 }
 
 ///|
@@ -2499,7 +2502,7 @@ fn Parser::parse_angle_bracket_type_assertion_with_tokens(
   self : Parser,
 ) -> @ast.TsExpr raise ParseError {
   let _ = self.expect(Lt)
-  let _ = self.parse_type()
+  let ty = self.parse_type()
   if !self.match_(Gt) {
     let prev_kind = if self.pos > 0 {
       self.tokens[self.pos - 1].kind
@@ -2511,7 +2514,10 @@ fn Parser::parse_angle_bracket_type_assertion_with_tokens(
       _ => raise ParseError("Expected Gt, got \{self.peek().kind}")
     }
   }
-  self.parse_unary()
+  // Preserve the asserted type as an `As` node (same shape as `expr as T`)
+  // so downstream inference widens to the asserted type rather than the
+  // inner expression's narrower type (e.g. `<any>"x"` is `any`, not `"x"`).
+  @ast.TsExpr::As(self.parse_unary(), ty)
 }
 
 ///|

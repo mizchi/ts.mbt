@@ -6705,3 +6705,68 @@ test "expr_check: interface method overloads are not flagged as duplicates" {
   })
   @test.assert_eq(dup.length(), 0)
 }
+
+///|
+test "expr_check: class that extends itself is flagged (TS2506)" {
+  let src =
+    #|class C extends C {}
+    #|class D<T> extends D<T> {}
+    #|class Ok extends Object {}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let self_ext = issues.filter(fn(i) {
+    i.message.contains("its own base expression")
+  })
+  let names = self_ext.map(fn(i) { i.path })
+  assert_true(names.iter().any(fn(p) { p.contains("class C") }))
+  assert_true(names.iter().any(fn(p) { p.contains("class D") }))
+  // A class extending a different base must never be flagged.
+  assert_true(!names.iter().any(fn(p) { p.contains("class Ok") }))
+}
+
+///|
+test "expr_check: deprecated @outFile directive is flagged (TS5101)" {
+  let src =
+    #|// @outFile: out.js
+    #|var x: number = 1;
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let dep = issues.filter(fn(i) {
+    i.message.contains("deprecated") && i.message.contains("outFile")
+  })
+  assert_true(dep.length() >= 1)
+}
+
+///|
+test "expr_check: distinct string-literal loose equality is flagged (TS2367)" {
+  // `"foo" == "bar"` has no overlap -> always false. The loose-equality
+  // branch now flags bare literal-vs-literal pairs (matching strict ===),
+  // because the `<any>` / `as` widening that used to require a blanket
+  // skip is now preserved through inference.
+  let src =
+    #|function f(): void {
+    #|  let b = "foo" == "bar";
+    #|  b;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let af = issues.filter(fn(i) { i.message.contains("always be false") })
+  assert_true(af.length() >= 1)
+}
+
+///|
+test "expr_check: angle-bracket cast widens operand type, no false TS2367" {
+  // `<any>"bar"` must infer as `any` (not the literal `"bar"`), so the
+  // comparison overlaps and is not flagged. Guards the parser fix that
+  // wraps `<T>expr` in an `As` node.
+  let src =
+    #|function f(): void {
+    #|  let b = "foo" == (<any>"bar");
+    #|  let c = "foo" == ("bar" as string);
+    #|  b; c;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let af = issues.filter(fn(i) { i.message.contains("always be false") })
+  @test.assert_eq(af.length(), 0)
+}
