@@ -10559,6 +10559,42 @@ fn check_module_function_bodies_layered(
     ) {
     all.push(issue)
   }
+  // TS5107: deprecated compiler-option directives (`// @target: es5`, …).
+  // These live only in the top-level module header, so emit once per file.
+  if outer_modules.length() == 0 {
+    for opt in module_.deprecated_compiler_options {
+      all.push({
+        path: "compiler options",
+        message: "option `\{opt}` is deprecated",
+      })
+    }
+    // Module-level structural validation that doesn't depend on function
+    // bodies. Only the kinds that are sound *and* not already covered by
+    // the body pass *and* false-positive-free are admitted:
+    //   - `CircularTypeAlias` / `InterfaceExtendsCycle`: self-referential
+    //     declarations TS always rejects.
+    //   - `TypeAliasArityMismatch`: wrong type-argument count against a
+    //     locally-declared alias.
+    // Excluded: `UnresolvedReference` (lib / cross-file refs we don't
+    // resolve), `DuplicateDeclaration` (legal declaration merging),
+    // `InterfaceFieldDuplicate` / `EnumMemberDuplicate` (the body pass
+    // already flags real dups while tolerating call / construct / method
+    // overloads, which the structural pass mis-reads as duplicate
+    // `<call>` / `<new>` / method fields), `ClassPropertyDuplicate` (the
+    // parser merges duplicate fields, so it never fires), and
+    // `TypeParameterConstraintViolation` (false-flags `infer` / forwarded
+    // type-parameter bounds).
+    for issue in check_module(module_).issues {
+      let keep = match issue.kind {
+        CircularTypeAlias | InterfaceExtendsCycle | TypeAliasArityMismatch =>
+          true
+        _ => false
+      }
+      if keep {
+        all.push({ path: issue.name, message: issue.detail })
+      }
+    }
+  }
   // Recurse into namespace bodies. Each level threads its own ancestor
   // chain so a nested namespace can reference parent-scope types by their
   // bare name (TypeScript scoping). Synthetic `<global>` blocks
@@ -10990,22 +11026,86 @@ fn check_interface_extends_compat(
       }
     }
   }
-  // TS2411 ("Property 'X' of type 'T' is not assignable to 'string' index
-  // type 'V'"): when a declaration carries an object-typed index
-  // signature, a scalar-typed named property can never satisfy it. Same
-  // reliable scalar-vs-object shape as the extends check above -- we stay
-  // silent on Named-vs-Named (subtype-dependent) to avoid false positives.
+  // TS2411 ("Property 'X' of type 'T' is not assignable to '<key>' index
+  // type 'V'"): an index signature `[k: K]: V` constrains the named
+  // members of its containing type -- every constrained property's type
+  // must be assignable to the index value type `V`. A numeric index
+  // signature (`[k: number]: V`) only constrains numeric-named properties;
+  // a string index signature (`[k: string]: V`) constrains every named
+  // property (a numeric name is also a string name).
+  //
+  // We only emit when the violation is structurally certain so the
+  // declaration-level check never false-flags subtype-dependent pairs:
+  //   - both sides are concrete scalars and the property scalar is not
+  //     assignable to the index scalar (`number` vs `string` index, etc.);
+  //   - the index value is a scalar but the property is object-shaped /
+  //     function / array / tuple (never assignable to a primitive);
+  //   - the index value is object-shaped but the property is a scalar
+  //     (a primitive can never satisfy an object index type).
+  // `any` / `unknown` / unresolved `Named` / generic-dependent property
+  // types fall through to "no diagnostic".
+  //
+  // A property name is treated as numeric only when it is a canonical
+  // non-negative integer literal (`"0"`, `"42"`); this is a deliberate
+  // subset of TS's numeric-literal-name rule, chosen so every name we
+  // count as numeric really is one (no false positives), accepting a
+  // conservative miss on fractional numeric names.
+  fn is_numeric_name(name : String) -> Bool {
+    let chars = name.to_array()
+    if chars.length() == 0 {
+      return false
+    }
+    if chars.length() > 1 && chars[0] == '0' {
+      return false
+    }
+    for c in chars {
+      if c < '0' || c > '9' {
+        return false
+      }
+    }
+    true
+  }
+  fn violates_index_value(prop : @ast.TsType, value : @ast.TsType) -> Bool {
+    let t = strip_optional(prop)
+    // Index value is object-shaped: a scalar property can never satisfy it.
+    if is_object_shaped(value) {
+      return is_scalar(t)
+    }
+    // Index value is a primitive scalar: the property must be assignable
+    // to it. Only decide for concrete property shapes.
+    if is_scalar(value) {
+      if is_scalar(t) {
+        return !is_assignable_to(t, value)
+      }
+      if is_object_shaped(t) {
+        return true
+      }
+      return match t {
+        Func(_, _) | Constructor(_, _, _) | Array(_) | Tuple(_) => true
+        _ => false
+      }
+    }
+    false
+  }
   fn check_index_props(
     index_sigs : Array[(@ast.TsType, @ast.TsType)],
     fields : Array[(String, @ast.TsType)],
     owner : String,
   ) -> Unit {
     for sig in index_sigs {
-      if !is_object_shaped(sig.1) {
-        continue
+      let numeric_only = match sig.0 {
+        Number | Int => true
+        String_ => false
+        // Symbol / template-literal / other index keys aren't constrained
+        // here (and the `Any` placeholder from an unparsed signature must
+        // never constrain anything).
+        _ => continue
       }
       for f in fields {
-        if is_scalar(f.1) {
+        if numeric_only && !is_numeric_name(f.0) {
+          continue
+        }
+        if violates_index_value(f.1, sig.1) {
           issues.push({
             path: owner,
             message: "property `\{f.0}` of type `\{type_display(f.1)}` is not assignable to index type `\{type_display(sig.1)}`",
@@ -11026,9 +11126,13 @@ fn check_interface_extends_compat(
   }
   for c in module_.classes {
     if c.type_params.length() == 0 {
+      // Getters / setters are upserted into `properties` by the parser
+      // with an imprecise (often `Any`) type, so exclude accessor-named
+      // members to keep the constraint check on real data fields.
+      let accessors = class_instance_accessor_names(c)
       let fields : Array[(String, @ast.TsType)] = []
       for p in c.properties {
-        if !p.is_static {
+        if !p.is_static && !accessors.contains(p.name) {
           fields.push((p.name, p.type_))
         }
       }

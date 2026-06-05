@@ -317,6 +317,7 @@ fn parse_module_or_empty(src : String) -> @ast.TsModule {
         module_augmentations: [],
         strict_property_initialization: true,
         use_define_for_class_fields: false,
+        deprecated_compiler_options: [],
         top_level_stmts: [],
       }
   } noraise {
@@ -6541,4 +6542,166 @@ test "expr_check: a tag typed any yields any from a tagged template" {
   let issues = check_module_function_bodies(module_)
   let prop = issues.filter(fn(i) { i.message.contains("does not exist") })
   @test.assert_eq(prop.length(), 0)
+}
+
+///|
+test "expr_check: string index signature constrains class properties (TS2411)" {
+  // `[x: string]: number` requires every named property to be assignable
+  // to `number`. The parser must capture the class index value type (it
+  // historically stored an `Any`/`Any` placeholder, which silenced this).
+  let src =
+    #|class C {
+    #|  [s: string]: number;
+    #|  x: number; // ok
+    #|  y: string; // error
+    #|  z: boolean; // error
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let idx = issues.filter(fn(i) {
+    i.message.contains("is not assignable to index type")
+  })
+  let names = idx.map(fn(i) { i.message })
+  assert_true(names.iter().any(fn(m) { m.contains("property `y`") }))
+  assert_true(names.iter().any(fn(m) { m.contains("property `z`") }))
+  // The matching `number` property must never be flagged.
+  assert_true(!names.iter().any(fn(m) { m.contains("property `x`") }))
+}
+
+///|
+test "expr_check: numeric index signature only constrains numeric-named properties (TS2411)" {
+  // `[x: number]: string` constrains numeric-named properties only. A
+  // string-named `number` property (`b`) is unconstrained; a numeric-named
+  // `number` property (`2`) violates the `string` index value type.
+  let src =
+    #|class C {
+    #|  [s: number]: string;
+    #|  a: string; // ok (string name, string value)
+    #|  b: number; // ok (string name, not numeric-constrained)
+    #|  0: string; // ok (numeric name, string value)
+    #|  2: number; // error (numeric name, number value)
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let idx = issues.filter(fn(i) {
+    i.message.contains("is not assignable to index type")
+  })
+  let names = idx.map(fn(i) { i.message })
+  assert_true(names.iter().any(fn(m) { m.contains("property `2`") }))
+  assert_true(!names.iter().any(fn(m) { m.contains("property `b`") }))
+  assert_true(!names.iter().any(fn(m) { m.contains("property `a`") }))
+  assert_true(!names.iter().any(fn(m) { m.contains("property `0`") }))
+}
+
+///|
+test "expr_check: index constraint stays silent on any / matching types (TS2411)" {
+  // `any` and assignable scalar properties must not be flagged, and a
+  // matching string index over string properties is clean.
+  let src =
+    #|class C {
+    #|  [s: string]: string;
+    #|  a: string; // ok
+    #|  b: any; // ok (any is assignable to anything)
+    #|  c: "literal"; // ok (string literal is a string)
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let idx = issues.filter(fn(i) {
+    i.message.contains("is not assignable to index type")
+  })
+  @test.assert_eq(idx.length(), 0)
+}
+
+///|
+test "expr_check: interface string index constrains fields (TS2411)" {
+  let src =
+    #|interface I {
+    #|  [x: string]: number;
+    #|  a: number; // ok
+    #|  b: string; // error
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let idx = issues.filter(fn(i) {
+    i.message.contains("is not assignable to index type")
+  })
+  let names = idx.map(fn(i) { i.message })
+  assert_true(names.iter().any(fn(m) { m.contains("property `b`") }))
+  assert_true(!names.iter().any(fn(m) { m.contains("property `a`") }))
+}
+
+///|
+test "expr_check: deprecated @target es5 directive is flagged (TS5107)" {
+  let src =
+    #|// @target: esnext, es2015, es5
+    #|class C { x: number = 1 }
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let dep = issues.filter(fn(i) {
+    i.message.contains("deprecated") && i.message.contains("target=ES5")
+  })
+  assert_true(dep.length() >= 1)
+}
+
+///|
+test "expr_check: non-deprecated @target es2015 is not flagged (TS5107)" {
+  let src =
+    #|// @target: es2015
+    #|class C { x: number = 1 }
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let dep = issues.filter(fn(i) { i.message.contains("deprecated") })
+  @test.assert_eq(dep.length(), 0)
+}
+
+///|
+test "expr_check: deprecated @target es3 directive is flagged (TS5107)" {
+  let src =
+    #|// @target: es3
+    #|var x: number = 1;
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let dep = issues.filter(fn(i) {
+    i.message.contains("deprecated") && i.message.contains("target=ES3")
+  })
+  assert_true(dep.length() >= 1)
+}
+
+///|
+test "expr_check: surfaces circular type alias and arity mismatch via body pass" {
+  // The module-level structural validation (circular aliases, extends
+  // cycles, type-alias arity) is wired into the function-body check entry
+  // so the accuracy walk counts these declaration errors.
+  let src =
+    #|type Loop = Loop;
+    #|type Pair<A, B> = [A, B];
+    #|type Bad = Pair<number>;
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let circular = issues.filter(fn(i) {
+    i.message.contains("resolves to itself")
+  })
+  let arity = issues.filter(fn(i) { i.message.contains("used with") })
+  assert_true(circular.length() >= 1)
+  assert_true(arity.length() >= 1)
+}
+
+///|
+test "expr_check: interface method overloads are not flagged as duplicates" {
+  // Multiple call signatures / method overloads share a field name in the
+  // parser representation; the structural pass must NOT be admitted for
+  // `InterfaceFieldDuplicate` or these would false-positive.
+  let src =
+    #|interface I {
+    #|  foo(x: string): string;
+    #|  foo(x: number): number;
+    #|  (x: string): string;
+    #|  (x: number): number;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let dup = issues.filter(fn(i) {
+    i.message.contains("same field name more than once")
+  })
+  @test.assert_eq(dup.length(), 0)
 }

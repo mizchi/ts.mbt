@@ -767,6 +767,13 @@ pub(all) struct TsModule {
   // Detected from `// @useDefineForClassFields: true` directives or
   // an `@target: es2022`/`esnext` directive (the TS default).
   use_define_for_class_fields : Bool
+  // Deprecated compiler options detected in the conformance test header
+  // directives (`// @target: es5`, etc.). Each entry is a human-readable
+  // option string such as `"target=ES5"`; the checker surfaces one
+  // diagnostic per entry (TS5107). Only populated from the `// @<option>`
+  // directive comments that the test corpus uses — real `.d.ts` / `.ts`
+  // bridge inputs never carry these, so the field stays empty for them.
+  deprecated_compiler_options : Array[String]
 } derive(Debug)
 
 ///|

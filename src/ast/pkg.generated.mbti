@@ -279,6 +279,7 @@ pub(all) struct TsModule {
   top_level_stmts : Array[TsStmt]
   strict_property_initialization : Bool
   use_define_for_class_fields : Bool
+  deprecated_compiler_options : Array[String]
 } derive(@debug.Debug)
 pub impl Show for TsModule
 

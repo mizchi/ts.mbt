@@ -416,6 +416,7 @@ async fn load_decl_module_info(
           top_level_stmts: [],
           strict_property_initialization: true,
           use_define_for_class_fields: false,
+          deprecated_compiler_options: [],
         }
       }
   }
@@ -9183,6 +9184,7 @@ pub async fn emit_moonbit_decl_from_entry_path(
     top_level_stmts: [],
     strict_property_initialization: true,
     use_define_for_class_fields: false,
+    deprecated_compiler_options: [],
   }
   // Run the checker over the final module shape and surface anything it
   // catches as a generator-level note. The emit pipeline is internally

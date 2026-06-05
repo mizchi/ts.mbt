@@ -1284,6 +1284,56 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-02 (T21)   351/815 (43 %)        412/414 ( 2 FP)
 2026-06-02 (T22)   350/815 (43 %)        413/414 ( 1 FP)
 2026-06-02 (T23)   348/815 (43 %)        414/414 ( 0 FP)
+2026-06-05 (T24)   435/815 (53 %)        414/414 ( 0 FP)
+2026-06-05 (T25)   473/815 (58 %)        414/414 ( 0 FP)
+2026-06-05 (T26)   476/815 (58 %)        414/414 ( 0 FP)
+
+  Note: the T24 starting point (433/815) is higher than the T23 row
+  because the TS2554 constructor/function-arity commits (PRs #84-#86)
+  landed after the T23 measurement without refreshing this table.
+
+  T26 -- surface module-level cycle / arity validation in the body pass.
+
+    The accuracy walk only runs `check_module_function_bodies`, so the
+    `check_module` structural validation never counted toward recall. A
+    strict FP-safe whitelist (`CircularTypeAlias`, `InterfaceExtendsCycle`,
+    `TypeAliasArityMismatch`) is now wired into the top-level body pass.
+    The remaining kinds were measured and rejected: admitting
+    `InterfaceFieldDuplicate` / `TypeParameterConstraintViolation` etc.
+    cost 12 precision FPs for +7 recall (the structural duplicate pass
+    mis-reads call / construct / method overloads as duplicate fields, and
+    the constraint check false-flags `infer` / forwarded bounds). +3
+    recall (473 -> 476), 0 FP.
+
+  T25 -- deprecated `@target` directives (TS5107).
+
+    TypeScript 6.0+ reports `target=ES3` / `target=ES5` as deprecated.
+    The conformance corpus exercises this through multi-target directive
+    lists like `// @target: esnext, es2015, es5`. The parser scans the
+    leading `// @target:` header, tokenizes the comma list, and records
+    canonical `target=ES5` / `target=ES3` entries on a new
+    `TsModule.deprecated_compiler_options` field; the checker surfaces one
+    diagnostic per entry from its top-level pass. Empirically verified
+    against the walked corpus: every file carrying an es3/es5 target has a
+    baseline, so the detection is false-positive-free. The directive
+    comments only appear in test corpora, so real `.d.ts` / `.ts` bridge
+    inputs never trigger it. +38 recall (435 -> 473), 0 FP.
+
+  T24 -- extend the TS2411 index-signature constraint check.
+
+    The runtime class parser stored an `Any`/`Any` placeholder for class
+    index signatures, leaving the class branch of the TS2411 check dead;
+    it now captures the real key/value types via
+    `try_parse_class_index_signature`. The constraint check widened beyond
+    scalar-vs-object to the structurally-certain cases: two concrete
+    scalars where the property is not assignable to the index scalar
+    (`number` vs `string` index); a scalar index value with an
+    object/function/array/tuple property; and the existing object-shaped
+    index value with a scalar property. Numeric index signatures constrain
+    only numeric-named properties (a conservative canonical-integer name
+    subset), string index signatures constrain every named property.
+    Accessor-named members are excluded (imprecise parser-stored type).
+    +2 recall (433 -> 435), 0 FP.
 
   T23 -- soft / hard generic inference candidates (Issue #62 path B).
 

@@ -420,6 +420,7 @@ async fn mtsc_load_bundle_files(
           module_augmentations: [],
           strict_property_initialization: true,
           use_define_for_class_fields: false,
+          deprecated_compiler_options: [],
           top_level_stmts: [],
         }
     }
@@ -618,6 +619,7 @@ async fn main {
           module_augmentations: [],
           strict_property_initialization: true,
           use_define_for_class_fields: false,
+          deprecated_compiler_options: [],
           top_level_stmts: [],
         })
         let local_names : Array[String] = []
@@ -720,6 +722,7 @@ async fn main {
             module_augmentations: [],
             strict_property_initialization: true,
             use_define_for_class_fields: false,
+            deprecated_compiler_options: [],
             top_level_stmts: [],
           })
           // Filter exports through the entry's `@internal` set so

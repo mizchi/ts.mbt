@@ -14,12 +14,14 @@ priv enum ClassElement {
   // strict-property-initialization check (TS2564) in the checker.
   Field(Bool, ClassKey, @ast.TsType, @ast.TsExpr?, Bool, Bool)
   StaticBlock(@ast.TsBlock)
-  // Marker for `[k: KeyType]: ValueType` index signatures. The body is
-  // skipped (we don't model index access through the class type), but
-  // the presence of any index signature opts the class out of strict-
-  // property-initialization (TS2564) because every concrete field is
-  // implicitly covered by the indexer.
-  IndexSig
+  // Marker for `[k: KeyType]: ValueType` index signatures, carrying the
+  // captured key / value types. The presence of any index signature opts
+  // the class out of strict-property-initialization (TS2564) because every
+  // concrete field is implicitly covered by the indexer; the captured value
+  // type also feeds the TS2411 index-constraint check (named properties must
+  // be assignable to the index value type). When the signature shape can't be
+  // parsed precisely the key/value default to `Any` (no constraint).
+  IndexSig(@ast.TsType, @ast.TsType)
 }
 
 ///|
@@ -211,17 +213,14 @@ fn build_runtime_class_decl(
     }
   }
   // Track index-signature presence so the TS2564 check can opt-out
-  // (an indexer implicitly types every concrete field). We don't
-  // model index lookups against class instances, so the value is an
-  // `Any` -> `Any` placeholder -- only the length matters for the
-  // skip predicate.
+  // (an indexer implicitly types every concrete field), and carry the
+  // captured key/value types so the TS2411 index-constraint check can
+  // verify named properties are assignable to the index value type.
   let index_signatures : Array[(@ast.TsType, @ast.TsType)] = []
   let static_blocks : Array[@ast.TsBlock] = []
   for element in elements {
-    if element is IndexSig {
-      index_signatures.push((@ast.TsType::Any, @ast.TsType::Any))
-    }
     match element {
+      IndexSig(key, value) => index_signatures.push((key, value))
       StaticBlock(block) => static_blocks.push(block)
       _ => ()
     }
@@ -952,8 +951,21 @@ fn Parser::parse_class_body(
     if parsed_static_block {
       continue // Continue to next class element
     }
+    // Prefer the type-capturing index-signature parser so the value type
+    // is available for the TS2411 index-constraint check. Fall back to the
+    // permissive skip path (recording an `Any`/`Any` placeholder) for
+    // shapes the precise parser declines, e.g. computed key expressions.
+    if self.check(LBracket) && self.is_index_signature_shape_after_lbracket() {
+      match self.try_parse_class_index_signature() {
+        Some((key, value)) => {
+          elements.push(IndexSig(key, value))
+          continue
+        }
+        None => ()
+      }
+    }
     if self.try_skip_class_index_signature() {
-      elements.push(IndexSig)
+      elements.push(IndexSig(@ast.TsType::Any, @ast.TsType::Any))
       continue
     }
     let mut accessor_kind : String? = None
@@ -1426,7 +1438,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
           }
         }
       StaticBlock(_) => key_temps.push(None) // Placeholder to keep indices aligned
-      IndexSig => key_temps.push(None)
+      IndexSig(_, _) => key_temps.push(None)
     }
   }
 
@@ -1782,7 +1794,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
         ])
         stmts.push(Expr(call_expr))
       }
-      IndexSig => ()
+      IndexSig(_, _) => ()
     }
   }
   stmts.push(Return(Some(@ast.TsExpr::Var(tmp_name))))
@@ -2009,7 +2021,7 @@ fn Parser::parse_class_decl_with_abstract(
           }
         }
       StaticBlock(_) => key_temps.push(None) // Placeholder to keep indices aligned
-      IndexSig => key_temps.push(None)
+      IndexSig(_, _) => key_temps.push(None)
     }
   }
 
@@ -2363,7 +2375,7 @@ fn Parser::parse_class_decl_with_abstract(
         ])
         stmts.push(Expr(call_expr))
       }
-      IndexSig => ()
+      IndexSig(_, _) => ()
     }
   }
   if stmts.length() == 1 {
