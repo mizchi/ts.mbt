@@ -7792,9 +7792,30 @@ fn collect_narrowing(
       }
     BinOp(Or, l, r) =>
       if !then_sense {
-        // Both must be false in the else-branch.
+        // Under a negation: `!(l || r)` is `!l && !r`, so both hold.
         collect_narrowing(env, resolver, l, then_binds, else_binds, true)
         collect_narrowing(env, resolver, r, then_binds, else_binds, true)
+      } else {
+        // `if (l || r) { } else { /* l false AND r false */ }`. The
+        // else-branch narrows by l-false *then* r-false (composed), which
+        // is the common `typeof x === "a" || typeof x === "b"` discriminant
+        // residue: in the else, x has both "a" and "b" types removed.
+        // Apply l's false narrowing to a scratch env so r's narrowing sees
+        // the already-reduced type, then collect both into else_binds
+        // (later push wins per key, which yields the composed result).
+        let lo = analyze_narrowing(env, resolver, l)
+        for b in lo.else_binds {
+          else_binds.push(b)
+        }
+        let snap = env.full_snapshot()
+        for b in lo.else_binds {
+          env.bind(b.0, b.1)
+        }
+        let ro = analyze_narrowing(env, resolver, r)
+        env.restore_from(snap)
+        for b in ro.else_binds {
+          else_binds.push(b)
+        }
       }
     BinOp(Coalesce, l, r) =>
       // `x ?? y`: when truthy, x is non-nullish; when falsy, narrowing from r.
