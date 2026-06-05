@@ -1225,10 +1225,13 @@ async test "checker: accuracy against TypeScript conformance baselines" {
       "recall floor breached: \{recall_hit}/\{with_baseline} baseline-positive cases caught (< 20 %)",
     )
   }
-  // Precision floor: residual 5 / 310 FPs (1.6 %). All five are flow-
-  // narrowing / generic-inference gaps -- multi-day features. Cap at
-  // 5 % so a single new pattern re-introducing several FPs trips
-  // immediately.
+  // Precision floor. The goal is TypeScript compatibility, not zero false
+  // positives: the property / method `does not exist` family is now emitted
+  // in permissive mode (it is a core TS diagnostic), trading a small number
+  // of residual flow-narrowing-gap FPs (this-guards, optional-chain unions,
+  // intersection members) for ~16 recall. Current residual is ~8 / 414
+  // (1.9 %); the cap stays at 5 % so a regression that re-introduces a
+  // whole family of FPs still trips immediately.
   if without_baseline > 0 && precision_miss * 100 > without_baseline * 5 {
     fail(
       "precision floor breached: \{precision_miss}/\{without_baseline} clean cases reported as failing (> 5 %)",

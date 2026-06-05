@@ -6793,3 +6793,36 @@ test "expr_check: parameter default must match annotation (TS2322)" {
   // The valid default `a: string = "yes"` must not be flagged.
   assert_true(!names.iter().any(fn(p) { p.contains("`a`") }))
 }
+
+///|
+test "expr_check: keyword property name `type` in object type is resolved" {
+  // `{ type: ... }` is the canonical discriminated-union discriminant. The
+  // object-type-literal parser previously rejected the `type` keyword as a
+  // property name, dropping the whole shape and producing spurious
+  // "property does not exist" diagnostics. All accesses below are valid.
+  let src =
+    #|type A = { type: "a"; value: number } | { type: "b"; label: string };
+    #|function f(x: A): void {
+    #|  x.type;
+    #|  if (x.type === "a") { x.value; } else { x.label; }
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let missing = issues.filter(fn(i) { i.message.contains("does not exist") })
+  @test.assert_eq(missing.length(), 0)
+}
+
+///|
+test "expr_check: void-returning function assignable to void callback" {
+  // A function returning a value is assignable to one expecting `void`
+  // return (TS's void-returning-function rule).
+  let src =
+    #|function run(cb: () => void): void {}
+    #|function f(): void { run(() => 42); }
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mism = issues.filter(fn(i) {
+    i.message.contains("not assignable") || i.message.contains("but got")
+  })
+  @test.assert_eq(mism.length(), 0)
+}
