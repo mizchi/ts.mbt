@@ -6542,3 +6542,89 @@ test "expr_check: a tag typed any yields any from a tagged template" {
   let prop = issues.filter(fn(i) { i.message.contains("does not exist") })
   @test.assert_eq(prop.length(), 0)
 }
+
+///|
+test "expr_check: string index signature constrains class properties (TS2411)" {
+  // `[x: string]: number` requires every named property to be assignable
+  // to `number`. The parser must capture the class index value type (it
+  // historically stored an `Any`/`Any` placeholder, which silenced this).
+  let src =
+    #|class C {
+    #|  [s: string]: number;
+    #|  x: number; // ok
+    #|  y: string; // error
+    #|  z: boolean; // error
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let idx = issues.filter(fn(i) {
+    i.message.contains("is not assignable to index type")
+  })
+  let names = idx.map(fn(i) { i.message })
+  assert_true(names.iter().any(fn(m) { m.contains("property `y`") }))
+  assert_true(names.iter().any(fn(m) { m.contains("property `z`") }))
+  // The matching `number` property must never be flagged.
+  assert_true(!names.iter().any(fn(m) { m.contains("property `x`") }))
+}
+
+///|
+test "expr_check: numeric index signature only constrains numeric-named properties (TS2411)" {
+  // `[x: number]: string` constrains numeric-named properties only. A
+  // string-named `number` property (`b`) is unconstrained; a numeric-named
+  // `number` property (`2`) violates the `string` index value type.
+  let src =
+    #|class C {
+    #|  [s: number]: string;
+    #|  a: string; // ok (string name, string value)
+    #|  b: number; // ok (string name, not numeric-constrained)
+    #|  0: string; // ok (numeric name, string value)
+    #|  2: number; // error (numeric name, number value)
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let idx = issues.filter(fn(i) {
+    i.message.contains("is not assignable to index type")
+  })
+  let names = idx.map(fn(i) { i.message })
+  assert_true(names.iter().any(fn(m) { m.contains("property `2`") }))
+  assert_true(!names.iter().any(fn(m) { m.contains("property `b`") }))
+  assert_true(!names.iter().any(fn(m) { m.contains("property `a`") }))
+  assert_true(!names.iter().any(fn(m) { m.contains("property `0`") }))
+}
+
+///|
+test "expr_check: index constraint stays silent on any / matching types (TS2411)" {
+  // `any` and assignable scalar properties must not be flagged, and a
+  // matching string index over string properties is clean.
+  let src =
+    #|class C {
+    #|  [s: string]: string;
+    #|  a: string; // ok
+    #|  b: any; // ok (any is assignable to anything)
+    #|  c: "literal"; // ok (string literal is a string)
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let idx = issues.filter(fn(i) {
+    i.message.contains("is not assignable to index type")
+  })
+  @test.assert_eq(idx.length(), 0)
+}
+
+///|
+test "expr_check: interface string index constrains fields (TS2411)" {
+  let src =
+    #|interface I {
+    #|  [x: string]: number;
+    #|  a: number; // ok
+    #|  b: string; // error
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let idx = issues.filter(fn(i) {
+    i.message.contains("is not assignable to index type")
+  })
+  let names = idx.map(fn(i) { i.message })
+  assert_true(names.iter().any(fn(m) { m.contains("property `b`") }))
+  assert_true(!names.iter().any(fn(m) { m.contains("property `a`") }))
+}
