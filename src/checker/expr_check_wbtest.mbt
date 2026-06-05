@@ -6705,3 +6705,34 @@ test "expr_check: interface method overloads are not flagged as duplicates" {
   })
   @test.assert_eq(dup.length(), 0)
 }
+
+///|
+test "expr_check: class that extends itself is flagged (TS2506)" {
+  let src =
+    #|class C extends C {}
+    #|class D<T> extends D<T> {}
+    #|class Ok extends Object {}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let self_ext = issues.filter(fn(i) {
+    i.message.contains("its own base expression")
+  })
+  let names = self_ext.map(fn(i) { i.path })
+  assert_true(names.iter().any(fn(p) { p.contains("class C") }))
+  assert_true(names.iter().any(fn(p) { p.contains("class D") }))
+  // A class extending a different base must never be flagged.
+  assert_true(!names.iter().any(fn(p) { p.contains("class Ok") }))
+}
+
+///|
+test "expr_check: deprecated @outFile directive is flagged (TS5101)" {
+  let src =
+    #|// @outFile: out.js
+    #|var x: number = 1;
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let dep = issues.filter(fn(i) {
+    i.message.contains("deprecated") && i.message.contains("outFile")
+  })
+  assert_true(dep.length() >= 1)
+}

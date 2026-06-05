@@ -10761,6 +10761,20 @@ fn check_class_member_structure(
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   for decl in module_.classes {
+    // --- TS2506: a class directly references itself in its own base
+    // expression (`class C extends C {}`, `class D<T> extends D<T> {}`).
+    // `base_names` carries the bare extended name, so a self-reference is
+    // exactly an entry equal to the class's own name. This is always an
+    // error and never a legal shape, so it is false-positive-free.
+    for base in decl.base_names {
+      if base == decl.name {
+        issues.push({
+          path: "class \{decl.name}",
+          message: "`\{decl.name}` is referenced directly in its own base expression",
+        })
+        break
+      }
+    }
     // --- Duplicate get / set accessors within the same class body. ---
     // Key by "name|static" so an instance and a static accessor of the
     // same name don't collide. A computed key (`name == "<computed>"`)

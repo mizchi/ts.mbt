@@ -3253,24 +3253,29 @@ fn Parser::parse_module_with_seeded_const_values_internal(
 }
 
 ///|
-/// Scan the leading `// @target: ...` test-header directive for deprecated
-/// compiler-option values. TypeScript 6.0+ reports `target=ES3` / `target=ES5`
-/// as deprecated (TS5107); the conformance corpus exercises these through
-/// multi-target directive lists like `// @target: esnext, es2015, es5`. We
-/// only surface the unambiguous `ES3` / `ES5` targets so the check stays
-/// false-positive-free, and we return canonical `target=ES5` / `target=ES3`
-/// strings for the diagnostic. Returns at most one entry per deprecated
-/// target value, in declaration order.
+/// Scan the leading test-header directives for deprecated compiler options
+/// that TypeScript 6.0+ reports (TS5107 / TS5101). Two shapes are handled:
+///
+///   - value-specific: `target=ES3` / `target=ES5`, exercised through
+///     multi-target directive lists like `// @target: esnext, es2015, es5`.
+///     Only the unambiguous `ES3` / `ES5` targets are surfaced.
+///   - presence-based: `outFile` / `out` / `baseUrl` / `downlevelIteration`
+///     are deprecated whenever specified, regardless of value, so the bare
+///     presence of the `// @<option>:` directive is enough.
+///
+/// The directive comments only appear in the conformance corpus; real
+/// `.d.ts` / `.ts` bridge inputs never carry them, so this stays empty for
+/// them. Returns one canonical option string per detected deprecation, in a
+/// stable order.
 fn detect_deprecated_compiler_options(src : String) -> Array[String] {
   let out : Array[String] = []
   let head_len = if src.length() < 1024 { src.length() } else { 1024 }
   let head = src[:head_len].to_owned()
-  // Find the `@target:` directive line and tokenize its comma list.
-  let needle = "@target:"
-  match head.find(needle) {
+  let head_lower = head.to_lower()
+  // Value-specific: the `@target:` directive's comma list.
+  match head.find("@target:") {
     Some(idx) => {
-      // Take the rest of that directive line.
-      let after = head[idx + needle.length():].to_owned()
+      let after = head[idx + "@target:".length():].to_owned()
       let line = match after.find("\n") {
         Some(nl) => after[:nl].to_owned()
         None => after
@@ -3285,8 +3290,7 @@ fn detect_deprecated_compiler_options(src : String) -> Array[String] {
           saw_es5 = true
         }
       }
-      // Match TS's report order (lowest deprecated target first as it
-      // appears); emit one diagnostic per distinct deprecated value.
+      // One diagnostic per distinct deprecated value.
       if saw_es5 {
         out.push("target=ES5")
       }
@@ -3295,6 +3299,14 @@ fn detect_deprecated_compiler_options(src : String) -> Array[String] {
       }
     }
     None => ()
+  }
+  // Presence-based options. `@out:` and `@outFile:` are distinct directives;
+  // the trailing colon keeps `@out:` from matching inside `@outFile:` /
+  // `@outDir:`.
+  for opt in ["outFile", "out", "baseUrl", "downlevelIteration"] {
+    if head_lower.find("@" + opt.to_lower() + ":") is Some(_) {
+      out.push(opt)
+    }
   }
   out
 }
