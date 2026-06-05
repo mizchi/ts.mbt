@@ -1295,6 +1295,7 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-05 (T32)   532/815 (65 %)        386/414 (28 FP)
 2026-06-05 (T33)   532/815 (65 %)        387/414 (27 FP)
 2026-06-05 (T34)   532/815 (65 %)        389/414 (25 FP)
+2026-06-05 (T35)   532/815 (65 %)        393/414 (21 FP)
 
   Policy shift (T30 onward): the goal is TypeScript compatibility, not a
   zero-false-positive score. Recall AND false positives are both tracked as
@@ -1308,6 +1309,19 @@ conformance sources (`.errors.txt` baseline = ground truth):
   Note: the T24 starting point (433/815) is higher than the T23 row
   because the TS2554 constructor/function-arity commits (PRs #84-#86)
   landed after the T23 measurement without refreshing this table.
+
+  T35 -- structural optional fields + `&&` then-branch narrowing.
+
+    - Optional target fields no longer block structural assignability:
+      `struct_assignable_named_rec` required every declared target field on
+      the source, but an optional `bar?: T` may be absent (TS allows
+      `s2 = t2` when `t2` omits `s2`'s optional members). Skip the missing-
+      on-source failure when the field type accepts `undefined`. Clears
+      assignmentCompatWithObjectMembers 2 / 3 / NumericNames.
+    - `&&` then-branch narrowing composes (mirror of T34's `||` else fix):
+      `typeof x !== "a" && typeof x !== "b"` now removes both types from
+      `x` in the then-branch. Clears typeGuardOfFormExpr1AndExpr2.
+    recall steady 532, FP 25 -> 21. Both net-positive, no recall loss.
 
   T34 -- union/destructuring flow narrowing (two real-machinery fixes).
 
