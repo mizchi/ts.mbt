@@ -1291,6 +1291,7 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-05 (T28)   483/815 (59 %)        414/414 ( 0 FP)
 2026-06-05 (T29)   484/815 (59 %)        414/414 ( 0 FP)
 2026-06-05 (T30)   500/815 (61 %)        406/414 ( 8 FP)
+2026-06-05 (T31)   500/815 (61 %)        407/414 ( 7 FP)
 
   Policy shift (T30 onward): the goal is TypeScript compatibility, not a
   zero-false-positive score. Recall AND false positives are both tracked as
@@ -1304,6 +1305,25 @@ conformance sources (`.errors.txt` baseline = ground truth):
   Note: the T24 starting point (433/815) is higher than the T23 row
   because the TS2554 constructor/function-arity commits (PRs #84-#86)
   landed after the T23 measurement without refreshing this table.
+
+  T31 -- `this is T` type-guard receiver narrowing.
+
+    `this is T` predicate methods / arrow-field guards narrow the *receiver*,
+    not a positional argument (`if (a.isLead()) { a.lead(); }`). The
+    method-predicate narrowing only handled argument predicates, so the
+    receiver stayed unnarrowed and `lead` was falsely reported missing.
+    Now: when the predicate parameter name is `this`, narrow the receiver's
+    binding; resolve arrow-function class field guards via `lookup_field`
+    (the parser synthesizes their `Func` type from a type-predicate arrow
+    return). Clears typeGuardFunctionOfFormThis. precision 406 -> 407 (FP
+    8 -> 7), recall steady at 500.
+
+    Investigated but reverted: blanket-skipping mangled `__private_brand__`
+    private-access diagnostics cleared 2 FP files but suppressed 8
+    baseline-positive private-access errors (wrong-class / typo private
+    accesses tsc flags), a net -8 recall. Distinguishing a legal in-class
+    brand access from an erroneous one needs real private-member
+    resolution -- deferred.
 
   T30 -- compatibility shift: emit TS2339 + discriminated-union / void fixes.
 
