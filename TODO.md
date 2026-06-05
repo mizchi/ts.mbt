@@ -1299,6 +1299,26 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-05 (T36)   532/815 (65 %)        394/414 (20 FP)
 2026-06-05 (T37)   533/815 (65 %)        394/414 (20 FP)
 2026-06-05 (T38)   535/815 (66 %)        394/414 (20 FP)
+2026-06-05 (T39)   536/815 (66 %)        394/414 (20 FP)
+
+  T39 -- TS2411 over scalar-union index values + generic interfaces.
+
+    The existing index-signature constraint check (`[x: string]: V` requires
+    every named property to be assignable to `V`) only fired when `V` was a
+    single scalar and the interface was non-generic. Extended on two axes,
+    both kept structurally certain so no FP slips in:
+      - `V` may now be a *union of scalars* (`string | number`). Such a value
+        is a closed "primitive set": object / function / array properties can
+        never satisfy it, and a scalar property is decided by the
+        union-membership-aware `is_assignable_to`. A union with even one
+        non-scalar arm (`string | Obj`) is excluded, so an object property is
+        never mis-flagged against an index it could actually satisfy.
+      - Generic interfaces are now processed. A property typed as one of the
+        interface's own type parameters resolves to a bare `Named` that is
+        neither scalar nor object-shaped, so `violates_index_value` leaves it
+        alone -- only concrete object / scalar fields are decided.
+    recall 535 -> 536, FP steady 20 (clears subtypesOfUnion, whose interfaces
+    are all generic with a `string | number` indexer).
 
   T38 -- incompatible index signatures in interface-extends (TS2430).
 

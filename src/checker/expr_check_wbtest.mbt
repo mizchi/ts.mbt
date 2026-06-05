@@ -6631,6 +6631,74 @@ test "expr_check: interface string index constrains fields (TS2411)" {
 }
 
 ///|
+test "expr_check: union-of-scalars index value constrains fields (TS2411)" {
+  // `[x: string]: string | number` is a primitive set: a `boolean` field and
+  // an object-shaped field both violate it, while `string` / `number` /
+  // string-literal fields are assignable members of the union.
+  let src =
+    #|interface I {
+    #|  [x: string]: string | number;
+    #|  a: string; // ok
+    #|  b: number; // ok
+    #|  c: "lit"; // ok (string literal is a string)
+    #|  d: boolean; // error (not in string | number)
+    #|  e: { v: number }; // error (object is never a primitive)
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let names = issues
+    .filter(fn(i) { i.message.contains("is not assignable to index type") })
+    .map(fn(i) { i.message })
+  assert_true(names.iter().any(fn(m) { m.contains("property `d`") }))
+  assert_true(names.iter().any(fn(m) { m.contains("property `e`") }))
+  assert_true(!names.iter().any(fn(m) { m.contains("property `a`") }))
+  assert_true(!names.iter().any(fn(m) { m.contains("property `b`") }))
+  assert_true(!names.iter().any(fn(m) { m.contains("property `c`") }))
+}
+
+///|
+test "expr_check: generic interface index constraint decides concrete fields only (TS2411)" {
+  // A generic interface is checked too, but only its concrete (non-type-
+  // parameter) fields are decided: `t: T` resolves to a bare type parameter
+  // that is neither scalar nor object-shaped, so it is left alone, while an
+  // object-shaped field is flagged against the scalar index value.
+  let src =
+    #|interface Obj { k: number }
+    #|interface I<T> {
+    #|  [x: string]: string;
+    #|  ok: string; // ok
+    #|  t: T; // silent (type parameter — undecidable)
+    #|  bad: Obj; // error (object is never a string)
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let names = issues
+    .filter(fn(i) { i.message.contains("is not assignable to index type") })
+    .map(fn(i) { i.message })
+  assert_true(names.iter().any(fn(m) { m.contains("property `bad`") }))
+  assert_true(!names.iter().any(fn(m) { m.contains("property `t`") }))
+  assert_true(!names.iter().any(fn(m) { m.contains("property `ok`") }))
+}
+
+///|
+test "expr_check: mixed scalar|object index value stays silent on objects (TS2411)" {
+  // `string | Obj` is NOT a primitive set, so an object-shaped property may
+  // legitimately satisfy it -- the check must not fire.
+  let src =
+    #|interface Obj { k: number }
+    #|interface I {
+    #|  [x: string]: string | Obj;
+    #|  good: Obj; // ok (object matches the Obj arm)
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let idx = issues.filter(fn(i) {
+    i.message.contains("is not assignable to index type")
+  })
+  @test.assert_eq(idx.length(), 0)
+}
+
+///|
 test "expr_check: deprecated @target es5 directive is flagged (TS5107)" {
   let src =
     #|// @target: esnext, es2015, es5

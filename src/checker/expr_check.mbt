@@ -11400,15 +11400,38 @@ fn check_interface_extends_compat(
     }
     true
   }
+  // A scalar, or a union whose every member is a scalar (`string | number`,
+  // `"a" | "b"`, …). Such a value type is a "primitive set": no object /
+  // function / array can be assigned to it, and a scalar property is decided
+  // by `is_assignable_to` (which handles union membership). A union with even
+  // one non-scalar member is excluded so an object property is never
+  // mis-flagged against an index type that could actually accept it.
+  fn is_scalar_set(t : @ast.TsType) -> Bool {
+    match t {
+      Union(members) => {
+        for m in members {
+          if !is_scalar(m) {
+            return false
+          }
+        }
+        members.length() > 0
+      }
+      _ => is_scalar(t)
+    }
+  }
   fn violates_index_value(prop : @ast.TsType, value : @ast.TsType) -> Bool {
     let t = strip_optional(prop)
     // Index value is object-shaped: a scalar property can never satisfy it.
     if is_object_shaped(value) {
       return is_scalar(t)
     }
-    // Index value is a primitive scalar: the property must be assignable
-    // to it. Only decide for concrete property shapes.
-    if is_scalar(value) {
+    // Index value is a primitive scalar (or a union of scalars): the property
+    // must be assignable to it. Only decide for concrete property shapes —
+    // object / function / array / tuple types are never a primitive, and a
+    // concrete scalar is decided by `is_assignable_to` (union-membership
+    // aware). Anything else (unresolved `Named`, type parameters, `any`,
+    // unions on the property side) falls through to "no diagnostic".
+    if is_scalar_set(value) {
       if is_scalar(t) {
         return !is_assignable_to(t, value)
       }
@@ -11451,13 +11474,15 @@ fn check_interface_extends_compat(
   }
 
   for iface in module_.interfaces {
-    if iface.type_params.length() == 0 {
-      check_index_props(
-        iface.index_signatures,
-        iface.fields,
-        "interface \{iface.name}",
-      )
-    }
+    // Generic interfaces are processed too: a property whose type is one of
+    // the interface's own type parameters resolves to a bare `Named` that is
+    // not object-shaped and not scalar, so `violates_index_value` leaves it
+    // alone -- only concrete object / scalar properties are decided.
+    check_index_props(
+      iface.index_signatures,
+      iface.fields,
+      "interface \{iface.name}",
+    )
   }
   for c in module_.classes {
     if c.type_params.length() == 0 {
