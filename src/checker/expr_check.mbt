@@ -4236,7 +4236,7 @@ fn infer_expr(
     BinOp(op, l, r) => {
       let lt = resolver.unwrap(infer_expr(env, resolver, l))
       let rt = resolver.unwrap(infer_expr(env, resolver, r))
-      infer_binop(op, lt, rt)
+      infer_binop(op, lt, rt, resolver)
     }
     UnaryOp(op, inner) => {
       let inner_ty = infer_expr(env, resolver, inner)
@@ -5153,10 +5153,47 @@ fn infer_index(
 }
 
 ///|
+/// The subset of `t`'s values that are falsy -- what the left operand of
+/// `a && b` contributes to the result type. Always-truthy shapes (object /
+/// class / interface / array / tuple / function references) contribute
+/// nothing (`never`), so `(x: Beast) && cond` is `boolean`, not
+/// `Beast | boolean`. Primitives are kept conservatively (we don't model
+/// `0` / `""` / `false` literal falsiness).
+fn falsy_subset(resolver : Resolver, t : @ast.TsType) -> @ast.TsType {
+  let u = resolver.unwrap(t)
+  match u {
+    Object(_)
+    | Struct(_, _)
+    | Array(_)
+    | Tuple(_)
+    | Func(_, _)
+    | Constructor(_, _, _) => @ast.TsType::Never
+    Named(_) | Applied(_, _) =>
+      if is_named_decl(u, resolver) {
+        @ast.TsType::Never
+      } else {
+        u
+      }
+    Union(ms) => {
+      let kept : Array[@ast.TsType] = []
+      for m in ms {
+        let f = falsy_subset(resolver, m)
+        if !(f is Never) {
+          kept.push(f)
+        }
+      }
+      union_of(kept)
+    }
+    _ => u
+  }
+}
+
+///|
 fn infer_binop(
   op : @ast.TsBinOp,
   l : @ast.TsType,
   r : @ast.TsType,
+  resolver : Resolver,
 ) -> @ast.TsType {
   match op {
     Add =>
@@ -5196,8 +5233,9 @@ fn infer_binop(
     | In
     | Instanceof => @ast.TsType::Boolean
     // `a && b` — when `a` is truthy the result is `b`; otherwise the falsy
-    // `a`. Conservative: union both sides.
-    And => narrow_union(l, r)
+    // subset of `a`. An always-truthy object/class operand contributes
+    // nothing, so `(x: Beast) && cond` is `boolean`, not `Beast | boolean`.
+    And => narrow_union(falsy_subset(resolver, l), r)
     // `a || b` — when `a` is truthy the result is `a`; otherwise `b`. TS
     // narrows the truthy branch by stripping always-falsy variants from
     // `l` (null / undefined are the practically-relevant ones here, since
