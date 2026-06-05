@@ -6826,3 +6826,25 @@ test "expr_check: void-returning function assignable to void callback" {
   })
   @test.assert_eq(mism.length(), 0)
 }
+
+///|
+test "expr_check: this-type-guard narrows the receiver (method and arrow field)" {
+  // `m(): this is T` narrows the *receiver* (not an argument) in the
+  // then-branch. Covers both method-form guards and arrow-function class
+  // field guards (`g = (): this is T => ...`).
+  let src =
+    #|class Base {
+    #|  isLead(): this is Lead { return this instanceof Lead; }
+    #|  isArrow = (): this is Arrow => { return this instanceof Arrow; }
+    #|}
+    #|class Lead extends Base { lead(): void {} }
+    #|class Arrow extends Base { shoot(): void {} }
+    #|function use(b: Base): void {
+    #|  if (b.isLead()) { b.lead(); }
+    #|  if (b.isArrow()) { b.shoot(); }
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let missing = issues.filter(fn(i) { i.message.contains("does not exist") })
+  @test.assert_eq(missing.length(), 0)
+}

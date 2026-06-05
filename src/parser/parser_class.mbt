@@ -86,9 +86,29 @@ fn build_runtime_class_decl(
         has_definite_assertion
       ) =>
         if is_public_runtime_class_member_name(field_name) {
+          // An unannotated field initialized by an arrow whose return type
+          // is a type predicate (`isElite = (): this is T => {...}`) is a
+          // callable guard. Synthesize its `Func` type so method-predicate
+          // narrowing can see the `this is T` return (arrow-field guards
+          // narrow the receiver the same way method guards do).
+          let effective_type = match (field_type, init) {
+            (@ast.TsType::Any, Some(@ast.TsExpr::ArrowFunc(aparams, aret, _, _))
+            ) =>
+              match aret {
+                @ast.TsType::TypePredicate(_, _) => {
+                  let pts : Array[@ast.TsType] = []
+                  for p in aparams {
+                    pts.push(p.type_)
+                  }
+                  @ast.TsType::Func(pts, aret)
+                }
+                _ => field_type
+              }
+            _ => field_type
+          }
           upsert_class_property(properties, {
             name: field_name,
-            type_: field_type,
+            type_: effective_type,
             is_static,
             is_readonly,
             is_accessor: false,
