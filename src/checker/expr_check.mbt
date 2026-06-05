@@ -8659,12 +8659,16 @@ fn check_block(env : ExprEnv, block : @ast.TsBlock, ctx : CheckCtx) -> Unit {
 }
 
 ///|
-fn check_block_with_narrowing(
+/// Checks `block` with the given narrowing `binds` applied, then returns
+/// the variable types in effect at the *end* of the block (after the binds
+/// plus any in-block assignment narrowing) before restoring the outer env.
+/// The `if` handler uses this to join branch exits at the merge point.
+fn check_block_narrowing_exit(
   env : ExprEnv,
   block : @ast.TsBlock,
   ctx : CheckCtx,
   binds : Array[(String, @ast.TsType)],
-) -> Unit {
+) -> Map[String, @ast.TsType] {
   let pre = env.full_snapshot()
   for b in binds {
     env.bind(b.0, b.1)
@@ -8672,7 +8676,12 @@ fn check_block_with_narrowing(
   for stmt in block.stmts {
     check_stmt(env, stmt, ctx)
   }
+  let exit : Map[String, @ast.TsType] = {}
+  for e in env.full_snapshot() {
+    exit[e.0] = e.1
+  }
   env.restore_from(pre)
+  exit
 }
 
 ///|
@@ -8871,15 +8880,36 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
     Throw(e) => check_call_args_in_expr(env, e, ctx)
     If(cond, then_block, else_block) => {
       check_call_args_in_expr(env, cond, ctx)
+      let pre_map : Map[String, @ast.TsType] = {}
+      for e in env.full_snapshot() {
+        pre_map[e.0] = e.1
+      }
       let effect = analyze_narrowing(env, ctx.resolver, cond)
-      check_block_with_narrowing(env, then_block, ctx, effect.then_binds)
+      let then_exit = check_block_narrowing_exit(
+        env,
+        then_block,
+        ctx,
+        effect.then_binds,
+      )
       let then_exits = block_always_exits(then_block)
-      let else_exits = match else_block {
-        Some(b) => {
-          check_block_with_narrowing(env, b, ctx, effect.else_binds)
-          block_always_exits(b)
+      let (else_exit, else_exits) = match else_block {
+        Some(b) =>
+          (
+            check_block_narrowing_exit(env, b, ctx, effect.else_binds),
+            block_always_exits(b),
+          )
+        // No `else`: the else path is the fall-through with the condition's
+        // else-narrowing applied and no statements.
+        None => {
+          let m : Map[String, @ast.TsType] = {}
+          for k, v in pre_map {
+            m[k] = v
+          }
+          for bnd in effect.else_binds {
+            m[bnd.0] = bnd.1
+          }
+          (m, false)
         }
-        None => false
       }
       // Narrowing after early return: when one branch unconditionally exits,
       // the surrounding scope continues with the opposite branch's effect
@@ -8892,6 +8922,39 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       } else if else_exits && !then_exits {
         for b in effect.then_binds {
           env.bind(b.0, b.1)
+        }
+      } else if !then_exits && !else_exits {
+        // Merge-point join: a variable's type after the `if` is the union of
+        // its type at the end of each branch (covering both the condition's
+        // narrowing and in-branch reassignment). This makes
+        // `if (id === undefined) { id = "1"; }` leave `id` as `string`.
+        // Union can only widen back toward the pre-`if` type, so the join
+        // never over-narrows. Only touch variables that actually changed in
+        // a branch.
+        let cands : Map[String, Unit] = {}
+        for k, v in then_exit {
+          if pre_map.get(k) != Some(v) {
+            cands[k] = ()
+          }
+        }
+        for k, v in else_exit {
+          if pre_map.get(k) != Some(v) {
+            cands[k] = ()
+          }
+        }
+        for k, _ in cands {
+          let tt = match then_exit.get(k) {
+            Some(t) => Some(t)
+            None => pre_map.get(k)
+          }
+          let et = match else_exit.get(k) {
+            Some(t) => Some(t)
+            None => pre_map.get(k)
+          }
+          match (tt, et) {
+            (Some(a), Some(b)) => env.narrow(k, narrow_union(a, b))
+            _ => ()
+          }
         }
       }
     }
