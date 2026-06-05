@@ -1302,6 +1302,19 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-05 (T39)   536/815 (66 %)        394/414 (20 FP)
 2026-06-05 (T40)   538/815 (66 %)        394/414 (20 FP)
 2026-06-05 (T41)   540/815 (66 %)        394/414 (20 FP)
+2026-06-05 (T42)   543/815 (67 %)        394/414 (20 FP)
+
+  T42 -- boxed wrapper objects are not assignable to primitives (TS2322).
+
+    `var s: string = new String("")` is a TypeScript error: the wrapper
+    object (`String` / `Number` / `Boolean` / `BigInt` / `Symbol`) is not
+    assignable to its primitive counterpart (the reverse, primitive widening
+    to the wrapper interface, stays fine). Added the exact wrapper/primitive
+    pairs to `is_assignable_to`, plus a carve-out in `check_expr_against` so
+    the diagnostic fires ahead of the unresolved-`Named` bail (these wrapper
+    names are lib globals the resolver doesn't carry). Only the exact pairs
+    are matched, so it is false-positive-free. recall 540 -> 543, FP steady
+    20 (clears assignFrom{String,Number,Boolean}Interface).
 
   T41 -- type-argument arity for classes / interfaces / enums (TS2314 /
   TS2315).

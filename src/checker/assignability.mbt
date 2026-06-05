@@ -494,6 +494,20 @@ fn is_assignable_to_inner(
     Never => return true
     _ => ()
   }
+  // Boxed wrapper objects are NOT assignable to their primitive
+  // counterparts: `var s: string = new String("")` is a TS error (TS2322,
+  // "'string' is a primitive, but 'String' is a wrapper object"). The
+  // reverse direction (primitive widening to the wrapper interface) stays
+  // structurally assignable and is handled below. Only the exact global
+  // wrapper names are matched, so user object types are unaffected.
+  match (source, target) {
+    (Named("String"), String_)
+    | (Named("Number"), Number | Int)
+    | (Named("Boolean"), Boolean)
+    | (Named("BigInt"), BigInt)
+    | (Named("Symbol"), Symbol) => return false
+    _ => ()
+  }
   // The target side of a union accepts a source if any member matches.
   match target {
     Union(members) => {

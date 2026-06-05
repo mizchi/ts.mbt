@@ -5534,6 +5534,28 @@ fn check_expr_against(
   // correctly assigns to `string` without a false mismatch.
   let inferred_u = ctx.resolver.unwrap(inferred)
   let expected_u = ctx.resolver.unwrap(expected)
+  // Boxed wrapper objects (`String`/`Number`/`Boolean`/`BigInt`/`Symbol`)
+  // are not assignable to their primitive counterparts: `var s: string =
+  // new String("")` is TS2322. These wrapper names are lib globals the
+  // resolver doesn't carry, so handle the mismatch here -- ahead of the
+  // unresolved-`Named` bail below, which would otherwise skip it. Only the
+  // exact wrapper/primitive pairs are matched, so this is false-positive-free.
+  let wrapper_mismatch = match (inferred_u, widen_literal(expected_u)) {
+    (Named("String"), String_)
+    | (Named("Number"), Number | Int)
+    | (Named("Boolean"), Boolean)
+    | (Named("BigInt"), BigInt)
+    | (Named("Symbol"), Symbol) => true
+    _ => false
+  }
+  if wrapper_mismatch {
+    record(
+      ctx,
+      sub_path,
+      "expected `\{type_display(expected)}` but got `\{type_display(inferred_u)}`",
+    )
+    return
+  }
   // Without `strictNullChecks`, a literal `null` / `undefined` is assignable
   // to every type (`var b: number = null`). The conformance corpus runs
   // largely under `@strict: false` and we have no per-file strict-mode
