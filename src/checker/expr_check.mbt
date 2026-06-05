@@ -10568,6 +10568,32 @@ fn check_module_function_bodies_layered(
         message: "option `\{opt}` is deprecated",
       })
     }
+    // Module-level structural validation that doesn't depend on function
+    // bodies. Only the kinds that are sound *and* not already covered by
+    // the body pass *and* false-positive-free are admitted:
+    //   - `CircularTypeAlias` / `InterfaceExtendsCycle`: self-referential
+    //     declarations TS always rejects.
+    //   - `TypeAliasArityMismatch`: wrong type-argument count against a
+    //     locally-declared alias.
+    // Excluded: `UnresolvedReference` (lib / cross-file refs we don't
+    // resolve), `DuplicateDeclaration` (legal declaration merging),
+    // `InterfaceFieldDuplicate` / `EnumMemberDuplicate` (the body pass
+    // already flags real dups while tolerating call / construct / method
+    // overloads, which the structural pass mis-reads as duplicate
+    // `<call>` / `<new>` / method fields), `ClassPropertyDuplicate` (the
+    // parser merges duplicate fields, so it never fires), and
+    // `TypeParameterConstraintViolation` (false-flags `infer` / forwarded
+    // type-parameter bounds).
+    for issue in check_module(module_).issues {
+      let keep = match issue.kind {
+        CircularTypeAlias | InterfaceExtendsCycle | TypeAliasArityMismatch =>
+          true
+        _ => false
+      }
+      if keep {
+        all.push({ path: issue.name, message: issue.detail })
+      }
+    }
   }
   // Recurse into namespace bodies. Each level threads its own ancestor
   // chain so a nested namespace can reference parent-scope types by their

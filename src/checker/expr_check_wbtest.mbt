@@ -6666,3 +6666,42 @@ test "expr_check: deprecated @target es3 directive is flagged (TS5107)" {
   })
   assert_true(dep.length() >= 1)
 }
+
+///|
+test "expr_check: surfaces circular type alias and arity mismatch via body pass" {
+  // The module-level structural validation (circular aliases, extends
+  // cycles, type-alias arity) is wired into the function-body check entry
+  // so the accuracy walk counts these declaration errors.
+  let src =
+    #|type Loop = Loop;
+    #|type Pair<A, B> = [A, B];
+    #|type Bad = Pair<number>;
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let circular = issues.filter(fn(i) {
+    i.message.contains("resolves to itself")
+  })
+  let arity = issues.filter(fn(i) { i.message.contains("used with") })
+  assert_true(circular.length() >= 1)
+  assert_true(arity.length() >= 1)
+}
+
+///|
+test "expr_check: interface method overloads are not flagged as duplicates" {
+  // Multiple call signatures / method overloads share a field name in the
+  // parser representation; the structural pass must NOT be admitted for
+  // `InterfaceFieldDuplicate` or these would false-positive.
+  let src =
+    #|interface I {
+    #|  foo(x: string): string;
+    #|  foo(x: number): number;
+    #|  (x: string): string;
+    #|  (x: number): number;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let dup = issues.filter(fn(i) {
+    i.message.contains("same field name more than once")
+  })
+  @test.assert_eq(dup.length(), 0)
+}
