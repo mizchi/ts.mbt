@@ -11331,6 +11331,34 @@ fn check_interface_extends_compat(
           None => ()
         }
       }
+      // Index-signature compatibility: a derived index signature's value
+      // type must be assignable to the base's same-keyed index signature
+      // value. `interface B extends A { [x: string]: Base }` over
+      // `interface A { [x: string]: Derived }` is incompatible because
+      // `Base` lacks `Derived`'s members. Decide structurally and only when
+      // both values are plain (non-generic) named decls, so it's a reliable
+      // "not assignable" with no FP from unresolved generics.
+      for d_sig in iface.index_signatures {
+        for b_sig in base.index_signatures {
+          if d_sig.0 == b_sig.0 {
+            let dv = strip_optional(d_sig.1)
+            let bv = strip_optional(b_sig.1)
+            let both_plain_named = match
+              (resolver.unwrap(dv), resolver.unwrap(bv)) {
+              (Named(_), Named(_)) =>
+                is_named_decl(dv, resolver) && is_named_decl(bv, resolver)
+              _ => false
+            }
+            if both_plain_named &&
+              !struct_assignable_named_rec(dv, bv, resolver, []) {
+              issues.push({
+                path: "interface \{iface.name}",
+                message: "interface incorrectly extends `\{base_name}`: index signatures are incompatible",
+              })
+            }
+          }
+        }
+      }
     }
   }
   // TS2411 ("Property 'X' of type 'T' is not assignable to '<key>' index
