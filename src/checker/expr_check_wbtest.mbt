@@ -6755,6 +6755,63 @@ test "expr_check: lib / cross-file generic references are never arity-flagged" {
 }
 
 ///|
+test "expr_check: object-literal field types widen for un-annotated var (TS2322 no FP)" {
+  // `var a = { foo: '' }` has type `{ foo: string }` in TS (object contents
+  // widen), so assigning a `{ foo: string }` value back is fine. Without
+  // field widening at the binding site this false-flagged `string` vs `''`.
+  let src =
+    #|var a = { foo: "" };
+    #|declare var b: { foo: string };
+    #|a = b;
+  let issues = check_module_function_bodies(parse_module_or_empty(src))
+  let mism = issues.filter(fn(i) { i.message.contains("but got") })
+  @test.assert_eq(mism.length(), 0)
+}
+
+///|
+test "expr_check: object assignment missing a required property is flagged (TS2322)" {
+  // Now that object types render structurally, a source object that lacks a
+  // required target member is reported (no longer hidden behind the `type`
+  // placeholder the permissive filter dropped).
+  let src =
+    #|declare var a: { x: number };
+    #|declare var t: { x: number; y: number };
+    #|t = a;
+  let issues = check_module_function_bodies(parse_module_or_empty(src))
+  assert_true(
+    issues
+    .iter()
+    .any(fn(i) {
+      i.message.contains("but got") && i.message.contains("y: number")
+    }),
+  )
+}
+
+///|
+test "expr_check: object assignable to a union arm is not flagged (TS2322 no FP)" {
+  // `{ p: number }` flows into `number | I2` via the `I2` arm; the one-way
+  // structural rescue must descend the union target.
+  let src =
+    #|interface I2 { p: number }
+    #|var x = { p: 1 };
+    #|var y: number | I2 = x;
+  let issues = check_module_function_bodies(parse_module_or_empty(src))
+  let mism = issues.filter(fn(i) { i.message.contains("but got") })
+  @test.assert_eq(mism.length(), 0)
+}
+
+///|
+test "expr_check: callable-interface vs function value is not flagged (TS2322 no FP)" {
+  // An overloaded call-signature object (`{ <call>; <call> }`) against a
+  // function value needs overload resolution we don't model -- suppressed.
+  let src =
+    #|var f: { (x: string): string; (x: number): number } = (x: any) => x;
+  let issues = check_module_function_bodies(parse_module_or_empty(src))
+  let mism = issues.filter(fn(i) { i.message.contains("but got") })
+  @test.assert_eq(mism.length(), 0)
+}
+
+///|
 test "expr_check: duplicate string/number index signatures are flagged (TS2374)" {
   // Two string index signatures (and, separately, two numeric ones) on a
   // single object type are always an error. One string + one numeric is

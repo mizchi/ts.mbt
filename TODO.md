@@ -1303,8 +1303,38 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-05 (T40)   538/815 (66 %)        394/414 (20 FP)
 2026-06-05 (T41)   540/815 (66 %)        394/414 (20 FP)
 2026-06-05 (T42)   543/815 (67 %)        394/414 (20 FP)
+2026-06-05 (T44)   545/815 (67 %)        395/414 (19 FP)
 
-  TS2322 object-rendering lever (investigated T43, NOT shipped).
+  T44 -- object-type rendering + structural assignment mismatches (TS2322).
+
+    Implemented prerequisite (1) from the T43 investigation and shipped the
+    object-rendering lever behind targeted guards. Net: recall 543 -> 545,
+    and FP 20 -> 19 (a pre-existing object FP was also healed). Pieces:
+      - `widen_literal_deep` + apply it to composite (`Object`/`Struct`/
+        `Array`/`Tuple`) inferred types at un-annotated `var`/`let`/`const`
+        binding sites. TS widens object/array *contents* even for `const`
+        (`var a = { foo: '' }` is `{ foo: string }`), so a later `a = b`
+        field comparison is no longer over-narrow.
+      - `type_display` now renders inline object types as `{ k: T; ... }`
+        instead of the `type` placeholder, so object mismatches survive the
+        permissive filter.
+      - Guards keeping it false-positive-free, since rendering surfaces
+        imprecision the placeholder hid: a one-way structural rescue (the
+        correct rule for assignment -- source need only provide the target's
+        required members; descends a union *target* via any arm); suppress
+        when either shape carries a `typeof x` field or a `<call>` / `<new>`
+        call-signature sentinel (overload resolution we don't model); and
+        suppress a fresh object-literal source against a non-scalar target
+        (contextual / generic typing we don't model -- plain object / interface
+        targets are still checked per-field before this point, and a scalar
+        target stays a reportable category clash).
+    The raw rendering alone was +12 recall / +11 FP (555/31); the guards
+    trade most of that recall for a clean FP profile. Recovering the rest
+    needs prerequisites (2) `typeof x` field resolution and (3) contextual
+    typing for object-literal arguments (still open below).
+
+  TS2322 object-rendering lever (investigated T43; prerequisite (1) shipped
+  in T44 above, (2)/(3) still open).
 
     The single biggest remaining recall bucket is TS2322 (~52 missed
     files). The dominant blocker is structural: inline object types render

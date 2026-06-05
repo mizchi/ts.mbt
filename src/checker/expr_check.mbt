@@ -5632,6 +5632,20 @@ fn check_expr_against(
       is_structurally_assignable_named(expected_u, inferred_u, ctx.resolver) {
       return
     }
+    // One-way structural assignability is the correct rule for an
+    // *assignment* (`lhs = rhs`): the source need only provide every member
+    // the target requires (extra source members are fine for a variable
+    // assignment -- excess-property checks apply only to fresh object
+    // literals, handled separately). `is_assignable_to` is nominal for
+    // `Named` class / interface references, so a structural source
+    // (`{ foo: string; baz: string }`) assigned to a named target
+    // (`interface S2 { foo: string }`) would otherwise false-flag. A missing
+    // or incompatible *required* target member still makes this `false`, so
+    // genuine subtype mismatches are preserved. A union target is satisfied
+    // when the source assigns to any arm.
+    if structural_oneway_assignable(inferred_u, expected_u, ctx.resolver) {
+      return
+    }
     // Class inheritance: `Derived is_a Base` when `class Derived extends
     // Base`. The resolver-free `is_assignable_to` is nominal so a pure
     // subtype assignment was previously flagged. Walk the source's class
@@ -5649,6 +5663,29 @@ fn check_expr_against(
     // string | number | boolean" mismatch that's almost always a
     // narrowing-gap rather than a real error.
     if is_flow_narrowing_gap(inferred_u, expected_u) {
+      return
+    }
+    // Object types now render as `{ ... }` (not the suppressed `type`
+    // placeholder), so two remaining imprecision classes must be guarded
+    // against to keep this false-positive-free:
+    //   - a `typeof x` value-query anywhere in either shape can't be
+    //     compared structurally (its identity is the binding it queries);
+    //   - a *fresh object literal* (`f({ ... })`, `x = { ... }`) flowing
+    //     into a non-object-literal target (a generic / utility / union /
+    //     call-signature shape) goes through contextual typing we don't
+    //     fully model. Plain object / interface targets were already routed
+    //     to the per-field literal checker before reaching here, so this
+    //     only drops the cases we can't decide -- a bare-scalar target
+    //     (`var n: number = { ... }`) is still a category clash worth
+    //     reporting and is left to fall through.
+    if type_contains_typeof(inferred_u) || type_contains_typeof(expected_u) {
+      return
+    }
+    if type_has_call_signature(inferred_u, ctx.resolver) ||
+      type_has_call_signature(expected_u, ctx.resolver) {
+      return
+    }
+    if expr is ObjectLit(_) && !is_bare_scalar_type(expected_u) {
       return
     }
     // Display the widened form of the inferred type (`number` rather than the
@@ -6141,6 +6178,97 @@ fn widen_literal(t : @ast.TsType) -> @ast.TsType {
       }
       @ast.TsType::Tuple(widened)
     }
+    _ => t
+  }
+}
+
+///|
+/// One-way structural assignability that also descends a union *target*: a
+/// source assigns to `A | B` when it structurally assigns to either arm
+/// (e.g. `{ p1, p2 }` flows into `number | I2` via `I2`). Plain targets
+/// defer to `is_structurally_assignable_named`.
+fn structural_oneway_assignable(
+  source : @ast.TsType,
+  target : @ast.TsType,
+  resolver : Resolver,
+) -> Bool {
+  match resolver.unwrap(target) {
+    Union(members) => {
+      for m in members {
+        if structural_oneway_assignable(source, m, resolver) {
+          return true
+        }
+      }
+      false
+    }
+    _ => is_structurally_assignable_named(source, target, resolver)
+  }
+}
+
+///|
+/// True when `t` is (or unwraps to) an object shape carrying a call /
+/// construct signature (`<call>` / `<new>` sentinel field) -- i.e. a
+/// callable / overloaded interface. Matching these against function types
+/// needs overload resolution we don't model, so an object mismatch involving
+/// one is suppressed rather than risk a false positive.
+fn type_has_call_signature(t : @ast.TsType, resolver : Resolver) -> Bool {
+  let fields = match resolver.unwrap(t) {
+    Object(fs) => fs
+    Struct(_, fs) => fs.map(fn(f) { (Literal(f.0), f.1) })
+    _ => return false
+  }
+  for f in fields {
+    match f.0 {
+      Literal(name) => if name == "<call>" || name == "<new>" { return true }
+      _ => ()
+    }
+  }
+  false
+}
+
+///|
+/// A bare scalar (primitive or scalar literal). Used to keep an
+/// object-literal-source mismatch against a *primitive* target (a real
+/// category clash) while suppressing it against generic / union / object
+/// targets we type contextually.
+fn is_bare_scalar_type(t : @ast.TsType) -> Bool {
+  match t {
+    Number
+    | Int
+    | Boolean
+    | String_
+    | BigInt
+    | Symbol
+    | Literal(_)
+    | NumberLiteral(_)
+    | BigIntLiteral(_)
+    | BooleanLiteral(_) => true
+    _ => false
+  }
+}
+
+///|
+/// Recursively widen literal types, descending through object / struct field
+/// types (and array / tuple / union members). Mirrors TypeScript's widening
+/// of a mutable object-literal initializer: `var a = { foo: '' }` has type
+/// `{ foo: string }`, not `{ foo: '' }`. The object's *contents* widen even
+/// for a `const` binding (only a top-level `const` scalar stays literal),
+/// which is why this is applied to composite binding types regardless of the
+/// declaration keyword. `widen_literal` only widens at the top level / array
+/// / tuple; this also reaches inside `Object` / `Struct` fields and unions.
+fn widen_literal_deep(t : @ast.TsType) -> @ast.TsType {
+  match t {
+    Literal(_) => String_
+    NumberLiteral(_) => Number
+    BigIntLiteral(_) => BigInt
+    BooleanLiteral(_) => Boolean
+    Array(elem) => Array(widen_literal_deep(elem))
+    Tuple(items) => Tuple(items.map(widen_literal_deep))
+    Union(members) => Union(members.map(widen_literal_deep))
+    Object(fields) =>
+      Object(fields.map(fn(f) { (f.0, widen_literal_deep(f.1)) }))
+    Struct(name, fields) =>
+      Struct(name, fields.map(fn(f) { (f.0, widen_literal_deep(f.1)) }))
     _ => t
   }
 }
@@ -7244,13 +7372,25 @@ fn type_display(ty : @ast.TsType) -> String {
     // `unique symbol` -- the literal `unique symbol` text matches the
     // source so messages look right.
     UniqueSymbol(_) => "unique symbol"
-    // Object literal type: leave as the generic `type` label.
-    // Rendering the field-name list (`{toString}`) backfired by
-    // introducing false positives on object-spread (`{ ...source }`),
-    // where the inferred shape only sees one or two field names but
-    // TS sees the full set. The improvement made `expected Test2 but
-    // got type` reachable but at the cost of a real FP.
-    Object(_) => "type"
+    // Object literal type: render the field shape so a mismatch message is
+    // actionable and survives the permissive filter's "type"-residue
+    // suppression. Object-literal field types are now widened at the binding
+    // site (see `widen_literal_deep`), so the historical literal-width false
+    // positives (`{ foo: '' }` vs `{ foo: string }`) do not recur.
+    Object(fields) =>
+      if fields.length() == 0 {
+        "{}"
+      } else {
+        let parts : Array[String] = []
+        for f in fields {
+          let key = match f.0 {
+            Literal(k) => k
+            _ => type_display(f.0)
+          }
+          parts.push(key + ": " + type_display(f.1))
+        }
+        "{ " + parts.join("; ") + " }"
+      }
     Struct(name, _) => name
     Constructor(_, ret, _) => "new (...) => " + type_display(ret)
     _ => "type"
@@ -8715,7 +8855,18 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       let bound_type = if is_checkable(declared) {
         declared
       } else {
-        infer_expr(env, ctx.resolver, init)
+        // No annotation: infer from the initializer. TypeScript widens the
+        // field types of an object / array / tuple literal (their contents
+        // are mutable), so `var a = { foo: '' }` is `{ foo: string }`, not
+        // `{ foo: '' }`. Apply that to composite inferred shapes so a later
+        // `a = b` field comparison isn't over-narrow. Top-level scalars are
+        // left to the existing primitive-widening behaviour.
+        let inferred = infer_expr(env, ctx.resolver, init)
+        match inferred {
+          Object(_) | Struct(_, _) | Array(_) | Tuple(_) =>
+            widen_literal_deep(inferred)
+          _ => inferred
+        }
       }
       env.bind(name, bound_type)
       // Make sure the *declared* slot reflects the source annotation
