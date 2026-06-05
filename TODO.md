@@ -1297,6 +1297,18 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-05 (T34)   532/815 (65 %)        389/414 (25 FP)
 2026-06-05 (T35)   532/815 (65 %)        393/414 (21 FP)
 2026-06-05 (T36)   532/815 (65 %)        394/414 (20 FP)
+2026-06-05 (T37)   533/815 (65 %)        394/414 (20 FP)
+
+  T37 -- structural detection of incompatible interface-extends (TS2430).
+
+    First recall-raising *detection* after a run of precision fixes (recall
+    had been flat at 532). `check_interface_extends_compat` now decides a
+    redeclared member structurally via `struct_assignable_named_rec` when
+    both member types are plain (non-generic) class / interface refs -- so
+    `interface B extends A { bar: Base }` over `interface A { bar: Derived }`
+    is flagged (Base lacks Derived's members). The full field sets make
+    `false` a reliable "not assignable", and generic `Applied` shapes are
+    excluded to stay FP-free. recall 532 -> 533, FP steady 20.
 
   Policy shift (T30 onward): the goal is TypeScript compatibility, not a
   zero-false-positive score. Recall AND false positives are both tracked as
