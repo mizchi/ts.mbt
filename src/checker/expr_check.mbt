@@ -8084,11 +8084,38 @@ fn apply_method_type_predicate_narrowing(
   let recv_ty = infer_expr(env, resolver, receiver)
   let ret = match resolver.lookup_method_sig(recv_ty, method_name) {
     Some((_, ret)) => ret
-    None => return
+    None =>
+      // Arrow-function class field predicate: `isElite = (): this is T =>
+      // {...}` is stored as a `Func`-typed property, not a method, so
+      // `lookup_method_sig` misses it. Fall back to the field's return type.
+      match resolver.lookup_field(recv_ty, method_name) {
+        Some(Func(_, r)) => r
+        _ => return
+      }
   }
   let (param_name, target) = match ret {
     TypePredicate(p, t) => (p, t)
     _ => return
+  }
+  // `this is T` predicate (`isLeader(): this is LeadGuard`): the guard
+  // narrows the *receiver* itself, not a positional argument. Narrow the
+  // receiver's binding (`if (a.isLeader()) { a.lead() }`).
+  if param_name == "this" {
+    match narrowing_key_for_expr(receiver) {
+      Some(key) => {
+        let cur = narrowing_current_type(env, resolver, key)
+        let then_ty = narrow_keep(cur, fn(v) { is_assignable_to(v, target) })
+        let then_resolved = match then_ty {
+          Never => target
+          _ => then_ty
+        }
+        pair_pos.push((key, then_resolved))
+        let else_ty = narrow_remove(cur, fn(v) { is_assignable_to(v, target) })
+        pair_neg.push((key, else_ty))
+      }
+      None => ()
+    }
+    return
   }
   // Without per-method TsParam metadata, fall back to first positional arg.
   let _ = param_name
