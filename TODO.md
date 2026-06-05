@@ -1288,10 +1288,24 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-05 (T25)   473/815 (58 %)        414/414 ( 0 FP)
 2026-06-05 (T26)   476/815 (58 %)        414/414 ( 0 FP)
 2026-06-05 (T27)   480/815 (59 %)        414/414 ( 0 FP)
+2026-06-05 (T28)   483/815 (59 %)        414/414 ( 0 FP)
 
   Note: the T24 starting point (433/815) is higher than the T23 row
   because the TS2554 constructor/function-arity commits (PRs #84-#86)
   landed after the T23 measurement without refreshing this table.
+
+  T28 -- distinct-literal loose equality + `<T>` cast type preservation.
+
+    The loose-equality (`==` / `!=`) TS2367 branch skipped bare
+    literal-vs-literal pairs to dodge a false positive on dropped type
+    assertions (`"foo" == (<any>"bar")`). Root cause: the angle-bracket
+    cast parser discarded its asserted type and returned the bare inner
+    expression, so `<any>"bar"` inferred as the literal `"bar"` rather than
+    `any`. Fixed at the source -- `parse_angle_bracket_type_assertion`
+    now wraps the operand in an `As(expr, ty)` node (same shape as
+    `expr as T`), so the cast widens through inference and the literal-const
+    skip is no longer needed. Genuine `"foo" == "bar"` now flags like the
+    strict `===` branch. +3 recall (480 -> 483), 0 FP.
 
   T27 -- class self-extension (TS2506) + presence-based deprecated options.
 
