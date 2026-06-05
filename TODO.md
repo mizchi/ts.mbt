@@ -1304,6 +1304,41 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-05 (T41)   540/815 (66 %)        394/414 (20 FP)
 2026-06-05 (T42)   543/815 (67 %)        394/414 (20 FP)
 
+  TS2322 object-rendering lever (investigated T43, NOT shipped).
+
+    The single biggest remaining recall bucket is TS2322 (~52 missed
+    files). The dominant blocker is structural: inline object types render
+    as the placeholder `type` in `type_display`, and the permissive filter
+    suppresses any mismatch carrying a `type` residue -- so every
+    object-shaped assignment / initializer mismatch is silently dropped even
+    though the checker already *computes* it correctly (visible under
+    `tscheck --strict`).
+
+    Rendering object types as `{ k: T; ... }` unlocks +12 recall (543 ->
+    555) but raises FP 20 -> 31 (7.5 %, over the ~5 % working budget). The
+    new FPs are NOT in the object-mismatch logic itself; they are latent
+    inference-precision gaps that the placeholder was masking:
+      - object-literal field types are not widened at the binding site
+        (`var a = { foo: '' }` is inferred `{ foo: '' }`, not `{ foo:
+        string }`), so a later `a = b` field-type comparison false-flags;
+      - `typeof x` field types compare nominally (`typeof a` vs `typeof b`);
+      - contextual / generic inference for object-literal *arguments*
+        (`assign({ count: ... })`) is incomplete.
+    Conservative gates were tried (one-way structural rescue; emit only
+    missing-required-member + primitive/object category clashes; retry with
+    both sides literal-widened) -- each either left FP at 31 or net-regressed
+    recall below 543, because the field-type object mismatches are
+    simultaneously the recall source and the FP source. Reverted; no change
+    shipped.
+
+    To land this cleanly the prerequisites are real inference fixes, in
+    rough priority order: (1) widen object-literal field types for
+    un-annotated `var`/`let` bindings (recursive `widen_literal` into Object
+    fields, gated off `const`); (2) resolve `typeof x` field types to the
+    binding's type; (3) contextual typing for object-literal arguments.
+    With (1)+(2) the naive rendering should drop most of the +11 FP while
+    keeping the +12 recall.
+
   T42 -- boxed wrapper objects are not assignable to primitives (TS2322).
 
     `var s: string = new String("")` is a TypeScript error: the wrapper
