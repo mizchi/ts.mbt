@@ -10020,9 +10020,6 @@ fn check_function_body_with(
   strict_property_init : Bool,
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
-  if func.body.stmts.length() == 0 {
-    return issues
-  }
   let env = ExprEnv::new()
   // Inside an async function body, `return x` returns the inner type — the
   // wrapping `Promise<T>` is what the *caller* sees. So we unwrap once for
@@ -10112,6 +10109,14 @@ fn check_function_body_with(
         check_expr_against(env, d, p.type_, ctx, "param `\{p.name}` default")
       None => ()
     }
+  }
+  // Nothing further to analyze for an empty / ambient body. The
+  // param-default check above is the only declaration-level check that
+  // applies to a bodiless signature, so run it (a default whose type
+  // mismatches the annotation is an error regardless of the body) and
+  // then bail before the statement / return-path analysis.
+  if func.body.stmts.length() == 0 {
+    return issues
   }
   for stmt in func.body.stmts {
     check_stmt(env, stmt, ctx)
@@ -10403,46 +10408,96 @@ fn check_module_function_bodies_layered(
   // issues point at the source location.
   for cls in module_.classes {
     for meth in cls.methods {
-      match meth.body {
-        Some(body) => {
-          let params : Array[@ast.TsParam] = []
-          for p in meth.params {
-            params.push({
-              name: p.0,
-              binding: None,
-              is_rest: false,
-              type_: p.1,
-              default: None,
-            })
-          }
-          // Merge class-level + method-level type parameters so the body
-          // sees the same in-scope generics that TypeScript does.
-          let merged_tparams : Array[String] = []
-          for tp in cls.type_params {
-            merged_tparams.push(tp)
-          }
-          for tp in meth.type_params {
-            merged_tparams.push(tp)
-          }
-          let synth : @ast.TsFunc = {
-            name: cls.name + "." + meth.name,
-            type_params: merged_tparams,
-            params,
-            return_type: meth.return_type,
-            body,
-            const_type_params: [],
-            is_generator: false,
-            is_async: false,
-          }
-          for
-            issue in check_function_body_with(
-              synth, resolver, permissive, strict_property_init,
-            ) {
-            all.push(issue)
-          }
-        }
-        None => ()
+      // Walk the body when present; a bodiless method (abstract / ambient /
+      // overload signature) still needs its parameter defaults validated,
+      // so synthesize an empty body in that case. `check_function_body_with`
+      // checks defaults first and then bails on the empty body.
+      let body = match meth.body {
+        Some(b) => b
+        None => { stmts: [], stmt_positions: [] }
       }
+      let params : Array[@ast.TsParam] = []
+      for i, p in meth.params {
+        // Preserve positionally-aligned default initializers and rest
+        // flags so the body checker validates `m(x: string = 1)` style
+        // default-vs-annotation mismatches (TS2322) the same way it
+        // does for top-level functions.
+        let default = if i < meth.param_defaults.length() {
+          meth.param_defaults[i]
+        } else {
+          None
+        }
+        let is_rest = i < meth.param_is_rest.length() && meth.param_is_rest[i]
+        params.push({ name: p.0, binding: None, is_rest, type_: p.1, default })
+      }
+      // Merge class-level + method-level type parameters so the body
+      // sees the same in-scope generics that TypeScript does.
+      let merged_tparams : Array[String] = []
+      for tp in cls.type_params {
+        merged_tparams.push(tp)
+      }
+      for tp in meth.type_params {
+        merged_tparams.push(tp)
+      }
+      let synth : @ast.TsFunc = {
+        name: cls.name + "." + meth.name,
+        type_params: merged_tparams,
+        params,
+        return_type: meth.return_type,
+        body,
+        const_type_params: [],
+        is_generator: false,
+        is_async: false,
+      }
+      for
+        issue in check_function_body_with(
+          synth, resolver, permissive, strict_property_init,
+        ) {
+        all.push(issue)
+      }
+    }
+  }
+  // Constructor parameter defaults (`constructor(x: string = 1)`). The
+  // constructor body isn't retained on `TsClassDecl`, but a default-value
+  // initializer must still be assignable to its parameter type (TS2322).
+  // Synthesize a bodiless function carrying the constructor's params and
+  // defaults; `check_function_body_with` validates the defaults and then
+  // bails on the empty body before any flow analysis.
+  for cls in module_.classes {
+    match cls.constructor_params {
+      Some(cparams) => {
+        if cparams.length() == 0 {
+          continue
+        }
+        let params : Array[@ast.TsParam] = []
+        for i, p in cparams {
+          let default = if i < cls.constructor_param_defaults.length() {
+            cls.constructor_param_defaults[i]
+          } else {
+            None
+          }
+          let is_rest = i < cls.constructor_param_is_rest.length() &&
+            cls.constructor_param_is_rest[i]
+          params.push({ name: p.0, binding: None, is_rest, type_: p.1, default })
+        }
+        let synth : @ast.TsFunc = {
+          name: cls.name + ".constructor",
+          type_params: cls.type_params,
+          params,
+          return_type: @ast.TsType::Void,
+          body: { stmts: [], stmt_positions: [] },
+          const_type_params: [],
+          is_generator: false,
+          is_async: false,
+        }
+        for
+          issue in check_function_body_with(
+            synth, resolver, permissive, strict_property_init,
+          ) {
+          all.push(issue)
+        }
+      }
+      None => ()
     }
   }
   // Class field initializers (`class C { x = expr; static y = expr }`).

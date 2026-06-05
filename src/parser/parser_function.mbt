@@ -2433,6 +2433,7 @@ fn Parser::parse_declare_class(
     // The ambient `declare class` param parser does not surface rest flags;
     // leave empty (rest detection just no-ops for these).
     constructor_param_is_rest: [],
+    constructor_param_defaults: [],
     properties,
     methods,
     index_signatures,
