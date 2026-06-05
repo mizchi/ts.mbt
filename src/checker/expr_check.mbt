@@ -5614,28 +5614,80 @@ fn is_structurally_assignable_named(
   target : @ast.TsType,
   resolver : Resolver,
 ) -> Bool {
-  // Only engage when both sides resolve as class / interface shapes.
-  // `lookup_field` returns `None` for opaque receivers, so this filter
-  // also weeds out unresolvable references (generic type parameters,
-  // qualified names) without false promotion.
-  if !is_named_decl(source, resolver) || !is_named_decl(target, resolver) {
+  struct_assignable_named_rec(source, target, resolver, [])
+}
+
+///|
+/// Co-inductive structural assignability for class / interface references.
+/// Field types are compared *recursively* through this same relation (not
+/// the nominal `is_assignable_to`) so two distinct-but-shape-identical
+/// recursive types assign -- e.g. `class S { foo: S }` and
+/// `class T { foo: T }`, where `S.foo` (`S`) must be checked against `T.foo`
+/// (`T`). `visited` records the (source, target) name pairs currently being
+/// proven; re-encountering a pair returns `true` (co-induction), which is
+/// how TypeScript itself relates recursive types and breaks the cycle.
+fn struct_assignable_named_rec(
+  source : @ast.TsType,
+  target : @ast.TsType,
+  resolver : Resolver,
+  visited : Array[(String, String)],
+) -> Bool {
+  // Depth cap: generic recursive shapes (`Wrapped<Wrapped<T>>`) deepen the
+  // substituted field type at every level, so the `visited` co-induction key
+  // never repeats and the recursion would not terminate. Bail conservatively
+  // (can't *prove* assignability) once the chain is implausibly deep -- the
+  // caller falls through to its other relations / the diagnostic.
+  if visited.length() >= 48 {
     return false
   }
-  let target_fields = collect_declared_fields(target, resolver)
+  let s = resolver.unwrap(source)
+  let t = resolver.unwrap(target)
+  if s == t {
+    return true
+  }
+  // Only engage when both sides resolve as class / interface (or object)
+  // shapes. `lookup_field` returns `None` for opaque receivers, so this
+  // also weeds out unresolvable references (generic type parameters,
+  // qualified names) without false promotion.
+  if !is_named_decl(s, resolver) || !is_named_decl(t, resolver) {
+    return false
+  }
+  let key = (type_display(s), type_display(t))
+  if visited.contains(key) {
+    return true
+  }
+  visited.push(key)
+  let target_fields = collect_declared_fields(t, resolver)
   if target_fields.length() == 0 {
+    let _ = visited.pop()
     return false
   }
   for f in target_fields {
-    let key = f.0
-    let want = f.1
-    match resolver.lookup_field(source, key) {
-      Some(have) =>
-        if !is_assignable_to(resolver.unwrap(have), resolver.unwrap(want)) {
+    let want = resolver.unwrap(f.1)
+    match resolver.lookup_field(s, f.0) {
+      Some(have) => {
+        let have_u = resolver.unwrap(have)
+        // Recurse structurally when both field types are themselves
+        // class / interface references (covers the recursive case); fall
+        // back to the well-tested nominal / builtin relation otherwise.
+        let ok = if is_named_decl(have_u, resolver) &&
+          is_named_decl(want, resolver) {
+          struct_assignable_named_rec(have_u, want, resolver, visited)
+        } else {
+          is_assignable_to(have_u, want)
+        }
+        if !ok {
+          let _ = visited.pop()
           return false
         }
-      None => return false
+      }
+      None => {
+        let _ = visited.pop()
+        return false
+      }
     }
   }
+  let _ = visited.pop()
   true
 }
 
