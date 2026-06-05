@@ -4131,24 +4131,19 @@ fn check_binop_operands(
           _ => false
         }
       }
-      // Both operands written as bare literal constants is exactly where
-      // a dropped type assertion (`"x" == (<any>"y")`, `... == ("y" as
-      // string)`) leaves behind a spurious literal-vs-literal shape, so
-      // skip that pair. Real always-false comparisons in the corpus pair
-      // a literal-typed *variable* with a literal, which is still flagged.
-      let is_literal_const = fn(e : @ast.TsExpr) -> Bool {
-        match e {
-          StringLit(_) | NumberLit(_) | IntLit(_) | BoolLit(_) | BigIntLit(_) =>
-            true
-          _ => false
-        }
-      }
+      // A dropped type assertion (`"x" == (<any>"y")`, `... == ("y" as
+      // string)`) used to leave behind a spurious literal-vs-literal shape
+      // here, but the parser now binds `as` / cast tighter than equality
+      // (T19), so those RHS operands are `As` / cast nodes whose inferred
+      // type is `string` / `any` and already overlaps. A genuine bare
+      // `"foo" == "bar"` therefore stays the only literal-vs-literal pair
+      // reaching this point, and TS reports it as TS2367 -- matching the
+      // strict-equality branch above.
       let lt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, l))
       let rt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, r))
       match (equality_primitive_family(lt), equality_primitive_family(rt)) {
         (Some(fa), Some(fb)) =>
           if fa == fb &&
-            !(is_literal_const(l) && is_literal_const(r)) &&
             !is_typeof(l) &&
             !is_typeof(r) &&
             !types_can_overlap(lt, rt) {
