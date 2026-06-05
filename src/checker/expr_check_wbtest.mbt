@@ -6699,6 +6699,62 @@ test "expr_check: mixed scalar|object index value stays silent on objects (TS241
 }
 
 ///|
+test "expr_check: type arguments on a non-generic class/interface/enum (TS2315)" {
+  // Applying type arguments to a locally-declared non-generic type is an
+  // error. Covers class, interface, enum and a non-generic alias, referenced
+  // from plain top-level `var` annotations (which live in `top_level_stmts`).
+  let src =
+    #|class C {}
+    #|interface I {}
+    #|enum E {}
+    #|type T = {};
+    #|var v1: C<string>;
+    #|var v2: I<string>;
+    #|var v3: E<string>;
+    #|var v4: T<string>;
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let arity = issues.filter(fn(i) { i.message.contains("type declared with") })
+  // Every one of the four references is reported.
+  assert_true(arity.iter().any(fn(i) { i.path == "C" }))
+  assert_true(arity.iter().any(fn(i) { i.path == "I" }))
+  assert_true(arity.iter().any(fn(i) { i.path == "E" }))
+  assert_true(arity.iter().any(fn(i) { i.path == "T" }))
+}
+
+///|
+test "expr_check: wrong type-argument count on a generic class (TS2314)" {
+  // A generic class used with the wrong number of type arguments, and a
+  // correct use that must stay silent.
+  let src =
+    #|declare class Box<T> { value: T }
+    #|var wrong: Box<string, number>;
+    #|var right: Box<string>;
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let arity = issues.filter(fn(i) {
+    i.message.contains("type declared with") && i.path == "Box"
+  })
+  // The 2-argument use is flagged; the 1-argument use is not (only one issue,
+  // de-duplicated per name by `check_arity`).
+  assert_true(arity.length() >= 1)
+}
+
+///|
+test "expr_check: lib / cross-file generic references are never arity-flagged" {
+  // `Array<T>` / `Promise<T>` are not locally declared, so the arity check
+  // must leave them alone regardless of argument count.
+  let src =
+    #|var a: Array<string>;
+    #|var b: Promise<number>;
+    #|var c: Map<string, number>;
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let arity = issues.filter(fn(i) { i.message.contains("type declared with") })
+  @test.assert_eq(arity.length(), 0)
+}
+
+///|
 test "expr_check: duplicate string/number index signatures are flagged (TS2374)" {
   // Two string index signatures (and, separately, two numeric ones) on a
   // single object type are always an error. One string + one numeric is

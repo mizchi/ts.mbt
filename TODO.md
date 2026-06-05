@@ -1301,6 +1301,23 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-05 (T38)   535/815 (66 %)        394/414 (20 FP)
 2026-06-05 (T39)   536/815 (66 %)        394/414 (20 FP)
 2026-06-05 (T40)   538/815 (66 %)        394/414 (20 FP)
+2026-06-05 (T41)   540/815 (66 %)        394/414 (20 FP)
+
+  T41 -- type-argument arity for classes / interfaces / enums (TS2314 /
+  TS2315).
+
+    The arity check (previously type-alias-only) now records the declared
+    type-parameter count of every top-level class, interface and enum too,
+    so `C<string>` against `class C {}` (TS2315 "not generic") and
+    `Box<A, B>` against `class Box<T>` (TS2314 "requires 1 type argument")
+    are both flagged. A name declared at two different arities (illegal
+    merging / clash) is dropped as ambiguous, and only locally-declared
+    names are recorded -- lib / cross-file references (`Array<T>`,
+    `Promise<T>`) are never touched, so it stays false-positive-free. Also
+    walks top-level `var`/`let`/`const` annotations (`var v: C<string>`),
+    which live in `top_level_stmts` rather than `values`. recall 538 -> 540,
+    FP steady 20 (clears nonGenericTypeReferenceWithTypeArguments and a
+    namedTypes arity case).
 
   T40 -- duplicate index signatures (TS2374).
 

@@ -212,11 +212,38 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
     }
   }
 
-  // 5. Type-alias arity mismatches: every `Applied(Name, args)` that resolves
-  //    to a top-level type alias must use the alias's declared arity.
+  // 5. Type-argument arity mismatches: every `Applied(Name, args)` that
+  //    resolves to a top-level declared type must use that type's declared
+  //    type-parameter count. Covers type aliases (`type T<P> = ...`),
+  //    interfaces, classes (TS2314 "requires N type argument(s)") and the
+  //    non-generic cases enums / 0-parameter decls (TS2315 "type is not
+  //    generic"). Restricted to locally-declared names, so lib / cross-file
+  //    references (`Array<T>`, `Promise<T>`) are never flagged.
   let arities : Map[String, Int] = {}
+  // A name declared at two different arities (illegal declaration merging,
+  // or an interface/namespace name clash) is ambiguous -- drop it so the
+  // arity check never mis-fires on a shape we can't pin down.
+  let arity_conflict : Map[String, Unit] = {}
+  fn record_arity(name : String, n : Int) -> Unit {
+    match arities.get(name) {
+      Some(prev) => if prev != n { arity_conflict[name] = () }
+      None => arities[name] = n
+    }
+  }
   for ta in module_.type_aliases {
-    arities[ta.name] = ta.type_params.length()
+    record_arity(ta.name, ta.type_params.length())
+  }
+  for iface in module_.interfaces {
+    record_arity(iface.name, iface.type_params.length())
+  }
+  for c in module_.classes {
+    record_arity(c.name, c.type_params.length())
+  }
+  for e in module_.enums {
+    record_arity(e.name, 0)
+  }
+  for name, _ in arity_conflict {
+    arities.remove(name) |> ignore
   }
   for iface in module_.interfaces {
     let scope = scope_with_iface_params(iface)
@@ -245,6 +272,16 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
   for v in module_.values {
     let scope : Array[String] = []
     check_arity(v.type_, scope, arities, issues)
+  }
+  // Top-level `var`/`let`/`const` declarations whose annotation references a
+  // declared type (`var v: C<string>`) -- these live in `top_level_stmts`,
+  // not `values`, so walk their type annotations here as well.
+  for stmt in module_.top_level_stmts {
+    match stmt {
+      Var(_, t, _) | Let(_, t, _) | Const(_, t, _) =>
+        check_arity(t, [], arities, issues)
+      _ => ()
+    }
   }
 
   // 6. Generic type-parameter constraint violations: every
@@ -531,7 +568,7 @@ fn check_arity(
                 issues.push({
                   kind: TypeAliasArityMismatch,
                   name,
-                  detail: "type alias declared with \{expected} parameter(s) used with \{args.length()}",
+                  detail: "type declared with \{expected} type parameter(s) used with \{args.length()}",
                 })
               }
             }
