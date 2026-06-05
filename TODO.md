@@ -1296,6 +1296,7 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-05 (T33)   532/815 (65 %)        387/414 (27 FP)
 2026-06-05 (T34)   532/815 (65 %)        389/414 (25 FP)
 2026-06-05 (T35)   532/815 (65 %)        393/414 (21 FP)
+2026-06-05 (T36)   532/815 (65 %)        394/414 (20 FP)
 
   Policy shift (T30 onward): the goal is TypeScript compatibility, not a
   zero-false-positive score. Recall AND false positives are both tracked as
@@ -1309,6 +1310,18 @@ conformance sources (`.errors.txt` baseline = ground truth):
   Note: the T24 starting point (433/815) is higher than the T23 row
   because the TS2554 constructor/function-arity commits (PRs #84-#86)
   landed after the T23 measurement without refreshing this table.
+
+  T36 -- join variable types at if/else merge points.
+
+    Control-flow branch join: after an `if` where neither branch exits, a
+    variable's type becomes the union of its type at the end of each branch
+    (covering the condition's narrowing *and* in-branch reassignment). So
+    `if (id === undefined) { id = "1"; }` leaves `id` as `string` -- the
+    then-branch reassigns it, the else path narrows out `undefined`. Union-
+    join only widens back toward the pre-`if` type, so it never over-
+    narrows (verified: no regressions across 2248 tests + the conformance
+    walk). `check_block_narrowing_exit` captures each branch's exit env.
+    recall steady 532, FP 21 -> 20 (clears controlFlowInOperator).
 
   T35 -- structural optional fields + `&&` then-branch narrowing.
 
