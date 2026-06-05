@@ -1293,6 +1293,7 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-05 (T30)   500/815 (61 %)        406/414 ( 8 FP)
 2026-06-05 (T31)   500/815 (61 %)        407/414 ( 7 FP)
 2026-06-05 (T32)   532/815 (65 %)        386/414 (28 FP)
+2026-06-05 (T33)   532/815 (65 %)        387/414 (27 FP)
 
   Policy shift (T30 onward): the goal is TypeScript compatibility, not a
   zero-false-positive score. Recall AND false positives are both tracked as
@@ -1306,6 +1307,21 @@ conformance sources (`.errors.txt` baseline = ground truth):
   Note: the T24 starting point (433/815) is higher than the T23 row
   because the TS2554 constructor/function-arity commits (PRs #84-#86)
   landed after the T23 measurement without refreshing this table.
+
+  T33 -- co-inductive structural assignability for recursive named types.
+
+    First piece of real machinery after the policy shift (chosen over
+    further filter tweaks, which were measured net-negative). Structural
+    class/interface assignability compared field types nominally, so
+    distinct-but-shape-identical recursive types (`class S { foo: S }` vs
+    `class T { foo: T }`) were falsely flagged. `is_structurally_assignable_named`
+    now recurses through itself with a `visited` (source, target) name-pair
+    set -- re-encountering a pair returns true (co-induction, how tsc
+    relates recursive types). A depth cap (48) is a required safety net for
+    generic recursive shapes (`Wrapped<Wrapped<T>>`) whose substituted field
+    type deepens each level; without it the recursion hung the checker.
+    recall steady 532, FP 28 -> 27. Net-positive, no recall loss, and fixes
+    a hang.
 
   T32 -- emit all renderable type mismatches + `keyof any` fix.
 
