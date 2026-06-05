@@ -317,6 +317,7 @@ fn parse_module_or_empty(src : String) -> @ast.TsModule {
         module_augmentations: [],
         strict_property_initialization: true,
         use_define_for_class_fields: false,
+        deprecated_compiler_options: [],
         top_level_stmts: [],
       }
   } noraise {
@@ -6627,4 +6628,41 @@ test "expr_check: interface string index constrains fields (TS2411)" {
   let names = idx.map(fn(i) { i.message })
   assert_true(names.iter().any(fn(m) { m.contains("property `b`") }))
   assert_true(!names.iter().any(fn(m) { m.contains("property `a`") }))
+}
+
+///|
+test "expr_check: deprecated @target es5 directive is flagged (TS5107)" {
+  let src =
+    #|// @target: esnext, es2015, es5
+    #|class C { x: number = 1 }
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let dep = issues.filter(fn(i) {
+    i.message.contains("deprecated") && i.message.contains("target=ES5")
+  })
+  assert_true(dep.length() >= 1)
+}
+
+///|
+test "expr_check: non-deprecated @target es2015 is not flagged (TS5107)" {
+  let src =
+    #|// @target: es2015
+    #|class C { x: number = 1 }
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let dep = issues.filter(fn(i) { i.message.contains("deprecated") })
+  @test.assert_eq(dep.length(), 0)
+}
+
+///|
+test "expr_check: deprecated @target es3 directive is flagged (TS5107)" {
+  let src =
+    #|// @target: es3
+    #|var x: number = 1;
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let dep = issues.filter(fn(i) {
+    i.message.contains("deprecated") && i.message.contains("target=ES3")
+  })
+  assert_true(dep.length() >= 1)
 }

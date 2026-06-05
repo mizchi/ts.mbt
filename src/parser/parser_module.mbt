@@ -132,6 +132,7 @@ fn empty_ts_module() -> @ast.TsModule {
     strict_property_initialization: true,
     use_define_for_class_fields: false,
     top_level_stmts: [],
+    deprecated_compiler_options: [],
   }
 }
 
@@ -3247,7 +3248,55 @@ fn Parser::parse_module_with_seeded_const_values_internal(
       self.src,
     ),
     use_define_for_class_fields: detect_use_define_for_class_fields(self.src),
+    deprecated_compiler_options: detect_deprecated_compiler_options(self.src),
   }
+}
+
+///|
+/// Scan the leading `// @target: ...` test-header directive for deprecated
+/// compiler-option values. TypeScript 6.0+ reports `target=ES3` / `target=ES5`
+/// as deprecated (TS5107); the conformance corpus exercises these through
+/// multi-target directive lists like `// @target: esnext, es2015, es5`. We
+/// only surface the unambiguous `ES3` / `ES5` targets so the check stays
+/// false-positive-free, and we return canonical `target=ES5` / `target=ES3`
+/// strings for the diagnostic. Returns at most one entry per deprecated
+/// target value, in declaration order.
+fn detect_deprecated_compiler_options(src : String) -> Array[String] {
+  let out : Array[String] = []
+  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
+  let head = src[:head_len].to_owned()
+  // Find the `@target:` directive line and tokenize its comma list.
+  let needle = "@target:"
+  match head.find(needle) {
+    Some(idx) => {
+      // Take the rest of that directive line.
+      let after = head[idx + needle.length():].to_owned()
+      let line = match after.find("\n") {
+        Some(nl) => after[:nl].to_owned()
+        None => after
+      }
+      let mut saw_es3 = false
+      let mut saw_es5 = false
+      for raw in line.split(",") {
+        let tok = raw.trim().to_owned().to_lower()
+        if tok == "es3" {
+          saw_es3 = true
+        } else if tok == "es5" {
+          saw_es5 = true
+        }
+      }
+      // Match TS's report order (lowest deprecated target first as it
+      // appears); emit one diagnostic per distinct deprecated value.
+      if saw_es5 {
+        out.push("target=ES5")
+      }
+      if saw_es3 {
+        out.push("target=ES3")
+      }
+    }
+    None => ()
+  }
+  out
 }
 
 ///|

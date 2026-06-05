@@ -10559,6 +10559,16 @@ fn check_module_function_bodies_layered(
     ) {
     all.push(issue)
   }
+  // TS5107: deprecated compiler-option directives (`// @target: es5`, …).
+  // These live only in the top-level module header, so emit once per file.
+  if outer_modules.length() == 0 {
+    for opt in module_.deprecated_compiler_options {
+      all.push({
+        path: "compiler options",
+        message: "option `\{opt}` is deprecated",
+      })
+    }
+  }
   // Recurse into namespace bodies. Each level threads its own ancestor
   // chain so a nested namespace can reference parent-scope types by their
   // bare name (TypeScript scoping). Synthetic `<global>` blocks
