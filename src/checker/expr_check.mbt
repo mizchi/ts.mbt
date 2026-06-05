@@ -11170,7 +11170,10 @@ fn check_class_member_structure(
       }
     }
   }
-  for issue in check_interface_extends_compat(module_, outer_object_names) {
+  for
+    issue in check_interface_extends_compat(
+      module_, outer_object_names, resolver,
+    ) {
     issues.push(issue)
   }
   issues
@@ -11196,6 +11199,7 @@ fn check_class_member_structure(
 fn check_interface_extends_compat(
   module_ : @ast.TsModule,
   outer_object_names : Map[String, Unit],
+  resolver : Resolver,
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   // Index declared interfaces by name (non-generic only).
@@ -11292,7 +11296,27 @@ fn check_interface_extends_compat(
             // Optionality weakening: derived optional over required base.
             let d_payload = strip_optional(df.1)
             let b_payload = strip_optional(btype)
+            // Both members are plain (non-generic) class / interface
+            // references: decide structurally. `struct_assignable_named_rec`
+            // has the full field sets, so a `false` here is a reliable
+            // "not assignable" (e.g. derived `bar: Base` over base
+            // `bar: Derived`, where `Base` lacks `Derived`'s members), not a
+            // "couldn't determine". Generic `Applied` shapes are excluded
+            // (no type-arg substitution) to stay false-positive-free.
+            let both_plain_named = match
+              (resolver.unwrap(d_payload), resolver.unwrap(b_payload)) {
+              (Named(_), Named(_)) =>
+                is_named_decl(d_payload, resolver) &&
+                is_named_decl(b_payload, resolver)
+              _ => false
+            }
             if is_scalar(d_payload) && is_object_shaped(b_payload) {
+              issues.push({
+                path: "interface \{iface.name}",
+                message: "interface incorrectly extends `\{base_name}`: property `\{df.0}` of type `\{type_display(df.1)}` is not assignable to the base type `\{type_display(btype)}`",
+              })
+            } else if both_plain_named &&
+              !struct_assignable_named_rec(d_payload, b_payload, resolver, []) {
               issues.push({
                 path: "interface \{iface.name}",
                 message: "interface incorrectly extends `\{base_name}`: property `\{df.0}` of type `\{type_display(df.1)}` is not assignable to the base type `\{type_display(btype)}`",
