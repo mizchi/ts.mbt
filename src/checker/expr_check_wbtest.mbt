@@ -6894,6 +6894,29 @@ test "expr_check: union callee with shared call signature checks args (TS2345)" 
 }
 
 ///|
+test "expr_check: union construct signature checks new-args (TS2345)" {
+  // The `new`-call analog: a union of construct-signature objects sharing
+  // identical parameters checks the `new` arguments; disagreeing parameters
+  // stay silent.
+  let bad =
+    #|declare var f: { new (a: number): number } | { new (a: number): Date };
+    #|new f("hello");
+  let issues_bad = check_module_function_bodies(parse_module_or_empty(bad))
+  assert_true(
+    issues_bad
+    .iter()
+    .any(fn(i) {
+      i.path.contains("new `f`") && i.message.contains("but got `string`")
+    }),
+  )
+  let ok =
+    #|declare var g: { new (a: number): number } | { new (a: string): Date };
+    #|new g("hi");
+  let issues_ok = check_module_function_bodies(parse_module_or_empty(ok))
+  assert_true(!issues_ok.iter().any(fn(i) { i.message.contains("but got") }))
+}
+
+///|
 test "expr_check: class incorrectly implements an interface (TS2420)" {
   // A class that implements a public interface member as private, or with an
   // incompatible property type, is flagged; a correct implementation and a

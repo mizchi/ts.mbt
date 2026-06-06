@@ -6321,6 +6321,76 @@ fn union_common_call_params(
 }
 
 ///|
+/// Parameter types of a single construct signature on `t`: `t` is a
+/// constructor type, or an object/struct carrying exactly one `<new>`
+/// signature. `None` for anything else (no construct signature, or several).
+fn single_construct_signature_params(
+  t : @ast.TsType,
+  resolver : Resolver,
+) -> Array[@ast.TsType]? {
+  match resolver.unwrap(t) {
+    Constructor(params, _, _) => Some(params)
+    Object(fields) => {
+      let mut found : Array[@ast.TsType]? = None
+      let mut count = 0
+      for f in fields {
+        match (f.0, f.1) {
+          (Literal("<new>"), Func(params, _)) => {
+            count += 1
+            found = Some(params)
+          }
+          _ => ()
+        }
+      }
+      if count == 1 {
+        found
+      } else {
+        None
+      }
+    }
+    _ => None
+  }
+}
+
+///|
+/// Common construct-signature parameters of a union: the `new`-call analog of
+/// `union_common_call_params`. Returns the shared parameter list when every
+/// member exposes exactly one construct signature and all are identical;
+/// `None` otherwise (TypeScript's "no construct signatures" case), so it is
+/// false-positive-free.
+fn union_common_construct_params(
+  union_ty : @ast.TsType,
+  resolver : Resolver,
+) -> Array[@ast.TsType]? {
+  match resolver.unwrap(union_ty) {
+    Union(members) => {
+      let mut common : Array[@ast.TsType]? = None
+      for m in members {
+        match single_construct_signature_params(m, resolver) {
+          Some(params) =>
+            match common {
+              None => common = Some(params)
+              Some(prev) => {
+                if prev.length() != params.length() {
+                  return None
+                }
+                for i in 0..<prev.length() {
+                  if prev[i] != params[i] {
+                    return None
+                  }
+                }
+              }
+            }
+          None => return None
+        }
+      }
+      common
+    }
+    _ => None
+  }
+}
+
+///|
 /// Parameter types of a static method called through the class name
 /// (`A.s(args)`), for argument checking. Returns `None` -- skipping the
 /// check -- unless exactly one non-accessor static method of that name
@@ -9828,10 +9898,29 @@ fn check_call_args_in_expr(
             check_call_args_in_expr(env, a, ctx)
           }
         }
-        None =>
+        None => {
+          // Not a resolvable class constructor: the name may be a value
+          // typed as a union of construct-signature objects (`declare var X:
+          // { new (a:number):T } | { new (a:number):U }`). When every member
+          // shares one identical construct signature, check the arguments
+          // against its parameters.
+          let callee_ty = match env.lookup(class_name) {
+            Some(t) => t
+            None =>
+              match ctx.resolver.globals.get(class_name) {
+                Some(t) => t
+                None => @ast.TsType::Any
+              }
+          }
+          match union_common_construct_params(callee_ty, ctx.resolver) {
+            Some(params) =>
+              check_arguments(env, params, args, ctx, "new `\{class_name}`")
+            None => ()
+          }
           for a in args {
             check_call_args_in_expr(env, a, ctx)
           }
+        }
       }
     }
     NewExpr(callee, args) => {

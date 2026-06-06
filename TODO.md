@@ -1310,6 +1310,20 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-05 (T48)   558/815 (68 %)        394/414 (20 FP)
 2026-06-05 (T49)   558/815 (68 %)        394/414 (20 FP)
 2026-06-05 (T50)   559/815 (69 %)        394/414 (20 FP)
+2026-06-05 (T51)   560/815 (69 %)        394/414 (20 FP)
+
+  T51 -- argument checking for union construct signatures (TS2345). recall
+  +1. The `new`-call analog of T50.
+
+    A value typed as a union of single-construct-signature objects
+    (`{ new (a:number):X } | { new (a:number):Y }`) is constructable when
+    every member's `<new>` parameters are identical. The `New` handler's
+    fallback branch (reached when the name isn't a resolvable class
+    constructor) now looks the name up as a value and, via
+    `union_common_construct_params` / `single_construct_signature_params`,
+    checks the `new` arguments against the shared parameters. Disagreeing
+    parameters yield `None` and stay silent, so it is false-positive-free.
+    Clears `unionTypeConstructSignatures`.
 
   T50 -- argument checking for union callees with a shared call signature
   (TS2345). recall +1, back on the measured corpus.
