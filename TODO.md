@@ -1328,6 +1328,23 @@ conformance sources (`.errors.txt` baseline = ground truth):
     instance/static same-name split stay silent. recall 556 -> 557, FP
     steady 20 (clears propertyAndAccessorWithSameName).
 
+  T47b -- complete the member-duplicate detection to getters / setters.
+
+    Generalized the parser's `duplicate_member_names` from a field-vs-method
+    intersection to per-name declaration counts (field / getter / setter /
+    method), flagging the remaining TS2300 shapes: two getters or two
+    setters of one name, and a getter / setter colliding with a regular
+    method. Method *overloads* (several non-accessor signatures) and a
+    get/set pair stay silent. Decided from declaration shape, so still
+    false-positive-free. recall steady 557, FP steady 20: the affected
+    conformance files (`twoAccessorsWithSameName`, `...2`) are already
+    counted -- either via a `(target=...)`-suffixed baseline the harness
+    doesn't match, or because the parser's getter→property upsert already
+    made them emit -- so this is a real-world correctness/completeness
+    improvement that the conformance metric doesn't reflect. (Auto-accessor
+    duplicates -- `autoAccessor11` -- parse as fields, not methods, so are
+    not yet covered.)
+
   T46 -- retain + walk the constructor body (TS2345 / TS2322 / TS2339 ...).
 
     `TsClassDecl` gained a `constructor_body : TsBlock?` field, populated by

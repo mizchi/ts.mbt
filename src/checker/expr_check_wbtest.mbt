@@ -6843,6 +6843,34 @@ test "expr_check: get/set accessor pair is not a duplicate (TS2300 no FP)" {
 }
 
 ///|
+test "expr_check: duplicate getters / accessor-vs-method are duplicates (TS2300)" {
+  // Two getters of the same name, two setters, and a getter colliding with
+  // a regular method are each TS2300 -- while method overloads (several
+  // non-accessor signatures of one name) stay silent.
+  let src =
+    #|class C {
+    #|  get a(): number { return 1; }
+    #|  get a(): number { return 2; }
+    #|  set b(v: number) {}
+    #|  set b(v: number) {}
+    #|  get c(): number { return 1; }
+    #|  c(): void {}
+    #|  m(x: string): void;
+    #|  m(x: number): void;
+    #|  m(x: any): void {}
+    #|}
+  let issues = check_module_function_bodies(parse_module_or_empty(src))
+  let dups = issues
+    .filter(fn(i) { i.message.contains("duplicate identifier") })
+    .map(fn(i) { i.message })
+  assert_true(dups.iter().any(fn(m) { m.contains("`a`") }))
+  assert_true(dups.iter().any(fn(m) { m.contains("`b`") }))
+  assert_true(dups.iter().any(fn(m) { m.contains("`c`") }))
+  // `m` is a legal overload set -- never flagged as a duplicate identifier.
+  assert_true(!dups.iter().any(fn(m) { m.contains("`m`") }))
+}
+
+///|
 test "expr_check: constructor body is walked with `this` bound (TS2345)" {
   // The constructor's statement body is retained and checked: a wrong-typed
   // argument to `this.m(...)` inside the constructor is caught, while a

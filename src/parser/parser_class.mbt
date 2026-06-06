@@ -254,36 +254,59 @@ fn build_runtime_class_decl(
       _ => ()
     }
   }
-  // TS2300: a data field that collides with a method / accessor of the same
-  // name (same static-ness) is a duplicate identifier. A data field can
-  // never share a name with a method or accessor in one class body, so the
-  // field-name ∩ method-name intersection is a sound, false-positive-free
-  // signal. Keyed by `name|static` so an instance member and a static one
-  // of the same name (legal) don't collide.
-  let field_keys : Map[String, Unit] = {}
-  let member_keys : Map[String, Unit] = {}
-  let duplicate_member_names : Array[String] = []
-  let dup_seen : Map[String, Unit] = {}
+  // TS2300: a class member declared in two incompatible ways within one
+  // class body is a duplicate identifier. Per member name (keyed by
+  // `name|static` so an instance and a static member of the same name stay
+  // legal) we count how it was declared -- data field, getter, setter, or
+  // regular (non-accessor) method -- and flag the combinations TypeScript
+  // rejects. All are decided from declaration shape alone, so the check is
+  // false-positive-free:
+  //   - a data field together with *any* other declaration of the name;
+  //   - two or more getters, or two or more setters;
+  //   - a getter / setter together with a regular method.
+  // Legal and left silent: a single field, method *overloads* (several
+  // non-accessor methods -- a separate diagnostic family), and a get/set
+  // pair.
+  let counts : Map[String, Array[Int]] = {} // key -> [field, get, set, method]
+  let key_name : Map[String, String] = {}
   for element in elements {
-    let (name, is_static, is_field) = match element {
-      Field(s, Name(n), _, _, _, _) => (n, s, true)
-      Method(s, Name(n), _, _) => (n, s, false)
+    let (name, is_static, slot) = match element {
+      Field(s, Name(n), _, _, _, _) => (n, s, 0)
+      Method(s, Name(n), Some("get"), _) => (n, s, 1)
+      Method(s, Name(n), Some("set"), _) => (n, s, 2)
+      Method(s, Name(n), _, _) => (n, s, 3)
       _ => continue
     }
     if !is_public_runtime_class_member_name(name) {
       continue
     }
     let key = if is_static { name + "|s" } else { name + "|i" }
-    let (own, other) = if is_field {
-      (field_keys, member_keys)
-    } else {
-      (member_keys, field_keys)
+    let c = match counts.get(key) {
+      Some(existing) => existing
+      None => {
+        let fresh = [0, 0, 0, 0]
+        counts[key] = fresh
+        key_name[key] = name
+        fresh
+      }
     }
-    if other.get(key) is Some(_) && !(dup_seen.get(key) is Some(_)) {
+    c[slot] += 1
+  }
+  let duplicate_member_names : Array[String] = []
+  let dup_seen : Map[String, Unit] = {}
+  for key, c in counts {
+    let nf = c[0]
+    let ng = c[1]
+    let ns = c[2]
+    let nm = c[3]
+    let is_dup = (nf >= 1 && nf + ng + ns + nm > nf) ||
+      ng >= 2 ||
+      ns >= 2 ||
+      ((ng >= 1 || ns >= 1) && nm >= 1)
+    if is_dup && !(dup_seen.get(key) is Some(_)) {
       dup_seen[key] = ()
-      duplicate_member_names.push(name)
+      duplicate_member_names.push(key_name.get(key).unwrap())
     }
-    own[key] = ()
   }
   {
     name,
