@@ -6871,6 +6871,29 @@ test "expr_check: duplicate getters / accessor-vs-method are duplicates (TS2300)
 }
 
 ///|
+test "expr_check: union callee with shared call signature checks args (TS2345)" {
+  // When every member of a union callee has one identical call signature,
+  // the call's arguments are checked against those parameters; a union whose
+  // members' parameters disagree stays silent ("no call signatures").
+  let bad =
+    #|declare var f: { (a: number): number } | { (a: number): Date };
+    #|f("hello");
+  let issues_bad = check_module_function_bodies(parse_module_or_empty(bad))
+  assert_true(
+    issues_bad
+    .iter()
+    .any(fn(i) {
+      i.path.contains("call `f`") && i.message.contains("but got `string`")
+    }),
+  )
+  let ok =
+    #|declare var g: { (a: number): number } | { (a: string): Date };
+    #|g("hi");
+  let issues_ok = check_module_function_bodies(parse_module_or_empty(ok))
+  assert_true(!issues_ok.iter().any(fn(i) { i.message.contains("but got") }))
+}
+
+///|
 test "expr_check: class incorrectly implements an interface (TS2420)" {
   // A class that implements a public interface member as private, or with an
   // incompatible property type, is flagged; a correct implementation and a

@@ -6248,6 +6248,79 @@ fn is_bare_scalar_type(t : @ast.TsType) -> Bool {
 }
 
 ///|
+/// Parameter types of a single call signature on `t`: `t` is a function
+/// type, or an object/struct carrying exactly one `<call>` signature.
+/// Returns `None` for anything else (no call signature, or several -- an
+/// overload set we don't resolve here).
+fn single_call_signature_params(
+  t : @ast.TsType,
+  resolver : Resolver,
+) -> Array[@ast.TsType]? {
+  match resolver.unwrap(t) {
+    Func(params, _) => Some(params)
+    Object(fields) => {
+      let mut found : Array[@ast.TsType]? = None
+      let mut count = 0
+      for f in fields {
+        match (f.0, f.1) {
+          (Literal("<call>"), Func(params, _)) => {
+            count += 1
+            found = Some(params)
+          }
+          _ => ()
+        }
+      }
+      if count == 1 {
+        found
+      } else {
+        None
+      }
+    }
+    _ => None
+  }
+}
+
+///|
+/// Common call-signature parameters of a union callee: when every member of
+/// the union exposes exactly one call signature and all of them have
+/// *identical* parameter types, the union is callable with those parameters
+/// (the return type is the union of each member's, which the arg check
+/// doesn't need). Returns `None` if any member lacks a call signature or the
+/// parameter lists disagree -- both cases TypeScript reports differently
+/// ("no call signatures"), so staying silent keeps this false-positive-free.
+fn union_common_call_params(
+  union_ty : @ast.TsType,
+  resolver : Resolver,
+) -> Array[@ast.TsType]? {
+  match resolver.unwrap(union_ty) {
+    Union(members) => {
+      let mut common : Array[@ast.TsType]? = None
+      for m in members {
+        match single_call_signature_params(m, resolver) {
+          Some(params) =>
+            match common {
+              None => common = Some(params)
+              Some(prev) => {
+                if prev.length() != params.length() {
+                  return None
+                }
+                for i in 0..<prev.length() {
+                  if prev[i] != params[i] {
+                    return None
+                  }
+                }
+              }
+            }
+          None => return None
+        }
+      }
+      common
+    }
+    _ => None
+  }
+}
+
+///|
 /// Parameter types of a static method called through the class name
 /// (`A.s(args)`), for argument checking. Returns `None` -- skipping the
 /// check -- unless exactly one non-accessor static method of that name
@@ -9629,12 +9702,20 @@ fn check_call_args_in_expr(
           )
         }
         other =>
-          if is_definitely_not_callable(other) {
-            record(
-              ctx,
-              "call `\{name}`",
-              "`\{type_display(other)}` is not callable",
-            )
+          // A union callee whose members share one identical call signature
+          // (`{ (a:number):X } | { (a:number):Y }`) is callable with those
+          // parameters; otherwise fall back to the not-callable diagnostic.
+          match union_common_call_params(other, ctx.resolver) {
+            Some(params) =>
+              check_arguments(env, params, args, ctx, "call `\{name}`")
+            None =>
+              if is_definitely_not_callable(other) {
+                record(
+                  ctx,
+                  "call `\{name}`",
+                  "`\{type_display(other)}` is not callable",
+                )
+              }
           }
       }
       for a in args {
@@ -9645,6 +9726,14 @@ fn check_call_args_in_expr(
       let callee_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, callee))
       match callee_ty {
         Func(params, _) => check_arguments(env, params, args, ctx, "call")
+        // A union callee whose members share one identical call signature is
+        // callable with those parameters (`{ (a:number):X } | { (a:number):Y
+        // }`); check the arguments against them.
+        Union(_) =>
+          match union_common_call_params(callee_ty, ctx.resolver) {
+            Some(params) => check_arguments(env, params, args, ctx, "call")
+            None => ()
+          }
         other =>
           if is_definitely_not_callable(other) {
             record(ctx, "call", "`\{type_display(other)}` is not callable")

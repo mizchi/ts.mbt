@@ -1309,6 +1309,31 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-05 (T47)   557/815 (68 %)        394/414 (20 FP)
 2026-06-05 (T48)   558/815 (68 %)        394/414 (20 FP)
 2026-06-05 (T49)   558/815 (68 %)        394/414 (20 FP)
+2026-06-05 (T50)   559/815 (69 %)        394/414 (20 FP)
+
+  T50 -- argument checking for union callees with a shared call signature
+  (TS2345). recall +1, back on the measured corpus.
+
+    A value typed as a union of single-call-signature objects
+    (`{ (a:number):X } | { (a:number):Y }`) is callable when every member's
+    call-signature *parameters* are identical (the result is the union of the
+    members' return types, irrelevant to argument checking). The `Call` /
+    `CallExpr` argument passes now extract those common parameters
+    (`single_call_signature_params` per member, `union_common_call_params`
+    across the union) and check the arguments against them. A union whose
+    members' parameters disagree -- TypeScript's "no call signatures" case --
+    yields `None` and stays silent, so it is false-positive-free. Clears
+    `unionTypeCallSignatures`.
+
+    Adjacent union misses still out of FP-safe reach: union *property access*
+    TS2339 (entangled with discriminated-union flow narrowing, which the
+    `field_on_any_union_member` suppression deliberately tolerates); union
+    *construct* signatures (`new`-call arity, a separate handler); and the
+    `this`-context / contextual-object-literal families. Generic-call
+    argument inference (`genericCallWith*`) mostly needs real type-parameter
+    inference or call-site type-argument capture (the latter would thread type
+    args through every `Call`/`CallExpr`/`New` AST node -- too invasive for
+    the payoff).
 
   T49 -- retain the `implements` clause + check it (TS2420).
 
