@@ -1307,6 +1307,33 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-05 (T45)   546/815 (67 %)        395/414 (19 FP)
 2026-06-05 (T46)   556/815 (68 %)        394/414 (20 FP)
 2026-06-05 (T47)   557/815 (68 %)        394/414 (20 FP)
+2026-06-05 (T48)   558/815 (68 %)        394/414 (20 FP)
+
+  T48 -- static-method call argument checking (TS2345) + class-override
+  property compatibility (TS2416).
+
+    TS2345 (recall +1): a static method called through the class name
+    (`A.s(arg)`) was never argument-checked -- the receiver `A` carries no
+    value-side type, so `lookup_method_sig` found nothing. The MethodCall
+    arg pass now reads the static method's parameter types straight off the
+    class declaration (`class_static_method_param_types`), gated to exactly
+    one non-accessor static method of that name with no rest parameter
+    (overload sets / variadics skipped), so it is false-positive-free.
+    Clears `privateNameStaticMethod` (`A1.#method(1)` in the constructor,
+    now reachable via the T46 constructor-body walk).
+
+    TS2416 (recall +0, defense-in-depth): a derived data property whose type
+    is not assignable to the same property on the directly-extended,
+    non-generic base class. The class analog of the shipped TS2430 interface
+    check, using the same conservative `member_override_incompatible`
+    decision (scalar/object category clash, plain-named structural
+    assignability, or concrete-scalar `is_assignable_to`); generics, `any`,
+    unions, methods, statics, accessors are all excluded. It catches no
+    conformance file -- the corpus's TS2416 cases are all method overrides,
+    generics, `implements` (discarded by the parser), private members,
+    statics, or class *expressions* -- but it is a correct, FP-safe
+    diagnostic that also guards synthesized bridge output (the
+    `@checker.check_module` sanity gate). FP steady 20.
 
   T47 -- data field colliding with a method / accessor is a duplicate
   identifier (TS2300).

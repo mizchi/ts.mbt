@@ -6871,6 +6871,49 @@ test "expr_check: duplicate getters / accessor-vs-method are duplicates (TS2300)
 }
 
 ///|
+test "expr_check: static method call via class name checks argument types (TS2345)" {
+  // `A.s(arg)` validates `arg` against the static method's parameter type.
+  let src =
+    #|class A {
+    #|  static s(p: string): void {}
+    #|}
+    #|A.s(1);
+    #|A.s("ok");
+  let issues = check_module_function_bodies(parse_module_or_empty(src))
+  let bad = issues.filter(fn(i) {
+    i.path.contains("call `s`") && i.message.contains("but got `number`")
+  })
+  @test.assert_eq(bad.length(), 1)
+}
+
+///|
+test "expr_check: derived class property incompatible with base is flagged (TS2416)" {
+  // A derived data property whose type is not assignable to the same base
+  // property is reported; a compatible (subtype) override stays silent.
+  let src =
+    #|interface Shape { a: string }
+    #|class Base {
+    #|  o: Shape = { a: "" }
+    #|  n: string = ""
+    #|  ok: number = 0
+    #|}
+    #|class D extends Base {
+    #|  o: number = 1
+    #|  n: number = 2
+    #|  ok: number = 5
+    #|}
+  let issues = check_module_function_bodies(parse_module_or_empty(src))
+  let bad = issues
+    .filter(fn(i) { i.message.contains("in base type") })
+    .map(fn(i) { i.message })
+  // `o` (object overridden by scalar) and `n` (string vs number) are flagged.
+  assert_true(bad.iter().any(fn(m) { m.contains("`o`") }))
+  assert_true(bad.iter().any(fn(m) { m.contains("`n`") }))
+  // `ok` (number over number) is compatible -- never flagged.
+  assert_true(!bad.iter().any(fn(m) { m.contains("`ok`") }))
+}
+
+///|
 test "expr_check: constructor body is walked with `this` bound (TS2345)" {
   // The constructor's statement body is retained and checked: a wrong-typed
   // argument to `this.m(...)` inside the constructor is caught, while a

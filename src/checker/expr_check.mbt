@@ -6248,6 +6248,105 @@ fn is_bare_scalar_type(t : @ast.TsType) -> Bool {
 }
 
 ///|
+/// Parameter types of a static method called through the class name
+/// (`A.s(args)`), for argument checking. Returns `None` -- skipping the
+/// check -- unless exactly one non-accessor static method of that name
+/// exists and it has no rest parameter, so overload sets and variadic
+/// signatures (whose arity/positional checking we don't model precisely)
+/// never produce a false positive.
+fn class_static_method_param_types(
+  cls : @ast.TsClassDecl,
+  meth : String,
+) -> Array[@ast.TsType]? {
+  let mut found : @ast.TsClassMethodDecl? = None
+  let mut count = 0
+  for m in cls.methods {
+    if m.is_static && m.accessor == "" && m.name == meth {
+      count += 1
+      found = Some(m)
+    }
+  }
+  if count != 1 {
+    return None
+  }
+  let m = found.unwrap()
+  for r in m.param_is_rest {
+    if r {
+      return None
+    }
+  }
+  let types : Array[@ast.TsType] = []
+  for p in m.params {
+    types.push(p.1)
+  }
+  Some(types)
+}
+
+///|
+/// True when an overriding member of type `derived` is *definitely* not
+/// assignable to the overridden base member of type `base` -- the structural
+/// core of TS2416 / TS2430. Decided only for shapes we can compare soundly:
+///   - a scalar overriding an object shape (or vice versa): a category clash
+///     that can never hold;
+///   - both plain (non-generic) named class / interface / object shapes: the
+///     full member sets make `struct_assignable_named_rec` a reliable
+///     "derived provides everything base requires" test;
+///   - both concrete scalars: decided by `is_assignable_to`.
+/// Anything else (`any` / `unknown`, generic `Applied`, unions, functions,
+/// type parameters) returns `false`, so the check never fires on a shape it
+/// can't fully model -- keeping it false-positive-free.
+fn member_override_incompatible(
+  derived : @ast.TsType,
+  base : @ast.TsType,
+  resolver : Resolver,
+) -> Bool {
+  fn strip_undef(t : @ast.TsType) -> @ast.TsType {
+    match t {
+      Union(members) => {
+        let rest : Array[@ast.TsType] = []
+        for m in members {
+          if !(m is Undefined) && !(m is Null) {
+            rest.push(m)
+          }
+        }
+        if rest.length() == 1 {
+          rest[0]
+        } else {
+          t
+        }
+      }
+      _ => t
+    }
+  }
+
+  let d = resolver.unwrap(strip_undef(derived))
+  let b = resolver.unwrap(strip_undef(base))
+  // `any` / `unknown` on either side is always compatible.
+  match (d, b) {
+    (Any, _) | (_, Any) | (Unknown, _) | (_, Unknown) => return false
+    // Generic instantiations need type-argument substitution we don't do
+    // here; stay silent rather than risk a substitution-shaped false positive.
+    (Applied(_, _), _) | (_, Applied(_, _)) => return false
+    _ => ()
+  }
+  let d_obj = is_named_decl(d, resolver)
+  let b_obj = is_named_decl(b, resolver)
+  if is_bare_scalar_type(d) && b_obj {
+    return true
+  }
+  if d_obj && is_bare_scalar_type(b) {
+    return true
+  }
+  if d_obj && b_obj {
+    return !struct_assignable_named_rec(d, b, resolver, [])
+  }
+  if is_bare_scalar_type(d) && is_bare_scalar_type(b) {
+    return !is_assignable_to(d, b)
+  }
+  false
+}
+
+///|
 /// Recursively widen literal types, descending through object / struct field
 /// types (and array / tuple / union members). Mirrors TypeScript's widening
 /// of a mutable object-literal initializer: `var a = { foo: '' }` has type
@@ -9560,12 +9659,18 @@ fn check_call_args_in_expr(
       check_private_name_access(ctx, meth)
       check_member_accessibility(env, ctx, receiver, meth)
       // Static-namespace dispatch: `Math.max(...)`, `JSON.stringify(...)`.
-      // Recognised by the bare-identifier shape of the receiver.
+      // Recognised by the bare-identifier shape of the receiver. Also handle
+      // a static method called through the class name (`A.s(args)`), whose
+      // parameter types we read straight off the class declaration.
       let static_params : Array[@ast.TsType]? = match receiver {
         Var(name) =>
           match global_namespace_method(name, meth) {
             Some(Func(params, _)) => Some(params)
-            _ => None
+            _ =>
+              match ctx.resolver.classes.get(name) {
+                Some(cls) => class_static_method_param_types(cls, meth)
+                None => None
+              }
           }
         _ => None
       }
@@ -11432,6 +11537,44 @@ fn check_class_member_structure(
                 path: "class \{decl.name}",
                 message: "`\{name}` is defined as an accessor but overridden as a property",
               })
+            }
+          }
+        }
+        _ => ()
+      }
+    }
+    // --- TS2416: a derived data property whose type is not assignable to
+    // the same property on the (directly extended, non-generic) base class.
+    // Restricted to non-generic class + base and to *data* properties
+    // (method override variance is bivariant and far more FP-prone), with
+    // the conservative `member_override_incompatible` decision, so it stays
+    // false-positive-free.
+    if decl.type_params.length() == 0 && decl.base_names.length() > 0 {
+      match resolver.classes.get(decl.base_names[0]) {
+        Some(base) if base.type_params.length() == 0 => {
+          let base_props : Map[String, @ast.TsType] = {}
+          let base_accessors = class_instance_accessor_names(base)
+          for p in base.properties {
+            if !p.is_static &&
+              !p.is_accessor &&
+              !base_accessors.contains(p.name) {
+              base_props[p.name] = p.type_
+            }
+          }
+          let this_accessors = class_instance_accessor_names(decl)
+          for p in decl.properties {
+            if p.is_static || p.is_accessor || this_accessors.contains(p.name) {
+              continue
+            }
+            match base_props.get(p.name) {
+              Some(btype) =>
+                if member_override_incompatible(p.type_, btype, resolver) {
+                  issues.push({
+                    path: "class \{decl.name}",
+                    message: "property `\{p.name}` of type `\{type_display(p.type_)}` is not assignable to the same property `\{type_display(btype)}` in base type `\{base.name}`",
+                  })
+                }
+              None => ()
             }
           }
         }
