@@ -6755,6 +6755,49 @@ test "expr_check: lib / cross-file generic references are never arity-flagged" {
 }
 
 ///|
+test "expr_check: this-typed instance method validates member access and call args" {
+  // `this` is bound to the enclosing class inside an instance method, so a
+  // wrong-typed argument to `this.m(...)` is caught, while an inherited
+  // member stays silent.
+  let src =
+    #|class Base { bm(): void {} }
+    #|class A extends Base {
+    #|  x: number = 1;
+    #|  m(p: string): void {}
+    #|  c(): void {
+    #|    this.m(1);
+    #|    this.bm();
+    #|    this.m("ok");
+    #|  }
+    #|}
+  let issues = check_module_function_bodies(parse_module_or_empty(src))
+  assert_true(
+    issues
+    .iter()
+    .any(fn(i) {
+      i.message.contains("but got `number`") && i.path.contains("call `m`")
+    }),
+  )
+  assert_true(!issues.iter().any(fn(i) { i.message.contains("bm") }))
+}
+
+///|
+test "expr_check: static method does not bind instance `this`" {
+  // In a `static` method `this` is the class/constructor side; we don't
+  // model it, so a name accessed through `this` must stay silent rather
+  // than false-flag against the instance shape.
+  let src =
+    #|class A {
+    #|  x: number = 1;
+    #|  static s(): void {
+    #|    this.nope();
+    #|  }
+    #|}
+  let issues = check_module_function_bodies(parse_module_or_empty(src))
+  assert_true(!issues.iter().any(fn(i) { i.message.contains("nope") }))
+}
+
+///|
 test "expr_check: object-literal field types widen for un-annotated var (TS2322 no FP)" {
   // `var a = { foo: '' }` has type `{ foo: string }` in TS (object contents
   // widen), so assigning a `{ foo: string }` value back is fine. Without

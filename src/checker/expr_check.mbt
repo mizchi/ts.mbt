@@ -10410,6 +10410,7 @@ fn check_function_body_with(
   resolver : Resolver,
   permissive : Bool,
   strict_property_init : Bool,
+  this_type? : @ast.TsType? = None,
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   let env = ExprEnv::new()
@@ -10492,6 +10493,14 @@ fn check_function_body_with(
         }
       _ => env.bind(p.name, p.type_)
     }
+  }
+  // Bind `this` to the enclosing class type for a method / constructor
+  // body so `this.x` and `this.method(args)` resolve against the class's
+  // members (property existence, method-argument types). Free functions
+  // pass `None` and leave `this` untyped.
+  match this_type {
+    Some(t) => env.bind("this", t)
+    None => ()
   }
   // Default-parameter expression must be assignable to the parameter's
   // (possibly optional-widened) type.
@@ -10885,9 +10894,21 @@ fn check_module_function_bodies_layered(
         is_generator: false,
         is_async: false,
       }
+      // Bind `this` to the instance type only for instance methods. In a
+      // `static` method `this` is the class/constructor side (its members
+      // are the statics), which we don't model -- leave it untyped there.
+      let this_type : @ast.TsType? = if meth.is_static {
+        None
+      } else {
+        Some(@ast.TsType::Named(cls.name))
+      }
       for
         issue in check_function_body_with(
-          synth, resolver, permissive, strict_property_init,
+          synth,
+          resolver,
+          permissive,
+          strict_property_init,
+          this_type~,
         ) {
         all.push(issue)
       }

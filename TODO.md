@@ -1304,6 +1304,24 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-05 (T41)   540/815 (66 %)        394/414 (20 FP)
 2026-06-05 (T42)   543/815 (67 %)        394/414 (20 FP)
 2026-06-05 (T44)   545/815 (67 %)        395/414 (19 FP)
+2026-06-05 (T45)   546/815 (67 %)        395/414 (19 FP)
+
+  T45 -- type `this` inside instance method bodies (TS2345 / TS2322 / TS2339).
+
+    Method bodies were checked with `this` untyped (inferred `Any`), so
+    `this.x` / `this.method(args)` were never validated. `check_function_body_with`
+    now takes an optional `this_type~` and binds `this` to the enclosing
+    class for instance methods, so a wrong-typed argument to `this.m(...)`,
+    a property-type mismatch via `this.x`, and a missing `this` member are
+    all caught. Bound only for *instance* methods -- in a `static` method
+    `this` is the class/constructor side (its members are the statics),
+    which we don't model, so binding the instance shape there false-flagged
+    private-static / `typeof this` cases; those stay untyped. Inherited
+    members resolve through the existing base-chain method/field lookup, so
+    `this.inheritedMethod()` does not false-flag. recall 545 -> 546, FP
+    steady 19. (Constructor-body `this` checks remain unreached -- the
+    parser doesn't retain the constructor body on `TsClassDecl`, only its
+    params; that's the next lever for the `privateNameMethod`-style cases.)
 
   T44 -- object-type rendering + structural assignment mismatches (TS2322).
 
