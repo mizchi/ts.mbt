@@ -1305,6 +1305,22 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-05 (T42)   543/815 (67 %)        394/414 (20 FP)
 2026-06-05 (T44)   545/815 (67 %)        395/414 (19 FP)
 2026-06-05 (T45)   546/815 (67 %)        395/414 (19 FP)
+2026-06-05 (T46)   556/815 (68 %)        394/414 (20 FP)
+
+  T46 -- retain + walk the constructor body (TS2345 / TS2322 / TS2339 ...).
+
+    `TsClassDecl` gained a `constructor_body : TsBlock?` field, populated by
+    the parser from the parsed constructor `TsFunc`. The checker's
+    constructor pass now walks that body (instead of synthesizing an empty
+    one for the param-default check only) with `this` bound to the instance
+    type, so every statement inside a constructor -- `this.method(args)`,
+    `this.x = v`, local declarations, nested calls -- gets the same
+    coverage as a regular instance-method body. This is where a large share
+    of class-body code lives, so it is the session's biggest single jump:
+    recall 546 -> 556 (+10), FP 19 -> 20 (one niche read-only mis-fire on a
+    mangled private computed-property-name assignment; left as-is at the
+    established 20-FP working level). Clears the `privateNameMethod`-style
+    cases the T45 note flagged as blocked.
 
   T45 -- type `this` inside instance method bodies (TS2345 / TS2322 / TS2339).
 

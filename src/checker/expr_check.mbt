@@ -10914,47 +10914,53 @@ fn check_module_function_bodies_layered(
       }
     }
   }
-  // Constructor parameter defaults (`constructor(x: string = 1)`). The
-  // constructor body isn't retained on `TsClassDecl`, but a default-value
-  // initializer must still be assignable to its parameter type (TS2322).
-  // Synthesize a bodiless function carrying the constructor's params and
-  // defaults; `check_function_body_with` validates the defaults and then
-  // bails on the empty body before any flow analysis.
+  // Constructor body + parameter defaults. The constructor's statement
+  // body (when retained) is walked with `this` bound to the instance type
+  // so `this.method(args)` / `this.x` inside the constructor are validated
+  // like any other instance-method body; the parameter-default expressions
+  // (`constructor(x: string = 1)`) are checked regardless (TS2322).
   for cls in module_.classes {
-    match cls.constructor_params {
-      Some(cparams) => {
-        if cparams.length() == 0 {
-          continue
-        }
-        let params : Array[@ast.TsParam] = []
-        for i, p in cparams {
-          let default = if i < cls.constructor_param_defaults.length() {
-            cls.constructor_param_defaults[i]
-          } else {
-            None
-          }
-          let is_rest = i < cls.constructor_param_is_rest.length() &&
-            cls.constructor_param_is_rest[i]
-          params.push({ name: p.0, binding: None, is_rest, type_: p.1, default })
-        }
-        let synth : @ast.TsFunc = {
-          name: cls.name + ".constructor",
-          type_params: cls.type_params,
-          params,
-          return_type: @ast.TsType::Void,
-          body: { stmts: [], stmt_positions: [] },
-          const_type_params: [],
-          is_generator: false,
-          is_async: false,
-        }
-        for
-          issue in check_function_body_with(
-            synth, resolver, permissive, strict_property_init,
-          ) {
-          all.push(issue)
-        }
+    let cparams = match cls.constructor_params {
+      Some(p) => p
+      None => []
+    }
+    let body : @ast.TsBlock = match cls.constructor_body {
+      Some(b) => b
+      None => { stmts: [], stmt_positions: [] }
+    }
+    if cparams.length() == 0 && body.stmts.length() == 0 {
+      continue
+    }
+    let params : Array[@ast.TsParam] = []
+    for i, p in cparams {
+      let default = if i < cls.constructor_param_defaults.length() {
+        cls.constructor_param_defaults[i]
+      } else {
+        None
       }
-      None => ()
+      let is_rest = i < cls.constructor_param_is_rest.length() &&
+        cls.constructor_param_is_rest[i]
+      params.push({ name: p.0, binding: None, is_rest, type_: p.1, default })
+    }
+    let synth : @ast.TsFunc = {
+      name: cls.name + ".constructor",
+      type_params: cls.type_params,
+      params,
+      return_type: @ast.TsType::Void,
+      body,
+      const_type_params: [],
+      is_generator: false,
+      is_async: false,
+    }
+    for
+      issue in check_function_body_with(
+        synth,
+        resolver,
+        permissive,
+        strict_property_init,
+        this_type=Some(@ast.TsType::Named(cls.name)),
+      ) {
+      all.push(issue)
     }
   }
   // Class field initializers (`class C { x = expr; static y = expr }`).

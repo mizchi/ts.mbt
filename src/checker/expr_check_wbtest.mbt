@@ -6755,6 +6755,29 @@ test "expr_check: lib / cross-file generic references are never arity-flagged" {
 }
 
 ///|
+test "expr_check: constructor body is walked with `this` bound (TS2345)" {
+  // The constructor's statement body is retained and checked: a wrong-typed
+  // argument to `this.m(...)` inside the constructor is caught, while a
+  // correct call stays silent.
+  let src =
+    #|class A {
+    #|  m(p: string): void {}
+    #|  constructor() {
+    #|    this.m(1);
+    #|    this.m("ok");
+    #|  }
+    #|}
+  let issues = check_module_function_bodies(parse_module_or_empty(src))
+  assert_true(
+    issues
+    .iter()
+    .any(fn(i) {
+      i.path.contains("A.constructor") && i.message.contains("but got `number`")
+    }),
+  )
+}
+
+///|
 test "expr_check: this-typed instance method validates member access and call args" {
   // `this` is bound to the enclosing class inside an instance method, so a
   // wrong-typed argument to `this.m(...)` is caught, while an inherited

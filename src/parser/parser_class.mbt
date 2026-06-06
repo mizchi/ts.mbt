@@ -75,6 +75,13 @@ fn build_runtime_class_decl(
     }
     None => None
   }
+  // Retain the constructor body (when it has one) so the checker can walk
+  // its statements with `this` bound to the instance type. An overload
+  // signature carries an empty body, which is harmless.
+  let constructor_body : @ast.TsBlock? = match ctor_opt {
+    Some(ctor) => Some(ctor.body)
+    None => None
+  }
   for element in elements {
     match element {
       Field(
@@ -258,6 +265,7 @@ fn build_runtime_class_decl(
     constructor_params,
     constructor_param_is_rest,
     constructor_param_defaults,
+    constructor_body,
     properties,
     methods,
     index_signatures,
@@ -1423,6 +1431,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     constructor_params: runtime_decl.constructor_params,
     constructor_param_is_rest: runtime_decl.constructor_param_is_rest,
     constructor_param_defaults: runtime_decl.constructor_param_defaults,
+    constructor_body: runtime_decl.constructor_body,
     properties: runtime_decl.properties,
     methods: runtime_decl.methods,
     index_signatures: runtime_decl.index_signatures,

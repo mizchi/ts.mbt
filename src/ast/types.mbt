@@ -676,6 +676,13 @@ pub(all) struct TsClassDecl {
   // parameter's declared type (TS2322) the same way it does for free
   // functions and methods.
   constructor_param_defaults : Array[TsExpr?]
+  // The constructor's statement body, when the source declared a
+  // constructor with an implementation (`constructor(...) { ... }`).
+  // `None` for classes with no constructor, an overload signature only,
+  // or an ambient `declare class`. The checker walks it with `this` bound
+  // to the instance type so `this.method(args)` / `this.x` inside the
+  // constructor are validated like any other method body.
+  constructor_body : TsBlock?
   properties : Array[TsClassPropertyDecl]
   methods : Array[TsClassMethodDecl]
   is_abstract : Bool

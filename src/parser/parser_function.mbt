@@ -2434,6 +2434,7 @@ fn Parser::parse_declare_class(
     // leave empty (rest detection just no-ops for these).
     constructor_param_is_rest: [],
     constructor_param_defaults: [],
+    constructor_body: None,
     properties,
     methods,
     index_signatures,
