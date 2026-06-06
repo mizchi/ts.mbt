@@ -1308,6 +1308,38 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-05 (T46)   556/815 (68 %)        394/414 (20 FP)
 2026-06-05 (T47)   557/815 (68 %)        394/414 (20 FP)
 2026-06-05 (T48)   558/815 (68 %)        394/414 (20 FP)
+2026-06-05 (T49)   558/815 (68 %)        394/414 (20 FP)
+
+  T49 -- retain the `implements` clause + check it (TS2420).
+
+    The parser previously discarded `implements` (a skip-to-`{` loop). It now
+    parses the clause into `TsClassDecl::implements_names` (head references,
+    qualified names joined with `.`, type args dropped) via a robust
+    consume-to-`{` scan that survives invalid forms like `implements A?.B`
+    (a parse-regression guard verified against `classExtendingOptionalChain`).
+    The checker's `check_class_implements` then flags, for a non-generic class
+    against a non-generic locally-declared implemented interface: a member
+    implemented as `private` / `protected`, and a public data property whose
+    type is incompatible (`member_override_incompatible`). Missing members,
+    interface methods, generics, lib interfaces, and index-signature compat
+    are deliberately not decided, so it stays false-positive-free.
+
+    recall 558 (steady), FP 20 (steady): correct and FP-safe, and it catches
+    real files (`interfaceImplementation1`, `implementPublicPropertyAsPrivate`,
+    `interfaceExtendsClassWithPrivate2`, ...), but every one lives in
+    `tests/cases/compiler/`, outside the harness's pinned `conformance/`
+    dirs; the two pinned-dir `implements` misses need a lib interface
+    (`String`) or index-signature compat we don't model. So this is a real
+    parser-capability + diagnostic improvement (also guarding the
+    synthesized-bridge `check_module` gate) that the conformance metric does
+    not reflect.
+
+    NOTE (process): T47b / T48-TS2416 / T49 have each been correct + FP-safe
+    but +0 on the measured corpus -- the requested member/override/implements
+    diagnostics land on `compiler/`-suite files or shapes outside the pinned
+    set. Measurable recall in the class area is now largely exhausted; the
+    remaining conformance gains are in generics / unions / overloads /
+    contextual typing (harder machinery).
 
   T48 -- static-method call argument checking (TS2345) + class-override
   property compatibility (TS2416).

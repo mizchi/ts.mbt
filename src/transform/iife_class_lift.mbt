@@ -224,6 +224,7 @@ fn try_lift_iife_value(
     name,
     type_params: [],
     base_names,
+    implements_names: [],
     base_expr,
     static_field_inits,
     static_blocks: [],

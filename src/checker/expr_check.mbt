@@ -11588,6 +11588,90 @@ fn check_class_member_structure(
     ) {
     issues.push(issue)
   }
+  for issue in check_class_implements(module_, resolver) {
+    issues.push(issue)
+  }
+  issues
+}
+
+///|
+/// TS2420 ("Class incorrectly implements interface"): a (non-generic) class
+/// whose `implements` clause names a (non-generic, locally declared)
+/// interface must satisfy that interface. We report only the two reliably-
+/// decidable shapes, so the check is false-positive-free:
+///   - a member the interface declares is implemented as `private` /
+///     `protected` (a non-public member can never satisfy a public interface
+///     requirement);
+///   - a public data property whose type is definitely not assignable to the
+///     interface's same-named member (`member_override_incompatible`).
+/// A *missing* member is deliberately not flagged (it may be inherited from a
+/// base class we don't fully thread here), and interface methods / generic
+/// shapes are left to the conservative `member_override_incompatible`, which
+/// declines anything it can't decide soundly.
+fn check_class_implements(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for cls in module_.classes {
+    if cls.implements_names.length() == 0 || cls.type_params.length() > 0 {
+      continue
+    }
+    let nonpublic : Map[String, Unit] = {}
+    for n in cls.private_members {
+      nonpublic[n] = ()
+    }
+    for n in cls.protected_members {
+      nonpublic[n] = ()
+    }
+    let accessors = class_instance_accessor_names(cls)
+    let cls_props : Map[String, @ast.TsType] = {}
+    for p in cls.properties {
+      if !p.is_static && !p.is_accessor && !accessors.contains(p.name) {
+        cls_props[p.name] = p.type_
+      }
+    }
+    for iname in cls.implements_names {
+      let iface = match resolver.interfaces.get(iname) {
+        Some(i) => i
+        None => continue
+      }
+      if iface.type_params.length() > 0 {
+        continue
+      }
+      let mut reported = false
+      for f in iface.fields {
+        if reported {
+          break
+        }
+        let mname = f.0
+        if is_signature_sentinel(mname) {
+          continue
+        }
+        // Interface member implemented with non-public visibility.
+        if nonpublic.get(mname) is Some(_) {
+          issues.push({
+            path: "class \{cls.name}",
+            message: "incorrectly implements interface `\{iname}`: member `\{mname}` is not public",
+          })
+          reported = true
+          continue
+        }
+        // Present public data property with an incompatible type.
+        match cls_props.get(mname) {
+          Some(ctype) =>
+            if member_override_incompatible(ctype, f.1, resolver) {
+              issues.push({
+                path: "class \{cls.name}",
+                message: "incorrectly implements interface `\{iname}`: property `\{mname}` of type `\{type_display(ctype)}` is not assignable to `\{type_display(f.1)}`",
+              })
+              reported = true
+            }
+          None => ()
+        }
+      }
+    }
+  }
   issues
 }
 

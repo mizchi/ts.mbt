@@ -57,6 +57,7 @@ fn build_runtime_class_decl(
   is_abstract : Bool,
   private_members : Array[String],
   protected_members : Array[String],
+  implements_names : Array[String],
 ) -> @ast.TsClassDecl {
   let properties : Array[@ast.TsClassPropertyDecl] = []
   let methods : Array[@ast.TsClassMethodDecl] = []
@@ -312,6 +313,7 @@ fn build_runtime_class_decl(
     name,
     type_params,
     base_names: [],
+    implements_names,
     base_expr: None,
     static_field_inits: [],
     static_blocks,
@@ -394,6 +396,59 @@ fn class_key_expr(key : ClassKey) -> @ast.TsExpr {
     Name(name) => @ast.TsExpr::StringLit(name)
     Computed(expr) => expr
   }
+}
+
+///|
+// Parse the comma-separated type references of an `implements` clause,
+// returning each head name (qualified names joined with `.`, type arguments
+// skipped). The leading `implements` keyword must already be consumed.
+fn Parser::parse_implements_names(self : Parser) -> Array[String] {
+  let names : Array[String] = []
+  // Always consume up to the class body `{` (matching the previous
+  // skip-to-`{` behaviour), collecting the head reference of each
+  // comma-separated entry. `expect_name` is true at the start of an entry
+  // (right after `implements` or a top-level comma); angle-bracket depth
+  // tracking skips type arguments so a `,` inside `Foo<A, B>` isn't read as
+  // an entry separator. Any unexpected token (e.g. the `?.` of an invalid
+  // `implements A?.B`) is simply skipped, so parsing always resyncs on `{`.
+  let mut expect_name = true
+  let mut angle = 0
+  while !self.check(LBrace) && !self.check(Eof) {
+    match self.peek().kind {
+      Lt => {
+        angle += 1
+        self.advance() |> ignore
+      }
+      Gt => {
+        if angle > 0 {
+          angle -= 1
+        }
+        self.advance() |> ignore
+      }
+      Comma if angle == 0 => {
+        expect_name = true
+        self.advance() |> ignore
+      }
+      Ident(n) if angle == 0 && expect_name => {
+        let parts = [n]
+        self.advance() |> ignore
+        while self.check(Dot) {
+          self.advance() |> ignore
+          match self.peek().kind {
+            Ident(m) => {
+              parts.push(m)
+              self.advance() |> ignore
+            }
+            _ => break
+          }
+        }
+        names.push(parts.join("."))
+        expect_name = false
+      }
+      _ => self.advance() |> ignore
+    }
+  }
+  names
 }
 
 ///|
@@ -1301,10 +1356,10 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       self.skip_type_args()
     }
   }
-  if self.match_ident("implements") {
-    while !self.check(LBrace) && !self.check(Eof) {
-      let _ = self.advance()
-    }
+  let implements_names = if self.match_ident("implements") {
+    self.parse_implements_names()
+  } else {
+    []
   }
   // Generate unique brand ID for private fields
   let brand_id = self.class_id
@@ -1349,7 +1404,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     Some(base_name) => {
       let runtime_decl = build_runtime_class_decl(
         class_name, class_type_params, ctor_opt, elements, false, private_members,
-        protected_members,
+        protected_members, implements_names,
       )
       let pending_base_expr = self.pending_class_base_expr
       self.pending_class_base_expr = None
@@ -1472,6 +1527,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     false,
     private_members,
     protected_members,
+    implements_names,
   )
   // Attach any decorators accumulated via `skip_decorator` before this
   // class statement.
@@ -1479,6 +1535,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     name: runtime_decl.name,
     type_params: runtime_decl.type_params,
     base_names: runtime_decl.base_names,
+    implements_names: runtime_decl.implements_names,
     base_expr: runtime_decl.base_expr,
     static_field_inits: runtime_decl.static_field_inits,
     static_blocks: runtime_decl.static_blocks,
@@ -1929,10 +1986,10 @@ fn Parser::parse_class_decl_with_abstract(
       self.skip_type_args()
     }
   }
-  if self.match_ident("implements") {
-    while !self.check(LBrace) && !self.check(Eof) {
-      let _ = self.advance()
-    }
+  let implements_names = if self.match_ident("implements") {
+    self.parse_implements_names()
+  } else {
+    []
   }
   // Generate unique brand ID for private fields
   let brand_id = self.class_id
@@ -1945,6 +2002,7 @@ fn Parser::parse_class_decl_with_abstract(
   self.restore_local_type_param_bounds(class_type_param_bound_len)
   let runtime_decl = build_runtime_class_decl(
     name, class_type_params, ctor_opt, elements, is_abstract, private_members, protected_members,
+    implements_names,
   )
   self.last_runtime_class_decl = Some(runtime_decl)
   // When the class extends another class, the IIFE desugar below

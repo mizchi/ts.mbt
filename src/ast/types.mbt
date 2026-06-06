@@ -637,6 +637,11 @@ pub(all) struct TsClassDecl {
   name : String
   type_params : Array[String]
   base_names : Array[String]
+  // Names of interfaces the class `implements` (`class C implements I, J`).
+  // Head identifiers only (qualified names joined with `.`, type arguments
+  // dropped). The checker uses these to verify the class satisfies each
+  // interface (TS2420). Empty when there is no `implements` clause.
+  implements_names : Array[String]
   // Expression-shaped heritage clause (`class X extends declare(args) {…}`
   // / `class X extends make(ast) {…}`). When present this carries the
   // parsed expression and `base_names` holds the sentinel marker

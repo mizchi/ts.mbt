@@ -2425,6 +2425,7 @@ fn Parser::parse_declare_class(
     name,
     type_params: class_type_params,
     base_names,
+    implements_names: [],
     base_expr: None,
     static_field_inits: [],
     static_blocks,

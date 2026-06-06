@@ -6871,6 +6871,33 @@ test "expr_check: duplicate getters / accessor-vs-method are duplicates (TS2300)
 }
 
 ///|
+test "expr_check: class incorrectly implements an interface (TS2420)" {
+  // A class that implements a public interface member as private, or with an
+  // incompatible property type, is flagged; a correct implementation and a
+  // generic interface (which we don't substitute) stay silent.
+  let src =
+    #|interface I { x: number; tag: string }
+    #|interface Shape { a: string }
+    #|interface G<T> { v: T }
+    #|class Bad implements I {
+    #|  private x = 0
+    #|  tag: number = 1
+    #|}
+    #|class Ok implements I, G<number> {
+    #|  x: number = 0
+    #|  tag: string = ""
+    #|}
+  let issues = check_module_function_bodies(parse_module_or_empty(src))
+  let impls = issues
+    .filter(fn(i) { i.message.contains("incorrectly implements") })
+    .map(fn(i) { "\{i.path} \{i.message}" })
+  // `Bad` is flagged: `x` implemented as private and `tag` type mismatch.
+  assert_true(impls.iter().any(fn(m) { m.contains("Bad") }))
+  // `Ok` correctly implements `I`; the generic `G<number>` is skipped.
+  assert_true(!impls.iter().any(fn(m) { m.contains("class Ok") }))
+}
+
+///|
 test "expr_check: static method call via class name checks argument types (TS2345)" {
   // `A.s(arg)` validates `arg` against the static method's parameter type.
   let src =
