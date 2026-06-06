@@ -10666,6 +10666,25 @@ fn check_structural_duplicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
 /// from declaration shape alone -- no resolution -- and carries no
 /// false-positive risk. Generic interfaces / classes are included since the
 /// rule is independent of any type argument.
+/// TS2300 ("Duplicate identifier") for a class member declared in two
+/// incompatible ways -- a data field colliding with a method / accessor of
+/// the same name. The parser computes `duplicate_member_names` from
+/// declaration shape (a data field can never share a name with a method or
+/// accessor in one class body), so this is false-positive-free.
+fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for cls in module_.classes {
+    for name in cls.duplicate_member_names {
+      issues.push({
+        path: "class \{cls.name}",
+        message: "duplicate identifier `\{name}`",
+      })
+    }
+  }
+  issues
+}
+
+///|
 fn check_duplicate_index_signatures(
   module_ : @ast.TsModule,
 ) -> Array[ExprIssue] {
@@ -11027,6 +11046,9 @@ fn check_module_function_bodies_layered(
     all.push(issue)
   }
   for issue in check_structural_duplicates(module_) {
+    all.push(issue)
+  }
+  for issue in check_class_duplicate_members(module_) {
     all.push(issue)
   }
   for issue in check_duplicate_index_signatures(module_) {

@@ -2444,5 +2444,6 @@ fn Parser::parse_declare_class(
     is_declare: true,
     private_members,
     protected_members,
+    duplicate_member_names: [],
   }
 }

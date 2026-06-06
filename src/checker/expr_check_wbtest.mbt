@@ -6755,6 +6755,94 @@ test "expr_check: lib / cross-file generic references are never arity-flagged" {
 }
 
 ///|
+test "expr_check: this.x = wrongType is flagged in method and constructor (TS2322)" {
+  // `this.x = <wrong>` assignments are validated against the field type in
+  // both an instance method and the constructor body.
+  let src =
+    #|class A {
+    #|  x: number = 0;
+    #|  m(): void { this.x = "bad"; }
+    #|  constructor() { this.x = "nope"; }
+    #|}
+  let issues = check_module_function_bodies(parse_module_or_empty(src))
+  let assigns = issues.filter(fn(i) {
+    i.message.contains("but got `string`") && i.path.contains("assign `.x`")
+  })
+  // Reported in both A.m and A.constructor.
+  assert_true(assigns.iter().any(fn(i) { i.path.contains("A.m") }))
+  assert_true(assigns.iter().any(fn(i) { i.path.contains("A.constructor") }))
+}
+
+///|
+test "expr_check: get/set accessor bodies are walked with `this` bound" {
+  // A getter / setter body is checked like any instance method: a bad
+  // local binding, a getter return mismatch, and a `this.x` assignment
+  // inside the accessor are all caught.
+  let src =
+    #|class A {
+    #|  x: number = 0;
+    #|  get v(): number {
+    #|    this.x = "bad";
+    #|    return 0;
+    #|  }
+    #|  set v(n: number) {
+    #|    let z: string = n;
+    #|  }
+    #|}
+  let issues = check_module_function_bodies(parse_module_or_empty(src))
+  assert_true(
+    issues
+    .iter()
+    .any(fn(i) {
+      i.path.contains("assign `.x`") && i.message.contains("but got `string`")
+    }),
+  )
+  assert_true(
+    issues
+    .iter()
+    .any(fn(i) {
+      i.path.contains("binding `z`") && i.message.contains("but got `number`")
+    }),
+  )
+}
+
+///|
+test "expr_check: data field colliding with an accessor is a duplicate (TS2300)" {
+  // A data property and an accessor (or method) sharing a name in one class
+  // body is a duplicate identifier.
+  let src =
+    #|class C {
+    #|  x: number = 0;
+    #|  get x(): number { return 1; }
+    #|}
+  let issues = check_module_function_bodies(parse_module_or_empty(src))
+  assert_true(
+    issues
+    .iter()
+    .any(fn(i) {
+      i.path.contains("class C") && i.message.contains("duplicate identifier")
+    }),
+  )
+}
+
+///|
+test "expr_check: get/set accessor pair is not a duplicate (TS2300 no FP)" {
+  // A matching getter/setter pair, and a static member sharing a name with
+  // an instance member, are both legal -- no duplicate-identifier report.
+  let src =
+    #|class C {
+    #|  get v(): number { return 1; }
+    #|  set v(n: number) {}
+    #|  x: number = 0;
+    #|  static x(): void {}
+    #|}
+  let issues = check_module_function_bodies(parse_module_or_empty(src))
+  assert_true(
+    !issues.iter().any(fn(i) { i.message.contains("duplicate identifier") }),
+  )
+}
+
+///|
 test "expr_check: constructor body is walked with `this` bound (TS2345)" {
   // The constructor's statement body is retained and checked: a wrong-typed
   // argument to `this.m(...)` inside the constructor is caught, while a

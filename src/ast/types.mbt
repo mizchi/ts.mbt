@@ -710,6 +710,13 @@ pub(all) struct TsClassDecl {
   // changing the member-decl structs. Empty for fully-public classes.
   private_members : Array[String]
   protected_members : Array[String]
+  // Member names the parser saw declared in two incompatible ways within
+  // this class body -- a data field colliding with a method / accessor of
+  // the same name, or a duplicated getter / setter. TypeScript reports
+  // these as TS2300 ("Duplicate identifier"). Computed from declaration
+  // shape alone (a data field can never share a name with a method or
+  // accessor), so it is false-positive-free. Empty for the common case.
+  duplicate_member_names : Array[String]
 } derive(Debug)
 
 ///|

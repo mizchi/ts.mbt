@@ -254,6 +254,37 @@ fn build_runtime_class_decl(
       _ => ()
     }
   }
+  // TS2300: a data field that collides with a method / accessor of the same
+  // name (same static-ness) is a duplicate identifier. A data field can
+  // never share a name with a method or accessor in one class body, so the
+  // field-name ∩ method-name intersection is a sound, false-positive-free
+  // signal. Keyed by `name|static` so an instance member and a static one
+  // of the same name (legal) don't collide.
+  let field_keys : Map[String, Unit] = {}
+  let member_keys : Map[String, Unit] = {}
+  let duplicate_member_names : Array[String] = []
+  let dup_seen : Map[String, Unit] = {}
+  for element in elements {
+    let (name, is_static, is_field) = match element {
+      Field(s, Name(n), _, _, _, _) => (n, s, true)
+      Method(s, Name(n), _, _) => (n, s, false)
+      _ => continue
+    }
+    if !is_public_runtime_class_member_name(name) {
+      continue
+    }
+    let key = if is_static { name + "|s" } else { name + "|i" }
+    let (own, other) = if is_field {
+      (field_keys, member_keys)
+    } else {
+      (member_keys, field_keys)
+    }
+    if other.get(key) is Some(_) && !(dup_seen.get(key) is Some(_)) {
+      dup_seen[key] = ()
+      duplicate_member_names.push(name)
+    }
+    own[key] = ()
+  }
   {
     name,
     type_params,
@@ -278,6 +309,7 @@ fn build_runtime_class_decl(
     is_declare: false,
     private_members,
     protected_members,
+    duplicate_member_names,
   }
 }
 
@@ -1441,6 +1473,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     is_declare: false,
     private_members: runtime_decl.private_members,
     protected_members: runtime_decl.protected_members,
+    duplicate_member_names: runtime_decl.duplicate_member_names,
   }
   self.last_runtime_class_decl = Some(decorated)
   let instance_assigns : Array[@ast.TsStmt] = []

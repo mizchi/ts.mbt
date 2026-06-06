@@ -1306,6 +1306,27 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-05 (T44)   545/815 (67 %)        395/414 (19 FP)
 2026-06-05 (T45)   546/815 (67 %)        395/414 (19 FP)
 2026-06-05 (T46)   556/815 (68 %)        394/414 (20 FP)
+2026-06-05 (T47)   557/815 (68 %)        394/414 (20 FP)
+
+  T47 -- data field colliding with a method / accessor is a duplicate
+  identifier (TS2300).
+
+    Verified first that the requested refinements were already delivered by
+    T45 / T46: `this.x = wrongType` assignments are checked in both method
+    and constructor bodies (TS2322), and get/set accessor bodies are walked
+    like any instance method (`this` bound, getter-return checked, setter
+    param in scope, getter-only assignment flagged TS2540). Added regression
+    tests locking all of that.
+
+    New detection: a data property and a method / accessor of the same name
+    in one class body. The parser merges a field and a same-named accessor
+    into a single `properties` entry (losing the collision), so the parser
+    now records the field-name ∩ method-name intersection (per static-ness)
+    in a new `TsClassDecl::duplicate_member_names`, and the checker emits
+    TS2300. A data field can never legally share a name with a method or
+    accessor, so it is false-positive-free; a get/set pair and an
+    instance/static same-name split stay silent. recall 556 -> 557, FP
+    steady 20 (clears propertyAndAccessorWithSameName).
 
   T46 -- retain + walk the constructor body (TS2345 / TS2322 / TS2339 ...).
 
