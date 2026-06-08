@@ -10968,6 +10968,122 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
 }
 
 ///|
+/// A type whose identity we can compare safely by structural / set equality:
+/// a primitive, a literal, or a named reference. Compound shapes (objects,
+/// functions, generics, `typeof`, conditionals, …) are excluded so the
+/// redeclaration check never mis-judges identity on a form it can't normalize.
+fn is_identity_comparable_atom(t : @ast.TsType) -> Bool {
+  match t {
+    Number
+    | Int
+    | Boolean
+    | String_
+    | BigInt
+    | Symbol
+    | Void
+    | Null
+    | Undefined
+    | Literal(_)
+    | NumberLiteral(_)
+    | BigIntLiteral(_)
+    | BooleanLiteral(_)
+    | Named(_) => true
+    _ => false
+  }
+}
+
+///|
+/// Flatten a type into its normalized union members: unwrap aliases, then
+/// flatten nested unions, so `(A | B) | C` and `A | (B | C)` both yield
+/// `[A, B, C]` and a `type S = string` alias normalizes to `string`.
+fn normalized_union_members(
+  t : @ast.TsType,
+  resolver : Resolver,
+) -> Array[@ast.TsType] {
+  match resolver.unwrap(t) {
+    Union(members) => {
+      let out : Array[@ast.TsType] = []
+      for m in members {
+        for n in normalized_union_members(m, resolver) {
+          out.push(n)
+        }
+      }
+      out
+    }
+    other => [other]
+  }
+}
+
+///|
+/// TS2403 ("Subsequent variable declarations must have the same type"): two
+/// `var` declarations of the same name must declare the *identical* type.
+/// Identity (not assignability) -- `C` and `C | D` are mutually assignable
+/// but not identical -- decided by order-independent set comparison of the
+/// normalized union members. To stay false-positive-free we only compare
+/// when every member of both types is an identity-comparable atom (primitive
+/// / literal / named); anything we can't normalize (objects, generics,
+/// `typeof`, …) skips the pair. Only true `var` declarations participate
+/// (block-scoped `let` / `const` redeclaration is a different diagnostic).
+fn check_var_redeclaration_types(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  let first_members : Map[String, Array[@ast.TsType]] = {}
+  let reported : Map[String, Unit] = {}
+  fn members_set_equal(a : Array[@ast.TsType], b : Array[@ast.TsType]) -> Bool {
+    for x in a {
+      if !b.iter().any(fn(y) { x == y }) {
+        return false
+      }
+    }
+    for x in b {
+      if !a.iter().any(fn(y) { x == y }) {
+        return false
+      }
+    }
+    true
+  }
+
+  fn consider(name : String, ty : @ast.TsType) -> Unit {
+    if !is_checkable(ty) {
+      return
+    }
+    let members = normalized_union_members(ty, resolver)
+    if members.length() == 0 {
+      return
+    }
+    for m in members {
+      if !is_identity_comparable_atom(m) {
+        return
+      }
+    }
+    match first_members.get(name) {
+      None => first_members[name] = members
+      Some(prev) =>
+        if !(reported.get(name) is Some(_)) && !members_set_equal(prev, members) {
+          reported[name] = ()
+          issues.push({
+            path: "var \{name}",
+            message: "subsequent variable declaration must have the same type",
+          })
+        }
+    }
+  }
+
+  for stmt in module_.top_level_stmts {
+    match stmt {
+      Var(@ast.TsBinding::Ident(n), ty, _) => consider(n, ty)
+      _ => ()
+    }
+  }
+  for v in module_.values {
+    consider(v.name, v.type_)
+  }
+  issues
+}
+
+///|
 fn check_duplicate_index_signatures(
   module_ : @ast.TsModule,
 ) -> Array[ExprIssue] {
@@ -11329,6 +11445,9 @@ fn check_module_function_bodies_layered(
     all.push(issue)
   }
   for issue in check_structural_duplicates(module_) {
+    all.push(issue)
+  }
+  for issue in check_var_redeclaration_types(module_, resolver) {
     all.push(issue)
   }
   for issue in check_class_duplicate_members(module_) {

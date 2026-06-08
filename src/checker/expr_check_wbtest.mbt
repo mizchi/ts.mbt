@@ -6871,6 +6871,38 @@ test "expr_check: duplicate getters / accessor-vs-method are duplicates (TS2300)
 }
 
 ///|
+test "expr_check: var redeclared with a non-identical type (TS2403)" {
+  // Two `var` declarations of the same name must declare the *identical*
+  // type. `C` vs `C | D` are mutually assignable but not identical -> error;
+  // union member order / nesting is normalized, so those stay silent.
+  let bad =
+    #|class C {}
+    #|class D {}
+    #|var x: C;
+    #|var x: C | D;
+  let issues_bad = check_module_function_bodies(parse_module_or_empty(bad))
+  assert_true(
+    issues_bad
+    .iter()
+    .any(fn(i) {
+      i.path.contains("var x") &&
+      i.message.contains("subsequent variable declaration")
+    }),
+  )
+  let ok =
+    #|var y: string | number;
+    #|var y: number | string;
+    #|var z: string | (number | boolean);
+    #|var z: (string | number) | boolean;
+  let issues_ok = check_module_function_bodies(parse_module_or_empty(ok))
+  assert_true(
+    !issues_ok
+    .iter()
+    .any(fn(i) { i.message.contains("subsequent variable declaration") }),
+  )
+}
+
+///|
 test "expr_check: union callee with shared call signature checks args (TS2345)" {
   // When every member of a union callee has one identical call signature,
   // the call's arguments are checked against those parameters; a union whose

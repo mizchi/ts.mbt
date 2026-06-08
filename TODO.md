@@ -1311,6 +1311,36 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-05 (T49)   558/815 (68 %)        394/414 (20 FP)
 2026-06-05 (T50)   559/815 (69 %)        394/414 (20 FP)
 2026-06-05 (T51)   560/815 (69 %)        394/414 (20 FP)
+2026-06-08 (T52)   (corpus sweep deferred — see note)
+
+  T52 -- TS2403 ("subsequent variable declarations must have the same type").
+  Verified via unit tests + `tscheck`; full-corpus recall/FP NOT re-measured
+  this session (the native parser-package test build was unworkably slow in
+  this environment -- repeated >15 min compiles with no completion).
+
+    Two `var` declarations of the same name must declare the *identical*
+    type. Identity, not assignability -- `C` and `C | D` are mutually
+    assignable but not identical -- decided by order-independent set
+    comparison of normalized union members (`normalized_union_members`
+    unwraps aliases and flattens nested unions). To stay false-positive-free
+    it only compares when every member of both types is an
+    identity-comparable atom (primitive / literal / named); anything it can't
+    normalize (objects, generics, `typeof`, …) skips the pair. Only true
+    `var` declarations participate (block-scoped `let` / `const`
+    redeclaration is a different diagnostic, TS2451).
+
+    Verification status:
+      - `moon check --deny-warn`: clean.
+      - checker package unit tests: 615/615 pass, including the new
+        "var redeclared with a non-identical type (TS2403)" test.
+      - `tscheck` on `conformance/types/union/unionTypeEquivalence.ts`:
+        flags exactly `var x` (`C` vs `C | D`), matching the baseline's lone
+        TS2403; the union order / nesting / `typeof` variants stay silent.
+      - FP-safe by construction (atom-gated, set-equality, var-only).
+    Expected effect once measured: recall +1 (clears unionTypeEquivalence),
+    FP steady 20. A future session should re-run the parser accuracy test
+    (use `-f "*accuracy*"` to skip the slow full-TS smoke-run) and fill in
+    the table row.
 
   T51 -- argument checking for union construct signatures (TS2345). recall
   +1. The `new`-call analog of T50.
