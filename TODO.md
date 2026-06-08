@@ -1313,6 +1313,17 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-05 (T51)   560/815 (69 %)        394/414 (20 FP)
 2026-06-08 (T52)   (corpus sweep deferred — see note)
 
+  Toolchain note (2026-06-08): the native parser-package whitebox test
+  generates a ~25 MB C unit that this session's `tcc` could not compile in
+  budget (>20 min, CPU-degraded container; it built in ~1-2 min in earlier
+  sessions). Added `src/cmd/tsacc` -- a standalone corpus-accuracy CLI that
+  pulls in only `parser` + `checker` (no test bundling) and prints the same
+  per-dir 2x2 table + `baseline accuracy:` line. On a healthy container,
+  `moon run --target native src/cmd/tsacc` measures recall/FP without the
+  whitebox build. (Even `tsacc` -- a 14 MB C unit -- did not finish compiling
+  this session, so T52's numbers remain unmeasured here; re-run when the
+  container compiles natively at normal speed.)
+
   T52 -- TS2403 ("subsequent variable declarations must have the same type").
   Verified via unit tests + `tscheck`; full-corpus recall/FP NOT re-measured
   this session (the native parser-package test build was unworkably slow in
