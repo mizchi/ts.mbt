@@ -592,22 +592,30 @@ async fn main {
         None => ""
       }
       if entry_source != "" {
-        let block = (try? @parser.parse_module_block_from_source(entry_source)).or({
-            block: { stmts: [], stmt_positions: [] },
-            imports: [],
-            exports: [],
-            reexports: [],
-            enums: [],
-            internal_names: {},
-            deprecations: {},
-            pure_declarations: {},
-            type_aliases: [],
-          },
-        )
-        let module_ = (try? @parser.parse_module_from_source_with_const_values(
-          entry_source,
-          {},
-        )).or(@ast.TsModule::{
+        let block = (try
+          @parser.parse_module_block_from_source(entry_source)
+        catch {
+          e => Err(e)
+        } noraise {
+          v => Ok(v)
+        }).or({
+          block: { stmts: [], stmt_positions: [] },
+          imports: [],
+          exports: [],
+          reexports: [],
+          enums: [],
+          internal_names: {},
+          deprecations: {},
+          pure_declarations: {},
+          type_aliases: [],
+        })
+        let module_ = (try
+          @parser.parse_module_from_source_with_const_values(entry_source, {})
+        catch {
+          e => Err(e)
+        } noraise {
+          v => Ok(v)
+        }).or(@ast.TsModule::{
           funcs: [],
           interfaces: [],
           type_aliases: [],
@@ -694,9 +702,13 @@ async fn main {
             Some(s) => s
             None => ""
           }
-          let entry_block = (try? @parser.parse_module_block_from_source(
-            entry_source,
-          )).or({
+          let entry_block = (try
+            @parser.parse_module_block_from_source(entry_source)
+          catch {
+            e => Err(e)
+          } noraise {
+            v => Ok(v)
+          }).or({
             block: { stmts: [], stmt_positions: [] },
             imports: [],
             exports: [],
@@ -707,10 +719,13 @@ async fn main {
             pure_declarations: {},
             type_aliases: [],
           })
-          let entry_module = (try? @parser.parse_module_from_source_with_const_values(
-            entry_source,
-            {},
-          )).or(@ast.TsModule::{
+          let entry_module = (try
+            @parser.parse_module_from_source_with_const_values(entry_source, {})
+          catch {
+            e => Err(e)
+          } noraise {
+            v => Ok(v)
+          }).or(@ast.TsModule::{
             funcs: [],
             interfaces: [],
             type_aliases: [],

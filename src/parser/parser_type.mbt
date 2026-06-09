@@ -1675,14 +1675,14 @@ fn Parser::skip_paren_type(self : Parser) -> Unit raise ParseError {
 /// annotation when it's parseable.
 fn Parser::parse_arrow_return_type(self : Parser) -> @ast.TsType {
   let saved = self.pos
-  let ty = try? self.parse_type()
-  match ty {
-    Ok(t) => t
-    Err(_) => {
+  try self.parse_type() catch {
+    _ => {
       self.pos = saved
       self.skip_type_until_arrow()
       @ast.TsType::Any
     }
+  } noraise {
+    t => t
   }
 }
 

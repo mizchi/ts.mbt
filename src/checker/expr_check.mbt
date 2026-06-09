@@ -1461,7 +1461,11 @@ fn Resolver::lookup_field_core(
       // so a type-alias `{ foo: number; [k: string]: V }` returns `V`
       // for non-declared keys instead of producing a missing-field
       // diagnostic.
-      let field_is_numeric = (try? @string.parse_int(field)) is Ok(_)
+      let field_is_numeric = try @string.parse_int(field) catch {
+        _ => false
+      } noraise {
+        _ => true
+      }
       for entry in entries {
         match entry.0 {
           String_ => return Some(entry.1)
@@ -8776,7 +8780,11 @@ fn index_signature_value(
   signatures : Array[(@ast.TsType, @ast.TsType)],
   field : String,
 ) -> @ast.TsType? {
-  let is_numeric = (try? @string.parse_int(field)) is Ok(_)
+  let is_numeric = try @string.parse_int(field) catch {
+    _ => false
+  } noraise {
+    _ => true
+  }
   let mut numeric_value : @ast.TsType? = None
   let mut string_value : @ast.TsType? = None
   for sig in signatures {
@@ -8832,7 +8840,11 @@ fn index_into_type(
     }
   }
   // Numeric index — read tuple slot or array element.
-  let idx = (try? @string.parse_int(inner)) is Ok(_)
+  let idx = try @string.parse_int(inner) catch {
+    _ => false
+  } noraise {
+    _ => true
+  }
   if idx {
     match shape {
       Array(elem) => return elem

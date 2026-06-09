@@ -927,7 +927,7 @@ fn Parser::parse_extends_clause_until_body(
         let base_args : Array[@ast.TsType] = []
         if self.check(Lt) && paren_depth == 0 && bracket_depth == 0 {
           let saved = self.pos
-          let parsed = try? ({
+          try {
             let _ = self.expect(Lt)
             let first = self.parse_type()
             base_args.push(first)
@@ -950,13 +950,13 @@ fn Parser::parse_extends_clause_until_body(
             } else if self.check(GtGtGt) {
               let _ = self.advance()
             }
-          })
-          match parsed {
-            Ok(_) => ()
-            Err(_) => {
+          } catch {
+            _ => {
               self.pos = saved
               base_args.clear()
             }
+          } noraise {
+            _ => ()
           }
         }
         names.push(full_name)
