@@ -45,6 +45,19 @@ jobs:
         # at the `Moon check` / `Moon test` steps below.
         run: moon update || true
 
+      - name: Patch deprecated `fn new()` in moonbitlang/async
+        # The bleeding-edge MoonBit toolchain (`latest`) now rejects
+        # `fn new(..)` declared *inside* a `struct` as a hard error, but
+        # moonbitlang/async@0.18.1 still uses that form. Its toplevel
+        # `Type::new` implementations already exist, so the in-struct
+        # signatures are redundant; drop them so `moon check` / `moon test`
+        # build the dependency. Remove once async ships a release migrated to
+        # the new constructor syntax (or the toolchain is pinnable).
+        run: |
+          moon install >/dev/null 2>&1 || true
+          find .mooncakes/moonbitlang/async/src -name '*.mbt' ! -name '*.mbti' -print0 \
+            | xargs -0 sed -i -E '/^[[:space:]]+fn(\[[^]]*\])? new\(.*\) -> /d'
+
       - name: Moon fmt check
         run: moon fmt --check
 
@@ -91,6 +104,15 @@ jobs:
 
       - name: Moon update
         run: moon update || true
+
+      - name: Patch deprecated `fn new()` in moonbitlang/async
+        # See the matching step in the `test` job: the latest toolchain
+        # hard-errors on async@0.18.1's in-struct `fn new(..)`; its toplevel
+        # `Type::new` impls already exist, so drop the redundant signatures.
+        run: |
+          moon install >/dev/null 2>&1 || true
+          find .mooncakes/moonbitlang/async/src -name '*.mbt' ! -name '*.mbti' -print0 \
+            | xargs -0 sed -i -E '/^[[:space:]]+fn(\[[^]]*\])? new\(.*\) -> /d'
 
       # Builds the `tscheck` binary and fails if the checker reports more
       # conformance false positives than the documented budget.
