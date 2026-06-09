@@ -46,17 +46,11 @@ jobs:
         run: moon update || true
 
       - name: Patch deprecated `fn new()` in moonbitlang/async
-        # The bleeding-edge MoonBit toolchain (`latest`) now rejects
-        # `fn new(..)` declared *inside* a `struct` as a hard error, but
-        # moonbitlang/async@0.18.1 still uses that form. Its toplevel
-        # `Type::new` implementations already exist, so the in-struct
-        # signatures are redundant; drop them so `moon check` / `moon test`
-        # build the dependency. Remove once async ships a release migrated to
-        # the new constructor syntax (or the toolchain is pinnable).
-        run: |
-          moon install >/dev/null 2>&1 || true
-          find .mooncakes/moonbitlang/async/src -name '*.mbt' ! -name '*.mbti' -print0 \
-            | xargs -0 sed -i -E '/^[[:space:]]+fn(\[[^]]*\])? new\(.*\) -> /d'
+        # The bleeding-edge MoonBit toolchain (`latest`) hard-errors on
+        # `fn new(..)` declared inside a `struct`, which async@0.18.1 still
+        # uses. Patch the shared registry cache so the top-level build *and*
+        # every scaffolded fixture pick up the fix. See the script header.
+        run: bash scripts/patch_async_dep.sh
 
       - name: Moon fmt check
         run: moon fmt --check
@@ -106,13 +100,8 @@ jobs:
         run: moon update || true
 
       - name: Patch deprecated `fn new()` in moonbitlang/async
-        # See the matching step in the `test` job: the latest toolchain
-        # hard-errors on async@0.18.1's in-struct `fn new(..)`; its toplevel
-        # `Type::new` impls already exist, so drop the redundant signatures.
-        run: |
-          moon install >/dev/null 2>&1 || true
-          find .mooncakes/moonbitlang/async/src -name '*.mbt' ! -name '*.mbti' -print0 \
-            | xargs -0 sed -i -E '/^[[:space:]]+fn(\[[^]]*\])? new\(.*\) -> /d'
+        # See the matching step in the `test` job + the script header.
+        run: bash scripts/patch_async_dep.sh
 
       # Builds the `tscheck` binary and fails if the checker reports more
       # conformance false positives than the documented budget.
