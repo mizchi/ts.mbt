@@ -6949,6 +6949,36 @@ test "expr_check: union construct signature checks new-args (TS2345)" {
 }
 
 ///|
+test "expr_check: ambient `declare class` implements is checked too (TS2420)" {
+  // `implements` on a `declare class` is retained by the parser (not just on
+  // runtime classes), so an ambient class implementing a public interface
+  // member as private is flagged; a correct ambient implementation stays
+  // silent.
+  let bad =
+    #|interface I { x: number }
+    #|declare class C implements I {
+    #|  private x: number;
+    #|}
+  let issues_bad = check_module_function_bodies(parse_module_or_empty(bad))
+  assert_true(
+    issues_bad
+    .iter()
+    .any(fn(i) { i.message.contains("incorrectly implements interface `I`") }),
+  )
+  let ok =
+    #|interface I { x: number }
+    #|declare class D implements I {
+    #|  x: number;
+    #|}
+  let issues_ok = check_module_function_bodies(parse_module_or_empty(ok))
+  assert_true(
+    !issues_ok
+    .iter()
+    .any(fn(i) { i.message.contains("incorrectly implements") }),
+  )
+}
+
+///|
 test "expr_check: class incorrectly implements an interface (TS2420)" {
   // A class that implements a public interface member as private, or with an
   // incompatible property type, is flagged; a correct implementation and a
