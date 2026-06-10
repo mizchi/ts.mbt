@@ -823,11 +823,22 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
           }
         }
       // `typeof varName` in type position — resolve the variable's current type.
-      TypeOf(name) =>
-        match self.globals.get(name) {
-          Some(resolved) => cur = resolved
-          None => keep_going = false
+      // Self-referential exports (`export var r: typeof r;`) would otherwise
+      // loop forever, so guard the name through `seen` like the alias cases.
+      TypeOf(name) => {
+        let key = "typeof " + name
+        if seen.contains(key) {
+          keep_going = false
+        } else {
+          match self.globals.get(name) {
+            Some(resolved) => {
+              seen[key] = true
+              cur = resolved
+            }
+            None => keep_going = false
+          }
         }
+      }
       // `keyof typeof Enum` — the type of the enum object has the member
       // names as its keys, so `keyof typeof Color` resolves to the union
       // of member-name string literals (`"Red" | "Green" | ...`). This
