@@ -11011,12 +11011,21 @@ fn is_identity_comparable_atom(t : @ast.TsType) -> Bool {
 fn normalized_union_members(
   t : @ast.TsType,
   resolver : Resolver,
+  depth~ : Int = 0,
 ) -> Array[@ast.TsType] {
+  // Mutually-recursive aliases (`type A = B | number; type B = A | string;`)
+  // would otherwise recurse forever through `unwrap` + union members. Cap the
+  // depth and return the type un-normalized when exceeded; the caller only
+  // trusts results made entirely of identity-comparable atoms, so an
+  // un-normalized alias safely fails that test and skips the pair.
+  if depth > 64 {
+    return [t]
+  }
   match resolver.unwrap(t) {
     Union(members) => {
       let out : Array[@ast.TsType] = []
       for m in members {
-        for n in normalized_union_members(m, resolver) {
+        for n in normalized_union_members(m, resolver, depth=depth + 1) {
           out.push(n)
         }
       }
