@@ -11930,10 +11930,12 @@ fn check_module_function_bodies_layered(
     ) {
     all.push(issue)
   }
-  if strict_root.use_define_for_class_fields {
-    for issue in check_class_property_init_order(module_) {
-      all.push(issue)
-    }
+  for
+    issue in check_class_property_init_order(
+      module_,
+      strict_root.use_define_for_class_fields,
+    ) {
+    all.push(issue)
   }
   // Object-shaped names visible from outer scopes (a nested namespace's
   // interface can `extends` a member typed by a top-level interface).
@@ -13153,9 +13155,22 @@ fn class_instance_field_names(
 /// We rely on `decl.instance_field_inits` (parser-populated in source
 /// order) and walk each init expression for `this.<name>` references.
 /// A reference is flagged when the referenced name is also an init in
-/// the list at a later index — references to methods, getters/setters,
-/// constructor params, or fields without initializers are not flagged.
-fn check_class_property_init_order(module_ : @ast.TsModule) -> Array[ExprIssue] {
+/// the list at a later index — references to methods and getters/setters
+/// are never flagged.
+///
+/// `define_semantics` widens the candidate set to match
+/// `useDefineForClassFields`. Under define semantics every field is
+/// [[Define]]d in declaration order before the constructor body runs,
+/// so TS also flags references to constructor parameter properties
+/// (assigned in the body, after the initializers) and to
+/// initializer-less fields declared later. Without it, tsc emits
+/// parameter-property assignments *before* field initializers and
+/// initializer-less fields produce no write at all, so only
+/// initializer-bearing fields at a later index are errors.
+fn check_class_property_init_order(
+  module_ : @ast.TsModule,
+  define_semantics : Bool,
+) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   for decl in module_.classes {
     if decl.is_declare {
@@ -13174,22 +13189,32 @@ fn check_class_property_init_order(module_ : @ast.TsModule) -> Array[ExprIssue] 
     // their names from the field set so `this.m1()` -> a method call
     // isn't flagged.
     let field_names : Map[String, Unit] = {}
-    for prop in decl.properties {
-      if !prop.is_static && !prop.is_accessor {
-        field_names[prop.name] = ()
-      }
-    }
-    // Constructor parameter properties (`constructor(public foo: T)`)
-    // declare `this.foo` slots that are written *during* the constructor
-    // body — i.e. after every instance-field initializer has already
-    // run. Treat their names as fields so a field-init that reads
-    // `this.foo` before the constructor runs is reported.
-    match decl.constructor_params {
-      Some(params) =>
-        for entry in params {
-          field_names[entry.0] = ()
+    if define_semantics {
+      for prop in decl.properties {
+        if !prop.is_static && !prop.is_accessor {
+          field_names[prop.name] = ()
         }
-      None => ()
+      }
+      // Constructor parameter properties (`constructor(public foo: T)`)
+      // declare `this.foo` slots that are written *during* the
+      // constructor body — i.e. after every instance-field initializer
+      // has already run. Treat their names as fields so a field-init
+      // that reads `this.foo` before the constructor runs is reported.
+      match decl.constructor_params {
+        Some(params) =>
+          for entry in params {
+            field_names[entry.0] = ()
+          }
+        None => ()
+      }
+    } else {
+      // Set semantics: parameter properties are assigned before the
+      // (constructor-inlined) field initializers, and initializer-less
+      // fields never produce a write — only fields that carry their
+      // own initializer can be "used before initialization".
+      for entry in decl.instance_field_inits {
+        field_names[entry.0] = ()
+      }
     }
     for m in decl.methods {
       // Methods + accessors live in `properties` AND `methods`. The

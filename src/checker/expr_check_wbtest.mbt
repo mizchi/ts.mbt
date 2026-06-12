@@ -7496,3 +7496,33 @@ test "expr_check: nested namespace enum members resolve through dotted chain" {
   assert_true(mism.iter().any(fn(i) { i.path.contains("`c`") }))
   assert_true(mism.iter().any(fn(i) { i.path.contains("`a`") }))
 }
+
+///|
+test "expr_check: TS2729 use-before-init fires without useDefineForClassFields" {
+  // `x = this.y; y = 5` is an error under every target: the initializer
+  // for `y` hasn't run when `x`'s evaluates. References to a field
+  // declared earlier *without* an initializer (`s!: Date`) and to
+  // constructor parameter properties are only errors under define
+  // semantics, so they must stay silent here.
+  let src =
+    #|class C {
+    #|  x = this.y;
+    #|  y = 5;
+    #|}
+    #|class D {
+    #|  s!: Date;
+    #|  n = this.s;
+    #|}
+    #|class E {
+    #|  constructor(private readonly dep: number) {}
+    #|  private readonly snap = this.dep;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let order = issues.filter(fn(i) {
+    i.message.contains("used before its initialization")
+  })
+  @test.assert_eq(order.length(), 1)
+  assert_true(order[0].path.contains("class C"))
+  assert_true(order[0].message.contains("`y`"))
+}
