@@ -145,6 +145,7 @@ pub(all) enum TypeIssueKind {
   DuplicateDeclaration
   CircularTypeAlias
   TypeAliasArityMismatch
+  TypeParameterConstraintViolation
   InterfaceFieldDuplicate
   EnumMemberDuplicate
   InterfaceExtendsCycle

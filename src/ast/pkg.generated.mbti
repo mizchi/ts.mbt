@@ -75,10 +75,15 @@ pub(all) struct TsClassDecl {
   name : String
   type_params : Array[String]
   base_names : Array[String]
+  implements_names : Array[String]
   base_expr : TsExpr?
   static_field_inits : Array[(String, TsExpr)]
+  static_blocks : Array[TsBlock]
   instance_field_inits : Array[(String, TsExpr)]
   constructor_params : Array[(String, TsType)]?
+  constructor_param_is_rest : Array[Bool]
+  constructor_param_defaults : Array[TsExpr?]
+  constructor_body : TsBlock?
   properties : Array[TsClassPropertyDecl]
   methods : Array[TsClassMethodDecl]
   is_abstract : Bool
@@ -86,6 +91,9 @@ pub(all) struct TsClassDecl {
   index_signatures : Array[(TsType, TsType)]
   decorators : Array[TsExpr]
   is_declare : Bool
+  private_members : Array[String]
+  protected_members : Array[String]
+  duplicate_member_names : Array[String]
 } derive(@debug.Debug)
 pub impl Show for TsClassDecl
 
@@ -238,6 +246,7 @@ pub(all) struct TsImport {
   module_ : String
   type_params : Array[String]
   params : Array[(String, TsType)]
+  param_is_rest : Array[Bool]
   return_type : TsType
 } derive(@debug.Debug)
 pub impl Show for TsImport
