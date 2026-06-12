@@ -4190,6 +4190,24 @@ fn check_binop_operands(
         )
       }
     }
+    // `+` and the relational operators accept strings, so the general
+    // arithmetic check stays away from them — but `symbol` is invalid
+    // on every one of these (TS2469: "The '<op>' operator cannot be
+    // applied to type 'symbol'").
+    Add | BinLt | BinLe | BinGt | BinGe => {
+      let lt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, l))
+      let rt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, r))
+      if lt is (Symbol | UniqueSymbol(_)) {
+        record(
+          ctx, "binary op", "operator cannot be applied to operand of type `symbol`",
+        )
+      }
+      if rt is (Symbol | UniqueSymbol(_)) {
+        record(
+          ctx, "binary op", "operator cannot be applied to operand of type `symbol`",
+        )
+      }
+    }
     // Strict equality: comparing two types with no overlap is always false.
     // e.g., `someNumber === "hello"` or `true === 42`.
     BinEq | BinNe => {
@@ -4422,6 +4440,17 @@ fn infer_expr(
       @ast.TsType::Array(elem)
     }
     Call(name, args) => {
+      // `Symbol()` / `Symbol("desc")` — the lib global isn't in the
+      // resolver, but its return type matters for TS2469-style symbol
+      // operand checks. Only applies when nothing shadows the name.
+      if name == "Symbol" &&
+        env.lookup(name) is None &&
+        resolver.globals.get(name) is None {
+        for a in args {
+          let _ = infer_expr(env, resolver, a)
+        }
+        return @ast.TsType::Symbol
+      }
       let callee_ty = match env.lookup(name) {
         Some(t) => t
         None =>
@@ -10591,6 +10620,19 @@ fn check_call_args_in_expr(
               ctx,
               "unary op",
               "operand `\{type_display(inner_ty)}` is not a valid number type",
+            )
+          }
+        }
+        // `++` / `--` on a symbol operand (TS2469). Other operand types
+        // are left alone — the increment target's arithmetic validity
+        // overlaps cases the corpus accepts (enums, any-pinned vars).
+        PreInc | PreDec | PostInc | PostDec => {
+          let inner_ty = ctx.resolver.unwrap(
+            infer_expr(env, ctx.resolver, inner),
+          )
+          if inner_ty is (Symbol | UniqueSymbol(_)) {
+            record(
+              ctx, "unary op", "operator cannot be applied to operand of type `symbol`",
             )
           }
         }

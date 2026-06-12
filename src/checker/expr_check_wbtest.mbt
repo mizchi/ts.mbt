@@ -7624,3 +7624,26 @@ test "expr_check: TS2464 computed property names of invalid type" {
   })
   @test.assert_eq(bad.length(), 5)
 }
+
+///|
+test "expr_check: TS2469 operators cannot be applied to symbol operands" {
+  // `Symbol()` types as `symbol`; arithmetic, `+`, relational
+  // comparison, and increment on it are all flagged. String / number
+  // operands on the same operators stay silent.
+  let src =
+    #|var sym = Symbol();
+    #|var a = sym + 1;
+    #|var b = sym * 2;
+    #|var c = sym < sym;
+    #|function f() { sym++; }
+    #|var ok1 = "s" + 1;
+    #|var ok2 = 1 < 2;
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let bad = issues.filter(fn(i) {
+    i.message.contains("`symbol`") &&
+    (i.path.contains("binary op") || i.path.contains("unary op"))
+  })
+  // sym+1 (1), sym*2 (1), sym<sym (2: both operands), sym++ (1)
+  @test.assert_eq(bad.length(), 5)
+}
