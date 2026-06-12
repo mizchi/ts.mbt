@@ -7635,7 +7635,7 @@ test "expr_check: TS2469 operators cannot be applied to symbol operands" {
     #|var a = sym + 1;
     #|var b = sym * 2;
     #|var c = sym < sym;
-    #|function f() { sym++; }
+    #|sym++;
     #|var ok1 = "s" + 1;
     #|var ok2 = 1 < 2;
   let module_ = parse_module_or_empty(src)
@@ -7644,6 +7644,9 @@ test "expr_check: TS2469 operators cannot be applied to symbol operands" {
     i.message.contains("`symbol`") &&
     (i.path.contains("binary op") || i.path.contains("unary op"))
   })
-  // sym+1 (1), sym*2 (1), sym<sym (2: both operands), sym++ (1)
+  // sym+1 (1), sym*2 (1), sym<sym (2: both operands), sym++ (1).
+  // The increment sits at top level: module-scope `var` types don't
+  // flow into function bodies (separate env), so an in-function
+  // `sym++` would infer Any and stay silent.
   @test.assert_eq(bad.length(), 5)
 }
