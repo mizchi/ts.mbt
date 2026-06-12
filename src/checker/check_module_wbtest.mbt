@@ -12,6 +12,7 @@ fn empty_module_for_check() -> @ast.TsModule {
     module_augmentations: [],
     strict_property_initialization: true,
     use_define_for_class_fields: false,
+    allow_unreachable_code: false,
     deprecated_compiler_options: [],
     top_level_stmts: [],
   }

@@ -793,6 +793,10 @@ pub(all) struct TsModule {
   // Detected from `// @useDefineForClassFields: true` directives or
   // an `@target: es2022`/`esnext` directive (the TS default).
   use_define_for_class_fields : Bool
+  // `// @allowUnreachableCode: true` header directive. tsc suppresses
+  // TS2695 (unused comma-operator left side) under this option, so the
+  // checker needs to see it.
+  allow_unreachable_code : Bool
   // Deprecated compiler options detected in the conformance test header
   // directives (`// @target: es5`, etc.). Each entry is a human-readable
   // option string such as `"target=ES5"`; the checker surfaces one

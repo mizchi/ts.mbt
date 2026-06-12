@@ -9990,6 +9990,24 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
     ForOf(kind, binding, declared, iter, body) => {
       check_call_args_in_expr(env, iter, ctx)
       let iter_ty = infer_expr(env, ctx.resolver, iter)
+      // TS2488: the iterated expression must have a `[Symbol.iterator]()`
+      // method. Only definitely-non-iterable primitives are flagged —
+      // strings, arrays, generics, and structural shapes stay silent.
+      match ctx.resolver.unwrap(iter_ty) {
+        Number
+        | Int
+        | NumberLiteral(_)
+        | Boolean
+        | BooleanLiteral(_)
+        | Null
+        | Undefined =>
+          record(
+            ctx,
+            "for-of",
+            "type `\{type_display(iter_ty)}` must have a `[Symbol.iterator]()` method that returns an iterator",
+          )
+        _ => ()
+      }
       let inferred_elem = for_of_element_type(ctx.resolver, iter_ty)
       let elem_ty = if is_checkable(declared) {
         // Validate the declared annotation against the actual element type.
@@ -10456,7 +10474,16 @@ fn check_call_args_in_expr(
             record(ctx, "call", "`\{type_display(other)}` is not callable")
           }
       }
-      check_call_args_in_expr(env, callee, ctx)
+      // Indirect-call idiom `(0, f)(...)` / `(0, o.m)(...)`: walk the
+      // comma operands directly so the Seq arm's TS2695 doesn't flag
+      // the deliberate left side (tsc exempts indirect calls too).
+      match callee {
+        Seq(sl, sr) => {
+          check_call_args_in_expr(env, sl, ctx)
+          check_call_args_in_expr(env, sr, ctx)
+        }
+        _ => check_call_args_in_expr(env, callee, ctx)
+      }
       for a in args {
         check_call_args_in_expr(env, a, ctx)
       }
@@ -10636,6 +10663,16 @@ fn check_call_args_in_expr(
             )
           }
         }
+        // TS2703: `delete` requires a property reference; a bare
+        // identifier operand is always invalid.
+        Delete =>
+          match inner {
+            Var(_) =>
+              record(
+                ctx, "delete", "the operand of a delete operator must be a property reference",
+              )
+            _ => ()
+          }
         _ => ()
       }
     }
@@ -10643,6 +10680,27 @@ fn check_call_args_in_expr(
       check_call_args_in_expr(env, c, ctx)
       check_call_args_in_expr(env, t, ctx)
       check_call_args_in_expr(env, e, ctx)
+    }
+    Seq(l, r) => {
+      check_call_args_in_expr(env, l, ctx)
+      check_call_args_in_expr(env, r, ctx)
+      // TS2695: a literal / bare-identifier left side of a comma
+      // operator is unused and has no side effects. The indirect-call
+      // idiom `(0, f)(...)` is exempted — the CallExpr arm walks a
+      // Seq callee's operands directly, bypassing this check.
+      match l {
+        NumberLit(_)
+        | IntLit(_)
+        | BigIntLit(_)
+        | BoolLit(_)
+        | StringLit(_)
+        | NullLit
+        | Var(_) =>
+          record(
+            ctx, "comma operator", "left side of comma operator is unused and has no side effects",
+          )
+        _ => ()
+      }
     }
     ArrayLit(items) =>
       for it in items {
@@ -10932,10 +10990,6 @@ fn check_call_args_in_expr(
           }
         _ => ()
       }
-    }
-    Seq(a, b) => {
-      check_call_args_in_expr(env, a, ctx)
-      check_call_args_in_expr(env, b, ctx)
     }
     TemplateLiteral(_, exprs) =>
       for e in exprs {
@@ -11621,13 +11675,363 @@ fn check_structural_duplicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
 }
 
 ///|
-/// TS2374 ("Duplicate index signature for type 'string' / 'number'"): a
-/// single object type (interface or class body) may declare at most one
-/// string index signature and at most one numeric index signature. Two of
-/// the same key kind is always an error in TypeScript, so this is decided
-/// from declaration shape alone -- no resolution -- and carries no
-/// false-positive risk. Generic interfaces / classes are included since the
-/// rule is independent of any type argument.
+/// TS1100 ("Invalid use of 'eval'/'arguments' in strict mode"): under a
+/// `"use strict"` directive prologue, `eval` and `arguments` cannot be
+/// bound (function names, parameters, variable / catch bindings) or
+/// written (assignment, compound assignment, `++` / `--`). Reads stay
+/// legal, so only binding and write positions are flagged. Class-body
+/// implied strictness is not modelled — only explicit directives.
+fn check_strict_mode_eval_arguments(
+  module_ : @ast.TsModule,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  let file_strict = has_use_strict_prologue(module_.top_level_stmts)
+  for func in module_.funcs {
+    if file_strict || has_use_strict_prologue(func.body.stmts) {
+      strict_scan_func_decl(
+        func.name,
+        func.params,
+        func.body,
+        "function \{func.name}",
+        issues,
+      )
+    }
+  }
+  if file_strict {
+    for stmt in module_.top_level_stmts {
+      strict_scan_stmt(stmt, "top-level", issues)
+    }
+  }
+  issues
+}
+
+///|
+fn has_use_strict_prologue(stmts : Array[@ast.TsStmt]) -> Bool {
+  // The directive prologue is the leading run of string-literal
+  // expression statements.
+  for s in stmts {
+    match s {
+      Expr(StringLit(d)) => if d == "use strict" { return true }
+      _ => return false
+    }
+  }
+  false
+}
+
+///|
+fn is_strict_restricted_name(name : String) -> Bool {
+  name == "eval" || name == "arguments"
+}
+
+///|
+fn strict_flag_name(
+  name : String,
+  path : String,
+  issues : Array[ExprIssue],
+) -> Unit {
+  if is_strict_restricted_name(name) {
+    issues.push({ path, message: "invalid use of `\{name}` in strict mode" })
+  }
+}
+
+///|
+fn strict_scan_func_decl(
+  name : String,
+  params : Array[@ast.TsParam],
+  body : @ast.TsBlock,
+  path : String,
+  issues : Array[ExprIssue],
+) -> Unit {
+  strict_flag_name(name, path, issues)
+  for p in params {
+    strict_flag_name(p.name, path, issues)
+  }
+  for stmt in body.stmts {
+    strict_scan_stmt(stmt, path, issues)
+  }
+}
+
+///|
+fn strict_scan_binding_names(
+  binding : @ast.TsBinding,
+  path : String,
+  issues : Array[ExprIssue],
+) -> Unit {
+  match binding {
+    Ident(n) => strict_flag_name(n, path, issues)
+    Array(ab) => {
+      for item in ab.items {
+        match item {
+          Some(elem) => strict_scan_binding_names(elem.binding, path, issues)
+          None => ()
+        }
+      }
+      match ab.rest {
+        Some(b) => strict_scan_binding_names(b, path, issues)
+        None => ()
+      }
+    }
+    Object(ob) => {
+      for p in ob.props {
+        strict_scan_binding_names(p.binding, path, issues)
+      }
+      match ob.rest {
+        Some(n) => strict_flag_name(n, path, issues)
+        None => ()
+      }
+    }
+    Target(_) => ()
+  }
+}
+
+///|
+fn strict_scan_stmt(
+  stmt : @ast.TsStmt,
+  path : String,
+  issues : Array[ExprIssue],
+) -> Unit {
+  match stmt {
+    Var(binding, _, init) | Let(binding, _, init) | Const(binding, _, init) => {
+      strict_scan_binding_names(binding, path, issues)
+      strict_scan_expr(init, path, issues)
+    }
+    Assign(n, e) | CompoundAssign(n, _, e) => {
+      strict_flag_name(n, path, issues)
+      strict_scan_expr(e, path, issues)
+    }
+    IndexAssign(obj, idx, v) => {
+      strict_scan_expr(obj, path, issues)
+      strict_scan_expr(idx, path, issues)
+      strict_scan_expr(v, path, issues)
+    }
+    PropAssign(obj, _, v) => {
+      strict_scan_expr(obj, path, issues)
+      strict_scan_expr(v, path, issues)
+    }
+    Expr(e) | Throw(e) => strict_scan_expr(e, path, issues)
+    Return(e) =>
+      match e {
+        Some(e) => strict_scan_expr(e, path, issues)
+        None => ()
+      }
+    Try(b, catch_binding, catch_block, finally_block) => {
+      for s in b.stmts {
+        strict_scan_stmt(s, path, issues)
+      }
+      match catch_binding {
+        Some(binding) => strict_scan_binding_names(binding, path, issues)
+        None => ()
+      }
+      match catch_block {
+        Some(cb) =>
+          for s in cb.stmts {
+            strict_scan_stmt(s, path, issues)
+          }
+        None => ()
+      }
+      match finally_block {
+        Some(fb) =>
+          for s in fb.stmts {
+            strict_scan_stmt(s, path, issues)
+          }
+        None => ()
+      }
+    }
+    If(c, t, e) => {
+      strict_scan_expr(c, path, issues)
+      for s in t.stmts {
+        strict_scan_stmt(s, path, issues)
+      }
+      match e {
+        Some(b) =>
+          for s in b.stmts {
+            strict_scan_stmt(s, path, issues)
+          }
+        None => ()
+      }
+    }
+    While(c, b) | DoWhile(c, b) => {
+      strict_scan_expr(c, path, issues)
+      for s in b.stmts {
+        strict_scan_stmt(s, path, issues)
+      }
+    }
+    For(init, cond, update, body) => {
+      match init {
+        Some(s) => strict_scan_stmt(s, path, issues)
+        None => ()
+      }
+      match cond {
+        Some(e) => strict_scan_expr(e, path, issues)
+        None => ()
+      }
+      match update {
+        Some(s) => strict_scan_stmt(s, path, issues)
+        None => ()
+      }
+      for s in body.stmts {
+        strict_scan_stmt(s, path, issues)
+      }
+    }
+    ForOf(_, binding, _, iter, body)
+    | ForAwaitOf(_, binding, _, iter, body)
+    | ForIn(_, binding, _, iter, body) => {
+      strict_scan_binding_names(binding, path, issues)
+      strict_scan_expr(iter, path, issues)
+      for s in body.stmts {
+        strict_scan_stmt(s, path, issues)
+      }
+    }
+    Switch(e, cases) => {
+      strict_scan_expr(e, path, issues)
+      for c in cases {
+        match c.test_expr {
+          Some(t) => strict_scan_expr(t, path, issues)
+          None => ()
+        }
+        for s in c.body.stmts {
+          strict_scan_stmt(s, path, issues)
+        }
+      }
+    }
+    With(e, b) => {
+      strict_scan_expr(e, path, issues)
+      for s in b.stmts {
+        strict_scan_stmt(s, path, issues)
+      }
+    }
+    Label(_, s) => strict_scan_stmt(s, path, issues)
+    Block(b) =>
+      for s in b.stmts {
+        strict_scan_stmt(s, path, issues)
+      }
+    NativeClassStmt(_, _) => ()
+    Break(_) | Continue(_) | Empty | Debugger => ()
+  }
+}
+
+///|
+fn strict_scan_expr(
+  expr : @ast.TsExpr,
+  path : String,
+  issues : Array[ExprIssue],
+) -> Unit {
+  match expr {
+    AssignExpr(n, v) => {
+      strict_flag_name(n, path, issues)
+      strict_scan_expr(v, path, issues)
+    }
+    CompoundAssignExpr(target, _, v) => {
+      match target {
+        Var(n) => strict_flag_name(n, path, issues)
+        _ => strict_scan_expr(target, path, issues)
+      }
+      strict_scan_expr(v, path, issues)
+    }
+    AssignPattern(binding, v) => {
+      strict_scan_binding_names(binding, path, issues)
+      strict_scan_expr(v, path, issues)
+    }
+    UnaryOp(op, inner) => {
+      match (op, inner) {
+        (PreInc | PreDec | PostInc | PostDec, Var(n)) =>
+          strict_flag_name(n, path, issues)
+        _ => ()
+      }
+      strict_scan_expr(inner, path, issues)
+    }
+    PropAssignExpr(obj, _, v) => {
+      strict_scan_expr(obj, path, issues)
+      strict_scan_expr(v, path, issues)
+    }
+    IndexAssignExpr(obj, idx, v) => {
+      strict_scan_expr(obj, path, issues)
+      strict_scan_expr(idx, path, issues)
+      strict_scan_expr(v, path, issues)
+    }
+    FuncExpr(f) => strict_scan_func_decl(f.name, f.params, f.body, path, issues)
+    ArrowFunc(params, _, body, _) => {
+      for p in params {
+        strict_flag_name(p.name, path, issues)
+      }
+      match body {
+        ArrowExpr(e) => strict_scan_expr(e, path, issues)
+        ArrowBlock(b) =>
+          for s in b.stmts {
+            strict_scan_stmt(s, path, issues)
+          }
+      }
+    }
+    BinOp(_, l, r) | Seq(l, r) => {
+      strict_scan_expr(l, path, issues)
+      strict_scan_expr(r, path, issues)
+    }
+    Spread(e)
+    | Await(e)
+    | NonNull(e)
+    | OptionalChain(e)
+    | As(e, _)
+    | Satisfies(e, _)
+    | PureCall(e)
+    | YieldStar(e) => strict_scan_expr(e, path, issues)
+    Yield(e) =>
+      match e {
+        Some(e) => strict_scan_expr(e, path, issues)
+        None => ()
+      }
+    Cond(c, t, e) => {
+      strict_scan_expr(c, path, issues)
+      strict_scan_expr(t, path, issues)
+      strict_scan_expr(e, path, issues)
+    }
+    Call(_, args) | New(_, args) =>
+      for a in args {
+        strict_scan_expr(a, path, issues)
+      }
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      strict_scan_expr(callee, path, issues)
+      for a in args {
+        strict_scan_expr(a, path, issues)
+      }
+    }
+    MethodCall(recv, _, args) => {
+      strict_scan_expr(recv, path, issues)
+      for a in args {
+        strict_scan_expr(a, path, issues)
+      }
+    }
+    ArrayLit(items) =>
+      for it in items {
+        strict_scan_expr(it, path, issues)
+      }
+    ObjectLit(entries) =>
+      for ent in entries {
+        strict_scan_expr(ent.1, path, issues)
+      }
+    ComputedProp(k, v) => {
+      strict_scan_expr(k, path, issues)
+      strict_scan_expr(v, path, issues)
+    }
+    IndexAccess(a, b) => {
+      strict_scan_expr(a, path, issues)
+      strict_scan_expr(b, path, issues)
+    }
+    PropAccess(e, _) => strict_scan_expr(e, path, issues)
+    TaggedTemplate(tag, _, _, exprs) => {
+      strict_scan_expr(tag, path, issues)
+      for e in exprs {
+        strict_scan_expr(e, path, issues)
+      }
+    }
+    TemplateLiteral(_, exprs) =>
+      for e in exprs {
+        strict_scan_expr(e, path, issues)
+      }
+    _ => ()
+  }
+}
+
+///|
 /// TS2300 ("Duplicate identifier") for a class member declared in two
 /// incompatible ways -- a data field colliding with a method / accessor of
 /// the same name. The parser computes `duplicate_member_names` from
@@ -11772,6 +12176,13 @@ fn check_var_redeclaration_types(
 }
 
 ///|
+/// TS2374 ("Duplicate index signature for type 'string' / 'number'"): a
+/// single object type (interface or class body) may declare at most one
+/// string index signature and at most one numeric index signature. Two of
+/// the same key kind is always an error in TypeScript, so this is decided
+/// from declaration shape alone -- no resolution -- and carries no
+/// false-positive risk. Generic interfaces / classes are included since the
+/// rule is independent of any type argument.
 fn check_duplicate_index_signatures(
   module_ : @ast.TsModule,
 ) -> Array[ExprIssue] {
@@ -12161,6 +12572,9 @@ fn check_module_function_bodies_layered(
   for issue in check_var_redeclaration_types(module_, resolver) {
     all.push(issue)
   }
+  for issue in check_strict_mode_eval_arguments(module_) {
+    all.push(issue)
+  }
   for issue in check_class_duplicate_members(module_) {
     all.push(issue)
   }
@@ -12272,6 +12686,12 @@ fn check_module_function_bodies_layered(
     for issue in issues {
       all.push({ path: "\{prefix} > \{issue.path}", message: issue.message })
     }
+  }
+  // tsc gates TS2695 (unused comma-operator left side) on
+  // `!allowUnreachableCode`; the walker records unconditionally, so
+  // drop those entries here when the file opts out.
+  if strict_root.allow_unreachable_code {
+    return all.filter(fn(i) { !i.path.has_suffix("comma operator") })
   }
   all
 }

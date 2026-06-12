@@ -131,6 +131,7 @@ fn empty_ts_module() -> @ast.TsModule {
     module_augmentations: [],
     strict_property_initialization: true,
     use_define_for_class_fields: false,
+    allow_unreachable_code: false,
     top_level_stmts: [],
     deprecated_compiler_options: [],
   }
@@ -3248,6 +3249,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
       self.src,
     ),
     use_define_for_class_fields: detect_use_define_for_class_fields(self.src),
+    allow_unreachable_code: detect_allow_unreachable_code(self.src),
     deprecated_compiler_options: detect_deprecated_compiler_options(self.src),
   }
 }
@@ -3343,6 +3345,14 @@ fn detect_strict_property_initialization(src : String) -> Bool {
 /// Fires on explicit `// @useDefineForClassFields: true` directives,
 /// otherwise falls back to the TS default for the target (es2022+ /
 /// esnext default to true).
+fn detect_allow_unreachable_code(src : String) -> Bool {
+  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
+  let head = src[:head_len].to_owned()
+  head.contains("@allowUnreachableCode: true") ||
+  head.contains("@allowUnreachableCode:true")
+}
+
+///|
 fn detect_use_define_for_class_fields(src : String) -> Bool {
   let head_len = if src.length() < 1024 { src.length() } else { 1024 }
   let head = src[:head_len].to_owned()

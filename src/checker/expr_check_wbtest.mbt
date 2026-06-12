@@ -317,6 +317,7 @@ fn parse_module_or_empty(src : String) -> @ast.TsModule {
         module_augmentations: [],
         strict_property_initialization: true,
         use_define_for_class_fields: false,
+        allow_unreachable_code: false,
         deprecated_compiler_options: [],
         top_level_stmts: [],
       }
@@ -7649,4 +7650,48 @@ test "expr_check: TS2469 operators cannot be applied to symbol operands" {
   // flow into function bodies (separate env), so an in-function
   // `sym++` would infer Any and stay silent.
   @test.assert_eq(bad.length(), 5)
+}
+
+///|
+test "expr_check: TS2703/TS2695/TS2488/TS1100 statement-level checks" {
+  // delete on a bare identifier, a discarded comma-operator left side,
+  // for-of over a number, and strict-mode eval increment are each
+  // flagged; the indirect-call comma idiom `(0, f)()` is exempt.
+  let src =
+    #|"use strict";
+    #|eval++;
+    #|var n = 1;
+    #|delete n;
+    #|var seq = (1, 2);
+    #|var f = function(): void {};
+    #|var indirect = (0, f)();
+    #|for (var y of 5) {}
+    #|for (var z of [1, 2]) {}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_true(
+    issues
+    .iter()
+    .any(fn(i) { i.message.contains("must be a property reference") }),
+  )
+  let comma = issues.filter(fn(i) { i.message.contains("comma operator") })
+  @test.assert_eq(comma.length(), 1)
+  let forof = issues.filter(fn(i) { i.message.contains("Symbol.iterator") })
+  @test.assert_eq(forof.length(), 1)
+  assert_true(
+    issues
+    .iter()
+    .any(fn(i) { i.message.contains("invalid use of `eval` in strict mode") }),
+  )
+}
+
+///|
+test "expr_check: TS2695 suppressed under allowUnreachableCode directive" {
+  let src =
+    #|// @allowUnreachableCode: true
+    #|var seq = (1, 2);
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let comma = issues.filter(fn(i) { i.message.contains("comma operator") })
+  @test.assert_eq(comma.length(), 0)
 }
