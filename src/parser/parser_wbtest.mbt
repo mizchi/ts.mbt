@@ -779,11 +779,16 @@ test "parser: parse property access" {
 
 ///|
 test "parser: parse new array" {
+  // Explicit constructor type args are preserved as a synthetic `as`
+  // wrapper so the checker types the result as the instantiation.
   let parser = Parser::from_source("new Array<number>(10)")
   let expr = parser.parse_expr()
   match expr {
-    New("Array", args) => assert_eq(args.length(), 1)
-    _ => fail("expected New, got \{expr}")
+    As(New("Array", args), Applied("Array", targs)) => {
+      assert_eq(args.length(), 1)
+      assert_eq(targs.length(), 1)
+    }
+    _ => fail("expected As(New, Applied), got \{expr}")
   }
 }
 
@@ -3814,8 +3819,11 @@ test "parser: parse bare import type annotation" {
 ///|
 test "parser: parse new expression with multiple generic type args" {
   match parse_expr_from("new Map<string, string>()") {
-    New("Map", args) => assert_eq(args.length(), 0)
-    _ => fail("expected generic New(Map), got different expression")
+    As(New("Map", args), Applied("Map", targs)) => {
+      assert_eq(args.length(), 0)
+      assert_eq(targs.length(), 2)
+    }
+    _ => fail("expected As(New(Map), Applied), got different expression")
   }
 }
 

@@ -3010,6 +3010,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
       }
       let mut type_name = ""
       let mut callee_expr : @ast.TsExpr? = None
+      let mut new_type_args : Array[@ast.TsType]? = None
       match self.peek().kind {
         Ident(_) => {
           let first = match self.advance().kind {
@@ -3078,9 +3079,15 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
             expr = PropAccess(expr, part)
           }
           callee_expr = Some(expr)
-          // typeparameter (simpleimplementation)
+          // Explicit constructor type arguments (`new Map<string,
+          // number>()`). Keep the parsed list so the expression can be
+          // typed as the applied instantiation; fall back to skipping
+          // when they don't parse as a simple type-argument list.
           if self.check(Lt) {
-            self.skip_type_args()
+            match self.try_parse_simple_type_args() {
+              Some(targs) => new_type_args = Some(targs)
+              None => self.skip_type_args()
+            }
           }
         }
         NumberType => {
@@ -3154,13 +3161,30 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
       } else {
         []
       }
-      match callee_expr {
+      let new_expr : @ast.TsExpr = match callee_expr {
         Some(expr) =>
           match expr {
             Var(_) => New(type_name, args)
             _ => NewExpr(expr, args)
           }
         None => New(type_name, args)
+      }
+      // Explicit type arguments pin the constructed type: surface them
+      // as a synthetic `as` wrapper (`new Map<K, V>()` types exactly as
+      // `Map<K, V>`). Emit strips `As`, so runtime output is unchanged.
+      // Skip callees that don't form a usable type name (`<call>`
+      // results, `this.#ctor` chains).
+      match new_type_args {
+        Some(targs) =>
+          if targs.length() > 0 &&
+            type_name != "<call>" &&
+            !type_name.has_prefix("this.") &&
+            !type_name.contains("#") {
+            As(new_expr, Applied(type_name, targs))
+          } else {
+            new_expr
+          }
+        None => new_expr
       }
     }
     LBrace => {

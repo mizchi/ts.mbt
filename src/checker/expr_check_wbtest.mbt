@@ -7569,3 +7569,24 @@ test "expr_check: new through a class-valued binding yields the instance type" {
   @test.assert_eq(mism.length(), 1)
   assert_true(mism[0].path.contains("`viaVar`"))
 }
+
+///|
+test "expr_check: explicit constructor type args type the instantiation" {
+  // `new Box<string>(...)` / `new Map<string, number>()` previously
+  // dropped the type arguments and inferred Any. The parser now wraps
+  // the construction in a synthetic `as Box<string>` so member reads
+  // see the substituted generic shape.
+  let src =
+    #|class Box<T> { constructor(public v: T) {} }
+    #|const b = new Box<string>("a");
+    #|const bad: number = b.v;
+    #|const ok: string = b.v;
+    #|const m = new Map<string, number>();
+    #|const bad2: boolean = m.get("k")!;
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mism = issues.filter(fn(i) { i.message.contains("but got") })
+  @test.assert_eq(mism.length(), 2)
+  assert_true(mism.iter().any(fn(i) { i.path.contains("`bad`") }))
+  assert_true(mism.iter().any(fn(i) { i.path.contains("`bad2`") }))
+}
