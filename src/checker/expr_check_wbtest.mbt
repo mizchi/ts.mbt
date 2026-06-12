@@ -7427,3 +7427,72 @@ test "expr_check: this-type-guard narrows the receiver (method and arrow field)"
   let missing = issues.filter(fn(i) { i.message.contains("does not exist") })
   @test.assert_eq(missing.length(), 0)
 }
+
+///|
+test "expr_check: TS2564 fires for constructor that never assigns the field" {
+  // A class with a constructor used to be skipped wholesale. Now the
+  // constructor body is scanned for `this.x = ...` writes: `E` never
+  // assigns `y` (flag), `F` assigns `z` (silent), `G` assigns only in a
+  // branch (still counts — over-approximation keeps us FP-free), and `P`
+  // initialises via a constructor parameter property (silent).
+  let src =
+    #|class E {
+    #|  y: number;
+    #|  constructor() { }
+    #|}
+    #|class F {
+    #|  z: number;
+    #|  constructor() { this.z = 1; }
+    #|}
+    #|class G {
+    #|  w: number;
+    #|  constructor(flag: boolean) { if (flag) { this.w = 1; } }
+    #|}
+    #|class P {
+    #|  v: number;
+    #|  constructor(public v: number) { }
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let uninit = issues.filter(fn(i) { i.message.contains("has no initializer") })
+  @test.assert_eq(uninit.length(), 1)
+  assert_true(uninit[0].path.contains("class E"))
+  assert_true(uninit[0].message.contains("`y`"))
+}
+
+///|
+test "expr_check: TS2564 skips class whose constructor writes dynamic this[k]" {
+  // `this[key] = ...` can target any field; the scan can't name it, so
+  // the whole class is conservatively exempt.
+  let src =
+    #|class D {
+    #|  a: number;
+    #|  constructor(key: string) { this[key] = 1; }
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let uninit = issues.filter(fn(i) { i.message.contains("has no initializer") })
+  @test.assert_eq(uninit.length(), 0)
+}
+
+///|
+test "expr_check: nested namespace enum members resolve through dotted chain" {
+  // `NS.Mode.Read` is a two-level PropAccess chain; the resolver
+  // registers the member as the dotted global `NS.Mode.Read`, which the
+  // chain lookup must find (the one-level static-side arm can't).
+  let src =
+    #|namespace NS {
+    #|  export enum Mode { Read = "read", Write = "write" }
+    #|  export function fn1(): number { return 1; }
+    #|}
+    #|const c: number = NS.Mode.Read;
+    #|const a: string = NS.fn1();
+    #|const ok: string = NS.Mode.Read;
+    #|const ok2: number = NS.fn1();
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mism = issues.filter(fn(i) { i.message.contains("but got") })
+  @test.assert_eq(mism.length(), 2)
+  assert_true(mism.iter().any(fn(i) { i.path.contains("`c`") }))
+  assert_true(mism.iter().any(fn(i) { i.path.contains("`a`") }))
+}

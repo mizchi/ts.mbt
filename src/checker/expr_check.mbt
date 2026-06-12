@@ -4469,6 +4469,23 @@ fn infer_expr(
           }
         _ => ()
       }
+      // Namespace-scoped function calls (`NS.fn(...)`, `A.B.fn(...)`):
+      // `ingest_module` registers a namespace's exported functions in
+      // the globals under their full dotted key, which the receiver-type
+      // dispatch below can't see (the namespace value itself is `Any`).
+      match new_callee_class_name(receiver) {
+        Some(prefix) =>
+          match resolver.globals.get(prefix + "." + meth) {
+            Some(Func(_, ret)) => {
+              for a in args {
+                let _ = infer_expr(env, resolver, a)
+              }
+              return ret
+            }
+            _ => ()
+          }
+        None => ()
+      }
       let recv_ty = infer_expr(env, resolver, receiver)
       // Special-case generic `Array.prototype.{map, flatMap, reduce}` so
       // the callback's body / initial-value type flows into the result
@@ -4653,6 +4670,19 @@ fn infer_expr(
                 }
                 None => ()
               }
+          }
+        // Nested namespace member chains (`NS.Mode.Read`, `A.B.member`)
+        // are registered in the globals under their full dotted key by
+        // `ingest_module`; the bare-identifier arm above only covers a
+        // one-level receiver, so retry with the whole chain's key.
+        PropAccess(_, _) =>
+          match new_callee_class_name(@ast.TsExpr::PropAccess(receiver, name)) {
+            Some(key) =>
+              match resolver.globals.get(key) {
+                Some(t) => return t
+                None => ()
+              }
+            None => ()
           }
         _ => ()
       }
@@ -12007,14 +12037,15 @@ fn is_in_scope_type_param(ctx : CheckCtx, ty : @ast.TsType) -> Bool {
 ///|
 /// TS2564 ("Property 'X' has no initializer and is not definitely
 /// assigned in the constructor") for native (runtime) class
-/// declarations. We catch the common shape where the class has no
-/// constructor at all and the field has neither an `=` initializer
-/// nor a `!` definite-assignment assertion, and the declared type
-/// doesn't already accept `undefined`. The constructor-body-walk
-/// variant (which would also catch `class C { x: T; constructor() {
-/// this.x = ...; } }`) requires CFA over constructor bodies and is
-/// deferred -- 91 of 93 TS2564 cases in the conformance corpus have
-/// no constructor at all.
+/// declarations. A field is exempt when it has an `=` initializer, a
+/// `!` definite-assignment assertion, a type that already accepts
+/// `undefined`, or a `this.<field> = ...` write anywhere in the
+/// constructor body. The body scan over-approximates "definitely
+/// assigned" (a write in only one branch still counts, and writes
+/// inside nested closures count even though they run after
+/// construction), so conditional-assignment cases TS flags are
+/// deliberate false negatives -- a missed report beats claiming an
+/// initialised field is uninitialised.
 fn check_native_class_property_initializers(
   module_ : @ast.TsModule,
   resolver : Resolver,
@@ -12051,14 +12082,40 @@ fn check_native_class_property_initializers(
     if decl.index_signatures.length() > 0 {
       continue
     }
-    // Skip when the class declares a constructor: its body might
-    // assign `this.x` and we don't model the constructor body in the
-    // TsClassDecl form (only the parameter list survives). A false
-    // negative here is much better than the false positive of
-    // claiming an initialised field is uninitialised.
-    match decl.constructor_params {
-      Some(_) => continue
-      None => ()
+    // A declared constructor can definitely-assign fields through
+    // `this.x = ...`. Collect every field name its body writes and
+    // exempt those below. Two shapes still skip the whole class:
+    // a constructor whose body wasn't retained (we can't see the
+    // assignments), and a dynamic `this[expr] = ...` write whose
+    // target field can't be named statically.
+    let ctor_assigned : Map[String, Unit] = {}
+    let has_ctor = decl.constructor_params is Some(_) ||
+      decl.constructor_body is Some(_)
+    if has_ctor {
+      match decl.constructor_body {
+        Some(body) => {
+          let scan : CtorWriteScan = {
+            assigned: ctor_assigned,
+            dynamic_write: false,
+          }
+          ctor_scan_block(scan, body)
+          if scan.dynamic_write {
+            continue
+          }
+        }
+        None => continue
+      }
+      // Constructor parameter properties (`constructor(public x: T)`)
+      // initialise their field before the body runs. The param list
+      // doesn't record the property modifier, so any param sharing a
+      // field's name conservatively counts as assigning it.
+      match decl.constructor_params {
+        Some(params) =>
+          for entry in params {
+            ctor_assigned[entry.0] = ()
+          }
+        None => ()
+      }
     }
     // Build a set of names backed by a getter/setter method so we can
     // skip them below. `class C { get x() {…} }` upserts `x` into
@@ -12085,6 +12142,9 @@ fn check_native_class_property_initializers(
       if prop.has_initializer || prop.has_definite_assertion {
         continue
       }
+      if ctor_assigned.contains(prop.name) {
+        continue
+      }
       // Skip when the declared type already accepts `undefined`
       // (`x?: T` is wrapped to `T | undefined` by the parser, and
       // `x: T | undefined` matches the same predicate).
@@ -12103,6 +12163,316 @@ fn check_native_class_property_initializers(
     }
   }
   issues
+}
+
+///|
+/// Mutable state for the constructor-body write scan feeding TS2564:
+/// `assigned` collects the field names written through `this`, and
+/// `dynamic_write` is set when a `this[expr] = ...` write hides its
+/// target field name (the caller then skips the whole class).
+priv struct CtorWriteScan {
+  assigned : Map[String, Unit]
+  mut dynamic_write : Bool
+}
+
+///|
+fn ctor_scan_block(scan : CtorWriteScan, block : @ast.TsBlock) -> Unit {
+  for s in block.stmts {
+    ctor_scan_stmt(scan, s)
+  }
+}
+
+///|
+fn CtorWriteScan::record_this_index(
+  scan : CtorWriteScan,
+  obj : @ast.TsExpr,
+  idx : @ast.TsExpr,
+) -> Unit {
+  if obj is Var("this") {
+    match idx {
+      StringLit(s) => scan.assigned[s] = ()
+      _ => scan.dynamic_write = true
+    }
+  }
+}
+
+///|
+fn ctor_scan_stmt(scan : CtorWriteScan, stmt : @ast.TsStmt) -> Unit {
+  match stmt {
+    Var(_, _, e) | Let(_, _, e) | Const(_, _, e) => ctor_scan_expr(scan, e)
+    Assign(_, e) | CompoundAssign(_, _, e) => ctor_scan_expr(scan, e)
+    IndexAssign(obj, idx, v) => {
+      scan.record_this_index(obj, idx)
+      ctor_scan_expr(scan, obj)
+      ctor_scan_expr(scan, idx)
+      ctor_scan_expr(scan, v)
+    }
+    PropAssign(obj, name, v) => {
+      if obj is Var("this") {
+        scan.assigned[name] = ()
+      }
+      ctor_scan_expr(scan, obj)
+      ctor_scan_expr(scan, v)
+    }
+    Expr(e) | Throw(e) => ctor_scan_expr(scan, e)
+    Return(e) =>
+      match e {
+        Some(e) => ctor_scan_expr(scan, e)
+        None => ()
+      }
+    Try(b, _, catch_block, finally_block) => {
+      ctor_scan_block(scan, b)
+      match catch_block {
+        Some(cb) => ctor_scan_block(scan, cb)
+        None => ()
+      }
+      match finally_block {
+        Some(fb) => ctor_scan_block(scan, fb)
+        None => ()
+      }
+    }
+    If(c, t, e) => {
+      ctor_scan_expr(scan, c)
+      ctor_scan_block(scan, t)
+      match e {
+        Some(b) => ctor_scan_block(scan, b)
+        None => ()
+      }
+    }
+    While(c, b) | DoWhile(c, b) => {
+      ctor_scan_expr(scan, c)
+      ctor_scan_block(scan, b)
+    }
+    For(init, cond, update, body) => {
+      match init {
+        Some(s) => ctor_scan_stmt(scan, s)
+        None => ()
+      }
+      match cond {
+        Some(e) => ctor_scan_expr(scan, e)
+        None => ()
+      }
+      match update {
+        Some(s) => ctor_scan_stmt(scan, s)
+        None => ()
+      }
+      ctor_scan_block(scan, body)
+    }
+    ForOf(_, binding, _, iter, body)
+    | ForAwaitOf(_, binding, _, iter, body)
+    | ForIn(_, binding, _, iter, body) => {
+      // `for (this.x of arr)` re-uses an assignment target binding.
+      ctor_scan_binding(scan, binding)
+      ctor_scan_expr(scan, iter)
+      ctor_scan_block(scan, body)
+    }
+    Switch(e, cases) => {
+      ctor_scan_expr(scan, e)
+      for c in cases {
+        match c.test_expr {
+          Some(t) => ctor_scan_expr(scan, t)
+          None => ()
+        }
+        ctor_scan_block(scan, c.body)
+      }
+    }
+    With(e, b) => {
+      ctor_scan_expr(scan, e)
+      ctor_scan_block(scan, b)
+    }
+    Label(_, s) => ctor_scan_stmt(scan, s)
+    Block(b) => ctor_scan_block(scan, b)
+    // A nested class body binds its own `this`.
+    NativeClassStmt(_, _) => ()
+    Break(_) | Continue(_) | Empty | Debugger => ()
+  }
+}
+
+///|
+/// Destructuring-assignment targets (`[this.x] = arr`,
+/// `({ a: this.x } = obj)`) write through `Target(...)` bindings.
+fn ctor_scan_binding(scan : CtorWriteScan, binding : @ast.TsBinding) -> Unit {
+  match binding {
+    Ident(_) => ()
+    Array(ab) => {
+      for item in ab.items {
+        match item {
+          Some(elem) => {
+            ctor_scan_binding(scan, elem.binding)
+            match elem.default {
+              Some(d) => ctor_scan_expr(scan, d)
+              None => ()
+            }
+          }
+          None => ()
+        }
+      }
+      match ab.rest {
+        Some(b) => ctor_scan_binding(scan, b)
+        None => ()
+      }
+    }
+    Object(ob) =>
+      for p in ob.props {
+        ctor_scan_binding(scan, p.binding)
+        match p.default {
+          Some(d) => ctor_scan_expr(scan, d)
+          None => ()
+        }
+      }
+    Target(e) =>
+      match e {
+        PropAccess(Var("this"), name) => scan.assigned[name] = ()
+        IndexAccess(Var("this"), idx) =>
+          scan.record_this_index(@ast.TsExpr::Var("this"), idx)
+        _ => ctor_scan_expr(scan, e)
+      }
+  }
+}
+
+///|
+fn ctor_scan_expr(scan : CtorWriteScan, expr : @ast.TsExpr) -> Unit {
+  match expr {
+    PropAssignExpr(obj, name, v) => {
+      if obj is Var("this") {
+        scan.assigned[name] = ()
+      }
+      ctor_scan_expr(scan, obj)
+      ctor_scan_expr(scan, v)
+    }
+    IndexAssignExpr(obj, idx, v) => {
+      scan.record_this_index(obj, idx)
+      ctor_scan_expr(scan, obj)
+      ctor_scan_expr(scan, idx)
+      ctor_scan_expr(scan, v)
+    }
+    CompoundAssignExpr(target, _, v) => {
+      // `this.x += e` still writes the slot; the uninitialised *read*
+      // is a separate diagnostic (TS2565), not TS2564.
+      match target {
+        PropAccess(Var("this"), name) => scan.assigned[name] = ()
+        _ => ()
+      }
+      ctor_scan_expr(scan, target)
+      ctor_scan_expr(scan, v)
+    }
+    AssignExpr(_, v) => ctor_scan_expr(scan, v)
+    AssignPattern(binding, v) => {
+      ctor_scan_binding(scan, binding)
+      ctor_scan_expr(scan, v)
+    }
+    BinOp(_, l, r) | Seq(l, r) => {
+      ctor_scan_expr(scan, l)
+      ctor_scan_expr(scan, r)
+    }
+    UnaryOp(_, e)
+    | Spread(e)
+    | Await(e)
+    | NonNull(e)
+    | OptionalChain(e)
+    | As(e, _)
+    | Satisfies(e, _)
+    | PureCall(e)
+    | YieldStar(e) => ctor_scan_expr(scan, e)
+    Yield(e) =>
+      match e {
+        Some(e) => ctor_scan_expr(scan, e)
+        None => ()
+      }
+    Cond(c, t, e) => {
+      ctor_scan_expr(scan, c)
+      ctor_scan_expr(scan, t)
+      ctor_scan_expr(scan, e)
+    }
+    Call(_, args) | New(_, args) =>
+      for a in args {
+        ctor_scan_expr(scan, a)
+      }
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      ctor_scan_expr(scan, callee)
+      for a in args {
+        ctor_scan_expr(scan, a)
+      }
+    }
+    MethodCall(recv, _, args) => {
+      ctor_scan_expr(scan, recv)
+      for a in args {
+        ctor_scan_expr(scan, a)
+      }
+    }
+    ArrayLit(items) =>
+      for it in items {
+        ctor_scan_expr(scan, it)
+      }
+    ObjectLit(entries) =>
+      for ent in entries {
+        ctor_scan_expr(scan, ent.1)
+      }
+    ComputedProp(k, v) => {
+      ctor_scan_expr(scan, k)
+      ctor_scan_expr(scan, v)
+    }
+    IndexAccess(a, b) => {
+      ctor_scan_expr(scan, a)
+      ctor_scan_expr(scan, b)
+    }
+    PropAccess(e, _) => ctor_scan_expr(scan, e)
+    // Arrow functions capture the constructor's `this`, and tsc's
+    // definite-assignment pass ignores them — but counting their
+    // writes only widens the exempt set (false-negative-safe).
+    ArrowFunc(params, _, body, _) => {
+      for p in params {
+        match p.default {
+          Some(d) => ctor_scan_expr(scan, d)
+          None => ()
+        }
+      }
+      match body {
+        ArrowExpr(e) => ctor_scan_expr(scan, e)
+        ArrowBlock(b) => ctor_scan_block(scan, b)
+      }
+    }
+    FuncExpr(f) => ctor_scan_block(scan, f.body)
+    TaggedTemplate(tag, _, _, exprs) => {
+      ctor_scan_expr(scan, tag)
+      for e in exprs {
+        ctor_scan_expr(scan, e)
+      }
+    }
+    TemplateLiteral(_, exprs) =>
+      for e in exprs {
+        ctor_scan_expr(scan, e)
+      }
+    DynamicImport(e, opts) => {
+      ctor_scan_expr(scan, e)
+      match opts {
+        Some(o) => ctor_scan_expr(scan, o)
+        None => ()
+      }
+    }
+    JsxElement(_, attrs, children) => {
+      for attr in attrs {
+        match attr.1 {
+          Some(v) => ctor_scan_expr(scan, v)
+          None => ()
+        }
+      }
+      for child in children {
+        ctor_scan_expr(scan, child)
+      }
+    }
+    // A nested class expression binds its own `this`.
+    NativeClassExpr(_, _) => ()
+    ImportMeta
+    | NumberLit(_)
+    | IntLit(_)
+    | BigIntLit(_)
+    | BoolLit(_)
+    | StringLit(_)
+    | NullLit
+    | ArrayHole
+    | Var(_) => ()
+  }
 }
 
 ///|
