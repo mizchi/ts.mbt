@@ -57,6 +57,7 @@ fn build_runtime_class_decl(
   is_abstract : Bool,
   private_members : Array[String],
   protected_members : Array[String],
+  implements_names : Array[String],
 ) -> @ast.TsClassDecl {
   let properties : Array[@ast.TsClassPropertyDecl] = []
   let methods : Array[@ast.TsClassMethodDecl] = []
@@ -73,6 +74,13 @@ fn build_runtime_class_decl(
       }
       Some(params)
     }
+    None => None
+  }
+  // Retain the constructor body (when it has one) so the checker can walk
+  // its statements with `this` bound to the instance type. An overload
+  // signature carries an empty body, which is harmless.
+  let constructor_body : @ast.TsBlock? = match ctor_opt {
+    Some(ctor) => Some(ctor.body)
     None => None
   }
   for element in elements {
@@ -247,10 +255,65 @@ fn build_runtime_class_decl(
       _ => ()
     }
   }
+  // TS2300: a class member declared in two incompatible ways within one
+  // class body is a duplicate identifier. Per member name (keyed by
+  // `name|static` so an instance and a static member of the same name stay
+  // legal) we count how it was declared -- data field, getter, setter, or
+  // regular (non-accessor) method -- and flag the combinations TypeScript
+  // rejects. All are decided from declaration shape alone, so the check is
+  // false-positive-free:
+  //   - a data field together with *any* other declaration of the name;
+  //   - two or more getters, or two or more setters;
+  //   - a getter / setter together with a regular method.
+  // Legal and left silent: a single field, method *overloads* (several
+  // non-accessor methods -- a separate diagnostic family), and a get/set
+  // pair.
+  let counts : Map[String, Array[Int]] = {} // key -> [field, get, set, method]
+  let key_name : Map[String, String] = {}
+  for element in elements {
+    let (name, is_static, slot) = match element {
+      Field(s, Name(n), _, _, _, _) => (n, s, 0)
+      Method(s, Name(n), Some("get"), _) => (n, s, 1)
+      Method(s, Name(n), Some("set"), _) => (n, s, 2)
+      Method(s, Name(n), _, _) => (n, s, 3)
+      _ => continue
+    }
+    if !is_public_runtime_class_member_name(name) {
+      continue
+    }
+    let key = if is_static { name + "|s" } else { name + "|i" }
+    let c = match counts.get(key) {
+      Some(existing) => existing
+      None => {
+        let fresh = [0, 0, 0, 0]
+        counts[key] = fresh
+        key_name[key] = name
+        fresh
+      }
+    }
+    c[slot] += 1
+  }
+  let duplicate_member_names : Array[String] = []
+  let dup_seen : Map[String, Unit] = {}
+  for key, c in counts {
+    let nf = c[0]
+    let ng = c[1]
+    let ns = c[2]
+    let nm = c[3]
+    let is_dup = (nf >= 1 && nf + ng + ns + nm > nf) ||
+      ng >= 2 ||
+      ns >= 2 ||
+      ((ng >= 1 || ns >= 1) && nm >= 1)
+    if is_dup && !(dup_seen.get(key) is Some(_)) {
+      dup_seen[key] = ()
+      duplicate_member_names.push(key_name.get(key).unwrap())
+    }
+  }
   {
     name,
     type_params,
     base_names: [],
+    implements_names,
     base_expr: None,
     static_field_inits: [],
     static_blocks,
@@ -258,6 +321,7 @@ fn build_runtime_class_decl(
     constructor_params,
     constructor_param_is_rest,
     constructor_param_defaults,
+    constructor_body,
     properties,
     methods,
     index_signatures,
@@ -270,6 +334,7 @@ fn build_runtime_class_decl(
     is_declare: false,
     private_members,
     protected_members,
+    duplicate_member_names,
   }
 }
 
@@ -331,6 +396,59 @@ fn class_key_expr(key : ClassKey) -> @ast.TsExpr {
     Name(name) => @ast.TsExpr::StringLit(name)
     Computed(expr) => expr
   }
+}
+
+///|
+// Parse the comma-separated type references of an `implements` clause,
+// returning each head name (qualified names joined with `.`, type arguments
+// skipped). The leading `implements` keyword must already be consumed.
+fn Parser::parse_implements_names(self : Parser) -> Array[String] {
+  let names : Array[String] = []
+  // Always consume up to the class body `{` (matching the previous
+  // skip-to-`{` behaviour), collecting the head reference of each
+  // comma-separated entry. `expect_name` is true at the start of an entry
+  // (right after `implements` or a top-level comma); angle-bracket depth
+  // tracking skips type arguments so a `,` inside `Foo<A, B>` isn't read as
+  // an entry separator. Any unexpected token (e.g. the `?.` of an invalid
+  // `implements A?.B`) is simply skipped, so parsing always resyncs on `{`.
+  let mut expect_name = true
+  let mut angle = 0
+  while !self.check(LBrace) && !self.check(Eof) {
+    match self.peek().kind {
+      Lt => {
+        angle += 1
+        self.advance() |> ignore
+      }
+      Gt => {
+        if angle > 0 {
+          angle -= 1
+        }
+        self.advance() |> ignore
+      }
+      Comma if angle == 0 => {
+        expect_name = true
+        self.advance() |> ignore
+      }
+      Ident(n) if angle == 0 && expect_name => {
+        let parts = [n]
+        self.advance() |> ignore
+        while self.check(Dot) {
+          self.advance() |> ignore
+          match self.peek().kind {
+            Ident(m) => {
+              parts.push(m)
+              self.advance() |> ignore
+            }
+            _ => break
+          }
+        }
+        names.push(parts.join("."))
+        expect_name = false
+      }
+      _ => self.advance() |> ignore
+    }
+  }
+  names
 }
 
 ///|
@@ -1238,10 +1356,10 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       self.skip_type_args()
     }
   }
-  if self.match_ident("implements") {
-    while !self.check(LBrace) && !self.check(Eof) {
-      let _ = self.advance()
-    }
+  let implements_names = if self.match_ident("implements") {
+    self.parse_implements_names()
+  } else {
+    []
   }
   // Generate unique brand ID for private fields
   let brand_id = self.class_id
@@ -1286,7 +1404,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     Some(base_name) => {
       let runtime_decl = build_runtime_class_decl(
         class_name, class_type_params, ctor_opt, elements, false, private_members,
-        protected_members,
+        protected_members, implements_names,
       )
       let pending_base_expr = self.pending_class_base_expr
       self.pending_class_base_expr = None
@@ -1409,6 +1527,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     false,
     private_members,
     protected_members,
+    implements_names,
   )
   // Attach any decorators accumulated via `skip_decorator` before this
   // class statement.
@@ -1416,6 +1535,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     name: runtime_decl.name,
     type_params: runtime_decl.type_params,
     base_names: runtime_decl.base_names,
+    implements_names: runtime_decl.implements_names,
     base_expr: runtime_decl.base_expr,
     static_field_inits: runtime_decl.static_field_inits,
     static_blocks: runtime_decl.static_blocks,
@@ -1423,6 +1543,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     constructor_params: runtime_decl.constructor_params,
     constructor_param_is_rest: runtime_decl.constructor_param_is_rest,
     constructor_param_defaults: runtime_decl.constructor_param_defaults,
+    constructor_body: runtime_decl.constructor_body,
     properties: runtime_decl.properties,
     methods: runtime_decl.methods,
     index_signatures: runtime_decl.index_signatures,
@@ -1432,6 +1553,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     is_declare: false,
     private_members: runtime_decl.private_members,
     protected_members: runtime_decl.protected_members,
+    duplicate_member_names: runtime_decl.duplicate_member_names,
   }
   self.last_runtime_class_decl = Some(decorated)
   let instance_assigns : Array[@ast.TsStmt] = []
@@ -1864,10 +1986,10 @@ fn Parser::parse_class_decl_with_abstract(
       self.skip_type_args()
     }
   }
-  if self.match_ident("implements") {
-    while !self.check(LBrace) && !self.check(Eof) {
-      let _ = self.advance()
-    }
+  let implements_names = if self.match_ident("implements") {
+    self.parse_implements_names()
+  } else {
+    []
   }
   // Generate unique brand ID for private fields
   let brand_id = self.class_id
@@ -1880,6 +2002,7 @@ fn Parser::parse_class_decl_with_abstract(
   self.restore_local_type_param_bounds(class_type_param_bound_len)
   let runtime_decl = build_runtime_class_decl(
     name, class_type_params, ctor_opt, elements, is_abstract, private_members, protected_members,
+    implements_names,
   )
   self.last_runtime_class_decl = Some(runtime_decl)
   // When the class extends another class, the IIFE desugar below

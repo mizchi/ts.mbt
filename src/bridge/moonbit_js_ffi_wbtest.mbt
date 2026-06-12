@@ -4978,6 +4978,7 @@ test "bridge: FFI class methods unwrap optional arguments" {
     name: "SignJWT",
     type_params: [],
     base_names: [],
+    implements_names: [],
     base_expr: None,
     static_field_inits: [],
     static_blocks: [],
@@ -4985,6 +4986,7 @@ test "bridge: FFI class methods unwrap optional arguments" {
     constructor_params: None,
     constructor_param_is_rest: [],
     constructor_param_defaults: [],
+    constructor_body: None,
     properties: [],
     methods: [],
     is_abstract: false,
@@ -4994,6 +4996,7 @@ test "bridge: FFI class methods unwrap optional arguments" {
     is_declare: false,
     private_members: [],
     protected_members: [],
+    duplicate_member_names: [],
   }
   let class_method : @ast.TsClassMethodDecl = {
     name: "setIssuedAt",

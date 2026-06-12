@@ -6631,6 +6631,585 @@ test "expr_check: interface string index constrains fields (TS2411)" {
 }
 
 ///|
+test "expr_check: union-of-scalars index value constrains fields (TS2411)" {
+  // `[x: string]: string | number` is a primitive set: a `boolean` field and
+  // an object-shaped field both violate it, while `string` / `number` /
+  // string-literal fields are assignable members of the union.
+  let src =
+    #|interface I {
+    #|  [x: string]: string | number;
+    #|  a: string; // ok
+    #|  b: number; // ok
+    #|  c: "lit"; // ok (string literal is a string)
+    #|  d: boolean; // error (not in string | number)
+    #|  e: { v: number }; // error (object is never a primitive)
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let names = issues
+    .filter(fn(i) { i.message.contains("is not assignable to index type") })
+    .map(fn(i) { i.message })
+  assert_true(names.iter().any(fn(m) { m.contains("property `d`") }))
+  assert_true(names.iter().any(fn(m) { m.contains("property `e`") }))
+  assert_true(!names.iter().any(fn(m) { m.contains("property `a`") }))
+  assert_true(!names.iter().any(fn(m) { m.contains("property `b`") }))
+  assert_true(!names.iter().any(fn(m) { m.contains("property `c`") }))
+}
+
+///|
+test "expr_check: generic interface index constraint decides concrete fields only (TS2411)" {
+  // A generic interface is checked too, but only its concrete (non-type-
+  // parameter) fields are decided: `t: T` resolves to a bare type parameter
+  // that is neither scalar nor object-shaped, so it is left alone, while an
+  // object-shaped field is flagged against the scalar index value.
+  let src =
+    #|interface Obj { k: number }
+    #|interface I<T> {
+    #|  [x: string]: string;
+    #|  ok: string; // ok
+    #|  t: T; // silent (type parameter — undecidable)
+    #|  bad: Obj; // error (object is never a string)
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let names = issues
+    .filter(fn(i) { i.message.contains("is not assignable to index type") })
+    .map(fn(i) { i.message })
+  assert_true(names.iter().any(fn(m) { m.contains("property `bad`") }))
+  assert_true(!names.iter().any(fn(m) { m.contains("property `t`") }))
+  assert_true(!names.iter().any(fn(m) { m.contains("property `ok`") }))
+}
+
+///|
+test "expr_check: mixed scalar|object index value stays silent on objects (TS2411)" {
+  // `string | Obj` is NOT a primitive set, so an object-shaped property may
+  // legitimately satisfy it -- the check must not fire.
+  let src =
+    #|interface Obj { k: number }
+    #|interface I {
+    #|  [x: string]: string | Obj;
+    #|  good: Obj; // ok (object matches the Obj arm)
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let idx = issues.filter(fn(i) {
+    i.message.contains("is not assignable to index type")
+  })
+  @test.assert_eq(idx.length(), 0)
+}
+
+///|
+test "expr_check: type arguments on a non-generic class/interface/enum (TS2315)" {
+  // Applying type arguments to a locally-declared non-generic type is an
+  // error. Covers class, interface, enum and a non-generic alias, referenced
+  // from plain top-level `var` annotations (which live in `top_level_stmts`).
+  let src =
+    #|class C {}
+    #|interface I {}
+    #|enum E {}
+    #|type T = {};
+    #|var v1: C<string>;
+    #|var v2: I<string>;
+    #|var v3: E<string>;
+    #|var v4: T<string>;
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let arity = issues.filter(fn(i) { i.message.contains("type declared with") })
+  // Every one of the four references is reported.
+  assert_true(arity.iter().any(fn(i) { i.path == "C" }))
+  assert_true(arity.iter().any(fn(i) { i.path == "I" }))
+  assert_true(arity.iter().any(fn(i) { i.path == "E" }))
+  assert_true(arity.iter().any(fn(i) { i.path == "T" }))
+}
+
+///|
+test "expr_check: wrong type-argument count on a generic class (TS2314)" {
+  // A generic class used with the wrong number of type arguments, and a
+  // correct use that must stay silent.
+  let src =
+    #|declare class Box<T> { value: T }
+    #|var wrong: Box<string, number>;
+    #|var right: Box<string>;
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let arity = issues.filter(fn(i) {
+    i.message.contains("type declared with") && i.path == "Box"
+  })
+  // The 2-argument use is flagged; the 1-argument use is not (only one issue,
+  // de-duplicated per name by `check_arity`).
+  assert_true(arity.length() >= 1)
+}
+
+///|
+test "expr_check: lib / cross-file generic references are never arity-flagged" {
+  // `Array<T>` / `Promise<T>` are not locally declared, so the arity check
+  // must leave them alone regardless of argument count.
+  let src =
+    #|var a: Array<string>;
+    #|var b: Promise<number>;
+    #|var c: Map<string, number>;
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let arity = issues.filter(fn(i) { i.message.contains("type declared with") })
+  @test.assert_eq(arity.length(), 0)
+}
+
+///|
+test "expr_check: this.x = wrongType is flagged in method and constructor (TS2322)" {
+  // `this.x = <wrong>` assignments are validated against the field type in
+  // both an instance method and the constructor body.
+  let src =
+    #|class A {
+    #|  x: number = 0;
+    #|  m(): void { this.x = "bad"; }
+    #|  constructor() { this.x = "nope"; }
+    #|}
+  let issues = check_module_function_bodies(parse_module_or_empty(src))
+  let assigns = issues.filter(fn(i) {
+    i.message.contains("but got `string`") && i.path.contains("assign `.x`")
+  })
+  // Reported in both A.m and A.constructor.
+  assert_true(assigns.iter().any(fn(i) { i.path.contains("A.m") }))
+  assert_true(assigns.iter().any(fn(i) { i.path.contains("A.constructor") }))
+}
+
+///|
+test "expr_check: get/set accessor bodies are walked with `this` bound" {
+  // A getter / setter body is checked like any instance method: a bad
+  // local binding, a getter return mismatch, and a `this.x` assignment
+  // inside the accessor are all caught.
+  let src =
+    #|class A {
+    #|  x: number = 0;
+    #|  get v(): number {
+    #|    this.x = "bad";
+    #|    return 0;
+    #|  }
+    #|  set v(n: number) {
+    #|    let z: string = n;
+    #|  }
+    #|}
+  let issues = check_module_function_bodies(parse_module_or_empty(src))
+  assert_true(
+    issues
+    .iter()
+    .any(fn(i) {
+      i.path.contains("assign `.x`") && i.message.contains("but got `string`")
+    }),
+  )
+  assert_true(
+    issues
+    .iter()
+    .any(fn(i) {
+      i.path.contains("binding `z`") && i.message.contains("but got `number`")
+    }),
+  )
+}
+
+///|
+test "expr_check: data field colliding with an accessor is a duplicate (TS2300)" {
+  // A data property and an accessor (or method) sharing a name in one class
+  // body is a duplicate identifier.
+  let src =
+    #|class C {
+    #|  x: number = 0;
+    #|  get x(): number { return 1; }
+    #|}
+  let issues = check_module_function_bodies(parse_module_or_empty(src))
+  assert_true(
+    issues
+    .iter()
+    .any(fn(i) {
+      i.path.contains("class C") && i.message.contains("duplicate identifier")
+    }),
+  )
+}
+
+///|
+test "expr_check: get/set accessor pair is not a duplicate (TS2300 no FP)" {
+  // A matching getter/setter pair, and a static member sharing a name with
+  // an instance member, are both legal -- no duplicate-identifier report.
+  let src =
+    #|class C {
+    #|  get v(): number { return 1; }
+    #|  set v(n: number) {}
+    #|  x: number = 0;
+    #|  static x(): void {}
+    #|}
+  let issues = check_module_function_bodies(parse_module_or_empty(src))
+  assert_true(
+    !issues.iter().any(fn(i) { i.message.contains("duplicate identifier") }),
+  )
+}
+
+///|
+test "expr_check: duplicate getters / accessor-vs-method are duplicates (TS2300)" {
+  // Two getters of the same name, two setters, and a getter colliding with
+  // a regular method are each TS2300 -- while method overloads (several
+  // non-accessor signatures of one name) stay silent.
+  let src =
+    #|class C {
+    #|  get a(): number { return 1; }
+    #|  get a(): number { return 2; }
+    #|  set b(v: number) {}
+    #|  set b(v: number) {}
+    #|  get c(): number { return 1; }
+    #|  c(): void {}
+    #|  m(x: string): void;
+    #|  m(x: number): void;
+    #|  m(x: any): void {}
+    #|}
+  let issues = check_module_function_bodies(parse_module_or_empty(src))
+  let dups = issues
+    .filter(fn(i) { i.message.contains("duplicate identifier") })
+    .map(fn(i) { i.message })
+  assert_true(dups.iter().any(fn(m) { m.contains("`a`") }))
+  assert_true(dups.iter().any(fn(m) { m.contains("`b`") }))
+  assert_true(dups.iter().any(fn(m) { m.contains("`c`") }))
+  // `m` is a legal overload set -- never flagged as a duplicate identifier.
+  assert_true(!dups.iter().any(fn(m) { m.contains("`m`") }))
+}
+
+///|
+test "expr_check: var redeclared with a non-identical type (TS2403)" {
+  // Two `var` declarations of the same name must declare the *identical*
+  // type. `C` vs `C | D` are mutually assignable but not identical -> error;
+  // union member order / nesting is normalized, so those stay silent.
+  let bad =
+    #|class C {}
+    #|class D {}
+    #|var x: C;
+    #|var x: C | D;
+  let issues_bad = check_module_function_bodies(parse_module_or_empty(bad))
+  assert_true(
+    issues_bad
+    .iter()
+    .any(fn(i) {
+      i.path.contains("var x") &&
+      i.message.contains("subsequent variable declaration")
+    }),
+  )
+  let ok =
+    #|var y: string | number;
+    #|var y: number | string;
+    #|var z: string | (number | boolean);
+    #|var z: (string | number) | boolean;
+  let issues_ok = check_module_function_bodies(parse_module_or_empty(ok))
+  assert_true(
+    !issues_ok
+    .iter()
+    .any(fn(i) { i.message.contains("subsequent variable declaration") }),
+  )
+}
+
+///|
+test "expr_check: union callee with shared call signature checks args (TS2345)" {
+  // When every member of a union callee has one identical call signature,
+  // the call's arguments are checked against those parameters; a union whose
+  // members' parameters disagree stays silent ("no call signatures").
+  let bad =
+    #|declare var f: { (a: number): number } | { (a: number): Date };
+    #|f("hello");
+  let issues_bad = check_module_function_bodies(parse_module_or_empty(bad))
+  assert_true(
+    issues_bad
+    .iter()
+    .any(fn(i) {
+      i.path.contains("call `f`") && i.message.contains("but got `string`")
+    }),
+  )
+  let ok =
+    #|declare var g: { (a: number): number } | { (a: string): Date };
+    #|g("hi");
+  let issues_ok = check_module_function_bodies(parse_module_or_empty(ok))
+  assert_true(!issues_ok.iter().any(fn(i) { i.message.contains("but got") }))
+}
+
+///|
+test "expr_check: union construct signature checks new-args (TS2345)" {
+  // The `new`-call analog: a union of construct-signature objects sharing
+  // identical parameters checks the `new` arguments; disagreeing parameters
+  // stay silent.
+  let bad =
+    #|declare var f: { new (a: number): number } | { new (a: number): Date };
+    #|new f("hello");
+  let issues_bad = check_module_function_bodies(parse_module_or_empty(bad))
+  assert_true(
+    issues_bad
+    .iter()
+    .any(fn(i) {
+      i.path.contains("new `f`") && i.message.contains("but got `string`")
+    }),
+  )
+  let ok =
+    #|declare var g: { new (a: number): number } | { new (a: string): Date };
+    #|new g("hi");
+  let issues_ok = check_module_function_bodies(parse_module_or_empty(ok))
+  assert_true(!issues_ok.iter().any(fn(i) { i.message.contains("but got") }))
+}
+
+///|
+test "expr_check: ambient `declare class` implements is checked too (TS2420)" {
+  // `implements` on a `declare class` is retained by the parser (not just on
+  // runtime classes), so an ambient class implementing a public interface
+  // member as private is flagged; a correct ambient implementation stays
+  // silent.
+  let bad =
+    #|interface I { x: number }
+    #|declare class C implements I {
+    #|  private x: number;
+    #|}
+  let issues_bad = check_module_function_bodies(parse_module_or_empty(bad))
+  assert_true(
+    issues_bad
+    .iter()
+    .any(fn(i) { i.message.contains("incorrectly implements interface `I`") }),
+  )
+  let ok =
+    #|interface I { x: number }
+    #|declare class D implements I {
+    #|  x: number;
+    #|}
+  let issues_ok = check_module_function_bodies(parse_module_or_empty(ok))
+  assert_true(
+    !issues_ok
+    .iter()
+    .any(fn(i) { i.message.contains("incorrectly implements") }),
+  )
+}
+
+///|
+test "expr_check: class incorrectly implements an interface (TS2420)" {
+  // A class that implements a public interface member as private, or with an
+  // incompatible property type, is flagged; a correct implementation and a
+  // generic interface (which we don't substitute) stay silent.
+  let src =
+    #|interface I { x: number; tag: string }
+    #|interface Shape { a: string }
+    #|interface G<T> { v: T }
+    #|class Bad implements I {
+    #|  private x = 0
+    #|  tag: number = 1
+    #|}
+    #|class Ok implements I, G<number> {
+    #|  x: number = 0
+    #|  tag: string = ""
+    #|}
+  let issues = check_module_function_bodies(parse_module_or_empty(src))
+  let impls = issues
+    .filter(fn(i) { i.message.contains("incorrectly implements") })
+    .map(fn(i) { "\{i.path} \{i.message}" })
+  // `Bad` is flagged: `x` implemented as private and `tag` type mismatch.
+  assert_true(impls.iter().any(fn(m) { m.contains("Bad") }))
+  // `Ok` correctly implements `I`; the generic `G<number>` is skipped.
+  assert_true(!impls.iter().any(fn(m) { m.contains("class Ok") }))
+}
+
+///|
+test "expr_check: static method call via class name checks argument types (TS2345)" {
+  // `A.s(arg)` validates `arg` against the static method's parameter type.
+  let src =
+    #|class A {
+    #|  static s(p: string): void {}
+    #|}
+    #|A.s(1);
+    #|A.s("ok");
+  let issues = check_module_function_bodies(parse_module_or_empty(src))
+  let bad = issues.filter(fn(i) {
+    i.path.contains("call `s`") && i.message.contains("but got `number`")
+  })
+  @test.assert_eq(bad.length(), 1)
+}
+
+///|
+test "expr_check: derived class property incompatible with base is flagged (TS2416)" {
+  // A derived data property whose type is not assignable to the same base
+  // property is reported; a compatible (subtype) override stays silent.
+  let src =
+    #|interface Shape { a: string }
+    #|class Base {
+    #|  o: Shape = { a: "" }
+    #|  n: string = ""
+    #|  ok: number = 0
+    #|}
+    #|class D extends Base {
+    #|  o: number = 1
+    #|  n: number = 2
+    #|  ok: number = 5
+    #|}
+  let issues = check_module_function_bodies(parse_module_or_empty(src))
+  let bad = issues
+    .filter(fn(i) { i.message.contains("in base type") })
+    .map(fn(i) { i.message })
+  // `o` (object overridden by scalar) and `n` (string vs number) are flagged.
+  assert_true(bad.iter().any(fn(m) { m.contains("`o`") }))
+  assert_true(bad.iter().any(fn(m) { m.contains("`n`") }))
+  // `ok` (number over number) is compatible -- never flagged.
+  assert_true(!bad.iter().any(fn(m) { m.contains("`ok`") }))
+}
+
+///|
+test "expr_check: constructor body is walked with `this` bound (TS2345)" {
+  // The constructor's statement body is retained and checked: a wrong-typed
+  // argument to `this.m(...)` inside the constructor is caught, while a
+  // correct call stays silent.
+  let src =
+    #|class A {
+    #|  m(p: string): void {}
+    #|  constructor() {
+    #|    this.m(1);
+    #|    this.m("ok");
+    #|  }
+    #|}
+  let issues = check_module_function_bodies(parse_module_or_empty(src))
+  assert_true(
+    issues
+    .iter()
+    .any(fn(i) {
+      i.path.contains("A.constructor") && i.message.contains("but got `number`")
+    }),
+  )
+}
+
+///|
+test "expr_check: this-typed instance method validates member access and call args" {
+  // `this` is bound to the enclosing class inside an instance method, so a
+  // wrong-typed argument to `this.m(...)` is caught, while an inherited
+  // member stays silent.
+  let src =
+    #|class Base { bm(): void {} }
+    #|class A extends Base {
+    #|  x: number = 1;
+    #|  m(p: string): void {}
+    #|  c(): void {
+    #|    this.m(1);
+    #|    this.bm();
+    #|    this.m("ok");
+    #|  }
+    #|}
+  let issues = check_module_function_bodies(parse_module_or_empty(src))
+  assert_true(
+    issues
+    .iter()
+    .any(fn(i) {
+      i.message.contains("but got `number`") && i.path.contains("call `m`")
+    }),
+  )
+  assert_true(!issues.iter().any(fn(i) { i.message.contains("bm") }))
+}
+
+///|
+test "expr_check: static method does not bind instance `this`" {
+  // In a `static` method `this` is the class/constructor side; we don't
+  // model it, so a name accessed through `this` must stay silent rather
+  // than false-flag against the instance shape.
+  let src =
+    #|class A {
+    #|  x: number = 1;
+    #|  static s(): void {
+    #|    this.nope();
+    #|  }
+    #|}
+  let issues = check_module_function_bodies(parse_module_or_empty(src))
+  assert_true(!issues.iter().any(fn(i) { i.message.contains("nope") }))
+}
+
+///|
+test "expr_check: object-literal field types widen for un-annotated var (TS2322 no FP)" {
+  // `var a = { foo: '' }` has type `{ foo: string }` in TS (object contents
+  // widen), so assigning a `{ foo: string }` value back is fine. Without
+  // field widening at the binding site this false-flagged `string` vs `''`.
+  let src =
+    #|var a = { foo: "" };
+    #|declare var b: { foo: string };
+    #|a = b;
+  let issues = check_module_function_bodies(parse_module_or_empty(src))
+  let mism = issues.filter(fn(i) { i.message.contains("but got") })
+  @test.assert_eq(mism.length(), 0)
+}
+
+///|
+test "expr_check: object assignment missing a required property is flagged (TS2322)" {
+  // Now that object types render structurally, a source object that lacks a
+  // required target member is reported (no longer hidden behind the `type`
+  // placeholder the permissive filter dropped).
+  let src =
+    #|declare var a: { x: number };
+    #|declare var t: { x: number; y: number };
+    #|t = a;
+  let issues = check_module_function_bodies(parse_module_or_empty(src))
+  assert_true(
+    issues
+    .iter()
+    .any(fn(i) {
+      i.message.contains("but got") && i.message.contains("y: number")
+    }),
+  )
+}
+
+///|
+test "expr_check: object assignable to a union arm is not flagged (TS2322 no FP)" {
+  // `{ p: number }` flows into `number | I2` via the `I2` arm; the one-way
+  // structural rescue must descend the union target.
+  let src =
+    #|interface I2 { p: number }
+    #|var x = { p: 1 };
+    #|var y: number | I2 = x;
+  let issues = check_module_function_bodies(parse_module_or_empty(src))
+  let mism = issues.filter(fn(i) { i.message.contains("but got") })
+  @test.assert_eq(mism.length(), 0)
+}
+
+///|
+test "expr_check: callable-interface vs function value is not flagged (TS2322 no FP)" {
+  // An overloaded call-signature object (`{ <call>; <call> }`) against a
+  // function value needs overload resolution we don't model -- suppressed.
+  let src =
+    #|var f: { (x: string): string; (x: number): number } = (x: any) => x;
+  let issues = check_module_function_bodies(parse_module_or_empty(src))
+  let mism = issues.filter(fn(i) { i.message.contains("but got") })
+  @test.assert_eq(mism.length(), 0)
+}
+
+///|
+test "expr_check: duplicate string/number index signatures are flagged (TS2374)" {
+  // Two string index signatures (and, separately, two numeric ones) on a
+  // single object type are always an error. One string + one numeric is
+  // legal and must stay silent.
+  let src =
+    #|interface Dup {
+    #|  [x: string]: string;
+    #|  [y: string]: string;
+    #|}
+    #|class DupNum {
+    #|  [x: number]: string;
+    #|  [y: number]: string;
+    #|}
+    #|interface Ok {
+    #|  [x: string]: string;
+    #|  [y: number]: string;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let dup = issues.filter(fn(i) {
+    i.message.contains("duplicate index signature")
+  })
+  let lines = dup.map(fn(i) { "\{i.path}: \{i.message}" })
+  assert_true(
+    lines
+    .iter()
+    .any(fn(m) { m.contains("interface Dup") && m.contains("`string`") }),
+  )
+  assert_true(
+    lines
+    .iter()
+    .any(fn(m) { m.contains("class DupNum") && m.contains("`number`") }),
+  )
+  // The mixed string+number interface is legal -- never flagged.
+  assert_true(!lines.iter().any(fn(m) { m.contains("interface Ok") }))
+}
+
+///|
 test "expr_check: deprecated @target es5 directive is flagged (TS5107)" {
   let src =
     #|// @target: esnext, es2015, es5

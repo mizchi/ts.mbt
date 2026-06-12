@@ -27,7 +27,7 @@ fn Parser::parse_paren_or_function_type(
   let param_types : Array[@ast.TsType] = []
   let mut can_be_function_type = true
   while true {
-    let _ = self.match_ellipsis()
+    let is_rest = self.match_ellipsis()
     let _ = self.parse_declare_param_name() catch {
       _ => {
         can_be_function_type = false
@@ -36,12 +36,16 @@ fn Parser::parse_paren_or_function_type(
     }
     let _ = self.match_(Question)
     // Type annotation on a function-type parameter is optional —
-    // `(item) => T` is a valid TS arrow function type.
-    if self.match_(Colon) {
-      param_types.push(self.parse_type())
+    // `(item) => T` is a valid TS arrow function type. A `...rest` param is
+    // wrapped in `Rest(...)` so call-site checking treats each trailing
+    // argument as the array's *element* type (matching module-function
+    // params), not the whole array.
+    let pty = if self.match_(Colon) {
+      self.parse_type()
     } else {
-      param_types.push(@ast.TsType::Any)
+      @ast.TsType::Any
     }
+    param_types.push(if is_rest { Rest(pty) } else { pty })
     if self.match_(Comma) {
       if self.check(RParen) {
         break
@@ -82,7 +86,7 @@ fn Parser::parse_constructor_tail(
   if !self.match_(RParen) {
     let mut ok = true
     while true {
-      let _ = self.match_ellipsis()
+      let is_rest = self.match_ellipsis()
       let _ = self.parse_declare_param_name() catch {
         _ => {
           ok = false
@@ -90,11 +94,12 @@ fn Parser::parse_constructor_tail(
         }
       }
       let _ = self.match_(Question)
-      if self.match_(Colon) {
-        param_types.push(self.parse_type())
+      let pty = if self.match_(Colon) {
+        self.parse_type()
       } else {
-        param_types.push(@ast.TsType::Any)
+        @ast.TsType::Any
       }
+      param_types.push(if is_rest { Rest(pty) } else { pty })
       if self.match_(Comma) {
         if self.check(RParen) {
           break
@@ -402,9 +407,23 @@ fn Parser::try_parse_simple_object_type(self : Parser) -> @ast.TsType? {
         }
         _ => self.parse_property_name_token()
       }
-      let _ = self.match_(Question)
+      let is_optional = self.match_(Question)
       let _ = self.expect(Colon)
-      fields.push((Literal(field_name), self.parse_type()))
+      let field_type = self.parse_type()
+      // A `?`-optional member desugars to `T | undefined` so assignability
+      // tolerates the property being absent. The fuller member parser already
+      // does this via `wrap_optional_ts_type`; this fast path previously
+      // dropped the `?`, making optional members look required.
+      fields.push(
+        (
+          Literal(field_name),
+          if is_optional {
+            wrap_optional_ts_type(field_type)
+          } else {
+            field_type
+          },
+        ),
+      )
       if self.match_(Semicolon) || self.match_(Comma) {
         continue
       }
@@ -1675,14 +1694,14 @@ fn Parser::skip_paren_type(self : Parser) -> Unit raise ParseError {
 /// annotation when it's parseable.
 fn Parser::parse_arrow_return_type(self : Parser) -> @ast.TsType {
   let saved = self.pos
-  let ty = try? self.parse_type()
-  match ty {
-    Ok(t) => t
-    Err(_) => {
+  try self.parse_type() catch {
+    _ => {
       self.pos = saved
       self.skip_type_until_arrow()
       @ast.TsType::Any
     }
+  } noraise {
+    t => t
   }
 }
 

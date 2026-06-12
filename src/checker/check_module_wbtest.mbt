@@ -136,6 +136,7 @@ test "check_module: detects duplicate class instance properties" {
     name: "Counter",
     type_params: [],
     base_names: [],
+    implements_names: [],
     base_expr: None,
     static_field_inits: [],
     static_blocks: [],
@@ -143,6 +144,7 @@ test "check_module: detects duplicate class instance properties" {
     constructor_params: None,
     constructor_param_is_rest: [],
     constructor_param_defaults: [],
+    constructor_body: None,
     properties: [
       {
         name: "value",
@@ -171,6 +173,7 @@ test "check_module: detects duplicate class instance properties" {
     is_declare: false,
     private_members: [],
     protected_members: [],
+    duplicate_member_names: [],
   })
   let report = check_module(m)
   let dups = report.issues.filter(fn(i) { i.kind == ClassPropertyDuplicate })
@@ -185,6 +188,7 @@ test "check_module: instance and static with same name is OK" {
     name: "Counter",
     type_params: [],
     base_names: [],
+    implements_names: [],
     base_expr: None,
     static_field_inits: [],
     static_blocks: [],
@@ -192,6 +196,7 @@ test "check_module: instance and static with same name is OK" {
     constructor_params: None,
     constructor_param_is_rest: [],
     constructor_param_defaults: [],
+    constructor_body: None,
     properties: [
       {
         name: "value",
@@ -220,6 +225,7 @@ test "check_module: instance and static with same name is OK" {
     is_declare: false,
     private_members: [],
     protected_members: [],
+    duplicate_member_names: [],
   })
   let report = check_module(m)
   let dups = report.issues.filter(fn(i) { i.kind == ClassPropertyDuplicate })

@@ -927,7 +927,7 @@ fn Parser::parse_extends_clause_until_body(
         let base_args : Array[@ast.TsType] = []
         if self.check(Lt) && paren_depth == 0 && bracket_depth == 0 {
           let saved = self.pos
-          let parsed = try? ({
+          try {
             let _ = self.expect(Lt)
             let first = self.parse_type()
             base_args.push(first)
@@ -950,13 +950,13 @@ fn Parser::parse_extends_clause_until_body(
             } else if self.check(GtGtGt) {
               let _ = self.advance()
             }
-          })
-          match parsed {
-            Ok(_) => ()
-            Err(_) => {
+          } catch {
+            _ => {
               self.pos = saved
               base_args.clear()
             }
+          } noraise {
+            _ => ()
           }
         }
         names.push(full_name)
@@ -2026,13 +2026,17 @@ fn Parser::parse_declare_class_member_name(
 }
 
 ///|
-fn Parser::parse_declare_class_base_names(self : Parser) -> Array[String] {
+fn Parser::parse_declare_class_base_names(
+  self : Parser,
+) -> (Array[String], Array[String]) {
   let names : Array[String] = []
+  let implements_names : Array[String] = []
   let mut paren_depth = 0
   let mut bracket_depth = 0
   let mut brace_depth = 0
   let mut angle_depth = 0
   let mut in_extends = false
+  let mut in_implements = false
   let mut expect_name = false
   while !self.check(Eof) {
     match self.peek().kind {
@@ -2045,6 +2049,7 @@ fn Parser::parse_declare_class_base_names(self : Parser) -> Array[String] {
         brace_depth == 0 &&
         angle_depth == 0 => {
         in_extends = true
+        in_implements = false
         expect_name = true
         let _ = self.advance()
       }
@@ -2053,10 +2058,11 @@ fn Parser::parse_declare_class_base_names(self : Parser) -> Array[String] {
         brace_depth == 0 &&
         angle_depth == 0 => {
         in_extends = false
-        expect_name = false
+        in_implements = true
+        expect_name = true
         let _ = self.advance()
       }
-      Ident(name) if in_extends &&
+      Ident(name) if (in_extends || in_implements) &&
         expect_name &&
         paren_depth == 0 &&
         bracket_depth == 0 &&
@@ -2074,7 +2080,11 @@ fn Parser::parse_declare_class_base_names(self : Parser) -> Array[String] {
             _ => break
           }
         }
-        names.push(full_name)
+        if in_implements {
+          implements_names.push(full_name)
+        } else {
+          names.push(full_name)
+        }
         expect_name = false
       }
       LParen => {
@@ -2126,7 +2136,7 @@ fn Parser::parse_declare_class_base_names(self : Parser) -> Array[String] {
         let _ = self.advance()
       }
       Comma => {
-        if in_extends &&
+        if (in_extends || in_implements) &&
           paren_depth == 0 &&
           bracket_depth == 0 &&
           brace_depth == 0 &&
@@ -2140,7 +2150,7 @@ fn Parser::parse_declare_class_base_names(self : Parser) -> Array[String] {
       }
     }
   }
-  names
+  (names, implements_names)
 }
 
 ///|
@@ -2187,7 +2197,7 @@ fn Parser::parse_declare_class(
       type_param_bounds,
     )
   }
-  let base_names = self.parse_declare_class_base_names()
+  let (base_names, implements_names) = self.parse_declare_class_base_names()
   let _ = self.expect(LBrace)
   let properties : Array[@ast.TsClassPropertyDecl] = []
   let methods : Array[@ast.TsClassMethodDecl] = []
@@ -2425,6 +2435,7 @@ fn Parser::parse_declare_class(
     name,
     type_params: class_type_params,
     base_names,
+    implements_names,
     base_expr: None,
     static_field_inits: [],
     static_blocks,
@@ -2434,6 +2445,7 @@ fn Parser::parse_declare_class(
     // leave empty (rest detection just no-ops for these).
     constructor_param_is_rest: [],
     constructor_param_defaults: [],
+    constructor_body: None,
     properties,
     methods,
     index_signatures,
@@ -2443,5 +2455,6 @@ fn Parser::parse_declare_class(
     is_declare: true,
     private_members,
     protected_members,
+    duplicate_member_names: [],
   }
 }

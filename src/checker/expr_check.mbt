@@ -209,6 +209,20 @@ fn collect_class_body_value_names(
       None => ()
     }
   }
+  // The constructor is stored separately from `methods`; collect its
+  // parameter and body bindings too so a `var` hoisted within the constructor
+  // (`super(i); … var i = …`) isn't falsely flagged as an undefined name.
+  match c.constructor_params {
+    Some(ps) =>
+      for p in ps {
+        out[p.0] = true
+      }
+    None => ()
+  }
+  match c.constructor_body {
+    Some(b) => collect_block_value_names(b, out)
+    None => ()
+  }
   for blk in c.static_blocks {
     collect_block_value_names(blk, out)
   }
@@ -823,11 +837,22 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
           }
         }
       // `typeof varName` in type position — resolve the variable's current type.
-      TypeOf(name) =>
-        match self.globals.get(name) {
-          Some(resolved) => cur = resolved
-          None => keep_going = false
+      // Self-referential exports (`export var r: typeof r;`) would otherwise
+      // loop forever, so guard the name through `seen` like the alias cases.
+      TypeOf(name) => {
+        let key = "typeof " + name
+        if seen.contains(key) {
+          keep_going = false
+        } else {
+          match self.globals.get(name) {
+            Some(resolved) => {
+              seen[key] = true
+              cur = resolved
+            }
+            None => keep_going = false
+          }
         }
+      }
       // `keyof typeof Enum` — the type of the enum object has the member
       // names as its keys, so `keyof typeof Color` resolves to the union
       // of member-name string literals (`"Red" | "Green" | ...`). This
@@ -1461,7 +1486,11 @@ fn Resolver::lookup_field_core(
       // so a type-alias `{ foo: number; [k: string]: V }` returns `V`
       // for non-declared keys instead of producing a missing-field
       // diagnostic.
-      let field_is_numeric = (try? @string.parse_int(field)) is Ok(_)
+      let field_is_numeric = try @string.parse_int(field) catch {
+        _ => false
+      } noraise {
+        _ => true
+      }
       for entry in entries {
         match entry.0 {
           String_ => return Some(entry.1)
@@ -5534,6 +5563,28 @@ fn check_expr_against(
   // correctly assigns to `string` without a false mismatch.
   let inferred_u = ctx.resolver.unwrap(inferred)
   let expected_u = ctx.resolver.unwrap(expected)
+  // Boxed wrapper objects (`String`/`Number`/`Boolean`/`BigInt`/`Symbol`)
+  // are not assignable to their primitive counterparts: `var s: string =
+  // new String("")` is TS2322. These wrapper names are lib globals the
+  // resolver doesn't carry, so handle the mismatch here -- ahead of the
+  // unresolved-`Named` bail below, which would otherwise skip it. Only the
+  // exact wrapper/primitive pairs are matched, so this is false-positive-free.
+  let wrapper_mismatch = match (inferred_u, widen_literal(expected_u)) {
+    (Named("String"), String_)
+    | (Named("Number"), Number | Int)
+    | (Named("Boolean"), Boolean)
+    | (Named("BigInt"), BigInt)
+    | (Named("Symbol"), Symbol) => true
+    _ => false
+  }
+  if wrapper_mismatch {
+    record(
+      ctx,
+      sub_path,
+      "expected `\{type_display(expected)}` but got `\{type_display(inferred_u)}`",
+    )
+    return
+  }
   // Without `strictNullChecks`, a literal `null` / `undefined` is assignable
   // to every type (`var b: number = null`). The conformance corpus runs
   // largely under `@strict: false` and we have no per-file strict-mode
@@ -5577,6 +5628,14 @@ fn check_expr_against(
   if type_contains_unresolved_named(inferred_u, ctx.resolver) {
     return
   }
+  // Mapped / conditional / `keyof` / indexed-access / template-literal forms
+  // on either side (`Boxified<any>`, `keyof {}`, `Proxify<Shape>`, …) resolve
+  // to type-level shapes we can't compare structurally. TypeScript resolves
+  // them fully; comparing nominally yields false mismatches, so stay silent.
+  if type_is_unmodeled_shape(inferred_u, ctx.resolver) ||
+    type_is_unmodeled_shape(expected_u, ctx.resolver) {
+    return
+  }
   // Generic `Applied(...)` shapes (`Generator<any, any>`, `Maybe<any>[]`,
   // `Promise<T>`) on either side carry inference we don't fully track.
   // Comparing them nominally produces false mismatches when the user's
@@ -5585,8 +5644,70 @@ fn check_expr_against(
   // genuine generic-mismatch diagnostics, but those are the same kind
   // of `expected Promise<X> but got Promise<Y>` cases users rarely
   // benefit from in a structurally-typed nominal-rendering checker.
+  // Flow-narrowing residue: when both sides are literal unions and the target's
+  // literal set is a subset of the source's (`expected 0 but got 0 | 1 | 9`,
+  // `expected "foo" but got "foo" | "bar"`), TypeScript has narrowed the source
+  // to a compatible value at this point. We don't model flow narrowing, so the
+  // source still looks like its full declared union — stay silent.
+  match (literal_union_members(expected_u), literal_union_members(inferred_u)) {
+    (Some(exp_lits), Some(inf_lits)) =>
+      if exp_lits.iter().all(fn(e) { inf_lits.iter().any(fn(i) { i == e }) }) {
+        return
+      }
+    _ => ()
+  }
+  // Const-widening gap: a literal-union target with the source widened to the
+  // primitive those literals share (`const c2: 123 | 456 = c` where `c` is a
+  // `const` we widened to `number`). TypeScript keeps the const literal narrow.
+  match literal_union_members(expected_u) {
+    Some(exp_lits) =>
+      match common_literal_base(exp_lits) {
+        Some(base) => if inferred_u == base { return }
+        None => ()
+      }
+    None => ()
+  }
+  // `any` / `any[]` / `any[][]` sources are assignable to anything (an
+  // `any[][]` array literal contextually typed to a tuple array, etc.).
+  if is_deeply_any(inferred_u) {
+    return
+  }
+  // Structurally-recursive named tuples (`RecursiveTupleA` vs
+  // `RecursiveTupleB`) compare nominally for us but structurally for TS.
+  if tuples_differ_only_in_named(inferred_u, expected_u, ctx.resolver) {
+    return
+  }
+  // Callable / constructable interfaces & objects (`<call>` / `<new>`
+  // signatures, often `extends Function`, with overloaded methods like
+  // `foo("hi"): Derived1; foo("bye"): Derived2`) match other call signatures
+  // structurally in ways we don't model — `expected (string) => string but
+  // got I`, `expected C but got I`. Stay silent.
+  if shape_is_callable(inferred_u, ctx.resolver) ||
+    shape_is_callable(expected_u, ctx.resolver) {
+    return
+  }
+  // Overloaded-method shapes (the same member name declared several times with
+  // different signatures) don't match structurally under our single-type-per-
+  // member model. Stay silent.
+  if shape_has_overloads(inferred_u, ctx.resolver) ||
+    shape_has_overloads(expected_u, ctx.resolver) {
+    return
+  }
   match (inferred_u, expected_u) {
     (Applied(_, _), _) | (_, Applied(_, _)) => return
+    // Intersections on either side (`PartialStepState & { repo: any }`,
+    // `ComponentType<any> & ComponentType<RouteComponentProps>`, `A & A`):
+    // intersection assignability (a value of the intersection satisfies each
+    // part, and an object satisfying every part inhabits the intersection) is
+    // something we don't model structurally, so comparing nominally yields
+    // false mismatches. Stay silent.
+    (Intersection(_), _) | (_, Intersection(_)) => return
+    // Bare callable / constructable shapes match other call signatures
+    // structurally in ways we don't model — stay silent.
+    (Func(_, _), _)
+    | (_, Func(_, _))
+    | (Constructor(_, _, _), _)
+    | (_, Constructor(_, _, _)) => return
     // Target `Object` / `{}` / empty Object literal accepts anything in
     // TypeScript -- it's the universal supertype. Skip the mismatch.
     (_, Named("Object")) | (_, Named("object")) => return
@@ -5597,6 +5718,14 @@ fn check_expr_against(
     // both as unions and the diagnostic is almost always wrong. Stay
     // silent rather than emit a false mismatch.
     (Union(_), Union(_)) => return
+    // A union target with a generic `Applied` member (`Generator<...> |
+    // AsyncGenerator<...>`) carries inference we don't track — the generator
+    // `return`/`yield` contributes to a type argument, not the whole union.
+    // Stay silent rather than compare the union nominally.
+    (_, Union(parts)) =>
+      if parts.iter().any(fn(p) { p is Applied(_, _) }) {
+        return
+      }
     _ => ()
   }
   if !is_assignable_to(inferred_u, expected_u) {
@@ -5608,6 +5737,20 @@ fn check_expr_against(
     // mismatches (target has fields source lacks) still get flagged.
     if is_structurally_assignable_named(inferred_u, expected_u, ctx.resolver) &&
       is_structurally_assignable_named(expected_u, inferred_u, ctx.resolver) {
+      return
+    }
+    // One-way structural assignability is the correct rule for an
+    // *assignment* (`lhs = rhs`): the source need only provide every member
+    // the target requires (extra source members are fine for a variable
+    // assignment -- excess-property checks apply only to fresh object
+    // literals, handled separately). `is_assignable_to` is nominal for
+    // `Named` class / interface references, so a structural source
+    // (`{ foo: string; baz: string }`) assigned to a named target
+    // (`interface S2 { foo: string }`) would otherwise false-flag. A missing
+    // or incompatible *required* target member still makes this `false`, so
+    // genuine subtype mismatches are preserved. A union target is satisfied
+    // when the source assigns to any arm.
+    if structural_oneway_assignable(inferred_u, expected_u, ctx.resolver) {
       return
     }
     // Class inheritance: `Derived is_a Base` when `class Derived extends
@@ -5627,6 +5770,29 @@ fn check_expr_against(
     // string | number | boolean" mismatch that's almost always a
     // narrowing-gap rather than a real error.
     if is_flow_narrowing_gap(inferred_u, expected_u) {
+      return
+    }
+    // Object types now render as `{ ... }` (not the suppressed `type`
+    // placeholder), so two remaining imprecision classes must be guarded
+    // against to keep this false-positive-free:
+    //   - a `typeof x` value-query anywhere in either shape can't be
+    //     compared structurally (its identity is the binding it queries);
+    //   - a *fresh object literal* (`f({ ... })`, `x = { ... }`) flowing
+    //     into a non-object-literal target (a generic / utility / union /
+    //     call-signature shape) goes through contextual typing we don't
+    //     fully model. Plain object / interface targets were already routed
+    //     to the per-field literal checker before reaching here, so this
+    //     only drops the cases we can't decide -- a bare-scalar target
+    //     (`var n: number = { ... }`) is still a category clash worth
+    //     reporting and is left to fall through.
+    if type_contains_typeof(inferred_u) || type_contains_typeof(expected_u) {
+      return
+    }
+    if type_has_call_signature(inferred_u, ctx.resolver) ||
+      type_has_call_signature(expected_u, ctx.resolver) {
+      return
+    }
+    if expr is ObjectLit(_) && !is_bare_scalar_type(expected_u) {
       return
     }
     // Display the widened form of the inferred type (`number` rather than the
@@ -5957,6 +6123,224 @@ fn type_contains_unresolved_named(
 }
 
 ///|
+/// True when a type, after resolution, is still a *type-level construct* the
+/// checker can't enumerate structurally: a mapped / conditional / `keyof` /
+/// indexed-access / template-literal type, or an `Applied` reference to
+/// something that isn't a class or interface (e.g. a generic alias whose body
+/// is a mapped type, like `Proxify<Shape>` / `Boxified<Foo>`). Member-existence
+/// and structural-assignment diagnostics suppress against such types:
+/// TypeScript resolves them fully, so flagging would just emit false positives
+/// like `property 'name' does not exist on 'Proxify<Shape>'`.
+fn type_is_unmodeled_shape(ty : @ast.TsType, resolver : Resolver) -> Bool {
+  match resolver.unwrap(ty) {
+    MappedType(_, _, _, _)
+    | MappedTypeRemap(_, _, _, _, _)
+    | Conditional(_, _, _, _)
+    | Keyof(_)
+    | IndexedAccess(_, _)
+    | TemplateLiteralType(_, _) => true
+    Applied(n, _) =>
+      resolver.classes.get(n) is None && resolver.interfaces.get(n) is None
+    _ => false
+  }
+}
+
+///|
+/// True when a class (or any class in its `extends` chain) extends a base the
+/// resolver can't resolve to a declared class or interface — a mixin
+/// application (`class C extends Mixin(Base)`), a type parameter
+/// (`class C extends superClass`), or a value/`const` produced by a mixin
+/// factory (`class Thing3 extends Thing2`). Instances of such classes inherit
+/// members we can't enumerate, so member-existence diagnostics on them (and on
+/// `this` inside their methods) would be false positives.
+fn class_chain_has_unresolved_base(name : String, resolver : Resolver) -> Bool {
+  let mut current = name
+  let mut depth = 0
+  while depth < 32 {
+    depth = depth + 1
+    match resolver.classes.get(current) {
+      None => return false
+      Some(decl) => {
+        if decl.base_names.length() == 0 {
+          return false
+        }
+        for base in decl.base_names {
+          if resolver.classes.get(base) is None &&
+            resolver.interfaces.get(base) is None {
+            return true
+          }
+        }
+        current = decl.base_names[0]
+      }
+    }
+  }
+  true
+}
+
+///|
+/// If `t` is a literal or a union of *only* literals, return those members;
+/// otherwise `None`. Used to detect flow-narrowing residue: when a target
+/// literal set is a subset of the source literal set, TypeScript has narrowed
+/// the source down to a compatible value at that point and we'd otherwise
+/// false-flag the un-narrowed wider source.
+fn literal_union_members(t : @ast.TsType) -> Array[@ast.TsType]? {
+  match t {
+    Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) =>
+      Some([t])
+    Union(ms) => {
+      let out : Array[@ast.TsType] = []
+      for m in ms {
+        match m {
+          Literal(_)
+          | NumberLiteral(_)
+          | BigIntLiteral(_)
+          | BooleanLiteral(_) => out.push(m)
+          _ => return None
+        }
+      }
+      if out.length() == 0 {
+        None
+      } else {
+        Some(out)
+      }
+    }
+    _ => None
+  }
+}
+
+///|
+/// The single widened primitive every member of a literal set shares
+/// (`123 | 456` -> `number`, `"a" | "b"` -> `string`), or `None` when the set
+/// mixes primitive kinds. Used to recognise the const-widening gap: TypeScript
+/// keeps a `const` initializer's literal narrow (`const c = cond ? 123 : 456`
+/// is `123 | 456`), but we widen it to its primitive, so `const c2: 123 | 456 =
+/// c` then looks like `number` assigned to a literal union.
+fn common_literal_base(lits : Array[@ast.TsType]) -> @ast.TsType? {
+  let mut base : @ast.TsType? = None
+  for l in lits {
+    let b : @ast.TsType = match l {
+      Literal(_) => String_
+      NumberLiteral(_) => Number
+      BigIntLiteral(_) => BigInt
+      BooleanLiteral(_) => Boolean
+      _ => return None
+    }
+    match base {
+      None => base = Some(b)
+      Some(prev) => if prev != b { return None }
+    }
+  }
+  base
+}
+
+///|
+/// True for a type that is `any`, or an array (possibly nested) whose ultimate
+/// element is `any`: `any`, `any[]`, `any[][]`. Such a value is assignable to
+/// anything in TypeScript, so a structural mismatch against it (e.g. an
+/// `any[][]` array literal contextually typed to a tuple array) is a false
+/// positive.
+fn is_deeply_any(t : @ast.TsType) -> Bool {
+  match t {
+    Any => true
+    Array(inner) => is_deeply_any(inner)
+    _ => false
+  }
+}
+
+///|
+/// True when both types resolve to tuples of equal arity that differ only at
+/// positions where *both* elements are `Named` references (distinct
+/// structurally-recursive tuple aliases like `RecursiveTupleA` /
+/// `RecursiveTupleB`). We compare named tuples nominally, so these false-flag;
+/// TypeScript compares them structurally and accepts.
+fn tuples_differ_only_in_named(
+  a : @ast.TsType,
+  b : @ast.TsType,
+  resolver : Resolver,
+) -> Bool {
+  match (resolver.unwrap(a), resolver.unwrap(b)) {
+    (Tuple(xs), Tuple(ys)) => {
+      if xs.length() != ys.length() || xs.length() == 0 {
+        return false
+      }
+      let mut saw_named_diff = false
+      for i in 0..<xs.length() {
+        if xs[i] == ys[i] {
+          continue
+        }
+        match (xs[i], ys[i]) {
+          (Named(_), Named(_)) => saw_named_diff = true
+          _ => return false
+        }
+      }
+      saw_named_diff
+    }
+    _ => false
+  }
+}
+
+///|
+/// Member-existence guard: true when the receiver type is one whose full
+/// member set we can't enumerate, so "property/method does not exist"
+/// diagnostics against it would be false positives. Covers the structural
+/// unmodeled shapes (mapped / conditional / `keyof` / …), intersections
+/// (mixins, `typeof M & typeof C`, `Constructor<X> & Constructor<{}>`),
+/// `typeof X` value queries (enum objects, namespaces, mixin factory
+/// results), and class instances with an unresolvable base chain.
+fn member_recv_unmodeled(ty : @ast.TsType, resolver : Resolver) -> Bool {
+  if type_is_unmodeled_shape(ty, resolver) {
+    return true
+  }
+  if shape_is_callable(ty, resolver) {
+    return true
+  }
+  match resolver.unwrap(ty) {
+    Intersection(_) | TypeOf(_) => true
+    Named(n) | Applied(n, _) =>
+      resolver.classes.get(n) is Some(_) &&
+      class_chain_has_unresolved_base(n, resolver)
+    _ => false
+  }
+}
+
+///|
+/// True when a type is callable / constructable: a bare `Func` / `Constructor`,
+/// or an object / interface carrying a call (`<call>`) or construct (`<new>`)
+/// signature (often an interface that `extends Function`). Such shapes inherit
+/// the full `Function` member set (`arguments`, `call`, `apply`, `bind`, …) and
+/// match other call signatures structurally in ways we don't model, so member
+/// existence and structural assignability against them would false-flag.
+fn shape_is_callable(ty : @ast.TsType, resolver : Resolver) -> Bool {
+  match resolver.unwrap(ty) {
+    Func(_, _) | Constructor(_, _, _) => return true
+    _ => ()
+  }
+  for f in collect_declared_fields(ty, resolver) {
+    if f.0 == "<call>" || f.0 == "<new>" {
+      return true
+    }
+  }
+  false
+}
+
+///|
+/// True when a shape declares the same member name more than once — the
+/// signature of overloaded methods (`foo(x: 'hi'): Derived1; foo(x: 'bye'):
+/// Derived2; foo(x: string): Base`). We compare members by a single nominal
+/// type each, so overload sets don't match structurally; comparing them
+/// produces false `expected C but got I` mismatches. Stay silent.
+fn shape_has_overloads(ty : @ast.TsType, resolver : Resolver) -> Bool {
+  let seen : Map[String, Bool] = {}
+  for f in collect_declared_fields(ty, resolver) {
+    if seen.contains(f.0) {
+      return true
+    }
+    seen[f.0] = true
+  }
+  false
+}
+
+///|
 fn is_named_decl(ty : @ast.TsType, resolver : Resolver) -> Bool {
   match resolver.unwrap(ty) {
     Named(n) =>
@@ -6119,6 +6503,339 @@ fn widen_literal(t : @ast.TsType) -> @ast.TsType {
       }
       @ast.TsType::Tuple(widened)
     }
+    _ => t
+  }
+}
+
+///|
+/// One-way structural assignability that also descends a union *target*: a
+/// source assigns to `A | B` when it structurally assigns to either arm
+/// (e.g. `{ p1, p2 }` flows into `number | I2` via `I2`). Plain targets
+/// defer to `is_structurally_assignable_named`.
+fn structural_oneway_assignable(
+  source : @ast.TsType,
+  target : @ast.TsType,
+  resolver : Resolver,
+) -> Bool {
+  match resolver.unwrap(target) {
+    Union(members) => {
+      for m in members {
+        if structural_oneway_assignable(source, m, resolver) {
+          return true
+        }
+      }
+      false
+    }
+    _ => is_structurally_assignable_named(source, target, resolver)
+  }
+}
+
+///|
+/// True when `t` is (or unwraps to) an object shape carrying a call /
+/// construct signature (`<call>` / `<new>` sentinel field) -- i.e. a
+/// callable / overloaded interface. Matching these against function types
+/// needs overload resolution we don't model, so an object mismatch involving
+/// one is suppressed rather than risk a false positive.
+fn type_has_call_signature(t : @ast.TsType, resolver : Resolver) -> Bool {
+  let fields = match resolver.unwrap(t) {
+    Object(fs) => fs
+    Struct(_, fs) => fs.map(fn(f) { (Literal(f.0), f.1) })
+    _ => return false
+  }
+  for f in fields {
+    match f.0 {
+      Literal(name) => if name == "<call>" || name == "<new>" { return true }
+      _ => ()
+    }
+  }
+  false
+}
+
+///|
+/// A bare scalar (primitive or scalar literal). Used to keep an
+/// object-literal-source mismatch against a *primitive* target (a real
+/// category clash) while suppressing it against generic / union / object
+/// targets we type contextually.
+fn is_bare_scalar_type(t : @ast.TsType) -> Bool {
+  match t {
+    Number
+    | Int
+    | Boolean
+    | String_
+    | BigInt
+    | Symbol
+    | Literal(_)
+    | NumberLiteral(_)
+    | BigIntLiteral(_)
+    | BooleanLiteral(_) => true
+    _ => false
+  }
+}
+
+///|
+/// Parameter types of a single call signature on `t`: `t` is a function
+/// type, or an object/struct carrying exactly one `<call>` signature.
+/// Returns `None` for anything else (no call signature, or several -- an
+/// overload set we don't resolve here).
+fn single_call_signature_params(
+  t : @ast.TsType,
+  resolver : Resolver,
+) -> Array[@ast.TsType]? {
+  match resolver.unwrap(t) {
+    Func(params, _) => Some(params)
+    Object(fields) => {
+      let mut found : Array[@ast.TsType]? = None
+      let mut count = 0
+      for f in fields {
+        match (f.0, f.1) {
+          (Literal("<call>"), Func(params, _)) => {
+            count += 1
+            found = Some(params)
+          }
+          _ => ()
+        }
+      }
+      if count == 1 {
+        found
+      } else {
+        None
+      }
+    }
+    _ => None
+  }
+}
+
+///|
+/// Common call-signature parameters of a union callee: when every member of
+/// the union exposes exactly one call signature and all of them have
+/// *identical* parameter types, the union is callable with those parameters
+/// (the return type is the union of each member's, which the arg check
+/// doesn't need). Returns `None` if any member lacks a call signature or the
+/// parameter lists disagree -- both cases TypeScript reports differently
+/// ("no call signatures"), so staying silent keeps this false-positive-free.
+fn union_common_call_params(
+  union_ty : @ast.TsType,
+  resolver : Resolver,
+) -> Array[@ast.TsType]? {
+  match resolver.unwrap(union_ty) {
+    Union(members) => {
+      let mut common : Array[@ast.TsType]? = None
+      for m in members {
+        match single_call_signature_params(m, resolver) {
+          Some(params) =>
+            match common {
+              None => common = Some(params)
+              Some(prev) => {
+                if prev.length() != params.length() {
+                  return None
+                }
+                for i in 0..<prev.length() {
+                  if prev[i] != params[i] {
+                    return None
+                  }
+                }
+              }
+            }
+          None => return None
+        }
+      }
+      common
+    }
+    _ => None
+  }
+}
+
+///|
+/// Parameter types of a single construct signature on `t`: `t` is a
+/// constructor type, or an object/struct carrying exactly one `<new>`
+/// signature. `None` for anything else (no construct signature, or several).
+fn single_construct_signature_params(
+  t : @ast.TsType,
+  resolver : Resolver,
+) -> Array[@ast.TsType]? {
+  match resolver.unwrap(t) {
+    Constructor(params, _, _) => Some(params)
+    Object(fields) => {
+      let mut found : Array[@ast.TsType]? = None
+      let mut count = 0
+      for f in fields {
+        match (f.0, f.1) {
+          (Literal("<new>"), Func(params, _)) => {
+            count += 1
+            found = Some(params)
+          }
+          _ => ()
+        }
+      }
+      if count == 1 {
+        found
+      } else {
+        None
+      }
+    }
+    _ => None
+  }
+}
+
+///|
+/// Common construct-signature parameters of a union: the `new`-call analog of
+/// `union_common_call_params`. Returns the shared parameter list when every
+/// member exposes exactly one construct signature and all are identical;
+/// `None` otherwise (TypeScript's "no construct signatures" case), so it is
+/// false-positive-free.
+fn union_common_construct_params(
+  union_ty : @ast.TsType,
+  resolver : Resolver,
+) -> Array[@ast.TsType]? {
+  match resolver.unwrap(union_ty) {
+    Union(members) => {
+      let mut common : Array[@ast.TsType]? = None
+      for m in members {
+        match single_construct_signature_params(m, resolver) {
+          Some(params) =>
+            match common {
+              None => common = Some(params)
+              Some(prev) => {
+                if prev.length() != params.length() {
+                  return None
+                }
+                for i in 0..<prev.length() {
+                  if prev[i] != params[i] {
+                    return None
+                  }
+                }
+              }
+            }
+          None => return None
+        }
+      }
+      common
+    }
+    _ => None
+  }
+}
+
+///|
+/// Parameter types of a static method called through the class name
+/// (`A.s(args)`), for argument checking. Returns `None` -- skipping the
+/// check -- unless exactly one non-accessor static method of that name
+/// exists and it has no rest parameter, so overload sets and variadic
+/// signatures (whose arity/positional checking we don't model precisely)
+/// never produce a false positive.
+fn class_static_method_param_types(
+  cls : @ast.TsClassDecl,
+  meth : String,
+) -> Array[@ast.TsType]? {
+  let mut found : @ast.TsClassMethodDecl? = None
+  let mut count = 0
+  for m in cls.methods {
+    if m.is_static && m.accessor == "" && m.name == meth {
+      count += 1
+      found = Some(m)
+    }
+  }
+  if count != 1 {
+    return None
+  }
+  let m = found.unwrap()
+  for r in m.param_is_rest {
+    if r {
+      return None
+    }
+  }
+  let types : Array[@ast.TsType] = []
+  for p in m.params {
+    types.push(p.1)
+  }
+  Some(types)
+}
+
+///|
+/// True when an overriding member of type `derived` is *definitely* not
+/// assignable to the overridden base member of type `base` -- the structural
+/// core of TS2416 / TS2430. Decided only for shapes we can compare soundly:
+///   - a scalar overriding an object shape (or vice versa): a category clash
+///     that can never hold;
+///   - both plain (non-generic) named class / interface / object shapes: the
+///     full member sets make `struct_assignable_named_rec` a reliable
+///     "derived provides everything base requires" test;
+///   - both concrete scalars: decided by `is_assignable_to`.
+/// Anything else (`any` / `unknown`, generic `Applied`, unions, functions,
+/// type parameters) returns `false`, so the check never fires on a shape it
+/// can't fully model -- keeping it false-positive-free.
+fn member_override_incompatible(
+  derived : @ast.TsType,
+  base : @ast.TsType,
+  resolver : Resolver,
+) -> Bool {
+  fn strip_undef(t : @ast.TsType) -> @ast.TsType {
+    match t {
+      Union(members) => {
+        let rest : Array[@ast.TsType] = []
+        for m in members {
+          if !(m is Undefined) && !(m is Null) {
+            rest.push(m)
+          }
+        }
+        if rest.length() == 1 {
+          rest[0]
+        } else {
+          t
+        }
+      }
+      _ => t
+    }
+  }
+
+  let d = resolver.unwrap(strip_undef(derived))
+  let b = resolver.unwrap(strip_undef(base))
+  // `any` / `unknown` on either side is always compatible.
+  match (d, b) {
+    (Any, _) | (_, Any) | (Unknown, _) | (_, Unknown) => return false
+    // Generic instantiations need type-argument substitution we don't do
+    // here; stay silent rather than risk a substitution-shaped false positive.
+    (Applied(_, _), _) | (_, Applied(_, _)) => return false
+    _ => ()
+  }
+  let d_obj = is_named_decl(d, resolver)
+  let b_obj = is_named_decl(b, resolver)
+  if is_bare_scalar_type(d) && b_obj {
+    return true
+  }
+  if d_obj && is_bare_scalar_type(b) {
+    return true
+  }
+  if d_obj && b_obj {
+    return !struct_assignable_named_rec(d, b, resolver, [])
+  }
+  if is_bare_scalar_type(d) && is_bare_scalar_type(b) {
+    return !is_assignable_to(d, b)
+  }
+  false
+}
+
+///|
+/// Recursively widen literal types, descending through object / struct field
+/// types (and array / tuple / union members). Mirrors TypeScript's widening
+/// of a mutable object-literal initializer: `var a = { foo: '' }` has type
+/// `{ foo: string }`, not `{ foo: '' }`. The object's *contents* widen even
+/// for a `const` binding (only a top-level `const` scalar stays literal),
+/// which is why this is applied to composite binding types regardless of the
+/// declaration keyword. `widen_literal` only widens at the top level / array
+/// / tuple; this also reaches inside `Object` / `Struct` fields and unions.
+fn widen_literal_deep(t : @ast.TsType) -> @ast.TsType {
+  match t {
+    Literal(_) => String_
+    NumberLiteral(_) => Number
+    BigIntLiteral(_) => BigInt
+    BooleanLiteral(_) => Boolean
+    Array(elem) => Array(widen_literal_deep(elem))
+    Tuple(items) => Tuple(items.map(widen_literal_deep))
+    Union(members) => Union(members.map(widen_literal_deep))
+    Object(fields) =>
+      Object(fields.map(fn(f) { (f.0, widen_literal_deep(f.1)) }))
+    Struct(name, fields) =>
+      Struct(name, fields.map(fn(f) { (f.0, widen_literal_deep(f.1)) }))
     _ => t
   }
 }
@@ -6429,6 +7146,33 @@ fn check_object_lit_against_target(
   if is_in_scope_type_param(ctx, target) {
     return
   }
+  // Mapped / conditional / `keyof` / generic-alias targets (`Boxified<any>`,
+  // `keyof {}` from an unresolved generic, …) can't be enumerated, so every
+  // supplied key would look like an excess property and every declared field
+  // like a missing one. TypeScript resolves these fully — suppress the whole
+  // excess/missing check rather than emit false positives.
+  if member_recv_unmodeled(target, resolver) {
+    return
+  }
+  // An unresolved `Named` / `Applied` target — typically a method-level type
+  // parameter (`foo<U extends T>(x: U)`) the enclosing-scope check above
+  // doesn't track — has an unknown shape, so TypeScript allows extra
+  // properties (the instantiation may be wider). Suppress excess/missing.
+  if type_contains_unresolved_named(target, resolver) {
+    return
+  }
+  // Excess-property reporting is suppressed for a bare anonymous `Object`
+  // target reached as a *call argument*. TypeScript inlines a constrained type
+  // parameter's bound into the parameter position (`foo<U extends { length:
+  // number }>(x: U)` checks the argument against `{ length: number }`), and
+  // excess properties ARE allowed against a type parameter — so flagging them
+  // here would be a false positive we can't distinguish from a genuine inline
+  // object-type annotation. We scope this to call arguments (`… arg[i]`):
+  // variable/property assignments to an explicit object type (`var x: { a:
+  // string } = { a, b }`) keep their excess-property diagnostic. Field-type
+  // and missing-required checks below still run regardless.
+  let suppress_excess = sub_path.contains("arg[") &&
+    resolver.unwrap(target) is Object(_)
   // Per-field type checks for each provided key.
   for entry in entries {
     let key = entry.0
@@ -6438,18 +7182,28 @@ fn check_object_lit_against_target(
     if key.has_prefix("@@spread:") {
       continue
     }
+    // Computed / symbol property keys (`@@computed:N`) can't be matched against
+    // declared members by name — TypeScript resolves the computed key to a
+    // symbol / literal we don't evaluate, so neither "excess" nor "missing"
+    // applies. Skip them.
+    if key.has_prefix("@@computed:") {
+      continue
+    }
     match resolver.lookup_field(target, key) {
       Some(declared) =>
         check_expr_against(env, value, declared, ctx, "\{sub_path}.\{key}")
       None =>
         // Unknown key on the target — TS calls this an excess-property
         // error. Skip class/struct opaque shapes by relying on lookup_field
-        // having already walked their fields above.
-        record(
-          ctx,
-          "\{sub_path}.\{key}",
-          "property `\{key}` does not exist on target type",
-        )
+        // having already walked their fields above, and bare anonymous object
+        // targets (possible type-parameter constraints; see above).
+        if !suppress_excess {
+          record(
+            ctx,
+            "\{sub_path}.\{key}",
+            "property `\{key}` does not exist on target type",
+          )
+        }
     }
   }
   // Missing-required check: collect the declared field names of the target
@@ -6459,14 +7213,34 @@ fn check_object_lit_against_target(
   let declared = collect_declared_fields(target, resolver)
   let provided : Map[String, Bool] = {}
   for entry in entries {
-    if !entry.0.has_prefix("@@spread:") {
+    if entry.0.has_prefix("@@spread:") {
+      // A `{...spread}` entry contributes every field of the spread source,
+      // so those count as provided for the missing-required check (`const a1:
+      // {a; b} = {...extra}` is not missing `a`/`b` when `extra` has them).
+      let spread_ty = infer_expr(env, resolver, entry.1)
+      for sf in collect_declared_fields(spread_ty, resolver) {
+        provided[sf.0] = true
+      }
+    } else {
       provided[entry.0] = true
     }
   }
+  // If the literal supplies any computed / symbol key, we can't tell which
+  // declared member it satisfies — suppress the missing-required check
+  // entirely rather than guess.
+  let has_computed_entry = entries
+    .iter()
+    .any(fn(e) { e.0.has_prefix("@@computed:") })
   for d in declared {
     let name = d.0
     let ty = d.1
     if provided.contains(name) {
+      continue
+    }
+    // Computed-keyed declared members (`<computed>`) can't be matched to a
+    // provided key by name; and once the literal has a computed entry, any
+    // declared member could be the one it fills. Stay silent.
+    if name == "<computed>" || has_computed_entry {
       continue
     }
     if is_assignable_to(@ast.TsType::Undefined, ty) {
@@ -7085,7 +7859,20 @@ fn check_arguments_with_sig(
       }
       idx
     }
-    None => -1
+    None => {
+      // No rich sig (a value typed `(...args: any[]) => R`, e.g. a
+      // parenthesized callee). Function-type rest params are still wrapped in
+      // `Rest(...)`, so scan the param *types* — otherwise each rest argument
+      // is wrongly checked against the whole array instead of its element.
+      let mut idx = -1
+      for k in 0..<params.length() {
+        if params[k] is Rest(_) {
+          idx = k
+          break
+        }
+      }
+      idx
+    }
   }
   let rest_elem_type : @ast.TsType = if rest_index >= 0 &&
     rest_index < params.length() {
@@ -7222,13 +8009,25 @@ fn type_display(ty : @ast.TsType) -> String {
     // `unique symbol` -- the literal `unique symbol` text matches the
     // source so messages look right.
     UniqueSymbol(_) => "unique symbol"
-    // Object literal type: leave as the generic `type` label.
-    // Rendering the field-name list (`{toString}`) backfired by
-    // introducing false positives on object-spread (`{ ...source }`),
-    // where the inferred shape only sees one or two field names but
-    // TS sees the full set. The improvement made `expected Test2 but
-    // got type` reachable but at the cost of a real FP.
-    Object(_) => "type"
+    // Object literal type: render the field shape so a mismatch message is
+    // actionable and survives the permissive filter's "type"-residue
+    // suppression. Object-literal field types are now widened at the binding
+    // site (see `widen_literal_deep`), so the historical literal-width false
+    // positives (`{ foo: '' }` vs `{ foo: string }`) do not recur.
+    Object(fields) =>
+      if fields.length() == 0 {
+        "{}"
+      } else {
+        let parts : Array[String] = []
+        for f in fields {
+          let key = match f.0 {
+            Literal(k) => k
+            _ => type_display(f.0)
+          }
+          parts.push(key + ": " + type_display(f.1))
+        }
+        "{ " + parts.join("; ") + " }"
+      }
     Struct(name, _) => name
     Constructor(_, ret, _) => "new (...) => " + type_display(ret)
     _ => "type"
@@ -8372,7 +9171,11 @@ fn index_signature_value(
   signatures : Array[(@ast.TsType, @ast.TsType)],
   field : String,
 ) -> @ast.TsType? {
-  let is_numeric = (try? @string.parse_int(field)) is Ok(_)
+  let is_numeric = try @string.parse_int(field) catch {
+    _ => false
+  } noraise {
+    _ => true
+  }
   let mut numeric_value : @ast.TsType? = None
   let mut string_value : @ast.TsType? = None
   for sig in signatures {
@@ -8428,7 +9231,11 @@ fn index_into_type(
     }
   }
   // Numeric index — read tuple slot or array element.
-  let idx = (try? @string.parse_int(inner)) is Ok(_)
+  let idx = try @string.parse_int(inner) catch {
+    _ => false
+  } noraise {
+    _ => true
+  }
   if idx {
     match shape {
       Array(elem) => return elem
@@ -8693,7 +9500,18 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       let bound_type = if is_checkable(declared) {
         declared
       } else {
-        infer_expr(env, ctx.resolver, init)
+        // No annotation: infer from the initializer. TypeScript widens the
+        // field types of an object / array / tuple literal (their contents
+        // are mutable), so `var a = { foo: '' }` is `{ foo: string }`, not
+        // `{ foo: '' }`. Apply that to composite inferred shapes so a later
+        // `a = b` field comparison isn't over-narrow. Top-level scalars are
+        // left to the existing primitive-widening behaviour.
+        let inferred = infer_expr(env, ctx.resolver, init)
+        match inferred {
+          Object(_) | Struct(_, _) | Array(_) | Tuple(_) =>
+            widen_literal_deep(inferred)
+          _ => inferred
+        }
       }
       env.bind(name, bound_type)
       // Make sure the *declared* slot reflects the source annotation
@@ -8827,7 +9645,10 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         None =>
           if is_checkable(recv_ty) &&
             !is_nullable_type(recv_ty) &&
-            !is_in_scope_type_param(ctx, recv_ty) {
+            !is_in_scope_type_param(ctx, recv_ty) &&
+            !prop.has_prefix("__private_brand__") &&
+            !type_contains_unresolved_named(recv_ty, ctx.resolver) &&
+            !member_recv_unmodeled(recv_ty, ctx.resolver) {
             match ctx.resolver.unwrap(recv_ty) {
               Object(_) | Struct(_, _) | Named(_) | Applied(_, _) =>
                 record(
@@ -9357,12 +10178,20 @@ fn check_call_args_in_expr(
           )
         }
         other =>
-          if is_definitely_not_callable(other) {
-            record(
-              ctx,
-              "call `\{name}`",
-              "`\{type_display(other)}` is not callable",
-            )
+          // A union callee whose members share one identical call signature
+          // (`{ (a:number):X } | { (a:number):Y }`) is callable with those
+          // parameters; otherwise fall back to the not-callable diagnostic.
+          match union_common_call_params(other, ctx.resolver) {
+            Some(params) =>
+              check_arguments(env, params, args, ctx, "call `\{name}`")
+            None =>
+              if is_definitely_not_callable(other) {
+                record(
+                  ctx,
+                  "call `\{name}`",
+                  "`\{type_display(other)}` is not callable",
+                )
+              }
           }
       }
       for a in args {
@@ -9373,6 +10202,14 @@ fn check_call_args_in_expr(
       let callee_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, callee))
       match callee_ty {
         Func(params, _) => check_arguments(env, params, args, ctx, "call")
+        // A union callee whose members share one identical call signature is
+        // callable with those parameters (`{ (a:number):X } | { (a:number):Y
+        // }`); check the arguments against them.
+        Union(_) =>
+          match union_common_call_params(callee_ty, ctx.resolver) {
+            Some(params) => check_arguments(env, params, args, ctx, "call")
+            None => ()
+          }
         other =>
           if is_definitely_not_callable(other) {
             record(ctx, "call", "`\{type_display(other)}` is not callable")
@@ -9387,12 +10224,18 @@ fn check_call_args_in_expr(
       check_private_name_access(ctx, meth)
       check_member_accessibility(env, ctx, receiver, meth)
       // Static-namespace dispatch: `Math.max(...)`, `JSON.stringify(...)`.
-      // Recognised by the bare-identifier shape of the receiver.
+      // Recognised by the bare-identifier shape of the receiver. Also handle
+      // a static method called through the class name (`A.s(args)`), whose
+      // parameter types we read straight off the class declaration.
       let static_params : Array[@ast.TsType]? = match receiver {
         Var(name) =>
           match global_namespace_method(name, meth) {
             Some(Func(params, _)) => Some(params)
-            _ => None
+            _ =>
+              match ctx.resolver.classes.get(name) {
+                Some(cls) => class_static_method_param_types(cls, meth)
+                None => None
+              }
           }
         _ => None
       }
@@ -9426,7 +10269,8 @@ fn check_call_args_in_expr(
                       // Named ref (this-type, in-scope TP we lost track
                       // of, qualified-namespace member), the resulting
                       // diagnostic is uninformative -- stay silent.
-                      !type_contains_unresolved_named(pruned, ctx.resolver) {
+                      !type_contains_unresolved_named(pruned, ctx.resolver) &&
+                      !member_recv_unmodeled(pruned, ctx.resolver) {
                       record(
                         ctx,
                         "call `\{meth}`",
@@ -9461,10 +10305,29 @@ fn check_call_args_in_expr(
             check_call_args_in_expr(env, a, ctx)
           }
         }
-        None =>
+        None => {
+          // Not a resolvable class constructor: the name may be a value
+          // typed as a union of construct-signature objects (`declare var X:
+          // { new (a:number):T } | { new (a:number):U }`). When every member
+          // shares one identical construct signature, check the arguments
+          // against its parameters.
+          let callee_ty = match env.lookup(class_name) {
+            Some(t) => t
+            None =>
+              match ctx.resolver.globals.get(class_name) {
+                Some(t) => t
+                None => @ast.TsType::Any
+              }
+          }
+          match union_common_construct_params(callee_ty, ctx.resolver) {
+            Some(params) =>
+              check_arguments(env, params, args, ctx, "new `\{class_name}`")
+            None => ()
+          }
           for a in args {
             check_call_args_in_expr(env, a, ctx)
           }
+        }
       }
     }
     NewExpr(callee, args) => {
@@ -9571,6 +10434,7 @@ fn check_call_args_in_expr(
                   let recv_ty = infer_expr(env, ctx.resolver, recv)
                   if is_checkable(recv_ty) &&
                     !is_in_scope_type_param(ctx, recv_ty) &&
+                    !member_recv_unmodeled(recv_ty, ctx.resolver) &&
                     !(ctx.resolver.lookup_field(recv_ty, prop) is Some(_)) {
                     record(
                       ctx,
@@ -9612,7 +10476,11 @@ fn check_call_args_in_expr(
         // the opaque shape with no actionable detail and almost always
         // comes from a generic / `this`-type / flow-narrowing gap we
         // don't model.
-        !type_contains_unresolved_named(recv_ty, ctx.resolver) {
+        !type_contains_unresolved_named(recv_ty, ctx.resolver) &&
+        // Mapped / conditional / generic-alias shapes (`Proxify<Shape>`,
+        // `Boxified<Foo>`, …) resolve to forms we can't enumerate; TS
+        // accepts member access on them, so stay silent.
+        !member_recv_unmodeled(recv_ty, ctx.resolver) {
         record(
           ctx,
           "PropAccess `.\{prop}`",
@@ -9749,7 +10617,8 @@ fn check_call_args_in_expr(
       check_private_name_access(ctx, prop)
       check_member_accessibility(env, ctx, recv, prop)
       let recv_ty = infer_expr(env, ctx.resolver, recv)
-      if is_readonly_field(ctx.resolver, recv_ty, prop) {
+      if !prop.has_prefix("__private_brand__") &&
+        is_readonly_field(ctx.resolver, recv_ty, prop) {
         record(
           ctx,
           "assign `.\{prop}`",
@@ -9762,7 +10631,10 @@ fn check_call_args_in_expr(
         None =>
           if is_checkable(recv_ty) &&
             !is_nullable_type(recv_ty) &&
-            !is_in_scope_type_param(ctx, recv_ty) {
+            !is_in_scope_type_param(ctx, recv_ty) &&
+            !prop.has_prefix("__private_brand__") &&
+            !type_contains_unresolved_named(recv_ty, ctx.resolver) &&
+            !member_recv_unmodeled(recv_ty, ctx.resolver) {
             match ctx.resolver.unwrap(recv_ty) {
               Object(_) | Struct(_, _) | Named(_) | Applied(_, _) =>
                 record(
@@ -9900,6 +10772,7 @@ fn check_call_args_in_expr(
           )
           if is_checkable(recv_ty) &&
             !is_in_scope_type_param(ctx, recv_ty) &&
+            !member_recv_unmodeled(recv_ty, ctx.resolver) &&
             !(ctx.resolver.lookup_field(recv_ty, prop) is Some(_)) &&
             !ctx.resolver.field_on_any_union_member(recv_ty, prop) {
             record(
@@ -10237,6 +11110,7 @@ fn check_function_body_with(
   resolver : Resolver,
   permissive : Bool,
   strict_property_init : Bool,
+  this_type? : @ast.TsType? = None,
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   let env = ExprEnv::new()
@@ -10319,6 +11193,14 @@ fn check_function_body_with(
         }
       _ => env.bind(p.name, p.type_)
     }
+  }
+  // Bind `this` to the enclosing class type for a method / constructor
+  // body so `this.x` and `this.method(args)` resolve against the class's
+  // members (property existence, method-argument types). Free functions
+  // pass `None` and leave `this` untyped.
+  match this_type {
+    Some(t) => env.bind("this", t)
+    None => ()
   }
   // Default-parameter expression must be assignable to the parameter's
   // (possibly optional-widened) type.
@@ -10472,6 +11354,194 @@ fn check_structural_duplicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
   }
   for v in module_.values {
     collect_type_dup_issues(v.type_, "value \{v.name}", issues)
+  }
+  issues
+}
+
+///|
+/// TS2374 ("Duplicate index signature for type 'string' / 'number'"): a
+/// single object type (interface or class body) may declare at most one
+/// string index signature and at most one numeric index signature. Two of
+/// the same key kind is always an error in TypeScript, so this is decided
+/// from declaration shape alone -- no resolution -- and carries no
+/// false-positive risk. Generic interfaces / classes are included since the
+/// rule is independent of any type argument.
+/// TS2300 ("Duplicate identifier") for a class member declared in two
+/// incompatible ways -- a data field colliding with a method / accessor of
+/// the same name. The parser computes `duplicate_member_names` from
+/// declaration shape (a data field can never share a name with a method or
+/// accessor in one class body), so this is false-positive-free.
+fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for cls in module_.classes {
+    for name in cls.duplicate_member_names {
+      issues.push({
+        path: "class \{cls.name}",
+        message: "duplicate identifier `\{name}`",
+      })
+    }
+  }
+  issues
+}
+
+///|
+/// A type whose identity we can compare safely by structural / set equality:
+/// a primitive, a literal, or a named reference. Compound shapes (objects,
+/// functions, generics, `typeof`, conditionals, …) are excluded so the
+/// redeclaration check never mis-judges identity on a form it can't normalize.
+fn is_identity_comparable_atom(t : @ast.TsType) -> Bool {
+  match t {
+    Number
+    | Int
+    | Boolean
+    | String_
+    | BigInt
+    | Symbol
+    | Void
+    | Null
+    | Undefined
+    | Literal(_)
+    | NumberLiteral(_)
+    | BigIntLiteral(_)
+    | BooleanLiteral(_)
+    | Named(_) => true
+    _ => false
+  }
+}
+
+///|
+/// Flatten a type into its normalized union members: unwrap aliases, then
+/// flatten nested unions, so `(A | B) | C` and `A | (B | C)` both yield
+/// `[A, B, C]` and a `type S = string` alias normalizes to `string`.
+fn normalized_union_members(
+  t : @ast.TsType,
+  resolver : Resolver,
+  depth? : Int = 0,
+) -> Array[@ast.TsType] {
+  // Mutually-recursive aliases (`type A = B | number; type B = A | string;`)
+  // would otherwise recurse forever through `unwrap` + union members. Cap the
+  // depth and return the type un-normalized when exceeded; the caller only
+  // trusts results made entirely of identity-comparable atoms, so an
+  // un-normalized alias safely fails that test and skips the pair.
+  if depth > 64 {
+    return [t]
+  }
+  match resolver.unwrap(t) {
+    Union(members) => {
+      let out : Array[@ast.TsType] = []
+      for m in members {
+        for n in normalized_union_members(m, resolver, depth=depth + 1) {
+          out.push(n)
+        }
+      }
+      out
+    }
+    other => [other]
+  }
+}
+
+///|
+/// TS2403 ("Subsequent variable declarations must have the same type"): two
+/// `var` declarations of the same name must declare the *identical* type.
+/// Identity (not assignability) -- `C` and `C | D` are mutually assignable
+/// but not identical -- decided by order-independent set comparison of the
+/// normalized union members. To stay false-positive-free we only compare
+/// when every member of both types is an identity-comparable atom (primitive
+/// / literal / named); anything we can't normalize (objects, generics,
+/// `typeof`, …) skips the pair. Only true `var` declarations participate
+/// (block-scoped `let` / `const` redeclaration is a different diagnostic).
+fn check_var_redeclaration_types(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  let first_members : Map[String, Array[@ast.TsType]] = {}
+  let reported : Map[String, Unit] = {}
+  fn members_set_equal(a : Array[@ast.TsType], b : Array[@ast.TsType]) -> Bool {
+    for x in a {
+      if !b.iter().any(fn(y) { x == y }) {
+        return false
+      }
+    }
+    for x in b {
+      if !a.iter().any(fn(y) { x == y }) {
+        return false
+      }
+    }
+    true
+  }
+
+  fn consider(name : String, ty : @ast.TsType) -> Unit {
+    if !is_checkable(ty) {
+      return
+    }
+    let members = normalized_union_members(ty, resolver)
+    if members.length() == 0 {
+      return
+    }
+    for m in members {
+      if !is_identity_comparable_atom(m) {
+        return
+      }
+    }
+    match first_members.get(name) {
+      None => first_members[name] = members
+      Some(prev) =>
+        if !(reported.get(name) is Some(_)) && !members_set_equal(prev, members) {
+          reported[name] = ()
+          issues.push({
+            path: "var \{name}",
+            message: "subsequent variable declaration must have the same type",
+          })
+        }
+    }
+  }
+
+  for stmt in module_.top_level_stmts {
+    match stmt {
+      Var(@ast.TsBinding::Ident(n), ty, _) => consider(n, ty)
+      _ => ()
+    }
+  }
+  for v in module_.values {
+    consider(v.name, v.type_)
+  }
+  issues
+}
+
+///|
+fn check_duplicate_index_signatures(
+  module_ : @ast.TsModule,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  fn scan(label : String, sigs : Array[(@ast.TsType, @ast.TsType)]) -> Unit {
+    let mut string_keys = 0
+    let mut number_keys = 0
+    for sig in sigs {
+      match sig.0 {
+        String_ => string_keys += 1
+        Number | Int => number_keys += 1
+        _ => ()
+      }
+    }
+    if string_keys >= 2 {
+      issues.push({
+        path: label,
+        message: "duplicate index signature for type `string`",
+      })
+    }
+    if number_keys >= 2 {
+      issues.push({
+        path: label,
+        message: "duplicate index signature for type `number`",
+      })
+    }
+  }
+  for iface in module_.interfaces {
+    scan("interface \{iface.name}", iface.index_signatures)
+  }
+  for c in module_.classes {
+    scan("class \{c.name}", c.index_signatures)
   }
   issues
 }
@@ -10668,55 +11738,73 @@ fn check_module_function_bodies_layered(
         is_generator: false,
         is_async: false,
       }
+      // Bind `this` to the instance type only for instance methods. In a
+      // `static` method `this` is the class/constructor side (its members
+      // are the statics), which we don't model -- leave it untyped there.
+      let this_type : @ast.TsType? = if meth.is_static {
+        None
+      } else {
+        Some(@ast.TsType::Named(cls.name))
+      }
       for
         issue in check_function_body_with(
-          synth, resolver, permissive, strict_property_init,
+          synth,
+          resolver,
+          permissive,
+          strict_property_init,
+          this_type~,
         ) {
         all.push(issue)
       }
     }
   }
-  // Constructor parameter defaults (`constructor(x: string = 1)`). The
-  // constructor body isn't retained on `TsClassDecl`, but a default-value
-  // initializer must still be assignable to its parameter type (TS2322).
-  // Synthesize a bodiless function carrying the constructor's params and
-  // defaults; `check_function_body_with` validates the defaults and then
-  // bails on the empty body before any flow analysis.
+  // Constructor body + parameter defaults. The constructor's statement
+  // body (when retained) is walked with `this` bound to the instance type
+  // so `this.method(args)` / `this.x` inside the constructor are validated
+  // like any other instance-method body; the parameter-default expressions
+  // (`constructor(x: string = 1)`) are checked regardless (TS2322).
   for cls in module_.classes {
-    match cls.constructor_params {
-      Some(cparams) => {
-        if cparams.length() == 0 {
-          continue
-        }
-        let params : Array[@ast.TsParam] = []
-        for i, p in cparams {
-          let default = if i < cls.constructor_param_defaults.length() {
-            cls.constructor_param_defaults[i]
-          } else {
-            None
-          }
-          let is_rest = i < cls.constructor_param_is_rest.length() &&
-            cls.constructor_param_is_rest[i]
-          params.push({ name: p.0, binding: None, is_rest, type_: p.1, default })
-        }
-        let synth : @ast.TsFunc = {
-          name: cls.name + ".constructor",
-          type_params: cls.type_params,
-          params,
-          return_type: @ast.TsType::Void,
-          body: { stmts: [], stmt_positions: [] },
-          const_type_params: [],
-          is_generator: false,
-          is_async: false,
-        }
-        for
-          issue in check_function_body_with(
-            synth, resolver, permissive, strict_property_init,
-          ) {
-          all.push(issue)
-        }
+    let cparams = match cls.constructor_params {
+      Some(p) => p
+      None => []
+    }
+    let body : @ast.TsBlock = match cls.constructor_body {
+      Some(b) => b
+      None => { stmts: [], stmt_positions: [] }
+    }
+    if cparams.length() == 0 && body.stmts.length() == 0 {
+      continue
+    }
+    let params : Array[@ast.TsParam] = []
+    for i, p in cparams {
+      let default = if i < cls.constructor_param_defaults.length() {
+        cls.constructor_param_defaults[i]
+      } else {
+        None
       }
-      None => ()
+      let is_rest = i < cls.constructor_param_is_rest.length() &&
+        cls.constructor_param_is_rest[i]
+      params.push({ name: p.0, binding: None, is_rest, type_: p.1, default })
+    }
+    let synth : @ast.TsFunc = {
+      name: cls.name + ".constructor",
+      type_params: cls.type_params,
+      params,
+      return_type: @ast.TsType::Void,
+      body,
+      const_type_params: [],
+      is_generator: false,
+      is_async: false,
+    }
+    for
+      issue in check_function_body_with(
+        synth,
+        resolver,
+        permissive,
+        strict_property_init,
+        this_type=Some(@ast.TsType::Named(cls.name)),
+      ) {
+      all.push(issue)
     }
   }
   // Class field initializers (`class C { x = expr; static y = expr }`).
@@ -10783,6 +11871,15 @@ fn check_module_function_bodies_layered(
     all.push(issue)
   }
   for issue in check_structural_duplicates(module_) {
+    all.push(issue)
+  }
+  for issue in check_var_redeclaration_types(module_, resolver) {
+    all.push(issue)
+  }
+  for issue in check_class_duplicate_members(module_) {
+    all.push(issue)
+  }
+  for issue in check_duplicate_index_signatures(module_) {
     all.push(issue)
   }
   // Walk class field initialisation. Namespaced classes need to
@@ -11169,12 +12266,134 @@ fn check_class_member_structure(
         _ => ()
       }
     }
+    // --- TS2416: a derived data property whose type is not assignable to
+    // the same property on the (directly extended, non-generic) base class.
+    // Restricted to non-generic class + base and to *data* properties
+    // (method override variance is bivariant and far more FP-prone), with
+    // the conservative `member_override_incompatible` decision, so it stays
+    // false-positive-free.
+    if decl.type_params.length() == 0 && decl.base_names.length() > 0 {
+      match resolver.classes.get(decl.base_names[0]) {
+        Some(base) if base.type_params.length() == 0 => {
+          let base_props : Map[String, @ast.TsType] = {}
+          let base_accessors = class_instance_accessor_names(base)
+          for p in base.properties {
+            if !p.is_static &&
+              !p.is_accessor &&
+              !base_accessors.contains(p.name) {
+              base_props[p.name] = p.type_
+            }
+          }
+          let this_accessors = class_instance_accessor_names(decl)
+          for p in decl.properties {
+            if p.is_static || p.is_accessor || this_accessors.contains(p.name) {
+              continue
+            }
+            match base_props.get(p.name) {
+              Some(btype) =>
+                if member_override_incompatible(p.type_, btype, resolver) {
+                  issues.push({
+                    path: "class \{decl.name}",
+                    message: "property `\{p.name}` of type `\{type_display(p.type_)}` is not assignable to the same property `\{type_display(btype)}` in base type `\{base.name}`",
+                  })
+                }
+              None => ()
+            }
+          }
+        }
+        _ => ()
+      }
+    }
   }
   for
     issue in check_interface_extends_compat(
       module_, outer_object_names, resolver,
     ) {
     issues.push(issue)
+  }
+  for issue in check_class_implements(module_, resolver) {
+    issues.push(issue)
+  }
+  issues
+}
+
+///|
+/// TS2420 ("Class incorrectly implements interface"): a (non-generic) class
+/// whose `implements` clause names a (non-generic, locally declared)
+/// interface must satisfy that interface. We report only the two reliably-
+/// decidable shapes, so the check is false-positive-free:
+///   - a member the interface declares is implemented as `private` /
+///     `protected` (a non-public member can never satisfy a public interface
+///     requirement);
+///   - a public data property whose type is definitely not assignable to the
+///     interface's same-named member (`member_override_incompatible`).
+/// A *missing* member is deliberately not flagged (it may be inherited from a
+/// base class we don't fully thread here), and interface methods / generic
+/// shapes are left to the conservative `member_override_incompatible`, which
+/// declines anything it can't decide soundly.
+fn check_class_implements(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for cls in module_.classes {
+    if cls.implements_names.length() == 0 || cls.type_params.length() > 0 {
+      continue
+    }
+    let nonpublic : Map[String, Unit] = {}
+    for n in cls.private_members {
+      nonpublic[n] = ()
+    }
+    for n in cls.protected_members {
+      nonpublic[n] = ()
+    }
+    let accessors = class_instance_accessor_names(cls)
+    let cls_props : Map[String, @ast.TsType] = {}
+    for p in cls.properties {
+      if !p.is_static && !p.is_accessor && !accessors.contains(p.name) {
+        cls_props[p.name] = p.type_
+      }
+    }
+    for iname in cls.implements_names {
+      let iface = match resolver.interfaces.get(iname) {
+        Some(i) => i
+        None => continue
+      }
+      if iface.type_params.length() > 0 {
+        continue
+      }
+      let mut reported = false
+      for f in iface.fields {
+        if reported {
+          break
+        }
+        let mname = f.0
+        if is_signature_sentinel(mname) {
+          continue
+        }
+        // Interface member implemented with non-public visibility.
+        if nonpublic.get(mname) is Some(_) {
+          issues.push({
+            path: "class \{cls.name}",
+            message: "incorrectly implements interface `\{iname}`: member `\{mname}` is not public",
+          })
+          reported = true
+          continue
+        }
+        // Present public data property with an incompatible type.
+        match cls_props.get(mname) {
+          Some(ctype) =>
+            if member_override_incompatible(ctype, f.1, resolver) {
+              issues.push({
+                path: "class \{cls.name}",
+                message: "incorrectly implements interface `\{iname}`: property `\{mname}` of type `\{type_display(ctype)}` is not assignable to `\{type_display(f.1)}`",
+              })
+              reported = true
+            }
+          None => ()
+        }
+      }
+    }
   }
   issues
 }
@@ -11400,15 +12619,38 @@ fn check_interface_extends_compat(
     }
     true
   }
+  // A scalar, or a union whose every member is a scalar (`string | number`,
+  // `"a" | "b"`, …). Such a value type is a "primitive set": no object /
+  // function / array can be assigned to it, and a scalar property is decided
+  // by `is_assignable_to` (which handles union membership). A union with even
+  // one non-scalar member is excluded so an object property is never
+  // mis-flagged against an index type that could actually accept it.
+  fn is_scalar_set(t : @ast.TsType) -> Bool {
+    match t {
+      Union(members) => {
+        for m in members {
+          if !is_scalar(m) {
+            return false
+          }
+        }
+        members.length() > 0
+      }
+      _ => is_scalar(t)
+    }
+  }
   fn violates_index_value(prop : @ast.TsType, value : @ast.TsType) -> Bool {
     let t = strip_optional(prop)
     // Index value is object-shaped: a scalar property can never satisfy it.
     if is_object_shaped(value) {
       return is_scalar(t)
     }
-    // Index value is a primitive scalar: the property must be assignable
-    // to it. Only decide for concrete property shapes.
-    if is_scalar(value) {
+    // Index value is a primitive scalar (or a union of scalars): the property
+    // must be assignable to it. Only decide for concrete property shapes —
+    // object / function / array / tuple types are never a primitive, and a
+    // concrete scalar is decided by `is_assignable_to` (union-membership
+    // aware). Anything else (unresolved `Named`, type parameters, `any`,
+    // unions on the property side) falls through to "no diagnostic".
+    if is_scalar_set(value) {
       if is_scalar(t) {
         return !is_assignable_to(t, value)
       }
@@ -11440,6 +12682,13 @@ fn check_interface_extends_compat(
         if numeric_only && !is_numeric_name(f.0) {
           continue
         }
+        // Symbol-keyed members (rendered `<computed>`, e.g.
+        // `[Symbol.toStringTag]: string` / `[mySymbol]: string`) are not
+        // constrained by string or numeric index signatures — only a symbol
+        // index signature would apply. Skip them.
+        if f.0 == "<computed>" {
+          continue
+        }
         if violates_index_value(f.1, sig.1) {
           issues.push({
             path: owner,
@@ -11451,13 +12700,15 @@ fn check_interface_extends_compat(
   }
 
   for iface in module_.interfaces {
-    if iface.type_params.length() == 0 {
-      check_index_props(
-        iface.index_signatures,
-        iface.fields,
-        "interface \{iface.name}",
-      )
-    }
+    // Generic interfaces are processed too: a property whose type is one of
+    // the interface's own type parameters resolves to a bare `Named` that is
+    // not object-shaped and not scalar, so `violates_index_value` leaves it
+    // alone -- only concrete object / scalar properties are decided.
+    check_index_props(
+      iface.index_signatures,
+      iface.fields,
+      "interface \{iface.name}",
+    )
   }
   for c in module_.classes {
     if c.type_params.length() == 0 {

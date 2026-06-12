@@ -1251,6 +1251,54 @@ runtime-bridge impact):
   deprecates the underlying pattern; modern components use default
   parameter values which we already cover.
 
+## Soundness gate: whole-corpus FP -> 0 + hang/crash fixes (2026-06-12)
+
+The `checker-soundness` CI job (`scripts/checker_conformance_oracle.sh
+--max-fp 0`) runs `tscheck` over the *entire* conformance corpus and gates
+at zero false positives. Two classes of failure were fixed:
+
+1. **Crash / hang fixes** (the soundness job was timing out at GitHub's 6h
+   ceiling, never reaching the gate):
+   - `normalized_union_members` had no cycle guard -> stack overflow on
+     mutually-recursive type aliases (`type A = B | number; type B = A |
+     string;`). Added a depth cap.
+   - `Resolver::unwrap`'s `TypeOf(name)` case resolved `typeof x` -> the
+     variable's type with no cycle guard -> *infinite loop* on a
+     self-referential export (`export var r: typeof r;`). Native binaries
+     ignore SIGTERM, so `timeout` couldn't kill it -> the 6h hang. Added a
+     `seen` guard keyed `"typeof "+name`.
+
+2. **Whole-corpus false positives 44 -> 0** (recall 1525 -> 1472 TP; the
+   trade was accepted to hold the FP=0 invariant). The recall-push
+   diagnostics over-fired against type shapes we don't fully model;
+   suppressions added (all FP-safe, most keep field/missing checks):
+   - `type_is_unmodeled_shape` / `member_recv_unmodeled`: skip member-
+     existence + structural-assignment against mapped / conditional /
+     `keyof` / indexed-access / template-literal types, generic-alias
+     applications (`Proxify<Shape>`, `Boxified<Foo>`), intersections
+     (mixins, `typeof M & typeof C`), `typeof X` value queries, callable /
+     construct-signature shapes, and class instances with an unresolvable
+     (mixin / type-param / expression) base chain.
+   - `check_expr_against`: skip intersections on either side, callable /
+     overloaded-method shapes, union targets with a generic `Applied`
+     member (generator returns), deeply-`any` sources, literal-narrowing
+     residue (`expected 0 but got 0 | 1 | 9`), const-widening
+     (`expected 123 | 456 but got number`), and structurally-recursive
+     named tuples.
+   - `check_object_lit_against_target`: skip computed/symbol keys
+     (`@@computed:N` / `<computed>`), count `{...spread}` fields as
+     provided, and suppress the excess-property arm for bare anonymous
+     `Object` *call-argument* targets (inlined type-parameter constraints).
+   - Private-brand synthetics (`__private_brand__*`) no longer trip
+     read-only / does-not-exist on assignment.
+   - Symbol-keyed (`<computed>`) interface members are exempt from
+     string/number index-signature compatibility.
+   - Constructor-local `var` names are collected for the TS2304 hoisting
+     backstop (`super(i); … var i = …`).
+   - Parser: object-type-literal optional members (`{ bar?: string }` fast
+     path) and function-type rest params (`(...args: any[]) => R`) now
+     preserve their `| undefined` / `Rest(...)` shape.
+
 ## Conformance Recall / Precision Push (2026-06-01)
 
 Baseline accuracy gate is now live at
@@ -1299,6 +1347,342 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-05 (T36)   532/815 (65 %)        394/414 (20 FP)
 2026-06-05 (T37)   533/815 (65 %)        394/414 (20 FP)
 2026-06-05 (T38)   535/815 (66 %)        394/414 (20 FP)
+2026-06-05 (T39)   536/815 (66 %)        394/414 (20 FP)
+2026-06-05 (T40)   538/815 (66 %)        394/414 (20 FP)
+2026-06-05 (T41)   540/815 (66 %)        394/414 (20 FP)
+2026-06-05 (T42)   543/815 (67 %)        394/414 (20 FP)
+2026-06-05 (T44)   545/815 (67 %)        395/414 (19 FP)
+2026-06-05 (T45)   546/815 (67 %)        395/414 (19 FP)
+2026-06-05 (T46)   556/815 (68 %)        394/414 (20 FP)
+2026-06-05 (T47)   557/815 (68 %)        394/414 (20 FP)
+2026-06-05 (T48)   558/815 (68 %)        394/414 (20 FP)
+2026-06-05 (T49)   558/815 (68 %)        394/414 (20 FP)
+2026-06-05 (T50)   559/815 (69 %)        394/414 (20 FP)
+2026-06-05 (T51)   560/815 (69 %)        394/414 (20 FP)
+2026-06-08 (T52)   (corpus sweep deferred — see note)
+
+  Toolchain note (2026-06-08): the native parser-package whitebox test
+  generates a ~25 MB C unit that this session's `tcc` could not compile in
+  budget (>20 min, CPU-degraded container; it built in ~1-2 min in earlier
+  sessions). Added `src/cmd/tsacc` -- a standalone corpus-accuracy CLI that
+  pulls in only `parser` + `checker` (no test bundling) and prints the same
+  per-dir 2x2 table + `baseline accuracy:` line. On a healthy container,
+  `moon run --target native src/cmd/tsacc` measures recall/FP without the
+  whitebox build. (Even `tsacc` -- a 14 MB C unit -- did not finish compiling
+  this session, so T52's numbers remain unmeasured here; re-run when the
+  container compiles natively at normal speed.)
+
+  T52 -- TS2403 ("subsequent variable declarations must have the same type").
+  Verified via unit tests + `tscheck`; full-corpus recall/FP NOT re-measured
+  this session (the native parser-package test build was unworkably slow in
+  this environment -- repeated >15 min compiles with no completion).
+
+    Two `var` declarations of the same name must declare the *identical*
+    type. Identity, not assignability -- `C` and `C | D` are mutually
+    assignable but not identical -- decided by order-independent set
+    comparison of normalized union members (`normalized_union_members`
+    unwraps aliases and flattens nested unions). To stay false-positive-free
+    it only compares when every member of both types is an
+    identity-comparable atom (primitive / literal / named); anything it can't
+    normalize (objects, generics, `typeof`, …) skips the pair. Only true
+    `var` declarations participate (block-scoped `let` / `const`
+    redeclaration is a different diagnostic, TS2451).
+
+    Verification status:
+      - `moon check --deny-warn`: clean.
+      - checker package unit tests: 615/615 pass, including the new
+        "var redeclared with a non-identical type (TS2403)" test.
+      - `tscheck` on `conformance/types/union/unionTypeEquivalence.ts`:
+        flags exactly `var x` (`C` vs `C | D`), matching the baseline's lone
+        TS2403; the union order / nesting / `typeof` variants stay silent.
+      - FP-safe by construction (atom-gated, set-equality, var-only).
+    Expected effect once measured: recall +1 (clears unionTypeEquivalence),
+    FP steady 20. A future session should re-run the parser accuracy test
+    (use `-f "*accuracy*"` to skip the slow full-TS smoke-run) and fill in
+    the table row.
+
+  T51 -- argument checking for union construct signatures (TS2345). recall
+  +1. The `new`-call analog of T50.
+
+    A value typed as a union of single-construct-signature objects
+    (`{ new (a:number):X } | { new (a:number):Y }`) is constructable when
+    every member's `<new>` parameters are identical. The `New` handler's
+    fallback branch (reached when the name isn't a resolvable class
+    constructor) now looks the name up as a value and, via
+    `union_common_construct_params` / `single_construct_signature_params`,
+    checks the `new` arguments against the shared parameters. Disagreeing
+    parameters yield `None` and stay silent, so it is false-positive-free.
+    Clears `unionTypeConstructSignatures`.
+
+  T50 -- argument checking for union callees with a shared call signature
+  (TS2345). recall +1, back on the measured corpus.
+
+    A value typed as a union of single-call-signature objects
+    (`{ (a:number):X } | { (a:number):Y }`) is callable when every member's
+    call-signature *parameters* are identical (the result is the union of the
+    members' return types, irrelevant to argument checking). The `Call` /
+    `CallExpr` argument passes now extract those common parameters
+    (`single_call_signature_params` per member, `union_common_call_params`
+    across the union) and check the arguments against them. A union whose
+    members' parameters disagree -- TypeScript's "no call signatures" case --
+    yields `None` and stays silent, so it is false-positive-free. Clears
+    `unionTypeCallSignatures`.
+
+    Adjacent union misses still out of FP-safe reach: union *property access*
+    TS2339 (entangled with discriminated-union flow narrowing, which the
+    `field_on_any_union_member` suppression deliberately tolerates); union
+    *construct* signatures (`new`-call arity, a separate handler); and the
+    `this`-context / contextual-object-literal families. Generic-call
+    argument inference (`genericCallWith*`) mostly needs real type-parameter
+    inference or call-site type-argument capture (the latter would thread type
+    args through every `Call`/`CallExpr`/`New` AST node -- too invasive for
+    the payoff).
+
+  T49 -- retain the `implements` clause + check it (TS2420).
+
+    The parser previously discarded `implements` (a skip-to-`{` loop). It now
+    parses the clause into `TsClassDecl::implements_names` (head references,
+    qualified names joined with `.`, type args dropped) via a robust
+    consume-to-`{` scan that survives invalid forms like `implements A?.B`
+    (a parse-regression guard verified against `classExtendingOptionalChain`).
+    The checker's `check_class_implements` then flags, for a non-generic class
+    against a non-generic locally-declared implemented interface: a member
+    implemented as `private` / `protected`, and a public data property whose
+    type is incompatible (`member_override_incompatible`). Missing members,
+    interface methods, generics, lib interfaces, and index-signature compat
+    are deliberately not decided, so it stays false-positive-free.
+
+    recall 558 (steady), FP 20 (steady): correct and FP-safe, and it catches
+    real files (`interfaceImplementation1`, `implementPublicPropertyAsPrivate`,
+    `interfaceExtendsClassWithPrivate2`, ...), but every one lives in
+    `tests/cases/compiler/`, outside the harness's pinned `conformance/`
+    dirs; the two pinned-dir `implements` misses need a lib interface
+    (`String`) or index-signature compat we don't model. So this is a real
+    parser-capability + diagnostic improvement (also guarding the
+    synthesized-bridge `check_module` gate) that the conformance metric does
+    not reflect.
+
+    NOTE (process): T47b / T48-TS2416 / T49 have each been correct + FP-safe
+    but +0 on the measured corpus -- the requested member/override/implements
+    diagnostics land on `compiler/`-suite files or shapes outside the pinned
+    set. Measurable recall in the class area is now largely exhausted; the
+    remaining conformance gains are in generics / unions / overloads /
+    contextual typing (harder machinery).
+
+  T48 -- static-method call argument checking (TS2345) + class-override
+  property compatibility (TS2416).
+
+    TS2345 (recall +1): a static method called through the class name
+    (`A.s(arg)`) was never argument-checked -- the receiver `A` carries no
+    value-side type, so `lookup_method_sig` found nothing. The MethodCall
+    arg pass now reads the static method's parameter types straight off the
+    class declaration (`class_static_method_param_types`), gated to exactly
+    one non-accessor static method of that name with no rest parameter
+    (overload sets / variadics skipped), so it is false-positive-free.
+    Clears `privateNameStaticMethod` (`A1.#method(1)` in the constructor,
+    now reachable via the T46 constructor-body walk).
+
+    TS2416 (recall +0, defense-in-depth): a derived data property whose type
+    is not assignable to the same property on the directly-extended,
+    non-generic base class. The class analog of the shipped TS2430 interface
+    check, using the same conservative `member_override_incompatible`
+    decision (scalar/object category clash, plain-named structural
+    assignability, or concrete-scalar `is_assignable_to`); generics, `any`,
+    unions, methods, statics, accessors are all excluded. It catches no
+    conformance file -- the corpus's TS2416 cases are all method overrides,
+    generics, `implements` (discarded by the parser), private members,
+    statics, or class *expressions* -- but it is a correct, FP-safe
+    diagnostic that also guards synthesized bridge output (the
+    `@checker.check_module` sanity gate). FP steady 20.
+
+  T47 -- data field colliding with a method / accessor is a duplicate
+  identifier (TS2300).
+
+    Verified first that the requested refinements were already delivered by
+    T45 / T46: `this.x = wrongType` assignments are checked in both method
+    and constructor bodies (TS2322), and get/set accessor bodies are walked
+    like any instance method (`this` bound, getter-return checked, setter
+    param in scope, getter-only assignment flagged TS2540). Added regression
+    tests locking all of that.
+
+    New detection: a data property and a method / accessor of the same name
+    in one class body. The parser merges a field and a same-named accessor
+    into a single `properties` entry (losing the collision), so the parser
+    now records the field-name ∩ method-name intersection (per static-ness)
+    in a new `TsClassDecl::duplicate_member_names`, and the checker emits
+    TS2300. A data field can never legally share a name with a method or
+    accessor, so it is false-positive-free; a get/set pair and an
+    instance/static same-name split stay silent. recall 556 -> 557, FP
+    steady 20 (clears propertyAndAccessorWithSameName).
+
+  T47b -- complete the member-duplicate detection to getters / setters.
+
+    Generalized the parser's `duplicate_member_names` from a field-vs-method
+    intersection to per-name declaration counts (field / getter / setter /
+    method), flagging the remaining TS2300 shapes: two getters or two
+    setters of one name, and a getter / setter colliding with a regular
+    method. Method *overloads* (several non-accessor signatures) and a
+    get/set pair stay silent. Decided from declaration shape, so still
+    false-positive-free. recall steady 557, FP steady 20: the affected
+    conformance files (`twoAccessorsWithSameName`, `...2`) are already
+    counted -- either via a `(target=...)`-suffixed baseline the harness
+    doesn't match, or because the parser's getter→property upsert already
+    made them emit -- so this is a real-world correctness/completeness
+    improvement that the conformance metric doesn't reflect. (Auto-accessor
+    duplicates -- `autoAccessor11` -- parse as fields, not methods, so are
+    not yet covered.)
+
+  T46 -- retain + walk the constructor body (TS2345 / TS2322 / TS2339 ...).
+
+    `TsClassDecl` gained a `constructor_body : TsBlock?` field, populated by
+    the parser from the parsed constructor `TsFunc`. The checker's
+    constructor pass now walks that body (instead of synthesizing an empty
+    one for the param-default check only) with `this` bound to the instance
+    type, so every statement inside a constructor -- `this.method(args)`,
+    `this.x = v`, local declarations, nested calls -- gets the same
+    coverage as a regular instance-method body. This is where a large share
+    of class-body code lives, so it is the session's biggest single jump:
+    recall 546 -> 556 (+10), FP 19 -> 20 (one niche read-only mis-fire on a
+    mangled private computed-property-name assignment; left as-is at the
+    established 20-FP working level). Clears the `privateNameMethod`-style
+    cases the T45 note flagged as blocked.
+
+  T45 -- type `this` inside instance method bodies (TS2345 / TS2322 / TS2339).
+
+    Method bodies were checked with `this` untyped (inferred `Any`), so
+    `this.x` / `this.method(args)` were never validated. `check_function_body_with`
+    now takes an optional `this_type~` and binds `this` to the enclosing
+    class for instance methods, so a wrong-typed argument to `this.m(...)`,
+    a property-type mismatch via `this.x`, and a missing `this` member are
+    all caught. Bound only for *instance* methods -- in a `static` method
+    `this` is the class/constructor side (its members are the statics),
+    which we don't model, so binding the instance shape there false-flagged
+    private-static / `typeof this` cases; those stay untyped. Inherited
+    members resolve through the existing base-chain method/field lookup, so
+    `this.inheritedMethod()` does not false-flag. recall 545 -> 546, FP
+    steady 19. (Constructor-body `this` checks remain unreached -- the
+    parser doesn't retain the constructor body on `TsClassDecl`, only its
+    params; that's the next lever for the `privateNameMethod`-style cases.)
+
+  T44 -- object-type rendering + structural assignment mismatches (TS2322).
+
+    Implemented prerequisite (1) from the T43 investigation and shipped the
+    object-rendering lever behind targeted guards. Net: recall 543 -> 545,
+    and FP 20 -> 19 (a pre-existing object FP was also healed). Pieces:
+      - `widen_literal_deep` + apply it to composite (`Object`/`Struct`/
+        `Array`/`Tuple`) inferred types at un-annotated `var`/`let`/`const`
+        binding sites. TS widens object/array *contents* even for `const`
+        (`var a = { foo: '' }` is `{ foo: string }`), so a later `a = b`
+        field comparison is no longer over-narrow.
+      - `type_display` now renders inline object types as `{ k: T; ... }`
+        instead of the `type` placeholder, so object mismatches survive the
+        permissive filter.
+      - Guards keeping it false-positive-free, since rendering surfaces
+        imprecision the placeholder hid: a one-way structural rescue (the
+        correct rule for assignment -- source need only provide the target's
+        required members; descends a union *target* via any arm); suppress
+        when either shape carries a `typeof x` field or a `<call>` / `<new>`
+        call-signature sentinel (overload resolution we don't model); and
+        suppress a fresh object-literal source against a non-scalar target
+        (contextual / generic typing we don't model -- plain object / interface
+        targets are still checked per-field before this point, and a scalar
+        target stays a reportable category clash).
+    The raw rendering alone was +12 recall / +11 FP (555/31); the guards
+    trade most of that recall for a clean FP profile. Recovering the rest
+    needs prerequisites (2) `typeof x` field resolution and (3) contextual
+    typing for object-literal arguments (still open below).
+
+  TS2322 object-rendering lever (investigated T43; prerequisite (1) shipped
+  in T44 above, (2)/(3) still open).
+
+    The single biggest remaining recall bucket is TS2322 (~52 missed
+    files). The dominant blocker is structural: inline object types render
+    as the placeholder `type` in `type_display`, and the permissive filter
+    suppresses any mismatch carrying a `type` residue -- so every
+    object-shaped assignment / initializer mismatch is silently dropped even
+    though the checker already *computes* it correctly (visible under
+    `tscheck --strict`).
+
+    Rendering object types as `{ k: T; ... }` unlocks +12 recall (543 ->
+    555) but raises FP 20 -> 31 (7.5 %, over the ~5 % working budget). The
+    new FPs are NOT in the object-mismatch logic itself; they are latent
+    inference-precision gaps that the placeholder was masking:
+      - object-literal field types are not widened at the binding site
+        (`var a = { foo: '' }` is inferred `{ foo: '' }`, not `{ foo:
+        string }`), so a later `a = b` field-type comparison false-flags;
+      - `typeof x` field types compare nominally (`typeof a` vs `typeof b`);
+      - contextual / generic inference for object-literal *arguments*
+        (`assign({ count: ... })`) is incomplete.
+    Conservative gates were tried (one-way structural rescue; emit only
+    missing-required-member + primitive/object category clashes; retry with
+    both sides literal-widened) -- each either left FP at 31 or net-regressed
+    recall below 543, because the field-type object mismatches are
+    simultaneously the recall source and the FP source. Reverted; no change
+    shipped.
+
+    To land this cleanly the prerequisites are real inference fixes, in
+    rough priority order: (1) widen object-literal field types for
+    un-annotated `var`/`let` bindings (recursive `widen_literal` into Object
+    fields, gated off `const`); (2) resolve `typeof x` field types to the
+    binding's type; (3) contextual typing for object-literal arguments.
+    With (1)+(2) the naive rendering should drop most of the +11 FP while
+    keeping the +12 recall.
+
+  T42 -- boxed wrapper objects are not assignable to primitives (TS2322).
+
+    `var s: string = new String("")` is a TypeScript error: the wrapper
+    object (`String` / `Number` / `Boolean` / `BigInt` / `Symbol`) is not
+    assignable to its primitive counterpart (the reverse, primitive widening
+    to the wrapper interface, stays fine). Added the exact wrapper/primitive
+    pairs to `is_assignable_to`, plus a carve-out in `check_expr_against` so
+    the diagnostic fires ahead of the unresolved-`Named` bail (these wrapper
+    names are lib globals the resolver doesn't carry). Only the exact pairs
+    are matched, so it is false-positive-free. recall 540 -> 543, FP steady
+    20 (clears assignFrom{String,Number,Boolean}Interface).
+
+  T41 -- type-argument arity for classes / interfaces / enums (TS2314 /
+  TS2315).
+
+    The arity check (previously type-alias-only) now records the declared
+    type-parameter count of every top-level class, interface and enum too,
+    so `C<string>` against `class C {}` (TS2315 "not generic") and
+    `Box<A, B>` against `class Box<T>` (TS2314 "requires 1 type argument")
+    are both flagged. A name declared at two different arities (illegal
+    merging / clash) is dropped as ambiguous, and only locally-declared
+    names are recorded -- lib / cross-file references (`Array<T>`,
+    `Promise<T>`) are never touched, so it stays false-positive-free. Also
+    walks top-level `var`/`let`/`const` annotations (`var v: C<string>`),
+    which live in `top_level_stmts` rather than `values`. recall 538 -> 540,
+    FP steady 20 (clears nonGenericTypeReferenceWithTypeArguments and a
+    namedTypes arity case).
+
+  T40 -- duplicate index signatures (TS2374).
+
+    A single object type (interface or class body) may declare at most one
+    string index signature and at most one numeric index signature; two of
+    the same key kind is always an error. Counted from declaration shape
+    alone -- no resolution, generic decls included (the rule is independent
+    of type arguments) -- so it is false-positive-free. recall 536 -> 538,
+    FP steady 20 (clears multiple{String,Numeric}Indexers).
+
+  T39 -- TS2411 over scalar-union index values + generic interfaces.
+
+    The existing index-signature constraint check (`[x: string]: V` requires
+    every named property to be assignable to `V`) only fired when `V` was a
+    single scalar and the interface was non-generic. Extended on two axes,
+    both kept structurally certain so no FP slips in:
+      - `V` may now be a *union of scalars* (`string | number`). Such a value
+        is a closed "primitive set": object / function / array properties can
+        never satisfy it, and a scalar property is decided by the
+        union-membership-aware `is_assignable_to`. A union with even one
+        non-scalar arm (`string | Obj`) is excluded, so an object property is
+        never mis-flagged against an index it could actually satisfy.
+      - Generic interfaces are now processed. A property typed as one of the
+        interface's own type parameters resolves to a bare `Named` that is
+        neither scalar nor object-shaped, so `violates_index_value` leaves it
+        alone -- only concrete object / scalar fields are decided.
+    recall 535 -> 536, FP steady 20 (clears subtypesOfUnion, whose interfaces
+    are all generic with a `string | number` indexer).
 
   T38 -- incompatible index signatures in interface-extends (TS2430).
 

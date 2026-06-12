@@ -2228,6 +2228,7 @@ fn collect_exported_decls(
               constructor_params: None,
               constructor_param_is_rest: [],
               constructor_param_defaults: [],
+              constructor_body: None,
               properties,
               methods,
               is_constructible: false,
@@ -8966,6 +8967,7 @@ fn clone_exported_class(
     name: exported.export_name,
     type_params: exported.class_.type_params,
     base_names: [],
+    implements_names: [],
     base_expr: None,
     static_field_inits: [],
     static_blocks: [],
@@ -8973,6 +8975,7 @@ fn clone_exported_class(
     constructor_params,
     constructor_param_is_rest: exported.class_.constructor_param_is_rest,
     constructor_param_defaults: exported.class_.constructor_param_defaults,
+    constructor_body: exported.class_.constructor_body,
     properties,
     methods,
     is_abstract: exported.class_.is_abstract,
@@ -8982,6 +8985,7 @@ fn clone_exported_class(
     is_declare: false,
     private_members: exported.class_.private_members,
     protected_members: exported.class_.protected_members,
+    duplicate_member_names: exported.class_.duplicate_member_names,
   }
 }
 

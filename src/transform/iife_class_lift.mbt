@@ -224,6 +224,7 @@ fn try_lift_iife_value(
     name,
     type_params: [],
     base_names,
+    implements_names: [],
     base_expr,
     static_field_inits,
     static_blocks: [],
@@ -231,6 +232,7 @@ fn try_lift_iife_value(
     constructor_params: None,
     constructor_param_is_rest: [],
     constructor_param_defaults: [],
+    constructor_body: None,
     properties: [],
     methods: all_methods,
     is_abstract: false,
@@ -240,6 +242,7 @@ fn try_lift_iife_value(
     is_declare: false,
     private_members: [],
     protected_members: [],
+    duplicate_member_names: [],
   }
   // Emit closure-variable declarations before the class so the class
   // body can still close over them.

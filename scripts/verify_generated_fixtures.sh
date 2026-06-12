@@ -539,7 +539,7 @@ verify_bridge_promise_return_fixture() {
   "name": "fixture/bridge_promise_return",
   "version": "0.1.0",
   "deps": {
-    "moonbitlang/async": "0.18.0"
+    "moonbitlang/async": "0.18.1"
   },
   "source": ".",
   "preferred-target": "js"

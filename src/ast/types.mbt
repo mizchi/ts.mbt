@@ -637,6 +637,11 @@ pub(all) struct TsClassDecl {
   name : String
   type_params : Array[String]
   base_names : Array[String]
+  // Names of interfaces the class `implements` (`class C implements I, J`).
+  // Head identifiers only (qualified names joined with `.`, type arguments
+  // dropped). The checker uses these to verify the class satisfies each
+  // interface (TS2420). Empty when there is no `implements` clause.
+  implements_names : Array[String]
   // Expression-shaped heritage clause (`class X extends declare(args) {…}`
   // / `class X extends make(ast) {…}`). When present this carries the
   // parsed expression and `base_names` holds the sentinel marker
@@ -676,6 +681,13 @@ pub(all) struct TsClassDecl {
   // parameter's declared type (TS2322) the same way it does for free
   // functions and methods.
   constructor_param_defaults : Array[TsExpr?]
+  // The constructor's statement body, when the source declared a
+  // constructor with an implementation (`constructor(...) { ... }`).
+  // `None` for classes with no constructor, an overload signature only,
+  // or an ambient `declare class`. The checker walks it with `this` bound
+  // to the instance type so `this.method(args)` / `this.x` inside the
+  // constructor are validated like any other method body.
+  constructor_body : TsBlock?
   properties : Array[TsClassPropertyDecl]
   methods : Array[TsClassMethodDecl]
   is_abstract : Bool
@@ -703,6 +715,13 @@ pub(all) struct TsClassDecl {
   // changing the member-decl structs. Empty for fully-public classes.
   private_members : Array[String]
   protected_members : Array[String]
+  // Member names the parser saw declared in two incompatible ways within
+  // this class body -- a data field colliding with a method / accessor of
+  // the same name, or a duplicated getter / setter. TypeScript reports
+  // these as TS2300 ("Duplicate identifier"). Computed from declaration
+  // shape alone (a data field can never share a name with a method or
+  // accessor), so it is false-positive-free. Empty for the common case.
+  duplicate_member_names : Array[String]
 } derive(Debug)
 
 ///|

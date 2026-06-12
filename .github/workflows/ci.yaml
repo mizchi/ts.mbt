@@ -45,6 +45,13 @@ jobs:
         # at the `Moon check` / `Moon test` steps below.
         run: moon update || true
 
+      - name: Patch deprecated `fn new()` in moonbitlang/async
+        # The bleeding-edge MoonBit toolchain (`latest`) hard-errors on
+        # `fn new(..)` declared inside a `struct`, which async@0.18.1 still
+        # uses. Patch the shared registry cache so the top-level build *and*
+        # every scaffolded fixture pick up the fix. See the script header.
+        run: bash scripts/patch_async_dep.sh
+
       - name: Moon fmt check
         run: moon fmt --check
 
@@ -91,6 +98,10 @@ jobs:
 
       - name: Moon update
         run: moon update || true
+
+      - name: Patch deprecated `fn new()` in moonbitlang/async
+        # See the matching step in the `test` job + the script header.
+        run: bash scripts/patch_async_dep.sh
 
       # Builds the `tscheck` binary and fails if the checker reports more
       # conformance false positives than the documented budget.

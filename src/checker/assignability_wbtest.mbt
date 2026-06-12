@@ -1,4 +1,17 @@
 ///|
+test "is_assignable_to: boxed wrappers are not assignable to primitives" {
+  // `var s: string = new String("")` is a TS error: the wrapper object is
+  // not assignable to the primitive. The reverse (primitive widening to the
+  // wrapper interface) is fine and handled structurally elsewhere.
+  assert_false(is_assignable_to(Named("String"), String_))
+  assert_false(is_assignable_to(Named("Number"), Number))
+  assert_false(is_assignable_to(Named("Number"), Int))
+  assert_false(is_assignable_to(Named("Boolean"), Boolean))
+  assert_false(is_assignable_to(Named("BigInt"), BigInt))
+  assert_false(is_assignable_to(Named("Symbol"), Symbol))
+}
+
+///|
 test "is_assignable_to: identical primitives are assignable" {
   assert_true(is_assignable_to(String_, String_))
   assert_true(is_assignable_to(Number, Number))
