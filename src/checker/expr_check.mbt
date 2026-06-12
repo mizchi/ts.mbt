@@ -4357,7 +4357,17 @@ fn infer_expr(
         None =>
           match resolver.globals.get(name) {
             Some(ty) => ty
-            None => @ast.TsType::Any
+            None =>
+              // A bare class reference in value position (`const ctor =
+              // C`) carries the class's static/constructor side. Model
+              // it as `typeof C` so `new ctor()` can recover the
+              // instance type; member checks already treat `TypeOf` as
+              // an unmodeled receiver and stay silent.
+              if resolver.classes.get(name) is Some(_) {
+                @ast.TsType::TypeOf(name)
+              } else {
+                @ast.TsType::Any
+              }
           }
       }
     BinOp(op, l, r) => {
@@ -4489,7 +4499,16 @@ fn infer_expr(
           for a in args {
             let _ = infer_expr(env, resolver, a)
           }
-          @ast.TsType::Any
+          // `new ctor()` through a class-valued binding: the callee
+          // name's type is `typeof C`, so construction yields `C`.
+          match
+            resolver.unwrap(
+              infer_expr(env, resolver, @ast.TsExpr::Var(class_name)),
+            ) {
+            TypeOf(n) if resolver.classes.get(n) is Some(_) =>
+              @ast.TsType::Named(n)
+            _ => @ast.TsType::Any
+          }
         }
       }
     NewExpr(callee, args) => {
@@ -4525,11 +4544,22 @@ fn infer_expr(
           }
         None => @ast.TsType::Any
       }
-      let _ = infer_expr(env, resolver, callee)
+      let callee_ty = infer_expr(env, resolver, callee)
       for a in args {
         let _ = infer_expr(env, resolver, a)
       }
-      instance_ty
+      match instance_ty {
+        // No statically-named class matched — `new ctor()` through a
+        // class-valued binding still constructs the class: the callee's
+        // inferred type is `typeof C`, so the result is `C`.
+        Any =>
+          match resolver.unwrap(callee_ty) {
+            TypeOf(n) if resolver.classes.get(n) is Some(_) =>
+              @ast.TsType::Named(n)
+            _ => @ast.TsType::Any
+          }
+        t => t
+      }
     }
     MethodCall(receiver, meth, args) => {
       // Static namespace dispatch: `Object.keys(...)`, `Math.max(...)`,

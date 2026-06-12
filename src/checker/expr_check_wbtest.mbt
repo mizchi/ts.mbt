@@ -7551,3 +7551,21 @@ test "expr_check: custom mapped type over keyof interface resolves fields" {
   assert_true(mism.iter().any(fn(i) { i.path.contains("`bad`") }))
   assert_true(mism.iter().any(fn(i) { i.path.contains("`bad2`") }))
 }
+
+///|
+test "expr_check: new through a class-valued binding yields the instance type" {
+  // `const ctor = C; new ctor()` — the bare class reference types as
+  // `typeof C`, and constructing through it recovers `C`. A class
+  // reference assigned to an annotated slot stays silent (`typeof C`
+  // is an unmodeled shape for the mismatch path).
+  let src =
+    #|class C { x: number = 1; }
+    #|const ctor = C;
+    #|const viaVar: string = new ctor();
+    #|const okVar: C = new ctor();
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mism = issues.filter(fn(i) { i.message.contains("but got") })
+  @test.assert_eq(mism.length(), 1)
+  assert_true(mism[0].path.contains("`viaVar`"))
+}
