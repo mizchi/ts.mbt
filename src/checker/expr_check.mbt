@@ -4164,6 +4164,66 @@ fn types_can_overlap(a : @ast.TsType, b : @ast.TsType) -> Bool {
 }
 
 ///|
+/// TS2872 / TS2873 ("This kind of expression is always truthy/falsy"):
+/// mirrors tsc's `getSyntacticTruthySemantics` over tested positions —
+/// if / while / do-while / for conditions, ternary conditions, and the
+/// left side of `&&` / `||`. Returns 1 (always truthy), -1 (always
+/// falsy), or 0 (depends on the value).
+fn syntactic_truthy_semantics(expr : @ast.TsExpr) -> Int {
+  match expr {
+    As(e, _) | Satisfies(e, _) | NonNull(e) | PureCall(e) =>
+      syntactic_truthy_semantics(e)
+    // tsc allows `while (0)` / `while (1)` loop idioms.
+    NumberLit(d) => if d == 0.0 || d == 1.0 { 0 } else { 1 }
+    IntLit(i) => if i == 0 || i == 1 { 0 } else { 1 }
+    ArrayLit(_)
+    | ObjectLit(_)
+    | ArrowFunc(_, _, _, _)
+    | FuncExpr(_)
+    | NativeClassExpr(_, _)
+    | BigIntLit(_)
+    | JsxElement(_, _, _) => 1
+    StringLit(s) => if s.length() > 0 { 1 } else { -1 }
+    // Only a substitution-free template has a statically known text.
+    TemplateLiteral(parts, exprs) =>
+      if exprs.length() == 0 {
+        let mut total = 0
+        for p in parts {
+          total = total + p.length()
+        }
+        if total > 0 {
+          1
+        } else {
+          -1
+        }
+      } else {
+        0
+      }
+    NullLit | Var("undefined") => -1
+    UnaryOp(Void, _) => -1
+    Cond(_, t, e) => {
+      let a = syntactic_truthy_semantics(t)
+      let b = syntactic_truthy_semantics(e)
+      if a == b {
+        a
+      } else {
+        0
+      }
+    }
+    _ => 0
+  }
+}
+
+///|
+fn check_truthiness_expr(expr : @ast.TsExpr, ctx : CheckCtx) -> Unit {
+  match syntactic_truthy_semantics(expr) {
+    1 => record(ctx, "condition", "this kind of expression is always truthy")
+    -1 => record(ctx, "condition", "this kind of expression is always falsy")
+    _ => ()
+  }
+}
+
+///|
 fn check_binop_operands(
   env : ExprEnv,
   op : @ast.TsBinOp,
@@ -4257,6 +4317,7 @@ fn check_binop_operands(
     // abstract-equality result matches strict equality and "no overlap"
     // (e.g. `"foo" == "bar"`, `x /* : "foo" */ == "bar"`) is reliably
     // always-false.
+    And | Or => check_truthiness_expr(l, ctx)
     AbstractEq | AbstractNe => {
       let is_typeof = fn(e : @ast.TsExpr) -> Bool {
         match e {
@@ -9888,6 +9949,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
     Throw(e) => check_call_args_in_expr(env, e, ctx)
     If(cond, then_block, else_block) => {
       check_call_args_in_expr(env, cond, ctx)
+      check_truthiness_expr(cond, ctx)
       let pre_map : Map[String, @ast.TsType] = {}
       for e in env.full_snapshot() {
         pre_map[e.0] = e.1
@@ -9968,6 +10030,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
     }
     While(cond, body) | DoWhile(cond, body) => {
       check_call_args_in_expr(env, cond, ctx)
+      check_truthiness_expr(cond, ctx)
       check_block(env, body, ctx)
     }
     For(init, cond, update, body) => {
@@ -9977,7 +10040,10 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         None => ()
       }
       match cond {
-        Some(e) => check_call_args_in_expr(env, e, ctx)
+        Some(e) => {
+          check_call_args_in_expr(env, e, ctx)
+          check_truthiness_expr(e, ctx)
+        }
         None => ()
       }
       match update {
@@ -10678,6 +10744,7 @@ fn check_call_args_in_expr(
     }
     Cond(c, t, e) => {
       check_call_args_in_expr(env, c, ctx)
+      check_truthiness_expr(c, ctx)
       check_call_args_in_expr(env, t, ctx)
       check_call_args_in_expr(env, e, ctx)
     }

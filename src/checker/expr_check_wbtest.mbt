@@ -7695,3 +7695,28 @@ test "expr_check: TS2695 suppressed under allowUnreachableCode directive" {
   let comma = issues.filter(fn(i) { i.message.contains("comma operator") })
   @test.assert_eq(comma.length(), 0)
 }
+
+///|
+test "expr_check: TS2872/TS2873 syntactically constant test expressions" {
+  // Mirrors tsc's getSyntacticTruthySemantics: object / array / arrow
+  // literals on the left of && / || and in conditions are always
+  // truthy; null / empty string are always falsy; `while (0)` /
+  // `while (1)` loop idioms and value-dependent tests stay silent.
+  let src =
+    #|declare var s: string;
+    #|var a = ({}) || s;
+    #|if ([]) {}
+    #|if (null) {}
+    #|if ("text") {}
+    #|if ("") {}
+    #|while (1) {}
+    #|while (0) {}
+    #|if (s) {}
+    #|var c = s || "fallback";
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let truthy = issues.filter(fn(i) { i.message.contains("always truthy") })
+  let falsy = issues.filter(fn(i) { i.message.contains("always falsy") })
+  @test.assert_eq(truthy.length(), 3)
+  @test.assert_eq(falsy.length(), 2)
+}
