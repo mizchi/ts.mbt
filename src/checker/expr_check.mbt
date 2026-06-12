@@ -52,6 +52,11 @@ priv struct Resolver {
   // *somewhere*, so it is never flagged even if the per-scope `env` hasn't
   // bound it yet at the reference site.
   declared_value_names : Map[String, Bool]
+  // Re-entrancy budget for the resolver-aware mapped-type expansion in
+  // `unwrap`. Resolving a mapped source (`keyof T`) recurses into
+  // `unwrap`, and each call starts a fresh `seen` map — a self- or
+  // mutually-referential mapped alias would otherwise recurse forever.
+  mapped_unwrap_depth : Ref[Int]
 }
 
 ///|
@@ -66,6 +71,7 @@ fn Resolver::empty() -> Resolver {
     func_const_type_params: {},
     enums: {},
     declared_value_names: {},
+    mapped_unwrap_depth: Ref(0),
   }
 }
 
@@ -781,6 +787,45 @@ fn param_is_optional(p : @ast.TsParam) -> Bool {
 }
 
 ///|
+/// Post-pass for resolver-aware mapped-type expansion in `unwrap`: each
+/// produced field value may still carry an `IndexedAccess(T, "k")`
+/// residue because the resolver-less simplifier can't look fields up on
+/// a Named interface. Resolve those through `lookup_field`, including
+/// inside the `| undefined` union added by the `?` modifier.
+fn Resolver::resolve_field_residues(
+  self : Resolver,
+  fields : Array[(@ast.TsType, @ast.TsType)],
+) -> Array[(@ast.TsType, @ast.TsType)] {
+  let out : Array[(@ast.TsType, @ast.TsType)] = []
+  for f in fields {
+    out.push((f.0, self.resolve_indexed_residue(f.1)))
+  }
+  out
+}
+
+///|
+fn Resolver::resolve_indexed_residue(
+  self : Resolver,
+  ty : @ast.TsType,
+) -> @ast.TsType {
+  match ty {
+    IndexedAccess(base, Literal(name)) =>
+      match self.lookup_field(base, name) {
+        Some(t) => t
+        None => ty
+      }
+    Union(parts) => {
+      let resolved : Array[@ast.TsType] = []
+      for p in parts {
+        resolved.push(self.resolve_indexed_residue(p))
+      }
+      Union(resolved)
+    }
+    _ => ty
+  }
+}
+
+///|
 /// Resolve a type to its "shape" — unwrap `Named(N)` through type aliases
 /// (one hop, with simple cycle protection) so callers can pattern-match on
 /// the structural form (Object, Tuple, Array, Func, ...).
@@ -892,14 +937,67 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
         }
       }
       // Simplify mapped types to Object shapes so field lookups work.
-      MappedType(_, _, _, _) | MappedTypeRemap(_, _, _, _, _) => {
-        let simplified = simplify_type(cur)
-        match simplified {
-          MappedType(_, _, _, _) | MappedTypeRemap(_, _, _, _, _) =>
-            keep_going = false // couldn't resolve — leave as-is
-          _ => cur = simplified
+      // `simplify_type` alone is resolver-less, so a source like
+      // `keyof T` over a Named interface stays opaque to it — resolve
+      // the source (and residual `T[K]` field values) through the
+      // resolver first. The depth budget breaks self- / mutually-
+      // referential mapped aliases, which would otherwise recurse
+      // through fresh `seen` maps forever.
+      MappedType(key_param, source, value, optional) =>
+        if self.mapped_unwrap_depth.val > 8 {
+          keep_going = false
+        } else {
+          self.mapped_unwrap_depth.val = self.mapped_unwrap_depth.val + 1
+          let resolved_source = self.unwrap(source)
+          match collect_mapped_source_keys(resolved_source) {
+            Some(keys) => {
+              let (raw_value, strip) = unwrap_strip_undef(value)
+              let fields : Array[(@ast.TsType, @ast.TsType)] = []
+              for k in keys {
+                let substituted = substitute_named(
+                  raw_value,
+                  key_param,
+                  Literal(k),
+                )
+                // Resolver-aware first: `T[K]` over a Named interface is
+                // opaque to `simplify_type`, which collapses it to Any.
+                let field_type = simplify_type(
+                  self.resolve_indexed_residue(substituted),
+                )
+                let stripped = if strip {
+                  strip_undefined_from(field_type)
+                } else {
+                  field_type
+                }
+                let final_type : @ast.TsType = if optional {
+                  Union([stripped, Undefined])
+                } else {
+                  stripped
+                }
+                fields.push((Literal(k), final_type))
+              }
+              cur = Object(fields)
+            }
+            None => keep_going = false // couldn't resolve — leave as-is
+          }
+          self.mapped_unwrap_depth.val = self.mapped_unwrap_depth.val - 1
         }
-      }
+      MappedTypeRemap(key_param, source, remap, value, optional) =>
+        if self.mapped_unwrap_depth.val > 8 {
+          keep_going = false
+        } else {
+          self.mapped_unwrap_depth.val = self.mapped_unwrap_depth.val + 1
+          let resolved_source = self.unwrap(source)
+          let simplified = simplify_type(
+            MappedTypeRemap(key_param, resolved_source, remap, value, optional),
+          )
+          match simplified {
+            MappedTypeRemap(_, _, _, _, _) => keep_going = false
+            Object(fields) => cur = Object(self.resolve_field_residues(fields))
+            _ => cur = simplified
+          }
+          self.mapped_unwrap_depth.val = self.mapped_unwrap_depth.val - 1
+        }
       // `T[K]` indexed access — resolve via simplify_type first; if still
       // unresolved, try lookup_field when the base is a Named/Applied type.
       IndexedAccess(base, key) => {

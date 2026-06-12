@@ -7526,3 +7526,28 @@ test "expr_check: TS2729 use-before-init fires without useDefineForClassFields" 
   assert_true(order[0].path.contains("class C"))
   assert_true(order[0].message.contains("`y`"))
 }
+
+///|
+test "expr_check: custom mapped type over keyof interface resolves fields" {
+  // `{ [K in keyof T]?: T[K] }` needs resolver help twice: `keyof P`
+  // resolves to the interface's key union, and the substituted `P["x"]`
+  // value is opaque to the resolver-less simplifier (which would
+  // collapse it to Any). A self-referential mapped alias must stay
+  // opaque instead of hanging the resolver.
+  let src =
+    #|type MyPartial<T> = { [K in keyof T]?: T[K] };
+    #|interface P { x: number; y: string }
+    #|declare const mp: MyPartial<P>;
+    #|const bad: boolean = mp.x!;
+    #|const ok: number = mp.x!;
+    #|declare const d: { [K in keyof P]: P[K] };
+    #|const bad2: string = d.x;
+    #|type M = { [K in keyof M]: number };
+    #|declare const m: M;
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mism = issues.filter(fn(i) { i.message.contains("but got") })
+  @test.assert_eq(mism.length(), 2)
+  assert_true(mism.iter().any(fn(i) { i.path.contains("`bad`") }))
+  assert_true(mism.iter().any(fn(i) { i.path.contains("`bad2`") }))
+}
