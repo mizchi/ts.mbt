@@ -10255,6 +10255,60 @@ fn check_undefined_name(env : ExprEnv, ctx : CheckCtx, name : String) -> Unit {
 }
 
 ///|
+/// TS2464 ("A computed property name must be of type 'string',
+/// 'number', 'symbol', or 'any'"). Flags only key types that are
+/// definitely outside that set after alias unwrap — boolean,
+/// null / undefined / void / never, and structural object / array /
+/// tuple / function shapes. Unresolved names, generics, `typeof`
+/// queries, and primitives stay silent.
+fn check_computed_property_key(
+  env : ExprEnv,
+  key : @ast.TsExpr,
+  ctx : CheckCtx,
+) -> Unit {
+  let key_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, key))
+  // A bare identifier key only flags on a `boolean`-declared variable.
+  // The binding path pins `let a: any = <literal>` to the literal's
+  // type (the parser can't distinguish `: any` from "no annotation"),
+  // so null / literal / structural shapes on identifiers are
+  // unreliable — tsc sees `any` there.
+  let invalid = match key {
+    Var(_) => key_ty is Boolean
+    _ => computed_key_type_invalid(key_ty)
+  }
+  if invalid {
+    record(
+      ctx,
+      "computed property name",
+      "computed property name must be of type `string`, `number`, `symbol`, or `any`, got `\{type_display(key_ty)}`",
+    )
+  }
+}
+
+///|
+fn computed_key_type_invalid(ty : @ast.TsType) -> Bool {
+  match ty {
+    Boolean | BooleanLiteral(_) => true
+    Null | Undefined | Void | Never => true
+    Object(_) | Struct(_, _) | Array(_) | Tuple(_) | Func(_, _) => true
+    // A union key is valid only when every member is; flag it only
+    // when every member is definitely invalid (FP-safe subset).
+    Union(parts) => {
+      if parts.length() == 0 {
+        return false
+      }
+      for p in parts {
+        if !computed_key_type_invalid(p) {
+          return false
+        }
+      }
+      true
+    }
+    _ => false
+  }
+}
+
+///|
 fn check_call_args_in_expr(
   env : ExprEnv,
   expr : @ast.TsExpr,
@@ -10556,6 +10610,14 @@ fn check_call_args_in_expr(
       for ent in entries {
         check_call_args_in_expr(env, ent.1, ctx)
       }
+    // `{ [keyExpr]: value }` — walk the value and validate the key's
+    // type (TS2464). The key expression is deliberately NOT given the
+    // generic walk: it would expose use-before-assigned (TS2454) and
+    // friends on key positions tsc doesn't treat that way.
+    ComputedProp(key, value) => {
+      check_call_args_in_expr(env, value, ctx)
+      check_computed_property_key(env, key, ctx)
+    }
     PropAccess(recv, prop) => {
       check_call_args_in_expr(env, recv, ctx)
       check_private_name_access(ctx, prop)
@@ -11855,6 +11917,29 @@ fn check_module_function_bodies_layered(
   // issues point at the source location.
   for cls in module_.classes {
     for meth in cls.methods {
+      // TS2464 on computed member keys (`class C { [true]() {} }`).
+      // The fresh env resolves only literal / global-backed key shapes,
+      // which is exactly the conservative subset we want to flag.
+      match meth.key_expr {
+        Some(key) => {
+          let key_ty = resolver.unwrap(
+            infer_expr(ExprEnv::new(), resolver, key),
+          )
+          // Same identifier-key restriction as
+          // `check_computed_property_key` (see there for why).
+          let invalid = match key {
+            Var(_) => key_ty is Boolean
+            _ => computed_key_type_invalid(key_ty)
+          }
+          if invalid {
+            all.push({
+              path: "class \{cls.name}",
+              message: "computed property name must be of type `string`, `number`, `symbol`, or `any`, got `\{type_display(key_ty)}`",
+            })
+          }
+        }
+        None => ()
+      }
       // Walk the body when present; a bodiless method (abstract / ambient /
       // overload signature) still needs its parameter defaults validated,
       // so synthesize an empty body in that case. `check_function_body_with`

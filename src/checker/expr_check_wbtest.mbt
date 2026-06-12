@@ -7590,3 +7590,37 @@ test "expr_check: explicit constructor type args type the instantiation" {
   assert_true(mism.iter().any(fn(i) { i.path.contains("`bad`") }))
   assert_true(mism.iter().any(fn(i) { i.path.contains("`bad2`") }))
 }
+
+///|
+test "expr_check: TS2464 computed property names of invalid type" {
+  // boolean / object / array / null literal keys are flagged in both
+  // object literals and class member positions; string / number /
+  // any-typed keys stay silent. Identifier keys only flag on a
+  // `boolean`-declared variable — `let a: any = null` pins `a`'s
+  // binding to `null` so identifier-keyed null must not flag.
+  let src =
+    #|var b: boolean;
+    #|var s: string;
+    #|var v = {
+    #|  [b]: 0,
+    #|  [{}]: 1,
+    #|  [null]: 2,
+    #|  [s]: 3,
+    #|  [s + s]: 4,
+    #|  [0]: 5,
+    #|};
+    #|class C {
+    #|  [true]() {}
+    #|  static [[]]() {}
+    #|}
+    #|function f() {
+    #|  let a: any = null;
+    #|  const o = { [a]: 1 };
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let bad = issues.filter(fn(i) {
+    i.message.contains("computed property name must be")
+  })
+  @test.assert_eq(bad.length(), 5)
+}
