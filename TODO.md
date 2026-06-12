@@ -1251,6 +1251,54 @@ runtime-bridge impact):
   deprecates the underlying pattern; modern components use default
   parameter values which we already cover.
 
+## Soundness gate: whole-corpus FP -> 0 + hang/crash fixes (2026-06-12)
+
+The `checker-soundness` CI job (`scripts/checker_conformance_oracle.sh
+--max-fp 0`) runs `tscheck` over the *entire* conformance corpus and gates
+at zero false positives. Two classes of failure were fixed:
+
+1. **Crash / hang fixes** (the soundness job was timing out at GitHub's 6h
+   ceiling, never reaching the gate):
+   - `normalized_union_members` had no cycle guard -> stack overflow on
+     mutually-recursive type aliases (`type A = B | number; type B = A |
+     string;`). Added a depth cap.
+   - `Resolver::unwrap`'s `TypeOf(name)` case resolved `typeof x` -> the
+     variable's type with no cycle guard -> *infinite loop* on a
+     self-referential export (`export var r: typeof r;`). Native binaries
+     ignore SIGTERM, so `timeout` couldn't kill it -> the 6h hang. Added a
+     `seen` guard keyed `"typeof "+name`.
+
+2. **Whole-corpus false positives 44 -> 0** (recall 1525 -> 1472 TP; the
+   trade was accepted to hold the FP=0 invariant). The recall-push
+   diagnostics over-fired against type shapes we don't fully model;
+   suppressions added (all FP-safe, most keep field/missing checks):
+   - `type_is_unmodeled_shape` / `member_recv_unmodeled`: skip member-
+     existence + structural-assignment against mapped / conditional /
+     `keyof` / indexed-access / template-literal types, generic-alias
+     applications (`Proxify<Shape>`, `Boxified<Foo>`), intersections
+     (mixins, `typeof M & typeof C`), `typeof X` value queries, callable /
+     construct-signature shapes, and class instances with an unresolvable
+     (mixin / type-param / expression) base chain.
+   - `check_expr_against`: skip intersections on either side, callable /
+     overloaded-method shapes, union targets with a generic `Applied`
+     member (generator returns), deeply-`any` sources, literal-narrowing
+     residue (`expected 0 but got 0 | 1 | 9`), const-widening
+     (`expected 123 | 456 but got number`), and structurally-recursive
+     named tuples.
+   - `check_object_lit_against_target`: skip computed/symbol keys
+     (`@@computed:N` / `<computed>`), count `{...spread}` fields as
+     provided, and suppress the excess-property arm for bare anonymous
+     `Object` *call-argument* targets (inlined type-parameter constraints).
+   - Private-brand synthetics (`__private_brand__*`) no longer trip
+     read-only / does-not-exist on assignment.
+   - Symbol-keyed (`<computed>`) interface members are exempt from
+     string/number index-signature compatibility.
+   - Constructor-local `var` names are collected for the TS2304 hoisting
+     backstop (`super(i); … var i = …`).
+   - Parser: object-type-literal optional members (`{ bar?: string }` fast
+     path) and function-type rest params (`(...args: any[]) => R`) now
+     preserve their `| undefined` / `Rest(...)` shape.
+
 ## Conformance Recall / Precision Push (2026-06-01)
 
 Baseline accuracy gate is now live at

@@ -209,6 +209,20 @@ fn collect_class_body_value_names(
       None => ()
     }
   }
+  // The constructor is stored separately from `methods`; collect its
+  // parameter and body bindings too so a `var` hoisted within the constructor
+  // (`super(i); … var i = …`) isn't falsely flagged as an undefined name.
+  match c.constructor_params {
+    Some(ps) =>
+      for p in ps {
+        out[p.0] = true
+      }
+    None => ()
+  }
+  match c.constructor_body {
+    Some(b) => collect_block_value_names(b, out)
+    None => ()
+  }
   for blk in c.static_blocks {
     collect_block_value_names(blk, out)
   }
@@ -5614,6 +5628,14 @@ fn check_expr_against(
   if type_contains_unresolved_named(inferred_u, ctx.resolver) {
     return
   }
+  // Mapped / conditional / `keyof` / indexed-access / template-literal forms
+  // on either side (`Boxified<any>`, `keyof {}`, `Proxify<Shape>`, …) resolve
+  // to type-level shapes we can't compare structurally. TypeScript resolves
+  // them fully; comparing nominally yields false mismatches, so stay silent.
+  if type_is_unmodeled_shape(inferred_u, ctx.resolver) ||
+    type_is_unmodeled_shape(expected_u, ctx.resolver) {
+    return
+  }
   // Generic `Applied(...)` shapes (`Generator<any, any>`, `Maybe<any>[]`,
   // `Promise<T>`) on either side carry inference we don't fully track.
   // Comparing them nominally produces false mismatches when the user's
@@ -5622,8 +5644,70 @@ fn check_expr_against(
   // genuine generic-mismatch diagnostics, but those are the same kind
   // of `expected Promise<X> but got Promise<Y>` cases users rarely
   // benefit from in a structurally-typed nominal-rendering checker.
+  // Flow-narrowing residue: when both sides are literal unions and the target's
+  // literal set is a subset of the source's (`expected 0 but got 0 | 1 | 9`,
+  // `expected "foo" but got "foo" | "bar"`), TypeScript has narrowed the source
+  // to a compatible value at this point. We don't model flow narrowing, so the
+  // source still looks like its full declared union — stay silent.
+  match (literal_union_members(expected_u), literal_union_members(inferred_u)) {
+    (Some(exp_lits), Some(inf_lits)) =>
+      if exp_lits.iter().all(fn(e) { inf_lits.iter().any(fn(i) { i == e }) }) {
+        return
+      }
+    _ => ()
+  }
+  // Const-widening gap: a literal-union target with the source widened to the
+  // primitive those literals share (`const c2: 123 | 456 = c` where `c` is a
+  // `const` we widened to `number`). TypeScript keeps the const literal narrow.
+  match literal_union_members(expected_u) {
+    Some(exp_lits) =>
+      match common_literal_base(exp_lits) {
+        Some(base) => if inferred_u == base { return }
+        None => ()
+      }
+    None => ()
+  }
+  // `any` / `any[]` / `any[][]` sources are assignable to anything (an
+  // `any[][]` array literal contextually typed to a tuple array, etc.).
+  if is_deeply_any(inferred_u) {
+    return
+  }
+  // Structurally-recursive named tuples (`RecursiveTupleA` vs
+  // `RecursiveTupleB`) compare nominally for us but structurally for TS.
+  if tuples_differ_only_in_named(inferred_u, expected_u, ctx.resolver) {
+    return
+  }
+  // Callable / constructable interfaces & objects (`<call>` / `<new>`
+  // signatures, often `extends Function`, with overloaded methods like
+  // `foo("hi"): Derived1; foo("bye"): Derived2`) match other call signatures
+  // structurally in ways we don't model — `expected (string) => string but
+  // got I`, `expected C but got I`. Stay silent.
+  if shape_is_callable(inferred_u, ctx.resolver) ||
+    shape_is_callable(expected_u, ctx.resolver) {
+    return
+  }
+  // Overloaded-method shapes (the same member name declared several times with
+  // different signatures) don't match structurally under our single-type-per-
+  // member model. Stay silent.
+  if shape_has_overloads(inferred_u, ctx.resolver) ||
+    shape_has_overloads(expected_u, ctx.resolver) {
+    return
+  }
   match (inferred_u, expected_u) {
     (Applied(_, _), _) | (_, Applied(_, _)) => return
+    // Intersections on either side (`PartialStepState & { repo: any }`,
+    // `ComponentType<any> & ComponentType<RouteComponentProps>`, `A & A`):
+    // intersection assignability (a value of the intersection satisfies each
+    // part, and an object satisfying every part inhabits the intersection) is
+    // something we don't model structurally, so comparing nominally yields
+    // false mismatches. Stay silent.
+    (Intersection(_), _) | (_, Intersection(_)) => return
+    // Bare callable / constructable shapes match other call signatures
+    // structurally in ways we don't model — stay silent.
+    (Func(_, _), _)
+    | (_, Func(_, _))
+    | (Constructor(_, _, _), _)
+    | (_, Constructor(_, _, _)) => return
     // Target `Object` / `{}` / empty Object literal accepts anything in
     // TypeScript -- it's the universal supertype. Skip the mismatch.
     (_, Named("Object")) | (_, Named("object")) => return
@@ -5634,6 +5718,14 @@ fn check_expr_against(
     // both as unions and the diagnostic is almost always wrong. Stay
     // silent rather than emit a false mismatch.
     (Union(_), Union(_)) => return
+    // A union target with a generic `Applied` member (`Generator<...> |
+    // AsyncGenerator<...>`) carries inference we don't track — the generator
+    // `return`/`yield` contributes to a type argument, not the whole union.
+    // Stay silent rather than compare the union nominally.
+    (_, Union(parts)) =>
+      if parts.iter().any(fn(p) { p is Applied(_, _) }) {
+        return
+      }
     _ => ()
   }
   if !is_assignable_to(inferred_u, expected_u) {
@@ -6028,6 +6120,224 @@ fn type_contains_unresolved_named(
     }
     _ => false
   }
+}
+
+///|
+/// True when a type, after resolution, is still a *type-level construct* the
+/// checker can't enumerate structurally: a mapped / conditional / `keyof` /
+/// indexed-access / template-literal type, or an `Applied` reference to
+/// something that isn't a class or interface (e.g. a generic alias whose body
+/// is a mapped type, like `Proxify<Shape>` / `Boxified<Foo>`). Member-existence
+/// and structural-assignment diagnostics suppress against such types:
+/// TypeScript resolves them fully, so flagging would just emit false positives
+/// like `property 'name' does not exist on 'Proxify<Shape>'`.
+fn type_is_unmodeled_shape(ty : @ast.TsType, resolver : Resolver) -> Bool {
+  match resolver.unwrap(ty) {
+    MappedType(_, _, _, _)
+    | MappedTypeRemap(_, _, _, _, _)
+    | Conditional(_, _, _, _)
+    | Keyof(_)
+    | IndexedAccess(_, _)
+    | TemplateLiteralType(_, _) => true
+    Applied(n, _) =>
+      resolver.classes.get(n) is None && resolver.interfaces.get(n) is None
+    _ => false
+  }
+}
+
+///|
+/// True when a class (or any class in its `extends` chain) extends a base the
+/// resolver can't resolve to a declared class or interface — a mixin
+/// application (`class C extends Mixin(Base)`), a type parameter
+/// (`class C extends superClass`), or a value/`const` produced by a mixin
+/// factory (`class Thing3 extends Thing2`). Instances of such classes inherit
+/// members we can't enumerate, so member-existence diagnostics on them (and on
+/// `this` inside their methods) would be false positives.
+fn class_chain_has_unresolved_base(name : String, resolver : Resolver) -> Bool {
+  let mut current = name
+  let mut depth = 0
+  while depth < 32 {
+    depth = depth + 1
+    match resolver.classes.get(current) {
+      None => return false
+      Some(decl) => {
+        if decl.base_names.length() == 0 {
+          return false
+        }
+        for base in decl.base_names {
+          if resolver.classes.get(base) is None &&
+            resolver.interfaces.get(base) is None {
+            return true
+          }
+        }
+        current = decl.base_names[0]
+      }
+    }
+  }
+  true
+}
+
+///|
+/// If `t` is a literal or a union of *only* literals, return those members;
+/// otherwise `None`. Used to detect flow-narrowing residue: when a target
+/// literal set is a subset of the source literal set, TypeScript has narrowed
+/// the source down to a compatible value at that point and we'd otherwise
+/// false-flag the un-narrowed wider source.
+fn literal_union_members(t : @ast.TsType) -> Array[@ast.TsType]? {
+  match t {
+    Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) =>
+      Some([t])
+    Union(ms) => {
+      let out : Array[@ast.TsType] = []
+      for m in ms {
+        match m {
+          Literal(_)
+          | NumberLiteral(_)
+          | BigIntLiteral(_)
+          | BooleanLiteral(_) => out.push(m)
+          _ => return None
+        }
+      }
+      if out.length() == 0 {
+        None
+      } else {
+        Some(out)
+      }
+    }
+    _ => None
+  }
+}
+
+///|
+/// The single widened primitive every member of a literal set shares
+/// (`123 | 456` -> `number`, `"a" | "b"` -> `string`), or `None` when the set
+/// mixes primitive kinds. Used to recognise the const-widening gap: TypeScript
+/// keeps a `const` initializer's literal narrow (`const c = cond ? 123 : 456`
+/// is `123 | 456`), but we widen it to its primitive, so `const c2: 123 | 456 =
+/// c` then looks like `number` assigned to a literal union.
+fn common_literal_base(lits : Array[@ast.TsType]) -> @ast.TsType? {
+  let mut base : @ast.TsType? = None
+  for l in lits {
+    let b : @ast.TsType = match l {
+      Literal(_) => String_
+      NumberLiteral(_) => Number
+      BigIntLiteral(_) => BigInt
+      BooleanLiteral(_) => Boolean
+      _ => return None
+    }
+    match base {
+      None => base = Some(b)
+      Some(prev) => if prev != b { return None }
+    }
+  }
+  base
+}
+
+///|
+/// True for a type that is `any`, or an array (possibly nested) whose ultimate
+/// element is `any`: `any`, `any[]`, `any[][]`. Such a value is assignable to
+/// anything in TypeScript, so a structural mismatch against it (e.g. an
+/// `any[][]` array literal contextually typed to a tuple array) is a false
+/// positive.
+fn is_deeply_any(t : @ast.TsType) -> Bool {
+  match t {
+    Any => true
+    Array(inner) => is_deeply_any(inner)
+    _ => false
+  }
+}
+
+///|
+/// True when both types resolve to tuples of equal arity that differ only at
+/// positions where *both* elements are `Named` references (distinct
+/// structurally-recursive tuple aliases like `RecursiveTupleA` /
+/// `RecursiveTupleB`). We compare named tuples nominally, so these false-flag;
+/// TypeScript compares them structurally and accepts.
+fn tuples_differ_only_in_named(
+  a : @ast.TsType,
+  b : @ast.TsType,
+  resolver : Resolver,
+) -> Bool {
+  match (resolver.unwrap(a), resolver.unwrap(b)) {
+    (Tuple(xs), Tuple(ys)) => {
+      if xs.length() != ys.length() || xs.length() == 0 {
+        return false
+      }
+      let mut saw_named_diff = false
+      for i in 0..<xs.length() {
+        if xs[i] == ys[i] {
+          continue
+        }
+        match (xs[i], ys[i]) {
+          (Named(_), Named(_)) => saw_named_diff = true
+          _ => return false
+        }
+      }
+      saw_named_diff
+    }
+    _ => false
+  }
+}
+
+///|
+/// Member-existence guard: true when the receiver type is one whose full
+/// member set we can't enumerate, so "property/method does not exist"
+/// diagnostics against it would be false positives. Covers the structural
+/// unmodeled shapes (mapped / conditional / `keyof` / …), intersections
+/// (mixins, `typeof M & typeof C`, `Constructor<X> & Constructor<{}>`),
+/// `typeof X` value queries (enum objects, namespaces, mixin factory
+/// results), and class instances with an unresolvable base chain.
+fn member_recv_unmodeled(ty : @ast.TsType, resolver : Resolver) -> Bool {
+  if type_is_unmodeled_shape(ty, resolver) {
+    return true
+  }
+  if shape_is_callable(ty, resolver) {
+    return true
+  }
+  match resolver.unwrap(ty) {
+    Intersection(_) | TypeOf(_) => true
+    Named(n) | Applied(n, _) =>
+      resolver.classes.get(n) is Some(_) &&
+      class_chain_has_unresolved_base(n, resolver)
+    _ => false
+  }
+}
+
+///|
+/// True when a type is callable / constructable: a bare `Func` / `Constructor`,
+/// or an object / interface carrying a call (`<call>`) or construct (`<new>`)
+/// signature (often an interface that `extends Function`). Such shapes inherit
+/// the full `Function` member set (`arguments`, `call`, `apply`, `bind`, …) and
+/// match other call signatures structurally in ways we don't model, so member
+/// existence and structural assignability against them would false-flag.
+fn shape_is_callable(ty : @ast.TsType, resolver : Resolver) -> Bool {
+  match resolver.unwrap(ty) {
+    Func(_, _) | Constructor(_, _, _) => return true
+    _ => ()
+  }
+  for f in collect_declared_fields(ty, resolver) {
+    if f.0 == "<call>" || f.0 == "<new>" {
+      return true
+    }
+  }
+  false
+}
+
+///|
+/// True when a shape declares the same member name more than once — the
+/// signature of overloaded methods (`foo(x: 'hi'): Derived1; foo(x: 'bye'):
+/// Derived2; foo(x: string): Base`). We compare members by a single nominal
+/// type each, so overload sets don't match structurally; comparing them
+/// produces false `expected C but got I` mismatches. Stay silent.
+fn shape_has_overloads(ty : @ast.TsType, resolver : Resolver) -> Bool {
+  let seen : Map[String, Bool] = {}
+  for f in collect_declared_fields(ty, resolver) {
+    if seen.contains(f.0) {
+      return true
+    }
+    seen[f.0] = true
+  }
+  false
 }
 
 ///|
@@ -6836,6 +7146,33 @@ fn check_object_lit_against_target(
   if is_in_scope_type_param(ctx, target) {
     return
   }
+  // Mapped / conditional / `keyof` / generic-alias targets (`Boxified<any>`,
+  // `keyof {}` from an unresolved generic, …) can't be enumerated, so every
+  // supplied key would look like an excess property and every declared field
+  // like a missing one. TypeScript resolves these fully — suppress the whole
+  // excess/missing check rather than emit false positives.
+  if member_recv_unmodeled(target, resolver) {
+    return
+  }
+  // An unresolved `Named` / `Applied` target — typically a method-level type
+  // parameter (`foo<U extends T>(x: U)`) the enclosing-scope check above
+  // doesn't track — has an unknown shape, so TypeScript allows extra
+  // properties (the instantiation may be wider). Suppress excess/missing.
+  if type_contains_unresolved_named(target, resolver) {
+    return
+  }
+  // Excess-property reporting is suppressed for a bare anonymous `Object`
+  // target reached as a *call argument*. TypeScript inlines a constrained type
+  // parameter's bound into the parameter position (`foo<U extends { length:
+  // number }>(x: U)` checks the argument against `{ length: number }`), and
+  // excess properties ARE allowed against a type parameter — so flagging them
+  // here would be a false positive we can't distinguish from a genuine inline
+  // object-type annotation. We scope this to call arguments (`… arg[i]`):
+  // variable/property assignments to an explicit object type (`var x: { a:
+  // string } = { a, b }`) keep their excess-property diagnostic. Field-type
+  // and missing-required checks below still run regardless.
+  let suppress_excess = sub_path.contains("arg[") &&
+    resolver.unwrap(target) is Object(_)
   // Per-field type checks for each provided key.
   for entry in entries {
     let key = entry.0
@@ -6845,18 +7182,28 @@ fn check_object_lit_against_target(
     if key.has_prefix("@@spread:") {
       continue
     }
+    // Computed / symbol property keys (`@@computed:N`) can't be matched against
+    // declared members by name — TypeScript resolves the computed key to a
+    // symbol / literal we don't evaluate, so neither "excess" nor "missing"
+    // applies. Skip them.
+    if key.has_prefix("@@computed:") {
+      continue
+    }
     match resolver.lookup_field(target, key) {
       Some(declared) =>
         check_expr_against(env, value, declared, ctx, "\{sub_path}.\{key}")
       None =>
         // Unknown key on the target — TS calls this an excess-property
         // error. Skip class/struct opaque shapes by relying on lookup_field
-        // having already walked their fields above.
-        record(
-          ctx,
-          "\{sub_path}.\{key}",
-          "property `\{key}` does not exist on target type",
-        )
+        // having already walked their fields above, and bare anonymous object
+        // targets (possible type-parameter constraints; see above).
+        if !suppress_excess {
+          record(
+            ctx,
+            "\{sub_path}.\{key}",
+            "property `\{key}` does not exist on target type",
+          )
+        }
     }
   }
   // Missing-required check: collect the declared field names of the target
@@ -6866,14 +7213,34 @@ fn check_object_lit_against_target(
   let declared = collect_declared_fields(target, resolver)
   let provided : Map[String, Bool] = {}
   for entry in entries {
-    if !entry.0.has_prefix("@@spread:") {
+    if entry.0.has_prefix("@@spread:") {
+      // A `{...spread}` entry contributes every field of the spread source,
+      // so those count as provided for the missing-required check (`const a1:
+      // {a; b} = {...extra}` is not missing `a`/`b` when `extra` has them).
+      let spread_ty = infer_expr(env, resolver, entry.1)
+      for sf in collect_declared_fields(spread_ty, resolver) {
+        provided[sf.0] = true
+      }
+    } else {
       provided[entry.0] = true
     }
   }
+  // If the literal supplies any computed / symbol key, we can't tell which
+  // declared member it satisfies — suppress the missing-required check
+  // entirely rather than guess.
+  let has_computed_entry = entries
+    .iter()
+    .any(fn(e) { e.0.has_prefix("@@computed:") })
   for d in declared {
     let name = d.0
     let ty = d.1
     if provided.contains(name) {
+      continue
+    }
+    // Computed-keyed declared members (`<computed>`) can't be matched to a
+    // provided key by name; and once the literal has a computed entry, any
+    // declared member could be the one it fills. Stay silent.
+    if name == "<computed>" || has_computed_entry {
       continue
     }
     if is_assignable_to(@ast.TsType::Undefined, ty) {
@@ -7492,7 +7859,20 @@ fn check_arguments_with_sig(
       }
       idx
     }
-    None => -1
+    None => {
+      // No rich sig (a value typed `(...args: any[]) => R`, e.g. a
+      // parenthesized callee). Function-type rest params are still wrapped in
+      // `Rest(...)`, so scan the param *types* — otherwise each rest argument
+      // is wrongly checked against the whole array instead of its element.
+      let mut idx = -1
+      for k in 0..<params.length() {
+        if params[k] is Rest(_) {
+          idx = k
+          break
+        }
+      }
+      idx
+    }
   }
   let rest_elem_type : @ast.TsType = if rest_index >= 0 &&
     rest_index < params.length() {
@@ -9265,7 +9645,10 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         None =>
           if is_checkable(recv_ty) &&
             !is_nullable_type(recv_ty) &&
-            !is_in_scope_type_param(ctx, recv_ty) {
+            !is_in_scope_type_param(ctx, recv_ty) &&
+            !prop.has_prefix("__private_brand__") &&
+            !type_contains_unresolved_named(recv_ty, ctx.resolver) &&
+            !member_recv_unmodeled(recv_ty, ctx.resolver) {
             match ctx.resolver.unwrap(recv_ty) {
               Object(_) | Struct(_, _) | Named(_) | Applied(_, _) =>
                 record(
@@ -9886,7 +10269,8 @@ fn check_call_args_in_expr(
                       // Named ref (this-type, in-scope TP we lost track
                       // of, qualified-namespace member), the resulting
                       // diagnostic is uninformative -- stay silent.
-                      !type_contains_unresolved_named(pruned, ctx.resolver) {
+                      !type_contains_unresolved_named(pruned, ctx.resolver) &&
+                      !member_recv_unmodeled(pruned, ctx.resolver) {
                       record(
                         ctx,
                         "call `\{meth}`",
@@ -10050,6 +10434,7 @@ fn check_call_args_in_expr(
                   let recv_ty = infer_expr(env, ctx.resolver, recv)
                   if is_checkable(recv_ty) &&
                     !is_in_scope_type_param(ctx, recv_ty) &&
+                    !member_recv_unmodeled(recv_ty, ctx.resolver) &&
                     !(ctx.resolver.lookup_field(recv_ty, prop) is Some(_)) {
                     record(
                       ctx,
@@ -10091,7 +10476,11 @@ fn check_call_args_in_expr(
         // the opaque shape with no actionable detail and almost always
         // comes from a generic / `this`-type / flow-narrowing gap we
         // don't model.
-        !type_contains_unresolved_named(recv_ty, ctx.resolver) {
+        !type_contains_unresolved_named(recv_ty, ctx.resolver) &&
+        // Mapped / conditional / generic-alias shapes (`Proxify<Shape>`,
+        // `Boxified<Foo>`, …) resolve to forms we can't enumerate; TS
+        // accepts member access on them, so stay silent.
+        !member_recv_unmodeled(recv_ty, ctx.resolver) {
         record(
           ctx,
           "PropAccess `.\{prop}`",
@@ -10228,7 +10617,8 @@ fn check_call_args_in_expr(
       check_private_name_access(ctx, prop)
       check_member_accessibility(env, ctx, recv, prop)
       let recv_ty = infer_expr(env, ctx.resolver, recv)
-      if is_readonly_field(ctx.resolver, recv_ty, prop) {
+      if !prop.has_prefix("__private_brand__") &&
+        is_readonly_field(ctx.resolver, recv_ty, prop) {
         record(
           ctx,
           "assign `.\{prop}`",
@@ -10241,7 +10631,10 @@ fn check_call_args_in_expr(
         None =>
           if is_checkable(recv_ty) &&
             !is_nullable_type(recv_ty) &&
-            !is_in_scope_type_param(ctx, recv_ty) {
+            !is_in_scope_type_param(ctx, recv_ty) &&
+            !prop.has_prefix("__private_brand__") &&
+            !type_contains_unresolved_named(recv_ty, ctx.resolver) &&
+            !member_recv_unmodeled(recv_ty, ctx.resolver) {
             match ctx.resolver.unwrap(recv_ty) {
               Object(_) | Struct(_, _) | Named(_) | Applied(_, _) =>
                 record(
@@ -10379,6 +10772,7 @@ fn check_call_args_in_expr(
           )
           if is_checkable(recv_ty) &&
             !is_in_scope_type_param(ctx, recv_ty) &&
+            !member_recv_unmodeled(recv_ty, ctx.resolver) &&
             !(ctx.resolver.lookup_field(recv_ty, prop) is Some(_)) &&
             !ctx.resolver.field_on_any_union_member(recv_ty, prop) {
             record(
@@ -11022,7 +11416,7 @@ fn is_identity_comparable_atom(t : @ast.TsType) -> Bool {
 fn normalized_union_members(
   t : @ast.TsType,
   resolver : Resolver,
-  depth~ : Int = 0,
+  depth? : Int = 0,
 ) -> Array[@ast.TsType] {
   // Mutually-recursive aliases (`type A = B | number; type B = A | string;`)
   // would otherwise recurse forever through `unwrap` + union members. Cap the
@@ -12286,6 +12680,13 @@ fn check_interface_extends_compat(
       }
       for f in fields {
         if numeric_only && !is_numeric_name(f.0) {
+          continue
+        }
+        // Symbol-keyed members (rendered `<computed>`, e.g.
+        // `[Symbol.toStringTag]: string` / `[mySymbol]: string`) are not
+        // constrained by string or numeric index signatures — only a symbol
+        // index signature would apply. Skip them.
+        if f.0 == "<computed>" {
           continue
         }
         if violates_index_value(f.1, sig.1) {
