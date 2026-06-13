@@ -134,6 +134,7 @@ fn wrap_optional_ts_type(type_ : @ast.TsType) -> @ast.TsType {
 ///|
 // / parameter
 fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
+  let param_start_pos = self.peek().pos
   self.skip_param_decorators()
   let (is_param_property, is_readonly_param, visibility_param) = self.skip_param_modifiers()
   let is_rest = self.match_ellipsis()
@@ -149,6 +150,12 @@ fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
     self.param_property_scopes[top].push(
       (name, is_readonly_param, visibility_param),
     )
+  } else if is_param_property {
+    // TS2369: an accessibility / readonly modifier on a parameter
+    // outside a constructor parameter list (plain function, function
+    // expression, arrow, or non-constructor method). Keyed by source
+    // position so the arrow-lookahead re-parse collapses to one entry.
+    self.collected_param_property_misuses[param_start_pos] = name
   }
   let is_optional = self.match_(Question)
   // type ()

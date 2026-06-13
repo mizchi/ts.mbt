@@ -319,6 +319,7 @@ fn parse_module_or_empty(src : String) -> @ast.TsModule {
         use_define_for_class_fields: false,
         allow_unreachable_code: false,
         deprecated_compiler_options: [],
+        parameter_property_misuses: [],
         top_level_stmts: [],
       }
   } noraise {
@@ -7745,4 +7746,26 @@ test "expr_check: TS2356 increment/decrement on non-arithmetic operands" {
     i.message.contains("arithmetic operand must be")
   })
   @test.assert_eq(bad.length(), 4)
+}
+
+///|
+test "expr_check: TS2369 parameter property outside a constructor" {
+  // Accessibility / readonly modifiers on parameters are only legal in
+  // a constructor parameter list. Functions, function expressions,
+  // arrows, and non-constructor methods are flagged; the constructor's
+  // own parameter property stays silent.
+  let src =
+    #|function foo(public x, private y) {}
+    #|var f = function (readonly z: number) {};
+    #|var g = (protected w: string) => {};
+    #|class C {
+    #|  constructor(public ok: number) {}
+    #|  m(private bad: number) {}
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let bad = issues.filter(fn(i) {
+    i.message.contains("parameter property is only allowed")
+  })
+  @test.assert_eq(bad.length(), 5)
 }

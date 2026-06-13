@@ -134,6 +134,7 @@ fn empty_ts_module() -> @ast.TsModule {
     allow_unreachable_code: false,
     top_level_stmts: [],
     deprecated_compiler_options: [],
+    parameter_property_misuses: [],
   }
 }
 
@@ -3251,6 +3252,9 @@ fn Parser::parse_module_with_seeded_const_values_internal(
     use_define_for_class_fields: detect_use_define_for_class_fields(self.src),
     allow_unreachable_code: detect_allow_unreachable_code(self.src),
     deprecated_compiler_options: detect_deprecated_compiler_options(self.src),
+    parameter_property_misuses: self.collected_param_property_misuses
+    .values()
+    .collect(),
   }
 }
 

@@ -290,6 +290,7 @@ pub(all) struct TsModule {
   use_define_for_class_fields : Bool
   allow_unreachable_code : Bool
   deprecated_compiler_options : Array[String]
+  parameter_property_misuses : Array[String]
 } derive(@debug.Debug)
 pub impl Show for TsModule
 

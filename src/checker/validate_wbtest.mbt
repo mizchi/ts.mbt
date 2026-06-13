@@ -14,6 +14,7 @@ fn empty_module() -> @ast.TsModule {
     use_define_for_class_fields: false,
     allow_unreachable_code: false,
     deprecated_compiler_options: [],
+    parameter_property_misuses: [],
     top_level_stmts: [],
   }
 }

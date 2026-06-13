@@ -804,6 +804,13 @@ pub(all) struct TsModule {
   // directive comments that the test corpus uses — real `.d.ts` / `.ts`
   // bridge inputs never carry these, so the field stays empty for them.
   deprecated_compiler_options : Array[String]
+  // Parameter names that carried an accessibility / readonly modifier
+  // (`public` / `private` / `protected` / `readonly`) outside a
+  // constructor parameter list — a TS2369 misuse. The parser records
+  // these as it parses function / arrow / non-constructor-method
+  // parameters; the checker emits one diagnostic per entry. Empty for
+  // well-formed inputs.
+  parameter_property_misuses : Array[String]
 } derive(Debug)
 
 ///|

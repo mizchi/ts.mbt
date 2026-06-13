@@ -12656,6 +12656,15 @@ fn check_module_function_bodies_layered(
   for issue in check_strict_mode_eval_arguments(module_) {
     all.push(issue)
   }
+  // TS2369: parameter properties outside a constructor parameter list.
+  // The parser records the offending parameter names while parsing;
+  // emit one diagnostic each.
+  for name in module_.parameter_property_misuses {
+    all.push({
+      path: "parameter `\{name}`",
+      message: "a parameter property is only allowed in a constructor implementation",
+    })
+  }
   for issue in check_class_duplicate_members(module_) {
     all.push(issue)
   }

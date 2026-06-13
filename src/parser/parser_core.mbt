@@ -62,6 +62,12 @@ pub struct Parser {
   // the class builder can materialize a readonly field and record member
   // visibility.
   param_property_scopes : Array[Array[(String, Bool, String)]]
+  // Parameter names seen with an accessibility / readonly modifier
+  // outside a constructor parameter list (TS2369 misuse), keyed by the
+  // parameter's source position so speculative re-parses (arrow
+  // lookahead re-runs `parse_param`) collapse to one entry. Surfaced
+  // on the resulting `TsModule`.
+  collected_param_property_misuses : Map[Int, String]
   // Token-position → "JSDoc `/* @__PURE__ */` annotation seen
   // just before this token". The lexer populates this when it
   // skips a block comment whose contents contain the literal
@@ -136,6 +142,7 @@ pub fn Parser::new_with_strict_and_jsx(
     local_type_param_bounds: [],
     pending_decorators: [],
     param_property_scopes: [],
+    collected_param_property_misuses: {},
     pure_marker_positions: {},
     internal_marker_positions: {},
     collected_internal_names: {},
@@ -188,6 +195,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     local_type_param_bounds: [],
     pending_decorators: [],
     param_property_scopes: [],
+    collected_param_property_misuses: {},
     pure_marker_positions: lexer.pure_marker_positions,
     internal_marker_positions: lexer.internal_marker_positions,
     collected_internal_names: {},
