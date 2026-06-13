@@ -4568,11 +4568,24 @@ fn infer_expr(
             }
           _ => infer_expr(env, resolver, item)
         }
+        // Widen literal element types the way TS does for an array
+        // literal (`[0, ""]` is `(number | string)[]`, not `(0 | "")[]`),
+        // then accumulate a deduped union across elements instead of
+        // collapsing a heterogeneous array to `any[]`. Restricted to
+        // scalar elements: compound shapes (tuples, objects, nested
+        // arrays, functions) keep the old `any` collapse, since a union
+        // over their structures would mis-render against a contextual
+        // tuple/array type and false-flag the assignment.
+        let wt = widen_literal(t)
         if first {
-          elem = t
+          elem = wt
           first = false
-        } else if !equivalent(elem, t) {
-          elem = Any
+        } else if !equivalent(elem, wt) {
+          elem = if is_scalar_elem_type(elem) && is_scalar_elem_type(wt) {
+            union_push(elem, wt)
+          } else {
+            Any
+          }
         }
       }
       @ast.TsType::Array(elem)
@@ -5661,6 +5674,61 @@ fn narrow_union(a : @ast.TsType, b : @ast.TsType) -> @ast.TsType {
     return a
   }
   @ast.TsType::Union([a, b])
+}
+
+///|
+/// True for scalar element types that combine cleanly into an
+/// array-literal element union. Compound shapes (tuples, objects,
+/// nested arrays, functions, generics) are excluded so the union build
+/// never distorts a structural element type.
+fn is_scalar_elem_type(t : @ast.TsType) -> Bool {
+  match t {
+    Number
+    | Int
+    | NumberLiteral(_)
+    | String_
+    | Literal(_)
+    | Boolean
+    | BooleanLiteral(_)
+    | BigInt
+    | BigIntLiteral(_)
+    | Symbol
+    | Null
+    | Undefined => true
+    _ => false
+  }
+}
+
+///|
+/// Accumulate `b` into the running union `acc`, flattening nested
+/// unions, deduping equivalent members, and absorbing to `Any` when
+/// either side is `Any`. Used to build an array-literal element type
+/// from heterogeneous elements without nesting `Union(Union(...))`.
+fn union_push(acc : @ast.TsType, b : @ast.TsType) -> @ast.TsType {
+  if acc is Any || b is Any {
+    return Any
+  }
+  let members : Array[@ast.TsType] = []
+  fn add(t : @ast.TsType) -> Unit {
+    match t {
+      Union(parts) =>
+        for p in parts {
+          add(p)
+        }
+      _ =>
+        if !members.iter().any(fn(m) { equivalent(m, t) }) {
+          members.push(t)
+        }
+    }
+  }
+
+  add(acc)
+  add(b)
+  if members.length() == 1 {
+    members[0]
+  } else {
+    Union(members)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -10180,10 +10248,36 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // declared slot to the iterable element type and reject
       // any later wider-typed assignments inside the body).
       match (kind, binding) {
-        (@ast.TsForOfKind::Assign, @ast.TsBinding::Ident(n)) =>
+        (@ast.TsForOfKind::Assign, @ast.TsBinding::Ident(n)) => {
+          // TS2322: `for (v of iter)` assigns each element to the
+          // existing variable `v`, so the element type must be
+          // assignable to `v`'s declared type. (The binding-form
+          // `for (let v of …)` is handled by the `declared` check
+          // above.)
+          match
+            (match env.lookup_declared(n) {
+              Some(t) => Some(t)
+              None => ctx.resolver.globals.get(n)
+            }) {
+            Some(var_ty) =>
+              if is_checkable(var_ty) &&
+                is_checkable(elem_ty) &&
+                !is_assignable_to(
+                  ctx.resolver.unwrap(elem_ty),
+                  ctx.resolver.unwrap(var_ty),
+                ) {
+                record(
+                  ctx,
+                  "for-of binding",
+                  "type `\{type_display(elem_ty)}` is not assignable to `\{type_display(var_ty)}`",
+                )
+              }
+            None => ()
+          }
           if is_checkable(elem_ty) {
             env.narrow(n, elem_ty)
           }
+        }
         _ => bind_pattern(env, ctx, binding, elem_ty)
       }
       check_block(env, body, ctx)

@@ -7882,3 +7882,27 @@ test "expr_check: TS18050 null/undefined operand of arithmetic +" {
   let bad = issues.filter(fn(i) { i.message.contains("cannot be used here") })
   @test.assert_eq(bad.length(), 4)
 }
+
+///|
+test "expr_check: heterogeneous array-literal element union + for-of assign" {
+  // `[0, ""]` infers `(number | string)[]` (widened, deduped) instead
+  // of collapsing to `any[]`, so assigning each element to a
+  // `string`-typed loop variable via the assignment-form `for (v of …)`
+  // is flagged. A homogeneous array and a matching variable stay
+  // silent. Compound (tuple) elements keep the `any` collapse, so a
+  // tuple-array literal does not mis-flag.
+  let src =
+    #|var v: string;
+    #|for (v of [0, ""]) {}
+    #|var w: number;
+    #|for (w of [1, 2]) {}
+    #|let xs: number[] = [0, ""];
+    #|let pairs: [number, string][] = [[1, "a"], [2, "b"]];
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let bad = issues.filter(fn(i) {
+    i.message.contains("not assignable") || i.message.contains("but got")
+  })
+  // for-of v (1) + xs element mismatch (1); w and pairs are silent.
+  @test.assert_eq(bad.length(), 2)
+}
