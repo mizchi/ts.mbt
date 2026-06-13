@@ -7720,3 +7720,29 @@ test "expr_check: TS2872/TS2873 syntactically constant test expressions" {
   @test.assert_eq(truthy.length(), 3)
   @test.assert_eq(falsy.length(), 2)
 }
+
+///|
+test "expr_check: TS2356 increment/decrement on non-arithmetic operands" {
+  // `++` / `--` require number / bigint / any / enum operands; string,
+  // boolean, and array operands are flagged while an enum-typed var and
+  // a plain number stay silent.
+  let src =
+    #|declare var STR: string;
+    #|declare var ARR: string[];
+    #|declare var BOOL: boolean;
+    #|declare var NUM: number;
+    #|enum E { A, B }
+    #|declare var e: E;
+    #|var r1 = ++STR;
+    #|var r2 = STR++;
+    #|var r3 = ++ARR;
+    #|var r4 = BOOL--;
+    #|var r5 = ++NUM;
+    #|var r6 = e++;
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let bad = issues.filter(fn(i) {
+    i.message.contains("arithmetic operand must be")
+  })
+  @test.assert_eq(bad.length(), 4)
+}

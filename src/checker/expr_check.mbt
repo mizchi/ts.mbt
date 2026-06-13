@@ -10716,16 +10716,30 @@ fn check_call_args_in_expr(
             )
           }
         }
-        // `++` / `--` on a symbol operand (TS2469). Other operand types
-        // are left alone — the increment target's arithmetic validity
-        // overlaps cases the corpus accepts (enums, any-pinned vars).
+        // TS2356: `++` / `--` operands must be `number` / `bigint` /
+        // `any` / an enum. `is_definitely_not_arithmetic` flags the
+        // concretely-wrong shapes (string, boolean, array, object,
+        // symbol, …) while leaving `Named` enums and `any`-pinned vars
+        // untouched, so this is false-positive-free.
         PreInc | PreDec | PostInc | PostDec => {
           let inner_ty = ctx.resolver.unwrap(
             infer_expr(env, ctx.resolver, inner),
           )
-          if inner_ty is (Symbol | UniqueSymbol(_)) {
+          // `null` / `undefined` operands are exempt: without
+          // strict-null-checks (the corpus default) they widen to
+          // `any`, so an inferred `null` field type (`{ y: null }`)
+          // must not false-flag `++obj.y`.
+          let widens_to_any = match inner_ty {
+            Null | Undefined => true
+            _ => false
+          }
+          if is_checkable(inner_ty) &&
+            is_definitely_not_arithmetic(inner_ty) &&
+            !widens_to_any {
             record(
-              ctx, "unary op", "operator cannot be applied to operand of type `symbol`",
+              ctx,
+              "unary op",
+              "an arithmetic operand must be of type `number`, `bigint`, `any`, or an enum type, got `\{type_display(inner_ty)}`",
             )
           }
         }
