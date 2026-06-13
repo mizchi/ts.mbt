@@ -7769,3 +7769,29 @@ test "expr_check: TS2369 parameter property outside a constructor" {
   })
   @test.assert_eq(bad.length(), 5)
 }
+
+///|
+test "expr_check: TS2464 union computed key with an invalid member" {
+  // A union-typed computed key is valid only when every member is a
+  // valid key type; a definitely-invalid member (`number[]`, `boolean`)
+  // makes the whole union an error, in both object-literal and class
+  // member positions. `number | string` stays silent, and an
+  // identifier pinned to `null` (any-typed binding) is exempt.
+  let src =
+    #|declare var k1: number | string;
+    #|declare var k2: number | number[];
+    #|declare var k3: string | boolean;
+    #|var v = { [k1]: 0, [k2]: 1, [k3]: 2 };
+    #|class C {
+    #|  [k1]() {}
+    #|  [k2]() {}
+    #|}
+    #|function f() { let a: any = null; const o = { [a]: 1 }; }
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let bad = issues.filter(fn(i) {
+    i.message.contains("computed property name must be")
+  })
+  // object: k2, k3 (k1 ok); class: k2 (k1 ok); f: a exempt → 3 total.
+  @test.assert_eq(bad.length(), 3)
+}

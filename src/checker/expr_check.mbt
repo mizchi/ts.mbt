@@ -10380,13 +10380,15 @@ fn check_computed_property_key(
   ctx : CheckCtx,
 ) -> Unit {
   let key_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, key))
-  // A bare identifier key only flags on a `boolean`-declared variable.
-  // The binding path pins `let a: any = <literal>` to the literal's
-  // type (the parser can't distinguish `: any` from "no annotation"),
-  // so null / literal / structural shapes on identifiers are
-  // unreliable — tsc sees `any` there.
+  // For an identifier key, `null` / `undefined` are excluded: the
+  // binding path pins `let a: any = null` to the literal's type (the
+  // parser can't distinguish `: any` from "no annotation"), so tsc
+  // sees `any` there. Other definitely-invalid shapes (boolean, union
+  // with a bad member, object, array) on an identifier are real.
+  // Literal keys keep the full check (`[null]` is a genuine TS2464).
   let invalid = match key {
-    Var(_) => key_ty is Boolean
+    Var(_) =>
+      computed_key_type_invalid(key_ty) && !(key_ty is (Null | Undefined))
     _ => computed_key_type_invalid(key_ty)
   }
   if invalid {
@@ -10404,18 +10406,18 @@ fn computed_key_type_invalid(ty : @ast.TsType) -> Bool {
     Boolean | BooleanLiteral(_) => true
     Null | Undefined | Void | Never => true
     Object(_) | Struct(_, _) | Array(_) | Tuple(_) | Func(_, _) => true
-    // A union key is valid only when every member is; flag it only
-    // when every member is definitely invalid (FP-safe subset).
+    // A union key is valid only when *every* member is a valid key
+    // type, so any definitely-invalid member makes the whole union an
+    // error (`number | number[]`, `string | boolean`). An `any` member
+    // absorbs the union to `any` (valid), so bail when one is present
+    // to stay false-positive-free.
     Union(parts) => {
-      if parts.length() == 0 {
-        return false
-      }
       for p in parts {
-        if !computed_key_type_invalid(p) {
+        if p is Any {
           return false
         }
       }
-      true
+      parts.iter().any(fn(p) { computed_key_type_invalid(p) })
     }
     _ => false
   }
@@ -12462,7 +12464,9 @@ fn check_module_function_bodies_layered(
           // Same identifier-key restriction as
           // `check_computed_property_key` (see there for why).
           let invalid = match key {
-            Var(_) => key_ty is Boolean
+            Var(_) =>
+              computed_key_type_invalid(key_ty) &&
+              !(key_ty is (Null | Undefined))
             _ => computed_key_type_invalid(key_ty)
           }
           if invalid {
