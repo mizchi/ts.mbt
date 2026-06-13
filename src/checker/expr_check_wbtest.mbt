@@ -7249,6 +7249,37 @@ test "expr_check: deprecated @target es3 directive is flagged (TS5107)" {
 }
 
 ///|
+test "expr_check: deprecated @module kinds are flagged (TS5107)" {
+  // The legacy module kinds AMD / System / UMD / None are deprecated;
+  // a comma-list directive emits one diagnostic per distinct kind.
+  // Modern kinds (commonjs / es2015) are not flagged.
+  let src =
+    #|// @module: amd,system,commonjs,es2015
+    #|var x: number = 1;
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let amd = issues.filter(fn(i) {
+    i.message.contains("deprecated") && i.message.contains("module=AMD")
+  })
+  let sys = issues.filter(fn(i) {
+    i.message.contains("deprecated") && i.message.contains("module=System")
+  })
+  assert_true(amd.length() == 1)
+  assert_true(sys.length() == 1)
+}
+
+///|
+test "expr_check: modern @module kind is not flagged (TS5107)" {
+  let src =
+    #|// @module: commonjs
+    #|var x: number = 1;
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let dep = issues.filter(fn(i) { i.message.contains("module=") })
+  assert_true(dep.length() == 0)
+}
+
+///|
 test "expr_check: surfaces circular type alias and arity mismatch via body pass" {
   // The module-level structural validation (circular aliases, extends
   // cycles, type-alias arity) is wired into the function-body check entry

@@ -3278,6 +3278,44 @@ fn detect_deprecated_compiler_options(src : String) -> Array[String] {
   let head_len = if src.length() < 1024 { src.length() } else { 1024 }
   let head = src[:head_len].to_owned()
   let head_lower = head.to_lower()
+  // Value-specific: the `@module:` directive's comma list. The legacy
+  // module kinds `AMD` / `System` / `UMD` / `None` are deprecated in
+  // TS 6.0+; one diagnostic per distinct deprecated value present.
+  match head_lower.find("@module:") {
+    Some(idx) => {
+      let after = head_lower[idx + "@module:".length():].to_owned()
+      let line = match after.find("\n") {
+        Some(nl) => after[:nl].to_owned()
+        None => after
+      }
+      let mut saw_amd = false
+      let mut saw_system = false
+      let mut saw_umd = false
+      let mut saw_none = false
+      for raw in line.split(",") {
+        match raw.trim().to_owned() {
+          "amd" => saw_amd = true
+          "system" => saw_system = true
+          "umd" => saw_umd = true
+          "none" => saw_none = true
+          _ => ()
+        }
+      }
+      if saw_amd {
+        out.push("module=AMD")
+      }
+      if saw_system {
+        out.push("module=System")
+      }
+      if saw_umd {
+        out.push("module=UMD")
+      }
+      if saw_none {
+        out.push("module=None")
+      }
+    }
+    None => ()
+  }
   // Value-specific: the `@target:` directive's comma list.
   match head.find("@target:") {
     Some(idx) => {
