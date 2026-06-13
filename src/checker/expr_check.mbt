@@ -4191,6 +4191,31 @@ fn types_can_overlap(a : @ast.TsType, b : @ast.TsType) -> Bool {
 /// if / while / do-while / for conditions, ternary conditions, and the
 /// left side of `&&` / `||`. Returns 1 (always truthy), -1 (always
 /// falsy), or 0 (depends on the value).
+/// True when `expr` is a literal `null` / `undefined` value — the
+/// FP-safe subset for the TS18050 `+`-operand check (a variable merely
+/// typed `null` could widen under non-strict).
+fn expr_is_nullish_literal(expr : @ast.TsExpr) -> Bool {
+  match expr {
+    NullLit | Var("undefined") => true
+    As(e, _) | Satisfies(e, _) | NonNull(e) => expr_is_nullish_literal(e)
+    _ => false
+  }
+}
+
+///|
+/// True when `+`'s other operand is arithmetic-only (number / bigint /
+/// numeric enum), so a nullish operand makes the `+` an addition rather
+/// than string concatenation. Strings, `any`, unions, and unresolved
+/// shapes return false so the TS18050 check stays silent on them.
+fn is_arithmetic_addend(resolver : Resolver, ty : @ast.TsType) -> Bool {
+  match ty {
+    Number | Int | NumberLiteral(_) | BigInt | BigIntLiteral(_) => true
+    Named(n) => resolver.enums.get(n) is Some(_)
+    _ => false
+  }
+}
+
+///|
 fn syntactic_truthy_semantics(expr : @ast.TsExpr) -> Int {
   match expr {
     As(e, _) | Satisfies(e, _) | NonNull(e) | PureCall(e) =>
@@ -4276,7 +4301,37 @@ fn check_binop_operands(
     // arithmetic check stays away from them — but `symbol` is invalid
     // on every one of these (TS2469: "The '<op>' operator cannot be
     // applied to type 'symbol'").
-    Add | BinLt | BinLe | BinGt | BinGe => {
+    Add => {
+      let lt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, l))
+      let rt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, r))
+      if lt is (Symbol | UniqueSymbol(_)) {
+        record(
+          ctx, "binary op", "operator cannot be applied to operand of type `symbol`",
+        )
+      }
+      if rt is (Symbol | UniqueSymbol(_)) {
+        record(
+          ctx, "binary op", "operator cannot be applied to operand of type `symbol`",
+        )
+      }
+      // TS18050: a `null` / `undefined` literal operand of `+` whose
+      // other operand is arithmetic (number / bigint / enum) makes the
+      // `+` an addition, where the nullish value cannot be used. A
+      // string / any other operand is concatenation / unchecked, so
+      // only the arithmetic-other case fires. Restricted to literal
+      // nullish operands to stay false-positive-free.
+      if expr_is_nullish_literal(l) && is_arithmetic_addend(ctx.resolver, rt) {
+        record(
+          ctx, "binary op", "the value `null`/`undefined` cannot be used here",
+        )
+      }
+      if expr_is_nullish_literal(r) && is_arithmetic_addend(ctx.resolver, lt) {
+        record(
+          ctx, "binary op", "the value `null`/`undefined` cannot be used here",
+        )
+      }
+    }
+    BinLt | BinLe | BinGt | BinGe => {
       let lt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, l))
       let rt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, r))
       if lt is (Symbol | UniqueSymbol(_)) {

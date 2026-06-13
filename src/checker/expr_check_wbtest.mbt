@@ -7858,3 +7858,27 @@ test "expr_check: leading UTF-8 BOM does not corrupt the first statement" {
   let mism = issues.filter(fn(i) { i.message.contains("but got") })
   @test.assert_eq(mism.length(), 1)
 }
+
+///|
+test "expr_check: TS18050 null/undefined operand of arithmetic +" {
+  // A literal `null` / `undefined` operand of `+` whose other operand
+  // is arithmetic (number / enum) makes the `+` an addition where the
+  // nullish value can't be used. A string or `any` other operand is
+  // concatenation / unchecked and stays silent.
+  let src =
+    #|enum E { a, b }
+    #|declare var b: number;
+    #|declare var d: string;
+    #|declare var x: any;
+    #|var r1 = null + b;
+    #|var r2 = b + null;
+    #|var r3 = null + E.a;
+    #|var r4 = undefined + b;
+    #|var ok1 = null + d;
+    #|var ok2 = d + null;
+    #|var ok3 = null + x;
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let bad = issues.filter(fn(i) { i.message.contains("cannot be used here") })
+  @test.assert_eq(bad.length(), 4)
+}
