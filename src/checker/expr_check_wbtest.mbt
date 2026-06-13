@@ -7795,3 +7795,35 @@ test "expr_check: TS2464 union computed key with an invalid member" {
   // object: k2, k3 (k1 ok); class: k2 (k1 ok); f: a exempt → 3 total.
   @test.assert_eq(bad.length(), 3)
 }
+
+///|
+test "expr_check: TS2349 calling a literal value is not callable" {
+  // A literal-value callee (template / array / object literal) is
+  // syntactically never callable — reported even in permissive mode
+  // since a literal can't be mis-modeled.
+  let src =
+    #|`abc${0}abc`(`hi`);
+    #|[1, 2](0);
+    #|({ a: 1 })();
+  let module_ = parse_module_or_empty(src)
+  let strict = check_module_function_bodies(module_)
+  let perm = check_module_function_bodies_permissive(module_)
+  let count = fn(issues : Array[ExprIssue]) -> Int {
+    issues.filter(fn(i) { i.message.contains("is not callable") }).length()
+  }
+  @test.assert_eq(count(strict), 3)
+  // Permissive mode keeps the literal-callee cases (unfiltered).
+  @test.assert_eq(count(perm), 3)
+}
+
+///|
+test "expr_check: leading UTF-8 BOM does not corrupt the first statement" {
+  // A BOM-prefixed source used to tokenise the BOM into the first
+  // token, dropping the first statement's diagnostics. With the BOM
+  // stripped, the first statement is checked normally.
+  let src = "\u{FEFF}var n: number = \"x\";"
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mism = issues.filter(fn(i) { i.message.contains("but got") })
+  @test.assert_eq(mism.length(), 1)
+}

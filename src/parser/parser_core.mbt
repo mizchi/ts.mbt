@@ -164,7 +164,25 @@ pub fn Parser::from_source(src : String) -> Parser {
 }
 
 ///|
-pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
+fn src_has_leading_bom(src : String) -> Bool {
+  src.length() > 0 && src[0].to_int() == 0xFEFF
+}
+
+///|
+pub fn Parser::from_source_with_jsx(
+  raw_src : String,
+  allow_jsx : Bool,
+) -> Parser {
+  // Strip a leading UTF-8 BOM (U+FEFF). Left in place it tokenises as
+  // part of the first token (e.g. a template literal or identifier),
+  // corrupting the first statement; TS/JS toolchains strip it. Done
+  // once here so the lexer and the stored `src` (directive scans,
+  // string-escape slow path) stay byte-aligned.
+  let src = if src_has_leading_bom(raw_src) {
+    raw_src.substring(start=1)
+  } else {
+    raw_src
+  }
   let lexer = Lexer::new(src)
   let tokens = lexer.tokenize()
   let trimmed = src.trim_start()

@@ -3916,6 +3916,28 @@ fn is_definitely_not_arithmetic(ty : @ast.TsType) -> Bool {
 // "not callable" diagnostic stays free of false positives. Permissive for
 // Named / Applied (interfaces may carry call signatures), Union / Intersection
 // (overload sets), and unresolved type-level forms.
+
+///|
+/// True when `expr` is a literal value form (template / string / number
+/// / bool / bigint / array / object literal). Such callees are
+/// syntactically never callable, so a "not callable" diagnostic on them
+/// is reliable even in permissive mode.
+fn expr_is_literal_value(expr : @ast.TsExpr) -> Bool {
+  match expr {
+    TemplateLiteral(_, _)
+    | StringLit(_)
+    | NumberLit(_)
+    | IntLit(_)
+    | BoolLit(_)
+    | BigIntLit(_)
+    | NullLit
+    | ArrayLit(_)
+    | ObjectLit(_) => true
+    _ => false
+  }
+}
+
+///|
 fn is_definitely_not_callable(ty : @ast.TsType) -> Bool {
   match ty {
     Number
@@ -10539,7 +10561,20 @@ fn check_call_args_in_expr(
           }
         other =>
           if is_definitely_not_callable(other) {
-            record(ctx, "call", "`\{type_display(other)}` is not callable")
+            // A *literal-value* callee (template / string / number /
+            // array / object literal, …) is syntactically never
+            // callable, so emit unfiltered — permissive mode otherwise
+            // drops the broad "not callable" family because resolved
+            // type shapes can be mis-modeled, but a literal can't.
+            if expr_is_literal_value(callee) {
+              record_unfiltered(
+                ctx,
+                "call",
+                "`\{type_display(other)}` is not callable",
+              )
+            } else {
+              record(ctx, "call", "`\{type_display(other)}` is not callable")
+            }
           }
       }
       // Indirect-call idiom `(0, f)(...)` / `(0, o.m)(...)`: walk the
@@ -11106,6 +11141,19 @@ fn check_call_args_in_expr(
       }
     }
     TaggedTemplate(tag, _, _, exprs) => {
+      // TS2349: a tagged-template tag is invoked, so a literal-value
+      // tag (`` `abc``def` ``) is not callable. Reliable on literal
+      // tags, so emit unfiltered.
+      if expr_is_literal_value(tag) {
+        let tag_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, tag))
+        if is_definitely_not_callable(tag_ty) {
+          record_unfiltered(
+            ctx,
+            "tagged template",
+            "`\{type_display(tag_ty)}` is not callable",
+          )
+        }
+      }
       check_call_args_in_expr(env, tag, ctx)
       for e in exprs {
         check_call_args_in_expr(env, e, ctx)
