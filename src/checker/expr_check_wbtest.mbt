@@ -7741,3 +7741,25 @@ test "expr_check: TS18012 flags `#constructor` private member" {
   // A normal constructor and an ordinary `#` member are legal.
   @test.assert_eq(flagged("class C { constructor() {} #foo() {} }"), 0)
 }
+
+///|
+// TS18006: a class may not have a data field named `constructor`
+// (`constructor: T` / `"constructor" = 3`). The real constructor parses as a
+// method / `constructor_body` (never a `properties` entry), a computed
+// `["constructor"]` key parses to `<computed>`, and a `static constructor`
+// field is allowed — so only a non-static, non-accessor property literally
+// named `constructor` is flagged.
+test "expr_check: TS18006 flags a field named constructor" {
+  let flagged = fn(src : String) -> Int {
+    let module_ = parse_module_or_empty(src)
+    check_module_function_bodies(module_)
+    .filter(fn(i) { i.message.contains("field named `constructor`") })
+    .length()
+  }
+  @test.assert_eq(flagged("class A { constructor: number; m() {} }"), 1)
+  @test.assert_eq(flagged("class B { \"constructor\" = 3; }"), 1)
+  // A real constructor, a computed key, and a static field are all legal.
+  @test.assert_eq(flagged("class C { constructor() {} }"), 0)
+  @test.assert_eq(flagged("class D { [\"constructor\"] = 3; }"), 0)
+  @test.assert_eq(flagged("class E { static constructor = 3; }"), 0)
+}
