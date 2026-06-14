@@ -4903,6 +4903,68 @@ fn infer_param_bindings(
 }
 
 ///|
+/// Whether the type parameter `tp` appears anywhere inside `t`. Exhaustive
+/// over every `TsType` variant so a future addition fails to compile rather
+/// than silently under-reporting (which would let `solve_generic_bindings`
+/// widen a parameter it shouldn't).
+fn type_param_occurs(tp : String, t : @ast.TsType) -> Bool {
+  match t {
+    Number
+    | Int
+    | Boolean
+    | String_
+    | Void
+    | BigInt
+    | Symbol
+    | UniqueSymbol(_)
+    | Any
+    | Unknown
+    | Never
+    | Null
+    | Undefined
+    | Literal(_)
+    | NumberLiteral(_)
+    | BigIntLiteral(_)
+    | BooleanLiteral(_)
+    | TypeOf(_) => false
+    Named(n) => n == tp
+    Array(e) | Rest(e) | Keyof(e) => type_param_occurs(tp, e)
+    Tuple(items) | Union(items) | Intersection(items) =>
+      items.iter().any(fn(it) { type_param_occurs(tp, it) })
+    Object(pairs) =>
+      pairs
+      .iter()
+      .any(fn(p) { type_param_occurs(tp, p.0) || type_param_occurs(tp, p.1) })
+    Struct(_, fields) => fields.iter().any(fn(f) { type_param_occurs(tp, f.1) })
+    Func(ps, r) | Constructor(ps, r, _) =>
+      ps.iter().any(fn(p) { type_param_occurs(tp, p) }) ||
+      type_param_occurs(tp, r)
+    Conditional(a, b, c, d) =>
+      type_param_occurs(tp, a) ||
+      type_param_occurs(tp, b) ||
+      type_param_occurs(tp, c) ||
+      type_param_occurs(tp, d)
+    Applied(name, args) =>
+      name == tp || args.iter().any(fn(a) { type_param_occurs(tp, a) })
+    IndexedAccess(a, b) => type_param_occurs(tp, a) || type_param_occurs(tp, b)
+    TemplateLiteralType(_, args) =>
+      args.iter().any(fn(a) { type_param_occurs(tp, a) })
+    MappedType(_, src, val, _) =>
+      type_param_occurs(tp, src) || type_param_occurs(tp, val)
+    MappedTypeRemap(_, src, remap, val, _) =>
+      type_param_occurs(tp, src) ||
+      type_param_occurs(tp, remap) ||
+      type_param_occurs(tp, val)
+    TypePredicate(_, pt) => type_param_occurs(tp, pt)
+    AssertsPredicate(_, opt) =>
+      match opt {
+        Some(pt) => type_param_occurs(tp, pt)
+        None => false
+      }
+  }
+}
+
+///|
 /// Compute type-parameter bindings at a call site by unifying each
 /// argument's inferred type against the corresponding formal parameter.
 /// Type parameters that remain unbound fall back to `Any`.
@@ -4917,6 +4979,27 @@ fn solve_generic_bindings(
   let bindings : Map[String, @ast.TsType] = {}
   for tp in type_params {
     bindings[tp] = @ast.TsType::Any
+  }
+  // A type parameter that appears *only* as a bare top-level parameter
+  // (`f<T>(x: T, y: T)`) — never nested inside an array / generic /
+  // structural shape — is inferred from every such argument as a union,
+  // matching TS (`f("a", 1)` gives `T = string | number`, not an error).
+  // When the same `T` also appears nested (`g<T>(arr: T[], x: T)`) we keep
+  // the first-wins inference so a genuine mismatch (`g([1,2,3], "abc")`) is
+  // still reported — the nested position pins `T` and the bare one is then
+  // a real assignability check.
+  let widen_safe : Map[String, Unit] = {}
+  for tp in type_params {
+    let mut nested = false
+    for p in params {
+      if type_param_occurs(tp, p) && !(p is Named(_) && p == Named(tp)) {
+        nested = true
+        break
+      }
+    }
+    if !nested {
+      widen_safe[tp] = ()
+    }
   }
   fn is_rest_at(i : Int) -> Bool {
     if params[i] is Rest(_) {
@@ -4954,7 +5037,13 @@ fn solve_generic_bindings(
     }
     if i < args.length() {
       let actual = infer_expr(env, resolver, args[i])
-      infer_param_bindings(type_params, params[i], actual, bindings, false)
+      // Widen (union across positions) only for a bare type parameter that
+      // is never nested elsewhere; otherwise keep first-wins.
+      let soft = match params[i] {
+        Named(n) => widen_safe.contains(n)
+        _ => false
+      }
+      infer_param_bindings(type_params, params[i], actual, bindings, soft)
     }
     i = i + 1
   }
