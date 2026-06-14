@@ -5844,6 +5844,15 @@ fn check_expr_against(
     if structural_oneway_assignable(inferred_u, expected_u, ctx.resolver) {
       return
     }
+    // A primitive / array / tuple source can structurally satisfy an object
+    // target through its intrinsic prototype members — `string` and arrays
+    // have `length: number`, etc. — so `const o: { length: number } = "hi"`
+    // and `f<T extends { length: number }>("hi")` are valid. The
+    // resolver-free `is_assignable_to` has no primitive-member table, so
+    // prove it here via `lookup_field`.
+    if intrinsic_source_satisfies_object(inferred_u, expected_u, ctx.resolver) {
+      return
+    }
     // Class inheritance: `Derived is_a Base` when `class Derived extends
     // Base`. The resolver-free `is_assignable_to` is nominal so a pure
     // subtype assignment was previously flagged. Walk the source's class
@@ -6619,6 +6628,68 @@ fn structural_oneway_assignable(
     }
     _ => is_structurally_assignable_named(source, target, resolver)
   }
+}
+
+///|
+/// A primitive / array / tuple source can structurally satisfy an object
+/// *target* through its intrinsic prototype members — `string` and arrays
+/// expose `length: number`, strings expose the `String.prototype` methods,
+/// etc. TypeScript accepts `const o: { length: number } = "hi"`, but the
+/// resolver-free `is_assignable_to` has no primitive-member table. Prove it
+/// here via `lookup_field`, which already resolves primitive / array members.
+///
+/// Conservative and false-positive-free: engages only for intrinsic-membered
+/// sources against an object-shape target whose *every* required field is
+/// present on the source with an assignable type. A field the source lacks
+/// (and that isn't optional) makes this `false`, so a genuine mismatch
+/// (`number` against `{ length: number }`, or `{ length: number; foo: string }`
+/// against `string`) still falls through to the diagnostic.
+fn intrinsic_source_satisfies_object(
+  source : @ast.TsType,
+  target : @ast.TsType,
+  resolver : Resolver,
+) -> Bool {
+  let s = resolver.unwrap(source)
+  let intrinsic = match s {
+    String_
+    | Number
+    | Int
+    | Boolean
+    | BigInt
+    | Symbol
+    | Literal(_)
+    | NumberLiteral(_)
+    | BigIntLiteral(_)
+    | BooleanLiteral(_)
+    | Array(_)
+    | Tuple(_) => true
+    Applied(n, _) => is_array_like_iterable_name(n)
+    _ => false
+  }
+  if !intrinsic {
+    return false
+  }
+  let t = resolver.unwrap(target)
+  let target_fields = match t {
+    Object(_) | Struct(_, _) => collect_declared_fields(t, resolver)
+    _ => return false
+  }
+  if target_fields.length() == 0 {
+    return false
+  }
+  for f in target_fields {
+    let want = resolver.unwrap(f.1)
+    match resolver.lookup_field(s, f.0) {
+      Some(have) =>
+        if !is_assignable_to(resolver.unwrap(have), want) {
+          return false
+        }
+      // A required target member the source lacks → not assignable. An
+      // optional member (type accepts `undefined`) may legitimately be absent.
+      None => if !type_accepts_undefined(want) { return false }
+    }
+  }
+  true
 }
 
 ///|
