@@ -7427,3 +7427,104 @@ test "expr_check: this-type-guard narrows the receiver (method and arrow field)"
   let missing = issues.filter(fn(i) { i.message.contains("does not exist") })
   @test.assert_eq(missing.length(), 0)
 }
+
+///|
+// TS2728 ("Property 'X' is used before its initialization"): an instance
+// field initializer that reads `this.Y` before `Y` has its own initializer
+// is flagged, while references to already-initialized fields, methods, and
+// later-declared methods stay silent. Regression cover for Issue #60; the
+// behaviour is otherwise only exercised through the conformance corpus,
+// which is an optional git submodule.
+test "expr_check: TS2728 flags field init reading a not-yet-initialized field" {
+  let src =
+    #|class C {
+    #|  x = this.y;
+    #|  y = 5;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_class_property_init_order(module_)
+  let hits = issues.filter(fn(i) {
+    i.message.contains("`y` is used before its initialization")
+  })
+  @test.assert_eq(hits.length(), 1)
+}
+
+///|
+test "expr_check: TS2728 silent when referenced field is already initialized" {
+  let src =
+    #|class C {
+    #|  x = 5;
+    #|  y = this.x;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_class_property_init_order(module_)
+  @test.assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: TS2728 silent for method references from a field init" {
+  let src =
+    #|class C {
+    #|  x = this.m();
+    #|  m(): number { return 5; }
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_class_property_init_order(module_)
+  @test.assert_eq(issues.length(), 0)
+}
+
+///|
+// Issue #64: TS2564 now walks the constructor body. A field the constructor
+// never assigns via `this.<name>` is reported even when a constructor is
+// present; fields the constructor touches (directly, conditionally, through
+// an arrow, a parameter property, or behind a cast / `!`) stay silent. The
+// constructor body walk over-approximates assignment by presence, so it
+// never produces a false positive.
+fn ts2564_flagged(src : String) -> Array[String] {
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let names : Array[String] = []
+  for i in issues {
+    if i.message.contains("no initializer and is not definitely assigned") {
+      names.push(i.message)
+    }
+  }
+  names
+}
+
+///|
+test "expr_check: TS2564 flags fields not assigned in the constructor body" {
+  // Empty constructor leaves `x` uninitialized.
+  @test.assert_eq(
+    ts2564_flagged("class C { x: number; constructor() {} }").length(),
+    1,
+  )
+  // Only the field the constructor never touches (`y`) is flagged.
+  @test.assert_eq(
+    ts2564_flagged(
+      "class C { x: number; y: number; constructor() { this.x = 1; } }",
+    ).length(),
+    1,
+  )
+}
+
+///|
+test "expr_check: TS2564 silent when the constructor assigns the field" {
+  let srcs = [
+    // Direct assignment.
+    "class C { x: number; constructor() { this.x = 5; } }",
+    // Conditional assignment (presence is enough — false-positive-free).
+     "class C { x: number; constructor(b: boolean) { if (b) { this.x = 1; } } }",
+    // Parameter property auto-assigns.
+     "class C { constructor(public y: number) {} }",
+    // Assignment inside an arrow callback (lexical `this`).
+     "class C { x: number; constructor() { [1].forEach(() => { this.x = 1; }); } }",
+    // Assignment through a cast / non-null receiver.
+     "class C { x: number; constructor() { (this as C).x = 1; } }", "class C { x: number; constructor() { this!.x = 1; } }",
+    // Field already has an initializer / definite-assignment assertion.
+     "class C { x: number = 0; constructor() {} }", "class C { x!: number; constructor() {} }",
+  ]
+  for src in srcs {
+    @test.assert_eq(ts2564_flagged(src).length(), 0)
+  }
+}

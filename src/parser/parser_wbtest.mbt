@@ -2648,6 +2648,33 @@ test "parser: parse export const numeric enum in ts module" {
 }
 
 ///|
+// Issue #43: the module-block parser used to `skip_declaration_block()` on
+// namespaces, dropping any enum declared inside. They are now hoisted into
+// `block.enums` (the flat list the bridge const-table pass reads), covering
+// `namespace`, `declare namespace`, nested namespaces, and `const enum`.
+test "parser: hoists enums declared inside namespaces in a module block" {
+  let cases : Array[(String, String, Bool)] = [
+    ("namespace N { export enum E { A, B } }", "E", false),
+    ("namespace N { enum E { A } }", "E", false),
+    ("declare namespace N { enum E { A } }", "E", false),
+    ("namespace N { namespace M { enum E { A } } }", "E", false),
+    ("namespace N { const enum E { A } }", "E", true),
+  ]
+  for c in cases {
+    let (src, expected_name, expected_const) = c
+    let block = parse_module_block_from_source(src) catch {
+      e => {
+        fail("Parse error for `\{src}`: \{e}")
+        return
+      }
+    }
+    assert_eq(block.enums.length(), 1)
+    assert_eq(block.enums[0].name, expected_name)
+    assert_eq(block.enums[0].is_const, expected_const)
+  }
+}
+
+///|
 test "parser: marks non-literal enum initializers as computed" {
   let src =
     #|export declare enum ComputedKind {

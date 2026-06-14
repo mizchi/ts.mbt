@@ -504,6 +504,25 @@ fn append_module_decls(
 }
 
 ///|
+/// Recursively collect every `enum` / `const enum` declaration reachable
+/// through a module's nested namespaces into `out`. Used by the module-block
+/// parser, which can only retain a flat `enums` list (`TsModuleBlock` has no
+/// `namespaces` field) but must not silently drop enums declared inside a
+/// `namespace N { ... }` / `declare namespace N { ... }` body — the bridge
+/// const-table pass and downstream type resolution read `block.enums`.
+fn collect_enums_recursive(
+  module_ : @ast.TsModule,
+  out : Array[@ast.TsEnumDecl],
+) -> Unit {
+  for enum_ in module_.enums {
+    out.push(enum_)
+  }
+  for ns in module_.namespaces {
+    collect_enums_recursive(ns.module_, out)
+  }
+}
+
+///|
 fn append_ambient_external_module_exports(
   module_ : @ast.TsModule,
   exports : Array[@ast.TsExportSpec],
@@ -3506,11 +3525,14 @@ fn Parser::parse_module_block_with_const_values(
                 append_ambient_external_module_exports(module_, exports)
               None => ()
             }
-          } else if name == "namespace" ||
-            name == "module" ||
-            name == "global" ||
-            name == "enum" ||
-            name == "class" {
+          } else if name == "namespace" || name == "module" || name == "global" {
+            // `declare namespace N { ... }` — not retained on the block, but
+            // hoist any nested enums so they aren't silently dropped.
+            match self.parse_namespace_decl() {
+              Some((_, Some(ns))) => collect_enums_recursive(ns.module_, enums)
+              _ => ()
+            }
+          } else if name == "enum" || name == "class" {
             self.skip_declaration_block()
           } else {
             raise ParseError("Unexpected identifier after declare: \{name}")
@@ -3538,7 +3560,13 @@ fn Parser::parse_module_block_with_const_values(
       continue
     }
     if self.is_namespace_decl_start() {
-      self.skip_declaration_block()
+      // Namespaces aren't retained on `TsModuleBlock`, but enums declared
+      // inside them must still be registered. Parse the body and hoist any
+      // nested enums rather than dropping the whole block.
+      match self.parse_namespace_decl_runtime() {
+        Some((_, Some(ns))) => collect_enums_recursive(ns.module_, enums)
+        _ => ()
+      }
       continue
     }
     if self.is_const_enum_decl_start() {

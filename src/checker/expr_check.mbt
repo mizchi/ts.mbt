@@ -12005,16 +12005,325 @@ fn is_in_scope_type_param(ctx : CheckCtx, ty : @ast.TsType) -> Bool {
 }
 
 ///|
+/// True when `expr` refers to the constructor receiver, looking through
+/// casts / assertions that don't change the value (`this as T`, `this!`,
+/// `this satisfies T`, an optional-chain wrapper, a `@__PURE__` marker).
+/// Used so `(this as Foo).x = …` / `this!.x = …` are recognised as
+/// assigning `this.x` and don't trigger a false TS2564.
+fn expr_is_this(expr : @ast.TsExpr) -> Bool {
+  match expr {
+    Var("this") => true
+    As(inner, _)
+    | Satisfies(inner, _)
+    | NonNull(inner)
+    | OptionalChain(inner)
+    | PureCall(inner) => expr_is_this(inner)
+    _ => false
+  }
+}
+
+///|
+/// Collect, into `members`, every field name referenced as `this.<name>`
+/// (property access or string-literal index) anywhere in a constructor
+/// body — reads included. This over-approximates "assigned in the
+/// constructor" by mere presence: a field that never appears cannot have
+/// been assigned, so it is a sound TS2564 candidate; a field that appears
+/// (even only read) is left alone to stay false-positive-free without
+/// modelling control flow.
+///
+/// `opaque[0]` is set when the body uses a form we don't model precisely
+/// enough to be sure which member it touches — a dynamic `this[expr]`, a
+/// destructuring assignment, or a nested class. The caller then skips the
+/// whole class rather than risk a false positive. Every `TsExpr` / `TsStmt`
+/// variant is matched explicitly so a future AST addition fails to compile
+/// here instead of silently going untraversed (which could cause an FP).
+fn collect_ctor_this_members_block(
+  block : @ast.TsBlock,
+  members : Map[String, Unit],
+  opaque : Array[Bool],
+) -> Unit {
+  for stmt in block.stmts {
+    collect_ctor_this_members_stmt(stmt, members, opaque)
+  }
+}
+
+///|
+fn collect_ctor_this_members_stmt(
+  stmt : @ast.TsStmt,
+  members : Map[String, Unit],
+  opaque : Array[Bool],
+) -> Unit {
+  match stmt {
+    Var(_, _, e) | Let(_, _, e) | Const(_, _, e) | Assign(_, e) =>
+      collect_ctor_this_members_expr(e, members, opaque)
+    CompoundAssign(_, _, e) =>
+      collect_ctor_this_members_expr(e, members, opaque)
+    IndexAssign(recv, idx, val) => {
+      if expr_is_this(recv) {
+        match idx {
+          StringLit(name) => members[name] = ()
+          _ => {
+            opaque[0] = true
+            collect_ctor_this_members_expr(idx, members, opaque)
+          }
+        }
+      } else {
+        collect_ctor_this_members_expr(recv, members, opaque)
+        collect_ctor_this_members_expr(idx, members, opaque)
+      }
+      collect_ctor_this_members_expr(val, members, opaque)
+    }
+    PropAssign(recv, name, val) => {
+      if expr_is_this(recv) {
+        members[name] = ()
+      } else {
+        collect_ctor_this_members_expr(recv, members, opaque)
+      }
+      collect_ctor_this_members_expr(val, members, opaque)
+    }
+    Expr(e) | Throw(e) => collect_ctor_this_members_expr(e, members, opaque)
+    Return(opt) =>
+      match opt {
+        Some(e) => collect_ctor_this_members_expr(e, members, opaque)
+        None => ()
+      }
+    Try(b, _, c, f) => {
+      collect_ctor_this_members_block(b, members, opaque)
+      match c {
+        Some(cb) => collect_ctor_this_members_block(cb, members, opaque)
+        None => ()
+      }
+      match f {
+        Some(fb) => collect_ctor_this_members_block(fb, members, opaque)
+        None => ()
+      }
+    }
+    If(c, t, e) => {
+      collect_ctor_this_members_expr(c, members, opaque)
+      collect_ctor_this_members_block(t, members, opaque)
+      match e {
+        Some(eb) => collect_ctor_this_members_block(eb, members, opaque)
+        None => ()
+      }
+    }
+    While(c, b) | DoWhile(c, b) => {
+      collect_ctor_this_members_expr(c, members, opaque)
+      collect_ctor_this_members_block(b, members, opaque)
+    }
+    For(init, cond, update, body) => {
+      match init {
+        Some(s) => collect_ctor_this_members_stmt(s, members, opaque)
+        None => ()
+      }
+      match cond {
+        Some(e) => collect_ctor_this_members_expr(e, members, opaque)
+        None => ()
+      }
+      match update {
+        Some(s) => collect_ctor_this_members_stmt(s, members, opaque)
+        None => ()
+      }
+      collect_ctor_this_members_block(body, members, opaque)
+    }
+    ForOf(_, _, _, it, body)
+    | ForAwaitOf(_, _, _, it, body)
+    | ForIn(_, _, _, it, body) => {
+      collect_ctor_this_members_expr(it, members, opaque)
+      collect_ctor_this_members_block(body, members, opaque)
+    }
+    Switch(e, cases) => {
+      collect_ctor_this_members_expr(e, members, opaque)
+      for cse in cases {
+        match cse.test_expr {
+          Some(te) => collect_ctor_this_members_expr(te, members, opaque)
+          None => ()
+        }
+        collect_ctor_this_members_block(cse.body, members, opaque)
+      }
+    }
+    With(e, b) => {
+      collect_ctor_this_members_expr(e, members, opaque)
+      collect_ctor_this_members_block(b, members, opaque)
+    }
+    Label(_, s) => collect_ctor_this_members_stmt(s, members, opaque)
+    Block(b) => collect_ctor_this_members_block(b, members, opaque)
+    NativeClassStmt(_, _) => opaque[0] = true
+    Debugger | Break(_) | Continue(_) | Empty => ()
+  }
+}
+
+///|
+fn collect_ctor_this_members_expr(
+  expr : @ast.TsExpr,
+  members : Map[String, Unit],
+  opaque : Array[Bool],
+) -> Unit {
+  match expr {
+    NumberLit(_)
+    | IntLit(_)
+    | BigIntLit(_)
+    | BoolLit(_)
+    | StringLit(_)
+    | NullLit
+    | ArrayHole
+    | Var(_)
+    | ImportMeta => ()
+    PropAccess(recv, name) =>
+      if expr_is_this(recv) {
+        members[name] = ()
+      } else {
+        collect_ctor_this_members_expr(recv, members, opaque)
+      }
+    IndexAccess(recv, idx) =>
+      if expr_is_this(recv) {
+        match idx {
+          StringLit(name) => members[name] = ()
+          _ => {
+            opaque[0] = true
+            collect_ctor_this_members_expr(idx, members, opaque)
+          }
+        }
+      } else {
+        collect_ctor_this_members_expr(recv, members, opaque)
+        collect_ctor_this_members_expr(idx, members, opaque)
+      }
+    BinOp(_, a, b) | Seq(a, b) => {
+      collect_ctor_this_members_expr(a, members, opaque)
+      collect_ctor_this_members_expr(b, members, opaque)
+    }
+    UnaryOp(_, a)
+    | Spread(a)
+    | PureCall(a)
+    | Await(a)
+    | NonNull(a)
+    | OptionalChain(a)
+    | YieldStar(a)
+    | As(a, _)
+    | Satisfies(a, _) => collect_ctor_this_members_expr(a, members, opaque)
+    Call(_, args) | New(_, args) =>
+      for a in args {
+        collect_ctor_this_members_expr(a, members, opaque)
+      }
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      collect_ctor_this_members_expr(callee, members, opaque)
+      for a in args {
+        collect_ctor_this_members_expr(a, members, opaque)
+      }
+    }
+    MethodCall(recv, _, args) => {
+      collect_ctor_this_members_expr(recv, members, opaque)
+      for a in args {
+        collect_ctor_this_members_expr(a, members, opaque)
+      }
+    }
+    Cond(a, b, c) => {
+      collect_ctor_this_members_expr(a, members, opaque)
+      collect_ctor_this_members_expr(b, members, opaque)
+      collect_ctor_this_members_expr(c, members, opaque)
+    }
+    ArrayLit(items) =>
+      for it in items {
+        collect_ctor_this_members_expr(it, members, opaque)
+      }
+    ObjectLit(entries) =>
+      for e in entries {
+        collect_ctor_this_members_expr(e.1, members, opaque)
+      }
+    ComputedProp(k, v) => {
+      collect_ctor_this_members_expr(k, members, opaque)
+      collect_ctor_this_members_expr(v, members, opaque)
+    }
+    AssignExpr(_, val) => collect_ctor_this_members_expr(val, members, opaque)
+    PropAssignExpr(recv, name, val) => {
+      if expr_is_this(recv) {
+        members[name] = ()
+      } else {
+        collect_ctor_this_members_expr(recv, members, opaque)
+      }
+      collect_ctor_this_members_expr(val, members, opaque)
+    }
+    CompoundAssignExpr(target, _, val) => {
+      collect_ctor_this_members_expr(target, members, opaque)
+      collect_ctor_this_members_expr(val, members, opaque)
+    }
+    IndexAssignExpr(recv, idx, val) => {
+      if expr_is_this(recv) {
+        match idx {
+          StringLit(name) => members[name] = ()
+          _ => {
+            opaque[0] = true
+            collect_ctor_this_members_expr(idx, members, opaque)
+          }
+        }
+      } else {
+        collect_ctor_this_members_expr(recv, members, opaque)
+        collect_ctor_this_members_expr(idx, members, opaque)
+      }
+      collect_ctor_this_members_expr(val, members, opaque)
+    }
+    ArrowFunc(_, _, body, _) =>
+      match body {
+        ArrowExpr(e) => collect_ctor_this_members_expr(e, members, opaque)
+        ArrowBlock(b) => collect_ctor_this_members_block(b, members, opaque)
+      }
+    FuncExpr(f) => collect_ctor_this_members_block(f.body, members, opaque)
+    TemplateLiteral(_, exprs) =>
+      for e in exprs {
+        collect_ctor_this_members_expr(e, members, opaque)
+      }
+    TaggedTemplate(tag, _, _, exprs) => {
+      collect_ctor_this_members_expr(tag, members, opaque)
+      for e in exprs {
+        collect_ctor_this_members_expr(e, members, opaque)
+      }
+    }
+    Yield(opt) =>
+      match opt {
+        Some(e) => collect_ctor_this_members_expr(e, members, opaque)
+        None => ()
+      }
+    DynamicImport(a, b) => {
+      collect_ctor_this_members_expr(a, members, opaque)
+      match b {
+        Some(e) => collect_ctor_this_members_expr(e, members, opaque)
+        None => ()
+      }
+    }
+    JsxElement(_, attrs, children) => {
+      for at in attrs {
+        match at.1 {
+          Some(e) => collect_ctor_this_members_expr(e, members, opaque)
+          None => ()
+        }
+      }
+      for ch in children {
+        collect_ctor_this_members_expr(ch, members, opaque)
+      }
+    }
+    // Forms that may bind a `this`-member in a way we don't model, or a
+    // nested class shape — be conservative so the caller skips the class.
+    AssignPattern(_, val) => {
+      opaque[0] = true
+      collect_ctor_this_members_expr(val, members, opaque)
+    }
+    NativeClassExpr(_, _) => opaque[0] = true
+  }
+}
+
+///|
 /// TS2564 ("Property 'X' has no initializer and is not definitely
 /// assigned in the constructor") for native (runtime) class
-/// declarations. We catch the common shape where the class has no
-/// constructor at all and the field has neither an `=` initializer
-/// nor a `!` definite-assignment assertion, and the declared type
-/// doesn't already accept `undefined`. The constructor-body-walk
-/// variant (which would also catch `class C { x: T; constructor() {
-/// this.x = ...; } }`) requires CFA over constructor bodies and is
-/// deferred -- 91 of 93 TS2564 cases in the conformance corpus have
-/// no constructor at all.
+/// declarations. Catches both the no-constructor shape and the
+/// constructor-bearing shape: when a constructor is present we walk its
+/// body (via `collect_ctor_this_members_block`) and skip any field whose
+/// name it touches through `this.<name>`. A field that the constructor
+/// never references — and that has neither an `=` initializer nor a `!`
+/// definite-assignment assertion, with a declared type that doesn't
+/// already accept `undefined` — is reported. The constructor walk
+/// over-approximates assignment by presence, so it never produces a
+/// false positive; classes using forms we can't model precisely
+/// (dynamic `this[expr]`, destructuring assignment, nested classes) are
+/// skipped entirely.
 fn check_native_class_property_initializers(
   module_ : @ast.TsModule,
   resolver : Resolver,
@@ -12051,14 +12360,40 @@ fn check_native_class_property_initializers(
     if decl.index_signatures.length() > 0 {
       continue
     }
-    // Skip when the class declares a constructor: its body might
-    // assign `this.x` and we don't model the constructor body in the
-    // TsClassDecl form (only the parameter list survives). A false
-    // negative here is much better than the false positive of
-    // claiming an initialised field is uninitialised.
+    // Collect the field names the constructor touches via `this.<name>`
+    // (reads included — `collect_ctor_this_members_block` over-approximates
+    // assignment by presence to stay false-positive-free). Parameter
+    // properties (`constructor(public x: T)`) auto-assign, so their names
+    // are seeded in too. A field that never appears is a sound TS2564
+    // candidate even when a constructor is present.
+    let ctor_members : Map[String, Unit] = {}
+    let ctor_opaque : Array[Bool] = [false]
     match decl.constructor_params {
-      Some(_) => continue
-      None => ()
+      Some(params) => {
+        for entry in params {
+          ctor_members[entry.0] = ()
+        }
+        // A constructor with parameters but no retained body is one we
+        // can't inspect (overload signature / parser gap) — skip the
+        // class to avoid a false positive.
+        match decl.constructor_body {
+          Some(body) =>
+            collect_ctor_this_members_block(body, ctor_members, ctor_opaque)
+          None => ctor_opaque[0] = true
+        }
+      }
+      None =>
+        // No declared constructor: nothing assigns `this.x`, so every
+        // uninitialized field is reported below (unchanged behaviour).
+        // A body may still be present via a desugared path; walk it when so.
+        match decl.constructor_body {
+          Some(body) =>
+            collect_ctor_this_members_block(body, ctor_members, ctor_opaque)
+          None => ()
+        }
+    }
+    if ctor_opaque[0] {
+      continue
     }
     // Build a set of names backed by a getter/setter method so we can
     // skip them below. `class C { get x() {…} }` upserts `x` into
@@ -12083,6 +12418,11 @@ fn check_native_class_property_initializers(
         continue
       }
       if prop.has_initializer || prop.has_definite_assertion {
+        continue
+      }
+      // The constructor references `this.<name>` (assignment, or a read we
+      // treat as a possible assignment) — assume definitely assigned.
+      if ctor_members.contains(prop.name) {
         continue
       }
       // Skip when the declared type already accepts `undefined`
