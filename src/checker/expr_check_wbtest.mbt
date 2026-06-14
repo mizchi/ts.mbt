@@ -7650,3 +7650,50 @@ test "expr_check: function-value rest param still flags real errors" {
   let few = ts63_messages(decl + "function g(): void { f(); }")
   assert_true(few.iter().any(fn(m) { m.contains("at least 1 argument(s)") }))
 }
+
+///|
+// Issue #62 (constraint-structural): a primitive / array source structurally
+// satisfies an object target through its intrinsic members — `string` and
+// arrays have `length: number` — so `f<T extends { length: number }>("s")`
+// and `const o: { length: number } = "hi"` are valid (matching tsc). A source
+// that genuinely lacks a required member (`number`, or a target with an extra
+// field) is still reported.
+test "expr_check: primitive/array satisfies object target via intrinsic members" {
+  let len_decl = "function len<T extends { length: number }>(x: T): number { return x.length; }\n"
+  // string / array have length:number — accepted.
+  @test.assert_eq(
+    ts63_messages(len_decl + "function g(): void { len(\"s\"); }").length(),
+    0,
+  )
+  @test.assert_eq(
+    ts63_messages(len_decl + "function g(): void { len([1, 2]); }").length(),
+    0,
+  )
+  // Direct assignment of a string to a structural object target.
+  @test.assert_eq(
+    ts63_messages(
+      "function g(): void { const o: { length: number } = \"hi\"; }",
+    ).length(),
+    0,
+  )
+}
+
+///|
+test "expr_check: intrinsic-source object check still flags real mismatches" {
+  // `number` has no `length` — still reported (recall preserved).
+  assert_true(
+    ts63_messages(
+      "function len<T extends { length: number }>(x: T): number { return x.length; }\n" +
+      "function g(): void { len(42); }",
+    ).length() >=
+    1,
+  )
+  // A target field the source lacks (`foo`) keeps the mismatch.
+  assert_true(
+    ts63_messages(
+      "function f<T extends { length: number; foo: string }>(x: T): void {}\n" +
+      "function g(): void { f(\"s\"); }",
+    ).length() >=
+    1,
+  )
+}
