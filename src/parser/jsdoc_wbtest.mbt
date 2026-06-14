@@ -287,3 +287,43 @@ test "jsdoc: ?{x:number} translates to ({x:number} | null)" {
     _ => fail("expected Let / FuncExpr")
   }
 }
+
+///|
+// Issue #26: remaining JSDoc-specific scalar translations and the
+// inline-TS-wins rule, complementing the `?T` / function-type cases above.
+test "jsdoc: !T strips non-null, Object<K,V> becomes Record, inline TS wins" {
+  let src =
+    #|/**
+    #| * @param {!number} a
+    #| * @param {Object<string, number>} b
+    #| * @param {string} c
+    #| * @returns {!boolean}
+    #| */
+    #|function f(a, b, c: boolean) { return true; }
+  let block = parse_block_from_source(src)
+  match block.stmts[0] {
+    Let(_, _, @ast.TsExpr::FuncExpr(f)) => {
+      // `!number` → number (non-null marker stripped).
+      match f.params[0].type_ {
+        @ast.TsType::Number => ()
+        other => fail("expected Number for a, got \{other}")
+      }
+      // `Object<string, number>` → Record<string, number>.
+      match f.params[1].type_ {
+        @ast.TsType::Applied("Record", _) => ()
+        other => fail("expected Record for b, got \{other}")
+      }
+      // Inline `: boolean` annotation wins over the `@param {string} c`.
+      match f.params[2].type_ {
+        @ast.TsType::Boolean => ()
+        other => fail("expected Boolean (inline wins) for c, got \{other}")
+      }
+      // `!boolean` return → boolean.
+      match f.return_type {
+        @ast.TsType::Boolean => ()
+        other => fail("expected Boolean return, got \{other}")
+      }
+    }
+    _ => fail("expected Let / FuncExpr")
+  }
+}

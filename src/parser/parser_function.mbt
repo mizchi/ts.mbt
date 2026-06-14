@@ -456,14 +456,6 @@ fn translate_jsdoc_type(raw : String) -> String {
       None => ()
     }
   }
-  // `function(T1, T2): R` → `(_0: T1, _1: T2) => R`
-  // `function(): R` → `() => R`
-  if s.has_prefix("function(") {
-    match translate_jsdoc_function_type(s) {
-      Some(ts) => return ts
-      None => ()
-    }
-  }
   s
 }
 
