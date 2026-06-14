@@ -12696,6 +12696,34 @@ fn check_class_member_structure(
         })
       }
     }
+    // --- TS18012: `#constructor` is a reserved word — a `#`-private member
+    // may not be named `constructor`. The parser brands such a member to
+    // `__private_brand__N__constructor`, so a branded name ending in
+    // `__constructor` is exactly a `#constructor` declaration (field, method,
+    // or accessor). Always an error, never a legal shape — false-positive-free.
+    let mut reported_hash_ctor = false
+    fn is_brand_constructor(n : String) -> Bool {
+      n.has_prefix("__private_brand__") && n.has_suffix("__constructor")
+    }
+
+    for p in decl.properties {
+      if is_brand_constructor(p.name) && !reported_hash_ctor {
+        reported_hash_ctor = true
+        issues.push({
+          path: "class \{decl.name}",
+          message: "`#constructor` is a reserved word",
+        })
+      }
+    }
+    for m in decl.methods {
+      if is_brand_constructor(m.name) && !reported_hash_ctor {
+        reported_hash_ctor = true
+        issues.push({
+          path: "class \{decl.name}",
+          message: "`#constructor` is a reserved word",
+        })
+      }
+    }
     // --- TS2506: a class directly references itself in its own base
     // expression (`class C extends C {}`, `class D<T> extends D<T> {}`).
     // `base_names` carries the bare extended name, so a self-reference is

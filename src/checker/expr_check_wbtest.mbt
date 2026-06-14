@@ -7723,3 +7723,21 @@ test "expr_check: TS18010 flags accessibility modifier on a private identifier" 
   // A plain `#x` (no modifier), and a regular `private y` (no `#`), are legal.
   @test.assert_eq(flagged("class C { #x = 1; private y = 2; }"), 0)
 }
+
+///|
+// TS18012: `#constructor` is a reserved word — a `#`-private member may not be
+// named `constructor` (field, method, or accessor). The parser brands it to
+// `__private_brand__N__constructor`; a normal `constructor` is not branded and
+// stays legal.
+test "expr_check: TS18012 flags `#constructor` private member" {
+  let flagged = fn(src : String) -> Int {
+    let module_ = parse_module_or_empty(src)
+    check_module_function_bodies(module_)
+    .filter(fn(i) { i.message.contains("`#constructor` is a reserved word") })
+    .length()
+  }
+  @test.assert_eq(flagged("class A { #constructor() {} }"), 1)
+  @test.assert_eq(flagged("class B { #constructor = 1; }"), 1)
+  // A normal constructor and an ordinary `#` member are legal.
+  @test.assert_eq(flagged("class C { constructor() {} #foo() {} }"), 0)
+}
