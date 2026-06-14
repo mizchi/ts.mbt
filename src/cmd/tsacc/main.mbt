@@ -6,7 +6,9 @@
 // compiles quickly and lets the conformance recall / false-positive
 // numbers be measured without paying that cost.
 //
-//   tsacc        # walks the pinned conformance dirs, prints the 2x2 table
+//   tsacc                       # walks the pinned conformance dirs, prints the 2x2 table
+//   tsacc --list-misses         # also print every recall miss (`RECALL_MISS <case>`)
+//   tsacc --list-misses <substr> # ...restricted to paths containing <substr>
 
 ///|
 fn ts_case_basename(path : String) -> String {
@@ -91,6 +93,22 @@ async fn collect_ts_source_files_recursive(dir : String) -> Array[String] {
 
 ///|
 async fn main {
+  // `--list-misses [substr]`: in addition to the 2x2 table, print one
+  // `RECALL_MISS <case>` line per baseline-positive file we fail to flag
+  // (a recall miss), optionally filtered to paths containing `substr`.
+  // Handy for triaging which conformance cases to target next without
+  // ad-hoc instrumentation.
+  let argv = @env.args()
+  let mut list_misses = false
+  let mut miss_filter = ""
+  for i in 0..<argv.length() {
+    if argv[i] == "--list-misses" {
+      list_misses = true
+      if i + 1 < argv.length() && !argv[i + 1].has_prefix("--") {
+        miss_filter = argv[i + 1]
+      }
+    }
+  }
   let baseline_index = collect_baseline_basenames()
   let dirs = [
     "typescript/tests/cases/conformance/types/typeParameters", "typescript/tests/cases/conformance/controlFlow",
@@ -159,6 +177,9 @@ async fn main {
       } else if has_baseline {
         recall_miss += 1
         d_rm += 1
+        if list_misses && (miss_filter == "" || path.contains(miss_filter)) {
+          println("RECALL_MISS \{case_name}")
+        }
       } else {
         precision_hit += 1
         d_ph += 1
