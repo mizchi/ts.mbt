@@ -8185,6 +8185,33 @@ fn bind_object_pattern(
     let field_ty = apply_binding_default(env, ctx, field_ty, prop.default)
     bind_pattern(env, ctx, prop.binding, field_ty)
   }
+  // Rest pattern `{ a, b, ...rest }`: `rest` takes an object type with the
+  // source's remaining (non-destructured) fields. Mirror the object-spread
+  // path — build from `collect_declared_fields`. When the source shape is
+  // unknown (no declared fields, e.g. `any` / an opaque generic) keep `rest`
+  // permissive as `Any` rather than synthesising an empty object that would
+  // make every `rest.x` access a false "property does not exist".
+  match ob.rest {
+    Some(rest_name) => {
+      let declared = collect_declared_fields(source, ctx.resolver)
+      if declared.length() == 0 {
+        env.bind(rest_name, @ast.TsType::Any)
+      } else {
+        let taken : Map[String, Unit] = {}
+        for prop in ob.props {
+          taken[prop.key] = ()
+        }
+        let rest_fields : Array[(@ast.TsType, @ast.TsType)] = []
+        for f in declared {
+          if !taken.contains(f.0) {
+            rest_fields.push((@ast.TsType::Literal(f.0), f.1))
+          }
+        }
+        env.bind(rest_name, @ast.TsType::Object(rest_fields))
+      }
+    }
+    None => ()
+  }
 }
 
 ///|
