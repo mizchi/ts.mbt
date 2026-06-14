@@ -7555,3 +7555,47 @@ test "expr_check: destructuring rest pattern carries the remaining fields" {
   })
   @test.assert_eq(other_missing.length(), 0)
 }
+
+///|
+// Issue #62: a type parameter that appears only as a bare top-level
+// parameter is inferred as the union of its argument positions (matching
+// tsc), so `f<T>(x: T, y: T)` called with mixed types is not a false
+// positive. A type parameter that also appears nested (`g<T>(arr: T[], x:
+// T)`) keeps first-wins inference so a genuine mismatch is still caught.
+fn ts62_issue_count(src : String) -> Int {
+  let module_ = parse_module_or_empty(src)
+  check_module_function_bodies(module_).length()
+}
+
+///|
+test "expr_check: bare type param unions across argument positions (no FP)" {
+  // All-bare `T` — `string | number`, accepted by tsc.
+  @test.assert_eq(
+    ts62_issue_count(
+      "function f<T>(x: T, y: T): T { return x; }\n" +
+      "function g(): void { f(\"a\", 1); }",
+    ),
+    0,
+  )
+  // Three bare positions union too.
+  @test.assert_eq(
+    ts62_issue_count(
+      "function pick<T>(a: T, b: T, c: T): T { return a; }\n" +
+      "function g(): void { pick(1, \"x\", true); }",
+    ),
+    0,
+  )
+}
+
+///|
+test "expr_check: nested type param keeps first-wins so mismatch is caught" {
+  // `T` is pinned to `number` by `arr: T[]`; `"abc"` against `T` is a real
+  // error — recall must be preserved, not widened away.
+  assert_true(
+    ts62_issue_count(
+      "function h<T>(arr: T[], x: T): void {}\n" +
+      "function g(): void { h([1, 2, 3], \"abc\"); }",
+    ) >=
+    1,
+  )
+}
