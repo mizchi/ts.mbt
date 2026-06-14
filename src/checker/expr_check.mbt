@@ -12659,6 +12659,92 @@ fn check_native_class_property_initializers(
 ///     changes the get/set-vs-data shape of an inherited member. TS only
 ///     reports these under `useDefineForClassFields`, so we gate on that
 ///     flag to stay false-positive-free.
+///
+/// Whether `expr` references `super` (a `super(...)` call, `super.x`, or
+/// `super.m(...)`). Used by the TS2335 check below.
+fn expr_mentions_super(expr : @ast.TsExpr) -> Bool {
+  match expr {
+    Var("super") => true
+    Call("super", _) => true
+    PropAccess(inner, _) => expr_mentions_super(inner)
+    IndexAccess(a, b) => expr_mentions_super(a) || expr_mentions_super(b)
+    CallExpr(callee, args) | NewExpr(callee, args) =>
+      expr_mentions_super(callee) ||
+      args.iter().any(fn(a) { expr_mentions_super(a) })
+    Call(_, args) | New(_, args) =>
+      args.iter().any(fn(a) { expr_mentions_super(a) })
+    MethodCall(recv, _, args) =>
+      expr_mentions_super(recv) ||
+      args.iter().any(fn(a) { expr_mentions_super(a) })
+    BinOp(_, a, b) | Seq(a, b) =>
+      expr_mentions_super(a) || expr_mentions_super(b)
+    UnaryOp(_, a)
+    | Spread(a)
+    | PureCall(a)
+    | Await(a)
+    | NonNull(a)
+    | OptionalChain(a)
+    | As(a, _)
+    | Satisfies(a, _) => expr_mentions_super(a)
+    Cond(a, b, c) =>
+      expr_mentions_super(a) || expr_mentions_super(b) || expr_mentions_super(c)
+    AssignExpr(_, v) => expr_mentions_super(v)
+    PropAssignExpr(r, _, v) => expr_mentions_super(r) || expr_mentions_super(v)
+    CompoundAssignExpr(t, _, v) =>
+      expr_mentions_super(t) || expr_mentions_super(v)
+    _ => false
+  }
+}
+
+///|
+fn block_mentions_super(block : @ast.TsBlock) -> Bool {
+  block.stmts.iter().any(fn(s) { stmt_mentions_super(s) })
+}
+
+///|
+fn stmt_mentions_super(stmt : @ast.TsStmt) -> Bool {
+  match stmt {
+    Expr(e) | Throw(e) => expr_mentions_super(e)
+    Return(opt) =>
+      match opt {
+        Some(e) => expr_mentions_super(e)
+        None => false
+      }
+    Var(_, _, e) | Let(_, _, e) | Const(_, _, e) => expr_mentions_super(e)
+    PropAssign(r, _, v) => expr_mentions_super(r) || expr_mentions_super(v)
+    Block(b) => block_mentions_super(b)
+    If(c, t, e) =>
+      expr_mentions_super(c) ||
+      block_mentions_super(t) ||
+      (match e {
+        Some(eb) => block_mentions_super(eb)
+        None => false
+      })
+    While(c, b) | DoWhile(c, b) =>
+      expr_mentions_super(c) || block_mentions_super(b)
+    For(_, _, _, b) => block_mentions_super(b)
+    ForOf(_, _, _, it, b)
+    | ForAwaitOf(_, _, _, it, b)
+    | ForIn(_, _, _, it, b) =>
+      expr_mentions_super(it) || block_mentions_super(b)
+    Try(b, _, c, f) =>
+      block_mentions_super(b) ||
+      (match c {
+        Some(cb) => block_mentions_super(cb)
+        None => false
+      }) ||
+      (match f {
+        Some(fb) => block_mentions_super(fb)
+        None => false
+      })
+    Switch(e, cases) =>
+      expr_mentions_super(e) ||
+      cases.iter().any(fn(cse) { block_mentions_super(cse.body) })
+    _ => false
+  }
+}
+
+///|
 fn check_class_member_structure(
   module_ : @ast.TsModule,
   resolver : Resolver,
@@ -12741,6 +12827,24 @@ fn check_class_member_structure(
           path: "class \{decl.name}",
           message: "classes may not have a field named `constructor`",
         })
+      }
+    }
+    // --- TS2335: `super` can only be referenced in a derived class. A class
+    // with no base (`base_names` empty and no expression-base) whose
+    // constructor body references `super` (`super()`, `super.x`,
+    // `super.m()`) is an error. Derived classes carry a base name (or the
+    // `<expr-base>` sentinel with `base_expr` set), so this is
+    // false-positive-free.
+    if decl.base_names.length() == 0 && decl.base_expr is None {
+      match decl.constructor_body {
+        Some(body) =>
+          if block_mentions_super(body) {
+            issues.push({
+              path: "class \{decl.name}",
+              message: "`super` can only be referenced in a derived class",
+            })
+          }
+        None => ()
       }
     }
     // --- TS2506: a class directly references itself in its own base

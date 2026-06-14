@@ -7763,3 +7763,30 @@ test "expr_check: TS18006 flags a field named constructor" {
   @test.assert_eq(flagged("class D { [\"constructor\"] = 3; }"), 0)
   @test.assert_eq(flagged("class E { static constructor = 3; }"), 0)
 }
+
+///|
+// TS2335: `super` can only be referenced in a derived class. A class with no
+// base whose constructor references `super` (`super()`, `super.x`) is an
+// error; a derived class (or one with no `super` reference) is not flagged.
+test "expr_check: TS2335 flags super in a class with no base" {
+  let flagged = fn(src : String) -> Int {
+    let module_ = parse_module_or_empty(src)
+    check_module_function_bodies(module_)
+    .filter(fn(i) { i.message.contains("can only be referenced in a derived") })
+    .length()
+  }
+  @test.assert_eq(flagged("class C { constructor() { super(); } }"), 1)
+  @test.assert_eq(
+    flagged("class C2 { x = 1; constructor() { let y = super.foo; } }"),
+    1,
+  )
+  // Derived class, and a base-less class without `super`, are both legal.
+  @test.assert_eq(
+    flagged("class B {}\nclass D extends B { constructor() { super(); } }"),
+    0,
+  )
+  @test.assert_eq(
+    flagged("class E { x: number; constructor() { this.x = 1; } }"),
+    0,
+  )
+}
