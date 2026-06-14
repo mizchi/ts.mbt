@@ -12724,6 +12724,25 @@ fn check_class_member_structure(
         })
       }
     }
+    // --- TS18006: a class may not have a (data) field named `constructor`
+    // (`class C { constructor: number }` / `class C { "constructor" = 3 }`).
+    // The real constructor is parsed as a method / `constructor_body`, never
+    // as a `properties` entry, and a computed `["constructor"]` key parses to
+    // `<computed>` — so a non-static, non-accessor property literally named
+    // `constructor` is exactly the illegal field form. False-positive-free.
+    let mut reported_ctor_field = false
+    for p in decl.properties {
+      if p.name == "constructor" &&
+        !p.is_static &&
+        !p.is_accessor &&
+        !reported_ctor_field {
+        reported_ctor_field = true
+        issues.push({
+          path: "class \{decl.name}",
+          message: "classes may not have a field named `constructor`",
+        })
+      }
+    }
     // --- TS2506: a class directly references itself in its own base
     // expression (`class C extends C {}`, `class D<T> extends D<T> {}`).
     // `base_names` carries the bare extended name, so a self-reference is
