@@ -730,7 +730,9 @@ fn required_arity_from_types(params : Array[@ast.TsType]) -> Int {
   let mut last_required = 0
   let mut i = 0
   while i < params.length() {
-    if !type_accepts_undefined_param(params[i]) {
+    // A rest parameter (`...args: T[]`, stored as `Rest(...)`) accepts zero
+    // arguments, so it never raises the required count.
+    if !(params[i] is Rest(_)) && !type_accepts_undefined_param(params[i]) {
       last_required = i + 1
     }
     i = i + 1
@@ -7900,14 +7902,25 @@ fn check_arguments_with_sig(
       let max_ = if has_rest { -1 } else { ps.length() }
       (min_, max_)
     }
-    None =>
+    None => {
       // No rich `TsParam` metadata (e.g. calling a value typed as
       // `Func([...], _)` — a variable, method, or call-signature). We can
       // still recover optionality from the parameter *types*: the parser
       // widens `x?: T` to `T | undefined`, so a trailing param whose type
       // accepts `undefined` is omittable. This drives the min count down
-      // without needing the declaration's `TsParam` list.
-      (required_arity_from_types(params), params.length())
+      // without needing the declaration's `TsParam` list. A function-type
+      // rest param is wrapped in `Rest(...)`, so scan for it to lift the
+      // arity cap — `(a: number, ...c: boolean[]) => void` accepts any
+      // count >= 1, not exactly 2.
+      let mut has_rest_ty = false
+      for p in params {
+        if p is Rest(_) {
+          has_rest_ty = true
+        }
+      }
+      let max_ = if has_rest_ty { -1 } else { params.length() }
+      (required_arity_from_types(params), max_)
+    }
   }
   if !has_spread {
     let n = args.length()
