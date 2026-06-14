@@ -12667,6 +12667,35 @@ fn check_class_member_structure(
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   for decl in module_.classes {
+    // --- TS18010: an accessibility modifier (`public` / `private` /
+    // `protected`) cannot be used with a private identifier (`private #x`,
+    // `protected #y`). The parser mangles a `#x` name to a
+    // `__private_brand__N__x` symbol and records an explicit accessibility
+    // modifier by pushing that mangled name into `private_members` /
+    // `protected_members` (a plain `#x` with no modifier is *not* added).
+    // So a branded name in either list is exactly a modifier-on-`#name`
+    // declaration, which TS rejects unconditionally — false-positive-free.
+    let reported_brand_modifier : Map[String, Unit] = {}
+    for name in decl.private_members {
+      if name.has_prefix("__private_brand__") &&
+        !reported_brand_modifier.contains(name) {
+        reported_brand_modifier[name] = ()
+        issues.push({
+          path: "class \{decl.name}",
+          message: "an accessibility modifier cannot be used with a private identifier",
+        })
+      }
+    }
+    for name in decl.protected_members {
+      if name.has_prefix("__private_brand__") &&
+        !reported_brand_modifier.contains(name) {
+        reported_brand_modifier[name] = ()
+        issues.push({
+          path: "class \{decl.name}",
+          message: "an accessibility modifier cannot be used with a private identifier",
+        })
+      }
+    }
     // --- TS2506: a class directly references itself in its own base
     // expression (`class C extends C {}`, `class D<T> extends D<T> {}`).
     // `base_names` carries the bare extended name, so a self-reference is
