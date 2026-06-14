@@ -7528,3 +7528,30 @@ test "expr_check: TS2564 silent when the constructor assigns the field" {
     @test.assert_eq(ts2564_flagged(src).length(), 0)
   }
 }
+
+///|
+// Issue #47: object-destructuring rest pattern `{ a, ...rest }` binds `rest`
+// to an object type carrying the source's remaining fields. A read of a
+// retained field resolves; a read of a destructured-out field is a real
+// "property does not exist" (matching TS), and an unknown source keeps
+// `rest` permissive.
+test "expr_check: destructuring rest pattern carries the remaining fields" {
+  let src =
+    #|interface P { a: number; b: string; c: boolean }
+    #|function f(p: P): void {
+    #|  const { a, ...rest } = p;
+    #|  const x: string = rest.b;
+    #|  const y: boolean = rest.c;
+    #|  const bad: number = rest.a;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let missing = issues.filter(fn(i) { i.message.contains("`a` does not exist") })
+  // Only `rest.a` is rejected — `a` was destructured out of `rest`.
+  @test.assert_eq(missing.length(), 1)
+  // `rest.b` / `rest.c` must not produce any "does not exist" diagnostic.
+  let other_missing = issues.filter(fn(i) {
+    i.message.contains("does not exist") && not(i.message.contains("`a`"))
+  })
+  @test.assert_eq(other_missing.length(), 0)
+}
