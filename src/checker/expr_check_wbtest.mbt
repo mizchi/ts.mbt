@@ -7599,3 +7599,54 @@ test "expr_check: nested type param keeps first-wins so mismatch is caught" {
     1,
   )
 }
+
+///|
+// Issue #63: a function *value* with a rest parameter (`(a: number, ...c:
+// boolean[]) => void`, stored with the rest param wrapped in `Rest(...)`)
+// accepts any argument count >= the fixed-param count, and each trailing
+// argument is checked against the rest *element* type — no spurious arity
+// diagnostic, and genuinely-too-few / wrong-element calls are still caught.
+fn ts63_messages(src : String) -> Array[String] {
+  let module_ = parse_module_or_empty(src)
+  let out : Array[String] = []
+  for i in check_module_function_bodies(module_) {
+    out.push(i.message)
+  }
+  out
+}
+
+///|
+test "expr_check: function-value rest param accepts variable arity" {
+  let decl = "declare let f: (a: number, ...c: boolean[]) => void;\n"
+  // Extra rest arguments of the right element type — no diagnostic.
+  @test.assert_eq(
+    ts63_messages(decl + "function g(): void { f(1, true, false); }").length(),
+    0,
+  )
+  // Only the fixed param supplied (rest empty) — OK.
+  @test.assert_eq(
+    ts63_messages(decl + "function g(): void { f(1); }").length(),
+    0,
+  )
+  // Rest-only signature with several args — OK.
+  @test.assert_eq(
+    ts63_messages(
+      "declare let h: (...n: number[]) => void;\n" +
+      "function g(): void { h(1, 2, 3); }",
+    ).length(),
+    0,
+  )
+}
+
+///|
+test "expr_check: function-value rest param still flags real errors" {
+  let decl = "declare let f: (a: number, ...c: boolean[]) => void;\n"
+  // A rest argument of the wrong element type is reported (against the
+  // element, not the array).
+  let elem = ts63_messages(decl + "function g(): void { f(1, true, 5); }")
+  assert_true(elem.iter().any(fn(m) { m.contains("got `number`") }))
+  assert_true(not(elem.iter().any(fn(m) { m.contains("argument(s)") })))
+  // Missing the required fixed param is still a too-few arity error.
+  let few = ts63_messages(decl + "function g(): void { f(); }")
+  assert_true(few.iter().any(fn(m) { m.contains("at least 1 argument(s)") }))
+}
