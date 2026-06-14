@@ -7427,3 +7427,48 @@ test "expr_check: this-type-guard narrows the receiver (method and arrow field)"
   let missing = issues.filter(fn(i) { i.message.contains("does not exist") })
   @test.assert_eq(missing.length(), 0)
 }
+
+///|
+// TS2728 ("Property 'X' is used before its initialization"): an instance
+// field initializer that reads `this.Y` before `Y` has its own initializer
+// is flagged, while references to already-initialized fields, methods, and
+// later-declared methods stay silent. Regression cover for Issue #60; the
+// behaviour is otherwise only exercised through the conformance corpus,
+// which is an optional git submodule.
+test "expr_check: TS2728 flags field init reading a not-yet-initialized field" {
+  let src =
+    #|class C {
+    #|  x = this.y;
+    #|  y = 5;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_class_property_init_order(module_)
+  let hits = issues.filter(fn(i) {
+    i.message.contains("`y` is used before its initialization")
+  })
+  @test.assert_eq(hits.length(), 1)
+}
+
+///|
+test "expr_check: TS2728 silent when referenced field is already initialized" {
+  let src =
+    #|class C {
+    #|  x = 5;
+    #|  y = this.x;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_class_property_init_order(module_)
+  @test.assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: TS2728 silent for method references from a field init" {
+  let src =
+    #|class C {
+    #|  x = this.m();
+    #|  m(): number { return 5; }
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_class_property_init_order(module_)
+  @test.assert_eq(issues.length(), 0)
+}
