@@ -7697,3 +7697,29 @@ test "expr_check: intrinsic-source object check still flags real mismatches" {
     1,
   )
 }
+
+///|
+// TS18010: an accessibility modifier (`public` / `private` / `protected`)
+// cannot be used with a private identifier (`private #x`). The parser brands
+// a `#x` member and records an explicit modifier in private/protected lists,
+// so the check is purely structural and false-positive-free — a plain `#x`,
+// a `readonly #x`, or a regular `private y` (no `#`) is not flagged.
+test "expr_check: TS18010 flags accessibility modifier on a private identifier" {
+  let flagged = fn(src : String) -> Int {
+    let module_ = parse_module_or_empty(src)
+    check_module_function_bodies(module_)
+    .filter(fn(i) {
+      i.message.contains("accessibility modifier cannot be used with a private")
+    })
+    .length()
+  }
+  // `private #bar` and `protected #baz` are both rejected; `readonly #qux` ok.
+  @test.assert_eq(
+    flagged(
+      "class A { private #bar = 2; protected #baz = 3; readonly #qux = 4; }",
+    ),
+    2,
+  )
+  // A plain `#x` (no modifier), and a regular `private y` (no `#`), are legal.
+  @test.assert_eq(flagged("class C { #x = 1; private y = 2; }"), 0)
+}
