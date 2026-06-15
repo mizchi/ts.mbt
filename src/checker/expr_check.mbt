@@ -4887,6 +4887,39 @@ fn infer_param_bindings(
       }
       infer_param_bindings(type_params, f_ret, a_ret, bindings, true)
     }
+    // Object / interface-shaped parameters: match fields by name and infer
+    // recursively. `foo<T>(x: { bar: T; baz: T })` called with `{ bar: 1,
+    // baz: "" }` infers `T = number` from `bar` (first-wins for a nested
+    // position), so the later `baz: ""` is then checked against `number` and
+    // the mismatch surfaces — matching tsc's object-literal inference.
+    (Object(f_fields), Object(a_fields)) =>
+      infer_object_field_bindings(
+        type_params,
+        object_fields_by_name(f_fields),
+        object_fields_by_name(a_fields),
+        bindings,
+        soft,
+      )
+    (Struct(_, f_fields), Object(a_fields)) =>
+      infer_object_field_bindings(
+        type_params,
+        f_fields,
+        object_fields_by_name(a_fields),
+        bindings,
+        soft,
+      )
+    (Object(f_fields), Struct(_, a_fields)) =>
+      infer_object_field_bindings(
+        type_params,
+        object_fields_by_name(f_fields),
+        a_fields,
+        bindings,
+        soft,
+      )
+    (Struct(_, f_fields), Struct(_, a_fields)) =>
+      infer_object_field_bindings(
+        type_params, f_fields, a_fields, bindings, soft,
+      )
     (Union(f_parts), _) =>
       // Best-effort: try the first part that isn't a bare type parameter
       // (matching a concrete shape generally yields more information). If
@@ -4901,6 +4934,42 @@ fn infer_param_bindings(
         }
       }
     _ => ()
+  }
+}
+
+///|
+/// Extract `(name, type)` pairs from an `Object` field list. Object keys are
+/// stored as `Literal(name)`; non-literal / computed keys are skipped.
+fn object_fields_by_name(
+  fields : Array[(@ast.TsType, @ast.TsType)],
+) -> Array[(String, @ast.TsType)] {
+  let out : Array[(String, @ast.TsType)] = []
+  for f in fields {
+    match f.0 {
+      Literal(name) => out.push((name, f.1))
+      _ => ()
+    }
+  }
+  out
+}
+
+///|
+/// Infer type-parameter bindings by matching formal/actual object fields by
+/// name, recursing into each shared field's types. Used for object / struct
+/// shaped parameters in `infer_param_bindings`.
+fn infer_object_field_bindings(
+  type_params : Array[String],
+  formal_fields : Array[(String, @ast.TsType)],
+  actual_fields : Array[(String, @ast.TsType)],
+  bindings : Map[String, @ast.TsType],
+  soft : Bool,
+) -> Unit {
+  for ff in formal_fields {
+    for af in actual_fields {
+      if af.0 == ff.0 {
+        infer_param_bindings(type_params, ff.1, af.1, bindings, soft)
+      }
+    }
   }
 }
 
