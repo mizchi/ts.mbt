@@ -1360,6 +1360,12 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-05 (T50)   559/815 (69 %)        394/414 (20 FP)
 2026-06-05 (T51)   560/815 (69 %)        394/414 (20 FP)
 2026-06-08 (T52)   (corpus sweep deferred — see note)
+2026-06-15 (RB)    538/815 (66 %)        414/414 ( 0 FP)
+2026-06-15 (T53)   539/815 (66 %)        414/414 ( 0 FP)
+2026-06-15 (T54)   540/815 (66 %)        414/414 ( 0 FP)
+2026-06-15 (T55)   541/815 (66 %)        414/414 ( 0 FP)
+2026-06-15 (T56)   542/815 (67 %)        414/414 ( 0 FP)
+2026-06-15 (T57)   543/815 (67 %)        414/414 ( 0 FP)
 
   Toolchain note (2026-06-08): the native parser-package whitebox test
   generates a ~25 MB C unit that this session's `tcc` could not compile in
@@ -1400,6 +1406,42 @@ conformance sources (`.errors.txt` baseline = ground truth):
     FP steady 20. A future session should re-run the parser accuracy test
     (use `-f "*accuracy*"` to skip the slow full-TS smoke-run) and fill in
     the table row.
+
+  RB / T53-T57 (2026-06-15) -- corpus re-measured via `tsacc` after the
+  2026-06-12 soundness pass drove whole-corpus FP to 0 (which suppressed the
+  ~20 FP-causing emissions logged through T51, re-baselining recall down to
+  538/815 @ 0 FP). The TypeScript submodule was re-initialised this session so
+  `moon run src/cmd/tsacc --target native` measures again. Precision held at
+  414/414 (0 FP) across every step below.
+
+    RB  -- re-baseline: 538/815 @ 0 FP.
+    T53 -- TS18010 ("an accessibility modifier cannot be used with a private
+      identifier"): a `#`-private member declared `private`/`protected`.
+      Structural, FP-free (brand-mangled name in the private/protected list).
+      recall 538 -> 539.
+    T54 -- TS18012 ("`#constructor` is a reserved word"): a `#`-private member
+      named `constructor`. recall 539 -> 540.
+    T55 -- TS18006 ("classes may not have a field named `constructor`"): a
+      non-static, non-accessor data field literally named `constructor`.
+      recall 540 -> 541.
+    T56 -- TS2335 ("`super` can only be referenced in a derived class"): a
+      base-less class whose constructor body references `super`. recall
+      541 -> 542.
+    T57 -- generic inference through object-typed parameters (#62): a type
+      parameter nested in an object-shaped parameter (`foo<T>(x: { bar: T;
+      baz: T })`) is now inferred from an object-literal argument's matching
+      fields (first-wins for nested positions), so `foo({ bar: 1, baz: "" })`
+      flags the `baz` mismatch. recall 542 -> 543. Clears
+      `genericCallWithObjectLiteralArgs`.
+
+    Tooling: `tsacc` gained `--list-misses [substr]`, which prints one
+    `RECALL_MISS <case>` line per recall miss (optionally path-filtered) for
+    triaging targets without ad-hoc instrumentation.
+
+    Remaining typeInference misses are the hard higher-order cases
+    (body-internal `null`-vs-bare-`T`, construct-signature inference, nested
+    function-type variance, mapped-type inference) — no bounded increment
+    left; each is deliberate multi-step work with FP risk to manage.
 
   T51 -- argument checking for union construct signatures (TS2345). recall
   +1. The `new`-call analog of T50.
