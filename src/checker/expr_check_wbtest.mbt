@@ -7790,3 +7790,25 @@ test "expr_check: TS2335 flags super in a class with no base" {
     0,
   )
 }
+
+///|
+// Issue #62 (object-typed argument inference): a type parameter nested in an
+// object-shaped parameter (`foo<T>(x: { bar: T; baz: T })`) is inferred from
+// the matching fields of an object-literal argument. `{ bar: 1, baz: "" }`
+// pins `T = number` from `bar`, so the later `baz: ""` mismatch surfaces;
+// consistent field types stay silent.
+test "expr_check: generic inference through object-typed parameter fields" {
+  let count = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  let decl = "function foo<T>(x: { bar: T; baz: T }) { return x; }\n"
+  // bar pins T = number; baz: "" is then a real mismatch.
+  assert_true(
+    count(decl + "function g(): void { foo({ bar: 1, baz: '' }); }") >= 1,
+  )
+  // Consistent field types — no diagnostic.
+  @test.assert_eq(
+    count(decl + "function g(): void { foo({ bar: 1, baz: 2 }); }"),
+    0,
+  )
+}
