@@ -5745,6 +5745,26 @@ fn check_expr_against(
     )
     return
   }
+  // Under strict null checks, a literal `null` / `undefined` is *not*
+  // assignable to a bare in-scope type parameter (`function f<T>(...)` body /
+  // a generic call's `T`): `T` could be instantiated to a non-nullable type,
+  // so tsc reports TS2345 / TS2322. Without strict mode null/undefined flow
+  // to everything (the suppression below), so gate this on the strict flag.
+  // Restricted to a target that is exactly an in-scope type-parameter name.
+  if ctx.strict_property_init && is_null_or_undefined_literal_expr(expr) {
+    match expected_u {
+      Named(n) =>
+        if ctx.in_scope_type_params.contains(n) {
+          record(
+            ctx,
+            sub_path,
+            "`null` / `undefined` is not assignable to type parameter `\{n}`",
+          )
+          return
+        }
+      _ => ()
+    }
+  }
   // Without `strictNullChecks`, a literal `null` / `undefined` is assignable
   // to every type (`var b: number = null`). The conformance corpus runs
   // largely under `@strict: false` and we have no per-file strict-mode

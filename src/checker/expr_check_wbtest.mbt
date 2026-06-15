@@ -7812,3 +7812,37 @@ test "expr_check: generic inference through object-typed parameter fields" {
     0,
   )
 }
+
+///|
+// Issue #62 (null/undefined vs a bare type parameter): under strict null
+// checks, passing `null` / `undefined` where a bare in-scope type parameter
+// `T` is expected is a TS2345 (`T` could be instantiated to a non-nullable
+// type). Non-strict files keep the permissive null rule.
+test "expr_check: null/undefined is not assignable to a bare type parameter (strict)" {
+  let count = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src))
+    .filter(fn(i) { i.message.contains("not assignable to type parameter") })
+    .length()
+  }
+  // Default (strict): `arg.cb(null)` with `cb: (t: T) => U` is flagged.
+  assert_true(
+    count(
+      "function foo<T, U>(arg: { cb: (t: T) => U }) { return arg.cb(null); }",
+    ) >=
+    1,
+  )
+  // Passing a real `T` value is fine.
+  @test.assert_eq(
+    count(
+      "function foo<T, U>(arg: { cb: (t: T) => U }, v: T) { return arg.cb(v); }",
+    ),
+    0,
+  )
+  // `@strict: false` keeps the permissive null rule — not flagged.
+  @test.assert_eq(
+    count(
+      "// @strict: false\nfunction foo<T, U>(arg: { cb: (t: T) => U }) { return arg.cb(null); }",
+    ),
+    0,
+  )
+}
