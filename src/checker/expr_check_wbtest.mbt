@@ -8135,3 +8135,44 @@ test "expr_check: TS2344 constraint violation on explicit type args" {
     0,
   )
 }
+
+///|
+// Issue #62: an undefined name used inside a computed property key is a
+// TS2304 ("cannot find name"), like any other value reference. A
+// declared-but-unassigned `var` read inside a computed key is NOT flagged
+// as used-before-assigned (tsc accepts it), but a `let` / `const` one is.
+test "expr_check: computed property key references" {
+  let issues = fn(src : String) -> Array[String] {
+    check_module_function_bodies(parse_module_or_empty(src)).map(fn(i) {
+      i.message
+    })
+  }
+  // Undefined name in an object-literal computed key.
+  assert_true(
+    issues("var v = { [missingName]: 1 };").any(fn(m) {
+      m.contains("cannot find name")
+    }),
+  )
+  // Defined name — no diagnostic.
+  @test.assert_eq(issues("const e = 1;\nvar v = { [e]: 1 };").length(), 0)
+  // `var` declared-but-unassigned read in a computed key is accepted.
+  @test.assert_eq(
+    issues("var s: string;\nvar v = { [s]: 1 };")
+    .filter(fn(m) { m.contains("used before being assigned") })
+    .length(),
+    0,
+  )
+}
+
+///|
+// Issue #62 (TS2322): a class field initializer whose value isn't assignable
+// to the field's declared type is reported.
+test "expr_check: class field initializer type mismatch" {
+  let issues = fn(src : String) -> Array[String] {
+    check_module_function_bodies(parse_module_or_empty(src)).map(fn(i) {
+      i.message
+    })
+  }
+  assert_true(issues("class C { x: number = \"s\"; }").length() >= 1)
+  @test.assert_eq(issues("class C { x: number = 5; }").length(), 0)
+}

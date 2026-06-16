@@ -2885,6 +2885,12 @@ priv struct CheckCtx {
   // True by default to match the tsc baseline behaviour for the
   // conformance corpus.
   strict_property_init : Bool
+  // True while walking a computed property key (`{ [expr]: v }`). Suppresses
+  // the TS2454 used-before-assigned read-check there: tsc does not apply
+  // definite-assignment analysis to a name read inside a computed key
+  // (`var s: string; ({ [s]() {} })` is accepted), so flagging it would be a
+  // false positive. Undefined-name (TS2304) checking still runs.
+  mut in_computed_key : Bool
 }
 
 ///|
@@ -8035,6 +8041,7 @@ fn check_arrow_with_context(
     permissive: ctx.permissive,
     unassigned: unassigned_without(ctx.unassigned, param_names),
     strict_property_init: ctx.strict_property_init,
+    in_computed_key: false,
   }
   match body {
     ArrowExpr(e) => {
@@ -8125,6 +8132,7 @@ fn check_funcexpr_with_context(
     // Parameters shadow outer bindings — drop them from the TS2454 set.
     unassigned: unassigned_without(ctx.unassigned, param_names),
     strict_property_init: ctx.strict_property_init,
+    in_computed_key: false,
   }
   let _ = sub_path
   for stmt in f.body.stmts {
@@ -9901,60 +9909,77 @@ fn check_block_narrowing_exit(
 }
 
 ///|
+/// Bind a `var` / `let` / `const` identifier declaration and check its
+/// initializer against the annotation. `track_unassigned` is true only for
+/// block-scoped `let` / `const`, where a missing initializer (`let x: T;`)
+/// arms the TS2454 "used before assigned" check; `var` is exempt.
+fn check_ident_binding_decl(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  name : String,
+  declared : @ast.TsType,
+  init : @ast.TsExpr,
+  block_scoped : Bool,
+) -> Unit {
+  let bound_type = if is_checkable(declared) {
+    declared
+  } else {
+    // No annotation: infer from the initializer. TypeScript widens the
+    // field types of an object / array / tuple literal (their contents
+    // are mutable), so `var a = { foo: '' }` is `{ foo: string }`, not
+    // `{ foo: '' }`. Apply that to composite inferred shapes so a later
+    // `a = b` field comparison isn't over-narrow. Top-level scalars are
+    // left to the existing primitive-widening behaviour.
+    let inferred = infer_expr(env, ctx.resolver, init)
+    match inferred {
+      Object(_) | Struct(_, _) | Array(_) | Tuple(_) =>
+        widen_literal_deep(inferred)
+      _ => inferred
+    }
+  }
+  env.bind(name, bound_type)
+  // Make sure the *declared* slot reflects the source annotation
+  // (which `bind` set on first write -- subsequent narrowing
+  // mutates `vars` only). When the declared annotation was
+  // checkable the binding above already pinned declared to it;
+  // when not, we leave declared as the inferred-from-init type
+  // since that's what TS widens to anyway.
+  env.declare_type(name, bound_type)
+  // TS2454: parser-synthesised `Var("__ts_no_init__")` marker means
+  // `let x: T;` / `var x: T;` with no `=` initializer. Track the binding as
+  // unassigned so later references can be flagged. Only do this when the
+  // declared type doesn't already accept `undefined` (otherwise the read of
+  // an unassigned `x` is well-typed) and when it's checkable (no annotation =
+  // `Any`, which TS doesn't flag either). The stored flag records whether the
+  // binding is block-scoped (`let` / `const`); a `var` read inside a computed
+  // property key is exempt from TS2454 (see the read sites).
+  match init {
+    Var("__ts_no_init__") =>
+      // TS2454 fires only under strict-null-checks (TS treats
+      // `let x: number;` as `x: number | undefined` otherwise).
+      // The conformance corpus uses the same `// @strict: false`
+      // / `// @strictPropertyInitialization: false` opt-out
+      // directives we already track for TS2564 -- reuse the
+      // module flag.
+      if is_checkable(declared) &&
+        !type_accepts_undefined(declared) &&
+        ctx.strict_property_init &&
+        !ctx.resolver.name_assigned_in_static_block(name) {
+        ctx.unassigned[name] = block_scoped
+      }
+    _ => ()
+  }
+  check_expr_against(env, init, declared, ctx, "binding `\{name}` init")
+}
+
+///|
 fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
   match stmt {
-    Var(@ast.TsBinding::Ident(name), declared, init)
-    | Let(@ast.TsBinding::Ident(name), declared, init)
-    | Const(@ast.TsBinding::Ident(name), declared, init) => {
-      let bound_type = if is_checkable(declared) {
-        declared
-      } else {
-        // No annotation: infer from the initializer. TypeScript widens the
-        // field types of an object / array / tuple literal (their contents
-        // are mutable), so `var a = { foo: '' }` is `{ foo: string }`, not
-        // `{ foo: '' }`. Apply that to composite inferred shapes so a later
-        // `a = b` field comparison isn't over-narrow. Top-level scalars are
-        // left to the existing primitive-widening behaviour.
-        let inferred = infer_expr(env, ctx.resolver, init)
-        match inferred {
-          Object(_) | Struct(_, _) | Array(_) | Tuple(_) =>
-            widen_literal_deep(inferred)
-          _ => inferred
-        }
-      }
-      env.bind(name, bound_type)
-      // Make sure the *declared* slot reflects the source annotation
-      // (which `bind` set on first write -- subsequent narrowing
-      // mutates `vars` only). When the declared annotation was
-      // checkable the binding above already pinned declared to it;
-      // when not, we leave declared as the inferred-from-init type
-      // since that's what TS widens to anyway.
-      env.declare_type(name, bound_type)
-      // TS2454: parser-synthesised `Var("__ts_no_init__")` marker means
-      // `let x: T;` / `var x: T;` with no `=` initializer. Track the
-      // binding as unassigned so later references can be flagged. Only
-      // do this when the declared type doesn't already accept
-      // `undefined` (otherwise the read of an unassigned `x` is well
-      // -typed) and when it's checkable (no annotation = `Any`, which
-      // TS doesn't flag either).
-      match init {
-        Var("__ts_no_init__") =>
-          // TS2454 fires only under strict-null-checks (TS treats
-          // `let x: number;` as `x: number | undefined` otherwise).
-          // The conformance corpus uses the same `// @strict: false`
-          // / `// @strictPropertyInitialization: false` opt-out
-          // directives we already track for TS2564 -- reuse the
-          // module flag.
-          if is_checkable(declared) &&
-            !type_accepts_undefined(declared) &&
-            ctx.strict_property_init &&
-            !ctx.resolver.name_assigned_in_static_block(name) {
-            ctx.unassigned[name] = true
-          }
-        _ => ()
-      }
-      check_expr_against(env, init, declared, ctx, "binding `\{name}` init")
-    }
+    Var(@ast.TsBinding::Ident(name), declared, init) =>
+      check_ident_binding_decl(env, ctx, name, declared, init, false)
+    Let(@ast.TsBinding::Ident(name), declared, init)
+    | Const(@ast.TsBinding::Ident(name), declared, init) =>
+      check_ident_binding_decl(env, ctx, name, declared, init, true)
     Var(@ast.TsBinding::Array(ab), declared, init)
     | Let(@ast.TsBinding::Array(ab), declared, init)
     | Const(@ast.TsBinding::Array(ab), declared, init) => {
@@ -10633,7 +10658,9 @@ fn check_call_args_in_expr(
       check_undefined_name(env, ctx, name)
       // TS2454: invoking an as-yet-unassigned variable (`var f: T; f()`)
       // reads it before assignment, same as a bare reference.
-      if name != "__ts_no_init__" && ctx.unassigned.get(name) is Some(_) {
+      if name != "__ts_no_init__" &&
+        ctx.unassigned.get(name) is Some(block_scoped) &&
+        (not(ctx.in_computed_key) || block_scoped) {
         record(
           ctx,
           "use `\{name}`",
@@ -10923,6 +10950,19 @@ fn check_call_args_in_expr(
       for ent in entries {
         check_call_args_in_expr(env, ent.1, ctx)
       }
+    // A computed property key (`{ [e]: 1 }`, `class C { [e]() {} }`) is an
+    // ordinary value expression: walk both the key and the value so an
+    // undefined name in the key surfaces (TS2304) like any other reference.
+    // The key is walked with `in_computed_key` set so the TS2454
+    // used-before-assigned read-check is suppressed there (tsc accepts a
+    // declared-but-unassigned name read inside a computed key).
+    ComputedProp(key, value) => {
+      let saved = ctx.in_computed_key
+      ctx.in_computed_key = true
+      check_call_args_in_expr(env, key, ctx)
+      ctx.in_computed_key = saved
+      check_call_args_in_expr(env, value, ctx)
+    }
     PropAccess(recv, prop) => {
       check_call_args_in_expr(env, recv, ctx)
       check_private_name_access(ctx, prop)
@@ -11346,7 +11386,9 @@ fn check_call_args_in_expr(
     // per variable. Skips the parser's no-init sentinel itself
     // (which appears as the rhs of the synthesised init).
     Var(name) => {
-      if name != "__ts_no_init__" && ctx.unassigned.get(name) is Some(_) {
+      if name != "__ts_no_init__" &&
+        ctx.unassigned.get(name) is Some(block_scoped) &&
+        (not(ctx.in_computed_key) || block_scoped) {
         record(
           ctx,
           "use `\{name}`",
@@ -11703,6 +11745,7 @@ fn check_function_body_with(
     permissive,
     unassigned: {},
     strict_property_init,
+    in_computed_key: false,
   }
   // Bind parameter names into the environment. Destructured params
   // (`function f({ a, b }: T)` / `function f([a, b]: T[])`) carry a
@@ -12627,16 +12670,44 @@ fn check_module_function_bodies_layered(
       permissive,
       unassigned: {},
       strict_property_init,
+      in_computed_key: false,
     }
     let env = ExprEnv::new()
     for v in module_.values {
       env.bind(v.name, v.type_)
     }
+    // Map each declared field to its annotated type so an initializer can be
+    // checked against it (TS2322: `class C { x: number = "s" }`). Static and
+    // instance fields are keyed separately since a static and an instance
+    // field may share a name. `check_expr_against` subsumes the member-access
+    // walk that this loop previously did via `check_call_args_in_expr`, so the
+    // existing coverage is preserved while adding the assignability check.
+    let static_field_types : Map[String, @ast.TsType] = {}
+    let instance_field_types : Map[String, @ast.TsType] = {}
+    for prop in cls.properties {
+      if prop.is_static {
+        static_field_types[prop.name] = prop.type_
+      } else {
+        instance_field_types[prop.name] = prop.type_
+      }
+    }
+    fn check_field(
+      name : String,
+      init : @ast.TsExpr,
+      types : Map[String, @ast.TsType],
+    ) -> Unit {
+      match types.get(name) {
+        Some(declared) if is_checkable(declared) =>
+          check_expr_against(env, init, declared, field_ctx, "field `\{name}`")
+        _ => check_call_args_in_expr(env, init, field_ctx)
+      }
+    }
+
     for entry in cls.static_field_inits {
-      check_call_args_in_expr(env, entry.1, field_ctx)
+      check_field(entry.0, entry.1, static_field_types)
     }
     for entry in cls.instance_field_inits {
-      check_call_args_in_expr(env, entry.1, field_ctx)
+      check_field(entry.0, entry.1, instance_field_types)
     }
     for issue in field_ctx.issues {
       all.push(issue)
@@ -12655,6 +12726,7 @@ fn check_module_function_bodies_layered(
       permissive,
       unassigned: {},
       strict_property_init,
+      in_computed_key: false,
     }
     let env = ExprEnv::new()
     for v in module_.values {
