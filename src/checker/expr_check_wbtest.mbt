@@ -8064,3 +8064,33 @@ test "expr_check: type arguments on non-generic callee (TS2558)" {
     0,
   )
 }
+
+///|
+test "expr_check: too many type arguments on generic callee (TS2558)" {
+  let count = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src))
+    .filter(fn(i) { i.message.contains("type argument") })
+    .length()
+  }
+  // generic function with 1 type param, given 2 → too many.
+  assert_true(
+    count(
+      "function g<T>(x: T): T { return x; }\nfunction f() { g<number, string>(1); }",
+    ) >=
+    1,
+  )
+  // generic class with 1 type param, given 2 → too many.
+  assert_true(
+    count(
+      "class Box<T> { v!: T; }\nfunction f() { new Box<number, string>(); }",
+    ) >=
+    1,
+  )
+  // exact arity → fine.
+  @test.assert_eq(
+    count(
+      "function g<T>(x: T): T { return x; }\nfunction f() { g<number>(1); }",
+    ),
+    0,
+  )
+}
