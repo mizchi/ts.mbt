@@ -860,6 +860,7 @@ fn signature_pure_stmt(stmt : @ast.TsStmt, locals : Map[String, Bool]) -> Bool {
 ///|
 fn signature_pure_expr(expr : @ast.TsExpr, locals : Map[String, Bool]) -> Bool {
   match expr {
+    TypeArgs(_, inner) => signature_pure_expr(inner, locals)
     NumberLit(_)
     | IntLit(_)
     | BigIntLit(_)

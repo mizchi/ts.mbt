@@ -139,6 +139,16 @@ pub(all) enum TsExpr {
   // function
   Call(String, Array[TsExpr])
 
+  // A call / new / method-call carrying explicit type arguments
+  // (`foo<number>(x)`, `new C<string>()`, `obj.m<T>(a)`). Wraps the
+  // underlying call expression; the type arguments are erased for every
+  // value-level consumer (JS emission, inlining, flow analysis), which peel
+  // to the inner call. Only type-checking reads the arguments — e.g. to
+  // report supplying type arguments to a non-generic callee (TS2558). Kept
+  // as a wrapper so the pervasive `Call` / `New` / `MethodCall` match sites
+  // stay unchanged.
+  TypeArgs(Array[TsType], TsExpr)
+
   // function (expression)
   CallExpr(TsExpr, Array[TsExpr])
 

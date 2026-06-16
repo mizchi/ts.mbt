@@ -1648,6 +1648,8 @@ fn emit_expr(e : Emitter, expr : @ast.TsExpr, parent_prec : Int) -> Unit {
 ///|
 fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
   match expr {
+    // Type arguments are erased in JS output — emit the underlying call.
+    TypeArgs(_, inner) => emit_expr_body(e, inner)
     NumberLit(n) =>
       if e.pretty {
         // Use JS-valid names for special floating-point values.
@@ -3354,6 +3356,7 @@ fn compound_op_str(op : @ast.TsCompoundOp) -> String {
 ///|
 fn expr_precedence(expr : @ast.TsExpr) -> Int {
   match expr {
+    TypeArgs(_, inner) => expr_precedence(inner)
     NumberLit(_)
     | IntLit(_)
     | BigIntLit(_)

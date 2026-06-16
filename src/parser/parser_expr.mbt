@@ -1031,13 +1031,22 @@ fn Parser::try_skip_call_type_args(self : Parser, expr : @ast.TsExpr) -> Bool {
     return false
   }
   let saved_pos = self.pos
+  self.pending_call_type_args = []
+  // Capture the type arguments when they parse cleanly so a following call
+  // can be wrapped in `TypeArgs`; otherwise fall back to the balanced skip.
   // Require a balanced `<...>` — otherwise `S<N;…` happily scans to
   // EOF, the caller treats it as a successful generic-instantiation,
   // and everything after the misread `<` disappears. (Real cases:
   // for-cond `S<N;++S`, ternary `S<N?a:b`.)
-  if !self.try_skip_type_args() {
-    self.pos = saved_pos
-    return false
+  match self.try_parse_simple_type_args() {
+    Some(args) => self.pending_call_type_args = args
+    None => {
+      self.pos = saved_pos
+      if !self.try_skip_type_args() {
+        self.pos = saved_pos
+        return false
+      }
+    }
   }
   if self.check(LParen) {
     return true
@@ -1058,6 +1067,7 @@ fn Parser::try_skip_call_type_args(self : Parser, expr : @ast.TsExpr) -> Bool {
     return true
   }
   self.pos = saved_pos
+  self.pending_call_type_args = []
   false
 }
 
@@ -2253,6 +2263,9 @@ fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
   // followed — bare `parse_primary()` results (`x` alone, no
   // `(args)`) shouldn't be tagged pure.
   let mut saw_call_in_chain = false
+  // Explicit type arguments captured for the call about to be built
+  // (`foo<number>(x)`). Reset after each call form consumes them.
+  let mut pending_type_args : Array[@ast.TsType] = []
 
   // operatorcheck
   while true {
@@ -2263,6 +2276,9 @@ fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
       continue
     }
     if self.try_skip_call_type_args(expr) {
+      // Stash the captured type args; the next loop iteration builds the
+      // actual call and wraps it (see the `LParen` branch below).
+      pending_type_args = self.pending_call_type_args
       continue
     }
     if self.check(Question) && self.peek_at(1).kind == Dot {
@@ -2317,12 +2333,20 @@ fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
       let args = self.parse_args()
       let _ = self.expect(RParen)
       saw_call_in_chain = true
-      match expr {
-        Var(name) => expr = Call(name, args)
+      let call : @ast.TsExpr = match expr {
+        Var(name) => Call(name, args)
         PropAccess(receiver, method_name) =>
           // method: receiver.method(args)
-          expr = MethodCall(receiver, method_name, args)
-        _ => expr = CallExpr(expr, args)
+          MethodCall(receiver, method_name, args)
+        _ => CallExpr(expr, args)
+      }
+      // Re-attach explicit type arguments captured just before the `(`.
+      expr = if pending_type_args.length() > 0 {
+        let wrapped = @ast.TsExpr::TypeArgs(pending_type_args, call)
+        pending_type_args = []
+        wrapped
+      } else {
+        call
       }
     } else if self.match_(LBracket) {
       // array
@@ -3010,6 +3034,9 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
       }
       let mut type_name = ""
       let mut callee_expr : @ast.TsExpr? = None
+      // Explicit constructor type arguments (`new C<number>()`); captured so
+      // the result can be wrapped in `TypeArgs` for type-checking.
+      let mut new_type_args : Array[@ast.TsType] = []
       match self.peek().kind {
         Ident(_) => {
           let first = match self.advance().kind {
@@ -3080,7 +3107,10 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
           callee_expr = Some(expr)
           // typeparameter (simpleimplementation)
           if self.check(Lt) {
-            self.skip_type_args()
+            match self.try_parse_simple_type_args() {
+              Some(targs) => new_type_args = targs
+              None => self.skip_type_args()
+            }
           }
         }
         NumberType => {
@@ -3154,13 +3184,18 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
       } else {
         []
       }
-      match callee_expr {
+      let new_expr : @ast.TsExpr = match callee_expr {
         Some(expr) =>
           match expr {
             Var(_) => New(type_name, args)
             _ => NewExpr(expr, args)
           }
         None => New(type_name, args)
+      }
+      if new_type_args.length() > 0 {
+        @ast.TsExpr::TypeArgs(new_type_args, new_expr)
+      } else {
+        new_expr
       }
     }
     LBrace => {

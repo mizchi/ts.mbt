@@ -8027,3 +8027,40 @@ test "expr_check: unrelated type-parameter assignment (TS2322)" {
   // Same type parameter — fine.
   @test.assert_eq(count("function f<T>(a: T, b: T) { a = b; }"), 0)
 }
+
+///|
+// Issue #62 (TS2558): supplying explicit type arguments to a callee that is
+// confidently non-generic (a declared class / function with zero type
+// parameters) is an error. Generic callees and ones we can't resolve stay
+// silent. Relies on the parser capturing call/new type arguments in a
+// `TypeArgs` wrapper.
+test "expr_check: type arguments on non-generic callee (TS2558)" {
+  let count = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src))
+    .filter(fn(i) { i.message.contains("type argument") })
+    .length()
+  }
+  // `new C<number>()` where `C` is a non-generic class.
+  assert_true(
+    count("class C {}\nfunction f() { var c = new C<number>(); }") >= 1,
+  )
+  // `new Foo<number>()` where `Foo` is a non-generic function.
+  assert_true(
+    count(
+      "function Foo(): void {}\nfunction f() { var r = new Foo<number>(); }",
+    ) >=
+    1,
+  )
+  // Generic function called with type arguments — fine.
+  @test.assert_eq(
+    count(
+      "function g<T>(x: T): T { return x; }\nfunction f() { g<number>(1); }",
+    ),
+    0,
+  )
+  // Generic class instantiated with type arguments — fine.
+  @test.assert_eq(
+    count("class Box<T> { v!: T; }\nfunction f() { new Box<number>(); }"),
+    0,
+  )
+}
