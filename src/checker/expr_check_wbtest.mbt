@@ -7846,3 +7846,42 @@ test "expr_check: null/undefined is not assignable to a bare type parameter (str
     0,
   )
 }
+
+///|
+// Issue #62 (a concrete literal vs a bare type parameter): a literal value is
+// never assignable to a bare in-scope type parameter `T` — `T` could be
+// instantiated with an arbitrary type unrelated to the literal, so this is a
+// TS2322 / TS2345 regardless of strict mode. The complement of the
+// null/undefined rule above; together they cover "non-`T` value -> bare `T`".
+test "expr_check: a literal is not assignable to a bare type parameter" {
+  let count = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src))
+    .filter(fn(i) { i.message.contains("not assignable to type parameter") })
+    .length()
+  }
+  // `var x: T = 1` in a generic body — flagged (literal source).
+  assert_true(count("function f<T>(): T { var x: T = 1; return x; }") >= 1)
+  // `return 1` where the return annotation is the bare type parameter.
+  assert_true(count("function f<T>(): T { return 1; }") >= 1)
+  // String literal likewise.
+  assert_true(count("function f<T>(): T { return \"s\"; }") >= 1)
+  // A value already typed as `T` is fine — not flagged.
+  @test.assert_eq(
+    count("function f<T>(t: T): T { var x: T = t; return x; }"),
+    0,
+  )
+  // An `any`-typed source flows to everything — not flagged.
+  @test.assert_eq(
+    count("function f<T>(a: any): T { var x: T = a; return x; }"),
+    0,
+  )
+  // Flow-narrowing residue: a `T`-typed variable narrowed to a primitive by a
+  // `typeof` guard keeps the intersection `T & string`, which IS assignable to
+  // `T`. The source is a variable (not a literal), so the rule stays silent.
+  @test.assert_eq(
+    count(
+      "function f<T>(x: T): void { if (typeof x === \"string\") { let v: T = x; } }",
+    ),
+    0,
+  )
+}
