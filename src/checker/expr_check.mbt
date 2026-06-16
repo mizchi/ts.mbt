@@ -12713,6 +12713,43 @@ fn check_module_function_bodies_layered(
       all.push(issue)
     }
   }
+  // Computed member keys on class methods / accessors (`class C { [e]() {} }`).
+  // The key is an ordinary value expression, so an undefined name in it is a
+  // TS2304 like any other reference. Walked with `in_computed_key` set so the
+  // TS2454 used-before-assigned read-check stays suppressed for `var` reads.
+  for cls in module_.classes {
+    let has_computed_key = cls.methods
+      .iter()
+      .any(fn(m) { m.key_expr is Some(_) })
+    if !has_computed_key {
+      continue
+    }
+    let key_ctx : CheckCtx = {
+      path_prefix: "function \{cls.name}.<member-key>",
+      return_type: @ast.TsType::Void,
+      yield_type: @ast.TsType::Any,
+      resolver,
+      issues: [],
+      in_scope_type_params: cls.type_params,
+      permissive,
+      unassigned: {},
+      strict_property_init,
+      in_computed_key: true,
+    }
+    let env = ExprEnv::new()
+    for v in module_.values {
+      env.bind(v.name, v.type_)
+    }
+    for meth in cls.methods {
+      match meth.key_expr {
+        Some(key) => check_call_args_in_expr(env, key, key_ctx)
+        None => ()
+      }
+    }
+    for issue in key_ctx.issues {
+      all.push(issue)
+    }
+  }
   // Top-level statements (const/let/var with explicit type annotations).
   // Walk them in a module-scope env so local names resolve correctly.
   if module_.top_level_stmts.length() > 0 {

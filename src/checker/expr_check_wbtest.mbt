@@ -8176,3 +8176,27 @@ test "expr_check: class field initializer type mismatch" {
   assert_true(issues("class C { x: number = \"s\"; }").length() >= 1)
   @test.assert_eq(issues("class C { x: number = 5; }").length(), 0)
 }
+
+///|
+// Issue #62: an undefined name in a class method's computed key
+// (`class C { [e]() {} }`) is a TS2304, like object-literal computed keys.
+test "expr_check: class method computed key references" {
+  let issues = fn(src : String) -> Array[String] {
+    check_module_function_bodies(parse_module_or_empty(src)).map(fn(i) {
+      i.message
+    })
+  }
+  assert_true(
+    issues("class C { [missingName]() {} }").any(fn(m) {
+      m.contains("cannot find name")
+    }),
+  )
+  // Getter / setter computed keys too.
+  assert_true(
+    issues("class C { get [missingName]() { return 1; } }").any(fn(m) {
+      m.contains("cannot find name")
+    }),
+  )
+  // Defined key — no diagnostic.
+  @test.assert_eq(issues("const k = \"m\";\nclass C { [k]() {} }").length(), 0)
+}
