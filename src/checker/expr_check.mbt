@@ -9984,6 +9984,20 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
     | Let(@ast.TsBinding::Array(ab), declared, init)
     | Const(@ast.TsBinding::Array(ab), declared, init) => {
       check_call_args_in_expr(env, init, ctx)
+      // TS2488: an array-destructuring pattern requires an iterable, but a
+      // plain object literal (`var [a, b] = { 0: "", 1: true }`) has no
+      // `[Symbol.iterator]()`. Object literals are never iterable, so this is
+      // false-positive-free — unless the literal carries a computed key that
+      // could itself be `[Symbol.iterator]`, in which case we stay silent.
+      match init {
+        ObjectLit(entries) =>
+          if not(entries.iter().any(fn(e) { e.1 is ComputedProp(_, _) })) {
+            record(
+              ctx, "destructuring init", "object literal must have a `[Symbol.iterator]()` method to be destructured as an array",
+            )
+          }
+        _ => ()
+      }
       if is_checkable(declared) {
         check_expr_against(env, init, declared, ctx, "destructuring init")
       }

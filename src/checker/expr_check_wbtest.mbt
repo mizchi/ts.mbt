@@ -8200,3 +8200,34 @@ test "expr_check: class method computed key references" {
   // Defined key — no diagnostic.
   @test.assert_eq(issues("const k = \"m\";\nclass C { [k]() {} }").length(), 0)
 }
+
+///|
+// Issue #62 (TS2488): array-destructuring a plain object literal is an error —
+// an object literal has no `[Symbol.iterator]()`. False-positive-free unless
+// the literal carries a computed key that could be `[Symbol.iterator]`.
+test "expr_check: array-destructure of object literal (TS2488)" {
+  let issues = fn(src : String) -> Array[String] {
+    check_module_function_bodies(parse_module_or_empty(src)).map(fn(i) {
+      i.message
+    })
+  }
+  assert_true(
+    issues("var [a, b] = { x: 1, y: 2 };").any(fn(m) {
+      m.contains("Symbol.iterator")
+    }),
+  )
+  // Array initializer is iterable — fine.
+  @test.assert_eq(
+    issues("var [a, b] = [1, 2];")
+    .filter(fn(m) { m.contains("Symbol.iterator") })
+    .length(),
+    0,
+  )
+  // Object literal with a computed key (could be `[Symbol.iterator]`) — silent.
+  @test.assert_eq(
+    issues("var [a] = { [Symbol.iterator]() { return null as any; } };")
+    .filter(fn(m) { m.contains("Symbol.iterator") })
+    .length(),
+    0,
+  )
+}
