@@ -223,6 +223,7 @@ fn try_lift_iife_value(
   let decl : @ast.TsClassDecl = {
     name,
     type_params: [],
+    type_param_bounds: [],
     base_names,
     implements_names: [],
     base_expr,

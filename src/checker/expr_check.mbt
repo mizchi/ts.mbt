@@ -41,6 +41,10 @@ priv struct Resolver {
   // should not widen the inferred literal type for that parameter.
   // Missing key / shorter array is treated as "all false".
   func_const_type_params : Map[String, Array[Bool]]
+  // Per-function type-parameter constraints (`(P, Bound)` pairs), keyed by
+  // function name. Sparse — only constrained parameters appear. The checker
+  // uses it to validate explicit type arguments against their bounds (TS2344).
+  func_type_param_bounds : Map[String, Array[(String, @ast.TsType)]]
   // Enum declarations keyed by name so `Color.Red` resolves to the member's
   // literal value type rather than falling through to Any.
   enums : Map[String, @ast.TsEnumDecl]
@@ -63,6 +67,7 @@ fn Resolver::empty() -> Resolver {
     globals: {},
     signatures: {},
     func_type_params: {},
+    func_type_param_bounds: {},
     func_const_type_params: {},
     enums: {},
     declared_value_names: {},
@@ -607,6 +612,9 @@ fn Resolver::ingest_module(
     r.signatures[prefix + f.name] = effective_params
     r.func_type_params[prefix + f.name] = f.type_params
     r.func_const_type_params[prefix + f.name] = f.const_type_params
+    if f.type_param_bounds.length() > 0 {
+      r.func_type_param_bounds[prefix + f.name] = f.type_param_bounds
+    }
   }
   for ns in module_.namespaces {
     // `<global>` is the synthetic namespace emitted for `declare global {}`
@@ -10514,15 +10522,24 @@ fn check_explicit_type_args(
   if targs.length() == 0 {
     return
   }
-  // Returns `Some(count)` when `name` is a declared callee whose type-parameter
-  // count is known, `None` when it can't be determined (stay silent).
-  fn declared_type_param_count(name : String) -> Int? {
+  // The callee's declared type-parameter names (positional), or `None` when the
+  // callee can't be resolved to a declared class / function (stay silent).
+  fn declared_type_params(name : String) -> Array[String]? {
     match ctx.resolver.classes.get(name) {
-      Some(cls) => Some(cls.type_params.length())
+      Some(cls) => Some(cls.type_params)
+      None => ctx.resolver.func_type_params.get(name)
+    }
+  }
+
+  // The callee's `(param, bound)` constraints — sparse, only constrained
+  // parameters appear.
+  fn declared_bounds(name : String) -> Array[(String, @ast.TsType)] {
+    match ctx.resolver.classes.get(name) {
+      Some(cls) => cls.type_param_bounds
       None =>
-        match ctx.resolver.func_type_params.get(name) {
-          Some(tps) => Some(tps.length())
-          None => None
+        match ctx.resolver.func_type_param_bounds.get(name) {
+          Some(b) => b
+          None => []
         }
     }
   }
@@ -10532,26 +10549,68 @@ fn check_explicit_type_args(
     New(name, _) => Some(name)
     _ => None
   }
-  match callee_name {
-    Some(name) =>
-      match declared_type_param_count(name) {
-        // Supplying *more* type arguments than the callee declares is always an
-        // error, regardless of any trailing defaults — defaults make trailing
-        // parameters optional but never raise the maximum. (The "too few"
-        // direction is left silent: without default-parameter info we can't
-        // tell a required parameter from a defaulted one, so flagging it would
-        // risk false positives.)
-        Some(count) =>
-          if targs.length() > count {
-            record(
-              ctx,
-              "call `\{name}`",
-              "expected \{count} type arguments, but got \{targs.length()}",
-            )
-          }
-        None => ()
+  guard callee_name is Some(name) else { return }
+  guard declared_type_params(name) is Some(params) else { return }
+  // Supplying *more* type arguments than the callee declares is always an
+  // error, regardless of any trailing defaults — defaults make trailing
+  // parameters optional but never raise the maximum. (The "too few" direction
+  // is left silent: without default-parameter info we can't tell a required
+  // parameter from a defaulted one, so flagging it would risk false positives.)
+  if targs.length() > params.length() {
+    record(
+      ctx,
+      "call `\{name}`",
+      "expected \{params.length()} type arguments, but got \{targs.length()}",
+    )
+    return
+  }
+  // TS2344: a type argument that doesn't satisfy its parameter's `extends`
+  // constraint. Mirrors the type-position check in `check_constraints`:
+  // positional substitution of the supplied arguments into the bound (so
+  // dependent constraints like `K extends keyof T` see the concrete `T`),
+  // then a three-valued `extends_decision_with` — only a definite `Some(false)`
+  // is reported, keeping the check false-positive-free. Requires an exact
+  // arity match so the positional substitution is meaningful.
+  let bounds = declared_bounds(name)
+  if bounds.length() == 0 || params.length() != targs.length() {
+    return
+  }
+  let resolve = fn(n : String) -> @ast.TsType? {
+    match ctx.resolver.type_aliases.get(n) {
+      Some(ta) =>
+        if ta.type_params.length() == 0 {
+          Some(ta.type_)
+        } else {
+          None
+        }
+      None => None
+    }
+  }
+  for pair in bounds {
+    let (pname, bound) = pair
+    let mut idx = -1
+    for i in 0..<params.length() {
+      if params[i] == pname {
+        idx = i
+        break
       }
-    None => ()
+    }
+    if idx < 0 {
+      continue
+    }
+    let mut substituted = bound
+    for i in 0..<params.length() {
+      substituted = substitute_named(substituted, params[i], targs[i])
+    }
+    let target = simplify_type(substituted)
+    let arg = simplify_type(targs[idx])
+    if extends_decision_with(arg, target, resolve) is Some(false) {
+      record(
+        ctx,
+        "call `\{name}`",
+        "type argument does not satisfy the `\{pname}` constraint",
+      )
+    }
   }
 }
 
@@ -12474,6 +12533,7 @@ fn check_module_function_bodies_layered(
         return_type: meth.return_type,
         body,
         const_type_params: [],
+        type_param_bounds: meth.type_param_bounds,
         is_generator: false,
         is_async: false,
       }
@@ -12532,6 +12592,7 @@ fn check_module_function_bodies_layered(
       return_type: @ast.TsType::Void,
       body,
       const_type_params: [],
+      type_param_bounds: cls.type_param_bounds,
       is_generator: false,
       is_async: false,
     }

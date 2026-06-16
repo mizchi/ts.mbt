@@ -1244,6 +1244,7 @@ fn synthesize_func_from_expr(
         return_type: infer_func_return_type(func, declared_type),
         body: func.body,
         const_type_params: [],
+        type_param_bounds: func.type_param_bounds,
         is_generator: func.is_generator,
         is_async: func.is_async,
       })
@@ -1274,6 +1275,7 @@ fn synthesize_func_from_expr(
         return_type,
         body: normalized_body,
         const_type_params: [],
+        type_param_bounds: [],
         is_generator: false,
         is_async,
       })
@@ -8326,6 +8328,7 @@ fn clone_exported_func(
     ),
     body: exported.func.body,
     const_type_params: [],
+    type_param_bounds: exported.func.type_param_bounds,
     is_generator: exported.func.is_generator,
     is_async: exported.func.is_async,
   }
@@ -8967,6 +8970,7 @@ fn clone_exported_class(
   {
     name: exported.export_name,
     type_params: exported.class_.type_params,
+    type_param_bounds: exported.class_.type_param_bounds,
     base_names: [],
     implements_names: [],
     base_expr: None,

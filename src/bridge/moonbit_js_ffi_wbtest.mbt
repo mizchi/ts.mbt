@@ -4977,6 +4977,7 @@ test "bridge: FFI class methods unwrap optional arguments" {
   let class_ : @ast.TsClassDecl = {
     name: "SignJWT",
     type_params: [],
+    type_param_bounds: [],
     base_names: [],
     implements_names: [],
     base_expr: None,
