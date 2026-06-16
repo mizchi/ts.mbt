@@ -5785,6 +5785,31 @@ fn check_expr_against(
   if expected_u is Never {
     return
   }
+  // A *literal* value is never assignable to a bare in-scope type parameter
+  // `T`: `T` could be instantiated with an arbitrary type unrelated to the
+  // value, so `function f<T>() { var x: T = 1 }` and
+  // `function f<T>(): T { return 1 }` are TS2322 / TS2345 regardless of strict
+  // mode (unlike `null` / `undefined`, which non-strict allows everywhere —
+  // handled above). Gated on the *expression* being a literal (not merely the
+  // inferred type being primitive): a variable typed `T` that flow-narrows to
+  // `string` (`if (typeof x === "string") { let v: T = x }`) keeps the
+  // intersection `T & string`, which IS assignable to `T` — flagging its
+  // inferred `string` would be a false positive.
+  if precise_literal_type(expr) is Some(_) {
+    match expected_u {
+      Named(n) =>
+        if ctx.in_scope_type_params.contains(n) &&
+          is_concrete_primitive_or_literal(inferred_u) {
+          record(
+            ctx,
+            sub_path,
+            "type `\{type_display(inferred_u)}` is not assignable to type parameter `\{n}`",
+          )
+          return
+        }
+      _ => ()
+    }
+  }
   // If the expected type is a `Named` reference that the resolver can't expand
   // (e.g. a generic type parameter like `T`, or a qualified name like
   // `Intl.NumberFormatPartTypes` that isn't in the module's declaration list),
@@ -12276,6 +12301,29 @@ fn check_module_function_bodies_layered(
     }
   }
   all
+}
+
+///|
+/// True when `ty` is a fully-concrete primitive or literal type with no type
+/// parameters, `any`, `unknown`, or `never` inside it. Used to decide that a
+/// value is genuinely incompatible with a bare in-scope type parameter `T`
+/// (`var x: T = 1`): only such unambiguously-concrete sources are flagged, so
+/// an imprecisely-inferred object / union / generic instantiation can never
+/// false-flag against `T`.
+fn is_concrete_primitive_or_literal(ty : @ast.TsType) -> Bool {
+  match ty {
+    Number
+    | Int
+    | String_
+    | Boolean
+    | BigInt
+    | Symbol
+    | Literal(_)
+    | NumberLiteral(_)
+    | BigIntLiteral(_)
+    | BooleanLiteral(_) => true
+    _ => false
+  }
 }
 
 ///|
