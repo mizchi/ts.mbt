@@ -8094,3 +8094,44 @@ test "expr_check: too many type arguments on generic callee (TS2558)" {
     0,
   )
 }
+
+///|
+// Issue #62 (TS2344): an explicit type argument that violates its parameter's
+// `extends` constraint is reported. Relies on the parser capturing type-param
+// bounds on `TsFunc` / `TsClassDecl` and threading them to the checker, plus
+// the `TypeArgs` wrapper capturing the call's type arguments.
+test "expr_check: TS2344 constraint violation on explicit type args" {
+  let constraint_issues = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src))
+    .filter(fn(i) { i.message.contains("constraint") })
+    .length()
+  }
+  // `g<string>` violates `T extends number`.
+  assert_true(
+    constraint_issues(
+      "function g<T extends number>(x: T): T { return x; }\nfunction f() { g<string>(0 as any); }",
+    ) >=
+    1,
+  )
+  // `new Box<string>` violates `T extends number`.
+  assert_true(
+    constraint_issues(
+      "class Box<T extends number> { v!: T; }\nfunction f() { new Box<string>(); }",
+    ) >=
+    1,
+  )
+  // `h<number>` satisfies `T extends number` — no constraint issue.
+  @test.assert_eq(
+    constraint_issues(
+      "function h<T extends number>(x: T): T { return x; }\nfunction f() { h<number>(1); }",
+    ),
+    0,
+  )
+  // Unconstrained generic — any argument is fine.
+  @test.assert_eq(
+    constraint_issues(
+      "function id<T>(x: T): T { return x; }\nfunction f() { id<string>(\"a\"); }",
+    ),
+    0,
+  )
+}

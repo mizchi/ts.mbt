@@ -542,6 +542,7 @@ fn Parser::parse_object_method_value(
   @ast.TsExpr::FuncExpr({
     name,
     type_params: [],
+    type_param_bounds: [],
     const_type_params: [],
     params,
     return_type,
@@ -3511,6 +3512,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
             @ast.TsExpr::FuncExpr(@ast.TsFunc::{
               name: func_name,
               type_params: [],
+              type_param_bounds: [],
               params,
               return_type,
               body,
@@ -3865,6 +3867,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
             @ast.TsExpr::FuncExpr(@ast.TsFunc::{
               name: func_name,
               type_params: [],
+              type_param_bounds: [],
               params,
               return_type,
               body,

@@ -505,6 +505,11 @@ pub(all) struct TsFunc {
   // — callers treat a missing flag as `false`. Generic inference uses
   // this to skip literal widening for the matching parameter.
   const_type_params : Array[Bool]
+  // `type_param_bounds` records `(P, Bound)` pairs for type parameters that
+  // declared a constraint (`function f<T extends X>()`). Sparse: only
+  // constrained parameters appear, so an empty array means "no constraints".
+  // The checker uses it to validate explicit type arguments (TS2344).
+  type_param_bounds : Array[(String, TsType)]
   params : Array[TsParam]
   return_type : TsType
   body : TsBlock
@@ -655,6 +660,10 @@ pub(all) struct TsClassMethodDecl {
 pub(all) struct TsClassDecl {
   name : String
   type_params : Array[String]
+  // `(P, Bound)` pairs for constrained class type parameters
+  // (`class C<T extends X> {}`). Sparse — only constrained parameters appear.
+  // Used by the checker to validate explicit type arguments (TS2344).
+  type_param_bounds : Array[(String, TsType)]
   base_names : Array[String]
   // Names of interfaces the class `implements` (`class C implements I, J`).
   // Head identifiers only (qualified names joined with `.`, type arguments

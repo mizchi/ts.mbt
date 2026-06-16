@@ -135,6 +135,7 @@ test "check_module: detects duplicate class instance properties" {
   m.classes.push({
     name: "Counter",
     type_params: [],
+    type_param_bounds: [],
     base_names: [],
     implements_names: [],
     base_expr: None,
@@ -187,6 +188,7 @@ test "check_module: instance and static with same name is OK" {
   m.classes.push({
     name: "Counter",
     type_params: [],
+    type_param_bounds: [],
     base_names: [],
     implements_names: [],
     base_expr: None,

@@ -52,6 +52,7 @@ fn runtime_class_param_name(param : @ast.TsParam, index : Int) -> String {
 fn build_runtime_class_decl(
   name : String,
   type_params : Array[String],
+  type_param_bounds : Array[(String, @ast.TsType)],
   ctor_opt : @ast.TsFunc?,
   elements : Array[ClassElement],
   is_abstract : Bool,
@@ -312,6 +313,7 @@ fn build_runtime_class_decl(
   {
     name,
     type_params,
+    type_param_bounds,
     base_names: [],
     implements_names,
     base_expr: None,
@@ -1003,6 +1005,7 @@ fn Parser::inject_instance_field_assigns(
     return_type: func.return_type,
     body: { stmts: new_stmts, stmt_positions: [] },
     const_type_params: [],
+    type_param_bounds: func.type_param_bounds,
     is_generator: func.is_generator,
     is_async: func.is_async,
   }
@@ -1143,9 +1146,11 @@ fn Parser::parse_class_body(
     let has_definite_assertion = self.match_(Bang)
     let mut local_type_param_bound_len = self.local_type_param_bounds.length()
     let mut method_type_param_names : Array[String] = []
+    let mut method_type_param_bounds : Array[(String, @ast.TsType)] = []
     if self.check(Lt) {
       let (names, type_param_bounds) = self.parse_type_param_names_and_bounds()
       method_type_param_names = names
+      method_type_param_bounds = type_param_bounds
       local_type_param_bound_len = self.push_local_type_param_bounds(
         type_param_bounds,
       )
@@ -1251,6 +1256,7 @@ fn Parser::parse_class_body(
         name: method_name,
         type_params: method_type_param_names,
         const_type_params: [],
+        type_param_bounds: method_type_param_bounds,
         params,
         return_type,
         body,
@@ -1341,10 +1347,12 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     _ => { kind: Eof, pos: 0, has_newline_before: false }
   }
   let mut class_type_params : Array[String] = []
+  let mut class_type_param_bounds : Array[(String, @ast.TsType)] = []
   let mut class_type_param_bound_len = self.local_type_param_bounds.length()
   if self.check(Lt) {
     let (names, type_param_bounds) = self.parse_type_param_names_and_bounds()
     class_type_params = names
+    class_type_param_bounds = type_param_bounds
     class_type_param_bound_len = self.push_local_type_param_bounds(
       type_param_bounds,
     )
@@ -1384,6 +1392,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
         return CallExpr(
           @ast.TsExpr::FuncExpr(@ast.TsFunc::{
             type_params: [],
+            type_param_bounds: [],
             name: "<class>",
             params: [],
             return_type: @ast.TsType::Any,
@@ -1403,8 +1412,8 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   match base {
     Some(base_name) => {
       let runtime_decl = build_runtime_class_decl(
-        class_name, class_type_params, ctor_opt, elements, false, private_members,
-        protected_members, implements_names,
+        class_name, class_type_params, class_type_param_bounds, ctor_opt, elements,
+        false, private_members, protected_members, implements_names,
       )
       let pending_base_expr = self.pending_class_base_expr
       self.pending_class_base_expr = None
@@ -1458,6 +1467,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
             Some(@ast.TsFunc::{
               name: "constructor",
               type_params: [],
+              type_param_bounds: [],
               params: [
                 {
                   name: rest_name,
@@ -1522,6 +1532,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       class_name
     },
     class_type_params,
+    class_type_param_bounds,
     ctor_opt,
     elements,
     false,
@@ -1534,6 +1545,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   let decorated : @ast.TsClassDecl = {
     name: runtime_decl.name,
     type_params: runtime_decl.type_params,
+    type_param_bounds: runtime_decl.type_param_bounds,
     base_names: runtime_decl.base_names,
     implements_names: runtime_decl.implements_names,
     base_expr: runtime_decl.base_expr,
@@ -1655,6 +1667,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
           {
             name: tmp_name,
             type_params: [],
+            type_param_bounds: [],
             params: [rest_param],
             return_type: Any,
             body: empty_body,
@@ -1668,6 +1681,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
           {
             name: tmp_name,
             type_params: [],
+            type_param_bounds: [],
             params: [],
             return_type: Any,
             body: empty_body,
@@ -1926,6 +1940,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
         // Generate: (function() { ...block... }).call(ClassName)
         let static_block_func = @ast.TsExpr::FuncExpr(@ast.TsFunc::{
           type_params: [],
+          type_param_bounds: [],
           name: "",
           params: [],
           return_type: @ast.TsType::Any,
@@ -1947,6 +1962,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   CallExpr(
     @ast.TsExpr::FuncExpr(@ast.TsFunc::{
       type_params: [],
+      type_param_bounds: [],
       name: "<class>",
       params: [],
       return_type: @ast.TsType::Any,
@@ -1971,10 +1987,12 @@ fn Parser::parse_class_decl_with_abstract(
     _ => "<class>"
   }
   let mut class_type_params : Array[String] = []
+  let mut class_type_param_bounds : Array[(String, @ast.TsType)] = []
   let mut class_type_param_bound_len = self.local_type_param_bounds.length()
   if self.check(Lt) {
     let (names, type_param_bounds) = self.parse_type_param_names_and_bounds()
     class_type_params = names
+    class_type_param_bounds = type_param_bounds
     class_type_param_bound_len = self.push_local_type_param_bounds(
       type_param_bounds,
     )
@@ -2001,8 +2019,8 @@ fn Parser::parse_class_decl_with_abstract(
   self.current_class_brand = prev_brand
   self.restore_local_type_param_bounds(class_type_param_bound_len)
   let runtime_decl = build_runtime_class_decl(
-    name, class_type_params, ctor_opt, elements, is_abstract, private_members, protected_members,
-    implements_names,
+    name, class_type_params, class_type_param_bounds, ctor_opt, elements, is_abstract,
+    private_members, protected_members, implements_names,
   )
   self.last_runtime_class_decl = Some(runtime_decl)
   // When the class extends another class, the IIFE desugar below
@@ -2061,6 +2079,7 @@ fn Parser::parse_class_decl_with_abstract(
             @ast.TsFunc::{
               name: "constructor",
               type_params: [],
+              type_param_bounds: [],
               params: [
                 {
                   name: rest_name,
@@ -2083,6 +2102,7 @@ fn Parser::parse_class_decl_with_abstract(
             @ast.TsFunc::{
               name: "",
               type_params: [],
+              type_param_bounds: [],
               params: [],
               return_type: @ast.TsType::Any,
               body: { stmts: [], stmt_positions: [] },
@@ -2246,6 +2266,7 @@ fn Parser::parse_class_decl_with_abstract(
           {
             name,
             type_params: [],
+            type_param_bounds: [],
             params: [rest_param],
             return_type: Any,
             body: empty_body,
@@ -2259,6 +2280,7 @@ fn Parser::parse_class_decl_with_abstract(
           {
             name,
             type_params: [],
+            type_param_bounds: [],
             params: [],
             return_type: Any,
             body: empty_body,
@@ -2508,6 +2530,7 @@ fn Parser::parse_class_decl_with_abstract(
         // Generate: (function() { ...block... }).call(ClassName)
         let static_block_func = @ast.TsExpr::FuncExpr(@ast.TsFunc::{
           type_params: [],
+          type_param_bounds: [],
           name: "",
           params: [],
           return_type: @ast.TsType::Any,
@@ -2539,6 +2562,7 @@ fn Parser::parse_class_decl_with_abstract(
     let iife = @ast.TsExpr::CallExpr(
       @ast.TsExpr::FuncExpr(@ast.TsFunc::{
         type_params: [],
+        type_param_bounds: [],
         name: "<class>",
         params: [],
         return_type: @ast.TsType::Any,

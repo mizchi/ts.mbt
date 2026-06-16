@@ -1025,6 +1025,7 @@ fn peep_decl_rhs(
         @ast.TsExpr::FuncExpr({
           name: "",
           type_params: [],
+          type_param_bounds: [],
           const_type_params: [],
           params,
           return_type: ret,

@@ -253,6 +253,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
       name,
       type_params,
       const_type_params,
+      type_param_bounds,
       params,
       return_type,
       body: { stmts: [], stmt_positions: [] },
@@ -265,6 +266,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
       name,
       type_params,
       const_type_params,
+      type_param_bounds,
       params,
       return_type,
       body: { stmts: [], stmt_positions: [] },
@@ -327,6 +329,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
     name,
     type_params,
     const_type_params,
+    type_param_bounds,
     params: final_params,
     return_type: final_return,
     body,
@@ -549,7 +552,7 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
     | In => self.parse_binding_ident()
     _ => "<anon>"
   }
-  let (type_params, const_type_params, _) = self.parse_type_param_names_bounds_and_const_flags()
+  let (type_params, const_type_params, type_param_bounds) = self.parse_type_param_names_bounds_and_const_flags()
   let _ = self.expect(LParen)
   let params = self.parse_params()
   let _ = self.expect(RParen)
@@ -598,6 +601,7 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
     name,
     type_params,
     const_type_params,
+    type_param_bounds,
     params,
     return_type,
     body,
@@ -2181,10 +2185,12 @@ fn Parser::parse_declare_class(
   let _ = self.expect(Class)
   let name = self.parse_binding_ident()
   let mut class_type_params : Array[String] = []
+  let mut class_type_param_bounds : Array[(String, @ast.TsType)] = []
   let mut class_type_param_bound_len = self.local_type_param_bounds.length()
   if self.check(Lt) {
     let (names, type_param_bounds) = self.parse_type_param_names_and_bounds()
     class_type_params = names
+    class_type_param_bounds = type_param_bounds
     class_type_param_bound_len = self.push_local_type_param_bounds(
       type_param_bounds,
     )
@@ -2426,6 +2432,7 @@ fn Parser::parse_declare_class(
   {
     name,
     type_params: class_type_params,
+    type_param_bounds: class_type_param_bounds,
     base_names,
     implements_names,
     base_expr: None,
