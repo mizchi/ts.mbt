@@ -7976,3 +7976,29 @@ test "expr_check: function-type parameter mismatch (contravariance)" {
     0,
   )
 }
+
+///|
+// Issue #62 (constructor-type assignability): a constructor type whose
+// parameter / return types are incompatible with the expected constructor
+// type is flagged, mirroring the function-type check.
+test "expr_check: constructor-type return mismatch" {
+  let count = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src))
+    .filter(fn(i) { i.message.contains("expected") })
+    .length()
+  }
+  // Return mismatch: `new (x: number) => string` vs `new (x: number) => number`.
+  assert_true(
+    count(
+      "declare var g: new (x: number) => string;\nvar f: new (x: number) => number = g;",
+    ) >=
+    1,
+  )
+  // Compatible — not flagged.
+  @test.assert_eq(
+    count(
+      "declare var g: new (x: number) => number;\nvar f: new (x: number) => number = g;",
+    ),
+    0,
+  )
+}
