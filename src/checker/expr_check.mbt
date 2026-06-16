@@ -5821,6 +5821,28 @@ fn check_expr_against(
       _ => ()
     }
   }
+  // Assignment between two *distinct* in-scope type parameters (`function
+  // foo<T, U>(t: T, u: U) { t = u }`) is a TS2322: type parameters are
+  // unrelated unless one is constrained to the other. Constraint relationships
+  // are already resolved by the parser, which inlines a constrained type
+  // parameter to its (transitive) bound — so a reference that is *still* a
+  // bare in-scope type parameter here is genuinely unconstrained relative to
+  // the target, and `<T, U extends T>` / `<T, V extends T, U extends V>` have
+  // their `U` rewritten to `T` and never reach this flag.
+  match (inferred_u, expected_u) {
+    (Named(s), Named(t)) =>
+      if s != t &&
+        ctx.in_scope_type_params.contains(s) &&
+        ctx.in_scope_type_params.contains(t) {
+        record(
+          ctx,
+          sub_path,
+          "expected `\{type_display(expected_u)}` but got `\{type_display(inferred_u)}`",
+        )
+        return
+      }
+    _ => ()
+  }
   // If the expected type is a `Named` reference that the resolver can't expand
   // (e.g. a generic type parameter like `T`, or a qualified name like
   // `Intl.NumberFormatPartTypes` that isn't in the module's declaration list),

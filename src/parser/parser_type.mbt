@@ -770,15 +770,40 @@ fn Parser::parse_named_type_tail(
 
 ///|
 fn Parser::local_type_param_bound(self : Parser, name : String) -> @ast.TsType? {
-  let mut idx = self.local_type_param_bounds.length()
-  while idx > 0 {
-    idx -= 1
-    let (param_name, bound) = self.local_type_param_bounds[idx]
-    if param_name == name {
-      return Some(bound)
+  fn direct(n : String) -> @ast.TsType? {
+    let mut idx = self.local_type_param_bounds.length()
+    while idx > 0 {
+      idx -= 1
+      let (param_name, bound) = self.local_type_param_bounds[idx]
+      if param_name == n {
+        return Some(bound)
+      }
+    }
+    None
+  }
+
+  match direct(name) {
+    None => None
+    Some(bound) => {
+      // Follow chains of type-parameter constraints to their ultimate bound:
+      // `<T, V extends T, U extends V>` resolves `U` to `T`, not just `V`.
+      // This keeps the inlined form transitively faithful so downstream
+      // structural checks (e.g. type-parameter assignability) don't treat
+      // `U` and `T` as unrelated. A visited set guards malformed cycles
+      // (`<A extends B, B extends A>`).
+      let mut cur = bound
+      let seen : Map[String, Bool] = {}
+      seen[name] = true
+      while cur is Named(n) && !seen.contains(n) {
+        seen[n] = true
+        match direct(n) {
+          Some(next) => cur = next
+          None => break
+        }
+      }
+      Some(cur)
     }
   }
-  None
 }
 
 ///|
