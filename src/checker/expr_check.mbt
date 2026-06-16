@@ -10535,13 +10535,21 @@ fn check_explicit_type_args(
   match callee_name {
     Some(name) =>
       match declared_type_param_count(name) {
-        Some(0) =>
-          record(
-            ctx,
-            "call `\{name}`",
-            "expected 0 type arguments, but got \{targs.length()}",
-          )
-        _ => ()
+        // Supplying *more* type arguments than the callee declares is always an
+        // error, regardless of any trailing defaults — defaults make trailing
+        // parameters optional but never raise the maximum. (The "too few"
+        // direction is left silent: without default-parameter info we can't
+        // tell a required parameter from a defaulted one, so flagging it would
+        // risk false positives.)
+        Some(count) =>
+          if targs.length() > count {
+            record(
+              ctx,
+              "call `\{name}`",
+              "expected \{count} type arguments, but got \{targs.length()}",
+            )
+          }
+        None => ()
       }
     None => ()
   }
