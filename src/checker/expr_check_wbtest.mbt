@@ -8002,3 +8002,28 @@ test "expr_check: constructor-type return mismatch" {
     0,
   )
 }
+
+///|
+// Issue #62 (type-parameter assignability): two distinct, unrelated in-scope
+// type parameters are not assignable to one another (TS2322). Constraint
+// relationships — including transitive ones — are resolved by the parser
+// (which inlines a constrained type parameter to its ultimate bound), so a
+// reference that is still a bare type parameter here is genuinely unrelated.
+test "expr_check: unrelated type-parameter assignment (TS2322)" {
+  let count = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src))
+    .filter(fn(i) { i.message.contains("expected") })
+    .length()
+  }
+  // Unconstrained, unrelated `T` and `U` — not assignable.
+  assert_true(count("function f<T, U>(t: T, u: U) { t = u; }") >= 1)
+  // `U extends T` — `U` is assignable to `T`, so `t = u` is fine.
+  @test.assert_eq(count("function f<T, U extends T>(t: T, u: U) { t = u; }"), 0)
+  // Transitive: `U extends V extends T` — `t = u` is fine (no FP).
+  @test.assert_eq(
+    count("function f<T, V extends T, U extends V>(t: T, u: U) { t = u; }"),
+    0,
+  )
+  // Same type parameter — fine.
+  @test.assert_eq(count("function f<T>(a: T, b: T) { a = b; }"), 0)
+}
