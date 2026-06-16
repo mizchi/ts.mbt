@@ -4236,6 +4236,9 @@ fn infer_expr(
   expr : @ast.TsExpr,
 ) -> @ast.TsType {
   match expr {
+    // Explicit type arguments are erased for inference: the call's value
+    // type is the inner call's type.
+    TypeArgs(_, inner) => infer_expr(env, resolver, inner)
     NumberLit(_) | IntLit(_) => @ast.TsType::Number
     BigIntLit(_) => @ast.TsType::BigInt
     BoolLit(_) => @ast.TsType::Boolean
@@ -10495,12 +10498,69 @@ fn check_undefined_name(env : ExprEnv, ctx : CheckCtx, name : String) -> Unit {
 }
 
 ///|
+
+///|
+/// TS2558 ("Expected N type arguments, but got M") for explicit type arguments
+/// supplied to a callee that is *confidently* non-generic: a declared class or
+/// function that declares zero type parameters. Restricted to that case to
+/// stay false-positive-free — when the callee can't be resolved, or is generic
+/// / `any` / a callable interface whose type-parameter count we don't model,
+/// the check stays silent.
+fn check_explicit_type_args(
+  ctx : CheckCtx,
+  targs : Array[@ast.TsType],
+  inner : @ast.TsExpr,
+) -> Unit {
+  if targs.length() == 0 {
+    return
+  }
+  // Returns `Some(count)` when `name` is a declared callee whose type-parameter
+  // count is known, `None` when it can't be determined (stay silent).
+  fn declared_type_param_count(name : String) -> Int? {
+    match ctx.resolver.classes.get(name) {
+      Some(cls) => Some(cls.type_params.length())
+      None =>
+        match ctx.resolver.func_type_params.get(name) {
+          Some(tps) => Some(tps.length())
+          None => None
+        }
+    }
+  }
+
+  let callee_name = match inner {
+    Call(name, _) => Some(name)
+    New(name, _) => Some(name)
+    _ => None
+  }
+  match callee_name {
+    Some(name) =>
+      match declared_type_param_count(name) {
+        Some(0) =>
+          record(
+            ctx,
+            "call `\{name}`",
+            "expected 0 type arguments, but got \{targs.length()}",
+          )
+        _ => ()
+      }
+    None => ()
+  }
+}
+
+///|
 fn check_call_args_in_expr(
   env : ExprEnv,
   expr : @ast.TsExpr,
   ctx : CheckCtx,
 ) -> Unit {
   match expr {
+    // A call carrying explicit type arguments: first validate the type-argument
+    // list against the callee, then descend into the underlying call so its
+    // arguments are still checked.
+    TypeArgs(targs, inner) => {
+      check_explicit_type_args(ctx, targs, inner)
+      check_call_args_in_expr(env, inner, ctx)
+    }
     Call(name, args) => {
       // TS2304: calling a name declared nowhere and not a standard global.
       check_undefined_name(env, ctx, name)
@@ -12943,6 +13003,7 @@ fn collect_ctor_this_members_expr(
     | ArrayHole
     | Var(_)
     | ImportMeta => ()
+    TypeArgs(_, inner) => collect_ctor_this_members_expr(inner, members, opaque)
     PropAccess(recv, name) =>
       if expr_is_this(recv) {
         members[name] = ()

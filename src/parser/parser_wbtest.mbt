@@ -782,8 +782,8 @@ test "parser: parse new array" {
   let parser = Parser::from_source("new Array<number>(10)")
   let expr = parser.parse_expr()
   match expr {
-    New("Array", args) => assert_eq(args.length(), 1)
-    _ => fail("expected New, got \{expr}")
+    TypeArgs([Number], New("Array", args)) => assert_eq(args.length(), 1)
+    _ => fail("expected TypeArgs-wrapped New, got \{expr}")
   }
 }
 
@@ -3840,17 +3840,25 @@ test "parser: parse bare import type annotation" {
 
 ///|
 test "parser: parse new expression with multiple generic type args" {
+  // Explicit constructor type arguments are now captured in a `TypeArgs`
+  // wrapper around the underlying `New`.
   match parse_expr_from("new Map<string, string>()") {
-    New("Map", args) => assert_eq(args.length(), 0)
-    _ => fail("expected generic New(Map), got different expression")
+    TypeArgs(targs, New("Map", args)) => {
+      assert_eq(targs.length(), 2)
+      assert_eq(args.length(), 0)
+    }
+    _ => fail("expected TypeArgs-wrapped New(Map), got different expression")
   }
 }
 
 ///|
 test "parser: parse new expression with private constructor property and type args" {
   match parse_expr_from("new this.#mapCtor<string, DataValue>()") {
-    NewExpr(_, args) => assert_eq(args.length(), 0)
-    _ => fail("expected NewExpr with private constructor property")
+    TypeArgs(targs, NewExpr(_, args)) => {
+      assert_eq(targs.length(), 2)
+      assert_eq(args.length(), 0)
+    }
+    _ => fail("expected TypeArgs-wrapped NewExpr with private constructor")
   }
 }
 
@@ -3880,8 +3888,9 @@ test "parser: parse module block type re-export metadata" {
 ///|
 test "parser: parse generic call with array type arg" {
   match parse_expr_from("signal<number[]>([])") {
-    Call("signal", args) => assert_eq(args.length(), 1)
-    _ => fail("expected generic call expression")
+    TypeArgs([Array(Number)], Call("signal", args)) =>
+      assert_eq(args.length(), 1)
+    _ => fail("expected TypeArgs-wrapped generic call expression")
   }
 }
 

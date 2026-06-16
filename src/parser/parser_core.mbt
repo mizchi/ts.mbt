@@ -46,6 +46,11 @@ pub struct Parser {
   // `extends make(ast)`). Callers drain this immediately after the
   // call to stash it on the resulting `TsClassDecl.base_expr`.
   mut pending_class_base_expr : @ast.TsExpr?
+  // Explicit type arguments captured by `try_skip_call_type_args` for the
+  // call that immediately follows (`foo<number>(x)`). Drained by `parse_call`
+  // when it builds the `Call` / `New` / `MethodCall` so the result can be
+  // wrapped in `TypeArgs`. Empty when the following call had none.
+  mut pending_call_type_args : Array[@ast.TsType]
   local_type_param_bounds : Array[(String, @ast.TsType)]
   // Decorator expressions parsed at the statement level that should be
   // attached to the next class declaration. The class parsers drain
@@ -116,6 +121,7 @@ pub fn Parser::new_with_strict_and_jsx(
     pos: 0,
     pending_gt: 0,
     pending_gt_pos: 0,
+    pending_call_type_args: [],
     in_generator: false,
     in_async: false,
     temp_index: 0,
@@ -168,6 +174,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     pos: 0,
     pending_gt: 0,
     pending_gt_pos: 0,
+    pending_call_type_args: [],
     in_generator: false,
     in_async: false,
     temp_index: 0,

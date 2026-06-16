@@ -1548,6 +1548,7 @@ fn collect_var_refs_stmt(stmt : @ast.TsStmt, out : Map[String, Bool]) -> Unit {
 ///|
 fn collect_var_refs_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit {
   match expr {
+    TypeArgs(_, inner) => collect_var_refs_expr(inner, out)
     Var(name) => out[name] = true
     BinOp(_, a, b) => {
       collect_var_refs_expr(a, out)
