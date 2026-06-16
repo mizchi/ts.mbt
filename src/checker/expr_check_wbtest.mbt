@@ -7917,3 +7917,62 @@ test "expr_check: out-of-scope single-letter type parameter (TS2304)" {
     0,
   )
 }
+
+///|
+// Issue #62 (function-type parameter assignability): a function-typed value /
+// argument whose explicit parameter types are incompatible with the expected
+// function type is a TS2322 / TS2345. Parameters are compared bivariantly
+// (matching `strictFunctionTypes: false`). Generic function types, in-scope
+// type parameters, unresolved names, and inference-union formals are skipped
+// to stay false-positive-free.
+test "expr_check: function-type parameter mismatch (contravariance)" {
+  let count = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src))
+    .filter(fn(i) { i.message.contains("expected") })
+    .length()
+  }
+  // Assignment: `(x: string) => string` is not assignable to
+  // `(x: number) => number` (param `string` vs `number`).
+  assert_true(
+    count(
+      "declare var g: (x: string) => string;\nvar f: (x: number) => number = g;",
+    ) >=
+    1,
+  )
+  // Function-typed argument: same mismatch at a call site.
+  assert_true(
+    count(
+      "declare function take(cb: (x: number) => number): void;\ndeclare var g: (x: string) => string;\ntake(g);",
+    ) >=
+    1,
+  )
+  // Arrow argument with an explicit, incompatible param annotation.
+  assert_true(
+    count(
+      "declare function take(cb: (x: number) => number): void;\ntake((x: string) => x.length);",
+    ) >=
+    1,
+  )
+  // Compatible (same param type) — not flagged.
+  @test.assert_eq(
+    count(
+      "declare var g: (x: number) => number;\nvar f: (x: number) => number = g;",
+    ),
+    0,
+  )
+  // A generic arrow (`<U extends string>(x: U) => x`) can be instantiated to
+  // satisfy the constraint — not flagged.
+  @test.assert_eq(
+    count(
+      "function foo<T extends (x: string) => string>(x: T): T { return x; }\nvar r = foo(<U extends string>(x: U) => x);",
+    ),
+    0,
+  )
+  // Unannotated arrow params take the contextual type — not flagged.
+  @test.assert_eq(
+    count(
+      "declare function take(cb: (x: number) => number): void;\ntake((x) => x + 1);",
+    ),
+    0,
+  )
+}

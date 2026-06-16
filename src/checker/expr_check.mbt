@@ -5893,6 +5893,36 @@ fn check_expr_against(
   if tuples_differ_only_in_named(inferred_u, expected_u, ctx.resolver) {
     return
   }
+  // Plain function-type vs function-type: check assignability before the
+  // broad callable bail below. Parameters are compared *bivariantly* — that
+  // matches the conformance corpus default (`strictFunctionTypes: false`) and
+  // is the permissive choice, so we never FP on a case a stricter
+  // contravariant rule would reject. A clear incompatibility
+  // (`(x: string) => string` assigned where `(x: number) => number` is
+  // expected) is then a real TS2322 / TS2345.
+  //
+  // Restricted to cases where neither side is a *generic* function type
+  // (`GenericFunc`) — those can be made compatible by instantiating their
+  // type parameters, which we don't attempt here — and where neither inner
+  // shape carries an unresolved / in-scope type-parameter reference (the
+  // source side is already cleared by the unresolved-`Named` bail above; this
+  // guards the expected side).
+  if not_generic_func(inferred) &&
+    not_generic_func(expected) &&
+    inferred_u is Func(_, _) &&
+    expected_u is Func(_, _) &&
+    !func_type_mentions_type_param(inferred_u, ctx) &&
+    !func_type_mentions_type_param(expected_u, ctx) &&
+    !type_contains_unresolved_named(expected_u, ctx.resolver) {
+    if !is_assignable_to_bivariant(inferred_u, expected_u) {
+      record(
+        ctx,
+        sub_path,
+        "expected `\{type_display(expected_u)}` but got `\{type_display(inferred_u)}`",
+      )
+    }
+    return
+  }
   // Callable / constructable interfaces & objects (`<call>` / `<new>`
   // signatures, often `extends Function`, with overloaded methods like
   // `foo("hi"): Derived1; foo("bye"): Derived2`) match other call signatures
@@ -7932,6 +7962,26 @@ fn check_arrow_with_context(
       formal_params[i]
     } else {
       p.type_
+    }
+    // When the arrow param carries an *explicit* annotation, it must be
+    // compatible with the contextual (formal) parameter type. Parameters are
+    // compared bivariantly (matching `strictFunctionTypes: false`, the corpus
+    // default): a clear incompatibility (`(x: string) => …` passed where
+    // `(x: number) => …` is expected) is a real TS2345 / TS2322. Skipped when
+    // either side is non-checkable (`any`) or mentions an in-scope type
+    // parameter (instantiation could reconcile them).
+    if is_checkable(p.type_) &&
+      i < formal_params.length() &&
+      is_checkable(formal_params[i]) &&
+      reliable_func_param_operand(p.type_, ctx) &&
+      reliable_func_param_operand(formal_params[i], ctx) &&
+      !(is_assignable_to_bivariant(p.type_, formal_params[i]) ||
+      is_assignable_to_bivariant(formal_params[i], p.type_)) {
+      record(
+        ctx,
+        "\{sub_path} param `\{p.name}`",
+        "expected `\{type_display(formal_params[i])}` but got `\{type_display(p.type_)}`",
+      )
     }
     env.bind(p.name, ty)
     param_names.push(p.name)
@@ -12616,6 +12666,69 @@ fn is_concrete_primitive_or_literal(ty : @ast.TsType) -> Bool {
     | BooleanLiteral(_) => true
     _ => false
   }
+}
+
+///|
+/// True when `ty` is *not* a generic function type. Used to keep the
+/// function-type assignability check away from `<S>(...) => T` shapes, which
+/// can be made compatible by instantiating their type parameters.
+fn not_generic_func(ty : @ast.TsType) -> Bool {
+  !(ty is GenericFunc(_, _))
+}
+
+///|
+/// True when any param / return position of a function type references an
+/// in-scope type parameter (`(x: T) => T` inside `function f<T>(...)`). Such a
+/// function type's assignability depends on how `T` is instantiated, so the
+/// concrete function-type check stays silent. Only the immediate param /
+/// return positions are inspected — enough for the shapes the check handles.
+fn func_type_mentions_type_param(ty : @ast.TsType, ctx : CheckCtx) -> Bool {
+  match ty {
+    Func(params, ret) | Constructor(params, ret, _) =>
+      params.iter().any(fn(p) { type_mentions_in_scope_type_param(p, ctx) }) ||
+      type_mentions_in_scope_type_param(ret, ctx)
+    _ => false
+  }
+}
+
+///|
+/// True when a type is a *reliable* operand for the bivariant function-type
+/// parameter check: a concrete type whose comparison we trust. Excludes
+/// - in-scope type parameters (`T`) and generic function types — instantiation
+///   could reconcile them;
+/// - unresolved `Named` references (an arrow's own dropped generic `<U>`, or a
+///   library type we don't model) — we can't compare them soundly;
+/// - `Union` types — these are usually the artifact of our generic
+///   type-argument inference (which diverges from tsc), so a strict param
+///   comparison against them false-flags.
+fn reliable_func_param_operand(ty : @ast.TsType, ctx : CheckCtx) -> Bool {
+  if type_mentions_in_scope_type_param(ty, ctx) {
+    return false
+  }
+  if !not_generic_func(ty) {
+    return false
+  }
+  if type_contains_unresolved_named(ty, ctx.resolver) {
+    return false
+  }
+  match ty {
+    Union(_) => false
+    _ => true
+  }
+}
+
+///|
+/// True when `ty` references any type parameter currently in scope.
+fn type_mentions_in_scope_type_param(ty : @ast.TsType, ctx : CheckCtx) -> Bool {
+  if ctx.in_scope_type_params.length() == 0 {
+    return false
+  }
+  for tp in ctx.in_scope_type_params {
+    if type_param_occurs(tp, ty) {
+      return true
+    }
+  }
+  false
 }
 
 ///|
