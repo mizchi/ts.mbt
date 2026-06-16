@@ -5893,13 +5893,14 @@ fn check_expr_against(
   if tuples_differ_only_in_named(inferred_u, expected_u, ctx.resolver) {
     return
   }
-  // Plain function-type vs function-type: check assignability before the
-  // broad callable bail below. Parameters are compared *bivariantly* — that
-  // matches the conformance corpus default (`strictFunctionTypes: false`) and
-  // is the permissive choice, so we never FP on a case a stricter
-  // contravariant rule would reject. A clear incompatibility
-  // (`(x: string) => string` assigned where `(x: number) => number` is
-  // expected) is then a real TS2322 / TS2345.
+  // Plain function- / constructor-type vs the same: check assignability
+  // before the broad callable bail below. Parameters are compared
+  // *bivariantly* — that matches the conformance corpus default
+  // (`strictFunctionTypes: false`) and is the permissive choice, so we never
+  // FP on a case a stricter contravariant rule would reject. A clear
+  // incompatibility (`(x: string) => string` assigned where `(x: number) =>
+  // number` is expected, or `new (x: number) => string` where `new (x:
+  // number) => number` is expected) is then a real TS2322 / TS2345.
   //
   // Restricted to cases where neither side is a *generic* function type
   // (`GenericFunc`) — those can be made compatible by instantiating their
@@ -5909,8 +5910,8 @@ fn check_expr_against(
   // guards the expected side).
   if not_generic_func(inferred) &&
     not_generic_func(expected) &&
-    inferred_u is Func(_, _) &&
-    expected_u is Func(_, _) &&
+    is_plain_callable(inferred_u) &&
+    is_plain_callable(expected_u) &&
     !func_type_mentions_type_param(inferred_u, ctx) &&
     !func_type_mentions_type_param(expected_u, ctx) &&
     !type_contains_unresolved_named(expected_u, ctx.resolver) {
@@ -12674,6 +12675,16 @@ fn is_concrete_primitive_or_literal(ty : @ast.TsType) -> Bool {
 /// can be made compatible by instantiating their type parameters.
 fn not_generic_func(ty : @ast.TsType) -> Bool {
   !(ty is GenericFunc(_, _))
+}
+
+///|
+/// True when `ty` is a plain callable type — a bare function or constructor
+/// type. Used to gate the bivariant function-type assignability check, which
+/// `is_assignable_to_bivariant` handles for `Func` / `Constructor` (and the
+/// `Constructor` -> `Func` direction) but not for interface / object call
+/// signatures (those keep going through the `shape_is_callable` bail).
+fn is_plain_callable(ty : @ast.TsType) -> Bool {
+  ty is (Func(_, _) | Constructor(_, _, _))
 }
 
 ///|
