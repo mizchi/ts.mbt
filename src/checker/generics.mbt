@@ -374,6 +374,16 @@ fn substitute_params(
       }
       TemplateLiteralType(parts, new_args)
     }
+    // A generic function type's own type parameters shadow the substitution:
+    // drop them from the bindings before recursing into the callable so an
+    // outer `T` substitution doesn't capture an inner `<T>`.
+    GenericFunc(names, inner) => {
+      let mut inner_bindings = bindings
+      for n in names {
+        inner_bindings = scoped_without(inner_bindings, n)
+      }
+      GenericFunc(names, substitute_params(inner, inner_bindings))
+    }
     _ => type_
   }
 }

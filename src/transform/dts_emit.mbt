@@ -480,6 +480,9 @@ fn emit_type(buf : StringBuilder, ty : @ast.TsType) -> Unit {
       buf.write_string(") => ")
       emit_type(buf, ret)
     }
+    // Emit the underlying callable; the generic binder prefix is dropped (as
+    // it was before the `GenericFunc` wrapper existed).
+    GenericFunc(_, inner) => emit_type(buf, inner)
     Constructor(params, ret, is_abstract) => {
       if is_abstract {
         buf.write_string("abstract ")

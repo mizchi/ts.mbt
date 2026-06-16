@@ -4207,9 +4207,12 @@ test "parser: parse generic function property type" {
   }
   assert_eq(module_.interfaces.length(), 1)
   assert_eq(module_.interfaces[0].fields.length(), 1)
+  // A function-type property that declares its own generic parameters
+  // (`<E>(expected: E) => void`) now lowers to `GenericFunc` carrying the
+  // bound names, wrapping the underlying `Func`.
   match module_.interfaces[0].fields[0].1 {
-    Func(params, Void) => assert_eq(params.length(), 1)
-    _ => fail("expected generic function property to lower to Func")
+    GenericFunc(["E"], Func(params, Void)) => assert_eq(params.length(), 1)
+    _ => fail("expected generic function property to lower to GenericFunc")
   }
 }
 
