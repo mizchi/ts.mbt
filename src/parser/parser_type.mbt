@@ -74,8 +74,14 @@ fn Parser::parse_constructor_tail(
   self : Parser,
   is_abstract : Bool,
 ) -> @ast.TsType raise ParseError {
-  if self.check(Lt) {
-    self.skip_type_args()
+  // Capture the constructor type's own generic parameters (`new <T>(x: T) =>
+  // T`) so scope-aware checks can see the binder; the names are erased for
+  // the value shape (see `GenericFunc`).
+  let tp_names = if self.check(Lt) {
+    let (names, _) = self.parse_type_param_names_and_bounds()
+    names
+  } else {
+    []
   }
   if !self.check(LParen) {
     return Any
@@ -119,7 +125,12 @@ fn Parser::parse_constructor_tail(
     return Any
   }
   let ret = self.parse_type()
-  Constructor(param_types, ret, is_abstract)
+  let ctor = @ast.TsType::Constructor(param_types, ret, is_abstract)
+  if tp_names.length() > 0 {
+    GenericFunc(tp_names, ctor)
+  } else {
+    ctor
+  }
 }
 
 ///|
@@ -776,10 +787,15 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
   let tok = self.peek()
   let base_type : @ast.TsType = match tok.kind {
     Lt => {
-      self.skip_type_args()
+      let (tp_names, _bounds) = self.parse_type_param_names_and_bounds()
       if self.check(LParen) {
         match self.parse_paren_or_function_type() {
-          Func(_, _) as func_type => func_type
+          Func(_, _) | Constructor(_, _, _) as func_type =>
+            if tp_names.length() > 0 {
+              @ast.TsType::GenericFunc(tp_names, func_type)
+            } else {
+              func_type
+            }
           _ => Any
         }
       } else {

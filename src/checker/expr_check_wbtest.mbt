@@ -7885,3 +7885,35 @@ test "expr_check: a literal is not assignable to a bare type parameter" {
     0,
   )
 }
+
+///|
+// Issue #62 (TS2304 for out-of-scope single-letter type parameters): a single
+// uppercase-letter type reference that is not declared and not in scope as a
+// type parameter is a `cannot find name` error. The generic parameters bound
+// by a nested generic function / constructor type, by interface call / index
+// signatures, and by object-literal call signatures are NOT mistaken for
+// out-of-scope references — keeping the check false-positive-free.
+test "expr_check: out-of-scope single-letter type parameter (TS2304)" {
+  let count = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src))
+    .filter(fn(i) { i.message.contains("cannot find name") })
+    .length()
+  }
+  // `b: (y: U) => U` references the undeclared `U` (only `<T>` is in scope).
+  assert_true(count("function f<T>(x: T, b: (y: U) => U): void {}") >= 1)
+  // A bound type parameter of the function itself is fine.
+  @test.assert_eq(count("function f<T>(x: T, b: (y: T) => T): void {}"), 0)
+  // A nested generic function type binds its own `<S>` — not flagged.
+  @test.assert_eq(count("function f(cb: <S>(x: S) => S): void {}"), 0)
+  // A nested generic constructor type binds its own `<S>` — not flagged.
+  @test.assert_eq(count("function f(cb: new <S>(x: S) => S[]): void {}"), 0)
+  // Interface call / index signatures declare their own generics — not flagged.
+  @test.assert_eq(count("interface I { <U>(x: U): U; }"), 0)
+  // Object-literal call signatures declare their own generics — not flagged.
+  @test.assert_eq(count("declare function g(o: { <T>(x: T): T }): void;"), 0)
+  // A declared type alias named with a single letter is in scope everywhere.
+  @test.assert_eq(
+    count("type T = number;\nfunction f(x: T): T { return x; }"),
+    0,
+  )
+}

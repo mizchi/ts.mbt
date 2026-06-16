@@ -3289,6 +3289,7 @@ fn utility_record_type_suffix(type_ : @ast.TsType) -> String {
     }
     Func(_, return_type) =>
       "FunctionTo" + utility_record_type_suffix(return_type)
+    GenericFunc(_, inner) => utility_record_type_suffix(inner)
     Union(items) => {
       let parts : Array[String] = []
       for item in items {

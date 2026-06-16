@@ -930,6 +930,13 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
           _ => cur = simplified
         }
       }
+      // A generic function type erases to its underlying callable for every
+      // value-shape decision (assignability, member lookup, inference): the
+      // declared type-parameter names matter only to scope-aware checks that
+      // read the wrapper directly. Peel it here so the rest of the resolver
+      // sees the plain `Func` / `Constructor` exactly as before this variant
+      // existed.
+      GenericFunc(_, inner) => cur = inner
       _ => keep_going = false
     }
   }
@@ -5010,6 +5017,10 @@ fn type_param_occurs(tp : String, t : @ast.TsType) -> Bool {
     Func(ps, r) | Constructor(ps, r, _) =>
       ps.iter().any(fn(p) { type_param_occurs(tp, p) }) ||
       type_param_occurs(tp, r)
+    // A generic function type shadows `tp` when it re-declares the same name;
+    // otherwise `tp` may occur free in the underlying callable.
+    GenericFunc(names, inner) =>
+      !names.contains(tp) && type_param_occurs(tp, inner)
     Conditional(a, b, c, d) =>
       type_param_occurs(tp, a) ||
       type_param_occurs(tp, b) ||
@@ -11673,6 +11684,279 @@ fn check_structural_duplicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
 }
 
 ///|
+/// True when `name` is a single uppercase ASCII letter (`T`, `U`, `K`, …).
+/// Such names are, by overwhelming convention, generic type parameters —
+/// never library / global types — so an *unresolved* one is reliably an
+/// out-of-scope type parameter rather than a type we merely fail to model.
+fn is_single_upper_letter(name : String) -> Bool {
+  if name.length() != 1 {
+    return false
+  }
+  let c = name[0]
+  c >= 'A' && c <= 'Z'
+}
+
+///|
+/// TS2304 ("Cannot find name") for the false-positive-free slice: a *single
+/// uppercase letter* type reference used in a function / method / property /
+/// interface-field / value signature that is neither declared anywhere in the
+/// module tree nor in scope as a type parameter of an enclosing function /
+/// method / class / interface / generic function type
+/// (`function foo<T>(b: (x: U) => U)` references the undeclared `U`).
+///
+/// Restricting to the single-letter lexical shape sidesteps the incomplete
+/// library-type registry that makes general unresolved-name reporting unsound
+/// here. The type parameters bound by a nested generic function type
+/// (`<S>(x: S) => T`) are tracked via the `GenericFunc` wrapper and added to
+/// scope, so they are not mistaken for out-of-scope references. Binder /
+/// computed forms that do *not* surface their binders (`Conditional` with
+/// `infer`, `MappedType`, `Keyof`, `IndexedAccess`, `TemplateLiteralType`)
+/// are not descended into.
+fn check_undeclared_type_parameters(
+  module_ : @ast.TsModule,
+) -> Array[ExprIssue] {
+  let declared : Map[String, Unit] = {}
+  collect_declared_type_names(module_, declared)
+  let issues : Array[ExprIssue] = []
+  walk_module_undeclared_tps(module_, [], declared, issues)
+  issues
+}
+
+///|
+/// Collect every type-name declaration (interface / alias / class / enum /
+/// namespace) across the whole module tree into `out`. Over-approximating
+/// visibility (a name declared in any namespace suppresses the report
+/// everywhere) keeps the check false-positive-free at the cost of a few
+/// missed reports — the safe direction.
+fn collect_declared_type_names(
+  module_ : @ast.TsModule,
+  out : Map[String, Unit],
+) -> Unit {
+  for iface in module_.interfaces {
+    out[iface.name] = ()
+  }
+  for ta in module_.type_aliases {
+    out[ta.name] = ()
+  }
+  for c in module_.classes {
+    out[c.name] = ()
+  }
+  for e in module_.enums {
+    out[e.name] = ()
+  }
+  for ns in module_.namespaces {
+    out[ns.name] = ()
+    collect_declared_type_names(ns.module_, out)
+  }
+}
+
+///|
+/// Walk a module's signatures looking for single-letter unresolved type
+/// parameters. `tp_scope` is the chain of type parameters in scope from
+/// enclosing functions / classes / interfaces (namespaces are not generic).
+fn walk_module_undeclared_tps(
+  module_ : @ast.TsModule,
+  tp_scope : Array[String],
+  declared : Map[String, Unit],
+  issues : Array[ExprIssue],
+) -> Unit {
+  for f in module_.funcs {
+    let scope = scope_extend(tp_scope, f.type_params)
+    for p in f.params {
+      check_type_undeclared_tps(
+        p.type_,
+        scope,
+        declared,
+        issues,
+        "function \{f.name}",
+      )
+    }
+    check_type_undeclared_tps(
+      f.return_type,
+      scope,
+      declared,
+      issues,
+      "function \{f.name}",
+    )
+  }
+  for imp in module_.imports {
+    let scope = scope_extend(tp_scope, imp.type_params)
+    for p in imp.params {
+      check_type_undeclared_tps(
+        p.1,
+        scope,
+        declared,
+        issues,
+        "function \{imp.name}",
+      )
+    }
+    check_type_undeclared_tps(
+      imp.return_type,
+      scope,
+      declared,
+      issues,
+      "function \{imp.name}",
+    )
+  }
+  for iface in module_.interfaces {
+    let iscope = scope_extend(tp_scope, iface.type_params)
+    for field in iface.fields {
+      // Call / construct / index signatures (`<T>(x: T): T`) declare their own
+      // generic parameters under a sentinel field name that doesn't key into
+      // `method_type_params`, so their binders aren't recoverable as scope —
+      // skip them to stay false-positive-free.
+      if is_signature_sentinel(field.0) {
+        continue
+      }
+      // A generic method field carries its own fresh type parameters.
+      let mut mscope = iscope
+      for entry in iface.method_type_params {
+        if entry.0 == field.0 {
+          mscope = scope_extend(iscope, entry.1)
+        }
+      }
+      check_type_undeclared_tps(
+        field.1,
+        mscope,
+        declared,
+        issues,
+        "interface \{iface.name}",
+      )
+    }
+  }
+  for c in module_.classes {
+    let cscope = scope_extend(tp_scope, c.type_params)
+    for prop in c.properties {
+      check_type_undeclared_tps(
+        prop.type_,
+        cscope,
+        declared,
+        issues,
+        "class \{c.name}",
+      )
+    }
+    for m in c.methods {
+      let mscope = scope_extend(cscope, m.type_params)
+      for p in m.params {
+        check_type_undeclared_tps(
+          p.1,
+          mscope,
+          declared,
+          issues,
+          "class \{c.name}",
+        )
+      }
+      check_type_undeclared_tps(
+        m.return_type,
+        mscope,
+        declared,
+        issues,
+        "class \{c.name}",
+      )
+    }
+  }
+  for v in module_.values {
+    check_type_undeclared_tps(
+      v.type_,
+      tp_scope,
+      declared,
+      issues,
+      "value \{v.name}",
+    )
+  }
+  for ns in module_.namespaces {
+    walk_module_undeclared_tps(ns.module_, tp_scope, declared, issues)
+  }
+}
+
+///|
+/// Concatenate `extra` onto `base`, returning `base` unchanged when `extra`
+/// is empty (the common non-generic case).
+fn scope_extend(base : Array[String], extra : Array[String]) -> Array[String] {
+  if extra.length() == 0 {
+    return base
+  }
+  let out : Array[String] = []
+  for b in base {
+    out.push(b)
+  }
+  for e in extra {
+    out.push(e)
+  }
+  out
+}
+
+///|
+/// Recurse a type position, reporting single-letter type references that are
+/// neither in `scope` nor `declared`. Binder / computed forms are not
+/// descended into (see `check_undeclared_type_parameters`).
+fn check_type_undeclared_tps(
+  ty : @ast.TsType,
+  scope : Array[String],
+  declared : Map[String, Unit],
+  issues : Array[ExprIssue],
+  path : String,
+) -> Unit {
+  fn report(n : String) -> Unit {
+    if is_single_upper_letter(n) &&
+      !scope.contains(n) &&
+      !(declared.get(n) is Some(_)) {
+      issues.push({ path, message: "cannot find name `\{n}`" })
+    }
+  }
+
+  match ty {
+    Named(n) => report(n)
+    Applied(n, args) => {
+      report(n)
+      for a in args {
+        check_type_undeclared_tps(a, scope, declared, issues, path)
+      }
+    }
+    Array(e) | Rest(e) =>
+      check_type_undeclared_tps(e, scope, declared, issues, path)
+    Tuple(items) | Union(items) | Intersection(items) =>
+      for it in items {
+        check_type_undeclared_tps(it, scope, declared, issues, path)
+      }
+    Object(pairs) =>
+      for p in pairs {
+        // Object-literal call / construct signatures (`{ <T>(x: T): T }`)
+        // bind their own generics under a sentinel key that doesn't surface
+        // the binder names, so skip them to stay false-positive-free.
+        match p.0 {
+          Literal(key) if is_signature_sentinel(key) => continue
+          _ => ()
+        }
+        check_type_undeclared_tps(p.1, scope, declared, issues, path)
+      }
+    Struct(_, fields) =>
+      for f in fields {
+        check_type_undeclared_tps(f.1, scope, declared, issues, path)
+      }
+    Func(params, ret) | Constructor(params, ret, _) => {
+      for p in params {
+        check_type_undeclared_tps(p, scope, declared, issues, path)
+      }
+      check_type_undeclared_tps(ret, scope, declared, issues, path)
+    }
+    // A generic function type binds its own type parameters: add them to
+    // scope before descending so `<S>(x: S) => T` does not flag `S`.
+    GenericFunc(names, inner) => {
+      let inner_scope = scope_extend(scope, names)
+      check_type_undeclared_tps(inner, inner_scope, declared, issues, path)
+    }
+    TypePredicate(_, pt) =>
+      check_type_undeclared_tps(pt, scope, declared, issues, path)
+    // Binder-introducing / computed forms are intentionally not descended
+    // into — `Conditional` (with `infer`), `MappedType`, `MappedTypeRemap`,
+    // `Keyof`, `IndexedAccess`, `TemplateLiteralType`, `AssertsPredicate`,
+    // and all primitive / literal leaves.
+    _ => ()
+  }
+}
+
+///|
 /// TS2374 ("Duplicate index signature for type 'string' / 'number'"): a
 /// single object type (interface or class body) may declare at most one
 /// string index signature and at most one numeric index signature. Two of
@@ -12186,6 +12470,14 @@ fn check_module_function_bodies_layered(
   }
   for issue in check_structural_duplicates(module_) {
     all.push(issue)
+  }
+  // TS2304 for single-letter out-of-scope type parameters. Run once at the
+  // top level — the walker recurses into namespaces itself, so calling it per
+  // layered namespace would double-report.
+  if outer_modules.length() == 0 {
+    for issue in check_undeclared_type_parameters(module_) {
+      all.push(issue)
+    }
   }
   for issue in check_var_redeclaration_types(module_, resolver) {
     all.push(issue)

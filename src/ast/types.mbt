@@ -42,6 +42,15 @@ pub(all) enum TsType {
   Object(Array[(TsType, TsType)]) // { key: value } - key is Literal for property names
   Struct(String, Array[(String, TsType)]) // name, fields (for codegen)
   Func(Array[TsType], TsType) // params, return
+  // A function type that declares its own generic type parameters:
+  // `<S>(x: S) => T`. Wraps the underlying `Func` (or `Constructor`) and
+  // carries the bound type-parameter names so the checker can add them to
+  // scope. Type-parameter names are erased everywhere the function type's
+  // *value* shape matters (assignability, emit, bridge), so those consumers
+  // peel the wrapper to the inner callable; only scope-aware checks read the
+  // names. Kept as a wrapper (rather than a field on `Func`) so the pervasive
+  // `Func(params, ret)` match sites stay unchanged.
+  GenericFunc(Array[String], TsType)
   // Constructor type: `new (...args) => T` or `abstract new (...) => T`.
   // Stored separately from `Func` so utility passes (`ConstructorParameters`,
   // `InstanceType`) can pattern-match on the call form, and so a bridge
