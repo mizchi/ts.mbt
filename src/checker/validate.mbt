@@ -46,6 +46,125 @@ pub fn unresolved_type_references(module_ : @ast.TsModule) -> Array[String] {
 }
 
 ///|
+// Return the base names of `typeof X` queries in `module_` that resolve to no
+// known value. A value is "known" when it is declared in the module (function,
+// ambient import, value, class, enum, namespace, or a top-level binding) or is
+// a standard-library ambient global (`is_lib_global_value`, the generated
+// 1000-name registry). Only `typeof` over a *provably* undeclared name is
+// returned, so the check is false-positive-free: any name we cannot account
+// for as a value is assumed known and left silent.
+//
+// Kept separate from `unresolved_type_references` (which resolves *type*
+// names) because a `typeof` query references the *value* namespace; the two
+// scopes differ (e.g. a `const` is a value but not a type).
+pub fn unresolved_typeof_references(module_ : @ast.TsModule) -> Array[String] {
+  // Gather every `typeof` base across all type positions.
+  let bases : Array[String] = []
+  for v in module_.values {
+    collect_typeof_bases(v.type_, bases)
+  }
+  for iface in module_.interfaces {
+    for field in iface.fields {
+      collect_typeof_bases(field.1, bases)
+    }
+  }
+  for ta in module_.type_aliases {
+    collect_typeof_bases(ta.type_, bases)
+  }
+  for f in module_.funcs {
+    for param in f.params {
+      collect_typeof_bases(param.type_, bases)
+    }
+    collect_typeof_bases(f.return_type, bases)
+  }
+  for i in module_.imports {
+    for param in i.params {
+      collect_typeof_bases(param.1, bases)
+    }
+    collect_typeof_bases(i.return_type, bases)
+  }
+  for stmt in module_.top_level_stmts {
+    match stmt {
+      Var(_, declared, _) | Let(_, declared, _) | Const(_, declared, _) =>
+        collect_typeof_bases(declared, bases)
+      _ => ()
+    }
+  }
+  if bases.length() == 0 {
+    return []
+  }
+  // Build the in-scope name set. Maximally conservative: a `typeof` base is
+  // left silent unless we can *prove* it undeclared, so the set folds in every
+  // namespace a value could plausibly live in. Besides the obvious value
+  // declarations it includes function / import parameters (`[T, typeof obj]`),
+  // every declared *type* name (our parser lowers a field-only class to an
+  // interface, erasing its value side — treating the type name as in scope
+  // avoids a false positive there), and the value keywords (`undefined`,
+  // `this`, …) that are not in the lib-globals registry.
+  let values : Map[String, Bool] = {}
+  for f in module_.funcs {
+    values[f.name] = true
+    for param in f.params {
+      values[param.name] = true
+    }
+  }
+  for i in module_.imports {
+    values[i.name] = true
+    for param in i.params {
+      values[param.0] = true
+    }
+  }
+  for v in module_.values {
+    values[v.name] = true
+  }
+  for c in module_.classes {
+    values[c.name] = true
+  }
+  for e in module_.enums {
+    values[e.name] = true
+  }
+  for ns in module_.namespaces {
+    values[ns.name] = true
+  }
+  for n in module_declared_names(module_) {
+    values[n] = true
+  }
+  for stmt in module_.top_level_stmts {
+    collect_stmt_value_names(stmt, values)
+  }
+  let acc : Array[String] = []
+  for base in bases {
+    if !values.contains(base) &&
+      !is_typeof_value_keyword(base) &&
+      !is_lib_global_value(base) &&
+      !acc.contains(base) {
+      acc.push(base)
+    }
+  }
+  acc
+}
+
+///|
+// Global value keywords that a `typeof` query may target but which are not in
+// the standard-library ambient-globals registry (they are language keywords /
+// contextual values, not declared identifiers).
+fn is_typeof_value_keyword(name : String) -> Bool {
+  match name {
+    "undefined"
+    | "null"
+    | "this"
+    | "globalThis"
+    | "NaN"
+    | "Infinity"
+    | "arguments"
+    | "true"
+    | "false"
+    | "import" => true
+    _ => false
+  }
+}
+
+///|
 fn scope_with(
   declared : Array[String],
   type_params : Array[String],
@@ -146,6 +265,68 @@ fn is_well_known_type_name(name : String) -> Bool {
     | "AsyncIterator"
     | "IterableIterator" => true
     _ => false
+  }
+}
+
+///|
+// Collect the base identifier of every `typeof X` query reachable in `type_`
+// (`typeof A` -> "A", `typeof A.B` -> "A"). `typeof import("…")` queries are
+// skipped — they reference an external module, not a local value. Used to
+// flag a `typeof` over an undefined name (TS2304). Mirrors `check_type`'s
+// structural recursion so the query is found in every nested position.
+fn collect_typeof_bases(type_ : @ast.TsType, acc : Array[String]) -> Unit {
+  match type_ {
+    TypeOf(query) => {
+      if query.has_prefix("import(") {
+        return
+      }
+      let base = match query.find(".") {
+        Some(i) => query.substring(start=0, end=i)
+        None => query
+      }
+      if base != "" && !acc.contains(base) {
+        acc.push(base)
+      }
+    }
+    Array(inner) => collect_typeof_bases(inner, acc)
+    Applied(_, args) =>
+      for a in args {
+        collect_typeof_bases(a, acc)
+      }
+    Tuple(items) =>
+      for it in items {
+        collect_typeof_bases(it, acc)
+      }
+    Object(fields) =>
+      for f in fields {
+        collect_typeof_bases(f.0, acc)
+        collect_typeof_bases(f.1, acc)
+      }
+    Struct(_, fields) =>
+      for f in fields {
+        collect_typeof_bases(f.1, acc)
+      }
+    Func(params, ret) => {
+      for p in params {
+        collect_typeof_bases(p, acc)
+      }
+      collect_typeof_bases(ret, acc)
+    }
+    Union(members) | Intersection(members) =>
+      for m in members {
+        collect_typeof_bases(m, acc)
+      }
+    Conditional(check_t, extends, t_branch, f_branch) => {
+      collect_typeof_bases(check_t, acc)
+      collect_typeof_bases(extends, acc)
+      collect_typeof_bases(t_branch, acc)
+      collect_typeof_bases(f_branch, acc)
+    }
+    IndexedAccess(base, key) => {
+      collect_typeof_bases(base, acc)
+      collect_typeof_bases(key, acc)
+    }
+    _ => ()
   }
 }
 
