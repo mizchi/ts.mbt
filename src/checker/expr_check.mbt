@@ -10637,43 +10637,61 @@ fn check_explicit_type_args(
     return
   }
   // TS2345: with explicit type arguments the formal parameters are pinned to
-  // the supplied types — inference plays no part — so `foo<string>(1)` rejects
-  // the numeric argument. The inner call's own pass *infers* `T` from the
-  // arguments and so never observes the mismatch; substitute the explicit
-  // arguments here and re-check each argument against the resulting concrete
-  // parameter. Functions only, exact type-argument arity (so substitution is
-  // well defined), and rest-free signatures (positional alignment) — and the
-  // per-argument `check_expr_against` is itself false-positive-free, so this
-  // stays sound. Spread arguments are skipped (their count is unknown).
+  // the supplied types — inference plays no part — so `foo<string>(1)` (and the
+  // constructor form `new C<string>(1)`) rejects the numeric argument. The
+  // inner call's own pass *infers* the type parameter from the arguments and so
+  // never observes the mismatch; substitute the explicit arguments here and
+  // re-check each argument against the resulting concrete parameter. Requires
+  // exact type-argument arity (so substitution is well defined) and a rest-free
+  // signature (positional alignment); the per-argument `check_expr_against` is
+  // itself false-positive-free. Spread arguments are skipped (count unknown).
   if targs.length() == params.length() {
+    // Shared per-argument re-check against `formal_types` with the explicit
+    // type arguments substituted in.
+    let check_against = fn(
+      formal_types : Array[@ast.TsType],
+      call_args : Array[@ast.TsExpr],
+      path : String,
+    ) -> Unit {
+      let bindings : Map[String, @ast.TsType] = {}
+      for i in 0..<params.length() {
+        bindings[params[i]] = targs[i]
+      }
+      let substituted = substitute_params_array(formal_types, bindings)
+      for i in 0..<call_args.length() {
+        if i < substituted.length() {
+          match call_args[i] {
+            Spread(_) => ()
+            arg =>
+              check_expr_against(
+                env,
+                arg,
+                substituted[i],
+                ctx,
+                "\{path} arg[\{i}]",
+              )
+          }
+        }
+      }
+    }
     match inner {
       Call(_, call_args) =>
         match ctx.resolver.signatures.get(name) {
           Some(sig) =>
             if not(sig.iter().any(fn(p) { p.is_rest })) {
-              let bindings : Map[String, @ast.TsType] = {}
-              for i in 0..<params.length() {
-                bindings[params[i]] = targs[i]
-              }
-              let substituted = substitute_params_array(
+              check_against(
                 sig.map(fn(p) { p.type_ }),
-                bindings,
+                call_args,
+                "call `\{name}`",
               )
-              for i in 0..<call_args.length() {
-                if i < substituted.length() {
-                  match call_args[i] {
-                    Spread(_) => ()
-                    arg =>
-                      check_expr_against(
-                        env,
-                        arg,
-                        substituted[i],
-                        ctx,
-                        "call `\{name}` arg[\{i}]",
-                      )
-                  }
-                }
-              }
+            }
+          None => ()
+        }
+      New(_, call_args) =>
+        match ctx.resolver.lookup_constructor_sig(name) {
+          Some((formal_types, sig)) =>
+            if not(sig.iter().any(fn(p) { p.is_rest })) {
+              check_against(formal_types, call_args, "new `\{name}`")
             }
           None => ()
         }
