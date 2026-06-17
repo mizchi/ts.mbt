@@ -8281,3 +8281,21 @@ test "expr_check: TS2304 typeof over undefined name" {
   @test.assert_eq(issues("var v: typeof undefined;"), 0)
   @test.assert_eq(issues("var v: typeof Math;"), 0)
 }
+
+///|
+// TS2322: a literal value assigned to a literal (or literal-union) target it
+// is not a member of (`let x: "a" = "b"`, `let x: 1 = 2`). Same-literal
+// assignment, const-widened variables, and call arguments (overload-prone)
+// are left silent.
+test "expr_check: TS2322 literal not assignable to literal target" {
+  // Permissive helper: matches the CLI / conformance path, where the
+  // widening-suppression this feature works around is active.
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  assert_true(issues("let x: \"a\" = \"b\";") > 0)
+  assert_true(issues("let x: 1 = 2;") > 0)
+  assert_true(issues("let x: \"a\" | \"b\" = \"c\";") > 0)
+  @test.assert_eq(issues("let x: \"a\" = \"a\";"), 0)
+  @test.assert_eq(issues("const c = \"b\";\nlet y: \"a\" = c;"), 0)
+}

@@ -6093,7 +6093,28 @@ fn check_expr_against(
     // Display the widened form of the inferred type (`number` rather than the
     // precise `42`) so the message reads naturally; the precise literal was
     // only needed for the assignability decision above.
-    let shown = widen_literal(inferred_u)
+    //
+    // Exception: when the *source expression* is itself a literal (`let x: "a"
+    // = "b"`), keep the precise literal in the message. A direct literal that
+    // is not assignable to a literal target is an unambiguous TS2322 — widening
+    // it to the bare primitive (`string`) would make the message look like a
+    // const-widening residue and get suppressed by the permissive filter
+    // (`is_widening_direction_mismatch`), masking a real error. A *variable*
+    // source (which may have been const-widened) still widens and stays
+    // conservatively suppressed.
+    // Gated tightly to stay false-positive-free: the source must be a literal
+    // expression, the target a literal (or literal union) of matching kind, and
+    // the context a single-target assignment — never a call argument
+    // (`… arg[i]`), where overload / specialized-signature resolution can
+    // legitimately accept a literal that the checked signature rejects.
+    let precise_literal_mismatch = precise_literal_type(expr) is Some(_) &&
+      literal_union_members(expected_u) is Some(_) &&
+      not(sub_path.contains("arg["))
+    let shown = if precise_literal_mismatch {
+      inferred_u
+    } else {
+      widen_literal(inferred_u)
+    }
     let exp_str = type_display(expected)
     let detail = "expected `\{exp_str}` but got `\{type_display(shown)}`"
     record(ctx, sub_path, detail)
