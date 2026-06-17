@@ -8299,3 +8299,18 @@ test "expr_check: TS2322 literal not assignable to literal target" {
   @test.assert_eq(issues("let x: \"a\" = \"a\";"), 0)
   @test.assert_eq(issues("const c = \"b\";\nlet y: \"a\" = c;"), 0)
 }
+
+///|
+// TS2345: a computed (string-literal) method call `recv["m"](args)` is checked
+// against the resolved method signature, just like the dotted `recv.m(args)`
+// form. A wrong-typed argument to a known primitive method is flagged; correct
+// args and unknown (`any`) receivers stay silent.
+test "expr_check: TS2345 computed method-call argument" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  assert_true(issues("var x = \"\";\nx[\"charAt\"](\"bad\");") > 0)
+  assert_true(issues("var a = [1];\na[\"slice\"](\"bad\");") > 0)
+  @test.assert_eq(issues("var x = \"\";\nx[\"charAt\"](0);"), 0)
+  @test.assert_eq(issues("declare var o: any;\no[\"foo\"](\"x\");"), 0)
+}

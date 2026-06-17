@@ -10798,8 +10798,30 @@ fn check_call_args_in_expr(
             None => ()
           }
         other =>
-          if is_definitely_not_callable(other) {
-            record(ctx, "call", "`\{type_display(other)}` is not callable")
+          // `recv["method"](args)` is a method call with a computed
+          // string-literal key — semantically identical to `recv.method(args)`.
+          // We don't resolve computed-member types, so the indexed access
+          // infers as `Any` and the arg types would go unchecked. Route it
+          // through the same method-signature lookup the dotted `MethodCall`
+          // path uses so a wrong-typed argument (`"".charAt("x")` written as
+          // `""["charAt"]("x")`) is still flagged. Only fires when the method
+          // signature resolves concretely, so it stays false-positive-free.
+          match callee {
+            IndexAccess(recv, StringLit(meth)) => {
+              let recv_ty = prune_nullish(
+                ctx.resolver,
+                infer_expr(env, ctx.resolver, recv),
+              )
+              match ctx.resolver.lookup_method_sig(recv_ty, meth) {
+                Some((params, _)) =>
+                  check_arguments(env, params, args, ctx, "call `\{meth}`")
+                None => ()
+              }
+            }
+            _ =>
+              if is_definitely_not_callable(other) {
+                record(ctx, "call", "`\{type_display(other)}` is not callable")
+              }
           }
       }
       check_call_args_in_expr(env, callee, ctx)
