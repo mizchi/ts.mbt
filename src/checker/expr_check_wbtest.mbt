@@ -8249,3 +8249,17 @@ test "expr_check: class field computed key references" {
   )
   @test.assert_eq(issues("const k = \"x\";\nclass C { [k] = 1; }").length(), 0)
 }
+
+///|
+// TS2364: the left-hand side of a (compound) assignment must be a variable or
+// property access. A literal LHS (`1 >>= 2`) is flagged; reference targets and
+// property/index accesses are left silent.
+test "expr_check: TS2364 literal assignment target" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  assert_true(issues("1 >>= 2;") > 0)
+  assert_true(issues("\"x\" += 2;") > 0)
+  @test.assert_eq(issues("let y = 0;\ny >>= 2;"), 0)
+  @test.assert_eq(issues("let o = { p: 0 };\no.p >>= 2;"), 0)
+}

@@ -11164,6 +11164,23 @@ fn check_call_args_in_expr(
     CompoundAssignExpr(target, op, v) => {
       check_call_args_in_expr(env, target, ctx)
       check_call_args_in_expr(env, v, ctx)
+      // TS2364: the left-hand side of an assignment must be a variable or a
+      // property access. A literal LHS (`1 >>= 2`) is never assignable. Only
+      // literals are flagged — every reference-shaped target (`Var`, member /
+      // index access, and anything we can't classify) is left silent, so the
+      // check is false-positive-free.
+      match target {
+        NumberLit(_)
+        | IntLit(_)
+        | BigIntLit(_)
+        | BoolLit(_)
+        | StringLit(_)
+        | NullLit =>
+          record(
+            ctx, "assignment", "the left-hand side of an assignment expression must be a variable or a property access",
+          )
+        _ => ()
+      }
       // TS2454: a compound assignment (`x += …`) settles `x` after
       // the rhs walk above (which still flags the implicit read).
       match target {
