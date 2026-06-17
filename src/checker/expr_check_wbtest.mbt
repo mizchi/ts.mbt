@@ -8263,3 +8263,21 @@ test "expr_check: TS2364 literal assignment target" {
   @test.assert_eq(issues("let y = 0;\ny >>= 2;"), 0)
   @test.assert_eq(issues("let o = { p: 0 };\no.p >>= 2;"), 0)
 }
+
+///|
+// TS2304: a `typeof X` query over an undefined value name is flagged
+// (`var v: typeof A`). Declared values, function parameters, declared type
+// names (a field-only class lowers to an interface in our parser), lib globals,
+// and value keywords (`undefined`, `this`) are all left silent — the check
+// only fires for a provably undeclared base.
+test "expr_check: TS2304 typeof over undefined name" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies(parse_module_or_empty(src)).length()
+  }
+  assert_true(issues("var v: typeof A;") > 0)
+  assert_true(issues("var v: typeof A.B;") > 0)
+  @test.assert_eq(issues("const A = 1;\nvar v: typeof A;"), 0)
+  @test.assert_eq(issues("function f() {}\nvar v: typeof f;"), 0)
+  @test.assert_eq(issues("var v: typeof undefined;"), 0)
+  @test.assert_eq(issues("var v: typeof Math;"), 0)
+}

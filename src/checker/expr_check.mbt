@@ -12912,6 +12912,13 @@ fn check_module_function_bodies_layered(
         all.push({ path: issue.name, message: issue.detail })
       }
     }
+    // TS2304 for `typeof X` over an undefined value name. Distinct from the
+    // (excluded) `UnresolvedReference` type-name check: this resolves the
+    // *value* namespace against the comprehensive lib-globals registry, so it
+    // is false-positive-free — only a provably undeclared `typeof` base fires.
+    for n in unresolved_typeof_references(module_) {
+      all.push({ path: "typeof \{n}", message: "cannot find name `\{n}`" })
+    }
   }
   // Recurse into namespace bodies. Each level threads its own ancestor
   // chain so a nested namespace can reference parent-scope types by their
