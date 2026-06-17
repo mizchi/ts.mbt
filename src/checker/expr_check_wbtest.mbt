@@ -8314,3 +8314,30 @@ test "expr_check: TS2345 computed method-call argument" {
   @test.assert_eq(issues("var x = \"\";\nx[\"charAt\"](0);"), 0)
   @test.assert_eq(issues("declare var o: any;\no[\"foo\"](\"x\");"), 0)
 }
+
+///|
+// Generic inference: explicit type arguments pin the formal parameters, so an
+// argument incompatible with the supplied type is a TS2345 — independent of
+// what inference would have derived from the arguments.
+test "expr_check: explicit type-argument call argument mismatch" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  assert_true(issues("function f<T>(t: T) { return t; }\nf<string>(1);") > 0)
+  assert_true(issues("function f<T>(a: T, b: T) {}\nf<string>(\"a\", 1);") > 0)
+  @test.assert_eq(issues("function f<T>(t: T) { return t; }\nf<number>(1);"), 0)
+}
+
+///|
+// A concrete primitive / literal is never assignable to a well-known
+// class-like standard-library type (`Date`, `RegExp`), but still widens to its
+// wrapper interface (`Number`, `String`) and into the universal `Object`.
+test "expr_check: primitive not assignable to lib class type" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  assert_true(issues("let x: Date = 1;") > 0)
+  assert_true(issues("let x: RegExp = \"s\";") > 0)
+  @test.assert_eq(issues("let x: Number = 5;"), 0)
+  @test.assert_eq(issues("let x: Object = 1;"), 0)
+}
