@@ -2433,6 +2433,7 @@ fn Parser::parse_declare_class(
     name,
     type_params: class_type_params,
     type_param_bounds: class_type_param_bounds,
+    computed_field_keys: [],
     base_names,
     implements_names,
     base_expr: None,

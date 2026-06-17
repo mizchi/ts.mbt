@@ -8971,6 +8971,7 @@ fn clone_exported_class(
     name: exported.export_name,
     type_params: exported.class_.type_params,
     type_param_bounds: exported.class_.type_param_bounds,
+    computed_field_keys: [],
     base_names: [],
     implements_names: [],
     base_expr: None,

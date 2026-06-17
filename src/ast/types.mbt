@@ -664,6 +664,12 @@ pub(all) struct TsClassDecl {
   // (`class C<T extends X> {}`). Sparse — only constrained parameters appear.
   // Used by the checker to validate explicit type arguments (TS2344).
   type_param_bounds : Array[(String, TsType)]
+  // Computed-key expressions on class *fields* (`class C { [e] = 1 }`). The
+  // key is an ordinary value expression; retaining it lets the checker flag an
+  // undefined name in the key (TS2304). Method computed keys live on
+  // `TsClassMethodDecl.key_expr`; fields have no key slot, so they are
+  // collected here. Empty for classes with no computed field keys.
+  computed_field_keys : Array[TsExpr]
   base_names : Array[String]
   // Names of interfaces the class `implements` (`class C implements I, J`).
   // Head identifiers only (qualified names joined with `.`, type arguments

@@ -4978,6 +4978,7 @@ test "bridge: FFI class methods unwrap optional arguments" {
     name: "SignJWT",
     type_params: [],
     type_param_bounds: [],
+    computed_field_keys: [],
     base_names: [],
     implements_names: [],
     base_expr: None,

@@ -12734,7 +12734,8 @@ fn check_module_function_bodies_layered(
   for cls in module_.classes {
     let has_computed_key = cls.methods
       .iter()
-      .any(fn(m) { m.key_expr is Some(_) })
+      .any(fn(m) { m.key_expr is Some(_) }) ||
+      cls.computed_field_keys.length() > 0
     if !has_computed_key {
       continue
     }
@@ -12759,6 +12760,9 @@ fn check_module_function_bodies_layered(
         Some(key) => check_call_args_in_expr(env, key, key_ctx)
         None => ()
       }
+    }
+    for key in cls.computed_field_keys {
+      check_call_args_in_expr(env, key, key_ctx)
     }
     for issue in key_ctx.issues {
       all.push(issue)
