@@ -63,6 +63,7 @@ fn build_runtime_class_decl(
   let properties : Array[@ast.TsClassPropertyDecl] = []
   let methods : Array[@ast.TsClassMethodDecl] = []
   let instance_field_inits : Array[(String, @ast.TsExpr)] = []
+  let computed_field_keys : Array[@ast.TsExpr] = []
   let constructor_param_is_rest : Array[Bool] = []
   let constructor_param_defaults : Array[@ast.TsExpr?] = []
   let constructor_params = match ctor_opt {
@@ -240,6 +241,12 @@ fn build_runtime_class_decl(
           is_generator: func.is_generator,
         })
       }
+      // A computed-key field (`class C { [e] = 1 }`). The property itself is
+      // recorded under the `<computed>` sentinel by the value-name passes;
+      // retain the key expression so the checker can flag an undefined name
+      // in it (TS2304).
+      Field(_, Computed(key_expr), _, _, _, _) =>
+        computed_field_keys.push(key_expr)
       _ => ()
     }
   }
@@ -314,6 +321,7 @@ fn build_runtime_class_decl(
     name,
     type_params,
     type_param_bounds,
+    computed_field_keys,
     base_names: [],
     implements_names,
     base_expr: None,
@@ -1546,6 +1554,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     name: runtime_decl.name,
     type_params: runtime_decl.type_params,
     type_param_bounds: runtime_decl.type_param_bounds,
+    computed_field_keys: runtime_decl.computed_field_keys,
     base_names: runtime_decl.base_names,
     implements_names: runtime_decl.implements_names,
     base_expr: runtime_decl.base_expr,

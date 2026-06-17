@@ -8231,3 +8231,21 @@ test "expr_check: array-destructure of object literal (TS2488)" {
     0,
   )
 }
+
+///|
+// Issue #62: an undefined name in a class *field* computed key
+// (`class C { [e] = 1 }`) is a TS2304. Fields have no key slot, so the parser
+// now collects the key expression on `TsClassDecl.computed_field_keys`.
+test "expr_check: class field computed key references" {
+  let issues = fn(src : String) -> Array[String] {
+    check_module_function_bodies(parse_module_or_empty(src)).map(fn(i) {
+      i.message
+    })
+  }
+  assert_true(
+    issues("class C { [missingName] = 1; }").any(fn(m) {
+      m.contains("cannot find name")
+    }),
+  )
+  @test.assert_eq(issues("const k = \"x\";\nclass C { [k] = 1; }").length(), 0)
+}
