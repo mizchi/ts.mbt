@@ -5868,7 +5868,18 @@ fn check_expr_against(
     Named(n) =>
       if ctx.resolver.type_aliases.get(n) is None &&
         ctx.resolver.interfaces.get(n) is None &&
-        ctx.resolver.classes.get(n) is None {
+        ctx.resolver.classes.get(n) is None &&
+        // A well-known standard-library type name (`Date`, `RegExp`, …) is
+        // resolvable enough to decide assignability against a *concrete
+        // primitive / literal* source: `number` is never a `Date`. The
+        // assignability table already accepts the legitimate primitive→wrapper
+        // widenings (`number`→`Number`, `string`→`String`) and `Object` /
+        // `Function` are guarded as universal targets below, so letting these
+        // through stays false-positive-free while catching e.g. `foo<Date>(1)`.
+        not(
+          is_well_known_type_name(n) &&
+          is_concrete_primitive_or_literal(inferred_u),
+        ) {
         return
       }
     _ => ()
@@ -10575,6 +10586,7 @@ fn check_undefined_name(env : ExprEnv, ctx : CheckCtx, name : String) -> Unit {
 /// / `any` / a callable interface whose type-parameter count we don't model,
 /// the check stays silent.
 fn check_explicit_type_args(
+  env : ExprEnv,
   ctx : CheckCtx,
   targs : Array[@ast.TsType],
   inner : @ast.TsExpr,
@@ -10623,6 +10635,50 @@ fn check_explicit_type_args(
       "expected \{params.length()} type arguments, but got \{targs.length()}",
     )
     return
+  }
+  // TS2345: with explicit type arguments the formal parameters are pinned to
+  // the supplied types — inference plays no part — so `foo<string>(1)` rejects
+  // the numeric argument. The inner call's own pass *infers* `T` from the
+  // arguments and so never observes the mismatch; substitute the explicit
+  // arguments here and re-check each argument against the resulting concrete
+  // parameter. Functions only, exact type-argument arity (so substitution is
+  // well defined), and rest-free signatures (positional alignment) — and the
+  // per-argument `check_expr_against` is itself false-positive-free, so this
+  // stays sound. Spread arguments are skipped (their count is unknown).
+  if targs.length() == params.length() {
+    match inner {
+      Call(_, call_args) =>
+        match ctx.resolver.signatures.get(name) {
+          Some(sig) =>
+            if not(sig.iter().any(fn(p) { p.is_rest })) {
+              let bindings : Map[String, @ast.TsType] = {}
+              for i in 0..<params.length() {
+                bindings[params[i]] = targs[i]
+              }
+              let substituted = substitute_params_array(
+                sig.map(fn(p) { p.type_ }),
+                bindings,
+              )
+              for i in 0..<call_args.length() {
+                if i < substituted.length() {
+                  match call_args[i] {
+                    Spread(_) => ()
+                    arg =>
+                      check_expr_against(
+                        env,
+                        arg,
+                        substituted[i],
+                        ctx,
+                        "call `\{name}` arg[\{i}]",
+                      )
+                  }
+                }
+              }
+            }
+          None => ()
+        }
+      _ => ()
+    }
   }
   // TS2344: a type argument that doesn't satisfy its parameter's `extends`
   // constraint. Mirrors the type-position check in `check_constraints`:
@@ -10685,7 +10741,7 @@ fn check_call_args_in_expr(
     // list against the callee, then descend into the underlying call so its
     // arguments are still checked.
     TypeArgs(targs, inner) => {
-      check_explicit_type_args(ctx, targs, inner)
+      check_explicit_type_args(env, ctx, targs, inner)
       check_call_args_in_expr(env, inner, ctx)
     }
     Call(name, args) => {
