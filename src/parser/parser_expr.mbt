@@ -363,7 +363,11 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
         CompoundAssignExpr(PropAccess(obj, prop), AddAssign, right)
       IndexAccess(obj, index) =>
         CompoundAssignExpr(IndexAccess(obj, index), AddAssign, right)
-      _ => right
+      // A non-reference LHS (`1 += 2`) is never a valid assignment
+      // target (TS2364). Preserve the node instead of discarding it so
+      // the checker sees the invalid target; pre-existing reference
+      // targets above are unaffected.
+      _ => CompoundAssignExpr(left, AddAssign, right)
     }
   } else if self.match_(MinusEq) {
     let right = self.parse_assignment()
@@ -373,7 +377,7 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
         CompoundAssignExpr(PropAccess(obj, prop), SubAssign, right)
       IndexAccess(obj, index) =>
         CompoundAssignExpr(IndexAccess(obj, index), SubAssign, right)
-      _ => right
+      _ => CompoundAssignExpr(left, SubAssign, right)
     }
   } else if self.match_(StarEq) {
     let right = self.parse_assignment()
@@ -383,7 +387,7 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
         CompoundAssignExpr(PropAccess(obj, prop), MulAssign, right)
       IndexAccess(obj, index) =>
         CompoundAssignExpr(IndexAccess(obj, index), MulAssign, right)
-      _ => right
+      _ => CompoundAssignExpr(left, MulAssign, right)
     }
   } else if self.match_(SlashEq) {
     let right = self.parse_assignment()
@@ -393,7 +397,7 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
         CompoundAssignExpr(PropAccess(obj, prop), DivAssign, right)
       IndexAccess(obj, index) =>
         CompoundAssignExpr(IndexAccess(obj, index), DivAssign, right)
-      _ => right
+      _ => CompoundAssignExpr(left, DivAssign, right)
     }
   } else if self.match_(PercentEq) {
     let right = self.parse_assignment()
@@ -403,7 +407,7 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
         CompoundAssignExpr(PropAccess(obj, prop), ModAssign, right)
       IndexAccess(obj, index) =>
         CompoundAssignExpr(IndexAccess(obj, index), ModAssign, right)
-      _ => right
+      _ => CompoundAssignExpr(left, ModAssign, right)
     }
   } else if self.match_(AmpEq) {
     let right = self.parse_assignment()
@@ -413,7 +417,7 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
         CompoundAssignExpr(PropAccess(obj, prop), BitAndAssign, right)
       IndexAccess(obj, index) =>
         CompoundAssignExpr(IndexAccess(obj, index), BitAndAssign, right)
-      _ => right
+      _ => CompoundAssignExpr(left, BitAndAssign, right)
     }
   } else if self.match_(PipeEq) {
     let right = self.parse_assignment()
@@ -423,7 +427,7 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
         CompoundAssignExpr(PropAccess(obj, prop), BitOrAssign, right)
       IndexAccess(obj, index) =>
         CompoundAssignExpr(IndexAccess(obj, index), BitOrAssign, right)
-      _ => right
+      _ => CompoundAssignExpr(left, BitOrAssign, right)
     }
   } else if self.match_(CaretEq) {
     let right = self.parse_assignment()
@@ -433,7 +437,7 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
         CompoundAssignExpr(PropAccess(obj, prop), BitXorAssign, right)
       IndexAccess(obj, index) =>
         CompoundAssignExpr(IndexAccess(obj, index), BitXorAssign, right)
-      _ => right
+      _ => CompoundAssignExpr(left, BitXorAssign, right)
     }
   } else if self.match_(LtLtEq) {
     let right = self.parse_assignment()
@@ -443,7 +447,7 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
         CompoundAssignExpr(PropAccess(obj, prop), ShlAssign, right)
       IndexAccess(obj, index) =>
         CompoundAssignExpr(IndexAccess(obj, index), ShlAssign, right)
-      _ => right
+      _ => CompoundAssignExpr(left, ShlAssign, right)
     }
   } else if self.match_(GtGtEq) {
     let right = self.parse_assignment()
@@ -453,7 +457,7 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
         CompoundAssignExpr(PropAccess(obj, prop), ShrAssign, right)
       IndexAccess(obj, index) =>
         CompoundAssignExpr(IndexAccess(obj, index), ShrAssign, right)
-      _ => right
+      _ => CompoundAssignExpr(left, ShrAssign, right)
     }
   } else if self.match_(GtGtGtEq) {
     let right = self.parse_assignment()
@@ -463,7 +467,7 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
         CompoundAssignExpr(PropAccess(obj, prop), UShrAssign, right)
       IndexAccess(obj, index) =>
         CompoundAssignExpr(IndexAccess(obj, index), UShrAssign, right)
-      _ => right
+      _ => CompoundAssignExpr(left, UShrAssign, right)
     }
   } else if self.match_(StarStarEq) {
     let right = self.parse_assignment()
@@ -473,7 +477,7 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
         CompoundAssignExpr(PropAccess(obj, prop), PowAssign, right)
       IndexAccess(obj, index) =>
         CompoundAssignExpr(IndexAccess(obj, index), PowAssign, right)
-      _ => right
+      _ => CompoundAssignExpr(left, PowAssign, right)
     }
   } else if self.match_(AmpAmpEq) {
     let right = self.parse_assignment()
@@ -483,7 +487,7 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
         CompoundAssignExpr(PropAccess(obj, prop), AndAssign, right)
       IndexAccess(obj, index) =>
         CompoundAssignExpr(IndexAccess(obj, index), AndAssign, right)
-      _ => right
+      _ => CompoundAssignExpr(left, AndAssign, right)
     }
   } else if self.match_(PipePipeEq) {
     let right = self.parse_assignment()
@@ -493,7 +497,7 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
         CompoundAssignExpr(PropAccess(obj, prop), OrAssign, right)
       IndexAccess(obj, index) =>
         CompoundAssignExpr(IndexAccess(obj, index), OrAssign, right)
-      _ => right
+      _ => CompoundAssignExpr(left, OrAssign, right)
     }
   } else if self.match_(QuestionQuestionEq) {
     let right = self.parse_assignment()
@@ -503,7 +507,7 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
         CompoundAssignExpr(PropAccess(obj, prop), CoalesceAssign, right)
       IndexAccess(obj, index) =>
         CompoundAssignExpr(IndexAccess(obj, index), CoalesceAssign, right)
-      _ => right
+      _ => CompoundAssignExpr(left, CoalesceAssign, right)
     }
   } else {
     left
