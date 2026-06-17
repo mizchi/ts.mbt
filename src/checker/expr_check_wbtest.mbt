@@ -8341,3 +8341,24 @@ test "expr_check: primitive not assignable to lib class type" {
   @test.assert_eq(issues("let x: Number = 5;"), 0)
   @test.assert_eq(issues("let x: Object = 1;"), 0)
 }
+
+///|
+// Generic inference: explicit type arguments on a `new` expression pin the
+// constructor's parameters just as they do for a function call, so
+// `new C<string>(1)` rejects the numeric constructor argument.
+test "expr_check: explicit type-argument constructor argument mismatch" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  assert_true(
+    issues("class C<T> { constructor(x: T) {} }\nnew C<string>(1);") > 0,
+  )
+  @test.assert_eq(
+    issues("class C<T> { constructor(x: T) {} }\nnew C<string>(\"s\");"),
+    0,
+  )
+  @test.assert_eq(
+    issues("class C<T> { constructor(x: T) {} }\nnew C<number>(1);"),
+    0,
+  )
+}
