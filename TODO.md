@@ -1374,6 +1374,8 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-18 (T62)   567/815 (69 %)        414/414 ( 0 FP)
 2026-06-18 (T63)   569/815 (70 %)        414/414 ( 0 FP)
 2026-06-18 (T64)   570/815 (70 %)        414/414 ( 0 FP)
+2026-06-18 (T65)   571/815 (70 %)        414/414 ( 0 FP)
+2026-06-18 (T66)   572/815 (70 %)        414/414 ( 0 FP)
 
   RB2 (2026-06-18) -- re-baseline after the intervening checker commits
   (through f545849) lifted measured recall 543 -> 563 @ 0 FP. Toolchain note:
@@ -1469,6 +1471,36 @@ conformance sources (`.errors.txt` baseline = ground truth):
   Tooling: `tsacc --list-misses` now also prints `FALSE_POS <case> :: <path>
   :: <msg>`, which made the arity quality assessment and the variance-safety
   audits above mechanical.
+
+  T65 / T66 -- overloaded function- and constructor-typed argument arity
+    (TS2345), the "overloaded function-typed arguments machinery" follow-up.
+    A function / constructor *value* passed for a (possibly overloaded) call-
+    or construct-signature parameter must be callable with the arguments every
+    target signature would pass it. When the value *requires* more parameters
+    than a signature *provides*, it can never implement that signature; for an
+    overload set the value must satisfy every signature, so any signature with
+    fewer parameters than the value requires is flagged. The source arity comes
+    from a function literal (`function_value_required_arity`) or the value's
+    single call / construct signature (`single_signature_required_arity`);
+    targets are enumerated by `collect_call_signatures` / `collect_construct_signatures`
+    (every `<call>` / `<new>` overload on object / interface types, plus bare
+    `Func` / `Constructor`). Checked ahead of the single-signature contextual-
+    typing routes, which never enforce this minimum.
+      T65: recall 570 -> 571, clears genericCallWithOverloadedFunctionTypedArguments2
+        (`foo(<T>(x, y) => '')` vs `{ (x: T): string; (x: T, y?: T): string }`).
+      T66: recall 571 -> 572, clears genericCallWithOverloadedConstructorTypedArguments2
+        (`foo(b)`, `b: { new <T>(x, y): string }` vs an overloaded `<new>` set).
+    Not covered by the arity mechanism (separate, larger machinery):
+      - genericCallToOverloadedMethodWithOverloadedArguments -- overload
+        *resolution* of an overloaded callback argument plus generic return
+        (`U`) inference through `(x: T) => Promise<U>`; arities match, so this
+        is TS2769 overload selection, not an arity verdict.
+      - The call/construct-signature *subtyping* families
+        (subtypingWith{Call,Construct}Signatures*, TS2430 interface-extends;
+        assignmentCompatWith{Construct,GenericCall}Signatures, TS2322 type-vs-
+        type) need full signature structural comparison (kind + arity + param
+        bivariance + covariant return), a broader relaxation than the arity
+        rule -- a candidate next slice if directed.
 
   Boundary (2026-06-18): the named higher-order MISS clusters remain
   single-recall-point, bespoke-machinery cases (overloaded construct-signature
