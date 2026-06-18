@@ -318,6 +318,7 @@ fn parse_module_or_empty(src : String) -> @ast.TsModule {
         strict_property_initialization: true,
         use_define_for_class_fields: false,
         deprecated_compiler_options: [],
+        parameter_property_misuses: [],
         top_level_stmts: [],
       }
   } noraise {
@@ -8658,4 +8659,28 @@ test "expr_check: explicit type-argument constructor argument mismatch" {
     issues("class C<T> { constructor(x: T) {} }\nnew C<number>(1);"),
     0,
   )
+}
+
+///|
+// TS2369: a parameter property (`public` / `private` / `protected` /
+// `readonly` on a parameter) is only allowed in a constructor implementation.
+// It is an error on a free function, arrow, non-constructor method, or a
+// call / construct signature; a real constructor parameter list stays silent.
+test "expr_check: parameter property outside a constructor (TS2369)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Free function, arrow, non-constructor method: each is an error.
+  assert_true(issues("function f(public x: number) {}") > 0)
+  assert_true(issues("var g = (private y: number) => {};") > 0)
+  assert_true(issues("class C { m(readonly z: number) {} }") > 0)
+  // Construct / call signatures in an interface or object type: error.
+  assert_true(issues("interface I { new (public x: number); }") > 0)
+  assert_true(issues("var a: { foo(private x: number); };") > 0)
+  // A genuine constructor parameter property is valid -> silent.
+  @test.assert_eq(issues("class D { constructor(public x: number) {} }"), 0)
+  // A plain parameter (no modifier) is valid -> silent.
+  @test.assert_eq(issues("function h(x: number) {}"), 0)
+  // `readonly` used as an ordinary parameter name, not a modifier -> silent.
+  @test.assert_eq(issues("function k(readonly: number) {}"), 0)
 }

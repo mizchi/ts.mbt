@@ -1381,6 +1381,7 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-18 (T69)   583/815 (72 %)        414/414 ( 0 FP)
 2026-06-18 (T70)   584/815 (72 %)        414/414 ( 0 FP)
 2026-06-18 (T71)   589/815 (72 %)        414/414 ( 0 FP)
+2026-06-18 (T72)   592/815 (73 %)        414/414 ( 0 FP)
 
   RB2 (2026-06-18) -- re-baseline after the intervening checker commits
   (through f545849) lifted measured recall 543 -> 563 @ 0 FP. Toolchain note:
@@ -1569,18 +1570,40 @@ conformance sources (`.errors.txt` baseline = ground truth):
   also drove a parser fix: optional function-/constructor-type parameters now
   widen to `T | undefined`).
 
+  T72 -- parameter property outside a constructor (TS2369). recall 589 -> 592
+    (pinned dirs; whole-corpus TP 1599 -> 1605, FP steady at the 2 pre-existing
+    unrelated cases). A parameter carrying `public` / `private` / `protected` /
+    `readonly` is only legal in a constructor *implementation*; everywhere else
+    (free function, arrow, function expression, non-constructor method, or a
+    call / construct signature in an interface / object type) it is a TS2369.
+    The parser already detected these modifiers via `skip_param_modifiers` and
+    used `param_property_scopes` (pushed only for a `constructor` method) to
+    materialize constructor fields; `parse_param` now records every modifier it
+    sees while that scope stack is *empty* into a new
+    `param_property_misuses` list, surfaced as `TsModule.parameter_property_misuses`
+    (mirroring `deprecated_compiler_options`) and emitted one diagnostic per
+    entry by the body pass. FP-safe by soundness: such a parameter is never
+    valid TS, and `skip_param_modifiers` already distinguishes a modifier from a
+    same-spelled parameter name (`function k(readonly: number)` -- the keyword
+    is followed by `:`, so it stays a name). Cleared
+    callSignaturesWithAccessibilityModifiersOnParameters,
+    constructSignatureWithAccessibilityModifiersOnParameters(2),
+    callSignaturesWithAccessibilityModifiersOnParameters2, and readonlyInAmbientClass
+    (the latter via its non-constructor `method(readonly x)`; the ambient
+    constructor-overload TS2369 still needs body-presence tracking). This is the
+    lighter half of the boundary note below: TS2369 needed only a flat module
+    list, *not* a field on every `TsClassDecl` construction site.
+
   Boundary (2026-06-18): the named higher-order MISS clusters remain
   single-recall-point, bespoke-machinery cases (overloaded construct-signature
   arity with generic constructors; overloaded / function-typed argument
   inference; `typeof Class` constructor-accessibility; mapped-type
   instantiation; static-/prototype-member function-assignment target
   resolution; lowercase `object` is currently parsed as `Any`, so the
-  non-primitive rule has nothing to fire on; abstract-member implementation
-  TS2515 and parameter-property TS2369 would need new AST/parser fields tracked
-  across every `TsClassDecl` construction site). Each needs its own resolver
+  non-primitive rule has nothing to fire on). Each needs its own resolver
   threading, AST extension, or generic / overload machinery; the clean
   structural relaxations are now largely harvested. Sound, FP-0 recall went
-  563 -> 589 (+26) this session.
+  563 -> 589 (+26) the prior session and 589 -> 592 (+3) here.
 
   Toolchain note (2026-06-08): the native parser-package whitebox test
   generates a ~25 MB C unit that this session's `tcc` could not compile in

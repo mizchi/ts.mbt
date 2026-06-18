@@ -13474,6 +13474,17 @@ fn check_module_function_bodies_layered(
         message: "option `\{opt}` is deprecated",
       })
     }
+    // TS2369: a parameter property (`public` / `private` / `protected` /
+    // `readonly` on a parameter) is only allowed in a constructor
+    // implementation. The parser records each one it saw outside a
+    // constructor parameter list; surface one diagnostic per occurrence.
+    // These positions are never valid TS, so this is false-positive-free.
+    for pname in module_.parameter_property_misuses {
+      all.push({
+        path: "parameter `\{pname}`",
+        message: "a parameter property is only allowed in a constructor implementation",
+      })
+    }
     // Module-level structural validation that doesn't depend on function
     // bodies. Only the kinds that are sound *and* not already covered by
     // the body pass *and* false-positive-free are admitted:

@@ -840,6 +840,14 @@ pub(all) struct TsModule {
   // directive comments that the test corpus uses — real `.d.ts` / `.ts`
   // bridge inputs never carry these, so the field stays empty for them.
   deprecated_compiler_options : Array[String]
+  // Parameter properties (`public` / `private` / `protected` / `readonly`
+  // on a parameter) found *outside* a class constructor. TypeScript only
+  // permits them in a constructor implementation, so each entry is a real
+  // TS2369. The parser records one human-readable location string per
+  // offending parameter; the checker surfaces one diagnostic per entry.
+  // Empty for any well-formed input (the modifier is always an error in
+  // these positions), so it never costs precision.
+  parameter_property_misuses : Array[String]
 } derive(Debug)
 
 ///|
