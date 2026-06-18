@@ -3124,6 +3124,7 @@ fn check_abstract_instantiation(ctx : CheckCtx, class_name : String) -> Unit {
 /// "simple" type (primitive / literal / `T[]` / single Named) is
 /// reliable enough to keep -- those cases are picked up by the
 /// strict mode anyway and contribute recall without inflating FP.
+///|
 fn is_permissively_suppressed(sub_path : String, message : String) -> Bool {
   if message.has_prefix("expected `") && message.contains("but got `") {
     // Compatibility goal: a type mismatch is a real TS error, so emit it
@@ -3188,11 +3189,12 @@ fn is_permissively_suppressed(sub_path : String, message : String) -> Bool {
     return false
   }
   if message.contains("argument(s), got ") {
-    // Arity diagnostics are suppressed by default in permissive mode
-    // (overloads / optional / builtin signatures we don't fully model make
-    // them false-positive-prone). The reliable cases -- constructor calls
-    // and direct calls to rest-free top-level function declarations -- are
-    // emitted via `record_unfiltered`, so they never reach this filter.
+    // Arity diagnostics are suppressed by default in permissive mode: with no
+    // rich `TsParam` list (builtin lib methods, call-signature-typed values)
+    // optional / default / rest parameters aren't modelled accurately, so the
+    // count is unreliable in both directions. Reliable cases (constructors,
+    // direct calls to function declarations -- `sig is Some`) bypass this
+    // filter via `record_unfiltered`.
     return true
   }
   if message.contains("is not callable") {
@@ -6043,6 +6045,22 @@ fn check_expr_against(
         "expected `\{type_display(expected_u)}` but got `\{type_display(inferred_u)}`",
       )
     }
+    return
+  }
+  // Callable vs concrete-scalar: a primitive / literal value is never a
+  // function or constructor (and vice versa), so this is a real, unambiguous
+  // mismatch -- `var f: () => void = 5`, `var k: new () => A = "asdf"`. Checked
+  // ahead of the structural callable bail below, which would otherwise swallow
+  // it (a `Func` / `Constructor` is `shape_is_callable`).
+  if (shape_is_callable(expected_u, ctx.resolver) &&
+      is_concrete_primitive_or_literal(inferred_u)) ||
+    (shape_is_callable(inferred_u, ctx.resolver) &&
+      is_concrete_primitive_or_literal(expected_u)) {
+    record(
+      ctx,
+      sub_path,
+      "expected `\{type_display(expected_u)}` but got `\{type_display(inferred_u)}`",
+    )
     return
   }
   // Callable / constructable interfaces & objects (`<call>` / `<new>`
@@ -10893,24 +10911,17 @@ fn check_call_args_in_expr(
             params
           }
           // A direct call to a top-level function *declaration* (present in
-          // `signatures`) with no rest parameter has an exact, reliable
-          // arity -- safe to report even in permissive mode. Call-signature
-          // -typed variables, inferred function values, and rest-bearing
-          // signatures are not in `signatures` (or carry a rest) and stay
-          // suppressed. (`this` parameters are stripped during resolver
-          // construction, so they no longer skew the count.)
-          let arity_reliable = match sig {
-            Some(ps) => {
-              let mut ok = true
-              for p in ps {
-                if p.is_rest {
-                  ok = false
-                }
-              }
-              ok
-            }
-            None => false
-          }
+          // `signatures`) has an exact, reliable arity -- safe to report even
+          // in permissive mode. The rich `TsParam` list models optional /
+          // default / rest parameters precisely (`required_arity` excludes
+          // optionals and rest; a rest param lifts the upper bound to
+          // unbounded), so even rest-bearing declarations are reliable. Call-
+          // signature-typed variables, inferred function values, and builtin
+          // lib methods have no `sig` and stay suppressed -- their lib param
+          // models don't mark optional / rest accurately, which is where the
+          // arity false positives come from. (`this` parameters are stripped
+          // during resolver construction, so they no longer skew the count.)
+          let arity_reliable = sig is Some(_)
           check_arguments_with_sig(
             env,
             substituted_params,
