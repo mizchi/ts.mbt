@@ -6062,7 +6062,19 @@ fn check_expr_against(
     return
   }
   match (inferred_u, expected_u) {
-    (Applied(_, _), _) | (_, Applied(_, _)) => return
+    (Applied(_, _), _) | (_, Applied(_, _)) => {
+      // Covariant best-effort: same generic, same arity, a type-argument pair
+      // that is bidirectionally incompatible (`Box<string>` vs `Box<number>`)
+      // is a real mismatch. Everything else keeps the conservative bail.
+      if applied_generic_mismatch(inferred_u, expected_u, ctx) {
+        record(
+          ctx,
+          sub_path,
+          "expected `\{type_display(expected_u)}` but got `\{type_display(inferred_u)}`",
+        )
+      }
+      return
+    }
     // Intersections on either side (`PartialStepState & { repo: any }`,
     // `ComponentType<any> & ComponentType<RouteComponentProps>`, `A & A`):
     // intersection assignability (a value of the intersection satisfies each
@@ -13143,6 +13155,70 @@ fn check_module_function_bodies_layered(
 /// (`var x: T = 1`): only such unambiguously-concrete sources are flagged, so
 /// an imprecisely-inferred object / union / generic instantiation can never
 /// false-flag against `T`.
+/// Covariant best-effort generic-instantiation mismatch. Two `Applied`
+/// instantiations of the *same* generic with the *same* arity are a genuine
+/// type error when some type-argument pair is bidirectionally incompatible
+/// (`Box<string>` vs `Box<number>`). Requiring incompatibility in *both*
+/// directions keeps the check variance-safe: a covariant widening
+/// (`Box<"a">` -> `Box<string>`) or a contravariant one leaves one direction
+/// assignable, so it is not flagged. Type-argument pairs are only judged when
+/// both sides are concrete primitives / literals; anything else (type
+/// parameters, object shapes, nested generics, `any`) abstains. This is the
+/// relaxation of the blanket `Applied` bail in `check_expr_against`.
+fn applied_generic_mismatch(
+  source : @ast.TsType,
+  target : @ast.TsType,
+  ctx : CheckCtx,
+) -> Bool {
+  match (source, target) {
+    (Applied(s_name, s_args), Applied(t_name, t_args)) => {
+      if s_name != t_name || s_args.length() != t_args.length() {
+        return false
+      }
+      if s_args.length() == 0 {
+        return false
+      }
+      for i in 0..<s_args.length() {
+        let sa = ctx.resolver.unwrap(s_args[i])
+        let ta = ctx.resolver.unwrap(t_args[i])
+        if is_concrete_primitive_or_literal(sa) &&
+          is_concrete_primitive_or_literal(ta) {
+          if not(is_assignable_to(sa, ta)) && not(is_assignable_to(ta, sa)) {
+            return true
+          }
+          continue
+        }
+        // Both args are distinct user-declared nominal references
+        // (`X<Foo>` vs `X<Bar>`) that are bidirectionally structurally
+        // incompatible. Bidirectional incompatibility keeps the covariant /
+        // contravariant subtype directions silent.
+        match (sa, ta) {
+          (Named(sn), Named(tn)) =>
+            if sn != tn &&
+              is_resolvable_nominal_name(ctx.resolver, sn) &&
+              is_resolvable_nominal_name(ctx.resolver, tn) &&
+              not(is_structurally_assignable_named(sa, ta, ctx.resolver)) &&
+              not(is_structurally_assignable_named(ta, sa, ctx.resolver)) {
+              return true
+            }
+          _ => ()
+        }
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+///|
+/// True when `name` resolves to a user-declared class or interface — a
+/// nominal reference whose member shape the structural-assignability relation
+/// can compare.
+fn is_resolvable_nominal_name(resolver : Resolver, name : String) -> Bool {
+  resolver.classes.get(name) is Some(_) || resolver.interfaces.get(name) is Some(_)
+}
+
+///|
 fn is_concrete_primitive_or_literal(ty : @ast.TsType) -> Bool {
   match ty {
     Number

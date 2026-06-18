@@ -8325,6 +8325,36 @@ test "expr_check: enum nominality assignment target" {
 }
 
 ///|
+// Covariant generic assignability (TS2322): two instantiations of the same
+// generic with a bidirectionally-incompatible type argument (`Box<string>` vs
+// `Box<number>`) are a real mismatch. Covariant widening (`Box<"x">` ->
+// `Box<string>`) and identical instantiations stay silent. This relaxes the
+// blanket `Applied` bail in `check_expr_against`.
+test "expr_check: covariant generic instantiation mismatch" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let pre = "interface Box<T> { v: T }\n"
+  assert_true(
+    issues(pre + "declare var a: Box<string>;\nvar b: Box<number> = a;") > 0,
+  )
+  @test.assert_eq(
+    issues(pre + "declare var a: Box<\"x\">;\nvar b: Box<string> = a;"),
+    0,
+  )
+  @test.assert_eq(
+    issues(pre + "declare var a: Box<number>;\nvar b: Box<number> = a;"),
+    0,
+  )
+  // Distinct user classes with incompatible shapes as the type argument are a
+  // mismatch; a shared shape (bidirectionally assignable) stays silent.
+  let pre2 = "class P { x: number }\nclass Q { y: string }\ninterface Box<T> { v: T }\n"
+  assert_true(
+    issues(pre2 + "declare var a: Box<P>;\nvar b: Box<Q> = a;") > 0,
+  )
+}
+
+///|
 // TS2345: a computed (string-literal) method call `recv["m"](args)` is checked
 // against the resolved method signature, just like the dotted `recv.m(args)`
 // form. A wrong-typed argument to a known primitive method is flagged; correct
