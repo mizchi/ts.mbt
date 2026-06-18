@@ -8419,6 +8419,30 @@ test "expr_check: primitive not assignable to overloaded interface" {
 }
 
 ///|
+// TS2322: private / protected members are nominal -- a class carrying one is
+// only assignable to / from the same class (or via inheritance). A distinct
+// structural / nominal type can never satisfy it.
+test "expr_check: private member makes a class nominal" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Source class with a private member -> structural object target: error.
+  assert_true(
+    issues("class E { private foo: string }\nvar a: { foo: string };\na = new E();") >
+    0,
+  )
+  // Distinct classes, one private: not mutually assignable.
+  let two = "class D { foo: string = \"\" }\nclass E { private foo: string = \"\" }\n"
+  assert_true(issues(two + "var d: D = new D();\nd = new E();") > 0)
+  // Same class stays silent; a public-only class is still structural.
+  @test.assert_eq(issues("class E { private foo: string = \"\" }\nvar e: E = new E();\ne = new E();"), 0)
+  @test.assert_eq(
+    issues("class P { foo: string = \"\" }\nvar a: { foo: string };\na = new P();"),
+    0,
+  )
+}
+
+///|
 // TS2345: a computed (string-literal) method call `recv["m"](args)` is checked
 // against the resolved method signature, just like the dotted `recv.m(args)`
 // form. A wrong-typed argument to a known primitive method is flagged; correct

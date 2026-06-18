@@ -2966,6 +2966,67 @@ fn class_extends(resolver : Resolver, sub : String, base : String) -> Bool {
 }
 
 ///|
+/// True when class `name` declares any `private` / `protected` member. Such a
+/// member is nominal in TypeScript: only the same class declaration (or a
+/// subclass, which inherits it) can satisfy the type.
+fn class_has_private_member(resolver : Resolver, name : String) -> Bool {
+  match resolver.classes.get(name) {
+    Some(decl) =>
+      decl.private_members.length() > 0 || decl.protected_members.length() > 0
+    None => false
+  }
+}
+
+///|
+/// Private / protected members must originate from the same class declaration,
+/// so assignability is blocked when:
+///  - the *target* is a class with a private/protected member and the source
+///    is neither that class nor a subclass of it (which inherits the member);
+///  - or the *source* is a class with a private/protected member and the
+///    target is neither that class nor a superclass of it -- a structural
+///    object / interface / unrelated class can never supply the private
+///    member.
+/// Returns true when the assignment must be flagged. Only fires when the
+/// relevant side resolves to a known class; everything else abstains. Callers
+/// reach this only after the nominal `is_assignable_to` already returned false
+/// (so same-class and `any` / universal targets never get here).
+fn nominal_private_blocks(
+  source : @ast.TsType,
+  target : @ast.TsType,
+  resolver : Resolver,
+) -> Bool {
+  let s_class = match resolver.unwrap(source) {
+    Named(n) => if resolver.classes.get(n) is Some(_) { Some(n) } else { None }
+    _ => None
+  }
+  let t_class = match resolver.unwrap(target) {
+    Named(n) => if resolver.classes.get(n) is Some(_) { Some(n) } else { None }
+    _ => None
+  }
+  match t_class {
+    Some(tn) =>
+      if class_has_private_member(resolver, tn) {
+        match s_class {
+          Some(sn) => if not(class_extends(resolver, sn, tn)) { return true }
+          None => return true
+        }
+      }
+    None => ()
+  }
+  match s_class {
+    Some(sn) =>
+      if class_has_private_member(resolver, sn) {
+        match t_class {
+          Some(tn) => if not(class_extends(resolver, sn, tn)) { return true }
+          None => return true
+        }
+      }
+    None => ()
+  }
+  false
+}
+
+///|
 /// TS2341 / TS2445: accessing a `private` / `protected` class member from
 /// outside the scope that's allowed to see it. The receiver's class is
 /// resolved (instance type or a static `Class.member` reference); a
@@ -6149,6 +6210,19 @@ fn check_expr_against(
     _ => ()
   }
   if !is_assignable_to(inferred_u, expected_u) {
+    // Private / protected members are nominal: a class carrying one is only
+    // assignable to / from the same class (or its sub- / super-class via
+    // inheritance). This must short-circuit the structural accept-fallbacks
+    // below, which would otherwise match the private member as an ordinary
+    // field (`var a: { foo: string } = e` where `class E { private foo }`).
+    if nominal_private_blocks(inferred_u, expected_u, ctx.resolver) {
+      record(
+        ctx,
+        sub_path,
+        "expected `\{type_display(expected_u)}` but got `\{type_display(inferred_u)}`",
+      )
+      return
+    }
     // Class / interface references are nominal in `is_assignable_to`
     // (Named(A) == Named(B) iff A == B), but TypeScript types are
     // structural: two distinct classes / interfaces with the same
