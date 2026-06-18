@@ -353,25 +353,35 @@ test "expr_check: permissive flags constructor arity for a base-less class" {
 
 ///|
 test "expr_check: permissive flags direct call arity for top-level functions" {
-  // A rest-free top-level function declaration has an exact arity, reliable
-  // even in permissive mode. A rest-bearing function is not flagged.
+  // A top-level function declaration carries a rich `TsParam` list, so its
+  // arity is modelled precisely (optionals / defaults / rest) and is reliable
+  // even in permissive mode. A rest-bearing declaration still has a hard
+  // *minimum* arity: `variadic()` omits the required leading `a`, so it is
+  // flagged ("at least 1"); extra trailing args (`variadic(1, 2, 3)`) are not.
   let src =
     #|function add(a: number, b: number): number { return a + b }
     #|function variadic(a: number, ...rest: number[]): void {}
     #|function caller(): void {
     #|  add(1)
     #|  variadic()
+    #|  variadic(1, 2, 3)
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies_permissive(module_)
   let mut saw_add = false
+  let mut saw_variadic_too_few = false
   for i in issues {
     if i.path.contains("call `add`") && i.message.contains("argument(s), got 1") {
       saw_add = true
     }
-    assert_true(!i.path.contains("call `variadic`"))
+    if i.path.contains("call `variadic`") && i.message.contains("got 0") {
+      saw_variadic_too_few = true
+    }
+    // The valid `variadic(1, 2, 3)` over-application is never flagged.
+    assert_true(!i.message.contains("got 3"))
   }
   assert_true(saw_add)
+  assert_true(saw_variadic_too_few)
 }
 
 ///|
@@ -8298,6 +8308,293 @@ test "expr_check: TS2322 literal not assignable to literal target" {
   assert_true(issues("let x: \"a\" | \"b\" = \"c\";") > 0)
   @test.assert_eq(issues("let x: \"a\" = \"a\";"), 0)
   @test.assert_eq(issues("const c = \"b\";\nlet y: \"a\" = c;"), 0)
+}
+
+///|
+// Enum nominality (TS2322): a numeric enum is nominal, so a concrete
+// non-numeric primitive / literal or a plain object value is not assignable to
+// an enum-typed target. Numeric values, the same enum, and `null` /
+// `undefined` (non-strict) stay silent.
+test "expr_check: enum nominality assignment target" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let prelude = "enum E { A, B }\nvar e: E;\n"
+  assert_true(issues(prelude + "e = '';") > 0)
+  assert_true(issues(prelude + "e = {};") > 0)
+  assert_true(issues(prelude + "e = true;") > 0)
+  // Numeric values, the same enum member, and a number variable stay silent.
+  @test.assert_eq(issues(prelude + "e = 1;"), 0)
+  @test.assert_eq(issues(prelude + "e = E.A;"), 0)
+  @test.assert_eq(issues(prelude + "declare var n: number;\ne = n;"), 0)
+  // A string enum is not numeric, so the rule does not fire on it.
+  @test.assert_eq(
+    issues("enum S { A = \"a\" }\nvar s: S;\ns = 'x';"),
+    0,
+  )
+}
+
+///|
+// Covariant generic assignability (TS2322): two instantiations of the same
+// generic with a bidirectionally-incompatible type argument (`Box<string>` vs
+// `Box<number>`) are a real mismatch. Covariant widening (`Box<"x">` ->
+// `Box<string>`) and identical instantiations stay silent. This relaxes the
+// blanket `Applied` bail in `check_expr_against`.
+test "expr_check: covariant generic instantiation mismatch" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let pre = "interface Box<T> { v: T }\n"
+  assert_true(
+    issues(pre + "declare var a: Box<string>;\nvar b: Box<number> = a;") > 0,
+  )
+  @test.assert_eq(
+    issues(pre + "declare var a: Box<\"x\">;\nvar b: Box<string> = a;"),
+    0,
+  )
+  @test.assert_eq(
+    issues(pre + "declare var a: Box<number>;\nvar b: Box<number> = a;"),
+    0,
+  )
+  // Distinct user classes with incompatible shapes as the type argument are a
+  // mismatch; a shared shape (bidirectionally assignable) stays silent.
+  let pre2 = "class P { x: number }\nclass Q { y: string }\ninterface Box<T> { v: T }\n"
+  assert_true(
+    issues(pre2 + "declare var a: Box<P>;\nvar b: Box<Q> = a;") > 0,
+  )
+}
+
+///|
+// TS2322: a concrete primitive / literal is never a function or constructor,
+// so assigning one to a callable-typed target (`() => void`, `new () => A`) is
+// a real mismatch. Callable-to-callable shapes still stay silent.
+test "expr_check: primitive not assignable to callable type" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  assert_true(issues("var f: () => void;\nf = 5;") > 0)
+  assert_true(
+    issues("class A {}\nvar k: new () => A;\nk = \"asdf\";") > 0,
+  )
+  // A matching callable value stays silent.
+  @test.assert_eq(issues("var f: () => void;\nf = () => {};"), 0)
+}
+
+///|
+// TS2322: a value inhabits an intersection `A & B` only when it satisfies
+// every part. A source that provably fails an object-like part (a concrete
+// primitive, or an object missing a part's members) is a real mismatch; a
+// source satisfying all parts stays silent.
+test "expr_check: intersection target requires every part" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let pre = "declare var a: { a: string };\n"
+  // `a` lacks `b`, so it cannot inhabit `{ a } & { b }`.
+  assert_true(
+    issues(pre + "var y: { a: string } & { b: string };\ny = a;") > 0,
+  )
+  // A primitive can never satisfy an object part of the intersection.
+  assert_true(issues("var y: { a: string } & { b: string };\ny = 5;") > 0)
+  // A source carrying both members satisfies the intersection.
+  @test.assert_eq(
+    issues(
+      "declare var x: { a: string, b: string };\nvar y: { a: string } & { b: string };\ny = x;",
+    ),
+    0,
+  )
+}
+
+///|
+// TS2322: a concrete primitive / literal is never an object shape, including
+// an overload-bearing interface, so assigning one to such a target is a real
+// mismatch (the overloaded-shape bail otherwise stays silent).
+test "expr_check: primitive not assignable to overloaded interface" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let pre = "interface I { f(x: string): string; f(x: number): number }\n"
+  assert_true(issues(pre + "var i: I;\ni = 5;") > 0)
+  assert_true(issues(pre + "var i: I;\ni = \"s\";") > 0)
+}
+
+///|
+// TS2322: private / protected members are nominal -- a class carrying one is
+// only assignable to / from the same class (or via inheritance). A distinct
+// structural / nominal type can never satisfy it.
+test "expr_check: private member makes a class nominal" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Source class with a private member -> structural object target: error.
+  assert_true(
+    issues("class E { private foo: string }\nvar a: { foo: string };\na = new E();") >
+    0,
+  )
+  // Distinct classes, one private: not mutually assignable.
+  let two = "class D { foo: string = \"\" }\nclass E { private foo: string = \"\" }\n"
+  assert_true(issues(two + "var d: D = new D();\nd = new E();") > 0)
+  // Same class stays silent; a public-only class is still structural.
+  @test.assert_eq(issues("class E { private foo: string = \"\" }\nvar e: E = new E();\ne = new E();"), 0)
+  @test.assert_eq(
+    issues("class P { foo: string = \"\" }\nvar a: { foo: string };\na = new P();"),
+    0,
+  )
+}
+
+///|
+// TS2322: a logical operator propagates the contextual type to its right
+// operand, so a function value there is checked against the expected
+// signature (`x = cond && (a => …)` types the arrow's params). The left
+// operand of `||` / `??` is the guarded value and is not checked.
+test "expr_check: logical operator propagates contextual type to rhs" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // The arrow body assigns its (contextually `string`) param to a `number`.
+  assert_true(
+    issues(
+      "let x: (a: string) => string;\nlet y = true;\nx = y && (a => { const b: number = a; return b; });",
+    ) >
+    0,
+  )
+  // `||` left operand may be the guarded (nullable) value — not flagged.
+  @test.assert_eq(
+    issues("declare var xs: string[] | undefined;\nvar r: string[] = xs || [];"),
+    0,
+  )
+}
+
+///|
+// TS2345: a function value passed for a (possibly overloaded) call-signature
+// parameter must be callable with every signature's arguments. A value that
+// *requires* more parameters than a signature provides can't implement it
+// (`foo(<T>(x, y) => '')` against `{ (x: T): string; (x: T, y?: T): string }`
+// -- the 1-param overload supplies no `y`).
+test "expr_check: function value arity vs overloaded call signature" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let overloaded = "function foo<T>(cb: { (x: T): string; (x: T, y?: T): string }) { return cb }\n"
+  // Arrow requires 2 args; the 1-param overload can't supply the second.
+  assert_true(issues(overloaded + "foo((x, y) => '');") > 0)
+  // A 1-param arrow satisfies both overloads.
+  @test.assert_eq(issues(overloaded + "foo(x => '');"), 0)
+  // Single call signature: arrow needing more args than provided is an error.
+  assert_true(
+    issues("function g(cb: { (x: number): string }) { return cb }\ng((x, y) => '');") >
+    0,
+  )
+  // A bare function-typed target enforces the same minimum arity: assigning an
+  // arrow that requires an argument to a `() => T` field is too many params.
+  assert_true(
+    issues("var f: () => number;\nf = (x: number) => 1;") > 0,
+  )
+}
+
+///|
+// TS2345: the call-signature arity rule extends to construct signatures. A
+// constructor value that requires more parameters than a `<new>` overload
+// provides can't implement it.
+test "expr_check: constructor value arity vs overloaded construct signature" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let pre = "function foo<T>(cb: { new (x: T): string; new (x: T, y?: T): string }) { return cb }\n"
+  // `b` needs 2 construct args; the 1-param overload supplies none for `y`.
+  assert_true(
+    issues(pre + "declare var b: { new <T>(x: T, y: T): string };\nfoo(b);") > 0,
+  )
+  // A 1-param constructor satisfies both overloads.
+  @test.assert_eq(
+    issues(pre + "declare var a: { new <T>(x: T): T };\nfoo(a);"),
+    0,
+  )
+}
+
+///|
+// TS2430: a derived interface that redeclares an inherited callable member
+// requiring more arguments than the base signature provides incorrectly
+// extends it (a base-typed caller would invoke it with too few args).
+test "expr_check: interface extends with too many required params" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let base = "interface Base { a: () => number }\n"
+  // Derived `a` requires 1 arg; base provides 0 -> incompatible.
+  assert_true(issues(base + "interface I extends Base { a: (x: number) => number }") > 0)
+  // Same number of required params (optional second) -> ok.
+  @test.assert_eq(
+    issues(base + "interface I extends Base { a: (x?: number) => number }"),
+    0,
+  )
+  // Construct-signature member analog.
+  let cbase = "interface CB { a: new () => number }\n"
+  assert_true(
+    issues(cbase + "interface I extends CB { a: new (x: number) => number }") > 0,
+  )
+  // Incompatible rest-parameter element type (`string[]` over `number[]`).
+  assert_true(
+    issues(
+      "interface B { a: (...xs: number[]) => number }\ninterface I extends B { a: (...xs: string[]) => number }",
+    ) >
+    0,
+  )
+  // A derived interface whose own call signature has an incompatible
+  // parameter type incorrectly extends the base's call signature.
+  assert_true(
+    issues(
+      "interface B { (x: number): number }\ninterface I extends B { (x: string): number }",
+    ) >
+    0,
+  )
+}
+
+///|
+// TS2322: assigning between callable values compares their single call /
+// construct signatures bivariantly. An incompatible parameter or return type
+// is flagged; a compatible signature stays silent. Signatures involving
+// intersections / generic instantiations abstain.
+test "expr_check: callable value assignment compares signatures" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Return-type mismatch between two function-typed values.
+  assert_true(
+    issues("declare var g: (x: number) => number;\nvar f: (x: number) => string;\nf = g;") >
+    0,
+  )
+  // Parameter-type mismatch.
+  assert_true(
+    issues("declare var g: (x: string) => number;\nvar f: (x: number) => number;\nf = g;") >
+    0,
+  )
+  // Compatible signature stays silent.
+  @test.assert_eq(
+    issues("declare var g: (x: number) => number;\nvar f: (x: number) => number;\nf = g;"),
+    0,
+  )
+}
+
+///|
+// TS2515: a non-abstract class extending a class with abstract members must
+// implement each of them. An abstract subclass, or a concrete class that
+// implements the member, stays silent.
+test "expr_check: non-abstract class must implement abstract members" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let base = "abstract class B { abstract foo(): void; bar(): void {} }\n"
+  // C does not implement abstract `foo`.
+  assert_true(issues(base + "class C extends B {}") > 0)
+  // D implements `foo` -> ok.
+  @test.assert_eq(issues(base + "class D extends B { foo(): void {} }"), 0)
+  // An abstract subclass need not implement it.
+  @test.assert_eq(issues(base + "abstract class E extends B {}"), 0)
+  // Transitive: a concrete grandchild of an abstract class must implement.
+  assert_true(
+    issues(base + "abstract class M extends B {}\nclass N extends M {}") > 0,
+  )
 }
 
 ///|

@@ -8,6 +8,7 @@
 //
 //   tsacc                       # walks the pinned conformance dirs, prints the 2x2 table
 //   tsacc --list-misses         # also print every recall miss (`RECALL_MISS <case>`)
+//                               # and every false positive (`FALSE_POS <case> :: <path> :: <message>`)
 //   tsacc --list-misses <substr> # ...restricted to paths containing <substr>
 
 ///|
@@ -173,6 +174,11 @@ async fn main {
         } else {
           precision_miss += 1
           d_pm += 1
+          if list_misses && (miss_filter == "" || path.contains(miss_filter)) {
+            for iss in issues {
+              println("FALSE_POS \{case_name} :: \{iss.path} :: \{iss.message}")
+            }
+          }
         }
       } else if has_baseline {
         recall_miss += 1

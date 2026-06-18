@@ -1366,6 +1366,221 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-15 (T55)   541/815 (66 %)        414/414 ( 0 FP)
 2026-06-15 (T56)   542/815 (67 %)        414/414 ( 0 FP)
 2026-06-15 (T57)   543/815 (67 %)        414/414 ( 0 FP)
+2026-06-18 (RB2)   563/815 (69 %)        414/414 ( 0 FP)
+2026-06-18 (T58)   564/815 (69 %)        414/414 ( 0 FP)
+2026-06-18 (T59)   564/815 (69 %)        414/414 ( 0 FP)
+2026-06-18 (T60)   565/815 (69 %)        414/414 ( 0 FP)
+2026-06-18 (T61)   566/815 (69 %)        414/414 ( 0 FP)
+2026-06-18 (T62)   567/815 (69 %)        414/414 ( 0 FP)
+2026-06-18 (T63)   569/815 (70 %)        414/414 ( 0 FP)
+2026-06-18 (T64)   570/815 (70 %)        414/414 ( 0 FP)
+2026-06-18 (T65)   571/815 (70 %)        414/414 ( 0 FP)
+2026-06-18 (T66)   572/815 (70 %)        414/414 ( 0 FP)
+2026-06-18 (T67)   576/815 (71 %)        414/414 ( 0 FP)
+2026-06-18 (T68)   581/815 (71 %)        414/414 ( 0 FP)
+2026-06-18 (T69)   583/815 (72 %)        414/414 ( 0 FP)
+2026-06-18 (T70)   584/815 (72 %)        414/414 ( 0 FP)
+2026-06-18 (T71)   589/815 (72 %)        414/414 ( 0 FP)
+
+  RB2 (2026-06-18) -- re-baseline after the intervening checker commits
+  (through f545849) lifted measured recall 543 -> 563 @ 0 FP. Toolchain note:
+  this session's container had no MoonBit toolchain or `typescript` submodule
+  checked out; both were provisioned (`scripts/patch_async_dep.sh` is still
+  required for the bleeding-edge compiler to accept moonbitlang/async). `moon
+  run --target native src/cmd/tsacc` compiles + runs in ~9s here.
+
+  Decision (2026-06-18): per direction to pursue the "real type-system" path
+  with a *small* FP budget for covariant generic assignability, this session
+  targeted the three remaining higher-order clusters the prior triage named:
+  named-interface object inference, multi-source `T` inference + enum
+  nominality, and overloaded constructor types.
+
+  T58 -- enum nominality on assignment targets (TS2322). recall 563 -> 564.
+    A numeric enum is nominal: a concrete non-numeric primitive / literal or a
+    plain object value is not assignable to an enum-typed target (`var e: E;
+    e = ''` / `e = {}` / `e = true`). Numeric values, the same enum,
+    `any` / `unknown`, and non-strict `null` / `undefined` stay silent. Added
+    ahead of the unresolved-`Named` bail in `check_expr_against`, which
+    previously skipped enum targets entirely (enums live in `resolver.enums`,
+    not the alias / interface / class tables). Cross-enum member assignment
+    (`e = E2.A`) loses its enum provenance through member access (it resolves
+    to a bare numeric literal) and is deliberately not caught -- modelling that
+    needs a nominal enum-typed value representation. Clears
+    `invalidEnumAssignments`. FP-safe by soundness (these shapes are never
+    assignable to a numeric enum). The remaining enum misses are strict-mode-
+    only (`validEnumAssignments`: `e = null` / `e = -1` need
+    strictNullChecks / numeric-literal-vs-member) or different diagnostics
+    (`enumAssignabilityInInheritance` is TS2403, `assignmentCompatWithEnumIndexer`
+    is TS2741 over `Record<E, any>`).
+
+  T59 -- covariant generic assignability (relax the `Applied` bail). recall
+    steady 564, FP steady 0.
+    `check_expr_against` bailed unconditionally whenever either side was an
+    `Applied(...)` instantiation. Relaxed to a variance-safe covariant
+    best-effort comparison (`applied_generic_mismatch`): two instantiations of
+    the *same* generic with the *same* arity are a mismatch when some
+    type-argument pair is bidirectionally incompatible (`Box<string>` vs
+    `Box<number>`; `Box<P>` vs `Box<Q>` for distinct shape-incompatible user
+    classes). Bidirectional incompatibility keeps covariant / contravariant
+    subtype directions silent, so it is sound; argument pairs are only judged
+    when both are concrete primitives / literals or distinct resolvable nominal
+    references. +0 on the measured corpus: every conformance generic-mismatch
+    lives at a *call-argument inference* site, not an assignment / return one,
+    so this strengthens the synthesized-bridge `@checker.check_module` gate
+    without moving the conformance metric.
+
+  Follow-up decision (2026-06-18): direction updated to "increase recall, a
+  temporary rise in FP is acceptable." In practice every gain below was still
+  found as a *sound* relaxation that holds FP at 0 -- the FP budget was never
+  spent. The one broad heuristic that does trade FP (emit unreliable arity for
+  `sig`-less calls: +7 recall / +8 FP) was rejected on *quality*: 6 of its 7
+  "gains" were spurious arity diagnostics that merely happened to land on
+  files carrying some other baseline error (the file-level metric rewards any
+  diagnostic on a baseline-positive file), and the 8 FP were our own lib /
+  call-signature param models lacking optional / rest markers. So arity stays
+  suppressed for `sig`-less calls; `arity_reliable` was instead broadened to
+  *every* `sig is Some` declaration (rest-bearing included -- `required_arity`
+  is exact), a correctness improvement (+0).
+
+  T60 -- primitive-vs-callable mismatch + precise rest-arity. recall 564 ->
+    565. A concrete primitive / literal is never a function or constructor, so
+    assigning one to a callable target (`var f: () => void = 5`, `var k: new ()
+    => A = "asdf"`) is a real TS2322. Checked ahead of the structural
+    `shape_is_callable` bail. Clears classAbstractAssignabilityConstructorFunction.
+
+  T61 -- intersection-target assignability. recall 565 -> 566. A value inhabits
+    `A & B` only when it satisfies every part; a source that provably fails an
+    object-like part (a primitive, or an object missing the part's members) is
+    a mismatch (`intersection_target_mismatch`). Intersection *source* still
+    bails. Clears nonPrimitiveUnionIntersection.
+
+  T62 -- primitive vs overload-bearing interface. recall 566 -> 567. A concrete
+    primitive / literal is never an object shape, including an overloaded-method
+    interface, so the overloaded-shape bail now flags a primitive source.
+    Clears assignFromStringInterface2.
+
+  T63 -- private / protected members are nominal. recall 567 -> 569.
+    `nominal_private_blocks` short-circuits the structural accept-fallbacks: a
+    class carrying a private/protected member is only assignable to/from the
+    same class or its sub/superclass (inheritance via `class_extends`). Clears
+    assignmentCompatWithObjectMembersAccessibility (a 72-error file) and
+    objectRest.
+
+  T64 -- contextual type through `&&` / `||` / `??`. recall 569 -> 570. The
+    expected type now flows to a logical operator's *right* operand (its result
+    / fallback), mirroring the ternary path, so `x = cond && (a => …)` types
+    the arrow's params and surfaces body errors. The left operand is not
+    checked (for `||` / `??` it is the guarded nullable value -- checking it
+    cost 1 FP in an earlier attempt). Clears contextuallyTypeLogicalAnd02.
+
+  Tooling: `tsacc --list-misses` now also prints `FALSE_POS <case> :: <path>
+  :: <msg>`, which made the arity quality assessment and the variance-safety
+  audits above mechanical.
+
+  T65 / T66 -- overloaded function- and constructor-typed argument arity
+    (TS2345), the "overloaded function-typed arguments machinery" follow-up.
+    A function / constructor *value* passed for a (possibly overloaded) call-
+    or construct-signature parameter must be callable with the arguments every
+    target signature would pass it. When the value *requires* more parameters
+    than a signature *provides*, it can never implement that signature; for an
+    overload set the value must satisfy every signature, so any signature with
+    fewer parameters than the value requires is flagged. The source arity comes
+    from a function literal (`function_value_required_arity`) or the value's
+    single call / construct signature (`single_signature_required_arity`);
+    targets are enumerated by `collect_call_signatures` / `collect_construct_signatures`
+    (every `<call>` / `<new>` overload on object / interface types, plus bare
+    `Func` / `Constructor`). Checked ahead of the single-signature contextual-
+    typing routes, which never enforce this minimum.
+      T65: recall 570 -> 571, clears genericCallWithOverloadedFunctionTypedArguments2
+        (`foo(<T>(x, y) => '')` vs `{ (x: T): string; (x: T, y?: T): string }`).
+      T66: recall 571 -> 572, clears genericCallWithOverloadedConstructorTypedArguments2
+        (`foo(b)`, `b: { new <T>(x, y): string }` vs an overloaded `<new>` set).
+    Not covered by the arity mechanism (separate, larger machinery):
+      - genericCallToOverloadedMethodWithOverloadedArguments -- overload
+        *resolution* of an overloaded callback argument plus generic return
+        (`U`) inference through `(x: T) => Promise<U>`; arities match, so this
+        is TS2769 overload selection, not an arity verdict.
+      - The call/construct-signature *subtyping* families
+        (subtypingWith{Call,Construct}Signatures*, TS2430 interface-extends;
+        assignmentCompatWith{Construct,GenericCall}Signatures, TS2322 type-vs-
+        type) need full signature structural comparison (kind + arity + param
+        bivariance + covariant return), a broader relaxation than the arity
+        rule -- a candidate next slice if directed.
+
+  T67 / T68 -- signature subtyping in interface-extends (TS2430). recall
+    572 -> 576 -> 581. `check_interface_extends_compat` previously compared only
+    optionality and scalar-vs-object for redeclared members. Now a callable
+    member (or a derived interface's own `<call>` / `<new>` signature, which
+    lives as a member) must be assignable to the base's:
+      T67 -- arity-only first (`callable_member_arity_incompatible`): a derived
+        signature requiring more args than the base provides. To make this
+        sound the parser now widens optional function-/constructor-*type*
+        parameters (`(x?: T) => R`) to `T | undefined` like declaration
+        parameters -- previously the `?` was consumed and discarded, so an
+        optional trailing parameter looked required (also corrected bridge FFI
+        emission to render such a parameter as `T?`). Cleared the four
+        subtypingWith{Call,Construct,GenericCall,GenericConstruct}SignaturesWithOptionalParameters.
+      T68 -- generalized to full `is_assignable_to_bivariant` (bivariant
+        params per `strictFunctionTypes: false`, covariant return) for plain
+        non-generic `Func` / `Constructor` members (`callable_member_incompatible`).
+        Catches incompatible parameter types (`(...xs: string[])` over
+        `(...xs: number[])`), returns, and interface call/construct signatures.
+        Cleared call/constructSignatureAssignabilityInInheritance and the
+        Call/ConstructSignaturesWithSpecializedSignatures pair.
+
+  T69 -- bivariant single-signature comparison for callable *value*
+    assignment (TS2322). recall 581 -> 583. The value-assignment analog of
+    T68: `check_expr_against` relaxes its `shape_is_callable` bail so that when
+    source and target each expose exactly one comparable call (or construct)
+    signature, it is compared via `is_assignable_to_bivariant`
+    (`single_signature_of`). Overloaded shapes, generic signatures, and
+    signatures containing intersections / generic `Applied`
+    (`type_has_intersection_or_applied`, which removed the lone FP) abstain.
+    Cleared assignmentCompatWithGenericCallSignatures2, genericCallWithFunctionTypedArguments2.
+
+  T70 -- enforce function-value arity against a bare `Func` target too (TS2322).
+    recall 583 -> 584. `collect_call_signatures` now treats a bare `Func` as a
+    single call signature, so the arity rule fires for `this.a = (x: T) => null`
+    where `a: () => T` (not only object/interface call-signature targets).
+    Cleared assignmentCompatWithGenericCallSignaturesWithOptionalParameters (126
+    errors). Still out of reach in the signature family: the remaining
+    generic-call-signature files (assignmentCompatWithGenericCallSignatures4)
+    need generic-signature instantiation, and the overloaded-value assignments
+    (stringLiteralTypesOverloadAssignability*) need overload-set comparison.
+
+  T71 -- non-abstract class must implement inherited abstract members
+    (TS2515). recall 584 -> 589. Added an `abstract_members` name list to
+    `TsClassDecl` (populated by the runtime-class and ambient-`declare class`
+    parsers, like the private/protected lists). `check_abstract_implementation`
+    walks a concrete class's single-inheritance base chain, gathers every
+    abstract member an ancestor declares, and flags any not implemented
+    concretely anywhere in the chain; abstains on an unresolved base. Cleared
+    classAbstractExtends, classAbstractGeneric, classAbstractInheritance1/2,
+    classAbstractUsingAbstractMethods2. (This is the one change that touched
+    the AST -- threaded through all nine `TsClassDecl` construction sites.)
+
+  Session total 2026-06-18: recall 563 -> 589 (+26) at a steady 0 FP, all via
+  sound relaxations (the authorized temporary-FP budget was never spent). The
+  clusters cleared: enum nominality; covariant generic assignability;
+  primitive-vs-callable / -overload / -object-part; intersection-target;
+  private/protected nominality; logical-operator contextual typing; overloaded
+  function-/constructor-typed argument arity; and the call/construct-signature
+  subtyping family at both interface-extends and value-assignment levels (which
+  also drove a parser fix: optional function-/constructor-type parameters now
+  widen to `T | undefined`).
+
+  Boundary (2026-06-18): the named higher-order MISS clusters remain
+  single-recall-point, bespoke-machinery cases (overloaded construct-signature
+  arity with generic constructors; overloaded / function-typed argument
+  inference; `typeof Class` constructor-accessibility; mapped-type
+  instantiation; static-/prototype-member function-assignment target
+  resolution; lowercase `object` is currently parsed as `Any`, so the
+  non-primitive rule has nothing to fire on; abstract-member implementation
+  TS2515 and parameter-property TS2369 would need new AST/parser fields tracked
+  across every `TsClassDecl` construction site). Each needs its own resolver
+  threading, AST extension, or generic / overload machinery; the clean
+  structural relaxations are now largely harvested. Sound, FP-0 recall went
+  563 -> 589 (+26) this session.
 
   Toolchain note (2026-06-08): the native parser-package whitebox test
   generates a ~25 MB C unit that this session's `tcc` could not compile in

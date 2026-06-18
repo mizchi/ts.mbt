@@ -8991,6 +8991,7 @@ fn clone_exported_class(
     is_declare: false,
     private_members: exported.class_.private_members,
     protected_members: exported.class_.protected_members,
+    abstract_members: exported.class_.abstract_members,
     duplicate_member_names: exported.class_.duplicate_member_names,
   }
 }

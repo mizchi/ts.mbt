@@ -765,6 +765,181 @@ fn type_accepts_undefined_param(ty : @ast.TsType) -> Bool {
 }
 
 ///|
+/// Required argument count of a function *value* -- an arrow or function
+/// expression. `None` for any other expression.
+fn function_value_required_arity(expr : @ast.TsExpr) -> Int? {
+  match expr {
+    ArrowFunc(params, _, _, _) => Some(required_arity(params))
+    FuncExpr(f) => Some(required_arity(f.params))
+    _ => None
+  }
+}
+
+///|
+/// Collect every call signature (`<call>`) declared on `t` -- one entry per
+/// overload -- from both structural object types and interface declarations,
+/// plus a bare `Func` type (a single call signature).
+fn collect_call_signatures(
+  t : @ast.TsType,
+  resolver : Resolver,
+) -> Array[@ast.TsType] {
+  let out : Array[@ast.TsType] = []
+  match resolver.unwrap(t) {
+    Func(_, _) as f => out.push(f)
+    Object(fields) =>
+      for f in fields {
+        match f.0 {
+          Literal(k) => if k == "<call>" { out.push(f.1) }
+          _ => ()
+        }
+      }
+    Named(n) =>
+      match resolver.interfaces.get(n) {
+        Some(iface) =>
+          for f in iface.fields {
+            if f.0 == "<call>" {
+              out.push(f.1)
+            }
+          }
+        None => ()
+      }
+    _ => ()
+  }
+  out
+}
+
+///|
+/// Collect every construct signature (`<new>`) declared on `t` -- one entry
+/// per overload -- from structural object types and interface declarations,
+/// plus a bare `Constructor` type.
+fn collect_construct_signatures(
+  t : @ast.TsType,
+  resolver : Resolver,
+) -> Array[@ast.TsType] {
+  let out : Array[@ast.TsType] = []
+  match resolver.unwrap(t) {
+    Constructor(_, _, _) as c => out.push(c)
+    Object(fields) =>
+      for f in fields {
+        match f.0 {
+          Literal(k) => if k == "<new>" { out.push(f.1) }
+          _ => ()
+        }
+      }
+    Named(n) =>
+      match resolver.interfaces.get(n) {
+        Some(iface) =>
+          for f in iface.fields {
+            if f.0 == "<new>" {
+              out.push(f.1)
+            }
+          }
+        None => ()
+      }
+    _ => ()
+  }
+  out
+}
+
+///|
+/// The finite parameter count of a call / construct signature (`Func` /
+/// `Constructor`), or `None` when it has a rest parameter (unbounded arity,
+/// so it can never be invoked with too few arguments).
+fn call_signature_param_count(sig : @ast.TsType) -> Int? {
+  let params = match sig {
+    Func(params, _) => params
+    Constructor(params, _, _) => params
+    _ => return None
+  }
+  for p in params {
+    if p is Rest(_) {
+      return None
+    }
+  }
+  Some(params.length())
+}
+
+///|
+/// The single call (`want_new` false) or construct (`want_new` true)
+/// signature of `ty`, or `None` when it has zero or several (an overloaded
+/// shape is not a single comparable signature). A bare `Func` counts as one
+/// call signature.
+fn single_signature_of(
+  ty : @ast.TsType,
+  want_new : Bool,
+  resolver : Resolver,
+) -> @ast.TsType? {
+  let sigs = if want_new {
+    collect_construct_signatures(ty, resolver)
+  } else {
+    match resolver.unwrap(ty) {
+      Func(_, _) as f => [f]
+      _ => collect_call_signatures(ty, resolver)
+    }
+  }
+  if sigs.length() == 1 {
+    Some(sigs[0])
+  } else {
+    None
+  }
+}
+
+///|
+/// True when a type contains an `Intersection` or a generic `Applied`
+/// instantiation anywhere -- shapes that the resolver-free
+/// `is_assignable_to_bivariant` compares nominally and so cannot reliably
+/// judge. Used to keep the bivariant single-signature comparison
+/// false-positive-free.
+fn type_has_intersection_or_applied(t : @ast.TsType) -> Bool {
+  match t {
+    Intersection(_) | Applied(_, _) => true
+    Array(e) | Rest(e) => type_has_intersection_or_applied(e)
+    Union(parts) => parts.iter().any(type_has_intersection_or_applied)
+    Tuple(items) => items.iter().any(type_has_intersection_or_applied)
+    Func(params, ret) =>
+      params.iter().any(type_has_intersection_or_applied) ||
+      type_has_intersection_or_applied(ret)
+    Constructor(params, ret, _) =>
+      params.iter().any(type_has_intersection_or_applied) ||
+      type_has_intersection_or_applied(ret)
+    Object(fields) => fields.iter().any(fn(f) {
+      type_has_intersection_or_applied(f.1)
+    })
+    _ => false
+  }
+}
+
+///|
+/// Required arity of a value whose type carries *exactly one* signature of the
+/// requested kind (`<call>` when `want_new` is false, `<new>` when true). An
+/// overloaded source (more than one matching signature) is itself flexible, so
+/// returns `None`; bare `Func` / `Constructor` types count as a single
+/// signature.
+fn single_signature_required_arity(
+  ty : @ast.TsType,
+  want_new : Bool,
+  resolver : Resolver,
+) -> Int? {
+  let sigs = if want_new {
+    collect_construct_signatures(ty, resolver)
+  } else {
+    let direct = match resolver.unwrap(ty) {
+      Func(_, _) as f => [f]
+      _ => collect_call_signatures(ty, resolver)
+    }
+    direct
+  }
+  if sigs.length() != 1 {
+    return None
+  }
+  match sigs[0] {
+    Func(params, _) | Constructor(params, _, _) =>
+      Some(required_arity_from_types(params))
+    _ => None
+  }
+}
+
+///|
 fn param_is_optional(p : @ast.TsParam) -> Bool {
   if p.is_rest {
     return true
@@ -2966,6 +3141,67 @@ fn class_extends(resolver : Resolver, sub : String, base : String) -> Bool {
 }
 
 ///|
+/// True when class `name` declares any `private` / `protected` member. Such a
+/// member is nominal in TypeScript: only the same class declaration (or a
+/// subclass, which inherits it) can satisfy the type.
+fn class_has_private_member(resolver : Resolver, name : String) -> Bool {
+  match resolver.classes.get(name) {
+    Some(decl) =>
+      decl.private_members.length() > 0 || decl.protected_members.length() > 0
+    None => false
+  }
+}
+
+///|
+/// Private / protected members must originate from the same class declaration,
+/// so assignability is blocked when:
+///  - the *target* is a class with a private/protected member and the source
+///    is neither that class nor a subclass of it (which inherits the member);
+///  - or the *source* is a class with a private/protected member and the
+///    target is neither that class nor a superclass of it -- a structural
+///    object / interface / unrelated class can never supply the private
+///    member.
+/// Returns true when the assignment must be flagged. Only fires when the
+/// relevant side resolves to a known class; everything else abstains. Callers
+/// reach this only after the nominal `is_assignable_to` already returned false
+/// (so same-class and `any` / universal targets never get here).
+fn nominal_private_blocks(
+  source : @ast.TsType,
+  target : @ast.TsType,
+  resolver : Resolver,
+) -> Bool {
+  let s_class = match resolver.unwrap(source) {
+    Named(n) => if resolver.classes.get(n) is Some(_) { Some(n) } else { None }
+    _ => None
+  }
+  let t_class = match resolver.unwrap(target) {
+    Named(n) => if resolver.classes.get(n) is Some(_) { Some(n) } else { None }
+    _ => None
+  }
+  match t_class {
+    Some(tn) =>
+      if class_has_private_member(resolver, tn) {
+        match s_class {
+          Some(sn) => if not(class_extends(resolver, sn, tn)) { return true }
+          None => return true
+        }
+      }
+    None => ()
+  }
+  match s_class {
+    Some(sn) =>
+      if class_has_private_member(resolver, sn) {
+        match t_class {
+          Some(tn) => if not(class_extends(resolver, sn, tn)) { return true }
+          None => return true
+        }
+      }
+    None => ()
+  }
+  false
+}
+
+///|
 /// TS2341 / TS2445: accessing a `private` / `protected` class member from
 /// outside the scope that's allowed to see it. The receiver's class is
 /// resolved (instance type or a static `Class.member` reference); a
@@ -3124,6 +3360,7 @@ fn check_abstract_instantiation(ctx : CheckCtx, class_name : String) -> Unit {
 /// "simple" type (primitive / literal / `T[]` / single Named) is
 /// reliable enough to keep -- those cases are picked up by the
 /// strict mode anyway and contribute recall without inflating FP.
+///|
 fn is_permissively_suppressed(sub_path : String, message : String) -> Bool {
   if message.has_prefix("expected `") && message.contains("but got `") {
     // Compatibility goal: a type mismatch is a real TS error, so emit it
@@ -3188,11 +3425,12 @@ fn is_permissively_suppressed(sub_path : String, message : String) -> Bool {
     return false
   }
   if message.contains("argument(s), got ") {
-    // Arity diagnostics are suppressed by default in permissive mode
-    // (overloads / optional / builtin signatures we don't fully model make
-    // them false-positive-prone). The reliable cases -- constructor calls
-    // and direct calls to rest-free top-level function declarations -- are
-    // emitted via `record_unfiltered`, so they never reach this filter.
+    // Arity diagnostics are suppressed by default in permissive mode: with no
+    // rich `TsParam` list (builtin lib methods, call-signature-typed values)
+    // optional / default / rest parameters aren't modelled accurately, so the
+    // count is unreliable in both directions. Reliable cases (constructors,
+    // direct calls to function declarations -- `sig is Some`) bypass this
+    // filter via `record_unfiltered`.
     return true
   }
   if message.contains("is not callable") {
@@ -3989,6 +4227,55 @@ fn enum_integer_values(decl : @ast.TsEnumDecl) -> Array[Int]? {
     return None
   }
   Some(values)
+}
+
+///|
+/// True when `decl` is a purely numeric enum: every member is either
+/// auto-incremented (no initializer, so numeric) or has a numeric
+/// initializer. String / heterogeneous enums return false. Unlike
+/// `enum_integer_values`, this accepts auto-incremented members (`enum E { A,
+/// B }`) since their runtime values are still numbers. Used by the
+/// enum-nominality assignment rule, which only reasons about numeric enums.
+fn is_numeric_enum(decl : @ast.TsEnumDecl) -> Bool {
+  for m in decl.members {
+    match m.value {
+      None => ()
+      Some(Number(_)) => ()
+      _ => return false
+    }
+  }
+  decl.members.length() > 0
+}
+
+///|
+/// True when `name` resolves to a purely numeric enum declaration.
+fn is_numeric_enum_name(resolver : Resolver, name : String) -> Bool {
+  match resolver.enums.get(name) {
+    Some(decl) => is_numeric_enum(decl)
+    None => false
+  }
+}
+
+///|
+/// Enum nominality: a value of these shapes is provably *not* assignable to a
+/// numeric enum target. Numeric sources (`number` / numeric literal), the same
+/// enum, `any` / `unknown`, and `null` / `undefined` are all accepted
+/// elsewhere; what remains here is a concrete non-numeric primitive / literal
+/// or a plain object value (`var e: E; e = ''` / `e = {}` is TS2322). Enums
+/// are nominal, so rejecting these is sound and false-positive-free.
+fn enum_incompatible_source(ty : @ast.TsType) -> Bool {
+  match ty {
+    String_
+    | Literal(_)
+    | Boolean
+    | BooleanLiteral(_)
+    | BigInt
+    | BigIntLiteral(_)
+    | Symbol
+    | Object(_)
+    | Struct(_, _) => true
+    _ => false
+  }
 }
 
 ///|
@@ -5599,6 +5886,68 @@ fn check_expr_against(
   // x + 1)` flows the element type into `x` so the body's `x + 1` is
   // properly typed instead of falling through to `Any`.
   let expected_shape = ctx.resolver.unwrap(expected)
+  // Function-typed-argument arity (contravariant): a function *value* must be
+  // callable with the arguments any target call signature would pass it. If
+  // the value *requires* more parameters than a call signature *provides*, it
+  // can never implement that signature -- `foo6(<T>(x, y) => '')` against
+  // `{ (x: T): string; (x: T, y?: T): string }`, where the 1-parameter
+  // overload would call the value with no `y`. For an overload set the value
+  // must satisfy *every* signature, so any signature with fewer parameters
+  // than the value requires is a real TS2345. Checked ahead of the
+  // contextual-typing routes below (which only fire for a single call
+  // signature and never enforce this minimum).
+  // The same applies to construct signatures (`new (x): T`): a constructor
+  // value that requires more parameters than a `<new>` overload provides can't
+  // implement it (`foo6(b)` where `b: { new <T>(x: T, y: T): string }` against
+  // `{ new (x: T): string; new (x: T, y?: T): string }`). The source arity is
+  // read from a function literal directly, otherwise from the value's own
+  // single call / construct signature.
+  let call_arity = match function_value_required_arity(expr) {
+    Some(m) => Some(m)
+    None =>
+      single_signature_required_arity(
+        infer_expr(env, ctx.resolver, expr), false, ctx.resolver,
+      )
+  }
+  match call_arity {
+    Some(m) =>
+      for sig in collect_call_signatures(expected_shape, ctx.resolver) {
+        match call_signature_param_count(sig) {
+          Some(n) =>
+            if m > n {
+              record(
+                ctx,
+                sub_path,
+                "expected `\{type_display(expected)}` but the function value requires \{m} argument(s); a target call signature accepts only \{n}",
+              )
+              return
+            }
+          None => ()
+        }
+      }
+    None => ()
+  }
+  match
+    single_signature_required_arity(
+      infer_expr(env, ctx.resolver, expr), true, ctx.resolver,
+    ) {
+    Some(m) =>
+      for sig in collect_construct_signatures(expected_shape, ctx.resolver) {
+        match call_signature_param_count(sig) {
+          Some(n) =>
+            if m > n {
+              record(
+                ctx,
+                sub_path,
+                "expected `\{type_display(expected)}` but the constructor value requires \{m} argument(s); a target construct signature accepts only \{n}",
+              )
+              return
+            }
+          None => ()
+        }
+      }
+    None => ()
+  }
   // A call-signature interface / object type (`interface I { (): T }`,
   // `type F = { (x): T }`) is callable. Route a function / arrow value
   // through that call signature so it gets contextual typing and skips
@@ -5646,6 +5995,21 @@ fn check_expr_against(
     (Cond(_, then_, else_), _) => {
       check_expr_against(env, then_, expected, ctx, sub_path + " (then)")
       check_expr_against(env, else_, expected, ctx, sub_path + " (else)")
+      return
+    }
+    // Logical operators propagate the contextual type to their *right*
+    // operand, mirroring TS: `x && f` yields `f` when truthy, and the fallback
+    // of `a || b` / `a ?? b` is `b`. The right operand must therefore be
+    // assignable to the expected type, so checking it flows a function /
+    // object context inward (`x = y && (a => …)` types the arrow's params),
+    // surfacing body errors a bare inference would miss. The left operand is
+    // deliberately *not* checked: for `||` / `??` it is the value being
+    // guarded (`const xs: string[] = maybe || []` has `maybe: string[] |
+    // undefined`), and for `&&` it is the boolean-ish guard.
+    (BinOp(And, _, r), _)
+    | (BinOp(Or, _, r), _)
+    | (BinOp(Coalesce, _, r), _) => {
+      check_expr_against(env, r, expected, ctx, sub_path + " (logical)")
       return
     }
     // Contextual typing for array literals: `[a, b]` against a tuple type
@@ -5860,6 +6224,28 @@ fn check_expr_against(
       }
     _ => ()
   }
+  // Enum nominality: a numeric enum target accepts numeric values, the same
+  // enum, `any` / `unknown`, and `null` / `undefined` (all handled above or
+  // not matched below). A concrete non-numeric primitive / literal or a plain
+  // object value is not assignable to it -- `var e: E; e = ''` / `e = {}` is
+  // TS2322. Cross-enum member assignment (`e = E2.A`) loses its enum
+  // provenance through member access (it resolves to a bare numeric literal)
+  // and is deliberately not caught here. Placed ahead of the unresolved-Named
+  // bail below, which would otherwise skip enum targets entirely (enums live
+  // in `resolver.enums`, not the alias / interface / class tables).
+  match expected_u {
+    Named(n) =>
+      if is_numeric_enum_name(ctx.resolver, n) &&
+        enum_incompatible_source(inferred_u) {
+        record(
+          ctx,
+          sub_path,
+          "expected `\{type_display(expected_u)}` but got `\{type_display(inferred_u)}`",
+        )
+        return
+      }
+    _ => ()
+  }
   // If the expected type is a `Named` reference that the resolver can't expand
   // (e.g. a generic type parameter like `T`, or a qualified name like
   // `Intl.NumberFormatPartTypes` that isn't in the module's declaration list),
@@ -5974,6 +6360,51 @@ fn check_expr_against(
     }
     return
   }
+  // Callable vs concrete-scalar: a primitive / literal value is never a
+  // function or constructor (and vice versa), so this is a real, unambiguous
+  // mismatch -- `var f: () => void = 5`, `var k: new () => A = "asdf"`. Checked
+  // ahead of the structural callable bail below, which would otherwise swallow
+  // it (a `Func` / `Constructor` is `shape_is_callable`).
+  if (shape_is_callable(expected_u, ctx.resolver) &&
+      is_concrete_primitive_or_literal(inferred_u)) ||
+    (shape_is_callable(inferred_u, ctx.resolver) &&
+      is_concrete_primitive_or_literal(expected_u)) {
+    record(
+      ctx,
+      sub_path,
+      "expected `\{type_display(expected_u)}` but got `\{type_display(inferred_u)}`",
+    )
+    return
+  }
+  // Value assignment between callable shapes: when the source and target each
+  // expose exactly one comparable call signature (or each exactly one
+  // construct signature), compare it bivariantly (params bivariant per
+  // `strictFunctionTypes: false`, return covariant) -- `var f: (x: number) =>
+  // string = g` where `g: (x: number) => number`. Overloaded shapes and
+  // generic signatures abstain, falling through to the structural callable
+  // bail below.
+  for want_new in [false, true] {
+    match
+      (
+        single_signature_of(inferred_u, want_new, ctx.resolver),
+        single_signature_of(expected_u, want_new, ctx.resolver),
+      ) {
+      (Some(s), Some(t)) =>
+        if not_generic_func(s) &&
+          not_generic_func(t) &&
+          not(type_has_intersection_or_applied(s)) &&
+          not(type_has_intersection_or_applied(t)) &&
+          not(is_assignable_to_bivariant(s, t)) {
+          record(
+            ctx,
+            sub_path,
+            "expected `\{type_display(expected_u)}` but got `\{type_display(inferred_u)}`",
+          )
+          return
+        }
+      _ => ()
+    }
+  }
   // Callable / constructable interfaces & objects (`<call>` / `<new>`
   // signatures, often `extends Function`, with overloaded methods like
   // `foo("hi"): Derived1; foo("bye"): Derived2`) match other call signatures
@@ -5985,20 +6416,54 @@ fn check_expr_against(
   }
   // Overloaded-method shapes (the same member name declared several times with
   // different signatures) don't match structurally under our single-type-per-
-  // member model. Stay silent.
+  // member model. Stay silent -- except a concrete primitive / literal source,
+  // which is never any object shape (overloaded or not), so a primitive
+  // assigned to an overload-bearing interface target is a real mismatch.
   if shape_has_overloads(inferred_u, ctx.resolver) ||
     shape_has_overloads(expected_u, ctx.resolver) {
+    if shape_has_overloads(expected_u, ctx.resolver) &&
+      is_concrete_primitive_or_literal(inferred_u) {
+      record(
+        ctx,
+        sub_path,
+        "expected `\{type_display(expected_u)}` but got `\{type_display(inferred_u)}`",
+      )
+    }
     return
   }
   match (inferred_u, expected_u) {
-    (Applied(_, _), _) | (_, Applied(_, _)) => return
-    // Intersections on either side (`PartialStepState & { repo: any }`,
-    // `ComponentType<any> & ComponentType<RouteComponentProps>`, `A & A`):
-    // intersection assignability (a value of the intersection satisfies each
-    // part, and an object satisfying every part inhabits the intersection) is
-    // something we don't model structurally, so comparing nominally yields
-    // false mismatches. Stay silent.
-    (Intersection(_), _) | (_, Intersection(_)) => return
+    (Applied(_, _), _) | (_, Applied(_, _)) => {
+      // Covariant best-effort: same generic, same arity, a type-argument pair
+      // that is bidirectionally incompatible (`Box<string>` vs `Box<number>`)
+      // is a real mismatch. Everything else keeps the conservative bail.
+      if applied_generic_mismatch(inferred_u, expected_u, ctx) {
+        record(
+          ctx,
+          sub_path,
+          "expected `\{type_display(expected_u)}` but got `\{type_display(inferred_u)}`",
+        )
+      }
+      return
+    }
+    // Intersection *target*: a value inhabits `A & B` only when it satisfies
+    // every part. When the source is a concrete shape we can compare (object /
+    // struct / nominal / primitive) and it provably fails one object-like
+    // part, the assignment is a real mismatch (`var y: {a}&{b} = a` where `a:
+    // {a}`). Bidirectional / nominal-only parts and unmodeled shapes abstain.
+    (_, Intersection(parts)) =>
+      if intersection_target_mismatch(inferred_u, parts, ctx.resolver) {
+        record(
+          ctx,
+          sub_path,
+          "expected `\{type_display(expected_u)}` but got `\{type_display(inferred_u)}`",
+        )
+        return
+      } else {
+        return
+      }
+    // Intersection *source*: still modelled too coarsely structurally — stay
+    // silent.
+    (Intersection(_), _) => return
     // Bare callable / constructable shapes match other call signatures
     // structurally in ways we don't model — stay silent.
     (Func(_, _), _)
@@ -6026,6 +6491,19 @@ fn check_expr_against(
     _ => ()
   }
   if !is_assignable_to(inferred_u, expected_u) {
+    // Private / protected members are nominal: a class carrying one is only
+    // assignable to / from the same class (or its sub- / super-class via
+    // inheritance). This must short-circuit the structural accept-fallbacks
+    // below, which would otherwise match the private member as an ordinary
+    // field (`var a: { foo: string } = e` where `class E { private foo }`).
+    if nominal_private_blocks(inferred_u, expected_u, ctx.resolver) {
+      record(
+        ctx,
+        sub_path,
+        "expected `\{type_display(expected_u)}` but got `\{type_display(inferred_u)}`",
+      )
+      return
+    }
     // Class / interface references are nominal in `is_assignable_to`
     // (Named(A) == Named(B) iff A == B), but TypeScript types are
     // structural: two distinct classes / interfaces with the same
@@ -10810,24 +11288,17 @@ fn check_call_args_in_expr(
             params
           }
           // A direct call to a top-level function *declaration* (present in
-          // `signatures`) with no rest parameter has an exact, reliable
-          // arity -- safe to report even in permissive mode. Call-signature
-          // -typed variables, inferred function values, and rest-bearing
-          // signatures are not in `signatures` (or carry a rest) and stay
-          // suppressed. (`this` parameters are stripped during resolver
-          // construction, so they no longer skew the count.)
-          let arity_reliable = match sig {
-            Some(ps) => {
-              let mut ok = true
-              for p in ps {
-                if p.is_rest {
-                  ok = false
-                }
-              }
-              ok
-            }
-            None => false
-          }
+          // `signatures`) has an exact, reliable arity -- safe to report even
+          // in permissive mode. The rich `TsParam` list models optional /
+          // default / rest parameters precisely (`required_arity` excludes
+          // optionals and rest; a rest param lifts the upper bound to
+          // unbounded), so even rest-bearing declarations are reliable. Call-
+          // signature-typed variables, inferred function values, and builtin
+          // lib methods have no `sig` and stay suppressed -- their lib param
+          // models don't mark optional / rest accurately, which is where the
+          // arity false positives come from. (`this` parameters are stripped
+          // during resolver construction, so they no longer skew the count.)
+          let arity_reliable = sig is Some(_)
           check_arguments_with_sig(
             env,
             substituted_params,
@@ -13072,6 +13543,113 @@ fn check_module_function_bodies_layered(
 /// (`var x: T = 1`): only such unambiguously-concrete sources are flagged, so
 /// an imprecisely-inferred object / union / generic instantiation can never
 /// false-flag against `T`.
+/// Covariant best-effort generic-instantiation mismatch. Two `Applied`
+/// instantiations of the *same* generic with the *same* arity are a genuine
+/// type error when some type-argument pair is bidirectionally incompatible
+/// (`Box<string>` vs `Box<number>`). Requiring incompatibility in *both*
+/// directions keeps the check variance-safe: a covariant widening
+/// (`Box<"a">` -> `Box<string>`) or a contravariant one leaves one direction
+/// assignable, so it is not flagged. Type-argument pairs are only judged when
+/// both sides are concrete primitives / literals; anything else (type
+/// parameters, object shapes, nested generics, `any`) abstains. This is the
+/// relaxation of the blanket `Applied` bail in `check_expr_against`.
+fn applied_generic_mismatch(
+  source : @ast.TsType,
+  target : @ast.TsType,
+  ctx : CheckCtx,
+) -> Bool {
+  match (source, target) {
+    (Applied(s_name, s_args), Applied(t_name, t_args)) => {
+      if s_name != t_name || s_args.length() != t_args.length() {
+        return false
+      }
+      if s_args.length() == 0 {
+        return false
+      }
+      for i in 0..<s_args.length() {
+        let sa = ctx.resolver.unwrap(s_args[i])
+        let ta = ctx.resolver.unwrap(t_args[i])
+        if is_concrete_primitive_or_literal(sa) &&
+          is_concrete_primitive_or_literal(ta) {
+          if not(is_assignable_to(sa, ta)) && not(is_assignable_to(ta, sa)) {
+            return true
+          }
+          continue
+        }
+        // Both args are distinct user-declared nominal references
+        // (`X<Foo>` vs `X<Bar>`) that are bidirectionally structurally
+        // incompatible. Bidirectional incompatibility keeps the covariant /
+        // contravariant subtype directions silent.
+        match (sa, ta) {
+          (Named(sn), Named(tn)) =>
+            if sn != tn &&
+              is_resolvable_nominal_name(ctx.resolver, sn) &&
+              is_resolvable_nominal_name(ctx.resolver, tn) &&
+              not(is_structurally_assignable_named(sa, ta, ctx.resolver)) &&
+              not(is_structurally_assignable_named(ta, sa, ctx.resolver)) {
+              return true
+            }
+          _ => ()
+        }
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+///|
+/// Intersection-target assignability: a value inhabits `A & B` only when it
+/// satisfies *every* part. Returns true when the source is a shape we can
+/// compare and it provably fails an object-like part -- a concrete primitive
+/// can never satisfy an object part, and a structural object / nominal source
+/// that lacks a part's members is a real mismatch. Parts that are primitives,
+/// type parameters, generics, callables, or unresolved names abstain (so the
+/// surrounding caller keeps bailing on those).
+fn intersection_target_mismatch(
+  source : @ast.TsType,
+  parts : Array[@ast.TsType],
+  resolver : Resolver,
+) -> Bool {
+  let source_concrete = is_concrete_primitive_or_literal(source)
+  let source_shape = match source {
+    Object(_) | Struct(_, _) => true
+    Named(n) => is_resolvable_nominal_name(resolver, n)
+    _ => false
+  }
+  if not(source_concrete) && not(source_shape) {
+    return false
+  }
+  for part in parts {
+    let p = resolver.unwrap(part)
+    let object_like = match p {
+      Object(_) | Struct(_, _) => true
+      Named(n) => is_resolvable_nominal_name(resolver, n)
+      _ => false
+    }
+    if not(object_like) {
+      continue
+    }
+    if source_concrete {
+      return true
+    }
+    if not(is_assignable_to(source, p)) &&
+      not(is_structurally_assignable_named(source, p, resolver)) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+/// True when `name` resolves to a user-declared class or interface — a
+/// nominal reference whose member shape the structural-assignability relation
+/// can compare.
+fn is_resolvable_nominal_name(resolver : Resolver, name : String) -> Bool {
+  resolver.classes.get(name) is Some(_) || resolver.interfaces.get(name) is Some(_)
+}
+
+///|
 fn is_concrete_primitive_or_literal(ty : @ast.TsType) -> Bool {
   match ty {
     Number
@@ -14007,6 +14585,84 @@ fn check_class_member_structure(
   for issue in check_class_implements(module_, resolver) {
     issues.push(issue)
   }
+  for issue in check_abstract_implementation(module_, resolver) {
+    issues.push(issue)
+  }
+  issues
+}
+
+///|
+/// TS2515: a non-abstract class that (transitively) extends a class declaring
+/// `abstract` members must implement each of them. Walks the single-
+/// inheritance base chain; abstains when any base in the chain is not a
+/// resolvable class declaration (an unresolved base could supply the
+/// implementation, so flagging would risk a false positive). Member identity
+/// is by name -- enough to detect a wholly-missing implementation, which is
+/// what TS2515 reports.
+fn check_abstract_implementation(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for cls in module_.classes {
+    // Only concrete (non-abstract), non-ambient classes must implement.
+    if cls.is_abstract || cls.is_declare {
+      continue
+    }
+    // name -> the abstract base that declared the still-unimplemented member.
+    let abstract_needed : Map[String, String] = {}
+    let concrete : Map[String, Unit] = {}
+    fn add_concrete(c : @ast.TsClassDecl) -> Unit {
+      let abs : Map[String, Unit] = {}
+      for a in c.abstract_members {
+        abs[a] = ()
+      }
+      for p in c.properties {
+        if not(abs.contains(p.name)) {
+          concrete[p.name] = ()
+        }
+      }
+      for m in c.methods {
+        if not(abs.contains(m.name)) {
+          concrete[m.name] = ()
+        }
+      }
+    }
+
+    add_concrete(cls)
+    let mut current = cls
+    let mut resolvable = true
+    let mut depth = 0
+    while current.base_names.length() > 0 && depth < 64 {
+      depth = depth + 1
+      match resolver.classes.get(current.base_names[0]) {
+        Some(base) => {
+          for a in base.abstract_members {
+            if not(abstract_needed.contains(a)) {
+              abstract_needed[a] = base.name
+            }
+          }
+          add_concrete(base)
+          current = base
+        }
+        None => {
+          resolvable = false
+          break
+        }
+      }
+    }
+    if not(resolvable) {
+      continue
+    }
+    for name, from_class in abstract_needed {
+      if not(concrete.contains(name)) {
+        issues.push({
+          path: "class \{cls.name}",
+          message: "non-abstract class `\{cls.name}` does not implement inherited abstract member `\{name}` from class `\{from_class}`",
+        })
+      }
+    }
+  }
   issues
 }
 
@@ -14089,6 +14745,33 @@ fn check_class_implements(
     }
   }
   issues
+}
+
+///|
+/// True when a derived callable member is not assignable to the base callable
+/// member (`interface I extends Base` requires `I`'s member to be a subtype of
+/// `Base`'s). Both must be plain, non-generic `Func` / `Constructor` of the
+/// same kind; assignability is bivariant in parameters (matching the
+/// conformance corpus' `strictFunctionTypes: false`) and covariant in the
+/// return type, via `is_assignable_to_bivariant`. This catches a derived
+/// signature that requires more arguments than the base provides (the surplus
+/// non-optional parameter fails), an incompatible parameter type (`(...args:
+/// string[])` over `(...args: number[])`), and an incompatible return.
+/// Generic signatures (`<T>(x: T): U`) abstain -- instantiation would need the
+/// full machinery.
+fn callable_member_incompatible(
+  derived : @ast.TsType,
+  base : @ast.TsType,
+) -> Bool {
+  let same_kind = match (derived, base) {
+    (Func(_, _), Func(_, _)) => true
+    (Constructor(_, _, _), Constructor(_, _, _)) => true
+    _ => false
+  }
+  same_kind &&
+  not_generic_func(derived) &&
+  not_generic_func(base) &&
+  not(is_assignable_to_bivariant(derived, base))
 }
 
 ///|
@@ -14232,6 +14915,14 @@ fn check_interface_extends_compat(
               issues.push({
                 path: "interface \{iface.name}",
                 message: "interface incorrectly extends `\{base_name}`: property `\{df.0}` of type `\{type_display(df.1)}` is not assignable to the base type `\{type_display(btype)}`",
+              })
+            } else if callable_member_incompatible(
+                resolver.unwrap(d_payload),
+                resolver.unwrap(b_payload),
+              ) {
+              issues.push({
+                path: "interface \{iface.name}",
+                message: "interface incorrectly extends `\{base_name}`: member `\{df.0}` signature is not assignable to the base signature",
               })
             } else if d_optional && !b_optional {
               issues.push({
