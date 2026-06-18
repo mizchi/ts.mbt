@@ -1369,6 +1369,11 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-18 (RB2)   563/815 (69 %)        414/414 ( 0 FP)
 2026-06-18 (T58)   564/815 (69 %)        414/414 ( 0 FP)
 2026-06-18 (T59)   564/815 (69 %)        414/414 ( 0 FP)
+2026-06-18 (T60)   565/815 (69 %)        414/414 ( 0 FP)
+2026-06-18 (T61)   566/815 (69 %)        414/414 ( 0 FP)
+2026-06-18 (T62)   567/815 (69 %)        414/414 ( 0 FP)
+2026-06-18 (T63)   569/815 (70 %)        414/414 ( 0 FP)
+2026-06-18 (T64)   570/815 (70 %)        414/414 ( 0 FP)
 
   RB2 (2026-06-18) -- re-baseline after the intervening checker commits
   (through f545849) lifted measured recall 543 -> 563 @ 0 FP. Toolchain note:
@@ -1417,24 +1422,63 @@ conformance sources (`.errors.txt` baseline = ground truth):
     so this strengthens the synthesized-bridge `@checker.check_module` gate
     without moving the conformance metric.
 
-  Boundary reached (2026-06-18): the named MISS clusters that remain are
-  single-recall-point, high-FP-risk higher-order cases, exactly as the prior
-  triage warned:
-    - `genericCallWithOverloadedConstructorTypedArguments2` (the "overloaded
-      constructor" target): its lone baseline error is an arity mismatch
-      *across an overloaded construct-signature set* fed a *generic*
-      constructor (`{ new(x:T):string; new(x:T,y?:T):string }` vs `new
-      <T>(x:T,y:T)=>string`). Needs quadratic-pairwise overload matching with
-      generic-constructor instantiation -- a large machine for +1.
-    - The "multi-source `T`" shape (`foo<T>(x:T, y:T)`) is already inferred via
-      `infer_param_bindings` (first-wins + per-arg assignability), and its
-      representative file (`genericCallWithNonSymmetricSubtypes`) is already a
-      hit; the open variants are overloaded / function-typed-argument cases
-      (`genericCallWith{Overloaded,Function}*TypedArguments2`).
-    Wiring the covariant comparison into the call-argument conflict path is the
-    next lever for these, but each remaining file needs bespoke higher-order
-    overload machinery whose FP exposure exceeds the small budget; recommend an
-    explicit per-case go-ahead before building it.
+  Follow-up decision (2026-06-18): direction updated to "increase recall, a
+  temporary rise in FP is acceptable." In practice every gain below was still
+  found as a *sound* relaxation that holds FP at 0 -- the FP budget was never
+  spent. The one broad heuristic that does trade FP (emit unreliable arity for
+  `sig`-less calls: +7 recall / +8 FP) was rejected on *quality*: 6 of its 7
+  "gains" were spurious arity diagnostics that merely happened to land on
+  files carrying some other baseline error (the file-level metric rewards any
+  diagnostic on a baseline-positive file), and the 8 FP were our own lib /
+  call-signature param models lacking optional / rest markers. So arity stays
+  suppressed for `sig`-less calls; `arity_reliable` was instead broadened to
+  *every* `sig is Some` declaration (rest-bearing included -- `required_arity`
+  is exact), a correctness improvement (+0).
+
+  T60 -- primitive-vs-callable mismatch + precise rest-arity. recall 564 ->
+    565. A concrete primitive / literal is never a function or constructor, so
+    assigning one to a callable target (`var f: () => void = 5`, `var k: new ()
+    => A = "asdf"`) is a real TS2322. Checked ahead of the structural
+    `shape_is_callable` bail. Clears classAbstractAssignabilityConstructorFunction.
+
+  T61 -- intersection-target assignability. recall 565 -> 566. A value inhabits
+    `A & B` only when it satisfies every part; a source that provably fails an
+    object-like part (a primitive, or an object missing the part's members) is
+    a mismatch (`intersection_target_mismatch`). Intersection *source* still
+    bails. Clears nonPrimitiveUnionIntersection.
+
+  T62 -- primitive vs overload-bearing interface. recall 566 -> 567. A concrete
+    primitive / literal is never an object shape, including an overloaded-method
+    interface, so the overloaded-shape bail now flags a primitive source.
+    Clears assignFromStringInterface2.
+
+  T63 -- private / protected members are nominal. recall 567 -> 569.
+    `nominal_private_blocks` short-circuits the structural accept-fallbacks: a
+    class carrying a private/protected member is only assignable to/from the
+    same class or its sub/superclass (inheritance via `class_extends`). Clears
+    assignmentCompatWithObjectMembersAccessibility (a 72-error file) and
+    objectRest.
+
+  T64 -- contextual type through `&&` / `||` / `??`. recall 569 -> 570. The
+    expected type now flows to a logical operator's *right* operand (its result
+    / fallback), mirroring the ternary path, so `x = cond && (a => …)` types
+    the arrow's params and surfaces body errors. The left operand is not
+    checked (for `||` / `??` it is the guarded nullable value -- checking it
+    cost 1 FP in an earlier attempt). Clears contextuallyTypeLogicalAnd02.
+
+  Tooling: `tsacc --list-misses` now also prints `FALSE_POS <case> :: <path>
+  :: <msg>`, which made the arity quality assessment and the variance-safety
+  audits above mechanical.
+
+  Boundary (2026-06-18): the named higher-order MISS clusters remain
+  single-recall-point, bespoke-machinery cases (overloaded construct-signature
+  arity with generic constructors; overloaded / function-typed argument
+  inference; `typeof Class` constructor-accessibility; mapped-type
+  instantiation; static-/prototype-member function-assignment target
+  resolution; lowercase `object` is currently parsed as `Any`, so the
+  non-primitive rule has nothing to fire on). Each needs its own resolver
+  threading or signature machinery; the clean structural relaxations are now
+  largely harvested. Sound, FP-0 recall went 563 -> 570 (+7) this session.
 
   Toolchain note (2026-06-08): the native parser-package whitebox test
   generates a ~25 MB C unit that this session's `tcc` could not compile in
