@@ -8406,6 +8406,19 @@ test "expr_check: intersection target requires every part" {
 }
 
 ///|
+// TS2322: a concrete primitive / literal is never an object shape, including
+// an overload-bearing interface, so assigning one to such a target is a real
+// mismatch (the overloaded-shape bail otherwise stays silent).
+test "expr_check: primitive not assignable to overloaded interface" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let pre = "interface I { f(x: string): string; f(x: number): number }\n"
+  assert_true(issues(pre + "var i: I;\ni = 5;") > 0)
+  assert_true(issues(pre + "var i: I;\ni = \"s\";") > 0)
+}
+
+///|
 // TS2345: a computed (string-literal) method call `recv["m"](args)` is checked
 // against the resolved method signature, just like the dotted `recv.m(args)`
 // form. A wrong-typed argument to a known primitive method is flagged; correct

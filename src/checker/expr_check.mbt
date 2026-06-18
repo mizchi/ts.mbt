@@ -6074,9 +6074,19 @@ fn check_expr_against(
   }
   // Overloaded-method shapes (the same member name declared several times with
   // different signatures) don't match structurally under our single-type-per-
-  // member model. Stay silent.
+  // member model. Stay silent -- except a concrete primitive / literal source,
+  // which is never any object shape (overloaded or not), so a primitive
+  // assigned to an overload-bearing interface target is a real mismatch.
   if shape_has_overloads(inferred_u, ctx.resolver) ||
     shape_has_overloads(expected_u, ctx.resolver) {
+    if shape_has_overloads(expected_u, ctx.resolver) &&
+      is_concrete_primitive_or_literal(inferred_u) {
+      record(
+        ctx,
+        sub_path,
+        "expected `\{type_display(expected_u)}` but got `\{type_display(inferred_u)}`",
+      )
+    }
     return
   }
   match (inferred_u, expected_u) {
