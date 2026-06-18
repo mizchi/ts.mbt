@@ -1379,6 +1379,7 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-18 (T67)   576/815 (71 %)        414/414 ( 0 FP)
 2026-06-18 (T68)   581/815 (71 %)        414/414 ( 0 FP)
 2026-06-18 (T69)   583/815 (72 %)        414/414 ( 0 FP)
+2026-06-18 (T70)   584/815 (72 %)        414/414 ( 0 FP)
 
   RB2 (2026-06-18) -- re-baseline after the intervening checker commits
   (through f545849) lifted measured recall 543 -> 563 @ 0 FP. Toolchain note:
@@ -1535,13 +1536,18 @@ conformance sources (`.errors.txt` baseline = ground truth):
     signatures containing intersections / generic `Applied`
     (`type_has_intersection_or_applied`, which removed the lone FP) abstain.
     Cleared assignmentCompatWithGenericCallSignatures2, genericCallWithFunctionTypedArguments2.
-    Still out of reach in this family: the remaining generic-call-signature
-    files (assignmentCompatWithGenericCallSignatures4 / ...WithOptionalParameters,
-    126 errors) need generic-signature instantiation, and the overloaded-value
-    assignments (stringLiteralTypesOverloadAssignability*) need overload-set
-    comparison.
 
-  Session total 2026-06-18: recall 563 -> 583 (+20) at a steady 0 FP, all via
+  T70 -- enforce function-value arity against a bare `Func` target too (TS2322).
+    recall 583 -> 584. `collect_call_signatures` now treats a bare `Func` as a
+    single call signature, so the arity rule fires for `this.a = (x: T) => null`
+    where `a: () => T` (not only object/interface call-signature targets).
+    Cleared assignmentCompatWithGenericCallSignaturesWithOptionalParameters (126
+    errors). Still out of reach in the signature family: the remaining
+    generic-call-signature files (assignmentCompatWithGenericCallSignatures4)
+    need generic-signature instantiation, and the overloaded-value assignments
+    (stringLiteralTypesOverloadAssignability*) need overload-set comparison.
+
+  Session total 2026-06-18: recall 563 -> 584 (+21) at a steady 0 FP, all via
   sound relaxations (the authorized temporary-FP budget was never spent). The
   clusters cleared: enum nominality; covariant generic assignability;
   primitive-vs-callable / -overload / -object-part; intersection-target;
@@ -1557,9 +1563,12 @@ conformance sources (`.errors.txt` baseline = ground truth):
   inference; `typeof Class` constructor-accessibility; mapped-type
   instantiation; static-/prototype-member function-assignment target
   resolution; lowercase `object` is currently parsed as `Any`, so the
-  non-primitive rule has nothing to fire on). Each needs its own resolver
-  threading or signature machinery; the clean structural relaxations are now
-  largely harvested. Sound, FP-0 recall went 563 -> 570 (+7) this session.
+  non-primitive rule has nothing to fire on; abstract-member implementation
+  TS2515 and parameter-property TS2369 would need new AST/parser fields tracked
+  across every `TsClassDecl` construction site). Each needs its own resolver
+  threading, AST extension, or generic / overload machinery; the clean
+  structural relaxations are now largely harvested. Sound, FP-0 recall went
+  563 -> 584 (+21) this session.
 
   Toolchain note (2026-06-08): the native parser-package whitebox test
   generates a ~25 MB C unit that this session's `tcc` could not compile in
