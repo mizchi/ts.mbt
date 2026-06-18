@@ -8466,6 +8466,28 @@ test "expr_check: logical operator propagates contextual type to rhs" {
 }
 
 ///|
+// TS2345: a function value passed for a (possibly overloaded) call-signature
+// parameter must be callable with every signature's arguments. A value that
+// *requires* more parameters than a signature provides can't implement it
+// (`foo(<T>(x, y) => '')` against `{ (x: T): string; (x: T, y?: T): string }`
+// -- the 1-param overload supplies no `y`).
+test "expr_check: function value arity vs overloaded call signature" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let overloaded = "function foo<T>(cb: { (x: T): string; (x: T, y?: T): string }) { return cb }\n"
+  // Arrow requires 2 args; the 1-param overload can't supply the second.
+  assert_true(issues(overloaded + "foo((x, y) => '');") > 0)
+  // A 1-param arrow satisfies both overloads.
+  @test.assert_eq(issues(overloaded + "foo(x => '');"), 0)
+  // Single call signature: arrow needing more args than provided is an error.
+  assert_true(
+    issues("function g(cb: { (x: number): string }) { return cb }\ng((x, y) => '');") >
+    0,
+  )
+}
+
+///|
 // TS2345: a computed (string-literal) method call `recv["m"](args)` is checked
 // against the resolved method signature, just like the dotted `recv.m(args)`
 // form. A wrong-typed argument to a known primitive method is flagged; correct

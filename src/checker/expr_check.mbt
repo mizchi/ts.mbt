@@ -765,6 +765,66 @@ fn type_accepts_undefined_param(ty : @ast.TsType) -> Bool {
 }
 
 ///|
+/// Required argument count of a function *value* -- an arrow or function
+/// expression. `None` for any other expression.
+fn function_value_required_arity(expr : @ast.TsExpr) -> Int? {
+  match expr {
+    ArrowFunc(params, _, _, _) => Some(required_arity(params))
+    FuncExpr(f) => Some(required_arity(f.params))
+    _ => None
+  }
+}
+
+///|
+/// Collect every call signature (`<call>`) declared on `t` -- one entry per
+/// overload -- from both structural object types and interface declarations.
+fn collect_call_signatures(
+  t : @ast.TsType,
+  resolver : Resolver,
+) -> Array[@ast.TsType] {
+  let out : Array[@ast.TsType] = []
+  match resolver.unwrap(t) {
+    Object(fields) =>
+      for f in fields {
+        match f.0 {
+          Literal(k) => if k == "<call>" { out.push(f.1) }
+          _ => ()
+        }
+      }
+    Named(n) =>
+      match resolver.interfaces.get(n) {
+        Some(iface) =>
+          for f in iface.fields {
+            if f.0 == "<call>" {
+              out.push(f.1)
+            }
+          }
+        None => ()
+      }
+    _ => ()
+  }
+  out
+}
+
+///|
+/// The finite parameter count of a call signature `Func(params, ret)`, or
+/// `None` when it has a rest parameter (its arity is unbounded, so it can
+/// never be invoked with too few arguments for a function value).
+fn call_signature_param_count(sig : @ast.TsType) -> Int? {
+  match sig {
+    Func(params, _) => {
+      for p in params {
+        if p is Rest(_) {
+          return None
+        }
+      }
+      Some(params.length())
+    }
+    _ => None
+  }
+}
+
+///|
 fn param_is_optional(p : @ast.TsParam) -> Bool {
   if p.is_rest {
     return true
@@ -5711,6 +5771,34 @@ fn check_expr_against(
   // x + 1)` flows the element type into `x` so the body's `x + 1` is
   // properly typed instead of falling through to `Any`.
   let expected_shape = ctx.resolver.unwrap(expected)
+  // Function-typed-argument arity (contravariant): a function *value* must be
+  // callable with the arguments any target call signature would pass it. If
+  // the value *requires* more parameters than a call signature *provides*, it
+  // can never implement that signature -- `foo6(<T>(x, y) => '')` against
+  // `{ (x: T): string; (x: T, y?: T): string }`, where the 1-parameter
+  // overload would call the value with no `y`. For an overload set the value
+  // must satisfy *every* signature, so any signature with fewer parameters
+  // than the value requires is a real TS2345. Checked ahead of the
+  // contextual-typing routes below (which only fire for a single call
+  // signature and never enforce this minimum).
+  match function_value_required_arity(expr) {
+    Some(m) =>
+      for sig in collect_call_signatures(expected_shape, ctx.resolver) {
+        match call_signature_param_count(sig) {
+          Some(n) =>
+            if m > n {
+              record(
+                ctx,
+                sub_path,
+                "expected `\{type_display(expected)}` but the function value requires \{m} argument(s); a target call signature accepts only \{n}",
+              )
+              return
+            }
+          None => ()
+        }
+      }
+    None => ()
+  }
   // A call-signature interface / object type (`interface I { (): T }`,
   // `type F = { (x): T }`) is callable. Route a function / arrow value
   // through that call signature so it gets contextual typing and skips
