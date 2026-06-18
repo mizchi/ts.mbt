@@ -777,13 +777,15 @@ fn function_value_required_arity(expr : @ast.TsExpr) -> Int? {
 
 ///|
 /// Collect every call signature (`<call>`) declared on `t` -- one entry per
-/// overload -- from both structural object types and interface declarations.
+/// overload -- from both structural object types and interface declarations,
+/// plus a bare `Func` type (a single call signature).
 fn collect_call_signatures(
   t : @ast.TsType,
   resolver : Resolver,
 ) -> Array[@ast.TsType] {
   let out : Array[@ast.TsType] = []
   match resolver.unwrap(t) {
+    Func(_, _) as f => out.push(f)
     Object(fields) =>
       for f in fields {
         match f.0 {

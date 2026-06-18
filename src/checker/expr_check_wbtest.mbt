@@ -8485,6 +8485,11 @@ test "expr_check: function value arity vs overloaded call signature" {
     issues("function g(cb: { (x: number): string }) { return cb }\ng((x, y) => '');") >
     0,
   )
+  // A bare function-typed target enforces the same minimum arity: assigning an
+  // arrow that requires an argument to a `() => T` field is too many params.
+  assert_true(
+    issues("var f: () => number;\nf = (x: number) => 1;") > 0,
+  )
 }
 
 ///|
