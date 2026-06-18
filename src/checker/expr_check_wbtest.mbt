@@ -8528,6 +8528,21 @@ test "expr_check: interface extends with too many required params" {
   assert_true(
     issues(cbase + "interface I extends CB { a: new (x: number) => number }") > 0,
   )
+  // Incompatible rest-parameter element type (`string[]` over `number[]`).
+  assert_true(
+    issues(
+      "interface B { a: (...xs: number[]) => number }\ninterface I extends B { a: (...xs: string[]) => number }",
+    ) >
+    0,
+  )
+  // A derived interface whose own call signature has an incompatible
+  // parameter type incorrectly extends the base's call signature.
+  assert_true(
+    issues(
+      "interface B { (x: number): number }\ninterface I extends B { (x: string): number }",
+    ) >
+    0,
+  )
 }
 
 ///|

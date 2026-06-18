@@ -14589,30 +14589,30 @@ fn check_class_implements(
 }
 
 ///|
-/// True when a derived callable member cannot be assignable to the base
-/// callable member purely on *arity*: the derived signature requires more
-/// arguments than the base provides, so a base-typed caller would invoke it
-/// with too few. Arity-only (no return / parameter-type variance), so it is a
-/// sound, false-positive-free subset of full signature subtyping. A base with
-/// a rest parameter provides unbounded arity and never triggers this.
-fn callable_member_arity_incompatible(
+/// True when a derived callable member is not assignable to the base callable
+/// member (`interface I extends Base` requires `I`'s member to be a subtype of
+/// `Base`'s). Both must be plain, non-generic `Func` / `Constructor` of the
+/// same kind; assignability is bivariant in parameters (matching the
+/// conformance corpus' `strictFunctionTypes: false`) and covariant in the
+/// return type, via `is_assignable_to_bivariant`. This catches a derived
+/// signature that requires more arguments than the base provides (the surplus
+/// non-optional parameter fails), an incompatible parameter type (`(...args:
+/// string[])` over `(...args: number[])`), and an incompatible return.
+/// Generic signatures (`<T>(x: T): U`) abstain -- instantiation would need the
+/// full machinery.
+fn callable_member_incompatible(
   derived : @ast.TsType,
   base : @ast.TsType,
 ) -> Bool {
-  fn arity_exceeds(dp : Array[@ast.TsType], bp : Array[@ast.TsType]) -> Bool {
-    for p in bp {
-      if p is Rest(_) {
-        return false
-      }
-    }
-    required_arity_from_types(dp) > bp.length()
-  }
-
-  match (derived, base) {
-    (Func(dp, _), Func(bp, _)) => arity_exceeds(dp, bp)
-    (Constructor(dp, _, _), Constructor(bp, _, _)) => arity_exceeds(dp, bp)
+  let same_kind = match (derived, base) {
+    (Func(_, _), Func(_, _)) => true
+    (Constructor(_, _, _), Constructor(_, _, _)) => true
     _ => false
   }
+  same_kind &&
+  not_generic_func(derived) &&
+  not_generic_func(base) &&
+  not(is_assignable_to_bivariant(derived, base))
 }
 
 ///|
@@ -14757,13 +14757,13 @@ fn check_interface_extends_compat(
                 path: "interface \{iface.name}",
                 message: "interface incorrectly extends `\{base_name}`: property `\{df.0}` of type `\{type_display(df.1)}` is not assignable to the base type `\{type_display(btype)}`",
               })
-            } else if callable_member_arity_incompatible(
+            } else if callable_member_incompatible(
                 resolver.unwrap(d_payload),
                 resolver.unwrap(b_payload),
               ) {
               issues.push({
                 path: "interface \{iface.name}",
-                message: "interface incorrectly extends `\{base_name}`: member `\{df.0}` requires more arguments than the base signature provides",
+                message: "interface incorrectly extends `\{base_name}`: member `\{df.0}` signature is not assignable to the base signature",
               })
             } else if d_optional && !b_optional {
               issues.push({
