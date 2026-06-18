@@ -1380,6 +1380,7 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-18 (T68)   581/815 (71 %)        414/414 ( 0 FP)
 2026-06-18 (T69)   583/815 (72 %)        414/414 ( 0 FP)
 2026-06-18 (T70)   584/815 (72 %)        414/414 ( 0 FP)
+2026-06-18 (T71)   589/815 (72 %)        414/414 ( 0 FP)
 
   RB2 (2026-06-18) -- re-baseline after the intervening checker commits
   (through f545849) lifted measured recall 543 -> 563 @ 0 FP. Toolchain note:
@@ -1547,7 +1548,18 @@ conformance sources (`.errors.txt` baseline = ground truth):
     need generic-signature instantiation, and the overloaded-value assignments
     (stringLiteralTypesOverloadAssignability*) need overload-set comparison.
 
-  Session total 2026-06-18: recall 563 -> 584 (+21) at a steady 0 FP, all via
+  T71 -- non-abstract class must implement inherited abstract members
+    (TS2515). recall 584 -> 589. Added an `abstract_members` name list to
+    `TsClassDecl` (populated by the runtime-class and ambient-`declare class`
+    parsers, like the private/protected lists). `check_abstract_implementation`
+    walks a concrete class's single-inheritance base chain, gathers every
+    abstract member an ancestor declares, and flags any not implemented
+    concretely anywhere in the chain; abstains on an unresolved base. Cleared
+    classAbstractExtends, classAbstractGeneric, classAbstractInheritance1/2,
+    classAbstractUsingAbstractMethods2. (This is the one change that touched
+    the AST -- threaded through all nine `TsClassDecl` construction sites.)
+
+  Session total 2026-06-18: recall 563 -> 589 (+26) at a steady 0 FP, all via
   sound relaxations (the authorized temporary-FP budget was never spent). The
   clusters cleared: enum nominality; covariant generic assignability;
   primitive-vs-callable / -overload / -object-part; intersection-target;
@@ -1568,7 +1580,7 @@ conformance sources (`.errors.txt` baseline = ground truth):
   across every `TsClassDecl` construction site). Each needs its own resolver
   threading, AST extension, or generic / overload machinery; the clean
   structural relaxations are now largely harvested. Sound, FP-0 recall went
-  563 -> 584 (+21) this session.
+  563 -> 589 (+26) this session.
 
   Toolchain note (2026-06-08): the native parser-package whitebox test
   generates a ~25 MB C unit that this session's `tcc` could not compile in
