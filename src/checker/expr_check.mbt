@@ -752,6 +752,9 @@ fn required_arity_from_types(params : Array[@ast.TsType]) -> Int {
 fn type_accepts_undefined_param(ty : @ast.TsType) -> Bool {
   match ty {
     Undefined => true
+    // A `void`-typed parameter is omittable (`(a: void) => R` is assignable
+    // to `() => R`), so it never raises the required-argument count.
+    Void => true
     Union(parts) => {
       for part in parts {
         if part is Undefined {
@@ -961,6 +964,10 @@ fn param_is_optional(p : @ast.TsParam) -> Bool {
       false
     }
     Undefined => true
+    // A `void`-typed parameter is omittable: TS lets `(a: void) => R` stand
+    // in for `() => R` (the caller may pass nothing). So it never raises the
+    // required-argument count.
+    Void => true
     _ => false
   }
 }
@@ -14773,16 +14780,40 @@ fn check_class_implements(
 fn callable_member_incompatible(
   derived : @ast.TsType,
   base : @ast.TsType,
+  ignore_return~ : Bool = false,
 ) -> Bool {
   let same_kind = match (derived, base) {
     (Func(_, _), Func(_, _)) => true
     (Constructor(_, _, _), Constructor(_, _, _)) => true
     _ => false
   }
+  // A bare `<call>` / `<new>` signature on a derived interface does *not*
+  // override the base's same-kind signature -- TypeScript merges them into an
+  // overload set rather than hiding the base ("derived interfaces no longer
+  // hide signatures from base types"), so a return-type-only difference is
+  // accepted (`(): number` extending `(): string`). For those members we
+  // compare parameters / arity only by neutralizing both return types; named
+  // function-typed members are real overrides and keep the full comparison.
+  let (d, b) = if ignore_return {
+    (with_void_return(derived), with_void_return(base))
+  } else {
+    (derived, base)
+  }
   same_kind &&
   not_generic_func(derived) &&
   not_generic_func(base) &&
-  not(is_assignable_to_bivariant(derived, base))
+  not(is_assignable_to_bivariant(d, b))
+}
+
+///|
+/// Replace a callable's return type with `Void` so two signatures can be
+/// compared on parameters / arity alone. Non-callables pass through.
+fn with_void_return(t : @ast.TsType) -> @ast.TsType {
+  match t {
+    Func(params, _) => Func(params, Void)
+    Constructor(params, _, abs) => Constructor(params, Void, abs)
+    _ => t
+  }
 }
 
 ///|
@@ -14930,6 +14961,7 @@ fn check_interface_extends_compat(
             } else if callable_member_incompatible(
                 resolver.unwrap(d_payload),
                 resolver.unwrap(b_payload),
+                ignore_return=df.0 == "<call>" || df.0 == "<new>",
               ) {
               issues.push({
                 path: "interface \{iface.name}",

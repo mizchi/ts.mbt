@@ -1594,6 +1594,29 @@ conformance sources (`.errors.txt` baseline = ground truth):
     lighter half of the boundary note below: TS2369 needed only a flat module
     list, *not* a field on every `TsClassDecl` construction site.
 
+  T73 -- whole-corpus soundness: two false positives -> 0 (precision). The
+    pinned-dir metric was already 414/414, but `checker_conformance_oracle.sh`
+    over the *entire* conformance corpus carried two pre-existing FP from the
+    T67-T70 signature work (whole-corpus FP 2 -> 0, TP 1605 -> 1604; the lone
+    TP lost is the return-only `callSignatureAssignabilityInInheritance`, which
+    is outside the pinned dirs, so pinned recall stays 592):
+      - voidParamAssignmentCompatibility: a `void`-typed parameter is omittable
+        (`(a: void) => R` is assignable to `() => R`), so `param_is_optional` /
+        `type_accepts_undefined_param` now treat `Void` like `undefined` and it
+        no longer raises the required-argument count.
+      - derivedInterfaceDoesNotHideBaseSignatures: a bare `<call>` / `<new>`
+        signature on a derived interface does not *override* the base's --
+        TypeScript merges them into an overload set rather than hiding it, so a
+        return-type-only difference (`(): number` extending `(): string`) is
+        accepted. `callable_member_incompatible` now takes `ignore_return` and,
+        for `<call>` / `<new>` members, neutralizes both return types
+        (`with_void_return`) so only parameters / arity are compared. Named
+        function-typed members stay full-comparison (real overrides). This
+        relaxation also drops the return-only inheritance error in
+        `callSignatureAssignabilityInInheritance` (the -1 TP); the precise TS
+        rule that separates it from the accepted case needs overload-set
+        merging the checker does not model, so the FP-0 invariant wins.
+
   Boundary (2026-06-18): the named higher-order MISS clusters remain
   single-recall-point, bespoke-machinery cases (overloaded construct-signature
   arity with generic constructors; overloaded / function-typed argument

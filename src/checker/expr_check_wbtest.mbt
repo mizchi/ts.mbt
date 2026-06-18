@@ -8549,6 +8549,37 @@ test "expr_check: interface extends with too many required params" {
     ) >
     0,
   )
+  // A bare `<call>` / `<new>` signature does not *override* the base's --
+  // TS merges them into an overload set, so a return-type-only difference
+  // (`(): number` extending `(): string`) is accepted, not a TS2430.
+  @test.assert_eq(
+    issues("interface B { (): string }\ninterface I extends B { (): number }"),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "interface B { new (x: string): number }\ninterface I extends B { new (x: string): string }",
+    ),
+    0,
+  )
+}
+
+///|
+// TS void-parameter rule: a parameter typed `void` is omittable, so
+// `(a: void) => R` is assignable to `() => R`. The arity check must not flag
+// the value as "requires 1 argument" against a parameter-less target.
+test "expr_check: void parameter is omittable for arity" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  @test.assert_eq(
+    issues("declare function g(a: void): void;\nlet gg: () => void = g;"),
+    0,
+  )
+  // A non-void required parameter still raises the count -> flagged.
+  assert_true(
+    issues("declare function h(a: number): void;\nlet hh: () => void = h;") > 0,
+  )
 }
 
 ///|
