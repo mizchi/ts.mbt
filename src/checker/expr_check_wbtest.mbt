@@ -8488,6 +8488,26 @@ test "expr_check: function value arity vs overloaded call signature" {
 }
 
 ///|
+// TS2345: the call-signature arity rule extends to construct signatures. A
+// constructor value that requires more parameters than a `<new>` overload
+// provides can't implement it.
+test "expr_check: constructor value arity vs overloaded construct signature" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let pre = "function foo<T>(cb: { new (x: T): string; new (x: T, y?: T): string }) { return cb }\n"
+  // `b` needs 2 construct args; the 1-param overload supplies none for `y`.
+  assert_true(
+    issues(pre + "declare var b: { new <T>(x: T, y: T): string };\nfoo(b);") > 0,
+  )
+  // A 1-param constructor satisfies both overloads.
+  @test.assert_eq(
+    issues(pre + "declare var a: { new <T>(x: T): T };\nfoo(a);"),
+    0,
+  )
+}
+
+///|
 // TS2345: a computed (string-literal) method call `recv["m"](args)` is checked
 // against the resolved method signature, just like the dotted `recv.m(args)`
 // form. A wrong-typed argument to a known primitive method is flagged; correct

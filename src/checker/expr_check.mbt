@@ -807,19 +807,82 @@ fn collect_call_signatures(
 }
 
 ///|
-/// The finite parameter count of a call signature `Func(params, ret)`, or
-/// `None` when it has a rest parameter (its arity is unbounded, so it can
-/// never be invoked with too few arguments for a function value).
-fn call_signature_param_count(sig : @ast.TsType) -> Int? {
-  match sig {
-    Func(params, _) => {
-      for p in params {
-        if p is Rest(_) {
-          return None
+/// Collect every construct signature (`<new>`) declared on `t` -- one entry
+/// per overload -- from structural object types and interface declarations,
+/// plus a bare `Constructor` type.
+fn collect_construct_signatures(
+  t : @ast.TsType,
+  resolver : Resolver,
+) -> Array[@ast.TsType] {
+  let out : Array[@ast.TsType] = []
+  match resolver.unwrap(t) {
+    Constructor(_, _, _) as c => out.push(c)
+    Object(fields) =>
+      for f in fields {
+        match f.0 {
+          Literal(k) => if k == "<new>" { out.push(f.1) }
+          _ => ()
         }
       }
-      Some(params.length())
+    Named(n) =>
+      match resolver.interfaces.get(n) {
+        Some(iface) =>
+          for f in iface.fields {
+            if f.0 == "<new>" {
+              out.push(f.1)
+            }
+          }
+        None => ()
+      }
+    _ => ()
+  }
+  out
+}
+
+///|
+/// The finite parameter count of a call / construct signature (`Func` /
+/// `Constructor`), or `None` when it has a rest parameter (unbounded arity,
+/// so it can never be invoked with too few arguments).
+fn call_signature_param_count(sig : @ast.TsType) -> Int? {
+  let params = match sig {
+    Func(params, _) => params
+    Constructor(params, _, _) => params
+    _ => return None
+  }
+  for p in params {
+    if p is Rest(_) {
+      return None
     }
+  }
+  Some(params.length())
+}
+
+///|
+/// Required arity of a value whose type carries *exactly one* signature of the
+/// requested kind (`<call>` when `want_new` is false, `<new>` when true). An
+/// overloaded source (more than one matching signature) is itself flexible, so
+/// returns `None`; bare `Func` / `Constructor` types count as a single
+/// signature.
+fn single_signature_required_arity(
+  ty : @ast.TsType,
+  want_new : Bool,
+  resolver : Resolver,
+) -> Int? {
+  let sigs = if want_new {
+    collect_construct_signatures(ty, resolver)
+  } else {
+    let direct = match resolver.unwrap(ty) {
+      Func(_, _) as f => [f]
+      _ => collect_call_signatures(ty, resolver)
+    }
+    direct
+  }
+  if sigs.length() != 1 {
+    return None
+  }
+  match sigs[0] {
+    Func(params, _) | Constructor(params, _, _) =>
+      Some(required_arity_from_types(params))
     _ => None
   }
 }
@@ -5781,7 +5844,20 @@ fn check_expr_against(
   // than the value requires is a real TS2345. Checked ahead of the
   // contextual-typing routes below (which only fire for a single call
   // signature and never enforce this minimum).
-  match function_value_required_arity(expr) {
+  // The same applies to construct signatures (`new (x): T`): a constructor
+  // value that requires more parameters than a `<new>` overload provides can't
+  // implement it (`foo6(b)` where `b: { new <T>(x: T, y: T): string }` against
+  // `{ new (x: T): string; new (x: T, y?: T): string }`). The source arity is
+  // read from a function literal directly, otherwise from the value's own
+  // single call / construct signature.
+  let call_arity = match function_value_required_arity(expr) {
+    Some(m) => Some(m)
+    None =>
+      single_signature_required_arity(
+        infer_expr(env, ctx.resolver, expr), false, ctx.resolver,
+      )
+  }
+  match call_arity {
     Some(m) =>
       for sig in collect_call_signatures(expected_shape, ctx.resolver) {
         match call_signature_param_count(sig) {
@@ -5791,6 +5867,27 @@ fn check_expr_against(
                 ctx,
                 sub_path,
                 "expected `\{type_display(expected)}` but the function value requires \{m} argument(s); a target call signature accepts only \{n}",
+              )
+              return
+            }
+          None => ()
+        }
+      }
+    None => ()
+  }
+  match
+    single_signature_required_arity(
+      infer_expr(env, ctx.resolver, expr), true, ctx.resolver,
+    ) {
+    Some(m) =>
+      for sig in collect_construct_signatures(expected_shape, ctx.resolver) {
+        match call_signature_param_count(sig) {
+          Some(n) =>
+            if m > n {
+              record(
+                ctx,
+                sub_path,
+                "expected `\{type_display(expected)}` but the constructor value requires \{m} argument(s); a target construct signature accepts only \{n}",
               )
               return
             }
