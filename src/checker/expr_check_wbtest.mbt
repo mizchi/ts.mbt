@@ -8381,6 +8381,31 @@ test "expr_check: primitive not assignable to callable type" {
 }
 
 ///|
+// TS2322: a value inhabits an intersection `A & B` only when it satisfies
+// every part. A source that provably fails an object-like part (a concrete
+// primitive, or an object missing a part's members) is a real mismatch; a
+// source satisfying all parts stays silent.
+test "expr_check: intersection target requires every part" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let pre = "declare var a: { a: string };\n"
+  // `a` lacks `b`, so it cannot inhabit `{ a } & { b }`.
+  assert_true(
+    issues(pre + "var y: { a: string } & { b: string };\ny = a;") > 0,
+  )
+  // A primitive can never satisfy an object part of the intersection.
+  assert_true(issues("var y: { a: string } & { b: string };\ny = 5;") > 0)
+  // A source carrying both members satisfies the intersection.
+  @test.assert_eq(
+    issues(
+      "declare var x: { a: string, b: string };\nvar y: { a: string } & { b: string };\ny = x;",
+    ),
+    0,
+  )
+}
+
+///|
 // TS2345: a computed (string-literal) method call `recv["m"](args)` is checked
 // against the resolved method signature, just like the dotted `recv.m(args)`
 // form. A wrong-typed argument to a known primitive method is flagged; correct

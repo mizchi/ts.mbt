@@ -6093,13 +6093,25 @@ fn check_expr_against(
       }
       return
     }
-    // Intersections on either side (`PartialStepState & { repo: any }`,
-    // `ComponentType<any> & ComponentType<RouteComponentProps>`, `A & A`):
-    // intersection assignability (a value of the intersection satisfies each
-    // part, and an object satisfying every part inhabits the intersection) is
-    // something we don't model structurally, so comparing nominally yields
-    // false mismatches. Stay silent.
-    (Intersection(_), _) | (_, Intersection(_)) => return
+    // Intersection *target*: a value inhabits `A & B` only when it satisfies
+    // every part. When the source is a concrete shape we can compare (object /
+    // struct / nominal / primitive) and it provably fails one object-like
+    // part, the assignment is a real mismatch (`var y: {a}&{b} = a` where `a:
+    // {a}`). Bidirectional / nominal-only parts and unmodeled shapes abstain.
+    (_, Intersection(parts)) =>
+      if intersection_target_mismatch(inferred_u, parts, ctx.resolver) {
+        record(
+          ctx,
+          sub_path,
+          "expected `\{type_display(expected_u)}` but got `\{type_display(inferred_u)}`",
+        )
+        return
+      } else {
+        return
+      }
+    // Intersection *source*: still modelled too coarsely structurally — stay
+    // silent.
+    (Intersection(_), _) => return
     // Bare callable / constructable shapes match other call signatures
     // structurally in ways we don't model — stay silent.
     (Func(_, _), _)
@@ -13219,6 +13231,49 @@ fn applied_generic_mismatch(
     }
     _ => false
   }
+}
+
+///|
+/// Intersection-target assignability: a value inhabits `A & B` only when it
+/// satisfies *every* part. Returns true when the source is a shape we can
+/// compare and it provably fails an object-like part -- a concrete primitive
+/// can never satisfy an object part, and a structural object / nominal source
+/// that lacks a part's members is a real mismatch. Parts that are primitives,
+/// type parameters, generics, callables, or unresolved names abstain (so the
+/// surrounding caller keeps bailing on those).
+fn intersection_target_mismatch(
+  source : @ast.TsType,
+  parts : Array[@ast.TsType],
+  resolver : Resolver,
+) -> Bool {
+  let source_concrete = is_concrete_primitive_or_literal(source)
+  let source_shape = match source {
+    Object(_) | Struct(_, _) => true
+    Named(n) => is_resolvable_nominal_name(resolver, n)
+    _ => false
+  }
+  if not(source_concrete) && not(source_shape) {
+    return false
+  }
+  for part in parts {
+    let p = resolver.unwrap(part)
+    let object_like = match p {
+      Object(_) | Struct(_, _) => true
+      Named(n) => is_resolvable_nominal_name(resolver, n)
+      _ => false
+    }
+    if not(object_like) {
+      continue
+    }
+    if source_concrete {
+      return true
+    }
+    if not(is_assignable_to(source, p)) &&
+      not(is_structurally_assignable_named(source, p, resolver)) {
+      return true
+    }
+  }
+  false
 }
 
 ///|
