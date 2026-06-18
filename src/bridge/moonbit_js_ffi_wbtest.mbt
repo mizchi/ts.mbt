@@ -4998,6 +4998,7 @@ test "bridge: FFI class methods unwrap optional arguments" {
     is_declare: false,
     private_members: [],
     protected_members: [],
+    abstract_members: [],
     duplicate_member_names: [],
   }
   let class_method : @ast.TsClassMethodDecl = {

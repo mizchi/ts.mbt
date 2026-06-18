@@ -2201,6 +2201,7 @@ fn Parser::parse_declare_class(
   let methods : Array[@ast.TsClassMethodDecl] = []
   let private_members : Array[String] = []
   let protected_members : Array[String] = []
+  let abstract_members : Array[String] = []
   let index_signatures : Array[(@ast.TsType, @ast.TsType)] = []
   let static_blocks : Array[@ast.TsBlock] = []
   let mut constructor_params : Array[(String, @ast.TsType)]? = None
@@ -2228,6 +2229,7 @@ fn Parser::parse_declare_class(
     let mut is_public = true
     let mut visibility = "public"
     let mut is_accessor = false
+    let mut is_abstract_member = false
     let mut has_modifier = true
     while has_modifier {
       has_modifier = false
@@ -2269,6 +2271,9 @@ fn Parser::parse_declare_class(
             is_public = false
             visibility = mod
           }
+          if mod == "abstract" {
+            is_abstract_member = true
+          }
           has_modifier = true
         }
         _ => ()
@@ -2294,12 +2299,16 @@ fn Parser::parse_declare_class(
     }
     let member_name = self.parse_declare_class_member_name()
     match member_name {
-      Some(n) =>
+      Some(n) => {
         if visibility == "private" {
           private_members.push(n)
         } else if visibility == "protected" {
           protected_members.push(n)
         }
+        if is_abstract_member {
+          abstract_members.push(n)
+        }
+      }
       None => ()
     }
     let _ = self.match_(Question)
@@ -2455,6 +2464,7 @@ fn Parser::parse_declare_class(
     is_declare: true,
     private_members,
     protected_members,
+    abstract_members,
     duplicate_member_names: [],
   }
 }

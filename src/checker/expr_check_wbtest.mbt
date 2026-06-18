@@ -8577,6 +8577,27 @@ test "expr_check: callable value assignment compares signatures" {
 }
 
 ///|
+// TS2515: a non-abstract class extending a class with abstract members must
+// implement each of them. An abstract subclass, or a concrete class that
+// implements the member, stays silent.
+test "expr_check: non-abstract class must implement abstract members" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let base = "abstract class B { abstract foo(): void; bar(): void {} }\n"
+  // C does not implement abstract `foo`.
+  assert_true(issues(base + "class C extends B {}") > 0)
+  // D implements `foo` -> ok.
+  @test.assert_eq(issues(base + "class D extends B { foo(): void {} }"), 0)
+  // An abstract subclass need not implement it.
+  @test.assert_eq(issues(base + "abstract class E extends B {}"), 0)
+  // Transitive: a concrete grandchild of an abstract class must implement.
+  assert_true(
+    issues(base + "abstract class M extends B {}\nclass N extends M {}") > 0,
+  )
+}
+
+///|
 // TS2345: a computed (string-literal) method call `recv["m"](args)` is checked
 // against the resolved method signature, just like the dotted `recv.m(args)`
 // form. A wrong-typed argument to a known primitive method is flagged; correct

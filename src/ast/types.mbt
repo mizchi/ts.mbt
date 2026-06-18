@@ -749,6 +749,12 @@ pub(all) struct TsClassDecl {
   // changing the member-decl structs. Empty for fully-public classes.
   private_members : Array[String]
   protected_members : Array[String]
+  // Names of members declared `abstract` (`abstract foo(): void;` /
+  // `abstract x: number;`). A non-abstract class extending a class that has
+  // abstract members must implement each of them (TS2515). Stored as a name
+  // list for the same reason as the visibility lists above. Empty unless the
+  // class is `abstract` and declares abstract members.
+  abstract_members : Array[String]
   // Member names the parser saw declared in two incompatible ways within
   // this class body -- a data field colliding with a method / accessor of
   // the same name, or a duplicated getter / setter. TypeScript reports

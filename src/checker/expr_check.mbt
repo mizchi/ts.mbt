@@ -14585,6 +14585,84 @@ fn check_class_member_structure(
   for issue in check_class_implements(module_, resolver) {
     issues.push(issue)
   }
+  for issue in check_abstract_implementation(module_, resolver) {
+    issues.push(issue)
+  }
+  issues
+}
+
+///|
+/// TS2515: a non-abstract class that (transitively) extends a class declaring
+/// `abstract` members must implement each of them. Walks the single-
+/// inheritance base chain; abstains when any base in the chain is not a
+/// resolvable class declaration (an unresolved base could supply the
+/// implementation, so flagging would risk a false positive). Member identity
+/// is by name -- enough to detect a wholly-missing implementation, which is
+/// what TS2515 reports.
+fn check_abstract_implementation(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for cls in module_.classes {
+    // Only concrete (non-abstract), non-ambient classes must implement.
+    if cls.is_abstract || cls.is_declare {
+      continue
+    }
+    // name -> the abstract base that declared the still-unimplemented member.
+    let abstract_needed : Map[String, String] = {}
+    let concrete : Map[String, Unit] = {}
+    fn add_concrete(c : @ast.TsClassDecl) -> Unit {
+      let abs : Map[String, Unit] = {}
+      for a in c.abstract_members {
+        abs[a] = ()
+      }
+      for p in c.properties {
+        if not(abs.contains(p.name)) {
+          concrete[p.name] = ()
+        }
+      }
+      for m in c.methods {
+        if not(abs.contains(m.name)) {
+          concrete[m.name] = ()
+        }
+      }
+    }
+
+    add_concrete(cls)
+    let mut current = cls
+    let mut resolvable = true
+    let mut depth = 0
+    while current.base_names.length() > 0 && depth < 64 {
+      depth = depth + 1
+      match resolver.classes.get(current.base_names[0]) {
+        Some(base) => {
+          for a in base.abstract_members {
+            if not(abstract_needed.contains(a)) {
+              abstract_needed[a] = base.name
+            }
+          }
+          add_concrete(base)
+          current = base
+        }
+        None => {
+          resolvable = false
+          break
+        }
+      }
+    }
+    if not(resolvable) {
+      continue
+    }
+    for name, from_class in abstract_needed {
+      if not(concrete.contains(name)) {
+        issues.push({
+          path: "class \{cls.name}",
+          message: "non-abstract class `\{cls.name}` does not implement inherited abstract member `\{name}` from class `\{from_class}`",
+        })
+      }
+    }
+  }
   issues
 }
 
