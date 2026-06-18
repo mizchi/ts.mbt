@@ -1378,6 +1378,7 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-18 (T66)   572/815 (70 %)        414/414 ( 0 FP)
 2026-06-18 (T67)   576/815 (71 %)        414/414 ( 0 FP)
 2026-06-18 (T68)   581/815 (71 %)        414/414 ( 0 FP)
+2026-06-18 (T69)   583/815 (72 %)        414/414 ( 0 FP)
 
   RB2 (2026-06-18) -- re-baseline after the intervening checker commits
   (through f545849) lifted measured recall 543 -> 563 @ 0 FP. Toolchain note:
@@ -1524,6 +1525,31 @@ conformance sources (`.errors.txt` baseline = ground truth):
         `(...xs: number[])`), returns, and interface call/construct signatures.
         Cleared call/constructSignatureAssignabilityInInheritance and the
         Call/ConstructSignaturesWithSpecializedSignatures pair.
+
+  T69 -- bivariant single-signature comparison for callable *value*
+    assignment (TS2322). recall 581 -> 583. The value-assignment analog of
+    T68: `check_expr_against` relaxes its `shape_is_callable` bail so that when
+    source and target each expose exactly one comparable call (or construct)
+    signature, it is compared via `is_assignable_to_bivariant`
+    (`single_signature_of`). Overloaded shapes, generic signatures, and
+    signatures containing intersections / generic `Applied`
+    (`type_has_intersection_or_applied`, which removed the lone FP) abstain.
+    Cleared assignmentCompatWithGenericCallSignatures2, genericCallWithFunctionTypedArguments2.
+    Still out of reach in this family: the remaining generic-call-signature
+    files (assignmentCompatWithGenericCallSignatures4 / ...WithOptionalParameters,
+    126 errors) need generic-signature instantiation, and the overloaded-value
+    assignments (stringLiteralTypesOverloadAssignability*) need overload-set
+    comparison.
+
+  Session total 2026-06-18: recall 563 -> 583 (+20) at a steady 0 FP, all via
+  sound relaxations (the authorized temporary-FP budget was never spent). The
+  clusters cleared: enum nominality; covariant generic assignability;
+  primitive-vs-callable / -overload / -object-part; intersection-target;
+  private/protected nominality; logical-operator contextual typing; overloaded
+  function-/constructor-typed argument arity; and the call/construct-signature
+  subtyping family at both interface-extends and value-assignment levels (which
+  also drove a parser fix: optional function-/constructor-type parameters now
+  widen to `T | undefined`).
 
   Boundary (2026-06-18): the named higher-order MISS clusters remain
   single-recall-point, bespoke-machinery cases (overloaded construct-signature
