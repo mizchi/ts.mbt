@@ -1376,6 +1376,8 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-18 (T64)   570/815 (70 %)        414/414 ( 0 FP)
 2026-06-18 (T65)   571/815 (70 %)        414/414 ( 0 FP)
 2026-06-18 (T66)   572/815 (70 %)        414/414 ( 0 FP)
+2026-06-18 (T67)   576/815 (71 %)        414/414 ( 0 FP)
+2026-06-18 (T68)   581/815 (71 %)        414/414 ( 0 FP)
 
   RB2 (2026-06-18) -- re-baseline after the intervening checker commits
   (through f545849) lifted measured recall 543 -> 563 @ 0 FP. Toolchain note:
@@ -1501,6 +1503,27 @@ conformance sources (`.errors.txt` baseline = ground truth):
         type) need full signature structural comparison (kind + arity + param
         bivariance + covariant return), a broader relaxation than the arity
         rule -- a candidate next slice if directed.
+
+  T67 / T68 -- signature subtyping in interface-extends (TS2430). recall
+    572 -> 576 -> 581. `check_interface_extends_compat` previously compared only
+    optionality and scalar-vs-object for redeclared members. Now a callable
+    member (or a derived interface's own `<call>` / `<new>` signature, which
+    lives as a member) must be assignable to the base's:
+      T67 -- arity-only first (`callable_member_arity_incompatible`): a derived
+        signature requiring more args than the base provides. To make this
+        sound the parser now widens optional function-/constructor-*type*
+        parameters (`(x?: T) => R`) to `T | undefined` like declaration
+        parameters -- previously the `?` was consumed and discarded, so an
+        optional trailing parameter looked required (also corrected bridge FFI
+        emission to render such a parameter as `T?`). Cleared the four
+        subtypingWith{Call,Construct,GenericCall,GenericConstruct}SignaturesWithOptionalParameters.
+      T68 -- generalized to full `is_assignable_to_bivariant` (bivariant
+        params per `strictFunctionTypes: false`, covariant return) for plain
+        non-generic `Func` / `Constructor` members (`callable_member_incompatible`).
+        Catches incompatible parameter types (`(...xs: string[])` over
+        `(...xs: number[])`), returns, and interface call/construct signatures.
+        Cleared call/constructSignatureAssignabilityInInheritance and the
+        Call/ConstructSignaturesWithSpecializedSignatures pair.
 
   Boundary (2026-06-18): the named higher-order MISS clusters remain
   single-recall-point, bespoke-machinery cases (overloaded construct-signature
