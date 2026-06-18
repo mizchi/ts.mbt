@@ -8301,6 +8301,30 @@ test "expr_check: TS2322 literal not assignable to literal target" {
 }
 
 ///|
+// Enum nominality (TS2322): a numeric enum is nominal, so a concrete
+// non-numeric primitive / literal or a plain object value is not assignable to
+// an enum-typed target. Numeric values, the same enum, and `null` /
+// `undefined` (non-strict) stay silent.
+test "expr_check: enum nominality assignment target" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let prelude = "enum E { A, B }\nvar e: E;\n"
+  assert_true(issues(prelude + "e = '';") > 0)
+  assert_true(issues(prelude + "e = {};") > 0)
+  assert_true(issues(prelude + "e = true;") > 0)
+  // Numeric values, the same enum member, and a number variable stay silent.
+  @test.assert_eq(issues(prelude + "e = 1;"), 0)
+  @test.assert_eq(issues(prelude + "e = E.A;"), 0)
+  @test.assert_eq(issues(prelude + "declare var n: number;\ne = n;"), 0)
+  // A string enum is not numeric, so the rule does not fire on it.
+  @test.assert_eq(
+    issues("enum S { A = \"a\" }\nvar s: S;\ns = 'x';"),
+    0,
+  )
+}
+
+///|
 // TS2345: a computed (string-literal) method call `recv["m"](args)` is checked
 // against the resolved method signature, just like the dotted `recv.m(args)`
 // form. A wrong-typed argument to a known primitive method is flagged; correct

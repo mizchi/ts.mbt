@@ -3992,6 +3992,55 @@ fn enum_integer_values(decl : @ast.TsEnumDecl) -> Array[Int]? {
 }
 
 ///|
+/// True when `decl` is a purely numeric enum: every member is either
+/// auto-incremented (no initializer, so numeric) or has a numeric
+/// initializer. String / heterogeneous enums return false. Unlike
+/// `enum_integer_values`, this accepts auto-incremented members (`enum E { A,
+/// B }`) since their runtime values are still numbers. Used by the
+/// enum-nominality assignment rule, which only reasons about numeric enums.
+fn is_numeric_enum(decl : @ast.TsEnumDecl) -> Bool {
+  for m in decl.members {
+    match m.value {
+      None => ()
+      Some(Number(_)) => ()
+      _ => return false
+    }
+  }
+  decl.members.length() > 0
+}
+
+///|
+/// True when `name` resolves to a purely numeric enum declaration.
+fn is_numeric_enum_name(resolver : Resolver, name : String) -> Bool {
+  match resolver.enums.get(name) {
+    Some(decl) => is_numeric_enum(decl)
+    None => false
+  }
+}
+
+///|
+/// Enum nominality: a value of these shapes is provably *not* assignable to a
+/// numeric enum target. Numeric sources (`number` / numeric literal), the same
+/// enum, `any` / `unknown`, and `null` / `undefined` are all accepted
+/// elsewhere; what remains here is a concrete non-numeric primitive / literal
+/// or a plain object value (`var e: E; e = ''` / `e = {}` is TS2322). Enums
+/// are nominal, so rejecting these is sound and false-positive-free.
+fn enum_incompatible_source(ty : @ast.TsType) -> Bool {
+  match ty {
+    String_
+    | Literal(_)
+    | Boolean
+    | BooleanLiteral(_)
+    | BigInt
+    | BigIntLiteral(_)
+    | Symbol
+    | Object(_)
+    | Struct(_, _) => true
+    _ => false
+  }
+}
+
+///|
 /// The integer value of a literal expression / type, if it is one.
 fn expr_integer_literal(e : @ast.TsExpr, t : @ast.TsType) -> Int? {
   match e {
@@ -5851,6 +5900,28 @@ fn check_expr_against(
       if s != t &&
         ctx.in_scope_type_params.contains(s) &&
         ctx.in_scope_type_params.contains(t) {
+        record(
+          ctx,
+          sub_path,
+          "expected `\{type_display(expected_u)}` but got `\{type_display(inferred_u)}`",
+        )
+        return
+      }
+    _ => ()
+  }
+  // Enum nominality: a numeric enum target accepts numeric values, the same
+  // enum, `any` / `unknown`, and `null` / `undefined` (all handled above or
+  // not matched below). A concrete non-numeric primitive / literal or a plain
+  // object value is not assignable to it -- `var e: E; e = ''` / `e = {}` is
+  // TS2322. Cross-enum member assignment (`e = E2.A`) loses its enum
+  // provenance through member access (it resolves to a bare numeric literal)
+  // and is deliberately not caught here. Placed ahead of the unresolved-Named
+  // bail below, which would otherwise skip enum targets entirely (enums live
+  // in `resolver.enums`, not the alias / interface / class tables).
+  match expected_u {
+    Named(n) =>
+      if is_numeric_enum_name(ctx.resolver, n) &&
+        enum_incompatible_source(inferred_u) {
         record(
           ctx,
           sub_path,
