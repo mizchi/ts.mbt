@@ -8443,6 +8443,29 @@ test "expr_check: private member makes a class nominal" {
 }
 
 ///|
+// TS2322: a logical operator propagates the contextual type to its right
+// operand, so a function value there is checked against the expected
+// signature (`x = cond && (a => …)` types the arrow's params). The left
+// operand of `||` / `??` is the guarded value and is not checked.
+test "expr_check: logical operator propagates contextual type to rhs" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // The arrow body assigns its (contextually `string`) param to a `number`.
+  assert_true(
+    issues(
+      "let x: (a: string) => string;\nlet y = true;\nx = y && (a => { const b: number = a; return b; });",
+    ) >
+    0,
+  )
+  // `||` left operand may be the guarded (nullable) value — not flagged.
+  @test.assert_eq(
+    issues("declare var xs: string[] | undefined;\nvar r: string[] = xs || [];"),
+    0,
+  )
+}
+
+///|
 // TS2345: a computed (string-literal) method call `recv["m"](args)` is checked
 // against the resolved method signature, just like the dotted `recv.m(args)`
 // form. A wrong-typed argument to a known primitive method is flagged; correct

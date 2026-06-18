@@ -5760,6 +5760,21 @@ fn check_expr_against(
       check_expr_against(env, else_, expected, ctx, sub_path + " (else)")
       return
     }
+    // Logical operators propagate the contextual type to their *right*
+    // operand, mirroring TS: `x && f` yields `f` when truthy, and the fallback
+    // of `a || b` / `a ?? b` is `b`. The right operand must therefore be
+    // assignable to the expected type, so checking it flows a function /
+    // object context inward (`x = y && (a => …)` types the arrow's params),
+    // surfacing body errors a bare inference would miss. The left operand is
+    // deliberately *not* checked: for `||` / `??` it is the value being
+    // guarded (`const xs: string[] = maybe || []` has `maybe: string[] |
+    // undefined`), and for `&&` it is the boolean-ish guard.
+    (BinOp(And, _, r), _)
+    | (BinOp(Or, _, r), _)
+    | (BinOp(Coalesce, _, r), _) => {
+      check_expr_against(env, r, expected, ctx, sub_path + " (logical)")
+      return
+    }
     // Contextual typing for array literals: `[a, b]` against a tuple type
     // `[T1, T2]` checks each element against the corresponding slot. Without
     // this hop the array literal would infer as `Array<elem>` and fail
