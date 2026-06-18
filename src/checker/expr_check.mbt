@@ -858,6 +858,56 @@ fn call_signature_param_count(sig : @ast.TsType) -> Int? {
 }
 
 ///|
+/// The single call (`want_new` false) or construct (`want_new` true)
+/// signature of `ty`, or `None` when it has zero or several (an overloaded
+/// shape is not a single comparable signature). A bare `Func` counts as one
+/// call signature.
+fn single_signature_of(
+  ty : @ast.TsType,
+  want_new : Bool,
+  resolver : Resolver,
+) -> @ast.TsType? {
+  let sigs = if want_new {
+    collect_construct_signatures(ty, resolver)
+  } else {
+    match resolver.unwrap(ty) {
+      Func(_, _) as f => [f]
+      _ => collect_call_signatures(ty, resolver)
+    }
+  }
+  if sigs.length() == 1 {
+    Some(sigs[0])
+  } else {
+    None
+  }
+}
+
+///|
+/// True when a type contains an `Intersection` or a generic `Applied`
+/// instantiation anywhere -- shapes that the resolver-free
+/// `is_assignable_to_bivariant` compares nominally and so cannot reliably
+/// judge. Used to keep the bivariant single-signature comparison
+/// false-positive-free.
+fn type_has_intersection_or_applied(t : @ast.TsType) -> Bool {
+  match t {
+    Intersection(_) | Applied(_, _) => true
+    Array(e) | Rest(e) => type_has_intersection_or_applied(e)
+    Union(parts) => parts.iter().any(type_has_intersection_or_applied)
+    Tuple(items) => items.iter().any(type_has_intersection_or_applied)
+    Func(params, ret) =>
+      params.iter().any(type_has_intersection_or_applied) ||
+      type_has_intersection_or_applied(ret)
+    Constructor(params, ret, _) =>
+      params.iter().any(type_has_intersection_or_applied) ||
+      type_has_intersection_or_applied(ret)
+    Object(fields) => fields.iter().any(fn(f) {
+      type_has_intersection_or_applied(f.1)
+    })
+    _ => false
+  }
+}
+
+///|
 /// Required arity of a value whose type carries *exactly one* signature of the
 /// requested kind (`<call>` when `want_new` is false, `<new>` when true). An
 /// overloaded source (more than one matching signature) is itself flexible, so
@@ -6323,6 +6373,35 @@ fn check_expr_against(
       "expected `\{type_display(expected_u)}` but got `\{type_display(inferred_u)}`",
     )
     return
+  }
+  // Value assignment between callable shapes: when the source and target each
+  // expose exactly one comparable call signature (or each exactly one
+  // construct signature), compare it bivariantly (params bivariant per
+  // `strictFunctionTypes: false`, return covariant) -- `var f: (x: number) =>
+  // string = g` where `g: (x: number) => number`. Overloaded shapes and
+  // generic signatures abstain, falling through to the structural callable
+  // bail below.
+  for want_new in [false, true] {
+    match
+      (
+        single_signature_of(inferred_u, want_new, ctx.resolver),
+        single_signature_of(expected_u, want_new, ctx.resolver),
+      ) {
+      (Some(s), Some(t)) =>
+        if not_generic_func(s) &&
+          not_generic_func(t) &&
+          not(type_has_intersection_or_applied(s)) &&
+          not(type_has_intersection_or_applied(t)) &&
+          not(is_assignable_to_bivariant(s, t)) {
+          record(
+            ctx,
+            sub_path,
+            "expected `\{type_display(expected_u)}` but got `\{type_display(inferred_u)}`",
+          )
+          return
+        }
+      _ => ()
+    }
   }
   // Callable / constructable interfaces & objects (`<call>` / `<new>`
   // signatures, often `extends Function`, with overloaded methods like

@@ -8546,6 +8546,32 @@ test "expr_check: interface extends with too many required params" {
 }
 
 ///|
+// TS2322: assigning between callable values compares their single call /
+// construct signatures bivariantly. An incompatible parameter or return type
+// is flagged; a compatible signature stays silent. Signatures involving
+// intersections / generic instantiations abstain.
+test "expr_check: callable value assignment compares signatures" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Return-type mismatch between two function-typed values.
+  assert_true(
+    issues("declare var g: (x: number) => number;\nvar f: (x: number) => string;\nf = g;") >
+    0,
+  )
+  // Parameter-type mismatch.
+  assert_true(
+    issues("declare var g: (x: string) => number;\nvar f: (x: number) => number;\nf = g;") >
+    0,
+  )
+  // Compatible signature stays silent.
+  @test.assert_eq(
+    issues("declare var g: (x: number) => number;\nvar f: (x: number) => number;\nf = g;"),
+    0,
+  )
+}
+
+///|
 // TS2345: a computed (string-literal) method call `recv["m"](args)` is checked
 // against the resolved method signature, just like the dotted `recv.m(args)`
 // form. A wrong-typed argument to a known primitive method is flagged; correct
