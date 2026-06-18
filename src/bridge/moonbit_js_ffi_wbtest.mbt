@@ -1133,7 +1133,7 @@ async test "bridge: emit callable wrappers for natural function-valued const exp
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn has_magic(arg0 : String, arg1 : GlobOptions) -> Bool = \"__ts_mbt_has_magic\"",
+      "pub extern \"js\" fn has_magic(arg0 : String, arg1 : GlobOptions?) -> Bool = \"__ts_mbt_has_magic\"",
     ),
   )
   // The full `hasMagic` wrapper now routes the `string | string[]`

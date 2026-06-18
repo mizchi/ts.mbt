@@ -34,7 +34,7 @@ fn Parser::parse_paren_or_function_type(
         break
       }
     }
-    let _ = self.match_(Question)
+    let is_optional = self.match_(Question)
     // Type annotation on a function-type parameter is optional —
     // `(item) => T` is a valid TS arrow function type. A `...rest` param is
     // wrapped in `Rest(...)` so call-site checking treats each trailing
@@ -45,6 +45,10 @@ fn Parser::parse_paren_or_function_type(
     } else {
       @ast.TsType::Any
     }
+    // An optional function-type parameter (`(x?: T) => R`) widens to
+    // `T | undefined`, mirroring declaration parameters, so arity / required-
+    // param reasoning sees it as omittable.
+    let pty = if is_optional { wrap_optional_ts_type(pty) } else { pty }
     param_types.push(if is_rest { Rest(pty) } else { pty })
     if self.match_(Comma) {
       if self.check(RParen) {
@@ -99,12 +103,15 @@ fn Parser::parse_constructor_tail(
           break
         }
       }
-      let _ = self.match_(Question)
+      let is_optional = self.match_(Question)
       let pty = if self.match_(Colon) {
         self.parse_type()
       } else {
         @ast.TsType::Any
       }
+      // Optional constructor-type parameter widens to `T | undefined`, like
+      // function-type and declaration parameters.
+      let pty = if is_optional { wrap_optional_ts_type(pty) } else { pty }
       param_types.push(if is_rest { Rest(pty) } else { pty })
       if self.match_(Comma) {
         if self.check(RParen) {

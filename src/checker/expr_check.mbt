@@ -14589,6 +14589,33 @@ fn check_class_implements(
 }
 
 ///|
+/// True when a derived callable member cannot be assignable to the base
+/// callable member purely on *arity*: the derived signature requires more
+/// arguments than the base provides, so a base-typed caller would invoke it
+/// with too few. Arity-only (no return / parameter-type variance), so it is a
+/// sound, false-positive-free subset of full signature subtyping. A base with
+/// a rest parameter provides unbounded arity and never triggers this.
+fn callable_member_arity_incompatible(
+  derived : @ast.TsType,
+  base : @ast.TsType,
+) -> Bool {
+  fn arity_exceeds(dp : Array[@ast.TsType], bp : Array[@ast.TsType]) -> Bool {
+    for p in bp {
+      if p is Rest(_) {
+        return false
+      }
+    }
+    required_arity_from_types(dp) > bp.length()
+  }
+
+  match (derived, base) {
+    (Func(dp, _), Func(bp, _)) => arity_exceeds(dp, bp)
+    (Constructor(dp, _, _), Constructor(bp, _, _)) => arity_exceeds(dp, bp)
+    _ => false
+  }
+}
+
+///|
 /// TS2430 ("Interface incorrectly extends interface"): a derived
 /// interface redeclares an inherited member with an incompatible shape.
 /// We report only the two reliably-detectable shapes (no structural
@@ -14729,6 +14756,14 @@ fn check_interface_extends_compat(
               issues.push({
                 path: "interface \{iface.name}",
                 message: "interface incorrectly extends `\{base_name}`: property `\{df.0}` of type `\{type_display(df.1)}` is not assignable to the base type `\{type_display(btype)}`",
+              })
+            } else if callable_member_arity_incompatible(
+                resolver.unwrap(d_payload),
+                resolver.unwrap(b_payload),
+              ) {
+              issues.push({
+                path: "interface \{iface.name}",
+                message: "interface incorrectly extends `\{base_name}`: member `\{df.0}` requires more arguments than the base signature provides",
               })
             } else if d_optional && !b_optional {
               issues.push({

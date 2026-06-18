@@ -8508,6 +8508,29 @@ test "expr_check: constructor value arity vs overloaded construct signature" {
 }
 
 ///|
+// TS2430: a derived interface that redeclares an inherited callable member
+// requiring more arguments than the base signature provides incorrectly
+// extends it (a base-typed caller would invoke it with too few args).
+test "expr_check: interface extends with too many required params" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let base = "interface Base { a: () => number }\n"
+  // Derived `a` requires 1 arg; base provides 0 -> incompatible.
+  assert_true(issues(base + "interface I extends Base { a: (x: number) => number }") > 0)
+  // Same number of required params (optional second) -> ok.
+  @test.assert_eq(
+    issues(base + "interface I extends Base { a: (x?: number) => number }"),
+    0,
+  )
+  // Construct-signature member analog.
+  let cbase = "interface CB { a: new () => number }\n"
+  assert_true(
+    issues(cbase + "interface I extends CB { a: new (x: number) => number }") > 0,
+  )
+}
+
+///|
 // TS2345: a computed (string-literal) method call `recv["m"](args)` is checked
 // against the resolved method signature, just like the dotted `recv.m(args)`
 // form. A wrong-typed argument to a known primitive method is flagged; correct
