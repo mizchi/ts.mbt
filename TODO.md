@@ -1366,6 +1366,75 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-15 (T55)   541/815 (66 %)        414/414 ( 0 FP)
 2026-06-15 (T56)   542/815 (67 %)        414/414 ( 0 FP)
 2026-06-15 (T57)   543/815 (67 %)        414/414 ( 0 FP)
+2026-06-18 (RB2)   563/815 (69 %)        414/414 ( 0 FP)
+2026-06-18 (T58)   564/815 (69 %)        414/414 ( 0 FP)
+2026-06-18 (T59)   564/815 (69 %)        414/414 ( 0 FP)
+
+  RB2 (2026-06-18) -- re-baseline after the intervening checker commits
+  (through f545849) lifted measured recall 543 -> 563 @ 0 FP. Toolchain note:
+  this session's container had no MoonBit toolchain or `typescript` submodule
+  checked out; both were provisioned (`scripts/patch_async_dep.sh` is still
+  required for the bleeding-edge compiler to accept moonbitlang/async). `moon
+  run --target native src/cmd/tsacc` compiles + runs in ~9s here.
+
+  Decision (2026-06-18): per direction to pursue the "real type-system" path
+  with a *small* FP budget for covariant generic assignability, this session
+  targeted the three remaining higher-order clusters the prior triage named:
+  named-interface object inference, multi-source `T` inference + enum
+  nominality, and overloaded constructor types.
+
+  T58 -- enum nominality on assignment targets (TS2322). recall 563 -> 564.
+    A numeric enum is nominal: a concrete non-numeric primitive / literal or a
+    plain object value is not assignable to an enum-typed target (`var e: E;
+    e = ''` / `e = {}` / `e = true`). Numeric values, the same enum,
+    `any` / `unknown`, and non-strict `null` / `undefined` stay silent. Added
+    ahead of the unresolved-`Named` bail in `check_expr_against`, which
+    previously skipped enum targets entirely (enums live in `resolver.enums`,
+    not the alias / interface / class tables). Cross-enum member assignment
+    (`e = E2.A`) loses its enum provenance through member access (it resolves
+    to a bare numeric literal) and is deliberately not caught -- modelling that
+    needs a nominal enum-typed value representation. Clears
+    `invalidEnumAssignments`. FP-safe by soundness (these shapes are never
+    assignable to a numeric enum). The remaining enum misses are strict-mode-
+    only (`validEnumAssignments`: `e = null` / `e = -1` need
+    strictNullChecks / numeric-literal-vs-member) or different diagnostics
+    (`enumAssignabilityInInheritance` is TS2403, `assignmentCompatWithEnumIndexer`
+    is TS2741 over `Record<E, any>`).
+
+  T59 -- covariant generic assignability (relax the `Applied` bail). recall
+    steady 564, FP steady 0.
+    `check_expr_against` bailed unconditionally whenever either side was an
+    `Applied(...)` instantiation. Relaxed to a variance-safe covariant
+    best-effort comparison (`applied_generic_mismatch`): two instantiations of
+    the *same* generic with the *same* arity are a mismatch when some
+    type-argument pair is bidirectionally incompatible (`Box<string>` vs
+    `Box<number>`; `Box<P>` vs `Box<Q>` for distinct shape-incompatible user
+    classes). Bidirectional incompatibility keeps covariant / contravariant
+    subtype directions silent, so it is sound; argument pairs are only judged
+    when both are concrete primitives / literals or distinct resolvable nominal
+    references. +0 on the measured corpus: every conformance generic-mismatch
+    lives at a *call-argument inference* site, not an assignment / return one,
+    so this strengthens the synthesized-bridge `@checker.check_module` gate
+    without moving the conformance metric.
+
+  Boundary reached (2026-06-18): the named MISS clusters that remain are
+  single-recall-point, high-FP-risk higher-order cases, exactly as the prior
+  triage warned:
+    - `genericCallWithOverloadedConstructorTypedArguments2` (the "overloaded
+      constructor" target): its lone baseline error is an arity mismatch
+      *across an overloaded construct-signature set* fed a *generic*
+      constructor (`{ new(x:T):string; new(x:T,y?:T):string }` vs `new
+      <T>(x:T,y:T)=>string`). Needs quadratic-pairwise overload matching with
+      generic-constructor instantiation -- a large machine for +1.
+    - The "multi-source `T`" shape (`foo<T>(x:T, y:T)`) is already inferred via
+      `infer_param_bindings` (first-wins + per-arg assignability), and its
+      representative file (`genericCallWithNonSymmetricSubtypes`) is already a
+      hit; the open variants are overloaded / function-typed-argument cases
+      (`genericCallWith{Overloaded,Function}*TypedArguments2`).
+    Wiring the covariant comparison into the call-argument conflict path is the
+    next lever for these, but each remaining file needs bespoke higher-order
+    overload machinery whose FP exposure exceeds the small budget; recommend an
+    explicit per-case go-ahead before building it.
 
   Toolchain note (2026-06-08): the native parser-package whitebox test
   generates a ~25 MB C unit that this session's `tcc` could not compile in
