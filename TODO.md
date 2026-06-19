@@ -2686,28 +2686,30 @@ precision_miss`):
 
 ### Recall pushes (target: 29 % -> 40 %)
 
-- [ ] Validate duplicate parameter names on functions / methods / call
-  signatures. Covers `objectTypeLiteral/callSignatures/...DuplicateParameters`
-  and similar method/interface variants (estimated 8-12 recall cases).
-- [ ] Validate duplicate type-parameter names on functions / classes /
-  interfaces / call signatures (`<T, T>`). Trivial detection; covers
-  `typesWithDuplicateTypeParameters.ts` and friends (estimated 2-4
-  cases).
-- [ ] Detect self-constrained type parameters (`T extends T`,
-  indirect cycles `T extends U, U extends T`). Covers
-  `typeParameterDirectlyConstrainedToItself.ts` /
-  `typeParameterIndirectlyConstrainedToItself.ts` (estimated 2-4 cases).
-- [ ] Validate type-argument counts on call expressions, `new`
-  expressions, and named type references. Covers
-  `callNonGenericFunctionWithTypeArguments.ts`,
-  `callGenericFunctionWithZeroTypeArguments.ts`,
-  `instantiateGenericClassWithWrongNumberOfTypeArguments.ts`, etc.
-  (estimated 10-15 recall cases across `typeArgumentLists/`).
-- [ ] Run `is_assignable_to` on top-level and function-body `=`
-  assignments (currently only used at call-site / declaration init).
-  `typeRelationships/assignmentCompatibility/*` is dominated by
-  `t = s;` patterns; this is the single biggest recall lever (137
-  recall-miss cases share this directory).
+This section was written at ~29 % recall; the audit on 2026-06-19 (at 595/815,
+73 %) found nearly all of it already shipped by intervening sessions. Status
+updated below.
+
+- [x] Validate duplicate parameter names on functions / methods / call
+  signatures. The parser raises on duplicate parameter names; the conformance
+  harness scores a parse failure on a baseline-positive file as a hit, so
+  `callSignaturesWithDuplicateParameters` and friends are already covered.
+- [x] Validate duplicate type-parameter names on functions / classes /
+  interfaces / call signatures (`<T, T>`). Already emitted as `duplicate type
+  parameter` — `typesWithDuplicateTypeParameters` is a hit.
+- [x] Detect self-constrained type parameters (`T extends T`, indirect cycles).
+  Shipped as T74 (`check_circular_type_params`, TS2313).
+- [x] Validate type-argument counts on call expressions, `new` expressions, and
+  named type references (TS2347 / TS2558). `callNonGenericFunctionWithTypeArguments`
+  and `instantiateGenericClassWithWrongNumberOfTypeArguments` are already
+  flagged.
+- [x] Run `is_assignable_to` on top-level and function-body `=` assignments.
+  Bare assignments (top-level and in function bodies) and return statements are
+  already assignability-checked. Only 6 specialized cases remain in
+  `assignmentCompatibility/*` (Record-over-enum-key TS2741, generic call
+  signatures, optional-property-vs-index-signature, `undefined`-assignment
+  TS2539) — each needs larger machinery, not the bare `t = s` lever. The
+  "137-case" estimate was from the 29 %-recall era and is obsolete.
 - [ ] Static-property-init / definite-assignment-assertion checks on
   classes. `controlFlow/definiteAssignmentAssertions.ts` and class
   property cases.
