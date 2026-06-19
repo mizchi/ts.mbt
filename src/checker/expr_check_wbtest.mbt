@@ -8599,6 +8599,36 @@ test "expr_check: generic interface instantiation mismatch" {
 }
 
 ///|
+// TS2344: a type argument that definitely violates a concrete constraint is
+// flagged (alias / class generic, in field / parameter / ambient positions).
+// Forwarded (in-scope) type parameters, `infer` markers, and union arguments
+// abstain so the check stays false-positive-free.
+test "expr_check: type-argument constraint violation (TS2344)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let a = "type A<T extends string> = T;\n"
+  // Concrete violation in an interface field / function parameter -> flagged.
+  assert_true(issues(a + "interface I { x: A<number> }") > 0)
+  assert_true(issues(a + "function f(p: A<number>) {}") > 0)
+  // Class generic with a constraint, violated at a field type.
+  assert_true(
+    issues("class C<T extends string> {}\ninterface I { c: C<number> }") > 0,
+  )
+  // Satisfying argument -> silent.
+  @test.assert_eq(issues(a + "interface I { x: A<\"hi\"> }"), 0)
+  // Forwarded type parameter (still in scope) -> abstain.
+  @test.assert_eq(issues(a + "function f<U>(p: A<U>) {}"), 0)
+  // Union argument that satisfies the bound -> abstain (no distribution FP).
+  @test.assert_eq(
+    issues(
+      "type B<T extends string | number> = T;\ninterface I { y: B<1 | \"a\"> }",
+    ),
+    0,
+  )
+}
+
+///|
 // TS2313: a type parameter with a circular constraint. Direct (`T extends T`)
 // and indirect cycles (`U extends T, T extends U`) are flagged; a valid bound
 // or an F-bounded `Applied` constraint (`S extends Foo<S>`) stays silent.

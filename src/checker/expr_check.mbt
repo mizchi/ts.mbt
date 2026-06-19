@@ -13605,13 +13605,17 @@ fn check_module_function_bodies_layered(
     // already flags real dups while tolerating call / construct / method
     // overloads, which the structural pass mis-reads as duplicate
     // `<call>` / `<new>` / method fields), `ClassPropertyDuplicate` (the
-    // parser merges duplicate fields, so it never fires), and
-    // `TypeParameterConstraintViolation` (false-flags `infer` / forwarded
-    // type-parameter bounds).
+    // parser merges duplicate fields, so it never fires).
+    //   - `TypeParameterConstraintViolation` (TS2344) is now sound to keep:
+    //     `check_constraints` abstains on `infer` markers and forwarded
+    //     (in-scope) type parameters, so only a concrete argument that
+    //     definitely violates a concrete bound fires.
     for issue in check_module(module_).issues {
       let keep = match issue.kind {
-        CircularTypeAlias | InterfaceExtendsCycle | TypeAliasArityMismatch =>
-          true
+        CircularTypeAlias
+        | InterfaceExtendsCycle
+        | TypeAliasArityMismatch
+        | TypeParameterConstraintViolation => true
         _ => false
       }
       if keep {

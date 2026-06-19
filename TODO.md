@@ -1647,6 +1647,25 @@ conformance sources (`.errors.txt` baseline = ground truth):
     site, not an assignment / return one -- so it strengthens the synthesized-
     bridge `@checker.check_module` gate without moving the conformance metric.
 
+  T76 -- type-argument constraint violations re-enabled soundly (TS2344;
+    whole-corpus TP 1607 -> 1608 @ 0 FP, pinned steady 595). The
+    `TypeParameterConstraintViolation` check (`check_constraints`) was computed
+    but excluded from the permissive pass because it false-flagged `infer`
+    markers and forwarded type parameters. Now sound and kept:
+      - `constraint_operand_unverifiable` abstains when the argument or the
+        substituted bound carries an `infer` marker (`Applied("__tsmbt_infer",..)`),
+        an in-scope (forwarded) type parameter, or an unevaluated type operator
+        (`keyof` / conditional / mapped / indexed-access / `typeof`).
+      - a violation now requires *both* a definite `extends_decision` =
+        `Some(false)` *and* `is_assignable_to` to fail. `extends_decision`
+        distributes over a union argument (conditional-type semantics) and
+        mis-reported `1 | "a"` vs `string | number`; the assignability
+        confirmation (the real constraint relation) removes that FP.
+      - the check now also covers generic *classes* (not just aliases) and
+        walks class fields / method signatures and function bodies with the
+        declaration's own type parameters in scope. Generic *interfaces* still
+        need a `type_param_bounds` AST field (not yet stored) -- a follow-up.
+
   Generic-instantiation landscape (2026-06-19): the remaining generic recall
   misses are not assignment/return-position instantiations (now covered) but
   (a) call-argument inference + constraint checking at the call site, and
