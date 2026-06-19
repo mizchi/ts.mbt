@@ -1384,6 +1384,82 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-18 (T72)   592/815 (73 %)        414/414 ( 0 FP)
 2026-06-19 (T74)   595/815 (73 %)        414/414 ( 0 FP)
 
+## Recall Roadmap: 595/815 -> higher (2026-06-19)
+
+Audit of the 220 remaining recall misses (`tsacc --list-misses`), grouped by the
+machinery each needs. Counts are by filename pattern over the miss list, so they
+overlap slightly; they rank the levers, they aren't exact recall deltas. The
+order below is chosen for the project's prime directive (**FP = 0 always**):
+cheap + low-FP tracks first, broad flow / overload machinery last. Every track
+follows the same workflow -- implement behind a sound gate, then verify with
+`scripts/checker_conformance_oracle.sh` (whole-corpus FP must stay 0) and
+`moon run --target native src/cmd/tsacc` (pinned recall + FP). Prefer the
+"flag only when *certain*, abstain otherwise" shape used by T58-T76.
+
+Tracks (theme -- ~miss count -- dominant TS codes -- machinery -- FP risk):
+
+  1. Generic interface bounds [QUICK] -- ~2-3 -- TS2344 -- add a
+     `type_param_bounds` field to `TsInterface` (parser already discards the
+     `<T extends Bound>` on interfaces) and register interfaces in T76's
+     `check_constraints` driver. Low FP. Completes T76; also unlocks interface
+     constraint references. Smallest next win.
+
+  2. Private names / `#x` semantics -- ~34 -- TS18013/18014/2803/2540/2300/2339
+     -- model ES private members: `#`-field declarations, nested-class
+     shadowing (TS18014), "cannot assign to private method" (TS2803), accessor
+     read-only (TS2540), duplicate `#x` (TS2300). Mostly nominal / structural
+     rules with low FP (like the T63 private/protected work), but needs parser
+     fields for `#` members. Largest single lever; do in sub-slices per code.
+
+  3. Class-member assignment semantics -- ~19 -- TS2322 -- instance-vs-prototype
+     and static-vs-constructor-function member assignment, abstract-class
+     assignability (classAbstractClass/Constructor*), `super` property access.
+     Medium effort; nominal rules keep FP low.
+
+  4. Template-literal types -- ~8 -- TS2322 -- pattern assignability for
+     `` `${T}` `` template types (templateLiteralTypes5/7,
+     PrefixSuffixAssignability) and string-mapping intrinsics
+     (`Uppercase`/`stringMappingOverPatternLiterals`). Contained; low-medium FP.
+
+  5. Intersection assignability -- ~9 -- TS2322/TS2367 -- intersection *source*
+     structural assignability (T61 did the target side), index-signature and
+     union-constraint intersections. Medium FP -- gate on concrete shapes.
+
+  6. Union / rest arity -- ~7 -- TS2554 -- calling a union of call signatures
+     requires satisfying every member (min/max arity over the union);
+     `genericRestArity` needs generic rest spread. The single-callable arity
+     machinery (T60/T65/T70) is the base; extend to unions. Medium FP.
+
+  7. Definite-assignment / strict property init -- ~4-5 -- TS2564 -- class
+     property has no initializer and no definite-assignment assertion under
+     strict mode. `strict_property_initialization` is already on `TsModule`;
+     needs constructor-assignment flow per field. Medium.
+
+  8. Conditional / keyof / indexed-access / mapped -- ~10 -- TS2322/TS2344 --
+     deeper evaluation of these type operators in assignability. Higher effort;
+     reuse `simplify_type` / `expand_generic`. Medium-high FP.
+
+  9. Flow narrowing in statements -- ~23 -- TS2322/TS2339/TS2367 -- type-guard
+     narrowing through `if` / `while` / `for` / `do` / `&&` bodies and user
+     type predicates (typeGuardsIn*Statement, typePredicateOnVariableDeclaration).
+     Biggest non-private cluster but needs a real control-flow narrowing engine;
+     highest FP risk. Tackle after the cheaper tracks, incrementally.
+
+ 10. `object` (lowercase non-primitive) type -- ~4 -- TS2344/TS2345 -- the
+     parser widens lowercase `object` to `Any`, so the non-primitive rule never
+     fires (nonPrimitiveInGeneric/AsProperty). Make it a distinct type; audit
+     ripple (it accepts any non-primitive). Medium-high FP, wide blast radius.
+
+ 11. Overload / string-literal-overload assignability -- ~4 -- TS2322/TS2769 --
+     overload-set comparison (stringLiteralTypesOverloadAssignability*,
+     contextualTypeWithUnionTypeCallSignatures). Highest effort; do last.
+
+Leftover singletons (TS2304 `directReferenceToNull`, TS17009 `super`-before-
+`this`, TS2790 `delete`, TS2872 always-truthy, uniqueSymbol) are case-by-case;
+pick them up opportunistically when a track passes nearby.
+
+Recommended order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10 -> 11.
+
   RB2 (2026-06-18) -- re-baseline after the intervening checker commits
   (through f545849) lifted measured recall 543 -> 563 @ 0 FP. Toolchain note:
   this session's container had no MoonBit toolchain or `typescript` submodule
