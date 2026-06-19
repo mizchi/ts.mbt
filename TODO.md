@@ -1384,6 +1384,7 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-18 (T72)   592/815 (73 %)        414/414 ( 0 FP)
 2026-06-19 (T74)   595/815 (73 %)        414/414 ( 0 FP)
 2026-06-19 (T78)   597/815 (73 %)        414/414 ( 0 FP)
+2026-06-19 (T79)   599/815 (73 %)        414/414 ( 0 FP)
 
   T78 -- assignment to a private method (TS2803; Roadmap track 2, first slice).
     recall 595 -> 597 @ 0 FP. `#`-private members are brand-mangled
@@ -1396,6 +1397,13 @@ conformance sources (`.errors.txt` baseline = ground truth):
     compound-assign / `++`/`--` targets. Sound: a writable `#`-field arrow lives
     in `properties`, never in this method set. Cleared privateNameMethodAssignment,
     privateNameStaticMethodAssignment.
+
+  T79 -- assignment to a read-only private accessor (TS2540; Roadmap track 2).
+    recall 597 -> 599 @ 0 FP. Generalized T78's walker to a name -> message
+    target map: a `#`-accessor with a `get` but no `set` is read-only, so an
+    assignment to it is TS2540 (alongside the TS2803 private-method targets).
+    An accessor that also declares a setter is excluded. Cleared
+    privateNameAccessors, privateNameStaticAccessors.
 
 ## Recall Roadmap: 595/815 -> higher (2026-06-19)
 

@@ -8660,6 +8660,18 @@ test "expr_check: assignment to a private method (TS2803)" {
     issues("class A { #m() {} f() { let g = this.#m } }"),
     0,
   )
+  // TS2540: a getter-only private accessor is read-only.
+  assert_true(
+    issues("class A { get #x() { return 1 } constructor() { this.#x = 2 } }") >
+    0,
+  )
+  // A private accessor with both get and set is writable -> silent.
+  @test.assert_eq(
+    issues(
+      "class A { get #x() { return 1 } set #x(v: Int) {} constructor() { this.#x = 2 } }",
+    ),
+    0,
+  )
 }
 
 ///|

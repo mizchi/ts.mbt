@@ -12453,34 +12453,50 @@ pub fn check_module_function_bodies(
 }
 
 ///|
-/// TS2803: assigning to a private method (`#method`) is an error -- private
-/// methods are not writable. `#`-private members are brand-mangled
-/// (`__private_brand__N__name`); a private *method* (empty `accessor`, not a
-/// `#`-field which lives in `properties`, nor a get/set accessor) carries that
-/// prefix in `cls.methods`. Any assignment whose target is a property access to
-/// such a name is a definite TS2803 (sound -- a writable `#`-field arrow lives
-/// in `properties`, so it never reaches this set).
+/// Assignment to a non-writable `#`-private member:
+///   - TS2803: a private *method* (`#m() {}`) is not writable.
+///   - TS2540: a getter-only private accessor (`get #x()` with no `set #x`) is
+///     a read-only property.
+/// `#`-private members are brand-mangled (`__private_brand__N__name`). A
+/// private method has an empty `accessor` in `cls.methods`; an accessor carries
+/// `"get"` / `"set"`. We build a name -> message map of the non-writable
+/// targets and flag any assignment whose target is a property access to one.
+/// Sound: a writable `#`-field arrow lives in `properties` (never `methods`),
+/// and an accessor with a setter is excluded.
 fn check_private_method_assignments(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   for cls in module_.classes {
-    let pmethods : Map[String, Unit] = {}
+    let targets : Map[String, String] = {}
+    let has_setter : Map[String, Unit] = {}
+    let getters : Map[String, Unit] = {}
     for m in cls.methods {
-      if m.accessor == "" && m.name.has_prefix("__private_brand__") {
-        pmethods[m.name] = ()
+      if !m.name.has_prefix("__private_brand__") {
+        continue
+      }
+      if m.accessor == "" {
+        targets[m.name] = "cannot assign to private method; private methods are not writable"
+      } else if m.accessor == "set" {
+        has_setter[m.name] = ()
+      } else if m.accessor == "get" {
+        getters[m.name] = ()
       }
     }
-    if pmethods.size() == 0 {
+    for name, _ in getters {
+      if !has_setter.contains(name) {
+        targets[name] = "cannot assign to a read-only private accessor"
+      }
+    }
+    if targets.size() == 0 {
       continue
     }
     let owner = cls.name
     match cls.constructor_body {
-      Some(b) => scan_stmts_priv_method_assign(b.stmts, pmethods, owner, issues)
+      Some(b) => scan_stmts_priv_method_assign(b.stmts, targets, owner, issues)
       None => ()
     }
     for m in cls.methods {
       match m.body {
-        Some(b) =>
-          scan_stmts_priv_method_assign(b.stmts, pmethods, owner, issues)
+        Some(b) => scan_stmts_priv_method_assign(b.stmts, targets, owner, issues)
         None => ()
       }
     }
@@ -12491,45 +12507,43 @@ fn check_private_method_assignments(module_ : @ast.TsModule) -> Array[ExprIssue]
 ///|
 fn record_priv_method_assign(
   name : String,
-  pmethods : Map[String, Unit],
+  targets : Map[String, String],
   owner : String,
   issues : Array[ExprIssue],
 ) -> Unit {
-  if pmethods.contains(name) {
-    issues.push({
-      path: "class \{owner}",
-      message: "cannot assign to private method; private methods are not writable",
-    })
+  match targets.get(name) {
+    Some(msg) => issues.push({ path: "class \{owner}", message: msg })
+    None => ()
   }
 }
 
 ///|
 fn scan_stmts_priv_method_assign(
   stmts : Array[@ast.TsStmt],
-  pmethods : Map[String, Unit],
+  targets : Map[String, String],
   owner : String,
   issues : Array[ExprIssue],
 ) -> Unit {
   for st in stmts {
     match st {
       PropAssign(_, name, value) => {
-        record_priv_method_assign(name, pmethods, owner, issues)
-        scan_expr_priv_method_assign(value, pmethods, owner, issues)
+        record_priv_method_assign(name, targets, owner, issues)
+        scan_expr_priv_method_assign(value, targets, owner, issues)
       }
       IndexAssign(_, _, value)
       | Assign(_, value)
       | CompoundAssign(_, _, value) =>
-        scan_expr_priv_method_assign(value, pmethods, owner, issues)
+        scan_expr_priv_method_assign(value, targets, owner, issues)
       Expr(e) | Throw(e) | Return(Some(e)) =>
-        scan_expr_priv_method_assign(e, pmethods, owner, issues)
+        scan_expr_priv_method_assign(e, targets, owner, issues)
       Var(_, _, e) | Let(_, _, e) | Const(_, _, e) =>
-        scan_expr_priv_method_assign(e, pmethods, owner, issues)
+        scan_expr_priv_method_assign(e, targets, owner, issues)
       If(c, a, b) => {
-        scan_expr_priv_method_assign(c, pmethods, owner, issues)
-        scan_stmts_priv_method_assign(a.stmts, pmethods, owner, issues)
+        scan_expr_priv_method_assign(c, targets, owner, issues)
+        scan_stmts_priv_method_assign(a.stmts, targets, owner, issues)
         match b {
           Some(blk) =>
-            scan_stmts_priv_method_assign(blk.stmts, pmethods, owner, issues)
+            scan_stmts_priv_method_assign(blk.stmts, targets, owner, issues)
           None => ()
         }
       }
@@ -12538,25 +12552,25 @@ fn scan_stmts_priv_method_assign(
       | ForOf(_, _, _, _, b)
       | ForAwaitOf(_, _, _, _, b)
       | ForIn(_, _, _, _, b)
-      | With(_, b) => scan_stmts_priv_method_assign(b.stmts, pmethods, owner, issues)
+      | With(_, b) => scan_stmts_priv_method_assign(b.stmts, targets, owner, issues)
       For(_, _, _, b) =>
-        scan_stmts_priv_method_assign(b.stmts, pmethods, owner, issues)
+        scan_stmts_priv_method_assign(b.stmts, targets, owner, issues)
       Try(a, _, c, f) => {
-        scan_stmts_priv_method_assign(a.stmts, pmethods, owner, issues)
+        scan_stmts_priv_method_assign(a.stmts, targets, owner, issues)
         match c {
           Some(blk) =>
-            scan_stmts_priv_method_assign(blk.stmts, pmethods, owner, issues)
+            scan_stmts_priv_method_assign(blk.stmts, targets, owner, issues)
           None => ()
         }
         match f {
           Some(blk) =>
-            scan_stmts_priv_method_assign(blk.stmts, pmethods, owner, issues)
+            scan_stmts_priv_method_assign(blk.stmts, targets, owner, issues)
           None => ()
         }
       }
       Switch(_, cases) =>
         for c in cases {
-          scan_stmts_priv_method_assign(c.body.stmts, pmethods, owner, issues)
+          scan_stmts_priv_method_assign(c.body.stmts, targets, owner, issues)
         }
       _ => ()
     }
@@ -12566,22 +12580,22 @@ fn scan_stmts_priv_method_assign(
 ///|
 fn scan_expr_priv_method_assign(
   expr : @ast.TsExpr,
-  pmethods : Map[String, Unit],
+  targets : Map[String, String],
   owner : String,
   issues : Array[ExprIssue],
 ) -> Unit {
   match expr {
     PropAssignExpr(_, name, value) => {
-      record_priv_method_assign(name, pmethods, owner, issues)
-      scan_expr_priv_method_assign(value, pmethods, owner, issues)
+      record_priv_method_assign(name, targets, owner, issues)
+      scan_expr_priv_method_assign(value, targets, owner, issues)
     }
     CompoundAssignExpr(target, _, value) => {
       match target {
         PropAccess(_, name) =>
-          record_priv_method_assign(name, pmethods, owner, issues)
+          record_priv_method_assign(name, targets, owner, issues)
         _ => ()
       }
-      scan_expr_priv_method_assign(value, pmethods, owner, issues)
+      scan_expr_priv_method_assign(value, targets, owner, issues)
     }
     UnaryOp(op, operand) => {
       match (op, operand) {
@@ -12589,21 +12603,21 @@ fn scan_expr_priv_method_assign(
         | (PreDec, PropAccess(_, name))
         | (PostInc, PropAccess(_, name))
         | (PostDec, PropAccess(_, name)) =>
-          record_priv_method_assign(name, pmethods, owner, issues)
+          record_priv_method_assign(name, targets, owner, issues)
         _ => ()
       }
-      scan_expr_priv_method_assign(operand, pmethods, owner, issues)
+      scan_expr_priv_method_assign(operand, targets, owner, issues)
     }
     Seq(a, b) => {
-      scan_expr_priv_method_assign(a, pmethods, owner, issues)
-      scan_expr_priv_method_assign(b, pmethods, owner, issues)
+      scan_expr_priv_method_assign(a, targets, owner, issues)
+      scan_expr_priv_method_assign(b, targets, owner, issues)
     }
     AssignExpr(_, v) | Spread(v) | Await(v) =>
-      scan_expr_priv_method_assign(v, pmethods, owner, issues)
+      scan_expr_priv_method_assign(v, targets, owner, issues)
     Cond(a, b, c) => {
-      scan_expr_priv_method_assign(a, pmethods, owner, issues)
-      scan_expr_priv_method_assign(b, pmethods, owner, issues)
-      scan_expr_priv_method_assign(c, pmethods, owner, issues)
+      scan_expr_priv_method_assign(a, targets, owner, issues)
+      scan_expr_priv_method_assign(b, targets, owner, issues)
+      scan_expr_priv_method_assign(c, targets, owner, issues)
     }
     _ => ()
   }
