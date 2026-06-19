@@ -316,6 +316,12 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
       alias_bounds[cls.name] = cls.type_param_bounds
     }
   }
+  for iface in module_.interfaces {
+    if iface.type_param_bounds.length() > 0 {
+      alias_params[iface.name] = iface.type_params
+      alias_bounds[iface.name] = iface.type_param_bounds
+    }
+  }
   let resolve = fn(name : String) -> @ast.TsType? {
     non_generic_alias_bodies.get(name)
   }

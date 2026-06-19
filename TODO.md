@@ -1398,11 +1398,15 @@ follows the same workflow -- implement behind a sound gate, then verify with
 
 Tracks (theme -- ~miss count -- dominant TS codes -- machinery -- FP risk):
 
-  1. Generic interface bounds [QUICK] -- ~2-3 -- TS2344 -- add a
-     `type_param_bounds` field to `TsInterface` (parser already discards the
-     `<T extends Bound>` on interfaces) and register interfaces in T76's
-     `check_constraints` driver. Low FP. Completes T76; also unlocks interface
-     constraint references. Smallest next win.
+  1. Generic interface bounds [QUICK] -- DONE (T77). Added `type_param_bounds`
+     to `TsInterface` and registered interfaces in `check_constraints`.
+     Interface generics with a *concrete* bound are now checked
+     (`P<number>` where `P<T extends string>`). +0 on the conformance corpus
+     (no such files) but completes T76 and strengthens the bridge gate.
+     Note: an *interface/object* bound (`T extends Base`) still does not fire --
+     `extends_decision_with` / `is_assignable_to` don't resolve a `Named`
+     interface target through the `resolve` callback; deeper bound resolution is
+     a separate follow-up.
 
   2. Private names / `#x` semantics -- ~34 -- TS18013/18014/2803/2540/2300/2339
      -- model ES private members: `#`-field declarations, nested-class
@@ -1739,8 +1743,17 @@ Recommended order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10 -> 11.
         confirmation (the real constraint relation) removes that FP.
       - the check now also covers generic *classes* (not just aliases) and
         walks class fields / method signatures and function bodies with the
-        declaration's own type parameters in scope. Generic *interfaces* still
-        need a `type_param_bounds` AST field (not yet stored) -- a follow-up.
+        declaration's own type parameters in scope. Generic *interfaces* were
+        wired in T77.
+
+  T77 -- generic interface type-parameter bounds (Roadmap track 1; whole-corpus
+    TP steady 1608 @ 0 FP). Added `TsInterface.type_param_bounds` (the parser
+    already parsed `interface I<T extends Bound>` but discarded the bound),
+    threaded it through every `TsInterface` construction site, and registered
+    interfaces alongside classes / aliases in `check_constraints`. Interface
+    generics with a concrete bound are now constraint-checked. +0 on the corpus
+    (no conformance file exercises it) but completes the constraint coverage and
+    lets the synthesized-bridge gate validate generic interfaces.
 
   Generic-instantiation landscape (2026-06-19): the remaining generic recall
   misses are not assignment/return-position instantiations (now covered) but

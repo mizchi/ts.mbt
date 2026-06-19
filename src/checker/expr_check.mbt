@@ -144,6 +144,7 @@ fn merge_interfaces(
   {
     name: a.name,
     type_params: a.type_params,
+    type_param_bounds: a.type_param_bounds,
     extends_names,
     extends_args,
     fields,

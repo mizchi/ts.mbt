@@ -1453,6 +1453,7 @@ pub fn Parser::parse_interface(
   {
     name,
     type_params,
+    type_param_bounds,
     extends_names,
     extends_args,
     fields,
@@ -1533,6 +1534,7 @@ fn type_alias_object_fields_to_interface(
         fields: iface_fields,
         readonly_fields: [],
         index_signatures: [],
+        type_param_bounds: [],
         method_type_params: [],
       })
     }

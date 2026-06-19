@@ -2707,6 +2707,7 @@ fn props_with_children_named_interface_spec(
           fields,
         ),
         index_signatures: origin.iface.index_signatures,
+        type_param_bounds: [],
         method_type_params: [],
       })
     }
@@ -2757,6 +2758,7 @@ fn props_with_children_interface_spec(
         fields,
         readonly_fields: [],
         index_signatures: [],
+        type_param_bounds: [],
         method_type_params: [],
       })
     }
@@ -2872,6 +2874,7 @@ fn component_props_with_ref_interface_spec(
               fields,
             ),
             index_signatures: origin.iface.index_signatures,
+            type_param_bounds: [],
             method_type_params: [],
           })
         }
@@ -3037,6 +3040,7 @@ fn utility_mapped_interface_spec(
           readonly_fields_for_fields(origin.iface.readonly_fields, fields)
         },
         index_signatures: origin.iface.index_signatures,
+        type_param_bounds: [],
         method_type_params: [],
       })
     }
@@ -3100,6 +3104,7 @@ fn utility_projection_interface_spec(
           fields,
         ),
         index_signatures: [],
+        type_param_bounds: [],
         method_type_params: [],
       })
     }
@@ -3904,6 +3909,7 @@ fn type_alias_record_to_interface_fields(
     fields,
     readonly_fields: [],
     index_signatures: [],
+    type_param_bounds: [],
     method_type_params: [],
   })
 }
@@ -3994,6 +4000,7 @@ fn project_interface_fields(
     fields,
     readonly_fields: readonly_fields_for_fields(iface.readonly_fields, fields),
     index_signatures: [],
+    type_param_bounds: [],
     method_type_params: [],
   })
 }
@@ -4024,6 +4031,7 @@ fn map_interface_fields(
       readonly_fields_for_fields(iface.readonly_fields, fields)
     },
     index_signatures: iface.index_signatures,
+    type_param_bounds: [],
     method_type_params: [],
   })
 }
@@ -4088,6 +4096,7 @@ fn type_alias_object_to_interface(
         fields: iface_fields,
         readonly_fields: [],
         index_signatures: [],
+        type_param_bounds: [],
         method_type_params: [],
       })
     }
@@ -5410,6 +5419,7 @@ fn tuple_result_interface_spec(
           fields,
           readonly_fields: [],
           index_signatures: [],
+          type_param_bounds: [],
           method_type_params: [],
         },
       })
@@ -5457,6 +5467,7 @@ fn inline_object_result_interface_spec(
           fields: iface_fields,
           readonly_fields: [],
           index_signatures: [],
+          type_param_bounds: [],
           method_type_params: [],
         },
       })
@@ -5813,6 +5824,7 @@ fn normalize_specialized_node_interfaces(
       ],
       readonly_fields: [],
       index_signatures: [],
+      type_param_bounds: [],
       method_type_params: [],
     })
   }
@@ -5826,6 +5838,7 @@ fn normalize_specialized_node_interfaces(
         fields: [("plaintextLength", @ast.TsType::Number)],
         readonly_fields: [],
         index_signatures: [],
+        type_param_bounds: [],
         method_type_params: [],
       })
     }
@@ -5838,6 +5851,7 @@ fn normalize_specialized_node_interfaces(
         fields: [("length", @ast.TsType::Number)],
         readonly_fields: [],
         index_signatures: [],
+        type_param_bounds: [],
         method_type_params: [],
       })
     }
@@ -5853,6 +5867,7 @@ fn normalize_specialized_node_interfaces(
         ],
         readonly_fields: [],
         index_signatures: [],
+        type_param_bounds: [],
         method_type_params: [],
       })
     }
@@ -5870,6 +5885,7 @@ fn normalize_specialized_node_interfaces(
       ],
       readonly_fields: [],
       index_signatures: [],
+      type_param_bounds: [],
       method_type_params: [],
     })
   }
@@ -5990,6 +6006,7 @@ fn clone_resolved_interface_origin(
     fields,
     readonly_fields: readonly_fields_for_fields(readonly_fields, fields),
     index_signatures: origin.iface.index_signatures,
+    type_param_bounds: [],
     method_type_params: [],
   }
 }
@@ -6335,6 +6352,7 @@ fn clone_exported_interface(
     fields,
     readonly_fields: readonly_fields_for_fields(readonly_fields, fields),
     index_signatures: exported.iface.index_signatures,
+    type_param_bounds: [],
     method_type_params: [],
   }
 }

@@ -8615,6 +8615,11 @@ test "expr_check: type-argument constraint violation (TS2344)" {
   assert_true(
     issues("class C<T extends string> {}\ninterface I { c: C<number> }") > 0,
   )
+  // Interface generic with a concrete constraint, violated at a field type.
+  assert_true(
+    issues("interface P<T extends string> { x: T }\ninterface I { p: P<number> }") >
+    0,
+  )
   // Satisfying argument -> silent.
   @test.assert_eq(issues(a + "interface I { x: A<\"hi\"> }"), 0)
   // Forwarded type parameter (still in scope) -> abstain.

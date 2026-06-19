@@ -522,6 +522,11 @@ pub(all) struct TsFunc {
 pub(all) struct TsInterface {
   name : String
   type_params : Array[String]
+  // `(P, Bound)` pairs for constrained interface type parameters
+  // (`interface I<T extends X> {}`). Sparse — only constrained parameters
+  // appear, so an empty array means "no constraints". Used by the checker to
+  // validate type-argument references (`I<number>` where `T extends string`).
+  type_param_bounds : Array[(String, TsType)]
   extends_names : Array[String]
   // Type arguments supplied alongside each `extends_names[i]`, parsed
   // from `extends Foo<A, B>`. Length matches `extends_names`; entries
