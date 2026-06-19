@@ -1631,6 +1631,35 @@ conformance sources (`.errors.txt` baseline = ground truth):
     corpus). Interface-level constraints aren't stored on the AST and are
     skipped, but the classes / functions in both files suffice at file level.
 
+  T75 -- generic interface instantiation in assignability (bridge gate;
+    conformance steady at 595/815 @ 0 FP). `check_expr_against` bailed on every
+    `Applied(...)` except the same-name covariant best-effort (T59).
+    `instantiate_generic_interface` now substitutes a generic interface's type
+    arguments into its fields to produce a concrete object shape (only when the
+    interface has matching arity and no heritage clause / index signatures /
+    generic methods -- shapes the structural relation can faithfully
+    reproduce), and `generic_instantiation_mismatch` compares the instantiated
+    shapes, flagging only a *bidirectionally* incompatible pair (the T59
+    soundness gate, so covariant / contravariant directions stay silent). This
+    catches `Box<string>` vs `{ value: number }` and `Box<A>` vs `Box<B>` for
+    structurally-incompatible `A` / `B`. Like T59 it +0 on the measured corpus
+    -- every conformance generic-mismatch lives at a *call-argument inference*
+    site, not an assignment / return one -- so it strengthens the synthesized-
+    bridge `@checker.check_module` gate without moving the conformance metric.
+
+  Generic-instantiation landscape (2026-06-19): the remaining generic recall
+  misses are not assignment/return-position instantiations (now covered) but
+  (a) call-argument inference + constraint checking at the call site, and
+  (b) type-reference constraint violations (TS2344). For (b) a check already
+  exists in `check_module` (`check_constraints`) but is restricted to generic
+  *aliases* and is excluded from the permissive pass because it false-flags
+  `infer` / forwarded type-parameter bounds; extending it to interfaces /
+  classes and re-enabling it soundly is the next slice. Both are gated on the
+  `object`-as-`Any` parser approximation: the dominant TS2344 conformance files
+  (`nonPrimitiveInGeneric`, the `nonPrimitive` dir) constrain on lowercase
+  `object`, which the parser currently widens to `Any`, so the constraint has
+  nothing to fire on.
+
   Boundary (2026-06-18): the named higher-order MISS clusters remain
   single-recall-point, bespoke-machinery cases (overloaded construct-signature
   arity with generic constructors; overloaded / function-typed argument

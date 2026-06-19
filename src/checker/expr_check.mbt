@@ -6442,8 +6442,12 @@ fn check_expr_against(
     (Applied(_, _), _) | (_, Applied(_, _)) => {
       // Covariant best-effort: same generic, same arity, a type-argument pair
       // that is bidirectionally incompatible (`Box<string>` vs `Box<number>`)
-      // is a real mismatch. Everything else keeps the conservative bail.
-      if applied_generic_mismatch(inferred_u, expected_u, ctx) {
+      // is a real mismatch. Generic interfaces are additionally instantiated
+      // to their concrete object shape so a structural mismatch against an
+      // object / different generic is caught too (`Box<string>` vs
+      // `{ value: number }`). Everything else keeps the conservative bail.
+      if applied_generic_mismatch(inferred_u, expected_u, ctx) ||
+        generic_instantiation_mismatch(inferred_u, expected_u, ctx.resolver) {
         record(
           ctx,
           sub_path,
@@ -13710,6 +13714,86 @@ fn applied_generic_mismatch(
     }
     _ => false
   }
+}
+
+///|
+/// Instantiate a generic interface reference `Applied(name, args)` to a
+/// concrete object shape by substituting its type parameters into its fields.
+/// Returns `None` unless `name` is a generic interface with matching arity and
+/// a shape the structural relation can faithfully reproduce: no heritage
+/// clause, no index signatures, and no generic methods. A `None` keeps the
+/// caller on its conservative bail, so this never introduces a false positive.
+fn instantiate_generic_interface(
+  ty : @ast.TsType,
+  resolver : Resolver,
+) -> @ast.TsType? {
+  match ty {
+    Applied(name, args) => {
+      guard resolver.interfaces.get(name) is Some(iface) else { return None }
+      if iface.type_params.length() != args.length() ||
+        iface.type_params.length() == 0 {
+        return None
+      }
+      if iface.extends_names.length() > 0 ||
+        iface.index_signatures.length() > 0 ||
+        iface.method_type_params.length() > 0 {
+        return None
+      }
+      let bindings : Map[String, @ast.TsType] = {}
+      for i in 0..<iface.type_params.length() {
+        bindings[iface.type_params[i]] = args[i]
+      }
+      let fields : Array[(@ast.TsType, @ast.TsType)] = []
+      for f in iface.fields {
+        fields.push((Literal(f.0), substitute_params(f.1, bindings)))
+      }
+      Some(Object(fields))
+    }
+    _ => None
+  }
+}
+
+///|
+/// Generic-instantiation mismatch: when at least one side is a generic
+/// interface reference (`Box<string>`), instantiate it to its concrete object
+/// shape and compare structurally. Flags only a *bidirectionally* incompatible
+/// pair (neither direction assignable), which keeps covariant / contravariant
+/// subtype directions silent -- the same soundness gate `applied_generic_mismatch`
+/// uses. Both sides must reduce to a comparable object / struct shape;
+/// otherwise abstain.
+fn generic_instantiation_mismatch(
+  source : @ast.TsType,
+  target : @ast.TsType,
+  resolver : Resolver,
+) -> Bool {
+  let s_inst = instantiate_generic_interface(source, resolver)
+  let t_inst = instantiate_generic_interface(target, resolver)
+  // Require that we actually instantiated at least one side (else this just
+  // duplicates the plain structural path).
+  if s_inst is None && t_inst is None {
+    return false
+  }
+  let s = match s_inst {
+    Some(o) => o
+    None => source
+  }
+  let t = match t_inst {
+    Some(o) => o
+    None => target
+  }
+  // Both sides must now be object-shaped for a faithful structural compare.
+  let s_shape = match s {
+    Object(_) | Struct(_, _) => true
+    _ => false
+  }
+  let t_shape = match t {
+    Object(_) | Struct(_, _) => true
+    _ => false
+  }
+  if not(s_shape) || not(t_shape) {
+    return false
+  }
+  not(is_assignable_to(s, t)) && not(is_assignable_to(t, s))
 }
 
 ///|

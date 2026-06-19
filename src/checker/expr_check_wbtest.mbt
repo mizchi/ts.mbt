@@ -8565,6 +8565,40 @@ test "expr_check: interface extends with too many required params" {
 }
 
 ///|
+// Generic interface instantiation: a generic interface reference is expanded
+// to its concrete object shape so a structural mismatch against an object or a
+// different generic instantiation is caught. Only bidirectionally-incompatible
+// pairs are flagged, so covariant / assignable cases stay silent.
+test "expr_check: generic interface instantiation mismatch" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let box = "interface Box<T> { value: T }\n"
+  // Instantiated `Box<string>` vs a `{ value: number }` object -> mismatch.
+  assert_true(
+    issues(
+      box + "declare let a: Box<string>;\ndeclare let b: { value: number };\na = b;",
+    ) >
+    0,
+  )
+  // Same-arg instantiation -> assignable, silent.
+  @test.assert_eq(
+    issues(
+      box + "declare let a: Box<string>;\ndeclare let b: { value: string };\na = b;",
+    ),
+    0,
+  )
+  // Covariant arg widening (`Box<string>` into `Box<string | number>`) is
+  // assignable -> silent.
+  @test.assert_eq(
+    issues(
+      box + "declare let a: Box<string | number>;\ndeclare let b: Box<string>;\na = b;",
+    ),
+    0,
+  )
+}
+
+///|
 // TS2313: a type parameter with a circular constraint. Direct (`T extends T`)
 // and indirect cycles (`U extends T, T extends U`) are flagged; a valid bound
 // or an F-bounded `Applied` constraint (`S extends Foo<S>`) stays silent.
