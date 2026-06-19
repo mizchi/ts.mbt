@@ -1383,6 +1383,19 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-18 (T71)   589/815 (72 %)        414/414 ( 0 FP)
 2026-06-18 (T72)   592/815 (73 %)        414/414 ( 0 FP)
 2026-06-19 (T74)   595/815 (73 %)        414/414 ( 0 FP)
+2026-06-19 (T78)   597/815 (73 %)        414/414 ( 0 FP)
+
+  T78 -- assignment to a private method (TS2803; Roadmap track 2, first slice).
+    recall 595 -> 597 @ 0 FP. `#`-private members are brand-mangled
+    (`__private_brand__N__name`); a private *method* (empty `accessor`, present
+    in `cls.methods`, prefix-tagged) is not writable, so any assignment whose
+    target is a property access to such a name is a definite TS2803.
+    `check_private_method_assignments` walks each class's constructor body and
+    method bodies (`scan_stmts_priv_method_assign` /
+    `scan_expr_priv_method_assign`) for `PropAssign` / `PropAssignExpr` /
+    compound-assign / `++`/`--` targets. Sound: a writable `#`-field arrow lives
+    in `properties`, never in this method set. Cleared privateNameMethodAssignment,
+    privateNameStaticMethodAssignment.
 
 ## Recall Roadmap: 595/815 -> higher (2026-06-19)
 
@@ -1409,6 +1422,8 @@ Tracks (theme -- ~miss count -- dominant TS codes -- machinery -- FP risk):
      a separate follow-up.
 
   2. Private names / `#x` semantics -- ~34 -- TS18013/18014/2803/2540/2300/2339
+     -- IN PROGRESS. T78 did the TS2803 slice (assignment to a `#`-private
+     method). Remaining sub-slices below.
      -- model ES private members: `#`-field declarations, nested-class
      shadowing (TS18014), "cannot assign to private method" (TS2803), accessor
      read-only (TS2540), duplicate `#x` (TS2300). Mostly nominal / structural

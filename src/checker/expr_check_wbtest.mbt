@@ -8634,6 +8634,35 @@ test "expr_check: type-argument constraint violation (TS2344)" {
 }
 
 ///|
+// TS2803: a private method (`#m`) is not writable -- assigning to it (via any
+// receiver, compound, or increment) is an error. A writable `#`-field stays
+// silent (it lives in `properties`, not `methods`).
+test "expr_check: assignment to a private method (TS2803)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Assign to a private method through `this` / another receiver.
+  assert_true(
+    issues("class A { #m() {} constructor() { this.#m = () => {} } }") > 0,
+  )
+  assert_true(
+    issues("class A { #m() {} f(a: A) { a.#m = () => {} } }") > 0,
+  )
+  // Compound / increment forms.
+  assert_true(issues("class A { #m() {} f(a: any) { a.#m++ } }") > 0)
+  // A writable `#`-field is fine.
+  @test.assert_eq(
+    issues("class A { #f = 1; constructor() { this.#f = 2 } }"),
+    0,
+  )
+  // Reading a private method is fine.
+  @test.assert_eq(
+    issues("class A { #m() {} f() { let g = this.#m } }"),
+    0,
+  )
+}
+
+///|
 // TS2313: a type parameter with a circular constraint. Direct (`T extends T`)
 // and indirect cycles (`U extends T, T extends U`) are flagged; a valid bound
 // or an F-bounded `Applied` constraint (`S extends Foo<S>`) stays silent.

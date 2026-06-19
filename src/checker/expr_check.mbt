@@ -12453,6 +12453,163 @@ pub fn check_module_function_bodies(
 }
 
 ///|
+/// TS2803: assigning to a private method (`#method`) is an error -- private
+/// methods are not writable. `#`-private members are brand-mangled
+/// (`__private_brand__N__name`); a private *method* (empty `accessor`, not a
+/// `#`-field which lives in `properties`, nor a get/set accessor) carries that
+/// prefix in `cls.methods`. Any assignment whose target is a property access to
+/// such a name is a definite TS2803 (sound -- a writable `#`-field arrow lives
+/// in `properties`, so it never reaches this set).
+fn check_private_method_assignments(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for cls in module_.classes {
+    let pmethods : Map[String, Unit] = {}
+    for m in cls.methods {
+      if m.accessor == "" && m.name.has_prefix("__private_brand__") {
+        pmethods[m.name] = ()
+      }
+    }
+    if pmethods.size() == 0 {
+      continue
+    }
+    let owner = cls.name
+    match cls.constructor_body {
+      Some(b) => scan_stmts_priv_method_assign(b.stmts, pmethods, owner, issues)
+      None => ()
+    }
+    for m in cls.methods {
+      match m.body {
+        Some(b) =>
+          scan_stmts_priv_method_assign(b.stmts, pmethods, owner, issues)
+        None => ()
+      }
+    }
+  }
+  issues
+}
+
+///|
+fn record_priv_method_assign(
+  name : String,
+  pmethods : Map[String, Unit],
+  owner : String,
+  issues : Array[ExprIssue],
+) -> Unit {
+  if pmethods.contains(name) {
+    issues.push({
+      path: "class \{owner}",
+      message: "cannot assign to private method; private methods are not writable",
+    })
+  }
+}
+
+///|
+fn scan_stmts_priv_method_assign(
+  stmts : Array[@ast.TsStmt],
+  pmethods : Map[String, Unit],
+  owner : String,
+  issues : Array[ExprIssue],
+) -> Unit {
+  for st in stmts {
+    match st {
+      PropAssign(_, name, value) => {
+        record_priv_method_assign(name, pmethods, owner, issues)
+        scan_expr_priv_method_assign(value, pmethods, owner, issues)
+      }
+      IndexAssign(_, _, value)
+      | Assign(_, value)
+      | CompoundAssign(_, _, value) =>
+        scan_expr_priv_method_assign(value, pmethods, owner, issues)
+      Expr(e) | Throw(e) | Return(Some(e)) =>
+        scan_expr_priv_method_assign(e, pmethods, owner, issues)
+      Var(_, _, e) | Let(_, _, e) | Const(_, _, e) =>
+        scan_expr_priv_method_assign(e, pmethods, owner, issues)
+      If(c, a, b) => {
+        scan_expr_priv_method_assign(c, pmethods, owner, issues)
+        scan_stmts_priv_method_assign(a.stmts, pmethods, owner, issues)
+        match b {
+          Some(blk) =>
+            scan_stmts_priv_method_assign(blk.stmts, pmethods, owner, issues)
+          None => ()
+        }
+      }
+      While(_, b)
+      | DoWhile(_, b)
+      | ForOf(_, _, _, _, b)
+      | ForAwaitOf(_, _, _, _, b)
+      | ForIn(_, _, _, _, b)
+      | With(_, b) => scan_stmts_priv_method_assign(b.stmts, pmethods, owner, issues)
+      For(_, _, _, b) =>
+        scan_stmts_priv_method_assign(b.stmts, pmethods, owner, issues)
+      Try(a, _, c, f) => {
+        scan_stmts_priv_method_assign(a.stmts, pmethods, owner, issues)
+        match c {
+          Some(blk) =>
+            scan_stmts_priv_method_assign(blk.stmts, pmethods, owner, issues)
+          None => ()
+        }
+        match f {
+          Some(blk) =>
+            scan_stmts_priv_method_assign(blk.stmts, pmethods, owner, issues)
+          None => ()
+        }
+      }
+      Switch(_, cases) =>
+        for c in cases {
+          scan_stmts_priv_method_assign(c.body.stmts, pmethods, owner, issues)
+        }
+      _ => ()
+    }
+  }
+}
+
+///|
+fn scan_expr_priv_method_assign(
+  expr : @ast.TsExpr,
+  pmethods : Map[String, Unit],
+  owner : String,
+  issues : Array[ExprIssue],
+) -> Unit {
+  match expr {
+    PropAssignExpr(_, name, value) => {
+      record_priv_method_assign(name, pmethods, owner, issues)
+      scan_expr_priv_method_assign(value, pmethods, owner, issues)
+    }
+    CompoundAssignExpr(target, _, value) => {
+      match target {
+        PropAccess(_, name) =>
+          record_priv_method_assign(name, pmethods, owner, issues)
+        _ => ()
+      }
+      scan_expr_priv_method_assign(value, pmethods, owner, issues)
+    }
+    UnaryOp(op, operand) => {
+      match (op, operand) {
+        (PreInc, PropAccess(_, name))
+        | (PreDec, PropAccess(_, name))
+        | (PostInc, PropAccess(_, name))
+        | (PostDec, PropAccess(_, name)) =>
+          record_priv_method_assign(name, pmethods, owner, issues)
+        _ => ()
+      }
+      scan_expr_priv_method_assign(operand, pmethods, owner, issues)
+    }
+    Seq(a, b) => {
+      scan_expr_priv_method_assign(a, pmethods, owner, issues)
+      scan_expr_priv_method_assign(b, pmethods, owner, issues)
+    }
+    AssignExpr(_, v) | Spread(v) | Await(v) =>
+      scan_expr_priv_method_assign(v, pmethods, owner, issues)
+    Cond(a, b, c) => {
+      scan_expr_priv_method_assign(a, pmethods, owner, issues)
+      scan_expr_priv_method_assign(b, pmethods, owner, issues)
+      scan_expr_priv_method_assign(c, pmethods, owner, issues)
+    }
+    _ => ()
+  }
+}
+
+///|
 /// TS2313 ("Type parameter 'T' has a circular constraint"): return the names of
 /// type parameters whose constraint cycles back to themselves. We only follow a
 /// constraint that is a *bare* reference to another type parameter in the same
@@ -13565,6 +13722,11 @@ fn check_module_function_bodies_layered(
       strict_root.use_define_for_class_fields,
       outer_object_names,
     ) {
+    all.push(issue)
+  }
+  // TS2803: assignment to a private method (`#method`). Run per-module so
+  // namespace-nested classes are covered by the layered recursion below.
+  for issue in check_private_method_assignments(module_) {
     all.push(issue)
   }
   // TS5107: deprecated compiler-option directives (`// @target: es5`, …).
