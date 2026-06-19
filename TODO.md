@@ -1382,6 +1382,7 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-18 (T70)   584/815 (72 %)        414/414 ( 0 FP)
 2026-06-18 (T71)   589/815 (72 %)        414/414 ( 0 FP)
 2026-06-18 (T72)   592/815 (73 %)        414/414 ( 0 FP)
+2026-06-19 (T74)   595/815 (73 %)        414/414 ( 0 FP)
 
   RB2 (2026-06-18) -- re-baseline after the intervening checker commits
   (through f545849) lifted measured recall 543 -> 563 @ 0 FP. Toolchain note:
@@ -1616,6 +1617,19 @@ conformance sources (`.errors.txt` baseline = ground truth):
         `callSignatureAssignabilityInInheritance` (the -1 TP); the precise TS
         rule that separates it from the accepted case needs overload-set
         merging the checker does not model, so the FP-0 invariant wins.
+
+  T74 -- circular type-parameter constraint (TS2313). recall 592 -> 595
+    (whole-corpus TP 1604 -> 1607, FP steady 0). `circular_type_param_names`
+    follows a type parameter's constraint chain while each constraint is a
+    *bare* reference to another type parameter in the same list, and reports a
+    cycle. Any other constraint shape (an `Applied` F-bound like
+    `S extends Foo<S>`, a union, an object, a keyword type) terminates the walk,
+    so genuine recursive constraints never false-flag. `check_circular_type_params`
+    walks top-level functions, classes (and their methods), type aliases, and
+    nested namespaces. Cleared typeParameterDirectlyConstrainedToItself,
+    typeParameterIndirectlyConstrainedToItself (plus one more in the wider
+    corpus). Interface-level constraints aren't stored on the AST and are
+    skipped, but the classes / functions in both files suffice at file level.
 
   Boundary (2026-06-18): the named higher-order MISS clusters remain
   single-recall-point, bespoke-machinery cases (overloaded construct-signature

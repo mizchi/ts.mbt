@@ -12448,6 +12448,96 @@ pub fn check_module_function_bodies(
 }
 
 ///|
+/// TS2313 ("Type parameter 'T' has a circular constraint"): return the names of
+/// type parameters whose constraint cycles back to themselves. We only follow a
+/// constraint that is a *bare* reference to another type parameter in the same
+/// list (`T extends U`); any other constraint shape — an `Applied` F-bound
+/// (`S extends Foo<S>`), a union, an object, a keyword type — terminates the
+/// walk. So genuine recursive constraints never false-flag; only a pure
+/// type-parameter reference cycle is reported.
+fn circular_type_param_names(
+  type_params : Array[String],
+  bounds : Array[(String, @ast.TsType)],
+) -> Array[String] {
+  let tp_set : Map[String, Unit] = {}
+  for p in type_params {
+    tp_set[p] = ()
+  }
+  let bound_of : Map[String, @ast.TsType] = {}
+  for b in bounds {
+    bound_of[b.0] = b.1
+  }
+  let circular : Array[String] = []
+  for p in type_params {
+    let visited : Map[String, Unit] = {}
+    visited[p] = ()
+    let mut cur = p
+    let mut is_circular = false
+    while true {
+      match bound_of.get(cur) {
+        Some(Named(q)) =>
+          if tp_set.contains(q) {
+            if visited.contains(q) {
+              is_circular = true
+              break
+            }
+            visited[q] = ()
+            cur = q
+          } else {
+            break
+          }
+        _ => break
+      }
+    }
+    if is_circular {
+      circular.push(p)
+    }
+  }
+  circular
+}
+
+///|
+/// Walk a module's declarations (and nested namespaces) and report every
+/// circular type-parameter constraint (TS2313). Only declarations that carry
+/// constraint metadata participate — top-level functions, classes (and their
+/// methods), and type aliases — which is enough to flag the offending file;
+/// interface-level constraints are not stored on the AST and are skipped.
+fn check_circular_type_params(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  fn emit(
+    owner : String,
+    type_params : Array[String],
+    bounds : Array[(String, @ast.TsType)],
+  ) -> Unit {
+    for name in circular_type_param_names(type_params, bounds) {
+      issues.push({
+        path: owner,
+        message: "type parameter `\{name}` has a circular constraint",
+      })
+    }
+  }
+
+  for f in module_.funcs {
+    emit("function \{f.name}", f.type_params, f.type_param_bounds)
+  }
+  for c in module_.classes {
+    emit("class \{c.name}", c.type_params, c.type_param_bounds)
+    for m in c.methods {
+      emit("method \{c.name}.\{m.name}", m.type_params, m.type_param_bounds)
+    }
+  }
+  for a in module_.type_aliases {
+    emit("type \{a.name}", a.type_params, a.type_param_bounds)
+  }
+  for ns in module_.namespaces {
+    for issue in check_circular_type_params(ns.module_) {
+      issues.push(issue)
+    }
+  }
+  issues
+}
+
+///|
 /// Like `check_module_function_bodies` but with the T9 nuclear FP
 /// suppressions enabled (mismatch / property / method / arity /
 /// callable / index / never / equality / assertion families dropped).
@@ -13491,6 +13581,12 @@ fn check_module_function_bodies_layered(
         path: "parameter `\{pname}`",
         message: "a parameter property is only allowed in a constructor implementation",
       })
+    }
+    // TS2313: a type parameter with a circular constraint (`T extends T`, or an
+    // indirect cycle). Walks declarations (and nested namespaces) once from the
+    // top.
+    for issue in check_circular_type_params(module_) {
+      all.push(issue)
     }
     // Module-level structural validation that doesn't depend on function
     // bodies. Only the kinds that are sound *and* not already covered by

@@ -8565,6 +8565,27 @@ test "expr_check: interface extends with too many required params" {
 }
 
 ///|
+// TS2313: a type parameter with a circular constraint. Direct (`T extends T`)
+// and indirect cycles (`U extends T, T extends U`) are flagged; a valid bound
+// or an F-bounded `Applied` constraint (`S extends Foo<S>`) stays silent.
+test "expr_check: circular type-parameter constraint (TS2313)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  assert_true(issues("function f<T extends T>() {}") > 0)
+  assert_true(issues("class C<T, U extends U> {}") > 0)
+  assert_true(issues("function g<U extends T, T extends U>() {}") > 0)
+  // A bound that is not a type-parameter reference -> not circular.
+  @test.assert_eq(issues("function h<T extends string>() {}"), 0)
+  @test.assert_eq(issues("function k<T extends U, U extends string>() {}"), 0)
+  // F-bounded constraint (`Applied`) is valid, not a cycle.
+  @test.assert_eq(
+    issues("type Foo<T> = T;\nfunction m<S extends Foo<S>>() {}"),
+    0,
+  )
+}
+
+///|
 // TS void-parameter rule: a parameter typed `void` is omittable, so
 // `(a: void) => R` is assignable to `() => R`. The arity check must not flag
 // the value as "requires 1 argument" against a parameter-less target.
