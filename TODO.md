@@ -1447,24 +1447,27 @@ Tracks (theme -- ~miss count -- dominant TS codes -- machinery -- FP risk):
      a separate follow-up.
 
   2. Private names / `#x` semantics -- ~34 -- TS18013/18014/2803/2540/2300/2339
-     -- IN PROGRESS (+4 so far). DONE: TS2803 assign-to-private-method (T78),
-     TS2540 assign-to-readonly-private-accessor (T79). Remaining sub-slices,
-     each needing more than the assignment walker:
+     -- IN PROGRESS (+6 so far). DONE: TS2803 assign-to-private-method (T78),
+     TS2540 assign-to-readonly-private-accessor (T79), TS18013/TS2339
+     reference-to-undeclared-`#`-name-in-enclosing-class (T80, brand-matched so
+     nested classes don't false-flag). Remaining sub-slices, each needing more
+     than the current walkers:
        - TS2300 duplicate `#x` (privateNameDuplicateField): the duplicate-member
          detector exists but (a) only counts field+other / 2-accessors, not two
          plain fields, and (b) the corpus classes are nested inside a function
          body, so they're not in `module_.classes`. Needs nested-class traversal
          + a two-field dup rule.
-       - TS18013/18014 (privateName*NestedClass*, *StaticFieldDerivedClasses):
-         accessing `#x` outside the declaring class / shadowed by a nested
-         class's same-spelled `#x`. Needs receiver-type resolution and
-         nested-class private scoping; brand-mangling gives each class's `#x` a
-         distinct name, which complicates the "shadowed" relationship.
-       - TS2339 (privateName*ConstructorChain, *StaticAccessorssDerivedClasses):
-         `#x` accessed where it isn't declared on the receiver's class. Needs
-         per-class `#`-member sets + receiver-type analysis.
-     Net: the cheap "assignment to a non-writable `#`-member" slices are
-     harvested (+4); the rest is receiver-type + nested-scope machinery.
+       - TS18014 nested-class shadowing (privateName*NestedClass*): `#x` accessed
+         where it is shadowed by a nested class's same-spelled `#x`. T80 skips
+         different-brand (nested) accesses by design, so these stay a miss; they
+         need a brand-aware "outer `#x` shadowed by inner `#x`" model.
+       - TS2339 receiver-type cases (privateName*ConstructorChain,
+         *StaticAccessorssDerivedClasses): `#x` declared by the enclosing class
+         but accessed via a receiver whose type lacks it (`Child.#bar` where
+         `#bar` is `Parent`'s static). Needs receiver-type analysis, not just
+         the lexical brand check.
+     Net: assignment-to-non-writable (+4) and undeclared-`#`-reference (+2) are
+     harvested; the rest is nested-scope / receiver-type machinery.
      -- model ES private members: `#`-field declarations, nested-class
      shadowing (TS18014), "cannot assign to private method" (TS2803), accessor
      read-only (TS2540), duplicate `#x` (TS2300). Mostly nominal / structural
