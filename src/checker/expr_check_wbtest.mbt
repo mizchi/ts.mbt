@@ -8716,6 +8716,8 @@ test "expr_check: abstract member modifier rules (TS1244/TS1243)" {
   assert_true(
     issues("abstract class A { private abstract x: number }") > 0,
   )
+  // Abstract constructor (TS1242).
+  assert_true(issues("abstract class A { abstract constructor() {} }") > 0)
   // Valid abstract member in an abstract class -> silent.
   @test.assert_eq(issues("abstract class A { abstract foo(): void }"), 0)
 }

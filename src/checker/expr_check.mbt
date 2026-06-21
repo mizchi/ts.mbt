@@ -12917,6 +12917,10 @@ fn check_abstract_modifier_rules(module_ : @ast.TsModule) -> Array[ExprIssue] {
         message: "abstract methods can only appear within an abstract class",
       })
     }
+    let abstract_set : Map[String, Unit] = {}
+    for n in cls.abstract_members {
+      abstract_set[n] = ()
+    }
     let private_set : Map[String, Unit] = {}
     for n in cls.private_members {
       private_set[n] = ()
@@ -12928,6 +12932,14 @@ fn check_abstract_modifier_rules(module_ : @ast.TsModule) -> Array[ExprIssue] {
           message: "`private` modifier cannot be used with `abstract` modifier",
         })
       }
+    }
+    // TS1242: `abstract` can only modify a class, method, or property -- not a
+    // constructor.
+    if abstract_set.contains("constructor") {
+      issues.push({
+        path: "class \{cls.name}",
+        message: "`abstract` modifier can only appear on a class, method, or property declaration",
+      })
     }
   }
   issues

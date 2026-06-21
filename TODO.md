@@ -1387,6 +1387,14 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-19 (T79)   599/815 (73 %)        414/414 ( 0 FP)
 2026-06-19 (T80)   601/815 (74 %)        414/414 ( 0 FP)
 2026-06-19 (T81)   604/815 (74 %)        414/414 ( 0 FP)
+2026-06-19 (T82)   605/815 (74 %)        414/414 ( 0 FP)
+
+  T82 -- abstract constructor (TS1242; Roadmap track 3). recall 604 -> 605 @
+    0 FP. `abstract` on a constructor is illegal (it may only modify a class /
+    method / property); detected when `abstract_members` contains `constructor`.
+    Cleared classAbstractConstructor. (TS1245 "abstract method with a body" was
+    attempted but the parser drops abstract-method bodies -- `body: None` -- so
+    there is no signal; it needs a parser "had-a-body" flag.)
 
   T81 -- `abstract` member modifier rules (TS1244 / TS1243; Roadmap track 3,
     first slice). recall 601 -> 604 @ 0 FP. `check_abstract_modifier_rules`
