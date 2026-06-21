@@ -1385,6 +1385,23 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-19 (T74)   595/815 (73 %)        414/414 ( 0 FP)
 2026-06-19 (T78)   597/815 (73 %)        414/414 ( 0 FP)
 2026-06-19 (T79)   599/815 (73 %)        414/414 ( 0 FP)
+2026-06-19 (T80)   601/815 (74 %)        414/414 ( 0 FP)
+
+  T80 -- reference to a `#`-private not declared by the enclosing class
+    (TS18013 / TS2339; Roadmap track 2). recall 599 -> 601 @ 0 FP. Inside a
+    top-level class C, every `#x` reference is brand-mangled to C's own brand
+    and every declared `#`-member shares it, so a same-brand access not in C's
+    declared set references a private C does not have (`Derived.#x` inside
+    `Base`). `check_private_member_access` walks C's bodies / field initializers
+    for `#`-accesses (`PropAccess` / `MethodCall` / `PropAssign*`).
+    Key soundness lever: each class gets a *unique* brand id, so an access
+    mangled with a *different* brand was written inside a nested / anonymous
+    class (which may legally reach an outer private) -- `record_priv_access`
+    only fires when the access brand equals C's own brand, so nested-class
+    accesses are never judged (removed the two `privateNameComputedPropertyName3`
+    / `privateNameInLhsReceiverExpression` FPs). Cleared
+    privateNameStaticFieldDerivedClasses and one more; nested-class-only cases
+    (TS18014 shadowing) remain a miss by design.
 
   T78 -- assignment to a private method (TS2803; Roadmap track 2, first slice).
     recall 595 -> 597 @ 0 FP. `#`-private members are brand-mangled

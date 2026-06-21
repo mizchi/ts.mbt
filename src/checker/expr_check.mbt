@@ -12453,7 +12453,284 @@ pub fn check_module_function_bodies(
 }
 
 ///|
-/// Assignment to a non-writable `#`-private member:
+/// TS18013 / TS2339: a `#`-private identifier referenced inside a *top-level*
+/// class C must be one C itself declares -- ECMAScript private names are
+/// lexically scoped to the declaring class body, so within C you can only write
+/// `#x` for names C declares. `#`-names are brand-mangled to C's own brand, and
+/// every declared `#`-member (instance / static, field / method / accessor) is
+/// in `cls.properties` / `cls.methods` with the same mangling. So an accessed
+/// `#`-name not in C's declared set is a reference to a private C does not have
+/// (`Derived.#x` inside `Base`). Sound for top-level classes (no enclosing
+/// class whose privates could be legally referenced); nested class bodies are
+/// skipped (their accesses may legally reach an outer class's privates).
+fn check_private_member_access(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for cls in module_.classes {
+    let declared : Map[String, Unit] = {}
+    for p in cls.properties {
+      if p.name.has_prefix("__private_brand__") {
+        declared[p.name] = ()
+      }
+    }
+    for m in cls.methods {
+      if m.name.has_prefix("__private_brand__") {
+        declared[m.name] = ()
+      }
+    }
+    if declared.size() == 0 {
+      continue
+    }
+    // The class's own brand (`__private_brand__N`) -- all its `#`-members share
+    // it. Only flag accesses mangled with *this* brand: an access carrying a
+    // different brand number was mangled inside a nested / anonymous class
+    // (whose body may legally reference an outer class's privates), so it is
+    // not ours to judge. Since each class gets a unique brand id, a same-brand
+    // access not in `declared` is a reference, directly in this class body, to
+    // a `#`-name this class does not declare -- always an error.
+    let own_brand = match private_brand_of_first(declared) {
+      Some(b) => b
+      None => continue
+    }
+    let owner = cls.name
+    match cls.constructor_body {
+      Some(b) => scan_stmts_priv_access(b.stmts, declared, own_brand, owner, issues)
+      None => ()
+    }
+    for m in cls.methods {
+      match m.body {
+        Some(b) =>
+          scan_stmts_priv_access(b.stmts, declared, own_brand, owner, issues)
+        None => ()
+      }
+    }
+    for fi in cls.static_field_inits {
+      scan_expr_priv_access(fi.1, declared, own_brand, owner, issues)
+    }
+    for fi in cls.instance_field_inits {
+      scan_expr_priv_access(fi.1, declared, own_brand, owner, issues)
+    }
+  }
+  issues
+}
+
+///|
+/// Extract the `__private_brand__N` prefix shared by a class's mangled
+/// `#`-member names (`__private_brand__N__field`). Returns `None` if the name
+/// doesn't carry a brand.
+fn private_brand_of(name : String) -> String? {
+  let prefix = "__private_brand__"
+  if !name.has_prefix(prefix) {
+    return None
+  }
+  let rest = name.substring(start=prefix.length())
+  let chars = rest.to_array()
+  let mut i = 0
+  while i < chars.length() && chars[i] >= '0' && chars[i] <= '9' {
+    i = i + 1
+  }
+  if i == 0 {
+    return None
+  }
+  Some(prefix + rest.substring(start=0, end=i))
+}
+
+///|
+fn private_brand_of_first(declared : Map[String, Unit]) -> String? {
+  for name, _ in declared {
+    match private_brand_of(name) {
+      Some(b) => return Some(b)
+      None => ()
+    }
+  }
+  None
+}
+
+///|
+fn record_priv_access(
+  name : String,
+  declared : Map[String, Unit],
+  own_brand : String,
+  owner : String,
+  issues : Array[ExprIssue],
+) -> Unit {
+  if private_brand_of(name) is Some(b) &&
+    b == own_brand &&
+    !declared.contains(name) {
+    issues.push({
+      path: "class \{owner}",
+      message: "private identifier is not accessible on the receiver outside its declaring class",
+    })
+  }
+}
+
+///|
+fn scan_stmts_priv_access(
+  stmts : Array[@ast.TsStmt],
+  declared : Map[String, Unit],
+  own_brand : String,
+  owner : String,
+  issues : Array[ExprIssue],
+) -> Unit {
+  for st in stmts {
+    match st {
+      PropAssign(obj, name, value) => {
+        record_priv_access(name, declared, own_brand, owner, issues)
+        scan_expr_priv_access(obj, declared, own_brand, owner, issues)
+        scan_expr_priv_access(value, declared, own_brand, owner, issues)
+      }
+      Assign(_, e) | CompoundAssign(_, _, e) | Expr(e) | Throw(e) | Return(Some(e)) =>
+        scan_expr_priv_access(e, declared, own_brand, owner, issues)
+      IndexAssign(a, b, c) => {
+        scan_expr_priv_access(a, declared, own_brand, owner, issues)
+        scan_expr_priv_access(b, declared, own_brand, owner, issues)
+        scan_expr_priv_access(c, declared, own_brand, owner, issues)
+      }
+      Var(_, _, e) | Let(_, _, e) | Const(_, _, e) =>
+        scan_expr_priv_access(e, declared, own_brand, owner, issues)
+      If(c, a, b) => {
+        scan_expr_priv_access(c, declared, own_brand, owner, issues)
+        scan_stmts_priv_access(a.stmts, declared, own_brand, owner, issues)
+        match b {
+          Some(blk) => scan_stmts_priv_access(blk.stmts, declared, own_brand, owner, issues)
+          None => ()
+        }
+      }
+      While(c, b) | DoWhile(c, b) | With(c, b) => {
+        scan_expr_priv_access(c, declared, own_brand, owner, issues)
+        scan_stmts_priv_access(b.stmts, declared, own_brand, owner, issues)
+      }
+      ForOf(_, _, _, e, b)
+      | ForAwaitOf(_, _, _, e, b)
+      | ForIn(_, _, _, e, b) => {
+        scan_expr_priv_access(e, declared, own_brand, owner, issues)
+        scan_stmts_priv_access(b.stmts, declared, own_brand, owner, issues)
+      }
+      For(_, _, _, b) => scan_stmts_priv_access(b.stmts, declared, own_brand, owner, issues)
+      Try(a, _, c, f) => {
+        scan_stmts_priv_access(a.stmts, declared, own_brand, owner, issues)
+        match c {
+          Some(blk) => scan_stmts_priv_access(blk.stmts, declared, own_brand, owner, issues)
+          None => ()
+        }
+        match f {
+          Some(blk) => scan_stmts_priv_access(blk.stmts, declared, own_brand, owner, issues)
+          None => ()
+        }
+      }
+      Switch(e, cases) => {
+        scan_expr_priv_access(e, declared, own_brand, owner, issues)
+        for c in cases {
+          scan_stmts_priv_access(c.body.stmts, declared, own_brand, owner, issues)
+        }
+      }
+      // A nested class declaration is a fresh private-name scope; its body may
+      // legally reference an outer class's privates, so do not descend.
+      _ => ()
+    }
+  }
+}
+
+///|
+fn scan_expr_priv_access(
+  expr : @ast.TsExpr,
+  declared : Map[String, Unit],
+  own_brand : String,
+  owner : String,
+  issues : Array[ExprIssue],
+) -> Unit {
+  fn go(e : @ast.TsExpr) -> Unit {
+    scan_expr_priv_access(e, declared, own_brand, owner, issues)
+  }
+
+  match expr {
+    PropAccess(recv, name) => {
+      record_priv_access(name, declared, own_brand, owner, issues)
+      go(recv)
+    }
+    MethodCall(recv, name, args) => {
+      record_priv_access(name, declared, own_brand, owner, issues)
+      go(recv)
+      for a in args {
+        go(a)
+      }
+    }
+    PropAssignExpr(obj, name, value) => {
+      record_priv_access(name, declared, own_brand, owner, issues)
+      go(obj)
+      go(value)
+    }
+    CompoundAssignExpr(target, _, value) => {
+      go(target)
+      go(value)
+    }
+    IndexAssignExpr(a, b, c) => {
+      go(a)
+      go(b)
+      go(c)
+    }
+    BinOp(_, a, b) | Seq(a, b) | ComputedProp(a, b) | IndexAccess(a, b) => {
+      go(a)
+      go(b)
+    }
+    UnaryOp(_, a)
+    | Spread(a)
+    | Await(a)
+    | PureCall(a)
+    | NonNull(a)
+    | OptionalChain(a)
+    | YieldStar(a)
+    | As(a, _)
+    | Satisfies(a, _)
+    | TypeArgs(_, a)
+    | AssignExpr(_, a)
+    | AssignPattern(_, a) => go(a)
+    Cond(a, b, c) => {
+      go(a)
+      go(b)
+      go(c)
+    }
+    Call(_, args) | New(_, args) | ArrayLit(args) => for a in args {
+      go(a)
+    }
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      go(callee)
+      for a in args {
+        go(a)
+      }
+    }
+    ObjectLit(entries) => for kv in entries {
+      go(kv.1)
+    }
+    TemplateLiteral(_, exprs) => for e in exprs {
+      go(e)
+    }
+    TaggedTemplate(tag, _, _, exprs) => {
+      go(tag)
+      for e in exprs {
+        go(e)
+      }
+    }
+    Yield(Some(e)) => go(e)
+    DynamicImport(a, b) => {
+      go(a)
+      match b {
+        Some(e) => go(e)
+        None => ()
+      }
+    }
+    ArrowFunc(_, _, body, _) =>
+      match body {
+        ArrowExpr(e) => go(e)
+        ArrowBlock(b) => scan_stmts_priv_access(b.stmts, declared, own_brand, owner, issues)
+      }
+    FuncExpr(f) => scan_stmts_priv_access(f.body.stmts, declared, own_brand, owner, issues)
+    // `NativeClassExpr` is a fresh private-name scope -- do not descend.
+    _ => ()
+  }
+}
+
+///|
+/// TS2803 / TS2540: assignment to a non-writable `#`-private member. See
 ///   - TS2803: a private *method* (`#m() {}`) is not writable.
 ///   - TS2540: a getter-only private accessor (`get #x()` with no `set #x`) is
 ///     a read-only property.
@@ -13741,6 +14018,11 @@ fn check_module_function_bodies_layered(
   // TS2803: assignment to a private method (`#method`). Run per-module so
   // namespace-nested classes are covered by the layered recursion below.
   for issue in check_private_method_assignments(module_) {
+    all.push(issue)
+  }
+  // TS18013 / TS2339: reference to a `#`-private not declared by the enclosing
+  // (top-level) class.
+  for issue in check_private_member_access(module_) {
     all.push(issue)
   }
   // TS5107: deprecated compiler-option directives (`// @target: es5`, …).

@@ -8675,6 +8675,34 @@ test "expr_check: assignment to a private method (TS2803)" {
 }
 
 ///|
+// TS18013/TS2339: a `#`-private reference inside a top-level class must be a
+// name that class declares. A reference to a `#`-name it does not declare is an
+// error; nested/anonymous classes (different brand) are not judged, so a nested
+// class legally reaching an outer private never false-flags.
+test "expr_check: private identifier not declared in enclosing class" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Reference to a `#`-name the class does not declare -> flagged.
+  assert_true(
+    issues("class Base { static #prop = 1; static m() { Base.#nope } }") > 0,
+  )
+  // Reference to a declared `#`-name -> silent.
+  @test.assert_eq(
+    issues("class Base { static #prop = 1; static m() { Base.#prop } }"),
+    0,
+  )
+  // A nested class reaching the outer class's private is not judged here
+  // (different brand) -> no false positive.
+  @test.assert_eq(
+    issues(
+      "class Foo { #name = 1; m() { class Bar { #y = 2; g(o: Foo) { return o.#name } } return 0 } }",
+    ),
+    0,
+  )
+}
+
+///|
 // TS2313: a type parameter with a circular constraint. Direct (`T extends T`)
 // and indirect cycles (`U extends T, T extends U`) are flagged; a valid bound
 // or an F-bounded `Applied` constraint (`S extends Foo<S>`) stays silent.
