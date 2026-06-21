@@ -12901,6 +12901,217 @@ fn scan_expr_priv_method_assign(
 }
 
 ///|
+/// TS2673 / TS2674: a `new C(...)` on a class whose constructor is `private` /
+/// `protected` is only allowed inside C's own declaration. `private` /
+/// `protected` constructors land in the class's `private_members` /
+/// `protected_members` under the name `constructor`. We flag a `new C(...)`
+/// that appears at module top level, in a free function, or in a *different*
+/// class's body (all provably outside C), which is false-positive-free.
+fn check_constructor_accessibility(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let restricted : Map[String, String] = {}
+  for cls in module_.classes {
+    let mut kind = ""
+    for n in cls.private_members {
+      if n == "constructor" {
+        kind = "private"
+      }
+    }
+    if kind == "" {
+      for n in cls.protected_members {
+        if n == "constructor" {
+          kind = "protected"
+        }
+      }
+    }
+    if kind != "" {
+      restricted[cls.name] = kind
+    }
+  }
+  let issues : Array[ExprIssue] = []
+  if restricted.size() == 0 {
+    return issues
+  }
+  scan_new_exprs_stmts(module_.top_level_stmts, restricted, "", issues)
+  for f in module_.funcs {
+    scan_new_exprs_stmts(f.body.stmts, restricted, "", issues)
+  }
+  for cls in module_.classes {
+    match cls.constructor_body {
+      Some(b) => scan_new_exprs_stmts(b.stmts, restricted, cls.name, issues)
+      None => ()
+    }
+    for m in cls.methods {
+      match m.body {
+        Some(b) => scan_new_exprs_stmts(b.stmts, restricted, cls.name, issues)
+        None => ()
+      }
+    }
+  }
+  issues
+}
+
+///|
+fn record_new_restricted(
+  cn : String,
+  restricted : Map[String, String],
+  enclosing : String,
+  issues : Array[ExprIssue],
+) -> Unit {
+  if cn != enclosing {
+    match restricted.get(cn) {
+      Some(kind) =>
+        issues.push({
+          path: "new \{cn}",
+          message: "constructor of class `\{cn}` is \{kind} and only accessible within the class declaration",
+        })
+      None => ()
+    }
+  }
+}
+
+///|
+fn scan_new_exprs_stmts(
+  stmts : Array[@ast.TsStmt],
+  restricted : Map[String, String],
+  enclosing : String,
+  issues : Array[ExprIssue],
+) -> Unit {
+  fn ge(e : @ast.TsExpr) -> Unit {
+    scan_new_exprs_expr(e, restricted, enclosing, issues)
+  }
+
+  fn gb(b : @ast.TsBlock) -> Unit {
+    scan_new_exprs_stmts(b.stmts, restricted, enclosing, issues)
+  }
+
+  for st in stmts {
+    match st {
+      Expr(e)
+      | Throw(e)
+      | Return(Some(e))
+      | Assign(_, e)
+      | CompoundAssign(_, _, e)
+      | Var(_, _, e)
+      | Let(_, _, e)
+      | Const(_, _, e) => ge(e)
+      PropAssign(a, _, b) | IndexAssign(a, _, b) => {
+        ge(a)
+        ge(b)
+      }
+      If(c, a, b) => {
+        ge(c)
+        gb(a)
+        match b {
+          Some(blk) => gb(blk)
+          None => ()
+        }
+      }
+      While(c, b) | DoWhile(c, b) | With(c, b) => {
+        ge(c)
+        gb(b)
+      }
+      ForOf(_, _, _, e, b) | ForAwaitOf(_, _, _, e, b) | ForIn(_, _, _, e, b) => {
+        ge(e)
+        gb(b)
+      }
+      For(_, _, _, b) => gb(b)
+      Try(a, _, c, f) => {
+        gb(a)
+        match c {
+          Some(blk) => gb(blk)
+          None => ()
+        }
+        match f {
+          Some(blk) => gb(blk)
+          None => ()
+        }
+      }
+      Switch(e, cases) => {
+        ge(e)
+        for c in cases {
+          gb(c.body)
+        }
+      }
+      _ => ()
+    }
+  }
+}
+
+///|
+fn scan_new_exprs_expr(
+  expr : @ast.TsExpr,
+  restricted : Map[String, String],
+  enclosing : String,
+  issues : Array[ExprIssue],
+) -> Unit {
+  fn go(e : @ast.TsExpr) -> Unit {
+    scan_new_exprs_expr(e, restricted, enclosing, issues)
+  }
+
+  match expr {
+    New(cn, args) => {
+      record_new_restricted(cn, restricted, enclosing, issues)
+      for a in args {
+        go(a)
+      }
+    }
+    NewExpr(callee, args) => {
+      match callee {
+        Var(cn) => record_new_restricted(cn, restricted, enclosing, issues)
+        _ => go(callee)
+      }
+      for a in args {
+        go(a)
+      }
+    }
+    BinOp(_, a, b) | Seq(a, b) | IndexAccess(a, b) | ComputedProp(a, b) => {
+      go(a)
+      go(b)
+    }
+    UnaryOp(_, a)
+    | Spread(a)
+    | Await(a)
+    | PureCall(a)
+    | NonNull(a)
+    | TypeArgs(_, a)
+    | As(a, _)
+    | Satisfies(a, _)
+    | AssignExpr(_, a)
+    | PropAccess(a, _)
+    | PropAssignExpr(_, _, a)
+    | CompoundAssignExpr(_, _, a) => go(a)
+    Cond(a, b, c) => {
+      go(a)
+      go(b)
+      go(c)
+    }
+    Call(_, args) | ArrayLit(args) =>
+      for a in args {
+        go(a)
+      }
+    CallExpr(callee, args) | MethodCall(callee, _, args) => {
+      go(callee)
+      for a in args {
+        go(a)
+      }
+    }
+    ObjectLit(entries) =>
+      for kv in entries {
+        go(kv.1)
+      }
+    ArrowFunc(_, _, body, _) =>
+      match body {
+        ArrowExpr(e) => go(e)
+        ArrowBlock(b) =>
+          scan_new_exprs_stmts(b.stmts, restricted, enclosing, issues)
+      }
+    FuncExpr(f) =>
+      scan_new_exprs_stmts(f.body.stmts, restricted, enclosing, issues)
+    _ => ()
+  }
+}
+
+///|
 /// TS1244 / TS1243: `abstract` member modifier rules, both decidable from the
 /// parsed class shape:
 ///   - TS1244: an `abstract` member is only legal inside an `abstract class`.
@@ -14072,6 +14283,10 @@ fn check_module_function_bodies_layered(
   }
   // TS1244 / TS1243: `abstract` member modifier rules.
   for issue in check_abstract_modifier_rules(module_) {
+    all.push(issue)
+  }
+  // TS2673 / TS2674: `new C(...)` on a private / protected constructor.
+  for issue in check_constructor_accessibility(module_) {
     all.push(issue)
   }
   // TS5107: deprecated compiler-option directives (`// @target: es5`, …).

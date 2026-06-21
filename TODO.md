@@ -1388,6 +1388,19 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-19 (T80)   601/815 (74 %)        414/414 ( 0 FP)
 2026-06-19 (T81)   604/815 (74 %)        414/414 ( 0 FP)
 2026-06-19 (T82)   605/815 (74 %)        414/414 ( 0 FP)
+2026-06-19 (T83)   608/815 (75 %)        414/414 ( 0 FP)
+
+  T83 -- private / protected constructor accessibility (TS2673 / TS2674;
+    Roadmap track 3). recall 605 -> 608 @ 0 FP. A `private` / `protected`
+    constructor lands in the class's `private_members` / `protected_members`
+    under the name `constructor`, so `check_constructor_accessibility` builds a
+    restricted-class map and flags a `new C(...)` that is provably outside C --
+    at module top level, in a free function, or in a *different* class's body
+    (`enclosing != C`). `new C` inside C's own body stays silent. Cleared
+    classConstructorAccessibility, classConstructorAccessibility2,
+    classConstructorAccessibility5. (classConstructorAccessibility3 is TS2322
+    `typeof`-assignability with ctor visibility -- a different mechanism, still
+    a miss.)
 
   T82 -- abstract constructor (TS1242; Roadmap track 3). recall 604 -> 605 @
     0 FP. `abstract` on a constructor is illegal (it may only modify a class /

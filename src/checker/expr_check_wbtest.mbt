@@ -8723,6 +8723,35 @@ test "expr_check: abstract member modifier rules (TS1244/TS1243)" {
 }
 
 ///|
+// TS2673/TS2674: `new C()` on a private/protected constructor is only allowed
+// inside C's own declaration; a `new` elsewhere (top level, free function,
+// other class) is flagged. A public constructor and a `new` of the enclosing
+// class stay silent.
+test "expr_check: private/protected constructor accessibility (TS2673/2674)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  assert_true(
+    issues("class D { private constructor() {} }\nvar d = new D();") > 0,
+  )
+  assert_true(
+    issues("class E { protected constructor() {} }\nvar e = new E();") > 0,
+  )
+  // Public constructor -> silent.
+  @test.assert_eq(
+    issues("class C { public constructor() {} }\nvar c = new C();"),
+    0,
+  )
+  // `new` of the enclosing class (inside its own static method) -> silent.
+  @test.assert_eq(
+    issues(
+      "class F { private constructor() {} static make(): F { return new F() } }",
+    ),
+    0,
+  )
+}
+
+///|
 // TS2313: a type parameter with a circular constraint. Direct (`T extends T`)
 // and indirect cycles (`U extends T, T extends U`) are flagged; a valid bound
 // or an F-bounded `Applied` constraint (`S extends Foo<S>`) stays silent.
