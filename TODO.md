@@ -1497,8 +1497,12 @@ Tracks (theme -- ~miss count -- dominant TS codes -- machinery -- FP risk):
      +3). Remaining: instance-vs-prototype and static-vs-constructor-function
      member assignment (instanceMemberAssignsToClassPrototype,
      staticMemberAssignsToConstructorFunctionMembers -- assign an incompatible
-     function to `C.prototype.m` / `C.m`; needs target-method-signature lookup +
-     a contextual assignability check), constructor-accessibility assignability
+     function to `C.prototype.m` / `C.m`. The `PropAssign` checker already does
+     `lookup_field(recv_ty, prop)` + `check_expr_against`, so the missing piece
+     is purely in `infer_expr`: it does not resolve `C.prototype` to C's
+     instance type nor `C` (a class value) to its static side, so the
+     field lookup finds nothing. Adding that resolution is an inference-layer
+     change -- audit FP before enabling), constructor-accessibility assignability
      (classConstructorAccessibility3 -- `typeof Baz` with a protected ctor not
      assignable to `typeof Foo`), and other abstract rules (TS1245
      abstract-with-body, TS2513 abstract-via-super, TS2516 non-consecutive).
