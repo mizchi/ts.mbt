@@ -1452,22 +1452,30 @@ Tracks (theme -- ~miss count -- dominant TS codes -- machinery -- FP risk):
      reference-to-undeclared-`#`-name-in-enclosing-class (T80, brand-matched so
      nested classes don't false-flag). Remaining sub-slices, each needing more
      than the current walkers:
-       - TS2300 duplicate `#x` (privateNameDuplicateField): the duplicate-member
-         detector exists but (a) only counts field+other / 2-accessors, not two
-         plain fields, and (b) the corpus classes are nested inside a function
-         body, so they're not in `module_.classes`. Needs nested-class traversal
-         + a two-field dup rule.
+       - TS2300 duplicate `#x` (privateNameDuplicateField): BLOCKED on parser
+         representation. The classes are non-extending and nested in a function
+         body, so the parser desugars each into a legacy IIFE
+         (`let A = (function(){...})()`) with prototype assignments and does
+         *not* preserve a `TsClassDecl` carrying `duplicate_member_names` (only
+         `extends`-classes keep a `NativeClassStmt`/`Expr`). So a checker-side
+         nested-class collector finds nothing to check. Fix needs the parser to
+         keep the class decl in the IIFE path, or detect the dup at parse time.
+         (Also the dup rule only counts field+other / 2-accessors, not two plain
+         fields -- a separate gap.) Investigated 2026-06-19; reverted the
+         no-op collector.
        - TS18014 nested-class shadowing (privateName*NestedClass*): `#x` accessed
          where it is shadowed by a nested class's same-spelled `#x`. T80 skips
          different-brand (nested) accesses by design, so these stay a miss; they
-         need a brand-aware "outer `#x` shadowed by inner `#x`" model.
+         need a brand-aware "outer `#x` shadowed by inner `#x`" model plus
+         receiver-type resolution.
        - TS2339 receiver-type cases (privateName*ConstructorChain,
          *StaticAccessorssDerivedClasses): `#x` declared by the enclosing class
          but accessed via a receiver whose type lacks it (`Child.#bar` where
          `#bar` is `Parent`'s static). Needs receiver-type analysis, not just
          the lexical brand check.
      Net: assignment-to-non-writable (+4) and undeclared-`#`-reference (+2) are
-     harvested; the rest is nested-scope / receiver-type machinery.
+     harvested; the rest is blocked on parser representation (TS2300) or needs
+     nested-scope / receiver-type machinery (TS18014 / TS2339).
      -- model ES private members: `#`-field declarations, nested-class
      shadowing (TS18014), "cannot assign to private method" (TS2803), accessor
      read-only (TS2540), duplicate `#x` (TS2300). Mostly nominal / structural
