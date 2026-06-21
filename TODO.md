@@ -1386,6 +1386,16 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-19 (T78)   597/815 (73 %)        414/414 ( 0 FP)
 2026-06-19 (T79)   599/815 (73 %)        414/414 ( 0 FP)
 2026-06-19 (T80)   601/815 (74 %)        414/414 ( 0 FP)
+2026-06-19 (T81)   604/815 (74 %)        414/414 ( 0 FP)
+
+  T81 -- `abstract` member modifier rules (TS1244 / TS1243; Roadmap track 3,
+    first slice). recall 601 -> 604 @ 0 FP. `check_abstract_modifier_rules`
+    reads the already-parsed class shape: an `abstract` member in a
+    non-`abstract` class is TS1244 (`!is_abstract && abstract_members nonempty`),
+    and a member in both `private_members` and `abstract_members` is TS1243
+    (`private` + `abstract`). Both combinations are never valid TypeScript, so
+    false-positive-free. Cleared classAbstractMethodInNonAbstractClass,
+    classAbstractProperties, classAbstractMixedWithModifiers.
 
   T80 -- reference to a `#`-private not declared by the enclosing class
     (TS18013 / TS2339; Roadmap track 2). recall 599 -> 601 @ 0 FP. Inside a
@@ -1482,9 +1492,16 @@ Tracks (theme -- ~miss count -- dominant TS codes -- machinery -- FP risk):
      rules with low FP (like the T63 private/protected work), but needs parser
      fields for `#` members. Largest single lever; do in sub-slices per code.
 
-  3. Class-member assignment semantics -- ~19 -- TS2322 -- instance-vs-prototype
-     and static-vs-constructor-function member assignment, abstract-class
-     assignability (classAbstractClass/Constructor*), `super` property access.
+  3. Class-member assignment / abstract rules -- ~19 -- TS2322/TS124x/TS251x --
+     IN PROGRESS. DONE: TS1244/TS1243 abstract-member modifier rules (T81,
+     +3). Remaining: instance-vs-prototype and static-vs-constructor-function
+     member assignment (instanceMemberAssignsToClassPrototype,
+     staticMemberAssignsToConstructorFunctionMembers -- assign an incompatible
+     function to `C.prototype.m` / `C.m`; needs target-method-signature lookup +
+     a contextual assignability check), constructor-accessibility assignability
+     (classConstructorAccessibility3 -- `typeof Baz` with a protected ctor not
+     assignable to `typeof Foo`), and other abstract rules (TS1245
+     abstract-with-body, TS2513 abstract-via-super, TS2516 non-consecutive).
      Medium effort; nominal rules keep FP low.
 
   4. Template-literal types -- ~8 -- TS2322 -- pattern assignability for

@@ -12901,6 +12901,39 @@ fn scan_expr_priv_method_assign(
 }
 
 ///|
+/// TS1244 / TS1243: `abstract` member modifier rules, both decidable from the
+/// parsed class shape:
+///   - TS1244: an `abstract` member is only legal inside an `abstract class`.
+///   - TS1243: `private` cannot be combined with `abstract`.
+/// `is_abstract`, `abstract_members`, and `private_members` are already on the
+/// class decl, so this is false-positive-free (these combinations are never
+/// valid TypeScript).
+fn check_abstract_modifier_rules(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for cls in module_.classes {
+    if !cls.is_abstract && cls.abstract_members.length() > 0 {
+      issues.push({
+        path: "class \{cls.name}",
+        message: "abstract methods can only appear within an abstract class",
+      })
+    }
+    let private_set : Map[String, Unit] = {}
+    for n in cls.private_members {
+      private_set[n] = ()
+    }
+    for n in cls.abstract_members {
+      if private_set.contains(n) {
+        issues.push({
+          path: "class \{cls.name}",
+          message: "`private` modifier cannot be used with `abstract` modifier",
+        })
+      }
+    }
+  }
+  issues
+}
+
+///|
 /// TS2313 ("Type parameter 'T' has a circular constraint"): return the names of
 /// type parameters whose constraint cycles back to themselves. We only follow a
 /// constraint that is a *bare* reference to another type parameter in the same
@@ -14023,6 +14056,10 @@ fn check_module_function_bodies_layered(
   // TS18013 / TS2339: reference to a `#`-private not declared by the enclosing
   // (top-level) class.
   for issue in check_private_member_access(module_) {
+    all.push(issue)
+  }
+  // TS1244 / TS1243: `abstract` member modifier rules.
+  for issue in check_abstract_modifier_rules(module_) {
     all.push(issue)
   }
   // TS5107: deprecated compiler-option directives (`// @target: es5`, …).

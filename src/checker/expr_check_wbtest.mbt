@@ -8703,6 +8703,24 @@ test "expr_check: private identifier not declared in enclosing class" {
 }
 
 ///|
+// TS1244 / TS1243: `abstract` member modifier rules. An abstract member is only
+// allowed in an abstract class (TS1244); `private` cannot combine with
+// `abstract` (TS1243). Valid abstract members in an abstract class stay silent.
+test "expr_check: abstract member modifier rules (TS1244/TS1243)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Abstract method in a non-abstract class.
+  assert_true(issues("class A { abstract foo(): void }") > 0)
+  // private + abstract.
+  assert_true(
+    issues("abstract class A { private abstract x: number }") > 0,
+  )
+  // Valid abstract member in an abstract class -> silent.
+  @test.assert_eq(issues("abstract class A { abstract foo(): void }"), 0)
+}
+
+///|
 // TS2313: a type parameter with a circular constraint. Direct (`T extends T`)
 // and indirect cycles (`U extends T, T extends U`) are flagged; a valid bound
 // or an F-bounded `Applied` constraint (`S extends Foo<S>`) stays silent.
