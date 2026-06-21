@@ -1509,8 +1509,15 @@ Tracks (theme -- ~miss count -- dominant TS codes -- machinery -- FP risk):
      `lookup_field(recv_ty, prop)` + `check_expr_against`, so the missing piece
      is purely in `infer_expr`: it does not resolve `C.prototype` to C's
      instance type nor `C` (a class value) to its static side, so the
-     field lookup finds nothing. Adding that resolution is an inference-layer
-     change -- audit FP before enabling), constructor-accessibility assignability
+     field lookup finds nothing. A targeted `class_assign_target_type` helper
+     was tried (resolves `C.prototype.m` / `C.m` to the member type for the
+     `PropAssign` checker), but two blockers remain: (i) these assignments parse
+     as `PropAssignExpr` *expressions*, not the `PropAssign` *statement* the
+     handler covers, so the target never reaches `check_expr_against`; and
+     (ii) even wired, `check_expr_against` does not deeply check an arrow body's
+     return against the target return (`() => {}` vs `(x:number)=>number` is the
+     actual conformance shape), only primitive-vs-callable. Both are needed --
+     reverted the inert helper 2026-06-19), constructor-accessibility assignability
      (classConstructorAccessibility3 -- `typeof Baz` with a protected ctor not
      assignable to `typeof Foo`), and other abstract rules (TS1245
      abstract-with-body, TS2513 abstract-via-super, TS2516 non-consecutive).
