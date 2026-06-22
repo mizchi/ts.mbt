@@ -8752,6 +8752,41 @@ test "expr_check: private/protected constructor accessibility (TS2673/2674)" {
 }
 
 ///|
+// TS2322: a void-returning function assigned to `C.prototype.m` / `C.m` where
+// method `m` has a concrete non-void return type. Expression-bodied arrows and
+// methods returning void stay silent.
+test "expr_check: void function assigned to non-void class method" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Instance (prototype) and static method with number return + void arrow.
+  assert_true(
+    issues(
+      "class C { bar(x: number): number { C.prototype.bar = () => {}; return 1 } }",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "class C { static bar(x: number): number { C.bar = () => {}; return 1 } }",
+    ) >
+    0,
+  )
+  // Value-returning arrow -> assignable, silent.
+  @test.assert_eq(
+    issues(
+      "class C { bar(x: number): number { C.prototype.bar = (x: number) => 1; return 1 } }",
+    ),
+    0,
+  )
+  // Method returning void -> a void arrow is fine.
+  @test.assert_eq(
+    issues("class C { foo(): void { C.prototype.foo = () => {} } }"),
+    0,
+  )
+}
+
+///|
 // TS2322: an intersection *source* of disjoint object parts is flattened and
 // checked against an intersection target's parts. Incompatible parts (a
 // differing literal property) are flagged; a compatible assignment stays silent.

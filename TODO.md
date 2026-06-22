@@ -1390,6 +1390,24 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-19 (T82)   605/815 (74 %)        414/414 ( 0 FP)
 2026-06-19 (T83)   608/815 (75 %)        414/414 ( 0 FP)
 2026-06-19 (T84)   609/815 (75 %)        414/414 ( 0 FP)
+2026-06-19 (T85)   611/815 (75 %)        414/414 ( 0 FP)
+
+  T85 -- void function assigned to a non-void class method (TS2322; Roadmap
+    track 3 / receiver-type foundation, contained slice). recall 609 -> 611 @
+    0 FP. The prototype/static method-assignment cluster needed the *target*
+    method's signature; rather than model the prototype / static side in
+    `infer_expr` (the broad, FP-risky change), `check_prototype_static_member_assign`
+    reads the method's declared return type directly off the class decl and
+    flags only a provably void-returning value: an arrow with a block body that
+    has no value `return` (`arrow_is_void_returning` / `block_has_value_return`),
+    assigned to `C.prototype.m` / `C.m` where `m`'s return is a concrete
+    non-void primitive / literal. Sound -- expression-bodied / value-returning
+    arrows and void-returning methods never fire. Cleared
+    instanceMemberAssignsToClassPrototype,
+    staticMemberAssignsToConstructorFunctionMembers. (The full receiver-type
+    foundation -- `typeof C` / `C.prototype` in `infer_expr`, for
+    classConstructorAccessibility3 and the deeper arrow-vs-signature cases --
+    remains the documented dedicated-session item.)
 
   T84 -- intersection-source assignability (TS2322; Roadmap track 5). recall
     608 -> 609 @ 0 FP. T61 handled an intersection *target* with a concrete

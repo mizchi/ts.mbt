@@ -12901,6 +12901,162 @@ fn scan_expr_priv_method_assign(
 }
 
 ///|
+/// TS2322 (instanceMemberAssignsToClassPrototype /
+/// staticMemberAssignsToConstructorFunctionMembers): assigning a provably
+/// void-returning function to `C.prototype.m` / `C.m` where method `m` has a
+/// concrete non-void return type. The method's declared signature is read
+/// directly off the class decl (no `infer_expr` modelling of the prototype /
+/// static side needed), and the value is flagged only when it is an arrow with
+/// a block body that contains no value `return` -- i.e. it definitely returns
+/// `void`, which is never assignable to a concrete non-void return. Sound:
+/// expression-bodied arrows and value-returning blocks are never flagged.
+fn check_prototype_static_member_assign(
+  module_ : @ast.TsModule,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for cls in module_.classes {
+    let inst : Map[String, Unit] = {}
+    let stat : Map[String, Unit] = {}
+    for m in cls.methods {
+      if m.accessor == "" && is_concrete_primitive_or_literal(m.return_type) {
+        if m.is_static {
+          stat[m.name] = ()
+        } else {
+          inst[m.name] = ()
+        }
+      }
+    }
+    if inst.size() == 0 && stat.size() == 0 {
+      continue
+    }
+    let cn = cls.name
+    fn check_target(recv : @ast.TsExpr, prop : String, value : @ast.TsExpr) -> Unit {
+      if not(arrow_is_void_returning(value)) {
+        return
+      }
+      let hit = match recv {
+        PropAccess(Var(rn), "prototype") => rn == cn && inst.contains(prop)
+        Var(rn) => rn == cn && stat.contains(prop)
+        _ => false
+      }
+      if hit {
+        issues.push({
+          path: "class \{cn}",
+          message: "a void-returning function is not assignable to method `\{prop}` with a non-void return type",
+        })
+      }
+    }
+
+    fn walk(stmts : Array[@ast.TsStmt]) -> Unit {
+      for st in stmts {
+        match st {
+          PropAssign(recv, prop, value) => check_target(recv, prop, value)
+          Expr(PropAssignExpr(recv, prop, value)) =>
+            check_target(recv, prop, value)
+          If(_, a, b) => {
+            walk(a.stmts)
+            match b {
+              Some(blk) => walk(blk.stmts)
+              None => ()
+            }
+          }
+          While(_, b) | DoWhile(_, b) | With(_, b) | For(_, _, _, b) =>
+            walk(b.stmts)
+          ForOf(_, _, _, _, b) | ForAwaitOf(_, _, _, _, b) | ForIn(_, _, _, _, b) =>
+            walk(b.stmts)
+          Try(a, _, c, f) => {
+            walk(a.stmts)
+            match c {
+              Some(blk) => walk(blk.stmts)
+              None => ()
+            }
+            match f {
+              Some(blk) => walk(blk.stmts)
+              None => ()
+            }
+          }
+          Switch(_, cases) =>
+            for c in cases {
+              walk(c.body.stmts)
+            }
+          _ => ()
+        }
+      }
+    }
+
+    match cls.constructor_body {
+      Some(b) => walk(b.stmts)
+      None => ()
+    }
+    for m in cls.methods {
+      match m.body {
+        Some(b) => walk(b.stmts)
+        None => ()
+      }
+    }
+  }
+  issues
+}
+
+///|
+/// True when `expr` is an arrow with a block body that definitely returns
+/// `void` -- no `return <value>` anywhere in the block (nested function /
+/// arrow / class bodies are not descended into, as their returns are their
+/// own). Expression-bodied arrows return a value and are never void here.
+fn arrow_is_void_returning(expr : @ast.TsExpr) -> Bool {
+  match expr {
+    ArrowFunc(_, _, ArrowBlock(b), _) => not(block_has_value_return(b.stmts))
+    _ => false
+  }
+}
+
+///|
+fn block_has_value_return(stmts : Array[@ast.TsStmt]) -> Bool {
+  for st in stmts {
+    match st {
+      Return(Some(_)) => return true
+      If(_, a, b) => {
+        if block_has_value_return(a.stmts) {
+          return true
+        }
+        match b {
+          Some(blk) => if block_has_value_return(blk.stmts) { return true }
+          None => ()
+        }
+      }
+      While(_, b)
+      | DoWhile(_, b)
+      | With(_, b)
+      | For(_, _, _, b)
+      | ForOf(_, _, _, _, b)
+      | ForAwaitOf(_, _, _, _, b)
+      | ForIn(_, _, _, _, b) => if block_has_value_return(b.stmts) { return true }
+      Try(a, _, c, f) => {
+        if block_has_value_return(a.stmts) {
+          return true
+        }
+        match c {
+          Some(blk) => if block_has_value_return(blk.stmts) { return true }
+          None => ()
+        }
+        match f {
+          Some(blk) => if block_has_value_return(blk.stmts) { return true }
+          None => ()
+        }
+      }
+      Switch(_, cases) =>
+        for c in cases {
+          if block_has_value_return(c.body.stmts) {
+            return true
+          }
+        }
+      _ => ()
+    }
+  }
+  false
+}
+
+///|
 /// TS2673 / TS2674: a `new C(...)` on a class whose constructor is `private` /
 /// `protected` is only allowed inside C's own declaration. `private` /
 /// `protected` constructors land in the class's `private_members` /
@@ -14287,6 +14443,10 @@ fn check_module_function_bodies_layered(
   }
   // TS2673 / TS2674: `new C(...)` on a private / protected constructor.
   for issue in check_constructor_accessibility(module_) {
+    all.push(issue)
+  }
+  // TS2322: void-returning function assigned to `C.prototype.m` / `C.m`.
+  for issue in check_prototype_static_member_assign(module_) {
     all.push(issue)
   }
   // TS5107: deprecated compiler-option directives (`// @target: es5`, …).
