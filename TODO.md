@@ -1389,6 +1389,16 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-19 (T81)   604/815 (74 %)        414/414 ( 0 FP)
 2026-06-19 (T82)   605/815 (74 %)        414/414 ( 0 FP)
 2026-06-19 (T83)   608/815 (75 %)        414/414 ( 0 FP)
+2026-06-19 (T84)   609/815 (75 %)        414/414 ( 0 FP)
+
+  T84 -- intersection-source assignability (TS2322; Roadmap track 5). recall
+    608 -> 609 @ 0 FP. T61 handled an intersection *target* with a concrete
+    source; this flattens an intersection *source* of disjoint object parts into
+    one object (`flatten_intersection_objects` -- merges members, bails on a
+    non-object part or an overlapping property name) so `intersection_target_mismatch`
+    can decide it against each target part. Cleared commonTypeIntersection
+    (`{t?:'A'} & {a}` not assignable to `{t?:'B'} & {a}`). The `& string`
+    intersections and generic / union-constraint intersection cases still bail.
 
   T83 -- private / protected constructor accessibility (TS2673 / TS2674;
     Roadmap track 3). recall 605 -> 608 @ 0 FP. A `private` / `protected`

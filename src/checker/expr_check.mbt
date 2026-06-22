@@ -14536,6 +14536,19 @@ fn intersection_target_mismatch(
   parts : Array[@ast.TsType],
   resolver : Resolver,
 ) -> Bool {
+  // An intersection *source* (`A & B`) carries the combined members of all its
+  // parts. When every part is a disjoint object shape we can faithfully flatten
+  // it into one object and decide assignability against each target part; a
+  // non-object part or an overlapping property name bails (returns the original
+  // source, which then fails the `source_shape` gate below and abstains).
+  let source = match source {
+    Intersection(sparts) =>
+      match flatten_intersection_objects(sparts, resolver) {
+        Some(obj) => obj
+        None => source
+      }
+    _ => source
+  }
   let source_concrete = is_concrete_primitive_or_literal(source)
   let source_shape = match source {
     Object(_) | Struct(_, _) => true
@@ -14564,6 +14577,45 @@ fn intersection_target_mismatch(
     }
   }
   false
+}
+
+///|
+/// Flatten an intersection of object parts into a single `Object` by merging
+/// their members. Returns `None` when any part is not a (resolvable) object
+/// shape or when two parts declare the same property name -- in both cases a
+/// faithful flat object cannot be formed, so the caller abstains. Keeps the
+/// result false-positive-safe: only disjoint, fully-object intersections flatten.
+fn flatten_intersection_objects(
+  parts : Array[@ast.TsType],
+  resolver : Resolver,
+) -> @ast.TsType? {
+  let merged : Array[(@ast.TsType, @ast.TsType)] = []
+  let seen : Map[String, Unit] = {}
+  for part in parts {
+    let fields = match resolver.unwrap(part) {
+      Object(fs) => fs
+      Struct(_, fs) => {
+        let out : Array[(@ast.TsType, @ast.TsType)] = []
+        for f in fs {
+          out.push((Literal(f.0), f.1))
+        }
+        out
+      }
+      _ => return None
+    }
+    for f in fields {
+      let key = match f.0 {
+        Literal(k) => k
+        _ => return None
+      }
+      if seen.contains(key) {
+        return None
+      }
+      seen[key] = ()
+      merged.push(f)
+    }
+  }
+  Some(Object(merged))
 }
 
 ///|

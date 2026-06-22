@@ -8752,6 +8752,30 @@ test "expr_check: private/protected constructor accessibility (TS2673/2674)" {
 }
 
 ///|
+// TS2322: an intersection *source* of disjoint object parts is flattened and
+// checked against an intersection target's parts. Incompatible parts (a
+// differing literal property) are flagged; a compatible assignment stays silent.
+test "expr_check: intersection source assignability (TS2322)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // `{t?:'A'} & {a}` is not assignable to `{t?:'B'} & {a}`.
+  assert_true(
+    issues(
+      "declare let x: { t?: \"A\" } & { a: boolean };\nlet y: { t?: \"B\" } & { a: boolean } = x;",
+    ) >
+    0,
+  )
+  // Same literal -> assignable, silent.
+  @test.assert_eq(
+    issues(
+      "declare let x: { t?: \"A\" } & { a: boolean };\nlet y: { t?: \"A\" } & { a: boolean } = x;",
+    ),
+    0,
+  )
+}
+
+///|
 // TS2313: a type parameter with a circular constraint. Direct (`T extends T`)
 // and indirect cycles (`U extends T, T extends U`) are flagged; a valid bound
 // or an F-bounded `Applied` constraint (`S extends Foo<S>`) stays silent.
