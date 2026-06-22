@@ -1391,6 +1391,35 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-19 (T83)   608/815 (75 %)        414/414 ( 0 FP)
 2026-06-19 (T84)   609/815 (75 %)        414/414 ( 0 FP)
 2026-06-19 (T85)   611/815 (75 %)        414/414 ( 0 FP)
+2026-06-22 (T86)   609/815 (75 %)        414/414 ( 0 FP)   whole-corpus TP 1624 -> 1629
+
+  T86 -- `undefined` keyword inference + nullish operands (TS18050 / TS2367;
+    receiver/flow-engine groundwork). The `undefined` keyword now infers as the
+    `Undefined` type (previously `Any`), and a paired pass corrects the operand
+    rules around the `null` / `undefined` keyword:
+      * TS18050 -- using the `null` / `undefined` *keyword* as an operand of an
+        arithmetic (`-` `*` `/` `%` `**` ...) or relational (`<` `<=` `>` `>=`)
+        operator is unconditionally an error ("The value ... cannot be used
+        here"). The relational case is new (`check_binop_operands`), restricted
+        to the literal keyword so it is false-positive-free; the arithmetic case
+        falls out of the now-`Undefined` inference feeding the existing
+        "not a valid number type" check.
+      * TS2367 -- comparing any value against the `null` / `undefined` keyword
+        with `===` / `!==` is *always permitted* (the canonical loose null
+        check) and must never trip the "always false" overlap check; added a
+        nullish-keyword exemption mirroring the existing `typeof` skip. This
+        also fixed the lone FP the inference change introduced
+        (objectSpreadRepeatedNullCheckPerf).
+    Net whole-corpus TP 1624 -> 1629 @ 0 FP (correct-reason: verified against
+    TS18050 baselines for arithmetic / relational nullish operands, e.g.
+    arithmeticOperatorWithUndefinedValueAndValidOperands,
+    comparisonOperatorWithOneOperandIsNull). Pinned recall 611 -> 609: the two
+    pinned files that regressed (controlFlowOptionalChain,
+    controlFlowTypeofObject) were previously matched only via a *wrong-reason*
+    `=== null/undefined` always-false flag that TS never emits; their real
+    errors (TS2454 conditional definite-assignment inside an optional chain;
+    TS2345 typeof-object narrowing) remain unmodelled flow-engine work. The
+    change therefore improves both whole-corpus recall and reason-correctness.
 
   T85 -- void function assigned to a non-void class method (TS2322; Roadmap
     track 3 / receiver-type foundation, contained slice). recall 609 -> 611 @

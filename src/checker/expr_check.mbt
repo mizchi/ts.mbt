@@ -906,9 +906,8 @@ fn type_has_intersection_or_applied(t : @ast.TsType) -> Bool {
     Constructor(params, ret, _) =>
       params.iter().any(type_has_intersection_or_applied) ||
       type_has_intersection_or_applied(ret)
-    Object(fields) => fields.iter().any(fn(f) {
-      type_has_intersection_or_applied(f.1)
-    })
+    Object(fields) =>
+      fields.iter().any(fn(f) { type_has_intersection_or_applied(f.1) })
     _ => false
   }
 }
@@ -3368,6 +3367,7 @@ fn check_abstract_instantiation(ctx : CheckCtx, class_name : String) -> Unit {
 /// "simple" type (primitive / literal / `T[]` / single Named) is
 /// reliable enough to keep -- those cases are picked up by the
 /// strict mode anyway and contribute recall without inflating FP.
+
 ///|
 fn is_permissively_suppressed(sub_path : String, message : String) -> Bool {
   if message.has_prefix("expected `") && message.contains("but got `") {
@@ -4424,10 +4424,21 @@ fn check_binop_operands(
           _ => false
         }
       }
+      // Comparing any value against the `null` / `undefined` keyword is
+      // always permitted in TypeScript (the canonical loose null check) —
+      // it never triggers TS2367 even when the static types don't overlap.
+      let is_nullish_kw = fn(e : @ast.TsExpr) -> Bool {
+        match e {
+          NullLit | Var("undefined") => true
+          _ => false
+        }
+      }
       let lt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, l))
       let rt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, r))
       if !is_typeof(l) &&
         !is_typeof(r) &&
+        !is_nullish_kw(l) &&
+        !is_nullish_kw(r) &&
         is_checkable(lt) &&
         is_checkable(rt) &&
         !types_can_overlap(lt, rt) {
@@ -4489,6 +4500,31 @@ fn check_binop_operands(
             )
           }
         _ => ()
+      }
+    }
+    // Relational comparison (`<`, `<=`, `>`, `>=`): the `null` / `undefined`
+    // keyword is never a valid operand — TypeScript reports TS18050 ("The
+    // value 'null' / 'undefined' cannot be used here"). Restricted to the
+    // literal keyword operands so a variable of an inferred nullish type is
+    // left to the (separate) assignability machinery; the literal form is
+    // unconditionally an error, so the check is false-positive-free.
+    BinLt | BinLe | BinGt | BinGe => {
+      let nullish_kw = fn(e : @ast.TsExpr) -> String? {
+        match e {
+          NullLit => Some("null")
+          Var("undefined") => Some("undefined")
+          _ => None
+        }
+      }
+      match nullish_kw(l) {
+        Some(kw) =>
+          record(ctx, "binary op", "the value `\{kw}` cannot be used here")
+        None => ()
+      }
+      match nullish_kw(r) {
+        Some(kw) =>
+          record(ctx, "binary op", "the value `\{kw}` cannot be used here")
+        None => ()
       }
     }
     _ => ()
@@ -4573,6 +4609,16 @@ fn infer_expr(
             Some(ty) => ty
             None => @ast.TsType::Any
           }
+      }
+    // The `undefined` keyword denotes the `undefined` type. Unless a
+    // local binding shadows it (illegal in practice), prefer the
+    // `Undefined` type over the `Any` fallback so assignment / argument
+    // contexts (`x = undefined` where `x: string | number`) see the
+    // mismatch. NULL is already handled by the `NullLit` arm.
+    Var("undefined") =>
+      match env.lookup("undefined") {
+        Some(ty) => ty
+        None => @ast.TsType::Undefined
       }
     Var(name) =>
       match env.lookup(name) {
@@ -5914,7 +5960,9 @@ fn check_expr_against(
     Some(m) => Some(m)
     None =>
       single_signature_required_arity(
-        infer_expr(env, ctx.resolver, expr), false, ctx.resolver,
+        infer_expr(env, ctx.resolver, expr),
+        false,
+        ctx.resolver,
       )
   }
   match call_arity {
@@ -5937,7 +5985,9 @@ fn check_expr_against(
   }
   match
     single_signature_required_arity(
-      infer_expr(env, ctx.resolver, expr), true, ctx.resolver,
+      infer_expr(env, ctx.resolver, expr),
+      true,
+      ctx.resolver,
     ) {
     Some(m) =>
       for sig in collect_construct_signatures(expected_shape, ctx.resolver) {
@@ -6014,9 +6064,7 @@ fn check_expr_against(
     // deliberately *not* checked: for `||` / `??` it is the value being
     // guarded (`const xs: string[] = maybe || []` has `maybe: string[] |
     // undefined`), and for `&&` it is the boolean-ish guard.
-    (BinOp(And, _, r), _)
-    | (BinOp(Or, _, r), _)
-    | (BinOp(Coalesce, _, r), _) => {
+    (BinOp(And, _, r), _) | (BinOp(Or, _, r), _) | (BinOp(Coalesce, _, r), _) => {
       check_expr_against(env, r, expected, ctx, sub_path + " (logical)")
       return
     }
@@ -6373,10 +6421,14 @@ fn check_expr_against(
   // mismatch -- `var f: () => void = 5`, `var k: new () => A = "asdf"`. Checked
   // ahead of the structural callable bail below, which would otherwise swallow
   // it (a `Func` / `Constructor` is `shape_is_callable`).
-  if (shape_is_callable(expected_u, ctx.resolver) &&
-      is_concrete_primitive_or_literal(inferred_u)) ||
-    (shape_is_callable(inferred_u, ctx.resolver) &&
-      is_concrete_primitive_or_literal(expected_u)) {
+  if (
+      shape_is_callable(expected_u, ctx.resolver) &&
+      is_concrete_primitive_or_literal(inferred_u)
+    ) ||
+    (
+      shape_is_callable(inferred_u, ctx.resolver) &&
+      is_concrete_primitive_or_literal(expected_u)
+    ) {
     record(
       ctx,
       sub_path,
@@ -12493,7 +12545,8 @@ fn check_private_member_access(module_ : @ast.TsModule) -> Array[ExprIssue] {
     }
     let owner = cls.name
     match cls.constructor_body {
-      Some(b) => scan_stmts_priv_access(b.stmts, declared, own_brand, owner, issues)
+      Some(b) =>
+        scan_stmts_priv_access(b.stmts, declared, own_brand, owner, issues)
       None => ()
     }
     for m in cls.methods {
@@ -12578,7 +12631,11 @@ fn scan_stmts_priv_access(
         scan_expr_priv_access(obj, declared, own_brand, owner, issues)
         scan_expr_priv_access(value, declared, own_brand, owner, issues)
       }
-      Assign(_, e) | CompoundAssign(_, _, e) | Expr(e) | Throw(e) | Return(Some(e)) =>
+      Assign(_, e)
+      | CompoundAssign(_, _, e)
+      | Expr(e)
+      | Throw(e)
+      | Return(Some(e)) =>
         scan_expr_priv_access(e, declared, own_brand, owner, issues)
       IndexAssign(a, b, c) => {
         scan_expr_priv_access(a, declared, own_brand, owner, issues)
@@ -12591,7 +12648,14 @@ fn scan_stmts_priv_access(
         scan_expr_priv_access(c, declared, own_brand, owner, issues)
         scan_stmts_priv_access(a.stmts, declared, own_brand, owner, issues)
         match b {
-          Some(blk) => scan_stmts_priv_access(blk.stmts, declared, own_brand, owner, issues)
+          Some(blk) =>
+            scan_stmts_priv_access(
+              blk.stmts,
+              declared,
+              own_brand,
+              owner,
+              issues,
+            )
           None => ()
         }
       }
@@ -12599,28 +12663,47 @@ fn scan_stmts_priv_access(
         scan_expr_priv_access(c, declared, own_brand, owner, issues)
         scan_stmts_priv_access(b.stmts, declared, own_brand, owner, issues)
       }
-      ForOf(_, _, _, e, b)
-      | ForAwaitOf(_, _, _, e, b)
-      | ForIn(_, _, _, e, b) => {
+      ForOf(_, _, _, e, b) | ForAwaitOf(_, _, _, e, b) | ForIn(_, _, _, e, b) => {
         scan_expr_priv_access(e, declared, own_brand, owner, issues)
         scan_stmts_priv_access(b.stmts, declared, own_brand, owner, issues)
       }
-      For(_, _, _, b) => scan_stmts_priv_access(b.stmts, declared, own_brand, owner, issues)
+      For(_, _, _, b) =>
+        scan_stmts_priv_access(b.stmts, declared, own_brand, owner, issues)
       Try(a, _, c, f) => {
         scan_stmts_priv_access(a.stmts, declared, own_brand, owner, issues)
         match c {
-          Some(blk) => scan_stmts_priv_access(blk.stmts, declared, own_brand, owner, issues)
+          Some(blk) =>
+            scan_stmts_priv_access(
+              blk.stmts,
+              declared,
+              own_brand,
+              owner,
+              issues,
+            )
           None => ()
         }
         match f {
-          Some(blk) => scan_stmts_priv_access(blk.stmts, declared, own_brand, owner, issues)
+          Some(blk) =>
+            scan_stmts_priv_access(
+              blk.stmts,
+              declared,
+              own_brand,
+              owner,
+              issues,
+            )
           None => ()
         }
       }
       Switch(e, cases) => {
         scan_expr_priv_access(e, declared, own_brand, owner, issues)
         for c in cases {
-          scan_stmts_priv_access(c.body.stmts, declared, own_brand, owner, issues)
+          scan_stmts_priv_access(
+            c.body.stmts,
+            declared,
+            own_brand,
+            owner,
+            issues,
+          )
         }
       }
       // A nested class declaration is a fresh private-name scope; its body may
@@ -12689,21 +12772,24 @@ fn scan_expr_priv_access(
       go(b)
       go(c)
     }
-    Call(_, args) | New(_, args) | ArrayLit(args) => for a in args {
-      go(a)
-    }
+    Call(_, args) | New(_, args) | ArrayLit(args) =>
+      for a in args {
+        go(a)
+      }
     CallExpr(callee, args) | NewExpr(callee, args) => {
       go(callee)
       for a in args {
         go(a)
       }
     }
-    ObjectLit(entries) => for kv in entries {
-      go(kv.1)
-    }
-    TemplateLiteral(_, exprs) => for e in exprs {
-      go(e)
-    }
+    ObjectLit(entries) =>
+      for kv in entries {
+        go(kv.1)
+      }
+    TemplateLiteral(_, exprs) =>
+      for e in exprs {
+        go(e)
+      }
     TaggedTemplate(tag, _, _, exprs) => {
       go(tag)
       for e in exprs {
@@ -12721,9 +12807,11 @@ fn scan_expr_priv_access(
     ArrowFunc(_, _, body, _) =>
       match body {
         ArrowExpr(e) => go(e)
-        ArrowBlock(b) => scan_stmts_priv_access(b.stmts, declared, own_brand, owner, issues)
+        ArrowBlock(b) =>
+          scan_stmts_priv_access(b.stmts, declared, own_brand, owner, issues)
       }
-    FuncExpr(f) => scan_stmts_priv_access(f.body.stmts, declared, own_brand, owner, issues)
+    FuncExpr(f) =>
+      scan_stmts_priv_access(f.body.stmts, declared, own_brand, owner, issues)
     // `NativeClassExpr` is a fresh private-name scope -- do not descend.
     _ => ()
   }
@@ -12740,7 +12828,9 @@ fn scan_expr_priv_access(
 /// targets and flag any assignment whose target is a property access to one.
 /// Sound: a writable `#`-field arrow lives in `properties` (never `methods`),
 /// and an accessor with a setter is excluded.
-fn check_private_method_assignments(module_ : @ast.TsModule) -> Array[ExprIssue] {
+fn check_private_method_assignments(
+  module_ : @ast.TsModule,
+) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   for cls in module_.classes {
     let targets : Map[String, String] = {}
@@ -12773,7 +12863,8 @@ fn check_private_method_assignments(module_ : @ast.TsModule) -> Array[ExprIssue]
     }
     for m in cls.methods {
       match m.body {
-        Some(b) => scan_stmts_priv_method_assign(b.stmts, targets, owner, issues)
+        Some(b) =>
+          scan_stmts_priv_method_assign(b.stmts, targets, owner, issues)
         None => ()
       }
     }
@@ -12829,7 +12920,8 @@ fn scan_stmts_priv_method_assign(
       | ForOf(_, _, _, _, b)
       | ForAwaitOf(_, _, _, _, b)
       | ForIn(_, _, _, _, b)
-      | With(_, b) => scan_stmts_priv_method_assign(b.stmts, targets, owner, issues)
+      | With(_, b) =>
+        scan_stmts_priv_method_assign(b.stmts, targets, owner, issues)
       For(_, _, _, b) =>
         scan_stmts_priv_method_assign(b.stmts, targets, owner, issues)
       Try(a, _, c, f) => {
@@ -12930,7 +13022,11 @@ fn check_prototype_static_member_assign(
       continue
     }
     let cn = cls.name
-    fn check_target(recv : @ast.TsExpr, prop : String, value : @ast.TsExpr) -> Unit {
+    fn check_target(
+      recv : @ast.TsExpr,
+      prop : String,
+      value : @ast.TsExpr,
+    ) -> Unit {
       if not(arrow_is_void_returning(value)) {
         return
       }
@@ -12962,8 +13058,9 @@ fn check_prototype_static_member_assign(
           }
           While(_, b) | DoWhile(_, b) | With(_, b) | For(_, _, _, b) =>
             walk(b.stmts)
-          ForOf(_, _, _, _, b) | ForAwaitOf(_, _, _, _, b) | ForIn(_, _, _, _, b) =>
-            walk(b.stmts)
+          ForOf(_, _, _, _, b)
+          | ForAwaitOf(_, _, _, _, b)
+          | ForIn(_, _, _, _, b) => walk(b.stmts)
           Try(a, _, c, f) => {
             walk(a.stmts)
             match c {
@@ -13030,7 +13127,10 @@ fn block_has_value_return(stmts : Array[@ast.TsStmt]) -> Bool {
       | For(_, _, _, b)
       | ForOf(_, _, _, _, b)
       | ForAwaitOf(_, _, _, _, b)
-      | ForIn(_, _, _, _, b) => if block_has_value_return(b.stmts) { return true }
+      | ForIn(_, _, _, _, b) =>
+        if block_has_value_return(b.stmts) {
+          return true
+        }
       Try(a, _, c, f) => {
         if block_has_value_return(a.stmts) {
           return true
@@ -14783,7 +14883,8 @@ fn flatten_intersection_objects(
 /// nominal reference whose member shape the structural-assignability relation
 /// can compare.
 fn is_resolvable_nominal_name(resolver : Resolver, name : String) -> Bool {
-  resolver.classes.get(name) is Some(_) || resolver.interfaces.get(name) is Some(_)
+  resolver.classes.get(name) is Some(_) ||
+  resolver.interfaces.get(name) is Some(_)
 }
 
 ///|
@@ -15899,7 +16000,7 @@ fn check_class_implements(
 fn callable_member_incompatible(
   derived : @ast.TsType,
   base : @ast.TsType,
-  ignore_return~ : Bool = false,
+  ignore_return? : Bool = false,
 ) -> Bool {
   let same_kind = match (derived, base) {
     (Func(_, _), Func(_, _)) => true
