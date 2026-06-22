@@ -1546,14 +1546,21 @@ Tracks (theme -- ~miss count -- dominant TS codes -- machinery -- FP risk):
      abstract-with-body, TS2513 abstract-via-super, TS2516 non-consecutive).
      Medium effort; nominal rules keep FP low.
 
-  4. Template-literal types -- ~8 -- TS2322 -- pattern assignability for
-     `` `${T}` `` template types (templateLiteralTypes5/7,
-     PrefixSuffixAssignability) and string-mapping intrinsics
-     (`Uppercase`/`stringMappingOverPatternLiterals`). Contained; low-medium FP.
+  4. Template-literal types -- ~8 -- TS2322 -- BLOCKED on missing machinery.
+     The string-mapping intrinsics (`Uppercase` / `Lowercase`) are not evaluated
+     in the assignability path (`Uppercase<string>` accepts a lowercase literal
+     today), and the patterns are generic (`` `${T}` ``). Needs intrinsic
+     evaluation + template-literal-type assignability before any of
+     templateLiteralTypes5/7, stringMappingOverPatternLiterals, etc. can fire.
+     (Verified 2026-06-19.)
 
-  5. Intersection assignability -- ~9 -- TS2322/TS2367 -- intersection *source*
-     structural assignability (T61 did the target side), index-signature and
-     union-constraint intersections. Medium FP -- gate on concrete shapes.
+  5. Intersection assignability -- ~9 -- TS2322/TS2367 -- IN PROGRESS. DONE:
+     intersection-*source* flattening for disjoint object parts (T84, +1,
+     commonTypeIntersection). Remaining: `& string` / primitive-bearing
+     intersections (intersectionTypeAssignment), union-constraint intersections
+     (intersectionWithUnionConstraint), index-signature intersections, and the
+     TS2367 no-overlap-comparison cases (intersectionNarrowing,
+     equalityWithIntersectionTypes01 -- need narrowed-comparison analysis).
 
   6. Union / rest arity -- ~7 -- TS2554 -- calling a union of call signatures
      requires satisfying every member (min/max arity over the union);
@@ -1588,7 +1595,22 @@ Leftover singletons (TS2304 `directReferenceToNull`, TS17009 `super`-before-
 `this`, TS2790 `delete`, TS2872 always-truthy, uniqueSymbol) are case-by-case;
 pick them up opportunistically when a track passes nearby.
 
-Recommended order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10 -> 11.
+Cross-cutting foundation -- receiver-type resolution for class values. Several
+remaining slices share one missing capability: `infer_expr` does not model a
+class *value*'s static side (`typeof C`) nor its prototype/instance side
+(`C.prototype`). Building this unlocks: track 2 TS2339 (`Child.#bar` accessed
+where `#bar` isn't on the receiver's class) and the TS18014 shadowing model;
+track 3 prototype/static method-assignment (T81 note) and
+classConstructorAccessibility3 (`typeof Baz` ctor-accessibility assignability).
+It is an inference-layer change with real FP surface (every `C` / `C.prototype`
+expression), so it warrants a dedicated session: add static / instance member
+tables per class to the resolver, resolve `Var(C)` -> a `typeof C` shape and
+`PropAccess(_, "prototype")` -> C's instance shape, then re-run the whole-corpus
+oracle to hold FP = 0. Estimated unlock: ~6-10 files across tracks 2/3.
+
+Recommended order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10 -> 11, with
+the receiver-type foundation slotted before re-attempting the track-2 TS2339 /
+track-3 prototype-assignment slices.
 
   RB2 (2026-06-18) -- re-baseline after the intervening checker commits
   (through f545849) lifted measured recall 543 -> 563 @ 0 FP. Toolchain note:
