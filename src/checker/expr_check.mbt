@@ -10365,6 +10365,17 @@ fn analyze_equality(
   false_side : Array[(String, @ast.TsType)],
   loose : Bool,
 ) -> Unit {
+  // A template literal with no substitutions (`` `string` ``) is exactly the
+  // string literal `"string"`; normalize so `typeof x === \`string\`` and
+  // discriminant comparisons narrow the same as the quoted form.
+  let norm = fn(e : @ast.TsExpr) -> @ast.TsExpr {
+    match e {
+      TemplateLiteral([s], []) => StringLit(s)
+      _ => e
+    }
+  }
+  let left = norm(left)
+  let right = norm(right)
   // `typeof x === "string"` — canonical form.
   // `typeof <expr> === "string"` — accept any Var / PropAccess chain on
   // the operand position so `typeof c.a.b === "string"` narrows the
@@ -11567,6 +11578,24 @@ fn check_call_args_in_expr(
               "call `\{meth}`",
               "cannot call `.\{meth}()` — receiver may be null or undefined",
             )
+          } else if ctx.strict_null_checks &&
+            receiver is Var(_) &&
+            union_possibly_nullish(ctx.resolver.unwrap(recv_ty)) is Some(kind) &&
+            ctx.resolver.lookup_method_sig(
+              prune_nullish(ctx.resolver, recv_ty),
+              meth,
+            )
+            is Some(_) {
+            // TS18048 / TS2722: calling a method on a value whose narrowed type
+            // still includes `undefined` / `null` is an error under
+            // strictNullChecks. Same `Var`-receiver gating as the PropAccess
+            // case — the method must resolve on the pruned receiver, otherwise
+            // the "method does not exist" branch below is the right diagnostic.
+            record(
+              ctx,
+              "call `\{meth}`",
+              "object is possibly `\{type_display(kind)}`",
+            )
           } else {
             let pruned = prune_nullish(ctx.resolver, recv_ty)
             match ctx.resolver.lookup_method_sig(pruned, meth) {
@@ -11814,9 +11843,11 @@ fn check_call_args_in_expr(
         // purely nullish) is an error. Gated to a simple `Var` receiver — those
         // are the bindings the narrowing engine rewrites precisely (`if (x)`,
         // `if (x != null)`, `x === undefined` early returns, …), so a residual
-        // nullish union at the access site means no guard removed it. The
-        // property must exist on the pruned receiver, otherwise the
-        // "does not exist" branch below is the right diagnostic.
+        // nullish union at the access site means no guard removed it.
+        // (`PropAccess`-chain receivers were tried but gain no conformance
+        // recall and expose correlated-union narrowing gaps — see
+        // intersectionOfUnionNarrowing.) The property must exist on the pruned
+        // receiver, otherwise the "does not exist" branch below is right.
         record(
           ctx,
           "PropAccess `.\{prop}`",
