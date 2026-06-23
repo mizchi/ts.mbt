@@ -4056,6 +4056,35 @@ fn is_nullable_type(ty : @ast.TsType) -> Bool {
 }
 
 ///|
+// When `ty` is a union that includes `undefined` / `null` *and* at least one
+// non-nullish member, returns the nullish kind to report (`undefined`
+// preferred). This is the "possibly undefined/null" shape that makes member
+// access an error under strictNullChecks (TS18048 / TS2532). A purely-nullish
+// type is handled by `is_nullable_type` separately, so it returns `None` here.
+fn union_possibly_nullish(ty : @ast.TsType) -> @ast.TsType? {
+  match ty {
+    Union(members) => {
+      let mut has_undef = false
+      let mut has_null = false
+      let mut has_other = false
+      for m in members {
+        match m {
+          Undefined => has_undef = true
+          Null => has_null = true
+          _ => has_other = true
+        }
+      }
+      if has_other && (has_undef || has_null) {
+        Some(if has_undef { @ast.TsType::Undefined } else { @ast.TsType::Null })
+      } else {
+        None
+      }
+    }
+    _ => None
+  }
+}
+
+///|
 // Returns true only for types that can NEVER participate in numeric
 // arithmetic (`-`, `*`, `/`, bit ops, …), so the "not a valid number type"
 // diagnostic stays free of false positives.  Mirrors `is_definitely_not_callable`:
@@ -11716,6 +11745,24 @@ fn check_call_args_in_expr(
           "PropAccess `.\{prop}`",
           "cannot access `.\{prop}` — receiver may be null or undefined",
         )
+      } else if ctx.strict_null_checks &&
+        recv is Var(_) &&
+        union_possibly_nullish(ctx.resolver.unwrap(recv_ty)) is Some(kind) &&
+        ctx.resolver.lookup_field(prune_nullish(ctx.resolver, recv_ty), prop)
+        is Some(_) {
+        // TS18048 / TS2532: under strictNullChecks, member access on a value
+        // whose *narrowed* type still includes `undefined` / `null` (and isn't
+        // purely nullish) is an error. Gated to a simple `Var` receiver — those
+        // are the bindings the narrowing engine rewrites precisely (`if (x)`,
+        // `if (x != null)`, `x === undefined` early returns, …), so a residual
+        // nullish union at the access site means no guard removed it. The
+        // property must exist on the pruned receiver, otherwise the
+        // "does not exist" branch below is the right diagnostic.
+        record(
+          ctx,
+          "PropAccess `.\{prop}`",
+          "object is possibly `\{type_display(kind)}`",
+        )
       } else if is_checkable(recv_ty) &&
         !is_in_scope_type_param(ctx, recv_ty) &&
         // Prune null/undefined before the existence lookup: a field declared on
@@ -11876,6 +11923,31 @@ fn check_call_args_in_expr(
               check_compound_assign(env, target_ty, op, v, ctx, name)
             None => ()
           }
+        _ => ()
+      }
+      // Narrow-by-coalescing-assignment: `name ??= v` assigns `v` only when
+      // `name` is null/undefined, so afterwards `name` is its non-nullish
+      // part unioned with `v`'s type — if `v` is non-nullish the residual
+      // `undefined` is gone. This mirrors TS flow narrowing so a later
+      // member access on `name` isn't a spurious "possibly undefined".
+      match (target, op) {
+        (Var(name), CoalesceAssign) => {
+          let current = match env.lookup(name) {
+            Some(t) => t
+            None =>
+              match env.lookup_declared(name) {
+                Some(t) => t
+                None => @ast.TsType::Any
+              }
+          }
+          let rhs_ty = infer_expr(env, ctx.resolver, v)
+          if is_checkable(rhs_ty) {
+            env.narrow(
+              name,
+              narrow_union(prune_nullish(ctx.resolver, current), rhs_ty),
+            )
+          }
+        }
         _ => ()
       }
     }

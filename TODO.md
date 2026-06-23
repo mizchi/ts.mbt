@@ -1393,6 +1393,28 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-19 (T85)   611/815 (75 %)        414/414 ( 0 FP)
 2026-06-22 (T86)   609/815 (75 %)        414/414 ( 0 FP)   whole-corpus TP 1624 -> 1629
 2026-06-22 (T87)   617/815 (76 %)        414/414 ( 0 FP)   whole-corpus TP 1629 -> 1640
+2026-06-22 (T88)   619/815 (76 %)        414/414 ( 0 FP)   whole-corpus TP 1640 -> 1643
+
+  T88 -- "object is possibly undefined/null" member access (TS18048 / TS2532),
+    gated on the T87 `strict_null_checks` flag. In the `check_call_args_in_expr`
+    `PropAccess(recv, prop)` branch, when the receiver is a simple `Var` whose
+    *narrowed* inferred type is a union still containing `undefined` / `null`
+    (and the property exists on the pruned receiver), flag it. Restricted to a
+    `Var` receiver because those are the bindings the narrowing engine rewrites
+    precisely -- `if (x)`, `typeof x === "..."`, `x === undefined` early
+    returns, etc. all remove the nullish part, so a residual nullish union at
+    the access site means no guard fired. Helper `union_possibly_nullish`
+    distinguishes the "possibly" shape from a purely-nullish receiver (handled
+    by the existing `is_nullable_type` branch). A whole-corpus sweep found a
+    single FP -- `logicalAssignment11` -- from missing `??=` flow narrowing, so
+    this also adds it: `name ??= v` narrows `name` to
+    `narrow_union(prune_nullish(name), typeof v)` (the bare `d ?? (d = …)`
+    form already narrowed via the inner assignment). Whole-corpus TP
+    1640 -> 1643 @ 0 FP, pinned recall 617 -> 619, correct-reason (matches
+    TS18047/TS18048/TS2722 baselines, e.g. parserharness, controlFlowOptionalChain).
+    Extending beyond `Var` receivers / to call receivers needs broader
+    narrowing coverage (`!= null`, `!x` early return, `&&` short-circuit all
+    still leave a residual nullish union) -- the next narrowing-engine increment.
 
   T87 -- per-file `strictNullChecks` signal + nullish-literal assignability.
     Added a `strict_null_checks : Bool` flag to `TsModule`, parsed from the

@@ -9049,3 +9049,52 @@ test "expr_check: nullish literal assignability gated on strictNullChecks" {
   @test.assert_eq(issues("function f(): number | null { return null; }"), 0)
   @test.assert_eq(issues("function f(): any { return null; }"), 0)
 }
+
+///|
+// TS18048 / TS2532: under strictNullChecks, member access on a `Var` whose
+// narrowed type still includes `undefined` / `null` is "object is possibly
+// undefined/null". Narrowing guards (`if (x)`, `typeof`, `=== undefined`
+// early return, `??=`) remove the nullish part and must stay silent.
+test "expr_check: possibly-undefined member access (TS18048) + narrowing" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Unguarded access on a possibly-undefined value -> flagged.
+  assert_true(
+    issues("function f(x: string | undefined) { return x.length; }") > 0,
+  )
+  assert_true(
+    issues("function f(x: { a: number } | undefined) { return x.a; }") > 0,
+  )
+  // Guards narrow the binding -> silent.
+  @test.assert_eq(
+    issues("function f(x?: string) { if (x) return x.length; return 0; }"),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "function f(x?: string) { if (typeof x === \"string\") return x.length; return 0; }",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "function f(x?: string) { if (x === undefined) return 0; return x.length; }",
+    ),
+    0,
+  )
+  // `??=` narrows away the nullish part when the rhs is non-nullish.
+  @test.assert_eq(
+    issues("let e: string | undefined;\ne ??= \"x\"\ne.length;"),
+    0,
+  )
+  // `@strict: false` opts out entirely.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nfunction f(x: string | undefined) { return x.length; }",
+    ),
+    0,
+  )
+  // Purely-nullable / non-union receivers are unaffected here.
+  @test.assert_eq(issues("function f(x: string) { return x.length; }"), 0)
+}
