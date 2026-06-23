@@ -9098,3 +9098,45 @@ test "expr_check: possibly-undefined member access (TS18048) + narrowing" {
   // Purely-nullable / non-union receivers are unaffected here.
   @test.assert_eq(issues("function f(x: string) { return x.length; }"), 0)
 }
+
+///|
+// Flow-narrowing guards that remove the nullish part of a `Var` must keep the
+// possibly-undefined member-access check (TS18048) silent. Covers the guard
+// forms beyond the truthy `if (x)` case: loose `!= null` (strips both null and
+// undefined), `!x` early return, and `&&` / `||` short-circuits in expression
+// position (`x && x.foo`, `!x || x.foo`).
+test "expr_check: narrowing guards suppress possibly-undefined (TS18048)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Loose `!= null` removes both null and undefined.
+  @test.assert_eq(
+    issues(
+      "function f(x?: string) { if (x != null) return x.length; return 0; }",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "function f(x?: string) { if (x == null) return 0; return x.length; }",
+    ),
+    0,
+  )
+  // `!x` early return narrows the fall-through to truthy.
+  @test.assert_eq(
+    issues("function f(x?: string) { if (!x) return 0; return x.length; }"),
+    0,
+  )
+  // `&&` / `||` short-circuit narrowing in expression position.
+  @test.assert_eq(issues("function f(x?: string) { return x && x.length; }"), 0)
+  @test.assert_eq(
+    issues("function f(x?: string) { return !x || x.length; }"),
+    0,
+  )
+  @test.assert_eq(
+    issues("function f(x?: string) { return x !== undefined && x.length; }"),
+    0,
+  )
+  // The genuinely-unguarded access still flags.
+  assert_true(issues("function f(x?: string) { return x.length; }") > 0)
+}

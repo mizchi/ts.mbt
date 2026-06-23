@@ -6099,7 +6099,25 @@ fn check_expr_against(
     // deliberately *not* checked: for `||` / `??` it is the value being
     // guarded (`const xs: string[] = maybe || []` has `maybe: string[] |
     // undefined`), and for `&&` it is the boolean-ish guard.
-    (BinOp(And, _, r), _) | (BinOp(Or, _, r), _) | (BinOp(Coalesce, _, r), _) => {
+    (BinOp(And, l, r), _) | (BinOp(Or, l, r), _) => {
+      // The RHS of `&&` runs only when the LHS is truthy, and the RHS of
+      // `||` only when the LHS is falsy — apply that flow narrowing before
+      // checking `r` so a `Var` the LHS guards (`x && x.foo`, `!x || x.foo`)
+      // isn't re-flagged as possibly-undefined under strictNullChecks.
+      let eff = analyze_narrowing(env, ctx.resolver, l)
+      let binds = match expr {
+        BinOp(And, _, _) => eff.then_binds
+        _ => eff.else_binds
+      }
+      let snap = env.full_snapshot()
+      for b in binds {
+        env.narrow(b.0, b.1)
+      }
+      check_expr_against(env, r, expected, ctx, sub_path + " (logical)")
+      env.restore_from(snap)
+      return
+    }
+    (BinOp(Coalesce, _, r), _) => {
       check_expr_against(env, r, expected, ctx, sub_path + " (logical)")
       return
     }
@@ -9763,7 +9781,10 @@ fn collect_narrowing(
         Some(eq) => {
           let true_side = if eq { pair_pos } else { pair_neg }
           let false_side = if eq { pair_neg } else { pair_pos }
-          analyze_equality(env, resolver, left, right, true_side, false_side)
+          let loose = op is (AbstractEq | AbstractNe)
+          analyze_equality(
+            env, resolver, left, right, true_side, false_side, loose,
+          )
         }
         None => ()
       }
@@ -9865,16 +9886,22 @@ fn collect_narrowing(
     // and arbitrary-depth `PropAccess(...)` chains share the same path
     // via `narrowing_key_for_expr`. Must come after the `Call` /
     // `MethodCall` arms so type-predicate narrowing isn't shadowed by
-    // this catch-all guard.
-    _ if then_sense =>
+    // this catch-all guard. Both polarities are handled: in the branch
+    // where the value is truthy (the then-branch normally, or the
+    // else-branch under a `!` -- `if (!x) return; x.length`), the value
+    // is non-nullish.
+    _ =>
       match narrowing_key_for_expr(cond) {
         Some(key) => {
           let cur = narrowing_current_type(env, resolver, key)
-          then_binds.push((key, non_nullable(cur)))
+          if then_sense {
+            then_binds.push((key, non_nullable(cur)))
+          } else {
+            else_binds.push((key, non_nullable(cur)))
+          }
         }
         None => ()
       }
-    _ => ()
   }
 }
 
@@ -10336,6 +10363,7 @@ fn analyze_equality(
   right : @ast.TsExpr,
   true_side : Array[(String, @ast.TsType)],
   false_side : Array[(String, @ast.TsType)],
+  loose : Bool,
 ) -> Unit {
   // `typeof x === "string"` — canonical form.
   // `typeof <expr> === "string"` — accept any Var / PropAccess chain on
@@ -10411,9 +10439,23 @@ fn analyze_equality(
   match null_match {
     Some((key, tag)) => {
       let cur = narrowing_current_type(env, resolver, key)
-      true_side.push((key, tag))
-      let stripped = narrow_remove(cur, fn(v) { type_eq(v, tag) })
-      false_side.push((key, stripped))
+      // Loose `== null` / `== undefined` matches *both* `null` and
+      // `undefined` (in JS `null == undefined`), so the equal side is the
+      // nullish pair and the not-equal side strips both. Strict `===` keeps
+      // the exact tag only.
+      let is_nullish = fn(v : @ast.TsType) -> Bool {
+        match v {
+          Null | Undefined => true
+          _ => false
+        }
+      }
+      if loose {
+        true_side.push((key, @ast.TsType::Union([Null, Undefined])))
+        false_side.push((key, narrow_remove(cur, is_nullish)))
+      } else {
+        true_side.push((key, tag))
+        false_side.push((key, narrow_remove(cur, fn(v) { type_eq(v, tag) })))
+      }
     }
     None => ()
   }
@@ -11617,7 +11659,24 @@ fn check_call_args_in_expr(
     }
     BinOp(op, l, r) => {
       check_call_args_in_expr(env, l, ctx)
-      check_call_args_in_expr(env, r, ctx)
+      // Short-circuit narrowing: the RHS of `&&` runs only when the LHS is
+      // truthy, and the RHS of `||` only when the LHS is falsy. Apply the
+      // corresponding flow narrowing to a scratch env before walking the
+      // RHS so `x && x.foo` / `!x || x.foo` don't false-flag a
+      // possibly-undefined `x` (TS18048) inside the RHS.
+      match op {
+        And | Or => {
+          let eff = analyze_narrowing(env, ctx.resolver, l)
+          let binds = if op is And { eff.then_binds } else { eff.else_binds }
+          let snap = env.full_snapshot()
+          for b in binds {
+            env.narrow(b.0, b.1)
+          }
+          check_call_args_in_expr(env, r, ctx)
+          env.restore_from(snap)
+        }
+        _ => check_call_args_in_expr(env, r, ctx)
+      }
       check_binop_operands(env, op, l, r, ctx)
     }
     UnaryOp(op, inner) => {

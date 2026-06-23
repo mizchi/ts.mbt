@@ -1394,6 +1394,28 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-22 (T86)   609/815 (75 %)        414/414 ( 0 FP)   whole-corpus TP 1624 -> 1629
 2026-06-22 (T87)   617/815 (76 %)        414/414 ( 0 FP)   whole-corpus TP 1629 -> 1640
 2026-06-22 (T88)   619/815 (76 %)        414/414 ( 0 FP)   whole-corpus TP 1640 -> 1643
+2026-06-22 (T89)   619/815 (76 %)        414/414 ( 0 FP)   narrowing-engine hardening (no corpus delta)
+
+  T89 -- narrowing-engine hardening for the T88 possibly-undefined check.
+    T88 was corpus-FP-0 but had *latent* FPs on ubiquitous guard forms the
+    conformance corpus didn't exercise (real bridge output would). Fixed three
+    narrowing gaps so those guards correctly strip the nullish part:
+      * Loose `== null` / `!= null` (and `== undefined`) now narrow *both*
+        `null` and `undefined` (in JS `null == undefined`), where strict
+        `===` / `!==` still narrows the exact tag only. `analyze_equality`
+        gained a `loose` parameter.
+      * The bare-`Var` / `PropAccess`-chain truthy narrowing now also populates
+        the *else* branch, so `if (!x) return; x.length` (truthy on the
+        fall-through) is silent. Previously only the then-branch was handled.
+      * `&&` / `||` short-circuit narrowing in *expression* position: the RHS
+        of `&&` is walked / checked with the LHS-truthy narrowing applied, and
+        `||` with LHS-falsy — in both `check_call_args_in_expr` (the `BinOp`
+        walk) and `check_expr_against` (the logical-operator contextual-typing
+        hop, which was the un-narrowed second walk that leaked the FP). So
+        `x && x.foo`, `!x || x.foo`, `x !== undefined && x.foo` are all silent.
+    No corpus delta (TP 1643, pinned 619, 0 FP) -- this is pure soundness
+    hardening that makes the T88 check safe for real-world (non-conformance)
+    inputs like the bridge generator's synthesized output.
 
   T88 -- "object is possibly undefined/null" member access (TS18048 / TS2532),
     gated on the T87 `strict_null_checks` flag. In the `check_call_args_in_expr`
