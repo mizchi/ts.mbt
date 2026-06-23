@@ -1392,6 +1392,37 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-19 (T84)   609/815 (75 %)        414/414 ( 0 FP)
 2026-06-19 (T85)   611/815 (75 %)        414/414 ( 0 FP)
 2026-06-22 (T86)   609/815 (75 %)        414/414 ( 0 FP)   whole-corpus TP 1624 -> 1629
+2026-06-22 (T87)   617/815 (76 %)        414/414 ( 0 FP)   whole-corpus TP 1629 -> 1640
+
+  T87 -- per-file `strictNullChecks` signal + nullish-literal assignability.
+    Added a `strict_null_checks : Bool` flag to `TsModule`, parsed from the
+    conformance header directives (`detect_strict_null_checks`): default `true`
+    (the conformance baseline default -- a file with no directive runs strict,
+    e.g. validVoidValues rejects `null -> void`), with `@strict: false` /
+    `@strictNullChecks: false` opting out (nullAssignableToEveryType accepts it).
+    Distinct from `strict_property_initialization` (which is also disabled by
+    `@strictPropertyInitialization: false`), so it is threaded as its own
+    `CheckCtx` field through `check_function_body_with` and every ctx
+    construction. Under the flag, in `check_expr_against`:
+      * `null` is not assignable to `void` (TS2322; `undefined` still is --
+        validVoidValues), and
+      * the `null` / `undefined` *keyword* falls through to the structural
+        assignability check instead of the blanket "nullish flows everywhere"
+        early return, so `function f(): number { return null }`,
+        `let x: string = undefined`, `null -> T` (type parameter), etc. are
+        flagged. With `@strict: false` they stay universally assignable, and
+        the parser no-init sentinel / `void` operator forms keep the early
+        return.
+    Also fixed `is_assignable_to(undefined, void)` to return `true` (a `void`
+    location holds `undefined`) -- a latent gap the broadened path exposed and
+    a checker whitebox test caught (the oracle had masked it: the one corpus
+    file with `void = undefined` also carries a baseline). Whole-corpus TP
+    1629 -> 1640 @ 0 FP, pinned recall 609 -> 617 -- gains in both metrics, all
+    correct-reason (spot-checked: `null -> U`/`T`, `null -> void`,
+    `undefined -> string` against the TS2322 baselines). The remaining
+    nullish-literal targets beyond `void` already flow through the structural
+    check; broadening the *inferred*-nullish (non-literal) path is the next
+    increment but needs its own FP sweep.
 
   T86 -- `undefined` keyword inference + nullish operands (TS18050 / TS2367;
     receiver/flow-engine groundwork). The `undefined` keyword now infers as the
