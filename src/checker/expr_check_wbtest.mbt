@@ -9140,3 +9140,38 @@ test "expr_check: narrowing guards suppress possibly-undefined (TS18048)" {
   // The genuinely-unguarded access still flags.
   assert_true(issues("function f(x?: string) { return x.length; }") > 0)
 }
+
+///|
+// TS18048 / TS2722 also covers *method calls* on a possibly-undefined `Var`
+// receiver, and `typeof x === \`tmpl\`` (a no-substitution template literal)
+// narrows the same as the quoted string form.
+test "expr_check: possibly-undefined method call + template-literal typeof" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Method call on a possibly-undefined value -> flagged.
+  assert_true(
+    issues("function f(x?: { foo(): number }) { return x.foo(); }") > 0,
+  )
+  // Guards narrow the receiver -> silent.
+  @test.assert_eq(
+    issues(
+      "function f(x?: { foo(): number }) { if (x) return x.foo(); return 0; }",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues("function f(x?: { foo(): number }) { return x && x.foo(); }"),
+    0,
+  )
+  // `typeof x === \`string\`` (template literal) narrows like `\"string\"`.
+  @test.assert_eq(
+    issues(
+      (
+        #|declare const e: string | undefined;
+        #|if (typeof e === `string`) { e.slice(0); }
+      ),
+    ),
+    0,
+  )
+}

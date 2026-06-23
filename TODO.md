@@ -1395,6 +1395,24 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-22 (T87)   617/815 (76 %)        414/414 ( 0 FP)   whole-corpus TP 1629 -> 1640
 2026-06-22 (T88)   619/815 (76 %)        414/414 ( 0 FP)   whole-corpus TP 1640 -> 1643
 2026-06-22 (T89)   619/815 (76 %)        414/414 ( 0 FP)   narrowing-engine hardening (no corpus delta)
+2026-06-22 (T90)   619/815 (76 %)        414/414 ( 0 FP)   whole-corpus TP 1643 -> 1645
+
+  T90 -- possibly-undefined *method calls* (TS18048 / TS2722) + template-literal
+    typeof narrowing. Extended the T88 check to the `MethodCall` path: calling a
+    method on a `Var` receiver whose narrowed type still includes nullish (and
+    the method resolves on the pruned receiver) flags "object is possibly
+    undefined/null". Same `Var`-receiver gating as PropAccess. Broadening the
+    PropAccess check to `PropAccess`-chain receivers was tried first but gains 0
+    conformance recall and exposes correlated-union narrowing gaps
+    (intersectionOfUnionNarrowing: `q.a !== undefined` doesn't propagate to
+    `q.b` across an intersection-of-union), so it was reverted -- chains stay
+    `Var`-only. The method-call broadening surfaced one FP
+    (controlFlowWithTemplateLiterals) from `typeof x === \`string\`` using a
+    no-substitution *template literal* instead of a quoted string, so
+    `analyze_equality` now normalizes `TemplateLiteral([s], [])` to
+    `StringLit(s)` (fixes typeof / discriminant / literal narrowing uniformly).
+    Whole-corpus TP 1643 -> 1645 @ 0 FP, pinned 619 (the +2 land outside the
+    pinned dirs). Correct-reason against the TS18048/TS2722 baselines.
 
   T89 -- narrowing-engine hardening for the T88 possibly-undefined check.
     T88 was corpus-FP-0 but had *latent* FPs on ubiquitous guard forms the
