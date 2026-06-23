@@ -829,6 +829,15 @@ pub(all) struct TsModule {
   // conformance harness baseline default, which has TS2564 emissions
   // for files without an explicit `@strict` directive).
   strict_property_initialization : Bool
+  // True when the source should be checked under `strictNullChecks`.
+  // Distinct from `strict_property_initialization`: it shares the
+  // default (`true`, matching the conformance baseline default) and the
+  // `@strict: false` opt-out, but is *not* disabled by
+  // `@strictPropertyInitialization: false`, and *is* disabled by
+  // `@strictNullChecks: false`. Gates the nullish-literal assignability
+  // checks (e.g. `null` is not assignable to `void` under strict mode,
+  // but flows everywhere when off).
+  strict_null_checks : Bool
   // True when class field initializers should be assumed to run via
   // ES2022 `[[DefineOwnProperty]]` semantics. This affects TS2729
   // ("property used before initialization") because the older

@@ -3067,6 +3067,12 @@ priv struct CheckCtx {
   // True by default to match the tsc baseline behaviour for the
   // conformance corpus.
   strict_property_init : Bool
+  // True when the file is checked under `strictNullChecks` (see the
+  // `TsModule.strict_null_checks` flag). Gates the nullish-literal
+  // assignability checks: under strict mode `null` / `undefined` are no
+  // longer assignable to arbitrary targets (e.g. `null` is not assignable
+  // to `void`), whereas without it they flow everywhere.
+  strict_null_checks : Bool
   // True while walking a computed property key (`{ [expr]: v }`). Suppresses
   // the TS2454 used-before-assigned read-check there: tsc does not apply
   // definite-assignment analysis to a name read inside a computed key
@@ -6213,16 +6219,36 @@ fn check_expr_against(
       _ => ()
     }
   }
-  // Without `strictNullChecks`, a literal `null` / `undefined` is assignable
-  // to every type (`var b: number = null`). The conformance corpus runs
-  // largely under `@strict: false` and we have no per-file strict-mode
-  // signal, so treat a *literal* null/undefined source as universally
-  // assignable. This is intentionally narrower than "inferred type is
-  // Null/Undefined": a value merely narrowed to `undefined` (e.g. an
-  // optional property in its else-branch) is still checked, matching the
-  // checker's existing optional-tracking behaviour.
-  if is_null_or_undefined_literal_expr(expr) {
+  // Under `strictNullChecks`, `void` accepts only `undefined` — the `null`
+  // keyword is never assignable to it (TS2322; see validVoidValues). When
+  // strict null checks are off, null flows everywhere (the universal
+  // suppression just below), so this is gated on the flag and on the literal
+  // `null` keyword, keeping it false-positive-free (nullAssignableToEveryType,
+  // which is `@strict: false`, stays silent).
+  if ctx.strict_null_checks && expr is NullLit && expected_u is Void {
+    record(ctx, sub_path, "type `null` is not assignable to type `void`")
     return
+  }
+  // Without `strictNullChecks`, a literal `null` / `undefined` is assignable
+  // to every type (`var b: number = null`). Many conformance cases use
+  // `@strict: false`, and the rest run with strict-null defaults; the
+  // `strict_null_checks` flag distinguishes them. The remaining nullish-
+  // literal targets (beyond `void`) are still treated as universally
+  // assignable for now — broadening them needs a careful FP sweep. This is
+  // intentionally narrower than "inferred type is Null/Undefined": a value
+  // merely narrowed to `undefined` (e.g. an optional property in its
+  // else-branch) is still checked, matching existing optional tracking.
+  if is_null_or_undefined_literal_expr(expr) {
+    // Under strict null checks, the `null` / `undefined` *keyword* is
+    // itself subject to assignability — it no longer flows to every type.
+    // Fall through to the structural check below for those two literal
+    // forms; the parser no-init sentinel and the `void` operator keep the
+    // permissive early return (their narrowing semantics are subtler).
+    let strict_nullish = ctx.strict_null_checks &&
+      (expr is NullLit || expr is Var("undefined"))
+    if !strict_nullish {
+      return
+    }
   }
   // A `never` target almost always shows up as the `assertNever(x: never)`
   // exhaustiveness idiom, where `x` has been flow-narrowed to `never` by an
@@ -8615,6 +8641,7 @@ fn check_arrow_with_context(
     permissive: ctx.permissive,
     unassigned: unassigned_without(ctx.unassigned, param_names),
     strict_property_init: ctx.strict_property_init,
+    strict_null_checks: ctx.strict_null_checks,
     in_computed_key: false,
   }
   match body {
@@ -8706,6 +8733,7 @@ fn check_funcexpr_with_context(
     // Parameters shadow outer bindings — drop them from the TS2454 set.
     unassigned: unassigned_without(ctx.unassigned, param_names),
     strict_property_init: ctx.strict_property_init,
+    strict_null_checks: ctx.strict_null_checks,
     in_computed_key: false,
   }
   let _ = sub_path
@@ -12351,7 +12379,7 @@ pub fn check_function_body(func : @ast.TsFunc) -> Array[ExprIssue] {
     collect_param_value_names(p, resolver.declared_value_names)
   }
   collect_block_value_names(func.body, resolver.declared_value_names)
-  check_function_body_with(func, resolver, false, true)
+  check_function_body_with(func, resolver, false, true, true)
 }
 
 ///|
@@ -12360,6 +12388,7 @@ fn check_function_body_with(
   resolver : Resolver,
   permissive : Bool,
   strict_property_init : Bool,
+  strict_null_checks : Bool,
   this_type? : @ast.TsType? = None,
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
@@ -12428,6 +12457,7 @@ fn check_function_body_with(
     permissive,
     unassigned: {},
     strict_property_init,
+    strict_null_checks,
     in_computed_key: false,
   }
   // Bind parameter names into the environment. Destructured params
@@ -14203,11 +14233,12 @@ fn check_module_function_bodies_layered(
     module_
   }
   let strict_property_init = strict_root.strict_property_initialization
+  let strict_null_checks = strict_root.strict_null_checks
   let all : Array[ExprIssue] = []
   for func in module_.funcs {
     for
       issue in check_function_body_with(
-        func, resolver, permissive, strict_property_init,
+        func, resolver, permissive, strict_property_init, strict_null_checks,
       ) {
       all.push(issue)
     }
@@ -14275,6 +14306,7 @@ fn check_module_function_bodies_layered(
           resolver,
           permissive,
           strict_property_init,
+          strict_null_checks,
           this_type~,
         ) {
         all.push(issue)
@@ -14326,6 +14358,7 @@ fn check_module_function_bodies_layered(
         resolver,
         permissive,
         strict_property_init,
+        strict_null_checks,
         this_type=Some(@ast.TsType::Named(cls.name)),
       ) {
       all.push(issue)
@@ -14351,6 +14384,7 @@ fn check_module_function_bodies_layered(
       permissive,
       unassigned: {},
       strict_property_init,
+      strict_null_checks,
       in_computed_key: false,
     }
     let env = ExprEnv::new()
@@ -14416,6 +14450,7 @@ fn check_module_function_bodies_layered(
       permissive,
       unassigned: {},
       strict_property_init,
+      strict_null_checks,
       in_computed_key: true,
     }
     let env = ExprEnv::new()
@@ -14448,6 +14483,7 @@ fn check_module_function_bodies_layered(
       permissive,
       unassigned: {},
       strict_property_init,
+      strict_null_checks,
       in_computed_key: false,
     }
     let env = ExprEnv::new()

@@ -316,6 +316,7 @@ fn parse_module_or_empty(src : String) -> @ast.TsModule {
         enums: [],
         module_augmentations: [],
         strict_property_initialization: true,
+        strict_null_checks: true,
         use_define_for_class_fields: false,
         deprecated_compiler_options: [],
         parameter_property_misuses: [],
@@ -9015,4 +9016,36 @@ test "expr_check: nullish keyword in arithmetic / relational / equality" {
     0,
   )
   @test.assert_eq(issues("function i(x: number) { let c = x === null; }"), 0)
+}
+
+///|
+// Under `strictNullChecks` (the conformance default, absent an opt-out
+// directive) the `null` / `undefined` keyword is subject to assignability:
+// it no longer flows to every target. With `// @strict: false` it flows
+// everywhere again. The `strict_null_checks` flag (parsed from the header)
+// gates this; `void` in particular accepts `undefined` but never `null`.
+test "expr_check: nullish literal assignability gated on strictNullChecks" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Default (strict): null/undefined not assignable to a non-nullable target.
+  assert_true(issues("function f(): number { return null; }") > 0)
+  assert_true(issues("function f(): string { return undefined; }") > 0)
+  // `void` accepts `undefined` but not `null`.
+  assert_true(issues("let x: void = null;") > 0)
+  @test.assert_eq(issues("let x: void = undefined;"), 0)
+  // `@strict: false` opts out -> null/undefined flow everywhere.
+  @test.assert_eq(
+    issues("// @strict: false\nfunction f(): number { return null; }"),
+    0,
+  )
+  @test.assert_eq(issues("// @strict: false\nlet x: void = null;"), 0)
+  // `@strictNullChecks: false` also opts out.
+  @test.assert_eq(
+    issues("// @strictNullChecks: false\nlet y: number = null;"),
+    0,
+  )
+  // Assignable targets stay silent even under strict: nullable union / any.
+  @test.assert_eq(issues("function f(): number | null { return null; }"), 0)
+  @test.assert_eq(issues("function f(): any { return null; }"), 0)
 }

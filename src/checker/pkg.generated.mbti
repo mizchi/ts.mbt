@@ -109,6 +109,8 @@ pub fn type_is_named(@ast.TsType, Array[String]) -> Bool
 
 pub fn unresolved_type_references(@ast.TsModule) -> Array[String]
 
+pub fn unresolved_typeof_references(@ast.TsModule) -> Array[String]
+
 // Errors
 
 // Types and methods
@@ -145,6 +147,7 @@ pub(all) enum TypeIssueKind {
   DuplicateDeclaration
   CircularTypeAlias
   TypeAliasArityMismatch
+  TypeParameterConstraintViolation
   InterfaceFieldDuplicate
   EnumMemberDuplicate
   InterfaceExtendsCycle
