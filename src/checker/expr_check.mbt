@@ -144,6 +144,7 @@ fn merge_interfaces(
   {
     name: a.name,
     type_params: a.type_params,
+    type_param_bounds: a.type_param_bounds,
     extends_names,
     extends_args,
     fields,
@@ -752,6 +753,9 @@ fn required_arity_from_types(params : Array[@ast.TsType]) -> Int {
 fn type_accepts_undefined_param(ty : @ast.TsType) -> Bool {
   match ty {
     Undefined => true
+    // A `void`-typed parameter is omittable (`(a: void) => R` is assignable
+    // to `() => R`), so it never raises the required-argument count.
+    Void => true
     Union(parts) => {
       for part in parts {
         if part is Undefined {
@@ -902,9 +906,8 @@ fn type_has_intersection_or_applied(t : @ast.TsType) -> Bool {
     Constructor(params, ret, _) =>
       params.iter().any(type_has_intersection_or_applied) ||
       type_has_intersection_or_applied(ret)
-    Object(fields) => fields.iter().any(fn(f) {
-      type_has_intersection_or_applied(f.1)
-    })
+    Object(fields) =>
+      fields.iter().any(fn(f) { type_has_intersection_or_applied(f.1) })
     _ => false
   }
 }
@@ -961,6 +964,10 @@ fn param_is_optional(p : @ast.TsParam) -> Bool {
       false
     }
     Undefined => true
+    // A `void`-typed parameter is omittable: TS lets `(a: void) => R` stand
+    // in for `() => R` (the caller may pass nothing). So it never raises the
+    // required-argument count.
+    Void => true
     _ => false
   }
 }
@@ -3060,6 +3067,12 @@ priv struct CheckCtx {
   // True by default to match the tsc baseline behaviour for the
   // conformance corpus.
   strict_property_init : Bool
+  // True when the file is checked under `strictNullChecks` (see the
+  // `TsModule.strict_null_checks` flag). Gates the nullish-literal
+  // assignability checks: under strict mode `null` / `undefined` are no
+  // longer assignable to arbitrary targets (e.g. `null` is not assignable
+  // to `void`), whereas without it they flow everywhere.
+  strict_null_checks : Bool
   // True while walking a computed property key (`{ [expr]: v }`). Suppresses
   // the TS2454 used-before-assigned read-check there: tsc does not apply
   // definite-assignment analysis to a name read inside a computed key
@@ -3360,6 +3373,7 @@ fn check_abstract_instantiation(ctx : CheckCtx, class_name : String) -> Unit {
 /// "simple" type (primitive / literal / `T[]` / single Named) is
 /// reliable enough to keep -- those cases are picked up by the
 /// strict mode anyway and contribute recall without inflating FP.
+
 ///|
 fn is_permissively_suppressed(sub_path : String, message : String) -> Bool {
   if message.has_prefix("expected `") && message.contains("but got `") {
@@ -4042,6 +4056,35 @@ fn is_nullable_type(ty : @ast.TsType) -> Bool {
 }
 
 ///|
+// When `ty` is a union that includes `undefined` / `null` *and* at least one
+// non-nullish member, returns the nullish kind to report (`undefined`
+// preferred). This is the "possibly undefined/null" shape that makes member
+// access an error under strictNullChecks (TS18048 / TS2532). A purely-nullish
+// type is handled by `is_nullable_type` separately, so it returns `None` here.
+fn union_possibly_nullish(ty : @ast.TsType) -> @ast.TsType? {
+  match ty {
+    Union(members) => {
+      let mut has_undef = false
+      let mut has_null = false
+      let mut has_other = false
+      for m in members {
+        match m {
+          Undefined => has_undef = true
+          Null => has_null = true
+          _ => has_other = true
+        }
+      }
+      if has_other && (has_undef || has_null) {
+        Some(if has_undef { @ast.TsType::Undefined } else { @ast.TsType::Null })
+      } else {
+        None
+      }
+    }
+    _ => None
+  }
+}
+
+///|
 // Returns true only for types that can NEVER participate in numeric
 // arithmetic (`-`, `*`, `/`, bit ops, …), so the "not a valid number type"
 // diagnostic stays free of false positives.  Mirrors `is_definitely_not_callable`:
@@ -4416,10 +4459,21 @@ fn check_binop_operands(
           _ => false
         }
       }
+      // Comparing any value against the `null` / `undefined` keyword is
+      // always permitted in TypeScript (the canonical loose null check) —
+      // it never triggers TS2367 even when the static types don't overlap.
+      let is_nullish_kw = fn(e : @ast.TsExpr) -> Bool {
+        match e {
+          NullLit | Var("undefined") => true
+          _ => false
+        }
+      }
       let lt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, l))
       let rt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, r))
       if !is_typeof(l) &&
         !is_typeof(r) &&
+        !is_nullish_kw(l) &&
+        !is_nullish_kw(r) &&
         is_checkable(lt) &&
         is_checkable(rt) &&
         !types_can_overlap(lt, rt) {
@@ -4481,6 +4535,31 @@ fn check_binop_operands(
             )
           }
         _ => ()
+      }
+    }
+    // Relational comparison (`<`, `<=`, `>`, `>=`): the `null` / `undefined`
+    // keyword is never a valid operand — TypeScript reports TS18050 ("The
+    // value 'null' / 'undefined' cannot be used here"). Restricted to the
+    // literal keyword operands so a variable of an inferred nullish type is
+    // left to the (separate) assignability machinery; the literal form is
+    // unconditionally an error, so the check is false-positive-free.
+    BinLt | BinLe | BinGt | BinGe => {
+      let nullish_kw = fn(e : @ast.TsExpr) -> String? {
+        match e {
+          NullLit => Some("null")
+          Var("undefined") => Some("undefined")
+          _ => None
+        }
+      }
+      match nullish_kw(l) {
+        Some(kw) =>
+          record(ctx, "binary op", "the value `\{kw}` cannot be used here")
+        None => ()
+      }
+      match nullish_kw(r) {
+        Some(kw) =>
+          record(ctx, "binary op", "the value `\{kw}` cannot be used here")
+        None => ()
       }
     }
     _ => ()
@@ -4565,6 +4644,16 @@ fn infer_expr(
             Some(ty) => ty
             None => @ast.TsType::Any
           }
+      }
+    // The `undefined` keyword denotes the `undefined` type. Unless a
+    // local binding shadows it (illegal in practice), prefer the
+    // `Undefined` type over the `Any` fallback so assignment / argument
+    // contexts (`x = undefined` where `x: string | number`) see the
+    // mismatch. NULL is already handled by the `NullLit` arm.
+    Var("undefined") =>
+      match env.lookup("undefined") {
+        Some(ty) => ty
+        None => @ast.TsType::Undefined
       }
     Var(name) =>
       match env.lookup(name) {
@@ -5906,7 +5995,9 @@ fn check_expr_against(
     Some(m) => Some(m)
     None =>
       single_signature_required_arity(
-        infer_expr(env, ctx.resolver, expr), false, ctx.resolver,
+        infer_expr(env, ctx.resolver, expr),
+        false,
+        ctx.resolver,
       )
   }
   match call_arity {
@@ -5929,7 +6020,9 @@ fn check_expr_against(
   }
   match
     single_signature_required_arity(
-      infer_expr(env, ctx.resolver, expr), true, ctx.resolver,
+      infer_expr(env, ctx.resolver, expr),
+      true,
+      ctx.resolver,
     ) {
     Some(m) =>
       for sig in collect_construct_signatures(expected_shape, ctx.resolver) {
@@ -6006,9 +6099,25 @@ fn check_expr_against(
     // deliberately *not* checked: for `||` / `??` it is the value being
     // guarded (`const xs: string[] = maybe || []` has `maybe: string[] |
     // undefined`), and for `&&` it is the boolean-ish guard.
-    (BinOp(And, _, r), _)
-    | (BinOp(Or, _, r), _)
-    | (BinOp(Coalesce, _, r), _) => {
+    (BinOp(And, l, r), _) | (BinOp(Or, l, r), _) => {
+      // The RHS of `&&` runs only when the LHS is truthy, and the RHS of
+      // `||` only when the LHS is falsy — apply that flow narrowing before
+      // checking `r` so a `Var` the LHS guards (`x && x.foo`, `!x || x.foo`)
+      // isn't re-flagged as possibly-undefined under strictNullChecks.
+      let eff = analyze_narrowing(env, ctx.resolver, l)
+      let binds = match expr {
+        BinOp(And, _, _) => eff.then_binds
+        _ => eff.else_binds
+      }
+      let snap = env.full_snapshot()
+      for b in binds {
+        env.narrow(b.0, b.1)
+      }
+      check_expr_against(env, r, expected, ctx, sub_path + " (logical)")
+      env.restore_from(snap)
+      return
+    }
+    (BinOp(Coalesce, _, r), _) => {
       check_expr_against(env, r, expected, ctx, sub_path + " (logical)")
       return
     }
@@ -6157,16 +6266,36 @@ fn check_expr_against(
       _ => ()
     }
   }
-  // Without `strictNullChecks`, a literal `null` / `undefined` is assignable
-  // to every type (`var b: number = null`). The conformance corpus runs
-  // largely under `@strict: false` and we have no per-file strict-mode
-  // signal, so treat a *literal* null/undefined source as universally
-  // assignable. This is intentionally narrower than "inferred type is
-  // Null/Undefined": a value merely narrowed to `undefined` (e.g. an
-  // optional property in its else-branch) is still checked, matching the
-  // checker's existing optional-tracking behaviour.
-  if is_null_or_undefined_literal_expr(expr) {
+  // Under `strictNullChecks`, `void` accepts only `undefined` — the `null`
+  // keyword is never assignable to it (TS2322; see validVoidValues). When
+  // strict null checks are off, null flows everywhere (the universal
+  // suppression just below), so this is gated on the flag and on the literal
+  // `null` keyword, keeping it false-positive-free (nullAssignableToEveryType,
+  // which is `@strict: false`, stays silent).
+  if ctx.strict_null_checks && expr is NullLit && expected_u is Void {
+    record(ctx, sub_path, "type `null` is not assignable to type `void`")
     return
+  }
+  // Without `strictNullChecks`, a literal `null` / `undefined` is assignable
+  // to every type (`var b: number = null`). Many conformance cases use
+  // `@strict: false`, and the rest run with strict-null defaults; the
+  // `strict_null_checks` flag distinguishes them. The remaining nullish-
+  // literal targets (beyond `void`) are still treated as universally
+  // assignable for now — broadening them needs a careful FP sweep. This is
+  // intentionally narrower than "inferred type is Null/Undefined": a value
+  // merely narrowed to `undefined` (e.g. an optional property in its
+  // else-branch) is still checked, matching existing optional tracking.
+  if is_null_or_undefined_literal_expr(expr) {
+    // Under strict null checks, the `null` / `undefined` *keyword* is
+    // itself subject to assignability — it no longer flows to every type.
+    // Fall through to the structural check below for those two literal
+    // forms; the parser no-init sentinel and the `void` operator keep the
+    // permissive early return (their narrowing semantics are subtler).
+    let strict_nullish = ctx.strict_null_checks &&
+      (expr is NullLit || expr is Var("undefined"))
+    if !strict_nullish {
+      return
+    }
   }
   // A `never` target almost always shows up as the `assertNever(x: never)`
   // exhaustiveness idiom, where `x` has been flow-narrowed to `never` by an
@@ -6365,10 +6494,14 @@ fn check_expr_against(
   // mismatch -- `var f: () => void = 5`, `var k: new () => A = "asdf"`. Checked
   // ahead of the structural callable bail below, which would otherwise swallow
   // it (a `Func` / `Constructor` is `shape_is_callable`).
-  if (shape_is_callable(expected_u, ctx.resolver) &&
-      is_concrete_primitive_or_literal(inferred_u)) ||
-    (shape_is_callable(inferred_u, ctx.resolver) &&
-      is_concrete_primitive_or_literal(expected_u)) {
+  if (
+      shape_is_callable(expected_u, ctx.resolver) &&
+      is_concrete_primitive_or_literal(inferred_u)
+    ) ||
+    (
+      shape_is_callable(inferred_u, ctx.resolver) &&
+      is_concrete_primitive_or_literal(expected_u)
+    ) {
     record(
       ctx,
       sub_path,
@@ -6435,8 +6568,12 @@ fn check_expr_against(
     (Applied(_, _), _) | (_, Applied(_, _)) => {
       // Covariant best-effort: same generic, same arity, a type-argument pair
       // that is bidirectionally incompatible (`Box<string>` vs `Box<number>`)
-      // is a real mismatch. Everything else keeps the conservative bail.
-      if applied_generic_mismatch(inferred_u, expected_u, ctx) {
+      // is a real mismatch. Generic interfaces are additionally instantiated
+      // to their concrete object shape so a structural mismatch against an
+      // object / different generic is caught too (`Box<string>` vs
+      // `{ value: number }`). Everything else keeps the conservative bail.
+      if applied_generic_mismatch(inferred_u, expected_u, ctx) ||
+        generic_instantiation_mismatch(inferred_u, expected_u, ctx.resolver) {
         record(
           ctx,
           sub_path,
@@ -8551,6 +8688,7 @@ fn check_arrow_with_context(
     permissive: ctx.permissive,
     unassigned: unassigned_without(ctx.unassigned, param_names),
     strict_property_init: ctx.strict_property_init,
+    strict_null_checks: ctx.strict_null_checks,
     in_computed_key: false,
   }
   match body {
@@ -8642,6 +8780,7 @@ fn check_funcexpr_with_context(
     // Parameters shadow outer bindings — drop them from the TS2454 set.
     unassigned: unassigned_without(ctx.unassigned, param_names),
     strict_property_init: ctx.strict_property_init,
+    strict_null_checks: ctx.strict_null_checks,
     in_computed_key: false,
   }
   let _ = sub_path
@@ -9642,7 +9781,10 @@ fn collect_narrowing(
         Some(eq) => {
           let true_side = if eq { pair_pos } else { pair_neg }
           let false_side = if eq { pair_neg } else { pair_pos }
-          analyze_equality(env, resolver, left, right, true_side, false_side)
+          let loose = op is (AbstractEq | AbstractNe)
+          analyze_equality(
+            env, resolver, left, right, true_side, false_side, loose,
+          )
         }
         None => ()
       }
@@ -9744,16 +9886,22 @@ fn collect_narrowing(
     // and arbitrary-depth `PropAccess(...)` chains share the same path
     // via `narrowing_key_for_expr`. Must come after the `Call` /
     // `MethodCall` arms so type-predicate narrowing isn't shadowed by
-    // this catch-all guard.
-    _ if then_sense =>
+    // this catch-all guard. Both polarities are handled: in the branch
+    // where the value is truthy (the then-branch normally, or the
+    // else-branch under a `!` -- `if (!x) return; x.length`), the value
+    // is non-nullish.
+    _ =>
       match narrowing_key_for_expr(cond) {
         Some(key) => {
           let cur = narrowing_current_type(env, resolver, key)
-          then_binds.push((key, non_nullable(cur)))
+          if then_sense {
+            then_binds.push((key, non_nullable(cur)))
+          } else {
+            else_binds.push((key, non_nullable(cur)))
+          }
         }
         None => ()
       }
-    _ => ()
   }
 }
 
@@ -10215,6 +10363,7 @@ fn analyze_equality(
   right : @ast.TsExpr,
   true_side : Array[(String, @ast.TsType)],
   false_side : Array[(String, @ast.TsType)],
+  loose : Bool,
 ) -> Unit {
   // `typeof x === "string"` — canonical form.
   // `typeof <expr> === "string"` — accept any Var / PropAccess chain on
@@ -10290,9 +10439,23 @@ fn analyze_equality(
   match null_match {
     Some((key, tag)) => {
       let cur = narrowing_current_type(env, resolver, key)
-      true_side.push((key, tag))
-      let stripped = narrow_remove(cur, fn(v) { type_eq(v, tag) })
-      false_side.push((key, stripped))
+      // Loose `== null` / `== undefined` matches *both* `null` and
+      // `undefined` (in JS `null == undefined`), so the equal side is the
+      // nullish pair and the not-equal side strips both. Strict `===` keeps
+      // the exact tag only.
+      let is_nullish = fn(v : @ast.TsType) -> Bool {
+        match v {
+          Null | Undefined => true
+          _ => false
+        }
+      }
+      if loose {
+        true_side.push((key, @ast.TsType::Union([Null, Undefined])))
+        false_side.push((key, narrow_remove(cur, is_nullish)))
+      } else {
+        true_side.push((key, tag))
+        false_side.push((key, narrow_remove(cur, fn(v) { type_eq(v, tag) })))
+      }
     }
     None => ()
   }
@@ -11496,7 +11659,24 @@ fn check_call_args_in_expr(
     }
     BinOp(op, l, r) => {
       check_call_args_in_expr(env, l, ctx)
-      check_call_args_in_expr(env, r, ctx)
+      // Short-circuit narrowing: the RHS of `&&` runs only when the LHS is
+      // truthy, and the RHS of `||` only when the LHS is falsy. Apply the
+      // corresponding flow narrowing to a scratch env before walking the
+      // RHS so `x && x.foo` / `!x || x.foo` don't false-flag a
+      // possibly-undefined `x` (TS18048) inside the RHS.
+      match op {
+        And | Or => {
+          let eff = analyze_narrowing(env, ctx.resolver, l)
+          let binds = if op is And { eff.then_binds } else { eff.else_binds }
+          let snap = env.full_snapshot()
+          for b in binds {
+            env.narrow(b.0, b.1)
+          }
+          check_call_args_in_expr(env, r, ctx)
+          env.restore_from(snap)
+        }
+        _ => check_call_args_in_expr(env, r, ctx)
+      }
       check_binop_operands(env, op, l, r, ctx)
     }
     UnaryOp(op, inner) => {
@@ -11623,6 +11803,24 @@ fn check_call_args_in_expr(
           ctx,
           "PropAccess `.\{prop}`",
           "cannot access `.\{prop}` — receiver may be null or undefined",
+        )
+      } else if ctx.strict_null_checks &&
+        recv is Var(_) &&
+        union_possibly_nullish(ctx.resolver.unwrap(recv_ty)) is Some(kind) &&
+        ctx.resolver.lookup_field(prune_nullish(ctx.resolver, recv_ty), prop)
+        is Some(_) {
+        // TS18048 / TS2532: under strictNullChecks, member access on a value
+        // whose *narrowed* type still includes `undefined` / `null` (and isn't
+        // purely nullish) is an error. Gated to a simple `Var` receiver — those
+        // are the bindings the narrowing engine rewrites precisely (`if (x)`,
+        // `if (x != null)`, `x === undefined` early returns, …), so a residual
+        // nullish union at the access site means no guard removed it. The
+        // property must exist on the pruned receiver, otherwise the
+        // "does not exist" branch below is the right diagnostic.
+        record(
+          ctx,
+          "PropAccess `.\{prop}`",
+          "object is possibly `\{type_display(kind)}`",
         )
       } else if is_checkable(recv_ty) &&
         !is_in_scope_type_param(ctx, recv_ty) &&
@@ -11784,6 +11982,31 @@ fn check_call_args_in_expr(
               check_compound_assign(env, target_ty, op, v, ctx, name)
             None => ()
           }
+        _ => ()
+      }
+      // Narrow-by-coalescing-assignment: `name ??= v` assigns `v` only when
+      // `name` is null/undefined, so afterwards `name` is its non-nullish
+      // part unioned with `v`'s type — if `v` is non-nullish the residual
+      // `undefined` is gone. This mirrors TS flow narrowing so a later
+      // member access on `name` isn't a spurious "possibly undefined".
+      match (target, op) {
+        (Var(name), CoalesceAssign) => {
+          let current = match env.lookup(name) {
+            Some(t) => t
+            None =>
+              match env.lookup_declared(name) {
+                Some(t) => t
+                None => @ast.TsType::Any
+              }
+          }
+          let rhs_ty = infer_expr(env, ctx.resolver, v)
+          if is_checkable(rhs_ty) {
+            env.narrow(
+              name,
+              narrow_union(prune_nullish(ctx.resolver, current), rhs_ty),
+            )
+          }
+        }
         _ => ()
       }
     }
@@ -12287,7 +12510,7 @@ pub fn check_function_body(func : @ast.TsFunc) -> Array[ExprIssue] {
     collect_param_value_names(p, resolver.declared_value_names)
   }
   collect_block_value_names(func.body, resolver.declared_value_names)
-  check_function_body_with(func, resolver, false, true)
+  check_function_body_with(func, resolver, false, true, true)
 }
 
 ///|
@@ -12296,6 +12519,7 @@ fn check_function_body_with(
   resolver : Resolver,
   permissive : Bool,
   strict_property_init : Bool,
+  strict_null_checks : Bool,
   this_type? : @ast.TsType? = None,
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
@@ -12364,6 +12588,7 @@ fn check_function_body_with(
     permissive,
     unassigned: {},
     strict_property_init,
+    strict_null_checks,
     in_computed_key: false,
   }
   // Bind parameter names into the environment. Destructured params
@@ -12438,6 +12663,1004 @@ pub fn check_module_function_bodies(
   module_ : @ast.TsModule,
 ) -> Array[ExprIssue] {
   check_module_function_bodies_layered(module_, [], false)
+}
+
+///|
+/// TS18013 / TS2339: a `#`-private identifier referenced inside a *top-level*
+/// class C must be one C itself declares -- ECMAScript private names are
+/// lexically scoped to the declaring class body, so within C you can only write
+/// `#x` for names C declares. `#`-names are brand-mangled to C's own brand, and
+/// every declared `#`-member (instance / static, field / method / accessor) is
+/// in `cls.properties` / `cls.methods` with the same mangling. So an accessed
+/// `#`-name not in C's declared set is a reference to a private C does not have
+/// (`Derived.#x` inside `Base`). Sound for top-level classes (no enclosing
+/// class whose privates could be legally referenced); nested class bodies are
+/// skipped (their accesses may legally reach an outer class's privates).
+fn check_private_member_access(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for cls in module_.classes {
+    let declared : Map[String, Unit] = {}
+    for p in cls.properties {
+      if p.name.has_prefix("__private_brand__") {
+        declared[p.name] = ()
+      }
+    }
+    for m in cls.methods {
+      if m.name.has_prefix("__private_brand__") {
+        declared[m.name] = ()
+      }
+    }
+    if declared.size() == 0 {
+      continue
+    }
+    // The class's own brand (`__private_brand__N`) -- all its `#`-members share
+    // it. Only flag accesses mangled with *this* brand: an access carrying a
+    // different brand number was mangled inside a nested / anonymous class
+    // (whose body may legally reference an outer class's privates), so it is
+    // not ours to judge. Since each class gets a unique brand id, a same-brand
+    // access not in `declared` is a reference, directly in this class body, to
+    // a `#`-name this class does not declare -- always an error.
+    let own_brand = match private_brand_of_first(declared) {
+      Some(b) => b
+      None => continue
+    }
+    let owner = cls.name
+    match cls.constructor_body {
+      Some(b) =>
+        scan_stmts_priv_access(b.stmts, declared, own_brand, owner, issues)
+      None => ()
+    }
+    for m in cls.methods {
+      match m.body {
+        Some(b) =>
+          scan_stmts_priv_access(b.stmts, declared, own_brand, owner, issues)
+        None => ()
+      }
+    }
+    for fi in cls.static_field_inits {
+      scan_expr_priv_access(fi.1, declared, own_brand, owner, issues)
+    }
+    for fi in cls.instance_field_inits {
+      scan_expr_priv_access(fi.1, declared, own_brand, owner, issues)
+    }
+  }
+  issues
+}
+
+///|
+/// Extract the `__private_brand__N` prefix shared by a class's mangled
+/// `#`-member names (`__private_brand__N__field`). Returns `None` if the name
+/// doesn't carry a brand.
+fn private_brand_of(name : String) -> String? {
+  let prefix = "__private_brand__"
+  if !name.has_prefix(prefix) {
+    return None
+  }
+  let rest = name.substring(start=prefix.length())
+  let chars = rest.to_array()
+  let mut i = 0
+  while i < chars.length() && chars[i] >= '0' && chars[i] <= '9' {
+    i = i + 1
+  }
+  if i == 0 {
+    return None
+  }
+  Some(prefix + rest.substring(start=0, end=i))
+}
+
+///|
+fn private_brand_of_first(declared : Map[String, Unit]) -> String? {
+  for name, _ in declared {
+    match private_brand_of(name) {
+      Some(b) => return Some(b)
+      None => ()
+    }
+  }
+  None
+}
+
+///|
+fn record_priv_access(
+  name : String,
+  declared : Map[String, Unit],
+  own_brand : String,
+  owner : String,
+  issues : Array[ExprIssue],
+) -> Unit {
+  if private_brand_of(name) is Some(b) &&
+    b == own_brand &&
+    !declared.contains(name) {
+    issues.push({
+      path: "class \{owner}",
+      message: "private identifier is not accessible on the receiver outside its declaring class",
+    })
+  }
+}
+
+///|
+fn scan_stmts_priv_access(
+  stmts : Array[@ast.TsStmt],
+  declared : Map[String, Unit],
+  own_brand : String,
+  owner : String,
+  issues : Array[ExprIssue],
+) -> Unit {
+  for st in stmts {
+    match st {
+      PropAssign(obj, name, value) => {
+        record_priv_access(name, declared, own_brand, owner, issues)
+        scan_expr_priv_access(obj, declared, own_brand, owner, issues)
+        scan_expr_priv_access(value, declared, own_brand, owner, issues)
+      }
+      Assign(_, e)
+      | CompoundAssign(_, _, e)
+      | Expr(e)
+      | Throw(e)
+      | Return(Some(e)) =>
+        scan_expr_priv_access(e, declared, own_brand, owner, issues)
+      IndexAssign(a, b, c) => {
+        scan_expr_priv_access(a, declared, own_brand, owner, issues)
+        scan_expr_priv_access(b, declared, own_brand, owner, issues)
+        scan_expr_priv_access(c, declared, own_brand, owner, issues)
+      }
+      Var(_, _, e) | Let(_, _, e) | Const(_, _, e) =>
+        scan_expr_priv_access(e, declared, own_brand, owner, issues)
+      If(c, a, b) => {
+        scan_expr_priv_access(c, declared, own_brand, owner, issues)
+        scan_stmts_priv_access(a.stmts, declared, own_brand, owner, issues)
+        match b {
+          Some(blk) =>
+            scan_stmts_priv_access(
+              blk.stmts,
+              declared,
+              own_brand,
+              owner,
+              issues,
+            )
+          None => ()
+        }
+      }
+      While(c, b) | DoWhile(c, b) | With(c, b) => {
+        scan_expr_priv_access(c, declared, own_brand, owner, issues)
+        scan_stmts_priv_access(b.stmts, declared, own_brand, owner, issues)
+      }
+      ForOf(_, _, _, e, b) | ForAwaitOf(_, _, _, e, b) | ForIn(_, _, _, e, b) => {
+        scan_expr_priv_access(e, declared, own_brand, owner, issues)
+        scan_stmts_priv_access(b.stmts, declared, own_brand, owner, issues)
+      }
+      For(_, _, _, b) =>
+        scan_stmts_priv_access(b.stmts, declared, own_brand, owner, issues)
+      Try(a, _, c, f) => {
+        scan_stmts_priv_access(a.stmts, declared, own_brand, owner, issues)
+        match c {
+          Some(blk) =>
+            scan_stmts_priv_access(
+              blk.stmts,
+              declared,
+              own_brand,
+              owner,
+              issues,
+            )
+          None => ()
+        }
+        match f {
+          Some(blk) =>
+            scan_stmts_priv_access(
+              blk.stmts,
+              declared,
+              own_brand,
+              owner,
+              issues,
+            )
+          None => ()
+        }
+      }
+      Switch(e, cases) => {
+        scan_expr_priv_access(e, declared, own_brand, owner, issues)
+        for c in cases {
+          scan_stmts_priv_access(
+            c.body.stmts,
+            declared,
+            own_brand,
+            owner,
+            issues,
+          )
+        }
+      }
+      // A nested class declaration is a fresh private-name scope; its body may
+      // legally reference an outer class's privates, so do not descend.
+      _ => ()
+    }
+  }
+}
+
+///|
+fn scan_expr_priv_access(
+  expr : @ast.TsExpr,
+  declared : Map[String, Unit],
+  own_brand : String,
+  owner : String,
+  issues : Array[ExprIssue],
+) -> Unit {
+  fn go(e : @ast.TsExpr) -> Unit {
+    scan_expr_priv_access(e, declared, own_brand, owner, issues)
+  }
+
+  match expr {
+    PropAccess(recv, name) => {
+      record_priv_access(name, declared, own_brand, owner, issues)
+      go(recv)
+    }
+    MethodCall(recv, name, args) => {
+      record_priv_access(name, declared, own_brand, owner, issues)
+      go(recv)
+      for a in args {
+        go(a)
+      }
+    }
+    PropAssignExpr(obj, name, value) => {
+      record_priv_access(name, declared, own_brand, owner, issues)
+      go(obj)
+      go(value)
+    }
+    CompoundAssignExpr(target, _, value) => {
+      go(target)
+      go(value)
+    }
+    IndexAssignExpr(a, b, c) => {
+      go(a)
+      go(b)
+      go(c)
+    }
+    BinOp(_, a, b) | Seq(a, b) | ComputedProp(a, b) | IndexAccess(a, b) => {
+      go(a)
+      go(b)
+    }
+    UnaryOp(_, a)
+    | Spread(a)
+    | Await(a)
+    | PureCall(a)
+    | NonNull(a)
+    | OptionalChain(a)
+    | YieldStar(a)
+    | As(a, _)
+    | Satisfies(a, _)
+    | TypeArgs(_, a)
+    | AssignExpr(_, a)
+    | AssignPattern(_, a) => go(a)
+    Cond(a, b, c) => {
+      go(a)
+      go(b)
+      go(c)
+    }
+    Call(_, args) | New(_, args) | ArrayLit(args) =>
+      for a in args {
+        go(a)
+      }
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      go(callee)
+      for a in args {
+        go(a)
+      }
+    }
+    ObjectLit(entries) =>
+      for kv in entries {
+        go(kv.1)
+      }
+    TemplateLiteral(_, exprs) =>
+      for e in exprs {
+        go(e)
+      }
+    TaggedTemplate(tag, _, _, exprs) => {
+      go(tag)
+      for e in exprs {
+        go(e)
+      }
+    }
+    Yield(Some(e)) => go(e)
+    DynamicImport(a, b) => {
+      go(a)
+      match b {
+        Some(e) => go(e)
+        None => ()
+      }
+    }
+    ArrowFunc(_, _, body, _) =>
+      match body {
+        ArrowExpr(e) => go(e)
+        ArrowBlock(b) =>
+          scan_stmts_priv_access(b.stmts, declared, own_brand, owner, issues)
+      }
+    FuncExpr(f) =>
+      scan_stmts_priv_access(f.body.stmts, declared, own_brand, owner, issues)
+    // `NativeClassExpr` is a fresh private-name scope -- do not descend.
+    _ => ()
+  }
+}
+
+///|
+/// TS2803 / TS2540: assignment to a non-writable `#`-private member. See
+///   - TS2803: a private *method* (`#m() {}`) is not writable.
+///   - TS2540: a getter-only private accessor (`get #x()` with no `set #x`) is
+///     a read-only property.
+/// `#`-private members are brand-mangled (`__private_brand__N__name`). A
+/// private method has an empty `accessor` in `cls.methods`; an accessor carries
+/// `"get"` / `"set"`. We build a name -> message map of the non-writable
+/// targets and flag any assignment whose target is a property access to one.
+/// Sound: a writable `#`-field arrow lives in `properties` (never `methods`),
+/// and an accessor with a setter is excluded.
+fn check_private_method_assignments(
+  module_ : @ast.TsModule,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for cls in module_.classes {
+    let targets : Map[String, String] = {}
+    let has_setter : Map[String, Unit] = {}
+    let getters : Map[String, Unit] = {}
+    for m in cls.methods {
+      if !m.name.has_prefix("__private_brand__") {
+        continue
+      }
+      if m.accessor == "" {
+        targets[m.name] = "cannot assign to private method; private methods are not writable"
+      } else if m.accessor == "set" {
+        has_setter[m.name] = ()
+      } else if m.accessor == "get" {
+        getters[m.name] = ()
+      }
+    }
+    for name, _ in getters {
+      if !has_setter.contains(name) {
+        targets[name] = "cannot assign to a read-only private accessor"
+      }
+    }
+    if targets.size() == 0 {
+      continue
+    }
+    let owner = cls.name
+    match cls.constructor_body {
+      Some(b) => scan_stmts_priv_method_assign(b.stmts, targets, owner, issues)
+      None => ()
+    }
+    for m in cls.methods {
+      match m.body {
+        Some(b) =>
+          scan_stmts_priv_method_assign(b.stmts, targets, owner, issues)
+        None => ()
+      }
+    }
+  }
+  issues
+}
+
+///|
+fn record_priv_method_assign(
+  name : String,
+  targets : Map[String, String],
+  owner : String,
+  issues : Array[ExprIssue],
+) -> Unit {
+  match targets.get(name) {
+    Some(msg) => issues.push({ path: "class \{owner}", message: msg })
+    None => ()
+  }
+}
+
+///|
+fn scan_stmts_priv_method_assign(
+  stmts : Array[@ast.TsStmt],
+  targets : Map[String, String],
+  owner : String,
+  issues : Array[ExprIssue],
+) -> Unit {
+  for st in stmts {
+    match st {
+      PropAssign(_, name, value) => {
+        record_priv_method_assign(name, targets, owner, issues)
+        scan_expr_priv_method_assign(value, targets, owner, issues)
+      }
+      IndexAssign(_, _, value)
+      | Assign(_, value)
+      | CompoundAssign(_, _, value) =>
+        scan_expr_priv_method_assign(value, targets, owner, issues)
+      Expr(e) | Throw(e) | Return(Some(e)) =>
+        scan_expr_priv_method_assign(e, targets, owner, issues)
+      Var(_, _, e) | Let(_, _, e) | Const(_, _, e) =>
+        scan_expr_priv_method_assign(e, targets, owner, issues)
+      If(c, a, b) => {
+        scan_expr_priv_method_assign(c, targets, owner, issues)
+        scan_stmts_priv_method_assign(a.stmts, targets, owner, issues)
+        match b {
+          Some(blk) =>
+            scan_stmts_priv_method_assign(blk.stmts, targets, owner, issues)
+          None => ()
+        }
+      }
+      While(_, b)
+      | DoWhile(_, b)
+      | ForOf(_, _, _, _, b)
+      | ForAwaitOf(_, _, _, _, b)
+      | ForIn(_, _, _, _, b)
+      | With(_, b) =>
+        scan_stmts_priv_method_assign(b.stmts, targets, owner, issues)
+      For(_, _, _, b) =>
+        scan_stmts_priv_method_assign(b.stmts, targets, owner, issues)
+      Try(a, _, c, f) => {
+        scan_stmts_priv_method_assign(a.stmts, targets, owner, issues)
+        match c {
+          Some(blk) =>
+            scan_stmts_priv_method_assign(blk.stmts, targets, owner, issues)
+          None => ()
+        }
+        match f {
+          Some(blk) =>
+            scan_stmts_priv_method_assign(blk.stmts, targets, owner, issues)
+          None => ()
+        }
+      }
+      Switch(_, cases) =>
+        for c in cases {
+          scan_stmts_priv_method_assign(c.body.stmts, targets, owner, issues)
+        }
+      _ => ()
+    }
+  }
+}
+
+///|
+fn scan_expr_priv_method_assign(
+  expr : @ast.TsExpr,
+  targets : Map[String, String],
+  owner : String,
+  issues : Array[ExprIssue],
+) -> Unit {
+  match expr {
+    PropAssignExpr(_, name, value) => {
+      record_priv_method_assign(name, targets, owner, issues)
+      scan_expr_priv_method_assign(value, targets, owner, issues)
+    }
+    CompoundAssignExpr(target, _, value) => {
+      match target {
+        PropAccess(_, name) =>
+          record_priv_method_assign(name, targets, owner, issues)
+        _ => ()
+      }
+      scan_expr_priv_method_assign(value, targets, owner, issues)
+    }
+    UnaryOp(op, operand) => {
+      match (op, operand) {
+        (PreInc, PropAccess(_, name))
+        | (PreDec, PropAccess(_, name))
+        | (PostInc, PropAccess(_, name))
+        | (PostDec, PropAccess(_, name)) =>
+          record_priv_method_assign(name, targets, owner, issues)
+        _ => ()
+      }
+      scan_expr_priv_method_assign(operand, targets, owner, issues)
+    }
+    Seq(a, b) => {
+      scan_expr_priv_method_assign(a, targets, owner, issues)
+      scan_expr_priv_method_assign(b, targets, owner, issues)
+    }
+    AssignExpr(_, v) | Spread(v) | Await(v) =>
+      scan_expr_priv_method_assign(v, targets, owner, issues)
+    Cond(a, b, c) => {
+      scan_expr_priv_method_assign(a, targets, owner, issues)
+      scan_expr_priv_method_assign(b, targets, owner, issues)
+      scan_expr_priv_method_assign(c, targets, owner, issues)
+    }
+    _ => ()
+  }
+}
+
+///|
+/// TS2322 (instanceMemberAssignsToClassPrototype /
+/// staticMemberAssignsToConstructorFunctionMembers): assigning a provably
+/// void-returning function to `C.prototype.m` / `C.m` where method `m` has a
+/// concrete non-void return type. The method's declared signature is read
+/// directly off the class decl (no `infer_expr` modelling of the prototype /
+/// static side needed), and the value is flagged only when it is an arrow with
+/// a block body that contains no value `return` -- i.e. it definitely returns
+/// `void`, which is never assignable to a concrete non-void return. Sound:
+/// expression-bodied arrows and value-returning blocks are never flagged.
+fn check_prototype_static_member_assign(
+  module_ : @ast.TsModule,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for cls in module_.classes {
+    let inst : Map[String, Unit] = {}
+    let stat : Map[String, Unit] = {}
+    for m in cls.methods {
+      if m.accessor == "" && is_concrete_primitive_or_literal(m.return_type) {
+        if m.is_static {
+          stat[m.name] = ()
+        } else {
+          inst[m.name] = ()
+        }
+      }
+    }
+    if inst.size() == 0 && stat.size() == 0 {
+      continue
+    }
+    let cn = cls.name
+    fn check_target(
+      recv : @ast.TsExpr,
+      prop : String,
+      value : @ast.TsExpr,
+    ) -> Unit {
+      if not(arrow_is_void_returning(value)) {
+        return
+      }
+      let hit = match recv {
+        PropAccess(Var(rn), "prototype") => rn == cn && inst.contains(prop)
+        Var(rn) => rn == cn && stat.contains(prop)
+        _ => false
+      }
+      if hit {
+        issues.push({
+          path: "class \{cn}",
+          message: "a void-returning function is not assignable to method `\{prop}` with a non-void return type",
+        })
+      }
+    }
+
+    fn walk(stmts : Array[@ast.TsStmt]) -> Unit {
+      for st in stmts {
+        match st {
+          PropAssign(recv, prop, value) => check_target(recv, prop, value)
+          Expr(PropAssignExpr(recv, prop, value)) =>
+            check_target(recv, prop, value)
+          If(_, a, b) => {
+            walk(a.stmts)
+            match b {
+              Some(blk) => walk(blk.stmts)
+              None => ()
+            }
+          }
+          While(_, b) | DoWhile(_, b) | With(_, b) | For(_, _, _, b) =>
+            walk(b.stmts)
+          ForOf(_, _, _, _, b)
+          | ForAwaitOf(_, _, _, _, b)
+          | ForIn(_, _, _, _, b) => walk(b.stmts)
+          Try(a, _, c, f) => {
+            walk(a.stmts)
+            match c {
+              Some(blk) => walk(blk.stmts)
+              None => ()
+            }
+            match f {
+              Some(blk) => walk(blk.stmts)
+              None => ()
+            }
+          }
+          Switch(_, cases) =>
+            for c in cases {
+              walk(c.body.stmts)
+            }
+          _ => ()
+        }
+      }
+    }
+
+    match cls.constructor_body {
+      Some(b) => walk(b.stmts)
+      None => ()
+    }
+    for m in cls.methods {
+      match m.body {
+        Some(b) => walk(b.stmts)
+        None => ()
+      }
+    }
+  }
+  issues
+}
+
+///|
+/// True when `expr` is an arrow with a block body that definitely returns
+/// `void` -- no `return <value>` anywhere in the block (nested function /
+/// arrow / class bodies are not descended into, as their returns are their
+/// own). Expression-bodied arrows return a value and are never void here.
+fn arrow_is_void_returning(expr : @ast.TsExpr) -> Bool {
+  match expr {
+    ArrowFunc(_, _, ArrowBlock(b), _) => not(block_has_value_return(b.stmts))
+    _ => false
+  }
+}
+
+///|
+fn block_has_value_return(stmts : Array[@ast.TsStmt]) -> Bool {
+  for st in stmts {
+    match st {
+      Return(Some(_)) => return true
+      If(_, a, b) => {
+        if block_has_value_return(a.stmts) {
+          return true
+        }
+        match b {
+          Some(blk) => if block_has_value_return(blk.stmts) { return true }
+          None => ()
+        }
+      }
+      While(_, b)
+      | DoWhile(_, b)
+      | With(_, b)
+      | For(_, _, _, b)
+      | ForOf(_, _, _, _, b)
+      | ForAwaitOf(_, _, _, _, b)
+      | ForIn(_, _, _, _, b) =>
+        if block_has_value_return(b.stmts) {
+          return true
+        }
+      Try(a, _, c, f) => {
+        if block_has_value_return(a.stmts) {
+          return true
+        }
+        match c {
+          Some(blk) => if block_has_value_return(blk.stmts) { return true }
+          None => ()
+        }
+        match f {
+          Some(blk) => if block_has_value_return(blk.stmts) { return true }
+          None => ()
+        }
+      }
+      Switch(_, cases) =>
+        for c in cases {
+          if block_has_value_return(c.body.stmts) {
+            return true
+          }
+        }
+      _ => ()
+    }
+  }
+  false
+}
+
+///|
+/// TS2673 / TS2674: a `new C(...)` on a class whose constructor is `private` /
+/// `protected` is only allowed inside C's own declaration. `private` /
+/// `protected` constructors land in the class's `private_members` /
+/// `protected_members` under the name `constructor`. We flag a `new C(...)`
+/// that appears at module top level, in a free function, or in a *different*
+/// class's body (all provably outside C), which is false-positive-free.
+fn check_constructor_accessibility(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let restricted : Map[String, String] = {}
+  for cls in module_.classes {
+    let mut kind = ""
+    for n in cls.private_members {
+      if n == "constructor" {
+        kind = "private"
+      }
+    }
+    if kind == "" {
+      for n in cls.protected_members {
+        if n == "constructor" {
+          kind = "protected"
+        }
+      }
+    }
+    if kind != "" {
+      restricted[cls.name] = kind
+    }
+  }
+  let issues : Array[ExprIssue] = []
+  if restricted.size() == 0 {
+    return issues
+  }
+  scan_new_exprs_stmts(module_.top_level_stmts, restricted, "", issues)
+  for f in module_.funcs {
+    scan_new_exprs_stmts(f.body.stmts, restricted, "", issues)
+  }
+  for cls in module_.classes {
+    match cls.constructor_body {
+      Some(b) => scan_new_exprs_stmts(b.stmts, restricted, cls.name, issues)
+      None => ()
+    }
+    for m in cls.methods {
+      match m.body {
+        Some(b) => scan_new_exprs_stmts(b.stmts, restricted, cls.name, issues)
+        None => ()
+      }
+    }
+  }
+  issues
+}
+
+///|
+fn record_new_restricted(
+  cn : String,
+  restricted : Map[String, String],
+  enclosing : String,
+  issues : Array[ExprIssue],
+) -> Unit {
+  if cn != enclosing {
+    match restricted.get(cn) {
+      Some(kind) =>
+        issues.push({
+          path: "new \{cn}",
+          message: "constructor of class `\{cn}` is \{kind} and only accessible within the class declaration",
+        })
+      None => ()
+    }
+  }
+}
+
+///|
+fn scan_new_exprs_stmts(
+  stmts : Array[@ast.TsStmt],
+  restricted : Map[String, String],
+  enclosing : String,
+  issues : Array[ExprIssue],
+) -> Unit {
+  fn ge(e : @ast.TsExpr) -> Unit {
+    scan_new_exprs_expr(e, restricted, enclosing, issues)
+  }
+
+  fn gb(b : @ast.TsBlock) -> Unit {
+    scan_new_exprs_stmts(b.stmts, restricted, enclosing, issues)
+  }
+
+  for st in stmts {
+    match st {
+      Expr(e)
+      | Throw(e)
+      | Return(Some(e))
+      | Assign(_, e)
+      | CompoundAssign(_, _, e)
+      | Var(_, _, e)
+      | Let(_, _, e)
+      | Const(_, _, e) => ge(e)
+      PropAssign(a, _, b) | IndexAssign(a, _, b) => {
+        ge(a)
+        ge(b)
+      }
+      If(c, a, b) => {
+        ge(c)
+        gb(a)
+        match b {
+          Some(blk) => gb(blk)
+          None => ()
+        }
+      }
+      While(c, b) | DoWhile(c, b) | With(c, b) => {
+        ge(c)
+        gb(b)
+      }
+      ForOf(_, _, _, e, b) | ForAwaitOf(_, _, _, e, b) | ForIn(_, _, _, e, b) => {
+        ge(e)
+        gb(b)
+      }
+      For(_, _, _, b) => gb(b)
+      Try(a, _, c, f) => {
+        gb(a)
+        match c {
+          Some(blk) => gb(blk)
+          None => ()
+        }
+        match f {
+          Some(blk) => gb(blk)
+          None => ()
+        }
+      }
+      Switch(e, cases) => {
+        ge(e)
+        for c in cases {
+          gb(c.body)
+        }
+      }
+      _ => ()
+    }
+  }
+}
+
+///|
+fn scan_new_exprs_expr(
+  expr : @ast.TsExpr,
+  restricted : Map[String, String],
+  enclosing : String,
+  issues : Array[ExprIssue],
+) -> Unit {
+  fn go(e : @ast.TsExpr) -> Unit {
+    scan_new_exprs_expr(e, restricted, enclosing, issues)
+  }
+
+  match expr {
+    New(cn, args) => {
+      record_new_restricted(cn, restricted, enclosing, issues)
+      for a in args {
+        go(a)
+      }
+    }
+    NewExpr(callee, args) => {
+      match callee {
+        Var(cn) => record_new_restricted(cn, restricted, enclosing, issues)
+        _ => go(callee)
+      }
+      for a in args {
+        go(a)
+      }
+    }
+    BinOp(_, a, b) | Seq(a, b) | IndexAccess(a, b) | ComputedProp(a, b) => {
+      go(a)
+      go(b)
+    }
+    UnaryOp(_, a)
+    | Spread(a)
+    | Await(a)
+    | PureCall(a)
+    | NonNull(a)
+    | TypeArgs(_, a)
+    | As(a, _)
+    | Satisfies(a, _)
+    | AssignExpr(_, a)
+    | PropAccess(a, _)
+    | PropAssignExpr(_, _, a)
+    | CompoundAssignExpr(_, _, a) => go(a)
+    Cond(a, b, c) => {
+      go(a)
+      go(b)
+      go(c)
+    }
+    Call(_, args) | ArrayLit(args) =>
+      for a in args {
+        go(a)
+      }
+    CallExpr(callee, args) | MethodCall(callee, _, args) => {
+      go(callee)
+      for a in args {
+        go(a)
+      }
+    }
+    ObjectLit(entries) =>
+      for kv in entries {
+        go(kv.1)
+      }
+    ArrowFunc(_, _, body, _) =>
+      match body {
+        ArrowExpr(e) => go(e)
+        ArrowBlock(b) =>
+          scan_new_exprs_stmts(b.stmts, restricted, enclosing, issues)
+      }
+    FuncExpr(f) =>
+      scan_new_exprs_stmts(f.body.stmts, restricted, enclosing, issues)
+    _ => ()
+  }
+}
+
+///|
+/// TS1244 / TS1243: `abstract` member modifier rules, both decidable from the
+/// parsed class shape:
+///   - TS1244: an `abstract` member is only legal inside an `abstract class`.
+///   - TS1243: `private` cannot be combined with `abstract`.
+/// `is_abstract`, `abstract_members`, and `private_members` are already on the
+/// class decl, so this is false-positive-free (these combinations are never
+/// valid TypeScript).
+fn check_abstract_modifier_rules(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for cls in module_.classes {
+    if !cls.is_abstract && cls.abstract_members.length() > 0 {
+      issues.push({
+        path: "class \{cls.name}",
+        message: "abstract methods can only appear within an abstract class",
+      })
+    }
+    let abstract_set : Map[String, Unit] = {}
+    for n in cls.abstract_members {
+      abstract_set[n] = ()
+    }
+    let private_set : Map[String, Unit] = {}
+    for n in cls.private_members {
+      private_set[n] = ()
+    }
+    for n in cls.abstract_members {
+      if private_set.contains(n) {
+        issues.push({
+          path: "class \{cls.name}",
+          message: "`private` modifier cannot be used with `abstract` modifier",
+        })
+      }
+    }
+    // TS1242: `abstract` can only modify a class, method, or property -- not a
+    // constructor.
+    if abstract_set.contains("constructor") {
+      issues.push({
+        path: "class \{cls.name}",
+        message: "`abstract` modifier can only appear on a class, method, or property declaration",
+      })
+    }
+  }
+  issues
+}
+
+///|
+/// TS2313 ("Type parameter 'T' has a circular constraint"): return the names of
+/// type parameters whose constraint cycles back to themselves. We only follow a
+/// constraint that is a *bare* reference to another type parameter in the same
+/// list (`T extends U`); any other constraint shape — an `Applied` F-bound
+/// (`S extends Foo<S>`), a union, an object, a keyword type — terminates the
+/// walk. So genuine recursive constraints never false-flag; only a pure
+/// type-parameter reference cycle is reported.
+fn circular_type_param_names(
+  type_params : Array[String],
+  bounds : Array[(String, @ast.TsType)],
+) -> Array[String] {
+  let tp_set : Map[String, Unit] = {}
+  for p in type_params {
+    tp_set[p] = ()
+  }
+  let bound_of : Map[String, @ast.TsType] = {}
+  for b in bounds {
+    bound_of[b.0] = b.1
+  }
+  let circular : Array[String] = []
+  for p in type_params {
+    let visited : Map[String, Unit] = {}
+    visited[p] = ()
+    let mut cur = p
+    let mut is_circular = false
+    while true {
+      match bound_of.get(cur) {
+        Some(Named(q)) =>
+          if tp_set.contains(q) {
+            if visited.contains(q) {
+              is_circular = true
+              break
+            }
+            visited[q] = ()
+            cur = q
+          } else {
+            break
+          }
+        _ => break
+      }
+    }
+    if is_circular {
+      circular.push(p)
+    }
+  }
+  circular
+}
+
+///|
+/// Walk a module's declarations (and nested namespaces) and report every
+/// circular type-parameter constraint (TS2313). Only declarations that carry
+/// constraint metadata participate — top-level functions, classes (and their
+/// methods), and type aliases — which is enough to flag the offending file;
+/// interface-level constraints are not stored on the AST and are skipped.
+fn check_circular_type_params(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  fn emit(
+    owner : String,
+    type_params : Array[String],
+    bounds : Array[(String, @ast.TsType)],
+  ) -> Unit {
+    for name in circular_type_param_names(type_params, bounds) {
+      issues.push({
+        path: owner,
+        message: "type parameter `\{name}` has a circular constraint",
+      })
+    }
+  }
+
+  for f in module_.funcs {
+    emit("function \{f.name}", f.type_params, f.type_param_bounds)
+  }
+  for c in module_.classes {
+    emit("class \{c.name}", c.type_params, c.type_param_bounds)
+    for m in c.methods {
+      emit("method \{c.name}.\{m.name}", m.type_params, m.type_param_bounds)
+    }
+  }
+  for a in module_.type_aliases {
+    emit("type \{a.name}", a.type_params, a.type_param_bounds)
+  }
+  for ns in module_.namespaces {
+    for issue in check_circular_type_params(ns.module_) {
+      issues.push(issue)
+    }
+  }
+  issues
 }
 
 ///|
@@ -13141,11 +14364,12 @@ fn check_module_function_bodies_layered(
     module_
   }
   let strict_property_init = strict_root.strict_property_initialization
+  let strict_null_checks = strict_root.strict_null_checks
   let all : Array[ExprIssue] = []
   for func in module_.funcs {
     for
       issue in check_function_body_with(
-        func, resolver, permissive, strict_property_init,
+        func, resolver, permissive, strict_property_init, strict_null_checks,
       ) {
       all.push(issue)
     }
@@ -13213,6 +14437,7 @@ fn check_module_function_bodies_layered(
           resolver,
           permissive,
           strict_property_init,
+          strict_null_checks,
           this_type~,
         ) {
         all.push(issue)
@@ -13264,6 +14489,7 @@ fn check_module_function_bodies_layered(
         resolver,
         permissive,
         strict_property_init,
+        strict_null_checks,
         this_type=Some(@ast.TsType::Named(cls.name)),
       ) {
       all.push(issue)
@@ -13289,6 +14515,7 @@ fn check_module_function_bodies_layered(
       permissive,
       unassigned: {},
       strict_property_init,
+      strict_null_checks,
       in_computed_key: false,
     }
     let env = ExprEnv::new()
@@ -13354,6 +14581,7 @@ fn check_module_function_bodies_layered(
       permissive,
       unassigned: {},
       strict_property_init,
+      strict_null_checks,
       in_computed_key: true,
     }
     let env = ExprEnv::new()
@@ -13386,6 +14614,7 @@ fn check_module_function_bodies_layered(
       permissive,
       unassigned: {},
       strict_property_init,
+      strict_null_checks,
       in_computed_key: false,
     }
     let env = ExprEnv::new()
@@ -13465,6 +14694,28 @@ fn check_module_function_bodies_layered(
     ) {
     all.push(issue)
   }
+  // TS2803: assignment to a private method (`#method`). Run per-module so
+  // namespace-nested classes are covered by the layered recursion below.
+  for issue in check_private_method_assignments(module_) {
+    all.push(issue)
+  }
+  // TS18013 / TS2339: reference to a `#`-private not declared by the enclosing
+  // (top-level) class.
+  for issue in check_private_member_access(module_) {
+    all.push(issue)
+  }
+  // TS1244 / TS1243: `abstract` member modifier rules.
+  for issue in check_abstract_modifier_rules(module_) {
+    all.push(issue)
+  }
+  // TS2673 / TS2674: `new C(...)` on a private / protected constructor.
+  for issue in check_constructor_accessibility(module_) {
+    all.push(issue)
+  }
+  // TS2322: void-returning function assigned to `C.prototype.m` / `C.m`.
+  for issue in check_prototype_static_member_assign(module_) {
+    all.push(issue)
+  }
   // TS5107: deprecated compiler-option directives (`// @target: es5`, …).
   // These live only in the top-level module header, so emit once per file.
   if outer_modules.length() == 0 {
@@ -13473,6 +14724,23 @@ fn check_module_function_bodies_layered(
         path: "compiler options",
         message: "option `\{opt}` is deprecated",
       })
+    }
+    // TS2369: a parameter property (`public` / `private` / `protected` /
+    // `readonly` on a parameter) is only allowed in a constructor
+    // implementation. The parser records each one it saw outside a
+    // constructor parameter list; surface one diagnostic per occurrence.
+    // These positions are never valid TS, so this is false-positive-free.
+    for pname in module_.parameter_property_misuses {
+      all.push({
+        path: "parameter `\{pname}`",
+        message: "a parameter property is only allowed in a constructor implementation",
+      })
+    }
+    // TS2313: a type parameter with a circular constraint (`T extends T`, or an
+    // indirect cycle). Walks declarations (and nested namespaces) once from the
+    // top.
+    for issue in check_circular_type_params(module_) {
+      all.push(issue)
     }
     // Module-level structural validation that doesn't depend on function
     // bodies. Only the kinds that are sound *and* not already covered by
@@ -13487,13 +14755,17 @@ fn check_module_function_bodies_layered(
     // already flags real dups while tolerating call / construct / method
     // overloads, which the structural pass mis-reads as duplicate
     // `<call>` / `<new>` / method fields), `ClassPropertyDuplicate` (the
-    // parser merges duplicate fields, so it never fires), and
-    // `TypeParameterConstraintViolation` (false-flags `infer` / forwarded
-    // type-parameter bounds).
+    // parser merges duplicate fields, so it never fires).
+    //   - `TypeParameterConstraintViolation` (TS2344) is now sound to keep:
+    //     `check_constraints` abstains on `infer` markers and forwarded
+    //     (in-scope) type parameters, so only a concrete argument that
+    //     definitely violates a concrete bound fires.
     for issue in check_module(module_).issues {
       let keep = match issue.kind {
-        CircularTypeAlias | InterfaceExtendsCycle | TypeAliasArityMismatch =>
-          true
+        CircularTypeAlias
+        | InterfaceExtendsCycle
+        | TypeAliasArityMismatch
+        | TypeParameterConstraintViolation => true
         _ => false
       }
       if keep {
@@ -13599,6 +14871,86 @@ fn applied_generic_mismatch(
 }
 
 ///|
+/// Instantiate a generic interface reference `Applied(name, args)` to a
+/// concrete object shape by substituting its type parameters into its fields.
+/// Returns `None` unless `name` is a generic interface with matching arity and
+/// a shape the structural relation can faithfully reproduce: no heritage
+/// clause, no index signatures, and no generic methods. A `None` keeps the
+/// caller on its conservative bail, so this never introduces a false positive.
+fn instantiate_generic_interface(
+  ty : @ast.TsType,
+  resolver : Resolver,
+) -> @ast.TsType? {
+  match ty {
+    Applied(name, args) => {
+      guard resolver.interfaces.get(name) is Some(iface) else { return None }
+      if iface.type_params.length() != args.length() ||
+        iface.type_params.length() == 0 {
+        return None
+      }
+      if iface.extends_names.length() > 0 ||
+        iface.index_signatures.length() > 0 ||
+        iface.method_type_params.length() > 0 {
+        return None
+      }
+      let bindings : Map[String, @ast.TsType] = {}
+      for i in 0..<iface.type_params.length() {
+        bindings[iface.type_params[i]] = args[i]
+      }
+      let fields : Array[(@ast.TsType, @ast.TsType)] = []
+      for f in iface.fields {
+        fields.push((Literal(f.0), substitute_params(f.1, bindings)))
+      }
+      Some(Object(fields))
+    }
+    _ => None
+  }
+}
+
+///|
+/// Generic-instantiation mismatch: when at least one side is a generic
+/// interface reference (`Box<string>`), instantiate it to its concrete object
+/// shape and compare structurally. Flags only a *bidirectionally* incompatible
+/// pair (neither direction assignable), which keeps covariant / contravariant
+/// subtype directions silent -- the same soundness gate `applied_generic_mismatch`
+/// uses. Both sides must reduce to a comparable object / struct shape;
+/// otherwise abstain.
+fn generic_instantiation_mismatch(
+  source : @ast.TsType,
+  target : @ast.TsType,
+  resolver : Resolver,
+) -> Bool {
+  let s_inst = instantiate_generic_interface(source, resolver)
+  let t_inst = instantiate_generic_interface(target, resolver)
+  // Require that we actually instantiated at least one side (else this just
+  // duplicates the plain structural path).
+  if s_inst is None && t_inst is None {
+    return false
+  }
+  let s = match s_inst {
+    Some(o) => o
+    None => source
+  }
+  let t = match t_inst {
+    Some(o) => o
+    None => target
+  }
+  // Both sides must now be object-shaped for a faithful structural compare.
+  let s_shape = match s {
+    Object(_) | Struct(_, _) => true
+    _ => false
+  }
+  let t_shape = match t {
+    Object(_) | Struct(_, _) => true
+    _ => false
+  }
+  if not(s_shape) || not(t_shape) {
+    return false
+  }
+  not(is_assignable_to(s, t)) && not(is_assignable_to(t, s))
+}
+
+///|
 /// Intersection-target assignability: a value inhabits `A & B` only when it
 /// satisfies *every* part. Returns true when the source is a shape we can
 /// compare and it provably fails an object-like part -- a concrete primitive
@@ -13611,6 +14963,19 @@ fn intersection_target_mismatch(
   parts : Array[@ast.TsType],
   resolver : Resolver,
 ) -> Bool {
+  // An intersection *source* (`A & B`) carries the combined members of all its
+  // parts. When every part is a disjoint object shape we can faithfully flatten
+  // it into one object and decide assignability against each target part; a
+  // non-object part or an overlapping property name bails (returns the original
+  // source, which then fails the `source_shape` gate below and abstains).
+  let source = match source {
+    Intersection(sparts) =>
+      match flatten_intersection_objects(sparts, resolver) {
+        Some(obj) => obj
+        None => source
+      }
+    _ => source
+  }
   let source_concrete = is_concrete_primitive_or_literal(source)
   let source_shape = match source {
     Object(_) | Struct(_, _) => true
@@ -13642,11 +15007,51 @@ fn intersection_target_mismatch(
 }
 
 ///|
+/// Flatten an intersection of object parts into a single `Object` by merging
+/// their members. Returns `None` when any part is not a (resolvable) object
+/// shape or when two parts declare the same property name -- in both cases a
+/// faithful flat object cannot be formed, so the caller abstains. Keeps the
+/// result false-positive-safe: only disjoint, fully-object intersections flatten.
+fn flatten_intersection_objects(
+  parts : Array[@ast.TsType],
+  resolver : Resolver,
+) -> @ast.TsType? {
+  let merged : Array[(@ast.TsType, @ast.TsType)] = []
+  let seen : Map[String, Unit] = {}
+  for part in parts {
+    let fields = match resolver.unwrap(part) {
+      Object(fs) => fs
+      Struct(_, fs) => {
+        let out : Array[(@ast.TsType, @ast.TsType)] = []
+        for f in fs {
+          out.push((Literal(f.0), f.1))
+        }
+        out
+      }
+      _ => return None
+    }
+    for f in fields {
+      let key = match f.0 {
+        Literal(k) => k
+        _ => return None
+      }
+      if seen.contains(key) {
+        return None
+      }
+      seen[key] = ()
+      merged.push(f)
+    }
+  }
+  Some(Object(merged))
+}
+
+///|
 /// True when `name` resolves to a user-declared class or interface — a
 /// nominal reference whose member shape the structural-assignability relation
 /// can compare.
 fn is_resolvable_nominal_name(resolver : Resolver, name : String) -> Bool {
-  resolver.classes.get(name) is Some(_) || resolver.interfaces.get(name) is Some(_)
+  resolver.classes.get(name) is Some(_) ||
+  resolver.interfaces.get(name) is Some(_)
 }
 
 ///|
@@ -14762,16 +16167,40 @@ fn check_class_implements(
 fn callable_member_incompatible(
   derived : @ast.TsType,
   base : @ast.TsType,
+  ignore_return? : Bool = false,
 ) -> Bool {
   let same_kind = match (derived, base) {
     (Func(_, _), Func(_, _)) => true
     (Constructor(_, _, _), Constructor(_, _, _)) => true
     _ => false
   }
+  // A bare `<call>` / `<new>` signature on a derived interface does *not*
+  // override the base's same-kind signature -- TypeScript merges them into an
+  // overload set rather than hiding the base ("derived interfaces no longer
+  // hide signatures from base types"), so a return-type-only difference is
+  // accepted (`(): number` extending `(): string`). For those members we
+  // compare parameters / arity only by neutralizing both return types; named
+  // function-typed members are real overrides and keep the full comparison.
+  let (d, b) = if ignore_return {
+    (with_void_return(derived), with_void_return(base))
+  } else {
+    (derived, base)
+  }
   same_kind &&
   not_generic_func(derived) &&
   not_generic_func(base) &&
-  not(is_assignable_to_bivariant(derived, base))
+  not(is_assignable_to_bivariant(d, b))
+}
+
+///|
+/// Replace a callable's return type with `Void` so two signatures can be
+/// compared on parameters / arity alone. Non-callables pass through.
+fn with_void_return(t : @ast.TsType) -> @ast.TsType {
+  match t {
+    Func(params, _) => Func(params, Void)
+    Constructor(params, _, abs) => Constructor(params, Void, abs)
+    _ => t
+  }
 }
 
 ///|
@@ -14919,6 +16348,7 @@ fn check_interface_extends_compat(
             } else if callable_member_incompatible(
                 resolver.unwrap(d_payload),
                 resolver.unwrap(b_payload),
+                ignore_return=df.0 == "<call>" || df.0 == "<new>",
               ) {
               issues.push({
                 path: "interface \{iface.name}",

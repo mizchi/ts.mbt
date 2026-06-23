@@ -316,8 +316,10 @@ fn parse_module_or_empty(src : String) -> @ast.TsModule {
         enums: [],
         module_augmentations: [],
         strict_property_initialization: true,
+        strict_null_checks: true,
         use_define_for_class_fields: false,
         deprecated_compiler_options: [],
+        parameter_property_misuses: [],
         top_level_stmts: [],
       }
   } noraise {
@@ -8328,10 +8330,7 @@ test "expr_check: enum nominality assignment target" {
   @test.assert_eq(issues(prelude + "e = E.A;"), 0)
   @test.assert_eq(issues(prelude + "declare var n: number;\ne = n;"), 0)
   // A string enum is not numeric, so the rule does not fire on it.
-  @test.assert_eq(
-    issues("enum S { A = \"a\" }\nvar s: S;\ns = 'x';"),
-    0,
-  )
+  @test.assert_eq(issues("enum S { A = \"a\" }\nvar s: S;\ns = 'x';"), 0)
 }
 
 ///|
@@ -8359,9 +8358,7 @@ test "expr_check: covariant generic instantiation mismatch" {
   // Distinct user classes with incompatible shapes as the type argument are a
   // mismatch; a shared shape (bidirectionally assignable) stays silent.
   let pre2 = "class P { x: number }\nclass Q { y: string }\ninterface Box<T> { v: T }\n"
-  assert_true(
-    issues(pre2 + "declare var a: Box<P>;\nvar b: Box<Q> = a;") > 0,
-  )
+  assert_true(issues(pre2 + "declare var a: Box<P>;\nvar b: Box<Q> = a;") > 0)
 }
 
 ///|
@@ -8373,9 +8370,7 @@ test "expr_check: primitive not assignable to callable type" {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
   assert_true(issues("var f: () => void;\nf = 5;") > 0)
-  assert_true(
-    issues("class A {}\nvar k: new () => A;\nk = \"asdf\";") > 0,
-  )
+  assert_true(issues("class A {}\nvar k: new () => A;\nk = \"asdf\";") > 0)
   // A matching callable value stays silent.
   @test.assert_eq(issues("var f: () => void;\nf = () => {};"), 0)
 }
@@ -8391,9 +8386,7 @@ test "expr_check: intersection target requires every part" {
   }
   let pre = "declare var a: { a: string };\n"
   // `a` lacks `b`, so it cannot inhabit `{ a } & { b }`.
-  assert_true(
-    issues(pre + "var y: { a: string } & { b: string };\ny = a;") > 0,
-  )
+  assert_true(issues(pre + "var y: { a: string } & { b: string };\ny = a;") > 0)
   // A primitive can never satisfy an object part of the intersection.
   assert_true(issues("var y: { a: string } & { b: string };\ny = 5;") > 0)
   // A source carrying both members satisfies the intersection.
@@ -8428,16 +8421,25 @@ test "expr_check: private member makes a class nominal" {
   }
   // Source class with a private member -> structural object target: error.
   assert_true(
-    issues("class E { private foo: string }\nvar a: { foo: string };\na = new E();") >
+    issues(
+      "class E { private foo: string }\nvar a: { foo: string };\na = new E();",
+    ) >
     0,
   )
   // Distinct classes, one private: not mutually assignable.
   let two = "class D { foo: string = \"\" }\nclass E { private foo: string = \"\" }\n"
   assert_true(issues(two + "var d: D = new D();\nd = new E();") > 0)
   // Same class stays silent; a public-only class is still structural.
-  @test.assert_eq(issues("class E { private foo: string = \"\" }\nvar e: E = new E();\ne = new E();"), 0)
   @test.assert_eq(
-    issues("class P { foo: string = \"\" }\nvar a: { foo: string };\na = new P();"),
+    issues(
+      "class E { private foo: string = \"\" }\nvar e: E = new E();\ne = new E();",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "class P { foo: string = \"\" }\nvar a: { foo: string };\na = new P();",
+    ),
     0,
   )
 }
@@ -8482,14 +8484,14 @@ test "expr_check: function value arity vs overloaded call signature" {
   @test.assert_eq(issues(overloaded + "foo(x => '');"), 0)
   // Single call signature: arrow needing more args than provided is an error.
   assert_true(
-    issues("function g(cb: { (x: number): string }) { return cb }\ng((x, y) => '');") >
+    issues(
+      "function g(cb: { (x: number): string }) { return cb }\ng((x, y) => '');",
+    ) >
     0,
   )
   // A bare function-typed target enforces the same minimum arity: assigning an
   // arrow that requires an argument to a `() => T` field is too many params.
-  assert_true(
-    issues("var f: () => number;\nf = (x: number) => 1;") > 0,
-  )
+  assert_true(issues("var f: () => number;\nf = (x: number) => 1;") > 0)
 }
 
 ///|
@@ -8522,7 +8524,9 @@ test "expr_check: interface extends with too many required params" {
   }
   let base = "interface Base { a: () => number }\n"
   // Derived `a` requires 1 arg; base provides 0 -> incompatible.
-  assert_true(issues(base + "interface I extends Base { a: (x: number) => number }") > 0)
+  assert_true(
+    issues(base + "interface I extends Base { a: (x: number) => number }") > 0,
+  )
   // Same number of required params (optional second) -> ok.
   @test.assert_eq(
     issues(base + "interface I extends Base { a: (x?: number) => number }"),
@@ -8531,7 +8535,8 @@ test "expr_check: interface extends with too many required params" {
   // Construct-signature member analog.
   let cbase = "interface CB { a: new () => number }\n"
   assert_true(
-    issues(cbase + "interface I extends CB { a: new (x: number) => number }") > 0,
+    issues(cbase + "interface I extends CB { a: new (x: number) => number }") >
+    0,
   )
   // Incompatible rest-parameter element type (`string[]` over `number[]`).
   assert_true(
@@ -8548,6 +8553,302 @@ test "expr_check: interface extends with too many required params" {
     ) >
     0,
   )
+  // A bare `<call>` / `<new>` signature does not *override* the base's --
+  // TS merges them into an overload set, so a return-type-only difference
+  // (`(): number` extending `(): string`) is accepted, not a TS2430.
+  @test.assert_eq(
+    issues("interface B { (): string }\ninterface I extends B { (): number }"),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "interface B { new (x: string): number }\ninterface I extends B { new (x: string): string }",
+    ),
+    0,
+  )
+}
+
+///|
+// Generic interface instantiation: a generic interface reference is expanded
+// to its concrete object shape so a structural mismatch against an object or a
+// different generic instantiation is caught. Only bidirectionally-incompatible
+// pairs are flagged, so covariant / assignable cases stay silent.
+test "expr_check: generic interface instantiation mismatch" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let box = "interface Box<T> { value: T }\n"
+  // Instantiated `Box<string>` vs a `{ value: number }` object -> mismatch.
+  assert_true(
+    issues(
+      box +
+      "declare let a: Box<string>;\ndeclare let b: { value: number };\na = b;",
+    ) >
+    0,
+  )
+  // Same-arg instantiation -> assignable, silent.
+  @test.assert_eq(
+    issues(
+      box +
+      "declare let a: Box<string>;\ndeclare let b: { value: string };\na = b;",
+    ),
+    0,
+  )
+  // Covariant arg widening (`Box<string>` into `Box<string | number>`) is
+  // assignable -> silent.
+  @test.assert_eq(
+    issues(
+      box +
+      "declare let a: Box<string | number>;\ndeclare let b: Box<string>;\na = b;",
+    ),
+    0,
+  )
+}
+
+///|
+// TS2344: a type argument that definitely violates a concrete constraint is
+// flagged (alias / class generic, in field / parameter / ambient positions).
+// Forwarded (in-scope) type parameters, `infer` markers, and union arguments
+// abstain so the check stays false-positive-free.
+test "expr_check: type-argument constraint violation (TS2344)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let a = "type A<T extends string> = T;\n"
+  // Concrete violation in an interface field / function parameter -> flagged.
+  assert_true(issues(a + "interface I { x: A<number> }") > 0)
+  assert_true(issues(a + "function f(p: A<number>) {}") > 0)
+  // Class generic with a constraint, violated at a field type.
+  assert_true(
+    issues("class C<T extends string> {}\ninterface I { c: C<number> }") > 0,
+  )
+  // Interface generic with a concrete constraint, violated at a field type.
+  assert_true(
+    issues(
+      "interface P<T extends string> { x: T }\ninterface I { p: P<number> }",
+    ) >
+    0,
+  )
+  // Satisfying argument -> silent.
+  @test.assert_eq(issues(a + "interface I { x: A<\"hi\"> }"), 0)
+  // Forwarded type parameter (still in scope) -> abstain.
+  @test.assert_eq(issues(a + "function f<U>(p: A<U>) {}"), 0)
+  // Union argument that satisfies the bound -> abstain (no distribution FP).
+  @test.assert_eq(
+    issues(
+      "type B<T extends string | number> = T;\ninterface I { y: B<1 | \"a\"> }",
+    ),
+    0,
+  )
+}
+
+///|
+// TS2803: a private method (`#m`) is not writable -- assigning to it (via any
+// receiver, compound, or increment) is an error. A writable `#`-field stays
+// silent (it lives in `properties`, not `methods`).
+test "expr_check: assignment to a private method (TS2803)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Assign to a private method through `this` / another receiver.
+  assert_true(
+    issues("class A { #m() {} constructor() { this.#m = () => {} } }") > 0,
+  )
+  assert_true(issues("class A { #m() {} f(a: A) { a.#m = () => {} } }") > 0)
+  // Compound / increment forms.
+  assert_true(issues("class A { #m() {} f(a: any) { a.#m++ } }") > 0)
+  // A writable `#`-field is fine.
+  @test.assert_eq(
+    issues("class A { #f = 1; constructor() { this.#f = 2 } }"),
+    0,
+  )
+  // Reading a private method is fine.
+  @test.assert_eq(issues("class A { #m() {} f() { let g = this.#m } }"), 0)
+  // TS2540: a getter-only private accessor is read-only.
+  assert_true(
+    issues("class A { get #x() { return 1 } constructor() { this.#x = 2 } }") >
+    0,
+  )
+  // A private accessor with both get and set is writable -> silent.
+  @test.assert_eq(
+    issues(
+      "class A { get #x() { return 1 } set #x(v: Int) {} constructor() { this.#x = 2 } }",
+    ),
+    0,
+  )
+}
+
+///|
+// TS18013/TS2339: a `#`-private reference inside a top-level class must be a
+// name that class declares. A reference to a `#`-name it does not declare is an
+// error; nested/anonymous classes (different brand) are not judged, so a nested
+// class legally reaching an outer private never false-flags.
+test "expr_check: private identifier not declared in enclosing class" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Reference to a `#`-name the class does not declare -> flagged.
+  assert_true(
+    issues("class Base { static #prop = 1; static m() { Base.#nope } }") > 0,
+  )
+  // Reference to a declared `#`-name -> silent.
+  @test.assert_eq(
+    issues("class Base { static #prop = 1; static m() { Base.#prop } }"),
+    0,
+  )
+  // A nested class reaching the outer class's private is not judged here
+  // (different brand) -> no false positive.
+  @test.assert_eq(
+    issues(
+      "class Foo { #name = 1; m() { class Bar { #y = 2; g(o: Foo) { return o.#name } } return 0 } }",
+    ),
+    0,
+  )
+}
+
+///|
+// TS1244 / TS1243: `abstract` member modifier rules. An abstract member is only
+// allowed in an abstract class (TS1244); `private` cannot combine with
+// `abstract` (TS1243). Valid abstract members in an abstract class stay silent.
+test "expr_check: abstract member modifier rules (TS1244/TS1243)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Abstract method in a non-abstract class.
+  assert_true(issues("class A { abstract foo(): void }") > 0)
+  // private + abstract.
+  assert_true(issues("abstract class A { private abstract x: number }") > 0)
+  // Abstract constructor (TS1242).
+  assert_true(issues("abstract class A { abstract constructor() {} }") > 0)
+  // Valid abstract member in an abstract class -> silent.
+  @test.assert_eq(issues("abstract class A { abstract foo(): void }"), 0)
+}
+
+///|
+// TS2673/TS2674: `new C()` on a private/protected constructor is only allowed
+// inside C's own declaration; a `new` elsewhere (top level, free function,
+// other class) is flagged. A public constructor and a `new` of the enclosing
+// class stay silent.
+test "expr_check: private/protected constructor accessibility (TS2673/2674)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  assert_true(
+    issues("class D { private constructor() {} }\nvar d = new D();") > 0,
+  )
+  assert_true(
+    issues("class E { protected constructor() {} }\nvar e = new E();") > 0,
+  )
+  // Public constructor -> silent.
+  @test.assert_eq(
+    issues("class C { public constructor() {} }\nvar c = new C();"),
+    0,
+  )
+  // `new` of the enclosing class (inside its own static method) -> silent.
+  @test.assert_eq(
+    issues(
+      "class F { private constructor() {} static make(): F { return new F() } }",
+    ),
+    0,
+  )
+}
+
+///|
+// TS2322: a void-returning function assigned to `C.prototype.m` / `C.m` where
+// method `m` has a concrete non-void return type. Expression-bodied arrows and
+// methods returning void stay silent.
+test "expr_check: void function assigned to non-void class method" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Instance (prototype) and static method with number return + void arrow.
+  assert_true(
+    issues(
+      "class C { bar(x: number): number { C.prototype.bar = () => {}; return 1 } }",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "class C { static bar(x: number): number { C.bar = () => {}; return 1 } }",
+    ) >
+    0,
+  )
+  // Value-returning arrow -> assignable, silent.
+  @test.assert_eq(
+    issues(
+      "class C { bar(x: number): number { C.prototype.bar = (x: number) => 1; return 1 } }",
+    ),
+    0,
+  )
+  // Method returning void -> a void arrow is fine.
+  @test.assert_eq(
+    issues("class C { foo(): void { C.prototype.foo = () => {} } }"),
+    0,
+  )
+}
+
+///|
+// TS2322: an intersection *source* of disjoint object parts is flattened and
+// checked against an intersection target's parts. Incompatible parts (a
+// differing literal property) are flagged; a compatible assignment stays silent.
+test "expr_check: intersection source assignability (TS2322)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // `{t?:'A'} & {a}` is not assignable to `{t?:'B'} & {a}`.
+  assert_true(
+    issues(
+      "declare let x: { t?: \"A\" } & { a: boolean };\nlet y: { t?: \"B\" } & { a: boolean } = x;",
+    ) >
+    0,
+  )
+  // Same literal -> assignable, silent.
+  @test.assert_eq(
+    issues(
+      "declare let x: { t?: \"A\" } & { a: boolean };\nlet y: { t?: \"A\" } & { a: boolean } = x;",
+    ),
+    0,
+  )
+}
+
+///|
+// TS2313: a type parameter with a circular constraint. Direct (`T extends T`)
+// and indirect cycles (`U extends T, T extends U`) are flagged; a valid bound
+// or an F-bounded `Applied` constraint (`S extends Foo<S>`) stays silent.
+test "expr_check: circular type-parameter constraint (TS2313)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  assert_true(issues("function f<T extends T>() {}") > 0)
+  assert_true(issues("class C<T, U extends U> {}") > 0)
+  assert_true(issues("function g<U extends T, T extends U>() {}") > 0)
+  // A bound that is not a type-parameter reference -> not circular.
+  @test.assert_eq(issues("function h<T extends string>() {}"), 0)
+  @test.assert_eq(issues("function k<T extends U, U extends string>() {}"), 0)
+  // F-bounded constraint (`Applied`) is valid, not a cycle.
+  @test.assert_eq(
+    issues("type Foo<T> = T;\nfunction m<S extends Foo<S>>() {}"),
+    0,
+  )
+}
+
+///|
+// TS void-parameter rule: a parameter typed `void` is omittable, so
+// `(a: void) => R` is assignable to `() => R`. The arity check must not flag
+// the value as "requires 1 argument" against a parameter-less target.
+test "expr_check: void parameter is omittable for arity" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  @test.assert_eq(
+    issues("declare function g(a: void): void;\nlet gg: () => void = g;"),
+    0,
+  )
+  // A non-void required parameter still raises the count -> flagged.
+  assert_true(
+    issues("declare function h(a: number): void;\nlet hh: () => void = h;") > 0,
+  )
 }
 
 ///|
@@ -8561,17 +8862,23 @@ test "expr_check: callable value assignment compares signatures" {
   }
   // Return-type mismatch between two function-typed values.
   assert_true(
-    issues("declare var g: (x: number) => number;\nvar f: (x: number) => string;\nf = g;") >
+    issues(
+      "declare var g: (x: number) => number;\nvar f: (x: number) => string;\nf = g;",
+    ) >
     0,
   )
   // Parameter-type mismatch.
   assert_true(
-    issues("declare var g: (x: string) => number;\nvar f: (x: number) => number;\nf = g;") >
+    issues(
+      "declare var g: (x: string) => number;\nvar f: (x: number) => number;\nf = g;",
+    ) >
     0,
   )
   // Compatible signature stays silent.
   @test.assert_eq(
-    issues("declare var g: (x: number) => number;\nvar f: (x: number) => number;\nf = g;"),
+    issues(
+      "declare var g: (x: number) => number;\nvar f: (x: number) => number;\nf = g;",
+    ),
     0,
   )
 }
@@ -8658,4 +8965,178 @@ test "expr_check: explicit type-argument constructor argument mismatch" {
     issues("class C<T> { constructor(x: T) {} }\nnew C<number>(1);"),
     0,
   )
+}
+
+///|
+// TS2369: a parameter property (`public` / `private` / `protected` /
+// `readonly` on a parameter) is only allowed in a constructor implementation.
+// It is an error on a free function, arrow, non-constructor method, or a
+// call / construct signature; a real constructor parameter list stays silent.
+test "expr_check: parameter property outside a constructor (TS2369)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Free function, arrow, non-constructor method: each is an error.
+  assert_true(issues("function f(public x: number) {}") > 0)
+  assert_true(issues("var g = (private y: number) => {};") > 0)
+  assert_true(issues("class C { m(readonly z: number) {} }") > 0)
+  // Construct / call signatures in an interface or object type: error.
+  assert_true(issues("interface I { new (public x: number); }") > 0)
+  assert_true(issues("var a: { foo(private x: number); };") > 0)
+  // A genuine constructor parameter property is valid -> silent.
+  @test.assert_eq(issues("class D { constructor(public x: number) {} }"), 0)
+  // A plain parameter (no modifier) is valid -> silent.
+  @test.assert_eq(issues("function h(x: number) {}"), 0)
+  // `readonly` used as an ordinary parameter name, not a modifier -> silent.
+  @test.assert_eq(issues("function k(readonly: number) {}"), 0)
+}
+
+///|
+// The `undefined` keyword denotes the `undefined` type. TS18050: using the
+// `null` / `undefined` keyword as an operand of an arithmetic or relational
+// operator is always an error ("The value 'null'/'undefined' cannot be used
+// here"). Comparing a value against the `null` / `undefined` keyword with
+// `===` / `!==`, however, is always permitted (the canonical loose null
+// check) and never trips the TS2367 "always false" check.
+test "expr_check: nullish keyword in arithmetic / relational / equality" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // `undefined` in an arithmetic operand -> TS18050.
+  assert_true(issues("let a = undefined * 1;") > 0)
+  // `null` / `undefined` keyword in a relational operand -> TS18050,
+  // on either side.
+  assert_true(issues("function h(x: number) { let b = x < null; }") > 0)
+  assert_true(issues("function m(x: number) { let d = undefined > x; }") > 0)
+  // Comparing a value against the `null` / `undefined` keyword with
+  // `===` / `!==` never trips the "always false" (TS2367) check, even
+  // with no static overlap.
+  @test.assert_eq(
+    issues("function k(x: number) { let c = x !== undefined; }"),
+    0,
+  )
+  @test.assert_eq(issues("function i(x: number) { let c = x === null; }"), 0)
+}
+
+///|
+// Under `strictNullChecks` (the conformance default, absent an opt-out
+// directive) the `null` / `undefined` keyword is subject to assignability:
+// it no longer flows to every target. With `// @strict: false` it flows
+// everywhere again. The `strict_null_checks` flag (parsed from the header)
+// gates this; `void` in particular accepts `undefined` but never `null`.
+test "expr_check: nullish literal assignability gated on strictNullChecks" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Default (strict): null/undefined not assignable to a non-nullable target.
+  assert_true(issues("function f(): number { return null; }") > 0)
+  assert_true(issues("function f(): string { return undefined; }") > 0)
+  // `void` accepts `undefined` but not `null`.
+  assert_true(issues("let x: void = null;") > 0)
+  @test.assert_eq(issues("let x: void = undefined;"), 0)
+  // `@strict: false` opts out -> null/undefined flow everywhere.
+  @test.assert_eq(
+    issues("// @strict: false\nfunction f(): number { return null; }"),
+    0,
+  )
+  @test.assert_eq(issues("// @strict: false\nlet x: void = null;"), 0)
+  // `@strictNullChecks: false` also opts out.
+  @test.assert_eq(
+    issues("// @strictNullChecks: false\nlet y: number = null;"),
+    0,
+  )
+  // Assignable targets stay silent even under strict: nullable union / any.
+  @test.assert_eq(issues("function f(): number | null { return null; }"), 0)
+  @test.assert_eq(issues("function f(): any { return null; }"), 0)
+}
+
+///|
+// TS18048 / TS2532: under strictNullChecks, member access on a `Var` whose
+// narrowed type still includes `undefined` / `null` is "object is possibly
+// undefined/null". Narrowing guards (`if (x)`, `typeof`, `=== undefined`
+// early return, `??=`) remove the nullish part and must stay silent.
+test "expr_check: possibly-undefined member access (TS18048) + narrowing" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Unguarded access on a possibly-undefined value -> flagged.
+  assert_true(
+    issues("function f(x: string | undefined) { return x.length; }") > 0,
+  )
+  assert_true(
+    issues("function f(x: { a: number } | undefined) { return x.a; }") > 0,
+  )
+  // Guards narrow the binding -> silent.
+  @test.assert_eq(
+    issues("function f(x?: string) { if (x) return x.length; return 0; }"),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "function f(x?: string) { if (typeof x === \"string\") return x.length; return 0; }",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "function f(x?: string) { if (x === undefined) return 0; return x.length; }",
+    ),
+    0,
+  )
+  // `??=` narrows away the nullish part when the rhs is non-nullish.
+  @test.assert_eq(
+    issues("let e: string | undefined;\ne ??= \"x\"\ne.length;"),
+    0,
+  )
+  // `@strict: false` opts out entirely.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nfunction f(x: string | undefined) { return x.length; }",
+    ),
+    0,
+  )
+  // Purely-nullable / non-union receivers are unaffected here.
+  @test.assert_eq(issues("function f(x: string) { return x.length; }"), 0)
+}
+
+///|
+// Flow-narrowing guards that remove the nullish part of a `Var` must keep the
+// possibly-undefined member-access check (TS18048) silent. Covers the guard
+// forms beyond the truthy `if (x)` case: loose `!= null` (strips both null and
+// undefined), `!x` early return, and `&&` / `||` short-circuits in expression
+// position (`x && x.foo`, `!x || x.foo`).
+test "expr_check: narrowing guards suppress possibly-undefined (TS18048)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Loose `!= null` removes both null and undefined.
+  @test.assert_eq(
+    issues(
+      "function f(x?: string) { if (x != null) return x.length; return 0; }",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "function f(x?: string) { if (x == null) return 0; return x.length; }",
+    ),
+    0,
+  )
+  // `!x` early return narrows the fall-through to truthy.
+  @test.assert_eq(
+    issues("function f(x?: string) { if (!x) return 0; return x.length; }"),
+    0,
+  )
+  // `&&` / `||` short-circuit narrowing in expression position.
+  @test.assert_eq(issues("function f(x?: string) { return x && x.length; }"), 0)
+  @test.assert_eq(
+    issues("function f(x?: string) { return !x || x.length; }"),
+    0,
+  )
+  @test.assert_eq(
+    issues("function f(x?: string) { return x !== undefined && x.length; }"),
+    0,
+  )
+  // The genuinely-unguarded access still flags.
+  assert_true(issues("function f(x?: string) { return x.length; }") > 0)
 }

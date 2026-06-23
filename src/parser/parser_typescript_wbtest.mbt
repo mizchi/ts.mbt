@@ -979,11 +979,11 @@ test "checker: duplicate parameter / type parameter names" {
 }
 
 ///|
-test "checker: null / undefined are assignable to every type (non-strict)" {
-  // Without `strictNullChecks` (the conformance default, and the mode we
-  // assume absent a per-file signal) `null` / `undefined` assign to any
-  // target. Make sure those initializers never false-flag.
-  let src =
+test "checker: null / undefined assignability is gated on strictNullChecks" {
+  // With an explicit `// @strict: false` directive, `null` / `undefined`
+  // assign to any target — those initializers must never false-flag.
+  let non_strict =
+    #|// @strict: false
     #|function f() {
     #|  var b: number = null;
     #|  var c: string = undefined;
@@ -991,17 +991,31 @@ test "checker: null / undefined are assignable to every type (non-strict)" {
     #|  var e: number[] = null;
     #|  var g: () => number = undefined;
     #|}
-  let module_ = Parser::from_source(src).parse_module()
+  let module_ = Parser::from_source(non_strict).parse_module()
   let issues = @checker.check_module_function_bodies(module_)
   for i in issues {
-    if i.message.contains("but got `null`") ||
-      i.message.contains("but got `undefined`") {
+    if i.message.contains("null") || i.message.contains("undefined") {
       println("unexpected: \{i.path}: \{i.message}")
       fail(
-        "got unexpected null/undefined assignability error in non-strict mode",
+        "null/undefined should be assignable everywhere under @strict: false",
       )
     }
   }
+  // Under the (default) strict-null mode, the same initializers ARE errors:
+  // `null` is not assignable to `number`, etc.
+  let strict =
+    #|function f() {
+    #|  var b: number = null;
+    #|}
+  let strict_mod = Parser::from_source(strict).parse_module()
+  let strict_issues = @checker.check_module_function_bodies(strict_mod)
+  let mut flagged = false
+  for i in strict_issues {
+    if i.message.contains("null") {
+      flagged = true
+    }
+  }
+  @test.assert_eq(flagged, true)
 }
 
 ///|

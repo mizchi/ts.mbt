@@ -74,11 +74,18 @@ pub impl Show for TsBlock
 pub(all) struct TsClassDecl {
   name : String
   type_params : Array[String]
+  type_param_bounds : Array[(String, TsType)]
+  computed_field_keys : Array[TsExpr]
   base_names : Array[String]
+  implements_names : Array[String]
   base_expr : TsExpr?
   static_field_inits : Array[(String, TsExpr)]
+  static_blocks : Array[TsBlock]
   instance_field_inits : Array[(String, TsExpr)]
   constructor_params : Array[(String, TsType)]?
+  constructor_param_is_rest : Array[Bool]
+  constructor_param_defaults : Array[TsExpr?]
+  constructor_body : TsBlock?
   properties : Array[TsClassPropertyDecl]
   methods : Array[TsClassMethodDecl]
   is_abstract : Bool
@@ -86,6 +93,10 @@ pub(all) struct TsClassDecl {
   index_signatures : Array[(TsType, TsType)]
   decorators : Array[TsExpr]
   is_declare : Bool
+  private_members : Array[String]
+  protected_members : Array[String]
+  abstract_members : Array[String]
+  duplicate_member_names : Array[String]
 } derive(@debug.Debug)
 pub impl Show for TsClassDecl
 
@@ -177,6 +188,7 @@ pub(all) enum TsExpr {
   BinOp(TsBinOp, TsExpr, TsExpr)
   UnaryOp(TsUnaryOp, TsExpr)
   Call(String, Array[TsExpr])
+  TypeArgs(Array[TsType], TsExpr)
   CallExpr(TsExpr, Array[TsExpr])
   Cond(TsExpr, TsExpr, TsExpr)
   ArrayLit(Array[TsExpr])
@@ -225,6 +237,7 @@ pub(all) struct TsFunc {
   name : String
   type_params : Array[String]
   const_type_params : Array[Bool]
+  type_param_bounds : Array[(String, TsType)]
   params : Array[TsParam]
   return_type : TsType
   body : TsBlock
@@ -238,6 +251,7 @@ pub(all) struct TsImport {
   module_ : String
   type_params : Array[String]
   params : Array[(String, TsType)]
+  param_is_rest : Array[Bool]
   return_type : TsType
 } derive(@debug.Debug)
 pub impl Show for TsImport
@@ -257,6 +271,7 @@ pub impl Show for TsImportDecl
 pub(all) struct TsInterface {
   name : String
   type_params : Array[String]
+  type_param_bounds : Array[(String, TsType)]
   extends_names : Array[String]
   extends_args : Array[Array[TsType]]
   fields : Array[(String, TsType)]
@@ -278,8 +293,10 @@ pub(all) struct TsModule {
   module_augmentations : Array[(String, TsModule)]
   top_level_stmts : Array[TsStmt]
   strict_property_initialization : Bool
+  strict_null_checks : Bool
   use_define_for_class_fields : Bool
   deprecated_compiler_options : Array[String]
+  parameter_property_misuses : Array[String]
 } derive(@debug.Debug)
 pub impl Show for TsModule
 
@@ -399,6 +416,7 @@ pub(all) enum TsType {
   Object(Array[(TsType, TsType)])
   Struct(String, Array[(String, TsType)])
   Func(Array[TsType], TsType)
+  GenericFunc(Array[String], TsType)
   Constructor(Array[TsType], TsType, Bool)
   Union(Array[TsType])
   Intersection(Array[TsType])

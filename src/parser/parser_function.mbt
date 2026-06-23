@@ -149,6 +149,13 @@ fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
     self.param_property_scopes[top].push(
       (name, is_readonly_param, visibility_param),
     )
+  } else if is_param_property {
+    // A parameter property outside a constructor parameter list (free
+    // function, arrow, non-constructor method, or call / construct
+    // signature). TypeScript permits these modifiers only in a constructor
+    // implementation, so this is a TS2369. Record it for the checker; the
+    // modifier was already consumed, so parsing otherwise proceeds normally.
+    self.param_property_misuses.push(name)
   }
   let is_optional = self.match_(Question)
   // type ()
@@ -1446,6 +1453,7 @@ pub fn Parser::parse_interface(
   {
     name,
     type_params,
+    type_param_bounds,
     extends_names,
     extends_args,
     fields,
@@ -1526,6 +1534,7 @@ fn type_alias_object_fields_to_interface(
         fields: iface_fields,
         readonly_fields: [],
         index_signatures: [],
+        type_param_bounds: [],
         method_type_params: [],
       })
     }

@@ -617,6 +617,11 @@ fn is_assignable_to_inner(
     (NumberLiteral(_), Number) => true
     (BigIntLiteral(_), BigInt) => true
     (BooleanLiteral(_), Boolean) => true
+    // `undefined` is assignable to `void` (a `void` location holds
+    // `undefined`). `null` is *not* — that distinction is what makes
+    // `let x: void = null` a strict-null error while `void = undefined` is
+    // fine.
+    (Undefined, Void) => true
     // A primitive is assignable to its boxed wrapper interface (`number`
     // flows into `Number`, `string` into `String`, etc.). The reverse does
     // not hold and is intentionally omitted. Literals reach the wrappers

@@ -292,6 +292,9 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
   //    `Some(false)` — opaque / nominal / unresolved shapes report
   //    `None` and stay silent, so external references and type-parameter
   //    forwarding never produce a false positive.
+  // Generic declarations that carry `<P extends Bound>` constraints — type
+  // aliases, interfaces, and classes alike. A `Applied(Name, args)` reference
+  // to any of them must supply arguments that satisfy the bounds.
   let alias_params : Map[String, Array[String]] = {}
   let alias_bounds : Map[String, Array[(String, @ast.TsType)]] = {}
   let non_generic_alias_bodies : Map[String, @ast.TsType] = {}
@@ -305,6 +308,18 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
     // satisfy `P extends string`). Generic aliases are left opaque.
     if ta.type_params.length() == 0 {
       non_generic_alias_bodies[ta.name] = ta.type_
+    }
+  }
+  for cls in module_.classes {
+    if cls.type_param_bounds.length() > 0 {
+      alias_params[cls.name] = cls.type_params
+      alias_bounds[cls.name] = cls.type_param_bounds
+    }
+  }
+  for iface in module_.interfaces {
+    if iface.type_param_bounds.length() > 0 {
+      alias_params[iface.name] = iface.type_params
+      alias_bounds[iface.name] = iface.type_param_bounds
     }
   }
   let resolve = fn(name : String) -> @ast.TsType? {
@@ -335,10 +350,13 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
       )
     }
     for f in module_.funcs {
+      // The function's own type parameters are in scope, so a forwarded
+      // `Bar<T>` is not mistaken for a constraint violation.
+      let scope = f.type_params
       for p in f.params {
         check_constraints(
           p.type_,
-          [],
+          scope,
           alias_params,
           alias_bounds,
           resolve,
@@ -347,12 +365,53 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
       }
       check_constraints(
         f.return_type,
-        [],
+        scope,
         alias_params,
         alias_bounds,
         resolve,
         issues,
       )
+    }
+    for cls in module_.classes {
+      // Class type parameters (and per-method type parameters) are in scope.
+      let scope = cls.type_params
+      for prop in cls.properties {
+        check_constraints(
+          prop.type_,
+          scope,
+          alias_params,
+          alias_bounds,
+          resolve,
+          issues,
+        )
+      }
+      for m in cls.methods {
+        let mscope : Array[String] = []
+        for p in scope {
+          mscope.push(p)
+        }
+        for p in m.type_params {
+          mscope.push(p)
+        }
+        for p in m.params {
+          check_constraints(
+            p.1,
+            mscope,
+            alias_params,
+            alias_bounds,
+            resolve,
+            issues,
+          )
+        }
+        check_constraints(
+          m.return_type,
+          mscope,
+          alias_params,
+          alias_bounds,
+          resolve,
+          issues,
+        )
+      }
     }
     for v in module_.values {
       check_constraints(
@@ -415,7 +474,33 @@ fn check_constraints(
                   }
                   let target = simplify_type(substituted)
                   let arg = simplify_type(args[idx])
-                  match extends_decision_with(arg, target, resolve) {
+                  // Soundness gate: abstain when the argument or the
+                  // (substituted) bound carries an `infer` marker or a
+                  // forwarded type parameter still in scope. Such an operand
+                  // could be instantiated to satisfy the bound, so a
+                  // `Some(false)` here is not a real violation (this is the
+                  // `infer` / forwarding false-positive the check historically
+                  // tripped on). Only concrete operands reach the relation.
+                  let unverifiable = constraint_operand_unverifiable(
+                      args[idx],
+                      scope,
+                    ) ||
+                    constraint_operand_unverifiable(target, scope)
+                  // A violation requires *both* the three-valued
+                  // `extends_decision` to be a definite `Some(false)` *and*
+                  // plain assignability to fail. `extends_decision` distributes
+                  // over a union argument (conditional-type semantics), which
+                  // mis-reports e.g. `1 | "a"` against `string | number`;
+                  // confirming with `is_assignable_to` (the actual constraint
+                  // relation) removes that false positive while keeping genuine
+                  // violations, where both agree.
+                  let violates = if unverifiable {
+                    false
+                  } else {
+                    extends_decision_with(arg, target, resolve) is Some(false) &&
+                    not(is_assignable_to(arg, target))
+                  }
+                  match (if violates { Some(false) } else { None }) {
                     Some(false) => {
                       let issue_name = "\{name}<\{pname}>"
                       let already = issues
@@ -505,6 +590,81 @@ fn check_constraints(
       check_constraints(k, scope, alias_params, alias_bounds, resolve, issues)
     }
     _ => ()
+  }
+}
+
+///|
+/// True when a type carries an `infer` marker (`Applied("__tsmbt_infer", ..)`)
+/// or a reference to a type parameter still in `scope` — an operand whose
+/// constraint relation we cannot decide soundly (a forwarded / inferred
+/// parameter could be instantiated to satisfy the bound). Unevaluated type
+/// operators (`keyof` / conditional / mapped / indexed-access / `typeof`) are
+/// also treated as unverifiable. Used to gate TS2344 so it never false-flags
+/// `infer ... extends ...` or forwarded type parameters.
+fn constraint_operand_unverifiable(
+  type_ : @ast.TsType,
+  scope : Array[String],
+) -> Bool {
+  match type_ {
+    Applied("__tsmbt_infer", _) => true
+    Named(n) => scope.contains(n)
+    Applied(_, args) => {
+      for a in args {
+        if constraint_operand_unverifiable(a, scope) {
+          return true
+        }
+      }
+      false
+    }
+    Array(inner) | Rest(inner) => constraint_operand_unverifiable(inner, scope)
+    Tuple(items) | Union(items) | Intersection(items) => {
+      for it in items {
+        if constraint_operand_unverifiable(it, scope) {
+          return true
+        }
+      }
+      false
+    }
+    Object(fields) => {
+      for f in fields {
+        if constraint_operand_unverifiable(f.0, scope) ||
+          constraint_operand_unverifiable(f.1, scope) {
+          return true
+        }
+      }
+      false
+    }
+    Struct(_, fields) => {
+      for f in fields {
+        if constraint_operand_unverifiable(f.1, scope) {
+          return true
+        }
+      }
+      false
+    }
+    Func(params, ret) => {
+      for p in params {
+        if constraint_operand_unverifiable(p, scope) {
+          return true
+        }
+      }
+      constraint_operand_unverifiable(ret, scope)
+    }
+    Constructor(params, ret, _) => {
+      for p in params {
+        if constraint_operand_unverifiable(p, scope) {
+          return true
+        }
+      }
+      constraint_operand_unverifiable(ret, scope)
+    }
+    Keyof(_)
+    | Conditional(_, _, _, _)
+    | MappedType(_, _, _, _)
+    | MappedTypeRemap(_, _, _, _, _)
+    | IndexedAccess(_, _)
+    | TypeOf(_) => true
+    _ => false
   }
 }
 

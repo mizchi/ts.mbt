@@ -419,8 +419,10 @@ async fn mtsc_load_bundle_files(
           enums: [],
           module_augmentations: [],
           strict_property_initialization: true,
+          strict_null_checks: true,
           use_define_for_class_fields: false,
           deprecated_compiler_options: [],
+          parameter_property_misuses: [],
           top_level_stmts: [],
         }
     }
@@ -626,8 +628,10 @@ async fn main {
           enums: [],
           module_augmentations: [],
           strict_property_initialization: true,
+          strict_null_checks: true,
           use_define_for_class_fields: false,
           deprecated_compiler_options: [],
+          parameter_property_misuses: [],
           top_level_stmts: [],
         })
         let local_names : Array[String] = []
@@ -736,8 +740,10 @@ async fn main {
             enums: [],
             module_augmentations: [],
             strict_property_initialization: true,
+            strict_null_checks: true,
             use_define_for_class_fields: false,
             deprecated_compiler_options: [],
+            parameter_property_misuses: [],
             top_level_stmts: [],
           })
           // Filter exports through the entry's `@internal` set so

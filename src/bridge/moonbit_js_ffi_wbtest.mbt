@@ -4787,6 +4787,7 @@ test "bridge: FFI struct generation deduplicates sanitized field names" {
     ],
     readonly_fields: [],
     index_signatures: [],
+    type_param_bounds: [],
     method_type_params: [],
   }
   let actual = ffi_struct_decl_to_moonbit(state, iface)
@@ -4858,6 +4859,7 @@ test "bridge: FFI struct generation sanitizes keyword and discard fields" {
     ],
     readonly_fields: [],
     index_signatures: [],
+    type_param_bounds: [],
     method_type_params: [],
   }
   let actual = ffi_struct_decl_to_moonbit(state, iface)
@@ -4905,6 +4907,7 @@ test "bridge: FFI struct generation adds method wrappers for function fields" {
     ],
     readonly_fields: [],
     index_signatures: [],
+    type_param_bounds: [],
     method_type_params: [],
   }
   let actual = ffi_struct_decl_to_moonbit(state, iface)
@@ -4947,6 +4950,7 @@ test "bridge: FFI struct method wrappers unwrap optional arguments" {
     ],
     readonly_fields: [],
     index_signatures: [],
+    type_param_bounds: [],
     method_type_params: [],
   }
   let actual = ffi_struct_decl_to_moonbit(state, iface)
@@ -5057,6 +5061,7 @@ test "bridge: FFI struct generation keeps generic method wrappers non-extern" {
     ],
     readonly_fields: [],
     index_signatures: [],
+    type_param_bounds: [],
     method_type_params: [],
   }
   let actual = ffi_struct_decl_to_moonbit(state, iface)
@@ -5095,6 +5100,7 @@ test "bridge: FFI struct generation caps method wrappers but keeps function fiel
     ],
     readonly_fields: [],
     index_signatures: [],
+    type_param_bounds: [],
     method_type_params: [],
   }
   let actual = ffi_struct_decl_to_moonbit(state, iface)
@@ -5139,6 +5145,7 @@ test "bridge: FFI struct generation keeps callable wrapper beyond cap" {
     ],
     readonly_fields: [],
     index_signatures: [],
+    type_param_bounds: [],
     method_type_params: [],
   }
   let actual = ffi_struct_decl_to_moonbit(state, iface)
@@ -5215,6 +5222,7 @@ test "bridge: FFI struct preserves selected interface type parameters locally" {
     ],
     readonly_fields: [],
     index_signatures: [],
+    type_param_bounds: [],
     method_type_params: [],
   }
   let actual = ffi_struct_decl_to_moonbit(state, iface)

@@ -522,6 +522,11 @@ pub(all) struct TsFunc {
 pub(all) struct TsInterface {
   name : String
   type_params : Array[String]
+  // `(P, Bound)` pairs for constrained interface type parameters
+  // (`interface I<T extends X> {}`). Sparse — only constrained parameters
+  // appear, so an empty array means "no constraints". Used by the checker to
+  // validate type-argument references (`I<number>` where `T extends string`).
+  type_param_bounds : Array[(String, TsType)]
   extends_names : Array[String]
   // Type arguments supplied alongside each `extends_names[i]`, parsed
   // from `extends Foo<A, B>`. Length matches `extends_names`; entries
@@ -824,6 +829,15 @@ pub(all) struct TsModule {
   // conformance harness baseline default, which has TS2564 emissions
   // for files without an explicit `@strict` directive).
   strict_property_initialization : Bool
+  // True when the source should be checked under `strictNullChecks`.
+  // Distinct from `strict_property_initialization`: it shares the
+  // default (`true`, matching the conformance baseline default) and the
+  // `@strict: false` opt-out, but is *not* disabled by
+  // `@strictPropertyInitialization: false`, and *is* disabled by
+  // `@strictNullChecks: false`. Gates the nullish-literal assignability
+  // checks (e.g. `null` is not assignable to `void` under strict mode,
+  // but flows everywhere when off).
+  strict_null_checks : Bool
   // True when class field initializers should be assumed to run via
   // ES2022 `[[DefineOwnProperty]]` semantics. This affects TS2729
   // ("property used before initialization") because the older
@@ -840,6 +854,14 @@ pub(all) struct TsModule {
   // directive comments that the test corpus uses — real `.d.ts` / `.ts`
   // bridge inputs never carry these, so the field stays empty for them.
   deprecated_compiler_options : Array[String]
+  // Parameter properties (`public` / `private` / `protected` / `readonly`
+  // on a parameter) found *outside* a class constructor. TypeScript only
+  // permits them in a constructor implementation, so each entry is a real
+  // TS2369. The parser records one human-readable location string per
+  // offending parameter; the checker surfaces one diagnostic per entry.
+  // Empty for any well-formed input (the modifier is always an error in
+  // these positions), so it never costs precision.
+  parameter_property_misuses : Array[String]
 } derive(Debug)
 
 ///|

@@ -11,8 +11,10 @@ fn empty_module() -> @ast.TsModule {
     enums: [],
     module_augmentations: [],
     strict_property_initialization: true,
+    strict_null_checks: true,
     use_define_for_class_fields: false,
     deprecated_compiler_options: [],
+    parameter_property_misuses: [],
     top_level_stmts: [],
   }
 }
@@ -30,6 +32,7 @@ fn iface(
     fields,
     readonly_fields: [],
     index_signatures: [],
+    type_param_bounds: [],
     method_type_params: [],
   }
 }
@@ -105,6 +108,7 @@ test "validate_module: ignores generic parameters in scope" {
     fields: [("value", Named("T"))],
     readonly_fields: [],
     index_signatures: [],
+    type_param_bounds: [],
     method_type_params: [],
   })
   let unresolved = unresolved_type_references(mod)

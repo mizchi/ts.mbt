@@ -99,8 +99,10 @@ test "module_alias_resolver: combines parsed aliases with stdlib utilities" {
     enums: [],
     module_augmentations: [],
     strict_property_initialization: true,
+    strict_null_checks: true,
     use_define_for_class_fields: false,
     deprecated_compiler_options: [],
+    parameter_property_misuses: [],
     top_level_stmts: [],
   }
   let resolve = module_alias_resolver(m)
@@ -135,8 +137,10 @@ test "module_alias_resolver: include_standard=false omits stdlib" {
     enums: [],
     module_augmentations: [],
     strict_property_initialization: true,
+    strict_null_checks: true,
     use_define_for_class_fields: false,
     deprecated_compiler_options: [],
+    parameter_property_misuses: [],
     top_level_stmts: [],
   }
   let resolve = module_alias_resolver(m, include_standard=false)
@@ -173,8 +177,10 @@ test "module_alias_resolver: module aliases shadow stdlib on name clash" {
     enums: [],
     module_augmentations: [],
     strict_property_initialization: true,
+    strict_null_checks: true,
     use_define_for_class_fields: false,
     deprecated_compiler_options: [],
+    parameter_property_misuses: [],
     top_level_stmts: [],
   }
   let resolve = module_alias_resolver(m)

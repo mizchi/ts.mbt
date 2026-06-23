@@ -1381,6 +1381,358 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-18 (T69)   583/815 (72 %)        414/414 ( 0 FP)
 2026-06-18 (T70)   584/815 (72 %)        414/414 ( 0 FP)
 2026-06-18 (T71)   589/815 (72 %)        414/414 ( 0 FP)
+2026-06-18 (T72)   592/815 (73 %)        414/414 ( 0 FP)
+2026-06-19 (T74)   595/815 (73 %)        414/414 ( 0 FP)
+2026-06-19 (T78)   597/815 (73 %)        414/414 ( 0 FP)
+2026-06-19 (T79)   599/815 (73 %)        414/414 ( 0 FP)
+2026-06-19 (T80)   601/815 (74 %)        414/414 ( 0 FP)
+2026-06-19 (T81)   604/815 (74 %)        414/414 ( 0 FP)
+2026-06-19 (T82)   605/815 (74 %)        414/414 ( 0 FP)
+2026-06-19 (T83)   608/815 (75 %)        414/414 ( 0 FP)
+2026-06-19 (T84)   609/815 (75 %)        414/414 ( 0 FP)
+2026-06-19 (T85)   611/815 (75 %)        414/414 ( 0 FP)
+2026-06-22 (T86)   609/815 (75 %)        414/414 ( 0 FP)   whole-corpus TP 1624 -> 1629
+2026-06-22 (T87)   617/815 (76 %)        414/414 ( 0 FP)   whole-corpus TP 1629 -> 1640
+2026-06-22 (T88)   619/815 (76 %)        414/414 ( 0 FP)   whole-corpus TP 1640 -> 1643
+2026-06-22 (T89)   619/815 (76 %)        414/414 ( 0 FP)   narrowing-engine hardening (no corpus delta)
+
+  T89 -- narrowing-engine hardening for the T88 possibly-undefined check.
+    T88 was corpus-FP-0 but had *latent* FPs on ubiquitous guard forms the
+    conformance corpus didn't exercise (real bridge output would). Fixed three
+    narrowing gaps so those guards correctly strip the nullish part:
+      * Loose `== null` / `!= null` (and `== undefined`) now narrow *both*
+        `null` and `undefined` (in JS `null == undefined`), where strict
+        `===` / `!==` still narrows the exact tag only. `analyze_equality`
+        gained a `loose` parameter.
+      * The bare-`Var` / `PropAccess`-chain truthy narrowing now also populates
+        the *else* branch, so `if (!x) return; x.length` (truthy on the
+        fall-through) is silent. Previously only the then-branch was handled.
+      * `&&` / `||` short-circuit narrowing in *expression* position: the RHS
+        of `&&` is walked / checked with the LHS-truthy narrowing applied, and
+        `||` with LHS-falsy — in both `check_call_args_in_expr` (the `BinOp`
+        walk) and `check_expr_against` (the logical-operator contextual-typing
+        hop, which was the un-narrowed second walk that leaked the FP). So
+        `x && x.foo`, `!x || x.foo`, `x !== undefined && x.foo` are all silent.
+    No corpus delta (TP 1643, pinned 619, 0 FP) -- this is pure soundness
+    hardening that makes the T88 check safe for real-world (non-conformance)
+    inputs like the bridge generator's synthesized output.
+
+  T88 -- "object is possibly undefined/null" member access (TS18048 / TS2532),
+    gated on the T87 `strict_null_checks` flag. In the `check_call_args_in_expr`
+    `PropAccess(recv, prop)` branch, when the receiver is a simple `Var` whose
+    *narrowed* inferred type is a union still containing `undefined` / `null`
+    (and the property exists on the pruned receiver), flag it. Restricted to a
+    `Var` receiver because those are the bindings the narrowing engine rewrites
+    precisely -- `if (x)`, `typeof x === "..."`, `x === undefined` early
+    returns, etc. all remove the nullish part, so a residual nullish union at
+    the access site means no guard fired. Helper `union_possibly_nullish`
+    distinguishes the "possibly" shape from a purely-nullish receiver (handled
+    by the existing `is_nullable_type` branch). A whole-corpus sweep found a
+    single FP -- `logicalAssignment11` -- from missing `??=` flow narrowing, so
+    this also adds it: `name ??= v` narrows `name` to
+    `narrow_union(prune_nullish(name), typeof v)` (the bare `d ?? (d = …)`
+    form already narrowed via the inner assignment). Whole-corpus TP
+    1640 -> 1643 @ 0 FP, pinned recall 617 -> 619, correct-reason (matches
+    TS18047/TS18048/TS2722 baselines, e.g. parserharness, controlFlowOptionalChain).
+    Extending beyond `Var` receivers / to call receivers needs broader
+    narrowing coverage (`!= null`, `!x` early return, `&&` short-circuit all
+    still leave a residual nullish union) -- the next narrowing-engine increment.
+
+  T87 -- per-file `strictNullChecks` signal + nullish-literal assignability.
+    Added a `strict_null_checks : Bool` flag to `TsModule`, parsed from the
+    conformance header directives (`detect_strict_null_checks`): default `true`
+    (the conformance baseline default -- a file with no directive runs strict,
+    e.g. validVoidValues rejects `null -> void`), with `@strict: false` /
+    `@strictNullChecks: false` opting out (nullAssignableToEveryType accepts it).
+    Distinct from `strict_property_initialization` (which is also disabled by
+    `@strictPropertyInitialization: false`), so it is threaded as its own
+    `CheckCtx` field through `check_function_body_with` and every ctx
+    construction. Under the flag, in `check_expr_against`:
+      * `null` is not assignable to `void` (TS2322; `undefined` still is --
+        validVoidValues), and
+      * the `null` / `undefined` *keyword* falls through to the structural
+        assignability check instead of the blanket "nullish flows everywhere"
+        early return, so `function f(): number { return null }`,
+        `let x: string = undefined`, `null -> T` (type parameter), etc. are
+        flagged. With `@strict: false` they stay universally assignable, and
+        the parser no-init sentinel / `void` operator forms keep the early
+        return.
+    Also fixed `is_assignable_to(undefined, void)` to return `true` (a `void`
+    location holds `undefined`) -- a latent gap the broadened path exposed and
+    a checker whitebox test caught (the oracle had masked it: the one corpus
+    file with `void = undefined` also carries a baseline). Whole-corpus TP
+    1629 -> 1640 @ 0 FP, pinned recall 609 -> 617 -- gains in both metrics, all
+    correct-reason (spot-checked: `null -> U`/`T`, `null -> void`,
+    `undefined -> string` against the TS2322 baselines). The remaining
+    nullish-literal targets beyond `void` already flow through the structural
+    check; broadening the *inferred*-nullish (non-literal) path is the next
+    increment but needs its own FP sweep.
+
+  T86 -- `undefined` keyword inference + nullish operands (TS18050 / TS2367;
+    receiver/flow-engine groundwork). The `undefined` keyword now infers as the
+    `Undefined` type (previously `Any`), and a paired pass corrects the operand
+    rules around the `null` / `undefined` keyword:
+      * TS18050 -- using the `null` / `undefined` *keyword* as an operand of an
+        arithmetic (`-` `*` `/` `%` `**` ...) or relational (`<` `<=` `>` `>=`)
+        operator is unconditionally an error ("The value ... cannot be used
+        here"). The relational case is new (`check_binop_operands`), restricted
+        to the literal keyword so it is false-positive-free; the arithmetic case
+        falls out of the now-`Undefined` inference feeding the existing
+        "not a valid number type" check.
+      * TS2367 -- comparing any value against the `null` / `undefined` keyword
+        with `===` / `!==` is *always permitted* (the canonical loose null
+        check) and must never trip the "always false" overlap check; added a
+        nullish-keyword exemption mirroring the existing `typeof` skip. This
+        also fixed the lone FP the inference change introduced
+        (objectSpreadRepeatedNullCheckPerf).
+    Net whole-corpus TP 1624 -> 1629 @ 0 FP (correct-reason: verified against
+    TS18050 baselines for arithmetic / relational nullish operands, e.g.
+    arithmeticOperatorWithUndefinedValueAndValidOperands,
+    comparisonOperatorWithOneOperandIsNull). Pinned recall 611 -> 609: the two
+    pinned files that regressed (controlFlowOptionalChain,
+    controlFlowTypeofObject) were previously matched only via a *wrong-reason*
+    `=== null/undefined` always-false flag that TS never emits; their real
+    errors (TS2454 conditional definite-assignment inside an optional chain;
+    TS2345 typeof-object narrowing) remain unmodelled flow-engine work. The
+    change therefore improves both whole-corpus recall and reason-correctness.
+
+  T85 -- void function assigned to a non-void class method (TS2322; Roadmap
+    track 3 / receiver-type foundation, contained slice). recall 609 -> 611 @
+    0 FP. The prototype/static method-assignment cluster needed the *target*
+    method's signature; rather than model the prototype / static side in
+    `infer_expr` (the broad, FP-risky change), `check_prototype_static_member_assign`
+    reads the method's declared return type directly off the class decl and
+    flags only a provably void-returning value: an arrow with a block body that
+    has no value `return` (`arrow_is_void_returning` / `block_has_value_return`),
+    assigned to `C.prototype.m` / `C.m` where `m`'s return is a concrete
+    non-void primitive / literal. Sound -- expression-bodied / value-returning
+    arrows and void-returning methods never fire. Cleared
+    instanceMemberAssignsToClassPrototype,
+    staticMemberAssignsToConstructorFunctionMembers. (The full receiver-type
+    foundation -- `typeof C` / `C.prototype` in `infer_expr`, for
+    classConstructorAccessibility3 and the deeper arrow-vs-signature cases --
+    remains the documented dedicated-session item.)
+
+  T84 -- intersection-source assignability (TS2322; Roadmap track 5). recall
+    608 -> 609 @ 0 FP. T61 handled an intersection *target* with a concrete
+    source; this flattens an intersection *source* of disjoint object parts into
+    one object (`flatten_intersection_objects` -- merges members, bails on a
+    non-object part or an overlapping property name) so `intersection_target_mismatch`
+    can decide it against each target part. Cleared commonTypeIntersection
+    (`{t?:'A'} & {a}` not assignable to `{t?:'B'} & {a}`). The `& string`
+    intersections and generic / union-constraint intersection cases still bail.
+
+  T83 -- private / protected constructor accessibility (TS2673 / TS2674;
+    Roadmap track 3). recall 605 -> 608 @ 0 FP. A `private` / `protected`
+    constructor lands in the class's `private_members` / `protected_members`
+    under the name `constructor`, so `check_constructor_accessibility` builds a
+    restricted-class map and flags a `new C(...)` that is provably outside C --
+    at module top level, in a free function, or in a *different* class's body
+    (`enclosing != C`). `new C` inside C's own body stays silent. Cleared
+    classConstructorAccessibility, classConstructorAccessibility2,
+    classConstructorAccessibility5. (classConstructorAccessibility3 is TS2322
+    `typeof`-assignability with ctor visibility -- a different mechanism, still
+    a miss.)
+
+  T82 -- abstract constructor (TS1242; Roadmap track 3). recall 604 -> 605 @
+    0 FP. `abstract` on a constructor is illegal (it may only modify a class /
+    method / property); detected when `abstract_members` contains `constructor`.
+    Cleared classAbstractConstructor. (TS1245 "abstract method with a body" was
+    attempted but the parser drops abstract-method bodies -- `body: None` -- so
+    there is no signal; it needs a parser "had-a-body" flag.)
+
+  T81 -- `abstract` member modifier rules (TS1244 / TS1243; Roadmap track 3,
+    first slice). recall 601 -> 604 @ 0 FP. `check_abstract_modifier_rules`
+    reads the already-parsed class shape: an `abstract` member in a
+    non-`abstract` class is TS1244 (`!is_abstract && abstract_members nonempty`),
+    and a member in both `private_members` and `abstract_members` is TS1243
+    (`private` + `abstract`). Both combinations are never valid TypeScript, so
+    false-positive-free. Cleared classAbstractMethodInNonAbstractClass,
+    classAbstractProperties, classAbstractMixedWithModifiers.
+
+  T80 -- reference to a `#`-private not declared by the enclosing class
+    (TS18013 / TS2339; Roadmap track 2). recall 599 -> 601 @ 0 FP. Inside a
+    top-level class C, every `#x` reference is brand-mangled to C's own brand
+    and every declared `#`-member shares it, so a same-brand access not in C's
+    declared set references a private C does not have (`Derived.#x` inside
+    `Base`). `check_private_member_access` walks C's bodies / field initializers
+    for `#`-accesses (`PropAccess` / `MethodCall` / `PropAssign*`).
+    Key soundness lever: each class gets a *unique* brand id, so an access
+    mangled with a *different* brand was written inside a nested / anonymous
+    class (which may legally reach an outer private) -- `record_priv_access`
+    only fires when the access brand equals C's own brand, so nested-class
+    accesses are never judged (removed the two `privateNameComputedPropertyName3`
+    / `privateNameInLhsReceiverExpression` FPs). Cleared
+    privateNameStaticFieldDerivedClasses and one more; nested-class-only cases
+    (TS18014 shadowing) remain a miss by design.
+
+  T78 -- assignment to a private method (TS2803; Roadmap track 2, first slice).
+    recall 595 -> 597 @ 0 FP. `#`-private members are brand-mangled
+    (`__private_brand__N__name`); a private *method* (empty `accessor`, present
+    in `cls.methods`, prefix-tagged) is not writable, so any assignment whose
+    target is a property access to such a name is a definite TS2803.
+    `check_private_method_assignments` walks each class's constructor body and
+    method bodies (`scan_stmts_priv_method_assign` /
+    `scan_expr_priv_method_assign`) for `PropAssign` / `PropAssignExpr` /
+    compound-assign / `++`/`--` targets. Sound: a writable `#`-field arrow lives
+    in `properties`, never in this method set. Cleared privateNameMethodAssignment,
+    privateNameStaticMethodAssignment.
+
+  T79 -- assignment to a read-only private accessor (TS2540; Roadmap track 2).
+    recall 597 -> 599 @ 0 FP. Generalized T78's walker to a name -> message
+    target map: a `#`-accessor with a `get` but no `set` is read-only, so an
+    assignment to it is TS2540 (alongside the TS2803 private-method targets).
+    An accessor that also declares a setter is excluded. Cleared
+    privateNameAccessors, privateNameStaticAccessors.
+
+## Recall Roadmap: 595/815 -> higher (2026-06-19)
+
+Audit of the 220 remaining recall misses (`tsacc --list-misses`), grouped by the
+machinery each needs. Counts are by filename pattern over the miss list, so they
+overlap slightly; they rank the levers, they aren't exact recall deltas. The
+order below is chosen for the project's prime directive (**FP = 0 always**):
+cheap + low-FP tracks first, broad flow / overload machinery last. Every track
+follows the same workflow -- implement behind a sound gate, then verify with
+`scripts/checker_conformance_oracle.sh` (whole-corpus FP must stay 0) and
+`moon run --target native src/cmd/tsacc` (pinned recall + FP). Prefer the
+"flag only when *certain*, abstain otherwise" shape used by T58-T76.
+
+Tracks (theme -- ~miss count -- dominant TS codes -- machinery -- FP risk):
+
+  1. Generic interface bounds [QUICK] -- DONE (T77). Added `type_param_bounds`
+     to `TsInterface` and registered interfaces in `check_constraints`.
+     Interface generics with a *concrete* bound are now checked
+     (`P<number>` where `P<T extends string>`). +0 on the conformance corpus
+     (no such files) but completes T76 and strengthens the bridge gate.
+     Note: an *interface/object* bound (`T extends Base`) still does not fire --
+     `extends_decision_with` / `is_assignable_to` don't resolve a `Named`
+     interface target through the `resolve` callback; deeper bound resolution is
+     a separate follow-up.
+
+  2. Private names / `#x` semantics -- ~34 -- TS18013/18014/2803/2540/2300/2339
+     -- IN PROGRESS (+6 so far). DONE: TS2803 assign-to-private-method (T78),
+     TS2540 assign-to-readonly-private-accessor (T79), TS18013/TS2339
+     reference-to-undeclared-`#`-name-in-enclosing-class (T80, brand-matched so
+     nested classes don't false-flag). Remaining sub-slices, each needing more
+     than the current walkers:
+       - TS2300 duplicate `#x` (privateNameDuplicateField): BLOCKED on parser
+         representation. The classes are non-extending and nested in a function
+         body, so the parser desugars each into a legacy IIFE
+         (`let A = (function(){...})()`) with prototype assignments and does
+         *not* preserve a `TsClassDecl` carrying `duplicate_member_names` (only
+         `extends`-classes keep a `NativeClassStmt`/`Expr`). So a checker-side
+         nested-class collector finds nothing to check. Fix needs the parser to
+         keep the class decl in the IIFE path, or detect the dup at parse time.
+         (Also the dup rule only counts field+other / 2-accessors, not two plain
+         fields -- a separate gap.) Investigated 2026-06-19; reverted the
+         no-op collector.
+       - TS18014 nested-class shadowing (privateName*NestedClass*): `#x` accessed
+         where it is shadowed by a nested class's same-spelled `#x`. T80 skips
+         different-brand (nested) accesses by design, so these stay a miss; they
+         need a brand-aware "outer `#x` shadowed by inner `#x`" model plus
+         receiver-type resolution.
+       - TS2339 receiver-type cases (privateName*ConstructorChain,
+         *StaticAccessorssDerivedClasses): `#x` declared by the enclosing class
+         but accessed via a receiver whose type lacks it (`Child.#bar` where
+         `#bar` is `Parent`'s static). Needs receiver-type analysis, not just
+         the lexical brand check.
+     Net: assignment-to-non-writable (+4) and undeclared-`#`-reference (+2) are
+     harvested; the rest is blocked on parser representation (TS2300) or needs
+     nested-scope / receiver-type machinery (TS18014 / TS2339).
+     -- model ES private members: `#`-field declarations, nested-class
+     shadowing (TS18014), "cannot assign to private method" (TS2803), accessor
+     read-only (TS2540), duplicate `#x` (TS2300). Mostly nominal / structural
+     rules with low FP (like the T63 private/protected work), but needs parser
+     fields for `#` members. Largest single lever; do in sub-slices per code.
+
+  3. Class-member assignment / abstract rules -- ~19 -- TS2322/TS124x/TS251x --
+     IN PROGRESS. DONE: TS1244/TS1243 abstract-member modifier rules (T81,
+     +3). Remaining: instance-vs-prototype and static-vs-constructor-function
+     member assignment (instanceMemberAssignsToClassPrototype,
+     staticMemberAssignsToConstructorFunctionMembers -- assign an incompatible
+     function to `C.prototype.m` / `C.m`. The `PropAssign` checker already does
+     `lookup_field(recv_ty, prop)` + `check_expr_against`, so the missing piece
+     is purely in `infer_expr`: it does not resolve `C.prototype` to C's
+     instance type nor `C` (a class value) to its static side, so the
+     field lookup finds nothing. A targeted `class_assign_target_type` helper
+     was tried (resolves `C.prototype.m` / `C.m` to the member type for the
+     `PropAssign` checker), but two blockers remain: (i) these assignments parse
+     as `PropAssignExpr` *expressions*, not the `PropAssign` *statement* the
+     handler covers, so the target never reaches `check_expr_against`; and
+     (ii) even wired, `check_expr_against` does not deeply check an arrow body's
+     return against the target return (`() => {}` vs `(x:number)=>number` is the
+     actual conformance shape), only primitive-vs-callable. Both are needed --
+     reverted the inert helper 2026-06-19), constructor-accessibility assignability
+     (classConstructorAccessibility3 -- `typeof Baz` with a protected ctor not
+     assignable to `typeof Foo`), and other abstract rules (TS1245
+     abstract-with-body, TS2513 abstract-via-super, TS2516 non-consecutive).
+     Medium effort; nominal rules keep FP low.
+
+  4. Template-literal types -- ~8 -- TS2322 -- BLOCKED on missing machinery.
+     The string-mapping intrinsics (`Uppercase` / `Lowercase`) are not evaluated
+     in the assignability path (`Uppercase<string>` accepts a lowercase literal
+     today), and the patterns are generic (`` `${T}` ``). Needs intrinsic
+     evaluation + template-literal-type assignability before any of
+     templateLiteralTypes5/7, stringMappingOverPatternLiterals, etc. can fire.
+     (Verified 2026-06-19.)
+
+  5. Intersection assignability -- ~9 -- TS2322/TS2367 -- IN PROGRESS. DONE:
+     intersection-*source* flattening for disjoint object parts (T84, +1,
+     commonTypeIntersection). Remaining: `& string` / primitive-bearing
+     intersections (intersectionTypeAssignment), union-constraint intersections
+     (intersectionWithUnionConstraint), index-signature intersections, and the
+     TS2367 no-overlap-comparison cases (intersectionNarrowing,
+     equalityWithIntersectionTypes01 -- need narrowed-comparison analysis).
+
+  6. Union / rest arity -- ~7 -- TS2554 -- calling a union of call signatures
+     requires satisfying every member (min/max arity over the union);
+     `genericRestArity` needs generic rest spread. The single-callable arity
+     machinery (T60/T65/T70) is the base; extend to unions. Medium FP.
+
+  7. Definite-assignment / strict property init -- ~4-5 -- TS2564 -- class
+     property has no initializer and no definite-assignment assertion under
+     strict mode. `strict_property_initialization` is already on `TsModule`;
+     needs constructor-assignment flow per field. Medium.
+
+  8. Conditional / keyof / indexed-access / mapped -- ~10 -- TS2322/TS2344 --
+     deeper evaluation of these type operators in assignability. Higher effort;
+     reuse `simplify_type` / `expand_generic`. Medium-high FP.
+
+  9. Flow narrowing in statements -- ~23 -- TS2322/TS2339/TS2367 -- type-guard
+     narrowing through `if` / `while` / `for` / `do` / `&&` bodies and user
+     type predicates (typeGuardsIn*Statement, typePredicateOnVariableDeclaration).
+     Biggest non-private cluster but needs a real control-flow narrowing engine;
+     highest FP risk. Tackle after the cheaper tracks, incrementally.
+
+ 10. `object` (lowercase non-primitive) type -- ~4 -- TS2344/TS2345 -- the
+     parser widens lowercase `object` to `Any`, so the non-primitive rule never
+     fires (nonPrimitiveInGeneric/AsProperty). Make it a distinct type; audit
+     ripple (it accepts any non-primitive). Medium-high FP, wide blast radius.
+
+ 11. Overload / string-literal-overload assignability -- ~4 -- TS2322/TS2769 --
+     overload-set comparison (stringLiteralTypesOverloadAssignability*,
+     contextualTypeWithUnionTypeCallSignatures). Highest effort; do last.
+
+Leftover singletons (TS2304 `directReferenceToNull`, TS17009 `super`-before-
+`this`, TS2790 `delete`, TS2872 always-truthy, uniqueSymbol) are case-by-case;
+pick them up opportunistically when a track passes nearby.
+
+Cross-cutting foundation -- receiver-type resolution for class values. Several
+remaining slices share one missing capability: `infer_expr` does not model a
+class *value*'s static side (`typeof C`) nor its prototype/instance side
+(`C.prototype`). Building this unlocks: track 2 TS2339 (`Child.#bar` accessed
+where `#bar` isn't on the receiver's class) and the TS18014 shadowing model;
+track 3 prototype/static method-assignment (T81 note) and
+classConstructorAccessibility3 (`typeof Baz` ctor-accessibility assignability).
+It is an inference-layer change with real FP surface (every `C` / `C.prototype`
+expression), so it warrants a dedicated session: add static / instance member
+tables per class to the resolver, resolve `Var(C)` -> a `typeof C` shape and
+`PropAccess(_, "prototype")` -> C's instance shape, then re-run the whole-corpus
+oracle to hold FP = 0. Estimated unlock: ~6-10 files across tracks 2/3.
+
+Recommended order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10 -> 11, with
+the receiver-type foundation slotted before re-attempting the track-2 TS2339 /
+track-3 prototype-assignment slices.
 
   RB2 (2026-06-18) -- re-baseline after the intervening checker commits
   (through f545849) lifted measured recall 543 -> 563 @ 0 FP. Toolchain note:
@@ -1569,18 +1921,133 @@ conformance sources (`.errors.txt` baseline = ground truth):
   also drove a parser fix: optional function-/constructor-type parameters now
   widen to `T | undefined`).
 
+  T72 -- parameter property outside a constructor (TS2369). recall 589 -> 592
+    (pinned dirs; whole-corpus TP 1599 -> 1605, FP steady at the 2 pre-existing
+    unrelated cases). A parameter carrying `public` / `private` / `protected` /
+    `readonly` is only legal in a constructor *implementation*; everywhere else
+    (free function, arrow, function expression, non-constructor method, or a
+    call / construct signature in an interface / object type) it is a TS2369.
+    The parser already detected these modifiers via `skip_param_modifiers` and
+    used `param_property_scopes` (pushed only for a `constructor` method) to
+    materialize constructor fields; `parse_param` now records every modifier it
+    sees while that scope stack is *empty* into a new
+    `param_property_misuses` list, surfaced as `TsModule.parameter_property_misuses`
+    (mirroring `deprecated_compiler_options`) and emitted one diagnostic per
+    entry by the body pass. FP-safe by soundness: such a parameter is never
+    valid TS, and `skip_param_modifiers` already distinguishes a modifier from a
+    same-spelled parameter name (`function k(readonly: number)` -- the keyword
+    is followed by `:`, so it stays a name). Cleared
+    callSignaturesWithAccessibilityModifiersOnParameters,
+    constructSignatureWithAccessibilityModifiersOnParameters(2),
+    callSignaturesWithAccessibilityModifiersOnParameters2, and readonlyInAmbientClass
+    (the latter via its non-constructor `method(readonly x)`; the ambient
+    constructor-overload TS2369 still needs body-presence tracking). This is the
+    lighter half of the boundary note below: TS2369 needed only a flat module
+    list, *not* a field on every `TsClassDecl` construction site.
+
+  T73 -- whole-corpus soundness: two false positives -> 0 (precision). The
+    pinned-dir metric was already 414/414, but `checker_conformance_oracle.sh`
+    over the *entire* conformance corpus carried two pre-existing FP from the
+    T67-T70 signature work (whole-corpus FP 2 -> 0, TP 1605 -> 1604; the lone
+    TP lost is the return-only `callSignatureAssignabilityInInheritance`, which
+    is outside the pinned dirs, so pinned recall stays 592):
+      - voidParamAssignmentCompatibility: a `void`-typed parameter is omittable
+        (`(a: void) => R` is assignable to `() => R`), so `param_is_optional` /
+        `type_accepts_undefined_param` now treat `Void` like `undefined` and it
+        no longer raises the required-argument count.
+      - derivedInterfaceDoesNotHideBaseSignatures: a bare `<call>` / `<new>`
+        signature on a derived interface does not *override* the base's --
+        TypeScript merges them into an overload set rather than hiding it, so a
+        return-type-only difference (`(): number` extending `(): string`) is
+        accepted. `callable_member_incompatible` now takes `ignore_return` and,
+        for `<call>` / `<new>` members, neutralizes both return types
+        (`with_void_return`) so only parameters / arity are compared. Named
+        function-typed members stay full-comparison (real overrides). This
+        relaxation also drops the return-only inheritance error in
+        `callSignatureAssignabilityInInheritance` (the -1 TP); the precise TS
+        rule that separates it from the accepted case needs overload-set
+        merging the checker does not model, so the FP-0 invariant wins.
+
+  T74 -- circular type-parameter constraint (TS2313). recall 592 -> 595
+    (whole-corpus TP 1604 -> 1607, FP steady 0). `circular_type_param_names`
+    follows a type parameter's constraint chain while each constraint is a
+    *bare* reference to another type parameter in the same list, and reports a
+    cycle. Any other constraint shape (an `Applied` F-bound like
+    `S extends Foo<S>`, a union, an object, a keyword type) terminates the walk,
+    so genuine recursive constraints never false-flag. `check_circular_type_params`
+    walks top-level functions, classes (and their methods), type aliases, and
+    nested namespaces. Cleared typeParameterDirectlyConstrainedToItself,
+    typeParameterIndirectlyConstrainedToItself (plus one more in the wider
+    corpus). Interface-level constraints aren't stored on the AST and are
+    skipped, but the classes / functions in both files suffice at file level.
+
+  T75 -- generic interface instantiation in assignability (bridge gate;
+    conformance steady at 595/815 @ 0 FP). `check_expr_against` bailed on every
+    `Applied(...)` except the same-name covariant best-effort (T59).
+    `instantiate_generic_interface` now substitutes a generic interface's type
+    arguments into its fields to produce a concrete object shape (only when the
+    interface has matching arity and no heritage clause / index signatures /
+    generic methods -- shapes the structural relation can faithfully
+    reproduce), and `generic_instantiation_mismatch` compares the instantiated
+    shapes, flagging only a *bidirectionally* incompatible pair (the T59
+    soundness gate, so covariant / contravariant directions stay silent). This
+    catches `Box<string>` vs `{ value: number }` and `Box<A>` vs `Box<B>` for
+    structurally-incompatible `A` / `B`. Like T59 it +0 on the measured corpus
+    -- every conformance generic-mismatch lives at a *call-argument inference*
+    site, not an assignment / return one -- so it strengthens the synthesized-
+    bridge `@checker.check_module` gate without moving the conformance metric.
+
+  T76 -- type-argument constraint violations re-enabled soundly (TS2344;
+    whole-corpus TP 1607 -> 1608 @ 0 FP, pinned steady 595). The
+    `TypeParameterConstraintViolation` check (`check_constraints`) was computed
+    but excluded from the permissive pass because it false-flagged `infer`
+    markers and forwarded type parameters. Now sound and kept:
+      - `constraint_operand_unverifiable` abstains when the argument or the
+        substituted bound carries an `infer` marker (`Applied("__tsmbt_infer",..)`),
+        an in-scope (forwarded) type parameter, or an unevaluated type operator
+        (`keyof` / conditional / mapped / indexed-access / `typeof`).
+      - a violation now requires *both* a definite `extends_decision` =
+        `Some(false)` *and* `is_assignable_to` to fail. `extends_decision`
+        distributes over a union argument (conditional-type semantics) and
+        mis-reported `1 | "a"` vs `string | number`; the assignability
+        confirmation (the real constraint relation) removes that FP.
+      - the check now also covers generic *classes* (not just aliases) and
+        walks class fields / method signatures and function bodies with the
+        declaration's own type parameters in scope. Generic *interfaces* were
+        wired in T77.
+
+  T77 -- generic interface type-parameter bounds (Roadmap track 1; whole-corpus
+    TP steady 1608 @ 0 FP). Added `TsInterface.type_param_bounds` (the parser
+    already parsed `interface I<T extends Bound>` but discarded the bound),
+    threaded it through every `TsInterface` construction site, and registered
+    interfaces alongside classes / aliases in `check_constraints`. Interface
+    generics with a concrete bound are now constraint-checked. +0 on the corpus
+    (no conformance file exercises it) but completes the constraint coverage and
+    lets the synthesized-bridge gate validate generic interfaces.
+
+  Generic-instantiation landscape (2026-06-19): the remaining generic recall
+  misses are not assignment/return-position instantiations (now covered) but
+  (a) call-argument inference + constraint checking at the call site, and
+  (b) type-reference constraint violations (TS2344). For (b) a check already
+  exists in `check_module` (`check_constraints`) but is restricted to generic
+  *aliases* and is excluded from the permissive pass because it false-flags
+  `infer` / forwarded type-parameter bounds; extending it to interfaces /
+  classes and re-enabling it soundly is the next slice. Both are gated on the
+  `object`-as-`Any` parser approximation: the dominant TS2344 conformance files
+  (`nonPrimitiveInGeneric`, the `nonPrimitive` dir) constrain on lowercase
+  `object`, which the parser currently widens to `Any`, so the constraint has
+  nothing to fire on.
+
   Boundary (2026-06-18): the named higher-order MISS clusters remain
   single-recall-point, bespoke-machinery cases (overloaded construct-signature
   arity with generic constructors; overloaded / function-typed argument
   inference; `typeof Class` constructor-accessibility; mapped-type
   instantiation; static-/prototype-member function-assignment target
   resolution; lowercase `object` is currently parsed as `Any`, so the
-  non-primitive rule has nothing to fire on; abstract-member implementation
-  TS2515 and parameter-property TS2369 would need new AST/parser fields tracked
-  across every `TsClassDecl` construction site). Each needs its own resolver
+  non-primitive rule has nothing to fire on). Each needs its own resolver
   threading, AST extension, or generic / overload machinery; the clean
   structural relaxations are now largely harvested. Sound, FP-0 recall went
-  563 -> 589 (+26) this session.
+  563 -> 589 (+26) the prior session and 589 -> 592 (+3) here.
 
   Toolchain note (2026-06-08): the native parser-package whitebox test
   generates a ~25 MB C unit that this session's `tcc` could not compile in
@@ -2626,28 +3093,30 @@ precision_miss`):
 
 ### Recall pushes (target: 29 % -> 40 %)
 
-- [ ] Validate duplicate parameter names on functions / methods / call
-  signatures. Covers `objectTypeLiteral/callSignatures/...DuplicateParameters`
-  and similar method/interface variants (estimated 8-12 recall cases).
-- [ ] Validate duplicate type-parameter names on functions / classes /
-  interfaces / call signatures (`<T, T>`). Trivial detection; covers
-  `typesWithDuplicateTypeParameters.ts` and friends (estimated 2-4
-  cases).
-- [ ] Detect self-constrained type parameters (`T extends T`,
-  indirect cycles `T extends U, U extends T`). Covers
-  `typeParameterDirectlyConstrainedToItself.ts` /
-  `typeParameterIndirectlyConstrainedToItself.ts` (estimated 2-4 cases).
-- [ ] Validate type-argument counts on call expressions, `new`
-  expressions, and named type references. Covers
-  `callNonGenericFunctionWithTypeArguments.ts`,
-  `callGenericFunctionWithZeroTypeArguments.ts`,
-  `instantiateGenericClassWithWrongNumberOfTypeArguments.ts`, etc.
-  (estimated 10-15 recall cases across `typeArgumentLists/`).
-- [ ] Run `is_assignable_to` on top-level and function-body `=`
-  assignments (currently only used at call-site / declaration init).
-  `typeRelationships/assignmentCompatibility/*` is dominated by
-  `t = s;` patterns; this is the single biggest recall lever (137
-  recall-miss cases share this directory).
+This section was written at ~29 % recall; the audit on 2026-06-19 (at 595/815,
+73 %) found nearly all of it already shipped by intervening sessions. Status
+updated below.
+
+- [x] Validate duplicate parameter names on functions / methods / call
+  signatures. The parser raises on duplicate parameter names; the conformance
+  harness scores a parse failure on a baseline-positive file as a hit, so
+  `callSignaturesWithDuplicateParameters` and friends are already covered.
+- [x] Validate duplicate type-parameter names on functions / classes /
+  interfaces / call signatures (`<T, T>`). Already emitted as `duplicate type
+  parameter` — `typesWithDuplicateTypeParameters` is a hit.
+- [x] Detect self-constrained type parameters (`T extends T`, indirect cycles).
+  Shipped as T74 (`check_circular_type_params`, TS2313).
+- [x] Validate type-argument counts on call expressions, `new` expressions, and
+  named type references (TS2347 / TS2558). `callNonGenericFunctionWithTypeArguments`
+  and `instantiateGenericClassWithWrongNumberOfTypeArguments` are already
+  flagged.
+- [x] Run `is_assignable_to` on top-level and function-body `=` assignments.
+  Bare assignments (top-level and in function bodies) and return statements are
+  already assignability-checked. Only 6 specialized cases remain in
+  `assignmentCompatibility/*` (Record-over-enum-key TS2741, generic call
+  signatures, optional-property-vs-index-signature, `undefined`-assignment
+  TS2539) — each needs larger machinery, not the bare `t = s` lever. The
+  "137-case" estimate was from the 29 %-recall era and is obsolete.
 - [ ] Static-property-init / definite-assignment-assertion checks on
   classes. `controlFlow/definiteAssignmentAssertions.ts` and class
   property cases.

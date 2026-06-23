@@ -130,9 +130,11 @@ fn empty_ts_module() -> @ast.TsModule {
     enums: [],
     module_augmentations: [],
     strict_property_initialization: true,
+    strict_null_checks: true,
     use_define_for_class_fields: false,
     top_level_stmts: [],
     deprecated_compiler_options: [],
+    parameter_property_misuses: [],
   }
 }
 
@@ -3266,8 +3268,10 @@ fn Parser::parse_module_with_seeded_const_values_internal(
     strict_property_initialization: detect_strict_property_initialization(
       self.src,
     ),
+    strict_null_checks: detect_strict_null_checks(self.src),
     use_define_for_class_fields: detect_use_define_for_class_fields(self.src),
     deprecated_compiler_options: detect_deprecated_compiler_options(self.src),
+    parameter_property_misuses: self.param_property_misuses,
   }
 }
 
@@ -3349,6 +3353,27 @@ fn detect_strict_property_initialization(src : String) -> Bool {
   }
   if head.contains("@strictPropertyInitialization: false") ||
     head.contains("@strictPropertyInitialization:false") {
+    return false
+  }
+  // No directive (or explicit opt-in) -> default true.
+  true
+}
+
+///|
+/// Scan the file's leading TS-test header directives for the
+/// `strictNullChecks` setting. Shares the default (`true`, matching the
+/// conformance baseline) and the `@strict: false` opt-out with
+/// `detect_strict_property_initialization`, but ignores
+/// `@strictPropertyInitialization: false` and honours an explicit
+/// `@strictNullChecks: false` opt-out instead.
+fn detect_strict_null_checks(src : String) -> Bool {
+  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
+  let head = src[:head_len].to_owned()
+  if head.contains("@strict: false") || head.contains("@strict:false") {
+    return false
+  }
+  if head.contains("@strictNullChecks: false") ||
+    head.contains("@strictNullChecks:false") {
     return false
   }
   // No directive (or explicit opt-in) -> default true.
