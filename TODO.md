@@ -1530,6 +1530,17 @@ conformance sources (`.errors.txt` baseline = ground truth):
     an explicit `expected` enum check in `check_expr_against`. Whole-corpus 0 FP;
     pinned recall 636 -> 637 (validEnumAssignments). Whitebox-tested.
 
+2026-06-25 (T104)  638/815 (78 %)        414/414 ( 0 FP)   TS2322 unconstrained type param -> concrete object type
+
+  T104 -- TS2322: a bare *unconstrained* in-scope type parameter is effectively
+    `unknown`, so a `T`-typed value is not assignable to a concrete object type
+    (`var b: { s?: number } = a` where `a: T`). Threaded the function/class type-
+    parameter bounds into `CheckCtx.type_param_bounds`; the check fires only when
+    `T` has no bound (a constrained `T extends { … }` is skipped conservatively)
+    and the target is a structural object / named-interface (primitives, any,
+    other type params unaffected). Whole-corpus 0 FP, TP +2; pinned recall
+    637 -> 638 (subtypingWithOptionalProperties). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary

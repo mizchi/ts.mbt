@@ -3081,6 +3081,13 @@ priv struct CheckCtx {
   // property / method misses on named types that are *not* type
   // parameters at this point.
   in_scope_type_params : Array[String]
+  // Constraints (`(name, bound)`) for the in-scope type parameters that
+  // declared one (`<T extends X>`). Sparse — a type parameter absent here is
+  // *unconstrained*. Used to flag a bare unconstrained type parameter assigned
+  // to a concrete object type (TS2322): an unconstrained `T` is effectively
+  // `unknown`, so it is not assignable to `{ … }` (constrained ones are skipped
+  // conservatively).
+  type_param_bounds : Array[(String, @ast.TsType)]
   // Permissive mode for whole-corpus runs: when `true`, drop the
   // diagnostic families dominated by features we don't model (flow
   // narrowing, generic inference, builtin optional-arg tables). Set
@@ -6509,6 +6516,35 @@ fn check_expr_against(
       _ => ()
     }
   }
+  // TS2322: a bare *unconstrained* in-scope type parameter is effectively
+  // `unknown`, so a value of type `T` is not assignable to a concrete object
+  // type (`var b: { s?: number } = a` where `a: T`). Restricted to an
+  // unconstrained `T` (no entry in `type_param_bounds`) so a constrained
+  // `T extends { … }` — which may satisfy the target — is conservatively
+  // skipped, and to a structural object / interface target so primitives,
+  // `any` / `unknown`, and other type parameters are unaffected.
+  match inferred_u {
+    Named(tp) =>
+      if ctx.in_scope_type_params.contains(tp) &&
+        not(ctx.type_param_bounds.iter().any(fn(b) { b.0 == tp })) {
+        let target_is_concrete_object = match expected_u {
+          Object(_) | Struct(_, _) => true
+          Named(tn) =>
+            not(ctx.in_scope_type_params.contains(tn)) &&
+            ctx.resolver.interfaces.get(tn) is Some(_)
+          _ => false
+        }
+        if target_is_concrete_object {
+          record(
+            ctx,
+            sub_path,
+            "type parameter `\{tp}` is not assignable to type `\{type_display(expected_u)}`",
+          )
+          return
+        }
+      }
+    _ => ()
+  }
   // A *literal* value is never assignable to a bare in-scope type parameter
   // `T`: `T` could be instantiated with an arbitrary type unrelated to the
   // value, so `function f<T>() { var x: T = 1 }` and
@@ -8905,6 +8941,7 @@ fn check_arrow_with_context(
     resolver: ctx.resolver,
     issues: ctx.issues,
     in_scope_type_params: ctx.in_scope_type_params,
+    type_param_bounds: ctx.type_param_bounds,
     permissive: ctx.permissive,
     unassigned: unassigned_without(ctx.unassigned, param_names),
     strict_property_init: ctx.strict_property_init,
@@ -8996,6 +9033,7 @@ fn check_funcexpr_with_context(
     resolver: ctx.resolver,
     issues: ctx.issues,
     in_scope_type_params: ctx.in_scope_type_params,
+    type_param_bounds: ctx.type_param_bounds,
     permissive: ctx.permissive,
     // Parameters shadow outer bindings — drop them from the TS2454 set.
     unassigned: unassigned_without(ctx.unassigned, param_names),
@@ -12943,6 +12981,7 @@ fn check_function_body_with(
     resolver,
     issues,
     in_scope_type_params: func.type_params,
+    type_param_bounds: func.type_param_bounds,
     permissive,
     unassigned: {},
     strict_property_init,
@@ -15516,6 +15555,7 @@ fn check_module_function_bodies_layered(
       resolver,
       issues: [],
       in_scope_type_params: cls.type_params,
+      type_param_bounds: cls.type_param_bounds,
       permissive,
       unassigned: {},
       strict_property_init,
@@ -15582,6 +15622,7 @@ fn check_module_function_bodies_layered(
       resolver,
       issues: [],
       in_scope_type_params: cls.type_params,
+      type_param_bounds: cls.type_param_bounds,
       permissive,
       unassigned: {},
       strict_property_init,
@@ -15615,6 +15656,7 @@ fn check_module_function_bodies_layered(
       resolver,
       issues: [],
       in_scope_type_params: [],
+      type_param_bounds: [],
       permissive,
       unassigned: {},
       strict_property_init,
