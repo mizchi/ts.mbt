@@ -9364,3 +9364,110 @@ test "expr_check: ternary branches are narrowed by the condition (TS18048)" {
     0,
   )
 }
+
+///|
+// TS17009: in a derived-class constructor, `this` must not be accessed before
+// `super(...)`. Sound, conservative detection — see `check_super_before_this`.
+test "expr_check: super must be called before this in derived ctor (TS17009)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Bare `this` before `super()` -> flagged.
+  assert_true(
+    issues(
+      (
+        #|class B {}
+        #|class A extends B {
+        #|  constructor() { this; super(); }
+        #|}
+      ),
+    ) >
+    0,
+  )
+  // `this` passed as a `super(...)` argument -> flagged.
+  assert_true(
+    issues(
+      (
+        #|class B { constructor(a: unknown) {} }
+        #|class A extends B {
+        #|  constructor() { super(this); }
+        #|}
+      ),
+    ) >
+    0,
+  )
+  // Parameter default referencing `this` in a derived ctor -> flagged.
+  assert_true(
+    issues(
+      (
+        #|class C { baseProp: number = 1; }
+        #|class F extends C {
+        #|  constructor(y: number = this.baseProp) { super(); }
+        #|}
+      ),
+    ) >
+    0,
+  )
+  // `super()` first, then `this` -> silent.
+  @test.assert_eq(
+    issues(
+      (
+        #|class B {}
+        #|class A extends B {
+        #|  constructor() { super(); this; }
+        #|}
+      ),
+    ),
+    0,
+  )
+  // `super` and `this` in one object literal (super evaluated first) -> silent.
+  @test.assert_eq(
+    issues(
+      (
+        #|class B { constructor(a: unknown) {} }
+        #|class D extends B {
+        #|  private _t: number = 0;
+        #|  constructor() { let x = { k: super(undefined), j: this._t }; }
+        #|}
+      ),
+    ),
+    0,
+  )
+  // `extends null` has no base ctor -> `this` access permitted -> silent.
+  @test.assert_eq(
+    issues(
+      (
+        #|class D extends null {
+        #|  private _t: number = 0;
+        #|  constructor() { this._t; }
+        #|}
+      ),
+    ),
+    0,
+  )
+  // Non-derived class: `this` in the ctor is always fine -> silent.
+  @test.assert_eq(
+    issues(
+      (
+        #|class C {
+        #|  baseProp: number = 1;
+        #|  constructor(x: unknown = this) {}
+        #|}
+      ),
+    ),
+    0,
+  )
+  // `this` only inside a nested arrow passed to super (not invoked early)
+  // -> we stay silent (sound: the closure observes `this` only when called).
+  @test.assert_eq(
+    issues(
+      (
+        #|class B {}
+        #|class A extends B {
+        #|  constructor() { super(); const f = () => this; f(); }
+        #|}
+      ),
+    ),
+    0,
+  )
+}

@@ -1400,6 +1400,28 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-25 (T92)   (corpus not re-measured)               `||=` nullish-strip narrowing
 2026-06-25 (T93)   (corpus not re-measured)               loop-condition body narrowing
 2026-06-25 (T94)   (corpus not re-measured)               ternary-branch condition narrowing
+2026-06-25 (T95)   623/815 (76 %)        414/414 ( 0 FP)   TS17009 super-before-this (corpus remeasured)
+
+  Note: the conformance corpus (`typescript` submodule) was restored in this
+  environment by fetching the pinned-SHA source tarball from codeload (the git
+  submodule clone is blocked by org policy, but codeload tarballs are allowed),
+  so recall/precision are measured again from T95 on.
+
+  T95 -- TS17009 "'super' must be called before accessing 'this' in the
+    constructor of a derived class". New `check_super_before_this` pass over
+    `module_.classes`: for a *derived* class (non-empty `base_names`, excluding
+    `extends null`, which has no base constructor), flag a `this` access that
+    precedes the `super(...)` call. Three sound, statically-obvious shapes are
+    modelled — a constructor parameter default referencing `this`; a `this`
+    argument to the `super(...)` call itself; and a `this` use in a simple
+    top-level statement before `super`. Nested function / arrow / class bodies
+    are not descended (their `this` is rebound or deferred), and a statement
+    that embeds the `super` call alongside `this` (ambiguous evaluation order,
+    e.g. `let x = { k: super(), j: this.p }`) is treated as "super called" so
+    the check never produces a false positive. Compound control-flow statements
+    before `super` stop the scan conservatively. Whole-corpus 0 FP (verified by
+    the conformance oracle); pinned recall 619 -> 623, precision 414/414 (0 FP).
+    Whitebox-tested.
 
   T94 -- ternary-branch condition narrowing. `cond ? a : b` runs the consequent
     only when `cond` is truthy and the alternative only when falsy, but neither

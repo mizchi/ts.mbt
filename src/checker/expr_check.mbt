@@ -13802,6 +13802,279 @@ fn is_signature_sentinel(name : String) -> Bool {
 /// occurrence is a non-method (property) field; signature sentinels are
 /// skipped. Both are decided from declaration shape alone — no type
 /// resolution — so they carry no false-positive risk on resolvable input.
+/// True when `e` references `this` somewhere that executes in the *current*
+/// lexical scope — i.e. without descending into a nested function / arrow /
+/// class body, where `this` is rebound (or, for arrows, captured but only
+/// observed when the closure is later invoked). Used by the TS17009
+/// "'super' must be called before accessing 'this'" check, which must only
+/// fire on a `this` that the constructor evaluates directly before `super(…)`.
+fn expr_uses_this_outside_fn(e : @ast.TsExpr) -> Bool {
+  match e {
+    Var("this") => true
+    // Nested scopes rebind / defer `this` — do not descend.
+    ArrowFunc(_, _, _, _) | FuncExpr(_) | NativeClassExpr(_, _) => false
+    Var(_)
+    | IntLit(_)
+    | NumberLit(_)
+    | BigIntLit(_)
+    | BoolLit(_)
+    | StringLit(_) => false
+    PropAccess(r, _) | NonNull(r) | OptionalChain(r) | Spread(r) | Await(r) =>
+      expr_uses_this_outside_fn(r)
+    UnaryOp(_, r) | As(r, _) | Satisfies(r, _) | YieldStar(r) | PureCall(r) =>
+      expr_uses_this_outside_fn(r)
+    TypeArgs(_, r) => expr_uses_this_outside_fn(r)
+    Yield(opt) =>
+      match opt {
+        Some(r) => expr_uses_this_outside_fn(r)
+        None => false
+      }
+    IndexAccess(a, b) | Seq(a, b) | BinOp(_, a, b) =>
+      expr_uses_this_outside_fn(a) || expr_uses_this_outside_fn(b)
+    Cond(a, b, c) =>
+      expr_uses_this_outside_fn(a) ||
+      expr_uses_this_outside_fn(b) ||
+      expr_uses_this_outside_fn(c)
+    MethodCall(r, _, args) => {
+      if expr_uses_this_outside_fn(r) {
+        return true
+      }
+      any_expr_uses_this(args)
+    }
+    Call(_, args) => any_expr_uses_this(args)
+    CallExpr(callee, args) | NewExpr(callee, args) =>
+      expr_uses_this_outside_fn(callee) || any_expr_uses_this(args)
+    New(_, args) => any_expr_uses_this(args)
+    ArrayLit(items) => any_expr_uses_this(items)
+    TemplateLiteral(_, parts) => any_expr_uses_this(parts)
+    ObjectLit(entries) => {
+      for ent in entries {
+        if expr_uses_this_outside_fn(ent.1) {
+          return true
+        }
+      }
+      false
+    }
+    ComputedProp(k, v) =>
+      expr_uses_this_outside_fn(k) || expr_uses_this_outside_fn(v)
+    AssignExpr(_, v) => expr_uses_this_outside_fn(v)
+    CompoundAssignExpr(t, _, v) =>
+      expr_uses_this_outside_fn(t) || expr_uses_this_outside_fn(v)
+    PropAssignExpr(r, _, v) =>
+      expr_uses_this_outside_fn(r) || expr_uses_this_outside_fn(v)
+    IndexAssignExpr(r, i, v) =>
+      expr_uses_this_outside_fn(r) ||
+      expr_uses_this_outside_fn(i) ||
+      expr_uses_this_outside_fn(v)
+    // Anything not enumerated (Jsx, TaggedTemplate, DynamicImport, …) is rare
+    // in a derived-class constructor head; stay conservative and report no
+    // `this` use so the check never produces a false positive.
+    _ => false
+  }
+}
+
+///|
+fn any_expr_uses_this(es : Array[@ast.TsExpr]) -> Bool {
+  for e in es {
+    if expr_uses_this_outside_fn(e) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+/// Returns the argument list of a `super(…)` call when `e` is one, else `None`.
+fn super_call_args(e : @ast.TsExpr) -> Array[@ast.TsExpr]? {
+  match e {
+    Call("super", args) => Some(args)
+    CallExpr(Var("super"), args) => Some(args)
+    _ => None
+  }
+}
+
+///|
+/// True when `e` embeds a `super(…)` call (or a bare `super` reference) that
+/// runs in the current scope. Mirrors `expr_uses_this_outside_fn`'s nested-scope
+/// discipline. When a statement contains *both* a `super` call and a `this`
+/// use, their relative evaluation order is not statically obvious (e.g.
+/// `let x = { k: super(), j: this.p }`, where `super` runs first), so the
+/// TS17009 check treats `super` as already called rather than risk a false
+/// positive.
+fn expr_embeds_super_outside_fn(e : @ast.TsExpr) -> Bool {
+  if super_call_args(e) is Some(_) {
+    return true
+  }
+  match e {
+    Var("super") => true
+    ArrowFunc(_, _, _, _) | FuncExpr(_) | NativeClassExpr(_, _) => false
+    PropAccess(r, _)
+    | NonNull(r)
+    | OptionalChain(r)
+    | Spread(r)
+    | Await(r)
+    | UnaryOp(_, r)
+    | As(r, _)
+    | Satisfies(r, _)
+    | YieldStar(r)
+    | PureCall(r)
+    | TypeArgs(_, r) => expr_embeds_super_outside_fn(r)
+    Yield(opt) =>
+      match opt {
+        Some(r) => expr_embeds_super_outside_fn(r)
+        None => false
+      }
+    IndexAccess(a, b) | Seq(a, b) | BinOp(_, a, b) =>
+      expr_embeds_super_outside_fn(a) || expr_embeds_super_outside_fn(b)
+    Cond(a, b, c) =>
+      expr_embeds_super_outside_fn(a) ||
+      expr_embeds_super_outside_fn(b) ||
+      expr_embeds_super_outside_fn(c)
+    MethodCall(r, _, args) =>
+      expr_embeds_super_outside_fn(r) || any_expr_embeds_super(args)
+    Call(_, args) => any_expr_embeds_super(args)
+    CallExpr(callee, args) | NewExpr(callee, args) =>
+      expr_embeds_super_outside_fn(callee) || any_expr_embeds_super(args)
+    New(_, args) => any_expr_embeds_super(args)
+    ArrayLit(items) => any_expr_embeds_super(items)
+    TemplateLiteral(_, parts) => any_expr_embeds_super(parts)
+    ObjectLit(entries) => {
+      for ent in entries {
+        if expr_embeds_super_outside_fn(ent.1) {
+          return true
+        }
+      }
+      false
+    }
+    ComputedProp(k, v) =>
+      expr_embeds_super_outside_fn(k) || expr_embeds_super_outside_fn(v)
+    AssignExpr(_, v) => expr_embeds_super_outside_fn(v)
+    CompoundAssignExpr(t, _, v) =>
+      expr_embeds_super_outside_fn(t) || expr_embeds_super_outside_fn(v)
+    PropAssignExpr(r, _, v) =>
+      expr_embeds_super_outside_fn(r) || expr_embeds_super_outside_fn(v)
+    IndexAssignExpr(r, i, v) =>
+      expr_embeds_super_outside_fn(r) ||
+      expr_embeds_super_outside_fn(i) ||
+      expr_embeds_super_outside_fn(v)
+    _ => false
+  }
+}
+
+///|
+fn any_expr_embeds_super(es : Array[@ast.TsExpr]) -> Bool {
+  for e in es {
+    if expr_embeds_super_outside_fn(e) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+/// TS17009: in the constructor of a *derived* class, `this` must not be
+/// accessed before `super(…)` is called. We model the common, statically
+/// obvious cases soundly:
+///   - a constructor parameter default that references `this` (it is evaluated
+///     before the body, hence before `super`);
+///   - a `this` argument passed to the `super(…)` call itself; and
+///   - a `this` use in a *simple* top-level statement that precedes `super`.
+/// Compound statements (`if` / loops / `try` / blocks) before `super` are
+/// treated conservatively as "super may have run" so the check never produces
+/// a false positive — at the cost of not catching `this` buried inside them.
+fn check_super_before_this(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for cls in module_.classes {
+    // Only derived classes have the constraint. `base_names` is the `extends`
+    // clause (interfaces live in `implements_names`), so a non-empty list —
+    // including the `<expr-base>` mixin sentinel — means "derived".
+    if cls.base_names.length() == 0 {
+      continue
+    }
+    // `class D extends null` has no base constructor, so TS does NOT require a
+    // `super` call and `this` access is permitted (superCallBeforeThisAccessing5).
+    // The parser lowers an expression heritage clause to the `<expr-base>`
+    // sentinel and stashes the expression in `base_expr`, so `extends null`
+    // surfaces as `base_expr = Some(Var("null") | NullLit)`.
+    match cls.base_expr {
+      Some(Var("null")) | Some(NullLit) => continue
+      _ => ()
+    }
+    let mut flagged = false
+    // (1) Parameter defaults run before the body, hence before `super`.
+    for d in cls.constructor_param_defaults {
+      match d {
+        Some(init) =>
+          if expr_uses_this_outside_fn(init) {
+            flagged = true
+            break
+          }
+        None => ()
+      }
+    }
+    // (2) / (3) constructor body, in source order, up to the `super(…)` call.
+    if not(flagged) {
+      match cls.constructor_body {
+        Some(body) => {
+          let mut super_seen = false
+          for stmt in body.stmts {
+            if super_seen {
+              break
+            }
+            // The expressions a simple statement evaluates directly. `None`
+            // marks a compound / opaque statement we don't descend into.
+            let exprs : Array[@ast.TsExpr]? = match stmt {
+              Expr(e) =>
+                // A direct `super(…)` statement: its arguments run before the
+                // call completes, so a `this` argument is an early access.
+                match super_call_args(e) {
+                  Some(args) => {
+                    if any_expr_uses_this(args) {
+                      flagged = true
+                    }
+                    super_seen = true
+                    continue
+                  }
+                  None => Some([e])
+                }
+              Return(Some(e)) | Throw(e) => Some([e])
+              Const(_, _, e) | Let(_, _, e) | Var(_, _, e) => Some([e])
+              Assign(_, e) | CompoundAssign(_, _, e) => Some([e])
+              PropAssign(r, _, v) => Some([r, v])
+              IndexAssign(r, i, v) => Some([r, i, v])
+              _ => None
+            }
+            match exprs {
+              Some(es) =>
+                // If the statement embeds the `super` call (e.g.
+                // `let x = { k: super(), j: this.p }`), evaluation order is not
+                // statically obvious — treat `super` as called and do not flag.
+                if any_expr_embeds_super(es) {
+                  super_seen = true
+                } else if any_expr_uses_this(es) {
+                  flagged = true
+                  break
+                }
+              // Compound control flow, empty, debugger, …: stop scanning
+              // conservatively rather than descend, so the check never FPs.
+              None => super_seen = true
+            }
+          }
+        }
+        None => ()
+      }
+    }
+    if flagged {
+      issues.push({
+        path: "class \{cls.name}.constructor",
+        message: "`super` must be called before accessing `this` in the constructor of a derived class",
+      })
+    }
+  }
+  issues
+}
+
+///|
 fn check_structural_duplicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   for e in module_.enums {
@@ -14739,6 +15012,9 @@ fn check_module_function_bodies_layered(
     }
   }
   for issue in check_var_redeclaration_types(module_, resolver) {
+    all.push(issue)
+  }
+  for issue in check_super_before_this(module_) {
     all.push(issue)
   }
   for issue in check_class_duplicate_members(module_) {
