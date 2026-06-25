@@ -9775,3 +9775,18 @@ test "expr_check: cannot assign to undefined (TS2539)" {
   // A normal variable assignment is silent.
   @test.assert_eq(issues("let u: number = 0; u = 1;"), 0)
 }
+
+///|
+// TS1228: a type predicate is only allowed in return-type position.
+test "expr_check: misplaced type predicate (TS1228)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  assert_true(issues("var x: this is string;") > 0)
+  assert_true(issues("var y: z is number;") > 0)
+  // A type predicate in return-type position is valid.
+  @test.assert_eq(
+    issues("function isStr(x: unknown): x is string { return true; }"),
+    0,
+  )
+}
