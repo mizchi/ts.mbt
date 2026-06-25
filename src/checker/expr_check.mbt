@@ -14957,6 +14957,31 @@ fn check_method_accessor_override_mismatch(
         _ => ()
       }
     }
+    // TS2610: a base-class *accessor* overridden by a derived data property.
+    // Only an error under `useDefineForClassFields` semantics (there the field
+    // uses `[[DefineOwnProperty]]`, shadowing the accessor; under the legacy
+    // assignment semantics the property flows through the setter and is
+    // allowed). `nearest_ancestor_member_kind` returns `2` only for a *true*
+    // get/set accessor — auto-accessors and abstract properties resolve to a
+    // property kind — so this no longer conflates them.
+    if module_.use_define_for_class_fields {
+      for p in cls.properties {
+        if p.is_accessor || reported.contains(p.name) {
+          continue
+        }
+        if cls.abstract_members.contains(p.name) {
+          continue
+        }
+        if nearest_ancestor_member_kind(resolver, base, p.name, p.is_static)
+          is Some(2) {
+          reported[p.name] = ()
+          issues.push({
+            path: "class \{cls.name}.\{p.name}",
+            message: "`\{p.name}` is defined as an accessor in a base class but is overridden here as a property",
+          })
+        }
+      }
+    }
   }
   issues
 }
