@@ -9175,3 +9175,473 @@ test "expr_check: possibly-undefined method call + template-literal typeof" {
     0,
   )
 }
+
+///|
+// Loop-divergence narrowing: `continue` / `break` terminate the current
+// block's normal flow exactly like `return` / `throw`, so a guard that
+// diverges on the nullish branch (`if (x === undefined) continue;`) must
+// strip the nullish part from the fall-through. Without this the then-branch
+// (where `x` is `undefined`) was unioned back at the merge point and produced
+// a spurious "object is possibly undefined" on the subsequent use.
+test "expr_check: continue / break narrow the loop-body fall-through (TS18048)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // `continue` on the nullish branch -> rest of the iteration is non-nullish.
+  @test.assert_eq(
+    issues(
+      (
+        #|function f(items: (string | undefined)[]): void {
+        #|  for (const x of items) {
+        #|    if (x === undefined) continue;
+        #|    x.toUpperCase();
+        #|  }
+        #|}
+      ),
+    ),
+    0,
+  )
+  // `break` on the nullish branch -> code after the guard is non-nullish.
+  @test.assert_eq(
+    issues(
+      (
+        #|function f(x: string | undefined): void {
+        #|  while (true) {
+        #|    if (x === undefined) break;
+        #|    x.toUpperCase();
+        #|    break;
+        #|  }
+        #|}
+      ),
+    ),
+    0,
+  )
+  // Labeled `continue` diverges just the same.
+  @test.assert_eq(
+    issues(
+      (
+        #|function f(items: (string | undefined)[]): void {
+        #|  outer: for (const x of items) {
+        #|    if (x === undefined) continue outer;
+        #|    x.toUpperCase();
+        #|  }
+        #|}
+      ),
+    ),
+    0,
+  )
+  // Sanity: an unguarded use inside the loop is still flagged.
+  assert_true(
+    issues(
+      (
+        #|function f(items: (string | undefined)[]): void {
+        #|  for (const x of items) {
+        #|    x.toUpperCase();
+        #|  }
+        #|}
+      ),
+    ) >
+    0,
+  )
+}
+
+///|
+// `||=` (logical-OR assignment) assigns the rhs whenever the lhs is falsy —
+// and `null` / `undefined` are always falsy — so a non-nullish rhs strips the
+// nullish part exactly like `??=`. `x ||= "d"; x.length` must be silent.
+test "expr_check: `||=` strips nullish from the lhs (TS18048)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  @test.assert_eq(
+    issues("let e: string | undefined;\ne ||= \"x\"\ne.length;"),
+    0,
+  )
+  // Parameter form keeps the `null` case free of the use-before-assign check
+  // (`let e: string | null;` with no initializer is genuinely TS2454).
+  @test.assert_eq(
+    issues(
+      "function f(e: string | null): number { e ||= \"x\"; return e.length; }",
+    ),
+    0,
+  )
+  // `&&=` does NOT strip nullish (it keeps the falsy part), so an unguarded
+  // use after it is still flagged.
+  assert_true(
+    issues(
+      "function f(e: string | undefined): number { e &&= \"x\"; return e.length; }",
+    ) >
+    0,
+  )
+}
+
+///|
+// A `while` / `for` loop applies its condition's narrowing to the body (the
+// body only runs when the condition holds). `while (x !== undefined) { x.foo }`
+// must be silent. `do { … } while (cond)` must NOT narrow the body — the body
+// runs once before the condition is ever tested.
+test "expr_check: loop-condition narrows the body (TS18048)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // `while` condition narrows the body.
+  @test.assert_eq(
+    issues(
+      (
+        #|function f(x: string | undefined): void {
+        #|  while (x !== undefined) {
+        #|    x.toUpperCase();
+        #|    break;
+        #|  }
+        #|}
+      ),
+    ),
+    0,
+  )
+  // `for` condition narrows the body.
+  @test.assert_eq(
+    issues(
+      (
+        #|function f(x: string | undefined): void {
+        #|  for (; x !== undefined; ) {
+        #|    x.toUpperCase();
+        #|    break;
+        #|  }
+        #|}
+      ),
+    ),
+    0,
+  )
+  // `do/while` must NOT narrow the body (body precedes the test) — flagged.
+  assert_true(
+    issues(
+      (
+        #|function f(x: string | undefined): void {
+        #|  do {
+        #|    x.toUpperCase();
+        #|  } while (x !== undefined);
+        #|}
+      ),
+    ) >
+    0,
+  )
+}
+
+///|
+// A ternary narrows each branch by its condition: the consequent sees the
+// truthy effect, the alternative the falsy one. `x !== undefined ? x.foo : 0`
+// must be silent in both contextual (`return`) and statement positions.
+test "expr_check: ternary branches are narrowed by the condition (TS18048)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Contextual position (checked against the declared return type).
+  @test.assert_eq(
+    issues(
+      "function f(x: string | undefined): number { return x !== undefined ? x.length : 0; }",
+    ),
+    0,
+  )
+  // Else-branch narrowing: `x === undefined ? 0 : x.length`.
+  @test.assert_eq(
+    issues(
+      "function f(x: string | undefined): number { return x === undefined ? 0 : x.length; }",
+    ),
+    0,
+  )
+  // Statement position (no contextual type).
+  @test.assert_eq(
+    issues(
+      "function f(x: string | undefined): void { x !== undefined ? x.toUpperCase() : void 0; }",
+    ),
+    0,
+  )
+  // Sanity: an unguarded member access in a ternary branch is still flagged.
+  assert_true(
+    issues(
+      "function f(x: string | undefined): number { return true ? x.length : 0; }",
+    ) >
+    0,
+  )
+}
+
+///|
+// TS17009: in a derived-class constructor, `this` must not be accessed before
+// `super(...)`. Sound, conservative detection — see `check_super_before_this`.
+test "expr_check: super must be called before this in derived ctor (TS17009)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Bare `this` before `super()` -> flagged.
+  assert_true(
+    issues(
+      (
+        #|class B {}
+        #|class A extends B {
+        #|  constructor() { this; super(); }
+        #|}
+      ),
+    ) >
+    0,
+  )
+  // `this` passed as a `super(...)` argument -> flagged.
+  assert_true(
+    issues(
+      (
+        #|class B { constructor(a: unknown) {} }
+        #|class A extends B {
+        #|  constructor() { super(this); }
+        #|}
+      ),
+    ) >
+    0,
+  )
+  // Parameter default referencing `this` in a derived ctor -> flagged.
+  assert_true(
+    issues(
+      (
+        #|class C { baseProp: number = 1; }
+        #|class F extends C {
+        #|  constructor(y: number = this.baseProp) { super(); }
+        #|}
+      ),
+    ) >
+    0,
+  )
+  // `super()` first, then `this` -> silent.
+  @test.assert_eq(
+    issues(
+      (
+        #|class B {}
+        #|class A extends B {
+        #|  constructor() { super(); this; }
+        #|}
+      ),
+    ),
+    0,
+  )
+  // `super` and `this` in one object literal (super evaluated first) -> silent.
+  @test.assert_eq(
+    issues(
+      (
+        #|class B { constructor(a: unknown) {} }
+        #|class D extends B {
+        #|  private _t: number = 0;
+        #|  constructor() { let x = { k: super(undefined), j: this._t }; }
+        #|}
+      ),
+    ),
+    0,
+  )
+  // `extends null` has no base ctor -> `this` access permitted -> silent.
+  @test.assert_eq(
+    issues(
+      (
+        #|class D extends null {
+        #|  private _t: number = 0;
+        #|  constructor() { this._t; }
+        #|}
+      ),
+    ),
+    0,
+  )
+  // Non-derived class: `this` in the ctor is always fine -> silent.
+  @test.assert_eq(
+    issues(
+      (
+        #|class C {
+        #|  baseProp: number = 1;
+        #|  constructor(x: unknown = this) {}
+        #|}
+      ),
+    ),
+    0,
+  )
+  // `this` only inside a nested arrow passed to super (not invoked early)
+  // -> we stay silent (sound: the closure observes `this` only when called).
+  @test.assert_eq(
+    issues(
+      (
+        #|class B {}
+        #|class A extends B {
+        #|  constructor() { super(); const f = () => this; f(); }
+        #|}
+      ),
+    ),
+    0,
+  )
+}
+
+///|
+// TS2414: a class name cannot be a predefined type keyword.
+test "expr_check: reserved class name (TS2414)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  assert_true(issues("class any {}") > 0)
+  assert_true(issues("class object {}") > 0)
+  assert_true(issues("class symbol {}") > 0)
+  // `bool` is NOT a predefined type -> allowed.
+  @test.assert_eq(issues("class bool {}"), 0)
+  @test.assert_eq(issues("class Foo {}"), 0)
+}
+
+///|
+// TS2611: overriding a base-class data property with an accessor.
+test "expr_check: property overridden as accessor (TS2611)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Base data property `p`, derived overrides with `get` -> flagged.
+  assert_true(
+    issues(
+      (
+        #|class A { p: string = "x"; }
+        #|class B extends A { get p(): string { return "y"; } }
+      ),
+    ) >
+    0,
+  )
+  // Transitive: A has field, B empty, C overrides with accessor -> flagged.
+  assert_true(
+    issues(
+      (
+        #|class A { x: number = 1; }
+        #|class B extends A {}
+        #|class C extends B { get x(): number { return 2; } }
+      ),
+    ) >
+    0,
+  )
+  // Overriding an inherited *accessor* with an accessor -> silent.
+  @test.assert_eq(
+    issues(
+      (
+        #|class A { get p(): string { return "x"; } }
+        #|class B extends A { get p(): string { return "y"; } }
+      ),
+    ),
+    0,
+  )
+  // Abstract base property implemented as accessor -> silent.
+  @test.assert_eq(
+    issues(
+      (
+        #|abstract class A { protected abstract x: string; }
+        #|class C extends A { protected get x(): string { return "c"; } }
+      ),
+    ),
+    0,
+  )
+}
+
+///|
+// TS1014: a rest parameter must be last in the parameter list.
+test "expr_check: rest parameter must be last (TS1014)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  assert_true(issues("function f(...x: number[], ...y: number[]) {}") > 0)
+  assert_true(issues("const g = (...x: number[], y: number) => {};") > 0)
+  assert_true(issues("class C { m(...x: number[], ...y: number[]) {} }") > 0)
+  // A single trailing rest parameter is fine.
+  @test.assert_eq(issues("function f(a: number, ...x: number[]) {}"), 0)
+}
+
+///|
+// TS2367 / TS2678: comparing a literal-union against a disjoint literal is
+// always false. Pure literal sets only (flattening nested discriminant unions);
+// any `string` / `Named` / residue member keeps it silent.
+test "expr_check: literal-union disjoint comparison (TS2367/TS2678)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Discriminant `===` against a value not in the union.
+  assert_true(
+    issues(
+      (
+        #|interface Sq { kind: "square" }
+        #|interface Ci { kind: "circle" }
+        #|type Shape = Sq | Ci;
+        #|function f(s: Shape) { return s.kind === "triangle"; }
+      ),
+    ) >
+    0,
+  )
+  // Nested discriminant union flattens: kind is "a" | ("b" | "c").
+  assert_true(
+    issues(
+      (
+        #|interface A { kind: "a" }
+        #|interface B { kind: "b" | "c" }
+        #|type U = A | B;
+        #|function f(x: U) { return x.kind === "z"; }
+      ),
+    ) >
+    0,
+  )
+  // switch case not in the literal union.
+  assert_true(
+    issues(
+      (
+        #|function f(x: "a" | "b") { switch (x) { case "z": return 1; } return 0; }
+      ),
+    ) >
+    0,
+  )
+  // A union containing `string` overlaps any literal -> silent.
+  @test.assert_eq(
+    issues("function f(x: \"a\" | string) { return x === \"z\"; }"),
+    0,
+  )
+  // Comparison against an actual member -> silent.
+  @test.assert_eq(
+    issues("function f(x: \"a\" | \"b\") { return x === \"a\"; }"),
+    0,
+  )
+}
+
+///|
+// TS1267 / TS1245: abstract members cannot carry an initializer / implementation.
+test "expr_check: abstract member with init/impl (TS1267/TS1245)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  assert_true(issues("abstract class C { abstract prop: number = 1; }") > 0)
+  // A bodiless abstract member is fine.
+  @test.assert_eq(issues("abstract class C { abstract prop: number; }"), 0)
+  @test.assert_eq(issues("abstract class C { abstract foo(): void; }"), 0)
+}
+
+///|
+// Tuple-arity in call-argument position: too many elements is a hard error even
+// with optional/rest params; a `...rest` target slot makes the length open.
+test "expr_check: tuple too-many vs variadic target (TS2345)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Fixed-length tuple param, too many elements -> flagged.
+  assert_true(
+    issues("declare function f(x: [number, number]): void; f([1, 2, 3]);") > 0,
+  )
+  // Variadic target tuple accepts extra elements -> silent.
+  @test.assert_eq(
+    issues("declare function f<T, U>(x: [T, ...U[]]): void; f([1, 2, 3]);"),
+    0,
+  )
+}
+
+///|
+// Field-type inference from a primitive-literal initializer: an unannotated
+// field `x = 1` is `number`, so `this.x = "s"` is a TS2322.
+test "expr_check: inferred primitive field assignment (TS2322)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  assert_true(issues("class C { a = 1; m() { this.a = \"s\"; } }") > 0)
+  assert_true(issues("class C { #a = 10; m() { this.#a = \"x\"; } }") > 0)
+  // Correct-typed assignment -> silent (literal widened to the primitive).
+  @test.assert_eq(issues("class C { a = 1; m() { this.a = 2; } }"), 0)
+  // Non-primitive initializer -> not inferred -> silent (no FP).
+  @test.assert_eq(issues("class C { a = {}; m() { this.a = 5; } }"), 0)
+}

@@ -1346,6 +1346,43 @@ fn Resolver::field_on_any_union_member(
 ///|
 
 ///|
+/// When `recv` is a class instance whose field `field` has no type annotation
+/// but is initialized to a *primitive literal* (`x = 1`, `s = "hi"`), return the
+/// widened primitive type (`number` / `string` / …). Used by the assignment
+/// checks so `this.x = "s"` (x inferred `number`) is flagged even without an
+/// explicit annotation. Restricted to primitive widenings inferred under an
+/// empty env — a non-literal / reference / object initializer yields `None`, so
+/// it never concludes a wrong type from an initializer it can't pin down.
+fn inferred_primitive_field_type(
+  resolver : Resolver,
+  recv : @ast.TsType,
+  field : String,
+) -> @ast.TsType? {
+  match resolver.unwrap(recv) {
+    Named(name) =>
+      match resolver.classes.get(name) {
+        Some(cls) => {
+          let env = ExprEnv::new()
+          for fi in cls.instance_field_inits {
+            if fi.0 == field {
+              let t = widen_literal(
+                resolver.unwrap(infer_expr(env, resolver, fi.1)),
+              )
+              return match t {
+                Number | String_ | Boolean | BigInt => Some(t)
+                _ => None
+              }
+            }
+          }
+          None
+        }
+        None => None
+      }
+    _ => None
+  }
+}
+
+///|
 /// True when assigning to `recv.field` is forbidden because the field is
 /// declared `readonly` on a reachable interface/class member. For a union
 /// receiver, *any* member with the readonly bit set is enough — the value
@@ -3461,6 +3498,12 @@ fn is_permissively_suppressed(sub_path : String, message : String) -> Bool {
     // tuple parameters (`...args: [...T]`) make the apparent arity
     // wrong (the call site unpacks a tuple of unknown length).
     if sub_path.contains("call ") && sub_path.contains(" arg[") {
+      // Keep the "too many elements" case (a hard error even with optional /
+      // rest parameters); suppress only the "too few" case, where a variadic-
+      // tuple parameter can legitimately unpack a shorter literal.
+      if message.contains("(too many)") {
+        return false
+      }
       return true
     }
     return false
@@ -4419,6 +4462,109 @@ fn types_can_overlap(a : @ast.TsType, b : @ast.TsType) -> Bool {
 }
 
 ///|
+
+///|
+/// Flatten `ty` into the set of string-literal values it denotes, descending
+/// into nested unions. Returns `false` (leaving `out` partial) the moment a
+/// non-string-literal member is seen — `string`, a `Named` ref, an unrenderable
+/// residue, etc. — so a caller only ever concludes "disjoint" on a type it can
+/// fully enumerate.
+fn collect_string_literals(ty : @ast.TsType, out : Array[String]) -> Bool {
+  match ty {
+    Literal(s) => {
+      out.push(s)
+      true
+    }
+    Union(parts) => {
+      for p in parts {
+        if not(collect_string_literals(p, out)) {
+          return false
+        }
+      }
+      true
+    }
+    _ => false
+  }
+}
+
+///|
+fn pure_string_literal_set(ty : @ast.TsType) -> Array[String]? {
+  let out : Array[String] = []
+  if collect_string_literals(ty, out) && out.length() > 0 {
+    Some(out)
+  } else {
+    None
+  }
+}
+
+///|
+fn collect_number_literals(ty : @ast.TsType, out : Array[String]) -> Bool {
+  match ty {
+    NumberLiteral(s) => {
+      out.push(s)
+      true
+    }
+    Union(parts) => {
+      for p in parts {
+        if not(collect_number_literals(p, out)) {
+          return false
+        }
+      }
+      true
+    }
+    _ => false
+  }
+}
+
+///|
+fn pure_number_literal_set(ty : @ast.TsType) -> Array[String]? {
+  let out : Array[String] = []
+  if collect_number_literals(ty, out) && out.length() > 0 {
+    Some(out)
+  } else {
+    None
+  }
+}
+
+///|
+/// TS2367 for literal comparisons that `types_can_overlap` is too coarse for:
+/// true when both operands are fully-enumerable same-kind literal sets
+/// (string-literal or number-literal, flattening nested unions) whose values do
+/// not intersect — so `x === lit` (x: "A" | "B"; lit: "X") is always false.
+/// Both sides must be pure literal sets, so a `string` / `number` / `Named` /
+/// residue member on either side returns `false` (no conclusion), keeping it
+/// false-positive-free. This is the discriminated-union comparison case.
+fn literal_union_disjoint(a : @ast.TsType, b : @ast.TsType) -> Bool {
+  match (pure_string_literal_set(a), pure_string_literal_set(b)) {
+    (Some(sa), Some(sb)) => {
+      for x in sa {
+        for y in sb {
+          if x == y {
+            return false
+          }
+        }
+      }
+      return true
+    }
+    _ => ()
+  }
+  match (pure_number_literal_set(a), pure_number_literal_set(b)) {
+    (Some(na), Some(nb)) => {
+      for x in na {
+        for y in nb {
+          if x == y {
+            return false
+          }
+        }
+      }
+      return true
+    }
+    _ => ()
+  }
+  false
+}
+
+///|
 fn check_binop_operands(
   env : ExprEnv,
   op : @ast.TsBinOp,
@@ -4476,7 +4622,7 @@ fn check_binop_operands(
         !is_nullish_kw(r) &&
         is_checkable(lt) &&
         is_checkable(rt) &&
-        !types_can_overlap(lt, rt) {
+        (not(types_can_overlap(lt, rt)) || literal_union_disjoint(lt, rt)) {
         record(
           ctx,
           "strict equality",
@@ -5060,7 +5206,18 @@ fn infer_expr(
       }
       let recv_ty = infer_expr(env, resolver, receiver)
       match resolver.lookup_field(recv_ty, name) {
-        Some(t) => t
+        Some(t) =>
+          // An unannotated field reads back as `Any`; recover the widened
+          // primitive from its initializer (matches TS's own inference) so a
+          // read like `return this.x` is typed.
+          if is_checkable(t) {
+            t
+          } else {
+            match inferred_primitive_field_type(resolver, recv_ty, name) {
+              Some(inferred) => inferred
+              None => t
+            }
+          }
         None =>
           // Union receiver: lookup_field requires ALL members to have the
           // field. When null/undefined members make that fail, retry on the
@@ -6085,9 +6242,23 @@ fn check_expr_against(
     // Ternary: check each branch against the expected type individually.
     // This catches `cond ? "ok" : 42` against `string` — without this the
     // inferred type is `string | number` and the union check may be too wide.
-    (Cond(_, then_, else_), _) => {
+    (Cond(c, then_, else_), _) => {
+      // The consequent runs only when the condition is truthy and the
+      // alternative only when it is falsy — apply that flow narrowing before
+      // checking each branch so a `Var` the condition guards
+      // (`x !== undefined ? x.foo : 0`) isn't re-flagged as possibly-undefined.
+      let eff = analyze_narrowing(env, ctx.resolver, c)
+      let snap = env.full_snapshot()
+      for b in eff.then_binds {
+        env.narrow(b.0, b.1)
+      }
       check_expr_against(env, then_, expected, ctx, sub_path + " (then)")
+      env.restore_from(snap)
+      for b in eff.else_binds {
+        env.narrow(b.0, b.1)
+      }
       check_expr_against(env, else_, expected, ctx, sub_path + " (else)")
+      env.restore_from(snap)
       return
     }
     // Logical operators propagate the contextual type to their *right*
@@ -7342,11 +7513,28 @@ fn check_array_lit_against_tuple(
       _ => ()
     }
   }
-  if !has_spread && items.length() != slots.length() {
+  // A `...rest` slot in the *target* tuple (`[a, ...b[]]`) makes its length
+  // open-ended, so a count mismatch is not an error. Optional trailing slots
+  // (`[a, b?]`) similarly make a *shorter* literal valid — but never a *longer*
+  // one, so supplying more elements than a fixed-length tuple has is always an
+  // error (marked `(too many)` so the permissive filter can keep it in
+  // call-argument position, where the "too few" case stays suppressed).
+  let mut has_rest_slot = false
+  for s in slots {
+    if s is Rest(_) {
+      has_rest_slot = true
+    }
+  }
+  if !has_spread && !has_rest_slot && items.length() != slots.length() {
+    let excess = if items.length() > slots.length() {
+      " (too many)"
+    } else {
+      ""
+    }
     record(
       ctx,
       sub_path,
-      "expected tuple of \{slots.length()} element(s), got \{items.length()}",
+      "expected tuple of \{slots.length()} element(s), got \{items.length()}\{excess}",
     )
   }
   let n = if items.length() < slots.length() {
@@ -10772,8 +10960,20 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       check_call_args_in_expr(env, value, ctx)
       let recv_ty = infer_expr(env, ctx.resolver, recv)
       match ctx.resolver.lookup_field(recv_ty, prop) {
-        Some(target_ty) =>
+        Some(target_ty) => {
+          // When the field carries no annotation (`x = 1`) its declared type is
+          // `Any`; recover the widened primitive from the initializer so a
+          // mismatched assignment is still flagged.
+          let target_ty = if is_checkable(target_ty) {
+            target_ty
+          } else {
+            match inferred_primitive_field_type(ctx.resolver, recv_ty, prop) {
+              Some(t) => t
+              None => target_ty
+            }
+          }
           check_expr_against(env, value, target_ty, ctx, "assign `.\{prop}`")
+        }
         None =>
           if is_checkable(recv_ty) &&
             !is_nullable_type(recv_ty) &&
@@ -10911,9 +11111,25 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         }
       }
     }
-    While(cond, body) | DoWhile(cond, body) => {
+    While(cond, body) => {
       check_call_args_in_expr(env, cond, ctx)
+      // The body only runs when the condition holds, so its then-narrowing
+      // applies at the top of the body (`while (x !== undefined) { x.foo }`).
+      // Snapshot / restore around the body so the narrowing (and any in-body
+      // reassignment) doesn't leak past the loop, where the condition is
+      // false — mirrors the `For` handler.
+      let pre = env.full_snapshot()
+      for b in analyze_narrowing(env, ctx.resolver, cond).then_binds {
+        env.bind(b.0, b.1)
+      }
       check_block(env, body, ctx)
+      env.restore_from(pre)
+    }
+    DoWhile(cond, body) => {
+      // `do { … } while (cond)`: the body runs once *before* the condition is
+      // ever evaluated, so the condition's narrowing must NOT apply to it.
+      check_block(env, body, ctx)
+      check_call_args_in_expr(env, cond, ctx)
     }
     For(init, cond, update, body) => {
       let pre = env.full_snapshot()
@@ -10927,6 +11143,14 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       }
       match update {
         Some(s) => check_stmt(env, s, ctx)
+        None => ()
+      }
+      // Like `while`, the body runs only when the condition holds.
+      match cond {
+        Some(e) =>
+          for b in analyze_narrowing(env, ctx.resolver, e).then_binds {
+            env.bind(b.0, b.1)
+          }
         None => ()
       }
       check_block(env, body, ctx)
@@ -11053,7 +11277,10 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
             let case_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, e))
             if is_checkable(scrutinee_ty) &&
               is_checkable(case_ty) &&
-              !types_can_overlap(scrutinee_ty, case_ty) {
+              (
+                not(types_can_overlap(scrutinee_ty, case_ty)) ||
+                literal_union_disjoint(scrutinee_ty, case_ty)
+              ) {
               record(
                 ctx,
                 "switch case",
@@ -11750,8 +11977,21 @@ fn check_call_args_in_expr(
     }
     Cond(c, t, e) => {
       check_call_args_in_expr(env, c, ctx)
+      // Walk each branch under the condition's flow narrowing (the consequent
+      // sees the truthy effect, the alternative the falsy one), so
+      // `x !== undefined ? x.foo : 0` doesn't re-flag `x` as possibly-undefined.
+      let eff = analyze_narrowing(env, ctx.resolver, c)
+      let snap = env.full_snapshot()
+      for b in eff.then_binds {
+        env.narrow(b.0, b.1)
+      }
       check_call_args_in_expr(env, t, ctx)
+      env.restore_from(snap)
+      for b in eff.else_binds {
+        env.narrow(b.0, b.1)
+      }
       check_call_args_in_expr(env, e, ctx)
+      env.restore_from(snap)
     }
     ArrayLit(items) =>
       for it in items {
@@ -12020,8 +12260,12 @@ fn check_call_args_in_expr(
       // part unioned with `v`'s type — if `v` is non-nullish the residual
       // `undefined` is gone. This mirrors TS flow narrowing so a later
       // member access on `name` isn't a spurious "possibly undefined".
+      // `name ||= v` behaves the same for nullish purposes: `null` /
+      // `undefined` are always falsy, so the rhs always replaces them — a
+      // non-nullish `v` strips the nullish part just like `??=`. (`&&=` keeps
+      // the falsy part and is deliberately excluded.)
       match (target, op) {
-        (Var(name), CoalesceAssign) => {
+        (Var(name), CoalesceAssign) | (Var(name), OrAssign) => {
           let current = match env.lookup(name) {
             Some(t) => t
             None =>
@@ -12064,8 +12308,17 @@ fn check_call_args_in_expr(
         )
       }
       match ctx.resolver.lookup_field(recv_ty, prop) {
-        Some(target_ty) =>
+        Some(target_ty) => {
+          let target_ty = if is_checkable(target_ty) {
+            target_ty
+          } else {
+            match inferred_primitive_field_type(ctx.resolver, recv_ty, prop) {
+              Some(t) => t
+              None => target_ty
+            }
+          }
           check_expr_against(env, v, target_ty, ctx, "assign `.\{prop}`")
+        }
         None =>
           if is_checkable(recv_ty) &&
             !is_nullable_type(recv_ty) &&
@@ -12485,6 +12738,16 @@ fn switch_covers_union(
 fn stmt_always_exits(stmt : @ast.TsStmt) -> Bool {
   match stmt {
     Return(_) | Throw(_) => true
+    // `break` / `continue` (labeled or not) terminate the current block's
+    // normal flow just like `return` / `throw`: control jumps out of the
+    // enclosing loop / switch, so statements after a diverging guard branch
+    // are unreachable on that path. This lets the early-exit narrowing in the
+    // `If` handler apply the *opposite* branch's effect to the fall-through
+    // (`if (x === undefined) continue; x.foo()` is silent). NOTE: this is the
+    // narrowing-only variant — the missing-return analysis uses
+    // `stmt_always_exits_with`, which must NOT treat `break` / `continue` as a
+    // function exit (a body that ends in `continue` still fails to return).
+    Break(_) | Continue(_) => true
     If(_, then_b, Some(else_b)) =>
       block_always_exits(then_b) && block_always_exits(else_b)
     Block(b) => block_always_exits(b)
@@ -13600,6 +13863,27 @@ fn check_abstract_modifier_rules(module_ : @ast.TsModule) -> Array[ExprIssue] {
         message: "`abstract` modifier can only appear on a class, method, or property declaration",
       })
     }
+    // TS1245: an `abstract` method cannot carry an implementation (`abstract
+    // foo() {}`). A genuinely-abstract method has no body, so a body on a member
+    // whose name is in `abstract_set` is the abstract-with-implementation form.
+    for m in cls.methods {
+      if abstract_set.contains(m.name) && m.body is Some(_) {
+        issues.push({
+          path: "class \{cls.name}.\{m.name}",
+          message: "method `\{m.name}` cannot have an implementation because it is marked abstract",
+        })
+      }
+    }
+    // TS1267: an `abstract` property cannot have an initializer (`abstract prop
+    // = 1`).
+    for p in cls.properties {
+      if abstract_set.contains(p.name) && p.has_initializer {
+        issues.push({
+          path: "class \{cls.name}.\{p.name}",
+          message: "property `\{p.name}` cannot have an initializer because it is marked abstract",
+        })
+      }
+    }
   }
   issues
 }
@@ -13737,6 +14021,631 @@ fn is_signature_sentinel(name : String) -> Bool {
 /// occurrence is a non-method (property) field; signature sentinels are
 /// skipped. Both are decided from declaration shape alone — no type
 /// resolution — so they carry no false-positive risk on resolvable input.
+/// True when `e` references `this` somewhere that executes in the *current*
+/// lexical scope — i.e. without descending into a nested function / arrow /
+/// class body, where `this` is rebound (or, for arrows, captured but only
+/// observed when the closure is later invoked). Used by the TS17009
+/// "'super' must be called before accessing 'this'" check, which must only
+/// fire on a `this` that the constructor evaluates directly before `super(…)`.
+fn expr_uses_this_outside_fn(e : @ast.TsExpr) -> Bool {
+  match e {
+    Var("this") => true
+    // Nested scopes rebind / defer `this` — do not descend.
+    ArrowFunc(_, _, _, _) | FuncExpr(_) | NativeClassExpr(_, _) => false
+    Var(_)
+    | IntLit(_)
+    | NumberLit(_)
+    | BigIntLit(_)
+    | BoolLit(_)
+    | StringLit(_) => false
+    PropAccess(r, _) | NonNull(r) | OptionalChain(r) | Spread(r) | Await(r) =>
+      expr_uses_this_outside_fn(r)
+    UnaryOp(_, r) | As(r, _) | Satisfies(r, _) | YieldStar(r) | PureCall(r) =>
+      expr_uses_this_outside_fn(r)
+    TypeArgs(_, r) => expr_uses_this_outside_fn(r)
+    Yield(opt) =>
+      match opt {
+        Some(r) => expr_uses_this_outside_fn(r)
+        None => false
+      }
+    IndexAccess(a, b) | Seq(a, b) | BinOp(_, a, b) =>
+      expr_uses_this_outside_fn(a) || expr_uses_this_outside_fn(b)
+    Cond(a, b, c) =>
+      expr_uses_this_outside_fn(a) ||
+      expr_uses_this_outside_fn(b) ||
+      expr_uses_this_outside_fn(c)
+    MethodCall(r, _, args) => {
+      if expr_uses_this_outside_fn(r) {
+        return true
+      }
+      any_expr_uses_this(args)
+    }
+    Call(_, args) => any_expr_uses_this(args)
+    CallExpr(callee, args) | NewExpr(callee, args) =>
+      expr_uses_this_outside_fn(callee) || any_expr_uses_this(args)
+    New(_, args) => any_expr_uses_this(args)
+    ArrayLit(items) => any_expr_uses_this(items)
+    TemplateLiteral(_, parts) => any_expr_uses_this(parts)
+    ObjectLit(entries) => {
+      for ent in entries {
+        if expr_uses_this_outside_fn(ent.1) {
+          return true
+        }
+      }
+      false
+    }
+    ComputedProp(k, v) =>
+      expr_uses_this_outside_fn(k) || expr_uses_this_outside_fn(v)
+    AssignExpr(_, v) => expr_uses_this_outside_fn(v)
+    CompoundAssignExpr(t, _, v) =>
+      expr_uses_this_outside_fn(t) || expr_uses_this_outside_fn(v)
+    PropAssignExpr(r, _, v) =>
+      expr_uses_this_outside_fn(r) || expr_uses_this_outside_fn(v)
+    IndexAssignExpr(r, i, v) =>
+      expr_uses_this_outside_fn(r) ||
+      expr_uses_this_outside_fn(i) ||
+      expr_uses_this_outside_fn(v)
+    // Anything not enumerated (Jsx, TaggedTemplate, DynamicImport, …) is rare
+    // in a derived-class constructor head; stay conservative and report no
+    // `this` use so the check never produces a false positive.
+    _ => false
+  }
+}
+
+///|
+fn any_expr_uses_this(es : Array[@ast.TsExpr]) -> Bool {
+  for e in es {
+    if expr_uses_this_outside_fn(e) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+/// Returns the argument list of a `super(…)` call when `e` is one, else `None`.
+fn super_call_args(e : @ast.TsExpr) -> Array[@ast.TsExpr]? {
+  match e {
+    Call("super", args) => Some(args)
+    CallExpr(Var("super"), args) => Some(args)
+    _ => None
+  }
+}
+
+///|
+/// True when `e` embeds a `super(…)` call (or a bare `super` reference) that
+/// runs in the current scope. Mirrors `expr_uses_this_outside_fn`'s nested-scope
+/// discipline. When a statement contains *both* a `super` call and a `this`
+/// use, their relative evaluation order is not statically obvious (e.g.
+/// `let x = { k: super(), j: this.p }`, where `super` runs first), so the
+/// TS17009 check treats `super` as already called rather than risk a false
+/// positive.
+fn expr_embeds_super_outside_fn(e : @ast.TsExpr) -> Bool {
+  if super_call_args(e) is Some(_) {
+    return true
+  }
+  match e {
+    Var("super") => true
+    ArrowFunc(_, _, _, _) | FuncExpr(_) | NativeClassExpr(_, _) => false
+    PropAccess(r, _)
+    | NonNull(r)
+    | OptionalChain(r)
+    | Spread(r)
+    | Await(r)
+    | UnaryOp(_, r)
+    | As(r, _)
+    | Satisfies(r, _)
+    | YieldStar(r)
+    | PureCall(r)
+    | TypeArgs(_, r) => expr_embeds_super_outside_fn(r)
+    Yield(opt) =>
+      match opt {
+        Some(r) => expr_embeds_super_outside_fn(r)
+        None => false
+      }
+    IndexAccess(a, b) | Seq(a, b) | BinOp(_, a, b) =>
+      expr_embeds_super_outside_fn(a) || expr_embeds_super_outside_fn(b)
+    Cond(a, b, c) =>
+      expr_embeds_super_outside_fn(a) ||
+      expr_embeds_super_outside_fn(b) ||
+      expr_embeds_super_outside_fn(c)
+    MethodCall(r, _, args) =>
+      expr_embeds_super_outside_fn(r) || any_expr_embeds_super(args)
+    Call(_, args) => any_expr_embeds_super(args)
+    CallExpr(callee, args) | NewExpr(callee, args) =>
+      expr_embeds_super_outside_fn(callee) || any_expr_embeds_super(args)
+    New(_, args) => any_expr_embeds_super(args)
+    ArrayLit(items) => any_expr_embeds_super(items)
+    TemplateLiteral(_, parts) => any_expr_embeds_super(parts)
+    ObjectLit(entries) => {
+      for ent in entries {
+        if expr_embeds_super_outside_fn(ent.1) {
+          return true
+        }
+      }
+      false
+    }
+    ComputedProp(k, v) =>
+      expr_embeds_super_outside_fn(k) || expr_embeds_super_outside_fn(v)
+    AssignExpr(_, v) => expr_embeds_super_outside_fn(v)
+    CompoundAssignExpr(t, _, v) =>
+      expr_embeds_super_outside_fn(t) || expr_embeds_super_outside_fn(v)
+    PropAssignExpr(r, _, v) =>
+      expr_embeds_super_outside_fn(r) || expr_embeds_super_outside_fn(v)
+    IndexAssignExpr(r, i, v) =>
+      expr_embeds_super_outside_fn(r) ||
+      expr_embeds_super_outside_fn(i) ||
+      expr_embeds_super_outside_fn(v)
+    _ => false
+  }
+}
+
+///|
+fn any_expr_embeds_super(es : Array[@ast.TsExpr]) -> Bool {
+  for e in es {
+    if expr_embeds_super_outside_fn(e) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+/// TS17009: in the constructor of a *derived* class, `this` must not be
+/// accessed before `super(…)` is called. We model the common, statically
+/// obvious cases soundly:
+///   - a constructor parameter default that references `this` (it is evaluated
+///     before the body, hence before `super`);
+///   - a `this` argument passed to the `super(…)` call itself; and
+///   - a `this` use in a *simple* top-level statement that precedes `super`.
+/// Compound statements (`if` / loops / `try` / blocks) before `super` are
+/// treated conservatively as "super may have run" so the check never produces
+/// a false positive — at the cost of not catching `this` buried inside them.
+fn check_super_before_this(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for cls in module_.classes {
+    // Only derived classes have the constraint. `base_names` is the `extends`
+    // clause (interfaces live in `implements_names`), so a non-empty list —
+    // including the `<expr-base>` mixin sentinel — means "derived".
+    if cls.base_names.length() == 0 {
+      continue
+    }
+    // `class D extends null` has no base constructor, so TS does NOT require a
+    // `super` call and `this` access is permitted (superCallBeforeThisAccessing5).
+    // The parser lowers an expression heritage clause to the `<expr-base>`
+    // sentinel and stashes the expression in `base_expr`, so `extends null`
+    // surfaces as `base_expr = Some(Var("null") | NullLit)`.
+    match cls.base_expr {
+      Some(Var("null")) | Some(NullLit) => continue
+      _ => ()
+    }
+    let mut flagged = false
+    // (1) Parameter defaults run before the body, hence before `super`.
+    for d in cls.constructor_param_defaults {
+      match d {
+        Some(init) =>
+          if expr_uses_this_outside_fn(init) {
+            flagged = true
+            break
+          }
+        None => ()
+      }
+    }
+    // (2) / (3) constructor body, in source order, up to the `super(…)` call.
+    if not(flagged) {
+      match cls.constructor_body {
+        Some(body) => {
+          let mut super_seen = false
+          for stmt in body.stmts {
+            if super_seen {
+              break
+            }
+            // The expressions a simple statement evaluates directly. `None`
+            // marks a compound / opaque statement we don't descend into.
+            let exprs : Array[@ast.TsExpr]? = match stmt {
+              Expr(e) =>
+                // A direct `super(…)` statement: its arguments run before the
+                // call completes, so a `this` argument is an early access.
+                match super_call_args(e) {
+                  Some(args) => {
+                    if any_expr_uses_this(args) {
+                      flagged = true
+                    }
+                    super_seen = true
+                    continue
+                  }
+                  None => Some([e])
+                }
+              Return(Some(e)) | Throw(e) => Some([e])
+              Const(_, _, e) | Let(_, _, e) | Var(_, _, e) => Some([e])
+              Assign(_, e) | CompoundAssign(_, _, e) => Some([e])
+              PropAssign(r, _, v) => Some([r, v])
+              IndexAssign(r, i, v) => Some([r, i, v])
+              _ => None
+            }
+            match exprs {
+              Some(es) =>
+                // If the statement embeds the `super` call (e.g.
+                // `let x = { k: super(), j: this.p }`), evaluation order is not
+                // statically obvious — treat `super` as called and do not flag.
+                if any_expr_embeds_super(es) {
+                  super_seen = true
+                } else if any_expr_uses_this(es) {
+                  flagged = true
+                  break
+                }
+              // Compound control flow, empty, debugger, …: stop scanning
+              // conservatively rather than descend, so the check never FPs.
+              None => super_seen = true
+            }
+          }
+        }
+        None => ()
+      }
+    }
+    if flagged {
+      issues.push({
+        path: "class \{cls.name}.constructor",
+        message: "`super` must be called before accessing `this` in the constructor of a derived class",
+      })
+    }
+  }
+  issues
+}
+
+///|
+/// TS1014: "A rest parameter must be last in a parameter list." Flags any
+/// callable param list (function / method / constructor / arrow / function
+/// expression) where a `...rest` parameter is not in the final position. Purely
+/// structural and sound — no valid TS allows a non-last rest parameter.
+fn rest_param_misplaced(params : Array[@ast.TsParam]) -> Bool {
+  let n = params.length()
+  for i, p in params {
+    if p.is_rest && i < n - 1 {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn rest_flags_misplaced(flags : Array[Bool]) -> Bool {
+  let n = flags.length()
+  for i, r in flags {
+    if r && i < n - 1 {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn rest_walk_block(block : @ast.TsBlock, out : Array[ExprIssue]) -> Unit {
+  for stmt in block.stmts {
+    rest_walk_stmt(stmt, out)
+  }
+}
+
+///|
+fn rest_walk_stmt(stmt : @ast.TsStmt, out : Array[ExprIssue]) -> Unit {
+  match stmt {
+    Expr(e) | Throw(e) => rest_walk_expr(e, out)
+    Return(opt) =>
+      match opt {
+        Some(e) => rest_walk_expr(e, out)
+        None => ()
+      }
+    Const(_, _, e) | Let(_, _, e) | Var(_, _, e) => rest_walk_expr(e, out)
+    Assign(_, e) | CompoundAssign(_, _, e) => rest_walk_expr(e, out)
+    PropAssign(a, _, b) | IndexAssign(a, _, b) => {
+      rest_walk_expr(a, out)
+      rest_walk_expr(b, out)
+    }
+    Block(b) => rest_walk_block(b, out)
+    If(c, t, e) => {
+      rest_walk_expr(c, out)
+      rest_walk_block(t, out)
+      match e {
+        Some(b) => rest_walk_block(b, out)
+        None => ()
+      }
+    }
+    While(c, b) | DoWhile(c, b) => {
+      rest_walk_expr(c, out)
+      rest_walk_block(b, out)
+    }
+    For(init, cond, update, body) => {
+      match init {
+        Some(s) => rest_walk_stmt(s, out)
+        None => ()
+      }
+      match cond {
+        Some(e) => rest_walk_expr(e, out)
+        None => ()
+      }
+      match update {
+        Some(s) => rest_walk_stmt(s, out)
+        None => ()
+      }
+      rest_walk_block(body, out)
+    }
+    ForOf(_, _, _, e, b) | ForIn(_, _, _, e, b) | ForAwaitOf(_, _, _, e, b) => {
+      rest_walk_expr(e, out)
+      rest_walk_block(b, out)
+    }
+    Switch(scrut, cases) => {
+      rest_walk_expr(scrut, out)
+      for c in cases {
+        rest_walk_block(c.body, out)
+      }
+    }
+    Try(tb, _, cb, fb) => {
+      rest_walk_block(tb, out)
+      match cb {
+        Some(b) => rest_walk_block(b, out)
+        None => ()
+      }
+      match fb {
+        Some(b) => rest_walk_block(b, out)
+        None => ()
+      }
+    }
+    Label(_, inner) => rest_walk_stmt(inner, out)
+    _ => ()
+  }
+}
+
+///|
+fn rest_walk_exprs(es : Array[@ast.TsExpr], out : Array[ExprIssue]) -> Unit {
+  for e in es {
+    rest_walk_expr(e, out)
+  }
+}
+
+///|
+fn rest_walk_expr(e : @ast.TsExpr, out : Array[ExprIssue]) -> Unit {
+  match e {
+    ArrowFunc(params, _, body, _) => {
+      if rest_param_misplaced(params) {
+        out.push({
+          path: "arrow function",
+          message: "a rest parameter must be last in a parameter list",
+        })
+      }
+      match body {
+        ArrowExpr(b) => rest_walk_expr(b, out)
+        ArrowBlock(b) => rest_walk_block(b, out)
+      }
+    }
+    FuncExpr(f) => {
+      if rest_param_misplaced(f.params) {
+        out.push({
+          path: "function \{f.name}",
+          message: "a rest parameter must be last in a parameter list",
+        })
+      }
+      rest_walk_block(f.body, out)
+    }
+    PropAccess(r, _)
+    | NonNull(r)
+    | OptionalChain(r)
+    | Spread(r)
+    | Await(r)
+    | UnaryOp(_, r)
+    | As(r, _)
+    | Satisfies(r, _)
+    | YieldStar(r)
+    | PureCall(r)
+    | TypeArgs(_, r) => rest_walk_expr(r, out)
+    Yield(opt) =>
+      match opt {
+        Some(r) => rest_walk_expr(r, out)
+        None => ()
+      }
+    IndexAccess(a, b) | Seq(a, b) | BinOp(_, a, b) => {
+      rest_walk_expr(a, out)
+      rest_walk_expr(b, out)
+    }
+    Cond(a, b, c) => {
+      rest_walk_expr(a, out)
+      rest_walk_expr(b, out)
+      rest_walk_expr(c, out)
+    }
+    MethodCall(r, _, args) => {
+      rest_walk_expr(r, out)
+      rest_walk_exprs(args, out)
+    }
+    Call(_, args) | New(_, args) => rest_walk_exprs(args, out)
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      rest_walk_expr(callee, out)
+      rest_walk_exprs(args, out)
+    }
+    ArrayLit(items) => rest_walk_exprs(items, out)
+    TemplateLiteral(_, parts) => rest_walk_exprs(parts, out)
+    ObjectLit(entries) =>
+      for ent in entries {
+        rest_walk_expr(ent.1, out)
+      }
+    ComputedProp(k, v) => {
+      rest_walk_expr(k, out)
+      rest_walk_expr(v, out)
+    }
+    AssignExpr(_, v) => rest_walk_expr(v, out)
+    CompoundAssignExpr(t, _, v) => {
+      rest_walk_expr(t, out)
+      rest_walk_expr(v, out)
+    }
+    PropAssignExpr(r, _, v) => {
+      rest_walk_expr(r, out)
+      rest_walk_expr(v, out)
+    }
+    IndexAssignExpr(r, i, v) => {
+      rest_walk_expr(r, out)
+      rest_walk_expr(i, out)
+      rest_walk_expr(v, out)
+    }
+    _ => ()
+  }
+}
+
+///|
+/// TS1014 driver: check every callable param list reachable in the module —
+/// top-level functions, class methods / constructors, and any nested arrow /
+/// function-expression in initializers and bodies.
+fn check_rest_param_position(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for f in module_.funcs {
+    if rest_param_misplaced(f.params) {
+      issues.push({
+        path: "function \{f.name}",
+        message: "a rest parameter must be last in a parameter list",
+      })
+    }
+    rest_walk_block(f.body, issues)
+  }
+  for cls in module_.classes {
+    for m in cls.methods {
+      if rest_flags_misplaced(m.param_is_rest) {
+        issues.push({
+          path: "class \{cls.name}.\{m.name}",
+          message: "a rest parameter must be last in a parameter list",
+        })
+      }
+      match m.body {
+        Some(b) => rest_walk_block(b, issues)
+        None => ()
+      }
+    }
+    if rest_flags_misplaced(cls.constructor_param_is_rest) {
+      issues.push({
+        path: "class \{cls.name}.constructor",
+        message: "a rest parameter must be last in a parameter list",
+      })
+    }
+    match cls.constructor_body {
+      Some(b) => rest_walk_block(b, issues)
+      None => ()
+    }
+  }
+  for stmt in module_.top_level_stmts {
+    rest_walk_stmt(stmt, issues)
+  }
+  issues
+}
+
+///|
+/// TS2414: a class name may not be one of the predefined type keywords. Mirrors
+/// `checkTypeNameIsReserved` in tsc — the exact reserved set is `any`,
+/// `unknown`, `never`, `number`, `bigint`, `boolean`, `string`, `symbol`,
+/// `void`, `object` (note `bool` is NOT reserved).
+fn check_reserved_class_names(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for cls in module_.classes {
+    match cls.name {
+      "any"
+      | "unknown"
+      | "never"
+      | "number"
+      | "bigint"
+      | "boolean"
+      | "string"
+      | "symbol"
+      | "void"
+      | "object" =>
+        issues.push({
+          path: "class \{cls.name}",
+          message: "class name cannot be `\{cls.name}`",
+        })
+      _ => ()
+    }
+  }
+  issues
+}
+
+///|
+/// Walk a class's `extends` ancestry (nearest first) looking for how `name`
+/// (matching `is_static`) was last declared. Returns `Some(true)` when the
+/// nearest ancestor declaration is a *data property*, `Some(false)` when it is
+/// an *accessor*, and `None` when no ancestor declares it (or the chain leaves
+/// resolvable classes — an expression base, an external class, a cycle).
+fn nearest_ancestor_member_is_property(
+  resolver : Resolver,
+  start_base : String,
+  name : String,
+  is_static : Bool,
+) -> Bool? {
+  let seen : Map[String, Unit] = {}
+  let mut cur = start_base
+  while not(seen.contains(cur)) {
+    seen[cur] = ()
+    let cls = match resolver.classes.get(cur) {
+      Some(c) => c
+      None => return None
+    }
+    // An accessor declaration on this ancestor shadows any data property of
+    // the same name further up — overriding an accessor with an accessor is OK.
+    for m in cls.methods {
+      if m.name == name && m.is_static == is_static && m.accessor != "" {
+        return Some(false)
+      }
+    }
+    for p in cls.properties {
+      if p.name == name && p.is_static == is_static {
+        // An auto-accessor (`accessor x`) or an `abstract` property is not a
+        // concrete data field that shadows at runtime, so overriding it with a
+        // `get` / `set` accessor is allowed (abstractProperty, autoAccessor7).
+        if p.is_accessor || cls.abstract_members.contains(p.name) {
+          return Some(false)
+        }
+        return Some(true)
+      }
+    }
+    // Not declared here — climb to the single `extends` base, if resolvable.
+    if cls.base_names.length() != 1 || cls.base_names[0] == "<expr-base>" {
+      return None
+    }
+    cur = cls.base_names[0]
+  }
+  None
+}
+
+///|
+/// TS2611: a derived class may not override a base-class *data property* with a
+/// `get` / `set` accessor (the property would shadow the accessor at runtime).
+/// Only fires when the nearest ancestor declaration of the name is a property;
+/// an inherited accessor overridden by an accessor is fine.
+fn check_property_overridden_as_accessor(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for cls in module_.classes {
+    if cls.base_names.length() != 1 || cls.base_names[0] == "<expr-base>" {
+      continue
+    }
+    let base = cls.base_names[0]
+    let reported : Map[String, Unit] = {}
+    for m in cls.methods {
+      if m.accessor == "" || reported.contains(m.name) {
+        continue
+      }
+      match
+        nearest_ancestor_member_is_property(resolver, base, m.name, m.is_static) {
+        Some(true) => {
+          reported[m.name] = ()
+          issues.push({
+            path: "class \{cls.name}.\{m.name}",
+            message: "`\{m.name}` is defined as a property in a base class but is overridden here as an accessor",
+          })
+        }
+        _ => ()
+      }
+    }
+  }
+  issues
+}
+
+///|
 fn check_structural_duplicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   for e in module_.enums {
@@ -14674,6 +15583,18 @@ fn check_module_function_bodies_layered(
     }
   }
   for issue in check_var_redeclaration_types(module_, resolver) {
+    all.push(issue)
+  }
+  for issue in check_super_before_this(module_) {
+    all.push(issue)
+  }
+  for issue in check_reserved_class_names(module_) {
+    all.push(issue)
+  }
+  for issue in check_property_overridden_as_accessor(module_, resolver) {
+    all.push(issue)
+  }
+  for issue in check_rest_param_position(module_) {
     all.push(issue)
   }
   for issue in check_class_duplicate_members(module_) {

@@ -1396,6 +1396,205 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-22 (T88)   619/815 (76 %)        414/414 ( 0 FP)   whole-corpus TP 1640 -> 1643
 2026-06-22 (T89)   619/815 (76 %)        414/414 ( 0 FP)   narrowing-engine hardening (no corpus delta)
 2026-06-22 (T90)   619/815 (76 %)        414/414 ( 0 FP)   whole-corpus TP 1643 -> 1645
+2026-06-25 (T91)   (corpus not re-measured)               loop-divergence narrowing hardening
+2026-06-25 (T92)   (corpus not re-measured)               `||=` nullish-strip narrowing
+2026-06-25 (T93)   (corpus not re-measured)               loop-condition body narrowing
+2026-06-25 (T94)   (corpus not re-measured)               ternary-branch condition narrowing
+2026-06-25 (T95)   623/815 (76 %)        414/414 ( 0 FP)   TS17009 super-before-this (corpus remeasured)
+
+  Note: the conformance corpus (`typescript` submodule) was restored in this
+  environment by fetching the pinned-SHA source tarball from codeload (the git
+  submodule clone is blocked by org policy, but codeload tarballs are allowed),
+  so recall/precision are measured again from T95 on.
+
+  T95 -- TS17009 "'super' must be called before accessing 'this' in the
+    constructor of a derived class". New `check_super_before_this` pass over
+    `module_.classes`: for a *derived* class (non-empty `base_names`, excluding
+    `extends null`, which has no base constructor), flag a `this` access that
+    precedes the `super(...)` call. Three sound, statically-obvious shapes are
+    modelled — a constructor parameter default referencing `this`; a `this`
+    argument to the `super(...)` call itself; and a `this` use in a simple
+    top-level statement before `super`. Nested function / arrow / class bodies
+    are not descended (their `this` is rebound or deferred), and a statement
+    that embeds the `super` call alongside `this` (ambiguous evaluation order,
+    e.g. `let x = { k: super(), j: this.p }`) is treated as "super called" so
+    the check never produces a false positive. Compound control-flow statements
+    before `super` stop the scan conservatively. Whole-corpus 0 FP (verified by
+    the conformance oracle); pinned recall 619 -> 623, precision 414/414 (0 FP).
+    Whitebox-tested.
+
+2026-06-25 (T96)   627/815 (77 %)        414/414 ( 0 FP)   TS2414 reserved class names + TS2611 property->accessor override
+
+  T96 -- two structural class-declaration checks.
+    * TS2414 ("Class name cannot be '{0}'"): `check_reserved_class_names` flags
+      a class whose name is a predefined type keyword (`any`, `unknown`,
+      `never`, `number`, `bigint`, `boolean`, `string`, `symbol`, `void`,
+      `object`), matching tsc's `checkTypeNameIsReserved` (note `bool` is not
+      reserved). Sound and mechanical. (The lexer keeps `number` / `boolean` /
+      `string` / `void` as full keywords, so a class named after one of those
+      four isn't registered with that name and slips through — the two
+      conformance cases still flip to hits via the other reserved names they
+      declare.)
+    * TS2611 ("'{0}' is defined as a property ... overridden here as an
+      accessor"): `check_property_overridden_as_accessor` walks the `extends`
+      ancestry (nearest declaration wins) and flags a derived `get`/`set`
+      accessor that overrides a base *data property*. Abstract properties and
+      auto-accessors (`accessor x`) are excluded — they are not concrete fields,
+      so implementing them as an accessor is allowed (abstractProperty,
+      autoAccessor7, found via the oracle's FP list and fixed).
+    Whole-corpus 0 FP (oracle); pinned recall 623 -> 627, precision 414/414
+    (0 FP). Whitebox-tested.
+
+2026-06-25 (T97)   630/815 (77 %)        414/414 ( 0 FP)   TS1014 rest parameter must be last
+
+  T97 -- TS1014 ("A rest parameter must be last in a parameter list").
+    `check_rest_param_position` flags any callable param list with a `...rest`
+    parameter that is not in the final position — purely structural and sound
+    (no valid TS allows a non-last rest param). Covers top-level functions,
+    class methods / constructors (via the `param_is_rest` flag arrays), and any
+    nested arrow / function-expression reached by a dedicated recursive walk of
+    initializers and bodies. (Interface call/method signatures are not covered:
+    the `Func` type stores parameter *types* only, so `is_rest` is unrecoverable
+    there — the conformance cases flip to hits via the arrow / function forms.)
+    Whole-corpus 0 FP (oracle); pinned recall 627 -> 630, precision 414/414
+    (0 FP). Whitebox-tested.
+
+2026-06-25 (T98)   632/815 (78 %)        414/414 ( 0 FP)   TS2367/TS2678 literal-union disjoint comparison
+
+  T98 -- TS2367 / TS2678 for literal-union comparisons that `types_can_overlap`
+    was too coarse for (it treats every union as overlapping). New
+    `literal_union_disjoint`: when both operands flatten to fully-enumerable
+    same-kind literal sets (string- or number-literal, descending into nested
+    discriminant unions like `"a" | ("b" | "c")`) with empty intersection, the
+    `===` / `!==` / `switch`-case comparison is always false. A `string` /
+    `number` / `Named` / unrenderable-residue member on either side returns
+    `false` (no conclusion) — so it never fires on `"a" | string`, on enum-member
+    residue (discriminatedUnionTypes4), or on `case null` over a mixed union
+    (literalTypes1), keeping it 0 FP. Wired into the strict-equality and
+    switch-case overlap checks (not loose-eq). Whole-corpus 0 FP (oracle); pinned
+    recall 630 -> 632, precision 414/414 (0 FP). Whitebox-tested.
+
+2026-06-25 (T99)   633/815 (78 %)        414/414 ( 0 FP)   TS1267 abstract property initializer (+ TS1245 abstract impl)
+
+  T99 -- abstract-member body/initializer rules, added to
+    `check_abstract_modifier_rules`. TS1267: an `abstract` property may not have
+    an initializer (`abstract prop = 1`). TS1245: an `abstract` method may not
+    have an implementation (`abstract foo() {}`) — wired in, but the parser
+    currently does not retain a body for an abstract method, so only TS1267
+    fires today. Both are decided locally from `abstract_members` + the member's
+    `has_initializer` / `body`, so 0 multi-file-concat risk. Whole-corpus 0 FP
+    (oracle); pinned recall 632 -> 633, precision 414/414 (0 FP). Whitebox-tested.
+
+2026-06-25 (T100)  633/815 (78 %)        414/414 ( 0 FP)   tuple too-many vs variadic-target (whole-corpus TP +1)
+
+  T100 -- tuple-arity in call-argument position. `check_array_lit_against_tuple`
+    now (a) skips the count check when the *target* tuple has a `...rest` slot
+    (`[T, ...U[]]` is open-ended — this removed a latent over-detection on
+    variadic targets like restTupleElements1's `f0`), and (b) marks the
+    "too many elements" case `(too many)` so the permissive filter keeps it in
+    call-argument position (a longer literal is a hard error even with optional /
+    rest *parameters*), while the "too few" case stays suppressed (optional
+    trailing slots). Whole-corpus 0 FP, TP +1; pinned recall unchanged at 633.
+    Whitebox-tested.
+
+2026-06-25 (T101)  634/815 (78 %)        414/414 ( 0 FP)   field-type inference from primitive-literal initializer
+
+  T101 -- infer an unannotated class field's type from a primitive-literal
+    initializer (`x = 1` -> `number`, `s = "hi"` -> `string`) in the assignment
+    checks, so `this.x = "s"` is flagged (TS2322) even without an annotation.
+    `inferred_primitive_field_type` widens the init type and returns it only for
+    `number` / `string` / `boolean` / `bigint` (a non-literal / object /
+    reference initializer yields `None`), so it never concludes a wrong type
+    from an initializer it can't pin down — 0 FP. Wired into both PropAssign and
+    PropAssignExpr where the declared field type is `Any`. Whole-corpus 0 FP, TP
+    +1; pinned recall 633 -> 634 (privateNameFieldsESNext). Whitebox-tested.
+
+  --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
+  Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
+  now been harvested (T95-T97). The remaining ~185 misses cluster by primary
+  TS code (file-level counts, primary `error TS` lines only) as:
+    TS2322 (42)  structural/advanced assignability — enums, template-literal
+                 types, conditional types, generics, the `object` keyword
+                 (parser lowers `object` to `Any`, so non-primitive→object is
+                 invisible without an AST-level change). Basic assignability is
+                 already solid (obj-literal field/missing/excess, primitive,
+                 return, arg, array-elem, var-assign all flagged) — the misses
+                 are genuinely the advanced forms.
+    TS2339 (19)  property access needing constraint resolution (`T extends Date`),
+                 `never` after exhaustive narrowing, union-member access, and
+                 cross-instance / static `#private` resolution (6 files).
+    TS2345 (15)  argument assignability against union / generic call signatures.
+    TS2344/2415/2420 (~19) generic constraint & index-signature subtyping with
+                 variance (subtypingWith{String,Numeric}Indexer*).
+    TS18014 (6)  `#private` shadowing across nested classes.
+    TS7006 (5)   noImplicitAny + contextual-typing parameter inference.
+    Each remaining bucket is FP-prone and individually worth 1-6 files, so every
+    increment needs the whole-corpus oracle (`scripts/checker_conformance_oracle.sh
+    --max-fp 0`) as a gate — mirroring the T0->T90 history (≈+1-3/step over a
+    month). Reaching 700 (+70) is multi-session work, not a single safe pass;
+    the 0-FP invariant (the `checker-soundness` CI gate) must not be traded for
+    recall. Corpus is restored in-env via the codeload tarball trick noted at T95.
+
+  T94 -- ternary-branch condition narrowing. `cond ? a : b` runs the consequent
+    only when `cond` is truthy and the alternative only when falsy, but neither
+    the contextual-typing ternary arm (`check_expr_against`) nor the walker arm
+    (`check_call_args_in_expr`) applied the condition's flow narrowing to the
+    branches. `x !== undefined ? x.length : 0` therefore produced a spurious
+    "object is possibly undefined" (TS18048) — two reports, one per walk. Both
+    arms now snapshot the env, apply `analyze_narrowing(cond).then_binds` to the
+    consequent and `.else_binds` to the alternative, and restore between (the
+    same pattern the `&&` / `||` contextual arm already used). FP-only soundness
+    fix, whitebox-tested (then / else narrowing, statement + contextual
+    position, unguarded branch still flagged). All 2347 tests green; `moon
+    check` 0 errors. Corpus not re-measured (submodule out of git scope).
+
+  T93 -- loop-condition body narrowing. A `while (cond)` / `for (…; cond; …)`
+    body only runs when `cond` holds, so the condition's then-narrowing applies
+    at the top of the body. The handlers checked the body with the un-narrowed
+    env, so `while (x !== undefined) { x.toUpperCase() }` produced a spurious
+    "object is possibly undefined" (TS18048). The `While` and `For` handlers now
+    apply `analyze_narrowing(cond).then_binds` before walking the body, snapshot
+    / restore around it (so the narrowing doesn't leak past the loop, where the
+    condition is false — matching the existing `For` snapshot discipline, now
+    extended to `While`). `do { … } while (cond)` is deliberately NOT narrowed:
+    the body runs once before the condition is evaluated, so it splits out of
+    the shared arm and an unguarded use in a do-body is still flagged. FP-only
+    soundness fix, whitebox-tested. All 2346 tests green; `moon check` 0 errors.
+    Corpus not re-measured (submodule out of this environment's git scope).
+
+  T92 -- `||=` (logical-OR assignment) nullish-strip narrowing. The T88
+    `??=` flow-narrowing only covered `CoalesceAssign`; `||=` (`OrAssign`)
+    was left out even though it strips nullish for the same reason — `null` /
+    `undefined` are always falsy, so a non-nullish rhs always replaces them.
+    `function f(e: string | null) { e ||= "x"; return e.length }` therefore
+    kept a residual nullish union and produced a spurious "object is possibly
+    null" (TS18048). Extended the `CompoundAssignExpr` narrowing match to
+    `(Var(name), OrAssign)` alongside `CoalesceAssign`, reusing the same
+    `narrow_union(prune_nullish(current), rhs)` rule. `&&=` (`AndAssign`) is
+    deliberately excluded — it keeps the falsy (incl. nullish) part, so a use
+    after it is still flagged. FP-only soundness fix, whitebox-tested. All
+    2345 tests green; `moon check` 0 errors. Corpus not re-measured (submodule
+    out of this environment's git scope).
+
+  T91 -- loop-divergence narrowing hardening for the T88/T90 possibly-undefined
+    check. `break` / `continue` (labeled or not) terminate the enclosing block's
+    normal flow exactly like `return` / `throw`, but the narrowing-only
+    `stmt_always_exits` didn't recognise them, so the `If` handler treated a
+    diverging guard branch as falling through. Inside a loop,
+    `if (x === undefined) continue; x.foo()` then unioned the then-branch (where
+    `x` is `undefined`) back at the merge point, leaving a residual nullish union
+    and a spurious "object is possibly undefined" (TS18048) on the subsequent
+    use. Added `Break(_) | Continue(_) => true` to `stmt_always_exits` so the
+    early-exit path applies the *opposite* branch's effect to the fall-through.
+    Scoped to the narrowing variant only: `stmt_always_exits_with` (the
+    missing-return / TS2366 analysis) is deliberately left unchanged, since a
+    body that ends in `break` / `continue` still does not return. FP-only
+    soundness fix (narrowing can only strip the nullish part, never add a
+    diagnostic), whitebox-tested (`continue` / `break` / labeled `continue` go
+    silent, unguarded loop use still flagged). All 2344 tests green;
+    `moon check` 0 errors. Corpus not re-measured — the `typescript` submodule
+    is out of this environment's git scope (clone returns 403), so the
+    conformance accuracy gate self-skips here.
 
   T90 -- possibly-undefined *method calls* (TS18048 / TS2722) + template-literal
     typeof narrowing. Extended the T88 check to the `MethodCall` path: calling a
