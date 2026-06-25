@@ -9934,3 +9934,24 @@ test "expr_check: unimplemented inherited abstract member (TS2515)" {
     0,
   )
 }
+
+///|
+test "expr_check: field initializer references constructor parameter (TS2301/2844)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A bare field initializer referencing a constructor parameter is an error.
+  assert_true(issues("class C { a = x; constructor(x: number) {} }") > 0)
+  // A `typeof x` field-type annotation referencing a parameter is an error.
+  assert_true(issues("class D { b: typeof x; constructor(x: number) {} }") > 0)
+  // `this.x` is the correct form and stays silent.
+  @test.assert_eq(
+    issues("class E { a = this.x; constructor(x: number) {} }"),
+    0,
+  )
+  // Referencing an outer binding (not a parameter) is fine.
+  @test.assert_eq(
+    issues("const y = 1; class G { a = y; constructor(z: number) {} }"),
+    0,
+  )
+}
