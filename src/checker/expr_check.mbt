@@ -14075,6 +14075,118 @@ fn check_super_before_this(module_ : @ast.TsModule) -> Array[ExprIssue] {
 }
 
 ///|
+/// TS2414: a class name may not be one of the predefined type keywords. Mirrors
+/// `checkTypeNameIsReserved` in tsc — the exact reserved set is `any`,
+/// `unknown`, `never`, `number`, `bigint`, `boolean`, `string`, `symbol`,
+/// `void`, `object` (note `bool` is NOT reserved).
+fn check_reserved_class_names(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for cls in module_.classes {
+    match cls.name {
+      "any"
+      | "unknown"
+      | "never"
+      | "number"
+      | "bigint"
+      | "boolean"
+      | "string"
+      | "symbol"
+      | "void"
+      | "object" =>
+        issues.push({
+          path: "class \{cls.name}",
+          message: "class name cannot be `\{cls.name}`",
+        })
+      _ => ()
+    }
+  }
+  issues
+}
+
+///|
+/// Walk a class's `extends` ancestry (nearest first) looking for how `name`
+/// (matching `is_static`) was last declared. Returns `Some(true)` when the
+/// nearest ancestor declaration is a *data property*, `Some(false)` when it is
+/// an *accessor*, and `None` when no ancestor declares it (or the chain leaves
+/// resolvable classes — an expression base, an external class, a cycle).
+fn nearest_ancestor_member_is_property(
+  resolver : Resolver,
+  start_base : String,
+  name : String,
+  is_static : Bool,
+) -> Bool? {
+  let seen : Map[String, Unit] = {}
+  let mut cur = start_base
+  while not(seen.contains(cur)) {
+    seen[cur] = ()
+    let cls = match resolver.classes.get(cur) {
+      Some(c) => c
+      None => return None
+    }
+    // An accessor declaration on this ancestor shadows any data property of
+    // the same name further up — overriding an accessor with an accessor is OK.
+    for m in cls.methods {
+      if m.name == name && m.is_static == is_static && m.accessor != "" {
+        return Some(false)
+      }
+    }
+    for p in cls.properties {
+      if p.name == name && p.is_static == is_static {
+        // An auto-accessor (`accessor x`) or an `abstract` property is not a
+        // concrete data field that shadows at runtime, so overriding it with a
+        // `get` / `set` accessor is allowed (abstractProperty, autoAccessor7).
+        if p.is_accessor || cls.abstract_members.contains(p.name) {
+          return Some(false)
+        }
+        return Some(true)
+      }
+    }
+    // Not declared here — climb to the single `extends` base, if resolvable.
+    if cls.base_names.length() != 1 || cls.base_names[0] == "<expr-base>" {
+      return None
+    }
+    cur = cls.base_names[0]
+  }
+  None
+}
+
+///|
+/// TS2611: a derived class may not override a base-class *data property* with a
+/// `get` / `set` accessor (the property would shadow the accessor at runtime).
+/// Only fires when the nearest ancestor declaration of the name is a property;
+/// an inherited accessor overridden by an accessor is fine.
+fn check_property_overridden_as_accessor(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for cls in module_.classes {
+    if cls.base_names.length() != 1 || cls.base_names[0] == "<expr-base>" {
+      continue
+    }
+    let base = cls.base_names[0]
+    let reported : Map[String, Unit] = {}
+    for m in cls.methods {
+      if m.accessor == "" || reported.contains(m.name) {
+        continue
+      }
+      match
+        nearest_ancestor_member_is_property(resolver, base, m.name, m.is_static) {
+        Some(true) => {
+          reported[m.name] = ()
+          issues.push({
+            path: "class \{cls.name}.\{m.name}",
+            message: "`\{m.name}` is defined as a property in a base class but is overridden here as an accessor",
+          })
+        }
+        _ => ()
+      }
+    }
+  }
+  issues
+}
+
+///|
 fn check_structural_duplicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   for e in module_.enums {
@@ -15015,6 +15127,12 @@ fn check_module_function_bodies_layered(
     all.push(issue)
   }
   for issue in check_super_before_this(module_) {
+    all.push(issue)
+  }
+  for issue in check_reserved_class_names(module_) {
+    all.push(issue)
+  }
+  for issue in check_property_overridden_as_accessor(module_, resolver) {
     all.push(issue)
   }
   for issue in check_class_duplicate_members(module_) {

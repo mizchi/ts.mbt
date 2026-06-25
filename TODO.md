@@ -1423,6 +1423,28 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the conformance oracle); pinned recall 619 -> 623, precision 414/414 (0 FP).
     Whitebox-tested.
 
+2026-06-25 (T96)   627/815 (77 %)        414/414 ( 0 FP)   TS2414 reserved class names + TS2611 property->accessor override
+
+  T96 -- two structural class-declaration checks.
+    * TS2414 ("Class name cannot be '{0}'"): `check_reserved_class_names` flags
+      a class whose name is a predefined type keyword (`any`, `unknown`,
+      `never`, `number`, `bigint`, `boolean`, `string`, `symbol`, `void`,
+      `object`), matching tsc's `checkTypeNameIsReserved` (note `bool` is not
+      reserved). Sound and mechanical. (The lexer keeps `number` / `boolean` /
+      `string` / `void` as full keywords, so a class named after one of those
+      four isn't registered with that name and slips through — the two
+      conformance cases still flip to hits via the other reserved names they
+      declare.)
+    * TS2611 ("'{0}' is defined as a property ... overridden here as an
+      accessor"): `check_property_overridden_as_accessor` walks the `extends`
+      ancestry (nearest declaration wins) and flags a derived `get`/`set`
+      accessor that overrides a base *data property*. Abstract properties and
+      auto-accessors (`accessor x`) are excluded — they are not concrete fields,
+      so implementing them as an accessor is allowed (abstractProperty,
+      autoAccessor7, found via the oracle's FP list and fixed).
+    Whole-corpus 0 FP (oracle); pinned recall 623 -> 627, precision 414/414
+    (0 FP). Whitebox-tested.
+
   T94 -- ternary-branch condition narrowing. `cond ? a : b` runs the consequent
     only when `cond` is truthy and the alternative only when falsy, but neither
     the contextual-typing ternary arm (`check_expr_against`) nor the walker arm

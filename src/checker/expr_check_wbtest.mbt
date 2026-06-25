@@ -9471,3 +9471,66 @@ test "expr_check: super must be called before this in derived ctor (TS17009)" {
     0,
   )
 }
+
+///|
+// TS2414: a class name cannot be a predefined type keyword.
+test "expr_check: reserved class name (TS2414)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  assert_true(issues("class any {}") > 0)
+  assert_true(issues("class object {}") > 0)
+  assert_true(issues("class symbol {}") > 0)
+  // `bool` is NOT a predefined type -> allowed.
+  @test.assert_eq(issues("class bool {}"), 0)
+  @test.assert_eq(issues("class Foo {}"), 0)
+}
+
+///|
+// TS2611: overriding a base-class data property with an accessor.
+test "expr_check: property overridden as accessor (TS2611)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Base data property `p`, derived overrides with `get` -> flagged.
+  assert_true(
+    issues(
+      (
+        #|class A { p: string = "x"; }
+        #|class B extends A { get p(): string { return "y"; } }
+      ),
+    ) >
+    0,
+  )
+  // Transitive: A has field, B empty, C overrides with accessor -> flagged.
+  assert_true(
+    issues(
+      (
+        #|class A { x: number = 1; }
+        #|class B extends A {}
+        #|class C extends B { get x(): number { return 2; } }
+      ),
+    ) >
+    0,
+  )
+  // Overriding an inherited *accessor* with an accessor -> silent.
+  @test.assert_eq(
+    issues(
+      (
+        #|class A { get p(): string { return "x"; } }
+        #|class B extends A { get p(): string { return "y"; } }
+      ),
+    ),
+    0,
+  )
+  // Abstract base property implemented as accessor -> silent.
+  @test.assert_eq(
+    issues(
+      (
+        #|abstract class A { protected abstract x: string; }
+        #|class C extends A { protected get x(): string { return "c"; } }
+      ),
+    ),
+    0,
+  )
+}
