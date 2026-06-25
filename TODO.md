@@ -1639,6 +1639,19 @@ conformance sources (`.errors.txt` baseline = ground truth):
     pinned recall 651 -> 652 (classAbstractMethodWithImplementation).
     Whitebox-tested.
 
+2026-06-25 (T114)  654/815 (80 %)        414/414 ( 0 FP)   TS2554 inherited constructor arity
+
+  T114 -- TS2554 ("Expected N arguments, but got M") for an *inherited*
+    constructor. A derived class with no own constructor inherits the nearest
+    ancestor's signature; `lookup_constructor_sig` previously returned `None`
+    (skip) whenever a class had a base, so `new Derived()` against a base
+    `constructor(x)` went unchecked. Added `lookup_inherited_constructor_sig`,
+    which walks the named-base heritage chain to the nearest explicit
+    constructor (bailing to `None` on an expression base, unresolvable/external
+    ancestor, or cycle — never assuming zero args). Whole-corpus TP 1688 ->
+    1690, 0 FP; pinned recall 652 -> 654 (derivedClassWithoutExplicitConstructor,
+    derivedClassWithoutExplicitConstructor2). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary

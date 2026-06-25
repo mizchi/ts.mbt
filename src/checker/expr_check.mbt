@@ -2930,14 +2930,71 @@ fn Resolver::lookup_constructor_sig(
         }
         // No explicit constructor. With no base class the constructor is the
         // implicit zero-arg one, so its arity is known exactly. With a base
-        // (named or expression heritage) the constructor is *inherited*, and
-        // we don't resolve the base's parameter list here -- return `None` so
-        // the call site skips arity / argument checks rather than assuming
-        // zero parameters (which would be a false positive on `new Derived(x)`
-        // when the base takes `x`).
-        None => if cls.base_names.length() == 0 { Some(([], [])) } else { None }
+        // the constructor is *inherited* from the nearest ancestor that
+        // declares one -- resolve it by walking the heritage chain so
+        // `new Derived()` is checked against the base's parameter list
+        // (TS2554). The walk bails to `None` (skip the check) on an expression
+        // base or an unresolvable / cyclic ancestor, never assuming zero args.
+        None =>
+          if cls.base_names.length() == 0 {
+            Some(([], []))
+          } else {
+            self.lookup_inherited_constructor_sig(cls.base_names[0], Map::new())
+          }
       }
     None => None
+  }
+}
+
+///|
+/// Walk the heritage chain (named bases only) to the nearest ancestor that
+/// declares an explicit constructor, returning its signature. Returns `None`
+/// — so the caller skips arity / argument checks — when the chain reaches an
+/// expression base, an unresolvable / external class, or a cycle. A *resolved*
+/// implicit zero-arg ancestor yields `Some(([], []))`, which correctly flags
+/// `new Derived(x)` on a zero-arg base. `seen` guards against an `extends`
+/// cycle.
+fn Resolver::lookup_inherited_constructor_sig(
+  self : Resolver,
+  class_name : String,
+  seen : Map[String, Unit],
+) -> (Array[@ast.TsType], Array[@ast.TsParam])? {
+  if seen.contains(class_name) {
+    return None
+  }
+  seen[class_name] = ()
+  let cls = match self.classes.get(class_name) {
+    Some(c) => c
+    None => return None
+  }
+  // An expression base (`extends mixin(Base)`) hides the real constructor.
+  if cls.base_names.contains("<expr-base>") {
+    return None
+  }
+  match cls.constructor_params {
+    Some(params) => {
+      let types : Array[@ast.TsType] = []
+      let sig : Array[@ast.TsParam] = []
+      for idx, p in params {
+        types.push(p.1)
+        let is_rest = idx < cls.constructor_param_is_rest.length() &&
+          cls.constructor_param_is_rest[idx]
+        sig.push({
+          name: p.0,
+          binding: None,
+          is_rest,
+          type_: p.1,
+          default: None,
+        })
+      }
+      Some((types, sig))
+    }
+    None =>
+      if cls.base_names.length() == 0 {
+        Some(([], []))
+      } else {
+        self.lookup_inherited_constructor_sig(cls.base_names[0], seen)
+      }
   }
 }
 
