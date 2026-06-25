@@ -12485,6 +12485,16 @@ fn switch_covers_union(
 fn stmt_always_exits(stmt : @ast.TsStmt) -> Bool {
   match stmt {
     Return(_) | Throw(_) => true
+    // `break` / `continue` (labeled or not) terminate the current block's
+    // normal flow just like `return` / `throw`: control jumps out of the
+    // enclosing loop / switch, so statements after a diverging guard branch
+    // are unreachable on that path. This lets the early-exit narrowing in the
+    // `If` handler apply the *opposite* branch's effect to the fall-through
+    // (`if (x === undefined) continue; x.foo()` is silent). NOTE: this is the
+    // narrowing-only variant — the missing-return analysis uses
+    // `stmt_always_exits_with`, which must NOT treat `break` / `continue` as a
+    // function exit (a body that ends in `continue` still fails to return).
+    Break(_) | Continue(_) => true
     If(_, then_b, Some(else_b)) =>
       block_always_exits(then_b) && block_always_exits(else_b)
     Block(b) => block_always_exits(b)

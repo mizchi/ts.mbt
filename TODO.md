@@ -1396,6 +1396,27 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-22 (T88)   619/815 (76 %)        414/414 ( 0 FP)   whole-corpus TP 1640 -> 1643
 2026-06-22 (T89)   619/815 (76 %)        414/414 ( 0 FP)   narrowing-engine hardening (no corpus delta)
 2026-06-22 (T90)   619/815 (76 %)        414/414 ( 0 FP)   whole-corpus TP 1643 -> 1645
+2026-06-25 (T91)   (corpus not re-measured)               loop-divergence narrowing hardening
+
+  T91 -- loop-divergence narrowing hardening for the T88/T90 possibly-undefined
+    check. `break` / `continue` (labeled or not) terminate the enclosing block's
+    normal flow exactly like `return` / `throw`, but the narrowing-only
+    `stmt_always_exits` didn't recognise them, so the `If` handler treated a
+    diverging guard branch as falling through. Inside a loop,
+    `if (x === undefined) continue; x.foo()` then unioned the then-branch (where
+    `x` is `undefined`) back at the merge point, leaving a residual nullish union
+    and a spurious "object is possibly undefined" (TS18048) on the subsequent
+    use. Added `Break(_) | Continue(_) => true` to `stmt_always_exits` so the
+    early-exit path applies the *opposite* branch's effect to the fall-through.
+    Scoped to the narrowing variant only: `stmt_always_exits_with` (the
+    missing-return / TS2366 analysis) is deliberately left unchanged, since a
+    body that ends in `break` / `continue` still does not return. FP-only
+    soundness fix (narrowing can only strip the nullish part, never add a
+    diagnostic), whitebox-tested (`continue` / `break` / labeled `continue` go
+    silent, unguarded loop use still flagged). All 2344 tests green;
+    `moon check` 0 errors. Corpus not re-measured — the `typescript` submodule
+    is out of this environment's git scope (clone returns 403), so the
+    conformance accuracy gate self-skips here.
 
   T90 -- possibly-undefined *method calls* (TS18048 / TS2722) + template-literal
     typeof narrowing. Extended the T88 check to the `MethodCall` path: calling a

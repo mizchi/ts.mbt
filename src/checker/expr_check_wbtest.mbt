@@ -9175,3 +9175,72 @@ test "expr_check: possibly-undefined method call + template-literal typeof" {
     0,
   )
 }
+
+///|
+// Loop-divergence narrowing: `continue` / `break` terminate the current
+// block's normal flow exactly like `return` / `throw`, so a guard that
+// diverges on the nullish branch (`if (x === undefined) continue;`) must
+// strip the nullish part from the fall-through. Without this the then-branch
+// (where `x` is `undefined`) was unioned back at the merge point and produced
+// a spurious "object is possibly undefined" on the subsequent use.
+test "expr_check: continue / break narrow the loop-body fall-through (TS18048)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // `continue` on the nullish branch -> rest of the iteration is non-nullish.
+  @test.assert_eq(
+    issues(
+      (
+        #|function f(items: (string | undefined)[]): void {
+        #|  for (const x of items) {
+        #|    if (x === undefined) continue;
+        #|    x.toUpperCase();
+        #|  }
+        #|}
+      ),
+    ),
+    0,
+  )
+  // `break` on the nullish branch -> code after the guard is non-nullish.
+  @test.assert_eq(
+    issues(
+      (
+        #|function f(x: string | undefined): void {
+        #|  while (true) {
+        #|    if (x === undefined) break;
+        #|    x.toUpperCase();
+        #|    break;
+        #|  }
+        #|}
+      ),
+    ),
+    0,
+  )
+  // Labeled `continue` diverges just the same.
+  @test.assert_eq(
+    issues(
+      (
+        #|function f(items: (string | undefined)[]): void {
+        #|  outer: for (const x of items) {
+        #|    if (x === undefined) continue outer;
+        #|    x.toUpperCase();
+        #|  }
+        #|}
+      ),
+    ),
+    0,
+  )
+  // Sanity: an unguarded use inside the loop is still flagged.
+  assert_true(
+    issues(
+      (
+        #|function f(items: (string | undefined)[]): void {
+        #|  for (const x of items) {
+        #|    x.toUpperCase();
+        #|  }
+        #|}
+      ),
+    ) >
+    0,
+  )
+}
