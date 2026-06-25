@@ -1521,6 +1521,15 @@ conformance sources (`.errors.txt` baseline = ground truth):
     `strict_null_checks` (non-strict code may delete freely -- objectRestReadonly
     FP, fixed). Whole-corpus 0 FP; pinned recall 634 -> 636. Whitebox-tested.
 
+2026-06-25 (T103)  637/815 (78 %)        414/414 ( 0 FP)   TS2322 null/undefined not assignable to enum
+
+  T103 -- TS2322: under strictNullChecks, `null` / `undefined` are not
+    assignable to an enum type. Interface / class targets already reject them
+    structurally, but an enum `Named` stays unresolved in the resolver-aware
+    assignability check and was conservatively treated as accepting null. Added
+    an explicit `expected` enum check in `check_expr_against`. Whole-corpus 0 FP;
+    pinned recall 636 -> 637 (validEnumAssignments). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary

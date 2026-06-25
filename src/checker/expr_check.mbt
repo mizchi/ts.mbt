@@ -4104,6 +4104,7 @@ fn is_nullable_type(ty : @ast.TsType) -> Bool {
 // preferred). This is the "possibly undefined/null" shape that makes member
 // access an error under strictNullChecks (TS18048 / TS2532). A purely-nullish
 // type is handled by `is_nullable_type` separately, so it returns `None` here.
+
 ///|
 /// True when `ty` includes an `undefined` member (directly or as a union part).
 /// Used by the TS2790 `delete` check: an optional property is encoded with an
@@ -6492,6 +6493,21 @@ fn check_expr_against(
   // on every exhaustiveness assertion.
   if expected_u is Never {
     return
+  }
+  // TS2322: under strictNullChecks, `null` / `undefined` are not assignable to
+  // an enum type. Interface / class targets already reject them via the
+  // structural check, but an enum `Named` stays unresolved there and is treated
+  // conservatively as accepting null — so handle it explicitly.
+  if ctx.strict_null_checks && (expr is NullLit || expr is Var("undefined")) {
+    match expected_u {
+      Named(n) =>
+        if ctx.resolver.enums.get(n) is Some(_) {
+          let lit = if expr is NullLit { "null" } else { "undefined" }
+          record(ctx, sub_path, "`\{lit}` is not assignable to enum `\{n}`")
+          return
+        }
+      _ => ()
+    }
   }
   // A *literal* value is never assignable to a bare in-scope type parameter
   // `T`: `T` could be instantiated with an arbitrary type unrelated to the
