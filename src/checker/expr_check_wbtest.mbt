@@ -9534,3 +9534,16 @@ test "expr_check: property overridden as accessor (TS2611)" {
     0,
   )
 }
+
+///|
+// TS1014: a rest parameter must be last in the parameter list.
+test "expr_check: rest parameter must be last (TS1014)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  assert_true(issues("function f(...x: number[], ...y: number[]) {}") > 0)
+  assert_true(issues("const g = (...x: number[], y: number) => {};") > 0)
+  assert_true(issues("class C { m(...x: number[], ...y: number[]) {} }") > 0)
+  // A single trailing rest parameter is fine.
+  @test.assert_eq(issues("function f(a: number, ...x: number[]) {}"), 0)
+}

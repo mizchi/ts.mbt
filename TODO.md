@@ -1445,6 +1445,20 @@ conformance sources (`.errors.txt` baseline = ground truth):
     Whole-corpus 0 FP (oracle); pinned recall 623 -> 627, precision 414/414
     (0 FP). Whitebox-tested.
 
+2026-06-25 (T97)   630/815 (77 %)        414/414 ( 0 FP)   TS1014 rest parameter must be last
+
+  T97 -- TS1014 ("A rest parameter must be last in a parameter list").
+    `check_rest_param_position` flags any callable param list with a `...rest`
+    parameter that is not in the final position — purely structural and sound
+    (no valid TS allows a non-last rest param). Covers top-level functions,
+    class methods / constructors (via the `param_is_rest` flag arrays), and any
+    nested arrow / function-expression reached by a dedicated recursive walk of
+    initializers and bodies. (Interface call/method signatures are not covered:
+    the `Func` type stores parameter *types* only, so `is_rest` is unrecoverable
+    there — the conformance cases flip to hits via the arrow / function forms.)
+    Whole-corpus 0 FP (oracle); pinned recall 627 -> 630, precision 414/414
+    (0 FP). Whitebox-tested.
+
   T94 -- ternary-branch condition narrowing. `cond ? a : b` runs the consequent
     only when `cond` is truthy and the alternative only when falsy, but neither
     the contextual-typing ternary arm (`check_expr_against`) nor the walker arm

@@ -14075,6 +14075,246 @@ fn check_super_before_this(module_ : @ast.TsModule) -> Array[ExprIssue] {
 }
 
 ///|
+/// TS1014: "A rest parameter must be last in a parameter list." Flags any
+/// callable param list (function / method / constructor / arrow / function
+/// expression) where a `...rest` parameter is not in the final position. Purely
+/// structural and sound — no valid TS allows a non-last rest parameter.
+fn rest_param_misplaced(params : Array[@ast.TsParam]) -> Bool {
+  let n = params.length()
+  for i, p in params {
+    if p.is_rest && i < n - 1 {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn rest_flags_misplaced(flags : Array[Bool]) -> Bool {
+  let n = flags.length()
+  for i, r in flags {
+    if r && i < n - 1 {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn rest_walk_block(block : @ast.TsBlock, out : Array[ExprIssue]) -> Unit {
+  for stmt in block.stmts {
+    rest_walk_stmt(stmt, out)
+  }
+}
+
+///|
+fn rest_walk_stmt(stmt : @ast.TsStmt, out : Array[ExprIssue]) -> Unit {
+  match stmt {
+    Expr(e) | Throw(e) => rest_walk_expr(e, out)
+    Return(opt) =>
+      match opt {
+        Some(e) => rest_walk_expr(e, out)
+        None => ()
+      }
+    Const(_, _, e) | Let(_, _, e) | Var(_, _, e) => rest_walk_expr(e, out)
+    Assign(_, e) | CompoundAssign(_, _, e) => rest_walk_expr(e, out)
+    PropAssign(a, _, b) | IndexAssign(a, _, b) => {
+      rest_walk_expr(a, out)
+      rest_walk_expr(b, out)
+    }
+    Block(b) => rest_walk_block(b, out)
+    If(c, t, e) => {
+      rest_walk_expr(c, out)
+      rest_walk_block(t, out)
+      match e {
+        Some(b) => rest_walk_block(b, out)
+        None => ()
+      }
+    }
+    While(c, b) | DoWhile(c, b) => {
+      rest_walk_expr(c, out)
+      rest_walk_block(b, out)
+    }
+    For(init, cond, update, body) => {
+      match init {
+        Some(s) => rest_walk_stmt(s, out)
+        None => ()
+      }
+      match cond {
+        Some(e) => rest_walk_expr(e, out)
+        None => ()
+      }
+      match update {
+        Some(s) => rest_walk_stmt(s, out)
+        None => ()
+      }
+      rest_walk_block(body, out)
+    }
+    ForOf(_, _, _, e, b) | ForIn(_, _, _, e, b) | ForAwaitOf(_, _, _, e, b) => {
+      rest_walk_expr(e, out)
+      rest_walk_block(b, out)
+    }
+    Switch(scrut, cases) => {
+      rest_walk_expr(scrut, out)
+      for c in cases {
+        rest_walk_block(c.body, out)
+      }
+    }
+    Try(tb, _, cb, fb) => {
+      rest_walk_block(tb, out)
+      match cb {
+        Some(b) => rest_walk_block(b, out)
+        None => ()
+      }
+      match fb {
+        Some(b) => rest_walk_block(b, out)
+        None => ()
+      }
+    }
+    Label(_, inner) => rest_walk_stmt(inner, out)
+    _ => ()
+  }
+}
+
+///|
+fn rest_walk_exprs(es : Array[@ast.TsExpr], out : Array[ExprIssue]) -> Unit {
+  for e in es {
+    rest_walk_expr(e, out)
+  }
+}
+
+///|
+fn rest_walk_expr(e : @ast.TsExpr, out : Array[ExprIssue]) -> Unit {
+  match e {
+    ArrowFunc(params, _, body, _) => {
+      if rest_param_misplaced(params) {
+        out.push({
+          path: "arrow function",
+          message: "a rest parameter must be last in a parameter list",
+        })
+      }
+      match body {
+        ArrowExpr(b) => rest_walk_expr(b, out)
+        ArrowBlock(b) => rest_walk_block(b, out)
+      }
+    }
+    FuncExpr(f) => {
+      if rest_param_misplaced(f.params) {
+        out.push({
+          path: "function \{f.name}",
+          message: "a rest parameter must be last in a parameter list",
+        })
+      }
+      rest_walk_block(f.body, out)
+    }
+    PropAccess(r, _)
+    | NonNull(r)
+    | OptionalChain(r)
+    | Spread(r)
+    | Await(r)
+    | UnaryOp(_, r)
+    | As(r, _)
+    | Satisfies(r, _)
+    | YieldStar(r)
+    | PureCall(r)
+    | TypeArgs(_, r) => rest_walk_expr(r, out)
+    Yield(opt) =>
+      match opt {
+        Some(r) => rest_walk_expr(r, out)
+        None => ()
+      }
+    IndexAccess(a, b) | Seq(a, b) | BinOp(_, a, b) => {
+      rest_walk_expr(a, out)
+      rest_walk_expr(b, out)
+    }
+    Cond(a, b, c) => {
+      rest_walk_expr(a, out)
+      rest_walk_expr(b, out)
+      rest_walk_expr(c, out)
+    }
+    MethodCall(r, _, args) => {
+      rest_walk_expr(r, out)
+      rest_walk_exprs(args, out)
+    }
+    Call(_, args) | New(_, args) => rest_walk_exprs(args, out)
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      rest_walk_expr(callee, out)
+      rest_walk_exprs(args, out)
+    }
+    ArrayLit(items) => rest_walk_exprs(items, out)
+    TemplateLiteral(_, parts) => rest_walk_exprs(parts, out)
+    ObjectLit(entries) =>
+      for ent in entries {
+        rest_walk_expr(ent.1, out)
+      }
+    ComputedProp(k, v) => {
+      rest_walk_expr(k, out)
+      rest_walk_expr(v, out)
+    }
+    AssignExpr(_, v) => rest_walk_expr(v, out)
+    CompoundAssignExpr(t, _, v) => {
+      rest_walk_expr(t, out)
+      rest_walk_expr(v, out)
+    }
+    PropAssignExpr(r, _, v) => {
+      rest_walk_expr(r, out)
+      rest_walk_expr(v, out)
+    }
+    IndexAssignExpr(r, i, v) => {
+      rest_walk_expr(r, out)
+      rest_walk_expr(i, out)
+      rest_walk_expr(v, out)
+    }
+    _ => ()
+  }
+}
+
+///|
+/// TS1014 driver: check every callable param list reachable in the module —
+/// top-level functions, class methods / constructors, and any nested arrow /
+/// function-expression in initializers and bodies.
+fn check_rest_param_position(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for f in module_.funcs {
+    if rest_param_misplaced(f.params) {
+      issues.push({
+        path: "function \{f.name}",
+        message: "a rest parameter must be last in a parameter list",
+      })
+    }
+    rest_walk_block(f.body, issues)
+  }
+  for cls in module_.classes {
+    for m in cls.methods {
+      if rest_flags_misplaced(m.param_is_rest) {
+        issues.push({
+          path: "class \{cls.name}.\{m.name}",
+          message: "a rest parameter must be last in a parameter list",
+        })
+      }
+      match m.body {
+        Some(b) => rest_walk_block(b, issues)
+        None => ()
+      }
+    }
+    if rest_flags_misplaced(cls.constructor_param_is_rest) {
+      issues.push({
+        path: "class \{cls.name}.constructor",
+        message: "a rest parameter must be last in a parameter list",
+      })
+    }
+    match cls.constructor_body {
+      Some(b) => rest_walk_block(b, issues)
+      None => ()
+    }
+  }
+  for stmt in module_.top_level_stmts {
+    rest_walk_stmt(stmt, issues)
+  }
+  issues
+}
+
+///|
 /// TS2414: a class name may not be one of the predefined type keywords. Mirrors
 /// `checkTypeNameIsReserved` in tsc — the exact reserved set is `any`,
 /// `unknown`, `never`, `number`, `bigint`, `boolean`, `string`, `symbol`,
@@ -15133,6 +15373,9 @@ fn check_module_function_bodies_layered(
     all.push(issue)
   }
   for issue in check_property_overridden_as_accessor(module_, resolver) {
+    all.push(issue)
+  }
+  for issue in check_rest_param_position(module_) {
     all.push(issue)
   }
   for issue in check_class_duplicate_members(module_) {
