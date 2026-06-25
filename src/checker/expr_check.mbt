@@ -14782,6 +14782,35 @@ fn check_reserved_class_names(module_ : @ast.TsModule) -> Array[ExprIssue] {
 }
 
 ///|
+/// A type alias whose name is a predefined-type keyword (`type any = …`,
+/// `type string = …`) is always a TS error (TS2457, "Type alias name cannot
+/// be 'X'"). The parser already lowers these keyword tokens to their spelling
+/// (`parse_binding_ident`), so the alias name is visible here directly.
+fn check_reserved_type_alias_names(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for ta in module_.type_aliases {
+    match ta.name {
+      "any"
+      | "unknown"
+      | "never"
+      | "number"
+      | "bigint"
+      | "boolean"
+      | "string"
+      | "symbol"
+      | "void"
+      | "object" =>
+        issues.push({
+          path: "type \{ta.name}",
+          message: "type alias name cannot be `\{ta.name}`",
+        })
+      _ => ()
+    }
+  }
+  issues
+}
+
+///|
 /// Walk a class's `extends` ancestry (nearest first) looking for how `name`
 /// (matching `is_static`) was last declared. Returns `Some(true)` when the
 /// nearest ancestor declaration is a *data property*, `Some(false)` when it is
@@ -15814,6 +15843,9 @@ fn check_module_function_bodies_layered(
     all.push(issue)
   }
   for issue in check_reserved_class_names(module_) {
+    all.push(issue)
+  }
+  for issue in check_reserved_type_alias_names(module_) {
     all.push(issue)
   }
   for issue in check_property_overridden_as_accessor(module_, resolver) {
