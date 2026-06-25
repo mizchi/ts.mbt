@@ -1541,6 +1541,20 @@ conformance sources (`.errors.txt` baseline = ground truth):
     other type params unaffected). Whole-corpus 0 FP, TP +2; pinned recall
     637 -> 638 (subtypingWithOptionalProperties). Whitebox-tested.
 
+2026-06-25 (T105)  641/815 (79 %)        414/414 ( 0 FP)   TS2322 residual nullish union into non-nullish target
+
+  T105 -- TS2322: under strictNullChecks, a non-keyword source whose inferred
+    type is a union still carrying `undefined` / `null` (a residual nullish no
+    narrowing removed) is not assignable to a target that does not accept that
+    nullish member (`let y: string | number = x` where `x: string | undefined`).
+    The purely-nullish keyword forms are handled separately (T87); this covers a
+    variable / expression leaking nullish into a non-nullish location. Targets
+    that accept anything (`any` / `unknown` / `void` / `never`) or a type
+    parameter are excluded, as is a target carrying the same nullish member.
+    This is the inferred-nullish increment T87 flagged as needing its own FP
+    sweep — done via the oracle. Whole-corpus 0 FP, TP +3; pinned recall
+    638 -> 641. Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary
