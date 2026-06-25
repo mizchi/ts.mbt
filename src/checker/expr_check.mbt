@@ -15073,6 +15073,67 @@ fn check_unimplemented_abstract_members(
 }
 
 ///|
+/// TS2301 / TS2663 / TS2844: an instance member initializer (or its `typeof`
+/// type annotation) may not reference a constructor parameter by its bare name
+/// -- the parameter is not in scope where field initializers are evaluated
+/// (`this.x` is required instead). Restricted to a *direct* `x` initializer or
+/// `typeof x` annotation so a name shadowed by a nested binding inside a
+/// compound initializer can never produce a false positive.
+fn check_field_init_references_ctor_param(
+  module_ : @ast.TsModule,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for cls in module_.classes {
+    let params : Map[String, Unit] = {}
+    match cls.constructor_params {
+      Some(ps) =>
+        for p in ps {
+          params[p.0] = ()
+        }
+      None => continue
+    }
+    if params.is_empty() {
+      continue
+    }
+    // Direct value initializer `field = x`.
+    for fi in cls.instance_field_inits {
+      match fi.1 {
+        Var(n) =>
+          if params.contains(n) {
+            issues.push({
+              path: "class \{cls.name}.\{fi.0}",
+              message: "instance member initializer cannot reference constructor parameter `\{n}`",
+            })
+          }
+        _ => ()
+      }
+    }
+    // Direct `typeof x` type annotation on a non-static field.
+    for p in cls.properties {
+      if p.is_static {
+        continue
+      }
+      match p.type_ {
+        TypeOf(q) => {
+          let base = match q.find(".") {
+            Some(i) => q.substring(start=0, end=i)
+            None => q
+          }
+          if params.contains(base) {
+            issues.push({
+              path: "class \{cls.name}.\{p.name}",
+              message: "instance member type cannot reference constructor parameter `\{base}`",
+            })
+          }
+        }
+        _ => ()
+      }
+    }
+  }
+  issues
+}
+
+///|
 fn check_structural_duplicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   for e in module_.enums {
@@ -16051,6 +16112,9 @@ fn check_module_function_bodies_layered(
     all.push(issue)
   }
   for issue in check_unimplemented_abstract_members(module_, resolver) {
+    all.push(issue)
+  }
+  for issue in check_field_init_references_ctor_param(module_) {
     all.push(issue)
   }
   for issue in check_rest_param_position(module_) {

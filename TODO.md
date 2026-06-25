@@ -1665,6 +1665,18 @@ conformance sources (`.errors.txt` baseline = ground truth):
     0 FP; pinned recall 654 -> 655 (classAbstractOverrideWithAbstract).
     Whitebox-tested.
 
+2026-06-25 (T116)  657/815 (81 %)        414/414 ( 0 FP)   TS2301/2663/2844 field init references ctor param
+
+  T116 -- TS2301 / TS2663 / TS2844: an instance member initializer (or its
+    `typeof` type annotation) may not reference a constructor parameter by its
+    bare name -- the parameter is not in scope where field initializers run
+    (`this.x` is required). `check_field_init_references_ctor_param` flags a
+    *direct* `field = x` initializer or `field: typeof x` annotation whose name
+    matches a constructor parameter; restricting to direct references means a
+    name shadowed by a nested binding in a compound initializer can never FP.
+    Whole-corpus TP 1691 -> 1693, 0 FP; pinned recall 655 -> 657
+    (initializerReferencingConstructorParameters, +1 more). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary
