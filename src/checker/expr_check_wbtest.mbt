@@ -9645,3 +9645,37 @@ test "expr_check: inferred primitive field assignment (TS2322)" {
   // Non-primitive initializer -> not inferred -> silent (no FP).
   @test.assert_eq(issues("class C { a = {}; m() { this.a = 5; } }"), 0)
 }
+
+///|
+// TS2790: the operand of `delete` must be an optional property (under
+// strictNullChecks); deleting a private name is never allowed.
+test "expr_check: delete operand must be optional (TS2790)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Required field, strictNullChecks -> flagged.
+  assert_true(
+    issues(
+      "// @strictNullChecks: true\nfunction f(){ let x: {a?: number, b: number} = {b:1}; delete x.b; }",
+    ) >
+    0,
+  )
+  // Optional field -> silent.
+  @test.assert_eq(
+    issues(
+      "// @strictNullChecks: true\nfunction f(){ let x: {a?: number, b: number} = {b:1}; delete x.a; }",
+    ),
+    0,
+  )
+  // Non-strict: deleting a required field is allowed.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nfunction f(){ let x: {b: number} = {b:1}; delete x.b; }",
+    ),
+    0,
+  )
+  // Private name delete -> flagged regardless.
+  assert_true(
+    issues("class A { #v = 1; constructor(){ delete this.#v; } }") > 0,
+  )
+}
