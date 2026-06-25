@@ -9974,3 +9974,26 @@ test "expr_check: duplicate private name and nested-class duplicates" {
   // flagged (the IIFE lowering would otherwise drop it from `module.classes`).
   assert_true(issues("function f() { class D { #foo = 1; #foo() {} } }") > 0)
 }
+
+///|
+test "expr_check: method/accessor override mismatch (TS2423/2426)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Base method overridden by a derived accessor (TS2423).
+  assert_true(
+    issues("class A { m() {} } class B extends A { get m() { return 1 } }") > 0,
+  )
+  // Base accessor overridden by a derived method (TS2426).
+  assert_true(
+    issues("class A { get m() { return 1 } } class B extends A { m() {} }") > 0,
+  )
+  // Same-kind overrides are fine.
+  @test.assert_eq(issues("class A { m() {} } class B extends A { m() {} }"), 0)
+  @test.assert_eq(
+    issues(
+      "class A { get m() { return 1 } } class B extends A { get m() { return 2 } }",
+    ),
+    0,
+  )
+}
