@@ -9908,3 +9908,29 @@ test "expr_check: inherited constructor arity (TS2554)" {
     0,
   )
 }
+
+///|
+test "expr_check: unimplemented inherited abstract member (TS2515)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A non-abstract class that does not implement an inherited abstract member.
+  assert_true(
+    issues("abstract class A { abstract foo(): void; } class B extends A {}") >
+    0,
+  )
+  // Implementing the member is fine.
+  @test.assert_eq(
+    issues(
+      "abstract class A { abstract foo(): void; } class B extends A { foo(): void {} }",
+    ),
+    0,
+  )
+  // An abstract subclass need not implement it.
+  @test.assert_eq(
+    issues(
+      "abstract class A { abstract foo(): void; } abstract class B extends A {}",
+    ),
+    0,
+  )
+}

@@ -14951,6 +14951,128 @@ fn check_property_overridden_as_accessor(
 }
 
 ///|
+/// How `name` is declared on `cls`: `2` = abstract, `1` = concrete, `0` = not
+/// declared here. An abstract method is recorded in both `abstract_members`
+/// and `methods` (as a bodyless stub), so `abstract_members` is checked first.
+fn class_member_decl_kind(cls : @ast.TsClassDecl, name : String) -> Int {
+  if cls.abstract_members.contains(name) {
+    return 2
+  }
+  for m in cls.methods {
+    if m.name == name {
+      return 1
+    }
+  }
+  for p in cls.properties {
+    if p.name == name {
+      return 1
+    }
+  }
+  0
+}
+
+///|
+/// Walk the heritage chain from `start` (nearest first) to the first class that
+/// declares `name`, returning how it is declared (`class_member_decl_kind`).
+/// Returns `None` when the chain reaches an unresolvable / expression base
+/// before the member is found — there the declaration could be concrete and we
+/// must not assume it is abstract.
+fn Resolver::nearest_member_decl_kind(
+  self : Resolver,
+  start : String,
+  name : String,
+) -> Int? {
+  let seen : Map[String, Unit] = {}
+  let mut cur = start
+  while not(seen.contains(cur)) {
+    seen[cur] = ()
+    let cls = match self.classes.get(cur) {
+      Some(c) => c
+      None => return None
+    }
+    let k = class_member_decl_kind(cls, name)
+    if k != 0 {
+      return Some(k)
+    }
+    if cls.base_names.length() == 0 || cls.base_names.contains("<expr-base>") {
+      return None
+    }
+    cur = cls.base_names[0]
+  }
+  None
+}
+
+///|
+/// TS2515: a non-abstract class must implement every abstract member it
+/// inherits. For each abstract member name declared by a *proper* ancestor, if
+/// the nearest declaration walking from the concrete class is still abstract
+/// (i.e. no intermediate class and not the class itself provides a concrete
+/// override), the member is unimplemented. The whole check is skipped for a
+/// class whose heritage chain is not fully resolvable (an unresolvable /
+/// external / expression ancestor could carry the implementation), so it stays
+/// false-positive-free.
+fn check_unimplemented_abstract_members(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for cls in module_.classes {
+    if cls.is_abstract || cls.is_declare {
+      continue
+    }
+    if cls.base_names.length() == 0 || cls.base_names.contains("<expr-base>") {
+      continue
+    }
+    // Gather abstract member names from proper ancestors, requiring the chain
+    // to be fully resolvable.
+    let abstract_names : Array[String] = []
+    let seen : Map[String, Unit] = {}
+    let mut cur = cls.base_names[0]
+    let mut chain_ok = true
+    while not(seen.contains(cur)) {
+      seen[cur] = ()
+      let anc = match resolver.classes.get(cur) {
+        Some(c) => c
+        None => {
+          chain_ok = false
+          break
+        }
+      }
+      if anc.base_names.contains("<expr-base>") {
+        chain_ok = false
+        break
+      }
+      for n in anc.abstract_members {
+        if !abstract_names.contains(n) {
+          abstract_names.push(n)
+        }
+      }
+      if anc.base_names.length() == 0 {
+        break
+      }
+      cur = anc.base_names[0]
+    }
+    if !chain_ok {
+      continue
+    }
+    let reported : Map[String, Unit] = {}
+    for name in abstract_names {
+      if reported.contains(name) {
+        continue
+      }
+      if resolver.nearest_member_decl_kind(cls.name, name) is Some(2) {
+        reported[name] = ()
+        issues.push({
+          path: "class \{cls.name}",
+          message: "non-abstract class does not implement inherited abstract member `\{name}`",
+        })
+      }
+    }
+  }
+  issues
+}
+
+///|
 fn check_structural_duplicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   for e in module_.enums {
@@ -15926,6 +16048,9 @@ fn check_module_function_bodies_layered(
     all.push(issue)
   }
   for issue in check_property_overridden_as_accessor(module_, resolver) {
+    all.push(issue)
+  }
+  for issue in check_unimplemented_abstract_members(module_, resolver) {
     all.push(issue)
   }
   for issue in check_rest_param_position(module_) {

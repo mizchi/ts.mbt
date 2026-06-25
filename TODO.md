@@ -1652,6 +1652,19 @@ conformance sources (`.errors.txt` baseline = ground truth):
     1690, 0 FP; pinned recall 652 -> 654 (derivedClassWithoutExplicitConstructor,
     derivedClassWithoutExplicitConstructor2). Whitebox-tested.
 
+2026-06-25 (T115)  655/815 (80 %)        414/414 ( 0 FP)   TS2515 unimplemented inherited abstract member
+
+  T115 -- TS2515 ("Non-abstract class does not implement inherited abstract
+    member"). For a concrete class, each abstract member declared by a proper
+    ancestor whose *nearest* declaration (walking from the concrete class) is
+    still abstract -- no intermediate or own concrete override -- is
+    unimplemented. `check_unimplemented_abstract_members` walks the heritage
+    chain via `nearest_member_decl_kind`; the whole check is skipped when the
+    chain isn't fully resolvable (an external/expression ancestor could carry
+    the implementation), so it stays FP-free. Whole-corpus TP 1690 -> 1691,
+    0 FP; pinned recall 654 -> 655 (classAbstractOverrideWithAbstract).
+    Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary
