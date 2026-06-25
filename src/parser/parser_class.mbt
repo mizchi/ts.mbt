@@ -1032,6 +1032,7 @@ fn Parser::parse_class_body(
   Array[String],
   Int,
   Bool,
+  Bool,
 ) raise ParseError {
   let _ = self.expect(LBrace)
   // Class body is implicitly strict mode
@@ -1045,6 +1046,10 @@ fn Parser::parse_class_body(
   // Set when an accessibility modifier (`public` / `private` / `protected`)
   // was written on an index signature -- always TS1071.
   let mut index_sig_modifier_misuse = false
+  // Set when an `abstract` method / accessor was given a real body -- always
+  // TS1245 ("Method cannot have an implementation because it is marked
+  // abstract").
+  let mut abstract_member_with_body = false
   let elements : Array[ClassElement] = []
   // Names declared `private` / `protected`, collected so the class decl
   // can expose member visibility to the checker (TS2341 / TS2445).
@@ -1348,6 +1353,12 @@ fn Parser::parse_class_body(
           }
         }
       } else {
+        // TS1245: an `abstract` method / accessor cannot carry a body. A
+        // bodyless `abstract foo();` is the valid form; a real `{ ... }` body
+        // is always an error.
+        if is_abstract_member && has_body_block {
+          abstract_member_with_body = true
+        }
         elements.push(Method(is_static, key, accessor_kind, func))
       }
     } else {
@@ -1388,7 +1399,7 @@ fn Parser::parse_class_body(
   self.in_strict = prev_strict
   (
     ctor, elements, private_members, protected_members, abstract_members, ctor_impl_count,
-    index_sig_modifier_misuse,
+    index_sig_modifier_misuse, abstract_member_with_body,
   )
 }
 
@@ -1439,6 +1450,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     private_members,
     protected_members,
     abstract_members,
+    _,
     _,
     _,
   ) = self.parse_class_body()
@@ -2101,6 +2113,7 @@ fn Parser::parse_class_decl_with_abstract(
     abstract_members,
     ctor_impl_count,
     index_sig_modifier_misuse,
+    abstract_member_with_body,
   ) = self.parse_class_body()
   self.current_class_brand = prev_brand
   self.restore_local_type_param_bounds(class_type_param_bound_len)
@@ -2119,6 +2132,10 @@ fn Parser::parse_class_decl_with_abstract(
   // channel; always an error, so false-positive-free.
   if index_sig_modifier_misuse {
     runtime_decl.duplicate_member_names.push("<index-sig-modifier>")
+  }
+  // TS1245: an `abstract` method with a body. Same sentinel channel.
+  if abstract_member_with_body {
+    runtime_decl.duplicate_member_names.push("<abstract-impl>")
   }
   self.last_runtime_class_decl = Some(runtime_decl)
   // When the class extends another class, the IIFE desugar below

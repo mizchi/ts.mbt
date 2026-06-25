@@ -9868,3 +9868,16 @@ test "expr_check: accessibility modifier on index signature (TS1071)" {
   // A plain index signature is fine.
   @test.assert_eq(issues("class F { [x: string]: number; }"), 0)
 }
+
+///|
+test "expr_check: abstract method with implementation (TS1245)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // An abstract method that carries a body is always an error.
+  assert_true(issues("abstract class A { abstract foo() {} }") > 0)
+  // A bodyless abstract signature is the valid form.
+  @test.assert_eq(issues("abstract class B { abstract foo(): void; }"), 0)
+  // A concrete method with a body is fine.
+  @test.assert_eq(issues("class C { foo(): void {} }"), 0)
+}
