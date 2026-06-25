@@ -279,6 +279,11 @@ fn build_runtime_class_decl(
   // pair.
   let counts : Map[String, Array[Int]] = {} // key -> [field, get, set, method]
   let key_name : Map[String, String] = {}
+  // Private names (`#foo`) share a *single* namespace across the static and
+  // instance halves of a class (a static `#foo` and an instance `#foo`
+  // collide, TS2804), unlike public members. Accumulate them separately keyed
+  // by the bare name with no `|s` / `|i` split.
+  let priv_counts : Map[String, Array[Int]] = {}
   for element in elements {
     let (name, is_static, slot) = match element {
       Field(s, Name(n), _, _, _, _) => (n, s, 0)
@@ -288,6 +293,19 @@ fn build_runtime_class_decl(
       _ => continue
     }
     if !is_public_runtime_class_member_name(name) {
+      // Only `#name` private identifiers participate; `<computed>` and other
+      // non-public synthetic names are skipped (we can't reason about them).
+      if name.has_prefix("#") {
+        let c = match priv_counts.get(name) {
+          Some(existing) => existing
+          None => {
+            let fresh = [0, 0, 0, 0]
+            priv_counts[name] = fresh
+            fresh
+          }
+        }
+        c[slot] += 1
+      }
       continue
     }
     let key = if is_static { name + "|s" } else { name + "|i" }
@@ -316,6 +334,27 @@ fn build_runtime_class_decl(
     if is_dup && !(dup_seen.get(key) is Some(_)) {
       dup_seen[key] = ()
       duplicate_member_names.push(key_name.get(key).unwrap())
+    }
+  }
+  // Private-name duplicates (TS2300 / TS2804). The only legal repeat of a
+  // private name is a getter + setter pair (ng=ns=1, nf=nm=0 — none of the
+  // clauses fire). Pure method multiplicity is left silent to match the public
+  // rule and avoid any overload-shape false positive.
+  for name, c in priv_counts {
+    let nf = c[0]
+    let ng = c[1]
+    let ns = c[2]
+    let nm = c[3]
+    // Two data fields of the same private name is also always a duplicate
+    // (`nf >= 2`); the only legal repeat is a getter + setter pair.
+    let is_dup = nf >= 2 ||
+      (nf >= 1 && nf + ng + ns + nm > nf) ||
+      ng >= 2 ||
+      ns >= 2 ||
+      ((ng >= 1 || ns >= 1) && nm >= 1)
+    if is_dup && !(dup_seen.get(name) is Some(_)) {
+      dup_seen[name] = ()
+      duplicate_member_names.push(name)
     }
   }
   {
@@ -2136,6 +2175,15 @@ fn Parser::parse_class_decl_with_abstract(
   // TS1245: an `abstract` method with a body. Same sentinel channel.
   if abstract_member_with_body {
     runtime_decl.duplicate_member_names.push("<abstract-impl>")
+  }
+  // Surface the class's structural diagnostics for *every* class, including
+  // ones nested in function bodies that the IIFE lowering removes from
+  // `module_.classes`. The top-level collector also records these, so the
+  // checker dedups by (class, name) to avoid a double report.
+  if runtime_decl.duplicate_member_names.length() > 0 {
+    self.collected_class_dups.push(
+      (runtime_decl.name, runtime_decl.duplicate_member_names),
+    )
   }
   self.last_runtime_class_decl = Some(runtime_decl)
   // When the class extends another class, the IIFE desugar below

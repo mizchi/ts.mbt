@@ -321,6 +321,7 @@ fn parse_module_or_empty(src : String) -> @ast.TsModule {
         deprecated_compiler_options: [],
         parameter_property_misuses: [],
         param_optional_initializer_misuses: [],
+        class_dup_diagnostics: [],
         top_level_stmts: [],
       }
   } noraise {
@@ -9954,4 +9955,22 @@ test "expr_check: field initializer references constructor parameter (TS2301/284
     issues("const y = 1; class G { a = y; constructor(z: number) {} }"),
     0,
   )
+}
+
+///|
+test "expr_check: duplicate private name and nested-class duplicates" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A private name declared as both a field and a method is a duplicate
+  // (only a get/set pair is legal).
+  assert_true(issues("class C { #foo = 1; #foo() {} }") > 0)
+  // A get/set pair on the same private name is legal.
+  @test.assert_eq(
+    issues("class C { get #foo() { return 1 } set #foo(v: number) {} }"),
+    0,
+  )
+  // A duplicate member inside a class nested in a function body is still
+  // flagged (the IIFE lowering would otherwise drop it from `module.classes`).
+  assert_true(issues("function f() { class D { #foo = 1; #foo() {} } }") > 0)
 }

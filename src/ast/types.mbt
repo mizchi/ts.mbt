@@ -867,6 +867,13 @@ pub(all) struct TsModule {
   // records one parameter name per offending declaration; the checker
   // surfaces one diagnostic per entry. Empty for well-formed input.
   param_optional_initializer_misuses : Array[String]
+  // Class-body structural diagnostics for every class parsed (top-level *and*
+  // nested in function bodies). Each entry is `(class_name, names)` where
+  // `names` is the class's `duplicate_member_names` (duplicate members plus
+  // the `<multiple-ctor-impl>` / `<index-sig-modifier>` / `<abstract-impl>`
+  // sentinels). Lets the checker flag nested classes that the IIFE lowering
+  // drops from `classes`. Empty for well-formed input.
+  class_dup_diagnostics : Array[(String, Array[String])]
 } derive(Debug)
 
 ///|

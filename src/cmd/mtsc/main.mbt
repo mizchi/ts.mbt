@@ -424,6 +424,7 @@ async fn mtsc_load_bundle_files(
           deprecated_compiler_options: [],
           parameter_property_misuses: [],
           param_optional_initializer_misuses: [],
+          class_dup_diagnostics: [],
           top_level_stmts: [],
         }
     }
@@ -634,6 +635,7 @@ async fn main {
           deprecated_compiler_options: [],
           parameter_property_misuses: [],
           param_optional_initializer_misuses: [],
+          class_dup_diagnostics: [],
           top_level_stmts: [],
         })
         let local_names : Array[String] = []
@@ -747,6 +749,7 @@ async fn main {
             deprecated_compiler_options: [],
             parameter_property_misuses: [],
             param_optional_initializer_misuses: [],
+            class_dup_diagnostics: [],
             top_level_stmts: [],
           })
           // Filter exports through the entry's `@internal` set so

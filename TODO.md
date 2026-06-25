@@ -1677,6 +1677,19 @@ conformance sources (`.errors.txt` baseline = ground truth):
     Whole-corpus TP 1691 -> 1693, 0 FP; pinned recall 655 -> 657
     (initializerReferencingConstructorParameters, +1 more). Whitebox-tested.
 
+2026-06-25 (T117)  658/815 (81 %)        414/414 ( 0 FP)   nested-class structural diagnostics + private-name dups
+
+  T117 -- generalized the parse-time class-body structural checks (duplicate
+    members, `<multiple-ctor-impl>` / `<index-sig-modifier>` / `<abstract-impl>`
+    sentinels) to classes *nested* in function bodies, which the IIFE lowering
+    drops from `module_.classes`. The parser now collects every class's
+    `duplicate_member_names` into `collected_class_dups` -> `TsModule
+    .class_dup_diagnostics`; `check_class_duplicate_members` reads that superset
+    (dedup by class+name). Also restored private-name duplicate detection
+    (`#foo` declared twice; only a get/set pair is legal; private names share a
+    static/instance namespace). Whole-corpus TP 1693 -> 1694, 0 FP; pinned
+    recall 657 -> 658 (privateNameDuplicateField). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary

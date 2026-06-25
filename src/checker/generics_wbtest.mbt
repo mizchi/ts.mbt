@@ -104,6 +104,7 @@ test "module_alias_resolver: combines parsed aliases with stdlib utilities" {
     deprecated_compiler_options: [],
     parameter_property_misuses: [],
     param_optional_initializer_misuses: [],
+    class_dup_diagnostics: [],
     top_level_stmts: [],
   }
   let resolve = module_alias_resolver(m)
@@ -143,6 +144,7 @@ test "module_alias_resolver: include_standard=false omits stdlib" {
     deprecated_compiler_options: [],
     parameter_property_misuses: [],
     param_optional_initializer_misuses: [],
+    class_dup_diagnostics: [],
     top_level_stmts: [],
   }
   let resolve = module_alias_resolver(m, include_standard=false)
@@ -184,6 +186,7 @@ test "module_alias_resolver: module aliases shadow stdlib on name clash" {
     deprecated_compiler_options: [],
     parameter_property_misuses: [],
     param_optional_initializer_misuses: [],
+    class_dup_diagnostics: [],
     top_level_stmts: [],
   }
   let resolve = module_alias_resolver(m)

@@ -420,6 +420,7 @@ async fn load_decl_module_info(
           deprecated_compiler_options: [],
           parameter_property_misuses: [],
           param_optional_initializer_misuses: [],
+          class_dup_diagnostics: [],
         }
       }
   }
@@ -9222,6 +9223,7 @@ pub async fn emit_moonbit_decl_from_entry_path(
     deprecated_compiler_options: [],
     parameter_property_misuses: [],
     param_optional_initializer_misuses: [],
+    class_dup_diagnostics: [],
   }
   // Run the checker over the final module shape and surface anything it
   // catches as a generator-level note. The emit pipeline is internally
