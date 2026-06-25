@@ -9679,3 +9679,29 @@ test "expr_check: delete operand must be optional (TS2790)" {
     issues("class A { #v = 1; constructor(){ delete this.#v; } }") > 0,
   )
 }
+
+///|
+// TS2322: null / undefined are not assignable to an enum type under
+// strictNullChecks.
+test "expr_check: null/undefined to enum (TS2322)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  assert_true(
+    issues("// @strict: true\nenum E { A } function f(e: E) { e = null; }") > 0,
+  )
+  assert_true(
+    issues("// @strict: true\nenum E { A } function f(e: E) { e = undefined; }") >
+    0,
+  )
+  // A valid enum member assignment is silent.
+  @test.assert_eq(
+    issues("// @strict: true\nenum E { A } function f(e: E) { e = E.A; }"),
+    0,
+  )
+  // Non-strict allows nullish.
+  @test.assert_eq(
+    issues("// @strict: false\nenum E { A } function f(e: E) { e = null; }"),
+    0,
+  )
+}
