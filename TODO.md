@@ -1398,6 +1398,21 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-22 (T90)   619/815 (76 %)        414/414 ( 0 FP)   whole-corpus TP 1643 -> 1645
 2026-06-25 (T91)   (corpus not re-measured)               loop-divergence narrowing hardening
 2026-06-25 (T92)   (corpus not re-measured)               `||=` nullish-strip narrowing
+2026-06-25 (T93)   (corpus not re-measured)               loop-condition body narrowing
+
+  T93 -- loop-condition body narrowing. A `while (cond)` / `for (…; cond; …)`
+    body only runs when `cond` holds, so the condition's then-narrowing applies
+    at the top of the body. The handlers checked the body with the un-narrowed
+    env, so `while (x !== undefined) { x.toUpperCase() }` produced a spurious
+    "object is possibly undefined" (TS18048). The `While` and `For` handlers now
+    apply `analyze_narrowing(cond).then_binds` before walking the body, snapshot
+    / restore around it (so the narrowing doesn't leak past the loop, where the
+    condition is false — matching the existing `For` snapshot discipline, now
+    extended to `While`). `do { … } while (cond)` is deliberately NOT narrowed:
+    the body runs once before the condition is evaluated, so it splits out of
+    the shared arm and an unguarded use in a do-body is still flagged. FP-only
+    soundness fix, whitebox-tested. All 2346 tests green; `moon check` 0 errors.
+    Corpus not re-measured (submodule out of this environment's git scope).
 
   T92 -- `||=` (logical-OR assignment) nullish-strip narrowing. The T88
     `??=` flow-narrowing only covered `CoalesceAssign`; `||=` (`OrAssign`)

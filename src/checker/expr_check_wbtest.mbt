@@ -9274,3 +9274,55 @@ test "expr_check: `||=` strips nullish from the lhs (TS18048)" {
     0,
   )
 }
+
+///|
+// A `while` / `for` loop applies its condition's narrowing to the body (the
+// body only runs when the condition holds). `while (x !== undefined) { x.foo }`
+// must be silent. `do { … } while (cond)` must NOT narrow the body — the body
+// runs once before the condition is ever tested.
+test "expr_check: loop-condition narrows the body (TS18048)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // `while` condition narrows the body.
+  @test.assert_eq(
+    issues(
+      (
+        #|function f(x: string | undefined): void {
+        #|  while (x !== undefined) {
+        #|    x.toUpperCase();
+        #|    break;
+        #|  }
+        #|}
+      ),
+    ),
+    0,
+  )
+  // `for` condition narrows the body.
+  @test.assert_eq(
+    issues(
+      (
+        #|function f(x: string | undefined): void {
+        #|  for (; x !== undefined; ) {
+        #|    x.toUpperCase();
+        #|    break;
+        #|  }
+        #|}
+      ),
+    ),
+    0,
+  )
+  // `do/while` must NOT narrow the body (body precedes the test) — flagged.
+  assert_true(
+    issues(
+      (
+        #|function f(x: string | undefined): void {
+        #|  do {
+        #|    x.toUpperCase();
+        #|  } while (x !== undefined);
+        #|}
+      ),
+    ) >
+    0,
+  )
+}

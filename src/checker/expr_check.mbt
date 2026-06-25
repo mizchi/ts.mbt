@@ -10911,9 +10911,25 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         }
       }
     }
-    While(cond, body) | DoWhile(cond, body) => {
+    While(cond, body) => {
       check_call_args_in_expr(env, cond, ctx)
+      // The body only runs when the condition holds, so its then-narrowing
+      // applies at the top of the body (`while (x !== undefined) { x.foo }`).
+      // Snapshot / restore around the body so the narrowing (and any in-body
+      // reassignment) doesn't leak past the loop, where the condition is
+      // false — mirrors the `For` handler.
+      let pre = env.full_snapshot()
+      for b in analyze_narrowing(env, ctx.resolver, cond).then_binds {
+        env.bind(b.0, b.1)
+      }
       check_block(env, body, ctx)
+      env.restore_from(pre)
+    }
+    DoWhile(cond, body) => {
+      // `do { … } while (cond)`: the body runs once *before* the condition is
+      // ever evaluated, so the condition's narrowing must NOT apply to it.
+      check_block(env, body, ctx)
+      check_call_args_in_expr(env, cond, ctx)
     }
     For(init, cond, update, body) => {
       let pre = env.full_snapshot()
@@ -10927,6 +10943,14 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       }
       match update {
         Some(s) => check_stmt(env, s, ctx)
+        None => ()
+      }
+      // Like `while`, the body runs only when the condition holds.
+      match cond {
+        Some(e) =>
+          for b in analyze_narrowing(env, ctx.resolver, e).then_binds {
+            env.bind(b.0, b.1)
+          }
         None => ()
       }
       check_block(env, body, ctx)
