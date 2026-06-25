@@ -9806,3 +9806,17 @@ test "expr_check: class named with predefined-type keyword (TS2414)" {
   // An ordinary class name is fine.
   @test.assert_eq(issues("class Foo {}"), 0)
 }
+
+///|
+test "expr_check: type alias named with predefined-type keyword (TS2457)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A type alias whose name is a predefined-type keyword is always a TS error.
+  assert_true(issues("type any = number;") > 0)
+  assert_true(issues("type string = number;") > 0)
+  assert_true(issues("type void = number;") > 0)
+  assert_true(issues("type object = number;") > 0)
+  // An ordinary alias name is fine.
+  @test.assert_eq(issues("type Foo = number;"), 0)
+}

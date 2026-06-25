@@ -1584,6 +1584,16 @@ conformance sources (`.errors.txt` baseline = ground truth):
     recall 644 -> 646 (classWithPredefinedTypesAsNames2,
     objectTypesWithPredefinedTypesAsName2). Whitebox-tested.
 
+2026-06-25 (T109)  647/815 (79 %)        414/414 ( 0 FP)   type alias named with predefined-type keyword
+
+  T109 -- TS2457 ("Type alias name cannot be 'X'"). A type alias whose name is
+    a predefined-type keyword (`type any = …`, `type string = …`, `type void
+    = …`, `type object = …`) is always an error. The parser already lowers the
+    keyword tokens to their spelling via `parse_binding_ident`, so the alias
+    name is visible directly; added `check_reserved_type_alias_names` mirroring
+    `check_reserved_class_names`. Whole-corpus TP 1679 -> 1680, 0 FP; pinned
+    recall 646 -> 647 (reservedNamesInAliases). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary
