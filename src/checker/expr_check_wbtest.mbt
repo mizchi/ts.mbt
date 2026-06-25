@@ -9729,3 +9729,38 @@ test "expr_check: unconstrained type param to object type (TS2322)" {
   @test.assert_eq(issues("function f<T>(a: T) { let b: any = a; }"), 0)
   @test.assert_eq(issues("function f<T>(a: T) { let b: T = a; }"), 0)
 }
+
+///|
+// TS2322: under strictNullChecks, a union value still carrying undefined/null
+// is not assignable to a target that does not accept it.
+test "expr_check: residual nullish union not assignable (TS2322)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  assert_true(
+    issues(
+      "// @strict: true\nfunction f(x: string | undefined) { let y: string | number = x; }",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "// @strict: true\nfunction f(x: string | null) { let y: string = x; }",
+    ) >
+    0,
+  )
+  // Target accepts the same nullish member -> silent.
+  @test.assert_eq(
+    issues(
+      "// @strict: true\nfunction f(x: string | undefined) { let y: string | undefined = x; }",
+    ),
+    0,
+  )
+  // any / unknown target -> silent.
+  @test.assert_eq(
+    issues(
+      "// @strict: true\nfunction f(x: string | undefined) { let y: unknown = x; }",
+    ),
+    0,
+  )
+}

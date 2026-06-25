@@ -4128,6 +4128,35 @@ fn type_has_undefined(ty : @ast.TsType) -> Bool {
 }
 
 ///|
+fn type_has_null(ty : @ast.TsType) -> Bool {
+  match ty {
+    Null => true
+    Union(parts) => parts.iter().any(fn(p) { p is Null })
+    _ => false
+  }
+}
+
+///|
+/// True when `ty` has at least one non-nullish member — distinguishes a
+/// "possibly nullish" union (`string | undefined`) from a purely-nullish type
+/// (whose keyword forms are handled by the dedicated strict-null path).
+fn type_has_non_nullish(ty : @ast.TsType) -> Bool {
+  match ty {
+    Null | Undefined => false
+    Union(parts) =>
+      parts
+      .iter()
+      .any(fn(p) {
+        match p {
+          Null | Undefined => false
+          _ => true
+        }
+      })
+    _ => true
+  }
+}
+
+///|
 fn union_possibly_nullish(ty : @ast.TsType) -> @ast.TsType? {
   match ty {
     Union(members) => {
@@ -6544,6 +6573,38 @@ fn check_expr_against(
         }
       }
     _ => ()
+  }
+  // TS2322: under strictNullChecks, a *non-keyword* source whose inferred type
+  // is a union that still carries `undefined` / `null` (a residual nullish that
+  // no narrowing removed) is not assignable to a target that does not accept
+  // that nullish member (`let y: string | number = x` where `x: string |
+  // undefined`). The purely-nullish keyword forms are handled above; this
+  // covers a variable / expression whose union leaks nullish into a
+  // non-nullish location. Targets that openly accept anything (`any` /
+  // `unknown` / `void`) or a type parameter (generic instantiation unknown) are
+  // excluded, as is a target that itself carries the same nullish member.
+  if ctx.strict_null_checks &&
+    type_has_non_nullish(inferred_u) &&
+    (type_has_undefined(inferred_u) || type_has_null(inferred_u)) {
+    let target_open = match expected_u {
+      Any | Unknown | Void | Never => true
+      Named(tn) => ctx.in_scope_type_params.contains(tn)
+      _ => false
+    }
+    if not(target_open) && is_checkable(expected_u) {
+      let leaks_undef = type_has_undefined(inferred_u) &&
+        not(type_has_undefined(expected_u))
+      let leaks_null = type_has_null(inferred_u) &&
+        not(type_has_null(expected_u))
+      if leaks_undef || leaks_null {
+        record(
+          ctx,
+          sub_path,
+          "type `\{type_display(inferred_u)}` is not assignable to type `\{type_display(expected_u)}`",
+        )
+        return
+      }
+    }
   }
   // A *literal* value is never assignable to a bare in-scope type parameter
   // `T`: `T` could be instantiated with an arbitrary type unrelated to the
