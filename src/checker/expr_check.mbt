@@ -5206,7 +5206,18 @@ fn infer_expr(
       }
       let recv_ty = infer_expr(env, resolver, receiver)
       match resolver.lookup_field(recv_ty, name) {
-        Some(t) => t
+        Some(t) =>
+          // An unannotated field reads back as `Any`; recover the widened
+          // primitive from its initializer (matches TS's own inference) so a
+          // read like `return this.x` is typed.
+          if is_checkable(t) {
+            t
+          } else {
+            match inferred_primitive_field_type(resolver, recv_ty, name) {
+              Some(inferred) => inferred
+              None => t
+            }
+          }
         None =>
           // Union receiver: lookup_field requires ALL members to have the
           // field. When null/undefined members make that fail, retry on the
