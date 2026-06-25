@@ -6085,9 +6085,23 @@ fn check_expr_against(
     // Ternary: check each branch against the expected type individually.
     // This catches `cond ? "ok" : 42` against `string` — without this the
     // inferred type is `string | number` and the union check may be too wide.
-    (Cond(_, then_, else_), _) => {
+    (Cond(c, then_, else_), _) => {
+      // The consequent runs only when the condition is truthy and the
+      // alternative only when it is falsy — apply that flow narrowing before
+      // checking each branch so a `Var` the condition guards
+      // (`x !== undefined ? x.foo : 0`) isn't re-flagged as possibly-undefined.
+      let eff = analyze_narrowing(env, ctx.resolver, c)
+      let snap = env.full_snapshot()
+      for b in eff.then_binds {
+        env.narrow(b.0, b.1)
+      }
       check_expr_against(env, then_, expected, ctx, sub_path + " (then)")
+      env.restore_from(snap)
+      for b in eff.else_binds {
+        env.narrow(b.0, b.1)
+      }
       check_expr_against(env, else_, expected, ctx, sub_path + " (else)")
+      env.restore_from(snap)
       return
     }
     // Logical operators propagate the contextual type to their *right*
@@ -11774,8 +11788,21 @@ fn check_call_args_in_expr(
     }
     Cond(c, t, e) => {
       check_call_args_in_expr(env, c, ctx)
+      // Walk each branch under the condition's flow narrowing (the consequent
+      // sees the truthy effect, the alternative the falsy one), so
+      // `x !== undefined ? x.foo : 0` doesn't re-flag `x` as possibly-undefined.
+      let eff = analyze_narrowing(env, ctx.resolver, c)
+      let snap = env.full_snapshot()
+      for b in eff.then_binds {
+        env.narrow(b.0, b.1)
+      }
       check_call_args_in_expr(env, t, ctx)
+      env.restore_from(snap)
+      for b in eff.else_binds {
+        env.narrow(b.0, b.1)
+      }
       check_call_args_in_expr(env, e, ctx)
+      env.restore_from(snap)
     }
     ArrayLit(items) =>
       for it in items {

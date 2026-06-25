@@ -1399,6 +1399,20 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-25 (T91)   (corpus not re-measured)               loop-divergence narrowing hardening
 2026-06-25 (T92)   (corpus not re-measured)               `||=` nullish-strip narrowing
 2026-06-25 (T93)   (corpus not re-measured)               loop-condition body narrowing
+2026-06-25 (T94)   (corpus not re-measured)               ternary-branch condition narrowing
+
+  T94 -- ternary-branch condition narrowing. `cond ? a : b` runs the consequent
+    only when `cond` is truthy and the alternative only when falsy, but neither
+    the contextual-typing ternary arm (`check_expr_against`) nor the walker arm
+    (`check_call_args_in_expr`) applied the condition's flow narrowing to the
+    branches. `x !== undefined ? x.length : 0` therefore produced a spurious
+    "object is possibly undefined" (TS18048) — two reports, one per walk. Both
+    arms now snapshot the env, apply `analyze_narrowing(cond).then_binds` to the
+    consequent and `.else_binds` to the alternative, and restore between (the
+    same pattern the `&&` / `||` contextual arm already used). FP-only soundness
+    fix, whitebox-tested (then / else narrowing, statement + contextual
+    position, unguarded branch still flagged). All 2347 tests green; `moon
+    check` 0 errors. Corpus not re-measured (submodule out of git scope).
 
   T93 -- loop-condition body narrowing. A `while (cond)` / `for (…; cond; …)`
     body only runs when `cond` holds, so the condition's then-narrowing applies

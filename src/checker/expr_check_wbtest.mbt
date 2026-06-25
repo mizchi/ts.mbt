@@ -9326,3 +9326,41 @@ test "expr_check: loop-condition narrows the body (TS18048)" {
     0,
   )
 }
+
+///|
+// A ternary narrows each branch by its condition: the consequent sees the
+// truthy effect, the alternative the falsy one. `x !== undefined ? x.foo : 0`
+// must be silent in both contextual (`return`) and statement positions.
+test "expr_check: ternary branches are narrowed by the condition (TS18048)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Contextual position (checked against the declared return type).
+  @test.assert_eq(
+    issues(
+      "function f(x: string | undefined): number { return x !== undefined ? x.length : 0; }",
+    ),
+    0,
+  )
+  // Else-branch narrowing: `x === undefined ? 0 : x.length`.
+  @test.assert_eq(
+    issues(
+      "function f(x: string | undefined): number { return x === undefined ? 0 : x.length; }",
+    ),
+    0,
+  )
+  // Statement position (no contextual type).
+  @test.assert_eq(
+    issues(
+      "function f(x: string | undefined): void { x !== undefined ? x.toUpperCase() : void 0; }",
+    ),
+    0,
+  )
+  // Sanity: an unguarded member access in a ternary branch is still flagged.
+  assert_true(
+    issues(
+      "function f(x: string | undefined): number { return true ? x.length : 0; }",
+    ) >
+    0,
+  )
+}
