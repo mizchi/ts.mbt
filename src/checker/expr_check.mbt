@@ -12357,6 +12357,14 @@ fn check_call_args_in_expr(
     }
     AssignExpr(name, v) => {
       check_call_args_in_expr(env, v, ctx)
+      // TS2539: `undefined` is a global value, not an assignable variable, so
+      // `undefined = x` is an error. Only when it is not shadowed by a declared
+      // local of that name (which would make it an ordinary variable).
+      if name == "undefined" && env.lookup_declared(name) is None {
+        record(
+          ctx, "assign `undefined`", "cannot assign to `undefined` because it is not a variable",
+        )
+      }
       // Assignment target is the *declared* type, not the narrowed
       // current type (same reasoning as the stmt-level `Assign`
       // case above). Falls back to `resolver.globals` for module-

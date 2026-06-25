@@ -1555,6 +1555,13 @@ conformance sources (`.errors.txt` baseline = ground truth):
     sweep — done via the oracle. Whole-corpus 0 FP, TP +3; pinned recall
     638 -> 641. Whitebox-tested.
 
+2026-06-25 (T106)  642/815 (79 %)        414/414 ( 0 FP)   TS2539 cannot assign to `undefined`
+
+  T106 -- TS2539: `undefined` is a global value, not an assignable variable, so
+    `undefined = x` is an error. Flagged in the `AssignExpr` walk, gated on the
+    name not being shadowed by a declared local. Whole-corpus 0 FP; pinned
+    recall 641 -> 642 (nullAssignedToUndefined). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary

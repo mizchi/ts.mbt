@@ -9764,3 +9764,14 @@ test "expr_check: residual nullish union not assignable (TS2322)" {
     0,
   )
 }
+
+///|
+// TS2539: `undefined` is not an assignable variable.
+test "expr_check: cannot assign to undefined (TS2539)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  assert_true(issues("var x = undefined = null;") > 0)
+  // A normal variable assignment is silent.
+  @test.assert_eq(issues("let u: number = 0; u = 1;"), 0)
+}
