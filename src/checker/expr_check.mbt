@@ -4104,6 +4104,22 @@ fn is_nullable_type(ty : @ast.TsType) -> Bool {
 // preferred). This is the "possibly undefined/null" shape that makes member
 // access an error under strictNullChecks (TS18048 / TS2532). A purely-nullish
 // type is handled by `is_nullable_type` separately, so it returns `None` here.
+///|
+/// True when `ty` includes an `undefined` member (directly or as a union part).
+/// Used by the TS2790 `delete` check: an optional property is encoded with an
+/// `undefined` member, so a field type *without* `undefined` is a required
+/// property that `delete` may not target. (An explicitly-nullable-but-required
+/// `b: T | undefined` is conservatively treated as optional here — a miss, not
+/// a false positive.)
+fn type_has_undefined(ty : @ast.TsType) -> Bool {
+  match ty {
+    Undefined => true
+    Union(parts) => parts.iter().any(fn(p) { p is Undefined })
+    _ => false
+  }
+}
+
+///|
 fn union_possibly_nullish(ty : @ast.TsType) -> @ast.TsType? {
   match ty {
     Union(members) => {
@@ -11972,6 +11988,38 @@ fn check_call_args_in_expr(
             )
           }
         }
+        // TS2790: the operand of `delete` must be an *optional* property. A
+        // `delete obj.prop` where `prop` resolves to a required field (its type
+        // carries no `undefined` member) is an error, as is deleting a private
+        // name (`delete this.#x`).
+        Delete =>
+          match inner {
+            PropAccess(recv, prop) =>
+              if prop.has_prefix("__private_brand__") {
+                record(
+                  ctx, "delete", "the operand of a `delete` operator cannot be a private name",
+                )
+              } else if ctx.strict_null_checks {
+                // TS2790 for a required field only fires under strictNullChecks;
+                // non-strict code may `delete` a required property freely.
+                let recv_ty = infer_expr(env, ctx.resolver, recv)
+                if is_checkable(recv_ty) &&
+                  !is_in_scope_type_param(ctx, recv_ty) &&
+                  !type_contains_unresolved_named(recv_ty, ctx.resolver) &&
+                  !member_recv_unmodeled(recv_ty, ctx.resolver) {
+                  match ctx.resolver.lookup_field(recv_ty, prop) {
+                    Some(ft) =>
+                      if is_checkable(ft) && not(type_has_undefined(ft)) {
+                        record(
+                          ctx, "delete", "the operand of a `delete` operator must be optional",
+                        )
+                      }
+                    None => ()
+                  }
+                }
+              }
+            _ => ()
+          }
         _ => ()
       }
     }

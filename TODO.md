@@ -1509,6 +1509,18 @@ conformance sources (`.errors.txt` baseline = ground truth):
     PropAssignExpr where the declared field type is `Any`. Whole-corpus 0 FP, TP
     +1; pinned recall 633 -> 634 (privateNameFieldsESNext). Whitebox-tested.
 
+2026-06-25 (T102)  636/815 (78 %)        414/414 ( 0 FP)   TS2790 delete operand must be optional
+
+  T102 -- TS2790 ("The operand of a 'delete' operator must be optional"). In the
+    `UnaryOp(Delete, PropAccess(recv, prop))` walk: deleting a *required* field
+    (its resolved type has no `undefined` member) under strictNullChecks is an
+    error, as is deleting a private name (`delete this.#x`, always illegal).
+    Optionality is read from the `| undefined` encoding, so an explicitly-
+    nullable-but-required `b: T | undefined` is conservatively treated as
+    optional (a miss, never an FP); the required-field case is gated on
+    `strict_null_checks` (non-strict code may delete freely -- objectRestReadonly
+    FP, fixed). Whole-corpus 0 FP; pinned recall 634 -> 636. Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary
