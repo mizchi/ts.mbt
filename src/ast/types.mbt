@@ -862,6 +862,11 @@ pub(all) struct TsModule {
   // Empty for any well-formed input (the modifier is always an error in
   // these positions), so it never costs precision.
   parameter_property_misuses : Array[String]
+  // Parameters declared with both an optional marker (`x?`) and an
+  // initializer (`x = e`) -- always a TS1015 syntax error. The parser
+  // records one parameter name per offending declaration; the checker
+  // surfaces one diagnostic per entry. Empty for well-formed input.
+  param_optional_initializer_misuses : Array[String]
 } derive(Debug)
 
 ///|

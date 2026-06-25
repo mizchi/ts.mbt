@@ -176,6 +176,12 @@ fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
   } else {
     None
   }
+  // TS1015: a parameter cannot be both optional (`x?`) and have an
+  // initializer (`x = e`). The `?` is otherwise lost into the parameter
+  // type below, so record the conflict here where both facts are visible.
+  if is_optional && not(default is None) {
+    self.param_optional_initializer_misuses.push(name)
+  }
   { name, binding: Some(binding), is_rest, type_, default }
 }
 

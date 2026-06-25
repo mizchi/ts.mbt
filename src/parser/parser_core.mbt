@@ -73,6 +73,16 @@ pub struct Parser {
   // signature. TypeScript reports TS2369 for each. `parse_param` appends a
   // location string here; `parse_module` hands the list to the checker.
   param_property_misuses : Array[String]
+  // Parameters declared with *both* an optional marker (`x?`) and an
+  // initializer (`x = e`) -- always a TS1015 syntax error regardless of
+  // position. The `?` is otherwise folded into the parameter type
+  // (`x?: T` -> `T | undefined`), indistinguishable from an explicit
+  // `x: T | undefined = e` (which is legal), so the conflict must be
+  // recorded at parse time where both facts are still separate.
+  // `parse_param` appends the parameter name; `parse_module` hands the
+  // list to the checker. Empty for well-formed input, so it never costs
+  // precision.
+  param_optional_initializer_misuses : Array[String]
   // Token-position → "JSDoc `/* @__PURE__ */` annotation seen
   // just before this token". The lexer populates this when it
   // skips a block comment whose contents contain the literal
@@ -149,6 +159,7 @@ pub fn Parser::new_with_strict_and_jsx(
     pending_decorators: [],
     param_property_scopes: [],
     param_property_misuses: [],
+    param_optional_initializer_misuses: [],
     pure_marker_positions: {},
     internal_marker_positions: {},
     collected_internal_names: {},
@@ -203,6 +214,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     pending_decorators: [],
     param_property_scopes: [],
     param_property_misuses: [],
+    param_optional_initializer_misuses: [],
     pure_marker_positions: lexer.pure_marker_positions,
     internal_marker_positions: lexer.internal_marker_positions,
     collected_internal_names: {},

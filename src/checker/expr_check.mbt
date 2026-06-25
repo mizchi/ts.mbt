@@ -15945,6 +15945,15 @@ fn check_module_function_bodies_layered(
         message: "a parameter property is only allowed in a constructor implementation",
       })
     }
+    // TS1015: a parameter cannot have both an optional marker (`x?`) and an
+    // initializer (`x = e`). The parser records each offending parameter; this
+    // position is never valid TS, so it is false-positive-free.
+    for pname in module_.param_optional_initializer_misuses {
+      all.push({
+        path: "parameter `\{pname}`",
+        message: "parameter cannot have question mark and initializer",
+      })
+    }
     // TS2313: a type parameter with a circular constraint (`T extends T`, or an
     // indirect cycle). Walks declarations (and nested namespaces) once from the
     // top.
