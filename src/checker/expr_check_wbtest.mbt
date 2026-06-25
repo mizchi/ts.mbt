@@ -10017,3 +10017,24 @@ test "expr_check: base accessor overridden by derived property (TS2610)" {
     0,
   )
 }
+
+///|
+test "expr_check: super property access before super() call (TS17011)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // `super.x()` before `super()` in a derived constructor is an error.
+  assert_true(
+    issues(
+      "class B { x() { return 1 } } class C extends B { constructor() { super.x(); super(); } }",
+    ) >
+    0,
+  )
+  // `super.x()` after `super()` is fine.
+  @test.assert_eq(
+    issues(
+      "class B { x() { return 1 } } class C extends B { constructor() { super(); super.x(); } }",
+    ),
+    0,
+  )
+}
