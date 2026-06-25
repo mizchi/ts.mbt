@@ -1459,6 +1459,32 @@ conformance sources (`.errors.txt` baseline = ground truth):
     Whole-corpus 0 FP (oracle); pinned recall 627 -> 630, precision 414/414
     (0 FP). Whitebox-tested.
 
+  --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
+  Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
+  now been harvested (T95-T97). The remaining ~185 misses cluster by primary
+  TS code (file-level counts, primary `error TS` lines only) as:
+    TS2322 (42)  structural/advanced assignability — enums, template-literal
+                 types, conditional types, generics, the `object` keyword
+                 (parser lowers `object` to `Any`, so non-primitive→object is
+                 invisible without an AST-level change). Basic assignability is
+                 already solid (obj-literal field/missing/excess, primitive,
+                 return, arg, array-elem, var-assign all flagged) — the misses
+                 are genuinely the advanced forms.
+    TS2339 (19)  property access needing constraint resolution (`T extends Date`),
+                 `never` after exhaustive narrowing, union-member access, and
+                 cross-instance / static `#private` resolution (6 files).
+    TS2345 (15)  argument assignability against union / generic call signatures.
+    TS2344/2415/2420 (~19) generic constraint & index-signature subtyping with
+                 variance (subtypingWith{String,Numeric}Indexer*).
+    TS18014 (6)  `#private` shadowing across nested classes.
+    TS7006 (5)   noImplicitAny + contextual-typing parameter inference.
+    Each remaining bucket is FP-prone and individually worth 1-6 files, so every
+    increment needs the whole-corpus oracle (`scripts/checker_conformance_oracle.sh
+    --max-fp 0`) as a gate — mirroring the T0->T90 history (≈+1-3/step over a
+    month). Reaching 700 (+70) is multi-session work, not a single safe pass;
+    the 0-FP invariant (the `checker-soundness` CI gate) must not be traded for
+    recall. Corpus is restored in-env via the codeload tarball trick noted at T95.
+
   T94 -- ternary-branch condition narrowing. `cond ? a : b` runs the consequent
     only when `cond` is truthy and the alternative only when falsy, but neither
     the contextual-typing ternary arm (`check_expr_against`) nor the walker arm
