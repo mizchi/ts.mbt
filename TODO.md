@@ -1703,6 +1703,18 @@ conformance sources (`.errors.txt` baseline = ground truth):
     658 -> 660 (accessorsOverrideMethod, derivedClassFunctionOverridesBaseClassAccessor).
     Whitebox-tested.
 
+2026-06-25 (T119)  661/815 (81 %)        414/414 ( 0 FP)   TS2610 base accessor overridden by derived property
+
+  T119 -- TS2610 ("defined as an accessor in a base class, overridden here as a
+    property"). Re-added (a first attempt was reverted for FPs) now that
+    `nearest_ancestor_member_kind` distinguishes a *true* get/set accessor
+    (kind 2) from auto-accessors and abstract properties (kind 3) -- the
+    conflation that caused the earlier FPs (abstractProperty, autoAccessor7,
+    autoAccessorAllowedModifiers). Gated on `use_define_for_class_fields`, since
+    under legacy assignment semantics the property flows through the setter and
+    is allowed. Whole-corpus TP 1696 -> 1697, 0 FP; pinned recall 660 -> 661
+    (propertyOverridesAccessors6). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary

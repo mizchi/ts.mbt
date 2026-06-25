@@ -9997,3 +9997,23 @@ test "expr_check: method/accessor override mismatch (TS2423/2426)" {
     0,
   )
 }
+
+///|
+test "expr_check: base accessor overridden by derived property (TS2610)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Under useDefineForClassFields, a base accessor overridden by a data
+  // property is an error.
+  assert_true(
+    issues(
+      "// @useDefineForClassFields: true\nclass A { get x() { return 1 } } class B extends A { x = 2; }",
+    ) >
+    0,
+  )
+  // Without the flag the property flows through the setter -- allowed.
+  @test.assert_eq(
+    issues("class A { get x() { return 1 } } class B extends A { x = 2; }"),
+    0,
+  )
+}
