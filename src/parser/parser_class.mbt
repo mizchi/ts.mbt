@@ -1031,6 +1031,7 @@ fn Parser::parse_class_body(
   Array[String],
   Array[String],
   Int,
+  Bool,
 ) raise ParseError {
   let _ = self.expect(LBrace)
   // Class body is implicitly strict mode
@@ -1041,6 +1042,9 @@ fn Parser::parse_class_body(
   // real body). Two or more is TS2392 ("Multiple constructor implementations
   // are not allowed").
   let mut ctor_impl_count = 0
+  // Set when an accessibility modifier (`public` / `private` / `protected`)
+  // was written on an index signature -- always TS1071.
+  let mut index_sig_modifier_misuse = false
   let elements : Array[ClassElement] = []
   // Names declared `private` / `protected`, collected so the class decl
   // can expose member visibility to the checker (TS2341 / TS2445).
@@ -1061,6 +1065,11 @@ fn Parser::parse_class_body(
     let mut parsed_static_block = false
     let mut has_declare = false
     let mut visibility = "public"
+    // Whether an explicit accessibility modifier (`public` / `private` /
+    // `protected`) was written on this member. Used to flag TS1071 -- such a
+    // modifier on an index signature is always an error -- where the default
+    // "public" can't be distinguished from an explicitly written one.
+    let mut saw_visibility_modifier = false
     let mut is_abstract_member = false
     while has_modifier {
       has_modifier = false
@@ -1100,6 +1109,9 @@ fn Parser::parse_class_body(
           if self.can_consume_class_modifier() {
             let _ = self.advance()
             has_modifier = true
+            if n == "public" || n == "private" || n == "protected" {
+              saw_visibility_modifier = true
+            }
             if n == "private" || n == "protected" {
               visibility = n
             }
@@ -1128,6 +1140,9 @@ fn Parser::parse_class_body(
     if self.check(LBracket) && self.is_index_signature_shape_after_lbracket() {
       match self.try_parse_class_index_signature() {
         Some((key, value)) => {
+          if saw_visibility_modifier {
+            index_sig_modifier_misuse = true
+          }
           elements.push(IndexSig(key, value))
           continue
         }
@@ -1135,6 +1150,9 @@ fn Parser::parse_class_body(
       }
     }
     if self.try_skip_class_index_signature() {
+      if saw_visibility_modifier {
+        index_sig_modifier_misuse = true
+      }
       elements.push(IndexSig(@ast.TsType::Any, @ast.TsType::Any))
       continue
     }
@@ -1370,6 +1388,7 @@ fn Parser::parse_class_body(
   self.in_strict = prev_strict
   (
     ctor, elements, private_members, protected_members, abstract_members, ctor_impl_count,
+    index_sig_modifier_misuse,
   )
 }
 
@@ -1420,6 +1439,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     private_members,
     protected_members,
     abstract_members,
+    _,
     _,
   ) = self.parse_class_body()
   self.current_class_brand = prev_brand
@@ -2080,6 +2100,7 @@ fn Parser::parse_class_decl_with_abstract(
     protected_members,
     abstract_members,
     ctor_impl_count,
+    index_sig_modifier_misuse,
   ) = self.parse_class_body()
   self.current_class_brand = prev_brand
   self.restore_local_type_param_bounds(class_type_param_bound_len)
@@ -2093,6 +2114,11 @@ fn Parser::parse_class_decl_with_abstract(
   // bodyless overload signatures) is legal and leaves the count at 1.
   if ctor_impl_count >= 2 {
     runtime_decl.duplicate_member_names.push("<multiple-ctor-impl>")
+  }
+  // TS1071: an accessibility modifier on an index signature. Same sentinel
+  // channel; always an error, so false-positive-free.
+  if index_sig_modifier_misuse {
+    runtime_decl.duplicate_member_names.push("<index-sig-modifier>")
   }
   self.last_runtime_class_decl = Some(runtime_decl)
   // When the class extends another class, the IIFE desugar below

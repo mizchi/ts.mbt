@@ -9855,3 +9855,16 @@ test "expr_check: multiple constructor implementations (TS2392)" {
   // A single constructor is fine.
   @test.assert_eq(issues("class E { constructor(x: number) {} }"), 0)
 }
+
+///|
+test "expr_check: accessibility modifier on index signature (TS1071)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // An accessibility modifier on an index signature is always an error.
+  assert_true(issues("class C { private [x: string]: string; }") > 0)
+  assert_true(issues("class D { public [x: number]: string; }") > 0)
+  assert_true(issues("class E { protected [x: string]: number; }") > 0)
+  // A plain index signature is fine.
+  @test.assert_eq(issues("class F { [x: string]: number; }"), 0)
+}
