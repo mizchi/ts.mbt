@@ -15246,10 +15246,18 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   for cls in module_.classes {
     for name in cls.duplicate_member_names {
-      issues.push({
-        path: "class \{cls.name}",
-        message: "duplicate identifier `\{name}`",
-      })
+      if name == "<multiple-ctor-impl>" {
+        // TS2392: the parser recorded two or more constructor implementations.
+        issues.push({
+          path: "class \{cls.name}",
+          message: "multiple constructor implementations are not allowed",
+        })
+      } else {
+        issues.push({
+          path: "class \{cls.name}",
+          message: "duplicate identifier `\{name}`",
+        })
+      }
     }
   }
   issues

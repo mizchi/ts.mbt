@@ -1605,6 +1605,18 @@ conformance sources (`.errors.txt` baseline = ground truth):
     surfaced by the checker. Whole-corpus TP 1680 -> 1682, 0 FP; pinned recall
     647 -> 648 (callSignatureWithOptionalParameterAndInitializer). Whitebox-tested.
 
+2026-06-25 (T111)  649/815 (79 %)        414/414 ( 0 FP)   TS2392 multiple constructor implementations
+
+  T111 -- TS2392 ("Multiple constructor implementations are not allowed"). A
+    class with two or more `constructor(...) { ... }` bodies (vs. bodyless
+    overload signatures) is an error. `parse_class_body` now counts
+    body-bearing constructors and, when >= 2, records a `<multiple-ctor-impl>`
+    sentinel in the class's existing duplicate-member channel; the checker maps
+    that sentinel to the dedicated diagnostic. A single implementation with any
+    number of bodyless overload signatures stays silent. Whole-corpus TP
+    1682 -> 1683, 0 FP; pinned recall 648 -> 649
+    (classWithTwoConstructorDefinitions). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary

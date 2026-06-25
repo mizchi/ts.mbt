@@ -9835,3 +9835,23 @@ test "expr_check: parameter optional marker plus initializer (TS1015)" {
   // An explicit `| undefined` type with an initializer is legal (no `?`).
   @test.assert_eq(issues("function k(x: number | undefined = 1) {}"), 0)
 }
+
+///|
+test "expr_check: multiple constructor implementations (TS2392)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Two constructor implementations (both with bodies) is an error.
+  assert_true(
+    issues("class C { constructor() {} constructor(x: number) {} }") > 0,
+  )
+  // A single implementation preceded by bodyless overload signatures is legal.
+  @test.assert_eq(
+    issues(
+      "class D { constructor(x: number); constructor(x: string); constructor(x: any) {} }",
+    ),
+    0,
+  )
+  // A single constructor is fine.
+  @test.assert_eq(issues("class E { constructor(x: number) {} }"), 0)
+}
