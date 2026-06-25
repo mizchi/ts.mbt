@@ -1628,6 +1628,17 @@ conformance sources (`.errors.txt` baseline = ground truth):
     Whole-corpus TP 1683 -> 1687, 0 FP; pinned recall 649 -> 651 (privateIndexer,
     publicIndexer). Whitebox-tested.
 
+2026-06-25 (T113)  652/815 (80 %)        414/414 ( 0 FP)   TS1245 abstract method with implementation
+
+  T113 -- TS1245 ("Method cannot have an implementation because it is marked
+    abstract"). A method/accessor with the `abstract` modifier and a real
+    `{ ... }` body (vs. the valid bodyless `abstract foo();`) is an error.
+    `parse_class_body` reuses the `has_body_block` signal (added for TS2392)
+    and records an `<abstract-impl>` sentinel in the duplicate-member channel
+    when an abstract member has a body. Whole-corpus TP 1687 -> 1688, 0 FP;
+    pinned recall 651 -> 652 (classAbstractMethodWithImplementation).
+    Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary

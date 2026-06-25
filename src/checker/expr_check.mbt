@@ -15258,6 +15258,12 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
           path: "class \{cls.name}",
           message: "accessibility modifier cannot appear on an index signature",
         })
+      } else if name == "<abstract-impl>" {
+        // TS1245: an abstract method cannot have an implementation.
+        issues.push({
+          path: "class \{cls.name}",
+          message: "an abstract method cannot have an implementation",
+        })
       } else {
         issues.push({
           path: "class \{cls.name}",
