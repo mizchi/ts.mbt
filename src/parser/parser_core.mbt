@@ -83,6 +83,14 @@ pub struct Parser {
   // list to the checker. Empty for well-formed input, so it never costs
   // precision.
   param_optional_initializer_misuses : Array[String]
+  // Class-body structural diagnostics (`duplicate_member_names`, which also
+  // carries the `<multiple-ctor-impl>` / `<index-sig-modifier>` /
+  // `<abstract-impl>` sentinels) collected for *every* class parsed, including
+  // classes nested in function bodies that are lowered away (IIFE desugar) and
+  // so never reach `module_.classes`. Each entry is `(class_name, names)`.
+  // `parse_class_decl_with_abstract` appends; the checker surfaces them. Empty
+  // for well-formed input, so it never costs precision.
+  collected_class_dups : Array[(String, Array[String])]
   // Token-position → "JSDoc `/* @__PURE__ */` annotation seen
   // just before this token". The lexer populates this when it
   // skips a block comment whose contents contain the literal
@@ -160,6 +168,7 @@ pub fn Parser::new_with_strict_and_jsx(
     param_property_scopes: [],
     param_property_misuses: [],
     param_optional_initializer_misuses: [],
+    collected_class_dups: [],
     pure_marker_positions: {},
     internal_marker_positions: {},
     collected_internal_names: {},
@@ -215,6 +224,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     param_property_scopes: [],
     param_property_misuses: [],
     param_optional_initializer_misuses: [],
+    collected_class_dups: [],
     pure_marker_positions: lexer.pure_marker_positions,
     internal_marker_positions: lexer.internal_marker_positions,
     collected_internal_names: {},

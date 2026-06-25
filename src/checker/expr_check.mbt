@@ -15484,29 +15484,37 @@ fn check_type_undeclared_tps(
 /// accessor in one class body), so this is false-positive-free.
 fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
-  for cls in module_.classes {
-    for name in cls.duplicate_member_names {
+  // `class_dup_diagnostics` carries every class parsed (top-level and nested);
+  // it is the superset of `module_.classes[].duplicate_member_names`, so it is
+  // the sole source. A `(class, name)` guard dedups in case the same class is
+  // recorded twice.
+  let seen : Map[String, Unit] = {}
+  for entry in module_.class_dup_diagnostics {
+    let cls_name = entry.0
+    for name in entry.1 {
+      let dedup_key = cls_name + "\u{0}" + name
+      if seen.contains(dedup_key) {
+        continue
+      }
+      seen[dedup_key] = ()
       if name == "<multiple-ctor-impl>" {
-        // TS2392: the parser recorded two or more constructor implementations.
         issues.push({
-          path: "class \{cls.name}",
+          path: "class \{cls_name}",
           message: "multiple constructor implementations are not allowed",
         })
       } else if name == "<index-sig-modifier>" {
-        // TS1071: an accessibility modifier on an index signature.
         issues.push({
-          path: "class \{cls.name}",
+          path: "class \{cls_name}",
           message: "accessibility modifier cannot appear on an index signature",
         })
       } else if name == "<abstract-impl>" {
-        // TS1245: an abstract method cannot have an implementation.
         issues.push({
-          path: "class \{cls.name}",
+          path: "class \{cls_name}",
           message: "an abstract method cannot have an implementation",
         })
       } else {
         issues.push({
-          path: "class \{cls.name}",
+          path: "class \{cls_name}",
           message: "duplicate identifier `\{name}`",
         })
       }
@@ -15514,6 +15522,8 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
   }
   issues
 }
+
+///|
 
 ///|
 /// A type whose identity we can compare safely by structural / set equality:
