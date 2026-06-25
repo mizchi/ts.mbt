@@ -1690,6 +1690,19 @@ conformance sources (`.errors.txt` baseline = ground truth):
     static/instance namespace). Whole-corpus TP 1693 -> 1694, 0 FP; pinned
     recall 657 -> 658 (privateNameDuplicateField). Whitebox-tested.
 
+2026-06-25 (T118)  660/815 (81 %)        414/414 ( 0 FP)   TS2423/2426 method<->accessor override mismatch
+
+  T118 -- TS2423 ("base defines a method, derived defines an accessor") and
+    TS2426 (the reverse). A method and a get/set accessor are structurally
+    incompatible, so overriding one with the other is always an error
+    (unlike TS2610's property case, this is not flag-gated). Added
+    `nearest_ancestor_member_kind` (reads the `accessor` field precisely, so it
+    never conflates method/accessor/abstract the way the property predicate
+    does) and `check_method_accessor_override_mismatch`; skips when the chain
+    isn't resolvable. Whole-corpus TP 1694 -> 1696, 0 FP; pinned recall
+    658 -> 660 (accessorsOverrideMethod, derivedClassFunctionOverridesBaseClassAccessor).
+    Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary

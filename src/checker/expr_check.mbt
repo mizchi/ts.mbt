@@ -14873,6 +14873,95 @@ fn check_reserved_type_alias_names(module_ : @ast.TsModule) -> Array[ExprIssue] 
 /// nearest ancestor declaration is a *data property*, `Some(false)` when it is
 /// an *accessor*, and `None` when no ancestor declares it (or the chain leaves
 /// resolvable classes — an expression base, an external class, a cycle).
+/// Walk the heritage chain (nearest first) to the first class that declares
+/// `name` (matching `is_static`), reporting its *kind*: `1` = a regular
+/// (non-accessor) method, `2` = a get/set accessor, `3` = a data property.
+/// Returns `None` when the chain reaches an unresolvable / expression base
+/// before the member is found — there the kind is unknown and the caller must
+/// not assume a mismatch. Used for TS2423 / TS2426 (a base method overridden
+/// as an accessor, or vice-versa — always an error regardless of compiler
+/// flags). Method vs. accessor is read precisely from the `accessor` field so
+/// this never conflates the two the way the property-vs-other predicate does.
+fn nearest_ancestor_member_kind(
+  resolver : Resolver,
+  start_base : String,
+  name : String,
+  is_static : Bool,
+) -> Int? {
+  let seen : Map[String, Unit] = {}
+  let mut cur = start_base
+  while not(seen.contains(cur)) {
+    seen[cur] = ()
+    let cls = match resolver.classes.get(cur) {
+      Some(c) => c
+      None => return None
+    }
+    for m in cls.methods {
+      if m.name == name && m.is_static == is_static {
+        return if m.accessor != "" { Some(2) } else { Some(1) }
+      }
+    }
+    for p in cls.properties {
+      if p.name == name && p.is_static == is_static {
+        return Some(3)
+      }
+    }
+    if cls.base_names.length() != 1 || cls.base_names[0] == "<expr-base>" {
+      return None
+    }
+    cur = cls.base_names[0]
+  }
+  None
+}
+
+///|
+/// TS2423 / TS2426: a derived class may not override a base-class *method* with
+/// an accessor, nor a base-class *accessor* with a method — the two member
+/// shapes are structurally incompatible. Only fires when the nearest ancestor
+/// declaration's kind is known (resolvable chain), so it is false-positive-free.
+fn check_method_accessor_override_mismatch(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for cls in module_.classes {
+    if cls.base_names.length() != 1 || cls.base_names[0] == "<expr-base>" {
+      continue
+    }
+    let base = cls.base_names[0]
+    let reported : Map[String, Unit] = {}
+    for m in cls.methods {
+      if reported.contains(m.name) {
+        continue
+      }
+      let derived_is_accessor = m.accessor != ""
+      match nearest_ancestor_member_kind(resolver, base, m.name, m.is_static) {
+        // Derived accessor over a base regular method.
+        Some(1) =>
+          if derived_is_accessor {
+            reported[m.name] = ()
+            issues.push({
+              path: "class \{cls.name}.\{m.name}",
+              message: "`\{m.name}` is defined as a method in a base class but is overridden here as an accessor",
+            })
+          }
+        // Derived regular method over a base accessor.
+        Some(2) =>
+          if not(derived_is_accessor) {
+            reported[m.name] = ()
+            issues.push({
+              path: "class \{cls.name}.\{m.name}",
+              message: "`\{m.name}` is defined as an accessor in a base class but is overridden here as a method",
+            })
+          }
+        _ => ()
+      }
+    }
+  }
+  issues
+}
+
+///|
 fn nearest_ancestor_member_is_property(
   resolver : Resolver,
   start_base : String,
@@ -16125,6 +16214,9 @@ fn check_module_function_bodies_layered(
     all.push(issue)
   }
   for issue in check_field_init_references_ctor_param(module_) {
+    all.push(issue)
+  }
+  for issue in check_method_accessor_override_mismatch(module_, resolver) {
     all.push(issue)
   }
   for issue in check_rest_param_position(module_) {
