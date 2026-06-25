@@ -1030,12 +1030,17 @@ fn Parser::parse_class_body(
   Array[String],
   Array[String],
   Array[String],
+  Int,
 ) raise ParseError {
   let _ = self.expect(LBrace)
   // Class body is implicitly strict mode
   let prev_strict = self.in_strict
   self.in_strict = true
   let mut ctor : @ast.TsFunc? = None
+  // Count constructor *implementations* (a `constructor(...) { ... }` with a
+  // real body). Two or more is TS2392 ("Multiple constructor implementations
+  // are not allowed").
+  let mut ctor_impl_count = 0
   let elements : Array[ClassElement] = []
   // Names declared `private` / `protected`, collected so the class decl
   // can expose member visibility to the checker (TS2341 / TS2445).
@@ -1216,7 +1221,12 @@ fn Parser::parse_class_body(
       } else {
         Any
       }
-      let body = if self.match_(Semicolon) {
+      let consumed_semi = self.match_(Semicolon)
+      // A real `{ ... }` body marks an *implementation* (vs. a bodyless
+      // overload signature). Used below to count constructor implementations
+      // for TS2392.
+      let has_body_block = not(consumed_semi) && self.check(LBrace)
+      let body = if consumed_semi {
         @ast.TsBlock::{ stmts: [], stmt_positions: [] }
       } else if !self.check(LBrace) {
         // Overload signature with no body and no trailing `;` (relying on
@@ -1288,6 +1298,9 @@ fn Parser::parse_class_body(
         is_async: is_async_method,
       }
       if accessor_kind is None && key is Name("constructor") && !is_static {
+        if has_body_block {
+          ctor_impl_count += 1
+        }
         ctor = Some(func)
         // Materialize TS "parameter properties" (`constructor(readonly x:
         // T)`) as real instance fields so the checker can see them — this
@@ -1355,7 +1368,9 @@ fn Parser::parse_class_body(
   }
   let _ = self.expect(RBrace)
   self.in_strict = prev_strict
-  (ctor, elements, private_members, protected_members, abstract_members)
+  (
+    ctor, elements, private_members, protected_members, abstract_members, ctor_impl_count,
+  )
 }
 
 ///|
@@ -1399,7 +1414,14 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   let brand = "__private_brand__" + brand_id.to_string()
   let prev_brand = self.current_class_brand
   self.current_class_brand = Some(brand)
-  let (ctor_opt, elements, private_members, protected_members, abstract_members) = self.parse_class_body()
+  let (
+    ctor_opt,
+    elements,
+    private_members,
+    protected_members,
+    abstract_members,
+    _,
+  ) = self.parse_class_body()
   self.current_class_brand = prev_brand
   self.restore_local_type_param_bounds(class_type_param_bound_len)
   // Self-extending classes (`class C extends C {}`) intentionally
@@ -2051,13 +2073,27 @@ fn Parser::parse_class_decl_with_abstract(
   let brand = "__private_brand__" + brand_id.to_string()
   let prev_brand = self.current_class_brand
   self.current_class_brand = Some(brand)
-  let (ctor_opt, elements, private_members, protected_members, abstract_members) = self.parse_class_body()
+  let (
+    ctor_opt,
+    elements,
+    private_members,
+    protected_members,
+    abstract_members,
+    ctor_impl_count,
+  ) = self.parse_class_body()
   self.current_class_brand = prev_brand
   self.restore_local_type_param_bounds(class_type_param_bound_len)
   let runtime_decl = build_runtime_class_decl(
     name, class_type_params, class_type_param_bounds, ctor_opt, elements, is_abstract,
     private_members, protected_members, abstract_members, implements_names,
   )
+  // TS2392: two or more constructor implementations. Recorded via the class's
+  // duplicate-member channel with a sentinel name so the checker can surface
+  // the dedicated diagnostic. A single implementation (with any number of
+  // bodyless overload signatures) is legal and leaves the count at 1.
+  if ctor_impl_count >= 2 {
+    runtime_decl.duplicate_member_names.push("<multiple-ctor-impl>")
+  }
   self.last_runtime_class_decl = Some(runtime_decl)
   // When the class extends another class, the IIFE desugar below
   // produces a `super(…)` call outside a real class body — V8
