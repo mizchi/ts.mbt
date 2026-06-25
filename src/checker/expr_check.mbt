@@ -12020,8 +12020,12 @@ fn check_call_args_in_expr(
       // part unioned with `v`'s type — if `v` is non-nullish the residual
       // `undefined` is gone. This mirrors TS flow narrowing so a later
       // member access on `name` isn't a spurious "possibly undefined".
+      // `name ||= v` behaves the same for nullish purposes: `null` /
+      // `undefined` are always falsy, so the rhs always replaces them — a
+      // non-nullish `v` strips the nullish part just like `??=`. (`&&=` keeps
+      // the falsy part and is deliberately excluded.)
       match (target, op) {
-        (Var(name), CoalesceAssign) => {
+        (Var(name), CoalesceAssign) | (Var(name), OrAssign) => {
           let current = match env.lookup(name) {
             Some(t) => t
             None =>

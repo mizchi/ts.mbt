@@ -9244,3 +9244,33 @@ test "expr_check: continue / break narrow the loop-body fall-through (TS18048)" 
     0,
   )
 }
+
+///|
+// `||=` (logical-OR assignment) assigns the rhs whenever the lhs is falsy —
+// and `null` / `undefined` are always falsy — so a non-nullish rhs strips the
+// nullish part exactly like `??=`. `x ||= "d"; x.length` must be silent.
+test "expr_check: `||=` strips nullish from the lhs (TS18048)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  @test.assert_eq(
+    issues("let e: string | undefined;\ne ||= \"x\"\ne.length;"),
+    0,
+  )
+  // Parameter form keeps the `null` case free of the use-before-assign check
+  // (`let e: string | null;` with no initializer is genuinely TS2454).
+  @test.assert_eq(
+    issues(
+      "function f(e: string | null): number { e ||= \"x\"; return e.length; }",
+    ),
+    0,
+  )
+  // `&&=` does NOT strip nullish (it keeps the falsy part), so an unguarded
+  // use after it is still flagged.
+  assert_true(
+    issues(
+      "function f(e: string | undefined): number { e &&= \"x\"; return e.length; }",
+    ) >
+    0,
+  )
+}

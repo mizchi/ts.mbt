@@ -1397,6 +1397,21 @@ conformance sources (`.errors.txt` baseline = ground truth):
 2026-06-22 (T89)   619/815 (76 %)        414/414 ( 0 FP)   narrowing-engine hardening (no corpus delta)
 2026-06-22 (T90)   619/815 (76 %)        414/414 ( 0 FP)   whole-corpus TP 1643 -> 1645
 2026-06-25 (T91)   (corpus not re-measured)               loop-divergence narrowing hardening
+2026-06-25 (T92)   (corpus not re-measured)               `||=` nullish-strip narrowing
+
+  T92 -- `||=` (logical-OR assignment) nullish-strip narrowing. The T88
+    `??=` flow-narrowing only covered `CoalesceAssign`; `||=` (`OrAssign`)
+    was left out even though it strips nullish for the same reason — `null` /
+    `undefined` are always falsy, so a non-nullish rhs always replaces them.
+    `function f(e: string | null) { e ||= "x"; return e.length }` therefore
+    kept a residual nullish union and produced a spurious "object is possibly
+    null" (TS18048). Extended the `CompoundAssignExpr` narrowing match to
+    `(Var(name), OrAssign)` alongside `CoalesceAssign`, reusing the same
+    `narrow_union(prune_nullish(current), rhs)` rule. `&&=` (`AndAssign`) is
+    deliberately excluded — it keeps the falsy (incl. nullish) part, so a use
+    after it is still flagged. FP-only soundness fix, whitebox-tested. All
+    2345 tests green; `moon check` 0 errors. Corpus not re-measured (submodule
+    out of this environment's git scope).
 
   T91 -- loop-divergence narrowing hardening for the T88/T90 possibly-undefined
     check. `break` / `continue` (labeled or not) terminate the enclosing block's
