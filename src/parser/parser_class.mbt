@@ -2009,8 +2009,17 @@ fn Parser::parse_class_decl_with_abstract(
 ) -> @ast.TsStmt raise ParseError {
   self.last_runtime_class_decl = None
   let _ = self.expect(Class)
+  // A class named with a predefined-type keyword (`class void {}`,
+  // `class string {}`, …) is always a TS error (TS1005 / TS2414). These
+  // keywords tokenize as dedicated `*Type` kinds rather than `Ident`, so
+  // capture their spelling here — otherwise the name is lost to the
+  // `<class>` recovery fallback and the reserved-name check can't see it.
   let name = match self.advance().kind {
     Ident(n) => n
+    VoidType => "void"
+    StringType => "string"
+    NumberType => "number"
+    BooleanType => "boolean"
     _ => "<class>"
   }
   let mut class_type_params : Array[String] = []

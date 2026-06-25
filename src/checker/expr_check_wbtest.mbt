@@ -9790,3 +9790,19 @@ test "expr_check: misplaced type predicate (TS1228)" {
     0,
   )
 }
+
+///|
+test "expr_check: class named with predefined-type keyword (TS2414)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A class whose name is a predefined-type keyword is always a TS error.
+  // These keywords tokenize as dedicated `*Type` kinds, so the parser must
+  // capture their spelling for the reserved-name check to fire.
+  assert_true(issues("class void {}") > 0)
+  assert_true(issues("class string {}") > 0)
+  assert_true(issues("class number {}") > 0)
+  assert_true(issues("class boolean {}") > 0)
+  // An ordinary class name is fine.
+  @test.assert_eq(issues("class Foo {}"), 0)
+}

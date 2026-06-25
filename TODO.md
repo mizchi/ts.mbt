@@ -1572,6 +1572,18 @@ conformance sources (`.errors.txt` baseline = ground truth):
     corpus TP 1675 -> 1677, 0 FP; pinned recall 642 -> 644
     (typePredicateOnVariableDeclaration01/02). Whitebox-tested.
 
+2026-06-25 (T108)  646/815 (79 %)        414/414 ( 0 FP)   class named with predefined-type keyword
+
+  T108 -- a class whose name is a predefined-type keyword (`class void {}`,
+    `class string {}`, `class number {}`, `class boolean {}`) is always a TS
+    error (TS1005/TS2414). `void`/`string`/`number`/`boolean` tokenize as
+    dedicated `*Type` kinds, so `parse_class_decl_with_abstract` previously
+    lost the name to the `<class>` recovery fallback and the existing
+    `check_reserved_class_names` couldn't see it. Capture the keyword spelling
+    in the class-name position. Whole-corpus TP 1677 -> 1679, 0 FP; pinned
+    recall 644 -> 646 (classWithPredefinedTypesAsNames2,
+    objectTypesWithPredefinedTypesAsName2). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary
