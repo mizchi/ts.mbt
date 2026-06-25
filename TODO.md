@@ -1562,6 +1562,16 @@ conformance sources (`.errors.txt` baseline = ground truth):
     name not being shadowed by a declared local. Whole-corpus 0 FP; pinned
     recall 641 -> 642 (nullAssignedToUndefined). Whitebox-tested.
 
+2026-06-25 (T107)  644/815 (79 %)        414/414 ( 0 FP)   TS1228 type predicate only in return position
+
+  T107 -- TS1228 ("A type predicate is only allowed in return type position
+    for functions and methods"). `check_misplaced_type_predicates` scans
+    non-return-type positions for `TypePredicate(_, _)`: top-level
+    Var/Let/Const declared types, function & ambient-import params, interface
+    fields, and type-alias bodies. Return-type predicates stay silent. Whole-
+    corpus TP 1675 -> 1677, 0 FP; pinned recall 642 -> 644
+    (typePredicateOnVariableDeclaration01/02). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary

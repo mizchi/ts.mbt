@@ -14706,6 +14706,53 @@ fn check_rest_param_position(module_ : @ast.TsModule) -> Array[ExprIssue] {
 }
 
 ///|
+/// TS1228: a type predicate (`x is T`) is only allowed in the return-type
+/// position of a function or method. The parser models it as `TypePredicate`,
+/// so flag it anywhere we know is *not* a return type: a variable / parameter /
+/// field annotation or a type-alias body. (Return types are never routed
+/// through this pass.) Sound — a type predicate is never valid in these spots.
+fn check_misplaced_type_predicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  let msg = "a type predicate is only allowed in return type position for functions and methods"
+  for stmt in module_.top_level_stmts {
+    match stmt {
+      Var(_, ty, _) | Let(_, ty, _) | Const(_, ty, _) =>
+        if ty is TypePredicate(_, _) {
+          issues.push({ path: "top-level", message: msg })
+        }
+      _ => ()
+    }
+  }
+  for f in module_.funcs {
+    for p in f.params {
+      if p.type_ is TypePredicate(_, _) {
+        issues.push({ path: "function \{f.name}", message: msg })
+      }
+    }
+  }
+  for imp in module_.imports {
+    for p in imp.params {
+      if p.1 is TypePredicate(_, _) {
+        issues.push({ path: "function \{imp.name}", message: msg })
+      }
+    }
+  }
+  for iface in module_.interfaces {
+    for fld in iface.fields {
+      if fld.1 is TypePredicate(_, _) {
+        issues.push({ path: "interface \{iface.name}", message: msg })
+      }
+    }
+  }
+  for ta in module_.type_aliases {
+    if ta.type_ is TypePredicate(_, _) {
+      issues.push({ path: "type \{ta.name}", message: msg })
+    }
+  }
+  issues
+}
+
+///|
 /// TS2414: a class name may not be one of the predefined type keywords. Mirrors
 /// `checkTypeNameIsReserved` in tsc — the exact reserved set is `any`,
 /// `unknown`, `never`, `number`, `bigint`, `boolean`, `string`, `symbol`,
@@ -15758,6 +15805,9 @@ fn check_module_function_bodies_layered(
     }
   }
   for issue in check_var_redeclaration_types(module_, resolver) {
+    all.push(issue)
+  }
+  for issue in check_misplaced_type_predicates(module_) {
     all.push(issue)
   }
   for issue in check_super_before_this(module_) {
