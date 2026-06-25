@@ -14420,6 +14420,85 @@ fn any_expr_embeds_super(es : Array[@ast.TsExpr]) -> Bool {
 }
 
 ///|
+/// True when `e` accesses a *property* of `super` (`super.x`, `super[k]`,
+/// `super.x(...)`) outside a nested function. Distinct from the `super(...)`
+/// call itself, which is legitimate. Used for TS17011 ("'super' must be called
+/// before accessing a property of 'super'"). Does not descend into nested
+/// functions (a `super.x` inside an arrow runs when the arrow is *called*, not
+/// where it is written).
+fn expr_uses_super_property(e : @ast.TsExpr) -> Bool {
+  match e {
+    PropAccess(Var("super"), _)
+    | IndexAccess(Var("super"), _)
+    | MethodCall(Var("super"), _, _) => return true
+    _ => ()
+  }
+  match e {
+    ArrowFunc(_, _, _, _) | FuncExpr(_) | NativeClassExpr(_, _) => false
+    PropAccess(r, _)
+    | NonNull(r)
+    | OptionalChain(r)
+    | Spread(r)
+    | Await(r)
+    | UnaryOp(_, r)
+    | As(r, _)
+    | Satisfies(r, _)
+    | YieldStar(r)
+    | PureCall(r)
+    | TypeArgs(_, r) => expr_uses_super_property(r)
+    Yield(opt) =>
+      match opt {
+        Some(r) => expr_uses_super_property(r)
+        None => false
+      }
+    IndexAccess(a, b) | Seq(a, b) | BinOp(_, a, b) =>
+      expr_uses_super_property(a) || expr_uses_super_property(b)
+    Cond(a, b, c) =>
+      expr_uses_super_property(a) ||
+      expr_uses_super_property(b) ||
+      expr_uses_super_property(c)
+    MethodCall(r, _, args) =>
+      expr_uses_super_property(r) || any_expr_uses_super_property(args)
+    Call(_, args) => any_expr_uses_super_property(args)
+    CallExpr(callee, args) | NewExpr(callee, args) =>
+      expr_uses_super_property(callee) || any_expr_uses_super_property(args)
+    New(_, args) => any_expr_uses_super_property(args)
+    ArrayLit(items) => any_expr_uses_super_property(items)
+    TemplateLiteral(_, parts) => any_expr_uses_super_property(parts)
+    ObjectLit(entries) => {
+      for ent in entries {
+        if expr_uses_super_property(ent.1) {
+          return true
+        }
+      }
+      false
+    }
+    ComputedProp(k, v) =>
+      expr_uses_super_property(k) || expr_uses_super_property(v)
+    AssignExpr(_, v) => expr_uses_super_property(v)
+    CompoundAssignExpr(t, _, v) =>
+      expr_uses_super_property(t) || expr_uses_super_property(v)
+    PropAssignExpr(r, _, v) =>
+      expr_uses_super_property(r) || expr_uses_super_property(v)
+    IndexAssignExpr(r, i, v) =>
+      expr_uses_super_property(r) ||
+      expr_uses_super_property(i) ||
+      expr_uses_super_property(v)
+    _ => false
+  }
+}
+
+///|
+fn any_expr_uses_super_property(es : Array[@ast.TsExpr]) -> Bool {
+  for e in es {
+    if expr_uses_super_property(e) {
+      return true
+    }
+  }
+  false
+}
+
+///|
 /// TS17009: in the constructor of a *derived* class, `this` must not be
 /// accessed before `super(…)` is called. We model the common, statically
 /// obvious cases soundly:
@@ -14449,6 +14528,9 @@ fn check_super_before_this(module_ : @ast.TsModule) -> Array[ExprIssue] {
       _ => ()
     }
     let mut flagged = false
+    // TS17011: `super.x` accessed before the `super(…)` call (a separate
+    // diagnostic from the TS17009 `this` case below).
+    let mut super_prop_flagged = false
     // (1) Parameter defaults run before the body, hence before `super`.
     for d in cls.constructor_param_defaults {
       match d {
@@ -14480,6 +14562,11 @@ fn check_super_before_this(module_ : @ast.TsModule) -> Array[ExprIssue] {
                     if any_expr_uses_this(args) {
                       flagged = true
                     }
+                    // A `super.x` in the super-call arguments also runs before
+                    // the call completes (`super(super.x())`).
+                    if any_expr_uses_super_property(args) {
+                      super_prop_flagged = true
+                    }
                     super_seen = true
                     continue
                   }
@@ -14494,10 +14581,16 @@ fn check_super_before_this(module_ : @ast.TsModule) -> Array[ExprIssue] {
             }
             match exprs {
               Some(es) =>
-                // If the statement embeds the `super` call (e.g.
-                // `let x = { k: super(), j: this.p }`), evaluation order is not
-                // statically obvious — treat `super` as called and do not flag.
-                if any_expr_embeds_super(es) {
+                // A `super.x` property access before `super(…)` is TS17011.
+                // Check it *before* the embeds-super short-circuit below, since
+                // `super.x` also "embeds super" but is not the call.
+                if any_expr_uses_super_property(es) {
+                  super_prop_flagged = true
+                  break
+                } else if any_expr_embeds_super(es) {
+                  // If the statement embeds the `super` call (e.g.
+                  // `let x = { k: super(), j: this.p }`), evaluation order is
+                  // not statically obvious — treat `super` as called.
                   super_seen = true
                 } else if any_expr_uses_this(es) {
                   flagged = true
@@ -14516,6 +14609,12 @@ fn check_super_before_this(module_ : @ast.TsModule) -> Array[ExprIssue] {
       issues.push({
         path: "class \{cls.name}.constructor",
         message: "`super` must be called before accessing `this` in the constructor of a derived class",
+      })
+    }
+    if super_prop_flagged {
+      issues.push({
+        path: "class \{cls.name}.constructor",
+        message: "`super` must be called before accessing a property of `super` in the constructor of a derived class",
       })
     }
   }

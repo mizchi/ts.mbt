@@ -1715,6 +1715,19 @@ conformance sources (`.errors.txt` baseline = ground truth):
     is allowed. Whole-corpus TP 1696 -> 1697, 0 FP; pinned recall 660 -> 661
     (propertyOverridesAccessors6). Whitebox-tested.
 
+2026-06-25 (T120)  662/815 (81 %)        414/414 ( 0 FP)   TS17011 super property access before super()
+
+  T120 -- TS17011 ("'super' must be called before accessing a property of
+    'super' in the constructor of a derived class"). Extended
+    `check_super_before_this` (which already scans the derived constructor body
+    up to the `super(…)` call) with `expr_uses_super_property`, detecting a
+    `super.x` / `super[k]` / `super.x()` access -- including inside the
+    super-call arguments (`super(super.x())`) -- before the call. Checked before
+    the embeds-super short-circuit (a `super.x` also "embeds super" but is not
+    the call); does not descend into nested functions. Whole-corpus TP 1697 ->
+    1698, 0 FP; pinned recall 661 -> 662 (superPropertyInConstructorBeforeSuperCall).
+    Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary
