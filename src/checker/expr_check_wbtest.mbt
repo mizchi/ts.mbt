@@ -9881,3 +9881,30 @@ test "expr_check: abstract method with implementation (TS1245)" {
   // A concrete method with a body is fine.
   @test.assert_eq(issues("class C { foo(): void {} }"), 0)
 }
+
+///|
+test "expr_check: inherited constructor arity (TS2554)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A derived class with no own constructor inherits the base's signature;
+  // `new Derived()` with too few arguments is an error.
+  assert_true(
+    issues(
+      "class Base { constructor(x: number) {} } class Derived extends Base {} let d = new Derived();",
+    ) >
+    0,
+  )
+  // Supplying the inherited argument is fine.
+  @test.assert_eq(
+    issues(
+      "class Base { constructor(x: number) {} } class Derived extends Base {} let d = new Derived(1);",
+    ),
+    0,
+  )
+  // A zero-arg base inherited through a derived class stays silent.
+  @test.assert_eq(
+    issues("class Base {} class Derived extends Base {} let d = new Derived();"),
+    0,
+  )
+}
