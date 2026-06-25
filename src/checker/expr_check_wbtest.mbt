@@ -320,6 +320,7 @@ fn parse_module_or_empty(src : String) -> @ast.TsModule {
         use_define_for_class_fields: false,
         deprecated_compiler_options: [],
         parameter_property_misuses: [],
+        param_optional_initializer_misuses: [],
         top_level_stmts: [],
       }
   } noraise {
@@ -9819,4 +9820,18 @@ test "expr_check: type alias named with predefined-type keyword (TS2457)" {
   assert_true(issues("type object = number;") > 0)
   // An ordinary alias name is fine.
   @test.assert_eq(issues("type Foo = number;"), 0)
+}
+
+///|
+test "expr_check: parameter optional marker plus initializer (TS1015)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A parameter cannot be both optional and have an initializer.
+  assert_true(issues("function f(x?: number = 1) {}") > 0)
+  assert_true(issues("var g = (y?: string = \"a\") => {};") > 0)
+  // An optional parameter without an initializer is fine.
+  @test.assert_eq(issues("function h(x?: number) {}"), 0)
+  // An explicit `| undefined` type with an initializer is legal (no `?`).
+  @test.assert_eq(issues("function k(x: number | undefined = 1) {}"), 0)
 }

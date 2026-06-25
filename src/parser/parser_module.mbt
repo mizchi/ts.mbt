@@ -135,6 +135,7 @@ fn empty_ts_module() -> @ast.TsModule {
     top_level_stmts: [],
     deprecated_compiler_options: [],
     parameter_property_misuses: [],
+    param_optional_initializer_misuses: [],
   }
 }
 
@@ -3272,6 +3273,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
     use_define_for_class_fields: detect_use_define_for_class_fields(self.src),
     deprecated_compiler_options: detect_deprecated_compiler_options(self.src),
     parameter_property_misuses: self.param_property_misuses,
+    param_optional_initializer_misuses: self.param_optional_initializer_misuses,
   }
 }
 

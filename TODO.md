@@ -1594,6 +1594,17 @@ conformance sources (`.errors.txt` baseline = ground truth):
     `check_reserved_class_names`. Whole-corpus TP 1679 -> 1680, 0 FP; pinned
     recall 646 -> 647 (reservedNamesInAliases). Whitebox-tested.
 
+2026-06-25 (T110)  648/815 (79 %)        414/414 ( 0 FP)   TS1015 optional param + initializer
+
+  T110 -- TS1015 ("Parameter cannot have question mark and initializer"). A
+    parameter declared with both `?` and `= e` is always a syntax error. The
+    `?` is otherwise folded into the parameter type (`x?: T` -> `T | undefined`),
+    making it indistinguishable from a legal `x: T | undefined = e`, so the
+    conflict is recorded at parse time (new `param_optional_initializer_misuses`
+    on the Parser / TsModule, mirroring `parameter_property_misuses`) and
+    surfaced by the checker. Whole-corpus TP 1680 -> 1682, 0 FP; pinned recall
+    647 -> 648 (callSignatureWithOptionalParameterAndInitializer). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary
