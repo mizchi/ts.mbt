@@ -13771,6 +13771,27 @@ fn check_abstract_modifier_rules(module_ : @ast.TsModule) -> Array[ExprIssue] {
         message: "`abstract` modifier can only appear on a class, method, or property declaration",
       })
     }
+    // TS1245: an `abstract` method cannot carry an implementation (`abstract
+    // foo() {}`). A genuinely-abstract method has no body, so a body on a member
+    // whose name is in `abstract_set` is the abstract-with-implementation form.
+    for m in cls.methods {
+      if abstract_set.contains(m.name) && m.body is Some(_) {
+        issues.push({
+          path: "class \{cls.name}.\{m.name}",
+          message: "method `\{m.name}` cannot have an implementation because it is marked abstract",
+        })
+      }
+    }
+    // TS1267: an `abstract` property cannot have an initializer (`abstract prop
+    // = 1`).
+    for p in cls.properties {
+      if abstract_set.contains(p.name) && p.has_initializer {
+        issues.push({
+          path: "class \{cls.name}.\{p.name}",
+          message: "property `\{p.name}` cannot have an initializer because it is marked abstract",
+        })
+      }
+    }
   }
   issues
 }

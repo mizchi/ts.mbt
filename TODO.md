@@ -1474,6 +1474,17 @@ conformance sources (`.errors.txt` baseline = ground truth):
     switch-case overlap checks (not loose-eq). Whole-corpus 0 FP (oracle); pinned
     recall 630 -> 632, precision 414/414 (0 FP). Whitebox-tested.
 
+2026-06-25 (T99)   633/815 (78 %)        414/414 ( 0 FP)   TS1267 abstract property initializer (+ TS1245 abstract impl)
+
+  T99 -- abstract-member body/initializer rules, added to
+    `check_abstract_modifier_rules`. TS1267: an `abstract` property may not have
+    an initializer (`abstract prop = 1`). TS1245: an `abstract` method may not
+    have an implementation (`abstract foo() {}`) — wired in, but the parser
+    currently does not retain a body for an abstract method, so only TS1267
+    fires today. Both are decided locally from `abstract_members` + the member's
+    `has_initializer` / `body`, so 0 multi-file-concat risk. Whole-corpus 0 FP
+    (oracle); pinned recall 632 -> 633, precision 414/414 (0 FP). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary

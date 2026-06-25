@@ -9600,3 +9600,15 @@ test "expr_check: literal-union disjoint comparison (TS2367/TS2678)" {
     0,
   )
 }
+
+///|
+// TS1267 / TS1245: abstract members cannot carry an initializer / implementation.
+test "expr_check: abstract member with init/impl (TS1267/TS1245)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  assert_true(issues("abstract class C { abstract prop: number = 1; }") > 0)
+  // A bodiless abstract member is fine.
+  @test.assert_eq(issues("abstract class C { abstract prop: number; }"), 0)
+  @test.assert_eq(issues("abstract class C { abstract foo(): void; }"), 0)
+}
