@@ -9630,3 +9630,18 @@ test "expr_check: tuple too-many vs variadic target (TS2345)" {
     0,
   )
 }
+
+///|
+// Field-type inference from a primitive-literal initializer: an unannotated
+// field `x = 1` is `number`, so `this.x = "s"` is a TS2322.
+test "expr_check: inferred primitive field assignment (TS2322)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  assert_true(issues("class C { a = 1; m() { this.a = \"s\"; } }") > 0)
+  assert_true(issues("class C { #a = 10; m() { this.#a = \"x\"; } }") > 0)
+  // Correct-typed assignment -> silent (literal widened to the primitive).
+  @test.assert_eq(issues("class C { a = 1; m() { this.a = 2; } }"), 0)
+  // Non-primitive initializer -> not inferred -> silent (no FP).
+  @test.assert_eq(issues("class C { a = {}; m() { this.a = 5; } }"), 0)
+}

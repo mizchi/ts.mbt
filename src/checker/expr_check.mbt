@@ -1346,6 +1346,43 @@ fn Resolver::field_on_any_union_member(
 ///|
 
 ///|
+/// When `recv` is a class instance whose field `field` has no type annotation
+/// but is initialized to a *primitive literal* (`x = 1`, `s = "hi"`), return the
+/// widened primitive type (`number` / `string` / …). Used by the assignment
+/// checks so `this.x = "s"` (x inferred `number`) is flagged even without an
+/// explicit annotation. Restricted to primitive widenings inferred under an
+/// empty env — a non-literal / reference / object initializer yields `None`, so
+/// it never concludes a wrong type from an initializer it can't pin down.
+fn inferred_primitive_field_type(
+  resolver : Resolver,
+  recv : @ast.TsType,
+  field : String,
+) -> @ast.TsType? {
+  match resolver.unwrap(recv) {
+    Named(name) =>
+      match resolver.classes.get(name) {
+        Some(cls) => {
+          let env = ExprEnv::new()
+          for fi in cls.instance_field_inits {
+            if fi.0 == field {
+              let t = widen_literal(
+                resolver.unwrap(infer_expr(env, resolver, fi.1)),
+              )
+              return match t {
+                Number | String_ | Boolean | BigInt => Some(t)
+                _ => None
+              }
+            }
+          }
+          None
+        }
+        None => None
+      }
+    _ => None
+  }
+}
+
+///|
 /// True when assigning to `recv.field` is forbidden because the field is
 /// declared `readonly` on a reachable interface/class member. For a union
 /// receiver, *any* member with the readonly bit set is enough — the value
@@ -10912,8 +10949,20 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       check_call_args_in_expr(env, value, ctx)
       let recv_ty = infer_expr(env, ctx.resolver, recv)
       match ctx.resolver.lookup_field(recv_ty, prop) {
-        Some(target_ty) =>
+        Some(target_ty) => {
+          // When the field carries no annotation (`x = 1`) its declared type is
+          // `Any`; recover the widened primitive from the initializer so a
+          // mismatched assignment is still flagged.
+          let target_ty = if is_checkable(target_ty) {
+            target_ty
+          } else {
+            match inferred_primitive_field_type(ctx.resolver, recv_ty, prop) {
+              Some(t) => t
+              None => target_ty
+            }
+          }
           check_expr_against(env, value, target_ty, ctx, "assign `.\{prop}`")
+        }
         None =>
           if is_checkable(recv_ty) &&
             !is_nullable_type(recv_ty) &&
@@ -12248,8 +12297,17 @@ fn check_call_args_in_expr(
         )
       }
       match ctx.resolver.lookup_field(recv_ty, prop) {
-        Some(target_ty) =>
+        Some(target_ty) => {
+          let target_ty = if is_checkable(target_ty) {
+            target_ty
+          } else {
+            match inferred_primitive_field_type(ctx.resolver, recv_ty, prop) {
+              Some(t) => t
+              None => target_ty
+            }
+          }
           check_expr_against(env, v, target_ty, ctx, "assign `.\{prop}`")
+        }
         None =>
           if is_checkable(recv_ty) &&
             !is_nullable_type(recv_ty) &&

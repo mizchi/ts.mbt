@@ -1497,6 +1497,18 @@ conformance sources (`.errors.txt` baseline = ground truth):
     trailing slots). Whole-corpus 0 FP, TP +1; pinned recall unchanged at 633.
     Whitebox-tested.
 
+2026-06-25 (T101)  634/815 (78 %)        414/414 ( 0 FP)   field-type inference from primitive-literal initializer
+
+  T101 -- infer an unannotated class field's type from a primitive-literal
+    initializer (`x = 1` -> `number`, `s = "hi"` -> `string`) in the assignment
+    checks, so `this.x = "s"` is flagged (TS2322) even without an annotation.
+    `inferred_primitive_field_type` widens the init type and returns it only for
+    `number` / `string` / `boolean` / `bigint` (a non-literal / object /
+    reference initializer yields `None`), so it never concludes a wrong type
+    from an initializer it can't pin down — 0 FP. Wired into both PropAssign and
+    PropAssignExpr where the declared field type is `Any`. Whole-corpus 0 FP, TP
+    +1; pinned recall 633 -> 634 (privateNameFieldsESNext). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary
