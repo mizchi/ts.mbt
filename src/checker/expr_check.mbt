@@ -3461,6 +3461,12 @@ fn is_permissively_suppressed(sub_path : String, message : String) -> Bool {
     // tuple parameters (`...args: [...T]`) make the apparent arity
     // wrong (the call site unpacks a tuple of unknown length).
     if sub_path.contains("call ") && sub_path.contains(" arg[") {
+      // Keep the "too many elements" case (a hard error even with optional /
+      // rest parameters); suppress only the "too few" case, where a variadic-
+      // tuple parameter can legitimately unpack a shorter literal.
+      if message.contains("(too many)") {
+        return false
+      }
       return true
     }
     return false
@@ -7459,11 +7465,28 @@ fn check_array_lit_against_tuple(
       _ => ()
     }
   }
-  if !has_spread && items.length() != slots.length() {
+  // A `...rest` slot in the *target* tuple (`[a, ...b[]]`) makes its length
+  // open-ended, so a count mismatch is not an error. Optional trailing slots
+  // (`[a, b?]`) similarly make a *shorter* literal valid — but never a *longer*
+  // one, so supplying more elements than a fixed-length tuple has is always an
+  // error (marked `(too many)` so the permissive filter can keep it in
+  // call-argument position, where the "too few" case stays suppressed).
+  let mut has_rest_slot = false
+  for s in slots {
+    if s is Rest(_) {
+      has_rest_slot = true
+    }
+  }
+  if !has_spread && !has_rest_slot && items.length() != slots.length() {
+    let excess = if items.length() > slots.length() {
+      " (too many)"
+    } else {
+      ""
+    }
     record(
       ctx,
       sub_path,
-      "expected tuple of \{slots.length()} element(s), got \{items.length()}",
+      "expected tuple of \{slots.length()} element(s), got \{items.length()}\{excess}",
     )
   }
   let n = if items.length() < slots.length() {

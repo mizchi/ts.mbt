@@ -9612,3 +9612,21 @@ test "expr_check: abstract member with init/impl (TS1267/TS1245)" {
   @test.assert_eq(issues("abstract class C { abstract prop: number; }"), 0)
   @test.assert_eq(issues("abstract class C { abstract foo(): void; }"), 0)
 }
+
+///|
+// Tuple-arity in call-argument position: too many elements is a hard error even
+// with optional/rest params; a `...rest` target slot makes the length open.
+test "expr_check: tuple too-many vs variadic target (TS2345)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Fixed-length tuple param, too many elements -> flagged.
+  assert_true(
+    issues("declare function f(x: [number, number]): void; f([1, 2, 3]);") > 0,
+  )
+  // Variadic target tuple accepts extra elements -> silent.
+  @test.assert_eq(
+    issues("declare function f<T, U>(x: [T, ...U[]]): void; f([1, 2, 3]);"),
+    0,
+  )
+}

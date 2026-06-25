@@ -1485,6 +1485,18 @@ conformance sources (`.errors.txt` baseline = ground truth):
     `has_initializer` / `body`, so 0 multi-file-concat risk. Whole-corpus 0 FP
     (oracle); pinned recall 632 -> 633, precision 414/414 (0 FP). Whitebox-tested.
 
+2026-06-25 (T100)  633/815 (78 %)        414/414 ( 0 FP)   tuple too-many vs variadic-target (whole-corpus TP +1)
+
+  T100 -- tuple-arity in call-argument position. `check_array_lit_against_tuple`
+    now (a) skips the count check when the *target* tuple has a `...rest` slot
+    (`[T, ...U[]]` is open-ended — this removed a latent over-detection on
+    variadic targets like restTupleElements1's `f0`), and (b) marks the
+    "too many elements" case `(too many)` so the permissive filter keeps it in
+    call-argument position (a longer literal is a hard error even with optional /
+    rest *parameters*), while the "too few" case stays suppressed (optional
+    trailing slots). Whole-corpus 0 FP, TP +1; pinned recall unchanged at 633.
+    Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary
