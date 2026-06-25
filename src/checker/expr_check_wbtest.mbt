@@ -9705,3 +9705,27 @@ test "expr_check: null/undefined to enum (TS2322)" {
     0,
   )
 }
+
+///|
+// TS2322: a bare unconstrained type parameter is not assignable to a concrete
+// object type. Constrained type params / any / T-to-T stay silent.
+test "expr_check: unconstrained type param to object type (TS2322)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  assert_true(issues("function f<T>(a: T) { let b: { s: number } = a; }") > 0)
+  assert_true(
+    issues("interface I { x: number } function f<T>(a: T) { let b: I = a; }") >
+    0,
+  )
+  // Constrained type parameter may satisfy the target -> silent.
+  @test.assert_eq(
+    issues(
+      "function f<T extends { s: number }>(a: T) { let b: { s: number } = a; }",
+    ),
+    0,
+  )
+  // `any` / same type parameter targets -> silent.
+  @test.assert_eq(issues("function f<T>(a: T) { let b: any = a; }"), 0)
+  @test.assert_eq(issues("function f<T>(a: T) { let b: T = a; }"), 0)
+}
