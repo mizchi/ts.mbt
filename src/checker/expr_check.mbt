@@ -15252,6 +15252,12 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
           path: "class \{cls.name}",
           message: "multiple constructor implementations are not allowed",
         })
+      } else if name == "<index-sig-modifier>" {
+        // TS1071: an accessibility modifier on an index signature.
+        issues.push({
+          path: "class \{cls.name}",
+          message: "accessibility modifier cannot appear on an index signature",
+        })
       } else {
         issues.push({
           path: "class \{cls.name}",

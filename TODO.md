@@ -1617,6 +1617,17 @@ conformance sources (`.errors.txt` baseline = ground truth):
     1682 -> 1683, 0 FP; pinned recall 648 -> 649
     (classWithTwoConstructorDefinitions). Whitebox-tested.
 
+2026-06-25 (T112)  651/815 (80 %)        414/414 ( 0 FP)   TS1071 accessibility modifier on index signature
+
+  T112 -- TS1071 ("'public'/'private'/'protected' modifier cannot appear on an
+    index signature"). `parse_class_body` now tracks whether an explicit
+    accessibility modifier preceded a member (the default "public" is otherwise
+    indistinguishable from a written one) and, when one precedes an index
+    signature, records an `<index-sig-modifier>` sentinel in the class's
+    duplicate-member channel; the checker maps it to the dedicated diagnostic.
+    Whole-corpus TP 1683 -> 1687, 0 FP; pinned recall 649 -> 651 (privateIndexer,
+    publicIndexer). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary
