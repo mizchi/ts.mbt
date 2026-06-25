@@ -1459,6 +1459,21 @@ conformance sources (`.errors.txt` baseline = ground truth):
     Whole-corpus 0 FP (oracle); pinned recall 627 -> 630, precision 414/414
     (0 FP). Whitebox-tested.
 
+2026-06-25 (T98)   632/815 (78 %)        414/414 ( 0 FP)   TS2367/TS2678 literal-union disjoint comparison
+
+  T98 -- TS2367 / TS2678 for literal-union comparisons that `types_can_overlap`
+    was too coarse for (it treats every union as overlapping). New
+    `literal_union_disjoint`: when both operands flatten to fully-enumerable
+    same-kind literal sets (string- or number-literal, descending into nested
+    discriminant unions like `"a" | ("b" | "c")`) with empty intersection, the
+    `===` / `!==` / `switch`-case comparison is always false. A `string` /
+    `number` / `Named` / unrenderable-residue member on either side returns
+    `false` (no conclusion) — so it never fires on `"a" | string`, on enum-member
+    residue (discriminatedUnionTypes4), or on `case null` over a mixed union
+    (literalTypes1), keeping it 0 FP. Wired into the strict-equality and
+    switch-case overlap checks (not loose-eq). Whole-corpus 0 FP (oracle); pinned
+    recall 630 -> 632, precision 414/414 (0 FP). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary

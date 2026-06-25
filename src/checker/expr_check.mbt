@@ -4419,6 +4419,109 @@ fn types_can_overlap(a : @ast.TsType, b : @ast.TsType) -> Bool {
 }
 
 ///|
+
+///|
+/// Flatten `ty` into the set of string-literal values it denotes, descending
+/// into nested unions. Returns `false` (leaving `out` partial) the moment a
+/// non-string-literal member is seen — `string`, a `Named` ref, an unrenderable
+/// residue, etc. — so a caller only ever concludes "disjoint" on a type it can
+/// fully enumerate.
+fn collect_string_literals(ty : @ast.TsType, out : Array[String]) -> Bool {
+  match ty {
+    Literal(s) => {
+      out.push(s)
+      true
+    }
+    Union(parts) => {
+      for p in parts {
+        if not(collect_string_literals(p, out)) {
+          return false
+        }
+      }
+      true
+    }
+    _ => false
+  }
+}
+
+///|
+fn pure_string_literal_set(ty : @ast.TsType) -> Array[String]? {
+  let out : Array[String] = []
+  if collect_string_literals(ty, out) && out.length() > 0 {
+    Some(out)
+  } else {
+    None
+  }
+}
+
+///|
+fn collect_number_literals(ty : @ast.TsType, out : Array[String]) -> Bool {
+  match ty {
+    NumberLiteral(s) => {
+      out.push(s)
+      true
+    }
+    Union(parts) => {
+      for p in parts {
+        if not(collect_number_literals(p, out)) {
+          return false
+        }
+      }
+      true
+    }
+    _ => false
+  }
+}
+
+///|
+fn pure_number_literal_set(ty : @ast.TsType) -> Array[String]? {
+  let out : Array[String] = []
+  if collect_number_literals(ty, out) && out.length() > 0 {
+    Some(out)
+  } else {
+    None
+  }
+}
+
+///|
+/// TS2367 for literal comparisons that `types_can_overlap` is too coarse for:
+/// true when both operands are fully-enumerable same-kind literal sets
+/// (string-literal or number-literal, flattening nested unions) whose values do
+/// not intersect — so `x === lit` (x: "A" | "B"; lit: "X") is always false.
+/// Both sides must be pure literal sets, so a `string` / `number` / `Named` /
+/// residue member on either side returns `false` (no conclusion), keeping it
+/// false-positive-free. This is the discriminated-union comparison case.
+fn literal_union_disjoint(a : @ast.TsType, b : @ast.TsType) -> Bool {
+  match (pure_string_literal_set(a), pure_string_literal_set(b)) {
+    (Some(sa), Some(sb)) => {
+      for x in sa {
+        for y in sb {
+          if x == y {
+            return false
+          }
+        }
+      }
+      return true
+    }
+    _ => ()
+  }
+  match (pure_number_literal_set(a), pure_number_literal_set(b)) {
+    (Some(na), Some(nb)) => {
+      for x in na {
+        for y in nb {
+          if x == y {
+            return false
+          }
+        }
+      }
+      return true
+    }
+    _ => ()
+  }
+  false
+}
+
+///|
 fn check_binop_operands(
   env : ExprEnv,
   op : @ast.TsBinOp,
@@ -4476,7 +4579,7 @@ fn check_binop_operands(
         !is_nullish_kw(r) &&
         is_checkable(lt) &&
         is_checkable(rt) &&
-        !types_can_overlap(lt, rt) {
+        (not(types_can_overlap(lt, rt)) || literal_union_disjoint(lt, rt)) {
         record(
           ctx,
           "strict equality",
@@ -11091,7 +11194,10 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
             let case_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, e))
             if is_checkable(scrutinee_ty) &&
               is_checkable(case_ty) &&
-              !types_can_overlap(scrutinee_ty, case_ty) {
+              (
+                not(types_can_overlap(scrutinee_ty, case_ty)) ||
+                literal_union_disjoint(scrutinee_ty, case_ty)
+              ) {
               record(
                 ctx,
                 "switch case",

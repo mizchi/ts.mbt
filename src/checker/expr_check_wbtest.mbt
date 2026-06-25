@@ -9547,3 +9547,56 @@ test "expr_check: rest parameter must be last (TS1014)" {
   // A single trailing rest parameter is fine.
   @test.assert_eq(issues("function f(a: number, ...x: number[]) {}"), 0)
 }
+
+///|
+// TS2367 / TS2678: comparing a literal-union against a disjoint literal is
+// always false. Pure literal sets only (flattening nested discriminant unions);
+// any `string` / `Named` / residue member keeps it silent.
+test "expr_check: literal-union disjoint comparison (TS2367/TS2678)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Discriminant `===` against a value not in the union.
+  assert_true(
+    issues(
+      (
+        #|interface Sq { kind: "square" }
+        #|interface Ci { kind: "circle" }
+        #|type Shape = Sq | Ci;
+        #|function f(s: Shape) { return s.kind === "triangle"; }
+      ),
+    ) >
+    0,
+  )
+  // Nested discriminant union flattens: kind is "a" | ("b" | "c").
+  assert_true(
+    issues(
+      (
+        #|interface A { kind: "a" }
+        #|interface B { kind: "b" | "c" }
+        #|type U = A | B;
+        #|function f(x: U) { return x.kind === "z"; }
+      ),
+    ) >
+    0,
+  )
+  // switch case not in the literal union.
+  assert_true(
+    issues(
+      (
+        #|function f(x: "a" | "b") { switch (x) { case "z": return 1; } return 0; }
+      ),
+    ) >
+    0,
+  )
+  // A union containing `string` overlaps any literal -> silent.
+  @test.assert_eq(
+    issues("function f(x: \"a\" | string) { return x === \"z\"; }"),
+    0,
+  )
+  // Comparison against an actual member -> silent.
+  @test.assert_eq(
+    issues("function f(x: \"a\" | \"b\") { return x === \"a\"; }"),
+    0,
+  )
+}
