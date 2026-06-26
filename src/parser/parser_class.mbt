@@ -1072,6 +1072,7 @@ fn Parser::parse_class_body(
   Int,
   Bool,
   Bool,
+  Bool,
 ) raise ParseError {
   let _ = self.expect(LBrace)
   // Class body is implicitly strict mode
@@ -1089,6 +1090,19 @@ fn Parser::parse_class_body(
   // TS1245 ("Method cannot have an implementation because it is marked
   // abstract").
   let mut abstract_member_with_body = false
+  // Bodyless overload-signature method names by static-ness. A name appearing
+  // as both a static and an instance overload signature is TS2387/2388. Uses
+  // `has_body_block` (not the AST body, which can't tell an empty `{}` from a
+  // signature) so an ordinary static+instance method *pair with bodies* is not
+  // flagged.
+  let ov_static : Map[String, Unit] = {}
+  let ov_instance : Map[String, Unit] = {}
+  // Body-bearing (implementation) methods by name, per static-ness. A name
+  // with both a static and an instance *implementation* is two distinct
+  // overload sets (e.g. `foo(){}` and `static foo(){}`), which is legal even
+  // when each side also has bodyless overload signatures.
+  let impl_static : Map[String, Unit] = {}
+  let impl_instance : Map[String, Unit] = {}
   let elements : Array[ClassElement] = []
   // Names declared `private` / `protected`, collected so the class decl
   // can expose member visibility to the checker (TS2341 / TS2445).
@@ -1398,6 +1412,23 @@ fn Parser::parse_class_body(
         if is_abstract_member && has_body_block {
           abstract_member_with_body = true
         }
+        // Track bodyless overload signatures (non-accessor, non-abstract) for
+        // the TS2387/2388 static/instance-mix check.
+        if accessor_kind is None &&
+          not(is_abstract_member) &&
+          method_name != "<computed>" {
+          if has_body_block {
+            if is_static {
+              impl_static[method_name] = ()
+            } else {
+              impl_instance[method_name] = ()
+            }
+          } else if is_static {
+            ov_static[method_name] = ()
+          } else {
+            ov_instance[method_name] = ()
+          }
+        }
         elements.push(Method(is_static, key, accessor_kind, func))
       }
     } else {
@@ -1436,9 +1467,19 @@ fn Parser::parse_class_body(
   }
   let _ = self.expect(RBrace)
   self.in_strict = prev_strict
+  let mut overload_static_mix = false
+  for name in ov_instance.keys() {
+    // Bodyless signatures on both sides, but NOT a full instance+static
+    // implementation pair (which would be two distinct, legal overload sets).
+    if ov_static.contains(name) &&
+      not(impl_static.contains(name) && impl_instance.contains(name)) {
+      overload_static_mix = true
+      break
+    }
+  }
   (
     ctor, elements, private_members, protected_members, abstract_members, ctor_impl_count,
-    index_sig_modifier_misuse, abstract_member_with_body,
+    index_sig_modifier_misuse, abstract_member_with_body, overload_static_mix,
   )
 }
 
@@ -1489,6 +1530,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     private_members,
     protected_members,
     abstract_members,
+    _,
     _,
     _,
     _,
@@ -2153,6 +2195,7 @@ fn Parser::parse_class_decl_with_abstract(
     ctor_impl_count,
     index_sig_modifier_misuse,
     abstract_member_with_body,
+    overload_static_mix,
   ) = self.parse_class_body()
   self.current_class_brand = prev_brand
   self.restore_local_type_param_bounds(class_type_param_bound_len)
@@ -2175,6 +2218,10 @@ fn Parser::parse_class_decl_with_abstract(
   // TS1245: an `abstract` method with a body. Same sentinel channel.
   if abstract_member_with_body {
     runtime_decl.duplicate_member_names.push("<abstract-impl>")
+  }
+  // TS2387/2388: bodyless overload signatures mixing static and instance.
+  if overload_static_mix {
+    runtime_decl.duplicate_member_names.push("<overload-static-mix>")
   }
   // Surface the class's structural diagnostics for *every* class, including
   // ones nested in function bodies that the IIFE lowering removes from

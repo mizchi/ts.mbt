@@ -15725,6 +15725,11 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
           path: "class \{cls_name}",
           message: "an abstract method cannot have an implementation",
         })
+      } else if name == "<overload-static-mix>" {
+        issues.push({
+          path: "class \{cls_name}",
+          message: "function overload signatures must not mix static and instance",
+        })
       } else {
         issues.push({
           path: "class \{cls_name}",
