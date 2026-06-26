@@ -1728,6 +1728,18 @@ conformance sources (`.errors.txt` baseline = ground truth):
     1698, 0 FP; pinned recall 661 -> 662 (superPropertyInConstructorBeforeSuperCall).
     Whitebox-tested.
 
+2026-06-25 (T121)  663/815 (81 %)        414/414 ( 0 FP)   TS2369 parameter property in ambient declare class
+
+  T121 -- TS2369 ("A parameter property is only allowed in a constructor
+    implementation") for declare-class member signatures. These go through
+    `parse_declare_signature_params`, which bypassed the misuse recording in
+    `parse_param`, so `declare class C { constructor(public x); method(readonly
+    y); }` went unflagged. The signature parser now detects a leading
+    accessibility/`readonly` modifier (only when another identifier follows, so
+    a parameter literally named `readonly` is unaffected) and records it in the
+    existing `param_property_misuses` channel. Whole-corpus TP 1698 -> 1700,
+    0 FP; pinned recall 662 -> 663 (readonlyInAmbientClass). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary
