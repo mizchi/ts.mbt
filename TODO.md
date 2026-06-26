@@ -1784,6 +1784,28 @@ conformance sources (`.errors.txt` baseline = ground truth):
     (+2), 0 FP; pinned recall 665 -> 667 (directReferenceToNull,
     directReferenceToUndefined). Whitebox-tested.
 
+2026-06-26 (T125)  668/815 (82 %)        414/414 ( 0 FP)   TS2729 field-init-order check un-gated + FP fix
+
+  T125 -- TS2729 ("Property 'X' is used before its initialization"). The
+    field-initialization-order check (`check_class_property_init_order`)
+    already existed and was whitebox-tested, but it was effectively DEAD in
+    the recall path: it only ran behind `if strict_root.use_define_for_class_fields`,
+    while the wbtest exercised it by calling the function directly. TS reports
+    TS2729 regardless of `useDefineForClassFields` (field initializers run in
+    declaration order either way), so the gate was wrong -- it suppressed the
+    diagnostic on `@target: es2015` files like `privateNamesUseBeforeDef`.
+    Un-gating it surfaced one false positive (`scopeResolutionIdentifiers`:
+    `s!: Date; n = this.s;`), caused by the candidate-field set including
+    declared-but-uninitialized fields: a field with no initializer has no
+    initialization to be "used before", yet `inited` (populated only from
+    `instance_field_inits`) could never mark it seen. Fixed by restricting the
+    flaggable set to fields that actually carry an initializer, plus parameter
+    *properties* (constructor params that also materialize as a property --
+    a plain `constructor(x: T)` param creates no field, so reading `this.x`
+    there is TS2339, not TS2729). Whole-corpus TP 1713 -> 1715 (+2), 0 FP;
+    pinned recall 667 -> 668 (privateNamesUseBeforeDef). Whitebox-tested
+    through the full permissive pipeline (the prior tests bypassed the gate).
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary
