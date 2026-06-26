@@ -1766,6 +1766,24 @@ conformance sources (`.errors.txt` baseline = ground truth):
     `<overload-no-impl>` sentinel. Whole-corpus TP 1701 -> 1711 (+10), 0 FP;
     pinned recall 664 -> 665 (classAbstractOverloads). Whitebox-tested.
 
+2026-06-26 (T124)  667/815 (82 %)        414/414 ( 0 FP)   TS2304 capitalized-primitive type misspelling
+
+  T124 -- TS2304 ("Cannot find name") for the capitalized-primitive
+    misspellings `Null` / `Undefined` used as type names (`var x: Null`).
+    These are never valid TS type names (the primitives spell as the
+    lowercase literals `null` / `undefined`) and the standard library
+    declares no global by either name (verified against the generated
+    `lib_globals` registry), so a reference to one is an unambiguous
+    "Cannot find name". The check is false-positive-free: it fires only on
+    these two exact spellings and is still guarded by `module_declared_names`
+    so a module that genuinely declares `type Null` / `interface Undefined`
+    stays silent. Scans value declarations, type aliases, interface fields,
+    function signatures, and runtime top-level `var`/`let`/`const` statements
+    (the test files use bare `var x: Null;`, which is retained as a statement
+    rather than lowered into `module_.values`). Whole-corpus TP 1711 -> 1713
+    (+2), 0 FP; pinned recall 665 -> 667 (directReferenceToNull,
+    directReferenceToUndefined). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary

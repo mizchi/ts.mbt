@@ -10087,3 +10087,24 @@ test "expr_check: overload signature with no implementation (TS2391)" {
   // Ambient declare-class signatures need no implementation.
   @test.assert_eq(issues("declare class C { foo(): number; }"), 0)
 }
+
+///|
+test "expr_check: capitalized-primitive type misspelling (TS2304)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // `Null` / `Undefined` are never valid TS type names (the primitives spell
+  // lowercase), so a reference to one as a type is "Cannot find name".
+  assert_true(issues("var x: Null;") > 0)
+  assert_true(issues("var x: Undefined;") > 0)
+  assert_true(issues("let y: Null;") > 0)
+  assert_true(issues("declare const z: Undefined;") > 0)
+  assert_true(issues("interface I { x: Null; }") > 0)
+  assert_true(issues("function f(p: Undefined): void {}") > 0)
+  // The lowercase primitives are valid and must stay silent.
+  @test.assert_eq(issues("var x: null;"), 0)
+  @test.assert_eq(issues("var x: undefined;"), 0)
+  // A module that genuinely declares the name is silent (no false positive).
+  @test.assert_eq(issues("type Null = string; var x: Null;"), 0)
+  @test.assert_eq(issues("interface Undefined {} var x: Undefined;"), 0)
+}

@@ -14967,6 +14967,122 @@ fn check_reserved_type_alias_names(module_ : @ast.TsModule) -> Array[ExprIssue] 
 }
 
 ///|
+/// Collect references to the capitalized-primitive *misspellings* `Null` and
+/// `Undefined` reachable in `type_`. These are never valid TypeScript type
+/// names — the primitives spell as the lowercase literals `null` / `undefined`
+/// — and the standard library declares no global by either name (verified
+/// against the generated `lib_globals` registry). A reference to one is
+/// therefore an unambiguous "Cannot find name" (TS2304); a user who wrote
+/// `var x: Null` meant `var x: null`. Mirrors `check_type`'s structural
+/// recursion so the misspelling is found in every nested type position.
+fn collect_invalid_primitive_type_names(
+  type_ : @ast.TsType,
+  acc : Array[String],
+) -> Unit {
+  fn note(name : String) -> Unit {
+    if (name == "Null" || name == "Undefined") && !acc.contains(name) {
+      acc.push(name)
+    }
+  }
+
+  match type_ {
+    Named(name) => note(name)
+    Applied(name, args) => {
+      note(name)
+      for a in args {
+        collect_invalid_primitive_type_names(a, acc)
+      }
+    }
+    Array(inner) => collect_invalid_primitive_type_names(inner, acc)
+    Tuple(items) =>
+      for it in items {
+        collect_invalid_primitive_type_names(it, acc)
+      }
+    Object(fields) =>
+      for f in fields {
+        collect_invalid_primitive_type_names(f.0, acc)
+        collect_invalid_primitive_type_names(f.1, acc)
+      }
+    Struct(_, fields) =>
+      for f in fields {
+        collect_invalid_primitive_type_names(f.1, acc)
+      }
+    Func(params, ret) => {
+      for p in params {
+        collect_invalid_primitive_type_names(p, acc)
+      }
+      collect_invalid_primitive_type_names(ret, acc)
+    }
+    Union(members) | Intersection(members) =>
+      for m in members {
+        collect_invalid_primitive_type_names(m, acc)
+      }
+    Conditional(check_t, extends, t_branch, f_branch) => {
+      collect_invalid_primitive_type_names(check_t, acc)
+      collect_invalid_primitive_type_names(extends, acc)
+      collect_invalid_primitive_type_names(t_branch, acc)
+      collect_invalid_primitive_type_names(f_branch, acc)
+    }
+    IndexedAccess(base, key) => {
+      collect_invalid_primitive_type_names(base, acc)
+      collect_invalid_primitive_type_names(key, acc)
+    }
+    _ => ()
+  }
+}
+
+///|
+/// TS2304 ("Cannot find name") for the capitalized-primitive misspellings
+/// `Null` / `Undefined` used as type names (`var x: Null`). The check is
+/// false-positive-free: it fires only on these two specific spellings, which
+/// are never valid TS types and never standard-library globals, and is still
+/// guarded by `module_declared_names` so a module that genuinely declares a
+/// `type Null`/`interface Undefined` of its own stays silent.
+fn check_invalid_primitive_type_names(
+  module_ : @ast.TsModule,
+) -> Array[ExprIssue] {
+  let declared = module_declared_names(module_)
+  let found : Array[String] = []
+  for v in module_.values {
+    collect_invalid_primitive_type_names(v.type_, found)
+  }
+  for ta in module_.type_aliases {
+    collect_invalid_primitive_type_names(ta.type_, found)
+  }
+  for iface in module_.interfaces {
+    for field in iface.fields {
+      collect_invalid_primitive_type_names(field.1, found)
+    }
+  }
+  for f in module_.funcs {
+    for param in f.params {
+      collect_invalid_primitive_type_names(param.type_, found)
+    }
+    collect_invalid_primitive_type_names(f.return_type, found)
+  }
+  // Runtime top-level `var x: Null` / `let x: Undefined` declarations are
+  // retained as statements (not lowered into `module_.values`), so scan their
+  // annotations directly.
+  for stmt in module_.top_level_stmts {
+    match stmt {
+      Var(_, type_, _) | Let(_, type_, _) | Const(_, type_, _) =>
+        collect_invalid_primitive_type_names(type_, found)
+      _ => ()
+    }
+  }
+  let issues : Array[ExprIssue] = []
+  for name in found {
+    if !declared.contains(name) {
+      issues.push({
+        path: "type \{name}",
+        message: "Cannot find name '\{name}'.",
+      })
+    }
+  }
+  issues
+}
+
+///|
 /// Walk a class's `extends` ancestry (nearest first) looking for how `name`
 /// (matching `is_static`) was last declared. Returns `Some(true)` when the
 /// nearest ancestor declaration is a *data property*, `Some(false)` when it is
@@ -16339,6 +16455,9 @@ fn check_module_function_bodies_layered(
     all.push(issue)
   }
   for issue in check_reserved_type_alias_names(module_) {
+    all.push(issue)
+  }
+  for issue in check_invalid_primitive_type_names(module_) {
     all.push(issue)
   }
   for issue in check_property_overridden_as_accessor(module_, resolver) {
