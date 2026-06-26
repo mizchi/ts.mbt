@@ -1806,6 +1806,48 @@ conformance sources (`.errors.txt` baseline = ground truth):
     pinned recall 667 -> 668 (privateNamesUseBeforeDef). Whitebox-tested
     through the full permissive pipeline (the prior tests bypassed the gate).
 
+2026-06-26 (T126)  668/815 (82 %)        414/414 ( 0 FP)   TS2344 constraint check on runtime declarations
+
+  T126 -- TS2344 ("Type does not satisfy the constraint"). `check_module`'s
+    generic-constraint walk already covered interfaces, classes, type aliases,
+    function signatures, and ambient `declare const` values -- but runtime
+    top-level `var`/`let`/`const x: Foo<Bad>` declarations are retained as
+    statements (`top_level_stmts`), not lowered into `module_.values`, so their
+    annotations were never constraint-checked (same gap class as T124's TS2304
+    fix). Extended only the constraint walk to `top_level_stmts` (the
+    unresolved-reference walk is deliberately left on `module_.values` to avoid
+    widening its narrow well-known-type allowlist onto runtime declarations).
+    Sound real-world consistency fix (a runtime `let b: Box<number>` where
+    `interface Box<T extends string>` now flags like the ambient form); 0 FP.
+    Conformance recall unchanged (668) -- the pinned TS2344 misses need
+    higher-order machinery (`object` constraints, intrinsic string types,
+    index-signature subtyping, tuple rest), not the basic runtime-decl case.
+    Whitebox-tested through the full permissive pipeline.
+
+2026-06-26 (T127)  669/815 (82 %)        414/414 ( 0 FP)   TS2339 property on some-but-not-all union members
+
+  T127 -- TS2339 ("Property does not exist"). A property access on a union `A |
+    B` is valid only when *every* member has the property (TS gives the union
+    the intersection of its members' members). Previously we flagged only when
+    the property was on *no* member (`field_on_any_union_member`), staying
+    silent on the "some but not all" case to avoid false positives on
+    discriminated-union narrowing we couldn't model. Discovery: the narrowing
+    engine already exists and handles simple-`Var` discriminant narrowing
+    precisely (`if (v.kind === "a")` rewrites `v`'s type), so a *residual* union
+    at the access site on a simple `Var` receiver means no guard applied.
+    Added `union_field_definitely_missing`: flags only when the receiver is a
+    simple `Var` AND every member is a fully-enumerable object shape
+    (`enumerable_object_shape`: interface/class/Struct, no index signature,
+    resolvable enumerable `extends`/`base` chain) AND the field is absent from
+    at least one member (per-member `lookup_field`, which folds in
+    `Object.prototype` members + each member's heritage). Non-enumerable members
+    (primitive / `any` / index-sig / generic-applied / `Object`-literal /
+    unresolved) bail to the old conservative behaviour. The `Var` gate (mirrors
+    the TS18048 branch) avoids the `controlFlowAliasing2` FP: a `this.test.name`
+    PropAccess-chain receiver is never narrowed by our engine (aliased-
+    discriminant / property narrowing we don't model). Whole-corpus TP 1715 ->
+    1716 (+1), 0 FP; pinned recall 668 -> 669 (unionTypeMembers). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary

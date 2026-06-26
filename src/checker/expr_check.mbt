@@ -1344,6 +1344,100 @@ fn Resolver::field_on_any_union_member(
 }
 
 ///|
+/// True when `ty` is an object shape whose member set we can enumerate
+/// *completely* — so "field absent" is a definite fact, not an artefact of an
+/// unmodeled construct. Restricted to interfaces / classes (with no index
+/// signature, whose entire `extends` chain is itself enumerable and
+/// resolvable) and `Struct` literals. Everything else — primitives, `any` /
+/// `unknown`, `Object` literals (whose index-signature encoding we don't
+/// inspect here), generic-applied aliases, conditional / mapped / unresolved
+/// names — returns `false` so the caller stays silent. The depth guard bails
+/// on pathological / cyclic heritage rather than risking a wrong "absent".
+fn Resolver::enumerable_object_shape(
+  self : Resolver,
+  ty : @ast.TsType,
+  depth : Int,
+) -> Bool {
+  if depth > 4 {
+    return false
+  }
+  match self.unwrap(ty) {
+    Struct(_, _) => true
+    Named(n) | Applied(n, _) =>
+      match self.interfaces.get(n) {
+        Some(iface) => {
+          if iface.index_signatures.length() > 0 {
+            return false
+          }
+          for b in iface.extends_names {
+            if !self.enumerable_object_shape(@ast.TsType::Named(b), depth + 1) {
+              return false
+            }
+          }
+          true
+        }
+        None =>
+          match self.classes.get(n) {
+            Some(cls) => {
+              if cls.index_signatures.length() > 0 {
+                return false
+              }
+              for b in cls.base_names {
+                // `<expr-base>` (an expression heritage clause) or any base we
+                // can't resolve makes the member set unknowable.
+                if !self.enumerable_object_shape(
+                    @ast.TsType::Named(b),
+                    depth + 1,
+                  ) {
+                  return false
+                }
+              }
+              true
+            }
+            // Unresolved name: could be an external type with the field.
+            None => false
+          }
+      }
+    _ => false
+  }
+}
+
+///|
+/// TS2339 for a union receiver: a property access on `A | B` is valid only when
+/// *every* member has the property (TS gives the union the intersection of its
+/// members' properties). We flag the access only when we can be certain — every
+/// member is a fully-enumerable object shape (`enumerable_object_shape`) and at
+/// least one of them lacks the field (per-member `lookup_field`, which already
+/// folds in `Object.prototype` members like `toString` and each member's
+/// `extends` chain). Any non-enumerable member (primitive, `any`, index
+/// signature, unresolved, generic-applied alias) makes the whole check bail, so
+/// discriminated-union narrowing gaps and unmodeled shapes stay silent.
+fn Resolver::union_field_definitely_missing(
+  self : Resolver,
+  recv : @ast.TsType,
+  field : String,
+) -> Bool {
+  match self.unwrap(recv) {
+    Union(items) => {
+      if items.length() == 0 {
+        return false
+      }
+      let mut any_missing = false
+      for it in items {
+        if !self.enumerable_object_shape(it, 0) {
+          return false
+        }
+        if self.lookup_field(it, field) is None {
+          any_missing = true
+        }
+      }
+      any_missing
+    }
+    _ => false
+  }
+}
+
+///|
 
 ///|
 /// When `recv` is a class instance whose field `field` has no type annotation
@@ -12320,11 +12414,31 @@ fn check_call_args_in_expr(
         // exists. The pure-null case is handled by the branch above.
         !(ctx.resolver.lookup_field(prune_nullish(ctx.resolver, recv_ty), prop)
         is Some(_)) &&
-        // Discriminated unions: when at least one member has the field the
-        // access is valid under flow-narrowing we can't model. Stay silent.
-        !ctx.resolver.field_on_any_union_member(
-          prune_nullish(ctx.resolver, recv_ty),
-          prop,
+        // Union receivers: a member access is valid only when *every* member
+        // has the field. Stay silent when at least one member has it UNLESS the
+        // receiver is a simple `Var` AND we can enumerate every member's full
+        // shape and prove the field is genuinely absent from one of them
+        // (`union_field_definitely_missing`) — that case is a real TS2339 even
+        // without narrowing. The `Var` gate matches the TS18048 branch above:
+        // those are the bindings the narrowing engine rewrites precisely, so a
+        // residual union at the access site means no guard applied. A
+        // `PropAccess`-chain receiver (`this.test.name`) is never narrowed by
+        // our engine (aliased-discriminant / property narrowing we don't model
+        // — see controlFlowAliasing2), so it stays conservative. Non-enumerable
+        // members (primitive / `any` / index-sig / generic-applied / unresolved)
+        // also keep the "at least one member has it ⇒ silent" behaviour.
+        (
+          !ctx.resolver.field_on_any_union_member(
+            prune_nullish(ctx.resolver, recv_ty),
+            prop,
+          ) ||
+          (
+            recv is Var(_) &&
+            ctx.resolver.union_field_definitely_missing(
+              prune_nullish(ctx.resolver, recv_ty),
+              prop,
+            )
+          )
         ) &&
         // Suppress when the receiver shape contains an unresolvable Named
         // ref (`this`, an in-scope generic, a qualified-namespace name
