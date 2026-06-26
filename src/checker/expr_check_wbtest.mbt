@@ -10053,3 +10053,22 @@ test "expr_check: parameter property in ambient declare class (TS2369)" {
   // A parameter literally named `readonly` is not a modifier.
   @test.assert_eq(issues("declare function f(readonly: number): void;"), 0)
 }
+
+///|
+test "expr_check: overload signatures mixing static and instance (TS2387/2388)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Bodyless overload signatures of the same name mixing static and instance.
+  assert_true(issues("class C { foo(); static foo(); }") > 0)
+  // A legal static+instance method pair (each with a body) is not flagged,
+  // even when each side also has its own overload signatures.
+  @test.assert_eq(
+    issues(
+      "class C { foo(x: number); foo(x: any) {} static foo(x: number); static foo(x: any) {} }",
+    ),
+    0,
+  )
+  // Same-kind overloads with an implementation are fine.
+  @test.assert_eq(issues("class C { foo(x: number); foo(x: any): void {} }"), 0)
+}

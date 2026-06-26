@@ -1740,6 +1740,20 @@ conformance sources (`.errors.txt` baseline = ground truth):
     existing `param_property_misuses` channel. Whole-corpus TP 1698 -> 1700,
     0 FP; pinned recall 662 -> 663 (readonlyInAmbientClass). Whitebox-tested.
 
+2026-06-25 (T122)  664/815 (81 %)        414/414 ( 0 FP)   TS2387/2388 overload signatures mixing static/instance
+
+  T122 -- TS2387/TS2388 ("Function overload must [not] be static"). Bodyless
+    overload signatures of one name may not mix static and instance. Detected
+    at parse time via the reliable `has_body_block` signal (the AST `body`
+    field can't tell an empty `{}` from a bodyless signature). A name with both
+    a static and an instance *implementation* is two distinct, legal overload
+    sets (`memberFunctionsWithPublicOverloads`), so the mix is flagged only
+    when that full instance+static impl pair is absent. Surfaced via the
+    `<overload-static-mix>` sentinel. Whole-corpus TP 1700 -> 1701, 0 FP;
+    pinned recall 663 -> 664 (memberFunctionOverloadMixingStaticAndInstance).
+    Whitebox-tested. (A first attempt using the AST `body` field FP'd and was
+    reverted before switching to the parse-time signal.)
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary
