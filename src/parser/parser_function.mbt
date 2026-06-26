@@ -1883,7 +1883,35 @@ fn Parser::parse_declare_signature_params(
   let params : Array[(String, @ast.TsType)] = []
   while !self.check(RParen) && !self.check(Eof) {
     let _ = self.match_ellipsis()
+    // A parameter-property modifier (`public` / `private` / `protected` /
+    // `readonly`) on a declare-class member signature is always TS2369: these
+    // signatures have no implementation. A leading modifier is only a modifier
+    // when another identifier (the real parameter name, or a further modifier)
+    // follows; otherwise the keyword *is* the parameter name (`readonly: T`).
+    let mut saw_param_prop_modifier = false
+    while true {
+      let is_modifier = match self.peek().kind {
+        Ident(m) =>
+          (
+            m == "public" ||
+            m == "private" ||
+            m == "protected" ||
+            m == "readonly"
+          ) &&
+          self.peek_at(1).kind is Ident(_)
+        _ => false
+      }
+      if is_modifier {
+        let _ = self.advance()
+        saw_param_prop_modifier = true
+      } else {
+        break
+      }
+    }
     let param_name = self.parse_declare_param_name()
+    if saw_param_prop_modifier {
+      self.param_property_misuses.push(param_name)
+    }
     let is_optional = self.match_(Question)
     let base_param_type = if self.check(Colon) {
       let _ = self.advance()

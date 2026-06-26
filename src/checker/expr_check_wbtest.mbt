@@ -10038,3 +10038,18 @@ test "expr_check: super property access before super() call (TS17011)" {
     0,
   )
 }
+
+///|
+test "expr_check: parameter property in ambient declare class (TS2369)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A parameter property in an ambient `declare class` member signature has no
+  // implementation, so it is always an error.
+  assert_true(issues("declare class C { method(readonly x: number); }") > 0)
+  assert_true(issues("declare class C { constructor(public x: number); }") > 0)
+  // A plain ambient signature is fine.
+  @test.assert_eq(issues("declare class C { method(x: number): void; }"), 0)
+  // A parameter literally named `readonly` is not a modifier.
+  @test.assert_eq(issues("declare function f(readonly: number): void;"), 0)
+}
