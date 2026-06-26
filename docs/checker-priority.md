@@ -73,10 +73,24 @@
 交差領域**。ここを攻めるとどちらの目的でも無駄にならない。各 Phase は
 「0-FP を守れる単位」で区切る。
 
-### Phase 0 — 足場（低リスク・即効）
+### Phase 0 — 足場（低 FP リスク・ただし要プラミング・recall ほぼ +0）
 1. **noImplicitAny（TS7006 系）**: トップレベル関数宣言の「型注釈なし param」限定で
    開始。文脈型が付く位置（コールバック引数等）は除外して FP を抑える。
-   小コスト・自己完結。最初の 1 本に最適。
+
+   > **実装時に判明した制約（2026-06-26 調査）**:
+   > - AST の `TsParam.type_` は非 optional で、**「注釈なし」と「明示 `: any`」を
+   >   区別できない**（両方 `Any` になる）。TS7006 は前者だけに出すべきなので、
+   >   パーサに「注釈なし param」を記録する新チャネル（`has_body_block` /
+   >   `param_optional_initializer_misuses` と同パターン）が必要。
+   > - `noImplicitAny` フラグも未追跡（`strict_null_checks` /
+   >   `strict_property_initialization` はあるが noImplicitAny はない）。
+   >   `TsModule` に `no_implicit_any : Bool` 追加＋ `@noImplicitAny` /
+   >   `@strict` ディレクティブ検出が要る（構築サイト約 8 箇所）。
+   > - **conformance recall は ~+0**: pinned の TS7006 miss 5 件は全て
+   >   contextual-typing ケース（comma / `&&` の左辺 arrow、class expression
+   >   method）で、単純なトップレベル param チェックでは捕捉できない。
+   >   よってこれは「実世界の品質・プロダクト価値」枠であり、recall 目標には
+   >   寄与しない。着手するなら期待値をそう設定する。
 
 ### Phase 1 — 交差領域（中コスト・両トラックに効く）
 2. **ジェネリック制約検証（TS2344）**: `type_param_bounds` が既にあるので、
@@ -124,6 +138,19 @@
   （`string|number` と `number|string` を等価判定できないと FP）。型機構が要る。
 - **TS2445 を namespace 本体に拡張**: 全コーパスで namespace 本体の式を walk する必要があり
   ブラスト半径が大きい（1 ファイルのために全 namespace を新規検査）。非推奨。
+
+## 結論（2026-06-26 時点）
+
+- **増分的な sound recall win は枯渇**。`recall=668/815` までで、構造的・パース時・
+  ヒープチェーン・オーバーロード検出系は全て収穫済み。残る miss を全クラスタ
+  （≥2 件 + 主要 single）まで個別調査した結果、例外なく
+  **(a) 型機構（代入可能性 / flow narrowing / generic instantiation）**、
+  **(b) パーサ変更が前提（TS18014）**、**(c) エッジ/抑制フィルタ** のいずれか。
+- したがって 668→700 は「小さな pass の積み上げ」では到達せず、上の Phase で挙げた
+  **本格的な機能を 1 つずつ腰を据えて作る**ことになる。Phase 0 ですら
+  パーサ・プラミングが要り、かつ recall には寄与しない（上記参照）。
+- 次に着手する機能は **ユーザーが明示的に選んでから**始める（各 Phase は
+  複数ターンの実装コミットメントで、0-FP 検証も個別に要るため）。
 
 ## 守るべき制約（数値目標より上位）
 
