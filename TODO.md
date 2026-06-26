@@ -1806,6 +1806,24 @@ conformance sources (`.errors.txt` baseline = ground truth):
     pinned recall 667 -> 668 (privateNamesUseBeforeDef). Whitebox-tested
     through the full permissive pipeline (the prior tests bypassed the gate).
 
+2026-06-26 (T126)  668/815 (82 %)        414/414 ( 0 FP)   TS2344 constraint check on runtime declarations
+
+  T126 -- TS2344 ("Type does not satisfy the constraint"). `check_module`'s
+    generic-constraint walk already covered interfaces, classes, type aliases,
+    function signatures, and ambient `declare const` values -- but runtime
+    top-level `var`/`let`/`const x: Foo<Bad>` declarations are retained as
+    statements (`top_level_stmts`), not lowered into `module_.values`, so their
+    annotations were never constraint-checked (same gap class as T124's TS2304
+    fix). Extended only the constraint walk to `top_level_stmts` (the
+    unresolved-reference walk is deliberately left on `module_.values` to avoid
+    widening its narrow well-known-type allowlist onto runtime declarations).
+    Sound real-world consistency fix (a runtime `let b: Box<number>` where
+    `interface Box<T extends string>` now flags like the ambient form); 0 FP.
+    Conformance recall unchanged (668) -- the pinned TS2344 misses need
+    higher-order machinery (`object` constraints, intrinsic string types,
+    index-signature subtyping, tuple rest), not the basic runtime-decl case.
+    Whitebox-tested through the full permissive pipeline.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary

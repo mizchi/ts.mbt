@@ -423,6 +423,26 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
         issues,
       )
     }
+    // Runtime top-level `var`/`let`/`const x: Foo<Bad>` declarations are
+    // retained as statements rather than lowered into `module_.values`, so
+    // scan their annotations too (mirrors the ambient-value walk above). Only
+    // the constraint check runs here -- the unresolved-reference walk is left
+    // to `module_.values` to avoid widening its (intentionally narrow)
+    // well-known-type allowlist onto runtime declarations.
+    for stmt in module_.top_level_stmts {
+      match stmt {
+        Var(_, type_, _) | Let(_, type_, _) | Const(_, type_, _) =>
+          check_constraints(
+            type_,
+            [],
+            alias_params,
+            alias_bounds,
+            resolve,
+            issues,
+          )
+        _ => ()
+      }
+    }
   }
   { issues, }
 }
