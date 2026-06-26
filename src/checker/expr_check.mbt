@@ -15730,6 +15730,11 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
           path: "class \{cls_name}",
           message: "function overload signatures must not mix static and instance",
         })
+      } else if name == "<overload-no-impl>" {
+        issues.push({
+          path: "class \{cls_name}",
+          message: "function implementation is missing or not immediately following the declaration",
+        })
       } else {
         issues.push({
           path: "class \{cls_name}",
