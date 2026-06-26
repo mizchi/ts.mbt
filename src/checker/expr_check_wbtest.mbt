@@ -10120,6 +10120,54 @@ test "expr_check: field-init-order (TS2729) via full permissive pipeline" {
 }
 
 ///|
+test "expr_check: property on some-but-not-all union members (TS2339)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A property present on only some members of a union is a TS2339 on a simple
+  // `Var` receiver when every member is a fully-enumerable object shape.
+  assert_true(
+    issues(
+      "interface I1 { p: number } interface I2 { q: number } declare var x: I1 | I2; x.p;",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "interface A { a: number } interface B { b: number } function f(v: A | B) { return v.a; }",
+    ) >
+    0,
+  )
+  // Present on *every* member -> valid, silent.
+  @test.assert_eq(
+    issues(
+      "interface A { a: number } interface B { a: string } function f(v: A | B) { return v.a; }",
+    ),
+    0,
+  )
+  // `Object.prototype` members exist on every object member -> silent.
+  @test.assert_eq(
+    issues(
+      "interface A { a: number } interface B { b: number } declare var x: A | B; x.toString;",
+    ),
+    0,
+  )
+  // A non-enumerable member (`any`) makes the whole union opaque -> silent.
+  @test.assert_eq(
+    issues("interface A { a: number } declare var x: A | any; x.a;"),
+    0,
+  )
+  // A `PropAccess`-chain receiver is never narrowed by our engine, so we stay
+  // conservative there (no false positive on aliased-discriminant narrowing).
+  @test.assert_eq(
+    issues(
+      "interface A { k: number } interface B { m: number } class C { t!: A | B; f() { return this.t.k; } }",
+    ),
+    0,
+  )
+}
+
+///|
 test "expr_check: generic constraint on runtime declaration (TS2344)" {
   let issues = fn(src : String) -> Int {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()

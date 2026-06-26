@@ -105,6 +105,27 @@
    TS2339・TS18047/48・TS2367・TS2872 がまとめて動く。実世界頻度は最大だが
    エンジンなので Phase 1 で足場を固めてから。
 
+   > **実装時に判明した制約（2026-06-26 調査）**:
+   > - **narrowing エンジンは既に存在し、かなり完成している**
+   >   （`analyse_narrowing` / `narrow_by_discriminant` / `narrow_union` /
+   >   `typeof` / `instanceof` / `=== null/undefined` / 判別共用体 / `&&`）。
+   >   単純 `Var` レシーバの判別共用体プロパティアクセスは正しく flag する
+   >   （`if (v.kind==="a") v.y` → TS2339）。よって Phase 2 は「ゼロから
+   >   エンジンを作る」ではなく **既存エンジンの穴を埋める**作業。
+   > - 残る narrowing miss の正体は 2 つ:
+   >   **(a) プリミティブ prototype テーブル未モデル** — `x.toFixed()` の
+   >   `x:string` ですら 0 issue。`string`/`number`/`boolean` のメソッド表が
+   >   無いので「narrowed 後に間違ったメソッド」を検出できない。完全な表が
+   >   無いと逆に valid メソッドを誤検出するため FP リスク大。
+   >   **(b) PropAccess-chain / aliased-discriminant の narrowing 未対応** —
+   >   `this.test.name`（`this.test` がプロパティアクセス）や
+   >   `const t = x.type; if (t===…)` は engine が narrow しない
+   >   （`controlFlowAliasing2`）。union-プロパティ検査はここで FP を出すため、
+   >   T127 では「単純 `Var` レシーバ限定」ゲートで回避済み。
+   > - **T127 で union "全メンバーに無いと不正" ルールを追加済み**
+   >   （some-but-not-all、`Var` レシーバ＋全メンバー列挙可能時のみ）。
+   >   pinned recall 668→669（unionTypeMembers）。
+
 ### Phase 3 — 最後（FP リスク最大）
 5. **代入可能性の深化**（関数共用体・交差・深い構造比較）。narrowing 投入後の方が
    「本当に不一致か」を切り分けやすく FP を避けやすい。miss 数は最多だが着手は最後。
