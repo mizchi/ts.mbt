@@ -10072,3 +10072,18 @@ test "expr_check: overload signatures mixing static and instance (TS2387/2388)" 
   // Same-kind overloads with an implementation are fine.
   @test.assert_eq(issues("class C { foo(x: number); foo(x: any): void {} }"), 0)
 }
+
+///|
+test "expr_check: overload signature with no implementation (TS2391)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A bodyless method with no implementation in a runtime class is TS2391.
+  assert_true(issues("class C { foo(); }") > 0)
+  // An overload signature followed by an implementation is fine.
+  @test.assert_eq(issues("class C { foo(x: number); foo(x: any): void {} }"), 0)
+  // An optional method may omit its body.
+  @test.assert_eq(issues("class C { foo?(): number; }"), 0)
+  // Ambient declare-class signatures need no implementation.
+  @test.assert_eq(issues("declare class C { foo(): number; }"), 0)
+}

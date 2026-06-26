@@ -1073,6 +1073,7 @@ fn Parser::parse_class_body(
   Bool,
   Bool,
   Bool,
+  Bool,
 ) raise ParseError {
   let _ = self.expect(LBrace)
   // Class body is implicitly strict mode
@@ -1414,8 +1415,11 @@ fn Parser::parse_class_body(
         }
         // Track bodyless overload signatures (non-accessor, non-abstract) for
         // the TS2387/2388 static/instance-mix check.
+        // Optional methods (`foo?()`) may omit their body, so they are neither
+        // overload signatures nor missing implementations -- skip them.
         if accessor_kind is None &&
           not(is_abstract_member) &&
+          not(is_optional) &&
           method_name != "<computed>" {
           if has_body_block {
             if is_static {
@@ -1477,9 +1481,25 @@ fn Parser::parse_class_body(
       break
     }
   }
+  // TS2391: a bodyless overload signature with no implementation *of any
+  // kind*. Conservative (a name with any-side impl is left to the more precise
+  // diagnostics), so it is false-positive-free on well-formed runtime classes.
+  let mut overload_missing_impl = false
+  fn check_missing(names : Map[String, Unit]) -> Bool {
+    for name in names.keys() {
+      if not(impl_static.contains(name)) && not(impl_instance.contains(name)) {
+        return true
+      }
+    }
+    false
+  }
+
+  if check_missing(ov_instance) || check_missing(ov_static) {
+    overload_missing_impl = true
+  }
   (
     ctor, elements, private_members, protected_members, abstract_members, ctor_impl_count,
-    index_sig_modifier_misuse, abstract_member_with_body, overload_static_mix,
+    index_sig_modifier_misuse, abstract_member_with_body, overload_static_mix, overload_missing_impl,
   )
 }
 
@@ -1530,6 +1550,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     private_members,
     protected_members,
     abstract_members,
+    _,
     _,
     _,
     _,
@@ -2196,6 +2217,7 @@ fn Parser::parse_class_decl_with_abstract(
     index_sig_modifier_misuse,
     abstract_member_with_body,
     overload_static_mix,
+    overload_missing_impl,
   ) = self.parse_class_body()
   self.current_class_brand = prev_brand
   self.restore_local_type_param_bounds(class_type_param_bound_len)
@@ -2222,6 +2244,10 @@ fn Parser::parse_class_decl_with_abstract(
   // TS2387/2388: bodyless overload signatures mixing static and instance.
   if overload_static_mix {
     runtime_decl.duplicate_member_names.push("<overload-static-mix>")
+  }
+  // TS2391: a bodyless overload signature with no implementation.
+  if overload_missing_impl {
+    runtime_decl.duplicate_member_names.push("<overload-no-impl>")
   }
   // Surface the class's structural diagnostics for *every* class, including
   // ones nested in function bodies that the IIFE lowering removes from

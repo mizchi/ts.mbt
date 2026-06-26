@@ -1754,6 +1754,18 @@ conformance sources (`.errors.txt` baseline = ground truth):
     Whitebox-tested. (A first attempt using the AST `body` field FP'd and was
     reverted before switching to the parse-time signal.)
 
+2026-06-25 (T123)  665/815 (82 %)        414/414 ( 0 FP)   TS2391 overload signature with no implementation
+
+  T123 -- TS2391 ("Function implementation is missing or not immediately
+    following the declaration"). A bodyless overload signature in a runtime
+    (non-declare) class with no implementation of any static-ness is an error.
+    Reuses the parse-time overload/impl tracking from T122 (`has_body_block`).
+    Excludes optional methods (`foo?()` may omit its body -- the FP that the
+    first attempt hit on optionalMethods / controlFlowSuperPropertyAccess),
+    abstract members, accessors, and declare classes. Surfaced via the
+    `<overload-no-impl>` sentinel. Whole-corpus TP 1701 -> 1711 (+10), 0 FP;
+    pinned recall 664 -> 665 (classAbstractOverloads). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary
