@@ -16499,10 +16499,8 @@ fn check_module_function_bodies_layered(
     ) {
     all.push(issue)
   }
-  if strict_root.use_define_for_class_fields {
-    for issue in check_class_property_init_order(module_) {
-      all.push(issue)
-    }
+  for issue in check_class_property_init_order(module_) {
+    all.push(issue)
   }
   // Object-shaped names visible from outer scopes (a nested namespace's
   // interface can `extends` a member typed by a top-level interface).
@@ -18456,22 +18454,40 @@ fn check_class_property_init_order(module_ : @ast.TsModule) -> Array[ExprIssue] 
     // getters/setters) are listed in `decl.methods` and we exclude
     // their names from the field set so `this.m1()` -> a method call
     // isn't flagged.
+    //
+    // Only fields that carry an *initializer* (the entries of
+    // `instance_field_inits`) are flaggable: TS2729 is about reading a field
+    // before its initializer has run, so a field declared without one
+    // (`s!: Date`, `s: Date`) has no initialization to be "used before" and
+    // reading it -- even from an earlier field's initializer -- is silent.
+    // Restricting the candidate set to init-bearing fields avoids flagging
+    // those declarations (the `scopeResolutionIdentifiers` false positive:
+    // `s!: Date; n = this.s;`, where `s` precedes `n` and has no init).
     let field_names : Map[String, Unit] = {}
-    for prop in decl.properties {
-      if !prop.is_static && !prop.is_accessor {
-        field_names[prop.name] = ()
-      }
+    for entry in decl.instance_field_inits {
+      field_names[entry.0] = ()
     }
-    // Constructor parameter properties (`constructor(public foo: T)`)
-    // declare `this.foo` slots that are written *during* the constructor
-    // body — i.e. after every instance-field initializer has already
-    // run. Treat their names as fields so a field-init that reads
-    // `this.foo` before the constructor runs is reported.
+    // Parameter properties (`constructor(public foo: T)`) declare a `this.foo`
+    // slot written *during* the constructor body -- after every instance-field
+    // initializer has run -- so a field-init that reads `this.foo` is TS2729.
+    // They materialize as no-initializer entries in `properties`, so a
+    // constructor parameter that *also* appears as a property is a parameter
+    // property (a plain `constructor(x: T)` param does not materialize a field,
+    // and reading `this.x` there is TS2339, handled elsewhere -- not TS2729).
     match decl.constructor_params {
-      Some(params) =>
-        for entry in params {
-          field_names[entry.0] = ()
+      Some(params) => {
+        let prop_names : Map[String, Unit] = {}
+        for prop in decl.properties {
+          if !prop.is_static {
+            prop_names[prop.name] = ()
+          }
         }
+        for entry in params {
+          if prop_names.contains(entry.0) {
+            field_names[entry.0] = ()
+          }
+        }
+      }
       None => ()
     }
     for m in decl.methods {

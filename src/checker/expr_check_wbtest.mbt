@@ -10089,6 +10089,37 @@ test "expr_check: overload signature with no implementation (TS2391)" {
 }
 
 ///|
+test "expr_check: field-init-order (TS2729) via full permissive pipeline" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A field initializer reading a *later* field that has its own initializer
+  // is "used before initialization" -- and it now fires through the full
+  // pipeline regardless of `useDefineForClassFields` (TS reports it on
+  // `@target: es2015` too).
+  assert_true(issues("class C { x = this.y; y = 5; }") > 0)
+  // Private-field forward reference (`privateNamesUseBeforeDef`).
+  assert_true(issues("class A { foo = this.bar; bar = 3; }") > 0)
+  // Reading an *earlier* initialized field is fine.
+  @test.assert_eq(issues("class C { x = 5; y = this.x; }"), 0)
+  // A field declared *without* an initializer has no initialization to be
+  // "used before", so reading it is silent even from an earlier field's init
+  // (`scopeResolutionIdentifiers` regression: `s!: Date; n = this.s;`).
+  @test.assert_eq(issues("class C { s!: number; n = this.s; }"), 0)
+  // A parameter *property* materializes a field assigned during the
+  // constructor, so reading it from a field init is flagged...
+  assert_true(
+    issues("class C { a = this.foo; constructor(public foo: number) {} }") > 0,
+  )
+  // ...but a plain constructor parameter creates no field (reading `this.x`
+  // there is TS2339, not TS2729 -- this check stays silent).
+  @test.assert_eq(
+    issues("class E { a = this.x; constructor(x: number) {} }"),
+    0,
+  )
+}
+
+///|
 test "expr_check: capitalized-primitive type misspelling (TS2304)" {
   let issues = fn(src : String) -> Int {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
