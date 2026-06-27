@@ -1891,6 +1891,25 @@ conformance sources (`.errors.txt` baseline = ground truth):
     669 -> 671 (templateLiteralTypes / stringLiteralTypesWithTemplateStrings
     family). Whitebox-tested.
 
+2026-06-26 (T130)  673/815 (83 %)        414/414 ( 0 FP)   TS2322 string literal vs intrinsic string-mapping type
+
+  T130 -- TS2322. A string literal assigned where an intrinsic string-mapping
+    type is expected (`Uppercase<…>` / `Lowercase<…>` / `Capitalize<…>` /
+    `Uncapitalize<…>`) is flagged when it violates the case constraint that
+    holds for *every* member regardless of the inner type: a member of
+    `Uppercase<X>` is always all-uppercase, so a literal with an ASCII
+    lowercase letter (`x = "a"` where `x: Uppercase<Lowercase<string>>`) can
+    never be one. `string_mapping_case_violation` implements this as a
+    *necessary*-condition check -- sound and false-positive-free (non-ASCII
+    letters stay conservative; it never flags a literal that could still be a
+    member, only definite case violations). Added in `check_expr_against`
+    beside the T129 template-literal check, emitted unfiltered for the same
+    reason. Whole-corpus TP 1718 -> 1720 (+2), 0 FP; pinned recall 671 -> 673
+    (stringLiteralsAssignedToStringMappings / stringMappingOverPatternLiterals).
+    Whitebox-tested. (The pattern-match half -- e.g. `y = "A"` against
+    `Uppercase<Lowercase<`${number}`>>`, where the number pattern can't produce
+    "A" -- is a deliberate MISS: it needs intrinsic-over-template evaluation.)
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary

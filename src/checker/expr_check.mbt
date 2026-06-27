@@ -6323,6 +6323,37 @@ fn Resolver::object_call_signature(
 }
 
 ///|
+
+///|
+/// True when the string literal `s` *cannot* be a member of the intrinsic
+/// string-mapping type `name<…>` because it violates the case constraint that
+/// holds for every member regardless of the inner type:
+///   - `Uppercase<X>`   members are all-uppercase  -> any ASCII lowercase a-z is a violation
+///   - `Lowercase<X>`   members are all-lowercase  -> any ASCII uppercase A-Z is a violation
+///   - `Capitalize<X>`  first char is not lowercase -> a leading a-z is a violation
+///   - `Uncapitalize<X>` first char is not uppercase -> a leading A-Z is a violation
+/// Conservative: non-ASCII letters are never treated as violations, so this
+/// only ever fires on a definite mismatch. Any other `name` returns false.
+fn string_mapping_case_violation(name : String, s : String) -> Bool {
+  fn is_lower(c : Char) -> Bool {
+    c >= 'a' && c <= 'z'
+  }
+
+  fn is_upper(c : Char) -> Bool {
+    c >= 'A' && c <= 'Z'
+  }
+
+  let chars = s.to_array()
+  match name {
+    "Uppercase" => chars.iter().any(fn(c) { is_lower(c) })
+    "Lowercase" => chars.iter().any(fn(c) { is_upper(c) })
+    "Capitalize" => chars.length() > 0 && is_lower(chars[0])
+    "Uncapitalize" => chars.length() > 0 && is_upper(chars[0])
+    _ => false
+  }
+}
+
+///|
 fn check_expr_against(
   env : ExprEnv,
   expr : @ast.TsExpr,
@@ -6615,6 +6646,24 @@ fn check_expr_against(
   match (inferred_u, expected_u) {
     (Literal(_), TemplateLiteralType(_, _)) =>
       if !is_assignable_to(inferred_u, expected_u) {
+        record_unfiltered(
+          ctx,
+          sub_path,
+          "expected `\{type_display(expected_u)}` but got `\{type_display(inferred_u)}`",
+        )
+        return
+      }
+    // Intrinsic string-mapping target (`Uppercase<…>` / `Lowercase<…>` /
+    // `Capitalize<…>` / `Uncapitalize<…>`). Every member of `Uppercase<X>` is
+    // an all-uppercase string regardless of `X`, so a string literal carrying
+    // an ASCII *lowercase* letter is a definite mismatch (and symmetrically for
+    // the others). This is a *necessary*-condition check — sound and
+    // false-positive-free: it never flags a literal that could still be a
+    // member (non-ASCII letters are left conservative), it only catches the
+    // case-constraint violations (`x = "a"` where `x: Uppercase<…>`). Emitted
+    // unfiltered like the template-target check above.
+    (Literal(s), Applied(intrinsic, [_])) =>
+      if string_mapping_case_violation(intrinsic, s) {
         record_unfiltered(
           ctx,
           sub_path,
