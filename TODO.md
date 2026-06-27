@@ -1873,6 +1873,24 @@ conformance sources (`.errors.txt` baseline = ground truth):
     controlFlowWithTemplateLiterals), and its recall payoff is small relative to
     that FP tail. See docs/checker-priority.md.
 
+2026-06-26 (T129)  671/815 (82 %)        414/414 ( 0 FP)   TS2322/2345 string literal vs template-literal-type pattern
+
+  T129 -- TS2322 / TS2345. A concrete string literal assigned to (or passed
+    where the slot expects) a template-literal type is an error when the
+    pattern can't produce that literal (`const x: `a${string}` = "hello"`,
+    `f("xyz")` where the param is `` `a${string}` ``). The pattern matcher
+    (`literal_matches_template` / `is_assignable_to`) already existed and is
+    conservative -- an unknown/opaque placeholder accepts any substring -- so a
+    `false` verdict is a *definite* mismatch and false-positive-free. The gap
+    was purely that `check_expr_against` never reached a flagging path for a
+    `(Literal, TemplateLiteralType)` pair (it bailed earlier). Added an early,
+    tightly-gated check there, emitted via `record_unfiltered` because the
+    permissive suppression filter only whitelists primitive/simple-shape
+    mismatch pairs and would otherwise drop the template-target diagnostic in
+    the recall path. Whole-corpus TP 1716 -> 1718 (+2), 0 FP; pinned recall
+    669 -> 671 (templateLiteralTypes / stringLiteralTypesWithTemplateStrings
+    family). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary
