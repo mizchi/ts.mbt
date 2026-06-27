@@ -10223,6 +10223,27 @@ test "expr_check: string literal vs template-literal-type pattern (TS2322/2345)"
 }
 
 ///|
+test "expr_check: string literal vs intrinsic string-mapping type (TS2322)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A literal that violates the case constraint of the mapping is a mismatch.
+  assert_true(
+    issues("declare var x: Uppercase<Lowercase<string>>; x = \"a\";") > 0,
+  )
+  assert_true(issues("declare var l: Lowercase<string>; l = \"ABC\";") > 0)
+  assert_true(issues("declare var c: Capitalize<string>; c = \"abc\";") > 0)
+  assert_true(issues("declare var u: Uncapitalize<string>; u = \"Abc\";") > 0)
+  // Literals that satisfy the (necessary) case constraint stay silent.
+  @test.assert_eq(
+    issues("declare var x: Uppercase<Lowercase<string>>; x = \"A\";"),
+    0,
+  )
+  @test.assert_eq(issues("declare var x: Uppercase<string>; x = \"1\";"), 0)
+  @test.assert_eq(issues("declare var c: Capitalize<string>; c = \"Abc\";"), 0)
+}
+
+///|
 test "expr_check: generic constraint on runtime declaration (TS2344)" {
   let issues = fn(src : String) -> Int {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
