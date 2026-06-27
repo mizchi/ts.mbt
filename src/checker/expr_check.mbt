@@ -6604,6 +6604,26 @@ fn check_expr_against(
   // correctly assigns to `string` without a false mismatch.
   let inferred_u = ctx.resolver.unwrap(inferred)
   let expected_u = ctx.resolver.unwrap(expected)
+  // TS2322 / TS2345: a concrete string literal assigned to a template-literal
+  // type pattern is an error when the pattern can't produce that literal
+  // (`const x: `a${string}` = "hello"`). `is_assignable_to`'s pattern matcher
+  // is conservative — an unknown / opaque placeholder accepts any substring —
+  // so a `false` verdict here is a *definite* mismatch and false-positive-free.
+  // Emitted unfiltered: the permissive suppression filter only whitelists
+  // primitive/simple-shape pairs, and a template-literal target isn't one, so
+  // it would otherwise be dropped in the recall path.
+  match (inferred_u, expected_u) {
+    (Literal(_), TemplateLiteralType(_, _)) =>
+      if !is_assignable_to(inferred_u, expected_u) {
+        record_unfiltered(
+          ctx,
+          sub_path,
+          "expected `\{type_display(expected_u)}` but got `\{type_display(inferred_u)}`",
+        )
+        return
+      }
+    _ => ()
+  }
   // Boxed wrapper objects (`String`/`Number`/`Boolean`/`BigInt`/`Symbol`)
   // are not assignable to their primitive counterparts: `var s: string =
   // new String("")` is TS2322. These wrapper names are lib globals the

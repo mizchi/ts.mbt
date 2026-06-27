@@ -10206,6 +10206,23 @@ test "expr_check: numeric / enum discriminant narrowing (switch + if)" {
 }
 
 ///|
+test "expr_check: string literal vs template-literal-type pattern (TS2322/2345)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A string literal that the pattern cannot produce is a mismatch.
+  assert_true(issues("const x: `a${string}` = \"hello\";") > 0)
+  assert_true(issues("const x: `${number}px` = \"10em\";") > 0)
+  assert_true(issues("function f(x: `a${string}`): void {} f(\"xyz\");") > 0)
+  // A literal the pattern *can* produce is fine.
+  @test.assert_eq(issues("const x: `a${string}` = \"abc\";"), 0)
+  @test.assert_eq(issues("const x: `${number}px` = \"10px\";"), 0)
+  // A widened `string` source is not a concrete literal -> stay silent (the
+  // pattern matcher only judges concrete literals).
+  @test.assert_eq(issues("const x: `a${string}` = (\"y\" as string);"), 0)
+}
+
+///|
 test "expr_check: generic constraint on runtime declaration (TS2344)" {
   let issues = fn(src : String) -> Int {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
