@@ -1363,6 +1363,11 @@ fn Resolver::enumerable_object_shape(
   }
   match self.unwrap(ty) {
     Struct(_, _) => true
+    // NOTE: `Object` type literals (`{ a } | { b }`) are intentionally NOT
+    // enumerated here. Enabling them flags object-literal unions discriminated
+    // by forms the narrowing engine doesn't yet cover (`=== undefined`
+    // discriminants, `"k" in obj` membership), producing false positives that
+    // outweigh the small object-literal recall gain. See docs/checker-priority.md.
     Named(n) | Applied(n, _) =>
       match self.interfaces.get(n) {
         Some(iface) => {
@@ -9919,20 +9924,24 @@ fn apply_switch_disc_default_narrowing(
   prop : String,
   cases : Array[@ast.TsSwitchCase],
 ) -> Unit {
-  let str_lits : Array[String] = []
+  let matchers : Array[(@ast.TsType) -> Bool] = []
   for c in cases {
     match c.test_expr {
-      Some(StringLit(s)) => str_lits.push(s)
-      _ => ()
+      Some(e) =>
+        match discriminant_field_matcher(e) {
+          Some(m) => matchers.push(m)
+          None => ()
+        }
+      None => ()
     }
   }
-  if str_lits.length() == 0 {
+  if matchers.length() == 0 {
     return
   }
   let cur = env_lookup_full(env, resolver, obj_name)
   let mut next : @ast.TsType = cur
-  for lit in str_lits {
-    match narrow_by_discriminant(resolver, next, prop, lit, false) {
+  for m in matchers {
+    match narrow_by_discriminant(resolver, next, prop, m, false) {
       Some(remainder) => next = remainder
       None => ()
     }
@@ -9985,15 +9994,15 @@ fn apply_switch_disc_narrowing(
   prop : String,
   case_test : @ast.TsExpr,
 ) -> Unit {
-  match case_test {
-    StringLit(lit) => {
+  match discriminant_field_matcher(case_test) {
+    Some(matcher) => {
       let cur = env_lookup_full(env, resolver, obj_name)
-      match narrow_by_discriminant(resolver, cur, prop, lit, true) {
+      match narrow_by_discriminant(resolver, cur, prop, matcher, true) {
         Some(narrowed) => env.bind(obj_name, narrowed)
         None => ()
       }
     }
-    _ => ()
+    None => ()
   }
 }
 
@@ -10099,11 +10108,70 @@ fn type_eq(a : @ast.TsType, b : @ast.TsType) -> Bool {
 /// Inspect a discriminator field on each variant and keep only those whose
 /// field is the matching literal. Returns `None` when the receiver isn't a
 /// union of structurally-known variants (so the caller can skip narrowing).
+/// Build a predicate over a *discriminant field type* from a `case` / `===`
+/// literal operand. Handles string (`Literal`), numeric (`NumberLiteral`) and
+/// boolean (`BooleanLiteral`) literal tags; returns `None` for any other
+/// operand shape (so the caller skips narrowing). Numeric literals are matched
+/// on their rendered text, mirroring `apply_switch_case_narrowing`.
+fn discriminant_field_matcher(
+  case_test : @ast.TsExpr,
+) -> ((@ast.TsType) -> Bool)? {
+  match case_test {
+    StringLit(s) =>
+      Some(fn(ft) {
+        match ft {
+          Literal(x) => x == s
+          _ => false
+        }
+      })
+    IntLit(i) => {
+      let s = "\{i}"
+      Some(fn(ft) {
+        match ft {
+          NumberLiteral(x) => x == s
+          _ => false
+        }
+      })
+    }
+    NumberLit(d) => {
+      let s = "\{d}"
+      Some(fn(ft) {
+        match ft {
+          NumberLiteral(x) => x == s
+          _ => false
+        }
+      })
+    }
+    BoolLit(b) =>
+      Some(fn(ft) {
+        match ft {
+          BooleanLiteral(x) => x == b
+          _ => false
+        }
+      })
+    // Enum-member tag (`case Choice.Yes:` / `x.kind === Choice.Yes`). The
+    // member access renders as `PropAccess(Var(enum), member)` and the field
+    // type of an enum-member literal parses as `Named("Enum.Member")`, so we
+    // match on the qualified name.
+    PropAccess(Var(enum_name), member) => {
+      let qualified = enum_name + "." + member
+      Some(fn(ft) {
+        match ft {
+          Named(x) => x == qualified
+          _ => false
+        }
+      })
+    }
+    _ => None
+  }
+}
+
+///|
 fn narrow_by_discriminant(
   resolver : Resolver,
   recv : @ast.TsType,
   field : String,
-  literal : String,
+  field_matches : (@ast.TsType) -> Bool,
   keep : Bool,
 ) -> @ast.TsType? {
   // Unwrap type aliases first so a `type Shape = A | B` receiver
@@ -10117,13 +10185,18 @@ fn narrow_by_discriminant(
   for v in variants {
     match resolver.lookup_field(v, field) {
       Some(field_ty) => {
-        any_resolved = true
-        let matches = match field_ty {
-          Literal(s) => s == literal
-          // String/Number primitives aren't a discriminator — be conservative.
-          _ => false
+        // Bail entirely if any variant's discriminant field is NOT a
+        // recognizable literal form (string / number / boolean literal, or a
+        // qualified enum-member `Named("Enum.Member")`). Otherwise a field we
+        // can't evaluate — e.g. a template-literal type `` `${AnimalType.cat}` ``
+        // — would fail every predicate and wrongly narrow the union to `never`
+        // (the `discriminatedUnionTypes4` false positive). Conservative
+        // non-narrowing matches the previous string-only behaviour there.
+        if !is_literal_discriminant_type(field_ty) {
+          return None
         }
-        if matches == keep {
+        any_resolved = true
+        if field_matches(field_ty) == keep {
           kept.push(v)
         }
       }
@@ -10134,6 +10207,20 @@ fn narrow_by_discriminant(
     return None
   }
   Some(union_of(kept))
+}
+
+///|
+/// True when `ft` is a literal type usable as a discriminant tag: a string /
+/// number / boolean literal, or a qualified enum-member name
+/// (`Named("Enum.Member")`). Bare primitives, template-literal types, plain
+/// `Named` references, and everything else are not — `narrow_by_discriminant`
+/// bails rather than risk narrowing a variant away on a tag it can't evaluate.
+fn is_literal_discriminant_type(ft : @ast.TsType) -> Bool {
+  match ft {
+    Literal(_) | NumberLiteral(_) | BooleanLiteral(_) => true
+    Named(x) => x.contains(".")
+    _ => false
+  }
 }
 
 ///|
@@ -10941,29 +11028,31 @@ fn analyze_equality(
     None => ()
   }
 
-  // `<chain>.<prop> === "literal"` — discriminated union narrowing on
+  // `<chain>.<prop> === <literal>` — discriminated union narrowing on
   // the parent chain. Accepts any `Var` / `PropAccess`-chain on the LHS
-  // so `o.shape.kind === "circle"` narrows `o.shape`.
-  let disc_match = match (left, right) {
-    (PropAccess(parent, prop), StringLit(lit)) =>
-      match narrowing_key_for_expr(parent) {
-        Some(parent_key) => Some((parent_key, prop, lit))
-        None => None
+  // so `o.shape.kind === "circle"` narrows `o.shape`. The literal may be a
+  // string, numeric, or boolean tag (`x.kind === 0`, `x.ok === true`).
+  let disc_match : (String, String, (@ast.TsType) -> Bool)? = match
+    (left, right) {
+    (PropAccess(parent, prop), rhs) =>
+      match (narrowing_key_for_expr(parent), discriminant_field_matcher(rhs)) {
+        (Some(parent_key), Some(m)) => Some((parent_key, prop, m))
+        _ => None
       }
-    (StringLit(lit), PropAccess(parent, prop)) =>
-      match narrowing_key_for_expr(parent) {
-        Some(parent_key) => Some((parent_key, prop, lit))
-        None => None
+    (lhs, PropAccess(parent, prop)) =>
+      match (narrowing_key_for_expr(parent), discriminant_field_matcher(lhs)) {
+        (Some(parent_key), Some(m)) => Some((parent_key, prop, m))
+        _ => None
       }
     _ => None
   }
   match disc_match {
-    Some((parent_key, prop, lit)) => {
+    Some((parent_key, prop, matcher)) => {
       let cur = narrowing_current_type(env, resolver, parent_key)
-      match narrow_by_discriminant(resolver, cur, prop, lit, true) {
+      match narrow_by_discriminant(resolver, cur, prop, matcher, true) {
         Some(then_ty) => {
           true_side.push((parent_key, then_ty))
-          match narrow_by_discriminant(resolver, cur, prop, lit, false) {
+          match narrow_by_discriminant(resolver, cur, prop, matcher, false) {
             Some(else_ty) => false_side.push((parent_key, else_ty))
             None => ()
           }

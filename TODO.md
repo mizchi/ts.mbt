@@ -1848,6 +1848,31 @@ conformance sources (`.errors.txt` baseline = ground truth):
     discriminant / property narrowing we don't model). Whole-corpus TP 1715 ->
     1716 (+1), 0 FP; pinned recall 668 -> 669 (unionTypeMembers). Whitebox-tested.
 
+2026-06-26 (T128)  669/815 (82 %)        414/414 ( 0 FP)   discriminant narrowing: numeric / boolean / enum tags
+
+  T128 -- generalized `narrow_by_discriminant` from string-`Literal`-only to a
+    predicate over the discriminant field type, adding numeric (`NumberLiteral`),
+    boolean (`BooleanLiteral`), and qualified enum-member (`Named("Enum.Member")`)
+    tags across all four call sites (switch-disc, switch-disc-default, the `if`
+    `=== <lit>` path, plus the new matcher `discriminant_field_matcher`). So
+    `switch (v.kind) { case 0: ... }` / `case Choice.Yes:` / `v.ok === true`
+    now narrow a discriminated union the same way string tags already did.
+    Guarded by `is_literal_discriminant_type`: if any variant's discriminant
+    field is NOT a recognizable literal tag (e.g. a template-literal type
+    `` `${AnimalType.cat}` ``), narrowing bails rather than narrow the union to
+    `never` and emit a spurious property-on-`never` (the `discriminatedUnionTypes4`
+    FP found while building this). Conformance recall-neutral (TP 1716, 0 FP)
+    but a real correctness fix -- it hardens the T127 union-property check
+    against numeric/enum-discriminated unions (a class of latent false
+    positives) and is the foundation for extending that check to object-literal
+    unions later. Whitebox-tested (switch + if + template-bail).
+
+    Object-literal union-property extension (`{a}|{b}`) was attempted on top of
+    this and REVERTED: it still needs `=== undefined` discriminant narrowing
+    and `"k" in obj` membership narrowing to be FP-free (discriminatedUnionTypes3,
+    controlFlowWithTemplateLiterals), and its recall payoff is small relative to
+    that FP tail. See docs/checker-priority.md.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary

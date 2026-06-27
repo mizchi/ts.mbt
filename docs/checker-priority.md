@@ -125,6 +125,20 @@
    > - **T127 で union "全メンバーに無いと不正" ルールを追加済み**
    >   （some-but-not-all、`Var` レシーバ＋全メンバー列挙可能時のみ）。
    >   pinned recall 668→669（unionTypeMembers）。
+   > - **T128 で判別 narrowing を数値/真偽/enum タグに一般化済み**
+   >   （`narrow_by_discriminant` を述語ベース化、switch/if/default の全経路）。
+   >   `switch(x.kind){case 0:}` / `case Choice.Yes:` / `v.ok === true` が
+   >   narrow するように。`is_literal_discriminant_type` ガードで、判別フィールドが
+   >   テンプレートリテラル型等の認識不能形のときは narrow を中止
+   >   （`never` 誤縮約＝`discriminatedUnionTypes4` FP を回避）。recall 中立だが
+   >   T127 の union 検査を数値/enum 判別 union の潜在 FP から守る正当性修正。
+   > - **オブジェクトリテラル union への拡張（`{a}|{b}`）は T128 上で試行 → 撤回**。
+   >   残る FP 源は **(a) `=== undefined` 判別 narrowing 未対応**
+   >   （`discriminatedUnionTypes3`）と **(b) `"k" in obj` メンバーシップ
+   >   narrowing 未対応**（`controlFlowWithTemplateLiterals`）。この 2 form を
+   >   narrowing に足せば 0-FP 化できるが、オブジェクトリテラル union の recall
+   >   利得は小さく FP テールが長いので優先度は低い。enum/数値判別の interface
+   >   union（T127 で既にカバー）が主な実利。
 
 ### Phase 3 — 最後（FP リスク最大）
 5. **代入可能性の深化**（関数共用体・交差・深い構造比較）。narrowing 投入後の方が

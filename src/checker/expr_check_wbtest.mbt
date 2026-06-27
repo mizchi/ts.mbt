@@ -10168,6 +10168,44 @@ test "expr_check: property on some-but-not-all union members (TS2339)" {
 }
 
 ///|
+test "expr_check: numeric / enum discriminant narrowing (switch + if)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A numeric-discriminated union narrowed by `switch (v.k)` must let each
+  // case body access its own variant's members (no T127 union false positive).
+  @test.assert_eq(
+    issues(
+      "interface A { k: 0; x: number } interface B { k: 1; y: number } declare var v: A | B; function f() { switch (v.k) { case 0: return v.x; case 1: return v.y; } }",
+    ),
+    0,
+  )
+  // Same via an `if` discriminant guard.
+  @test.assert_eq(
+    issues(
+      "interface A { k: 0; x: number } interface B { k: 1; y: number } function f(v: A | B) { if (v.k === 0) { return v.x; } return v.y; }",
+    ),
+    0,
+  )
+  // Control: without any narrowing, accessing a non-common member still flags.
+  assert_true(
+    issues(
+      "interface A { k: 0; x: number } interface B { k: 1; y: number } declare var v: A | B; function f() { return v.x; }",
+    ) >
+    0,
+  )
+  // A template-literal-typed discriminant is not a recognizable literal tag, so
+  // narrowing bails (no spurious narrow-to-`never`): the union access stays
+  // silent rather than producing a property-on-`never` false positive.
+  @test.assert_eq(
+    issues(
+      "declare var x: { type: `a`; meow: string } | { type: `b`; bark: string }; function f() { if ((x as any).type === \"a\") { return 1; } return 2; }",
+    ),
+    0,
+  )
+}
+
+///|
 test "expr_check: generic constraint on runtime declaration (TS2344)" {
   let issues = fn(src : String) -> Int {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
