@@ -16141,6 +16141,11 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
           path: "class \{cls_name}",
           message: "function implementation is missing or not immediately following the declaration",
         })
+      } else if name == "<overload-accessibility-mix>" {
+        issues.push({
+          path: "class \{cls_name}",
+          message: "overload signatures must all be public, private or protected",
+        })
       } else {
         issues.push({
           path: "class \{cls_name}",
