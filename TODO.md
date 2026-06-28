@@ -1930,6 +1930,26 @@ conformance sources (`.errors.txt` baseline = ground truth):
     consistency fix (a common real-world error now caught uniformly).
     Whitebox-tested.
 
+2026-06-26 (T132)  674/815 (83 %)        414/414 ( 0 FP)   TS1070 accessibility modifier on interface member
+
+  T132 -- TS1070 ("'private' modifier cannot appear on a type member"). The
+    parser silently consumed and discarded `private` / `public` / `protected`
+    on interface members, so the error was never surfaced. Added
+    `can_consume_interface_accessibility_modifier` (mirrors the existing
+    `readonly` modifier lookahead via the new shared `token_starts_interface_member`
+    helper) -- it treats the keyword as a modifier only when the next token
+    begins a member name AND is on the SAME line (a line break means ASI split
+    it into a standalone property signature, which TS accepts: `Protected8`,
+    `parserModifierOnPropertySignature2` -- the two FPs caught during dev). The
+    parser records each offending member in the new
+    `interface_member_modifier_misuses` channel (TsModule + Parser field, 15
+    construction sites); the checker surfaces one diagnostic per entry. Never
+    valid TS in this position, so false-positive-free. Whole-corpus TP 1720 ->
+    1723 (+3), 0 FP; pinned recall 673 -> 674 (interfaceWithPrivateMember).
+    Whitebox-tested incl. the ASI and member-named-`private` negatives. (Object
+    type literals `var v: { private y }` are not yet covered -- a separate
+    parse path -- but the interface case flips the file.)
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary
