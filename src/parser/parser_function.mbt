@@ -1435,6 +1435,17 @@ pub fn Parser::parse_interface(
       let _ = self.advance()
       let method_params = self.parse_params()
       let _ = self.expect(RParen)
+      // TS2371: a parameter initializer (`x = 1`) is only allowed in an
+      // implementation signature. An interface method / call signature never
+      // has a body, so any default here is an error. Recorded via the shared
+      // interface-member-misuse channel with a `<param-init>` sentinel.
+      for param in method_params {
+        if !(param.default is None) {
+          self.interface_member_modifier_misuses.push(
+            "<param-init>\{field_name}.\{param.name}",
+          )
+        }
+      }
       // Return type
       let return_type = if self.check(Colon) {
         let _ = self.advance()

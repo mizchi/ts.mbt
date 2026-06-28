@@ -10224,6 +10224,22 @@ test "expr_check: string literal vs template-literal-type pattern (TS2322/2345)"
 }
 
 ///|
+test "expr_check: parameter initializer in interface signature (TS2371)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A parameter initializer in an interface method / call signature is illegal
+  // (no implementation body).
+  assert_true(issues("interface I { foo(x: number, y = 1); }") > 0)
+  assert_true(issues("interface I { (x = 1); }") > 0)
+  // Implementations (function / class method) DO allow initializers -> silent.
+  @test.assert_eq(issues("function foo(x = 1) {}"), 0)
+  @test.assert_eq(issues("class C { foo(x = 1) {} }"), 0)
+  // A signature with no initializer is fine.
+  @test.assert_eq(issues("interface I { foo(x: number): void; }"), 0)
+}
+
+///|
 test "expr_check: accessibility modifier on interface member (TS1070)" {
   let issues = fn(src : String) -> Int {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
