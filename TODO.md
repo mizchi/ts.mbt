@@ -1950,6 +1950,22 @@ conformance sources (`.errors.txt` baseline = ground truth):
     type literals `var v: { private y }` are not yet covered -- a separate
     parse path -- but the interface case flips the file.)
 
+2026-06-26 (T133)  675/815 (83 %)        414/414 ( 0 FP)   TS2371 parameter initializer in interface signature
+
+  T133 -- TS2371 ("A parameter initializer is only allowed in a function or
+    constructor implementation"). An interface method / call signature has no
+    body, so a parameter default (`interface I { foo(y = 1); }`, `{ (x = 1); }`)
+    is always an error. Detected in `parse_interface` right after the signature
+    `parse_params()` (any param with a non-`None` `default`), recorded via the
+    shared `interface_member_modifier_misuses` channel with a `<param-init>`
+    sentinel so the checker emits TS2371 vs the TS1070 modifier message.
+    Function / class-method *implementations* (which legitimately allow
+    initializers) go through different parse paths and are unaffected. Never
+    valid TS in a signature, so false-positive-free. Whole-corpus TP 1723 ->
+    1724 (+1), 0 FP; pinned recall 674 -> 675 (callSignaturesWithParameterInitializers).
+    Whitebox-tested. (Object-type-literal signatures `{ (x = 1) }` use a
+    separate parse path and aren't covered, but the interface case flips the file.)
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary
