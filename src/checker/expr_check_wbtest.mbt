@@ -10223,6 +10223,28 @@ test "expr_check: string literal vs template-literal-type pattern (TS2322/2345)"
 }
 
 ///|
+test "expr_check: string literal vs string-literal union, call args (TS2345)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A string literal not in the union, passed as a call argument, is flagged
+  // — previously only the binding-init path caught this (the call path widened
+  // the literal source to `string`, which the permissive filter then dropped).
+  assert_true(issues("function f(x: \"a\" | \"b\"): void {} f(\"c\");") > 0)
+  assert_true(issues("const x: \"a\" | \"b\" = \"c\";") > 0)
+  // A literal that IS in the union is fine.
+  @test.assert_eq(issues("function f(x: \"a\" | \"b\"): void {} f(\"a\");"), 0)
+  // A widened `string` source stays silent (could be a valid member; matches
+  // the over-widening guard, no false positive).
+  @test.assert_eq(
+    issues(
+      "function f(x: \"a\" | \"b\"): void {} declare const s: string; f(s);",
+    ),
+    0,
+  )
+}
+
+///|
 test "expr_check: string literal vs intrinsic string-mapping type (TS2322)" {
   let issues = fn(src : String) -> Int {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
