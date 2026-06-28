@@ -6671,6 +6671,24 @@ fn check_expr_against(
         )
         return
       }
+    // A concrete string literal assigned where a union of *string literals* is
+    // expected, when the literal isn't one of them (`f("c")` where the param is
+    // `"a" | "b"`). `is_assignable_to` decides this precisely. Emitted unfiltered
+    // because the call-argument path otherwise widens the literal source to
+    // `string`, and `string`-vs-literal-union is dropped by the permissive
+    // filter's over-widening guard — so the binding-init path flags this but the
+    // call-argument path silently missed it. Scoped to all-string-literal unions
+    // (numeric / boolean unions already emit through the normal path).
+    (Literal(_), Union(members)) =>
+      if members.iter().all(fn(m) { m is Literal(_) }) &&
+        !is_assignable_to(inferred_u, expected_u) {
+        record_unfiltered(
+          ctx,
+          sub_path,
+          "expected `\{type_display(expected_u)}` but got `\{type_display(inferred_u)}`",
+        )
+        return
+      }
     _ => ()
   }
   // Boxed wrapper objects (`String`/`Number`/`Boolean`/`BigInt`/`Symbol`)

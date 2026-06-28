@@ -1910,6 +1910,26 @@ conformance sources (`.errors.txt` baseline = ground truth):
     `Uppercase<Lowercase<`${number}`>>`, where the number pattern can't produce
     "A" -- is a deliberate MISS: it needs intrinsic-over-template evaluation.)
 
+2026-06-26 (T131)  673/815 (83 %)        414/414 ( 0 FP)   TS2345 string literal vs string-literal union (call args)
+
+  T131 -- TS2345 / TS2322 consistency fix. A concrete string literal that
+    isn't a member of a string-literal union was flagged on the binding-init /
+    assignment path (`const x: "a" | "b" = "c"`) but NOT as a call argument
+    (`f("c")` where the param is `"a" | "b"`): the call path widens the literal
+    source to `string`, and `string`-vs-literal-union is dropped by the
+    permissive suppression filter's over-widening guard (it can't tell an
+    over-widened valid literal from an invalid one). Added an early precise
+    check in `check_expr_against` for `(Literal, Union-of-string-literals)`
+    using `is_assignable_to`, emitted unfiltered, scoped to all-string-literal
+    unions (numeric / boolean unions already emit normally). A widened `string`
+    source never reaches it (not a precise `Literal`), so the over-widening
+    guard is preserved -- no false positive. Conformance recall-neutral (TP
+    1720, 0 FP): the corpus's literal-union call-arg misses are derived from
+    generic/conditional types (`templateLiteralTypes4`'s `TypedObject<[...]>`)
+    we don't evaluate, not the basic case -- but it's a real correctness /
+    consistency fix (a common real-world error now caught uniformly).
+    Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary
