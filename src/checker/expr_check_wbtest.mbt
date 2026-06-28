@@ -10224,6 +10224,41 @@ test "expr_check: string literal vs template-literal-type pattern (TS2322/2345)"
 }
 
 ///|
+test "expr_check: constructor overload accessibility mismatch (TS2385)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Constructor overload signatures with inconsistent accessibility are TS2385.
+  assert_true(
+    issues(
+      "class A { public constructor(a: boolean); protected constructor(a: number); private constructor(a: string); private constructor() {} }",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "class B { protected constructor(a: number); constructor(a: string); constructor() {} }",
+    ) >
+    0,
+  )
+  // All-same accessibility (incl. all-default-public) is fine.
+  @test.assert_eq(
+    issues(
+      "class C { protected constructor(a: number); protected constructor(a: string); protected constructor() {} }",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "class D { constructor(a: number); constructor(a: string); constructor() {} }",
+    ),
+    0,
+  )
+  // A single constructor (no overloads) is never flagged.
+  @test.assert_eq(issues("class E { private constructor() {} }"), 0)
+}
+
+///|
 test "expr_check: parameter initializer in interface signature (TS2371)" {
   let issues = fn(src : String) -> Int {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()

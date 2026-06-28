@@ -1966,6 +1966,23 @@ conformance sources (`.errors.txt` baseline = ground truth):
     Whitebox-tested. (Object-type-literal signatures `{ (x = 1) }` use a
     separate parse path and aren't covered, but the interface case flips the file.)
 
+2026-06-26 (T134)  676/815 (83 %)        414/414 ( 0 FP)   TS2385 constructor overload accessibility mismatch
+
+  T134 -- TS2385 ("Overload signatures must all be public, private or
+    protected"). A class declaring 2+ constructor signatures whose
+    accessibilities differ (`public constructor(...); protected constructor(...);
+    private constructor(...)`) is an error. The class-body parser already tracks
+    per-element `visibility` (defaults to "public", captures private/protected);
+    added a `ctor_visibilities` accumulator that records each constructor
+    signature's visibility, computes an `overload_accessibility_mix` flag (2+
+    entries not all equal), threads it through the parse_class_body return tuple
+    (now 11-tuple) and surfaces it via the existing `duplicate_member_names`
+    sentinel channel (`<overload-accessibility-mix>`) -> checker emits TS2385.
+    Scoped to constructors (the conformance file's focus); all-same and single
+    constructors stay silent. Never valid TS, so false-positive-free.
+    Whole-corpus TP 1724 -> 1725 (+1), 0 FP; pinned recall 675 -> 676
+    (classConstructorOverloadsAccessibility). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary

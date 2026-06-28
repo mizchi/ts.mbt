@@ -1074,6 +1074,7 @@ fn Parser::parse_class_body(
   Bool,
   Bool,
   Bool,
+  Bool,
 ) raise ParseError {
   let _ = self.expect(LBrace)
   // Class body is implicitly strict mode
@@ -1110,6 +1111,11 @@ fn Parser::parse_class_body(
   let private_members : Array[String] = []
   let protected_members : Array[String] = []
   let abstract_members : Array[String] = []
+  // Accessibility of each constructor signature / implementation seen, in
+  // order. Used for TS2385 ("overload signatures must all be public, private
+  // or protected"): if a class declares 2+ constructor signatures whose
+  // accessibilities differ, it's an error.
+  let ctor_visibilities : Array[String] = []
   while !self.check(RBrace) && !self.check(Eof) {
     while self.check(At) {
       self.skip_decorator()
@@ -1275,6 +1281,10 @@ fn Parser::parse_class_body(
       let is_constructor_method = key is Name("constructor")
       if is_constructor_method {
         self.param_property_scopes.push([])
+        // TS2385: record this constructor signature's accessibility so we can
+        // flag an overload set whose members don't all share one (`visibility`
+        // defaults to "public" and captures private / protected modifiers).
+        ctor_visibilities.push(visibility)
       }
       let params = if self.check(LParen) {
         let _ = self.expect(LParen)
@@ -1497,9 +1507,23 @@ fn Parser::parse_class_body(
   if check_missing(ov_instance) || check_missing(ov_static) {
     overload_missing_impl = true
   }
+  // TS2385: a constructor overload set (2+ signatures) whose members don't all
+  // share one accessibility. Conservative — fires only when the visibilities
+  // genuinely differ, which is never valid TS, so it is false-positive-free.
+  let mut overload_accessibility_mix = false
+  if ctor_visibilities.length() >= 2 {
+    let first = ctor_visibilities[0]
+    for v in ctor_visibilities {
+      if v != first {
+        overload_accessibility_mix = true
+        break
+      }
+    }
+  }
   (
     ctor, elements, private_members, protected_members, abstract_members, ctor_impl_count,
     index_sig_modifier_misuse, abstract_member_with_body, overload_static_mix, overload_missing_impl,
+    overload_accessibility_mix,
   )
 }
 
@@ -1550,6 +1574,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     private_members,
     protected_members,
     abstract_members,
+    _,
     _,
     _,
     _,
@@ -2218,6 +2243,7 @@ fn Parser::parse_class_decl_with_abstract(
     abstract_member_with_body,
     overload_static_mix,
     overload_missing_impl,
+    overload_accessibility_mix,
   ) = self.parse_class_body()
   self.current_class_brand = prev_brand
   self.restore_local_type_param_bounds(class_type_param_bound_len)
@@ -2248,6 +2274,10 @@ fn Parser::parse_class_decl_with_abstract(
   // TS2391: a bodyless overload signature with no implementation.
   if overload_missing_impl {
     runtime_decl.duplicate_member_names.push("<overload-no-impl>")
+  }
+  // TS2385: constructor overload signatures with inconsistent accessibility.
+  if overload_accessibility_mix {
+    runtime_decl.duplicate_member_names.push("<overload-accessibility-mix>")
   }
   // Surface the class's structural diagnostics for *every* class, including
   // ones nested in function bodies that the IIFE lowering removes from
