@@ -16863,6 +16863,16 @@ fn check_module_function_bodies_layered(
         message: "parameter cannot have question mark and initializer",
       })
     }
+    // TS1070: an accessibility modifier (`private` / `public` / `protected`)
+    // cannot appear on an interface / type-literal member. The parser records
+    // each offending member; this position is never valid TS, so it is
+    // false-positive-free.
+    for member in module_.interface_member_modifier_misuses {
+      all.push({
+        path: "member `\{member}`",
+        message: "accessibility modifier cannot appear on a type member",
+      })
+    }
     // TS2313: a type parameter with a circular constraint (`T extends T`, or an
     // indirect cycle). Walks declarations (and nested namespaces) once from the
     // top.

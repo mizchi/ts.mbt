@@ -1025,11 +1025,47 @@ fn Parser::parse_extends_clause_until_body(
 }
 
 ///|
+// True when an accessibility modifier (`private` / `public` / `protected`) is
+// being used as a *modifier* on the next interface / type-literal member — i.e.
+// it's one of those keywords AND the following token begins a member name. Such
+// a modifier is illegal on a type member (TS1070); the caller records the
+// diagnostic, consumes the keyword, and parses the member as usual. Reuses the
+// same member-start lookahead as the `readonly` modifier so a property literally
+// named `private` (`{ private: string }`) is not misread as a modifier.
+fn Parser::can_consume_interface_accessibility_modifier(self : Parser) -> Bool {
+  let is_acc = match self.peek().kind {
+    Ident(n) => n == "private" || n == "public" || n == "protected"
+    _ => false
+  }
+  if !is_acc {
+    return false
+  }
+  // A modifier must sit on the SAME line as the member it modifies. With a line
+  // break after the keyword, ASI splits it into its own property signature
+  // (`interface I { protected \n p }` declares members `protected` and `p`,
+  // which TS accepts) — so a newline before the next token means this is a
+  // member *name*, not a modifier.
+  let next = self.peek_at(1)
+  if next.has_newline_before {
+    return false
+  }
+  token_starts_interface_member(next.kind)
+}
+
+///|
 fn Parser::can_consume_interface_readonly_modifier(self : Parser) -> Bool {
   if !self.check(Ident("readonly")) {
     return false
   }
-  match self.peek_at(1).kind {
+  token_starts_interface_member(self.peek_at(1).kind)
+}
+
+///|
+// True when `kind` can begin an interface / type-literal member name (a plain
+// identifier, string / numeric literal key, index-signature `[`, call / new
+// signature, or any of the contextual keywords that double as member names).
+fn token_starts_interface_member(kind : TokenKind) -> Bool {
+  match kind {
     Ident(_)
     | Str(_)
     | Int(_)
@@ -1101,6 +1137,18 @@ pub fn Parser::parse_interface(
   let index_signatures : Array[(@ast.TsType, @ast.TsType)] = []
   let method_type_params : Array[(String, Array[String])] = []
   while !self.check(RBrace) && !self.check(Eof) {
+    // TS1070: an accessibility modifier (`private` / `public` / `protected`)
+    // is never valid on an interface member. Record it, consume the keyword,
+    // and parse the member as usual (the `readonly` modifier — which IS legal —
+    // is handled separately below). `name` is the member it precedes.
+    while self.can_consume_interface_accessibility_modifier() {
+      let _ = self.advance()
+      let member = match self.peek().kind {
+        Ident(n) => n
+        _ => "<member>"
+      }
+      self.interface_member_modifier_misuses.push("\{name}.\{member}")
+    }
     // Skip readonly modifier
     let mut is_readonly_field = false
     if self.can_consume_interface_readonly_modifier() {

@@ -321,6 +321,7 @@ fn parse_module_or_empty(src : String) -> @ast.TsModule {
         deprecated_compiler_options: [],
         parameter_property_misuses: [],
         param_optional_initializer_misuses: [],
+        interface_member_modifier_misuses: [],
         class_dup_diagnostics: [],
         top_level_stmts: [],
       }
@@ -10220,6 +10221,36 @@ test "expr_check: string literal vs template-literal-type pattern (TS2322/2345)"
   // A widened `string` source is not a concrete literal -> stay silent (the
   // pattern matcher only judges concrete literals).
   @test.assert_eq(issues("const x: `a${string}` = (\"y\" as string);"), 0)
+}
+
+///|
+test "expr_check: accessibility modifier on interface member (TS1070)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // `private` / `public` / `protected` are never valid on a type member.
+  assert_true(issues("interface I { private x: string; }") > 0)
+  assert_true(issues("interface I { public x: string; }") > 0)
+  assert_true(issues("interface I { protected x: string; }") > 0)
+  // `readonly` IS valid -> silent.
+  @test.assert_eq(issues("interface I { readonly x: string; }"), 0)
+  // A member literally *named* `private` (no following name) is a property, not
+  // a modifier -> silent.
+  @test.assert_eq(issues("interface I { private: string; }"), 0)
+  // ASI: a modifier keyword on its own line splits into a standalone property
+  // signature (`interface I { protected\n p }` declares `protected` and `p`),
+  // which TS accepts -> silent.
+  @test.assert_eq(
+    issues(
+      (
+        #|interface I {
+        #|  protected
+        #|  p
+        #|}
+      ),
+    ),
+    0,
+  )
 }
 
 ///|

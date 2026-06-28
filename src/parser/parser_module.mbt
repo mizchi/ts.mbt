@@ -136,6 +136,7 @@ fn empty_ts_module() -> @ast.TsModule {
     deprecated_compiler_options: [],
     parameter_property_misuses: [],
     param_optional_initializer_misuses: [],
+    interface_member_modifier_misuses: [],
     class_dup_diagnostics: [],
   }
 }
@@ -3275,6 +3276,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
     deprecated_compiler_options: detect_deprecated_compiler_options(self.src),
     parameter_property_misuses: self.param_property_misuses,
     param_optional_initializer_misuses: self.param_optional_initializer_misuses,
+    interface_member_modifier_misuses: self.interface_member_modifier_misuses,
     class_dup_diagnostics: self.collected_class_dups,
   }
 }

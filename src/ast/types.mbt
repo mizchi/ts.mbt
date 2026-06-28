@@ -867,6 +867,13 @@ pub(all) struct TsModule {
   // records one parameter name per offending declaration; the checker
   // surfaces one diagnostic per entry. Empty for well-formed input.
   param_optional_initializer_misuses : Array[String]
+  // Interface / type-literal members declared with an accessibility modifier
+  // (`private` / `public` / `protected` x: T) -- always a TS1070 grammar error
+  // ("'private' modifier cannot appear on a type member"). The parser records
+  // one human-readable location string per offending member; the checker
+  // surfaces one diagnostic per entry. Empty for well-formed input (the
+  // modifier is never valid in these positions), so it never costs precision.
+  interface_member_modifier_misuses : Array[String]
   // Class-body structural diagnostics for every class parsed (top-level *and*
   // nested in function bodies). Each entry is `(class_name, names)` where
   // `names` is the class's `duplicate_member_names` (duplicate members plus

@@ -83,6 +83,12 @@ pub struct Parser {
   // list to the checker. Empty for well-formed input, so it never costs
   // precision.
   param_optional_initializer_misuses : Array[String]
+  // Interface / type-literal members seen with an accessibility modifier
+  // (`private` / `public` / `protected`) -- always a TS1070 grammar error.
+  // `parse_interface` / the object-type-literal parser append one location
+  // string per offending member; the checker surfaces them. Empty for
+  // well-formed input, so it never costs precision.
+  interface_member_modifier_misuses : Array[String]
   // Class-body structural diagnostics (`duplicate_member_names`, which also
   // carries the `<multiple-ctor-impl>` / `<index-sig-modifier>` /
   // `<abstract-impl>` sentinels) collected for *every* class parsed, including
@@ -168,6 +174,7 @@ pub fn Parser::new_with_strict_and_jsx(
     param_property_scopes: [],
     param_property_misuses: [],
     param_optional_initializer_misuses: [],
+    interface_member_modifier_misuses: [],
     collected_class_dups: [],
     pure_marker_positions: {},
     internal_marker_positions: {},
@@ -224,6 +231,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     param_property_scopes: [],
     param_property_misuses: [],
     param_optional_initializer_misuses: [],
+    interface_member_modifier_misuses: [],
     collected_class_dups: [],
     pure_marker_positions: lexer.pure_marker_positions,
     internal_marker_positions: lexer.internal_marker_positions,

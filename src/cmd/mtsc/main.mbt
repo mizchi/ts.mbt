@@ -424,6 +424,7 @@ async fn mtsc_load_bundle_files(
           deprecated_compiler_options: [],
           parameter_property_misuses: [],
           param_optional_initializer_misuses: [],
+          interface_member_modifier_misuses: [],
           class_dup_diagnostics: [],
           top_level_stmts: [],
         }
@@ -635,6 +636,7 @@ async fn main {
           deprecated_compiler_options: [],
           parameter_property_misuses: [],
           param_optional_initializer_misuses: [],
+          interface_member_modifier_misuses: [],
           class_dup_diagnostics: [],
           top_level_stmts: [],
         })
@@ -749,6 +751,7 @@ async fn main {
             deprecated_compiler_options: [],
             parameter_property_misuses: [],
             param_optional_initializer_misuses: [],
+            interface_member_modifier_misuses: [],
             class_dup_diagnostics: [],
             top_level_stmts: [],
           })
