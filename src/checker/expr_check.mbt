@@ -3542,6 +3542,14 @@ fn is_syntactically_always_truthy(expr : @ast.TsExpr) -> Bool {
     | NativeClassExpr(_, _)
     | ObjectLit(_)
     | ArrayLit(_) => true
+    // Literal scalars whose value is statically truthy: a non-empty string, a
+    // non-zero number / bigint, or `true`. Mirrors the always-falsy set, so a
+    // bare identifier or call result is still never matched.
+    BoolLit(b) => b
+    StringLit(s) => s != ""
+    IntLit(n) => n != 0
+    NumberLit(n) => n != 0.0
+    BigIntLit(s) => s != "0" && s != "0n"
     _ => false
   }
 }
