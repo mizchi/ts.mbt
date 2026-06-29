@@ -12574,6 +12574,35 @@ fn check_call_args_in_expr(
         _ => ()
       }
       let recv_ty = infer_expr(env, ctx.resolver, recv)
+      // TS2339: a private name accessed on a `typeof C` value (`x: typeof
+      // Derived; x.#prop`) — the static-side analogue of the `C.#x` check
+      // above. Private statics are never inherited, so a private-brand name
+      // that `C` doesn't declare statically is a definite error.
+      match ctx.resolver.unwrap(recv_ty) {
+        TypeOf(cname) =>
+          if prop.has_prefix("__private_brand__") {
+            match ctx.resolver.classes.get(cname) {
+              Some(cls) => {
+                let has_static = cls.properties
+                  .iter()
+                  .any(fn(p) { p.is_static && p.name == prop }) ||
+                  cls.methods
+                  .iter()
+                  .any(fn(m) { m.is_static && m.name == prop })
+                if !has_static {
+                  record_unfiltered(
+                    ctx,
+                    "PropAccess `.#…`",
+                    "private static member does not exist on class `\{cname}`",
+                  )
+                  return
+                }
+              }
+              None => ()
+            }
+          }
+        _ => ()
+      }
       // Null/undefined receiver: `.foo` on `null | undefined` is a runtime error.
       if is_nullable_type(recv_ty) {
         record(

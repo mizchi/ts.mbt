@@ -2043,6 +2043,17 @@ conformance sources (`.errors.txt` baseline = ground truth):
     681 (privateNamesConstructorChain-1/2, privateNamesAndStaticFields).
     Whitebox-tested.
 
+2026-06-26 (T139)  682/815 (84 %)        414/414 ( 0 FP)   TS2339 static private on `typeof C` receiver
+
+  T139 -- extends T138 to the static-side analogue where the receiver is a
+    `typeof C` value (`x: typeof Derived; x.#prop`), not a bare class name.
+    When the inferred receiver type unwraps to `TypeOf(cname)` and the accessed
+    private-brand name isn't a static member of class `cname`, flag TS2339
+    (private statics are never inherited). Same-class `typeof C` access of C's
+    own static private stays silent. Whole-corpus TP 1732 -> 1733 (+1), 0 FP;
+    pinned recall 681 -> 682 (privateNameStaticAccessorssDerivedClasses).
+    Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary

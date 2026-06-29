@@ -10242,6 +10242,19 @@ test "expr_check: static private member not on class (TS2339)" {
     issues("class P { static get #g() { return 1; } m() { return P.#g; } }"),
     0,
   )
+  // Same via a `typeof C` receiver: a static private not on the resolved class.
+  assert_true(
+    issues(
+      "class Base { static get #prop() { return 1; } static m(x: typeof Derived) { return x.#prop; } } class Derived extends Base {}",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "class C { static get #p() { return 1; } static m(x: typeof C) { return x.#p; } }",
+    ),
+    0,
+  )
 }
 
 ///|
