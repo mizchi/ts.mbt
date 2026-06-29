@@ -10650,3 +10650,28 @@ test "expr_check: always-truthy left operand of && (TS2872)" {
   // `||` is not flagged by this check.
   @test.assert_eq(issues("let z = {} || 1;"), 0)
 }
+
+///|
+test "expr_check: always-falsy left operand of || (TS2873)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("this kind of expression is always falsy") {
+        n += 1
+      }
+    }
+    n
+  }
+  // Literal always-falsy left operands of `||`.
+  assert_true(issues("let z = null || 1;") > 0)
+  assert_true(issues("let z = void 0 || 1;") > 0)
+  assert_true(issues("let z = 0 || 1;") > 0)
+  assert_true(issues("let z = \"\" || 1;") > 0)
+  assert_true(issues("let z = false || 1;") > 0)
+  // A bare identifier (incl. `undefined`, which is shadowable) is NOT matched.
+  @test.assert_eq(issues("let a: any; let z = a || 1;"), 0)
+  @test.assert_eq(issues("let z = undefined || 1;"), 0)
+  // Non-falsy literals and `&&` are not flagged by this check.
+  @test.assert_eq(issues("let z = 1 || 2;"), 0)
+  @test.assert_eq(issues("let z = null && 1;"), 0)
+}
