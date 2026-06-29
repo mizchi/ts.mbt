@@ -3547,6 +3547,22 @@ fn is_syntactically_always_truthy(expr : @ast.TsExpr) -> Bool {
 }
 
 ///|
+/// True when `expr` is a literal form that always evaluates to a falsy value:
+/// `null`, `false`, `0`, `0n`, `""`, or `void <expr>` (always `undefined`).
+/// Used to flag `<always-falsy> || rhs` (TS2873, "This kind of expression is
+/// always falsy"). `undefined` is intentionally excluded -- it parses as a
+/// bare identifier that can be shadowed -- so the check stays sound.
+fn is_syntactically_always_falsy(expr : @ast.TsExpr) -> Bool {
+  match expr {
+    NullLit | BoolLit(false) | StringLit("") | IntLit(0) => true
+    NumberLit(n) => n == 0.0
+    BigIntLit(s) => s == "0" || s == "0n"
+    UnaryOp(Void, _) => true
+    _ => false
+  }
+}
+
+///|
 fn record_unfiltered(
   ctx : CheckCtx,
   sub_path : String,
@@ -12430,6 +12446,15 @@ fn check_call_args_in_expr(
       if op is And && is_syntactically_always_truthy(l) {
         record_unfiltered(
           ctx, "logical `&&`", "this kind of expression is always truthy",
+        )
+      }
+      // TS2873: a `||` whose left operand is a literal always-falsy value
+      // (`null || x`, `void 0 || y`, `0 || z`) is redundant -- the guard
+      // always falls through to the right operand. Same literal-only matching,
+      // so no inference and no false positives.
+      if op is Or && is_syntactically_always_falsy(l) {
+        record_unfiltered(
+          ctx, "logical `||`", "this kind of expression is always falsy",
         )
       }
       // Short-circuit narrowing: the RHS of `&&` runs only when the LHS is

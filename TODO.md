@@ -2144,6 +2144,19 @@ conformance sources (`.errors.txt` baseline = ground truth):
     1741, 0 FP. Pinned recall 688 -> 689 (contextuallyTypeLogicalAnd03).
     Whitebox-tested.
 
+2026-06-29 (T147)  690/815 (85 %)        414/414 ( 0 FP)   TS2873 always-falsy left operand of ||
+
+  T147 -- TS2873 ("This kind of expression is always falsy"). The companion to
+    T146: a `||` whose left operand is a literal always-falsy value -- `null`,
+    `false`, `0`, `0n`, `""`, or `void <expr>` (always `undefined`) -- is
+    redundant; the guard always falls through to the right operand
+    (`null || x`, `void 0 || y`, `0 || z`). `is_syntactically_always_falsy`
+    matches only those literal forms; `undefined` is deliberately excluded
+    because it parses as a shadowable identifier. Added in the `BinOp(Or, …)`
+    arm via `record_unfiltered`. Whole-corpus TP 1741 -> 1745 (+4, caught
+    several files beyond the pinned set), 0 FP. Pinned recall 689 -> 690
+    (initializersWidened). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary
