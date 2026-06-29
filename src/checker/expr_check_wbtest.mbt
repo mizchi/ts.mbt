@@ -10224,6 +10224,22 @@ test "expr_check: string literal vs template-literal-type pattern (TS2322/2345)"
 }
 
 ///|
+test "expr_check: async-before-static modifier order (TS1029)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // `async static` (wrong order) is TS1029 — in a class declaration and a
+  // class expression, with or without a generator.
+  assert_true(issues("class C { async static foo() {} }") > 0)
+  assert_true(issues("class C { async static *bar() {} }") > 0)
+  assert_true(issues("const C = class { async static foo() {} };") > 0)
+  // Correct order, or only one of the modifiers -> silent.
+  @test.assert_eq(issues("class C { static async foo() {} }"), 0)
+  @test.assert_eq(issues("class C { async foo() {} }"), 0)
+  @test.assert_eq(issues("class C { static foo() {} }"), 0)
+}
+
+///|
 test "expr_check: constructor overload accessibility mismatch (TS2385)" {
   let issues = fn(src : String) -> Int {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()

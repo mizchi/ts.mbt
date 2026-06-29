@@ -16146,6 +16146,11 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
           path: "class \{cls_name}",
           message: "overload signatures must all be public, private or protected",
         })
+      } else if name == "<modifier-order>" {
+        issues.push({
+          path: "class \{cls_name}",
+          message: "`static` modifier must precede `async` modifier",
+        })
       } else {
         issues.push({
           path: "class \{cls_name}",
