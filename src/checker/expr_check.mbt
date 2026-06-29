@@ -12447,23 +12447,22 @@ fn check_call_args_in_expr(
     }
     BinOp(op, l, r) => {
       check_call_args_in_expr(env, l, ctx)
-      // TS2872: a `&&` whose left operand is a literal always-truthy value
-      // (`(a => a) && f`, `{} && x`, `[] && x`) is redundant -- the guard
-      // never short-circuits. Only syntactic literal forms are matched, so
-      // this needs no inference and never false-positives.
-      if op is And && is_syntactically_always_truthy(l) {
-        record_unfiltered(
-          ctx, "logical `&&`", "this kind of expression is always truthy",
-        )
-      }
-      // TS2873: a `||` whose left operand is a literal always-falsy value
-      // (`null || x`, `void 0 || y`, `0 || z`) is redundant -- the guard
-      // always falls through to the right operand. Same literal-only matching,
-      // so no inference and no false positives.
-      if op is Or && is_syntactically_always_falsy(l) {
-        record_unfiltered(
-          ctx, "logical `||`", "this kind of expression is always falsy",
-        )
+      // TS2872 / TS2873: the left operand of a `&&` / `||` whose value is a
+      // statically truthy / falsy literal makes the short-circuit redundant.
+      // TS reports on the operand's truthiness regardless of which logical
+      // operator it gates (`{} && x`, `{} || x` -> always truthy; `0 && x`,
+      // `null || x` -> always falsy). Only syntactic literal forms are matched,
+      // so the check needs no inference and never false-positives.
+      if op is (And | Or) {
+        if is_syntactically_always_truthy(l) {
+          record_unfiltered(
+            ctx, "logical operand", "this kind of expression is always truthy",
+          )
+        } else if is_syntactically_always_falsy(l) {
+          record_unfiltered(
+            ctx, "logical operand", "this kind of expression is always falsy",
+          )
+        }
       }
       // Short-circuit narrowing: the RHS of `&&` runs only when the LHS is
       // truthy, and the RHS of `||` only when the LHS is falsy. Apply the

@@ -10654,8 +10654,9 @@ test "expr_check: always-truthy left operand of && (TS2872)" {
     issues("function h(): any { return 0; } let z = h() && 1;"),
     0,
   )
-  // `||` is not flagged by this check.
-  @test.assert_eq(issues("let z = {} || 1;"), 0)
+  // A truthy literal also flags as the left operand of `||` (the right
+  // operand is then unreachable).
+  assert_true(issues("let z = {} || 1;") > 0)
 }
 
 ///|
@@ -10678,7 +10679,9 @@ test "expr_check: always-falsy left operand of || (TS2873)" {
   // A bare identifier (incl. `undefined`, which is shadowable) is NOT matched.
   @test.assert_eq(issues("let a: any; let z = a || 1;"), 0)
   @test.assert_eq(issues("let z = undefined || 1;"), 0)
-  // Non-falsy literals and `&&` are not flagged by this check.
+  // A falsy literal also flags as the left operand of `&&` (the operator
+  // then always yields the falsy left value).
+  assert_true(issues("let z = null && 1;") > 0)
+  // A truthy literal is not "always falsy".
   @test.assert_eq(issues("let z = 1 || 2;"), 0)
-  @test.assert_eq(issues("let z = null && 1;"), 0)
 }
