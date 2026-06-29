@@ -1331,6 +1331,7 @@ fn Resolver::lookup_field(
 // discriminant) would make the access valid.  The PropAccess existence check
 // uses this to stay silent in that situation — we can't model the narrowing,
 // so we trust the partial match.
+
 ///|
 /// True when `name` is the mangled name of a private *accessor* that some
 /// class declares with a setter but NO getter. Reading such a member
@@ -15319,6 +15320,37 @@ fn check_reserved_class_names(module_ : @ast.TsModule) -> Array[ExprIssue] {
 /// `type string = …`) is always a TS error (TS2457, "Type alias name cannot
 /// be 'X'"). The parser already lowers these keyword tokens to their spelling
 /// (`parse_binding_ident`), so the alias name is visible here directly.
+/// TS2304 ("Cannot find name"): a class / interface whose `extends` clause
+/// names one of its OWN type parameters (`class C<T> extends T {}`,
+/// `interface I<T> extends T {}`). A type parameter is not a value / nominal
+/// base, so this is always an error -- false-positive-free (the name is
+/// genuinely unresolvable as a base, shadowed by the type parameter).
+fn check_type_param_as_base(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for cls in module_.classes {
+    for base in cls.base_names {
+      if cls.type_params.contains(base) {
+        issues.push({
+          path: "class \{cls.name}",
+          message: "cannot find name `\{base}` (a type parameter cannot be used as a base class)",
+        })
+      }
+    }
+  }
+  for iface in module_.interfaces {
+    for base in iface.extends_names {
+      if iface.type_params.contains(base) {
+        issues.push({
+          path: "interface \{iface.name}",
+          message: "cannot find name `\{base}` (a type parameter cannot be extended)",
+        })
+      }
+    }
+  }
+  issues
+}
+
+///|
 fn check_reserved_type_alias_names(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   for ta in module_.type_aliases {
@@ -16844,6 +16876,9 @@ fn check_module_function_bodies_layered(
     all.push(issue)
   }
   for issue in check_reserved_class_names(module_) {
+    all.push(issue)
+  }
+  for issue in check_type_param_as_base(module_) {
     all.push(issue)
   }
   for issue in check_reserved_type_alias_names(module_) {

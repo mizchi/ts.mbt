@@ -2067,6 +2067,16 @@ conformance sources (`.errors.txt` baseline = ground truth):
     class-expression variant privateNameSetterNoGetter stays uncaught -- IIFE
     lowering buries the read.) Whitebox-tested.
 
+2026-06-26 (T141)  684/815 (84 %)        414/414 ( 0 FP)   TS2304 type parameter used as base
+
+  T141 -- TS2304 ("Cannot find name"). A class / interface whose `extends`
+    clause names one of its OWN type parameters (`class C<T> extends T {}`,
+    `interface I<T> extends T {}`) -- a type parameter is not a value / nominal
+    base, so the name is unresolvable as a base. `check_type_param_as_base`
+    flags base names that appear in the declaration's own `type_params`.
+    Always an error, false-positive-free. Whole-corpus TP 1734 -> 1736 (+2),
+    0 FP; pinned recall 683 -> 684 (typeParameterAsBaseType). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary
