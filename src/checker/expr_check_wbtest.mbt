@@ -10224,6 +10224,27 @@ test "expr_check: string literal vs template-literal-type pattern (TS2322/2345)"
 }
 
 ///|
+test "expr_check: class-expression structural diagnostics" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Class *expressions* now surface the same class-body structural errors as
+  // declarations (previously a blind spot in `parse_class_stub`).
+  // TS2391: a bodyless overload signature with no implementation.
+  assert_true(issues("const C = class { foo(); };") > 0)
+  // TS2392: multiple constructor implementations.
+  assert_true(
+    issues(
+      "const C = class { constructor(a: number) {} constructor(b: string) {} };",
+    ) >
+    0,
+  )
+  // Valid class expressions stay silent.
+  @test.assert_eq(issues("const C = class { foo() {} };"), 0)
+  @test.assert_eq(issues("const C = class { foo(); foo() {} };"), 0)
+}
+
+///|
 test "expr_check: async-before-static modifier order (TS1029)" {
   let issues = fn(src : String) -> Int {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
