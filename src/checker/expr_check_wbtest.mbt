@@ -10224,6 +10224,27 @@ test "expr_check: string literal vs template-literal-type pattern (TS2322/2345)"
 }
 
 ///|
+test "expr_check: static private member not on class (TS2339)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A private name accessed on the static side of a class that doesn't declare
+  // it (private statics aren't inherited) is an error.
+  assert_true(
+    issues(
+      "class Parent { static #bar = 5; m() { Child.#bar; } } class Child extends Parent { #bar = 1; }",
+    ) >
+    0,
+  )
+  // Same-class static private access is valid -> silent.
+  @test.assert_eq(issues("class P { static #b = 5; m() { return P.#b; } }"), 0)
+  @test.assert_eq(
+    issues("class P { static get #g() { return 1; } m() { return P.#g; } }"),
+    0,
+  )
+}
+
+///|
 test "expr_check: statement in class body (TS1128)" {
   let issues = fn(src : String) -> Int {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()

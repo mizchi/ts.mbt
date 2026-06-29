@@ -2028,6 +2028,21 @@ conformance sources (`.errors.txt` baseline = ground truth):
     expressions. Whole-corpus TP 1727 -> 1729 (+2), 0 FP; pinned recall 677 ->
     678 (classBodyWithStatements). Whitebox-tested incl. the ASI negative.
 
+2026-06-26 (T138)  681/815 (84 %)        414/414 ( 0 FP)   TS2339 static private member not on class
+
+  T138 -- TS2339 / TS18013. A private name accessed on the *static* side of a
+    class (`C.#x` / `B.#foo`) is valid only when `C` itself declares that static
+    private -- private names are never inherited and never global. The existing
+    static-member existence check (`Var(class).prop`) already computed
+    `has_static`, but only flagged when the unmodeled `typeof C` receiver type
+    was "checkable", so it silently fell through. For a private-brand name a
+    `has_static == false` is a *definite* error (no inheritance/global escape
+    hatch), so flag it directly (unfiltered). The mangled name carries the
+    *accessing* class's brand, so same-class access matches `has_static` and is
+    not flagged. Whole-corpus TP 1729 -> 1732 (+3), 0 FP; pinned recall 678 ->
+    681 (privateNamesConstructorChain-1/2, privateNamesAndStaticFields).
+    Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary
