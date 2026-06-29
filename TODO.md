@@ -1983,6 +1983,21 @@ conformance sources (`.errors.txt` baseline = ground truth):
     Whole-corpus TP 1724 -> 1725 (+1), 0 FP; pinned recall 675 -> 676
     (classConstructorOverloadsAccessibility). Whitebox-tested.
 
+2026-06-26 (T135)  677/815 (83 %)        414/414 ( 0 FP)   TS1029 `static` must precede `async` modifier
+
+  T135 -- TS1029 ("'static' modifier must precede 'async' modifier"). A class
+    member written `async static foo()` has the modifiers in the wrong order.
+    Detected in the class-body modifier loop: when `static` is consumed while
+    `async` was already seen for the same member, set `modifier_order_misuse`,
+    thread it through the parse_class_body return tuple (now 12-tuple), and
+    surface via the `duplicate_member_names` / `collected_class_dups` sentinel
+    channel (`<modifier-order>`) -> checker emits TS1029. Wired for BOTH class
+    declarations and class *expressions* (`parse_class_stub`, which previously
+    ignored every structural flag -- a general blind spot; the conformance file
+    is a class expression). Never valid TS, so false-positive-free. Whole-corpus
+    TP 1725 -> 1727 (+2), 0 FP; pinned recall 676 -> 677
+    (privateNameStaticMethodAsync). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary

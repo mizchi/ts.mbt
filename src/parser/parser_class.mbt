@@ -1075,6 +1075,7 @@ fn Parser::parse_class_body(
   Bool,
   Bool,
   Bool,
+  Bool,
 ) raise ParseError {
   let _ = self.expect(LBrace)
   // Class body is implicitly strict mode
@@ -1116,6 +1117,9 @@ fn Parser::parse_class_body(
   // or protected"): if a class declares 2+ constructor signatures whose
   // accessibilities differ, it's an error.
   let ctor_visibilities : Array[String] = []
+  // Set when a member wrote `async` before `static` (`async static foo()`) --
+  // always TS1029 ("'static' modifier must precede 'async' modifier").
+  let mut modifier_order_misuse = false
   while !self.check(RBrace) && !self.check(Eof) {
     while self.check(At) {
       self.skip_decorator()
@@ -1142,6 +1146,11 @@ fn Parser::parse_class_body(
         Ident(n) if n == "static" =>
           if self.can_consume_class_modifier() {
             let _ = self.advance()
+            // TS1029: `static` must precede `async`. If `async` was already
+            // consumed for this member, the source order was `async static`.
+            if is_async_method {
+              modifier_order_misuse = true
+            }
             is_static = true
             has_modifier = true
             // Check for static initialization block: static { ... }
@@ -1523,7 +1532,7 @@ fn Parser::parse_class_body(
   (
     ctor, elements, private_members, protected_members, abstract_members, ctor_impl_count,
     index_sig_modifier_misuse, abstract_member_with_body, overload_static_mix, overload_missing_impl,
-    overload_accessibility_mix,
+    overload_accessibility_mix, modifier_order_misuse,
   )
 }
 
@@ -1580,9 +1589,18 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     _,
     _,
     _,
+    modifier_order_misuse,
   ) = self.parse_class_body()
   self.current_class_brand = prev_brand
   self.restore_local_type_param_bounds(class_type_param_bound_len)
+  // TS1029 (`async` before `static`) on a class *expression* member. The
+  // expression paths below build the result several different ways, so record
+  // the sentinel up front via the shared `collected_class_dups` channel the
+  // checker already reads (declarations record it through
+  // `build_runtime_class_decl`'s caller instead).
+  if modifier_order_misuse {
+    self.collected_class_dups.push((class_name, ["<modifier-order>"]))
+  }
   // Self-extending classes (`class C extends C {}`) intentionally
   // throw at evaluation time per ES spec; preserve that with a
   // tiny IIFE.
@@ -2244,6 +2262,7 @@ fn Parser::parse_class_decl_with_abstract(
     overload_static_mix,
     overload_missing_impl,
     overload_accessibility_mix,
+    modifier_order_misuse,
   ) = self.parse_class_body()
   self.current_class_brand = prev_brand
   self.restore_local_type_param_bounds(class_type_param_bound_len)
@@ -2278,6 +2297,10 @@ fn Parser::parse_class_decl_with_abstract(
   // TS2385: constructor overload signatures with inconsistent accessibility.
   if overload_accessibility_mix {
     runtime_decl.duplicate_member_names.push("<overload-accessibility-mix>")
+  }
+  // TS1029: a member wrote `async` before `static`.
+  if modifier_order_misuse {
+    runtime_decl.duplicate_member_names.push("<modifier-order>")
   }
   // Surface the class's structural diagnostics for *every* class, including
   // ones nested in function bodies that the IIFE lowering removes from
