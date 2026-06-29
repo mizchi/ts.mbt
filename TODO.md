@@ -1998,6 +1998,21 @@ conformance sources (`.errors.txt` baseline = ground truth):
     TP 1725 -> 1727 (+2), 0 FP; pinned recall 676 -> 677
     (privateNameStaticMethodAsync). Whitebox-tested.
 
+2026-06-26 (T136)  677/815 (83 %)        414/414 ( 0 FP)   class-expression structural-diagnostic blind spot
+
+  T136 -- `parse_class_stub` (class *expressions*, `const C = class { … }`)
+    ignored every class-body structural flag the declaration path surfaces, so
+    class expressions never reported TS2392 / TS1071 / TS1245 / TS2387-8 /
+    TS2391 / TS2385 / TS1029. Generalized the T135 modifier-order push: capture
+    all the flags from the parse_class_body tuple and push their sentinels to
+    the shared `collected_class_dups` channel up front (covers all three
+    expression return paths). All always-an-error conditions, so
+    false-positive-free. Conformance recall-neutral (TP 1727, 0 FP) -- the
+    corpus has no class-expression structural-misuse files beyond the
+    modifier-order ones T135 already caught -- but a sound consistency /
+    robustness fix that closes the blind spot (class expressions now match
+    declarations). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary

@@ -1583,23 +1583,47 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     private_members,
     protected_members,
     abstract_members,
-    _,
-    _,
-    _,
-    _,
-    _,
-    _,
+    ctor_impl_count,
+    index_sig_modifier_misuse,
+    abstract_member_with_body,
+    overload_static_mix,
+    overload_missing_impl,
+    overload_accessibility_mix,
     modifier_order_misuse,
   ) = self.parse_class_body()
   self.current_class_brand = prev_brand
   self.restore_local_type_param_bounds(class_type_param_bound_len)
-  // TS1029 (`async` before `static`) on a class *expression* member. The
-  // expression paths below build the result several different ways, so record
-  // the sentinel up front via the shared `collected_class_dups` channel the
-  // checker already reads (declarations record it through
-  // `build_runtime_class_decl`'s caller instead).
+  // Class *expressions* (`const C = class { … }`) build their result through
+  // several branches below, none of which record the class-body structural
+  // diagnostics that the declaration path surfaces via
+  // `build_runtime_class_decl`'s caller. Record the flag-derived sentinels up
+  // front through the shared `collected_class_dups` channel the checker reads,
+  // so these always-an-error conditions (TS2392 / TS1071 / TS1245 / TS2387-8 /
+  // TS2391 / TS2385 / TS1029) are flagged on class expressions too.
+  let expr_class_sentinels : Array[String] = []
+  if ctor_impl_count >= 2 {
+    expr_class_sentinels.push("<multiple-ctor-impl>")
+  }
+  if index_sig_modifier_misuse {
+    expr_class_sentinels.push("<index-sig-modifier>")
+  }
+  if abstract_member_with_body {
+    expr_class_sentinels.push("<abstract-impl>")
+  }
+  if overload_static_mix {
+    expr_class_sentinels.push("<overload-static-mix>")
+  }
+  if overload_missing_impl {
+    expr_class_sentinels.push("<overload-no-impl>")
+  }
+  if overload_accessibility_mix {
+    expr_class_sentinels.push("<overload-accessibility-mix>")
+  }
   if modifier_order_misuse {
-    self.collected_class_dups.push((class_name, ["<modifier-order>"]))
+    expr_class_sentinels.push("<modifier-order>")
+  }
+  if expr_class_sentinels.length() > 0 {
+    self.collected_class_dups.push((class_name, expr_class_sentinels))
   }
   // Self-extending classes (`class C extends C {}`) intentionally
   // throw at evaluation time per ES spec; preserve that with a
