@@ -10624,3 +10624,29 @@ test "expr_check: object-type members on same line without separator (TS1005)" {
   // Single member: valid.
   @test.assert_eq(issues("var x: { foo: string };"), 0)
 }
+
+///|
+test "expr_check: always-truthy left operand of && (TS2872)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("this kind of expression is always truthy") {
+        n += 1
+      }
+    }
+    n
+  }
+  // Literal always-truthy left operands of `&&`.
+  assert_true(issues("let f: any; f = (a => a) && (b => b);") > 0)
+  assert_true(issues("function g() { return (function(){}) && 1; }") > 0)
+  assert_true(issues("let z = {} && 1;") > 0)
+  assert_true(issues("let z = [] && 1;") > 0)
+  // A bare identifier / call result is NOT a literal truthy form: silent.
+  @test.assert_eq(issues("let a: any; let z = a && a.b;"), 0)
+  @test.assert_eq(
+    issues("function h(): any { return 0; } let z = h() && 1;"),
+    0,
+  )
+  // `||` is not flagged by this check.
+  @test.assert_eq(issues("let z = {} || 1;"), 0)
+}

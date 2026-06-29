@@ -2131,6 +2131,19 @@ conformance sources (`.errors.txt` baseline = ground truth):
     false-positive-free. Pinned recall 687 -> 688 (objectTypeLiteralSyntax2).
     Whitebox-tested. **Reaches the recall-688 goal.**
 
+2026-06-29 (T146)  689/815 (85 %)        414/414 ( 0 FP)   TS2872 always-truthy left operand of &&
+
+  T146 -- TS2872 ("This kind of expression is always truthy"). A `&&` whose
+    left operand is a literal always-truthy value -- a function / arrow / class
+    expression, an object literal, or an array literal (`(a => a) && f`,
+    `{} && x`, `[] && x`) -- is redundant; the guard never short-circuits.
+    `is_syntactically_always_truthy` matches only syntactic literal forms (a
+    bare identifier or call result is never matched), so the check needs no
+    inference and is false-positive-free. Added in the `BinOp(And, …)` arm of
+    the expression walker via `record_unfiltered`. Whole-corpus TP 1740 ->
+    1741, 0 FP. Pinned recall 688 -> 689 (contextuallyTypeLogicalAnd03).
+    Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary
