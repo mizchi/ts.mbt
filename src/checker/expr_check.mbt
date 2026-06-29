@@ -12536,6 +12536,24 @@ fn check_call_args_in_expr(
                   if has_static {
                     return
                   }
+                  // TS2339 / TS18013: a private name accessed on the *static*
+                  // side of a class (`C.#x`) is only valid when `C` itself
+                  // declares that static private — private names are never
+                  // inherited and never global, so a miss here is a definite
+                  // error (e.g. `Child.#bar` where `#bar` is the *base*'s static
+                  // private, or `B.#foo` where `B` declares its own different
+                  // `#foo`). The brand in the mangled name is the *accessing*
+                  // class's, so same-class access matches `has_static` above and
+                  // is not flagged. Emitted unfiltered (the general lookup below
+                  // can't see the unmodeled `typeof C` static side).
+                  if prop.has_prefix("__private_brand__") {
+                    record_unfiltered(
+                      ctx,
+                      "PropAccess `.#…`",
+                      "private static member does not exist on class `\{class_name}`",
+                    )
+                    return
+                  }
                   // Fall through to the general lookup below.
                   let recv_ty = infer_expr(env, ctx.resolver, recv)
                   if is_checkable(recv_ty) &&
