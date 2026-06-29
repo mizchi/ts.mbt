@@ -2054,6 +2054,19 @@ conformance sources (`.errors.txt` baseline = ground truth):
     pinned recall 681 -> 682 (privateNameStaticAccessorssDerivedClasses).
     Whitebox-tested.
 
+2026-06-26 (T140)  683/815 (84 %)        414/414 ( 0 FP)   TS2806 read of setter-only private accessor
+
+  T140 -- TS2806 ("Private accessor was defined without a getter"). Reading a
+    private accessor declared with a setter but no getter is an error. A write
+    (`this.#x = v`) parses as `PropAssignExpr`, so any `PropAccess` of a
+    set-only private name is a read. `is_set_only_private_accessor` scans the
+    resolver's classes for a mangled accessor name with a `set` but no `get`
+    (a get/set pair shares the mangled name with distinct accessor markers);
+    the PropAccess arm flags such reads. Whole-corpus TP 1733 -> 1734 (+1),
+    0 FP; pinned recall 682 -> 683 (privateWriteOnlyAccessorRead). (The
+    class-expression variant privateNameSetterNoGetter stays uncaught -- IIFE
+    lowering buries the read.) Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary
