@@ -3529,6 +3529,24 @@ fn record(ctx : CheckCtx, sub_path : String, message : String) -> Unit {
 /// Like `record`, but bypasses the permissive-mode suppression filter. Used
 /// for diagnostics the caller has already established are reliable in
 /// permissive mode (e.g. constructor / direct-function-call arity).
+/// True when `expr` is a literal form that always evaluates to a truthy
+/// value: a function / arrow / class expression, an object literal, or an
+/// array literal. Used to flag `<always-truthy> && rhs` (TS2872, "This kind
+/// of expression is always truthy"). Only syntactic literal forms qualify --
+/// a bare identifier or call result is never matched, so no inference is
+/// needed and the check is false-positive-free.
+fn is_syntactically_always_truthy(expr : @ast.TsExpr) -> Bool {
+  match expr {
+    ArrowFunc(_, _, _, _)
+    | FuncExpr(_)
+    | NativeClassExpr(_, _)
+    | ObjectLit(_)
+    | ArrayLit(_) => true
+    _ => false
+  }
+}
+
+///|
 fn record_unfiltered(
   ctx : CheckCtx,
   sub_path : String,
@@ -12405,6 +12423,15 @@ fn check_call_args_in_expr(
     }
     BinOp(op, l, r) => {
       check_call_args_in_expr(env, l, ctx)
+      // TS2872: a `&&` whose left operand is a literal always-truthy value
+      // (`(a => a) && f`, `{} && x`, `[] && x`) is redundant -- the guard
+      // never short-circuits. Only syntactic literal forms are matched, so
+      // this needs no inference and never false-positives.
+      if op is And && is_syntactically_always_truthy(l) {
+        record_unfiltered(
+          ctx, "logical `&&`", "this kind of expression is always truthy",
+        )
+      }
       // Short-circuit narrowing: the RHS of `&&` runs only when the LHS is
       // truthy, and the RHS of `||` only when the LHS is falsy. Apply the
       // corresponding flow narrowing to a scratch env before walking the
