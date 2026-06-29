@@ -1331,6 +1331,37 @@ fn Resolver::lookup_field(
 // discriminant) would make the access valid.  The PropAccess existence check
 // uses this to stay silent in that situation — we can't model the narrowing,
 // so we trust the partial match.
+///|
+/// True when `name` is the mangled name of a private *accessor* that some
+/// class declares with a setter but NO getter. Reading such a member
+/// (`this.#x` in a value position) is TS2806 ("Private accessor was defined
+/// without a getter"). The mangled name embeds the declaring class's brand, so
+/// a global scan is unambiguous. A get/set pair shares the same mangled name
+/// with distinct `accessor` markers, so any matching `get` makes it readable.
+fn Resolver::is_set_only_private_accessor(
+  self : Resolver,
+  name : String,
+) -> Bool {
+  if !name.has_prefix("__private_brand__") {
+    return false
+  }
+  let mut has_set = false
+  let mut has_get = false
+  for _, cls in self.classes {
+    for m in cls.methods {
+      if m.name == name {
+        if m.accessor == "set" {
+          has_set = true
+        } else if m.accessor == "get" {
+          has_get = true
+        }
+      }
+    }
+  }
+  has_set && !has_get
+}
+
+///|
 fn Resolver::field_on_any_union_member(
   self : Resolver,
   recv : @ast.TsType,
@@ -12508,6 +12539,15 @@ fn check_call_args_in_expr(
       check_call_args_in_expr(env, recv, ctx)
       check_private_name_access(ctx, prop)
       check_member_accessibility(env, ctx, recv, prop)
+      // TS2806: reading a private accessor that was defined with a setter but
+      // no getter. A write (`this.#x = v`) parses as `PropAssignExpr`, so a
+      // `PropAccess` of a set-only private name is always a read.
+      if ctx.resolver.is_set_only_private_accessor(prop) {
+        record_unfiltered(
+          ctx, "PropAccess `.#…`", "private accessor was defined without a getter",
+        )
+        return
+      }
       // Property-existence check: when the receiver has a concrete
       // structural shape and the resolver can't find `prop` on it,
       // surface a diagnostic. The class static-side fallback used

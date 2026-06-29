@@ -10224,6 +10224,30 @@ test "expr_check: string literal vs template-literal-type pattern (TS2322/2345)"
 }
 
 ///|
+test "expr_check: read of setter-only private accessor (TS2806)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Reading a private accessor defined with a setter but no getter is TS2806.
+  assert_true(
+    issues("class T { set #v(x: number) {} m() { return this.#v; } }") > 0,
+  )
+  // A write (`this.#v = x`) is fine -- it parses as PropAssignExpr, not a read.
+  @test.assert_eq(
+    issues("class T { set #v(x: number) {} m() { this.#v = 1; } }"),
+    0,
+  )
+  // A get/set pair (readable) and a plain private field are fine.
+  @test.assert_eq(
+    issues(
+      "class T { get #v() { return 1; } set #v(x: number) {} m() { return this.#v; } }",
+    ),
+    0,
+  )
+  @test.assert_eq(issues("class T { #v = 1; m() { return this.#v; } }"), 0)
+}
+
+///|
 test "expr_check: static private member not on class (TS2339)" {
   let issues = fn(src : String) -> Int {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
