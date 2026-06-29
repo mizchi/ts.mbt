@@ -10641,6 +10641,13 @@ test "expr_check: always-truthy left operand of && (TS2872)" {
   assert_true(issues("function g() { return (function(){}) && 1; }") > 0)
   assert_true(issues("let z = {} && 1;") > 0)
   assert_true(issues("let z = [] && 1;") > 0)
+  // Literal scalars that are statically truthy.
+  assert_true(issues("let z = 10 && 1;") > 0)
+  assert_true(issues("let z = \"x\" && 1;") > 0)
+  assert_true(issues("let z = true && 1;") > 0)
+  // Falsy scalars are NOT always-truthy: silent under this check.
+  @test.assert_eq(issues("let z = 0 && 1;"), 0)
+  @test.assert_eq(issues("let z = \"\" && 1;"), 0)
   // A bare identifier / call result is NOT a literal truthy form: silent.
   @test.assert_eq(issues("let a: any; let z = a && a.b;"), 0)
   @test.assert_eq(

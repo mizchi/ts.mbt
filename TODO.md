@@ -2157,6 +2157,15 @@ conformance sources (`.errors.txt` baseline = ground truth):
     several files beyond the pinned set), 0 FP. Pinned recall 689 -> 690
     (initializersWidened). Whitebox-tested.
 
+2026-06-29 (T148)  691/815 (85 %)        414/414 ( 0 FP)   TS2872 extended to always-truthy literal scalars
+
+  T148 -- extends T146's always-truthy set (TS2872) to literal scalars: a
+    non-empty string, a non-zero number / bigint, or `true` (`10 && x`,
+    `"s" && x`, `true && x`). Symmetric with the always-falsy set (T147), which
+    proved 0-FP across the corpus, so the same literal-only matching applies.
+    Whole-corpus TP 1745 -> 1746, 0 FP. Pinned recall 690 -> 691
+    (typeGuardsInIfStatement, via `10 && x.toString()`). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary
