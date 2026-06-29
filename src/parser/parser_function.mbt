@@ -1126,7 +1126,16 @@ pub fn Parser::parse_interface(
     Ident(n) => n
     k => raise ParseError("Expected interface name, got \{k}")
   }
-  let (type_params, type_param_bounds) = self.parse_type_param_names_and_bounds()
+  let (type_params, const_flags, type_param_bounds) = self.parse_type_param_names_bounds_and_const_flags()
+  // TS1277: a `const` modifier on a type parameter is only valid on a
+  // function, method, or class. An interface's own type-parameter list is
+  // none of those, so `interface I<const T>` is always an error. Record it
+  // through the shared interface-misuse channel with a distinct sentinel.
+  for i, name_i in type_params {
+    if i < const_flags.length() && const_flags[i] {
+      self.interface_member_modifier_misuses.push("<const-typeparam>\{name_i}")
+    }
+  }
   let local_type_param_bound_len = self.push_local_type_param_bounds(
     type_param_bounds,
   )
@@ -1721,7 +1730,14 @@ fn Parser::parse_type_alias_after_type_keyword(
   // `parse_type` substitute `Named(T) → bound` inside the alias body, eagerly
   // erasing the generic shape (e.g. `DateArg<DateType>` would become
   // `Date | ...` and lose precision).
-  let (type_params, type_param_bounds) = self.parse_type_param_names_and_bounds()
+  let (type_params, const_flags, type_param_bounds) = self.parse_type_param_names_bounds_and_const_flags()
+  // TS1277: a `const` modifier on a type-alias type parameter is invalid
+  // (only functions, methods, and classes allow it). `type T<const U> = …`.
+  for i, name_i in type_params {
+    if i < const_flags.length() && const_flags[i] {
+      self.interface_member_modifier_misuses.push("<const-typeparam>\{name_i}")
+    }
+  }
   let _ = self.expect(Eq)
   let alias_type = self.parse_type()
   self.consume_semicolon()

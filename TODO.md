@@ -2092,6 +2092,45 @@ conformance sources (`.errors.txt` baseline = ground truth):
     common compound type shapes conservatively. Pinned recall 684 -> 685
     (staticIndexers). Whitebox-tested.
 
+2026-06-29 (T143)  686/815 (84 %)        414/414 ( 0 FP)   TS1277 const modifier on interface/alias type param
+
+  T143 -- TS1277 ("`const` modifier can only appear on a type parameter of a
+    function, method or class"). The TS5.0 `const` type-parameter modifier is
+    legal on function / method / class type-parameter lists but NOT on an
+    interface's own list (`interface I<const T>`) or a type alias's
+    (`type T<const U> = …`). `parse_interface` and
+    `parse_type_alias_after_type_keyword` now read the per-parameter const
+    flags (already captured by `parse_type_param_names_bounds_and_const_flags`)
+    and push a `<const-typeparam>NAME` sentinel through the
+    `interface_member_modifier_misuses` channel, mapped to the TS1277 message.
+    Always an error, false-positive-free. Pinned recall 685 -> 686
+    (typeParameterConstModifiers). Whitebox-tested.
+
+2026-06-29 (T144)  687/815 (84 %)        414/414 ( 0 FP)   TS1257 required tuple element after optional
+
+  T144 -- TS1257 ("A required element cannot follow an optional element").
+    In a tuple type, once an optional element appears (`[string?, ...]`) a
+    later required (non-optional, non-rest) element is illegal -- a rest
+    element is exempt, so `[string?, ...number[]]` stays valid. `parse_tuple_type`
+    tracks `seen_optional` / `required_after_optional` across the element loop
+    and pushes a `<tuple-required-after-optional>` sentinel mapped to the
+    TS1257 message. Always an error, false-positive-free. Whole-corpus TP
+    1738 -> 1739. Pinned recall 686 -> 687 (restTupleElements1). Whitebox-tested.
+
+2026-06-29 (T145)  688/815 (84 %)        414/414 ( 0 FP)   TS1005 object-type members on same line w/o separator
+
+  T145 -- TS1005 ("';' expected"). Two object-type-literal members on the SAME
+    line with no `,` / `;` separator (`{ foo: string bar: string }`) -- a line
+    break between members is valid (ASI), so the check requires the next member
+    token to sit on the same line (`!has_line_terminator_before()`).
+    `try_parse_object_type_with_members` (the parser that previously accepted
+    this silently) sets a `missing_separator` flag and, only on the success
+    path, pushes an `<object-member-no-separator>` sentinel mapped to the
+    TS1005 message. Recording on success only keeps speculative parses that
+    later fall back from leaving a spurious diagnostic. Always an error,
+    false-positive-free. Pinned recall 687 -> 688 (objectTypeLiteralSyntax2).
+    Whitebox-tested. **Reaches the recall-688 goal.**
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary

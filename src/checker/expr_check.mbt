@@ -17019,6 +17019,19 @@ fn check_module_function_bodies_layered(
           path: "member `\{m}`",
           message: "a parameter initializer is only allowed in an implementation signature",
         })
+      } else if member.has_prefix("<const-typeparam>") {
+        let m = member.substring(start="<const-typeparam>".length())
+        all.push({
+          path: "type parameter `\{m}`",
+          message: "`const` modifier can only appear on a type parameter of a function, method or class",
+        })
+      } else if member == "<tuple-required-after-optional>" {
+        all.push({
+          path: "tuple type",
+          message: "a required element cannot follow an optional element",
+        })
+      } else if member == "<object-member-no-separator>" {
+        all.push({ path: "object type", message: "`;` expected" })
       } else {
         all.push({
           path: "member `\{member}`",

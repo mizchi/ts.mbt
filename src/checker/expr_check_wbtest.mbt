@@ -10551,3 +10551,76 @@ test "expr_check: static index signature referencing class type parameter (TS230
   // Non-generic class: no type parameters in scope, so nothing to reference.
   @test.assert_eq(issues("class H { static [x: string]: number; }"), 0)
 }
+
+///|
+test "expr_check: const modifier on interface/type-alias type parameter (TS1277)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains(
+          "`const` modifier can only appear on a type parameter",
+        ) {
+        n += 1
+      }
+    }
+    n
+  }
+  // `const` on an interface's own type parameter -- TS1277.
+  assert_true(issues("interface I1<const T> { x: T }") > 0)
+  // `const` on a type-alias type parameter -- TS1277.
+  assert_true(issues("type T1<const T> = T;") > 0)
+  // `const` IS valid on function / method / class type parameters: silent.
+  @test.assert_eq(issues("function f<const T>(x: T): T { return x }"), 0)
+  @test.assert_eq(issues("class C<const T> { x: T }"), 0)
+  @test.assert_eq(issues("interface I2 { f<const T>(x: T): T }"), 0)
+  // No `const` modifier at all: silent.
+  @test.assert_eq(issues("interface J<T> { x: T }"), 0)
+  @test.assert_eq(issues("type T2<U> = U;"), 0)
+}
+
+///|
+test "expr_check: required tuple element after optional (TS1257)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains(
+          "a required element cannot follow an optional element",
+        ) {
+        n += 1
+      }
+    }
+    n
+  }
+  // Required element following an optional one.
+  assert_true(issues("type T = [string, string?, number];") > 0)
+  assert_true(issues("type T = [a?: string, b: number];") > 0)
+  // Valid tuples: trailing optionals, rest after optional, all-required.
+  @test.assert_eq(issues("type T = [string, string?];"), 0)
+  @test.assert_eq(issues("type T = [string?];"), 0)
+  @test.assert_eq(issues("type T = [string?, ...number[]];"), 0)
+  @test.assert_eq(issues("type T = [string, number];"), 0)
+  @test.assert_eq(issues("type T = [a: string, b?: number];"), 0)
+}
+
+///|
+test "expr_check: object-type members on same line without separator (TS1005)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("`;` expected") {
+        n += 1
+      }
+    }
+    n
+  }
+  // Two members on the same line with no separator.
+  assert_true(issues("var z: { foo: string bar: string };") > 0)
+  assert_true(issues("type T = { a: number b: number };") > 0)
+  // Separators present: valid.
+  @test.assert_eq(issues("var z: { foo: string, bar: string };"), 0)
+  @test.assert_eq(issues("var z: { foo: string; bar: string };"), 0)
+  // ASI via line break between members: valid.
+  @test.assert_eq(issues("var y: {\n foo: string\n bar: string\n};"), 0)
+  // Single member: valid.
+  @test.assert_eq(issues("var x: { foo: string };"), 0)
+}

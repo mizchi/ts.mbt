@@ -147,6 +147,12 @@ fn Parser::parse_tuple_type(self : Parser) -> @ast.TsType raise ParseError {
   if self.match_(RBracket) {
     return Tuple(items)
   }
+  // TS1257: a required element cannot follow an optional one
+  // (`[string?, number]`). A rest element is neither required nor optional
+  // for this rule, so `[string?, ...number[]]` stays valid. Tracked across
+  // the element loop and surfaced once per offending tuple.
+  let mut seen_optional = false
+  let mut required_after_optional = false
   while !self.check(Eof) {
     let is_rest = self.match_ellipsis()
     // Labels like `[name: T]` strip the label tokens; `[name?: T]` is
@@ -172,7 +178,13 @@ fn Parser::parse_tuple_type(self : Parser) -> @ast.TsType raise ParseError {
     }
     let item_type = self.parse_type()
     let trailing_optional = self.match_(Question)
-    let with_optional : @ast.TsType = if label_optional || trailing_optional {
+    let is_optional = label_optional || trailing_optional
+    if is_optional {
+      seen_optional = true
+    } else if !is_rest && seen_optional {
+      required_after_optional = true
+    }
+    let with_optional : @ast.TsType = if is_optional {
       wrap_optional_ts_type(item_type)
     } else {
       item_type
@@ -186,6 +198,11 @@ fn Parser::parse_tuple_type(self : Parser) -> @ast.TsType raise ParseError {
     }
     let _ = self.expect(RBracket)
     break
+  }
+  if required_after_optional {
+    self.interface_member_modifier_misuses.push(
+      "<tuple-required-after-optional>",
+    )
   }
   Tuple(items)
 }
@@ -484,6 +501,12 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
   }
   let saved_pos = self.pos
   let fields : Array[(@ast.TsType, @ast.TsType)] = []
+  // TS1005 (';' expected): two object-type members on the SAME line with no
+  // `,` / `;` separator (`{ foo: string bar: string }`). A line break between
+  // members is fine (ASI), so the check requires the next member token to sit
+  // on the same line. Recorded only on the success path so a speculative parse
+  // that later falls back leaves no spurious diagnostic.
+  let mut missing_separator = false
   try {
     let _ = self.expect(LBrace)
     while !self.check(Eof) && !self.check(RBrace) {
@@ -611,9 +634,20 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
         self.pos = saved_pos
         return None
       }
-      let _ = self.match_(Semicolon) || self.match_(Comma)
+      let had_sep = self.match_(Semicolon) || self.match_(Comma)
+      if !had_sep &&
+        !self.check(RBrace) &&
+        !self.check(Eof) &&
+        !self.has_line_terminator_before() {
+        missing_separator = true
+      }
     }
     let _ = self.expect(RBrace)
+    if missing_separator {
+      self.interface_member_modifier_misuses.push(
+        "<object-member-no-separator>",
+      )
+    }
     Some(Object(fields))
   } catch {
     _ => {
