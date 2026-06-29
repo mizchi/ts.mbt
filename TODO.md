@@ -2166,6 +2166,17 @@ conformance sources (`.errors.txt` baseline = ground truth):
     Whole-corpus TP 1745 -> 1746, 0 FP. Pinned recall 690 -> 691
     (typeGuardsInIfStatement, via `10 && x.toString()`). Whitebox-tested.
 
+2026-06-29 (T149)  691/815 (85 %)        414/414 ( 0 FP)   TS2872/2873 generalized to both && and ||
+
+  T149 -- generalizes T146-T148: TS reports on the LEFT operand's truthiness
+    regardless of which logical operator gates it. A truthy literal left
+    operand is TS2872 in both `x && y` and `x || y` (in `||` the right operand
+    is then unreachable); a falsy literal left operand is TS2873 in both (in
+    `&&` the operator always yields the falsy left value). The check now fires
+    for `op is (And | Or)` on either truthiness. Whole-corpus TP 1746 -> 1749
+    (+3 beyond the pinned set: `{} || x`, `0 && x`, `null && x` forms), 0 FP.
+    Pinned recall unchanged at 691. Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary
