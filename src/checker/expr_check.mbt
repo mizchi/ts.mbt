@@ -16275,6 +16275,11 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
           path: "class \{cls_name}",
           message: "declaration or statement expected",
         })
+      } else if name == "<static-type-param-ref>" {
+        issues.push({
+          path: "class \{cls_name}",
+          message: "static members cannot reference class type parameters",
+        })
       } else {
         issues.push({
           path: "class \{cls_name}",

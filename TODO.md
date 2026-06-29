@@ -2077,6 +2077,21 @@ conformance sources (`.errors.txt` baseline = ground truth):
     Always an error, false-positive-free. Whole-corpus TP 1734 -> 1736 (+2),
     0 FP; pinned recall 683 -> 684 (typeParameterAsBaseType). Whitebox-tested.
 
+2026-06-29 (T142)  685/815 (84 %)        414/414 ( 0 FP)   TS2302 static index sig refs class type param
+
+  T142 -- TS2302 ("Static members cannot reference class type parameters").
+    A *static* index signature whose value type names one of the enclosing
+    class's type parameters (`class E<T> { static [x: string]: T }`). Detected
+    in the parser inside `parse_class_body` (which now receives the class's
+    `type_params`): when a static index signature is parsed and its value type
+    mentions a class type-param name, a `<static-type-param-ref>` sentinel is
+    pushed through the existing `collected_class_dups` channel and mapped to
+    the TS2302 message in `check_class_duplicate_members`. Gated on `is_static`
+    so instance index signatures (which may reference `T` freely) are never
+    flagged -- false-positive-free. `type_references_type_param_name` walks the
+    common compound type shapes conservatively. Pinned recall 684 -> 685
+    (staticIndexers). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary

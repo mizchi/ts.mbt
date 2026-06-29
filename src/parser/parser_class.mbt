@@ -397,6 +397,72 @@ fn Parser::take_last_runtime_class_decl(self : Parser) -> @ast.TsClassDecl? {
 }
 
 ///|
+/// True when `t` mentions any of the type-parameter names held in `bounds`
+/// (the `(name, bound)` pairs pushed for the enclosing scope). Used to detect a
+/// static index signature whose value type references a class type parameter
+/// (TS2302). Conservative: variants it does not descend simply return `false`,
+/// so a missed reference never produces a false positive.
+fn type_references_type_param_name(
+  t : @ast.TsType,
+  names : Array[String],
+) -> Bool {
+  fn mentions(name : String) -> Bool {
+    for n in names {
+      if n == name {
+        return true
+      }
+    }
+    false
+  }
+
+  fn walk(ty : @ast.TsType) -> Bool {
+    match ty {
+      Named(n) => mentions(n)
+      Applied(n, args) => {
+        if mentions(n) {
+          return true
+        }
+        for a in args {
+          if walk(a) {
+            return true
+          }
+        }
+        false
+      }
+      Array(inner) | Rest(inner) | Keyof(inner) => walk(inner)
+      Union(members) | Intersection(members) | Tuple(members) => {
+        for m in members {
+          if walk(m) {
+            return true
+          }
+        }
+        false
+      }
+      Func(params, ret) => {
+        for p in params {
+          if walk(p) {
+            return true
+          }
+        }
+        walk(ret)
+      }
+      IndexedAccess(base, idx) => walk(base) || walk(idx)
+      Object(fields) => {
+        for f in fields {
+          if walk(f.1) {
+            return true
+          }
+        }
+        false
+      }
+      _ => false
+    }
+  }
+
+  walk(t)
+}
+
+///|
 fn has_static_private_elements(elements : Array[ClassElement]) -> Bool {
   for element in elements {
     match element {
@@ -1063,6 +1129,7 @@ fn Parser::inject_instance_field_assigns(
 ///|
 fn Parser::parse_class_body(
   self : Parser,
+  class_type_params : Array[String],
 ) -> (
   @ast.TsFunc?,
   Array[ClassElement],
@@ -1070,6 +1137,7 @@ fn Parser::parse_class_body(
   Array[String],
   Array[String],
   Int,
+  Bool,
   Bool,
   Bool,
   Bool,
@@ -1127,6 +1195,14 @@ fn Parser::parse_class_body(
   // literally named `var` / `function` by requiring an identifier to follow
   // (the statement form), so `{ var: T }` / `{ var() {} }` stay valid members.
   let mut class_body_statement_misuse = false
+  // Set when a *static* index signature's value type references one of the
+  // enclosing class's type parameters (`class C<T> { static [k: string]: T }`)
+  // -- always TS2302 ("Static members cannot reference class type
+  // parameters"). The class type parameters are in scope via
+  // `self.local_type_param_bounds` at the point the body is parsed. Only static
+  // index signatures qualify; instance ones may reference `T` freely, so the
+  // check is gated on `is_static` and never produces a false positive.
+  let mut static_index_type_param_ref = false
   while !self.check(RBrace) && !self.check(Eof) {
     // `var x` / `function foo` etc. at member position is a statement, not a
     // member (TS1128) -- but only when the identifier is on the SAME line. A
@@ -1236,6 +1312,11 @@ fn Parser::parse_class_body(
         Some((key, value)) => {
           if saw_visibility_modifier {
             index_sig_modifier_misuse = true
+          }
+          if is_static &&
+            class_type_params.length() > 0 &&
+            type_references_type_param_name(value, class_type_params) {
+            static_index_type_param_ref = true
           }
           elements.push(IndexSig(key, value))
           continue
@@ -1553,6 +1634,7 @@ fn Parser::parse_class_body(
     ctor, elements, private_members, protected_members, abstract_members, ctor_impl_count,
     index_sig_modifier_misuse, abstract_member_with_body, overload_static_mix, overload_missing_impl,
     overload_accessibility_mix, modifier_order_misuse, class_body_statement_misuse,
+    static_index_type_param_ref,
   )
 }
 
@@ -1611,7 +1693,8 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     overload_accessibility_mix,
     modifier_order_misuse,
     class_body_statement_misuse,
-  ) = self.parse_class_body()
+    static_index_type_param_ref,
+  ) = self.parse_class_body(class_type_params)
   self.current_class_brand = prev_brand
   self.restore_local_type_param_bounds(class_type_param_bound_len)
   // Class *expressions* (`const C = class { … }`) build their result through
@@ -1645,6 +1728,9 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   }
   if class_body_statement_misuse {
     expr_class_sentinels.push("<class-body-statement>")
+  }
+  if static_index_type_param_ref {
+    expr_class_sentinels.push("<static-type-param-ref>")
   }
   if expr_class_sentinels.length() > 0 {
     self.collected_class_dups.push((class_name, expr_class_sentinels))
@@ -2312,7 +2398,8 @@ fn Parser::parse_class_decl_with_abstract(
     overload_accessibility_mix,
     modifier_order_misuse,
     class_body_statement_misuse,
-  ) = self.parse_class_body()
+    static_index_type_param_ref,
+  ) = self.parse_class_body(class_type_params)
   self.current_class_brand = prev_brand
   self.restore_local_type_param_bounds(class_type_param_bound_len)
   let runtime_decl = build_runtime_class_decl(
@@ -2354,6 +2441,10 @@ fn Parser::parse_class_decl_with_abstract(
   // TS1128: a statement (`var x = 1` / `function foo() {}`) in a class body.
   if class_body_statement_misuse {
     runtime_decl.duplicate_member_names.push("<class-body-statement>")
+  }
+  // TS2302: a static index signature references a class type parameter.
+  if static_index_type_param_ref {
+    runtime_decl.duplicate_member_names.push("<static-type-param-ref>")
   }
   // Surface the class's structural diagnostics for *every* class, including
   // ones nested in function bodies that the IIFE lowering removes from

@@ -10526,3 +10526,28 @@ test "expr_check: capitalized-primitive type misspelling (TS2304)" {
   @test.assert_eq(issues("type Null = string; var x: Null;"), 0)
   @test.assert_eq(issues("interface Undefined {} var x: Undefined;"), 0)
 }
+
+///|
+test "expr_check: static index signature referencing class type parameter (TS2302)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains(
+          "static members cannot reference class type parameters",
+        ) {
+        n += 1
+      }
+    }
+    n
+  }
+  // A static index signature whose value type names a class type parameter.
+  assert_true(issues("class E<T> { static [x: string]: T; }") > 0)
+  assert_true(issues("class F<U> { static [x: number]: U[]; }") > 0)
+  // Instance index signatures may reference `T` freely -- never flagged.
+  @test.assert_eq(issues("class G<T> { [x: string]: T; }"), 0)
+  // Static index signature with a concrete value type -- no type-param ref.
+  @test.assert_eq(issues("class C { static [x: string]: string; }"), 0)
+  @test.assert_eq(issues("class D { static [x: number]: string; }"), 0)
+  // Non-generic class: no type parameters in scope, so nothing to reference.
+  @test.assert_eq(issues("class H { static [x: string]: number; }"), 0)
+}
