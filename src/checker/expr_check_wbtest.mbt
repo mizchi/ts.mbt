@@ -10224,6 +10224,19 @@ test "expr_check: string literal vs template-literal-type pattern (TS2322/2345)"
 }
 
 ///|
+test "expr_check: type parameter used as base (TS2304)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A class / interface extending one of its own type parameters is TS2304.
+  assert_true(issues("class C<T> extends T {}") > 0)
+  assert_true(issues("interface I<T> extends T {}") > 0)
+  // Extending a real base is fine.
+  @test.assert_eq(issues("class B {} class C<T> extends B {}"), 0)
+  @test.assert_eq(issues("interface J {} interface I<T> extends J {}"), 0)
+}
+
+///|
 test "expr_check: read of setter-only private accessor (TS2806)" {
   let issues = fn(src : String) -> Int {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
