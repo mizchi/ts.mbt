@@ -1076,6 +1076,7 @@ fn Parser::parse_class_body(
   Bool,
   Bool,
   Bool,
+  Bool,
 ) raise ParseError {
   let _ = self.expect(LBrace)
   // Class body is implicitly strict mode
@@ -1120,7 +1121,26 @@ fn Parser::parse_class_body(
   // Set when a member wrote `async` before `static` (`async static foo()`) --
   // always TS1029 ("'static' modifier must precede 'async' modifier").
   let mut modifier_order_misuse = false
+  // Set when a class body contains a *statement* rather than a member
+  // declaration -- `var x = 1` / `function foo() {}` at member position
+  // (TS1128 "Declaration or statement expected"). Distinguished from a member
+  // literally named `var` / `function` by requiring an identifier to follow
+  // (the statement form), so `{ var: T }` / `{ var() {} }` stay valid members.
+  let mut class_body_statement_misuse = false
   while !self.check(RBrace) && !self.check(Eof) {
+    // `var x` / `function foo` etc. at member position is a statement, not a
+    // member (TS1128) -- but only when the identifier is on the SAME line. A
+    // line break makes ASI split the keyword into a standalone member named
+    // `var` / `function` (`class C { var \n public }`), which TS accepts.
+    if !self.peek_at(1).has_newline_before {
+      match (self.peek().kind, self.peek_at(1).kind) {
+        (Var, Ident(_))
+        | (Let, Ident(_))
+        | (Const, Ident(_))
+        | (Function, Ident(_)) => class_body_statement_misuse = true
+        _ => ()
+      }
+    }
     while self.check(At) {
       self.skip_decorator()
     }
@@ -1532,7 +1552,7 @@ fn Parser::parse_class_body(
   (
     ctor, elements, private_members, protected_members, abstract_members, ctor_impl_count,
     index_sig_modifier_misuse, abstract_member_with_body, overload_static_mix, overload_missing_impl,
-    overload_accessibility_mix, modifier_order_misuse,
+    overload_accessibility_mix, modifier_order_misuse, class_body_statement_misuse,
   )
 }
 
@@ -1590,6 +1610,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     overload_missing_impl,
     overload_accessibility_mix,
     modifier_order_misuse,
+    class_body_statement_misuse,
   ) = self.parse_class_body()
   self.current_class_brand = prev_brand
   self.restore_local_type_param_bounds(class_type_param_bound_len)
@@ -1621,6 +1642,9 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   }
   if modifier_order_misuse {
     expr_class_sentinels.push("<modifier-order>")
+  }
+  if class_body_statement_misuse {
+    expr_class_sentinels.push("<class-body-statement>")
   }
   if expr_class_sentinels.length() > 0 {
     self.collected_class_dups.push((class_name, expr_class_sentinels))
@@ -2287,6 +2311,7 @@ fn Parser::parse_class_decl_with_abstract(
     overload_missing_impl,
     overload_accessibility_mix,
     modifier_order_misuse,
+    class_body_statement_misuse,
   ) = self.parse_class_body()
   self.current_class_brand = prev_brand
   self.restore_local_type_param_bounds(class_type_param_bound_len)
@@ -2325,6 +2350,10 @@ fn Parser::parse_class_decl_with_abstract(
   // TS1029: a member wrote `async` before `static`.
   if modifier_order_misuse {
     runtime_decl.duplicate_member_names.push("<modifier-order>")
+  }
+  // TS1128: a statement (`var x = 1` / `function foo() {}`) in a class body.
+  if class_body_statement_misuse {
+    runtime_decl.duplicate_member_names.push("<class-body-statement>")
   }
   // Surface the class's structural diagnostics for *every* class, including
   // ones nested in function bodies that the IIFE lowering removes from

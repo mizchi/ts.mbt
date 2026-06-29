@@ -2013,6 +2013,21 @@ conformance sources (`.errors.txt` baseline = ground truth):
     robustness fix that closes the blind spot (class expressions now match
     declarations). Whitebox-tested.
 
+2026-06-26 (T137)  678/815 (83 %)        414/414 ( 0 FP)   TS1128 statement in class body
+
+  T137 -- TS1128 ("Declaration or statement expected"). A `var x = 1` /
+    `function foo() {}` statement at class-member position is not a member
+    declaration. Detected in the class-body loop: a `Var`/`Let`/`Const`/`Function`
+    keyword followed by an identifier ON THE SAME LINE (the statement form).
+    The same-line guard (`has_newline_before`) avoids the parserClassDeclaration26
+    FP -- a keyword on its own line is ASI-split into a standalone member named
+    `var`/`public` (TS accepts that); a member named `var` via `var: T` / `var() {}`
+    is also untouched (identifier doesn't follow). Threaded through the
+    parse_class_body return tuple (now 13-tuple) and surfaced via the
+    `<class-body-statement>` sentinel for both declarations and class
+    expressions. Whole-corpus TP 1727 -> 1729 (+2), 0 FP; pinned recall 677 ->
+    678 (classBodyWithStatements). Whitebox-tested incl. the ASI negative.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary

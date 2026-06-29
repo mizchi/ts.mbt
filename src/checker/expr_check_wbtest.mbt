@@ -10224,6 +10224,34 @@ test "expr_check: string literal vs template-literal-type pattern (TS2322/2345)"
 }
 
 ///|
+test "expr_check: statement in class body (TS1128)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A `var`/`function` statement in a class body (declaration and expression).
+  assert_true(issues("class C { var x = 1; }") > 0)
+  assert_true(issues("class C { function foo() {} }") > 0)
+  assert_true(issues("const C = class { var x = 1; };") > 0)
+  // Valid members stay silent.
+  @test.assert_eq(issues("class C { x: number = 1; }"), 0)
+  @test.assert_eq(issues("class C { foo() {} }"), 0)
+  // ASI: a keyword on its own line is a standalone member (`var` then `public`
+  // are two fields), which TS accepts -> silent (the parserClassDeclaration26
+  // regression).
+  @test.assert_eq(
+    issues(
+      (
+        #|class C {
+        #|  var
+        #|  public
+        #|}
+      ),
+    ),
+    0,
+  )
+}
+
+///|
 test "expr_check: class-expression structural diagnostics" {
   let issues = fn(src : String) -> Int {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
