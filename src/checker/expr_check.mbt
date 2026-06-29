@@ -16151,6 +16151,11 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
           path: "class \{cls_name}",
           message: "`static` modifier must precede `async` modifier",
         })
+      } else if name == "<class-body-statement>" {
+        issues.push({
+          path: "class \{cls_name}",
+          message: "declaration or statement expected",
+        })
       } else {
         issues.push({
           path: "class \{cls_name}",
