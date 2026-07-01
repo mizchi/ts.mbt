@@ -2177,6 +2177,21 @@ conformance sources (`.errors.txt` baseline = ground truth):
     (+3 beyond the pinned set: `{} || x`, `0 && x`, `null && x` forms), 0 FP.
     Pinned recall unchanged at 691. Whitebox-tested.
 
+2026-07-01 (T150)  692/815 (85 %)        414/414 ( 0 FP)   TS2344 intrinsic string-mapping type w/ non-string arg
+
+  T150 -- TS2344 ("Type ... does not satisfy the constraint ..."). The
+    intrinsic string-mapping utility types (`Uppercase` / `Lowercase` /
+    `Capitalize` / `Uncapitalize`) carry an implicit `S extends string` bound.
+    Rather than hand-roll a predicate, they are registered as synthetic bounded
+    aliases in `check_constraints`' `alias_params` / `alias_bounds` maps -- so
+    the existing, tested constraint machinery flags a non-string argument
+    (`Uppercase<42>`, `Lowercase<number>`) exactly like a user alias would.
+    Guarded against files that declare their own type of the same name (an
+    unbounded `type Uppercase<T>` must not be flagged). Registering them also
+    makes `alias_bounds` non-empty, so the constraint walk runs even in files
+    with no user generics. Whole-corpus TP 1749 -> 1750, 0 FP. Pinned recall
+    691 -> 692 (intrinsicTypes). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary

@@ -10685,3 +10685,28 @@ test "expr_check: always-falsy left operand of || (TS2873)" {
   // A truthy literal is not "always falsy".
   @test.assert_eq(issues("let z = 1 || 2;"), 0)
 }
+
+///|
+test "expr_check: intrinsic string-mapping type with non-string arg (TS2344)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("does not satisfy the `S` constraint") {
+        n += 1
+      }
+    }
+    n
+  }
+  // Non-string concrete arguments to the intrinsic string-mapping types.
+  assert_true(issues("type T = Uppercase<42>;") > 0)
+  assert_true(issues("type T = Lowercase<number>;") > 0)
+  assert_true(issues("type T = Capitalize<0>;") > 0)
+  assert_true(issues("type T = Uncapitalize<123>;") > 0)
+  // Valid string arguments: silent.
+  @test.assert_eq(issues("type T = Uppercase<\"hello\">;"), 0)
+  @test.assert_eq(issues("type T = Uppercase<string>;"), 0)
+  @test.assert_eq(issues("type T = Uppercase<'a' | 'b'>;"), 0)
+  @test.assert_eq(issues("type T = Uppercase<any>;"), 0)
+  // A user-declared `Uppercase` alias is not the intrinsic: no forced flag.
+  @test.assert_eq(issues("type Uppercase<T> = T; type X = Uppercase<42>;"), 0)
+}
