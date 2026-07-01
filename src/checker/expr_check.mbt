@@ -17244,6 +17244,11 @@ fn check_module_function_bodies_layered(
         })
       } else if member == "<object-member-no-separator>" {
         all.push({ path: "object type", message: "`;` expected" })
+      } else if member.has_prefix("<generic-noarg-required>") ||
+        member.has_prefix("<type-param-name>") {
+        // Consumed by the TS2314 arity check in `check_module`, not a
+        // diagnostic of its own -- skip it here.
+        ()
       } else {
         all.push({
           path: "member `\{member}`",

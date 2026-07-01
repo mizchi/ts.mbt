@@ -2223,6 +2223,27 @@ conformance sources (`.errors.txt` baseline = ground truth):
     Pinned recall 693 -> 694 (classAndInterfaceMergeConflictingMembers).
     Whitebox-tested.
 
+2026-07-01 (T153)  695/815 (85 %)        414/414 ( 0 FP)   TS2314 generic type used without type arguments
+
+  T153 -- TS2314 ("Generic type 'C<T>' requires N type argument(s)."). A bare
+    reference to a locally-declared generic (class / interface / alias /
+    declare class) with no defaulted type parameter (`var c: C` where
+    `class C<T>`) supplies zero type arguments and is an error. The parser
+    records the had-a-default flag per declaration (via a new
+    `last_type_params_had_default` field set in
+    `parse_type_param_names_bounds_and_const_flags`) and pushes a
+    `<generic-noarg-required>NAME` sentinel for each no-default generic. It
+    also records every type-parameter name (`<type-param-name>NAME`); the
+    checker EXCLUDES any such name from the flag set, because
+    `check_arity`'s `scope` does not track nested call / construct-signature
+    generics -- a bare `Named(B)` might be an in-scope type parameter (e.g.
+    `new <A, B>(...)`) rather than a same-named generic class, so skipping it
+    keeps the check false-positive-free. `check_arity` gained a `Named` case
+    that flags names in the (arity-conflict-free) required set. Whole-corpus TP
+    1754 -> 1756 (+2: genericTypeReferenceWithoutTypeArgument{,3}), 0 FP. Pinned
+    recall 694 -> 695. Whitebox-tested (incl. default-param and type-param-name
+    exclusion cases).
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary

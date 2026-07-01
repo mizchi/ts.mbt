@@ -10784,3 +10784,38 @@ test "expr_check: class/interface merge with conflicting modifiers (TS2687)" {
     0,
   )
 }
+
+///|
+test "expr_check: bare reference to generic without type arguments (TS2314)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("generic type requires") {
+        n += 1
+      }
+    }
+    n
+  }
+  // Bare reference to a generic class / interface / alias / declare class.
+  assert_true(issues("class C<T> { x: T = 0 as any; }\nvar c: C;") > 0)
+  assert_true(issues("interface I<T> { x: T; }\nvar i: I;") > 0)
+  assert_true(issues("declare class D<T> { x: T; }\ndeclare var d: D;") > 0)
+  // A defaulted type parameter makes the bare reference valid: silent.
+  @test.assert_eq(issues("interface I<T = string> { x: T; }\nvar i: I;"), 0)
+  @test.assert_eq(
+    issues("declare class D<T = string> { x: T; }\ndeclare var d: D;"),
+    0,
+  )
+  // A supplied type argument is fine.
+  @test.assert_eq(issues("interface I<T> { x: T; }\nvar i: I<number>;"), 0)
+  // A non-generic type referenced bare is fine.
+  @test.assert_eq(issues("interface I { x: number; }\nvar i: I;"), 0)
+  // A name that is also used as a type parameter anywhere is not flagged
+  // (it may be an in-scope type parameter, not the generic declaration).
+  @test.assert_eq(
+    issues(
+      "class B<U, V> { x: U = 0 as any; }\ndeclare var f: { new <A, B>(x: A): B };",
+    ),
+    0,
+  )
+}

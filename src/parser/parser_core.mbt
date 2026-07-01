@@ -51,6 +51,13 @@ pub struct Parser {
   // when it builds the `Call` / `New` / `MethodCall` so the result can be
   // wrapped in `TypeArgs`. Empty when the following call had none.
   mut pending_call_type_args : Array[@ast.TsType]
+  // Set by `parse_type_param_names_bounds_and_const_flags` to record whether
+  // the type-parameter list it just parsed contained ANY defaulted parameter
+  // (`<T = string>`). A generic declaration with no defaulted parameter
+  // requires all of its type arguments, so a bare reference to it (`C` with no
+  // `<...>`) is TS2314. Read immediately after the call by the class /
+  // interface / type-alias parsers.
+  mut last_type_params_had_default : Bool
   local_type_param_bounds : Array[(String, @ast.TsType)]
   // Decorator expressions parsed at the statement level that should be
   // attached to the next class declaration. The class parsers drain
@@ -169,6 +176,7 @@ pub fn Parser::new_with_strict_and_jsx(
     current_class_brand: None,
     last_runtime_class_decl: None,
     pending_class_base_expr: None,
+    last_type_params_had_default: false,
     local_type_param_bounds: [],
     pending_decorators: [],
     param_property_scopes: [],
@@ -226,6 +234,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     current_class_brand: None,
     last_runtime_class_decl: None,
     pending_class_base_expr: None,
+    last_type_params_had_default: false,
     local_type_param_bounds: [],
     pending_decorators: [],
     param_property_scopes: [],
