@@ -15611,16 +15611,22 @@ fn check_class_interface_merge_modifiers(
   module_ : @ast.TsModule,
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
-  for cls in module_.classes {
-    // Find a same-named interface (the merge partner).
-    let mut merged : @ast.TsInterface? = None
-    for iface in module_.interfaces {
-      if iface.name == cls.name {
-        merged = Some(iface)
-        break
-      }
+  // Index interfaces by name once so the per-class lookup is O(1) rather than
+  // an inner scan over every interface (which made this O(classes ×
+  // interfaces) on files that declare many of both).
+  let iface_by_name : Map[String, @ast.TsInterface] = {}
+  for iface in module_.interfaces {
+    if iface_by_name.get(iface.name) is None {
+      iface_by_name[iface.name] = iface
     }
-    match merged {
+  }
+  for cls in module_.classes {
+    // Only classes with a private/protected member can conflict with an
+    // interface's (always-public) member.
+    if cls.private_members.length() == 0 && cls.protected_members.length() == 0 {
+      continue
+    }
+    match iface_by_name.get(cls.name) {
       Some(iface) => {
         let iface_field_names : Map[String, Unit] = {}
         for field in iface.fields {

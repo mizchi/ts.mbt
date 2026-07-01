@@ -338,6 +338,40 @@ test "bench checker: JSX-heavy (20 components, 100 call sites)" (it : @bench.T) 
 }
 
 ///|
+/// Permissive full pipeline — the path the recall gate and the bridge's
+/// sanity check actually run (`check_module_function_bodies_permissive`,
+/// which additionally runs `check_module` and every module-level structural
+/// pass, then applies the T9 suppressions). Scales the interface count so a
+/// super-linear module-level pass shows up here the same way the strict
+/// benchmarks surfaced the earlier O(n^2) scans.
+test "bench checker: permissive pipeline (500 interfaces)" (it : @bench.T) {
+  let module_ = @parser.parse_module_from_source_with_const_values(
+    bench_wide_500,
+    {},
+  ) catch {
+    _ => return
+  }
+  it.bench(fn() {
+    let issues = check_module_function_bodies_permissive(module_)
+    it.keep(issues.length())
+  })
+}
+
+///|
+test "bench checker: permissive pipeline (2000 interfaces)" (it : @bench.T) {
+  let module_ = @parser.parse_module_from_source_with_const_values(
+    bench_wide_2000,
+    {},
+  ) catch {
+    _ => return
+  }
+  it.bench(fn() {
+    let issues = check_module_function_bodies_permissive(module_)
+    it.keep(issues.length())
+  })
+}
+
+///|
 /// Resolver build alone — separates `Resolver::from_module` (which
 /// scans the whole module surface and builds 6 lookup tables) from
 /// the function-body walk. Use the same input as the wide-500 bench
@@ -376,6 +410,58 @@ test "bench checker: function-body walk only (500 interfaces)" (it : @bench.T) {
     let issues = check_module_function_bodies(module_)
     it.keep(issues.length())
   })
+}
+
+///|
+/// File-backed benchmark over the vendored conformance corpus (always
+/// present, unlike the `typescript/src` submodule). Measures the *product*
+/// path — parse + `check_module_function_bodies_permissive` — over a few of
+/// the largest real-world `.ts` files, reporting throughput in MB/s. Run:
+///   moon test --target native -p mizchi/ts/checker --filter "corpus files"
+async test "bench checker: corpus files (permissive, file IO)" {
+  let candidates = [
+    "typescript/tests/cases/conformance/parser/ecmascript5/parserRealSource11.ts",
+    "typescript/tests/cases/conformance/parser/ecmascript5/RealWorld/parserharness.ts",
+    "typescript/tests/cases/conformance/fixSignatureCaching.ts",
+  ]
+  let prepared : Array[(String, Int, @ast.TsModule)] = []
+  for path in candidates {
+    try @fs.read_file(path) catch {
+      _ => ()
+    } noraise {
+      data => {
+        let text = data.text()
+        try @parser.Parser::from_source(text).parse_module() catch {
+          _ => ()
+        } noraise {
+          module_ => prepared.push((path, text.length(), module_))
+        }
+      }
+    }
+  }
+  if prepared.length() == 0 {
+    println("skip: conformance corpus files not found")
+    return
+  }
+  println("checker bench (corpus, permissive) — throughput (50 iters):")
+  for entry in prepared {
+    let (path, chars, module_) = entry
+    let iters = 50
+    let start = @bench.monotonic_clock_start()
+    for _ in 0..<iters {
+      let _ = check_module_function_bodies_permissive(module_)
+    }
+    let total_us = @bench.monotonic_clock_end(start)
+    if total_us > 0.0 {
+      let per_call_us = total_us / iters.to_double()
+      let mbps = chars.to_double() / per_call_us
+      println(
+        "  \{path}: \{mbps.to_int()} MB/s (\{chars} chars / \{per_call_us.to_int()} µs per check)",
+      )
+    } else {
+      println("  \{path}: too fast to measure (\{chars} chars)")
+    }
+  }
 }
 
 ///|
