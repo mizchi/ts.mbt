@@ -10710,3 +10710,40 @@ test "expr_check: intrinsic string-mapping type with non-string arg (TS2344)" {
   // A user-declared `Uppercase` alias is not the intrinsic: no forced flag.
   @test.assert_eq(issues("type Uppercase<T> = T; type X = Uppercase<42>;"), 0)
 }
+
+///|
+test "expr_check: exported var initializer is walked; opaque target abstains" {
+  let count = fn(src : String, needle : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains(needle) {
+        n += 1
+      }
+    }
+    n
+  }
+  // An `export var` initializer is now checked the same as a plain `var`:
+  // reading a protected static from outside the class is flagged.
+  assert_true(
+    count(
+      "class C { protected static bar: string; }\nexport var b = C.bar;", "protected",
+    ) >
+    0,
+  )
+  // Structural assignability abstains when the target's element/field type
+  // is an unmodeled type-level construct behind an alias (`keyof typeof`),
+  // which TypeScript resolves but we approximate -- no false positive.
+  @test.assert_eq(
+    count(
+      (
+        #|const s = { a: 1, b: 2 };
+        #|type K = keyof typeof s;
+        #|type Obj = { code: K };
+        #|declare function mk(): { code: string }[];
+        #|const arr: Obj[] = mk();
+      ),
+      "expected",
+    ),
+    0,
+  )
+}
