@@ -1657,6 +1657,15 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     let (names, type_param_bounds) = self.parse_type_param_names_and_bounds()
     class_type_params = names
     class_type_param_bounds = type_param_bounds
+    // TS2314: a named generic class expression with no defaulted type
+    // parameter requires all of its type arguments on a bare reference.
+    if class_name != "" &&
+      names.length() > 0 &&
+      not(self.last_type_params_had_default) {
+      self.interface_member_modifier_misuses.push(
+        "<generic-noarg-required>\{class_name}",
+      )
+    }
     class_type_param_bound_len = self.push_local_type_param_bounds(
       type_param_bounds,
     )
@@ -2362,6 +2371,17 @@ fn Parser::parse_class_decl_with_abstract(
     let (names, type_param_bounds) = self.parse_type_param_names_and_bounds()
     class_type_params = names
     class_type_param_bounds = type_param_bounds
+    // TS2314: a generic class with no defaulted type parameter requires all of
+    // its type arguments; a bare `C` reference is an error. Read the flag now,
+    // before the base / body parse clobbers it via a nested generic.
+    if name != "" &&
+      name != "<class>" &&
+      names.length() > 0 &&
+      not(self.last_type_params_had_default) {
+      self.interface_member_modifier_misuses.push(
+        "<generic-noarg-required>\{name}",
+      )
+    }
     class_type_param_bound_len = self.push_local_type_param_bounds(
       type_param_bounds,
     )

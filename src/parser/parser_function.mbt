@@ -775,6 +775,12 @@ fn Parser::parse_type_param_names_bounds_and_const_flags(
   let names : Array[String] = []
   let const_flags : Array[Bool] = []
   let bounds : Array[(String, @ast.TsType)] = []
+  self.last_type_params_had_default = false
+  // Tracked in a local (not the parser field) because parsing a parameter's
+  // bound can recursively invoke this function for a nested generic function
+  // type and clobber the field; the field is assigned once at the end from
+  // this local so the outermost call's value wins.
+  let mut had_default = false
   if !self.check(Lt) {
     return (names, const_flags, bounds)
   }
@@ -839,6 +845,14 @@ fn Parser::parse_type_param_names_bounds_and_const_flags(
     }
     names.push(name)
     const_flags.push(is_const)
+    // Record every type-parameter name seen anywhere (class / interface /
+    // alias / function / method / call+construct-signature generics). The
+    // TS2314 bare-reference check excludes these names: a bare `Named(X)` that
+    // is also a type-parameter name might be an in-scope type parameter rather
+    // than a reference to a same-named generic declaration (e.g. `new <Y, Z,
+    // A, B>(...)` uses `B` as a type parameter while a class `B<U, V>` also
+    // exists), so skipping it keeps the check false-positive-free.
+    self.interface_member_modifier_misuses.push("<type-param-name>\{name}")
     if self.match_(Extends) {
       let saved_pos = self.pos
       let saved_pending_gt = self.pending_gt
@@ -856,6 +870,7 @@ fn Parser::parse_type_param_names_bounds_and_const_flags(
       }
     }
     if self.match_(Eq) {
+      had_default = true
       self.skip_type_param_tail_until_delim()
     }
     if self.check(Comma) {
@@ -867,6 +882,7 @@ fn Parser::parse_type_param_names_bounds_and_const_flags(
       break
     }
   }
+  self.last_type_params_had_default = had_default
   (names, const_flags, bounds)
 }
 
@@ -1127,6 +1143,14 @@ pub fn Parser::parse_interface(
     k => raise ParseError("Expected interface name, got \{k}")
   }
   let (type_params, const_flags, type_param_bounds) = self.parse_type_param_names_bounds_and_const_flags()
+  // TS2314: a generic interface with no defaulted type parameter requires all
+  // of its type arguments, so a bare reference (`I` without `<...>`) is an
+  // error. Recorded via the shared channel; the checker consults it.
+  if type_params.length() > 0 && not(self.last_type_params_had_default) {
+    self.interface_member_modifier_misuses.push(
+      "<generic-noarg-required>\{name}",
+    )
+  }
   // TS1277: a `const` modifier on a type parameter is only valid on a
   // function, method, or class. An interface's own type-parameter list is
   // none of those, so `interface I<const T>` is always an error. Record it
@@ -1731,6 +1755,15 @@ fn Parser::parse_type_alias_after_type_keyword(
   // erasing the generic shape (e.g. `DateArg<DateType>` would become
   // `Date | ...` and lose precision).
   let (type_params, const_flags, type_param_bounds) = self.parse_type_param_names_bounds_and_const_flags()
+  // TS2314: a generic type alias with no defaulted type parameter requires all
+  // of its type arguments; a bare reference (`A` without `<...>`) is an error.
+  // Read before the alias body is parsed (which could clobber the flag via a
+  // nested generic).
+  if type_params.length() > 0 && not(self.last_type_params_had_default) {
+    self.interface_member_modifier_misuses.push(
+      "<generic-noarg-required>\{name}",
+    )
+  }
   // TS1277: a `const` modifier on a type-alias type parameter is invalid
   // (only functions, methods, and classes allow it). `type T<const U> = …`.
   for i, name_i in type_params {
@@ -2309,6 +2342,16 @@ fn Parser::parse_declare_class(
     let (names, type_param_bounds) = self.parse_type_param_names_and_bounds()
     class_type_params = names
     class_type_param_bounds = type_param_bounds
+    // TS2314: a generic `declare class` with no defaulted type parameter
+    // requires all of its type arguments on a bare reference. Read the flag
+    // before the base / body parse clobbers it via a nested generic.
+    if name != "" &&
+      names.length() > 0 &&
+      not(self.last_type_params_had_default) {
+      self.interface_member_modifier_misuses.push(
+        "<generic-noarg-required>\{name}",
+      )
+    }
     class_type_param_bound_len = self.push_local_type_param_bounds(
       type_param_bounds,
     )

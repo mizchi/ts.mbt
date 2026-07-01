@@ -245,33 +245,61 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
   for name, _ in arity_conflict {
     arities.remove(name) |> ignore
   }
+  // TS2314: names of locally-declared generics with NO defaulted type
+  // parameter -- a bare reference to one (`C` without `<...>`) supplies zero
+  // arguments and is an error. The parser records each via the
+  // `<generic-noarg-required>NAME` sentinel. A name dropped from `arities`
+  // for an arity conflict is excluded (ambiguous merge), keeping this sound.
+  // Every type-parameter name seen anywhere in the module (including nested
+  // call / construct signature and method generics). A name in this set is
+  // excluded from `noarg_required` because a bare `Named(X)` reference might
+  // resolve to an in-scope type parameter rather than a same-named generic
+  // declaration -- `check_arity`'s `scope` does not track nested signature
+  // scopes, so this exclusion keeps the bare-reference check sound.
+  let all_type_param_names : Map[String, Unit] = {}
+  for entry in module_.interface_member_modifier_misuses {
+    if entry.has_prefix("<type-param-name>") {
+      all_type_param_names[entry.substring(start="<type-param-name>".length())] = ()
+    }
+  }
+  let noarg_required : Map[String, Unit] = {}
+  for entry in module_.interface_member_modifier_misuses {
+    if entry.has_prefix("<generic-noarg-required>") {
+      let nm = entry.substring(start="<generic-noarg-required>".length())
+      if arities.get(nm) is Some(_) &&
+        arity_conflict.get(nm) is None &&
+        all_type_param_names.get(nm) is None {
+        noarg_required[nm] = ()
+      }
+    }
+  }
   for iface in module_.interfaces {
     let scope = scope_with_iface_params(iface)
     for field in iface.fields {
-      check_arity(field.1, scope, arities, issues)
+      check_arity(field.1, scope, arities, noarg_required, issues)
     }
   }
   for ta in module_.type_aliases {
     let scope = ta.type_params
-    check_arity(ta.type_, scope, arities, issues)
+    check_arity(ta.type_, scope, arities, noarg_required, issues)
   }
   for f in module_.funcs {
     let scope : Array[String] = []
     for p in f.params {
-      check_arity(p.type_, scope, arities, issues)
+      check_arity(p.type_, scope, arities, noarg_required, issues)
     }
-    check_arity(f.return_type, scope, arities, issues)
+    check_arity(f.return_type, scope, arities, noarg_required, issues)
   }
   for i in module_.imports {
     let scope : Array[String] = []
     for p in i.params {
-      check_arity(p.1, scope, arities, issues)
+      check_arity(p.1, scope, arities, noarg_required, issues)
     }
-    check_arity(i.return_type, scope, arities, issues)
+    check_arity(i.return_type, scope, arities, noarg_required, issues)
   }
   for v in module_.values {
     let scope : Array[String] = []
-    check_arity(v.type_, scope, arities, issues)
+    check_arity(v.type_, scope, arities, noarg_required, issues)
   }
   // Top-level `var`/`let`/`const` declarations whose annotation references a
   // declared type (`var v: C<string>`) -- these live in `top_level_stmts`,
@@ -279,7 +307,7 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
   for stmt in module_.top_level_stmts {
     match stmt {
       Var(_, t, _) | Let(_, t, _) | Const(_, t, _) =>
-        check_arity(t, [], arities, issues)
+        check_arity(t, [], arities, noarg_required, issues)
       _ => ()
     }
   }
@@ -755,9 +783,31 @@ fn check_arity(
   type_ : @ast.TsType,
   scope : Array[String],
   arities : Map[String, Int],
+  noarg_required : Map[String, Unit],
   issues : Array[TypeIssue],
 ) -> Unit {
   match type_ {
+    // TS2314: a bare reference to a generic that has no defaulted type
+    // parameter (`C` where `class C<T> {}`) supplies zero type arguments and
+    // is an error. `noarg_required` holds exactly those names (recorded by the
+    // parser, arity-conflict names excluded), so this is false-positive-free.
+    Named(name) =>
+      if not(scope.contains(name)) && noarg_required.get(name) is Some(_) {
+        let already = issues
+          .iter()
+          .any(fn(i) { i.kind == TypeAliasArityMismatch && i.name == name })
+        if not(already) {
+          match arities.get(name) {
+            Some(expected) =>
+              issues.push({
+                kind: TypeAliasArityMismatch,
+                name,
+                detail: "generic type requires \{expected} type argument(s)",
+              })
+            None => ()
+          }
+        }
+      }
     Applied(name, args) => {
       if !scope.contains(name) {
         match arities.get(name) {
@@ -780,38 +830,38 @@ fn check_arity(
         }
       }
       for a in args {
-        check_arity(a, scope, arities, issues)
+        check_arity(a, scope, arities, noarg_required, issues)
       }
     }
-    Array(inner) => check_arity(inner, scope, arities, issues)
+    Array(inner) => check_arity(inner, scope, arities, noarg_required, issues)
     Tuple(items) =>
       for it in items {
-        check_arity(it, scope, arities, issues)
+        check_arity(it, scope, arities, noarg_required, issues)
       }
     Object(fields) =>
       for f in fields {
-        check_arity(f.0, scope, arities, issues)
-        check_arity(f.1, scope, arities, issues)
+        check_arity(f.0, scope, arities, noarg_required, issues)
+        check_arity(f.1, scope, arities, noarg_required, issues)
       }
     Func(params, ret) => {
       for p in params {
-        check_arity(p, scope, arities, issues)
+        check_arity(p, scope, arities, noarg_required, issues)
       }
-      check_arity(ret, scope, arities, issues)
+      check_arity(ret, scope, arities, noarg_required, issues)
     }
     Union(items) | Intersection(items) =>
       for m in items {
-        check_arity(m, scope, arities, issues)
+        check_arity(m, scope, arities, noarg_required, issues)
       }
     Conditional(c, e, t, f) => {
-      check_arity(c, scope, arities, issues)
-      check_arity(e, scope, arities, issues)
-      check_arity(t, scope, arities, issues)
-      check_arity(f, scope, arities, issues)
+      check_arity(c, scope, arities, noarg_required, issues)
+      check_arity(e, scope, arities, noarg_required, issues)
+      check_arity(t, scope, arities, noarg_required, issues)
+      check_arity(f, scope, arities, noarg_required, issues)
     }
     IndexedAccess(b, k) => {
-      check_arity(b, scope, arities, issues)
-      check_arity(k, scope, arities, issues)
+      check_arity(b, scope, arities, noarg_required, issues)
+      check_arity(k, scope, arities, noarg_required, issues)
     }
     _ => ()
   }
