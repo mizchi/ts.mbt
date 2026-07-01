@@ -3508,6 +3508,59 @@ fn check_member_accessibility(
 }
 
 ///|
+/// TS2513: an abstract member cannot be reached through `super`. In a class
+/// `C extends B`, `super.foo` / `super.foo()` where `foo` is declared
+/// `abstract` on a base in `C`'s inheritance chain has no implementation to
+/// dispatch to. Only fires for a `super` receiver whose enclosing class has a
+/// base that lists `prop` in its `abstract_members`, so it is
+/// false-positive-free.
+fn check_super_abstract_access(
+  ctx : CheckCtx,
+  recv : @ast.TsExpr,
+  prop : String,
+) -> Unit {
+  guard recv is Var("super") else { return }
+  let enclosing = match current_enclosing_class(ctx.path_prefix) {
+    Some(c) => c
+    None => return
+  }
+  let cls = match ctx.resolver.classes.get(enclosing) {
+    Some(c) => c
+    None => return
+  }
+  // Walk the base chain; the first base that declares `prop` abstract makes a
+  // `super` access illegal.
+  let mut current = cls.base_names
+  let mut depth = 0
+  while depth < 32 {
+    depth = depth + 1
+    let next : Array[String] = []
+    for base in current {
+      match ctx.resolver.classes.get(base) {
+        Some(bdecl) => {
+          if bdecl.abstract_members.contains(prop) {
+            record(
+              ctx,
+              "super `.\{prop}`",
+              "abstract method `\{prop}` in class `\{base}` cannot be accessed via super expression",
+            )
+            return
+          }
+          for b in bdecl.base_names {
+            next.push(b)
+          }
+        }
+        None => ()
+      }
+    }
+    if next.length() == 0 {
+      break
+    }
+    current = next
+  }
+}
+
+///|
 fn record(ctx : CheckCtx, sub_path : String, message : String) -> Unit {
   // T9: in permissive mode, drop the diagnostic families whose
   // residual FPs are dominated by features we don't model. Strict
@@ -12406,6 +12459,7 @@ fn check_call_args_in_expr(
     MethodCall(receiver, meth, args) => {
       check_private_name_access(ctx, meth)
       check_member_accessibility(env, ctx, receiver, meth)
+      check_super_abstract_access(ctx, receiver, meth)
       // Static-namespace dispatch: `Math.max(...)`, `JSON.stringify(...)`.
       // Recognised by the bare-identifier shape of the receiver. Also handle
       // a static method called through the class name (`A.s(args)`), whose
@@ -12695,6 +12749,7 @@ fn check_call_args_in_expr(
       check_call_args_in_expr(env, recv, ctx)
       check_private_name_access(ctx, prop)
       check_member_accessibility(env, ctx, recv, prop)
+      check_super_abstract_access(ctx, recv, prop)
       // TS2806: reading a private accessor that was defined with a setter but
       // no getter. A write (`this.#x = v`) parses as `PropAssignExpr`, so a
       // `PropAccess` of a set-only private name is always a read.
