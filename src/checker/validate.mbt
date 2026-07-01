@@ -13,34 +13,32 @@
 // Imports are not consulted (they are bridged through external modules); a
 // future overload could accept a name table to fold them in.
 pub fn unresolved_type_references(module_ : @ast.TsModule) -> Array[String] {
-  let declared = module_declared_names(module_)
+  let declared = module_declared_name_set(module_)
   let acc : Array[String] = []
+  let acc_set : Map[String, Unit] = {}
+  let no_locals : Array[String] = []
   for iface in module_.interfaces {
-    let scope = scope_with(declared, iface.type_params)
     for field in iface.fields {
-      check_type(field.1, scope, acc)
+      check_type(field.1, declared, iface.type_params, acc, acc_set)
     }
   }
   for ta in module_.type_aliases {
-    let scope = scope_with(declared, ta.type_params)
-    check_type(ta.type_, scope, acc)
+    check_type(ta.type_, declared, ta.type_params, acc, acc_set)
   }
   for f in module_.funcs {
-    let scope = scope_with(declared, f.type_params)
     for param in f.params {
-      check_type(param.type_, scope, acc)
+      check_type(param.type_, declared, f.type_params, acc, acc_set)
     }
-    check_type(f.return_type, scope, acc)
+    check_type(f.return_type, declared, f.type_params, acc, acc_set)
   }
   for i in module_.imports {
-    let scope = scope_with(declared, i.type_params)
     for param in i.params {
-      check_type(param.1, scope, acc)
+      check_type(param.1, declared, i.type_params, acc, acc_set)
     }
-    check_type(i.return_type, scope, acc)
+    check_type(i.return_type, declared, i.type_params, acc, acc_set)
   }
   for v in module_.values {
-    check_type(v.type_, declared, acc)
+    check_type(v.type_, declared, no_locals, acc, acc_set)
   }
   acc
 }
@@ -165,54 +163,59 @@ fn is_typeof_value_keyword(name : String) -> Bool {
 }
 
 ///|
-fn scope_with(
-  declared : Array[String],
-  type_params : Array[String],
-) -> Array[String] {
-  if type_params.length() == 0 {
-    return declared
-  }
-  let result : Array[String] = []
-  for d in declared {
-    result.push(d)
-  }
-  for p in type_params {
-    if !result.contains(p) {
-      result.push(p)
+fn module_declared_names(module_ : @ast.TsModule) -> Array[String] {
+  // Deduplicate through a set so this stays O(n) in the declaration count
+  // (an `Array::contains` per push made it O(n^2), which dominated the
+  // checker on modules with thousands of interfaces).
+  let names : Array[String] = []
+  let seen : Map[String, Unit] = {}
+  fn add(name : String) -> Unit {
+    if not(seen.contains(name)) {
+      seen[name] = ()
+      names.push(name)
     }
   }
-  result
+
+  for iface in module_.interfaces {
+    add(iface.name)
+  }
+  for ta in module_.type_aliases {
+    add(ta.name)
+  }
+  for c in module_.classes {
+    add(c.name)
+  }
+  for e in module_.enums {
+    add(e.name)
+  }
+  for ns in module_.namespaces {
+    add(ns.name)
+  }
+  names
 }
 
 ///|
-fn module_declared_names(module_ : @ast.TsModule) -> Array[String] {
-  let names : Array[String] = []
+/// Set form of `module_declared_names` for O(1) membership tests -- used by
+/// the reference walk, which previously did a linear `Array::contains` per
+/// referenced name (O(n^2) over the module surface).
+fn module_declared_name_set(module_ : @ast.TsModule) -> Map[String, Unit] {
+  let set : Map[String, Unit] = {}
   for iface in module_.interfaces {
-    if !names.contains(iface.name) {
-      names.push(iface.name)
-    }
+    set[iface.name] = ()
   }
   for ta in module_.type_aliases {
-    if !names.contains(ta.name) {
-      names.push(ta.name)
-    }
+    set[ta.name] = ()
   }
   for c in module_.classes {
-    if !names.contains(c.name) {
-      names.push(c.name)
-    }
+    set[c.name] = ()
   }
   for e in module_.enums {
-    if !names.contains(e.name) {
-      names.push(e.name)
-    }
+    set[e.name] = ()
   }
   for ns in module_.namespaces {
-    if !names.contains(ns.name) {
-      names.push(ns.name)
-    }
+    set[ns.name] = ()
   }
-  names
+  set
 }
 
 ///|
@@ -333,59 +336,69 @@ fn collect_typeof_bases(type_ : @ast.TsType, acc : Array[String]) -> Unit {
 ///|
 fn check_type(
   type_ : @ast.TsType,
-  scope : Array[String],
+  declared : Map[String, Unit],
+  local : Array[String],
   acc : Array[String],
+  acc_set : Map[String, Unit],
 ) -> Unit {
-  match type_ {
-    Named(name) =>
-      if !scope.contains(name) && !is_well_known_type_name(name) {
-        if !acc.contains(name) {
-          acc.push(name)
-        }
-      }
-    Applied(name, args) => {
-      if !scope.contains(name) && !is_well_known_type_name(name) {
-        if !acc.contains(name) {
-          acc.push(name)
-        }
-      }
-      for a in args {
-        check_type(a, scope, acc)
+  // `declared` is a set (O(1) membership); `local` is the small type-parameter
+  // list in scope at the current declaration (usually 0-3 entries), checked
+  // linearly. Together they replace the old merged-and-copied `scope` array,
+  // which made the walk O(n^2) over the module surface.
+  fn in_scope(name : String) -> Bool {
+    declared.contains(name) || local.contains(name)
+  }
+
+  fn note(name : String) -> Unit {
+    if not(in_scope(name)) && not(is_well_known_type_name(name)) {
+      if not(acc_set.contains(name)) {
+        acc_set[name] = ()
+        acc.push(name)
       }
     }
-    Array(inner) => check_type(inner, scope, acc)
+  }
+
+  match type_ {
+    Named(name) => note(name)
+    Applied(name, args) => {
+      note(name)
+      for a in args {
+        check_type(a, declared, local, acc, acc_set)
+      }
+    }
+    Array(inner) => check_type(inner, declared, local, acc, acc_set)
     Tuple(items) =>
       for it in items {
-        check_type(it, scope, acc)
+        check_type(it, declared, local, acc, acc_set)
       }
     Object(fields) =>
       for f in fields {
-        check_type(f.0, scope, acc)
-        check_type(f.1, scope, acc)
+        check_type(f.0, declared, local, acc, acc_set)
+        check_type(f.1, declared, local, acc, acc_set)
       }
     Struct(_, fields) =>
       for f in fields {
-        check_type(f.1, scope, acc)
+        check_type(f.1, declared, local, acc, acc_set)
       }
     Func(params, ret) => {
       for p in params {
-        check_type(p, scope, acc)
+        check_type(p, declared, local, acc, acc_set)
       }
-      check_type(ret, scope, acc)
+      check_type(ret, declared, local, acc, acc_set)
     }
     Union(members) | Intersection(members) =>
       for m in members {
-        check_type(m, scope, acc)
+        check_type(m, declared, local, acc, acc_set)
       }
     Conditional(check_t, extends, t_branch, f_branch) => {
-      check_type(check_t, scope, acc)
-      check_type(extends, scope, acc)
-      check_type(t_branch, scope, acc)
-      check_type(f_branch, scope, acc)
+      check_type(check_t, declared, local, acc, acc_set)
+      check_type(extends, declared, local, acc, acc_set)
+      check_type(t_branch, declared, local, acc, acc_set)
+      check_type(f_branch, declared, local, acc, acc_set)
     }
     IndexedAccess(base, key) => {
-      check_type(base, scope, acc)
-      check_type(key, scope, acc)
+      check_type(base, declared, local, acc, acc_set)
+      check_type(key, declared, local, acc, acc_set)
     }
     _ => ()
   }
