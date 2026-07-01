@@ -13204,6 +13204,44 @@ fn check_call_args_in_expr(
           "as",
           "Type '\{type_display(inferred)}' cannot be asserted to type '\{type_display(asserted)}' (no overlap)",
         )
+      } else {
+        // TS2352: a bare primitive and a concrete object type (a user
+        // interface / class / object literal) never overlap, so asserting one
+        // to the other (`z as number` where `z: SomeInterface`, `<I>n` where
+        // `n: number`) is always a mistake. Enums are number-ish and boxed
+        // wrapper objects are excluded so the check stays false-positive-free;
+        // aliases are resolved via `unwrap` first.
+        let inferred_u = ctx.resolver.unwrap(inferred)
+        let asserted_u = ctx.resolver.unwrap(asserted)
+        let is_bare_primitive = fn(t : @ast.TsType) -> Bool {
+          match t {
+            Number | Int | String_ | Boolean | BigInt => true
+            _ => false
+          }
+        }
+        // Classes are deliberately excluded: a class name is also a value, so
+        // an ASI-split `as` call (`var y = 20\nas(Foo)`, where `as` is a
+        // function and `Foo` a class) mis-parses as `20 as Foo` and would
+        // false-positive. Interfaces / object-literal types are not values, so
+        // they don't hit that ambiguity.
+        let is_concrete_object = fn(t : @ast.TsType) -> Bool {
+          match t {
+            Object(_) | Struct(_, _) => true
+            Named(n) => ctx.resolver.interfaces.get(n) is Some(_)
+            _ => false
+          }
+        }
+        let no_overlap = (
+            is_bare_primitive(inferred_u) && is_concrete_object(asserted_u)
+          ) ||
+          (is_concrete_object(inferred_u) && is_bare_primitive(asserted_u))
+        if no_overlap {
+          record(
+            ctx,
+            "as",
+            "conversion of type '\{type_display(inferred_u)}' to type '\{type_display(asserted_u)}' may be a mistake because neither type sufficiently overlaps with the other",
+          )
+        }
       }
     }
     NonNull(inner) => check_call_args_in_expr(env, inner, ctx)
