@@ -2283,6 +2283,18 @@ conformance sources (`.errors.txt` baseline = ground truth):
     fire -- false-positive-free. Whole-corpus TP 1758 -> 1759, 0 FP. Pinned
     recall 697 -> 698 (enumIsNotASubtypeOfAnythingButNumber). Whitebox-tested.
 
+2026-07-01 (T157)  699/815 (86 %)        414/414 ( 0 FP)   TS2513 abstract method accessed via super
+
+  T157 -- TS2513 ("Abstract method 'X' in class 'Y' cannot be accessed via
+    super expression."). In `class C extends B`, `super.foo` / `super.foo()`
+    where `foo` is declared `abstract` on a base in C's inheritance chain has
+    no implementation to dispatch to. `check_super_abstract_access` fires only
+    for a `super` receiver whose enclosing class has a base listing `prop` in
+    its `abstract_members` (walking the base chain), so it is
+    false-positive-free. Wired into the `PropAccess` and `MethodCall` arms of
+    the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
+    698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary

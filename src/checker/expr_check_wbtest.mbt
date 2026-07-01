@@ -10917,3 +10917,46 @@ test "expr_check: enum property under string index signature (TS2411)" {
     0,
   )
 }
+
+///|
+test "expr_check: abstract method accessed via super (TS2513)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("cannot be accessed via super expression") {
+        n += 1
+      }
+    }
+    n
+  }
+  // `super.foo()` where foo is abstract in the base.
+  assert_true(
+    issues(
+      (
+        #|abstract class B { abstract foo(): number; }
+        #|class C extends B { foo() { return 2; } m() { return super.foo(); } }
+      ),
+    ) >
+    0,
+  )
+  // A concrete base method reached via super is fine.
+  @test.assert_eq(
+    issues(
+      (
+        #|class B { foo() { return 1; } }
+        #|class C extends B { foo() { return 2; } m() { return super.foo(); } }
+      ),
+    ),
+    0,
+  )
+  // `this.foo()` (not super) is never flagged by this check.
+  @test.assert_eq(
+    issues(
+      (
+        #|abstract class B { abstract foo(): number; }
+        #|class C extends B { foo() { return this.foo(); } }
+      ),
+    ),
+    0,
+  )
+}
