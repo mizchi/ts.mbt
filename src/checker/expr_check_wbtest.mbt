@@ -10747,3 +10747,40 @@ test "expr_check: exported var initializer is walked; opaque target abstains" {
     0,
   )
 }
+
+///|
+test "expr_check: class/interface merge with conflicting modifiers (TS2687)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("must have identical modifiers") {
+        n += 1
+      }
+    }
+    n
+  }
+  // A protected / private class member re-declared by a merged interface.
+  assert_true(
+    issues(
+      "declare class C { protected x: number; }\ninterface C { x: number; }",
+    ) >
+    0,
+  )
+  assert_true(
+    issues("declare class C { private x: number; }\ninterface C { x: number; }") >
+    0,
+  )
+  // A public class member matches the interface's implicit public: silent.
+  @test.assert_eq(
+    issues("declare class C { public x: number; }\ninterface C { x: number; }"),
+    0,
+  )
+  // No merged interface, or member not shared: silent.
+  @test.assert_eq(issues("declare class C { protected x: number; }"), 0)
+  @test.assert_eq(
+    issues(
+      "declare class C { protected x: number; }\ninterface C { y: number; }",
+    ),
+    0,
+  )
+}

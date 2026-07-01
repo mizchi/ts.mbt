@@ -15506,6 +15506,60 @@ fn check_type_param_as_base(module_ : @ast.TsModule) -> Array[ExprIssue] {
 }
 
 ///|
+/// TS2687: "All declarations of 'X' must have identical modifiers." When a
+/// class and a same-named interface merge (declaration merging) and the class
+/// declares a member with a `private` / `protected` accessibility modifier that
+/// the interface also declares, the modifiers differ -- interface members are
+/// always public -- so it is always an error. Only private/protected class
+/// members that also appear as interface fields are flagged; a `public` class
+/// member matches the interface's implicit public and is left alone, keeping
+/// this false-positive-free.
+fn check_class_interface_merge_modifiers(
+  module_ : @ast.TsModule,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for cls in module_.classes {
+    // Find a same-named interface (the merge partner).
+    let mut merged : @ast.TsInterface? = None
+    for iface in module_.interfaces {
+      if iface.name == cls.name {
+        merged = Some(iface)
+        break
+      }
+    }
+    match merged {
+      Some(iface) => {
+        let iface_field_names : Map[String, Unit] = {}
+        for field in iface.fields {
+          iface_field_names[field.0] = ()
+        }
+        let seen : Map[String, Unit] = {}
+        for name in cls.private_members {
+          if iface_field_names.get(name) is Some(_) && seen.get(name) is None {
+            seen[name] = ()
+            issues.push({
+              path: "class \{cls.name}",
+              message: "all declarations of `\{name}` must have identical modifiers",
+            })
+          }
+        }
+        for name in cls.protected_members {
+          if iface_field_names.get(name) is Some(_) && seen.get(name) is None {
+            seen[name] = ()
+            issues.push({
+              path: "class \{cls.name}",
+              message: "all declarations of `\{name}` must have identical modifiers",
+            })
+          }
+        }
+      }
+      None => ()
+    }
+  }
+  issues
+}
+
+///|
 fn check_reserved_type_alias_names(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   for ta in module_.type_aliases {
@@ -17039,6 +17093,9 @@ fn check_module_function_bodies_layered(
     all.push(issue)
   }
   for issue in check_type_param_as_base(module_) {
+    all.push(issue)
+  }
+  for issue in check_class_interface_merge_modifiers(module_) {
     all.push(issue)
   }
   for issue in check_reserved_type_alias_names(module_) {
