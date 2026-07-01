@@ -2210,6 +2210,19 @@ conformance sources (`.errors.txt` baseline = ground truth):
     Pinned recall 692 -> 693. Whitebox-tested (both the new coverage and the
     abstain).
 
+2026-07-01 (T152)  694/815 (85 %)        414/414 ( 0 FP)   TS2687 class/interface merge conflicting modifiers
+
+  T152 -- TS2687 ("All declarations of 'X' must have identical modifiers.").
+    When a class and a same-named interface merge and the class declares a
+    member with a `private` / `protected` accessibility modifier that the
+    interface also declares, the modifiers differ (interface members are always
+    public), so it is always an error. `check_class_interface_merge_modifiers`
+    flags only private/protected class members that also appear as interface
+    fields; a `public` class member matches the interface's implicit public and
+    is left alone -- false-positive-free. Whole-corpus TP 1753 -> 1754, 0 FP.
+    Pinned recall 693 -> 694 (classAndInterfaceMergeConflictingMembers).
+    Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary
