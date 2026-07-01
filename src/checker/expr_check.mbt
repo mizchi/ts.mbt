@@ -15598,6 +15598,51 @@ fn check_class_interface_merge_modifiers(
 }
 
 ///|
+/// TS2411: a named property whose type is an enum is not assignable to a
+/// `string` (or other non-`number` primitive) index signature on the same
+/// interface -- an enum type is only assignable to `number` / `any`, never to
+/// `string` / `boolean` / `bigint`. `interface I { [x: string]: string; foo:
+/// E }` is the canonical case. Restricted to an enum-typed field under a
+/// string index of a non-`number` bare primitive so it never false-positives
+/// (a `number` index accepts a numeric enum, and `any` accepts everything).
+fn check_index_signature_enum_violation(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for iface in module_.interfaces {
+    // The value type of a `string` index signature, when it is a non-`number`
+    // bare primitive (an enum is not assignable to it).
+    let mut string_index_value : @ast.TsType? = None
+    for sig in iface.index_signatures {
+      if sig.0 is String_ {
+        match resolver.unwrap(sig.1) {
+          String_ | Boolean | BigInt as v => string_index_value = Some(v)
+          _ => ()
+        }
+      }
+    }
+    match string_index_value {
+      Some(idx_ty) =>
+        for field in iface.fields {
+          match resolver.unwrap(field.1) {
+            Named(n) =>
+              if resolver.enums.get(n) is Some(_) {
+                issues.push({
+                  path: "interface \{iface.name}",
+                  message: "property `\{field.0}` of type `\{n}` is not assignable to `\{type_display(idx_ty)}` index type",
+                })
+              }
+            _ => ()
+          }
+        }
+      None => ()
+    }
+  }
+  issues
+}
+
+///|
 fn check_reserved_type_alias_names(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   for ta in module_.type_aliases {
@@ -17134,6 +17179,9 @@ fn check_module_function_bodies_layered(
     all.push(issue)
   }
   for issue in check_class_interface_merge_modifiers(module_) {
+    all.push(issue)
+  }
+  for issue in check_index_signature_enum_violation(module_, resolver) {
     all.push(issue)
   }
   for issue in check_reserved_type_alias_names(module_) {

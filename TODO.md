@@ -2271,6 +2271,18 @@ conformance sources (`.errors.txt` baseline = ground truth):
     resolved via `unwrap` first. Whole-corpus TP 1757 -> 1758, 0 FP. Pinned
     recall 696 -> 697 (typeAssertionsWithUnionTypes01). Whitebox-tested.
 
+2026-07-01 (T156)  698/815 (86 %)        414/414 ( 0 FP)   TS2411 enum property under string index signature
+
+  T156 -- TS2411 ("Property 'X' of type 'E' is not assignable to '<idx>' index
+    type"). An enum-typed field is not assignable to a `string` (or other
+    non-`number` bare primitive) index signature on the same interface -- an
+    enum is only assignable to `number` / `any`. `interface I { [x: string]:
+    string; foo: E }`. Restricted to an enum-typed field under a string index
+    whose value type unwraps to `string` / `boolean` / `bigint`, so a `number`
+    index (accepts numeric enums) and an `any` index (accepts everything) never
+    fire -- false-positive-free. Whole-corpus TP 1758 -> 1759, 0 FP. Pinned
+    recall 697 -> 698 (enumIsNotASubtypeOfAnythingButNumber). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary
