@@ -10819,3 +10819,22 @@ test "expr_check: bare reference to generic without type arguments (TS2314)" {
     0,
   )
 }
+
+///|
+test "expr_check: circular type alias through typeof value query (TS2456)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("resolves to itself") {
+        n += 1
+      }
+    }
+    n
+  }
+  // `type A = typeof v; var v: A;` is circular through the value query.
+  assert_true(issues("type A = typeof v;\nvar v: A;") > 0)
+  assert_true(issues("var w: B;\ntype B = typeof w;") > 0)
+  // A non-circular typeof alias is fine.
+  @test.assert_eq(issues("var n: number;\ntype A = typeof n;"), 0)
+  @test.assert_eq(issues("type A = typeof v;\nvar v: number;"), 0)
+}
