@@ -71,22 +71,23 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
   let issues : Array[TypeIssue] = []
 
   // 1. Duplicate declarations across all top-level kinds.
-  let seen_names : Array[String] = []
+  let seen_names : Map[String, Unit] = {}
+  let dup_set : Map[String, Unit] = {}
   let duplicates : Array[String] = []
   for iface in module_.interfaces {
-    record_or_duplicate(seen_names, duplicates, iface.name)
+    record_or_duplicate(seen_names, dup_set, duplicates, iface.name)
   }
   for ta in module_.type_aliases {
-    record_or_duplicate(seen_names, duplicates, ta.name)
+    record_or_duplicate(seen_names, dup_set, duplicates, ta.name)
   }
   for c in module_.classes {
-    record_or_duplicate(seen_names, duplicates, c.name)
+    record_or_duplicate(seen_names, dup_set, duplicates, c.name)
   }
   for e in module_.enums {
-    record_or_duplicate(seen_names, duplicates, e.name)
+    record_or_duplicate(seen_names, dup_set, duplicates, e.name)
   }
   for n in module_.namespaces {
-    record_or_duplicate(seen_names, duplicates, n.name)
+    record_or_duplicate(seen_names, dup_set, duplicates, n.name)
   }
   for d in duplicates {
     issues.push({
@@ -869,16 +870,20 @@ fn check_arity(
 
 ///|
 fn record_or_duplicate(
-  seen : Array[String],
+  seen : Map[String, Unit],
+  dup_set : Map[String, Unit],
   duplicates : Array[String],
   name : String,
 ) -> Unit {
+  // Set-backed so the top-level duplicate scan stays O(n): the previous
+  // `Array::contains` per name was O(n^2) over the declaration count.
   if seen.contains(name) {
-    if !duplicates.contains(name) {
+    if not(dup_set.contains(name)) {
+      dup_set[name] = ()
       duplicates.push(name)
     }
   } else {
-    seen.push(name)
+    seen[name] = ()
   }
 }
 
