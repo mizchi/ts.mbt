@@ -2244,6 +2244,19 @@ conformance sources (`.errors.txt` baseline = ground truth):
     recall 694 -> 695. Whitebox-tested (incl. default-param and type-param-name
     exclusion cases).
 
+2026-07-01 (T154)  696/815 (85 %)        414/414 ( 0 FP)   TS2456 circular type alias through typeof value query
+
+  T154 -- TS2456 ("Type alias 'A' circularly references itself."). The pattern
+    `type A = typeof v; var v: A;` is circular through the value query but the
+    existing `reaches_alias` walker only followed `Named` alias references. A
+    `TypeOf(v)` case now looks up the queried value's explicitly-annotated
+    declared type (from `top_level_stmts` / `values`) and recurses; if it
+    reaches the target alias, the cycle is reported. The value name is tracked
+    in `visited` (NUL-prefixed to avoid colliding with alias names). Only
+    explicitly-annotated values participate -- an inferred value type is opaque
+    and safely reports no cycle. Whole-corpus TP 1756 -> 1757, 0 FP. Pinned
+    recall 695 -> 696 (circularTypeofWithVarOrFunc). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary

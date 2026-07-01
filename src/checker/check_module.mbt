@@ -919,6 +919,46 @@ fn reaches_alias(
       }
       false
     }
+    // `type A = typeof v; var v: A;` is circular through the value query.
+    // Follow the queried value's declared type: if it reaches `target`, the
+    // alias references itself (TS2456). The value name is tracked in `visited`
+    // (prefixed with a NUL so it can't collide with an alias name) to break
+    // cycles. Only a value with an explicit type annotation participates -- an
+    // inferred value type is opaque here and safely reports no cycle.
+    TypeOf(vname) => {
+      let key = "\u{0}" + vname
+      if visited.contains(key) {
+        return false
+      }
+      let mut vty : @ast.TsType? = None
+      for stmt in module_.top_level_stmts {
+        match stmt {
+          Var(Ident(n), t, _) | Let(Ident(n), t, _) | Const(Ident(n), t, _) =>
+            if n == vname {
+              vty = Some(t)
+              break
+            }
+          _ => ()
+        }
+      }
+      if vty is None {
+        for val in module_.values {
+          if val.name == vname {
+            vty = Some(val.type_)
+            break
+          }
+        }
+      }
+      match vty {
+        Some(t) => {
+          visited.push(key)
+          let result = reaches_alias(module_, target, t, visited)
+          let _ = visited.pop()
+          result
+        }
+        None => false
+      }
+    }
     _ => false
   }
 }
