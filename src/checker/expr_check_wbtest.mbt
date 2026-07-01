@@ -10838,3 +10838,46 @@ test "expr_check: circular type alias through typeof value query (TS2456)" {
   @test.assert_eq(issues("var n: number;\ntype A = typeof n;"), 0)
   @test.assert_eq(issues("type A = typeof v;\nvar v: number;"), 0)
 }
+
+///|
+test "expr_check: type assertion between primitive and object (TS2352)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("neither type sufficiently overlaps") {
+        n += 1
+      }
+    }
+    n
+  }
+  // Asserting an interface value to a primitive (and vice versa) never overlaps.
+  assert_true(
+    issues(
+      "interface I { a: number; }\ndeclare var z: I;\nlet n = z as number;",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "interface I { a: number; }\ndeclare var n: number;\nlet z = n as I;",
+    ) >
+    0,
+  )
+  // `any` / `unknown` sources overlap with everything: silent.
+  @test.assert_eq(
+    issues("interface I { a: number; }\ndeclare var a: any;\nlet z = a as I;"),
+    0,
+  )
+  // Enums are number-ish: no TS2352 against number.
+  @test.assert_eq(
+    issues("enum E { A }\ndeclare var e: E;\nlet n = e as number;"),
+    0,
+  )
+  // Classes are excluded (ASI `as`-call ambiguity): silent.
+  @test.assert_eq(
+    issues(
+      "class C { a: number = 0; }\ndeclare var n: number;\nlet c = n as C;",
+    ),
+    0,
+  )
+}

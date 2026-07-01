@@ -2257,6 +2257,20 @@ conformance sources (`.errors.txt` baseline = ground truth):
     and safely reports no cycle. Whole-corpus TP 1756 -> 1757, 0 FP. Pinned
     recall 695 -> 696 (circularTypeofWithVarOrFunc). Whitebox-tested.
 
+2026-07-01 (T155)  697/815 (86 %)        414/414 ( 0 FP)   TS2352 assertion between primitive and object type
+
+  T155 -- TS2352 ("Conversion of type X to Y may be a mistake because neither
+    type sufficiently overlaps..."). Extends the existing primitive↔primitive
+    assertion check to primitive↔object: a bare primitive (`number` / `string`
+    / `boolean` / `bigint`) and a concrete object type (an interface or object
+    literal) never overlap, so `z as number` (z: SomeInterface) / `<I>n`
+    (n: number) is always a mistake. Enums (number-ish) and CLASSES are
+    excluded -- a class name is also a value, so an ASI-split `as`-function
+    call (`var y = 20\nas(Foo)`) mis-parses as `20 as Foo` and would otherwise
+    false-positive (caught by the oracle on asOperatorASI). Aliases are
+    resolved via `unwrap` first. Whole-corpus TP 1757 -> 1758, 0 FP. Pinned
+    recall 696 -> 697 (typeAssertionsWithUnionTypes01). Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary
