@@ -2192,6 +2192,24 @@ conformance sources (`.errors.txt` baseline = ground truth):
     with no user generics. Whole-corpus TP 1749 -> 1750, 0 FP. Pinned recall
     691 -> 692 (intrinsicTypes). Whitebox-tested.
 
+2026-07-01 (T151)  693/815 (85 %)        414/414 ( 0 FP)   exported var initializers are walked (+ opaque-target abstain)
+
+  T151 -- coverage gap: `export var/let/const b = <expr>` dropped its
+    initializer -- the parser collected the value decl but never pushed the
+    statement into `top_level_stmts`, so NO expression-level check ever ran on
+    an exported initializer, including every binding inside a namespace (where
+    all members are exported). `parse_export_stmt` now pushes the statement
+    like the non-export path does. This surfaced a latent structural-
+    assignability false positive (`const arr: Obj[] = xs.map(...)` where `Obj =
+    { code: LangCode }` and `LangCode = keyof typeof s` -- an unmodeled
+    type-level construct nested behind an alias), so a companion guard,
+    `type_deeply_contains_unmodeled`, makes the general `expected X but got Y`
+    fallback abstain when either shape contains a nested `keyof` / `typeof` /
+    conditional / mapped / indexed-access after alias resolution. Whole-corpus
+    TP 1750 -> 1753 (+3, incl. protectedStaticNotAccessibleInClodule), 0 FP.
+    Pinned recall 692 -> 693. Whitebox-tested (both the new coverage and the
+    abstain).
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary

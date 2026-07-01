@@ -7326,6 +7326,17 @@ fn check_expr_against(
     if type_contains_typeof(inferred_u) || type_contains_typeof(expected_u) {
       return
     }
+    // A `keyof` / `typeof` / conditional / mapped / indexed-access nested
+    // anywhere inside either shape (e.g. `Obj[]` where `Obj = { code:
+    // LangCode }` and `LangCode = keyof typeof set`) is resolved fully by
+    // TypeScript but only approximated here, so a structural mismatch against
+    // it is a false positive. The shallow `type_contains_typeof` guard above
+    // misses the case where the construct sits behind a named alias / array
+    // element; this deep walk (which resolves aliases) covers it.
+    if type_deeply_contains_unmodeled(expected_u, ctx.resolver) ||
+      type_deeply_contains_unmodeled(inferred_u, ctx.resolver) {
+      return
+    }
     if type_has_call_signature(inferred_u, ctx.resolver) ||
       type_has_call_signature(expected_u, ctx.resolver) {
       return
@@ -7700,6 +7711,91 @@ fn type_is_unmodeled_shape(ty : @ast.TsType, resolver : Resolver) -> Bool {
     | TemplateLiteralType(_, _) => true
     Applied(n, _) =>
       resolver.classes.get(n) is None && resolver.interfaces.get(n) is None
+    _ => false
+  }
+}
+
+///|
+/// Deep variant of `type_is_unmodeled_shape`: true when the type contains an
+/// unmodeled type-level construct (`keyof` / `typeof` / conditional / mapped /
+/// indexed-access / template-literal, or an `Applied` to a non-class/interface)
+/// ANYWHERE inside it -- nested in an array element, object field, tuple slot,
+/// union / intersection member, or a resolved alias / interface body. Used to
+/// abstain from structural assignability diagnostics against a target whose
+/// members TypeScript resolves but we approximate (`Obj[]` where `Obj = { code:
+/// LangCode }` and `LangCode = keyof typeof set`); flagging such a target
+/// produces false positives, so the check stays silent.
+fn type_deeply_contains_unmodeled(
+  ty : @ast.TsType,
+  resolver : Resolver,
+  depth? : Int = 0,
+  visited? : Array[String] = [],
+) -> Bool {
+  if depth > 8 {
+    return false
+  }
+  if type_is_unmodeled_shape(ty, resolver) {
+    return true
+  }
+  fn recur(t : @ast.TsType) -> Bool {
+    type_deeply_contains_unmodeled(t, resolver, depth=depth + 1, visited~)
+  }
+
+  match resolver.unwrap(ty) {
+    Array(inner) | Rest(inner) => recur(inner)
+    Union(parts) | Intersection(parts) | Tuple(parts) => {
+      for p in parts {
+        if recur(p) {
+          return true
+        }
+      }
+      false
+    }
+    Object(fields) => {
+      for f in fields {
+        if recur(f.1) {
+          return true
+        }
+      }
+      false
+    }
+    Func(params, ret) => {
+      for p in params {
+        if recur(p) {
+          return true
+        }
+      }
+      recur(ret)
+    }
+    Named(n) => {
+      if visited.contains(n) {
+        return false
+      }
+      visited.push(n)
+      let result = match resolver.interfaces.get(n) {
+        Some(iface) => {
+          let mut hit = false
+          for field in iface.fields {
+            if recur(field.1) {
+              hit = true
+              break
+            }
+          }
+          hit
+        }
+        None => false
+      }
+      let _ = visited.pop()
+      result
+    }
+    Applied(_, args) => {
+      for a in args {
+        if recur(a) {
+          return true
+        }
+      }
+      false
+    }
     _ => false
   }
 }

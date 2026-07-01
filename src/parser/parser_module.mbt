@@ -2717,6 +2717,7 @@ fn Parser::parse_export_stmt(
   namespaces : Array[@ast.TsNamespaceDecl],
   enums : Array[@ast.TsEnumDecl],
   const_values : Map[String, @ast.TsExpr],
+  top_level_stmts : Array[@ast.TsStmt],
 ) -> Unit raise ParseError {
   let _ = self.expect(Export)
   if self.match_(As) || self.match_ident("as") {
@@ -2990,6 +2991,13 @@ fn Parser::parse_export_stmt(
     let stmt = self.parse_stmt()
     collect_static_const_exprs_from_stmt(stmt, const_values)
     collect_value_decls_from_stmt(stmt, values, const_values)
+    // Retain the statement so the checker walks the initializer expression
+    // (`export var b = C.bar`) the same way it does a non-exported
+    // `var b = C.bar`. Without this the initializer was dropped, so no
+    // expression-level check (accessibility, call arity, always-truthy, …)
+    // ever fired on exported variable initializers -- including every
+    // binding inside a namespace, where all members are exported.
+    top_level_stmts.push(stmt)
     return
   }
   // ES2023 `using` / `await using` declarations at the module export
@@ -3173,7 +3181,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
     } else if self.check(Export) {
       self.parse_export_stmt(
         funcs, interfaces, type_aliases, imports, values, classes, namespaces, enums,
-        const_values,
+        const_values, top_level_stmts,
       )
     } else if self.check(Type) {
       let type_alias = self.parse_type_alias()
