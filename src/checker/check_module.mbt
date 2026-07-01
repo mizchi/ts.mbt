@@ -322,6 +322,30 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
       alias_bounds[iface.name] = iface.type_param_bounds
     }
   }
+  // The intrinsic string-mapping utility types carry an implicit `extends
+  // string` bound on their single parameter (`Uppercase<S extends string>`,
+  // etc.). Register them as synthetic bounded aliases -- unless the file
+  // declares its own type of the same name (an unbounded `type Uppercase<T>`
+  // would otherwise be flagged spuriously) -- so the existing constraint
+  // machinery flags a non-string argument (`Uppercase<42>`) as TS2344. This
+  // also makes `alias_bounds` non-empty, so the constraint walk below always
+  // runs even in files that declare no generics of their own.
+  let user_declared_type_names : Map[String, Unit] = {}
+  for ta in module_.type_aliases {
+    user_declared_type_names[ta.name] = ()
+  }
+  for iface in module_.interfaces {
+    user_declared_type_names[iface.name] = ()
+  }
+  for cls in module_.classes {
+    user_declared_type_names[cls.name] = ()
+  }
+  for intrinsic in ["Uppercase", "Lowercase", "Capitalize", "Uncapitalize"] {
+    if user_declared_type_names.get(intrinsic) is None {
+      alias_params[intrinsic] = ["S"]
+      alias_bounds[intrinsic] = [("S", @ast.TsType::String_)]
+    }
+  }
   let resolve = fn(name : String) -> @ast.TsType? {
     non_generic_alias_bodies.get(name)
   }
