@@ -10881,3 +10881,39 @@ test "expr_check: type assertion between primitive and object (TS2352)" {
     0,
   )
 }
+
+///|
+test "expr_check: enum property under string index signature (TS2411)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("is not assignable to") &&
+        i.message.contains("index type") {
+        n += 1
+      }
+    }
+    n
+  }
+  // An enum-typed property under a string index of `string` is TS2411.
+  assert_true(
+    issues("enum E { A }\ninterface I { [x: string]: string; foo: E; }") > 0,
+  )
+  assert_true(
+    issues("enum E { A }\ninterface I { [x: string]: boolean; foo: E; }") > 0,
+  )
+  // A `number` index accepts a numeric enum: silent.
+  @test.assert_eq(
+    issues("enum E { A }\ninterface I { [x: string]: number; foo: E; }"),
+    0,
+  )
+  // An `any` index accepts everything: silent.
+  @test.assert_eq(
+    issues("enum E { A }\ninterface I { [x: string]: any; foo: E; }"),
+    0,
+  )
+  // A non-enum property is not flagged by this check.
+  @test.assert_eq(
+    issues("interface I { [x: string]: string; foo: string; }"),
+    0,
+  )
+}
