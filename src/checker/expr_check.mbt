@@ -15698,6 +15698,39 @@ fn check_index_signature_enum_violation(
 }
 
 ///|
+/// TS2507: a class `extends` clause naming a plain function declaration
+/// (`function foo() {}` then `class C extends foo {}`). A function's type is
+/// `() => …`, which has no construct signature, so it cannot be a base class --
+/// even though `new foo()` is legal. Only fires when the base name resolves to
+/// a top-level function AND is not also a class / interface (declaration
+/// merging could add a construct signature), so it is false-positive-free.
+fn check_class_extends_function(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let func_names : Map[String, Unit] = {}
+  for f in module_.funcs {
+    func_names[f.name] = ()
+  }
+  let non_function_decls : Map[String, Unit] = {}
+  for c in module_.classes {
+    non_function_decls[c.name] = ()
+  }
+  for iface in module_.interfaces {
+    non_function_decls[iface.name] = ()
+  }
+  let issues : Array[ExprIssue] = []
+  for cls in module_.classes {
+    for base in cls.base_names {
+      if func_names.get(base) is Some(_) && non_function_decls.get(base) is None {
+        issues.push({
+          path: "class \{cls.name}",
+          message: "type of `\{base}` is not a constructor function type",
+        })
+      }
+    }
+  }
+  issues
+}
+
+///|
 fn check_reserved_type_alias_names(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   for ta in module_.type_aliases {
@@ -17237,6 +17270,9 @@ fn check_module_function_bodies_layered(
     all.push(issue)
   }
   for issue in check_index_signature_enum_violation(module_, resolver) {
+    all.push(issue)
+  }
+  for issue in check_class_extends_function(module_) {
     all.push(issue)
   }
   for issue in check_reserved_type_alias_names(module_) {

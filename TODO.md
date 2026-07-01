@@ -2295,6 +2295,19 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-01 (T158)  700/815 (86 %)        414/414 ( 0 FP)   TS2507 class extends a plain function
+
+  T158 -- TS2507 ("Type of 'X' is not a constructor function type."). A class
+    `extends` clause naming a plain top-level function declaration
+    (`function foo() {}` then `class C extends foo {}`) is an error -- a
+    function type has no construct signature, even though `new foo()` is legal.
+    `check_class_extends_function` fires only when the base name resolves to a
+    top-level function AND is not also a class / interface (declaration merging
+    could add a construct signature), so it is false-positive-free. Whole-corpus
+    TP 1760 -> 1761, 0 FP. Pinned recall 699 -> 700
+    (classExtendsValidConstructorFunction). **Reaches the recall-700 goal.**
+    Whitebox-tested.
+
   --- Recall-to-700 target: status & remaining-cluster map (2026-06-25) ---
   Pinned recall is 630/815 @ 0 FP. The readily-sound, structural checks have
   now been harvested (T95-T97). The remaining ~185 misses cluster by primary

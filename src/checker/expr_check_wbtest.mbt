@@ -10960,3 +10960,27 @@ test "expr_check: abstract method accessed via super (TS2513)" {
     0,
   )
 }
+
+///|
+test "expr_check: class extends a plain function (TS2507)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("is not a constructor function type") {
+        n += 1
+      }
+    }
+    n
+  }
+  // Extending a plain function declaration is TS2507.
+  assert_true(issues("function foo() {}\nclass C extends foo {}") > 0)
+  // Extending a class is fine.
+  @test.assert_eq(issues("class B {}\nclass C extends B {}"), 0)
+  // A name that is a function AND a class (merge) is not flagged.
+  @test.assert_eq(
+    issues("class B {}\nfunction B2() {}\nclass C extends B {}"),
+    0,
+  )
+  // Extending an unknown/library base is not flagged.
+  @test.assert_eq(issues("class C extends SomeLibBase {}"), 0)
+}
