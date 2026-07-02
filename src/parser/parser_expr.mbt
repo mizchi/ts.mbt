@@ -321,12 +321,28 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
   } else {
     wrapped
   }
+  // Strict-mode `eval` / `arguments` as a *compound* assignment target
+  // (`eval += 1`). The simple-assignment arm below records the `=` case;
+  // this non-consuming peek covers the compound operators, then parsing
+  // continues through the per-operator branches unchanged.
+  match left {
+    Var(strict_target) =>
+      if (self.in_strict || self.directive_strict) &&
+        (strict_target == "eval" || strict_target == "arguments") &&
+        self.peek_is_compound_assign_op() {
+        self.strict_mode_misuses.push(strict_target)
+      }
+    _ => ()
+  }
   if self.check(Eq) {
     match left {
       Var(name) => {
-        // In strict mode, cannot assign to eval or arguments
-        if self.in_strict && (name == "eval" || name == "arguments") {
-          raise ParseError("Cannot assign to '\{name}' in strict mode")
+        // In strict mode, `eval` / `arguments` are not valid assignment
+        // targets (TS1100 family). Recorded -- not raised -- so the file
+        // still parses and the checker reports the diagnostic.
+        if (self.in_strict || self.directive_strict) &&
+          (name == "eval" || name == "arguments") {
+          self.strict_mode_misuses.push(name)
         }
         let _ = self.advance()
         let right = self.parse_assignment()
@@ -4136,4 +4152,29 @@ fn Parser::parse_async_arrow_function(
   }
   self.in_async = prev_async
   ArrowFunc(params, return_type, body, true) // is_async = true
+}
+
+///|
+/// True when the *current* token is a compound assignment operator
+/// (`+=`, `-=`, `*=`, `**=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=`,
+/// `>>>=`, `&&=`, `||=`, `??=`). Non-consuming.
+fn Parser::peek_is_compound_assign_op(self : Parser) -> Bool {
+  match self.peek().kind {
+    PlusEq
+    | MinusEq
+    | StarEq
+    | StarStarEq
+    | SlashEq
+    | PercentEq
+    | AmpEq
+    | PipeEq
+    | CaretEq
+    | LtLtEq
+    | GtGtEq
+    | GtGtGtEq
+    | AmpAmpEq
+    | PipePipeEq
+    | QuestionQuestionEq => true
+    _ => false
+  }
 }

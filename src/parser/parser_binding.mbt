@@ -5,11 +5,12 @@ fn Parser::parse_binding_ident(self : Parser) -> String raise ParseError {
     Ident(_) =>
       match self.advance().kind {
         Ident(n) => {
-          // In strict mode, eval and arguments cannot be used as binding identifiers
-          if self.in_strict && (n == "eval" || n == "arguments") {
-            raise ParseError(
-              "'" + n + "' cannot be used as identifier in strict mode",
-            )
+          // In strict mode, `eval` and `arguments` cannot be used as binding
+          // identifiers (TS1100 family). Recorded -- not raised -- so the
+          // file still parses and the checker reports the diagnostic.
+          if (self.in_strict || self.directive_strict) &&
+            (n == "eval" || n == "arguments") {
+            self.strict_mode_misuses.push(n)
           }
           n
         }

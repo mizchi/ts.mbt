@@ -15,6 +15,7 @@ fn empty_module_for_check() -> @ast.TsModule {
     use_define_for_class_fields: false,
     deprecated_compiler_options: [],
     parameter_property_misuses: [],
+    strict_mode_misuses: [],
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],
     class_dup_diagnostics: [],

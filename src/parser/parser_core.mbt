@@ -80,6 +80,17 @@ pub struct Parser {
   // signature. TypeScript reports TS2369 for each. `parse_param` appends a
   // location string here; `parse_module` hands the list to the checker.
   param_property_misuses : Array[String]
+  // `eval` / `arguments` bound or assigned in strict-mode code. Fed by
+  // `parse_binding_ident` / assignment parsing when `in_strict` (prologue /
+  // class body) or `directive_strict` (conformance `@alwaysStrict: true` /
+  // `@strict: true` header) is active; `parse_module` hands the list to the
+  // checker. Empty for well-formed input.
+  strict_mode_misuses : Array[String]
+  // Conformance-header strict directive (`@alwaysStrict: true` / `@strict:
+  // true`). Unlike `in_strict` it does NOT change parsing behaviour (octal
+  // handling, statement restrictions, ...) -- it only arms the strict-misuse
+  // *recording* above, so multi-variant directive files never fail to parse.
+  directive_strict : Bool
   // Parameters declared with *both* an optional marker (`x?`) and an
   // initializer (`x = e`) -- always a TS1015 syntax error regardless of
   // position. The `?` is otherwise folded into the parameter type
@@ -181,6 +192,8 @@ pub fn Parser::new_with_strict_and_jsx(
     pending_decorators: [],
     param_property_scopes: [],
     param_property_misuses: [],
+    strict_mode_misuses: [],
+    directive_strict: false,
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],
     collected_class_dups: [],
@@ -208,9 +221,7 @@ pub fn Parser::from_source(src : String) -> Parser {
 pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
   let lexer = Lexer::new(src)
   let tokens = lexer.tokenize()
-  let trimmed = src.trim_start()
-  let in_strict = trimmed.has_prefix("\"use strict\";") ||
-    trimmed.has_prefix("'use strict';")
+  let in_strict = detect_use_strict_prologue(src)
   {
     tokens,
     pos: 0,
@@ -239,6 +250,8 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     pending_decorators: [],
     param_property_scopes: [],
     param_property_misuses: [],
+    strict_mode_misuses: [],
+    directive_strict: detect_directive_strict(src),
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],
     collected_class_dups: [],
@@ -436,4 +449,73 @@ fn Parser::has_line_terminator_before(self : Parser) -> Bool {
   // for every `[` (array vs index access), every contextual `as` /
   // `satisfies`, and every ASI-relevant statement boundary.
   self.tokens[self.pos].has_newline_before
+}
+
+///|
+/// True when the file's first *code* line is a `"use strict"` prologue.
+/// Conformance sources routinely put `// @directive` header comments (and a
+/// BOM) ahead of the prologue, so leading comment / blank lines are skipped
+/// before testing -- `// @target: es5\n"use strict";` is a strict script.
+fn detect_use_strict_prologue(src : String) -> Bool {
+  let mut in_block_comment = false
+  for line in src.split("\n") {
+    let mut t = line.trim_start().to_string()
+    // Strip a leading BOM the lexer would otherwise hide.
+    if t.has_prefix("\u{FEFF}") {
+      t = t[1:].to_string().trim_start().to_string()
+    }
+    if in_block_comment {
+      match t.find("*/") {
+        Some(i) => {
+          in_block_comment = false
+          t = t[i + 2:].to_string().trim_start().to_string()
+        }
+        None => continue
+      }
+    }
+    while t.has_prefix("/*") {
+      match t.find("*/") {
+        Some(i) => t = t[i + 2:].to_string().trim_start().to_string()
+        None => {
+          in_block_comment = true
+          break
+        }
+      }
+    }
+    if in_block_comment {
+      continue
+    }
+    if t == "" || t.has_prefix("//") {
+      continue
+    }
+    return t.has_prefix("\"use strict\"") || t.has_prefix("'use strict'")
+  }
+  false
+}
+
+///|
+/// Scan the leading conformance-header directives for an explicit strict
+/// opt-in: `@alwaysStrict: <values>` or `@strict: <values>` where the value
+/// list contains `true`. Multi-variant directives (`@alwaysStrict: true,
+/// false`) count -- at least one tsc variant runs strict, so a strict-mode
+/// grammar misuse is an error in that variant's baseline.
+fn detect_directive_strict(src : String) -> Bool {
+  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
+  let head = src[:head_len].to_owned()
+  for directive in ["@alwaysStrict:", "@strict:"] {
+    match head.find(directive) {
+      Some(i) => {
+        let rest = head[i + directive.length():].to_owned()
+        let line = match rest.find("\n") {
+          Some(j) => rest[:j].to_owned()
+          None => rest
+        }
+        if line.contains("true") {
+          return true
+        }
+      }
+      None => ()
+    }
+  }
+  false
 }

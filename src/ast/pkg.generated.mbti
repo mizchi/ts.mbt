@@ -297,6 +297,10 @@ pub(all) struct TsModule {
   use_define_for_class_fields : Bool
   deprecated_compiler_options : Array[String]
   parameter_property_misuses : Array[String]
+  strict_mode_misuses : Array[String]
+  param_optional_initializer_misuses : Array[String]
+  interface_member_modifier_misuses : Array[String]
+  class_dup_diagnostics : Array[(String, Array[String])]
 } derive(@debug.Debug)
 pub impl Show for TsModule
 

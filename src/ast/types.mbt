@@ -862,6 +862,12 @@ pub(all) struct TsModule {
   // Empty for any well-formed input (the modifier is always an error in
   // these positions), so it never costs precision.
   parameter_property_misuses : Array[String]
+  // `eval` / `arguments` used as a binding identifier or assignment target
+  // in strict-mode code (a `"use strict"` prologue, a class body, or a
+  // conformance-header `@alwaysStrict: true` / `@strict: true` directive).
+  // Always a TS1100-family grammar error in the strict variant, so each
+  // recorded name is a real diagnostic. Empty for well-formed input.
+  strict_mode_misuses : Array[String]
   // Parameters declared with both an optional marker (`x?`) and an
   // initializer (`x = e`) -- always a TS1015 syntax error. The parser
   // records one parameter name per offending declaration; the checker
