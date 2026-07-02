@@ -329,10 +329,16 @@ fn collect_stmt_value_names(
       }
       collect_block_value_names(body, out)
     }
-    ForOf(_, b, _, e, body)
-    | ForAwaitOf(_, b, _, e, body)
-    | ForIn(_, b, _, e, body) => {
-      collect_binding_value_names(b, out)
+    ForOf(kind, b, _, e, body)
+    | ForAwaitOf(kind, b, _, e, body)
+    | ForIn(kind, b, _, e, body) => {
+      // The assignment form (`for (v of xs)` with no `let`/`var`/`const`)
+      // declares nothing -- it *reads* an existing binding, so its name must
+      // not enter the hoisting backstop (that would mask the TS2304 on an
+      // undeclared target).
+      if !(kind is @ast.TsForOfKind::Assign) {
+        collect_binding_value_names(b, out)
+      }
       collect_expr_value_names(e, out)
       collect_block_value_names(body, out)
     }
@@ -12111,10 +12117,15 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // declared slot to the iterable element type and reject
       // any later wider-typed assignments inside the body).
       match (kind, binding) {
-        (@ast.TsForOfKind::Assign, @ast.TsBinding::Ident(n)) =>
+        (@ast.TsForOfKind::Assign, @ast.TsBinding::Ident(n)) => {
+          // TS2304: the assignment-form target must be an existing binding
+          // (`for (v of [0])` with no `v` anywhere is an error even in
+          // non-strict code).
+          check_undefined_name(env, ctx, n)
           if is_checkable(elem_ty) {
             env.narrow(n, elem_ty)
           }
+        }
         _ => bind_pattern(env, ctx, binding, elem_ty)
       }
       check_block(env, body, ctx)
@@ -12787,6 +12798,13 @@ fn check_call_args_in_expr(
     }
     New(class_name, args) => {
       check_abstract_instantiation(ctx, class_name)
+      // TS2304: `new` over a name declared nowhere. Interfaces are exempt --
+      // the parser lowers field-only classes to interfaces, so an interface
+      // name can still be a legitimate runtime constructor.
+      if ctx.resolver.interfaces.get(class_name) is None &&
+        ctx.resolver.type_aliases.get(class_name) is None {
+        check_undefined_name(env, ctx, class_name)
+      }
       match ctx.resolver.lookup_constructor_sig(class_name) {
         Some((params, sig)) => {
           check_arguments_with_sig(
@@ -16372,6 +16390,446 @@ fn args_outside_fn_walk_stmt(
 }
 
 ///|
+/// TS2415: a derived class's index signature must be assignable to the
+/// base's index signature of the same kind (`class B extends A` where
+/// `A[x: number]: Base` but `B[x: number]: Unrelated`). Two decidable
+/// shapes are checked:
+///   - the substituted base value type is a *bare type parameter* of the
+///     derived class (`class B3<T> extends A<T> { [x: number]: Derived }`)
+///     -- a concrete value type is never assignable to a naked `T`;
+///   - both value types are concrete, fully resolved, and
+///     `is_assignable_to` rejects the pair.
+/// Everything else (unresolved refs, unmodeled shapes, in-scope generics on
+/// the derived side) abstains.
+fn check_derived_indexer_compat(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+  base_type_args : Array[(String, String, Array[@ast.TsType])],
+  class_dups : Array[(String, Array[String])],
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  // `(class, is_numeric_key) -> naked type-parameter name` markers recorded
+  // by the parser: the AST's index-signature value was widened to the
+  // parameter's bound, so the generic slot is recovered from here.
+  let naked_params : Map[String, String] = {}
+  for entry in class_dups {
+    for name in entry.1 {
+      if name.has_prefix("<index-naked-param:num:") {
+        let param = name["<index-naked-param:num:".length():name.length() - 1].to_string()
+        naked_params[entry.0 + "|num"] = param
+      } else if name.has_prefix("<index-naked-param:str:") {
+        let param = name["<index-naked-param:str:".length():name.length() - 1].to_string()
+        naked_params[entry.0 + "|str"] = param
+      }
+    }
+  }
+  fn is_numeric_key(k : @ast.TsType) -> Bool {
+    match k {
+      Number | Int => true
+      _ => false
+    }
+  }
+
+  fn is_string_key(k : @ast.TsType) -> Bool {
+    k is String_
+  }
+
+  for cls in module_.classes {
+    if cls.is_declare || cls.index_signatures.length() == 0 {
+      continue
+    }
+    guard cls.base_names.length() == 1 else { continue }
+    let base_name = cls.base_names[0]
+    // The parser lowers member-only classes to interfaces, so the base may
+    // live in either table; both carry type params and index signatures.
+    let base_info : (Array[String], Array[(@ast.TsType, @ast.TsType)])? = match
+      resolver.classes.get(base_name) {
+      Some(base) => Some((base.type_params, base.index_signatures))
+      None =>
+        match resolver.interfaces.get(base_name) {
+          Some(biface) => Some((biface.type_params, biface.index_signatures))
+          None => None
+        }
+    }
+    guard base_info is Some((base_type_params, base_index_signatures)) else {
+      continue
+    }
+    // Bind the base's type parameters to the `extends B<...>` arguments
+    // recorded by the parser (empty for a non-generic base).
+    let bindings : Map[String, @ast.TsType] = {}
+    for entry in base_type_args {
+      if entry.0 == cls.name && entry.1 == base_name {
+        for i, tp in base_type_params {
+          if i < entry.2.length() {
+            bindings[tp] = entry.2[i]
+          }
+        }
+      }
+    }
+    // A generic base referenced without arguments leaves its parameters
+    // unbound; substituting would compare against the raw parameter name.
+    if base_type_params.length() > 0 &&
+      bindings.size() != base_type_params.length() {
+      continue
+    }
+    for dsig in cls.index_signatures {
+      for bsig in base_index_signatures {
+        let same_kind = (is_numeric_key(dsig.0) && is_numeric_key(bsig.0)) ||
+          (is_string_key(dsig.0) && is_string_key(bsig.0))
+        if !same_kind {
+          continue
+        }
+        let kind_tag = if is_numeric_key(bsig.0) { "num" } else { "str" }
+        let base_val = match naked_params.get(base_name + "|" + kind_tag) {
+          // The base's declared value was a naked bounded parameter --
+          // instantiate it from the heritage-clause bindings.
+          Some(p) =>
+            match bindings.get(p) {
+              Some(t) => t
+              None => continue
+            }
+          None => substitute_params(bsig.1, bindings)
+        }
+        let derived_val = dsig.1
+        // Case 1: naked type-parameter target.
+        if base_val is Named(p) && cls.type_params.contains(p) {
+          // Match on the *raw* reference -- `unwrap` expands interface names
+          // to their structural shape, which would defeat the Named check.
+          let concrete = match derived_val {
+            Named(n) | Applied(n, _) =>
+              !cls.type_params.contains(n) &&
+              (
+                resolver.classes.get(n) is Some(_) ||
+                resolver.interfaces.get(n) is Some(_)
+              )
+            _ => false
+          }
+          if concrete {
+            issues.push({
+              path: "class \{cls.name}",
+              message: "class `\{cls.name}` incorrectly extends base class `\{base_name}`: index signatures are incompatible",
+            })
+          }
+          continue
+        }
+        // Case 2: concrete-vs-concrete mismatch.
+        if is_checkable(derived_val) &&
+          is_checkable(base_val) &&
+          !func_type_mentions_type_param_names(derived_val, cls.type_params) &&
+          !func_type_mentions_type_param_names(base_val, cls.type_params) &&
+          !type_contains_unresolved_named(derived_val, resolver) &&
+          !type_contains_unresolved_named(base_val, resolver) &&
+          !type_deeply_contains_unmodeled(derived_val, resolver) &&
+          !type_deeply_contains_unmodeled(base_val, resolver) &&
+          !is_assignable_to(
+            resolver.unwrap(derived_val),
+            resolver.unwrap(base_val),
+          ) &&
+          !is_structurally_assignable_named(derived_val, base_val, resolver) {
+          issues.push({
+            path: "class \{cls.name}",
+            message: "class `\{cls.name}` incorrectly extends base class `\{base_name}`: index signatures are incompatible",
+          })
+        }
+      }
+    }
+  }
+  // The parser lowers member-only *classes* to interfaces, so the derived
+  // side of a `class B<T> extends A<T> { [x: number]: V }` heritage clause
+  // may live in the interface table -- and real `interface B extends A`
+  // index-signature widening is the same family of error (TS2430).
+  // `TsInterface` carries `extends_args` directly, so no side channel is
+  // needed for the bindings.
+  for iface in module_.interfaces {
+    if iface.index_signatures.length() == 0 {
+      continue
+    }
+    guard iface.extends_names.length() == 1 else { continue }
+    let base_name = iface.extends_names[0]
+    let base_info : (Array[String], Array[(@ast.TsType, @ast.TsType)])? = match
+      resolver.classes.get(base_name) {
+      Some(base) => Some((base.type_params, base.index_signatures))
+      None =>
+        match resolver.interfaces.get(base_name) {
+          Some(biface) => Some((biface.type_params, biface.index_signatures))
+          None => None
+        }
+    }
+    guard base_info is Some((base_type_params, base_index_signatures)) else {
+      continue
+    }
+    let bindings : Map[String, @ast.TsType] = {}
+    if iface.extends_args.length() == 1 {
+      for i, tp in base_type_params {
+        if i < iface.extends_args[0].length() {
+          bindings[tp] = iface.extends_args[0][i]
+        }
+      }
+    }
+    if base_type_params.length() > 0 &&
+      bindings.size() != base_type_params.length() {
+      continue
+    }
+    for dsig in iface.index_signatures {
+      for bsig in base_index_signatures {
+        let same_kind = (is_numeric_key(dsig.0) && is_numeric_key(bsig.0)) ||
+          (is_string_key(dsig.0) && is_string_key(bsig.0))
+        if !same_kind {
+          continue
+        }
+        let kind_tag = if is_numeric_key(bsig.0) { "num" } else { "str" }
+        let base_val = match naked_params.get(base_name + "|" + kind_tag) {
+          Some(p) =>
+            match bindings.get(p) {
+              Some(t) => t
+              None => continue
+            }
+          None => substitute_params(bsig.1, bindings)
+        }
+        let derived_val = dsig.1
+        if base_val is Named(p) && iface.type_params.contains(p) {
+          let concrete = match derived_val {
+            Named(n) | Applied(n, _) =>
+              !iface.type_params.contains(n) &&
+              (
+                resolver.classes.get(n) is Some(_) ||
+                resolver.interfaces.get(n) is Some(_)
+              )
+            _ => false
+          }
+          if concrete {
+            issues.push({
+              path: "class \{iface.name}",
+              message: "class `\{iface.name}` incorrectly extends base class `\{base_name}`: index signatures are incompatible",
+            })
+          }
+          continue
+        }
+        if is_checkable(derived_val) &&
+          is_checkable(base_val) &&
+          !func_type_mentions_type_param_names(derived_val, iface.type_params) &&
+          !func_type_mentions_type_param_names(base_val, iface.type_params) &&
+          !type_contains_unresolved_named(derived_val, resolver) &&
+          !type_contains_unresolved_named(base_val, resolver) &&
+          !type_deeply_contains_unmodeled(derived_val, resolver) &&
+          !type_deeply_contains_unmodeled(base_val, resolver) &&
+          !is_assignable_to(
+            resolver.unwrap(derived_val),
+            resolver.unwrap(base_val),
+          ) &&
+          !is_structurally_assignable_named(derived_val, base_val, resolver) {
+          issues.push({
+            path: "class \{iface.name}",
+            message: "class `\{iface.name}` incorrectly extends base class `\{base_name}`: index signatures are incompatible",
+          })
+        }
+      }
+    }
+  }
+  issues
+}
+
+///|
+/// True when `ty` mentions any of `names` as a bare `Named` reference.
+fn func_type_mentions_type_param_names(
+  ty : @ast.TsType,
+  names : Array[String],
+) -> Bool {
+  match ty {
+    Named(n) => names.contains(n)
+    Applied(n, args) => {
+      if names.contains(n) {
+        return true
+      }
+      for a in args {
+        if func_type_mentions_type_param_names(a, names) {
+          return true
+        }
+      }
+      false
+    }
+    Array(inner) => func_type_mentions_type_param_names(inner, names)
+    Union(parts) | Intersection(parts) | Tuple(parts) => {
+      for p in parts {
+        if func_type_mentions_type_param_names(p, names) {
+          return true
+        }
+      }
+      false
+    }
+    Func(params, ret) => {
+      for p in params {
+        if func_type_mentions_type_param_names(p, names) {
+          return true
+        }
+      }
+      func_type_mentions_type_param_names(ret, names)
+    }
+    _ => false
+  }
+}
+
+///|
+/// TS2304 for unresolved names in *declaration signature* type positions:
+/// `implements` clauses, `interface … extends` clauses, and generic
+/// constraint bounds (`class C<T extends List<T>>`). These positions name a
+/// type directly, so a reference that resolves to no module declaration, no
+/// in-scope type parameter, no import binding, and no standard-library
+/// global is a definite "Cannot find name".
+///
+/// Conservative rails:
+///   - qualified names (`A.B`) are skipped (namespace members);
+///   - the resolution set is collected *recursively* across the whole
+///     module tree (nested namespaces included), so namespace-local code
+///     referencing outer / sibling declarations never flags;
+///   - the standard-library registry covers both type and value globals
+///     across every lib target;
+///   - runs once at the top level (the walk recurses into namespaces).
+fn check_unresolved_signature_type_refs(
+  module_ : @ast.TsModule,
+) -> Array[ExprIssue] {
+  let declared : Map[String, Unit] = {}
+  fn collect_declared(m : @ast.TsModule) -> Unit {
+    for iface in m.interfaces {
+      declared[iface.name] = ()
+    }
+    for ta in m.type_aliases {
+      declared[ta.name] = ()
+    }
+    for c in m.classes {
+      declared[c.name] = ()
+    }
+    for e in m.enums {
+      declared[e.name] = ()
+    }
+    for ns in m.namespaces {
+      declared[ns.name] = ()
+      collect_declared(ns.module_)
+    }
+    for imp in m.imports {
+      declared[imp.name] = ()
+    }
+    for n in m.imported_binding_names {
+      declared[n] = ()
+    }
+    for aug in m.module_augmentations {
+      collect_declared(aug.1)
+    }
+  }
+
+  collect_declared(module_)
+  let issues : Array[ExprIssue] = []
+  fn resolved(name : String, scope : Array[String]) -> Bool {
+    name == "" ||
+    name.contains(".") ||
+    !is_ascii_ident_start_name(name) ||
+    declared.contains(name) ||
+    scope.contains(name) ||
+    is_lib_global_type(name) ||
+    is_lib_global_value(name) ||
+    is_pseudo_value_keyword(name)
+  }
+
+  fn note(name : String, scope : Array[String], where_ : String) -> Unit {
+    if !resolved(name, scope) {
+      issues.push({ path: where_, message: "cannot find name `\{name}`" })
+    }
+  }
+
+  fn walk_bound(
+    ty : @ast.TsType,
+    scope : Array[String],
+    where_ : String,
+  ) -> Unit {
+    match ty {
+      Named(n) => note(n, scope, where_)
+      Applied(n, args) => {
+        note(n, scope, where_)
+        for a in args {
+          walk_bound(a, scope, where_)
+        }
+      }
+      Array(inner) | Keyof(inner) => walk_bound(inner, scope, where_)
+      Tuple(items) | Union(items) | Intersection(items) =>
+        for it in items {
+          walk_bound(it, scope, where_)
+        }
+      Func(params, ret) => {
+        for pt in params {
+          walk_bound(pt, scope, where_)
+        }
+        walk_bound(ret, scope, where_)
+      }
+      IndexedAccess(base, key) => {
+        walk_bound(base, scope, where_)
+        walk_bound(key, scope, where_)
+      }
+      _ => ()
+    }
+  }
+
+  fn walk_module(m : @ast.TsModule) -> Unit {
+    for cls in m.classes {
+      // Ambient / declared classes may implement cross-file surfaces the
+      // single-file parse cannot see; only runtime classes are checked.
+      if cls.is_declare {
+        continue
+      }
+      for n in cls.implements_names {
+        note(n, cls.type_params, "class \{cls.name} implements")
+      }
+      for bound in cls.type_param_bounds {
+        walk_bound(bound.1, cls.type_params, "class \{cls.name} constraint")
+      }
+      for meth in cls.methods {
+        let merged : Array[String] = []
+        for tp in cls.type_params {
+          merged.push(tp)
+        }
+        for tp in meth.type_params {
+          merged.push(tp)
+        }
+        for bound in meth.type_param_bounds {
+          walk_bound(
+            bound.1,
+            merged,
+            "method \{cls.name}.\{meth.name} constraint",
+          )
+        }
+      }
+    }
+    for iface in m.interfaces {
+      for n in iface.extends_names {
+        note(n, iface.type_params, "interface \{iface.name} extends")
+      }
+      for bound in iface.type_param_bounds {
+        walk_bound(
+          bound.1,
+          iface.type_params,
+          "interface \{iface.name} constraint",
+        )
+      }
+    }
+    for f in m.funcs {
+      for bound in f.type_param_bounds {
+        walk_bound(bound.1, f.type_params, "function \{f.name} constraint")
+      }
+    }
+    for ta in m.type_aliases {
+      for bound in ta.type_param_bounds {
+        walk_bound(bound.1, ta.type_params, "type \{ta.name} constraint")
+      }
+    }
+    for ns in m.namespaces {
+      walk_module(ns.module_)
+    }
+  }
+
+  walk_module(module_)
+  issues
+}
+
+///|
 fn check_class_extends_function(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let func_names : Map[String, Unit] = {}
   for f in module_.funcs {
@@ -17328,6 +17786,11 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
           path: "class \{cls_name}",
           message: "static members cannot reference class type parameters",
         })
+      } else if name.has_prefix("<index-naked-param:") {
+        // Marker, not an error: an instance index signature's declared value
+        // type was a naked bounded type parameter. Consumed by
+        // `check_derived_indexer_compat`.
+        ()
       } else {
         issues.push({
           path: "class \{cls_name}",
@@ -17922,6 +18385,9 @@ fn check_module_function_bodies_layered(
     for issue in check_undeclared_type_parameters(module_) {
       all.push(issue)
     }
+    for issue in check_unresolved_signature_type_refs(module_) {
+      all.push(issue)
+    }
   }
   for issue in check_var_redeclaration_types(module_, resolver) {
     all.push(issue)
@@ -17948,6 +18414,34 @@ fn check_module_function_bodies_layered(
     all.push(issue)
   }
   for issue in check_arguments_outside_function(module_, resolver) {
+    all.push(issue)
+  }
+  // Heritage type-argument / naked-param recordings live on the module that
+  // was parsed with them: the top level for top-level classes, and each
+  // namespace's own TsModule for namespace bodies (they re-parse with a
+  // fresh parser). Consult both the current layer and the outermost root.
+  let merged_base_args : Array[(String, String, Array[@ast.TsType])] = []
+  for e in module_.class_base_type_args {
+    merged_base_args.push(e)
+  }
+  if outer_modules.length() > 0 {
+    for e in strict_root.class_base_type_args {
+      merged_base_args.push(e)
+    }
+  }
+  let merged_dups : Array[(String, Array[String])] = []
+  for e in module_.class_dup_diagnostics {
+    merged_dups.push(e)
+  }
+  if outer_modules.length() > 0 {
+    for e in strict_root.class_dup_diagnostics {
+      merged_dups.push(e)
+    }
+  }
+  for
+    issue in check_derived_indexer_compat(
+      module_, resolver, merged_base_args, merged_dups,
+    ) {
     all.push(issue)
   }
   for issue in check_reserved_type_alias_names(module_) {

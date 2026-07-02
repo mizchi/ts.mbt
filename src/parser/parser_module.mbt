@@ -33,9 +33,12 @@ fn Parser::maybe_match_type_modifier(self : Parser) -> Bool {
 fn Parser::parse_import_specifiers(self : Parser) -> Unit raise ParseError {
   while !self.check(RBrace) {
     let _ = self.maybe_match_type_modifier()
-    let _ = self.parse_binding_ident()
+    let imported = self.parse_binding_ident()
     if self.match_(As) || self.match_ident("as") {
-      let _ = self.parse_binding_ident()
+      let local = self.parse_binding_ident()
+      self.imported_binding_names.push(local)
+    } else {
+      self.imported_binding_names.push(imported)
     }
     if self.match_(Comma) {
       if self.check(RBrace) {
@@ -138,6 +141,8 @@ fn empty_ts_module() -> @ast.TsModule {
     strict_mode_misuses: [],
     invalid_decorator_uses: [],
     grammar_misuses: [],
+    imported_binding_names: [],
+    class_base_type_args: [],
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],
     class_dup_diagnostics: [],
@@ -2611,8 +2616,9 @@ fn Parser::parse_import_stmt(self : Parser) -> Unit raise ParseError {
     _ => ()
   }
   match self.peek().kind {
-    Ident(_) => {
+    Ident(default_name) => {
       let _ = self.advance()
+      self.imported_binding_names.push(default_name)
       if self.match_(Comma) {
         // continue to namespace/named
       } else {
@@ -2629,7 +2635,8 @@ fn Parser::parse_import_stmt(self : Parser) -> Unit raise ParseError {
     if !(self.match_(As) || self.match_ident("as")) {
       raise ParseError("Expected 'as' in import namespace")
     }
-    let _ = self.parse_binding_ident()
+    let ns_name = self.parse_binding_ident()
+    self.imported_binding_names.push(ns_name)
   } else if self.match_(LBrace) {
     self.parse_import_specifiers()
     let _ = self.expect(RBrace)
@@ -3310,6 +3317,8 @@ fn Parser::parse_module_with_seeded_const_values_internal(
     strict_mode_misuses: self.strict_mode_misuses,
     invalid_decorator_uses: self.invalid_decorator_uses,
     grammar_misuses: self.grammar_misuses,
+    imported_binding_names: self.imported_binding_names,
+    class_base_type_args: self.class_base_type_args,
     param_optional_initializer_misuses: self.param_optional_initializer_misuses,
     interface_member_modifier_misuses: self.interface_member_modifier_misuses,
     class_dup_diagnostics: self.collected_class_dups,

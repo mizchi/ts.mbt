@@ -323,6 +323,8 @@ fn parse_module_or_empty(src : String) -> @ast.TsModule {
         strict_mode_misuses: [],
         invalid_decorator_uses: [],
         grammar_misuses: [],
+        imported_binding_names: [],
+        class_base_type_args: [],
         param_optional_initializer_misuses: [],
         interface_member_modifier_misuses: [],
         class_dup_diagnostics: [],
@@ -11202,4 +11204,39 @@ test "expr_check: instanceof primitive LHS, nullish arithmetic operands, generat
   @test.assert_eq(issues("function yield() {}"), 0)
   // Speculative arrow lookahead must not leak recordings.
   @test.assert_eq(issues("function* g() { class C extends (yield 0) { } }"), 0)
+}
+
+///|
+test "expr_check: derived index-signature compatibility (TS2415)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Concrete widening against the base indexer is flagged.
+  assert_true(
+    issues(
+      "interface Base { foo: string }\ninterface Other { baz: number }\nclass A { [x: number]: Base }\nclass B extends A { [x: number]: Other }",
+    ) >
+    0,
+  )
+  // A concrete value against a *naked type-parameter* slot is flagged.
+  assert_true(
+    issues(
+      "interface Base { foo: string }\ninterface Derived extends Base { bar: string }\nclass A<T extends Base> { [x: number]: T }\nclass B3<T extends Base> extends A<T> { [x: number]: Derived }",
+    ) >
+    0,
+  )
+  // Legal narrowing stays silent.
+  @test.assert_eq(
+    issues(
+      "interface Base { foo: string }\ninterface Derived extends Base { bar: string }\nclass A { [x: number]: Base }\nclass B extends A { [x: number]: Derived }",
+    ),
+    0,
+  )
+  // A concrete instantiation that satisfies the slot stays silent.
+  @test.assert_eq(
+    issues(
+      "interface Base { foo: string }\ninterface Derived extends Base { bar: string }\nclass A<T extends Base> { [x: number]: T }\nclass B extends A<Base> { [x: number]: Derived }",
+    ),
+    0,
+  )
 }

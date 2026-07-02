@@ -90,6 +90,21 @@ pub struct Parser {
   invalid_decorator_uses : Array[String]
   // Always-error grammar misuses (complete messages; see TsModule).
   grammar_misuses : Array[String]
+  // Local binding names introduced by ES `import` statements (default,
+  // namespace, and named/aliased specifiers). The import statements
+  // themselves are consumed and discarded, but the *names* must stay
+  // visible so unresolved-reference checks treat them as declared.
+  imported_binding_names : Array[String]
+  // `(class, base, args)` for every `class C extends B<...>` heritage clause
+  // whose type arguments parse cleanly. Lets the checker instantiate the
+  // base's generic surface (e.g. index-signature value types) without a
+  // TsClassDecl shape change.
+  class_base_type_args : Array[(String, String, Array[@ast.TsType])]
+  // When set, `parse_type` keeps a bounded type parameter as its `Named`
+  // reference instead of inlining the constraint. Used when capturing
+  // `extends B<...>` heritage type arguments, where the raw parameter
+  // identity is the whole point.
+  mut no_bound_inline : Bool
   // Conformance-header strict directive (`@alwaysStrict: true` / `@strict:
   // true`). Unlike `in_strict` it does NOT change parsing behaviour (octal
   // handling, statement restrictions, ...) -- it only arms the strict-misuse
@@ -199,6 +214,9 @@ pub fn Parser::new_with_strict_and_jsx(
     strict_mode_misuses: [],
     invalid_decorator_uses: [],
     grammar_misuses: [],
+    imported_binding_names: [],
+    class_base_type_args: [],
+    no_bound_inline: false,
     directive_strict: false,
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],
@@ -266,6 +284,9 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     strict_mode_misuses: [],
     invalid_decorator_uses: [],
     grammar_misuses,
+    imported_binding_names: [],
+    class_base_type_args: [],
+    no_bound_inline: false,
     directive_strict: detect_directive_strict(src),
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],

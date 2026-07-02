@@ -129,6 +129,9 @@ pub struct Parser {
   strict_mode_misuses : Array[String]
   invalid_decorator_uses : Array[String]
   grammar_misuses : Array[String]
+  imported_binding_names : Array[String]
+  class_base_type_args : Array[(String, String, Array[@ast.TsType])]
+  mut no_bound_inline : Bool
   directive_strict : Bool
   param_optional_initializer_misuses : Array[String]
   interface_member_modifier_misuses : Array[String]

@@ -1181,8 +1181,8 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
     Ident(name) => {
       let _ = self.advance()
       match self.local_type_param_bound(name) {
-        Some(bound) => bound
-        None => self.parse_named_type_tail(name)
+        Some(bound) if !self.no_bound_inline => bound
+        _ => self.parse_named_type_tail(name)
       }
     }
     _ => raise ParseError("Expected type, got \{tok.kind}")

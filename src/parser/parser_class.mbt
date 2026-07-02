@@ -1145,6 +1145,7 @@ fn Parser::parse_class_body(
   Bool,
   Bool,
   Bool,
+  Array[(Bool, String)],
 ) raise ParseError {
   let _ = self.expect(LBrace)
   // Class body is implicitly strict mode
@@ -1158,6 +1159,10 @@ fn Parser::parse_class_body(
   // Set when an accessibility modifier (`public` / `private` / `protected`)
   // was written on an index signature -- always TS1071.
   let mut index_sig_modifier_misuse = false
+  // Instance index signatures whose declared value type was a naked bounded
+  // type parameter (`[x: number]: T` under `T extends Base`), as
+  // `(is_numeric_key, param_name)`. See `try_parse_class_index_signature`.
+  let index_naked_params : Array[(Bool, String)] = []
   // Set when an `abstract` method / accessor was given a real body -- always
   // TS1245 ("Method cannot have an implementation because it is marked
   // abstract").
@@ -1328,7 +1333,7 @@ fn Parser::parse_class_body(
     // shapes the precise parser declines, e.g. computed key expressions.
     if self.check(LBracket) && self.is_index_signature_shape_after_lbracket() {
       match self.try_parse_class_index_signature() {
-        Some((key, value)) => {
+        Some((key, value, naked_param)) => {
           if saw_visibility_modifier {
             index_sig_modifier_misuse = true
           }
@@ -1336,6 +1341,18 @@ fn Parser::parse_class_body(
             class_type_params.length() > 0 &&
             type_references_type_param_name(value, class_type_params) {
             static_index_type_param_ref = true
+          }
+          if !is_static {
+            match naked_param {
+              Some(np) => {
+                let is_num = match key {
+                  Number | Int => true
+                  _ => false
+                }
+                index_naked_params.push((is_num, np))
+              }
+              None => ()
+            }
           }
           elements.push(IndexSig(key, value))
           continue
@@ -1653,7 +1670,7 @@ fn Parser::parse_class_body(
     ctor, elements, private_members, protected_members, abstract_members, ctor_impl_count,
     index_sig_modifier_misuse, abstract_member_with_body, overload_static_mix, overload_missing_impl,
     overload_accessibility_mix, modifier_order_misuse, class_body_statement_misuse,
-    static_index_type_param_ref,
+    static_index_type_param_ref, index_naked_params,
   )
 }
 
@@ -1693,7 +1710,22 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   if self.match_(Extends) {
     base = Some(self.parse_class_base_name())
     if self.check(Lt) {
-      self.skip_type_args()
+      // Capture `extends B<...>` type arguments for the checker's
+      // generic-base compatibility checks; fall back to the permissive
+      // skip when they don't parse as simple types. Bound inlining is
+      // suppressed so `extends A<T>` records the raw `T`, not its
+      // constraint.
+      self.no_bound_inline = true
+      match self.try_parse_simple_type_args() {
+        Some(targs) =>
+          match base {
+            Some(bname) =>
+              self.class_base_type_args.push((class_name, bname, targs))
+            None => ()
+          }
+        None => self.skip_type_args()
+      }
+      self.no_bound_inline = false
     }
   }
   let implements_names = if self.match_ident("implements") {
@@ -1722,6 +1754,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     modifier_order_misuse,
     class_body_statement_misuse,
     static_index_type_param_ref,
+    index_naked_params,
   ) = self.parse_class_body(class_type_params)
   self.current_class_brand = prev_brand
   self.restore_local_type_param_bounds(class_type_param_bound_len)
@@ -1759,6 +1792,14 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   }
   if static_index_type_param_ref {
     expr_class_sentinels.push("<static-type-param-ref>")
+  }
+  // Not an error by itself: records that an instance index signature's
+  // declared value type was a naked bounded type parameter (widened to its
+  // bound in the AST), so derived-class indexer compatibility can still
+  // reason about the generic slot.
+  for np in index_naked_params {
+    let kind = if np.0 { "num" } else { "str" }
+    expr_class_sentinels.push("<index-naked-param:\{kind}:\{np.1}>")
   }
   if expr_class_sentinels.length() > 0 {
     self.collected_class_dups.push((class_name, expr_class_sentinels))
@@ -2409,7 +2450,21 @@ fn Parser::parse_class_decl_with_abstract(
   if self.match_(Extends) {
     base = Some(self.parse_class_base_name())
     if self.check(Lt) {
-      self.skip_type_args()
+      // Capture `extends B<...>` type arguments for the checker's
+      // generic-base compatibility checks; fall back to the permissive
+      // skip when they don't parse as simple types. Bound inlining is
+      // suppressed so `extends A<T>` records the raw `T`, not its
+      // constraint.
+      self.no_bound_inline = true
+      match self.try_parse_simple_type_args() {
+        Some(targs) =>
+          match base {
+            Some(bname) => self.class_base_type_args.push((name, bname, targs))
+            None => ()
+          }
+        None => self.skip_type_args()
+      }
+      self.no_bound_inline = false
     }
   }
   let implements_names = if self.match_ident("implements") {
@@ -2438,6 +2493,7 @@ fn Parser::parse_class_decl_with_abstract(
     modifier_order_misuse,
     class_body_statement_misuse,
     static_index_type_param_ref,
+    index_naked_params,
   ) = self.parse_class_body(class_type_params)
   self.current_class_brand = prev_brand
   self.restore_local_type_param_bounds(class_type_param_bound_len)
@@ -2484,6 +2540,13 @@ fn Parser::parse_class_decl_with_abstract(
   // TS2302: a static index signature references a class type parameter.
   if static_index_type_param_ref {
     runtime_decl.duplicate_member_names.push("<static-type-param-ref>")
+  }
+  // Marker only (see the expression-class path above).
+  for np in index_naked_params {
+    let kind = if np.0 { "num" } else { "str" }
+    runtime_decl.duplicate_member_names.push(
+      "<index-naked-param:\{kind}:\{np.1}>",
+    )
   }
   // Surface the class's structural diagnostics for *every* class, including
   // ones nested in function bodies that the IIFE lowering removes from

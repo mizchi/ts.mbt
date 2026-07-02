@@ -61,7 +61,15 @@ emit_match() {
   echo "/// True when \`name\` is a standard-library ambient global *value*"
   echo "/// (\`console\`, \`Math\`, \`Promise\`, \`document\`, \`Symbol\`, …)."
   emit_match is_lib_global_value /tmp/lib_value_names.txt
+  echo ""
+  echo "///|"
+  echo "/// True when \`name\` is a standard-library ambient global *type*"
+  echo "/// (\`PropertyDescriptor\`, \`PromiseLike\`, \`HTMLElement\`,"
+  echo "/// \`IteratorResult\`, …). Interfaces, type aliases, declared classes,"
+  echo "/// namespaces, and enums across every lib target."
+  emit_match is_lib_global_type /tmp/lib_type_names.txt
 } > "$OUT"
 
 echo "wrote $OUT"
 echo "  value globals: $(wc -l < /tmp/lib_value_names.txt)"
+echo "  type globals:  $(wc -l < /tmp/lib_type_names.txt)"

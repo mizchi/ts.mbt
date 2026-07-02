@@ -2097,7 +2097,7 @@ fn Parser::is_index_signature_shape_after_lbracket(self : Parser) -> Bool {
 /// fall back to the original skip path.
 fn Parser::try_parse_class_index_signature(
   self : Parser,
-) -> (@ast.TsType, @ast.TsType)? raise ParseError {
+) -> (@ast.TsType, @ast.TsType, String?)? raise ParseError {
   let saved = self.pos
   let _ = self.expect(LBracket)
   match self.peek().kind {
@@ -2122,9 +2122,23 @@ fn Parser::try_parse_class_index_signature(
     self.pos = saved
     return None
   }
+  // A value that is a *naked bounded type parameter* (`[x: number]: T` with
+  // `T extends Base` in scope) is about to be widened to its bound by
+  // `parse_type`'s constraint inlining. Capture the parameter name first so
+  // derived-class index-signature compatibility (TS2415) can still see the
+  // generic slot; the widened value stays in the AST for every other
+  // consumer.
+  let naked_param : String? = match self.peek().kind {
+    Ident(n) if self.local_type_param_bound(n) is Some(_) =>
+      match self.peek_at(1).kind {
+        Semicolon | RBrace => Some(n)
+        _ => None
+      }
+    _ => None
+  }
   let value_type = self.parse_type()
   self.consume_semicolon()
-  Some((key_type, value_type))
+  Some((key_type, value_type, naked_param))
 }
 
 ///|
@@ -2405,7 +2419,7 @@ fn Parser::parse_declare_class(
     if self.check(LBracket) && self.is_index_signature_shape_after_lbracket() {
       match self.try_parse_class_index_signature() {
         Some(sig) => {
-          index_signatures.push(sig)
+          index_signatures.push((sig.0, sig.1))
           continue
         }
         None => ()

@@ -18,6 +18,8 @@ fn empty_module_for_check() -> @ast.TsModule {
     strict_mode_misuses: [],
     invalid_decorator_uses: [],
     grammar_misuses: [],
+    imported_binding_names: [],
+    class_base_type_args: [],
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],
     class_dup_diagnostics: [],

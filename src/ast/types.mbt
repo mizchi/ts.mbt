@@ -881,6 +881,14 @@ pub(all) struct TsModule {
   // identifier inside an async context (TS1359). Empty for well-formed
   // input.
   grammar_misuses : Array[String]
+  // Local binding names introduced by ES `import` statements. Consulted by
+  // unresolved-reference checks so imported types / values read as
+  // declared even though the import statements themselves are erased.
+  imported_binding_names : Array[String]
+  // `(class, base, args)` recorded from `class C extends B<...>` heritage
+  // clauses. Consulted when checking derived-class member compatibility
+  // against a generic base (TS2415 index-signature subtyping).
+  class_base_type_args : Array[(String, String, Array[TsType])]
   // Parameters declared with both an optional marker (`x?`) and an
   // initializer (`x = e`) -- always a TS1015 syntax error. The parser
   // records one parameter name per offending declaration; the checker
