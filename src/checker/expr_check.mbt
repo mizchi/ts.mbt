@@ -56,6 +56,13 @@ priv struct Resolver {
   // *somewhere*, so it is never flagged even if the per-scope `env` hasn't
   // bound it yet at the reference site.
   declared_value_names : Map[String, Bool]
+  // `brand id -> declared private base names`, populated from the parser's
+  // `<private-decl:N:x>` class sentinels before body walking. Lets the
+  // private-name existence check distinguish a *shadowing* reference (the
+  // referencing class declares the same `#name` -- the inner declaration
+  // wins, so a receiver-class miss is a real TS18014) from a legal outward
+  // lexical reference.
+  private_brand_decls : Map[String, Array[String]]
 }
 
 ///|
@@ -71,6 +78,7 @@ fn Resolver::empty() -> Resolver {
     func_const_type_params: {},
     enums: {},
     declared_value_names: {},
+    private_brand_decls: {},
   }
 }
 
@@ -3397,6 +3405,17 @@ fn private_brand_declared_on_receiver(
   prop : String,
 ) -> Bool {
   guard private_brand_base_name(prop) is Some(base) else { return false }
+  // Shadowing (TS18014): when the *referencing* class itself declares the
+  // same `#name`, the inner declaration wins -- the receiver-class miss is a
+  // real error, so never suppress it.
+  match private_brand_id(prop) {
+    Some(brand_id) =>
+      match resolver.private_brand_decls.get(brand_id) {
+        Some(bases) => if bases.contains(base) { return false }
+        None => ()
+      }
+    None => ()
+  }
   let class_name = match resolver.unwrap(recv_ty) {
     Named(n) | Applied(n, _) | Struct(n, _) => n
     _ => return false
@@ -3466,6 +3485,21 @@ fn private_brand_id_known_to_resolver(
     }
   }
   false
+}
+
+///|
+/// The numeric brand id embedded in a mangled private name
+/// (`__private_brand__<N>__<name>` -> `N`).
+fn private_brand_id(prop : String) -> String? {
+  let prefix = "__private_brand__"
+  if !prop.has_prefix(prefix) {
+    return None
+  }
+  let rest = prop[prefix.length():].to_owned()
+  match rest.find("__") {
+    Some(i) => Some(rest[:i].to_string())
+    None => None
+  }
 }
 
 ///|
@@ -17786,6 +17820,10 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
           path: "class \{cls_name}",
           message: "static members cannot reference class type parameters",
         })
+      } else if name.has_prefix("<private-decl:") {
+        // Marker, not an error: a private member declaration keyed by its
+        // class brand. Consumed by `private_brand_declared_on_receiver`.
+        ()
       } else if name.has_prefix("<index-naked-param:") {
         // Marker, not an error: an instance index signature's declared value
         // type was a naked bounded type parameter. Consumed by
@@ -18102,6 +18140,35 @@ fn check_module_function_bodies_layered(
   }
   let strict_property_init = strict_root.strict_property_initialization
   let strict_null_checks = strict_root.strict_null_checks
+  // Brand-keyed private declarations recorded by the parser (own layer plus
+  // the outermost root -- namespace bodies re-parse with a fresh parser, so
+  // their recordings live on their own TsModule). Populated before body
+  // walking so the private-name existence check can detect shadowing.
+  fn ingest_private_decls(dups : Array[(String, Array[String])]) -> Unit {
+    for entry in dups {
+      for name in entry.1 {
+        if name.has_prefix("<private-decl:") {
+          let body = name["<private-decl:".length():name.length() - 1].to_string()
+          match body.find(":") {
+            Some(i) => {
+              let brand_id = body[:i].to_string()
+              let base = body[i + 1:].to_string()
+              match resolver.private_brand_decls.get(brand_id) {
+                Some(arr) => arr.push(base)
+                None => resolver.private_brand_decls[brand_id] = [base]
+              }
+            }
+            None => ()
+          }
+        }
+      }
+    }
+  }
+
+  ingest_private_decls(module_.class_dup_diagnostics)
+  if outer_modules.length() > 0 {
+    ingest_private_decls(strict_root.class_dup_diagnostics)
+  }
   let all : Array[ExprIssue] = []
   for func in module_.funcs {
     for

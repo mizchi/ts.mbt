@@ -11240,3 +11240,25 @@ test "expr_check: derived index-signature compatibility (TS2415)" {
     0,
   )
 }
+
+///|
+test "expr_check: nested-class private shadowing (TS18014)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // The nested class declares its own `#x`, shadowing the outer one -- an
+  // access on an outer-typed receiver is an error.
+  assert_true(
+    issues(
+      "class Base { #x; constructor() { class Derived { #x; testBase(x: Base) { return x.#x; } } } }",
+    ) >
+    0,
+  )
+  // Without shadowing, the nested class reaches the outer private legally.
+  @test.assert_eq(
+    issues(
+      "class Foo { #name = 1; m() { class Bar { #y = 2; g(o: Foo) { return o.#name } } return 0 } }",
+    ),
+    0,
+  )
+}

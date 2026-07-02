@@ -1801,6 +1801,20 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     let kind = if np.0 { "num" } else { "str" }
     expr_class_sentinels.push("<index-naked-param:\{kind}:\{np.1}>")
   }
+  // Marker only: every private (`#name`) member this class declares, keyed
+  // by its brand id, so the checker can detect shadowed private accesses
+  // (TS18014) even for classes lowered out of `module_.classes`.
+  let brand_member_prefix = brand + "__"
+  for element in elements {
+    match element {
+      Field(_, Name(n), _, _, _, _) | Method(_, Name(n), _, _) =>
+        if n.has_prefix(brand_member_prefix) {
+          let base = n[brand_member_prefix.length():].to_string()
+          expr_class_sentinels.push("<private-decl:\{brand_id}:\{base}>")
+        }
+      _ => ()
+    }
+  }
   if expr_class_sentinels.length() > 0 {
     self.collected_class_dups.push((class_name, expr_class_sentinels))
   }
@@ -2547,6 +2561,19 @@ fn Parser::parse_class_decl_with_abstract(
     runtime_decl.duplicate_member_names.push(
       "<index-naked-param:\{kind}:\{np.1}>",
     )
+  }
+  let brand_member_prefix = brand + "__"
+  for element in elements {
+    match element {
+      Field(_, Name(n), _, _, _, _) | Method(_, Name(n), _, _) =>
+        if n.has_prefix(brand_member_prefix) {
+          let base = n[brand_member_prefix.length():].to_string()
+          runtime_decl.duplicate_member_names.push(
+            "<private-decl:\{brand_id}:\{base}>",
+          )
+        }
+      _ => ()
+    }
   }
   // Surface the class's structural diagnostics for *every* class, including
   // ones nested in function bodies that the IIFE lowering removes from
