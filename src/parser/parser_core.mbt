@@ -105,6 +105,10 @@ pub struct Parser {
   // `extends B<...>` heritage type arguments, where the raw parameter
   // identity is the whole point.
   mut no_bound_inline : Bool
+  // The conformance header carries an explicit `@target:` of ES2015 or
+  // newer. In that mode tsc reserves `yield` as a function name
+  // (TS1212 -- `function yield() {}` under `@target: es6`).
+  target_es6_plus : Bool
   // Conformance-header strict directive (`@alwaysStrict: true` / `@strict:
   // true`). Unlike `in_strict` it does NOT change parsing behaviour (octal
   // handling, statement restrictions, ...) -- it only arms the strict-misuse
@@ -217,6 +221,7 @@ pub fn Parser::new_with_strict_and_jsx(
     imported_binding_names: [],
     class_base_type_args: [],
     no_bound_inline: false,
+    target_es6_plus: false,
     directive_strict: false,
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],
@@ -287,6 +292,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     imported_binding_names: [],
     class_base_type_args: [],
     no_bound_inline: false,
+    target_es6_plus: detect_target_es6_plus(src),
     directive_strict: detect_directive_strict(src),
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],
@@ -591,5 +597,31 @@ fn Parser::rollback_recordings(
   }
   while self.param_optional_initializer_misuses.length() > lens.3 {
     let _ = self.param_optional_initializer_misuses.pop()
+  }
+}
+
+///|
+/// True when the conformance header names an ES2015+ target
+/// (`@target: es6` / `es2015` .. `esnext`), in any position of the
+/// comma list.
+fn detect_target_es6_plus(src : String) -> Bool {
+  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
+  let head = src[:head_len].to_owned().to_lower()
+  match head.find("@target:") {
+    Some(i) => {
+      let rest = head[i + "@target:".length():].to_owned()
+      let line = match rest.find("\n") {
+        Some(j) => rest[:j].to_owned()
+        None => rest
+      }
+      for raw in line.split(",") {
+        let tok = raw.trim().to_string()
+        if tok == "es6" || tok == "esnext" || tok.has_prefix("es20") {
+          return true
+        }
+      }
+      false
+    }
+    None => false
   }
 }

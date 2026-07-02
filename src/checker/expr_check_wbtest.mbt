@@ -11262,3 +11262,34 @@ test "expr_check: nested-class private shadowing (TS18014)" {
     0,
   )
 }
+
+///|
+test "expr_check: exact spread arity (TS2554) and es6 yield function names (TS1212)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Array-literal / fixed-tuple spreads give an exact argument count.
+  assert_true(
+    issues(
+      "declare const t3: [string, string, string];\ndeclare function g2(a: string, b: string): void;\ng2(...t3);",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "declare const t2: [string, string];\ndeclare function g2(a: string, b: string): void;\ng2(...t2);\ng2('a', ...[  'b']);",
+    ),
+    0,
+  )
+  // Open-ended spreads still abstain.
+  @test.assert_eq(
+    issues(
+      "declare const xs: string[];\ndeclare function g2(a: string, b: string): void;\ng2(...xs);",
+    ),
+    0,
+  )
+  // `function yield` under an es6+ target directive (or as a generator).
+  assert_true(issues("// @target: es6\nfunction yield() {}") > 0)
+  assert_true(issues("var v = function * yield() {};") > 0)
+  @test.assert_eq(issues("function yield() {}"), 0)
+}

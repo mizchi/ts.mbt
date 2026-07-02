@@ -2295,6 +2295,52 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-02 (T160)  713/815 (87 %)        414/414 ( 0 FP)   pinned + whole-corpus push: TP 1881 -> 1914
+
+  T160 -- second session round, aimed at the pinned clusters T159 left.
+    Whole-corpus TP 1881 -> 1914 @ 0 FP (session total 1761 -> 1914, +153);
+    pinned recall 700 -> 713. Batches:
+
+    1. TS2304 signature type refs: `lib_globals.mbt` now also bakes the
+       ambient *type* registry (2,201 names from `typescript/src/lib`;
+       `gen_lib_globals.sh` extended). `check_unresolved_signature_type_refs`
+       flags unresolved names in `implements` clauses, `interface extends`
+       clauses, and generic constraint bounds, resolved against module
+       declarations (recursively across namespaces), in-scope type params,
+       ES-import bindings (newly recorded `imported_binding_names`), and the
+       full lib registry. Also TS2304 on `new X()` over an undeclared name
+       (interfaces exempt -- the parser lowers member-only classes to
+       interfaces) and on assignment-form `for (v of ...)` targets, whose
+       bindings no longer enter the hoisting backstop.
+    2. TS2415 derived indexer compatibility: the parser records
+       `extends B<...>` heritage type arguments (`class_base_type_args`)
+       with constraint inlining suppressed (`no_bound_inline`), plus
+       `<index-naked-param:kind:T>` sentinels for instance index signatures
+       whose declared value was a naked bounded type parameter (the AST
+       stores the widened bound). `check_derived_indexer_compat` flags a
+       derived class/interface whose same-kind index-signature value is
+       concrete against a naked type-parameter slot, or concretely
+       non-assignable to the instantiated base value. Namespace bodies
+       re-parse with a fresh parser, so recordings merge per layer.
+    3. TS18014 nested-class private shadowing: `<private-decl:brand:name>`
+       sentinels record every private member per class brand (including
+       classes lowered out of `module_.classes`); the private-name
+       existence suppression keeps reporting when the *referencing* class's
+       own brand declares the same `#name` (inner declaration shadows), and
+       stays silent for outward lexical references.
+    4. TS2554 exact spread arity: spreads of syntactic array literals and
+       fixed-length tuple-typed values contribute an exact argument count,
+       so the arity check runs again (`fs2(...s3)` where `s3` is a
+       3-tuple). Open-ended spreads still abstain.
+    5. TS1212 `yield` as a function name under an ES2015+ `@target`
+       directive / strict prologue / generator form, for declarations and
+       function expressions.
+
+    Remaining pinned misses cluster in TS2322 (27, advanced assignability),
+    TS2345, TS2339, TS7006 (needs noImplicitAny modeling), TS2403 /
+    TS2367 / TS2551 / TS2564 (each 2-6 files, inference-dependent).
+    Whitebox-tested throughout (2421 tests).
+
 2026-07-02 (T159)  700/815 (86 %)        414/414 ( 0 FP)   whole-corpus recall push: TP 1761 -> 1881
 
   T159 -- a whole-corpus-focused session (the pinned-directory recall stays at

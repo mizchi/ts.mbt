@@ -265,10 +265,12 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   let name = self.parse_binding_ident()
   // TS1212: a *generator* cannot be named `yield` (`function * yield() {}`)
   // -- inside generator grammar `yield` is a reserved word. A plain
-  // function named `yield` is legal in non-strict code and stays silent.
-  if is_generator && name == "yield" {
+  // function named `yield` is additionally reserved when the conformance
+  // header targets ES2015+ (`@target: es6`); without that directive it is
+  // legal in non-strict code and stays silent.
+  if (is_generator || self.target_es6_plus || self.in_strict) && name == "yield" {
     self.grammar_misuses.push(
-      "`yield` cannot be used as the name of a generator function",
+      "`yield` cannot be used as the name of a function here",
     )
   }
   let (type_params, const_type_params, type_param_bounds) = self.parse_type_param_names_bounds_and_const_flags()
@@ -590,6 +592,14 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
     | Of
     | In => self.parse_binding_ident()
     _ => "<anon>"
+  }
+  // TS1212: mirror `parse_function` -- a generator expression (or any
+  // function expression under an ES2015+ target / strict prologue) cannot
+  // be named `yield`.
+  if (is_generator || self.target_es6_plus || self.in_strict) && name == "yield" {
+    self.grammar_misuses.push(
+      "`yield` cannot be used as the name of a function here",
+    )
   }
   let (type_params, const_type_params, type_param_bounds) = self.parse_type_param_names_bounds_and_const_flags()
   let _ = self.expect(LParen)

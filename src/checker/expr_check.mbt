@@ -9885,12 +9885,65 @@ fn check_arguments_with_sig(
   arity_reliable? : Bool = false,
 ) -> Unit {
   // Spread arguments make positional matching unreliable — just type-check
-  // each argument and skip count enforcement.
+  // each argument and skip count enforcement. Exception: when *every*
+  // spread wraps a syntactic array literal (`f(1, ...[2, 3])`), the
+  // effective argument count is exact, so the arity check still applies
+  // (TS2554 -- \`action.run(...[100, 'foo'])\` against \`run(event?)\`).
   let mut has_spread = false
+  let mut spread_exact = true
+  let mut effective_count = 0
   for a in args {
     match a {
-      Spread(_) => has_spread = true
-      _ => ()
+      Spread(inner) => {
+        has_spread = true
+        match inner {
+          ArrayLit(items) => {
+            // An inner spread / hole re-opens the count.
+            let mut ok = true
+            for it in items {
+              match it {
+                Spread(_) | ArrayHole => ok = false
+                _ => ()
+              }
+            }
+            if ok {
+              effective_count += items.length()
+            } else {
+              spread_exact = false
+            }
+          }
+          _ => {
+            // A spread of a *fixed-length tuple*-typed value (`...s2` where
+            // `s2: [string, string]`) also contributes an exact count. Rest
+            // slots or optional (`| undefined`) members re-open the range.
+            let t = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, inner))
+            match t {
+              Tuple(items) => {
+                let mut fixed = true
+                for it in items {
+                  match it {
+                    Rest(_) => fixed = false
+                    Union(members) =>
+                      for m in members {
+                        if m is Undefined {
+                          fixed = false
+                        }
+                      }
+                    _ => ()
+                  }
+                }
+                if fixed {
+                  effective_count += items.length()
+                } else {
+                  spread_exact = false
+                }
+              }
+              _ => spread_exact = false
+            }
+          }
+        }
+      }
+      _ => effective_count += 1
     }
   }
   // Arity check: prefer the rich sig if present.
@@ -9926,8 +9979,8 @@ fn check_arguments_with_sig(
       (required_arity_from_types(params), max_)
     }
   }
-  if !has_spread {
-    let n = args.length()
+  if !has_spread || spread_exact {
+    let n = if has_spread { effective_count } else { args.length() }
     let too_few = n < min_arity
     let too_many = max_arity >= 0 && n > max_arity
     if too_few || too_many {
