@@ -719,6 +719,9 @@ fn Parser::parse_single_param_arrow(
 fn Parser::is_destructuring_assignment_start(self : Parser) -> Bool {
   let saved_pos = self.pos
   let saved_gen = self.in_generator
+  // Speculative binding-pattern parse: roll back any misuse recordings it
+  // pushes (see `is_arrow_function`).
+  let recordings = self.recording_lengths()
   let mut ok = false
   try {
     let _ = self.parse_assignment_binding_pattern()
@@ -726,6 +729,7 @@ fn Parser::is_destructuring_assignment_start(self : Parser) -> Bool {
   } catch {
     _ => ok = false
   }
+  self.rollback_recordings(recordings)
   self.pos = saved_pos
   self.in_generator = saved_gen
   ok

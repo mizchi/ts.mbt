@@ -12856,6 +12856,58 @@ fn check_call_args_in_expr(
           )
         }
       }
+      // TS2358: the left operand of `instanceof` must be of an object type
+      // (or `any`). A syntactic literal LHS -- string / template / number /
+      // boolean / bigint -- is a primitive, never an object, so it is a
+      // definite error with no inference involved.
+      if op is Instanceof {
+        let literal_primitive_lhs = match l {
+          StringLit(_)
+          | TemplateLiteral(_, _)
+          | NumberLit(_)
+          | IntLit(_)
+          | BigIntLit(_)
+          | BoolLit(_) => true
+          _ => false
+        }
+        if literal_primitive_lhs {
+          record_unfiltered(
+            ctx, "instanceof", "the left-hand side of an `instanceof` expression must be of type `any`, an object type or a type parameter",
+          )
+        }
+      }
+      // TS18050: `null` / `undefined` written literally as an operand of an
+      // arithmetic operator (`null + null`, `1 * undefined`). Syntactic-only
+      // (no inference), so it is false-positive-free; `==` / `===` and the
+      // logical / coalescing operators legitimately take nullish operands
+      // and are excluded.
+      match op {
+        Add
+        | Sub
+        | Mul
+        | Div
+        | Mod
+        | Pow
+        | BitAnd
+        | BitOr
+        | BitXor
+        | Shl
+        | Shr
+        | UShr => {
+          let is_nullish_literal = fn(e : @ast.TsExpr) -> Bool {
+            match e {
+              NullLit | Var("undefined") => true
+              _ => false
+            }
+          }
+          if is_nullish_literal(l) || is_nullish_literal(r) {
+            record_unfiltered(
+              ctx, "binary operand", "the value `null` or `undefined` cannot be used as an arithmetic operand",
+            )
+          }
+        }
+        _ => ()
+      }
       // Short-circuit narrowing: the RHS of `&&` runs only when the LHS is
       // truthy, and the RHS of `||` only when the LHS is falsy. Apply the
       // corresponding flow narrowing to a scratch env before walking the

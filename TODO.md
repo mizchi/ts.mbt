@@ -2295,6 +2295,73 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-02 (T159)  700/815 (86 %)        414/414 ( 0 FP)   whole-corpus recall push: TP 1761 -> 1881
+
+  T159 -- a whole-corpus-focused session (the pinned-directory recall stays at
+    700/815; every gain landed outside the pinned set). Whole-corpus TP
+    1761 -> 1881 (+120) at 0 FP, MISS 924 -> 805, all gated per batch with
+    `scripts/checker_conformance_oracle.sh --max-fp 0`. Six batches:
+
+    1. Function-valued expression bodies (largest single win). The expression
+       walker's catch-all silently dropped `ArrowFunc` / `FuncExpr` in
+       *non-contextual* positions -- `var f = function () { … }`, IIFE
+       callees, object-literal members, `return function () { … }` -- so
+       nothing inside those bodies was ever checked. New walker arms route
+       them through the existing `check_arrow_with_context` /
+       `check_funcexpr_with_context` helpers with `Any`-typed formals.
+       Contextual call-argument positions re-walk the same body with typed
+       formals; a `dedup_issues_since` pass drops the duplicate strings
+       (only pre-existing entries suppress, so two distinct occurrences of
+       the same message survive). Function expressions rebind `this` to
+       `Any` (dynamic `this`, matches tsc without `noImplicitThis`) and bind
+       their own name for recursion. FP fallout fixed alongside:
+       `type_contains_unresolved_named` now recurses into `Applied` type
+       args (erased generic-arrow type params like
+       `EPlusFallback<Lowercase<T>>`), and brand-mangled private-name
+       existence checks stay silent when the reference's brand belongs to no
+       resolver-known class (parser-lowered nested classes) while the
+       receiver declares the same base name -- known-brand cross-class
+       accesses keep reporting (`Child.#bar`, `this.#staticOnInstance`).
+    2. TS2304 `arguments` outside any non-arrow function (top level / arrow
+       chains), via a dedicated `check_arguments_outside_function` walker;
+       shielded by any declared `arguments` binding.
+    3. TS1100 family: `eval` / `arguments` as binding identifier or
+       assignment target in strict code. The parser's strict-mode raises
+       became recorded `strict_mode_misuses` (files now parse, so the oracle
+       classifies them instead of skipping); `"use strict"` prologue
+       detection skips leading directive comments / BOM; conformance-header
+       `@alwaysStrict: true` / `@strict: true` arms the recording without
+       changing parse behaviour.
+    4. TS2356 `++` / `--` on confidently non-arithmetic operands and TS2464
+       non-key computed property names -- both abstain on nullish shapes (a
+       `null` initializer narrows an `any` binding to `Null` in our flow
+       model while non-strict tsc widens it to `any`).
+    5. TS1206 decorators on non-class declarations (enum / function /
+       interface / var), gated on decorators skipped in the same iteration
+       so class paths that leave stale pending entries never re-trigger.
+    6. Always-error grammar family, recorded at lex/parse time through the
+       new `TsModule.grammar_misuses` channel: TS1127 invalid characters
+       (stray `\` not starting a `\u` identifier escape, control chars),
+       TS1160 unterminated template literals, TS2480 `let` as a let/const
+       binding name, TS1359 `await` as an async-function *parameter* (the
+       function name is exempt -- `async function await()` is legal),
+       TS1212 `yield` as a generator's name or parameter, TS1029 extended
+       modifier-order coverage (accessibility after
+       static/async/readonly/override/abstract, static after
+       override/readonly, override after readonly), TS2358 syntactic-literal
+       LHS of `instanceof`, TS18050 literal `null` / `undefined` arithmetic
+       operands, and TS5107 deprecated `@module: amd/umd/system` directives.
+       Speculative parses (`is_arrow_function`, destructuring lookahead)
+       share the recording arrays with the real parser, so they now snapshot
+       and roll back recordings -- `(yield 0)` in a generator no longer
+       leaks a bogus TS1212.
+
+    Remaining pinned misses (109) still cluster in TS2322 (27, advanced
+    assignability), TS2345 (8), TS18014 (6, nested-class private brands we
+    deliberately abstain on), TS2415 (6, indexer subtyping -- needs class
+    `extends` type args the AST does not yet carry), TS2339/TS7006/TS2554.
+    Whitebox-tested throughout (2418 tests).
+
 2026-07-01 (T158)  700/815 (86 %)        414/414 ( 0 FP)   TS2507 class extends a plain function
 
   T158 -- TS2507 ("Type of 'X' is not a constructor function type."). A class

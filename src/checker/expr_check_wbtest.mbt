@@ -11181,3 +11181,25 @@ test "expr_check: always-error grammar misuses (TS1127/TS1160/TS2480/TS1359/TS10
     0,
   )
 }
+
+///|
+test "expr_check: instanceof primitive LHS, nullish arithmetic operands, generator yield names" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2358: a syntactic literal LHS of `instanceof` is never an object.
+  assert_true(issues("var x = `abc${0}def` instanceof String;") > 0)
+  assert_true(issues("var x = \"s\" instanceof String;") > 0)
+  @test.assert_eq(issues("var x = {} instanceof Object;"), 0)
+  // TS18050: literal null / undefined as an arithmetic operand.
+  assert_true(issues("var r = null + null;") > 0)
+  assert_true(issues("var r = undefined + 1;") > 0)
+  assert_true(issues("var r = 1 * undefined;") > 0)
+  @test.assert_eq(issues("var r = null == null;"), 0)
+  @test.assert_eq(issues("var r = null ?? 1;"), 0)
+  // TS1212: a generator (or its parameter) cannot be named `yield`.
+  assert_true(issues("function * yield() {}") > 0)
+  @test.assert_eq(issues("function yield() {}"), 0)
+  // Speculative arrow lookahead must not leak recordings.
+  @test.assert_eq(issues("function* g() { class C extends (yield 0) { } }"), 0)
+}

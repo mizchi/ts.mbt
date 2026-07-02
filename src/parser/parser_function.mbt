@@ -150,6 +150,13 @@ fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
       "`await` cannot be used as a parameter name in an async context",
     )
   }
+  // TS1212: a parameter named `yield` inside a *generator* -- reserved in
+  // generator grammar (`function * f(yield) {}`).
+  if name == "yield" && self.in_generator {
+    self.grammar_misuses.push(
+      "`yield` cannot be used as a parameter name in a generator",
+    )
+  }
   // Record the name (with its `readonly`-ness and visibility) so the
   // surrounding constructor parser can synthesize `this.name = name`
   // field assigns and materialize the corresponding class field. Only
@@ -256,6 +263,14 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   let is_generator = self.match_(Star)
   let is_async = self.in_async
   let name = self.parse_binding_ident()
+  // TS1212: a *generator* cannot be named `yield` (`function * yield() {}`)
+  // -- inside generator grammar `yield` is a reserved word. A plain
+  // function named `yield` is legal in non-strict code and stays silent.
+  if is_generator && name == "yield" {
+    self.grammar_misuses.push(
+      "`yield` cannot be used as the name of a generator function",
+    )
+  }
   let (type_params, const_type_params, type_param_bounds) = self.parse_type_param_names_bounds_and_const_flags()
   let local_type_param_bound_len = self.push_local_type_param_bounds(
     type_param_bounds,

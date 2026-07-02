@@ -344,12 +344,18 @@ fn Parser::peek_at(self : Parser, offset : Int) -> Token {
 // / functioncheck (currentposition `(` )
 fn Parser::is_arrow_function(self : Parser) -> Bool {
   let temp = { ..self, pos: self.pos + 1 }
+  // The struct-spread copy shares the recording arrays with `self`, so a
+  // speculative `parse_params` here would leak misuse recordings for
+  // expressions that merely *look* like parameter lists (`(yield 0)` in a
+  // generator, `(eval)` in strict code). Snapshot and roll back.
+  let recordings = self.recording_lengths()
   let params_ok = try {
     let _ = temp.parse_params()
     temp.check(RParen)
   } catch {
     _ => false
   }
+  self.rollback_recordings(recordings)
   if !params_ok {
     return false
   }
@@ -533,4 +539,36 @@ fn detect_directive_strict(src : String) -> Bool {
     }
   }
   false
+}
+
+///|
+/// Lengths of the parser's misuse-recording arrays, taken before a
+/// speculative parse whose side effects must not survive.
+fn Parser::recording_lengths(self : Parser) -> (Int, Int, Int, Int) {
+  (
+    self.grammar_misuses.length(),
+    self.strict_mode_misuses.length(),
+    self.param_property_misuses.length(),
+    self.param_optional_initializer_misuses.length(),
+  )
+}
+
+///|
+/// Drop any misuse recordings pushed since `recording_lengths` was taken.
+fn Parser::rollback_recordings(
+  self : Parser,
+  lens : (Int, Int, Int, Int),
+) -> Unit {
+  while self.grammar_misuses.length() > lens.0 {
+    let _ = self.grammar_misuses.pop()
+  }
+  while self.strict_mode_misuses.length() > lens.1 {
+    let _ = self.strict_mode_misuses.pop()
+  }
+  while self.param_property_misuses.length() > lens.2 {
+    let _ = self.param_property_misuses.pop()
+  }
+  while self.param_optional_initializer_misuses.length() > lens.3 {
+    let _ = self.param_optional_initializer_misuses.pop()
+  }
 }

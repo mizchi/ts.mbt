@@ -3364,6 +3364,40 @@ fn detect_deprecated_compiler_options(src : String) -> Array[String] {
     }
     None => ()
   }
+  // Value-specific: the `@module:` directive's comma list. TypeScript 6
+  // deprecates the `amd` / `umd` / `system` module targets (TS5107).
+  match head_lower.find("@module:") {
+    Some(idx) => {
+      let after = head_lower[idx + "@module:".length():].to_owned()
+      let line = match after.find("\n") {
+        Some(nl) => after[:nl].to_owned()
+        None => after
+      }
+      let mut saw_amd = false
+      let mut saw_umd = false
+      let mut saw_system = false
+      for raw in line.split(",") {
+        let tok = raw.trim().to_owned()
+        if tok == "amd" {
+          saw_amd = true
+        } else if tok == "umd" {
+          saw_umd = true
+        } else if tok == "system" {
+          saw_system = true
+        }
+      }
+      if saw_amd {
+        out.push("module=AMD")
+      }
+      if saw_umd {
+        out.push("module=UMD")
+      }
+      if saw_system {
+        out.push("module=System")
+      }
+    }
+    None => ()
+  }
   // Presence-based options. `@out:` and `@outFile:` are distinct directives;
   // the trailing colon keeps `@out:` from matching inside `@outFile:` /
   // `@outDir:`.
