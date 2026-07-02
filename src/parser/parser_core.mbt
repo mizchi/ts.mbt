@@ -109,6 +109,23 @@ pub struct Parser {
   // newer. In that mode tsc reserves `yield` as a function name
   // (TS1212 -- `function yield() {}` under `@target: es6`).
   target_es6_plus : Bool
+  // noImplicitAny per the conformance-header directives. Mirrors the
+  // checker's strict-flag convention: the tsc-generated baselines for files
+  // *without* a directive include the implicit-any family (TS7006 / TS7010 /
+  // TS7005 / ...), so the default is `true`; `@strict: false` or
+  // `@noImplicitAny: false` opt out, an explicit `@noImplicitAny: true`
+  // opts back in over `@strict: false`.
+  no_implicit_any : Bool
+  // Armed only while parsing a *function declaration's* parameter list --
+  // the one position where an unannotated parameter can never be
+  // contextually typed, so the implicit-any verdict is reliable.
+  mut record_implicit_any_params : Bool
+  // Armed while parsing the body of a *class declaration with no heritage
+  // clause* -- with neither `extends` nor `implements`, a method parameter
+  // has no contextual-typing source, so the implicit-any verdict is
+  // reliable for members too. Class *expressions* stay unarmed (their
+  // members can be contextually typed from the assignment target).
+  mut class_decl_no_heritage : Bool
   // Conformance-header strict directive (`@alwaysStrict: true` / `@strict:
   // true`). Unlike `in_strict` it does NOT change parsing behaviour (octal
   // handling, statement restrictions, ...) -- it only arms the strict-misuse
@@ -222,6 +239,9 @@ pub fn Parser::new_with_strict_and_jsx(
     class_base_type_args: [],
     no_bound_inline: false,
     target_es6_plus: false,
+    no_implicit_any: false,
+    record_implicit_any_params: false,
+    class_decl_no_heritage: false,
     directive_strict: false,
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],
@@ -293,6 +313,9 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     class_base_type_args: [],
     no_bound_inline: false,
     target_es6_plus: detect_target_es6_plus(src),
+    no_implicit_any: detect_no_implicit_any(src),
+    record_implicit_any_params: false,
+    class_decl_no_heritage: false,
     directive_strict: detect_directive_strict(src),
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],
@@ -624,4 +647,26 @@ fn detect_target_es6_plus(src : String) -> Bool {
     }
     None => false
   }
+}
+
+///|
+/// noImplicitAny from the conformance header. Default `true` (matching the
+/// baselines for directive-less files); `@strict: false` /
+/// `@noImplicitAny: false` opt out, explicit `@noImplicitAny: true` wins
+/// over `@strict: false`.
+fn detect_no_implicit_any(src : String) -> Bool {
+  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
+  let head = src[:head_len].to_owned()
+  if head.contains("@noImplicitAny: true") ||
+    head.contains("@noImplicitAny:true") {
+    return true
+  }
+  if head.contains("@noImplicitAny: false") ||
+    head.contains("@noImplicitAny:false") {
+    return false
+  }
+  if head.contains("@strict: false") || head.contains("@strict:false") {
+    return false
+  }
+  true
 }

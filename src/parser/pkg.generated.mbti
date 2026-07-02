@@ -133,6 +133,9 @@ pub struct Parser {
   class_base_type_args : Array[(String, String, Array[@ast.TsType])]
   mut no_bound_inline : Bool
   target_es6_plus : Bool
+  no_implicit_any : Bool
+  mut record_implicit_any_params : Bool
+  mut class_decl_no_heritage : Bool
   directive_strict : Bool
   param_optional_initializer_misuses : Array[String]
   interface_member_modifier_misuses : Array[String]

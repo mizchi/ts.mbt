@@ -1434,7 +1434,16 @@ fn Parser::parse_class_body(
       }
       let params = if self.check(LParen) {
         let _ = self.expect(LParen)
+        // noImplicitAny: method parameters of a heritage-free class
+        // declaration have no contextual-typing source (see
+        // `class_decl_no_heritage`). Accessors are exempt: a setter's
+        // parameter type is inferred from the paired getter's return type
+        // (`get [k]() { return "" } set [k](x) {}` types `x` as string).
+        let prev_record_nia = self.record_implicit_any_params
+        self.record_implicit_any_params = self.class_decl_no_heritage &&
+          accessor_kind is None
         let params = self.parse_params()
+        self.record_implicit_any_params = prev_record_nia
         let _ = self.expect(RParen)
         params
       } else {
@@ -1448,7 +1457,8 @@ fn Parser::parse_class_body(
       } else {
         []
       }
-      let return_type = if self.check(Colon) {
+      let had_return_annotation = self.check(Colon)
+      let return_type = if had_return_annotation {
         let _ = self.advance()
         self.parse_type()
       } else {
@@ -1459,6 +1469,11 @@ fn Parser::parse_class_body(
       // overload signature). Used below to count constructor implementations
       // for TS2392.
       let has_body_block = not(consumed_semi) && self.check(LBrace)
+      // (Method-level TS7010 is intentionally not recorded: a bodiless
+      // method with no implementation at all already reports TS2391, and
+      // tsc does not flag an overload signature whose implementation
+      // carries the return annotation.)
+      let _ = had_return_annotation
       let body = if consumed_semi {
         @ast.TsBlock::{ stmts: [], stmt_positions: [] }
       } else if !self.check(LBrace) {
@@ -1733,6 +1748,11 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   } else {
     []
   }
+  // Class *expressions* can be contextually typed from their assignment
+  // target, so member-level noImplicitAny recording is disarmed for the
+  // whole body (including when nested inside an armed class declaration).
+  let prev_no_heritage_expr = self.class_decl_no_heritage
+  self.class_decl_no_heritage = false
   // Generate unique brand ID for private fields
   let brand_id = self.class_id
   self.class_id += 1
@@ -1756,6 +1776,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     static_index_type_param_ref,
     index_naked_params,
   ) = self.parse_class_body(class_type_params)
+  self.class_decl_no_heritage = prev_no_heritage_expr
   self.current_class_brand = prev_brand
   self.restore_local_type_param_bounds(class_type_param_bound_len)
   // Class *expressions* (`const C = class { … }`) build their result through
@@ -2486,6 +2507,11 @@ fn Parser::parse_class_decl_with_abstract(
   } else {
     []
   }
+  // Arm noImplicitAny member recording only for a heritage-free class
+  // *declaration*: no `extends` / `implements` means no contextual-typing
+  // source for method parameters or bodiless returns.
+  let prev_no_heritage = self.class_decl_no_heritage
+  self.class_decl_no_heritage = base is None && implements_names.length() == 0
   // Generate unique brand ID for private fields
   let brand_id = self.class_id
   self.class_id += 1
@@ -2509,6 +2535,7 @@ fn Parser::parse_class_decl_with_abstract(
     static_index_type_param_ref,
     index_naked_params,
   ) = self.parse_class_body(class_type_params)
+  self.class_decl_no_heritage = prev_no_heritage
   self.current_class_brand = prev_brand
   self.restore_local_type_param_bounds(class_type_param_bound_len)
   let runtime_decl = build_runtime_class_decl(

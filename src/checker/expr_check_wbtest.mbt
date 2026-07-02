@@ -11169,7 +11169,7 @@ test "expr_check: always-error grammar misuses (TS1127/TS1160/TS2480/TS1359/TS10
   // *name* `await` is legal (binds in the enclosing scope).
   assert_true(issues("async function foo(await): Promise<void> {}") > 0)
   @test.assert_eq(issues("async function await(): Promise<void> {}"), 0)
-  @test.assert_eq(issues("function g(await) {}"), 0)
+  @test.assert_eq(issues("function g(await: number) {}"), 0)
   // TS1160: unterminated template literal.
   assert_true(issues("var t = `abc") > 0)
   @test.assert_eq(issues("var t = `abc`;"), 0)
@@ -11292,4 +11292,69 @@ test "expr_check: exact spread arity (TS2554) and es6 yield function names (TS12
   assert_true(issues("// @target: es6\nfunction yield() {}") > 0)
   assert_true(issues("var v = function * yield() {};") > 0)
   @test.assert_eq(issues("function yield() {}"), 0)
+}
+
+///|
+test "expr_check: noImplicitAny family (TS7005/TS7006/TS7010/TS7019/TS7031)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("implicitly has an") {
+        n += 1
+      }
+    }
+    n
+  }
+  // Function-declaration parameters are never contextually typed.
+  assert_true(issues("function f(x) { return x; }") > 0)
+  assert_true(issues("function f(...rest) {}") > 0)
+  assert_true(issues("function f({ a, b }) {}") > 0)
+  // Annotated / defaulted / empty-pattern / `this` parameters stay silent.
+  @test.assert_eq(issues("function f(x: number, y = 1, ...r: string[]) {}"), 0)
+  @test.assert_eq(issues("function f([]) {}"), 0)
+  @test.assert_eq(issues("function f(this: unknown, x: number) {}"), 0)
+  // Contextual positions (arrows, function expressions, callbacks) abstain.
+  @test.assert_eq(
+    issues(
+      "declare function on(cb: (x: number) => void): void;\non((x) => {});",
+    ),
+    0,
+  )
+  @test.assert_eq(issues("var g = function (x) { return x; };"), 0)
+  // Heritage-free class-declaration methods are covered; heritage or class
+  // expressions abstain, and setter params infer from the paired getter.
+  assert_true(issues("class C { m(x) { return x; } }") > 0)
+  @test.assert_eq(
+    issues(
+      "interface I { m(x: number): void }\nclass C implements I { m(x) {} }",
+    ),
+    0,
+  )
+  @test.assert_eq(issues("var C = class { m(x) {} };"), 0)
+  @test.assert_eq(
+    issues(
+      "class C { get [Symbol.toPrimitive]() { return \"\"; } set [Symbol.toPrimitive](x) {} }",
+    ),
+    0,
+  )
+  // Bodiless / ambient signatures without a return annotation are TS7010;
+  // ambient `declare var` without annotation or initializer is TS7005.
+  assert_true(issues("declare function df(a);") > 0)
+  assert_true(issues("declare var dv;") > 0)
+  @test.assert_eq(
+    issues("declare var dv2: number;\ndeclare function df2(): void;"),
+    0,
+  )
+  // The whole family honours the directive opt-outs.
+  @test.assert_eq(issues("// @strict: false\nfunction f(x) { return x; }"), 0)
+  @test.assert_eq(
+    issues("// @noImplicitAny: false\nfunction f(x) { return x; }"),
+    0,
+  )
+  assert_true(
+    issues(
+      "// @strict: false\n// @noImplicitAny: true\nfunction f(x) { return x; }",
+    ) >
+    0,
+  )
 }

@@ -177,7 +177,8 @@ fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
   }
   let is_optional = self.match_(Question)
   // type ()
-  let base_type = if self.check(Colon) {
+  let had_annotation = self.check(Colon)
+  let base_type = if had_annotation {
     let _ = self.advance()
     self.parse_type()
   } else {
@@ -193,6 +194,45 @@ fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
     Some(self.parse_assignment())
   } else {
     None
+  }
+  // TS7006 / TS7019 / TS7031 (noImplicitAny): an unannotated,
+  // default-less parameter of a *function declaration* implicitly has an
+  // `any` type -- declarations are never contextually typed, so the verdict
+  // needs no inference. Arrows, function expressions, methods, and call
+  // signatures (where a contextual type may apply) never arm the flag.
+  // Recorded with the `<noimplicitany>` marker so emission stays
+  // permissive-mode-only (the conformance path).
+  if self.record_implicit_any_params &&
+    self.no_implicit_any &&
+    !had_annotation &&
+    default is None &&
+    name != "this" {
+    match binding {
+      // An *empty* pattern (`function f([]) {}` / `f({})`) binds no
+      // elements, so nothing is implicitly `any` -- tsc accepts it.
+      @ast.TsBinding::Object(ob) =>
+        if ob.props.length() > 0 || ob.rest is Some(_) {
+          self.grammar_misuses.push(
+            "<noimplicitany>binding element implicitly has an `any` type",
+          )
+        }
+      @ast.TsBinding::Array(ab) =>
+        if ab.items.length() > 0 || ab.rest is Some(_) {
+          self.grammar_misuses.push(
+            "<noimplicitany>binding element implicitly has an `any` type",
+          )
+        }
+      _ =>
+        if is_rest {
+          self.grammar_misuses.push(
+            "<noimplicitany>rest parameter `\{name}` implicitly has an `any[]` type",
+          )
+        } else {
+          self.grammar_misuses.push(
+            "<noimplicitany>parameter `\{name}` implicitly has an `any` type",
+          )
+        }
+    }
   }
   // TS1015: a parameter cannot be both optional (`x?`) and have an
   // initializer (`x = e`). The `?` is otherwise lost into the parameter
@@ -278,17 +318,33 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
     type_param_bounds,
   )
   let _ = self.expect(LParen)
+  let prev_record_nia = self.record_implicit_any_params
+  self.record_implicit_any_params = true
   let params = self.parse_params()
+  self.record_implicit_any_params = prev_record_nia
   let _ = self.expect(RParen)
   // return valuetype ()
-  let return_type = if self.check(Colon) {
+  let had_return_annotation = self.check(Colon)
+  let return_type = if had_return_annotation {
     let _ = self.advance()
     self.parse_type()
   } else {
     Any // type Any
   }
   self.restore_local_type_param_bounds(local_type_param_bound_len)
+  // TS7010 (noImplicitAny): a *bodiless* signature (overload / ambient)
+  // without a return-type annotation implicitly returns `any` -- there is
+  // no body to infer from. Implementations infer and stay silent.
+  fn record_implicit_any_return(p : Parser, fname : String) -> Unit {
+    if p.no_implicit_any && !had_return_annotation {
+      p.grammar_misuses.push(
+        "<noimplicitany>function `\{fname}` lacks a return-type annotation and implicitly has an `any` return type",
+      )
+    }
+  }
+
   if self.check(Semicolon) {
+    record_implicit_any_return(self, name)
     let _ = self.advance()
     return {
       name,
@@ -303,6 +359,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
     }
   }
   if !self.check(LBrace) {
+    record_implicit_any_return(self, name)
     return {
       name,
       type_params,
@@ -1878,7 +1935,8 @@ pub fn Parser::parse_declare_function(
     // Handle optional parameter: name?
     let is_optional = self.match_(Question)
     // Type annotation is optional
-    let computed_param_type = if self.check(Colon) {
+    let had_param_annotation = self.check(Colon)
+    let computed_param_type = if had_param_annotation {
       let _ = self.advance()
       let parsed = self.parse_type()
       if is_optional {
@@ -1890,6 +1948,19 @@ pub fn Parser::parse_declare_function(
       wrap_optional_ts_type(@ast.TsType::Any)
     } else {
       @ast.TsType::Any
+    }
+    // TS7006 / TS7019 (noImplicitAny): `declare function` parameters have no
+    // implementation or contextual source to infer from.
+    if self.no_implicit_any && !had_param_annotation && param_name != "this" {
+      if is_rest {
+        self.grammar_misuses.push(
+          "<noimplicitany>rest parameter `\{param_name}` implicitly has an `any[]` type",
+        )
+      } else {
+        self.grammar_misuses.push(
+          "<noimplicitany>parameter `\{param_name}` implicitly has an `any` type",
+        )
+      }
     }
     // TypeScript's `this` parameter at index 0 (`afterAll(this: unknown,
     // fn, timeout)`) types the receiver — there is no runtime arg for
@@ -1908,11 +1979,19 @@ pub fn Parser::parse_declare_function(
   // return valuetype — annotation is optional (TS treats a missing one as
   // `void` for `declare function`, but we use `Any` so the checker matches
   // the convention used elsewhere for un-annotated functions).
-  let return_type = if self.check(Colon) {
+  let had_return_annotation = self.check(Colon)
+  let return_type = if had_return_annotation {
     let _ = self.advance()
     self.parse_type()
   } else {
     @ast.TsType::Any
+  }
+  // TS7010 (noImplicitAny): an ambient function without a return-type
+  // annotation implicitly returns `any` -- no body exists to infer from.
+  if self.no_implicit_any && !had_return_annotation {
+    self.grammar_misuses.push(
+      "<noimplicitany>function `\{name}` lacks a return-type annotation and implicitly has an `any` return type",
+    )
   }
   self.restore_local_type_param_bounds(local_type_param_bound_len)
   self.consume_semicolon()
@@ -2001,18 +2080,42 @@ fn Parser::parse_declare_values(
   self : Parser,
 ) -> Array[@ast.TsValueDecl] raise ParseError {
   let values : Array[@ast.TsValueDecl] = []
+  // TS7005 (noImplicitAny): an ambient `declare var x;` with neither an
+  // annotation nor an initializer implicitly has an `any` type -- unlike a
+  // runtime `var x;`, no assignment can ever narrow it.
+  fn record_ambient_implicit_any(
+    p : Parser,
+    vname : String,
+    annotated : Bool,
+    initialised : Bool,
+  ) -> Unit {
+    if p.no_implicit_any && !annotated && !initialised {
+      p.grammar_misuses.push(
+        "<noimplicitany>variable `\{vname}` implicitly has an `any` type",
+      )
+    }
+  }
+
   let name = self.parse_binding_ident()
+  let annotated = self.check(Colon)
   let type_ = self.parse_var_decl_type()
-  if self.match_(Eq) {
+  let initialised = self.match_(Eq)
+  if initialised {
     let _ = self.parse_expr()
   }
+  record_ambient_implicit_any(self, name, annotated, initialised)
   values.push({ name, type_ })
   while self.match_(Comma) {
     let next_name = self.parse_binding_ident()
+    let next_annotated = self.check(Colon)
     let next_type = self.parse_var_decl_type()
-    if self.match_(Eq) {
+    let next_initialised = self.match_(Eq)
+    if next_initialised {
       let _ = self.parse_expr()
     }
+    record_ambient_implicit_any(
+      self, next_name, next_annotated, next_initialised,
+    )
     values.push({ name: next_name, type_: next_type })
   }
   self.consume_semicolon()

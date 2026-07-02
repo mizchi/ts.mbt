@@ -18690,7 +18690,20 @@ fn check_module_function_bodies_layered(
     // TS2480 `let` as a let/const binding name, TS1359 `await` bound in an
     // async context). Each entry is already a complete message.
     for gm in module_.grammar_misuses {
-      all.push({ path: "grammar", message: gm })
+      if gm.has_prefix("<noimplicitany>") {
+        // noImplicitAny diagnostics (TS7005/7006/7010/7019/7031) surface only
+        // on the permissive (conformance) path: strict unit-test snippets
+        // routinely leave parameters unannotated while testing something
+        // else, and bridge inputs never carry the conformance directives.
+        if permissive {
+          all.push({
+            path: "noImplicitAny",
+            message: gm["<noimplicitany>".length():].to_string(),
+          })
+        }
+      } else {
+        all.push({ path: "grammar", message: gm })
+      }
     }
     // TS1206 ("Decorators are not valid here"): a decorator group parsed
     // ahead of a declaration that cannot take one (enum / function /

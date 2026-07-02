@@ -2295,6 +2295,40 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-02 (T161)  713/815 (87 %)        414/414 ( 0 FP)   noImplicitAny family: TP 1914 -> 1926
+
+  T161 -- noImplicitAny (requested priority). The conformance baselines for
+    directive-less files include the implicit-any family, so the parser's
+    `no_implicit_any` flag defaults to true with `@strict: false` /
+    `@noImplicitAny: false` opt-outs (explicit `@noImplicitAny: true` wins
+    over `@strict: false`). All diagnostics are recorded at parse time with
+    a `<noimplicitany>` marker and emitted only on the permissive
+    (conformance) path -- strict unit-test snippets and bridge inputs never
+    see them. Covered, restricted to positions where no contextual typing
+    can apply:
+      - TS7006 / TS7019 / TS7031: unannotated, default-less parameters of
+        *function declarations* (`record_implicit_any_params`, armed only
+        around `parse_function`'s parameter list) -- plain, rest, and
+        non-empty binding-pattern params; `this` params and empty patterns
+        (`function f([]) {}`) exempt.
+      - The same for methods of *heritage-free class declarations*
+        (`class_decl_no_heritage`): no `extends` / `implements` means no
+        contextual source. Class expressions stay disarmed (assignment
+        targets can type their members) and accessors are exempt (a setter
+        parameter infers from the paired getter's return type).
+      - TS7010: bodiless *function* signatures (overloads, `declare
+        function`) without a return-type annotation. Method-level TS7010 is
+        deliberately not recorded: a bodiless method with no implementation
+        already reports TS2391, and tsc accepts an overload signature whose
+        implementation carries the annotation.
+      - TS7005: ambient `declare var x;` with neither annotation nor
+        initializer (a runtime `var x;` is an evolving any and legal).
+    Whole-corpus TP 1914 -> 1926 @ 0 FP (session total 1761 -> +165);
+    pinned recall steady at 713 (the pinned TS7006 misses are
+    contextual-typing *failures* -- comma-operator results, class-expression
+    methods against union call signatures -- which this conservative subset
+    deliberately does not judge). Whitebox-tested (2422 tests).
+
 2026-07-02 (T160)  713/815 (87 %)        414/414 ( 0 FP)   pinned + whole-corpus push: TP 1881 -> 1914
 
   T160 -- second session round, aimed at the pinned clusters T159 left.
