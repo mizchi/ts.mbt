@@ -18019,6 +18019,13 @@ fn check_module_function_bodies_layered(
         message: "invalid use of `\{sname}` in strict mode",
       })
     }
+    // Always-error grammar misuses recorded during lexing / parsing
+    // (TS1127 invalid characters, TS1160 unterminated template literals,
+    // TS2480 `let` as a let/const binding name, TS1359 `await` bound in an
+    // async context). Each entry is already a complete message.
+    for gm in module_.grammar_misuses {
+      all.push({ path: "grammar", message: gm })
+    }
     // TS1206 ("Decorators are not valid here"): a decorator group parsed
     // ahead of a declaration that cannot take one (enum / function /
     // interface / variable / import). The parser records one entry per

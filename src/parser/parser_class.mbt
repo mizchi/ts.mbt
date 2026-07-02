@@ -1236,15 +1236,17 @@ fn Parser::parse_class_body(
     // "public" can't be distinguished from an explicitly written one.
     let mut saw_visibility_modifier = false
     let mut is_abstract_member = false
+    let mut saw_override_modifier = false
     while has_modifier {
       has_modifier = false
       match self.peek().kind {
         Ident(n) if n == "static" =>
           if self.can_consume_class_modifier() {
             let _ = self.advance()
-            // TS1029: `static` must precede `async`. If `async` was already
-            // consumed for this member, the source order was `async static`.
-            if is_async_method {
+            // TS1029: `static` must precede `async` / `override` / `readonly`.
+            // If any of those was already consumed for this member, the
+            // source order was reversed.
+            if is_async_method || saw_override_modifier || is_readonly_field {
               modifier_order_misuse = true
             }
             is_static = true
@@ -1281,6 +1283,23 @@ fn Parser::parse_class_body(
             has_modifier = true
             if n == "public" || n == "private" || n == "protected" {
               saw_visibility_modifier = true
+              // TS1029 / TS1028: an accessibility modifier must precede
+              // `static` / `async` / `readonly` / `override` / `abstract`
+              // (`static public x` is reversed).
+              if is_static ||
+                is_async_method ||
+                is_readonly_field ||
+                is_abstract_member ||
+                saw_override_modifier {
+                modifier_order_misuse = true
+              }
+            }
+            if n == "override" {
+              saw_override_modifier = true
+              // TS1029: `override` must precede `readonly`.
+              if is_readonly_field {
+                modifier_order_misuse = true
+              }
             }
             if n == "private" || n == "protected" {
               visibility = n

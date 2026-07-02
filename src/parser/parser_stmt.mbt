@@ -274,6 +274,15 @@ fn Parser::parse_var_like(
   kw_pos : Int,
 ) -> @ast.TsStmt raise ParseError {
   let binding = self.parse_binding_pattern()
+  // TS2480: `let` is not allowed as a binding name in `let` / `const`
+  // declarations (`let let = 1`). Always an error regardless of mode.
+  match (kind, binding) {
+    (VarKind::Let | VarKind::Const, @ast.TsBinding::Ident("let")) =>
+      self.grammar_misuses.push(
+        "`let` is not allowed to be used as a name in `let` or `const` declarations",
+      )
+    _ => ()
+  }
   let type_ = self.parse_var_decl_type()
   let stmts = self.parse_var_decl_list_from(binding, type_, kind)
   self.consume_semicolon()
@@ -516,6 +525,18 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
       }
     }
     let binding = self.parse_binding_pattern()
+    // TS2480: `for (let let of ...)` / `for (const let in ...)`.
+    match (kind, binding) {
+      (
+        @ast.TsForOfKind::Let
+        | @ast.TsForOfKind::Const,
+        @ast.TsBinding::Ident("let"),
+      ) =>
+        self.grammar_misuses.push(
+          "`let` is not allowed to be used as a name in `let` or `const` declarations",
+        )
+      _ => ()
+    }
     let var_type = self.parse_var_decl_type()
     if self.check(Of) || self.check(In) {
       let is_in = self.check(In)

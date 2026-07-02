@@ -78,6 +78,8 @@ pub(all) enum JsdocTag {
 } derive(Eq, @debug.Debug)
 
 pub struct Lexer {
+  mut invalid_char_count : Int
+  mut unterminated_template : Bool
   src : String
   mut pos : Int
   mut allow_regex : Bool
@@ -126,6 +128,7 @@ pub struct Parser {
   param_property_misuses : Array[String]
   strict_mode_misuses : Array[String]
   invalid_decorator_uses : Array[String]
+  grammar_misuses : Array[String]
   directive_strict : Bool
   param_optional_initializer_misuses : Array[String]
   interface_member_modifier_misuses : Array[String]

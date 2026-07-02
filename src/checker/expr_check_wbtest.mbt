@@ -322,6 +322,7 @@ fn parse_module_or_empty(src : String) -> @ast.TsModule {
         parameter_property_misuses: [],
         strict_mode_misuses: [],
         invalid_decorator_uses: [],
+        grammar_misuses: [],
         param_optional_initializer_misuses: [],
         interface_member_modifier_misuses: [],
         class_dup_diagnostics: [],
@@ -11149,6 +11150,34 @@ test "expr_check: decorators are not valid here (TS1206)" {
   )
   @test.assert_eq(
     issues("declare function dec<T>(t: T): T;\n@dec\nexport class C {}"),
+    0,
+  )
+}
+
+///|
+test "expr_check: always-error grammar misuses (TS1127/TS1160/TS2480/TS1359/TS1029)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2480: `let` as a let/const binding name.
+  assert_true(issues("let let = 1;") > 0)
+  assert_true(issues("for (let let of []) {}") > 0)
+  @test.assert_eq(issues("var let = 1;"), 0)
+  // TS1359: `await` as a parameter of an async function; the function
+  // *name* `await` is legal (binds in the enclosing scope).
+  assert_true(issues("async function foo(await): Promise<void> {}") > 0)
+  @test.assert_eq(issues("async function await(): Promise<void> {}"), 0)
+  @test.assert_eq(issues("function g(await) {}"), 0)
+  // TS1160: unterminated template literal.
+  assert_true(issues("var t = `abc") > 0)
+  @test.assert_eq(issues("var t = `abc`;"), 0)
+  // TS1029: modifier order on class members.
+  assert_true(issues("class C { static public x: number; }") > 0)
+  assert_true(issues("class C { override static m() {} }") > 0)
+  @test.assert_eq(
+    issues(
+      "class D extends B { public static override m() {} }\nclass B { static m() {} }",
+    ),
     0,
   )
 }

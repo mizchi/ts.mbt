@@ -88,6 +88,8 @@ pub struct Parser {
   strict_mode_misuses : Array[String]
   // Decorator groups that preceded a non-class declaration (TS1206).
   invalid_decorator_uses : Array[String]
+  // Always-error grammar misuses (complete messages; see TsModule).
+  grammar_misuses : Array[String]
   // Conformance-header strict directive (`@alwaysStrict: true` / `@strict:
   // true`). Unlike `in_strict` it does NOT change parsing behaviour (octal
   // handling, statement restrictions, ...) -- it only arms the strict-misuse
@@ -196,6 +198,7 @@ pub fn Parser::new_with_strict_and_jsx(
     param_property_misuses: [],
     strict_mode_misuses: [],
     invalid_decorator_uses: [],
+    grammar_misuses: [],
     directive_strict: false,
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],
@@ -225,6 +228,13 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
   let lexer = Lexer::new(src)
   let tokens = lexer.tokenize()
   let in_strict = detect_use_strict_prologue(src)
+  let grammar_misuses : Array[String] = []
+  if lexer.invalid_char_count > 0 {
+    grammar_misuses.push("invalid character in source")
+  }
+  if lexer.unterminated_template {
+    grammar_misuses.push("unterminated template literal")
+  }
   {
     tokens,
     pos: 0,
@@ -255,6 +265,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     param_property_misuses: [],
     strict_mode_misuses: [],
     invalid_decorator_uses: [],
+    grammar_misuses,
     directive_strict: detect_directive_strict(src),
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],

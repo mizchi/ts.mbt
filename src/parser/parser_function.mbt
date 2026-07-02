@@ -139,6 +139,17 @@ fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
   let is_rest = self.match_ellipsis()
   let binding = self.parse_binding_pattern()
   let name = self.binding_first_name(binding)
+  // TS1359: a *parameter* named `await` inside an async function
+  // (`async function foo(await) {}`) -- the parameter binds in the async
+  // body scope where `await` is reserved. The function *name* is exempt
+  // (it binds in the enclosing, non-async scope: `async function await()`
+  // is legal), which is why this lives here and not in
+  // `parse_binding_ident`.
+  if name == "await" && self.in_async {
+    self.grammar_misuses.push(
+      "`await` cannot be used as a parameter name in an async context",
+    )
+  }
   // Record the name (with its `readonly`-ness and visibility) so the
   // surrounding constructor parser can synthesize `this.name = name`
   // field assigns and materialize the corresponding class field. Only

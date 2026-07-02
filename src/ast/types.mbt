@@ -874,6 +874,13 @@ pub(all) struct TsModule {
   // such position; the parser records one entry per orphaned decorator
   // group. Empty for well-formed input.
   invalid_decorator_uses : Array[String]
+  // Always-error grammar misuses recorded during lexing / parsing, each
+  // entry a complete human-readable message: invalid source characters
+  // (TS1127), unterminated template literals (TS1160), `let` as a
+  // `let` / `const` binding name (TS2480), and `await` used as a binding
+  // identifier inside an async context (TS1359). Empty for well-formed
+  // input.
+  grammar_misuses : Array[String]
   // Parameters declared with both an optional marker (`x?`) and an
   // initializer (`x = e`) -- always a TS1015 syntax error. The parser
   // records one parameter name per offending declaration; the checker
