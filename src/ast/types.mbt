@@ -868,6 +868,12 @@ pub(all) struct TsModule {
   // Always a TS1100-family grammar error in the strict variant, so each
   // recorded name is a real diagnostic. Empty for well-formed input.
   strict_mode_misuses : Array[String]
+  // Decorators (`@dec`) parsed ahead of a declaration that cannot take
+  // them (an enum, function, interface, variable statement, import, ...).
+  // TypeScript reports TS1206 ("Decorators are not valid here") for each
+  // such position; the parser records one entry per orphaned decorator
+  // group. Empty for well-formed input.
+  invalid_decorator_uses : Array[String]
   // Parameters declared with both an optional marker (`x?`) and an
   // initializer (`x = e`) -- always a TS1015 syntax error. The parser
   // records one parameter name per offending declaration; the checker

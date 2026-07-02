@@ -3322,6 +3322,43 @@ priv struct CheckCtx {
 /// access *outside* any class body (top-level code or a free function),
 /// where touching a private identifier is always illegal. That makes
 /// this a false-positive-free signal.
+///
+/// (The TS18013 check itself is `check_private_name_access` below.)
+
+///|
+/// TS2464: a computed property name must be of type `string`, `number`,
+/// `symbol`, or `any`. Flags only operand types that are *confidently*
+/// none of those -- boolean / void / nullish / object / array / tuple /
+/// function shapes. Unions, generics, unresolved names, enums, bigint,
+/// and anything `any`-ish abstain.
+fn check_computed_key_type(
+  env : ExprEnv,
+  key : @ast.TsExpr,
+  ctx : CheckCtx,
+) -> Unit {
+  let key_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, key))
+  // Nullish shapes are deliberately absent: a `null` initializer narrows an
+  // `any`-typed binding to `Null` in our flow model (`let a: any = null;
+  // ({ [a]: 1 })`), and non-strict tsc widens such literals to `any` -- so
+  // a nullish verdict here is not trustworthy.
+  let bad = match key_ty {
+    Boolean
+    | BooleanLiteral(_)
+    | Object(_)
+    | Struct(_, _)
+    | Array(_)
+    | Tuple(_)
+    | Func(_, _) => true
+    _ => false
+  }
+  if bad && is_checkable(key_ty) {
+    record_unfiltered(
+      ctx, "computed key", "a computed property name must be of type `string`, `number`, `symbol`, or `any`",
+    )
+  }
+}
+
+///|
 /// Extract the declared member name from a parser-mangled private name
 /// (`__private_brand__<N>__<name>` -> `name`). Returns `None` for
 /// non-branded names.
@@ -12908,6 +12945,37 @@ fn check_call_args_in_expr(
               }
             _ => ()
           }
+        // TS2356: the operand of `++` / `--` must be `any`, `number`,
+        // `bigint`, or an enum type. Same family as the unary `-` / `~`
+        // classification but *without* the nullish shapes -- a `null`
+        // initializer narrows an `any`-typed binding to `Null` in our flow
+        // model while non-strict tsc widens it to `any`, so nullish verdicts
+        // are not trustworthy here. Unions, generics, `any`, and unresolved
+        // names all abstain.
+        PreInc | PreDec | PostInc | PostDec => {
+          let inner_ty = ctx.resolver.unwrap(
+            infer_expr(env, ctx.resolver, inner),
+          )
+          let bad_incdec = match inner_ty {
+            String_
+            | Literal(_)
+            | Boolean
+            | BooleanLiteral(_)
+            | Symbol
+            | Object(_)
+            | Struct(_, _)
+            | Array(_)
+            | Tuple(_)
+            | TemplateLiteralType(_, _)
+            | Func(_, _) => true
+            _ => false
+          }
+          if is_checkable(inner_ty) && bad_incdec {
+            record(
+              ctx, "unary op", "an arithmetic operand must be of type `any`, `number`, `bigint` or an enum type",
+            )
+          }
+        }
         _ => ()
       }
     }
@@ -12948,6 +13016,7 @@ fn check_call_args_in_expr(
       ctx.in_computed_key = true
       check_call_args_in_expr(env, key, ctx)
       ctx.in_computed_key = saved
+      check_computed_key_type(env, key, ctx)
       check_call_args_in_expr(env, value, ctx)
     }
     PropAccess(recv, prop) => {
@@ -17745,12 +17814,16 @@ fn check_module_function_bodies_layered(
     }
     for meth in cls.methods {
       match meth.key_expr {
-        Some(key) => check_call_args_in_expr(env, key, key_ctx)
+        Some(key) => {
+          check_call_args_in_expr(env, key, key_ctx)
+          check_computed_key_type(env, key, key_ctx)
+        }
         None => ()
       }
     }
     for key in cls.computed_field_keys {
       check_call_args_in_expr(env, key, key_ctx)
+      check_computed_key_type(env, key, key_ctx)
     }
     for issue in key_ctx.issues {
       all.push(issue)
@@ -17944,6 +18017,17 @@ fn check_module_function_bodies_layered(
       all.push({
         path: "strict `\{sname}`",
         message: "invalid use of `\{sname}` in strict mode",
+      })
+    }
+    // TS1206 ("Decorators are not valid here"): a decorator group parsed
+    // ahead of a declaration that cannot take one (enum / function /
+    // interface / variable / import). The parser records one entry per
+    // orphaned group; the position is never valid TS, so it is
+    // false-positive-free.
+    for dpos in module_.invalid_decorator_uses {
+      all.push({
+        path: "decorator (\{dpos})",
+        message: "decorators are not valid here",
       })
     }
     // TS1015: a parameter cannot have both an optional marker (`x?`) and an

@@ -34,6 +34,20 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
   match tok.kind {
     At => {
       self.skip_decorator()
+      // TS1206: at statement level a decorator can only precede a class
+      // declaration (or further decorators / modifiers). Anything else
+      // orphans the pending group.
+      if self.pending_decorators.length() > 0 {
+        let can_take_decorators = match self.peek().kind {
+          Class | Export | At | Declare => true
+          Ident("abstract") => true
+          _ => false
+        }
+        if !can_take_decorators {
+          self.invalid_decorator_uses.push("statement")
+          self.pending_decorators.clear()
+        }
+      }
       self.parse_stmt()
     }
     Var => self.parse_var()

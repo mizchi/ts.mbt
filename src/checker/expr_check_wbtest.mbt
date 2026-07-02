@@ -321,6 +321,7 @@ fn parse_module_or_empty(src : String) -> @ast.TsModule {
         deprecated_compiler_options: [],
         parameter_property_misuses: [],
         strict_mode_misuses: [],
+        invalid_decorator_uses: [],
         param_optional_initializer_misuses: [],
         interface_member_modifier_misuses: [],
         class_dup_diagnostics: [],
@@ -10984,4 +10985,170 @@ test "expr_check: class extends a plain function (TS2507)" {
   )
   // Extending an unknown/library base is not flagged.
   @test.assert_eq(issues("class C extends SomeLibBase {}"), 0)
+}
+
+///|
+test "expr_check: function-valued expression bodies are walked" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Undefined names inside non-contextual callable bodies are flagged.
+  assert_true(issues("var v = function () { return missing1; };") > 0)
+  assert_true(issues("var a = () => { return missing2; };") > 0)
+  assert_true(issues("var r = (function () { return missing3; })();") > 0)
+  assert_true(issues("var o = { m: function () { return missing4; } };") > 0)
+  // Hoisted / forward-referenced locals stay silent.
+  @test.assert_eq(
+    issues("var v = function () { var r = later; var later = 1; return r; };"),
+    0,
+  )
+  // A named function expression can call itself.
+  @test.assert_eq(
+    issues(
+      "var f = function fact(n: number): number { return n <= 1 ? 1 : n * fact(n - 1); };",
+    ),
+    0,
+  )
+  // `this` inside a function expression is dynamically bound -> `any`.
+  @test.assert_eq(
+    issues("class C { m() { var g = function () { return this.anything; }; } }"),
+    0,
+  )
+  // A contextually-checked callback argument is not double-reported.
+  @test.assert_eq(
+    issues(
+      "function f(cb: (x: number) => void) { cb(1); }\nf(function (x) { return missing5; });",
+    ),
+    1,
+  )
+}
+
+///|
+test "expr_check: arguments outside any function (TS2304)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("cannot find name `arguments`") {
+        n += 1
+      }
+    }
+    n
+  }
+  // Top-level arrows never bind `arguments`.
+  assert_true(issues("var a = () => { var arg = arguments[0]; };") > 0)
+  assert_true(issues("foo(() => { var arg = arguments[0]; });") > 0)
+  // Inside a regular function (or a nested arrow within one) it is bound.
+  @test.assert_eq(
+    issues("function baz() { var f = () => { var arg = arguments[0]; }; }"),
+    0,
+  )
+  @test.assert_eq(
+    issues("var b = function () { var a = () => arguments; };"),
+    0,
+  )
+  // A declared `arguments` binding shadows the missing global.
+  @test.assert_eq(issues("var arguments;\nvar a = () => arguments;"), 0)
+}
+
+///|
+test "expr_check: strict-mode eval/arguments misuse (TS1100 family)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("in strict mode") {
+        n += 1
+      }
+    }
+    n
+  }
+  // Prologue-strict files flag assignment / binding / catch positions,
+  // including when header directive comments precede the prologue.
+  assert_true(issues("\"use strict\";\neval = 1;") > 0)
+  assert_true(issues("// @target: es2015\n\"use strict\";\narguments = 1;") > 0)
+  assert_true(issues("\"use strict\";\neval += 1;") > 0)
+  assert_true(issues("\"use strict\";\nfunction eval() {}") > 0)
+  assert_true(issues("\"use strict\";\nfunction f(eval) {}") > 0)
+  assert_true(issues("\"use strict\";\ntry {} catch (eval) {}") > 0)
+  // Conformance @alwaysStrict directives arm the recording too.
+  assert_true(issues("// @alwaysStrict: true\nvar arguments;") > 0)
+  assert_true(issues("// @strict: true\neval = 1;") > 0)
+  // Non-strict code accepts these names.
+  @test.assert_eq(issues("eval = 1;"), 0)
+  @test.assert_eq(issues("function f(eval) {}"), 0)
+  @test.assert_eq(issues("// @alwaysStrict: false\nfunction f(eval) {}"), 0)
+}
+
+///|
+test "expr_check: increment/decrement operand type (TS2356)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("arithmetic operand") {
+        n += 1
+      }
+    }
+    n
+  }
+  assert_true(issues("function f() { var s = \"x\"; s++; }") > 0)
+  assert_true(issues("declare var B: boolean;\nfunction f() { --B; }") > 0)
+  assert_true(issues("declare var A: string[];\nfunction f() { A++; }") > 0)
+  // Numbers, any, enums, unions, and generics abstain.
+  @test.assert_eq(issues("function f() { var n = 1; n++; }"), 0)
+  @test.assert_eq(issues("declare var a: any;\nfunction f() { a++; }"), 0)
+  @test.assert_eq(issues("enum E { A }\nfunction f(e: E) { e++; }"), 0)
+  @test.assert_eq(
+    issues("declare var u: number | string;\nfunction f() { u++; }"),
+    0,
+  )
+}
+
+///|
+test "expr_check: computed property name type (TS2464)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("computed property name") {
+        n += 1
+      }
+    }
+    n
+  }
+  // Boolean / object / array / nullish keys on class members are flagged.
+  assert_true(issues("declare var b: boolean;\nclass C { [b]() {} }") > 0)
+  assert_true(issues("class C { static [true]() {} }") > 0)
+  assert_true(issues("class C { [[]]() {} }") > 0)
+  assert_true(issues("class C { static [{}]() {} }") > 0)
+  // string / number / symbol / any keys stay silent.
+  @test.assert_eq(issues("declare var s: string;\nclass C { [s]() {} }"), 0)
+  @test.assert_eq(issues("declare var n: number;\nclass C { [n]() {} }"), 0)
+  @test.assert_eq(issues("declare var a: any;\nclass C { [a]() {} }"), 0)
+}
+
+///|
+test "expr_check: decorators are not valid here (TS1206)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("decorators are not valid here") {
+        n += 1
+      }
+    }
+    n
+  }
+  assert_true(issues("declare function dec<T>(t: T): T;\n@dec\nenum E {}") > 0)
+  assert_true(
+    issues("declare function dec<T>(t: T): T;\n@dec\nfunction f() {}") > 0,
+  )
+  assert_true(
+    issues("declare function dec<T>(t: T): T;\n@dec\ninterface I {}") > 0,
+  )
+  // Decorators on classes are fine.
+  @test.assert_eq(
+    issues("declare function dec<T>(t: T): T;\n@dec\nclass C {}"),
+    0,
+  )
+  @test.assert_eq(
+    issues("declare function dec<T>(t: T): T;\n@dec\nexport class C {}"),
+    0,
+  )
 }

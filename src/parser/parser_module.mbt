@@ -136,6 +136,7 @@ fn empty_ts_module() -> @ast.TsModule {
     deprecated_compiler_options: [],
     parameter_property_misuses: [],
     strict_mode_misuses: [],
+    invalid_decorator_uses: [],
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],
     class_dup_diagnostics: [],
@@ -3041,8 +3042,29 @@ fn Parser::parse_module_with_seeded_const_values_internal(
     // Consume any top-level decorators (`@foo`, `@foo()`). Decorators are
     // erased from the bridge AST; we just skip them and parse the declaration
     // that follows (`class`, `export class`, `async function`, etc.).
+    let mut saw_decorator_here = false
     while self.check(At) {
       self.skip_decorator()
+      saw_decorator_here = true
+    }
+    // TS1206: decorators only attach to class declarations. When the next
+    // token cannot begin one (`enum`, `function`, `interface`, `var`,
+    // `import`, ...), the pending decorators are orphaned -- record one
+    // diagnostic per group and drop them. `export ...` is left alone (the
+    // class may follow the modifier chain). Gated on decorators actually
+    // skipped in *this* iteration: some class-parse paths legitimately leave
+    // stale pending entries behind, and those must not re-trigger here.
+    if saw_decorator_here && self.pending_decorators.length() > 0 {
+      let can_take_decorators = match self.peek().kind {
+        Class | Export | At => true
+        Ident("abstract") => true
+        Declare => true
+        _ => false
+      }
+      if !can_take_decorators {
+        self.invalid_decorator_uses.push("top-level")
+        self.pending_decorators.clear()
+      }
     }
     if self.check(Function) {
       funcs.push(self.parse_function())
@@ -3285,6 +3307,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
     deprecated_compiler_options: detect_deprecated_compiler_options(self.src),
     parameter_property_misuses: self.param_property_misuses,
     strict_mode_misuses: self.strict_mode_misuses,
+    invalid_decorator_uses: self.invalid_decorator_uses,
     param_optional_initializer_misuses: self.param_optional_initializer_misuses,
     interface_member_modifier_misuses: self.interface_member_modifier_misuses,
     class_dup_diagnostics: self.collected_class_dups,

@@ -86,6 +86,8 @@ pub struct Parser {
   // `@strict: true` header) is active; `parse_module` hands the list to the
   // checker. Empty for well-formed input.
   strict_mode_misuses : Array[String]
+  // Decorator groups that preceded a non-class declaration (TS1206).
+  invalid_decorator_uses : Array[String]
   // Conformance-header strict directive (`@alwaysStrict: true` / `@strict:
   // true`). Unlike `in_strict` it does NOT change parsing behaviour (octal
   // handling, statement restrictions, ...) -- it only arms the strict-misuse
@@ -193,6 +195,7 @@ pub fn Parser::new_with_strict_and_jsx(
     param_property_scopes: [],
     param_property_misuses: [],
     strict_mode_misuses: [],
+    invalid_decorator_uses: [],
     directive_strict: false,
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],
@@ -251,6 +254,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     param_property_scopes: [],
     param_property_misuses: [],
     strict_mode_misuses: [],
+    invalid_decorator_uses: [],
     directive_strict: detect_directive_strict(src),
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],
