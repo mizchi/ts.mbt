@@ -2295,6 +2295,17 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-02 (T163)  713/815 (87 %)        414/414 ( 0 FP)   strict yield/let bindings + union computed keys: TP 1950 -> 1955
+
+  T163 -- two small clusters. `yield` / `let` as binding identifiers join
+    the `eval` / `arguments` strict-mode recording (TS1212 -- class bodies,
+    "use strict" prologues, @alwaysStrict directives). And a *union*
+    computed property key is TS2464 as soon as one member is a non-key
+    type (`number | number[]`, `string | boolean`) while a union of valid
+    key types stays silent; nullish members keep the widening abstention.
+    Whole-corpus TP 1950 -> 1955 @ 0 FP (session total 1761 -> +194);
+    pinned recall 713, precision 414/414. 2424 tests.
+
 2026-07-02 (T162)  713/815 (87 %)        414/414 ( 0 FP)   TS2307 / TS1042 / TS2703 / TS2430: TP 1926 -> 1950
 
   T162 -- four more clusters, all gated at 0 FP:

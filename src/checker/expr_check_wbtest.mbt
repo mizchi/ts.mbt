@@ -11405,3 +11405,26 @@ test "expr_check: batch L — TS2307 / TS1042 / TS2703 / TS2430" {
     0,
   )
 }
+
+///|
+test "expr_check: strict yield/let bindings (TS1212) and union computed keys (TS2464)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // `yield` / `let` as binding identifiers in strict contexts.
+  assert_true(issues("// @alwaysStrict: true\nfor (var let of []) {}") > 0)
+  assert_true(issues("\"use strict\";\nfunction f(yield: number) {}") > 0)
+  @test.assert_eq(issues("function f(yield: number) {}"), 0)
+  @test.assert_eq(issues("for (var x of []) {}"), 0)
+  // A union computed key with one non-key member.
+  assert_true(
+    issues("declare var p: number | number[];\nclass C { [p]() {} }") > 0,
+  )
+  assert_true(
+    issues("declare var p: string | boolean;\nclass C { [p]() {} }") > 0,
+  )
+  @test.assert_eq(
+    issues("declare var p: number | string;\nclass C { [p]() {} }"),
+    0,
+  )
+}

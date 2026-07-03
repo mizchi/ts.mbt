@@ -18,6 +18,11 @@ fn Parser::parse_binding_ident(self : Parser) -> String raise ParseError {
       }
     Yield => {
       let _ = self.advance()
+      // TS1212: `yield` cannot be used as a binding identifier in strict
+      // mode (class bodies, "use strict" prologues, @alwaysStrict runs).
+      if self.in_strict || self.directive_strict {
+        self.strict_mode_misuses.push("yield")
+      }
       "yield"
     }
     NumberType => {
@@ -62,6 +67,10 @@ fn Parser::parse_binding_ident(self : Parser) -> String raise ParseError {
     }
     Let => {
       let _ = self.advance()
+      // TS1212: same strict-mode reservation as `yield` above.
+      if self.in_strict || self.directive_strict {
+        self.strict_mode_misuses.push("let")
+      }
       "let"
     }
     Var => {

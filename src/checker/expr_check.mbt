@@ -3355,15 +3355,39 @@ fn check_computed_key_type(
   // `any`-typed binding to `Null` in our flow model (`let a: any = null;
   // ({ [a]: 1 })`), and non-strict tsc widens such literals to `any` -- so
   // a nullish verdict here is not trustworthy.
+  fn member_bad(t : @ast.TsType) -> Bool {
+    match t {
+      Boolean
+      | BooleanLiteral(_)
+      | Object(_)
+      | Struct(_, _)
+      | Array(_)
+      | Tuple(_)
+      | Func(_, _) => true
+      _ => false
+    }
+  }
+
+  // A union key is invalid as soon as *one* member is a non-key type
+  // (`number | number[]`, `string | boolean`); a union of valid key types
+  // (`number | string`) stays silent. Nullish members keep the abstention
+  // documented above.
   let bad = match key_ty {
-    Boolean
-    | BooleanLiteral(_)
-    | Object(_)
-    | Struct(_, _)
-    | Array(_)
-    | Tuple(_)
-    | Func(_, _) => true
-    _ => false
+    Union(members) => {
+      let mut any_bad = false
+      let mut any_nullish = false
+      for m in members {
+        if member_bad(m) {
+          any_bad = true
+        }
+        match m {
+          Null | Undefined | Void => any_nullish = true
+          _ => ()
+        }
+      }
+      any_bad && !any_nullish
+    }
+    other => member_bad(other)
   }
   if bad && is_checkable(key_ty) {
     record_unfiltered(
