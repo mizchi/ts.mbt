@@ -11428,3 +11428,53 @@ test "expr_check: strict yield/let bindings (TS1212) and union computed keys (TS
     0,
   )
 }
+
+///|
+test "expr_check: symbol keys, template-literal values, accessor pairs (batch N)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2464: `Symbol.*` statics that are not well-known symbols.
+  assert_true(issues("var obj = { [Symbol.for]: 0 };") > 0)
+  assert_true(issues("var obj = { [Symbol.prototype]: 0 };") > 0)
+  @test.assert_eq(issues("var ok = { [Symbol.iterator]: 0 };"), 0)
+  @test.assert_eq(
+    issues(
+      "interface SymbolConstructor { foo: string }\nvar o = { [Symbol.foo]: 0 };",
+    ),
+    0,
+  )
+  // TS2411: a well-known-symbol member against a `symbol` index signature.
+  assert_true(
+    issues(
+      "class C1 { [Symbol.toStringTag]() { return { x: \"\" }; }\n  [s: symbol]: () => { x: number }; }",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "class C1 { [Symbol.toStringTag]() { return { x: 1 }; }\n  [s: symbol]: () => { x: number }; }",
+    ),
+    0,
+  )
+  // TS2322: a fully-literal template against a string-literal target.
+  assert_true(issues("let x1: \"ab\" = `cd`;") > 0)
+  @test.assert_eq(issues("let x2: \"ab\" = `ab`;"), 0)
+  // TS2322 between a type parameter and its template-literal form.
+  assert_true(
+    issues(
+      "function f3<T3 extends \"a\" | \"b\">(x: T3) { const t2: T3 = \"\" as `${T3}`; }",
+    ) >
+    0,
+  )
+  // Getter / setter type agreement.
+  assert_true(
+    issues("class C { get x() { return true; } set x(v: number) {} }") > 0,
+  )
+  @test.assert_eq(
+    issues(
+      "class C { get x(): number { return 1; } set x(v: number | string) {} }",
+    ),
+    0,
+  )
+}

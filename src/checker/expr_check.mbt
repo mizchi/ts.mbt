@@ -3345,11 +3345,57 @@ priv struct CheckCtx {
 /// none of those -- boolean / void / nullish / object / array / tuple /
 /// function shapes. Unions, generics, unresolved names, enums, bigint,
 /// and anything `any`-ish abstain.
+/// The well-known symbols of `SymbolConstructor` -- the only `Symbol.*`
+/// members whose type is a (unique) symbol and therefore a valid computed
+/// property key.
+fn is_well_known_symbol_name(name : String) -> Bool {
+  match name {
+    "iterator"
+    | "asyncIterator"
+    | "hasInstance"
+    | "isConcatSpreadable"
+    | "match"
+    | "matchAll"
+    | "replace"
+    | "search"
+    | "species"
+    | "split"
+    | "toPrimitive"
+    | "toStringTag"
+    | "unscopables"
+    | "dispose"
+    | "asyncDispose"
+    | "metadata" => true
+    _ => false
+  }
+}
+
+///|
 fn check_computed_key_type(
   env : ExprEnv,
   key : @ast.TsExpr,
   ctx : CheckCtx,
 ) -> Unit {
+  // TS2464 for `Symbol.*` statics that are *not* well-known symbols
+  // (`[Symbol.for]`, `[Symbol.prototype]`, `[Symbol.keyFor]`): their types
+  // are functions / objects, never `symbol`. Only fires against the global
+  // `Symbol` -- a user declaration of that name disables the shortcut.
+  match key {
+    PropAccess(Var("Symbol"), sprop) =>
+      // A user augmentation of `SymbolConstructor` can add members of any
+      // (possibly key-valid) type -- the shortcut only trusts the stock lib
+      // surface.
+      if !is_well_known_symbol_name(sprop) &&
+        ctx.resolver.declared_value_names.get("Symbol") is None &&
+        ctx.resolver.classes.get("Symbol") is None &&
+        ctx.resolver.interfaces.get("SymbolConstructor") is None {
+        record_unfiltered(
+          ctx, "computed key", "a computed property name must be of type `string`, `number`, `symbol`, or `any`",
+        )
+        return
+      }
+    _ => ()
+  }
   let key_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, key))
   // Nullish shapes are deliberately absent: a `null` initializer narrows an
   // `any`-typed binding to `Null` in our flow model (`let a: any = null;
@@ -6993,6 +7039,113 @@ fn check_expr_against(
   // Emitted unfiltered: the permissive suppression filter only whitelists
   // primitive/simple-shape pairs, and a template-literal target isn't one, so
   // it would otherwise be dropped in the recall path.
+  // A template literal *expression* whose placeholders are all string
+  // literals has a statically known cooked value; against a string-literal
+  // target (or an all-literal union) a differing value is a definite
+  // TS2322 (`let abc: "AB\r\nC" = \`AB\nC\``).
+  match expr {
+    TemplateLiteral(parts, tpl_exprs) => {
+      let mut cooked : String? = None
+      let mut all_lit = true
+      for e in tpl_exprs {
+        if !(e is StringLit(_)) {
+          all_lit = false
+        }
+      }
+      if all_lit && parts.length() == tpl_exprs.length() + 1 {
+        let buf = StringBuilder::new()
+        for i, part in parts {
+          buf.write_string(part)
+          if i < tpl_exprs.length() {
+            match tpl_exprs[i] {
+              StringLit(v) => buf.write_string(v)
+              _ => ()
+            }
+          }
+        }
+        cooked = Some(buf.to_string())
+      }
+      // Escape-sequence decoding differs between the type-literal parser and
+      // the template scanner (`"DE\nF"` vs a template with a real newline),
+      // so any value or target containing backslashes / line breaks abstains.
+      let clean = fn(v : String) -> Bool {
+        !v.contains("\\") && !v.contains("\n") && !v.contains("\r")
+      }
+      match (cooked, literal_union_members(expected_u)) {
+        (Some(value), Some(lits)) if clean(value) => {
+          let mut matched = false
+          let mut comparable = true
+          for lit in lits {
+            match lit {
+              Literal(lv) => {
+                if !clean(lv) {
+                  comparable = false
+                }
+                if lv == value {
+                  matched = true
+                }
+              }
+              _ => comparable = false
+            }
+          }
+          if !comparable {
+            matched = true
+          }
+          if !matched {
+            record_unfiltered(
+              ctx,
+              sub_path,
+              "expected `\{type_display(expected_u)}` but the template literal evaluates to `\"\{value}\"`",
+            )
+            return
+          }
+        }
+        _ => ()
+      }
+    }
+    _ => ()
+  }
+  // TS2322 both ways between a bare in-scope type parameter `T` and the
+  // template type `\`${T}\`` -- tsc never equates them even though the
+  // template merely stringifies `T` (microsoft/TypeScript#55364).
+  fn is_bare_template_of(t : @ast.TsType, pname : String) -> Bool {
+    match t {
+      TemplateLiteralType(tparts, [Named(inner)]) => {
+        if inner != pname {
+          return false
+        }
+        for tp in tparts {
+          if tp != "" {
+            return false
+          }
+        }
+        true
+      }
+      _ => false
+    }
+  }
+
+  match (inferred_u, expected_u) {
+    (Named(pn), other) =>
+      if ctx.in_scope_type_params.contains(pn) && is_bare_template_of(other, pn) {
+        record_unfiltered(
+          ctx,
+          sub_path,
+          "type `\{pn}` is not assignable to its template-literal form `${\{pn}}`",
+        )
+        return
+      }
+    (other, Named(pn)) =>
+      if ctx.in_scope_type_params.contains(pn) && is_bare_template_of(other, pn) {
+        record_unfiltered(
+          ctx,
+          sub_path,
+          "the template-literal form `${\{pn}}` is not assignable to type `\{pn}`",
+        )
+        return
+      }
+    _ => ()
+  }
   match (inferred_u, expected_u) {
     (Literal(_), TemplateLiteralType(_, _)) =>
       if !is_assignable_to(inferred_u, expected_u) {
@@ -7029,6 +7182,21 @@ fn check_expr_against(
     // filter's over-widening guard — so the binding-init path flags this but the
     // call-argument path silently missed it. Scoped to all-string-literal unions
     // (numeric / boolean unions already emit through the normal path).
+    // Same rule for a direct *numeric* literal against an all-numeric
+    // literal union (`f(2)` where the parameter is `0 | 1`): `inferred_u` is
+    // only a `NumberLiteral` when the source expression itself was a literal
+    // (`precise_literal_type`), so const-widened variables never reach here.
+    (NumberLiteral(_), Union(members)) =>
+      if members.iter().all(fn(m) { m is NumberLiteral(_) }) &&
+        members.length() > 0 &&
+        !is_assignable_to(inferred_u, expected_u) {
+        record_unfiltered(
+          ctx,
+          sub_path,
+          "expected `\{type_display(expected_u)}` but got `\{type_display(inferred_u)}`",
+        )
+        return
+      }
     (Literal(_), Union(members)) =>
       if members.iter().all(fn(m) { m is Literal(_) }) &&
         !is_assignable_to(inferred_u, expected_u) {
@@ -16817,6 +16985,162 @@ fn func_type_mentions_type_param_names(
 }
 
 ///|
+/// TS2411 for symbol-keyed members against a `[s: symbol]: T` index
+/// signature (own or inherited): `class C { [Symbol.toStringTag]() {…} ;
+/// [s: symbol]: () => { x: number } }` requires the method's type to be
+/// assignable to the index value type. Only well-known-symbol keys with
+/// concrete, fully-resolved types are judged.
+fn check_symbol_index_members(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  fn symbol_index_value(start : String) -> @ast.TsType? {
+    let mut current = start
+    let mut depth = 0
+    while depth < 16 {
+      match resolver.classes.get(current) {
+        Some(cls) => {
+          for sig in cls.index_signatures {
+            if sig.0 is Symbol {
+              return Some(sig.1)
+            }
+          }
+          // A generic base would need substitution; abstain.
+          if cls.base_names.length() != 1 || cls.type_params.length() > 0 {
+            return None
+          }
+          current = cls.base_names[0]
+        }
+        None => return None
+      }
+      depth += 1
+    }
+    None
+  }
+
+  let env = ExprEnv::new()
+  for v in module_.values {
+    env.bind(v.name, v.type_)
+  }
+  for cls in module_.classes {
+    if cls.is_declare || cls.type_params.length() > 0 {
+      continue
+    }
+    guard symbol_index_value(cls.name) is Some(idx_value) else { continue }
+    for meth in cls.methods {
+      guard meth.key_expr is Some(PropAccess(Var("Symbol"), wk)) else {
+        continue
+      }
+      if !is_well_known_symbol_name(wk) {
+        continue
+      }
+      // Accessors contribute their return / param type directly; ordinary
+      // methods contribute their function type. Unannotated returns infer
+      // from the body's return statements.
+      let ret = if is_checkable(meth.return_type) {
+        meth.return_type
+      } else {
+        match meth.body {
+          Some(b) => infer_block_return(env, resolver, b)
+          None => continue
+        }
+      }
+      let member_ty : @ast.TsType = if meth.accessor == "get" {
+        ret
+      } else if meth.accessor == "set" {
+        continue
+      } else {
+        let ptypes : Array[@ast.TsType] = []
+        for pp in meth.params {
+          ptypes.push(pp.1)
+        }
+        Func(ptypes, ret)
+      }
+      if is_checkable(member_ty) &&
+        is_checkable(idx_value) &&
+        !type_contains_unresolved_named(member_ty, resolver) &&
+        !type_contains_unresolved_named(idx_value, resolver) &&
+        !type_deeply_contains_unmodeled(member_ty, resolver) &&
+        !type_deeply_contains_unmodeled(idx_value, resolver) &&
+        !is_assignable_to_bivariant(member_ty, idx_value) &&
+        !is_structurally_assignable_named(member_ty, idx_value, resolver) {
+        issues.push({
+          path: "class \{cls.name}",
+          message: "property `[Symbol.\{wk}]` is not assignable to the `symbol` index signature type",
+        })
+      }
+    }
+  }
+  issues
+}
+
+///|
+/// Getter / setter type agreement on the same class member key: the
+/// getter's (declared or body-inferred) return type must be assignable to
+/// the setter's declared parameter type (`get [G.B]() { return true }` /
+/// `set [G.B](x: number)` is a TS2322). Keys pair by name, or by the
+/// rendered key expression for computed members.
+fn check_accessor_pair_types(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  let env = ExprEnv::new()
+  for v in module_.values {
+    env.bind(v.name, v.type_)
+  }
+  for cls in module_.classes {
+    if cls.is_declare || cls.type_params.length() > 0 {
+      continue
+    }
+    // key -> (getter type?, setter param type?)
+    let getters : Map[String, @ast.TsType] = {}
+    let setters : Map[String, @ast.TsType] = {}
+    for meth in cls.methods {
+      let key = match meth.key_expr {
+        Some(ke) => "\{ke}" + (if meth.is_static { "|s" } else { "|i" })
+        None => meth.name + (if meth.is_static { "|s" } else { "|i" })
+      }
+      if meth.accessor == "get" {
+        let ret = if is_checkable(meth.return_type) {
+          meth.return_type
+        } else {
+          match meth.body {
+            Some(b) => infer_block_return(env, resolver, b)
+            None => continue
+          }
+        }
+        getters[key] = ret
+      } else if meth.accessor == "set" {
+        if meth.params.length() == 1 {
+          setters[key] = meth.params[0].1
+        }
+      }
+    }
+    for key, get_ty in getters {
+      guard setters.get(key) is Some(set_ty) else { continue }
+      if is_checkable(get_ty) &&
+        is_checkable(set_ty) &&
+        !type_contains_unresolved_named(get_ty, resolver) &&
+        !type_contains_unresolved_named(set_ty, resolver) &&
+        !type_deeply_contains_unmodeled(get_ty, resolver) &&
+        !type_deeply_contains_unmodeled(set_ty, resolver) &&
+        !type_has_call_signature(get_ty, resolver) &&
+        !type_has_call_signature(set_ty, resolver) &&
+        !is_assignable_to(resolver.unwrap(get_ty), resolver.unwrap(set_ty)) &&
+        !is_structurally_assignable_named(get_ty, set_ty, resolver) {
+        issues.push({
+          path: "class \{cls.name}",
+          message: "the getter type is not assignable to its setter parameter type",
+        })
+      }
+    }
+  }
+  issues
+}
+
+///|
 /// TS2430 ("Interface 'D' incorrectly extends interface 'B'."): a derived
 /// interface re-declares a base member with a type that is not assignable
 /// to the base's. Only decidable pairs are judged: both sides concrete,
@@ -18683,6 +19007,12 @@ fn check_module_function_bodies_layered(
     all.push(issue)
   }
   for issue in check_interface_extends_member_compat(module_, resolver) {
+    all.push(issue)
+  }
+  for issue in check_symbol_index_members(module_, resolver) {
+    all.push(issue)
+  }
+  for issue in check_accessor_pair_types(module_, resolver) {
     all.push(issue)
   }
   // Heritage type-argument / naked-param recordings live on the module that

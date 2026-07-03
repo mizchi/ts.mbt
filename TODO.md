@@ -2295,6 +2295,36 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-02 (T164)  714/815 (88 %)        414/414 ( 0 FP)   symbol keys / template-literal values / accessor pairs: TP 1955 -> 1963
+
+  T164 -- requested clusters (symbol index, enum, template literal):
+    - TS2464: `Symbol.*` statics that are not well-known symbols
+      (`[Symbol.for]`, `[Symbol.prototype]`, `[Symbol.keyFor]`) are never
+      `symbol`-typed keys. Trusts only the stock lib surface: a user
+      `Symbol` declaration or a `SymbolConstructor` augmentation disables
+      the shortcut.
+    - TS2411: a well-known-symbol member (`[Symbol.toStringTag]() {…}`)
+      must be assignable to a `[s: symbol]` index signature, own or
+      inherited (non-generic chains); unannotated returns infer from the
+      body.
+    - TS2322: a template-literal *expression* whose placeholders are all
+      string literals has a known cooked value -- compared against
+      string-literal targets when both sides are escape-free (the
+      type-literal parser and the template scanner decode escapes
+      differently, so backslashes / line breaks abstain).
+    - TS2322 between a bare in-scope type parameter `T` and its
+      template-literal form `${T}` (never assignable either way,
+      microsoft/TypeScript#55364).
+    - TS2345: a direct *numeric* literal against an all-numeric literal
+      union joins the unfiltered literal-union rule (`f(2)` where the
+      parameter is `0 | 1`); const-widened variables never reach it.
+    - Getter / setter agreement (the enum cluster's actual failure --
+      `get [G.B]() { return true }` with `set [G.B](x: number)`): the
+      getter's declared-or-inferred type must be assignable to the setter
+      parameter's, keyed by name or rendered computed-key expression.
+    Whole-corpus TP 1955 -> 1963 @ 0 FP (session total 1761 -> +202);
+    pinned recall 713 -> 714, precision 414/414. 2425 tests.
+
 2026-07-02 (T163)  713/815 (87 %)        414/414 ( 0 FP)   strict yield/let bindings + union computed keys: TP 1950 -> 1955
 
   T163 -- two small clusters. `yield` / `let` as binding identifiers join
