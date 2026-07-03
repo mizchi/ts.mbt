@@ -19,6 +19,7 @@ fn empty_module() -> @ast.TsModule {
     invalid_decorator_uses: [],
     grammar_misuses: [],
     imported_binding_names: [],
+    import_module_specs: [],
     class_base_type_args: [],
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],

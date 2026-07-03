@@ -2295,6 +2295,33 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-02 (T162)  713/815 (87 %)        414/414 ( 0 FP)   TS2307 / TS1042 / TS2703 / TS2430: TP 1926 -> 1950
+
+  T162 -- four more clusters, all gated at 0 FP:
+    - TS2307 ("Cannot find module"): the parser records ES-import module
+      specifiers (`import_module_specs`, incl. `import x = require(...)`),
+      and the permissive path flags any specifier no in-file ambient
+      `declare module "X"` provides. `tslib` is exempt (importHelpers runs
+      ship it), and sources embedding `@filename:` directives (multi-file
+      tests concatenated into one parse) disable the recording -- the pinned
+      accuracy gate feeds those in whole, unlike the oracle, and cross-file
+      resolution is out of scope.
+    - TS1042: `async` on a class / enum / interface / namespace declaration
+      or on a class accessor (`async get foo()`). The modifier is dropped
+      and the declaration parses on.
+    - TS2703: `delete` over a syntactic non-reference (literals, calls,
+      awaits, templates, operators). Bare identifiers stay silent
+      (sloppy-mode `delete x` is legal JS).
+    - TS2430: a derived interface re-declaring a base member (generic bases
+      instantiated from `extends_args`) with a concretely non-assignable
+      type. Callable members abstain -- interface methods compare
+      bivariantly and the existing signature check already covers them.
+    Also fixed a latent bug the new tests exposed: the class-method body
+    synthesis dropped `is_async` / `is_generator`, so
+    `async m(): Promise<void> { return; }` demanded a return value.
+    Whole-corpus TP 1926 -> 1950 @ 0 FP (session total 1761 -> +189);
+    pinned recall steady at 713, precision 414/414. 2423 tests.
+
 2026-07-02 (T161)  713/815 (87 %)        414/414 ( 0 FP)   noImplicitAny family: TP 1914 -> 1926
 
   T161 -- noImplicitAny (requested priority). The conformance baselines for

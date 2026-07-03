@@ -95,6 +95,14 @@ pub struct Parser {
   // themselves are consumed and discarded, but the *names* must stay
   // visible so unresolved-reference checks treat them as declared.
   imported_binding_names : Array[String]
+  // Module specifiers of ES `import` statements (`import ... from "spec"`,
+  // `import x = require("spec")`). Consulted by the module-not-found check
+  // (TS2307) against in-file ambient module declarations.
+  import_module_specs : Array[String]
+  // The source carries `@filename:` conformance directives -- a multi-file
+  // test concatenated into one parse. Cross-file resolution is out of scope
+  // there, so the TS2307 recording is disabled.
+  multi_file_source : Bool
   // `(class, base, args)` for every `class C extends B<...>` heritage clause
   // whose type arguments parse cleanly. Lets the checker instantiate the
   // base's generic surface (e.g. index-signature value types) without a
@@ -236,6 +244,8 @@ pub fn Parser::new_with_strict_and_jsx(
     invalid_decorator_uses: [],
     grammar_misuses: [],
     imported_binding_names: [],
+    import_module_specs: [],
+    multi_file_source: false,
     class_base_type_args: [],
     no_bound_inline: false,
     target_es6_plus: false,
@@ -310,6 +320,8 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     invalid_decorator_uses: [],
     grammar_misuses,
     imported_binding_names: [],
+    import_module_specs: [],
+    multi_file_source: detect_filename_directives(src),
     class_base_type_args: [],
     no_bound_inline: false,
     target_es6_plus: detect_target_es6_plus(src),
@@ -669,4 +681,11 @@ fn detect_no_implicit_any(src : String) -> Bool {
     return false
   }
   true
+}
+
+///|
+/// True when the source embeds `@filename:` conformance directives (any
+/// case variant) -- i.e. a multi-file test concatenated into one parse.
+fn detect_filename_directives(src : String) -> Bool {
+  src.to_lower().contains("@filename:")
 }

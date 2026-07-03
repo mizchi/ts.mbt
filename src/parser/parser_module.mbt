@@ -142,6 +142,7 @@ fn empty_ts_module() -> @ast.TsModule {
     invalid_decorator_uses: [],
     grammar_misuses: [],
     imported_binding_names: [],
+    import_module_specs: [],
     class_base_type_args: [],
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],
@@ -715,6 +716,9 @@ fn Parser::parse_import_equals_decl(
     let _ = self.expect(LParen)
     let spec = self.expect_str_literal()
     let _ = self.expect(RParen)
+    if !self.multi_file_source {
+      self.import_module_specs.push(spec)
+    }
     spec
   } else {
     self.skip_until_semicolon()
@@ -2599,8 +2603,11 @@ fn Parser::parse_import_stmt(self : Parser) -> Unit raise ParseError {
     // import type ...
   }
   match self.peek().kind {
-    Str(_) => {
+    Str(side_effect_spec) => {
       let _ = self.advance()
+      if !self.multi_file_source {
+        self.import_module_specs.push(side_effect_spec)
+      }
       self.skip_import_attributes()
       self.consume_semicolon()
       return
@@ -2623,7 +2630,10 @@ fn Parser::parse_import_stmt(self : Parser) -> Unit raise ParseError {
         // continue to namespace/named
       } else {
         self.expect_from()
-        let _ = self.expect_str_literal()
+        let default_spec = self.expect_str_literal()
+        if !self.multi_file_source {
+          self.import_module_specs.push(default_spec)
+        }
         self.skip_import_attributes()
         self.consume_semicolon()
         return
@@ -2642,7 +2652,10 @@ fn Parser::parse_import_stmt(self : Parser) -> Unit raise ParseError {
     let _ = self.expect(RBrace)
   }
   self.expect_from()
-  let _ = self.expect_str_literal()
+  let tail_spec = self.expect_str_literal()
+  if !self.multi_file_source {
+    self.import_module_specs.push(tail_spec)
+  }
   self.skip_import_attributes()
   self.consume_semicolon()
 }
@@ -3077,7 +3090,19 @@ fn Parser::parse_module_with_seeded_const_values_internal(
     if self.check(Function) {
       funcs.push(self.parse_function())
     } else if (match self.peek().kind {
-        Ident("async") => self.peek_at(1).kind == Function
+        Ident("async") =>
+          match self.peek_at(1).kind {
+            // TS1042: `async` is only valid on functions / methods. An
+            // `async class` / `async enum` / `async interface` /
+            // `async namespace` records the misuse and drops the modifier so
+            // the declaration itself still parses.
+            Class | Interface | Ident("namespace") | Ident("enum") => {
+              self.grammar_misuses.push("`async` modifier cannot be used here")
+              let _ = self.advance()
+              false
+            }
+            _ => self.peek_at(1).kind == Function
+          }
         _ => false
       }) {
       // Top-level `async function f() { ... }` declaration.
@@ -3318,6 +3343,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
     invalid_decorator_uses: self.invalid_decorator_uses,
     grammar_misuses: self.grammar_misuses,
     imported_binding_names: self.imported_binding_names,
+    import_module_specs: self.import_module_specs,
     class_base_type_args: self.class_base_type_args,
     param_optional_initializer_misuses: self.param_optional_initializer_misuses,
     interface_member_modifier_misuses: self.interface_member_modifier_misuses,

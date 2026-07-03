@@ -301,6 +301,7 @@ pub(all) struct TsModule {
   invalid_decorator_uses : Array[String]
   grammar_misuses : Array[String]
   imported_binding_names : Array[String]
+  import_module_specs : Array[String]
   class_base_type_args : Array[(String, String, Array[TsType])]
   param_optional_initializer_misuses : Array[String]
   interface_member_modifier_misuses : Array[String]

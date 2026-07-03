@@ -324,6 +324,7 @@ fn parse_module_or_empty(src : String) -> @ast.TsModule {
         invalid_decorator_uses: [],
         grammar_misuses: [],
         imported_binding_names: [],
+        import_module_specs: [],
         class_base_type_args: [],
         param_optional_initializer_misuses: [],
         interface_member_modifier_misuses: [],
@@ -11355,6 +11356,52 @@ test "expr_check: noImplicitAny family (TS7005/TS7006/TS7010/TS7019/TS7031)" {
     issues(
       "// @strict: false\n// @noImplicitAny: true\nfunction f(x) { return x; }",
     ) >
+    0,
+  )
+}
+
+///|
+test "expr_check: batch L — TS2307 / TS1042 / TS2703 / TS2430" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2307: an import specifier no in-file ambient module provides.
+  assert_true(issues("import {} from 'module-not-existed';") > 0)
+  assert_true(issues("import x = require('nope');") > 0)
+  @test.assert_eq(
+    issues(
+      "declare module \"m\" { export var x: number; }\nimport { x } from \"m\";",
+    ),
+    0,
+  )
+  // TS1042: `async` on non-function declarations and accessors.
+  assert_true(issues("async class C {}") > 0)
+  assert_true(issues("async enum E { A }") > 0)
+  assert_true(issues("async namespace M {}") > 0)
+  assert_true(issues("class C { async get foo() { return 1; } }") > 0)
+  @test.assert_eq(issues("async function ok(): Promise<void> {}"), 0)
+  @test.assert_eq(issues("class C { async m(): Promise<void> { return; } }"), 0)
+  // TS2703: `delete` on a syntactic non-reference.
+  assert_true(issues("async function f() { delete await 42; }") > 0)
+  assert_true(issues("delete `abc`;") > 0)
+  @test.assert_eq(
+    issues("var o = { a: undefined as number | undefined };\ndelete o.a;"),
+    0,
+  )
+  // TS2430: derived interface member incompatible with the base's.
+  assert_true(
+    issues("interface B { x: number }\ninterface D extends B { x: string }") > 0,
+  )
+  assert_true(
+    issues(
+      "interface B<T> { x: T }\ninterface D extends B<number> { x: string }",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "interface B { x: number | string }\ninterface D extends B { x: number }",
+    ),
     0,
   )
 }

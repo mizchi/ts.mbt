@@ -13074,7 +13074,42 @@ fn check_call_args_in_expr(
         // `delete obj.prop` where `prop` resolves to a required field (its type
         // carries no `undefined` member) is an error, as is deleting a private
         // name (`delete this.#x`).
-        Delete =>
+        Delete => {
+          // TS2703: the operand of `delete` must be a property reference.
+          // Syntactic non-reference operands (literals, calls, awaits,
+          // templates, operators) are definite errors; bare identifiers are
+          // left alone (sloppy-mode `delete x` is legal JS and reports a
+          // different, strict-only code).
+          let non_reference = match inner {
+            NumberLit(_)
+            | IntLit(_)
+            | BigIntLit(_)
+            | BoolLit(_)
+            | StringLit(_)
+            | NullLit
+            | ArrayLit(_)
+            | ObjectLit(_)
+            | TemplateLiteral(_, _)
+            | Await(_)
+            | Yield(_)
+            | YieldStar(_)
+            | BinOp(_, _, _)
+            | UnaryOp(_, _)
+            | Cond(_, _, _)
+            | ArrowFunc(_, _, _, _)
+            | FuncExpr(_)
+            | Call(_, _)
+            | MethodCall(_, _, _)
+            | CallExpr(_, _)
+            | New(_, _)
+            | NewExpr(_, _) => true
+            _ => false
+          }
+          if non_reference {
+            record_unfiltered(
+              ctx, "delete", "the operand of a `delete` operator must be a property reference",
+            )
+          }
           match inner {
             PropAccess(recv, prop) =>
               if prop.has_prefix("__private_brand__") {
@@ -13102,6 +13137,7 @@ fn check_call_args_in_expr(
               }
             _ => ()
           }
+        }
         // TS2356: the operand of `++` / `--` must be `any`, `number`,
         // `bigint`, or an enum type. Same family as the unary `-` / `~`
         // classification but *without* the nullish shapes -- a `null`
@@ -16757,6 +16793,88 @@ fn func_type_mentions_type_param_names(
 }
 
 ///|
+/// TS2430 ("Interface 'D' incorrectly extends interface 'B'."): a derived
+/// interface re-declares a base member with a type that is not assignable
+/// to the base's. Only decidable pairs are judged: both sides concrete,
+/// fully resolved, mentioning no in-scope type parameters, with no
+/// call-signature / unmodeled shapes (interface *methods* compare
+/// bivariantly in TS and overload sets collapse in our model, so callable
+/// members abstain).
+fn check_interface_extends_member_compat(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for iface in module_.interfaces {
+    if iface.fields.length() == 0 {
+      continue
+    }
+    for bi, base_name in iface.extends_names {
+      guard resolver.interfaces.get(base_name) is Some(base) else { continue }
+      // Instantiate a generic base from the recorded `extends B<...>` args.
+      let bindings : Map[String, @ast.TsType] = {}
+      if base.type_params.length() > 0 {
+        if bi < iface.extends_args.length() {
+          for i, tp in base.type_params {
+            if i < iface.extends_args[bi].length() {
+              bindings[tp] = iface.extends_args[bi][i]
+            }
+          }
+        }
+        if bindings.size() != base.type_params.length() {
+          continue
+        }
+      }
+      for field in iface.fields {
+        let fname = field.0
+        let fty = field.1
+        // Symbol-keyed / computed members don't compare by name.
+        if fname.has_prefix("@@") || fname == "<computed>" {
+          continue
+        }
+        let mut base_ty : @ast.TsType? = None
+        for bf in base.fields {
+          if bf.0 == fname {
+            base_ty = Some(bf.1)
+          }
+        }
+        guard base_ty is Some(bty0) else { continue }
+        let bty = substitute_params(bty0, bindings)
+        // Callable members (methods) are covered by the existing
+        // signature-assignability check and compare bivariantly -- skip
+        // them here to avoid double reporting.
+        let callable = match (fty, bty) {
+          (Func(_, _) | GenericFunc(_, _) | Constructor(_, _, _), _)
+          | (_, Func(_, _) | GenericFunc(_, _) | Constructor(_, _, _)) => true
+          _ => false
+        }
+        if callable {
+          continue
+        }
+        if is_checkable(fty) &&
+          is_checkable(bty) &&
+          !func_type_mentions_type_param_names(fty, iface.type_params) &&
+          !func_type_mentions_type_param_names(bty, iface.type_params) &&
+          !type_contains_unresolved_named(fty, resolver) &&
+          !type_contains_unresolved_named(bty, resolver) &&
+          !type_deeply_contains_unmodeled(fty, resolver) &&
+          !type_deeply_contains_unmodeled(bty, resolver) &&
+          !type_has_call_signature(fty, resolver) &&
+          !type_has_call_signature(bty, resolver) &&
+          !is_assignable_to(resolver.unwrap(fty), resolver.unwrap(bty)) &&
+          !is_structurally_assignable_named(fty, bty, resolver) {
+          issues.push({
+            path: "interface \{iface.name}",
+            message: "interface `\{iface.name}` incorrectly extends interface `\{base_name}`: types of property `\{fname}` are incompatible",
+          })
+        }
+      }
+    }
+  }
+  issues
+}
+
+///|
 /// TS2304 for unresolved names in *declaration signature* type positions:
 /// `implements` clauses, `interface … extends` clauses, and generic
 /// constraint bounds (`class C<T extends List<T>>`). These positions name a
@@ -18277,8 +18395,12 @@ fn check_module_function_bodies_layered(
         body,
         const_type_params: [],
         type_param_bounds: meth.type_param_bounds,
-        is_generator: false,
-        is_async: false,
+        // Carry the method's own async / generator flags so the body checker
+        // unwraps `Promise<T>` returns and extracts yield types exactly as it
+        // does for top-level functions (`async m(): Promise<void> { return; }`
+        // must not demand a value).
+        is_generator: meth.is_generator,
+        is_async: meth.is_async,
       }
       // Bind `this` to the instance type only for instance methods. In a
       // `static` method `this` is the class/constructor side (its members
@@ -18536,6 +18658,9 @@ fn check_module_function_bodies_layered(
   for issue in check_arguments_outside_function(module_, resolver) {
     all.push(issue)
   }
+  for issue in check_interface_extends_member_compat(module_, resolver) {
+    all.push(issue)
+  }
   // Heritage type-argument / naked-param recordings live on the module that
   // was parsed with them: the top level for top-level classes, and each
   // namespace's own TsModule for namespace bodies (they re-parse with a
@@ -18689,6 +18814,26 @@ fn check_module_function_bodies_layered(
     // (TS1127 invalid characters, TS1160 unterminated template literals,
     // TS2480 `let` as a let/const binding name, TS1359 `await` bound in an
     // async context). Each entry is already a complete message.
+    // TS2307 ("Cannot find module 'X'"): a single-file program importing a
+    // specifier that no in-file ambient `declare module "X"` provides can
+    // never resolve in the conformance harness. Emitted only on the
+    // permissive (conformance) path -- real bridge inputs resolve their
+    // imports against a genuine node_modules tree. `tslib` is exempt (the
+    // harness ships it for importHelpers runs).
+    if permissive {
+      let ambient_specs : Map[String, Unit] = {}
+      for aug in module_.module_augmentations {
+        ambient_specs[aug.0] = ()
+      }
+      for spec in module_.import_module_specs {
+        if spec != "tslib" && !ambient_specs.contains(spec) {
+          all.push({
+            path: "import `\{spec}`",
+            message: "cannot find module `\{spec}`",
+          })
+        }
+      }
+    }
     for gm in module_.grammar_misuses {
       if gm.has_prefix("<noimplicitany>") {
         // noImplicitAny diagnostics (TS7005/7006/7010/7019/7031) surface only

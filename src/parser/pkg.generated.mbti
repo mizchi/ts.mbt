@@ -130,6 +130,8 @@ pub struct Parser {
   invalid_decorator_uses : Array[String]
   grammar_misuses : Array[String]
   imported_binding_names : Array[String]
+  import_module_specs : Array[String]
+  multi_file_source : Bool
   class_base_type_args : Array[(String, String, Array[@ast.TsType])]
   mut no_bound_inline : Bool
   target_es6_plus : Bool

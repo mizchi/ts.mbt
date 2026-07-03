@@ -885,6 +885,8 @@ pub(all) struct TsModule {
   // unresolved-reference checks so imported types / values read as
   // declared even though the import statements themselves are erased.
   imported_binding_names : Array[String]
+  // Module specifiers of ES `import` statements, for the TS2307 check.
+  import_module_specs : Array[String]
   // `(class, base, args)` recorded from `class C extends B<...>` heritage
   // clauses. Consulted when checking derived-class member compatibility
   // against a generic base (TS2415 index-signature subtyping).

@@ -1384,6 +1384,10 @@ fn Parser::parse_class_body(
         self.peek_at(1).kind != RBrace => {
         let _ = self.advance()
         accessor_kind = Some(n)
+        // TS1042: `async` cannot modify an accessor (`async get foo()`).
+        if is_async_method {
+          self.grammar_misuses.push("`async` modifier cannot be used here")
+        }
       }
       _ => ()
     }
