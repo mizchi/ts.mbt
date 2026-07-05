@@ -2295,6 +2295,36 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-05 (T167)  714/815 (88 %)        414/414 ( 0 FP)   TS2304 subclusters: computed type keys, `export =`, var annotations: TP 1968 -> 1986
+
+  T167 -- TS2304 ("Cannot find name 'X'") in three value/type-reference
+    positions, all resolved against a conservative module value-name set
+    (`module_value_name_set`, factored out of `unresolved_typeof_references`;
+    now also folds in ES import bindings, namespace and module-augmentation
+    inner declarations):
+    - A single-bare-identifier computed key in a *type* position
+      (`var v: { [e]: number }`, `{ [e]?(): T }`, `interface I { [e]: T }`,
+      `declare class C { get [e](): T }`). Recorded by the parser via the
+      `<computed-type-key>` grammar-misuse sentinel at all three member
+      parsers; dotted keys (`[Symbol.iterator]`) don't match the
+      single-token shape and function bodies are skipped (`in_function`) so
+      locals can't false-flag. 10 parserComputedPropertyName files +
+      parserIndexSignature5.
+    - `export = name` over a provably undeclared value (`<export-eq>`
+      sentinel, both the top-level and module-block export parsers).
+      parserExportAssignment1/2/7/8.
+    - Top-level `var`/`let`/`const` annotations: `check_unresolved_
+      signature_type_refs` now walks `m.values` and top-level statement
+      declared types (no type parameters are in scope at top level).
+      Callable object-member values abstain entirely
+      (`type_mentions_callable`): the object-member parser discards a
+      signature's own type parameters (`{ <T>(x: T): T }`), which
+      false-flagged 37 files as `cannot find name T` before the guard.
+      parserGenericsInVariableDeclaration1, parserObjectType5,
+      autoAccessorExperimentalDecorators.
+    Whole-corpus TP 1968 -> 1986 @ 0 FP (session total 1761 -> +225);
+    pinned recall 714, precision 414/414. 2428 tests.
+
 2026-07-05 (T166)  714/815 (88 %)        414/414 ( 0 FP)   `object` keyword as a first-class type (NonPrimitiveObject): TP 1966 -> 1968
 
   T166 -- the `object` keyword is no longer lowered to `Any` at parse; it is a

@@ -11552,3 +11552,43 @@ test "expr_check: `object` keyword as first-class type (batch P)" {
   // An object literal against an `object` target: no excess/missing checks.
   @test.assert_eq(issues("var a: object = { x: 1, y: 2 };"), 0)
 }
+
+///|
+test "expr_check: TS2304 computed type keys, export =, var annotations (batch Q)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2304: a bare-identifier computed key in a type position must resolve
+  // in the value namespace.
+  assert_true(issues("var v: { [e]: number };") > 0)
+  assert_true(issues("var v: { [e](): number };") > 0)
+  assert_true(issues("interface I { [e]: number }") > 0)
+  assert_true(issues("declare class C { [e]: number }") > 0)
+  assert_true(issues("declare class C { get [e](): number }") > 0)
+  @test.assert_eq(issues("declare const e: \"k\";\nvar v: { [e]: number };"), 0)
+  @test.assert_eq(issues("var v: { [Symbol.iterator]: number };"), 0)
+  @test.assert_eq(issues("interface I { [Symbol.iterator](): void }"), 0)
+  // A function-local name can satisfy the key -- the parser skips recording
+  // inside function bodies.
+  @test.assert_eq(
+    issues("function f() { const k = \"x\"; var v: { [k]: number }; }"),
+    0,
+  )
+  // TS2304: `export = name` over a provably undeclared value.
+  assert_true(issues("export = foo;") > 0)
+  @test.assert_eq(issues("function foo() {}\nexport = foo;"), 0)
+  @test.assert_eq(
+    issues("declare module \"M\" { const A: number; export = A; }"),
+    0,
+  )
+  // TS2304 in a top-level `var` annotation.
+  assert_true(issues("var v: Foo<T> = 1;") > 0)
+  assert_true(issues("var v: { a: Undeclared };") > 0)
+  @test.assert_eq(issues("interface Foo<T> { x: T }\nvar v: Foo<string>;"), 0)
+  @test.assert_eq(issues("var v: Promise<number>;"), 0)
+  // Callable member values abstain: their own type parameters were
+  // discarded at parse (`{ <T>(x: T): T }` / `{ m<T>(x: T): T }`).
+  @test.assert_eq(issues("var a: { <T>(x: T): T };"), 0)
+  @test.assert_eq(issues("var a: { m<T>(x: T): T };"), 0)
+  @test.assert_eq(issues("var a: { new <T>(x: T): T };"), 0)
+}

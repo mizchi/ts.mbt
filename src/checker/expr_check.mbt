@@ -17370,6 +17370,27 @@ fn check_interface_extends_member_compat(
 ///   - the standard-library registry covers both type and value globals
 ///     across every lib target;
 ///   - runs once at the top level (the walk recurses into namespaces).
+/// True when `ty` is or contains a callable shape (function / generic
+/// function / constructor) anywhere reachable. Used to abstain from
+/// unresolved-name checks inside object-member values, whose signatures may
+/// have had their own type parameters discarded at parse.
+fn type_mentions_callable(ty : @ast.TsType) -> Bool {
+  match ty {
+    Func(_, _) | GenericFunc(_, _) | Constructor(_, _, _) => true
+    Array(inner) | Keyof(inner) | Rest(inner) => type_mentions_callable(inner)
+    Tuple(items) | Union(items) | Intersection(items) =>
+      items.iter().any(fn(it) { type_mentions_callable(it) })
+    Applied(_, args) => args.iter().any(fn(a) { type_mentions_callable(a) })
+    Object(fields) => fields.iter().any(fn(f) { type_mentions_callable(f.1) })
+    Struct(_, fields) =>
+      fields.iter().any(fn(f) { type_mentions_callable(f.1) })
+    IndexedAccess(base, key) =>
+      type_mentions_callable(base) || type_mentions_callable(key)
+    _ => false
+  }
+}
+
+///|
 fn check_unresolved_signature_type_refs(
   module_ : @ast.TsModule,
 ) -> Array[ExprIssue] {
@@ -17449,6 +17470,17 @@ fn check_unresolved_signature_type_refs(
         walk_bound(base, scope, where_)
         walk_bound(key, scope, where_)
       }
+      Object(fields) =>
+        // Value types only: keys are `Literal` names or index-signature key
+        // primitives, never user references. Callable member values are
+        // skipped entirely: the object-member parser discards a signature's
+        // own type parameters (`{ <T>(x: T): T }`, `{ m<T>(x: T): T }`), so
+        // a `Named` inside could be a perfectly-scoped generic we lost.
+        for f in fields {
+          if !type_mentions_callable(f.1) {
+            walk_bound(f.1, scope, where_)
+          }
+        }
       _ => ()
     }
   }
@@ -17503,6 +17535,29 @@ fn check_unresolved_signature_type_refs(
     for ta in m.type_aliases {
       for bound in ta.type_param_bounds {
         walk_bound(bound.1, ta.type_params, "type \{ta.name} constraint")
+      }
+    }
+    // TS2304 in a *value* annotation (`var v: Foo<T>`): a top-level binding
+    // has no type parameters in scope, so every reference must resolve to a
+    // declared type or a lib global. Function-typed annotations recurse
+    // through `Func` params/returns; `GenericFunc` is skipped entirely (its
+    // own type parameters would need scope threading).
+    let no_tp : Array[String] = []
+    for v in m.values {
+      walk_bound(v.type_, no_tp, "var \{v.name}")
+    }
+    for stmt in m.top_level_stmts {
+      match stmt {
+        Var(binding, declared_ty, _)
+        | Let(binding, declared_ty, _)
+        | Const(binding, declared_ty, _) => {
+          let label = match binding {
+            @ast.TsBinding::Ident(n) => "var \{n}"
+            _ => "var"
+          }
+          walk_bound(declared_ty, no_tp, label)
+        }
+        _ => ()
       }
     }
     for ns in m.namespaces {
@@ -19320,7 +19375,56 @@ fn check_module_function_bodies_layered(
         }
       }
     }
+    // TS2304 for a single-bare-identifier computed key in a type position
+    // (`var v: { [e]: number }`, `interface I { [e](): T }`, `declare class
+    // C { [e]: T }`). The key references the *value* namespace; resolve it
+    // against the module's conservative value-name set (plus value keywords
+    // and lib globals) and flag only a provably undeclared name. The value
+    // set is built lazily -- most modules record no computed type keys.
+    let mut computed_key_values : Map[String, Bool]? = None
     for gm in module_.grammar_misuses {
+      if gm.has_prefix("<computed-type-key>") {
+        let key = gm["<computed-type-key>".length():].to_string()
+        let values = match computed_key_values {
+          Some(v) => v
+          None => {
+            let v = module_value_name_set(module_)
+            computed_key_values = Some(v)
+            v
+          }
+        }
+        if !values.contains(key) &&
+          !is_typeof_value_keyword(key) &&
+          !is_lib_global_value(key) {
+          all.push({
+            path: "computed key `[\{key}]`",
+            message: "cannot find name `\{key}`",
+          })
+        }
+        continue
+      }
+      // TS2304: `export = name` over a provably undeclared value. Same
+      // resolution contract as the computed-type-key check above.
+      if gm.has_prefix("<export-eq>") {
+        let key = gm["<export-eq>".length():].to_string()
+        let values = match computed_key_values {
+          Some(v) => v
+          None => {
+            let v = module_value_name_set(module_)
+            computed_key_values = Some(v)
+            v
+          }
+        }
+        if !values.contains(key) &&
+          !is_typeof_value_keyword(key) &&
+          !is_lib_global_value(key) {
+          all.push({
+            path: "export = \{key}",
+            message: "cannot find name `\{key}`",
+          })
+        }
+        continue
+      }
       if gm.has_prefix("<noimplicitany>") {
         // noImplicitAny diagnostics (TS7005/7006/7010/7019/7031) surface only
         // on the permissive (conformance) path: strict unit-test snippets

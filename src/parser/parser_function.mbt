@@ -1331,6 +1331,15 @@ pub fn Parser::parse_interface(
           }
           continue
         }
+        // TS2304: a computed member key that is a single bare identifier
+        // (`[e]: number` / `[e](): T`) references the value namespace --
+        // record it for the checker's undeclared-name resolution. Dotted
+        // keys (`[Symbol.iterator]`) don't match the single-token shape.
+        match self.peek().kind {
+          Ident(key) if self.peek_at(1).kind == RBracket && !self.in_function =>
+            self.grammar_misuses.push("<computed-type-key>" + key)
+          _ => ()
+        }
         let mut saw_colon = false
         while !self.check(RBracket) && !self.check(Eof) {
           if self.check(Colon) {
@@ -2259,6 +2268,14 @@ fn Parser::parse_declare_class_member_name(
   self : Parser,
 ) -> String? raise ParseError {
   if self.match_(LBracket) {
+    // TS2304: a single-bare-identifier computed key (`[e]: number`) in a
+    // `declare class` body references the value namespace -- record it for
+    // the checker's undeclared-name resolution (dotted keys don't match).
+    match self.peek().kind {
+      Ident(key) if self.peek_at(1).kind == RBracket && !self.in_function =>
+        self.grammar_misuses.push("<computed-type-key>" + key)
+      _ => ()
+    }
     let mut depth = 1
     while depth > 0 && !self.check(Eof) {
       match self.peek().kind {

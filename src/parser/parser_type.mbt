@@ -538,6 +538,18 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
             _ => false
           }
           if !is_index_sig {
+            // TS2304: a computed key in a *type* literal (`{ [e]: number }`,
+            // `{ [e](): T }`) references the value namespace. Record the
+            // bare-identifier shape so the checker can flag a provably
+            // undeclared name. Dotted keys (`[Symbol.iterator]`) don't match
+            // the single-token shape, and function bodies are skipped (the
+            // name may be a local we can't resolve at module level).
+            match self.peek().kind {
+              Ident(key) if self.peek_at(1).kind == RBracket &&
+                !self.in_function =>
+                self.grammar_misuses.push("<computed-type-key>" + key)
+              _ => ()
+            }
             self.pos = saved_pos
             return None
           }

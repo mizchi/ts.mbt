@@ -2201,6 +2201,14 @@ fn Parser::parse_export_decl_for_module(
   }
   if self.match_(Eq) {
     let expr = self.parse_expr()
+    // TS2304: `export = name` references the value namespace; record the
+    // bare-identifier shape so the checker can flag a provably undeclared
+    // name (resolution folds in module-block / namespace declarations).
+    match expr {
+      @ast.TsExpr::Var(name) if !self.in_function =>
+        self.grammar_misuses.push("<export-eq>" + name)
+      _ => ()
+    }
     let local_name = match expr {
       @ast.TsExpr::Var(name) => name
       _ => {
@@ -2777,7 +2785,13 @@ fn Parser::parse_export_stmt(
     return
   }
   if self.match_(Eq) {
-    let _ = self.parse_expr()
+    // TS2304: `export = name` over a provably undeclared value (see the
+    // module-block variant above for the recording contract).
+    match self.parse_expr() {
+      @ast.TsExpr::Var(name) if !self.in_function =>
+        self.grammar_misuses.push("<export-eq>" + name)
+      _ => ()
+    }
     self.consume_semicolon()
     return
   }
