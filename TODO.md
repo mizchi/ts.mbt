@@ -2295,6 +2295,30 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-05 (T171)  714/815 (88 %)        414/414 ( 0 FP)   TS2564 computed fields, index-sig myth, literal-name exemption: TP 2018 -> 2028
+
+  T171 -- strict-property-initialization refinements:
+    - Computed-key fields (`[Symbol.toPrimitive]: number;`) now surface in
+      `TsClassDecl.properties` under the `<computed>` sentinel (pushed, not
+      upserted -- names repeat; the TS2416 derived-vs-base walk skips the
+      sentinel so unrelated computed fields never compare). TS2564 reports
+      them only when the class declares NO constructor (a constructor could
+      assign through a dynamic `this[key]` write). symbolProperty6/7,
+      symbolDeclarationEmit1, parserSymbolProperty5,
+      instanceMemberWithComputedPropertyName2, computedPropertyNames12_ES6.
+    - The index-signature opt-out was a myth: `class C { [a: string]:
+      number; public v: number }` DOES report `v`
+      (parserIndexMemberDeclaration2-5 baselines). Removed.
+    - What the opt-out was actually protecting: *literal-named* fields
+      (`1: Date`, `'a': {}`) are exempt from TS2564 in tsc
+      (indexersInClassType has no baseline errors -- caught as the batch's
+      one FP by the whole-corpus gate). Numeric names are recognised by
+      shape; quoted names survive via a new parser channel
+      (`Parser.quoted_member_names`, drained per class into
+      `<quoted-member:...>` markers on the duplicate-member channel).
+    Whole-corpus TP 2018 -> 2028 @ 0 FP (session total 1761 -> +267);
+    pinned recall 714, precision 414/414. 2432 tests.
+
 2026-07-05 (T170)  714/815 (88 %)        414/414 ( 0 FP)   TS1212/TS1359 reserved words in binding positions: TP 2001 -> 2018
 
   T170 -- reserved-word binding names, recorded at *binding* parse sites

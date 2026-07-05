@@ -18585,6 +18585,11 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
         // type was a naked bounded type parameter. Consumed by
         // `check_derived_indexer_compat`.
         ()
+      } else if name.has_prefix("<quoted-member:") {
+        // Marker, not an error: a string-literal member name. Consumed by
+        // the strict-property-initialization check (literal-named fields
+        // are exempt from TS2564).
+        ()
       } else {
         issues.push({
           path: "class \{cls_name}",
@@ -20320,15 +20325,10 @@ fn check_native_class_property_initializers(
     if decl.is_abstract {
       continue
     }
-    // Index signatures (`class C { [k: string]: T }`) implicitly
-    // type every property, so a bare `1: Date` / `'a': {}`
-    // declaration is satisfied without an `=` initializer. Our
-    // assignability layer doesn't reconcile these against
-    // individual `properties` entries, so the conservative trade
-    // is to skip TS2564 for any class that has one.
-    if decl.index_signatures.length() > 0 {
-      continue
-    }
+    // NOTE: an index signature does NOT exempt named fields from
+    // strict-property-initialization -- `class C { [a: string]: number;
+    // public v: number }` still reports `v` (parserIndexMemberDeclaration2
+    // baseline), so no index-signature opt-out here.
     // Collect the field names the constructor touches via `this.<name>`
     // (reads included — `collect_ctor_this_members_block` over-approximates
     // assignment by presence to stay false-positive-free). Parameter
@@ -20374,6 +20374,30 @@ fn check_native_class_property_initializers(
         accessor_names[m.name] = ()
       }
     }
+    // Literal-named fields (`1: Date`, `'a': {}`) are exempt from
+    // strict-property-initialization in tsc (indexersInClassType has no
+    // baseline errors while identifier-named siblings report). Numeric
+    // names are recognisable by shape; quoted names come from the
+    // parser's `<quoted-member:...>` markers (quoting is otherwise
+    // erased).
+    let quoted_names : Map[String, Unit] = {}
+    for n in decl.duplicate_member_names {
+      if n.has_prefix("<quoted-member:") {
+        quoted_names[n["<quoted-member:".length():n.length() - 1].to_string()] = ()
+      }
+    }
+    fn is_numeric_shaped(name : String) -> Bool {
+      let chars = name.to_array()
+      if chars.length() == 0 {
+        return false
+      }
+      for c in chars {
+        if (c < '0' || c > '9') && c != '.' && c != '-' {
+          return false
+        }
+      }
+      true
+    }
     for prop in decl.properties {
       // Static fields are subject to a separate initialisation rule
       // in TS (`static x: T;` without `=`) and the runtime path
@@ -20383,7 +20407,31 @@ fn check_native_class_property_initializers(
       if prop.is_static {
         continue
       }
+      // Computed-key fields (`[Symbol.toPrimitive]: number;`, name
+      // `<computed>`) are checked too, but only when the class declares
+      // NO constructor at all -- a constructor could assign the slot
+      // through a dynamic `this[key]` write our by-name walk can't see.
+      // The accessor-name filter below must not apply (a computed getter
+      // also registers as `<computed>` and would mask an unrelated
+      // computed field).
+      if prop.name == "<computed>" {
+        if decl.constructor_body is None &&
+          decl.constructor_params is None &&
+          !prop.has_initializer &&
+          !prop.has_definite_assertion &&
+          is_checkable(prop.type_) &&
+          !type_accepts_undefined(resolver.unwrap(prop.type_)) {
+          issues.push({
+            path: "class \{decl.name}",
+            message: "computed property has no initializer and is not definitely assigned",
+          })
+        }
+        continue
+      }
       if accessor_names.contains(prop.name) {
+        continue
+      }
+      if quoted_names.contains(prop.name) || is_numeric_shaped(prop.name) {
         continue
       }
       if prop.has_initializer || prop.has_definite_assertion {
@@ -20776,6 +20824,12 @@ fn check_class_member_structure(
           let this_accessors = class_instance_accessor_names(decl)
           for p in decl.properties {
             if p.is_static || p.is_accessor || this_accessors.contains(p.name) {
+              continue
+            }
+            // Computed-key fields share the `<computed>` sentinel name --
+            // a base and derived computed field are unrelated members, so
+            // never compare them by that name.
+            if p.name == "<computed>" {
               continue
             }
             match base_props.get(p.name) {

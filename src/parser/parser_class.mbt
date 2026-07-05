@@ -253,8 +253,30 @@ fn build_runtime_class_decl(
       // recorded under the `<computed>` sentinel by the value-name passes;
       // retain the key expression so the checker can flag an undefined name
       // in it (TS2304).
-      Field(_, Computed(key_expr), _, _, _, _) =>
+      Field(
+        is_static_c,
+        Computed(key_expr),
+        field_type,
+        init,
+        is_readonly_c,
+        has_definite_assertion_c
+      ) => {
         computed_field_keys.push(key_expr)
+        // Also surface the field's annotated/initialized shape under the
+        // `<computed>` sentinel name so strict-property-initialization
+        // (TS2564: `[Symbol.toPrimitive]: number;` with no initializer)
+        // can see it. Pushed, not upserted -- computed names may repeat,
+        // and name-keyed member checks skip the sentinel.
+        properties.push({
+          name: "<computed>",
+          type_: field_type,
+          is_static: is_static_c,
+          is_readonly: is_readonly_c,
+          is_accessor: false,
+          has_initializer: init is Some(_),
+          has_definite_assertion: has_definite_assertion_c,
+        })
+      }
       _ => ()
     }
   }
@@ -754,7 +776,13 @@ fn Parser::parse_class_method_key(self : Parser) -> ClassKey raise ParseError {
         None => private_name
       }
     }
-    Str(s) => s
+    Str(s) => {
+      // Quotedness is erased from the returned key; record it so
+      // strict-property-initialization can exempt literal-named fields
+      // (`class C { 'a': {} }` is not TS2564-checked by tsc).
+      self.quoted_member_names.push(s)
+      s
+    }
     Number(n) => "\{n}"
     Int(n) => "\{n}"
     // Reserved words can be used as method names in ES6+
@@ -1777,6 +1805,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   let brand = "__private_brand__" + brand_id.to_string()
   let prev_brand = self.current_class_brand
   self.current_class_brand = Some(brand)
+  let quoted_names_start = self.quoted_member_names.length()
   let (
     ctor_opt,
     elements,
@@ -1805,6 +1834,17 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   // so these always-an-error conditions (TS2392 / TS1071 / TS1245 / TS2387-8 /
   // TS2391 / TS2385 / TS1029) are flagged on class expressions too.
   let expr_class_sentinels : Array[String] = []
+  // Drain this class's quoted member names (see `parse_class_method_key`).
+  let quoted_names : Array[String] = []
+  while self.quoted_member_names.length() > quoted_names_start {
+    match self.quoted_member_names.pop() {
+      Some(n) => quoted_names.push(n)
+      None => ()
+    }
+  }
+  for qn in quoted_names {
+    expr_class_sentinels.push("<quoted-member:" + qn + ">")
+  }
   if ctor_impl_count >= 2 {
     expr_class_sentinels.push("<multiple-ctor-impl>")
   }
@@ -2537,6 +2577,7 @@ fn Parser::parse_class_decl_with_abstract(
   let brand = "__private_brand__" + brand_id.to_string()
   let prev_brand = self.current_class_brand
   self.current_class_brand = Some(brand)
+  let quoted_names_start = self.quoted_member_names.length()
   let (
     ctor_opt,
     elements,
@@ -2565,6 +2606,13 @@ fn Parser::parse_class_decl_with_abstract(
   // duplicate-member channel with a sentinel name so the checker can surface
   // the dedicated diagnostic. A single implementation (with any number of
   // bodyless overload signatures) is legal and leaves the count at 1.
+  while self.quoted_member_names.length() > quoted_names_start {
+    match self.quoted_member_names.pop() {
+      Some(n) =>
+        runtime_decl.duplicate_member_names.push("<quoted-member:" + n + ">")
+      None => ()
+    }
+  }
   if ctor_impl_count >= 2 {
     runtime_decl.duplicate_member_names.push("<multiple-ctor-impl>")
   }

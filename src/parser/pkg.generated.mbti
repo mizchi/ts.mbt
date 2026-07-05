@@ -142,6 +142,7 @@ pub struct Parser {
   param_optional_initializer_misuses : Array[String]
   interface_member_modifier_misuses : Array[String]
   collected_class_dups : Array[(String, Array[String])]
+  quoted_member_names : Array[String]
   pure_marker_positions : Map[Int, Bool]
   internal_marker_positions : Map[Int, Bool]
   collected_internal_names : Map[String, Bool]

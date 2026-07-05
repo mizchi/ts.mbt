@@ -163,6 +163,11 @@ pub struct Parser {
   // `parse_class_decl_with_abstract` appends; the checker surfaces them. Empty
   // for well-formed input, so it never costs precision.
   collected_class_dups : Array[(String, Array[String])]
+  // String-literal member names (`class C { 'a': T }`) seen while parsing
+  // class bodies. Quotedness is erased by the key parser, but
+  // strict-property-initialization must exempt literal-named fields --
+  // drained per class into `<quoted-member:...>` sentinels.
+  quoted_member_names : Array[String]
   // Token-position → "JSDoc `/* @__PURE__ */` annotation seen
   // just before this token". The lexer populates this when it
   // skips a block comment whose contents contain the literal
@@ -256,6 +261,7 @@ pub fn Parser::new_with_strict_and_jsx(
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],
     collected_class_dups: [],
+    quoted_member_names: [],
     pure_marker_positions: {},
     internal_marker_positions: {},
     collected_internal_names: {},
@@ -332,6 +338,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],
     collected_class_dups: [],
+    quoted_member_names: [],
     pure_marker_positions: lexer.pure_marker_positions,
     internal_marker_positions: lexer.internal_marker_positions,
     collected_internal_names: {},

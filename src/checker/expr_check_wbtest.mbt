@@ -11760,3 +11760,37 @@ test "expr_check: TS1212/TS1359 reserved binding names (batch T)" {
     0,
   )
 }
+
+///|
+test "expr_check: TS2564 computed fields, index sigs, literal names (batch U)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src))
+    .filter(fn(i) { i.message.contains("no initializer") })
+    .length()
+  }
+  // A computed-key field with an annotation and no initializer reports
+  // (only when the class has no constructor that could assign the slot).
+  assert_true(issues("class C { [Symbol.toPrimitive]: number; }") > 0)
+  @test.assert_eq(issues("class C { [Symbol.iterator] = 0; }"), 0)
+  @test.assert_eq(issues("class C { [Symbol.toPrimitive]!: number; }"), 0)
+  @test.assert_eq(
+    issues(
+      "const k = \"x\";\nclass C { [k]: string; constructor() { this[k] = \"\"; } }",
+    ),
+    0,
+  )
+  // An index signature does NOT exempt identifier-named fields.
+  assert_true(
+    issues("class C { [a: string]: number;\n  public v: number }") > 0,
+  )
+  // Literal-named fields ARE exempt (quoted or numeric).
+  @test.assert_eq(
+    issues(
+      "class C { [x: number]: Date;\n  [x: string]: Object;\n  1: Date;\n  'a': {} }",
+    ),
+    0,
+  )
+  // Identifier-named uninitialized field still reports without index sigs.
+  assert_true(issues("class C { v: number }") > 0)
+  @test.assert_eq(issues("class C { v: number = 1 }"), 0)
+}
