@@ -11716,3 +11716,47 @@ test "expr_check: TS2454 computed keys, new-callee, conditional assigns (batch S
   // An unconditional assignment before the read stays silent.
   @test.assert_eq(issues("let a: number;\na = 1;\na.toString();"), 0)
 }
+
+///|
+test "expr_check: TS1212/TS1359 reserved binding names (batch T)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS1212 at ES2015+ targets: strict-reserved words as *binding* names.
+  assert_true(issues("// @target: es2015\nvar interface: number;") > 0)
+  assert_true(issues("// @target: es2015\nvar let: any = {};") > 0)
+  assert_true(issues("// @target: es6\nfunction f(yield = 1) {}") > 0)
+  @test.assert_eq(issues("var interface: number;"), 0)
+  // Lenient name positions stay legal at any target.
+  @test.assert_eq(issues("// @target: es2015\nenum Bar { interface }"), 0)
+  @test.assert_eq(
+    issues("// @target: es2015\nvar v: { interface: number };"),
+    0,
+  )
+  // TS1359: hard-reserved words are never binding names.
+  assert_true(issues("var { while: while } = { while: 1 };") > 0)
+  assert_true(issues("enum void {}") > 0)
+  @test.assert_eq(issues("var { while: ok } = { while: 1 };"), 0)
+  // A `this` first parameter is a this-type annotation, not a binding.
+  @test.assert_eq(
+    issues("function f(this: { n: number }) { return this.n; }"),
+    0,
+  )
+  // TS1359: `await` as an async arrow parameter or async function
+  // expression name binds in async scope where it is reserved.
+  assert_true(
+    issues("// @target: es2017\nvar foo = async (await): Promise<void> => {};") >
+    0,
+  )
+  assert_true(
+    issues(
+      "// @target: es2017\nvar v = async function await(): Promise<void> {};",
+    ) >
+    0,
+  )
+  // An async function *declaration* named `await` binds outward -- legal.
+  @test.assert_eq(
+    issues("// @target: es2017\nasync function await(): Promise<void> {}"),
+    0,
+  )
+}

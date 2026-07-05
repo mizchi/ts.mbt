@@ -2295,6 +2295,33 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-05 (T170)  714/815 (88 %)        414/414 ( 0 FP)   TS1212/TS1359 reserved words in binding positions: TP 2001 -> 2018
+
+  T170 -- reserved-word binding names, recorded at *binding* parse sites
+    (never in the shared `parse_binding_ident`, whose callers include
+    lenient name positions -- enum members `enum Bar { interface }`,
+    property signatures, import specifiers -- where keywords stay legal;
+    a first draft recorded there and the whole-corpus gate caught 12 FPs):
+    - TS1212 at ES2015+ targets: `interface` / `let` / `yield` rejected as
+      binding names (`var interface`, `var let`, `function f(yield = …)`).
+      asiPreventsParsingAsInterface01-05, letIdentifierInElementAccess01,
+      FunctionDeclaration3_es6, asyncOrYieldAsBindingIdentifier1.
+    - TS1359 hard-reserved words are never binding names anywhere
+      (`var { while: while } = …`, `enum void {}`); `this` is explicitly
+      excluded (a `this` first parameter is a this-type annotation).
+      objectBindingPatternKeywordIdentifiers02/04, parserEnumDeclaration4,
+      parserErrorRecovery_VariableList1,
+      parserInvalidIdentifiersInVariableStatements1.
+    - TS1359 `await`: an async *arrow*'s parameters now parse with
+      `in_async` armed (`async (await) => {}` -- parse_async_arrow_function
+      armed the flag only for the body), the single-param form records
+      directly, and an async function *expression*'s name (binds inside
+      the async scope: `var v = async function await() {}`) records while
+      declarations (bind outward) stay legal.
+      asyncArrowFunction5_es6/es2017, asyncFunctionDeclaration12_es6/es2017.
+    Whole-corpus TP 2001 -> 2018 @ 0 FP (session total 1761 -> +257);
+    pinned recall 714, precision 414/414. 2431 tests.
+
 2026-07-05 (T169)  714/815 (88 %)        414/414 ( 0 FP)   TS2454 subclusters: computed property keys, new-callee, short-circuit assigns: TP 1992 -> 2001
 
   T169 -- used-before-assigned refinements:

@@ -289,6 +289,8 @@ fn Parser::parse_enum_decl_after_enum_keyword(
     raise ParseError("Expected enum declaration")
   }
   let name = self.parse_binding_ident()
+  // TS1359: an enum name is a binding name (`enum void {}` is never legal).
+  self.record_reserved_binding_name(name)
   let _ = self.expect(LBrace)
   let members : Array[@ast.TsEnumMember] = []
   while !self.check(RBrace) && !self.check(Eof) {

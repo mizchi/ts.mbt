@@ -4057,6 +4057,13 @@ fn Parser::parse_async_arrow_function(
       _ => "<anon>"
     }
     if name != "<anon>" {
+      // TS1359: the single parameter of `async x => …` binds in the async
+      // body scope where `await` is reserved.
+      if name == "await" {
+        self.grammar_misuses.push(
+          "`await` cannot be used as a parameter name in an async context",
+        )
+      }
       let _ = self.expect(Arrow)
       let prev_async = self.in_async
       self.in_async = true
@@ -4110,9 +4117,14 @@ fn Parser::parse_async_arrow_function(
   if self.check(Lt) {
     self.skip_type_args()
   }
-  // Parse with parentheses: async (params) => body
+  // Parse with parentheses: async (params) => body. Parameters bind in the
+  // async body scope, so `in_async` must already be armed while they parse
+  // -- `async (await) => {}` is a TS1359 recorded by `parse_param`.
   let _ = self.expect(LParen)
+  let prev_async_params = self.in_async
+  self.in_async = true
   let params = self.parse_params()
+  self.in_async = prev_async_params
   let _ = self.expect(RParen)
   // Optional return type annotation — captured so the checker can see
   // `(x): x is Foo => …` predicates.

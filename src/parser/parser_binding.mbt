@@ -20,6 +20,9 @@ fn Parser::parse_binding_ident(self : Parser) -> String raise ParseError {
       let _ = self.advance()
       // TS1212: `yield` cannot be used as a binding identifier in strict
       // mode (class bodies, "use strict" prologues, @alwaysStrict runs).
+      // The ES2015+-target reservation lives in `parse_binding_pattern`:
+      // this parser is also used by lenient name positions (enum members,
+      // import specifiers) where keywords stay legal.
       if self.in_strict || self.directive_strict {
         self.strict_mode_misuses.push("yield")
       }
@@ -67,7 +70,8 @@ fn Parser::parse_binding_ident(self : Parser) -> String raise ParseError {
     }
     Let => {
       let _ = self.advance()
-      // TS1212: same strict-mode reservation as `yield` above.
+      // TS1212: same strict-mode reservation as `yield` above (the
+      // ES2015+-target rule lives in `parse_binding_pattern`).
       if self.in_strict || self.directive_strict {
         self.strict_mode_misuses.push("let")
       }
@@ -459,6 +463,20 @@ fn Parser::parse_binding_pattern(
     LBrace => self.parse_binding_object()
     _ => {
       let name = self.parse_binding_ident()
+      // Every caller of this parser is a genuine binding position
+      // (var/let/const declarations, destructuring elements and rename
+      // values, parameters, for-of bindings) -- a hard-reserved word is
+      // never legal here (TS1359, `var { while: while } = …`).
+      self.record_reserved_binding_name(name)
+      // TS1212 at ES2015+ targets: the strict-reserved words are rejected
+      // as *binding* names (`var interface`, `var let`,
+      // `function f(yield = …)`) while staying legal in lenient name
+      // positions (enum members, property names, import specifiers) --
+      // which is why this lives here and not in `parse_binding_ident`.
+      if self.target_es6_plus &&
+        (name == "interface" || name == "let" || name == "yield") {
+        self.strict_mode_misuses.push(name)
+      }
       @ast.TsBinding::Ident(name)
     }
   }
@@ -605,10 +623,68 @@ fn Parser::parse_assignment_binding_pattern(
         LBrace => self.parse_assignment_binding_object()
         _ => {
           let name = self.parse_binding_ident()
+          // TS1359: this slot is a genuine binding target (destructuring
+          // element / rename value, `var { while: while } = …`), where a
+          // hard-reserved word is never a legal name. `parse_binding_ident`
+          // itself stays lenient because import/export specifiers and
+          // property-name callers legitimately accept keywords.
+          self.record_reserved_binding_name(name)
           @ast.TsBinding::Ident(name)
         }
       }
     }
+  }
+}
+
+///|
+/// Record a TS1359 ("Identifier expected. 'X' is a reserved word that
+/// cannot be used here") when `name` is a hard-reserved word -- one that is
+/// never a legal binding name in any mode. Contextual keywords (`of`,
+/// `from`, `as`, `type`, `yield`, `let`, `await`, …) are excluded; their
+/// mode-dependent rules live at their own parse sites.
+fn Parser::record_reserved_binding_name(self : Parser, name : String) -> Unit {
+  match name {
+    "void"
+    | "function"
+    | "class"
+    | "var"
+    | "const"
+    | "new"
+    | "switch"
+    | "case"
+    | "if"
+    | "else"
+    | "while"
+    | "do"
+    | "for"
+    | "return"
+    | "break"
+    | "continue"
+    | "default"
+    | "with"
+    | "try"
+    | "catch"
+    | "finally"
+    | "throw"
+    | "delete"
+    | "typeof"
+    | "instanceof"
+    | "in"
+    // NOT `this`: a `this` first parameter (`function f(this: Foo)`) is a
+    // legal this-type annotation and routes through the same binding parse.
+    | "true"
+    | "false"
+    | "null"
+    | "enum"
+    | "import"
+    | "export"
+    | "extends"
+    | "super"
+    | "debugger" =>
+      self.grammar_misuses.push(
+        "`\{name}` is a reserved word and cannot be used as a binding name",
+      )
+    _ => ()
   }
 }
 

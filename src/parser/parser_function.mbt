@@ -658,6 +658,16 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
       "`yield` cannot be used as the name of a function here",
     )
   }
+  // TS1359: a function *expression*'s name binds inside its own scope; in
+  // an async context every identifier use of `await` is reserved, so
+  // `var v = async function await() {}` (and a sync expression named
+  // `await` nested in an async body) is an error. Function *declarations*
+  // named `await` bind outward and stay legal outside async bodies.
+  if name == "await" && self.in_async {
+    self.grammar_misuses.push(
+      "`await` cannot be used as the name of a function here",
+    )
+  }
   let (type_params, const_type_params, type_param_bounds) = self.parse_type_param_names_bounds_and_const_flags()
   let _ = self.expect(LParen)
   let params = self.parse_params()
