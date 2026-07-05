@@ -413,6 +413,7 @@ pub(all) enum TsType {
   Any
   Unknown
   Never
+  NonPrimitiveObject
   Null
   Undefined
   Literal(String)

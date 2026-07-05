@@ -3265,6 +3265,7 @@ fn utility_record_type_suffix(type_ : @ast.TsType) -> String {
     None => ()
   }
   match type_ {
+    NonPrimitiveObject => "Object"
     Literal(value) => {
       let suffix = decl_to_pascal_case(value)
       if suffix == "" {

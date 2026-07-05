@@ -1328,10 +1328,14 @@ fn Resolver::lookup_field(
       // Object-like receivers inherit Object.prototype members
       // (toString / hasOwnProperty / valueOf / …). Fall back to those so
       // they don't surface as missing-property diagnostics. Primitives have
-      // their own prototype dispatchers and don't need this hop.
+      // their own prototype dispatchers and don't need this hop. The `object`
+      // keyword exposes EXACTLY this surface — nothing else resolves on it.
       match self.unwrap(recv) {
-        Named(_) | Applied(_, _) | Object(_) | Struct(_, _) =>
-          object_prototype_member(field)
+        Named(_)
+        | Applied(_, _)
+        | Object(_)
+        | Struct(_, _)
+        | NonPrimitiveObject => object_prototype_member(field)
         _ => None
       }
   }
@@ -6142,7 +6146,8 @@ fn infer_object_field_bindings(
 /// widen a parameter it shouldn't).
 fn type_param_occurs(tp : String, t : @ast.TsType) -> Bool {
   match t {
-    Number
+    NonPrimitiveObject
+    | Number
     | Int
     | Boolean
     | String_
@@ -7319,6 +7324,10 @@ fn check_expr_against(
         not(ctx.type_param_bounds.iter().any(fn(b) { b.0 == tp })) {
         let target_is_concrete_object = match expected_u {
           Object(_) | Struct(_, _) => true
+          // The `object` keyword excludes primitives; an unconstrained `T`
+          // may be instantiated with one, so `let a: object = (x: T)` is
+          // TS2322 (tsc suggests an `extends object` constraint).
+          NonPrimitiveObject => true
           Named(tn) =>
             not(ctx.in_scope_type_params.contains(tn)) &&
             ctx.resolver.interfaces.get(tn) is Some(_)
@@ -8404,6 +8413,9 @@ fn tuples_differ_only_in_named(
 /// `typeof X` value queries (enum objects, namespaces, mixin factory
 /// results), and class instances with an unresolvable base chain.
 fn member_recv_unmodeled(ty : @ast.TsType, resolver : Resolver) -> Bool {
+  // The `object` keyword is NOT unmodeled: its full member surface is exactly
+  // `Object.prototype` (folded into `lookup_field`), so member-existence
+  // checks against it are sound (`(a: object).nonExist()` is a real TS2339).
   if type_is_unmodeled_shape(ty, resolver) {
     return true
   }
@@ -9339,6 +9351,11 @@ fn check_object_lit_against_target(
   // properties because the actual instantiation may be a wider type.
   // Suppress the entire excess-property check in that case.
   if is_in_scope_type_param(ctx, target) {
+    return
+  }
+  // The `object` keyword accepts ANY object shape: no key is excess and no
+  // key is required. Suppress the whole excess/missing check.
+  if resolver.unwrap(target) is NonPrimitiveObject {
     return
   }
   // Mapped / conditional / `keyof` / generic-alias targets (`Boxified<any>`,
@@ -10303,6 +10320,7 @@ fn type_display(ty : @ast.TsType) -> String {
     Null => "null"
     Undefined => "undefined"
     Any => "any"
+    NonPrimitiveObject => "object"
     Never => "never"
     // Show literal types as `"s" (string)` so messages remain searchable
     // for both the literal form and the underlying primitive.
@@ -13116,7 +13134,11 @@ fn check_call_args_in_expr(
                 // method, flag it — but be conservative and skip Any/primitives
                 // (which have many built-in methods we don't model).
                 match ctx.resolver.unwrap(pruned) {
-                  Named(_) | Applied(_, _) | Object(_) | Struct(_, _) =>
+                  Named(_)
+                  | Applied(_, _)
+                  | Object(_)
+                  | Struct(_, _)
+                  | NonPrimitiveObject =>
                     if is_checkable(pruned) &&
                       !is_in_scope_type_param(ctx, pruned) &&
                       ctx.resolver.lookup_field(pruned, meth) is None &&

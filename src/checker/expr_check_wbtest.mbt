@@ -11510,3 +11510,45 @@ test "expr_check: for-of assign targets, custom iterators, `in` operands (batch 
     0,
   )
 }
+
+///|
+test "expr_check: `object` keyword as first-class type (batch P)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2339: member existence on an `object` receiver — only the
+  // Object.prototype surface resolves.
+  assert_true(issues("function f(a: object) { a.nonExist(); }") > 0)
+  assert_true(issues("declare var a: object;\na.nonExist();") > 0)
+  @test.assert_eq(
+    issues(
+      "declare var a: object;\na.toString();\na.hasOwnProperty(\"x\");\na.valueOf();\na.isPrototypeOf(a);\na.toLocaleString();",
+    ),
+    0,
+  )
+  // TS2322: primitives are not assignable to `object`; object shapes are.
+  assert_true(issues("var o: object = 42;") > 0)
+  assert_true(issues("var o: object = \"s\";") > 0)
+  @test.assert_eq(
+    issues(
+      "let o: object;\nfunction g() { o = {}; o = [1]; o = function () {}; o = new Date(); }",
+    ),
+    0,
+  )
+  // TS2322: an *unconstrained* in-scope type parameter may be primitive.
+  assert_true(issues("function foo<T>(x: T) { let a: object = x; }") > 0)
+  // A `T extends object` bound erases to `Any` — no flag on either the
+  // assignment or members of a generic return typed by the parameter.
+  @test.assert_eq(
+    issues("function bar<T extends object>(x: T) { let a: object = x; }"),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "declare function unboxify<T extends object>(obj: T): T;\nfunction f2() { let v = unboxify({ a: 42 }); let n = v.a; }",
+    ),
+    0,
+  )
+  // An object literal against an `object` target: no excess/missing checks.
+  @test.assert_eq(issues("var a: object = { x: 1, y: 2 };"), 0)
+}

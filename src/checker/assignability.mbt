@@ -489,6 +489,85 @@ fn is_assignable_to_inner(
     Unknown => return false
     _ => ()
   }
+  // The `object` keyword: every non-primitive flows into it; primitives do
+  // not. Unresolvable references (`Named` / `Applied` / type params) stay
+  // permissive so this can never claim a false mismatch.
+  match target {
+    NonPrimitiveObject =>
+      return match source {
+        Never
+        | NonPrimitiveObject
+        | Object(_)
+        | Struct(_, _)
+        | Array(_)
+        | Tuple(_)
+        | Func(_, _)
+        | GenericFunc(_, _)
+        | Constructor(_, _, _) => true
+        String_
+        | Literal(_)
+        | Number
+        | Int
+        | NumberLiteral(_)
+        | Boolean
+        | BooleanLiteral(_)
+        | BigInt
+        | BigIntLiteral(_)
+        | Symbol
+        | UniqueSymbol(_)
+        | Void
+        | Null
+        | Undefined
+        | TemplateLiteralType(_, _) => false
+        Union(ms) => {
+          for m in ms {
+            if !is_assignable_to_inner(m, NonPrimitiveObject, bivariant_params) {
+              return false
+            }
+          }
+          true
+        }
+        _ => true
+      }
+    _ => ()
+  }
+  match source {
+    NonPrimitiveObject =>
+      return match target {
+        NonPrimitiveObject => true
+        // Permissive against object shapes: the parser inlines bounded type
+        // parameters to their constraints, so a source that *looks* like
+        // `object` may really be an erased `T extends object` -- claiming a
+        // definite mismatch against `{ a: ... }` would be a false positive
+        // (isomorphicMappedTypeInference). Primitive targets stay definite:
+        // no instantiation of a non-primitive flows into `string`.
+        Object(_) => true
+        String_
+        | Literal(_)
+        | Number
+        | Int
+        | NumberLiteral(_)
+        | Boolean
+        | BooleanLiteral(_)
+        | BigInt
+        | BigIntLiteral(_)
+        | Symbol
+        | UniqueSymbol(_)
+        | Void
+        | Null
+        | Undefined => false
+        Union(ms) => {
+          for m in ms {
+            if is_assignable_to_inner(NonPrimitiveObject, m, bivariant_params) {
+              return true
+            }
+          }
+          false
+        }
+        _ => true
+      }
+    _ => ()
+  }
   // `never` is the bottom type: anything accepts it as a source.
   match source {
     Never => return true

@@ -2295,6 +2295,38 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-05 (T166)  714/815 (88 %)        414/414 ( 0 FP)   `object` keyword as a first-class type (NonPrimitiveObject): TP 1966 -> 1968
+
+  T166 -- the `object` keyword is no longer lowered to `Any` at parse; it is a
+    new `TsType::NonPrimitiveObject` AST case with its own semantics:
+    - Assignability: primitives / literals / template-literals are not
+      assignable to `object`; object shapes / arrays / tuples / callables /
+      `never` are; unions member-wise both directions; unresolved names stay
+      permissive. Source-`object` against a concrete `Object(_)` target stays
+      permissive (explicit `<object>` type-argument instantiation can plant
+      the keyword in erased generic contexts).
+    - TS2339 member existence: `object` exposes EXACTLY the
+      `Object.prototype` surface (folded into `lookup_field`), so
+      `a.nonExist()` / `a.nonExist` on an `object` receiver reports while
+      `a.toString()` / `a.hasOwnProperty(...)` stay silent
+      (nonPrimitiveAccessProperty).
+    - TS2322: a bare *unconstrained* in-scope type parameter is not
+      assignable to `object` (may be instantiated with a primitive) --
+      extends the existing concrete-object-target rule
+      (nonPrimitiveAndTypeVariables).
+    - Excess/missing property checks are suppressed against an `object`
+      target (`var a: object = { x: 1 }` accepts any shape).
+    - CRITICAL parser guard: a `T extends object` *bound* erases to `Any`,
+      not `NonPrimitiveObject` -- constraint inlining plants bounds into
+      every use-site, and a generic return typed by the parameter
+      (`unboxify<T extends object>(...): T` then `v.a`) would false-flag
+      member existence (isomorphicMappedTypeInference FP, caught by the
+      whole-corpus gate). Direct `: object` annotations keep the type.
+    Emitters: `type_display` -> "object", `.mbti` bridge -> "Object",
+    `.d.ts` emit -> "object". Whole-corpus TP 1966 -> 1968 @ 0 FP
+    (nonPrimitiveAsProperty, nonPrimitiveInGeneric; session total 1761 ->
+    +207); pinned recall 714, precision 414/414. 2427 tests.
+
 2026-07-02 (T165)  714/815 (88 %)        414/414 ( 0 FP)   TS2322 subclusters: for-of targets, custom iterators, `in` operands: TP 1963 -> 1966
 
   T165 -- first TS2322 subcluster pass:

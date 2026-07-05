@@ -962,6 +962,8 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
         Unknown
       } else if name == "symbol" {
         Symbol
+      } else if name == "object" {
+        NonPrimitiveObject
       } else {
         Any
       }
@@ -1181,6 +1183,13 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
     Ident(name) => {
       let _ = self.advance()
       match self.local_type_param_bound(name) {
+        // A `T extends object` bound erases to `Any`, not `NonPrimitiveObject`:
+        // the constraint promises "some object type", so treating a value of
+        // type `T` as the bare `object` surface would let member-existence
+        // checks false-flag properties the instantiation does have
+        // (`unboxify<T extends object>(...): T` → `v.a`). Direct `: object`
+        // annotations keep the first-class type.
+        Some(NonPrimitiveObject) if !self.no_bound_inline => Any
         Some(bound) if !self.no_bound_inline => bound
         _ => self.parse_named_type_tail(name)
       }

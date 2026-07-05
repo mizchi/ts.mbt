@@ -24,6 +24,10 @@ pub(all) enum TsType {
   // `Any` so the checker can enforce the narrowing requirement.
   Unknown
   Never // bottom type (no value)
+  // The `object` *keyword* type: any non-primitive value. Distinct from
+  // `Object(fields)` (an object literal type) and from `Any` (which used to
+  // swallow it, making primitive-to-`object` mismatches invisible).
+  NonPrimitiveObject
   Null // null
   Undefined // undefined
   // Literal types
