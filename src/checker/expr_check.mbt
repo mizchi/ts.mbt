@@ -10644,6 +10644,45 @@ fn check_compound_assign(
 fn for_of_element_type(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType {
   let shape = resolver.unwrap(ty)
   match shape {
+    // A user iterator class: `next()` returning `{ value: T, … }` yields
+    // `T`. The return type is the declared annotation when present,
+    // otherwise the object literal inferred from the body's `return`
+    // statements. Only fires when a `value` member resolves concretely.
+    Named(cname) | Struct(cname, _) =>
+      match resolver.classes.get(cname) {
+        Some(cls) => {
+          let mut elem : @ast.TsType = @ast.TsType::Any
+          for meth in cls.methods {
+            if meth.name == "next" && !meth.is_static {
+              let ret = if is_checkable(meth.return_type) {
+                meth.return_type
+              } else {
+                match meth.body {
+                  Some(b) => infer_block_return(ExprEnv::new(), resolver, b)
+                  None => @ast.TsType::Any
+                }
+              }
+              match resolver.unwrap(ret) {
+                Object(fields) =>
+                  for f in fields {
+                    if f.0 is Literal("value") {
+                      elem = f.1
+                    }
+                  }
+                Struct(_, sfields) =>
+                  for sf in sfields {
+                    if sf.0 == "value" {
+                      elem = sf.1
+                    }
+                  }
+                _ => ()
+              }
+            }
+          }
+          elem
+        }
+        None => @ast.TsType::Any
+      }
     Array(elem) => elem
     Tuple(items) =>
       if items.length() == 0 {
@@ -12401,6 +12440,36 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           // (`for (v of [0])` with no `v` anywhere is an error even in
           // non-strict code).
           check_undefined_name(env, ctx, n)
+          // TS2322: the element type must be assignable to the *existing*
+          // target's declared type (`var v: string; for (v of [0])`). The
+          // declared slot -- not the narrowed one -- is the assignment
+          // target (`x = true; for (x of nums)` re-widens `x`).
+          match env.lookup_declared(n) {
+            Some(target_ty) =>
+              if is_checkable(target_ty) &&
+                is_checkable(elem_ty) &&
+                !is_in_scope_type_param(ctx, target_ty) &&
+                !type_contains_unresolved_named(target_ty, ctx.resolver) &&
+                !type_contains_unresolved_named(elem_ty, ctx.resolver) &&
+                !type_deeply_contains_unmodeled(target_ty, ctx.resolver) &&
+                !type_deeply_contains_unmodeled(elem_ty, ctx.resolver) &&
+                !is_assignable_to(
+                  ctx.resolver.unwrap(widen_literal(elem_ty)),
+                  ctx.resolver.unwrap(target_ty),
+                ) &&
+                !is_structurally_assignable_named(
+                  elem_ty,
+                  target_ty,
+                  ctx.resolver,
+                ) {
+                record(
+                  ctx,
+                  "for-of target",
+                  "iterable yields `\{type_display(widen_literal(elem_ty))}` which is not assignable to `\{type_display(target_ty)}`",
+                )
+              }
+            None => ()
+          }
           if is_checkable(elem_ty) {
             env.narrow(n, elem_ty)
           }
@@ -13150,6 +13219,47 @@ fn check_call_args_in_expr(
         } else if is_syntactically_always_falsy(l) {
           record_unfiltered(
             ctx, "logical operand", "this kind of expression is always falsy",
+          )
+        }
+      }
+      // TS2322 (via the `in` operator's operand constraints): the left
+      // operand must be `string | number | symbol` (or `any`), the right an
+      // object type. Only confidently-typed operands are judged.
+      if op is In {
+        let lhs_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, l))
+        let lhs_bad = match lhs_ty {
+          Boolean | BooleanLiteral(_) | Void | Object(_) | Struct(_, _) => true
+          Named(n) =>
+            ctx.resolver.enums.get(n) is Some(_) ||
+            ctx.resolver.classes.get(n) is Some(_)
+          _ => false
+        }
+        if lhs_bad && is_checkable(lhs_ty) {
+          record_unfiltered(
+            ctx, "`in` operand", "the left operand of `in` must be of type `string`, `number`, or `symbol`",
+          )
+        }
+        let rhs_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, r))
+        let rhs_bad = match rhs_ty {
+          String_
+          | Literal(_)
+          | Number
+          | Int
+          | NumberLiteral(_)
+          | BigInt
+          | BigIntLiteral(_)
+          | Boolean
+          | BooleanLiteral(_)
+          | Symbol
+          | UniqueSymbol(_)
+          | Void
+          | Null
+          | Undefined => true
+          _ => false
+        }
+        if rhs_bad && is_checkable(rhs_ty) {
+          record_unfiltered(
+            ctx, "`in` operand", "the right operand of `in` must be an object type",
           )
         }
       }

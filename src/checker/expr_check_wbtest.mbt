@@ -11478,3 +11478,35 @@ test "expr_check: symbol keys, template-literal values, accessor pairs (batch N)
     0,
   )
 }
+
+///|
+test "expr_check: for-of assign targets, custom iterators, `in` operands (batch O)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Assignment-form for-of checks the element against the declared target.
+  assert_true(issues("var v: string;\nfor (v of [0]) { }") > 0)
+  @test.assert_eq(issues("var v: number;\nfor (v of [0]) { }"), 0)
+  // Narrowing before the loop must not shrink the assignment target.
+  @test.assert_eq(
+    issues(
+      "let obj: number[];\nlet x: string | number;\nfunction a() { x = \"s\"; for (x of obj) {} }",
+    ),
+    0,
+  )
+  // A user iterator class yields its `next()` value type.
+  assert_true(
+    issues(
+      "class NumberIterator { next() { return { value: 0, done: false }; } [Symbol.iterator]() { return this; } }\nvar v: string;\nfor (v of new NumberIterator) { }",
+    ) >
+    0,
+  )
+  // `in` operand constraints.
+  assert_true(issues("declare var b: boolean;\nvar r = b in {};") > 0)
+  assert_true(issues("var r = \"x\" in \"abc\";") > 0)
+  @test.assert_eq(issues("var o = { a: 1 };\nvar r = \"a\" in o;"), 0)
+  @test.assert_eq(
+    issues("declare var k: string | number;\nvar r = k in { a: 1 };"),
+    0,
+  )
+}

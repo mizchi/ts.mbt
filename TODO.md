@@ -2295,6 +2295,27 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-02 (T165)  714/815 (88 %)        414/414 ( 0 FP)   TS2322 subclusters: for-of targets, custom iterators, `in` operands: TP 1963 -> 1966
+
+  T165 -- first TS2322 subcluster pass:
+    - Assignment-form `for (v of xs)` now checks the element type against
+      the target's *declared* slot (`var v: string; for (v of [0])`); the
+      narrowed slot is not the assignment target (`x = true; for (x of
+      nums)` re-widens, caught as an FP by the whole-corpus gate and fixed
+      via `lookup_declared`).
+    - `for_of_element_type` understands user iterator classes: `next()`
+      returning `{ value: T, … }` (declared or body-inferred) yields `T`,
+      so `for (v of new NumberIterator)` and declared-binding loops over
+      custom iterables both check.
+    - `in` operator operand constraints: a confidently-bad left operand
+      (boolean / void / object shapes / class instances / enums) or a
+      primitive right operand reports; `any` / unions / generics abstain.
+    Remaining TS2322 misses are dominated by contextual typing of object
+    literals against unions, mapped-type relationships, overloaded
+    signature assignability, and the `object` keyword (still lowered to
+    `Any` at parse). Whole-corpus TP 1963 -> 1966 @ 0 FP (session total
+    1761 -> +205); pinned recall 714, precision 414/414. 2426 tests.
+
 2026-07-02 (T164)  714/815 (88 %)        414/414 ( 0 FP)   symbol keys / template-literal values / accessor pairs: TP 1955 -> 1963
 
   T164 -- requested clusters (symbol index, enum, template literal):
