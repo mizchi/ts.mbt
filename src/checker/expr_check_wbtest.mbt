@@ -8160,8 +8160,10 @@ test "expr_check: TS2344 constraint violation on explicit type args" {
 ///|
 // Issue #62: an undefined name used inside a computed property key is a
 // TS2304 ("cannot find name"), like any other value reference. A
-// declared-but-unassigned `var` read inside a computed key is NOT flagged
-// as used-before-assigned (tsc accepts it), but a `let` / `const` one is.
+// declared-but-unassigned `var` read in a computed *property* key IS a
+// TS2454 (symbolProperty1: `var s: symbol; { [s]: 0 }`), but in a computed
+// *method* / accessor key it is not (computedPropertyNames10:
+// `{ [s]() {} }` is accepted by tsc).
 test "expr_check: computed property key references" {
   let issues = fn(src : String) -> Array[String] {
     check_module_function_bodies(parse_module_or_empty(src)).map(fn(i) {
@@ -8176,9 +8178,16 @@ test "expr_check: computed property key references" {
   )
   // Defined name — no diagnostic.
   @test.assert_eq(issues("const e = 1;\nvar v = { [e]: 1 };").length(), 0)
-  // `var` declared-but-unassigned read in a computed key is accepted.
+  // `var` declared-but-unassigned read in a computed *property* key is a
+  // TS2454; the same read in a computed *method* key is accepted.
   @test.assert_eq(
     issues("var s: string;\nvar v = { [s]: 1 };")
+    .filter(fn(m) { m.contains("used before being assigned") })
+    .length(),
+    1,
+  )
+  @test.assert_eq(
+    issues("var s: string;\nvar v = { [s]() { } };")
     .filter(fn(m) { m.contains("used before being assigned") })
     .length(),
     0,
@@ -11661,4 +11670,49 @@ test "expr_check: TS2411/TS2413 index-signature member compatibility (batch R)" 
     issues("class B { [s: string]: number;\n  [s: number]: 42 | 233 }"),
     0,
   )
+}
+
+///|
+test "expr_check: TS2454 computed keys, new-callee, conditional assigns (batch S)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src))
+    .filter(fn(i) { i.message.contains("used before being assigned") })
+    .length()
+  }
+  // A computed *property* key reads the binding (symbolProperty1)...
+  assert_true(issues("var s: symbol;\nvar x = { [s]: 0 };") > 0)
+  // ...while a computed *method* / accessor key does not
+  // (computedPropertyNames10).
+  @test.assert_eq(issues("var s: string;\nvar v = { [s]() { } };"), 0)
+  @test.assert_eq(
+    issues("var s: string;\nvar v = { get [s]() { return 0; } };"),
+    0,
+  )
+  @test.assert_eq(issues("var s: symbol = Symbol();\nvar x = { [s]: 0 };"), 0)
+  // `new` over a declared-but-unassigned variable reads it.
+  assert_true(
+    issues("interface F { new (): { a: number } }\nvar d: F;\nvar r = new d();") >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "interface F { new (): { a: number } }\ndeclare var d: F;\nvar r = new d();",
+    ),
+    0,
+  )
+  // An assignment on a short-circuit path is not a definite assignment.
+  assert_true(
+    issues(
+      "declare const o: number | undefined;\nlet a: number;\no ?? (a = 1);\na.toString();",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "declare const o: boolean;\nlet a: number;\no && (a = 1);\na.toString();",
+    ) >
+    0,
+  )
+  // An unconditional assignment before the read stays silent.
+  @test.assert_eq(issues("let a: number;\na = 1;\na.toString();"), 0)
 }

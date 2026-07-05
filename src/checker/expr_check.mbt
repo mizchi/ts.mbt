@@ -4823,6 +4823,30 @@ fn object_prototype_member(field : String) -> @ast.TsType? {
 // also evaluates to `undefined`.
 
 ///|
+/// Snapshot the TS2454 unassigned map before walking a conditionally
+/// executed expression (the RHS of `&&` / `||` / `??`).
+fn snapshot_unassigned(ctx : CheckCtx) -> Array[(String, Bool)] {
+  let out : Array[(String, Bool)] = []
+  for kv in ctx.unassigned {
+    out.push((kv.0, kv.1))
+  }
+  out
+}
+
+///|
+/// Re-arm unassigned entries a conditionally executed walk cleared: an
+/// assignment on one short-circuit path is not a definite assignment.
+/// Entries the walk *reported* (reads clear on report) are re-armed too --
+/// a duplicate report is harmless while a lost one is a miss.
+fn rearm_unassigned(ctx : CheckCtx, before : Array[(String, Bool)]) -> Unit {
+  for kv in before {
+    if !ctx.unassigned.contains(kv.0) {
+      ctx.unassigned[kv.0] = kv.1
+    }
+  }
+}
+
+///|
 /// Recursively walk a binding pattern and clear every named slot
 /// from the TS2454 unassigned set. Used by the destructuring-
 /// assignment walker so `[a, b] = expr` / `{x: y} = expr` register
@@ -13175,6 +13199,16 @@ fn check_call_args_in_expr(
         ctx.resolver.type_aliases.get(class_name) is None {
         check_undefined_name(env, ctx, class_name)
       }
+      // TS2454: `new` over a declared-but-unassigned variable (`var d:
+      // Derived; new d()`) reads the binding like any other reference.
+      if ctx.unassigned.get(class_name) is Some(_) {
+        record(
+          ctx,
+          "new `\{class_name}`",
+          "variable `\{class_name}` is used before being assigned",
+        )
+        let _ = ctx.unassigned.remove(class_name)
+      }
       match ctx.resolver.lookup_constructor_sig(class_name) {
         Some((params, sig)) => {
           check_arguments_with_sig(
@@ -13350,8 +13384,19 @@ fn check_call_args_in_expr(
           for b in binds {
             env.narrow(b.0, b.1)
           }
+          let unassigned_before = snapshot_unassigned(ctx)
           check_call_args_in_expr(env, r, ctx)
           env.restore_from(snap)
+          rearm_unassigned(ctx, unassigned_before)
+        }
+        Coalesce => {
+          // The RHS of `??` runs only when the LHS is nullish, so an
+          // assignment inside it is conditional and does not discharge
+          // TS2454 (`o ?? (a = 1); a.toString()` still reads `a` before
+          // assignment on the other path). Same for `&&` / `||` above.
+          let unassigned_before = snapshot_unassigned(ctx)
+          check_call_args_in_expr(env, r, ctx)
+          rearm_unassigned(ctx, unassigned_before)
         }
         _ => check_call_args_in_expr(env, r, ctx)
       }
@@ -13525,12 +13570,17 @@ fn check_call_args_in_expr(
     // A computed property key (`{ [e]: 1 }`, `class C { [e]() {} }`) is an
     // ordinary value expression: walk both the key and the value so an
     // undefined name in the key surfaces (TS2304) like any other reference.
-    // The key is walked with `in_computed_key` set so the TS2454
-    // used-before-assigned read-check is suppressed there (tsc accepts a
-    // declared-but-unassigned name read inside a computed key).
+    // TS2454 in the key follows tsc's split: a computed *property* key runs
+    // the used-before-assigned analysis (`var s: symbol; { [s]: 0 }` flags
+    // `s`, symbolProperty1) while a computed *method* / accessor key does
+    // not (`{ [s]() {} }` is accepted, computedPropertyNames10) -- the
+    // `in_computed_key` var-read exemption applies only to callable values.
     ComputedProp(key, value) => {
       let saved = ctx.in_computed_key
-      ctx.in_computed_key = true
+      ctx.in_computed_key = match value {
+        FuncExpr(_) | ArrowFunc(_, _, _, _) => true
+        _ => false
+      }
       check_call_args_in_expr(env, key, ctx)
       ctx.in_computed_key = saved
       check_computed_key_type(env, key, ctx)

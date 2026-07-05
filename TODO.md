@@ -2295,6 +2295,28 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-05 (T169)  714/815 (88 %)        414/414 ( 0 FP)   TS2454 subclusters: computed property keys, new-callee, short-circuit assigns: TP 1992 -> 2001
+
+  T169 -- used-before-assigned refinements:
+    - The blanket `var`-in-computed-key exemption encoded a wrong premise:
+      tsc DOES run the analysis on a computed *property* key
+      (`var s: symbol; { [s]: 0 }` is TS2454, symbolProperty1) and only
+      skips computed *method* / accessor keys (`{ [s]() {} }`,
+      computedPropertyNames10 -- verified by its empty baseline). The
+      `in_computed_key` exemption now applies only when the entry value is
+      a callable literal. symbolProperty1, computedPropertyNames8/51.
+    - `new d()` over a declared-but-unassigned binding reads it like any
+      other reference (interfaceWithConstructSignaturesThatHidesBase
+      Signature 1/2, taggedTemplateStringsWithManyCallAndMember
+      Expressions x2 as bonuses).
+    - An assignment inside the RHS of `&&` / `||` / `??` executes
+      conditionally, so it no longer discharges the unassigned marker
+      (`o ?? (a = 1); a.toString()` keeps the TS2454;
+      controlFlowNullishCoalesce). Implemented as snapshot/re-arm around
+      the short-circuit RHS walk.
+    Whole-corpus TP 1992 -> 2001 @ 0 FP (session total 1761 -> +240);
+    pinned recall 714, precision 414/414. 2430 tests.
+
 2026-07-05 (T168)  714/815 (88 %)        414/414 ( 0 FP)   TS2411/TS2413 index-signature member compatibility: TP 1986 -> 1992
 
   T168 -- index signatures vs the members they constrain:
