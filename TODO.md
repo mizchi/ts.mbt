@@ -2295,6 +2295,45 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-05 (T168)  714/815 (88 %)        414/414 ( 0 FP)   TS2411/TS2413 index-signature member compatibility: TP 1986 -> 1992
+
+  T168 -- index signatures vs the members they constrain:
+    - TS2411 object-vs-object: a member whose type and the index value are
+      both fully-modeled literal-keyed `Object` shapes is decided by
+      `is_assignable_to` (`y: { a }` never satisfies `[x: string]: { a; b }`).
+      Guards: literal keys only (no `<call>` / `<new>` / computed /
+      index-sig-keyed entries), no unresolved named refs, no unmodeled
+      shapes.
+    - TS2411 function-typed member vs object index value: flags when the
+      value requires a member outside the `Function.prototype` surface
+      (`foo(): T` vs `[x: string]: { x: number }`; `{ length: number }`
+      stays silent -- functions have `.length`).
+    - TS2411 methods: regular (non-accessor, non-private) class methods are
+      constrained too (`[s: string]: string` over `foo() {}`).
+    - TS2411 union member: every constituent must satisfy a scalar index
+      value; decided only when all constituents are concrete scalars
+      (`foo: string | number` vs `[x: string]: number`;
+      `e | number` abstains on the enum constituent).
+    - TS2411 inherited indexers: base-interface index signatures constrain
+      derived members (non-generic extends chains, cycle-guarded).
+    - TS2411 statics: NEW `TsClassDecl.static_index_signatures` field --
+      `static [k: string]: V` was previously folded into the instance list
+      (latent unsoundness); it now constrains static fields (initializer
+      literals widen: `static x = 12` -> `number`; the class-decl builder
+      now records `static_field_inits`, previously always empty) and
+      static methods only. Both class parsers (runtime + declare) route by
+      the `static` modifier; the declare parser gained a post-modifier
+      index-signature pass.
+    - TS2413: within one container the numeric index value type must be
+      assignable to the string index value type (`[s: number]: 1` vs
+      `[s: string]: boolean`), applied to interfaces and both class sides.
+    staticIndexSignature7, interfaceWithStringIndexerHidingBaseTypeIndexer
+    1/2/3, derivedInterfaceIncompatibleWithBaseIndexer,
+    unionSubtypeIfEveryConstituentTypeIsSubtype (staticIndexSignature3
+    kept via the TS2413 pass). Whole-corpus TP 1986 -> 1992 @ 0 FP
+    (session total 1761 -> +231); pinned recall 714, precision 414/414.
+    2429 tests.
+
 2026-07-05 (T167)  714/815 (88 %)        414/414 ( 0 FP)   TS2304 subclusters: computed type keys, `export =`, var annotations: TP 1968 -> 1986
 
   T167 -- TS2304 ("Cannot find name 'X'") in three value/type-reference

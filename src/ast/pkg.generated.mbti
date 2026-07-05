@@ -91,6 +91,7 @@ pub(all) struct TsClassDecl {
   is_abstract : Bool
   is_constructible : Bool
   index_signatures : Array[(TsType, TsType)]
+  static_index_signatures : Array[(TsType, TsType)]
   decorators : Array[TsExpr]
   is_declare : Bool
   private_members : Array[String]

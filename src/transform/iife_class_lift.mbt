@@ -240,6 +240,7 @@ fn try_lift_iife_value(
     is_abstract: false,
     is_constructible: true,
     index_signatures: [],
+    static_index_signatures: [],
     decorators: [],
     is_declare: false,
     private_members: [],

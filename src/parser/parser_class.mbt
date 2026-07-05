@@ -15,13 +15,16 @@ priv enum ClassElement {
   Field(Bool, ClassKey, @ast.TsType, @ast.TsExpr?, Bool, Bool)
   StaticBlock(@ast.TsBlock)
   // Marker for `[k: KeyType]: ValueType` index signatures, carrying the
-  // captured key / value types. The presence of any index signature opts
-  // the class out of strict-property-initialization (TS2564) because every
-  // concrete field is implicitly covered by the indexer; the captured value
-  // type also feeds the TS2411 index-constraint check (named properties must
-  // be assignable to the index value type). When the signature shape can't be
-  // parsed precisely the key/value default to `Any` (no constraint).
-  IndexSig(@ast.TsType, @ast.TsType)
+  // captured key / value types and whether the signature was declared
+  // `static` (a static signature constrains the *static* member side and
+  // never participates in instance resolution). The presence of any index
+  // signature opts the class out of strict-property-initialization (TS2564)
+  // because every concrete field is implicitly covered by the indexer; the
+  // captured value type also feeds the TS2411 index-constraint check (named
+  // properties must be assignable to the index value type). When the
+  // signature shape can't be parsed precisely the key/value default to `Any`
+  // (no constraint).
+  IndexSig(@ast.TsType, @ast.TsType, Bool)
 }
 
 ///|
@@ -64,6 +67,7 @@ fn build_runtime_class_decl(
   let properties : Array[@ast.TsClassPropertyDecl] = []
   let methods : Array[@ast.TsClassMethodDecl] = []
   let instance_field_inits : Array[(String, @ast.TsExpr)] = []
+  let static_field_inits : Array[(String, @ast.TsExpr)] = []
   let computed_field_keys : Array[@ast.TsExpr] = []
   let constructor_param_is_rest : Array[Bool] = []
   let constructor_param_defaults : Array[@ast.TsExpr?] = []
@@ -126,11 +130,14 @@ fn build_runtime_class_decl(
             has_initializer: init is Some(_),
             has_definite_assertion,
           })
-          if !is_static {
-            match init {
-              Some(expr) => instance_field_inits.push((field_name, expr))
-              None => ()
-            }
+          match init {
+            Some(expr) =>
+              if is_static {
+                static_field_inits.push((field_name, expr))
+              } else {
+                instance_field_inits.push((field_name, expr))
+              }
+            None => ()
           }
         }
       Method(is_static, Name(method_name), accessor_kind, func) =>
@@ -256,10 +263,16 @@ fn build_runtime_class_decl(
   // captured key/value types so the TS2411 index-constraint check can
   // verify named properties are assignable to the index value type.
   let index_signatures : Array[(@ast.TsType, @ast.TsType)] = []
+  let static_index_signatures : Array[(@ast.TsType, @ast.TsType)] = []
   let static_blocks : Array[@ast.TsBlock] = []
   for element in elements {
     match element {
-      IndexSig(key, value) => index_signatures.push((key, value))
+      IndexSig(key, value, is_static) =>
+        if is_static {
+          static_index_signatures.push((key, value))
+        } else {
+          index_signatures.push((key, value))
+        }
       StaticBlock(block) => static_blocks.push(block)
       _ => ()
     }
@@ -365,7 +378,7 @@ fn build_runtime_class_decl(
     base_names: [],
     implements_names,
     base_expr: None,
-    static_field_inits: [],
+    static_field_inits,
     static_blocks,
     instance_field_inits,
     constructor_params,
@@ -375,6 +388,7 @@ fn build_runtime_class_decl(
     properties,
     methods,
     index_signatures,
+    static_index_signatures,
     is_abstract,
     is_constructible: !is_abstract,
     // Decorators on runtime classes are attached by the caller via
@@ -1354,7 +1368,7 @@ fn Parser::parse_class_body(
               None => ()
             }
           }
-          elements.push(IndexSig(key, value))
+          elements.push(IndexSig(key, value, is_static))
           continue
         }
         None => ()
@@ -1364,7 +1378,7 @@ fn Parser::parse_class_body(
       if saw_visibility_modifier {
         index_sig_modifier_misuse = true
       }
-      elements.push(IndexSig(@ast.TsType::Any, @ast.TsType::Any))
+      elements.push(IndexSig(@ast.TsType::Any, @ast.TsType::Any, is_static))
       continue
     }
     let mut accessor_kind : String? = None
@@ -2026,6 +2040,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     properties: runtime_decl.properties,
     methods: runtime_decl.methods,
     index_signatures: runtime_decl.index_signatures,
+    static_index_signatures: runtime_decl.static_index_signatures,
     is_abstract: runtime_decl.is_abstract,
     is_constructible: runtime_decl.is_constructible,
     decorators: self.take_pending_decorators(),
@@ -2064,7 +2079,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
           }
         }
       StaticBlock(_) => key_temps.push(None) // Placeholder to keep indices aligned
-      IndexSig(_, _) => key_temps.push(None)
+      IndexSig(_, _, _) => key_temps.push(None)
     }
   }
 
@@ -2423,7 +2438,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
         ])
         stmts.push(Expr(call_expr))
       }
-      IndexSig(_, _) => ()
+      IndexSig(_, _, _) => ()
     }
   }
   stmts.push(Return(Some(@ast.TsExpr::Var(tmp_name))))
@@ -2781,7 +2796,7 @@ fn Parser::parse_class_decl_with_abstract(
           }
         }
       StaticBlock(_) => key_temps.push(None) // Placeholder to keep indices aligned
-      IndexSig(_, _) => key_temps.push(None)
+      IndexSig(_, _, _) => key_temps.push(None)
     }
   }
 
@@ -3138,7 +3153,7 @@ fn Parser::parse_class_decl_with_abstract(
         ])
         stmts.push(Expr(call_expr))
       }
-      IndexSig(_, _) => ()
+      IndexSig(_, _, _) => ()
     }
   }
   if stmts.length() == 1 {

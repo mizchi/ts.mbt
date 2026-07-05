@@ -11592,3 +11592,73 @@ test "expr_check: TS2304 computed type keys, export =, var annotations (batch Q)
   @test.assert_eq(issues("var a: { m<T>(x: T): T };"), 0)
   @test.assert_eq(issues("var a: { new <T>(x: T): T };"), 0)
 }
+
+///|
+test "expr_check: TS2411/TS2413 index-signature member compatibility (batch R)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2411: an object-shaped member vs an object-shaped index value is
+  // decided structurally for fully-modeled literal-keyed shapes.
+  assert_true(
+    issues(
+      "interface I { [x: string]: { a: number; b: number }; y: { a: number } }",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "interface I { [x: string]: { a: number }; y: { a: number; b: number } }",
+    ),
+    0,
+  )
+  // Inherited indexers constrain derived members.
+  assert_true(
+    issues(
+      "interface B { [x: number]: { x: number; y: number } }\ninterface D extends B { 1: { y: number } }",
+    ) >
+    0,
+  )
+  // A method against a scalar index value.
+  assert_true(issues("class Y { [index: string]: string;\n  foo() {} }") > 0)
+  // A method against an object index value that requires a non-function
+  // member; `{ length: number }` is satisfied by any function, so silent.
+  assert_true(
+    issues("interface I { [x: string]: { x: number }; foo(): void }") > 0,
+  )
+  @test.assert_eq(
+    issues("interface I { [x: string]: { length: number }; foo(): void }"),
+    0,
+  )
+  // Static index signatures constrain static members only.
+  assert_true(
+    issues("class X { static [index: string]: string;\n  static x = 12; }") > 0,
+  )
+  @test.assert_eq(
+    issues("class X { static [index: string]: string;\n  x = 12; }"),
+    0,
+  )
+  @test.assert_eq(
+    issues("class X { [index: string]: number;\n  static foo() {} }"),
+    0,
+  )
+  // TS2322 union property: every constituent must satisfy the index value.
+  assert_true(
+    issues("interface I2 { [x: string]: number; foo: string | number }") > 0,
+  )
+  @test.assert_eq(
+    issues(
+      "interface I2 { [x: string]: string | number; foo: string | number }",
+    ),
+    0,
+  )
+  // TS2413: the numeric index value must be assignable to the string one.
+  assert_true(
+    issues("class ED { static [s: string]: boolean;\n  static [s: number]: 1 }") >
+    0,
+  )
+  @test.assert_eq(
+    issues("class B { [s: string]: number;\n  [s: number]: 42 | 233 }"),
+    0,
+  )
+}

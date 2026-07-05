@@ -740,6 +740,10 @@ pub(all) struct TsClassDecl {
   // type with the value type so the checker can resolve `instance.foo`
   // when there is no named field matching `foo`.
   index_signatures : Array[(TsType, TsType)]
+  // `static [key: string]: T` signatures. Kept apart from the instance
+  // list: a static index signature constrains the class's *static*
+  // members (TS2411) and never applies to instance member resolution.
+  static_index_signatures : Array[(TsType, TsType)]
   // Stage-3 decorators applied to the class declaration (`@Foo`,
   // `@Foo()`, `@a.b()`). Each entry is the decorator's call /
   // reference expression in source order. Retained so downstream

@@ -21215,8 +21215,86 @@ fn check_interface_extends_compat(
       _ => is_scalar(t)
     }
   }
+  // An `Object` shape whose keys are all plain literal member names --
+  // no call / construct signatures, no computed keys, no index-signature
+  // keyed entries. Only such shapes are structurally decided below (an
+  // index signature or call surface makes assignability wider than the
+  // literal member walk models).
+  fn object_shape_literal_keys_only(t : @ast.TsType) -> Bool {
+    match t {
+      Object(fields) => {
+        for f in fields {
+          match f.0 {
+            Literal(name) =>
+              if name == "<call>" ||
+                name == "<new>" ||
+                name.has_prefix("@@") ||
+                name == "<computed>" {
+                return false
+              }
+            _ => return false
+          }
+        }
+        true
+      }
+      _ => false
+    }
+  }
+  // Member names a bare function value *does* have (Function.prototype and
+  // call metadata). An object-shaped index value whose required members all
+  // fall outside this set can never be satisfied by a Func property.
+  fn is_function_member_name(name : String) -> Bool {
+    match name {
+      "length"
+      | "name"
+      | "arguments"
+      | "caller"
+      | "apply"
+      | "call"
+      | "bind"
+      | "prototype"
+      | "toString"
+      | "constructor" => true
+      _ => false
+    }
+  }
   fn violates_index_value(prop : @ast.TsType, value : @ast.TsType) -> Bool {
     let t = strip_optional(prop)
+    let tu = resolver.unwrap(t)
+    let vu = resolver.unwrap(value)
+    // Both sides are fully-modeled anonymous object shapes: decide
+    // structurally. `is_assignable_to` returning false for a concrete
+    // literal-keyed pair is definite (a required member is missing or a
+    // member type conflicts) -- `{ a: number }` never satisfies a
+    // `{ a: number; b: number }` index value.
+    if object_shape_literal_keys_only(tu) &&
+      object_shape_literal_keys_only(vu) &&
+      !type_contains_unresolved_named(tu, resolver) &&
+      !type_contains_unresolved_named(vu, resolver) &&
+      !type_deeply_contains_unmodeled(tu, resolver) &&
+      !type_deeply_contains_unmodeled(vu, resolver) {
+      return !is_assignable_to(tu, vu)
+    }
+    // A function-typed property against a literal-keyed object index value:
+    // a bare function only carries the Function.prototype surface, so when
+    // the value requires a member outside that set the property can never
+    // satisfy it (`foo(): { x: number }` vs `[x: string]: { x: number }`).
+    if tu is Func(_, _) && object_shape_literal_keys_only(vu) {
+      match vu {
+        Object(vfields) =>
+          for vf in vfields {
+            match vf.0 {
+              Literal(vname) =>
+                if !is_function_member_name(vname) &&
+                  !type_accepts_undefined(vf.1) {
+                  return true
+                }
+              _ => ()
+            }
+          }
+        _ => ()
+      }
+    }
     // Index value is object-shaped: a scalar property can never satisfy it.
     if is_object_shaped(value) {
       return is_scalar(t)
@@ -21236,6 +21314,22 @@ fn check_interface_extends_compat(
       }
       return match t {
         Func(_, _) | Constructor(_, _, _) | Array(_) | Tuple(_) => true
+        // A union property must have EVERY constituent assignable to the
+        // index value (`foo: string | number` vs `[x: string]: number`).
+        // Only decided when all members are concrete scalars, so enum /
+        // generic constituents keep the conservative silence.
+        Union(members) => {
+          let mut any_bad = false
+          for m in members {
+            if !is_scalar(m) {
+              return false
+            }
+            if !is_assignable_to(m, value) {
+              any_bad = true
+            }
+          }
+          any_bad
+        }
         _ => false
       }
     }
@@ -21276,6 +21370,47 @@ fn check_interface_extends_compat(
     }
   }
 
+  // TS2413 ("'number' index type 'N' is not assignable to 'string' index
+  // type 'S'"): when one container declares both a numeric and a string
+  // index signature, the numeric value type must be assignable to the
+  // string value type (a numeric key IS a string key). Decided only for
+  // concrete, fully-modeled value pairs.
+  fn check_num_vs_str_sigs(
+    sigs : Array[(@ast.TsType, @ast.TsType)],
+    owner : String,
+  ) -> Unit {
+    let mut str_val : @ast.TsType? = None
+    for s in sigs {
+      if s.0 is String_ {
+        str_val = Some(s.1)
+      }
+    }
+    match str_val {
+      Some(sv) =>
+        for s in sigs {
+          let is_num = match s.0 {
+            Number | Int => true
+            _ => false
+          }
+          if is_num &&
+            is_checkable(s.1) &&
+            is_checkable(sv) &&
+            !type_contains_unresolved_named(s.1, resolver) &&
+            !type_contains_unresolved_named(sv, resolver) &&
+            !type_deeply_contains_unmodeled(s.1, resolver) &&
+            !type_deeply_contains_unmodeled(sv, resolver) &&
+            !is_assignable_to(resolver.unwrap(s.1), resolver.unwrap(sv)) &&
+            !is_structurally_assignable_named(s.1, sv, resolver) {
+            issues.push({
+              path: owner,
+              message: "`number` index type `\{type_display(s.1)}` is not assignable to `string` index type `\{type_display(sv)}`",
+            })
+          }
+        }
+      None => ()
+    }
+  }
+
   for iface in module_.interfaces {
     // Generic interfaces are processed too: a property whose type is one of
     // the interface's own type parameters resolves to a bare `Named` that is
@@ -21286,6 +21421,46 @@ fn check_interface_extends_compat(
       iface.fields,
       "interface \{iface.name}",
     )
+    if iface.type_params.length() == 0 {
+      check_num_vs_str_sigs(iface.index_signatures, "interface \{iface.name}")
+    }
+    // Inherited index signatures constrain a derived interface's members
+    // too (`interface D extends B { 1: { y } }` where `B` has a numeric
+    // indexer). Walk non-generic extends chains, guarding cycles.
+    if iface.type_params.length() == 0 && iface.extends_names.length() > 0 {
+      let inherited : Array[(@ast.TsType, @ast.TsType)] = []
+      let visited : Map[String, Unit] = {}
+      visited[iface.name] = ()
+      let stack : Array[String] = []
+      for bi, base_name in iface.extends_names {
+        if bi < iface.extends_args.length() &&
+          iface.extends_args[bi].length() > 0 {
+          continue
+        }
+        stack.push(base_name)
+      }
+      while stack.length() > 0 {
+        let n = stack.unsafe_pop()
+        if visited.contains(n) {
+          continue
+        }
+        visited[n] = ()
+        match iface_by_name.get(n) {
+          Some(b) => {
+            for sig in b.index_signatures {
+              inherited.push(sig)
+            }
+            for bn in b.extends_names {
+              stack.push(bn)
+            }
+          }
+          None => ()
+        }
+      }
+      if inherited.length() > 0 {
+        check_index_props(inherited, iface.fields, "interface \{iface.name}")
+      }
+    }
   }
   for c in module_.classes {
     if c.type_params.length() == 0 {
@@ -21299,7 +21474,80 @@ fn check_interface_extends_compat(
           fields.push((p.name, p.type_))
         }
       }
+      // Regular (non-accessor) instance methods are constrained too:
+      // `[s: string]: string` over `foo() {}` is a TS2411. Private names
+      // are not string-keyed members and are skipped.
+      for m in c.methods {
+        if !m.is_static &&
+          m.accessor != "get" &&
+          m.accessor != "set" &&
+          m.name != "constructor" &&
+          m.name != "<computed>" &&
+          !m.name.has_prefix("__private_brand__") &&
+          !m.name.has_prefix("#") {
+          let ptypes : Array[@ast.TsType] = []
+          for p in m.params {
+            ptypes.push(p.1)
+          }
+          fields.push((m.name, @ast.TsType::Func(ptypes, m.return_type)))
+        }
+      }
       check_index_props(c.index_signatures, fields, "class \{c.name}")
+      check_num_vs_str_sigs(c.index_signatures, "class \{c.name}")
+      check_num_vs_str_sigs(c.static_index_signatures, "class \{c.name}")
+      // Static side: `static [k: string]: V` constrains static fields and
+      // methods (never instance members, and vice versa). A field with no
+      // annotation recovers its widened primitive from the recorded static
+      // initializer (`static x = 12` -> `number`).
+      if c.static_index_signatures.length() > 0 {
+        // Same accessor exclusion as the instance walk: get/set pairs are
+        // upserted into `properties` with an imprecise type.
+        let static_accessors : Map[String, Unit] = {}
+        for m in c.methods {
+          if m.is_static && (m.accessor == "get" || m.accessor == "set") {
+            static_accessors[m.name] = ()
+          }
+        }
+        let static_fields : Array[(String, @ast.TsType)] = []
+        for p in c.properties {
+          if p.is_static && !p.is_accessor && !static_accessors.contains(p.name) {
+            let mut ty = p.type_
+            if !is_checkable(ty) {
+              for init in c.static_field_inits {
+                if init.0 == p.name {
+                  match precise_literal_type(init.1) {
+                    Some(lt) => ty = widen_literal(lt)
+                    None => ()
+                  }
+                  break
+                }
+              }
+            }
+            static_fields.push((p.name, ty))
+          }
+        }
+        for m in c.methods {
+          if m.is_static &&
+            m.accessor != "get" &&
+            m.accessor != "set" &&
+            m.name != "<computed>" &&
+            !m.name.has_prefix("__private_brand__") &&
+            !m.name.has_prefix("#") {
+            let ptypes : Array[@ast.TsType] = []
+            for p in m.params {
+              ptypes.push(p.1)
+            }
+            static_fields.push(
+              (m.name, @ast.TsType::Func(ptypes, m.return_type)),
+            )
+          }
+        }
+        check_index_props(
+          c.static_index_signatures,
+          static_fields,
+          "class \{c.name}",
+        )
+      }
     }
   }
   issues

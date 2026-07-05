@@ -2534,6 +2534,7 @@ fn Parser::parse_declare_class(
   let protected_members : Array[String] = []
   let abstract_members : Array[String] = []
   let index_signatures : Array[(@ast.TsType, @ast.TsType)] = []
+  let static_index_signatures : Array[(@ast.TsType, @ast.TsType)] = []
   let static_blocks : Array[@ast.TsBlock] = []
   let mut constructor_params : Array[(String, @ast.TsType)]? = None
   let mut saw_public_constructor = false
@@ -2616,6 +2617,21 @@ fn Parser::parse_declare_class(
     if is_static && self.check(LBrace) {
       static_blocks.push(self.parse_block())
       continue
+    }
+    // Index signature written after modifiers (`static [index: string]:
+    // string`): the pre-modifier check at the loop head can't see it.
+    if self.check(LBracket) && self.is_index_signature_shape_after_lbracket() {
+      match self.try_parse_class_index_signature() {
+        Some(sig) => {
+          if is_static {
+            static_index_signatures.push((sig.0, sig.1))
+          } else {
+            index_signatures.push((sig.0, sig.1))
+          }
+          continue
+        }
+        None => ()
+      }
     }
     let mut accessor_kind : String? = None
     match self.peek().kind {
@@ -2789,6 +2805,7 @@ fn Parser::parse_declare_class(
     properties,
     methods,
     index_signatures,
+    static_index_signatures,
     is_abstract,
     is_constructible,
     decorators: self.take_pending_decorators(),
