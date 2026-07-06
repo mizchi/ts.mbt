@@ -11954,3 +11954,19 @@ test "expr_check: TS2339 namespace exports and enum members (batch X)" {
     0,
   )
 }
+
+///|
+test "expr_check: TS7006 uncontextual arrow params (batch Y)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // An unannotated binding gives its arrow initializer no contextual type.
+  assert_true(issues("var x = x => `abc${ x }def`;") > 0)
+  assert_true(issues("var x = `abc${ x => x }def`;") > 0)
+  // Annotated bindings / params / call arguments keep contextual typing.
+  @test.assert_eq(issues("var f1: (x: number) => number = x => x + 1;"), 0)
+  @test.assert_eq(issues("var f2 = (x: number) => x + 1;"), 0)
+  @test.assert_eq(issues("const a = [1, 2].map(x => x + 1);"), 0)
+  @test.assert_eq(issues("var f3 = (x = 1) => x;"), 0)
+  @test.assert_eq(issues("var f4 = (...rest: number[]) => rest.length;"), 0)
+}

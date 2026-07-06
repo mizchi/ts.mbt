@@ -2295,6 +2295,23 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-06 (T175)  714/815 (88 %)        414/414 ( 0 FP)   TS7006 uncontextual arrow parameters: TP 2050 -> 2054
+
+  T175 -- noImplicitAny for arrows without contextual types: an
+    *unannotated* `var`/`let`/`const` binding initialized by an arrow
+    gives the arrow's unannotated parameters no contextual type
+    (`var x = x => …`), and template-literal placeholders never carry one
+    (`` var x = `abc${ x => x }def` ``). Recorded by `parse_var_like`
+    under the parser's `no_implicit_any` flag through the established
+    `<noimplicitany>` channel; only the DIRECT initializer shape (and
+    template placeholders) is walked -- arrows nested in call arguments
+    may be contextually typed by the callee and abstain, as do annotated
+    bindings, annotated/defaulted/rest parameters.
+    templateStringInArrowFunction, templateStringWithEmbeddedArrow
+    Function, ArrowFunction3 + parserX_ArrowFunction3 as bonuses.
+    Whole-corpus TP 2050 -> 2054 @ 0 FP (session total 1761 -> +293);
+    pinned recall 714, precision 414/414. 2437 tests.
+
 2026-07-06 (T174)  714/815 (88 %)        414/414 ( 0 FP)   TS2339 namespace exports / enum members: TP 2045 -> 2050
 
   T174 -- qualified-access member existence:

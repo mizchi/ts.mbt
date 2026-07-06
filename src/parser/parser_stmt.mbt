@@ -285,12 +285,59 @@ fn Parser::parse_var_like(
   }
   let type_ = self.parse_var_decl_type()
   let stmts = self.parse_var_decl_list_from(binding, type_, kind)
+  // TS7006 (noImplicitAny): an unannotated binding initialized by a
+  // callable literal gives the callable's unannotated parameters no
+  // contextual type -- they are implicitly `any` (`var x = x => x`).
+  // An annotated binding contextually types the parameters and abstains.
+  if self.no_implicit_any {
+    for stmt in stmts {
+      match stmt {
+        Var(_, Any, init) | Let(_, Any, init) | Const(_, Any, init) =>
+          self.record_uncontextual_callable_params(init)
+        _ => ()
+      }
+    }
+  }
   self.consume_semicolon()
   let merged = self.merge_decl_stmts(stmts)
   // If there is a single simple-ident declarator whose initializer is an
   // arrow-function or function-expression, apply JSDoc param/return overlays
   // using the var/let/const keyword position (where the JSDoc block sits).
   apply_jsdoc_var_func_overlay(self.jsdoc_at_pos, merged, kw_pos)
+}
+
+///|
+/// Record TS7006 for each unannotated, non-rest, non-defaulted simple
+/// parameter of an arrow function sitting in a position with no
+/// contextual type. Only the DIRECT initializer shape is walked -- an
+/// arrow nested in a call argument may receive a contextual type from
+/// the callee, so anything deeper abstains.
+fn Parser::record_uncontextual_callable_params(
+  self : Parser,
+  init : @ast.TsExpr,
+) -> Unit {
+  match init {
+    ArrowFunc(params, _, _, _) =>
+      for p in params {
+        if p.type_ is Any &&
+          p.default is None &&
+          !p.is_rest &&
+          p.name != "<param>" &&
+          !p.name.has_prefix("<") &&
+          (p.binding is None || p.binding is Some(Ident(_))) {
+          self.grammar_misuses.push(
+            "<noimplicitany>parameter `\{p.name}` implicitly has an `any` type",
+          )
+        }
+      }
+    // A template literal's placeholders never receive contextual types
+    // (`` var x = `abc${ x => x }def` ``).
+    TemplateLiteral(_, exprs) =>
+      for e in exprs {
+        self.record_uncontextual_callable_params(e)
+      }
+    _ => ()
+  }
 }
 
 ///|
