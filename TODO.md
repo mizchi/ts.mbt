@@ -2295,6 +2295,643 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-06 (T180)  714/815 (88 %)        414/414 ( 0 FP)   Partial/Required/Readonly wrapper lattice: TP 2078 -> 2081
+
+  T180 -- mapped-type utility assignability (user-requested cluster): an
+    optionality level over ONE core type (Required=0, plain=1, Partial=2;
+    the outermost Partial/Required wrapper decides, `Readonly` is
+    assignability-transparent and just unwraps) may only stay or decrease
+    across an assignment. `Partial<T>` never satisfies `Readonly<T>` /
+    `T` / `Required<T>`, and `T` never satisfies `Required<T>`; the legal
+    directions (`Required -> plain -> Partial`, Readonly anywhere) stay
+    silent. Decided only when both peeled cores are the identical type
+    (`equivalent`), so no structural reasoning is involved and generic
+    cores (`T`) are fine. Applied in `check_expr_against`, so
+    assignments, initializers, returns, and call arguments all see it.
+    mappedTypes5, mappedTypes6, mappedTypeRelationships (bonus).
+    Whole-corpus TP 2078 -> 2081 @ 0 FP (session total 1761 -> +320);
+    pinned recall 714, precision 414/414. 2442 tests.
+
+2026-07-06 (T179)  714/815 (88 %)        414/414 ( 0 FP)   TS2304 round 2: typeof tails, module names, dotted paths: TP 2072 -> 2078
+
+  T179 -- error-recovery name resolution:
+    - `var v: typeof A.` (trailing dot): the typeof-query parser now
+      tolerates the missing segment instead of collapsing the whole
+      annotation to `Any`, so `unresolved_typeof_references` still flags
+      the undeclared base. parserTypeQuery3/4.
+    - TS1443: a `declare module` name written as a template literal
+      (`declare module \`M1\` {}`) records a grammar misuse -- only
+      '/" quoted strings are legal. templateStringInModuleName(ES6).
+    - A hard-reserved word as a dotted namespace path segment
+      (`declare namespace chrome.debugger {}`) records; contextual
+      keywords (`of`, `type`, ...) remain legal segments via
+      `is_qualified_type_name_part`.
+      ambientModuleDeclarationWithReservedIdentifierInDottedPath 1/2.
+    Whole-corpus TP 2072 -> 2078 @ 0 FP (session total 1761 -> +317);
+    pinned recall 714, precision 414/414. 2441 tests.
+
+2026-07-06 (T178)  714/815 (88 %)        414/414 ( 0 FP)   TS2345: iterables vs tuples, spread elements, BigInt builtin: TP 2066 -> 2072
+
+  T178 -- argument-type subclusters:
+    - A value that is iterable-but-not-array-like never satisfies a
+      *tuple* target: well-known keyed collections (`Map`/`Set`/weak
+      variants, user-undeclared -- also matched syntactically as
+      `new Map(…)` when inference loses the class) and base-less iterator
+      classes (declare `next()`, no heritage that could reach `Array`, no
+      index signatures). Applied in `check_expr_against` (Tuple targets)
+      and at call sites for *unannotated array-destructuring parameters*
+      (`function fun([a, b]) {}` types as `[any, any]`); a parameter
+      default retypes the pattern and abstains
+      (`fun([a, b] = new FooIterator)` -- caught as 3 FPs by the gate).
+      iterableArrayPattern10/13/16/26.
+    - Spread arguments in rest position check the spread source's
+      *element* type against the rest parameter's element type
+      (`foo(...new StringIterator)` vs `(...s: (symbol | number)[])`).
+      Tuple sources with variadic slots union a `Rest(...)` marker into
+      the element and abstain (genericRestParameters2 FP); covariant
+      arrays recurse one level (`Foo[]` satisfies `Bar[]` when `Foo`
+      extends `Bar` structurally -- iterableArrayPattern20 FP).
+      iteratorSpreadInCall6.
+    - `BigInt(x)` builtin: nullish literal arguments report under
+      strictNullChecks; `Symbol()` and object literals always
+      (`(string | number | bigint | boolean)` parameter). Skipped when
+      the module declares its own `BigInt`. constructBigint.
+    Whole-corpus TP 2066 -> 2072 @ 0 FP (session total 1761 -> +311);
+    pinned recall 714, precision 414/414. 2440 tests.
+
+2026-07-06 (T177)  714/815 (88 %)        414/414 ( 0 FP)   TS2322 round 3: generator returns, destructuring assignment: TP 2062 -> 2066
+
+  T177 -- third TS2322 subcluster pass:
+    - A generator's declared return type must be iterator-like: a concrete
+      scalar annotation (`function* g1(): number {}`) can never hold the
+      produced Generator object. generatorTypeCheck6.
+    - Generator `return` values are NOT contextually typed by tsc
+      (microsoft/TypeScript#35995): a fresh all-literal-field object
+      literal widens before the TReturn check (`return { x: 'x' }` against
+      `Generator<any, { x: 'x' }, any>` reports "string not assignable to
+      '\'x\''"). New `CheckCtx.widen_generator_return` armed when the
+      TReturn slot was extracted; only the direct all-literal shape widens
+      (an `as` cast keeps the ordinary contextual path).
+      generatorReturnContextualType.
+    - Assignment-form array destructuring (`[a, b] = new FooIterator`)
+      checks the source's element type against each existing target's
+      *declared* slot (same guard set as the for-of target check);
+      syntactic array-literal sources destructure per slot (the widened
+      union element cross-contaminated slots -- caught on a probe).
+      iterableArrayPattern5/7.
+    - Underlying model fix: a parser-merged declarator group
+      (`var a: string, b: string;` becomes `Block[Var, Var]`) had its
+      bindings erased by block snapshot/restore for every later statement.
+      `var`-only groups now leak into the enclosing scope (JS hoisting
+      semantics); `let`/`const` blocks stay scoped (the existing
+      inner-binding-strip wbtest pinned that).
+    Whole-corpus TP 2062 -> 2066 @ 0 FP (session total 1761 -> +305);
+    pinned recall 714, precision 414/414. 2439 tests.
+
+2026-07-06 (T176)  714/815 (88 %)        414/414 ( 0 FP)   TS2322 subclusters: union elements/targets, `in` operands, static index writes: TP 2054 -> 2062
+
+  T176 -- second TS2322 subcluster pass (user-requested):
+    - Array-literal inference: mixed *scalar* elements now infer the
+      union (`[0, ""]` -> `(number | string)[]`) instead of widening to
+      `any[]`; non-scalar mixes keep the old widening (unions over
+      nullish/object members would interact with strictness rules the
+      context-free assignability can't see). Drives the for-of target
+      check: `var v: string; for (v of [0, ""])` reports (for-of11).
+    - `in` RHS: a well-known `Symbol.X` static is a unique symbol even
+      when inference loses the type (syntactic shape, bypasses the
+      `is_checkable` gate; a user SymbolConstructor augmentation disables
+      it) -- symbolType2/15. A bare unconstrained in-scope type parameter
+      (or a union of them) may be instantiated with a primitive, so it is
+      not assignable to `object` -- inOperatorWithValidOperands.
+    - Writes through a *static* index signature check the value type
+      (`class C { static [s: number]: 42 }; C[2] = 2` -- numeric-literal
+      keys select the numeric signature, falling back to string). Routed
+      through check_expr_against so only established definite rules fire.
+      staticIndexSignature1/2.
+    - A fresh object literal against a *union* target must satisfy at
+      least one constituent (`{ prop: strOrNumber }` never satisfies
+      `{ prop: string } | { prop: number }`). Tight guards: every
+      constituent a fully-modeled literal-keyed object shape, plain
+      entries only, uncertain verdicts count as "satisfies"; entries keep
+      their literal types (a widen_literal draft false-flagged
+      discriminant literals -- caught by the whole-corpus gate on
+      discriminatedUnionInference). contextualTypeWithUnionTypeObject
+      Literal, discriminatedUnionTypes2, optionalBindingParameters1.
+    Whole-corpus TP 2054 -> 2062 @ 0 FP (session total 1761 -> +301);
+    pinned recall 714, precision 414/414. 2438 tests.
+
+2026-07-06 (T175)  714/815 (88 %)        414/414 ( 0 FP)   TS7006 uncontextual arrow parameters: TP 2050 -> 2054
+
+  T175 -- noImplicitAny for arrows without contextual types: an
+    *unannotated* `var`/`let`/`const` binding initialized by an arrow
+    gives the arrow's unannotated parameters no contextual type
+    (`var x = x => …`), and template-literal placeholders never carry one
+    (`` var x = `abc${ x => x }def` ``). Recorded by `parse_var_like`
+    under the parser's `no_implicit_any` flag through the established
+    `<noimplicitany>` channel; only the DIRECT initializer shape (and
+    template placeholders) is walked -- arrows nested in call arguments
+    may be contextually typed by the callee and abstain, as do annotated
+    bindings, annotated/defaulted/rest parameters.
+    templateStringInArrowFunction, templateStringWithEmbeddedArrow
+    Function, ArrowFunction3 + parserX_ArrowFunction3 as bonuses.
+    Whole-corpus TP 2050 -> 2054 @ 0 FP (session total 1761 -> +293);
+    pinned recall 714, precision 414/414. 2437 tests.
+
+2026-07-06 (T174)  714/815 (88 %)        414/414 ( 0 FP)   TS2339 namespace exports / enum members: TP 2045 -> 2050
+
+  T174 -- qualified-access member existence:
+    - `A.y` where the runtime namespace `A` *declares* `y` but never
+      exports it. The resolver now carries per-namespace value-decl and
+      `<export-value>` marker sets (`namespace_value_decls` /
+      `namespace_exports`, merged across same-name declarations); the
+      check is gated on the namespace having at least one marker, so
+      ambient namespaces (implicitly all-exported, no markers) abstain.
+      No env-shadowing guard: the namespace's own value binding lands in
+      the top-level env, so a lookup there can't distinguish the
+      namespace object from a local shadow.
+      ModuleWithExportedAndNonExported{Variables,Enums,ImportAlias}.
+    - `E.x` where the enum `E` has no member `x`: enums are closed, so a
+      miss is definite. A *const* enum has no runtime object, so even the
+      `Object.prototype` surface reports
+      (constEnumNoObjectPrototypePropertyAccess); a regular enum object
+      legitimately carries it. Enum/namespace merging opens the surface
+      and abstains. decrementOperatorWithEnumTypeInvalidOperations as a
+      bonus.
+    - Resolver enum ingestion now MERGES same-name enum declarations
+      (member-list union) instead of last-writer-wins -- the whole-corpus
+      gate caught `enumMerging` flipping TN->FP under the new member
+      check before this.
+    Whole-corpus TP 2045 -> 2050 @ 0 FP (session total 1761 -> +289);
+    pinned recall 714, precision 414/414. 2436 tests.
+
+2026-07-06 (T173)  714/815 (88 %)        414/414 ( 0 FP)   TS2394/TS2371/TS2349 + BOM lexer fix: TP 2036 -> 2045
+
+  T173 -- overload compatibility and non-callable call targets:
+    - TS2394 (definite subcase): an overload with a concrete scalar return
+      over an implementation *annotated* `void` (`function f(x): number;`
+      + `function f(x): void {…}`); the implementation is the last entry
+      of a same-name group, unannotated returns parse as `Any` and stay
+      silent. functionOverloadCompatibilityWithVoid01,
+      functionOverloadErrors.
+    - TS2371: a parameter initializer on a *bodiless* function signature
+      (`function foo(a = 4);`) -- initializers belong to implementations.
+      parserParameterList15.
+    - TS2349: non-callable tagged-template tags -- template/string-literal
+      tags (syntactic), bare class references (construct signatures only;
+      a same-named interface or alias abstains), and values whose shape
+      declares `<new>` but no `<call>` (non-generic, extends-free
+      interfaces). Template-literal *callees* too (`` `abc${0}`(…) ``).
+      Emitted unfiltered: the permissive filter drops the "not callable"
+      family for inference gaps, but these are decided syntactically /
+      from declaration shape. taggedTemplateWithConstructableTag01/02,
+      templateStringInCallExpression(ES6),
+      templateStringInTaggedTemplate(ES6).
+    - Lexer: a leading U+FEFF byte-order mark reached the identifier
+      scanner as an unknown character and error recovery silently
+      swallowed the file's FIRST statement. `Lexer::new` now skips it.
+      (Several conformance fixtures are BOM-prefixed; the two
+      templateStringInCallExpression files were unreachable before this.)
+    Whole-corpus TP 2036 -> 2045 @ 0 FP (session total 1761 -> +284);
+    pinned recall 714, precision 414/414. 2435 tests.
+
+2026-07-05 (T172)  714/815 (88 %)        414/414 ( 0 FP)   TS2300 duplicate values, TS1046 .d.ts modifiers: TP 2028 -> 2036
+
+  T172 -- duplicate-identifier and declaration-file rules:
+    - TS2300 function-vs-binding: a function declaration and a
+      `var`/`let`/`const` binding of one name share a value declaration
+      space (`function fn() {}` + `var fn;`); `var`+`var` merging and
+      function overloads stay legal. Flat per-layer check, so namespace
+      bodies report through the layered walker. functionNameConflicts.
+    - TS2300 class/namespace merge: a class's *static* member vs the
+      merged namespace's *exported* value of the same name. Exportedness
+      is erased when namespace bodies re-parse as nested modules, so
+      `parse_export_stmt` now records `<export-value>` markers (function /
+      var / declare-var / enum / class branches) on the grammar channel;
+      non-exported locals and exported *types* stay silent.
+      ClassAndModuleThatMergeWithStatic{Variable,Function}AndExported*.
+    - TS2300 computed accessors: repeated same-kind accessors keyed by one
+      well-known symbol (`get [Symbol.hasInstance]` twice); get/set pairs
+      and distinct symbols stay legal. symbolProperty44.
+    - TS1046: bare top-level declarations in `.d.ts` files (function /
+      enum / class / var without `declare` or `export`). Keyed off the
+      file extension, so the tscheck driver calls the new
+      `check_dts_top_level_modifiers` for `.d.ts` paths; ambient
+      `declare function` parses into `imports`, so anything in `funcs`
+      was written bare. parserEnumDeclaration3.d,
+      parserFunctionDeclaration2.d, parserVariableStatement1/2.d.
+    Whole-corpus TP 2028 -> 2036 @ 0 FP (session total 1761 -> +275);
+    pinned recall 714, precision 414/414. 2433 tests.
+
+2026-07-05 (T171)  714/815 (88 %)        414/414 ( 0 FP)   TS2564 computed fields, index-sig myth, literal-name exemption: TP 2018 -> 2028
+
+  T171 -- strict-property-initialization refinements:
+    - Computed-key fields (`[Symbol.toPrimitive]: number;`) now surface in
+      `TsClassDecl.properties` under the `<computed>` sentinel (pushed, not
+      upserted -- names repeat; the TS2416 derived-vs-base walk skips the
+      sentinel so unrelated computed fields never compare). TS2564 reports
+      them only when the class declares NO constructor (a constructor could
+      assign through a dynamic `this[key]` write). symbolProperty6/7,
+      symbolDeclarationEmit1, parserSymbolProperty5,
+      instanceMemberWithComputedPropertyName2, computedPropertyNames12_ES6.
+    - The index-signature opt-out was a myth: `class C { [a: string]:
+      number; public v: number }` DOES report `v`
+      (parserIndexMemberDeclaration2-5 baselines). Removed.
+    - What the opt-out was actually protecting: *literal-named* fields
+      (`1: Date`, `'a': {}`) are exempt from TS2564 in tsc
+      (indexersInClassType has no baseline errors -- caught as the batch's
+      one FP by the whole-corpus gate). Numeric names are recognised by
+      shape; quoted names survive via a new parser channel
+      (`Parser.quoted_member_names`, drained per class into
+      `<quoted-member:...>` markers on the duplicate-member channel).
+    Whole-corpus TP 2018 -> 2028 @ 0 FP (session total 1761 -> +267);
+    pinned recall 714, precision 414/414. 2432 tests.
+
+2026-07-05 (T170)  714/815 (88 %)        414/414 ( 0 FP)   TS1212/TS1359 reserved words in binding positions: TP 2001 -> 2018
+
+  T170 -- reserved-word binding names, recorded at *binding* parse sites
+    (never in the shared `parse_binding_ident`, whose callers include
+    lenient name positions -- enum members `enum Bar { interface }`,
+    property signatures, import specifiers -- where keywords stay legal;
+    a first draft recorded there and the whole-corpus gate caught 12 FPs):
+    - TS1212 at ES2015+ targets: `interface` / `let` / `yield` rejected as
+      binding names (`var interface`, `var let`, `function f(yield = …)`).
+      asiPreventsParsingAsInterface01-05, letIdentifierInElementAccess01,
+      FunctionDeclaration3_es6, asyncOrYieldAsBindingIdentifier1.
+    - TS1359 hard-reserved words are never binding names anywhere
+      (`var { while: while } = …`, `enum void {}`); `this` is explicitly
+      excluded (a `this` first parameter is a this-type annotation).
+      objectBindingPatternKeywordIdentifiers02/04, parserEnumDeclaration4,
+      parserErrorRecovery_VariableList1,
+      parserInvalidIdentifiersInVariableStatements1.
+    - TS1359 `await`: an async *arrow*'s parameters now parse with
+      `in_async` armed (`async (await) => {}` -- parse_async_arrow_function
+      armed the flag only for the body), the single-param form records
+      directly, and an async function *expression*'s name (binds inside
+      the async scope: `var v = async function await() {}`) records while
+      declarations (bind outward) stay legal.
+      asyncArrowFunction5_es6/es2017, asyncFunctionDeclaration12_es6/es2017.
+    Whole-corpus TP 2001 -> 2018 @ 0 FP (session total 1761 -> +257);
+    pinned recall 714, precision 414/414. 2431 tests.
+
+2026-07-05 (T169)  714/815 (88 %)        414/414 ( 0 FP)   TS2454 subclusters: computed property keys, new-callee, short-circuit assigns: TP 1992 -> 2001
+
+  T169 -- used-before-assigned refinements:
+    - The blanket `var`-in-computed-key exemption encoded a wrong premise:
+      tsc DOES run the analysis on a computed *property* key
+      (`var s: symbol; { [s]: 0 }` is TS2454, symbolProperty1) and only
+      skips computed *method* / accessor keys (`{ [s]() {} }`,
+      computedPropertyNames10 -- verified by its empty baseline). The
+      `in_computed_key` exemption now applies only when the entry value is
+      a callable literal. symbolProperty1, computedPropertyNames8/51.
+    - `new d()` over a declared-but-unassigned binding reads it like any
+      other reference (interfaceWithConstructSignaturesThatHidesBase
+      Signature 1/2, taggedTemplateStringsWithManyCallAndMember
+      Expressions x2 as bonuses).
+    - An assignment inside the RHS of `&&` / `||` / `??` executes
+      conditionally, so it no longer discharges the unassigned marker
+      (`o ?? (a = 1); a.toString()` keeps the TS2454;
+      controlFlowNullishCoalesce). Implemented as snapshot/re-arm around
+      the short-circuit RHS walk.
+    Whole-corpus TP 1992 -> 2001 @ 0 FP (session total 1761 -> +240);
+    pinned recall 714, precision 414/414. 2430 tests.
+
+2026-07-05 (T168)  714/815 (88 %)        414/414 ( 0 FP)   TS2411/TS2413 index-signature member compatibility: TP 1986 -> 1992
+
+  T168 -- index signatures vs the members they constrain:
+    - TS2411 object-vs-object: a member whose type and the index value are
+      both fully-modeled literal-keyed `Object` shapes is decided by
+      `is_assignable_to` (`y: { a }` never satisfies `[x: string]: { a; b }`).
+      Guards: literal keys only (no `<call>` / `<new>` / computed /
+      index-sig-keyed entries), no unresolved named refs, no unmodeled
+      shapes.
+    - TS2411 function-typed member vs object index value: flags when the
+      value requires a member outside the `Function.prototype` surface
+      (`foo(): T` vs `[x: string]: { x: number }`; `{ length: number }`
+      stays silent -- functions have `.length`).
+    - TS2411 methods: regular (non-accessor, non-private) class methods are
+      constrained too (`[s: string]: string` over `foo() {}`).
+    - TS2411 union member: every constituent must satisfy a scalar index
+      value; decided only when all constituents are concrete scalars
+      (`foo: string | number` vs `[x: string]: number`;
+      `e | number` abstains on the enum constituent).
+    - TS2411 inherited indexers: base-interface index signatures constrain
+      derived members (non-generic extends chains, cycle-guarded).
+    - TS2411 statics: NEW `TsClassDecl.static_index_signatures` field --
+      `static [k: string]: V` was previously folded into the instance list
+      (latent unsoundness); it now constrains static fields (initializer
+      literals widen: `static x = 12` -> `number`; the class-decl builder
+      now records `static_field_inits`, previously always empty) and
+      static methods only. Both class parsers (runtime + declare) route by
+      the `static` modifier; the declare parser gained a post-modifier
+      index-signature pass.
+    - TS2413: within one container the numeric index value type must be
+      assignable to the string index value type (`[s: number]: 1` vs
+      `[s: string]: boolean`), applied to interfaces and both class sides.
+    staticIndexSignature7, interfaceWithStringIndexerHidingBaseTypeIndexer
+    1/2/3, derivedInterfaceIncompatibleWithBaseIndexer,
+    unionSubtypeIfEveryConstituentTypeIsSubtype (staticIndexSignature3
+    kept via the TS2413 pass). Whole-corpus TP 1986 -> 1992 @ 0 FP
+    (session total 1761 -> +231); pinned recall 714, precision 414/414.
+    2429 tests.
+
+2026-07-05 (T167)  714/815 (88 %)        414/414 ( 0 FP)   TS2304 subclusters: computed type keys, `export =`, var annotations: TP 1968 -> 1986
+
+  T167 -- TS2304 ("Cannot find name 'X'") in three value/type-reference
+    positions, all resolved against a conservative module value-name set
+    (`module_value_name_set`, factored out of `unresolved_typeof_references`;
+    now also folds in ES import bindings, namespace and module-augmentation
+    inner declarations):
+    - A single-bare-identifier computed key in a *type* position
+      (`var v: { [e]: number }`, `{ [e]?(): T }`, `interface I { [e]: T }`,
+      `declare class C { get [e](): T }`). Recorded by the parser via the
+      `<computed-type-key>` grammar-misuse sentinel at all three member
+      parsers; dotted keys (`[Symbol.iterator]`) don't match the
+      single-token shape and function bodies are skipped (`in_function`) so
+      locals can't false-flag. 10 parserComputedPropertyName files +
+      parserIndexSignature5.
+    - `export = name` over a provably undeclared value (`<export-eq>`
+      sentinel, both the top-level and module-block export parsers).
+      parserExportAssignment1/2/7/8.
+    - Top-level `var`/`let`/`const` annotations: `check_unresolved_
+      signature_type_refs` now walks `m.values` and top-level statement
+      declared types (no type parameters are in scope at top level).
+      Callable object-member values abstain entirely
+      (`type_mentions_callable`): the object-member parser discards a
+      signature's own type parameters (`{ <T>(x: T): T }`), which
+      false-flagged 37 files as `cannot find name T` before the guard.
+      parserGenericsInVariableDeclaration1, parserObjectType5,
+      autoAccessorExperimentalDecorators.
+    Whole-corpus TP 1968 -> 1986 @ 0 FP (session total 1761 -> +225);
+    pinned recall 714, precision 414/414. 2428 tests.
+
+2026-07-05 (T166)  714/815 (88 %)        414/414 ( 0 FP)   `object` keyword as a first-class type (NonPrimitiveObject): TP 1966 -> 1968
+
+  T166 -- the `object` keyword is no longer lowered to `Any` at parse; it is a
+    new `TsType::NonPrimitiveObject` AST case with its own semantics:
+    - Assignability: primitives / literals / template-literals are not
+      assignable to `object`; object shapes / arrays / tuples / callables /
+      `never` are; unions member-wise both directions; unresolved names stay
+      permissive. Source-`object` against a concrete `Object(_)` target stays
+      permissive (explicit `<object>` type-argument instantiation can plant
+      the keyword in erased generic contexts).
+    - TS2339 member existence: `object` exposes EXACTLY the
+      `Object.prototype` surface (folded into `lookup_field`), so
+      `a.nonExist()` / `a.nonExist` on an `object` receiver reports while
+      `a.toString()` / `a.hasOwnProperty(...)` stay silent
+      (nonPrimitiveAccessProperty).
+    - TS2322: a bare *unconstrained* in-scope type parameter is not
+      assignable to `object` (may be instantiated with a primitive) --
+      extends the existing concrete-object-target rule
+      (nonPrimitiveAndTypeVariables).
+    - Excess/missing property checks are suppressed against an `object`
+      target (`var a: object = { x: 1 }` accepts any shape).
+    - CRITICAL parser guard: a `T extends object` *bound* erases to `Any`,
+      not `NonPrimitiveObject` -- constraint inlining plants bounds into
+      every use-site, and a generic return typed by the parameter
+      (`unboxify<T extends object>(...): T` then `v.a`) would false-flag
+      member existence (isomorphicMappedTypeInference FP, caught by the
+      whole-corpus gate). Direct `: object` annotations keep the type.
+    Emitters: `type_display` -> "object", `.mbti` bridge -> "Object",
+    `.d.ts` emit -> "object". Whole-corpus TP 1966 -> 1968 @ 0 FP
+    (nonPrimitiveAsProperty, nonPrimitiveInGeneric; session total 1761 ->
+    +207); pinned recall 714, precision 414/414. 2427 tests.
+
+2026-07-02 (T165)  714/815 (88 %)        414/414 ( 0 FP)   TS2322 subclusters: for-of targets, custom iterators, `in` operands: TP 1963 -> 1966
+
+  T165 -- first TS2322 subcluster pass:
+    - Assignment-form `for (v of xs)` now checks the element type against
+      the target's *declared* slot (`var v: string; for (v of [0])`); the
+      narrowed slot is not the assignment target (`x = true; for (x of
+      nums)` re-widens, caught as an FP by the whole-corpus gate and fixed
+      via `lookup_declared`).
+    - `for_of_element_type` understands user iterator classes: `next()`
+      returning `{ value: T, … }` (declared or body-inferred) yields `T`,
+      so `for (v of new NumberIterator)` and declared-binding loops over
+      custom iterables both check.
+    - `in` operator operand constraints: a confidently-bad left operand
+      (boolean / void / object shapes / class instances / enums) or a
+      primitive right operand reports; `any` / unions / generics abstain.
+    Remaining TS2322 misses are dominated by contextual typing of object
+    literals against unions, mapped-type relationships, overloaded
+    signature assignability, and the `object` keyword (still lowered to
+    `Any` at parse). Whole-corpus TP 1963 -> 1966 @ 0 FP (session total
+    1761 -> +205); pinned recall 714, precision 414/414. 2426 tests.
+
+2026-07-02 (T164)  714/815 (88 %)        414/414 ( 0 FP)   symbol keys / template-literal values / accessor pairs: TP 1955 -> 1963
+
+  T164 -- requested clusters (symbol index, enum, template literal):
+    - TS2464: `Symbol.*` statics that are not well-known symbols
+      (`[Symbol.for]`, `[Symbol.prototype]`, `[Symbol.keyFor]`) are never
+      `symbol`-typed keys. Trusts only the stock lib surface: a user
+      `Symbol` declaration or a `SymbolConstructor` augmentation disables
+      the shortcut.
+    - TS2411: a well-known-symbol member (`[Symbol.toStringTag]() {…}`)
+      must be assignable to a `[s: symbol]` index signature, own or
+      inherited (non-generic chains); unannotated returns infer from the
+      body.
+    - TS2322: a template-literal *expression* whose placeholders are all
+      string literals has a known cooked value -- compared against
+      string-literal targets when both sides are escape-free (the
+      type-literal parser and the template scanner decode escapes
+      differently, so backslashes / line breaks abstain).
+    - TS2322 between a bare in-scope type parameter `T` and its
+      template-literal form `${T}` (never assignable either way,
+      microsoft/TypeScript#55364).
+    - TS2345: a direct *numeric* literal against an all-numeric literal
+      union joins the unfiltered literal-union rule (`f(2)` where the
+      parameter is `0 | 1`); const-widened variables never reach it.
+    - Getter / setter agreement (the enum cluster's actual failure --
+      `get [G.B]() { return true }` with `set [G.B](x: number)`): the
+      getter's declared-or-inferred type must be assignable to the setter
+      parameter's, keyed by name or rendered computed-key expression.
+    Whole-corpus TP 1955 -> 1963 @ 0 FP (session total 1761 -> +202);
+    pinned recall 713 -> 714, precision 414/414. 2425 tests.
+
+2026-07-02 (T163)  713/815 (87 %)        414/414 ( 0 FP)   strict yield/let bindings + union computed keys: TP 1950 -> 1955
+
+  T163 -- two small clusters. `yield` / `let` as binding identifiers join
+    the `eval` / `arguments` strict-mode recording (TS1212 -- class bodies,
+    "use strict" prologues, @alwaysStrict directives). And a *union*
+    computed property key is TS2464 as soon as one member is a non-key
+    type (`number | number[]`, `string | boolean`) while a union of valid
+    key types stays silent; nullish members keep the widening abstention.
+    Whole-corpus TP 1950 -> 1955 @ 0 FP (session total 1761 -> +194);
+    pinned recall 713, precision 414/414. 2424 tests.
+
+2026-07-02 (T162)  713/815 (87 %)        414/414 ( 0 FP)   TS2307 / TS1042 / TS2703 / TS2430: TP 1926 -> 1950
+
+  T162 -- four more clusters, all gated at 0 FP:
+    - TS2307 ("Cannot find module"): the parser records ES-import module
+      specifiers (`import_module_specs`, incl. `import x = require(...)`),
+      and the permissive path flags any specifier no in-file ambient
+      `declare module "X"` provides. `tslib` is exempt (importHelpers runs
+      ship it), and sources embedding `@filename:` directives (multi-file
+      tests concatenated into one parse) disable the recording -- the pinned
+      accuracy gate feeds those in whole, unlike the oracle, and cross-file
+      resolution is out of scope.
+    - TS1042: `async` on a class / enum / interface / namespace declaration
+      or on a class accessor (`async get foo()`). The modifier is dropped
+      and the declaration parses on.
+    - TS2703: `delete` over a syntactic non-reference (literals, calls,
+      awaits, templates, operators). Bare identifiers stay silent
+      (sloppy-mode `delete x` is legal JS).
+    - TS2430: a derived interface re-declaring a base member (generic bases
+      instantiated from `extends_args`) with a concretely non-assignable
+      type. Callable members abstain -- interface methods compare
+      bivariantly and the existing signature check already covers them.
+    Also fixed a latent bug the new tests exposed: the class-method body
+    synthesis dropped `is_async` / `is_generator`, so
+    `async m(): Promise<void> { return; }` demanded a return value.
+    Whole-corpus TP 1926 -> 1950 @ 0 FP (session total 1761 -> +189);
+    pinned recall steady at 713, precision 414/414. 2423 tests.
+
+2026-07-02 (T161)  713/815 (87 %)        414/414 ( 0 FP)   noImplicitAny family: TP 1914 -> 1926
+
+  T161 -- noImplicitAny (requested priority). The conformance baselines for
+    directive-less files include the implicit-any family, so the parser's
+    `no_implicit_any` flag defaults to true with `@strict: false` /
+    `@noImplicitAny: false` opt-outs (explicit `@noImplicitAny: true` wins
+    over `@strict: false`). All diagnostics are recorded at parse time with
+    a `<noimplicitany>` marker and emitted only on the permissive
+    (conformance) path -- strict unit-test snippets and bridge inputs never
+    see them. Covered, restricted to positions where no contextual typing
+    can apply:
+      - TS7006 / TS7019 / TS7031: unannotated, default-less parameters of
+        *function declarations* (`record_implicit_any_params`, armed only
+        around `parse_function`'s parameter list) -- plain, rest, and
+        non-empty binding-pattern params; `this` params and empty patterns
+        (`function f([]) {}`) exempt.
+      - The same for methods of *heritage-free class declarations*
+        (`class_decl_no_heritage`): no `extends` / `implements` means no
+        contextual source. Class expressions stay disarmed (assignment
+        targets can type their members) and accessors are exempt (a setter
+        parameter infers from the paired getter's return type).
+      - TS7010: bodiless *function* signatures (overloads, `declare
+        function`) without a return-type annotation. Method-level TS7010 is
+        deliberately not recorded: a bodiless method with no implementation
+        already reports TS2391, and tsc accepts an overload signature whose
+        implementation carries the annotation.
+      - TS7005: ambient `declare var x;` with neither annotation nor
+        initializer (a runtime `var x;` is an evolving any and legal).
+    Whole-corpus TP 1914 -> 1926 @ 0 FP (session total 1761 -> +165);
+    pinned recall steady at 713 (the pinned TS7006 misses are
+    contextual-typing *failures* -- comma-operator results, class-expression
+    methods against union call signatures -- which this conservative subset
+    deliberately does not judge). Whitebox-tested (2422 tests).
+
+2026-07-02 (T160)  713/815 (87 %)        414/414 ( 0 FP)   pinned + whole-corpus push: TP 1881 -> 1914
+
+  T160 -- second session round, aimed at the pinned clusters T159 left.
+    Whole-corpus TP 1881 -> 1914 @ 0 FP (session total 1761 -> 1914, +153);
+    pinned recall 700 -> 713. Batches:
+
+    1. TS2304 signature type refs: `lib_globals.mbt` now also bakes the
+       ambient *type* registry (2,201 names from `typescript/src/lib`;
+       `gen_lib_globals.sh` extended). `check_unresolved_signature_type_refs`
+       flags unresolved names in `implements` clauses, `interface extends`
+       clauses, and generic constraint bounds, resolved against module
+       declarations (recursively across namespaces), in-scope type params,
+       ES-import bindings (newly recorded `imported_binding_names`), and the
+       full lib registry. Also TS2304 on `new X()` over an undeclared name
+       (interfaces exempt -- the parser lowers member-only classes to
+       interfaces) and on assignment-form `for (v of ...)` targets, whose
+       bindings no longer enter the hoisting backstop.
+    2. TS2415 derived indexer compatibility: the parser records
+       `extends B<...>` heritage type arguments (`class_base_type_args`)
+       with constraint inlining suppressed (`no_bound_inline`), plus
+       `<index-naked-param:kind:T>` sentinels for instance index signatures
+       whose declared value was a naked bounded type parameter (the AST
+       stores the widened bound). `check_derived_indexer_compat` flags a
+       derived class/interface whose same-kind index-signature value is
+       concrete against a naked type-parameter slot, or concretely
+       non-assignable to the instantiated base value. Namespace bodies
+       re-parse with a fresh parser, so recordings merge per layer.
+    3. TS18014 nested-class private shadowing: `<private-decl:brand:name>`
+       sentinels record every private member per class brand (including
+       classes lowered out of `module_.classes`); the private-name
+       existence suppression keeps reporting when the *referencing* class's
+       own brand declares the same `#name` (inner declaration shadows), and
+       stays silent for outward lexical references.
+    4. TS2554 exact spread arity: spreads of syntactic array literals and
+       fixed-length tuple-typed values contribute an exact argument count,
+       so the arity check runs again (`fs2(...s3)` where `s3` is a
+       3-tuple). Open-ended spreads still abstain.
+    5. TS1212 `yield` as a function name under an ES2015+ `@target`
+       directive / strict prologue / generator form, for declarations and
+       function expressions.
+
+    Remaining pinned misses cluster in TS2322 (27, advanced assignability),
+    TS2345, TS2339, TS7006 (needs noImplicitAny modeling), TS2403 /
+    TS2367 / TS2551 / TS2564 (each 2-6 files, inference-dependent).
+    Whitebox-tested throughout (2421 tests).
+
+2026-07-02 (T159)  700/815 (86 %)        414/414 ( 0 FP)   whole-corpus recall push: TP 1761 -> 1881
+
+  T159 -- a whole-corpus-focused session (the pinned-directory recall stays at
+    700/815; every gain landed outside the pinned set). Whole-corpus TP
+    1761 -> 1881 (+120) at 0 FP, MISS 924 -> 805, all gated per batch with
+    `scripts/checker_conformance_oracle.sh --max-fp 0`. Six batches:
+
+    1. Function-valued expression bodies (largest single win). The expression
+       walker's catch-all silently dropped `ArrowFunc` / `FuncExpr` in
+       *non-contextual* positions -- `var f = function () { … }`, IIFE
+       callees, object-literal members, `return function () { … }` -- so
+       nothing inside those bodies was ever checked. New walker arms route
+       them through the existing `check_arrow_with_context` /
+       `check_funcexpr_with_context` helpers with `Any`-typed formals.
+       Contextual call-argument positions re-walk the same body with typed
+       formals; a `dedup_issues_since` pass drops the duplicate strings
+       (only pre-existing entries suppress, so two distinct occurrences of
+       the same message survive). Function expressions rebind `this` to
+       `Any` (dynamic `this`, matches tsc without `noImplicitThis`) and bind
+       their own name for recursion. FP fallout fixed alongside:
+       `type_contains_unresolved_named` now recurses into `Applied` type
+       args (erased generic-arrow type params like
+       `EPlusFallback<Lowercase<T>>`), and brand-mangled private-name
+       existence checks stay silent when the reference's brand belongs to no
+       resolver-known class (parser-lowered nested classes) while the
+       receiver declares the same base name -- known-brand cross-class
+       accesses keep reporting (`Child.#bar`, `this.#staticOnInstance`).
+    2. TS2304 `arguments` outside any non-arrow function (top level / arrow
+       chains), via a dedicated `check_arguments_outside_function` walker;
+       shielded by any declared `arguments` binding.
+    3. TS1100 family: `eval` / `arguments` as binding identifier or
+       assignment target in strict code. The parser's strict-mode raises
+       became recorded `strict_mode_misuses` (files now parse, so the oracle
+       classifies them instead of skipping); `"use strict"` prologue
+       detection skips leading directive comments / BOM; conformance-header
+       `@alwaysStrict: true` / `@strict: true` arms the recording without
+       changing parse behaviour.
+    4. TS2356 `++` / `--` on confidently non-arithmetic operands and TS2464
+       non-key computed property names -- both abstain on nullish shapes (a
+       `null` initializer narrows an `any` binding to `Null` in our flow
+       model while non-strict tsc widens it to `any`).
+    5. TS1206 decorators on non-class declarations (enum / function /
+       interface / var), gated on decorators skipped in the same iteration
+       so class paths that leave stale pending entries never re-trigger.
+    6. Always-error grammar family, recorded at lex/parse time through the
+       new `TsModule.grammar_misuses` channel: TS1127 invalid characters
+       (stray `\` not starting a `\u` identifier escape, control chars),
+       TS1160 unterminated template literals, TS2480 `let` as a let/const
+       binding name, TS1359 `await` as an async-function *parameter* (the
+       function name is exempt -- `async function await()` is legal),
+       TS1212 `yield` as a generator's name or parameter, TS1029 extended
+       modifier-order coverage (accessibility after
+       static/async/readonly/override/abstract, static after
+       override/readonly, override after readonly), TS2358 syntactic-literal
+       LHS of `instanceof`, TS18050 literal `null` / `undefined` arithmetic
+       operands, and TS5107 deprecated `@module: amd/umd/system` directives.
+       Speculative parses (`is_arrow_function`, destructuring lookahead)
+       share the recording arrays with the real parser, so they now snapshot
+       and roll back recordings -- `(yield 0)` in a generator no longer
+       leaks a bogus TS1212.
+
+    Remaining pinned misses (109) still cluster in TS2322 (27, advanced
+    assignability), TS2345 (8), TS18014 (6, nested-class private brands we
+    deliberately abstain on), TS2415 (6, indexer subtyping -- needs class
+    `extends` type args the AST does not yet carry), TS2339/TS7006/TS2554.
+    Whitebox-tested throughout (2418 tests).
+
 2026-07-01 (T158)  700/815 (86 %)        414/414 ( 0 FP)   TS2507 class extends a plain function
 
   T158 -- TS2507 ("Type of 'X' is not a constructor function type."). A class

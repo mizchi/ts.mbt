@@ -34,6 +34,20 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
   match tok.kind {
     At => {
       self.skip_decorator()
+      // TS1206: at statement level a decorator can only precede a class
+      // declaration (or further decorators / modifiers). Anything else
+      // orphans the pending group.
+      if self.pending_decorators.length() > 0 {
+        let can_take_decorators = match self.peek().kind {
+          Class | Export | At | Declare => true
+          Ident("abstract") => true
+          _ => false
+        }
+        if !can_take_decorators {
+          self.invalid_decorator_uses.push("statement")
+          self.pending_decorators.clear()
+        }
+      }
       self.parse_stmt()
     }
     Var => self.parse_var()
@@ -260,14 +274,70 @@ fn Parser::parse_var_like(
   kw_pos : Int,
 ) -> @ast.TsStmt raise ParseError {
   let binding = self.parse_binding_pattern()
+  // TS2480: `let` is not allowed as a binding name in `let` / `const`
+  // declarations (`let let = 1`). Always an error regardless of mode.
+  match (kind, binding) {
+    (VarKind::Let | VarKind::Const, @ast.TsBinding::Ident("let")) =>
+      self.grammar_misuses.push(
+        "`let` is not allowed to be used as a name in `let` or `const` declarations",
+      )
+    _ => ()
+  }
   let type_ = self.parse_var_decl_type()
   let stmts = self.parse_var_decl_list_from(binding, type_, kind)
+  // TS7006 (noImplicitAny): an unannotated binding initialized by a
+  // callable literal gives the callable's unannotated parameters no
+  // contextual type -- they are implicitly `any` (`var x = x => x`).
+  // An annotated binding contextually types the parameters and abstains.
+  if self.no_implicit_any {
+    for stmt in stmts {
+      match stmt {
+        Var(_, Any, init) | Let(_, Any, init) | Const(_, Any, init) =>
+          self.record_uncontextual_callable_params(init)
+        _ => ()
+      }
+    }
+  }
   self.consume_semicolon()
   let merged = self.merge_decl_stmts(stmts)
   // If there is a single simple-ident declarator whose initializer is an
   // arrow-function or function-expression, apply JSDoc param/return overlays
   // using the var/let/const keyword position (where the JSDoc block sits).
   apply_jsdoc_var_func_overlay(self.jsdoc_at_pos, merged, kw_pos)
+}
+
+///|
+/// Record TS7006 for each unannotated, non-rest, non-defaulted simple
+/// parameter of an arrow function sitting in a position with no
+/// contextual type. Only the DIRECT initializer shape is walked -- an
+/// arrow nested in a call argument may receive a contextual type from
+/// the callee, so anything deeper abstains.
+fn Parser::record_uncontextual_callable_params(
+  self : Parser,
+  init : @ast.TsExpr,
+) -> Unit {
+  match init {
+    ArrowFunc(params, _, _, _) =>
+      for p in params {
+        if p.type_ is Any &&
+          p.default is None &&
+          !p.is_rest &&
+          p.name != "<param>" &&
+          !p.name.has_prefix("<") &&
+          (p.binding is None || p.binding is Some(Ident(_))) {
+          self.grammar_misuses.push(
+            "<noimplicitany>parameter `\{p.name}` implicitly has an `any` type",
+          )
+        }
+      }
+    // A template literal's placeholders never receive contextual types
+    // (`` var x = `abc${ x => x }def` ``).
+    TemplateLiteral(_, exprs) =>
+      for e in exprs {
+        self.record_uncontextual_callable_params(e)
+      }
+    _ => ()
+  }
 }
 
 ///|
@@ -502,6 +572,18 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
       }
     }
     let binding = self.parse_binding_pattern()
+    // TS2480: `for (let let of ...)` / `for (const let in ...)`.
+    match (kind, binding) {
+      (
+        @ast.TsForOfKind::Let
+        | @ast.TsForOfKind::Const,
+        @ast.TsBinding::Ident("let"),
+      ) =>
+        self.grammar_misuses.push(
+          "`let` is not allowed to be used as a name in `let` or `const` declarations",
+        )
+      _ => ()
+    }
     let var_type = self.parse_var_decl_type()
     if self.check(Of) || self.check(In) {
       let is_in = self.check(In)

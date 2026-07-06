@@ -15,13 +15,16 @@ priv enum ClassElement {
   Field(Bool, ClassKey, @ast.TsType, @ast.TsExpr?, Bool, Bool)
   StaticBlock(@ast.TsBlock)
   // Marker for `[k: KeyType]: ValueType` index signatures, carrying the
-  // captured key / value types. The presence of any index signature opts
-  // the class out of strict-property-initialization (TS2564) because every
-  // concrete field is implicitly covered by the indexer; the captured value
-  // type also feeds the TS2411 index-constraint check (named properties must
-  // be assignable to the index value type). When the signature shape can't be
-  // parsed precisely the key/value default to `Any` (no constraint).
-  IndexSig(@ast.TsType, @ast.TsType)
+  // captured key / value types and whether the signature was declared
+  // `static` (a static signature constrains the *static* member side and
+  // never participates in instance resolution). The presence of any index
+  // signature opts the class out of strict-property-initialization (TS2564)
+  // because every concrete field is implicitly covered by the indexer; the
+  // captured value type also feeds the TS2411 index-constraint check (named
+  // properties must be assignable to the index value type). When the
+  // signature shape can't be parsed precisely the key/value default to `Any`
+  // (no constraint).
+  IndexSig(@ast.TsType, @ast.TsType, Bool)
 }
 
 ///|
@@ -64,6 +67,7 @@ fn build_runtime_class_decl(
   let properties : Array[@ast.TsClassPropertyDecl] = []
   let methods : Array[@ast.TsClassMethodDecl] = []
   let instance_field_inits : Array[(String, @ast.TsExpr)] = []
+  let static_field_inits : Array[(String, @ast.TsExpr)] = []
   let computed_field_keys : Array[@ast.TsExpr] = []
   let constructor_param_is_rest : Array[Bool] = []
   let constructor_param_defaults : Array[@ast.TsExpr?] = []
@@ -126,11 +130,14 @@ fn build_runtime_class_decl(
             has_initializer: init is Some(_),
             has_definite_assertion,
           })
-          if !is_static {
-            match init {
-              Some(expr) => instance_field_inits.push((field_name, expr))
-              None => ()
-            }
+          match init {
+            Some(expr) =>
+              if is_static {
+                static_field_inits.push((field_name, expr))
+              } else {
+                instance_field_inits.push((field_name, expr))
+              }
+            None => ()
           }
         }
       Method(is_static, Name(method_name), accessor_kind, func) =>
@@ -246,8 +253,30 @@ fn build_runtime_class_decl(
       // recorded under the `<computed>` sentinel by the value-name passes;
       // retain the key expression so the checker can flag an undefined name
       // in it (TS2304).
-      Field(_, Computed(key_expr), _, _, _, _) =>
+      Field(
+        is_static_c,
+        Computed(key_expr),
+        field_type,
+        init,
+        is_readonly_c,
+        has_definite_assertion_c
+      ) => {
         computed_field_keys.push(key_expr)
+        // Also surface the field's annotated/initialized shape under the
+        // `<computed>` sentinel name so strict-property-initialization
+        // (TS2564: `[Symbol.toPrimitive]: number;` with no initializer)
+        // can see it. Pushed, not upserted -- computed names may repeat,
+        // and name-keyed member checks skip the sentinel.
+        properties.push({
+          name: "<computed>",
+          type_: field_type,
+          is_static: is_static_c,
+          is_readonly: is_readonly_c,
+          is_accessor: false,
+          has_initializer: init is Some(_),
+          has_definite_assertion: has_definite_assertion_c,
+        })
+      }
       _ => ()
     }
   }
@@ -256,10 +285,16 @@ fn build_runtime_class_decl(
   // captured key/value types so the TS2411 index-constraint check can
   // verify named properties are assignable to the index value type.
   let index_signatures : Array[(@ast.TsType, @ast.TsType)] = []
+  let static_index_signatures : Array[(@ast.TsType, @ast.TsType)] = []
   let static_blocks : Array[@ast.TsBlock] = []
   for element in elements {
     match element {
-      IndexSig(key, value) => index_signatures.push((key, value))
+      IndexSig(key, value, is_static) =>
+        if is_static {
+          static_index_signatures.push((key, value))
+        } else {
+          index_signatures.push((key, value))
+        }
       StaticBlock(block) => static_blocks.push(block)
       _ => ()
     }
@@ -365,7 +400,7 @@ fn build_runtime_class_decl(
     base_names: [],
     implements_names,
     base_expr: None,
-    static_field_inits: [],
+    static_field_inits,
     static_blocks,
     instance_field_inits,
     constructor_params,
@@ -375,6 +410,7 @@ fn build_runtime_class_decl(
     properties,
     methods,
     index_signatures,
+    static_index_signatures,
     is_abstract,
     is_constructible: !is_abstract,
     // Decorators on runtime classes are attached by the caller via
@@ -740,7 +776,13 @@ fn Parser::parse_class_method_key(self : Parser) -> ClassKey raise ParseError {
         None => private_name
       }
     }
-    Str(s) => s
+    Str(s) => {
+      // Quotedness is erased from the returned key; record it so
+      // strict-property-initialization can exempt literal-named fields
+      // (`class C { 'a': {} }` is not TS2564-checked by tsc).
+      self.quoted_member_names.push(s)
+      s
+    }
     Number(n) => "\{n}"
     Int(n) => "\{n}"
     // Reserved words can be used as method names in ES6+
@@ -1145,6 +1187,7 @@ fn Parser::parse_class_body(
   Bool,
   Bool,
   Bool,
+  Array[(Bool, String)],
 ) raise ParseError {
   let _ = self.expect(LBrace)
   // Class body is implicitly strict mode
@@ -1158,6 +1201,10 @@ fn Parser::parse_class_body(
   // Set when an accessibility modifier (`public` / `private` / `protected`)
   // was written on an index signature -- always TS1071.
   let mut index_sig_modifier_misuse = false
+  // Instance index signatures whose declared value type was a naked bounded
+  // type parameter (`[x: number]: T` under `T extends Base`), as
+  // `(is_numeric_key, param_name)`. See `try_parse_class_index_signature`.
+  let index_naked_params : Array[(Bool, String)] = []
   // Set when an `abstract` method / accessor was given a real body -- always
   // TS1245 ("Method cannot have an implementation because it is marked
   // abstract").
@@ -1236,15 +1283,17 @@ fn Parser::parse_class_body(
     // "public" can't be distinguished from an explicitly written one.
     let mut saw_visibility_modifier = false
     let mut is_abstract_member = false
+    let mut saw_override_modifier = false
     while has_modifier {
       has_modifier = false
       match self.peek().kind {
         Ident(n) if n == "static" =>
           if self.can_consume_class_modifier() {
             let _ = self.advance()
-            // TS1029: `static` must precede `async`. If `async` was already
-            // consumed for this member, the source order was `async static`.
-            if is_async_method {
+            // TS1029: `static` must precede `async` / `override` / `readonly`.
+            // If any of those was already consumed for this member, the
+            // source order was reversed.
+            if is_async_method || saw_override_modifier || is_readonly_field {
               modifier_order_misuse = true
             }
             is_static = true
@@ -1281,6 +1330,23 @@ fn Parser::parse_class_body(
             has_modifier = true
             if n == "public" || n == "private" || n == "protected" {
               saw_visibility_modifier = true
+              // TS1029 / TS1028: an accessibility modifier must precede
+              // `static` / `async` / `readonly` / `override` / `abstract`
+              // (`static public x` is reversed).
+              if is_static ||
+                is_async_method ||
+                is_readonly_field ||
+                is_abstract_member ||
+                saw_override_modifier {
+                modifier_order_misuse = true
+              }
+            }
+            if n == "override" {
+              saw_override_modifier = true
+              // TS1029: `override` must precede `readonly`.
+              if is_readonly_field {
+                modifier_order_misuse = true
+              }
             }
             if n == "private" || n == "protected" {
               visibility = n
@@ -1309,7 +1375,7 @@ fn Parser::parse_class_body(
     // shapes the precise parser declines, e.g. computed key expressions.
     if self.check(LBracket) && self.is_index_signature_shape_after_lbracket() {
       match self.try_parse_class_index_signature() {
-        Some((key, value)) => {
+        Some((key, value, naked_param)) => {
           if saw_visibility_modifier {
             index_sig_modifier_misuse = true
           }
@@ -1318,7 +1384,19 @@ fn Parser::parse_class_body(
             type_references_type_param_name(value, class_type_params) {
             static_index_type_param_ref = true
           }
-          elements.push(IndexSig(key, value))
+          if !is_static {
+            match naked_param {
+              Some(np) => {
+                let is_num = match key {
+                  Number | Int => true
+                  _ => false
+                }
+                index_naked_params.push((is_num, np))
+              }
+              None => ()
+            }
+          }
+          elements.push(IndexSig(key, value, is_static))
           continue
         }
         None => ()
@@ -1328,7 +1406,7 @@ fn Parser::parse_class_body(
       if saw_visibility_modifier {
         index_sig_modifier_misuse = true
       }
-      elements.push(IndexSig(@ast.TsType::Any, @ast.TsType::Any))
+      elements.push(IndexSig(@ast.TsType::Any, @ast.TsType::Any, is_static))
       continue
     }
     let mut accessor_kind : String? = None
@@ -1348,6 +1426,10 @@ fn Parser::parse_class_body(
         self.peek_at(1).kind != RBrace => {
         let _ = self.advance()
         accessor_kind = Some(n)
+        // TS1042: `async` cannot modify an accessor (`async get foo()`).
+        if is_async_method {
+          self.grammar_misuses.push("`async` modifier cannot be used here")
+        }
       }
       _ => ()
     }
@@ -1398,7 +1480,16 @@ fn Parser::parse_class_body(
       }
       let params = if self.check(LParen) {
         let _ = self.expect(LParen)
+        // noImplicitAny: method parameters of a heritage-free class
+        // declaration have no contextual-typing source (see
+        // `class_decl_no_heritage`). Accessors are exempt: a setter's
+        // parameter type is inferred from the paired getter's return type
+        // (`get [k]() { return "" } set [k](x) {}` types `x` as string).
+        let prev_record_nia = self.record_implicit_any_params
+        self.record_implicit_any_params = self.class_decl_no_heritage &&
+          accessor_kind is None
         let params = self.parse_params()
+        self.record_implicit_any_params = prev_record_nia
         let _ = self.expect(RParen)
         params
       } else {
@@ -1412,7 +1503,8 @@ fn Parser::parse_class_body(
       } else {
         []
       }
-      let return_type = if self.check(Colon) {
+      let had_return_annotation = self.check(Colon)
+      let return_type = if had_return_annotation {
         let _ = self.advance()
         self.parse_type()
       } else {
@@ -1423,6 +1515,11 @@ fn Parser::parse_class_body(
       // overload signature). Used below to count constructor implementations
       // for TS2392.
       let has_body_block = not(consumed_semi) && self.check(LBrace)
+      // (Method-level TS7010 is intentionally not recorded: a bodiless
+      // method with no implementation at all already reports TS2391, and
+      // tsc does not flag an overload signature whose implementation
+      // carries the return annotation.)
+      let _ = had_return_annotation
       let body = if consumed_semi {
         @ast.TsBlock::{ stmts: [], stmt_positions: [] }
       } else if !self.check(LBrace) {
@@ -1634,7 +1731,7 @@ fn Parser::parse_class_body(
     ctor, elements, private_members, protected_members, abstract_members, ctor_impl_count,
     index_sig_modifier_misuse, abstract_member_with_body, overload_static_mix, overload_missing_impl,
     overload_accessibility_mix, modifier_order_misuse, class_body_statement_misuse,
-    static_index_type_param_ref,
+    static_index_type_param_ref, index_naked_params,
   )
 }
 
@@ -1674,7 +1771,22 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   if self.match_(Extends) {
     base = Some(self.parse_class_base_name())
     if self.check(Lt) {
-      self.skip_type_args()
+      // Capture `extends B<...>` type arguments for the checker's
+      // generic-base compatibility checks; fall back to the permissive
+      // skip when they don't parse as simple types. Bound inlining is
+      // suppressed so `extends A<T>` records the raw `T`, not its
+      // constraint.
+      self.no_bound_inline = true
+      match self.try_parse_simple_type_args() {
+        Some(targs) =>
+          match base {
+            Some(bname) =>
+              self.class_base_type_args.push((class_name, bname, targs))
+            None => ()
+          }
+        None => self.skip_type_args()
+      }
+      self.no_bound_inline = false
     }
   }
   let implements_names = if self.match_ident("implements") {
@@ -1682,12 +1794,18 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   } else {
     []
   }
+  // Class *expressions* can be contextually typed from their assignment
+  // target, so member-level noImplicitAny recording is disarmed for the
+  // whole body (including when nested inside an armed class declaration).
+  let prev_no_heritage_expr = self.class_decl_no_heritage
+  self.class_decl_no_heritage = false
   // Generate unique brand ID for private fields
   let brand_id = self.class_id
   self.class_id += 1
   let brand = "__private_brand__" + brand_id.to_string()
   let prev_brand = self.current_class_brand
   self.current_class_brand = Some(brand)
+  let quoted_names_start = self.quoted_member_names.length()
   let (
     ctor_opt,
     elements,
@@ -1703,7 +1821,9 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     modifier_order_misuse,
     class_body_statement_misuse,
     static_index_type_param_ref,
+    index_naked_params,
   ) = self.parse_class_body(class_type_params)
+  self.class_decl_no_heritage = prev_no_heritage_expr
   self.current_class_brand = prev_brand
   self.restore_local_type_param_bounds(class_type_param_bound_len)
   // Class *expressions* (`const C = class { … }`) build their result through
@@ -1714,6 +1834,17 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   // so these always-an-error conditions (TS2392 / TS1071 / TS1245 / TS2387-8 /
   // TS2391 / TS2385 / TS1029) are flagged on class expressions too.
   let expr_class_sentinels : Array[String] = []
+  // Drain this class's quoted member names (see `parse_class_method_key`).
+  let quoted_names : Array[String] = []
+  while self.quoted_member_names.length() > quoted_names_start {
+    match self.quoted_member_names.pop() {
+      Some(n) => quoted_names.push(n)
+      None => ()
+    }
+  }
+  for qn in quoted_names {
+    expr_class_sentinels.push("<quoted-member:" + qn + ">")
+  }
   if ctor_impl_count >= 2 {
     expr_class_sentinels.push("<multiple-ctor-impl>")
   }
@@ -1740,6 +1871,28 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   }
   if static_index_type_param_ref {
     expr_class_sentinels.push("<static-type-param-ref>")
+  }
+  // Not an error by itself: records that an instance index signature's
+  // declared value type was a naked bounded type parameter (widened to its
+  // bound in the AST), so derived-class indexer compatibility can still
+  // reason about the generic slot.
+  for np in index_naked_params {
+    let kind = if np.0 { "num" } else { "str" }
+    expr_class_sentinels.push("<index-naked-param:\{kind}:\{np.1}>")
+  }
+  // Marker only: every private (`#name`) member this class declares, keyed
+  // by its brand id, so the checker can detect shadowed private accesses
+  // (TS18014) even for classes lowered out of `module_.classes`.
+  let brand_member_prefix = brand + "__"
+  for element in elements {
+    match element {
+      Field(_, Name(n), _, _, _, _) | Method(_, Name(n), _, _) =>
+        if n.has_prefix(brand_member_prefix) {
+          let base = n[brand_member_prefix.length():].to_string()
+          expr_class_sentinels.push("<private-decl:\{brand_id}:\{base}>")
+        }
+      _ => ()
+    }
   }
   if expr_class_sentinels.length() > 0 {
     self.collected_class_dups.push((class_name, expr_class_sentinels))
@@ -1927,6 +2080,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     properties: runtime_decl.properties,
     methods: runtime_decl.methods,
     index_signatures: runtime_decl.index_signatures,
+    static_index_signatures: runtime_decl.static_index_signatures,
     is_abstract: runtime_decl.is_abstract,
     is_constructible: runtime_decl.is_constructible,
     decorators: self.take_pending_decorators(),
@@ -1965,7 +2119,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
           }
         }
       StaticBlock(_) => key_temps.push(None) // Placeholder to keep indices aligned
-      IndexSig(_, _) => key_temps.push(None)
+      IndexSig(_, _, _) => key_temps.push(None)
     }
   }
 
@@ -2324,7 +2478,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
         ])
         stmts.push(Expr(call_expr))
       }
-      IndexSig(_, _) => ()
+      IndexSig(_, _, _) => ()
     }
   }
   stmts.push(Return(Some(@ast.TsExpr::Var(tmp_name))))
@@ -2390,7 +2544,21 @@ fn Parser::parse_class_decl_with_abstract(
   if self.match_(Extends) {
     base = Some(self.parse_class_base_name())
     if self.check(Lt) {
-      self.skip_type_args()
+      // Capture `extends B<...>` type arguments for the checker's
+      // generic-base compatibility checks; fall back to the permissive
+      // skip when they don't parse as simple types. Bound inlining is
+      // suppressed so `extends A<T>` records the raw `T`, not its
+      // constraint.
+      self.no_bound_inline = true
+      match self.try_parse_simple_type_args() {
+        Some(targs) =>
+          match base {
+            Some(bname) => self.class_base_type_args.push((name, bname, targs))
+            None => ()
+          }
+        None => self.skip_type_args()
+      }
+      self.no_bound_inline = false
     }
   }
   let implements_names = if self.match_ident("implements") {
@@ -2398,12 +2566,18 @@ fn Parser::parse_class_decl_with_abstract(
   } else {
     []
   }
+  // Arm noImplicitAny member recording only for a heritage-free class
+  // *declaration*: no `extends` / `implements` means no contextual-typing
+  // source for method parameters or bodiless returns.
+  let prev_no_heritage = self.class_decl_no_heritage
+  self.class_decl_no_heritage = base is None && implements_names.length() == 0
   // Generate unique brand ID for private fields
   let brand_id = self.class_id
   self.class_id += 1
   let brand = "__private_brand__" + brand_id.to_string()
   let prev_brand = self.current_class_brand
   self.current_class_brand = Some(brand)
+  let quoted_names_start = self.quoted_member_names.length()
   let (
     ctor_opt,
     elements,
@@ -2419,7 +2593,9 @@ fn Parser::parse_class_decl_with_abstract(
     modifier_order_misuse,
     class_body_statement_misuse,
     static_index_type_param_ref,
+    index_naked_params,
   ) = self.parse_class_body(class_type_params)
+  self.class_decl_no_heritage = prev_no_heritage
   self.current_class_brand = prev_brand
   self.restore_local_type_param_bounds(class_type_param_bound_len)
   let runtime_decl = build_runtime_class_decl(
@@ -2430,6 +2606,13 @@ fn Parser::parse_class_decl_with_abstract(
   // duplicate-member channel with a sentinel name so the checker can surface
   // the dedicated diagnostic. A single implementation (with any number of
   // bodyless overload signatures) is legal and leaves the count at 1.
+  while self.quoted_member_names.length() > quoted_names_start {
+    match self.quoted_member_names.pop() {
+      Some(n) =>
+        runtime_decl.duplicate_member_names.push("<quoted-member:" + n + ">")
+      None => ()
+    }
+  }
   if ctor_impl_count >= 2 {
     runtime_decl.duplicate_member_names.push("<multiple-ctor-impl>")
   }
@@ -2465,6 +2648,26 @@ fn Parser::parse_class_decl_with_abstract(
   // TS2302: a static index signature references a class type parameter.
   if static_index_type_param_ref {
     runtime_decl.duplicate_member_names.push("<static-type-param-ref>")
+  }
+  // Marker only (see the expression-class path above).
+  for np in index_naked_params {
+    let kind = if np.0 { "num" } else { "str" }
+    runtime_decl.duplicate_member_names.push(
+      "<index-naked-param:\{kind}:\{np.1}>",
+    )
+  }
+  let brand_member_prefix = brand + "__"
+  for element in elements {
+    match element {
+      Field(_, Name(n), _, _, _, _) | Method(_, Name(n), _, _) =>
+        if n.has_prefix(brand_member_prefix) {
+          let base = n[brand_member_prefix.length():].to_string()
+          runtime_decl.duplicate_member_names.push(
+            "<private-decl:\{brand_id}:\{base}>",
+          )
+        }
+      _ => ()
+    }
   }
   // Surface the class's structural diagnostics for *every* class, including
   // ones nested in function bodies that the IIFE lowering removes from
@@ -2641,7 +2844,7 @@ fn Parser::parse_class_decl_with_abstract(
           }
         }
       StaticBlock(_) => key_temps.push(None) // Placeholder to keep indices aligned
-      IndexSig(_, _) => key_temps.push(None)
+      IndexSig(_, _, _) => key_temps.push(None)
     }
   }
 
@@ -2998,7 +3201,7 @@ fn Parser::parse_class_decl_with_abstract(
         ])
         stmts.push(Expr(call_expr))
       }
-      IndexSig(_, _) => ()
+      IndexSig(_, _, _) => ()
     }
   }
   if stmts.length() == 1 {

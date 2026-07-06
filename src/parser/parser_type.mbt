@@ -538,6 +538,18 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
             _ => false
           }
           if !is_index_sig {
+            // TS2304: a computed key in a *type* literal (`{ [e]: number }`,
+            // `{ [e](): T }`) references the value namespace. Record the
+            // bare-identifier shape so the checker can flag a provably
+            // undeclared name. Dotted keys (`[Symbol.iterator]`) don't match
+            // the single-token shape, and function bodies are skipped (the
+            // name may be a local we can't resolve at module level).
+            match self.peek().kind {
+              Ident(key) if self.peek_at(1).kind == RBracket &&
+                !self.in_function =>
+                self.grammar_misuses.push("<computed-type-key>" + key)
+              _ => ()
+            }
             self.pos = saved_pos
             return None
           }
@@ -962,6 +974,8 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
         Unknown
       } else if name == "symbol" {
         Symbol
+      } else if name == "object" {
+        NonPrimitiveObject
       } else {
         Any
       }
@@ -1181,8 +1195,15 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
     Ident(name) => {
       let _ = self.advance()
       match self.local_type_param_bound(name) {
-        Some(bound) => bound
-        None => self.parse_named_type_tail(name)
+        // A `T extends object` bound erases to `Any`, not `NonPrimitiveObject`:
+        // the constraint promises "some object type", so treating a value of
+        // type `T` as the bare `object` surface would let member-existence
+        // checks false-flag properties the instantiation does have
+        // (`unboxify<T extends object>(...): T` → `v.a`). Direct `: object`
+        // annotations keep the first-class type.
+        Some(NonPrimitiveObject) if !self.no_bound_inline => Any
+        Some(bound) if !self.no_bound_inline => bound
+        _ => self.parse_named_type_tail(name)
       }
     }
     _ => raise ParseError("Expected type, got \{tok.kind}")
@@ -1881,7 +1902,19 @@ fn Parser::parse_typeof_type_query(
   let first = self.parse_typeof_query_segment()
   let mut query = first
   while self.match_(Dot) {
-    query += "." + self.parse_typeof_query_segment()
+    // Tolerate a trailing dot (`var v: typeof A.` -- parser error-recovery
+    // fixtures): keep the query so the base name still resolves and an
+    // undeclared `A` reports TS2304 instead of the whole annotation
+    // collapsing to `Any`.
+    let seg : String? = try self.parse_typeof_query_segment() catch {
+      _ => None
+    } noraise {
+      s => Some(s)
+    }
+    match seg {
+      Some(sg) => query += "." + sg
+      None => break
+    }
   }
   if self.check(Lt) {
     self.skip_type_args()

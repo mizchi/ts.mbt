@@ -78,6 +78,8 @@ pub(all) enum JsdocTag {
 } derive(Eq, @debug.Debug)
 
 pub struct Lexer {
+  mut invalid_char_count : Int
+  mut unterminated_template : Bool
   src : String
   mut pos : Int
   mut allow_regex : Bool
@@ -119,10 +121,28 @@ pub struct Parser {
   mut last_runtime_class_decl : @ast.TsClassDecl?
   mut pending_class_base_expr : @ast.TsExpr?
   mut pending_call_type_args : Array[@ast.TsType]
+  mut last_type_params_had_default : Bool
   local_type_param_bounds : Array[(String, @ast.TsType)]
   pending_decorators : Array[@ast.TsExpr]
   param_property_scopes : Array[Array[(String, Bool, String)]]
   param_property_misuses : Array[String]
+  strict_mode_misuses : Array[String]
+  invalid_decorator_uses : Array[String]
+  grammar_misuses : Array[String]
+  imported_binding_names : Array[String]
+  import_module_specs : Array[String]
+  multi_file_source : Bool
+  class_base_type_args : Array[(String, String, Array[@ast.TsType])]
+  mut no_bound_inline : Bool
+  target_es6_plus : Bool
+  no_implicit_any : Bool
+  mut record_implicit_any_params : Bool
+  mut class_decl_no_heritage : Bool
+  directive_strict : Bool
+  param_optional_initializer_misuses : Array[String]
+  interface_member_modifier_misuses : Array[String]
+  collected_class_dups : Array[(String, Array[String])]
+  quoted_member_names : Array[String]
   pure_marker_positions : Map[Int, Bool]
   internal_marker_positions : Map[Int, Bool]
   collected_internal_names : Map[String, Bool]

@@ -1,0 +1,368 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "mizchi/ts/transform"
+
+import {
+  "mizchi/ts/ast",
+  "moonbitlang/core/debug",
+}
+
+// Values
+pub fn analyze_observability(SymbolGraph, Array[(Sink, Int)]) -> Map[Int, Observability]
+
+pub fn analyze_purity(@ast.TsBlock) -> PurityReport
+
+pub fn analyze_purity_with(@ast.TsBlock, Map[String, Bool]) -> PurityReport
+
+pub fn as_const_inline_block(@ast.TsBlock) -> @ast.TsBlock
+
+pub fn auto_reserve_from_module(@ast.TsModuleBlock, @ast.TsModule, ManglerConfig) -> ManglerConfig
+
+pub fn build_const_enum_table(Array[@ast.TsEnumDecl]) -> Map[String, @ast.TsExpr]
+
+pub fn build_enum_inline_table(Array[@ast.TsEnumDecl], include_non_const? : Bool) -> Map[String, @ast.TsExpr]
+
+pub fn build_predicate_table(@ast.TsBlock) -> PredicateTable
+
+pub fn build_switch_fold_table(@ast.TsBlock) -> SwitchFoldTable
+
+pub fn build_symbol_graph(@ast.TsBlock, Map[String, Bool]) -> SymbolGraph
+
+pub fn build_symbol_graph_with_sinks(@ast.TsBlock, Map[String, Bool]) -> (SymbolGraph, Array[(Sink, Int)])
+
+pub fn bundle_modules(Map[String, String], String, BundleOptions) -> Result[BundleOutput, String]
+
+pub fn class_method_dce_block(@ast.TsBlock) -> @ast.TsBlock
+
+pub fn collect_externally_visible_props(@ast.TsBlock, Map[String, Bool]) -> Array[String]
+
+pub fn collect_sinks(@ast.TsBlock, Map[String, Bool]) -> Array[Sink]
+
+pub fn drop_dead_properties_block(@ast.TsBlock, Map[String, Bool]) -> @ast.TsBlock
+
+pub fn emit_entry_dts(@ast.TsModule, Array[String], Map[String, String]) -> String
+
+pub fn entry_export_property_names(@ast.TsModule, Array[String]) -> Array[String]
+
+pub fn external_import_bindings(Array[@ast.TsImportDecl]) -> Map[String, Bool]
+
+pub fn extract_jsx_pragmas(String, JsxConfig) -> JsxConfig
+
+pub fn fold_block(@ast.TsBlock) -> @ast.TsBlock
+
+pub fn iife_class_lift_block(@ast.TsBlock) -> @ast.TsBlock
+
+pub fn infer_numeric_symbols(SymbolGraph) -> Map[Int, Bool]
+
+pub fn inline_block(@ast.TsBlock) -> @ast.TsBlock
+
+pub fn inline_const_enums(@ast.TsBlock, Map[String, @ast.TsExpr]) -> @ast.TsBlock
+
+pub fn inline_predicates(@ast.TsBlock, PredicateTable) -> @ast.TsBlock
+
+pub fn is_index_numeric_with_graph(@ast.TsExpr, SymbolGraph, Map[Int, Bool]) -> Bool
+
+pub fn is_index_numeric_with_names(@ast.TsExpr, Map[String, Bool]) -> Bool
+
+pub fn lookup_symbol_in_scope(SymbolGraph, Int, String) -> Int?
+
+pub fn lower_block_with_runtime_imports(JsxConfig, @ast.TsBlock) -> (@ast.TsBlock, Array[String])
+
+pub fn lower_enums(Array[@ast.TsEnumDecl]) -> Array[@ast.TsStmt]
+
+pub fn lower_jsx_element(JsxConfig, String, Array[(String, @ast.TsExpr?)], Array[@ast.TsExpr]) -> @ast.TsExpr
+
+pub fn lower_jsx_in_block(JsxConfig, @ast.TsBlock) -> @ast.TsBlock
+
+pub fn lower_jsx_in_expr(JsxConfig, @ast.TsExpr) -> @ast.TsExpr
+
+pub fn lower_jsx_in_stmt(JsxConfig, @ast.TsStmt) -> @ast.TsStmt
+
+pub fn mangle_block(@ast.TsBlock, ManglerConfig) -> @ast.TsBlock
+
+pub fn mangle_block_with_renames(@ast.TsBlock, ManglerConfig) -> (@ast.TsBlock, Map[String, String])
+
+pub fn mangle_source_with_auto_reserve(String, ManglerConfig) -> Result[String, String]
+
+pub fn numeric_name_set(SymbolGraph, Map[Int, Bool]) -> Map[String, Bool]
+
+pub fn peephole_block(@ast.TsBlock) -> @ast.TsBlock
+
+pub fn reserve_props_from_sink(Sink, Int, SymbolGraph, Map[String, Bool], Map[String, Bool]) -> Unit
+
+pub fn reserved_props_from_observability(SymbolGraph, Map[Int, Observability]) -> Map[String, Bool]
+
+pub fn switch_fold(@ast.TsBlock, SwitchFoldTable) -> @ast.TsBlock
+
+pub fn tag_rewrite_block(@ast.TsBlock, Array[@ast.TsTypeAlias]) -> @ast.TsBlock
+
+pub fn transform_source(String) -> Result[String, String]
+
+pub fn transform_source_full(String, JsxConfig, with_sourcemap? : Bool, source_path? : String, output_path? : String, mangle? : Bool, mangle_properties? : Bool, minify? : Bool) -> Result[TransformOutput, String]
+
+pub fn transform_source_with(String, JsxConfig) -> Result[String, String]
+
+pub fn treeshake_block(@ast.TsBlock) -> @ast.TsBlock
+
+pub fn type_declared_property_names(@ast.TsModule) -> Array[String]
+
+pub fn type_fold_block(@ast.TsBlock, type_aliases? : Array[@ast.TsTypeAlias]) -> @ast.TsBlock
+
+pub fn vlq_encode(Int) -> String
+
+// Errors
+
+// Types and methods
+pub(all) struct BundleOptions {
+  jsx : JsxConfig
+  with_sourcemap : Bool
+  mangle : Bool
+  mangle_properties : Bool
+  mangle_properties_shape_color : Bool
+  treeshake : Bool
+  minify : Bool
+  fold : Bool
+  aliases : Map[String, String]
+  extra_reserved_props : Array[String]
+}
+pub fn BundleOptions::default() -> Self
+pub fn BundleOptions::with_aliases(Self, Map[String, String]) -> Self
+pub fn BundleOptions::with_extra_reserved_props(Self, Array[String]) -> Self
+pub fn BundleOptions::with_fold(Self, Bool) -> Self
+pub fn BundleOptions::with_mangle(Self, Bool) -> Self
+pub fn BundleOptions::with_mangle_properties(Self, Bool) -> Self
+pub fn BundleOptions::with_mangle_properties_shape_color(Self, Bool) -> Self
+pub fn BundleOptions::with_minify(Self, Bool) -> Self
+pub fn BundleOptions::with_sourcemap(Self, Bool) -> Self
+pub fn BundleOptions::with_treeshake(Self, Bool) -> Self
+
+pub(all) struct BundleOutput {
+  js : String
+  sourcemap : String?
+  modules : Array[String]
+  warnings : Array[String]
+}
+
+pub(all) struct Def {
+  init : @ast.TsExpr?
+} derive(@debug.Debug)
+
+pub(all) struct FlowEdge {
+  from : FlowNode
+  to : FlowNode
+} derive(@debug.Debug)
+
+pub(all) enum FlowNode {
+  SymVal(Int)
+  FuncReturn(Int)
+  FuncArg(Int, Int)
+  Literal(LiteralKind)
+  External
+  Unknown
+} derive(@debug.Debug)
+
+pub(all) struct FuncInfo {
+  params : Array[Int]
+  returns : Array[FlowNode]
+} derive(@debug.Debug)
+
+pub(all) struct ImpureGetter {
+  class_name : String
+  getter_name : String
+  reason : String
+}
+
+pub(all) struct JsxConfig {
+  runtime : String
+  import_source : String
+  dev : Bool
+  pragma_jsx : String
+  pragma_jsx_frag : String
+}
+pub fn JsxConfig::default() -> Self
+pub fn JsxConfig::with_dev(Self, Bool) -> Self
+pub fn JsxConfig::with_import_source(Self, String) -> Self
+pub fn JsxConfig::with_pragma_jsx(Self, String) -> Self
+pub fn JsxConfig::with_pragma_jsx_frag(Self, String) -> Self
+pub fn JsxConfig::with_runtime(Self, String) -> Self
+
+pub(all) struct LineIndex {
+  line_starts : Array[Int]
+}
+pub fn LineIndex::new(String) -> Self
+pub fn LineIndex::position(Self, Int) -> Position
+
+pub(all) enum LiteralKind {
+  LitNumeric
+  LitString
+  LitBool
+  LitNull
+  LitObject
+  LitOther
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ManglerConfig {
+  reserved : Array[String]
+  preserve_top_level : Bool
+  mangle_properties : Bool
+  reserved_properties : Array[String]
+  mangle_properties_shape_color : Bool
+}
+pub fn ManglerConfig::default() -> Self
+pub fn ManglerConfig::with_mangle_properties(Self, Bool) -> Self
+pub fn ManglerConfig::with_mangle_properties_shape_color(Self, Bool) -> Self
+pub fn ManglerConfig::with_preserve_top_level(Self, Bool) -> Self
+pub fn ManglerConfig::with_reserved(Self, Array[String]) -> Self
+pub fn ManglerConfig::with_reserved_properties(Self, Array[String]) -> Self
+
+pub(all) enum Observability {
+  Hidden
+  ViaStringify
+  DirectProps
+  RecursiveProps
+  External
+} derive(Eq, @debug.Debug)
+
+pub(all) struct Position {
+  line : Int
+  column : Int
+} derive(Eq, @debug.Debug)
+pub fn Position::new(Int, Int) -> Self
+
+pub(all) struct PredicateEntry {
+  param_name : String
+  body_expr : @ast.TsExpr
+}
+
+pub(all) struct PredicateTable {
+  entries : Map[String, PredicateEntry]
+}
+
+pub(all) struct PurityReport {
+  pure_functions : Map[String, Bool]
+  impure_getters : Array[ImpureGetter]
+}
+
+pub(all) struct Scope {
+  id : Int
+  parent : Int?
+  kind : ScopeKind
+  declared : Array[Int]
+}
+
+pub(all) enum ScopeKind {
+  Module
+  Function
+  Block
+  Catch
+} derive(Eq, @debug.Debug)
+
+pub(all) struct Segment {
+  out_col : Int
+  src_line : Int?
+  src_col : Int?
+  src_id : Int?
+}
+
+pub(all) struct Sink {
+  expr : @ast.TsExpr
+  observation : SinkObservation
+}
+
+pub(all) enum SinkObservation {
+  DirectKeys
+  Recursive
+  ExternalCallArg
+  ExternalPropWrite
+  StringifyOnly
+}
+
+pub(all) struct SourceMapBuilder {
+  lines : Array[Array[Segment]]
+  mut last_out_line : Int
+  mut current_source : Int
+}
+pub fn SourceMapBuilder::add_mapping(Self, Int, Int, Int, Int) -> Unit
+pub fn SourceMapBuilder::add_unmapped(Self, Int, Int) -> Unit
+pub fn SourceMapBuilder::new() -> Self
+pub fn SourceMapBuilder::set_current_source(Self, Int) -> Unit
+pub fn SourceMapBuilder::to_json(Self, source~ : String, source_path~ : String, output_path~ : String) -> String
+pub fn SourceMapBuilder::to_json_multi(Self, Array[String], Array[String], output_path~ : String) -> String
+
+pub(all) struct SwitchFoldEntry {
+  param_names : Array[String]
+  switch_param_index : Int
+  arms : Map[String, @ast.TsExpr]
+}
+
+pub(all) struct SwitchFoldTable {
+  entries : Map[String, SwitchFoldEntry]
+}
+
+pub(all) struct Symbol {
+  id : Int
+  scope_id : Int
+  name : String
+  kind : SymbolKind
+  uses : Array[Use]
+  defs : Array[Def]
+  reassign_rhs : Array[@ast.TsExpr]
+  mut reassigned : Bool
+  mut captured_by_closure : Bool
+  mut ts_type : @ast.TsType
+} derive(@debug.Debug)
+
+pub(all) struct SymbolGraph {
+  scopes : Array[Scope]
+  symbols : Array[Symbol]
+  by_name : Map[String, Int]
+  flow_edges : Array[FlowEdge]
+  external_bindings : Map[Int, Bool]
+  funcs : Map[Int, FuncInfo]
+}
+
+pub(all) enum SymbolKind {
+  Let
+  Const
+  Var
+  Param
+  FuncDecl
+  ImportDefault
+  ImportNamespace
+  ImportNamed
+  Catch
+  ClassDecl
+} derive(Eq, @debug.Debug)
+
+pub(all) struct TransformOutput {
+  js : String
+  sourcemap : String?
+}
+
+pub(all) struct Use {
+  scope_id : Int
+  context : UseContext
+} derive(@debug.Debug)
+
+pub(all) enum UseContext {
+  Read
+  PropReceiver(String)
+  IndexReceiver
+  IndexKey
+  CallReceiver
+  CallArg(Int)
+  NewReceiver
+  ReturnValue
+  ThrowValue
+  AssignLHS
+  AssignRHS
+  PropAssignRHS
+  IndexAssignRHS
+} derive(@debug.Debug)
+
+// Type aliases
+pub type ScopeId = Int
+
+pub type SymbolId = Int
+
+// Traits
+

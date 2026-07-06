@@ -91,6 +91,7 @@ pub(all) struct TsClassDecl {
   is_abstract : Bool
   is_constructible : Bool
   index_signatures : Array[(TsType, TsType)]
+  static_index_signatures : Array[(TsType, TsType)]
   decorators : Array[TsExpr]
   is_declare : Bool
   private_members : Array[String]
@@ -297,6 +298,15 @@ pub(all) struct TsModule {
   use_define_for_class_fields : Bool
   deprecated_compiler_options : Array[String]
   parameter_property_misuses : Array[String]
+  strict_mode_misuses : Array[String]
+  invalid_decorator_uses : Array[String]
+  grammar_misuses : Array[String]
+  imported_binding_names : Array[String]
+  import_module_specs : Array[String]
+  class_base_type_args : Array[(String, String, Array[TsType])]
+  param_optional_initializer_misuses : Array[String]
+  interface_member_modifier_misuses : Array[String]
+  class_dup_diagnostics : Array[(String, Array[String])]
 } derive(@debug.Debug)
 pub impl Show for TsModule
 
@@ -404,6 +414,7 @@ pub(all) enum TsType {
   Any
   Unknown
   Never
+  NonPrimitiveObject
   Null
   Undefined
   Literal(String)

@@ -15,6 +15,8 @@ pub fn check_assignable_with(@ast.TsType, @ast.TsType, (String) -> @ast.TsType?)
 
 pub fn check_assignable_with_generics(@ast.TsType, @ast.TsType, (String) -> AliasBinding?) -> Array[AssignabilityIssue]
 
+pub fn check_dts_top_level_modifiers(@ast.TsModule) -> Array[ExprIssue]
+
 pub fn check_function_body(@ast.TsFunc) -> Array[ExprIssue]
 
 pub fn check_module(@ast.TsModule) -> TypeCheckReport

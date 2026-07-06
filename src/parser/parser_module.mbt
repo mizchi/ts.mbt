@@ -33,9 +33,12 @@ fn Parser::maybe_match_type_modifier(self : Parser) -> Bool {
 fn Parser::parse_import_specifiers(self : Parser) -> Unit raise ParseError {
   while !self.check(RBrace) {
     let _ = self.maybe_match_type_modifier()
-    let _ = self.parse_binding_ident()
+    let imported = self.parse_binding_ident()
     if self.match_(As) || self.match_ident("as") {
-      let _ = self.parse_binding_ident()
+      let local = self.parse_binding_ident()
+      self.imported_binding_names.push(local)
+    } else {
+      self.imported_binding_names.push(imported)
     }
     if self.match_(Comma) {
       if self.check(RBrace) {
@@ -135,6 +138,12 @@ fn empty_ts_module() -> @ast.TsModule {
     top_level_stmts: [],
     deprecated_compiler_options: [],
     parameter_property_misuses: [],
+    strict_mode_misuses: [],
+    invalid_decorator_uses: [],
+    grammar_misuses: [],
+    imported_binding_names: [],
+    import_module_specs: [],
+    class_base_type_args: [],
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],
     class_dup_diagnostics: [],
@@ -280,6 +289,8 @@ fn Parser::parse_enum_decl_after_enum_keyword(
     raise ParseError("Expected enum declaration")
   }
   let name = self.parse_binding_ident()
+  // TS1359: an enum name is a binding name (`enum void {}` is never legal).
+  self.record_reserved_binding_name(name)
   let _ = self.expect(LBrace)
   let members : Array[@ast.TsEnumMember] = []
   while !self.check(RBrace) && !self.check(Eof) {
@@ -607,6 +618,14 @@ fn Parser::parse_namespace_decl_with_mode(
       return Some((None, None))
     }
   }
+  // TS1443: a module declaration name must be an identifier or a
+  // single/double-quoted string -- template literals are rejected
+  // (`declare module \`M1\` {}`).
+  if keyword == "module" && self.peek().kind is Template(_, _, _) {
+    self.grammar_misuses.push(
+      "module declaration names may only use ' or \" quoted strings",
+    )
+  }
   let name = if self.is_qualified_type_name_part(0) {
     Some(self.parse_binding_ident())
   } else {
@@ -616,6 +635,44 @@ fn Parser::parse_namespace_decl_with_mode(
     if self.is_qualified_type_name_part(0) {
       let _ = self.parse_binding_ident()
     } else {
+      // A hard-reserved word as a dotted path segment
+      // (`declare namespace chrome.debugger {}`) is never legal --
+      // tsc reports TS1005/TS2304 recovery errors here.
+      match self.peek().kind {
+        Debugger
+        | While
+        | If
+        | Else
+        | For
+        | Do
+        | Switch
+        | Case
+        | Return
+        | Break
+        | Continue
+        | Function
+        | Class
+        | Var
+        | Const
+        | New
+        | Delete
+        | Typeof
+        | Instanceof
+        | In
+        | Import
+        | Export
+        | Extends
+        | Try
+        | Catch
+        | Finally
+        | Throw
+        | With
+        | Default =>
+          self.grammar_misuses.push(
+            "a reserved word cannot be used as a namespace path segment",
+          )
+        _ => ()
+      }
       break
     }
   }
@@ -707,6 +764,9 @@ fn Parser::parse_import_equals_decl(
     let _ = self.expect(LParen)
     let spec = self.expect_str_literal()
     let _ = self.expect(RParen)
+    if !self.multi_file_source {
+      self.import_module_specs.push(spec)
+    }
     spec
   } else {
     self.skip_until_semicolon()
@@ -2189,6 +2249,14 @@ fn Parser::parse_export_decl_for_module(
   }
   if self.match_(Eq) {
     let expr = self.parse_expr()
+    // TS2304: `export = name` references the value namespace; record the
+    // bare-identifier shape so the checker can flag a provably undeclared
+    // name (resolution folds in module-block / namespace declarations).
+    match expr {
+      @ast.TsExpr::Var(name) if !self.in_function =>
+        self.grammar_misuses.push("<export-eq>" + name)
+      _ => ()
+    }
     let local_name = match expr {
       @ast.TsExpr::Var(name) => name
       _ => {
@@ -2591,8 +2659,11 @@ fn Parser::parse_import_stmt(self : Parser) -> Unit raise ParseError {
     // import type ...
   }
   match self.peek().kind {
-    Str(_) => {
+    Str(side_effect_spec) => {
       let _ = self.advance()
+      if !self.multi_file_source {
+        self.import_module_specs.push(side_effect_spec)
+      }
       self.skip_import_attributes()
       self.consume_semicolon()
       return
@@ -2608,13 +2679,17 @@ fn Parser::parse_import_stmt(self : Parser) -> Unit raise ParseError {
     _ => ()
   }
   match self.peek().kind {
-    Ident(_) => {
+    Ident(default_name) => {
       let _ = self.advance()
+      self.imported_binding_names.push(default_name)
       if self.match_(Comma) {
         // continue to namespace/named
       } else {
         self.expect_from()
-        let _ = self.expect_str_literal()
+        let default_spec = self.expect_str_literal()
+        if !self.multi_file_source {
+          self.import_module_specs.push(default_spec)
+        }
         self.skip_import_attributes()
         self.consume_semicolon()
         return
@@ -2626,13 +2701,17 @@ fn Parser::parse_import_stmt(self : Parser) -> Unit raise ParseError {
     if !(self.match_(As) || self.match_ident("as")) {
       raise ParseError("Expected 'as' in import namespace")
     }
-    let _ = self.parse_binding_ident()
+    let ns_name = self.parse_binding_ident()
+    self.imported_binding_names.push(ns_name)
   } else if self.match_(LBrace) {
     self.parse_import_specifiers()
     let _ = self.expect(RBrace)
   }
   self.expect_from()
-  let _ = self.expect_str_literal()
+  let tail_spec = self.expect_str_literal()
+  if !self.multi_file_source {
+    self.import_module_specs.push(tail_spec)
+  }
   self.skip_import_attributes()
   self.consume_semicolon()
 }
@@ -2754,7 +2833,13 @@ fn Parser::parse_export_stmt(
     return
   }
   if self.match_(Eq) {
-    let _ = self.parse_expr()
+    // TS2304: `export = name` over a provably undeclared value (see the
+    // module-block variant above for the recording contract).
+    match self.parse_expr() {
+      @ast.TsExpr::Var(name) if !self.in_function =>
+        self.grammar_misuses.push("<export-eq>" + name)
+      _ => ()
+    }
     self.consume_semicolon()
     return
   }
@@ -2804,7 +2889,12 @@ fn Parser::parse_export_stmt(
     return
   }
   if self.check(Function) {
-    funcs.push(self.parse_function())
+    let func = self.parse_function()
+    // Exported *value* marker: class/namespace declaration merging needs
+    // to know which namespace members were exported (the nested-module
+    // re-parse otherwise erases `export`-ness).
+    self.grammar_misuses.push("<export-value>" + func.name)
+    funcs.push(func)
     return
   }
   match self.peek().kind {
@@ -2813,7 +2903,9 @@ fn Parser::parse_export_stmt(
       !self.has_line_terminator_after() => {
       let _ = self.advance()
       self.in_async = true
-      funcs.push(self.parse_function())
+      let func = self.parse_function()
+      self.grammar_misuses.push("<export-value>" + func.name)
+      funcs.push(func)
       self.in_async = false
       return
     }
@@ -2824,11 +2916,15 @@ fn Parser::parse_export_stmt(
     return
   }
   if self.is_const_enum_decl_start() {
-    enums.push(self.parse_const_enum_decl(false))
+    let enum_ = self.parse_const_enum_decl(false)
+    self.grammar_misuses.push("<export-value>" + enum_.name)
+    enums.push(enum_)
     return
   }
   if self.is_enum_keyword_at(0) {
-    enums.push(self.parse_enum_decl_after_enum_keyword(false, false))
+    let enum_ = self.parse_enum_decl_after_enum_keyword(false, false)
+    self.grammar_misuses.push("<export-value>" + enum_.name)
+    enums.push(enum_)
     return
   }
   match self.peek().kind {
@@ -2872,6 +2968,7 @@ fn Parser::parse_export_stmt(
         let _ = self.advance()
         let parsed_values = self.parse_declare_values()
         for value in parsed_values {
+          self.grammar_misuses.push("<export-value>" + value.name)
           values.push(value)
         }
       }
@@ -2966,7 +3063,10 @@ fn Parser::parse_export_stmt(
   if self.check(Class) {
     let _ = self.parse_class_decl()
     match self.take_last_runtime_class_decl() {
-      Some(class_) => classes.push(class_)
+      Some(class_) => {
+        self.grammar_misuses.push("<export-value>" + class_.name)
+        classes.push(class_)
+      }
       None => ()
     }
     return
@@ -2974,7 +3074,10 @@ fn Parser::parse_export_stmt(
   if self.match_ident("abstract") && self.check(Class) {
     let _ = self.parse_class_decl_with_abstract(true)
     match self.take_last_runtime_class_decl() {
-      Some(class_) => classes.push(class_)
+      Some(class_) => {
+        self.grammar_misuses.push("<export-value>" + class_.name)
+        classes.push(class_)
+      }
       None => ()
     }
     return
@@ -2991,6 +3094,11 @@ fn Parser::parse_export_stmt(
     let stmt = self.parse_stmt()
     collect_static_const_exprs_from_stmt(stmt, const_values)
     collect_value_decls_from_stmt(stmt, values, const_values)
+    match stmt {
+      Var(Ident(n), _, _) | Let(Ident(n), _, _) | Const(Ident(n), _, _) =>
+        self.grammar_misuses.push("<export-value>" + n)
+      _ => ()
+    }
     // Retain the statement so the checker walks the initializer expression
     // (`export var b = C.bar`) the same way it does a non-exported
     // `var b = C.bar`. Without this the initializer was dropped, so no
@@ -3040,13 +3148,46 @@ fn Parser::parse_module_with_seeded_const_values_internal(
     // Consume any top-level decorators (`@foo`, `@foo()`). Decorators are
     // erased from the bridge AST; we just skip them and parse the declaration
     // that follows (`class`, `export class`, `async function`, etc.).
+    let mut saw_decorator_here = false
     while self.check(At) {
       self.skip_decorator()
+      saw_decorator_here = true
+    }
+    // TS1206: decorators only attach to class declarations. When the next
+    // token cannot begin one (`enum`, `function`, `interface`, `var`,
+    // `import`, ...), the pending decorators are orphaned -- record one
+    // diagnostic per group and drop them. `export ...` is left alone (the
+    // class may follow the modifier chain). Gated on decorators actually
+    // skipped in *this* iteration: some class-parse paths legitimately leave
+    // stale pending entries behind, and those must not re-trigger here.
+    if saw_decorator_here && self.pending_decorators.length() > 0 {
+      let can_take_decorators = match self.peek().kind {
+        Class | Export | At => true
+        Ident("abstract") => true
+        Declare => true
+        _ => false
+      }
+      if !can_take_decorators {
+        self.invalid_decorator_uses.push("top-level")
+        self.pending_decorators.clear()
+      }
     }
     if self.check(Function) {
       funcs.push(self.parse_function())
     } else if (match self.peek().kind {
-        Ident("async") => self.peek_at(1).kind == Function
+        Ident("async") =>
+          match self.peek_at(1).kind {
+            // TS1042: `async` is only valid on functions / methods. An
+            // `async class` / `async enum` / `async interface` /
+            // `async namespace` records the misuse and drops the modifier so
+            // the declaration itself still parses.
+            Class | Interface | Ident("namespace") | Ident("enum") => {
+              self.grammar_misuses.push("`async` modifier cannot be used here")
+              let _ = self.advance()
+              false
+            }
+            _ => self.peek_at(1).kind == Function
+          }
         _ => false
       }) {
       // Top-level `async function f() { ... }` declaration.
@@ -3283,6 +3424,12 @@ fn Parser::parse_module_with_seeded_const_values_internal(
     use_define_for_class_fields: detect_use_define_for_class_fields(self.src),
     deprecated_compiler_options: detect_deprecated_compiler_options(self.src),
     parameter_property_misuses: self.param_property_misuses,
+    strict_mode_misuses: self.strict_mode_misuses,
+    invalid_decorator_uses: self.invalid_decorator_uses,
+    grammar_misuses: self.grammar_misuses,
+    imported_binding_names: self.imported_binding_names,
+    import_module_specs: self.import_module_specs,
+    class_base_type_args: self.class_base_type_args,
     param_optional_initializer_misuses: self.param_optional_initializer_misuses,
     interface_member_modifier_misuses: self.interface_member_modifier_misuses,
     class_dup_diagnostics: self.collected_class_dups,
@@ -3333,6 +3480,40 @@ fn detect_deprecated_compiler_options(src : String) -> Array[String] {
       }
       if saw_es3 {
         out.push("target=ES3")
+      }
+    }
+    None => ()
+  }
+  // Value-specific: the `@module:` directive's comma list. TypeScript 6
+  // deprecates the `amd` / `umd` / `system` module targets (TS5107).
+  match head_lower.find("@module:") {
+    Some(idx) => {
+      let after = head_lower[idx + "@module:".length():].to_owned()
+      let line = match after.find("\n") {
+        Some(nl) => after[:nl].to_owned()
+        None => after
+      }
+      let mut saw_amd = false
+      let mut saw_umd = false
+      let mut saw_system = false
+      for raw in line.split(",") {
+        let tok = raw.trim().to_owned()
+        if tok == "amd" {
+          saw_amd = true
+        } else if tok == "umd" {
+          saw_umd = true
+        } else if tok == "system" {
+          saw_system = true
+        }
+      }
+      if saw_amd {
+        out.push("module=AMD")
+      }
+      if saw_umd {
+        out.push("module=UMD")
+      }
+      if saw_system {
+        out.push("module=System")
       }
     }
     None => ()

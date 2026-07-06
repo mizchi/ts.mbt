@@ -321,12 +321,28 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
   } else {
     wrapped
   }
+  // Strict-mode `eval` / `arguments` as a *compound* assignment target
+  // (`eval += 1`). The simple-assignment arm below records the `=` case;
+  // this non-consuming peek covers the compound operators, then parsing
+  // continues through the per-operator branches unchanged.
+  match left {
+    Var(strict_target) =>
+      if (self.in_strict || self.directive_strict) &&
+        (strict_target == "eval" || strict_target == "arguments") &&
+        self.peek_is_compound_assign_op() {
+        self.strict_mode_misuses.push(strict_target)
+      }
+    _ => ()
+  }
   if self.check(Eq) {
     match left {
       Var(name) => {
-        // In strict mode, cannot assign to eval or arguments
-        if self.in_strict && (name == "eval" || name == "arguments") {
-          raise ParseError("Cannot assign to '\{name}' in strict mode")
+        // In strict mode, `eval` / `arguments` are not valid assignment
+        // targets (TS1100 family). Recorded -- not raised -- so the file
+        // still parses and the checker reports the diagnostic.
+        if (self.in_strict || self.directive_strict) &&
+          (name == "eval" || name == "arguments") {
+          self.strict_mode_misuses.push(name)
         }
         let _ = self.advance()
         let right = self.parse_assignment()
@@ -703,6 +719,9 @@ fn Parser::parse_single_param_arrow(
 fn Parser::is_destructuring_assignment_start(self : Parser) -> Bool {
   let saved_pos = self.pos
   let saved_gen = self.in_generator
+  // Speculative binding-pattern parse: roll back any misuse recordings it
+  // pushes (see `is_arrow_function`).
+  let recordings = self.recording_lengths()
   let mut ok = false
   try {
     let _ = self.parse_assignment_binding_pattern()
@@ -710,6 +729,7 @@ fn Parser::is_destructuring_assignment_start(self : Parser) -> Bool {
   } catch {
     _ => ok = false
   }
+  self.rollback_recordings(recordings)
   self.pos = saved_pos
   self.in_generator = saved_gen
   ok
@@ -4037,6 +4057,13 @@ fn Parser::parse_async_arrow_function(
       _ => "<anon>"
     }
     if name != "<anon>" {
+      // TS1359: the single parameter of `async x => …` binds in the async
+      // body scope where `await` is reserved.
+      if name == "await" {
+        self.grammar_misuses.push(
+          "`await` cannot be used as a parameter name in an async context",
+        )
+      }
       let _ = self.expect(Arrow)
       let prev_async = self.in_async
       self.in_async = true
@@ -4090,9 +4117,14 @@ fn Parser::parse_async_arrow_function(
   if self.check(Lt) {
     self.skip_type_args()
   }
-  // Parse with parentheses: async (params) => body
+  // Parse with parentheses: async (params) => body. Parameters bind in the
+  // async body scope, so `in_async` must already be armed while they parse
+  // -- `async (await) => {}` is a TS1359 recorded by `parse_param`.
   let _ = self.expect(LParen)
+  let prev_async_params = self.in_async
+  self.in_async = true
   let params = self.parse_params()
+  self.in_async = prev_async_params
   let _ = self.expect(RParen)
   // Optional return type annotation — captured so the checker can see
   // `(x): x is Foo => …` predicates.
@@ -4136,4 +4168,29 @@ fn Parser::parse_async_arrow_function(
   }
   self.in_async = prev_async
   ArrowFunc(params, return_type, body, true) // is_async = true
+}
+
+///|
+/// True when the *current* token is a compound assignment operator
+/// (`+=`, `-=`, `*=`, `**=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=`,
+/// `>>>=`, `&&=`, `||=`, `??=`). Non-consuming.
+fn Parser::peek_is_compound_assign_op(self : Parser) -> Bool {
+  match self.peek().kind {
+    PlusEq
+    | MinusEq
+    | StarEq
+    | StarStarEq
+    | SlashEq
+    | PercentEq
+    | AmpEq
+    | PipeEq
+    | CaretEq
+    | LtLtEq
+    | GtGtEq
+    | GtGtGtEq
+    | AmpAmpEq
+    | PipePipeEq
+    | QuestionQuestionEq => true
+    _ => false
+  }
 }

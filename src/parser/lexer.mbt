@@ -144,6 +144,11 @@ fn write_codepoint(buf : StringBuilder, code : Int) -> Unit {
 ///|
 // /
 pub struct Lexer {
+  // TS1127: count of genuinely-unknown ASCII characters the tokenizer had
+  // to skip (a stray `\` not starting a unicode escape, control chars, ...).
+  mut invalid_char_count : Int
+  // TS1160: a template literal ran to EOF without its closing backtick.
+  mut unterminated_template : Bool
   src : String
   mut pos : Int
   mut allow_regex : Bool
@@ -206,8 +211,17 @@ fn Lexer::read_hex_digit(self : Lexer) -> Int? {
 // / create
 pub fn Lexer::new(src : String) -> Lexer {
   {
+    invalid_char_count: 0,
+    unterminated_template: false,
     src,
-    pos: 0,
+    // Skip a UTF-8/UTF-16 byte-order mark. Without this the BOM reaches
+    // the identifier scanner as an unknown character and error recovery
+    // silently swallows the first statement of the file.
+    pos: if src.length() > 0 && src[0] == '\u{FEFF}' {
+      1
+    } else {
+      0
+    },
     allow_regex: true,
     pending: [],
     pending_index: 0,
@@ -1559,7 +1573,11 @@ fn Lexer::scan_template_parts_with_raw(
   let mut raw_buf = StringBuilder::new()
   while true {
     match self.peek() {
-      None => break
+      None => {
+        // EOF before the closing backtick -- TS1160.
+        self.unterminated_template = true
+        break
+      }
       Some(c) =>
         if c == '`' {
           let _ = self.advance()
@@ -2190,7 +2208,10 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
               self.scan_ident()
             }
             _ => {
-              // invalid start, treat as identifier fallback
+              // TS1127: a backslash not starting a `\u....` identifier
+              // escape is an invalid character. Keep the permissive
+              // identifier fallback so parsing continues.
+              self.invalid_char_count += 1
               self.pos -= 1
               self.scan_ident()
             }
@@ -2465,6 +2486,18 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
             self.pos -= 1
             self.scan_ident()
           } else {
+            // TS1127: a genuinely unknown ASCII character. A backslash may
+            // begin a `\u....` identifier escape (legal TS), so only count
+            // one that is *not* followed by `u`; every other ASCII char that
+            // reaches this fallback is invalid source.
+            let is_escape_start = c == '\\' &&
+              (match self.peek() {
+                Some('u') => true
+                _ => false
+              })
+            if !is_escape_start {
+              self.invalid_char_count += 1
+            }
             Ident(c.to_string())
           }
       }

@@ -91,14 +91,31 @@ pub fn unresolved_typeof_references(module_ : @ast.TsModule) -> Array[String] {
   if bases.length() == 0 {
     return []
   }
-  // Build the in-scope name set. Maximally conservative: a `typeof` base is
-  // left silent unless we can *prove* it undeclared, so the set folds in every
-  // namespace a value could plausibly live in. Besides the obvious value
-  // declarations it includes function / import parameters (`[T, typeof obj]`),
-  // every declared *type* name (our parser lowers a field-only class to an
-  // interface, erasing its value side — treating the type name as in scope
-  // avoids a false positive there), and the value keywords (`undefined`,
-  // `this`, …) that are not in the lib-globals registry.
+  let values = module_value_name_set(module_)
+  let acc : Array[String] = []
+  for base in bases {
+    if !values.contains(base) &&
+      !is_typeof_value_keyword(base) &&
+      !is_lib_global_value(base) &&
+      !acc.contains(base) {
+      acc.push(base)
+    }
+  }
+  acc
+}
+
+///|
+// The in-scope *value*-namespace name set for a module. Maximally
+// conservative: callers leave a name silent unless it is *provably*
+// undeclared, so the set folds in every namespace a value could plausibly
+// live in. Besides the obvious value declarations it includes function /
+// import parameters (`[T, typeof obj]`), every declared *type* name (our
+// parser lowers a field-only class to an interface, erasing its value side —
+// treating the type name as in scope avoids a false positive there), and
+// top-level statement bindings. Shared by `unresolved_typeof_references`
+// (TS2304 over `typeof X`) and the computed-type-key check (TS2304 over
+// `{ [e]: T }`).
+fn module_value_name_set(module_ : @ast.TsModule) -> Map[String, Bool] {
   let values : Map[String, Bool] = {}
   for f in module_.funcs {
     values[f.name] = true
@@ -112,6 +129,9 @@ pub fn unresolved_typeof_references(module_ : @ast.TsModule) -> Array[String] {
       values[param.0] = true
     }
   }
+  for n in module_.imported_binding_names {
+    values[n] = true
+  }
   for v in module_.values {
     values[v.name] = true
   }
@@ -123,6 +143,17 @@ pub fn unresolved_typeof_references(module_ : @ast.TsModule) -> Array[String] {
   }
   for ns in module_.namespaces {
     values[ns.name] = true
+    // Fold nested declarations in as well: recordings that surface at the
+    // root layer (`export = A` inside `declare module "M"`) resolve against
+    // this set, and the referenced value may live in the nested scope.
+    for kv in module_value_name_set(ns.module_) {
+      values[kv.0] = true
+    }
+  }
+  for aug in module_.module_augmentations {
+    for kv in module_value_name_set(aug.1) {
+      values[kv.0] = true
+    }
   }
   for n in module_declared_names(module_) {
     values[n] = true
@@ -130,16 +161,59 @@ pub fn unresolved_typeof_references(module_ : @ast.TsModule) -> Array[String] {
   for stmt in module_.top_level_stmts {
     collect_stmt_value_names(stmt, values)
   }
-  let acc : Array[String] = []
-  for base in bases {
-    if !values.contains(base) &&
-      !is_typeof_value_keyword(base) &&
-      !is_lib_global_value(base) &&
-      !acc.contains(base) {
-      acc.push(base)
+  values
+}
+
+///|
+/// TS1046 ("Top-level declarations in .d.ts files must start with either a
+/// 'declare' or 'export' modifier."). Only meaningful for sources known to
+/// be `.d.ts` files, so the CLI driver calls it by file extension rather
+/// than the general check pipeline. Flags runtime function declarations
+/// (an ambient `declare function` parses into `imports`, so anything in
+/// `funcs` was written bare), non-declare enums / classes, and top-level
+/// `var` / `let` / `const` statements -- unless the declaration carries the
+/// parser's `<export-value>` marker (an `export` modifier satisfies the
+/// rule). Interfaces / type aliases / imports are exempt in tsc.
+pub fn check_dts_top_level_modifiers(
+  module_ : @ast.TsModule,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  let exported : Map[String, Unit] = {}
+  for gm in module_.grammar_misuses {
+    if gm.has_prefix("<export-value>") {
+      exported[gm["<export-value>".length():].to_string()] = ()
     }
   }
-  acc
+  fn flag(kind : String, name : String) -> Unit {
+    if !exported.contains(name) {
+      issues.push({
+        path: "\{kind} `\{name}`",
+        message: "top-level declarations in .d.ts files must start with either a `declare` or `export` modifier",
+      })
+    }
+  }
+
+  for f in module_.funcs {
+    flag("function", f.name)
+  }
+  for e in module_.enums {
+    if !e.is_declare {
+      flag("enum", e.name)
+    }
+  }
+  for c in module_.classes {
+    if !c.is_declare {
+      flag("class", c.name)
+    }
+  }
+  for stmt in module_.top_level_stmts {
+    match stmt {
+      Var(Ident(n), _, _) | Let(Ident(n), _, _) | Const(Ident(n), _, _) =>
+        flag("var", n)
+      _ => ()
+    }
+  }
+  issues
 }
 
 ///|

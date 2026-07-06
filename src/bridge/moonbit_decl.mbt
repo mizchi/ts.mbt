@@ -419,6 +419,12 @@ async fn load_decl_module_info(
           use_define_for_class_fields: false,
           deprecated_compiler_options: [],
           parameter_property_misuses: [],
+          strict_mode_misuses: [],
+          invalid_decorator_uses: [],
+          grammar_misuses: [],
+          imported_binding_names: [],
+          import_module_specs: [],
+          class_base_type_args: [],
           param_optional_initializer_misuses: [],
           interface_member_modifier_misuses: [],
           class_dup_diagnostics: [],
@@ -3259,6 +3265,7 @@ fn utility_record_type_suffix(type_ : @ast.TsType) -> String {
     None => ()
   }
   match type_ {
+    NonPrimitiveObject => "Object"
     Literal(value) => {
       let suffix = decl_to_pascal_case(value)
       if suffix == "" {
@@ -9010,6 +9017,7 @@ fn clone_exported_class(
     is_abstract: exported.class_.is_abstract,
     is_constructible: exported.class_.is_constructible,
     index_signatures: [],
+    static_index_signatures: [],
     decorators: [],
     is_declare: false,
     private_members: exported.class_.private_members,
@@ -9223,6 +9231,12 @@ pub async fn emit_moonbit_decl_from_entry_path(
     use_define_for_class_fields: false,
     deprecated_compiler_options: [],
     parameter_property_misuses: [],
+    strict_mode_misuses: [],
+    invalid_decorator_uses: [],
+    grammar_misuses: [],
+    imported_binding_names: [],
+    import_module_specs: [],
+    class_base_type_args: [],
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],
     class_dup_diagnostics: [],

@@ -24,6 +24,10 @@ pub(all) enum TsType {
   // `Any` so the checker can enforce the narrowing requirement.
   Unknown
   Never // bottom type (no value)
+  // The `object` *keyword* type: any non-primitive value. Distinct from
+  // `Object(fields)` (an object literal type) and from `Any` (which used to
+  // swallow it, making primitive-to-`object` mismatches invisible).
+  NonPrimitiveObject
   Null // null
   Undefined // undefined
   // Literal types
@@ -736,6 +740,10 @@ pub(all) struct TsClassDecl {
   // type with the value type so the checker can resolve `instance.foo`
   // when there is no named field matching `foo`.
   index_signatures : Array[(TsType, TsType)]
+  // `static [key: string]: T` signatures. Kept apart from the instance
+  // list: a static index signature constrains the class's *static*
+  // members (TS2411) and never applies to instance member resolution.
+  static_index_signatures : Array[(TsType, TsType)]
   // Stage-3 decorators applied to the class declaration (`@Foo`,
   // `@Foo()`, `@a.b()`). Each entry is the decorator's call /
   // reference expression in source order. Retained so downstream
@@ -862,6 +870,35 @@ pub(all) struct TsModule {
   // Empty for any well-formed input (the modifier is always an error in
   // these positions), so it never costs precision.
   parameter_property_misuses : Array[String]
+  // `eval` / `arguments` used as a binding identifier or assignment target
+  // in strict-mode code (a `"use strict"` prologue, a class body, or a
+  // conformance-header `@alwaysStrict: true` / `@strict: true` directive).
+  // Always a TS1100-family grammar error in the strict variant, so each
+  // recorded name is a real diagnostic. Empty for well-formed input.
+  strict_mode_misuses : Array[String]
+  // Decorators (`@dec`) parsed ahead of a declaration that cannot take
+  // them (an enum, function, interface, variable statement, import, ...).
+  // TypeScript reports TS1206 ("Decorators are not valid here") for each
+  // such position; the parser records one entry per orphaned decorator
+  // group. Empty for well-formed input.
+  invalid_decorator_uses : Array[String]
+  // Always-error grammar misuses recorded during lexing / parsing, each
+  // entry a complete human-readable message: invalid source characters
+  // (TS1127), unterminated template literals (TS1160), `let` as a
+  // `let` / `const` binding name (TS2480), and `await` used as a binding
+  // identifier inside an async context (TS1359). Empty for well-formed
+  // input.
+  grammar_misuses : Array[String]
+  // Local binding names introduced by ES `import` statements. Consulted by
+  // unresolved-reference checks so imported types / values read as
+  // declared even though the import statements themselves are erased.
+  imported_binding_names : Array[String]
+  // Module specifiers of ES `import` statements, for the TS2307 check.
+  import_module_specs : Array[String]
+  // `(class, base, args)` recorded from `class C extends B<...>` heritage
+  // clauses. Consulted when checking derived-class member compatibility
+  // against a generic base (TS2415 index-signature subtyping).
+  class_base_type_args : Array[(String, String, Array[TsType])]
   // Parameters declared with both an optional marker (`x?`) and an
   // initializer (`x = e`) -- always a TS1015 syntax error. The parser
   // records one parameter name per offending declaration; the checker

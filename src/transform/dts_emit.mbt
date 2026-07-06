@@ -394,6 +394,7 @@ fn emit_type_params(buf : StringBuilder, params : Array[String]) -> Unit {
 /// / template literal types — the modern type vocabulary.
 fn emit_type(buf : StringBuilder, ty : @ast.TsType) -> Unit {
   match ty {
+    NonPrimitiveObject => buf.write_string("object")
     Number => buf.write_string("number")
     Int => buf.write_string("number")
     Boolean => buf.write_string("boolean")

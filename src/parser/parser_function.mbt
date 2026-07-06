@@ -139,6 +139,24 @@ fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
   let is_rest = self.match_ellipsis()
   let binding = self.parse_binding_pattern()
   let name = self.binding_first_name(binding)
+  // TS1359: a *parameter* named `await` inside an async function
+  // (`async function foo(await) {}`) -- the parameter binds in the async
+  // body scope where `await` is reserved. The function *name* is exempt
+  // (it binds in the enclosing, non-async scope: `async function await()`
+  // is legal), which is why this lives here and not in
+  // `parse_binding_ident`.
+  if name == "await" && self.in_async {
+    self.grammar_misuses.push(
+      "`await` cannot be used as a parameter name in an async context",
+    )
+  }
+  // TS1212: a parameter named `yield` inside a *generator* -- reserved in
+  // generator grammar (`function * f(yield) {}`).
+  if name == "yield" && self.in_generator {
+    self.grammar_misuses.push(
+      "`yield` cannot be used as a parameter name in a generator",
+    )
+  }
   // Record the name (with its `readonly`-ness and visibility) so the
   // surrounding constructor parser can synthesize `this.name = name`
   // field assigns and materialize the corresponding class field. Only
@@ -159,7 +177,8 @@ fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
   }
   let is_optional = self.match_(Question)
   // type ()
-  let base_type = if self.check(Colon) {
+  let had_annotation = self.check(Colon)
+  let base_type = if had_annotation {
     let _ = self.advance()
     self.parse_type()
   } else {
@@ -175,6 +194,45 @@ fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
     Some(self.parse_assignment())
   } else {
     None
+  }
+  // TS7006 / TS7019 / TS7031 (noImplicitAny): an unannotated,
+  // default-less parameter of a *function declaration* implicitly has an
+  // `any` type -- declarations are never contextually typed, so the verdict
+  // needs no inference. Arrows, function expressions, methods, and call
+  // signatures (where a contextual type may apply) never arm the flag.
+  // Recorded with the `<noimplicitany>` marker so emission stays
+  // permissive-mode-only (the conformance path).
+  if self.record_implicit_any_params &&
+    self.no_implicit_any &&
+    !had_annotation &&
+    default is None &&
+    name != "this" {
+    match binding {
+      // An *empty* pattern (`function f([]) {}` / `f({})`) binds no
+      // elements, so nothing is implicitly `any` -- tsc accepts it.
+      @ast.TsBinding::Object(ob) =>
+        if ob.props.length() > 0 || ob.rest is Some(_) {
+          self.grammar_misuses.push(
+            "<noimplicitany>binding element implicitly has an `any` type",
+          )
+        }
+      @ast.TsBinding::Array(ab) =>
+        if ab.items.length() > 0 || ab.rest is Some(_) {
+          self.grammar_misuses.push(
+            "<noimplicitany>binding element implicitly has an `any` type",
+          )
+        }
+      _ =>
+        if is_rest {
+          self.grammar_misuses.push(
+            "<noimplicitany>rest parameter `\{name}` implicitly has an `any[]` type",
+          )
+        } else {
+          self.grammar_misuses.push(
+            "<noimplicitany>parameter `\{name}` implicitly has an `any` type",
+          )
+        }
+    }
   }
   // TS1015: a parameter cannot be both optional (`x?`) and have an
   // initializer (`x = e`). The `?` is otherwise lost into the parameter
@@ -245,22 +303,65 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   let is_generator = self.match_(Star)
   let is_async = self.in_async
   let name = self.parse_binding_ident()
+  // TS1212: a *generator* cannot be named `yield` (`function * yield() {}`)
+  // -- inside generator grammar `yield` is a reserved word. A plain
+  // function named `yield` is additionally reserved when the conformance
+  // header targets ES2015+ (`@target: es6`); without that directive it is
+  // legal in non-strict code and stays silent.
+  if (is_generator || self.target_es6_plus || self.in_strict) && name == "yield" {
+    self.grammar_misuses.push(
+      "`yield` cannot be used as the name of a function here",
+    )
+  }
   let (type_params, const_type_params, type_param_bounds) = self.parse_type_param_names_bounds_and_const_flags()
   let local_type_param_bound_len = self.push_local_type_param_bounds(
     type_param_bounds,
   )
   let _ = self.expect(LParen)
+  let prev_record_nia = self.record_implicit_any_params
+  self.record_implicit_any_params = true
   let params = self.parse_params()
+  self.record_implicit_any_params = prev_record_nia
   let _ = self.expect(RParen)
   // return valuetype ()
-  let return_type = if self.check(Colon) {
+  let had_return_annotation = self.check(Colon)
+  let return_type = if had_return_annotation {
     let _ = self.advance()
     self.parse_type()
   } else {
     Any // type Any
   }
   self.restore_local_type_param_bounds(local_type_param_bound_len)
+  // TS7010 (noImplicitAny): a *bodiless* signature (overload / ambient)
+  // without a return-type annotation implicitly returns `any` -- there is
+  // no body to infer from. Implementations infer and stay silent.
+  fn record_implicit_any_return(p : Parser, fname : String) -> Unit {
+    if p.no_implicit_any && !had_return_annotation {
+      p.grammar_misuses.push(
+        "<noimplicitany>function `\{fname}` lacks a return-type annotation and implicitly has an `any` return type",
+      )
+    }
+  }
+
+  // TS2371: a parameter initializer on a *bodiless* signature (overload /
+  // stray declaration) -- initializers belong to implementations only.
+  fn record_signature_param_initializer(
+    p : Parser,
+    ps : Array[@ast.TsParam],
+  ) -> Unit {
+    for param in ps {
+      if param.default is Some(_) {
+        p.grammar_misuses.push(
+          "a parameter initializer is only allowed in a function or constructor implementation",
+        )
+        break
+      }
+    }
+  }
+
   if self.check(Semicolon) {
+    record_implicit_any_return(self, name)
+    record_signature_param_initializer(self, params)
     let _ = self.advance()
     return {
       name,
@@ -275,6 +376,8 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
     }
   }
   if !self.check(LBrace) {
+    record_implicit_any_return(self, name)
+    record_signature_param_initializer(self, params)
     return {
       name,
       type_params,
@@ -564,6 +667,24 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
     | Of
     | In => self.parse_binding_ident()
     _ => "<anon>"
+  }
+  // TS1212: mirror `parse_function` -- a generator expression (or any
+  // function expression under an ES2015+ target / strict prologue) cannot
+  // be named `yield`.
+  if (is_generator || self.target_es6_plus || self.in_strict) && name == "yield" {
+    self.grammar_misuses.push(
+      "`yield` cannot be used as the name of a function here",
+    )
+  }
+  // TS1359: a function *expression*'s name binds inside its own scope; in
+  // an async context every identifier use of `await` is reserved, so
+  // `var v = async function await() {}` (and a sync expression named
+  // `await` nested in an async body) is an error. Function *declarations*
+  // named `await` bind outward and stay legal outside async bodies.
+  if name == "await" && self.in_async {
+    self.grammar_misuses.push(
+      "`await` cannot be used as the name of a function here",
+    )
   }
   let (type_params, const_type_params, type_param_bounds) = self.parse_type_param_names_bounds_and_const_flags()
   let _ = self.expect(LParen)
@@ -1238,6 +1359,15 @@ pub fn Parser::parse_interface(
           }
           continue
         }
+        // TS2304: a computed member key that is a single bare identifier
+        // (`[e]: number` / `[e](): T`) references the value namespace --
+        // record it for the checker's undeclared-name resolution. Dotted
+        // keys (`[Symbol.iterator]`) don't match the single-token shape.
+        match self.peek().kind {
+          Ident(key) if self.peek_at(1).kind == RBracket && !self.in_function =>
+            self.grammar_misuses.push("<computed-type-key>" + key)
+          _ => ()
+        }
         let mut saw_colon = false
         while !self.check(RBracket) && !self.check(Eof) {
           if self.check(Colon) {
@@ -1842,7 +1972,8 @@ pub fn Parser::parse_declare_function(
     // Handle optional parameter: name?
     let is_optional = self.match_(Question)
     // Type annotation is optional
-    let computed_param_type = if self.check(Colon) {
+    let had_param_annotation = self.check(Colon)
+    let computed_param_type = if had_param_annotation {
       let _ = self.advance()
       let parsed = self.parse_type()
       if is_optional {
@@ -1854,6 +1985,19 @@ pub fn Parser::parse_declare_function(
       wrap_optional_ts_type(@ast.TsType::Any)
     } else {
       @ast.TsType::Any
+    }
+    // TS7006 / TS7019 (noImplicitAny): `declare function` parameters have no
+    // implementation or contextual source to infer from.
+    if self.no_implicit_any && !had_param_annotation && param_name != "this" {
+      if is_rest {
+        self.grammar_misuses.push(
+          "<noimplicitany>rest parameter `\{param_name}` implicitly has an `any[]` type",
+        )
+      } else {
+        self.grammar_misuses.push(
+          "<noimplicitany>parameter `\{param_name}` implicitly has an `any` type",
+        )
+      }
     }
     // TypeScript's `this` parameter at index 0 (`afterAll(this: unknown,
     // fn, timeout)`) types the receiver — there is no runtime arg for
@@ -1872,11 +2016,19 @@ pub fn Parser::parse_declare_function(
   // return valuetype — annotation is optional (TS treats a missing one as
   // `void` for `declare function`, but we use `Any` so the checker matches
   // the convention used elsewhere for un-annotated functions).
-  let return_type = if self.check(Colon) {
+  let had_return_annotation = self.check(Colon)
+  let return_type = if had_return_annotation {
     let _ = self.advance()
     self.parse_type()
   } else {
     @ast.TsType::Any
+  }
+  // TS7010 (noImplicitAny): an ambient function without a return-type
+  // annotation implicitly returns `any` -- no body exists to infer from.
+  if self.no_implicit_any && !had_return_annotation {
+    self.grammar_misuses.push(
+      "<noimplicitany>function `\{name}` lacks a return-type annotation and implicitly has an `any` return type",
+    )
   }
   self.restore_local_type_param_bounds(local_type_param_bound_len)
   self.consume_semicolon()
@@ -1965,18 +2117,42 @@ fn Parser::parse_declare_values(
   self : Parser,
 ) -> Array[@ast.TsValueDecl] raise ParseError {
   let values : Array[@ast.TsValueDecl] = []
+  // TS7005 (noImplicitAny): an ambient `declare var x;` with neither an
+  // annotation nor an initializer implicitly has an `any` type -- unlike a
+  // runtime `var x;`, no assignment can ever narrow it.
+  fn record_ambient_implicit_any(
+    p : Parser,
+    vname : String,
+    annotated : Bool,
+    initialised : Bool,
+  ) -> Unit {
+    if p.no_implicit_any && !annotated && !initialised {
+      p.grammar_misuses.push(
+        "<noimplicitany>variable `\{vname}` implicitly has an `any` type",
+      )
+    }
+  }
+
   let name = self.parse_binding_ident()
+  let annotated = self.check(Colon)
   let type_ = self.parse_var_decl_type()
-  if self.match_(Eq) {
+  let initialised = self.match_(Eq)
+  if initialised {
     let _ = self.parse_expr()
   }
+  record_ambient_implicit_any(self, name, annotated, initialised)
   values.push({ name, type_ })
   while self.match_(Comma) {
     let next_name = self.parse_binding_ident()
+    let next_annotated = self.check(Colon)
     let next_type = self.parse_var_decl_type()
-    if self.match_(Eq) {
+    let next_initialised = self.match_(Eq)
+    if next_initialised {
       let _ = self.parse_expr()
     }
+    record_ambient_implicit_any(
+      self, next_name, next_annotated, next_initialised,
+    )
     values.push({ name: next_name, type_: next_type })
   }
   self.consume_semicolon()
@@ -2071,7 +2247,7 @@ fn Parser::is_index_signature_shape_after_lbracket(self : Parser) -> Bool {
 /// fall back to the original skip path.
 fn Parser::try_parse_class_index_signature(
   self : Parser,
-) -> (@ast.TsType, @ast.TsType)? raise ParseError {
+) -> (@ast.TsType, @ast.TsType, String?)? raise ParseError {
   let saved = self.pos
   let _ = self.expect(LBracket)
   match self.peek().kind {
@@ -2096,9 +2272,23 @@ fn Parser::try_parse_class_index_signature(
     self.pos = saved
     return None
   }
+  // A value that is a *naked bounded type parameter* (`[x: number]: T` with
+  // `T extends Base` in scope) is about to be widened to its bound by
+  // `parse_type`'s constraint inlining. Capture the parameter name first so
+  // derived-class index-signature compatibility (TS2415) can still see the
+  // generic slot; the widened value stays in the AST for every other
+  // consumer.
+  let naked_param : String? = match self.peek().kind {
+    Ident(n) if self.local_type_param_bound(n) is Some(_) =>
+      match self.peek_at(1).kind {
+        Semicolon | RBrace => Some(n)
+        _ => None
+      }
+    _ => None
+  }
   let value_type = self.parse_type()
   self.consume_semicolon()
-  Some((key_type, value_type))
+  Some((key_type, value_type, naked_param))
 }
 
 ///|
@@ -2106,6 +2296,14 @@ fn Parser::parse_declare_class_member_name(
   self : Parser,
 ) -> String? raise ParseError {
   if self.match_(LBracket) {
+    // TS2304: a single-bare-identifier computed key (`[e]: number`) in a
+    // `declare class` body references the value namespace -- record it for
+    // the checker's undeclared-name resolution (dotted keys don't match).
+    match self.peek().kind {
+      Ident(key) if self.peek_at(1).kind == RBracket && !self.in_function =>
+        self.grammar_misuses.push("<computed-type-key>" + key)
+      _ => ()
+    }
     let mut depth = 1
     while depth > 0 && !self.check(Eof) {
       match self.peek().kind {
@@ -2364,6 +2562,7 @@ fn Parser::parse_declare_class(
   let protected_members : Array[String] = []
   let abstract_members : Array[String] = []
   let index_signatures : Array[(@ast.TsType, @ast.TsType)] = []
+  let static_index_signatures : Array[(@ast.TsType, @ast.TsType)] = []
   let static_blocks : Array[@ast.TsBlock] = []
   let mut constructor_params : Array[(String, @ast.TsType)]? = None
   let mut saw_public_constructor = false
@@ -2379,7 +2578,7 @@ fn Parser::parse_declare_class(
     if self.check(LBracket) && self.is_index_signature_shape_after_lbracket() {
       match self.try_parse_class_index_signature() {
         Some(sig) => {
-          index_signatures.push(sig)
+          index_signatures.push((sig.0, sig.1))
           continue
         }
         None => ()
@@ -2446,6 +2645,21 @@ fn Parser::parse_declare_class(
     if is_static && self.check(LBrace) {
       static_blocks.push(self.parse_block())
       continue
+    }
+    // Index signature written after modifiers (`static [index: string]:
+    // string`): the pre-modifier check at the loop head can't see it.
+    if self.check(LBracket) && self.is_index_signature_shape_after_lbracket() {
+      match self.try_parse_class_index_signature() {
+        Some(sig) => {
+          if is_static {
+            static_index_signatures.push((sig.0, sig.1))
+          } else {
+            index_signatures.push((sig.0, sig.1))
+          }
+          continue
+        }
+        None => ()
+      }
     }
     let mut accessor_kind : String? = None
     match self.peek().kind {
@@ -2619,6 +2833,7 @@ fn Parser::parse_declare_class(
     properties,
     methods,
     index_signatures,
+    static_index_signatures,
     is_abstract,
     is_constructible,
     decorators: self.take_pending_decorators(),

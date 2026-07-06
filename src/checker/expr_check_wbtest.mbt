@@ -320,6 +320,12 @@ fn parse_module_or_empty(src : String) -> @ast.TsModule {
         use_define_for_class_fields: false,
         deprecated_compiler_options: [],
         parameter_property_misuses: [],
+        strict_mode_misuses: [],
+        invalid_decorator_uses: [],
+        grammar_misuses: [],
+        imported_binding_names: [],
+        import_module_specs: [],
+        class_base_type_args: [],
         param_optional_initializer_misuses: [],
         interface_member_modifier_misuses: [],
         class_dup_diagnostics: [],
@@ -8154,8 +8160,10 @@ test "expr_check: TS2344 constraint violation on explicit type args" {
 ///|
 // Issue #62: an undefined name used inside a computed property key is a
 // TS2304 ("cannot find name"), like any other value reference. A
-// declared-but-unassigned `var` read inside a computed key is NOT flagged
-// as used-before-assigned (tsc accepts it), but a `let` / `const` one is.
+// declared-but-unassigned `var` read in a computed *property* key IS a
+// TS2454 (symbolProperty1: `var s: symbol; { [s]: 0 }`), but in a computed
+// *method* / accessor key it is not (computedPropertyNames10:
+// `{ [s]() {} }` is accepted by tsc).
 test "expr_check: computed property key references" {
   let issues = fn(src : String) -> Array[String] {
     check_module_function_bodies(parse_module_or_empty(src)).map(fn(i) {
@@ -8170,9 +8178,16 @@ test "expr_check: computed property key references" {
   )
   // Defined name — no diagnostic.
   @test.assert_eq(issues("const e = 1;\nvar v = { [e]: 1 };").length(), 0)
-  // `var` declared-but-unassigned read in a computed key is accepted.
+  // `var` declared-but-unassigned read in a computed *property* key is a
+  // TS2454; the same read in a computed *method* key is accepted.
   @test.assert_eq(
     issues("var s: string;\nvar v = { [s]: 1 };")
+    .filter(fn(m) { m.contains("used before being assigned") })
+    .length(),
+    1,
+  )
+  @test.assert_eq(
+    issues("var s: string;\nvar v = { [s]() { } };")
     .filter(fn(m) { m.contains("used before being assigned") })
     .length(),
     0,
@@ -10983,4 +10998,1217 @@ test "expr_check: class extends a plain function (TS2507)" {
   )
   // Extending an unknown/library base is not flagged.
   @test.assert_eq(issues("class C extends SomeLibBase {}"), 0)
+}
+
+///|
+test "expr_check: function-valued expression bodies are walked" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Undefined names inside non-contextual callable bodies are flagged.
+  assert_true(issues("var v = function () { return missing1; };") > 0)
+  assert_true(issues("var a = () => { return missing2; };") > 0)
+  assert_true(issues("var r = (function () { return missing3; })();") > 0)
+  assert_true(issues("var o = { m: function () { return missing4; } };") > 0)
+  // Hoisted / forward-referenced locals stay silent.
+  @test.assert_eq(
+    issues("var v = function () { var r = later; var later = 1; return r; };"),
+    0,
+  )
+  // A named function expression can call itself.
+  @test.assert_eq(
+    issues(
+      "var f = function fact(n: number): number { return n <= 1 ? 1 : n * fact(n - 1); };",
+    ),
+    0,
+  )
+  // `this` inside a function expression is dynamically bound -> `any`.
+  @test.assert_eq(
+    issues("class C { m() { var g = function () { return this.anything; }; } }"),
+    0,
+  )
+  // A contextually-checked callback argument is not double-reported.
+  @test.assert_eq(
+    issues(
+      "function f(cb: (x: number) => void) { cb(1); }\nf(function (x) { return missing5; });",
+    ),
+    1,
+  )
+}
+
+///|
+test "expr_check: arguments outside any function (TS2304)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("cannot find name `arguments`") {
+        n += 1
+      }
+    }
+    n
+  }
+  // Top-level arrows never bind `arguments`.
+  assert_true(issues("var a = () => { var arg = arguments[0]; };") > 0)
+  assert_true(issues("foo(() => { var arg = arguments[0]; });") > 0)
+  // Inside a regular function (or a nested arrow within one) it is bound.
+  @test.assert_eq(
+    issues("function baz() { var f = () => { var arg = arguments[0]; }; }"),
+    0,
+  )
+  @test.assert_eq(
+    issues("var b = function () { var a = () => arguments; };"),
+    0,
+  )
+  // A declared `arguments` binding shadows the missing global.
+  @test.assert_eq(issues("var arguments;\nvar a = () => arguments;"), 0)
+}
+
+///|
+test "expr_check: strict-mode eval/arguments misuse (TS1100 family)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("in strict mode") {
+        n += 1
+      }
+    }
+    n
+  }
+  // Prologue-strict files flag assignment / binding / catch positions,
+  // including when header directive comments precede the prologue.
+  assert_true(issues("\"use strict\";\neval = 1;") > 0)
+  assert_true(issues("// @target: es2015\n\"use strict\";\narguments = 1;") > 0)
+  assert_true(issues("\"use strict\";\neval += 1;") > 0)
+  assert_true(issues("\"use strict\";\nfunction eval() {}") > 0)
+  assert_true(issues("\"use strict\";\nfunction f(eval) {}") > 0)
+  assert_true(issues("\"use strict\";\ntry {} catch (eval) {}") > 0)
+  // Conformance @alwaysStrict directives arm the recording too.
+  assert_true(issues("// @alwaysStrict: true\nvar arguments;") > 0)
+  assert_true(issues("// @strict: true\neval = 1;") > 0)
+  // Non-strict code accepts these names.
+  @test.assert_eq(issues("eval = 1;"), 0)
+  @test.assert_eq(issues("function f(eval) {}"), 0)
+  @test.assert_eq(issues("// @alwaysStrict: false\nfunction f(eval) {}"), 0)
+}
+
+///|
+test "expr_check: increment/decrement operand type (TS2356)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("arithmetic operand") {
+        n += 1
+      }
+    }
+    n
+  }
+  assert_true(issues("function f() { var s = \"x\"; s++; }") > 0)
+  assert_true(issues("declare var B: boolean;\nfunction f() { --B; }") > 0)
+  assert_true(issues("declare var A: string[];\nfunction f() { A++; }") > 0)
+  // Numbers, any, enums, unions, and generics abstain.
+  @test.assert_eq(issues("function f() { var n = 1; n++; }"), 0)
+  @test.assert_eq(issues("declare var a: any;\nfunction f() { a++; }"), 0)
+  @test.assert_eq(issues("enum E { A }\nfunction f(e: E) { e++; }"), 0)
+  @test.assert_eq(
+    issues("declare var u: number | string;\nfunction f() { u++; }"),
+    0,
+  )
+}
+
+///|
+test "expr_check: computed property name type (TS2464)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("computed property name") {
+        n += 1
+      }
+    }
+    n
+  }
+  // Boolean / object / array / nullish keys on class members are flagged.
+  assert_true(issues("declare var b: boolean;\nclass C { [b]() {} }") > 0)
+  assert_true(issues("class C { static [true]() {} }") > 0)
+  assert_true(issues("class C { [[]]() {} }") > 0)
+  assert_true(issues("class C { static [{}]() {} }") > 0)
+  // string / number / symbol / any keys stay silent.
+  @test.assert_eq(issues("declare var s: string;\nclass C { [s]() {} }"), 0)
+  @test.assert_eq(issues("declare var n: number;\nclass C { [n]() {} }"), 0)
+  @test.assert_eq(issues("declare var a: any;\nclass C { [a]() {} }"), 0)
+}
+
+///|
+test "expr_check: decorators are not valid here (TS1206)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("decorators are not valid here") {
+        n += 1
+      }
+    }
+    n
+  }
+  assert_true(issues("declare function dec<T>(t: T): T;\n@dec\nenum E {}") > 0)
+  assert_true(
+    issues("declare function dec<T>(t: T): T;\n@dec\nfunction f() {}") > 0,
+  )
+  assert_true(
+    issues("declare function dec<T>(t: T): T;\n@dec\ninterface I {}") > 0,
+  )
+  // Decorators on classes are fine.
+  @test.assert_eq(
+    issues("declare function dec<T>(t: T): T;\n@dec\nclass C {}"),
+    0,
+  )
+  @test.assert_eq(
+    issues("declare function dec<T>(t: T): T;\n@dec\nexport class C {}"),
+    0,
+  )
+}
+
+///|
+test "expr_check: always-error grammar misuses (TS1127/TS1160/TS2480/TS1359/TS1029)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2480: `let` as a let/const binding name.
+  assert_true(issues("let let = 1;") > 0)
+  assert_true(issues("for (let let of []) {}") > 0)
+  @test.assert_eq(issues("var let = 1;"), 0)
+  // TS1359: `await` as a parameter of an async function; the function
+  // *name* `await` is legal (binds in the enclosing scope).
+  assert_true(issues("async function foo(await): Promise<void> {}") > 0)
+  @test.assert_eq(issues("async function await(): Promise<void> {}"), 0)
+  @test.assert_eq(issues("function g(await: number) {}"), 0)
+  // TS1160: unterminated template literal.
+  assert_true(issues("var t = `abc") > 0)
+  @test.assert_eq(issues("var t = `abc`;"), 0)
+  // TS1029: modifier order on class members.
+  assert_true(issues("class C { static public x: number; }") > 0)
+  assert_true(issues("class C { override static m() {} }") > 0)
+  @test.assert_eq(
+    issues(
+      "class D extends B { public static override m() {} }\nclass B { static m() {} }",
+    ),
+    0,
+  )
+}
+
+///|
+test "expr_check: instanceof primitive LHS, nullish arithmetic operands, generator yield names" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2358: a syntactic literal LHS of `instanceof` is never an object.
+  assert_true(issues("var x = `abc${0}def` instanceof String;") > 0)
+  assert_true(issues("var x = \"s\" instanceof String;") > 0)
+  @test.assert_eq(issues("var x = {} instanceof Object;"), 0)
+  // TS18050: literal null / undefined as an arithmetic operand.
+  assert_true(issues("var r = null + null;") > 0)
+  assert_true(issues("var r = undefined + 1;") > 0)
+  assert_true(issues("var r = 1 * undefined;") > 0)
+  @test.assert_eq(issues("var r = null == null;"), 0)
+  @test.assert_eq(issues("var r = null ?? 1;"), 0)
+  // TS1212: a generator (or its parameter) cannot be named `yield`.
+  assert_true(issues("function * yield() {}") > 0)
+  @test.assert_eq(issues("function yield() {}"), 0)
+  // Speculative arrow lookahead must not leak recordings.
+  @test.assert_eq(issues("function* g() { class C extends (yield 0) { } }"), 0)
+}
+
+///|
+test "expr_check: derived index-signature compatibility (TS2415)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Concrete widening against the base indexer is flagged.
+  assert_true(
+    issues(
+      "interface Base { foo: string }\ninterface Other { baz: number }\nclass A { [x: number]: Base }\nclass B extends A { [x: number]: Other }",
+    ) >
+    0,
+  )
+  // A concrete value against a *naked type-parameter* slot is flagged.
+  assert_true(
+    issues(
+      "interface Base { foo: string }\ninterface Derived extends Base { bar: string }\nclass A<T extends Base> { [x: number]: T }\nclass B3<T extends Base> extends A<T> { [x: number]: Derived }",
+    ) >
+    0,
+  )
+  // Legal narrowing stays silent.
+  @test.assert_eq(
+    issues(
+      "interface Base { foo: string }\ninterface Derived extends Base { bar: string }\nclass A { [x: number]: Base }\nclass B extends A { [x: number]: Derived }",
+    ),
+    0,
+  )
+  // A concrete instantiation that satisfies the slot stays silent.
+  @test.assert_eq(
+    issues(
+      "interface Base { foo: string }\ninterface Derived extends Base { bar: string }\nclass A<T extends Base> { [x: number]: T }\nclass B extends A<Base> { [x: number]: Derived }",
+    ),
+    0,
+  )
+}
+
+///|
+test "expr_check: nested-class private shadowing (TS18014)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // The nested class declares its own `#x`, shadowing the outer one -- an
+  // access on an outer-typed receiver is an error.
+  assert_true(
+    issues(
+      "class Base { #x; constructor() { class Derived { #x; testBase(x: Base) { return x.#x; } } } }",
+    ) >
+    0,
+  )
+  // Without shadowing, the nested class reaches the outer private legally.
+  @test.assert_eq(
+    issues(
+      "class Foo { #name = 1; m() { class Bar { #y = 2; g(o: Foo) { return o.#name } } return 0 } }",
+    ),
+    0,
+  )
+}
+
+///|
+test "expr_check: exact spread arity (TS2554) and es6 yield function names (TS1212)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Array-literal / fixed-tuple spreads give an exact argument count.
+  assert_true(
+    issues(
+      "declare const t3: [string, string, string];\ndeclare function g2(a: string, b: string): void;\ng2(...t3);",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "declare const t2: [string, string];\ndeclare function g2(a: string, b: string): void;\ng2(...t2);\ng2('a', ...[  'b']);",
+    ),
+    0,
+  )
+  // Open-ended spreads still abstain.
+  @test.assert_eq(
+    issues(
+      "declare const xs: string[];\ndeclare function g2(a: string, b: string): void;\ng2(...xs);",
+    ),
+    0,
+  )
+  // `function yield` under an es6+ target directive (or as a generator).
+  assert_true(issues("// @target: es6\nfunction yield() {}") > 0)
+  assert_true(issues("var v = function * yield() {};") > 0)
+  @test.assert_eq(issues("function yield() {}"), 0)
+}
+
+///|
+test "expr_check: noImplicitAny family (TS7005/TS7006/TS7010/TS7019/TS7031)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("implicitly has an") {
+        n += 1
+      }
+    }
+    n
+  }
+  // Function-declaration parameters are never contextually typed.
+  assert_true(issues("function f(x) { return x; }") > 0)
+  assert_true(issues("function f(...rest) {}") > 0)
+  assert_true(issues("function f({ a, b }) {}") > 0)
+  // Annotated / defaulted / empty-pattern / `this` parameters stay silent.
+  @test.assert_eq(issues("function f(x: number, y = 1, ...r: string[]) {}"), 0)
+  @test.assert_eq(issues("function f([]) {}"), 0)
+  @test.assert_eq(issues("function f(this: unknown, x: number) {}"), 0)
+  // Contextual positions (arrows, function expressions, callbacks) abstain.
+  @test.assert_eq(
+    issues(
+      "declare function on(cb: (x: number) => void): void;\non((x) => {});",
+    ),
+    0,
+  )
+  @test.assert_eq(issues("var g = function (x) { return x; };"), 0)
+  // Heritage-free class-declaration methods are covered; heritage or class
+  // expressions abstain, and setter params infer from the paired getter.
+  assert_true(issues("class C { m(x) { return x; } }") > 0)
+  @test.assert_eq(
+    issues(
+      "interface I { m(x: number): void }\nclass C implements I { m(x) {} }",
+    ),
+    0,
+  )
+  @test.assert_eq(issues("var C = class { m(x) {} };"), 0)
+  @test.assert_eq(
+    issues(
+      "class C { get [Symbol.toPrimitive]() { return \"\"; } set [Symbol.toPrimitive](x) {} }",
+    ),
+    0,
+  )
+  // Bodiless / ambient signatures without a return annotation are TS7010;
+  // ambient `declare var` without annotation or initializer is TS7005.
+  assert_true(issues("declare function df(a);") > 0)
+  assert_true(issues("declare var dv;") > 0)
+  @test.assert_eq(
+    issues("declare var dv2: number;\ndeclare function df2(): void;"),
+    0,
+  )
+  // The whole family honours the directive opt-outs.
+  @test.assert_eq(issues("// @strict: false\nfunction f(x) { return x; }"), 0)
+  @test.assert_eq(
+    issues("// @noImplicitAny: false\nfunction f(x) { return x; }"),
+    0,
+  )
+  assert_true(
+    issues(
+      "// @strict: false\n// @noImplicitAny: true\nfunction f(x) { return x; }",
+    ) >
+    0,
+  )
+}
+
+///|
+test "expr_check: batch L — TS2307 / TS1042 / TS2703 / TS2430" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2307: an import specifier no in-file ambient module provides.
+  assert_true(issues("import {} from 'module-not-existed';") > 0)
+  assert_true(issues("import x = require('nope');") > 0)
+  @test.assert_eq(
+    issues(
+      "declare module \"m\" { export var x: number; }\nimport { x } from \"m\";",
+    ),
+    0,
+  )
+  // TS1042: `async` on non-function declarations and accessors.
+  assert_true(issues("async class C {}") > 0)
+  assert_true(issues("async enum E { A }") > 0)
+  assert_true(issues("async namespace M {}") > 0)
+  assert_true(issues("class C { async get foo() { return 1; } }") > 0)
+  @test.assert_eq(issues("async function ok(): Promise<void> {}"), 0)
+  @test.assert_eq(issues("class C { async m(): Promise<void> { return; } }"), 0)
+  // TS2703: `delete` on a syntactic non-reference.
+  assert_true(issues("async function f() { delete await 42; }") > 0)
+  assert_true(issues("delete `abc`;") > 0)
+  @test.assert_eq(
+    issues("var o = { a: undefined as number | undefined };\ndelete o.a;"),
+    0,
+  )
+  // TS2430: derived interface member incompatible with the base's.
+  assert_true(
+    issues("interface B { x: number }\ninterface D extends B { x: string }") > 0,
+  )
+  assert_true(
+    issues(
+      "interface B<T> { x: T }\ninterface D extends B<number> { x: string }",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "interface B { x: number | string }\ninterface D extends B { x: number }",
+    ),
+    0,
+  )
+}
+
+///|
+test "expr_check: strict yield/let bindings (TS1212) and union computed keys (TS2464)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // `yield` / `let` as binding identifiers in strict contexts.
+  assert_true(issues("// @alwaysStrict: true\nfor (var let of []) {}") > 0)
+  assert_true(issues("\"use strict\";\nfunction f(yield: number) {}") > 0)
+  @test.assert_eq(issues("function f(yield: number) {}"), 0)
+  @test.assert_eq(issues("for (var x of []) {}"), 0)
+  // A union computed key with one non-key member.
+  assert_true(
+    issues("declare var p: number | number[];\nclass C { [p]() {} }") > 0,
+  )
+  assert_true(
+    issues("declare var p: string | boolean;\nclass C { [p]() {} }") > 0,
+  )
+  @test.assert_eq(
+    issues("declare var p: number | string;\nclass C { [p]() {} }"),
+    0,
+  )
+}
+
+///|
+test "expr_check: symbol keys, template-literal values, accessor pairs (batch N)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2464: `Symbol.*` statics that are not well-known symbols.
+  assert_true(issues("var obj = { [Symbol.for]: 0 };") > 0)
+  assert_true(issues("var obj = { [Symbol.prototype]: 0 };") > 0)
+  @test.assert_eq(issues("var ok = { [Symbol.iterator]: 0 };"), 0)
+  @test.assert_eq(
+    issues(
+      "interface SymbolConstructor { foo: string }\nvar o = { [Symbol.foo]: 0 };",
+    ),
+    0,
+  )
+  // TS2411: a well-known-symbol member against a `symbol` index signature.
+  assert_true(
+    issues(
+      "class C1 { [Symbol.toStringTag]() { return { x: \"\" }; }\n  [s: symbol]: () => { x: number }; }",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "class C1 { [Symbol.toStringTag]() { return { x: 1 }; }\n  [s: symbol]: () => { x: number }; }",
+    ),
+    0,
+  )
+  // TS2322: a fully-literal template against a string-literal target.
+  assert_true(issues("let x1: \"ab\" = `cd`;") > 0)
+  @test.assert_eq(issues("let x2: \"ab\" = `ab`;"), 0)
+  // TS2322 between a type parameter and its template-literal form.
+  assert_true(
+    issues(
+      "function f3<T3 extends \"a\" | \"b\">(x: T3) { const t2: T3 = \"\" as `${T3}`; }",
+    ) >
+    0,
+  )
+  // Getter / setter type agreement.
+  assert_true(
+    issues("class C { get x() { return true; } set x(v: number) {} }") > 0,
+  )
+  @test.assert_eq(
+    issues(
+      "class C { get x(): number { return 1; } set x(v: number | string) {} }",
+    ),
+    0,
+  )
+}
+
+///|
+test "expr_check: for-of assign targets, custom iterators, `in` operands (batch O)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Assignment-form for-of checks the element against the declared target.
+  assert_true(issues("var v: string;\nfor (v of [0]) { }") > 0)
+  @test.assert_eq(issues("var v: number;\nfor (v of [0]) { }"), 0)
+  // Narrowing before the loop must not shrink the assignment target.
+  @test.assert_eq(
+    issues(
+      "let obj: number[];\nlet x: string | number;\nfunction a() { x = \"s\"; for (x of obj) {} }",
+    ),
+    0,
+  )
+  // A user iterator class yields its `next()` value type.
+  assert_true(
+    issues(
+      "class NumberIterator { next() { return { value: 0, done: false }; } [Symbol.iterator]() { return this; } }\nvar v: string;\nfor (v of new NumberIterator) { }",
+    ) >
+    0,
+  )
+  // `in` operand constraints.
+  assert_true(issues("declare var b: boolean;\nvar r = b in {};") > 0)
+  assert_true(issues("var r = \"x\" in \"abc\";") > 0)
+  @test.assert_eq(issues("var o = { a: 1 };\nvar r = \"a\" in o;"), 0)
+  @test.assert_eq(
+    issues("declare var k: string | number;\nvar r = k in { a: 1 };"),
+    0,
+  )
+}
+
+///|
+test "expr_check: `object` keyword as first-class type (batch P)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2339: member existence on an `object` receiver — only the
+  // Object.prototype surface resolves.
+  assert_true(issues("function f(a: object) { a.nonExist(); }") > 0)
+  assert_true(issues("declare var a: object;\na.nonExist();") > 0)
+  @test.assert_eq(
+    issues(
+      "declare var a: object;\na.toString();\na.hasOwnProperty(\"x\");\na.valueOf();\na.isPrototypeOf(a);\na.toLocaleString();",
+    ),
+    0,
+  )
+  // TS2322: primitives are not assignable to `object`; object shapes are.
+  assert_true(issues("var o: object = 42;") > 0)
+  assert_true(issues("var o: object = \"s\";") > 0)
+  @test.assert_eq(
+    issues(
+      "let o: object;\nfunction g() { o = {}; o = [1]; o = function () {}; o = new Date(); }",
+    ),
+    0,
+  )
+  // TS2322: an *unconstrained* in-scope type parameter may be primitive.
+  assert_true(issues("function foo<T>(x: T) { let a: object = x; }") > 0)
+  // A `T extends object` bound erases to `Any` — no flag on either the
+  // assignment or members of a generic return typed by the parameter.
+  @test.assert_eq(
+    issues("function bar<T extends object>(x: T) { let a: object = x; }"),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "declare function unboxify<T extends object>(obj: T): T;\nfunction f2() { let v = unboxify({ a: 42 }); let n = v.a; }",
+    ),
+    0,
+  )
+  // An object literal against an `object` target: no excess/missing checks.
+  @test.assert_eq(issues("var a: object = { x: 1, y: 2 };"), 0)
+}
+
+///|
+test "expr_check: TS2304 computed type keys, export =, var annotations (batch Q)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2304: a bare-identifier computed key in a type position must resolve
+  // in the value namespace.
+  assert_true(issues("var v: { [e]: number };") > 0)
+  assert_true(issues("var v: { [e](): number };") > 0)
+  assert_true(issues("interface I { [e]: number }") > 0)
+  assert_true(issues("declare class C { [e]: number }") > 0)
+  assert_true(issues("declare class C { get [e](): number }") > 0)
+  @test.assert_eq(issues("declare const e: \"k\";\nvar v: { [e]: number };"), 0)
+  @test.assert_eq(issues("var v: { [Symbol.iterator]: number };"), 0)
+  @test.assert_eq(issues("interface I { [Symbol.iterator](): void }"), 0)
+  // A function-local name can satisfy the key -- the parser skips recording
+  // inside function bodies.
+  @test.assert_eq(
+    issues("function f() { const k = \"x\"; var v: { [k]: number }; }"),
+    0,
+  )
+  // TS2304: `export = name` over a provably undeclared value.
+  assert_true(issues("export = foo;") > 0)
+  @test.assert_eq(issues("function foo() {}\nexport = foo;"), 0)
+  @test.assert_eq(
+    issues("declare module \"M\" { const A: number; export = A; }"),
+    0,
+  )
+  // TS2304 in a top-level `var` annotation.
+  assert_true(issues("var v: Foo<T> = 1;") > 0)
+  assert_true(issues("var v: { a: Undeclared };") > 0)
+  @test.assert_eq(issues("interface Foo<T> { x: T }\nvar v: Foo<string>;"), 0)
+  @test.assert_eq(issues("var v: Promise<number>;"), 0)
+  // Callable member values abstain: their own type parameters were
+  // discarded at parse (`{ <T>(x: T): T }` / `{ m<T>(x: T): T }`).
+  @test.assert_eq(issues("var a: { <T>(x: T): T };"), 0)
+  @test.assert_eq(issues("var a: { m<T>(x: T): T };"), 0)
+  @test.assert_eq(issues("var a: { new <T>(x: T): T };"), 0)
+}
+
+///|
+test "expr_check: TS2411/TS2413 index-signature member compatibility (batch R)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2411: an object-shaped member vs an object-shaped index value is
+  // decided structurally for fully-modeled literal-keyed shapes.
+  assert_true(
+    issues(
+      "interface I { [x: string]: { a: number; b: number }; y: { a: number } }",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "interface I { [x: string]: { a: number }; y: { a: number; b: number } }",
+    ),
+    0,
+  )
+  // Inherited indexers constrain derived members.
+  assert_true(
+    issues(
+      "interface B { [x: number]: { x: number; y: number } }\ninterface D extends B { 1: { y: number } }",
+    ) >
+    0,
+  )
+  // A method against a scalar index value.
+  assert_true(issues("class Y { [index: string]: string;\n  foo() {} }") > 0)
+  // A method against an object index value that requires a non-function
+  // member; `{ length: number }` is satisfied by any function, so silent.
+  assert_true(
+    issues("interface I { [x: string]: { x: number }; foo(): void }") > 0,
+  )
+  @test.assert_eq(
+    issues("interface I { [x: string]: { length: number }; foo(): void }"),
+    0,
+  )
+  // Static index signatures constrain static members only.
+  assert_true(
+    issues("class X { static [index: string]: string;\n  static x = 12; }") > 0,
+  )
+  @test.assert_eq(
+    issues("class X { static [index: string]: string;\n  x = 12; }"),
+    0,
+  )
+  @test.assert_eq(
+    issues("class X { [index: string]: number;\n  static foo() {} }"),
+    0,
+  )
+  // TS2322 union property: every constituent must satisfy the index value.
+  assert_true(
+    issues("interface I2 { [x: string]: number; foo: string | number }") > 0,
+  )
+  @test.assert_eq(
+    issues(
+      "interface I2 { [x: string]: string | number; foo: string | number }",
+    ),
+    0,
+  )
+  // TS2413: the numeric index value must be assignable to the string one.
+  assert_true(
+    issues("class ED { static [s: string]: boolean;\n  static [s: number]: 1 }") >
+    0,
+  )
+  @test.assert_eq(
+    issues("class B { [s: string]: number;\n  [s: number]: 42 | 233 }"),
+    0,
+  )
+}
+
+///|
+test "expr_check: TS2454 computed keys, new-callee, conditional assigns (batch S)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src))
+    .filter(fn(i) { i.message.contains("used before being assigned") })
+    .length()
+  }
+  // A computed *property* key reads the binding (symbolProperty1)...
+  assert_true(issues("var s: symbol;\nvar x = { [s]: 0 };") > 0)
+  // ...while a computed *method* / accessor key does not
+  // (computedPropertyNames10).
+  @test.assert_eq(issues("var s: string;\nvar v = { [s]() { } };"), 0)
+  @test.assert_eq(
+    issues("var s: string;\nvar v = { get [s]() { return 0; } };"),
+    0,
+  )
+  @test.assert_eq(issues("var s: symbol = Symbol();\nvar x = { [s]: 0 };"), 0)
+  // `new` over a declared-but-unassigned variable reads it.
+  assert_true(
+    issues("interface F { new (): { a: number } }\nvar d: F;\nvar r = new d();") >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "interface F { new (): { a: number } }\ndeclare var d: F;\nvar r = new d();",
+    ),
+    0,
+  )
+  // An assignment on a short-circuit path is not a definite assignment.
+  assert_true(
+    issues(
+      "declare const o: number | undefined;\nlet a: number;\no ?? (a = 1);\na.toString();",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "declare const o: boolean;\nlet a: number;\no && (a = 1);\na.toString();",
+    ) >
+    0,
+  )
+  // An unconditional assignment before the read stays silent.
+  @test.assert_eq(issues("let a: number;\na = 1;\na.toString();"), 0)
+}
+
+///|
+test "expr_check: TS1212/TS1359 reserved binding names (batch T)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS1212 at ES2015+ targets: strict-reserved words as *binding* names.
+  assert_true(issues("// @target: es2015\nvar interface: number;") > 0)
+  assert_true(issues("// @target: es2015\nvar let: any = {};") > 0)
+  assert_true(issues("// @target: es6\nfunction f(yield = 1) {}") > 0)
+  @test.assert_eq(issues("var interface: number;"), 0)
+  // Lenient name positions stay legal at any target.
+  @test.assert_eq(issues("// @target: es2015\nenum Bar { interface }"), 0)
+  @test.assert_eq(
+    issues("// @target: es2015\nvar v: { interface: number };"),
+    0,
+  )
+  // TS1359: hard-reserved words are never binding names.
+  assert_true(issues("var { while: while } = { while: 1 };") > 0)
+  assert_true(issues("enum void {}") > 0)
+  @test.assert_eq(issues("var { while: ok } = { while: 1 };"), 0)
+  // A `this` first parameter is a this-type annotation, not a binding.
+  @test.assert_eq(
+    issues("function f(this: { n: number }) { return this.n; }"),
+    0,
+  )
+  // TS1359: `await` as an async arrow parameter or async function
+  // expression name binds in async scope where it is reserved.
+  assert_true(
+    issues("// @target: es2017\nvar foo = async (await): Promise<void> => {};") >
+    0,
+  )
+  assert_true(
+    issues(
+      "// @target: es2017\nvar v = async function await(): Promise<void> {};",
+    ) >
+    0,
+  )
+  // An async function *declaration* named `await` binds outward -- legal.
+  @test.assert_eq(
+    issues("// @target: es2017\nasync function await(): Promise<void> {}"),
+    0,
+  )
+}
+
+///|
+test "expr_check: TS2564 computed fields, index sigs, literal names (batch U)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src))
+    .filter(fn(i) { i.message.contains("no initializer") })
+    .length()
+  }
+  // A computed-key field with an annotation and no initializer reports
+  // (only when the class has no constructor that could assign the slot).
+  assert_true(issues("class C { [Symbol.toPrimitive]: number; }") > 0)
+  @test.assert_eq(issues("class C { [Symbol.iterator] = 0; }"), 0)
+  @test.assert_eq(issues("class C { [Symbol.toPrimitive]!: number; }"), 0)
+  @test.assert_eq(
+    issues(
+      "const k = \"x\";\nclass C { [k]: string; constructor() { this[k] = \"\"; } }",
+    ),
+    0,
+  )
+  // An index signature does NOT exempt identifier-named fields.
+  assert_true(
+    issues("class C { [a: string]: number;\n  public v: number }") > 0,
+  )
+  // Literal-named fields ARE exempt (quoted or numeric).
+  @test.assert_eq(
+    issues(
+      "class C { [x: number]: Date;\n  [x: string]: Object;\n  1: Date;\n  'a': {} }",
+    ),
+    0,
+  )
+  // Identifier-named uninitialized field still reports without index sigs.
+  assert_true(issues("class C { v: number }") > 0)
+  @test.assert_eq(issues("class C { v: number = 1 }"), 0)
+}
+
+///|
+test "expr_check: TS2300 duplicates and TS1046 dts modifiers (batch V)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2300: a function declaration and a var binding share one value space.
+  assert_true(issues("function fn3() { }\nvar fn3;") > 0)
+  assert_true(issues("namespace M { function fn1() { }\n  var fn1; }") > 0)
+  @test.assert_eq(issues("var a;\nvar a;"), 0)
+  @test.assert_eq(
+    issues(
+      "function o(x: number): void;\nfunction o(x: string): void;\nfunction o(x: any) { }",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues("function m() {}\nnamespace m { export var inner = 1; }"),
+    0,
+  )
+  // TS2300: class static vs merged namespace *exported* value.
+  assert_true(
+    issues(
+      "class P { static Origin = { x: 0 }; }\nnamespace P { export var Origin = \"\"; }",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "class P { static Origin = { x: 0 }; }\nnamespace P { var Origin = \"\"; }",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "class P { static Origin = { x: 0 }; }\nnamespace P { export interface Origin {} }",
+    ),
+    0,
+  )
+  // TS2300: repeated same-kind computed accessors on one well-known symbol.
+  assert_true(
+    issues(
+      "class C { get [Symbol.hasInstance]() { return \"\"; }\n  get [Symbol.hasInstance]() { return \"\"; } }",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "class C { get [Symbol.iterator]() { return 0; }\n  set [Symbol.iterator](v: number) { } }",
+    ),
+    0,
+  )
+  // TS1046: bare top-level declarations in a .d.ts module.
+  let dts = fn(src : String) -> Int {
+    check_dts_top_level_modifiers(parse_module_or_empty(src)).length()
+  }
+  assert_true(dts("enum E { A = 1 }") > 0)
+  assert_true(dts("function F() {}") > 0)
+  assert_true(dts("var x: number;") > 0)
+  @test.assert_eq(dts("declare function f(): void;"), 0)
+  @test.assert_eq(dts("declare enum E { A }"), 0)
+  @test.assert_eq(dts("interface I { a: number }"), 0)
+  @test.assert_eq(dts("export declare const x: number;"), 0)
+}
+
+///|
+test "expr_check: TS2394/TS2371/TS2349 overloads, non-callable tags (batch W)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2394: a scalar-returning overload over a void-annotated impl.
+  assert_true(
+    issues(
+      "function f(x: string): number;\nfunction f(x: string): void { return; }",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues("function f(x: string): void;\nfunction f(x: any): void { }"),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "function f(x: string): number;\nfunction f(x: any): any { return x; }",
+    ),
+    0,
+  )
+  // TS2371: a parameter initializer on a bodiless overload signature.
+  assert_true(issues("function foo(a = 4);\nfunction foo(a, b) {}") > 0)
+  @test.assert_eq(issues("function foo(a = 4) {}"), 0)
+  // TS2349: non-callable tagged-template tags and template callees.
+  assert_true(issues("class CtorTag { }\nCtorTag `Hello world!`;") > 0)
+  assert_true(
+    issues("interface I { new (): string; }\ndeclare var tag: I;\ntag `Hello`;") >
+    0,
+  )
+  assert_true(issues("`abc${0}abc`(`hello`);") > 0)
+  assert_true(issues("`I AM ${ `TAG` }` `I AM TEMPLATE`;") > 0)
+  @test.assert_eq(
+    issues(
+      "declare function gql(s: TemplateStringsArray): string;\ngql `query {}`;",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "interface B { new (): string; (s: TemplateStringsArray): string; }\ndeclare var b: B;\nb `ok`;",
+    ),
+    0,
+  )
+}
+
+///|
+test "expr_check: leading BOM does not swallow the first statement" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  assert_true(issues("\u{FEFF}`abc${0}abc`(`hello`);") > 0)
+}
+
+///|
+test "expr_check: TS2339 namespace exports and enum members (batch X)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A declared-but-not-exported namespace member is inaccessible.
+  assert_true(
+    issues("namespace A { export var x = 1;\n  var y = 12; }\nvar b = A.y;") > 0,
+  )
+  @test.assert_eq(
+    issues("namespace A { export var x = 1;\n  var y = 12; }\nvar b = A.x;"),
+    0,
+  )
+  // Ambient namespaces implicitly export everything -- abstain.
+  @test.assert_eq(
+    issues("declare namespace B { var z: number; }\nvar ok = B.z;"),
+    0,
+  )
+  // Enums are closed: a non-member access is definite.
+  assert_true(issues("enum E { Red }\nvar x = E.Blue;") > 0)
+  @test.assert_eq(issues("enum E { Red }\nvar x = E.Red;"), 0)
+  // A regular enum object carries Object.prototype; a *const* enum has no
+  // runtime object, so even the prototype surface reports.
+  @test.assert_eq(issues("enum E { Red }\nvar x = E.toString();"), 0)
+  assert_true(issues("const enum B {}\nvar x = B.toString;") > 0)
+  // Enum/namespace merging opens the surface -- abstain.
+  @test.assert_eq(
+    issues(
+      "enum M { A }\nnamespace M { export function extra() {} }\nM.extra();",
+    ),
+    0,
+  )
+  // Enum declaration merging unions member lists.
+  @test.assert_eq(
+    issues(
+      "namespace M1 { export enum E { A = 3 }\n  export enum E { D = 7 }\n  var x = [E.A, E.D]; }",
+    ),
+    0,
+  )
+}
+
+///|
+test "expr_check: TS7006 uncontextual arrow params (batch Y)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // An unannotated binding gives its arrow initializer no contextual type.
+  assert_true(issues("var x = x => `abc${ x }def`;") > 0)
+  assert_true(issues("var x = `abc${ x => x }def`;") > 0)
+  // Annotated bindings / params / call arguments keep contextual typing.
+  @test.assert_eq(issues("var f1: (x: number) => number = x => x + 1;"), 0)
+  @test.assert_eq(issues("var f2 = (x: number) => x + 1;"), 0)
+  @test.assert_eq(issues("const a = [1, 2].map(x => x + 1);"), 0)
+  @test.assert_eq(issues("var f3 = (x = 1) => x;"), 0)
+  @test.assert_eq(issues("var f4 = (...rest: number[]) => rest.length;"), 0)
+}
+
+///|
+test "expr_check: TS2322 unions, in-operands, static index writes (batch Z)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Mixed scalar array literals infer a union element type.
+  assert_true(issues("var v: string;\nfor (v of [0, \"\"]) { }") > 0)
+  @test.assert_eq(
+    issues("var v: string | number;\nfor (v of [0, \"\"]) { }"),
+    0,
+  )
+  @test.assert_eq(issues("var a: (string | number)[] = [0, \"\"];"), 0)
+  // `in` RHS: a well-known Symbol static is a unique symbol; an unbounded
+  // in-scope type parameter may be a primitive.
+  assert_true(issues("var r = \"\" in Symbol.toPrimitive;") > 0)
+  assert_true(issues("function f<T>(x: T) { return \"\" in x; }") > 0)
+  @test.assert_eq(
+    issues("function g<T extends object>(t: T) { return \"x\" in t; }"),
+    0,
+  )
+  @test.assert_eq(issues("var m = { a: 1 };\nvar r = \"a\" in m;"), 0)
+  // Writes through a static index signature check the value type.
+  assert_true(
+    issues(
+      "class C { static [s: string]: number;\n  static [s: number]: 42 }\nC[2] = 2;",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "class C { static [s: string]: number;\n  static [s: number]: 42 }\nC[42] = 42;\nC[\"foo\"] = 1;",
+    ),
+    0,
+  )
+  // A fresh object literal must satisfy at least one union constituent.
+  assert_true(
+    issues(
+      "declare var sn: string | number;\nvar x: { prop: string } | { prop: number } = { prop: sn };",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "declare var s: string;\nvar x: { prop: string } | { prop: number } = { prop: s };",
+    ),
+    0,
+  )
+  // Discriminant literals keep their literal types.
+  @test.assert_eq(
+    issues(
+      "var x: { kind: \"a\"; n: number } | { kind: \"b\"; s: string } = { kind: \"a\", n: 1 };",
+    ),
+    0,
+  )
+  // Empty literal satisfies an all-optional constituent.
+  @test.assert_eq(issues("var x: { a: string } | { b?: number } = {};"), 0)
+}
+
+///|
+test "expr_check: generator returns and destructuring assignment (batch AA)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A generator's return annotation must be iterator-like.
+  assert_true(issues("function* g1(): number { }") > 0)
+  @test.assert_eq(issues("function* g2(): Generator<number> { yield 1; }"), 0)
+  // Generator `return` values are NOT contextually typed (#35995):
+  // literal fields widen before the TReturn check.
+  assert_true(
+    issues(
+      "function* f1(): Generator<any, { x: 'x' }, any> { return { x: 'x' }; }",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "function* f2(): Generator<any, { x: string }, any> { return { x: 'x' }; }",
+    ),
+    0,
+  )
+  // Assignment-form array destructuring checks element types against the
+  // existing targets' declared slots.
+  assert_true(
+    issues(
+      "class It { next() { return { value: 1, done: false }; } [Symbol.iterator]() { return this; } }\nvar a: number, b: string;\n[a, b] = new It;",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "class It { next() { return { value: 1, done: false }; } [Symbol.iterator]() { return this; } }\nvar a: number, b: number;\n[a, b] = new It;",
+    ),
+    0,
+  )
+  // Syntactic array-literal sources destructure per slot.
+  assert_true(issues("var t1: string, t2: number;\n[t1, t2] = [1, \"a\"];") > 0)
+  @test.assert_eq(
+    issues("var t1: string, t2: number;\n[t1, t2] = [\"a\", 1];"),
+    0,
+  )
+  // Multi-declarator var groups leak their bindings to later statements;
+  // let/const blocks stay scoped.
+  @test.assert_eq(
+    issues(
+      "function f(): number {\n  {\n    const inner: string = \"hello\";\n  }\n  const x: number = inner;\n  return x;\n}",
+    ),
+    0,
+  )
+}
+
+///|
+test "expr_check: TS2345 iterables vs tuples, spread elements, BigInt (batch AB)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src))
+    .filter(fn(i) { !i.message.contains("implicitly has an `any`") })
+    .length()
+  }
+  let iter = "class It { next() { return { value: 1, done: false }; } [Symbol.iterator]() { return this; } }\n"
+  // A base-less iterator class never satisfies a tuple target.
+  assert_true(issues(iter + "function fun([a, b]) { }\nfun(new It);") > 0)
+  assert_true(issues(iter + "var t: [any, any] = new It;") > 0)
+  @test.assert_eq(issues("function fun([a, b]) { }\nfun([1, 2]);"), 0)
+  // A default value retypes the pattern parameter from its initializer.
+  @test.assert_eq(
+    issues(iter + "function fun([a, b] = new It) { }\nfun(new It);"),
+    0,
+  )
+  // `new Map(...)` never satisfies a tuple parameter.
+  assert_true(
+    issues(
+      "function f(...xs: [string, number][]) { }\nf(new Map([[\"\", 0]]));",
+    ) >
+    0,
+  )
+  // Spread elements check against the rest element type.
+  assert_true(
+    issues(
+      "function foo(...s: (symbol | number)[]) { }\n" +
+      "class SIt { next() { return { value: \"\", done: false }; } [Symbol.iterator]() { return this; } }\n" +
+      "foo(...new SIt);",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues("function foo(...s: (string | number)[]) { }\nfoo(...[1, \"a\"]);"),
+    0,
+  )
+  // Covariant arrays: Foo[] satisfies Bar[] when Foo extends Bar.
+  @test.assert_eq(
+    issues(
+      "class Bar { x }\nclass Foo extends Bar { y }\n" +
+      "function fun(...bs: Bar[][]) { }\n" +
+      "class AIt { next() { return { value: [new Foo], done: false }; } [Symbol.iterator]() { return this; } }\n" +
+      "fun(...new AIt);",
+    ),
+    0,
+  )
+  // BigInt builtin argument rules.
+  assert_true(issues("// @strict: true\nBigInt(null);") > 0)
+  assert_true(issues("BigInt(Symbol());") > 0)
+  assert_true(issues("BigInt({ e: 1, m: 1 });") > 0)
+  @test.assert_eq(issues("BigInt(1);\nBigInt(\"0\");\nBigInt(false);"), 0)
+  @test.assert_eq(
+    issues("function BigInt(x: any) { return x; }\nBigInt(null);"),
+    0,
+  )
+}
+
+///|
+test "expr_check: TS2304 typeof tails, module names, dotted paths (batch AC)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A trailing dot keeps the typeof query alive so the base resolves.
+  assert_true(issues("var v: typeof A.") > 0)
+  @test.assert_eq(
+    issues(
+      "declare var A: { b: number };\nvar v: typeof A.b;\nvar w: typeof A;",
+    ),
+    0,
+  )
+  // TS1443: template-literal module declaration names.
+  assert_true(issues("declare module `M1` {\n}") > 0)
+  @test.assert_eq(issues("declare module \"M\" { export const x: number; }"), 0)
+  // A hard-reserved word as a dotted namespace path segment.
+  assert_true(
+    issues(
+      "declare namespace chrome.debugger {\n    declare var tabId: number;\n}",
+    ) >
+    0,
+  )
+  @test.assert_eq(issues("declare namespace a.b.c { const y: number; }"), 0)
+  @test.assert_eq(issues("declare namespace ns.type { const z: number; }"), 0)
+}
+
+///|
+test "expr_check: Partial/Required/Readonly lattice (batch AD)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Optionality may only stay or decrease: Partial never satisfies
+  // Readonly/plain/Required over the same core.
+  assert_true(
+    issues("function f<T>(p: Partial<T>) { let b: Readonly<T> = p; }") > 0,
+  )
+  assert_true(
+    issues(
+      "function f<T>(pr: Partial<Readonly<T>>) { let b: Readonly<T> = pr; }",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "function f<T>(rp: Readonly<Partial<T>>) { let b: Readonly<T> = rp; }",
+    ) >
+    0,
+  )
+  assert_true(issues("function f<T>(y: T) { let x: Required<T> = y; }") > 0)
+  assert_true(
+    issues("function f<T>(z: Partial<T>) { let x: Required<T> = z; }") > 0,
+  )
+  // Legal directions: Readonly is transparent, Required satisfies all.
+  @test.assert_eq(
+    issues(
+      "function f<T>(p: Partial<T>, r: Readonly<T>, x: Required<T>) {\n" +
+      "  let a: Partial<T> = p;\n" +
+      "  let b: Partial<T> = r;\n" +
+      "  let c: Partial<Readonly<T>> = p;\n" +
+      "  let d: Readonly<T> = x;\n" +
+      "  let e: T = x;\n" +
+      "  let g: Readonly<Partial<T>> = r;\n" +
+      "}",
+    ),
+    0,
+  )
+  // Distinct cores abstain.
+  @test.assert_eq(
+    issues("function f<T, U>(p: Partial<U>) { let b: Readonly<T> = p as any; }"),
+    0,
+  )
 }

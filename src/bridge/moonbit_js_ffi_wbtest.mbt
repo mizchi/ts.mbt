@@ -4998,6 +4998,7 @@ test "bridge: FFI class methods unwrap optional arguments" {
     is_abstract: false,
     is_constructible: true,
     index_signatures: [],
+    static_index_signatures: [],
     decorators: [],
     is_declare: false,
     private_members: [],

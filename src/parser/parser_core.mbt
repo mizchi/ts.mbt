@@ -80,6 +80,65 @@ pub struct Parser {
   // signature. TypeScript reports TS2369 for each. `parse_param` appends a
   // location string here; `parse_module` hands the list to the checker.
   param_property_misuses : Array[String]
+  // `eval` / `arguments` bound or assigned in strict-mode code. Fed by
+  // `parse_binding_ident` / assignment parsing when `in_strict` (prologue /
+  // class body) or `directive_strict` (conformance `@alwaysStrict: true` /
+  // `@strict: true` header) is active; `parse_module` hands the list to the
+  // checker. Empty for well-formed input.
+  strict_mode_misuses : Array[String]
+  // Decorator groups that preceded a non-class declaration (TS1206).
+  invalid_decorator_uses : Array[String]
+  // Always-error grammar misuses (complete messages; see TsModule).
+  grammar_misuses : Array[String]
+  // Local binding names introduced by ES `import` statements (default,
+  // namespace, and named/aliased specifiers). The import statements
+  // themselves are consumed and discarded, but the *names* must stay
+  // visible so unresolved-reference checks treat them as declared.
+  imported_binding_names : Array[String]
+  // Module specifiers of ES `import` statements (`import ... from "spec"`,
+  // `import x = require("spec")`). Consulted by the module-not-found check
+  // (TS2307) against in-file ambient module declarations.
+  import_module_specs : Array[String]
+  // The source carries `@filename:` conformance directives -- a multi-file
+  // test concatenated into one parse. Cross-file resolution is out of scope
+  // there, so the TS2307 recording is disabled.
+  multi_file_source : Bool
+  // `(class, base, args)` for every `class C extends B<...>` heritage clause
+  // whose type arguments parse cleanly. Lets the checker instantiate the
+  // base's generic surface (e.g. index-signature value types) without a
+  // TsClassDecl shape change.
+  class_base_type_args : Array[(String, String, Array[@ast.TsType])]
+  // When set, `parse_type` keeps a bounded type parameter as its `Named`
+  // reference instead of inlining the constraint. Used when capturing
+  // `extends B<...>` heritage type arguments, where the raw parameter
+  // identity is the whole point.
+  mut no_bound_inline : Bool
+  // The conformance header carries an explicit `@target:` of ES2015 or
+  // newer. In that mode tsc reserves `yield` as a function name
+  // (TS1212 -- `function yield() {}` under `@target: es6`).
+  target_es6_plus : Bool
+  // noImplicitAny per the conformance-header directives. Mirrors the
+  // checker's strict-flag convention: the tsc-generated baselines for files
+  // *without* a directive include the implicit-any family (TS7006 / TS7010 /
+  // TS7005 / ...), so the default is `true`; `@strict: false` or
+  // `@noImplicitAny: false` opt out, an explicit `@noImplicitAny: true`
+  // opts back in over `@strict: false`.
+  no_implicit_any : Bool
+  // Armed only while parsing a *function declaration's* parameter list --
+  // the one position where an unannotated parameter can never be
+  // contextually typed, so the implicit-any verdict is reliable.
+  mut record_implicit_any_params : Bool
+  // Armed while parsing the body of a *class declaration with no heritage
+  // clause* -- with neither `extends` nor `implements`, a method parameter
+  // has no contextual-typing source, so the implicit-any verdict is
+  // reliable for members too. Class *expressions* stay unarmed (their
+  // members can be contextually typed from the assignment target).
+  mut class_decl_no_heritage : Bool
+  // Conformance-header strict directive (`@alwaysStrict: true` / `@strict:
+  // true`). Unlike `in_strict` it does NOT change parsing behaviour (octal
+  // handling, statement restrictions, ...) -- it only arms the strict-misuse
+  // *recording* above, so multi-variant directive files never fail to parse.
+  directive_strict : Bool
   // Parameters declared with *both* an optional marker (`x?`) and an
   // initializer (`x = e`) -- always a TS1015 syntax error regardless of
   // position. The `?` is otherwise folded into the parameter type
@@ -104,6 +163,11 @@ pub struct Parser {
   // `parse_class_decl_with_abstract` appends; the checker surfaces them. Empty
   // for well-formed input, so it never costs precision.
   collected_class_dups : Array[(String, Array[String])]
+  // String-literal member names (`class C { 'a': T }`) seen while parsing
+  // class bodies. Quotedness is erased by the key parser, but
+  // strict-property-initialization must exempt literal-named fields --
+  // drained per class into `<quoted-member:...>` sentinels.
+  quoted_member_names : Array[String]
   // Token-position → "JSDoc `/* @__PURE__ */` annotation seen
   // just before this token". The lexer populates this when it
   // skips a block comment whose contents contain the literal
@@ -181,9 +245,23 @@ pub fn Parser::new_with_strict_and_jsx(
     pending_decorators: [],
     param_property_scopes: [],
     param_property_misuses: [],
+    strict_mode_misuses: [],
+    invalid_decorator_uses: [],
+    grammar_misuses: [],
+    imported_binding_names: [],
+    import_module_specs: [],
+    multi_file_source: false,
+    class_base_type_args: [],
+    no_bound_inline: false,
+    target_es6_plus: false,
+    no_implicit_any: false,
+    record_implicit_any_params: false,
+    class_decl_no_heritage: false,
+    directive_strict: false,
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],
     collected_class_dups: [],
+    quoted_member_names: [],
     pure_marker_positions: {},
     internal_marker_positions: {},
     collected_internal_names: {},
@@ -208,9 +286,14 @@ pub fn Parser::from_source(src : String) -> Parser {
 pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
   let lexer = Lexer::new(src)
   let tokens = lexer.tokenize()
-  let trimmed = src.trim_start()
-  let in_strict = trimmed.has_prefix("\"use strict\";") ||
-    trimmed.has_prefix("'use strict';")
+  let in_strict = detect_use_strict_prologue(src)
+  let grammar_misuses : Array[String] = []
+  if lexer.invalid_char_count > 0 {
+    grammar_misuses.push("invalid character in source")
+  }
+  if lexer.unterminated_template {
+    grammar_misuses.push("unterminated template literal")
+  }
   {
     tokens,
     pos: 0,
@@ -239,9 +322,23 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     pending_decorators: [],
     param_property_scopes: [],
     param_property_misuses: [],
+    strict_mode_misuses: [],
+    invalid_decorator_uses: [],
+    grammar_misuses,
+    imported_binding_names: [],
+    import_module_specs: [],
+    multi_file_source: detect_filename_directives(src),
+    class_base_type_args: [],
+    no_bound_inline: false,
+    target_es6_plus: detect_target_es6_plus(src),
+    no_implicit_any: detect_no_implicit_any(src),
+    record_implicit_any_params: false,
+    class_decl_no_heritage: false,
+    directive_strict: detect_directive_strict(src),
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],
     collected_class_dups: [],
+    quoted_member_names: [],
     pure_marker_positions: lexer.pure_marker_positions,
     internal_marker_positions: lexer.internal_marker_positions,
     collected_internal_names: {},
@@ -316,12 +413,18 @@ fn Parser::peek_at(self : Parser, offset : Int) -> Token {
 // / functioncheck (currentposition `(` )
 fn Parser::is_arrow_function(self : Parser) -> Bool {
   let temp = { ..self, pos: self.pos + 1 }
+  // The struct-spread copy shares the recording arrays with `self`, so a
+  // speculative `parse_params` here would leak misuse recordings for
+  // expressions that merely *look* like parameter lists (`(yield 0)` in a
+  // generator, `(eval)` in strict code). Snapshot and roll back.
+  let recordings = self.recording_lengths()
   let params_ok = try {
     let _ = temp.parse_params()
     temp.check(RParen)
   } catch {
     _ => false
   }
+  self.rollback_recordings(recordings)
   if !params_ok {
     return false
   }
@@ -436,4 +539,160 @@ fn Parser::has_line_terminator_before(self : Parser) -> Bool {
   // for every `[` (array vs index access), every contextual `as` /
   // `satisfies`, and every ASI-relevant statement boundary.
   self.tokens[self.pos].has_newline_before
+}
+
+///|
+/// True when the file's first *code* line is a `"use strict"` prologue.
+/// Conformance sources routinely put `// @directive` header comments (and a
+/// BOM) ahead of the prologue, so leading comment / blank lines are skipped
+/// before testing -- `// @target: es5\n"use strict";` is a strict script.
+fn detect_use_strict_prologue(src : String) -> Bool {
+  let mut in_block_comment = false
+  for line in src.split("\n") {
+    let mut t = line.trim_start().to_string()
+    // Strip a leading BOM the lexer would otherwise hide.
+    if t.has_prefix("\u{FEFF}") {
+      t = t[1:].to_string().trim_start().to_string()
+    }
+    if in_block_comment {
+      match t.find("*/") {
+        Some(i) => {
+          in_block_comment = false
+          t = t[i + 2:].to_string().trim_start().to_string()
+        }
+        None => continue
+      }
+    }
+    while t.has_prefix("/*") {
+      match t.find("*/") {
+        Some(i) => t = t[i + 2:].to_string().trim_start().to_string()
+        None => {
+          in_block_comment = true
+          break
+        }
+      }
+    }
+    if in_block_comment {
+      continue
+    }
+    if t == "" || t.has_prefix("//") {
+      continue
+    }
+    return t.has_prefix("\"use strict\"") || t.has_prefix("'use strict'")
+  }
+  false
+}
+
+///|
+/// Scan the leading conformance-header directives for an explicit strict
+/// opt-in: `@alwaysStrict: <values>` or `@strict: <values>` where the value
+/// list contains `true`. Multi-variant directives (`@alwaysStrict: true,
+/// false`) count -- at least one tsc variant runs strict, so a strict-mode
+/// grammar misuse is an error in that variant's baseline.
+fn detect_directive_strict(src : String) -> Bool {
+  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
+  let head = src[:head_len].to_owned()
+  for directive in ["@alwaysStrict:", "@strict:"] {
+    match head.find(directive) {
+      Some(i) => {
+        let rest = head[i + directive.length():].to_owned()
+        let line = match rest.find("\n") {
+          Some(j) => rest[:j].to_owned()
+          None => rest
+        }
+        if line.contains("true") {
+          return true
+        }
+      }
+      None => ()
+    }
+  }
+  false
+}
+
+///|
+/// Lengths of the parser's misuse-recording arrays, taken before a
+/// speculative parse whose side effects must not survive.
+fn Parser::recording_lengths(self : Parser) -> (Int, Int, Int, Int) {
+  (
+    self.grammar_misuses.length(),
+    self.strict_mode_misuses.length(),
+    self.param_property_misuses.length(),
+    self.param_optional_initializer_misuses.length(),
+  )
+}
+
+///|
+/// Drop any misuse recordings pushed since `recording_lengths` was taken.
+fn Parser::rollback_recordings(
+  self : Parser,
+  lens : (Int, Int, Int, Int),
+) -> Unit {
+  while self.grammar_misuses.length() > lens.0 {
+    let _ = self.grammar_misuses.pop()
+  }
+  while self.strict_mode_misuses.length() > lens.1 {
+    let _ = self.strict_mode_misuses.pop()
+  }
+  while self.param_property_misuses.length() > lens.2 {
+    let _ = self.param_property_misuses.pop()
+  }
+  while self.param_optional_initializer_misuses.length() > lens.3 {
+    let _ = self.param_optional_initializer_misuses.pop()
+  }
+}
+
+///|
+/// True when the conformance header names an ES2015+ target
+/// (`@target: es6` / `es2015` .. `esnext`), in any position of the
+/// comma list.
+fn detect_target_es6_plus(src : String) -> Bool {
+  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
+  let head = src[:head_len].to_owned().to_lower()
+  match head.find("@target:") {
+    Some(i) => {
+      let rest = head[i + "@target:".length():].to_owned()
+      let line = match rest.find("\n") {
+        Some(j) => rest[:j].to_owned()
+        None => rest
+      }
+      for raw in line.split(",") {
+        let tok = raw.trim().to_string()
+        if tok == "es6" || tok == "esnext" || tok.has_prefix("es20") {
+          return true
+        }
+      }
+      false
+    }
+    None => false
+  }
+}
+
+///|
+/// noImplicitAny from the conformance header. Default `true` (matching the
+/// baselines for directive-less files); `@strict: false` /
+/// `@noImplicitAny: false` opt out, explicit `@noImplicitAny: true` wins
+/// over `@strict: false`.
+fn detect_no_implicit_any(src : String) -> Bool {
+  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
+  let head = src[:head_len].to_owned()
+  if head.contains("@noImplicitAny: true") ||
+    head.contains("@noImplicitAny:true") {
+    return true
+  }
+  if head.contains("@noImplicitAny: false") ||
+    head.contains("@noImplicitAny:false") {
+    return false
+  }
+  if head.contains("@strict: false") || head.contains("@strict:false") {
+    return false
+  }
+  true
+}
+
+///|
+/// True when the source embeds `@filename:` conformance directives (any
+/// case variant) -- i.e. a multi-file test concatenated into one parse.
+fn detect_filename_directives(src : String) -> Bool {
+  src.to_lower().contains("@filename:")
 }
