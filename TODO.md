@@ -2295,6 +2295,35 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-06 (T178)  714/815 (88 %)        414/414 ( 0 FP)   TS2345: iterables vs tuples, spread elements, BigInt builtin: TP 2066 -> 2072
+
+  T178 -- argument-type subclusters:
+    - A value that is iterable-but-not-array-like never satisfies a
+      *tuple* target: well-known keyed collections (`Map`/`Set`/weak
+      variants, user-undeclared -- also matched syntactically as
+      `new Map(…)` when inference loses the class) and base-less iterator
+      classes (declare `next()`, no heritage that could reach `Array`, no
+      index signatures). Applied in `check_expr_against` (Tuple targets)
+      and at call sites for *unannotated array-destructuring parameters*
+      (`function fun([a, b]) {}` types as `[any, any]`); a parameter
+      default retypes the pattern and abstains
+      (`fun([a, b] = new FooIterator)` -- caught as 3 FPs by the gate).
+      iterableArrayPattern10/13/16/26.
+    - Spread arguments in rest position check the spread source's
+      *element* type against the rest parameter's element type
+      (`foo(...new StringIterator)` vs `(...s: (symbol | number)[])`).
+      Tuple sources with variadic slots union a `Rest(...)` marker into
+      the element and abstain (genericRestParameters2 FP); covariant
+      arrays recurse one level (`Foo[]` satisfies `Bar[]` when `Foo`
+      extends `Bar` structurally -- iterableArrayPattern20 FP).
+      iteratorSpreadInCall6.
+    - `BigInt(x)` builtin: nullish literal arguments report under
+      strictNullChecks; `Symbol()` and object literals always
+      (`(string | number | bigint | boolean)` parameter). Skipped when
+      the module declares its own `BigInt`. constructBigint.
+    Whole-corpus TP 2066 -> 2072 @ 0 FP (session total 1761 -> +311);
+    pinned recall 714, precision 414/414. 2440 tests.
+
 2026-07-06 (T177)  714/815 (88 %)        414/414 ( 0 FP)   TS2322 round 3: generator returns, destructuring assignment: TP 2062 -> 2066
 
   T177 -- third TS2322 subcluster pass:

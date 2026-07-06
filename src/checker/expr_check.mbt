@@ -7189,6 +7189,31 @@ fn check_expr_against(
       }
     _ => ()
   }
+  // TS2322/TS2345: a value that is iterable but not array-like is never
+  // assignable to a *tuple* target (`fun(new FooIterator)` against
+  // `([a, b])` -- iterableArrayPattern10; `Map` against `[K, V]` --
+  // iterableArrayPattern26). Decided only for well-known collections and
+  // base-less iterator classes (an `extends` chain could reach Array).
+  if expected_shape is Tuple(_) {
+    let src_shape = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, expr))
+    // `new Map(…)` stays syntactically recognisable even when inference
+    // loses the class type (iterableArrayPattern26).
+    let syntactic_collection = match expr {
+      New(cn, _) =>
+        (cn == "Map" || cn == "Set" || cn == "WeakMap" || cn == "WeakSet") &&
+        ctx.resolver.classes.get(cn) is None
+      _ => false
+    }
+    if syntactic_collection ||
+      type_definitely_not_array_like(src_shape, ctx.resolver) {
+      record(
+        ctx,
+        sub_path,
+        "type `\{type_display(src_shape)}` is not assignable to tuple type `\{type_display(expected_shape)}`",
+      )
+      return
+    }
+  }
   if !is_checkable(expected) {
     return
   }
@@ -10360,6 +10385,33 @@ fn check_arguments(
 /// available, so optional / default / rest parameters are honored on arity
 /// checks. `param_types` is the simplified types array (already lifted out
 /// of `Func(...)`), and `sig` carries the full `TsParam` metadata.
+/// True when a value of this shape is iterable-but-not-array-like, so it
+/// can never satisfy a tuple target: the well-known keyed collections
+/// (`Map` / `Set` / weak variants, user-undeclared) and base-less iterator
+/// classes (declare `next()`, no heritage that could reach `Array`, no
+/// index signatures).
+fn type_definitely_not_array_like(
+  src_shape : @ast.TsType,
+  resolver : Resolver,
+) -> Bool {
+  match src_shape {
+    Applied(cn, _) =>
+      (cn == "Map" || cn == "Set" || cn == "WeakMap" || cn == "WeakSet") &&
+      resolver.classes.get(cn) is None
+    Named(cn) =>
+      match resolver.classes.get(cn) {
+        Some(cls) =>
+          cls.base_names.length() == 0 &&
+          cls.base_expr is None &&
+          cls.index_signatures.length() == 0 &&
+          cls.methods.iter().any(fn(m) { m.name == "next" && !m.is_static })
+        None => cn == "Map" || cn == "Set" || cn == "WeakMap" || cn == "WeakSet"
+      }
+    _ => false
+  }
+}
+
+///|
 fn check_arguments_with_sig(
   env : ExprEnv,
   params : Array[@ast.TsType],
@@ -10578,8 +10630,91 @@ fn check_arguments_with_sig(
       check_expr_against(env, args[i], rest_elem_type, ctx, sub_path)
     } else if i < params.length() {
       check_expr_against(env, args[i], params[i], ctx, sub_path)
+      // TS2345: an unannotated array-destructuring parameter is tuple-like
+      // (`function fun([a, b]) {}` types as `[any, any]`), so an iterable
+      // that is not array-like never satisfies it (`fun(new FooIterator)`).
+      match sig {
+        Some(ps) =>
+          if i < ps.length() &&
+            !is_checkable(ps[i].type_) &&
+            // A default value retypes the parameter from its initializer
+            // (`function fun([a, b] = new FooIterator)` accepts the
+            // iterator), so only default-free patterns are tuple-like.
+            ps[i].default is None &&
+            ps[i].binding is Some(@ast.TsBinding::Array(_)) {
+            let src_shape = ctx.resolver.unwrap(
+              infer_expr(env, ctx.resolver, args[i]),
+            )
+            if type_definitely_not_array_like(src_shape, ctx.resolver) {
+              record(
+                ctx,
+                sub_path,
+                "type `\{type_display(src_shape)}` is not assignable to the array-destructuring parameter",
+              )
+            }
+          }
+        None => ()
+      }
     }
     i = i + 1
+  }
+  // TS2345 for spread arguments in rest position: the spread source's
+  // *element* type must be assignable to the rest parameter's element type
+  // (`foo(...new StringIterator)` against `(...s: (symbol | number)[])`).
+  // Same guard set as the for-of target check; `Any` elements abstain.
+  if rest_index >= 0 && is_checkable(rest_elem_type) {
+    for j, a in args {
+      match a {
+        Spread(inner) if j >= rest_index => {
+          let src_ty = infer_expr(env, ctx.resolver, inner)
+          let elem = for_of_element_type(ctx.resolver, src_ty)
+          // A tuple source with a variadic slot (`[string, ...boolean[]]`)
+          // unions a `Rest(...)` marker into the element -- not a real
+          // element type, so abstain.
+          let elem_has_rest = match elem {
+            Rest(_) => true
+            Union(ms) => ms.iter().any(fn(m) { m is Rest(_) })
+            _ => false
+          }
+          if !elem_has_rest &&
+            is_checkable(elem) &&
+            !is_in_scope_type_param(ctx, elem) &&
+            !is_in_scope_type_param(ctx, rest_elem_type) &&
+            !type_contains_unresolved_named(elem, ctx.resolver) &&
+            !type_contains_unresolved_named(rest_elem_type, ctx.resolver) &&
+            !type_deeply_contains_unmodeled(elem, ctx.resolver) &&
+            !type_deeply_contains_unmodeled(rest_elem_type, ctx.resolver) &&
+            !is_assignable_to(
+              ctx.resolver.unwrap(widen_literal(elem)),
+              ctx.resolver.unwrap(rest_elem_type),
+            ) &&
+            !is_structurally_assignable_named(
+              elem,
+              rest_elem_type,
+              ctx.resolver,
+            ) &&
+            // Array elements: `Foo[]` satisfies `Bar[]` when `Foo` is
+            // structurally assignable to `Bar` (covariant arrays).
+            !(match
+              (ctx.resolver.unwrap(elem), ctx.resolver.unwrap(rest_elem_type)) {
+              (Array(ie), Array(re)) =>
+                is_assignable_to(
+                  ctx.resolver.unwrap(ie),
+                  ctx.resolver.unwrap(re),
+                ) ||
+                is_structurally_assignable_named(ie, re, ctx.resolver)
+              _ => false
+            }) {
+            record(
+              ctx,
+              "\{call_path} spread arg",
+              "spread element type `\{type_display(elem)}` is not assignable to `\{type_display(rest_elem_type)}`",
+            )
+          }
+        }
+        _ => ()
+      }
+    }
   }
 }
 
@@ -13286,6 +13421,27 @@ fn check_call_args_in_expr(
     Call(name, args) => {
       // TS2304: calling a name declared nowhere and not a standard global.
       check_undefined_name(env, ctx, name)
+      // TS2345 for the `BigInt` builtin (`(string | number | bigint |
+      // boolean)`): nullish literals report under strictNullChecks;
+      // symbols and object literals always. Skipped when the module
+      // declares its own `BigInt`.
+      if name == "BigInt" &&
+        args.length() >= 1 &&
+        env.lookup(name) is None &&
+        ctx.resolver.globals.get(name) is None &&
+        ctx.resolver.classes.get(name) is None {
+        let bad = match args[0] {
+          NullLit | Var("undefined") => ctx.strict_null_checks
+          ObjectLit(_) => true
+          Call("Symbol", _) => true
+          _ => false
+        }
+        if bad {
+          record_unfiltered(
+            ctx, "call `BigInt`", "argument is not assignable to parameter of type `string | number | bigint | boolean`",
+          )
+        }
+      }
       // TS2454: invoking an as-yet-unassigned variable (`var f: T; f()`)
       // reads it before assignment, same as a bare reference.
       if name != "__ts_no_init__" &&

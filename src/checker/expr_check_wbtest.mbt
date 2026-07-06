@@ -12080,3 +12080,61 @@ test "expr_check: generator returns and destructuring assignment (batch AA)" {
     0,
   )
 }
+
+///|
+test "expr_check: TS2345 iterables vs tuples, spread elements, BigInt (batch AB)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src))
+    .filter(fn(i) { !i.message.contains("implicitly has an `any`") })
+    .length()
+  }
+  let iter = "class It { next() { return { value: 1, done: false }; } [Symbol.iterator]() { return this; } }\n"
+  // A base-less iterator class never satisfies a tuple target.
+  assert_true(issues(iter + "function fun([a, b]) { }\nfun(new It);") > 0)
+  assert_true(issues(iter + "var t: [any, any] = new It;") > 0)
+  @test.assert_eq(issues("function fun([a, b]) { }\nfun([1, 2]);"), 0)
+  // A default value retypes the pattern parameter from its initializer.
+  @test.assert_eq(
+    issues(iter + "function fun([a, b] = new It) { }\nfun(new It);"),
+    0,
+  )
+  // `new Map(...)` never satisfies a tuple parameter.
+  assert_true(
+    issues(
+      "function f(...xs: [string, number][]) { }\nf(new Map([[\"\", 0]]));",
+    ) >
+    0,
+  )
+  // Spread elements check against the rest element type.
+  assert_true(
+    issues(
+      "function foo(...s: (symbol | number)[]) { }\n" +
+      "class SIt { next() { return { value: \"\", done: false }; } [Symbol.iterator]() { return this; } }\n" +
+      "foo(...new SIt);",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues("function foo(...s: (string | number)[]) { }\nfoo(...[1, \"a\"]);"),
+    0,
+  )
+  // Covariant arrays: Foo[] satisfies Bar[] when Foo extends Bar.
+  @test.assert_eq(
+    issues(
+      "class Bar { x }\nclass Foo extends Bar { y }\n" +
+      "function fun(...bs: Bar[][]) { }\n" +
+      "class AIt { next() { return { value: [new Foo], done: false }; } [Symbol.iterator]() { return this; } }\n" +
+      "fun(...new AIt);",
+    ),
+    0,
+  )
+  // BigInt builtin argument rules.
+  assert_true(issues("// @strict: true\nBigInt(null);") > 0)
+  assert_true(issues("BigInt(Symbol());") > 0)
+  assert_true(issues("BigInt({ e: 1, m: 1 });") > 0)
+  @test.assert_eq(issues("BigInt(1);\nBigInt(\"0\");\nBigInt(false);"), 0)
+  @test.assert_eq(
+    issues("function BigInt(x: any) { return x; }\nBigInt(null);"),
+    0,
+  )
+}
