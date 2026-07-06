@@ -13088,6 +13088,12 @@ fn check_call_args_in_expr(
                 None => ()
               }
             }
+            // A template / string literal callee is a `string` -- never
+            // callable (`` `abc${0}`(…) ``). Syntactic (and so exempt from
+            // the permissive "not callable" suppression, which exists for
+            // inference gaps).
+            TemplateLiteral(_, _) | StringLit(_) =>
+              record_unfiltered(ctx, "call", "`string` is not callable")
             _ =>
               if is_definitely_not_callable(other) {
                 record(ctx, "call", "`\{type_display(other)}` is not callable")
@@ -14078,6 +14084,63 @@ fn check_call_args_in_expr(
       check_call_args_in_expr(env, tag, ctx)
       for e in exprs {
         check_call_args_in_expr(env, e, ctx)
+      }
+      // TS2349: the tag of a tagged template is *called*. A template /
+      // string literal tag is a `string` (never callable), and a bare
+      // class reference has construct signatures but no call signatures
+      // (`CtorTag \`Hello\``). Interface merging could add a call surface
+      // to a class name, so a same-named interface abstains.
+      let tag_not_callable = match tag {
+        TemplateLiteral(_, _) | StringLit(_) => true
+        Var(n) => {
+          let is_bare_class = ctx.resolver.classes.get(n) is Some(_) &&
+            ctx.resolver.interfaces.get(n) is None &&
+            ctx.resolver.type_aliases.get(n) is None
+          // A value whose type declares construct signatures but no call
+          // signatures (`interface I { new (): T }`) is constructable,
+          // not callable.
+          let tag_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, tag))
+          let shape_fields : Array[(String, @ast.TsType)] = match tag_ty {
+            Object(fields) => {
+              let out : Array[(String, @ast.TsType)] = []
+              for f in fields {
+                match f.0 {
+                  Literal(fname) => out.push((fname, f.1))
+                  _ => ()
+                }
+              }
+              out
+            }
+            Named(tn) =>
+              match ctx.resolver.interfaces.get(tn) {
+                Some(iface) if iface.type_params.length() == 0 &&
+                  iface.extends_names.length() == 0 => iface.fields
+                _ => []
+              }
+            _ => []
+          }
+          let mut has_new = false
+          let mut has_call = false
+          for f in shape_fields {
+            if f.0 == "<new>" {
+              has_new = true
+            }
+            if f.0 == "<call>" {
+              has_call = true
+            }
+          }
+          is_bare_class || (has_new && !has_call)
+        }
+        _ => false
+      }
+      if tag_not_callable {
+        // Unfiltered: the permissive filter drops the "is not callable"
+        // family wholesale, but these tag shapes are decided syntactically
+        // (string tags) or from the class table (no call signatures) --
+        // no inference gap can rescue them.
+        record_unfiltered(
+          ctx, "tagged template", "this expression is not callable",
+        )
       }
     }
     // New AST wrappers: recurse into the inner expression so call-site
@@ -17620,6 +17683,67 @@ fn check_unresolved_signature_type_refs(
 }
 
 ///|
+/// TS2394 ("This overload signature is not compatible with its
+/// implementation signature") -- the definite subcase: an overload with a
+/// concrete scalar return type over an implementation *annotated* `void`
+/// (`function f(x: string): number; function f(x: string): void {…}`).
+/// A `void`-returning implementation can never produce the scalar the
+/// overload promises. The implementation is the last entry of a same-name
+/// group (TS requires it to follow its overloads); an unannotated return
+/// parses as `Any` and stays silent.
+fn check_overload_void_return(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  if module_.funcs.length() < 2 {
+    return issues
+  }
+  // Group same-name declarations in source order.
+  let by_name : Map[String, Array[@ast.TsType]] = {}
+  let order : Array[String] = []
+  for f in module_.funcs {
+    match by_name.get(f.name) {
+      Some(arr) => arr.push(f.return_type)
+      None => {
+        by_name[f.name] = [f.return_type]
+        order.push(f.name)
+      }
+    }
+  }
+  fn is_concrete_scalar_ret(t : @ast.TsType) -> Bool {
+    match t {
+      Number
+      | Int
+      | String_
+      | Boolean
+      | BigInt
+      | Literal(_)
+      | NumberLiteral(_)
+      | BigIntLiteral(_)
+      | BooleanLiteral(_) => true
+      _ => false
+    }
+  }
+
+  for name in order {
+    match by_name.get(name) {
+      Some(rets) if rets.length() >= 2 =>
+        if rets[rets.length() - 1] is Void {
+          for i in 0..<(rets.length() - 1) {
+            if is_concrete_scalar_ret(rets[i]) {
+              issues.push({
+                path: "function \{name}",
+                message: "this overload signature is not compatible with its implementation signature",
+              })
+              break
+            }
+          }
+        }
+      _ => ()
+    }
+  }
+  issues
+}
+
+///|
 /// TS2300 ("Duplicate identifier 'X'"): a function declaration and a
 /// `var` / `let` / `const` binding of the same name occupy one value
 /// declaration space (`function fn() {}` + `var fn;`). `var`+`var`
@@ -19401,6 +19525,9 @@ fn check_module_function_bodies_layered(
     all.push(issue)
   }
   for issue in check_function_var_duplicates(module_) {
+    all.push(issue)
+  }
+  for issue in check_overload_void_return(module_) {
     all.push(issue)
   }
   for issue in check_class_namespace_static_merge(module_) {

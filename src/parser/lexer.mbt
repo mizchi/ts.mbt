@@ -214,7 +214,14 @@ pub fn Lexer::new(src : String) -> Lexer {
     invalid_char_count: 0,
     unterminated_template: false,
     src,
-    pos: 0,
+    // Skip a UTF-8/UTF-16 byte-order mark. Without this the BOM reaches
+    // the identifier scanner as an unknown character and error recovery
+    // silently swallows the first statement of the file.
+    pos: if src.length() > 0 && src[0] == '\u{FEFF}' {
+      1
+    } else {
+      0
+    },
     allow_regex: true,
     pending: [],
     pending_index: 0,

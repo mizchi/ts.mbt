@@ -2295,6 +2295,36 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-06 (T173)  714/815 (88 %)        414/414 ( 0 FP)   TS2394/TS2371/TS2349 + BOM lexer fix: TP 2036 -> 2045
+
+  T173 -- overload compatibility and non-callable call targets:
+    - TS2394 (definite subcase): an overload with a concrete scalar return
+      over an implementation *annotated* `void` (`function f(x): number;`
+      + `function f(x): void {…}`); the implementation is the last entry
+      of a same-name group, unannotated returns parse as `Any` and stay
+      silent. functionOverloadCompatibilityWithVoid01,
+      functionOverloadErrors.
+    - TS2371: a parameter initializer on a *bodiless* function signature
+      (`function foo(a = 4);`) -- initializers belong to implementations.
+      parserParameterList15.
+    - TS2349: non-callable tagged-template tags -- template/string-literal
+      tags (syntactic), bare class references (construct signatures only;
+      a same-named interface or alias abstains), and values whose shape
+      declares `<new>` but no `<call>` (non-generic, extends-free
+      interfaces). Template-literal *callees* too (`` `abc${0}`(…) ``).
+      Emitted unfiltered: the permissive filter drops the "not callable"
+      family for inference gaps, but these are decided syntactically /
+      from declaration shape. taggedTemplateWithConstructableTag01/02,
+      templateStringInCallExpression(ES6),
+      templateStringInTaggedTemplate(ES6).
+    - Lexer: a leading U+FEFF byte-order mark reached the identifier
+      scanner as an unknown character and error recovery silently
+      swallowed the file's FIRST statement. `Lexer::new` now skips it.
+      (Several conformance fixtures are BOM-prefixed; the two
+      templateStringInCallExpression files were unreachable before this.)
+    Whole-corpus TP 2036 -> 2045 @ 0 FP (session total 1761 -> +284);
+    pinned recall 714, precision 414/414. 2435 tests.
+
 2026-07-05 (T172)  714/815 (88 %)        414/414 ( 0 FP)   TS2300 duplicate values, TS1046 .d.ts modifiers: TP 2028 -> 2036
 
   T172 -- duplicate-identifier and declaration-file rules:

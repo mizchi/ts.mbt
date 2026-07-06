@@ -11858,3 +11858,58 @@ test "expr_check: TS2300 duplicates and TS1046 dts modifiers (batch V)" {
   @test.assert_eq(dts("interface I { a: number }"), 0)
   @test.assert_eq(dts("export declare const x: number;"), 0)
 }
+
+///|
+test "expr_check: TS2394/TS2371/TS2349 overloads, non-callable tags (batch W)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2394: a scalar-returning overload over a void-annotated impl.
+  assert_true(
+    issues(
+      "function f(x: string): number;\nfunction f(x: string): void { return; }",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues("function f(x: string): void;\nfunction f(x: any): void { }"),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "function f(x: string): number;\nfunction f(x: any): any { return x; }",
+    ),
+    0,
+  )
+  // TS2371: a parameter initializer on a bodiless overload signature.
+  assert_true(issues("function foo(a = 4);\nfunction foo(a, b) {}") > 0)
+  @test.assert_eq(issues("function foo(a = 4) {}"), 0)
+  // TS2349: non-callable tagged-template tags and template callees.
+  assert_true(issues("class CtorTag { }\nCtorTag `Hello world!`;") > 0)
+  assert_true(
+    issues("interface I { new (): string; }\ndeclare var tag: I;\ntag `Hello`;") >
+    0,
+  )
+  assert_true(issues("`abc${0}abc`(`hello`);") > 0)
+  assert_true(issues("`I AM ${ `TAG` }` `I AM TEMPLATE`;") > 0)
+  @test.assert_eq(
+    issues(
+      "declare function gql(s: TemplateStringsArray): string;\ngql `query {}`;",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "interface B { new (): string; (s: TemplateStringsArray): string; }\ndeclare var b: B;\nb `ok`;",
+    ),
+    0,
+  )
+}
+
+///|
+test "expr_check: leading BOM does not swallow the first statement" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  assert_true(issues("\u{FEFF}`abc${0}abc`(`hello`);") > 0)
+}

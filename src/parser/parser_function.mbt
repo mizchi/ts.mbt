@@ -343,8 +343,25 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
     }
   }
 
+  // TS2371: a parameter initializer on a *bodiless* signature (overload /
+  // stray declaration) -- initializers belong to implementations only.
+  fn record_signature_param_initializer(
+    p : Parser,
+    ps : Array[@ast.TsParam],
+  ) -> Unit {
+    for param in ps {
+      if param.default is Some(_) {
+        p.grammar_misuses.push(
+          "a parameter initializer is only allowed in a function or constructor implementation",
+        )
+        break
+      }
+    }
+  }
+
   if self.check(Semicolon) {
     record_implicit_any_return(self, name)
+    record_signature_param_initializer(self, params)
     let _ = self.advance()
     return {
       name,
@@ -360,6 +377,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   }
   if !self.check(LBrace) {
     record_implicit_any_return(self, name)
+    record_signature_param_initializer(self, params)
     return {
       name,
       type_params,
