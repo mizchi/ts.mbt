@@ -12212,3 +12212,84 @@ test "expr_check: Partial/Required/Readonly lattice (batch AD)" {
     0,
   )
 }
+
+///|
+test "expr_check: TS2528/TS2488/override family (batch AE)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2528: multiple default exports.
+  assert_true(
+    issues("export default function Foo() {}\nexport default class Bar {}") > 0,
+  )
+  @test.assert_eq(issues("export default function Foo() {}"), 0)
+  // TS2488: for-of over a class lacking the iterator protocol.
+  assert_true(
+    issues(
+      "class It { next() { return \"\"; } }\nvar v: string;\nfor (v of new It) { }",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "class It { [Symbol.iterator]() { return this; } }\nvar v: string;\nfor (v of new It) { }",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "class It { next() { return { value: 1, done: false }; } [Symbol.iterator]() { return this; } }\nvar n: number;\nfor (n of new It) { }",
+    ),
+    0,
+  )
+  // A computed FIELD iterator or a `next` field satisfies the protocol.
+  @test.assert_eq(
+    issues("class It { [Symbol.iterator]: any; }\nfor (var v of new It) { }"),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "class It { next: any;\n  [Symbol.iterator]() { return this; } }\nfor (var v of new It) { }",
+    ),
+    0,
+  )
+  // TS4112: override without heritage.
+  assert_true(issues("class C { override foo(v: string) {} }") > 0)
+  // TS4113: override with no matching base member.
+  assert_true(
+    issues(
+      "class B { foo(v: string) {} }\nclass D extends B { override bar(v: string) {} }",
+    ) >
+    0,
+  )
+  // TS4114 under noImplicitOverride: a genuine override missing the
+  // modifier; abstract implementations and declare members are exempt.
+  assert_true(
+    issues(
+      "// @noImplicitOverride: true\nclass B { foo() {} }\nclass D extends B { foo() {} }",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @noImplicitOverride: true\nclass B { foo() {} }\nclass D extends B { override foo() {} }",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues("class B { foo() {} }\nclass D extends B { foo() {} }"),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @noImplicitOverride: true\nabstract class B { abstract foo(): void; }\nclass D extends B { foo() {} }",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @noImplicitOverride: true\nclass B { p = 1 }\nclass D extends B { declare p: number }",
+    ),
+    0,
+  )
+}

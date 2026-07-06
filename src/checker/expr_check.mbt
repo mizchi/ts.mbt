@@ -12923,6 +12923,77 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
     ForOf(kind, binding, declared, iter, body) => {
       check_call_args_in_expr(env, iter, ctx)
       let iter_ty = infer_expr(env, ctx.resolver, iter)
+      // TS2488: the iterated value must have a `[Symbol.iterator]()`
+      // method returning an iterator. Decided only for base-less,
+      // index-signature-free class instances (an `extends` chain or an
+      // interface merge could add the protocol): either the class lacks
+      // the `[Symbol.iterator]` member entirely, or it returns `this`
+      // while the class has no `next` method (for-of14 / for-of16).
+      match ctx.resolver.unwrap(iter_ty) {
+        Named(icn) =>
+          match ctx.resolver.classes.get(icn) {
+            Some(icls) if icls.base_names.length() == 0 &&
+              icls.base_expr is None &&
+              icls.index_signatures.length() == 0 &&
+              icls.type_params.length() == 0 &&
+              ctx.resolver.interfaces.get(icn) is None => {
+              let mut has_sym_iter = false
+              let mut sym_iter_returns_this_only = false
+              let mut has_next = false
+              // A computed FIELD can also provide the protocol
+              // (`[Symbol.iterator]: any;` -- for-of27): its shape is
+              // unverifiable, so its presence silences the check.
+              for kexpr in icls.computed_field_keys {
+                if kexpr is PropAccess(Var("Symbol"), "iterator") {
+                  has_sym_iter = true
+                  has_next = true
+                }
+              }
+              // A FIELD named `next` (callable-typed or `any`) satisfies
+              // the iterator side too (for-of28).
+              for pr in icls.properties {
+                if !pr.is_static && pr.name == "next" {
+                  has_next = true
+                }
+              }
+              for m in icls.methods {
+                if !m.is_static {
+                  if m.name == "next" {
+                    has_next = true
+                  }
+                  if m.name == "<computed>" &&
+                    m.key_expr is Some(PropAccess(Var("Symbol"), "iterator")) {
+                    has_sym_iter = true
+                    match m.body {
+                      Some(b) => {
+                        let mut all_this = true
+                        let mut saw_return = false
+                        for st in b.stmts {
+                          match st {
+                            Return(Some(Var("this"))) => saw_return = true
+                            Return(_) => all_this = false
+                            _ => ()
+                          }
+                        }
+                        sym_iter_returns_this_only = saw_return && all_this
+                      }
+                      None => ()
+                    }
+                  }
+                }
+              }
+              if !has_sym_iter || (sym_iter_returns_this_only && !has_next) {
+                record(
+                  ctx,
+                  "for-of iterable",
+                  "type `\{icn}` must have a `[Symbol.iterator]()` method that returns an iterator",
+                )
+              }
+            }
+            _ => ()
+          }
+        _ => ()
+      }
       let inferred_elem = for_of_element_type(ctx.resolver, iter_ty)
       let elem_ty = if is_checkable(declared) {
         // Validate the declared annotation against the actual element type.
@@ -18447,6 +18518,195 @@ fn check_namespace_or_enum_member_access(
 }
 
 ///|
+/// TS4112 / TS4113 / TS4114 -- the `override` modifier family:
+///   - TS4112: an `override` member in a class with NO heritage clause.
+///   - TS4113: an `override` member that no (fully resolvable, in-module,
+///     non-generic) base-chain class or merged interface declares.
+///   - TS4114 (only under `@noImplicitOverride: true`, via the parser's
+///     `<noimplicitoverride-on>` marker): an instance member that DOES
+///     override a base member but lacks the modifier. `constructor` and
+///     computed/private names are exempt.
+fn check_override_modifiers(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  let mut no_implicit_override = false
+  for gm in module_.grammar_misuses {
+    if gm == "<noimplicitoverride-on>" {
+      no_implicit_override = true
+    }
+  }
+  let class_by_name : Map[String, @ast.TsClassDecl] = {}
+  for c in module_.classes {
+    class_by_name[c.name] = c
+  }
+  let iface_by_name : Map[String, @ast.TsInterface] = {}
+  for i in module_.interfaces {
+    if i.type_params.length() == 0 {
+      iface_by_name[i.name] = i
+    }
+  }
+  for cls in module_.classes {
+    let overrides : Map[String, Unit] = {}
+    let declare_members : Map[String, Unit] = {}
+    for d in cls.duplicate_member_names {
+      if d.has_prefix("<override-member:") {
+        overrides[d["<override-member:".length():d.length() - 1].to_string()] = ()
+      }
+      if d.has_prefix("<declare-member:") {
+        declare_members[d["<declare-member:".length():d.length() - 1].to_string()] = ()
+      }
+    }
+    let has_heritage = cls.base_names.length() > 0 || cls.base_expr is Some(_)
+    if !has_heritage {
+      if overrides.size() > 0 {
+        issues.push({
+          path: "class \{cls.name}",
+          message: "this member cannot have an `override` modifier because its containing class does not extend another class",
+        })
+      }
+      continue
+    }
+    // Resolve the transitive base member set. Bail (conservatively) when
+    // any base is generic, expression-shaped, or not declared in-module.
+    guard cls.base_names.length() == 1 && cls.base_expr is None else {
+      continue
+    }
+    let base_instance : Map[String, Unit] = {}
+    let base_static : Map[String, Unit] = {}
+    let base_abstract : Map[String, Unit] = {}
+    let mut resolvable = true
+    let mut cursor : String? = Some(cls.base_names[0])
+    let visited : Map[String, Unit] = {}
+    while cursor is Some(bn) {
+      if visited.contains(bn) {
+        break
+      }
+      visited[bn] = ()
+      let mut next : String? = None
+      match class_by_name.get(bn) {
+        Some(b) => {
+          if b.type_params.length() > 0 {
+            resolvable = false
+            break
+          }
+          for an in b.abstract_members {
+            base_abstract[an] = ()
+          }
+          for m in b.methods {
+            if m.name != "<computed>" {
+              if m.is_static {
+                base_static[m.name] = ()
+              } else {
+                base_instance[m.name] = ()
+              }
+            }
+          }
+          for pr in b.properties {
+            if pr.name != "<computed>" {
+              if pr.is_static {
+                base_static[pr.name] = ()
+              } else {
+                base_instance[pr.name] = ()
+              }
+            }
+          }
+          if b.base_expr is Some(_) || b.base_names.length() > 1 {
+            resolvable = false
+            break
+          }
+          if b.base_names.length() == 1 {
+            next = Some(b.base_names[0])
+          }
+        }
+        None =>
+          match iface_by_name.get(bn) {
+            // The parser lowers member-only classes to interfaces.
+            Some(bi) => {
+              for f in bi.fields {
+                base_instance[f.0] = ()
+              }
+              if bi.extends_names.length() > 0 {
+                resolvable = false
+              }
+            }
+            None => resolvable = false
+          }
+      }
+      cursor = next
+    }
+    if !resolvable {
+      continue
+    }
+    // TS4113: overrides that no base declares.
+    for kv in overrides {
+      let name = kv.0
+      let is_static_m = name.has_prefix("s:")
+      let bare = name[2:].to_string()
+      let known = if is_static_m {
+        base_static.contains(bare)
+      } else {
+        base_instance.contains(bare)
+      }
+      if !known {
+        issues.push({
+          path: "class \{cls.name}",
+          message: "this member cannot have an `override` modifier because it is not declared in the base class",
+        })
+      }
+    }
+    // TS4114: genuine overrides missing the modifier.
+    if no_implicit_override {
+      let flag_missing = fn(name : String, is_static_m : Bool) -> Unit {
+        if name == "constructor" ||
+          name == "<computed>" ||
+          name.has_prefix("__private_brand__") ||
+          name.has_prefix("#") {
+          return
+        }
+        // Implementing an ABSTRACT base member does not require the
+        // modifier (override10), and `declare`-modified members are
+        // ambient re-declarations, also exempt (override14).
+        if !is_static_m && base_abstract.contains(name) {
+          return
+        }
+        if declare_members.contains(
+            (if is_static_m { "s:" } else { "i:" }) + name,
+          ) {
+          return
+        }
+        let in_base = if is_static_m {
+          base_static.contains(name)
+        } else {
+          base_instance.contains(name)
+        }
+        let key = (if is_static_m { "s:" } else { "i:" }) + name
+        if in_base && !overrides.contains(key) {
+          issues.push({
+            path: "class \{cls.name}",
+            message: "this member must have an `override` modifier because it overrides a member in the base class",
+          })
+        }
+      }
+      let seen_members : Map[String, Unit] = {}
+      for m in cls.methods {
+        let key = (if m.is_static { "s:" } else { "i:" }) + m.name
+        if !seen_members.contains(key) {
+          seen_members[key] = ()
+          flag_missing(m.name, m.is_static)
+        }
+      }
+      for pr in cls.properties {
+        let key = (if pr.is_static { "s:" } else { "i:" }) + pr.name
+        if !seen_members.contains(key) {
+          seen_members[key] = ()
+          flag_missing(pr.name, pr.is_static)
+        }
+      }
+    }
+  }
+  issues
+}
+
+///|
 /// TS2394 ("This overload signature is not compatible with its
 /// implementation signature") -- the definite subcase: an overload with a
 /// concrete scalar return type over an implementation *annotated* `void`
@@ -19628,6 +19888,11 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
         // type was a naked bounded type parameter. Consumed by
         // `check_derived_indexer_compat`.
         ()
+      } else if name.has_prefix("<override-member:") ||
+        name.has_prefix("<declare-member:") {
+        // Markers, not errors: `override`- / `declare`-modified member
+        // names, consumed by check_override_modifiers.
+        ()
       } else if name.has_prefix("<quoted-member:") {
         // Marker, not an error: a string-literal member name. Consumed by
         // the strict-property-initialization check (literal-named fields
@@ -20297,6 +20562,9 @@ fn check_module_function_bodies_layered(
   for issue in check_overload_void_return(module_) {
     all.push(issue)
   }
+  for issue in check_override_modifiers(module_) {
+    all.push(issue)
+  }
   for issue in check_class_namespace_static_merge(module_) {
     all.push(issue)
   }
@@ -20488,6 +20756,34 @@ fn check_module_function_bodies_layered(
         }
       }
     }
+    // TS2528: a module cannot have multiple default exports. Function
+    // markers group by name (overload signatures + the implementation are
+    // ONE default); anonymous functions and class/expression defaults each
+    // count individually.
+    let mut default_count = 0
+    let seen_default_fns : Map[String, Unit] = {}
+    for gm in module_.grammar_misuses {
+      if gm.has_prefix("<export-default>") {
+        let payload = gm["<export-default>".length():].to_string()
+        if payload.has_prefix("fn:") {
+          let fname = payload["fn:".length():].to_string()
+          if fname == "<anon>" {
+            default_count += 1
+          } else if !seen_default_fns.contains(fname) {
+            seen_default_fns[fname] = ()
+            default_count += 1
+          }
+        } else {
+          default_count += 1
+        }
+      }
+    }
+    if default_count >= 2 {
+      all.push({
+        path: "export default",
+        message: "a module cannot have multiple default exports",
+      })
+    }
     // TS2304 for a single-bare-identifier computed key in a type position
     // (`var v: { [e]: number }`, `interface I { [e](): T }`, `declare class
     // C { [e]: T }`). The key references the *value* namespace; resolve it
@@ -20519,6 +20815,16 @@ fn check_module_function_bodies_layered(
       // Marker, not an error: an exported value declaration's name,
       // consumed by the class/namespace static-merge check.
       if gm.has_prefix("<export-value>") {
+        continue
+      }
+      // Marker, not an error: a default-export occurrence, consumed by the
+      // TS2528 multiple-defaults count.
+      if gm.has_prefix("<export-default>") {
+        continue
+      }
+      // Marker, not an error: the @noImplicitOverride directive flag,
+      // consumed by the override-modifier checks.
+      if gm == "<noimplicitoverride-on>" {
         continue
       }
       // TS2304: `export = name` over a provably undeclared value. Same

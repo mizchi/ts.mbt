@@ -2844,10 +2844,16 @@ fn Parser::parse_export_stmt(
     return
   }
   if self.match_(Default) || self.match_ident("default") {
+    // TS2528: a module cannot have multiple default exports. Each default
+    // is recorded with a kind+name marker; the checker groups
+    // function-declaration overload sets (bodiless signatures + one
+    // implementation of the SAME name are a single default) and reports
+    // when more than one distinct default remains.
     if self.match_ident("async") && self.check(Function) {
       self.in_async = true
       let func = self.parse_function_expr()
       self.in_async = false
+      self.grammar_misuses.push("<export-default>fn:" + func.name)
       if func.name != "<anon>" {
         funcs.push(func)
       }
@@ -2855,6 +2861,7 @@ fn Parser::parse_export_stmt(
     }
     if self.check(Function) {
       let func = self.parse_function_expr()
+      self.grammar_misuses.push("<export-default>fn:" + func.name)
       if func.name != "<anon>" {
         funcs.push(func)
       }
@@ -2882,9 +2889,11 @@ fn Parser::parse_export_stmt(
           }
         }
       }
+      self.grammar_misuses.push("<export-default>class:")
       return
     }
     let _ = self.parse_expr()
+    self.grammar_misuses.push("<export-default>expr:")
     self.consume_semicolon()
     return
   }

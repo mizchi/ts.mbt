@@ -1445,6 +1445,21 @@ fn Parser::parse_class_body(
       if is_abstract_member {
         abstract_members.push(method_name)
       }
+      // TS4112/4113/4114 support: which members carried an `override`
+      // modifier (checked against the base chain, and -- under
+      // noImplicitOverride -- required on genuine overrides). Marker
+      // format matches other per-class sentinels; instance and static
+      // sides are distinguished.
+      if saw_override_modifier {
+        self.override_member_names.push(
+          (if is_static { "s:" } else { "i:" }) + method_name,
+        )
+      }
+      if has_declare {
+        self.override_member_names.push(
+          "<decl>" + (if is_static { "s:" } else { "i:" }) + method_name,
+        )
+      }
     }
     let is_optional = self.match_(Question)
     let has_definite_assertion = self.match_(Bang)
@@ -1806,6 +1821,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   let prev_brand = self.current_class_brand
   self.current_class_brand = Some(brand)
   let quoted_names_start = self.quoted_member_names.length()
+  let override_names_start = self.override_member_names.length()
   let (
     ctor_opt,
     elements,
@@ -1844,6 +1860,19 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   }
   for qn in quoted_names {
     expr_class_sentinels.push("<quoted-member:" + qn + ">")
+  }
+  while self.override_member_names.length() > override_names_start {
+    match self.override_member_names.pop() {
+      Some(n) =>
+        if n.has_prefix("<decl>") {
+          expr_class_sentinels.push(
+            "<declare-member:" + n["<decl>".length():].to_string() + ">",
+          )
+        } else {
+          expr_class_sentinels.push("<override-member:" + n + ">")
+        }
+      None => ()
+    }
   }
   if ctor_impl_count >= 2 {
     expr_class_sentinels.push("<multiple-ctor-impl>")
@@ -2578,6 +2607,7 @@ fn Parser::parse_class_decl_with_abstract(
   let prev_brand = self.current_class_brand
   self.current_class_brand = Some(brand)
   let quoted_names_start = self.quoted_member_names.length()
+  let override_names_start = self.override_member_names.length()
   let (
     ctor_opt,
     elements,
@@ -2610,6 +2640,21 @@ fn Parser::parse_class_decl_with_abstract(
     match self.quoted_member_names.pop() {
       Some(n) =>
         runtime_decl.duplicate_member_names.push("<quoted-member:" + n + ">")
+      None => ()
+    }
+  }
+  while self.override_member_names.length() > override_names_start {
+    match self.override_member_names.pop() {
+      Some(n) =>
+        if n.has_prefix("<decl>") {
+          runtime_decl.duplicate_member_names.push(
+            "<declare-member:" + n["<decl>".length():].to_string() + ">",
+          )
+        } else {
+          runtime_decl.duplicate_member_names.push(
+            "<override-member:" + n + ">",
+          )
+        }
       None => ()
     }
   }

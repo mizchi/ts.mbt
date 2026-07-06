@@ -2295,6 +2295,32 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-06 (T181)  714/815 (88 %)        414/414 ( 0 FP)   Practical errors first: TS2528/TS2488/TS4112-4114: TP 2081 -> 2095
+
+  T181 -- user-directed pivot: of the 605 remaining misses, ~446 are
+    practical semantic errors and ~159 parser/error-recovery edge
+    fixtures; this batch works the practical side.
+    - TS2528: a module cannot have multiple default exports. Each
+      `export default` records a kind+name marker; function markers group
+      by name (overload sets are one default), anonymous/class/expression
+      defaults count individually. multipleExportDefault1-6.
+    - TS2488: for-of over a base-less class instance lacking the iterator
+      protocol -- either no `[Symbol.iterator]` member at all, or one
+      returning `this` while the class has no `next`. A computed FIELD
+      iterator (`[Symbol.iterator]: any`) or a `next` FIELD satisfies the
+      protocol (for-of27/28 caught as FPs by the gate). for-of14/16.
+    - TS4112/4113/4114 (`override` family): per-member `override` and
+      `declare` modifiers now survive parsing (both class parsers) via
+      `<override-member:...>` / `<declare-member:...>` markers, and
+      `@noImplicitOverride: true` arms a module marker. TS4112 (override
+      without heritage) and TS4113 (override with no matching base-chain
+      member) are unconditional; TS4114 (genuine override missing the
+      modifier) fires only under the flag, with abstract implementations
+      and `declare` members exempt (override10/14 caught as FPs).
+      override1/2/3/6/13/15, overrideParameterProperty.
+    Whole-corpus TP 2081 -> 2095 @ 0 FP (session total 1761 -> +334);
+    pinned recall 714, precision 414/414. 2443 tests.
+
 2026-07-06 (T180)  714/815 (88 %)        414/414 ( 0 FP)   Partial/Required/Readonly wrapper lattice: TP 2078 -> 2081
 
   T180 -- mapped-type utility assignability (user-requested cluster): an

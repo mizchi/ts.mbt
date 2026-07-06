@@ -2564,6 +2564,7 @@ fn Parser::parse_declare_class(
   let index_signatures : Array[(@ast.TsType, @ast.TsType)] = []
   let static_index_signatures : Array[(@ast.TsType, @ast.TsType)] = []
   let static_blocks : Array[@ast.TsBlock] = []
+  let declare_override_names : Array[String] = []
   let mut constructor_params : Array[(String, @ast.TsType)]? = None
   let mut saw_public_constructor = false
   let mut saw_nonpublic_constructor = false
@@ -2590,6 +2591,7 @@ fn Parser::parse_declare_class(
     let mut visibility = "public"
     let mut is_accessor = false
     let mut is_abstract_member = false
+    let mut saw_override = false
     let mut has_modifier = true
     while has_modifier {
       has_modifier = false
@@ -2633,6 +2635,9 @@ fn Parser::parse_declare_class(
           }
           if mod == "abstract" {
             is_abstract_member = true
+          }
+          if mod == "override" {
+            saw_override = true
           }
           has_modifier = true
         }
@@ -2682,6 +2687,9 @@ fn Parser::parse_declare_class(
         }
         if is_abstract_member {
           abstract_members.push(n)
+        }
+        if saw_override {
+          declare_override_names.push((if is_static { "s:" } else { "i:" }) + n)
         }
       }
       None => ()
@@ -2841,6 +2849,12 @@ fn Parser::parse_declare_class(
     private_members,
     protected_members,
     abstract_members,
-    duplicate_member_names: [],
+    duplicate_member_names: {
+      let d : Array[String] = []
+      for n in declare_override_names {
+        d.push("<override-member:" + n + ">")
+      }
+      d
+    },
   }
 }
