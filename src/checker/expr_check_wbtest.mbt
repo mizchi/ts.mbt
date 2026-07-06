@@ -11970,3 +11970,61 @@ test "expr_check: TS7006 uncontextual arrow params (batch Y)" {
   @test.assert_eq(issues("var f3 = (x = 1) => x;"), 0)
   @test.assert_eq(issues("var f4 = (...rest: number[]) => rest.length;"), 0)
 }
+
+///|
+test "expr_check: TS2322 unions, in-operands, static index writes (batch Z)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Mixed scalar array literals infer a union element type.
+  assert_true(issues("var v: string;\nfor (v of [0, \"\"]) { }") > 0)
+  @test.assert_eq(
+    issues("var v: string | number;\nfor (v of [0, \"\"]) { }"),
+    0,
+  )
+  @test.assert_eq(issues("var a: (string | number)[] = [0, \"\"];"), 0)
+  // `in` RHS: a well-known Symbol static is a unique symbol; an unbounded
+  // in-scope type parameter may be a primitive.
+  assert_true(issues("var r = \"\" in Symbol.toPrimitive;") > 0)
+  assert_true(issues("function f<T>(x: T) { return \"\" in x; }") > 0)
+  @test.assert_eq(
+    issues("function g<T extends object>(t: T) { return \"x\" in t; }"),
+    0,
+  )
+  @test.assert_eq(issues("var m = { a: 1 };\nvar r = \"a\" in m;"), 0)
+  // Writes through a static index signature check the value type.
+  assert_true(
+    issues(
+      "class C { static [s: string]: number;\n  static [s: number]: 42 }\nC[2] = 2;",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "class C { static [s: string]: number;\n  static [s: number]: 42 }\nC[42] = 42;\nC[\"foo\"] = 1;",
+    ),
+    0,
+  )
+  // A fresh object literal must satisfy at least one union constituent.
+  assert_true(
+    issues(
+      "declare var sn: string | number;\nvar x: { prop: string } | { prop: number } = { prop: sn };",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "declare var s: string;\nvar x: { prop: string } | { prop: number } = { prop: s };",
+    ),
+    0,
+  )
+  // Discriminant literals keep their literal types.
+  @test.assert_eq(
+    issues(
+      "var x: { kind: \"a\"; n: number } | { kind: \"b\"; s: string } = { kind: \"a\", n: 1 };",
+    ),
+    0,
+  )
+  // Empty literal satisfies an all-optional constituent.
+  @test.assert_eq(issues("var x: { a: string } | { b?: number } = {};"), 0)
+}

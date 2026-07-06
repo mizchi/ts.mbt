@@ -5567,7 +5567,51 @@ fn infer_expr(
           elem = t
           first = false
         } else if !equivalent(elem, t) {
-          elem = Any
+          // Mixed element types: TS infers the union. Only concrete
+          // scalars union here (`[0, ""]` -> `(number | string)[]`,
+          // driving the for-of / assignment mismatch checks); anything
+          // else keeps the old `any` widening -- unions over nullish /
+          // object members would interact with strictness rules our
+          // context-free assignability can't see.
+          let both_scalar = fn(a : @ast.TsType, b : @ast.TsType) -> Bool {
+            let is_s = fn(x : @ast.TsType) -> Bool {
+              match x {
+                Number
+                | Int
+                | String_
+                | Boolean
+                | BigInt
+                | Literal(_)
+                | NumberLiteral(_)
+                | BigIntLiteral(_)
+                | BooleanLiteral(_) => true
+                Union(ms) => {
+                  for m in ms {
+                    match m {
+                      Number
+                      | Int
+                      | String_
+                      | Boolean
+                      | BigInt
+                      | Literal(_)
+                      | NumberLiteral(_)
+                      | BigIntLiteral(_)
+                      | BooleanLiteral(_) => ()
+                      _ => return false
+                    }
+                  }
+                  true
+                }
+                _ => false
+              }
+            }
+            is_s(a) && is_s(b)
+          }
+          if both_scalar(elem, t) {
+            elem = narrow_union(elem, t)
+          } else {
+            elem = Any
+          }
         }
       }
       @ast.TsType::Array(elem)
@@ -7118,6 +7162,27 @@ fn check_expr_against(
         return
       }
     }
+    // A fresh object literal against a *union* target must satisfy at
+    // least one constituent (`{ prop: strOrNumber }` never satisfies
+    // `{ prop: string } | { prop: number }` --
+    // contextualTypeWithUnionTypeObjectLiteral). Decided only when every
+    // constituent is a fully-modeled literal-keyed object shape and every
+    // literal entry is a plain key with a concrete inferred type;
+    // any uncertainty counts as "satisfies" and stays silent.
+    (ObjectLit(entries), Union(union_members)) =>
+      if object_lit_never_satisfies_union(
+          env,
+          entries,
+          union_members,
+          ctx.resolver,
+        ) {
+        record(
+          ctx,
+          sub_path,
+          "type of the object literal is not assignable to type `\{type_display(expected_shape)}`",
+        )
+        return
+      }
     _ => ()
   }
   if !is_checkable(expected) {
@@ -9437,6 +9502,109 @@ fn check_jsx_attrs(
       "property `\{n}` is required by `\{type_display(props)}`",
     )
   }
+}
+
+///|
+/// True when a fresh object literal provably satisfies NO constituent of a
+/// union target. Decided only under tight guards -- every constituent must
+/// be a fully-modeled, literal-keyed anonymous object shape and every
+/// literal entry a plain key -- and each per-constituent verdict errs
+/// toward "satisfies": a member fails only when a *required* field is
+/// missing, a provided entry is provably not assignable to the member's
+/// field, or the entry is excess (fresh literals get excess-property
+/// checks against each constituent).
+fn object_lit_never_satisfies_union(
+  env : ExprEnv,
+  entries : Array[(String, @ast.TsExpr)],
+  union_members : Array[@ast.TsType],
+  resolver : Resolver,
+) -> Bool {
+  if union_members.length() == 0 {
+    return false
+  }
+  // Guard: plain literal entries only.
+  for entry in entries {
+    if entry.0.has_prefix("@@") {
+      return false
+    }
+  }
+  // Guard: every constituent is a concrete literal-keyed object shape.
+  let member_shapes : Array[Array[(String, @ast.TsType)]] = []
+  for m in union_members {
+    match resolver.unwrap(m) {
+      Object(fields) => {
+        let shape : Array[(String, @ast.TsType)] = []
+        for f in fields {
+          match f.0 {
+            Literal(fname) => {
+              if fname == "<call>" ||
+                fname == "<new>" ||
+                fname == "<computed>" ||
+                fname.has_prefix("@@") {
+                return false
+              }
+              if type_contains_unresolved_named(f.1, resolver) ||
+                type_deeply_contains_unmodeled(f.1, resolver) {
+                return false
+              }
+              shape.push((fname, f.1))
+            }
+            _ => return false
+          }
+        }
+        member_shapes.push(shape)
+      }
+      _ => return false
+    }
+  }
+  // Infer entry types once.
+  let entry_types : Array[(String, @ast.TsType)] = []
+  for entry in entries {
+    entry_types.push((entry.0, infer_expr(env, resolver, entry.1)))
+  }
+  for shape in member_shapes {
+    let field_by_name : Map[String, @ast.TsType] = {}
+    for f in shape {
+      field_by_name[f.0] = f.1
+    }
+    let mut satisfied = true
+    // Required members must be provided.
+    for f in shape {
+      if !type_accepts_undefined(resolver.unwrap(f.1)) {
+        let mut provided = false
+        for e in entry_types {
+          if e.0 == f.0 {
+            provided = true
+          }
+        }
+        if !provided {
+          satisfied = false
+        }
+      }
+    }
+    // Provided entries must fit; excess entries fail the constituent.
+    for e in entry_types {
+      match field_by_name.get(e.0) {
+        Some(ft) => {
+          // Uncertain inference counts as satisfying. Fresh literal
+          // entries keep their literal types -- a `kind: "a"` discriminant
+          // must match `kind: "a"` members, so no widening here.
+          let et = resolver.unwrap(e.1)
+          if is_checkable(et) &&
+            !type_contains_unresolved_named(et, resolver) &&
+            !type_deeply_contains_unmodeled(et, resolver) &&
+            !is_assignable_to(et, resolver.unwrap(ft)) {
+            satisfied = false
+          }
+        }
+        None => satisfied = false
+      }
+    }
+    if satisfied {
+      return false
+    }
+  }
+  true
 }
 
 ///|
@@ -12364,6 +12532,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       check_call_args_in_expr(env, recv, ctx)
       check_call_args_in_expr(env, idx, ctx)
       check_call_args_in_expr(env, value, ctx)
+      check_static_index_write(env, ctx, recv, idx, value)
       let recv_ty = infer_expr(env, ctx.resolver, recv)
       match recv_ty {
         Array(elem) =>
@@ -13380,6 +13549,18 @@ fn check_call_args_in_expr(
           )
         }
         let rhs_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, r))
+        // A bare unconstrained in-scope type parameter may be instantiated
+        // with a primitive, so it is not assignable to `object`
+        // (`"" in x` where `x: T` -- inOperatorWithValidOperands); every
+        // member of a union must satisfy the operand rule.
+        let is_unbounded_param = fn(t : @ast.TsType) -> Bool {
+          match t {
+            Named(p) =>
+              ctx.in_scope_type_params.contains(p) &&
+              not(ctx.type_param_bounds.iter().any(fn(b) { b.0 == p }))
+            _ => false
+          }
+        }
         let rhs_bad = match rhs_ty {
           String_
           | Literal(_)
@@ -13395,9 +13576,25 @@ fn check_call_args_in_expr(
           | Void
           | Null
           | Undefined => true
+          Named(_) => is_unbounded_param(rhs_ty)
+          Union(ms) => {
+            let mut all_params = ms.length() > 0
+            for m in ms {
+              if !is_unbounded_param(m) {
+                all_params = false
+              }
+            }
+            all_params
+          }
           _ => false
         }
-        if rhs_bad && is_checkable(rhs_ty) {
+        // `Symbol.X` well-known-symbol references are unique symbols even
+        // when our inference loses the type entirely (symbolType2) -- the
+        // syntactic shape bypasses the `is_checkable` gate (a user
+        // `SymbolConstructor` augmentation disables the shortcut).
+        let symbol_static_rhs = r is PropAccess(Var("Symbol"), _) &&
+          ctx.resolver.interfaces.get("SymbolConstructor") is None
+        if symbol_static_rhs || (rhs_bad && is_checkable(rhs_ty)) {
           record_unfiltered(
             ctx, "`in` operand", "the right operand of `in` must be an object type",
           )
@@ -14104,6 +14301,7 @@ fn check_call_args_in_expr(
       check_call_args_in_expr(env, recv, ctx)
       check_call_args_in_expr(env, idx, ctx)
       check_call_args_in_expr(env, v, ctx)
+      check_static_index_write(env, ctx, recv, idx, v)
       let recv_ty = infer_expr(env, ctx.resolver, recv)
       match ctx.resolver.unwrap(recv_ty) {
         // `ReadonlyArray<T>` (and the `readonly [...]` tuple form, when it
@@ -17759,6 +17957,54 @@ fn check_unresolved_signature_type_refs(
 
   walk_module(module_)
   issues
+}
+
+///|
+/// TS2322 on a write through a class's *static* index signature
+/// (`class C { static [s: number]: 42 }` + `C[2] = 2`). A numeric-literal
+/// key selects the numeric signature (falling back to the string one --
+/// a numeric key is also a string key); other keys use the string
+/// signature. Routed through `check_expr_against`, so only its
+/// established definite rules fire.
+fn check_static_index_write(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  recv : @ast.TsExpr,
+  idx : @ast.TsExpr,
+  value : @ast.TsExpr,
+) -> Unit {
+  guard recv is Var(cname) else { return }
+  guard ctx.resolver.classes.get(cname) is Some(cls) else { return }
+  if cls.static_index_signatures.length() == 0 {
+    return
+  }
+  let idx_is_numeric = match idx {
+    IntLit(_) | NumberLit(_) => true
+    _ => false
+  }
+  let mut sig_value : @ast.TsType? = None
+  if idx_is_numeric {
+    for sig in cls.static_index_signatures {
+      match sig.0 {
+        Number | Int => sig_value = Some(sig.1)
+        _ => ()
+      }
+    }
+  }
+  if sig_value is None {
+    for sig in cls.static_index_signatures {
+      if sig.0 is String_ {
+        sig_value = Some(sig.1)
+      }
+    }
+  }
+  match sig_value {
+    Some(vt) =>
+      if is_checkable(vt) {
+        check_expr_against(env, value, vt, ctx, "assign `\{cname}[…]`")
+      }
+    None => ()
+  }
 }
 
 ///|

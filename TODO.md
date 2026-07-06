@@ -2295,6 +2295,38 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-06 (T176)  714/815 (88 %)        414/414 ( 0 FP)   TS2322 subclusters: union elements/targets, `in` operands, static index writes: TP 2054 -> 2062
+
+  T176 -- second TS2322 subcluster pass (user-requested):
+    - Array-literal inference: mixed *scalar* elements now infer the
+      union (`[0, ""]` -> `(number | string)[]`) instead of widening to
+      `any[]`; non-scalar mixes keep the old widening (unions over
+      nullish/object members would interact with strictness rules the
+      context-free assignability can't see). Drives the for-of target
+      check: `var v: string; for (v of [0, ""])` reports (for-of11).
+    - `in` RHS: a well-known `Symbol.X` static is a unique symbol even
+      when inference loses the type (syntactic shape, bypasses the
+      `is_checkable` gate; a user SymbolConstructor augmentation disables
+      it) -- symbolType2/15. A bare unconstrained in-scope type parameter
+      (or a union of them) may be instantiated with a primitive, so it is
+      not assignable to `object` -- inOperatorWithValidOperands.
+    - Writes through a *static* index signature check the value type
+      (`class C { static [s: number]: 42 }; C[2] = 2` -- numeric-literal
+      keys select the numeric signature, falling back to string). Routed
+      through check_expr_against so only established definite rules fire.
+      staticIndexSignature1/2.
+    - A fresh object literal against a *union* target must satisfy at
+      least one constituent (`{ prop: strOrNumber }` never satisfies
+      `{ prop: string } | { prop: number }`). Tight guards: every
+      constituent a fully-modeled literal-keyed object shape, plain
+      entries only, uncertain verdicts count as "satisfies"; entries keep
+      their literal types (a widen_literal draft false-flagged
+      discriminant literals -- caught by the whole-corpus gate on
+      discriminatedUnionInference). contextualTypeWithUnionTypeObject
+      Literal, discriminatedUnionTypes2, optionalBindingParameters1.
+    Whole-corpus TP 2054 -> 2062 @ 0 FP (session total 1761 -> +301);
+    pinned recall 714, precision 414/414. 2438 tests.
+
 2026-07-06 (T175)  714/815 (88 %)        414/414 ( 0 FP)   TS7006 uncontextual arrow parameters: TP 2050 -> 2054
 
   T175 -- noImplicitAny for arrows without contextual types: an
