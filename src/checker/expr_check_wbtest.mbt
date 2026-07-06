@@ -12138,3 +12138,30 @@ test "expr_check: TS2345 iterables vs tuples, spread elements, BigInt (batch AB)
     0,
   )
 }
+
+///|
+test "expr_check: TS2304 typeof tails, module names, dotted paths (batch AC)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A trailing dot keeps the typeof query alive so the base resolves.
+  assert_true(issues("var v: typeof A.") > 0)
+  @test.assert_eq(
+    issues(
+      "declare var A: { b: number };\nvar v: typeof A.b;\nvar w: typeof A;",
+    ),
+    0,
+  )
+  // TS1443: template-literal module declaration names.
+  assert_true(issues("declare module `M1` {\n}") > 0)
+  @test.assert_eq(issues("declare module \"M\" { export const x: number; }"), 0)
+  // A hard-reserved word as a dotted namespace path segment.
+  assert_true(
+    issues(
+      "declare namespace chrome.debugger {\n    declare var tabId: number;\n}",
+    ) >
+    0,
+  )
+  @test.assert_eq(issues("declare namespace a.b.c { const y: number; }"), 0)
+  @test.assert_eq(issues("declare namespace ns.type { const z: number; }"), 0)
+}

@@ -618,6 +618,14 @@ fn Parser::parse_namespace_decl_with_mode(
       return Some((None, None))
     }
   }
+  // TS1443: a module declaration name must be an identifier or a
+  // single/double-quoted string -- template literals are rejected
+  // (`declare module \`M1\` {}`).
+  if keyword == "module" && self.peek().kind is Template(_, _, _) {
+    self.grammar_misuses.push(
+      "module declaration names may only use ' or \" quoted strings",
+    )
+  }
   let name = if self.is_qualified_type_name_part(0) {
     Some(self.parse_binding_ident())
   } else {
@@ -627,6 +635,44 @@ fn Parser::parse_namespace_decl_with_mode(
     if self.is_qualified_type_name_part(0) {
       let _ = self.parse_binding_ident()
     } else {
+      // A hard-reserved word as a dotted path segment
+      // (`declare namespace chrome.debugger {}`) is never legal --
+      // tsc reports TS1005/TS2304 recovery errors here.
+      match self.peek().kind {
+        Debugger
+        | While
+        | If
+        | Else
+        | For
+        | Do
+        | Switch
+        | Case
+        | Return
+        | Break
+        | Continue
+        | Function
+        | Class
+        | Var
+        | Const
+        | New
+        | Delete
+        | Typeof
+        | Instanceof
+        | In
+        | Import
+        | Export
+        | Extends
+        | Try
+        | Catch
+        | Finally
+        | Throw
+        | With
+        | Default =>
+          self.grammar_misuses.push(
+            "a reserved word cannot be used as a namespace path segment",
+          )
+        _ => ()
+      }
       break
     }
   }

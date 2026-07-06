@@ -2295,6 +2295,24 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-06 (T179)  714/815 (88 %)        414/414 ( 0 FP)   TS2304 round 2: typeof tails, module names, dotted paths: TP 2072 -> 2078
+
+  T179 -- error-recovery name resolution:
+    - `var v: typeof A.` (trailing dot): the typeof-query parser now
+      tolerates the missing segment instead of collapsing the whole
+      annotation to `Any`, so `unresolved_typeof_references` still flags
+      the undeclared base. parserTypeQuery3/4.
+    - TS1443: a `declare module` name written as a template literal
+      (`declare module \`M1\` {}`) records a grammar misuse -- only
+      '/" quoted strings are legal. templateStringInModuleName(ES6).
+    - A hard-reserved word as a dotted namespace path segment
+      (`declare namespace chrome.debugger {}`) records; contextual
+      keywords (`of`, `type`, ...) remain legal segments via
+      `is_qualified_type_name_part`.
+      ambientModuleDeclarationWithReservedIdentifierInDottedPath 1/2.
+    Whole-corpus TP 2072 -> 2078 @ 0 FP (session total 1761 -> +317);
+    pinned recall 714, precision 414/414. 2441 tests.
+
 2026-07-06 (T178)  714/815 (88 %)        414/414 ( 0 FP)   TS2345: iterables vs tuples, spread elements, BigInt builtin: TP 2066 -> 2072
 
   T178 -- argument-type subclusters:

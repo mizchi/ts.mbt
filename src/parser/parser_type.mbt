@@ -1902,7 +1902,19 @@ fn Parser::parse_typeof_type_query(
   let first = self.parse_typeof_query_segment()
   let mut query = first
   while self.match_(Dot) {
-    query += "." + self.parse_typeof_query_segment()
+    // Tolerate a trailing dot (`var v: typeof A.` -- parser error-recovery
+    // fixtures): keep the query so the base name still resolves and an
+    // undeclared `A` reports TS2304 instead of the whole annotation
+    // collapsing to `Any`.
+    let seg : String? = try self.parse_typeof_query_segment() catch {
+      _ => None
+    } noraise {
+      s => Some(s)
+    }
+    match seg {
+      Some(sg) => query += "." + sg
+      None => break
+    }
   }
   if self.check(Lt) {
     self.skip_type_args()
