@@ -11794,3 +11794,67 @@ test "expr_check: TS2564 computed fields, index sigs, literal names (batch U)" {
   assert_true(issues("class C { v: number }") > 0)
   @test.assert_eq(issues("class C { v: number = 1 }"), 0)
 }
+
+///|
+test "expr_check: TS2300 duplicates and TS1046 dts modifiers (batch V)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2300: a function declaration and a var binding share one value space.
+  assert_true(issues("function fn3() { }\nvar fn3;") > 0)
+  assert_true(issues("namespace M { function fn1() { }\n  var fn1; }") > 0)
+  @test.assert_eq(issues("var a;\nvar a;"), 0)
+  @test.assert_eq(
+    issues(
+      "function o(x: number): void;\nfunction o(x: string): void;\nfunction o(x: any) { }",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues("function m() {}\nnamespace m { export var inner = 1; }"),
+    0,
+  )
+  // TS2300: class static vs merged namespace *exported* value.
+  assert_true(
+    issues(
+      "class P { static Origin = { x: 0 }; }\nnamespace P { export var Origin = \"\"; }",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "class P { static Origin = { x: 0 }; }\nnamespace P { var Origin = \"\"; }",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "class P { static Origin = { x: 0 }; }\nnamespace P { export interface Origin {} }",
+    ),
+    0,
+  )
+  // TS2300: repeated same-kind computed accessors on one well-known symbol.
+  assert_true(
+    issues(
+      "class C { get [Symbol.hasInstance]() { return \"\"; }\n  get [Symbol.hasInstance]() { return \"\"; } }",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "class C { get [Symbol.iterator]() { return 0; }\n  set [Symbol.iterator](v: number) { } }",
+    ),
+    0,
+  )
+  // TS1046: bare top-level declarations in a .d.ts module.
+  let dts = fn(src : String) -> Int {
+    check_dts_top_level_modifiers(parse_module_or_empty(src)).length()
+  }
+  assert_true(dts("enum E { A = 1 }") > 0)
+  assert_true(dts("function F() {}") > 0)
+  assert_true(dts("var x: number;") > 0)
+  @test.assert_eq(dts("declare function f(): void;"), 0)
+  @test.assert_eq(dts("declare enum E { A }"), 0)
+  @test.assert_eq(dts("interface I { a: number }"), 0)
+  @test.assert_eq(dts("export declare const x: number;"), 0)
+}

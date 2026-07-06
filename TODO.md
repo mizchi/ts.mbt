@@ -2295,6 +2295,34 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-05 (T172)  714/815 (88 %)        414/414 ( 0 FP)   TS2300 duplicate values, TS1046 .d.ts modifiers: TP 2028 -> 2036
+
+  T172 -- duplicate-identifier and declaration-file rules:
+    - TS2300 function-vs-binding: a function declaration and a
+      `var`/`let`/`const` binding of one name share a value declaration
+      space (`function fn() {}` + `var fn;`); `var`+`var` merging and
+      function overloads stay legal. Flat per-layer check, so namespace
+      bodies report through the layered walker. functionNameConflicts.
+    - TS2300 class/namespace merge: a class's *static* member vs the
+      merged namespace's *exported* value of the same name. Exportedness
+      is erased when namespace bodies re-parse as nested modules, so
+      `parse_export_stmt` now records `<export-value>` markers (function /
+      var / declare-var / enum / class branches) on the grammar channel;
+      non-exported locals and exported *types* stay silent.
+      ClassAndModuleThatMergeWithStatic{Variable,Function}AndExported*.
+    - TS2300 computed accessors: repeated same-kind accessors keyed by one
+      well-known symbol (`get [Symbol.hasInstance]` twice); get/set pairs
+      and distinct symbols stay legal. symbolProperty44.
+    - TS1046: bare top-level declarations in `.d.ts` files (function /
+      enum / class / var without `declare` or `export`). Keyed off the
+      file extension, so the tscheck driver calls the new
+      `check_dts_top_level_modifiers` for `.d.ts` paths; ambient
+      `declare function` parses into `imports`, so anything in `funcs`
+      was written bare. parserEnumDeclaration3.d,
+      parserFunctionDeclaration2.d, parserVariableStatement1/2.d.
+    Whole-corpus TP 2028 -> 2036 @ 0 FP (session total 1761 -> +275);
+    pinned recall 714, precision 414/414. 2433 tests.
+
 2026-07-05 (T171)  714/815 (88 %)        414/414 ( 0 FP)   TS2564 computed fields, index-sig myth, literal-name exemption: TP 2018 -> 2028
 
   T171 -- strict-property-initialization refinements:

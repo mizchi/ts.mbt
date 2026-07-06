@@ -165,6 +165,58 @@ fn module_value_name_set(module_ : @ast.TsModule) -> Map[String, Bool] {
 }
 
 ///|
+/// TS1046 ("Top-level declarations in .d.ts files must start with either a
+/// 'declare' or 'export' modifier."). Only meaningful for sources known to
+/// be `.d.ts` files, so the CLI driver calls it by file extension rather
+/// than the general check pipeline. Flags runtime function declarations
+/// (an ambient `declare function` parses into `imports`, so anything in
+/// `funcs` was written bare), non-declare enums / classes, and top-level
+/// `var` / `let` / `const` statements -- unless the declaration carries the
+/// parser's `<export-value>` marker (an `export` modifier satisfies the
+/// rule). Interfaces / type aliases / imports are exempt in tsc.
+pub fn check_dts_top_level_modifiers(
+  module_ : @ast.TsModule,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  let exported : Map[String, Unit] = {}
+  for gm in module_.grammar_misuses {
+    if gm.has_prefix("<export-value>") {
+      exported[gm["<export-value>".length():].to_string()] = ()
+    }
+  }
+  fn flag(kind : String, name : String) -> Unit {
+    if !exported.contains(name) {
+      issues.push({
+        path: "\{kind} `\{name}`",
+        message: "top-level declarations in .d.ts files must start with either a `declare` or `export` modifier",
+      })
+    }
+  }
+
+  for f in module_.funcs {
+    flag("function", f.name)
+  }
+  for e in module_.enums {
+    if !e.is_declare {
+      flag("enum", e.name)
+    }
+  }
+  for c in module_.classes {
+    if !c.is_declare {
+      flag("class", c.name)
+    }
+  }
+  for stmt in module_.top_level_stmts {
+    match stmt {
+      Var(Ident(n), _, _) | Let(Ident(n), _, _) | Const(Ident(n), _, _) =>
+        flag("var", n)
+      _ => ()
+    }
+  }
+  issues
+}
+
+///|
 // Global value keywords that a `typeof` query may target but which are not in
 // the standard-library ambient-globals registry (they are language keywords /
 // contextual values, not declared identifiers).

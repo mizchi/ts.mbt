@@ -71,6 +71,13 @@ async fn main {
       } else {
         @checker.check_module_function_bodies_permissive(module_)
       }
+      // TS1046 applies only to declaration files -- keyed off the file
+      // extension, which the general check pipeline can't see.
+      if path.has_suffix(".d.ts") {
+        for iss in @checker.check_dts_top_level_modifiers(module_) {
+          issues.push(iss)
+        }
+      }
       issue_count = issue_count + issues.length()
       if verbose {
         for iss in issues {

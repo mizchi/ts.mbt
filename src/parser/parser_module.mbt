@@ -2843,7 +2843,12 @@ fn Parser::parse_export_stmt(
     return
   }
   if self.check(Function) {
-    funcs.push(self.parse_function())
+    let func = self.parse_function()
+    // Exported *value* marker: class/namespace declaration merging needs
+    // to know which namespace members were exported (the nested-module
+    // re-parse otherwise erases `export`-ness).
+    self.grammar_misuses.push("<export-value>" + func.name)
+    funcs.push(func)
     return
   }
   match self.peek().kind {
@@ -2852,7 +2857,9 @@ fn Parser::parse_export_stmt(
       !self.has_line_terminator_after() => {
       let _ = self.advance()
       self.in_async = true
-      funcs.push(self.parse_function())
+      let func = self.parse_function()
+      self.grammar_misuses.push("<export-value>" + func.name)
+      funcs.push(func)
       self.in_async = false
       return
     }
@@ -2863,11 +2870,15 @@ fn Parser::parse_export_stmt(
     return
   }
   if self.is_const_enum_decl_start() {
-    enums.push(self.parse_const_enum_decl(false))
+    let enum_ = self.parse_const_enum_decl(false)
+    self.grammar_misuses.push("<export-value>" + enum_.name)
+    enums.push(enum_)
     return
   }
   if self.is_enum_keyword_at(0) {
-    enums.push(self.parse_enum_decl_after_enum_keyword(false, false))
+    let enum_ = self.parse_enum_decl_after_enum_keyword(false, false)
+    self.grammar_misuses.push("<export-value>" + enum_.name)
+    enums.push(enum_)
     return
   }
   match self.peek().kind {
@@ -2911,6 +2922,7 @@ fn Parser::parse_export_stmt(
         let _ = self.advance()
         let parsed_values = self.parse_declare_values()
         for value in parsed_values {
+          self.grammar_misuses.push("<export-value>" + value.name)
           values.push(value)
         }
       }
@@ -3005,7 +3017,10 @@ fn Parser::parse_export_stmt(
   if self.check(Class) {
     let _ = self.parse_class_decl()
     match self.take_last_runtime_class_decl() {
-      Some(class_) => classes.push(class_)
+      Some(class_) => {
+        self.grammar_misuses.push("<export-value>" + class_.name)
+        classes.push(class_)
+      }
       None => ()
     }
     return
@@ -3013,7 +3028,10 @@ fn Parser::parse_export_stmt(
   if self.match_ident("abstract") && self.check(Class) {
     let _ = self.parse_class_decl_with_abstract(true)
     match self.take_last_runtime_class_decl() {
-      Some(class_) => classes.push(class_)
+      Some(class_) => {
+        self.grammar_misuses.push("<export-value>" + class_.name)
+        classes.push(class_)
+      }
       None => ()
     }
     return
@@ -3030,6 +3048,11 @@ fn Parser::parse_export_stmt(
     let stmt = self.parse_stmt()
     collect_static_const_exprs_from_stmt(stmt, const_values)
     collect_value_decls_from_stmt(stmt, values, const_values)
+    match stmt {
+      Var(Ident(n), _, _) | Let(Ident(n), _, _) | Const(Ident(n), _, _) =>
+        self.grammar_misuses.push("<export-value>" + n)
+      _ => ()
+    }
     // Retain the statement so the checker walks the initializer expression
     // (`export var b = C.bar`) the same way it does a non-exported
     // `var b = C.bar`. Without this the initializer was dropped, so no

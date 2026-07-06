@@ -17620,6 +17620,161 @@ fn check_unresolved_signature_type_refs(
 }
 
 ///|
+/// TS2300 ("Duplicate identifier 'X'"): a function declaration and a
+/// `var` / `let` / `const` binding of the same name occupy one value
+/// declaration space (`function fn() {}` + `var fn;`). `var`+`var`
+/// merges and function overloads legally repeat a name, so only the
+/// function-vs-binding pair is flagged. Flat: the layered walker calls
+/// this per namespace body.
+fn check_function_var_duplicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  let func_names : Map[String, Unit] = {}
+  for f in module_.funcs {
+    func_names[f.name] = ()
+  }
+  if func_names.size() == 0 {
+    return issues
+  }
+  let flagged : Map[String, Unit] = {}
+  for stmt in module_.top_level_stmts {
+    match stmt {
+      Var(Ident(n), _, _) | Let(Ident(n), _, _) | Const(Ident(n), _, _) =>
+        if func_names.contains(n) && !flagged.contains(n) {
+          flagged[n] = ()
+          issues.push({
+            path: "declare `\{n}`",
+            message: "duplicate identifier `\{n}`",
+          })
+        }
+      _ => ()
+    }
+  }
+  issues
+}
+
+///|
+/// TS2300 for class/namespace declaration merging: a class's *static*
+/// member collides with the merged namespace's *exported* value of the
+/// same name (`class Point { static Origin … }` + `namespace Point {
+/// export var Origin … }`). Only exported value declarations participate
+/// in the merge; exported types (interfaces, aliases) live in a separate
+/// declaration space and stay silent.
+fn check_class_namespace_static_merge(
+  module_ : @ast.TsModule,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  if module_.classes.length() == 0 || module_.namespaces.length() == 0 {
+    return issues
+  }
+  for cls in module_.classes {
+    for ns in module_.namespaces {
+      if ns.name != cls.name {
+        continue
+      }
+      let nsm = ns.module_
+      // Exported member names come from the parser's `<export-value>`
+      // markers (namespace bodies re-parse as nested modules, which
+      // erases `export`-ness otherwise). Non-exported locals don't
+      // participate in the class merge.
+      let exported : Map[String, Unit] = {}
+      for gm in nsm.grammar_misuses {
+        if gm.has_prefix("<export-value>") {
+          exported[gm["<export-value>".length():].to_string()] = ()
+        }
+      }
+      if exported.size() == 0 {
+        continue
+      }
+      // Exported *value* names of the namespace body.
+      let value_names : Map[String, Unit] = {}
+      for f in nsm.funcs {
+        value_names[f.name] = ()
+      }
+      for v in nsm.values {
+        value_names[v.name] = ()
+      }
+      for c2 in nsm.classes {
+        value_names[c2.name] = ()
+      }
+      for e in nsm.enums {
+        value_names[e.name] = ()
+      }
+      for stmt in nsm.top_level_stmts {
+        match stmt {
+          Var(Ident(n), _, _) | Let(Ident(n), _, _) | Const(Ident(n), _, _) =>
+            value_names[n] = ()
+          _ => ()
+        }
+      }
+      let flagged : Map[String, Unit] = {}
+      fn flag(name : String) -> Unit {
+        if name != "<computed>" &&
+          !name.has_prefix("__private_brand__") &&
+          !name.has_prefix("#") &&
+          exported.contains(name) &&
+          value_names.contains(name) &&
+          !flagged.contains(name) {
+          flagged[name] = ()
+          issues.push({
+            path: "class \{cls.name}",
+            message: "duplicate identifier `\{name}`",
+          })
+        }
+      }
+
+      for p in cls.properties {
+        if p.is_static {
+          flag(p.name)
+        }
+      }
+      for m in cls.methods {
+        if m.is_static {
+          flag(m.name)
+        }
+      }
+    }
+  }
+  issues
+}
+
+///|
+/// TS2300 for repeated computed accessors keyed by the same well-known
+/// symbol: `class C { get [Symbol.hasInstance]() {…} get
+/// [Symbol.hasInstance]() {…} }`. Only same-kind repeats are duplicates
+/// (a get/set pair is legal), and only `Symbol.X` keys are compared --
+/// arbitrary key expressions may evaluate to distinct symbols.
+fn check_duplicate_computed_accessors(
+  module_ : @ast.TsModule,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for cls in module_.classes {
+    let seen : Map[String, Unit] = {}
+    for m in cls.methods {
+      if m.name == "<computed>" && (m.accessor == "get" || m.accessor == "set") {
+        match m.key_expr {
+          Some(PropAccess(Var("Symbol"), wk)) => {
+            let key = (if m.is_static { "s:" } else { "i:" }) +
+              m.accessor +
+              ":" +
+              wk
+            if seen.contains(key) {
+              issues.push({
+                path: "class \{cls.name}",
+                message: "duplicate identifier `[Symbol.\{wk}]`",
+              })
+            } else {
+              seen[key] = ()
+            }
+          }
+          _ => ()
+        }
+      }
+    }
+  }
+  issues
+}
+
+///|
 fn check_class_extends_function(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let func_names : Map[String, Unit] = {}
   for f in module_.funcs {
@@ -19245,6 +19400,15 @@ fn check_module_function_bodies_layered(
   for issue in check_class_extends_function(module_) {
     all.push(issue)
   }
+  for issue in check_function_var_duplicates(module_) {
+    all.push(issue)
+  }
+  for issue in check_class_namespace_static_merge(module_) {
+    all.push(issue)
+  }
+  for issue in check_duplicate_computed_accessors(module_) {
+    all.push(issue)
+  }
   for issue in check_arguments_outside_function(module_, resolver) {
     all.push(issue)
   }
@@ -19456,6 +19620,11 @@ fn check_module_function_bodies_layered(
             message: "cannot find name `\{key}`",
           })
         }
+        continue
+      }
+      // Marker, not an error: an exported value declaration's name,
+      // consumed by the class/namespace static-merge check.
+      if gm.has_prefix("<export-value>") {
         continue
       }
       // TS2304: `export = name` over a provably undeclared value. Same
