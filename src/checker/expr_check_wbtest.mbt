@@ -11913,3 +11913,44 @@ test "expr_check: leading BOM does not swallow the first statement" {
   }
   assert_true(issues("\u{FEFF}`abc${0}abc`(`hello`);") > 0)
 }
+
+///|
+test "expr_check: TS2339 namespace exports and enum members (batch X)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A declared-but-not-exported namespace member is inaccessible.
+  assert_true(
+    issues("namespace A { export var x = 1;\n  var y = 12; }\nvar b = A.y;") > 0,
+  )
+  @test.assert_eq(
+    issues("namespace A { export var x = 1;\n  var y = 12; }\nvar b = A.x;"),
+    0,
+  )
+  // Ambient namespaces implicitly export everything -- abstain.
+  @test.assert_eq(
+    issues("declare namespace B { var z: number; }\nvar ok = B.z;"),
+    0,
+  )
+  // Enums are closed: a non-member access is definite.
+  assert_true(issues("enum E { Red }\nvar x = E.Blue;") > 0)
+  @test.assert_eq(issues("enum E { Red }\nvar x = E.Red;"), 0)
+  // A regular enum object carries Object.prototype; a *const* enum has no
+  // runtime object, so even the prototype surface reports.
+  @test.assert_eq(issues("enum E { Red }\nvar x = E.toString();"), 0)
+  assert_true(issues("const enum B {}\nvar x = B.toString;") > 0)
+  // Enum/namespace merging opens the surface -- abstain.
+  @test.assert_eq(
+    issues(
+      "enum M { A }\nnamespace M { export function extra() {} }\nM.extra();",
+    ),
+    0,
+  )
+  // Enum declaration merging unions member lists.
+  @test.assert_eq(
+    issues(
+      "namespace M1 { export enum E { A = 3 }\n  export enum E { D = 7 }\n  var x = [E.A, E.D]; }",
+    ),
+    0,
+  )
+}

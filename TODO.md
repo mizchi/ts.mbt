@@ -2295,6 +2295,33 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-06 (T174)  714/815 (88 %)        414/414 ( 0 FP)   TS2339 namespace exports / enum members: TP 2045 -> 2050
+
+  T174 -- qualified-access member existence:
+    - `A.y` where the runtime namespace `A` *declares* `y` but never
+      exports it. The resolver now carries per-namespace value-decl and
+      `<export-value>` marker sets (`namespace_value_decls` /
+      `namespace_exports`, merged across same-name declarations); the
+      check is gated on the namespace having at least one marker, so
+      ambient namespaces (implicitly all-exported, no markers) abstain.
+      No env-shadowing guard: the namespace's own value binding lands in
+      the top-level env, so a lookup there can't distinguish the
+      namespace object from a local shadow.
+      ModuleWithExportedAndNonExported{Variables,Enums,ImportAlias}.
+    - `E.x` where the enum `E` has no member `x`: enums are closed, so a
+      miss is definite. A *const* enum has no runtime object, so even the
+      `Object.prototype` surface reports
+      (constEnumNoObjectPrototypePropertyAccess); a regular enum object
+      legitimately carries it. Enum/namespace merging opens the surface
+      and abstains. decrementOperatorWithEnumTypeInvalidOperations as a
+      bonus.
+    - Resolver enum ingestion now MERGES same-name enum declarations
+      (member-list union) instead of last-writer-wins -- the whole-corpus
+      gate caught `enumMerging` flipping TN->FP under the new member
+      check before this.
+    Whole-corpus TP 2045 -> 2050 @ 0 FP (session total 1761 -> +289);
+    pinned recall 714, precision 414/414. 2436 tests.
+
 2026-07-06 (T173)  714/815 (88 %)        414/414 ( 0 FP)   TS2394/TS2371/TS2349 + BOM lexer fix: TP 2036 -> 2045
 
   T173 -- overload compatibility and non-callable call targets:

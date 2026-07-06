@@ -63,6 +63,14 @@ priv struct Resolver {
   // wins, so a receiver-class miss is a real TS18014) from a legal outward
   // lexical reference.
   private_brand_decls : Map[String, Array[String]]
+  // Qualified-access support (TS2339 on `A.y` where `y` is declared but
+  // not exported): per namespace name (prefixed for nesting), the value
+  // names its body declares and the subset the parser marked
+  // `<export-value>`. A namespace with no markers is either ambient
+  // (implicitly all-exported) or export-free -- consumers must treat it
+  // as unknown and abstain.
+  namespace_value_decls : Map[String, Map[String, Bool]]
+  namespace_exports : Map[String, Map[String, Bool]]
 }
 
 ///|
@@ -79,6 +87,8 @@ fn Resolver::empty() -> Resolver {
     enums: {},
     declared_value_names: {},
     private_brand_decls: {},
+    namespace_value_decls: {},
+    namespace_exports: {},
   }
 }
 
@@ -499,7 +509,26 @@ fn Resolver::ingest_module(
     r.classes[prefix + c.name] = c
   }
   for e in module_.enums {
-    r.enums[prefix + e.name] = e
+    // TS declaration merging: two `enum E { … }` blocks with one name
+    // combine their member lists (enumMerging). Last-writer-wins on the
+    // flags; members union.
+    match r.enums.get(prefix + e.name) {
+      Some(existing) => {
+        let merged_members : Array[@ast.TsEnumMember] = []
+        let seen_members : Map[String, Unit] = {}
+        for m in existing.members {
+          seen_members[m.name] = ()
+          merged_members.push(m)
+        }
+        for m in e.members {
+          if !seen_members.contains(m.name) {
+            merged_members.push(m)
+          }
+        }
+        r.enums[prefix + e.name] = { ..e, members: merged_members }
+      }
+      None => r.enums[prefix + e.name] = e
+    }
     // Expose enum members as globals so `Color.Red` resolves via PropAccess.
     for m in e.members {
       let val_ty = match m.value {
@@ -641,6 +670,55 @@ fn Resolver::ingest_module(
       prefix + ns.name + "."
     }
     Resolver::ingest_module(r, ns.module_, ns_prefix)
+    // Record the namespace's declared value names and its `<export-value>`
+    // marker set (merging across same-name declarations).
+    if ns.name != "<global>" {
+      let ns_key = prefix + ns.name
+      let decls = match r.namespace_value_decls.get(ns_key) {
+        Some(m) => m
+        None => {
+          let m : Map[String, Bool] = {}
+          r.namespace_value_decls[ns_key] = m
+          m
+        }
+      }
+      let exports = match r.namespace_exports.get(ns_key) {
+        Some(m) => m
+        None => {
+          let m : Map[String, Bool] = {}
+          r.namespace_exports[ns_key] = m
+          m
+        }
+      }
+      let nsm = ns.module_
+      for f in nsm.funcs {
+        decls[f.name] = true
+      }
+      for v in nsm.values {
+        decls[v.name] = true
+      }
+      for e in nsm.enums {
+        decls[e.name] = true
+      }
+      for c in nsm.classes {
+        decls[c.name] = true
+      }
+      for inner in nsm.namespaces {
+        decls[inner.name] = true
+      }
+      for stmt in nsm.top_level_stmts {
+        match stmt {
+          Var(Ident(n), _, _) | Let(Ident(n), _, _) | Const(Ident(n), _, _) =>
+            decls[n] = true
+          _ => ()
+        }
+      }
+      for gm in nsm.grammar_misuses {
+        if gm.has_prefix("<export-value>") {
+          exports[gm["<export-value>".length():].to_string()] = true
+        }
+      }
+    }
     // Namespace + class static-side merging: when a `namespace X` is
     // declared alongside `class X`, the namespace's exports are
     // exposed as static members on the class. Wire each top-level
@@ -13597,6 +13675,7 @@ fn check_call_args_in_expr(
       check_private_name_access(ctx, prop)
       check_member_accessibility(env, ctx, recv, prop)
       check_super_abstract_access(ctx, recv, prop)
+      check_namespace_or_enum_member_access(env, ctx, recv, prop)
       // TS2806: reading a private accessor that was defined with a setter but
       // no getter. A write (`this.#x = v`) parses as `PropAssignExpr`, so a
       // `PropAccess` of a set-only private name is always a read.
@@ -17680,6 +17759,76 @@ fn check_unresolved_signature_type_refs(
 
   walk_module(module_)
   issues
+}
+
+///|
+/// TS2339 on qualified namespace / enum member access:
+///   - `A.y` where the runtime namespace `A` *declares* `y` but never
+///     exports it ("Property 'y' does not exist on type 'typeof A'").
+///     Gated on the namespace having at least one `<export-value>` marker:
+///     an ambient namespace implicitly exports everything and records
+///     none, so it abstains.
+///   - `E.x` where the enum `E` has no member `x`. Enums are closed, so a
+///     miss is definite; a *const* enum has no runtime object either, so
+///     even the `Object.prototype` surface reports
+///     (constEnumNoObjectPrototypePropertyAccess), while a regular enum
+///     object legitimately carries it. A same-name namespace (enum merge)
+///     makes the surface open -- abstain.
+fn check_namespace_or_enum_member_access(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  recv : @ast.TsExpr,
+  prop : String,
+) -> Unit {
+  guard recv is Var(n) else { return }
+  // Note: no env-shadowing guard -- the namespace's own value binding
+  // (`parse_namespace_decl_runtime` registers `A` as a value) already
+  // lands in the top-level env, so a lookup there can't distinguish the
+  // namespace object from a genuine local shadow.
+  let _ = env
+  match ctx.resolver.namespace_exports.get(n) {
+    Some(exports) if exports.size() > 0 =>
+      match ctx.resolver.namespace_value_decls.get(n) {
+        Some(decls) =>
+          if decls.contains(prop) && !exports.contains(prop) {
+            record(
+              ctx,
+              "PropAccess `.\{prop}`",
+              "property `\{prop}` does not exist on `typeof \{n}` (not exported)",
+            )
+            return
+          }
+        None => ()
+      }
+    _ => ()
+  }
+  match ctx.resolver.enums.get(n) {
+    Some(e) => {
+      // Enum/namespace merging opens the member surface.
+      if ctx.resolver.namespace_value_decls.get(n) is Some(_) {
+        return
+      }
+      for m in e.members {
+        if m.name == prop {
+          return
+        }
+      }
+      if e.is_const {
+        record(
+          ctx,
+          "PropAccess `.\{prop}`",
+          "property `\{prop}` does not exist on `typeof \{n}`",
+        )
+      } else if object_prototype_member(prop) is None {
+        record(
+          ctx,
+          "PropAccess `.\{prop}`",
+          "property `\{prop}` does not exist on `typeof \{n}`",
+        )
+      }
+    }
+    None => ()
+  }
 }
 
 ///|
