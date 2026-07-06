@@ -2295,6 +2295,23 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-06 (T180)  714/815 (88 %)        414/414 ( 0 FP)   Partial/Required/Readonly wrapper lattice: TP 2078 -> 2081
+
+  T180 -- mapped-type utility assignability (user-requested cluster): an
+    optionality level over ONE core type (Required=0, plain=1, Partial=2;
+    the outermost Partial/Required wrapper decides, `Readonly` is
+    assignability-transparent and just unwraps) may only stay or decrease
+    across an assignment. `Partial<T>` never satisfies `Readonly<T>` /
+    `T` / `Required<T>`, and `T` never satisfies `Required<T>`; the legal
+    directions (`Required -> plain -> Partial`, Readonly anywhere) stay
+    silent. Decided only when both peeled cores are the identical type
+    (`equivalent`), so no structural reasoning is involved and generic
+    cores (`T`) are fine. Applied in `check_expr_against`, so
+    assignments, initializers, returns, and call arguments all see it.
+    mappedTypes5, mappedTypes6, mappedTypeRelationships (bonus).
+    Whole-corpus TP 2078 -> 2081 @ 0 FP (session total 1761 -> +320);
+    pinned recall 714, precision 414/414. 2442 tests.
+
 2026-07-06 (T179)  714/815 (88 %)        414/414 ( 0 FP)   TS2304 round 2: typeof tails, module names, dotted paths: TP 2072 -> 2078
 
   T179 -- error-recovery name resolution:

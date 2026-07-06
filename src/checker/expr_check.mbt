@@ -7228,6 +7228,28 @@ fn check_expr_against(
   if !is_checkable(inferred) {
     return
   }
+  // TS2322 over the Partial/Required/Readonly wrapper lattice around ONE
+  // core type: an optionality level (Required=0, plain=1, Partial=2 --
+  // the outermost Partial/Required wins, Readonly is
+  // assignability-transparent) may only stay or decrease across an
+  // assignment. `Partial<T>` never satisfies `Readonly<T>` /
+  // `Required<T>` / `T`, and `T` never satisfies `Required<T>`
+  // (mappedTypes5/6). Decided only when both cores are the identical
+  // type, so no structural reasoning is involved.
+  {
+    let (exp_core, exp_lvl) = optionality_level(expected)
+    let (inf_core, inf_lvl) = optionality_level(inferred)
+    if inf_lvl > exp_lvl &&
+      (exp_lvl != 1 || inf_lvl != 1) &&
+      equivalent(exp_core, inf_core) {
+      record(
+        ctx,
+        sub_path,
+        "type `\{type_display(inferred)}` is not assignable to type `\{type_display(expected)}`",
+      )
+      return
+    }
+  }
   // Unwrap type aliases before assignability check so `type Str = string`
   // correctly assigns to `string` without a false mismatch.
   let inferred_u = ctx.resolver.unwrap(inferred)
@@ -9634,6 +9656,27 @@ fn object_lit_never_satisfies_union(
     }
   }
   true
+}
+
+///|
+/// Peel `Partial` / `Required` / `Readonly` utility wrappers off `t`,
+/// returning the core type and the resulting optionality level:
+/// `0` = Required, `1` = plain, `2` = Partial. The OUTERMOST
+/// Partial/Required wrapper decides (`Partial<Required<T>>` is Partial);
+/// `Readonly` doesn't affect assignability and just unwraps.
+fn optionality_level(t : @ast.TsType) -> (@ast.TsType, Int) {
+  match t {
+    Applied("Partial", [inner]) => {
+      let (core, _) = optionality_level(inner)
+      (core, 2)
+    }
+    Applied("Required", [inner]) => {
+      let (core, _) = optionality_level(inner)
+      (core, 0)
+    }
+    Applied("Readonly", [inner]) => optionality_level(inner)
+    _ => (t, 1)
+  }
 }
 
 ///|

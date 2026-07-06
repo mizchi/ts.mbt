@@ -12165,3 +12165,50 @@ test "expr_check: TS2304 typeof tails, module names, dotted paths (batch AC)" {
   @test.assert_eq(issues("declare namespace a.b.c { const y: number; }"), 0)
   @test.assert_eq(issues("declare namespace ns.type { const z: number; }"), 0)
 }
+
+///|
+test "expr_check: Partial/Required/Readonly lattice (batch AD)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Optionality may only stay or decrease: Partial never satisfies
+  // Readonly/plain/Required over the same core.
+  assert_true(
+    issues("function f<T>(p: Partial<T>) { let b: Readonly<T> = p; }") > 0,
+  )
+  assert_true(
+    issues(
+      "function f<T>(pr: Partial<Readonly<T>>) { let b: Readonly<T> = pr; }",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "function f<T>(rp: Readonly<Partial<T>>) { let b: Readonly<T> = rp; }",
+    ) >
+    0,
+  )
+  assert_true(issues("function f<T>(y: T) { let x: Required<T> = y; }") > 0)
+  assert_true(
+    issues("function f<T>(z: Partial<T>) { let x: Required<T> = z; }") > 0,
+  )
+  // Legal directions: Readonly is transparent, Required satisfies all.
+  @test.assert_eq(
+    issues(
+      "function f<T>(p: Partial<T>, r: Readonly<T>, x: Required<T>) {\n" +
+      "  let a: Partial<T> = p;\n" +
+      "  let b: Partial<T> = r;\n" +
+      "  let c: Partial<Readonly<T>> = p;\n" +
+      "  let d: Readonly<T> = x;\n" +
+      "  let e: T = x;\n" +
+      "  let g: Readonly<Partial<T>> = r;\n" +
+      "}",
+    ),
+    0,
+  )
+  // Distinct cores abstain.
+  @test.assert_eq(
+    issues("function f<T, U>(p: Partial<U>) { let b: Readonly<T> = p as any; }"),
+    0,
+  )
+}
