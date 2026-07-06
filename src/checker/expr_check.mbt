@@ -3356,6 +3356,10 @@ priv struct CheckCtx {
   // `Any` when not in a generator or when the type isn't statically
   // extractable — the yield check skips in that case.
   yield_type : @ast.TsType
+  // True inside a generator body whose `TReturn` slot was extracted into
+  // `return_type`: tsc does NOT contextually type generator `return`
+  // values (#35995), so fresh literals widen before the TReturn check.
+  widen_generator_return : Bool
   resolver : Resolver
   issues : Array[ExprIssue]
   // Type-parameter names that are in scope where the checker is running
@@ -10160,6 +10164,7 @@ fn check_arrow_with_context(
     path_prefix: ctx.path_prefix,
     return_type: unwrap_async_return(is_async, formal_ret),
     yield_type: @ast.TsType::Any,
+    widen_generator_return: false,
     resolver: ctx.resolver,
     issues: ctx.issues,
     in_scope_type_params: ctx.in_scope_type_params,
@@ -10292,6 +10297,7 @@ fn check_funcexpr_with_context(
     path_prefix: ctx.path_prefix,
     return_type: body_return,
     yield_type: @ast.TsType::Any,
+    widen_generator_return: false,
     resolver: ctx.resolver,
     issues: ctx.issues,
     in_scope_type_params: ctx.in_scope_type_params,
@@ -12554,7 +12560,51 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
     }
     Return(opt) =>
       match opt {
-        Some(e) => check_expr_against(env, e, ctx.return_type, ctx, "return")
+        Some(e) => {
+          // tsc does not contextually type generator `return` values
+          // (#35995): a fresh object literal's field literals widen
+          // before the TReturn check (`return { x: 'x' }` against
+          // `Generator<any, { x: 'x' }, any>` reports). Only the
+          // all-direct-literal-field shape is widened -- an `as` cast or
+          // computed value keeps the ordinary contextual path.
+          let mut handled = false
+          if ctx.widen_generator_return {
+            match e {
+              ObjectLit(entries) => {
+                let mut all_literal_fields = entries.length() > 0
+                for ent in entries {
+                  if ent.0.has_prefix("@@") ||
+                    !(precise_literal_type(ent.1) is Some(_)) {
+                    all_literal_fields = false
+                  }
+                }
+                if all_literal_fields {
+                  let it = ctx.resolver.unwrap(
+                    widen_literal_deep(infer_expr(env, ctx.resolver, e)),
+                  )
+                  let tt = ctx.resolver.unwrap(ctx.return_type)
+                  if is_checkable(it) &&
+                    is_checkable(tt) &&
+                    !type_contains_unresolved_named(tt, ctx.resolver) &&
+                    !type_deeply_contains_unmodeled(tt, ctx.resolver) &&
+                    !is_assignable_to(it, tt) {
+                    record(
+                      ctx,
+                      "return",
+                      "type `\{type_display(it)}` is not assignable to the generator's TReturn type `\{type_display(tt)}`",
+                    )
+                  }
+                  check_call_args_in_expr(env, e, ctx)
+                  handled = true
+                }
+              }
+              _ => ()
+            }
+          }
+          if !handled {
+            check_expr_against(env, e, ctx.return_type, ctx, "return")
+          }
+        }
         None =>
           if is_checkable(ctx.return_type) &&
             !is_assignable_to(@ast.TsType::Undefined, ctx.return_type) &&
@@ -12922,7 +12972,28 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         None => ()
       }
     }
-    Block(b) => check_block(env, b, ctx)
+    Block(b) => {
+      // A parser-merged declarator group (`var a: string, b: number;`
+      // becomes `Block[Var, Var]`) must leak its bindings into the
+      // enclosing scope -- snapshot/restore would erase them for every
+      // later statement. Only `var` groups leak (they hoist out of real
+      // blocks in JS anyway); `let`/`const` stay block-scoped so a later
+      // same-named outer declaration isn't shadowed by a stale type.
+      let mut all_decls = b.stmts.length() > 0
+      for st in b.stmts {
+        match st {
+          Var(_, _, _) => ()
+          _ => all_decls = false
+        }
+      }
+      if all_decls {
+        for st in b.stmts {
+          check_stmt(env, st, ctx)
+        }
+      } else {
+        check_block(env, b, ctx)
+      }
+    }
     Label(_, inner) => check_stmt(env, inner, ctx)
     Empty | Break(_) | Continue(_) | Debugger => ()
     NativeClassStmt(decl, _) =>
@@ -14250,6 +14321,75 @@ fn check_call_args_in_expr(
       // `{x, y} = …`) writes every named binding inside. Clear them
       // from the unassigned set so subsequent reads don't trip.
       clear_unassigned_in_binding(ctx, binding)
+      // TS2322: assignment-form array destructuring writes the source's
+      // element type into each *existing* target's declared slot
+      // (`var a: Bar, b: string; [a, b] = new FooIterator` --
+      // iterableArrayPattern5). Tuple sources check per slot.
+      match binding {
+        @ast.TsBinding::Array(ab) => {
+          let src_ty = infer_expr(env, ctx.resolver, v)
+          let elem = for_of_element_type(ctx.resolver, src_ty)
+          let unwrapped_src = ctx.resolver.unwrap(src_ty)
+          for i, item in ab.items {
+            match item {
+              Some(el) =>
+                match el.binding {
+                  @ast.TsBinding::Ident(n) => {
+                    // A syntactic array-literal source destructures per
+                    // slot (tsc treats it as a tuple here), so the slot
+                    // type comes from the item expression -- the widened
+                    // union element would cross-contaminate slots.
+                    let slot_ty = match v {
+                      ArrayLit(src_items) if i < src_items.length() =>
+                        infer_expr(env, ctx.resolver, src_items[i])
+                      _ =>
+                        match unwrapped_src {
+                          Tuple(parts) if i < parts.length() => parts[i]
+                          _ => elem
+                        }
+                    }
+                    match env.lookup_declared(n) {
+                      Some(target_ty) =>
+                        if is_checkable(target_ty) &&
+                          is_checkable(slot_ty) &&
+                          !is_in_scope_type_param(ctx, target_ty) &&
+                          !is_in_scope_type_param(ctx, slot_ty) &&
+                          !type_contains_unresolved_named(
+                            target_ty,
+                            ctx.resolver,
+                          ) &&
+                          !type_contains_unresolved_named(slot_ty, ctx.resolver) &&
+                          !type_deeply_contains_unmodeled(
+                            target_ty,
+                            ctx.resolver,
+                          ) &&
+                          !type_deeply_contains_unmodeled(slot_ty, ctx.resolver) &&
+                          !is_assignable_to(
+                            ctx.resolver.unwrap(widen_literal(slot_ty)),
+                            ctx.resolver.unwrap(target_ty),
+                          ) &&
+                          !is_structurally_assignable_named(
+                            slot_ty,
+                            target_ty,
+                            ctx.resolver,
+                          ) {
+                          record(
+                            ctx,
+                            "destructuring target `\{n}`",
+                            "element type `\{type_display(slot_ty)}` is not assignable to `\{type_display(target_ty)}`",
+                          )
+                        }
+                      None => ()
+                    }
+                  }
+                  _ => ()
+                }
+              None => ()
+            }
+          }
+        }
+        _ => ()
+      }
     }
     Spread(v) | Await(v) => check_call_args_in_expr(env, v, ctx)
     PropAssignExpr(recv, prop, v) => {
@@ -14956,10 +15096,40 @@ fn check_function_body_with(
   } else {
     body_return
   }
+  let generator_treturn = func.is_generator &&
+    (match func.return_type {
+      Applied("Generator", args)
+      | Applied("AsyncGenerator", args)
+      | Applied("Iterator", args)
+      | Applied("AsyncIterator", args) => args.length() >= 2
+      _ => false
+    })
+  // TS2322: a generator's declared return type must be iterator-like; a
+  // concrete scalar can never hold the produced Generator object
+  // (`function* g1(): number {}`, generatorTypeCheck6).
+  if func.is_generator {
+    match func.return_type {
+      Number
+      | Int
+      | String_
+      | Boolean
+      | BigInt
+      | Literal(_)
+      | NumberLiteral(_)
+      | BigIntLiteral(_)
+      | BooleanLiteral(_) =>
+        issues.push({
+          path: "function " + func.name,
+          message: "a generator's return type `\{type_display(func.return_type)}` is not an iterator type",
+        })
+      _ => ()
+    }
+  }
   let ctx : CheckCtx = {
     path_prefix: "function " + func.name,
     return_type: effective_return,
     yield_type,
+    widen_generator_return: generator_treturn,
     resolver,
     issues,
     in_scope_type_params: func.type_params,
@@ -19752,6 +19922,7 @@ fn check_module_function_bodies_layered(
       path_prefix: "function \{cls.name}.<field-init>",
       return_type: @ast.TsType::Void,
       yield_type: @ast.TsType::Any,
+      widen_generator_return: false,
       resolver,
       issues: [],
       in_scope_type_params: cls.type_params,
@@ -19819,6 +19990,7 @@ fn check_module_function_bodies_layered(
       path_prefix: "function \{cls.name}.<member-key>",
       return_type: @ast.TsType::Void,
       yield_type: @ast.TsType::Any,
+      widen_generator_return: false,
       resolver,
       issues: [],
       in_scope_type_params: cls.type_params,
@@ -19857,6 +20029,7 @@ fn check_module_function_bodies_layered(
       path_prefix: "top-level",
       return_type: @ast.TsType::Void,
       yield_type: @ast.TsType::Any,
+      widen_generator_return: false,
       resolver,
       issues: [],
       in_scope_type_params: [],

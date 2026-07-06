@@ -2295,6 +2295,35 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-06 (T177)  714/815 (88 %)        414/414 ( 0 FP)   TS2322 round 3: generator returns, destructuring assignment: TP 2062 -> 2066
+
+  T177 -- third TS2322 subcluster pass:
+    - A generator's declared return type must be iterator-like: a concrete
+      scalar annotation (`function* g1(): number {}`) can never hold the
+      produced Generator object. generatorTypeCheck6.
+    - Generator `return` values are NOT contextually typed by tsc
+      (microsoft/TypeScript#35995): a fresh all-literal-field object
+      literal widens before the TReturn check (`return { x: 'x' }` against
+      `Generator<any, { x: 'x' }, any>` reports "string not assignable to
+      '\'x\''"). New `CheckCtx.widen_generator_return` armed when the
+      TReturn slot was extracted; only the direct all-literal shape widens
+      (an `as` cast keeps the ordinary contextual path).
+      generatorReturnContextualType.
+    - Assignment-form array destructuring (`[a, b] = new FooIterator`)
+      checks the source's element type against each existing target's
+      *declared* slot (same guard set as the for-of target check);
+      syntactic array-literal sources destructure per slot (the widened
+      union element cross-contaminated slots -- caught on a probe).
+      iterableArrayPattern5/7.
+    - Underlying model fix: a parser-merged declarator group
+      (`var a: string, b: string;` becomes `Block[Var, Var]`) had its
+      bindings erased by block snapshot/restore for every later statement.
+      `var`-only groups now leak into the enclosing scope (JS hoisting
+      semantics); `let`/`const` blocks stay scoped (the existing
+      inner-binding-strip wbtest pinned that).
+    Whole-corpus TP 2062 -> 2066 @ 0 FP (session total 1761 -> +305);
+    pinned recall 714, precision 414/414. 2439 tests.
+
 2026-07-06 (T176)  714/815 (88 %)        414/414 ( 0 FP)   TS2322 subclusters: union elements/targets, `in` operands, static index writes: TP 2054 -> 2062
 
   T176 -- second TS2322 subcluster pass (user-requested):

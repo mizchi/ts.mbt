@@ -12028,3 +12028,55 @@ test "expr_check: TS2322 unions, in-operands, static index writes (batch Z)" {
   // Empty literal satisfies an all-optional constituent.
   @test.assert_eq(issues("var x: { a: string } | { b?: number } = {};"), 0)
 }
+
+///|
+test "expr_check: generator returns and destructuring assignment (batch AA)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A generator's return annotation must be iterator-like.
+  assert_true(issues("function* g1(): number { }") > 0)
+  @test.assert_eq(issues("function* g2(): Generator<number> { yield 1; }"), 0)
+  // Generator `return` values are NOT contextually typed (#35995):
+  // literal fields widen before the TReturn check.
+  assert_true(
+    issues(
+      "function* f1(): Generator<any, { x: 'x' }, any> { return { x: 'x' }; }",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "function* f2(): Generator<any, { x: string }, any> { return { x: 'x' }; }",
+    ),
+    0,
+  )
+  // Assignment-form array destructuring checks element types against the
+  // existing targets' declared slots.
+  assert_true(
+    issues(
+      "class It { next() { return { value: 1, done: false }; } [Symbol.iterator]() { return this; } }\nvar a: number, b: string;\n[a, b] = new It;",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "class It { next() { return { value: 1, done: false }; } [Symbol.iterator]() { return this; } }\nvar a: number, b: number;\n[a, b] = new It;",
+    ),
+    0,
+  )
+  // Syntactic array-literal sources destructure per slot.
+  assert_true(issues("var t1: string, t2: number;\n[t1, t2] = [1, \"a\"];") > 0)
+  @test.assert_eq(
+    issues("var t1: string, t2: number;\n[t1, t2] = [\"a\", 1];"),
+    0,
+  )
+  // Multi-declarator var groups leak their bindings to later statements;
+  // let/const blocks stay scoped.
+  @test.assert_eq(
+    issues(
+      "function f(): number {\n  {\n    const inner: string = \"hello\";\n  }\n  const x: number = inner;\n  return x;\n}",
+    ),
+    0,
+  )
+}
