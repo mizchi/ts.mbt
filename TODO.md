@@ -2295,6 +2295,38 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-07 (T185)  714/815 (88 %)        414/414 ( 0 FP)   Practical round 5: TS2352 cast overlap: TP 2136 -> 2140
+
+  T185 -- practical (non-edge) misses, round 5. (PR #192 merged the
+    T181-T184 batches to main as 1602d28; branch restarted from it.)
+    - TS2352 revival: the As-arm's "cannot be asserted" diagnostic was
+      blanket-suppressed in permissive mode. Carved out the reliable
+      subset as unfiltered emissions: (a) cross-family primitive casts
+      (`a as string` where `a: number`) -- requires a *keyword*
+      primitive asserted type (string/number/boolean/bigint), because
+      the ASI `var x = 10\n as `Hello world`` mis-parse reaches the arm
+      as a cast to a string-literal type (asOperatorASI was the gate
+      FP); (b) nullish sources under strictNullChecks against primitive
+      targets (`undefined as number`, `null as string`) -- non-strict
+      assignability would let them flow, so this is an explicit strict
+      branch. Also added `Int` to the concrete-operand set.
+    - TS2352 between object shapes: both directions missing a required
+      property (full extends-chain field maps via `cast_shape_fields`;
+      intersections merge; generics / index signatures / computed
+      members abstain) -- `<I3>z` where `z: I2`
+      (typeAssertionsWithIntersectionTypes01).
+    - Parser: a non-interpolating template literal in TYPE position is
+      now the string *literal* type of its text (tsc semantics), not
+      `String_` -- needed so the ASI mis-parse lands on the filtered
+      path, and more correct generally.
+    - TS2420 missing-member extension was investigated and dropped:
+      symbol-keyed members erase to `<computed>` on both the interface
+      and class sides, so the missing-member verdict isn't decidable
+      for the remaining fixtures.
+    asOperator1/2, asOperatorNames, typeAssertionsWithIntersectionTypes01.
+    Whole-corpus TP 2136 -> 2140 @ 0 FP (session total 1761 -> +379);
+    pinned recall 714, precision 414/414. 2447 tests.
+
 2026-07-07 (T184)  714/815 (88 %)        414/414 ( 0 FP)   Practical round 4: TS2403 identity keys + union-callee arity: TP 2134 -> 2136
 
   T184 -- practical (non-edge) misses, round 4.

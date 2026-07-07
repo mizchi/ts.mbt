@@ -920,13 +920,18 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
         Void
       }
     }
-    // Template literal type: `bg${ForegroundColorName}`. Falls back to
-    // `String_` for non-interpolating templates so the prior conservative
-    // behavior is preserved.
+    // Template literal type: `bg${ForegroundColorName}`. A
+    // non-interpolating template is the string *literal* type of its text
+    // (tsc semantics) — also keeps the `as`-cast reliability split from
+    // firing on the ASI `as `Hello world`` mis-parse (asOperatorASI).
     Template(cooked_parts, _, expr_sources) => {
       let _ = self.advance()
       if expr_sources.length() == 0 {
-        String_
+        if cooked_parts.length() >= 1 {
+          Literal(cooked_parts[0])
+        } else {
+          String_
+        }
       } else {
         let type_args : Array[@ast.TsType] = []
         for src in expr_sources {

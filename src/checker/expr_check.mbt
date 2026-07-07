@@ -15273,6 +15273,7 @@ fn check_call_args_in_expr(
       let concrete = fn(t : @ast.TsType) -> Bool {
         match t {
           Number
+          | Int
           | String_
           | Boolean
           | BigInt
@@ -15287,15 +15288,56 @@ fn check_call_args_in_expr(
           _ => false
         }
       }
-      if concrete(inferred) &&
+      // TS2352 between disjoint primitive families (`a as string` where
+      // `a: number`) is reliable: emit unfiltered. Under strictNullChecks
+      // a nullish source never overlaps a concrete primitive target
+      // (`undefined as number`, `null as string`) even though non-strict
+      // assignability would let it flow.
+      // Reliability requires a *keyword* primitive asserted type: an ASI
+      // call of a function named `as` with a tagged template (`var x = 10\n
+      // as `Hello world`;`, asOperatorASI) reaches here as a cast to a
+      // string-literal type, so literal / template asserted types stay on
+      // the filtered path.
+      let asserted_reliable = match asserted {
+        String_ | Number | Int | Boolean | BigInt => true
+        _ => false
+      }
+      let strict_nullish_cast = ctx.strict_null_checks &&
+        asserted_reliable &&
+        inferred is (Null | Undefined) &&
+        equality_primitive_family(asserted) is Some(_)
+      if strict_nullish_cast {
+        record_unfiltered(
+          ctx,
+          "as",
+          "conversion of type '\{type_display(inferred)}' to type '\{type_display(asserted)}' may be a mistake because neither type sufficiently overlaps with the other",
+        )
+      } else if concrete(inferred) &&
         concrete(asserted) &&
         !is_assignable_to(inferred, asserted) &&
         !is_assignable_to(asserted, inferred) {
-        record(
-          ctx,
-          "as",
-          "Type '\{type_display(inferred)}' cannot be asserted to type '\{type_display(asserted)}' (no overlap)",
-        )
+        let families_differ = match
+          (
+            equality_primitive_family(inferred),
+            equality_primitive_family(asserted),
+          ) {
+          (Some(a), Some(b)) => a != b
+          _ => false
+        }
+        let cross_family = asserted_reliable && families_differ
+        if cross_family {
+          record_unfiltered(
+            ctx,
+            "as",
+            "conversion of type '\{type_display(inferred)}' to type '\{type_display(asserted)}' may be a mistake because neither type sufficiently overlaps with the other",
+          )
+        } else {
+          record(
+            ctx,
+            "as",
+            "Type '\{type_display(inferred)}' cannot be asserted to type '\{type_display(asserted)}' (no overlap)",
+          )
+        }
       } else {
         // TS2352: a bare primitive and a concrete object type (a user
         // interface / class / object literal) never overlap, so asserting one
@@ -15333,6 +15375,41 @@ fn check_call_args_in_expr(
             "as",
             "conversion of type '\{type_display(inferred_u)}' to type '\{type_display(asserted_u)}' may be a mistake because neither type sufficiently overlaps with the other",
           )
+        } else {
+          // TS2352 between object shapes (interfaces, intersections of
+          // interfaces, literal shapes): the conversion is a definite
+          // mistake when EACH side declares a required property the other
+          // side lacks entirely -- then neither direction is comparable
+          // (`<I3>z` where `z: I2`; typeAssertionsWithIntersectionTypes01).
+          // Any unresolvable / generic / indexed / computed shape abstains.
+          match
+            (
+              cast_shape_fields(ctx.resolver, inferred_u, 0),
+              cast_shape_fields(ctx.resolver, asserted_u, 0),
+            ) {
+            (Some(src), Some(tgt)) => {
+              let mut tgt_requires_missing = false
+              for name, required in tgt {
+                if required && !src.contains(name) {
+                  tgt_requires_missing = true
+                }
+              }
+              let mut src_requires_missing = false
+              for name, required in src {
+                if required && !tgt.contains(name) {
+                  src_requires_missing = true
+                }
+              }
+              if tgt_requires_missing && src_requires_missing {
+                record(
+                  ctx,
+                  "as",
+                  "conversion of type '\{type_display(inferred_u)}' to type '\{type_display(asserted_u)}' may be a mistake because neither type sufficiently overlaps with the other",
+                )
+              }
+            }
+            _ => ()
+          }
         }
       }
     }
@@ -23040,6 +23117,93 @@ fn check_abstract_implementation(
     }
   }
   issues
+}
+
+///|
+/// Full field map (`name -> required`) of an object-shaped cast operand for
+/// the TS2352 comparability check, or `None` when the shape can't be
+/// collected faithfully: generic interfaces, index signatures, computed /
+/// synthetic members, generic heritage, unresolvable names. Interfaces walk
+/// their `extends` chain; intersections merge every part.
+fn cast_shape_fields(
+  resolver : Resolver,
+  t : @ast.TsType,
+  depth : Int,
+) -> Map[String, Bool]? {
+  if depth > 8 {
+    return None
+  }
+  match resolver.unwrap(t) {
+    Named(n) => {
+      guard resolver.interfaces.get(n) is Some(iface) else { return None }
+      if iface.type_params.length() > 0 || iface.index_signatures.length() > 0 {
+        return None
+      }
+      let out : Map[String, Bool] = {}
+      for f in iface.fields {
+        if f.0.has_prefix("<") {
+          return None
+        }
+        out[f.0] = !type_has_undefined(f.1)
+      }
+      for i, base in iface.extends_names {
+        if i < iface.extends_args.length() && iface.extends_args[i].length() > 0 {
+          return None
+        }
+        match cast_shape_fields(resolver, Named(base), depth + 1) {
+          Some(bf) =>
+            for k, v in bf {
+              if !out.contains(k) {
+                out[k] = v
+              }
+            }
+          None => return None
+        }
+      }
+      Some(out)
+    }
+    Intersection(parts) => {
+      let out : Map[String, Bool] = {}
+      for p in parts {
+        match cast_shape_fields(resolver, p, depth + 1) {
+          Some(pf) =>
+            for k, v in pf {
+              if !out.contains(k) {
+                out[k] = v
+              }
+            }
+          None => return None
+        }
+      }
+      Some(out)
+    }
+    Object(fields) => {
+      let out : Map[String, Bool] = {}
+      for f in fields {
+        match f.0 {
+          Literal(k) =>
+            if k.has_prefix("<") {
+              return None
+            } else {
+              out[k] = !type_has_undefined(f.1)
+            }
+          _ => return None
+        }
+      }
+      Some(out)
+    }
+    Struct(_, fields) => {
+      let out : Map[String, Bool] = {}
+      for f in fields {
+        if f.0.has_prefix("<") {
+          return None
+        }
+        out[f.0] = !type_has_undefined(f.1)
+      }
+      Some(out)
+    }
+    _ => None
+  }
 }
 
 ///|
