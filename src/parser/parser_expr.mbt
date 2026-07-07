@@ -1000,7 +1000,31 @@ fn Parser::parse_unary(self : Parser) -> @ast.TsExpr raise ParseError {
         Yield(expr)
       }
     } else {
-      Var("yield")
+      // TS1163: outside a generator, `yield <expr>` on one line can only be
+      // a yield expression (two adjacent expressions never parse), so it is
+      // definitely "only allowed in a generator body". A bare `yield`
+      // identifier (followed by an operator, `(`, `;`, …) stays legal
+      // non-strict code.
+      let next = self.peek()
+      let next_starts_operand = match next.kind {
+        Ident(_)
+        | Int(_)
+        | Number(_)
+        | Str(_)
+        | Bool(_)
+        | Null
+        | Template(_, _, _) => !next.has_newline_before
+        _ => false
+      }
+      if next_starts_operand {
+        self.grammar_misuses.push(
+          "a `yield` expression is only allowed in a generator body",
+        )
+        let expr = self.parse_assignment()
+        Yield(Some(expr))
+      } else {
+        Var("yield")
+      }
     }
   } else if self.peek().kind == Ident("await") {
     // await expression - valid in async functions or top-level await

@@ -12756,3 +12756,29 @@ test "expr_check: decorator/tagged-template parse recoveries (batch AO)" {
     0,
   )
 }
+
+///|
+test "expr_check: ambient declare, dup accessibility, non-generator yield, dts stmts (batch AP)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS1038: `declare` inside an already-ambient namespace body.
+  assert_true(
+    issues("declare namespace M {\n  declare function F(): void;\n}") > 0,
+  )
+  @test.assert_eq(issues("declare namespace M { function F(): void; }"), 0)
+  // TS1028: duplicate accessibility modifier.
+  assert_true(issues("class C { public public foo() { } }") > 0)
+  @test.assert_eq(issues("class C { public foo() {} private x = 1; }"), 0)
+  // TS1163: `yield <operand>` inside a non-generator (including a plain
+  // function nested in a generator).
+  assert_true(
+    issues("function* foo() {\n  function bar() {\n    yield foo;\n  }\n}") > 0,
+  )
+  @test.assert_eq(
+    issues(
+      "function* gen() { yield 1; yield* [1]; }\nfunction ng() { var yield2 = 1; return yield2; }",
+    ),
+    0,
+  )
+}

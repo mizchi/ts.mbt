@@ -2295,6 +2295,33 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-07 (T192)  714/815 (88 %)        414/414 ( 0 FP)   Grammar clusters under the new spec: TP 2562 -> 2581
+
+  T192 -- the new classification surfaced grammar clusters that
+    previously hid behind parse-skips.
+    - TS1038: `declare` inside an already-ambient namespace body. The
+      misuse records in the namespace sub-parser, and the layered
+      checker's namespace recursion now emits nested bodies' PLAIN
+      grammar misuses (the top-level-only emission loop is for marker
+      processing) — this alone unlocked several other already-recorded
+      namespace-body diagnostics (+19 total for the round).
+      parser{Function,Enum,Class,Module,Variable}Declaration fixtures.
+    - TS1028: a second accessibility modifier on one class member
+      (`public public foo()`). parserMemberFunctionDeclaration1,
+      Protected4/7 et al.
+    - TS1163: `yield <operand>` in a non-generator — two adjacent
+      expressions never parse, so the same-line operand form is
+      definitely a yield expression. Landing it exposed ANOTHER parser
+      context bug: `parse_function` set `in_generator = true` for
+      generators but never reset it for plain functions nested inside
+      one; both sites now assign `is_generator` (mirrors the batch-AK
+      `in_async` fix). YieldExpression16_es6 et al.
+    - TS1036: executable statements (block / debugger / for / try /
+      with / expression …) at the top level of a `.d.ts` file, added to
+      `check_dts_top_level_modifiers`. parser*Statement1.d fixtures.
+    Whole-corpus TP 2562 -> 2581 @ 0 FP, PFLEGAL 1, TN 1414 (session
+    total 1761 -> +820 under the current spec). 2454 tests.
+
 2026-07-07 (T191)  714/815 (88 %)        414/414 ( 0 FP)   Gate spec: parse rejections classify; decorator/template parser fixes: TP 2166 -> 2562
 
   T191 -- gate-spec change (user-approved) + the parser fixes it forces.

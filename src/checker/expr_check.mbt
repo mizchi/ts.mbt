@@ -22372,6 +22372,16 @@ fn check_module_function_bodies_layered(
     for issue in issues {
       all.push({ path: "\{prefix} > \{issue.path}", message: issue.message })
     }
+    // The grammar-misuse emission loop above runs only at the top level
+    // (its markers must not double-process), so surface a nested
+    // namespace body's PLAIN misuses here — e.g. TS1038 `declare` inside
+    // an already-ambient body (parserFunctionDeclaration1). Marker
+    // entries (`<…>`-prefixed) stay internal.
+    for gm in ns.module_.grammar_misuses {
+      if !gm.has_prefix("<") {
+        all.push({ path: "\{prefix} > grammar", message: gm })
+      }
+    }
   }
   // tsc gates the TS2695 comma-operator check on `allowUnreachableCode`
   // being off; under the directive (parser `<allowunreachable-on>` marker)

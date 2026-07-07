@@ -3334,6 +3334,13 @@ fn Parser::parse_module_with_seeded_const_values_internal(
       // named `declare`, not an ambient declaration —
       // taggedTemplateStringsWithTagNamedDeclare.)
       let _ = self.advance() // consume 'declare'
+      // TS1038: a `declare` modifier inside an already-ambient context
+      // (`declare namespace M { declare function F(); }`).
+      if self.in_ambient_module {
+        self.grammar_misuses.push(
+          "a `declare` modifier cannot be used in an already ambient context",
+        )
+      }
       if self.is_const_enum_decl_start() {
         enums.push(self.parse_const_enum_decl(true))
         continue

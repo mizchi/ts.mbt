@@ -406,9 +406,11 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   for label in self.labels {
     prev_labels.push(label)
   }
-  if is_generator {
-    self.in_generator = true
-  }
+  // Mirror `in_async`: the body's generator-ness follows THIS function, so
+  // a plain function nested in a generator leaves the generator context
+  // (`function* foo() { function bar() { yield x; } }` — the inner `yield`
+  // is TS1163, YieldExpression16).
+  self.in_generator = is_generator
   // The body's async-ness follows THIS function (a non-async nested
   // function leaves the async context; an `async` one enters it -- `await`
   // is reserved in its type positions).
@@ -715,9 +717,11 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
   for label in self.labels {
     prev_labels.push(label)
   }
-  if is_generator {
-    self.in_generator = true
-  }
+  // Mirror `in_async`: the body's generator-ness follows THIS function, so
+  // a plain function nested in a generator leaves the generator context
+  // (`function* foo() { function bar() { yield x; } }` — the inner `yield`
+  // is TS1163, YieldExpression16).
+  self.in_generator = is_generator
   // The body's async-ness follows THIS function (a non-async nested
   // function leaves the async context; an `async` one enters it -- `await`
   // is reserved in its type positions).

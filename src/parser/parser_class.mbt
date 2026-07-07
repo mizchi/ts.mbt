@@ -1909,6 +1909,11 @@ fn Parser::parse_class_body(
             let _ = self.advance()
             has_modifier = true
             if n == "public" || n == "private" || n == "protected" {
+              // TS1028: a second accessibility modifier on one member
+              // (`public public Foo()`, `private protected x`).
+              if saw_visibility_modifier {
+                self.grammar_misuses.push("accessibility modifier already seen")
+              }
               saw_visibility_modifier = true
               // TS1029 / TS1028: an accessibility modifier must precede
               // `static` / `async` / `readonly` / `override` / `abstract`
