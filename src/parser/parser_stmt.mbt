@@ -283,8 +283,53 @@ fn Parser::parse_var_like(
       )
     _ => ()
   }
+  // Whether the FIRST declarator carries a written type annotation. Even
+  // `: any` retypes a destructuring source (`var { a2 }: any = {}` is
+  // legal), but the annotation and its absence both reach the checker as
+  // `Any`, so the distinction only exists here at the token level.
+  let first_decl_annotated = self.check(Colon)
   let type_ = self.parse_var_decl_type()
   let stmts = self.parse_var_decl_list_from(binding, type_, kind)
+  // TS2339: `var { x, y } = {}` — a non-defaulted pattern property that
+  // the syntactic object-literal initializer provably lacks. Only the
+  // first declarator is judged (later declarators parse their own
+  // annotations inside the list). Spread / computed / synthetic entries
+  // make the key set unknowable, so the pattern abstains.
+  if !first_decl_annotated && stmts.length() >= 1 {
+    match stmts[0] {
+      Var(Object(ob), _, ObjectLit(entries))
+      | Let(Object(ob), _, ObjectLit(entries))
+      | Const(Object(ob), _, ObjectLit(entries)) => {
+        let keys : Map[String, Bool] = {}
+        let mut keys_known = true
+        for e in entries {
+          if e.0.has_prefix("@@spread") || e.0.has_prefix("<") {
+            keys_known = false
+          }
+          match e.1 {
+            ComputedProp(_, _) => keys_known = false
+            _ => ()
+          }
+          keys[e.0] = true
+        }
+        if keys_known {
+          for prop in ob.props {
+            if prop.default is None &&
+              prop.key_expr is None &&
+              !prop.key.has_prefix("<") &&
+              !keys.contains(prop.key) {
+              self.grammar_misuses.push(
+                "property `" +
+                prop.key +
+                "` does not exist on the object-literal source",
+              )
+            }
+          }
+        }
+      }
+      _ => ()
+    }
+  }
   // TS1262: `await` used as a top-level declaration name. Only an error
   // when the file is a module; the checker pairs this marker with the
   // module-syntax evidence (`<module-syntax>` / export markers / imports).

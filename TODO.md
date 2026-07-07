@@ -2295,6 +2295,34 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-07 (T186)  714/815 (88 %)        414/414 ( 0 FP)   Practical round 6: destructuring literal misses + globalThis: TP 2140 -> 2144
+
+  T186 -- practical (non-edge) misses, round 6 (TS2339 subclusters).
+    - Destructuring from a syntactic object literal: a non-defaulted
+      pattern property the literal provably lacks (`var { x, y } = {}`,
+      `({ x } = {})`). The assignment form checks in the `AssignPattern`
+      arm; the declaration form is recorded by the PARSER, because
+      `var { a2 }: any = {}` is legal — the annotation retypes the
+      source — but annotation and absence both reach the checker as
+      `Any` (the ES5/ES6 destructuring fixtures caught that as gate
+      FPs). Spread / computed / synthetic source entries abstain;
+      defaults are legal. missingAndExcessProperties.
+    - `globalThis.<name>` where `<name>` is a top-level `let` / `const`
+      of this file: block-scoped declarations never become `globalThis`
+      properties. Standalone syntactic pass, dotted value form only.
+      globalThisBlockscopedProperties.
+    - TS2339 on a `Window & typeof globalThis` receiver (`win.hi`):
+      property must be a declared module value (env / globals / classes
+      / enums) or a known lib global; fires regardless of noImplicitAny,
+      unlike the element-access form. globalThisUnknown,
+      globalThisUnknownNoImplicitAny.
+    - Investigated and dropped: computedPropertyNames TS2411 (computed
+      getter return types are `Any` at parse time — the accessor body
+      isn't retained on the class decl), symbol-keyed TS2411
+      (symbolProperty17: both sides erase to `<computed>`).
+    Whole-corpus TP 2140 -> 2144 @ 0 FP (session total 1761 -> +383);
+    pinned recall 714, precision 414/414. 2448 tests.
+
 2026-07-07 (T185)  714/815 (88 %)        414/414 ( 0 FP)   Practical round 5: TS2352 cast overlap: TP 2136 -> 2140
 
   T185 -- practical (non-edge) misses, round 5. (PR #192 merged the

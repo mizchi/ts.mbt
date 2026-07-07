@@ -12530,3 +12530,40 @@ test "expr_check: TS2352 cast overlap (batch AI)" {
     0,
   )
 }
+
+///|
+test "expr_check: destructuring literal misses and globalThis (batch AJ)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2339: non-defaulted pattern properties missing from a syntactic
+  // object-literal source; defaults and annotations stay legal.
+  assert_true(issues("var { x, y } = {};") > 0)
+  assert_true(
+    issues("function f2() { var x: number; ({ x } = {}); return x; }") > 0,
+  )
+  @test.assert_eq(issues("var { x = 1, y = 2 } = {};"), 0)
+  @test.assert_eq(issues("var { a2 }: any = {};"), 0)
+  @test.assert_eq(
+    issues("declare var src: { x: number };\nvar { x } = { ...src };"),
+    0,
+  )
+  @test.assert_eq(issues("var { m } = { m: 1, extra: 2 };"), 0)
+  // TS2339: block-scoped top-level declarations are not globalThis
+  // properties; var declarations and lib globals are.
+  assert_true(issues("var x = 1\nconst y = 2\nglobalThis.y") > 0)
+  @test.assert_eq(issues("var x = 1\nglobalThis.x\nglobalThis.Infinity"), 0)
+  // TS2339 on a `Window & typeof globalThis` receiver.
+  assert_true(
+    issues(
+      "// @strict: false\ndeclare let win: Window & typeof globalThis;\nwin.hi",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nvar gx = 1\ndeclare let win: Window & typeof globalThis;\nwin.gx\nwin.document",
+    ),
+    0,
+  )
+}
