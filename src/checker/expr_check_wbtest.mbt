@@ -7159,12 +7159,12 @@ test "expr_check: object assignment missing a required property is flagged (TS23
     #|declare var t: { x: number; y: number };
     #|t = a;
   let issues = check_module_function_bodies(parse_module_or_empty(src))
+  // (Now reported by the dedicated missing-required-property rule, which
+  // runs ahead of the generic mismatch.)
   assert_true(
     issues
     .iter()
-    .any(fn(i) {
-      i.message.contains("but got") && i.message.contains("y: number")
-    }),
+    .any(fn(i) { i.message.contains("`y`") && i.message.contains("missing") }),
   )
 }
 
@@ -12617,4 +12617,61 @@ test "expr_check: static-block TDZ, spread overwrite, enum readonly, await type 
     ),
     0,
   )
+}
+
+///|
+test "expr_check: wrapper primitives, construct sigs, index values, templates (batch AL)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Wrapper object -> primitive is an error; the reverse flows.
+  assert_true(
+    issues(
+      "declare var sym: symbol;\nvar symObj: Symbol;\nsymObj = sym;\nsym = symObj;",
+    ) >
+    0,
+  )
+  // Pure call signature never matches a construct-only target.
+  assert_true(
+    issues(
+      "interface T2 { new (x: number): void; }\ndeclare var t: T2;\ndeclare var f: (x: string) => number;\nt = f;",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "interface T2 { new (x: number): void; }\ndeclare var t: T2;\ndeclare var c: { new (x: number): void };\nt = c;",
+    ),
+    0,
+  )
+  // Missing required property between resolvable object shapes.
+  assert_true(
+    issues(
+      "declare var a: { a: string };\ndeclare var x: { a: string, b: string };\na = x;\nx = a;",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "declare var a: { a: string };\ndeclare var opt: { a: string, b?: string };\nopt = a;",
+    ),
+    0,
+  )
+  // Object-literal values against a string index signature.
+  assert_true(
+    issues(
+      "interface I { [s: string]: boolean; }\nvar o: I = { [\"\"+\"foo\"]: \"\" };",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "interface I { [s: string]: boolean; }\ndeclare var b: boolean;\nvar o: I = { [\"\"+\"k\"]: true, m: b };",
+    ),
+    0,
+  )
+  // Template cooked values normalize CRLF -> LF, so a physical-CRLF
+  // template mismatches a "\r\n"-escaped literal target.
+  assert_true(issues("let abc: \"AB\\r\\nC\" = `AB\r\nC`;") > 0)
+  @test.assert_eq(issues("let ok: \"AB\\nC\" = `AB\r\nC`;"), 0)
 }

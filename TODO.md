@@ -2295,6 +2295,40 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-07 (T188)  714/815 (88 %)        414/414 ( 0 FP)   Practical round 8: analysis-queue checks: TP 2155 -> 2161
+
+  T188 -- practical (non-edge) misses, round 8: the feasible queue from
+    T187's parallel corpus analysis, implemented as targeted early rules
+    in `check_expr_against` (all unfiltered). A bare `Var` source uses
+    its DECLARED type there: our assignment narrowing over-narrows
+    non-union declarations (`symObj = sym` narrowed `symObj: Symbol` to
+    `symbol`, which tsc does not do), hiding the errors on second
+    assignments.
+    - Wrapper object -> primitive (`Symbol`->`symbol`, `String`->`string`,
+      …) is never assignable (also encoded in `is_assignable_to`);
+      primitive -> wrapper stays legal. symbolType15.
+    - A pure call signature provides no match for a construct-only
+      target, and vice versa. assignmentCompatWithConstructSignatures.
+    - Missing required property between fully-resolvable object shapes
+      (`cast_shape_fields` both sides; intersections merge; ObjectLit
+      sources left to the literal checks). intersectionTypeAssignment.
+      (One pinned test updated: the dedicated rule now reports ahead of
+      the generic mismatch with a `missing` message.)
+    - Object-literal entry values (computed keys included) against a
+      string index signature's value type; concrete primitives only.
+      computedPropertyNamesContextualType8/9/10_ES6.
+    - Lexer: ES template cooked values normalize CRLF / lone CR -> LF,
+      and `infer_expr` gives a non-interpolating template its literal
+      type; the template-vs-literal-union check then compares real
+      characters and no longer abstains on line breaks
+      (stringLiteralTypesWithTemplateStrings02).
+    Deferred from the queue: string-literal param contravariance through
+    overload sets (stringLiteralTypesOverloadAssignability01/02 — needs
+    overload-set assignability), optionalPropertyAssignableToString-
+    IndexSignature, iterableArrayPattern17.
+    Whole-corpus TP 2155 -> 2161 @ 0 FP (session total 1761 -> +400);
+    pinned recall 714, precision 414/414. 2450 tests.
+
 2026-07-07 (T187)  714/815 (88 %)        414/414 ( 0 FP)   Practical round 7: TDZ, spread overwrite, enum readonly, await type: TP 2144 -> 2155
 
   T187 -- practical (non-edge) misses, round 7. Cluster selection came

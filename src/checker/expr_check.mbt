@@ -6273,7 +6273,15 @@ fn infer_expr(
         Any => @ast.TsType::Any
         _ => @ast.TsType::String_
       }
-    TemplateLiteral(_, _) => @ast.TsType::String_
+    // A non-interpolating template is the string literal type of its text
+    // (tsc infers `` `AB\nC` `` as `"AB\nC"`, which is NOT assignable to a
+    // differently-escaped literal target — stringLiteralTypesWithTemplateStrings02).
+    TemplateLiteral(parts, exprs) =>
+      if exprs.length() == 0 && parts.length() == 1 {
+        @ast.TsType::Literal(parts[0])
+      } else {
+        @ast.TsType::String_
+      }
     // `x as T` — forced cast; result type is `T`. We still walk `inner` so
     // any nested call sites are validated.
     As(inner, ty) => {
@@ -7126,6 +7134,171 @@ fn check_expr_against(
   // x + 1)` flows the element type into `x` so the body's `x + 1` is
   // properly typed instead of falling through to `Any`.
   let expected_shape = ctx.resolver.unwrap(expected)
+  // --- Batch AL targeted rules (all conservative, unfiltered) ---
+  // A bare variable source uses its DECLARED type: our assignment
+  // narrowing over-narrows non-union declared types (`symObj = sym`
+  // narrows `symObj: Symbol` to `symbol`, which tsc does not do for
+  // non-union declarations), and these rules must see the annotation.
+  let src_shape = match expr {
+    Var(n) =>
+      match env.lookup_declared(n) {
+        Some(t) if is_checkable(t) => ctx.resolver.unwrap(t)
+        _ =>
+          match ctx.resolver.globals.get(n) {
+            Some(t) if is_checkable(t) => ctx.resolver.unwrap(t)
+            _ => ctx.resolver.unwrap(infer_expr(env, ctx.resolver, expr))
+          }
+      }
+    _ => ctx.resolver.unwrap(infer_expr(env, ctx.resolver, expr))
+  }
+  // (1) A lib wrapper-object value never flows into its primitive slot
+  // (`sym = symObj` where `symObj: Symbol`, symbolType15). The reverse
+  // direction is legal and untouched.
+  match (src_shape, expected_shape) {
+    (Named("Symbol"), Symbol)
+    | (Named("String"), String_)
+    | (Named("Number"), Number | Int)
+    | (Named("Boolean"), Boolean)
+    | (Named("BigInt"), BigInt) => {
+      record_unfiltered(
+        ctx,
+        sub_path,
+        "`\{type_display(src_shape)}` is a wrapper object and is not assignable to the primitive `\{type_display(expected_shape)}`",
+      )
+      return
+    }
+    _ => ()
+  }
+  // (2) A pure call signature provides no match for a construct-only
+  // target, and vice versa (assignmentCompatWithConstructSignatures).
+  {
+    let tgt_ctor = collect_construct_signatures(expected_shape, ctx.resolver)
+    let tgt_call = collect_call_signatures(expected_shape, ctx.resolver)
+    if tgt_ctor.length() > 0 && tgt_call.length() == 0 {
+      match src_shape {
+        Func(_, _) => {
+          record_unfiltered(
+            ctx, sub_path, "a call signature provides no match for the target's construct signature",
+          )
+          return
+        }
+        _ => ()
+      }
+    } else if tgt_call.length() > 0 && tgt_ctor.length() == 0 {
+      match src_shape {
+        Constructor(_, _, _) => {
+          record_unfiltered(
+            ctx, sub_path, "a construct signature provides no match for the target's call signature",
+          )
+          return
+        }
+        _ => ()
+      }
+    }
+  }
+  // (3) Missing required property: both sides expand to full field maps
+  // (`cast_shape_fields` — objects, interfaces incl. extends chains,
+  // intersections; generics / index signatures / computed members
+  // abstain) and the target requires a name the source lacks entirely
+  // (`x = a` where `x: {a,b}`, `a: {a}` — intersectionTypeAssignment).
+  // Fresh object-literal sources are left to the excess/missing literal
+  // checks.
+  if !(expr is ObjectLit(_)) {
+    match
+      (
+        cast_shape_fields(ctx.resolver, src_shape, 0),
+        cast_shape_fields(ctx.resolver, expected_shape, 0),
+      ) {
+      (Some(src_f), Some(tgt_f)) => {
+        let mut missing : String? = None
+        for name, required in tgt_f {
+          if required && !src_f.contains(name) {
+            missing = Some(name)
+          }
+        }
+        match missing {
+          Some(name) => {
+            record_unfiltered(
+              ctx,
+              sub_path,
+              "property `\{name}` is missing in `\{type_display(src_shape)}` but required in `\{type_display(expected_shape)}`",
+            )
+            return
+          }
+          None => ()
+        }
+      }
+      _ => ()
+    }
+  }
+  // (4) An object literal against an index-signature-bearing interface:
+  // every entry value (computed keys included) must satisfy the string
+  // index value type (computedPropertyNamesContextualType8/9/10). Only
+  // concrete primitive values are judged; spreads abstain.
+  match (expr, expected_shape) {
+    (ObjectLit(entries), Named(iname)) =>
+      match ctx.resolver.interfaces.get(iname) {
+        Some(iface) =>
+          if iface.type_params.length() == 0 &&
+            iface.index_signatures.length() > 0 {
+            let mut idx_val : @ast.TsType? = None
+            for isig in iface.index_signatures {
+              if isig.0 is String_ {
+                idx_val = Some(isig.1)
+              }
+            }
+            match idx_val {
+              Some(v) => {
+                let v_u = ctx.resolver.unwrap(v)
+                if is_checkable(v_u) {
+                  let mut has_spread = false
+                  for e in entries {
+                    if e.0.has_prefix("@@spread") {
+                      has_spread = true
+                    }
+                  }
+                  if !has_spread {
+                    let mut reported = false
+                    for e in entries {
+                      if reported {
+                        break
+                      }
+                      // A named entry that matches a declared field is
+                      // checked against that field elsewhere.
+                      if iface.fields.iter().any(fn(f) { f.0 == e.0 }) {
+                        continue
+                      }
+                      let val_expr = match e.1 {
+                        ComputedProp(_, value) => value
+                        other => other
+                      }
+                      let t = ctx.resolver.unwrap(
+                        widen_literal(infer_expr(env, ctx.resolver, val_expr)),
+                      )
+                      let concrete_prim = match t {
+                        String_ | Number | Int | Boolean | BigInt => true
+                        _ => false
+                      }
+                      if concrete_prim && !is_assignable_to(t, v_u) {
+                        record_unfiltered(
+                          ctx,
+                          sub_path,
+                          "type `\{type_display(t)}` is not assignable to the `string` index type `\{type_display(v_u)}`",
+                        )
+                        reported = true
+                      }
+                    }
+                  }
+                }
+              }
+              None => ()
+            }
+          }
+        None => ()
+      }
+    _ => ()
+  }
+  // --- end batch AL rules ---
   // Function-typed-argument arity (contravariant): a function *value* must be
   // callable with the arguments any target call signature would pass it. If
   // the value *requires* more parameters than a call signature *provides*, it
@@ -7491,12 +7664,12 @@ fn check_expr_against(
         }
         cooked = Some(buf.to_string())
       }
-      // Escape-sequence decoding differs between the type-literal parser and
-      // the template scanner (`"DE\nF"` vs a template with a real newline),
-      // so any value or target containing backslashes / line breaks abstains.
-      let clean = fn(v : String) -> Bool {
-        !v.contains("\\") && !v.contains("\n") && !v.contains("\r")
-      }
+      // Both decoders now yield real characters: string literals decode
+      // their escapes and template cooked values normalize CRLF -> LF, so
+      // line breaks compare faithfully (`"AB\r\nC"` vs a physical-CRLF
+      // template = `"AB\nC"` — stringLiteralTypesWithTemplateStrings02).
+      // Residual backslashes (exotic escapes) still abstain.
+      let clean = fn(v : String) -> Bool { !v.contains("\\") }
       match (cooked, literal_union_members(expected_u)) {
         (Some(value), Some(lits)) if clean(value) => {
           let mut matched = false
