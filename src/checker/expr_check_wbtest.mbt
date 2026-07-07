@@ -12487,3 +12487,134 @@ test "expr_check: identity keys and union callee arity (batch AH)" {
     0,
   )
 }
+
+///|
+test "expr_check: TS2352 cast overlap (batch AI)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Cross-family primitive casts are definite mistakes.
+  assert_true(issues("var a = 20;\nvar b = a as string;") > 0)
+  assert_true(issues("declare var n: number;\nvar c = n as string;") > 0)
+  // Nullish sources under strictNullChecks never overlap a primitive.
+  assert_true(issues("var x = undefined as number;") > 0)
+  assert_true(issues("var y = (null as string).length;") > 0)
+  @test.assert_eq(issues("// @strict: false\nvar x = undefined as number;"), 0)
+  // Widening / any / union targets stay legal.
+  @test.assert_eq(
+    issues(
+      "declare var e: any;\nvar f = e as string;\nvar g = \"s\" as string;\nvar h = 20 as number | string;\nvar i = undefined as void;",
+    ),
+    0,
+  )
+  // Interface shapes: both directions missing a required property flag;
+  // sub/super shapes stay legal.
+  assert_true(
+    issues(
+      "// @strict: false\ninterface I1 { p1: number }\ninterface I2 extends I1 { p2: number }\ninterface I3 { p3: number }\ndeclare var z: I2;\nvar b = z as I3;",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @strict: false\ninterface I1 { p1: number }\ninterface I2 extends I1 { p2: number }\ndeclare var a: I1;\nvar b = a as I2;\nvar c = a as I1;",
+    ),
+    0,
+  )
+  // A non-interpolating template in type position is that string literal
+  // type (also keeps the ASI `as `Hello world`` mis-parse silent).
+  @test.assert_eq(
+    issues(
+      "// @strict: false\ndeclare function as(...args: any[]);\nvar x = 10\nas `Hello world`;",
+    ),
+    0,
+  )
+}
+
+///|
+test "expr_check: destructuring literal misses and globalThis (batch AJ)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2339: non-defaulted pattern properties missing from a syntactic
+  // object-literal source; defaults and annotations stay legal.
+  assert_true(issues("var { x, y } = {};") > 0)
+  assert_true(
+    issues("function f2() { var x: number; ({ x } = {}); return x; }") > 0,
+  )
+  @test.assert_eq(issues("var { x = 1, y = 2 } = {};"), 0)
+  @test.assert_eq(issues("var { a2 }: any = {};"), 0)
+  @test.assert_eq(
+    issues("declare var src: { x: number };\nvar { x } = { ...src };"),
+    0,
+  )
+  @test.assert_eq(issues("var { m } = { m: 1, extra: 2 };"), 0)
+  // TS2339: block-scoped top-level declarations are not globalThis
+  // properties; var declarations and lib globals are.
+  assert_true(issues("var x = 1\nconst y = 2\nglobalThis.y") > 0)
+  @test.assert_eq(issues("var x = 1\nglobalThis.x\nglobalThis.Infinity"), 0)
+  // TS2339 on a `Window & typeof globalThis` receiver.
+  assert_true(
+    issues(
+      "// @strict: false\ndeclare let win: Window & typeof globalThis;\nwin.hi",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nvar gx = 1\ndeclare let win: Window & typeof globalThis;\nwin.gx\nwin.document",
+    ),
+    0,
+  )
+}
+
+///|
+test "expr_check: static-block TDZ, spread overwrite, enum readonly, await type (batch AK)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2448: a static block using a block-scoped variable declared later.
+  assert_true(
+    issues("class Baz { static { console.log(FOO); } }\nconst FOO = \"FOO\";") >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "const FOO = \"FOO\";\nclass Bar { static { console.log(FOO); } }\nclass C2 { static { const cb = () => LATER; } }\nconst LATER = 3;",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues("class D { static { console.log(gv); } }\nvar gv = 1;"),
+    0,
+  )
+  // TS2783: an explicit property overwritten by a later spread.
+  assert_true(
+    issues(
+      "declare var ab: { a: number, b: number };\nvar x = { b: 1, ...ab };",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "declare var ab: { a: number, b: number };\ndeclare var opt: { a: number, b?: number };\nvar ok1 = { ...ab, b: 1 };\nvar ok2 = { b: 1, ...opt };",
+    ),
+    0,
+  )
+  // TS2540: enum members are read-only.
+  assert_true(issues("enum E { A, B }\nE.B++;") > 0)
+  @test.assert_eq(issues("enum E { A, B }\nvar n = E.B;\nn++;"), 0)
+  // TS2552: `await` as a type reference inside an async context.
+  assert_true(
+    issues("var bar = async (): Promise<void> => {\n  var v: await;\n}") > 0,
+  )
+  assert_true(
+    issues("async function foo(): Promise<void> {\n  var v: await;\n}") > 0,
+  )
+  @test.assert_eq(
+    issues(
+      "type awaitAlias = number;\nfunction g() { var v: awaitAlias = 1; return v; }",
+    ),
+    0,
+  )
+}

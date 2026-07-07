@@ -920,13 +920,18 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
         Void
       }
     }
-    // Template literal type: `bg${ForegroundColorName}`. Falls back to
-    // `String_` for non-interpolating templates so the prior conservative
-    // behavior is preserved.
+    // Template literal type: `bg${ForegroundColorName}`. A
+    // non-interpolating template is the string *literal* type of its text
+    // (tsc semantics) — also keeps the `as`-cast reliability split from
+    // firing on the ASI `as `Hello world`` mis-parse (asOperatorASI).
     Template(cooked_parts, _, expr_sources) => {
       let _ = self.advance()
       if expr_sources.length() == 0 {
-        String_
+        if cooked_parts.length() >= 1 {
+          Literal(cooked_parts[0])
+        } else {
+          String_
+        }
       } else {
         let type_args : Array[@ast.TsType] = []
         for src in expr_sources {
@@ -1194,6 +1199,14 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
     // Ident or generic type: Foo, Array<T>
     Ident(name) => {
       let _ = self.advance()
+      // TS2552: inside an `async` context `await` is a reserved word, so a
+      // type reference spelled `await` (`var v: await`) can never resolve
+      // (tsc suggests `Awaited`). Outside async it is a legal type name.
+      if name == "await" && self.in_async {
+        self.grammar_misuses.push(
+          "cannot find name `await`. Did you mean `Awaited`?",
+        )
+      }
       match self.local_type_param_bound(name) {
         // A `T extends object` bound erases to `Any`, not `NonPrimitiveObject`:
         // the constraint promises "some object type", so treating a value of

@@ -2295,6 +2295,102 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-07 (T187)  714/815 (88 %)        414/414 ( 0 FP)   Practical round 7: TDZ, spread overwrite, enum readonly, await type: TP 2144 -> 2155
+
+  T187 -- practical (non-edge) misses, round 7. Cluster selection came
+    from three parallel corpus-analysis passes over the remaining TS2322
+    (53), TS2345 (25), and small-code misses; their reports also
+    identified the follow-up queue (object-literal-vs-index-signature
+    values, literal-param contravariance, Symbol wrapper vs primitive,
+    call-vs-construct signatures, TS2741 missing property) and marked
+    ~34 TS2322 / ~22 TS2345 files as needing unmodelable machinery
+    (generic inference chains, lib member signatures, flow narrowing).
+    - TS2448: a top-level class's static block reading / writing a
+      block-scoped variable declared LATER at top level (TDZ at class
+      definition time). Statement order between classes and consts is
+      erased by module lowering, so the parser records `<sb-read:X>`
+      (immediate reads / writes of each top-level static block,
+      function bodies skipped) and `<letconst-decl:X>` markers whose
+      relative order in the append-only `grammar_misuses` channel IS
+      parse order; the checker pairs them. classStaticBlock16,
+      classStaticBlockUseBeforeDef3.
+    - TS2783: an explicitly-written object-literal property that a later
+      spread always overwrites (`{ b: 1, ...ab }` with `b` required in
+      `ab`'s type). Reuses `cast_shape_fields`; optional members,
+      unions, generics, spread-vs-spread abstain.
+      spreadDuplicate(Exact), spreadOverwritesProperty(Strict).
+    - TS2540: enum members are read-only — `E.B++` / `--E["B"]` with an
+      unshadowed enum receiver. incrementOperatorWithEnumType.
+    - TS2552: `await` as a type reference inside an async context can
+      never resolve (tsc suggests `Awaited`). Recorded in the type
+      parser under `in_async` — which exposed a parser bug: function
+      declarations reset `in_async = false` before parsing their body
+      (`async function` bodies parsed as non-async); both
+      `parse_function` sites now propagate `is_async`.
+      asyncArrowFunction10_*, asyncFunctionDeclaration13_*.
+    Whole-corpus TP 2144 -> 2155 @ 0 FP (session total 1761 -> +394);
+    pinned recall 714, precision 414/414. 2449 tests.
+
+2026-07-07 (T186)  714/815 (88 %)        414/414 ( 0 FP)   Practical round 6: destructuring literal misses + globalThis: TP 2140 -> 2144
+
+  T186 -- practical (non-edge) misses, round 6 (TS2339 subclusters).
+    - Destructuring from a syntactic object literal: a non-defaulted
+      pattern property the literal provably lacks (`var { x, y } = {}`,
+      `({ x } = {})`). The assignment form checks in the `AssignPattern`
+      arm; the declaration form is recorded by the PARSER, because
+      `var { a2 }: any = {}` is legal — the annotation retypes the
+      source — but annotation and absence both reach the checker as
+      `Any` (the ES5/ES6 destructuring fixtures caught that as gate
+      FPs). Spread / computed / synthetic source entries abstain;
+      defaults are legal. missingAndExcessProperties.
+    - `globalThis.<name>` where `<name>` is a top-level `let` / `const`
+      of this file: block-scoped declarations never become `globalThis`
+      properties. Standalone syntactic pass, dotted value form only.
+      globalThisBlockscopedProperties.
+    - TS2339 on a `Window & typeof globalThis` receiver (`win.hi`):
+      property must be a declared module value (env / globals / classes
+      / enums) or a known lib global; fires regardless of noImplicitAny,
+      unlike the element-access form. globalThisUnknown,
+      globalThisUnknownNoImplicitAny.
+    - Investigated and dropped: computedPropertyNames TS2411 (computed
+      getter return types are `Any` at parse time — the accessor body
+      isn't retained on the class decl), symbol-keyed TS2411
+      (symbolProperty17: both sides erase to `<computed>`).
+    Whole-corpus TP 2140 -> 2144 @ 0 FP (session total 1761 -> +383);
+    pinned recall 714, precision 414/414. 2448 tests.
+
+2026-07-07 (T185)  714/815 (88 %)        414/414 ( 0 FP)   Practical round 5: TS2352 cast overlap: TP 2136 -> 2140
+
+  T185 -- practical (non-edge) misses, round 5. (PR #192 merged the
+    T181-T184 batches to main as 1602d28; branch restarted from it.)
+    - TS2352 revival: the As-arm's "cannot be asserted" diagnostic was
+      blanket-suppressed in permissive mode. Carved out the reliable
+      subset as unfiltered emissions: (a) cross-family primitive casts
+      (`a as string` where `a: number`) -- requires a *keyword*
+      primitive asserted type (string/number/boolean/bigint), because
+      the ASI `var x = 10\n as `Hello world`` mis-parse reaches the arm
+      as a cast to a string-literal type (asOperatorASI was the gate
+      FP); (b) nullish sources under strictNullChecks against primitive
+      targets (`undefined as number`, `null as string`) -- non-strict
+      assignability would let them flow, so this is an explicit strict
+      branch. Also added `Int` to the concrete-operand set.
+    - TS2352 between object shapes: both directions missing a required
+      property (full extends-chain field maps via `cast_shape_fields`;
+      intersections merge; generics / index signatures / computed
+      members abstain) -- `<I3>z` where `z: I2`
+      (typeAssertionsWithIntersectionTypes01).
+    - Parser: a non-interpolating template literal in TYPE position is
+      now the string *literal* type of its text (tsc semantics), not
+      `String_` -- needed so the ASI mis-parse lands on the filtered
+      path, and more correct generally.
+    - TS2420 missing-member extension was investigated and dropped:
+      symbol-keyed members erase to `<computed>` on both the interface
+      and class sides, so the missing-member verdict isn't decidable
+      for the remaining fixtures.
+    asOperator1/2, asOperatorNames, typeAssertionsWithIntersectionTypes01.
+    Whole-corpus TP 2136 -> 2140 @ 0 FP (session total 1761 -> +379);
+    pinned recall 714, precision 414/414. 2447 tests.
+
 2026-07-07 (T184)  714/815 (88 %)        414/414 ( 0 FP)   Practical round 4: TS2403 identity keys + union-callee arity: TP 2134 -> 2136
 
   T184 -- practical (non-edge) misses, round 4.

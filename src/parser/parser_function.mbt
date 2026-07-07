@@ -404,7 +404,10 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   if is_generator {
     self.in_generator = true
   }
-  self.in_async = false // Reset for nested functions
+  // The body's async-ness follows THIS function (a non-async nested
+  // function leaves the async context; an `async` one enters it -- `await`
+  // is reserved in its type positions).
+  self.in_async = is_async
   self.in_function = true
   self.in_iteration = false
   self.in_switch = false
@@ -710,7 +713,10 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
   if is_generator {
     self.in_generator = true
   }
-  self.in_async = false // Reset for nested functions
+  // The body's async-ness follows THIS function (a non-async nested
+  // function leaves the async context; an `async` one enters it -- `await`
+  // is reserved in its type positions).
+  self.in_async = is_async
   self.in_function = true
   self.in_iteration = false
   self.in_switch = false

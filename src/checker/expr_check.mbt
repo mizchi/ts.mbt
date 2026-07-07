@@ -12924,6 +12924,43 @@ fn check_ident_binding_decl(
 }
 
 ///|
+/// TS2339 for object destructuring from a syntactic object literal: a
+/// pattern property with no default whose key is provably absent from the
+/// literal (`var { x } = {}`, `({ x } = {})`). A defaulted property is
+/// legal (the default fills in), and any spread / computed / synthetic
+/// entry in the source makes the key set unknowable, so the whole pattern
+/// abstains.
+fn check_object_pattern_from_literal(
+  ctx : CheckCtx,
+  ob : @ast.TsObjectBinding,
+  entries : Array[(String, @ast.TsExpr)],
+) -> Unit {
+  let keys : Map[String, Bool] = {}
+  for e in entries {
+    if e.0.has_prefix("@@spread") || e.0.has_prefix("<") {
+      return
+    }
+    match e.1 {
+      ComputedProp(_, _) => return
+      _ => ()
+    }
+    keys[e.0] = true
+  }
+  for prop in ob.props {
+    if prop.default is None &&
+      prop.key_expr is None &&
+      !prop.key.has_prefix("<") &&
+      !keys.contains(prop.key) {
+      record_unfiltered(
+        ctx,
+        "destructuring `\{prop.key}`",
+        "property `\{prop.key}` does not exist on the object-literal source",
+      )
+    }
+  }
+}
+
+///|
 fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
   match stmt {
     Var(@ast.TsBinding::Ident(name), declared, init) =>
@@ -12963,6 +13000,10 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
     | Let(@ast.TsBinding::Object(ob), declared, init)
     | Const(@ast.TsBinding::Object(ob), declared, init) => {
       check_call_args_in_expr(env, init, ctx)
+      // (TS2339 for `var { x } = {}` is recorded by the PARSER, which can
+      // see whether a type annotation was written — `var { x }: any = {}`
+      // retypes the source and is legal, but reaches here with the same
+      // `Any` declared type as the unannotated form.)
       if is_checkable(declared) {
         check_expr_against(env, init, declared, ctx, "destructuring init")
       }
@@ -14543,6 +14584,22 @@ fn check_call_args_in_expr(
         // are not trustworthy here. Unions, generics, `any`, and unresolved
         // names all abstain.
         PreInc | PreDec | PostInc | PostDec => {
+          // TS2540: enum members are read-only, so `E.B++` / `--E["B"]`
+          // (receiver resolving to an enum object, not shadowed locally)
+          // can never be an assignment target.
+          match inner {
+            PropAccess(Var(recv_name), member)
+            | IndexAccess(Var(recv_name), StringLit(member)) =>
+              if env.lookup(recv_name) is None &&
+                ctx.resolver.enums.get(recv_name) is Some(_) {
+                record_unfiltered(
+                  ctx,
+                  "unary op",
+                  "cannot assign to `\{member}` because it is a read-only property",
+                )
+              }
+            _ => ()
+          }
           let inner_ty = ctx.resolver.unwrap(
             infer_expr(env, ctx.resolver, inner),
           )
@@ -14611,10 +14668,47 @@ fn check_call_args_in_expr(
       for it in items {
         check_call_args_in_expr(env, it, ctx)
       }
-    ObjectLit(entries) =>
+    ObjectLit(entries) => {
       for ent in entries {
         check_call_args_in_expr(env, ent.1, ctx)
       }
+      // TS2783: an explicitly-written property that a LATER spread in the
+      // same literal always overwrites (`{ b: 1, ...ab }` where `ab`'s type
+      // declares `b` as required). Optional members, unions, generics, and
+      // unresolvable spread shapes abstain (`cast_shape_fields` returns
+      // `None` for those); spread-vs-spread never errors.
+      for i, ent in entries {
+        if ent.0.has_prefix("@@spread") || ent.0.has_prefix("<") {
+          continue
+        }
+        let mut reported = false
+        for j in (i + 1)..<entries.length() {
+          if reported {
+            break
+          }
+          if entries[j].0.has_prefix("@@spread") {
+            let spread_ty = ctx.resolver.unwrap(
+              infer_expr(env, ctx.resolver, entries[j].1),
+            )
+            match cast_shape_fields(ctx.resolver, spread_ty, 0) {
+              Some(fields) =>
+                match fields.get(ent.0) {
+                  Some(true) => {
+                    record_unfiltered(
+                      ctx,
+                      "object literal `\{ent.0}`",
+                      "`\{ent.0}` is specified more than once, so this usage will be overwritten by the spread",
+                    )
+                    reported = true
+                  }
+                  _ => ()
+                }
+              None => ()
+            }
+          }
+        }
+      }
+    }
     // A computed property key (`{ [e]: 1 }`, `class C { [e]() {} }`) is an
     // ordinary value expression: walk both the key and the value so an
     // undefined name in the key surfaces (TS2304) like any other reference.
@@ -14640,6 +14734,38 @@ fn check_call_args_in_expr(
       check_member_accessibility(env, ctx, recv, prop)
       check_super_abstract_access(ctx, recv, prop)
       check_namespace_or_enum_member_access(env, ctx, recv, prop)
+      // TS2339 on a `Window & typeof globalThis` receiver (`declare let
+      // win: Window & typeof globalThis; win.hi`): the property must be a
+      // declared module value or a known lib / window global. Errors
+      // regardless of noImplicitAny (globalThisUnknown), unlike the
+      // element-access form.
+      match ctx.resolver.unwrap(infer_expr(env, ctx.resolver, recv)) {
+        Intersection(parts) => {
+          let mut has_globalthis = false
+          let mut only_window_parts = true
+          for p in parts {
+            match p {
+              TypeOf("globalThis") => has_globalthis = true
+              Named("Window") => ()
+              _ => only_window_parts = false
+            }
+          }
+          if has_globalthis &&
+            only_window_parts &&
+            env.lookup(prop) is None &&
+            ctx.resolver.globals.get(prop) is None &&
+            ctx.resolver.classes.get(prop) is None &&
+            ctx.resolver.enums.get(prop) is None &&
+            !is_lib_global_value(prop) {
+            record_unfiltered(
+              ctx,
+              "PropAccess `.\{prop}`",
+              "property `\{prop}` does not exist on `Window & typeof globalThis`",
+            )
+          }
+        }
+        _ => ()
+      }
       // TS2806: reading a private accessor that was defined with a setter but
       // no getter. A write (`this.#x = v`) parses as `PropAssignExpr`, so a
       // `PropAccess` of a set-only private name is always a read.
@@ -15017,6 +15143,17 @@ fn check_call_args_in_expr(
       // `{x, y} = …`) writes every named binding inside. Clear them
       // from the unassigned set so subsequent reads don't trip.
       clear_unassigned_in_binding(ctx, binding)
+      // TS2339: `({ x, y } = {})` — a non-defaulted pattern property the
+      // syntactic object-literal source provably lacks.
+      match binding {
+        @ast.TsBinding::Object(ob2) =>
+          match v {
+            ObjectLit(src_entries) =>
+              check_object_pattern_from_literal(ctx, ob2, src_entries)
+            _ => ()
+          }
+        _ => ()
+      }
       // TS2322: assignment-form array destructuring writes the source's
       // element type into each *existing* target's declared slot
       // (`var a: Bar, b: string; [a, b] = new FooIterator` --
@@ -15273,6 +15410,7 @@ fn check_call_args_in_expr(
       let concrete = fn(t : @ast.TsType) -> Bool {
         match t {
           Number
+          | Int
           | String_
           | Boolean
           | BigInt
@@ -15287,15 +15425,56 @@ fn check_call_args_in_expr(
           _ => false
         }
       }
-      if concrete(inferred) &&
+      // TS2352 between disjoint primitive families (`a as string` where
+      // `a: number`) is reliable: emit unfiltered. Under strictNullChecks
+      // a nullish source never overlaps a concrete primitive target
+      // (`undefined as number`, `null as string`) even though non-strict
+      // assignability would let it flow.
+      // Reliability requires a *keyword* primitive asserted type: an ASI
+      // call of a function named `as` with a tagged template (`var x = 10\n
+      // as `Hello world`;`, asOperatorASI) reaches here as a cast to a
+      // string-literal type, so literal / template asserted types stay on
+      // the filtered path.
+      let asserted_reliable = match asserted {
+        String_ | Number | Int | Boolean | BigInt => true
+        _ => false
+      }
+      let strict_nullish_cast = ctx.strict_null_checks &&
+        asserted_reliable &&
+        inferred is (Null | Undefined) &&
+        equality_primitive_family(asserted) is Some(_)
+      if strict_nullish_cast {
+        record_unfiltered(
+          ctx,
+          "as",
+          "conversion of type '\{type_display(inferred)}' to type '\{type_display(asserted)}' may be a mistake because neither type sufficiently overlaps with the other",
+        )
+      } else if concrete(inferred) &&
         concrete(asserted) &&
         !is_assignable_to(inferred, asserted) &&
         !is_assignable_to(asserted, inferred) {
-        record(
-          ctx,
-          "as",
-          "Type '\{type_display(inferred)}' cannot be asserted to type '\{type_display(asserted)}' (no overlap)",
-        )
+        let families_differ = match
+          (
+            equality_primitive_family(inferred),
+            equality_primitive_family(asserted),
+          ) {
+          (Some(a), Some(b)) => a != b
+          _ => false
+        }
+        let cross_family = asserted_reliable && families_differ
+        if cross_family {
+          record_unfiltered(
+            ctx,
+            "as",
+            "conversion of type '\{type_display(inferred)}' to type '\{type_display(asserted)}' may be a mistake because neither type sufficiently overlaps with the other",
+          )
+        } else {
+          record(
+            ctx,
+            "as",
+            "Type '\{type_display(inferred)}' cannot be asserted to type '\{type_display(asserted)}' (no overlap)",
+          )
+        }
       } else {
         // TS2352: a bare primitive and a concrete object type (a user
         // interface / class / object literal) never overlap, so asserting one
@@ -15333,6 +15512,41 @@ fn check_call_args_in_expr(
             "as",
             "conversion of type '\{type_display(inferred_u)}' to type '\{type_display(asserted_u)}' may be a mistake because neither type sufficiently overlaps with the other",
           )
+        } else {
+          // TS2352 between object shapes (interfaces, intersections of
+          // interfaces, literal shapes): the conversion is a definite
+          // mistake when EACH side declares a required property the other
+          // side lacks entirely -- then neither direction is comparable
+          // (`<I3>z` where `z: I2`; typeAssertionsWithIntersectionTypes01).
+          // Any unresolvable / generic / indexed / computed shape abstains.
+          match
+            (
+              cast_shape_fields(ctx.resolver, inferred_u, 0),
+              cast_shape_fields(ctx.resolver, asserted_u, 0),
+            ) {
+            (Some(src), Some(tgt)) => {
+              let mut tgt_requires_missing = false
+              for name, required in tgt {
+                if required && !src.contains(name) {
+                  tgt_requires_missing = true
+                }
+              }
+              let mut src_requires_missing = false
+              for name, required in src {
+                if required && !tgt.contains(name) {
+                  src_requires_missing = true
+                }
+              }
+              if tgt_requires_missing && src_requires_missing {
+                record(
+                  ctx,
+                  "as",
+                  "conversion of type '\{type_display(inferred_u)}' to type '\{type_display(asserted_u)}' may be a mistake because neither type sufficiently overlaps with the other",
+                )
+              }
+            }
+            _ => ()
+          }
         }
       }
     }
@@ -20677,6 +20891,178 @@ fn normalized_union_members(
 }
 
 ///|
+/// TS2339 for `globalThis.<name>` where `<name>` is a top-level `let` /
+/// `const` in this file: block-scoped declarations never become
+/// `globalThis` properties (globalThisBlockscopedProperties). Only the
+/// dotted value form is judged — element access and type positions report
+/// different codes. Walks top-level statements and their direct
+/// initializer / operand expressions; nested function bodies are covered
+/// too via the recursive statement walk.
+fn check_globalthis_blockscoped(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  let block_scoped : Map[String, Bool] = {}
+  for stmt in module_.top_level_stmts {
+    match stmt {
+      Let(@ast.TsBinding::Ident(n), _, _)
+      | Const(@ast.TsBinding::Ident(n), _, _) => block_scoped[n] = true
+      _ => ()
+    }
+  }
+  if block_scoped.length() == 0 {
+    return issues
+  }
+  fn walk_expr(e : @ast.TsExpr) -> Unit {
+    match e {
+      PropAccess(Var("globalThis"), p) =>
+        if block_scoped.get(p) is Some(_) {
+          issues.push({
+            path: "globalThis.\{p}",
+            message: "property `\{p}` does not exist on `typeof globalThis`",
+          })
+        }
+      PropAccess(r, _) => walk_expr(r)
+      PropAssignExpr(r, _, v) => {
+        walk_expr(r)
+        walk_expr(v)
+      }
+      BinOp(_, a, b) | Seq(a, b) | IndexAccess(a, b) | ComputedProp(a, b) => {
+        walk_expr(a)
+        walk_expr(b)
+      }
+      Cond(a, b, c) | IndexAssignExpr(a, b, c) => {
+        walk_expr(a)
+        walk_expr(b)
+        walk_expr(c)
+      }
+      UnaryOp(_, x)
+      | Spread(x)
+      | Await(x)
+      | AssignExpr(_, x)
+      | As(x, _)
+      | NonNull(x)
+      | OptionalChain(x) => walk_expr(x)
+      Call(_, args) | New(_, args) =>
+        for a in args {
+          walk_expr(a)
+        }
+      CallExpr(callee, args) | NewExpr(callee, args) => {
+        walk_expr(callee)
+        for a in args {
+          walk_expr(a)
+        }
+      }
+      MethodCall(r, _, args) => {
+        walk_expr(r)
+        for a in args {
+          walk_expr(a)
+        }
+      }
+      ArrayLit(items) =>
+        for it in items {
+          walk_expr(it)
+        }
+      ObjectLit(entries) =>
+        for ent in entries {
+          walk_expr(ent.1)
+        }
+      TemplateLiteral(_, exprs) =>
+        for x in exprs {
+          walk_expr(x)
+        }
+      _ => ()
+    }
+  }
+
+  fn walk_stmt(stmt : @ast.TsStmt) -> Unit {
+    fn walk_block(b : @ast.TsBlock) -> Unit {
+      for s in b.stmts {
+        walk_stmt(s)
+      }
+    }
+
+    match stmt {
+      Var(_, _, e)
+      | Let(_, _, e)
+      | Const(_, _, e)
+      | Assign(_, e)
+      | CompoundAssign(_, _, e)
+      | Expr(e)
+      | Throw(e)
+      | Return(Some(e)) => walk_expr(e)
+      PropAssign(r, _, v) => {
+        walk_expr(r)
+        walk_expr(v)
+      }
+      IndexAssign(a, b, c) => {
+        walk_expr(a)
+        walk_expr(b)
+        walk_expr(c)
+      }
+      If(c, t, e) => {
+        walk_expr(c)
+        walk_block(t)
+        match e {
+          Some(x) => walk_block(x)
+          None => ()
+        }
+      }
+      While(c, b) | DoWhile(c, b) | With(c, b) => {
+        walk_expr(c)
+        walk_block(b)
+      }
+      For(init, cond, upd, body) => {
+        match init {
+          Some(s) => walk_stmt(s)
+          None => ()
+        }
+        match cond {
+          Some(e) => walk_expr(e)
+          None => ()
+        }
+        match upd {
+          Some(s) => walk_stmt(s)
+          None => ()
+        }
+        walk_block(body)
+      }
+      ForOf(_, _, _, e, b) | ForAwaitOf(_, _, _, e, b) | ForIn(_, _, _, e, b) => {
+        walk_expr(e)
+        walk_block(b)
+      }
+      Switch(e, cases) => {
+        walk_expr(e)
+        for case in cases {
+          match case.test_expr {
+            Some(t) => walk_expr(t)
+            None => ()
+          }
+          walk_block(case.body)
+        }
+      }
+      Try(b, _, cb, fb) => {
+        walk_block(b)
+        match cb {
+          Some(x) => walk_block(x)
+          None => ()
+        }
+        match fb {
+          Some(x) => walk_block(x)
+          None => ()
+        }
+      }
+      Label(_, s) => walk_stmt(s)
+      Block(b) => walk_block(b)
+      _ => ()
+    }
+  }
+
+  for stmt in module_.top_level_stmts {
+    walk_stmt(stmt)
+  }
+  issues
+}
+
+///|
 /// TS2403 ("Subsequent variable declarations must have the same type"): two
 /// `var` declarations of the same name must declare the *identical* type.
 /// Identity (not assignability) -- `C` and `C | D` are mutually assignable
@@ -21225,6 +21611,9 @@ fn check_module_function_bodies_layered(
   for issue in check_var_redeclaration_types(module_, resolver) {
     all.push(issue)
   }
+  for issue in check_globalthis_blockscoped(module_) {
+    all.push(issue)
+  }
   for issue in check_misplaced_type_predicates(module_) {
     all.push(issue)
   }
@@ -21498,6 +21887,34 @@ fn check_module_function_bodies_layered(
         message: "`await` is a reserved word at the top-level of a module",
       })
     }
+    // TS2448: a top-level class's static block reading / writing a
+    // block-scoped variable declared LATER at top level (TDZ at class
+    // definition time). `grammar_misuses` is append-only in parse order,
+    // so an `<sb-read:X>` seen before X's `<letconst-decl:X>` — with the
+    // declaration present at all — is a definite use-before-declaration.
+    let tdz_declared : Map[String, Bool] = {}
+    let tdz_pending : Map[String, Bool] = {}
+    let tdz_reported : Map[String, Bool] = {}
+    for gm in module_.grammar_misuses {
+      if gm.has_prefix("<letconst-decl:") {
+        let n = gm["<letconst-decl:".length():gm.length() - 1].to_string()
+        tdz_declared[n] = true
+        if tdz_pending.get(n) is Some(_) && tdz_reported.get(n) is None {
+          tdz_reported[n] = true
+          all.push({
+            path: "static block",
+            message: "block-scoped variable `\{n}` used before its declaration",
+          })
+        }
+        continue
+      }
+      if gm.has_prefix("<sb-read:") {
+        let n = gm["<sb-read:".length():gm.length() - 1].to_string()
+        if tdz_declared.get(n) is None {
+          tdz_pending[n] = true
+        }
+      }
+    }
     // TS2304 for a single-bare-identifier computed key in a type position
     // (`var v: { [e]: number }`, `interface I { [e](): T }`, `declare class
     // C { [e]: T }`). The key references the *value* namespace; resolve it
@@ -21549,6 +21966,11 @@ fn check_module_function_bodies_layered(
       // Markers, not errors: module-syntax evidence and a top-level
       // binding named `await`, combined into TS1262 above.
       if gm == "<module-syntax>" || gm == "<top-await-name>" {
+        continue
+      }
+      // Markers, not errors: static-block reads and top-level let/const
+      // declarations, paired into TS2448 above.
+      if gm.has_prefix("<sb-read:") || gm.has_prefix("<letconst-decl:") {
         continue
       }
       // TS2304: `export = name` over a provably undeclared value. Same
@@ -23040,6 +23462,93 @@ fn check_abstract_implementation(
     }
   }
   issues
+}
+
+///|
+/// Full field map (`name -> required`) of an object-shaped cast operand for
+/// the TS2352 comparability check, or `None` when the shape can't be
+/// collected faithfully: generic interfaces, index signatures, computed /
+/// synthetic members, generic heritage, unresolvable names. Interfaces walk
+/// their `extends` chain; intersections merge every part.
+fn cast_shape_fields(
+  resolver : Resolver,
+  t : @ast.TsType,
+  depth : Int,
+) -> Map[String, Bool]? {
+  if depth > 8 {
+    return None
+  }
+  match resolver.unwrap(t) {
+    Named(n) => {
+      guard resolver.interfaces.get(n) is Some(iface) else { return None }
+      if iface.type_params.length() > 0 || iface.index_signatures.length() > 0 {
+        return None
+      }
+      let out : Map[String, Bool] = {}
+      for f in iface.fields {
+        if f.0.has_prefix("<") {
+          return None
+        }
+        out[f.0] = !type_has_undefined(f.1)
+      }
+      for i, base in iface.extends_names {
+        if i < iface.extends_args.length() && iface.extends_args[i].length() > 0 {
+          return None
+        }
+        match cast_shape_fields(resolver, Named(base), depth + 1) {
+          Some(bf) =>
+            for k, v in bf {
+              if !out.contains(k) {
+                out[k] = v
+              }
+            }
+          None => return None
+        }
+      }
+      Some(out)
+    }
+    Intersection(parts) => {
+      let out : Map[String, Bool] = {}
+      for p in parts {
+        match cast_shape_fields(resolver, p, depth + 1) {
+          Some(pf) =>
+            for k, v in pf {
+              if !out.contains(k) {
+                out[k] = v
+              }
+            }
+          None => return None
+        }
+      }
+      Some(out)
+    }
+    Object(fields) => {
+      let out : Map[String, Bool] = {}
+      for f in fields {
+        match f.0 {
+          Literal(k) =>
+            if k.has_prefix("<") {
+              return None
+            } else {
+              out[k] = !type_has_undefined(f.1)
+            }
+          _ => return None
+        }
+      }
+      Some(out)
+    }
+    Struct(_, fields) => {
+      let out : Map[String, Bool] = {}
+      for f in fields {
+        if f.0.has_prefix("<") {
+          return None
+        }
+        out[f.0] = !type_has_undefined(f.1)
+      }
+      Some(out)
+    }
+    _ => None
+  }
 }
 
 ///|
