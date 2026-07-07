@@ -2295,6 +2295,32 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-07 (T189)  714/815 (88 %)        414/414 ( 0 FP)   Practical round 9: abstract ctor typeof + iterable protocol sites: TP 2161 -> 2166
+
+  T189 -- practical (non-edge) misses, round 9.
+    - TS2322 for `var AA: typeof A = B` where `B` is abstract and `A` is
+      not: purely syntactic (`TypeOf` annotation + bare class-name
+      initializer, both resolvable), so it sidesteps the general
+      `typeof`-skip resolver-cycle guard.
+      classAbstractConstructorAssignability (both errors — `CC: typeof C
+      = B` is also abstract-into-non-abstract).
+    - TS2488 extraction: the for-of base-less-class iterator-protocol
+      check moved into `check_iterable_class_protocol` and now also runs
+      on array-literal spreads (`[...new SymbolIterator]` —
+      iteratorSpreadInArray8/10) and, for object-literal sources, on
+      assignment-form array destructuring (`[a, b] = { 0: "", 1: true }`
+      — iterableArrayPattern23/24; computed keys silence it).
+    Investigated and dropped this round:
+    optionalPropertyAssignableToStringIndexSignature (`k1?: string` and
+    `k1: string | undefined` parse to identical ASTs — optionality is
+    unrecoverable), typeArgumentInferenceConstructSignatures (construct
+    signatures erase their type-parameter lists), iterableArrayPattern17
+    (a class's computed METHOD keys erase to `<computed>`, so "property
+    absent" is unsound), classConstructorAccessibility3 (needs the
+    narrowed class-constructor value type on the target side).
+    Whole-corpus TP 2161 -> 2166 @ 0 FP (session total 1761 -> +405);
+    pinned recall 714, precision 414/414. 2451 tests.
+
 2026-07-07 (T188)  714/815 (88 %)        414/414 ( 0 FP)   Practical round 8: analysis-queue checks: TP 2155 -> 2161
 
   T188 -- practical (non-edge) misses, round 8: the feasible queue from

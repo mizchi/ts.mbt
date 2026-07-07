@@ -12675,3 +12675,39 @@ test "expr_check: wrapper primitives, construct sigs, index values, templates (b
   assert_true(issues("let abc: \"AB\\r\\nC\" = `AB\r\nC`;") > 0)
   @test.assert_eq(issues("let ok: \"AB\\nC\" = `AB\r\nC`;"), 0)
 }
+
+///|
+test "expr_check: abstract ctor typeof, iterable spreads/assign (batch AM)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2322: abstract constructor into a non-abstract `typeof` slot.
+  assert_true(
+    issues("class A {}\nabstract class B extends A {}\nvar AA: typeof A = B;") >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "class A {}\nabstract class B extends A {}\nvar BB: typeof B = A;\nvar B2: typeof B = B;",
+    ),
+    0,
+  )
+  // TS2488: array spread of a non-iterable class instance.
+  assert_true(
+    issues(
+      "class S { next() { return { value: 1, done: false }; } }\nvar a = [...new S];",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "class It { next() { return { value: 1, done: false }; } [Symbol.iterator]() { return this; } }\nvar a = [...new It];\nvar b = [...[1, 2], 3];",
+    ),
+    0,
+  )
+  // TS2488: assignment-form array destructuring from an object literal.
+  assert_true(
+    issues("var a: string, b: boolean;\n[a, b] = { 0: \"\", 1: true };") > 0,
+  )
+  @test.assert_eq(issues("var x: number, y: number;\n[x, y] = [1, 2];"), 0)
+}

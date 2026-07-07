@@ -13045,6 +13045,30 @@ fn check_ident_binding_decl(
   init : @ast.TsExpr,
   block_scoped : Bool,
 ) -> Unit {
+  // TS2322 for `var AA: typeof A = B`: an abstract constructor type is
+  // never assignable to a non-abstract one. Purely syntactic — a `typeof
+  // Class` annotation initialized by a bare abstract-class name, both
+  // resolvable in this module (the general `typeof` machinery is skipped
+  // by the resolver-cycle guard, so this narrow case is handled here).
+  match (declared, init) {
+    (TypeOf(target_name), Var(source_name)) =>
+      match
+        (
+          ctx.resolver.classes.get(target_name),
+          ctx.resolver.classes.get(source_name),
+        ) {
+        (Some(tcls), Some(scls)) =>
+          if scls.is_abstract && !tcls.is_abstract {
+            record_unfiltered(
+              ctx,
+              "binding `\{name}` init",
+              "cannot assign an abstract constructor type to a non-abstract constructor type",
+            )
+          }
+        _ => ()
+      }
+    _ => ()
+  }
   let bound_type = if is_checkable(declared) {
     declared
   } else {
@@ -13094,6 +13118,81 @@ fn check_ident_binding_decl(
     _ => ()
   }
   check_expr_against(env, init, declared, ctx, "binding `\{name}` init")
+}
+
+///|
+/// TS2488: the value must have a `[Symbol.iterator]()` method returning an
+/// iterator. Decided only for base-less, index-signature-free class
+/// instances (an `extends` chain or an interface merge could add the
+/// protocol): either the class lacks the `[Symbol.iterator]` member
+/// entirely, or it returns `this` while the class has no `next` method
+/// (for-of14 / for-of16). Computed FIELDS and `next` fields silence the
+/// check (for-of27/28).
+fn check_iterable_class_protocol(
+  ctx : CheckCtx,
+  iter_ty : @ast.TsType,
+  path : String,
+) -> Unit {
+  match ctx.resolver.unwrap(iter_ty) {
+    Named(icn) =>
+      match ctx.resolver.classes.get(icn) {
+        Some(icls) if icls.base_names.length() == 0 &&
+          icls.base_expr is None &&
+          icls.index_signatures.length() == 0 &&
+          icls.type_params.length() == 0 &&
+          ctx.resolver.interfaces.get(icn) is None => {
+          let mut has_sym_iter = false
+          let mut sym_iter_returns_this_only = false
+          let mut has_next = false
+          for kexpr in icls.computed_field_keys {
+            if kexpr is PropAccess(Var("Symbol"), "iterator") {
+              has_sym_iter = true
+              has_next = true
+            }
+          }
+          for pr in icls.properties {
+            if !pr.is_static && pr.name == "next" {
+              has_next = true
+            }
+          }
+          for m in icls.methods {
+            if !m.is_static {
+              if m.name == "next" {
+                has_next = true
+              }
+              if m.name == "<computed>" &&
+                m.key_expr is Some(PropAccess(Var("Symbol"), "iterator")) {
+                has_sym_iter = true
+                match m.body {
+                  Some(b) => {
+                    let mut all_this = true
+                    let mut saw_return = false
+                    for st in b.stmts {
+                      match st {
+                        Return(Some(Var("this"))) => saw_return = true
+                        Return(_) => all_this = false
+                        _ => ()
+                      }
+                    }
+                    sym_iter_returns_this_only = saw_return && all_this
+                  }
+                  None => ()
+                }
+              }
+            }
+          }
+          if !has_sym_iter || (sym_iter_returns_this_only && !has_next) {
+            record(
+              ctx,
+              path,
+              "type `\{icn}` must have a `[Symbol.iterator]()` method that returns an iterator",
+            )
+          }
+        }
+        _ => ()
+      }
+    _ => ()
+  }
 }
 
 ///|
@@ -13512,76 +13611,9 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       check_call_args_in_expr(env, iter, ctx)
       let iter_ty = infer_expr(env, ctx.resolver, iter)
       // TS2488: the iterated value must have a `[Symbol.iterator]()`
-      // method returning an iterator. Decided only for base-less,
-      // index-signature-free class instances (an `extends` chain or an
-      // interface merge could add the protocol): either the class lacks
-      // the `[Symbol.iterator]` member entirely, or it returns `this`
-      // while the class has no `next` method (for-of14 / for-of16).
-      match ctx.resolver.unwrap(iter_ty) {
-        Named(icn) =>
-          match ctx.resolver.classes.get(icn) {
-            Some(icls) if icls.base_names.length() == 0 &&
-              icls.base_expr is None &&
-              icls.index_signatures.length() == 0 &&
-              icls.type_params.length() == 0 &&
-              ctx.resolver.interfaces.get(icn) is None => {
-              let mut has_sym_iter = false
-              let mut sym_iter_returns_this_only = false
-              let mut has_next = false
-              // A computed FIELD can also provide the protocol
-              // (`[Symbol.iterator]: any;` -- for-of27): its shape is
-              // unverifiable, so its presence silences the check.
-              for kexpr in icls.computed_field_keys {
-                if kexpr is PropAccess(Var("Symbol"), "iterator") {
-                  has_sym_iter = true
-                  has_next = true
-                }
-              }
-              // A FIELD named `next` (callable-typed or `any`) satisfies
-              // the iterator side too (for-of28).
-              for pr in icls.properties {
-                if !pr.is_static && pr.name == "next" {
-                  has_next = true
-                }
-              }
-              for m in icls.methods {
-                if !m.is_static {
-                  if m.name == "next" {
-                    has_next = true
-                  }
-                  if m.name == "<computed>" &&
-                    m.key_expr is Some(PropAccess(Var("Symbol"), "iterator")) {
-                    has_sym_iter = true
-                    match m.body {
-                      Some(b) => {
-                        let mut all_this = true
-                        let mut saw_return = false
-                        for st in b.stmts {
-                          match st {
-                            Return(Some(Var("this"))) => saw_return = true
-                            Return(_) => all_this = false
-                            _ => ()
-                          }
-                        }
-                        sym_iter_returns_this_only = saw_return && all_this
-                      }
-                      None => ()
-                    }
-                  }
-                }
-              }
-              if !has_sym_iter || (sym_iter_returns_this_only && !has_next) {
-                record(
-                  ctx,
-                  "for-of iterable",
-                  "type `\{icn}` must have a `[Symbol.iterator]()` method that returns an iterator",
-                )
-              }
-            }
-            _ => ()
-          }
-        _ => ()
-      }
+      // method returning an iterator (extracted; also used for array
+      // spreads and assignment-form destructuring).
+      check_iterable_class_protocol(ctx, iter_ty, "for-of iterable")
       let inferred_elem = for_of_element_type(ctx.resolver, iter_ty)
       let elem_ty = if is_checkable(declared) {
         // Validate the declared annotation against the actual element type.
@@ -14840,6 +14872,18 @@ fn check_call_args_in_expr(
     ArrayLit(items) =>
       for it in items {
         check_call_args_in_expr(env, it, ctx)
+        // TS2488: `[...v]` requires `v` to be iterable — a base-less class
+        // instance without `[Symbol.iterator]` never is
+        // (iteratorSpreadInArray8/10).
+        match it {
+          Spread(inner) =>
+            check_iterable_class_protocol(
+              ctx,
+              infer_expr(env, ctx.resolver, inner),
+              "array spread",
+            )
+          _ => ()
+        }
       }
     ObjectLit(entries) => {
       for ent in entries {
@@ -15323,6 +15367,24 @@ fn check_call_args_in_expr(
           match v {
             ObjectLit(src_entries) =>
               check_object_pattern_from_literal(ctx, ob2, src_entries)
+            _ => ()
+          }
+        // TS2488: `[a, b] = { 0: "", 1: true }` — an object literal is
+        // never iterable, so assignment-form array destructuring from one
+        // always fails (iterableArrayPattern23/24). Computed keys could be
+        // `[Symbol.iterator]`, so they silence the check.
+        @ast.TsBinding::Array(_) =>
+          match v {
+            ObjectLit(src_entries) =>
+              if !src_entries
+                .iter()
+                .any(fn(e) {
+                  e.1 is ComputedProp(_, _) || e.0.has_prefix("@@spread")
+                }) {
+                record_unfiltered(
+                  ctx, "destructuring assignment", "object literal must have a `[Symbol.iterator]()` method to be destructured as an array",
+                )
+              }
             _ => ()
           }
         _ => ()
