@@ -12711,3 +12711,18 @@ test "expr_check: abstract ctor typeof, iterable spreads/assign (batch AM)" {
   )
   @test.assert_eq(issues("var x: number, y: number;\n[x, y] = [1, 2];"), 0)
 }
+
+///|
+test "expr_check: legal-TS parse recoveries (batch AN)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // These previously failed to parse outright; they are legal TS and must
+  // produce zero issues.
+  @test.assert_eq(issues("namespace number {}\nnamespace number.a {}"), 0)
+  @test.assert_eq(
+    issues("declare function declare(...args: any[]): void;\ndeclare `hello`;"),
+    0,
+  )
+  @test.assert_eq(issues("declare var [a, b];\ndeclare var {c, d};"), 0)
+}

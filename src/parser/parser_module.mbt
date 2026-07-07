@@ -3328,7 +3328,11 @@ fn Parser::parse_module_with_seeded_const_values_internal(
           None => ()
         }
       }
-    } else if self.check(Declare) {
+    } else if self.check(Declare) &&
+      !(self.peek_at(1).kind is Template(_, _, _)) {
+      // (`declare `template`` is a tagged-template CALL of a function
+      // named `declare`, not an ambient declaration —
+      // taggedTemplateStringsWithTagNamedDeclare.)
       let _ = self.advance() // consume 'declare'
       if self.is_const_enum_decl_start() {
         enums.push(self.parse_const_enum_decl(true))

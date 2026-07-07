@@ -2123,6 +2123,18 @@ fn Parser::parse_declare_values(
   self : Parser,
 ) -> Array[@ast.TsValueDecl] raise ParseError {
   let values : Array[@ast.TsValueDecl] = []
+  // A destructuring pattern in an ambient declaration (`declare var
+  // [a, b];`, declarationInAmbientContext) is tolerated: current tsc
+  // accepts it (the fixture has no error baseline despite its comment),
+  // so just skip the statement without recording anything.
+  match self.peek().kind {
+    LBracket | LBrace => {
+      self.skip_until_semicolon()
+      self.consume_semicolon()
+      return values
+    }
+    _ => ()
+  }
   // TS7005 (noImplicitAny): an ambient `declare var x;` with neither an
   // annotation nor an initializer implicitly has an `any` type -- unlike a
   // runtime `var x;`, no assignment can ever narrow it.

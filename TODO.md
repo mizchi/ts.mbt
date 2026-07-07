@@ -2295,6 +2295,32 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-07 (T190)  714/815 (88 %)        414/414 ( 0 FP)   Parse-failure audit: legal-TS parser fixes: TN 1406 -> 1411
+
+  T190 -- PARSEFAIL population audit. Of the 406 skipped parse failures,
+    397 carry an error baseline: they are tsc-rejected (mostly
+    syntax-error) fixtures our parser correctly refuses — the oracle
+    counts them as SKIPPED rather than agreement, which understates
+    recall; changing that classification is a gate-spec decision, noted
+    here and left untouched. The remaining 9 were LEGAL TypeScript our
+    parser failed on; 5 fixed this round:
+    - `namespace number {}` (and dotted `namespace number.a {}`):
+      primitive type keywords are legal namespace names
+      (parserModuleDeclaration6/7).
+    - `declare `template``: a tagged-template call of a function named
+      `declare`, not an ambient declaration
+      (taggedTemplateStringsWithTagNamedDeclare[ES6]).
+    - `declare var [a, b];` / `declare var {c, d};`: ambient
+      destructuring is tolerated and skipped WITHOUT recording — current
+      tsc accepts it despite the fixture's stale comment (recording it
+      was a gate FP) (declarationInAmbientContext).
+    Deferred (high-cost): legacy parameter decorators with expression
+    decorators, tagged templates with explicit type arguments,
+    `@x!`-style decorator expressions, and the block-statement-vs-regex
+    `}` ambiguity (parser768531).
+    Whole-corpus TP 2166 @ 0 FP unchanged; TN 1406 -> 1411, parse
+    failures 406 -> 401. 2452 tests.
+
 2026-07-07 (T189)  714/815 (88 %)        414/414 ( 0 FP)   Practical round 9: abstract ctor typeof + iterable protocol sites: TP 2161 -> 2166
 
   T189 -- practical (non-edge) misses, round 9.
