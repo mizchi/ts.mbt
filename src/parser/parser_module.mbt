@@ -759,6 +759,14 @@ fn Parser::parse_import_equals_decl(
   self : Parser,
   local_name : String,
 ) -> @ast.TsImportDecl raise ParseError {
+  // TS1262: `import await = …` binds the name `await`; an error only when
+  // the file is otherwise a module (topLevelAwaitErrors.12). An
+  // import-equals alias does NOT itself make the file a module — a bare
+  // `import await = foo.await` in a script is legal (topLevelAwait.2), so
+  // no `<module-syntax>` marker here.
+  if local_name == "await" && !self.in_function {
+    self.grammar_misuses.push("<top-await-name>")
+  }
   let _ = self.expect(Eq)
   let module_spec = if self.match_ident("require") {
     let _ = self.expect(LParen)
@@ -3027,6 +3035,9 @@ fn Parser::parse_export_stmt(
     return
   }
   if self.match_(LBrace) {
+    // Marker, not an error: even an empty `export {}` makes the file a
+    // module. Consumed by the TS1262 top-level `await`-name check.
+    self.grammar_misuses.push("<module-syntax>")
     self.parse_import_specifiers()
     let _ = self.expect(RBrace)
     if self.match_(From) || self.match_ident("from") {

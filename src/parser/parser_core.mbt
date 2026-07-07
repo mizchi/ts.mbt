@@ -304,6 +304,11 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
   if detect_no_implicit_override(src) {
     grammar_misuses.push("<noimplicitoverride-on>")
   }
+  // Marker for the TS2695 comma-operator check, which tsc disables under
+  // `@allowUnreachableCode: true`.
+  if detect_allow_unreachable_code(src) {
+    grammar_misuses.push("<allowunreachable-on>")
+  }
   {
     tokens,
     pos: 0,
@@ -710,6 +715,16 @@ fn detect_no_implicit_override(src : String) -> Bool {
   let head = src[:head_len].to_owned()
   head.contains("@noImplicitOverride: true") ||
   head.contains("@noImplicitOverride:true")
+}
+
+///|
+/// True when the conformance header enables `@allowUnreachableCode`.
+/// tsc gates the TS2695 comma-operator check on this flag being off.
+fn detect_allow_unreachable_code(src : String) -> Bool {
+  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
+  let head = src[:head_len].to_owned()
+  head.contains("@allowUnreachableCode: true") ||
+  head.contains("@allowUnreachableCode:true")
 }
 
 ///|

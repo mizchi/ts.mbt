@@ -2295,6 +2295,49 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-07 (T182)  714/815 (88 %)        414/414 ( 0 FP)   Practical round 2: TS2872/TS1345/TS2695/TS1262/TS2729: TP 2095 -> 2119
+
+  T182 -- practical (non-edge) misses, round 2.
+    - TS2872/TS2873 in *condition* positions: a ternary condition or `!`
+      operand that is a non-exempt literal (object / array / function
+      literal, non-empty or empty string, numeric other than 0 / 1) is
+      always-truthy / always-falsy. Same classification as the existing
+      `&&`/`||` operand check but with tsc's `0` / `1` / boolean
+      exemptions (`1 ? a : b` and `while (1)` idioms stay legal).
+      conditionalOperatorConditionIs{Object,Number,String,Any}Type,
+      logicalNotOperatorWith{Number,String,Boolean}Type, for-inStatements.
+    - TS1345: a `void`-typed condition (annotated var or call whose
+      signature returns `void`) cannot be tested for truthiness; fires on
+      ternary conditions and `&&` left operands only for Var / call
+      shapes whose `void` verdict is trustworthy.
+      logicalAndOperatorStrictMode.
+    - TS2695: statement-level comma whose left side is side-effect-free
+      (tsc's `isSideEffectFree` subset; `!`/`-`/`+`/`~`/`typeof` don't
+      recurse). Statement position only -- nested commas include the
+      `(0, fn)()` indirect-call idiom our paren-erasing parser can't
+      distinguish. Suppressed under `@allowUnreachableCode: true` via the
+      parser's `<allowunreachable-on>` marker (two gate FPs:
+      commaOperatorWithSecondOperandAnyType, bitwiseNotOperatorWithEnumType).
+      logicalNot/negate/plus/typeofOperatorWithEnumType et al.
+    - TS1262: `await` as a top-level declaration name in a module. The
+      parser records `<top-await-name>` (var / destructuring /
+      import-equals / exported class + function via `<export-value>await`)
+      and module-syntax evidence separately (`export {}` now records
+      `<module-syntax>`); only the pair errors -- `var await` in a script
+      and a bare `import await = ns.path` stay legal (topLevelAwait.2 was
+      a gate FP until import-equals stopped counting as module syntax).
+      topLevelAwaitErrors.2/3/4/5/6/12.
+    - TS2729 in `static { }` blocks: reading or writing `this.<f>` /
+      `<Class>.<f>` where the static *field* `f` is first declared after
+      the block. Computed in the parser (`static_block_use_before_def`)
+      where element order is still known, routed through the per-class
+      `<static-use-before-def:f>` marker. Methods / accessors exempt
+      (installed before blocks run); nested function bodies not entered;
+      blocks that rebind the class name skipped.
+      classStaticBlock3/4, classStaticBlockUseBeforeDef2/5.
+    Whole-corpus TP 2095 -> 2119 @ 0 FP (session total 1761 -> +358);
+    pinned recall 714, precision 414/414. 2444 tests.
+
 2026-07-06 (T181)  714/815 (88 %)        414/414 ( 0 FP)   Practical errors first: TS2528/TS2488/TS4112-4114: TP 2081 -> 2095
 
   T181 -- user-directed pivot: of the 605 remaining misses, ~446 are

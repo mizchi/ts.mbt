@@ -285,6 +285,20 @@ fn Parser::parse_var_like(
   }
   let type_ = self.parse_var_decl_type()
   let stmts = self.parse_var_decl_list_from(binding, type_, kind)
+  // TS1262: `await` used as a top-level declaration name. Only an error
+  // when the file is a module; the checker pairs this marker with the
+  // module-syntax evidence (`<module-syntax>` / export markers / imports).
+  if !self.in_function {
+    for stmt in stmts {
+      match stmt {
+        Var(b, _, _) | Let(b, _, _) | Const(b, _, _) =>
+          if binding_contains_await_name(b) {
+            self.grammar_misuses.push("<top-await-name>")
+          }
+        _ => ()
+      }
+    }
+  }
   // TS7006 (noImplicitAny): an unannotated binding initialized by a
   // callable literal gives the callable's unannotated parameters no
   // contextual type -- they are implicitly `any` (`var x = x => x`).
@@ -304,6 +318,40 @@ fn Parser::parse_var_like(
   // arrow-function or function-expression, apply JSDoc param/return overlays
   // using the var/let/const keyword position (where the JSDoc block sits).
   apply_jsdoc_var_func_overlay(self.jsdoc_at_pos, merged, kw_pos)
+}
+
+///|
+/// True when a binding pattern declares an identifier named `await`
+/// anywhere in its structure (`var await`, `var {await} = …`,
+/// `var [await] = …`). Used by the TS1262 top-level-await-name marker.
+fn binding_contains_await_name(binding : @ast.TsBinding) -> Bool {
+  match binding {
+    Ident(name) => name == "await"
+    Array(ab) => {
+      for item in ab.items {
+        match item {
+          Some(elem) =>
+            if binding_contains_await_name(elem.binding) {
+              return true
+            }
+          None => ()
+        }
+      }
+      match ab.rest {
+        Some(rest) => binding_contains_await_name(rest)
+        None => false
+      }
+    }
+    Object(ob) => {
+      for prop in ob.props {
+        if binding_contains_await_name(prop.binding) {
+          return true
+        }
+      }
+      ob.rest is Some("await")
+    }
+    Target(_) => false
+  }
 }
 
 ///|

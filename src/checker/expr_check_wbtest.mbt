@@ -12293,3 +12293,86 @@ test "expr_check: TS2528/TS2488/override family (batch AE)" {
     0,
   )
 }
+
+///|
+test "expr_check: truthiness/comma/await/static-block (batch AF)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2872 / TS2873: literal ternary conditions (0 / 1 / booleans exempt).
+  assert_true(issues("declare var a: any;\nvar r = ({}) ? a : a;") > 0)
+  assert_true(issues("declare var a: any;\nvar r = \"s\" ? a : a;") > 0)
+  assert_true(issues("declare var a: any;\nvar r = \"\" ? a : a;") > 0)
+  assert_true(issues("declare var a: any;\nvar r = 42 ? a : a;") > 0)
+  assert_true(issues("declare var a: any;\nnull ? a : a;") > 0)
+  @test.assert_eq(issues("declare var a: any;\nvar r = 1 ? a : a;"), 0)
+  @test.assert_eq(issues("declare var a: any;\nvar r = 0 ? a : a;"), 0)
+  @test.assert_eq(issues("declare var a: any;\nvar r = true ? a : a;"), 0)
+  @test.assert_eq(
+    issues(
+      "declare var flag: boolean;\ndeclare var a: any;\nvar r = flag ? a : a;",
+    ),
+    0,
+  )
+  // TS2872 / TS2873 on the `!` operand.
+  assert_true(issues("var b = !{ x: 1 };") > 0)
+  assert_true(issues("var b = !\"\";") > 0)
+  @test.assert_eq(issues("var b = !1;"), 0)
+  @test.assert_eq(issues("declare var n: number;\nvar b = !n;"), 0)
+  // TS1345: a void condition cannot be tested for truthiness. (An
+  // unannotated `function foo() { }` infers `Any`, not `Void`, so only
+  // annotated shapes fire -- conservative by design.)
+  assert_true(
+    issues("declare function foo(): void;\ndeclare var a: any;\nfoo() ? a : a;") >
+    0,
+  )
+  assert_true(
+    issues("const v: void = undefined;\ndeclare var a: any;\nvar r = v && a;") >
+    0,
+  )
+  @test.assert_eq(
+    issues("function foo() { return 1; }\ndeclare var a: any;\nfoo() ? a : a;"),
+    0,
+  )
+  // TS2695: statement-level comma with a side-effect-free left side;
+  // suppressed under @allowUnreachableCode.
+  assert_true(
+    issues("declare var o: { a: number, n: number };\n!o.a, o.n;") > 0,
+  )
+  assert_true(issues("enum E { A }\ntypeof E, E.A;") > 0)
+  @test.assert_eq(
+    issues("declare var o: { a: number, n: number };\no.a = 1, o.n;"),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @allowUnreachableCode: true\ndeclare var o: { a: number, n: number };\n!o.a, o.n;",
+    ),
+    0,
+  )
+  // TS1262: `await` as a top-level name, only in modules.
+  assert_true(issues("export {};\nvar await = 1;") > 0)
+  assert_true(issues("export {};\nvar [await] = [1];") > 0)
+  assert_true(issues("export class await {}") > 0)
+  @test.assert_eq(issues("var await = 1;"), 0)
+  @test.assert_eq(
+    issues("export {};\nfunction g() { var await = 2; return 1; }"),
+    0,
+  )
+  // TS2729: static-block use of a static field declared after the block.
+  assert_true(
+    issues("class C { static f1 = 1; static { C.f1; C.f2; } static f2 = 2; }") >
+    0,
+  )
+  assert_true(issues("class C { static { this.x = 1; } static x; }") > 0)
+  @test.assert_eq(
+    issues(
+      "class C { static f1 = 1; static { C.f1; this.f1; } static m() { return C.f1; } }",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues("class C { static { const g = () => C.f2; } static f2 = 2; }"),
+    0,
+  )
+}

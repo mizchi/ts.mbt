@@ -3979,6 +3979,84 @@ fn is_syntactically_always_falsy(expr : @ast.TsExpr) -> Bool {
 }
 
 ///|
+/// TS2872 / TS2873 for *condition* positions (`cond ? a : b`, `!cond`).
+/// Same literal classification as the `&&` / `||` operand check, except
+/// that tsc exempts `0`, `1`, `true`, and `false` here -- `while (1)`,
+/// `if (0)`, and `1 ? a : b` are idiomatic debug / generated-code shapes
+/// (conditionalOperatorConditionIsNumberType flags `10000 ?` but not
+/// `1 ?` / `0 ?`). Returns `Some(truthy)` when the condition is a
+/// non-exempt literal, `None` otherwise.
+fn condition_literal_truthiness(expr : @ast.TsExpr) -> Bool? {
+  match expr {
+    IntLit(0) | IntLit(1) | BoolLit(_) => None
+    NumberLit(n) if n == 0.0 || n == 1.0 => None
+    _ =>
+      if is_syntactically_always_truthy(expr) {
+        Some(true)
+      } else if is_syntactically_always_falsy(expr) {
+        Some(false)
+      } else {
+        None
+      }
+  }
+}
+
+///|
+/// TS1345: an expression of type `void` cannot be tested for truthiness.
+/// Restricted to shapes whose `void` verdict is trustworthy -- a variable
+/// with a `void` annotation or a call whose signature returns `void`
+/// (`function foo() { }` infers `void` too). Other expression shapes
+/// abstain even if inference says `void`.
+fn tested_condition_is_void(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  expr : @ast.TsExpr,
+) -> Bool {
+  match expr {
+    Var(_) | Call(_, _) | MethodCall(_, _, _) | CallExpr(_, _) =>
+      ctx.resolver.unwrap(infer_expr(env, ctx.resolver, expr)) is Void
+    _ => false
+  }
+}
+
+///|
+/// tsc's `isSideEffectFree` subset, used by the TS2695 comma-operator
+/// check. Mirrors the compiler's classification: identifiers, literals,
+/// function / class / array / object literals, templates (tagged included),
+/// the pure unary operators (`!`, `-`, `+`, `~`, `typeof` -- which don't
+/// recurse into their operand, matching tsc), and recursive conditional /
+/// binary / comma forms. Property access is *not* side-effect-free
+/// (getters), and neither are calls, `new`, assignments, or `++`/`--`.
+fn comma_left_side_effect_free(expr : @ast.TsExpr) -> Bool {
+  match expr {
+    Var(_)
+    | NumberLit(_)
+    | IntLit(_)
+    | BigIntLit(_)
+    | BoolLit(_)
+    | StringLit(_)
+    | NullLit
+    | ArrowFunc(_, _, _, _)
+    | FuncExpr(_)
+    | NativeClassExpr(_, _)
+    | ArrayLit(_)
+    | ObjectLit(_)
+    | TemplateLiteral(_, _)
+    | TaggedTemplate(_, _, _, _) => true
+    UnaryOp(op, _) =>
+      match op {
+        Not | Neg | Plus | BitwiseNot | Typeof => true
+        _ => false
+      }
+    Cond(_, t, e) =>
+      comma_left_side_effect_free(t) && comma_left_side_effect_free(e)
+    Seq(a, b) | BinOp(_, a, b) =>
+      comma_left_side_effect_free(a) && comma_left_side_effect_free(b)
+    _ => false
+  }
+}
+
+///|
 fn record_unfiltered(
   ctx : CheckCtx,
   sub_path : String,
@@ -12619,6 +12697,20 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       let _ = infer_expr(env, ctx.resolver, init)
     }
     Expr(e) => {
+      // TS2695: a statement-level comma expression whose left side is
+      // side-effect-free discards a useless value (`!obj.a, M.n;`). Only the
+      // statement position is checked -- nested commas include the
+      // `(0, fn)(…)` indirect-call idiom, which tsc exempts and which our
+      // paren-erasing parser can't distinguish.
+      match e {
+        Seq(l, _) =>
+          if comma_left_side_effect_free(l) {
+            record_unfiltered(
+              ctx, "comma operator", "left side of comma operator is unused and has no side effects",
+            )
+          }
+        _ => ()
+      }
       check_call_args_in_expr(env, e, ctx)
       // `f(v)` where `f`'s declared return is `asserts v [is T]` narrows
       // `v` for every statement that follows.
@@ -13870,6 +13962,12 @@ fn check_call_args_in_expr(
           record_unfiltered(
             ctx, "logical operand", "this kind of expression is always falsy",
           )
+        } else if tested_condition_is_void(env, ctx, l) {
+          // TS1345: `voidValue && x` tests a `void` expression for
+          // truthiness (logicalAndOperatorStrictMode).
+          record_unfiltered(
+            ctx, "logical operand", "an expression of type `void` cannot be tested for truthiness",
+          )
         }
       }
       // TS2322 (via the `in` operator's operand constraints): the left
@@ -14027,6 +14125,20 @@ fn check_call_args_in_expr(
     UnaryOp(op, inner) => {
       check_call_args_in_expr(env, inner, ctx)
       match op {
+        // TS2872 / TS2873: `!` tests its operand for truthiness, so a
+        // non-exempt literal operand (`!{ x: 1 }`, `!""`) is always-taken.
+        Not =>
+          match condition_literal_truthiness(inner) {
+            Some(true) =>
+              record_unfiltered(
+                ctx, "unary op", "this kind of expression is always truthy",
+              )
+            Some(false) =>
+              record_unfiltered(
+                ctx, "unary op", "this kind of expression is always falsy",
+              )
+            None => ()
+          }
         Neg | BitwiseNot => {
           let inner_ty = ctx.resolver.unwrap(
             infer_expr(env, ctx.resolver, inner),
@@ -14165,6 +14277,26 @@ fn check_call_args_in_expr(
     }
     Cond(c, t, e) => {
       check_call_args_in_expr(env, c, ctx)
+      // TS2872 / TS2873: a ternary whose condition is a non-exempt literal
+      // (object / array / function literal, non-empty string, numeric other
+      // than 0 / 1) always takes the same branch. TS1345: a `void`-typed
+      // condition cannot be tested for truthiness at all.
+      match condition_literal_truthiness(c) {
+        Some(true) =>
+          record_unfiltered(
+            ctx, "cond", "this kind of expression is always truthy",
+          )
+        Some(false) =>
+          record_unfiltered(
+            ctx, "cond", "this kind of expression is always falsy",
+          )
+        None =>
+          if tested_condition_is_void(env, ctx, c) {
+            record_unfiltered(
+              ctx, "cond", "an expression of type `void` cannot be tested for truthiness",
+            )
+          }
+      }
       // Walk each branch under the condition's flow narrowing (the consequent
       // sees the truthy effect, the alternative the falsy one), so
       // `x !== undefined ? x.foo : 0` doesn't re-flag `x` as possibly-undefined.
@@ -19898,6 +20030,14 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
         // the strict-property-initialization check (literal-named fields
         // are exempt from TS2564).
         ()
+      } else if name.has_prefix("<static-use-before-def:") {
+        // TS2729: a static block read / wrote a static field that is only
+        // declared after the block.
+        let f = name["<static-use-before-def:".length():name.length() - 1].to_string()
+        issues.push({
+          path: "class \{cls_name}",
+          message: "property `\{f}` is used before its initialization",
+        })
       } else {
         issues.push({
           path: "class \{cls_name}",
@@ -20784,6 +20924,30 @@ fn check_module_function_bodies_layered(
         message: "a module cannot have multiple default exports",
       })
     }
+    // TS1262: `await` is a reserved word at the top level of a *module*.
+    // The parser records `<top-await-name>` for a top-level binding named
+    // `await` (var / destructuring / import-equals) and module-syntax
+    // evidence separately; only the combination is an error — `var await`
+    // in a plain script stays legal.
+    let mut has_module_syntax = module_.imports.length() > 0
+    let mut top_await_name = false
+    for gm in module_.grammar_misuses {
+      if gm == "<module-syntax>" ||
+        gm.has_prefix("<export-value>") ||
+        gm.has_prefix("<export-default>") ||
+        gm.has_prefix("<export-eq>") {
+        has_module_syntax = true
+      }
+      if gm == "<top-await-name>" || gm == "<export-value>await" {
+        top_await_name = true
+      }
+    }
+    if has_module_syntax && top_await_name {
+      all.push({
+        path: "top-level `await`",
+        message: "`await` is a reserved word at the top-level of a module",
+      })
+    }
     // TS2304 for a single-bare-identifier computed key in a type position
     // (`var v: { [e]: number }`, `interface I { [e](): T }`, `declare class
     // C { [e]: T }`). The key references the *value* namespace; resolve it
@@ -20825,6 +20989,16 @@ fn check_module_function_bodies_layered(
       // Marker, not an error: the @noImplicitOverride directive flag,
       // consumed by the override-modifier checks.
       if gm == "<noimplicitoverride-on>" {
+        continue
+      }
+      // Marker, not an error: the @allowUnreachableCode directive flag,
+      // consumed by the TS2695 comma-operator suppression below.
+      if gm == "<allowunreachable-on>" {
+        continue
+      }
+      // Markers, not errors: module-syntax evidence and a top-level
+      // binding named `await`, combined into TS1262 above.
+      if gm == "<module-syntax>" || gm == "<top-await-name>" {
         continue
       }
       // TS2304: `export = name` over a provably undeclared value. Same
@@ -20990,6 +21164,17 @@ fn check_module_function_bodies_layered(
     }
     for issue in issues {
       all.push({ path: "\{prefix} > \{issue.path}", message: issue.message })
+    }
+  }
+  // tsc gates the TS2695 comma-operator check on `allowUnreachableCode`
+  // being off; under the directive (parser `<allowunreachable-on>` marker)
+  // drop any comma diagnostics the statement walkers recorded.
+  for gm in module_.grammar_misuses {
+    if gm == "<allowunreachable-on>" {
+      return all.filter(fn(i) {
+        i.message !=
+        "left side of comma operator is unused and has no side effects"
+      })
     }
   }
   all
