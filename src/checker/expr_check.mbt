@@ -4897,6 +4897,102 @@ fn union_possibly_nullish(ty : @ast.TsType) -> @ast.TsType? {
 }
 
 ///|
+
+///|
+/// True when `ty` is an unconstrained in-scope type parameter — never
+/// comparable to anything but itself in a relational comparison.
+fn relational_unconstrained_param(ctx : CheckCtx, ty : @ast.TsType) -> Bool {
+  match ty {
+    Named(n) =>
+      ctx.in_scope_type_params.contains(n) &&
+      not(ctx.type_param_bounds.iter().any(fn(b) { b.0 == n }))
+    _ => false
+  }
+}
+
+///|
+/// Object-side classification for the relational-comparison check: shapes
+/// that are never assignable to `number | bigint | string`. Booleans join
+/// this side (comparable only to themselves), and a union counts when any
+/// non-nullish member does.
+fn relational_object_like(ctx : CheckCtx, ty : @ast.TsType) -> Bool {
+  match ty {
+    Boolean
+    | BooleanLiteral(_)
+    | Void
+    | Symbol
+    | Func(_, _)
+    | Object(_)
+    | Struct(_, _)
+    | Array(_)
+    | Tuple(_) => true
+    Named(n) => {
+      if ctx.in_scope_type_params.contains(n) ||
+        ctx.resolver.enums.get(n) is Some(_) {
+        return false
+      }
+      ctx.resolver.classes.get(n) is Some(_) ||
+      ctx.resolver.interfaces.get(n) is Some(_)
+    }
+    Applied(n, _) =>
+      n == "Promise" ||
+      n == "Map" ||
+      n == "Set" ||
+      n == "WeakMap" ||
+      n == "WeakSet"
+    Union(members) => {
+      for m in members {
+        match m {
+          Null | Undefined => ()
+          other => if relational_object_like(ctx, other) { return true }
+        }
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+///|
+/// Primitive-side classification: a type that is confidently
+/// `number` / `bigint` / `string`-like (or an enum), i.e. definitely NOT
+/// comparable to the object side.
+fn relational_primitive_comparable(ctx : CheckCtx, ty : @ast.TsType) -> Bool {
+  match ty {
+    Number | Int | String_ | Literal(_) | BigInt | TemplateLiteralType(_, _) =>
+      true
+    Named(n) => ctx.resolver.enums.get(n) is Some(_)
+    _ => false
+  }
+}
+
+///|
+/// TS2365 for `<` `<=` `>` `>=`: true when the operand pair is *definitely*
+/// unrelated. tsc allows the comparison when either side is comparable to
+/// the other (so identical type parameters and subtype-related object
+/// shapes are legal) or when both sides are number/bigint-like. Definite
+/// errors: an unconstrained type parameter against anything else, and an
+/// object-side shape against a number/string/bigint primitive. Nullish
+/// operands abstain.
+fn relational_pair_never_comparable(
+  ctx : CheckCtx,
+  lt : @ast.TsType,
+  rt : @ast.TsType,
+) -> Bool {
+  match (lt, rt) {
+    // Identical named types (same type parameter, same class) compare fine.
+    (Named(a), Named(b)) if a == b => return false
+    (Null | Undefined, _) | (_, Null | Undefined) => return false
+    _ => ()
+  }
+  if relational_unconstrained_param(ctx, lt) ||
+    relational_unconstrained_param(ctx, rt) {
+    return true
+  }
+  (relational_object_like(ctx, lt) && relational_primitive_comparable(ctx, rt)) ||
+  (relational_object_like(ctx, rt) && relational_primitive_comparable(ctx, lt))
+}
+
 // Returns true only for types that can NEVER participate in numeric
 // arithmetic (`-`, `*`, `/`, bit ops, …), so the "not a valid number type"
 // diagnostic stays free of false positives.  Mirrors `is_definitely_not_callable`:
@@ -4904,6 +5000,8 @@ fn union_possibly_nullish(ty : @ast.TsType) -> @ast.TsType? {
 // Union / Intersection (could be a numeric-literal union like `0 | 1 | 2`),
 // and unresolved type-level forms.  Only concrete non-numeric primitives and
 // object-like shapes are flagged.
+
+///|
 fn is_definitely_not_arithmetic(ty : @ast.TsType) -> Bool {
   match ty {
     String_
@@ -5384,6 +5482,54 @@ fn check_binop_operands(
         )
       }
     }
+    // TS2365 for relational comparison (`<` `<=` `>` `>=`): both operands
+    // must be of type `any` / `number` / `bigint` / `string` / enum. An
+    // operand that is *definitely* never comparable -- a boolean, void,
+    // symbol, function, object / array / tuple shape, a resolvable
+    // class / interface instance, an unconstrained in-scope type
+    // parameter, or a union containing one of those -- always errors.
+    // Nullish members, unresolved names, and constrained type parameters
+    // abstain.
+    BinLt | BinLe | BinGt | BinGe => {
+      // TS18050: the literal `null` / `undefined` keyword is never a valid
+      // relational operand. (Restricted to the keyword forms; variables of
+      // nullish type are left to the assignability machinery.)
+      let nullish_kw = fn(e : @ast.TsExpr) -> String? {
+        match e {
+          NullLit => Some("null")
+          Var("undefined") => Some("undefined")
+          _ => None
+        }
+      }
+      let mut saw_nullish_kw = false
+      match nullish_kw(l) {
+        Some(kw) => {
+          saw_nullish_kw = true
+          record(ctx, "binary op", "the value `\{kw}` cannot be used here")
+        }
+        None => ()
+      }
+      match nullish_kw(r) {
+        Some(kw) => {
+          saw_nullish_kw = true
+          record(ctx, "binary op", "the value `\{kw}` cannot be used here")
+        }
+        None => ()
+      }
+      if !saw_nullish_kw {
+        let lt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, l))
+        let rt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, r))
+        if is_checkable(lt) &&
+          is_checkable(rt) &&
+          relational_pair_never_comparable(ctx, lt, rt) {
+          record_unfiltered(
+            ctx,
+            "binary op",
+            "operator cannot be applied to types `\{type_display(lt)}` and `\{type_display(rt)}`",
+          )
+        }
+      }
+    }
     // Strict equality: comparing two types with no overlap is always false.
     // e.g., `someNumber === "hello"` or `true === 42`.
     BinEq | BinNe => {
@@ -5477,30 +5623,9 @@ fn check_binop_operands(
       }
     }
     // Relational comparison (`<`, `<=`, `>`, `>=`): the `null` / `undefined`
-    // keyword is never a valid operand — TypeScript reports TS18050 ("The
-    // value 'null' / 'undefined' cannot be used here"). Restricted to the
-    // literal keyword operands so a variable of an inferred nullish type is
-    // left to the (separate) assignability machinery; the literal form is
-    // unconditionally an error, so the check is false-positive-free.
-    BinLt | BinLe | BinGt | BinGe => {
-      let nullish_kw = fn(e : @ast.TsExpr) -> String? {
-        match e {
-          NullLit => Some("null")
-          Var("undefined") => Some("undefined")
-          _ => None
-        }
-      }
-      match nullish_kw(l) {
-        Some(kw) =>
-          record(ctx, "binary op", "the value `\{kw}` cannot be used here")
-        None => ()
-      }
-      match nullish_kw(r) {
-        Some(kw) =>
-          record(ctx, "binary op", "the value `\{kw}` cannot be used here")
-        None => ()
-      }
-    }
+    // keyword operand handling (TS18050) lives in the merged
+    // `BinLt | BinLe | BinGt | BinGe` arm above, together with the TS2365
+    // never-comparable pair check.
     _ => ()
   }
 }
@@ -10541,7 +10666,103 @@ fn check_arguments_with_sig(
   ctx : CheckCtx,
   call_path : String,
   arity_reliable? : Bool = false,
+  check_spread? : Bool = false,
 ) -> Unit {
+  // TS2556 ("A spread argument must either have a tuple type or be passed
+  // to a rest parameter"): tsc's arity rule for the first non-tuple spread
+  // argument at effective index `i` -- error unless
+  // `i >= minArgCount && (hasRest || i < paramCount)`. Tuple-typed spreads
+  // (and exact array-literal spreads) expand into individual arguments and
+  // don't count. Only runs when the caller vouches the signature is exact
+  // and non-overloaded (`check_spread`, set by the direct
+  // function-declaration call path), and only for spread operands whose
+  // type is confidently a plain array or a class instance -- `any`,
+  // generics, unions, and open tuples abstain.
+  if check_spread && sig is Some(ps) {
+    let mut has_rest = false
+    let mut param_count = 0
+    for p in ps {
+      if p.is_rest {
+        has_rest = true
+      } else {
+        param_count += 1
+      }
+    }
+    let min_args = required_arity(ps)
+    let mut i = 0
+    let mut stop = false
+    for a in args {
+      if stop {
+        break
+      }
+      match a {
+        Spread(inner) => {
+          // An exact array-literal spread contributes a known count.
+          let literal_len : Int? = match inner {
+            ArrayLit(items) => {
+              let mut ok = true
+              for it in items {
+                match it {
+                  Spread(_) | ArrayHole => ok = false
+                  _ => ()
+                }
+              }
+              if ok {
+                Some(items.length())
+              } else {
+                None
+              }
+            }
+            _ => None
+          }
+          match literal_len {
+            Some(n) => i += n
+            None => {
+              let t = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, inner))
+              match t {
+                Tuple(items) => {
+                  let mut fixed = true
+                  for it in items {
+                    if it is Rest(_) {
+                      fixed = false
+                    }
+                  }
+                  if fixed {
+                    i += items.length()
+                  } else {
+                    stop = true
+                  }
+                }
+                Array(_) | Applied("Array", _) | Applied("ReadonlyArray", _) => {
+                  if i < min_args || (!has_rest && i >= param_count) {
+                    record_unfiltered(
+                      ctx, call_path, "a spread argument must either have a tuple type or be passed to a rest parameter",
+                    )
+                  }
+                  stop = true
+                }
+                Named(n) =>
+                  // A class instance (e.g. a hand-rolled iterator) is never
+                  // a tuple, so the same arity formula decides.
+                  if ctx.resolver.classes.get(n) is Some(_) {
+                    if i < min_args || (!has_rest && i >= param_count) {
+                      record_unfiltered(
+                        ctx, call_path, "a spread argument must either have a tuple type or be passed to a rest parameter",
+                      )
+                    }
+                    stop = true
+                  } else {
+                    stop = true
+                  }
+                _ => stop = true
+              }
+            }
+          }
+        }
+        _ => i += 1
+      }
+    }
+  }
   // Spread arguments make positional matching unreliable — just type-check
   // each argument and skip count enforcement. Exception: when *every*
   // spread wraps a syntactic array literal (`f(1, ...[2, 3])`), the
@@ -13712,6 +13933,10 @@ fn check_call_args_in_expr(
             ctx,
             "call `\{name}`",
             arity_reliable~,
+            // Overloaded declarations never reach this branch (their callee
+            // type is a `Union`), so the signature is exact and the TS2556
+            // spread-argument arity rule can run.
+            check_spread=true,
           )
         }
         other =>

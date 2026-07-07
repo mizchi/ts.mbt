@@ -2295,6 +2295,45 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-07 (T183)  714/815 (88 %)        414/414 ( 0 FP)   Practical round 3: TS2556/TS2362/TS2365 + lexer template-division: TP 2119 -> 2134
+
+  T183 -- practical (non-edge) misses, round 3.
+    - TS2556: a spread argument must have a tuple type or hit a rest
+      parameter. tsc's arity rule for the first non-tuple spread at
+      effective index i: error unless i >= minArgCount && (hasRest ||
+      i < paramCount); tuple-typed and exact array-literal spreads expand
+      first. Runs only on the direct function-declaration call path
+      (`check_spread` flag) — overloaded callees become `Union` types and
+      never reach it. Spread operands classified confidently: plain
+      arrays, ReadonlyArray, and class instances; `any` / generics /
+      open tuples abstain. iteratorSpreadInCall/2/4/10, callWithSpread2/4,
+      readonlyRestParameters. (Updated one stale pin: `g2(...xs)` against
+      two required params DOES error in tsc.)
+    - Lexer: a template literal now ends an expression for the
+      regex-vs-division split, so `` `a${1}b` / 1 `` parses as division
+      instead of swallowing the rest of the line as a regex
+      (templateStringInDivision, previously mis-lexed under ES6 targets).
+    - TS2362/TS2363 in computed enum-member initializers: the enum AST
+      only keeps folded literal values, so the parser speculatively
+      parses the about-to-be-skipped initializer (position and misuse
+      side channels restored) and records string-operand arithmetic
+      (`d = "a" - "a"`, `` b = `1` - `1` ``).
+      enumConstantMemberWithString/TemplateLiterals, templateStringInDivision.
+    - TS2365 for relational `<` `<=` `>` `>=`: pairwise never-comparable
+      classification — an unconstrained type parameter against anything
+      but itself, or an object-side shape (boolean / void / symbol /
+      func / object / array / tuple / resolvable class-interface /
+      Promise-like / union containing one) against a number / string /
+      bigint / enum primitive. Identical named types and object-vs-object
+      stay silent (comparisonOperatorWithIdenticalTypeParameter and the
+      subtype-object fixtures were gate FPs of the first per-operand
+      draft). Merged into the existing TS18050 nullish-keyword arm
+      (the new arm had shadowed it — caught by the pinned suite).
+      comparisonOperatorWith{NumberOperand,IntersectionType,
+      NoRelationshipTypeParameter,TypeParameter}.
+    Whole-corpus TP 2119 -> 2134 @ 0 FP (session total 1761 -> +373);
+    pinned recall 714, precision 414/414. 2445 tests.
+
 2026-07-07 (T182)  714/815 (88 %)        414/414 ( 0 FP)   Practical round 2: TS2872/TS1345/TS2695/TS1262/TS2729: TP 2095 -> 2119
 
   T182 -- practical (non-edge) misses, round 2.

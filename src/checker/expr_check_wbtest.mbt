@@ -11291,11 +11291,13 @@ test "expr_check: exact spread arity (TS2554) and es6 yield function names (TS12
     ),
     0,
   )
-  // Open-ended spreads still abstain.
-  @test.assert_eq(
+  // An open-ended array spread against required params abstains from the
+  // TS2554 arity check but now reports TS2556 (a spread argument must have
+  // a tuple type or hit a rest parameter) — matching tsc.
+  assert_true(
     issues(
       "declare const xs: string[];\ndeclare function g2(a: string, b: string): void;\ng2(...xs);",
-    ),
+    ) >
     0,
   )
   // `function yield` under an es6+ target directive (or as a generator).
@@ -12373,6 +12375,66 @@ test "expr_check: truthiness/comma/await/static-block (batch AF)" {
   )
   @test.assert_eq(
     issues("class C { static { const g = () => C.f2; } static f2 = 2; }"),
+    0,
+  )
+}
+
+///|
+test "expr_check: spread arity, enum string arith, relational pairs (batch AG)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2556: array spread past a rest-less parameter list, or an iterator
+  // class spread short of the required count.
+  assert_true(
+    issues(
+      "declare function normal(s: string): void;\ndeclare var ns: number[];\nnormal(\"g\", ...ns);",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "declare function foo(s: symbol, ...rest: symbol[]): void;\nclass It { next() { return { value: 1, done: false }; } [Symbol.iterator]() { return this; } }\nfoo(...new It);",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "declare function all(a?: number, b?: number): void;\ndeclare var ns: number[];\nall(...ns);",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "declare function rest(s: string, ...r: number[]): void;\ndeclare var ns: number[];\nrest(\"d\", ...ns);",
+    ),
+    0,
+  )
+  // TS2362/TS2363: string arithmetic inside enum member initializers, and
+  // a template literal in a division (regex/division lexer split).
+  assert_true(issues("enum T { d = \"a\" - \"a\" }") > 0)
+  @test.assert_eq(
+    issues("enum T { a = \"1\", b = \"1\" + \"2\", c = 1 + 2 }"),
+    0,
+  )
+  assert_true(issues("var x = `abc${ 1 }def` / 1;") > 0)
+  // TS2365: relational comparison of definitely-unrelated operands.
+  assert_true(issues("function foo<T, U>(t: T, u: U) { var r = t < u; }") > 0)
+  assert_true(issues("declare let a: { a: 1 };\na > 1;") > 0)
+  assert_true(
+    issues("declare const t1: number | Promise<number>;\nt1 >= 0;") > 0,
+  )
+  @test.assert_eq(issues("function foo<T>(t: T) { var r = t < t; }"), 0)
+  @test.assert_eq(
+    issues(
+      // (@strict: false so the uninitialized `a` doesn't trip TS2564 —
+      // this pin is about the comparison staying legal.)
+      "// @strict: false\nclass A1 { public a: string; }\ndeclare var x: A1, y: A1;\nx < y;",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues("declare var n: number;\nenum E { a }\nn < 1;\nE.a >= 1;"),
     0,
   )
 }

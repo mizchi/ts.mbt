@@ -224,9 +224,96 @@ fn Parser::skip_enum_member_initializer_tail(self : Parser) -> Unit {
 }
 
 ///|
+
+///|
+/// True when the expression is syntactically string-valued: a string
+/// literal, a template literal, or a `+` chain containing one.
+fn enum_init_stringish(e : @ast.TsExpr) -> Bool {
+  match e {
+    StringLit(_) | TemplateLiteral(_, _) => true
+    BinOp(Add, l, r) => enum_init_stringish(l) || enum_init_stringish(r)
+    _ => false
+  }
+}
+
+///|
+/// TS2362 / TS2363 inside a computed enum-member initializer: a non-`+`
+/// arithmetic operation with a syntactically string-valued operand
+/// (`d = "a" - "a"`, `` b = `1` - `1` ``). The enum AST only keeps folded
+/// literal values, so the check runs here on the speculatively parsed
+/// initializer expression.
+fn Parser::record_enum_string_arith(self : Parser, e : @ast.TsExpr) -> Unit {
+  match e {
+    BinOp(op, l, r) => {
+      match op {
+        Sub
+        | Mul
+        | Div
+        | Mod
+        | Pow
+        | Shl
+        | Shr
+        | UShr
+        | BitAnd
+        | BitOr
+        | BitXor => {
+          if enum_init_stringish(l) {
+            self.grammar_misuses.push(
+              "the left-hand side of an arithmetic operation must be of type `any`, `number`, `bigint` or an enum type",
+            )
+          }
+          if enum_init_stringish(r) {
+            self.grammar_misuses.push(
+              "the right-hand side of an arithmetic operation must be of type `any`, `number`, `bigint` or an enum type",
+            )
+          }
+        }
+        _ => ()
+      }
+      self.record_enum_string_arith(l)
+      self.record_enum_string_arith(r)
+    }
+    UnaryOp(_, x) => self.record_enum_string_arith(x)
+    _ => ()
+  }
+}
+
+///|
+/// Speculatively parse the (non-literal) enum member initializer that is
+/// about to be skipped, and record string-arithmetic misuses found in it.
+/// Every parser side channel that expression parsing can grow is truncated
+/// back before our own recordings, and the token position is restored, so
+/// this is observation-only.
+fn Parser::scan_skipped_enum_initializer(
+  self : Parser,
+  start_pos : Int,
+) -> Unit {
+  self.pos = start_pos
+  let gm_len = self.grammar_misuses.length()
+  let sm_len = self.strict_mode_misuses.length()
+  let parsed : @ast.TsExpr? = try self.parse_ternary() catch {
+    _ => None
+  } noraise {
+    e => Some(e)
+  }
+  while self.grammar_misuses.length() > gm_len {
+    let _ = self.grammar_misuses.pop()
+  }
+  while self.strict_mode_misuses.length() > sm_len {
+    let _ = self.strict_mode_misuses.pop()
+  }
+  self.pos = start_pos
+  match parsed {
+    Some(e) => self.record_enum_string_arith(e)
+    None => ()
+  }
+}
+
+///|
 fn Parser::parse_enum_member_initializer(
   self : Parser,
 ) -> (@ast.TsEnumMemberValue?, Bool) {
+  let start_pos = self.pos
   let sign = if self.match_(Minus) {
     "-"
   } else if self.match_(Plus) {
@@ -256,6 +343,7 @@ fn Parser::parse_enum_member_initializer(
       Some(@ast.TsEnumMemberValue::Bool(value))
     }
     _ => {
+      self.scan_skipped_enum_initializer(start_pos)
       self.skip_enum_member_initializer_tail()
       return (None, true)
     }
@@ -263,6 +351,7 @@ fn Parser::parse_enum_member_initializer(
   if self.is_enum_member_initializer_delim() {
     (value, false)
   } else {
+    self.scan_skipped_enum_initializer(start_pos)
     self.skip_enum_member_initializer_tail()
     (None, true)
   }

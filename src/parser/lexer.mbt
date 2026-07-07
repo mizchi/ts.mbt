@@ -2063,6 +2063,9 @@ fn token_can_end_expr(kind : TokenKind) -> Bool {
     | Bool(_)
     | Str(_)
     | Regex(_, _)
+    // A template literal is a complete expression, so a following `/` is
+    // division, not a regex start (`` `a${1}b` / 1 ``).
+    | Template(_, _, _)
     | Ident(_)
     | PrivateIdent(_)
     | NumberType
