@@ -9234,6 +9234,67 @@ fn single_call_signature_params(
 }
 
 ///|
+/// TS2554 for a union-of-functions callee whose members have *different*
+/// signatures: a call through a union must be valid for every constituent,
+/// so fewer arguments than the largest member minimum always fails, and --
+/// when every member has a bounded parameter list -- more arguments than
+/// the largest member maximum also fails. Members with rest parameters
+/// lift the upper bound; any non-`Func` member or spread argument
+/// abstains.
+fn check_union_callee_arity(
+  ctx : CheckCtx,
+  callee_ty : @ast.TsType,
+  args : Array[@ast.TsExpr],
+  call_path : String,
+) -> Unit {
+  guard ctx.resolver.unwrap(callee_ty) is Union(members) else { return }
+  for a in args {
+    if a is Spread(_) {
+      return
+    }
+  }
+  let mut max_min = 0
+  let mut all_bounded = true
+  let mut max_max = 0
+  for m in members {
+    match ctx.resolver.unwrap(m) {
+      Func(ps, _) => {
+        let mut has_rest = false
+        for p in ps {
+          if p is Rest(_) {
+            has_rest = true
+          }
+        }
+        let min_ = required_arity_from_types(ps)
+        if min_ > max_min {
+          max_min = min_
+        }
+        if has_rest {
+          all_bounded = false
+        } else if ps.length() > max_max {
+          max_max = ps.length()
+        }
+      }
+      _ => return
+    }
+  }
+  let n = args.length()
+  if n < max_min {
+    record_unfiltered(
+      ctx,
+      call_path,
+      "expected at least \{max_min} argument(s), got \{n}",
+    )
+  } else if all_bounded && n > max_max {
+    record_unfiltered(
+      ctx,
+      call_path,
+      "expected at most \{max_max} argument(s), got \{n}",
+    )
+  }
+}
+
+///|
 /// Common call-signature parameters of a union callee: when every member of
 /// the union exposes exactly one call signature and all of them have
 /// *identical* parameter types, the union is callable with those parameters
@@ -13946,7 +14007,14 @@ fn check_call_args_in_expr(
           match union_common_call_params(other, ctx.resolver) {
             Some(params) =>
               check_arguments(env, params, args, ctx, "call `\{name}`")
-            None =>
+            None => {
+              // Overload sets also ingest as a `Union` of `Func`s; a call
+              // needs only ONE overload to match, so the every-member arity
+              // rule applies solely to union-typed *values* (names with no
+              // function-declaration signature).
+              if ctx.resolver.signatures.get(name) is None {
+                check_union_callee_arity(ctx, other, args, "call `\{name}`")
+              }
               if is_definitely_not_callable(other) {
                 record(
                   ctx,
@@ -13954,6 +14022,7 @@ fn check_call_args_in_expr(
                   "`\{type_display(other)}` is not callable",
                 )
               }
+            }
           }
       }
       for a in args {
@@ -20277,27 +20346,302 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
 ///|
 
 ///|
-/// A type whose identity we can compare safely by structural / set equality:
-/// a primitive, a literal, or a named reference. Compound shapes (objects,
-/// functions, generics, `typeof`, conditionals, …) are excluded so the
-/// redeclaration check never mis-judges identity on a form it can't normalize.
-fn is_identity_comparable_atom(t : @ast.TsType) -> Bool {
-  match t {
-    Number
-    | Int
-    | Boolean
-    | String_
-    | BigInt
-    | Symbol
-    | Void
-    | Null
-    | Undefined
-    | Literal(_)
-    | NumberLiteral(_)
-    | BigIntLiteral(_)
-    | BooleanLiteral(_)
-    | Named(_) => true
-    _ => false
+/// Structural identity key for a named class / interface reference used by
+/// the TS2403 check, or `None` when the declaration's shape can't be
+/// expanded faithfully: generics, heritage, index / call signatures,
+/// readonly or private / protected / abstract members, computed keys.
+fn structural_named_key(
+  n : String,
+  resolver : Resolver,
+  depth : Int,
+) -> String? {
+  match resolver.interfaces.get(n) {
+    Some(iface) => {
+      if iface.type_params.length() > 0 ||
+        iface.extends_names.length() > 0 ||
+        iface.index_signatures.length() > 0 ||
+        iface.readonly_fields.length() > 0 {
+        return None
+      }
+      let pairs : Array[String] = []
+      for f in iface.fields {
+        if f.0.has_prefix("<") {
+          return None
+        }
+        match identity_key(f.1, resolver, depth + 1) {
+          Some(v) => pairs.push(f.0 + ":" + v)
+          None => return None
+        }
+      }
+      pairs.sort()
+      return Some("obj{" + pairs.join(",") + "}")
+    }
+    None => ()
+  }
+  match resolver.classes.get(n) {
+    Some(cls) => {
+      if cls.type_params.length() > 0 ||
+        cls.base_names.length() > 0 ||
+        cls.computed_field_keys.length() > 0 ||
+        cls.index_signatures.length() > 0 ||
+        cls.is_abstract ||
+        cls.private_members.length() > 0 ||
+        cls.protected_members.length() > 0 ||
+        cls.abstract_members.length() > 0 {
+        return None
+      }
+      let pairs : Array[String] = []
+      for p in cls.properties {
+        if p.is_static {
+          continue
+        }
+        if p.is_readonly || p.name.has_prefix("<") || p.name.has_prefix("#") {
+          return None
+        }
+        match identity_key(p.type_, resolver, depth + 1) {
+          Some(v) => pairs.push(p.name + ":" + v)
+          None => return None
+        }
+      }
+      for m in cls.methods {
+        if m.is_static {
+          continue
+        }
+        if m.type_params.length() > 0 ||
+          m.name.has_prefix("<") ||
+          m.name.has_prefix("#") {
+          return None
+        }
+        let pkeys : Array[String] = []
+        for prm in m.params {
+          match identity_key(prm.1, resolver, depth + 1) {
+            Some(v) => pkeys.push(v)
+            None => return None
+          }
+        }
+        match identity_key(m.return_type, resolver, depth + 1) {
+          Some(rk) => pairs.push(m.name + ":fn(" + pkeys.join(",") + ")=>" + rk)
+          None => return None
+        }
+      }
+      pairs.sort()
+      return Some("obj{" + pairs.join(",") + "}")
+    }
+    None => ()
+  }
+  None
+}
+
+///|
+/// Canonical identity key for the TS2403 redeclaration check, or `None`
+/// when the type has a form whose identity we can't decide safely
+/// (generics, intersections, `typeof`, conditionals, index signatures,
+/// unresolved applied references, …). Two `var` declarations whose keys
+/// both resolve and differ are *definitely* non-identical. Normalizations
+/// applied so spelling differences never flag: aliases unwrap, union
+/// members sort / dedupe, literal members subsumed by their base primitive
+/// drop (`string | "a"` ≡ `string`), `never` members drop, `any` /
+/// `unknown` absorb the union, and `Array<T>` ≡ `T[]`.
+fn identity_key(t : @ast.TsType, resolver : Resolver, depth : Int) -> String? {
+  if depth > 16 {
+    return None
+  }
+  match resolver.unwrap(t) {
+    Number | Int => Some("number")
+    Boolean => Some("boolean")
+    String_ => Some("string")
+    BigInt => Some("bigint")
+    Symbol => Some("symbol")
+    Void => Some("void")
+    Null => Some("null")
+    Undefined => Some("undefined")
+    Unknown => Some("unknown")
+    Never => Some("never")
+    NonPrimitiveObject => Some("object")
+    Literal(s) => Some("slit:" + s)
+    NumberLiteral(s) => Some("nlit:" + s)
+    BigIntLiteral(s) => Some("blit:" + s)
+    BooleanLiteral(b) => Some(if b { "true" } else { "false" })
+    Named(n) =>
+      // tsc's identity relation is structural for interfaces and classes
+      // (a class instance type IS identical to a spelled-out object
+      // literal of the same shape — nestedModules), so expand simple
+      // shapes to their structural key. Enums stay nominal.
+      if resolver.enums.get(n) is Some(_) {
+        Some("n:" + n)
+      } else {
+        structural_named_key(n, resolver, depth)
+      }
+    Array(e) | Applied("Array", [e]) =>
+      match identity_key(e, resolver, depth + 1) {
+        Some(k) => Some("arr(" + k + ")")
+        None => None
+      }
+    Tuple(items) => {
+      let keys : Array[String] = []
+      for it in items {
+        match it {
+          Rest(_) => return None
+          other =>
+            match identity_key(other, resolver, depth + 1) {
+              Some(k) => keys.push(k)
+              None => return None
+            }
+        }
+      }
+      Some("tup[" + keys.join(",") + "]")
+    }
+    Func(ps, r) => {
+      let keys : Array[String] = []
+      for p in ps {
+        match identity_key(p, resolver, depth + 1) {
+          Some(k) => keys.push(k)
+          None => return None
+        }
+      }
+      match identity_key(r, resolver, depth + 1) {
+        Some(rk) => Some("fn(" + keys.join(",") + ")=>" + rk)
+        None => None
+      }
+    }
+    Constructor(ps, r, is_abstract) => {
+      let keys : Array[String] = []
+      for p in ps {
+        match identity_key(p, resolver, depth + 1) {
+          Some(k) => keys.push(k)
+          None => return None
+        }
+      }
+      match identity_key(r, resolver, depth + 1) {
+        Some(rk) =>
+          Some(
+            (if is_abstract { "actor(" } else { "ctor(" }) +
+            keys.join(",") +
+            ")=>" +
+            rk,
+          )
+        None => None
+      }
+    }
+    Object(fields) => {
+      // A single call / construct signature written as a type literal is
+      // identical to the arrow form: `{ (x): R }` === `(x) => R` and
+      // `{ new (x): R }` === `new (x) => R`.
+      match fields {
+        [(Literal("<call>"), inner)] =>
+          return identity_key(inner, resolver, depth + 1)
+        [(Literal("<new>"), inner)] =>
+          return match identity_key(inner, resolver, depth + 1) {
+            Some(k) =>
+              // Reuse the Constructor spelling: `fn(...)=>r` -> `ctor(...)=>r`.
+              if k.has_prefix("fn(") {
+                Some("ctor" + k.substring(start=2))
+              } else {
+                None
+              }
+            None => None
+          }
+        _ => ()
+      }
+      let pairs : Array[String] = []
+      for f in fields {
+        match f.0 {
+          Literal(k) =>
+            // Any synthetic member (call/construct/index signatures inside a
+            // larger literal) makes identity undecidable.
+            if k.has_prefix("<") {
+              return None
+            } else {
+              match identity_key(f.1, resolver, depth + 1) {
+                Some(v) => pairs.push(k + ":" + v)
+                None => return None
+              }
+            }
+          // Index signatures / computed keys: identity undecidable.
+          _ => return None
+        }
+      }
+      pairs.sort()
+      Some("obj{" + pairs.join(",") + "}")
+    }
+    Union(_) as u => {
+      let members = normalized_union_members(u, resolver)
+      let keys : Array[String] = []
+      let mut has_string = false
+      let mut has_number = false
+      let mut has_boolean = false
+      let mut has_bigint = false
+      for m in members {
+        match resolver.unwrap(m) {
+          String_ => has_string = true
+          Number | Int => has_number = true
+          Boolean => has_boolean = true
+          BigInt => has_bigint = true
+          _ => ()
+        }
+      }
+      let mut true_lit = false
+      let mut false_lit = false
+      for m in members {
+        match resolver.unwrap(m) {
+          // `any` / `unknown` absorb the whole union.
+          Any => return None
+          Unknown => return Some("unknown")
+          // `never` members vanish; literal members subsumed by their
+          // base primitive vanish (tsc reduces before comparing identity).
+          Never => ()
+          Literal(_) if has_string => ()
+          NumberLiteral(_) if has_number => ()
+          BooleanLiteral(_) if has_boolean => ()
+          BigIntLiteral(_) if has_bigint => ()
+          BooleanLiteral(b) => {
+            if b {
+              true_lit = true
+            } else {
+              false_lit = true
+            }
+            match identity_key(m, resolver, depth + 1) {
+              Some(k) => keys.push(k)
+              None => return None
+            }
+          }
+          other =>
+            match identity_key(other, resolver, depth + 1) {
+              Some(k) => keys.push(k)
+              None => return None
+            }
+        }
+      }
+      // `true | false` reduces to `boolean`.
+      if true_lit && false_lit && !has_boolean {
+        let filtered = keys.filter(fn(k) { k != "true" && k != "false" })
+        filtered.push("boolean")
+        keys.clear()
+        for k in filtered {
+          keys.push(k)
+        }
+      }
+      keys.sort()
+      // Dedupe repeated *atomic* members (`string | string` ≡ `string`).
+      // Structural keys stay: two distinct-but-structurally-equal classes
+      // in a union (`C | D` with both empty) are separate members to tsc,
+      // so `C` vs `C | D` must remain non-identical.
+      let deduped : Array[String] = []
+      for k in keys {
+        let atomic = !k.contains("{") && !k.contains("(")
+        if deduped.length() == 0 ||
+          deduped[deduped.length() - 1] != k ||
+          !atomic {
+          deduped.push(k)
+        }
+      }
+      match deduped.length() {
+        0 => Some("never")
+        1 => Some(deduped[0])
+        _ => Some("u(" + deduped.join("|") + ")")
+      }
+    }
+    _ => None
   }
 }
 
@@ -20347,44 +20691,25 @@ fn check_var_redeclaration_types(
   resolver : Resolver,
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
-  let first_members : Map[String, Array[@ast.TsType]] = {}
+  let first_key : Map[String, String] = {}
   let reported : Map[String, Unit] = {}
-  fn members_set_equal(a : Array[@ast.TsType], b : Array[@ast.TsType]) -> Bool {
-    for x in a {
-      if !b.iter().any(fn(y) { x == y }) {
-        return false
-      }
-    }
-    for x in b {
-      if !a.iter().any(fn(y) { x == y }) {
-        return false
-      }
-    }
-    true
-  }
-
   fn consider(name : String, ty : @ast.TsType) -> Unit {
     if !is_checkable(ty) {
       return
     }
-    let members = normalized_union_members(ty, resolver)
-    if members.length() == 0 {
-      return
-    }
-    for m in members {
-      if !is_identity_comparable_atom(m) {
-        return
-      }
-    }
-    match first_members.get(name) {
-      None => first_members[name] = members
-      Some(prev) =>
-        if !(reported.get(name) is Some(_)) && !members_set_equal(prev, members) {
-          reported[name] = ()
-          issues.push({
-            path: "var \{name}",
-            message: "subsequent variable declaration must have the same type",
-          })
+    match identity_key(ty, resolver, 0) {
+      None => ()
+      Some(key) =>
+        match first_key.get(name) {
+          None => first_key[name] = key
+          Some(prev) =>
+            if !(reported.get(name) is Some(_)) && prev != key {
+              reported[name] = ()
+              issues.push({
+                path: "var \{name}",
+                message: "subsequent variable declaration must have the same type",
+              })
+            }
         }
     }
   }

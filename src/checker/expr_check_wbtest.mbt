@@ -12438,3 +12438,52 @@ test "expr_check: spread arity, enum string arith, relational pairs (batch AG)" 
     0,
   )
 }
+
+///|
+test "expr_check: identity keys and union callee arity (batch AH)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2403 via structural identity keys: function-type unions vs a
+  // union-returning function differ; spelling variants stay silent.
+  assert_true(
+    issues(
+      "var u: (() => string) | (() => number);\nvar u: () => string | number;",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "var a: (string | number)[];\nvar a: Array<string | number>;\nvar b: { (x: string): string };\nvar b: (x: string) => string;\nvar l: string | \"a\";\nvar l: string;",
+    ),
+    0,
+  )
+  // A class instance type is structurally identical to its spelled-out
+  // object literal (nestedModules), while `C` vs `C | D` is not.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nnamespace M { export class P { x: number; y: number; } }\nvar p: { x: number; y: number; };\nvar p: M.P;",
+    ),
+    0,
+  )
+  // TS2554 for union-typed callees with differing member arities.
+  assert_true(
+    issues(
+      "type F1 = (a: string, b?: string) => void;\ntype F5 = (a: string, b: string) => void;\ndeclare var f: F1 | F5;\nf(\"a\");",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "type F1 = (a: string, b?: string) => void;\ntype F2 = (a: string, b?: string, c?: string) => void;\ndeclare var f: F1 | F2;\nf(\"a\");\nf(\"a\", \"b\", \"c\");",
+    ),
+    0,
+  )
+  // Overloaded declarations are also `Union`s of `Func`s — exempt.
+  @test.assert_eq(
+    issues(
+      "declare function g(a: string, b: string): void;\ndeclare function g(a: number): void;\ng(1);",
+    ),
+    0,
+  )
+}

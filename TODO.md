@@ -2295,6 +2295,37 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-07 (T184)  714/815 (88 %)        414/414 ( 0 FP)   Practical round 4: TS2403 identity keys + union-callee arity: TP 2134 -> 2136
+
+  T184 -- practical (non-edge) misses, round 4.
+    - TS2403 rewrite: the redeclaration check moves from
+      atoms-only set comparison to a canonical `identity_key` covering
+      functions, constructors, tuples, arrays, object literals, and
+      unions -- with the normalizations tsc's identity relation implies:
+      aliases unwrap, union members sort, literal members subsumed by
+      their base primitive drop (`string | "a"` == `string`),
+      `never` drops, `any`/`unknown` absorb, `Array<T>` == `T[]`,
+      `{ (x): R }` == `(x) => R`, `{ new (x): R }` == `new (x) => R`.
+      Named references: enums stay nominal; classes / interfaces expand
+      to their structural shape when simple (no generics / heritage /
+      index sigs / readonly / private / abstract) because tsc's identity
+      is structural there -- a class instance type IS identical to its
+      spelled-out object literal (nestedModules, exportImportAlias, and
+      the DeclarationMerging pair were gate FPs of the name-keyed
+      draft). Union dedup is atomic-only so `C | D` with two
+      structurally-equal classes stays a 2-member union (pinned test).
+      unionTypeLiterals.
+    - TS2554 for union-typed callees whose members have different
+      arities: a call through a union must satisfy every member, so
+      `n < max(member minimums)` always errors and -- when every member
+      is rest-free -- `n > max(member maximums)` errors too. Gated to
+      names with no function-declaration signature: overload sets ingest
+      as the same `Union`-of-`Func` shape but need only ONE overload to
+      match (typeParameterConstModifiersReturnsAndYields was a gate FP
+      until the signatures-map guard). unionTypeCallSignatures4.
+    Whole-corpus TP 2134 -> 2136 @ 0 FP (session total 1761 -> +375);
+    pinned recall 714, precision 414/414. 2446 tests.
+
 2026-07-07 (T183)  714/815 (88 %)        414/414 ( 0 FP)   Practical round 3: TS2556/TS2362/TS2365 + lexer template-division: TP 2119 -> 2134
 
   T183 -- practical (non-edge) misses, round 3.
