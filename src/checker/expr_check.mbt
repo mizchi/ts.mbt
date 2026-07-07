@@ -14584,6 +14584,22 @@ fn check_call_args_in_expr(
         // are not trustworthy here. Unions, generics, `any`, and unresolved
         // names all abstain.
         PreInc | PreDec | PostInc | PostDec => {
+          // TS2540: enum members are read-only, so `E.B++` / `--E["B"]`
+          // (receiver resolving to an enum object, not shadowed locally)
+          // can never be an assignment target.
+          match inner {
+            PropAccess(Var(recv_name), member)
+            | IndexAccess(Var(recv_name), StringLit(member)) =>
+              if env.lookup(recv_name) is None &&
+                ctx.resolver.enums.get(recv_name) is Some(_) {
+                record_unfiltered(
+                  ctx,
+                  "unary op",
+                  "cannot assign to `\{member}` because it is a read-only property",
+                )
+              }
+            _ => ()
+          }
           let inner_ty = ctx.resolver.unwrap(
             infer_expr(env, ctx.resolver, inner),
           )
@@ -14652,10 +14668,47 @@ fn check_call_args_in_expr(
       for it in items {
         check_call_args_in_expr(env, it, ctx)
       }
-    ObjectLit(entries) =>
+    ObjectLit(entries) => {
       for ent in entries {
         check_call_args_in_expr(env, ent.1, ctx)
       }
+      // TS2783: an explicitly-written property that a LATER spread in the
+      // same literal always overwrites (`{ b: 1, ...ab }` where `ab`'s type
+      // declares `b` as required). Optional members, unions, generics, and
+      // unresolvable spread shapes abstain (`cast_shape_fields` returns
+      // `None` for those); spread-vs-spread never errors.
+      for i, ent in entries {
+        if ent.0.has_prefix("@@spread") || ent.0.has_prefix("<") {
+          continue
+        }
+        let mut reported = false
+        for j in (i + 1)..<entries.length() {
+          if reported {
+            break
+          }
+          if entries[j].0.has_prefix("@@spread") {
+            let spread_ty = ctx.resolver.unwrap(
+              infer_expr(env, ctx.resolver, entries[j].1),
+            )
+            match cast_shape_fields(ctx.resolver, spread_ty, 0) {
+              Some(fields) =>
+                match fields.get(ent.0) {
+                  Some(true) => {
+                    record_unfiltered(
+                      ctx,
+                      "object literal `\{ent.0}`",
+                      "`\{ent.0}` is specified more than once, so this usage will be overwritten by the spread",
+                    )
+                    reported = true
+                  }
+                  _ => ()
+                }
+              None => ()
+            }
+          }
+        }
+      }
+    }
     // A computed property key (`{ [e]: 1 }`, `class C { [e]() {} }`) is an
     // ordinary value expression: walk both the key and the value so an
     // undefined name in the key surfaces (TS2304) like any other reference.
@@ -21834,6 +21887,34 @@ fn check_module_function_bodies_layered(
         message: "`await` is a reserved word at the top-level of a module",
       })
     }
+    // TS2448: a top-level class's static block reading / writing a
+    // block-scoped variable declared LATER at top level (TDZ at class
+    // definition time). `grammar_misuses` is append-only in parse order,
+    // so an `<sb-read:X>` seen before X's `<letconst-decl:X>` — with the
+    // declaration present at all — is a definite use-before-declaration.
+    let tdz_declared : Map[String, Bool] = {}
+    let tdz_pending : Map[String, Bool] = {}
+    let tdz_reported : Map[String, Bool] = {}
+    for gm in module_.grammar_misuses {
+      if gm.has_prefix("<letconst-decl:") {
+        let n = gm["<letconst-decl:".length():gm.length() - 1].to_string()
+        tdz_declared[n] = true
+        if tdz_pending.get(n) is Some(_) && tdz_reported.get(n) is None {
+          tdz_reported[n] = true
+          all.push({
+            path: "static block",
+            message: "block-scoped variable `\{n}` used before its declaration",
+          })
+        }
+        continue
+      }
+      if gm.has_prefix("<sb-read:") {
+        let n = gm["<sb-read:".length():gm.length() - 1].to_string()
+        if tdz_declared.get(n) is None {
+          tdz_pending[n] = true
+        }
+      }
+    }
     // TS2304 for a single-bare-identifier computed key in a type position
     // (`var v: { [e]: number }`, `interface I { [e](): T }`, `declare class
     // C { [e]: T }`). The key references the *value* namespace; resolve it
@@ -21885,6 +21966,11 @@ fn check_module_function_bodies_layered(
       // Markers, not errors: module-syntax evidence and a top-level
       // binding named `await`, combined into TS1262 above.
       if gm == "<module-syntax>" || gm == "<top-await-name>" {
+        continue
+      }
+      // Markers, not errors: static-block reads and top-level let/const
+      // declarations, paired into TS2448 above.
+      if gm.has_prefix("<sb-read:") || gm.has_prefix("<letconst-decl:") {
         continue
       }
       // TS2304: `export = name` over a provably undeclared value. Same

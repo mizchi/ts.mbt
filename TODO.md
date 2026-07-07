@@ -2295,6 +2295,42 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-07 (T187)  714/815 (88 %)        414/414 ( 0 FP)   Practical round 7: TDZ, spread overwrite, enum readonly, await type: TP 2144 -> 2155
+
+  T187 -- practical (non-edge) misses, round 7. Cluster selection came
+    from three parallel corpus-analysis passes over the remaining TS2322
+    (53), TS2345 (25), and small-code misses; their reports also
+    identified the follow-up queue (object-literal-vs-index-signature
+    values, literal-param contravariance, Symbol wrapper vs primitive,
+    call-vs-construct signatures, TS2741 missing property) and marked
+    ~34 TS2322 / ~22 TS2345 files as needing unmodelable machinery
+    (generic inference chains, lib member signatures, flow narrowing).
+    - TS2448: a top-level class's static block reading / writing a
+      block-scoped variable declared LATER at top level (TDZ at class
+      definition time). Statement order between classes and consts is
+      erased by module lowering, so the parser records `<sb-read:X>`
+      (immediate reads / writes of each top-level static block,
+      function bodies skipped) and `<letconst-decl:X>` markers whose
+      relative order in the append-only `grammar_misuses` channel IS
+      parse order; the checker pairs them. classStaticBlock16,
+      classStaticBlockUseBeforeDef3.
+    - TS2783: an explicitly-written object-literal property that a later
+      spread always overwrites (`{ b: 1, ...ab }` with `b` required in
+      `ab`'s type). Reuses `cast_shape_fields`; optional members,
+      unions, generics, spread-vs-spread abstain.
+      spreadDuplicate(Exact), spreadOverwritesProperty(Strict).
+    - TS2540: enum members are read-only — `E.B++` / `--E["B"]` with an
+      unshadowed enum receiver. incrementOperatorWithEnumType.
+    - TS2552: `await` as a type reference inside an async context can
+      never resolve (tsc suggests `Awaited`). Recorded in the type
+      parser under `in_async` — which exposed a parser bug: function
+      declarations reset `in_async = false` before parsing their body
+      (`async function` bodies parsed as non-async); both
+      `parse_function` sites now propagate `is_async`.
+      asyncArrowFunction10_*, asyncFunctionDeclaration13_*.
+    Whole-corpus TP 2144 -> 2155 @ 0 FP (session total 1761 -> +394);
+    pinned recall 714, precision 414/414. 2449 tests.
+
 2026-07-07 (T186)  714/815 (88 %)        414/414 ( 0 FP)   Practical round 6: destructuring literal misses + globalThis: TP 2140 -> 2144
 
   T186 -- practical (non-edge) misses, round 6 (TS2339 subclusters).

@@ -54,6 +54,222 @@ fn runtime_class_param_name(param : @ast.TsParam, index : Int) -> String {
 ///|
 
 ///|
+/// Every identifier a binding pattern declares (helper for the static-block
+/// TDZ scan).
+fn sb_binding_names(binding : @ast.TsBinding, out : Array[String]) -> Unit {
+  match binding {
+    Ident(n) => out.push(n)
+    Array(ab) => {
+      for item in ab.items {
+        match item {
+          Some(e) => sb_binding_names(e.binding, out)
+          None => ()
+        }
+      }
+      match ab.rest {
+        Some(r) => sb_binding_names(r, out)
+        None => ()
+      }
+    }
+    Object(ob) => {
+      for p in ob.props {
+        sb_binding_names(p.binding, out)
+      }
+      match ob.rest {
+        Some(r) => out.push(r)
+        None => ()
+      }
+    }
+    Target(_) => ()
+  }
+}
+
+///|
+/// Free identifier reads / writes of a static block's *immediate* execution
+/// (function bodies are deferred and skipped): `Var` reads in any operand
+/// position and assignment-statement target names. Block-local declarations
+/// are collected into `locals` and excluded by the caller.
+fn sb_reads_expr(e : @ast.TsExpr, out : Array[String]) -> Unit {
+  match e {
+    Var(n) => out.push(n)
+    PropAccess(recv, _) => sb_reads_expr(recv, out)
+    PropAssignExpr(recv, _, v) => {
+      sb_reads_expr(recv, out)
+      sb_reads_expr(v, out)
+    }
+    MethodCall(recv, _, args) => {
+      sb_reads_expr(recv, out)
+      for a in args {
+        sb_reads_expr(a, out)
+      }
+    }
+    BinOp(_, a, b) | Seq(a, b) | IndexAccess(a, b) | ComputedProp(a, b) => {
+      sb_reads_expr(a, out)
+      sb_reads_expr(b, out)
+    }
+    IndexAssignExpr(a, b, c) | Cond(a, b, c) => {
+      sb_reads_expr(a, out)
+      sb_reads_expr(b, out)
+      sb_reads_expr(c, out)
+    }
+    UnaryOp(_, x)
+    | Spread(x)
+    | Await(x)
+    | YieldStar(x)
+    | PureCall(x)
+    | TypeArgs(_, x) => sb_reads_expr(x, out)
+    AssignExpr(n, v) => {
+      out.push(n)
+      sb_reads_expr(v, out)
+    }
+    CompoundAssignExpr(a, _, b) => {
+      sb_reads_expr(a, out)
+      sb_reads_expr(b, out)
+    }
+    Yield(opt) =>
+      match opt {
+        Some(x) => sb_reads_expr(x, out)
+        None => ()
+      }
+    Call(n, args) => {
+      out.push(n)
+      for a in args {
+        sb_reads_expr(a, out)
+      }
+    }
+    New(_, args) =>
+      for a in args {
+        sb_reads_expr(a, out)
+      }
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      sb_reads_expr(callee, out)
+      for a in args {
+        sb_reads_expr(a, out)
+      }
+    }
+    ArrayLit(items) =>
+      for it in items {
+        sb_reads_expr(it, out)
+      }
+    ObjectLit(entries) =>
+      for ent in entries {
+        sb_reads_expr(ent.1, out)
+      }
+    TemplateLiteral(_, exprs) =>
+      for x in exprs {
+        sb_reads_expr(x, out)
+      }
+    TaggedTemplate(tag, _, _, exprs) => {
+      sb_reads_expr(tag, out)
+      for x in exprs {
+        sb_reads_expr(x, out)
+      }
+    }
+    _ => ()
+  }
+}
+
+///|
+fn sb_reads_stmt(
+  stmt : @ast.TsStmt,
+  locals : Array[String],
+  out : Array[String],
+) -> Unit {
+  fn walk_block(b : @ast.TsBlock) -> Unit {
+    for s in b.stmts {
+      sb_reads_stmt(s, locals, out)
+    }
+  }
+
+  match stmt {
+    Var(b, _, e) | Let(b, _, e) | Const(b, _, e) => {
+      sb_binding_names(b, locals)
+      sb_reads_expr(e, out)
+    }
+    Assign(n, e) => {
+      out.push(n)
+      sb_reads_expr(e, out)
+    }
+    CompoundAssign(n, _, e) => {
+      out.push(n)
+      sb_reads_expr(e, out)
+    }
+    Expr(e) | Throw(e) | Return(Some(e)) => sb_reads_expr(e, out)
+    PropAssign(recv, _, v) => {
+      sb_reads_expr(recv, out)
+      sb_reads_expr(v, out)
+    }
+    IndexAssign(a, b, c) => {
+      sb_reads_expr(a, out)
+      sb_reads_expr(b, out)
+      sb_reads_expr(c, out)
+    }
+    If(c, t, e) => {
+      sb_reads_expr(c, out)
+      walk_block(t)
+      match e {
+        Some(x) => walk_block(x)
+        None => ()
+      }
+    }
+    While(c, b) | DoWhile(c, b) | With(c, b) => {
+      sb_reads_expr(c, out)
+      walk_block(b)
+    }
+    For(init, cond, upd, body) => {
+      match init {
+        Some(s) => sb_reads_stmt(s, locals, out)
+        None => ()
+      }
+      match cond {
+        Some(e) => sb_reads_expr(e, out)
+        None => ()
+      }
+      match upd {
+        Some(s) => sb_reads_stmt(s, locals, out)
+        None => ()
+      }
+      walk_block(body)
+    }
+    ForOf(_, b, _, e, body)
+    | ForAwaitOf(_, b, _, e, body)
+    | ForIn(_, b, _, e, body) => {
+      sb_binding_names(b, locals)
+      sb_reads_expr(e, out)
+      walk_block(body)
+    }
+    Switch(e, cases) => {
+      sb_reads_expr(e, out)
+      for case in cases {
+        match case.test_expr {
+          Some(t) => sb_reads_expr(t, out)
+          None => ()
+        }
+        walk_block(case.body)
+      }
+    }
+    Try(b, cb_binding, cb, fb) => {
+      walk_block(b)
+      match cb_binding {
+        Some(bind) => sb_binding_names(bind, locals)
+        None => ()
+      }
+      match cb {
+        Some(x) => walk_block(x)
+        None => ()
+      }
+      match fb {
+        Some(x) => walk_block(x)
+        None => ()
+      }
+    }
+    Label(_, s) => sb_reads_stmt(s, locals, out)
+    Block(b) => walk_block(b)
+    _ => ()
+  }
+}
+
+///|
 /// True when `binding` declares an identifier equal to `name`.
 fn sb_binding_binds(binding : @ast.TsBinding, name : String) -> Bool {
   match binding {
@@ -1608,6 +1824,23 @@ fn Parser::parse_class_body(
             if self.check(LBrace) {
               let block = self.parse_block()
               elements.push(StaticBlock(block))
+              // TS2448: a top-level class's static block executes at class
+              // definition time, so its immediate reads / writes of a
+              // block-scoped variable declared LATER at top level hit the
+              // TDZ. Record the free identifiers in parse order; the
+              // checker pairs them with `<letconst-decl:…>` markers.
+              if !self.in_function {
+                let locals : Array[String] = []
+                let reads : Array[String] = []
+                for s in block.stmts {
+                  sb_reads_stmt(s, locals, reads)
+                }
+                for r in reads {
+                  if !locals.contains(r) {
+                    self.grammar_misuses.push("<sb-read:" + r + ">")
+                  }
+                }
+              }
               parsed_static_block = true
               break // Exit inner loop, then continue outer loop
             }

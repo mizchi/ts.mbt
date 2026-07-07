@@ -1199,6 +1199,14 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
     // Ident or generic type: Foo, Array<T>
     Ident(name) => {
       let _ = self.advance()
+      // TS2552: inside an `async` context `await` is a reserved word, so a
+      // type reference spelled `await` (`var v: await`) can never resolve
+      // (tsc suggests `Awaited`). Outside async it is a legal type name.
+      if name == "await" && self.in_async {
+        self.grammar_misuses.push(
+          "cannot find name `await`. Did you mean `Awaited`?",
+        )
+      }
       match self.local_type_param_bound(name) {
         // A `T extends object` bound erases to `Any`, not `NonPrimitiveObject`:
         // the constraint promises "some object type", so treating a value of

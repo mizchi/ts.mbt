@@ -343,6 +343,21 @@ fn Parser::parse_var_like(
         _ => ()
       }
     }
+    // TS2448 pairing data: top-level `let` / `const` declarations, in
+    // parse order relative to the `<sb-read:…>` markers static blocks
+    // record. `var` is hoisted and never in the TDZ, so it is excluded.
+    for stmt in stmts {
+      match stmt {
+        Let(b, _, _) | Const(b, _, _) => {
+          let names : Array[String] = []
+          sb_binding_names(b, names)
+          for n in names {
+            self.grammar_misuses.push("<letconst-decl:" + n + ">")
+          }
+        }
+        _ => ()
+      }
+    }
   }
   // TS7006 (noImplicitAny): an unannotated binding initialized by a
   // callable literal gives the callable's unannotated parameters no

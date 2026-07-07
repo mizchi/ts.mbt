@@ -12567,3 +12567,54 @@ test "expr_check: destructuring literal misses and globalThis (batch AJ)" {
     0,
   )
 }
+
+///|
+test "expr_check: static-block TDZ, spread overwrite, enum readonly, await type (batch AK)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2448: a static block using a block-scoped variable declared later.
+  assert_true(
+    issues("class Baz { static { console.log(FOO); } }\nconst FOO = \"FOO\";") >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "const FOO = \"FOO\";\nclass Bar { static { console.log(FOO); } }\nclass C2 { static { const cb = () => LATER; } }\nconst LATER = 3;",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues("class D { static { console.log(gv); } }\nvar gv = 1;"),
+    0,
+  )
+  // TS2783: an explicit property overwritten by a later spread.
+  assert_true(
+    issues(
+      "declare var ab: { a: number, b: number };\nvar x = { b: 1, ...ab };",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "declare var ab: { a: number, b: number };\ndeclare var opt: { a: number, b?: number };\nvar ok1 = { ...ab, b: 1 };\nvar ok2 = { b: 1, ...opt };",
+    ),
+    0,
+  )
+  // TS2540: enum members are read-only.
+  assert_true(issues("enum E { A, B }\nE.B++;") > 0)
+  @test.assert_eq(issues("enum E { A, B }\nvar n = E.B;\nn++;"), 0)
+  // TS2552: `await` as a type reference inside an async context.
+  assert_true(
+    issues("var bar = async (): Promise<void> => {\n  var v: await;\n}") > 0,
+  )
+  assert_true(
+    issues("async function foo(): Promise<void> {\n  var v: await;\n}") > 0,
+  )
+  @test.assert_eq(
+    issues(
+      "type awaitAlias = number;\nfunction g() { var v: awaitAlias = 1; return v; }",
+    ),
+    0,
+  )
+}
