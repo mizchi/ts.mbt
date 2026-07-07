@@ -2295,6 +2295,34 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-07 (T191)  714/815 (88 %)        414/414 ( 0 FP)   Gate spec: parse rejections classify; decorator/template parser fixes: TP 2166 -> 2562
+
+  T191 -- gate-spec change (user-approved) + the parser fixes it forces.
+    - Oracle reclassification: a parse failure is a REJECTION. With an
+      error baseline it is agreement -> TP (shown separately as "via
+      parse rejection": 397); on a tsc-accepted file it is a parser
+      soundness bug -> new PFLEGAL bucket, listed and gated by
+      `--max-legal-parsefail` (kept separate from `--max-fp` so the
+      checker invariant and parser-coverage budget move independently).
+      docs/checker-priority.md updated: the standing gate is now
+      `--max-fp 0 --max-legal-parsefail 1`.
+    - The symmetry forced fixing the remaining legal-TS parse failures:
+      * tagged templates with explicit type arguments (`f<Stuff> `…``)
+        — previously mis-parsed as a comparison chain, which was also a
+        latent TS2365 FP source (taggedTemplatesWithTypeArguments1);
+      * decorator heads with non-null asserts / member chains after
+        them / explicit type args (`@x!`, `@x!.y`, `@g<number>()`), and
+        parenthesized instantiation expressions (`@(g<number>)`) via a
+        balanced-skip fallback (esDecorators-decoratorExpression.2);
+      * parameter decorators with parenthesized expression heads
+        (`(@((t, k, i) => {}) p: any)` —
+        legacyDecorators-contextualTypes).
+    - Remaining PFLEGAL budget 1: parser768531's `{a: 3}\n/x/` — the
+      block-statement `}` vs division regex-lexing ambiguity needs
+      parser-fed lexer context; deferred.
+    Whole-corpus (new spec): TP 2562 (of which 397 via parse rejection)
+    @ 0 FP, PFLEGAL 1, TN 1414, MISS 521. 2453 tests.
+
 2026-07-07 (T190)  714/815 (88 %)        414/414 ( 0 FP)   Parse-failure audit: legal-TS parser fixes: TN 1406 -> 1411
 
   T190 -- PARSEFAIL population audit. Of the 406 skipped parse failures,

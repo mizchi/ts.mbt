@@ -12726,3 +12726,33 @@ test "expr_check: legal-TS parse recoveries (batch AN)" {
   )
   @test.assert_eq(issues("declare var [a, b];\ndeclare var {c, d};"), 0)
 }
+
+///|
+test "expr_check: decorator/tagged-template parse recoveries (batch AO)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Tagged template with explicit type arguments parses as a call, not a
+  // comparison chain.
+  @test.assert_eq(
+    issues(
+      "declare function f<T>(strs: TemplateStringsArray): void;\nconst a = f<string> `hi`;",
+    ),
+    0,
+  )
+  // Decorator heads: non-null asserts, member chains after them, explicit
+  // type args, and instantiation expressions in parens.
+  @test.assert_eq(
+    issues(
+      "declare let x: any;\ndeclare let g: <T>(...args: any) => any;\n{ @x! class C {} }\n{ @x!.y class C {} }\n{ @g<number>() class C {} }\n{ @(g<number>) class C {} }",
+    ),
+    0,
+  )
+  // Parameter decorators with parenthesized expression heads.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nclass D { constructor(@((t, k, i) => {}) p: any) {} }",
+    ),
+    0,
+  )
+}

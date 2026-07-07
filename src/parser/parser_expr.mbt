@@ -1076,6 +1076,12 @@ fn Parser::try_skip_call_type_args(self : Parser, expr : @ast.TsExpr) -> Bool {
   if self.check(LParen) {
     return true
   }
+  // A template literal after type arguments is a tagged-template call with
+  // explicit type args (`f<Stuff> `…`` — taggedTemplatesWithTypeArguments1);
+  // the postfix loop turns the following Template into a TaggedTemplate.
+  if self.peek().kind is Template(_, _, _) {
+    return true
+  }
   if is_instantiation_expr_target(expr) &&
     (
       self.check(Comma) ||

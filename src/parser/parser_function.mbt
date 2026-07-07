@@ -5,12 +5,17 @@
 ///|
 fn Parser::skip_param_decorators(self : Parser) -> Unit raise ParseError {
   while self.match_(At) {
-    let _ = self.parse_binding_ident()
-    while self.match_(Dot) {
+    // `@(expr)` decorator heads (`(@((t, k, i) => {}) p: any)` —
+    // legacyDecorators-contextualTypes) go straight to the balanced
+    // paren skip below; identifier heads consume their member chain.
+    if !self.check(LParen) {
       let _ = self.parse_binding_ident()
-    }
-    if self.check(Lt) {
-      self.skip_type_args()
+      while self.match_(Dot) {
+        let _ = self.parse_binding_ident()
+      }
+      if self.check(Lt) {
+        self.skip_type_args()
+      }
     }
     if self.check(LParen) {
       let _ = self.advance()
