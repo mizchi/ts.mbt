@@ -168,6 +168,10 @@ pub struct Parser {
   // strict-property-initialization must exempt literal-named fields --
   // drained per class into `<quoted-member:...>` sentinels.
   quoted_member_names : Array[String]
+  // Member names that carried an `override` modifier while parsing class
+  // bodies ("i:"/"s:" prefixed for instance/static). Drained per class
+  // into `<override-member:...>` sentinels for TS4112/4113/4114.
+  override_member_names : Array[String]
   // Token-position → "JSDoc `/* @__PURE__ */` annotation seen
   // just before this token". The lexer populates this when it
   // skips a block comment whose contents contain the literal
@@ -262,6 +266,7 @@ pub fn Parser::new_with_strict_and_jsx(
     interface_member_modifier_misuses: [],
     collected_class_dups: [],
     quoted_member_names: [],
+    override_member_names: [],
     pure_marker_positions: {},
     internal_marker_positions: {},
     collected_internal_names: {},
@@ -293,6 +298,16 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
   }
   if lexer.unterminated_template {
     grammar_misuses.push("unterminated template literal")
+  }
+  // Module-scoped flag marker for the override checks (TS4114 fires only
+  // under `@noImplicitOverride: true`); TS4112/TS4113 are unconditional.
+  if detect_no_implicit_override(src) {
+    grammar_misuses.push("<noimplicitoverride-on>")
+  }
+  // Marker for the TS2695 comma-operator check, which tsc disables under
+  // `@allowUnreachableCode: true`.
+  if detect_allow_unreachable_code(src) {
+    grammar_misuses.push("<allowunreachable-on>")
   }
   {
     tokens,
@@ -339,6 +354,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     interface_member_modifier_misuses: [],
     collected_class_dups: [],
     quoted_member_names: [],
+    override_member_names: [],
     pure_marker_positions: lexer.pure_marker_positions,
     internal_marker_positions: lexer.internal_marker_positions,
     collected_internal_names: {},
@@ -688,6 +704,27 @@ fn detect_no_implicit_any(src : String) -> Bool {
     return false
   }
   true
+}
+
+///|
+/// True when the conformance header enables `@noImplicitOverride`.
+/// Default OFF (unlike noImplicitAny): tsc only checks missing `override`
+/// modifiers under the explicit flag.
+fn detect_no_implicit_override(src : String) -> Bool {
+  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
+  let head = src[:head_len].to_owned()
+  head.contains("@noImplicitOverride: true") ||
+  head.contains("@noImplicitOverride:true")
+}
+
+///|
+/// True when the conformance header enables `@allowUnreachableCode`.
+/// tsc gates the TS2695 comma-operator check on this flag being off.
+fn detect_allow_unreachable_code(src : String) -> Bool {
+  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
+  let head = src[:head_len].to_owned()
+  head.contains("@allowUnreachableCode: true") ||
+  head.contains("@allowUnreachableCode:true")
 }
 
 ///|

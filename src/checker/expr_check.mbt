@@ -3979,6 +3979,84 @@ fn is_syntactically_always_falsy(expr : @ast.TsExpr) -> Bool {
 }
 
 ///|
+/// TS2872 / TS2873 for *condition* positions (`cond ? a : b`, `!cond`).
+/// Same literal classification as the `&&` / `||` operand check, except
+/// that tsc exempts `0`, `1`, `true`, and `false` here -- `while (1)`,
+/// `if (0)`, and `1 ? a : b` are idiomatic debug / generated-code shapes
+/// (conditionalOperatorConditionIsNumberType flags `10000 ?` but not
+/// `1 ?` / `0 ?`). Returns `Some(truthy)` when the condition is a
+/// non-exempt literal, `None` otherwise.
+fn condition_literal_truthiness(expr : @ast.TsExpr) -> Bool? {
+  match expr {
+    IntLit(0) | IntLit(1) | BoolLit(_) => None
+    NumberLit(n) if n == 0.0 || n == 1.0 => None
+    _ =>
+      if is_syntactically_always_truthy(expr) {
+        Some(true)
+      } else if is_syntactically_always_falsy(expr) {
+        Some(false)
+      } else {
+        None
+      }
+  }
+}
+
+///|
+/// TS1345: an expression of type `void` cannot be tested for truthiness.
+/// Restricted to shapes whose `void` verdict is trustworthy -- a variable
+/// with a `void` annotation or a call whose signature returns `void`
+/// (`function foo() { }` infers `void` too). Other expression shapes
+/// abstain even if inference says `void`.
+fn tested_condition_is_void(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  expr : @ast.TsExpr,
+) -> Bool {
+  match expr {
+    Var(_) | Call(_, _) | MethodCall(_, _, _) | CallExpr(_, _) =>
+      ctx.resolver.unwrap(infer_expr(env, ctx.resolver, expr)) is Void
+    _ => false
+  }
+}
+
+///|
+/// tsc's `isSideEffectFree` subset, used by the TS2695 comma-operator
+/// check. Mirrors the compiler's classification: identifiers, literals,
+/// function / class / array / object literals, templates (tagged included),
+/// the pure unary operators (`!`, `-`, `+`, `~`, `typeof` -- which don't
+/// recurse into their operand, matching tsc), and recursive conditional /
+/// binary / comma forms. Property access is *not* side-effect-free
+/// (getters), and neither are calls, `new`, assignments, or `++`/`--`.
+fn comma_left_side_effect_free(expr : @ast.TsExpr) -> Bool {
+  match expr {
+    Var(_)
+    | NumberLit(_)
+    | IntLit(_)
+    | BigIntLit(_)
+    | BoolLit(_)
+    | StringLit(_)
+    | NullLit
+    | ArrowFunc(_, _, _, _)
+    | FuncExpr(_)
+    | NativeClassExpr(_, _)
+    | ArrayLit(_)
+    | ObjectLit(_)
+    | TemplateLiteral(_, _)
+    | TaggedTemplate(_, _, _, _) => true
+    UnaryOp(op, _) =>
+      match op {
+        Not | Neg | Plus | BitwiseNot | Typeof => true
+        _ => false
+      }
+    Cond(_, t, e) =>
+      comma_left_side_effect_free(t) && comma_left_side_effect_free(e)
+    Seq(a, b) | BinOp(_, a, b) =>
+      comma_left_side_effect_free(a) && comma_left_side_effect_free(b)
+    _ => false
+  }
+}
+
+///|
 fn record_unfiltered(
   ctx : CheckCtx,
   sub_path : String,
@@ -4819,6 +4897,102 @@ fn union_possibly_nullish(ty : @ast.TsType) -> @ast.TsType? {
 }
 
 ///|
+
+///|
+/// True when `ty` is an unconstrained in-scope type parameter — never
+/// comparable to anything but itself in a relational comparison.
+fn relational_unconstrained_param(ctx : CheckCtx, ty : @ast.TsType) -> Bool {
+  match ty {
+    Named(n) =>
+      ctx.in_scope_type_params.contains(n) &&
+      not(ctx.type_param_bounds.iter().any(fn(b) { b.0 == n }))
+    _ => false
+  }
+}
+
+///|
+/// Object-side classification for the relational-comparison check: shapes
+/// that are never assignable to `number | bigint | string`. Booleans join
+/// this side (comparable only to themselves), and a union counts when any
+/// non-nullish member does.
+fn relational_object_like(ctx : CheckCtx, ty : @ast.TsType) -> Bool {
+  match ty {
+    Boolean
+    | BooleanLiteral(_)
+    | Void
+    | Symbol
+    | Func(_, _)
+    | Object(_)
+    | Struct(_, _)
+    | Array(_)
+    | Tuple(_) => true
+    Named(n) => {
+      if ctx.in_scope_type_params.contains(n) ||
+        ctx.resolver.enums.get(n) is Some(_) {
+        return false
+      }
+      ctx.resolver.classes.get(n) is Some(_) ||
+      ctx.resolver.interfaces.get(n) is Some(_)
+    }
+    Applied(n, _) =>
+      n == "Promise" ||
+      n == "Map" ||
+      n == "Set" ||
+      n == "WeakMap" ||
+      n == "WeakSet"
+    Union(members) => {
+      for m in members {
+        match m {
+          Null | Undefined => ()
+          other => if relational_object_like(ctx, other) { return true }
+        }
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+///|
+/// Primitive-side classification: a type that is confidently
+/// `number` / `bigint` / `string`-like (or an enum), i.e. definitely NOT
+/// comparable to the object side.
+fn relational_primitive_comparable(ctx : CheckCtx, ty : @ast.TsType) -> Bool {
+  match ty {
+    Number | Int | String_ | Literal(_) | BigInt | TemplateLiteralType(_, _) =>
+      true
+    Named(n) => ctx.resolver.enums.get(n) is Some(_)
+    _ => false
+  }
+}
+
+///|
+/// TS2365 for `<` `<=` `>` `>=`: true when the operand pair is *definitely*
+/// unrelated. tsc allows the comparison when either side is comparable to
+/// the other (so identical type parameters and subtype-related object
+/// shapes are legal) or when both sides are number/bigint-like. Definite
+/// errors: an unconstrained type parameter against anything else, and an
+/// object-side shape against a number/string/bigint primitive. Nullish
+/// operands abstain.
+fn relational_pair_never_comparable(
+  ctx : CheckCtx,
+  lt : @ast.TsType,
+  rt : @ast.TsType,
+) -> Bool {
+  match (lt, rt) {
+    // Identical named types (same type parameter, same class) compare fine.
+    (Named(a), Named(b)) if a == b => return false
+    (Null | Undefined, _) | (_, Null | Undefined) => return false
+    _ => ()
+  }
+  if relational_unconstrained_param(ctx, lt) ||
+    relational_unconstrained_param(ctx, rt) {
+    return true
+  }
+  (relational_object_like(ctx, lt) && relational_primitive_comparable(ctx, rt)) ||
+  (relational_object_like(ctx, rt) && relational_primitive_comparable(ctx, lt))
+}
+
 // Returns true only for types that can NEVER participate in numeric
 // arithmetic (`-`, `*`, `/`, bit ops, …), so the "not a valid number type"
 // diagnostic stays free of false positives.  Mirrors `is_definitely_not_callable`:
@@ -4826,6 +5000,8 @@ fn union_possibly_nullish(ty : @ast.TsType) -> @ast.TsType? {
 // Union / Intersection (could be a numeric-literal union like `0 | 1 | 2`),
 // and unresolved type-level forms.  Only concrete non-numeric primitives and
 // object-like shapes are flagged.
+
+///|
 fn is_definitely_not_arithmetic(ty : @ast.TsType) -> Bool {
   match ty {
     String_
@@ -5306,6 +5482,54 @@ fn check_binop_operands(
         )
       }
     }
+    // TS2365 for relational comparison (`<` `<=` `>` `>=`): both operands
+    // must be of type `any` / `number` / `bigint` / `string` / enum. An
+    // operand that is *definitely* never comparable -- a boolean, void,
+    // symbol, function, object / array / tuple shape, a resolvable
+    // class / interface instance, an unconstrained in-scope type
+    // parameter, or a union containing one of those -- always errors.
+    // Nullish members, unresolved names, and constrained type parameters
+    // abstain.
+    BinLt | BinLe | BinGt | BinGe => {
+      // TS18050: the literal `null` / `undefined` keyword is never a valid
+      // relational operand. (Restricted to the keyword forms; variables of
+      // nullish type are left to the assignability machinery.)
+      let nullish_kw = fn(e : @ast.TsExpr) -> String? {
+        match e {
+          NullLit => Some("null")
+          Var("undefined") => Some("undefined")
+          _ => None
+        }
+      }
+      let mut saw_nullish_kw = false
+      match nullish_kw(l) {
+        Some(kw) => {
+          saw_nullish_kw = true
+          record(ctx, "binary op", "the value `\{kw}` cannot be used here")
+        }
+        None => ()
+      }
+      match nullish_kw(r) {
+        Some(kw) => {
+          saw_nullish_kw = true
+          record(ctx, "binary op", "the value `\{kw}` cannot be used here")
+        }
+        None => ()
+      }
+      if !saw_nullish_kw {
+        let lt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, l))
+        let rt = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, r))
+        if is_checkable(lt) &&
+          is_checkable(rt) &&
+          relational_pair_never_comparable(ctx, lt, rt) {
+          record_unfiltered(
+            ctx,
+            "binary op",
+            "operator cannot be applied to types `\{type_display(lt)}` and `\{type_display(rt)}`",
+          )
+        }
+      }
+    }
     // Strict equality: comparing two types with no overlap is always false.
     // e.g., `someNumber === "hello"` or `true === 42`.
     BinEq | BinNe => {
@@ -5399,30 +5623,9 @@ fn check_binop_operands(
       }
     }
     // Relational comparison (`<`, `<=`, `>`, `>=`): the `null` / `undefined`
-    // keyword is never a valid operand — TypeScript reports TS18050 ("The
-    // value 'null' / 'undefined' cannot be used here"). Restricted to the
-    // literal keyword operands so a variable of an inferred nullish type is
-    // left to the (separate) assignability machinery; the literal form is
-    // unconditionally an error, so the check is false-positive-free.
-    BinLt | BinLe | BinGt | BinGe => {
-      let nullish_kw = fn(e : @ast.TsExpr) -> String? {
-        match e {
-          NullLit => Some("null")
-          Var("undefined") => Some("undefined")
-          _ => None
-        }
-      }
-      match nullish_kw(l) {
-        Some(kw) =>
-          record(ctx, "binary op", "the value `\{kw}` cannot be used here")
-        None => ()
-      }
-      match nullish_kw(r) {
-        Some(kw) =>
-          record(ctx, "binary op", "the value `\{kw}` cannot be used here")
-        None => ()
-      }
-    }
+    // keyword operand handling (TS18050) lives in the merged
+    // `BinLt | BinLe | BinGt | BinGe` arm above, together with the TS2365
+    // never-comparable pair check.
     _ => ()
   }
 }
@@ -9031,6 +9234,67 @@ fn single_call_signature_params(
 }
 
 ///|
+/// TS2554 for a union-of-functions callee whose members have *different*
+/// signatures: a call through a union must be valid for every constituent,
+/// so fewer arguments than the largest member minimum always fails, and --
+/// when every member has a bounded parameter list -- more arguments than
+/// the largest member maximum also fails. Members with rest parameters
+/// lift the upper bound; any non-`Func` member or spread argument
+/// abstains.
+fn check_union_callee_arity(
+  ctx : CheckCtx,
+  callee_ty : @ast.TsType,
+  args : Array[@ast.TsExpr],
+  call_path : String,
+) -> Unit {
+  guard ctx.resolver.unwrap(callee_ty) is Union(members) else { return }
+  for a in args {
+    if a is Spread(_) {
+      return
+    }
+  }
+  let mut max_min = 0
+  let mut all_bounded = true
+  let mut max_max = 0
+  for m in members {
+    match ctx.resolver.unwrap(m) {
+      Func(ps, _) => {
+        let mut has_rest = false
+        for p in ps {
+          if p is Rest(_) {
+            has_rest = true
+          }
+        }
+        let min_ = required_arity_from_types(ps)
+        if min_ > max_min {
+          max_min = min_
+        }
+        if has_rest {
+          all_bounded = false
+        } else if ps.length() > max_max {
+          max_max = ps.length()
+        }
+      }
+      _ => return
+    }
+  }
+  let n = args.length()
+  if n < max_min {
+    record_unfiltered(
+      ctx,
+      call_path,
+      "expected at least \{max_min} argument(s), got \{n}",
+    )
+  } else if all_bounded && n > max_max {
+    record_unfiltered(
+      ctx,
+      call_path,
+      "expected at most \{max_max} argument(s), got \{n}",
+    )
+  }
+}
+
+///|
 /// Common call-signature parameters of a union callee: when every member of
 /// the union exposes exactly one call signature and all of them have
 /// *identical* parameter types, the union is callable with those parameters
@@ -10463,7 +10727,103 @@ fn check_arguments_with_sig(
   ctx : CheckCtx,
   call_path : String,
   arity_reliable? : Bool = false,
+  check_spread? : Bool = false,
 ) -> Unit {
+  // TS2556 ("A spread argument must either have a tuple type or be passed
+  // to a rest parameter"): tsc's arity rule for the first non-tuple spread
+  // argument at effective index `i` -- error unless
+  // `i >= minArgCount && (hasRest || i < paramCount)`. Tuple-typed spreads
+  // (and exact array-literal spreads) expand into individual arguments and
+  // don't count. Only runs when the caller vouches the signature is exact
+  // and non-overloaded (`check_spread`, set by the direct
+  // function-declaration call path), and only for spread operands whose
+  // type is confidently a plain array or a class instance -- `any`,
+  // generics, unions, and open tuples abstain.
+  if check_spread && sig is Some(ps) {
+    let mut has_rest = false
+    let mut param_count = 0
+    for p in ps {
+      if p.is_rest {
+        has_rest = true
+      } else {
+        param_count += 1
+      }
+    }
+    let min_args = required_arity(ps)
+    let mut i = 0
+    let mut stop = false
+    for a in args {
+      if stop {
+        break
+      }
+      match a {
+        Spread(inner) => {
+          // An exact array-literal spread contributes a known count.
+          let literal_len : Int? = match inner {
+            ArrayLit(items) => {
+              let mut ok = true
+              for it in items {
+                match it {
+                  Spread(_) | ArrayHole => ok = false
+                  _ => ()
+                }
+              }
+              if ok {
+                Some(items.length())
+              } else {
+                None
+              }
+            }
+            _ => None
+          }
+          match literal_len {
+            Some(n) => i += n
+            None => {
+              let t = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, inner))
+              match t {
+                Tuple(items) => {
+                  let mut fixed = true
+                  for it in items {
+                    if it is Rest(_) {
+                      fixed = false
+                    }
+                  }
+                  if fixed {
+                    i += items.length()
+                  } else {
+                    stop = true
+                  }
+                }
+                Array(_) | Applied("Array", _) | Applied("ReadonlyArray", _) => {
+                  if i < min_args || (!has_rest && i >= param_count) {
+                    record_unfiltered(
+                      ctx, call_path, "a spread argument must either have a tuple type or be passed to a rest parameter",
+                    )
+                  }
+                  stop = true
+                }
+                Named(n) =>
+                  // A class instance (e.g. a hand-rolled iterator) is never
+                  // a tuple, so the same arity formula decides.
+                  if ctx.resolver.classes.get(n) is Some(_) {
+                    if i < min_args || (!has_rest && i >= param_count) {
+                      record_unfiltered(
+                        ctx, call_path, "a spread argument must either have a tuple type or be passed to a rest parameter",
+                      )
+                    }
+                    stop = true
+                  } else {
+                    stop = true
+                  }
+                _ => stop = true
+              }
+            }
+          }
+        }
+        _ => i += 1
+      }
+    }
+  }
   // Spread arguments make positional matching unreliable — just type-check
   // each argument and skip count enforcement. Exception: when *every*
   // spread wraps a syntactic array literal (`f(1, ...[2, 3])`), the
@@ -12619,6 +12979,20 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       let _ = infer_expr(env, ctx.resolver, init)
     }
     Expr(e) => {
+      // TS2695: a statement-level comma expression whose left side is
+      // side-effect-free discards a useless value (`!obj.a, M.n;`). Only the
+      // statement position is checked -- nested commas include the
+      // `(0, fn)(…)` indirect-call idiom, which tsc exempts and which our
+      // paren-erasing parser can't distinguish.
+      match e {
+        Seq(l, _) =>
+          if comma_left_side_effect_free(l) {
+            record_unfiltered(
+              ctx, "comma operator", "left side of comma operator is unused and has no side effects",
+            )
+          }
+        _ => ()
+      }
       check_call_args_in_expr(env, e, ctx)
       // `f(v)` where `f`'s declared return is `asserts v [is T]` narrows
       // `v` for every statement that follows.
@@ -12923,6 +13297,77 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
     ForOf(kind, binding, declared, iter, body) => {
       check_call_args_in_expr(env, iter, ctx)
       let iter_ty = infer_expr(env, ctx.resolver, iter)
+      // TS2488: the iterated value must have a `[Symbol.iterator]()`
+      // method returning an iterator. Decided only for base-less,
+      // index-signature-free class instances (an `extends` chain or an
+      // interface merge could add the protocol): either the class lacks
+      // the `[Symbol.iterator]` member entirely, or it returns `this`
+      // while the class has no `next` method (for-of14 / for-of16).
+      match ctx.resolver.unwrap(iter_ty) {
+        Named(icn) =>
+          match ctx.resolver.classes.get(icn) {
+            Some(icls) if icls.base_names.length() == 0 &&
+              icls.base_expr is None &&
+              icls.index_signatures.length() == 0 &&
+              icls.type_params.length() == 0 &&
+              ctx.resolver.interfaces.get(icn) is None => {
+              let mut has_sym_iter = false
+              let mut sym_iter_returns_this_only = false
+              let mut has_next = false
+              // A computed FIELD can also provide the protocol
+              // (`[Symbol.iterator]: any;` -- for-of27): its shape is
+              // unverifiable, so its presence silences the check.
+              for kexpr in icls.computed_field_keys {
+                if kexpr is PropAccess(Var("Symbol"), "iterator") {
+                  has_sym_iter = true
+                  has_next = true
+                }
+              }
+              // A FIELD named `next` (callable-typed or `any`) satisfies
+              // the iterator side too (for-of28).
+              for pr in icls.properties {
+                if !pr.is_static && pr.name == "next" {
+                  has_next = true
+                }
+              }
+              for m in icls.methods {
+                if !m.is_static {
+                  if m.name == "next" {
+                    has_next = true
+                  }
+                  if m.name == "<computed>" &&
+                    m.key_expr is Some(PropAccess(Var("Symbol"), "iterator")) {
+                    has_sym_iter = true
+                    match m.body {
+                      Some(b) => {
+                        let mut all_this = true
+                        let mut saw_return = false
+                        for st in b.stmts {
+                          match st {
+                            Return(Some(Var("this"))) => saw_return = true
+                            Return(_) => all_this = false
+                            _ => ()
+                          }
+                        }
+                        sym_iter_returns_this_only = saw_return && all_this
+                      }
+                      None => ()
+                    }
+                  }
+                }
+              }
+              if !has_sym_iter || (sym_iter_returns_this_only && !has_next) {
+                record(
+                  ctx,
+                  "for-of iterable",
+                  "type `\{icn}` must have a `[Symbol.iterator]()` method that returns an iterator",
+                )
+              }
+            }
+            _ => ()
+          }
+        _ => ()
+      }
       let inferred_elem = for_of_element_type(ctx.resolver, iter_ty)
       let elem_ty = if is_checkable(declared) {
         // Validate the declared annotation against the actual element type.
@@ -13549,6 +13994,10 @@ fn check_call_args_in_expr(
             ctx,
             "call `\{name}`",
             arity_reliable~,
+            // Overloaded declarations never reach this branch (their callee
+            // type is a `Union`), so the signature is exact and the TS2556
+            // spread-argument arity rule can run.
+            check_spread=true,
           )
         }
         other =>
@@ -13558,7 +14007,14 @@ fn check_call_args_in_expr(
           match union_common_call_params(other, ctx.resolver) {
             Some(params) =>
               check_arguments(env, params, args, ctx, "call `\{name}`")
-            None =>
+            None => {
+              // Overload sets also ingest as a `Union` of `Func`s; a call
+              // needs only ONE overload to match, so the every-member arity
+              // rule applies solely to union-typed *values* (names with no
+              // function-declaration signature).
+              if ctx.resolver.signatures.get(name) is None {
+                check_union_callee_arity(ctx, other, args, "call `\{name}`")
+              }
               if is_definitely_not_callable(other) {
                 record(
                   ctx,
@@ -13566,6 +14022,7 @@ fn check_call_args_in_expr(
                   "`\{type_display(other)}` is not callable",
                 )
               }
+            }
           }
       }
       for a in args {
@@ -13799,6 +14256,12 @@ fn check_call_args_in_expr(
           record_unfiltered(
             ctx, "logical operand", "this kind of expression is always falsy",
           )
+        } else if tested_condition_is_void(env, ctx, l) {
+          // TS1345: `voidValue && x` tests a `void` expression for
+          // truthiness (logicalAndOperatorStrictMode).
+          record_unfiltered(
+            ctx, "logical operand", "an expression of type `void` cannot be tested for truthiness",
+          )
         }
       }
       // TS2322 (via the `in` operator's operand constraints): the left
@@ -13956,6 +14419,20 @@ fn check_call_args_in_expr(
     UnaryOp(op, inner) => {
       check_call_args_in_expr(env, inner, ctx)
       match op {
+        // TS2872 / TS2873: `!` tests its operand for truthiness, so a
+        // non-exempt literal operand (`!{ x: 1 }`, `!""`) is always-taken.
+        Not =>
+          match condition_literal_truthiness(inner) {
+            Some(true) =>
+              record_unfiltered(
+                ctx, "unary op", "this kind of expression is always truthy",
+              )
+            Some(false) =>
+              record_unfiltered(
+                ctx, "unary op", "this kind of expression is always falsy",
+              )
+            None => ()
+          }
         Neg | BitwiseNot => {
           let inner_ty = ctx.resolver.unwrap(
             infer_expr(env, ctx.resolver, inner),
@@ -14094,6 +14571,26 @@ fn check_call_args_in_expr(
     }
     Cond(c, t, e) => {
       check_call_args_in_expr(env, c, ctx)
+      // TS2872 / TS2873: a ternary whose condition is a non-exempt literal
+      // (object / array / function literal, non-empty string, numeric other
+      // than 0 / 1) always takes the same branch. TS1345: a `void`-typed
+      // condition cannot be tested for truthiness at all.
+      match condition_literal_truthiness(c) {
+        Some(true) =>
+          record_unfiltered(
+            ctx, "cond", "this kind of expression is always truthy",
+          )
+        Some(false) =>
+          record_unfiltered(
+            ctx, "cond", "this kind of expression is always falsy",
+          )
+        None =>
+          if tested_condition_is_void(env, ctx, c) {
+            record_unfiltered(
+              ctx, "cond", "an expression of type `void` cannot be tested for truthiness",
+            )
+          }
+      }
       // Walk each branch under the condition's flow narrowing (the consequent
       // sees the truthy effect, the alternative the falsy one), so
       // `x !== undefined ? x.foo : 0` doesn't re-flag `x` as possibly-undefined.
@@ -18447,6 +18944,195 @@ fn check_namespace_or_enum_member_access(
 }
 
 ///|
+/// TS4112 / TS4113 / TS4114 -- the `override` modifier family:
+///   - TS4112: an `override` member in a class with NO heritage clause.
+///   - TS4113: an `override` member that no (fully resolvable, in-module,
+///     non-generic) base-chain class or merged interface declares.
+///   - TS4114 (only under `@noImplicitOverride: true`, via the parser's
+///     `<noimplicitoverride-on>` marker): an instance member that DOES
+///     override a base member but lacks the modifier. `constructor` and
+///     computed/private names are exempt.
+fn check_override_modifiers(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  let mut no_implicit_override = false
+  for gm in module_.grammar_misuses {
+    if gm == "<noimplicitoverride-on>" {
+      no_implicit_override = true
+    }
+  }
+  let class_by_name : Map[String, @ast.TsClassDecl] = {}
+  for c in module_.classes {
+    class_by_name[c.name] = c
+  }
+  let iface_by_name : Map[String, @ast.TsInterface] = {}
+  for i in module_.interfaces {
+    if i.type_params.length() == 0 {
+      iface_by_name[i.name] = i
+    }
+  }
+  for cls in module_.classes {
+    let overrides : Map[String, Unit] = {}
+    let declare_members : Map[String, Unit] = {}
+    for d in cls.duplicate_member_names {
+      if d.has_prefix("<override-member:") {
+        overrides[d["<override-member:".length():d.length() - 1].to_string()] = ()
+      }
+      if d.has_prefix("<declare-member:") {
+        declare_members[d["<declare-member:".length():d.length() - 1].to_string()] = ()
+      }
+    }
+    let has_heritage = cls.base_names.length() > 0 || cls.base_expr is Some(_)
+    if !has_heritage {
+      if overrides.size() > 0 {
+        issues.push({
+          path: "class \{cls.name}",
+          message: "this member cannot have an `override` modifier because its containing class does not extend another class",
+        })
+      }
+      continue
+    }
+    // Resolve the transitive base member set. Bail (conservatively) when
+    // any base is generic, expression-shaped, or not declared in-module.
+    guard cls.base_names.length() == 1 && cls.base_expr is None else {
+      continue
+    }
+    let base_instance : Map[String, Unit] = {}
+    let base_static : Map[String, Unit] = {}
+    let base_abstract : Map[String, Unit] = {}
+    let mut resolvable = true
+    let mut cursor : String? = Some(cls.base_names[0])
+    let visited : Map[String, Unit] = {}
+    while cursor is Some(bn) {
+      if visited.contains(bn) {
+        break
+      }
+      visited[bn] = ()
+      let mut next : String? = None
+      match class_by_name.get(bn) {
+        Some(b) => {
+          if b.type_params.length() > 0 {
+            resolvable = false
+            break
+          }
+          for an in b.abstract_members {
+            base_abstract[an] = ()
+          }
+          for m in b.methods {
+            if m.name != "<computed>" {
+              if m.is_static {
+                base_static[m.name] = ()
+              } else {
+                base_instance[m.name] = ()
+              }
+            }
+          }
+          for pr in b.properties {
+            if pr.name != "<computed>" {
+              if pr.is_static {
+                base_static[pr.name] = ()
+              } else {
+                base_instance[pr.name] = ()
+              }
+            }
+          }
+          if b.base_expr is Some(_) || b.base_names.length() > 1 {
+            resolvable = false
+            break
+          }
+          if b.base_names.length() == 1 {
+            next = Some(b.base_names[0])
+          }
+        }
+        None =>
+          match iface_by_name.get(bn) {
+            // The parser lowers member-only classes to interfaces.
+            Some(bi) => {
+              for f in bi.fields {
+                base_instance[f.0] = ()
+              }
+              if bi.extends_names.length() > 0 {
+                resolvable = false
+              }
+            }
+            None => resolvable = false
+          }
+      }
+      cursor = next
+    }
+    if !resolvable {
+      continue
+    }
+    // TS4113: overrides that no base declares.
+    for kv in overrides {
+      let name = kv.0
+      let is_static_m = name.has_prefix("s:")
+      let bare = name[2:].to_string()
+      let known = if is_static_m {
+        base_static.contains(bare)
+      } else {
+        base_instance.contains(bare)
+      }
+      if !known {
+        issues.push({
+          path: "class \{cls.name}",
+          message: "this member cannot have an `override` modifier because it is not declared in the base class",
+        })
+      }
+    }
+    // TS4114: genuine overrides missing the modifier.
+    if no_implicit_override {
+      let flag_missing = fn(name : String, is_static_m : Bool) -> Unit {
+        if name == "constructor" ||
+          name == "<computed>" ||
+          name.has_prefix("__private_brand__") ||
+          name.has_prefix("#") {
+          return
+        }
+        // Implementing an ABSTRACT base member does not require the
+        // modifier (override10), and `declare`-modified members are
+        // ambient re-declarations, also exempt (override14).
+        if !is_static_m && base_abstract.contains(name) {
+          return
+        }
+        if declare_members.contains(
+            (if is_static_m { "s:" } else { "i:" }) + name,
+          ) {
+          return
+        }
+        let in_base = if is_static_m {
+          base_static.contains(name)
+        } else {
+          base_instance.contains(name)
+        }
+        let key = (if is_static_m { "s:" } else { "i:" }) + name
+        if in_base && !overrides.contains(key) {
+          issues.push({
+            path: "class \{cls.name}",
+            message: "this member must have an `override` modifier because it overrides a member in the base class",
+          })
+        }
+      }
+      let seen_members : Map[String, Unit] = {}
+      for m in cls.methods {
+        let key = (if m.is_static { "s:" } else { "i:" }) + m.name
+        if !seen_members.contains(key) {
+          seen_members[key] = ()
+          flag_missing(m.name, m.is_static)
+        }
+      }
+      for pr in cls.properties {
+        let key = (if pr.is_static { "s:" } else { "i:" }) + pr.name
+        if !seen_members.contains(key) {
+          seen_members[key] = ()
+          flag_missing(pr.name, pr.is_static)
+        }
+      }
+    }
+  }
+  issues
+}
+
+///|
 /// TS2394 ("This overload signature is not compatible with its
 /// implementation signature") -- the definite subcase: an overload with a
 /// concrete scalar return type over an implementation *annotated* `void`
@@ -19628,11 +20314,24 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
         // type was a naked bounded type parameter. Consumed by
         // `check_derived_indexer_compat`.
         ()
+      } else if name.has_prefix("<override-member:") ||
+        name.has_prefix("<declare-member:") {
+        // Markers, not errors: `override`- / `declare`-modified member
+        // names, consumed by check_override_modifiers.
+        ()
       } else if name.has_prefix("<quoted-member:") {
         // Marker, not an error: a string-literal member name. Consumed by
         // the strict-property-initialization check (literal-named fields
         // are exempt from TS2564).
         ()
+      } else if name.has_prefix("<static-use-before-def:") {
+        // TS2729: a static block read / wrote a static field that is only
+        // declared after the block.
+        let f = name["<static-use-before-def:".length():name.length() - 1].to_string()
+        issues.push({
+          path: "class \{cls_name}",
+          message: "property `\{f}` is used before its initialization",
+        })
       } else {
         issues.push({
           path: "class \{cls_name}",
@@ -19647,27 +20346,302 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
 ///|
 
 ///|
-/// A type whose identity we can compare safely by structural / set equality:
-/// a primitive, a literal, or a named reference. Compound shapes (objects,
-/// functions, generics, `typeof`, conditionals, …) are excluded so the
-/// redeclaration check never mis-judges identity on a form it can't normalize.
-fn is_identity_comparable_atom(t : @ast.TsType) -> Bool {
-  match t {
-    Number
-    | Int
-    | Boolean
-    | String_
-    | BigInt
-    | Symbol
-    | Void
-    | Null
-    | Undefined
-    | Literal(_)
-    | NumberLiteral(_)
-    | BigIntLiteral(_)
-    | BooleanLiteral(_)
-    | Named(_) => true
-    _ => false
+/// Structural identity key for a named class / interface reference used by
+/// the TS2403 check, or `None` when the declaration's shape can't be
+/// expanded faithfully: generics, heritage, index / call signatures,
+/// readonly or private / protected / abstract members, computed keys.
+fn structural_named_key(
+  n : String,
+  resolver : Resolver,
+  depth : Int,
+) -> String? {
+  match resolver.interfaces.get(n) {
+    Some(iface) => {
+      if iface.type_params.length() > 0 ||
+        iface.extends_names.length() > 0 ||
+        iface.index_signatures.length() > 0 ||
+        iface.readonly_fields.length() > 0 {
+        return None
+      }
+      let pairs : Array[String] = []
+      for f in iface.fields {
+        if f.0.has_prefix("<") {
+          return None
+        }
+        match identity_key(f.1, resolver, depth + 1) {
+          Some(v) => pairs.push(f.0 + ":" + v)
+          None => return None
+        }
+      }
+      pairs.sort()
+      return Some("obj{" + pairs.join(",") + "}")
+    }
+    None => ()
+  }
+  match resolver.classes.get(n) {
+    Some(cls) => {
+      if cls.type_params.length() > 0 ||
+        cls.base_names.length() > 0 ||
+        cls.computed_field_keys.length() > 0 ||
+        cls.index_signatures.length() > 0 ||
+        cls.is_abstract ||
+        cls.private_members.length() > 0 ||
+        cls.protected_members.length() > 0 ||
+        cls.abstract_members.length() > 0 {
+        return None
+      }
+      let pairs : Array[String] = []
+      for p in cls.properties {
+        if p.is_static {
+          continue
+        }
+        if p.is_readonly || p.name.has_prefix("<") || p.name.has_prefix("#") {
+          return None
+        }
+        match identity_key(p.type_, resolver, depth + 1) {
+          Some(v) => pairs.push(p.name + ":" + v)
+          None => return None
+        }
+      }
+      for m in cls.methods {
+        if m.is_static {
+          continue
+        }
+        if m.type_params.length() > 0 ||
+          m.name.has_prefix("<") ||
+          m.name.has_prefix("#") {
+          return None
+        }
+        let pkeys : Array[String] = []
+        for prm in m.params {
+          match identity_key(prm.1, resolver, depth + 1) {
+            Some(v) => pkeys.push(v)
+            None => return None
+          }
+        }
+        match identity_key(m.return_type, resolver, depth + 1) {
+          Some(rk) => pairs.push(m.name + ":fn(" + pkeys.join(",") + ")=>" + rk)
+          None => return None
+        }
+      }
+      pairs.sort()
+      return Some("obj{" + pairs.join(",") + "}")
+    }
+    None => ()
+  }
+  None
+}
+
+///|
+/// Canonical identity key for the TS2403 redeclaration check, or `None`
+/// when the type has a form whose identity we can't decide safely
+/// (generics, intersections, `typeof`, conditionals, index signatures,
+/// unresolved applied references, …). Two `var` declarations whose keys
+/// both resolve and differ are *definitely* non-identical. Normalizations
+/// applied so spelling differences never flag: aliases unwrap, union
+/// members sort / dedupe, literal members subsumed by their base primitive
+/// drop (`string | "a"` ≡ `string`), `never` members drop, `any` /
+/// `unknown` absorb the union, and `Array<T>` ≡ `T[]`.
+fn identity_key(t : @ast.TsType, resolver : Resolver, depth : Int) -> String? {
+  if depth > 16 {
+    return None
+  }
+  match resolver.unwrap(t) {
+    Number | Int => Some("number")
+    Boolean => Some("boolean")
+    String_ => Some("string")
+    BigInt => Some("bigint")
+    Symbol => Some("symbol")
+    Void => Some("void")
+    Null => Some("null")
+    Undefined => Some("undefined")
+    Unknown => Some("unknown")
+    Never => Some("never")
+    NonPrimitiveObject => Some("object")
+    Literal(s) => Some("slit:" + s)
+    NumberLiteral(s) => Some("nlit:" + s)
+    BigIntLiteral(s) => Some("blit:" + s)
+    BooleanLiteral(b) => Some(if b { "true" } else { "false" })
+    Named(n) =>
+      // tsc's identity relation is structural for interfaces and classes
+      // (a class instance type IS identical to a spelled-out object
+      // literal of the same shape — nestedModules), so expand simple
+      // shapes to their structural key. Enums stay nominal.
+      if resolver.enums.get(n) is Some(_) {
+        Some("n:" + n)
+      } else {
+        structural_named_key(n, resolver, depth)
+      }
+    Array(e) | Applied("Array", [e]) =>
+      match identity_key(e, resolver, depth + 1) {
+        Some(k) => Some("arr(" + k + ")")
+        None => None
+      }
+    Tuple(items) => {
+      let keys : Array[String] = []
+      for it in items {
+        match it {
+          Rest(_) => return None
+          other =>
+            match identity_key(other, resolver, depth + 1) {
+              Some(k) => keys.push(k)
+              None => return None
+            }
+        }
+      }
+      Some("tup[" + keys.join(",") + "]")
+    }
+    Func(ps, r) => {
+      let keys : Array[String] = []
+      for p in ps {
+        match identity_key(p, resolver, depth + 1) {
+          Some(k) => keys.push(k)
+          None => return None
+        }
+      }
+      match identity_key(r, resolver, depth + 1) {
+        Some(rk) => Some("fn(" + keys.join(",") + ")=>" + rk)
+        None => None
+      }
+    }
+    Constructor(ps, r, is_abstract) => {
+      let keys : Array[String] = []
+      for p in ps {
+        match identity_key(p, resolver, depth + 1) {
+          Some(k) => keys.push(k)
+          None => return None
+        }
+      }
+      match identity_key(r, resolver, depth + 1) {
+        Some(rk) =>
+          Some(
+            (if is_abstract { "actor(" } else { "ctor(" }) +
+            keys.join(",") +
+            ")=>" +
+            rk,
+          )
+        None => None
+      }
+    }
+    Object(fields) => {
+      // A single call / construct signature written as a type literal is
+      // identical to the arrow form: `{ (x): R }` === `(x) => R` and
+      // `{ new (x): R }` === `new (x) => R`.
+      match fields {
+        [(Literal("<call>"), inner)] =>
+          return identity_key(inner, resolver, depth + 1)
+        [(Literal("<new>"), inner)] =>
+          return match identity_key(inner, resolver, depth + 1) {
+            Some(k) =>
+              // Reuse the Constructor spelling: `fn(...)=>r` -> `ctor(...)=>r`.
+              if k.has_prefix("fn(") {
+                Some("ctor" + k.substring(start=2))
+              } else {
+                None
+              }
+            None => None
+          }
+        _ => ()
+      }
+      let pairs : Array[String] = []
+      for f in fields {
+        match f.0 {
+          Literal(k) =>
+            // Any synthetic member (call/construct/index signatures inside a
+            // larger literal) makes identity undecidable.
+            if k.has_prefix("<") {
+              return None
+            } else {
+              match identity_key(f.1, resolver, depth + 1) {
+                Some(v) => pairs.push(k + ":" + v)
+                None => return None
+              }
+            }
+          // Index signatures / computed keys: identity undecidable.
+          _ => return None
+        }
+      }
+      pairs.sort()
+      Some("obj{" + pairs.join(",") + "}")
+    }
+    Union(_) as u => {
+      let members = normalized_union_members(u, resolver)
+      let keys : Array[String] = []
+      let mut has_string = false
+      let mut has_number = false
+      let mut has_boolean = false
+      let mut has_bigint = false
+      for m in members {
+        match resolver.unwrap(m) {
+          String_ => has_string = true
+          Number | Int => has_number = true
+          Boolean => has_boolean = true
+          BigInt => has_bigint = true
+          _ => ()
+        }
+      }
+      let mut true_lit = false
+      let mut false_lit = false
+      for m in members {
+        match resolver.unwrap(m) {
+          // `any` / `unknown` absorb the whole union.
+          Any => return None
+          Unknown => return Some("unknown")
+          // `never` members vanish; literal members subsumed by their
+          // base primitive vanish (tsc reduces before comparing identity).
+          Never => ()
+          Literal(_) if has_string => ()
+          NumberLiteral(_) if has_number => ()
+          BooleanLiteral(_) if has_boolean => ()
+          BigIntLiteral(_) if has_bigint => ()
+          BooleanLiteral(b) => {
+            if b {
+              true_lit = true
+            } else {
+              false_lit = true
+            }
+            match identity_key(m, resolver, depth + 1) {
+              Some(k) => keys.push(k)
+              None => return None
+            }
+          }
+          other =>
+            match identity_key(other, resolver, depth + 1) {
+              Some(k) => keys.push(k)
+              None => return None
+            }
+        }
+      }
+      // `true | false` reduces to `boolean`.
+      if true_lit && false_lit && !has_boolean {
+        let filtered = keys.filter(fn(k) { k != "true" && k != "false" })
+        filtered.push("boolean")
+        keys.clear()
+        for k in filtered {
+          keys.push(k)
+        }
+      }
+      keys.sort()
+      // Dedupe repeated *atomic* members (`string | string` ≡ `string`).
+      // Structural keys stay: two distinct-but-structurally-equal classes
+      // in a union (`C | D` with both empty) are separate members to tsc,
+      // so `C` vs `C | D` must remain non-identical.
+      let deduped : Array[String] = []
+      for k in keys {
+        let atomic = !k.contains("{") && !k.contains("(")
+        if deduped.length() == 0 ||
+          deduped[deduped.length() - 1] != k ||
+          !atomic {
+          deduped.push(k)
+        }
+      }
+      match deduped.length() {
+        0 => Some("never")
+        1 => Some(deduped[0])
+        _ => Some("u(" + deduped.join("|") + ")")
+      }
+    }
+    _ => None
   }
 }
 
@@ -19717,44 +20691,25 @@ fn check_var_redeclaration_types(
   resolver : Resolver,
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
-  let first_members : Map[String, Array[@ast.TsType]] = {}
+  let first_key : Map[String, String] = {}
   let reported : Map[String, Unit] = {}
-  fn members_set_equal(a : Array[@ast.TsType], b : Array[@ast.TsType]) -> Bool {
-    for x in a {
-      if !b.iter().any(fn(y) { x == y }) {
-        return false
-      }
-    }
-    for x in b {
-      if !a.iter().any(fn(y) { x == y }) {
-        return false
-      }
-    }
-    true
-  }
-
   fn consider(name : String, ty : @ast.TsType) -> Unit {
     if !is_checkable(ty) {
       return
     }
-    let members = normalized_union_members(ty, resolver)
-    if members.length() == 0 {
-      return
-    }
-    for m in members {
-      if !is_identity_comparable_atom(m) {
-        return
-      }
-    }
-    match first_members.get(name) {
-      None => first_members[name] = members
-      Some(prev) =>
-        if !(reported.get(name) is Some(_)) && !members_set_equal(prev, members) {
-          reported[name] = ()
-          issues.push({
-            path: "var \{name}",
-            message: "subsequent variable declaration must have the same type",
-          })
+    match identity_key(ty, resolver, 0) {
+      None => ()
+      Some(key) =>
+        match first_key.get(name) {
+          None => first_key[name] = key
+          Some(prev) =>
+            if !(reported.get(name) is Some(_)) && prev != key {
+              reported[name] = ()
+              issues.push({
+                path: "var \{name}",
+                message: "subsequent variable declaration must have the same type",
+              })
+            }
         }
     }
   }
@@ -20297,6 +21252,9 @@ fn check_module_function_bodies_layered(
   for issue in check_overload_void_return(module_) {
     all.push(issue)
   }
+  for issue in check_override_modifiers(module_) {
+    all.push(issue)
+  }
   for issue in check_class_namespace_static_merge(module_) {
     all.push(issue)
   }
@@ -20488,6 +21446,58 @@ fn check_module_function_bodies_layered(
         }
       }
     }
+    // TS2528: a module cannot have multiple default exports. Function
+    // markers group by name (overload signatures + the implementation are
+    // ONE default); anonymous functions and class/expression defaults each
+    // count individually.
+    let mut default_count = 0
+    let seen_default_fns : Map[String, Unit] = {}
+    for gm in module_.grammar_misuses {
+      if gm.has_prefix("<export-default>") {
+        let payload = gm["<export-default>".length():].to_string()
+        if payload.has_prefix("fn:") {
+          let fname = payload["fn:".length():].to_string()
+          if fname == "<anon>" {
+            default_count += 1
+          } else if !seen_default_fns.contains(fname) {
+            seen_default_fns[fname] = ()
+            default_count += 1
+          }
+        } else {
+          default_count += 1
+        }
+      }
+    }
+    if default_count >= 2 {
+      all.push({
+        path: "export default",
+        message: "a module cannot have multiple default exports",
+      })
+    }
+    // TS1262: `await` is a reserved word at the top level of a *module*.
+    // The parser records `<top-await-name>` for a top-level binding named
+    // `await` (var / destructuring / import-equals) and module-syntax
+    // evidence separately; only the combination is an error — `var await`
+    // in a plain script stays legal.
+    let mut has_module_syntax = module_.imports.length() > 0
+    let mut top_await_name = false
+    for gm in module_.grammar_misuses {
+      if gm == "<module-syntax>" ||
+        gm.has_prefix("<export-value>") ||
+        gm.has_prefix("<export-default>") ||
+        gm.has_prefix("<export-eq>") {
+        has_module_syntax = true
+      }
+      if gm == "<top-await-name>" || gm == "<export-value>await" {
+        top_await_name = true
+      }
+    }
+    if has_module_syntax && top_await_name {
+      all.push({
+        path: "top-level `await`",
+        message: "`await` is a reserved word at the top-level of a module",
+      })
+    }
     // TS2304 for a single-bare-identifier computed key in a type position
     // (`var v: { [e]: number }`, `interface I { [e](): T }`, `declare class
     // C { [e]: T }`). The key references the *value* namespace; resolve it
@@ -20519,6 +21529,26 @@ fn check_module_function_bodies_layered(
       // Marker, not an error: an exported value declaration's name,
       // consumed by the class/namespace static-merge check.
       if gm.has_prefix("<export-value>") {
+        continue
+      }
+      // Marker, not an error: a default-export occurrence, consumed by the
+      // TS2528 multiple-defaults count.
+      if gm.has_prefix("<export-default>") {
+        continue
+      }
+      // Marker, not an error: the @noImplicitOverride directive flag,
+      // consumed by the override-modifier checks.
+      if gm == "<noimplicitoverride-on>" {
+        continue
+      }
+      // Marker, not an error: the @allowUnreachableCode directive flag,
+      // consumed by the TS2695 comma-operator suppression below.
+      if gm == "<allowunreachable-on>" {
+        continue
+      }
+      // Markers, not errors: module-syntax evidence and a top-level
+      // binding named `await`, combined into TS1262 above.
+      if gm == "<module-syntax>" || gm == "<top-await-name>" {
         continue
       }
       // TS2304: `export = name` over a provably undeclared value. Same
@@ -20684,6 +21714,17 @@ fn check_module_function_bodies_layered(
     }
     for issue in issues {
       all.push({ path: "\{prefix} > \{issue.path}", message: issue.message })
+    }
+  }
+  // tsc gates the TS2695 comma-operator check on `allowUnreachableCode`
+  // being off; under the directive (parser `<allowunreachable-on>` marker)
+  // drop any comma diagnostics the statement walkers recorded.
+  for gm in module_.grammar_misuses {
+    if gm == "<allowunreachable-on>" {
+      return all.filter(fn(i) {
+        i.message !=
+        "left side of comma operator is unused and has no side effects"
+      })
     }
   }
   all

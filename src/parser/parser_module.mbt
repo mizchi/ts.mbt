@@ -224,9 +224,96 @@ fn Parser::skip_enum_member_initializer_tail(self : Parser) -> Unit {
 }
 
 ///|
+
+///|
+/// True when the expression is syntactically string-valued: a string
+/// literal, a template literal, or a `+` chain containing one.
+fn enum_init_stringish(e : @ast.TsExpr) -> Bool {
+  match e {
+    StringLit(_) | TemplateLiteral(_, _) => true
+    BinOp(Add, l, r) => enum_init_stringish(l) || enum_init_stringish(r)
+    _ => false
+  }
+}
+
+///|
+/// TS2362 / TS2363 inside a computed enum-member initializer: a non-`+`
+/// arithmetic operation with a syntactically string-valued operand
+/// (`d = "a" - "a"`, `` b = `1` - `1` ``). The enum AST only keeps folded
+/// literal values, so the check runs here on the speculatively parsed
+/// initializer expression.
+fn Parser::record_enum_string_arith(self : Parser, e : @ast.TsExpr) -> Unit {
+  match e {
+    BinOp(op, l, r) => {
+      match op {
+        Sub
+        | Mul
+        | Div
+        | Mod
+        | Pow
+        | Shl
+        | Shr
+        | UShr
+        | BitAnd
+        | BitOr
+        | BitXor => {
+          if enum_init_stringish(l) {
+            self.grammar_misuses.push(
+              "the left-hand side of an arithmetic operation must be of type `any`, `number`, `bigint` or an enum type",
+            )
+          }
+          if enum_init_stringish(r) {
+            self.grammar_misuses.push(
+              "the right-hand side of an arithmetic operation must be of type `any`, `number`, `bigint` or an enum type",
+            )
+          }
+        }
+        _ => ()
+      }
+      self.record_enum_string_arith(l)
+      self.record_enum_string_arith(r)
+    }
+    UnaryOp(_, x) => self.record_enum_string_arith(x)
+    _ => ()
+  }
+}
+
+///|
+/// Speculatively parse the (non-literal) enum member initializer that is
+/// about to be skipped, and record string-arithmetic misuses found in it.
+/// Every parser side channel that expression parsing can grow is truncated
+/// back before our own recordings, and the token position is restored, so
+/// this is observation-only.
+fn Parser::scan_skipped_enum_initializer(
+  self : Parser,
+  start_pos : Int,
+) -> Unit {
+  self.pos = start_pos
+  let gm_len = self.grammar_misuses.length()
+  let sm_len = self.strict_mode_misuses.length()
+  let parsed : @ast.TsExpr? = try self.parse_ternary() catch {
+    _ => None
+  } noraise {
+    e => Some(e)
+  }
+  while self.grammar_misuses.length() > gm_len {
+    let _ = self.grammar_misuses.pop()
+  }
+  while self.strict_mode_misuses.length() > sm_len {
+    let _ = self.strict_mode_misuses.pop()
+  }
+  self.pos = start_pos
+  match parsed {
+    Some(e) => self.record_enum_string_arith(e)
+    None => ()
+  }
+}
+
+///|
 fn Parser::parse_enum_member_initializer(
   self : Parser,
 ) -> (@ast.TsEnumMemberValue?, Bool) {
+  let start_pos = self.pos
   let sign = if self.match_(Minus) {
     "-"
   } else if self.match_(Plus) {
@@ -256,6 +343,7 @@ fn Parser::parse_enum_member_initializer(
       Some(@ast.TsEnumMemberValue::Bool(value))
     }
     _ => {
+      self.scan_skipped_enum_initializer(start_pos)
       self.skip_enum_member_initializer_tail()
       return (None, true)
     }
@@ -263,6 +351,7 @@ fn Parser::parse_enum_member_initializer(
   if self.is_enum_member_initializer_delim() {
     (value, false)
   } else {
+    self.scan_skipped_enum_initializer(start_pos)
     self.skip_enum_member_initializer_tail()
     (None, true)
   }
@@ -759,6 +848,14 @@ fn Parser::parse_import_equals_decl(
   self : Parser,
   local_name : String,
 ) -> @ast.TsImportDecl raise ParseError {
+  // TS1262: `import await = …` binds the name `await`; an error only when
+  // the file is otherwise a module (topLevelAwaitErrors.12). An
+  // import-equals alias does NOT itself make the file a module — a bare
+  // `import await = foo.await` in a script is legal (topLevelAwait.2), so
+  // no `<module-syntax>` marker here.
+  if local_name == "await" && !self.in_function {
+    self.grammar_misuses.push("<top-await-name>")
+  }
   let _ = self.expect(Eq)
   let module_spec = if self.match_ident("require") {
     let _ = self.expect(LParen)
@@ -2844,10 +2941,16 @@ fn Parser::parse_export_stmt(
     return
   }
   if self.match_(Default) || self.match_ident("default") {
+    // TS2528: a module cannot have multiple default exports. Each default
+    // is recorded with a kind+name marker; the checker groups
+    // function-declaration overload sets (bodiless signatures + one
+    // implementation of the SAME name are a single default) and reports
+    // when more than one distinct default remains.
     if self.match_ident("async") && self.check(Function) {
       self.in_async = true
       let func = self.parse_function_expr()
       self.in_async = false
+      self.grammar_misuses.push("<export-default>fn:" + func.name)
       if func.name != "<anon>" {
         funcs.push(func)
       }
@@ -2855,6 +2958,7 @@ fn Parser::parse_export_stmt(
     }
     if self.check(Function) {
       let func = self.parse_function_expr()
+      self.grammar_misuses.push("<export-default>fn:" + func.name)
       if func.name != "<anon>" {
         funcs.push(func)
       }
@@ -2882,9 +2986,11 @@ fn Parser::parse_export_stmt(
           }
         }
       }
+      self.grammar_misuses.push("<export-default>class:")
       return
     }
     let _ = self.parse_expr()
+    self.grammar_misuses.push("<export-default>expr:")
     self.consume_semicolon()
     return
   }
@@ -3018,6 +3124,9 @@ fn Parser::parse_export_stmt(
     return
   }
   if self.match_(LBrace) {
+    // Marker, not an error: even an empty `export {}` makes the file a
+    // module. Consumed by the TS1262 top-level `await`-name check.
+    self.grammar_misuses.push("<module-syntax>")
     self.parse_import_specifiers()
     let _ = self.expect(RBrace)
     if self.match_(From) || self.match_ident("from") {

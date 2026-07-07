@@ -11291,11 +11291,13 @@ test "expr_check: exact spread arity (TS2554) and es6 yield function names (TS12
     ),
     0,
   )
-  // Open-ended spreads still abstain.
-  @test.assert_eq(
+  // An open-ended array spread against required params abstains from the
+  // TS2554 arity check but now reports TS2556 (a spread argument must have
+  // a tuple type or hit a rest parameter) — matching tsc.
+  assert_true(
     issues(
       "declare const xs: string[];\ndeclare function g2(a: string, b: string): void;\ng2(...xs);",
-    ),
+    ) >
     0,
   )
   // `function yield` under an es6+ target directive (or as a generator).
@@ -12209,6 +12211,279 @@ test "expr_check: Partial/Required/Readonly lattice (batch AD)" {
   // Distinct cores abstain.
   @test.assert_eq(
     issues("function f<T, U>(p: Partial<U>) { let b: Readonly<T> = p as any; }"),
+    0,
+  )
+}
+
+///|
+test "expr_check: TS2528/TS2488/override family (batch AE)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2528: multiple default exports.
+  assert_true(
+    issues("export default function Foo() {}\nexport default class Bar {}") > 0,
+  )
+  @test.assert_eq(issues("export default function Foo() {}"), 0)
+  // TS2488: for-of over a class lacking the iterator protocol.
+  assert_true(
+    issues(
+      "class It { next() { return \"\"; } }\nvar v: string;\nfor (v of new It) { }",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "class It { [Symbol.iterator]() { return this; } }\nvar v: string;\nfor (v of new It) { }",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "class It { next() { return { value: 1, done: false }; } [Symbol.iterator]() { return this; } }\nvar n: number;\nfor (n of new It) { }",
+    ),
+    0,
+  )
+  // A computed FIELD iterator or a `next` field satisfies the protocol.
+  @test.assert_eq(
+    issues("class It { [Symbol.iterator]: any; }\nfor (var v of new It) { }"),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "class It { next: any;\n  [Symbol.iterator]() { return this; } }\nfor (var v of new It) { }",
+    ),
+    0,
+  )
+  // TS4112: override without heritage.
+  assert_true(issues("class C { override foo(v: string) {} }") > 0)
+  // TS4113: override with no matching base member.
+  assert_true(
+    issues(
+      "class B { foo(v: string) {} }\nclass D extends B { override bar(v: string) {} }",
+    ) >
+    0,
+  )
+  // TS4114 under noImplicitOverride: a genuine override missing the
+  // modifier; abstract implementations and declare members are exempt.
+  assert_true(
+    issues(
+      "// @noImplicitOverride: true\nclass B { foo() {} }\nclass D extends B { foo() {} }",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @noImplicitOverride: true\nclass B { foo() {} }\nclass D extends B { override foo() {} }",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues("class B { foo() {} }\nclass D extends B { foo() {} }"),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @noImplicitOverride: true\nabstract class B { abstract foo(): void; }\nclass D extends B { foo() {} }",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @noImplicitOverride: true\nclass B { p = 1 }\nclass D extends B { declare p: number }",
+    ),
+    0,
+  )
+}
+
+///|
+test "expr_check: truthiness/comma/await/static-block (batch AF)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2872 / TS2873: literal ternary conditions (0 / 1 / booleans exempt).
+  assert_true(issues("declare var a: any;\nvar r = ({}) ? a : a;") > 0)
+  assert_true(issues("declare var a: any;\nvar r = \"s\" ? a : a;") > 0)
+  assert_true(issues("declare var a: any;\nvar r = \"\" ? a : a;") > 0)
+  assert_true(issues("declare var a: any;\nvar r = 42 ? a : a;") > 0)
+  assert_true(issues("declare var a: any;\nnull ? a : a;") > 0)
+  @test.assert_eq(issues("declare var a: any;\nvar r = 1 ? a : a;"), 0)
+  @test.assert_eq(issues("declare var a: any;\nvar r = 0 ? a : a;"), 0)
+  @test.assert_eq(issues("declare var a: any;\nvar r = true ? a : a;"), 0)
+  @test.assert_eq(
+    issues(
+      "declare var flag: boolean;\ndeclare var a: any;\nvar r = flag ? a : a;",
+    ),
+    0,
+  )
+  // TS2872 / TS2873 on the `!` operand.
+  assert_true(issues("var b = !{ x: 1 };") > 0)
+  assert_true(issues("var b = !\"\";") > 0)
+  @test.assert_eq(issues("var b = !1;"), 0)
+  @test.assert_eq(issues("declare var n: number;\nvar b = !n;"), 0)
+  // TS1345: a void condition cannot be tested for truthiness. (An
+  // unannotated `function foo() { }` infers `Any`, not `Void`, so only
+  // annotated shapes fire -- conservative by design.)
+  assert_true(
+    issues("declare function foo(): void;\ndeclare var a: any;\nfoo() ? a : a;") >
+    0,
+  )
+  assert_true(
+    issues("const v: void = undefined;\ndeclare var a: any;\nvar r = v && a;") >
+    0,
+  )
+  @test.assert_eq(
+    issues("function foo() { return 1; }\ndeclare var a: any;\nfoo() ? a : a;"),
+    0,
+  )
+  // TS2695: statement-level comma with a side-effect-free left side;
+  // suppressed under @allowUnreachableCode.
+  assert_true(
+    issues("declare var o: { a: number, n: number };\n!o.a, o.n;") > 0,
+  )
+  assert_true(issues("enum E { A }\ntypeof E, E.A;") > 0)
+  @test.assert_eq(
+    issues("declare var o: { a: number, n: number };\no.a = 1, o.n;"),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @allowUnreachableCode: true\ndeclare var o: { a: number, n: number };\n!o.a, o.n;",
+    ),
+    0,
+  )
+  // TS1262: `await` as a top-level name, only in modules.
+  assert_true(issues("export {};\nvar await = 1;") > 0)
+  assert_true(issues("export {};\nvar [await] = [1];") > 0)
+  assert_true(issues("export class await {}") > 0)
+  @test.assert_eq(issues("var await = 1;"), 0)
+  @test.assert_eq(
+    issues("export {};\nfunction g() { var await = 2; return 1; }"),
+    0,
+  )
+  // TS2729: static-block use of a static field declared after the block.
+  assert_true(
+    issues("class C { static f1 = 1; static { C.f1; C.f2; } static f2 = 2; }") >
+    0,
+  )
+  assert_true(issues("class C { static { this.x = 1; } static x; }") > 0)
+  @test.assert_eq(
+    issues(
+      "class C { static f1 = 1; static { C.f1; this.f1; } static m() { return C.f1; } }",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues("class C { static { const g = () => C.f2; } static f2 = 2; }"),
+    0,
+  )
+}
+
+///|
+test "expr_check: spread arity, enum string arith, relational pairs (batch AG)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2556: array spread past a rest-less parameter list, or an iterator
+  // class spread short of the required count.
+  assert_true(
+    issues(
+      "declare function normal(s: string): void;\ndeclare var ns: number[];\nnormal(\"g\", ...ns);",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "declare function foo(s: symbol, ...rest: symbol[]): void;\nclass It { next() { return { value: 1, done: false }; } [Symbol.iterator]() { return this; } }\nfoo(...new It);",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "declare function all(a?: number, b?: number): void;\ndeclare var ns: number[];\nall(...ns);",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "declare function rest(s: string, ...r: number[]): void;\ndeclare var ns: number[];\nrest(\"d\", ...ns);",
+    ),
+    0,
+  )
+  // TS2362/TS2363: string arithmetic inside enum member initializers, and
+  // a template literal in a division (regex/division lexer split).
+  assert_true(issues("enum T { d = \"a\" - \"a\" }") > 0)
+  @test.assert_eq(
+    issues("enum T { a = \"1\", b = \"1\" + \"2\", c = 1 + 2 }"),
+    0,
+  )
+  assert_true(issues("var x = `abc${ 1 }def` / 1;") > 0)
+  // TS2365: relational comparison of definitely-unrelated operands.
+  assert_true(issues("function foo<T, U>(t: T, u: U) { var r = t < u; }") > 0)
+  assert_true(issues("declare let a: { a: 1 };\na > 1;") > 0)
+  assert_true(
+    issues("declare const t1: number | Promise<number>;\nt1 >= 0;") > 0,
+  )
+  @test.assert_eq(issues("function foo<T>(t: T) { var r = t < t; }"), 0)
+  @test.assert_eq(
+    issues(
+      // (@strict: false so the uninitialized `a` doesn't trip TS2564 —
+      // this pin is about the comparison staying legal.)
+      "// @strict: false\nclass A1 { public a: string; }\ndeclare var x: A1, y: A1;\nx < y;",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues("declare var n: number;\nenum E { a }\nn < 1;\nE.a >= 1;"),
+    0,
+  )
+}
+
+///|
+test "expr_check: identity keys and union callee arity (batch AH)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2403 via structural identity keys: function-type unions vs a
+  // union-returning function differ; spelling variants stay silent.
+  assert_true(
+    issues(
+      "var u: (() => string) | (() => number);\nvar u: () => string | number;",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "var a: (string | number)[];\nvar a: Array<string | number>;\nvar b: { (x: string): string };\nvar b: (x: string) => string;\nvar l: string | \"a\";\nvar l: string;",
+    ),
+    0,
+  )
+  // A class instance type is structurally identical to its spelled-out
+  // object literal (nestedModules), while `C` vs `C | D` is not.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nnamespace M { export class P { x: number; y: number; } }\nvar p: { x: number; y: number; };\nvar p: M.P;",
+    ),
+    0,
+  )
+  // TS2554 for union-typed callees with differing member arities.
+  assert_true(
+    issues(
+      "type F1 = (a: string, b?: string) => void;\ntype F5 = (a: string, b: string) => void;\ndeclare var f: F1 | F5;\nf(\"a\");",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "type F1 = (a: string, b?: string) => void;\ntype F2 = (a: string, b?: string, c?: string) => void;\ndeclare var f: F1 | F2;\nf(\"a\");\nf(\"a\", \"b\", \"c\");",
+    ),
+    0,
+  )
+  // Overloaded declarations are also `Union`s of `Func`s — exempt.
+  @test.assert_eq(
+    issues(
+      "declare function g(a: string, b: string): void;\ndeclare function g(a: number): void;\ng(1);",
+    ),
     0,
   )
 }

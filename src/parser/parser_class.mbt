@@ -52,6 +52,306 @@ fn runtime_class_param_name(param : @ast.TsParam, index : Int) -> String {
 }
 
 ///|
+
+///|
+/// True when `binding` declares an identifier equal to `name`.
+fn sb_binding_binds(binding : @ast.TsBinding, name : String) -> Bool {
+  match binding {
+    Ident(n) => n == name
+    Array(ab) => {
+      for item in ab.items {
+        match item {
+          Some(elem) => if sb_binding_binds(elem.binding, name) { return true }
+          None => ()
+        }
+      }
+      match ab.rest {
+        Some(rest) => sb_binding_binds(rest, name)
+        None => false
+      }
+    }
+    Object(ob) => {
+      for prop in ob.props {
+        if sb_binding_binds(prop.binding, name) {
+          return true
+        }
+      }
+      ob.rest is Some(r) && r == name
+    }
+    Target(_) => false
+  }
+}
+
+///|
+/// Expression walk for the TS2729 static-block check: record a hit when the
+/// expression reads or writes `this.<f>` / `<ClassName>.<f>` for a field
+/// name in `later`. Function-valued expressions (arrow / function / class
+/// expressions) are NOT entered -- their bodies run later, after every
+/// static field has initialized.
+fn sb_walk_expr(
+  expr : @ast.TsExpr,
+  cname : String,
+  later : Map[String, Bool],
+  hits : Array[String],
+) -> Unit {
+  let check_recv = fn(recv : @ast.TsExpr, f : String) -> Unit {
+    match recv {
+      Var(n) =>
+        if (n == "this" || n == cname) && later.get(f) is Some(_) {
+          hits.push(f)
+        }
+      _ => ()
+    }
+  }
+  match expr {
+    PropAccess(recv, f) => {
+      check_recv(recv, f)
+      sb_walk_expr(recv, cname, later, hits)
+    }
+    PropAssignExpr(recv, f, v) => {
+      check_recv(recv, f)
+      sb_walk_expr(recv, cname, later, hits)
+      sb_walk_expr(v, cname, later, hits)
+    }
+    MethodCall(recv, m, args) => {
+      check_recv(recv, m)
+      sb_walk_expr(recv, cname, later, hits)
+      for a in args {
+        sb_walk_expr(a, cname, later, hits)
+      }
+    }
+    BinOp(_, a, b) | Seq(a, b) | IndexAccess(a, b) | ComputedProp(a, b) => {
+      sb_walk_expr(a, cname, later, hits)
+      sb_walk_expr(b, cname, later, hits)
+    }
+    IndexAssignExpr(a, b, c) | Cond(a, b, c) => {
+      sb_walk_expr(a, cname, later, hits)
+      sb_walk_expr(b, cname, later, hits)
+      sb_walk_expr(c, cname, later, hits)
+    }
+    UnaryOp(_, x)
+    | Spread(x)
+    | Await(x)
+    | YieldStar(x)
+    | PureCall(x)
+    | TypeArgs(_, x)
+    | AssignExpr(_, x)
+    | AssignPattern(_, x) => sb_walk_expr(x, cname, later, hits)
+    CompoundAssignExpr(a, _, b) => {
+      sb_walk_expr(a, cname, later, hits)
+      sb_walk_expr(b, cname, later, hits)
+    }
+    Yield(opt) =>
+      match opt {
+        Some(x) => sb_walk_expr(x, cname, later, hits)
+        None => ()
+      }
+    Call(_, args) | New(_, args) =>
+      for a in args {
+        sb_walk_expr(a, cname, later, hits)
+      }
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      sb_walk_expr(callee, cname, later, hits)
+      for a in args {
+        sb_walk_expr(a, cname, later, hits)
+      }
+    }
+    ArrayLit(items) =>
+      for it in items {
+        sb_walk_expr(it, cname, later, hits)
+      }
+    ObjectLit(entries) =>
+      for ent in entries {
+        sb_walk_expr(ent.1, cname, later, hits)
+      }
+    TaggedTemplate(tag, _, _, exprs) => {
+      sb_walk_expr(tag, cname, later, hits)
+      for e in exprs {
+        sb_walk_expr(e, cname, later, hits)
+      }
+    }
+    TemplateLiteral(_, exprs) =>
+      for e in exprs {
+        sb_walk_expr(e, cname, later, hits)
+      }
+    DynamicImport(a, b) => {
+      sb_walk_expr(a, cname, later, hits)
+      match b {
+        Some(x) => sb_walk_expr(x, cname, later, hits)
+        None => ()
+      }
+    }
+    _ => ()
+  }
+}
+
+///|
+fn sb_walk_block(
+  block : @ast.TsBlock,
+  cname : String,
+  later : Map[String, Bool],
+  hits : Array[String],
+) -> Unit {
+  for s in block.stmts {
+    sb_walk_stmt(s, cname, later, hits)
+  }
+}
+
+///|
+fn sb_walk_stmt(
+  stmt : @ast.TsStmt,
+  cname : String,
+  later : Map[String, Bool],
+  hits : Array[String],
+) -> Unit {
+  match stmt {
+    Var(_, _, e)
+    | Let(_, _, e)
+    | Const(_, _, e)
+    | Assign(_, e)
+    | CompoundAssign(_, _, e)
+    | Expr(e)
+    | Throw(e)
+    | Return(Some(e)) => sb_walk_expr(e, cname, later, hits)
+    PropAssign(recv, prop, value) => {
+      match recv {
+        Var(n) =>
+          if (n == "this" || n == cname) && later.get(prop) is Some(_) {
+            hits.push(prop)
+          }
+        _ => ()
+      }
+      sb_walk_expr(recv, cname, later, hits)
+      sb_walk_expr(value, cname, later, hits)
+    }
+    IndexAssign(a, b, c) => {
+      sb_walk_expr(a, cname, later, hits)
+      sb_walk_expr(b, cname, later, hits)
+      sb_walk_expr(c, cname, later, hits)
+    }
+    Try(b, _, cb, fb) => {
+      sb_walk_block(b, cname, later, hits)
+      match cb {
+        Some(x) => sb_walk_block(x, cname, later, hits)
+        None => ()
+      }
+      match fb {
+        Some(x) => sb_walk_block(x, cname, later, hits)
+        None => ()
+      }
+    }
+    If(c, t, e) => {
+      sb_walk_expr(c, cname, later, hits)
+      sb_walk_block(t, cname, later, hits)
+      match e {
+        Some(x) => sb_walk_block(x, cname, later, hits)
+        None => ()
+      }
+    }
+    While(c, b) | DoWhile(c, b) | With(c, b) => {
+      sb_walk_expr(c, cname, later, hits)
+      sb_walk_block(b, cname, later, hits)
+    }
+    For(init, cond, upd, body) => {
+      match init {
+        Some(s) => sb_walk_stmt(s, cname, later, hits)
+        None => ()
+      }
+      match cond {
+        Some(e) => sb_walk_expr(e, cname, later, hits)
+        None => ()
+      }
+      match upd {
+        Some(s) => sb_walk_stmt(s, cname, later, hits)
+        None => ()
+      }
+      sb_walk_block(body, cname, later, hits)
+    }
+    ForOf(_, _, _, e, b) | ForAwaitOf(_, _, _, e, b) | ForIn(_, _, _, e, b) => {
+      sb_walk_expr(e, cname, later, hits)
+      sb_walk_block(b, cname, later, hits)
+    }
+    Switch(e, cases) => {
+      sb_walk_expr(e, cname, later, hits)
+      for case in cases {
+        match case.test_expr {
+          Some(t) => sb_walk_expr(t, cname, later, hits)
+          None => ()
+        }
+        sb_walk_block(case.body, cname, later, hits)
+      }
+    }
+    Label(_, s) => sb_walk_stmt(s, cname, later, hits)
+    Block(b) => sb_walk_block(b, cname, later, hits)
+    _ => ()
+  }
+}
+
+///|
+/// TS2729 for `static { … }` blocks: a read or write of `this.<f>` /
+/// `<ClassName>.<f>` inside a static block, where the static *field* `f`
+/// is first declared after that block, runs before the field initializes.
+/// Static methods and accessors are installed before blocks execute, so
+/// only data fields participate. A block whose top level rebinds the class
+/// name is skipped, and nested function bodies are never entered.
+fn static_block_use_before_def(
+  class_name : String,
+  elements : Array[ClassElement],
+) -> Array[String] {
+  let hits : Array[String] = []
+  if class_name == "" || class_name.has_prefix("<") {
+    return hits
+  }
+  // First declaration index of every public static field.
+  let first_decl : Map[String, Int] = {}
+  for i, element in elements {
+    match element {
+      Field(true, Name(n), _, _, _, _) =>
+        if is_public_runtime_class_member_name(n) && !first_decl.contains(n) {
+          first_decl[n] = i
+        }
+      _ => ()
+    }
+  }
+  if first_decl.length() == 0 {
+    return hits
+  }
+  for i, element in elements {
+    match element {
+      StaticBlock(block) => {
+        let later : Map[String, Bool] = {}
+        for n, di in first_decl {
+          if di > i {
+            later[n] = true
+          }
+        }
+        if later.length() == 0 {
+          continue
+        }
+        let mut rebinds = false
+        for s in block.stmts {
+          match s {
+            @ast.TsStmt::Var(b, _, _)
+            | @ast.TsStmt::Let(b, _, _)
+            | @ast.TsStmt::Const(b, _, _) =>
+              if sb_binding_binds(b, class_name) {
+                rebinds = true
+              }
+            _ => ()
+          }
+        }
+        if rebinds {
+          continue
+        }
+        sb_walk_block(block, class_name, later, hits)
+      }
+      _ => ()
+    }
+  }
+  hits
+}
+
+///|
 fn build_runtime_class_decl(
   name : String,
   type_params : Array[String],
@@ -391,6 +691,12 @@ fn build_runtime_class_decl(
       dup_seen[name] = ()
       duplicate_member_names.push(name)
     }
+  }
+  // TS2729: `this.<f>` / `<Name>.<f>` inside a static block before the
+  // static field `f` is declared. Routed through the per-class channel as
+  // a marker; the checker turns it into the diagnostic.
+  for f in static_block_use_before_def(name, elements) {
+    duplicate_member_names.push("<static-use-before-def:" + f + ">")
   }
   {
     name,
@@ -1445,6 +1751,21 @@ fn Parser::parse_class_body(
       if is_abstract_member {
         abstract_members.push(method_name)
       }
+      // TS4112/4113/4114 support: which members carried an `override`
+      // modifier (checked against the base chain, and -- under
+      // noImplicitOverride -- required on genuine overrides). Marker
+      // format matches other per-class sentinels; instance and static
+      // sides are distinguished.
+      if saw_override_modifier {
+        self.override_member_names.push(
+          (if is_static { "s:" } else { "i:" }) + method_name,
+        )
+      }
+      if has_declare {
+        self.override_member_names.push(
+          "<decl>" + (if is_static { "s:" } else { "i:" }) + method_name,
+        )
+      }
     }
     let is_optional = self.match_(Question)
     let has_definite_assertion = self.match_(Bang)
@@ -1806,6 +2127,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   let prev_brand = self.current_class_brand
   self.current_class_brand = Some(brand)
   let quoted_names_start = self.quoted_member_names.length()
+  let override_names_start = self.override_member_names.length()
   let (
     ctor_opt,
     elements,
@@ -1844,6 +2166,19 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   }
   for qn in quoted_names {
     expr_class_sentinels.push("<quoted-member:" + qn + ">")
+  }
+  while self.override_member_names.length() > override_names_start {
+    match self.override_member_names.pop() {
+      Some(n) =>
+        if n.has_prefix("<decl>") {
+          expr_class_sentinels.push(
+            "<declare-member:" + n["<decl>".length():].to_string() + ">",
+          )
+        } else {
+          expr_class_sentinels.push("<override-member:" + n + ">")
+        }
+      None => ()
+    }
   }
   if ctor_impl_count >= 2 {
     expr_class_sentinels.push("<multiple-ctor-impl>")
@@ -2578,6 +2913,7 @@ fn Parser::parse_class_decl_with_abstract(
   let prev_brand = self.current_class_brand
   self.current_class_brand = Some(brand)
   let quoted_names_start = self.quoted_member_names.length()
+  let override_names_start = self.override_member_names.length()
   let (
     ctor_opt,
     elements,
@@ -2610,6 +2946,21 @@ fn Parser::parse_class_decl_with_abstract(
     match self.quoted_member_names.pop() {
       Some(n) =>
         runtime_decl.duplicate_member_names.push("<quoted-member:" + n + ">")
+      None => ()
+    }
+  }
+  while self.override_member_names.length() > override_names_start {
+    match self.override_member_names.pop() {
+      Some(n) =>
+        if n.has_prefix("<decl>") {
+          runtime_decl.duplicate_member_names.push(
+            "<declare-member:" + n["<decl>".length():].to_string() + ">",
+          )
+        } else {
+          runtime_decl.duplicate_member_names.push(
+            "<override-member:" + n + ">",
+          )
+        }
       None => ()
     }
   }
