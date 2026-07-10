@@ -1097,6 +1097,11 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
               }
           }
         }
+      // The `NoInfer<T>` intrinsic is an inference barrier only — for
+      // every checking purpose it IS its argument (unless the module
+      // shadows the name with its own alias, handled below).
+      Applied("NoInfer", [inner]) if !self.type_aliases.contains("NoInfer") =>
+        cur = inner
       Applied(n, args) =>
         if seen.contains(n) {
           keep_going = false
@@ -6579,6 +6584,11 @@ fn solve_generic_bindings(
   args : Array[@ast.TsExpr],
   sig : Array[@ast.TsParam]?,
 ) -> Map[String, @ast.TsType] {
+  // `NoInfer<T>` positions are inference barriers (the intrinsic's whole
+  // purpose): erase them to `Any` for candidate collection, so `T` pins
+  // from the other positions and the NoInfer argument is CHECKED against
+  // the pinned binding instead of contributing to it (noInfer.ts).
+  let params = params.map(fn(p) { strip_noinfer_positions(p) })
   let bindings : Map[String, @ast.TsType] = {}
   for tp in type_params {
     bindings[tp] = @ast.TsType::Any
@@ -6651,6 +6661,37 @@ fn solve_generic_bindings(
     i = i + 1
   }
   bindings
+}
+
+///|
+/// Erase `NoInfer<…>` subtrees to `Any` for inference-candidate collection
+/// (checking still sees them — `Resolver::unwrap` is NoInfer-transparent).
+fn strip_noinfer_positions(t : @ast.TsType) -> @ast.TsType {
+  match t {
+    Applied("NoInfer", _) => Any
+    Array(e) => Array(strip_noinfer_positions(e))
+    Rest(e) => Rest(strip_noinfer_positions(e))
+    Applied(n, args) =>
+      Applied(n, args.map(fn(a) { strip_noinfer_positions(a) }))
+    Union(ms) => Union(ms.map(fn(m) { strip_noinfer_positions(m) }))
+    Intersection(ms) =>
+      Intersection(ms.map(fn(m) { strip_noinfer_positions(m) }))
+    Func(ps, r) =>
+      Func(
+        ps.map(fn(p) { strip_noinfer_positions(p) }),
+        strip_noinfer_positions(r),
+      )
+    Constructor(ps, r, a) =>
+      Constructor(
+        ps.map(fn(p) { strip_noinfer_positions(p) }),
+        strip_noinfer_positions(r),
+        a,
+      )
+    Object(fields) =>
+      Object(fields.map(fn(f) { (f.0, strip_noinfer_positions(f.1)) }))
+    Tuple(items) => Tuple(items.map(fn(i) { strip_noinfer_positions(i) }))
+    other => other
+  }
 }
 
 ///|

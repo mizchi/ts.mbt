@@ -2295,6 +2295,31 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-08 (T193)  714/815 (88 %)        414/414 ( 0 FP)   Generic inference: NoInfer intrinsic: TP 2581 -> 2582
+
+  T193 -- generic call-site inference, round 1 (user-directed pivot to
+    the generic-inference blocker).
+    - `NoInfer<T>` intrinsic: two halves. (a) Inference barrier —
+      `solve_generic_bindings` erases `NoInfer<…>` subtrees to `Any`
+      before candidate collection (`strip_noinfer_positions`), so `T`
+      pins from the other argument positions and the NoInfer argument
+      is CHECKED against the pinned binding instead of contributing to
+      it. (b) Checking transparency — `Resolver::unwrap` resolves
+      `Applied("NoInfer", [inner])` to `inner` (unless the module
+      shadows the name with its own alias), so every downstream
+      assignability / member check sees through it. Catches
+      `assertEqual(g, { x: 3 })` (missing `y`), contravariant-default
+      `doSomething(new Dog(), () => new Animal())`, and
+      `doWork(comp, {})` (missing `foo`); literal-vs-literal pins
+      (`foo1('foo', 'bar')`) still widen and stay missed. noInfer.ts.
+    Surveyed and deferred (multi-stage machinery): generic rest tuple
+    inference from callback parameter lists (genericRestArity*),
+    method-chain constraint propagation
+    (wrappedAndRecursiveConstraints4), generator inference
+    (generatorTypeCheck62/63), iterator-element inference through lib
+    types (iteratorSpreadInCall7/8/9).
+    Whole-corpus TP 2581 -> 2582 @ 0 FP, PFLEGAL 1, TN 1414. 2455 tests.
+
 2026-07-07 (T192)  714/815 (88 %)        414/414 ( 0 FP)   Grammar clusters under the new spec: TP 2562 -> 2581
 
   T192 -- the new classification surfaced grammar clusters that

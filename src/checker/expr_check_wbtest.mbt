@@ -12782,3 +12782,32 @@ test "expr_check: ambient declare, dup accessibility, non-generator yield, dts s
     0,
   )
 }
+
+///|
+test "expr_check: NoInfer inference barrier (batch AQ)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // T pins from the non-NoInfer position; the NoInfer argument is checked
+  // against the pinned binding.
+  assert_true(
+    issues(
+      "declare function assertEqual<T>(actual: T, expected: NoInfer<T>): boolean;\nconst g = { x: 3, y: 2 };\nassertEqual(g, { x: 3 });",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "declare class Animal { move(): void }\ndeclare class Dog extends Animal { woof(): void }\ndeclare function doSomething<T>(value: T, getDefault: () => NoInfer<T>): void;\ndoSomething(new Dog(), () => new Animal());",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "declare function assertEqual<T>(actual: T, expected: NoInfer<T>): boolean;\nassertEqual({ x: 1 }, { x: 3 });\ndeclare class Animal { move(): void }\ndeclare class Dog extends Animal { woof(): void }\ndeclare function doSomething<T>(value: T, getDefault: () => NoInfer<T>): void;\ndoSomething(new Animal(), () => new Dog());",
+    ),
+    0,
+  )
+  // NoInfer in a type alias position is transparent for checking.
+  @test.assert_eq(issues("type N2 = NoInfer<string>;\nvar s2: N2 = \"ok\";"), 0)
+}
