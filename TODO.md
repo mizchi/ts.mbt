@@ -2295,6 +2295,42 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-10 (T201)  714/815 (88 %)        414/414 ( 0 FP)   Generator TReturn + construct overloads: TP 2607 -> 2610
+
+  T201 -- batch AX, the generic-inference theme's remaining two shapes
+    (user-selected continuation).
+    (a) Generator TReturn: a `function*` LITERAL argument whose body
+    contains `return <value>` is not assignable to a callback parameter
+    returning `IterableIterator<..., void>` / `Generator<..., void, ...>`
+    — the explicit `void` TReturn slot means the callback must not return
+    anything (generatorTypeCheck62 x2 errors, 63 x3 errors — counts match
+    tsc's per-line diagnostics). `return;` / `return undefined;` and an
+    UNWRITTEN TReturn slot (default `any`) never flag. Walks the body
+    statement tree without descending into nested functions; a NEW
+    walker pair (`generator_body_returns_value`) rather than the existing
+    `block_has_value_return`, which counts `return undefined` as a value
+    (fine for its arrow-void consumer, an FP here). Note: the constrained
+    type param in `strategy<T extends StrategicState>` is bound-erased by
+    the parser (T199/T200 note), which is exactly why the void slot
+    survives to the checker — erasure helps this once.
+    (b) TS2769 construct overloads: a construct-signature set (>= 2
+    overloads collected via collect_construct_signatures) whose params
+    are ALL concrete primitives rejects a call whose (decidably-typed)
+    arguments fail every overload — `new fn1({})` against
+    `new (s: string)` / `new (s: number)`
+    (overloadResolutionConstructors). Generic signatures, non-primitive
+    params, spreads, and undecidable argument types abstain; nullish
+    arguments count as matching (strict-mode misses cost recall, never
+    precision — `new fn1(undefined)` is tsc's legal ambiguous-pick-first
+    and stays silent, pinned).
+    Remaining in the theme (documented): genericCallToOverloadedMethod-
+    WithOverloadedArguments (method overloads over generic receivers),
+    controlFlowIterationErrors (loop narrowing x overloads),
+    es2020IntlAPIs (Intl lib surface), unionTypeReduction2 (union
+    signature reduction), taggedTemplateContextualTyping2.
+    Whole-corpus TP 2607 -> 2610 @ 0 FP, PFLEGAL 1, TN 1414. 581 checker
+    wbtests.
+
 2026-07-10 (T200)  714/815 (88 %)        414/414 ( 0 FP)   Generic inference (user-priority theme): TP 2597 -> 2607
 
   T200 -- batch AW, the user-designated HIGH theme (multi-stage generic

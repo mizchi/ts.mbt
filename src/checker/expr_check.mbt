@@ -11558,6 +11558,7 @@ fn check_arguments_with_sig(
     if rest_index >= 0 && i >= rest_index {
       check_expr_against(env, args[i], rest_elem_type, ctx, sub_path)
     } else if i < params.length() {
+      check_generator_arg_treturn(ctx, args[i], params[i], sub_path)
       check_expr_against(env, args[i], params[i], ctx, sub_path)
       // TS2345: an unannotated array-destructuring parameter is tuple-like
       // (`function fun([a, b]) {}` types as `[any, any]`), so an iterable
@@ -11644,6 +11645,95 @@ fn check_arguments_with_sig(
         _ => ()
       }
     }
+  }
+}
+
+///|
+/// TS2345 for a generator-literal argument whose body RETURNS a value when
+/// the parameter's callback return type is `IterableIterator<..., void>` /
+/// `Generator<..., void, ...>` — a `void` TReturn slot means the callback
+/// must not return anything (`strategy("x", function*(s) { return s; })`,
+/// generatorTypeCheck62/63). `return;` and `return undefined;` stay legal,
+/// and an unwritten TReturn slot (whose default is `any`) never flags.
+fn check_generator_arg_treturn(
+  ctx : CheckCtx,
+  arg : @ast.TsExpr,
+  param_ty : @ast.TsType,
+  sub_path : String,
+) -> Unit {
+  guard arg is FuncExpr(f) && f.is_generator else { return }
+  let ret = match ctx.resolver.unwrap(param_ty) {
+    Func(_, r) => r
+    _ => return
+  }
+  match ctx.resolver.unwrap(ret) {
+    Applied("IterableIterator", targs) | Applied("Generator", targs) =>
+      if !(targs.length() >= 2 && targs[1] is Void) {
+        return
+      }
+    _ => return
+  }
+  if generator_body_returns_value(f.body) {
+    record(
+      ctx, sub_path, "a generator returning a value is not assignable to a parameter returning `IterableIterator<..., void>`",
+    )
+  }
+}
+
+///|
+/// True when the block contains a `return <operand>` (other than
+/// `undefined` / `void ...`) outside any nested function.
+fn generator_body_returns_value(b : @ast.TsBlock) -> Bool {
+  for st in b.stmts {
+    if generator_stmt_returns_value(st) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn generator_stmt_returns_value(st : @ast.TsStmt) -> Bool {
+  match st {
+    Return(Some(e)) =>
+      match e {
+        Var("undefined") | UnaryOp(Void, _) => false
+        _ => true
+      }
+    Return(None) => false
+    Block(b) => generator_body_returns_value(b)
+    If(_, then_, else_) =>
+      generator_body_returns_value(then_) ||
+      (match else_ {
+        Some(b) => generator_body_returns_value(b)
+        None => false
+      })
+    While(_, body) | DoWhile(_, body) | With(_, body) =>
+      generator_body_returns_value(body)
+    For(_, _, _, body) => generator_body_returns_value(body)
+    ForIn(_, _, _, _, body)
+    | ForOf(_, _, _, _, body)
+    | ForAwaitOf(_, _, _, _, body) => generator_body_returns_value(body)
+    Try(b, _, catch_, finally_) =>
+      generator_body_returns_value(b) ||
+      (match catch_ {
+        Some(c) => generator_body_returns_value(c)
+        None => false
+      }) ||
+      (match finally_ {
+        Some(fb) => generator_body_returns_value(fb)
+        None => false
+      })
+    Label(_, inner) => generator_stmt_returns_value(inner)
+    Switch(_, cases) => {
+      for c in cases {
+        if generator_body_returns_value(c.body) {
+          return true
+        }
+      }
+      false
+    }
+    _ => false
   }
 }
 
@@ -14936,7 +15026,98 @@ fn check_call_args_in_expr(
           match union_common_construct_params(callee_ty, ctx.resolver) {
             Some(params) =>
               check_arguments(env, params, args, ctx, "new `\{class_name}`")
-            None => ()
+            None => {
+              // TS2769 for a construct-overload set whose signatures are
+              // all concrete primitives: a call whose arguments fail every
+              // overload matches nothing (`new fn1({})` against
+              // `new (s: string)` / `new (s: number)`,
+              // overloadResolutionConstructors). Any generic signature,
+              // non-primitive parameter, spread argument, or undecidable
+              // argument type abstains.
+              let sigs = collect_construct_signatures(callee_ty, ctx.resolver)
+              if sigs.length() >= 2 &&
+                !args.iter().any(fn(a) { a is Spread(_) }) {
+                let mut decidable = true
+                let sig_params : Array[Array[@ast.TsType]] = []
+                for s in sigs {
+                  match s {
+                    Func(ps, _) | Constructor(ps, _, _) => {
+                      for p in ps {
+                        match ctx.resolver.unwrap(p) {
+                          String_
+                          | Number
+                          | Int
+                          | Boolean
+                          | BigInt
+                          | Literal(_)
+                          | NumberLiteral(_)
+                          | BooleanLiteral(_) => ()
+                          _ => decidable = false
+                        }
+                      }
+                      sig_params.push(ps)
+                    }
+                    _ => decidable = false
+                  }
+                }
+                let arg_types : Array[@ast.TsType] = []
+                if decidable {
+                  for a in args {
+                    let t = ctx.resolver.unwrap(
+                      infer_expr(env, ctx.resolver, a),
+                    )
+                    match t {
+                      String_
+                      | Number
+                      | Int
+                      | Boolean
+                      | BigInt
+                      | Literal(_)
+                      | NumberLiteral(_)
+                      | BooleanLiteral(_)
+                      | Object(_)
+                      | Struct(_, _)
+                      | Undefined
+                      | Null => arg_types.push(t)
+                      _ => decidable = false
+                    }
+                  }
+                }
+                if decidable {
+                  let mut any_matches = false
+                  for ps in sig_params {
+                    if arg_types.length() > ps.length() ||
+                      arg_types.length() < required_arity_from_types(ps) {
+                      continue
+                    }
+                    let mut ok = true
+                    for i, at in arg_types {
+                      // Nullish arguments satisfy anything outside
+                      // strictNullChecks; a strict-mode miss here only
+                      // costs recall, never precision.
+                      if at is (Undefined | Null) {
+                        continue
+                      }
+                      if !is_assignable_to(at, ps[i]) {
+                        ok = false
+                        break
+                      }
+                    }
+                    if ok {
+                      any_matches = true
+                      break
+                    }
+                  }
+                  if !any_matches {
+                    record(
+                      ctx,
+                      "new `\{class_name}`",
+                      "no construct overload matches this call",
+                    )
+                  }
+                }
+              }
+            }
           }
           for a in args {
             check_call_args_in_expr(env, a, ctx)

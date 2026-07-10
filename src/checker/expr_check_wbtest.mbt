@@ -13226,3 +13226,52 @@ test "expr_check: uniform Map<K, V> inference (batch AW stage 3)" {
     0,
   )
 }
+
+///|
+test "expr_check: generator TReturn + construct overloads (batch AX)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let strategy_decl = "interface StrategicState { lastStrategyApplied?: string; }\nfunction strategy<T extends StrategicState>(stratName: string, gen: (a: T) => IterableIterator<T | undefined, void>): (a: T) => IterableIterator<T | undefined, void> { return null; }\ninterface State extends StrategicState { foo: number; }\n"
+  // A generator argument RETURNING a value vs a void TReturn slot
+  // (generatorTypeCheck62/63, TS2345).
+  assert_true(
+    issues(
+      "// @strict: false\n" +
+      strategy_decl +
+      "var Nothing1 = strategy(\"Nothing\", function*(state: State) {\n  return state;\n});",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "// @strict: false\n" +
+      strategy_decl +
+      "var Nothing3 = strategy(\"Nothing\", function*(state: State) {\n  yield state;\n  return 1;\n});",
+    ) >
+    0,
+  )
+  // Pins: yield-only and empty generators stay legal; so does
+  // `return undefined` (void accepts undefined).
+  @test.assert_eq(
+    issues(
+      "// @strict: false\n" +
+      strategy_decl +
+      "var Nothing2 = strategy(\"Nothing\", function*(state: State) {\n  yield state;\n});\nvar Nothing1 = strategy(\"Nothing\", function*(state: State) {\n});\nvar NothingU = strategy(\"Nothing\", function*(state: State) {\n  return undefined;\n});",
+    ),
+    0,
+  )
+  // Construct-overload set with all-primitive signatures: an object
+  // literal matches no overload (overloadResolutionConstructors, TS2769).
+  let fn1_decl = "interface fn1 {\n  new (s: string): string;\n  new (s: number): number;\n}\ndeclare var fn1: fn1;\n"
+  assert_true(issues("// @strict: false\n" + fn1_decl + "new fn1({});") > 0)
+  // Pins: a matching overload and the ambiguous nullish pick stay legal.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\n" +
+      fn1_decl +
+      "var s = new fn1(\"a\");\nvar n = new fn1(4);\nvar u = new fn1(undefined);",
+    ),
+    0,
+  )
+}
