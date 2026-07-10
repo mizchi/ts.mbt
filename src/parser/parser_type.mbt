@@ -578,6 +578,15 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
           let _ = self.advance()
           n
         }
+        // Keyword-token member names (`{ type: string; … }` — `type`
+        // lexes as its own token). Only when the next token proves this
+        // is a member key, so `readonly` / call-signature shapes above
+        // keep their meaning.
+        Type if self.peek_at(1).kind
+          is (Colon | Question | Semicolon | Comma | LParen | RBrace) => {
+          let _ = self.advance()
+          "type"
+        }
         Str(s) => {
           let _ = self.advance()
           s

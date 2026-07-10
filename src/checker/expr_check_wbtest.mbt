@@ -12832,3 +12832,32 @@ test "expr_check: predicate narrowing from any (batch AR)" {
     0,
   )
 }
+
+///|
+test "expr_check: keyword member names in object types (batch AS)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // `type` lexes as its own token; as an object-type member name followed
+  // by a method-signature member it used to collapse the whole annotation
+  // to Any, hiding every member check behind it.
+  assert_true(
+    issues(
+      "// @strict: false\ndeclare var v: { type: string; dontPanic(): void };\nv.doPanic();",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @strict: false\ndeclare var v: { type: string; dontPanic(): void };\nv.dontPanic();\nvar s: string = v.type;",
+    ),
+    0,
+  )
+  // The narrowing chain this unblocks: catch-var + predicate guard.
+  assert_true(
+    issues(
+      "// @strict: false\ndeclare function isFooError(x: any): x is { type: string; dontPanic(): void };\nfunction t() {\n  try { } catch (err) {\n    if (isFooError(err)) {\n      err.dontPanic();\n      err.doPanic();\n    }\n  }\n}",
+    ) >
+    0,
+  )
+}

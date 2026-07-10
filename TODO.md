@@ -2295,6 +2295,28 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-08 (T195)  714/815 (88 %)        414/414 ( 0 FP)   Parser: keyword member names in object types: TP 2583 -> 2584
+
+  T195 -- the T194 reach gap, root-caused and fixed. The trail:
+    provenance branch didn't fire -> a DIRECT `declare var v: { type:
+    string; dontPanic(): void }; v.doPanic();` was also silent -> the
+    annotation itself parsed as `Any`. `type` lexes as its own token,
+    the primary object-type member parser had no keyword-key arm (falls
+    back to `None` -> conservative parser), and the FALLBACK object
+    parser handles plain `type: string` properties but not
+    method-signature members — so exactly the combination
+    `{ type: …; m(): … }` collapsed the whole annotation to `Any`,
+    silencing every member check behind it (this was the real
+    narrowExceptionVariableInCatchClause blocker, NOT the permissive
+    filter). Fix: the member-name match accepts a `Type` keyword token
+    when the following token proves it's a member key (`:`, `?`, `;`,
+    `,`, `(`, `}`). The provenance-aware record branch prototyped in
+    T194 turned out unnecessary — with the type parsed, the normal
+    member-miss path fires (top-level `declare var` receivers render as
+    object-literal shapes, which the permissive filter allows through
+    the `{}` carve-out family).
+    Whole-corpus TP 2583 -> 2584 @ 0 FP, PFLEGAL 1, TN 1414. 2457 tests.
+
 2026-07-08 (T194)  714/815 (88 %)        414/414 ( 0 FP)   Flow narrowing: predicate narrowing from `any`: TP 2582 -> 2583
 
   T194 -- flow narrowing, round 1 (user-directed pivot).
@@ -2311,14 +2333,8 @@ conformance sources (`.errors.txt` baseline = ground truth):
       member-miss on `{ type: 'foo'; dontPanic() }`-shaped receivers is
       still permissively suppressed (`does not exist on `{…}`` render),
       so narrowExceptionVariableInCatchClause stays missed.
-      FOLLOW-UP FINDING (post-merge probe): the suppression isn't the
-      (only) blocker — a DIRECT `declare var v2: { type: string;
-      dontPanic(): void }; v2.doPanic();` is also silent, so the
-      MethodCall member-miss check never reaches its record for
-      Object-with-method-field receivers at all. A provenance-aware
-      record_unfiltered branch was prototyped and reverted (dead until
-      the reach problem is found); next step is tracing the MethodCall
-      dispatch path for that receiver shape.
+      FOLLOW-UP FINDING (post-merge probe): the suppression wasn't the
+      blocker at all — RESOLVED in T195 below.
     - Surveyed: instanceof-from-any already narrows (batch earlier);
       Error / Date member typos (TS2551) need lib member models;
       loop back-edge widening and `||`-RHS narrowing chains deferred.
