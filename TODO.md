@@ -2310,9 +2310,15 @@ conformance sources (`.errors.txt` baseline = ground truth):
       path serves `catch (err) { if (isFooError(err)) … }` — but the
       member-miss on `{ type: 'foo'; dontPanic() }`-shaped receivers is
       still permissively suppressed (`does not exist on `{…}`` render),
-      so narrowExceptionVariableInCatchClause stays missed. Lifting
-      that suppression for narrowing-derived object shapes is the next
-      step and needs care (the filter can't currently see provenance).
+      so narrowExceptionVariableInCatchClause stays missed.
+      FOLLOW-UP FINDING (post-merge probe): the suppression isn't the
+      (only) blocker — a DIRECT `declare var v2: { type: string;
+      dontPanic(): void }; v2.doPanic();` is also silent, so the
+      MethodCall member-miss check never reaches its record for
+      Object-with-method-field receivers at all. A provenance-aware
+      record_unfiltered branch was prototyped and reverted (dead until
+      the reach problem is found); next step is tracing the MethodCall
+      dispatch path for that receiver shape.
     - Surveyed: instanceof-from-any already narrows (batch earlier);
       Error / Date member typos (TS2551) need lib member models;
       loop back-edge widening and `||`-RHS narrowing chains deferred.
