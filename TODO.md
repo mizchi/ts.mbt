@@ -2295,6 +2295,147 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-07 (T192)  714/815 (88 %)        414/414 ( 0 FP)   Grammar clusters under the new spec: TP 2562 -> 2581
+
+  T192 -- the new classification surfaced grammar clusters that
+    previously hid behind parse-skips.
+    - TS1038: `declare` inside an already-ambient namespace body. The
+      misuse records in the namespace sub-parser, and the layered
+      checker's namespace recursion now emits nested bodies' PLAIN
+      grammar misuses (the top-level-only emission loop is for marker
+      processing) — this alone unlocked several other already-recorded
+      namespace-body diagnostics (+19 total for the round).
+      parser{Function,Enum,Class,Module,Variable}Declaration fixtures.
+    - TS1028: a second accessibility modifier on one class member
+      (`public public foo()`). parserMemberFunctionDeclaration1,
+      Protected4/7 et al.
+    - TS1163: `yield <operand>` in a non-generator — two adjacent
+      expressions never parse, so the same-line operand form is
+      definitely a yield expression. Landing it exposed ANOTHER parser
+      context bug: `parse_function` set `in_generator = true` for
+      generators but never reset it for plain functions nested inside
+      one; both sites now assign `is_generator` (mirrors the batch-AK
+      `in_async` fix). YieldExpression16_es6 et al.
+    - TS1036: executable statements (block / debugger / for / try /
+      with / expression …) at the top level of a `.d.ts` file, added to
+      `check_dts_top_level_modifiers`. parser*Statement1.d fixtures.
+    Whole-corpus TP 2562 -> 2581 @ 0 FP, PFLEGAL 1, TN 1414 (session
+    total 1761 -> +820 under the current spec). 2454 tests.
+
+2026-07-07 (T191)  714/815 (88 %)        414/414 ( 0 FP)   Gate spec: parse rejections classify; decorator/template parser fixes: TP 2166 -> 2562
+
+  T191 -- gate-spec change (user-approved) + the parser fixes it forces.
+    - Oracle reclassification: a parse failure is a REJECTION. With an
+      error baseline it is agreement -> TP (shown separately as "via
+      parse rejection": 397); on a tsc-accepted file it is a parser
+      soundness bug -> new PFLEGAL bucket, listed and gated by
+      `--max-legal-parsefail` (kept separate from `--max-fp` so the
+      checker invariant and parser-coverage budget move independently).
+      docs/checker-priority.md updated: the standing gate is now
+      `--max-fp 0 --max-legal-parsefail 1`.
+    - The symmetry forced fixing the remaining legal-TS parse failures:
+      * tagged templates with explicit type arguments (`f<Stuff> `…``)
+        — previously mis-parsed as a comparison chain, which was also a
+        latent TS2365 FP source (taggedTemplatesWithTypeArguments1);
+      * decorator heads with non-null asserts / member chains after
+        them / explicit type args (`@x!`, `@x!.y`, `@g<number>()`), and
+        parenthesized instantiation expressions (`@(g<number>)`) via a
+        balanced-skip fallback (esDecorators-decoratorExpression.2);
+      * parameter decorators with parenthesized expression heads
+        (`(@((t, k, i) => {}) p: any)` —
+        legacyDecorators-contextualTypes).
+    - Remaining PFLEGAL budget 1: parser768531's `{a: 3}\n/x/` — the
+      block-statement `}` vs division regex-lexing ambiguity needs
+      parser-fed lexer context; deferred.
+    Whole-corpus (new spec): TP 2562 (of which 397 via parse rejection)
+    @ 0 FP, PFLEGAL 1, TN 1414, MISS 521. 2453 tests.
+
+2026-07-07 (T190)  714/815 (88 %)        414/414 ( 0 FP)   Parse-failure audit: legal-TS parser fixes: TN 1406 -> 1411
+
+  T190 -- PARSEFAIL population audit. Of the 406 skipped parse failures,
+    397 carry an error baseline: they are tsc-rejected (mostly
+    syntax-error) fixtures our parser correctly refuses — the oracle
+    counts them as SKIPPED rather than agreement, which understates
+    recall; changing that classification is a gate-spec decision, noted
+    here and left untouched. The remaining 9 were LEGAL TypeScript our
+    parser failed on; 5 fixed this round:
+    - `namespace number {}` (and dotted `namespace number.a {}`):
+      primitive type keywords are legal namespace names
+      (parserModuleDeclaration6/7).
+    - `declare `template``: a tagged-template call of a function named
+      `declare`, not an ambient declaration
+      (taggedTemplateStringsWithTagNamedDeclare[ES6]).
+    - `declare var [a, b];` / `declare var {c, d};`: ambient
+      destructuring is tolerated and skipped WITHOUT recording — current
+      tsc accepts it despite the fixture's stale comment (recording it
+      was a gate FP) (declarationInAmbientContext).
+    Deferred (high-cost): legacy parameter decorators with expression
+    decorators, tagged templates with explicit type arguments,
+    `@x!`-style decorator expressions, and the block-statement-vs-regex
+    `}` ambiguity (parser768531).
+    Whole-corpus TP 2166 @ 0 FP unchanged; TN 1406 -> 1411, parse
+    failures 406 -> 401. 2452 tests.
+
+2026-07-07 (T189)  714/815 (88 %)        414/414 ( 0 FP)   Practical round 9: abstract ctor typeof + iterable protocol sites: TP 2161 -> 2166
+
+  T189 -- practical (non-edge) misses, round 9.
+    - TS2322 for `var AA: typeof A = B` where `B` is abstract and `A` is
+      not: purely syntactic (`TypeOf` annotation + bare class-name
+      initializer, both resolvable), so it sidesteps the general
+      `typeof`-skip resolver-cycle guard.
+      classAbstractConstructorAssignability (both errors — `CC: typeof C
+      = B` is also abstract-into-non-abstract).
+    - TS2488 extraction: the for-of base-less-class iterator-protocol
+      check moved into `check_iterable_class_protocol` and now also runs
+      on array-literal spreads (`[...new SymbolIterator]` —
+      iteratorSpreadInArray8/10) and, for object-literal sources, on
+      assignment-form array destructuring (`[a, b] = { 0: "", 1: true }`
+      — iterableArrayPattern23/24; computed keys silence it).
+    Investigated and dropped this round:
+    optionalPropertyAssignableToStringIndexSignature (`k1?: string` and
+    `k1: string | undefined` parse to identical ASTs — optionality is
+    unrecoverable), typeArgumentInferenceConstructSignatures (construct
+    signatures erase their type-parameter lists), iterableArrayPattern17
+    (a class's computed METHOD keys erase to `<computed>`, so "property
+    absent" is unsound), classConstructorAccessibility3 (needs the
+    narrowed class-constructor value type on the target side).
+    Whole-corpus TP 2161 -> 2166 @ 0 FP (session total 1761 -> +405);
+    pinned recall 714, precision 414/414. 2451 tests.
+
+2026-07-07 (T188)  714/815 (88 %)        414/414 ( 0 FP)   Practical round 8: analysis-queue checks: TP 2155 -> 2161
+
+  T188 -- practical (non-edge) misses, round 8: the feasible queue from
+    T187's parallel corpus analysis, implemented as targeted early rules
+    in `check_expr_against` (all unfiltered). A bare `Var` source uses
+    its DECLARED type there: our assignment narrowing over-narrows
+    non-union declarations (`symObj = sym` narrowed `symObj: Symbol` to
+    `symbol`, which tsc does not do), hiding the errors on second
+    assignments.
+    - Wrapper object -> primitive (`Symbol`->`symbol`, `String`->`string`,
+      …) is never assignable (also encoded in `is_assignable_to`);
+      primitive -> wrapper stays legal. symbolType15.
+    - A pure call signature provides no match for a construct-only
+      target, and vice versa. assignmentCompatWithConstructSignatures.
+    - Missing required property between fully-resolvable object shapes
+      (`cast_shape_fields` both sides; intersections merge; ObjectLit
+      sources left to the literal checks). intersectionTypeAssignment.
+      (One pinned test updated: the dedicated rule now reports ahead of
+      the generic mismatch with a `missing` message.)
+    - Object-literal entry values (computed keys included) against a
+      string index signature's value type; concrete primitives only.
+      computedPropertyNamesContextualType8/9/10_ES6.
+    - Lexer: ES template cooked values normalize CRLF / lone CR -> LF,
+      and `infer_expr` gives a non-interpolating template its literal
+      type; the template-vs-literal-union check then compares real
+      characters and no longer abstains on line breaks
+      (stringLiteralTypesWithTemplateStrings02).
+    Deferred from the queue: string-literal param contravariance through
+    overload sets (stringLiteralTypesOverloadAssignability01/02 — needs
+    overload-set assignability), optionalPropertyAssignableToString-
+    IndexSignature, iterableArrayPattern17.
+    Whole-corpus TP 2155 -> 2161 @ 0 FP (session total 1761 -> +400);
+    pinned recall 714, precision 414/414. 2450 tests.
+
 2026-07-07 (T187)  714/815 (88 %)        414/414 ( 0 FP)   Practical round 7: TDZ, spread overwrite, enum readonly, await type: TP 2144 -> 2155
 
   T187 -- practical (non-edge) misses, round 7. Cluster selection came

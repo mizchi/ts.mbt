@@ -210,6 +210,30 @@ pub fn check_dts_top_level_modifiers(
     match stmt {
       Var(Ident(n), _, _) | Let(Ident(n), _, _) | Const(Ident(n), _, _) =>
         flag("var", n)
+      // TS1036: executable statements never belong in an ambient (.d.ts)
+      // file (`{}`, `debugger;`, `for(…)…` — parserBlockStatement1.d et
+      // al). Declaration-shaped statements are handled above; anything
+      // control-flow / expression shaped is a definite error.
+      Block(_)
+      | Debugger
+      | If(_, _, _)
+      | While(_, _)
+      | DoWhile(_, _)
+      | For(_, _, _, _)
+      | ForOf(_, _, _, _, _)
+      | ForIn(_, _, _, _, _)
+      | ForAwaitOf(_, _, _, _, _)
+      | Switch(_, _)
+      | Try(_, _, _, _)
+      | With(_, _)
+      | Throw(_)
+      | Return(_)
+      | Label(_, _)
+      | Expr(_) =>
+        issues.push({
+          path: "ambient statement",
+          message: "statements are not allowed in ambient contexts",
+        })
       _ => ()
     }
   }

@@ -6273,7 +6273,15 @@ fn infer_expr(
         Any => @ast.TsType::Any
         _ => @ast.TsType::String_
       }
-    TemplateLiteral(_, _) => @ast.TsType::String_
+    // A non-interpolating template is the string literal type of its text
+    // (tsc infers `` `AB\nC` `` as `"AB\nC"`, which is NOT assignable to a
+    // differently-escaped literal target — stringLiteralTypesWithTemplateStrings02).
+    TemplateLiteral(parts, exprs) =>
+      if exprs.length() == 0 && parts.length() == 1 {
+        @ast.TsType::Literal(parts[0])
+      } else {
+        @ast.TsType::String_
+      }
     // `x as T` — forced cast; result type is `T`. We still walk `inner` so
     // any nested call sites are validated.
     As(inner, ty) => {
@@ -7126,6 +7134,171 @@ fn check_expr_against(
   // x + 1)` flows the element type into `x` so the body's `x + 1` is
   // properly typed instead of falling through to `Any`.
   let expected_shape = ctx.resolver.unwrap(expected)
+  // --- Batch AL targeted rules (all conservative, unfiltered) ---
+  // A bare variable source uses its DECLARED type: our assignment
+  // narrowing over-narrows non-union declared types (`symObj = sym`
+  // narrows `symObj: Symbol` to `symbol`, which tsc does not do for
+  // non-union declarations), and these rules must see the annotation.
+  let src_shape = match expr {
+    Var(n) =>
+      match env.lookup_declared(n) {
+        Some(t) if is_checkable(t) => ctx.resolver.unwrap(t)
+        _ =>
+          match ctx.resolver.globals.get(n) {
+            Some(t) if is_checkable(t) => ctx.resolver.unwrap(t)
+            _ => ctx.resolver.unwrap(infer_expr(env, ctx.resolver, expr))
+          }
+      }
+    _ => ctx.resolver.unwrap(infer_expr(env, ctx.resolver, expr))
+  }
+  // (1) A lib wrapper-object value never flows into its primitive slot
+  // (`sym = symObj` where `symObj: Symbol`, symbolType15). The reverse
+  // direction is legal and untouched.
+  match (src_shape, expected_shape) {
+    (Named("Symbol"), Symbol)
+    | (Named("String"), String_)
+    | (Named("Number"), Number | Int)
+    | (Named("Boolean"), Boolean)
+    | (Named("BigInt"), BigInt) => {
+      record_unfiltered(
+        ctx,
+        sub_path,
+        "`\{type_display(src_shape)}` is a wrapper object and is not assignable to the primitive `\{type_display(expected_shape)}`",
+      )
+      return
+    }
+    _ => ()
+  }
+  // (2) A pure call signature provides no match for a construct-only
+  // target, and vice versa (assignmentCompatWithConstructSignatures).
+  {
+    let tgt_ctor = collect_construct_signatures(expected_shape, ctx.resolver)
+    let tgt_call = collect_call_signatures(expected_shape, ctx.resolver)
+    if tgt_ctor.length() > 0 && tgt_call.length() == 0 {
+      match src_shape {
+        Func(_, _) => {
+          record_unfiltered(
+            ctx, sub_path, "a call signature provides no match for the target's construct signature",
+          )
+          return
+        }
+        _ => ()
+      }
+    } else if tgt_call.length() > 0 && tgt_ctor.length() == 0 {
+      match src_shape {
+        Constructor(_, _, _) => {
+          record_unfiltered(
+            ctx, sub_path, "a construct signature provides no match for the target's call signature",
+          )
+          return
+        }
+        _ => ()
+      }
+    }
+  }
+  // (3) Missing required property: both sides expand to full field maps
+  // (`cast_shape_fields` — objects, interfaces incl. extends chains,
+  // intersections; generics / index signatures / computed members
+  // abstain) and the target requires a name the source lacks entirely
+  // (`x = a` where `x: {a,b}`, `a: {a}` — intersectionTypeAssignment).
+  // Fresh object-literal sources are left to the excess/missing literal
+  // checks.
+  if !(expr is ObjectLit(_)) {
+    match
+      (
+        cast_shape_fields(ctx.resolver, src_shape, 0),
+        cast_shape_fields(ctx.resolver, expected_shape, 0),
+      ) {
+      (Some(src_f), Some(tgt_f)) => {
+        let mut missing : String? = None
+        for name, required in tgt_f {
+          if required && !src_f.contains(name) {
+            missing = Some(name)
+          }
+        }
+        match missing {
+          Some(name) => {
+            record_unfiltered(
+              ctx,
+              sub_path,
+              "property `\{name}` is missing in `\{type_display(src_shape)}` but required in `\{type_display(expected_shape)}`",
+            )
+            return
+          }
+          None => ()
+        }
+      }
+      _ => ()
+    }
+  }
+  // (4) An object literal against an index-signature-bearing interface:
+  // every entry value (computed keys included) must satisfy the string
+  // index value type (computedPropertyNamesContextualType8/9/10). Only
+  // concrete primitive values are judged; spreads abstain.
+  match (expr, expected_shape) {
+    (ObjectLit(entries), Named(iname)) =>
+      match ctx.resolver.interfaces.get(iname) {
+        Some(iface) =>
+          if iface.type_params.length() == 0 &&
+            iface.index_signatures.length() > 0 {
+            let mut idx_val : @ast.TsType? = None
+            for isig in iface.index_signatures {
+              if isig.0 is String_ {
+                idx_val = Some(isig.1)
+              }
+            }
+            match idx_val {
+              Some(v) => {
+                let v_u = ctx.resolver.unwrap(v)
+                if is_checkable(v_u) {
+                  let mut has_spread = false
+                  for e in entries {
+                    if e.0.has_prefix("@@spread") {
+                      has_spread = true
+                    }
+                  }
+                  if !has_spread {
+                    let mut reported = false
+                    for e in entries {
+                      if reported {
+                        break
+                      }
+                      // A named entry that matches a declared field is
+                      // checked against that field elsewhere.
+                      if iface.fields.iter().any(fn(f) { f.0 == e.0 }) {
+                        continue
+                      }
+                      let val_expr = match e.1 {
+                        ComputedProp(_, value) => value
+                        other => other
+                      }
+                      let t = ctx.resolver.unwrap(
+                        widen_literal(infer_expr(env, ctx.resolver, val_expr)),
+                      )
+                      let concrete_prim = match t {
+                        String_ | Number | Int | Boolean | BigInt => true
+                        _ => false
+                      }
+                      if concrete_prim && !is_assignable_to(t, v_u) {
+                        record_unfiltered(
+                          ctx,
+                          sub_path,
+                          "type `\{type_display(t)}` is not assignable to the `string` index type `\{type_display(v_u)}`",
+                        )
+                        reported = true
+                      }
+                    }
+                  }
+                }
+              }
+              None => ()
+            }
+          }
+        None => ()
+      }
+    _ => ()
+  }
+  // --- end batch AL rules ---
   // Function-typed-argument arity (contravariant): a function *value* must be
   // callable with the arguments any target call signature would pass it. If
   // the value *requires* more parameters than a call signature *provides*, it
@@ -7491,12 +7664,12 @@ fn check_expr_against(
         }
         cooked = Some(buf.to_string())
       }
-      // Escape-sequence decoding differs between the type-literal parser and
-      // the template scanner (`"DE\nF"` vs a template with a real newline),
-      // so any value or target containing backslashes / line breaks abstains.
-      let clean = fn(v : String) -> Bool {
-        !v.contains("\\") && !v.contains("\n") && !v.contains("\r")
-      }
+      // Both decoders now yield real characters: string literals decode
+      // their escapes and template cooked values normalize CRLF -> LF, so
+      // line breaks compare faithfully (`"AB\r\nC"` vs a physical-CRLF
+      // template = `"AB\nC"` — stringLiteralTypesWithTemplateStrings02).
+      // Residual backslashes (exotic escapes) still abstain.
+      let clean = fn(v : String) -> Bool { !v.contains("\\") }
       match (cooked, literal_union_members(expected_u)) {
         (Some(value), Some(lits)) if clean(value) => {
           let mut matched = false
@@ -12872,6 +13045,30 @@ fn check_ident_binding_decl(
   init : @ast.TsExpr,
   block_scoped : Bool,
 ) -> Unit {
+  // TS2322 for `var AA: typeof A = B`: an abstract constructor type is
+  // never assignable to a non-abstract one. Purely syntactic — a `typeof
+  // Class` annotation initialized by a bare abstract-class name, both
+  // resolvable in this module (the general `typeof` machinery is skipped
+  // by the resolver-cycle guard, so this narrow case is handled here).
+  match (declared, init) {
+    (TypeOf(target_name), Var(source_name)) =>
+      match
+        (
+          ctx.resolver.classes.get(target_name),
+          ctx.resolver.classes.get(source_name),
+        ) {
+        (Some(tcls), Some(scls)) =>
+          if scls.is_abstract && !tcls.is_abstract {
+            record_unfiltered(
+              ctx,
+              "binding `\{name}` init",
+              "cannot assign an abstract constructor type to a non-abstract constructor type",
+            )
+          }
+        _ => ()
+      }
+    _ => ()
+  }
   let bound_type = if is_checkable(declared) {
     declared
   } else {
@@ -12921,6 +13118,81 @@ fn check_ident_binding_decl(
     _ => ()
   }
   check_expr_against(env, init, declared, ctx, "binding `\{name}` init")
+}
+
+///|
+/// TS2488: the value must have a `[Symbol.iterator]()` method returning an
+/// iterator. Decided only for base-less, index-signature-free class
+/// instances (an `extends` chain or an interface merge could add the
+/// protocol): either the class lacks the `[Symbol.iterator]` member
+/// entirely, or it returns `this` while the class has no `next` method
+/// (for-of14 / for-of16). Computed FIELDS and `next` fields silence the
+/// check (for-of27/28).
+fn check_iterable_class_protocol(
+  ctx : CheckCtx,
+  iter_ty : @ast.TsType,
+  path : String,
+) -> Unit {
+  match ctx.resolver.unwrap(iter_ty) {
+    Named(icn) =>
+      match ctx.resolver.classes.get(icn) {
+        Some(icls) if icls.base_names.length() == 0 &&
+          icls.base_expr is None &&
+          icls.index_signatures.length() == 0 &&
+          icls.type_params.length() == 0 &&
+          ctx.resolver.interfaces.get(icn) is None => {
+          let mut has_sym_iter = false
+          let mut sym_iter_returns_this_only = false
+          let mut has_next = false
+          for kexpr in icls.computed_field_keys {
+            if kexpr is PropAccess(Var("Symbol"), "iterator") {
+              has_sym_iter = true
+              has_next = true
+            }
+          }
+          for pr in icls.properties {
+            if !pr.is_static && pr.name == "next" {
+              has_next = true
+            }
+          }
+          for m in icls.methods {
+            if !m.is_static {
+              if m.name == "next" {
+                has_next = true
+              }
+              if m.name == "<computed>" &&
+                m.key_expr is Some(PropAccess(Var("Symbol"), "iterator")) {
+                has_sym_iter = true
+                match m.body {
+                  Some(b) => {
+                    let mut all_this = true
+                    let mut saw_return = false
+                    for st in b.stmts {
+                      match st {
+                        Return(Some(Var("this"))) => saw_return = true
+                        Return(_) => all_this = false
+                        _ => ()
+                      }
+                    }
+                    sym_iter_returns_this_only = saw_return && all_this
+                  }
+                  None => ()
+                }
+              }
+            }
+          }
+          if !has_sym_iter || (sym_iter_returns_this_only && !has_next) {
+            record(
+              ctx,
+              path,
+              "type `\{icn}` must have a `[Symbol.iterator]()` method that returns an iterator",
+            )
+          }
+        }
+        _ => ()
+      }
+    _ => ()
+  }
 }
 
 ///|
@@ -13339,76 +13611,9 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       check_call_args_in_expr(env, iter, ctx)
       let iter_ty = infer_expr(env, ctx.resolver, iter)
       // TS2488: the iterated value must have a `[Symbol.iterator]()`
-      // method returning an iterator. Decided only for base-less,
-      // index-signature-free class instances (an `extends` chain or an
-      // interface merge could add the protocol): either the class lacks
-      // the `[Symbol.iterator]` member entirely, or it returns `this`
-      // while the class has no `next` method (for-of14 / for-of16).
-      match ctx.resolver.unwrap(iter_ty) {
-        Named(icn) =>
-          match ctx.resolver.classes.get(icn) {
-            Some(icls) if icls.base_names.length() == 0 &&
-              icls.base_expr is None &&
-              icls.index_signatures.length() == 0 &&
-              icls.type_params.length() == 0 &&
-              ctx.resolver.interfaces.get(icn) is None => {
-              let mut has_sym_iter = false
-              let mut sym_iter_returns_this_only = false
-              let mut has_next = false
-              // A computed FIELD can also provide the protocol
-              // (`[Symbol.iterator]: any;` -- for-of27): its shape is
-              // unverifiable, so its presence silences the check.
-              for kexpr in icls.computed_field_keys {
-                if kexpr is PropAccess(Var("Symbol"), "iterator") {
-                  has_sym_iter = true
-                  has_next = true
-                }
-              }
-              // A FIELD named `next` (callable-typed or `any`) satisfies
-              // the iterator side too (for-of28).
-              for pr in icls.properties {
-                if !pr.is_static && pr.name == "next" {
-                  has_next = true
-                }
-              }
-              for m in icls.methods {
-                if !m.is_static {
-                  if m.name == "next" {
-                    has_next = true
-                  }
-                  if m.name == "<computed>" &&
-                    m.key_expr is Some(PropAccess(Var("Symbol"), "iterator")) {
-                    has_sym_iter = true
-                    match m.body {
-                      Some(b) => {
-                        let mut all_this = true
-                        let mut saw_return = false
-                        for st in b.stmts {
-                          match st {
-                            Return(Some(Var("this"))) => saw_return = true
-                            Return(_) => all_this = false
-                            _ => ()
-                          }
-                        }
-                        sym_iter_returns_this_only = saw_return && all_this
-                      }
-                      None => ()
-                    }
-                  }
-                }
-              }
-              if !has_sym_iter || (sym_iter_returns_this_only && !has_next) {
-                record(
-                  ctx,
-                  "for-of iterable",
-                  "type `\{icn}` must have a `[Symbol.iterator]()` method that returns an iterator",
-                )
-              }
-            }
-            _ => ()
-          }
-        _ => ()
-      }
+      // method returning an iterator (extracted; also used for array
+      // spreads and assignment-form destructuring).
+      check_iterable_class_protocol(ctx, iter_ty, "for-of iterable")
       let inferred_elem = for_of_element_type(ctx.resolver, iter_ty)
       let elem_ty = if is_checkable(declared) {
         // Validate the declared annotation against the actual element type.
@@ -14667,6 +14872,18 @@ fn check_call_args_in_expr(
     ArrayLit(items) =>
       for it in items {
         check_call_args_in_expr(env, it, ctx)
+        // TS2488: `[...v]` requires `v` to be iterable — a base-less class
+        // instance without `[Symbol.iterator]` never is
+        // (iteratorSpreadInArray8/10).
+        match it {
+          Spread(inner) =>
+            check_iterable_class_protocol(
+              ctx,
+              infer_expr(env, ctx.resolver, inner),
+              "array spread",
+            )
+          _ => ()
+        }
       }
     ObjectLit(entries) => {
       for ent in entries {
@@ -15150,6 +15367,24 @@ fn check_call_args_in_expr(
           match v {
             ObjectLit(src_entries) =>
               check_object_pattern_from_literal(ctx, ob2, src_entries)
+            _ => ()
+          }
+        // TS2488: `[a, b] = { 0: "", 1: true }` — an object literal is
+        // never iterable, so assignment-form array destructuring from one
+        // always fails (iterableArrayPattern23/24). Computed keys could be
+        // `[Symbol.iterator]`, so they silence the check.
+        @ast.TsBinding::Array(_) =>
+          match v {
+            ObjectLit(src_entries) =>
+              if !src_entries
+                .iter()
+                .any(fn(e) {
+                  e.1 is ComputedProp(_, _) || e.0.has_prefix("@@spread")
+                }) {
+                record_unfiltered(
+                  ctx, "destructuring assignment", "object literal must have a `[Symbol.iterator]()` method to be destructured as an array",
+                )
+              }
             _ => ()
           }
         _ => ()
@@ -22136,6 +22371,16 @@ fn check_module_function_bodies_layered(
     }
     for issue in issues {
       all.push({ path: "\{prefix} > \{issue.path}", message: issue.message })
+    }
+    // The grammar-misuse emission loop above runs only at the top level
+    // (its markers must not double-process), so surface a nested
+    // namespace body's PLAIN misuses here — e.g. TS1038 `declare` inside
+    // an already-ambient body (parserFunctionDeclaration1). Marker
+    // entries (`<…>`-prefixed) stay internal.
+    for gm in ns.module_.grammar_misuses {
+      if !gm.has_prefix("<") {
+        all.push({ path: "\{prefix} > grammar", message: gm })
+      }
     }
   }
   // tsc gates the TS2695 comma-operator check on `allowUnreachableCode`

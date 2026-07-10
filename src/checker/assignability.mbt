@@ -468,6 +468,18 @@ fn is_assignable_to_inner(
   if source == target {
     return true
   }
+  // A lib wrapper-object type is NOT assignable to its primitive
+  // (`Symbol` -> `symbol`, `String` -> `string`, …; tsc: "'symbol' is a
+  // primitive, but 'Symbol' is a wrapper object"). The primitive DOES flow
+  // into the wrapper, so only this direction is special-cased.
+  match (source, target) {
+    (Named("Symbol"), Symbol)
+    | (Named("String"), String_)
+    | (Named("Number"), Number | Int)
+    | (Named("Boolean"), Boolean)
+    | (Named("BigInt"), BigInt) => return false
+    _ => ()
+  }
   // `any` is the universal escape hatch — it flows in either direction.
   match target {
     Any => return true

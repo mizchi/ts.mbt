@@ -5,12 +5,17 @@
 ///|
 fn Parser::skip_param_decorators(self : Parser) -> Unit raise ParseError {
   while self.match_(At) {
-    let _ = self.parse_binding_ident()
-    while self.match_(Dot) {
+    // `@(expr)` decorator heads (`(@((t, k, i) => {}) p: any)` —
+    // legacyDecorators-contextualTypes) go straight to the balanced
+    // paren skip below; identifier heads consume their member chain.
+    if !self.check(LParen) {
       let _ = self.parse_binding_ident()
-    }
-    if self.check(Lt) {
-      self.skip_type_args()
+      while self.match_(Dot) {
+        let _ = self.parse_binding_ident()
+      }
+      if self.check(Lt) {
+        self.skip_type_args()
+      }
     }
     if self.check(LParen) {
       let _ = self.advance()
@@ -401,9 +406,11 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   for label in self.labels {
     prev_labels.push(label)
   }
-  if is_generator {
-    self.in_generator = true
-  }
+  // Mirror `in_async`: the body's generator-ness follows THIS function, so
+  // a plain function nested in a generator leaves the generator context
+  // (`function* foo() { function bar() { yield x; } }` — the inner `yield`
+  // is TS1163, YieldExpression16).
+  self.in_generator = is_generator
   // The body's async-ness follows THIS function (a non-async nested
   // function leaves the async context; an `async` one enters it -- `await`
   // is reserved in its type positions).
@@ -710,9 +717,11 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
   for label in self.labels {
     prev_labels.push(label)
   }
-  if is_generator {
-    self.in_generator = true
-  }
+  // Mirror `in_async`: the body's generator-ness follows THIS function, so
+  // a plain function nested in a generator leaves the generator context
+  // (`function* foo() { function bar() { yield x; } }` — the inner `yield`
+  // is TS1163, YieldExpression16).
+  self.in_generator = is_generator
   // The body's async-ness follows THIS function (a non-async nested
   // function leaves the async context; an `async` one enters it -- `await`
   // is reserved in its type positions).
@@ -2123,6 +2132,18 @@ fn Parser::parse_declare_values(
   self : Parser,
 ) -> Array[@ast.TsValueDecl] raise ParseError {
   let values : Array[@ast.TsValueDecl] = []
+  // A destructuring pattern in an ambient declaration (`declare var
+  // [a, b];`, declarationInAmbientContext) is tolerated: current tsc
+  // accepts it (the fixture has no error baseline despite its comment),
+  // so just skip the statement without recording anything.
+  match self.peek().kind {
+    LBracket | LBrace => {
+      self.skip_until_semicolon()
+      self.consume_semicolon()
+      return values
+    }
+    _ => ()
+  }
   // TS7005 (noImplicitAny): an ambient `declare var x;` with neither an
   // annotation nor an initializer implicitly has an `any` type -- unlike a
   // runtime `var x;`, no assignment can ever narrow it.

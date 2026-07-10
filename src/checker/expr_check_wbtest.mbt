@@ -7159,12 +7159,12 @@ test "expr_check: object assignment missing a required property is flagged (TS23
     #|declare var t: { x: number; y: number };
     #|t = a;
   let issues = check_module_function_bodies(parse_module_or_empty(src))
+  // (Now reported by the dedicated missing-required-property rule, which
+  // runs ahead of the generic mismatch.)
   assert_true(
     issues
     .iter()
-    .any(fn(i) {
-      i.message.contains("but got") && i.message.contains("y: number")
-    }),
+    .any(fn(i) { i.message.contains("`y`") && i.message.contains("missing") }),
   )
 }
 
@@ -12614,6 +12614,170 @@ test "expr_check: static-block TDZ, spread overwrite, enum readonly, await type 
   @test.assert_eq(
     issues(
       "type awaitAlias = number;\nfunction g() { var v: awaitAlias = 1; return v; }",
+    ),
+    0,
+  )
+}
+
+///|
+test "expr_check: wrapper primitives, construct sigs, index values, templates (batch AL)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Wrapper object -> primitive is an error; the reverse flows.
+  assert_true(
+    issues(
+      "declare var sym: symbol;\nvar symObj: Symbol;\nsymObj = sym;\nsym = symObj;",
+    ) >
+    0,
+  )
+  // Pure call signature never matches a construct-only target.
+  assert_true(
+    issues(
+      "interface T2 { new (x: number): void; }\ndeclare var t: T2;\ndeclare var f: (x: string) => number;\nt = f;",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "interface T2 { new (x: number): void; }\ndeclare var t: T2;\ndeclare var c: { new (x: number): void };\nt = c;",
+    ),
+    0,
+  )
+  // Missing required property between resolvable object shapes.
+  assert_true(
+    issues(
+      "declare var a: { a: string };\ndeclare var x: { a: string, b: string };\na = x;\nx = a;",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "declare var a: { a: string };\ndeclare var opt: { a: string, b?: string };\nopt = a;",
+    ),
+    0,
+  )
+  // Object-literal values against a string index signature.
+  assert_true(
+    issues(
+      "interface I { [s: string]: boolean; }\nvar o: I = { [\"\"+\"foo\"]: \"\" };",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "interface I { [s: string]: boolean; }\ndeclare var b: boolean;\nvar o: I = { [\"\"+\"k\"]: true, m: b };",
+    ),
+    0,
+  )
+  // Template cooked values normalize CRLF -> LF, so a physical-CRLF
+  // template mismatches a "\r\n"-escaped literal target.
+  assert_true(issues("let abc: \"AB\\r\\nC\" = `AB\r\nC`;") > 0)
+  @test.assert_eq(issues("let ok: \"AB\\nC\" = `AB\r\nC`;"), 0)
+}
+
+///|
+test "expr_check: abstract ctor typeof, iterable spreads/assign (batch AM)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2322: abstract constructor into a non-abstract `typeof` slot.
+  assert_true(
+    issues("class A {}\nabstract class B extends A {}\nvar AA: typeof A = B;") >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "class A {}\nabstract class B extends A {}\nvar BB: typeof B = A;\nvar B2: typeof B = B;",
+    ),
+    0,
+  )
+  // TS2488: array spread of a non-iterable class instance.
+  assert_true(
+    issues(
+      "class S { next() { return { value: 1, done: false }; } }\nvar a = [...new S];",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "class It { next() { return { value: 1, done: false }; } [Symbol.iterator]() { return this; } }\nvar a = [...new It];\nvar b = [...[1, 2], 3];",
+    ),
+    0,
+  )
+  // TS2488: assignment-form array destructuring from an object literal.
+  assert_true(
+    issues("var a: string, b: boolean;\n[a, b] = { 0: \"\", 1: true };") > 0,
+  )
+  @test.assert_eq(issues("var x: number, y: number;\n[x, y] = [1, 2];"), 0)
+}
+
+///|
+test "expr_check: legal-TS parse recoveries (batch AN)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // These previously failed to parse outright; they are legal TS and must
+  // produce zero issues.
+  @test.assert_eq(issues("namespace number {}\nnamespace number.a {}"), 0)
+  @test.assert_eq(
+    issues("declare function declare(...args: any[]): void;\ndeclare `hello`;"),
+    0,
+  )
+  @test.assert_eq(issues("declare var [a, b];\ndeclare var {c, d};"), 0)
+}
+
+///|
+test "expr_check: decorator/tagged-template parse recoveries (batch AO)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Tagged template with explicit type arguments parses as a call, not a
+  // comparison chain.
+  @test.assert_eq(
+    issues(
+      "declare function f<T>(strs: TemplateStringsArray): void;\nconst a = f<string> `hi`;",
+    ),
+    0,
+  )
+  // Decorator heads: non-null asserts, member chains after them, explicit
+  // type args, and instantiation expressions in parens.
+  @test.assert_eq(
+    issues(
+      "declare let x: any;\ndeclare let g: <T>(...args: any) => any;\n{ @x! class C {} }\n{ @x!.y class C {} }\n{ @g<number>() class C {} }\n{ @(g<number>) class C {} }",
+    ),
+    0,
+  )
+  // Parameter decorators with parenthesized expression heads.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nclass D { constructor(@((t, k, i) => {}) p: any) {} }",
+    ),
+    0,
+  )
+}
+
+///|
+test "expr_check: ambient declare, dup accessibility, non-generator yield, dts stmts (batch AP)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS1038: `declare` inside an already-ambient namespace body.
+  assert_true(
+    issues("declare namespace M {\n  declare function F(): void;\n}") > 0,
+  )
+  @test.assert_eq(issues("declare namespace M { function F(): void; }"), 0)
+  // TS1028: duplicate accessibility modifier.
+  assert_true(issues("class C { public public foo() { } }") > 0)
+  @test.assert_eq(issues("class C { public foo() {} private x = 1; }"), 0)
+  // TS1163: `yield <operand>` inside a non-generator (including a plain
+  // function nested in a generator).
+  assert_true(
+    issues("function* foo() {\n  function bar() {\n    yield foo;\n  }\n}") > 0,
+  )
+  @test.assert_eq(
+    issues(
+      "function* gen() { yield 1; yield* [1]; }\nfunction ng() { var yield2 = 1; return yield2; }",
     ),
     0,
   )

@@ -19,6 +19,9 @@ fn Parser::is_namespace_decl_start(self : Parser) -> Bool {
         "namespace" | "module" =>
           match self.peek_at(1).kind {
             Ident(_) | Str(_) | LBrace => true
+            // Primitive type keywords are legal namespace names
+            // (`namespace number {}` — parserModuleDeclaration6/7).
+            NumberType | StringType | BooleanType | IntType => true
             _ => false
           }
         _ => false

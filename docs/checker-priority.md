@@ -191,7 +191,11 @@
 
 実装順に関わらず、以下は **常に** 数値目標より優先する（明示指示）。
 
-1. **0 false positives** を維持（`scripts/checker_conformance_oracle.sh --max-fp 0`）。
+1. **0 false positives** を維持（`scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 1`）。
+   パース失敗は「拒否」として分類される: エラーベースラインを持つファイルの
+   パース拒否は一致（TP、`via parse rejection` として別掲）、tsc が受理する
+   ファイルのパース失敗は PFLEGAL（パーサのバグ）として `--max-legal-parsefail`
+   でゲートする（現在の予算 1 = parser768531 の正規表現曖昧性のみ）。
 2. テストスイート（現在 2379）と bridge プロダクトを壊さない。
 3. recall 数値を捏造しない・unsound なチェックを出さない。
 

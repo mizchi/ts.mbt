@@ -1574,25 +1574,66 @@ fn Parser::parse_decorator_expr(self : Parser) -> @ast.TsExpr? raise ParseError 
   let _ = self.match_(At)
   let head : @ast.TsExpr = match self.peek().kind {
     LParen => {
-      // `@(expr)` form. Use the standard parenthesized-expression
-      // parser so the captured expression is faithful.
+      // `@(expr)` form. Use the standard parenthesized-expression parser
+      // so the captured expression is faithful; shapes it can't model
+      // (instantiation expressions like `@(g<number>)` —
+      // esDecorators-decoratorExpression.2) fall back to a balanced skip
+      // with a placeholder head.
       let _ = self.advance()
-      let inner = self.parse_assignment()
-      let _ = self.expect(RParen)
-      inner
+      let saved = self.pos
+      let inner_opt : @ast.TsExpr? = try self.parse_assignment() catch {
+        _ => None
+      } noraise {
+        e => Some(e)
+      }
+      match inner_opt {
+        Some(inner) if self.check(RParen) => {
+          let _ = self.advance()
+          inner
+        }
+        _ => {
+          self.pos = saved
+          let mut depth = 1
+          while depth > 0 && !self.check(Eof) {
+            match self.peek().kind {
+              LParen => depth += 1
+              RParen => depth -= 1
+              _ => ()
+            }
+            let _ = self.advance()
+          }
+          Var("<decorator>")
+        }
+      }
     }
     Ident(_) => {
       let name = self.parse_binding_ident()
       let mut expr : @ast.TsExpr = Var(name)
-      // Member access chain `@a.b.c`.
-      while self.check(Dot) {
-        let _ = self.advance()
-        match self.peek().kind {
-          Ident(prop) => {
-            let _ = self.advance()
-            expr = PropAccess(expr, prop)
+      // Member / assertion chain: `@a.b.c`, `@x!`, `@x!.y`
+      // (esDecorators-decoratorExpression.2).
+      while true {
+        if self.check(Dot) {
+          let _ = self.advance()
+          match self.peek().kind {
+            Ident(prop) => {
+              let _ = self.advance()
+              expr = PropAccess(expr, prop)
+            }
+            _ => break
           }
-          _ => break
+        } else if self.check(Bang) {
+          let _ = self.advance()
+          expr = NonNull(expr)
+        } else {
+          break
+        }
+      }
+      // Explicit type arguments before the call form (`@g<number>()`).
+      if self.check(Lt) {
+        let saved = self.pos
+        match self.try_parse_simple_type_args() {
+          Some(_) => if !self.check(LParen) { self.pos = saved }
+          None => self.pos = saved
         }
       }
       expr
@@ -1868,6 +1909,11 @@ fn Parser::parse_class_body(
             let _ = self.advance()
             has_modifier = true
             if n == "public" || n == "private" || n == "protected" {
+              // TS1028: a second accessibility modifier on one member
+              // (`public public Foo()`, `private protected x`).
+              if saw_visibility_modifier {
+                self.grammar_misuses.push("accessibility modifier already seen")
+              }
               saw_visibility_modifier = true
               // TS1029 / TS1028: an accessibility modifier must precede
               // `static` / `async` / `readonly` / `override` / `abstract`

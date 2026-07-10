@@ -1780,6 +1780,17 @@ fn Lexer::scan_template_parts_with_raw(
             }
             None => break
           }
+        } else if c == '\r' {
+          // ES template cooked values normalize line terminators: a
+          // physical CRLF (or lone CR) contributes a single LF
+          // (stringLiteralTypesWithTemplateStrings02 relies on the cooked
+          // value differing from a `"\r\n"`-escaped string literal).
+          let _ = self.advance()
+          if self.peek() is Some('\n') {
+            let _ = self.advance()
+          }
+          cooked_buf.write_char('\n')
+          raw_buf.write_char('\n')
         } else {
           let _ = self.advance()
           cooked_buf.write_char(c)
