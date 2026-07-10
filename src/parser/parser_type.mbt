@@ -3,6 +3,59 @@
 // ============================================
 
 ///|
+/// The member-name spelling of a keyword token, for object-type members
+/// whose key happens to be a keyword (`{ type: T }`, `{ function: T }`).
+/// `New` is handled separately (construct-signature ambiguity).
+fn keyword_member_name(kind : TokenKind) -> String? {
+  match kind {
+    Type => Some("type")
+    Function => Some("function")
+    Class => Some("class")
+    Extends => Some("extends")
+    Var => Some("var")
+    Let => Some("let")
+    Const => Some("const")
+    Return => Some("return")
+    If => Some("if")
+    Else => Some("else")
+    Switch => Some("switch")
+    Case => Some("case")
+    Default => Some("default")
+    With => Some("with")
+    Debugger => Some("debugger")
+    Import => Some("import")
+    Export => Some("export")
+    From => Some("from")
+    As => Some("as")
+    While => Some("while")
+    Do => Some("do")
+    For => Some("for")
+    Break => Some("break")
+    Continue => Some("continue")
+    Try => Some("try")
+    Catch => Some("catch")
+    Finally => Some("finally")
+    Throw => Some("throw")
+    Yield => Some("yield")
+    Typeof => Some("typeof")
+    Delete => Some("delete")
+    Instanceof => Some("instanceof")
+    Interface => Some("interface")
+    Of => Some("of")
+    In => Some("in")
+    Declare => Some("declare")
+    Null => Some("null")
+    Bool(true) => Some("true")
+    Bool(false) => Some("false")
+    NumberType => Some("number")
+    BooleanType => Some("boolean")
+    StringType => Some("string")
+    VoidType => Some("void")
+    _ => None
+  }
+}
+
+///|
 /// Check if current token is an identifier
 fn Parser::is_ident(self : Parser) -> Bool {
   match self.peek().kind {
@@ -520,10 +573,18 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
           self.skip_type_params()
           "<call>"
         }
-        New => {
-          let _ = self.advance()
-          "<new>"
-        }
+        // `new` followed by a member-key token is a PROPERTY named
+        // `new` (`{ new: string }`); otherwise it heads a construct
+        // signature.
+        New =>
+          if self.peek_at(1).kind
+            is (Colon | Question | Semicolon | Comma | RBrace) {
+            let _ = self.advance()
+            "new"
+          } else {
+            let _ = self.advance()
+            "<new>"
+          }
         LBracket => {
           // Index signature `[k: K]: V`. The checker / mangle passes
           // encode these inside `Object` as a field keyed by the *key
@@ -577,6 +638,16 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
         Ident(n) => {
           let _ = self.advance()
           n
+        }
+        // Keyword-token member names (`{ type: string; … }`,
+        // `{ function: T }`, … — these lex as their own tokens). Only
+        // when the next token proves this is a member key, so
+        // `readonly` / call-signature shapes above keep their meaning.
+        k if keyword_member_name(k) is Some(kw) &&
+          self.peek_at(1).kind
+          is (Colon | Question | Semicolon | Comma | LParen | RBrace) => {
+          let _ = self.advance()
+          kw
         }
         Str(s) => {
           let _ = self.advance()

@@ -12832,3 +12832,61 @@ test "expr_check: predicate narrowing from any (batch AR)" {
     0,
   )
 }
+
+///|
+test "expr_check: keyword member names in object types (batch AS)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // `type` lexes as its own token; as an object-type member name followed
+  // by a method-signature member it used to collapse the whole annotation
+  // to Any, hiding every member check behind it.
+  assert_true(
+    issues(
+      "// @strict: false\ndeclare var v: { type: string; dontPanic(): void };\nv.doPanic();",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @strict: false\ndeclare var v: { type: string; dontPanic(): void };\nv.dontPanic();\nvar s: string = v.type;",
+    ),
+    0,
+  )
+  // The narrowing chain this unblocks: catch-var + predicate guard.
+  assert_true(
+    issues(
+      "// @strict: false\ndeclare function isFooError(x: any): x is { type: string; dontPanic(): void };\nfunction t() {\n  try { } catch (err) {\n    if (isFooError(err)) {\n      err.dontPanic();\n      err.doPanic();\n    }\n  }\n}",
+    ) >
+    0,
+  )
+}
+
+///|
+test "expr_check: generalized keyword member names (batch AT)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Keyword-keyed members no longer collapse the annotation to Any, so
+  // member misses behind them surface.
+  assert_true(
+    issues(
+      "// @strict: false\ndeclare var a: { function: string; m(): void };\na.other();",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "// @strict: false\ndeclare var c: { new: string; m(): void };\nc.other();",
+    ) >
+    0,
+  )
+  // Legal uses of keyword-keyed members, and construct/call signatures
+  // keep their meaning.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\ndeclare var a: { function: string; class: number; in: boolean; m(): void };\na.m();\nvar s: string = a.function;\nvar n: number = a.class;\ndeclare var h: { new (x: number): string };\nvar inst = new h(1);",
+    ),
+    0,
+  )
+}
