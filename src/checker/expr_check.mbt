@@ -71,6 +71,12 @@ priv struct Resolver {
   // as unknown and abstain.
   namespace_value_decls : Map[String, Map[String, Bool]]
   namespace_exports : Map[String, Map[String, Bool]]
+  // Names of overloaded tag functions: >= 2 bodyless overload signatures
+  // whose first parameter is the lib `TemplateStringsArray`, plus at most
+  // one implementation. A direct (non-template) call passing an array
+  // literal fails every overload (the `raw` member only exists on
+  // engine-created template objects), which is TS2769/TS2345.
+  template_tag_funcs : Map[String, Bool]
 }
 
 ///|
@@ -89,6 +95,7 @@ fn Resolver::empty() -> Resolver {
     private_brand_decls: {},
     namespace_value_decls: {},
     namespace_exports: {},
+    template_tag_funcs: {},
   }
 }
 
@@ -658,6 +665,31 @@ fn Resolver::ingest_module(
     r.func_const_type_params[prefix + f.name] = f.const_type_params
     if f.type_param_bounds.length() > 0 {
       r.func_type_param_bounds[prefix + f.name] = f.type_param_bounds
+    }
+  }
+  // Tag-function overload sets (see the `template_tag_funcs` field doc):
+  // group same-name declarations into bodyless overload signatures vs
+  // implementations; register only the unambiguous
+  // all-TemplateStringsArray shape.
+  let tag_groups : Map[String, (Int, Int, Bool)] = {}
+  for f in module_.funcs {
+    let is_sig_only = f.body.stmts.length() == 0
+    let tsa_first = f.params.length() > 0 &&
+      !f.params[0].is_rest &&
+      f.params[0].type_ is Named("TemplateStringsArray")
+    let cur = match tag_groups.get(f.name) {
+      Some(v) => v
+      None => (0, 0, true)
+    }
+    tag_groups[f.name] = (
+      cur.0 + (if is_sig_only { 1 } else { 0 }),
+      cur.1 + (if is_sig_only { 0 } else { 1 }),
+      cur.2 && (tsa_first || !is_sig_only),
+    )
+  }
+  for name, g in tag_groups {
+    if g.0 >= 2 && g.1 <= 1 && g.2 {
+      r.template_tag_funcs[prefix + name] = true
     }
   }
   for ns in module_.namespaces {
@@ -5652,6 +5684,46 @@ fn equality_primitive_family(t : @ast.TsType) -> String? {
 }
 
 ///|
+/// The compile-time string value of an interpolated template literal whose
+/// substitutions are all literal constants, or `None` when any substitution
+/// is non-constant or its JS string rendering isn't reproducible here
+/// (non-integer numbers keep JS `Number.prototype.toString` formatting
+/// edge cases out of scope).
+fn fold_constant_template(
+  parts : Array[String],
+  exprs : Array[@ast.TsExpr],
+) -> String? {
+  if parts.length() != exprs.length() + 1 {
+    return None
+  }
+  let buf = StringBuilder::new()
+  for i, e in exprs {
+    buf.write_string(parts[i])
+    match e {
+      StringLit(s) => buf.write_string(s)
+      BoolLit(b) => buf.write_string(if b { "true" } else { "false" })
+      IntLit(n) => buf.write_string(n.to_string())
+      NumberLit(d) =>
+        // Only integers render identically in JS and here; fractional /
+        // huge values hit exponent and shortest-round-trip formatting.
+        if d >= 0.0 && d < 1.0e15 && d == d.floor() {
+          buf.write_string(d.to_int64().to_string())
+        } else {
+          return None
+        }
+      TemplateLiteral(inner_parts, inner_exprs) =>
+        match fold_constant_template(inner_parts, inner_exprs) {
+          Some(s) => buf.write_string(s)
+          None => return None
+        }
+      _ => return None
+    }
+  }
+  buf.write_string(parts[parts.length() - 1])
+  Some(buf.to_string())
+}
+
+///|
 fn wrap_async_return(is_async : Bool, ret : @ast.TsType) -> @ast.TsType {
   if !is_async {
     return ret
@@ -5771,7 +5843,13 @@ fn infer_expr(
                 }
                 u
               }
-              _ => @ast.TsType::Any
+              // `[...new StringIterator]` — spreading a hand-rolled
+              // iterator class yields its `next()` element type.
+              other =>
+                match iterator_class_element_type(resolver, other) {
+                  Some(el) => el
+                  None => @ast.TsType::Any
+                }
             }
           _ => infer_expr(env, resolver, item)
         }
@@ -5905,6 +5983,40 @@ fn infer_expr(
         None => {
           for a in args {
             let _ = infer_expr(env, resolver, a)
+          }
+          // Lib `Map` with a uniform entry array infers `Map<K, V>` from
+          // the literal-widened first pair, so downstream iteration /
+          // spread checks see `[K, V]` elements
+          // (`...new Map([["", true]])` against `[string, number][]` is
+          // TS2345 — iterableArrayPattern29). Mixed pairs (flagged
+          // separately as a constructor-overload failure) stay `Any`.
+          if class_name == "Map" &&
+            resolver.classes.get("Map") is None &&
+            resolver.interfaces.get("Map") is None &&
+            args.length() == 1 &&
+            args[0] is ArrayLit(entries) &&
+            entries.length() > 0 {
+            let mut k0 : @ast.TsType = Any
+            let mut v0 : @ast.TsType = Any
+            let mut uniform = true
+            for i, e in entries {
+              match e {
+                ArrayLit([k, v]) => {
+                  let kt = widen_literal(infer_expr(env, resolver, k))
+                  let vt = widen_literal(infer_expr(env, resolver, v))
+                  if i == 0 {
+                    k0 = kt
+                    v0 = vt
+                  } else if kt != k0 || vt != v0 {
+                    uniform = false
+                  }
+                }
+                _ => uniform = false
+              }
+            }
+            if uniform && is_checkable(k0) && is_checkable(v0) {
+              return @ast.TsType::Applied("Map", [k0, v0])
+            }
           }
           @ast.TsType::Any
         }
@@ -6285,7 +6397,14 @@ fn infer_expr(
       if exprs.length() == 0 && parts.length() == 1 {
         @ast.TsType::Literal(parts[0])
       } else {
-        @ast.TsType::String_
+        // tsc folds a template whose substitutions are all literal
+        // constants into the resulting string-literal type before
+        // widening (`` `abc${0}abc` `` is `"abc0abc"` in a comparison),
+        // which is what feeds the TS2367 overlap check.
+        match fold_constant_template(parts, exprs) {
+          Some(s) => @ast.TsType::Literal(s)
+          None => @ast.TsType::String_
+        }
       }
     // `x as T` — forced cast; result type is `T`. We still walk `inner` so
     // any nested call sites are validated.
@@ -6641,7 +6760,25 @@ fn solve_generic_bindings(
         let actual = infer_expr(env, resolver, args[i])
         match args[i] {
           Spread(_) =>
-            infer_param_bindings(type_params, rest_arr, actual, bindings, true)
+            // A spread of a hand-rolled iterator class contributes its
+            // ELEMENT type (`foo(...new SymbolIterator)` binds `T` to
+            // `symbol`), not the class itself. The contribution flows
+            // through the iterable protocol — a nested inference position
+            // in tsc — so it PINS first-wins rather than widening into a
+            // union: the second spread's mismatching element is an error
+            // (iteratorSpreadInCall7), unlike plain rest arguments.
+            match iterator_class_element_type(resolver, actual) {
+              Some(el) =>
+                infer_param_bindings(type_params, elem, el, bindings, false)
+              None =>
+                // Array-typed spreads (`...[...it]`, `...arr`) infer
+                // `number[] -> T[]` — a NESTED position, so they pin
+                // first-wins too (iteratorSpreadInCall9); only direct rest
+                // arguments union across positions.
+                infer_param_bindings(
+                  type_params, rest_arr, actual, bindings, false,
+                )
+            }
           _ => infer_param_bindings(type_params, elem, actual, bindings, true)
         }
         i = i + 1
@@ -6661,6 +6798,82 @@ fn solve_generic_bindings(
     i = i + 1
   }
   bindings
+}
+
+///|
+/// Element type produced by iterating a hand-rolled iterator class: one that
+/// declares `[Symbol.iterator]()` and whose `next()` yields `{ value: V }`.
+/// `V` comes from the annotated return type when present, otherwise from a
+/// `return { value: ..., done: ... }` object literal in the body (inferred
+/// in a fresh env and literal-widened, matching how tsc spreads
+/// `...new SymbolIterator` as `symbol`s). Returns `None` for anything the
+/// shape doesn't pin down exactly: base classes, generics, interface
+/// merges, or a missing/opaque `next`.
+fn iterator_class_element_type(
+  resolver : Resolver,
+  t : @ast.TsType,
+) -> @ast.TsType? {
+  guard resolver.unwrap(t) is Named(n) else { return None }
+  guard resolver.classes.get(n) is Some(cls) else { return None }
+  guard cls.base_names.length() == 0 &&
+    cls.base_expr is None &&
+    cls.type_params.length() == 0 &&
+    resolver.interfaces.get(n) is None else {
+    return None
+  }
+  let mut has_sym_iter = false
+  for m in cls.methods {
+    if !m.is_static &&
+      m.name == "<computed>" &&
+      m.key_expr is Some(PropAccess(Var("Symbol"), "iterator")) {
+      has_sym_iter = true
+    }
+  }
+  guard has_sym_iter else { return None }
+  for m in cls.methods {
+    if m.is_static || m.name != "next" {
+      continue
+    }
+    // Annotated `next(): { value: V; done: boolean }`.
+    match m.return_type {
+      Object(fields) =>
+        for f in fields {
+          if f.0 is Literal("value") {
+            return Some(f.1)
+          }
+        }
+      _ => ()
+    }
+    // Unannotated: read the returned object literal's `value` property.
+    match m.body {
+      Some(b) =>
+        for st in b.stmts {
+          match st {
+            Return(Some(ObjectLit(props))) =>
+              for kv in props {
+                if kv.0 == "value" {
+                  // `Symbol()` has no global call model in `infer_expr`
+                  // (the lib global isn't a function value there), so map
+                  // it directly — the iterator fixtures build symbol
+                  // elements this way.
+                  match kv.1 {
+                    Call("Symbol", _) => return Some(@ast.TsType::Symbol)
+                    other =>
+                      return Some(
+                        widen_literal(
+                          infer_expr(ExprEnv::new(), resolver, other),
+                        ),
+                      )
+                  }
+                }
+              }
+            _ => ()
+          }
+        }
+      None => ()
+    }
+  }
+  None
 }
 
 ///|
@@ -10902,6 +11115,67 @@ fn check_arguments(
 }
 
 ///|
+/// True when `meth` on receiver type `recv` resolves to a method declared
+/// EXACTLY ONCE across a module-declared interface and its (depth-limited)
+/// extends chain, with no rest parameter and no generic method type params.
+/// Such a signature's arity is exact — interfaces cannot declare parameter
+/// defaults, and `?` optionality is widened into the parameter type — so an
+/// arity diagnostic against it is reliable. Classes are excluded (method
+/// implementations may carry defaults the recorded types don't show).
+fn interface_method_arity_reliable(
+  resolver : Resolver,
+  recv : @ast.TsType,
+  meth : String,
+) -> Bool {
+  guard resolver.unwrap(recv) is Named(n) else { return false }
+  let mut count = 0
+  let mut sig_ty : @ast.TsType? = None
+  let mut generic = false
+  fn walk(name : String, depth : Int) -> Unit {
+    if depth > 8 {
+      count += 2 // force-bail on suspiciously deep chains
+      return
+    }
+    match resolver.interfaces.get(name) {
+      Some(iface) => {
+        for f in iface.fields {
+          if f.0 == meth {
+            count += 1
+            sig_ty = Some(f.1)
+          }
+        }
+        for pair in iface.method_type_params {
+          if pair.0 == meth && pair.1.length() > 0 {
+            generic = true
+          }
+        }
+        for base in iface.extends_names {
+          walk(base, depth + 1)
+        }
+      }
+      None =>
+        // An unresolvable base could contribute overloads we can't see.
+        count += 2
+    }
+  }
+  walk(n, 0)
+  if count != 1 || generic {
+    return false
+  }
+  match sig_ty {
+    Some(Func(ps, _)) => {
+      for p in ps {
+        if p is Rest(_) {
+          return false
+        }
+      }
+      true
+    }
+    _ => false
+  }
+}
+
+///|
 /// Variant of `check_arguments` that takes the rich `TsParam` list when
 /// available, so optional / default / rest parameters are honored on arity
 /// checks. `param_types` is the simplified types array (already lifted out
@@ -11109,9 +11383,47 @@ fn check_arguments_with_sig(
           has_rest = true
         }
       }
-      let min_ = required_arity(ps)
-      let max_ = if has_rest { -1 } else { ps.length() }
-      (min_, max_)
+      // An UNANNOTATED rest parameter destructured by a fixed-length array
+      // pattern (`function f(...[[k1, v1], [k2, v2]]) {}`) behaves as
+      // exactly that many required parameters — tsc reports "Expected 2
+      // arguments", not an open-ended rest. A declared tuple type on the
+      // rest param can carry its own optionality, so only the
+      // annotation-free form pins the count.
+      let mut fixed_rest_len = -1
+      if has_rest && ps.length() > 0 && ps[ps.length() - 1].is_rest {
+        let last = ps[ps.length() - 1]
+        if last.type_ is Any {
+          match last.binding {
+            Some(Array(ab)) =>
+              if ab.rest is None {
+                let mut fixed = true
+                let mut n = 0
+                for it in ab.items {
+                  match it {
+                    Some(el) => {
+                      if el.default is Some(_) {
+                        fixed = false
+                      }
+                      n += 1
+                    }
+                    None => fixed = false
+                  }
+                }
+                if fixed && n > 0 {
+                  fixed_rest_len = n
+                }
+              }
+            _ => ()
+          }
+        }
+      }
+      if fixed_rest_len >= 0 {
+        (required_arity(ps) + fixed_rest_len, ps.length() - 1 + fixed_rest_len)
+      } else {
+        let min_ = required_arity(ps)
+        let max_ = if has_rest { -1 } else { ps.length() }
+        (min_, max_)
+      }
     }
     None => {
       // No rich `TsParam` metadata (e.g. calling a value typed as
@@ -14302,6 +14614,25 @@ fn check_call_args_in_expr(
             Some(params) =>
               check_arguments(env, params, args, ctx, "call `\{name}`")
             None => {
+              // TS2345 for a direct (non-template) call to a tag-function
+              // overload set: every overload's first parameter is the lib
+              // `TemplateStringsArray`, and no array literal can satisfy
+              // it (the `raw` property only exists on engine-created
+              // template objects), so `foo([])` / `foo([], 1)` fail every
+              // overload (taggedTemplateStringsWithOverloadResolution1).
+              // A module-declared `TemplateStringsArray` interface or a
+              // local binding shadowing the function name abstains.
+              if args.length() > 0 &&
+                args[0] is ArrayLit(_) &&
+                env.lookup(name) is None &&
+                ctx.resolver.interfaces.get("TemplateStringsArray") is None &&
+                ctx.resolver.template_tag_funcs.get(name) is Some(_) {
+                record(
+                  ctx,
+                  "call `\{name}`",
+                  "an array literal is not assignable to parameter of type `TemplateStringsArray`",
+                )
+              }
               // Overload sets also ingest as a `Union` of `Func`s; a call
               // needs only ONE overload to match, so the every-member arity
               // rule applies solely to union-typed *values* (names with no
@@ -14426,7 +14757,26 @@ fn check_call_args_in_expr(
             let pruned = prune_nullish(ctx.resolver, recv_ty)
             match ctx.resolver.lookup_method_sig(pruned, meth) {
               Some((params, _)) =>
-                check_arguments(env, params, args, ctx, "call `\{meth}`")
+                // A method declared exactly once on a module-declared
+                // INTERFACE has an exact arity: interfaces can't carry
+                // parameter defaults, `?` optionality is widened into the
+                // type, and overloads would appear as repeated fields.
+                // That makes the count reliable enough to bypass the
+                // permissive arity suppression (`action.run(...[100,
+                // 'foo'])` against `run(event?: unknown)` is TS2554).
+                check_arguments_with_sig(
+                  env,
+                  params,
+                  None,
+                  args,
+                  ctx,
+                  "call `\{meth}`",
+                  arity_reliable=interface_method_arity_reliable(
+                    ctx.resolver,
+                    pruned,
+                    meth,
+                  ),
+                )
               None =>
                 // If the receiver has a concrete shape and we can't find the
                 // method, flag it — but be conservative and skip Any/primitives
@@ -14483,11 +14833,82 @@ fn check_call_args_in_expr(
         )
         let _ = ctx.unassigned.remove(class_name)
       }
+      // TS2769 for the lib `Map` constructor with a mixed entry array:
+      // `new Map([["", true], ["", 0]])` has no single (K, V)
+      // instantiation, so no constructor overload matches (for-of39,
+      // iterableArrayPattern28). Explicit type arguments (`new Map<K, V>
+      // (...)`) parse into a `TypeArgs` wrapper and never reach this bare
+      // `New` shape, so a widening annotation can't false-positive here.
+      // A user-declared `Map` class or binding shadows the lib type and
+      // abstains.
+      if class_name == "Map" &&
+        ctx.resolver.classes.get("Map") is None &&
+        ctx.resolver.interfaces.get("Map") is None &&
+        env.lookup("Map") is None &&
+        args.length() == 1 &&
+        args[0] is ArrayLit(entries) &&
+        entries.length() >= 2 {
+        let mut all_pairs = true
+        let pairs : Array[(@ast.TsType, @ast.TsType)] = []
+        for e in entries {
+          match e {
+            ArrayLit([k, v]) => {
+              let kt = widen_literal(infer_expr(env, ctx.resolver, k))
+              let vt = widen_literal(infer_expr(env, ctx.resolver, v))
+              pairs.push((kt, vt))
+            }
+            _ => all_pairs = false
+          }
+        }
+        if all_pairs && pairs.length() >= 2 {
+          let (k0, v0) = pairs[0]
+          let mut mixed = false
+          for idx in 1..<pairs.length() {
+            let (ki, vi) = pairs[idx]
+            if is_checkable(k0) &&
+              is_checkable(ki) &&
+              !is_assignable_to(ki, k0) &&
+              !is_assignable_to(k0, ki) {
+              mixed = true
+            }
+            if is_checkable(v0) &&
+              is_checkable(vi) &&
+              !is_assignable_to(vi, v0) &&
+              !is_assignable_to(v0, vi) {
+              mixed = true
+            }
+          }
+          if mixed {
+            record(
+              ctx, "new `Map`", "no overload of the `Map` constructor matches this mixed entry array",
+            )
+          }
+        }
+      }
       match ctx.resolver.lookup_constructor_sig(class_name) {
         Some((params, sig)) => {
+          // Generic class: infer the constructor's type-param bindings from
+          // the arguments (mirroring the direct-call path) so `new Foo(...
+          // new SymbolIterator, ...new _StringIterator)` with
+          // `constructor(...s: T[])` pins `T` from the first argument and
+          // checks the rest against it.
+          let substituted_params = match ctx.resolver.classes.get(class_name) {
+            Some(cls) if cls.type_params.length() > 0 => {
+              let bindings = solve_generic_bindings(
+                env,
+                ctx.resolver,
+                cls.type_params,
+                params,
+                args,
+                Some(sig),
+              )
+              substitute_params_array(params, bindings)
+            }
+            _ => params
+          }
           check_arguments_with_sig(
             env,
-            params,
+            substituted_params,
             Some(sig),
             args,
             ctx,
@@ -20457,6 +20878,129 @@ fn check_structural_duplicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
 }
 
 ///|
+/// TS2428: every declaration of a merged interface must carry an identical
+/// type parameter list — same arity, same names in the same order, and (when
+/// both declarations constrain a parameter) identical constraints. tsc
+/// relaxes the constraint comparison when one declaration omits it
+/// (`interface C<T>` merges fine with `interface C<T extends number>`), so a
+/// one-sided bound never flags. Runs per module scope: the caller invokes it
+/// once per namespace layer, which matches tsc's declaration spaces — two
+/// non-exported interfaces in *separate* blocks of the same namespace do not
+/// merge and are never compared here.
+fn check_interface_merge_type_params(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  let first : Map[String, @ast.TsInterface] = {}
+  let reported : Map[String, Bool] = {}
+  for iface in module_.interfaces {
+    match first.get(iface.name) {
+      None => first[iface.name] = iface
+      Some(prev) =>
+        if !(reported.get(iface.name) is Some(_)) &&
+          !interface_type_params_identical(resolver, prev, iface) {
+          reported[iface.name] = true
+          issues.push({
+            path: "interface \{iface.name}",
+            message: "all declarations of `\{iface.name}` must have identical type parameters",
+          })
+        }
+    }
+  }
+  issues
+}
+
+///|
+fn interface_type_params_identical(
+  resolver : Resolver,
+  a : @ast.TsInterface,
+  b : @ast.TsInterface,
+) -> Bool {
+  if a.type_params.length() != b.type_params.length() {
+    return false
+  }
+  for i, tp in a.type_params {
+    if b.type_params[i] != tp {
+      return false
+    }
+  }
+  for tp in a.type_params {
+    match (interface_param_bound(a, tp), interface_param_bound(b, tp)) {
+      (Some(x), Some(y)) =>
+        if interface_bound_differs(resolver, x, y) {
+          return false
+        }
+      // One-sided constraint: tsc skips the comparison entirely.
+      _ => ()
+    }
+  }
+  true
+}
+
+///|
+fn interface_param_bound(
+  iface : @ast.TsInterface,
+  param : String,
+) -> @ast.TsType? {
+  for pair in iface.type_param_bounds {
+    if pair.0 == param {
+      return Some(pair.1)
+    }
+  }
+  None
+}
+
+///|
+/// True when two interface type-parameter constraints are *definitely*
+/// non-identical. Spelling differences must never flag, so identity is
+/// decided in stages: raw AST equality, alias-unwrapped equality, canonical
+/// `identity_key` comparison, and finally a nominal head comparison for
+/// reference types the canonicalizer can't expand (lib names like `Date` /
+/// `Number` have no module declaration, so their keys are `None` — but two
+/// different unresolvable names are distinct types to tsc).
+fn interface_bound_differs(
+  resolver : Resolver,
+  x : @ast.TsType,
+  y : @ast.TsType,
+) -> Bool {
+  if x == y {
+    return false
+  }
+  let ux = resolver.unwrap(x)
+  let uy = resolver.unwrap(y)
+  if ux == uy {
+    return false
+  }
+  match (identity_key(ux, resolver, 0), identity_key(uy, resolver, 0)) {
+    (Some(a), Some(b)) => a != b
+    _ =>
+      match (ux, uy) {
+        (Named(a), Named(b)) => a != b
+        (Applied(a, xs), Applied(b, ys)) =>
+          if a != b {
+            true
+          } else if xs.length() != ys.length() {
+            true
+          } else {
+            let mut differs = false
+            for i, xa in xs {
+              if interface_bound_differs(resolver, xa, ys[i]) {
+                differs = true
+                break
+              }
+            }
+            differs
+          }
+        // A parsed literal `any` bound against a concrete reference:
+        // tsc's identity relation only equates `any` with itself.
+        (Named(_), Any) | (Any, Named(_)) => true
+        _ => false
+      }
+  }
+}
+
+///|
 /// True when `name` is a single uppercase ASCII letter (`T`, `U`, `K`, …).
 /// Such names are, by overwhelming convention, generic type parameters —
 /// never library / global types — so an *unresolved* one is reliably an
@@ -21878,6 +22422,9 @@ fn check_module_function_bodies_layered(
     all.push(issue)
   }
   for issue in check_structural_duplicates(module_) {
+    all.push(issue)
+  }
+  for issue in check_interface_merge_type_params(module_, resolver) {
     all.push(issue)
   }
   // TS2304 for single-letter out-of-scope type parameters. Run once at the

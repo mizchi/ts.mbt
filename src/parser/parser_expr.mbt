@@ -550,9 +550,10 @@ fn Parser::parse_object_method_value(
   let prev_generator = self.in_generator
   let prev_function = self.in_function
   let prev_async = self.in_async
-  if is_generator {
-    self.in_generator = true
-  }
+  // Assign (not just set-when-true): a non-generator function expression
+  // inside a generator body must not inherit the outer generator context
+  // (`yield <operand>` in its body is TS1163).
+  self.in_generator = is_generator
   self.in_function = true
   self.in_async = is_async
   let body = self.parse_block()
@@ -684,7 +685,10 @@ fn Parser::parse_single_param_arrow(
     while self.labels.length() > 0 {
       let _ = self.labels.pop()
     }
+    let prev_generator = self.in_generator
+    self.in_generator = false
     let block = self.parse_block()
+    self.in_generator = prev_generator
     self.in_function = prev_function
     self.in_iteration = prev_iteration
     self.in_switch = prev_switch
@@ -696,7 +700,10 @@ fn Parser::parse_single_param_arrow(
     }
     @ast.TsArrowBody::ArrowBlock(block)
   } else {
+    let prev_generator = self.in_generator
+    self.in_generator = false
     let expr = self.parse_assignment()
+    self.in_generator = prev_generator
     ArrowExpr(expr)
   }
   ArrowFunc(
@@ -1196,6 +1203,13 @@ fn Parser::parse_parenthesized_expr(
   if !temp.check(Eof) {
     raise ParseError("Expected RParen, got \{temp.peek().kind}")
   }
+  // The temp parser records grammar misuses into its own channel; without
+  // this hand-off a misuse inside a parenthesized expression (`({ b:
+  // yield 2 })` in a non-generator context) silently vanishes. Appending
+  // here keeps the parse-order position the emission loop relies on.
+  for gm in temp.grammar_misuses {
+    self.grammar_misuses.push(gm)
+  }
   self.pos = end_idx + 1
   expr
 }
@@ -1268,6 +1282,11 @@ fn Parser::parse_expr_until_top_level(
   let expr = temp.parse_expr()
   if !temp.check(Eof) {
     raise ParseError("Expected \{terminator}, got \{temp.peek().kind}")
+  }
+  // Same grammar-misuse hand-off as the parenthesized-expression helper
+  // above: the temp parser's recordings would otherwise vanish.
+  for gm in temp.grammar_misuses {
+    self.grammar_misuses.push(gm)
   }
   self.pos = end_idx
   expr
@@ -2514,7 +2533,10 @@ fn Parser::parse_generic_arrow_function(
     while self.labels.length() > 0 {
       let _ = self.labels.pop()
     }
+    let prev_generator = self.in_generator
+    self.in_generator = false
     let block = self.parse_block()
+    self.in_generator = prev_generator
     self.in_function = prev_function
     self.in_iteration = prev_iteration
     self.in_switch = prev_switch
@@ -2526,7 +2548,10 @@ fn Parser::parse_generic_arrow_function(
     }
     @ast.TsArrowBody::ArrowBlock(block)
   } else {
+    let prev_generator = self.in_generator
+    self.in_generator = false
     let expr = self.parse_assignment()
+    self.in_generator = prev_generator
     ArrowExpr(expr)
   }
   ArrowFunc(params, return_type, body, false)
@@ -2825,7 +2850,10 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
           while self.labels.length() > 0 {
             let _ = self.labels.pop()
           }
+          let prev_generator = self.in_generator
+          self.in_generator = false
           let block = self.parse_block()
+          self.in_generator = prev_generator
           self.in_function = prev_function
           self.in_iteration = prev_iteration
           self.in_switch = prev_switch
@@ -2838,7 +2866,10 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
           }
           @ast.TsArrowBody::ArrowBlock(block)
         } else {
+          let prev_generator = self.in_generator
+          self.in_generator = false
           let expr = self.parse_assignment()
+          self.in_generator = prev_generator
           ArrowExpr(expr)
         }
         ArrowFunc(
@@ -2927,7 +2958,10 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
               while self.labels.length() > 0 {
                 let _ = self.labels.pop()
               }
+              let prev_generator = self.in_generator
+              self.in_generator = false
               let block = self.parse_block()
+              self.in_generator = prev_generator
               self.in_function = prev_function
               self.in_iteration = prev_iteration
               self.in_switch = prev_switch
@@ -2940,7 +2974,10 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
               }
               @ast.TsArrowBody::ArrowBlock(block)
             } else {
+              let prev_generator = self.in_generator
+              self.in_generator = false
               let expr = self.parse_assignment()
+              self.in_generator = prev_generator
               ArrowExpr(expr)
             }
             ArrowFunc(params, return_type, body, false)
@@ -2976,7 +3013,10 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
             while self.labels.length() > 0 {
               let _ = self.labels.pop()
             }
+            let prev_generator = self.in_generator
+            self.in_generator = false
             let block = self.parse_block()
+            self.in_generator = prev_generator
             self.in_function = prev_function
             self.in_iteration = prev_iteration
             self.in_switch = prev_switch
@@ -2989,7 +3029,10 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
             }
             @ast.TsArrowBody::ArrowBlock(block)
           } else {
+            let prev_generator = self.in_generator
+            self.in_generator = false
             let expr = self.parse_assignment()
+            self.in_generator = prev_generator
             ArrowExpr(expr)
           }
           ArrowFunc(params, return_type, body, false)
@@ -3025,7 +3068,10 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
           while self.labels.length() > 0 {
             let _ = self.labels.pop()
           }
+          let prev_generator = self.in_generator
+          self.in_generator = false
           let block = self.parse_block()
+          self.in_generator = prev_generator
           self.in_function = prev_function
           self.in_iteration = prev_iteration
           self.in_switch = prev_switch
@@ -3038,7 +3084,10 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
           }
           @ast.TsArrowBody::ArrowBlock(block)
         } else {
+          let prev_generator = self.in_generator
+          self.in_generator = false
           let expr = self.parse_assignment()
+          self.in_generator = prev_generator
           ArrowExpr(expr)
         }
         ArrowFunc(params, return_type, body, false)
@@ -4111,7 +4160,10 @@ fn Parser::parse_async_arrow_function(
         while self.labels.length() > 0 {
           let _ = self.labels.pop()
         }
+        let prev_generator = self.in_generator
+        self.in_generator = false
         let block = self.parse_block()
+        self.in_generator = prev_generator
         self.in_function = prev_function
         self.in_iteration = prev_iteration
         self.in_switch = prev_switch
@@ -4123,7 +4175,10 @@ fn Parser::parse_async_arrow_function(
         }
         @ast.TsArrowBody::ArrowBlock(block)
       } else {
+        let prev_generator = self.in_generator
+        self.in_generator = false
         let expr = self.parse_assignment()
+        self.in_generator = prev_generator
         ArrowExpr(expr)
       }
       self.in_async = prev_async
@@ -4181,7 +4236,10 @@ fn Parser::parse_async_arrow_function(
     while self.labels.length() > 0 {
       let _ = self.labels.pop()
     }
+    let prev_generator = self.in_generator
+    self.in_generator = false
     let block = self.parse_block()
+    self.in_generator = prev_generator
     self.in_function = prev_function
     self.in_iteration = prev_iteration
     self.in_switch = prev_switch
@@ -4193,7 +4251,10 @@ fn Parser::parse_async_arrow_function(
     }
     @ast.TsArrowBody::ArrowBlock(block)
   } else {
+    let prev_generator = self.in_generator
+    self.in_generator = false
     let expr = self.parse_assignment()
+    self.in_generator = prev_generator
     ArrowExpr(expr)
   }
   self.in_async = prev_async

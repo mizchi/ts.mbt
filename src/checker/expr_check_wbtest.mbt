@@ -12890,3 +12890,339 @@ test "expr_check: generalized keyword member names (batch AT)" {
     0,
   )
 }
+
+///|
+test "expr_check: TS2428 interface merge type-param identity (batch AU)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Generic + non-generic declarations of one name never merge.
+  assert_true(
+    issues(
+      "// @strict: false\ninterface A { foo: string; }\ninterface A<T> { bar: T; }",
+    ) >
+    0,
+  )
+  // Same arity, different parameter names.
+  assert_true(
+    issues(
+      "// @strict: false\ninterface A<T> { x: T; }\ninterface A<U> { y: U; }",
+    ) >
+    0,
+  )
+  // Different arity.
+  assert_true(
+    issues(
+      "// @strict: false\ninterface A<T> { x: T; }\ninterface A<T, U> { y: U; }",
+    ) >
+    0,
+  )
+  // Both constrained, different constraints.
+  assert_true(
+    issues(
+      "// @strict: false\ninterface A<T extends Date> { x: T; }\ninterface A<T extends Number> { y: T; }",
+    ) >
+    0,
+  )
+  // Same head, one argument `any` vs a concrete reference.
+  assert_true(
+    issues(
+      "// @strict: false\ninterface B<T> { x: T; }\ninterface C<T extends B<Date>> { x: T; }\ninterface C<T extends B<any>> { y: T; }",
+    ) >
+    0,
+  )
+  // Pins: legal merges stay silent.
+  // Identical lists merge.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\ninterface A<T> { x: T; }\ninterface A<T> { y: T; }",
+    ),
+    0,
+  )
+  // One-sided constraint is exempt from the comparison (both directions).
+  @test.assert_eq(
+    issues(
+      "// @strict: false\ninterface B<T extends number> { u: T; }\ninterface B<T> { x: T; }\ninterface C<T> { x: T; }\ninterface C<T extends number> { y: T; }",
+    ),
+    0,
+  )
+  // Alias spelling of the same constraint is identical after unwrap.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\ntype N = number;\ninterface I<T extends N> { x: T; }\ninterface I<T extends number> { y: T; }",
+    ),
+    0,
+  )
+  // Union member order is canonicalized before comparing.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\ninterface J<T extends string | number> { x: T; }\ninterface J<T extends number | string> { y: T; }",
+    ),
+    0,
+  )
+  // Non-exported interfaces in separate blocks of one namespace do not
+  // merge (different declaration spaces).
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nnamespace M2 { interface A { foo: string; } }\nnamespace M2 { interface A<T> { bar: T; } }",
+    ),
+    0,
+  )
+}
+
+///|
+test "expr_check: constant template folding feeds TS2367 (batch AU)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Literal substitutions fold to the resulting string-literal type, so
+  // disjoint comparisons surface (templateStringInEqualityChecks).
+  assert_true(issues("// @strict: false\nvar x = `abc${0}abc` === `abc`;") > 0)
+  assert_true(issues("// @strict: false\nvar x = `abc` !== `abc${0}abc`;") > 0)
+  assert_true(
+    issues("// @strict: false\nvar x = `a${\"b\"}c` === \"other\";") > 0,
+  )
+  // Pins: identical folds overlap; non-constant substitutions stay
+  // `string` (never flagged); widening keeps reassignment legal.
+  @test.assert_eq(
+    issues("// @strict: false\nvar x = `abc${0}abc` == \"abc0abc\";"),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @strict: false\ndeclare var n: number;\nvar x = `abc${n}abc` === `abc`;",
+    ),
+    0,
+  )
+  // Parity pin: a folded template init behaves exactly like the same
+  // string written as a plain literal init — folding introduces no new
+  // reassignment behavior on top of the existing literal handling.
+  @test.assert_eq(
+    issues("// @strict: false\nvar x = `a${0}`;\nx = \"other\";"),
+    issues("// @strict: false\nvar x = \"a0\";\nx = \"other\";"),
+  )
+  // Fractional / huge numbers are not folded (JS formatting edge cases).
+  @test.assert_eq(issues("// @strict: false\nvar x = `a${0.5}` === `a`;"), 0)
+}
+
+///|
+test "expr_check: TS1163 yield contexts inside generators (batch AV)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Arrow bodies never inherit the generator context.
+  assert_true(
+    issues(
+      "// @strict: false\nfunction* g() {\n  return () => ({ b: yield 2 });\n}",
+    ) >
+    0,
+  )
+  assert_true(
+    issues("// @strict: false\nfunction* g() {\n  var f = x => yield 2;\n}") > 0,
+  )
+  // Class field initializers (instance and static) are their own context.
+  assert_true(
+    issues(
+      "// @strict: false\nfunction* g() {\n  class C {\n    x = yield 0;\n  }\n}",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "// @strict: false\nfunction* g() {\n  class C {\n    static x = yield 0;\n  }\n}",
+    ) >
+    0,
+  )
+  // A non-generator function expression / method inside a generator.
+  assert_true(
+    issues(
+      "// @strict: false\nfunction* g() {\n  var f = function () {\n    var a = yield 0;\n  };\n}",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "// @strict: false\nfunction* g() {\n  class C {\n    m() {\n      var a = yield 0;\n    }\n  }\n}",
+    ) >
+    0,
+  )
+  // Pins: contexts where yield stays legal.
+  // Plain yield in the generator body itself.
+  @test.assert_eq(
+    issues("// @strict: false\nfunction* g() {\n  var a = yield 0;\n}"),
+    0,
+  )
+  // Parenthesized yield in the generator body (temp-parser hand-off must
+  // not double- or mis-record).
+  @test.assert_eq(
+    issues("// @strict: false\nfunction* g() {\n  var a = (yield 0);\n}"),
+    0,
+  )
+  // Class decorators and computed keys evaluate in the enclosing
+  // (generator) scope.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nfunction* g() {\n  class C {\n    [yield 0]() {}\n  }\n}",
+    ),
+    0,
+  )
+  // A generator METHOD of a class inside a generator keeps its own
+  // generator context.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nfunction* g() {\n  class C {\n    *m() {\n      var a = yield 0;\n    }\n  }\n}",
+    ),
+    0,
+  )
+  // yield as a plain identifier in non-generator code stays legal.
+  @test.assert_eq(
+    issues("// @strict: false\nfunction f() {\n  var yield_ok = 1;\n}"),
+    0,
+  )
+}
+
+///|
+test "expr_check: generic inference stage 1 (batch AW)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Exact array-literal spread against an interface method's optional
+  // param: too many arguments (arraySpreadInCall / TS2554).
+  assert_true(
+    issues(
+      "// @strict: false\ninterface IAction { run(event?: unknown): unknown; }\ndeclare const action: IAction;\naction.run(...[100, \"foo\"]);",
+    ) >
+    0,
+  )
+  // Rest param destructured by a fixed-length tuple pattern pins arity
+  // (iterableArrayPattern25 / TS2554).
+  assert_true(
+    issues(
+      "// @strict: false\nfunction takeFirstTwoEntries(...[[k1, v1], [k2, v2]]) { }\ntakeFirstTwoEntries(new Map([[\"\", 0], [\"hello\", 1]]));",
+    ) >
+    0,
+  )
+  // Iterator-class spreads pin the rest type param first-wins
+  // (iteratorSpreadInCall7/8/9 / TS2345).
+  let iter_classes = "class SymbolIterator {\n  next() { return { value: Symbol(), done: false }; }\n  [Symbol.iterator]() { return this; }\n}\nclass _StringIterator {\n  next() { return { value: \"\", done: false }; }\n  [Symbol.iterator]() { return this; }\n}\n"
+  assert_true(
+    issues(
+      "// @strict: false\nfunction foo<T>(...s: T[]) { return s[0]; }\n" +
+      iter_classes +
+      "foo(...new SymbolIterator, ...new _StringIterator);",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "// @strict: false\nclass Foo<T> { constructor(...s: T[]) { } }\n" +
+      iter_classes +
+      "new Foo(...new SymbolIterator, ...[...new _StringIterator]);",
+    ) >
+    0,
+  )
+  // Pins: legal patterns stay silent.
+  // Same-element iterator spreads agree.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nfunction foo<T>(...s: T[]) { return s[0]; }\n" +
+      iter_classes +
+      "foo(...new SymbolIterator, ...new SymbolIterator);",
+    ),
+    0,
+  )
+  // Direct mixed rest arguments still union (no pin): tsc accepts.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nfunction foo<T>(...s: T[]) { return s[0]; }\nfoo(1, \"a\");",
+    ),
+    0,
+  )
+  // Interface method calls with exact arity stay silent, incl. optional.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\ninterface IAction { run(event?: unknown): unknown; }\ndeclare const action: IAction;\naction.run();\naction.run(1);\naction.run(...[100]);",
+    ),
+    0,
+  )
+  // Tuple-annotated rest params keep their own optionality (no pattern pin).
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nfunction g(...args: [number, string?]) { }\ng(1);\ng(1, \"a\");",
+    ),
+    0,
+  )
+}
+
+///|
+test "expr_check: generic inference stage 2 — Map entries + tag funcs (batch AW)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Mixed (K, V) entry array: no Map constructor overload matches
+  // (for-of39 / iterableArrayPattern28, TS2769).
+  assert_true(
+    issues("// @strict: false\nvar map = new Map([[\"\", true], [\"\", 0]]);") >
+    0,
+  )
+  // Uniform entries stay legal.
+  @test.assert_eq(
+    issues("// @strict: false\nvar map = new Map([[\"\", 0], [\"hello\", 1]]);"),
+    0,
+  )
+  // Literal-widened uniform entries too.
+  @test.assert_eq(
+    issues("// @strict: false\nvar m2 = new Map([[1, \"a\"], [2, \"b\"]]);"),
+    0,
+  )
+  // A user-declared Map shadows the lib constructor: abstain.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nclass Map { constructor(x: any) {} }\nvar m = new Map([[\"\", true], [\"\", 0]]);",
+    ),
+    0,
+  )
+  // Direct call to a TemplateStringsArray tag-function overload set with
+  // an array literal fails every overload (TS2345/TS2769).
+  let tag_decl = "function foo(strs: TemplateStringsArray): number;\nfunction foo(strs: TemplateStringsArray, x: number): string;\nfunction foo(...stuff: any[]): any {\n    return undefined;\n}\n"
+  assert_true(issues("// @strict: false\n" + tag_decl + "var a = foo([]);") > 0)
+  assert_true(
+    issues("// @strict: false\n" + tag_decl + "var b = foo([], 1);") > 0,
+  )
+  // The template form is the legal use.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\n" + tag_decl + "var u = foo ``;\nvar v = foo `${1}`;",
+    ),
+    0,
+  )
+}
+
+///|
+test "expr_check: uniform Map<K, V> inference (batch AW stage 3)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Uniform-map spread element vs a tuple-typed rest param
+  // (iterableArrayPattern29, TS2345).
+  assert_true(
+    issues(
+      "// @strict: false\nfunction takeFirstTwoEntries(...[[k1, v1], [k2, v2]]: [string, number][]) { }\ntakeFirstTwoEntries(...new Map([[\"\", true], [\"hello\", true]]));",
+    ) >
+    0,
+  )
+  // Matching element type stays legal.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nfunction takeFirstTwoEntries(...[[k1, v1], [k2, v2]]: [string, number][]) { }\ntakeFirstTwoEntries(...new Map([[\"\", 0], [\"hello\", 1]]));",
+    ),
+    0,
+  )
+  // for-of over an inferred Map<K, V> stays legal.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nvar m = new Map([[\"a\", 1], [\"b\", 2]]);\nfor (var [k, v] of m) {\n  var s: string = k;\n  var n: number = v;\n}",
+    ),
+    0,
+  )
+}

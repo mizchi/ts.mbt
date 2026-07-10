@@ -2295,6 +2295,179 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-10 (T200)  714/815 (88 %)        414/414 ( 0 FP)   Generic inference (user-priority theme): TP 2597 -> 2607
+
+  T200 -- batch AW, the user-designated HIGH theme (multi-stage generic
+    inference), landed in two FP-gated stages.
+    STAGE 1 (TP 2597 -> 2602): (a) iterator-class spread element
+    inference — a hand-rolled iterator class ([Symbol.iterator]() +
+    next() yielding { value: V }) spread into a rest param contributes V,
+    read from the annotated next() return or the returned object literal
+    (`Symbol()` mapped to `symbol` directly — infer_expr has no global
+    call model for it). Spread contributions flow through the iterable
+    protocol — a NESTED tsc inference position — so they pin type params
+    FIRST-WINS; direct rest arguments still union (`foo(1, "a")` pinned
+    legal). Root-caused via bindings dump: the old soft=true unioned
+    `symbol | string` and swallowed the mismatch. Array-literal spread
+    inference (`[...new It]`) also folds iterator elements
+    (iteratorSpreadInCall7/8/9). (b) `new Foo(...)` now runs
+    solve_generic_bindings over constructor signatures. (c) An
+    unannotated rest param destructured by a fixed-length array pattern
+    pins exact arity (iterableArrayPattern25). (d) Single-declaration
+    interface methods have exact arity — bypass the permissive arity
+    suppression (arraySpreadInCall's `action.run(...[100, 'foo'])`).
+    STAGE 2 (TP 2602 -> 2606): (e) lib `Map` constructor with a mixed
+    entry array (`new Map([["", true], ["", 0]])`) matches no overload —
+    fires only on the bare `New` shape (explicit `new Map<K, V>(...)`
+    parses into a TypeArgs wrapper and never reaches it; user-declared
+    Map shadows abstain) — for-of39, iterableArrayPattern28. (f) direct
+    calls passing an ARRAY LITERAL to a TemplateStringsArray tag-function
+    overload set fail every overload (`raw` can't exist on literals);
+    the overload set is registered at ingestion (>= 2 bodyless
+    TemplateStringsArray-first signatures, <= 1 implementation) because
+    the ingested Union includes the implementation signature and can't be
+    classified post-hoc (taggedTemplateStringsWithOverloadResolution1 x2).
+    STAGE 3 (TP 2606 -> 2607): (g) `new Map([uniform entries])` infers
+    `Map<K, V>` from the literal-widened first pair (mixed pairs stay
+    `Any` — flagged by (e)), so `for_of_element_type`'s existing
+    `Map<K, V> -> [K, V]` arm feeds the spread-element check:
+    `...new Map([["", true]])` against `[string, number][]` is TS2345
+    (iterableArrayPattern29). Pinned legal: matching element types, and
+    for-of destructuring over the inferred map.
+    DROPPED after root-causing: genericRestArity's variadic-handler shape
+    — the PARSER erases constrained type params to their bounds
+    (`TS extends unknown[]` -> `Array(Unknown)` in both the handler's
+    param list and the rest param), making the generic and non-generic
+    spellings indistinguishable at check time; un-erasing is a parser
+    design work item (would also unlock constraint-carrying inference).
+    Whole-corpus TP 2597 -> 2606 @ 0 FP, PFLEGAL 1, TN 1414, no lost
+    TPs. 579 checker wbtests.
+
+## Release checkpoint (2026-07-10, post-T199)
+
+State at this cut: whole-corpus TP 2597 (397 via parse rejection) / FP 0 /
+PFLEGAL 1 (parser768531 only) / TN 1414; 2461 unit tests; standing gate
+`--max-fp 0 --max-legal-parsefail 1` green. Session arc: TP 1761 -> 2597
+across PRs #191-#197 plus three unmerged commits (TS2428 merge identity,
+constant template folding, TS1163 yield contexts + temp-parser hand-off).
+
+Remaining 486 misses, sorted by real-world likelihood (what a bridge user
+would actually hit), so the release notes can state known limitations:
+
+  HIGH -- multi-stage generic inference (~40-60 files spanning TS2345 /
+    TS2322 / TS2554 / TS2769). Callback parameter types derived from a
+    sibling argument, overloaded call resolution (fetch-style APIs, tagged
+    templates), iterator / generator element inference. One design work
+    item, already scoped in T-entries; the single highest-leverage post-
+    release investment.
+  HIGH -- contextual typing gaps (TS7006 x7, TS7053 x6): contextually
+    typed IIFEs, class-expression methods, union call signatures.
+    Un-annotated callbacks are ubiquitous in real code.
+  MEDIUM -- lib surface models: nonexistent METHOD CALLS on primitive
+    receivers are unchecked (property access IS checked; needs complete
+    String/Number prototype tables to stay FP-free — T197 notes), and
+    Error / Date member models for TS2551 typo suggestions (x2).
+  MEDIUM -- flow narrowing tails: loop back-edge widening, `||`-RHS
+    chains, `T & primitive` disjointness (intersectionNarrowing). Common
+    in app code, rare in declaration files.
+  LOW (edge; acceptable release cuts) -- computed property names /
+    well-known symbols (TS2411 x13, TS2464/2466), parser-recovery
+    baselines (TS1005 x12), declaration-merging exotica, `using`
+    declarations (TS2851/TS1492), variant-baseline oracle artifacts
+    (NOBASE x12).
+
+Known non-blockers to note in a release: `moon check --deny-warn` fails on
+pre-existing deprecated-API warnings from toolchain drift (T197 note; tests
+are the gate), and parser768531's regex/division ambiguity is the one
+budgeted legal parse failure.
+
+2026-07-10 (T199)  714/815 (88 %)        414/414 ( 0 FP)   TS1163 yield contexts + temp-parser misuse hand-off: TP 2592 -> 2597
+
+  T199 -- TS1163 ("A 'yield' expression is only allowed in a generator
+    body") for `yield` in contexts nested INSIDE a generator that do not
+    inherit its [Yield] grammar: arrow bodies (block and expression form),
+    class field initializers (instance and static), non-generator function
+    EXPRESSIONS, and non-generator class METHODS. Three parser context
+    fixes, same family as the T193-era `parse_function` bug: (1) function
+    expressions and (2) class method bodies only SET `in_generator = true`
+    for generators and never reset it to false for non-generators nested
+    in one — both now assign `is_generator` unconditionally; (3) all 16
+    arrow-body parse sites (8 block + 8 expression) now save/clear/restore
+    `in_generator` (arrows are never generators). Class field initializers
+    clear it around the initializer expression only. Deliberately NOT
+    reset (pinned): class decorator arguments and computed member keys —
+    both evaluate in the enclosing scope, so `@decorator(yield 0)` and
+    `[yield 0]() {}` inside a generator are LEGAL (generatorTypeCheck39's
+    only baseline error is the field init, not the decorator).
+    Root-caused along the way: `({ b: yield 2 })` still missed because
+    parenthesized expressions parse through a TEMP parser whose
+    `grammar_misuses` were dropped on success — both temp-parser helpers
+    (paren inner + parse-until-terminator) now hand their recordings back
+    to the real parser in parse order. That hole silently ate EVERY
+    grammar misuse recorded inside parentheses, not just yield.
+    Corpus fixtures: YieldExpression20_es6, generatorTypeCheck39/57/58,
+    plus awaitAndYieldInProperty as an unplanned bonus (object-literal
+    property initializers hit the same contexts). Whole-corpus TP 2592 ->
+    2597 @ 0 FP, PFLEGAL 1, TN 1414, no lost TPs. 2461 tests.
+
+2026-07-10 (T198)  714/815 (88 %)        414/414 ( 0 FP)   Constant template folding feeds TS2367/TS2678: TP 2588 -> 2592
+
+  T198 -- interpolated template literals with literal-constant
+    substitutions now fold to their string-literal type in `infer_expr`
+    (`` `abc${0}abc` `` is `Literal("abc0abc")`), matching the fresh
+    pre-widening literal type tsc uses for comparisons. That feeds the
+    EXISTING TS2367 equality-overlap check (templateStringInEqualityChecks
+    x2) and — unplanned bonus — the existing switch/case comparability
+    check (templateStringInSwitchAndCase x2, TS2678). Folding is
+    deliberately narrow: string/bool literals, `IntLit`, and
+    integer-valued `NumberLit` below 1e15 (JS shortest-round-trip and
+    exponent formatting for fractional/huge numbers stays out of scope:
+    `${0.5}` does NOT fold — pinned); nested constant templates fold
+    recursively; anything else keeps the template at `string`.
+    Parity pin: a folded init behaves exactly like the same string as a
+    plain literal init (`var x = `a${0}`; x = "other"` asserts EQUAL issue
+    counts with the `"a0"` spelling, not zero — top-level var literal
+    inits don't widen on reassignment in the current checker for ANY
+    literal spelling; pre-existing, corpus-clean, noted for a future
+    widening pass). Whole-corpus TP 2588 -> 2592 @ 0 FP, PFLEGAL 1,
+    TN 1414. 2460 tests. Deferred from the TS2367 cluster: intersection
+    comparability (`I1 & I3` vs `I2`, `T & number` vs `string`) — needs
+    structural comparability analysis, not literal folding.
+
+2026-07-10 (T197)  714/815 (88 %)        414/414 ( 0 FP)   TS2428 interface merge type-param identity: TP 2584 -> 2588
+
+  T197 -- TS2428 ("All declarations of 'X' must have identical type
+    parameters."). Same-scope interface declarations of one name merge in
+    tsc only when their type-parameter lists are identical: same arity,
+    same names positionally, and identical constraints — with tsc's
+    relaxation that a declaration OMITTING a constraint is exempt from the
+    comparison (`interface C<T>` merges with `interface C<T extends
+    number>`; pinned). `check_interface_merge_type_params` runs per module
+    scope from the layered walker, which matches tsc's declaration spaces
+    for free: namespace bodies re-parse into per-BLOCK `TsModule`s, so two
+    non-exported interfaces in separate blocks of one namespace are never
+    compared (pinned ok-case). Constraint identity is staged to keep
+    spelling differences silent: raw AST `==`, alias-`unwrap` `==`,
+    canonical `identity_key` comparison (sorts unions, folds `T[]` ==
+    `Array<T>`), then a nominal fallback for refs the canonicalizer can't
+    expand (lib names like `Date` / `Number` have no module declaration):
+    different `Named` heads, different/argwise-different `Applied` heads,
+    and `any` vs a concrete ref. Known miss (documented): EXPORTED
+    interfaces across merged namespace blocks (`namespace M3 { export
+    interface A<T> }` x2) — needs an export marker for namespace interface
+    members; all 4 corpus files also error at top level, so no TP left
+    behind. Batch AU also audited class/interface bodies for the T195/T196
+    keyword-member-name hole: both already parse keyword keys correctly.
+    One real gap found and deliberately skipped: nonexistent METHOD CALLS
+    on primitive receivers (`n.bogus()`) are unchecked while property
+    access is — only 1 corpus file hinges on it and our prototype tables
+    are incomplete (FP risk), documented here instead.
+    Whole-corpus TP 2584 -> 2588 @ 0 FP, PFLEGAL 1, TN 1414 (unchanged).
+    The 4 new TPs are exactly the declarationMerging fixtures. 2459 tests.
+    Note: `moon check --deny-warn` fails on PRE-EXISTING deprecated-API
+    warnings (226, e.g. StringView `to_string`) on clean main too —
+    toolchain drift, not introduced by any batch; tests are the gate.
+
 2026-07-08 (T196)  714/815 (88 %)        414/414 ( 0 FP)   Parser: keyword member names generalized: TP 2584 (soundness)
 
   T196 -- generalize T195 beyond `type`. A probe sweep showed EVERY
