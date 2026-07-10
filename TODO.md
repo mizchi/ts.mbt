@@ -2295,6 +2295,47 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-10 (T200)  714/815 (88 %)        414/414 ( 0 FP)   Generic inference (user-priority theme): TP 2597 -> 2606
+
+  T200 -- batch AW, the user-designated HIGH theme (multi-stage generic
+    inference), landed in two FP-gated stages.
+    STAGE 1 (TP 2597 -> 2602): (a) iterator-class spread element
+    inference — a hand-rolled iterator class ([Symbol.iterator]() +
+    next() yielding { value: V }) spread into a rest param contributes V,
+    read from the annotated next() return or the returned object literal
+    (`Symbol()` mapped to `symbol` directly — infer_expr has no global
+    call model for it). Spread contributions flow through the iterable
+    protocol — a NESTED tsc inference position — so they pin type params
+    FIRST-WINS; direct rest arguments still union (`foo(1, "a")` pinned
+    legal). Root-caused via bindings dump: the old soft=true unioned
+    `symbol | string` and swallowed the mismatch. Array-literal spread
+    inference (`[...new It]`) also folds iterator elements
+    (iteratorSpreadInCall7/8/9). (b) `new Foo(...)` now runs
+    solve_generic_bindings over constructor signatures. (c) An
+    unannotated rest param destructured by a fixed-length array pattern
+    pins exact arity (iterableArrayPattern25). (d) Single-declaration
+    interface methods have exact arity — bypass the permissive arity
+    suppression (arraySpreadInCall's `action.run(...[100, 'foo'])`).
+    STAGE 2 (TP 2602 -> 2606): (e) lib `Map` constructor with a mixed
+    entry array (`new Map([["", true], ["", 0]])`) matches no overload —
+    fires only on the bare `New` shape (explicit `new Map<K, V>(...)`
+    parses into a TypeArgs wrapper and never reaches it; user-declared
+    Map shadows abstain) — for-of39, iterableArrayPattern28. (f) direct
+    calls passing an ARRAY LITERAL to a TemplateStringsArray tag-function
+    overload set fail every overload (`raw` can't exist on literals);
+    the overload set is registered at ingestion (>= 2 bodyless
+    TemplateStringsArray-first signatures, <= 1 implementation) because
+    the ingested Union includes the implementation signature and can't be
+    classified post-hoc (taggedTemplateStringsWithOverloadResolution1 x2).
+    DROPPED after root-causing: genericRestArity's variadic-handler shape
+    — the PARSER erases constrained type params to their bounds
+    (`TS extends unknown[]` -> `Array(Unknown)` in both the handler's
+    param list and the rest param), making the generic and non-generic
+    spellings indistinguishable at check time; un-erasing is a parser
+    design work item (would also unlock constraint-carrying inference).
+    Whole-corpus TP 2597 -> 2606 @ 0 FP, PFLEGAL 1, TN 1414, no lost
+    TPs. 579 checker wbtests.
+
 ## Release checkpoint (2026-07-10, post-T199)
 
 State at this cut: whole-corpus TP 2597 (397 via parse rejection) / FP 0 /

@@ -13153,3 +13153,47 @@ test "expr_check: generic inference stage 1 (batch AW)" {
     0,
   )
 }
+
+///|
+test "expr_check: generic inference stage 2 — Map entries + tag funcs (batch AW)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Mixed (K, V) entry array: no Map constructor overload matches
+  // (for-of39 / iterableArrayPattern28, TS2769).
+  assert_true(
+    issues("// @strict: false\nvar map = new Map([[\"\", true], [\"\", 0]]);") >
+    0,
+  )
+  // Uniform entries stay legal.
+  @test.assert_eq(
+    issues("// @strict: false\nvar map = new Map([[\"\", 0], [\"hello\", 1]]);"),
+    0,
+  )
+  // Literal-widened uniform entries too.
+  @test.assert_eq(
+    issues("// @strict: false\nvar m2 = new Map([[1, \"a\"], [2, \"b\"]]);"),
+    0,
+  )
+  // A user-declared Map shadows the lib constructor: abstain.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nclass Map { constructor(x: any) {} }\nvar m = new Map([[\"\", true], [\"\", 0]]);",
+    ),
+    0,
+  )
+  // Direct call to a TemplateStringsArray tag-function overload set with
+  // an array literal fails every overload (TS2345/TS2769).
+  let tag_decl = "function foo(strs: TemplateStringsArray): number;\nfunction foo(strs: TemplateStringsArray, x: number): string;\nfunction foo(...stuff: any[]): any {\n    return undefined;\n}\n"
+  assert_true(issues("// @strict: false\n" + tag_decl + "var a = foo([]);") > 0)
+  assert_true(
+    issues("// @strict: false\n" + tag_decl + "var b = foo([], 1);") > 0,
+  )
+  // The template form is the legal use.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\n" + tag_decl + "var u = foo ``;\nvar v = foo `${1}`;",
+    ),
+    0,
+  )
+}

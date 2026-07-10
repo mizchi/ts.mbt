@@ -71,6 +71,12 @@ priv struct Resolver {
   // as unknown and abstain.
   namespace_value_decls : Map[String, Map[String, Bool]]
   namespace_exports : Map[String, Map[String, Bool]]
+  // Names of overloaded tag functions: >= 2 bodyless overload signatures
+  // whose first parameter is the lib `TemplateStringsArray`, plus at most
+  // one implementation. A direct (non-template) call passing an array
+  // literal fails every overload (the `raw` member only exists on
+  // engine-created template objects), which is TS2769/TS2345.
+  template_tag_funcs : Map[String, Bool]
 }
 
 ///|
@@ -89,6 +95,7 @@ fn Resolver::empty() -> Resolver {
     private_brand_decls: {},
     namespace_value_decls: {},
     namespace_exports: {},
+    template_tag_funcs: {},
   }
 }
 
@@ -658,6 +665,31 @@ fn Resolver::ingest_module(
     r.func_const_type_params[prefix + f.name] = f.const_type_params
     if f.type_param_bounds.length() > 0 {
       r.func_type_param_bounds[prefix + f.name] = f.type_param_bounds
+    }
+  }
+  // Tag-function overload sets (see the `template_tag_funcs` field doc):
+  // group same-name declarations into bodyless overload signatures vs
+  // implementations; register only the unambiguous
+  // all-TemplateStringsArray shape.
+  let tag_groups : Map[String, (Int, Int, Bool)] = {}
+  for f in module_.funcs {
+    let is_sig_only = f.body.stmts.length() == 0
+    let tsa_first = f.params.length() > 0 &&
+      !f.params[0].is_rest &&
+      f.params[0].type_ is Named("TemplateStringsArray")
+    let cur = match tag_groups.get(f.name) {
+      Some(v) => v
+      None => (0, 0, true)
+    }
+    tag_groups[f.name] = (
+      cur.0 + (if is_sig_only { 1 } else { 0 }),
+      cur.1 + (if is_sig_only { 0 } else { 1 }),
+      cur.2 && (tsa_first || !is_sig_only),
+    )
+  }
+  for name, g in tag_groups {
+    if g.0 >= 2 && g.1 <= 1 && g.2 {
+      r.template_tag_funcs[prefix + name] = true
     }
   }
   for ns in module_.namespaces {
@@ -14548,6 +14580,25 @@ fn check_call_args_in_expr(
             Some(params) =>
               check_arguments(env, params, args, ctx, "call `\{name}`")
             None => {
+              // TS2345 for a direct (non-template) call to a tag-function
+              // overload set: every overload's first parameter is the lib
+              // `TemplateStringsArray`, and no array literal can satisfy
+              // it (the `raw` property only exists on engine-created
+              // template objects), so `foo([])` / `foo([], 1)` fail every
+              // overload (taggedTemplateStringsWithOverloadResolution1).
+              // A module-declared `TemplateStringsArray` interface or a
+              // local binding shadowing the function name abstains.
+              if args.length() > 0 &&
+                args[0] is ArrayLit(_) &&
+                env.lookup(name) is None &&
+                ctx.resolver.interfaces.get("TemplateStringsArray") is None &&
+                ctx.resolver.template_tag_funcs.get(name) is Some(_) {
+                record(
+                  ctx,
+                  "call `\{name}`",
+                  "an array literal is not assignable to parameter of type `TemplateStringsArray`",
+                )
+              }
               // Overload sets also ingest as a `Union` of `Func`s; a call
               // needs only ONE overload to match, so the every-member arity
               // rule applies solely to union-typed *values* (names with no
@@ -14747,6 +14798,58 @@ fn check_call_args_in_expr(
           "variable `\{class_name}` is used before being assigned",
         )
         let _ = ctx.unassigned.remove(class_name)
+      }
+      // TS2769 for the lib `Map` constructor with a mixed entry array:
+      // `new Map([["", true], ["", 0]])` has no single (K, V)
+      // instantiation, so no constructor overload matches (for-of39,
+      // iterableArrayPattern28). Explicit type arguments (`new Map<K, V>
+      // (...)`) parse into a `TypeArgs` wrapper and never reach this bare
+      // `New` shape, so a widening annotation can't false-positive here.
+      // A user-declared `Map` class or binding shadows the lib type and
+      // abstains.
+      if class_name == "Map" &&
+        ctx.resolver.classes.get("Map") is None &&
+        ctx.resolver.interfaces.get("Map") is None &&
+        env.lookup("Map") is None &&
+        args.length() == 1 &&
+        args[0] is ArrayLit(entries) &&
+        entries.length() >= 2 {
+        let mut all_pairs = true
+        let pairs : Array[(@ast.TsType, @ast.TsType)] = []
+        for e in entries {
+          match e {
+            ArrayLit([k, v]) => {
+              let kt = widen_literal(infer_expr(env, ctx.resolver, k))
+              let vt = widen_literal(infer_expr(env, ctx.resolver, v))
+              pairs.push((kt, vt))
+            }
+            _ => all_pairs = false
+          }
+        }
+        if all_pairs && pairs.length() >= 2 {
+          let (k0, v0) = pairs[0]
+          let mut mixed = false
+          for idx in 1..<pairs.length() {
+            let (ki, vi) = pairs[idx]
+            if is_checkable(k0) &&
+              is_checkable(ki) &&
+              !is_assignable_to(ki, k0) &&
+              !is_assignable_to(k0, ki) {
+              mixed = true
+            }
+            if is_checkable(v0) &&
+              is_checkable(vi) &&
+              !is_assignable_to(vi, v0) &&
+              !is_assignable_to(v0, vi) {
+              mixed = true
+            }
+          }
+          if mixed {
+            record(
+              ctx, "new `Map`", "no overload of the `Map` constructor matches this mixed entry array",
+            )
+          }
+        }
       }
       match ctx.resolver.lookup_constructor_sig(class_name) {
         Some((params, sig)) => {
