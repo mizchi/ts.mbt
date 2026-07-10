@@ -12969,3 +12969,38 @@ test "expr_check: TS2428 interface merge type-param identity (batch AU)" {
     0,
   )
 }
+
+///|
+test "expr_check: constant template folding feeds TS2367 (batch AU)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Literal substitutions fold to the resulting string-literal type, so
+  // disjoint comparisons surface (templateStringInEqualityChecks).
+  assert_true(issues("// @strict: false\nvar x = `abc${0}abc` === `abc`;") > 0)
+  assert_true(issues("// @strict: false\nvar x = `abc` !== `abc${0}abc`;") > 0)
+  assert_true(
+    issues("// @strict: false\nvar x = `a${\"b\"}c` === \"other\";") > 0,
+  )
+  // Pins: identical folds overlap; non-constant substitutions stay
+  // `string` (never flagged); widening keeps reassignment legal.
+  @test.assert_eq(
+    issues("// @strict: false\nvar x = `abc${0}abc` == \"abc0abc\";"),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @strict: false\ndeclare var n: number;\nvar x = `abc${n}abc` === `abc`;",
+    ),
+    0,
+  )
+  // Parity pin: a folded template init behaves exactly like the same
+  // string written as a plain literal init — folding introduces no new
+  // reassignment behavior on top of the existing literal handling.
+  @test.assert_eq(
+    issues("// @strict: false\nvar x = `a${0}`;\nx = \"other\";"),
+    issues("// @strict: false\nvar x = \"a0\";\nx = \"other\";"),
+  )
+  // Fractional / huge numbers are not folded (JS formatting edge cases).
+  @test.assert_eq(issues("// @strict: false\nvar x = `a${0.5}` === `a`;"), 0)
+}

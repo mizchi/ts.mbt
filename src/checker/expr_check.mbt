@@ -5652,6 +5652,46 @@ fn equality_primitive_family(t : @ast.TsType) -> String? {
 }
 
 ///|
+/// The compile-time string value of an interpolated template literal whose
+/// substitutions are all literal constants, or `None` when any substitution
+/// is non-constant or its JS string rendering isn't reproducible here
+/// (non-integer numbers keep JS `Number.prototype.toString` formatting
+/// edge cases out of scope).
+fn fold_constant_template(
+  parts : Array[String],
+  exprs : Array[@ast.TsExpr],
+) -> String? {
+  if parts.length() != exprs.length() + 1 {
+    return None
+  }
+  let buf = StringBuilder::new()
+  for i, e in exprs {
+    buf.write_string(parts[i])
+    match e {
+      StringLit(s) => buf.write_string(s)
+      BoolLit(b) => buf.write_string(if b { "true" } else { "false" })
+      IntLit(n) => buf.write_string(n.to_string())
+      NumberLit(d) =>
+        // Only integers render identically in JS and here; fractional /
+        // huge values hit exponent and shortest-round-trip formatting.
+        if d >= 0.0 && d < 1.0e15 && d == d.floor() {
+          buf.write_string(d.to_int64().to_string())
+        } else {
+          return None
+        }
+      TemplateLiteral(inner_parts, inner_exprs) =>
+        match fold_constant_template(inner_parts, inner_exprs) {
+          Some(s) => buf.write_string(s)
+          None => return None
+        }
+      _ => return None
+    }
+  }
+  buf.write_string(parts[parts.length() - 1])
+  Some(buf.to_string())
+}
+
+///|
 fn wrap_async_return(is_async : Bool, ret : @ast.TsType) -> @ast.TsType {
   if !is_async {
     return ret
@@ -6285,7 +6325,14 @@ fn infer_expr(
       if exprs.length() == 0 && parts.length() == 1 {
         @ast.TsType::Literal(parts[0])
       } else {
-        @ast.TsType::String_
+        // tsc folds a template whose substitutions are all literal
+        // constants into the resulting string-literal type before
+        // widening (`` `abc${0}abc` `` is `"abc0abc"` in a comparison),
+        // which is what feeds the TS2367 overlap check.
+        match fold_constant_template(parts, exprs) {
+          Some(s) => @ast.TsType::Literal(s)
+          None => @ast.TsType::String_
+        }
       }
     // `x as T` — forced cast; result type is `T`. We still walk `inner` so
     // any nested call sites are validated.

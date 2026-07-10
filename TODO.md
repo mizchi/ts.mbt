@@ -2295,6 +2295,30 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-10 (T198)  714/815 (88 %)        414/414 ( 0 FP)   Constant template folding feeds TS2367/TS2678: TP 2588 -> 2592
+
+  T198 -- interpolated template literals with literal-constant
+    substitutions now fold to their string-literal type in `infer_expr`
+    (`` `abc${0}abc` `` is `Literal("abc0abc")`), matching the fresh
+    pre-widening literal type tsc uses for comparisons. That feeds the
+    EXISTING TS2367 equality-overlap check (templateStringInEqualityChecks
+    x2) and — unplanned bonus — the existing switch/case comparability
+    check (templateStringInSwitchAndCase x2, TS2678). Folding is
+    deliberately narrow: string/bool literals, `IntLit`, and
+    integer-valued `NumberLit` below 1e15 (JS shortest-round-trip and
+    exponent formatting for fractional/huge numbers stays out of scope:
+    `${0.5}` does NOT fold — pinned); nested constant templates fold
+    recursively; anything else keeps the template at `string`.
+    Parity pin: a folded init behaves exactly like the same string as a
+    plain literal init (`var x = `a${0}`; x = "other"` asserts EQUAL issue
+    counts with the `"a0"` spelling, not zero — top-level var literal
+    inits don't widen on reassignment in the current checker for ANY
+    literal spelling; pre-existing, corpus-clean, noted for a future
+    widening pass). Whole-corpus TP 2588 -> 2592 @ 0 FP, PFLEGAL 1,
+    TN 1414. 2460 tests. Deferred from the TS2367 cluster: intersection
+    comparability (`I1 & I3` vs `I2`, `T & number` vs `string`) — needs
+    structural comparability analysis, not literal folding.
+
 2026-07-10 (T197)  714/815 (88 %)        414/414 ( 0 FP)   TS2428 interface merge type-param identity: TP 2584 -> 2588
 
   T197 -- TS2428 ("All declarations of 'X' must have identical type
