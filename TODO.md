@@ -2295,6 +2295,40 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-10 (T197)  714/815 (88 %)        414/414 ( 0 FP)   TS2428 interface merge type-param identity: TP 2584 -> 2588
+
+  T197 -- TS2428 ("All declarations of 'X' must have identical type
+    parameters."). Same-scope interface declarations of one name merge in
+    tsc only when their type-parameter lists are identical: same arity,
+    same names positionally, and identical constraints — with tsc's
+    relaxation that a declaration OMITTING a constraint is exempt from the
+    comparison (`interface C<T>` merges with `interface C<T extends
+    number>`; pinned). `check_interface_merge_type_params` runs per module
+    scope from the layered walker, which matches tsc's declaration spaces
+    for free: namespace bodies re-parse into per-BLOCK `TsModule`s, so two
+    non-exported interfaces in separate blocks of one namespace are never
+    compared (pinned ok-case). Constraint identity is staged to keep
+    spelling differences silent: raw AST `==`, alias-`unwrap` `==`,
+    canonical `identity_key` comparison (sorts unions, folds `T[]` ==
+    `Array<T>`), then a nominal fallback for refs the canonicalizer can't
+    expand (lib names like `Date` / `Number` have no module declaration):
+    different `Named` heads, different/argwise-different `Applied` heads,
+    and `any` vs a concrete ref. Known miss (documented): EXPORTED
+    interfaces across merged namespace blocks (`namespace M3 { export
+    interface A<T> }` x2) — needs an export marker for namespace interface
+    members; all 4 corpus files also error at top level, so no TP left
+    behind. Batch AU also audited class/interface bodies for the T195/T196
+    keyword-member-name hole: both already parse keyword keys correctly.
+    One real gap found and deliberately skipped: nonexistent METHOD CALLS
+    on primitive receivers (`n.bogus()`) are unchecked while property
+    access is — only 1 corpus file hinges on it and our prototype tables
+    are incomplete (FP risk), documented here instead.
+    Whole-corpus TP 2584 -> 2588 @ 0 FP, PFLEGAL 1, TN 1414 (unchanged).
+    The 4 new TPs are exactly the declarationMerging fixtures. 2459 tests.
+    Note: `moon check --deny-warn` fails on PRE-EXISTING deprecated-API
+    warnings (226, e.g. StringView `to_string`) on clean main too —
+    toolchain drift, not introduced by any batch; tests are the gate.
+
 2026-07-08 (T196)  714/815 (88 %)        414/414 ( 0 FP)   Parser: keyword member names generalized: TP 2584 (soundness)
 
   T196 -- generalize T195 beyond `type`. A probe sweep showed EVERY

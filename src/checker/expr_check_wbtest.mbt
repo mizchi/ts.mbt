@@ -12890,3 +12890,82 @@ test "expr_check: generalized keyword member names (batch AT)" {
     0,
   )
 }
+
+///|
+test "expr_check: TS2428 interface merge type-param identity (batch AU)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Generic + non-generic declarations of one name never merge.
+  assert_true(
+    issues(
+      "// @strict: false\ninterface A { foo: string; }\ninterface A<T> { bar: T; }",
+    ) >
+    0,
+  )
+  // Same arity, different parameter names.
+  assert_true(
+    issues(
+      "// @strict: false\ninterface A<T> { x: T; }\ninterface A<U> { y: U; }",
+    ) >
+    0,
+  )
+  // Different arity.
+  assert_true(
+    issues(
+      "// @strict: false\ninterface A<T> { x: T; }\ninterface A<T, U> { y: U; }",
+    ) >
+    0,
+  )
+  // Both constrained, different constraints.
+  assert_true(
+    issues(
+      "// @strict: false\ninterface A<T extends Date> { x: T; }\ninterface A<T extends Number> { y: T; }",
+    ) >
+    0,
+  )
+  // Same head, one argument `any` vs a concrete reference.
+  assert_true(
+    issues(
+      "// @strict: false\ninterface B<T> { x: T; }\ninterface C<T extends B<Date>> { x: T; }\ninterface C<T extends B<any>> { y: T; }",
+    ) >
+    0,
+  )
+  // Pins: legal merges stay silent.
+  // Identical lists merge.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\ninterface A<T> { x: T; }\ninterface A<T> { y: T; }",
+    ),
+    0,
+  )
+  // One-sided constraint is exempt from the comparison (both directions).
+  @test.assert_eq(
+    issues(
+      "// @strict: false\ninterface B<T extends number> { u: T; }\ninterface B<T> { x: T; }\ninterface C<T> { x: T; }\ninterface C<T extends number> { y: T; }",
+    ),
+    0,
+  )
+  // Alias spelling of the same constraint is identical after unwrap.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\ntype N = number;\ninterface I<T extends N> { x: T; }\ninterface I<T extends number> { y: T; }",
+    ),
+    0,
+  )
+  // Union member order is canonicalized before comparing.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\ninterface J<T extends string | number> { x: T; }\ninterface J<T extends number | string> { y: T; }",
+    ),
+    0,
+  )
+  // Non-exported interfaces in separate blocks of one namespace do not
+  // merge (different declaration spaces).
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nnamespace M2 { interface A { foo: string; } }\nnamespace M2 { interface A<T> { bar: T; } }",
+    ),
+    0,
+  )
+}

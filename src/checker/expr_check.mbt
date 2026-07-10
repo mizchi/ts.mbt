@@ -20457,6 +20457,129 @@ fn check_structural_duplicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
 }
 
 ///|
+/// TS2428: every declaration of a merged interface must carry an identical
+/// type parameter list — same arity, same names in the same order, and (when
+/// both declarations constrain a parameter) identical constraints. tsc
+/// relaxes the constraint comparison when one declaration omits it
+/// (`interface C<T>` merges fine with `interface C<T extends number>`), so a
+/// one-sided bound never flags. Runs per module scope: the caller invokes it
+/// once per namespace layer, which matches tsc's declaration spaces — two
+/// non-exported interfaces in *separate* blocks of the same namespace do not
+/// merge and are never compared here.
+fn check_interface_merge_type_params(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  let first : Map[String, @ast.TsInterface] = {}
+  let reported : Map[String, Bool] = {}
+  for iface in module_.interfaces {
+    match first.get(iface.name) {
+      None => first[iface.name] = iface
+      Some(prev) =>
+        if !(reported.get(iface.name) is Some(_)) &&
+          !interface_type_params_identical(resolver, prev, iface) {
+          reported[iface.name] = true
+          issues.push({
+            path: "interface \{iface.name}",
+            message: "all declarations of `\{iface.name}` must have identical type parameters",
+          })
+        }
+    }
+  }
+  issues
+}
+
+///|
+fn interface_type_params_identical(
+  resolver : Resolver,
+  a : @ast.TsInterface,
+  b : @ast.TsInterface,
+) -> Bool {
+  if a.type_params.length() != b.type_params.length() {
+    return false
+  }
+  for i, tp in a.type_params {
+    if b.type_params[i] != tp {
+      return false
+    }
+  }
+  for tp in a.type_params {
+    match (interface_param_bound(a, tp), interface_param_bound(b, tp)) {
+      (Some(x), Some(y)) =>
+        if interface_bound_differs(resolver, x, y) {
+          return false
+        }
+      // One-sided constraint: tsc skips the comparison entirely.
+      _ => ()
+    }
+  }
+  true
+}
+
+///|
+fn interface_param_bound(
+  iface : @ast.TsInterface,
+  param : String,
+) -> @ast.TsType? {
+  for pair in iface.type_param_bounds {
+    if pair.0 == param {
+      return Some(pair.1)
+    }
+  }
+  None
+}
+
+///|
+/// True when two interface type-parameter constraints are *definitely*
+/// non-identical. Spelling differences must never flag, so identity is
+/// decided in stages: raw AST equality, alias-unwrapped equality, canonical
+/// `identity_key` comparison, and finally a nominal head comparison for
+/// reference types the canonicalizer can't expand (lib names like `Date` /
+/// `Number` have no module declaration, so their keys are `None` — but two
+/// different unresolvable names are distinct types to tsc).
+fn interface_bound_differs(
+  resolver : Resolver,
+  x : @ast.TsType,
+  y : @ast.TsType,
+) -> Bool {
+  if x == y {
+    return false
+  }
+  let ux = resolver.unwrap(x)
+  let uy = resolver.unwrap(y)
+  if ux == uy {
+    return false
+  }
+  match (identity_key(ux, resolver, 0), identity_key(uy, resolver, 0)) {
+    (Some(a), Some(b)) => a != b
+    _ =>
+      match (ux, uy) {
+        (Named(a), Named(b)) => a != b
+        (Applied(a, xs), Applied(b, ys)) =>
+          if a != b {
+            true
+          } else if xs.length() != ys.length() {
+            true
+          } else {
+            let mut differs = false
+            for i, xa in xs {
+              if interface_bound_differs(resolver, xa, ys[i]) {
+                differs = true
+                break
+              }
+            }
+            differs
+          }
+        // A parsed literal `any` bound against a concrete reference:
+        // tsc's identity relation only equates `any` with itself.
+        (Named(_), Any) | (Any, Named(_)) => true
+        _ => false
+      }
+  }
+}
+
+///|
 /// True when `name` is a single uppercase ASCII letter (`T`, `U`, `K`, …).
 /// Such names are, by overwhelming convention, generic type parameters —
 /// never library / global types — so an *unresolved* one is reliably an
@@ -21878,6 +22001,9 @@ fn check_module_function_bodies_layered(
     all.push(issue)
   }
   for issue in check_structural_duplicates(module_) {
+    all.push(issue)
+  }
+  for issue in check_interface_merge_type_params(module_, resolver) {
     all.push(issue)
   }
   // TS2304 for single-letter out-of-scope type parameters. Run once at the
