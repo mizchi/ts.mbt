@@ -2295,7 +2295,7 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
-2026-07-10 (T200)  714/815 (88 %)        414/414 ( 0 FP)   Generic inference (user-priority theme): TP 2597 -> 2606
+2026-07-10 (T200)  714/815 (88 %)        414/414 ( 0 FP)   Generic inference (user-priority theme): TP 2597 -> 2607
 
   T200 -- batch AW, the user-designated HIGH theme (multi-stage generic
     inference), landed in two FP-gated stages.
@@ -2327,6 +2327,13 @@ conformance sources (`.errors.txt` baseline = ground truth):
     TemplateStringsArray-first signatures, <= 1 implementation) because
     the ingested Union includes the implementation signature and can't be
     classified post-hoc (taggedTemplateStringsWithOverloadResolution1 x2).
+    STAGE 3 (TP 2606 -> 2607): (g) `new Map([uniform entries])` infers
+    `Map<K, V>` from the literal-widened first pair (mixed pairs stay
+    `Any` — flagged by (e)), so `for_of_element_type`'s existing
+    `Map<K, V> -> [K, V]` arm feeds the spread-element check:
+    `...new Map([["", true]])` against `[string, number][]` is TS2345
+    (iterableArrayPattern29). Pinned legal: matching element types, and
+    for-of destructuring over the inferred map.
     DROPPED after root-causing: genericRestArity's variadic-handler shape
     — the PARSER erases constrained type params to their bounds
     (`TS extends unknown[]` -> `Array(Unknown)` in both the handler's

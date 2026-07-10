@@ -13197,3 +13197,32 @@ test "expr_check: generic inference stage 2 — Map entries + tag funcs (batch A
     0,
   )
 }
+
+///|
+test "expr_check: uniform Map<K, V> inference (batch AW stage 3)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Uniform-map spread element vs a tuple-typed rest param
+  // (iterableArrayPattern29, TS2345).
+  assert_true(
+    issues(
+      "// @strict: false\nfunction takeFirstTwoEntries(...[[k1, v1], [k2, v2]]: [string, number][]) { }\ntakeFirstTwoEntries(...new Map([[\"\", true], [\"hello\", true]]));",
+    ) >
+    0,
+  )
+  // Matching element type stays legal.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nfunction takeFirstTwoEntries(...[[k1, v1], [k2, v2]]: [string, number][]) { }\ntakeFirstTwoEntries(...new Map([[\"\", 0], [\"hello\", 1]]));",
+    ),
+    0,
+  )
+  // for-of over an inferred Map<K, V> stays legal.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nvar m = new Map([[\"a\", 1], [\"b\", 2]]);\nfor (var [k, v] of m) {\n  var s: string = k;\n  var n: number = v;\n}",
+    ),
+    0,
+  )
+}

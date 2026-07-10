@@ -5984,6 +5984,40 @@ fn infer_expr(
           for a in args {
             let _ = infer_expr(env, resolver, a)
           }
+          // Lib `Map` with a uniform entry array infers `Map<K, V>` from
+          // the literal-widened first pair, so downstream iteration /
+          // spread checks see `[K, V]` elements
+          // (`...new Map([["", true]])` against `[string, number][]` is
+          // TS2345 — iterableArrayPattern29). Mixed pairs (flagged
+          // separately as a constructor-overload failure) stay `Any`.
+          if class_name == "Map" &&
+            resolver.classes.get("Map") is None &&
+            resolver.interfaces.get("Map") is None &&
+            args.length() == 1 &&
+            args[0] is ArrayLit(entries) &&
+            entries.length() > 0 {
+            let mut k0 : @ast.TsType = Any
+            let mut v0 : @ast.TsType = Any
+            let mut uniform = true
+            for i, e in entries {
+              match e {
+                ArrayLit([k, v]) => {
+                  let kt = widen_literal(infer_expr(env, resolver, k))
+                  let vt = widen_literal(infer_expr(env, resolver, v))
+                  if i == 0 {
+                    k0 = kt
+                    v0 = vt
+                  } else if kt != k0 || vt != v0 {
+                    uniform = false
+                  }
+                }
+                _ => uniform = false
+              }
+            }
+            if uniform && is_checkable(k0) && is_checkable(v0) {
+              return @ast.TsType::Applied("Map", [k0, v0])
+            }
+          }
           @ast.TsType::Any
         }
       }
