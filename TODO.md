@@ -2295,6 +2295,29 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-08 (T194)  714/815 (88 %)        414/414 ( 0 FP)   Flow narrowing: predicate narrowing from `any`: TP 2582 -> 2583
+
+  T194 -- flow narrowing, round 1 (user-directed pivot).
+    - Type-predicate narrowing from `any`: `narrow_keep(Any, …)` passes
+      `any` through unchanged, so `if (isFoo(x)) { … }` never narrowed
+      an `any`-typed x and every member check inside abstained.
+      `apply_type_predicate_narrowing` now special-cases an `Any`
+      source: it narrows straight to the predicate target — EXCEPT
+      `Function` / `Object` targets, which tsc deliberately leaves as
+      `any` (narrowFromAnyWithTypePredicate: `x is {}` then
+      `x.method()` flags on the empty object).
+    - Catch-clause bindings already enter the env as `Any`, so the same
+      path serves `catch (err) { if (isFooError(err)) … }` — but the
+      member-miss on `{ type: 'foo'; dontPanic() }`-shaped receivers is
+      still permissively suppressed (`does not exist on `{…}`` render),
+      so narrowExceptionVariableInCatchClause stays missed. Lifting
+      that suppression for narrowing-derived object shapes is the next
+      step and needs care (the filter can't currently see provenance).
+    - Surveyed: instanceof-from-any already narrows (batch earlier);
+      Error / Date member typos (TS2551) need lib member models;
+      loop back-edge widening and `||`-RHS narrowing chains deferred.
+    Whole-corpus TP 2582 -> 2583 @ 0 FP, PFLEGAL 1, TN 1414. 2456 tests.
+
 2026-07-08 (T193)  714/815 (88 %)        414/414 ( 0 FP)   Generic inference: NoInfer intrinsic: TP 2581 -> 2582
 
   T193 -- generic call-site inference, round 1 (user-directed pivot to

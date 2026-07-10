@@ -12811,3 +12811,24 @@ test "expr_check: NoInfer inference barrier (batch AQ)" {
   // NoInfer in a type alias position is transparent for checking.
   @test.assert_eq(issues("type N2 = NoInfer<string>;\nvar s2: N2 = \"ok\";"), 0)
 }
+
+///|
+test "expr_check: predicate narrowing from any (batch AR)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // `any` narrows to the predicate target; `{}` has no members.
+  assert_true(
+    issues(
+      "// @strict: false\ndeclare var x: any;\ndeclare function isAnything(x): x is {};\nif (isAnything(x)) {\n  x.method();\n}",
+    ) >
+    0,
+  )
+  // `Function` / `Object` predicate targets leave `any` unnarrowed.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\ndeclare var x: any;\ndeclare function isFunction(x): x is Function;\ndeclare function isObject(x): x is Object;\nif (isFunction(x)) { x(); x.prop; }\nif (isObject(x)) { x.method(); }",
+    ),
+    0,
+  )
+}
