@@ -5811,7 +5811,13 @@ fn infer_expr(
                 }
                 u
               }
-              _ => @ast.TsType::Any
+              // `[...new StringIterator]` — spreading a hand-rolled
+              // iterator class yields its `next()` element type.
+              other =>
+                match iterator_class_element_type(resolver, other) {
+                  Some(el) => el
+                  None => @ast.TsType::Any
+                }
             }
           _ => infer_expr(env, resolver, item)
         }
@@ -6688,7 +6694,25 @@ fn solve_generic_bindings(
         let actual = infer_expr(env, resolver, args[i])
         match args[i] {
           Spread(_) =>
-            infer_param_bindings(type_params, rest_arr, actual, bindings, true)
+            // A spread of a hand-rolled iterator class contributes its
+            // ELEMENT type (`foo(...new SymbolIterator)` binds `T` to
+            // `symbol`), not the class itself. The contribution flows
+            // through the iterable protocol — a nested inference position
+            // in tsc — so it PINS first-wins rather than widening into a
+            // union: the second spread's mismatching element is an error
+            // (iteratorSpreadInCall7), unlike plain rest arguments.
+            match iterator_class_element_type(resolver, actual) {
+              Some(el) =>
+                infer_param_bindings(type_params, elem, el, bindings, false)
+              None =>
+                // Array-typed spreads (`...[...it]`, `...arr`) infer
+                // `number[] -> T[]` — a NESTED position, so they pin
+                // first-wins too (iteratorSpreadInCall9); only direct rest
+                // arguments union across positions.
+                infer_param_bindings(
+                  type_params, rest_arr, actual, bindings, false,
+                )
+            }
           _ => infer_param_bindings(type_params, elem, actual, bindings, true)
         }
         i = i + 1
@@ -6708,6 +6732,82 @@ fn solve_generic_bindings(
     i = i + 1
   }
   bindings
+}
+
+///|
+/// Element type produced by iterating a hand-rolled iterator class: one that
+/// declares `[Symbol.iterator]()` and whose `next()` yields `{ value: V }`.
+/// `V` comes from the annotated return type when present, otherwise from a
+/// `return { value: ..., done: ... }` object literal in the body (inferred
+/// in a fresh env and literal-widened, matching how tsc spreads
+/// `...new SymbolIterator` as `symbol`s). Returns `None` for anything the
+/// shape doesn't pin down exactly: base classes, generics, interface
+/// merges, or a missing/opaque `next`.
+fn iterator_class_element_type(
+  resolver : Resolver,
+  t : @ast.TsType,
+) -> @ast.TsType? {
+  guard resolver.unwrap(t) is Named(n) else { return None }
+  guard resolver.classes.get(n) is Some(cls) else { return None }
+  guard cls.base_names.length() == 0 &&
+    cls.base_expr is None &&
+    cls.type_params.length() == 0 &&
+    resolver.interfaces.get(n) is None else {
+    return None
+  }
+  let mut has_sym_iter = false
+  for m in cls.methods {
+    if !m.is_static &&
+      m.name == "<computed>" &&
+      m.key_expr is Some(PropAccess(Var("Symbol"), "iterator")) {
+      has_sym_iter = true
+    }
+  }
+  guard has_sym_iter else { return None }
+  for m in cls.methods {
+    if m.is_static || m.name != "next" {
+      continue
+    }
+    // Annotated `next(): { value: V; done: boolean }`.
+    match m.return_type {
+      Object(fields) =>
+        for f in fields {
+          if f.0 is Literal("value") {
+            return Some(f.1)
+          }
+        }
+      _ => ()
+    }
+    // Unannotated: read the returned object literal's `value` property.
+    match m.body {
+      Some(b) =>
+        for st in b.stmts {
+          match st {
+            Return(Some(ObjectLit(props))) =>
+              for kv in props {
+                if kv.0 == "value" {
+                  // `Symbol()` has no global call model in `infer_expr`
+                  // (the lib global isn't a function value there), so map
+                  // it directly — the iterator fixtures build symbol
+                  // elements this way.
+                  match kv.1 {
+                    Call("Symbol", _) => return Some(@ast.TsType::Symbol)
+                    other =>
+                      return Some(
+                        widen_literal(
+                          infer_expr(ExprEnv::new(), resolver, other),
+                        ),
+                      )
+                  }
+                }
+              }
+            _ => ()
+          }
+        }
+      None => ()
+    }
+  }
+  None
 }
 
 ///|
@@ -10949,6 +11049,67 @@ fn check_arguments(
 }
 
 ///|
+/// True when `meth` on receiver type `recv` resolves to a method declared
+/// EXACTLY ONCE across a module-declared interface and its (depth-limited)
+/// extends chain, with no rest parameter and no generic method type params.
+/// Such a signature's arity is exact — interfaces cannot declare parameter
+/// defaults, and `?` optionality is widened into the parameter type — so an
+/// arity diagnostic against it is reliable. Classes are excluded (method
+/// implementations may carry defaults the recorded types don't show).
+fn interface_method_arity_reliable(
+  resolver : Resolver,
+  recv : @ast.TsType,
+  meth : String,
+) -> Bool {
+  guard resolver.unwrap(recv) is Named(n) else { return false }
+  let mut count = 0
+  let mut sig_ty : @ast.TsType? = None
+  let mut generic = false
+  fn walk(name : String, depth : Int) -> Unit {
+    if depth > 8 {
+      count += 2 // force-bail on suspiciously deep chains
+      return
+    }
+    match resolver.interfaces.get(name) {
+      Some(iface) => {
+        for f in iface.fields {
+          if f.0 == meth {
+            count += 1
+            sig_ty = Some(f.1)
+          }
+        }
+        for pair in iface.method_type_params {
+          if pair.0 == meth && pair.1.length() > 0 {
+            generic = true
+          }
+        }
+        for base in iface.extends_names {
+          walk(base, depth + 1)
+        }
+      }
+      None =>
+        // An unresolvable base could contribute overloads we can't see.
+        count += 2
+    }
+  }
+  walk(n, 0)
+  if count != 1 || generic {
+    return false
+  }
+  match sig_ty {
+    Some(Func(ps, _)) => {
+      for p in ps {
+        if p is Rest(_) {
+          return false
+        }
+      }
+      true
+    }
+    _ => false
+  }
+}
+
+///|
 /// Variant of `check_arguments` that takes the rich `TsParam` list when
 /// available, so optional / default / rest parameters are honored on arity
 /// checks. `param_types` is the simplified types array (already lifted out
@@ -11156,9 +11317,47 @@ fn check_arguments_with_sig(
           has_rest = true
         }
       }
-      let min_ = required_arity(ps)
-      let max_ = if has_rest { -1 } else { ps.length() }
-      (min_, max_)
+      // An UNANNOTATED rest parameter destructured by a fixed-length array
+      // pattern (`function f(...[[k1, v1], [k2, v2]]) {}`) behaves as
+      // exactly that many required parameters — tsc reports "Expected 2
+      // arguments", not an open-ended rest. A declared tuple type on the
+      // rest param can carry its own optionality, so only the
+      // annotation-free form pins the count.
+      let mut fixed_rest_len = -1
+      if has_rest && ps.length() > 0 && ps[ps.length() - 1].is_rest {
+        let last = ps[ps.length() - 1]
+        if last.type_ is Any {
+          match last.binding {
+            Some(Array(ab)) =>
+              if ab.rest is None {
+                let mut fixed = true
+                let mut n = 0
+                for it in ab.items {
+                  match it {
+                    Some(el) => {
+                      if el.default is Some(_) {
+                        fixed = false
+                      }
+                      n += 1
+                    }
+                    None => fixed = false
+                  }
+                }
+                if fixed && n > 0 {
+                  fixed_rest_len = n
+                }
+              }
+            _ => ()
+          }
+        }
+      }
+      if fixed_rest_len >= 0 {
+        (required_arity(ps) + fixed_rest_len, ps.length() - 1 + fixed_rest_len)
+      } else {
+        let min_ = required_arity(ps)
+        let max_ = if has_rest { -1 } else { ps.length() }
+        (min_, max_)
+      }
     }
     None => {
       // No rich `TsParam` metadata (e.g. calling a value typed as
@@ -14473,7 +14672,26 @@ fn check_call_args_in_expr(
             let pruned = prune_nullish(ctx.resolver, recv_ty)
             match ctx.resolver.lookup_method_sig(pruned, meth) {
               Some((params, _)) =>
-                check_arguments(env, params, args, ctx, "call `\{meth}`")
+                // A method declared exactly once on a module-declared
+                // INTERFACE has an exact arity: interfaces can't carry
+                // parameter defaults, `?` optionality is widened into the
+                // type, and overloads would appear as repeated fields.
+                // That makes the count reliable enough to bypass the
+                // permissive arity suppression (`action.run(...[100,
+                // 'foo'])` against `run(event?: unknown)` is TS2554).
+                check_arguments_with_sig(
+                  env,
+                  params,
+                  None,
+                  args,
+                  ctx,
+                  "call `\{meth}`",
+                  arity_reliable=interface_method_arity_reliable(
+                    ctx.resolver,
+                    pruned,
+                    meth,
+                  ),
+                )
               None =>
                 // If the receiver has a concrete shape and we can't find the
                 // method, flag it — but be conservative and skip Any/primitives
@@ -14532,9 +14750,28 @@ fn check_call_args_in_expr(
       }
       match ctx.resolver.lookup_constructor_sig(class_name) {
         Some((params, sig)) => {
+          // Generic class: infer the constructor's type-param bindings from
+          // the arguments (mirroring the direct-call path) so `new Foo(...
+          // new SymbolIterator, ...new _StringIterator)` with
+          // `constructor(...s: T[])` pins `T` from the first argument and
+          // checks the rest against it.
+          let substituted_params = match ctx.resolver.classes.get(class_name) {
+            Some(cls) if cls.type_params.length() > 0 => {
+              let bindings = solve_generic_bindings(
+                env,
+                ctx.resolver,
+                cls.type_params,
+                params,
+                args,
+                Some(sig),
+              )
+              substitute_params_array(params, bindings)
+            }
+            _ => params
+          }
           check_arguments_with_sig(
             env,
-            params,
+            substituted_params,
             Some(sig),
             args,
             ctx,

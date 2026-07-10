@@ -13080,3 +13080,76 @@ test "expr_check: TS1163 yield contexts inside generators (batch AV)" {
     0,
   )
 }
+
+///|
+test "expr_check: generic inference stage 1 (batch AW)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Exact array-literal spread against an interface method's optional
+  // param: too many arguments (arraySpreadInCall / TS2554).
+  assert_true(
+    issues(
+      "// @strict: false\ninterface IAction { run(event?: unknown): unknown; }\ndeclare const action: IAction;\naction.run(...[100, \"foo\"]);",
+    ) >
+    0,
+  )
+  // Rest param destructured by a fixed-length tuple pattern pins arity
+  // (iterableArrayPattern25 / TS2554).
+  assert_true(
+    issues(
+      "// @strict: false\nfunction takeFirstTwoEntries(...[[k1, v1], [k2, v2]]) { }\ntakeFirstTwoEntries(new Map([[\"\", 0], [\"hello\", 1]]));",
+    ) >
+    0,
+  )
+  // Iterator-class spreads pin the rest type param first-wins
+  // (iteratorSpreadInCall7/8/9 / TS2345).
+  let iter_classes = "class SymbolIterator {\n  next() { return { value: Symbol(), done: false }; }\n  [Symbol.iterator]() { return this; }\n}\nclass _StringIterator {\n  next() { return { value: \"\", done: false }; }\n  [Symbol.iterator]() { return this; }\n}\n"
+  assert_true(
+    issues(
+      "// @strict: false\nfunction foo<T>(...s: T[]) { return s[0]; }\n" +
+      iter_classes +
+      "foo(...new SymbolIterator, ...new _StringIterator);",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "// @strict: false\nclass Foo<T> { constructor(...s: T[]) { } }\n" +
+      iter_classes +
+      "new Foo(...new SymbolIterator, ...[...new _StringIterator]);",
+    ) >
+    0,
+  )
+  // Pins: legal patterns stay silent.
+  // Same-element iterator spreads agree.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nfunction foo<T>(...s: T[]) { return s[0]; }\n" +
+      iter_classes +
+      "foo(...new SymbolIterator, ...new SymbolIterator);",
+    ),
+    0,
+  )
+  // Direct mixed rest arguments still union (no pin): tsc accepts.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nfunction foo<T>(...s: T[]) { return s[0]; }\nfoo(1, \"a\");",
+    ),
+    0,
+  )
+  // Interface method calls with exact arity stay silent, incl. optional.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\ninterface IAction { run(event?: unknown): unknown; }\ndeclare const action: IAction;\naction.run();\naction.run(1);\naction.run(...[100]);",
+    ),
+    0,
+  )
+  // Tuple-annotated rest params keep their own optionality (no pattern pin).
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nfunction g(...args: [number, string?]) { }\ng(1);\ng(1, \"a\");",
+    ),
+    0,
+  )
+}
