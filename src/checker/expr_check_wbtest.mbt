@@ -12861,3 +12861,32 @@ test "expr_check: keyword member names in object types (batch AS)" {
     0,
   )
 }
+
+///|
+test "expr_check: generalized keyword member names (batch AT)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Keyword-keyed members no longer collapse the annotation to Any, so
+  // member misses behind them surface.
+  assert_true(
+    issues(
+      "// @strict: false\ndeclare var a: { function: string; m(): void };\na.other();",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "// @strict: false\ndeclare var c: { new: string; m(): void };\nc.other();",
+    ) >
+    0,
+  )
+  // Legal uses of keyword-keyed members, and construct/call signatures
+  // keep their meaning.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\ndeclare var a: { function: string; class: number; in: boolean; m(): void };\na.m();\nvar s: string = a.function;\nvar n: number = a.class;\ndeclare var h: { new (x: number): string };\nvar inst = new h(1);",
+    ),
+    0,
+  )
+}

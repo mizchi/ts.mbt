@@ -2295,6 +2295,24 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-08 (T196)  714/815 (88 %)        414/414 ( 0 FP)   Parser: keyword member names generalized: TP 2584 (soundness)
+
+  T196 -- generalize T195 beyond `type`. A probe sweep showed EVERY
+    keyword-token member name (`function:`, `class:`, `in:`, `of:`,
+    `typeof:`, `declare:`, …) combined with a method-signature member
+    collapsed the object-type annotation to `Any` through the same
+    primary-parser gap, and `{ new: string }` additionally misparsed as
+    a construct signature (swallowing the property). Fix: a
+    `keyword_member_name` token->spelling table feeds a guarded
+    member-name arm (next token must prove a member key), and the `New`
+    arm distinguishes a `new:`-property from a construct-signature head
+    the same way. Interfaces were already correct (separate parser).
+    No corpus TP delta this round — the corpus rarely puts keyword keys
+    on checked paths — but the annotation soundness hole is closed for
+    real-world inputs (`type`-discriminated unions were the visible
+    case in T195).
+    Whole-corpus TP 2584 @ 0 FP, PFLEGAL 1, TN 1414. 2458 tests.
+
 2026-07-08 (T195)  714/815 (88 %)        414/414 ( 0 FP)   Parser: keyword member names in object types: TP 2583 -> 2584
 
   T195 -- the T194 reach gap, root-caused and fixed. The trail:
