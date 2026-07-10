@@ -12442,13 +12442,20 @@ fn apply_type_predicate_narrowing(
       // not just to `target`, so subsequent calls expecting `cur` still
       // accept the narrowed value.
       let then_ty = narrow_keep(cur, fn(v) { is_assignable_to(v, target) })
-      let then_resolved = match then_ty {
-        Never =>
-          match cur {
-            Any => target
-            _ => @ast.TsType::Intersection([cur, target])
+      let then_resolved = match cur {
+        // From `any`, a positive predicate narrows straight to the target
+        // — except `Function` / `Object`, which tsc deliberately leaves
+        // as `any` (narrowFromAnyWithTypePredicate).
+        Any =>
+          match target {
+            Named("Function") | Named("Object") => @ast.TsType::Any
+            _ => target
           }
-        _ => then_ty
+        _ =>
+          match then_ty {
+            Never => @ast.TsType::Intersection([cur, target])
+            _ => then_ty
+          }
       }
       pair_pos.push((arg_name, then_resolved))
       // Negative: strip members that fit T.
