@@ -2295,6 +2295,44 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+## Release checkpoint (2026-07-10, post-T199)
+
+State at this cut: whole-corpus TP 2597 (397 via parse rejection) / FP 0 /
+PFLEGAL 1 (parser768531 only) / TN 1414; 2461 unit tests; standing gate
+`--max-fp 0 --max-legal-parsefail 1` green. Session arc: TP 1761 -> 2597
+across PRs #191-#197 plus three unmerged commits (TS2428 merge identity,
+constant template folding, TS1163 yield contexts + temp-parser hand-off).
+
+Remaining 486 misses, sorted by real-world likelihood (what a bridge user
+would actually hit), so the release notes can state known limitations:
+
+  HIGH -- multi-stage generic inference (~40-60 files spanning TS2345 /
+    TS2322 / TS2554 / TS2769). Callback parameter types derived from a
+    sibling argument, overloaded call resolution (fetch-style APIs, tagged
+    templates), iterator / generator element inference. One design work
+    item, already scoped in T-entries; the single highest-leverage post-
+    release investment.
+  HIGH -- contextual typing gaps (TS7006 x7, TS7053 x6): contextually
+    typed IIFEs, class-expression methods, union call signatures.
+    Un-annotated callbacks are ubiquitous in real code.
+  MEDIUM -- lib surface models: nonexistent METHOD CALLS on primitive
+    receivers are unchecked (property access IS checked; needs complete
+    String/Number prototype tables to stay FP-free — T197 notes), and
+    Error / Date member models for TS2551 typo suggestions (x2).
+  MEDIUM -- flow narrowing tails: loop back-edge widening, `||`-RHS
+    chains, `T & primitive` disjointness (intersectionNarrowing). Common
+    in app code, rare in declaration files.
+  LOW (edge; acceptable release cuts) -- computed property names /
+    well-known symbols (TS2411 x13, TS2464/2466), parser-recovery
+    baselines (TS1005 x12), declaration-merging exotica, `using`
+    declarations (TS2851/TS1492), variant-baseline oracle artifacts
+    (NOBASE x12).
+
+Known non-blockers to note in a release: `moon check --deny-warn` fails on
+pre-existing deprecated-API warnings from toolchain drift (T197 note; tests
+are the gate), and parser768531's regex/division ambiguity is the one
+budgeted legal parse failure.
+
 2026-07-10 (T199)  714/815 (88 %)        414/414 ( 0 FP)   TS1163 yield contexts + temp-parser misuse hand-off: TP 2592 -> 2597
 
   T199 -- TS1163 ("A 'yield' expression is only allowed in a generator
