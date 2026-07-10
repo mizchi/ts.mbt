@@ -13004,3 +13004,79 @@ test "expr_check: constant template folding feeds TS2367 (batch AU)" {
   // Fractional / huge numbers are not folded (JS formatting edge cases).
   @test.assert_eq(issues("// @strict: false\nvar x = `a${0.5}` === `a`;"), 0)
 }
+
+///|
+test "expr_check: TS1163 yield contexts inside generators (batch AV)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Arrow bodies never inherit the generator context.
+  assert_true(
+    issues(
+      "// @strict: false\nfunction* g() {\n  return () => ({ b: yield 2 });\n}",
+    ) >
+    0,
+  )
+  assert_true(
+    issues("// @strict: false\nfunction* g() {\n  var f = x => yield 2;\n}") > 0,
+  )
+  // Class field initializers (instance and static) are their own context.
+  assert_true(
+    issues(
+      "// @strict: false\nfunction* g() {\n  class C {\n    x = yield 0;\n  }\n}",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "// @strict: false\nfunction* g() {\n  class C {\n    static x = yield 0;\n  }\n}",
+    ) >
+    0,
+  )
+  // A non-generator function expression / method inside a generator.
+  assert_true(
+    issues(
+      "// @strict: false\nfunction* g() {\n  var f = function () {\n    var a = yield 0;\n  };\n}",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "// @strict: false\nfunction* g() {\n  class C {\n    m() {\n      var a = yield 0;\n    }\n  }\n}",
+    ) >
+    0,
+  )
+  // Pins: contexts where yield stays legal.
+  // Plain yield in the generator body itself.
+  @test.assert_eq(
+    issues("// @strict: false\nfunction* g() {\n  var a = yield 0;\n}"),
+    0,
+  )
+  // Parenthesized yield in the generator body (temp-parser hand-off must
+  // not double- or mis-record).
+  @test.assert_eq(
+    issues("// @strict: false\nfunction* g() {\n  var a = (yield 0);\n}"),
+    0,
+  )
+  // Class decorators and computed keys evaluate in the enclosing
+  // (generator) scope.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nfunction* g() {\n  class C {\n    [yield 0]() {}\n  }\n}",
+    ),
+    0,
+  )
+  // A generator METHOD of a class inside a generator keeps its own
+  // generator context.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nfunction* g() {\n  class C {\n    *m() {\n      var a = yield 0;\n    }\n  }\n}",
+    ),
+    0,
+  )
+  // yield as a plain identifier in non-generator code stays legal.
+  @test.assert_eq(
+    issues("// @strict: false\nfunction f() {\n  var yield_ok = 1;\n}"),
+    0,
+  )
+}

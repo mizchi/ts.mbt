@@ -2295,6 +2295,35 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-10 (T199)  714/815 (88 %)        414/414 ( 0 FP)   TS1163 yield contexts + temp-parser misuse hand-off: TP 2592 -> 2597
+
+  T199 -- TS1163 ("A 'yield' expression is only allowed in a generator
+    body") for `yield` in contexts nested INSIDE a generator that do not
+    inherit its [Yield] grammar: arrow bodies (block and expression form),
+    class field initializers (instance and static), non-generator function
+    EXPRESSIONS, and non-generator class METHODS. Three parser context
+    fixes, same family as the T193-era `parse_function` bug: (1) function
+    expressions and (2) class method bodies only SET `in_generator = true`
+    for generators and never reset it to false for non-generators nested
+    in one — both now assign `is_generator` unconditionally; (3) all 16
+    arrow-body parse sites (8 block + 8 expression) now save/clear/restore
+    `in_generator` (arrows are never generators). Class field initializers
+    clear it around the initializer expression only. Deliberately NOT
+    reset (pinned): class decorator arguments and computed member keys —
+    both evaluate in the enclosing scope, so `@decorator(yield 0)` and
+    `[yield 0]() {}` inside a generator are LEGAL (generatorTypeCheck39's
+    only baseline error is the field init, not the decorator).
+    Root-caused along the way: `({ b: yield 2 })` still missed because
+    parenthesized expressions parse through a TEMP parser whose
+    `grammar_misuses` were dropped on success — both temp-parser helpers
+    (paren inner + parse-until-terminator) now hand their recordings back
+    to the real parser in parse order. That hole silently ate EVERY
+    grammar misuse recorded inside parentheses, not just yield.
+    Corpus fixtures: YieldExpression20_es6, generatorTypeCheck39/57/58,
+    plus awaitAndYieldInProperty as an unplanned bonus (object-literal
+    property initializers hit the same contexts). Whole-corpus TP 2592 ->
+    2597 @ 0 FP, PFLEGAL 1, TN 1414, no lost TPs. 2461 tests.
+
 2026-07-10 (T198)  714/815 (88 %)        414/414 ( 0 FP)   Constant template folding feeds TS2367/TS2678: TP 2588 -> 2592
 
   T198 -- interpolated template literals with literal-constant

@@ -2129,12 +2129,13 @@ fn Parser::parse_class_body(
         // signature; we don't enforce overload/implementation pairing.
         @ast.TsBlock::{ stmts: [], stmt_positions: [] }
       } else {
-        // Save and set function context for method body
+        // Save and set function context for method body. Assign (not
+        // just set-when-true): a non-generator method of a class declared
+        // inside a generator function must NOT inherit the outer
+        // generator context — `yield <operand>` in its body is TS1163.
         let prev_generator = self.in_generator
         let prev_function = self.in_function
-        if is_generator {
-          self.in_generator = true
-        }
+        self.in_generator = is_generator
         self.in_function = true
         let body = self.parse_block()
         self.in_generator = prev_generator
@@ -2265,7 +2266,15 @@ fn Parser::parse_class_body(
         field_type
       }
       let init : @ast.TsExpr? = if self.match_(Eq) {
-        Some(self.parse_assignment())
+        // A field initializer is its own function-like context: `yield
+        // <operand>` inside one is TS1163 even when the class sits in a
+        // generator body (class DECORATORS and computed KEYS, by
+        // contrast, evaluate in the enclosing scope and stay legal).
+        let prev_generator = self.in_generator
+        self.in_generator = false
+        let e = self.parse_assignment()
+        self.in_generator = prev_generator
+        Some(e)
       } else {
         None
       }
