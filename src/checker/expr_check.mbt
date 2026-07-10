@@ -644,7 +644,31 @@ fn Resolver::ingest_module(
     }
     // Async functions expose `Promise<R>` to callers even when the body's
     // declared `return_type` is the un-wrapped `R`.
-    let ret = wrap_async_return(f.is_async, f.return_type)
+    // An unannotated return type (`function len(s: string) { return
+    // s.length; }`) is declared `Any`; infer it from the body so callers
+    // see the real type. Adopted only when the inference lands on a bare
+    // primitive — anything structural, unioned, or unresolved keeps `Any`
+    // (partial-resolver inference isn't trustworthy beyond that), and
+    // generators are excluded (their calls yield iterator objects).
+    let effective_ret = if f.return_type is Any &&
+      !f.is_generator &&
+      f.body.stmts.length() > 0 {
+      let fenv = ExprEnv::new()
+      for p in effective_params {
+        fenv.bind(p.name, p.type_)
+      }
+      match widen_literal(infer_block_return(fenv, r, f.body)) {
+        Number => @ast.TsType::Number
+        Int => @ast.TsType::Int
+        String_ => @ast.TsType::String_
+        Boolean => @ast.TsType::Boolean
+        BigInt => @ast.TsType::BigInt
+        _ => @ast.TsType::Any
+      }
+    } else {
+      f.return_type
+    }
+    let ret = wrap_async_return(f.is_async, effective_ret)
     let new_func_sig = @ast.TsType::Func(param_types, ret)
     let func_key = prefix + f.name
     match r.globals.get(func_key) {
@@ -11649,6 +11673,130 @@ fn check_arguments_with_sig(
 }
 
 ///|
+/// One-pass approximation of tsc's loop back-edge join: for each variable
+/// directly reassigned inside the loop body (`x = <rhs>`, statement or
+/// expression form, not inside a nested function), its type at the top of
+/// the body is the union of the entry type and the assigned types, with
+/// RHS types inferred in the ENTRY env and literal-widened. Conservative
+/// bail-outs keep this FP-free where the approximation diverges from a
+/// real fixpoint: any `break` / `continue` / `switch` in the body (an
+/// assignment could exit without flowing around the back edge), a loop
+/// condition that mentions the variable (the condition should re-narrow
+/// the JOINED type, which our narrowing pass can't always do), and an
+/// assigned type that escapes the declared type (the assignment error is
+/// reported separately).
+fn loop_backedge_bindings(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  cond : @ast.TsExpr,
+  body : @ast.TsBlock,
+) -> Array[(String, @ast.TsType)] {
+  let out : Array[(String, @ast.TsType)] = []
+  let assigns : Array[(String, @ast.TsExpr)] = []
+  if !collect_loop_assignments(body, assigns) {
+    return out
+  }
+  let merged : Map[String, @ast.TsType] = {}
+  for a in assigns {
+    let (name, rhs) = a
+    if expr_mentions_name(cond, name) {
+      continue
+    }
+    guard env.lookup(name) is Some(cur) else { continue }
+    guard env.lookup_declared(name) is Some(decl) else { continue }
+    let rhs_ty = widen_literal(infer_expr(env, ctx.resolver, rhs))
+    if rhs_ty is Any || !is_checkable(rhs_ty) {
+      continue
+    }
+    // Cap at the declared type: an escaping assignment is its own error.
+    if is_checkable(decl) && !is_assignable_to(rhs_ty, decl) {
+      continue
+    }
+    let base = match merged.get(name) {
+      Some(t) => t
+      None => cur
+    }
+    merged[name] = narrow_union(base, rhs_ty)
+  }
+  for name, t in merged {
+    match env.lookup(name) {
+      Some(cur) if cur != t => out.push((name, t))
+      _ => ()
+    }
+  }
+  out
+}
+
+///|
+/// Collect `x = rhs` assignments in the statement tree (not descending into
+/// nested functions / classes). Returns `false` — meaning "bail, don't
+/// widen" — when the body contains `break` / `continue` / `switch`.
+fn collect_loop_assignments(
+  b : @ast.TsBlock,
+  out : Array[(String, @ast.TsExpr)],
+) -> Bool {
+  for st in b.stmts {
+    if !collect_loop_assignments_stmt(st, out) {
+      return false
+    }
+  }
+  true
+}
+
+///|
+fn collect_loop_assignments_stmt(
+  st : @ast.TsStmt,
+  out : Array[(String, @ast.TsExpr)],
+) -> Bool {
+  match st {
+    Break(_) | Continue(_) | Switch(_, _) => false
+    Assign(name, rhs) => {
+      out.push((name, rhs))
+      true
+    }
+    Expr(AssignExpr(name, rhs)) => {
+      out.push((name, rhs))
+      true
+    }
+    Block(inner) => collect_loop_assignments(inner, out)
+    If(_, then_, else_) =>
+      collect_loop_assignments(then_, out) &&
+      (match else_ {
+        Some(e) => collect_loop_assignments(e, out)
+        None => true
+      })
+    While(_, body) | DoWhile(_, body) | With(_, body) =>
+      collect_loop_assignments(body, out)
+    For(_, _, _, body) => collect_loop_assignments(body, out)
+    ForIn(_, _, _, _, body)
+    | ForOf(_, _, _, _, body)
+    | ForAwaitOf(_, _, _, _, body) => collect_loop_assignments(body, out)
+    Try(t, _, c, f) =>
+      collect_loop_assignments(t, out) &&
+      (match c {
+        Some(cb) => collect_loop_assignments(cb, out)
+        None => true
+      }) &&
+      (match f {
+        Some(fb) => collect_loop_assignments(fb, out)
+        None => true
+      })
+    Label(_, inner) => collect_loop_assignments_stmt(inner, out)
+    _ => true
+  }
+}
+
+///|
+/// True when `name` appears as a variable reference anywhere in `e`.
+/// Syntactic and over-approximate (matches the rendered `Var("name")` node
+/// spelling in the Debug tree, so shadowed uses count too) — used only to
+/// make back-edge widening MORE conservative, never less.
+fn expr_mentions_name(e : @ast.TsExpr, name : String) -> Bool {
+  let rendered = "\{e}"
+  rendered.contains("Var(\"" + name + "\")")
+}
+
+///|
 /// TS2345 for a generator-literal argument whose body RETURNS a value when
 /// the parameter's callback return type is `IterableIterator<..., void>` /
 /// `Generator<..., void, ...>` — a `void` TReturn slot means the callback
@@ -14020,6 +14168,15 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // reassignment) doesn't leak past the loop, where the condition is
       // false — mirrors the `For` handler.
       let pre = env.full_snapshot()
+      // Loop back-edge join: a variable reassigned inside the body sees the
+      // union of its entry type and the assigned types on the next
+      // iteration (`x = ""; while (cond) { x = len(x); }` makes `x`
+      // `string | number` at the call — controlFlowIterationErrors).
+      // Applied BEFORE the condition narrowing so a condition that
+      // re-narrows the variable keeps precedence.
+      for wb in loop_backedge_bindings(env, ctx, cond, body) {
+        env.bind(wb.0, wb.1)
+      }
       for b in analyze_narrowing(env, ctx.resolver, cond).then_binds {
         env.bind(b.0, b.1)
       }
@@ -14029,6 +14186,9 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
     DoWhile(cond, body) => {
       // `do { … } while (cond)`: the body runs once *before* the condition is
       // ever evaluated, so the condition's narrowing must NOT apply to it.
+      // (Back-edge widening is deliberately not applied here: this arm's
+      // in-body rebinds intentionally leak past the loop, and a snapshot /
+      // restore to contain a widened binding would change that.)
       check_block(env, body, ctx)
       check_call_args_in_expr(env, cond, ctx)
     }

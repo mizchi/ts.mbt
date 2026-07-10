@@ -13275,3 +13275,54 @@ test "expr_check: generator TReturn + construct overloads (batch AX)" {
     0,
   )
 }
+
+///|
+test "expr_check: loop back-edge widening (batch AY)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A variable reassigned in a while body sees the union of entry and
+  // assigned types on the next iteration (controlFlowIterationErrors).
+  assert_true(
+    issues(
+      "// @strict: false\ndeclare var cond: boolean;\nfunction len(s: string) { return s.length; }\nfunction f1() {\n  let x: string | number | boolean;\n  x = \"\";\n  while (cond) {\n    x = len(x);\n  }\n}",
+    ) >
+    0,
+  )
+  // Use-before-assignment ordering inside the loop errors too (f2 shape).
+  assert_true(
+    issues(
+      "// @strict: false\ndeclare var cond: boolean;\nfunction len(s: string) { return s.length; }\nfunction f2() {\n  let x: string | number | boolean;\n  x = \"\";\n  while (cond) {\n    x;\n    x = len(x);\n  }\n}",
+    ) >
+    0,
+  )
+  // Pins. Same-type reassignment never widens.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\ndeclare var cond: boolean;\nfunction up(s: string) { return s.toUpperCase(); }\nfunction ok() {\n  let x: string | number;\n  x = \"\";\n  while (cond) {\n    x = up(x);\n  }\n}",
+    ),
+    0,
+  )
+  // A `break` in the body bails out of widening entirely.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\ndeclare var cond: boolean;\nfunction len(s: string) { return s.length; }\nfunction bail() {\n  let x: string | number;\n  x = \"\";\n  while (cond) {\n    if (cond) { x = 1; break; }\n    len(x);\n  }\n}",
+    ),
+    0,
+  )
+  // A condition mentioning the variable re-narrows it: no widening.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nfunction len(s: string) { return s.length; }\nfunction guard1() {\n  let x: string | number;\n  x = \"\";\n  while (typeof x === \"string\") {\n    x = len(x);\n  }\n}",
+    ),
+    0,
+  )
+  // Inferred primitive return types stay literal-safe: a function
+  // returning its string param widens to `string`, not a literal.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nfunction pick() { return \"a\"; }\nvar s: string = pick();",
+    ),
+    0,
+  )
+}

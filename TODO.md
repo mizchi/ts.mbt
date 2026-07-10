@@ -2295,6 +2295,42 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-10 (T202)  714/815 (88 %)        414/414 ( 0 FP)   Loop back-edge widening + inferred returns: TP 2610 -> 2612
+
+  T202 -- batch AY, the flow-narrowing design item from the release
+    checkpoint (loop back-edge widening), one-pass approximation of
+    tsc's fixpoint. In a `while` body, a variable directly reassigned
+    (`x = <rhs>`, statement or expression form, not inside nested
+    functions) is bound at body-top to union(entry type, assigned types),
+    with RHS types inferred in the ENTRY env, literal-widened, and capped
+    at the declared type. Conservative bail-outs keep it FP-free where
+    the approximation diverges from a real fixpoint: any `break` /
+    `continue` / `switch` in the body (an assignment could exit without
+    flowing around the back edge — pinned), and a condition that mentions
+    the variable (it should re-narrow the JOINED type, which
+    analyze_narrowing can't always reproduce — `while (typeof x ===
+    "string")` pinned legal). Applied BEFORE the condition's then-binds
+    so condition narrowing keeps precedence; NOT applied to `do-while`
+    (that arm deliberately leaks body rebinds past the loop, and a
+    snapshot to contain the widened binding would change that).
+    UNBLOCKING PIECE: unannotated module-function return types ingest as
+    `Any`, which silently killed the RHS inference (`function len(s:
+    string) { return s.length; }`). Ingestion now infers the return from
+    the body (params bound, partial resolver) and adopts it ONLY when it
+    lands on a bare primitive — structural / union / unresolved shapes
+    keep `Any`, generators excluded. This is a whole-corpus inference
+    change and swept clean: TN 1414 unchanged, no lost TPs.
+    controlFlowIterationErrors + Async: f1/f2 detected with per-line
+    fidelity; g1/g2 (overloaded callee) still missed — overloaded
+    return inference stays `Any` (file already TP via f1/f2).
+    Whole-corpus TP 2610 -> 2612 @ 0 FP, PFLEGAL 1, TN 1414. 582 checker
+    wbtests. NOT pursued from the theme (documented reasons):
+    unionTypeReduction2 (blocked: `x?: T` and `x: T | undefined` are
+    identical post-parse — known representation limit),
+    genericCallToOverloadedMethodWithOverloadedArguments (needs
+    last-overload inference semantics on generic interface methods),
+    es2020IntlAPIs (needs an Intl lib surface model).
+
 2026-07-10 (T201)  714/815 (88 %)        414/414 ( 0 FP)   Generator TReturn + construct overloads: TP 2607 -> 2610
 
   T201 -- batch AX, the generic-inference theme's remaining two shapes
