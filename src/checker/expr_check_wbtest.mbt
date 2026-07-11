@@ -316,6 +316,7 @@ fn parse_module_or_empty(src : String) -> @ast.TsModule {
         enums: [],
         module_augmentations: [],
         strict_property_initialization: true,
+        no_implicit_any: true,
         strict_null_checks: true,
         use_define_for_class_fields: false,
         deprecated_compiler_options: [],
@@ -13365,6 +13366,50 @@ test "expr_check: comma-operand implicit any (batch AZ)" {
   @test.assert_eq(
     issues(
       "// @noImplicitAny: false\nlet x: (a: string) => string;\nx = (a => a, b => b);",
+    ),
+    0,
+  )
+}
+
+///|
+test "expr_check: union contextual-type implicit any (batch AZ stage 2)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let ifaces = "interface IWithNoCallSignatures { foo: string; }\ninterface IWithCallSignatures { (a: number): string; }\ninterface IWithCallSignatures2 { (a: number): number; }\ninterface IWithCallSignatures3 { (b: string): number; }\ninterface IWithCallSignatures4 { (a: number): string; (a: string, b: number): number; }\n"
+  // Mismatching parameter types across members: no contextual type.
+  assert_true(
+    issues(
+      "// @noImplicitAny: true\n" +
+      ifaces +
+      "var x3: IWithCallSignatures | IWithCallSignatures3 = a => a.toString();",
+    ) >
+    0,
+  )
+  // Mismatching signature COUNTS across members: no contextual type.
+  assert_true(
+    issues(
+      "// @noImplicitAny: true\n" +
+      ifaces +
+      "var x4: IWithCallSignatures | IWithCallSignatures4 = a => a.toString();",
+    ) >
+    0,
+  )
+  // Pins: a single signature-bearing member provides context; matching
+  // sets with different returns do too; the option gates the rule.
+  @test.assert_eq(
+    issues(
+      "// @noImplicitAny: true\n" +
+      ifaces +
+      "var x: IWithNoCallSignatures | IWithCallSignatures = a => a.toString();\nvar x2: IWithCallSignatures | IWithCallSignatures2 = a => a.toString();",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @noImplicitAny: false\n" +
+      ifaces +
+      "var x3: IWithCallSignatures | IWithCallSignatures3 = a => a.toString();",
     ),
     0,
   )

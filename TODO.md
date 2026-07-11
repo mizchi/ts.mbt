@@ -2295,6 +2295,26 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-10 (T204)  714/815 (88 %)        414/414 ( 0 FP)   Union contextual-type implicit any: TP 2613 -> 2614
+
+  T204 -- batch AZ stage 2. tsc propagates a contextual type from a
+    UNION only when every signature-bearing member exposes an identical
+    call-signature set (ignoring return types); otherwise a function
+    literal assigned to the union gets no parameter context and its
+    unannotated params are implicitly `any`
+    (contextualTypeWithUnionTypeCallSignatures x2: param-type mismatch
+    and signature-count mismatch; the no-sig-member and
+    differing-returns cases stay silent — all four shapes pinned).
+    Runs as a module-level pass over top-level var declarations
+    (`check_union_context_implicit_any`), comparing per-member signature
+    param-list keys; unresolved param types anywhere abstain.
+    INFRA: `no_implicit_any` is now a `TsModule` field (detected from
+    the conformance directives like the strict flags) so CHECKER-side
+    TS7006 rules can gate on it — previously the option only existed
+    inside the parser (T203's marker channel).
+    Whole-corpus TP 2613 -> 2614 @ 0 FP, PFLEGAL 1, TN 1414. 584
+    checker wbtests.
+
 2026-07-10 (T203)  714/815 (88 %)        414/414 ( 0 FP)   Comma-operand implicit any + temp-parser option context: TP 2612 -> 2613
 
   T203 -- batch AZ stage 1, opening the contextual-typing theme

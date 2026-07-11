@@ -21342,6 +21342,87 @@ fn interface_bound_differs(
 }
 
 ///|
+/// TS7006 for a union contextual type whose members' call signatures are
+/// not identical (ignoring return types): tsc only propagates a contextual
+/// type from a union when every signature-bearing member exposes the SAME
+/// signature set, so `var x: IWithCallSignatures | IWithCallSignatures3 =
+/// a => ...` leaves `a` implicitly `any`
+/// (contextualTypeWithUnionTypeCallSignatures). Members WITHOUT call
+/// signatures are excluded from the comparison (they don't contribute), a
+/// single signature-bearing member always provides context, and matching
+/// sets (even with different returns) do too — all silent.
+fn check_union_context_implicit_any(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  if !module_.no_implicit_any {
+    return issues
+  }
+  for st in module_.top_level_stmts {
+    let (decl_ty, init) = match st {
+      Let(_, t, e) | Const(_, t, e) | Var(_, t, e) => (t, e)
+      _ => continue
+    }
+    let params : Array[@ast.TsParam] = match init {
+      ArrowFunc(ps, _, _, _) => ps
+      FuncExpr(f) => f.params
+      _ => continue
+    }
+    guard resolver.unwrap(decl_ty) is Union(members) else { continue }
+    let member_sig_keys : Array[String] = []
+    let mut opaque = false
+    for m in members {
+      let sigs = collect_call_signatures(m, resolver)
+      let lists : Array[String] = []
+      for s in sigs {
+        match s {
+          Func(ps2, _) => {
+            // An unresolved param type would make the comparison
+            // unreliable — abstain for the whole declaration.
+            for p2 in ps2 {
+              if type_contains_unresolved_named(p2, resolver) {
+                opaque = true
+              }
+            }
+            lists.push("\{ps2}")
+          }
+          _ => opaque = true
+        }
+      }
+      if lists.length() > 0 {
+        lists.sort()
+        member_sig_keys.push(lists.join(";"))
+      }
+    }
+    if opaque || member_sig_keys.length() < 2 {
+      continue
+    }
+    let mut identical = true
+    for i in 1..<member_sig_keys.length() {
+      if member_sig_keys[i] != member_sig_keys[0] {
+        identical = false
+      }
+    }
+    if identical {
+      continue
+    }
+    for p in params {
+      if p.type_ is Any &&
+        p.default is None &&
+        p.binding is (None | Some(Ident(_))) &&
+        !p.is_rest {
+        issues.push({
+          path: "noImplicitAny",
+          message: "parameter `\{p.name}` implicitly has an `any` type",
+        })
+      }
+    }
+  }
+  issues
+}
+
+///|
 /// True when `name` is a single uppercase ASCII letter (`T`, `U`, `K`, …).
 /// Such names are, by overwhelming convention, generic type parameters —
 /// never library / global types — so an *unresolved* one is reliably an
@@ -22766,6 +22847,9 @@ fn check_module_function_bodies_layered(
     all.push(issue)
   }
   for issue in check_interface_merge_type_params(module_, resolver) {
+    all.push(issue)
+  }
+  for issue in check_union_context_implicit_any(module_, resolver) {
     all.push(issue)
   }
   // TS2304 for single-letter out-of-scope type parameters. Run once at the
