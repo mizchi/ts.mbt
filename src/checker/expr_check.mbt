@@ -21363,6 +21363,139 @@ fn interface_bound_differs(
 }
 
 ///|
+/// TS7006/TS7032 for object literals whose members receive no contextual
+/// type, in two shapes gated on noImplicitAny:
+///
+/// 1. `<lit> satisfies T` in a variable initializer: the SATISFIES type is
+///    the literal's contextual type — the declared annotation does not
+///    reach it. A method missing from `T` (or present but not as a
+///    function) leaves its unannotated params implicitly `any`
+///    (typeSatisfaction_contextualTyping2: `f(s)` flags, `g(s)` doesn't).
+///    Only decidable targets run: plain object types and intersections of
+///    those with `Record<_, V>` where `V` is a concrete non-function.
+///
+/// 2. An object-literal SET accessor in an UNANNOTATED declaration
+///    (`var v = { set Foo(a) { } }`): no contextual type exists and no
+///    paired getter provides an inferred type, so the parameter (and the
+///    property) are implicitly `any` (parserES3Accessors4, TS7032+TS7006).
+fn check_uncontextual_object_literals(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  if !module_.no_implicit_any {
+    return issues
+  }
+  // Member map of a decidable satisfies target, or None when any part is
+  // unresolvable / could supply function context via an index signature.
+  fn sat_members(t : @ast.TsType) -> Map[String, @ast.TsType]? {
+    let out : Map[String, @ast.TsType] = {}
+    fn add_object(fields : Array[(@ast.TsType, @ast.TsType)]) -> Bool {
+      for f in fields {
+        match f.0 {
+          Literal(k) =>
+            if k.has_prefix("<") {
+              return false
+            } else {
+              out[k] = f.1
+            }
+          _ => return false
+        }
+      }
+      true
+    }
+
+    match resolver.unwrap(t) {
+      Object(fields) => if add_object(fields) { Some(out) } else { None }
+      Intersection(parts) => {
+        for part in parts {
+          match resolver.unwrap(part) {
+            Object(fields) => if !add_object(fields) { return None }
+            Applied("Record", [_, v]) =>
+              // A function-ish or `any` value type could type the missing
+              // member through the index signature — abstain.
+              match resolver.unwrap(v) {
+                Func(_, _) | Any => return None
+                _ => ()
+              }
+            _ => return None
+          }
+        }
+        Some(out)
+      }
+      _ => None
+    }
+  }
+
+  for st in module_.top_level_stmts {
+    let (decl_ty, init) = match st {
+      Let(_, t, e) | Const(_, t, e) | Var(_, t, e) => (t, e)
+      _ => continue
+    }
+    match init {
+      Satisfies(ObjectLit(props), sat_ty) =>
+        match sat_members(sat_ty) {
+          Some(members) =>
+            for kv in props {
+              guard kv.1 is FuncExpr(f) else { continue }
+              let has_func_context = match members.get(kv.0) {
+                Some(Func(_, _)) => true
+                _ => false
+              }
+              if has_func_context {
+                continue
+              }
+              for p in f.params {
+                if p.type_ is Any &&
+                  p.default is None &&
+                  !p.is_rest &&
+                  p.binding is (None | Some(Ident(_))) {
+                  issues.push({
+                    path: "noImplicitAny",
+                    message: "parameter `\{p.name}` implicitly has an `any` type",
+                  })
+                }
+              }
+            }
+          None => ()
+        }
+      ObjectLit(props) =>
+        // Only a declaration with NO annotation lacks a contextual type.
+        if decl_ty is Any {
+          for kv in props {
+            guard kv.0.has_prefix("@@set:") else { continue }
+            let prop_name = kv.0["@@set:".length():].to_string()
+            let mut has_getter = false
+            for other in props {
+              if other.0 == "@@get:" + prop_name {
+                has_getter = true
+              }
+            }
+            if has_getter {
+              continue
+            }
+            guard kv.1 is FuncExpr(f) else { continue }
+            for p in f.params {
+              if p.type_ is Any && p.default is None && !p.is_rest {
+                issues.push({
+                  path: "noImplicitAny",
+                  message: "property `\{prop_name}` implicitly has type `any`, because its set accessor lacks a parameter type annotation",
+                })
+                issues.push({
+                  path: "noImplicitAny",
+                  message: "parameter `\{p.name}` implicitly has an `any` type",
+                })
+              }
+            }
+          }
+        }
+      _ => ()
+    }
+  }
+  issues
+}
+
+///|
 /// Variable names appearing as DIRECT operands of arithmetic binary
 /// operators in `e` (recursing through nested arithmetic only, so a
 /// guarded/conditional use never reports).
@@ -22897,6 +23030,9 @@ fn check_module_function_bodies_layered(
     all.push(issue)
   }
   for issue in check_union_context_implicit_any(module_, resolver) {
+    all.push(issue)
+  }
+  for issue in check_uncontextual_object_literals(module_, resolver) {
     all.push(issue)
   }
   // TS2304 for single-letter out-of-scope type parameters. Run once at the

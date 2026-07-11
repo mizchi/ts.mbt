@@ -13441,3 +13441,48 @@ test "expr_check: IIFE optional-param arithmetic TS18048 (batch AZ stage 3)" {
   )
   @test.assert_eq(issues("// @strict: false\n((j?) => j + 1)(12);"), 0)
 }
+
+///|
+test "expr_check: uncontextual object literals (batch AZ stage 4)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // `satisfies` intercepts the contextual type: a method missing from
+  // the satisfies target leaves its params implicitly any
+  // (typeSatisfaction_contextualTyping2).
+  assert_true(
+    issues(
+      "// @strict: true\nlet obj: { f(s: string): void } & Record<string, unknown> = {\n    f(s) { },\n    g(s) { }\n} satisfies { g(s: string): void } & Record<string, unknown>;",
+    ) >
+    0,
+  )
+  // Pins: a member PRESENT in the satisfies target gets context; a
+  // function-valued Record abstains entirely.
+  @test.assert_eq(
+    issues(
+      "// @strict: true\nlet o2 = { f(x) { } } satisfies { f(s: string): void };",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @strict: true\nlet o3: Record<string, (s: string) => void> = {\n  f(s) { }\n} satisfies Record<string, (s: string) => void>;",
+    ),
+    0,
+  )
+  // A lone set accessor in an unannotated declaration is TS7032+TS7006
+  // (parserES3Accessors4).
+  assert_true(issues("var v = { set Foo(a) { } };") >= 2)
+  // Pins: a paired getter provides the parameter type; an annotated
+  // setter never flags; noImplicitAny off gates the rule.
+  @test.assert_eq(
+    issues(
+      "var v = { get Foo() { return 1; }, set Foo(a) { } };\nvar w = { set Bar(a: number) { } };",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues("// @noImplicitAny: false\nvar v = { set Foo(a) { } };"),
+    0,
+  )
+}

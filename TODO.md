@@ -2295,6 +2295,32 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-10 (T206)  714/815 (88 %)        414/414 ( 0 FP)   Uncontextual object literals (satisfies / lone setter): TP 2615 -> 2617
+
+  T206 -- batch AZ stage 4, two more contextual-typing shapes.
+    (a) `satisfies` INTERCEPTS the contextual type: for `let obj: A =
+    { ... } satisfies B`, the literal's context is B, not A — a method
+    missing from B (or present but not as a function) leaves its
+    unannotated params implicitly `any`
+    (typeSatisfaction_contextualTyping2: `f(s)` flags while `g(s)`,
+    present in B, doesn't — matches tsc's single diagnostic). Decidable
+    targets only: plain object types and intersections of those with
+    `Record<_, V>` where V is a concrete non-function (a function-valued
+    or `any` Record could type the member through the index signature —
+    abstains, pinned).
+    (b) An object-literal SET accessor in an UNANNOTATED declaration has
+    no contextual type and no paired getter to infer from, so the
+    property and its parameter are implicitly `any`
+    (parserES3Accessors4, TS7032 + TS7006 — both emitted, matching
+    tsc's two diagnostics). Accessor keys ride the parser's `@@set:` /
+    `@@get:` spellings; a paired getter or a parameter annotation
+    silences (pinned).
+    Whole-corpus TP 2615 -> 2617 @ 0 FP, PFLEGAL 1, TN 1414. 586 checker
+    wbtests. Contextual-typing cluster remainder: contextuallyTyped-
+    ClassExpressionMethodDeclaration01/02 (needs class-expression
+    contextual machinery: static-vs-instance signature matching through
+    return-position construct contexts).
+
 2026-07-10 (T205)  714/815 (88 %)        414/414 ( 0 FP)   IIFE optional-param arithmetic TS18048: TP 2614 -> 2615
 
   T205 -- batch AZ stage 3, user-selected (contextuallyTypedIifeStrict).
