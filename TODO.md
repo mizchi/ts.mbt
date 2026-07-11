@@ -2295,6 +2295,33 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-10 (T203)  714/815 (88 %)        414/414 ( 0 FP)   Comma-operand implicit any + temp-parser option context: TP 2612 -> 2613
+
+  T203 -- batch AZ stage 1, opening the contextual-typing theme
+    (TS7006/TS7053 cluster from the release checkpoint). The comma
+    operator DISCARDS every non-final operand's value, so no contextual
+    type can ever reach a function literal there: its unannotated params
+    are implicitly `any` under noImplicitAny (`x = (a => a, b => b)`
+    flags `a` — contextuallyTypeCommaOperator03, TS7006). Recorded in
+    `parse_comma` as each operand becomes non-final (dedup-free by
+    construction: only the most recent operand is scanned per comma);
+    `<noimplicitany>` marker channel, so emission stays conformance-only.
+    Simple-ident params only — annotated, defaulted, and pattern params
+    abstain; final operands never flag (all pinned).
+    ROOT-CAUSE FIX en route: parenthesized expressions re-parse through a
+    TEMP parser that copied syntactic context (in_generator etc, T199)
+    but not COMPILER-OPTION context — `no_implicit_any` was silently
+    false inside every parenthesized sub-parse. Both temp-parser
+    constructions now inherit it (field is immutable, so it rides the
+    record-update construction).
+    Whole-corpus TP 2612 -> 2613 @ 0 FP, PFLEGAL 1, TN 1414. 583 checker
+    wbtests. Remaining in the cluster (checker-side, need a module-level
+    noImplicitAny flag the checker can see): union-of-call-signatures
+    contexts (contextualTypeWithUnionTypeCallSignatures), class
+    expression method declarations (contextuallyTypedClassExpression-
+    MethodDeclaration01/02), IIFE param contextual typing
+    (contextuallyTypedIifeStrict — TS18048 on optional IIFE params).
+
 2026-07-10 (T202)  714/815 (88 %)        414/414 ( 0 FP)   Loop back-edge widening + inferred returns: TP 2610 -> 2612
 
   T202 -- batch AY, the flow-narrowing design item from the release

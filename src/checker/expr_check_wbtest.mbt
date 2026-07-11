@@ -13326,3 +13326,46 @@ test "expr_check: loop back-edge widening (batch AY)" {
     0,
   )
 }
+
+///|
+test "expr_check: comma-operand implicit any (batch AZ)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A non-final comma operand never receives a contextual type: its
+  // unannotated function-literal params are implicitly `any`
+  // (contextuallyTypeCommaOperator03, TS7006).
+  assert_true(
+    issues(
+      "// @noImplicitAny: true\nlet x: (a: string) => string;\nx = (a => a, b => b);",
+    ) >
+    0,
+  )
+  // Three operands: both non-final arrows flag.
+  assert_true(
+    issues(
+      "// @noImplicitAny: true\nlet x: (a: string) => string;\nx = (a => a, b => b, c => c);",
+    ) >=
+    2,
+  )
+  // Pins: the FINAL operand is contextually typed (never flagged);
+  // annotated / defaulted params never flag; the option gates the rule.
+  @test.assert_eq(
+    issues(
+      "// @noImplicitAny: true\nlet x: (a: string) => string;\nx = ((a: string) => a, b => b);",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @noImplicitAny: true\nlet x: (a: string) => string;\nx = ((a = \"z\") => a, b => b);",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @noImplicitAny: false\nlet x: (a: string) => string;\nx = (a => a, b => b);",
+    ),
+    0,
+  )
+}
