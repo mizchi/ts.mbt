@@ -13414,3 +13414,30 @@ test "expr_check: union contextual-type implicit any (batch AZ stage 2)" {
     0,
   )
 }
+
+///|
+test "expr_check: IIFE optional-param arithmetic TS18048 (batch AZ stage 3)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // An optional unannotated IIFE parameter keeps `undefined` in its type
+  // regardless of the supplied argument (contextuallyTypedIifeStrict).
+  assert_true(issues("// @strictNullChecks: true\n((j?) => j + 1)(12);") > 0)
+  assert_true(issues("// @strictNullChecks: true\n((k?) => k + 1)();") > 0)
+  assert_true(issues("// @strictNullChecks: true\n((l, o?) => l + o)(12);") > 0)
+  // Pins: defaults fill the parameter; required params never flag; block
+  // bodies (which can guard) abstain; the option gates the rule.
+  @test.assert_eq(
+    issues(
+      "// @strictNullChecks: true\n((m = 10) => m + 1)(12);\n((n = 10) => n + 1)();\n((a, b, c) => { })(\"foo\", 101, false);",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @strictNullChecks: true\n((j?) => { return j ? j + 1 : 0; })(12);",
+    ),
+    0,
+  )
+  @test.assert_eq(issues("// @strict: false\n((j?) => j + 1)(12);"), 0)
+}

@@ -2295,6 +2295,24 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-10 (T205)  714/815 (88 %)        414/414 ( 0 FP)   IIFE optional-param arithmetic TS18048: TP 2614 -> 2615
+
+  T205 -- batch AZ stage 3, user-selected (contextuallyTypedIifeStrict).
+    An OPTIONAL unannotated IIFE parameter keeps `undefined` in its type
+    no matter what the call supplies (`?` widens the contextually
+    inferred type with `| undefined`), so arithmetic on it is TS18048
+    under strictNullChecks — `((j?) => j + 1)(12)`, `((k?) => k + 1)()`,
+    `((l, o?) => l + o)(12)` all flag, matching tsc's three per-line
+    diagnostics exactly. Detection: `CallExpr(ArrowFunc(...))` with a
+    param whose type is EXACTLY `Union([Any, Undefined])` (the parser's
+    optional-unannotated spelling) used as a DIRECT operand of an
+    arithmetic binary op in an EXPRESSION-BODIED arrow. Block bodies
+    abstain (a guard could narrow), defaults fill the param (pinned),
+    required params never flag (pinned), and the rule is gated on
+    strictNullChecks (pinned).
+    Whole-corpus TP 2614 -> 2615 @ 0 FP, PFLEGAL 1, TN 1414. 585 checker
+    wbtests.
+
 2026-07-10 (T204)  714/815 (88 %)        414/414 ( 0 FP)   Union contextual-type implicit any: TP 2613 -> 2614
 
   T204 -- batch AZ stage 2. tsc propagates a contextual type from a

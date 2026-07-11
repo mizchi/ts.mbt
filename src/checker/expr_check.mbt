@@ -14905,6 +14905,27 @@ fn check_call_args_in_expr(
       }
     }
     CallExpr(callee, args) => {
+      // Contextually typed IIFE with an OPTIONAL unannotated parameter:
+      // the `?` keeps `undefined` in the parameter's type no matter what
+      // the call supplies, so arithmetic on it is TS18048 under
+      // strictNullChecks (`((j?) => j + 1)(12)`,
+      // contextuallyTypedIifeStrict). Restricted to expression-bodied
+      // arrows — a block body could narrow the parameter with a guard —
+      // and to DIRECT arithmetic operands of the body expression.
+      if ctx.strict_null_checks {
+        match callee {
+          ArrowFunc(ps, _, ArrowExpr(body_expr), _) =>
+            for p in ps {
+              if !p.is_rest &&
+                p.default is None &&
+                p.type_ is Union([Any, Undefined]) &&
+                arith_operand_names(body_expr).contains(p.name) {
+                record(ctx, "call", "`\{p.name}` is possibly `undefined`")
+              }
+            }
+          _ => ()
+        }
+      }
       let callee_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, callee))
       match callee_ty {
         Func(params, _) => check_arguments(env, params, args, ctx, "call")
@@ -21339,6 +21360,32 @@ fn interface_bound_differs(
         _ => false
       }
   }
+}
+
+///|
+/// Variable names appearing as DIRECT operands of arithmetic binary
+/// operators in `e` (recursing through nested arithmetic only, so a
+/// guarded/conditional use never reports).
+fn arith_operand_names(e : @ast.TsExpr) -> Array[String] {
+  let out : Array[String] = []
+  fn walk(x : @ast.TsExpr) -> Unit {
+    match x {
+      BinOp(op, l, r) =>
+        if op is (Add | Sub | Mul | Div | Mod) {
+          match l {
+            Var(n) => out.push(n)
+            other => walk(other)
+          }
+          match r {
+            Var(n) => out.push(n)
+            other => walk(other)
+          }
+        }
+      _ => ()
+    }
+  }
+  walk(e)
+  out
 }
 
 ///|
