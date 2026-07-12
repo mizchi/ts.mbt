@@ -305,6 +305,9 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
   if lexer.unterminated_template {
     grammar_misuses.push("unterminated template literal")
   }
+  for _i in 0..<lexer.invalid_radix_digit_count {
+    grammar_misuses.push("invalid digit in a binary or octal numeric literal")
+  }
   // Module-scoped flag marker for the override checks (TS4114 fires only
   // under `@noImplicitOverride: true`); TS4112/TS4113 are unconditional.
   if detect_no_implicit_override(src) {

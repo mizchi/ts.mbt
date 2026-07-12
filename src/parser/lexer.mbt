@@ -147,6 +147,10 @@ pub struct Lexer {
   // TS1127: count of genuinely-unknown ASCII characters the tokenizer had
   // to skip (a stray `\` not starting a unicode escape, control chars, ...).
   mut invalid_char_count : Int
+  // TS1177/TS1178-family: a binary / octal literal ran into a decimal
+  // digit outside its radix (`0b1102110`, `0o13334823`). tsc surfaces
+  // parser-recovery errors there; one count per offending literal.
+  mut invalid_radix_digit_count : Int
   // TS1160: a template literal ran to EOF without its closing backtick.
   mut unterminated_template : Bool
   src : String
@@ -212,6 +216,7 @@ fn Lexer::read_hex_digit(self : Lexer) -> Int? {
 pub fn Lexer::new(src : String) -> Lexer {
   {
     invalid_char_count: 0,
+    invalid_radix_digit_count: 0,
     unterminated_template: false,
     src,
     // Skip a UTF-8/UTF-16 byte-order mark. Without this the BOM reaches
@@ -526,6 +531,11 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
             _ => break
           }
         }
+        match self.peek() {
+          Some(c) if c >= '2' && c <= '9' =>
+            self.invalid_radix_digit_count = self.invalid_radix_digit_count + 1
+          _ => ()
+        }
         if !has_digit {
           value = 0
         }
@@ -592,6 +602,11 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
             }
             _ => break
           }
+        }
+        match self.peek() {
+          Some(c) if c is ('8' | '9') =>
+            self.invalid_radix_digit_count = self.invalid_radix_digit_count + 1
+          _ => ()
         }
         if !has_digit {
           value = 0

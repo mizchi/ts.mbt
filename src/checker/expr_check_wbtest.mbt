@@ -13602,3 +13602,404 @@ test "expr_check: for-of assign patterns + rest targets (batch BA)" {
     0,
   )
 }
+
+///|
+test "expr_check: destructuring defaults + literal overload sets (batch BB)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Binding-element defaults check against the annotated path type
+  // (destructuringVariableDeclaration1ES5/ES6: per-element errors).
+  @test.assert_eq(
+    issues(
+      "var {h: {h1 = [undefined, null]}}: { h: { h1: number[] } } = { h: { h1: [1, 2] } };",
+    ),
+    2,
+  )
+  // An `any[]` annotated path accepts the same default (pinned legal).
+  @test.assert_eq(
+    issues(
+      "var {g: {g1 = [undefined, null]}}: { g: { g1: any[] } } = { g: { g1: [1, 2] } };",
+    ),
+    0,
+  )
+  // Disjoint string-literal overload sets are mutually non-assignable
+  // (stringLiteralTypesOverloadAssignability01/02).
+  let fg = "function f(x: \"foo\"): number;\nfunction f(x: string): number {\n    return 0;\n}\nfunction g(x: \"bar\"): number;\nfunction g(x: string): number {\n    return 0;\n}\nlet a = f;\nlet b = g;\n"
+  @test.assert_eq(issues("// @strict: false\n" + fg + "a = b;\nb = a;"), 2)
+  // A wider set satisfies a narrower one (05's legal direction), and the
+  // narrower set fails the wider (05's error direction).
+  let fg5 = "function f(x: \"foo\"): number;\nfunction f(x: string): number;\nfunction f(x: string): number {\n    return 0;\n}\nfunction g(x: \"foo\"): number;\nfunction g(x: string): number {\n    return 0;\n}\nlet a = f;\nlet b = g;\n"
+  @test.assert_eq(issues("// @strict: false\n" + fg5 + "b = a;"), 0)
+  @test.assert_eq(issues("// @strict: false\n" + fg5 + "a = b;"), 1)
+  // Identical sets assign freely (03/04 shapes).
+  let fg3 = "function f(x: \"foo\"): number;\nfunction f(x: string): number {\n    return 0;\n}\nfunction g(x: \"foo\"): number;\nfunction g(x: string): number {\n    return 0;\n}\nlet a = f;\nlet b = g;\n"
+  @test.assert_eq(issues("// @strict: false\n" + fg3 + "a = b;\nb = a;"), 0)
+}
+
+///|
+test "expr_check: well-known-symbol members (batch BC task 1)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // `[Symbol.iterator]`-typed members participate in assignability:
+  // a smaller symbol-keyed member fails the larger requirement
+  // (symbolProperty9), and a private symbol member blocks both
+  // directions (symbolProperty12).
+  assert_true(
+    issues(
+      "// @strict: false\nclass C {\n  [Symbol.iterator]: { x; y };\n}\ninterface I {\n  [Symbol.iterator]: { x };\n}\nvar i: I;\ni = new C;\nvar c: C = i;",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "// @strict: false\nclass C {\n  private [Symbol.iterator]: { x };\n}\ninterface I {\n  [Symbol.iterator]: { x };\n}\nvar i: I;\nvar c: C = i;",
+    ) >
+    0,
+  )
+  // Pins: matching symbol members assign freely both ways; the
+  // iterator protocol checks still recognize `[Symbol.iterator]()`
+  // methods under the new `@@iterator` spelling.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nclass C2 {\n  [Symbol.iterator]: { x };\n}\ninterface I2 {\n  [Symbol.iterator]: { x };\n}\nvar i2: I2;\ni2 = new C2;\nvar c2: C2 = i2;",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nclass It {\n  next() { return { value: 1, done: false }; }\n  [Symbol.iterator]() { return this; }\n}\nfor (var n of new It) { }",
+    ),
+    0,
+  )
+  // Well-known-symbol members merge without duplicate checks
+  // (symbolProperty37) and are exempt from string/number index
+  // signatures (symbolProperty60) — both tsc-legal, pinned.
+  @test.assert_eq(
+    issues(
+      "interface D {\n  [Symbol.isConcatSpreadable]: string;\n  [Symbol.isConcatSpreadable]: string;\n}\ninterface E {\n  [Symbol.toStringTag]: string;\n  [key: string]: number;\n}",
+    ),
+    0,
+  )
+  // Shorthand type members keep their names (`{ x; y }` is
+  // `{ x: any; y: any }`) — the annotation no longer collapses.
+  assert_true(
+    issues("// @strict: false\ndeclare var v: { x; m(): void };\nv.zzz();") > 0,
+  )
+}
+
+///|
+test "expr_check: Object member hiding (batch BC task 2)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A member hiding an Object.prototype member with an incompatible
+  // signature blocks assignment to `Object`
+  // (objectTypeHidingMembersOfObjectAssignmentCompat: interface, class,
+  // and object-literal sources).
+  @test.assert_eq(
+    issues(
+      "interface I { toString(): void; }\ndeclare var i: I;\ndeclare var o: Object;\no = i;\ni = o;",
+    ),
+    1,
+  )
+  // Bare `Object` never satisfies a callable or constructable target.
+  assert_true(
+    issues(
+      "interface I { (): void; }\ndeclare var i: I;\ndeclare var f: Object;\nf = i;\ni = f;",
+    ) >
+    0,
+  )
+  // Pins: a COMPATIBLE toString keeps assignment legal; `i = o`
+  // (Object into the interface) is the legal direction of file 1; a
+  // module-declared Object shadows the lib and abstains.
+  @test.assert_eq(
+    issues(
+      "interface J { toString(): string; }\ndeclare var j: J;\ndeclare var o2: Object;\no2 = j;",
+    ),
+    0,
+  )
+  // A module-declared `interface Object` merges with the global: `K`
+  // lacks the merged `x` member, so tsc errors here too — the flag comes
+  // from the general structural compare, not the prototype-hiding rule
+  // (which abstains under the shadow).
+  assert_true(
+    issues(
+      "interface Object { x: number; }\ninterface K { toString(): void; }\ndeclare var k: K;\ndeclare var o3: Object;\no3 = k;",
+    ) >
+    0,
+  )
+}
+
+///|
+test "expr_check: generator object vs function type (batch BC task 3)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Calling a generator IIFE produces a `Generator` object, which has no
+  // call signatures — yielding it into a function-typed slot is TS2322
+  // (generatorTypeCheck31).
+  assert_true(
+    issues(
+      "function* g2(): Iterator<() => Iterable<(x: string) => number>> {\n  yield function* () {\n    yield x => x.length;\n  } ()\n}",
+    ) >
+    0,
+  )
+  // Pins: the generator object itself flows into Iterable / iteration
+  // positions legally, and member access on the synthesized `Generator`
+  // return stays silent.
+  @test.assert_eq(
+    issues(
+      "var it = function* () { yield 1; } ();\nit.next();\nfunction takesIterable(x: Iterable<number>) {}\ntakesIterable(function* () { yield 1; } ());\nfor (const n of function* () { yield 1; } ()) {}",
+    ),
+    0,
+  )
+  // Pin: a fixture-declared `Generator` interface abstains — the user
+  // shape could carry a call signature we don't model.
+  @test.assert_eq(
+    issues(
+      "interface Generator<T, R, N> { (): void; next(): { value: T } }\ndeclare var gg: Generator<number, void, void>;\nvar f2: () => void = gg;",
+    ),
+    0,
+  )
+}
+
+///|
+test "expr_check: mapped-type as clauses (batch BC task 4)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Concrete evaluation of a filter remap: `KeysExtendedBy<M, number>`
+  // reduces to `"b"`, so `f("a")` flags and `f("b")` stays legal
+  // (mappedTypeAsClauses).
+  @test.assert_eq(
+    issues(
+      "type KeysExtendedBy<T, U> = keyof { [K in keyof T as U extends T[K] ? K : never] : T[K] };\ninterface M { a: boolean; b: number; }\nfunction f(x: KeysExtendedBy<M, number>) { return x; }\nf(\"a\");\nf(\"b\");",
+    ),
+    1,
+  )
+  // A bare `val: T` into a key-remapped mapped type over `keyof T`
+  // (mappedTypeAsClauseRelationships): renames flag even under `+?`,
+  // `-?` flags even for pure filters; pure filters otherwise stay legal.
+  @test.assert_eq(
+    issues(
+      "type Filter<T> = { [P in keyof T as T[P] extends Function ? P : never]: T[P] };\ntype Modify<T> = { [P in keyof T as P extends string? `bool${P}`: P]: T[P] };\ntype FilterExclOpt<T> = { [P in keyof T as T[P] extends Function ? P : never]-?: T[P] };\nfunction fun<T>(val: T) {\n  let x: Filter<T> = val;\n  let y: Modify<T> = val;\n  let z: FilterExclOpt<T> = val;\n}",
+    ),
+    2,
+  )
+  // Reading `obj[key]` through a RENAMING remap cannot be correlated to
+  // a checkable target (mappedTypeConstraints2 f2); the same read
+  // through a pure FILTER remap stays legal (f5).
+  @test.assert_eq(
+    issues(
+      "type Mapped2<K extends string> = { [P in K as `get${P}`]: { a: P } };\nfunction f2<K extends string>(obj: Mapped2<K>, key: `get${K}`) {\n  const x: { a: K } = obj[key];\n}",
+    ),
+    1,
+  )
+  @test.assert_eq(
+    issues(
+      "type Mapped5<K extends string> = { [P in K as P extends `_${string}` ? P : never]: P };\nfunction f5<K extends string>(obj: Mapped5<K>, key: keyof Mapped5<K>) {\n  let s: `_${string}` = obj[key];\n}",
+    ),
+    0,
+  )
+  // Pins: a concrete rename-remap instantiation materializes and reads
+  // legally; a getter map over a concrete interface stays silent.
+  @test.assert_eq(
+    issues(
+      "type Getters<T> = { [P in keyof T as `get${P & string}`]: () => T[P] };\ninterface Car { name: string; }\ndeclare var g: Getters<Car>;\nvar h: () => string = g[\"getname\"];",
+    ),
+    0,
+  )
+}
+
+///|
+test "expr_check: Error/Date lib member surface (batch BC task 5)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // The Error / Date instance surfaces are fully table-modeled, so a
+  // member miss is definite (narrowFromAnyWithInstanceof: TS2551 typo
+  // members) — for both annotated receivers and `instanceof`-narrowed
+  // `any`.
+  @test.assert_eq(
+    issues("function f(e: Error, d: Date) {\n  e.mesage;\n  d.getHuors();\n}"),
+    2,
+  )
+  @test.assert_eq(
+    issues(
+      "declare var x: any;\nif (x instanceof Error) {\n  x.message;\n  x.mesage;\n}",
+    ),
+    1,
+  )
+  // Pins: real members (incl. `stack`, `cause`, Object.prototype
+  // fallbacks) stay silent; `instanceof Function` / `instanceof Object`
+  // receivers stay tolerant; a module-declared `Error` interface merge
+  // abstains; error SUBCLASS receivers abstain (their surface carries
+  // members the shared table doesn't list).
+  @test.assert_eq(
+    issues(
+      "function g(e: Error, d: Date) {\n  e.message; e.name; e.stack; e.cause; e.toString(); e.hasOwnProperty(\"x\");\n  d.getDate(); d.setFullYear(2020); d.toISOString(); d.constructor;\n}",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "declare var x: any;\nif (x instanceof Function) { x(); x.prop; }\nif (x instanceof Object) { x.method(); }",
+    ),
+    0,
+  )
+  // A module-declared `interface Error` MERGES with the lib: its own
+  // members and the lib table both resolve; a name in neither is a
+  // genuine TS2339 (flagged by the general resolved-interface branch,
+  // not the lib carve).
+  @test.assert_eq(
+    issues(
+      "interface Error { code: number; }\nfunction h(e: Error) { e.code; e.message; }",
+    ),
+    0,
+  )
+  assert_true(
+    issues(
+      "interface Error { code: number; }\nfunction h(e: Error) { e.whatever; }",
+    ) >
+    0,
+  )
+  @test.assert_eq(issues("function k(e: AggregateError) { e.errors; }"), 0)
+}
+
+///|
+test "expr_check: TS2411 computed keys and symbol index sigs (batch BC task 6)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A constant computed key names the member statically: the getter's
+  // inferred return `Foo` violates the string index value `Foo2`
+  // (computedPropertyNames36_ES6); the setter's `Foo2` param is legal.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nclass Foo { x }\nclass Foo2 { x; y }\nclass C {\n  [s: string]: Foo2;\n  get [\"get1\"]() { return new Foo }\n  set [\"set1\"](p: Foo2) { }\n}",
+    ),
+    1,
+  )
+  // `[1 << 6]` folds to the numeric name "64" and violates a NUMERIC
+  // index signature too (computedPropertyNames39_ES6).
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nclass Foo { x }\nclass Foo2 { x; y }\nclass C {\n  [s: number]: Foo2;\n  get [1 << 6]() { return new Foo }\n  set [1 << 6](p: Foo2) { }\n}",
+    ),
+    1,
+  )
+  // Inheritance both ways: a BASE indexer constrains derived members
+  // (computedPropertyNames43), and a DERIVED indexer constrains
+  // inherited members (computedPropertyNames45 — both get1 and set1).
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nclass Foo { x }\nclass Foo2 { x; y }\nclass C {\n  [s: string]: Foo2;\n}\nclass D extends C {\n  get [\"get1\"]() { return new Foo }\n  set [\"set1\"](p: Foo2) { }\n}",
+    ),
+    1,
+  )
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nclass Foo { x }\nclass Foo2 { x; y }\nclass C {\n  get [\"get1\"]() { return new Foo }\n}\nclass D extends C {\n  [s: string]: Foo2;\n  set [\"set1\"](p: Foo)  { }\n}",
+    ),
+    2,
+  )
+  // A `symbol` index signature constrains well-known-symbol members:
+  // scalar mismatch (symbolProperty17) and function-shape mismatch via
+  // the inferred method return (symbolProperty32).
+  @test.assert_eq(
+    issues(
+      "interface I {\n  [Symbol.iterator]: number;\n  [s: symbol]: string;\n}",
+    ),
+    1,
+  )
+  @test.assert_eq(
+    issues(
+      "class C1 {\n  [Symbol.toStringTag]() { return { x: \"\" }; }\n}\nclass C2 extends C1 {\n  [s: symbol]: () => { x: number };\n}",
+    ),
+    1,
+  )
+  // Pins: assignable members stay silent for every arm — a matching
+  // computed member, an OPTIONAL missing value member, a symbol member
+  // matching the symbol sig, and string/number sigs still ignoring
+  // symbol-keyed members.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nclass Foo2 { x; y }\nclass C {\n  [s: string]: Foo2;\n  get [\"get1\"]() { return new Foo2 }\n  [\"f2\"]: Foo2;\n}",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nclass Foo { x }\nclass Maybe { x; y?: string }\nclass C {\n  [s: string]: Maybe;\n  [\"m\"]: Foo;\n}",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "interface I {\n  [Symbol.iterator]: string;\n  [s: symbol]: string;\n}\ninterface J {\n  [Symbol.toPrimitive]: number;\n  [s: string]: string;\n}",
+    ),
+    0,
+  )
+}
+
+///|
+test "expr_check: using-declaration grammar (batch BC task 7)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS1492: a `using` / `await using` declarator never takes a binding
+  // pattern — later declarators land in the init comma chain
+  // (usingDeclarations.5/.7), and for-of heads are checked directly
+  // (usingDeclarationsInForOf.3).
+  assert_true(
+    issues("{\n  using a = null,\n        [b] = null,\n        c = null;\n}") >
+    0,
+  )
+  assert_true(
+    issues(
+      "async function f() {\n  await using a = null,\n              {b} = null;\n}",
+    ) >
+    0,
+  )
+  assert_true(issues("for (using {} of []) {\n}") > 0)
+  // TS2850/2851: an unannotated object-LITERAL initializer with plain
+  // keys provably lacks `[Symbol.dispose]()` (awaitUsingDeclarations.12).
+  assert_true(issues("async function f() {\n  await using x = {};\n}") > 0)
+  // Pins: identifier declarators with legal inits stay silent — `null`,
+  // a symbol-keyed disposable literal, an ANNOTATED literal, and plain
+  // multi-declarator lists.
+  @test.assert_eq(
+    issues(
+      "{\n  using a = null, c = null;\n}\n{\n  using d = { [Symbol.dispose]() {} };\n}",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "interface D { [Symbol.dispose](): void; }\ndeclare var mk: () => D;\n{\n  using d: D = mk();\n}\nfor (using x of []) {\n}",
+    ),
+    0,
+  )
+}
+
+///|
+test "expr_check: invalid radix digits (batch BC task 7b)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A binary / octal literal running into an out-of-radix decimal digit
+  // is a definite grammar error (binaryIntegerLiteralError /
+  // octalIntegerLiteralError — tsc recovers with TS1005s).
+  @test.assert_eq(issues("var bin1 = 0B1102110;\nvar bin2 = 0b11023410;"), 2)
+  @test.assert_eq(issues("var oct1 = 0O13334823;\nvar oct2 = 0o34318592;"), 2)
+  // Pins: well-formed radix literals (separators, bigint suffix, hex,
+  // adjacent expressions) stay silent.
+  @test.assert_eq(
+    issues(
+      "var a = 0b101;\nvar b = 0o777;\nvar c = 0b101 + 2;\nvar d = 0x1f9;\nvar e = 0b1_01;\nvar f = 0o7n;\nvar g = [0b11, 9];",
+    ),
+    0,
+  )
+}

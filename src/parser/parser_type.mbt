@@ -712,8 +712,23 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
             },
           ),
         )
+      } else if self.check(Semicolon) || self.check(Comma) || self.check(RBrace) {
+        // Shorthand type member (`{ x; y }`): an annotation-less member
+        // means `any` — retaining the NAME keeps missing-member
+        // assignability decisions alive (symbolProperty9's `{ x }` vs
+        // `{ x; y }`).
+        fields.push(
+          (
+            Literal(field_name),
+            if is_optional {
+              wrap_optional_ts_type(@ast.TsType::Any)
+            } else {
+              @ast.TsType::Any
+            },
+          ),
+        )
       } else {
-        // No `:` and no `(` — not a member shape we handle; fall back.
+        // Not a member shape we handle; fall back.
         self.pos = saved_pos
         return None
       }

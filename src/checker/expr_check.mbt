@@ -618,6 +618,17 @@ fn Resolver::ingest_module(
     }
     r.signatures[prefix + imp.name] = synth_params
   }
+  // tsc's callable surface for an overload set is the BODYLESS overload
+  // signatures only — the implementation signature is not callable. When a
+  // name has at least one bodyless declaration, bodied declarations of the
+  // same name stay out of the ingested union (they still contribute
+  // `signatures` metadata below).
+  let has_sig_only : Map[String, Bool] = {}
+  for f in module_.funcs {
+    if f.body.stmts.length() == 0 {
+      has_sig_only[f.name] = true
+    }
+  }
   for f in module_.funcs {
     // A leading `this` parameter (`function f(this: T, a)`) declares the
     // callee's `this` type, not an argument position, so drop it from the
@@ -671,7 +682,10 @@ fn Resolver::ingest_module(
     let ret = wrap_async_return(f.is_async, effective_ret)
     let new_func_sig = @ast.TsType::Func(param_types, ret)
     let func_key = prefix + f.name
+    let impl_excluded = f.body.stmts.length() > 0 &&
+      has_sig_only.get(f.name) is Some(_)
     match r.globals.get(func_key) {
+      _ if impl_excluded => ()
       Some(Func(_, _) as existing) =>
         r.globals[func_key] = @ast.TsType::Union([existing, new_func_sig])
       Some(Union(existing_parts)) => {
@@ -1124,6 +1138,116 @@ fn param_is_optional(p : @ast.TsParam) -> Bool {
 /// Resolve a type to its "shape" — unwrap `Named(N)` through type aliases
 /// (one hop, with simple cycle protection) so callers can pattern-match on
 /// the structural form (Object, Tuple, Array, Func, ...).
+/// Resolver-aware evaluation of a key-remapping mapped type with a fully
+/// concrete source (`KeysExtendedBy<M, number>` in mappedTypeAsClauses:
+/// `keyof { [K in keyof M as U extends M[K] ? K : never]: M[K] }` needs the
+/// resolver to enumerate `keyof M` and resolve `M[K]` per key — the
+/// resolver-free `simplify_type` cannot). Returns `None` (caller falls back
+/// to the simplify path) whenever any step is not decidable. A `keyof` over
+/// an ALIAS source bails before resolution — a self-referential mapped
+/// alias would otherwise re-enter this evaluation forever
+/// (mappedTypeAsClauseRecursiveNoCrash1).
+fn resolver_eval_mapped_remap(
+  resolver : Resolver,
+  t : @ast.TsType,
+) -> @ast.TsType? {
+  guard t is MappedTypeRemap(binder, source, remap, value, optional) else {
+    return None
+  }
+  let src_keys : @ast.TsType = match source {
+    Keyof(inner) => {
+      match inner {
+        Named(n) | Applied(n, _) =>
+          if resolver.type_aliases.get(n) is Some(_) {
+            return None
+          }
+        _ => ()
+      }
+      let fields = collect_declared_fields(resolver.unwrap(inner), resolver)
+      if fields.length() == 0 {
+        return None
+      }
+      let ks : Array[@ast.TsType] = []
+      for f in fields {
+        ks.push(Literal(f.0))
+      }
+      if ks.length() == 1 {
+        ks[0]
+      } else {
+        Union(ks)
+      }
+    }
+    Literal(_) | Union(_) => source
+    _ => return None
+  }
+  let keys : Array[String] = []
+  match src_keys {
+    Literal(k) => keys.push(k)
+    Union(parts) =>
+      for p in parts {
+        guard p is Literal(k) else { return None }
+        keys.push(k)
+      }
+    _ => return None
+  }
+  // Evaluate a (substituted) remap branch to a produced key: `Some(name)`
+  // keeps the field under `name`, `None` filters it out. Anything not
+  // reducible to a string literal or `never` aborts the whole evaluation.
+  let out_fields : Array[(@ast.TsType, @ast.TsType)] = []
+  // `resolver.unwrap` on `M["a"]` degrades to `Any` (simplify's structural
+  // fallback), which would make every filter condition trivially true —
+  // resolve literal-keyed accesses through the field table first.
+  let resolve_step = fn(t : @ast.TsType) -> @ast.TsType {
+    match t {
+      IndexedAccess(base, Literal(name)) =>
+        match resolver.lookup_field(resolver.unwrap(base), name) {
+          Some(ft) => ft
+          None => t
+        }
+      other => resolver.unwrap(other)
+    }
+  }
+  for k in keys {
+    let bind : Map[String, @ast.TsType] = {}
+    bind[binder] = Literal(k)
+    let remap_k = substitute_params(remap, bind)
+    let branch_key = fn(b : @ast.TsType) -> @ast.TsType {
+      match b {
+        Literal(_) | Never => b
+        other => simplify_type(resolve_step(other))
+      }
+    }
+    let produced : @ast.TsType = match remap_k {
+      Conditional(a, b, tb, eb) =>
+        match extends_decision(resolve_step(a), resolve_step(b)) {
+          Some(true) => branch_key(tb)
+          Some(false) => branch_key(eb)
+          None => return None
+        }
+      other => branch_key(other)
+    }
+    match produced {
+      Never => continue
+      Literal(new_key) => {
+        let (raw_val, strip_undef) = match substitute_params(value, bind) {
+          Applied("__tsmbt_strip_undef", [v]) => (v, true)
+          v => (v, false)
+        }
+        let val_t = resolve_step(raw_val)
+        let field_t : @ast.TsType = if optional && !strip_undef {
+          Union([val_t, Undefined])
+        } else {
+          val_t
+        }
+        out_fields.push((Literal(new_key), field_t))
+      }
+      _ => return None
+    }
+  }
+  Some(Object(out_fields))
+}
+
+///|
 fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
   let seen : Map[String, Bool] = {}
   let mut cur = ty
@@ -1237,14 +1361,20 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
         }
       }
       // Simplify mapped types to Object shapes so field lookups work.
-      MappedType(_, _, _, _) | MappedTypeRemap(_, _, _, _, _) => {
-        let simplified = simplify_type(cur)
-        match simplified {
-          MappedType(_, _, _, _) | MappedTypeRemap(_, _, _, _, _) =>
-            keep_going = false // couldn't resolve — leave as-is
-          _ => cur = simplified
+      // Remapped variants over concrete interface keys need the
+      // resolver-aware evaluation first (`keyof M` / `M[K]` sources).
+      MappedType(_, _, _, _) | MappedTypeRemap(_, _, _, _, _) =>
+        match resolver_eval_mapped_remap(self, cur) {
+          Some(obj) => cur = obj
+          None => {
+            let simplified = simplify_type(cur)
+            match simplified {
+              MappedType(_, _, _, _) | MappedTypeRemap(_, _, _, _, _) =>
+                keep_going = false // couldn't resolve — leave as-is
+              _ => cur = simplified
+            }
+          }
         }
-      }
       // `T[K]` indexed access — resolve via simplify_type first; if still
       // unresolved, try lookup_field when the base is a Named/Applied type.
       IndexedAccess(base, key) => {
@@ -2658,9 +2788,28 @@ fn error_prototype_member(field : String) -> @ast.TsType? {
   match field {
     "message" | "name" => Some(s)
     "stack" => Some(narrow_union(s, @ast.TsType::Undefined))
+    // `cause` is `unknown | undefined` in lib.es2022 — modeled as `any`
+    // so member access through it stays tolerant.
+    "cause" => Some(@ast.TsType::Any)
     "toString" => Some(@ast.TsType::Func([], s))
     _ => None
   }
+}
+
+///|
+/// True when `n` names a lib type whose instance-member surface is
+/// completely covered by a prototype table (`error_prototype_member` /
+/// `date_prototype_member` plus the `Object.prototype` fallback inside
+/// `lookup_field`), so a lookup miss on it is a definite TS2339 / TS2551
+/// (narrowFromAnyWithInstanceof's `e.mesage` / `d.getHuors()`).
+/// Restricted to the bare `Error` / `Date` names — subclasses carry
+/// members the shared table doesn't list (`AggregateError.errors`). A
+/// module-declared interface or class of the same name merges with (or
+/// shadows) the lib surface, so those abstain.
+fn lib_member_surface_complete(resolver : Resolver, n : String) -> Bool {
+  (n == "Error" || n == "Date") &&
+  resolver.interfaces.get(n) is None &&
+  resolver.classes.get(n) is None
 }
 
 ///|
@@ -6415,9 +6564,14 @@ fn infer_expr(
         param_types.push(p.type_)
       }
       // When no explicit return-type annotation was given, walk the body for
-      // return statements — same strategy as ArrowBlock.
+      // return statements — same strategy as ArrowBlock. A generator function
+      // returns a `Generator` object, not its `return` value, so calling one
+      // yields a Generator — which is what makes yielding a generator IIFE
+      // into a function-typed slot a mismatch (generatorTypeCheck31).
       let ret = if is_checkable(f.return_type) {
         f.return_type
+      } else if f.is_generator {
+        @ast.TsType::Applied("Generator", [Any, Any, Any])
       } else {
         infer_block_return(env, resolver, f.body)
       }
@@ -6870,9 +7024,7 @@ fn iterator_class_element_type(
   }
   let mut has_sym_iter = false
   for m in cls.methods {
-    if !m.is_static &&
-      m.name == "<computed>" &&
-      m.key_expr is Some(PropAccess(Var("Symbol"), "iterator")) {
+    if !m.is_static && m.name == "@@iterator" {
       has_sym_iter = true
     }
   }
@@ -7417,6 +7569,88 @@ fn string_mapping_case_violation(name : String, s : String) -> Bool {
 }
 
 ///|
+/// True when the target's `@@`-named (well-known-symbol) members are
+/// provably unsatisfied by the source: the source lacks a required key of
+/// the target member's object shape, or the source member is optional
+/// where the target's is required. Both member types come from literal
+/// annotations here, so `any`-valued keys (shorthand members) are still
+/// REQUIRED — unlike the general member compare, which tolerates missing
+/// `any`-typed fields as an unmodeled-inference guard.
+fn symbol_member_shape_blocks(
+  src : @ast.TsType,
+  tgt : @ast.TsType,
+  resolver : Resolver,
+) -> Bool {
+  let tgt_members : Array[(String, @ast.TsType)] = match resolver.unwrap(tgt) {
+    Named(tn) => {
+      let out : Array[(String, @ast.TsType)] = []
+      match resolver.interfaces.get(tn) {
+        Some(iface) =>
+          for f in iface.fields {
+            if f.0.has_prefix("@@") {
+              out.push((f.0, f.1))
+            }
+          }
+        None => ()
+      }
+      match resolver.classes.get(tn) {
+        Some(cls) =>
+          for p in cls.properties {
+            if !p.is_static && p.name.has_prefix("@@") {
+              out.push((p.name, p.type_))
+            }
+          }
+        None => ()
+      }
+      out
+    }
+    _ => return false
+  }
+  if tgt_members.length() == 0 {
+    return false
+  }
+  for tm in tgt_members {
+    let (mname, mty) = tm
+    guard resolver.unwrap(mty) is Object(t_fields) else { continue }
+    let src_member = resolver.lookup_field(src, mname)
+    let src_obj = match src_member {
+      Some(smty) =>
+        match resolver.unwrap(smty) {
+          Object(sf) => sf
+          // Optional source member (`[Symbol.iterator]?: T`) against a
+          // required target member: not assignable (symbolProperty10).
+          Union(parts) =>
+            if parts.iter().any(fn(p) { p is Undefined }) {
+              return true
+            } else {
+              continue
+            }
+          _ => continue
+        }
+      None => continue
+    }
+    for tf in t_fields {
+      guard tf.0 is Literal(tk) else { continue }
+      if tk.has_prefix("<") {
+        continue
+      }
+      let mut found = false
+      for sf in src_obj {
+        if sf.0 is Literal(sk) && sk == tk {
+          found = true
+        }
+      }
+      // Explicitly-optional target keys tolerate the miss; `any` (the
+      // shorthand spelling) does not.
+      if !found && !(tf.1 is Union(_) && type_accepts_undefined(tf.1)) {
+        return true
+      }
+    }
+  }
+  false
+}
+
+///|
 fn check_expr_against(
   env : ExprEnv,
   expr : @ast.TsExpr,
@@ -7452,6 +7686,22 @@ fn check_expr_against(
       }
     _ => ctx.resolver.unwrap(infer_expr(env, ctx.resolver, expr))
   }
+  // (0) Well-known-symbol members compare by their annotated OBJECT
+  // shape: shorthand type members are `any`-typed, which the general
+  // member compare tolerates as omittable — but both sides here are
+  // literal annotations, so a missing required key (or an optional
+  // source member against a required target member) is a real TS2322
+  // (symbolProperty9's `{ x }` vs `{ x; y }`, 10's optional member).
+  // Decides only for resolvable Named pairs carrying `@@` members.
+  if !is_assignable_to(src_shape, expected_shape) &&
+    symbol_member_shape_blocks(src_shape, expected_shape, ctx.resolver) {
+    record(
+      ctx,
+      sub_path,
+      "expected `\{type_display(expected_shape)}` but got `\{type_display(src_shape)}`",
+    )
+    return
+  }
   // (1) A lib wrapper-object value never flows into its primitive slot
   // (`sym = symObj` where `symObj: Symbol`, symbolType15). The reverse
   // direction is legal and untouched.
@@ -7469,6 +7719,187 @@ fn check_expr_against(
       return
     }
     _ => ()
+  }
+  // (1b) A generator object has no call signatures, so a `Generator<...>`
+  // value (e.g. the result of calling a generator IIFE) never satisfies a
+  // function-typed slot (generatorTypeCheck31's `yield function* () {..} ()`
+  // into `() => Iterable<...>`). Abstains when the fixture declares its own
+  // `Generator` — a user shape could carry a call signature.
+  match (src_shape, expected_shape) {
+    (Applied("Generator" | "IterableIterator" | "AsyncGenerator", _), Func(_, _)
+    ) =>
+      if ctx.resolver.interfaces.get("Generator") is None &&
+        ctx.resolver.classes.get("Generator") is None &&
+        ctx.resolver.interfaces.get("IterableIterator") is None {
+        record_unfiltered(
+          ctx,
+          sub_path,
+          "a generator object provides no match for the function type `\{type_display(expected_shape)}`",
+        )
+        return
+      }
+    _ => ()
+  }
+  // (1c) A bare type-param value `val: T` flowing into a key-remapped
+  // mapped type over `keyof T` (mappedTypeAsClauseRelationships). tsc
+  // accepts only when the remap provably keeps a SUBSET of `T`'s keys —
+  // a pure filter (`cond ? P : never`) without a `-?` modifier. A remap
+  // that may RENAME keys (template / intrinsic branches) can demand keys
+  // `T` lacks — even under `+?` — and `-?` strengthens optionality; both
+  // are TS2322.
+  match expected_shape {
+    MappedTypeRemap(binder, Keyof(Named(src_tp)), remap, value, _) if src_shape
+      is Named(sn) &&
+      sn == src_tp &&
+      type_contains_unresolved_named(Named(sn), ctx.resolver) => {
+      let strips_undef = value is Applied("__tsmbt_strip_undef", _)
+      let pure_filter = match remap {
+        Conditional(_, _, tb, eb) =>
+          ((tb is Named(t) && t == binder) || tb is Never) &&
+          ((eb is Named(e) && e == binder) || eb is Never)
+        _ => false
+      }
+      if strips_undef {
+        record_unfiltered(
+          ctx,
+          sub_path,
+          "the mapped type's `-?` modifier makes every remapped property required, so `\{sn}` is not assignable to it",
+        )
+        return
+      }
+      if !pure_filter {
+        record_unfiltered(
+          ctx,
+          sub_path,
+          "the mapped type's `as` clause may rename keys of `\{sn}`, so `\{sn}` is not assignable to it",
+        )
+        return
+      }
+    }
+    _ => ()
+  }
+  // (1d) Reading `obj[key]` through a mapped type whose `as` clause
+  // REWRITES keys (template / intrinsic) over an opaque source cannot
+  // correlate the key back to its binder, so tsc types the access as the
+  // uninstantiated `Mapped<K>[...]` — not assignable to any concrete or
+  // parametric target (mappedTypeConstraints2, all five sites). Pure
+  // filter remaps keep the correlation and abstain (f5 / f7 / validate).
+  match expr {
+    IndexAccess(obj, _) if is_checkable(expected) =>
+      match ctx.resolver.unwrap(infer_expr(env, ctx.resolver, obj)) {
+        // The source must be non-materializable: a type param (possibly
+        // erased to its `string` / template bound by the parser) — a
+        // finite literal-union source materializes at simplify time and
+        // a `keyof <concrete>` source abstains here.
+        MappedTypeRemap(binder, source, remap, _, _) if type_contains_unresolved_named(
+            source,
+            ctx.resolver,
+          ) ||
+          source is (String_ | TemplateLiteralType(_, _)) => {
+          let pure_filter = match remap {
+            Conditional(_, _, tb, eb) =>
+              ((tb is Named(t) && t == binder) || tb is Never) &&
+              ((eb is Named(e) && e == binder) || eb is Never)
+            _ => false
+          }
+          if !pure_filter {
+            record_unfiltered(
+              ctx,
+              sub_path,
+              "an element read through a key-remapping mapped type cannot be correlated to `\{type_display(expected_shape)}`",
+            )
+            return
+          }
+        }
+        _ => ()
+      }
+    _ => ()
+  }
+  // (2a) Members HIDING `Object.prototype` members with incompatible
+  // signatures make the source non-assignable to the lib `Object`
+  // (`interface I { toString(): void }` — Object's toString returns
+  // string; objectTypeHidingMembersOfObjectAssignmentCompat). Decided
+  // via the object_prototype_member table; unresolvable member types
+  // abstain. A module-declared `Object` shadows the lib and abstains.
+  if expected_shape is Named("Object") &&
+    ctx.resolver.interfaces.get("Object") is None &&
+    ctx.resolver.classes.get("Object") is None {
+    let src_members : Array[(String, @ast.TsType)] = match src_shape {
+      Object(fs) => {
+        let out : Array[(String, @ast.TsType)] = []
+        for f in fs {
+          match f.0 {
+            Literal(k) => out.push((k, f.1))
+            _ => ()
+          }
+        }
+        out
+      }
+      Struct(_, sf) => sf
+      Named(sn) => {
+        let out : Array[(String, @ast.TsType)] = []
+        match ctx.resolver.interfaces.get(sn) {
+          Some(iface) =>
+            for f in iface.fields {
+              out.push(f)
+            }
+          None => ()
+        }
+        match ctx.resolver.classes.get(sn) {
+          Some(cls) => {
+            for p in cls.properties {
+              if !p.is_static {
+                out.push((p.name, p.type_))
+              }
+            }
+            for meth in cls.methods {
+              if !meth.is_static {
+                let ps : Array[@ast.TsType] = []
+                for prm in meth.params {
+                  ps.push(prm.1)
+                }
+                out.push((meth.name, Func(ps, meth.return_type)))
+              }
+            }
+          }
+          None => ()
+        }
+        out
+      }
+      _ => []
+    }
+    for m in src_members {
+      match object_prototype_member(m.0) {
+        Some(proto_ty) =>
+          if is_checkable(m.1) &&
+            !type_contains_unresolved_named(m.1, ctx.resolver) &&
+            !is_assignable_to(ctx.resolver.unwrap(m.1), proto_ty) {
+            record_unfiltered(
+              ctx,
+              sub_path,
+              "member `\{m.0}` hides an `Object.prototype` member with an incompatible type, so the value is not assignable to `Object`",
+            )
+            return
+          }
+        None => ()
+      }
+    }
+  }
+  // (2b) The bare lib `Object` type has no call or construct signatures,
+  // so it never satisfies a callable / constructable target
+  // (objectTypeWithCallSignatureHidingMembersOfFunction... and the
+  // construct-signature variant).
+  if src_shape is Named("Object") &&
+    ctx.resolver.interfaces.get("Object") is None &&
+    ctx.resolver.classes.get("Object") is None &&
+    (
+      collect_call_signatures(expected_shape, ctx.resolver).length() > 0 ||
+      collect_construct_signatures(expected_shape, ctx.resolver).length() > 0
+    ) {
+    record_unfiltered(
+      ctx, sub_path, "`Object` has no call or construct signatures, so it is not assignable to a callable target",
+    )
+    return
   }
   // (2) A pure call signature provides no match for a construct-only
   // target, and vice versa (assignmentCompatWithConstructSignatures).
@@ -13781,8 +14212,7 @@ fn check_iterable_class_protocol(
               if m.name == "next" {
                 has_next = true
               }
-              if m.name == "<computed>" &&
-                m.key_expr is Some(PropAccess(Var("Symbol"), "iterator")) {
+              if m.name == "@@iterator" {
                 has_sym_iter = true
                 match m.body {
                   Some(b) => {
@@ -13881,6 +14311,12 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       }
       if is_checkable(declared) {
         check_expr_against(env, init, declared, ctx, "destructuring init")
+        check_pattern_defaults_against(
+          env,
+          ctx,
+          @ast.TsBinding::Array(ab),
+          declared,
+        )
       }
       let source_ty = if is_checkable(declared) {
         declared
@@ -13899,6 +14335,12 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // `Any` declared type as the unannotated form.)
       if is_checkable(declared) {
         check_expr_against(env, init, declared, ctx, "destructuring init")
+        check_pattern_defaults_against(
+          env,
+          ctx,
+          @ast.TsBinding::Object(ob),
+          declared,
+        )
       }
       let source_ty = if is_checkable(declared) {
         declared
@@ -13946,8 +14388,21 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         None => ctx.resolver.globals.get(name)
       }
       match target {
-        Some(target_ty) =>
+        Some(target_ty) => {
           check_expr_against(env, e, target_ty, ctx, "assign `\{name}`")
+          // TS2322 between string-literal overload sets: every callable
+          // member of the target must be satisfiable by some source
+          // member (`a = b` where `a: (x: "foo") => number` and
+          // `b: (x: "bar") => number` — the literals are disjoint;
+          // stringLiteralTypesOverloadAssignability01/02/05).
+          check_literal_overload_assign(
+            env,
+            ctx,
+            target_ty,
+            e,
+            "assign `\{name}`",
+          )
+        }
         None => ()
       }
       // After a successful assignment, the variable's effective type
@@ -15083,6 +15538,20 @@ fn check_call_args_in_expr(
                 // method, flag it — but be conservative and skip Any/primitives
                 // (which have many built-in methods we don't model).
                 match ctx.resolver.unwrap(pruned) {
+                  // Table-modeled lib surfaces (`Error` / `Date`) decide
+                  // even though the Named ref is unresolved
+                  // (narrowFromAnyWithInstanceof's `d.getHuors()`).
+                  Named(lib_n) if lib_member_surface_complete(
+                      ctx.resolver,
+                      lib_n,
+                    ) =>
+                    if ctx.resolver.lookup_field(pruned, meth) is None {
+                      record(
+                        ctx,
+                        "call `\{meth}`",
+                        "method `\{meth}` does not exist on `\{lib_n}`",
+                      )
+                    }
                   Named(_)
                   | Applied(_, _)
                   | Object(_)
@@ -15991,6 +16460,18 @@ fn check_call_args_in_expr(
           "PropAccess `.\{prop}`",
           "object is possibly `\{type_display(kind)}`",
         )
+      } else if ctx.resolver.unwrap(recv_ty) is Named(lib_n) &&
+        lib_member_surface_complete(ctx.resolver, lib_n) &&
+        ctx.resolver.lookup_field(recv_ty, prop) is None {
+        // The `Error` / `Date` instance surfaces are fully table-modeled,
+        // so a lookup miss is definite even though the Named ref is
+        // "unresolved" to the general branch below (TS2551,
+        // narrowFromAnyWithInstanceof's `e.mesage`).
+        record(
+          ctx,
+          "PropAccess `.\{prop}`",
+          "property `\{prop}` does not exist on `\{lib_n}`",
+        )
       } else if is_checkable(recv_ty) &&
         !is_in_scope_type_param(ctx, recv_ty) &&
         // Prune null/undefined before the existence lookup: a field declared on
@@ -16133,8 +16614,18 @@ fn check_call_args_in_expr(
         None => ctx.resolver.globals.get(name)
       }
       match target {
-        Some(target_ty) =>
+        Some(target_ty) => {
           check_expr_against(env, v, target_ty, ctx, "assign `\{name}`")
+          // TS2322 between string-literal overload sets (same rule as
+          // the stmt-level `Assign` arm).
+          check_literal_overload_assign(
+            env,
+            ctx,
+            target_ty,
+            v,
+            "assign `\{name}`",
+          )
+        }
         None => ()
       }
       // Narrow-by-assignment: the variable's effective type now
@@ -21566,6 +22057,147 @@ fn check_uncontextual_object_literals(
 }
 
 ///|
+/// Single-parameter string-flavored function members of `t`: `Some(params)`
+/// when EVERY callable member is a one-param `Func` whose parameter is a
+/// string literal or `string` and whose return types all agree — the shape
+/// where overload-set assignability is decidable without full variance
+/// machinery. `None` for anything else.
+fn literal_overload_params(
+  resolver : Resolver,
+  t : @ast.TsType,
+) -> Array[@ast.TsType]? {
+  let members : Array[@ast.TsType] = match resolver.unwrap(t) {
+    Func(_, _) as f => [f]
+    Union(ms) => ms
+    _ => return None
+  }
+  let out : Array[@ast.TsType] = []
+  let mut ret0 : @ast.TsType? = None
+  for m in members {
+    match resolver.unwrap(m) {
+      Func([p], r) => {
+        match resolver.unwrap(p) {
+          Literal(_) | String_ => out.push(resolver.unwrap(p))
+          _ => return None
+        }
+        match ret0 {
+          None => ret0 = Some(r)
+          Some(r0) => if r != r0 { return None }
+        }
+      }
+      _ => return None
+    }
+  }
+  if out.length() == 0 {
+    None
+  } else {
+    Some(out)
+  }
+}
+
+///|
+/// TS2322 between string-literal overload sets (see the assignment-site
+/// caller). Both sides must be fully decidable via
+/// `literal_overload_params`; a target member is satisfied by a source
+/// member accepting AT LEAST its parameter type (`string` source accepts
+/// any literal target; a literal source accepts only the same literal).
+fn check_literal_overload_assign(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  target_ty : @ast.TsType,
+  rhs : @ast.TsExpr,
+  path : String,
+) -> Unit {
+  guard literal_overload_params(ctx.resolver, target_ty) is Some(tps) else {
+    return
+  }
+  let src_ty = infer_expr(env, ctx.resolver, rhs)
+  guard literal_overload_params(ctx.resolver, src_ty) is Some(sps) else {
+    return
+  }
+  for tp in tps {
+    let mut ok = false
+    for sp in sps {
+      match (tp, sp) {
+        (_, String_) => ok = true
+        (Literal(a), Literal(b)) => if a == b { ok = true }
+        _ => ()
+      }
+    }
+    if !ok {
+      record_unfiltered(
+        ctx,
+        path,
+        "type `\{type_display(src_ty)}` is not assignable to type `\{type_display(target_ty)}` (no overload accepts `\{type_display(tp)}`)",
+      )
+      return
+    }
+  }
+}
+
+///|
+/// TS2322 for binding-element DEFAULTS in an ANNOTATED destructuring
+/// declaration: the initializer expression of each element must be
+/// assignable to the annotated type at that path (`var {h: {h1 =
+/// [undefined, null]}}: { h: { h1: number[] } }` errors per element —
+/// destructuringVariableDeclaration1ES5/ES6). Paths the annotation doesn't
+/// pin (missing property, non-tuple/array slot) stay `Any` and abstain.
+fn check_pattern_defaults_against(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  binding : @ast.TsBinding,
+  annot : @ast.TsType,
+) -> Unit {
+  match binding {
+    @ast.TsBinding::Array(ab) => {
+      let un = ctx.resolver.unwrap(annot)
+      for i, item in ab.items {
+        match item {
+          Some(el) => {
+            let slot = match un {
+              Tuple(parts) if i < parts.length() => parts[i]
+              Array(e) | Applied("Array", [e]) => e
+              _ => @ast.TsType::Any
+            }
+            match el.default {
+              Some(d) =>
+                if is_checkable(slot) {
+                  check_expr_against(env, d, slot, ctx, "destructuring default")
+                }
+              None => ()
+            }
+            check_pattern_defaults_against(env, ctx, el.binding, slot)
+          }
+          None => ()
+        }
+      }
+    }
+    @ast.TsBinding::Object(ob) =>
+      for pr in ob.props {
+        let slot = match ctx.resolver.lookup_field(annot, pr.key) {
+          Some(t) => t
+          None => @ast.TsType::Any
+        }
+        match pr.default {
+          Some(d) =>
+            if is_checkable(slot) {
+              check_expr_against(
+                env,
+                d,
+                slot,
+                ctx,
+                "destructuring default `\{pr.key}`",
+              )
+            }
+          None => ()
+        }
+        check_pattern_defaults_against(env, ctx, pr.binding, slot)
+      }
+    _ => ()
+  }
+}
+
+///|
 /// The destructuring-target guard chain: true when `slot_ty` is DEFINITELY
 /// not assignable to `target_ty` with every reliability guard passing
 /// (checkable both sides, no in-scope type params, no unresolved /
@@ -22763,7 +23395,10 @@ fn member_name_duplicates(
   let order : Array[String] = []
   for f in fields {
     let name = f.0
-    if is_signature_sentinel(name) {
+    // Well-known-symbol members (`@@X`) merge without a duplicate check in
+    // tsc (symbolProperty37 declares `[Symbol.isConcatSpreadable]` twice
+    // legally).
+    if is_signature_sentinel(name) || name.has_prefix("@@") {
       continue
     }
     match count.get(name) {
@@ -24777,14 +25412,21 @@ fn check_class_member_structure(
     // --- TS18006: a class may not have a (data) field named `constructor`
     // (`class C { constructor: number }` / `class C { "constructor" = 3 }`).
     // The real constructor is parsed as a method / `constructor_body`, never
-    // as a `properties` entry, and a computed `["constructor"]` key parses to
-    // `<computed>` — so a non-static, non-accessor property literally named
-    // `constructor` is exactly the illegal field form. False-positive-free.
+    // as a `properties` entry. A COMPUTED `["constructor"]` key is legal in
+    // tsc — constant computed keys now fold to their literal name, so check
+    // the recorded computed key expressions to exempt that form.
+    let mut ctor_field_from_computed = false
+    for ke in decl.computed_field_keys {
+      if ke is StringLit("constructor") {
+        ctor_field_from_computed = true
+      }
+    }
     let mut reported_ctor_field = false
     for p in decl.properties {
       if p.name == "constructor" &&
         !p.is_static &&
         !p.is_accessor &&
+        !ctor_field_from_computed &&
         !reported_ctor_field {
         reported_ctor_field = true
         issues.push({
@@ -25613,6 +26255,50 @@ fn check_interface_extends_compat(
       !type_deeply_contains_unmodeled(vu, resolver) {
       return !is_assignable_to(tu, vu)
     }
+    // Two concrete function shapes decide by signature assignability
+    // (`[Symbol.toStringTag]() { return { x: "" } }` vs a symbol index
+    // value `() => { x: number }` — symbolProperty32). Bivariant so
+    // parameter-variance nuances never flag.
+    match (tu, vu) {
+      (Func(_, _), Func(_, _)) =>
+        if !type_contains_unresolved_named(tu, resolver) &&
+          !type_contains_unresolved_named(vu, resolver) &&
+          !type_deeply_contains_unmodeled(tu, resolver) &&
+          !type_deeply_contains_unmodeled(vu, resolver) {
+          return !is_assignable_to_bivariant(tu, vu)
+        }
+      _ => ()
+    }
+    // Both sides resolve as plain named class declarations: a REQUIRED
+    // value member with no counterpart on the property's class is a
+    // definite violation (`get1(): Foo { x }` vs index value `Foo2 { x;
+    // y }` — computedPropertyNames36-45_ES6). Member-type mismatches
+    // abstain; only a missing member decides.
+    match (tu, vu) {
+      (Named(pn), Named(vn)) =>
+        if resolver.classes.get(pn) is Some(pc) &&
+          resolver.classes.get(vn) is Some(vc) &&
+          pc.type_params.length() == 0 &&
+          vc.type_params.length() == 0 &&
+          !class_chain_has_unresolved_base(pn, resolver) &&
+          !class_chain_has_unresolved_base(vn, resolver) {
+          for vf in collect_declared_fields(vu, resolver) {
+            // Only genuine optionality (`y?:` — a `| undefined` union)
+            // exempts a value member; an unannotated (`any`) member is
+            // still required to EXIST on the property's class.
+            let optional_member = match resolver.unwrap(vf.1) {
+              Undefined => true
+              Union(parts) => parts.contains(@ast.TsType::Undefined)
+              _ => false
+            }
+            if !optional_member && resolver.lookup_field(tu, vf.0) is None {
+              return true
+            }
+          }
+          return false
+        }
+      _ => ()
+    }
     // A function-typed property against a literal-keyed object index value:
     // a bare function only carries the Function.prototype surface, so when
     // the value requires a member outside that set the property can never
@@ -25679,24 +26365,36 @@ fn check_interface_extends_compat(
     owner : String,
   ) -> Unit {
     for sig in index_sigs {
-      let numeric_only = match sig.0 {
-        Number | Int => true
-        String_ => false
-        // Symbol / template-literal / other index keys aren't constrained
-        // here (and the `Any` placeholder from an unparsed signature must
+      // 0 = numeric keys only, 1 = string keys, 2 = symbol keys.
+      let key_kind : Int = match sig.0 {
+        Number | Int => 0
+        String_ => 1
+        // A `symbol` index signature constrains exactly the well-known
+        // symbol members (`@@X` names — symbolProperty17/32).
+        Symbol => 2
+        // Template-literal / other index keys aren't constrained here
+        // (and the `Any` placeholder from an unparsed signature must
         // never constrain anything).
         _ => continue
       }
       for f in fields {
-        if numeric_only && !is_numeric_name(f.0) {
-          continue
-        }
-        // Symbol-keyed members (rendered `<computed>`, e.g.
-        // `[Symbol.toStringTag]: string` / `[mySymbol]: string`) are not
-        // constrained by string or numeric index signatures — only a symbol
-        // index signature would apply. Skip them.
-        if f.0 == "<computed>" {
-          continue
+        if key_kind == 2 {
+          // Only `@@`-named members are provably symbol-keyed; opaque
+          // `<computed>` keys may be strings, so they stay silent.
+          if !f.0.has_prefix("@@") {
+            continue
+          }
+        } else {
+          if key_kind == 0 && !is_numeric_name(f.0) {
+            continue
+          }
+          // Symbol-keyed members (rendered `<computed>` for opaque keys,
+          // `@@X` for well-known symbols — `[Symbol.toStringTag]: string` /
+          // `[mySymbol]: string`) are not constrained by string or numeric
+          // index signatures — only a symbol index signature would apply.
+          if f.0 == "<computed>" || f.0.has_prefix("@@") {
+            continue
+          }
         }
         if violates_index_value(f.1, sig.1) {
           issues.push({
@@ -25800,37 +26498,118 @@ fn check_interface_extends_compat(
       }
     }
   }
+  // Non-generic classes by name for the base-chain walks below.
+  let cls_by_name : Map[String, @ast.TsClassDecl] = {}
   for c in module_.classes {
-    if c.type_params.length() == 0 {
-      // Getters / setters are upserted into `properties` by the parser
-      // with an imprecise (often `Any`) type, so exclude accessor-named
-      // members to keep the constraint check on real data fields.
-      let accessors = class_instance_accessor_names(c)
-      let fields : Array[(String, @ast.TsType)] = []
-      for p in c.properties {
-        if !p.is_static && !accessors.contains(p.name) {
-          fields.push((p.name, p.type_))
+    if c.type_params.length() == 0 && cls_by_name.get(c.name) is None {
+      cls_by_name[c.name] = c
+    }
+  }
+  // The TS2411 member surface of one class: data fields (excluding the
+  // imprecise accessor upserts), accessor types — the getter's return
+  // (inferred from the body when unannotated: `get ["get1"]() { return
+  // new Foo }`) and the setter's parameter — and method signatures with
+  // body-inferred returns when unannotated (`[Symbol.toStringTag]() {
+  // return { x: "" } }` — symbolProperty32).
+  fn class_index_members(c : @ast.TsClassDecl) -> Array[(String, @ast.TsType)] {
+    let accessors = class_instance_accessor_names(c)
+    let out : Array[(String, @ast.TsType)] = []
+    for p in c.properties {
+      if !p.is_static && !accessors.contains(p.name) {
+        out.push((p.name, p.type_))
+      }
+    }
+    fn method_ret(m : @ast.TsClassMethodDecl) -> @ast.TsType {
+      if is_checkable(m.return_type) {
+        m.return_type
+      } else {
+        match m.body {
+          Some(b) => infer_block_return(ExprEnv::new(), resolver, b)
+          None => @ast.TsType::Any
         }
       }
-      // Regular (non-accessor) instance methods are constrained too:
-      // `[s: string]: string` over `foo() {}` is a TS2411. Private names
-      // are not string-keyed members and are skipped.
-      for m in c.methods {
-        if !m.is_static &&
-          m.accessor != "get" &&
-          m.accessor != "set" &&
-          m.name != "constructor" &&
-          m.name != "<computed>" &&
-          !m.name.has_prefix("__private_brand__") &&
-          !m.name.has_prefix("#") {
-          let ptypes : Array[@ast.TsType] = []
-          for p in m.params {
-            ptypes.push(p.1)
+    }
+
+    for m in c.methods {
+      if m.is_static ||
+        m.name == "constructor" ||
+        m.name == "<computed>" ||
+        m.name.has_prefix("__private_brand__") ||
+        m.name.has_prefix("#") {
+        continue
+      }
+      if m.accessor == "get" {
+        out.push((m.name, method_ret(m)))
+      } else if m.accessor == "set" {
+        if m.params.length() >= 1 {
+          out.push((m.name, m.params[0].1))
+        }
+      } else {
+        let ptypes : Array[@ast.TsType] = []
+        for p in m.params {
+          ptypes.push(p.1)
+        }
+        out.push((m.name, @ast.TsType::Func(ptypes, method_ret(m))))
+      }
+    }
+    out
+  }
+
+  for c in module_.classes {
+    if c.type_params.length() == 0 {
+      let fields = class_index_members(c)
+      // Base-chain walk: inherited index signatures constrain a derived
+      // class's own members (computedPropertyNames43/44), and a derived
+      // indexer constrains INHERITED members too (computedPropertyNames45,
+      // symbolProperty32). Inherited members are not re-checked against
+      // inherited signatures — the declaring class already did that.
+      let inherited_sigs : Array[(@ast.TsType, @ast.TsType)] = []
+      let inherited_fields : Array[(String, @ast.TsType)] = []
+      let own_names : Map[String, Unit] = {}
+      for f in fields {
+        own_names[f.0] = ()
+      }
+      let visited : Map[String, Unit] = {}
+      visited[c.name] = ()
+      let stack : Array[String] = []
+      for bn in c.base_names {
+        stack.push(bn)
+      }
+      while stack.length() > 0 {
+        let n = stack.unsafe_pop()
+        if visited.contains(n) {
+          continue
+        }
+        visited[n] = ()
+        match cls_by_name.get(n) {
+          Some(b) => {
+            for sig in b.index_signatures {
+              inherited_sigs.push(sig)
+            }
+            for f in class_index_members(b) {
+              if !own_names.contains(f.0) {
+                inherited_fields.push(f)
+                own_names[f.0] = ()
+              }
+            }
+            for bn in b.base_names {
+              stack.push(bn)
+            }
           }
-          fields.push((m.name, @ast.TsType::Func(ptypes, m.return_type)))
+          None => ()
         }
       }
       check_index_props(c.index_signatures, fields, "class \{c.name}")
+      if inherited_sigs.length() > 0 {
+        check_index_props(inherited_sigs, fields, "class \{c.name}")
+      }
+      if c.index_signatures.length() > 0 && inherited_fields.length() > 0 {
+        check_index_props(
+          c.index_signatures,
+          inherited_fields,
+          "class \{c.name}",
+        )
+      }
       check_num_vs_str_sigs(c.index_signatures, "class \{c.name}")
       check_num_vs_str_sigs(c.static_index_signatures, "class \{c.name}")
       // Static side: `static [k: string]: V` constrains static fields and

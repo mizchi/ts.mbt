@@ -31,7 +31,58 @@ priv enum ClassElement {
 fn class_key_name(key : ClassKey) -> String {
   match key {
     Name(name) => name
-    Computed(_) => "<computed>"
+    // A WELL-KNOWN-symbol key (`[Symbol.iterator]`) is statically
+    // resolvable, so keep a stable member name — assignability and
+    // member lookups can then treat it like any named member
+    // (symbolProperty9/10/12). Other computed keys stay opaque.
+    Computed(PropAccess(Var("Symbol"), sym)) => "@@" + sym
+    // A constant literal key (`["get1"]`, `[""]`, `[1 << 6]`) names the
+    // member statically, exactly as tsc resolves it — the TS2411
+    // index-constraint checks need the real name
+    // (computedPropertyNames36-45_ES6).
+    Computed(e) =>
+      match computed_key_const_name(e) {
+        Some(n) => n
+        None => "<computed>"
+      }
+  }
+}
+
+///|
+/// Statically evaluate a computed member key: string literals, integer
+/// literals, and the small constant integer expressions tsc folds
+/// (`[1 << 6]` is the property name "64"). Anything else is `None`.
+fn computed_key_const_name(e : @ast.TsExpr) -> String? {
+  match e {
+    StringLit(s) => Some(s)
+    _ =>
+      match computed_key_const_int(e) {
+        Some(i) => Some(i.to_string())
+        None => None
+      }
+  }
+}
+
+///|
+fn computed_key_const_int(e : @ast.TsExpr) -> Int? {
+  match e {
+    IntLit(i) => Some(i)
+    BinOp(op, a, b) => {
+      guard computed_key_const_int(a) is Some(x) else { return None }
+      guard computed_key_const_int(b) is Some(y) else { return None }
+      match op {
+        Add => Some(x + y)
+        Sub => Some(x - y)
+        Mul => Some(x * y)
+        Shl => Some(x << y)
+        Shr => Some(x >> y)
+        BitAnd => Some(x & y)
+        BitOr => Some(x | y)
+        BitXor => Some(x ^ y)
+        _ => None
+      }
+    }
+    _ => None
   }
 }
 
@@ -746,7 +797,7 @@ fn build_runtime_class_decl(
           _ => ""
         }
         methods.push({
-          name: "<computed>",
+          name: class_key_name(Computed(key_expr)),
           type_params: func.type_params,
           type_param_bounds: [],
           params,
@@ -784,7 +835,7 @@ fn build_runtime_class_decl(
         // can see it. Pushed, not upserted -- computed names may repeat,
         // and name-keyed member checks skip the sentinel.
         properties.push({
-          name: "<computed>",
+          name: class_key_name(Computed(key_expr)),
           type_: field_type,
           is_static: is_static_c,
           is_readonly: is_readonly_c,
