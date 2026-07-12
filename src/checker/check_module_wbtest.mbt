@@ -11,6 +11,7 @@ fn empty_module_for_check() -> @ast.TsModule {
     enums: [],
     module_augmentations: [],
     strict_property_initialization: true,
+    no_implicit_any: true,
     strict_null_checks: true,
     use_define_for_class_fields: false,
     deprecated_compiler_options: [],

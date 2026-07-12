@@ -2295,6 +2295,193 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-10 (T208)  714/815 (88 %)        414/414 ( 0 FP)   For-of assign patterns + rest targets: TP 2619 -> 2625
+
+  T208 -- batch BA stage 1 (user-selected deep TS2322/TS2345 theme).
+    Assignment-form destructuring writes into EXISTING declared slots,
+    and three of those write paths were unchecked:
+    (a) for-of ASSIGNMENT PATTERNS (`for ([k = false, v] of map)` /
+    `for ({x, y = E.x} of arr)`): each named target keeps its declared
+    type, so both the flowing element/property type AND any default
+    expression must fit it. Array patterns read tuple slots
+    positionally; object patterns look the property up on the element
+    type; defaults route through check_expr_against (for-of46 x2
+    matching tsc exactly, 47, 48).
+    (b) REST targets in assignment-form array destructuring collect
+    `SourceElem[]` (`[a, ...b] = new FooIterator` writes `Foo[]` into
+    `b` — iterableArrayPattern6 vs `string[]`, 8 vs `string`).
+    Array-literal / tuple sources skip (their rest is a heterogeneous
+    slice).
+    (c) `Array.prototype.values()` / `keys()` / `entries()` now model
+    their IterableIterator returns, so for-of element types flow
+    through them (for-of12: `for (v of [0, ""].values())` against
+    `v: string` is TS2322 string|number).
+    All three reuse a newly factored `destructure_target_mismatch`
+    guard chain (the per-slot AssignPattern check's guards, extracted).
+    FP CAUGHT BY THE SWEEP and fixed before landing: the first rest-
+    target cut flagged `[a, ...b]: Bar[] = new FooIterator` (elements
+    Foo extends Bar) — context-free `is_assignable_to` doesn't see the
+    extends chain at Array(Named) level. Added the covariant-array
+    element comparison arm the spread-element check already carries
+    (iterableArrayPattern4 pinned legal).
+    Whole-corpus TP 2619 -> 2625 @ 0 FP, PFLEGAL 1, TN 1414. 588
+    checker wbtests.
+
+2026-07-10 (T207)  714/815 (88 %)        414/414 ( 0 FP)   Class-expression method implicit any: TP 2617 -> 2619
+
+  T207 -- batch AZ stage 5, closing the contextual-typing cluster
+    (user-selected remainder). tsc splits class-EXPRESSION member
+    typing: METHOD declarations are NEVER contextually typed — a
+    matching member on the assignment/return target does not reach them
+    (contextuallyTypedClassExpressionMethodDeclaration01: static
+    methods flag while static FIELD initializers get context; 02:
+    instance methods flag even through a construct-signature target).
+    Implementation is a one-line-of-truth change: `parse_class_stub`
+    used to DISARM the heritage-free member noImplicitAny recording for
+    the whole expression body; it now arms it exactly like a
+    heritage-free class declaration. The existing method-param gate
+    naturally skips field initializers (they never run it) and
+    accessors (already exempt); constructors are newly exempted via
+    `in_class_expr_body` (a construct-signature contextual type can
+    supply constructor params, unlike methods). A base class or
+    implements clause re-disarms everything (inherited members supply
+    param types — pinned).
+    Updated one batch-K era pin that had encoded the old disarm as
+    "expected 0" on `var C = class { m(x) {} }` — tsc flags that
+    (TS7006), so the pin now asserts the diagnostic.
+    01 matches tsc exactly (2); 02 reports the 2 method-declaration
+    diagnostics of tsc's 6 (its field-initializer cases need
+    per-target-shape contextual analysis — documented miss, file still
+    TP). Whole-corpus TP 2617 -> 2619 @ 0 FP, PFLEGAL 1, TN 1414. 587
+    checker wbtests.
+
+2026-07-10 (T206)  714/815 (88 %)        414/414 ( 0 FP)   Uncontextual object literals (satisfies / lone setter): TP 2615 -> 2617
+
+  T206 -- batch AZ stage 4, two more contextual-typing shapes.
+    (a) `satisfies` INTERCEPTS the contextual type: for `let obj: A =
+    { ... } satisfies B`, the literal's context is B, not A — a method
+    missing from B (or present but not as a function) leaves its
+    unannotated params implicitly `any`
+    (typeSatisfaction_contextualTyping2: `f(s)` flags while `g(s)`,
+    present in B, doesn't — matches tsc's single diagnostic). Decidable
+    targets only: plain object types and intersections of those with
+    `Record<_, V>` where V is a concrete non-function (a function-valued
+    or `any` Record could type the member through the index signature —
+    abstains, pinned).
+    (b) An object-literal SET accessor in an UNANNOTATED declaration has
+    no contextual type and no paired getter to infer from, so the
+    property and its parameter are implicitly `any`
+    (parserES3Accessors4, TS7032 + TS7006 — both emitted, matching
+    tsc's two diagnostics). Accessor keys ride the parser's `@@set:` /
+    `@@get:` spellings; a paired getter or a parameter annotation
+    silences (pinned).
+    Whole-corpus TP 2615 -> 2617 @ 0 FP, PFLEGAL 1, TN 1414. 586 checker
+    wbtests. Contextual-typing cluster remainder: contextuallyTyped-
+    ClassExpressionMethodDeclaration01/02 (needs class-expression
+    contextual machinery: static-vs-instance signature matching through
+    return-position construct contexts).
+
+2026-07-10 (T205)  714/815 (88 %)        414/414 ( 0 FP)   IIFE optional-param arithmetic TS18048: TP 2614 -> 2615
+
+  T205 -- batch AZ stage 3, user-selected (contextuallyTypedIifeStrict).
+    An OPTIONAL unannotated IIFE parameter keeps `undefined` in its type
+    no matter what the call supplies (`?` widens the contextually
+    inferred type with `| undefined`), so arithmetic on it is TS18048
+    under strictNullChecks — `((j?) => j + 1)(12)`, `((k?) => k + 1)()`,
+    `((l, o?) => l + o)(12)` all flag, matching tsc's three per-line
+    diagnostics exactly. Detection: `CallExpr(ArrowFunc(...))` with a
+    param whose type is EXACTLY `Union([Any, Undefined])` (the parser's
+    optional-unannotated spelling) used as a DIRECT operand of an
+    arithmetic binary op in an EXPRESSION-BODIED arrow. Block bodies
+    abstain (a guard could narrow), defaults fill the param (pinned),
+    required params never flag (pinned), and the rule is gated on
+    strictNullChecks (pinned).
+    Whole-corpus TP 2614 -> 2615 @ 0 FP, PFLEGAL 1, TN 1414. 585 checker
+    wbtests.
+
+2026-07-10 (T204)  714/815 (88 %)        414/414 ( 0 FP)   Union contextual-type implicit any: TP 2613 -> 2614
+
+  T204 -- batch AZ stage 2. tsc propagates a contextual type from a
+    UNION only when every signature-bearing member exposes an identical
+    call-signature set (ignoring return types); otherwise a function
+    literal assigned to the union gets no parameter context and its
+    unannotated params are implicitly `any`
+    (contextualTypeWithUnionTypeCallSignatures x2: param-type mismatch
+    and signature-count mismatch; the no-sig-member and
+    differing-returns cases stay silent — all four shapes pinned).
+    Runs as a module-level pass over top-level var declarations
+    (`check_union_context_implicit_any`), comparing per-member signature
+    param-list keys; unresolved param types anywhere abstain.
+    INFRA: `no_implicit_any` is now a `TsModule` field (detected from
+    the conformance directives like the strict flags) so CHECKER-side
+    TS7006 rules can gate on it — previously the option only existed
+    inside the parser (T203's marker channel).
+    Whole-corpus TP 2613 -> 2614 @ 0 FP, PFLEGAL 1, TN 1414. 584
+    checker wbtests.
+
+2026-07-10 (T203)  714/815 (88 %)        414/414 ( 0 FP)   Comma-operand implicit any + temp-parser option context: TP 2612 -> 2613
+
+  T203 -- batch AZ stage 1, opening the contextual-typing theme
+    (TS7006/TS7053 cluster from the release checkpoint). The comma
+    operator DISCARDS every non-final operand's value, so no contextual
+    type can ever reach a function literal there: its unannotated params
+    are implicitly `any` under noImplicitAny (`x = (a => a, b => b)`
+    flags `a` — contextuallyTypeCommaOperator03, TS7006). Recorded in
+    `parse_comma` as each operand becomes non-final (dedup-free by
+    construction: only the most recent operand is scanned per comma);
+    `<noimplicitany>` marker channel, so emission stays conformance-only.
+    Simple-ident params only — annotated, defaulted, and pattern params
+    abstain; final operands never flag (all pinned).
+    ROOT-CAUSE FIX en route: parenthesized expressions re-parse through a
+    TEMP parser that copied syntactic context (in_generator etc, T199)
+    but not COMPILER-OPTION context — `no_implicit_any` was silently
+    false inside every parenthesized sub-parse. Both temp-parser
+    constructions now inherit it (field is immutable, so it rides the
+    record-update construction).
+    Whole-corpus TP 2612 -> 2613 @ 0 FP, PFLEGAL 1, TN 1414. 583 checker
+    wbtests. Remaining in the cluster (checker-side, need a module-level
+    noImplicitAny flag the checker can see): union-of-call-signatures
+    contexts (contextualTypeWithUnionTypeCallSignatures), class
+    expression method declarations (contextuallyTypedClassExpression-
+    MethodDeclaration01/02), IIFE param contextual typing
+    (contextuallyTypedIifeStrict — TS18048 on optional IIFE params).
+
+2026-07-10 (T202)  714/815 (88 %)        414/414 ( 0 FP)   Loop back-edge widening + inferred returns: TP 2610 -> 2612
+
+  T202 -- batch AY, the flow-narrowing design item from the release
+    checkpoint (loop back-edge widening), one-pass approximation of
+    tsc's fixpoint. In a `while` body, a variable directly reassigned
+    (`x = <rhs>`, statement or expression form, not inside nested
+    functions) is bound at body-top to union(entry type, assigned types),
+    with RHS types inferred in the ENTRY env, literal-widened, and capped
+    at the declared type. Conservative bail-outs keep it FP-free where
+    the approximation diverges from a real fixpoint: any `break` /
+    `continue` / `switch` in the body (an assignment could exit without
+    flowing around the back edge — pinned), and a condition that mentions
+    the variable (it should re-narrow the JOINED type, which
+    analyze_narrowing can't always reproduce — `while (typeof x ===
+    "string")` pinned legal). Applied BEFORE the condition's then-binds
+    so condition narrowing keeps precedence; NOT applied to `do-while`
+    (that arm deliberately leaks body rebinds past the loop, and a
+    snapshot to contain the widened binding would change that).
+    UNBLOCKING PIECE: unannotated module-function return types ingest as
+    `Any`, which silently killed the RHS inference (`function len(s:
+    string) { return s.length; }`). Ingestion now infers the return from
+    the body (params bound, partial resolver) and adopts it ONLY when it
+    lands on a bare primitive — structural / union / unresolved shapes
+    keep `Any`, generators excluded. This is a whole-corpus inference
+    change and swept clean: TN 1414 unchanged, no lost TPs.
+    controlFlowIterationErrors + Async: f1/f2 detected with per-line
+    fidelity; g1/g2 (overloaded callee) still missed — overloaded
+    return inference stays `Any` (file already TP via f1/f2).
+    Whole-corpus TP 2610 -> 2612 @ 0 FP, PFLEGAL 1, TN 1414. 582 checker
+    wbtests. NOT pursued from the theme (documented reasons):
+    unionTypeReduction2 (blocked: `x?: T` and `x: T | undefined` are
+    identical post-parse — known representation limit),
+    genericCallToOverloadedMethodWithOverloadedArguments (needs
+    last-overload inference semantics on generic interface methods),
+    es2020IntlAPIs (needs an Intl lib surface model).
+
 2026-07-10 (T201)  714/815 (88 %)        414/414 ( 0 FP)   Generator TReturn + construct overloads: TP 2607 -> 2610
 
   T201 -- batch AX, the generic-inference theme's remaining two shapes

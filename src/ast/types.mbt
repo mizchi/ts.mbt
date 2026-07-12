@@ -837,6 +837,11 @@ pub(all) struct TsModule {
   // conformance harness baseline default, which has TS2564 emissions
   // for files without an explicit `@strict` directive).
   strict_property_initialization : Bool
+  // True when the source should be checked under `noImplicitAny`
+  // (detected from the conformance `@noImplicitAny` / `@strict` header
+  // directives; defaults to true like the harness baseline). Checker-side
+  // contextual-typing TS7006 rules gate on it.
+  no_implicit_any : Bool
   // True when the source should be checked under `strictNullChecks`.
   // Distinct from `strict_property_initialization`: it shares the
   // default (`true`, matching the conformance baseline default) and the

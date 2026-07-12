@@ -297,11 +297,49 @@ fn Parser::parse_asserted_ternary(
 // / operator
 fn Parser::parse_comma(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut expr = self.parse_assignment()
+  let mut last = expr
   while self.match_(Comma) {
+    // `last` just became a NON-FINAL comma operand: the comma operator
+    // discards its value, so no contextual type can ever reach it — an
+    // unannotated function-literal parameter there is implicitly `any`
+    // (TS7006/TS7019; `x = (a => a, b => b)` flags `a`,
+    // contextuallyTypeCommaOperator03). Only the final operand's value
+    // survives to receive a contextual type.
+    if self.no_implicit_any {
+      self.record_comma_operand_implicit_any(last)
+    }
     let right = self.parse_assignment()
     expr = Seq(expr, right)
+    last = right
   }
   expr
+}
+
+///|
+fn Parser::record_comma_operand_implicit_any(
+  self : Parser,
+  e : @ast.TsExpr,
+) -> Unit {
+  let params : Array[@ast.TsParam] = match e {
+    ArrowFunc(ps, _, _, _) => ps
+    FuncExpr(f) => f.params
+    _ => return
+  }
+  for p in params {
+    if p.type_ is Any &&
+      p.default is None &&
+      p.binding is (None | Some(Ident(_))) {
+      if p.is_rest {
+        self.grammar_misuses.push(
+          "<noimplicitany>rest parameter `\{p.name}` implicitly has an `any[]` type",
+        )
+      } else {
+        self.grammar_misuses.push(
+          "<noimplicitany>parameter `\{p.name}` implicitly has an `any` type",
+        )
+      }
+    }
+  }
 }
 
 ///|
@@ -1187,6 +1225,9 @@ fn Parser::parse_parenthesized_expr(
       self.allow_jsx,
     ),
     src: self.src,
+    // Compiler-option context must survive into the sub-parse too — the
+    // comma-operand implicit-any rule is gated on it.
+    no_implicit_any: self.no_implicit_any,
   }
   temp.in_generator = self.in_generator
   temp.in_async = self.in_async
@@ -1267,6 +1308,9 @@ fn Parser::parse_expr_until_top_level(
       self.allow_jsx,
     ),
     src: self.src,
+    // Compiler-option context must survive into the sub-parse too — the
+    // comma-operand implicit-any rule is gated on it.
+    no_implicit_any: self.no_implicit_any,
   }
   temp.in_generator = self.in_generator
   temp.in_async = self.in_async

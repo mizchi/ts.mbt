@@ -2087,7 +2087,8 @@ fn Parser::parse_class_body(
         // (`get [k]() { return "" } set [k](x) {}` types `x` as string).
         let prev_record_nia = self.record_implicit_any_params
         self.record_implicit_any_params = self.class_decl_no_heritage &&
-          accessor_kind is None
+          accessor_kind is None &&
+          !(is_constructor_method && self.in_class_expr_body)
         let params = self.parse_params()
         self.record_implicit_any_params = prev_record_nia
         let _ = self.expect(RParen)
@@ -2403,11 +2404,20 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   } else {
     []
   }
-  // Class *expressions* can be contextually typed from their assignment
-  // target, so member-level noImplicitAny recording is disarmed for the
-  // whole body (including when nested inside an armed class declaration).
+  // Class-expression member typing follows tsc's split: METHOD
+  // declarations are never contextually typed (a matching member on the
+  // assignment target does not reach them —
+  // contextuallyTypedClassExpressionMethodDeclaration01/02), so a
+  // heritage-free class expression arms the same noImplicitAny recording
+  // as a heritage-free declaration. FIELD initializers and constructor
+  // parameters CAN be contextually typed and stay exempt (fields don't
+  // run the method-param gate; constructors are excluded via
+  // `in_class_expr_body`). A base class re-disarms everything — an
+  // inherited member can supply the parameter types.
   let prev_no_heritage_expr = self.class_decl_no_heritage
-  self.class_decl_no_heritage = false
+  self.class_decl_no_heritage = base is None && implements_names.length() == 0
+  let prev_in_class_expr = self.in_class_expr_body
+  self.in_class_expr_body = true
   // Generate unique brand ID for private fields
   let brand_id = self.class_id
   self.class_id += 1
@@ -2434,6 +2444,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     index_naked_params,
   ) = self.parse_class_body(class_type_params)
   self.class_decl_no_heritage = prev_no_heritage_expr
+  self.in_class_expr_body = prev_in_class_expr
   self.current_class_brand = prev_brand
   self.restore_local_type_param_bounds(class_type_param_bound_len)
   // Class *expressions* (`const C = class { … }`) build their result through

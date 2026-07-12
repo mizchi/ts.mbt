@@ -644,7 +644,31 @@ fn Resolver::ingest_module(
     }
     // Async functions expose `Promise<R>` to callers even when the body's
     // declared `return_type` is the un-wrapped `R`.
-    let ret = wrap_async_return(f.is_async, f.return_type)
+    // An unannotated return type (`function len(s: string) { return
+    // s.length; }`) is declared `Any`; infer it from the body so callers
+    // see the real type. Adopted only when the inference lands on a bare
+    // primitive — anything structural, unioned, or unresolved keeps `Any`
+    // (partial-resolver inference isn't trustworthy beyond that), and
+    // generators are excluded (their calls yield iterator objects).
+    let effective_ret = if f.return_type is Any &&
+      !f.is_generator &&
+      f.body.stmts.length() > 0 {
+      let fenv = ExprEnv::new()
+      for p in effective_params {
+        fenv.bind(p.name, p.type_)
+      }
+      match widen_literal(infer_block_return(fenv, r, f.body)) {
+        Number => @ast.TsType::Number
+        Int => @ast.TsType::Int
+        String_ => @ast.TsType::String_
+        Boolean => @ast.TsType::Boolean
+        BigInt => @ast.TsType::BigInt
+        _ => @ast.TsType::Any
+      }
+    } else {
+      f.return_type
+    }
+    let ret = wrap_async_return(f.is_async, effective_ret)
     let new_func_sig = @ast.TsType::Func(param_types, ret)
     let func_key = prefix + f.name
     match r.globals.get(func_key) {
@@ -1320,6 +1344,29 @@ fn array_prototype_member(elem : @ast.TsType, field : String) -> @ast.TsType? {
     "includes" => Some(@ast.TsType::Func([elem], @ast.TsType::Boolean))
     "every" => Some(@ast.TsType::Func([cb_bool], @ast.TsType::Boolean))
     "some" => Some(@ast.TsType::Func([cb_bool], @ast.TsType::Boolean))
+    // Iteration protocol views: `values()` yields the elements (for-of12
+    // needs the element type to flow), `keys()` the indices, `entries()`
+    // index/element pairs.
+    "values" =>
+      Some(
+        @ast.TsType::Func([], @ast.TsType::Applied("IterableIterator", [elem])),
+      )
+    "keys" =>
+      Some(
+        @ast.TsType::Func(
+          [],
+          @ast.TsType::Applied("IterableIterator", [@ast.TsType::Number]),
+        ),
+      )
+    "entries" =>
+      Some(
+        @ast.TsType::Func(
+          [],
+          @ast.TsType::Applied("IterableIterator", [
+            @ast.TsType::Tuple([@ast.TsType::Number, elem]),
+          ]),
+        ),
+      )
     "find" => Some(@ast.TsType::Func([cb_bool], nullable_elem))
     "findIndex" => Some(@ast.TsType::Func([cb_bool], @ast.TsType::Number))
     "findLast" => Some(@ast.TsType::Func([cb_bool], nullable_elem))
@@ -11649,6 +11696,130 @@ fn check_arguments_with_sig(
 }
 
 ///|
+/// One-pass approximation of tsc's loop back-edge join: for each variable
+/// directly reassigned inside the loop body (`x = <rhs>`, statement or
+/// expression form, not inside a nested function), its type at the top of
+/// the body is the union of the entry type and the assigned types, with
+/// RHS types inferred in the ENTRY env and literal-widened. Conservative
+/// bail-outs keep this FP-free where the approximation diverges from a
+/// real fixpoint: any `break` / `continue` / `switch` in the body (an
+/// assignment could exit without flowing around the back edge), a loop
+/// condition that mentions the variable (the condition should re-narrow
+/// the JOINED type, which our narrowing pass can't always do), and an
+/// assigned type that escapes the declared type (the assignment error is
+/// reported separately).
+fn loop_backedge_bindings(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  cond : @ast.TsExpr,
+  body : @ast.TsBlock,
+) -> Array[(String, @ast.TsType)] {
+  let out : Array[(String, @ast.TsType)] = []
+  let assigns : Array[(String, @ast.TsExpr)] = []
+  if !collect_loop_assignments(body, assigns) {
+    return out
+  }
+  let merged : Map[String, @ast.TsType] = {}
+  for a in assigns {
+    let (name, rhs) = a
+    if expr_mentions_name(cond, name) {
+      continue
+    }
+    guard env.lookup(name) is Some(cur) else { continue }
+    guard env.lookup_declared(name) is Some(decl) else { continue }
+    let rhs_ty = widen_literal(infer_expr(env, ctx.resolver, rhs))
+    if rhs_ty is Any || !is_checkable(rhs_ty) {
+      continue
+    }
+    // Cap at the declared type: an escaping assignment is its own error.
+    if is_checkable(decl) && !is_assignable_to(rhs_ty, decl) {
+      continue
+    }
+    let base = match merged.get(name) {
+      Some(t) => t
+      None => cur
+    }
+    merged[name] = narrow_union(base, rhs_ty)
+  }
+  for name, t in merged {
+    match env.lookup(name) {
+      Some(cur) if cur != t => out.push((name, t))
+      _ => ()
+    }
+  }
+  out
+}
+
+///|
+/// Collect `x = rhs` assignments in the statement tree (not descending into
+/// nested functions / classes). Returns `false` — meaning "bail, don't
+/// widen" — when the body contains `break` / `continue` / `switch`.
+fn collect_loop_assignments(
+  b : @ast.TsBlock,
+  out : Array[(String, @ast.TsExpr)],
+) -> Bool {
+  for st in b.stmts {
+    if !collect_loop_assignments_stmt(st, out) {
+      return false
+    }
+  }
+  true
+}
+
+///|
+fn collect_loop_assignments_stmt(
+  st : @ast.TsStmt,
+  out : Array[(String, @ast.TsExpr)],
+) -> Bool {
+  match st {
+    Break(_) | Continue(_) | Switch(_, _) => false
+    Assign(name, rhs) => {
+      out.push((name, rhs))
+      true
+    }
+    Expr(AssignExpr(name, rhs)) => {
+      out.push((name, rhs))
+      true
+    }
+    Block(inner) => collect_loop_assignments(inner, out)
+    If(_, then_, else_) =>
+      collect_loop_assignments(then_, out) &&
+      (match else_ {
+        Some(e) => collect_loop_assignments(e, out)
+        None => true
+      })
+    While(_, body) | DoWhile(_, body) | With(_, body) =>
+      collect_loop_assignments(body, out)
+    For(_, _, _, body) => collect_loop_assignments(body, out)
+    ForIn(_, _, _, _, body)
+    | ForOf(_, _, _, _, body)
+    | ForAwaitOf(_, _, _, _, body) => collect_loop_assignments(body, out)
+    Try(t, _, c, f) =>
+      collect_loop_assignments(t, out) &&
+      (match c {
+        Some(cb) => collect_loop_assignments(cb, out)
+        None => true
+      }) &&
+      (match f {
+        Some(fb) => collect_loop_assignments(fb, out)
+        None => true
+      })
+    Label(_, inner) => collect_loop_assignments_stmt(inner, out)
+    _ => true
+  }
+}
+
+///|
+/// True when `name` appears as a variable reference anywhere in `e`.
+/// Syntactic and over-approximate (matches the rendered `Var("name")` node
+/// spelling in the Debug tree, so shadowed uses count too) — used only to
+/// make back-edge widening MORE conservative, never less.
+fn expr_mentions_name(e : @ast.TsExpr, name : String) -> Bool {
+  let rendered = "\{e}"
+  rendered.contains("Var(\"" + name + "\")")
+}
+
+///|
 /// TS2345 for a generator-literal argument whose body RETURNS a value when
 /// the parameter's callback return type is `IterableIterator<..., void>` /
 /// `Generator<..., void, ...>` — a `void` TReturn slot means the callback
@@ -14020,6 +14191,15 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // reassignment) doesn't leak past the loop, where the condition is
       // false — mirrors the `For` handler.
       let pre = env.full_snapshot()
+      // Loop back-edge join: a variable reassigned inside the body sees the
+      // union of its entry type and the assigned types on the next
+      // iteration (`x = ""; while (cond) { x = len(x); }` makes `x`
+      // `string | number` at the call — controlFlowIterationErrors).
+      // Applied BEFORE the condition narrowing so a condition that
+      // re-narrows the variable keeps precedence.
+      for wb in loop_backedge_bindings(env, ctx, cond, body) {
+        env.bind(wb.0, wb.1)
+      }
       for b in analyze_narrowing(env, ctx.resolver, cond).then_binds {
         env.bind(b.0, b.1)
       }
@@ -14029,6 +14209,9 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
     DoWhile(cond, body) => {
       // `do { … } while (cond)`: the body runs once *before* the condition is
       // ever evaluated, so the condition's narrowing must NOT apply to it.
+      // (Back-edge widening is deliberately not applied here: this arm's
+      // in-body rebinds intentionally leak past the loop, and a snapshot /
+      // restore to contain a widened binding would change that.)
       check_block(env, body, ctx)
       check_call_args_in_expr(env, cond, ctx)
     }
@@ -14131,6 +14314,13 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
           if is_checkable(elem_ty) {
             env.narrow(n, elem_ty)
           }
+        }
+        (@ast.TsForOfKind::Assign, _) => {
+          // Assignment-form destructuring PATTERN: the named targets keep
+          // their declared types, so both the flowing element/property
+          // types and any defaults must fit them (for-of46/47/48).
+          check_forof_assign_pattern(env, ctx, binding, elem_ty)
+          bind_pattern(env, ctx, binding, elem_ty)
         }
         _ => bind_pattern(env, ctx, binding, elem_ty)
       }
@@ -14745,6 +14935,27 @@ fn check_call_args_in_expr(
       }
     }
     CallExpr(callee, args) => {
+      // Contextually typed IIFE with an OPTIONAL unannotated parameter:
+      // the `?` keeps `undefined` in the parameter's type no matter what
+      // the call supplies, so arithmetic on it is TS18048 under
+      // strictNullChecks (`((j?) => j + 1)(12)`,
+      // contextuallyTypedIifeStrict). Restricted to expression-bodied
+      // arrows — a block body could narrow the parameter with a guard —
+      // and to DIRECT arithmetic operands of the body expression.
+      if ctx.strict_null_checks {
+        match callee {
+          ArrowFunc(ps, _, ArrowExpr(body_expr), _) =>
+            for p in ps {
+              if !p.is_rest &&
+                p.default is None &&
+                p.type_ is Union([Any, Undefined]) &&
+                arith_operand_names(body_expr).contains(p.name) {
+                record(ctx, "call", "`\{p.name}` is possibly `undefined`")
+              }
+            }
+          _ => ()
+        }
+      }
       let callee_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, callee))
       match callee_ty {
         Func(params, _) => check_arguments(env, params, args, ctx, "call")
@@ -16104,6 +16315,46 @@ fn check_call_args_in_expr(
                 }
               None => ()
             }
+          }
+          // TS2322 for the REST target: it collects the remaining elements
+          // as an ARRAY of the source's element type (`[a, ...b] = new
+          // FooIterator` writes `Foo[]` into `b` --
+          // iterableArrayPattern6/8). Syntactic array-literal sources are
+          // skipped (their rest is a heterogeneous tuple slice).
+          match ab.rest {
+            Some(@ast.TsBinding::Ident(rn)) =>
+              if !(v is ArrayLit(_)) && !(unwrapped_src is Tuple(_)) {
+                let rest_ty = @ast.TsType::Array(elem)
+                match env.lookup_declared(rn) {
+                  Some(target_ty) =>
+                    if is_checkable(elem) &&
+                      destructure_target_mismatch(ctx, rest_ty, target_ty) &&
+                      // Covariant arrays: `Foo[]` satisfies `Bar[]` when the
+                      // element is structurally assignable (base-class
+                      // elements — iterableArrayPattern4 is legal).
+                      !(match ctx.resolver.unwrap(target_ty) {
+                        Array(te) | Applied("Array", [te]) =>
+                          is_assignable_to(
+                            ctx.resolver.unwrap(elem),
+                            ctx.resolver.unwrap(te),
+                          ) ||
+                          is_structurally_assignable_named(
+                            elem,
+                            te,
+                            ctx.resolver,
+                          )
+                        _ => false
+                      }) {
+                      record(
+                        ctx,
+                        "destructuring rest `\{rn}`",
+                        "rest collects `\{type_display(rest_ty)}` which is not assignable to `\{type_display(target_ty)}`",
+                      )
+                    }
+                  None => ()
+                }
+              }
+            _ => ()
           }
         }
         _ => ()
@@ -21182,6 +21433,349 @@ fn interface_bound_differs(
 }
 
 ///|
+/// TS7006/TS7032 for object literals whose members receive no contextual
+/// type, in two shapes gated on noImplicitAny:
+///
+/// 1. `<lit> satisfies T` in a variable initializer: the SATISFIES type is
+///    the literal's contextual type — the declared annotation does not
+///    reach it. A method missing from `T` (or present but not as a
+///    function) leaves its unannotated params implicitly `any`
+///    (typeSatisfaction_contextualTyping2: `f(s)` flags, `g(s)` doesn't).
+///    Only decidable targets run: plain object types and intersections of
+///    those with `Record<_, V>` where `V` is a concrete non-function.
+///
+/// 2. An object-literal SET accessor in an UNANNOTATED declaration
+///    (`var v = { set Foo(a) { } }`): no contextual type exists and no
+///    paired getter provides an inferred type, so the parameter (and the
+///    property) are implicitly `any` (parserES3Accessors4, TS7032+TS7006).
+fn check_uncontextual_object_literals(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  if !module_.no_implicit_any {
+    return issues
+  }
+  // Member map of a decidable satisfies target, or None when any part is
+  // unresolvable / could supply function context via an index signature.
+  fn sat_members(t : @ast.TsType) -> Map[String, @ast.TsType]? {
+    let out : Map[String, @ast.TsType] = {}
+    fn add_object(fields : Array[(@ast.TsType, @ast.TsType)]) -> Bool {
+      for f in fields {
+        match f.0 {
+          Literal(k) =>
+            if k.has_prefix("<") {
+              return false
+            } else {
+              out[k] = f.1
+            }
+          _ => return false
+        }
+      }
+      true
+    }
+
+    match resolver.unwrap(t) {
+      Object(fields) => if add_object(fields) { Some(out) } else { None }
+      Intersection(parts) => {
+        for part in parts {
+          match resolver.unwrap(part) {
+            Object(fields) => if !add_object(fields) { return None }
+            Applied("Record", [_, v]) =>
+              // A function-ish or `any` value type could type the missing
+              // member through the index signature — abstain.
+              match resolver.unwrap(v) {
+                Func(_, _) | Any => return None
+                _ => ()
+              }
+            _ => return None
+          }
+        }
+        Some(out)
+      }
+      _ => None
+    }
+  }
+
+  for st in module_.top_level_stmts {
+    let (decl_ty, init) = match st {
+      Let(_, t, e) | Const(_, t, e) | Var(_, t, e) => (t, e)
+      _ => continue
+    }
+    match init {
+      Satisfies(ObjectLit(props), sat_ty) =>
+        match sat_members(sat_ty) {
+          Some(members) =>
+            for kv in props {
+              guard kv.1 is FuncExpr(f) else { continue }
+              let has_func_context = match members.get(kv.0) {
+                Some(Func(_, _)) => true
+                _ => false
+              }
+              if has_func_context {
+                continue
+              }
+              for p in f.params {
+                if p.type_ is Any &&
+                  p.default is None &&
+                  !p.is_rest &&
+                  p.binding is (None | Some(Ident(_))) {
+                  issues.push({
+                    path: "noImplicitAny",
+                    message: "parameter `\{p.name}` implicitly has an `any` type",
+                  })
+                }
+              }
+            }
+          None => ()
+        }
+      ObjectLit(props) =>
+        // Only a declaration with NO annotation lacks a contextual type.
+        if decl_ty is Any {
+          for kv in props {
+            guard kv.0.has_prefix("@@set:") else { continue }
+            let prop_name = kv.0["@@set:".length():].to_string()
+            let mut has_getter = false
+            for other in props {
+              if other.0 == "@@get:" + prop_name {
+                has_getter = true
+              }
+            }
+            if has_getter {
+              continue
+            }
+            guard kv.1 is FuncExpr(f) else { continue }
+            for p in f.params {
+              if p.type_ is Any && p.default is None && !p.is_rest {
+                issues.push({
+                  path: "noImplicitAny",
+                  message: "property `\{prop_name}` implicitly has type `any`, because its set accessor lacks a parameter type annotation",
+                })
+                issues.push({
+                  path: "noImplicitAny",
+                  message: "parameter `\{p.name}` implicitly has an `any` type",
+                })
+              }
+            }
+          }
+        }
+      _ => ()
+    }
+  }
+  issues
+}
+
+///|
+/// The destructuring-target guard chain: true when `slot_ty` is DEFINITELY
+/// not assignable to `target_ty` with every reliability guard passing
+/// (checkable both sides, no in-scope type params, no unresolved /
+/// unmodeled shapes, literal-widened, structural class fallback tried).
+fn destructure_target_mismatch(
+  ctx : CheckCtx,
+  slot_ty : @ast.TsType,
+  target_ty : @ast.TsType,
+) -> Bool {
+  is_checkable(target_ty) &&
+  is_checkable(slot_ty) &&
+  !is_in_scope_type_param(ctx, target_ty) &&
+  !is_in_scope_type_param(ctx, slot_ty) &&
+  !type_contains_unresolved_named(target_ty, ctx.resolver) &&
+  !type_contains_unresolved_named(slot_ty, ctx.resolver) &&
+  !type_deeply_contains_unmodeled(target_ty, ctx.resolver) &&
+  !type_deeply_contains_unmodeled(slot_ty, ctx.resolver) &&
+  !is_assignable_to(
+    ctx.resolver.unwrap(widen_literal(slot_ty)),
+    ctx.resolver.unwrap(target_ty),
+  ) &&
+  !is_structurally_assignable_named(slot_ty, target_ty, ctx.resolver)
+}
+
+///|
+/// TS2322 for assignment-form destructuring PATTERNS in `for-of` heads
+/// (`for ([k = false, v] of map)` / `for ({x, y = E.x} of arr)`): each
+/// named target keeps its DECLARED type, so both the element/property type
+/// flowing in and any DEFAULT expression must be assignable to it
+/// (for-of46/47/48).
+fn check_forof_assign_pattern(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  binding : @ast.TsBinding,
+  elem_ty : @ast.TsType,
+) -> Unit {
+  fn check_target(n : String, slot_ty : @ast.TsType) -> Unit {
+    match env.lookup_declared(n) {
+      Some(target_ty) =>
+        if destructure_target_mismatch(ctx, slot_ty, target_ty) {
+          record(
+            ctx,
+            "for-of target `\{n}`",
+            "element type `\{type_display(widen_literal(slot_ty))}` is not assignable to `\{type_display(target_ty)}`",
+          )
+        }
+      None => ()
+    }
+  }
+
+  fn check_default(n : String, d : @ast.TsExpr) -> Unit {
+    match env.lookup_declared(n) {
+      Some(target_ty) =>
+        check_expr_against(env, d, target_ty, ctx, "for-of default `\{n}`")
+      None => ()
+    }
+  }
+
+  match binding {
+    @ast.TsBinding::Array(ab) => {
+      let unwrapped = ctx.resolver.unwrap(elem_ty)
+      for i, item in ab.items {
+        match item {
+          Some(el) =>
+            match el.binding {
+              @ast.TsBinding::Ident(n) => {
+                let slot_ty = match unwrapped {
+                  Tuple(parts) if i < parts.length() => parts[i]
+                  _ => elem_ty
+                }
+                check_target(n, slot_ty)
+                match el.default {
+                  Some(d) => check_default(n, d)
+                  None => ()
+                }
+              }
+              _ => ()
+            }
+          None => ()
+        }
+      }
+    }
+    @ast.TsBinding::Object(ob) =>
+      for pr in ob.props {
+        match pr.binding {
+          @ast.TsBinding::Ident(n) => {
+            match ctx.resolver.lookup_field(elem_ty, pr.key) {
+              Some(prop_ty) => check_target(n, prop_ty)
+              None => ()
+            }
+            match pr.default {
+              Some(d) => check_default(n, d)
+              None => ()
+            }
+          }
+          _ => ()
+        }
+      }
+    _ => ()
+  }
+}
+
+///|
+/// Variable names appearing as DIRECT operands of arithmetic binary
+/// operators in `e` (recursing through nested arithmetic only, so a
+/// guarded/conditional use never reports).
+fn arith_operand_names(e : @ast.TsExpr) -> Array[String] {
+  let out : Array[String] = []
+  fn walk(x : @ast.TsExpr) -> Unit {
+    match x {
+      BinOp(op, l, r) =>
+        if op is (Add | Sub | Mul | Div | Mod) {
+          match l {
+            Var(n) => out.push(n)
+            other => walk(other)
+          }
+          match r {
+            Var(n) => out.push(n)
+            other => walk(other)
+          }
+        }
+      _ => ()
+    }
+  }
+  walk(e)
+  out
+}
+
+///|
+/// TS7006 for a union contextual type whose members' call signatures are
+/// not identical (ignoring return types): tsc only propagates a contextual
+/// type from a union when every signature-bearing member exposes the SAME
+/// signature set, so `var x: IWithCallSignatures | IWithCallSignatures3 =
+/// a => ...` leaves `a` implicitly `any`
+/// (contextualTypeWithUnionTypeCallSignatures). Members WITHOUT call
+/// signatures are excluded from the comparison (they don't contribute), a
+/// single signature-bearing member always provides context, and matching
+/// sets (even with different returns) do too — all silent.
+fn check_union_context_implicit_any(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  if !module_.no_implicit_any {
+    return issues
+  }
+  for st in module_.top_level_stmts {
+    let (decl_ty, init) = match st {
+      Let(_, t, e) | Const(_, t, e) | Var(_, t, e) => (t, e)
+      _ => continue
+    }
+    let params : Array[@ast.TsParam] = match init {
+      ArrowFunc(ps, _, _, _) => ps
+      FuncExpr(f) => f.params
+      _ => continue
+    }
+    guard resolver.unwrap(decl_ty) is Union(members) else { continue }
+    let member_sig_keys : Array[String] = []
+    let mut opaque = false
+    for m in members {
+      let sigs = collect_call_signatures(m, resolver)
+      let lists : Array[String] = []
+      for s in sigs {
+        match s {
+          Func(ps2, _) => {
+            // An unresolved param type would make the comparison
+            // unreliable — abstain for the whole declaration.
+            for p2 in ps2 {
+              if type_contains_unresolved_named(p2, resolver) {
+                opaque = true
+              }
+            }
+            lists.push("\{ps2}")
+          }
+          _ => opaque = true
+        }
+      }
+      if lists.length() > 0 {
+        lists.sort()
+        member_sig_keys.push(lists.join(";"))
+      }
+    }
+    if opaque || member_sig_keys.length() < 2 {
+      continue
+    }
+    let mut identical = true
+    for i in 1..<member_sig_keys.length() {
+      if member_sig_keys[i] != member_sig_keys[0] {
+        identical = false
+      }
+    }
+    if identical {
+      continue
+    }
+    for p in params {
+      if p.type_ is Any &&
+        p.default is None &&
+        p.binding is (None | Some(Ident(_))) &&
+        !p.is_rest {
+        issues.push({
+          path: "noImplicitAny",
+          message: "parameter `\{p.name}` implicitly has an `any` type",
+        })
+      }
+    }
+  }
+  issues
+}
+
+///|
 /// True when `name` is a single uppercase ASCII letter (`T`, `U`, `K`, …).
 /// Such names are, by overwhelming convention, generic type parameters —
 /// never library / global types — so an *unresolved* one is reliably an
@@ -22606,6 +23200,12 @@ fn check_module_function_bodies_layered(
     all.push(issue)
   }
   for issue in check_interface_merge_type_params(module_, resolver) {
+    all.push(issue)
+  }
+  for issue in check_union_context_implicit_any(module_, resolver) {
+    all.push(issue)
+  }
+  for issue in check_uncontextual_object_literals(module_, resolver) {
     all.push(issue)
   }
   // TS2304 for single-letter out-of-scope type parameters. Run once at the

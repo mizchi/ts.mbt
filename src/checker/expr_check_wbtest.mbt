@@ -316,6 +316,7 @@ fn parse_module_or_empty(src : String) -> @ast.TsModule {
         enums: [],
         module_augmentations: [],
         strict_property_initialization: true,
+        no_implicit_any: true,
         strict_null_checks: true,
         use_define_for_class_fields: false,
         deprecated_compiler_options: [],
@@ -11342,7 +11343,9 @@ test "expr_check: noImplicitAny family (TS7005/TS7006/TS7010/TS7019/TS7031)" {
     ),
     0,
   )
-  @test.assert_eq(issues("var C = class { m(x) {} };"), 0)
+  // Class-expression METHOD declarations are never contextually typed
+  // (batch AZ stage 5 re-armed them; tsc flags this).
+  assert_true(issues("var C = class { m(x) {} };") > 0)
   @test.assert_eq(
     issues(
       "class C { get [Symbol.toPrimitive]() { return \"\"; } set [Symbol.toPrimitive](x) {} }",
@@ -13271,6 +13274,330 @@ test "expr_check: generator TReturn + construct overloads (batch AX)" {
       "// @strict: false\n" +
       fn1_decl +
       "var s = new fn1(\"a\");\nvar n = new fn1(4);\nvar u = new fn1(undefined);",
+    ),
+    0,
+  )
+}
+
+///|
+test "expr_check: loop back-edge widening (batch AY)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A variable reassigned in a while body sees the union of entry and
+  // assigned types on the next iteration (controlFlowIterationErrors).
+  assert_true(
+    issues(
+      "// @strict: false\ndeclare var cond: boolean;\nfunction len(s: string) { return s.length; }\nfunction f1() {\n  let x: string | number | boolean;\n  x = \"\";\n  while (cond) {\n    x = len(x);\n  }\n}",
+    ) >
+    0,
+  )
+  // Use-before-assignment ordering inside the loop errors too (f2 shape).
+  assert_true(
+    issues(
+      "// @strict: false\ndeclare var cond: boolean;\nfunction len(s: string) { return s.length; }\nfunction f2() {\n  let x: string | number | boolean;\n  x = \"\";\n  while (cond) {\n    x;\n    x = len(x);\n  }\n}",
+    ) >
+    0,
+  )
+  // Pins. Same-type reassignment never widens.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\ndeclare var cond: boolean;\nfunction up(s: string) { return s.toUpperCase(); }\nfunction ok() {\n  let x: string | number;\n  x = \"\";\n  while (cond) {\n    x = up(x);\n  }\n}",
+    ),
+    0,
+  )
+  // A `break` in the body bails out of widening entirely.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\ndeclare var cond: boolean;\nfunction len(s: string) { return s.length; }\nfunction bail() {\n  let x: string | number;\n  x = \"\";\n  while (cond) {\n    if (cond) { x = 1; break; }\n    len(x);\n  }\n}",
+    ),
+    0,
+  )
+  // A condition mentioning the variable re-narrows it: no widening.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nfunction len(s: string) { return s.length; }\nfunction guard1() {\n  let x: string | number;\n  x = \"\";\n  while (typeof x === \"string\") {\n    x = len(x);\n  }\n}",
+    ),
+    0,
+  )
+  // Inferred primitive return types stay literal-safe: a function
+  // returning its string param widens to `string`, not a literal.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nfunction pick() { return \"a\"; }\nvar s: string = pick();",
+    ),
+    0,
+  )
+}
+
+///|
+test "expr_check: comma-operand implicit any (batch AZ)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A non-final comma operand never receives a contextual type: its
+  // unannotated function-literal params are implicitly `any`
+  // (contextuallyTypeCommaOperator03, TS7006).
+  assert_true(
+    issues(
+      "// @noImplicitAny: true\nlet x: (a: string) => string;\nx = (a => a, b => b);",
+    ) >
+    0,
+  )
+  // Three operands: both non-final arrows flag.
+  assert_true(
+    issues(
+      "// @noImplicitAny: true\nlet x: (a: string) => string;\nx = (a => a, b => b, c => c);",
+    ) >=
+    2,
+  )
+  // Pins: the FINAL operand is contextually typed (never flagged);
+  // annotated / defaulted params never flag; the option gates the rule.
+  @test.assert_eq(
+    issues(
+      "// @noImplicitAny: true\nlet x: (a: string) => string;\nx = ((a: string) => a, b => b);",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @noImplicitAny: true\nlet x: (a: string) => string;\nx = ((a = \"z\") => a, b => b);",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @noImplicitAny: false\nlet x: (a: string) => string;\nx = (a => a, b => b);",
+    ),
+    0,
+  )
+}
+
+///|
+test "expr_check: union contextual-type implicit any (batch AZ stage 2)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let ifaces = "interface IWithNoCallSignatures { foo: string; }\ninterface IWithCallSignatures { (a: number): string; }\ninterface IWithCallSignatures2 { (a: number): number; }\ninterface IWithCallSignatures3 { (b: string): number; }\ninterface IWithCallSignatures4 { (a: number): string; (a: string, b: number): number; }\n"
+  // Mismatching parameter types across members: no contextual type.
+  assert_true(
+    issues(
+      "// @noImplicitAny: true\n" +
+      ifaces +
+      "var x3: IWithCallSignatures | IWithCallSignatures3 = a => a.toString();",
+    ) >
+    0,
+  )
+  // Mismatching signature COUNTS across members: no contextual type.
+  assert_true(
+    issues(
+      "// @noImplicitAny: true\n" +
+      ifaces +
+      "var x4: IWithCallSignatures | IWithCallSignatures4 = a => a.toString();",
+    ) >
+    0,
+  )
+  // Pins: a single signature-bearing member provides context; matching
+  // sets with different returns do too; the option gates the rule.
+  @test.assert_eq(
+    issues(
+      "// @noImplicitAny: true\n" +
+      ifaces +
+      "var x: IWithNoCallSignatures | IWithCallSignatures = a => a.toString();\nvar x2: IWithCallSignatures | IWithCallSignatures2 = a => a.toString();",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @noImplicitAny: false\n" +
+      ifaces +
+      "var x3: IWithCallSignatures | IWithCallSignatures3 = a => a.toString();",
+    ),
+    0,
+  )
+}
+
+///|
+test "expr_check: IIFE optional-param arithmetic TS18048 (batch AZ stage 3)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // An optional unannotated IIFE parameter keeps `undefined` in its type
+  // regardless of the supplied argument (contextuallyTypedIifeStrict).
+  assert_true(issues("// @strictNullChecks: true\n((j?) => j + 1)(12);") > 0)
+  assert_true(issues("// @strictNullChecks: true\n((k?) => k + 1)();") > 0)
+  assert_true(issues("// @strictNullChecks: true\n((l, o?) => l + o)(12);") > 0)
+  // Pins: defaults fill the parameter; required params never flag; block
+  // bodies (which can guard) abstain; the option gates the rule.
+  @test.assert_eq(
+    issues(
+      "// @strictNullChecks: true\n((m = 10) => m + 1)(12);\n((n = 10) => n + 1)();\n((a, b, c) => { })(\"foo\", 101, false);",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @strictNullChecks: true\n((j?) => { return j ? j + 1 : 0; })(12);",
+    ),
+    0,
+  )
+  @test.assert_eq(issues("// @strict: false\n((j?) => j + 1)(12);"), 0)
+}
+
+///|
+test "expr_check: uncontextual object literals (batch AZ stage 4)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // `satisfies` intercepts the contextual type: a method missing from
+  // the satisfies target leaves its params implicitly any
+  // (typeSatisfaction_contextualTyping2).
+  assert_true(
+    issues(
+      "// @strict: true\nlet obj: { f(s: string): void } & Record<string, unknown> = {\n    f(s) { },\n    g(s) { }\n} satisfies { g(s: string): void } & Record<string, unknown>;",
+    ) >
+    0,
+  )
+  // Pins: a member PRESENT in the satisfies target gets context; a
+  // function-valued Record abstains entirely.
+  @test.assert_eq(
+    issues(
+      "// @strict: true\nlet o2 = { f(x) { } } satisfies { f(s: string): void };",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @strict: true\nlet o3: Record<string, (s: string) => void> = {\n  f(s) { }\n} satisfies Record<string, (s: string) => void>;",
+    ),
+    0,
+  )
+  // A lone set accessor in an unannotated declaration is TS7032+TS7006
+  // (parserES3Accessors4).
+  assert_true(issues("var v = { set Foo(a) { } };") >= 2)
+  // Pins: a paired getter provides the parameter type; an annotated
+  // setter never flags; noImplicitAny off gates the rule.
+  @test.assert_eq(
+    issues(
+      "var v = { get Foo() { return 1; }, set Foo(a) { } };\nvar w = { set Bar(a: number) { } };",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues("// @noImplicitAny: false\nvar v = { set Foo(a) { } };"),
+    0,
+  )
+}
+
+///|
+test "expr_check: class-expression method implicit any (batch AZ stage 5)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Class-expression METHOD declarations are never contextually typed:
+  // a matching member on the target doesn't reach them
+  // (contextuallyTypedClassExpressionMethodDeclaration01/02).
+  assert_true(
+    issues(
+      "// @noImplicitAny: true\ninterface A { numProp: number; }\ninterface Foo { method1(arg: A): void; }\nfunction getFoo1(): Foo {\n  return class {\n    static method1(arg) { arg.numProp = 10; }\n  }\n}",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "// @noImplicitAny: true\ninterface A { numProp: number; }\ninterface Bar { method1(arg: A): void; }\ninterface Foo { new (): Bar; }\nfunction getFoo1(): Foo {\n  return class {\n    method1(arg) { arg.numProp = 10; }\n  }\n}",
+    ) >
+    0,
+  )
+  // Pins: FIELD initializers receive contextual types (01 getFoo2 shape);
+  // a base class supplies inherited param types; constructors can be
+  // contextually typed from construct signatures; accessors infer from
+  // the paired getter; the option gates everything.
+  @test.assert_eq(
+    issues(
+      "// @noImplicitAny: true\ninterface A { numProp: number; }\ninterface Foo { method1(arg: A): void; }\nfunction getFoo2(): Foo {\n  return class {\n    static method1 = (arg) => { arg.numProp = 10; }\n  }\n}",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @noImplicitAny: true\nclass Base { m(x: number) {} }\nvar C = class extends Base { m(x) { } };",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @noImplicitAny: true\nvar C = class { constructor(arg) { } };\nvar D = class { get p() { return \"\"; } set p(v) { } };",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues("// @noImplicitAny: false\nvar C = class { m(arg) { } };"),
+    0,
+  )
+}
+
+///|
+test "expr_check: for-of assign patterns + rest targets (batch BA)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Array `.values()` yields the element type (for-of12).
+  assert_true(
+    issues(
+      "// @strict: false\nvar v: string;\nfor (v of [0, \"\"].values()) { }",
+    ) >
+    0,
+  )
+  // Defaults in a for-of assignment pattern check against the declared
+  // target type (for-of46: boolean default into string, and vice versa).
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nvar k: string, v: boolean;\nvar map = new Map([[\"\", true]]);\nfor ([k = false, v = \"\"] of map) { }",
+    ),
+    2,
+  )
+  // Object-pattern property types check against declared targets
+  // (for-of47/48 shapes, incl. shorthand default).
+  assert_true(
+    issues(
+      "// @strict: false\nvar x: string, y: number;\nvar array = [{ x: \"\", y: true }];\nenum E { x }\nfor ({x, y = E.x} of array) { }",
+    ) >
+    0,
+  )
+  // Rest target collects an array of the source element type
+  // (iterableArrayPattern6/8).
+  let iter_cls = "class Bar { x }\nclass Foo extends Bar { y }\nclass FooIterator {\n  next() { return { value: new Foo, done: false }; }\n  [Symbol.iterator]() { return this; }\n}\n"
+  assert_true(
+    issues(
+      "// @strict: false\n" +
+      iter_cls +
+      "var a: Bar, b: string[];\n[a, ...b] = new FooIterator;",
+    ) >
+    0,
+  )
+  // Pins: matching declared types stay silent everywhere.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nvar s: string;\nfor (s of [\"a\", \"b\"].values()) { }\nvar k2: string, v2: boolean;\nfor ([k2 = \"z\", v2 = true] of new Map([[\"\", true]])) { }",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @strict: false\n" +
+      iter_cls +
+      "var a2: Bar, b2: Foo[];\n[a2, ...b2] = new FooIterator;",
+    ),
+    0,
+  )
+  // Covariant arrays: base-class element targets accept the derived
+  // element array (iterableArrayPattern4 is legal).
+  @test.assert_eq(
+    issues(
+      "// @strict: false\n" +
+      iter_cls +
+      "var a3: Bar, b3: Bar[];\n[a3, ...b3] = new FooIterator;",
     ),
     0,
   )

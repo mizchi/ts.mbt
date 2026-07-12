@@ -134,6 +134,11 @@ pub struct Parser {
   // reliable for members too. Class *expressions* stay unarmed (their
   // members can be contextually typed from the assignment target).
   mut class_decl_no_heritage : Bool
+  // True while parsing a class EXPRESSION body: constructor params stay
+  // exempt from the heritage-free noImplicitAny arming (a construct-
+  // signature contextual type can supply them), while method params are
+  // never contextually typed and keep recording.
+  mut in_class_expr_body : Bool
   // Conformance-header strict directive (`@alwaysStrict: true` / `@strict:
   // true`). Unlike `in_strict` it does NOT change parsing behaviour (octal
   // handling, statement restrictions, ...) -- it only arms the strict-misuse
@@ -261,6 +266,7 @@ pub fn Parser::new_with_strict_and_jsx(
     no_implicit_any: false,
     record_implicit_any_params: false,
     class_decl_no_heritage: false,
+    in_class_expr_body: false,
     directive_strict: false,
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],
@@ -349,6 +355,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     no_implicit_any: detect_no_implicit_any(src),
     record_implicit_any_params: false,
     class_decl_no_heritage: false,
+    in_class_expr_body: false,
     directive_strict: detect_directive_strict(src),
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],

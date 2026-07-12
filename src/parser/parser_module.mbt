@@ -133,6 +133,7 @@ fn empty_ts_module() -> @ast.TsModule {
     enums: [],
     module_augmentations: [],
     strict_property_initialization: true,
+    no_implicit_any: true,
     strict_null_checks: true,
     use_define_for_class_fields: false,
     top_level_stmts: [],
@@ -3540,6 +3541,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
     strict_property_initialization: detect_strict_property_initialization(
       self.src,
     ),
+    no_implicit_any: detect_no_implicit_any(self.src),
     strict_null_checks: detect_strict_null_checks(self.src),
     use_define_for_class_fields: detect_use_define_for_class_fields(self.src),
     deprecated_compiler_options: detect_deprecated_compiler_options(self.src),
