@@ -140,6 +140,7 @@ pub struct Parser {
   mut record_implicit_any_params : Bool
   mut class_decl_no_heritage : Bool
   mut in_class_expr_body : Bool
+  written_any_params : Map[String, Unit]
   directive_strict : Bool
   param_optional_initializer_misuses : Array[String]
   interface_member_modifier_misuses : Array[String]

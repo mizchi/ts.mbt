@@ -7232,16 +7232,17 @@ test "expr_check: duplicate string/number index signatures are flagged (TS2374)"
 }
 
 ///|
-test "expr_check: deprecated @target es5 directive is flagged (TS5107)" {
+test "expr_check: deprecated @target es5 directive is NOT flagged (TS7)" {
+  // TypeScript 7 (typescript-go) dropped the ES3/ES5 targets and never
+  // runs those variants, so `@target: es5` headers produce no error.
+  // The TS6-era TS5107 surfacing was removed with the TS7 oracle switch.
   let src =
     #|// @target: esnext, es2015, es5
     #|class C { x: number = 1 }
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  let dep = issues.filter(fn(i) {
-    i.message.contains("deprecated") && i.message.contains("target=ES5")
-  })
-  assert_true(dep.length() >= 1)
+  let dep = issues.filter(fn(i) { i.message.contains("deprecated") })
+  @test.assert_eq(dep.length(), 0)
 }
 
 ///|
@@ -7256,16 +7257,16 @@ test "expr_check: non-deprecated @target es2015 is not flagged (TS5107)" {
 }
 
 ///|
-test "expr_check: deprecated @target es3 directive is flagged (TS5107)" {
+test "expr_check: deprecated @target es3 directive is NOT flagged (TS7)" {
+  // See the es5 twin above: TS7 dropped the ES3/ES5 targets, so the
+  // TS5107 surfacing was removed with the TS7 oracle switch.
   let src =
     #|// @target: es3
     #|var x: number = 1;
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  let dep = issues.filter(fn(i) {
-    i.message.contains("deprecated") && i.message.contains("target=ES3")
-  })
-  assert_true(dep.length() >= 1)
+  let dep = issues.filter(fn(i) { i.message.contains("deprecated") })
+  @test.assert_eq(dep.length(), 0)
 }
 
 ///|
@@ -7326,16 +7327,16 @@ test "expr_check: class that extends itself is flagged (TS2506)" {
 }
 
 ///|
-test "expr_check: deprecated @outFile directive is flagged (TS5101)" {
+test "expr_check: deprecated @outFile directive is NOT flagged (TS7)" {
+  // typescript-go dropped `outFile` along with the ES3/ES5 targets; the
+  // deprecated-option surfacing was removed with the TS7 oracle switch.
   let src =
     #|// @outFile: out.js
     #|var x: number = 1;
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
-  let dep = issues.filter(fn(i) {
-    i.message.contains("deprecated") && i.message.contains("outFile")
-  })
-  assert_true(dep.length() >= 1)
+  let dep = issues.filter(fn(i) { i.message.contains("deprecated") })
+  @test.assert_eq(dep.length(), 0)
 }
 
 ///|
@@ -14002,4 +14003,46 @@ test "expr_check: invalid radix digits (batch BC task 7b)" {
     ),
     0,
   )
+}
+
+///|
+test "expr_check: TS7 oracle switch fixes (batch BD)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A redeclaration of a runtime-provided lib global is never "used
+  // before being assigned" (ES5SymbolProperty1); a plain unassigned
+  // var still is.
+  @test.assert_eq(
+    issues(
+      "interface SymbolConstructor { foo: string; }\nvar Symbol: SymbolConstructor;\nvar obj = { [Symbol.foo]: 0 };\nobj[Symbol.foo];",
+    ),
+    0,
+  )
+  assert_true(issues("var q: number;\nq + 1;") > 0)
+  // Parameter-property assigns land after a `super(...)` buried in the
+  // using-lowering's try/finally (usingDeclarations.11) — no TS17009.
+  @test.assert_eq(
+    issues(
+      "class A {}\nclass C4 extends A {\n  constructor(public y: number) {\n    using x = null;\n    super();\n  }\n}",
+    ),
+    0,
+  )
+  assert_true(
+    issues(
+      "class A {}\nclass B extends A {\n  constructor(public y: number) {\n    this.y;\n    super();\n  }\n}",
+    ) >
+    0,
+  )
+  // A spread copies the property under a getter (objectSpread).
+  @test.assert_eq(
+    issues(
+      "let op = { get a () { return 6 } };\nlet getter: { a: number, c: number } = { ...op, c: 7 };",
+    ),
+    0,
+  )
+  // An EXPLICIT `: any` parameter annotation is not TS7006
+  // (destructuringEvaluationOrder); a genuinely unannotated one is.
+  @test.assert_eq(issues("let f = (n: any): any => n;"), 0)
+  assert_true(issues("let f = n => n;") > 0)
 }
