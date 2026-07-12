@@ -13867,3 +13867,79 @@ test "expr_check: Error/Date lib member surface (batch BC task 5)" {
   )
   @test.assert_eq(issues("function k(e: AggregateError) { e.errors; }"), 0)
 }
+
+///|
+test "expr_check: TS2411 computed keys and symbol index sigs (batch BC task 6)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A constant computed key names the member statically: the getter's
+  // inferred return `Foo` violates the string index value `Foo2`
+  // (computedPropertyNames36_ES6); the setter's `Foo2` param is legal.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nclass Foo { x }\nclass Foo2 { x; y }\nclass C {\n  [s: string]: Foo2;\n  get [\"get1\"]() { return new Foo }\n  set [\"set1\"](p: Foo2) { }\n}",
+    ),
+    1,
+  )
+  // `[1 << 6]` folds to the numeric name "64" and violates a NUMERIC
+  // index signature too (computedPropertyNames39_ES6).
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nclass Foo { x }\nclass Foo2 { x; y }\nclass C {\n  [s: number]: Foo2;\n  get [1 << 6]() { return new Foo }\n  set [1 << 6](p: Foo2) { }\n}",
+    ),
+    1,
+  )
+  // Inheritance both ways: a BASE indexer constrains derived members
+  // (computedPropertyNames43), and a DERIVED indexer constrains
+  // inherited members (computedPropertyNames45 — both get1 and set1).
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nclass Foo { x }\nclass Foo2 { x; y }\nclass C {\n  [s: string]: Foo2;\n}\nclass D extends C {\n  get [\"get1\"]() { return new Foo }\n  set [\"set1\"](p: Foo2) { }\n}",
+    ),
+    1,
+  )
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nclass Foo { x }\nclass Foo2 { x; y }\nclass C {\n  get [\"get1\"]() { return new Foo }\n}\nclass D extends C {\n  [s: string]: Foo2;\n  set [\"set1\"](p: Foo)  { }\n}",
+    ),
+    2,
+  )
+  // A `symbol` index signature constrains well-known-symbol members:
+  // scalar mismatch (symbolProperty17) and function-shape mismatch via
+  // the inferred method return (symbolProperty32).
+  @test.assert_eq(
+    issues(
+      "interface I {\n  [Symbol.iterator]: number;\n  [s: symbol]: string;\n}",
+    ),
+    1,
+  )
+  @test.assert_eq(
+    issues(
+      "class C1 {\n  [Symbol.toStringTag]() { return { x: \"\" }; }\n}\nclass C2 extends C1 {\n  [s: symbol]: () => { x: number };\n}",
+    ),
+    1,
+  )
+  // Pins: assignable members stay silent for every arm — a matching
+  // computed member, an OPTIONAL missing value member, a symbol member
+  // matching the symbol sig, and string/number sigs still ignoring
+  // symbol-keyed members.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nclass Foo2 { x; y }\nclass C {\n  [s: string]: Foo2;\n  get [\"get1\"]() { return new Foo2 }\n  [\"f2\"]: Foo2;\n}",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nclass Foo { x }\nclass Maybe { x; y?: string }\nclass C {\n  [s: string]: Maybe;\n  [\"m\"]: Foo;\n}",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "interface I {\n  [Symbol.iterator]: string;\n  [s: symbol]: string;\n}\ninterface J {\n  [Symbol.toPrimitive]: number;\n  [s: string]: string;\n}",
+    ),
+    0,
+  )
+}

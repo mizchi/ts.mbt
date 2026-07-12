@@ -1127,10 +1127,25 @@ parser768531 (regex/division ambiguity needs parser-fed lexer context).
    incomplete (deprecated HTML methods like `"x".anchor()` are legal
    tsc) and flagging there would be FP-prone for zero recall.
    TP 2646 -> 2648, FP 0.
-6. [ ] TS2411 computed-property cluster (symbolProperty17/32,
-   computedPropertyNames36/38/39/42-45_ES6) — property-vs-index-signature
-   compatibility through computed keys; shares the key-retention work
-   with task 1.
+6. [x] TS2411 computed-property cluster — DONE (batch BC):
+   (a) parser: constant computed class keys fold to their literal name
+   (`["get1"]` -> get1, `[""]` -> "", `[1 << 6]` -> 64 via a small
+   const-int evaluator) instead of `<computed>`; TS18006 exempts the
+   computed `["constructor"]` form via `computed_field_keys` (tsc-legal).
+   (b) checker: `check_index_props` gained a `symbol` index-signature
+   arm constraining `@@X` members (symbolProperty17/32);
+   `violates_index_value` gained a bivariant Func-vs-Func arm and a
+   Named-class arm that flags only a MISSING required value member
+   (`any`-typed members count as required; `?`-optional ones don't —
+   `is_structurally_assignable_named` can't disprove, it tolerates
+   missing `any` members by design). (c) the class TS2411 walk now
+   models accessors (getter return inferred from the body, setter param
+   type), infers unannotated method returns, and walks base chains both
+   ways: inherited sigs constrain own members (43/44), own sigs
+   constrain inherited members (45, symbolProperty32); inherited
+   members are NOT re-checked against inherited sigs (no duplicates).
+   Unlocks computedPropertyNames36/38/39/40/42/43/44/45_ES6 +
+   symbolProperty17/32. TP 2648 -> 2658, FP 0.
 7. [ ] Edge buckets, only if cheap after the above: TS1005
    parser-recovery baselines, `using` declarations (TS2851/TS1492),
    variant-baseline NOBASE files (oracle artifacts).

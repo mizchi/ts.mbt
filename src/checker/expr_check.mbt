@@ -25412,14 +25412,21 @@ fn check_class_member_structure(
     // --- TS18006: a class may not have a (data) field named `constructor`
     // (`class C { constructor: number }` / `class C { "constructor" = 3 }`).
     // The real constructor is parsed as a method / `constructor_body`, never
-    // as a `properties` entry, and a computed `["constructor"]` key parses to
-    // `<computed>` — so a non-static, non-accessor property literally named
-    // `constructor` is exactly the illegal field form. False-positive-free.
+    // as a `properties` entry. A COMPUTED `["constructor"]` key is legal in
+    // tsc — constant computed keys now fold to their literal name, so check
+    // the recorded computed key expressions to exempt that form.
+    let mut ctor_field_from_computed = false
+    for ke in decl.computed_field_keys {
+      if ke is StringLit("constructor") {
+        ctor_field_from_computed = true
+      }
+    }
     let mut reported_ctor_field = false
     for p in decl.properties {
       if p.name == "constructor" &&
         !p.is_static &&
         !p.is_accessor &&
+        !ctor_field_from_computed &&
         !reported_ctor_field {
         reported_ctor_field = true
         issues.push({
@@ -26248,6 +26255,50 @@ fn check_interface_extends_compat(
       !type_deeply_contains_unmodeled(vu, resolver) {
       return !is_assignable_to(tu, vu)
     }
+    // Two concrete function shapes decide by signature assignability
+    // (`[Symbol.toStringTag]() { return { x: "" } }` vs a symbol index
+    // value `() => { x: number }` — symbolProperty32). Bivariant so
+    // parameter-variance nuances never flag.
+    match (tu, vu) {
+      (Func(_, _), Func(_, _)) =>
+        if !type_contains_unresolved_named(tu, resolver) &&
+          !type_contains_unresolved_named(vu, resolver) &&
+          !type_deeply_contains_unmodeled(tu, resolver) &&
+          !type_deeply_contains_unmodeled(vu, resolver) {
+          return !is_assignable_to_bivariant(tu, vu)
+        }
+      _ => ()
+    }
+    // Both sides resolve as plain named class declarations: a REQUIRED
+    // value member with no counterpart on the property's class is a
+    // definite violation (`get1(): Foo { x }` vs index value `Foo2 { x;
+    // y }` — computedPropertyNames36-45_ES6). Member-type mismatches
+    // abstain; only a missing member decides.
+    match (tu, vu) {
+      (Named(pn), Named(vn)) =>
+        if resolver.classes.get(pn) is Some(pc) &&
+          resolver.classes.get(vn) is Some(vc) &&
+          pc.type_params.length() == 0 &&
+          vc.type_params.length() == 0 &&
+          !class_chain_has_unresolved_base(pn, resolver) &&
+          !class_chain_has_unresolved_base(vn, resolver) {
+          for vf in collect_declared_fields(vu, resolver) {
+            // Only genuine optionality (`y?:` — a `| undefined` union)
+            // exempts a value member; an unannotated (`any`) member is
+            // still required to EXIST on the property's class.
+            let optional_member = match resolver.unwrap(vf.1) {
+              Undefined => true
+              Union(parts) => parts.contains(@ast.TsType::Undefined)
+              _ => false
+            }
+            if !optional_member && resolver.lookup_field(tu, vf.0) is None {
+              return true
+            }
+          }
+          return false
+        }
+      _ => ()
+    }
     // A function-typed property against a literal-keyed object index value:
     // a bare function only carries the Function.prototype surface, so when
     // the value requires a member outside that set the property can never
@@ -26314,24 +26365,36 @@ fn check_interface_extends_compat(
     owner : String,
   ) -> Unit {
     for sig in index_sigs {
-      let numeric_only = match sig.0 {
-        Number | Int => true
-        String_ => false
-        // Symbol / template-literal / other index keys aren't constrained
-        // here (and the `Any` placeholder from an unparsed signature must
+      // 0 = numeric keys only, 1 = string keys, 2 = symbol keys.
+      let key_kind : Int = match sig.0 {
+        Number | Int => 0
+        String_ => 1
+        // A `symbol` index signature constrains exactly the well-known
+        // symbol members (`@@X` names — symbolProperty17/32).
+        Symbol => 2
+        // Template-literal / other index keys aren't constrained here
+        // (and the `Any` placeholder from an unparsed signature must
         // never constrain anything).
         _ => continue
       }
       for f in fields {
-        if numeric_only && !is_numeric_name(f.0) {
-          continue
-        }
-        // Symbol-keyed members (rendered `<computed>` for opaque keys,
-        // `@@X` for well-known symbols — `[Symbol.toStringTag]: string` /
-        // `[mySymbol]: string`) are not constrained by string or numeric
-        // index signatures — only a symbol index signature would apply.
-        if f.0 == "<computed>" || f.0.has_prefix("@@") {
-          continue
+        if key_kind == 2 {
+          // Only `@@`-named members are provably symbol-keyed; opaque
+          // `<computed>` keys may be strings, so they stay silent.
+          if !f.0.has_prefix("@@") {
+            continue
+          }
+        } else {
+          if key_kind == 0 && !is_numeric_name(f.0) {
+            continue
+          }
+          // Symbol-keyed members (rendered `<computed>` for opaque keys,
+          // `@@X` for well-known symbols — `[Symbol.toStringTag]: string` /
+          // `[mySymbol]: string`) are not constrained by string or numeric
+          // index signatures — only a symbol index signature would apply.
+          if f.0 == "<computed>" || f.0.has_prefix("@@") {
+            continue
+          }
         }
         if violates_index_value(f.1, sig.1) {
           issues.push({
@@ -26435,37 +26498,118 @@ fn check_interface_extends_compat(
       }
     }
   }
+  // Non-generic classes by name for the base-chain walks below.
+  let cls_by_name : Map[String, @ast.TsClassDecl] = {}
   for c in module_.classes {
-    if c.type_params.length() == 0 {
-      // Getters / setters are upserted into `properties` by the parser
-      // with an imprecise (often `Any`) type, so exclude accessor-named
-      // members to keep the constraint check on real data fields.
-      let accessors = class_instance_accessor_names(c)
-      let fields : Array[(String, @ast.TsType)] = []
-      for p in c.properties {
-        if !p.is_static && !accessors.contains(p.name) {
-          fields.push((p.name, p.type_))
+    if c.type_params.length() == 0 && cls_by_name.get(c.name) is None {
+      cls_by_name[c.name] = c
+    }
+  }
+  // The TS2411 member surface of one class: data fields (excluding the
+  // imprecise accessor upserts), accessor types — the getter's return
+  // (inferred from the body when unannotated: `get ["get1"]() { return
+  // new Foo }`) and the setter's parameter — and method signatures with
+  // body-inferred returns when unannotated (`[Symbol.toStringTag]() {
+  // return { x: "" } }` — symbolProperty32).
+  fn class_index_members(c : @ast.TsClassDecl) -> Array[(String, @ast.TsType)] {
+    let accessors = class_instance_accessor_names(c)
+    let out : Array[(String, @ast.TsType)] = []
+    for p in c.properties {
+      if !p.is_static && !accessors.contains(p.name) {
+        out.push((p.name, p.type_))
+      }
+    }
+    fn method_ret(m : @ast.TsClassMethodDecl) -> @ast.TsType {
+      if is_checkable(m.return_type) {
+        m.return_type
+      } else {
+        match m.body {
+          Some(b) => infer_block_return(ExprEnv::new(), resolver, b)
+          None => @ast.TsType::Any
         }
       }
-      // Regular (non-accessor) instance methods are constrained too:
-      // `[s: string]: string` over `foo() {}` is a TS2411. Private names
-      // are not string-keyed members and are skipped.
-      for m in c.methods {
-        if !m.is_static &&
-          m.accessor != "get" &&
-          m.accessor != "set" &&
-          m.name != "constructor" &&
-          m.name != "<computed>" &&
-          !m.name.has_prefix("__private_brand__") &&
-          !m.name.has_prefix("#") {
-          let ptypes : Array[@ast.TsType] = []
-          for p in m.params {
-            ptypes.push(p.1)
+    }
+
+    for m in c.methods {
+      if m.is_static ||
+        m.name == "constructor" ||
+        m.name == "<computed>" ||
+        m.name.has_prefix("__private_brand__") ||
+        m.name.has_prefix("#") {
+        continue
+      }
+      if m.accessor == "get" {
+        out.push((m.name, method_ret(m)))
+      } else if m.accessor == "set" {
+        if m.params.length() >= 1 {
+          out.push((m.name, m.params[0].1))
+        }
+      } else {
+        let ptypes : Array[@ast.TsType] = []
+        for p in m.params {
+          ptypes.push(p.1)
+        }
+        out.push((m.name, @ast.TsType::Func(ptypes, method_ret(m))))
+      }
+    }
+    out
+  }
+
+  for c in module_.classes {
+    if c.type_params.length() == 0 {
+      let fields = class_index_members(c)
+      // Base-chain walk: inherited index signatures constrain a derived
+      // class's own members (computedPropertyNames43/44), and a derived
+      // indexer constrains INHERITED members too (computedPropertyNames45,
+      // symbolProperty32). Inherited members are not re-checked against
+      // inherited signatures — the declaring class already did that.
+      let inherited_sigs : Array[(@ast.TsType, @ast.TsType)] = []
+      let inherited_fields : Array[(String, @ast.TsType)] = []
+      let own_names : Map[String, Unit] = {}
+      for f in fields {
+        own_names[f.0] = ()
+      }
+      let visited : Map[String, Unit] = {}
+      visited[c.name] = ()
+      let stack : Array[String] = []
+      for bn in c.base_names {
+        stack.push(bn)
+      }
+      while stack.length() > 0 {
+        let n = stack.unsafe_pop()
+        if visited.contains(n) {
+          continue
+        }
+        visited[n] = ()
+        match cls_by_name.get(n) {
+          Some(b) => {
+            for sig in b.index_signatures {
+              inherited_sigs.push(sig)
+            }
+            for f in class_index_members(b) {
+              if !own_names.contains(f.0) {
+                inherited_fields.push(f)
+                own_names[f.0] = ()
+              }
+            }
+            for bn in b.base_names {
+              stack.push(bn)
+            }
           }
-          fields.push((m.name, @ast.TsType::Func(ptypes, m.return_type)))
+          None => ()
         }
       }
       check_index_props(c.index_signatures, fields, "class \{c.name}")
+      if inherited_sigs.length() > 0 {
+        check_index_props(inherited_sigs, fields, "class \{c.name}")
+      }
+      if c.index_signatures.length() > 0 && inherited_fields.length() > 0 {
+        check_index_props(
+          c.index_signatures,
+          inherited_fields,
+          "class \{c.name}",
+        )
+      }
       check_num_vs_str_sigs(c.index_signatures, "class \{c.name}")
       check_num_vs_str_sigs(c.static_index_signatures, "class \{c.name}")
       // Static side: `static [k: string]: V` constrains static fields and
