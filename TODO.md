@@ -1021,13 +1021,13 @@ augmentation, React `HTMLAttributes` index signatures.
 - [ ] Do not pursue `any` / `unknown` AST distinction unless a downstream
   consumer needs it; the JSValue count is unaffected.
 
-## TS Checker Conformance (current state, 2026-07-11)
+## TS Checker Conformance (current state, 2026-07-12)
 
 The conformance push's per-batch log (T0-T209, 2026-06-01 .. 2026-07-11) was
 compacted at this checkpoint — see the git history of TODO.md for the full
 batch-by-batch record, including every dead end and pinned behavior.
 
-State: whole-corpus **TP 2631 / FP 0 / PFLEGAL 1 / TN 1414** against the
+State: whole-corpus **TP 2669 / FP 0 / PFLEGAL 1 / TN 1414** against the
 TypeScript conformance baselines (`.errors.txt` = ground truth). Standing CI
 gate: `scripts/checker_conformance_oracle.sh --max-fp 0
 --max-legal-parsefail 1`. Session arc TP 1761 -> 2631 across PRs #191-#200.
@@ -1160,8 +1160,15 @@ parser768531 (regex/division ambiguity needs parser-fed lexer context).
    instead. Unlocks usingDeclarations.5/.7/.14,
    awaitUsingDeclarations.5/.7/.12, and both InForOf.3 files.
    TP 2658 -> 2666, FP 0.
-   Remaining (documented, not attempted): TS1005 parser-recovery
-   baselines (require reproducing tsc's error-recovery token stream),
+   Also DONE from the TS1005 bucket: invalid radix digits — the lexer
+   counts a binary / octal literal running into an out-of-radix decimal
+   digit (`0b1102110`, `0o13334823`) and the parser surfaces one grammar
+   misuse per literal (binaryIntegerLiteralError,
+   octalIntegerLiteralError, invalidBinaryIntegerLiteralAndOctal-
+   IntegerLiteral). TP 2666 -> 2669, FP 0.
+   Remaining (documented, not attempted): the rest of the TS1005
+   parser-recovery baselines (heterogeneous, require reproducing tsc's
+   error-recovery token stream — e.g. `var x = /fo(o/;` regex re-scan),
    the IteratorObject `using` fixtures (need lib-level
    `Iterator.prototype[Symbol.dispose]` type modeling), and NOBASE
    variant-baseline files (oracle artifacts, not checker gaps).

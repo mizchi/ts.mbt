@@ -79,6 +79,7 @@ pub(all) enum JsdocTag {
 
 pub struct Lexer {
   mut invalid_char_count : Int
+  mut invalid_radix_digit_count : Int
   mut unterminated_template : Bool
   src : String
   mut pos : Int

@@ -13983,3 +13983,23 @@ test "expr_check: using-declaration grammar (batch BC task 7)" {
     0,
   )
 }
+
+///|
+test "expr_check: invalid radix digits (batch BC task 7b)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A binary / octal literal running into an out-of-radix decimal digit
+  // is a definite grammar error (binaryIntegerLiteralError /
+  // octalIntegerLiteralError — tsc recovers with TS1005s).
+  @test.assert_eq(issues("var bin1 = 0B1102110;\nvar bin2 = 0b11023410;"), 2)
+  @test.assert_eq(issues("var oct1 = 0O13334823;\nvar oct2 = 0o34318592;"), 2)
+  // Pins: well-formed radix literals (separators, bigint suffix, hex,
+  // adjacent expressions) stay silent.
+  @test.assert_eq(
+    issues(
+      "var a = 0b101;\nvar b = 0o777;\nvar c = 0b101 + 2;\nvar d = 0x1f9;\nvar e = 0b1_01;\nvar f = 0o7n;\nvar g = [0b11, 9];",
+    ),
+    0,
+  )
+}
