@@ -13812,3 +13812,58 @@ test "expr_check: mapped-type as clauses (batch BC task 4)" {
     0,
   )
 }
+
+///|
+test "expr_check: Error/Date lib member surface (batch BC task 5)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // The Error / Date instance surfaces are fully table-modeled, so a
+  // member miss is definite (narrowFromAnyWithInstanceof: TS2551 typo
+  // members) — for both annotated receivers and `instanceof`-narrowed
+  // `any`.
+  @test.assert_eq(
+    issues("function f(e: Error, d: Date) {\n  e.mesage;\n  d.getHuors();\n}"),
+    2,
+  )
+  @test.assert_eq(
+    issues(
+      "declare var x: any;\nif (x instanceof Error) {\n  x.message;\n  x.mesage;\n}",
+    ),
+    1,
+  )
+  // Pins: real members (incl. `stack`, `cause`, Object.prototype
+  // fallbacks) stay silent; `instanceof Function` / `instanceof Object`
+  // receivers stay tolerant; a module-declared `Error` interface merge
+  // abstains; error SUBCLASS receivers abstain (their surface carries
+  // members the shared table doesn't list).
+  @test.assert_eq(
+    issues(
+      "function g(e: Error, d: Date) {\n  e.message; e.name; e.stack; e.cause; e.toString(); e.hasOwnProperty(\"x\");\n  d.getDate(); d.setFullYear(2020); d.toISOString(); d.constructor;\n}",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "declare var x: any;\nif (x instanceof Function) { x(); x.prop; }\nif (x instanceof Object) { x.method(); }",
+    ),
+    0,
+  )
+  // A module-declared `interface Error` MERGES with the lib: its own
+  // members and the lib table both resolve; a name in neither is a
+  // genuine TS2339 (flagged by the general resolved-interface branch,
+  // not the lib carve).
+  @test.assert_eq(
+    issues(
+      "interface Error { code: number; }\nfunction h(e: Error) { e.code; e.message; }",
+    ),
+    0,
+  )
+  assert_true(
+    issues(
+      "interface Error { code: number; }\nfunction h(e: Error) { e.whatever; }",
+    ) >
+    0,
+  )
+  @test.assert_eq(issues("function k(e: AggregateError) { e.errors; }"), 0)
+}

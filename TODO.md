@@ -1112,9 +1112,21 @@ parser768531 (regex/division ambiguity needs parser-fed lexer context).
    (mappedTypeConstraints2, 4 of 5 sites; the 5th has an `any`-typed
    expected slot and abstains). Filter remaps abstain (f5/f7/validate).
    TP 2643 -> 2646, FP 0.
-5. [ ] Lib surface models — Error/Date member tables for TS2551 typo
-   suggestions; complete String/Number prototype tables so nonexistent
-   METHOD CALLS on primitives can flag (property access already does).
+5. [x] Lib surface models — DONE (batch BC): the `Error` / `Date`
+   prototype tables already existed in `lookup_field_core`; the gap was
+   that both member-miss flag sites suppress unresolved `Named`
+   receivers. Added `lib_member_surface_complete` (bare `Error` / `Date`
+   only, abstaining when a module-declared interface/class merges or
+   shadows) and carves at the PropAccess and MethodCall miss sites, plus
+   `cause` in the Error table (lib.es2022). Unlocks
+   narrowFromAnyWithInstanceof (TS2551 typo members via
+   `instanceof`-narrowed `any`) and
+   propertyAccessOnTypeParameterWithConstraints4. Note: NO current miss
+   depends on primitive METHOD-CALL existence (checked the corpus), so
+   the String/Number method-call half was dropped — the tables stay
+   incomplete (deprecated HTML methods like `"x".anchor()` are legal
+   tsc) and flagging there would be FP-prone for zero recall.
+   TP 2646 -> 2648, FP 0.
 6. [ ] TS2411 computed-property cluster (symbolProperty17/32,
    computedPropertyNames36/38/39/42-45_ES6) — property-vs-index-signature
    compatibility through computed keys; shares the key-retention work

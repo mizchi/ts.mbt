@@ -2788,9 +2788,28 @@ fn error_prototype_member(field : String) -> @ast.TsType? {
   match field {
     "message" | "name" => Some(s)
     "stack" => Some(narrow_union(s, @ast.TsType::Undefined))
+    // `cause` is `unknown | undefined` in lib.es2022 — modeled as `any`
+    // so member access through it stays tolerant.
+    "cause" => Some(@ast.TsType::Any)
     "toString" => Some(@ast.TsType::Func([], s))
     _ => None
   }
+}
+
+///|
+/// True when `n` names a lib type whose instance-member surface is
+/// completely covered by a prototype table (`error_prototype_member` /
+/// `date_prototype_member` plus the `Object.prototype` fallback inside
+/// `lookup_field`), so a lookup miss on it is a definite TS2339 / TS2551
+/// (narrowFromAnyWithInstanceof's `e.mesage` / `d.getHuors()`).
+/// Restricted to the bare `Error` / `Date` names — subclasses carry
+/// members the shared table doesn't list (`AggregateError.errors`). A
+/// module-declared interface or class of the same name merges with (or
+/// shadows) the lib surface, so those abstain.
+fn lib_member_surface_complete(resolver : Resolver, n : String) -> Bool {
+  (n == "Error" || n == "Date") &&
+  resolver.interfaces.get(n) is None &&
+  resolver.classes.get(n) is None
 }
 
 ///|
@@ -15519,6 +15538,20 @@ fn check_call_args_in_expr(
                 // method, flag it — but be conservative and skip Any/primitives
                 // (which have many built-in methods we don't model).
                 match ctx.resolver.unwrap(pruned) {
+                  // Table-modeled lib surfaces (`Error` / `Date`) decide
+                  // even though the Named ref is unresolved
+                  // (narrowFromAnyWithInstanceof's `d.getHuors()`).
+                  Named(lib_n) if lib_member_surface_complete(
+                      ctx.resolver,
+                      lib_n,
+                    ) =>
+                    if ctx.resolver.lookup_field(pruned, meth) is None {
+                      record(
+                        ctx,
+                        "call `\{meth}`",
+                        "method `\{meth}` does not exist on `\{lib_n}`",
+                      )
+                    }
                   Named(_)
                   | Applied(_, _)
                   | Object(_)
@@ -16426,6 +16459,18 @@ fn check_call_args_in_expr(
           ctx,
           "PropAccess `.\{prop}`",
           "object is possibly `\{type_display(kind)}`",
+        )
+      } else if ctx.resolver.unwrap(recv_ty) is Named(lib_n) &&
+        lib_member_surface_complete(ctx.resolver, lib_n) &&
+        ctx.resolver.lookup_field(recv_ty, prop) is None {
+        // The `Error` / `Date` instance surfaces are fully table-modeled,
+        // so a lookup miss is definite even though the Named ref is
+        // "unresolved" to the general branch below (TS2551,
+        // narrowFromAnyWithInstanceof's `e.mesage`).
+        record(
+          ctx,
+          "PropAccess `.\{prop}`",
+          "property `\{prop}` does not exist on `\{lib_n}`",
         )
       } else if is_checkable(recv_ty) &&
         !is_in_scope_type_param(ctx, recv_ty) &&
