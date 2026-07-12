@@ -1383,18 +1383,37 @@ pub fn Parser::parse_interface(
             self.grammar_misuses.push("<computed-type-key>" + key)
           _ => ()
         }
-        let mut saw_colon = false
-        while !self.check(RBracket) && !self.check(Eof) {
-          if self.check(Colon) {
-            saw_colon = true
+        // A WELL-KNOWN-symbol key (`[Symbol.iterator]: T`) keeps a stable
+        // `@@`-name so the member participates in assignability
+        // (symbolProperty9/10/12); other computed keys stay opaque.
+        let mut symbol_name : String? = None
+        match (self.peek().kind, self.peek_at(2).kind, self.peek_at(3).kind) {
+          (Ident("Symbol"), Ident(sym), RBracket) if self.peek_at(1).kind == Dot => {
+            let _ = self.advance()
+            let _ = self.advance()
+            let _ = self.advance()
+            let _ = self.expect(RBracket)
+            symbol_name = Some("@@" + sym)
           }
-          let _ = self.advance()
+          _ => ()
         }
-        let _ = self.expect(RBracket)
-        if saw_colon {
-          "<index_signature>"
-        } else {
-          "<computed>"
+        match symbol_name {
+          Some(sn) => sn
+          None => {
+            let mut saw_colon = false
+            while !self.check(RBracket) && !self.check(Eof) {
+              if self.check(Colon) {
+                saw_colon = true
+              }
+              let _ = self.advance()
+            }
+            let _ = self.expect(RBracket)
+            if saw_colon {
+              "<index_signature>"
+            } else {
+              "<computed>"
+            }
+          }
         }
       }
       // Regular identifier

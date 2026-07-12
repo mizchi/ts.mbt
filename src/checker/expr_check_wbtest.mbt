@@ -13636,3 +13636,55 @@ test "expr_check: destructuring defaults + literal overload sets (batch BB)" {
   let fg3 = "function f(x: \"foo\"): number;\nfunction f(x: string): number {\n    return 0;\n}\nfunction g(x: \"foo\"): number;\nfunction g(x: string): number {\n    return 0;\n}\nlet a = f;\nlet b = g;\n"
   @test.assert_eq(issues("// @strict: false\n" + fg3 + "a = b;\nb = a;"), 0)
 }
+
+///|
+test "expr_check: well-known-symbol members (batch BC task 1)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // `[Symbol.iterator]`-typed members participate in assignability:
+  // a smaller symbol-keyed member fails the larger requirement
+  // (symbolProperty9), and a private symbol member blocks both
+  // directions (symbolProperty12).
+  assert_true(
+    issues(
+      "// @strict: false\nclass C {\n  [Symbol.iterator]: { x; y };\n}\ninterface I {\n  [Symbol.iterator]: { x };\n}\nvar i: I;\ni = new C;\nvar c: C = i;",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "// @strict: false\nclass C {\n  private [Symbol.iterator]: { x };\n}\ninterface I {\n  [Symbol.iterator]: { x };\n}\nvar i: I;\nvar c: C = i;",
+    ) >
+    0,
+  )
+  // Pins: matching symbol members assign freely both ways; the
+  // iterator protocol checks still recognize `[Symbol.iterator]()`
+  // methods under the new `@@iterator` spelling.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nclass C2 {\n  [Symbol.iterator]: { x };\n}\ninterface I2 {\n  [Symbol.iterator]: { x };\n}\nvar i2: I2;\ni2 = new C2;\nvar c2: C2 = i2;",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nclass It {\n  next() { return { value: 1, done: false }; }\n  [Symbol.iterator]() { return this; }\n}\nfor (var n of new It) { }",
+    ),
+    0,
+  )
+  // Well-known-symbol members merge without duplicate checks
+  // (symbolProperty37) and are exempt from string/number index
+  // signatures (symbolProperty60) — both tsc-legal, pinned.
+  @test.assert_eq(
+    issues(
+      "interface D {\n  [Symbol.isConcatSpreadable]: string;\n  [Symbol.isConcatSpreadable]: string;\n}\ninterface E {\n  [Symbol.toStringTag]: string;\n  [key: string]: number;\n}",
+    ),
+    0,
+  )
+  // Shorthand type members keep their names (`{ x; y }` is
+  // `{ x: any; y: any }`) — the annotation no longer collapses.
+  assert_true(
+    issues("// @strict: false\ndeclare var v: { x; m(): void };\nv.zzz();") > 0,
+  )
+}

@@ -1064,10 +1064,18 @@ parser768531 (regex/division ambiguity needs parser-fed lexer context).
 
 ### Next tasks (in order)
 
-1. [ ] symbolProperty9/10/12/46 — `[Symbol.iterator]`-typed PROPERTY
-   members: structural comparison of symbol-keyed member types across
-   class/interface assignability. Needs the computed-key property's type
-   retained and compared (currently erased). 4 files, one mechanism.
+1. [x] symbolProperty9/10/12 — DONE (batch BC): well-known-symbol
+   computed keys (`[Symbol.X]`) now parse as stable `@@X` member names in
+   classes AND interfaces (types were already retained; only the name was
+   erased), shorthand type members (`{ x; y }`) parse as `any`-typed named
+   members instead of collapsing the annotation, and a dedicated
+   `symbol_member_shape_blocks` rule compares `@@`-member OBJECT shapes
+   (annotation-vs-annotation, so `any`-valued keys stay REQUIRED — the
+   general member compare tolerates missing `any` fields as an
+   unmodeled-inference guard and can't decide these). symbolProperty46
+   (accessor: setter param inferred from paired getter return, then
+   symbol-keyed INDEX-assignment lookup) remains — needs accessor pairing
+   machinery.
 2. [ ] objectTypeHidingMembersOfObjectAssignmentCompat +
    objectTypeWithCallSignatureHidingMembersOfFunctionAssignmentCompat +
    objectTypeWithConstructSignatureHidingMembersOfFunction... — object

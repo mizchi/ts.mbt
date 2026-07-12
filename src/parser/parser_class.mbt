@@ -31,6 +31,11 @@ priv enum ClassElement {
 fn class_key_name(key : ClassKey) -> String {
   match key {
     Name(name) => name
+    // A WELL-KNOWN-symbol key (`[Symbol.iterator]`) is statically
+    // resolvable, so keep a stable member name — assignability and
+    // member lookups can then treat it like any named member
+    // (symbolProperty9/10/12). Other computed keys stay opaque.
+    Computed(PropAccess(Var("Symbol"), sym)) => "@@" + sym
     Computed(_) => "<computed>"
   }
 }
@@ -746,7 +751,7 @@ fn build_runtime_class_decl(
           _ => ""
         }
         methods.push({
-          name: "<computed>",
+          name: class_key_name(Computed(key_expr)),
           type_params: func.type_params,
           type_param_bounds: [],
           params,
@@ -784,7 +789,7 @@ fn build_runtime_class_decl(
         // can see it. Pushed, not upserted -- computed names may repeat,
         // and name-keyed member checks skip the sentinel.
         properties.push({
-          name: "<computed>",
+          name: class_key_name(Computed(key_expr)),
           type_: field_type,
           is_static: is_static_c,
           is_readonly: is_readonly_c,

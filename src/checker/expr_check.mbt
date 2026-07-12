@@ -6884,9 +6884,7 @@ fn iterator_class_element_type(
   }
   let mut has_sym_iter = false
   for m in cls.methods {
-    if !m.is_static &&
-      m.name == "<computed>" &&
-      m.key_expr is Some(PropAccess(Var("Symbol"), "iterator")) {
+    if !m.is_static && m.name == "@@iterator" {
       has_sym_iter = true
     }
   }
@@ -7431,6 +7429,88 @@ fn string_mapping_case_violation(name : String, s : String) -> Bool {
 }
 
 ///|
+/// True when the target's `@@`-named (well-known-symbol) members are
+/// provably unsatisfied by the source: the source lacks a required key of
+/// the target member's object shape, or the source member is optional
+/// where the target's is required. Both member types come from literal
+/// annotations here, so `any`-valued keys (shorthand members) are still
+/// REQUIRED — unlike the general member compare, which tolerates missing
+/// `any`-typed fields as an unmodeled-inference guard.
+fn symbol_member_shape_blocks(
+  src : @ast.TsType,
+  tgt : @ast.TsType,
+  resolver : Resolver,
+) -> Bool {
+  let tgt_members : Array[(String, @ast.TsType)] = match resolver.unwrap(tgt) {
+    Named(tn) => {
+      let out : Array[(String, @ast.TsType)] = []
+      match resolver.interfaces.get(tn) {
+        Some(iface) =>
+          for f in iface.fields {
+            if f.0.has_prefix("@@") {
+              out.push((f.0, f.1))
+            }
+          }
+        None => ()
+      }
+      match resolver.classes.get(tn) {
+        Some(cls) =>
+          for p in cls.properties {
+            if !p.is_static && p.name.has_prefix("@@") {
+              out.push((p.name, p.type_))
+            }
+          }
+        None => ()
+      }
+      out
+    }
+    _ => return false
+  }
+  if tgt_members.length() == 0 {
+    return false
+  }
+  for tm in tgt_members {
+    let (mname, mty) = tm
+    guard resolver.unwrap(mty) is Object(t_fields) else { continue }
+    let src_member = resolver.lookup_field(src, mname)
+    let src_obj = match src_member {
+      Some(smty) =>
+        match resolver.unwrap(smty) {
+          Object(sf) => sf
+          // Optional source member (`[Symbol.iterator]?: T`) against a
+          // required target member: not assignable (symbolProperty10).
+          Union(parts) =>
+            if parts.iter().any(fn(p) { p is Undefined }) {
+              return true
+            } else {
+              continue
+            }
+          _ => continue
+        }
+      None => continue
+    }
+    for tf in t_fields {
+      guard tf.0 is Literal(tk) else { continue }
+      if tk.has_prefix("<") {
+        continue
+      }
+      let mut found = false
+      for sf in src_obj {
+        if sf.0 is Literal(sk) && sk == tk {
+          found = true
+        }
+      }
+      // Explicitly-optional target keys tolerate the miss; `any` (the
+      // shorthand spelling) does not.
+      if !found && !(tf.1 is Union(_) && type_accepts_undefined(tf.1)) {
+        return true
+      }
+    }
+  }
+  false
+}
+
+///|
 fn check_expr_against(
   env : ExprEnv,
   expr : @ast.TsExpr,
@@ -7465,6 +7545,22 @@ fn check_expr_against(
           }
       }
     _ => ctx.resolver.unwrap(infer_expr(env, ctx.resolver, expr))
+  }
+  // (0) Well-known-symbol members compare by their annotated OBJECT
+  // shape: shorthand type members are `any`-typed, which the general
+  // member compare tolerates as omittable — but both sides here are
+  // literal annotations, so a missing required key (or an optional
+  // source member against a required target member) is a real TS2322
+  // (symbolProperty9's `{ x }` vs `{ x; y }`, 10's optional member).
+  // Decides only for resolvable Named pairs carrying `@@` members.
+  if !is_assignable_to(src_shape, expected_shape) &&
+    symbol_member_shape_blocks(src_shape, expected_shape, ctx.resolver) {
+    record(
+      ctx,
+      sub_path,
+      "expected `\{type_display(expected_shape)}` but got `\{type_display(src_shape)}`",
+    )
+    return
   }
   // (1) A lib wrapper-object value never flows into its primitive slot
   // (`sym = symObj` where `symObj: Symbol`, symbolType15). The reverse
@@ -13795,8 +13891,7 @@ fn check_iterable_class_protocol(
               if m.name == "next" {
                 has_next = true
               }
-              if m.name == "<computed>" &&
-                m.key_expr is Some(PropAccess(Var("Symbol"), "iterator")) {
+              if m.name == "@@iterator" {
                 has_sym_iter = true
                 match m.body {
                   Some(b) => {
@@ -22953,7 +23048,10 @@ fn member_name_duplicates(
   let order : Array[String] = []
   for f in fields {
     let name = f.0
-    if is_signature_sentinel(name) {
+    // Well-known-symbol members (`@@X`) merge without a duplicate check in
+    // tsc (symbolProperty37 declares `[Symbol.isConcatSpreadable]` twice
+    // legally).
+    if is_signature_sentinel(name) || name.has_prefix("@@") {
       continue
     }
     match count.get(name) {
@@ -25881,11 +25979,11 @@ fn check_interface_extends_compat(
         if numeric_only && !is_numeric_name(f.0) {
           continue
         }
-        // Symbol-keyed members (rendered `<computed>`, e.g.
-        // `[Symbol.toStringTag]: string` / `[mySymbol]: string`) are not
-        // constrained by string or numeric index signatures — only a symbol
-        // index signature would apply. Skip them.
-        if f.0 == "<computed>" {
+        // Symbol-keyed members (rendered `<computed>` for opaque keys,
+        // `@@X` for well-known symbols — `[Symbol.toStringTag]: string` /
+        // `[mySymbol]: string`) are not constrained by string or numeric
+        // index signatures — only a symbol index signature would apply.
+        if f.0 == "<computed>" || f.0.has_prefix("@@") {
           continue
         }
         if violates_index_value(f.1, sig.1) {
