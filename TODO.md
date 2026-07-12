@@ -1146,6 +1146,22 @@ parser768531 (regex/division ambiguity needs parser-fed lexer context).
    members are NOT re-checked against inherited sigs (no duplicates).
    Unlocks computedPropertyNames36/38/39/40/42/43/44/45_ES6 +
    symbolProperty17/32. TP 2648 -> 2658, FP 0.
-7. [ ] Edge buckets, only if cheap after the above: TS1005
-   parser-recovery baselines, `using` declarations (TS2851/TS1492),
-   variant-baseline NOBASE files (oracle artifacts).
+7. [~] Edge buckets — `using` declarations DONE (batch BC): TS1492
+   ('using' declarations may not have binding patterns) recorded as
+   grammar misuses at three parse sites — parse_var_like (labelled
+   `using_kw` param), the block-level using lowering (later declarators
+   of a multi-declarator `using` land inside the init COMMA CHAIN as
+   `AssignPattern` operands — scanned recursively), and the for-of head.
+   TS2850/2851 (initializer must be disposable) decided only for the
+   provable slice: an UNANNOTATED object-literal initializer whose keys
+   are all plain (no `@@`-symbol / computed / spread entries), which
+   definitely lacks `[Symbol.dispose]()`. Annotated declarations
+   (`using d: T = {...}`) abstain — tsc checks the literal against `T`
+   instead. Unlocks usingDeclarations.5/.7/.14,
+   awaitUsingDeclarations.5/.7/.12, and both InForOf.3 files.
+   TP 2658 -> 2666, FP 0.
+   Remaining (documented, not attempted): TS1005 parser-recovery
+   baselines (require reproducing tsc's error-recovery token stream),
+   the IteratorObject `using` fixtures (need lib-level
+   `Iterator.prototype[Symbol.dispose]` type modeling), and NOBASE
+   variant-baseline files (oracle artifacts, not checker gaps).

@@ -13943,3 +13943,43 @@ test "expr_check: TS2411 computed keys and symbol index sigs (batch BC task 6)" 
     0,
   )
 }
+
+///|
+test "expr_check: using-declaration grammar (batch BC task 7)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS1492: a `using` / `await using` declarator never takes a binding
+  // pattern — later declarators land in the init comma chain
+  // (usingDeclarations.5/.7), and for-of heads are checked directly
+  // (usingDeclarationsInForOf.3).
+  assert_true(
+    issues("{\n  using a = null,\n        [b] = null,\n        c = null;\n}") >
+    0,
+  )
+  assert_true(
+    issues(
+      "async function f() {\n  await using a = null,\n              {b} = null;\n}",
+    ) >
+    0,
+  )
+  assert_true(issues("for (using {} of []) {\n}") > 0)
+  // TS2850/2851: an unannotated object-LITERAL initializer with plain
+  // keys provably lacks `[Symbol.dispose]()` (awaitUsingDeclarations.12).
+  assert_true(issues("async function f() {\n  await using x = {};\n}") > 0)
+  // Pins: identifier declarators with legal inits stay silent — `null`,
+  // a symbol-keyed disposable literal, an ANNOTATED literal, and plain
+  // multi-declarator lists.
+  @test.assert_eq(
+    issues(
+      "{\n  using a = null, c = null;\n}\n{\n  using d = { [Symbol.dispose]() {} };\n}",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "interface D { [Symbol.dispose](): void; }\ndeclare var mk: () => D;\n{\n  using d: D = mk();\n}\nfor (using x of []) {\n}",
+    ),
+    0,
+  )
+}

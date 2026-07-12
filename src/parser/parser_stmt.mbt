@@ -66,14 +66,14 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
     Ident("using") if self.is_using_declaration_start() => {
       let kw_pos = self.peek().pos
       let _ = self.advance()
-      self.parse_var_like(VarKind::Let, kw_pos)
+      self.parse_var_like(VarKind::Let, kw_pos, using_kw="using")
     }
     Ident("await") if self.peek_at(1).kind is Ident("using") &&
       self.is_await_using_declaration_start() => {
       let kw_pos = self.peek().pos
       let _ = self.advance() // `await`
       let _ = self.advance() // `using`
-      self.parse_var_like(VarKind::Let, kw_pos)
+      self.parse_var_like(VarKind::Let, kw_pos, using_kw="await using")
     }
     Const =>
       match self.peek_at(1).kind {
@@ -275,6 +275,7 @@ fn Parser::parse_var_like(
   self : Parser,
   kind : VarKind,
   kw_pos : Int,
+  using_kw? : String = "",
 ) -> @ast.TsStmt raise ParseError {
   let binding = self.parse_binding_pattern()
   // TS2480: `let` is not allowed as a binding name in `let` / `const`
@@ -293,6 +294,43 @@ fn Parser::parse_var_like(
   let first_decl_annotated = self.check(Colon)
   let type_ = self.parse_var_decl_type()
   let stmts = self.parse_var_decl_list_from(binding, type_, kind)
+  // `using` / `await using` grammar constraints (recorded per declarator):
+  //   TS1492 — a binding pattern is never allowed;
+  //   TS2850/2851 — an object-LITERAL initializer with fully-known plain
+  //   keys provably lacks a `[Symbol.dispose]()` / `[Symbol.asyncDispose]()`
+  //   method (symbol-keyed / computed / spread entries abstain).
+  if using_kw != "" {
+    for st in stmts {
+      match st {
+        Var(b, _, init) | Let(b, _, init) | Const(b, _, init) => {
+          match b {
+            Array(_) | Object(_) =>
+              self.grammar_misuses.push(
+                "'\{using_kw}' declarations may not have binding patterns",
+              )
+            _ => ()
+          }
+          match init {
+            ObjectLit(entries) => {
+              let mut keys_plain = true
+              for e in entries {
+                if e.0.has_prefix("@@") || e.0.has_prefix("<") {
+                  keys_plain = false
+                }
+              }
+              if keys_plain {
+                self.grammar_misuses.push(
+                  "the initializer of a '\{using_kw}' declaration must be an object with a `[Symbol.dispose]()` method, or `null` / `undefined`",
+                )
+              }
+            }
+            _ => ()
+          }
+        }
+        _ => ()
+      }
+    }
+  }
   // TS2339: `var { x, y } = {}` — a non-defaulted pattern property that
   // the syntactic object-literal initializer provably lacks. Only the
   // first declarator is judged (later declarators parse their own
@@ -657,12 +695,15 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
   // `for (let x of ...)` for parsing purposes; we tag the binding with
   // `TsForOfKind::Let` since the auto-disposal semantics don't affect the
   // type-level shape the checker cares about.
+  let mut using_kw = ""
   let using_declaration = if self.is_using_declaration_start() {
     let _ = self.advance()
+    using_kw = "using"
     true
   } else if self.is_await_using_declaration_start() {
     let _ = self.advance() // `await`
     let _ = self.advance() // `using`
+    using_kw = "await using"
     true
   } else {
     false
@@ -683,6 +724,13 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
       }
     }
     let binding = self.parse_binding_pattern()
+    // TS1492: `for (using [a] of ...)` / `for (await using {} of ...)` —
+    // a `using` head never takes a binding pattern.
+    if using_declaration && binding is (Array(_) | Object(_)) {
+      self.grammar_misuses.push(
+        "'\{using_kw}' declarations may not have binding patterns",
+      )
+    }
     // TS2480: `for (let let of ...)` / `for (const let in ...)`.
     match (kind, binding) {
       (
@@ -1135,7 +1183,8 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
         let _ = self.advance() // `using`
       }
       let binding_name = self.parse_binding_ident()
-      let ty = if self.check(Colon) {
+      let has_annotation = self.check(Colon)
+      let ty = if has_annotation {
         let _ = self.advance()
         self.parse_type()
       } else {
@@ -1144,6 +1193,52 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
       let _ = self.expect(Eq)
       let init = self.parse_expr()
       let _ = self.match_(Semicolon)
+      let using_kw = if is_await_using { "await using" } else { "using" }
+      // Later declarators of a multi-declarator `using` land inside the
+      // init as a comma chain (`using a = null, [b] = null, c = null`
+      // parses `null, ([b] = null), (c = null)`). A destructuring
+      // assignment operand is exactly a pattern declarator — TS1492.
+      // The FIRST operand is the real initializer: an object LITERAL
+      // whose keys are all plain (no symbol-keyed / computed / spread
+      // entry) provably lacks `[Symbol.dispose]()` — TS2850/2851.
+      fn using_first_operand(e : @ast.TsExpr) -> @ast.TsExpr {
+        match e {
+          Seq(a, _) => using_first_operand(a)
+          _ => e
+        }
+      }
+      fn scan_using_declarators(p : Parser, e : @ast.TsExpr) -> Unit {
+        match e {
+          Seq(a, b) => {
+            scan_using_declarators(p, a)
+            scan_using_declarators(p, b)
+          }
+          AssignPattern(_, _) =>
+            p.grammar_misuses.push(
+              "'\{using_kw}' declarations may not have binding patterns",
+            )
+          _ => ()
+        }
+      }
+      scan_using_declarators(self, init)
+      // An annotated declaration (`using d: T = {...}`) type-checks the
+      // literal against `T` instead — only the unannotated form decides.
+      match (has_annotation, using_first_operand(init)) {
+        (false, ObjectLit(entries)) => {
+          let mut keys_plain = true
+          for e in entries {
+            if e.0.has_prefix("@@") || e.0.has_prefix("<") {
+              keys_plain = false
+            }
+          }
+          if keys_plain {
+            self.grammar_misuses.push(
+              "the initializer of a '\{using_kw}' declaration must be an object with a `[Symbol.dispose]()` method, or `null` / `undefined`",
+            )
+          }
+        }
+        _ => ()
+      }
       // Parse the remaining statements in this block into the try body.
       let rest_stmts : Array[@ast.TsStmt] = []
       let rest_positions : Array[Int] = []
