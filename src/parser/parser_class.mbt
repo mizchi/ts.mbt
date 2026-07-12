@@ -2197,24 +2197,67 @@ fn Parser::parse_class_body(
       self.restore_local_type_param_bounds(local_type_param_bound_len)
       // Inject `this.name = name` assigns for every parameter
       // property at the TOP of the constructor body — after `super(…)`
-      // when there is one. Vanilla TS semantics.
-      let body = if param_props.length() > 0 {
-        let new_stmts : Array[@ast.TsStmt] = []
-        let mut super_inserted = false
-        for s in body.stmts {
-          new_stmts.push(s)
-          if !super_inserted && self.is_super_call_stmt(s) {
-            for pp in param_props {
-              new_stmts.push(
-                PropAssign(
-                  @ast.TsExpr::Var("this"),
-                  pp.0,
-                  @ast.TsExpr::Var(pp.0),
-                ),
-              )
-            }
-            super_inserted = true
+      // when there is one. Vanilla TS semantics. The `using` lowering
+      // wraps the statements after a `using` declaration in
+      // `try { … } finally { dispose }`, which can bury the `super(…)`
+      // call one or more `Try` levels deep — recurse into try bodies so
+      // the assigns still land right after the call instead of being
+      // prepended before it (usingDeclarations.11's C4/C5).
+      fn insert_after_super_in(
+        p : Parser,
+        stmts : Array[@ast.TsStmt],
+      ) -> Array[@ast.TsStmt]? {
+        let out : Array[@ast.TsStmt] = []
+        let mut inserted = false
+        for s in stmts {
+          if inserted {
+            out.push(s)
+            continue
           }
+          match s {
+            Try(tb, cb, cbody, fb) if !p.is_super_call_stmt(s) =>
+              match insert_after_super_in(p, tb.stmts) {
+                Some(new_inner) => {
+                  out.push(
+                    Try({ stmts: new_inner, stmt_positions: [] }, cb, cbody, fb),
+                  )
+                  inserted = true
+                }
+                None => out.push(s)
+              }
+            _ => {
+              out.push(s)
+              if p.is_super_call_stmt(s) {
+                for pp in param_props {
+                  out.push(
+                    PropAssign(
+                      @ast.TsExpr::Var("this"),
+                      pp.0,
+                      @ast.TsExpr::Var(pp.0),
+                    ),
+                  )
+                }
+                inserted = true
+              }
+            }
+          }
+        }
+        if inserted {
+          Some(out)
+        } else {
+          None
+        }
+      }
+
+      let body = if param_props.length() > 0 {
+        let mut super_inserted = false
+        let new_stmts : Array[@ast.TsStmt] = match
+          insert_after_super_in(self, body.stmts) {
+          Some(ns) => {
+            super_inserted = true
+            ns
+          }
+          None => body.stmts
         }
         if !super_inserted {
           let prepended : Array[@ast.TsStmt] = []

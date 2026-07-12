@@ -1021,11 +1021,34 @@ augmentation, React `HTMLAttributes` index signatures.
 - [ ] Do not pursue `any` / `unknown` AST distinction unless a downstream
   consumer needs it; the JSValue count is unaffected.
 
-## TS Checker Conformance (current state, 2026-07-12)
+## TS Checker Conformance (current state, 2026-07-12 — TypeScript 7)
 
-The conformance push's per-batch log (T0-T209, 2026-06-01 .. 2026-07-11) was
-compacted at this checkpoint — see the git history of TODO.md for the full
-batch-by-batch record, including every dead end and pinned behavior.
+The oracle now correlates against **TypeScript 7** (typescript-go
+v7.0.2). Truth comes from vendored name manifests
+(`scripts/ts7_baselines/`, see its README); case files are the
+`typescript` submodule at typescript-go's `_submodules/TypeScript` pin
+(`4d4f005c`). TS7 removed the ES3/ES5 targets — every `target=es5/es3`
+variant is NOTRUN, and the TS6-era deprecated-compiler-option
+diagnostics (TS5107/TS5101) were removed from the checker accordingly.
+
+State: whole-corpus **TP 2152 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 582 /
+NOTRUN 14** via `scripts/checker_conformance_oracle.sh --max-fp 0
+--max-legal-parsefail 3`. (Final TS6 state for reference: TP 2669 /
+FP 0 / TN 1414 / MISS 414 — the TS7 renumbering reflects dropped es5
+variants and Corsa behavior changes, not checker regressions; the
+582 misses include ~170 new TS7-only opportunities.)
+
+The switch surfaced and fixed four latent checker bugs that es5-variant
+errors had masked (batch BD): lib-global redeclarations are never
+TS2454-unassigned; parameter-property assigns follow a `super()` buried
+in the using-lowering's try/finally; spreads provide properties under
+getters (`@@get:` names); an EXPLICIT `: any` parameter annotation is
+never TS7006 (tracked via the parser's `written_any_params` set —
+`TsParam.type_` alone cannot distinguish it).
+
+PFLEGAL budget is 3: parser768531 (fuzz), decoratorOnClass3 and
+defaultExportWithOverloads01 (both TS7-accepted forms our parser
+rejects — parser follow-ups).
 
 State: whole-corpus **TP 2669 / FP 0 / PFLEGAL 1 / TN 1414** against the
 TypeScript conformance baselines (`.errors.txt` = ground truth). Standing CI

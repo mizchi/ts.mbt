@@ -5329,6 +5329,37 @@ fn snapshot_unassigned(ctx : CheckCtx) -> Array[(String, Bool)] {
 /// assignment on one short-circuit path is not a definite assignment.
 /// Entries the walk *reported* (reads clear on report) are re-armed too --
 /// a duplicate report is harmless while a lost one is a miss.
+fn is_lib_global_value_name(name : String) -> Bool {
+  // Names of runtime-provided global values. A script-level `var` that
+  // redeclares one of these merges with the platform binding, so it is
+  // never "used before being assigned" (TS2454 exemption).
+  match name {
+    "Symbol"
+    | "Object"
+    | "Function"
+    | "Array"
+    | "String"
+    | "Number"
+    | "Boolean"
+    | "BigInt"
+    | "Date"
+    | "RegExp"
+    | "Error"
+    | "Promise"
+    | "Map"
+    | "Set"
+    | "WeakMap"
+    | "WeakSet"
+    | "Proxy"
+    | "Reflect"
+    | "JSON"
+    | "Math"
+    | "globalThis" => true
+    _ => false
+  }
+}
+
+///|
 fn rearm_unassigned(ctx : CheckCtx, before : Array[(String, Bool)]) -> Unit {
   for kv in before {
     if !ctx.unassigned.contains(kv.0) {
@@ -10940,9 +10971,17 @@ fn check_object_lit_against_target(
       // A `{...spread}` entry contributes every field of the spread source,
       // so those count as provided for the missing-required check (`const a1:
       // {a; b} = {...extra}` is not missing `a`/`b` when `extra` has them).
+      // Accessor members surface under `@@get:`/`@@set:` names, but a
+      // spread copies the underlying PROPERTY (`{ ...op }` where `op` has
+      // `get a()` provides `a` — objectSpread's getter case).
       let spread_ty = infer_expr(env, resolver, entry.1)
       for sf in collect_declared_fields(spread_ty, resolver) {
-        provided[sf.0] = true
+        let n = if sf.0.has_prefix("@@get:") || sf.0.has_prefix("@@set:") {
+          sf.0.substring(start=6)
+        } else {
+          sf.0
+        }
+        provided[n] = true
       }
     } else {
       provided[entry.0] = true
@@ -14161,9 +14200,13 @@ fn check_ident_binding_decl(
       // / `// @strictPropertyInitialization: false` opt-out
       // directives we already track for TS2564 -- reuse the
       // module flag.
+      // A top-level redeclaration of a runtime-provided lib global
+      // (`var Symbol: SymbolConstructor;` — ES5SymbolProperty1) merges
+      // with the platform value, which is always assigned.
       if is_checkable(declared) &&
         !type_accepts_undefined(declared) &&
         ctx.strict_property_init &&
+        !is_lib_global_value_name(name) &&
         !ctx.resolver.name_assigned_in_static_block(name) {
         ctx.unassigned[name] = block_scoped
       }
@@ -24029,12 +24072,11 @@ fn check_module_function_bodies_layered(
   // TS5107: deprecated compiler-option directives (`// @target: es5`, …).
   // These live only in the top-level module header, so emit once per file.
   if outer_modules.length() == 0 {
-    for opt in module_.deprecated_compiler_options {
-      all.push({
-        path: "compiler options",
-        message: "option `\{opt}` is deprecated",
-      })
-    }
+    // TS5107 deprecated-option diagnostics were removed with the switch to
+    // the TypeScript 7 oracle: typescript-go dropped the ES3/ES5 targets
+    // entirely and never runs those test variants, so `@target: es5`
+    // headers no longer produce errors. The parser still records
+    // `deprecated_compiler_options`; nothing surfaces them.
     // TS2369: a parameter property (`public` / `private` / `protected` /
     // `readonly` on a parameter) is only allowed in a constructor
     // implementation. The parser records each one it saw outside a

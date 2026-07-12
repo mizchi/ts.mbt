@@ -139,6 +139,13 @@ pub struct Parser {
   // signature contextual type can supply them), while method params are
   // never contextually typed and keep recording.
   mut in_class_expr_body : Bool
+  // Parameter names the source annotated explicitly with `: any`. tsc
+  // never reports TS7006 for these, but post-parse `TsParam.type_` can't
+  // distinguish a written `any` from a missing annotation — the
+  // noImplicitAny recorders consult this set. Keyed by bare name (a
+  // same-named unannotated param elsewhere is then exempt too — a safe
+  // MISS, never an FP).
+  written_any_params : Map[String, Unit]
   // Conformance-header strict directive (`@alwaysStrict: true` / `@strict:
   // true`). Unlike `in_strict` it does NOT change parsing behaviour (octal
   // handling, statement restrictions, ...) -- it only arms the strict-misuse
@@ -267,6 +274,7 @@ pub fn Parser::new_with_strict_and_jsx(
     record_implicit_any_params: false,
     class_decl_no_heritage: false,
     in_class_expr_body: false,
+    written_any_params: {},
     directive_strict: false,
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],
@@ -359,6 +367,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     record_implicit_any_params: false,
     class_decl_no_heritage: false,
     in_class_expr_body: false,
+    written_any_params: {},
     directive_strict: detect_directive_strict(src),
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],

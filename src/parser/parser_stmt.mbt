@@ -469,6 +469,7 @@ fn Parser::record_uncontextual_callable_params(
     ArrowFunc(params, _, _, _) =>
       for p in params {
         if p.type_ is Any &&
+          !self.written_any_params.contains(p.name) &&
           p.default is None &&
           !p.is_rest &&
           p.name != "<param>" &&

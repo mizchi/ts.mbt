@@ -327,6 +327,7 @@ fn Parser::record_comma_operand_implicit_any(
   }
   for p in params {
     if p.type_ is Any &&
+      !self.written_any_params.contains(p.name) &&
       p.default is None &&
       p.binding is (None | Some(Ident(_))) {
       if p.is_rest {

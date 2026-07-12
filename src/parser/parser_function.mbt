@@ -189,6 +189,12 @@ fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
   } else {
     Any // type Any
   }
+  // An EXPLICIT `: any` annotation is indistinguishable from a missing
+  // one once stored in `TsParam.type_`, but tsc never reports TS7006
+  // for it — remember the name for the noImplicitAny recorders.
+  if had_annotation && base_type is Any {
+    self.written_any_params[name] = ()
+  }
   let type_ = if is_optional {
     wrap_optional_ts_type(base_type)
   } else {

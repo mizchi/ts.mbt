@@ -1,36 +1,39 @@
 #!/usr/bin/env bash
-# Correlate the checker against the TypeScript conformance baselines.
+# Correlate the checker against the TypeScript 7 conformance results.
 #
-# Each conformance case `foo.ts` is shipped alongside a baseline directory.
-# When the official compiler reports an error, a `foo.errors.txt` baseline
-# exists; when the program is accepted, it does not. That gives a free
-# oracle for the checker's *soundness*: we don't model every TS type rule,
-# so missing some flagged cases is expected — but flagging a case the
-# compiler accepts is a compatibility bug.
+# The oracle's ground truth is **TypeScript 7** (the native compiler,
+# microsoft/typescript-go). tsgo runs the conformance suite from its
+# TypeScript submodule pin and stores complete baselines; whether a test
+# errors is derivable from baseline FILE NAMES alone, so this repo vendors
+# only two name lists under scripts/ts7_baselines/ (see the README there
+# for provenance and regeneration):
+#
+#   tsgo_ran_set.txt     tests tsgo actually ran (any baseline artifact)
+#   tsgo_errors_set.txt  tests where TS7 reports >= 1 error
 #
 # For every single-file conformance `.ts` (multi-file `// @filename` cases
 # are skipped — the single-file parser can't model them) this classifies:
 #
-#   TP   has .errors.txt  &&  we flag    (agreement — TS errors, we agree)
-#   MISS has .errors.txt  &&  we silent  (expected: we are a subset of TS)
-#   FP   no  .errors.txt  &&  we flag    (***soundness bug — TS accepts***)
-#   TN   no  .errors.txt  &&  we silent  (agreement — both accept)
+#   TP     TS7 errors  &&  we flag    (agreement)
+#   MISS   TS7 errors  &&  we silent  (expected: we are a subset of TS)
+#   FP     TS7 accepts &&  we flag    (***soundness bug***)
+#   TN     TS7 accepts &&  we silent  (agreement)
+#   NOTRUN tsgo skipped the test      (excluded — e.g. every target=es5 /
+#                                      target=es3 variant; TS7 removed
+#                                      those targets)
 #
-# A PARSE FAILURE is a rejection too: when the file has an error baseline
-# the compiler also rejects it, so it counts as a TP (reported separately
-# as "via parse rejection"). A parse failure on a file the compiler
-# ACCEPTS is a parser soundness bug — reported as PFLEGAL and gated by
-# --max-legal-parsefail (kept separate from --max-fp so the checker
-# invariant and the parser-coverage budget can move independently).
+# A PARSE FAILURE is a rejection too: on a TS7-erroring file it counts as a
+# TP (reported separately); on a TS7-accepted file it is a parser soundness
+# bug — reported as PFLEGAL and gated by --max-legal-parsefail.
 #
 # Usage:
-#   scripts/checker_conformance_oracle.sh                 # print summary + FP list
-#   scripts/checker_conformance_oracle.sh --max-fp 7      # gate: exit 1 if FP > 7
-#   scripts/checker_conformance_oracle.sh --dir types     # restrict to a subtree
+#   scripts/checker_conformance_oracle.sh                 # summary + FP list
+#   scripts/checker_conformance_oracle.sh --max-fp 0      # gate on FPs
+#   scripts/checker_conformance_oracle.sh --dir types     # restrict subtree
 #
 # Exit codes:
-#   0  ran (or FP within --max-fp budget)
-#   1  FP count exceeded --max-fp, or no corpus / binary found
+#   0  ran (or budgets respected)
+#   1  FP / PFLEGAL budget exceeded, or no corpus / binary found
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -44,8 +47,9 @@ if [ ! -x "$TSCHECK" ]; then
   exit 1
 fi
 
-BASELINES="typescript/tests/baselines/reference"
 CONFORMANCE="typescript/tests/cases/conformance"
+RAN_SET="scripts/ts7_baselines/tsgo_ran_set.txt"
+ERRORS_SET="scripts/ts7_baselines/tsgo_errors_set.txt"
 SUBDIR=""
 MAX_FP=-1
 MAX_LEGAL_PARSEFAIL=-1
@@ -62,12 +66,12 @@ done
 ROOT="$CONFORMANCE"
 [ -n "$SUBDIR" ] && ROOT="$CONFORMANCE/$SUBDIR"
 
-if [ ! -d "$ROOT" ] || [ ! -d "$BASELINES" ]; then
-  echo "conformance corpus not populated ($ROOT / $BASELINES missing) — skipping." >&2
+if [ ! -d "$ROOT" ] || [ ! -f "$RAN_SET" ] || [ ! -f "$ERRORS_SET" ]; then
+  echo "conformance corpus / TS7 manifests not populated ($ROOT / $RAN_SET) — skipping." >&2
   exit 0
 fi
 
-declare -i tp=0 miss=0 fp=0 tn=0 tp_parse=0 pflegal=0
+declare -i tp=0 miss=0 fp=0 tn=0 tp_parse=0 pflegal=0 notrun=0
 fp_files=()
 pflegal_files=()
 
@@ -79,15 +83,12 @@ while IFS= read -r f; do
   # concatenated multi-file blob gets classified as if it were one file.
   grep -qi "@filename" "$f" 2>/dev/null && continue
   base=$(basename "$f" .ts)
-  # A case run under multiple settings emits suffixed baselines such as
-  # `foo(target=es5).errors.txt`, so match the bare name and any
-  # parenthesised variant.
-  if [ -f "$BASELINES/${base}.errors.txt" ] || \
-     compgen -G "$BASELINES/${base}(*).errors.txt" >/dev/null 2>&1; then
-    has=1
-  else
-    has=0
+  # Tests tsgo never ran carry no verdict — excluded from every bucket.
+  if ! grep -qxF "$base" "$RAN_SET"; then
+    notrun+=1
+    continue
   fi
+  if grep -qxF "$base" "$ERRORS_SET"; then has=1; else has=0; fi
   out=$("$TSCHECK" "$f" 2>&1 | tail -1)
   if echo "$out" | grep -q "error:"; then
     # A parse rejection of a compiler-rejected file is agreement; of a
@@ -109,20 +110,20 @@ while IFS= read -r f; do
 done < <(find "$ROOT" -name "*.ts")
 
 total=$((tp + miss + fp + tn + pflegal))
-echo "=== Checker vs TypeScript conformance baselines ==="
+echo "=== Checker vs TypeScript 7 conformance results ==="
 echo "Corpus root   : $ROOT"
-echo "Classified    : $total"
+echo "Classified    : $total   (NOTRUN excluded: $notrun)"
 echo "TP  err+flag  : $tp   (of which via parse rejection: $tp_parse)"
 echo "MISS err+quiet: $miss   (expected — checker models a subset of TS)"
-echo "FP  ok +flag  : $fp     (soundness bugs — TS accepts these)"
-echo "PFLEGAL       : $pflegal     (parser rejects TS-legal files — parser bugs)"
+echo "FP  ok +flag  : $fp     (soundness bugs — TS7 accepts these)"
+echo "PFLEGAL       : $pflegal     (parser rejects TS7-legal files — parser bugs)"
 echo "TN  ok +quiet : $tn"
 if [ "$fp" -gt 0 ]; then
-  echo "--- false positives (TS accepts, we flag) ---"
+  echo "--- false positives (TS7 accepts, we flag) ---"
   for f in "${fp_files[@]}"; do echo "  $f"; done
 fi
 if [ "$pflegal" -gt 0 ]; then
-  echo "--- legal-TS parse failures (parser bugs) ---"
+  echo "--- legal-TS7 parse failures (parser bugs) ---"
   for f in "${pflegal_files[@]}"; do echo "  $f"; done
 fi
 
@@ -131,6 +132,7 @@ if [ "$MAX_FP" -ge 0 ] && [ "$fp" -gt "$MAX_FP" ]; then
   exit 1
 fi
 if [ "$MAX_LEGAL_PARSEFAIL" -ge 0 ] && [ "$pflegal" -gt "$MAX_LEGAL_PARSEFAIL" ]; then
-  echo "FAIL: legal-TS parse-failure count $pflegal exceeds budget $MAX_LEGAL_PARSEFAIL" >&2
+  echo "FAIL: legal-parse-failure count $pflegal exceeds budget $MAX_LEGAL_PARSEFAIL" >&2
   exit 1
 fi
+exit 0
