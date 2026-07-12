@@ -2295,6 +2295,34 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-10 (T207)  714/815 (88 %)        414/414 ( 0 FP)   Class-expression method implicit any: TP 2617 -> 2619
+
+  T207 -- batch AZ stage 5, closing the contextual-typing cluster
+    (user-selected remainder). tsc splits class-EXPRESSION member
+    typing: METHOD declarations are NEVER contextually typed — a
+    matching member on the assignment/return target does not reach them
+    (contextuallyTypedClassExpressionMethodDeclaration01: static
+    methods flag while static FIELD initializers get context; 02:
+    instance methods flag even through a construct-signature target).
+    Implementation is a one-line-of-truth change: `parse_class_stub`
+    used to DISARM the heritage-free member noImplicitAny recording for
+    the whole expression body; it now arms it exactly like a
+    heritage-free class declaration. The existing method-param gate
+    naturally skips field initializers (they never run it) and
+    accessors (already exempt); constructors are newly exempted via
+    `in_class_expr_body` (a construct-signature contextual type can
+    supply constructor params, unlike methods). A base class or
+    implements clause re-disarms everything (inherited members supply
+    param types — pinned).
+    Updated one batch-K era pin that had encoded the old disarm as
+    "expected 0" on `var C = class { m(x) {} }` — tsc flags that
+    (TS7006), so the pin now asserts the diagnostic.
+    01 matches tsc exactly (2); 02 reports the 2 method-declaration
+    diagnostics of tsc's 6 (its field-initializer cases need
+    per-target-shape contextual analysis — documented miss, file still
+    TP). Whole-corpus TP 2617 -> 2619 @ 0 FP, PFLEGAL 1, TN 1414. 587
+    checker wbtests.
+
 2026-07-10 (T206)  714/815 (88 %)        414/414 ( 0 FP)   Uncontextual object literals (satisfies / lone setter): TP 2615 -> 2617
 
   T206 -- batch AZ stage 4, two more contextual-typing shapes.

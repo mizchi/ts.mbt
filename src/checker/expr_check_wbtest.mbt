@@ -11343,7 +11343,9 @@ test "expr_check: noImplicitAny family (TS7005/TS7006/TS7010/TS7019/TS7031)" {
     ),
     0,
   )
-  @test.assert_eq(issues("var C = class { m(x) {} };"), 0)
+  // Class-expression METHOD declarations are never contextually typed
+  // (batch AZ stage 5 re-armed them; tsc flags this).
+  assert_true(issues("var C = class { m(x) {} };") > 0)
   @test.assert_eq(
     issues(
       "class C { get [Symbol.toPrimitive]() { return \"\"; } set [Symbol.toPrimitive](x) {} }",
@@ -13483,6 +13485,54 @@ test "expr_check: uncontextual object literals (batch AZ stage 4)" {
   )
   @test.assert_eq(
     issues("// @noImplicitAny: false\nvar v = { set Foo(a) { } };"),
+    0,
+  )
+}
+
+///|
+test "expr_check: class-expression method implicit any (batch AZ stage 5)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Class-expression METHOD declarations are never contextually typed:
+  // a matching member on the target doesn't reach them
+  // (contextuallyTypedClassExpressionMethodDeclaration01/02).
+  assert_true(
+    issues(
+      "// @noImplicitAny: true\ninterface A { numProp: number; }\ninterface Foo { method1(arg: A): void; }\nfunction getFoo1(): Foo {\n  return class {\n    static method1(arg) { arg.numProp = 10; }\n  }\n}",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "// @noImplicitAny: true\ninterface A { numProp: number; }\ninterface Bar { method1(arg: A): void; }\ninterface Foo { new (): Bar; }\nfunction getFoo1(): Foo {\n  return class {\n    method1(arg) { arg.numProp = 10; }\n  }\n}",
+    ) >
+    0,
+  )
+  // Pins: FIELD initializers receive contextual types (01 getFoo2 shape);
+  // a base class supplies inherited param types; constructors can be
+  // contextually typed from construct signatures; accessors infer from
+  // the paired getter; the option gates everything.
+  @test.assert_eq(
+    issues(
+      "// @noImplicitAny: true\ninterface A { numProp: number; }\ninterface Foo { method1(arg: A): void; }\nfunction getFoo2(): Foo {\n  return class {\n    static method1 = (arg) => { arg.numProp = 10; }\n  }\n}",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @noImplicitAny: true\nclass Base { m(x: number) {} }\nvar C = class extends Base { m(x) { } };",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @noImplicitAny: true\nvar C = class { constructor(arg) { } };\nvar D = class { get p() { return \"\"; } set p(v) { } };",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues("// @noImplicitAny: false\nvar C = class { m(arg) { } };"),
     0,
   )
 }
