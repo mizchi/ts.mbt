@@ -6429,9 +6429,14 @@ fn infer_expr(
         param_types.push(p.type_)
       }
       // When no explicit return-type annotation was given, walk the body for
-      // return statements — same strategy as ArrowBlock.
+      // return statements — same strategy as ArrowBlock. A generator function
+      // returns a `Generator` object, not its `return` value, so calling one
+      // yields a Generator — which is what makes yielding a generator IIFE
+      // into a function-typed slot a mismatch (generatorTypeCheck31).
       let ret = if is_checkable(f.return_type) {
         f.return_type
+      } else if f.is_generator {
+        @ast.TsType::Applied("Generator", [Any, Any, Any])
       } else {
         infer_block_return(env, resolver, f.body)
       }
@@ -7578,6 +7583,26 @@ fn check_expr_against(
       )
       return
     }
+    _ => ()
+  }
+  // (1b) A generator object has no call signatures, so a `Generator<...>`
+  // value (e.g. the result of calling a generator IIFE) never satisfies a
+  // function-typed slot (generatorTypeCheck31's `yield function* () {..} ()`
+  // into `() => Iterable<...>`). Abstains when the fixture declares its own
+  // `Generator` — a user shape could carry a call signature.
+  match (src_shape, expected_shape) {
+    (Applied("Generator" | "IterableIterator" | "AsyncGenerator", _), Func(_, _)
+    ) =>
+      if ctx.resolver.interfaces.get("Generator") is None &&
+        ctx.resolver.classes.get("Generator") is None &&
+        ctx.resolver.interfaces.get("IterableIterator") is None {
+        record_unfiltered(
+          ctx,
+          sub_path,
+          "a generator object provides no match for the function type `\{type_display(expected_shape)}`",
+        )
+        return
+      }
     _ => ()
   }
   // (2a) Members HIDING `Object.prototype` members with incompatible

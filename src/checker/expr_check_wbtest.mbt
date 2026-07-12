@@ -13731,3 +13731,36 @@ test "expr_check: Object member hiding (batch BC task 2)" {
     0,
   )
 }
+
+///|
+test "expr_check: generator object vs function type (batch BC task 3)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Calling a generator IIFE produces a `Generator` object, which has no
+  // call signatures — yielding it into a function-typed slot is TS2322
+  // (generatorTypeCheck31).
+  assert_true(
+    issues(
+      "function* g2(): Iterator<() => Iterable<(x: string) => number>> {\n  yield function* () {\n    yield x => x.length;\n  } ()\n}",
+    ) >
+    0,
+  )
+  // Pins: the generator object itself flows into Iterable / iteration
+  // positions legally, and member access on the synthesized `Generator`
+  // return stays silent.
+  @test.assert_eq(
+    issues(
+      "var it = function* () { yield 1; } ();\nit.next();\nfunction takesIterable(x: Iterable<number>) {}\ntakesIterable(function* () { yield 1; } ());\nfor (const n of function* () { yield 1; } ()) {}",
+    ),
+    0,
+  )
+  // Pin: a fixture-declared `Generator` interface abstains — the user
+  // shape could carry a call signature we don't model.
+  @test.assert_eq(
+    issues(
+      "interface Generator<T, R, N> { (): void; next(): { value: T } }\ndeclare var gg: Generator<number, void, void>;\nvar f2: () => void = gg;",
+    ),
+    0,
+  )
+}

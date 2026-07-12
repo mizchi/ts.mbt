@@ -1082,8 +1082,15 @@ parser768531 (regex/division ambiguity needs parser-fed lexer context).
    the lib `Object`; (b) bare `Object` never satisfies a callable /
    constructable target. Module-declared `Object` shadows abstain
    (pinned). All three fixtures match tsc's per-line counts.
-3. [ ] generatorTypeCheck31 — `function*` yield-type synthesis checked
-   against a declared union-of-iterable return.
+3. [x] generatorTypeCheck31 — DONE (batch BC): an unannotated
+   `function*` expression now infers its return as
+   `Generator<any, any, any>` (calling a generator produces the
+   generator OBJECT, not its return value), and a new rule (1b) flags a
+   `Generator` / `IterableIterator` / `AsyncGenerator` source against a
+   function-typed target (no call signatures). Abstains when the fixture
+   declares its own `Generator` interface. Pinned legal: `.next()` on
+   the synthesized return, generator IIFEs into `Iterable` slots and
+   `for..of` heads. TP 2642 -> 2643, FP 0.
 4. [ ] mappedTypeAsClauses / mappedTypeConstraints2 /
    mappedTypeAsClauseRelationships — mapped types with `as` clauses:
    key-remapping relationships (deep; scope a decidable slice first).
