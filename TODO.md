@@ -2295,6 +2295,38 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-10 (T208)  714/815 (88 %)        414/414 ( 0 FP)   For-of assign patterns + rest targets: TP 2619 -> 2625
+
+  T208 -- batch BA stage 1 (user-selected deep TS2322/TS2345 theme).
+    Assignment-form destructuring writes into EXISTING declared slots,
+    and three of those write paths were unchecked:
+    (a) for-of ASSIGNMENT PATTERNS (`for ([k = false, v] of map)` /
+    `for ({x, y = E.x} of arr)`): each named target keeps its declared
+    type, so both the flowing element/property type AND any default
+    expression must fit it. Array patterns read tuple slots
+    positionally; object patterns look the property up on the element
+    type; defaults route through check_expr_against (for-of46 x2
+    matching tsc exactly, 47, 48).
+    (b) REST targets in assignment-form array destructuring collect
+    `SourceElem[]` (`[a, ...b] = new FooIterator` writes `Foo[]` into
+    `b` — iterableArrayPattern6 vs `string[]`, 8 vs `string`).
+    Array-literal / tuple sources skip (their rest is a heterogeneous
+    slice).
+    (c) `Array.prototype.values()` / `keys()` / `entries()` now model
+    their IterableIterator returns, so for-of element types flow
+    through them (for-of12: `for (v of [0, ""].values())` against
+    `v: string` is TS2322 string|number).
+    All three reuse a newly factored `destructure_target_mismatch`
+    guard chain (the per-slot AssignPattern check's guards, extracted).
+    FP CAUGHT BY THE SWEEP and fixed before landing: the first rest-
+    target cut flagged `[a, ...b]: Bar[] = new FooIterator` (elements
+    Foo extends Bar) — context-free `is_assignable_to` doesn't see the
+    extends chain at Array(Named) level. Added the covariant-array
+    element comparison arm the spread-element check already carries
+    (iterableArrayPattern4 pinned legal).
+    Whole-corpus TP 2619 -> 2625 @ 0 FP, PFLEGAL 1, TN 1414. 588
+    checker wbtests.
+
 2026-07-10 (T207)  714/815 (88 %)        414/414 ( 0 FP)   Class-expression method implicit any: TP 2617 -> 2619
 
   T207 -- batch AZ stage 5, closing the contextual-typing cluster

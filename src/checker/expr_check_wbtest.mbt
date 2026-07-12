@@ -13536,3 +13536,69 @@ test "expr_check: class-expression method implicit any (batch AZ stage 5)" {
     0,
   )
 }
+
+///|
+test "expr_check: for-of assign patterns + rest targets (batch BA)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Array `.values()` yields the element type (for-of12).
+  assert_true(
+    issues(
+      "// @strict: false\nvar v: string;\nfor (v of [0, \"\"].values()) { }",
+    ) >
+    0,
+  )
+  // Defaults in a for-of assignment pattern check against the declared
+  // target type (for-of46: boolean default into string, and vice versa).
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nvar k: string, v: boolean;\nvar map = new Map([[\"\", true]]);\nfor ([k = false, v = \"\"] of map) { }",
+    ),
+    2,
+  )
+  // Object-pattern property types check against declared targets
+  // (for-of47/48 shapes, incl. shorthand default).
+  assert_true(
+    issues(
+      "// @strict: false\nvar x: string, y: number;\nvar array = [{ x: \"\", y: true }];\nenum E { x }\nfor ({x, y = E.x} of array) { }",
+    ) >
+    0,
+  )
+  // Rest target collects an array of the source element type
+  // (iterableArrayPattern6/8).
+  let iter_cls = "class Bar { x }\nclass Foo extends Bar { y }\nclass FooIterator {\n  next() { return { value: new Foo, done: false }; }\n  [Symbol.iterator]() { return this; }\n}\n"
+  assert_true(
+    issues(
+      "// @strict: false\n" +
+      iter_cls +
+      "var a: Bar, b: string[];\n[a, ...b] = new FooIterator;",
+    ) >
+    0,
+  )
+  // Pins: matching declared types stay silent everywhere.
+  @test.assert_eq(
+    issues(
+      "// @strict: false\nvar s: string;\nfor (s of [\"a\", \"b\"].values()) { }\nvar k2: string, v2: boolean;\nfor ([k2 = \"z\", v2 = true] of new Map([[\"\", true]])) { }",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @strict: false\n" +
+      iter_cls +
+      "var a2: Bar, b2: Foo[];\n[a2, ...b2] = new FooIterator;",
+    ),
+    0,
+  )
+  // Covariant arrays: base-class element targets accept the derived
+  // element array (iterableArrayPattern4 is legal).
+  @test.assert_eq(
+    issues(
+      "// @strict: false\n" +
+      iter_cls +
+      "var a3: Bar, b3: Bar[];\n[a3, ...b3] = new FooIterator;",
+    ),
+    0,
+  )
+}

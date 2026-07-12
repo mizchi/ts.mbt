@@ -1344,6 +1344,29 @@ fn array_prototype_member(elem : @ast.TsType, field : String) -> @ast.TsType? {
     "includes" => Some(@ast.TsType::Func([elem], @ast.TsType::Boolean))
     "every" => Some(@ast.TsType::Func([cb_bool], @ast.TsType::Boolean))
     "some" => Some(@ast.TsType::Func([cb_bool], @ast.TsType::Boolean))
+    // Iteration protocol views: `values()` yields the elements (for-of12
+    // needs the element type to flow), `keys()` the indices, `entries()`
+    // index/element pairs.
+    "values" =>
+      Some(
+        @ast.TsType::Func([], @ast.TsType::Applied("IterableIterator", [elem])),
+      )
+    "keys" =>
+      Some(
+        @ast.TsType::Func(
+          [],
+          @ast.TsType::Applied("IterableIterator", [@ast.TsType::Number]),
+        ),
+      )
+    "entries" =>
+      Some(
+        @ast.TsType::Func(
+          [],
+          @ast.TsType::Applied("IterableIterator", [
+            @ast.TsType::Tuple([@ast.TsType::Number, elem]),
+          ]),
+        ),
+      )
     "find" => Some(@ast.TsType::Func([cb_bool], nullable_elem))
     "findIndex" => Some(@ast.TsType::Func([cb_bool], @ast.TsType::Number))
     "findLast" => Some(@ast.TsType::Func([cb_bool], nullable_elem))
@@ -14292,6 +14315,13 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
             env.narrow(n, elem_ty)
           }
         }
+        (@ast.TsForOfKind::Assign, _) => {
+          // Assignment-form destructuring PATTERN: the named targets keep
+          // their declared types, so both the flowing element/property
+          // types and any defaults must fit them (for-of46/47/48).
+          check_forof_assign_pattern(env, ctx, binding, elem_ty)
+          bind_pattern(env, ctx, binding, elem_ty)
+        }
         _ => bind_pattern(env, ctx, binding, elem_ty)
       }
       check_block(env, body, ctx)
@@ -16285,6 +16315,46 @@ fn check_call_args_in_expr(
                 }
               None => ()
             }
+          }
+          // TS2322 for the REST target: it collects the remaining elements
+          // as an ARRAY of the source's element type (`[a, ...b] = new
+          // FooIterator` writes `Foo[]` into `b` --
+          // iterableArrayPattern6/8). Syntactic array-literal sources are
+          // skipped (their rest is a heterogeneous tuple slice).
+          match ab.rest {
+            Some(@ast.TsBinding::Ident(rn)) =>
+              if !(v is ArrayLit(_)) && !(unwrapped_src is Tuple(_)) {
+                let rest_ty = @ast.TsType::Array(elem)
+                match env.lookup_declared(rn) {
+                  Some(target_ty) =>
+                    if is_checkable(elem) &&
+                      destructure_target_mismatch(ctx, rest_ty, target_ty) &&
+                      // Covariant arrays: `Foo[]` satisfies `Bar[]` when the
+                      // element is structurally assignable (base-class
+                      // elements — iterableArrayPattern4 is legal).
+                      !(match ctx.resolver.unwrap(target_ty) {
+                        Array(te) | Applied("Array", [te]) =>
+                          is_assignable_to(
+                            ctx.resolver.unwrap(elem),
+                            ctx.resolver.unwrap(te),
+                          ) ||
+                          is_structurally_assignable_named(
+                            elem,
+                            te,
+                            ctx.resolver,
+                          )
+                        _ => false
+                      }) {
+                      record(
+                        ctx,
+                        "destructuring rest `\{rn}`",
+                        "rest collects `\{type_display(rest_ty)}` which is not assignable to `\{type_display(target_ty)}`",
+                      )
+                    }
+                  None => ()
+                }
+              }
+            _ => ()
           }
         }
         _ => ()
@@ -21493,6 +21563,109 @@ fn check_uncontextual_object_literals(
     }
   }
   issues
+}
+
+///|
+/// The destructuring-target guard chain: true when `slot_ty` is DEFINITELY
+/// not assignable to `target_ty` with every reliability guard passing
+/// (checkable both sides, no in-scope type params, no unresolved /
+/// unmodeled shapes, literal-widened, structural class fallback tried).
+fn destructure_target_mismatch(
+  ctx : CheckCtx,
+  slot_ty : @ast.TsType,
+  target_ty : @ast.TsType,
+) -> Bool {
+  is_checkable(target_ty) &&
+  is_checkable(slot_ty) &&
+  !is_in_scope_type_param(ctx, target_ty) &&
+  !is_in_scope_type_param(ctx, slot_ty) &&
+  !type_contains_unresolved_named(target_ty, ctx.resolver) &&
+  !type_contains_unresolved_named(slot_ty, ctx.resolver) &&
+  !type_deeply_contains_unmodeled(target_ty, ctx.resolver) &&
+  !type_deeply_contains_unmodeled(slot_ty, ctx.resolver) &&
+  !is_assignable_to(
+    ctx.resolver.unwrap(widen_literal(slot_ty)),
+    ctx.resolver.unwrap(target_ty),
+  ) &&
+  !is_structurally_assignable_named(slot_ty, target_ty, ctx.resolver)
+}
+
+///|
+/// TS2322 for assignment-form destructuring PATTERNS in `for-of` heads
+/// (`for ([k = false, v] of map)` / `for ({x, y = E.x} of arr)`): each
+/// named target keeps its DECLARED type, so both the element/property type
+/// flowing in and any DEFAULT expression must be assignable to it
+/// (for-of46/47/48).
+fn check_forof_assign_pattern(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  binding : @ast.TsBinding,
+  elem_ty : @ast.TsType,
+) -> Unit {
+  fn check_target(n : String, slot_ty : @ast.TsType) -> Unit {
+    match env.lookup_declared(n) {
+      Some(target_ty) =>
+        if destructure_target_mismatch(ctx, slot_ty, target_ty) {
+          record(
+            ctx,
+            "for-of target `\{n}`",
+            "element type `\{type_display(widen_literal(slot_ty))}` is not assignable to `\{type_display(target_ty)}`",
+          )
+        }
+      None => ()
+    }
+  }
+
+  fn check_default(n : String, d : @ast.TsExpr) -> Unit {
+    match env.lookup_declared(n) {
+      Some(target_ty) =>
+        check_expr_against(env, d, target_ty, ctx, "for-of default `\{n}`")
+      None => ()
+    }
+  }
+
+  match binding {
+    @ast.TsBinding::Array(ab) => {
+      let unwrapped = ctx.resolver.unwrap(elem_ty)
+      for i, item in ab.items {
+        match item {
+          Some(el) =>
+            match el.binding {
+              @ast.TsBinding::Ident(n) => {
+                let slot_ty = match unwrapped {
+                  Tuple(parts) if i < parts.length() => parts[i]
+                  _ => elem_ty
+                }
+                check_target(n, slot_ty)
+                match el.default {
+                  Some(d) => check_default(n, d)
+                  None => ()
+                }
+              }
+              _ => ()
+            }
+          None => ()
+        }
+      }
+    }
+    @ast.TsBinding::Object(ob) =>
+      for pr in ob.props {
+        match pr.binding {
+          @ast.TsBinding::Ident(n) => {
+            match ctx.resolver.lookup_field(elem_ty, pr.key) {
+              Some(prop_ty) => check_target(n, prop_ty)
+              None => ()
+            }
+            match pr.default {
+              Some(d) => check_default(n, d)
+              None => ()
+            }
+          }
+          _ => ()
+        }
+      }
+    _ => ()
+  }
 }
 
 ///|
