@@ -13688,3 +13688,46 @@ test "expr_check: well-known-symbol members (batch BC task 1)" {
     issues("// @strict: false\ndeclare var v: { x; m(): void };\nv.zzz();") > 0,
   )
 }
+
+///|
+test "expr_check: Object member hiding (batch BC task 2)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // A member hiding an Object.prototype member with an incompatible
+  // signature blocks assignment to `Object`
+  // (objectTypeHidingMembersOfObjectAssignmentCompat: interface, class,
+  // and object-literal sources).
+  @test.assert_eq(
+    issues(
+      "interface I { toString(): void; }\ndeclare var i: I;\ndeclare var o: Object;\no = i;\ni = o;",
+    ),
+    1,
+  )
+  // Bare `Object` never satisfies a callable or constructable target.
+  assert_true(
+    issues(
+      "interface I { (): void; }\ndeclare var i: I;\ndeclare var f: Object;\nf = i;\ni = f;",
+    ) >
+    0,
+  )
+  // Pins: a COMPATIBLE toString keeps assignment legal; `i = o`
+  // (Object into the interface) is the legal direction of file 1; a
+  // module-declared Object shadows the lib and abstains.
+  @test.assert_eq(
+    issues(
+      "interface J { toString(): string; }\ndeclare var j: J;\ndeclare var o2: Object;\no2 = j;",
+    ),
+    0,
+  )
+  // A module-declared `interface Object` merges with the global: `K`
+  // lacks the merged `x` member, so tsc errors here too — the flag comes
+  // from the general structural compare, not the prototype-hiding rule
+  // (which abstains under the shadow).
+  assert_true(
+    issues(
+      "interface Object { x: number; }\ninterface K { toString(): void; }\ndeclare var k: K;\ndeclare var o3: Object;\no3 = k;",
+    ) >
+    0,
+  )
+}

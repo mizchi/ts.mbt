@@ -1076,11 +1076,12 @@ parser768531 (regex/division ambiguity needs parser-fed lexer context).
    (accessor: setter param inferred from paired getter return, then
    symbol-keyed INDEX-assignment lookup) remains — needs accessor pairing
    machinery.
-2. [ ] objectTypeHidingMembersOfObjectAssignmentCompat +
-   objectTypeWithCallSignatureHidingMembersOfFunctionAssignmentCompat +
-   objectTypeWithConstructSignatureHidingMembersOfFunction... — object
-   types that redeclare `Object` / `Function` members with incompatible
-   types are not assignable to `Object` / `Function`. 3 files, one rule.
+2. [x] Object member hiding — DONE (batch BC): (a) a source member
+   hiding an `Object.prototype` member with an incompatible signature
+   (checked via the object_prototype_member table) blocks assignment to
+   the lib `Object`; (b) bare `Object` never satisfies a callable /
+   constructable target. Module-declared `Object` shadows abstain
+   (pinned). All three fixtures match tsc's per-line counts.
 3. [ ] generatorTypeCheck31 — `function*` yield-type synthesis checked
    against a declared union-of-iterable return.
 4. [ ] mappedTypeAsClauses / mappedTypeConstraints2 /

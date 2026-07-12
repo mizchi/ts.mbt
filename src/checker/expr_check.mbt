@@ -7580,6 +7580,92 @@ fn check_expr_against(
     }
     _ => ()
   }
+  // (2a) Members HIDING `Object.prototype` members with incompatible
+  // signatures make the source non-assignable to the lib `Object`
+  // (`interface I { toString(): void }` — Object's toString returns
+  // string; objectTypeHidingMembersOfObjectAssignmentCompat). Decided
+  // via the object_prototype_member table; unresolvable member types
+  // abstain. A module-declared `Object` shadows the lib and abstains.
+  if expected_shape is Named("Object") &&
+    ctx.resolver.interfaces.get("Object") is None &&
+    ctx.resolver.classes.get("Object") is None {
+    let src_members : Array[(String, @ast.TsType)] = match src_shape {
+      Object(fs) => {
+        let out : Array[(String, @ast.TsType)] = []
+        for f in fs {
+          match f.0 {
+            Literal(k) => out.push((k, f.1))
+            _ => ()
+          }
+        }
+        out
+      }
+      Struct(_, sf) => sf
+      Named(sn) => {
+        let out : Array[(String, @ast.TsType)] = []
+        match ctx.resolver.interfaces.get(sn) {
+          Some(iface) =>
+            for f in iface.fields {
+              out.push(f)
+            }
+          None => ()
+        }
+        match ctx.resolver.classes.get(sn) {
+          Some(cls) => {
+            for p in cls.properties {
+              if !p.is_static {
+                out.push((p.name, p.type_))
+              }
+            }
+            for meth in cls.methods {
+              if !meth.is_static {
+                let ps : Array[@ast.TsType] = []
+                for prm in meth.params {
+                  ps.push(prm.1)
+                }
+                out.push((meth.name, Func(ps, meth.return_type)))
+              }
+            }
+          }
+          None => ()
+        }
+        out
+      }
+      _ => []
+    }
+    for m in src_members {
+      match object_prototype_member(m.0) {
+        Some(proto_ty) =>
+          if is_checkable(m.1) &&
+            !type_contains_unresolved_named(m.1, ctx.resolver) &&
+            !is_assignable_to(ctx.resolver.unwrap(m.1), proto_ty) {
+            record_unfiltered(
+              ctx,
+              sub_path,
+              "member `\{m.0}` hides an `Object.prototype` member with an incompatible type, so the value is not assignable to `Object`",
+            )
+            return
+          }
+        None => ()
+      }
+    }
+  }
+  // (2b) The bare lib `Object` type has no call or construct signatures,
+  // so it never satisfies a callable / constructable target
+  // (objectTypeWithCallSignatureHidingMembersOfFunction... and the
+  // construct-signature variant).
+  if src_shape is Named("Object") &&
+    ctx.resolver.interfaces.get("Object") is None &&
+    ctx.resolver.classes.get("Object") is None &&
+    (
+      collect_call_signatures(expected_shape, ctx.resolver).length() > 0 ||
+      collect_construct_signatures(expected_shape, ctx.resolver).length() > 0
+    ) {
+    record_unfiltered(
+      ctx, sub_path, "`Object` has no call or construct signatures, so it is not assignable to a callable target",
+    )
+    return
+  }
   // (2) A pure call signature provides no match for a construct-only
   // target, and vice versa (assignmentCompatWithConstructSignatures).
   {
