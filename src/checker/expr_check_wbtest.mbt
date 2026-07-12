@@ -13602,3 +13602,37 @@ test "expr_check: for-of assign patterns + rest targets (batch BA)" {
     0,
   )
 }
+
+///|
+test "expr_check: destructuring defaults + literal overload sets (batch BB)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Binding-element defaults check against the annotated path type
+  // (destructuringVariableDeclaration1ES5/ES6: per-element errors).
+  @test.assert_eq(
+    issues(
+      "var {h: {h1 = [undefined, null]}}: { h: { h1: number[] } } = { h: { h1: [1, 2] } };",
+    ),
+    2,
+  )
+  // An `any[]` annotated path accepts the same default (pinned legal).
+  @test.assert_eq(
+    issues(
+      "var {g: {g1 = [undefined, null]}}: { g: { g1: any[] } } = { g: { g1: [1, 2] } };",
+    ),
+    0,
+  )
+  // Disjoint string-literal overload sets are mutually non-assignable
+  // (stringLiteralTypesOverloadAssignability01/02).
+  let fg = "function f(x: \"foo\"): number;\nfunction f(x: string): number {\n    return 0;\n}\nfunction g(x: \"bar\"): number;\nfunction g(x: string): number {\n    return 0;\n}\nlet a = f;\nlet b = g;\n"
+  @test.assert_eq(issues("// @strict: false\n" + fg + "a = b;\nb = a;"), 2)
+  // A wider set satisfies a narrower one (05's legal direction), and the
+  // narrower set fails the wider (05's error direction).
+  let fg5 = "function f(x: \"foo\"): number;\nfunction f(x: string): number;\nfunction f(x: string): number {\n    return 0;\n}\nfunction g(x: \"foo\"): number;\nfunction g(x: string): number {\n    return 0;\n}\nlet a = f;\nlet b = g;\n"
+  @test.assert_eq(issues("// @strict: false\n" + fg5 + "b = a;"), 0)
+  @test.assert_eq(issues("// @strict: false\n" + fg5 + "a = b;"), 1)
+  // Identical sets assign freely (03/04 shapes).
+  let fg3 = "function f(x: \"foo\"): number;\nfunction f(x: string): number {\n    return 0;\n}\nfunction g(x: \"foo\"): number;\nfunction g(x: string): number {\n    return 0;\n}\nlet a = f;\nlet b = g;\n"
+  @test.assert_eq(issues("// @strict: false\n" + fg3 + "a = b;\nb = a;"), 0)
+}

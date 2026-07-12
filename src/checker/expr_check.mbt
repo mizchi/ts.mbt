@@ -618,6 +618,17 @@ fn Resolver::ingest_module(
     }
     r.signatures[prefix + imp.name] = synth_params
   }
+  // tsc's callable surface for an overload set is the BODYLESS overload
+  // signatures only — the implementation signature is not callable. When a
+  // name has at least one bodyless declaration, bodied declarations of the
+  // same name stay out of the ingested union (they still contribute
+  // `signatures` metadata below).
+  let has_sig_only : Map[String, Bool] = {}
+  for f in module_.funcs {
+    if f.body.stmts.length() == 0 {
+      has_sig_only[f.name] = true
+    }
+  }
   for f in module_.funcs {
     // A leading `this` parameter (`function f(this: T, a)`) declares the
     // callee's `this` type, not an argument position, so drop it from the
@@ -671,7 +682,10 @@ fn Resolver::ingest_module(
     let ret = wrap_async_return(f.is_async, effective_ret)
     let new_func_sig = @ast.TsType::Func(param_types, ret)
     let func_key = prefix + f.name
+    let impl_excluded = f.body.stmts.length() > 0 &&
+      has_sig_only.get(f.name) is Some(_)
     match r.globals.get(func_key) {
+      _ if impl_excluded => ()
       Some(Func(_, _) as existing) =>
         r.globals[func_key] = @ast.TsType::Union([existing, new_func_sig])
       Some(Union(existing_parts)) => {
@@ -13881,6 +13895,12 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       }
       if is_checkable(declared) {
         check_expr_against(env, init, declared, ctx, "destructuring init")
+        check_pattern_defaults_against(
+          env,
+          ctx,
+          @ast.TsBinding::Array(ab),
+          declared,
+        )
       }
       let source_ty = if is_checkable(declared) {
         declared
@@ -13899,6 +13919,12 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // `Any` declared type as the unannotated form.)
       if is_checkable(declared) {
         check_expr_against(env, init, declared, ctx, "destructuring init")
+        check_pattern_defaults_against(
+          env,
+          ctx,
+          @ast.TsBinding::Object(ob),
+          declared,
+        )
       }
       let source_ty = if is_checkable(declared) {
         declared
@@ -13946,8 +13972,21 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         None => ctx.resolver.globals.get(name)
       }
       match target {
-        Some(target_ty) =>
+        Some(target_ty) => {
           check_expr_against(env, e, target_ty, ctx, "assign `\{name}`")
+          // TS2322 between string-literal overload sets: every callable
+          // member of the target must be satisfiable by some source
+          // member (`a = b` where `a: (x: "foo") => number` and
+          // `b: (x: "bar") => number` — the literals are disjoint;
+          // stringLiteralTypesOverloadAssignability01/02/05).
+          check_literal_overload_assign(
+            env,
+            ctx,
+            target_ty,
+            e,
+            "assign `\{name}`",
+          )
+        }
         None => ()
       }
       // After a successful assignment, the variable's effective type
@@ -16133,8 +16172,18 @@ fn check_call_args_in_expr(
         None => ctx.resolver.globals.get(name)
       }
       match target {
-        Some(target_ty) =>
+        Some(target_ty) => {
           check_expr_against(env, v, target_ty, ctx, "assign `\{name}`")
+          // TS2322 between string-literal overload sets (same rule as
+          // the stmt-level `Assign` arm).
+          check_literal_overload_assign(
+            env,
+            ctx,
+            target_ty,
+            v,
+            "assign `\{name}`",
+          )
+        }
         None => ()
       }
       // Narrow-by-assignment: the variable's effective type now
@@ -21563,6 +21612,147 @@ fn check_uncontextual_object_literals(
     }
   }
   issues
+}
+
+///|
+/// Single-parameter string-flavored function members of `t`: `Some(params)`
+/// when EVERY callable member is a one-param `Func` whose parameter is a
+/// string literal or `string` and whose return types all agree — the shape
+/// where overload-set assignability is decidable without full variance
+/// machinery. `None` for anything else.
+fn literal_overload_params(
+  resolver : Resolver,
+  t : @ast.TsType,
+) -> Array[@ast.TsType]? {
+  let members : Array[@ast.TsType] = match resolver.unwrap(t) {
+    Func(_, _) as f => [f]
+    Union(ms) => ms
+    _ => return None
+  }
+  let out : Array[@ast.TsType] = []
+  let mut ret0 : @ast.TsType? = None
+  for m in members {
+    match resolver.unwrap(m) {
+      Func([p], r) => {
+        match resolver.unwrap(p) {
+          Literal(_) | String_ => out.push(resolver.unwrap(p))
+          _ => return None
+        }
+        match ret0 {
+          None => ret0 = Some(r)
+          Some(r0) => if r != r0 { return None }
+        }
+      }
+      _ => return None
+    }
+  }
+  if out.length() == 0 {
+    None
+  } else {
+    Some(out)
+  }
+}
+
+///|
+/// TS2322 between string-literal overload sets (see the assignment-site
+/// caller). Both sides must be fully decidable via
+/// `literal_overload_params`; a target member is satisfied by a source
+/// member accepting AT LEAST its parameter type (`string` source accepts
+/// any literal target; a literal source accepts only the same literal).
+fn check_literal_overload_assign(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  target_ty : @ast.TsType,
+  rhs : @ast.TsExpr,
+  path : String,
+) -> Unit {
+  guard literal_overload_params(ctx.resolver, target_ty) is Some(tps) else {
+    return
+  }
+  let src_ty = infer_expr(env, ctx.resolver, rhs)
+  guard literal_overload_params(ctx.resolver, src_ty) is Some(sps) else {
+    return
+  }
+  for tp in tps {
+    let mut ok = false
+    for sp in sps {
+      match (tp, sp) {
+        (_, String_) => ok = true
+        (Literal(a), Literal(b)) => if a == b { ok = true }
+        _ => ()
+      }
+    }
+    if !ok {
+      record_unfiltered(
+        ctx,
+        path,
+        "type `\{type_display(src_ty)}` is not assignable to type `\{type_display(target_ty)}` (no overload accepts `\{type_display(tp)}`)",
+      )
+      return
+    }
+  }
+}
+
+///|
+/// TS2322 for binding-element DEFAULTS in an ANNOTATED destructuring
+/// declaration: the initializer expression of each element must be
+/// assignable to the annotated type at that path (`var {h: {h1 =
+/// [undefined, null]}}: { h: { h1: number[] } }` errors per element —
+/// destructuringVariableDeclaration1ES5/ES6). Paths the annotation doesn't
+/// pin (missing property, non-tuple/array slot) stay `Any` and abstain.
+fn check_pattern_defaults_against(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  binding : @ast.TsBinding,
+  annot : @ast.TsType,
+) -> Unit {
+  match binding {
+    @ast.TsBinding::Array(ab) => {
+      let un = ctx.resolver.unwrap(annot)
+      for i, item in ab.items {
+        match item {
+          Some(el) => {
+            let slot = match un {
+              Tuple(parts) if i < parts.length() => parts[i]
+              Array(e) | Applied("Array", [e]) => e
+              _ => @ast.TsType::Any
+            }
+            match el.default {
+              Some(d) =>
+                if is_checkable(slot) {
+                  check_expr_against(env, d, slot, ctx, "destructuring default")
+                }
+              None => ()
+            }
+            check_pattern_defaults_against(env, ctx, el.binding, slot)
+          }
+          None => ()
+        }
+      }
+    }
+    @ast.TsBinding::Object(ob) =>
+      for pr in ob.props {
+        let slot = match ctx.resolver.lookup_field(annot, pr.key) {
+          Some(t) => t
+          None => @ast.TsType::Any
+        }
+        match pr.default {
+          Some(d) =>
+            if is_checkable(slot) {
+              check_expr_against(
+                env,
+                d,
+                slot,
+                ctx,
+                "destructuring default `\{pr.key}`",
+              )
+            }
+          None => ()
+        }
+        check_pattern_defaults_against(env, ctx, pr.binding, slot)
+      }
+    _ => ()
+  }
 }
 
 ///|

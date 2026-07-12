@@ -2295,6 +2295,39 @@ conformance sources (`.errors.txt` baseline = ground truth):
     the expression walker. Whole-corpus TP 1759 -> 1760, 0 FP. Pinned recall
     698 -> 699 (classAbstractSuperCalls). Whitebox-tested.
 
+2026-07-11 (T209)  714/815 (88 %)        414/414 ( 0 FP)   Destructuring defaults + literal overload sets: TP 2625 -> 2631
+
+  T209 -- batch BB (TS2322/TS2345 theme round 2).
+    (a) Binding-element DEFAULTS in an ANNOTATED destructuring
+    declaration check against the annotation's type at that path
+    (`var {h: {h1 = [undefined, null]}}: { h: { h1: number[] } }` —
+    per-element TS2322 undefined/null vs number, matching tsc's two
+    diagnostics; destructuringVariableDeclaration1ES5+ES6). Recursive
+    walker navigates object props via lookup_field and array patterns
+    via tuple slots / array elements; unpinned paths stay `Any`.
+    (b) INGESTION: tsc's callable surface for an overload set is the
+    BODYLESS signatures only — the implementation signature is not
+    callable. When a name has >= 1 bodyless declaration, bodied
+    declarations stay out of the ingested union (whole-corpus change;
+    swept clean, TN 1414 intact).
+    (c) String-literal overload-set assignability at ASSIGNMENT sites
+    (both the stmt-level `Assign` and expression `AssignExpr` arms —
+    the top-level statements parse as the latter, root-caused when the
+    05 fixture stayed silent): decidable only when EVERY member of both
+    sides is a one-param Func over string literals / `string` with
+    agreeing returns; each target member must be satisfied by some
+    source member (`string` source covers any literal; a literal covers
+    only itself). stringLiteralTypesOverloadAssignability01 (2 = tsc),
+    02 (2 = tsc), 05 (1 = tsc, both directions pinned); 03/04 legal
+    pinned.
+    Whole-corpus TP 2625 -> 2631 @ 0 FP, PFLEGAL 1, TN 1414 (the
+    sixth file, contextuallyTypedBindingInitializerNegative, came free
+    from the defaults walker). 589 checker wbtests. Theme remainder (documented): symbolProperty9/
+    10/12/46 (symbol-keyed member structural comparison — computed-key
+    members currently erase), objectTypeHiding* trio (Function-object
+    member hiding), generatorTypeCheck31 (generator yield-type
+    synthesis into union targets), mapped-type files.
+
 2026-07-10 (T208)  714/815 (88 %)        414/414 ( 0 FP)   For-of assign patterns + rest targets: TP 2619 -> 2625
 
   T208 -- batch BA stage 1 (user-selected deep TS2322/TS2345 theme).
