@@ -13764,3 +13764,51 @@ test "expr_check: generator object vs function type (batch BC task 3)" {
     0,
   )
 }
+
+///|
+test "expr_check: mapped-type as clauses (batch BC task 4)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Concrete evaluation of a filter remap: `KeysExtendedBy<M, number>`
+  // reduces to `"b"`, so `f("a")` flags and `f("b")` stays legal
+  // (mappedTypeAsClauses).
+  @test.assert_eq(
+    issues(
+      "type KeysExtendedBy<T, U> = keyof { [K in keyof T as U extends T[K] ? K : never] : T[K] };\ninterface M { a: boolean; b: number; }\nfunction f(x: KeysExtendedBy<M, number>) { return x; }\nf(\"a\");\nf(\"b\");",
+    ),
+    1,
+  )
+  // A bare `val: T` into a key-remapped mapped type over `keyof T`
+  // (mappedTypeAsClauseRelationships): renames flag even under `+?`,
+  // `-?` flags even for pure filters; pure filters otherwise stay legal.
+  @test.assert_eq(
+    issues(
+      "type Filter<T> = { [P in keyof T as T[P] extends Function ? P : never]: T[P] };\ntype Modify<T> = { [P in keyof T as P extends string? `bool${P}`: P]: T[P] };\ntype FilterExclOpt<T> = { [P in keyof T as T[P] extends Function ? P : never]-?: T[P] };\nfunction fun<T>(val: T) {\n  let x: Filter<T> = val;\n  let y: Modify<T> = val;\n  let z: FilterExclOpt<T> = val;\n}",
+    ),
+    2,
+  )
+  // Reading `obj[key]` through a RENAMING remap cannot be correlated to
+  // a checkable target (mappedTypeConstraints2 f2); the same read
+  // through a pure FILTER remap stays legal (f5).
+  @test.assert_eq(
+    issues(
+      "type Mapped2<K extends string> = { [P in K as `get${P}`]: { a: P } };\nfunction f2<K extends string>(obj: Mapped2<K>, key: `get${K}`) {\n  const x: { a: K } = obj[key];\n}",
+    ),
+    1,
+  )
+  @test.assert_eq(
+    issues(
+      "type Mapped5<K extends string> = { [P in K as P extends `_${string}` ? P : never]: P };\nfunction f5<K extends string>(obj: Mapped5<K>, key: keyof Mapped5<K>) {\n  let s: `_${string}` = obj[key];\n}",
+    ),
+    0,
+  )
+  // Pins: a concrete rename-remap instantiation materializes and reads
+  // legally; a getter map over a concrete interface stays silent.
+  @test.assert_eq(
+    issues(
+      "type Getters<T> = { [P in keyof T as `get${P & string}`]: () => T[P] };\ninterface Car { name: string; }\ndeclare var g: Getters<Car>;\nvar h: () => string = g[\"getname\"];",
+    ),
+    0,
+  )
+}

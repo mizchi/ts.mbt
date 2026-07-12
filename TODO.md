@@ -1091,9 +1091,27 @@ parser768531 (regex/division ambiguity needs parser-fed lexer context).
    declares its own `Generator` interface. Pinned legal: `.next()` on
    the synthesized return, generator IIFEs into `Iterable` slots and
    `for..of` heads. TP 2642 -> 2643, FP 0.
-4. [ ] mappedTypeAsClauses / mappedTypeConstraints2 /
-   mappedTypeAsClauseRelationships — mapped types with `as` clauses:
-   key-remapping relationships (deep; scope a decidable slice first).
+4. [x] mapped types with `as` clauses — DONE (batch BC), three slices:
+   (a) `resolver_eval_mapped_remap` concretely evaluates a remapped
+   mapped type whose source enumerates to literal keys (`keyof M` over
+   an interface): per key, the remap conditional decides via
+   `extends_decision`, `T[K]` resolves through `lookup_field` (NOT
+   `unwrap` — `simplify_indexed_access` degrades a `Named`-based access
+   to `any`, which would make every filter trivially true), `never`
+   filters, literals rewrite. Wired into `unwrap`'s mapped arm; bails
+   for alias-named sources (recursion guard —
+   mappedTypeAsClauseRecursiveNoCrash1 stays crash-free). Unlocks
+   mappedTypeAsClauses (`KeysExtendedBy<M, number>` -> `"b"`).
+   (b) Rule (1c): bare `val: T` into a remapped mapped type over
+   `keyof T` — pure filters (`cond ? P : never`, no `-?`) are legal,
+   key RENAMES flag even under `+?`, `-?` flags always
+   (mappedTypeAsClauseRelationships, all 4 sites).
+   (c) Rule (1d): reading `obj[key]` through a RENAMING remap with a
+   non-materializable source (type param, possibly bound-erased to
+   `string`/template) can't be correlated to a checkable target
+   (mappedTypeConstraints2, 4 of 5 sites; the 5th has an `any`-typed
+   expected slot and abstains). Filter remaps abstain (f5/f7/validate).
+   TP 2643 -> 2646, FP 0.
 5. [ ] Lib surface models — Error/Date member tables for TS2551 typo
    suggestions; complete String/Number prototype tables so nonexistent
    METHOD CALLS on primitives can flag (property access already does).

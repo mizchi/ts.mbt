@@ -1138,6 +1138,116 @@ fn param_is_optional(p : @ast.TsParam) -> Bool {
 /// Resolve a type to its "shape" — unwrap `Named(N)` through type aliases
 /// (one hop, with simple cycle protection) so callers can pattern-match on
 /// the structural form (Object, Tuple, Array, Func, ...).
+/// Resolver-aware evaluation of a key-remapping mapped type with a fully
+/// concrete source (`KeysExtendedBy<M, number>` in mappedTypeAsClauses:
+/// `keyof { [K in keyof M as U extends M[K] ? K : never]: M[K] }` needs the
+/// resolver to enumerate `keyof M` and resolve `M[K]` per key — the
+/// resolver-free `simplify_type` cannot). Returns `None` (caller falls back
+/// to the simplify path) whenever any step is not decidable. A `keyof` over
+/// an ALIAS source bails before resolution — a self-referential mapped
+/// alias would otherwise re-enter this evaluation forever
+/// (mappedTypeAsClauseRecursiveNoCrash1).
+fn resolver_eval_mapped_remap(
+  resolver : Resolver,
+  t : @ast.TsType,
+) -> @ast.TsType? {
+  guard t is MappedTypeRemap(binder, source, remap, value, optional) else {
+    return None
+  }
+  let src_keys : @ast.TsType = match source {
+    Keyof(inner) => {
+      match inner {
+        Named(n) | Applied(n, _) =>
+          if resolver.type_aliases.get(n) is Some(_) {
+            return None
+          }
+        _ => ()
+      }
+      let fields = collect_declared_fields(resolver.unwrap(inner), resolver)
+      if fields.length() == 0 {
+        return None
+      }
+      let ks : Array[@ast.TsType] = []
+      for f in fields {
+        ks.push(Literal(f.0))
+      }
+      if ks.length() == 1 {
+        ks[0]
+      } else {
+        Union(ks)
+      }
+    }
+    Literal(_) | Union(_) => source
+    _ => return None
+  }
+  let keys : Array[String] = []
+  match src_keys {
+    Literal(k) => keys.push(k)
+    Union(parts) =>
+      for p in parts {
+        guard p is Literal(k) else { return None }
+        keys.push(k)
+      }
+    _ => return None
+  }
+  // Evaluate a (substituted) remap branch to a produced key: `Some(name)`
+  // keeps the field under `name`, `None` filters it out. Anything not
+  // reducible to a string literal or `never` aborts the whole evaluation.
+  let out_fields : Array[(@ast.TsType, @ast.TsType)] = []
+  // `resolver.unwrap` on `M["a"]` degrades to `Any` (simplify's structural
+  // fallback), which would make every filter condition trivially true —
+  // resolve literal-keyed accesses through the field table first.
+  let resolve_step = fn(t : @ast.TsType) -> @ast.TsType {
+    match t {
+      IndexedAccess(base, Literal(name)) =>
+        match resolver.lookup_field(resolver.unwrap(base), name) {
+          Some(ft) => ft
+          None => t
+        }
+      other => resolver.unwrap(other)
+    }
+  }
+  for k in keys {
+    let bind : Map[String, @ast.TsType] = {}
+    bind[binder] = Literal(k)
+    let remap_k = substitute_params(remap, bind)
+    let branch_key = fn(b : @ast.TsType) -> @ast.TsType {
+      match b {
+        Literal(_) | Never => b
+        other => simplify_type(resolve_step(other))
+      }
+    }
+    let produced : @ast.TsType = match remap_k {
+      Conditional(a, b, tb, eb) =>
+        match extends_decision(resolve_step(a), resolve_step(b)) {
+          Some(true) => branch_key(tb)
+          Some(false) => branch_key(eb)
+          None => return None
+        }
+      other => branch_key(other)
+    }
+    match produced {
+      Never => continue
+      Literal(new_key) => {
+        let (raw_val, strip_undef) = match substitute_params(value, bind) {
+          Applied("__tsmbt_strip_undef", [v]) => (v, true)
+          v => (v, false)
+        }
+        let val_t = resolve_step(raw_val)
+        let field_t : @ast.TsType = if optional && !strip_undef {
+          Union([val_t, Undefined])
+        } else {
+          val_t
+        }
+        out_fields.push((Literal(new_key), field_t))
+      }
+      _ => return None
+    }
+  }
+  Some(Object(out_fields))
+}
+
+///|
 fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
   let seen : Map[String, Bool] = {}
   let mut cur = ty
@@ -1251,14 +1361,20 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
         }
       }
       // Simplify mapped types to Object shapes so field lookups work.
-      MappedType(_, _, _, _) | MappedTypeRemap(_, _, _, _, _) => {
-        let simplified = simplify_type(cur)
-        match simplified {
-          MappedType(_, _, _, _) | MappedTypeRemap(_, _, _, _, _) =>
-            keep_going = false // couldn't resolve — leave as-is
-          _ => cur = simplified
+      // Remapped variants over concrete interface keys need the
+      // resolver-aware evaluation first (`keyof M` / `M[K]` sources).
+      MappedType(_, _, _, _) | MappedTypeRemap(_, _, _, _, _) =>
+        match resolver_eval_mapped_remap(self, cur) {
+          Some(obj) => cur = obj
+          None => {
+            let simplified = simplify_type(cur)
+            match simplified {
+              MappedType(_, _, _, _) | MappedTypeRemap(_, _, _, _, _) =>
+                keep_going = false // couldn't resolve — leave as-is
+              _ => cur = simplified
+            }
+          }
         }
-      }
       // `T[K]` indexed access — resolve via simplify_type first; if still
       // unresolved, try lookup_field when the base is a Named/Applied type.
       IndexedAccess(base, key) => {
@@ -7602,6 +7718,81 @@ fn check_expr_against(
           "a generator object provides no match for the function type `\{type_display(expected_shape)}`",
         )
         return
+      }
+    _ => ()
+  }
+  // (1c) A bare type-param value `val: T` flowing into a key-remapped
+  // mapped type over `keyof T` (mappedTypeAsClauseRelationships). tsc
+  // accepts only when the remap provably keeps a SUBSET of `T`'s keys —
+  // a pure filter (`cond ? P : never`) without a `-?` modifier. A remap
+  // that may RENAME keys (template / intrinsic branches) can demand keys
+  // `T` lacks — even under `+?` — and `-?` strengthens optionality; both
+  // are TS2322.
+  match expected_shape {
+    MappedTypeRemap(binder, Keyof(Named(src_tp)), remap, value, _) if src_shape
+      is Named(sn) &&
+      sn == src_tp &&
+      type_contains_unresolved_named(Named(sn), ctx.resolver) => {
+      let strips_undef = value is Applied("__tsmbt_strip_undef", _)
+      let pure_filter = match remap {
+        Conditional(_, _, tb, eb) =>
+          ((tb is Named(t) && t == binder) || tb is Never) &&
+          ((eb is Named(e) && e == binder) || eb is Never)
+        _ => false
+      }
+      if strips_undef {
+        record_unfiltered(
+          ctx,
+          sub_path,
+          "the mapped type's `-?` modifier makes every remapped property required, so `\{sn}` is not assignable to it",
+        )
+        return
+      }
+      if !pure_filter {
+        record_unfiltered(
+          ctx,
+          sub_path,
+          "the mapped type's `as` clause may rename keys of `\{sn}`, so `\{sn}` is not assignable to it",
+        )
+        return
+      }
+    }
+    _ => ()
+  }
+  // (1d) Reading `obj[key]` through a mapped type whose `as` clause
+  // REWRITES keys (template / intrinsic) over an opaque source cannot
+  // correlate the key back to its binder, so tsc types the access as the
+  // uninstantiated `Mapped<K>[...]` — not assignable to any concrete or
+  // parametric target (mappedTypeConstraints2, all five sites). Pure
+  // filter remaps keep the correlation and abstain (f5 / f7 / validate).
+  match expr {
+    IndexAccess(obj, _) if is_checkable(expected) =>
+      match ctx.resolver.unwrap(infer_expr(env, ctx.resolver, obj)) {
+        // The source must be non-materializable: a type param (possibly
+        // erased to its `string` / template bound by the parser) — a
+        // finite literal-union source materializes at simplify time and
+        // a `keyof <concrete>` source abstains here.
+        MappedTypeRemap(binder, source, remap, _, _) if type_contains_unresolved_named(
+            source,
+            ctx.resolver,
+          ) ||
+          source is (String_ | TemplateLiteralType(_, _)) => {
+          let pure_filter = match remap {
+            Conditional(_, _, tb, eb) =>
+              ((tb is Named(t) && t == binder) || tb is Never) &&
+              ((eb is Named(e) && e == binder) || eb is Never)
+            _ => false
+          }
+          if !pure_filter {
+            record_unfiltered(
+              ctx,
+              sub_path,
+              "an element read through a key-remapping mapped type cannot be correlated to `\{type_display(expected_shape)}`",
+            )
+            return
+          }
+        }
+        _ => ()
       }
     _ => ()
   }
