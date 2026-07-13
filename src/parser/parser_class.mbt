@@ -1878,9 +1878,11 @@ fn Parser::parse_class_body(
         _ => ()
       }
     }
+    let deco_before = self.pending_decorators.length()
     while self.check(At) {
       self.skip_decorator()
     }
+    let member_decorated = self.pending_decorators.length() > deco_before
     if self.match_(Semicolon) {
       continue
     }
@@ -2072,6 +2074,22 @@ fn Parser::parse_class_body(
     let is_generator = self.match_(Star)
     let key = self.parse_class_method_key()
     let method_name = class_key_name(key)
+    // TS1206: decorators are not valid on a constructor
+    // (decoratorOnClassConstructor1), nor on `abstract` or ambient
+    // (`declare`) members (esDecorators-classDeclaration-*-nonStatic
+    // Abstract / -Ambient) — in both decorator modes.
+    if member_decorated {
+      // Legacy (`experimentalDecorators`) mode ACCEPTS decorators on
+      // `declare` / `abstract` members (decoratorInAmbientContext);
+      // only standard ES decorators reject them. Constructor
+      // decoration is invalid in both modes.
+      if (is_abstract_member || has_declare) && !self.experimental_decorators {
+        self.invalid_decorator_uses.push("class member")
+      } else if method_name == "constructor" &&
+        (self.check(LParen) || self.check(Lt)) {
+        self.invalid_decorator_uses.push("constructor")
+      }
+    }
     if method_name != "<computed>" {
       if visibility == "private" {
         private_members.push(method_name)

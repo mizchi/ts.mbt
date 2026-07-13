@@ -1031,9 +1031,39 @@ v7.0.2). Truth comes from vendored name manifests
 variant is NOTRUN, and the TS6-era deprecated-compiler-option
 diagnostics (TS5107/TS5101) were removed from the checker accordingly.
 
-State: whole-corpus **TP 2152 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 582 /
+State: whole-corpus **TP 2203 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 531 /
 NOTRUN 14** via `scripts/checker_conformance_oracle.sh --max-fp 0
---max-legal-parsefail 3`. (Final TS6 state for reference: TP 2669 /
+--max-legal-parsefail 3`.
+
+Batch BE (TS7-only miss mining, +51 TP) worked the misses newly exposed
+by the oracle switch:
+- TS5102: `downlevelIteration` was REMOVED in TS7 — its presence-based
+  recording now surfaces as an error (every ran conformance case
+  carrying the directive errors under tsgo; none is accepted).
+- TS2378: a class `get` accessor whose body contains NO return, throw,
+  or loop must return a value (empty bodies parse as `body: None`;
+  ambient / abstract accessors and any explicit `return;` abstain — a
+  written `(): any` is indistinguishable from no annotation).
+- TS1206: decorators on constructors flag in both modes; on `abstract` /
+  `declare` members only under STANDARD decorators (legacy mode accepts
+  them — decoratorInAmbientContext); parameter decorators flag only
+  without `@experimentaldecorators` and only when the decorator chain's
+  last follower is not `class` (a paren'd decorated class expression
+  enters the arrow-params trial — esDecorators-classExpression-*).
+- TS2373/TS2372: a parameter default (or binding-pattern computed key /
+  element default, or class-expression heritage inside one) may not
+  reference the parameter itself, a later parameter, or a body-declared
+  name (`var` hoisted anywhere, `let`/`const` top-level). Nested
+  callables defer evaluation and abstain. Covers module functions,
+  class constructors/methods, top-level callable initializers, and
+  IIFE arrows.
+Sweep round-trip: the first BE sweep surfaced 10 FPs (bare-return
+getters, legacy-mode ambient decorators, stacked decorators before
+class expressions); all root-caused and fixed before landing.
+Remaining TS7-only clusters (documented, unattempted): TS2683/TS2465
+(`this` typing in plain functions / computed keys — needs enclosing-
+callable context tracking), TS2339 Corsa behavior changes, TS1125/
+TS1121/TS1198 escape-sequence lexing, TS1166 ambient computed keys. (Final TS6 state for reference: TP 2669 /
 FP 0 / TN 1414 / MISS 414 — the TS7 renumbering reflects dropped es5
 variants and Corsa behavior changes, not checker regressions; the
 582 misses include ~170 new TS7-only opportunities.)

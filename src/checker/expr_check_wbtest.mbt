@@ -12752,11 +12752,19 @@ test "expr_check: decorator/tagged-template parse recoveries (batch AO)" {
     ),
     0,
   )
-  // Parameter decorators with parenthesized expression heads.
+  // Parameter decorators with parenthesized expression heads parse
+  // cleanly under LEGACY decorators; without the pragma the same form is
+  // a TS1206 (standard decorators have no parameter form — batch BE).
   @test.assert_eq(
     issues(
-      "// @strict: false\nclass D { constructor(@((t, k, i) => {}) p: any) {} }",
+      "// @strict: false\n// @experimentaldecorators: true\nclass D { constructor(@((t, k, i) => {}) p: any) {} }",
     ),
+    0,
+  )
+  assert_true(
+    issues(
+      "// @strict: false\nclass D { constructor(@((t, k, i) => {}) p: any) {} }",
+    ) >
     0,
   )
 }
@@ -14045,4 +14053,60 @@ test "expr_check: TS7 oracle switch fixes (batch BD)" {
   // (destructuringEvaluationOrder); a genuinely unannotated one is.
   @test.assert_eq(issues("let f = (n: any): any => n;"), 0)
   assert_true(issues("let f = n => n;") > 0)
+}
+
+///|
+test "expr_check: TS7-only miss clusters (batch BE)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS5102: `downlevelIteration` was REMOVED in TS7 — its presence is an
+  // error (ES5For-of* cluster). Other recorded legacy options stay silent.
+  assert_true(
+    issues("// @downlevelIteration: true\nfor (var v of ['a']) { }") > 0,
+  )
+  @test.assert_eq(issues("// @module: amd\nvar x: number = 1;"), 0)
+  // TS2378: a `get` accessor must return a value — empty bodies parse as
+  // `body: None`; throwing / looping / declare / abstract forms abstain.
+  assert_true(issues("class C { get Foo() { } }") > 0)
+  @test.assert_eq(
+    issues(
+      "class G {\n  get a() { return 1; }\n  get b() { throw new Error(\"x\"); }\n  get c(): number { while (true) {} }\n  set d(v: number) { }\n}\ndeclare class DG { get e(): number; }\nabstract class AG { abstract get f(): number; }",
+    ),
+    0,
+  )
+  // TS1206: decorators are invalid on constructors and abstract/ambient
+  // members; parameter decorators require legacy decorators.
+  assert_true(
+    issues(
+      "// @experimentaldecorators: true\ndeclare function dec(t: any, k?: any, d?: any): any;\nclass C {\n  @dec constructor() {}\n}",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "declare let dec: any;\nabstract class C {\n  @dec(1) abstract field1: number;\n}",
+    ) >
+    0,
+  )
+  assert_true(
+    issues("declare let dec: any;\nclass C {\n  m(@dec x: number) { }\n}") > 0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @experimentaldecorators: true\ndeclare function dec(t: any, k?: any, d?: any): any;\nclass L {\n  @dec m(@dec x: number) { }\n  @dec f: number = 1;\n  @dec get g() { return 1; }\n}",
+    ),
+    0,
+  )
+  // TS2373: parameter defaults may not reference later parameters or
+  // body-declared names; deferred (closure) references are legal.
+  assert_true(issues("function right(a = b, b = a) { a; b; }") > 0)
+  assert_true(issues("function inside(a = b) { var b; }") > 0)
+  assert_true(issues("((b = a() ?? \"d\") => { var a; })();") > 0)
+  @test.assert_eq(
+    issues(
+      "function left(a: any, b = a, c = b) { }\nfunction ok2(a = function () { return b; }, b = 1) { }\nfunction ok3(a = () => () => b, b = 3) { }\nvar outerv = 1;\nfunction ok4(n = outerv) { }",
+    ),
+    0,
+  )
 }

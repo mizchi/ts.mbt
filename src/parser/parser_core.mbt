@@ -124,6 +124,10 @@ pub struct Parser {
   // `@noImplicitAny: false` opt out, an explicit `@noImplicitAny: true`
   // opts back in over `@strict: false`.
   no_implicit_any : Bool
+  // True when the test header carries `@experimentaldecorators: true`
+  // (legacy decorators). Parameter decorators are only legal in that
+  // mode — under standard (ES) decorators they are TS1206.
+  experimental_decorators : Bool
   // Armed only while parsing a *function declaration's* parameter list --
   // the one position where an unannotated parameter can never be
   // contextually typed, so the implicit-any verdict is reliable.
@@ -271,6 +275,7 @@ pub fn Parser::new_with_strict_and_jsx(
     no_bound_inline: false,
     target_es6_plus: false,
     no_implicit_any: false,
+    experimental_decorators: true,
     record_implicit_any_params: false,
     class_decl_no_heritage: false,
     in_class_expr_body: false,
@@ -364,6 +369,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     no_bound_inline: false,
     target_es6_plus: detect_target_es6_plus(src),
     no_implicit_any: detect_no_implicit_any(src),
+    experimental_decorators: detect_experimental_decorators(src),
     record_implicit_any_params: false,
     class_decl_no_heritage: false,
     in_class_expr_body: false,
@@ -751,4 +757,24 @@ fn detect_allow_unreachable_code(src : String) -> Bool {
 /// case variant) -- i.e. a multi-file test concatenated into one parse.
 fn detect_filename_directives(src : String) -> Bool {
   src.to_lower().contains("@filename:")
+}
+
+///|
+/// True when the leading test-header directives enable legacy decorators
+/// (`// @experimentaldecorators: true`). Parameter decorators are legal
+/// only in that mode.
+fn detect_experimental_decorators(src : String) -> Bool {
+  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
+  let head = src[:head_len].to_owned().to_lower()
+  match head.find("@experimentaldecorators:") {
+    Some(idx) => {
+      let after = head[idx + "@experimentaldecorators:".length():].to_owned()
+      let line = match after.find("\n") {
+        Some(nl) => after[:nl].to_owned()
+        None => after
+      }
+      line.trim().to_owned().has_prefix("true")
+    }
+    None => false
+  }
 }
