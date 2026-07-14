@@ -356,6 +356,32 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
   if detect_no_implicit_override(src) {
     grammar_misuses.push("<noimplicitoverride-on>")
   }
+  // TS2318 evidence: lib-set directives that provably remove global types
+  // the checker requires. `@noLib: true` removes ALL of them (every ran
+  // conformance case carrying it errors — parser509698); an explicit
+  // `@lib:` list without a full-year ES2015+ lib (or `es2015.iterable`)
+  // lacks `IterableIterator` (needed by generators —
+  // generatorReturnTypeFallback.2), and one without `esnext` lacks
+  // `Disposable` (needed by `using` — usingDeclarations.9).
+  if detect_nolib(src) {
+    grammar_misuses.push("<nolib>")
+  }
+  match detect_lib_list(src) {
+    Some(libs) => {
+      if !lib_list_grants_iterable(libs) {
+        grammar_misuses.push("<lib-lacks-iterable>")
+      }
+      if !libs.contains("esnext") {
+        grammar_misuses.push("<lib-lacks-esnext>")
+      }
+    }
+    None => ()
+  }
+  // Decorator-mode marker so checker-side decorator signature rules can
+  // pick the runtime invocation arity (legacy = 1 arg, standard = 2).
+  if detect_experimental_decorators(src) {
+    grammar_misuses.push("<experimental-decorators>")
+  }
   // Marker for the TS2695 comma-operator check, which tsc disables under
   // `@allowUnreachableCode: true`.
   if detect_allow_unreachable_code(src) {
@@ -794,6 +820,61 @@ fn detect_filename_directives(src : String) -> Bool {
 /// True when the leading test-header directives enable legacy decorators
 /// (`// @experimentaldecorators: true`). Parameter decorators are legal
 /// only in that mode.
+fn detect_nolib(src : String) -> Bool {
+  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
+  let head = src[:head_len].to_owned().to_lower()
+  match head.find("@nolib:") {
+    Some(idx) => {
+      let after = head[idx + "@nolib:".length():].to_owned()
+      let line = match after.find("\n") {
+        Some(nl) => after[:nl].to_owned()
+        None => after
+      }
+      line.trim().to_owned().has_prefix("true")
+    }
+    None => false
+  }
+}
+
+///|
+/// The raw (lower-cased, comma-separated) `@lib:` directive value from the
+/// test-header comment block, if present.
+fn detect_lib_list(src : String) -> String? {
+  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
+  let head = src[:head_len].to_owned().to_lower()
+  match head.find("@lib:") {
+    Some(idx) => {
+      let after = head[idx + "@lib:".length():].to_owned()
+      let line = match after.find("\n") {
+        Some(nl) => after[:nl].to_owned()
+        None => after
+      }
+      Some(line.trim().to_owned())
+    }
+    None => None
+  }
+}
+
+///|
+/// Whether an explicit `@lib:` list provides `IterableIterator`: any
+/// full-year ES2015+ lib (`es2015` .. `es2024`, no dot suffix), `es6`,
+/// `esnext`, or the targeted `es2015.iterable` / `es2015.generator`
+/// slices. `es5` / `es2015.promise` etc. do NOT.
+fn lib_list_grants_iterable(libs : String) -> Bool {
+  for tok in libs.split(",") {
+    let t = tok.to_string().trim().to_owned()
+    if t == "es6" ||
+      t == "esnext" ||
+      t == "es2015.iterable" ||
+      t == "es2015.generator" ||
+      (t.has_prefix("es20") && !t.contains(".")) {
+      return true
+    }
+  }
+  false
+}
+
+///|
 fn detect_experimental_decorators(src : String) -> Bool {
   let head_len = if src.length() < 1024 { src.length() } else { 1024 }
   let head = src[:head_len].to_owned().to_lower()

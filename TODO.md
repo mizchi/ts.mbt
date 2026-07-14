@@ -1031,7 +1031,7 @@ v7.0.2). Truth comes from vendored name manifests
 variant is NOTRUN, and the TS6-era deprecated-compiler-option
 diagnostics (TS5107/TS5101) were removed from the checker accordingly.
 
-State: whole-corpus **TP 2296 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 438 /
+State: whole-corpus **TP 2305 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 429 /
 NOTRUN 14** via `scripts/checker_conformance_oracle.sh --max-fp 0
 --max-legal-parsefail 3`.
 
@@ -1188,6 +1188,31 @@ Batch BL (+7 TP, TP 2296 / MISS 438) worked the TS2339 cluster:
   ArrayBuffer's `resizable` / `detached` / `resize`), and the surface
   registers as fully modeled so member misses are definite
   (`sab.length` — useSharedArrayBuffer6).
+Batch BM (+9 TP, TP 2305 / MISS 429) took lib-set directives,
+decorator signatures, and generator interface returns:
+- TS2318 via parser markers: `@noLib: true` removes every required
+  global type (parser509698); an explicit `@lib:` list without a
+  full-year ES2015+ lib / `es2015.iterable` lacks `IterableIterator`
+  for generators (generatorReturnTypeFallback.2, types.forAwait); one
+  without `esnext` lacks `Disposable` for `using` declarations
+  (usingDeclarations.9 / awaitUsingDeclarations.9 — the block-scoped
+  `using` lowering records the marker too).
+- TS1238 (`check_class_decorator_signatures`): a CLASS used as a class
+  decorator is not callable (constructableDecoratorOnClass01); a
+  decorator or factory result whose REQUIRED arity exceeds the runtime
+  invocation (1 arg legacy / 2 standard, `<experimental-decorators>`
+  marker) can never resolve (decoratorOnClass8, esDecorators-arguments).
+  Zero-parameter decorators also error in tsc but are deliberately
+  skipped. The parser now captures class decorators BEFORE the body
+  parse — member decorators share `pending_decorators` and previously
+  either leaked onto the next declaration or (after the first fix)
+  masqueraded as class decorators (decoratorOnClassAccessor1 FP'd, and
+  the base-less IIFE route plus `parse_class_stub` never attached them
+  at all).
+- TS2741 (`check_generator_interface_returns`): a generator whose
+  declared return type is an interface extending
+  Iterator/IterableIterator/Generator with extra REQUIRED members can
+  never satisfy it (generatorTypeCheck7); optional extras abstain.
 Documented dead ends from this round: YieldExpression10_es6 (an
 object-literal method's name in the backstop is indistinguishable from
 a legal self-referential named function expression property);

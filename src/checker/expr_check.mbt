@@ -24613,6 +24613,229 @@ fn check_lib_global_redeclaration(module_ : @ast.TsModule) -> Array[ExprIssue] {
 }
 
 ///|
+/// TS2318 from lib-set directives (parser markers): `@noLib: true`
+/// removes every required global type (parser509698); an explicit
+/// `@lib:` list without an iterable-granting entry lacks
+/// `IterableIterator`, which generators require
+/// (generatorReturnTypeFallback.2); one without `esnext` lacks
+/// `Disposable`, which `using` declarations require
+/// (usingDeclarations.9 / awaitUsingDeclarations.9).
+fn check_lib_directive_globals(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  let mut nolib = false
+  let mut lacks_iterable = false
+  let mut lacks_esnext = false
+  let mut has_using = false
+  for gm in module_.grammar_misuses {
+    if gm == "<nolib>" {
+      nolib = true
+    }
+    if gm == "<lib-lacks-iterable>" {
+      lacks_iterable = true
+    }
+    if gm == "<lib-lacks-esnext>" {
+      lacks_esnext = true
+    }
+    if gm == "<has-using>" {
+      has_using = true
+    }
+  }
+  if nolib {
+    issues.push({
+      path: "lib",
+      message: "cannot find required global types (compiling with `noLib`)",
+    })
+    return issues
+  }
+  if lacks_iterable {
+    let mut has_generator = false
+    for f in module_.funcs {
+      if f.is_generator {
+        has_generator = true
+      }
+    }
+    if has_generator {
+      issues.push({
+        path: "lib",
+        message: "cannot find global type `IterableIterator` (not in the `lib` set)",
+      })
+    }
+  }
+  if lacks_esnext && has_using {
+    issues.push({
+      path: "lib",
+      message: "cannot find global type `Disposable` (not in the `lib` set)",
+    })
+  }
+  issues
+}
+
+///|
+/// Required-parameter count of a callable TYPE: parameters that are
+/// neither rest nor optional (`T | undefined`). `None` when the type
+/// isn't a plain function shape.
+fn callable_required_arity(resolver : Resolver, t : @ast.TsType) -> Int? {
+  match resolver.unwrap(t) {
+    GenericFunc(_, inner) => callable_required_arity(resolver, inner)
+    Func(ps, _) => {
+      let mut required = 0
+      for p in ps {
+        match p {
+          Rest(_) => ()
+          other => if !type_accepts_undefined(other) { required += 1 }
+        }
+      }
+      Some(required)
+    }
+    _ => None
+  }
+}
+
+///|
+/// Required-parameter count of a SYNTACTIC callable (inline decorator
+/// arrows / function expressions).
+fn syntactic_required_arity(params : Array[@ast.TsParam]) -> Int {
+  let mut required = 0
+  for p in params {
+    if !p.is_rest && p.default is None {
+      required += 1
+    }
+  }
+  required
+}
+
+///|
+/// TS1238: a class decorator whose signature cannot match the runtime
+/// invocation. The runtime passes 1 argument under legacy
+/// `experimentalDecorators` and 2 under standard ES decorators, so a
+/// decorator (or decorator-factory RESULT) requiring MORE parameters can
+/// never resolve (esDecorators-arguments, decoratorOnClass8), and a
+/// CLASS used as a decorator is not callable at all
+/// (constructableDecoratorOnClass01). Zero-parameter decorators also
+/// error in tsc but are left alone here (the corpus carries legal-looking
+/// shapes we can't distinguish cheaply).
+fn check_class_decorator_signatures(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  let mut legacy = false
+  for gm in module_.grammar_misuses {
+    if gm == "<experimental-decorators>" {
+      legacy = true
+    }
+  }
+  let runtime_arity = if legacy { 1 } else { 2 }
+  for cls in module_.classes {
+    for d in cls.decorators {
+      let required : Int? = match d {
+        Var(n) =>
+          if resolver.classes.get(n) is Some(_) &&
+            resolver.globals.get(n) is None {
+            issues.push({
+              path: "class \{cls.name} decorator",
+              message: "unable to resolve signature of class decorator when called as an expression: this expression is not callable",
+            })
+            None
+          } else {
+            match resolver.globals.get(n) {
+              Some(t) => callable_required_arity(resolver, t)
+              None => None
+            }
+          }
+        ArrowFunc(params, _, _, _) => Some(syntactic_required_arity(params))
+        FuncExpr(f) =>
+          if f.name == "<class>" {
+            None
+          } else {
+            Some(syntactic_required_arity(f.params))
+          }
+        Call(n, _) =>
+          match resolver.globals.get(n) {
+            Some(t) =>
+              match resolver.unwrap(t) {
+                GenericFunc(_, Func(_, ret)) | Func(_, ret) =>
+                  callable_required_arity(resolver, ret)
+                _ => None
+              }
+            None => None
+          }
+        CallExpr(Var(n), _) =>
+          match resolver.globals.get(n) {
+            Some(t) =>
+              match resolver.unwrap(t) {
+                GenericFunc(_, Func(_, ret)) | Func(_, ret) =>
+                  callable_required_arity(resolver, ret)
+                _ => None
+              }
+            None => None
+          }
+        _ => None
+      }
+      match required {
+        Some(r) =>
+          if r > runtime_arity {
+            issues.push({
+              path: "class \{cls.name} decorator",
+              message: "unable to resolve signature of class decorator when called as an expression: the runtime will invoke the decorator with \{runtime_arity} arguments, but the decorator expects \{r}",
+            })
+          }
+        None => ()
+      }
+    }
+  }
+  issues
+}
+
+///|
+/// TS2741 for a generator whose DECLARED return type is an interface
+/// extending the iteration protocol with extra REQUIRED members: the
+/// generator object never carries them (`function* g1(): WeirdIter {}` —
+/// generatorTypeCheck7). Optional extras abstain.
+fn check_generator_interface_returns(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for f in module_.funcs {
+    if !f.is_generator {
+      continue
+    }
+    let ret_name = match f.return_type {
+      Named(n) => n
+      Applied(n, _) => n
+      _ => continue
+    }
+    match resolver.interfaces.get(ret_name) {
+      Some(iface) => {
+        let mut extends_iter_proto = false
+        for en in iface.extends_names {
+          if en == "IterableIterator" || en == "Iterator" || en == "Generator" {
+            extends_iter_proto = true
+          }
+        }
+        if !extends_iter_proto {
+          continue
+        }
+        for fl in iface.fields {
+          if !fl.0.has_prefix("<") &&
+            !fl.0.has_prefix("@@") &&
+            !type_accepts_undefined(fl.1) {
+            issues.push({
+              path: "function \{f.name}",
+              message: "property `\{fl.0}` is missing in the generator object but required in type `\{ret_name}`",
+            })
+            break
+          }
+        }
+      }
+      None => ()
+    }
+  }
+  issues
+}
+
+///|
 fn check_duplicate_index_signatures(
   module_ : @ast.TsModule,
 ) -> Array[ExprIssue] {
@@ -25123,6 +25346,18 @@ fn check_module_function_bodies_layered(
     for issue in check_lib_global_redeclaration(module_) {
       all.push(issue)
     }
+    // TS2318 from lib-set directives (@noLib / restricted @lib).
+    for issue in check_lib_directive_globals(module_) {
+      all.push(issue)
+    }
+    // TS1238 class-decorator signature mismatches.
+    for issue in check_class_decorator_signatures(module_, resolver) {
+      all.push(issue)
+    }
+    // TS2741 generator returns declared as protocol-extending interfaces.
+    for issue in check_generator_interface_returns(module_, resolver) {
+      all.push(issue)
+    }
   }
   for issue in check_var_redeclaration_types(module_, resolver) {
     all.push(issue)
@@ -25509,6 +25744,17 @@ fn check_module_function_bodies_layered(
       // Marker, not an error: the @allowUnreachableCode directive flag,
       // consumed by the TS2695 comma-operator suppression below.
       if gm == "<allowunreachable-on>" {
+        continue
+      }
+      // Markers, not errors: lib-set directive evidence and decorator
+      // mode, consumed by `check_lib_directive_globals` and the decorator
+      // signature checks. (`<nolib>` IS the error condition itself, but
+      // it's surfaced there with a proper message.)
+      if gm == "<nolib>" ||
+        gm == "<lib-lacks-iterable>" ||
+        gm == "<lib-lacks-esnext>" ||
+        gm == "<has-using>" ||
+        gm == "<experimental-decorators>" {
         continue
       }
       // Markers, not errors: module-syntax evidence and a top-level

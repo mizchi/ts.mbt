@@ -14412,3 +14412,58 @@ test "expr_check: patterns over primitives/arrays, spread folding, SharedArrayBu
     0,
   )
 }
+
+///|
+test "expr_check: lib directives, decorator signatures, generator returns (batch BM)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2318: `@noLib` removes every required global type; an explicit
+  // `@lib:` without an iterable-granting entry breaks generators; one
+  // without `esnext` breaks `using` (parser509698,
+  // generatorReturnTypeFallback.2, usingDeclarations.9).
+  assert_true(issues("// @noLib: true\ndeclare function foo(): void;") > 0)
+  assert_true(issues("// @lib: es5\nfunction* f() {\n  yield 1;\n}") > 0)
+  @test.assert_eq(
+    issues("// @lib: es5,es2015.iterable\nfunction* f() {\n  yield 1;\n}"),
+    0,
+  )
+  assert_true(issues("// @lib: es2022\n{\n    using a = null;\n}") > 0)
+  @test.assert_eq(issues("// @lib: esnext\n{\n    using a = null;\n}"), 0)
+  @test.assert_eq(issues("{\n    using a = null;\n}"), 0)
+  // TS1238: a class used as a class decorator is not callable
+  // (constructableDecoratorOnClass01); a decorator (or factory result)
+  // requiring more parameters than the runtime passes cannot resolve
+  // (decoratorOnClass8, esDecorators-arguments). Member decorators and
+  // matching arities stay legal (decoratorOnClassAccessor1).
+  assert_true(issues("class CtorDtor {}\n@CtorDtor\nclass C {}") > 0)
+  assert_true(
+    issues(
+      "// @experimentaldecorators: true\ndeclare function dec(): (target: Function, paramIndex: number) => void;\n@dec()\nclass C {}",
+    ) >
+    0,
+  )
+  assert_true(issues("@((a: any, b: any, c: any) => {})\nclass C1 {}") > 0)
+  @test.assert_eq(issues("@((a: any, b: any) => {})\nclass C2 {}"), 0)
+  @test.assert_eq(
+    issues(
+      "// @experimentaldecorators: true\ndeclare function dec<T>(target: any, propertyKey: string, descriptor: T): T;\nclass C {\n    @dec get accessor() { return 1; }\n}",
+    ),
+    0,
+  )
+  // TS2741: a generator declared to return a protocol-extending interface
+  // with extra REQUIRED members (generatorTypeCheck7); optional extras
+  // abstain.
+  assert_true(
+    issues(
+      "interface WeirdIter extends IterableIterator<number> {\n    hello: string;\n}\nfunction* g1(): WeirdIter { }",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "interface SoftIter extends IterableIterator<number> {\n    hello?: string;\n}\nfunction* g2(): SoftIter { yield 1; }",
+    ),
+    0,
+  )
+}

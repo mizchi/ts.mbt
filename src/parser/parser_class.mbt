@@ -2503,6 +2503,10 @@ fn Parser::parse_class_body(
 ///|
 fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   self.last_runtime_class_decl = None
+  // Same pre-capture as `parse_class_decl_with_abstract`: only decorators
+  // pending BEFORE the body parse are class decorators; member decorators
+  // pushed during the body parse are erased.
+  let class_decorators = self.take_pending_decorators()
   let _ = self.expect(Class)
   let mut class_name = ""
   let _ = match self.peek().kind {
@@ -2725,11 +2729,12 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       )
       let pending_base_expr = self.pending_class_base_expr
       self.pending_class_base_expr = None
+      let _ = self.take_pending_decorators()
       let decorated : @ast.TsClassDecl = {
         ..runtime_decl,
         base_names: [base_name],
         base_expr: pending_base_expr,
-        decorators: self.take_pending_decorators(),
+        decorators: class_decorators,
         is_declare: false,
       }
       self.last_runtime_class_decl = Some(decorated)
@@ -2872,7 +2877,10 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     static_index_signatures: runtime_decl.static_index_signatures,
     is_abstract: runtime_decl.is_abstract,
     is_constructible: runtime_decl.is_constructible,
-    decorators: self.take_pending_decorators(),
+    decorators: {
+      let _ = self.take_pending_decorators()
+      class_decorators
+    },
     is_declare: false,
     private_members: runtime_decl.private_members,
     protected_members: runtime_decl.protected_members,
@@ -3293,6 +3301,12 @@ fn Parser::parse_class_decl_with_abstract(
   is_abstract : Bool,
 ) -> @ast.TsStmt raise ParseError {
   self.last_runtime_class_decl = None
+  // Capture CLASS-declaration decorators before the body parse: member
+  // decorators accumulate into the same `pending_decorators` (they're
+  // erased, not modeled) and must not masquerade as class decorators
+  // (decoratorOnClassAccessor1 — an accessor decorator's 3-parameter
+  // signature is legal, a class decorator's is not).
+  let class_decorators = self.take_pending_decorators()
   let _ = self.expect(Class)
   // A class named with a predefined-type keyword (`class void {}`,
   // `class string {}`, …) is always a TS error (TS1005 / TS2414). These
@@ -3483,6 +3497,15 @@ fn Parser::parse_class_decl_with_abstract(
       (runtime_decl.name, runtime_decl.duplicate_member_names),
     )
   }
+  // Attach the class-declaration decorators captured before the body
+  // parse (the checker's TS1238 decorator-signature rules read
+  // `decl.decorators`), and drain any MEMBER decorators the body parse
+  // pushed so they don't leak onto the next declaration.
+  let _ = self.take_pending_decorators()
+  let runtime_decl : @ast.TsClassDecl = {
+    ..runtime_decl,
+    decorators: class_decorators,
+  }
   self.last_runtime_class_decl = Some(runtime_decl)
   // When the class extends another class, the IIFE desugar below
   // produces a `super(…)` call outside a real class body — V8
@@ -3585,7 +3608,6 @@ fn Parser::parse_class_decl_with_abstract(
         ..runtime_decl,
         base_names: [base_name],
         base_expr: pending_base_expr2,
-        decorators: self.take_pending_decorators(),
         is_declare: false,
       }
       // Static field initializers: stash them on the AST so the
