@@ -8,6 +8,4 @@ import {
   "mizchi/ts/ast",
 }
 
-options(
-  is_main: true,
-)
+pkgtype(kind: "executable")
