@@ -19767,6 +19767,47 @@ fn ts2683_walk_stmts(
 }
 
 ///|
+/// Direct `super` reference inside a computed-key expression (member
+/// access / call receivers only — computed keys can't contain nested
+/// callables that would rebind it meaningfully for TS2466's purposes).
+fn computed_key_mentions_super(e : @ast.TsExpr) -> Bool {
+  match e {
+    Var("super") => true
+    // `super(…)` calls (`[(super(), "prop")]` — computedPropertyNames27).
+    Call("super", _) => true
+    Seq(a, b) =>
+      computed_key_mentions_super(a) || computed_key_mentions_super(b)
+    PropAccess(a, _) | UnaryOp(_, a) | NonNull(a) | OptionalChain(a) =>
+      computed_key_mentions_super(a)
+    MethodCall(r, _, args) => {
+      if computed_key_mentions_super(r) {
+        return true
+      }
+      for a in args {
+        if computed_key_mentions_super(a) {
+          return true
+        }
+      }
+      false
+    }
+    CallExpr(c, args) => {
+      if computed_key_mentions_super(c) {
+        return true
+      }
+      for a in args {
+        if computed_key_mentions_super(a) {
+          return true
+        }
+      }
+      false
+    }
+    BinOp(_, a, b) | IndexAccess(a, b) =>
+      computed_key_mentions_super(a) || computed_key_mentions_super(b)
+    _ => false
+  }
+}
+
+///|
 fn check_this_in_computed_keys(
   module_ : @ast.TsModule,
   resolver : Resolver,
@@ -19787,6 +19828,14 @@ fn check_this_in_computed_keys(
           message: "`this` cannot be referenced in a computed property name",
         })
       }
+      // TS2466: `super` is equally banned in computed property names
+      // (computedPropertyNames24/27/30's `[super.bar()]`).
+      if computed_key_mentions_super(ke) {
+        issues.push({
+          path: "class \{decl.name}",
+          message: "`super` cannot be referenced in a computed property name",
+        })
+      }
       // TS1166: a computed class-property key must have a simple literal
       // (or unique symbol) type. A CALL through a declared-`any` callee
       // never does (`declare var f: any; class C2 { accessor [f()] = 1 }`
@@ -19805,13 +19854,20 @@ fn check_this_in_computed_keys(
     }
     for m in decl.methods {
       match m.key_expr {
-        Some(ke) =>
+        Some(ke) => {
           if expr_uses_this_outside_fn(ke) {
             issues.push({
               path: "class \{decl.name}",
               message: "`this` cannot be referenced in a computed property name",
             })
           }
+          if computed_key_mentions_super(ke) {
+            issues.push({
+              path: "class \{decl.name}",
+              message: "`super` cannot be referenced in a computed property name",
+            })
+          }
+        }
         None => ()
       }
     }

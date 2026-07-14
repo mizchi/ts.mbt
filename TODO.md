@@ -1031,7 +1031,7 @@ v7.0.2). Truth comes from vendored name manifests
 variant is NOTRUN, and the TS6-era deprecated-compiler-option
 diagnostics (TS5107/TS5101) were removed from the checker accordingly.
 
-State: whole-corpus **TP 2242 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 492 /
+State: whole-corpus **TP 2266 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 468 /
 NOTRUN 14** via `scripts/checker_conformance_oracle.sh --max-fp 0
 --max-legal-parsefail 3`.
 
@@ -1108,6 +1108,23 @@ implicit-any `this` — as a dedicated context-tracking walker
   marker), `@strict: false`, and the `@ts-ignore` whole-file marker.
 Permissive-path only. One stale wbtest pin (`this` in a method-nested
 function expr expected 0) was updated to the TS7 verdict.
+Batch BI (+24 TP, TP 2266 / MISS 468) took the small syntactic
+clusters from the general miss pool:
+- TS1049/TS1054: a `set` accessor takes exactly one parameter, a `get`
+  accessor none — recorded at the parse sites for both object-literal
+  accessors (both parse paths) and class accessors.
+- TS1031: `export` / `declare` cannot modify class elements (incl.
+  `declare constructor`). The `export` arm consumes the token only in
+  MODIFIER position via `can_consume_class_modifier` — `class C {
+  export; }` declares a field NAMED export
+  (propertyNamesOfReservedWords went PFLEGAL until guarded).
+- TS1124: a numeric exponent needs at least one digit (`1e`, `1e+`).
+- TS2466: `super` cannot be referenced in a computed property name —
+  member chains and `super()` inside comma chains
+  (computedPropertyNames24/27). computedPropertyNames30 stays a MISS:
+  strada raises TS2466 for `this` in an object-literal computed key
+  inside a typed constructor arrow, which our typed-context model
+  deliberately treats as legal.
 Remaining TS7-only clusters (documented, unattempted): nested
 class-expression computed keys (the parser lowers class expressions to
 IIFEs, erasing the member structure), TS2339 Corsa behavior changes. (Final TS6 state for reference: TP 2669 /

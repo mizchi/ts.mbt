@@ -14229,3 +14229,42 @@ test "expr_check: implicit-any this (batch BH)" {
     0,
   )
 }
+
+///|
+test "expr_check: accessor arity, member modifiers, exponents, super keys (batch BI)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS1049/TS1054: setter takes exactly one parameter, getter none —
+  // object literals and classes.
+  assert_true(issues("var v = { set foo() { } };") > 0)
+  assert_true(issues("class A { set foo() { } }") > 0)
+  assert_true(issues("class A { get foo(x: number) { return x; } }") > 0)
+  @test.assert_eq(
+    issues(
+      "var v = { get a() { return 1; }, set a(n) { } };\nclass B { get b() { return 1; } set b(n: number) { } }",
+    ),
+    0,
+  )
+  // TS1031: `export` / `declare` cannot modify class elements.
+  assert_true(issues("class C {\n  export constructor() { }\n}") > 0)
+  assert_true(issues("class C {\n  declare constructor() { }\n}") > 0)
+  @test.assert_eq(issues("class C {\n  declare x: number;\n}"), 0)
+  // TS1124: an exponent needs at least one digit.
+  assert_true(issues("var n = 1e;") > 0)
+  @test.assert_eq(issues("var a = 1e3;\nvar b = 1e+3;\nvar c = 1.5e-2;"), 0)
+  // TS2466: `super` (including `super()` in a comma chain) cannot be
+  // referenced in a computed property name.
+  assert_true(
+    issues(
+      "class Base { bar() { return \"\"; } }\nclass C extends Base {\n  [super.bar()]() { }\n}",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "class Base { }\nclass C extends Base {\n  [(super(), \"prop\")]() { }\n}",
+    ) >
+    0,
+  )
+}

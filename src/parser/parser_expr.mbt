@@ -3660,6 +3660,20 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
             let _ = self.expect(LParen)
             let params = self.parse_params()
             let _ = self.expect(RParen)
+            // TS1054 / TS1049: a `get` accessor takes no parameters; a
+            // `set` accessor takes exactly one (parserAccessors8's
+            // `{ set foo() { } }`).
+            if is_getter {
+              if params.length() != 0 {
+                self.grammar_misuses.push(
+                  "a `get` accessor cannot have parameters",
+                )
+              }
+            } else if params.length() != 1 {
+              self.grammar_misuses.push(
+                "a `set` accessor must have exactly one parameter",
+              )
+            }
             let return_type = if self.check(Colon) {
               let _ = self.advance()
               self.parse_type()
@@ -4015,6 +4029,20 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
             let _ = self.expect(LParen)
             let params = self.parse_params()
             let _ = self.expect(RParen)
+            // TS1054 / TS1049: a `get` accessor takes no parameters; a
+            // `set` accessor takes exactly one (parserAccessors8's
+            // `{ set foo() { } }`).
+            if is_getter {
+              if params.length() != 0 {
+                self.grammar_misuses.push(
+                  "a `get` accessor cannot have parameters",
+                )
+              }
+            } else if params.length() != 1 {
+              self.grammar_misuses.push(
+                "a `set` accessor must have exactly one parameter",
+              )
+            }
             let return_type = if self.check(Colon) {
               let _ = self.advance()
               self.parse_type()

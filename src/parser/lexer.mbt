@@ -705,6 +705,14 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
             }
             _ => ()
           }
+          // TS1124: the exponent needs at least one digit (`1e`, `1e+`
+          // — scannerNumericLiteral4/6, scannerES3NumericLiteral4/6).
+          match self.peek() {
+            Some(d) if d >= '0' && d <= '9' => ()
+            _ =>
+              self.invalid_radix_digit_count = self.invalid_radix_digit_count +
+                1
+          }
         } else {
           break
         }
