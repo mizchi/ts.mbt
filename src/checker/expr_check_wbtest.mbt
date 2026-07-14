@@ -14110,3 +14110,45 @@ test "expr_check: TS7-only miss clusters (batch BE)" {
     0,
   )
 }
+
+///|
+test "expr_check: TS7 lexical clusters (batch BF)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2465: `this` in a class member's computed property name; TS1166:
+  // a computed field key through a declared-`any` call has no literal
+  // type. Well-known-symbol and literal keys stay legal.
+  assert_true(
+    issues("class C {\n  bar() { return 0; }\n  [this.bar()]() { }\n}") > 0,
+  )
+  assert_true(
+    issues("declare var f: any;\nclass C2 {\n  accessor [f()] = 1;\n}") > 0,
+  )
+  @test.assert_eq(
+    issues(
+      "const k = \"a\";\nclass D {\n  [Symbol.iterator]() { return null as any; }\n  [\"lit\"] = 1;\n  [k] = 2;\n}",
+    ),
+    0,
+  )
+  // TS1125 / TS1198: invalid `\u{...}` escapes in STRING literals —
+  // missing / non-hex digits and out-of-range values. Valid escapes
+  // stay silent.
+  assert_true(issues("var x = \"\\u{}\";") > 0)
+  assert_true(issues("var x = \"\\u{-DDDD}\";") > 0)
+  assert_true(issues("var x = \"\\u{110000}\";") > 0)
+  assert_true(issues("var x = \"\\u{FFFFFFFF}\";") > 0)
+  @test.assert_eq(
+    issues(
+      "var a = \"\\u{0}\";\nvar b = \"\\u{10FFFF}\";\nvar c = \"\\u0041\";",
+    ),
+    0,
+  )
+  // TS1121: legacy octal integer literals; modern radix forms stay
+  // legal.
+  assert_true(issues("var o = 01;") > 0)
+  @test.assert_eq(
+    issues("var a = 0o777;\nvar b = 0;\nvar c = 0.5;\nvar d = 08.5;"),
+    0,
+  )
+}

@@ -151,6 +151,15 @@ pub struct Lexer {
   // digit outside its radix (`0b1102110`, `0o13334823`). tsc surfaces
   // parser-recovery errors there; one count per offending literal.
   mut invalid_radix_digit_count : Int
+  // TS1125: a `\u{...}` / `\uXXXX` escape in a STRING literal with a
+  // missing / non-hex digit (`"\u{}"`, `"\u{-DDDD}"`, `"\u{"`).
+  // Template literals are NOT counted here — tagged templates accept
+  // invalid escapes (ES2018), so the parser decides those.
+  mut invalid_unicode_escape_count : Int
+  // TS1198: a `\u{...}` escape whose value exceeds 0x10FFFF.
+  mut unicode_escape_overflow_count : Int
+  // TS1121: a legacy octal integer literal (`01`) — banned in TS.
+  mut legacy_octal_literal_count : Int
   // TS1160: a template literal ran to EOF without its closing backtick.
   mut unterminated_template : Bool
   src : String
@@ -217,6 +226,9 @@ pub fn Lexer::new(src : String) -> Lexer {
   {
     invalid_char_count: 0,
     invalid_radix_digit_count: 0,
+    invalid_unicode_escape_count: 0,
+    unicode_escape_overflow_count: 0,
+    legacy_octal_literal_count: 0,
     unterminated_template: false,
     src,
     // Skip a UTF-8/UTF-16 byte-order mark. Without this the BOM reaches
@@ -642,6 +654,9 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
           }
         }
         if is_pure_octal {
+          // TS1121: legacy octal integer literals (`01`) are banned in
+          // TypeScript regardless of target (scannerNumericLiteral2/3/8).
+          self.legacy_octal_literal_count = self.legacy_octal_literal_count + 1
           // Recalculate as octal
           let mut octal_value = 0
           let mut mult = 1
@@ -1256,7 +1271,9 @@ fn Lexer::scan_string(self : Lexer, quote : Char) -> TokenKind {
               let mut code = 0
               let mut ok = true
               let mut digits = 0
+              let mut braced = false
               if self.peek() == Some('{') {
+                braced = true
                 let _ = self.advance()
                 while true {
                   match self.peek() {
@@ -1296,8 +1313,20 @@ fn Lexer::scan_string(self : Lexer, quote : Char) -> TokenKind {
                 }
               }
               if ok && digits > 0 {
-                write_codepoint(buf, code)
+                // TS1198: a braced escape past the Unicode range. `code`
+                // may have wrapped a 32-bit Int on long inputs
+                // (`\u{FFFFFFFF}`), so a negative accumulation counts too.
+                if braced && (code > 0x10FFFF || code < 0) {
+                  self.unicode_escape_overflow_count = self.unicode_escape_overflow_count +
+                    1
+                  buf.write_char('u')
+                } else {
+                  write_codepoint(buf, code)
+                }
               } else {
+                // TS1125: missing / non-hex digits (`\u{}`, `\u{-D}`, `\u{`).
+                self.invalid_unicode_escape_count = self.invalid_unicode_escape_count +
+                  1
                 buf.write_char('u')
               }
             }

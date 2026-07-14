@@ -19450,6 +19450,98 @@ fn check_param_forward_refs(module_ : @ast.TsModule) -> Array[ExprIssue] {
 }
 
 ///|
+/// TS2465 / TS1166: `this` cannot be referenced in a computed property
+/// name of a class member (`class C { [this.bar()]() { } }` —
+/// computedPropertyNames21_ES5, typeOfThisInStaticMembers12/13,
+/// autoAccessor5). Direct references only — a `this` inside a nested
+/// callable binds that callable's own receiver. Class EXPRESSIONS
+/// nested in static-field initializers are walked too (`static bar =
+/// class Inner { [this.c] = 1 }`).
+fn check_this_in_computed_keys(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  // `@ts-ignore` / `@ts-expect-error` can suppress exactly these lines
+  // (esDecorators-classDeclaration-outerThisReference ignores its
+  // `[f(this)]` keys); without line-anchored issues the safe granularity
+  // is whole-file abstention.
+  if module_.grammar_misuses.contains("<ts-suppression-present>") {
+    return issues
+  }
+  fn check_class(decl : @ast.TsClassDecl) -> Unit {
+    for ke in decl.computed_field_keys {
+      if expr_uses_this_outside_fn(ke) {
+        issues.push({
+          path: "class \{decl.name}",
+          message: "`this` cannot be referenced in a computed property name",
+        })
+      }
+      // TS1166: a computed class-property key must have a simple literal
+      // (or unique symbol) type. A CALL through a declared-`any` callee
+      // never does (`declare var f: any; class C2 { accessor [f()] = 1 }`
+      // — autoAccessor5). Only the declared-any-callee form decides;
+      // unresolved callees abstain.
+      match ke {
+        CallExpr(Var(cn), _) | Call(cn, _) =>
+          if resolver.globals.get(cn) is Some(Any) {
+            issues.push({
+              path: "class \{decl.name}",
+              message: "a computed property name in a class property declaration must have a simple literal type",
+            })
+          }
+        _ => ()
+      }
+    }
+    for m in decl.methods {
+      match m.key_expr {
+        Some(ke) =>
+          if expr_uses_this_outside_fn(ke) {
+            issues.push({
+              path: "class \{decl.name}",
+              message: "`this` cannot be referenced in a computed property name",
+            })
+          }
+        None => ()
+      }
+    }
+    fn scan_expr(e : @ast.TsExpr) -> Unit {
+      match e {
+        NativeClassExpr(inner, _) => check_class(inner)
+        ArrayLit(items) =>
+          for it in items {
+            scan_expr(it)
+          }
+        ObjectLit(entries) =>
+          for en in entries {
+            scan_expr(en.1)
+          }
+        CallExpr(c, args) => {
+          scan_expr(c)
+          for a in args {
+            scan_expr(a)
+          }
+        }
+        BinOp(_, a, b) => {
+          scan_expr(a)
+          scan_expr(b)
+        }
+        _ => ()
+      }
+    }
+
+    for init in decl.static_field_inits {
+      scan_expr(init.1)
+    }
+  }
+
+  for cls in module_.classes {
+    check_class(cls)
+  }
+  issues
+}
+
+///|
 /// TS2378: a `get` accessor must return a value. Flagged only for the
 /// provable shape — a class getter body with NO value-returning `return`,
 /// no `throw`, and no loop statement anywhere (a throwing getter is legal,
@@ -24347,6 +24439,10 @@ fn check_module_function_bodies_layered(
   for issue in check_param_forward_refs(module_) {
     all.push(issue)
   }
+  // TS2465: `this` in a class member's computed property name.
+  for issue in check_this_in_computed_keys(module_, resolver) {
+    all.push(issue)
+  }
   for issue in check_reserved_class_names(module_) {
     all.push(issue)
   }
@@ -24692,6 +24788,9 @@ fn check_module_function_bodies_layered(
       }
       // Marker, not an error: the @noImplicitOverride directive flag,
       // consumed by the override-modifier checks.
+      if gm == "<ts-suppression-present>" {
+        continue
+      }
       if gm == "<noimplicitoverride-on>" {
         continue
       }

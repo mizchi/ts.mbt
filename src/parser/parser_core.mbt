@@ -318,8 +318,26 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
   if lexer.unterminated_template {
     grammar_misuses.push("unterminated template literal")
   }
+  // Marker: the file uses `@ts-ignore` / `@ts-expect-error` suppression
+  // comments somewhere. Our issues carry no line positions, so rules
+  // whose corpus counter-examples are suppressed lines (the computed-key
+  // TS2465/TS1166 family) abstain for the whole file when set.
+  if src.contains("@ts-ignore") || src.contains("@ts-expect-error") {
+    grammar_misuses.push("<ts-suppression-present>")
+  }
   for _i in 0..<lexer.invalid_radix_digit_count {
     grammar_misuses.push("invalid digit in a binary or octal numeric literal")
+  }
+  for _i in 0..<lexer.invalid_unicode_escape_count {
+    grammar_misuses.push("hexadecimal digit expected in a unicode escape")
+  }
+  for _i in 0..<lexer.unicode_escape_overflow_count {
+    grammar_misuses.push(
+      "an extended unicode escape value must be between 0x0 and 0x10FFFF inclusive",
+    )
+  }
+  for _i in 0..<lexer.legacy_octal_literal_count {
+    grammar_misuses.push("octal literals are not allowed")
   }
   // Module-scoped flag marker for the override checks (TS4114 fires only
   // under `@noImplicitOverride: true`); TS4112/TS4113 are unconditional.

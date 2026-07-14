@@ -1031,7 +1031,7 @@ v7.0.2). Truth comes from vendored name manifests
 variant is NOTRUN, and the TS6-era deprecated-compiler-option
 diagnostics (TS5107/TS5101) were removed from the checker accordingly.
 
-State: whole-corpus **TP 2203 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 531 /
+State: whole-corpus **TP 2222 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 512 /
 NOTRUN 14** via `scripts/checker_conformance_oracle.sh --max-fp 0
 --max-legal-parsefail 3`.
 
@@ -1060,10 +1060,26 @@ by the oracle switch:
 Sweep round-trip: the first BE sweep surfaced 10 FPs (bare-return
 getters, legacy-mode ambient decorators, stacked decorators before
 class expressions); all root-caused and fixed before landing.
-Remaining TS7-only clusters (documented, unattempted): TS2683/TS2465
-(`this` typing in plain functions / computed keys — needs enclosing-
-callable context tracking), TS2339 Corsa behavior changes, TS1125/
-TS1121/TS1198 escape-sequence lexing, TS1166 ambient computed keys. (Final TS6 state for reference: TP 2669 /
+Batch BF (+19 TP, TP 2222 / MISS 512) continued the mining:
+- TS2465/TS1166: `this` in a class member's computed property name
+  (direct refs only — nested callables rebind), and computed FIELD keys
+  through a declared-`any` call (no literal type — autoAccessor5).
+  Whole-file abstention when the source carries `@ts-ignore` /
+  `@ts-expect-error` (the parser pushes a `<ts-suppression-present>`
+  marker; our issues aren't line-anchored, so file granularity is the
+  FP-safe choice — esDecorators-classDeclaration-outerThisReference).
+- TS1125/TS1198: `\u{...}` escapes in STRING literals — missing /
+  non-hex digits and values past 0x10FFFF (accumulator clamped against
+  32-bit wrap). Template literals deliberately NOT counted: tagged
+  templates accept invalid escapes (ES2018) and the lexer can't see
+  taggedness.
+- TS1121: legacy octal integer literals (`01`).
+Remaining TS7-only clusters (documented, unattempted): template /
+regex escape variants (need tagged-exemption plumbing through token
+metadata and `u`-flag gating in the regex scanner), nested
+class-expression computed keys (the parser lowers class expressions to
+IIFEs, erasing the member structure), TS2683 `this`-context typing,
+TS2339 Corsa behavior changes. (Final TS6 state for reference: TP 2669 /
 FP 0 / TN 1414 / MISS 414 — the TS7 renumbering reflects dropped es5
 variants and Corsa behavior changes, not checker regressions; the
 582 misses include ~170 new TS7-only opportunities.)
