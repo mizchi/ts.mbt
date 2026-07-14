@@ -409,6 +409,14 @@ fn Parser::parse_binding_object(
         }
         break
       }
+      // A literal key token (string / number / boolean / null) can never be
+      // a SHORTHAND binding — it needs the `: alias` form. Captured before
+      // the key parse erases the token kind
+      // (objectBindingPatternKeywordIdentifiers01/03).
+      let key_is_literal_token = match self.peek().kind {
+        Str(_) | Number(_) | Int(_) | Bool(_) | Null => true
+        _ => false
+      }
       let (key, key_expr) = if self.match_(LBracket) {
         let expr = self.parse_assignment()
         let _ = self.expect(RBracket)
@@ -428,6 +436,16 @@ fn Parser::parse_binding_object(
         match key_expr {
           Some(_) => raise ParseError("Expected Colon, got \{self.peek().kind}")
           None => {
+            // Shorthand: the key IS the binding name. A hard-reserved word
+            // (`var { while } = …`) or a literal key (`var { "while" } = …`)
+            // is only legal with a `: alias` (TS1005).
+            if key_is_literal_token {
+              self.grammar_misuses.push(
+                "a literal object-binding key needs a `:` alias",
+              )
+            } else {
+              self.record_reserved_binding_name(key)
+            }
             let mut default : @ast.TsExpr? = None
             if self.match_(Eq) {
               default = Some(self.parse_assignment())

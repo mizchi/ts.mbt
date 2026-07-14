@@ -1050,6 +1050,12 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
     VoidType => {
       let _ = self.advance()
       if self.check(Dot) {
+        // `void` can never head a qualified type name (`var v: void.x` —
+        // TS1005, parservoidInQualifiedName1). Parse through for recovery
+        // but record the misuse.
+        self.grammar_misuses.push(
+          "`void` cannot be used in a qualified type name",
+        )
         self.parse_named_type_tail("void")
       } else {
         Void

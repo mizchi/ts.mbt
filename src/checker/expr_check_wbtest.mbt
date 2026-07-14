@@ -14326,3 +14326,52 @@ test "expr_check: ASI namespace/declare, for-of TS2488, lib-global TS2403 (batch
   // Module files declare a fresh local binding — no TS2403.
   @test.assert_eq(issues("var Symbol: any;\nexport { };"), 0)
 }
+
+///|
+test "expr_check: block-scoped hoisting, new<, apply arguments, binding keys (batch BK)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2304: a `let` for-of head is loop-scoped (for-of7) and a body `let`
+  // can't provide an assign-form head's binding (for-of6).
+  assert_true(issues("v;\nfor (let v of [0]) { }") > 0)
+  assert_true(issues("for (v of [0]) { let v; }") > 0)
+  // `var` head / body still hoist — no error.
+  @test.assert_eq(issues("for (var w of [0]) { }\nw;"), 0)
+  @test.assert_eq(issues("for (u of [0]) { var u; }"), 0)
+  // Loop-head lets stay visible to closures inside the loop.
+  @test.assert_eq(issues("for (let v of [0]) { const g = () => v; g(); }"), 0)
+  // TS2304 via `new Date<A;` — no balanced `>` means `<` is a comparison
+  // and `A` is an (undeclared) value read (parserConstructorAmbiguity1-4).
+  assert_true(issues("new Date<A;") > 0)
+  assert_true(issues("new Date<A ? B : C;") > 0)
+  @test.assert_eq(issues("var m = new Map<string, Array<number>>();"), 0)
+  // TS2345: `f.apply(x, arguments)` with a zero-parameter target
+  // (asyncArrowFunctionCapturesArguments_*).
+  assert_true(
+    issues(
+      "class C {\n  method() {\n    function other() {}\n    var fn = async () => await other.apply(this, arguments);\n  }\n}",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "class C {\n  method() {\n    function other(...xs: any[]) {}\n    var fn = () => other.apply(this, [1]);\n  }\n}",
+    ),
+    0,
+  )
+  // TS1005: reserved-word / literal object-binding shorthands need `: alias`
+  // (objectBindingPatternKeywordIdentifiers01/03); aliased forms stay legal.
+  assert_true(issues("var { while } = { while: 1 };") > 0)
+  assert_true(issues("var { \"while\" } = { while: 1 };") > 0)
+  @test.assert_eq(
+    issues(
+      "var { while: w } = { while: 1 };\nvar { a, b = 1 } = { a: 0, b: 2 };",
+    ),
+    0,
+  )
+  // TS1005: `void` cannot head a qualified type name
+  // (parservoidInQualifiedName1).
+  assert_true(issues("var v : void.x;") > 0)
+  @test.assert_eq(issues("var v : void;"), 0)
+}

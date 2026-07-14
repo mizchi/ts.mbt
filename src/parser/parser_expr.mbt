@@ -3271,7 +3271,18 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
           if self.check(Lt) {
             match self.try_parse_simple_type_args() {
               Some(targs) => new_type_args = targs
-              None => self.skip_type_args()
+              None => {
+                // Only treat `<...>` as type arguments when a balanced
+                // closing `>` exists. `new Date<A;` never closes — TS
+                // parses it as the comparison `new Date < A`, so restore
+                // the cursor and let the binary-operator machinery read
+                // `A` as a value reference (parserConstructorAmbiguity1-4
+                // expect the TS2304 on `A`).
+                let saved = self.pos
+                if !self.try_skip_type_args() {
+                  self.pos = saved
+                }
+              }
             }
           }
         }

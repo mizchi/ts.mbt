@@ -360,12 +360,21 @@ fn collect_stmt_value_names(
       // The assignment form (`for (v of xs)` with no `let`/`var`/`const`)
       // declares nothing -- it *reads* an existing binding, so its name must
       // not enter the hoisting backstop (that would mask the TS2304 on an
-      // undeclared target).
-      if !(kind is @ast.TsForOfKind::Assign) {
+      // undeclared target). A `let` / `const` head is LOOP-scoped, so it
+      // must not suppress module-level reads either (`v; for (let v of …)`
+      // — for-of7); only a `var` head hoists.
+      if kind is @ast.TsForOfKind::Var {
         collect_binding_value_names(b, out)
       }
       collect_expr_value_names(e, out)
-      collect_block_value_names(body, out)
+      // For the assign form, a block-scoped declaration in the body cannot
+      // provide the head's binding (`for (v of xs) { let v; }` — for-of6),
+      // so only `var`s (which hoist past the block) enter the backstop.
+      if kind is @ast.TsForOfKind::Assign {
+        collect_block_var_names_only(body, out)
+      } else {
+        collect_block_value_names(body, out)
+      }
     }
     Switch(e, cases) => {
       collect_expr_value_names(e, out)
@@ -407,6 +416,24 @@ fn collect_block_value_names(
 ) -> Unit {
   for s in block.stmts {
     collect_stmt_value_names(s, out)
+  }
+}
+
+///|
+/// Hoisting-backstop walk over a block that keeps only `var` binding names
+/// (which hoist past the block) — direct `let` / `const` bindings are
+/// block-scoped and skipped. Initializer expressions and nested statements
+/// still contribute their names (nested callables introduce their own
+/// scopes, which the full walker already over-approximates).
+fn collect_block_var_names_only(
+  block : @ast.TsBlock,
+  out : Map[String, Bool],
+) -> Unit {
+  for s in block.stmts {
+    match s {
+      Let(_, _, init) | Const(_, _, init) => collect_expr_value_names(init, out)
+      _ => collect_stmt_value_names(s, out)
+    }
   }
 }
 
@@ -15565,6 +15592,20 @@ fn check_call_args_in_expr(
       check_private_name_access(ctx, meth)
       check_member_accessibility(env, ctx, receiver, meth)
       check_super_abstract_access(ctx, receiver, meth)
+      // TS2345 (strict bind/call/apply): `f.apply(x, arguments)` where `f`
+      // is a ZERO-parameter function — `IArguments` is never assignable to
+      // the empty parameter tuple `[]`
+      // (asyncArrowFunctionCapturesArguments_*). Functions with parameters
+      // abstain (their tuple shape needs full apply modeling).
+      if meth == "apply" && args.length() == 2 && args[1] is Var("arguments") {
+        match ctx.resolver.unwrap(infer_expr(env, ctx.resolver, receiver)) {
+          Func([], _) =>
+            record(
+              ctx, "call `apply`", "argument of type `IArguments` is not assignable to parameter of type `[]`",
+            )
+          _ => ()
+        }
+      }
       // Static-namespace dispatch: `Math.max(...)`, `JSON.stringify(...)`.
       // Recognised by the bare-identifier shape of the receiver. Also handle
       // a static method called through the class name (`A.s(args)`), whose

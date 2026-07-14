@@ -1031,7 +1031,7 @@ v7.0.2). Truth comes from vendored name manifests
 variant is NOTRUN, and the TS6-era deprecated-compiler-option
 diagnostics (TS5107/TS5101) were removed from the checker accordingly.
 
-State: whole-corpus **TP 2278 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 456 /
+State: whole-corpus **TP 2289 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 445 /
 NOTRUN 14** via `scripts/checker_conformance_oracle.sh --max-fp 0
 --max-legal-parsefail 3`.
 
@@ -1151,6 +1151,34 @@ type clusters:
   (`var Symbol: any` / `{ iterator: string }`) must carry the matching
   `*Constructor` interface annotation; module files and `typeof`
   annotations abstain (ES5SymbolProperty3/4/7 vs ES5SymbolProperty1).
+Batch BK (+11 TP, TP 2289 / MISS 445) mixed scoping, parser-recovery,
+and call-modeling slices:
+- Block scoping in the TS2304 hoisting backstop: a `let` / `const`
+  for-of/for-in head is LOOP-scoped (only `var` heads hoist —
+  for-of7), and an assign-form loop's body contributes only `var`s
+  (`for (v of xs) { let v; }` cannot declare the head — for-of6).
+  Closures inside the loop still see the head binding via the env walk.
+- `new Date<A;`: type arguments are only consumed when a balanced `>`
+  exists; otherwise the cursor restores and `<` parses as a comparison,
+  so `A` surfaces through the normal undefined-name path
+  (parserConstructorAmbiguity1/2/4).
+- TS2345: `f.apply(x, arguments)` where `f` is a zero-parameter
+  function — `IArguments` is never assignable to the empty tuple `[]`
+  (asyncArrowFunctionCapturesArguments_es5/es6/es2017). Functions WITH
+  parameters abstain.
+- TS1005: reserved-word and literal object-binding shorthands need a
+  `: alias` (`var { while } = …`, `var { "while" } = …` —
+  objectBindingPatternKeywordIdentifiers01/03), and `void` cannot head
+  a qualified type name (`var v: void.x` — parservoidInQualifiedName1).
+Documented dead ends from this round: YieldExpression10_es6 (an
+object-literal method's name in the backstop is indistinguishable from
+a legal self-referential named function expression property);
+symbolProperty3/59 (need the `Symbol` VALUE modeled as
+`SymbolConstructor`); computedPropertyNames9 (needs overload+generic
+call inference to pick `boolean`); the TS2403 identity cluster
+(spreadUnion2 / typeOfThisGeneral etc. need inferred-initializer
+identity; unionTypeEquivalence needs non-reducing union identity over
+subtype-related classes).
 Remaining TS7-only clusters (documented, unattempted): nested
 class-expression computed keys (the parser lowers class expressions to
 IIFEs, erasing the member structure), TS2339 Corsa behavior changes. (Final TS6 state for reference: TP 2669 /
