@@ -25,5 +25,5 @@ fn main {
   )
   let _ = app.get("/", fn(c) { c.text("hello", None, None) })
   let opts = make_serve_options(app, 0)
-  let _ = @sut_node_server.serve(opts, fn(_info) { smoke_exit_ok() })
+  let _ = @sut_node_server.serve(opts, Some(fn(_info) { smoke_exit_ok() }))
 }
