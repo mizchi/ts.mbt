@@ -4,6 +4,4 @@ import {
   "mizchi/ts",
 }
 
-options(
-  is_main: true,
-)
+pkgtype(kind: "executable")
