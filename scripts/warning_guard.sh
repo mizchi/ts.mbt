@@ -33,9 +33,16 @@ tsmbt_run_no_warnings() {
   # silenceable per-decl. The generated code is regenerated, not
   # hand-edited, so we let those warnings through.
   #
+  # `[0082]` (`ambiguous_braces`: `let m : Map[...] = {}`) and `[0035]`
+  # (`reserved_keyword`: identifiers like `local` / `recur`) appeared
+  # with the 2026-07 toolchain and fire on long-standing idiomatic repo
+  # code compiled during `moon run` — same bleeding-edge-churn category
+  # as `[0020]`, so let them through until the syntax migration lands
+  # upstream-wide.
+  #
   # Treat every other Warning as fatal.
   if grep -E '(^|[[:space:]])([Ww]arning):|forwardRef requires a render function' "$tmp" \
-      | grep -vE '^Warning: \[0020\]|^Warning: \[0005\]|^warning: unhandled Platform key' >&2; then
+      | grep -vE '^Warning: \[0020\]|^Warning: \[0005\]|^Warning: \[0082\]|^Warning: \[0035\]|^warning: unhandled Platform key' >&2; then
     printf 'warning output detected while running:' >&2
     printf ' %q' "$@" >&2
     printf '\n' >&2
