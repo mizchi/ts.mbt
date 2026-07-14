@@ -1031,7 +1031,7 @@ v7.0.2). Truth comes from vendored name manifests
 variant is NOTRUN, and the TS6-era deprecated-compiler-option
 diagnostics (TS5107/TS5101) were removed from the checker accordingly.
 
-State: whole-corpus **TP 2233 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 501 /
+State: whole-corpus **TP 2242 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 492 /
 NOTRUN 14** via `scripts/checker_conformance_oracle.sh --max-fp 0
 --max-legal-parsefail 3`.
 
@@ -1088,10 +1088,29 @@ remainder:
   the postfix path. Escapes inside `${...}` interpolation sub-parses
   are lost (sub-parser array discarded) — a known miss, not an FP.
 - Strings additionally validate `\x` (exactly two hex digits).
+Batch BH (+9 TP, TP 2242 / MISS 492) implemented TS2683 —
+implicit-any `this` — as a dedicated context-tracking walker
+(`check_implicit_any_this` + `ts2683_walk_expr/stmts`):
+- IMPLICIT contexts: plain function declarations/expressions without a
+  `this` parameter (including ones nested in methods and static-field
+  initializer function exprs), namespace top-level statements (a
+  namespace body is an IIFE), and class-declaration decorators inside
+  namespaces.
+- TYPED/EXEMPT contexts: methods/accessors/constructors at their top
+  level, arrows (inherit), object-literal FUNCTION values (contextual),
+  function exprs in CALL-ARGUMENT position (callee may declare `this` —
+  esDecorators-contextualTypes.2), property/index/compound-assignment
+  RHS (`Element.prototype.remove ??= function () {…}` —
+  thisPrototypeMethodCompoundAssignment), ANNOTATED binding
+  initializers, `<class>`-named IIFE lowerings of class expressions,
+  true top level (`globalThis`), and `this`-parameter functions.
+- Opt-outs: `@noImplicitThis: false` (new `<noimplicitthis-off>`
+  marker), `@strict: false`, and the `@ts-ignore` whole-file marker.
+Permissive-path only. One stale wbtest pin (`this` in a method-nested
+function expr expected 0) was updated to the TS7 verdict.
 Remaining TS7-only clusters (documented, unattempted): nested
 class-expression computed keys (the parser lowers class expressions to
-IIFEs, erasing the member structure), TS2683 `this`-context typing,
-TS2339 Corsa behavior changes. (Final TS6 state for reference: TP 2669 /
+IIFEs, erasing the member structure), TS2339 Corsa behavior changes. (Final TS6 state for reference: TP 2669 /
 FP 0 / TN 1414 / MISS 414 — the TS7 renumbering reflects dropped es5
 variants and Corsa behavior changes, not checker regressions; the
 582 misses include ~170 new TS7-only opportunities.)

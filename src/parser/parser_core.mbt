@@ -331,6 +331,12 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
   if src.contains("@ts-ignore") || src.contains("@ts-expect-error") {
     grammar_misuses.push("<ts-suppression-present>")
   }
+  // TS2683 opt-out: `@noImplicitThis: false` disables the implicit-any
+  // `this` diagnostics for the file.
+  if src.to_lower().contains("@noimplicitthis: false") ||
+    src.to_lower().contains("@noimplicitthis:false") {
+    grammar_misuses.push("<noimplicitthis-off>")
+  }
   for _i in 0..<lexer.invalid_radix_digit_count {
     grammar_misuses.push("invalid digit in a binary or octal numeric literal")
   }

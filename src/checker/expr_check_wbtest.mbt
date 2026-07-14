@@ -11024,9 +11024,17 @@ test "expr_check: function-valued expression bodies are walked" {
     ),
     0,
   )
-  // `this` inside a function expression is dynamically bound -> `any`.
+  // `this` inside a plain function expression is implicit `any` — a
+  // TS2683 under noImplicitThis (batch BH). A written `this` parameter
+  // types it and keeps the member access tolerant.
+  assert_true(
+    issues("class C { m() { var g = function () { return this.anything; }; } }") >
+    0,
+  )
   @test.assert_eq(
-    issues("class C { m() { var g = function () { return this.anything; }; } }"),
+    issues(
+      "class C { m() { var g = function (this: any) { return this.anything; }; } }",
+    ),
     0,
   )
   // A contextually-checked callback argument is not double-reported.
@@ -14182,4 +14190,42 @@ test "expr_check: template and regex escape validation (batch BG)" {
   // Strings reject `\x` with missing hex digits too.
   assert_true(issues("var s = \"\\xZZ\";") > 0)
   @test.assert_eq(issues("var s = \"\\x41\";"), 0)
+}
+
+///|
+test "expr_check: implicit-any this (batch BH)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Plain functions (incl. nested in methods, static-init function
+  // exprs, namespace bodies) give `this` an implicit `any`.
+  assert_true(issues("function plain() { return this; }") > 0)
+  assert_true(
+    issues(
+      "class C {\n  method() {\n    function fn() { return this; }\n  }\n}",
+    ) >
+    0,
+  )
+  assert_true(
+    issues("class C {\n  static x = function () { return this; };\n}") > 0,
+  )
+  assert_true(issues("namespace M {\n  var obj = { [this.bar]: 0 };\n}") > 0)
+  // Typed contexts stay silent: this-params, methods, object-literal
+  // function values, arrows in static inits, classes nested in plain
+  // functions (IIFE lowering), true top level, and the
+  // `@noImplicitThis: false` opt-out.
+  @test.assert_eq(
+    issues(
+      "function tf(this: Window) { this.name; }\nvar obj = { m: function() { return this; }, n() { this; } };\nvar top1 = this;\nclass K { m() { return this; } static s = () => this; }\nfunction outer() {\n  class A { x = 1; m() { return this.x; } }\n  return new A();\n}",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues("// @noImplicitThis: false\nfunction plain() { return this; }"),
+    0,
+  )
+  @test.assert_eq(
+    issues("// @strict: false\nfunction plain() { return this; }"),
+    0,
+  )
 }

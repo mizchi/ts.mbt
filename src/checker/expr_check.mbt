@@ -19457,6 +19457,316 @@ fn check_param_forward_refs(module_ : @ast.TsModule) -> Array[ExprIssue] {
 /// callable binds that callable's own receiver. Class EXPRESSIONS
 /// nested in static-field initializers are walked too (`static bar =
 /// class Inner { [this.c] = 1 }`).
+/// TS2683: `this` implicitly has type `any` inside a PLAIN function
+/// (function declaration / expression with no `this` parameter) under
+/// noImplicitThis. Arrows inherit the enclosing context; object-literal
+/// function VALUES are contextually `this`-typed and abstain; methods /
+/// accessors / constructors / static initializers are typed at their top
+/// level but a nested plain function expression flips back to implicit
+/// (typeOfThisInStaticMembers8's `static x = function () { this.f }`).
+/// Class-declaration decorator expressions evaluate in the enclosing
+/// scope — inside a NAMESPACE that scope's `this` is implicit any
+/// (decoratorOnClassMethod11); at true top level it is `globalThis` and
+/// stays legal. Whole-file abstention under `@ts-ignore` suppression.
+fn check_implicit_any_this(
+  module_ : @ast.TsModule,
+  in_namespace : Bool,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  if !module_.no_implicit_any {
+    return issues
+  }
+  if module_.grammar_misuses.contains("<ts-suppression-present>") ||
+    module_.grammar_misuses.contains("<noimplicitthis-off>") {
+    return issues
+  }
+  for f in module_.funcs {
+    let plain = !(f.params.length() > 0 && f.params[0].name == "this")
+    ts2683_walk_stmts(issues, f.body.stmts, plain, "function \{f.name}")
+  }
+  // A true top level's `this` is `globalThis` (legal); a NAMESPACE
+  // body is an IIFE whose `this` is implicit any
+  // (computedPropertyNames19_ES5's `[this.bar]` inside `namespace M`).
+  for st in module_.top_level_stmts {
+    match st {
+      @ast.TsStmt::Expr(e)
+      | @ast.TsStmt::Var(_, _, e)
+      | @ast.TsStmt::Let(_, _, e)
+      | @ast.TsStmt::Const(_, _, e) =>
+        ts2683_walk_expr(issues, e, in_namespace, "top-level")
+      _ => ()
+    }
+  }
+  for cls in module_.classes {
+    match cls.constructor_body {
+      Some(b) =>
+        ts2683_walk_stmts(
+          issues,
+          b.stmts,
+          false,
+          "class \{cls.name}.constructor",
+        )
+      None => ()
+    }
+    for m in cls.methods {
+      match m.body {
+        Some(b) =>
+          ts2683_walk_stmts(
+            issues,
+            b.stmts,
+            false,
+            "class \{cls.name}.\{m.name}",
+          )
+        None => ()
+      }
+    }
+    for init in cls.static_field_inits {
+      ts2683_walk_expr(issues, init.1, false, "class \{cls.name}.\{init.0}")
+    }
+    // Class-declaration decorators evaluate in the enclosing scope: a
+    // namespace body's `this` is implicit any; true top level is
+    // `globalThis` and legal.
+    if in_namespace {
+      for d in cls.decorators {
+        ts2683_walk_expr(issues, d, true, "class \{cls.name} decorator")
+      }
+    }
+  }
+  issues
+}
+
+///|
+fn ts2683_walk_expr(
+  issues : Array[ExprIssue],
+  e : @ast.TsExpr,
+  in_plain : Bool,
+  owner : String,
+) -> Unit {
+  match e {
+    Var("this") =>
+      if in_plain {
+        issues.push({
+          path: owner,
+          message: "`this` implicitly has type `any` because it does not have a type annotation",
+        })
+      }
+    // Arrows inherit `this` from the enclosing context.
+    ArrowFunc(_, _, abody, _) =>
+      match abody {
+        ArrowExpr(inner) => ts2683_walk_expr(issues, inner, in_plain, owner)
+        ArrowBlock(b) => ts2683_walk_stmts(issues, b.stmts, in_plain, owner)
+      }
+    // A plain function expression rebinds `this` to implicit any —
+    // unless it declares a `this` parameter. The parser lowers class
+    // declarations/expressions to `<class>`-named IIFE emulations whose
+    // synthesized bodies write `this.field` freely — those are typed
+    // class contexts, never implicit any.
+    FuncExpr(f2) => {
+      if f2.name == "<class>" {
+        return
+      }
+      let plain = !(f2.params.length() > 0 && f2.params[0].name == "this")
+      ts2683_walk_stmts(issues, f2.body.stmts, plain, owner)
+    }
+    // Object-literal FUNCTION values are contextually `this`-typed by
+    // the literal — skip their bodies. Arrow values still inherit the
+    // outer context.
+    ObjectLit(entries) =>
+      for en in entries {
+        match en.1 {
+          FuncExpr(_) => ()
+          other => ts2683_walk_expr(issues, other, in_plain, owner)
+        }
+      }
+    ComputedProp(k, v) => {
+      ts2683_walk_expr(issues, k, in_plain, owner)
+      match v {
+        FuncExpr(_) => ()
+        other => ts2683_walk_expr(issues, other, in_plain, owner)
+      }
+    }
+    // Class expressions carry their own member rules; abstain inside.
+    NativeClassExpr(_, _) => ()
+    BinOp(_, a, b) | Seq(a, b) | IndexAccess(a, b) => {
+      ts2683_walk_expr(issues, a, in_plain, owner)
+      ts2683_walk_expr(issues, b, in_plain, owner)
+    }
+    PropAssignExpr(a, _, b) => {
+      ts2683_walk_expr(issues, a, in_plain, owner)
+      match b {
+        FuncExpr(_) => ()
+        other => ts2683_walk_expr(issues, other, in_plain, owner)
+      }
+    }
+    // A function expression assigned to a PROPERTY / index slot may be
+    // `this`-typed by the target's declared signature
+    // (`Element.prototype.remove ??= function () { this… }` —
+    // thisPrototypeMethodCompoundAssignment) — skip those bodies too.
+    IndexAssignExpr(a, b, c) => {
+      ts2683_walk_expr(issues, a, in_plain, owner)
+      ts2683_walk_expr(issues, b, in_plain, owner)
+      match c {
+        FuncExpr(_) => ()
+        other => ts2683_walk_expr(issues, other, in_plain, owner)
+      }
+    }
+    CompoundAssignExpr(a, _, c) => {
+      ts2683_walk_expr(issues, a, in_plain, owner)
+      match c {
+        FuncExpr(_) => ()
+        other => ts2683_walk_expr(issues, other, in_plain, owner)
+      }
+    }
+    Cond(c, t, f3) => {
+      ts2683_walk_expr(issues, c, in_plain, owner)
+      ts2683_walk_expr(issues, t, in_plain, owner)
+      ts2683_walk_expr(issues, f3, in_plain, owner)
+    }
+    // Function expressions in CALL-ARGUMENT position may receive a
+    // contextual `this` from the callee's signature
+    // (`context.addInitializer(function () { this… })` —
+    // esDecorators-contextualTypes.2) — skip their bodies. IIFE callees
+    // are never contextually typed and keep walking.
+    Call(_, args) | New(_, args) =>
+      for a in args {
+        match a {
+          FuncExpr(_) => ()
+          other => ts2683_walk_expr(issues, other, in_plain, owner)
+        }
+      }
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      ts2683_walk_expr(issues, callee, in_plain, owner)
+      for a in args {
+        match a {
+          FuncExpr(_) => ()
+          other => ts2683_walk_expr(issues, other, in_plain, owner)
+        }
+      }
+    }
+    MethodCall(recv, _, args) => {
+      ts2683_walk_expr(issues, recv, in_plain, owner)
+      for a in args {
+        match a {
+          FuncExpr(_) => ()
+          other => ts2683_walk_expr(issues, other, in_plain, owner)
+        }
+      }
+    }
+    ArrayLit(items) =>
+      for it in items {
+        ts2683_walk_expr(issues, it, in_plain, owner)
+      }
+    TemplateLiteral(_, exprs) =>
+      for ex in exprs {
+        ts2683_walk_expr(issues, ex, in_plain, owner)
+      }
+    AssignExpr(_, v) =>
+      match v {
+        FuncExpr(_) => ()
+        other => ts2683_walk_expr(issues, other, in_plain, owner)
+      }
+    UnaryOp(_, a)
+    | PropAccess(a, _)
+    | Spread(a)
+    | As(a, _)
+    | Satisfies(a, _)
+    | NonNull(a)
+    | OptionalChain(a)
+    | Await(a)
+    | TypeArgs(_, a) => ts2683_walk_expr(issues, a, in_plain, owner)
+    Yield(opt) =>
+      match opt {
+        Some(a) => ts2683_walk_expr(issues, a, in_plain, owner)
+        None => ()
+      }
+    _ => ()
+  }
+}
+
+///|
+fn ts2683_walk_stmts(
+  issues : Array[ExprIssue],
+  stmts : Array[@ast.TsStmt],
+  in_plain : Bool,
+  owner : String,
+) -> Unit {
+  for st in stmts {
+    match st {
+      Expr(e) | Return(Some(e)) | Throw(e) =>
+        ts2683_walk_expr(issues, e, in_plain, owner)
+      // An ANNOTATED binding contextually types a function-expression
+      // initializer (its declared type may carry a `this` parameter) —
+      // skip those; unannotated initializers keep the implicit-any
+      // verdict.
+      Var(_, ty, init) | Let(_, ty, init) | Const(_, ty, init) =>
+        match init {
+          FuncExpr(_) =>
+            if !is_checkable(ty) {
+              ts2683_walk_expr(issues, init, in_plain, owner)
+            }
+          _ => ts2683_walk_expr(issues, init, in_plain, owner)
+        }
+      Assign(_, e) =>
+        match e {
+          FuncExpr(_) => ()
+          other => ts2683_walk_expr(issues, other, in_plain, owner)
+        }
+      PropAssign(r, _, v) => {
+        ts2683_walk_expr(issues, r, in_plain, owner)
+        match v {
+          FuncExpr(_) => ()
+          other => ts2683_walk_expr(issues, other, in_plain, owner)
+        }
+      }
+      IndexAssign(r, i, v) => {
+        ts2683_walk_expr(issues, r, in_plain, owner)
+        ts2683_walk_expr(issues, i, in_plain, owner)
+        match v {
+          FuncExpr(_) => ()
+          other => ts2683_walk_expr(issues, other, in_plain, owner)
+        }
+      }
+      If(c, a, b) => {
+        ts2683_walk_expr(issues, c, in_plain, owner)
+        ts2683_walk_stmts(issues, a.stmts, in_plain, owner)
+        match b {
+          Some(blk) => ts2683_walk_stmts(issues, blk.stmts, in_plain, owner)
+          None => ()
+        }
+      }
+      While(c, b) | DoWhile(c, b) => {
+        ts2683_walk_expr(issues, c, in_plain, owner)
+        ts2683_walk_stmts(issues, b.stmts, in_plain, owner)
+      }
+      For(_, _, _, b)
+      | ForOf(_, _, _, _, b)
+      | ForAwaitOf(_, _, _, _, b)
+      | ForIn(_, _, _, _, b)
+      | With(_, b) => ts2683_walk_stmts(issues, b.stmts, in_plain, owner)
+      Try(a, _, c, f4) => {
+        ts2683_walk_stmts(issues, a.stmts, in_plain, owner)
+        match c {
+          Some(blk) => ts2683_walk_stmts(issues, blk.stmts, in_plain, owner)
+          None => ()
+        }
+        match f4 {
+          Some(blk) => ts2683_walk_stmts(issues, blk.stmts, in_plain, owner)
+          None => ()
+        }
+      }
+      Switch(d, cases) => {
+        ts2683_walk_expr(issues, d, in_plain, owner)
+        for cse in cases {
+          ts2683_walk_stmts(issues, cse.body.stmts, in_plain, owner)
+        }
+      }
+      Block(b) => ts2683_walk_stmts(issues, b.stmts, in_plain, owner)
+      _ => ()
+    }
+  }
+}
+
+///|
 fn check_this_in_computed_keys(
   module_ : @ast.TsModule,
   resolver : Resolver,
@@ -24443,6 +24753,13 @@ fn check_module_function_bodies_layered(
   for issue in check_this_in_computed_keys(module_, resolver) {
     all.push(issue)
   }
+  // TS2683: implicit-any `this` in plain functions (permissive path
+  // only — strict unit-test snippets use bare functions freely).
+  if permissive {
+    for issue in check_implicit_any_this(module_, outer_modules.length() > 0) {
+      all.push(issue)
+    }
+  }
   for issue in check_reserved_class_names(module_) {
     all.push(issue)
   }
@@ -24788,7 +25105,7 @@ fn check_module_function_bodies_layered(
       }
       // Marker, not an error: the @noImplicitOverride directive flag,
       // consumed by the override-modifier checks.
-      if gm == "<ts-suppression-present>" {
+      if gm == "<ts-suppression-present>" || gm == "<noimplicitthis-off>" {
         continue
       }
       if gm == "<noimplicitoverride-on>" {
