@@ -14268,3 +14268,61 @@ test "expr_check: accessor arity, member modifiers, exponents, super keys (batch
     0,
   )
 }
+
+///|
+test "expr_check: ASI namespace/declare, for-of TS2488, lib-global TS2403 (batch BJ)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2454 via ASI: `namespace` / `module` / `declare` followed by a
+  // newline are identifier references, not declaration heads
+  // (asiPreventsParsingAsNamespace01/02, ...AmbientExternalModule01).
+  assert_true(
+    issues("var namespace: number;\nvar n: string;\nnamespace\nn\n{ }") > 0,
+  )
+  assert_true(
+    issues(
+      "var declare: number;\nvar module: string;\ndeclare\nmodule\n\"my external module\"\n{ }",
+    ) >
+    0,
+  )
+  // Same-line namespace / module declarations stay legal.
+  @test.assert_eq(issues("namespace M { export var x = 1; }"), 0)
+  @test.assert_eq(issues("declare module \"foo\" { export var x: number; }"), 0)
+  // TS2488: non-iterable for-of sources — a union with a non-iterable
+  // primitive member, a bare numeric literal, an array-destructuring
+  // pattern over primitive elements, and an OPTIONAL `[Symbol.iterator]`
+  // member (ES5For-ofTypeCheck7/12, ES5For-of26, for-of29).
+  assert_true(
+    issues("declare var u: string | number;\nfor (var v of u) { }") > 0,
+  )
+  assert_true(issues("for (const v of 0) { }") > 0)
+  assert_true(issues("for (var [a = 0, b = 1] of [2, 3]) { }") > 0)
+  assert_true(
+    issues(
+      "declare var it: { [Symbol.iterator]?(): Iterator<string> };\nfor (var v of it) { }",
+    ) >
+    0,
+  )
+  // Iterable sources stay legal: arrays, strings, arrays-of-arrays under
+  // a pattern, and a REQUIRED `[Symbol.iterator]` member.
+  @test.assert_eq(
+    issues(
+      "declare var xs: number[];\nfor (var v of xs) { }\nfor (var c of \"abc\") { }\nfor (var [a, b] of [[1, 2]]) { }",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "declare var it: { [Symbol.iterator](): Iterator<string> };\nfor (var v of it) { }",
+    ),
+    0,
+  )
+  // TS2403: a script-level `var` redeclaring a lib global needs the
+  // matching constructor-interface annotation (ES5SymbolProperty1 vs 3/4).
+  assert_true(issues("var Symbol: any;") > 0)
+  assert_true(issues("var Symbol: { iterator: string };") > 0)
+  @test.assert_eq(issues("var Symbol: SymbolConstructor;"), 0)
+  // Module files declare a fresh local binding — no TS2403.
+  @test.assert_eq(issues("var Symbol: any;\nexport { };"), 0)
+}

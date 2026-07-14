@@ -1031,7 +1031,7 @@ v7.0.2). Truth comes from vendored name manifests
 variant is NOTRUN, and the TS6-era deprecated-compiler-option
 diagnostics (TS5107/TS5101) were removed from the checker accordingly.
 
-State: whole-corpus **TP 2266 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 468 /
+State: whole-corpus **TP 2278 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 456 /
 NOTRUN 14** via `scripts/checker_conformance_oracle.sh --max-fp 0
 --max-legal-parsefail 3`.
 
@@ -1125,6 +1125,32 @@ clusters from the general miss pool:
   strada raises TS2466 for `this` in an object-literal computed key
   inside a typed constructor arrow, which our typed-context model
   deliberately treats as legal.
+Batch BJ (+12 TP, TP 2278 / MISS 456) took the TS2454/TS2488/TS2403
+type clusters:
+- ASI vs declaration heads: `namespace` / `module` head a declaration
+  only when the NAME sits on the same line (`is_namespace_decl_start`
+  rejects a newline-separated follower), and a statement-level `declare`
+  with a line break after it is a plain identifier reference (TS's
+  modifier ASI rule). `namespace\nn\n{}` is then three statements whose
+  reads hit the existing TS2454 unassigned tracking
+  (asiPreventsParsingAsNamespace01/02,
+  asiPreventsParsingAsAmbientExternalModule01).
+- TS2488 beyond class instances (`check_forof_non_iterable`): a for-of
+  source that is a non-iterable primitive (`for (const v of 0)`), a
+  union with a non-iterable primitive member (`string | number`), or an
+  object type whose `[Symbol.iterator]` member is OPTIONAL; plus an
+  array-destructuring pattern over a primitive element type
+  (`for (var [a = 0] of [2, 3])`, syntactic array-literal sources only).
+  The optional-iterator case rides a new parser encoding: STANDARD
+  well-known `[Symbol.x]` keys in object-type literals parse as `@@x`
+  members instead of degrading the whole literal to `any`
+  (user-augmented `Symbol.foo` keys keep the legacy fallback —
+  symbolProperty61 FP'd until restricted).
+- TS2403 vs lib declarations (`check_lib_global_redeclaration`): a
+  script-level initializer-less `var` redeclaring a runtime global
+  (`var Symbol: any` / `{ iterator: string }`) must carry the matching
+  `*Constructor` interface annotation; module files and `typeof`
+  annotations abstain (ES5SymbolProperty3/4/7 vs ES5SymbolProperty1).
 Remaining TS7-only clusters (documented, unattempted): nested
 class-expression computed keys (the parser lowers class expressions to
 IIFEs, erasing the member structure), TS2339 Corsa behavior changes. (Final TS6 state for reference: TP 2669 /

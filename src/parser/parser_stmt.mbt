@@ -17,12 +17,20 @@ fn Parser::is_namespace_decl_start(self : Parser) -> Bool {
       match name {
         "global" => self.peek_at(1).kind == LBrace
         "namespace" | "module" =>
-          match self.peek_at(1).kind {
-            Ident(_) | Str(_) | LBrace => true
-            // Primitive type keywords are legal namespace names
-            // (`namespace number {}` — parserModuleDeclaration6/7).
-            NumberType | StringType | BooleanType | IntType => true
-            _ => false
+          // ASI: TS only treats `namespace` / `module` as a declaration
+          // keyword when the name follows on the SAME line
+          // (asiPreventsParsingAsNamespace01/02). A newline makes it a
+          // plain identifier reference.
+          if self.peek_at(1).has_newline_before {
+            false
+          } else {
+            match self.peek_at(1).kind {
+              Ident(_) | Str(_) | LBrace => true
+              // Primitive type keywords are legal namespace names
+              // (`namespace number {}` — parserModuleDeclaration6/7).
+              NumberType | StringType | BooleanType | IntType => true
+              _ => false
+            }
           }
         _ => false
       }

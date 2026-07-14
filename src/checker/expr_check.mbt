@@ -14290,6 +14290,49 @@ fn check_iterable_class_protocol(
 }
 
 ///|
+/// A type that provably has no `[Symbol.iterator]()`: the non-iterable
+/// primitives. `string` is iterable (chars), arrays / tuples are, and
+/// anything named / generic / `any` could be — only these are safe calls.
+fn is_non_iterable_primitive(t : @ast.TsType) -> Bool {
+  match t {
+    Number | Boolean | Symbol | BigInt => true
+    NumberLiteral(_) | BooleanLiteral(_) | BigIntLiteral(_) => true
+    _ => false
+  }
+}
+
+///|
+/// TS2488 for provably non-iterable `for-of` sources beyond class
+/// instances: a non-iterable primitive (`for (const v of 0)` —
+/// ES5For-ofTypeCheck12), a union with a non-iterable primitive member
+/// (`string | number` — ES5For-ofTypeCheck7/9), and an object type whose
+/// `[Symbol.iterator]` member is optional and may thus be absent
+/// (for-of29).
+fn check_forof_non_iterable(ctx : CheckCtx, iter_ty : @ast.TsType) -> Unit {
+  let msg = "type `\{type_display(iter_ty)}` must have a `[Symbol.iterator]()` method that returns an iterator"
+  match ctx.resolver.unwrap(iter_ty) {
+    Union(ms) => {
+      let mut bad = false
+      for m in ms {
+        if is_non_iterable_primitive(ctx.resolver.unwrap(m)) {
+          bad = true
+        }
+      }
+      if bad {
+        record(ctx, "for-of iterable", msg)
+      }
+    }
+    Object(fields) =>
+      for f in fields {
+        if f.0 is Literal("@@iterator") && type_accepts_undefined(f.1) {
+          record(ctx, "for-of iterable", msg)
+        }
+      }
+    t => if is_non_iterable_primitive(t) { record(ctx, "for-of iterable", msg) }
+  }
+}
+
+///|
 /// TS2339 for object destructuring from a syntactic object literal: a
 /// pattern property with no default whose key is provably absent from the
 /// literal (`var { x } = {}`, `({ x } = {})`). A defaulted property is
@@ -14745,6 +14788,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // method returning an iterator (extracted; also used for array
       // spreads and assignment-form destructuring).
       check_iterable_class_protocol(ctx, iter_ty, "for-of iterable")
+      check_forof_non_iterable(ctx, iter_ty)
       let inferred_elem = for_of_element_type(ctx.resolver, iter_ty)
       let elem_ty = if is_checkable(declared) {
         // Validate the declared annotation against the actual element type.
@@ -14762,6 +14806,20 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         declared
       } else {
         inferred_elem
+      }
+      // TS2488 on the PATTERN: array-destructuring an element that is a
+      // non-iterable primitive (`for (var [a = 0, b = 1] of [2, 3])` —
+      // the elements are `number`s; ES5For-of26/28). Restricted to a
+      // syntactic array-literal source so the element type is exact.
+      if binding is @ast.TsBinding::Array(_) && iter is ArrayLit(_) {
+        let ew = ctx.resolver.unwrap(widen_literal(elem_ty))
+        if is_non_iterable_primitive(ew) {
+          record(
+            ctx,
+            "for-of pattern",
+            "type `\{type_display(ew)}` must have a `[Symbol.iterator]()` method that returns an iterator",
+          )
+        }
       }
       let pre = env.full_snapshot()
       // TS2454: same reasoning as for-in — the loop variable is assigned
@@ -24278,6 +24336,82 @@ fn check_var_redeclaration_types(
 }
 
 ///|
+/// The lib interface a runtime-global's `var` declaration must carry to
+/// merge cleanly (`var Symbol: SymbolConstructor`). Only names with a
+/// dedicated `*Constructor` interface participate — `Math` / `JSON` /
+/// `Reflect` have namespace-shaped types we don't model.
+fn lib_global_ctor_type_name(name : String) -> String? {
+  match name {
+    "Symbol" => Some("SymbolConstructor")
+    "Object" => Some("ObjectConstructor")
+    "Function" => Some("FunctionConstructor")
+    "Array" => Some("ArrayConstructor")
+    "String" => Some("StringConstructor")
+    "Number" => Some("NumberConstructor")
+    "Boolean" => Some("BooleanConstructor")
+    "BigInt" => Some("BigIntConstructor")
+    "Date" => Some("DateConstructor")
+    "RegExp" => Some("RegExpConstructor")
+    "Error" => Some("ErrorConstructor")
+    "Promise" => Some("PromiseConstructor")
+    "Proxy" => Some("ProxyConstructor")
+    "Map" => Some("MapConstructor")
+    "Set" => Some("SetConstructor")
+    "WeakMap" => Some("WeakMapConstructor")
+    "WeakSet" => Some("WeakSetConstructor")
+    _ => None
+  }
+}
+
+///|
+/// TS2403 against the LIB declaration: a script-level initializer-less
+/// `var` that redeclares a runtime-provided global merges with the lib's
+/// declaration, so its annotation must be the matching constructor
+/// interface (`var Symbol: SymbolConstructor` is legal —
+/// ES5SymbolProperty1 — while `var Symbol: any` / `{ iterator: string }`
+/// is TS2403 — ES5SymbolProperty3/4/7). Module files (import / export
+/// syntax) declare a fresh module-local binding instead, so they abstain,
+/// as do `typeof` annotations we can't compare.
+fn check_lib_global_redeclaration(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  let mut has_module_syntax = module_.imports.length() > 0
+  for gm in module_.grammar_misuses {
+    if gm == "<module-syntax>" ||
+      gm.has_prefix("<export-value>") ||
+      gm.has_prefix("<export-default>") ||
+      gm.has_prefix("<export-eq>") {
+      has_module_syntax = true
+    }
+  }
+  if has_module_syntax {
+    return issues
+  }
+  for stmt in module_.top_level_stmts {
+    match stmt {
+      Var(@ast.TsBinding::Ident(n), ty, Var("__ts_no_init__")) =>
+        match lib_global_ctor_type_name(n) {
+          Some(expected) => {
+            let ok = match ty {
+              Named(t) => t == expected
+              TypeOf(_) => true
+              _ => false
+            }
+            if !ok {
+              issues.push({
+                path: "var \{n}",
+                message: "subsequent variable declaration must have the same type as the lib declaration (`\{expected}`)",
+              })
+            }
+          }
+          None => ()
+        }
+      _ => ()
+    }
+  }
+  issues
+}
+
+///|
 fn check_duplicate_index_signatures(
   module_ : @ast.TsModule,
 ) -> Array[ExprIssue] {
@@ -24782,6 +24916,10 @@ fn check_module_function_bodies_layered(
       all.push(issue)
     }
     for issue in check_unresolved_signature_type_refs(module_) {
+      all.push(issue)
+    }
+    // TS2403 for lib-global `var` redeclarations (script scope only).
+    for issue in check_lib_global_redeclaration(module_) {
       all.push(issue)
     }
   }

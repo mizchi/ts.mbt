@@ -3330,10 +3330,13 @@ fn Parser::parse_module_with_seeded_const_values_internal(
         }
       }
     } else if self.check(Declare) &&
-      !(self.peek_at(1).kind is Template(_, _, _)) {
+      !(self.peek_at(1).kind is Template(_, _, _)) &&
+      !self.peek_at(1).has_newline_before {
       // (`declare `template`` is a tagged-template CALL of a function
       // named `declare`, not an ambient declaration —
-      // taggedTemplateStringsWithTagNamedDeclare.)
+      // taggedTemplateStringsWithTagNamedDeclare. A newline right after
+      // `declare` triggers ASI, so it is a plain identifier reference —
+      // asiPreventsParsingAsAmbientExternalModule01.)
       let _ = self.advance() // consume 'declare'
       // TS1038: a `declare` modifier inside an already-ambient context
       // (`declare namespace M { declare function F(); }`).

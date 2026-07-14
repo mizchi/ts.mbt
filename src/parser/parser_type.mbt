@@ -538,6 +538,33 @@ fn Parser::try_parse_simple_object_type(self : Parser) -> @ast.TsType? {
 }
 
 ///|
+/// The standard well-known symbols of `SymbolConstructor`. Mirrors the
+/// checker's `is_well_known_symbol_name`; the parser needs its own copy
+/// (package boundary) to decide which `[Symbol.x]` type-literal keys are
+/// safe to encode as `@@x` members.
+fn is_standard_well_known_symbol(name : String) -> Bool {
+  match name {
+    "iterator"
+    | "asyncIterator"
+    | "hasInstance"
+    | "isConcatSpreadable"
+    | "match"
+    | "matchAll"
+    | "replace"
+    | "search"
+    | "species"
+    | "split"
+    | "toPrimitive"
+    | "toStringTag"
+    | "unscopables"
+    | "dispose"
+    | "asyncDispose"
+    | "metadata" => true
+    _ => false
+  }
+}
+
+///|
 /// Parse an object type literal that may include method signatures
 /// (`m(x): T`), call signatures (`(x): T`), construct signatures
 /// (`new (x): T`), index signatures (`[k: K]: V`), and ordinary
@@ -594,46 +621,68 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
           // mangle-safety relies on). Anything that isn't the canonical
           // `[ident: Type]: Type` shape (computed keys, etc.) falls back.
           let _ = self.advance()
-          let is_index_sig = match self.peek().kind {
-            Ident(_) => self.peek_at(1).kind == Colon
-            _ => false
+          // Well-known symbol member key (`[Symbol.iterator]?(): T`):
+          // encode with the toolchain's `@@name` convention so the
+          // checker can reason about the iteration protocol (for-of29).
+          // Only the STANDARD well-known symbols participate — a
+          // user-augmented `Symbol.foo` (symbolProperty61) keeps the
+          // legacy fall-back so we never invent a required member the
+          // checker can't match structurally.
+          let well_known_sym : String? = match
+            (self.peek().kind, self.peek_at(1).kind, self.peek_at(2).kind) {
+            (Ident("Symbol"), Dot, Ident(sym)) if self.peek_at(3).kind ==
+              RBracket &&
+              is_standard_well_known_symbol(sym) => Some(sym)
+            _ => None
           }
-          if !is_index_sig {
-            // TS2304: a computed key in a *type* literal (`{ [e]: number }`,
-            // `{ [e](): T }`) references the value namespace. Record the
-            // bare-identifier shape so the checker can flag a provably
-            // undeclared name. Dotted keys (`[Symbol.iterator]`) don't match
-            // the single-token shape, and function bodies are skipped (the
-            // name may be a local we can't resolve at module level).
-            match self.peek().kind {
-              Ident(key) if self.peek_at(1).kind == RBracket &&
-                !self.in_function =>
-                self.grammar_misuses.push("<computed-type-key>" + key)
-              _ => ()
-            }
-            self.pos = saved_pos
-            return None
-          }
-          let _ = self.advance() // index name
-          let _ = self.expect(Colon)
-          let key_type = self.parse_type()
-          let _ = self.expect(RBracket)
-          let _ = self.match_(Question)
-          // Consume the value type to advance the cursor, but record the
-          // signature with an `Any` value. Keeping the index signature
-          // (key typed `String_` / `Number`) preserves the "any key"
-          // meaning the mangle-safety and TS2454 passes need; widening
-          // the value to `Any` keeps us from driving value-assignability
-          // checks off an anonymous index signature, where our checker's
-          // object-literal getter modelling (`get x()` rendered as
-          // `() => T`) would otherwise produce spurious mismatches.
-          if self.check(Colon) {
+          if well_known_sym is Some(sym) {
             let _ = self.advance()
-            let _ = self.parse_type()
+            let _ = self.advance()
+            let _ = self.advance()
+            let _ = self.advance()
+            "@@" + sym
+          } else {
+            let is_index_sig = match self.peek().kind {
+              Ident(_) => self.peek_at(1).kind == Colon
+              _ => false
+            }
+            if !is_index_sig {
+              // TS2304: a computed key in a *type* literal (`{ [e]: number }`,
+              // `{ [e](): T }`) references the value namespace. Record the
+              // bare-identifier shape so the checker can flag a provably
+              // undeclared name. Dotted keys (`[Symbol.iterator]`) don't match
+              // the single-token shape, and function bodies are skipped (the
+              // name may be a local we can't resolve at module level).
+              match self.peek().kind {
+                Ident(key) if self.peek_at(1).kind == RBracket &&
+                  !self.in_function =>
+                  self.grammar_misuses.push("<computed-type-key>" + key)
+                _ => ()
+              }
+              self.pos = saved_pos
+              return None
+            }
+            let _ = self.advance() // index name
+            let _ = self.expect(Colon)
+            let key_type = self.parse_type()
+            let _ = self.expect(RBracket)
+            let _ = self.match_(Question)
+            // Consume the value type to advance the cursor, but record the
+            // signature with an `Any` value. Keeping the index signature
+            // (key typed `String_` / `Number`) preserves the "any key"
+            // meaning the mangle-safety and TS2454 passes need; widening
+            // the value to `Any` keeps us from driving value-assignability
+            // checks off an anonymous index signature, where our checker's
+            // object-literal getter modelling (`get x()` rendered as
+            // `() => T`) would otherwise produce spurious mismatches.
+            if self.check(Colon) {
+              let _ = self.advance()
+              let _ = self.parse_type()
+            }
+            fields.push((key_type, @ast.TsType::Any))
+            let _ = self.match_(Semicolon) || self.match_(Comma)
+            continue
           }
-          fields.push((key_type, @ast.TsType::Any))
-          let _ = self.match_(Semicolon) || self.match_(Comma)
-          continue
         }
         Ident(n) => {
           let _ = self.advance()
