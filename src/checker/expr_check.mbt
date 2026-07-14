@@ -1941,6 +1941,17 @@ fn Resolver::lookup_field_core(
           | ("SharedArrayBuffer", "byteLength")
           | ("DataView", "byteLength")
           | ("DataView", "byteOffset") => return Some(@ast.TsType::Number)
+          ("ArrayBuffer", "maxByteLength")
+          | ("SharedArrayBuffer", "maxByteLength") =>
+            return Some(@ast.TsType::Number)
+          ("ArrayBuffer", "resizable")
+          | ("ArrayBuffer", "detached")
+          | ("SharedArrayBuffer", "growable") =>
+            return Some(@ast.TsType::Boolean)
+          ("ArrayBuffer", "resize") | ("SharedArrayBuffer", "grow") =>
+            return Some(
+              @ast.TsType::Func([@ast.TsType::Number], @ast.TsType::Void),
+            )
           ("ArrayBuffer", "slice") | ("SharedArrayBuffer", "slice") =>
             return Some(
               @ast.TsType::Func(
@@ -2834,7 +2845,7 @@ fn error_prototype_member(field : String) -> @ast.TsType? {
 /// module-declared interface or class of the same name merges with (or
 /// shadows) the lib surface, so those abstain.
 fn lib_member_surface_complete(resolver : Resolver, n : String) -> Bool {
-  (n == "Error" || n == "Date") &&
+  (n == "Error" || n == "Date" || n == "SharedArrayBuffer") &&
   resolver.interfaces.get(n) is None &&
   resolver.classes.get(n) is None
 }
@@ -6237,6 +6248,14 @@ fn infer_expr(
         None => {
           for a in args {
             let _ = infer_expr(env, resolver, a)
+          }
+          // A lib `SharedArrayBuffer` instance keeps its Named type so the
+          // fully-table-modeled member surface applies (`foge.length` —
+          // useSharedArrayBuffer6).
+          if class_name == "SharedArrayBuffer" &&
+            resolver.classes.get(class_name) is None &&
+            resolver.interfaces.get(class_name) is None {
+            return @ast.TsType::Named("SharedArrayBuffer")
           }
           // Lib `Map` with a uniform entry array infers `Map<K, V>` from
           // the literal-widened first pair, so downstream iteration /
@@ -12591,9 +12610,71 @@ fn bind_array_pattern(
         Array(t) => @ast.TsType::Array(t)
         _ => @ast.TsType::Any
       }
+      check_object_pattern_over_array(ctx, rest_binding, rest_ty)
       bind_pattern(env, ctx, rest_binding, rest_ty)
     }
     None => ()
+  }
+}
+
+///|
+/// TS2339 for an OBJECT pattern destructuring an array / tuple (a rest
+/// element's object sub-pattern: `var [...{ 0: a, b }] = [0, 1]` — `b`
+/// does not exist on `number[]`; restElementWithBindingPattern2 /
+/// restElementWithAssignmentPattern4). Numeric keys and the array surface
+/// (`length`, methods) stay legal.
+fn check_object_pattern_over_array(
+  ctx : CheckCtx,
+  binding : @ast.TsBinding,
+  source : @ast.TsType,
+) -> Unit {
+  fn all_digits(s : String) -> Bool {
+    if s.length() == 0 {
+      return false
+    }
+    for c in s {
+      if c < '0' || c > '9' {
+        return false
+      }
+    }
+    true
+  }
+  fn array_surface_member(name : String) -> Bool {
+    if array_prototype_member(@ast.TsType::Any, name) is Some(_) {
+      return true
+    }
+    match name {
+      // Names the modeled surface may lack but real arrays have.
+      "constructor"
+      | "valueOf"
+      | "toLocaleString"
+      | "at"
+      | "copyWithin"
+      | "reduceRight"
+      | "toReversed"
+      | "toSorted"
+      | "toSpliced"
+      | "with" => true
+      _ => false
+    }
+  }
+  match binding {
+    @ast.TsBinding::Object(ob) =>
+      if ctx.resolver.unwrap(source) is (Array(_) | Tuple(_)) {
+        for prop in ob.props {
+          if !prop.key.has_prefix("<") &&
+            prop.key_expr is None &&
+            !all_digits(prop.key) &&
+            !array_surface_member(prop.key) {
+            record(
+              ctx,
+              "destructuring `\{prop.key}`",
+              "property `\{prop.key}` does not exist on type `\{type_display(source)}`",
+            )
+          }
+        }
+      }
+    _ => ()
   }
 }
 
@@ -14372,15 +14453,35 @@ fn check_object_pattern_from_literal(
   entries : Array[(String, @ast.TsExpr)],
 ) -> Unit {
   let keys : Map[String, Bool] = {}
-  for e in entries {
-    if e.0.has_prefix("@@spread") || e.0.has_prefix("<") {
-      return
+  // A spread of a syntactic object LITERAL keeps the key set knowable —
+  // fold its keys in recursively (`{ ...{ a: 0 } , x: 0 }` provides `a`
+  // and `x`; destructuringSpread). Any other spread source abstains.
+  fn collect(es : Array[(String, @ast.TsExpr)]) -> Bool {
+    for e in es {
+      if e.0.has_prefix("@@spread") {
+        match e.1 {
+          ObjectLit(inner) => if !collect(inner) { return false }
+          _ => return false
+        }
+        continue
+      }
+      if e.0.has_prefix("@@get:") || e.0.has_prefix("@@set:") {
+        keys[e.0.substring(start=6)] = true
+        continue
+      }
+      if e.0.has_prefix("<") || e.0.has_prefix("@@") {
+        return false
+      }
+      match e.1 {
+        ComputedProp(_, _) => return false
+        _ => ()
+      }
+      keys[e.0] = true
     }
-    match e.1 {
-      ComputedProp(_, _) => return
-      _ => ()
-    }
-    keys[e.0] = true
+    true
+  }
+  if !collect(entries) {
+    return
   }
   for prop in ob.props {
     if prop.default is None &&
@@ -14846,6 +14947,37 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
             "for-of pattern",
             "type `\{type_display(ew)}` must have a `[Symbol.iterator]()` method that returns an iterator",
           )
+        }
+      }
+      // TS2339 on the PATTERN: object-destructuring a primitive element
+      // (`for (var {x: a = 0} of [2, 3])` — `x` does not exist on `number`;
+      // ES5For-of27). Same syntactic array-literal restriction; prototype
+      // members (`toString`, `valueOf`, …) stay legal.
+      if binding is @ast.TsBinding::Object(ob) && iter is ArrayLit(_) {
+        let ew = ctx.resolver.unwrap(widen_literal(elem_ty))
+        let proto_member : (String) -> Bool = match ew {
+          Number =>
+            fn(f) {
+              number_prototype_member(f) is Some(_) || f == "constructor"
+            }
+          Boolean =>
+            fn(f) {
+              boolean_prototype_member(f) is Some(_) || f == "constructor"
+            }
+          _ => fn(_f) { true }
+        }
+        if ew is (Number | Boolean) {
+          for prop in ob.props {
+            if !prop.key.has_prefix("<") &&
+              prop.key_expr is None &&
+              !proto_member(prop.key) {
+              record(
+                ctx,
+                "for-of pattern",
+                "property `\{prop.key}` does not exist on type `\{type_display(ew)}`",
+              )
+            }
+          }
         }
       }
       let pre = env.full_snapshot()
@@ -16867,7 +16999,7 @@ fn check_call_args_in_expr(
         // never iterable, so assignment-form array destructuring from one
         // always fails (iterableArrayPattern23/24). Computed keys could be
         // `[Symbol.iterator]`, so they silence the check.
-        @ast.TsBinding::Array(_) =>
+        @ast.TsBinding::Array(ab2) => {
           match v {
             ObjectLit(src_entries) =>
               if !src_entries
@@ -16881,6 +17013,34 @@ fn check_call_args_in_expr(
               }
             _ => ()
           }
+          // TS2339: an object sub-pattern under a rest element must draw
+          // its keys from the ARRAY surface
+          // (`[...{ 0: a = "", b }] = tuple` —
+          // restElementWithAssignmentPattern4).
+          match ab2.rest {
+            Some(rb) => {
+              let src = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, v))
+              let rest_ty : @ast.TsType? = match src {
+                Tuple(items) => {
+                  let remaining : Array[@ast.TsType] = []
+                  let mut j = ab2.items.length()
+                  while j < items.length() {
+                    remaining.push(items[j])
+                    j = j + 1
+                  }
+                  Some(@ast.TsType::Tuple(remaining))
+                }
+                Array(t) => Some(@ast.TsType::Array(t))
+                _ => None
+              }
+              match rest_ty {
+                Some(rt) => check_object_pattern_over_array(ctx, rb, rt)
+                None => ()
+              }
+            }
+            None => ()
+          }
+        }
         _ => ()
       }
       // TS2322: assignment-form array destructuring writes the source's

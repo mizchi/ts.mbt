@@ -14375,3 +14375,40 @@ test "expr_check: block-scoped hoisting, new<, apply arguments, binding keys (ba
   assert_true(issues("var v : void.x;") > 0)
   @test.assert_eq(issues("var v : void;"), 0)
 }
+
+///|
+test "expr_check: patterns over primitives/arrays, spread folding, SharedArrayBuffer (batch BL)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2339: object pattern over a primitive for-of element (ES5For-of27);
+  // prototype members stay legal.
+  assert_true(issues("for (var {x: a = 0, y: b = 1} of [2, 3]) { }") > 0)
+  @test.assert_eq(issues("for (var {toString: t} of [2, 3]) { }"), 0)
+  @test.assert_eq(issues("for (var {x: a} of [{ x: 1 }]) { }"), 0)
+  // TS2339: object sub-pattern under a rest element draws from the ARRAY
+  // surface (restElementWithBindingPattern2 / AssignmentPattern4).
+  assert_true(issues("var [...{0: a, b }] = [0, 1];") > 0)
+  assert_true(
+    issues(
+      "var a: string, b: number;\nvar tuple: [string, number] = [\"\", 1];\n[...{ 0: a = \"\", b }] = tuple;",
+    ) >
+    0,
+  )
+  @test.assert_eq(issues("var [...{ 0: a, length: n }] = [0, 1];"), 0)
+  // TS2339: spread of syntactic object literals keeps pattern keys knowable
+  // (destructuringSpread); provided keys stay legal.
+  assert_true(
+    issues("const { c, g } = { ...{ ...{ c: 0 }, d: 0 }, f: 0 };") > 0,
+  )
+  @test.assert_eq(issues("const { z, a, b } = { z: 0, ...{ a: 0, b: 0 } };"), 0)
+  // TS2339: the SharedArrayBuffer instance surface is table-modeled
+  // (useSharedArrayBuffer6); real members stay legal.
+  assert_true(issues("var sab = new SharedArrayBuffer(1024);\nsab.length;") > 0)
+  @test.assert_eq(
+    issues(
+      "var sab = new SharedArrayBuffer(8);\nvar n: number = sab.byteLength;\nvar s2 = sab.slice(0, 4);",
+    ),
+    0,
+  )
+}

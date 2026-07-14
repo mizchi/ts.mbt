@@ -1031,7 +1031,7 @@ v7.0.2). Truth comes from vendored name manifests
 variant is NOTRUN, and the TS6-era deprecated-compiler-option
 diagnostics (TS5107/TS5101) were removed from the checker accordingly.
 
-State: whole-corpus **TP 2289 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 445 /
+State: whole-corpus **TP 2296 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 438 /
 NOTRUN 14** via `scripts/checker_conformance_oracle.sh --max-fp 0
 --max-legal-parsefail 3`.
 
@@ -1170,6 +1170,24 @@ and call-modeling slices:
   `: alias` (`var { while } = …`, `var { "while" } = …` —
   objectBindingPatternKeywordIdentifiers01/03), and `void` cannot head
   a qualified type name (`var v: void.x` — parservoidInQualifiedName1).
+Batch BL (+7 TP, TP 2296 / MISS 438) worked the TS2339 cluster:
+- Object patterns over PRIMITIVE for-of elements flag their props
+  (`for (var {x: a = 0} of [2, 3])` — ES5For-of27/29; prototype members
+  like `toString` stay legal), mirroring BJ's array-pattern TS2488.
+- An object sub-pattern under a REST element draws its keys from the
+  array surface: non-numeric keys outside `array_prototype_member` (+ a
+  small always-legal extra set) flag on Array/Tuple sources, in both
+  declaration and assignment forms (restElementWithBindingPattern2,
+  restElementWithAssignmentPattern2/4).
+- The pattern-vs-object-literal key check (parser AND checker copies)
+  now folds spreads of syntactic object literals recursively instead of
+  abstaining (`const { g } = { ...{ ...{ c: 0 } } , f: 0 }` —
+  destructuringSpread); getter/setter entries provide their names.
+- `new SharedArrayBuffer(...)` keeps its Named type, the instance table
+  gained the ES2024 members (`growable` / `maxByteLength` / `grow`, and
+  ArrayBuffer's `resizable` / `detached` / `resize`), and the surface
+  registers as fully modeled so member misses are definite
+  (`sab.length` — useSharedArrayBuffer6).
 Documented dead ends from this round: YieldExpression10_es6 (an
 object-literal method's name in the backstop is indistinguishable from
 a legal self-referential named function expression property);
