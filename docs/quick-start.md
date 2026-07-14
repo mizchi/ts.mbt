@@ -178,9 +178,10 @@ pub fn build_app() -> @hono.Hono {
 ///|
 pub fn serve(app : @hono.Hono, port : Int) -> Unit {
   let opts = make_serve_options(app, port)
-  let _ = @node_server.serve(opts, fn(_info) {
-    println("listening on http://localhost:\{port}")
-  })
+  let _ = @node_server.serve(
+    opts,
+    Some(fn(_info) { println("listening on http://localhost:\{port}") }),
+  )
 
 }
 

@@ -360,12 +360,21 @@ fn collect_stmt_value_names(
       // The assignment form (`for (v of xs)` with no `let`/`var`/`const`)
       // declares nothing -- it *reads* an existing binding, so its name must
       // not enter the hoisting backstop (that would mask the TS2304 on an
-      // undeclared target).
-      if !(kind is @ast.TsForOfKind::Assign) {
+      // undeclared target). A `let` / `const` head is LOOP-scoped, so it
+      // must not suppress module-level reads either (`v; for (let v of …)`
+      // — for-of7); only a `var` head hoists.
+      if kind is @ast.TsForOfKind::Var {
         collect_binding_value_names(b, out)
       }
       collect_expr_value_names(e, out)
-      collect_block_value_names(body, out)
+      // For the assign form, a block-scoped declaration in the body cannot
+      // provide the head's binding (`for (v of xs) { let v; }` — for-of6),
+      // so only `var`s (which hoist past the block) enter the backstop.
+      if kind is @ast.TsForOfKind::Assign {
+        collect_block_var_names_only(body, out)
+      } else {
+        collect_block_value_names(body, out)
+      }
     }
     Switch(e, cases) => {
       collect_expr_value_names(e, out)
@@ -407,6 +416,24 @@ fn collect_block_value_names(
 ) -> Unit {
   for s in block.stmts {
     collect_stmt_value_names(s, out)
+  }
+}
+
+///|
+/// Hoisting-backstop walk over a block that keeps only `var` binding names
+/// (which hoist past the block) — direct `let` / `const` bindings are
+/// block-scoped and skipped. Initializer expressions and nested statements
+/// still contribute their names (nested callables introduce their own
+/// scopes, which the full walker already over-approximates).
+fn collect_block_var_names_only(
+  block : @ast.TsBlock,
+  out : Map[String, Bool],
+) -> Unit {
+  for s in block.stmts {
+    match s {
+      Let(_, _, init) | Const(_, _, init) => collect_expr_value_names(init, out)
+      _ => collect_stmt_value_names(s, out)
+    }
   }
 }
 
@@ -1914,6 +1941,17 @@ fn Resolver::lookup_field_core(
           | ("SharedArrayBuffer", "byteLength")
           | ("DataView", "byteLength")
           | ("DataView", "byteOffset") => return Some(@ast.TsType::Number)
+          ("ArrayBuffer", "maxByteLength")
+          | ("SharedArrayBuffer", "maxByteLength") =>
+            return Some(@ast.TsType::Number)
+          ("ArrayBuffer", "resizable")
+          | ("ArrayBuffer", "detached")
+          | ("SharedArrayBuffer", "growable") =>
+            return Some(@ast.TsType::Boolean)
+          ("ArrayBuffer", "resize") | ("SharedArrayBuffer", "grow") =>
+            return Some(
+              @ast.TsType::Func([@ast.TsType::Number], @ast.TsType::Void),
+            )
           ("ArrayBuffer", "slice") | ("SharedArrayBuffer", "slice") =>
             return Some(
               @ast.TsType::Func(
@@ -2807,7 +2845,7 @@ fn error_prototype_member(field : String) -> @ast.TsType? {
 /// module-declared interface or class of the same name merges with (or
 /// shadows) the lib surface, so those abstain.
 fn lib_member_surface_complete(resolver : Resolver, n : String) -> Bool {
-  (n == "Error" || n == "Date") &&
+  (n == "Error" || n == "Date" || n == "SharedArrayBuffer") &&
   resolver.interfaces.get(n) is None &&
   resolver.classes.get(n) is None
 }
@@ -6210,6 +6248,14 @@ fn infer_expr(
         None => {
           for a in args {
             let _ = infer_expr(env, resolver, a)
+          }
+          // A lib `SharedArrayBuffer` instance keeps its Named type so the
+          // fully-table-modeled member surface applies (`foge.length` —
+          // useSharedArrayBuffer6).
+          if class_name == "SharedArrayBuffer" &&
+            resolver.classes.get(class_name) is None &&
+            resolver.interfaces.get(class_name) is None {
+            return @ast.TsType::Named("SharedArrayBuffer")
           }
           // Lib `Map` with a uniform entry array infers `Map<K, V>` from
           // the literal-widened first pair, so downstream iteration /
@@ -12564,9 +12610,71 @@ fn bind_array_pattern(
         Array(t) => @ast.TsType::Array(t)
         _ => @ast.TsType::Any
       }
+      check_object_pattern_over_array(ctx, rest_binding, rest_ty)
       bind_pattern(env, ctx, rest_binding, rest_ty)
     }
     None => ()
+  }
+}
+
+///|
+/// TS2339 for an OBJECT pattern destructuring an array / tuple (a rest
+/// element's object sub-pattern: `var [...{ 0: a, b }] = [0, 1]` — `b`
+/// does not exist on `number[]`; restElementWithBindingPattern2 /
+/// restElementWithAssignmentPattern4). Numeric keys and the array surface
+/// (`length`, methods) stay legal.
+fn check_object_pattern_over_array(
+  ctx : CheckCtx,
+  binding : @ast.TsBinding,
+  source : @ast.TsType,
+) -> Unit {
+  fn all_digits(s : String) -> Bool {
+    if s.length() == 0 {
+      return false
+    }
+    for c in s {
+      if c < '0' || c > '9' {
+        return false
+      }
+    }
+    true
+  }
+  fn array_surface_member(name : String) -> Bool {
+    if array_prototype_member(@ast.TsType::Any, name) is Some(_) {
+      return true
+    }
+    match name {
+      // Names the modeled surface may lack but real arrays have.
+      "constructor"
+      | "valueOf"
+      | "toLocaleString"
+      | "at"
+      | "copyWithin"
+      | "reduceRight"
+      | "toReversed"
+      | "toSorted"
+      | "toSpliced"
+      | "with" => true
+      _ => false
+    }
+  }
+  match binding {
+    @ast.TsBinding::Object(ob) =>
+      if ctx.resolver.unwrap(source) is (Array(_) | Tuple(_)) {
+        for prop in ob.props {
+          if !prop.key.has_prefix("<") &&
+            prop.key_expr is None &&
+            !all_digits(prop.key) &&
+            !array_surface_member(prop.key) {
+            record(
+              ctx,
+              "destructuring `\{prop.key}`",
+              "property `\{prop.key}` does not exist on type `\{type_display(source)}`",
+            )
+          }
+        }
+      }
+    _ => ()
   }
 }
 
@@ -14290,6 +14398,49 @@ fn check_iterable_class_protocol(
 }
 
 ///|
+/// A type that provably has no `[Symbol.iterator]()`: the non-iterable
+/// primitives. `string` is iterable (chars), arrays / tuples are, and
+/// anything named / generic / `any` could be — only these are safe calls.
+fn is_non_iterable_primitive(t : @ast.TsType) -> Bool {
+  match t {
+    Number | Boolean | Symbol | BigInt => true
+    NumberLiteral(_) | BooleanLiteral(_) | BigIntLiteral(_) => true
+    _ => false
+  }
+}
+
+///|
+/// TS2488 for provably non-iterable `for-of` sources beyond class
+/// instances: a non-iterable primitive (`for (const v of 0)` —
+/// ES5For-ofTypeCheck12), a union with a non-iterable primitive member
+/// (`string | number` — ES5For-ofTypeCheck7/9), and an object type whose
+/// `[Symbol.iterator]` member is optional and may thus be absent
+/// (for-of29).
+fn check_forof_non_iterable(ctx : CheckCtx, iter_ty : @ast.TsType) -> Unit {
+  let msg = "type `\{type_display(iter_ty)}` must have a `[Symbol.iterator]()` method that returns an iterator"
+  match ctx.resolver.unwrap(iter_ty) {
+    Union(ms) => {
+      let mut bad = false
+      for m in ms {
+        if is_non_iterable_primitive(ctx.resolver.unwrap(m)) {
+          bad = true
+        }
+      }
+      if bad {
+        record(ctx, "for-of iterable", msg)
+      }
+    }
+    Object(fields) =>
+      for f in fields {
+        if f.0 is Literal("@@iterator") && type_accepts_undefined(f.1) {
+          record(ctx, "for-of iterable", msg)
+        }
+      }
+    t => if is_non_iterable_primitive(t) { record(ctx, "for-of iterable", msg) }
+  }
+}
+
+///|
 /// TS2339 for object destructuring from a syntactic object literal: a
 /// pattern property with no default whose key is provably absent from the
 /// literal (`var { x } = {}`, `({ x } = {})`). A defaulted property is
@@ -14302,15 +14453,35 @@ fn check_object_pattern_from_literal(
   entries : Array[(String, @ast.TsExpr)],
 ) -> Unit {
   let keys : Map[String, Bool] = {}
-  for e in entries {
-    if e.0.has_prefix("@@spread") || e.0.has_prefix("<") {
-      return
+  // A spread of a syntactic object LITERAL keeps the key set knowable —
+  // fold its keys in recursively (`{ ...{ a: 0 } , x: 0 }` provides `a`
+  // and `x`; destructuringSpread). Any other spread source abstains.
+  fn collect(es : Array[(String, @ast.TsExpr)]) -> Bool {
+    for e in es {
+      if e.0.has_prefix("@@spread") {
+        match e.1 {
+          ObjectLit(inner) => if !collect(inner) { return false }
+          _ => return false
+        }
+        continue
+      }
+      if e.0.has_prefix("@@get:") || e.0.has_prefix("@@set:") {
+        keys[e.0.substring(start=6)] = true
+        continue
+      }
+      if e.0.has_prefix("<") || e.0.has_prefix("@@") {
+        return false
+      }
+      match e.1 {
+        ComputedProp(_, _) => return false
+        _ => ()
+      }
+      keys[e.0] = true
     }
-    match e.1 {
-      ComputedProp(_, _) => return
-      _ => ()
-    }
-    keys[e.0] = true
+    true
+  }
+  if !collect(entries) {
+    return
   }
   for prop in ob.props {
     if prop.default is None &&
@@ -14745,6 +14916,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // method returning an iterator (extracted; also used for array
       // spreads and assignment-form destructuring).
       check_iterable_class_protocol(ctx, iter_ty, "for-of iterable")
+      check_forof_non_iterable(ctx, iter_ty)
       let inferred_elem = for_of_element_type(ctx.resolver, iter_ty)
       let elem_ty = if is_checkable(declared) {
         // Validate the declared annotation against the actual element type.
@@ -14762,6 +14934,51 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         declared
       } else {
         inferred_elem
+      }
+      // TS2488 on the PATTERN: array-destructuring an element that is a
+      // non-iterable primitive (`for (var [a = 0, b = 1] of [2, 3])` —
+      // the elements are `number`s; ES5For-of26/28). Restricted to a
+      // syntactic array-literal source so the element type is exact.
+      if binding is @ast.TsBinding::Array(_) && iter is ArrayLit(_) {
+        let ew = ctx.resolver.unwrap(widen_literal(elem_ty))
+        if is_non_iterable_primitive(ew) {
+          record(
+            ctx,
+            "for-of pattern",
+            "type `\{type_display(ew)}` must have a `[Symbol.iterator]()` method that returns an iterator",
+          )
+        }
+      }
+      // TS2339 on the PATTERN: object-destructuring a primitive element
+      // (`for (var {x: a = 0} of [2, 3])` — `x` does not exist on `number`;
+      // ES5For-of27). Same syntactic array-literal restriction; prototype
+      // members (`toString`, `valueOf`, …) stay legal.
+      if binding is @ast.TsBinding::Object(ob) && iter is ArrayLit(_) {
+        let ew = ctx.resolver.unwrap(widen_literal(elem_ty))
+        let proto_member : (String) -> Bool = match ew {
+          Number =>
+            fn(f) {
+              number_prototype_member(f) is Some(_) || f == "constructor"
+            }
+          Boolean =>
+            fn(f) {
+              boolean_prototype_member(f) is Some(_) || f == "constructor"
+            }
+          _ => fn(_f) { true }
+        }
+        if ew is (Number | Boolean) {
+          for prop in ob.props {
+            if !prop.key.has_prefix("<") &&
+              prop.key_expr is None &&
+              !proto_member(prop.key) {
+              record(
+                ctx,
+                "for-of pattern",
+                "property `\{prop.key}` does not exist on type `\{type_display(ew)}`",
+              )
+            }
+          }
+        }
       }
       let pre = env.full_snapshot()
       // TS2454: same reasoning as for-in — the loop variable is assigned
@@ -15507,6 +15724,20 @@ fn check_call_args_in_expr(
       check_private_name_access(ctx, meth)
       check_member_accessibility(env, ctx, receiver, meth)
       check_super_abstract_access(ctx, receiver, meth)
+      // TS2345 (strict bind/call/apply): `f.apply(x, arguments)` where `f`
+      // is a ZERO-parameter function — `IArguments` is never assignable to
+      // the empty parameter tuple `[]`
+      // (asyncArrowFunctionCapturesArguments_*). Functions with parameters
+      // abstain (their tuple shape needs full apply modeling).
+      if meth == "apply" && args.length() == 2 && args[1] is Var("arguments") {
+        match ctx.resolver.unwrap(infer_expr(env, ctx.resolver, receiver)) {
+          Func([], _) =>
+            record(
+              ctx, "call `apply`", "argument of type `IArguments` is not assignable to parameter of type `[]`",
+            )
+          _ => ()
+        }
+      }
       // Static-namespace dispatch: `Math.max(...)`, `JSON.stringify(...)`.
       // Recognised by the bare-identifier shape of the receiver. Also handle
       // a static method called through the class name (`A.s(args)`), whose
@@ -16768,7 +16999,7 @@ fn check_call_args_in_expr(
         // never iterable, so assignment-form array destructuring from one
         // always fails (iterableArrayPattern23/24). Computed keys could be
         // `[Symbol.iterator]`, so they silence the check.
-        @ast.TsBinding::Array(_) =>
+        @ast.TsBinding::Array(ab2) => {
           match v {
             ObjectLit(src_entries) =>
               if !src_entries
@@ -16782,6 +17013,34 @@ fn check_call_args_in_expr(
               }
             _ => ()
           }
+          // TS2339: an object sub-pattern under a rest element must draw
+          // its keys from the ARRAY surface
+          // (`[...{ 0: a = "", b }] = tuple` —
+          // restElementWithAssignmentPattern4).
+          match ab2.rest {
+            Some(rb) => {
+              let src = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, v))
+              let rest_ty : @ast.TsType? = match src {
+                Tuple(items) => {
+                  let remaining : Array[@ast.TsType] = []
+                  let mut j = ab2.items.length()
+                  while j < items.length() {
+                    remaining.push(items[j])
+                    j = j + 1
+                  }
+                  Some(@ast.TsType::Tuple(remaining))
+                }
+                Array(t) => Some(@ast.TsType::Array(t))
+                _ => None
+              }
+              match rest_ty {
+                Some(rt) => check_object_pattern_over_array(ctx, rb, rt)
+                None => ()
+              }
+            }
+            None => ()
+          }
+        }
         _ => ()
       }
       // TS2322: assignment-form array destructuring writes the source's
@@ -19115,6 +19374,894 @@ fn any_expr_uses_super_property(es : Array[@ast.TsExpr]) -> Bool {
 /// Compound statements (`if` / loops / `try` / blocks) before `super` are
 /// treated conservatively as "super may have run" so the check never produces
 /// a false positive — at the cost of not catching `this` buried inside them.
+/// TS2373 / TS2372: a parameter default may not reference the parameter
+/// itself, a parameter declared after it, or a name the function BODY
+/// declares (`function f6(n = m) { var m = 4; }`). References inside
+/// nested callables are exempt — their evaluation is deferred
+/// (`a = function () { return b; }` is legal —
+/// parameterInitializersForwardReferencing). Outer-scope declarations
+/// only matter when the body redeclares the name, so unknown names
+/// abstain unless the body declares them.
+fn check_param_forward_refs(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  fn default_ref_names(e : @ast.TsExpr, out : Array[String]) -> Unit {
+    match e {
+      Var(n) => out.push(n)
+      // Deferred-evaluation boundaries.
+      ArrowFunc(_, _, _, _) | FuncExpr(_) => ()
+      BinOp(_, a, b) | Seq(a, b) | IndexAccess(a, b) => {
+        default_ref_names(a, out)
+        default_ref_names(b, out)
+      }
+      Cond(c, t, f2) => {
+        default_ref_names(c, out)
+        default_ref_names(t, out)
+        default_ref_names(f2, out)
+      }
+      Call(callee, args) => {
+        out.push(callee)
+        for a in args {
+          default_ref_names(a, out)
+        }
+      }
+      CallExpr(callee, args) => {
+        default_ref_names(callee, out)
+        for a in args {
+          default_ref_names(a, out)
+        }
+      }
+      MethodCall(recv, _, args) => {
+        default_ref_names(recv, out)
+        for a in args {
+          default_ref_names(a, out)
+        }
+      }
+      ArrayLit(items) =>
+        for it in items {
+          default_ref_names(it, out)
+        }
+      ObjectLit(entries) =>
+        for en in entries {
+          default_ref_names(en.1, out)
+        }
+      TemplateLiteral(_, exprs) =>
+        for ex in exprs {
+          default_ref_names(ex, out)
+        }
+      UnaryOp(_, a) | PropAccess(a, _) | Spread(a) | OptionalChain(a) =>
+        default_ref_names(a, out)
+      // A class expression evaluates its heritage clause immediately
+      // (`{ [class extends C { … }.x]: b }` reads `C` —
+      // classWithStaticFieldInParameterBindingPattern.2).
+      NativeClassExpr(decl, _) => {
+        for bn in decl.base_names {
+          if bn != "<expr-base>" {
+            out.push(bn)
+          }
+        }
+        match decl.base_expr {
+          Some(be) => default_ref_names(be, out)
+          None => ()
+        }
+      }
+      _ => ()
+    }
+  }
+
+  // References evaluated by a binding PATTERN itself: computed keys and
+  // element defaults (`{ [k(1)]: x } = …` runs `k` at bind time).
+  fn binding_ref_names(b : @ast.TsBinding, out : Array[String]) -> Unit {
+    match b {
+      Ident(_) | Target(_) => ()
+      Array(ab) => {
+        for item in ab.items {
+          match item {
+            Some(el) => {
+              match el.default {
+                Some(d) => default_ref_names(d, out)
+                None => ()
+              }
+              binding_ref_names(el.binding, out)
+            }
+            None => ()
+          }
+        }
+        match ab.rest {
+          Some(r) => binding_ref_names(r, out)
+          None => ()
+        }
+      }
+      Object(ob) =>
+        for pr in ob.props {
+          match pr.key_expr {
+            Some(k) => default_ref_names(k, out)
+            None => ()
+          }
+          match pr.default {
+            Some(d) => default_ref_names(d, out)
+            None => ()
+          }
+          binding_ref_names(pr.binding, out)
+        }
+    }
+  }
+
+  fn binding_idents(b : @ast.TsBinding, out : Array[String]) -> Unit {
+    match b {
+      Ident(n) => out.push(n)
+      Array(ab) => {
+        for item in ab.items {
+          match item {
+            Some(el) => binding_idents(el.binding, out)
+            None => ()
+          }
+        }
+        match ab.rest {
+          Some(r) => binding_idents(r, out)
+          None => ()
+        }
+      }
+      Object(ob) => {
+        for pr in ob.props {
+          binding_idents(pr.binding, out)
+        }
+        match ob.rest {
+          Some(n) => out.push(n)
+          None => ()
+        }
+      }
+      Target(_) => ()
+    }
+  }
+
+  // `var` declarations hoist to function scope (walk every nested block);
+  // `let` / `const` count only at the body's top level. Nested callable
+  // bodies are separate scopes and never walked (they only appear inside
+  // expressions, which this statement walk does not descend into).
+  fn body_decl_names(
+    stmts : Array[@ast.TsStmt],
+    out : Array[String],
+    top : Bool,
+  ) -> Unit {
+    for st in stmts {
+      match st {
+        Var(b, _, _) => binding_idents(b, out)
+        Let(b, _, _) | Const(b, _, _) => if top { binding_idents(b, out) }
+        If(_, a, b2) => {
+          body_decl_names(a.stmts, out, false)
+          match b2 {
+            Some(blk) => body_decl_names(blk.stmts, out, false)
+            None => ()
+          }
+        }
+        While(_, b2)
+        | DoWhile(_, b2)
+        | With(_, b2)
+        | For(_, _, _, b2)
+        | ForOf(_, _, _, _, b2)
+        | ForAwaitOf(_, _, _, _, b2)
+        | ForIn(_, _, _, _, b2) => body_decl_names(b2.stmts, out, false)
+        Try(a, _, c, f2) => {
+          body_decl_names(a.stmts, out, false)
+          match c {
+            Some(blk) => body_decl_names(blk.stmts, out, false)
+            None => ()
+          }
+          match f2 {
+            Some(blk) => body_decl_names(blk.stmts, out, false)
+            None => ()
+          }
+        }
+        Switch(_, cases) =>
+          for c in cases {
+            body_decl_names(c.body.stmts, out, false)
+          }
+        Block(b2) => body_decl_names(b2.stmts, out, false)
+        _ => ()
+      }
+    }
+  }
+
+  fn check_one(
+    names : Array[String],
+    defaults : Array[@ast.TsExpr?],
+    body : @ast.TsBlock?,
+    owner : String,
+    bindings : Array[@ast.TsBinding?],
+  ) -> Unit {
+    let body_decls : Array[String] = []
+    match body {
+      Some(b) => body_decl_names(b.stmts, body_decls, true)
+      None => ()
+    }
+    for i, d in defaults {
+      let refs : Array[String] = []
+      if i < bindings.length() {
+        match bindings[i] {
+          Some(bd) => binding_ref_names(bd, refs)
+          None => ()
+        }
+      }
+      match d {
+        Some(expr) => default_ref_names(expr, refs)
+        None => ()
+      }
+      if refs.length() > 0 {
+        let expr = ()
+        ignore(expr)
+        for r in refs {
+          let mut later = false
+          for j, pn in names {
+            if j >= i && pn == r {
+              later = true
+            }
+          }
+          if later || body_decls.contains(r) {
+            let pname = if i < names.length() { names[i] } else { "?" }
+            issues.push({
+              path: owner,
+              message: "parameter `\{pname}` cannot reference identifier `\{r}` declared after it",
+            })
+          }
+        }
+      }
+    }
+  }
+
+  fn scan_callable_expr(e : @ast.TsExpr, owner : String) -> Unit {
+    match e {
+      ArrowFunc(ps, _, abody, _) => {
+        let names : Array[String] = []
+        let defaults : Array[@ast.TsExpr?] = []
+        let bindings : Array[@ast.TsBinding?] = []
+        for p in ps {
+          names.push(p.name)
+          defaults.push(p.default)
+          bindings.push(p.binding)
+        }
+        let blk : @ast.TsBlock? = match abody {
+          ArrowBlock(b) => Some(b)
+          ArrowExpr(_) => None
+        }
+        check_one(names, defaults, blk, owner, bindings)
+      }
+      FuncExpr(f2) => {
+        let names : Array[String] = []
+        let defaults : Array[@ast.TsExpr?] = []
+        let bindings : Array[@ast.TsBinding?] = []
+        for p in f2.params {
+          names.push(p.name)
+          defaults.push(p.default)
+          bindings.push(p.binding)
+        }
+        check_one(names, defaults, Some(f2.body), owner, bindings)
+      }
+      // An IIFE evaluates its callee's parameter list right here
+      // (`((b = a() ?? "d") => { var a; })()` —
+      // nullishCoalescingOperatorInParameterInitializer.2).
+      CallExpr(callee, _) => scan_callable_expr(callee, owner)
+      _ => ()
+    }
+  }
+
+  for f in module_.funcs {
+    let names : Array[String] = []
+    let defaults : Array[@ast.TsExpr?] = []
+    let bindings : Array[@ast.TsBinding?] = []
+    for p in f.params {
+      names.push(p.name)
+      defaults.push(p.default)
+      bindings.push(p.binding)
+    }
+    check_one(names, defaults, Some(f.body), "function \{f.name}", bindings)
+    for st in f.body.stmts {
+      match st {
+        Var(_, _, init) | Let(_, _, init) | Const(_, _, init) | Expr(init) =>
+          scan_callable_expr(init, "function \{f.name}")
+        _ => ()
+      }
+    }
+  }
+  for st in module_.top_level_stmts {
+    match st {
+      @ast.TsStmt::Var(_, _, init)
+      | @ast.TsStmt::Let(_, _, init)
+      | @ast.TsStmt::Const(_, _, init)
+      | @ast.TsStmt::Expr(init) => scan_callable_expr(init, "top-level")
+      _ => ()
+    }
+  }
+  for cls in module_.classes {
+    match cls.constructor_params {
+      Some(cps) => {
+        let names : Array[String] = []
+        for p in cps {
+          names.push(p.0)
+        }
+        check_one(
+          names,
+          cls.constructor_param_defaults,
+          cls.constructor_body,
+          "class \{cls.name}.constructor",
+          [],
+        )
+      }
+      None => ()
+    }
+    for m in cls.methods {
+      if m.param_defaults.length() == 0 {
+        continue
+      }
+      let names : Array[String] = []
+      for p in m.params {
+        names.push(p.0)
+      }
+      check_one(
+        names,
+        m.param_defaults,
+        m.body,
+        "class \{cls.name}.\{m.name}",
+        [],
+      )
+    }
+  }
+  issues
+}
+
+///|
+/// TS2465 / TS1166: `this` cannot be referenced in a computed property
+/// name of a class member (`class C { [this.bar()]() { } }` —
+/// computedPropertyNames21_ES5, typeOfThisInStaticMembers12/13,
+/// autoAccessor5). Direct references only — a `this` inside a nested
+/// callable binds that callable's own receiver. Class EXPRESSIONS
+/// nested in static-field initializers are walked too (`static bar =
+/// class Inner { [this.c] = 1 }`).
+/// TS2683: `this` implicitly has type `any` inside a PLAIN function
+/// (function declaration / expression with no `this` parameter) under
+/// noImplicitThis. Arrows inherit the enclosing context; object-literal
+/// function VALUES are contextually `this`-typed and abstain; methods /
+/// accessors / constructors / static initializers are typed at their top
+/// level but a nested plain function expression flips back to implicit
+/// (typeOfThisInStaticMembers8's `static x = function () { this.f }`).
+/// Class-declaration decorator expressions evaluate in the enclosing
+/// scope — inside a NAMESPACE that scope's `this` is implicit any
+/// (decoratorOnClassMethod11); at true top level it is `globalThis` and
+/// stays legal. Whole-file abstention under `@ts-ignore` suppression.
+fn check_implicit_any_this(
+  module_ : @ast.TsModule,
+  in_namespace : Bool,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  if !module_.no_implicit_any {
+    return issues
+  }
+  if module_.grammar_misuses.contains("<ts-suppression-present>") ||
+    module_.grammar_misuses.contains("<noimplicitthis-off>") {
+    return issues
+  }
+  for f in module_.funcs {
+    let plain = !(f.params.length() > 0 && f.params[0].name == "this")
+    ts2683_walk_stmts(issues, f.body.stmts, plain, "function \{f.name}")
+  }
+  // A true top level's `this` is `globalThis` (legal); a NAMESPACE
+  // body is an IIFE whose `this` is implicit any
+  // (computedPropertyNames19_ES5's `[this.bar]` inside `namespace M`).
+  for st in module_.top_level_stmts {
+    match st {
+      @ast.TsStmt::Expr(e)
+      | @ast.TsStmt::Var(_, _, e)
+      | @ast.TsStmt::Let(_, _, e)
+      | @ast.TsStmt::Const(_, _, e) =>
+        ts2683_walk_expr(issues, e, in_namespace, "top-level")
+      _ => ()
+    }
+  }
+  for cls in module_.classes {
+    match cls.constructor_body {
+      Some(b) =>
+        ts2683_walk_stmts(
+          issues,
+          b.stmts,
+          false,
+          "class \{cls.name}.constructor",
+        )
+      None => ()
+    }
+    for m in cls.methods {
+      match m.body {
+        Some(b) =>
+          ts2683_walk_stmts(
+            issues,
+            b.stmts,
+            false,
+            "class \{cls.name}.\{m.name}",
+          )
+        None => ()
+      }
+    }
+    for init in cls.static_field_inits {
+      ts2683_walk_expr(issues, init.1, false, "class \{cls.name}.\{init.0}")
+    }
+    // Class-declaration decorators evaluate in the enclosing scope: a
+    // namespace body's `this` is implicit any; true top level is
+    // `globalThis` and legal.
+    if in_namespace {
+      for d in cls.decorators {
+        ts2683_walk_expr(issues, d, true, "class \{cls.name} decorator")
+      }
+    }
+  }
+  issues
+}
+
+///|
+fn ts2683_walk_expr(
+  issues : Array[ExprIssue],
+  e : @ast.TsExpr,
+  in_plain : Bool,
+  owner : String,
+) -> Unit {
+  match e {
+    Var("this") =>
+      if in_plain {
+        issues.push({
+          path: owner,
+          message: "`this` implicitly has type `any` because it does not have a type annotation",
+        })
+      }
+    // Arrows inherit `this` from the enclosing context.
+    ArrowFunc(_, _, abody, _) =>
+      match abody {
+        ArrowExpr(inner) => ts2683_walk_expr(issues, inner, in_plain, owner)
+        ArrowBlock(b) => ts2683_walk_stmts(issues, b.stmts, in_plain, owner)
+      }
+    // A plain function expression rebinds `this` to implicit any —
+    // unless it declares a `this` parameter. The parser lowers class
+    // declarations/expressions to `<class>`-named IIFE emulations whose
+    // synthesized bodies write `this.field` freely — those are typed
+    // class contexts, never implicit any.
+    FuncExpr(f2) => {
+      if f2.name == "<class>" {
+        return
+      }
+      let plain = !(f2.params.length() > 0 && f2.params[0].name == "this")
+      ts2683_walk_stmts(issues, f2.body.stmts, plain, owner)
+    }
+    // Object-literal FUNCTION values are contextually `this`-typed by
+    // the literal — skip their bodies. Arrow values still inherit the
+    // outer context.
+    ObjectLit(entries) =>
+      for en in entries {
+        match en.1 {
+          FuncExpr(_) => ()
+          other => ts2683_walk_expr(issues, other, in_plain, owner)
+        }
+      }
+    ComputedProp(k, v) => {
+      ts2683_walk_expr(issues, k, in_plain, owner)
+      match v {
+        FuncExpr(_) => ()
+        other => ts2683_walk_expr(issues, other, in_plain, owner)
+      }
+    }
+    // Class expressions carry their own member rules; abstain inside.
+    NativeClassExpr(_, _) => ()
+    BinOp(_, a, b) | Seq(a, b) | IndexAccess(a, b) => {
+      ts2683_walk_expr(issues, a, in_plain, owner)
+      ts2683_walk_expr(issues, b, in_plain, owner)
+    }
+    PropAssignExpr(a, _, b) => {
+      ts2683_walk_expr(issues, a, in_plain, owner)
+      match b {
+        FuncExpr(_) => ()
+        other => ts2683_walk_expr(issues, other, in_plain, owner)
+      }
+    }
+    // A function expression assigned to a PROPERTY / index slot may be
+    // `this`-typed by the target's declared signature
+    // (`Element.prototype.remove ??= function () { this… }` —
+    // thisPrototypeMethodCompoundAssignment) — skip those bodies too.
+    IndexAssignExpr(a, b, c) => {
+      ts2683_walk_expr(issues, a, in_plain, owner)
+      ts2683_walk_expr(issues, b, in_plain, owner)
+      match c {
+        FuncExpr(_) => ()
+        other => ts2683_walk_expr(issues, other, in_plain, owner)
+      }
+    }
+    CompoundAssignExpr(a, _, c) => {
+      ts2683_walk_expr(issues, a, in_plain, owner)
+      match c {
+        FuncExpr(_) => ()
+        other => ts2683_walk_expr(issues, other, in_plain, owner)
+      }
+    }
+    Cond(c, t, f3) => {
+      ts2683_walk_expr(issues, c, in_plain, owner)
+      ts2683_walk_expr(issues, t, in_plain, owner)
+      ts2683_walk_expr(issues, f3, in_plain, owner)
+    }
+    // Function expressions in CALL-ARGUMENT position may receive a
+    // contextual `this` from the callee's signature
+    // (`context.addInitializer(function () { this… })` —
+    // esDecorators-contextualTypes.2) — skip their bodies. IIFE callees
+    // are never contextually typed and keep walking.
+    Call(_, args) | New(_, args) =>
+      for a in args {
+        match a {
+          FuncExpr(_) => ()
+          other => ts2683_walk_expr(issues, other, in_plain, owner)
+        }
+      }
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      ts2683_walk_expr(issues, callee, in_plain, owner)
+      for a in args {
+        match a {
+          FuncExpr(_) => ()
+          other => ts2683_walk_expr(issues, other, in_plain, owner)
+        }
+      }
+    }
+    MethodCall(recv, _, args) => {
+      ts2683_walk_expr(issues, recv, in_plain, owner)
+      for a in args {
+        match a {
+          FuncExpr(_) => ()
+          other => ts2683_walk_expr(issues, other, in_plain, owner)
+        }
+      }
+    }
+    ArrayLit(items) =>
+      for it in items {
+        ts2683_walk_expr(issues, it, in_plain, owner)
+      }
+    TemplateLiteral(_, exprs) =>
+      for ex in exprs {
+        ts2683_walk_expr(issues, ex, in_plain, owner)
+      }
+    AssignExpr(_, v) =>
+      match v {
+        FuncExpr(_) => ()
+        other => ts2683_walk_expr(issues, other, in_plain, owner)
+      }
+    UnaryOp(_, a)
+    | PropAccess(a, _)
+    | Spread(a)
+    | As(a, _)
+    | Satisfies(a, _)
+    | NonNull(a)
+    | OptionalChain(a)
+    | Await(a)
+    | TypeArgs(_, a) => ts2683_walk_expr(issues, a, in_plain, owner)
+    Yield(opt) =>
+      match opt {
+        Some(a) => ts2683_walk_expr(issues, a, in_plain, owner)
+        None => ()
+      }
+    _ => ()
+  }
+}
+
+///|
+fn ts2683_walk_stmts(
+  issues : Array[ExprIssue],
+  stmts : Array[@ast.TsStmt],
+  in_plain : Bool,
+  owner : String,
+) -> Unit {
+  for st in stmts {
+    match st {
+      Expr(e) | Return(Some(e)) | Throw(e) =>
+        ts2683_walk_expr(issues, e, in_plain, owner)
+      // An ANNOTATED binding contextually types a function-expression
+      // initializer (its declared type may carry a `this` parameter) —
+      // skip those; unannotated initializers keep the implicit-any
+      // verdict.
+      Var(_, ty, init) | Let(_, ty, init) | Const(_, ty, init) =>
+        match init {
+          FuncExpr(_) =>
+            if !is_checkable(ty) {
+              ts2683_walk_expr(issues, init, in_plain, owner)
+            }
+          _ => ts2683_walk_expr(issues, init, in_plain, owner)
+        }
+      Assign(_, e) =>
+        match e {
+          FuncExpr(_) => ()
+          other => ts2683_walk_expr(issues, other, in_plain, owner)
+        }
+      PropAssign(r, _, v) => {
+        ts2683_walk_expr(issues, r, in_plain, owner)
+        match v {
+          FuncExpr(_) => ()
+          other => ts2683_walk_expr(issues, other, in_plain, owner)
+        }
+      }
+      IndexAssign(r, i, v) => {
+        ts2683_walk_expr(issues, r, in_plain, owner)
+        ts2683_walk_expr(issues, i, in_plain, owner)
+        match v {
+          FuncExpr(_) => ()
+          other => ts2683_walk_expr(issues, other, in_plain, owner)
+        }
+      }
+      If(c, a, b) => {
+        ts2683_walk_expr(issues, c, in_plain, owner)
+        ts2683_walk_stmts(issues, a.stmts, in_plain, owner)
+        match b {
+          Some(blk) => ts2683_walk_stmts(issues, blk.stmts, in_plain, owner)
+          None => ()
+        }
+      }
+      While(c, b) | DoWhile(c, b) => {
+        ts2683_walk_expr(issues, c, in_plain, owner)
+        ts2683_walk_stmts(issues, b.stmts, in_plain, owner)
+      }
+      For(_, _, _, b)
+      | ForOf(_, _, _, _, b)
+      | ForAwaitOf(_, _, _, _, b)
+      | ForIn(_, _, _, _, b)
+      | With(_, b) => ts2683_walk_stmts(issues, b.stmts, in_plain, owner)
+      Try(a, _, c, f4) => {
+        ts2683_walk_stmts(issues, a.stmts, in_plain, owner)
+        match c {
+          Some(blk) => ts2683_walk_stmts(issues, blk.stmts, in_plain, owner)
+          None => ()
+        }
+        match f4 {
+          Some(blk) => ts2683_walk_stmts(issues, blk.stmts, in_plain, owner)
+          None => ()
+        }
+      }
+      Switch(d, cases) => {
+        ts2683_walk_expr(issues, d, in_plain, owner)
+        for cse in cases {
+          ts2683_walk_stmts(issues, cse.body.stmts, in_plain, owner)
+        }
+      }
+      Block(b) => ts2683_walk_stmts(issues, b.stmts, in_plain, owner)
+      _ => ()
+    }
+  }
+}
+
+///|
+/// Direct `super` reference inside a computed-key expression (member
+/// access / call receivers only — computed keys can't contain nested
+/// callables that would rebind it meaningfully for TS2466's purposes).
+fn computed_key_mentions_super(e : @ast.TsExpr) -> Bool {
+  match e {
+    Var("super") => true
+    // `super(…)` calls (`[(super(), "prop")]` — computedPropertyNames27).
+    Call("super", _) => true
+    Seq(a, b) =>
+      computed_key_mentions_super(a) || computed_key_mentions_super(b)
+    PropAccess(a, _) | UnaryOp(_, a) | NonNull(a) | OptionalChain(a) =>
+      computed_key_mentions_super(a)
+    MethodCall(r, _, args) => {
+      if computed_key_mentions_super(r) {
+        return true
+      }
+      for a in args {
+        if computed_key_mentions_super(a) {
+          return true
+        }
+      }
+      false
+    }
+    CallExpr(c, args) => {
+      if computed_key_mentions_super(c) {
+        return true
+      }
+      for a in args {
+        if computed_key_mentions_super(a) {
+          return true
+        }
+      }
+      false
+    }
+    BinOp(_, a, b) | IndexAccess(a, b) =>
+      computed_key_mentions_super(a) || computed_key_mentions_super(b)
+    _ => false
+  }
+}
+
+///|
+fn check_this_in_computed_keys(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  // `@ts-ignore` / `@ts-expect-error` can suppress exactly these lines
+  // (esDecorators-classDeclaration-outerThisReference ignores its
+  // `[f(this)]` keys); without line-anchored issues the safe granularity
+  // is whole-file abstention.
+  if module_.grammar_misuses.contains("<ts-suppression-present>") {
+    return issues
+  }
+  fn check_class(decl : @ast.TsClassDecl) -> Unit {
+    for ke in decl.computed_field_keys {
+      if expr_uses_this_outside_fn(ke) {
+        issues.push({
+          path: "class \{decl.name}",
+          message: "`this` cannot be referenced in a computed property name",
+        })
+      }
+      // TS2466: `super` is equally banned in computed property names
+      // (computedPropertyNames24/27/30's `[super.bar()]`).
+      if computed_key_mentions_super(ke) {
+        issues.push({
+          path: "class \{decl.name}",
+          message: "`super` cannot be referenced in a computed property name",
+        })
+      }
+      // TS1166: a computed class-property key must have a simple literal
+      // (or unique symbol) type. A CALL through a declared-`any` callee
+      // never does (`declare var f: any; class C2 { accessor [f()] = 1 }`
+      // — autoAccessor5). Only the declared-any-callee form decides;
+      // unresolved callees abstain.
+      match ke {
+        CallExpr(Var(cn), _) | Call(cn, _) =>
+          if resolver.globals.get(cn) is Some(Any) {
+            issues.push({
+              path: "class \{decl.name}",
+              message: "a computed property name in a class property declaration must have a simple literal type",
+            })
+          }
+        _ => ()
+      }
+    }
+    for m in decl.methods {
+      match m.key_expr {
+        Some(ke) => {
+          if expr_uses_this_outside_fn(ke) {
+            issues.push({
+              path: "class \{decl.name}",
+              message: "`this` cannot be referenced in a computed property name",
+            })
+          }
+          if computed_key_mentions_super(ke) {
+            issues.push({
+              path: "class \{decl.name}",
+              message: "`super` cannot be referenced in a computed property name",
+            })
+          }
+        }
+        None => ()
+      }
+    }
+    fn scan_expr(e : @ast.TsExpr) -> Unit {
+      match e {
+        NativeClassExpr(inner, _) => check_class(inner)
+        ArrayLit(items) =>
+          for it in items {
+            scan_expr(it)
+          }
+        ObjectLit(entries) =>
+          for en in entries {
+            scan_expr(en.1)
+          }
+        CallExpr(c, args) => {
+          scan_expr(c)
+          for a in args {
+            scan_expr(a)
+          }
+        }
+        BinOp(_, a, b) => {
+          scan_expr(a)
+          scan_expr(b)
+        }
+        _ => ()
+      }
+    }
+
+    for init in decl.static_field_inits {
+      scan_expr(init.1)
+    }
+  }
+
+  for cls in module_.classes {
+    check_class(cls)
+  }
+  issues
+}
+
+///|
+/// TS2378: a `get` accessor must return a value. Flagged only for the
+/// provable shape — a class getter body with NO value-returning `return`,
+/// no `throw`, and no loop statement anywhere (a throwing getter is legal,
+/// and a non-terminating body makes the fall-off endpoint unreachable, so
+/// both abstain). All thirteen TS7 conformance hits are trivial empty
+/// bodies (`get Foo() { }` — parserAccessors / parserMemberAccessor
+/// clusters, computedPropertyNames2_ES5).
+fn check_getter_returns_value(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  fn stmts_have_throw_or_loop(stmts : Array[@ast.TsStmt]) -> Bool {
+    for st in stmts {
+      match st {
+        Throw(_) => return true
+        // A bare `return;` under an undefined-accepting annotation
+        // (`get x(): any { return; }` — asyncMethodWithSuper_es6) is
+        // legal, and a written `: any` is indistinguishable from no
+        // annotation — any explicit return abstains.
+        Return(None) => return true
+        While(_, _)
+        | DoWhile(_, _)
+        | For(_, _, _, _)
+        | ForOf(_, _, _, _, _)
+        | ForAwaitOf(_, _, _, _, _)
+        | ForIn(_, _, _, _, _) => return true
+        If(_, a, b) => {
+          if stmts_have_throw_or_loop(a.stmts) {
+            return true
+          }
+          match b {
+            Some(blk) => if stmts_have_throw_or_loop(blk.stmts) { return true }
+            None => ()
+          }
+        }
+        Try(a, _, c, f) => {
+          if stmts_have_throw_or_loop(a.stmts) {
+            return true
+          }
+          match c {
+            Some(blk) => if stmts_have_throw_or_loop(blk.stmts) { return true }
+            None => ()
+          }
+          match f {
+            Some(blk) => if stmts_have_throw_or_loop(blk.stmts) { return true }
+            None => ()
+          }
+        }
+        Switch(_, cases) =>
+          for c in cases {
+            if stmts_have_throw_or_loop(c.body.stmts) {
+              return true
+            }
+          }
+        Block(b) => if stmts_have_throw_or_loop(b.stmts) { return true }
+        _ => ()
+      }
+    }
+    false
+  }
+
+  for cls in module_.classes {
+    // Ambient classes and abstract accessors legitimately have no body;
+    // an overload signature is impossible for accessors, so a runtime
+    // class getter with `body: None` is exactly the empty-body form
+    // (`get Foo() { }` — the parser stores empty blocks as `None`).
+    for m in cls.methods {
+      if m.accessor != "get" {
+        continue
+      }
+      if cls.is_declare || cls.abstract_members.contains(m.name) {
+        continue
+      }
+      // A declared return type that accepts `undefined` (`(): any`,
+      // `(): void`, `T | undefined`) makes a bare `return;` well-typed —
+      // tsc does not raise TS2378 there (asyncMethodWithSuper_es6's
+      // `get getter(): any { return; }`).
+      if is_checkable(m.return_type) && type_accepts_undefined(m.return_type) {
+        continue
+      }
+      let bad = match m.body {
+        None => true
+        Some(b) =>
+          !block_has_value_return(b.stmts) && !stmts_have_throw_or_loop(b.stmts)
+      }
+      if bad {
+        issues.push({
+          path: "class \{cls.name}.\{m.name}",
+          message: "a `get` accessor must return a value",
+        })
+      }
+    }
+  }
+  issues
+}
+
+///|
 fn check_super_before_this(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   for cls in module_.classes {
@@ -23390,6 +24537,82 @@ fn check_var_redeclaration_types(
 }
 
 ///|
+/// The lib interface a runtime-global's `var` declaration must carry to
+/// merge cleanly (`var Symbol: SymbolConstructor`). Only names with a
+/// dedicated `*Constructor` interface participate — `Math` / `JSON` /
+/// `Reflect` have namespace-shaped types we don't model.
+fn lib_global_ctor_type_name(name : String) -> String? {
+  match name {
+    "Symbol" => Some("SymbolConstructor")
+    "Object" => Some("ObjectConstructor")
+    "Function" => Some("FunctionConstructor")
+    "Array" => Some("ArrayConstructor")
+    "String" => Some("StringConstructor")
+    "Number" => Some("NumberConstructor")
+    "Boolean" => Some("BooleanConstructor")
+    "BigInt" => Some("BigIntConstructor")
+    "Date" => Some("DateConstructor")
+    "RegExp" => Some("RegExpConstructor")
+    "Error" => Some("ErrorConstructor")
+    "Promise" => Some("PromiseConstructor")
+    "Proxy" => Some("ProxyConstructor")
+    "Map" => Some("MapConstructor")
+    "Set" => Some("SetConstructor")
+    "WeakMap" => Some("WeakMapConstructor")
+    "WeakSet" => Some("WeakSetConstructor")
+    _ => None
+  }
+}
+
+///|
+/// TS2403 against the LIB declaration: a script-level initializer-less
+/// `var` that redeclares a runtime-provided global merges with the lib's
+/// declaration, so its annotation must be the matching constructor
+/// interface (`var Symbol: SymbolConstructor` is legal —
+/// ES5SymbolProperty1 — while `var Symbol: any` / `{ iterator: string }`
+/// is TS2403 — ES5SymbolProperty3/4/7). Module files (import / export
+/// syntax) declare a fresh module-local binding instead, so they abstain,
+/// as do `typeof` annotations we can't compare.
+fn check_lib_global_redeclaration(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  let mut has_module_syntax = module_.imports.length() > 0
+  for gm in module_.grammar_misuses {
+    if gm == "<module-syntax>" ||
+      gm.has_prefix("<export-value>") ||
+      gm.has_prefix("<export-default>") ||
+      gm.has_prefix("<export-eq>") {
+      has_module_syntax = true
+    }
+  }
+  if has_module_syntax {
+    return issues
+  }
+  for stmt in module_.top_level_stmts {
+    match stmt {
+      Var(@ast.TsBinding::Ident(n), ty, Var("__ts_no_init__")) =>
+        match lib_global_ctor_type_name(n) {
+          Some(expected) => {
+            let ok = match ty {
+              Named(t) => t == expected
+              TypeOf(_) => true
+              _ => false
+            }
+            if !ok {
+              issues.push({
+                path: "var \{n}",
+                message: "subsequent variable declaration must have the same type as the lib declaration (`\{expected}`)",
+              })
+            }
+          }
+          None => ()
+        }
+      _ => ()
+    }
+  }
+  issues
+}
+
+///|
 fn check_duplicate_index_signatures(
   module_ : @ast.TsModule,
 ) -> Array[ExprIssue] {
@@ -23896,6 +25119,10 @@ fn check_module_function_bodies_layered(
     for issue in check_unresolved_signature_type_refs(module_) {
       all.push(issue)
     }
+    // TS2403 for lib-global `var` redeclarations (script scope only).
+    for issue in check_lib_global_redeclaration(module_) {
+      all.push(issue)
+    }
   }
   for issue in check_var_redeclaration_types(module_, resolver) {
     all.push(issue)
@@ -23908,6 +25135,25 @@ fn check_module_function_bodies_layered(
   }
   for issue in check_super_before_this(module_) {
     all.push(issue)
+  }
+  // TS2378: getters must return a value.
+  for issue in check_getter_returns_value(module_) {
+    all.push(issue)
+  }
+  // TS2373: parameter defaults referencing later declarations.
+  for issue in check_param_forward_refs(module_) {
+    all.push(issue)
+  }
+  // TS2465: `this` in a class member's computed property name.
+  for issue in check_this_in_computed_keys(module_, resolver) {
+    all.push(issue)
+  }
+  // TS2683: implicit-any `this` in plain functions (permissive path
+  // only — strict unit-test snippets use bare functions freely).
+  if permissive {
+    for issue in check_implicit_any_this(module_, outer_modules.length() > 0) {
+      all.push(issue)
+    }
   }
   for issue in check_reserved_class_names(module_) {
     all.push(issue)
@@ -24076,7 +25322,18 @@ fn check_module_function_bodies_layered(
     // the TypeScript 7 oracle: typescript-go dropped the ES3/ES5 targets
     // entirely and never runs those test variants, so `@target: es5`
     // headers no longer produce errors. The parser still records
-    // `deprecated_compiler_options`; nothing surfaces them.
+    // `deprecated_compiler_options`; only options TS7 REMOVED (TS5102 —
+    // an error, not a deprecation) surface. Corpus evidence covers
+    // exactly `downlevelIteration`: every ran conformance case carrying
+    // the directive errors under tsgo v7.0.2, none is accepted.
+    for opt in module_.deprecated_compiler_options {
+      if opt == "downlevelIteration" {
+        all.push({
+          path: "compiler options",
+          message: "option `\{opt}` has been removed",
+        })
+      }
+    }
     // TS2369: a parameter property (`public` / `private` / `protected` /
     // `readonly` on a parameter) is only allowed in a constructor
     // implementation. The parser records each one it saw outside a
@@ -24243,6 +25500,9 @@ fn check_module_function_bodies_layered(
       }
       // Marker, not an error: the @noImplicitOverride directive flag,
       // consumed by the override-modifier checks.
+      if gm == "<ts-suppression-present>" || gm == "<noimplicitthis-off>" {
+        continue
+      }
       if gm == "<noimplicitoverride-on>" {
         continue
       }

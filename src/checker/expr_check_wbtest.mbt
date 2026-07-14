@@ -11024,9 +11024,17 @@ test "expr_check: function-valued expression bodies are walked" {
     ),
     0,
   )
-  // `this` inside a function expression is dynamically bound -> `any`.
+  // `this` inside a plain function expression is implicit `any` — a
+  // TS2683 under noImplicitThis (batch BH). A written `this` parameter
+  // types it and keeps the member access tolerant.
+  assert_true(
+    issues("class C { m() { var g = function () { return this.anything; }; } }") >
+    0,
+  )
   @test.assert_eq(
-    issues("class C { m() { var g = function () { return this.anything; }; } }"),
+    issues(
+      "class C { m() { var g = function (this: any) { return this.anything; }; } }",
+    ),
     0,
   )
   // A contextually-checked callback argument is not double-reported.
@@ -12752,11 +12760,19 @@ test "expr_check: decorator/tagged-template parse recoveries (batch AO)" {
     ),
     0,
   )
-  // Parameter decorators with parenthesized expression heads.
+  // Parameter decorators with parenthesized expression heads parse
+  // cleanly under LEGACY decorators; without the pragma the same form is
+  // a TS1206 (standard decorators have no parameter form — batch BE).
   @test.assert_eq(
     issues(
-      "// @strict: false\nclass D { constructor(@((t, k, i) => {}) p: any) {} }",
+      "// @strict: false\n// @experimentaldecorators: true\nclass D { constructor(@((t, k, i) => {}) p: any) {} }",
     ),
+    0,
+  )
+  assert_true(
+    issues(
+      "// @strict: false\nclass D { constructor(@((t, k, i) => {}) p: any) {} }",
+    ) >
     0,
   )
 }
@@ -14045,4 +14061,354 @@ test "expr_check: TS7 oracle switch fixes (batch BD)" {
   // (destructuringEvaluationOrder); a genuinely unannotated one is.
   @test.assert_eq(issues("let f = (n: any): any => n;"), 0)
   assert_true(issues("let f = n => n;") > 0)
+}
+
+///|
+test "expr_check: TS7-only miss clusters (batch BE)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS5102: `downlevelIteration` was REMOVED in TS7 — its presence is an
+  // error (ES5For-of* cluster). Other recorded legacy options stay silent.
+  assert_true(
+    issues("// @downlevelIteration: true\nfor (var v of ['a']) { }") > 0,
+  )
+  @test.assert_eq(issues("// @module: amd\nvar x: number = 1;"), 0)
+  // TS2378: a `get` accessor must return a value — empty bodies parse as
+  // `body: None`; throwing / looping / declare / abstract forms abstain.
+  assert_true(issues("class C { get Foo() { } }") > 0)
+  @test.assert_eq(
+    issues(
+      "class G {\n  get a() { return 1; }\n  get b() { throw new Error(\"x\"); }\n  get c(): number { while (true) {} }\n  set d(v: number) { }\n}\ndeclare class DG { get e(): number; }\nabstract class AG { abstract get f(): number; }",
+    ),
+    0,
+  )
+  // TS1206: decorators are invalid on constructors and abstract/ambient
+  // members; parameter decorators require legacy decorators.
+  assert_true(
+    issues(
+      "// @experimentaldecorators: true\ndeclare function dec(t: any, k?: any, d?: any): any;\nclass C {\n  @dec constructor() {}\n}",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "declare let dec: any;\nabstract class C {\n  @dec(1) abstract field1: number;\n}",
+    ) >
+    0,
+  )
+  assert_true(
+    issues("declare let dec: any;\nclass C {\n  m(@dec x: number) { }\n}") > 0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @experimentaldecorators: true\ndeclare function dec(t: any, k?: any, d?: any): any;\nclass L {\n  @dec m(@dec x: number) { }\n  @dec f: number = 1;\n  @dec get g() { return 1; }\n}",
+    ),
+    0,
+  )
+  // TS2373: parameter defaults may not reference later parameters or
+  // body-declared names; deferred (closure) references are legal.
+  assert_true(issues("function right(a = b, b = a) { a; b; }") > 0)
+  assert_true(issues("function inside(a = b) { var b; }") > 0)
+  assert_true(issues("((b = a() ?? \"d\") => { var a; })();") > 0)
+  @test.assert_eq(
+    issues(
+      "function left(a: any, b = a, c = b) { }\nfunction ok2(a = function () { return b; }, b = 1) { }\nfunction ok3(a = () => () => b, b = 3) { }\nvar outerv = 1;\nfunction ok4(n = outerv) { }",
+    ),
+    0,
+  )
+}
+
+///|
+test "expr_check: TS7 lexical clusters (batch BF)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2465: `this` in a class member's computed property name; TS1166:
+  // a computed field key through a declared-`any` call has no literal
+  // type. Well-known-symbol and literal keys stay legal.
+  assert_true(
+    issues("class C {\n  bar() { return 0; }\n  [this.bar()]() { }\n}") > 0,
+  )
+  assert_true(
+    issues("declare var f: any;\nclass C2 {\n  accessor [f()] = 1;\n}") > 0,
+  )
+  @test.assert_eq(
+    issues(
+      "const k = \"a\";\nclass D {\n  [Symbol.iterator]() { return null as any; }\n  [\"lit\"] = 1;\n  [k] = 2;\n}",
+    ),
+    0,
+  )
+  // TS1125 / TS1198: invalid `\u{...}` escapes in STRING literals —
+  // missing / non-hex digits and out-of-range values. Valid escapes
+  // stay silent.
+  assert_true(issues("var x = \"\\u{}\";") > 0)
+  assert_true(issues("var x = \"\\u{-DDDD}\";") > 0)
+  assert_true(issues("var x = \"\\u{110000}\";") > 0)
+  assert_true(issues("var x = \"\\u{FFFFFFFF}\";") > 0)
+  @test.assert_eq(
+    issues(
+      "var a = \"\\u{0}\";\nvar b = \"\\u{10FFFF}\";\nvar c = \"\\u0041\";",
+    ),
+    0,
+  )
+  // TS1121: legacy octal integer literals; modern radix forms stay
+  // legal.
+  assert_true(issues("var o = 01;") > 0)
+  @test.assert_eq(
+    issues("var a = 0o777;\nvar b = 0;\nvar c = 0.5;\nvar d = 08.5;"),
+    0,
+  )
+}
+
+///|
+test "expr_check: template and regex escape validation (batch BG)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Regex `\u{...}` under the `u` flag: hex digits required, value
+  // capped at 0x10FFFF. Without the flag the same body is a quantified
+  // `u` and stays legal.
+  assert_true(issues("var x = /\\u{-DDDD}/gu;") > 0)
+  assert_true(issues("var x = /\\u{110000}/u;") > 0)
+  @test.assert_eq(
+    issues(
+      "var a = /\\u{10FFFF}/u;\nvar b = /\\u{2}/;\nvar c = /[\\u{0}-\\u{FF}]/u;",
+    ),
+    0,
+  )
+  // UNTAGGED template literals reject invalid `\u` / `\x` escapes;
+  // TAGGED templates accept them (ES2018).
+  assert_true(issues("var y = `\\u{hello} \\xtraordinary \\uworld`;") > 0)
+  assert_true(issues("var y = `\\u{110000}`;") > 0)
+  @test.assert_eq(
+    issues(
+      "declare function tag(s: any, ...a: any[]): any;\nvar z = tag`\\u{hello} \\xtraordinary \\uworld`;\nvar w = `\\u{48}ello`;",
+    ),
+    0,
+  )
+  // Strings reject `\x` with missing hex digits too.
+  assert_true(issues("var s = \"\\xZZ\";") > 0)
+  @test.assert_eq(issues("var s = \"\\x41\";"), 0)
+}
+
+///|
+test "expr_check: implicit-any this (batch BH)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Plain functions (incl. nested in methods, static-init function
+  // exprs, namespace bodies) give `this` an implicit `any`.
+  assert_true(issues("function plain() { return this; }") > 0)
+  assert_true(
+    issues(
+      "class C {\n  method() {\n    function fn() { return this; }\n  }\n}",
+    ) >
+    0,
+  )
+  assert_true(
+    issues("class C {\n  static x = function () { return this; };\n}") > 0,
+  )
+  assert_true(issues("namespace M {\n  var obj = { [this.bar]: 0 };\n}") > 0)
+  // Typed contexts stay silent: this-params, methods, object-literal
+  // function values, arrows in static inits, classes nested in plain
+  // functions (IIFE lowering), true top level, and the
+  // `@noImplicitThis: false` opt-out.
+  @test.assert_eq(
+    issues(
+      "function tf(this: Window) { this.name; }\nvar obj = { m: function() { return this; }, n() { this; } };\nvar top1 = this;\nclass K { m() { return this; } static s = () => this; }\nfunction outer() {\n  class A { x = 1; m() { return this.x; } }\n  return new A();\n}",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues("// @noImplicitThis: false\nfunction plain() { return this; }"),
+    0,
+  )
+  @test.assert_eq(
+    issues("// @strict: false\nfunction plain() { return this; }"),
+    0,
+  )
+}
+
+///|
+test "expr_check: accessor arity, member modifiers, exponents, super keys (batch BI)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS1049/TS1054: setter takes exactly one parameter, getter none —
+  // object literals and classes.
+  assert_true(issues("var v = { set foo() { } };") > 0)
+  assert_true(issues("class A { set foo() { } }") > 0)
+  assert_true(issues("class A { get foo(x: number) { return x; } }") > 0)
+  @test.assert_eq(
+    issues(
+      "var v = { get a() { return 1; }, set a(n) { } };\nclass B { get b() { return 1; } set b(n: number) { } }",
+    ),
+    0,
+  )
+  // TS1031: `export` / `declare` cannot modify class elements.
+  assert_true(issues("class C {\n  export constructor() { }\n}") > 0)
+  assert_true(issues("class C {\n  declare constructor() { }\n}") > 0)
+  @test.assert_eq(issues("class C {\n  declare x: number;\n}"), 0)
+  // TS1124: an exponent needs at least one digit.
+  assert_true(issues("var n = 1e;") > 0)
+  @test.assert_eq(issues("var a = 1e3;\nvar b = 1e+3;\nvar c = 1.5e-2;"), 0)
+  // TS2466: `super` (including `super()` in a comma chain) cannot be
+  // referenced in a computed property name.
+  assert_true(
+    issues(
+      "class Base { bar() { return \"\"; } }\nclass C extends Base {\n  [super.bar()]() { }\n}",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "class Base { }\nclass C extends Base {\n  [(super(), \"prop\")]() { }\n}",
+    ) >
+    0,
+  )
+}
+
+///|
+test "expr_check: ASI namespace/declare, for-of TS2488, lib-global TS2403 (batch BJ)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2454 via ASI: `namespace` / `module` / `declare` followed by a
+  // newline are identifier references, not declaration heads
+  // (asiPreventsParsingAsNamespace01/02, ...AmbientExternalModule01).
+  assert_true(
+    issues("var namespace: number;\nvar n: string;\nnamespace\nn\n{ }") > 0,
+  )
+  assert_true(
+    issues(
+      "var declare: number;\nvar module: string;\ndeclare\nmodule\n\"my external module\"\n{ }",
+    ) >
+    0,
+  )
+  // Same-line namespace / module declarations stay legal.
+  @test.assert_eq(issues("namespace M { export var x = 1; }"), 0)
+  @test.assert_eq(issues("declare module \"foo\" { export var x: number; }"), 0)
+  // TS2488: non-iterable for-of sources — a union with a non-iterable
+  // primitive member, a bare numeric literal, an array-destructuring
+  // pattern over primitive elements, and an OPTIONAL `[Symbol.iterator]`
+  // member (ES5For-ofTypeCheck7/12, ES5For-of26, for-of29).
+  assert_true(
+    issues("declare var u: string | number;\nfor (var v of u) { }") > 0,
+  )
+  assert_true(issues("for (const v of 0) { }") > 0)
+  assert_true(issues("for (var [a = 0, b = 1] of [2, 3]) { }") > 0)
+  assert_true(
+    issues(
+      "declare var it: { [Symbol.iterator]?(): Iterator<string> };\nfor (var v of it) { }",
+    ) >
+    0,
+  )
+  // Iterable sources stay legal: arrays, strings, arrays-of-arrays under
+  // a pattern, and a REQUIRED `[Symbol.iterator]` member.
+  @test.assert_eq(
+    issues(
+      "declare var xs: number[];\nfor (var v of xs) { }\nfor (var c of \"abc\") { }\nfor (var [a, b] of [[1, 2]]) { }",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "declare var it: { [Symbol.iterator](): Iterator<string> };\nfor (var v of it) { }",
+    ),
+    0,
+  )
+  // TS2403: a script-level `var` redeclaring a lib global needs the
+  // matching constructor-interface annotation (ES5SymbolProperty1 vs 3/4).
+  assert_true(issues("var Symbol: any;") > 0)
+  assert_true(issues("var Symbol: { iterator: string };") > 0)
+  @test.assert_eq(issues("var Symbol: SymbolConstructor;"), 0)
+  // Module files declare a fresh local binding — no TS2403.
+  @test.assert_eq(issues("var Symbol: any;\nexport { };"), 0)
+}
+
+///|
+test "expr_check: block-scoped hoisting, new<, apply arguments, binding keys (batch BK)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2304: a `let` for-of head is loop-scoped (for-of7) and a body `let`
+  // can't provide an assign-form head's binding (for-of6).
+  assert_true(issues("v;\nfor (let v of [0]) { }") > 0)
+  assert_true(issues("for (v of [0]) { let v; }") > 0)
+  // `var` head / body still hoist — no error.
+  @test.assert_eq(issues("for (var w of [0]) { }\nw;"), 0)
+  @test.assert_eq(issues("for (u of [0]) { var u; }"), 0)
+  // Loop-head lets stay visible to closures inside the loop.
+  @test.assert_eq(issues("for (let v of [0]) { const g = () => v; g(); }"), 0)
+  // TS2304 via `new Date<A;` — no balanced `>` means `<` is a comparison
+  // and `A` is an (undeclared) value read (parserConstructorAmbiguity1-4).
+  assert_true(issues("new Date<A;") > 0)
+  assert_true(issues("new Date<A ? B : C;") > 0)
+  @test.assert_eq(issues("var m = new Map<string, Array<number>>();"), 0)
+  // TS2345: `f.apply(x, arguments)` with a zero-parameter target
+  // (asyncArrowFunctionCapturesArguments_*).
+  assert_true(
+    issues(
+      "class C {\n  method() {\n    function other() {}\n    var fn = async () => await other.apply(this, arguments);\n  }\n}",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "class C {\n  method() {\n    function other(...xs: any[]) {}\n    var fn = () => other.apply(this, [1]);\n  }\n}",
+    ),
+    0,
+  )
+  // TS1005: reserved-word / literal object-binding shorthands need `: alias`
+  // (objectBindingPatternKeywordIdentifiers01/03); aliased forms stay legal.
+  assert_true(issues("var { while } = { while: 1 };") > 0)
+  assert_true(issues("var { \"while\" } = { while: 1 };") > 0)
+  @test.assert_eq(
+    issues(
+      "var { while: w } = { while: 1 };\nvar { a, b = 1 } = { a: 0, b: 2 };",
+    ),
+    0,
+  )
+  // TS1005: `void` cannot head a qualified type name
+  // (parservoidInQualifiedName1).
+  assert_true(issues("var v : void.x;") > 0)
+  @test.assert_eq(issues("var v : void;"), 0)
+}
+
+///|
+test "expr_check: patterns over primitives/arrays, spread folding, SharedArrayBuffer (batch BL)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2339: object pattern over a primitive for-of element (ES5For-of27);
+  // prototype members stay legal.
+  assert_true(issues("for (var {x: a = 0, y: b = 1} of [2, 3]) { }") > 0)
+  @test.assert_eq(issues("for (var {toString: t} of [2, 3]) { }"), 0)
+  @test.assert_eq(issues("for (var {x: a} of [{ x: 1 }]) { }"), 0)
+  // TS2339: object sub-pattern under a rest element draws from the ARRAY
+  // surface (restElementWithBindingPattern2 / AssignmentPattern4).
+  assert_true(issues("var [...{0: a, b }] = [0, 1];") > 0)
+  assert_true(
+    issues(
+      "var a: string, b: number;\nvar tuple: [string, number] = [\"\", 1];\n[...{ 0: a = \"\", b }] = tuple;",
+    ) >
+    0,
+  )
+  @test.assert_eq(issues("var [...{ 0: a, length: n }] = [0, 1];"), 0)
+  // TS2339: spread of syntactic object literals keeps pattern keys knowable
+  // (destructuringSpread); provided keys stay legal.
+  assert_true(
+    issues("const { c, g } = { ...{ ...{ c: 0 }, d: 0 }, f: 0 };") > 0,
+  )
+  @test.assert_eq(issues("const { z, a, b } = { z: 0, ...{ a: 0, b: 0 } };"), 0)
+  // TS2339: the SharedArrayBuffer instance surface is table-modeled
+  // (useSharedArrayBuffer6); real members stay legal.
+  assert_true(issues("var sab = new SharedArrayBuffer(1024);\nsab.length;") > 0)
+  @test.assert_eq(
+    issues(
+      "var sab = new SharedArrayBuffer(8);\nvar n: number = sab.byteLength;\nvar s2 = sab.slice(0, 4);",
+    ),
+    0,
+  )
 }

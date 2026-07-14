@@ -2833,7 +2833,20 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
       New("RegExp", args)
     }
     Template(cooked_parts, _, expr_sources) => {
+      let tpl_pos = self.peek().pos
       let _ = self.advance()
+      // TS1125: an UNTAGGED template carrying an invalid `\u` / `\x`
+      // escape is an error; tagged templates accept them (ES2018) and
+      // parse through the postfix path, never here. One diagnostic per
+      // recorded escape inside this token's span.
+      let next_pos = self.peek().pos
+      for p in self.template_invalid_escape_positions {
+        if p >= tpl_pos && (next_pos <= tpl_pos || p < next_pos) {
+          self.grammar_misuses.push(
+            "hexadecimal digit expected in a unicode escape",
+          )
+        }
+      }
       // Parse expression sources into AST expressions. Each `${…}`
       // interpolation is captured as a raw source string by the
       // lexer and parsed here via a fresh sub-parser. The sub-
@@ -3258,7 +3271,18 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
           if self.check(Lt) {
             match self.try_parse_simple_type_args() {
               Some(targs) => new_type_args = targs
-              None => self.skip_type_args()
+              None => {
+                // Only treat `<...>` as type arguments when a balanced
+                // closing `>` exists. `new Date<A;` never closes — TS
+                // parses it as the comparison `new Date < A`, so restore
+                // the cursor and let the binary-operator machinery read
+                // `A` as a value reference (parserConstructorAmbiguity1-4
+                // expect the TS2304 on `A`).
+                let saved = self.pos
+                if !self.try_skip_type_args() {
+                  self.pos = saved
+                }
+              }
             }
           }
         }
@@ -3647,6 +3671,20 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
             let _ = self.expect(LParen)
             let params = self.parse_params()
             let _ = self.expect(RParen)
+            // TS1054 / TS1049: a `get` accessor takes no parameters; a
+            // `set` accessor takes exactly one (parserAccessors8's
+            // `{ set foo() { } }`).
+            if is_getter {
+              if params.length() != 0 {
+                self.grammar_misuses.push(
+                  "a `get` accessor cannot have parameters",
+                )
+              }
+            } else if params.length() != 1 {
+              self.grammar_misuses.push(
+                "a `set` accessor must have exactly one parameter",
+              )
+            }
             let return_type = if self.check(Colon) {
               let _ = self.advance()
               self.parse_type()
@@ -4002,6 +4040,20 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
             let _ = self.expect(LParen)
             let params = self.parse_params()
             let _ = self.expect(RParen)
+            // TS1054 / TS1049: a `get` accessor takes no parameters; a
+            // `set` accessor takes exactly one (parserAccessors8's
+            // `{ set foo() { } }`).
+            if is_getter {
+              if params.length() != 0 {
+                self.grammar_misuses.push(
+                  "a `get` accessor cannot have parameters",
+                )
+              }
+            } else if params.length() != 1 {
+              self.grammar_misuses.push(
+                "a `set` accessor must have exactly one parameter",
+              )
+            }
             let return_type = if self.check(Colon) {
               let _ = self.advance()
               self.parse_type()

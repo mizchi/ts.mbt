@@ -17,12 +17,20 @@ fn Parser::is_namespace_decl_start(self : Parser) -> Bool {
       match name {
         "global" => self.peek_at(1).kind == LBrace
         "namespace" | "module" =>
-          match self.peek_at(1).kind {
-            Ident(_) | Str(_) | LBrace => true
-            // Primitive type keywords are legal namespace names
-            // (`namespace number {}` — parserModuleDeclaration6/7).
-            NumberType | StringType | BooleanType | IntType => true
-            _ => false
+          // ASI: TS only treats `namespace` / `module` as a declaration
+          // keyword when the name follows on the SAME line
+          // (asiPreventsParsingAsNamespace01/02). A newline makes it a
+          // plain identifier reference.
+          if self.peek_at(1).has_newline_before {
+            false
+          } else {
+            match self.peek_at(1).kind {
+              Ident(_) | Str(_) | LBrace => true
+              // Primitive type keywords are legal namespace names
+              // (`namespace number {}` — parserModuleDeclaration6/7).
+              NumberType | StringType | BooleanType | IntType => true
+              _ => false
+            }
           }
         _ => false
       }
@@ -342,17 +350,38 @@ fn Parser::parse_var_like(
       | Let(Object(ob), _, ObjectLit(entries))
       | Const(Object(ob), _, ObjectLit(entries)) => {
         let keys : Map[String, Bool] = {}
-        let mut keys_known = true
-        for e in entries {
-          if e.0.has_prefix("@@spread") || e.0.has_prefix("<") {
-            keys_known = false
+        // A spread of a syntactic object LITERAL keeps the key set
+        // knowable — fold its keys in recursively
+        // (`const { g } = { ...{ c: 0 }, f: 0 }` — destructuringSpread).
+        // Any other spread / computed / synthetic entry abstains.
+        fn collect(es : Array[(String, @ast.TsExpr)]) -> Bool {
+          for e in es {
+            if e.0.has_prefix("@@spread") {
+              match e.1 {
+                @ast.TsExpr::ObjectLit(inner) =>
+                  if !collect(inner) {
+                    return false
+                  }
+                _ => return false
+              }
+              continue
+            }
+            if e.0.has_prefix("@@get:") || e.0.has_prefix("@@set:") {
+              keys[e.0.substring(start=6)] = true
+              continue
+            }
+            if e.0.has_prefix("<") || e.0.has_prefix("@@") {
+              return false
+            }
+            match e.1 {
+              @ast.TsExpr::ComputedProp(_, _) => return false
+              _ => ()
+            }
+            keys[e.0] = true
           }
-          match e.1 {
-            ComputedProp(_, _) => keys_known = false
-            _ => ()
-          }
-          keys[e.0] = true
+          true
         }
+        let keys_known = collect(entries)
         if keys_known {
           for prop in ob.props {
             if prop.default is None &&

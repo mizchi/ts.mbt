@@ -124,6 +124,10 @@ pub struct Parser {
   // `@noImplicitAny: false` opt out, an explicit `@noImplicitAny: true`
   // opts back in over `@strict: false`.
   no_implicit_any : Bool
+  // True when the test header carries `@experimentaldecorators: true`
+  // (legacy decorators). Parameter decorators are only legal in that
+  // mode — under standard (ES) decorators they are TS1206.
+  experimental_decorators : Bool
   // Armed only while parsing a *function declaration's* parameter list --
   // the one position where an unannotated parameter can never be
   // contextually typed, so the implicit-any verdict is reliable.
@@ -146,6 +150,11 @@ pub struct Parser {
   // same-named unannotated param elsewhere is then exempt too — a safe
   // MISS, never an FP).
   written_any_params : Map[String, Unit]
+  // Source positions of invalid `\u` / `\x` escapes inside template
+  // literals (from the lexer). Tagged templates accept invalid escapes
+  // (ES2018), so only the UNTAGGED template parse site counts the
+  // entries inside its token span.
+  template_invalid_escape_positions : Array[Int]
   // Conformance-header strict directive (`@alwaysStrict: true` / `@strict:
   // true`). Unlike `in_strict` it does NOT change parsing behaviour (octal
   // handling, statement restrictions, ...) -- it only arms the strict-misuse
@@ -271,10 +280,12 @@ pub fn Parser::new_with_strict_and_jsx(
     no_bound_inline: false,
     target_es6_plus: false,
     no_implicit_any: false,
+    experimental_decorators: true,
     record_implicit_any_params: false,
     class_decl_no_heritage: false,
     in_class_expr_body: false,
     written_any_params: {},
+    template_invalid_escape_positions: [],
     directive_strict: false,
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],
@@ -313,8 +324,32 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
   if lexer.unterminated_template {
     grammar_misuses.push("unterminated template literal")
   }
+  // Marker: the file uses `@ts-ignore` / `@ts-expect-error` suppression
+  // comments somewhere. Our issues carry no line positions, so rules
+  // whose corpus counter-examples are suppressed lines (the computed-key
+  // TS2465/TS1166 family) abstain for the whole file when set.
+  if src.contains("@ts-ignore") || src.contains("@ts-expect-error") {
+    grammar_misuses.push("<ts-suppression-present>")
+  }
+  // TS2683 opt-out: `@noImplicitThis: false` disables the implicit-any
+  // `this` diagnostics for the file.
+  if src.to_lower().contains("@noimplicitthis: false") ||
+    src.to_lower().contains("@noimplicitthis:false") {
+    grammar_misuses.push("<noimplicitthis-off>")
+  }
   for _i in 0..<lexer.invalid_radix_digit_count {
     grammar_misuses.push("invalid digit in a binary or octal numeric literal")
+  }
+  for _i in 0..<lexer.invalid_unicode_escape_count {
+    grammar_misuses.push("hexadecimal digit expected in a unicode escape")
+  }
+  for _i in 0..<lexer.unicode_escape_overflow_count {
+    grammar_misuses.push(
+      "an extended unicode escape value must be between 0x0 and 0x10FFFF inclusive",
+    )
+  }
+  for _i in 0..<lexer.legacy_octal_literal_count {
+    grammar_misuses.push("octal literals are not allowed")
   }
   // Module-scoped flag marker for the override checks (TS4114 fires only
   // under `@noImplicitOverride: true`); TS4112/TS4113 are unconditional.
@@ -364,6 +399,8 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     no_bound_inline: false,
     target_es6_plus: detect_target_es6_plus(src),
     no_implicit_any: detect_no_implicit_any(src),
+    experimental_decorators: detect_experimental_decorators(src),
+    template_invalid_escape_positions: lexer.template_invalid_escape_positions,
     record_implicit_any_params: false,
     class_decl_no_heritage: false,
     in_class_expr_body: false,
@@ -751,4 +788,24 @@ fn detect_allow_unreachable_code(src : String) -> Bool {
 /// case variant) -- i.e. a multi-file test concatenated into one parse.
 fn detect_filename_directives(src : String) -> Bool {
   src.to_lower().contains("@filename:")
+}
+
+///|
+/// True when the leading test-header directives enable legacy decorators
+/// (`// @experimentaldecorators: true`). Parameter decorators are legal
+/// only in that mode.
+fn detect_experimental_decorators(src : String) -> Bool {
+  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
+  let head = src[:head_len].to_owned().to_lower()
+  match head.find("@experimentaldecorators:") {
+    Some(idx) => {
+      let after = head[idx + "@experimentaldecorators:".length():].to_owned()
+      let line = match after.find("\n") {
+        Some(nl) => after[:nl].to_owned()
+        None => after
+      }
+      line.trim().to_owned().has_prefix("true")
+    }
+    None => false
+  }
 }

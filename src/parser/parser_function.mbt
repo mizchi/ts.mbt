@@ -5,6 +5,14 @@
 ///|
 fn Parser::skip_param_decorators(self : Parser) -> Unit raise ParseError {
   while self.match_(At) {
+    // TS1206: parameter decorators exist only under legacy
+    // (`experimentalDecorators`) semantics; standard ES decorators have
+    // no parameter form (esDecorators-classDeclaration-parameterDecorators).
+    // Recorded AFTER the decorator expression is consumed: a following
+    // `class` keyword means this is really a decorated CLASS EXPRESSION
+    // inside parens (`(@dec class { … })`) that the arrow-params trial
+    // will abandon — never a parameter decorator.
+    let record_at = !self.experimental_decorators
     // `@(expr)` decorator heads (`(@((t, k, i) => {}) p: any)` —
     // legacyDecorators-contextualTypes) go straight to the balanced
     // paren skip below; identifier heads consume their member chain.
@@ -57,6 +65,12 @@ fn Parser::skip_param_decorators(self : Parser) -> Unit raise ParseError {
           }
         }
       }
+    }
+    // A following `@` means another stacked decorator — defer the verdict
+    // to the LAST decorator in the chain, whose follower reveals whether
+    // the chain precedes a class expression or a real parameter.
+    if record_at && !self.check(Class) && !self.check(At) {
+      self.invalid_decorator_uses.push("parameter")
     }
   }
 }

@@ -1031,9 +1031,175 @@ v7.0.2). Truth comes from vendored name manifests
 variant is NOTRUN, and the TS6-era deprecated-compiler-option
 diagnostics (TS5107/TS5101) were removed from the checker accordingly.
 
-State: whole-corpus **TP 2152 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 582 /
+State: whole-corpus **TP 2296 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 438 /
 NOTRUN 14** via `scripts/checker_conformance_oracle.sh --max-fp 0
---max-legal-parsefail 3`. (Final TS6 state for reference: TP 2669 /
+--max-legal-parsefail 3`.
+
+Batch BE (TS7-only miss mining, +51 TP) worked the misses newly exposed
+by the oracle switch:
+- TS5102: `downlevelIteration` was REMOVED in TS7 — its presence-based
+  recording now surfaces as an error (every ran conformance case
+  carrying the directive errors under tsgo; none is accepted).
+- TS2378: a class `get` accessor whose body contains NO return, throw,
+  or loop must return a value (empty bodies parse as `body: None`;
+  ambient / abstract accessors and any explicit `return;` abstain — a
+  written `(): any` is indistinguishable from no annotation).
+- TS1206: decorators on constructors flag in both modes; on `abstract` /
+  `declare` members only under STANDARD decorators (legacy mode accepts
+  them — decoratorInAmbientContext); parameter decorators flag only
+  without `@experimentaldecorators` and only when the decorator chain's
+  last follower is not `class` (a paren'd decorated class expression
+  enters the arrow-params trial — esDecorators-classExpression-*).
+- TS2373/TS2372: a parameter default (or binding-pattern computed key /
+  element default, or class-expression heritage inside one) may not
+  reference the parameter itself, a later parameter, or a body-declared
+  name (`var` hoisted anywhere, `let`/`const` top-level). Nested
+  callables defer evaluation and abstain. Covers module functions,
+  class constructors/methods, top-level callable initializers, and
+  IIFE arrows.
+Sweep round-trip: the first BE sweep surfaced 10 FPs (bare-return
+getters, legacy-mode ambient decorators, stacked decorators before
+class expressions); all root-caused and fixed before landing.
+Batch BF (+19 TP, TP 2222 / MISS 512) continued the mining:
+- TS2465/TS1166: `this` in a class member's computed property name
+  (direct refs only — nested callables rebind), and computed FIELD keys
+  through a declared-`any` call (no literal type — autoAccessor5).
+  Whole-file abstention when the source carries `@ts-ignore` /
+  `@ts-expect-error` (the parser pushes a `<ts-suppression-present>`
+  marker; our issues aren't line-anchored, so file granularity is the
+  FP-safe choice — esDecorators-classDeclaration-outerThisReference).
+- TS1125/TS1198: `\u{...}` escapes in STRING literals — missing /
+  non-hex digits and values past 0x10FFFF (accumulator clamped against
+  32-bit wrap). Template literals deliberately NOT counted: tagged
+  templates accept invalid escapes (ES2018) and the lexer can't see
+  taggedness.
+- TS1121: legacy octal integer literals (`01`).
+Batch BG (+11 TP, TP 2233 / MISS 501) closed the escape-sequence
+remainder:
+- Regex `\u{...}` under the `u` / `v` flags: `scan_regex` collects the
+  body and `validate_regex_unicode_escapes` requires hex digits and a
+  value within 0x0..0x10FFFF (accumulator clamped against 32-bit wrap).
+  Without the flag, `\u{2}` is a quantified `u` and stays legal.
+- Untagged-template invalid `\u` / `\x` escapes (incl. overflow): the
+  lexer records each escape's source position in
+  `template_invalid_escape_positions`; the parser counts entries inside
+  the Template token's span at the UNTAGGED primary parse site only —
+  tagged templates accept invalid escapes (ES2018) and parse through
+  the postfix path. Escapes inside `${...}` interpolation sub-parses
+  are lost (sub-parser array discarded) — a known miss, not an FP.
+- Strings additionally validate `\x` (exactly two hex digits).
+Batch BH (+9 TP, TP 2242 / MISS 492) implemented TS2683 —
+implicit-any `this` — as a dedicated context-tracking walker
+(`check_implicit_any_this` + `ts2683_walk_expr/stmts`):
+- IMPLICIT contexts: plain function declarations/expressions without a
+  `this` parameter (including ones nested in methods and static-field
+  initializer function exprs), namespace top-level statements (a
+  namespace body is an IIFE), and class-declaration decorators inside
+  namespaces.
+- TYPED/EXEMPT contexts: methods/accessors/constructors at their top
+  level, arrows (inherit), object-literal FUNCTION values (contextual),
+  function exprs in CALL-ARGUMENT position (callee may declare `this` —
+  esDecorators-contextualTypes.2), property/index/compound-assignment
+  RHS (`Element.prototype.remove ??= function () {…}` —
+  thisPrototypeMethodCompoundAssignment), ANNOTATED binding
+  initializers, `<class>`-named IIFE lowerings of class expressions,
+  true top level (`globalThis`), and `this`-parameter functions.
+- Opt-outs: `@noImplicitThis: false` (new `<noimplicitthis-off>`
+  marker), `@strict: false`, and the `@ts-ignore` whole-file marker.
+Permissive-path only. One stale wbtest pin (`this` in a method-nested
+function expr expected 0) was updated to the TS7 verdict.
+Batch BI (+24 TP, TP 2266 / MISS 468) took the small syntactic
+clusters from the general miss pool:
+- TS1049/TS1054: a `set` accessor takes exactly one parameter, a `get`
+  accessor none — recorded at the parse sites for both object-literal
+  accessors (both parse paths) and class accessors.
+- TS1031: `export` / `declare` cannot modify class elements (incl.
+  `declare constructor`). The `export` arm consumes the token only in
+  MODIFIER position via `can_consume_class_modifier` — `class C {
+  export; }` declares a field NAMED export
+  (propertyNamesOfReservedWords went PFLEGAL until guarded).
+- TS1124: a numeric exponent needs at least one digit (`1e`, `1e+`).
+- TS2466: `super` cannot be referenced in a computed property name —
+  member chains and `super()` inside comma chains
+  (computedPropertyNames24/27). computedPropertyNames30 stays a MISS:
+  strada raises TS2466 for `this` in an object-literal computed key
+  inside a typed constructor arrow, which our typed-context model
+  deliberately treats as legal.
+Batch BJ (+12 TP, TP 2278 / MISS 456) took the TS2454/TS2488/TS2403
+type clusters:
+- ASI vs declaration heads: `namespace` / `module` head a declaration
+  only when the NAME sits on the same line (`is_namespace_decl_start`
+  rejects a newline-separated follower), and a statement-level `declare`
+  with a line break after it is a plain identifier reference (TS's
+  modifier ASI rule). `namespace\nn\n{}` is then three statements whose
+  reads hit the existing TS2454 unassigned tracking
+  (asiPreventsParsingAsNamespace01/02,
+  asiPreventsParsingAsAmbientExternalModule01).
+- TS2488 beyond class instances (`check_forof_non_iterable`): a for-of
+  source that is a non-iterable primitive (`for (const v of 0)`), a
+  union with a non-iterable primitive member (`string | number`), or an
+  object type whose `[Symbol.iterator]` member is OPTIONAL; plus an
+  array-destructuring pattern over a primitive element type
+  (`for (var [a = 0] of [2, 3])`, syntactic array-literal sources only).
+  The optional-iterator case rides a new parser encoding: STANDARD
+  well-known `[Symbol.x]` keys in object-type literals parse as `@@x`
+  members instead of degrading the whole literal to `any`
+  (user-augmented `Symbol.foo` keys keep the legacy fallback —
+  symbolProperty61 FP'd until restricted).
+- TS2403 vs lib declarations (`check_lib_global_redeclaration`): a
+  script-level initializer-less `var` redeclaring a runtime global
+  (`var Symbol: any` / `{ iterator: string }`) must carry the matching
+  `*Constructor` interface annotation; module files and `typeof`
+  annotations abstain (ES5SymbolProperty3/4/7 vs ES5SymbolProperty1).
+Batch BK (+11 TP, TP 2289 / MISS 445) mixed scoping, parser-recovery,
+and call-modeling slices:
+- Block scoping in the TS2304 hoisting backstop: a `let` / `const`
+  for-of/for-in head is LOOP-scoped (only `var` heads hoist —
+  for-of7), and an assign-form loop's body contributes only `var`s
+  (`for (v of xs) { let v; }` cannot declare the head — for-of6).
+  Closures inside the loop still see the head binding via the env walk.
+- `new Date<A;`: type arguments are only consumed when a balanced `>`
+  exists; otherwise the cursor restores and `<` parses as a comparison,
+  so `A` surfaces through the normal undefined-name path
+  (parserConstructorAmbiguity1/2/4).
+- TS2345: `f.apply(x, arguments)` where `f` is a zero-parameter
+  function — `IArguments` is never assignable to the empty tuple `[]`
+  (asyncArrowFunctionCapturesArguments_es5/es6/es2017). Functions WITH
+  parameters abstain.
+- TS1005: reserved-word and literal object-binding shorthands need a
+  `: alias` (`var { while } = …`, `var { "while" } = …` —
+  objectBindingPatternKeywordIdentifiers01/03), and `void` cannot head
+  a qualified type name (`var v: void.x` — parservoidInQualifiedName1).
+Batch BL (+7 TP, TP 2296 / MISS 438) worked the TS2339 cluster:
+- Object patterns over PRIMITIVE for-of elements flag their props
+  (`for (var {x: a = 0} of [2, 3])` — ES5For-of27/29; prototype members
+  like `toString` stay legal), mirroring BJ's array-pattern TS2488.
+- An object sub-pattern under a REST element draws its keys from the
+  array surface: non-numeric keys outside `array_prototype_member` (+ a
+  small always-legal extra set) flag on Array/Tuple sources, in both
+  declaration and assignment forms (restElementWithBindingPattern2,
+  restElementWithAssignmentPattern2/4).
+- The pattern-vs-object-literal key check (parser AND checker copies)
+  now folds spreads of syntactic object literals recursively instead of
+  abstaining (`const { g } = { ...{ ...{ c: 0 } } , f: 0 }` —
+  destructuringSpread); getter/setter entries provide their names.
+- `new SharedArrayBuffer(...)` keeps its Named type, the instance table
+  gained the ES2024 members (`growable` / `maxByteLength` / `grow`, and
+  ArrayBuffer's `resizable` / `detached` / `resize`), and the surface
+  registers as fully modeled so member misses are definite
+  (`sab.length` — useSharedArrayBuffer6).
+Documented dead ends from this round: YieldExpression10_es6 (an
+object-literal method's name in the backstop is indistinguishable from
+a legal self-referential named function expression property);
+symbolProperty3/59 (need the `Symbol` VALUE modeled as
+`SymbolConstructor`); computedPropertyNames9 (needs overload+generic
+call inference to pick `boolean`); the TS2403 identity cluster
+(spreadUnion2 / typeOfThisGeneral etc. need inferred-initializer
+identity; unionTypeEquivalence needs non-reducing union identity over
+subtype-related classes).
+Remaining TS7-only clusters (documented, unattempted): nested
+class-expression computed keys (the parser lowers class expressions to
+IIFEs, erasing the member structure), TS2339 Corsa behavior changes. (Final TS6 state for reference: TP 2669 /
 FP 0 / TN 1414 / MISS 414 — the TS7 renumbering reflects dropped es5
 variants and Corsa behavior changes, not checker regressions; the
 582 misses include ~170 new TS7-only opportunities.)

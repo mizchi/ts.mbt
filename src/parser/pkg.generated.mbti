@@ -80,6 +80,10 @@ pub(all) enum JsdocTag {
 pub struct Lexer {
   mut invalid_char_count : Int
   mut invalid_radix_digit_count : Int
+  mut invalid_unicode_escape_count : Int
+  mut unicode_escape_overflow_count : Int
+  mut legacy_octal_literal_count : Int
+  template_invalid_escape_positions : Array[Int]
   mut unterminated_template : Bool
   src : String
   mut pos : Int
@@ -137,10 +141,12 @@ pub struct Parser {
   mut no_bound_inline : Bool
   target_es6_plus : Bool
   no_implicit_any : Bool
+  experimental_decorators : Bool
   mut record_implicit_any_params : Bool
   mut class_decl_no_heritage : Bool
   mut in_class_expr_body : Bool
   written_any_params : Map[String, Unit]
+  template_invalid_escape_positions : Array[Int]
   directive_strict : Bool
   param_optional_initializer_misuses : Array[String]
   interface_member_modifier_misuses : Array[String]
