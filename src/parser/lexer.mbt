@@ -160,6 +160,11 @@ pub struct Lexer {
   mut unicode_escape_overflow_count : Int
   // TS1121: a legacy octal integer literal (`01`) — banned in TS.
   mut legacy_octal_literal_count : Int
+  // Absolute source positions of invalid `\u` / `\x` escapes inside
+  // TEMPLATE literals. Tagged templates accept invalid escapes (ES2018)
+  // and taggedness is a parse-time fact, so the lexer only records —
+  // the parser counts entries inside each UNTAGGED template's span.
+  template_invalid_escape_positions : Array[Int]
   // TS1160: a template literal ran to EOF without its closing backtick.
   mut unterminated_template : Bool
   src : String
@@ -229,6 +234,7 @@ pub fn Lexer::new(src : String) -> Lexer {
     invalid_unicode_escape_count: 0,
     unicode_escape_overflow_count: 0,
     legacy_octal_literal_count: 0,
+    template_invalid_escape_positions: [],
     unterminated_template: false,
     src,
     // Skip a UTF-8/UTF-16 byte-order mark. Without this the BOM reaches
@@ -1263,6 +1269,9 @@ fn Lexer::scan_string(self : Lexer, quote : Char) -> TokenKind {
               if ok {
                 write_codepoint(buf, code)
               } else {
+                // TS1125: `\x` demands exactly two hex digits in a string.
+                self.invalid_unicode_escape_count = self.invalid_unicode_escape_count +
+                  1
                 buf.write_char('x')
               }
             }
@@ -1510,6 +1519,59 @@ fn Lexer::skip_regex_body(self : Lexer) -> Unit {
 }
 
 ///|
+/// TS1125 / TS1198: under the `u` / `v` flags, `\u{...}` escapes in a
+/// regex body must carry hex digits and stay within 0x0..0x10FFFF
+/// (unicodeExtendedEscapesInRegularExpressions07-19). Without the flag,
+/// `\u{2}` is a quantified `u` and stays legal.
+fn Lexer::validate_regex_unicode_escapes(self : Lexer, bs : String) -> Unit {
+  let n = bs.length()
+  let mut i = 0
+  while i + 2 < n {
+    if bs[i].to_int() == '\\'.to_int() &&
+      bs[i + 1].to_int() == 'u'.to_int() &&
+      bs[i + 2].to_int() == '{'.to_int() {
+      let mut j = i + 3
+      let mut code = 0
+      let mut digits = 0
+      let mut ok = true
+      while j < n && bs[j].to_int() != '}'.to_int() {
+        let ch = bs[j].to_int()
+        let d = if ch >= '0'.to_int() && ch <= '9'.to_int() {
+          ch - '0'.to_int()
+        } else if ch >= 'a'.to_int() && ch <= 'f'.to_int() {
+          ch - 'a'.to_int() + 10
+        } else if ch >= 'A'.to_int() && ch <= 'F'.to_int() {
+          ch - 'A'.to_int() + 10
+        } else {
+          -1
+        }
+        if d < 0 {
+          ok = false
+          break
+        }
+        if code <= 0x10FFFF {
+          code = code * 16 + d
+        }
+        digits = digits + 1
+        j = j + 1
+      }
+      if j >= n {
+        ok = false
+      }
+      if !ok || digits == 0 {
+        self.invalid_unicode_escape_count = self.invalid_unicode_escape_count +
+          1
+      } else if code > 0x10FFFF {
+        self.unicode_escape_overflow_count = self.unicode_escape_overflow_count +
+          1
+      }
+      i = j
+    }
+    i = i + 1
+  }
+}
+
+///|
 fn Lexer::skip_template_expr(self : Lexer) -> Unit {
   let mut depth = 1
   let mut prev_sig : Char? = Some('{')
@@ -1739,6 +1801,7 @@ fn Lexer::scan_template_parts_with_raw(
               if ok {
                 write_codepoint(cooked_buf, code)
               } else {
+                self.template_invalid_escape_positions.push(self.pos)
                 cooked_buf.write_char('x')
               }
             }
@@ -1748,7 +1811,9 @@ fn Lexer::scan_template_parts_with_raw(
               let mut code = 0
               let mut ok = true
               let mut digits = 0
+              let mut braced = false
               if self.peek() == Some('{') {
+                braced = true
                 let _ = self.advance()
                 raw_buf.write_char('{')
                 while true {
@@ -1761,7 +1826,9 @@ fn Lexer::scan_template_parts_with_raw(
                     Some(_) =>
                       match self.read_hex_digit() {
                         Some(d) => {
-                          code = code * 16 + d
+                          if code <= 0x10FFFF {
+                            code = code * 16 + d
+                          }
                           digits = digits + 1
                           let hex_char = if d < 10 {
                             (d + '0'.to_int()).unsafe_to_char()
@@ -1802,8 +1869,16 @@ fn Lexer::scan_template_parts_with_raw(
                 }
               }
               if ok && digits > 0 {
-                write_codepoint(cooked_buf, code)
+                // Overflow (`\u{110000}`) is recorded like a malformed
+                // escape — the untagged-template parse site surfaces it.
+                if braced && (code > 0x10FFFF || code < 0) {
+                  self.template_invalid_escape_positions.push(self.pos)
+                  cooked_buf.write_char('u')
+                } else {
+                  write_codepoint(cooked_buf, code)
+                }
               } else {
+                self.template_invalid_escape_positions.push(self.pos)
                 cooked_buf.write_char('u')
               }
             }
@@ -2105,7 +2180,11 @@ fn Lexer::scan_regex(self : Lexer) -> TokenKind {
       None => break
     }
   }
-  Regex(buf.to_string(), flags.to_string())
+  let flag_str = flags.to_string()
+  if flag_str.contains("u") || flag_str.contains("v") {
+    self.validate_regex_unicode_escapes(buf.to_string())
+  }
+  Regex(buf.to_string(), flag_str)
 }
 
 ///|

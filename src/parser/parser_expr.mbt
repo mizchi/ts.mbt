@@ -2833,7 +2833,20 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
       New("RegExp", args)
     }
     Template(cooked_parts, _, expr_sources) => {
+      let tpl_pos = self.peek().pos
       let _ = self.advance()
+      // TS1125: an UNTAGGED template carrying an invalid `\u` / `\x`
+      // escape is an error; tagged templates accept them (ES2018) and
+      // parse through the postfix path, never here. One diagnostic per
+      // recorded escape inside this token's span.
+      let next_pos = self.peek().pos
+      for p in self.template_invalid_escape_positions {
+        if p >= tpl_pos && (next_pos <= tpl_pos || p < next_pos) {
+          self.grammar_misuses.push(
+            "hexadecimal digit expected in a unicode escape",
+          )
+        }
+      }
       // Parse expression sources into AST expressions. Each `${…}`
       // interpolation is captured as a raw source string by the
       // lexer and parsed here via a fresh sub-parser. The sub-

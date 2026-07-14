@@ -14152,3 +14152,34 @@ test "expr_check: TS7 lexical clusters (batch BF)" {
     0,
   )
 }
+
+///|
+test "expr_check: template and regex escape validation (batch BG)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Regex `\u{...}` under the `u` flag: hex digits required, value
+  // capped at 0x10FFFF. Without the flag the same body is a quantified
+  // `u` and stays legal.
+  assert_true(issues("var x = /\\u{-DDDD}/gu;") > 0)
+  assert_true(issues("var x = /\\u{110000}/u;") > 0)
+  @test.assert_eq(
+    issues(
+      "var a = /\\u{10FFFF}/u;\nvar b = /\\u{2}/;\nvar c = /[\\u{0}-\\u{FF}]/u;",
+    ),
+    0,
+  )
+  // UNTAGGED template literals reject invalid `\u` / `\x` escapes;
+  // TAGGED templates accept them (ES2018).
+  assert_true(issues("var y = `\\u{hello} \\xtraordinary \\uworld`;") > 0)
+  assert_true(issues("var y = `\\u{110000}`;") > 0)
+  @test.assert_eq(
+    issues(
+      "declare function tag(s: any, ...a: any[]): any;\nvar z = tag`\\u{hello} \\xtraordinary \\uworld`;\nvar w = `\\u{48}ello`;",
+    ),
+    0,
+  )
+  // Strings reject `\x` with missing hex digits too.
+  assert_true(issues("var s = \"\\xZZ\";") > 0)
+  @test.assert_eq(issues("var s = \"\\x41\";"), 0)
+}

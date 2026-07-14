@@ -1031,7 +1031,7 @@ v7.0.2). Truth comes from vendored name manifests
 variant is NOTRUN, and the TS6-era deprecated-compiler-option
 diagnostics (TS5107/TS5101) were removed from the checker accordingly.
 
-State: whole-corpus **TP 2222 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 512 /
+State: whole-corpus **TP 2233 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 501 /
 NOTRUN 14** via `scripts/checker_conformance_oracle.sh --max-fp 0
 --max-legal-parsefail 3`.
 
@@ -1074,9 +1074,21 @@ Batch BF (+19 TP, TP 2222 / MISS 512) continued the mining:
   templates accept invalid escapes (ES2018) and the lexer can't see
   taggedness.
 - TS1121: legacy octal integer literals (`01`).
-Remaining TS7-only clusters (documented, unattempted): template /
-regex escape variants (need tagged-exemption plumbing through token
-metadata and `u`-flag gating in the regex scanner), nested
+Batch BG (+11 TP, TP 2233 / MISS 501) closed the escape-sequence
+remainder:
+- Regex `\u{...}` under the `u` / `v` flags: `scan_regex` collects the
+  body and `validate_regex_unicode_escapes` requires hex digits and a
+  value within 0x0..0x10FFFF (accumulator clamped against 32-bit wrap).
+  Without the flag, `\u{2}` is a quantified `u` and stays legal.
+- Untagged-template invalid `\u` / `\x` escapes (incl. overflow): the
+  lexer records each escape's source position in
+  `template_invalid_escape_positions`; the parser counts entries inside
+  the Template token's span at the UNTAGGED primary parse site only —
+  tagged templates accept invalid escapes (ES2018) and parse through
+  the postfix path. Escapes inside `${...}` interpolation sub-parses
+  are lost (sub-parser array discarded) — a known miss, not an FP.
+- Strings additionally validate `\x` (exactly two hex digits).
+Remaining TS7-only clusters (documented, unattempted): nested
 class-expression computed keys (the parser lowers class expressions to
 IIFEs, erasing the member structure), TS2683 `this`-context typing,
 TS2339 Corsa behavior changes. (Final TS6 state for reference: TP 2669 /

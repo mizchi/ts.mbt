@@ -150,6 +150,11 @@ pub struct Parser {
   // same-named unannotated param elsewhere is then exempt too — a safe
   // MISS, never an FP).
   written_any_params : Map[String, Unit]
+  // Source positions of invalid `\u` / `\x` escapes inside template
+  // literals (from the lexer). Tagged templates accept invalid escapes
+  // (ES2018), so only the UNTAGGED template parse site counts the
+  // entries inside its token span.
+  template_invalid_escape_positions : Array[Int]
   // Conformance-header strict directive (`@alwaysStrict: true` / `@strict:
   // true`). Unlike `in_strict` it does NOT change parsing behaviour (octal
   // handling, statement restrictions, ...) -- it only arms the strict-misuse
@@ -280,6 +285,7 @@ pub fn Parser::new_with_strict_and_jsx(
     class_decl_no_heritage: false,
     in_class_expr_body: false,
     written_any_params: {},
+    template_invalid_escape_positions: [],
     directive_strict: false,
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],
@@ -388,6 +394,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     target_es6_plus: detect_target_es6_plus(src),
     no_implicit_any: detect_no_implicit_any(src),
     experimental_decorators: detect_experimental_decorators(src),
+    template_invalid_escape_positions: lexer.template_invalid_escape_positions,
     record_implicit_any_params: false,
     class_decl_no_heritage: false,
     in_class_expr_body: false,
