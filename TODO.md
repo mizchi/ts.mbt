@@ -889,6 +889,16 @@ valibot.
     all 24 corpus entries; per-package `JSValue` cause budgets, function
     counts, and unsupported-export budgets now reflect the actual
     generated output, including the new heterogeneous-union diagnostics.
+- [ ] Drive the `heterogeneous-union-widened` budget in
+  `scripts/bridge_quality_report.sh` back to 0 (currently 5, added
+  2026-07-15: hono `Child = string | number | JSX.Element`, react
+  `ElementType`, vitest `CancelReason` / `TestArtifact`, drizzle
+  `NeonAuthToken`). All five widen because a member has no
+  runtime-discriminable constructor name — qualified names like
+  `JSX.Element` don't resolve to a PascalCase constructor. The aliases
+  stay runtime-safe (widened to JSValue with diagnostics); the fix is
+  either resolving qualified member names to their canonical local
+  declarations before discriminability, or discriminating structurally.
 
 ### 2. Method-level generics preserved through bridge
 
