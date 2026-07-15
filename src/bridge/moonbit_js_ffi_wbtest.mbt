@@ -5327,3 +5327,82 @@ async test "bridge: polymorphic this lowers to the owner with its own type param
   assert_false(bundle.ffi_mbt.contains("Box[JSValue, JSValue]"))
   assert_false(bundle.ffi_mbt.contains("Chain[JSValue, JSValue]"))
 }
+
+///|
+fn ffi_string_subset_test_state(declared : Array[String]) -> MoonBitJsFfiState {
+  MoonBitJsFfiState::{
+    declared_type_names: declared,
+    struct_type_names: [],
+    generic_type_params_by_name: {},
+    enums: [],
+    external_type_names: [],
+    local_type_param_names: [],
+    function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
+    tagged_union_decls_by_name: {},
+    synthesized_inline_unions: {},
+    needs_js_any: false,
+    needs_promise: false,
+  }
+}
+
+///|
+test "bridge: FFI type name subsets undeclared string-or-Params unions to String" {
+  // zod's optional-message pattern: `params?: string | $ZodCheckMinLengthParams`.
+  // The `$`-prefixed name rejects tagged-union synthesis (constructor names
+  // must start with A-Z), and the Params bag is not a declared type on this
+  // bridge surface — the boundary subsets to `String`.
+  let state = ffi_string_subset_test_state([])
+  let actual = ffi_type_name(
+    state,
+    @ast.TsType::Union([
+      @ast.TsType::String_,
+      @ast.TsType::Named("$ZodCheckMinLengthParams"),
+    ]),
+  )
+  assert_eq(actual, "String")
+  assert_false(state.needs_js_any)
+}
+
+///|
+test "bridge: FFI string-subset abstains when the Params type is declared" {
+  // `$ZodCheckMinLengthParams` sanitizes to `UnderscoreZodCheckMinLengthParams`;
+  // when that type is declared on the bridge surface the union keeps the
+  // JSValue fallback instead of silently dropping the reachable object form.
+  let state = ffi_string_subset_test_state(["UnderscoreZodCheckMinLengthParams"])
+  let actual = ffi_type_name(
+    state,
+    @ast.TsType::Union([
+      @ast.TsType::String_,
+      @ast.TsType::Named("$ZodCheckMinLengthParams"),
+    ]),
+  )
+  assert_eq(actual, "JSValue")
+  assert_true(state.needs_js_any)
+}
+
+///|
+test "bridge: FFI string-subset abstains without the Params suffix" {
+  // `string | $ZodURL`: not an option-bag shape — keep the JSValue fallback.
+  let state = ffi_string_subset_test_state([])
+  let actual = ffi_type_name(
+    state,
+    @ast.TsType::Union([@ast.TsType::String_, @ast.TsType::Named("$ZodURL")]),
+  )
+  assert_eq(actual, "JSValue")
+  assert_true(state.needs_js_any)
+}
+
+///|
+test "bridge: FFI string-subset abstains for three-member unions" {
+  let state = ffi_string_subset_test_state([])
+  let actual = ffi_type_name(
+    state,
+    @ast.TsType::Union([
+      @ast.TsType::String_,
+      @ast.TsType::Named("$ZodCheckMinLengthParams"),
+      @ast.TsType::Object([]),
+    ]),
+  )
+  assert_eq(actual, "JSValue")
+  assert_true(state.needs_js_any)
+}

@@ -982,10 +982,14 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
     Union(parts) =>
       match ffi_synthesize_inline_union(state, parts) {
         Some(synth_name) => synth_name
-        None => {
-          state.needs_js_any = true
-          "JSValue"
-        }
+        None =>
+          match ffi_string_subset_union_text(state, parts) {
+            Some(text) => text
+            None => {
+              state.needs_js_any = true
+              "JSValue"
+            }
+          }
       }
     _ => {
       state.needs_js_any = true
@@ -1105,6 +1109,39 @@ fn ffi_inline_union_synthesized_name(
   // parser-side helper so both paths produce the same synthetic alias name.
   names.sort()
   "Auto_" + names.join("_or_")
+}
+
+///|
+/// String-subset policy for the pervasive optional-message pattern
+/// (`params?: string | $ZodCheckMinLengthParams` across the zod check
+/// surface): when a two-member union pairs `string` with a named
+/// `...Params` bag that is NOT reachable as a declared type in this
+/// bridge surface, type the boundary as `String`. The common string form
+/// becomes naturally typed; the structured object form stays reachable
+/// via `unsafeCast`. Restricted to the `*Params` suffix so option-bag
+/// unions with reachable declarations keep their tagged lowering, and
+/// shapes like `string | URL` keep the JSValue fallback.
+fn ffi_string_subset_union_text(
+  state : MoonBitJsFfiState,
+  parts : Array[@ast.TsType],
+) -> String? {
+  if parts.length() != 2 {
+    return None
+  }
+  let named = match (parts[0], parts[1]) {
+    (String_, Named(n)) | (Named(n), String_) => n
+    _ => return None
+  }
+  if !named.has_suffix("Params") {
+    return None
+  }
+  let ident = ffi_type_identifier(named, "OpaqueType")
+  if state.declared_type_names.contains(ident) ||
+    state.generic_type_params_by_name.get(ident) is Some(_) ||
+    ffi_is_local_type_param(state, named) {
+    return None
+  }
+  Some("String")
 }
 
 ///|

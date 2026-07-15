@@ -1074,6 +1074,28 @@ Previously every `pub fn[T] ...` free function was omitted from
 - Next increments: generic methods on non-generic owners (same
   monomorphization through the facade path), then generic owners.
 
+### 10. String-subset boundary for optional-message unions (done 2026-07-15)
+
+Pattern: zod's check surface passes `params?: string | $ZodCheckMinLengthParams`
+on nearly every validator (`min`, `max`, `length`, `regex`, ...). The
+`$`-prefixed name cannot become a tagged-union constructor (names must start
+`A-Z`), so the whole param degraded to `JSValue?`.
+
+- [x] `ffi_string_subset_union_text`: a two-member union pairing `string`
+  with a named `*Params` bag that is NOT a declared type on the bridge
+  surface now types the boundary as `String`. The common string form is
+  naturally typed; the structured object form stays reachable via
+  `unsafeCast`. Guards: exactly two members, `Params` suffix required,
+  abstains when the named type is declared / a generic param / a local type
+  param — so option-bag unions with reachable declarations keep their
+  tagged lowering and `string | URL` keeps the JSValue fallback.
+- zod: SCAFFOLD JSValue fallback entries 648 -> 565
+  (`min : (Double, String?) -> ZodMap[Key, Value]` etc.); the regenerated
+  zod3 package passes `moon check --target js`.
+- Note: per-package JSValue counts in the env-gated realworld METRICS
+  corpus may drift downward next time it is regenerated — the budget file
+  encodes upper bounds, so this is safe, but expect diffs there.
+
 ### Non-Goals (still)
 
 - [ ] Do not turn this list into a checklist for "all of TypeScript". Each item
