@@ -1031,7 +1031,7 @@ v7.0.2). Truth comes from vendored name manifests
 variant is NOTRUN, and the TS6-era deprecated-compiler-option
 diagnostics (TS5107/TS5101) were removed from the checker accordingly.
 
-State: whole-corpus **TP 2323 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 411 /
+State: whole-corpus **TP 2329 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 405 /
 NOTRUN 14** via `scripts/checker_conformance_oracle.sh --max-fp 0
 --max-legal-parsefail 3`.
 
@@ -1256,6 +1256,22 @@ Batch BO (+12 TP, TP 2323 / MISS 411) continued the small clusters:
   scannerImportDeclaration1).
 - TS1003-adjacent: a primitive-type keyword can never be a qualified
   type-name segment (`var v: x.void` — parservoidInQualifiedName2).
+Batch BP (+6 TP, TP 2329 / MISS 405) took TS2322 subclusters and
+primitive spreads:
+- `SharedArrayBuffer` and `ArrayBuffer` are nominally distinct lib
+  types: `var foo: ArrayBuffer = new SharedArrayBuffer(...)` flags when
+  neither name has a user declaration
+  (assignSharedArrayBufferToArrayBuffer).
+- `new Array<T>(n)` keeps the explicit element type (`Array(T)`), so a
+  mismatched declared annotation flags (parserObjectCreation1).
+- TS2698: an object-literal spread of a provably non-object primitive
+  (string / numeric / template-literal-typed operand) — named /
+  generic / union operands abstain (spreadNonObject1,
+  spreadTypeVariable as a bonus flip).
+- A provably NUMERIC computed key in an object literal checks its
+  value against the target interface's number index signature
+  (`var o: I = { [+"foo"]: "" }` where `[s: number]: boolean` —
+  computedPropertyNamesContextualType10_ES5/ES6).
 Documented dead ends from this round: YieldExpression10_es6 (an
 object-literal method's name in the backstop is indistinguishable from
 a legal self-referential named function expression property);

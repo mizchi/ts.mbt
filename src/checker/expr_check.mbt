@@ -6036,7 +6036,18 @@ fn infer_expr(
   match expr {
     // Explicit type arguments are erased for inference: the call's value
     // type is the inner call's type.
-    TypeArgs(_, inner) => infer_expr(env, resolver, inner)
+    TypeArgs(targs, inner) => {
+      // `new Array<T>(n)` constructs a `T[]` — keep the explicit element
+      // type so a mismatched declared annotation flags
+      // (`var a: number[] = new Array<number[]>(1)` — parserObjectCreation1).
+      if inner is New("Array", _) &&
+        targs.length() == 1 &&
+        resolver.classes.get("Array") is None &&
+        resolver.interfaces.get("Array") is None {
+        return @ast.TsType::Array(targs[0])
+      }
+      infer_expr(env, resolver, inner)
+    }
     NumberLit(_) | IntLit(_) => @ast.TsType::Number
     BigIntLit(_) => @ast.TsType::BigInt
     BoolLit(_) => @ast.TsType::Boolean
@@ -10997,8 +11008,41 @@ fn check_object_lit_against_target(
     // Computed / symbol property keys (`@@computed:N`) can't be matched against
     // declared members by name — TypeScript resolves the computed key to a
     // symbol / literal we don't evaluate, so neither "excess" nor "missing"
-    // applies. Skip them.
+    // applies. But when the computed key is provably NUMERIC and the target
+    // interface declares a number index signature, the VALUE must satisfy
+    // the index value type (`var o: I = { [+"foo"]: "" }` where
+    // `[s: number]: boolean` — computedPropertyNamesContextualType10).
     if key.has_prefix("@@computed:") {
+      match value {
+        ComputedProp(kexpr, vexpr) => {
+          let num_value_ty : @ast.TsType? = match resolver.unwrap(target) {
+            Named(n) =>
+              match resolver.interfaces.get(n) {
+                Some(iface) => {
+                  let mut found : @ast.TsType? = None
+                  for sig in iface.index_signatures {
+                    if sig.0 is (Number | Int) && found is None {
+                      found = Some(sig.1)
+                    }
+                  }
+                  found
+                }
+                None => None
+              }
+            _ => None
+          }
+          match num_value_ty {
+            Some(vt) =>
+              if is_checkable(vt) &&
+                resolver.unwrap(infer_expr(env, resolver, kexpr))
+                is (Number | NumberLiteral(_) | Int) {
+                check_expr_against(env, vexpr, vt, ctx, "\{sub_path}[computed]")
+              }
+            None => ()
+          }
+        }
+        _ => ()
+      }
       continue
     }
     match resolver.lookup_field(target, key) {
@@ -14312,6 +14356,22 @@ fn check_ident_binding_decl(
   // `Any`, which TS doesn't flag either). The stored flag records whether the
   // binding is block-scoped (`let` / `const`); a `var` read inside a computed
   // property key is exempt from TS2454 (see the read sites).
+  // TS2322: `SharedArrayBuffer` and `ArrayBuffer` are nominally distinct
+  // lib types (`var foo: ArrayBuffer = new SharedArrayBuffer(1024)` —
+  // assignSharedArrayBufferToArrayBuffer). Both must be lib-provided
+  // (no user declarations) for the verdict to hold.
+  if init is New("SharedArrayBuffer", _) &&
+    ctx.resolver.unwrap(declared) is Named("ArrayBuffer") &&
+    ctx.resolver.classes.get("ArrayBuffer") is None &&
+    ctx.resolver.interfaces.get("ArrayBuffer") is None &&
+    ctx.resolver.classes.get("SharedArrayBuffer") is None &&
+    ctx.resolver.interfaces.get("SharedArrayBuffer") is None {
+    record(
+      ctx,
+      "binding `\{name}` init",
+      "type `SharedArrayBuffer` is not assignable to type `ArrayBuffer`",
+    )
+  }
   match init {
     Var("__ts_no_init__") =>
       // TS2454 fires only under strict-null-checks (TS treats
@@ -16534,6 +16594,30 @@ fn check_call_args_in_expr(
     ObjectLit(entries) => {
       for ent in entries {
         check_call_args_in_expr(env, ent.1, ctx)
+      }
+      // TS2698: an object-literal spread of a provably NON-OBJECT value
+      // (`{ ...s }` where `s` is a string / template-literal / numeric
+      // type — spreadNonObject1). Named / generic / union operands
+      // abstain.
+      for ent in entries {
+        if ent.0.has_prefix("@@spread") {
+          match ctx.resolver.unwrap(infer_expr(env, ctx.resolver, ent.1)) {
+            String_
+            | Number
+            | Boolean
+            | BigInt
+            | Symbol
+            | Literal(_)
+            | NumberLiteral(_)
+            | BigIntLiteral(_)
+            | BooleanLiteral(_)
+            | TemplateLiteralType(_, _) =>
+              record(
+                ctx, "object spread", "spread types may only be created from object types",
+              )
+            _ => ()
+          }
+        }
       }
       // TS2783: an explicitly-written property that a LATER spread in the
       // same literal always overwrites (`{ b: 1, ...ab }` where `ab`'s type

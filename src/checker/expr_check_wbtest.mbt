@@ -14558,3 +14558,44 @@ test "expr_check: for-in patterns, lib eras, import-eq roots (batch BO)" {
   // segment (parservoidInQualifiedName2).
   assert_true(issues("var v : x.void;") > 0)
 }
+
+///|
+test "expr_check: buffer nominality, Array targs, primitive spreads, computed index values (batch BP)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2322: SharedArrayBuffer and ArrayBuffer are nominally distinct
+  // (assignSharedArrayBufferToArrayBuffer).
+  assert_true(issues("var foo: ArrayBuffer = new SharedArrayBuffer(1024);") > 0)
+  @test.assert_eq(
+    issues("var foo: SharedArrayBuffer = new SharedArrayBuffer(1024);"),
+    0,
+  )
+  // TS2322: `new Array<T>(n)` keeps the explicit element type
+  // (parserObjectCreation1).
+  assert_true(issues("var autoToken: number[] = new Array<number[]>(1);") > 0)
+  @test.assert_eq(issues("var ok: number[][] = new Array<number[]>(1);"), 0)
+  // TS2698: an object spread of a provably non-object primitive
+  // (spreadNonObject1); object-typed and generic spreads stay legal.
+  assert_true(
+    issues("type S = `${number}`;\ndeclare var s: S;\nvar a = { ...s, y: 6 };") >
+    0,
+  )
+  assert_true(issues("var a = { ...\"str\" };") > 0)
+  @test.assert_eq(issues("var o = { x: 1 };\nvar a = { ...o, y: 6 };"), 0)
+  // TS2322: a provably numeric computed key checks its VALUE against the
+  // target's number index signature
+  // (computedPropertyNamesContextualType10).
+  assert_true(
+    issues(
+      "interface I {\n    [s: number]: boolean;\n}\nvar o: I = {\n    [+\"foo\"]: \"\",\n    [+\"bar\"]: 0\n}",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "interface I {\n    [s: number]: boolean;\n}\nvar o: I = {\n    [+\"foo\"]: true\n}",
+    ),
+    0,
+  )
+}
