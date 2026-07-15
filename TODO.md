@@ -1137,6 +1137,28 @@ callback returns, where `JSValue` is the semantically correct type).
 - Note: per-package JSValue counts in the env-gated realworld METRICS
   corpus will drift down on regeneration (budgets are upper bounds).
 
+### 12. Indexed access on constrained type params (done 2026-07-15)
+
+zod: `def: Internals["def"]` / `type: Internals["def"]["type"]` with
+`Internals extends core.$ZodTypeInternals<Output, Input>`.
+Fallback entries 241 -> 225.
+
+- [x] `decl_eval_bound_indexed_access`: a `P["key"]` access whose base is
+  one of the owning interface's CONSTRAINED type parameters resolves by
+  looking the key up in the bound's field surface — through the qualified
+  namespace import (`core.`), the barrel `export * from "./schemas.js"`
+  (new `decl_resolve_interface_origin_deep` walks
+  `record.reexports`), and the bound's own `extends` chain. Chained
+  accesses evaluate inside-out, tracking the module each intermediate
+  name is relative to; resolved names map back to canonical export names
+  where the surface has one. Generic targets substitute supplied type
+  arguments; a field that still references the target's own params
+  without matching arguments is rejected (capture risk) and keeps the
+  old widening.
+- zod: `def : UnderscoreZodTypeDef` (typed opaque handle instead of
+  `JSValue`), `type_ : SchemaType` / `ZodTypeType` (enum of the schema
+  kind literal union).
+
 ### Non-Goals (still)
 
 - [ ] Do not turn this list into a checklist for "all of TypeScript". Each item

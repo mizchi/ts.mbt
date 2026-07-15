@@ -6218,10 +6218,16 @@ fn append_interface_origin_fields(
     // the boundary typed at the bound is sound for params and keeps the
     // member natural instead of widening the `T` references to `JSValue`.
     // Unconstrained method generics keep the existing widening.
-    let bounded_type = decl_substitute_method_type_param_bounds(
-      origin.iface,
-      field_name,
-      field_type,
+    let bounded_type = decl_eval_bound_indexed_access(
+      origin,
+      modules,
+      canonical_types,
+      decl_substitute_method_type_param_bounds(
+        origin.iface,
+        field_name,
+        field_type,
+      ),
+      0,
     )
     append_lowered_interface_field(
       fields,
@@ -6236,6 +6242,395 @@ fn append_interface_origin_fields(
       modules,
       canonical_types,
     )
+  }
+}
+
+///|
+/// Evaluate `P["key"]` indexed accesses whose base is one of the owning
+/// interface's CONSTRAINED type parameters by looking the key up in the
+/// bound's field surface (zod: `def: Internals["def"]` with
+/// `Internals extends $ZodTypeInternals<O, I>` resolves through the
+/// bound's extends chain to `$ZodTypeDef`). Chained accesses
+/// (`Internals["def"]["type"]`) evaluate inside-out. Anything that cannot
+/// be resolved keeps its original shape and widens as before.
+fn decl_eval_bound_indexed_access(
+  origin : ResolvedInterfaceOrigin,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+  t : @ast.TsType,
+  depth : Int,
+) -> @ast.TsType {
+  if depth > 8 {
+    return t
+  }
+  fn go(x : @ast.TsType) -> @ast.TsType {
+    decl_eval_bound_indexed_access(
+      origin,
+      modules,
+      canonical_types,
+      x,
+      depth + 1,
+    )
+  }
+
+  match t {
+    IndexedAccess(_, _) =>
+      match
+        decl_eval_indexed_chain(origin, modules, canonical_types, t, depth) {
+        Some((resolved, resolved_info)) =>
+          // The resolved field type's names live in the module that
+          // declares the looked-up interface; map them to canonical
+          // export names where the surface has one so later passes
+          // resolve them like any other exported reference.
+          decl_rewrite_names_to_exports(
+            resolved_info, canonical_types, resolved,
+          )
+        None => t
+      }
+    Func(ps, r) => {
+      let out : Array[@ast.TsType] = []
+      for p in ps {
+        out.push(go(p))
+      }
+      Func(out, go(r))
+    }
+    Union(items) => {
+      let out : Array[@ast.TsType] = []
+      for it in items {
+        out.push(go(it))
+      }
+      Union(out)
+    }
+    Array(inner) => Array(go(inner))
+    Applied(n, args) => {
+      let out : Array[@ast.TsType] = []
+      for a in args {
+        out.push(go(a))
+      }
+      Applied(n, out)
+    }
+    Tuple(items) => {
+      let out : Array[@ast.TsType] = []
+      for it in items {
+        out.push(go(it))
+      }
+      Tuple(out)
+    }
+    _ => t
+  }
+}
+
+///|
+fn decl_iface_type_param_bound(
+  iface : @ast.TsInterface,
+  param : String,
+) -> @ast.TsType? {
+  if !iface.type_params.contains(param) {
+    return None
+  }
+  for pair in iface.type_param_bounds {
+    let (name, bound) = pair
+    if name == param {
+      return Some(bound)
+    }
+  }
+  None
+}
+
+///|
+/// Resolve an `IndexedAccess` chain to its field type, tracking the module
+/// whose namespace the intermediate names live in: `Internals["def"]`
+/// looks the key up in the BOUND's declaring module (core), and the
+/// chained `["type"]` must resolve `$ZodTypeDef` there, not in the entry.
+/// Returns the resolved type together with that module.
+fn decl_eval_indexed_chain(
+  origin : ResolvedInterfaceOrigin,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+  t : @ast.TsType,
+  depth : Int,
+) -> (@ast.TsType, DeclModuleInfo)? {
+  if depth > 8 {
+    return None
+  }
+  match t {
+    IndexedAccess(base, key) => {
+      let key_name = match key {
+        @ast.TsType::Literal(k) => k
+        _ => return None
+      }
+      let (base_ty, base_info) = match
+        decl_eval_indexed_chain(
+          origin,
+          modules,
+          canonical_types,
+          base,
+          depth + 1,
+        ) {
+        Some(pair) => pair
+        None => return None
+      }
+      // A constrained type parameter of the OWNING interface stands in
+      // for its bound: any instantiation's `P["key"]` is the bound's
+      // `key` member (or a subtype), so the bound's field type is a
+      // sound upper approximation for the boundary.
+      let resolved_base = match base_ty {
+        Named(p) if base_info.record.path == origin.info.record.path =>
+          match decl_iface_type_param_bound(origin.iface, p) {
+            Some(bound) => bound
+            None => base_ty
+          }
+        _ => base_ty
+      }
+      decl_lookup_field_in_named_interface(
+        base_info, modules, canonical_types, resolved_base, key_name,
+      )
+    }
+    Named(_) | Applied(_, _) => Some((t, origin.info))
+    _ => None
+  }
+}
+
+///|
+/// Look `key` up in the field surface of the interface `base_ty` names,
+/// walking its `extends` chain. Generic targets substitute their supplied
+/// type arguments; a found field that still references the target's own
+/// type parameters without matching arguments is rejected (capture risk).
+/// Returns the field type and the module its names are relative to.
+fn decl_lookup_field_in_named_interface(
+  lookup_from : DeclModuleInfo,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+  base_ty : @ast.TsType,
+  key : String,
+) -> (@ast.TsType, DeclModuleInfo)? {
+  let (raw_name, args) = match base_ty {
+    Named(n) => (n, ([] : Array[@ast.TsType]))
+    Applied(n, type_args) => (n, type_args)
+    _ => return None
+  }
+  // Bounds are routinely qualified (`core.$ZodTypeInternals<O, I>`):
+  // resolve the namespace-import head to its source module first.
+  let (lookup_info, name) = match
+    redirect_qualified_named(lookup_from, modules, Named(raw_name)) {
+    (target_info, Named(tail)) => (target_info, tail)
+    _ => (lookup_from, raw_name)
+  }
+  let visited_paths : Array[String] = []
+  let target = match
+    decl_resolve_interface_origin_deep(
+      lookup_info, name, modules, canonical_types, visited_paths,
+    ) {
+    Some(t) => t
+    None => return None
+  }
+  let visited : Array[String] = []
+  let found = match
+    decl_lookup_field_via_extends(
+      target, key, modules, canonical_types, visited,
+    ) {
+    Some(f) => f
+    None => return None
+  }
+  let target_params = target.iface.type_params
+  if decl_type_references_any_param(found, target_params) {
+    if target_params.length() > 0 && args.length() == target_params.length() {
+      return Some(
+        (substitute_type_alias_params(found, target_params, args), target.info),
+      )
+    }
+    return None
+  }
+  Some((found, target.info))
+}
+
+///|
+/// Rewrite `Named` / `Applied` heads to their canonical export names when
+/// the bridge surface has one, so a type resolved in another module's
+/// namespace links up with the emitted structs instead of degrading to an
+/// opaque companion.
+fn decl_rewrite_names_to_exports(
+  info : DeclModuleInfo,
+  canonical_types : Map[String, String],
+  t : @ast.TsType,
+) -> @ast.TsType {
+  fn go(x : @ast.TsType) -> @ast.TsType {
+    decl_rewrite_names_to_exports(info, canonical_types, x)
+  }
+
+  match t {
+    Named(n) =>
+      match resolve_exported_type_name(info, n, canonical_types) {
+        Some(export_name) => Named(export_name)
+        None => t
+      }
+    Applied(n, args) => {
+      let out : Array[@ast.TsType] = []
+      for a in args {
+        out.push(go(a))
+      }
+      match resolve_exported_type_name(info, n, canonical_types) {
+        Some(export_name) => Applied(export_name, out)
+        None => Applied(n, out)
+      }
+    }
+    Union(items) => {
+      let out : Array[@ast.TsType] = []
+      for it in items {
+        out.push(go(it))
+      }
+      Union(out)
+    }
+    Array(inner) => Array(go(inner))
+    Func(ps, r) => {
+      let out : Array[@ast.TsType] = []
+      for p in ps {
+        out.push(go(p))
+      }
+      Func(out, go(r))
+    }
+    _ => t
+  }
+}
+
+///|
+/// `resolve_interface_origin` plus `export * from "./sub.js"` barrel
+/// traversal: zod's `core/index.d.ts` only re-exports, so
+/// `core.$ZodTypeInternals` is declared one star-re-export hop away.
+fn decl_resolve_interface_origin_deep(
+  info : DeclModuleInfo,
+  name : String,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+  visited_paths : Array[String],
+) -> ResolvedInterfaceOrigin? {
+  if visited_paths.contains(info.record.path) {
+    return None
+  }
+  visited_paths.push(info.record.path)
+  match resolve_interface_origin(info, name, modules, canonical_types) {
+    Some(t) => return Some(t)
+    None => ()
+  }
+  for edge in info.record.reexports {
+    match edge.kind {
+      All =>
+        match modules.get(edge.resolved_path) {
+          Some(target_info) =>
+            match
+              decl_resolve_interface_origin_deep(
+                target_info, name, modules, canonical_types, visited_paths,
+              ) {
+              Some(found) => return Some(found)
+              None => ()
+            }
+          None => ()
+        }
+      _ => ()
+    }
+  }
+  None
+}
+
+///|
+fn decl_lookup_field_via_extends(
+  target : ResolvedInterfaceOrigin,
+  key : String,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+  visited : Array[String],
+) -> @ast.TsType? {
+  let target_key = decl_key(target.info.record.path, target.iface.name)
+  if visited.contains(target_key) {
+    return None
+  }
+  visited.push(target_key)
+  for field in target.iface.fields {
+    if field.0 == key {
+      return Some(field.1)
+    }
+  }
+  for base_name in target.iface.extends_names {
+    match
+      resolve_interface_origin(target.info, base_name, modules, canonical_types) {
+      Some(base_origin) =>
+        match
+          decl_lookup_field_via_extends(
+            base_origin, key, modules, canonical_types, visited,
+          ) {
+          Some(found) =>
+            // A base-declared field may reference the BASE's own type
+            // parameters; without the derived interface's extends_args
+            // substitution this would capture — bail conservatively.
+            if decl_type_references_any_param(
+                found,
+                base_origin.iface.type_params,
+              ) {
+              return None
+            } else {
+              return Some(found)
+            }
+          None => ()
+        }
+      None => ()
+    }
+  }
+  None
+}
+
+///|
+fn decl_type_references_any_param(
+  t : @ast.TsType,
+  params : Array[String],
+) -> Bool {
+  if params.length() == 0 {
+    return false
+  }
+  fn go(x : @ast.TsType) -> Bool {
+    decl_type_references_any_param(x, params)
+  }
+
+  match t {
+    Named(n) => params.contains(n)
+    Applied(n, args) => {
+      if params.contains(n) {
+        return true
+      }
+      for a in args {
+        if go(a) {
+          return true
+        }
+      }
+      false
+    }
+    Array(inner) | Rest(inner) | Keyof(inner) => go(inner)
+    Union(items) | Intersection(items) | Tuple(items) => {
+      for it in items {
+        if go(it) {
+          return true
+        }
+      }
+      false
+    }
+    Func(ps, r) => {
+      for p in ps {
+        if go(p) {
+          return true
+        }
+      }
+      go(r)
+    }
+    Object(fields) => {
+      for f in fields {
+        if go(f.0) || go(f.1) {
+          return true
+        }
+      }
+      false
+    }
+    IndexedAccess(base, k) => go(base) || go(k)
+    Conditional(a, b, c, d) => go(a) || go(b) || go(c) || go(d)
+    _ => false
   }
 }
 

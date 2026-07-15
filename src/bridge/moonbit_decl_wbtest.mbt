@@ -2783,3 +2783,27 @@ test "bridge: generic method type params substitute their bounds at the boundary
   )
   assert_eq(untouched, iface.fields[0].1)
 }
+
+///|
+async test "bridge: indexed access on constrained type params resolves through bounds" {
+  // `def: Internals["def"]` with `Internals extends core.$ZodTypeInternals`
+  // looks the key up in the bound's field surface — through the qualified
+  // namespace import, the barrel `export * from "./schemas.js"`, and the
+  // bound's own extends chain. The chained `["type"]` continues resolving
+  // in the bound's declaring module and lands on the literal union.
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/indexed-bound-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("/// def : UnderscoreZodTypeDef"))
+  assert_false(actual.contains("/// def : JSValue"))
+  assert_true(actual.contains("/// type : ZodTypeType"))
+  assert_false(actual.contains("/// type : JSValue"))
+}
