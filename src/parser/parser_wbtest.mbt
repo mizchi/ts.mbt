@@ -7136,3 +7136,43 @@ test "parser: type alias in module block is collected" {
     msg="expected Callback",
   )
 }
+
+///|
+test "parser: legal shapes formerly in the PFLEGAL budget (batch BR)" {
+  // decoratorOnClass3: decorators between `export` and `class`.
+  let m1 = Parser::from_source(
+    (
+      #|declare function dec<T>(target: T): T;
+      #|
+      #|export
+      #|@dec
+      #|class C {
+      #|}
+    ),
+  ).parse_module()
+  @test.assert_eq(m1.classes.length(), 1)
+  assert_true(m1.classes[0].decorators.length() > 0)
+  // defaultExportWithOverloads01: bodiless overload signatures on a
+  // named default export function.
+  let m2 = Parser::from_source(
+    (
+      #|export default function f();
+      #|export default function f(x: string);
+      #|export default function f(...args: any[]) {
+      #|}
+    ),
+  ).parse_module()
+  @test.assert_eq(m2.funcs.length(), 3)
+  // parser768531: a `/x/` regex in statement position directly after a
+  // block's closing brace lexes as a regex, not division.
+  let m3 = Parser::from_source(
+    (
+      #|{a: 3}
+      #|/x/
+    ),
+  ).parse_module()
+  assert_true(m3.top_level_stmts.length() > 0)
+  // Division after a can-end-expression token still lexes as division.
+  let p4 = Parser::from_source("var y = (x) / 2;")
+  let _ = p4.parse_module()
+}

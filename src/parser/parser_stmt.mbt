@@ -43,6 +43,44 @@ fn Parser::is_namespace_decl_start(self : Parser) -> Bool {
 pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
   let tok = self.peek()
   match tok.kind {
+    Slash => {
+      // A `/` in statement position starts a regex literal; the prelexer
+      // classified it as division because the previous token was a
+      // block's closing `}` (`{a: 3}` then `/x/` — parser768531). Re-lex
+      // the span from the source text with a fresh regex-allowing lexer,
+      // overwrite the last covered token slot with the regex token, and
+      // reparse so postfix expressions (`/x/.test(s)`) still work.
+      let start = tok.pos
+      let rest = self.src[start:self.src.length()].to_owned()
+      let relexer = Lexer::new(rest)
+      let relexed = relexer.next_token()
+      match relexed.kind {
+        Regex(_, flags) => {
+          // TS1499: only `d g i m s u v y` are regular-expression flags
+          // (`if (1) /regexp/a.foo()` —
+          // parserRegularExpressionDivideAmbiguity3).
+          for c in flags {
+            if !"dgimsuvy".contains_char(c) {
+              self.grammar_misuses.push("unknown regular expression flag")
+              break
+            }
+          }
+          let end_pos = start + relexer.pos
+          let mut k = self.pos
+          while k + 1 < self.tokens.length() && self.tokens[k + 1].pos < end_pos {
+            k += 1
+          }
+          self.tokens[k] = {
+            kind: relexed.kind,
+            pos: start,
+            has_newline_before: tok.has_newline_before,
+          }
+          self.pos = k
+          self.parse_stmt()
+        }
+        _ => raise ParseError("Unexpected token: Slash")
+      }
+    }
     At => {
       self.skip_decorator()
       // TS1206: at statement level a decorator can only precede a class

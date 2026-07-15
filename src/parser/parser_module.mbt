@@ -2966,7 +2966,20 @@ fn Parser::parse_export_stmt(
       return
     }
     if self.check(Function) {
-      let func = self.parse_function_expr()
+      // A NAMED default function may be a bodiless overload signature
+      // (`export default function f();` — defaultExportWithOverloads01):
+      // route through the declaration parser, which tolerates missing
+      // bodies. Anonymous defaults keep the expression parser.
+      let is_named = match self.peek_at(1).kind {
+        Ident(_) => true
+        Star => self.peek_at(2).kind is Ident(_)
+        _ => false
+      }
+      let func = if is_named {
+        self.parse_function()
+      } else {
+        self.parse_function_expr()
+      }
       self.grammar_misuses.push("<export-default>fn:" + func.name)
       if func.name != "<anon>" {
         funcs.push(func)
@@ -3002,6 +3015,13 @@ fn Parser::parse_export_stmt(
     self.grammar_misuses.push("<export-default>expr:")
     self.consume_semicolon()
     return
+  }
+  // Decorators may sit between `export` and `class`
+  // (`export @dec class C {}` — decoratorOnClass3). Collect them into
+  // `pending_decorators`; the class parsers drain that list at their
+  // entry, exactly as for the `@dec export class` order.
+  while self.check(At) {
+    self.skip_decorator()
   }
   if self.check(Function) {
     let func = self.parse_function()

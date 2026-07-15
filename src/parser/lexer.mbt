@@ -2218,6 +2218,12 @@ fn token_can_end_expr(kind : TokenKind) -> Bool {
     | Null
     | RParen
     | RBracket
+    // `}` stays here even though a closing brace often ends a BLOCK
+    // (after which `/` starts a regex): JSX self-closing tags
+    // (`attr={x} />`) and object-literal division depend on the
+    // division reading. The statement-position regex case is recovered
+    // by the parser re-lexing from source (`Parser::parse_stmt`'s
+    // `Slash` arm — parser768531).
     | RBrace
     | PlusPlus
     | MinusMinus => true
