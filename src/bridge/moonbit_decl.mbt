@@ -5917,6 +5917,7 @@ fn append_lowered_interface_field(
   seen_field_names : Array[String],
   info : DeclModuleInfo,
   owner_name : String,
+  this_owner : @ast.TsType,
   field_name : String,
   field_type : @ast.TsType,
   is_readonly : Bool,
@@ -5927,14 +5928,21 @@ fn append_lowered_interface_field(
     return
   }
   seen_field_names.push(field_name)
+  // `this` in a member type always denotes the interface the struct is
+  // being generated for (the root of the extends expansion), applied to
+  // that struct's own type parameters — those are exactly the params in
+  // scope for the generated field / wrapper signatures.
   let lowered_type = decl_specialize_generated_interface_field_type(
     owner_name,
     field_name,
-    lower_react_utility_type(
-      info,
-      rewrite_type_refs(info, field_type, canonical_types),
-      modules,
-      canonical_types,
+    decl_replace_this_type(
+      lower_react_utility_type(
+        info,
+        rewrite_type_refs(info, field_type, canonical_types),
+        modules,
+        canonical_types,
+      ),
+      this_owner,
     ),
   )
   fields.push(
@@ -5954,6 +5962,7 @@ fn append_lowered_interface_field(
 ///|
 fn append_interface_origin_fields(
   origin : ResolvedInterfaceOrigin,
+  this_owner : @ast.TsType,
   modules : Map[String, DeclModuleInfo],
   canonical_types : Map[String, String],
   fields : Array[(String, @ast.TsType)],
@@ -5971,9 +5980,12 @@ fn append_interface_origin_fields(
       resolve_interface_origin(origin.info, base_name, modules, canonical_types) {
       Some(base_origin) =>
         if should_expand_interface_base(base_origin) {
+          // Base members merged into the derived struct keep the ROOT
+          // `this_owner`: `this` in an inherited member denotes the
+          // derived type, and only the root's type params are in scope.
           append_interface_origin_fields(
-            base_origin, modules, canonical_types, fields, readonly_fields, seen_field_names,
-            seen_origins,
+            base_origin, this_owner, modules, canonical_types, fields, readonly_fields,
+            seen_field_names, seen_origins,
           )
         }
       None => ()
@@ -5987,6 +5999,7 @@ fn append_interface_origin_fields(
       seen_field_names,
       origin.info,
       origin.export_name,
+      this_owner,
       field_name,
       field_type,
       origin.iface.readonly_fields.contains(field_name),
@@ -6007,7 +6020,13 @@ fn clone_resolved_interface_origin(
   let seen_field_names : Array[String] = []
   let seen_origins : Array[String] = []
   append_interface_origin_fields(
-    origin, modules, canonical_types, fields, readonly_fields, seen_field_names,
+    origin,
+    decl_this_owner_type(origin.export_name, origin.iface.type_params),
+    modules,
+    canonical_types,
+    fields,
+    readonly_fields,
+    seen_field_names,
     seen_origins,
   )
   {
@@ -6349,6 +6368,7 @@ fn clone_exported_interface(
   let seen_origins : Array[String] = []
   append_interface_origin_fields(
     { info, export_name: exported.export_name, iface: exported.iface },
+    decl_this_owner_type(exported.export_name, exported.iface.type_params),
     modules,
     canonical_types,
     fields,
@@ -7527,7 +7547,7 @@ fn decl_specialize_generated_class_method_return_type(
   // TypeScript `this` types in builder-style chains (`setIssuedAt(): this`)
   // are parsed as `Named("This")`. Replace them with the owning class so
   // chained calls keep type-checking.
-  let type_ = decl_replace_this_type(type_, class_name)
+  let type_ = decl_replace_this_type(type_, @ast.TsType::Named(class_name))
   if class_name == "Context" &&
     decl_is_hono_context_response_method(method_name) {
     return Named("Response")
@@ -7559,41 +7579,71 @@ fn decl_replace_this_in_function_return(
 ) -> @ast.TsType {
   match type_ {
     @ast.TsType::Func(params, return_type) =>
-      @ast.TsType::Func(params, decl_replace_this_type(return_type, owner_name))
+      @ast.TsType::Func(
+        params,
+        decl_replace_this_type(return_type, @ast.TsType::Named(owner_name)),
+      )
     _ => type_
+  }
+}
+
+///|
+/// The type that a member-level `this` denotes: the owning declaration
+/// applied to its own type parameters (`Box[A, B]`), or the bare name
+/// when the owner is not generic. Substituting the applied form keeps
+/// fluent chains typed instead of letting the bare generic reference
+/// fall into the `JSValue` arity filler.
+fn decl_this_owner_type(
+  owner_name : String,
+  type_params : Array[String],
+) -> @ast.TsType {
+  if type_params.length() == 0 {
+    @ast.TsType::Named(owner_name)
+  } else {
+    let args : Array[@ast.TsType] = []
+    for param in type_params {
+      args.push(@ast.TsType::Named(param))
+    }
+    @ast.TsType::Applied(owner_name, args)
   }
 }
 
 ///|
 fn decl_replace_this_type(
   type_ : @ast.TsType,
-  class_name : String,
+  owner : @ast.TsType,
 ) -> @ast.TsType {
   match type_ {
-    @ast.TsType::Named(n) if n == "this" || n == "This" =>
-      @ast.TsType::Named(class_name)
+    @ast.TsType::Named(n) if n == "this" || n == "This" => owner
     @ast.TsType::Array(inner) =>
-      @ast.TsType::Array(decl_replace_this_type(inner, class_name))
+      @ast.TsType::Array(decl_replace_this_type(inner, owner))
     @ast.TsType::Tuple(items) => {
       let next : Array[@ast.TsType] = []
       for item in items {
-        next.push(decl_replace_this_type(item, class_name))
+        next.push(decl_replace_this_type(item, owner))
       }
       @ast.TsType::Tuple(next)
     }
     @ast.TsType::Union(items) => {
       let next : Array[@ast.TsType] = []
       for item in items {
-        next.push(decl_replace_this_type(item, class_name))
+        next.push(decl_replace_this_type(item, owner))
       }
       @ast.TsType::Union(next)
     }
     @ast.TsType::Applied(name, args) => {
       let next_args : Array[@ast.TsType] = []
       for arg in args {
-        next_args.push(decl_replace_this_type(arg, class_name))
+        next_args.push(decl_replace_this_type(arg, owner))
       }
       @ast.TsType::Applied(name, next_args)
+    }
+    @ast.TsType::Func(params, return_type) => {
+      let next_params : Array[@ast.TsType] = []
+      for param in params {
+        next_params.push(decl_replace_this_type(param, owner))
+      }
+      @ast.TsType::Func(next_params, decl_replace_this_type(return_type, owner))
     }
     _ => type_
   }
@@ -8633,6 +8683,7 @@ fn clone_class_property_in_scope(
 fn clone_class_method_in_scope(
   class_method : @ast.TsClassMethodDecl,
   class_name : String,
+  this_owner : @ast.TsType,
   info : DeclModuleInfo,
   local_name_prefix : String,
   modules : Map[String, DeclModuleInfo],
@@ -8641,13 +8692,16 @@ fn clone_class_method_in_scope(
   let params : Array[(String, @ast.TsType)] = []
   for param_index, param in class_method.params {
     let (param_name, param_type) = param
-    let lowered_param_type = lower_react_utility_type(
-      info,
-      rewrite_type_refs_in_scope(
-        info, local_name_prefix, param_type, canonical_types,
+    let lowered_param_type = decl_replace_this_type(
+      lower_react_utility_type(
+        info,
+        rewrite_type_refs_in_scope(
+          info, local_name_prefix, param_type, canonical_types,
+        ),
+        modules,
+        canonical_types,
       ),
-      modules,
-      canonical_types,
+      this_owner,
     )
     params.push(
       (
@@ -8675,16 +8729,19 @@ fn clone_class_method_in_scope(
     return_type: decl_specialize_generated_class_method_return_type(
       class_name,
       class_method.name,
-      lower_react_utility_type(
-        info,
-        rewrite_type_refs_in_scope(
+      decl_replace_this_type(
+        lower_react_utility_type(
           info,
-          local_name_prefix,
-          class_method.return_type,
+          rewrite_type_refs_in_scope(
+            info,
+            local_name_prefix,
+            class_method.return_type,
+            canonical_types,
+          ),
+          modules,
           canonical_types,
         ),
-        modules,
-        canonical_types,
+        this_owner,
       ),
     ),
     is_static: class_method.is_static,
@@ -8701,6 +8758,7 @@ fn clone_class_method_in_scope(
 ///|
 fn callable_method_from_func_type(
   class_name : String,
+  this_owner : @ast.TsType,
   method_name : String,
   is_static : Bool,
   params : Array[@ast.TsType],
@@ -8713,13 +8771,16 @@ fn callable_method_from_func_type(
   let method_params : Array[(String, @ast.TsType)] = []
   for i, param_type in params {
     let param_name = "arg" + i.to_string()
-    let lowered_param_type = lower_react_utility_type(
-      info,
-      rewrite_type_refs_in_scope(
-        info, local_name_prefix, param_type, canonical_types,
+    let lowered_param_type = decl_replace_this_type(
+      lower_react_utility_type(
+        info,
+        rewrite_type_refs_in_scope(
+          info, local_name_prefix, param_type, canonical_types,
+        ),
+        modules,
+        canonical_types,
       ),
-      modules,
-      canonical_types,
+      this_owner,
     )
     method_params.push(
       (
@@ -8730,13 +8791,16 @@ fn callable_method_from_func_type(
       ),
     )
   }
-  let lowered_return_type = lower_react_utility_type(
-    info,
-    rewrite_type_refs_in_scope(
-      info, local_name_prefix, return_type, canonical_types,
+  let lowered_return_type = decl_replace_this_type(
+    lower_react_utility_type(
+      info,
+      rewrite_type_refs_in_scope(
+        info, local_name_prefix, return_type, canonical_types,
+      ),
+      modules,
+      canonical_types,
     ),
-    modules,
-    canonical_types,
+    this_owner,
   )
   {
     name: method_name,
@@ -8781,6 +8845,7 @@ fn preferred_callable_interface_field(iface : @ast.TsInterface) -> @ast.TsType? 
 ///|
 fn callable_method_from_property(
   class_name : String,
+  this_owner : @ast.TsType,
   class_property : @ast.TsClassPropertyDecl,
   info : DeclModuleInfo,
   local_name_prefix : String,
@@ -8792,6 +8857,7 @@ fn callable_method_from_property(
       Some(
         callable_method_from_func_type(
           class_name,
+          this_owner,
           class_property.name,
           class_property.is_static,
           params,
@@ -8811,6 +8877,7 @@ fn callable_method_from_property(
               Some(
                 callable_method_from_func_type(
                   class_name,
+                  this_owner,
                   class_property.name,
                   class_property.is_static,
                   params,
@@ -8870,6 +8937,7 @@ fn append_class_method_once(
 ///|
 fn append_class_origin_members(
   origin : ResolvedClassOrigin,
+  this_owner : @ast.TsType,
   graph : ModuleGraph,
   modules : Map[String, DeclModuleInfo],
   surface_cache : Map[String, Array[ResolvedExport]],
@@ -8896,8 +8964,8 @@ fn append_class_origin_members(
       ) {
       Some(base_origin) =>
         append_class_origin_members(
-          base_origin, graph, modules, surface_cache, canonical_types, properties,
-          methods, seen_property_keys, seen_method_keys, seen_origins,
+          base_origin, this_owner, graph, modules, surface_cache, canonical_types,
+          properties, methods, seen_property_keys, seen_method_keys, seen_origins,
         )
       None => ()
     }
@@ -8915,6 +8983,7 @@ fn append_class_origin_members(
     match
       callable_method_from_property(
         origin.class_.name,
+        this_owner,
         class_property,
         origin.info,
         origin.local_name_prefix,
@@ -8933,6 +9002,7 @@ fn append_class_origin_members(
       clone_class_method_in_scope(
         class_method,
         origin.class_.name,
+        this_owner,
         origin.info,
         origin.local_name_prefix,
         modules,
@@ -8962,6 +9032,7 @@ fn clone_exported_class(
       local_name_prefix: exported.local_name_prefix,
       class_: exported.class_,
     },
+    decl_this_owner_type(exported.export_name, exported.class_.type_params),
     graph,
     modules,
     surface_cache,

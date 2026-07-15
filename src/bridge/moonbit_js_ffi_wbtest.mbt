@@ -5284,3 +5284,46 @@ test "ffi_classify_transparent_intersection: collapses uniform Number primitive"
     None => fail("expected Some(Number), got None")
   }
 }
+
+///|
+async test "bridge: polymorphic this lowers to the owner with its own type params" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/generic-this-chain-entry.d.ts", "/runtime/mod.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // Interface members: `this` keeps the fluent chain typed on Box[A, B]
+  // instead of falling into the JSValue arity filler.
+  assert_true(bundle.ffi_mbt.contains("check : (Array[String]) -> Box[A, B]"))
+  assert_true(bundle.ffi_mbt.contains("optional : () -> Wrap[Box[A, B]]"))
+  assert_true(bundle.ffi_mbt.contains("pair : (B) -> Box[A, B]"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub fn[A, B] Box::check(self : Box[A, B], arg0 : Array[String]) -> Box[A, B]",
+    ),
+  )
+  // Class methods: `this` in returns and params maps to Chain[A, B].
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub fn[A, B] Chain::push(self : Chain[A, B], item : A) -> Chain[A, B]",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub fn[A, B] Chain::wrap(self : Chain[A, B]) -> Wrap[Chain[A, B]]",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub fn[A, B] Chain::merge(self : Chain[A, B], other : Chain[A, B]) -> Chain[A, B]",
+    ),
+  )
+  assert_false(bundle.ffi_mbt.contains("Box[JSValue, JSValue]"))
+  assert_false(bundle.ffi_mbt.contains("Chain[JSValue, JSValue]"))
+}

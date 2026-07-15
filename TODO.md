@@ -1013,6 +1013,26 @@ augmentation, React `HTMLAttributes` index signatures.
   literal widening when any of the component's type parameters carries
   the modifier.
 
+### 8. Polymorphic `this` keeps fluent chains typed (done 2026-07-15)
+
+Patterns: zod `ZodType.check(...): this` / `optional(): ZodOptional<this>`,
+builder chains like jose `SignJWT.setIssuedAt(): this`, generic classes
+with `merge(other: this): this`.
+
+- [x] `this` in interface members and class methods now lowers to the
+  owning declaration applied to its own type parameters
+  (`Schema[Output, Input, Internals]`) instead of `Named(owner)` +
+  the `JSValue` arity filler (`Schema[JSValue, JSValue, JSValue]`).
+  The substitution is root-scoped: members merged in from `extends`
+  expansion also resolve `this` to the derived struct, matching TS
+  semantics and keeping every substituted param in scope.
+  Implemented in `decl_this_owner_type` / `decl_replace_this_type`
+  (now recursing through `Func` params and returns as well, so
+  `apply((this) => R)`-style callback params stop leaking a raw
+  `This` opaque type). zod: SCAFFOLD JSValue fallback entries
+  748 -> 648; the whole fluent core (`check` / `clone` / `optional` /
+  `nullable` / `describe` / ...) keeps `Schema[Output, Input, Internals]`.
+
 ### Non-Goals (still)
 
 - [ ] Do not turn this list into a checklist for "all of TypeScript". Each item
