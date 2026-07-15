@@ -164,6 +164,7 @@ pub(all) enum TaggedUnionCaseDiscriminator {
   TypeofNumber
   TypeofBoolean
   TypeofBigInt
+  TypeofFunction
   IsArrayPredicate
   InstanceOfNamed(String)
   StrictEqualsString(String)

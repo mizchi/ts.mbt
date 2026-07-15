@@ -1598,3 +1598,44 @@ async test "bridge: unconstrained generic free fns export through monomorphized 
   assert_false(root_content.contains("export function describe"))
   assert_false(root_content.contains("export function map_pair"))
 }
+
+///|
+async test "bridge: generic methods on non-generic owners export via monomorphized facade" {
+  let bundle = emit_typescript_facade_scaffold_bundle_from_mbti_path(
+    "fixtures/mbti_typescript/generic_method.pkg.generated.mbti",
+  ) catch {
+    MbtiTypescriptDeclError::ReadError(msg)
+    | MbtiTypescriptDeclError::ParseError(msg) =>
+      fail("MBTI facade bundle emit error: \{msg}")
+  }
+  // Unconstrained generic methods monomorphize through TsMbtGenericAny.
+  assert_true(
+    bundle.autolink_glue_mbt.contains(
+      "pub fn counter_tap(self_ : @tsmbt_source.Counter, arg1 : TsMbtGenericAny) -> TsMbtGenericAny {",
+    ),
+  )
+  // Bare `T?` returns unwrap to `value | undefined`.
+  assert_true(bundle.autolink_glue_mbt.contains("pub fn counter_pick("))
+  assert_true(bundle.autolink_glue_mbt.contains("tsmbt_generic_undefined()"))
+  // The facade TS declaration keeps the generic signature with a BARE
+  // owner type (the method's params must not leak onto `self`).
+  let mut ts_decls = ""
+  for decl in bundle.files {
+    if decl.relative_path == "index.d.ts" {
+      ts_decls = decl.content
+    }
+  }
+  assert_true(
+    ts_decls.contains(
+      "export function counter_tap<T>(self: Counter, arg1: T): T;",
+    ),
+  )
+  assert_true(
+    ts_decls.contains(
+      "export function counter_pick<T>(self: Counter, items: Array<T>): T | undefined;",
+    ),
+  )
+  // Trait-bounded methods stay omitted.
+  assert_false(bundle.autolink_glue_mbt.contains("counter_describe"))
+  assert_false(bundle.moon_pkg.contains("counter_describe"))
+}

@@ -889,16 +889,20 @@ valibot.
     all 24 corpus entries; per-package `JSValue` cause budgets, function
     counts, and unsupported-export budgets now reflect the actual
     generated output, including the new heterogeneous-union diagnostics.
-- [ ] Drive the `heterogeneous-union-widened` budget in
-  `scripts/bridge_quality_report.sh` back to 0 (currently 5, added
-  2026-07-15: hono `Child = string | number | JSX.Element`, react
-  `ElementType`, vitest `CancelReason` / `TestArtifact`, drizzle
-  `NeonAuthToken`). All five widen because a member has no
-  runtime-discriminable constructor name — qualified names like
-  `JSX.Element` don't resolve to a PascalCase constructor. The aliases
-  stay runtime-safe (widened to JSValue with diagnostics); the fix is
-  either resolving qualified member names to their canonical local
-  declarations before discriminability, or discriminating structurally.
+- [x] Drive the `heterogeneous-union-widened` budget back to 0 (done
+  2026-07-15, same day it was added). Four lowerings landed:
+  - qualified namespace refs resolve to their flattened export name
+    before classification (`JSX.Element` -> `JsxElement`, hono `Child`);
+  - function members discriminate via `typeof === "function"` and render
+    as arrow payloads (`FnValue(() -> String)` — drizzle `NeonAuthToken`,
+    react `ElementType`); inline `Auto_*` synthesis still excludes
+    function members (the useState wrapper glue can't produce the enum);
+  - branded-string intersections collapse to `string` and the
+    LiteralUnion pattern collapses to a plain String alias
+    (vitest `CancelReason = "a" | "b" | (string & Record<string, never>)`);
+  - indexed access over an EMPTY registry interface reduces to `never`
+    and drops from the union (vitest
+    `TestArtifact = A | B | C | Registry[keyof Registry]`).
 
 ### 2. Method-level generics preserved through bridge
 
@@ -1069,6 +1073,28 @@ Previously every `pub fn[T] ...` free function was omitted from
   of the emitted `.d.ts`.
 - Next increments: generic methods on non-generic owners (same
   monomorphization through the facade path), then generic owners.
+
+### 10. String-subset boundary for optional-message unions (done 2026-07-15)
+
+Pattern: zod's check surface passes `params?: string | $ZodCheckMinLengthParams`
+on nearly every validator (`min`, `max`, `length`, `regex`, ...). The
+`$`-prefixed name cannot become a tagged-union constructor (names must start
+`A-Z`), so the whole param degraded to `JSValue?`.
+
+- [x] `ffi_string_subset_union_text`: a two-member union pairing `string`
+  with a named `*Params` bag that is NOT a declared type on the bridge
+  surface now types the boundary as `String`. The common string form is
+  naturally typed; the structured object form stays reachable via
+  `unsafeCast`. Guards: exactly two members, `Params` suffix required,
+  abstains when the named type is declared / a generic param / a local type
+  param — so option-bag unions with reachable declarations keep their
+  tagged lowering and `string | URL` keeps the JSValue fallback.
+- zod: SCAFFOLD JSValue fallback entries 648 -> 565
+  (`min : (Double, String?) -> ZodMap[Key, Value]` etc.); the regenerated
+  zod3 package passes `moon check --target js`.
+- Note: per-package JSValue counts in the env-gated realworld METRICS
+  corpus may drift downward next time it is regenerated — the budget file
+  encodes upper bounds, so this is safe, but expect diffs there.
 
 ### Non-Goals (still)
 

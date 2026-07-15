@@ -1989,10 +1989,41 @@ fn collect_mbti_autolink_glue_decls(
           Some(owner_name) if include_facades =>
             match local_type_params.get(owner_name) {
               Some(owner_type_params) => {
-                if owner_type_params.length() > 0 || fn_type_params.length() > 0 {
+                // Generic OWNERS stay out of scope (the facade would need
+                // a monomorphized receiver type).
+                if owner_type_params.length() > 0 {
                   continue
                 }
                 let owner_type_param_names = type_param_names(owner_type_params)
+                let raw_params = match
+                  parse_mbti_raw_facade_params(glue_params_src, owner_name) {
+                  Some(params) => params
+                  None => continue
+                }
+                // A generic METHOD on a non-generic owner monomorphizes
+                // through `TsMbtGenericAny` exactly like a generic free
+                // function; the facade TS declaration keeps the generic
+                // signature. Bounded / tuple / non-top-level-Option
+                // shapes stay omitted.
+                let is_generic = fn_type_params.length() > 0
+                let mut method_option_unwrap = false
+                if is_generic {
+                  match
+                    mbti_generic_glue_return_plan(
+                      fn_type_params, raw_params, return_src,
+                    ) {
+                    Some(MbtiGenericGlueReturnOptionUnwrap) =>
+                      method_option_unwrap = true
+                    Some(MbtiGenericGlueReturnDirect) => ()
+                    None => continue
+                  }
+                }
+                // NOTE: the type-param-names argument below parametrizes
+                // `Self` (`Self` -> `Owner<params>`), so method-level type
+                // params must NOT be passed there — the owner is
+                // non-generic and its `Self` renders bare. Method type
+                // params reach the TS declaration through the `<T>` suffix
+                // and render verbatim as unknown type refs.
                 let params = parse_mbti_params(
                   params_src,
                   imports,
@@ -2000,18 +2031,13 @@ fn collect_mbti_autolink_glue_decls(
                   Some(owner_name),
                   owner_type_param_names,
                 )
-                let raw_params = match
-                  parse_mbti_raw_facade_params(glue_params_src, owner_name) {
-                  Some(params) => params
-                  None => continue
-                }
                 if mbti_raw_facade_uses_private_types(
                     raw_params,
                     replace_mbti_self_refs(
                       glue_return_src_with_effect, owner_name,
                     ),
                     private_type_names,
-                    owner_type_param_names,
+                    fn_type_param_names,
                   ) {
                   continue
                 }
@@ -2040,35 +2066,78 @@ fn collect_mbti_autolink_glue_decls(
                   unique_export_name += "_facade"
                 }
                 let rendered_ts_params = render_ts_params(params)
-                let facade_ts_decl = "export function \{unique_export_name}(\{rendered_ts_params}): \{rendered_return_ty};"
+                let ts_type_param_suffix = if is_generic {
+                  "<" + fn_type_param_names.join(", ") + ">"
+                } else {
+                  ""
+                }
+                let facade_ts_decl = "export function \{unique_export_name}\{ts_type_param_suffix}(\{rendered_ts_params}): \{rendered_return_ty};"
                 let runtime_unique_export_name = runtime_export_prefix +
                   unique_export_name
                 let async_prefix = if is_async { "async " } else { "" }
+                // Monomorphize the MoonBit-side glue signature: every
+                // method type-parameter ref becomes the opaque boundary
+                // type.
+                let glue_raw_params = if is_generic {
+                  let substituted : Array[MbtiRawFacadeParam] = []
+                  for param in raw_params {
+                    substituted.push({
+                      name: param.name,
+                      ty_src: replace_mbti_type_param_refs(
+                        param.ty_src,
+                        fn_type_param_names,
+                        MBTI_GENERIC_ANY_TYPE_NAME,
+                      ),
+                      optional: param.optional,
+                    })
+                  }
+                  substituted
+                } else {
+                  raw_params
+                }
+                let glue_method_return_src = if is_generic {
+                  replace_mbti_type_param_refs(
+                    glue_return_src,
+                    fn_type_param_names,
+                    MBTI_GENERIC_ANY_TYPE_NAME,
+                  )
+                } else {
+                  glue_return_src
+                }
+                let glue_method_return_src_with_effect = if is_generic {
+                  replace_mbti_type_param_refs(
+                    glue_return_src_with_effect,
+                    fn_type_param_names,
+                    MBTI_GENERIC_ANY_TYPE_NAME,
+                  )
+                } else {
+                  glue_return_src_with_effect
+                }
                 let rendered_mbt_params = render_mbt_glue_params(
-                  raw_params,
+                  glue_raw_params,
                   local_type_names,
                   [],
                   source_alias,
                 )
                 let rendered_mbt_return = mbti_qualify_root_type_refs_for_glue(
-                  replace_mbti_self_refs(glue_return_src, owner_name),
+                  replace_mbti_self_refs(glue_method_return_src, owner_name),
                   local_type_names,
                   [],
                   source_alias,
                 )
                 let effect_suffix = mbti_qualified_effect_suffix_for_glue(
                   replace_mbti_self_refs(
-                    glue_return_src_with_effect, owner_name,
+                    glue_method_return_src_with_effect, owner_name,
                   ),
                   local_type_names,
                   [],
                   source_alias,
                 )
-                let call_args = render_mbt_glue_call_args(raw_params)
-                let body_expr = if raw_params.length() > 0 &&
-                  raw_params[0].name == "self" {
+                let call_args = render_mbt_glue_call_args(glue_raw_params)
+                let body_expr = if glue_raw_params.length() > 0 &&
+                  glue_raw_params[0].name == "self" {
                   let tail_args = render_mbt_glue_method_tail_call_args(
-                    raw_params,
+                    glue_raw_params,
                   )
                   if tail_args == "" {
                     "self_.\{fn_name}()"
@@ -2078,15 +2147,24 @@ fn collect_mbti_autolink_glue_decls(
                 } else {
                   "@\{source_alias}.\{owner_name}::\{fn_name}(\{call_args})"
                 }
-                let facade_mbt_decl = "pub \{async_prefix}fn \{runtime_unique_export_name}(\{rendered_mbt_params}) -> \{rendered_mbt_return}\{effect_suffix} {\n  \{body_expr}\n}"
+                let facade_mbt_decl = if method_option_unwrap {
+                  let unwrapped_return = if rendered_mbt_return.has_suffix("?") {
+                    rendered_mbt_return[:rendered_mbt_return.length() - 1].to_owned()
+                  } else {
+                    rendered_mbt_return
+                  }
+                  "pub \{async_prefix}fn \{runtime_unique_export_name}(\{rendered_mbt_params}) -> \{unwrapped_return}\{effect_suffix} {\n  match \{body_expr} {\n    Some(value) => value\n    None => tsmbt_generic_undefined()\n  }\n}"
+                } else {
+                  "pub \{async_prefix}fn \{runtime_unique_export_name}(\{rendered_mbt_params}) -> \{rendered_mbt_return}\{effect_suffix} {\n  \{body_expr}\n}"
+                }
                 decls.push({
                   package_name,
                   export_name: unique_export_name,
                   runtime_export_name: runtime_unique_export_name,
                   ts_decl: facade_ts_decl,
                   mbt_decl: facade_mbt_decl,
-                  uses_generic_any: false,
-                  uses_generic_undefined: false,
+                  uses_generic_any: is_generic,
+                  uses_generic_undefined: method_option_unwrap,
                 })
               }
               None => ()

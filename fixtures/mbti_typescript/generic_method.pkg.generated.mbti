@@ -1,0 +1,20 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "demo/genmethod"
+
+// Values
+
+// Errors
+
+// Types and methods
+pub(all) struct Counter {
+  mut value : Int
+}
+pub fn[T : Show] Counter::describe(Self, T) -> String
+pub fn Counter::label(Self) -> String
+pub fn Counter::new() -> Self
+pub fn[T] Counter::pick(Self, Array[T]) -> T?
+pub fn[T] Counter::tap(Self, T) -> T
+
+// Type aliases
+
+// Traits
