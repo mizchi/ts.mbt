@@ -1088,7 +1088,7 @@ v7.0.2). Truth comes from vendored name manifests
 variant is NOTRUN, and the TS6-era deprecated-compiler-option
 diagnostics (TS5107/TS5101) were removed from the checker accordingly.
 
-State: whole-corpus **TP 2329 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 405 /
+State: whole-corpus **TP 2335 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 399 /
 NOTRUN 14** via `scripts/checker_conformance_oracle.sh --max-fp 0
 --max-legal-parsefail 3`.
 
@@ -1329,6 +1329,25 @@ primitive spreads:
   value against the target interface's number index signature
   (`var o: I = { [+"foo"]: "" }` where `[s: number]: boolean` —
   computedPropertyNamesContextualType10_ES5/ES6).
+Batch BQ (+6 TP, TP 2335 / MISS 399) took the TS7057 generator cluster
+and the deferred genericRestArity tuple arity:
+- TS7057: in a generator lacking a return-type annotation (under
+  noImplicitAny), a `yield` whose RESULT is consumed with no contextual
+  type — three syntactically decidable shapes: unannotated Ident
+  binding (`const value = yield`), a generic call argument whose
+  matching parameter is a bare type param with no explicit type args
+  (`f(yield)`), and `yield yield`. Unused results, annotated bindings,
+  destructuring targets, and `f<string>(yield)` abstain
+  (generatorImplicitAny, generatorTypeCheck50,
+  generatorReturnTypeInference + NonStrict).
+- TS2554 generic-rest-tuple arity: `call<TS extends unknown[]>(handler:
+  (...args: TS) => void, ...args: TS)` needs exactly 1 + handler-param
+  count arguments. The parser substitutes the tuple param with its
+  bound, so the carve keys on the substituted single-type-param shape
+  (`(...args: unknown[]/any[]) => R` + same-bound rest) with a
+  syntactic all-required arrow handler (genericRestArity,
+  genericRestArityStrict). A non-generic `unknown[]`-rest signature
+  abstains.
 Documented dead ends from this round: YieldExpression10_es6 (an
 object-literal method's name in the backstop is indistinguishable from
 a legal self-referential named function expression property);

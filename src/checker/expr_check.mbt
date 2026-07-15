@@ -15574,6 +15574,247 @@ fn check_explicit_type_args(
 }
 
 ///|
+/// TS7057 (noImplicitAny): in a generator lacking a return-type
+/// annotation, a `yield` whose RESULT is consumed with no contextual type
+/// implicitly gets `any`. Three syntactically decidable consumption
+/// shapes (generatorImplicitAny, generatorTypeCheck50,
+/// generatorReturnTypeInference g204):
+/// - `const x = yield ...` — Ident binding with no type annotation
+/// - `f(yield ...)` — `f` is a generic function whose matching parameter
+///   is a bare type parameter, with no explicit type arguments
+/// - `yield yield` — the inner yield feeds the outer yield's operand
+/// Everything else abstains: unused results (expression statements, comma
+/// operands, `void`, for-clauses), annotated bindings, destructuring
+/// targets (contextually typed by the pattern), and `f<T>(yield)` with
+/// explicit type arguments.
+fn check_generator_yield_implicit_any(
+  func : @ast.TsFunc,
+  ctx : CheckCtx,
+) -> Unit {
+  if !func.is_generator || !(func.return_type is Any) {
+    return
+  }
+  if !ctx.resolver.no_implicit_any {
+    return
+  }
+  for stmt in func.body.stmts {
+    generator_yield_any_walk_stmt(stmt, ctx)
+  }
+}
+
+///|
+const GENERATOR_YIELD_ANY_MSG : String = "`yield` expression implicitly results in an `any` type because its containing generator lacks a return-type annotation"
+
+///|
+fn generator_yield_any_walk_block(block : @ast.TsBlock, ctx : CheckCtx) -> Unit {
+  for stmt in block.stmts {
+    generator_yield_any_walk_stmt(stmt, ctx)
+  }
+}
+
+///|
+fn generator_yield_any_walk_stmt(stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
+  match stmt {
+    Var(binding, declared, init)
+    | Let(binding, declared, init)
+    | Const(binding, declared, init) =>
+      // `const x = yield ...` with an Ident binding and no annotation:
+      // nothing supplies a contextual type, so the yield result is any.
+      // Destructuring patterns abstain — the pattern (with defaults)
+      // contextually types the yield (generatorReturnTypeInference g310).
+      if binding is Ident(_) && declared is Any && init is Yield(_) {
+        record(ctx, "yield", GENERATOR_YIELD_ANY_MSG)
+      } else {
+        generator_yield_any_walk_expr(init, ctx)
+      }
+    Assign(_, e) | CompoundAssign(_, _, e) | Throw(e) | Expr(e) =>
+      generator_yield_any_walk_expr(e, ctx)
+    IndexAssign(a, i, v) => {
+      generator_yield_any_walk_expr(a, ctx)
+      generator_yield_any_walk_expr(i, ctx)
+      generator_yield_any_walk_expr(v, ctx)
+    }
+    PropAssign(o, _, v) => {
+      generator_yield_any_walk_expr(o, ctx)
+      generator_yield_any_walk_expr(v, ctx)
+    }
+    Return(Some(e)) => generator_yield_any_walk_expr(e, ctx)
+    Return(None) | Empty | Debugger => ()
+    Try(b, _, catch_block, finally_block) => {
+      generator_yield_any_walk_block(b, ctx)
+      match catch_block {
+        Some(cb) => generator_yield_any_walk_block(cb, ctx)
+        None => ()
+      }
+      match finally_block {
+        Some(fb) => generator_yield_any_walk_block(fb, ctx)
+        None => ()
+      }
+    }
+    If(cond, then_block, else_block) => {
+      generator_yield_any_walk_expr(cond, ctx)
+      generator_yield_any_walk_block(then_block, ctx)
+      match else_block {
+        Some(eb) => generator_yield_any_walk_block(eb, ctx)
+        None => ()
+      }
+    }
+    While(cond, body) | DoWhile(cond, body) => {
+      generator_yield_any_walk_expr(cond, ctx)
+      generator_yield_any_walk_block(body, ctx)
+    }
+    For(init, cond, update, body) => {
+      match init {
+        Some(s) => generator_yield_any_walk_stmt(s, ctx)
+        None => ()
+      }
+      match cond {
+        Some(e) => generator_yield_any_walk_expr(e, ctx)
+        None => ()
+      }
+      match update {
+        Some(s) => generator_yield_any_walk_stmt(s, ctx)
+        None => ()
+      }
+      generator_yield_any_walk_block(body, ctx)
+    }
+    ForOf(_, _, _, iter, body)
+    | ForAwaitOf(_, _, _, iter, body)
+    | ForIn(_, _, _, iter, body) => {
+      generator_yield_any_walk_expr(iter, ctx)
+      generator_yield_any_walk_block(body, ctx)
+    }
+    Switch(scrut, cases) => {
+      generator_yield_any_walk_expr(scrut, ctx)
+      for case in cases {
+        generator_yield_any_walk_block(case.body, ctx)
+      }
+    }
+    Label(_, inner) => generator_yield_any_walk_stmt(inner, ctx)
+    _ => ()
+  }
+}
+
+///|
+fn generator_yield_any_walk_expr(expr : @ast.TsExpr, ctx : CheckCtx) -> Unit {
+  match expr {
+    Yield(Some(operand)) => {
+      // `yield yield` — the inner yield's result feeds the outer operand
+      // with no contextual type (generatorTypeCheck50).
+      if operand is Yield(_) {
+        record(ctx, "yield", GENERATOR_YIELD_ANY_MSG)
+      }
+      generator_yield_any_walk_expr(operand, ctx)
+    }
+    Yield(None) => ()
+    YieldStar(operand) | Await(operand) =>
+      generator_yield_any_walk_expr(operand, ctx)
+    Call(name, args) => {
+      // `f(yield)` where `f`'s matching parameter is a bare type
+      // parameter: nothing constrains the yield, T infers as any
+      // (generatorImplicitAny g5, generatorReturnTypeInference g204).
+      // Function declarations register as `Func` in globals with their
+      // type-parameter list tracked separately in `func_type_params`.
+      match
+        (
+          ctx.resolver.globals.get(name),
+          ctx.resolver.func_type_params.get(name),
+        ) {
+        (Some(Func(params, _)), Some(tps)) if tps.length() > 0 =>
+          for i, a in args {
+            if a is Yield(_) && i < params.length() {
+              match params[i] {
+                Named(p) =>
+                  if tps.contains(p) {
+                    record(ctx, "yield", GENERATOR_YIELD_ANY_MSG)
+                    break
+                  }
+                _ => ()
+              }
+            }
+          }
+        _ => ()
+      }
+      for a in args {
+        generator_yield_any_walk_expr(a, ctx)
+      }
+    }
+    // Explicit type arguments contextually type the yield
+    // (`f<string>(yield)`, generatorImplicitAny g6): skip the generic-call
+    // pattern on the wrapped call, but keep scanning its arguments for
+    // nested shapes.
+    TypeArgs(_, Call(_, args)) =>
+      for a in args {
+        generator_yield_any_walk_expr(a, ctx)
+      }
+    TypeArgs(_, inner) | PureCall(inner) | Spread(inner) | UnaryOp(_, inner) =>
+      generator_yield_any_walk_expr(inner, ctx)
+    CallExpr(callee, args) => {
+      generator_yield_any_walk_expr(callee, ctx)
+      for a in args {
+        generator_yield_any_walk_expr(a, ctx)
+      }
+    }
+    MethodCall(recv, _, args) => {
+      generator_yield_any_walk_expr(recv, ctx)
+      for a in args {
+        generator_yield_any_walk_expr(a, ctx)
+      }
+    }
+    New(_, args) =>
+      for a in args {
+        generator_yield_any_walk_expr(a, ctx)
+      }
+    NewExpr(callee, args) => {
+      generator_yield_any_walk_expr(callee, ctx)
+      for a in args {
+        generator_yield_any_walk_expr(a, ctx)
+      }
+    }
+    BinOp(_, l, r) | Seq(l, r) | CompoundAssignExpr(l, _, r) => {
+      generator_yield_any_walk_expr(l, ctx)
+      generator_yield_any_walk_expr(r, ctx)
+    }
+    Cond(c, t, f) => {
+      generator_yield_any_walk_expr(c, ctx)
+      generator_yield_any_walk_expr(t, ctx)
+      generator_yield_any_walk_expr(f, ctx)
+    }
+    ArrayLit(items) =>
+      for item in items {
+        generator_yield_any_walk_expr(item, ctx)
+      }
+    ObjectLit(fields) =>
+      for field in fields {
+        let (_, v) = field
+        generator_yield_any_walk_expr(v, ctx)
+      }
+    ComputedProp(k, v) => {
+      generator_yield_any_walk_expr(k, ctx)
+      generator_yield_any_walk_expr(v, ctx)
+    }
+    IndexAccess(a, i) => {
+      generator_yield_any_walk_expr(a, ctx)
+      generator_yield_any_walk_expr(i, ctx)
+    }
+    PropAccess(o, _) => generator_yield_any_walk_expr(o, ctx)
+    AssignExpr(_, v) => generator_yield_any_walk_expr(v, ctx)
+    PropAssignExpr(o, _, v) => {
+      generator_yield_any_walk_expr(o, ctx)
+      generator_yield_any_walk_expr(v, ctx)
+    }
+    IndexAssignExpr(a, i, v) => {
+      generator_yield_any_walk_expr(a, ctx)
+      generator_yield_any_walk_expr(i, ctx)
+      generator_yield_any_walk_expr(v, ctx)
+    }
+    // Nested function scopes own their yields; do not descend.
+    ArrowFunc(_, _, _, _) | FuncExpr(_) | NativeClassExpr(_, _) => ()
+    _ => ()
+  }
+}
+
+///|
 fn check_call_args_in_expr(
   env : ExprEnv,
   expr : @ast.TsExpr,
@@ -15610,6 +15851,61 @@ fn check_call_args_in_expr(
             ctx, "call `BigInt`", "argument is not assignable to parameter of type `string | number | bigint | boolean`",
           )
         }
+      }
+      // TS2554 for the generic-rest-tuple pattern
+      // `call<TS extends unknown[]>(handler: (...args: TS) => R, ...args: TS)`
+      // (genericRestArity, genericRestArityStrict): TS infers to the
+      // handler's parameter tuple, so the call needs exactly
+      // 1 + <handler param count> arguments. The parser substitutes the
+      // tuple param with its declared array bound, so the recognizable
+      // shape is: a single-type-param declaration whose two params are
+      // `(...args: unknown[]/any[]) => R` and a rest of the same array
+      // bound. Restricted to a syntactic arrow / function-expression
+      // handler whose params are all required.
+      match
+        (
+          ctx.resolver.signatures.get(name),
+          ctx.resolver.func_type_params.get(name),
+        ) {
+        (Some(sig_params), Some(tps)) if tps.length() == 1 &&
+          sig_params.length() == 2 &&
+          args.length() >= 1 => {
+          let tuple_bound_shape = match
+            (sig_params[0].type_, sig_params[1].is_rest, sig_params[1].type_) {
+            (Func([Rest(Array(Unknown))], _), true, Array(Unknown)) => true
+            (Func([Rest(Array(Any))], _), true, Array(Any)) => true
+            _ => false
+          }
+          let handler_params = match args[0] {
+            ArrowFunc(ps, _, _, _) => Some(ps)
+            FuncExpr(f) => Some(f.params)
+            _ => None
+          }
+          match handler_params {
+            Some(ps) if tuple_bound_shape => {
+              let mut all_required = true
+              for p in ps {
+                if p.is_rest ||
+                  p.default is Some(_) ||
+                  classify_optional_like_union(p.type_) is Some((_, true)) {
+                  all_required = false
+                }
+              }
+              if all_required {
+                let expected = 1 + ps.length()
+                if args.length() != expected {
+                  record(
+                    ctx,
+                    "call `\{name}`",
+                    "expected \{expected} arguments, but got \{args.length()}",
+                  )
+                }
+              }
+            }
+            _ => ()
+          }
+        }
+        _ => ()
       }
       // TS2454: invoking an as-yet-unassigned variable (`var f: T; f()`)
       // reads it before assignment, same as a bare reference.
@@ -18229,6 +18525,7 @@ fn check_function_body_with(
   if func.body.stmts.length() == 0 {
     return issues
   }
+  check_generator_yield_implicit_any(func, ctx)
   for stmt in func.body.stmts {
     check_stmt(env, stmt, ctx)
   }
