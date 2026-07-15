@@ -1088,9 +1088,11 @@ v7.0.2). Truth comes from vendored name manifests
 variant is NOTRUN, and the TS6-era deprecated-compiler-option
 diagnostics (TS5107/TS5101) were removed from the checker accordingly.
 
-State: whole-corpus **TP 2335 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 399 /
+State: whole-corpus **TP 2335 / FP 0 / PFLEGAL 0 / TN 1750 / MISS 399 /
 NOTRUN 14** via `scripts/checker_conformance_oracle.sh --max-fp 0
---max-legal-parsefail 3`.
+--max-legal-parsefail 0`. Batch BR emptied the legal-parse-failure
+budget (decoratorOnClass3, defaultExportWithOverloads01, parser768531)
+and the gate now enforces 0.
 
 Batch BE (TS7-only miss mining, +51 TP) worked the misses newly exposed
 by the oracle switch:
