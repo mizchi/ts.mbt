@@ -1033,6 +1033,33 @@ with `merge(other: this): this`.
   748 -> 648; the whole fluent core (`check` / `clone` / `optional` /
   `nullable` / `describe` / ...) keeps `Schema[Output, Input, Internals]`.
 
+### 9. Generic free functions export via monomorphized glue (done 2026-07-15)
+
+Previously every `pub fn[T] ...` free function was omitted from
+`link.js.exports` and listed in `AUTOLINK_DIAGNOSTICS.md`.
+
+- [x] Unconstrained generic free functions now export through autolink
+  glue: type parameters are instantiated at an opaque
+  `#external pub type TsMbtGenericAny` (values cross the JS boundary
+  unchanged, which is exactly parametric behavior), the glue wrapper is
+  therefore non-generic and exportable, and the emitted `.d.ts` keeps the
+  original generic signature (`export function identity<T>(value: T): T`).
+- [x] Bare `T?` returns unwrap to `value | undefined` via a
+  `tsmbt_generic_undefined()` extern, because `Option[TsMbtGenericAny]`
+  crosses the boundary in the boxed `{_0}` representation.
+- [x] Eligibility is decided by `mbti_generic_glue_return_plan` and shared
+  by the glue emitter, the runtime-inaccessible screening, and the
+  diagnostics list. Ineligible (stay omitted): trait bounds (`[T : Show]`),
+  type params inside tuples (MoonBit tuples are not JS arrays), type params
+  under `Option` anywhere except the bare top-level return, and optional
+  params (`name? : T`).
+- Runtime verified with a node smoke: `identity(obj) === obj`,
+  `identity(undefined) === undefined`, `first([]) === undefined`,
+  `first([10, 20]) === 10`; `tsc --strict` accepts a typed generic consumer
+  of the emitted `.d.ts`.
+- Next increments: generic methods on non-generic owners (same
+  monomorphization through the facade path), then generic owners.
+
 ### Non-Goals (still)
 
 - [ ] Do not turn this list into a checklist for "all of TypeScript". Each item

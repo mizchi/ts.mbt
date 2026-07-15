@@ -1157,9 +1157,16 @@ async test "bridge: emit TypeScript scaffold bundle keeps optional named params 
   assert_true(bundle.moon_pkg.contains("\"consume_callbacks\""))
   assert_true(bundle.moon_pkg.contains("\"nullValue\""))
   assert_true(bundle.moon_pkg.contains("\"undefinedValue\""))
-  assert_false(bundle.moon_pkg.contains("\"identity\""))
+  // Unconstrained generic free functions now export through a
+  // monomorphized `TsMbtGenericAny` glue wrapper.
+  assert_true(bundle.moon_pkg.contains("\"identity\""))
+  assert_true(
+    bundle.autolink_glue_mbt.contains(
+      "pub fn identity(arg0 : TsMbtGenericAny) -> TsMbtGenericAny {",
+    ),
+  )
   assert_false(bundle.moon_pkg.contains("\"make_secret\""))
-  assert_true(bundle.autolink_diagnostics_md.contains("- `identity`"))
+  assert_false(bundle.autolink_diagnostics_md.contains("- `identity`"))
   assert_true(bundle.autolink_diagnostics_md.contains("- `make_secret`"))
   let mut root_content = ""
   for file in bundle.files {
@@ -1167,7 +1174,7 @@ async test "bridge: emit TypeScript scaffold bundle keeps optional named params 
       root_content = file.content
     }
   }
-  assert_false(root_content.contains("export function identity<T>"))
+  assert_true(root_content.contains("export function identity<T>"))
   assert_false(root_content.contains("export function make_secret"))
   assert_true(
     bundle.autolink_glue_mbt.contains(
@@ -1537,4 +1544,57 @@ async test "bridge: emit TypeScript facade scaffold bundle omits generic root tr
   }
   assert_true(bundle.autolink_diagnostics_md.contains("- `eof`"))
   assert_false(bundle.autolink_glue_mbt.contains("pub fn[T"))
+}
+
+///|
+async test "bridge: unconstrained generic free fns export through monomorphized glue" {
+  let bundle = emit_typescript_scaffold_bundle_from_mbti_path(
+    "fixtures/mbti_typescript/generic_free_fn.pkg.generated.mbti",
+  ) catch {
+    MbtiTypescriptDeclError::ReadError(msg)
+    | MbtiTypescriptDeclError::ParseError(msg) =>
+      fail("MBTI scaffold bundle emit error: \{msg}")
+  }
+  // Eligible: unconstrained type params in passthrough positions.
+  assert_true(bundle.moon_pkg.contains("\"identity\""))
+  assert_true(bundle.moon_pkg.contains("\"first\""))
+  assert_true(
+    bundle.autolink_glue_mbt.contains(
+      "pub fn identity(arg0 : TsMbtGenericAny) -> TsMbtGenericAny {",
+    ),
+  )
+  // Bare `T?` returns unwrap to `value | undefined` at the boundary.
+  assert_true(
+    bundle.autolink_glue_mbt.contains(
+      "pub fn first(arg0 : Array[TsMbtGenericAny]) -> TsMbtGenericAny {",
+    ),
+  )
+  assert_true(bundle.autolink_glue_mbt.contains("tsmbt_generic_undefined()"))
+  assert_true(
+    bundle.autolink_glue_mbt.contains("#external\npub type TsMbtGenericAny"),
+  )
+  // Ineligible: trait bounds and tuple payloads stay omitted.
+  assert_false(bundle.moon_pkg.contains("\"describe\""))
+  assert_false(bundle.moon_pkg.contains("\"map_pair\""))
+  assert_true(bundle.autolink_diagnostics_md.contains("- `describe`"))
+  assert_true(bundle.autolink_diagnostics_md.contains("- `map_pair`"))
+  assert_false(bundle.autolink_diagnostics_md.contains("- `identity`"))
+  assert_false(bundle.autolink_diagnostics_md.contains("- `first`"))
+  // The public .d.ts keeps the generic signatures for glue-backed fns.
+  let mut root_content = ""
+  for file in bundle.files {
+    if file.relative_path == "index.d.ts" {
+      root_content = file.content
+    }
+  }
+  assert_true(
+    root_content.contains("export function identity<T>(value: T): T;"),
+  )
+  assert_true(
+    root_content.contains(
+      "export function first<T>(items: Array<T>): T | undefined;",
+    ),
+  )
+  assert_false(root_content.contains("export function describe"))
+  assert_false(root_content.contains("export function map_pair"))
 }
