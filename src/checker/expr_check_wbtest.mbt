@@ -14503,3 +14503,58 @@ test "expr_check: TS7053 string-literal keys, Symbol.keyFor, es5 Date.UTC (batch
   @test.assert_eq(issues("Date.UTC(2017);"), 0)
   @test.assert_eq(issues("// @lib: es5\nDate.UTC(2017, 1);"), 0)
 }
+
+///|
+test "expr_check: for-in patterns, lib eras, import-eq roots (batch BO)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2491: the left side of for...in is never a destructuring pattern,
+  // declaration or assignment form (for-inStatementsDestructuring/3/4).
+  assert_true(issues("for (var [a, b] in []) {}") > 0)
+  assert_true(issues("var a, b;\nfor ([a, b] in []) { }") > 0)
+  assert_true(issues("var a, b;\nfor ({a, b} in []) { }") > 0)
+  @test.assert_eq(issues("for (var k in { a: 1 }) { }"), 0)
+  // TS2854: top-level `await using` requires target >= es2017
+  // (awaitUsingDeclarations.1).
+  assert_true(
+    issues(
+      "// @target: esnext,es2015\n// @lib: esnext\nawait using d1 = { async [Symbol.asyncDispose]() {} };",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @target: esnext\n// @lib: esnext\nawait using d1 = { async [Symbol.asyncDispose]() {} };",
+    ),
+    0,
+  )
+  // TS2550: `Object.values` / `Object.entries` need the es2017 lib
+  // surface (useObjectValuesAndEntries2/3); `Atomics.waitAsync` needs
+  // es2024 (es2024SharedMemory).
+  assert_true(issues("// @lib: es5\nvar o = { a: 1 };\nObject.values(o);") > 0)
+  assert_true(
+    issues("// @target: es6\nvar o = { a: 1 };\nObject.entries(o);") > 0,
+  )
+  @test.assert_eq(
+    issues("// @lib: es2017\nvar o = { a: 1 };\nObject.values(o);"),
+    0,
+  )
+  @test.assert_eq(issues("var o = { a: 1 };\nObject.values(o);"), 0)
+  assert_true(
+    issues(
+      "// @lib: es2022\nAtomics.waitAsync(new Int32Array(new SharedArrayBuffer(4)), 0, 0);",
+    ) >
+    0,
+  )
+  // TS2503: an entity-reference import alias needs a declared root
+  // namespace (parserImportDeclaration1).
+  assert_true(issues("import TypeScript = TypeScriptServices.TypeScript;") > 0)
+  @test.assert_eq(
+    issues("namespace Ns { export var x = 1; }\nimport N = Ns.x;"),
+    0,
+  )
+  // TS1003-adjacent: a primitive keyword can't be a qualified type-name
+  // segment (parservoidInQualifiedName2).
+  assert_true(issues("var v : x.void;") > 0)
+}

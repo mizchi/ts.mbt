@@ -374,7 +374,32 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
       if !libs.contains("esnext") {
         grammar_misuses.push("<lib-lacks-esnext>")
       }
+      if !lib_list_grants_year(libs, 2017) {
+        grammar_misuses.push("<lib-lacks-es2017>")
+      }
+      if !lib_list_grants_year(libs, 2024) {
+        grammar_misuses.push("<lib-lacks-es2024>")
+      }
     }
+    None =>
+      // No explicit `@lib:` — the default lib follows the target, so an
+      // explicit `@target:` list capped below es2017 also lacks the
+      // es2017 surface (useObjectValuesAndEntries3's `@target: es6`).
+      match detect_target_list(src) {
+        Some(targets) =>
+          if !target_list_reaches_es2017(targets) {
+            grammar_misuses.push("<lib-lacks-es2017>")
+          }
+        None => ()
+      }
+  }
+  // TS2854 evidence: a top-level `await using` needs target >= es2017;
+  // conformance files list their variant targets in one directive.
+  match detect_target_list(src) {
+    Some(targets) =>
+      if target_list_has_below_es2017(targets) {
+        grammar_misuses.push("<target-below-es2017>")
+      }
     None => ()
   }
   // Decorator-mode marker so checker-side decorator signature rules can
@@ -869,6 +894,90 @@ fn lib_list_grants_iterable(libs : String) -> Bool {
       t == "es2015.generator" ||
       (t.has_prefix("es20") && !t.contains(".")) {
       return true
+    }
+  }
+  false
+}
+
+///|
+/// The raw (lower-cased, comma-separated) `@target:` directive value, if
+/// present.
+fn detect_target_list(src : String) -> String? {
+  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
+  let head = src[:head_len].to_owned().to_lower()
+  match head.find("@target:") {
+    Some(idx) => {
+      let after = head[idx + "@target:".length():].to_owned()
+      let line = match after.find("\n") {
+        Some(nl) => after[:nl].to_owned()
+        None => after
+      }
+      Some(line.trim().to_owned())
+    }
+    None => None
+  }
+}
+
+///|
+/// Year number of an `es20NN` token; `es6` maps to 2015, `esnext` to 9999.
+/// `None` for anything else (`es5`, `es3`, dotted slices, `dom`, ...).
+fn es_token_year(t : String) -> Int? {
+  if t == "esnext" {
+    return Some(9999)
+  }
+  if t == "es6" {
+    return Some(2015)
+  }
+  if t.has_prefix("es20") && !t.contains(".") && t.length() == 6 {
+    let mut y = 0
+    for c in t.substring(start=2) {
+      if c < '0' || c > '9' {
+        return None
+      }
+      y = y * 10 + (c.to_int() - '0'.to_int())
+    }
+    return Some(y)
+  }
+  None
+}
+
+///|
+/// Whether an explicit `@lib:` list provides the ES-`year` surface: a
+/// full-year lib at or past `year`, `esnext`, or a dotted slice of that
+/// exact year (`es2017.object` grants 2017).
+fn lib_list_grants_year(libs : String, year : Int) -> Bool {
+  for tok in libs.split(",") {
+    let t = tok.to_string().trim().to_owned()
+    match es_token_year(t) {
+      Some(y) => if y >= year { return true }
+      None => if t.has_prefix("es" + year.to_string() + ".") { return true }
+    }
+  }
+  false
+}
+
+///|
+fn target_list_reaches_es2017(targets : String) -> Bool {
+  for tok in targets.split(",") {
+    let t = tok.to_string().trim().to_owned()
+    match es_token_year(t) {
+      Some(y) => if y >= 2017 { return true }
+      None => ()
+    }
+  }
+  false
+}
+
+///|
+fn target_list_has_below_es2017(targets : String) -> Bool {
+  for tok in targets.split(",") {
+    let t = tok.to_string().trim().to_owned()
+    if t == "es5" || t == "es3" {
+      return true
+    }
+    match es_token_year(t) {
+      Some(y) => if y < 2017 { return true }
+      None => ()
     }
   }
   false

@@ -1031,7 +1031,7 @@ v7.0.2). Truth comes from vendored name manifests
 variant is NOTRUN, and the TS6-era deprecated-compiler-option
 diagnostics (TS5107/TS5101) were removed from the checker accordingly.
 
-State: whole-corpus **TP 2311 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 423 /
+State: whole-corpus **TP 2323 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 411 /
 NOTRUN 14** via `scripts/checker_conformance_oracle.sh --max-fp 0
 --max-legal-parsefail 3`.
 
@@ -1235,6 +1235,27 @@ handler parameter (`call<TS extends unknown[]>(handler: (...args: TS)
 => void, ...args: TS)` — expected count = 1 + handler params), which
 requires threading callee type-params into the arity checker;
 unionTypeReduction2 needs union call-signature reduction.
+Batch BO (+12 TP, TP 2323 / MISS 411) continued the small clusters:
+- TS2491: the left side of `for...in` is never a destructuring pattern,
+  declaration or assignment form (for-inStatementsDestructuring/2/3/4,
+  parserForInStatement8 — always-error, `record_unfiltered`).
+- TS2854: a TOP-LEVEL `await using` requires target >= es2017 — new
+  `<top-level-await-using>` and `<target-below-es2017>` parser markers
+  (multi-target conformance directives list pre-es2017 variants —
+  awaitUsingDeclarations.1; .2/.3 parse through other shapes and stay
+  misses).
+- TS2550: `Object.values` / `Object.entries` need the es2017 lib
+  surface, `Atomics.waitAsync` needs es2024 — `<lib-lacks-es2017>` /
+  `<lib-lacks-es2024>` markers (explicit `@lib:` lacking the year, or
+  no `@lib:` with an explicit sub-es2017 `@target:`), threaded through
+  new `Resolver.lib_lacks_es2017/es2024` flags to the MethodCall carve
+  (useObjectValuesAndEntries2/3, es2024SharedMemory).
+- TS2503: an entity-reference import alias (`import X = A.B`) whose
+  ROOT is provably undeclared — `<import-eq-root>` marker, resolved
+  with the same contract as `<export-eq>` (parserImportDeclaration1,
+  scannerImportDeclaration1).
+- TS1003-adjacent: a primitive-type keyword can never be a qualified
+  type-name segment (`var v: x.void` — parservoidInQualifiedName2).
 Documented dead ends from this round: YieldExpression10_es6 (an
 object-literal method's name in the backstop is indistinguishable from
 a legal self-referential named function expression property);

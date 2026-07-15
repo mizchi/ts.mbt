@@ -81,6 +81,11 @@ priv struct Resolver {
   // threaded through the resolver so expression-level rules (TS7053)
   // can gate without widening `CheckCtx`.
   mut no_implicit_any : Bool
+  // Lib-era evidence from `@lib:` / `@target:` directives (parser
+  // markers): the es2017 object surface (`Object.values`) or the es2024
+  // shared-memory surface (`Atomics.waitAsync`) is missing (TS2550).
+  mut lib_lacks_es2017 : Bool
+  mut lib_lacks_es2024 : Bool
 }
 
 ///|
@@ -101,6 +106,8 @@ fn Resolver::empty() -> Resolver {
     namespace_exports: {},
     template_tag_funcs: {},
     no_implicit_any: false,
+    lib_lacks_es2017: false,
+    lib_lacks_es2024: false,
   }
 }
 
@@ -15075,6 +15082,14 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       env.restore_from(pre)
     }
     ForIn(_, binding, declared, iter, body) => {
+      // TS2491/TS2461: the left side of `for...in` can never be a
+      // destructuring pattern, in either the declaration or assignment
+      // form (for-inStatementsDestructuring/3/4).
+      if binding is (@ast.TsBinding::Array(_) | @ast.TsBinding::Object(_)) {
+        record_unfiltered(
+          ctx, "for-in binding", "the left-hand side of a `for...in` statement cannot be a destructuring pattern",
+        )
+      }
       // `for (key in obj)` — `key` is always `string` in JS/TS.
       // A declared type that doesn't accept `string` is an error.
       check_call_args_in_expr(env, iter, ctx)
@@ -15729,6 +15744,28 @@ fn check_call_args_in_expr(
       check_private_name_access(ctx, meth)
       check_member_accessibility(env, ctx, receiver, meth)
       check_super_abstract_access(ctx, receiver, meth)
+      // TS2550: es2017+/es2024+ static surface used under an older lib
+      // (parser-marker evidence): `Object.values` / `Object.entries`
+      // arrived in es2017 (useObjectValuesAndEntries2/3), `Atomics.waitAsync`
+      // in es2024 (es2024SharedMemory).
+      if ctx.resolver.lib_lacks_es2017 &&
+        receiver is Var("Object") &&
+        (meth == "values" || meth == "entries") &&
+        ctx.resolver.globals.get("Object") is None {
+        record(
+          ctx,
+          "call `Object.\{meth}`",
+          "property `\{meth}` does not exist on `ObjectConstructor` with the current `lib`",
+        )
+      }
+      if ctx.resolver.lib_lacks_es2024 &&
+        receiver is Var("Atomics") &&
+        meth == "waitAsync" &&
+        ctx.resolver.globals.get("Atomics") is None {
+        record(
+          ctx, "call `Atomics.waitAsync`", "property `waitAsync` does not exist on `Atomics` with the current `lib`",
+        )
+      }
       // TS2345 (strict bind/call/apply): `f.apply(x, arguments)` where `f`
       // is a ZERO-parameter function — `IArguments` is never assignable to
       // the empty parameter tuple `[]`
@@ -24771,6 +24808,25 @@ fn check_lib_directive_globals(module_ : @ast.TsModule) -> Array[ExprIssue] {
       message: "cannot find global type `Disposable` (not in the `lib` set)",
     })
   }
+  // TS2854: a top-level `await using` requires target >= es2017 — the
+  // conformance multi-target directives include pre-es2017 variants
+  // (awaitUsingDeclarations.1-3).
+  let mut tl_await_using = false
+  let mut target_below_2017 = false
+  for gm in module_.grammar_misuses {
+    if gm == "<top-level-await-using>" {
+      tl_await_using = true
+    }
+    if gm == "<target-below-es2017>" {
+      target_below_2017 = true
+    }
+  }
+  if tl_await_using && target_below_2017 {
+    issues.push({
+      path: "top-level `await using`",
+      message: "top-level `await using` statements require `target` es2017 or higher",
+    })
+  }
   issues
 }
 
@@ -25116,6 +25172,14 @@ fn check_module_function_bodies_layered(
   let strict_property_init = strict_root.strict_property_initialization
   let strict_null_checks = strict_root.strict_null_checks
   resolver.no_implicit_any = strict_root.no_implicit_any
+  for gm in strict_root.grammar_misuses {
+    if gm == "<lib-lacks-es2017>" {
+      resolver.lib_lacks_es2017 = true
+    }
+    if gm == "<lib-lacks-es2024>" {
+      resolver.lib_lacks_es2024 = true
+    }
+  }
   // Brand-keyed private declarations recorded by the parser (own layer plus
   // the outermost root -- namespace bodies re-parse with a fresh parser, so
   // their recordings live on their own TsModule). Populated before body
@@ -25851,13 +25915,17 @@ fn check_module_function_bodies_layered(
       if gm == "<allowunreachable-on>" {
         continue
       }
-      // Markers, not errors: lib-set directive evidence and decorator
-      // mode, consumed by `check_lib_directive_globals` and the decorator
-      // signature checks. (`<nolib>` IS the error condition itself, but
-      // it's surfaced there with a proper message.)
+      // Markers, not errors: lib-set / target directive evidence and
+      // decorator mode, consumed by `check_lib_directive_globals` and the
+      // decorator signature checks. (`<nolib>` IS the error condition
+      // itself, but it's surfaced there with a proper message.)
       if gm == "<nolib>" ||
         gm == "<lib-lacks-iterable>" ||
         gm == "<lib-lacks-esnext>" ||
+        gm == "<lib-lacks-es2017>" ||
+        gm == "<lib-lacks-es2024>" ||
+        gm == "<target-below-es2017>" ||
+        gm == "<top-level-await-using>" ||
         gm == "<has-using>" ||
         gm == "<experimental-decorators>" {
         continue
@@ -25890,6 +25958,30 @@ fn check_module_function_bodies_layered(
           all.push({
             path: "export = \{key}",
             message: "cannot find name `\{key}`",
+          })
+        }
+        continue
+      }
+      // TS2503: the ROOT of an entity-reference import alias
+      // (`import X = A.B`) must be a declared namespace / value
+      // (parserImportDeclaration1). Same resolution contract as
+      // `<export-eq>` above.
+      if gm.has_prefix("<import-eq-root>") {
+        let key = gm["<import-eq-root>".length():].to_string()
+        let values = match computed_key_values {
+          Some(v) => v
+          None => {
+            let v = module_value_name_set(module_)
+            computed_key_values = Some(v)
+            v
+          }
+        }
+        if !values.contains(key) &&
+          !is_typeof_value_keyword(key) &&
+          !is_lib_global_value(key) {
+          all.push({
+            path: "import = \{key}",
+            message: "cannot find namespace `\{key}`",
           })
         }
         continue

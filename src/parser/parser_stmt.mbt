@@ -311,6 +311,11 @@ fn Parser::parse_var_like(
     // Marker for the lib-directive TS2318 rule: a `using` declaration
     // requires the `Disposable` global type (usingDeclarations.9).
     self.grammar_misuses.push("<has-using>")
+    // TS2854 evidence: a TOP-LEVEL `await using` requires target >=
+    // es2017 (awaitUsingDeclarations.1-3 run pre-es2017 variants).
+    if using_kw == "await using" && !self.in_function {
+      self.grammar_misuses.push("<top-level-await-using>")
+    }
     for st in stmts {
       match st {
         Var(b, _, init) | Let(b, _, init) | Const(b, _, init) => {
