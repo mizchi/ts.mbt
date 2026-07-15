@@ -2736,3 +2736,50 @@ async test "bridge: qualified React.ReactNode renders as opaque ReactNode in mbt
   assert_false(actual.contains("element : JSValue?"))
   assert_false(actual.contains("element : JSValue?"))
 }
+
+///|
+test "bridge: generic method type params substitute their bounds at the boundary" {
+  let iface : @ast.TsInterface = {
+    name: "Schema",
+    type_params: [],
+    type_param_bounds: [],
+    extends_names: [],
+    extends_args: [],
+    fields: [
+      (
+        "pipe",
+        @ast.TsType::Func(
+          [@ast.TsType::Named("T")],
+          @ast.TsType::Applied("ZodPipe", [@ast.TsType::Named("T")]),
+        ),
+      ),
+    ],
+    readonly_fields: [],
+    index_signatures: [],
+    method_type_params: [("pipe", ["T"])],
+    method_type_param_bounds: [
+      ("pipe", [("T", @ast.TsType::Named("$ZodType"))]),
+    ],
+    internal_members: [],
+    deprecated_members: [],
+  }
+  let substituted = decl_substitute_method_type_param_bounds(
+    iface,
+    "pipe",
+    iface.fields[0].1,
+  )
+  assert_eq(
+    substituted,
+    @ast.TsType::Func(
+      [@ast.TsType::Named("$ZodType")],
+      @ast.TsType::Applied("ZodPipe", [@ast.TsType::Named("$ZodType")]),
+    ),
+  )
+  // Members without recorded bounds pass through untouched.
+  let untouched = decl_substitute_method_type_param_bounds(
+    iface,
+    "other",
+    iface.fields[0].1,
+  )
+  assert_eq(untouched, iface.fields[0].1)
+}

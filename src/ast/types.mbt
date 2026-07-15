@@ -551,6 +551,22 @@ pub(all) struct TsInterface {
   // (x: T): T }` — the `m`-level `T` is fresh, unrelated to `I`'s `T`).
   // Empty for interfaces with no generic methods.
   method_type_params : Array[(String, Array[String])]
+  // `(P, Bound)` constraint pairs for each generic METHOD's type
+  // parameters, keyed by member name (`pipe<T extends $ZodType>` records
+  // `("pipe", [("T", $ZodType)])`). Sparse — only constrained parameters
+  // appear. The bridge substitutes the bound for the parameter at the
+  // FFI boundary (a `T`-typed argument always satisfies its bound), so
+  // bounded generic methods keep a natural signature instead of `JSValue`.
+  method_type_param_bounds : Array[(String, Array[(String, TsType)])]
+  // Member names carrying a `/** @internal */` JSDoc tag. tsc strips
+  // these from public declaration emit (`stripInternal`), so bridge
+  // scaffolds omit them from the generated surface entirely.
+  internal_members : Array[String]
+  // Member names carrying `@deprecated`. Bridge scaffolds keep deprecated
+  // members that still type naturally but drop the ones that could only
+  // widen to `JSValue` — a deprecated member nobody should adopt is not
+  // worth a fallback slot (zod's `_def` / `_input` / `_output`).
+  deprecated_members : Array[String]
 } derive(Debug)
 
 ///|

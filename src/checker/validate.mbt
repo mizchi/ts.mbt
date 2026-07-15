@@ -365,7 +365,12 @@ fn is_well_known_type_name(name : String) -> Bool {
     | "AsyncIterable"
     | "AsyncIterator"
     | "IterableIterator" => true
-    _ => false
+    // Everything else the TypeScript standard libraries declare
+    // ambiently (PropertyKey, TemplateStringsArray, ThisType,
+    // HTMLElement, ...) — the generated registry unions every lib
+    // target, and a larger allowlist only ever suppresses a
+    // diagnostic, never creates one.
+    _ => is_lib_global_type(name)
   }
 }
 

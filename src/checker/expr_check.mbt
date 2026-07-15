@@ -176,6 +176,31 @@ fn merge_interfaces(
   for mtp in b.method_type_params {
     method_type_params.push(mtp)
   }
+  let method_type_param_bounds : Array[(String, Array[(String, @ast.TsType)])] = []
+  for mtb in a.method_type_param_bounds {
+    method_type_param_bounds.push(mtb)
+  }
+  for mtb in b.method_type_param_bounds {
+    method_type_param_bounds.push(mtb)
+  }
+  let internal_members : Array[String] = []
+  for name in a.internal_members {
+    internal_members.push(name)
+  }
+  for name in b.internal_members {
+    if !internal_members.contains(name) {
+      internal_members.push(name)
+    }
+  }
+  let deprecated_members : Array[String] = []
+  for name in a.deprecated_members {
+    deprecated_members.push(name)
+  }
+  for name in b.deprecated_members {
+    if !deprecated_members.contains(name) {
+      deprecated_members.push(name)
+    }
+  }
   // Type parameters: use `a`'s. TS requires them to match across
   // declarations, so it shouldn't matter which we pick.
   {
@@ -188,6 +213,9 @@ fn merge_interfaces(
     readonly_fields,
     index_signatures,
     method_type_params,
+    method_type_param_bounds,
+    internal_members,
+    deprecated_members,
   }
 }
 

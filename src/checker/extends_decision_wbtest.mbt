@@ -135,3 +135,37 @@ test "extends_decision_with_generics: 3-valued unknown survives expansion" {
     None,
   )
 }
+
+///|
+test "extends_decision: plain-return fn never extends a predicate-return fn" {
+  // tsc: `((x: any) => boolean) extends ((x: any) => x is string)` is false
+  // — a source signature "must be a type predicate".
+  @test.assert_eq(
+    extends_decision(
+      Func([Any], Boolean),
+      Func([Any], TypePredicate("x", String_)),
+    ),
+    Some(false),
+  )
+  // zod's refine shape: callback returning `unknown | Promise<unknown>`.
+  @test.assert_eq(
+    extends_decision(
+      Func([Named("Out")], Union([Named("unknown"), Applied("Promise", [Any])])),
+      Func([Any], TypePredicate("arg", Named("R"))),
+    ),
+    Some(false),
+  )
+  // A predicate-return source stays undecided here (it MAY extend).
+  @test.assert_eq(
+    extends_decision(
+      Func([Any], TypePredicate("x", String_)),
+      Func([Any], TypePredicate("x", Named("R"))),
+    ),
+    None,
+  )
+  // `any`-returning sources stay undecided out of caution.
+  @test.assert_eq(
+    extends_decision(Func([Any], Any), Func([Any], TypePredicate("x", String_))),
+    None,
+  )
+}

@@ -31,7 +31,10 @@ fi
 } | sort -u > /tmp/lib_value_names.txt
 
 # Ambient global *types*: interface / type alias / declare class / namespace / enum.
-grep -hoP '^\s*(?:interface|type|declare\s+(?:class|abstract class|namespace|enum))\s+\K[A-Za-z_$][A-Za-z0-9_$]*' "$LIB"/*.d.ts \
+# `declare type X = ...` (lib.es5's PropertyKey, the *Decorator aliases,
+# PromiseConstructorLike) needs its own alternative — the bare `type` branch
+# only matches un-prefixed aliases.
+grep -hoP '^\s*(?:interface|type|declare\s+(?:class|abstract class|namespace|enum|type))\s+\K[A-Za-z_$][A-Za-z0-9_$]*' "$LIB"/*.d.ts \
   | sort -u > /tmp/lib_type_names.txt
 
 emit_match() {

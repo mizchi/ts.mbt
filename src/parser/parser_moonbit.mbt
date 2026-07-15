@@ -538,16 +538,49 @@ fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
     Union(parts) =>
       match inline_union_synthesized_name_from_parts(parts) {
         Some(name) => name
-        None => {
-          state.needs_jsvalue = true
-          "JSValue"
-        }
+        None =>
+          if moonbit_string_params_subset_union(state, parts) {
+            "String"
+          } else {
+            state.needs_jsvalue = true
+            "JSValue"
+          }
       }
     _ => {
       state.needs_jsvalue = true
       "JSValue"
     }
   }
+}
+
+///|
+/// Decl-surface mirror of the bridge FFI string-subset policy: a
+/// two-member union pairing `string` with a `*Params` option bag that is
+/// not a declared type on this surface (zod's pervasive
+/// `params?: string | core.$ZodEmailParams`) types the boundary as
+/// `String`. The structured object form stays reachable via `unsafeCast`;
+/// declared bags keep their real lowering.
+fn moonbit_string_params_subset_union(
+  state : MoonBitDeclState,
+  parts : Array[@ast.TsType],
+) -> Bool {
+  if parts.length() != 2 {
+    return false
+  }
+  let named = match (parts[0], parts[1]) {
+    (String_, Named(n)) | (Named(n), String_) => n
+    (String_, Applied(n, _)) | (Applied(n, _), String_) => n
+    _ => return false
+  }
+  if !named.has_suffix("Params") {
+    return false
+  }
+  if state.declared_type_names.contains(named) ||
+    state.generic_preserved_type_names.contains(named) ||
+    is_local_type_param(state, named) {
+    return false
+  }
+  true
 }
 
 ///|
@@ -960,9 +993,20 @@ fn interface_decl_to_moonbit(
   let type_name = moonbit_type_identifier(iface.name, "OpaqueType")
   for field in iface.fields {
     let (name, raw_type) = field
+    // `@internal` members never surface (tsc's stripInternal hides them
+    // from declaration consumers). `@deprecated` members stay only while
+    // they type naturally — one that could only widen to `JSValue` is
+    // dropped rather than kept as a fallback slot.
+    if iface.internal_members.contains(name) {
+      continue
+    }
     // Replace TypeScript builder `this` return with the owning interface.
     let type_ = moonbit_replace_this_in_function_return(raw_type, iface.name)
     let moonbit_type = moonbit_function_field_type_name(state, type_)
+    if iface.deprecated_members.contains(name) &&
+      moonbit_type.contains("JSValue") {
+      continue
+    }
     if iface.readonly_fields.contains(name) {
       lines.push("/// readonly \{name} : \{moonbit_type}")
     } else {

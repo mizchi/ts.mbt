@@ -300,3 +300,61 @@ test "parser: emit MoonBit declarations keeps generic intersections with empty o
   )
   assert_false(actual.contains("date : JSValue"))
 }
+
+///|
+test "parser: emit MoonBit decl subsets undeclared string-or-Params unions" {
+  // Decl-surface mirror of the bridge FFI string-subset policy: the
+  // `$`-prefixed Params bag can never become a tagged-union constructor
+  // and is not declared here, so the boundary types as `String`.
+  let src = "export declare function email(params?: string | $ZodEmailParams): string;"
+  let actual = emit_moonbit_decl_from_source(src) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_true(
+    actual.contains("declare pub fn email(params : String?) -> String"),
+  )
+}
+
+///|
+test "parser: emit MoonBit decl keeps declared Params bags out of the string subset" {
+  let src =
+    #|export interface FooParams { message: string; }
+    #|export declare function email(params?: string | FooParams): string;
+  let actual = emit_moonbit_decl_from_source(src) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_false(
+    actual.contains("declare pub fn email(params : String?) -> String"),
+  )
+}
+
+///|
+test "parser: emit MoonBit decl drops internal and JSValue-widened deprecated members" {
+  let src =
+    #|export interface Schema {
+    #|  /** @internal */
+    #|  run: string;
+    #|  /** @deprecated Use `.def` instead. */
+    #|  _def: string | number | { kind: string };
+    #|  /** @deprecated still fine */
+    #|  name: string;
+    #|  keep: string;
+    #|}
+  let actual = emit_moonbit_decl_from_source(src) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  // @internal never surfaces; @deprecated surfaces only while naturally typed.
+  assert_false(actual.contains("run"))
+  assert_false(actual.contains("_def"))
+  assert_true(actual.contains("/// name : String"))
+  assert_true(actual.contains("/// keep : String"))
+}

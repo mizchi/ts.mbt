@@ -1128,8 +1128,14 @@ fn ffi_string_subset_union_text(
   if parts.length() != 2 {
     return None
   }
+  // The bag reference survives in two shapes depending on how far alias
+  // inlining got before rendering: `Named("core.$ZodEmailParams")` when the
+  // qualified alias never resolved, or `Applied("StringFormatParams", ...)`
+  // when it resolved into an applied generic alias the decl layer cannot
+  // expand. Both keep the `*Params` suffix.
   let named = match (parts[0], parts[1]) {
     (String_, Named(n)) | (Named(n), String_) => n
+    (String_, Applied(n, _)) | (Applied(n, _), String_) => n
     _ => return None
   }
   if !named.has_suffix("Params") {
@@ -1537,6 +1543,47 @@ fn ffi_function_field_method_decl(
 }
 
 ///|
+/// `@internal` members never surface (tsc's stripInternal hides them
+/// from declaration consumers). `@deprecated` members stay only while
+/// they type naturally — one that could only widen to `JSValue` is
+/// dropped rather than kept as a fallback slot (zod's `_def` /
+/// `_input` / `_output`). The same predicate gates the struct decl and
+/// its bridge.js converter so both sides agree on the field set.
+fn ffi_interface_field_is_hidden(
+  state : MoonBitJsFfiState,
+  iface : @ast.TsInterface,
+  name : String,
+  type_ : @ast.TsType,
+) -> Bool {
+  if iface.internal_members.contains(name) {
+    return true
+  }
+  if iface.deprecated_members.contains(name) {
+    return ffi_struct_field_type_name(state, type_).contains("JSValue")
+  }
+  false
+}
+
+///|
+fn ffi_visible_interface_fields(
+  state : MoonBitJsFfiState,
+  iface : @ast.TsInterface,
+) -> Array[(String, @ast.TsType)] {
+  if iface.internal_members.length() == 0 &&
+    iface.deprecated_members.length() == 0 {
+    return iface.fields
+  }
+  let out : Array[(String, @ast.TsType)] = []
+  for field in iface.fields {
+    let (name, type_) = field
+    if !ffi_interface_field_is_hidden(state, iface, name, type_) {
+      out.push(field)
+    }
+  }
+  out
+}
+
+///|
 fn ffi_struct_decl_to_moonbit(
   state : MoonBitJsFfiState,
   iface : @ast.TsInterface,
@@ -1568,6 +1615,9 @@ fn ffi_struct_decl_to_moonbit(
   let seen_fields : Array[String] = []
   for field in iface.fields {
     let (name, type_) = field
+    if ffi_interface_field_is_hidden(state, iface, name, type_) {
+      continue
+    }
     let field_name = ffi_sanitize_identifier(name, "field")
     if seen_fields.contains(field_name) {
       continue
@@ -4881,7 +4931,11 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         ffi_sections.push(ffi_struct_decl_to_moonbit(state, iface))
         if state.struct_type_names.contains(type_name) {
           bridge_struct_converter_lines.push(
-            ffi_struct_js_converter_decl(state, iface.name, iface.fields),
+            ffi_struct_js_converter_decl(
+              state,
+              iface.name,
+              ffi_visible_interface_fields(state, iface),
+            ),
           )
         }
       }

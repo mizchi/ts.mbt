@@ -2876,6 +2876,9 @@ fn props_with_children_named_interface_spec(
         index_signatures: origin.iface.index_signatures,
         type_param_bounds: [],
         method_type_params: [],
+        method_type_param_bounds: [],
+        internal_members: [],
+        deprecated_members: [],
       })
     }
     None => None
@@ -2927,6 +2930,9 @@ fn props_with_children_interface_spec(
         index_signatures: [],
         type_param_bounds: [],
         method_type_params: [],
+        method_type_param_bounds: [],
+        internal_members: [],
+        deprecated_members: [],
       })
     }
     _ =>
@@ -3043,6 +3049,9 @@ fn component_props_with_ref_interface_spec(
             index_signatures: origin.iface.index_signatures,
             type_param_bounds: [],
             method_type_params: [],
+            method_type_param_bounds: [],
+            internal_members: [],
+            deprecated_members: [],
           })
         }
         None => None
@@ -3209,6 +3218,9 @@ fn utility_mapped_interface_spec(
         index_signatures: origin.iface.index_signatures,
         type_param_bounds: [],
         method_type_params: [],
+        method_type_param_bounds: [],
+        internal_members: [],
+        deprecated_members: [],
       })
     }
     None => None
@@ -3273,6 +3285,9 @@ fn utility_projection_interface_spec(
         index_signatures: [],
         type_param_bounds: [],
         method_type_params: [],
+        method_type_param_bounds: [],
+        internal_members: [],
+        deprecated_members: [],
       })
     }
     None => None
@@ -4079,6 +4094,9 @@ fn type_alias_record_to_interface_fields(
     index_signatures: [],
     type_param_bounds: [],
     method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members: [],
+    deprecated_members: [],
   })
 }
 
@@ -4170,6 +4188,9 @@ fn project_interface_fields(
     index_signatures: [],
     type_param_bounds: [],
     method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members: [],
+    deprecated_members: [],
   })
 }
 
@@ -4201,6 +4222,9 @@ fn map_interface_fields(
     index_signatures: iface.index_signatures,
     type_param_bounds: [],
     method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members: [],
+    deprecated_members: [],
   })
 }
 
@@ -4266,6 +4290,9 @@ fn type_alias_object_to_interface(
         index_signatures: [],
         type_param_bounds: [],
         method_type_params: [],
+        method_type_param_bounds: [],
+        internal_members: [],
+        deprecated_members: [],
       })
     }
     _ => None
@@ -5589,6 +5616,9 @@ fn tuple_result_interface_spec(
           index_signatures: [],
           type_param_bounds: [],
           method_type_params: [],
+          method_type_param_bounds: [],
+          internal_members: [],
+          deprecated_members: [],
         },
       })
     }
@@ -5637,6 +5667,9 @@ fn inline_object_result_interface_spec(
           index_signatures: [],
           type_param_bounds: [],
           method_type_params: [],
+          method_type_param_bounds: [],
+          internal_members: [],
+          deprecated_members: [],
         },
       })
     None => None
@@ -5994,6 +6027,9 @@ fn normalize_specialized_node_interfaces(
       index_signatures: [],
       type_param_bounds: [],
       method_type_params: [],
+      method_type_param_bounds: [],
+      internal_members: [],
+      deprecated_members: [],
     })
   }
   if needs_crypto_helpers {
@@ -6008,6 +6044,9 @@ fn normalize_specialized_node_interfaces(
         index_signatures: [],
         type_param_bounds: [],
         method_type_params: [],
+        method_type_param_bounds: [],
+        internal_members: [],
+        deprecated_members: [],
       })
     }
     if !exported_names.contains("GenerateKeyOptions") {
@@ -6021,6 +6060,9 @@ fn normalize_specialized_node_interfaces(
         index_signatures: [],
         type_param_bounds: [],
         method_type_params: [],
+        method_type_param_bounds: [],
+        internal_members: [],
+        deprecated_members: [],
       })
     }
     if !exported_names.contains("DiffieHellmanOptions") {
@@ -6037,6 +6079,9 @@ fn normalize_specialized_node_interfaces(
         index_signatures: [],
         type_param_bounds: [],
         method_type_params: [],
+        method_type_param_bounds: [],
+        internal_members: [],
+        deprecated_members: [],
       })
     }
   }
@@ -6055,6 +6100,9 @@ fn normalize_specialized_node_interfaces(
       index_signatures: [],
       type_param_bounds: [],
       method_type_params: [],
+      method_type_param_bounds: [],
+      internal_members: [],
+      deprecated_members: [],
     })
   }
   interfaces
@@ -6125,12 +6173,27 @@ fn append_interface_origin_fields(
   readonly_fields : Array[String],
   seen_field_names : Array[String],
   seen_origins : Array[String],
+  internal_members : Array[String],
+  deprecated_members : Array[String],
 ) -> Unit {
   let origin_key = decl_key(origin.info.record.path, origin.iface.name)
   if seen_origins.contains(origin_key) {
     return
   }
   seen_origins.push(origin_key)
+  // `@internal` / `@deprecated` tags travel with the member into the
+  // flattened derived surface: `_def` is declared (and tagged) on the
+  // root `ZodType` but reaches consumers through every derived schema.
+  for name in origin.iface.internal_members {
+    if !internal_members.contains(name) {
+      internal_members.push(name)
+    }
+  }
+  for name in origin.iface.deprecated_members {
+    if !deprecated_members.contains(name) {
+      deprecated_members.push(name)
+    }
+  }
   for base_name in origin.iface.extends_names {
     match
       resolve_interface_origin(origin.info, base_name, modules, canonical_types) {
@@ -6141,7 +6204,7 @@ fn append_interface_origin_fields(
           // derived type, and only the root's type params are in scope.
           append_interface_origin_fields(
             base_origin, this_owner, modules, canonical_types, fields, readonly_fields,
-            seen_field_names, seen_origins,
+            seen_field_names, seen_origins, internal_members, deprecated_members,
           )
         }
       None => ()
@@ -6149,6 +6212,17 @@ fn append_interface_origin_fields(
   }
   for field in origin.iface.fields {
     let (field_name, field_type) = field
+    // A generic METHOD's constrained type parameters are substituted with
+    // their bounds at the bridge boundary: every argument for a
+    // `pipe<T extends $ZodType>(target: T)` slot satisfies `$ZodType`, so
+    // the boundary typed at the bound is sound for params and keeps the
+    // member natural instead of widening the `T` references to `JSValue`.
+    // Unconstrained method generics keep the existing widening.
+    let bounded_type = decl_substitute_method_type_param_bounds(
+      origin.iface,
+      field_name,
+      field_type,
+    )
     append_lowered_interface_field(
       fields,
       readonly_fields,
@@ -6157,12 +6231,39 @@ fn append_interface_origin_fields(
       origin.export_name,
       this_owner,
       field_name,
-      field_type,
+      bounded_type,
       origin.iface.readonly_fields.contains(field_name),
       modules,
       canonical_types,
     )
   }
+}
+
+///|
+fn decl_substitute_method_type_param_bounds(
+  iface : @ast.TsInterface,
+  field_name : String,
+  field_type : @ast.TsType,
+) -> @ast.TsType {
+  let mut bounds : Array[(String, @ast.TsType)] = []
+  for entry in iface.method_type_param_bounds {
+    let (member_name, member_bounds) = entry
+    if member_name == field_name {
+      bounds = member_bounds
+      break
+    }
+  }
+  if bounds.length() == 0 {
+    return field_type
+  }
+  let params : Array[String] = []
+  let args : Array[@ast.TsType] = []
+  for pair in bounds {
+    let (param_name, bound) = pair
+    params.push(param_name)
+    args.push(bound)
+  }
+  substitute_type_alias_params(field_type, params, args)
 }
 
 ///|
@@ -6175,6 +6276,8 @@ fn clone_resolved_interface_origin(
   let readonly_fields : Array[String] = []
   let seen_field_names : Array[String] = []
   let seen_origins : Array[String] = []
+  let internal_members : Array[String] = []
+  let deprecated_members : Array[String] = []
   append_interface_origin_fields(
     origin,
     decl_this_owner_type(origin.export_name, origin.iface.type_params),
@@ -6184,6 +6287,8 @@ fn clone_resolved_interface_origin(
     readonly_fields,
     seen_field_names,
     seen_origins,
+    internal_members,
+    deprecated_members,
   )
   {
     name: origin.export_name,
@@ -6195,6 +6300,9 @@ fn clone_resolved_interface_origin(
     index_signatures: origin.iface.index_signatures,
     type_param_bounds: [],
     method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members,
+    deprecated_members,
   }
 }
 
@@ -6522,6 +6630,8 @@ fn clone_exported_interface(
   let readonly_fields : Array[String] = []
   let seen_field_names : Array[String] = []
   let seen_origins : Array[String] = []
+  let internal_members : Array[String] = []
+  let deprecated_members : Array[String] = []
   append_interface_origin_fields(
     { info, export_name: exported.export_name, iface: exported.iface },
     decl_this_owner_type(exported.export_name, exported.iface.type_params),
@@ -6531,6 +6641,8 @@ fn clone_exported_interface(
     readonly_fields,
     seen_field_names,
     seen_origins,
+    internal_members,
+    deprecated_members,
   )
   {
     name: exported.export_name,
@@ -6542,6 +6654,9 @@ fn clone_exported_interface(
     index_signatures: exported.iface.index_signatures,
     type_param_bounds: [],
     method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members,
+    deprecated_members,
   }
 }
 
