@@ -462,3 +462,35 @@ test "tagged union: from-JS snippet uses Array.isArray for arrays" {
     None => fail("Array.isArray should be a valid discriminator")
   }
 }
+
+///|
+test "tagged union: function member discriminates via typeof function" {
+  // `AuthToken = string | (() => string)` — drizzle NeonAuthToken shape.
+  let members : Array[@ast.TsType] = [String_, Func([], String_)]
+  match tagged_union_cases(members) {
+    Some(cases) => {
+      @test.assert_eq(cases.length(), 2)
+      @test.assert_eq(cases[1].0, "FnValue")
+    }
+    None => fail("expected function member union to be accepted")
+  }
+  match tagged_union_case_discriminator(Func([], String_)) {
+    Some(TypeofFunction) => ()
+    _ => fail("expected TypeofFunction discriminator")
+  }
+  // Two function members collide on the constructor name and reject.
+  let two_fns : Array[@ast.TsType] = [
+    Func([], String_),
+    Func([String_], String_),
+  ]
+  assert_true(tagged_union_cases(two_fns) is None)
+  // The enum section renders the arrow payload.
+  match
+    tagged_union_decl_to_moonbit_section({
+      name: "AuthToken",
+      cases: [("StringValue", String_), ("FnValue", Func([], String_))],
+    }) {
+    Some(section) => assert_true(section.contains("FnValue(() -> String)"))
+    None => fail("expected enum section for function payload")
+  }
+}

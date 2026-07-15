@@ -13,12 +13,11 @@ ambiguous_unsupported_export_budget=1
 namespace_omitted_unsupported_export_budget=0
 namespace_widened_unsupported_export_budget=0
 # Heterogeneous unions whose members carry no runtime-discriminable
-# constructor name (e.g. hono `Child = string | number | JSX.Element`,
-# vitest `CancelReason` / `TestArtifact`, react `ElementType`, drizzle
-# `NeonAuthToken`). The alias widens to JSValue and stays runtime-safe;
-# driving this back to 0 is roadmap item "Heterogeneous union ->
-# auto-enum" in TODO.md.
-heterogeneous_union_unsupported_export_budget=5
+# constructor name. Function members, branded-string intersections,
+# empty-registry indexed accesses, and qualified namespace refs now
+# lower (2026-07-15), so the budget is 0: any new occurrence is a real
+# regression.
+heterogeneous_union_unsupported_export_budget=0
 
 rm -rf "$report_root"
 mkdir -p "$log_root"

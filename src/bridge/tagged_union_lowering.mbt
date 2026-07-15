@@ -67,6 +67,12 @@ pub fn tagged_union_member_constructor_name(t : @ast.TsType) -> String? {
   match t {
     @ast.TsType::Named(name) => tagged_union_named_constructor_name(name)
     @ast.TsType::Array(inner) => tagged_union_array_constructor_name(inner)
+    // A function-typed member discriminates via `typeof === "function"`
+    // (`NeonAuthToken = string | (() => ...)`,
+    // `ElementType = string | ((props) => ReactElement)`). At most one
+    // function member per union — a second one collides on the
+    // constructor name and rejects the alias.
+    @ast.TsType::Func(_, _) => Some("FnValue")
     @ast.TsType::Literal(_)
     | @ast.TsType::NumberLiteral(_)
     | @ast.TsType::BooleanLiteral(_)
@@ -386,6 +392,7 @@ pub(all) enum TaggedUnionCaseDiscriminator {
   TypeofNumber
   TypeofBoolean
   TypeofBigInt
+  TypeofFunction
   IsArrayPredicate
   InstanceOfNamed(String)
   StrictEqualsString(String)
@@ -405,6 +412,7 @@ pub fn tagged_union_case_discriminator(
     @ast.TsType::Boolean => Some(TypeofBoolean)
     @ast.TsType::BigInt => Some(TypeofBigInt)
     @ast.TsType::Array(_) => Some(IsArrayPredicate)
+    @ast.TsType::Func(_, _) => Some(TypeofFunction)
     @ast.TsType::Named(name) => Some(InstanceOfNamed(name))
     @ast.TsType::Literal(value) => Some(StrictEqualsString(value))
     @ast.TsType::NumberLiteral(value) => Some(StrictEqualsNumber(value))
@@ -424,6 +432,7 @@ fn tagged_union_case_predicate_text(
     TypeofNumber => "typeof " + expr + " === \"number\""
     TypeofBoolean => "typeof " + expr + " === \"boolean\""
     TypeofBigInt => "typeof " + expr + " === \"bigint\""
+    TypeofFunction => "typeof " + expr + " === \"function\""
     IsArrayPredicate => "Array.isArray(" + expr + ")"
     InstanceOfNamed(name) => expr + " instanceof " + name
     StrictEqualsString(value) =>
@@ -638,6 +647,35 @@ pub fn tagged_union_inner_moonbit_text_with_arity(
         Some(text) => Some("Array[" + text + "]")
         None => None
       }
+    // A function payload renders as a MoonBit arrow; positions whose type
+    // has no direct rendering widen to `JSValue` locally instead of
+    // failing the whole enum (`AuthToken = string | (() => string)`).
+    @ast.TsType::Func(params, ret) => {
+      let rendered_params : Array[String] = []
+      for p in params {
+        rendered_params.push(
+          match
+            tagged_union_inner_moonbit_text_with_arity(
+              p, generic_type_params_by_name,
+            ) {
+            Some(text) => text
+            None => "JSValue"
+          },
+        )
+      }
+      let rendered_ret = match ret {
+        @ast.TsType::Void => "Unit"
+        other =>
+          match
+            tagged_union_inner_moonbit_text_with_arity(
+              other, generic_type_params_by_name,
+            ) {
+            Some(text) => text
+            None => "JSValue"
+          }
+      }
+      Some("(" + rendered_params.join(", ") + ") -> " + rendered_ret)
+    }
     _ => None
   }
 }

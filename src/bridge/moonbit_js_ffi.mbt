@@ -1122,6 +1122,17 @@ fn ffi_synthesize_inline_union(
   state : MoonBitJsFfiState,
   parts : Array[@ast.TsType],
 ) -> String? {
+  // Function members are accepted for EXPORTED alias lowering (their
+  // boundary stays passthrough), but inline synthesis would generate a
+  // wrapper whose conversion glue can't produce the enum from a raw
+  // value (`useState(initialState: S | (() => S))` — the JSValue
+  // argument has no path into `Auto_SValue_or_FnValue`). Keep such
+  // inline unions on the JSValue fallback.
+  for part in parts {
+    if part is Func(_, _) {
+      return None
+    }
+  }
   let cases = match tagged_union_cases(parts) {
     Some(c) => c
     None => return None
@@ -2485,13 +2496,29 @@ fn ffi_type_alias_constructors(
   if type_alias.type_params.length() > 0 {
     return []
   }
-  let items = match ffi_type_alias_union_items(type_alias.type_) {
-    Some(items) => items
-    None => return []
-  }
   let alias_type_name = ffi_type_identifier(type_alias.name, "OpaqueType")
   let alias_fn_prefix = ffi_to_snake_case(alias_type_name)
   let tagged_decl = state.tagged_union_decls_by_name.get(alias_type_name)
+  // When a tagged-union decl exists, its cases carry the NORMALIZED
+  // member types (qualified namespace refs resolved, `never` members
+  // dropped) in enum order — helpers built from the raw alias body would
+  // reference unresolved names (`JSX.Element` -> opaque `JSX_Element`)
+  // and mis-index `$tag` after a dropped member.
+  let items = match tagged_decl {
+    Some(decl) => {
+      let case_types : Array[@ast.TsType] = []
+      for entry in decl.cases {
+        let (_, inner) = entry
+        case_types.push(inner)
+      }
+      case_types
+    }
+    None =>
+      match ffi_type_alias_union_items(type_alias.type_) {
+        Some(items) => items
+        None => return []
+      }
+  }
   let ctors : Array[FfiAliasConstructor] = []
   let seen_names : Array[String] = []
   for index, item in items {
@@ -2967,6 +2994,10 @@ fn ffi_tagged_union_return_is_safe_to_wrap(
         let (_, inner) = entry
         match tagged_union_case_discriminator(inner) {
           Some(InstanceOfNamed(_)) => return false
+          // Function payloads stay on the raw passthrough: the generic
+          // wrapper would need closure conversion in both directions,
+          // which the auto-wrap doesn't model.
+          Some(TypeofFunction) => return false
           _ => ()
         }
       }

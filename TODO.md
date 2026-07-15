@@ -889,16 +889,20 @@ valibot.
     all 24 corpus entries; per-package `JSValue` cause budgets, function
     counts, and unsupported-export budgets now reflect the actual
     generated output, including the new heterogeneous-union diagnostics.
-- [ ] Drive the `heterogeneous-union-widened` budget in
-  `scripts/bridge_quality_report.sh` back to 0 (currently 5, added
-  2026-07-15: hono `Child = string | number | JSX.Element`, react
-  `ElementType`, vitest `CancelReason` / `TestArtifact`, drizzle
-  `NeonAuthToken`). All five widen because a member has no
-  runtime-discriminable constructor name — qualified names like
-  `JSX.Element` don't resolve to a PascalCase constructor. The aliases
-  stay runtime-safe (widened to JSValue with diagnostics); the fix is
-  either resolving qualified member names to their canonical local
-  declarations before discriminability, or discriminating structurally.
+- [x] Drive the `heterogeneous-union-widened` budget back to 0 (done
+  2026-07-15, same day it was added). Four lowerings landed:
+  - qualified namespace refs resolve to their flattened export name
+    before classification (`JSX.Element` -> `JsxElement`, hono `Child`);
+  - function members discriminate via `typeof === "function"` and render
+    as arrow payloads (`FnValue(() -> String)` — drizzle `NeonAuthToken`,
+    react `ElementType`); inline `Auto_*` synthesis still excludes
+    function members (the useState wrapper glue can't produce the enum);
+  - branded-string intersections collapse to `string` and the
+    LiteralUnion pattern collapses to a plain String alias
+    (vitest `CancelReason = "a" | "b" | (string & Record<string, never>)`);
+  - indexed access over an EMPTY registry interface reduces to `never`
+    and drops from the union (vitest
+    `TestArtifact = A | B | C | Registry[keyof Registry]`).
 
 ### 2. Method-level generics preserved through bridge
 

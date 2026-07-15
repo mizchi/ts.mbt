@@ -1792,6 +1792,158 @@ fn resolve_decl_from_export_name(
 }
 
 ///|
+/// Resolve a QUALIFIED namespace type reference (`JSX.Element`) to its
+/// flattened export name (`JsxElement`) by walking the module's namespace
+/// declarations with the same prefixing scheme the exporter uses. Returns
+/// `None` when any segment doesn't resolve to a declared namespace /
+/// member.
+fn decl_qualified_namespace_type_name(
+  info : DeclModuleInfo,
+  name : String,
+) -> String? {
+  if !name.contains(".") {
+    return None
+  }
+  let segments : Array[String] = []
+  for seg in name.split(".") {
+    segments.push(seg.to_owned())
+  }
+  if segments.length() < 2 {
+    return None
+  }
+  let mut current : @ast.TsModule = info.module_
+  let mut prefix = ""
+  for i in 0..<(segments.length() - 1) {
+    let ns_name = segments[i]
+    let mut found : @ast.TsNamespaceDecl? = None
+    for ns in current.namespaces {
+      if ns.name == ns_name {
+        found = Some(ns)
+        break
+      }
+    }
+    match found {
+      Some(ns) => {
+        current = ns.module_
+        prefix = namespace_next_type_export_prefix(prefix, ns_name)
+      }
+      None => return None
+    }
+  }
+  let member = segments[segments.length() - 1]
+  let mut member_exists = false
+  for iface in current.interfaces {
+    if iface.name == member {
+      member_exists = true
+      break
+    }
+  }
+  if !member_exists {
+    for enum_ in current.enums {
+      if enum_.name == member {
+        member_exists = true
+        break
+      }
+    }
+  }
+  if !member_exists {
+    return None
+  }
+  Some(namespace_type_export_name(prefix, member))
+}
+
+///|
+/// Bridge-local normalizations applied to a type-alias body before the
+/// enum / tagged-union classification. Each rule keeps the alias
+/// classifiable instead of widening it to `JSValue`:
+/// - qualified namespace refs resolve to their flattened export name
+///   (`JSX.Element` -> `JsxElement`, hono `Child`);
+/// - branded-string intersections collapse to `string`
+///   (`string & Record<string, never>`, vitest `CancelReason`);
+/// - an indexed access over an EMPTY registry interface reduces to
+///   `never` (`TestArtifactRegistry[keyof TestArtifactRegistry]`, vitest
+///   `TestArtifact`), and `never` members drop out of unions;
+/// - a union of a plain `string` plus only string literals collapses to
+///   `string` (the LiteralUnion autocomplete pattern).
+fn decl_normalize_alias_union_body(
+  info : DeclModuleInfo,
+  type_ : @ast.TsType,
+) -> @ast.TsType {
+  match type_ {
+    Union(members) => {
+      let next : Array[@ast.TsType] = []
+      for m in members {
+        let normalized = decl_normalize_alias_union_body(info, m)
+        // `never` contributes no runtime values; drop it so the
+        // remaining members stay discriminable.
+        if normalized is Never {
+          continue
+        }
+        next.push(normalized)
+      }
+      if next.length() == 1 {
+        return next[0]
+      }
+      // LiteralUnion collapse: `"a" | "b" | string` is `string` for every
+      // runtime purpose (the literal split only preserves editor
+      // autocomplete).
+      let mut has_plain_string = false
+      let mut all_string_like = true
+      for m in next {
+        match m {
+          String_ => has_plain_string = true
+          Literal(_) => ()
+          _ => all_string_like = false
+        }
+      }
+      if has_plain_string && all_string_like {
+        return String_
+      }
+      Union(next)
+    }
+    Intersection(parts) => {
+      // Branded-string escape hatch: `string & Record<string, never>` /
+      // `string & {}` accept every plain string at runtime.
+      let mut has_string = false
+      let mut rest_is_empty_brand = true
+      for p in parts {
+        match p {
+          String_ => has_string = true
+          Applied("Record", [_, Never]) => ()
+          Object([]) => ()
+          _ => rest_is_empty_brand = false
+        }
+      }
+      if has_string && rest_is_empty_brand {
+        String_
+      } else {
+        type_
+      }
+    }
+    IndexedAccess(Named(reg), Keyof(Named(reg_keyof))) if reg == reg_keyof =>
+      // `Registry[keyof Registry]` over an EMPTY interface (the module
+      // augmentation registry pattern) has no keys: the member is
+      // `never`.
+      match find_interface_decl_recursive(info.module_, reg) {
+        Some(iface) if iface.fields.length() == 0 &&
+          iface.index_signatures.length() == 0 => Never
+        _ => type_
+      }
+    Named(name) =>
+      match decl_qualified_namespace_type_name(info, name) {
+        Some(flattened) => Named(flattened)
+        None => type_
+      }
+    Applied(name, args) =>
+      match decl_qualified_namespace_type_name(info, name) {
+        Some(flattened) => Applied(flattened, args)
+        None => type_
+      }
+    _ => type_
+  }
+}
+
+///|
 fn resolve_decl_from_local_name(
   export_name : String,
   source_path : String,
@@ -1830,9 +1982,13 @@ fn resolve_decl_from_local_name(
                   // pass an empty map so the lower path falls back to the
                   // raw alias names.
                   let canonical_types_for_lower : Map[String, String] = {}
+                  // Normalize BEFORE the utility lowering: the rules match
+                  // raw parse shapes (`Record<string, never>` inside a
+                  // brand intersection, `Registry[keyof Registry]`), which
+                  // the utility pass would otherwise rewrite first.
                   let lowered_alias_type = lower_react_utility_type(
                     info,
-                    type_alias.type_,
+                    decl_normalize_alias_union_body(info, type_alias.type_),
                     modules,
                     canonical_types_for_lower,
                   )

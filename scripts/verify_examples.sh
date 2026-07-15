@@ -590,12 +590,18 @@ EOF
   grep_generated_mbt "$out" 'pub extern "js" fn get_assert() -> Chai_Assert'
   grep_generated_mbt "$out" 'pub extern "js" fn get_vi() -> VitestUtils'
   grep_generated_mbt "$out" 'pub extern "js" fn VitestUtils::isFakeTimers(self : VitestUtils) -> Bool'
-  # vitest's `CancelReason` (string-literal alias) and `TestArtifact`
-  # (object alias) are heterogeneous unions whose members aren't
-  # runtime-discriminable. They're correctly diagnosed and widened to
-  # `JSValue`; the rest of the public surface stays untouched.
-  grep -F 'CancelReason (heterogeneous union member is not runtime-discriminable' "$out/SCAFFOLD_DIAGNOSTICS.md" >/dev/null
-  grep -F 'TestArtifact (heterogeneous union member is not runtime-discriminable' "$out/SCAFFOLD_DIAGNOSTICS.md" >/dev/null
+  # vitest's `CancelReason` is the LiteralUnion pattern
+  # (`"a" | "b" | (string & Record<string, never>)`) and collapses to a
+  # plain String alias; `TestArtifact` drops its empty-registry indexed
+  # access (`TestArtifactRegistry[keyof TestArtifactRegistry]` -> never)
+  # and lowers to a tagged enum of the three artifact interfaces.
+  grep -F 'pub type CancelReason = String' "$out/bridge.mbti" >/dev/null
+  grep -F 'pub(all) enum TestArtifact {' "$out/bridge.mbti" >/dev/null
+  grep -F 'FailureScreenshotArtifactValue(FailureScreenshotArtifact)' "$out/bridge.mbti" >/dev/null
+  if grep -F 'heterogeneous union member is not runtime-discriminable' "$out/SCAFFOLD_DIAGNOSTICS.md" >/dev/null; then
+    echo "unexpected heterogeneous-union widening in vitest scaffold diagnostics" >&2
+    exit 1
+  fi
   moon -C "$out" check --target js
   moon -C "$out" test --target js
   run_typescript_to_moonbit_js_build_smoke "$out" "examples/typescript_to_moonbit_vitest" < \
