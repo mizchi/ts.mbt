@@ -12,6 +12,13 @@ unsupported_details_file="$report_root/unsupported-exports.tsv"
 ambiguous_unsupported_export_budget=1
 namespace_omitted_unsupported_export_budget=0
 namespace_widened_unsupported_export_budget=0
+# Heterogeneous unions whose members carry no runtime-discriminable
+# constructor name (e.g. hono `Child = string | number | JSX.Element`,
+# vitest `CancelReason` / `TestArtifact`, react `ElementType`, drizzle
+# `NeonAuthToken`). The alias widens to JSValue and stays runtime-safe;
+# driving this back to 0 is roadmap item "Heterogeneous union ->
+# auto-enum" in TODO.md.
+heterogeneous_union_unsupported_export_budget=5
 
 rm -rf "$report_root"
 mkdir -p "$log_root"
@@ -147,6 +154,7 @@ collect_unsupported_export_counts() {
   local ambiguous=0
   local namespace_omitted=0
   local namespace_widened=0
+  local heterogeneous_union=0
   local unbudgeted=0
   local file
   local line
@@ -174,6 +182,9 @@ collect_unsupported_export_counts() {
       elif [[ "$line" == *"namespace export is widened to JSValue." ]]; then
         classification="namespace-widened"
         namespace_widened=$((namespace_widened + 1))
+      elif [[ "$line" == *"heterogeneous union member is not runtime-discriminable"* ]]; then
+        classification="heterogeneous-union-widened"
+        heterogeneous_union=$((heterogeneous_union + 1))
       else
         unbudgeted=$((unbudgeted + 1))
       fi
@@ -186,11 +197,12 @@ collect_unsupported_export_counts() {
     done < "$file"
   done < <(find_metric_files 'bridge.mbti')
 
-  printf '%s|%s|%s|%s|%s\n' \
+  printf '%s|%s|%s|%s|%s|%s\n' \
     "$total" \
     "$ambiguous" \
     "$namespace_omitted" \
     "$namespace_widened" \
+    "$heterogeneous_union" \
     "$unbudgeted"
 }
 
@@ -277,6 +289,7 @@ IFS='|' read -r \
   ambiguous_unsupported_exports \
   namespace_omitted_unsupported_exports \
   namespace_widened_unsupported_exports \
+  heterogeneous_union_unsupported_exports \
   unbudgeted_unsupported_exports < <(collect_unsupported_export_counts "$unsupported_details_file")
 moonbit_declared_functions="$(count_matching_files 'bridge.mbti' '^declare pub fn ')"
 moonbit_declared_types="$(count_matching_files 'bridge.mbti' '^declare pub type ')"
@@ -311,6 +324,9 @@ fi
 if [ "$namespace_widened_unsupported_exports" -gt "$namespace_widened_unsupported_export_budget" ]; then
   overall="fail"
 fi
+if [ "$heterogeneous_union_unsupported_exports" -gt "$heterogeneous_union_unsupported_export_budget" ]; then
+  overall="fail"
+fi
 
 {
   printf '# Bridge Quality Report\n\n'
@@ -343,6 +359,7 @@ fi
   printf '| budgeted ambiguous unsupported exports | %s / %s |\n' "$ambiguous_unsupported_exports" "$ambiguous_unsupported_export_budget"
   printf '| budgeted namespace-runtime omitted exports | %s / %s |\n' "$namespace_omitted_unsupported_exports" "$namespace_omitted_unsupported_export_budget"
   printf '| budgeted namespace-widened exports | %s / %s |\n' "$namespace_widened_unsupported_exports" "$namespace_widened_unsupported_export_budget"
+  printf '| budgeted heterogeneous-union widened exports | %s / %s |\n' "$heterogeneous_union_unsupported_exports" "$heterogeneous_union_unsupported_export_budget"
   printf '| unbudgeted unsupported exports | %s |\n' "$unbudgeted_unsupported_exports"
   printf '| JSValue refs | %s |\n' "$jsvalue_refs"
   printf '| JSValue surface lines | %s |\n' "$jsvalue_surface_lines"

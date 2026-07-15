@@ -889,6 +889,16 @@ valibot.
     all 24 corpus entries; per-package `JSValue` cause budgets, function
     counts, and unsupported-export budgets now reflect the actual
     generated output, including the new heterogeneous-union diagnostics.
+- [ ] Drive the `heterogeneous-union-widened` budget in
+  `scripts/bridge_quality_report.sh` back to 0 (currently 5, added
+  2026-07-15: hono `Child = string | number | JSX.Element`, react
+  `ElementType`, vitest `CancelReason` / `TestArtifact`, drizzle
+  `NeonAuthToken`). All five widen because a member has no
+  runtime-discriminable constructor name — qualified names like
+  `JSX.Element` don't resolve to a PascalCase constructor. The aliases
+  stay runtime-safe (widened to JSValue with diagnostics); the fix is
+  either resolving qualified member names to their canonical local
+  declarations before discriminability, or discriminating structurally.
 
 ### 2. Method-level generics preserved through bridge
 
@@ -1013,6 +1023,53 @@ augmentation, React `HTMLAttributes` index signatures.
   literal widening when any of the component's type parameters carries
   the modifier.
 
+### 8. Polymorphic `this` keeps fluent chains typed (done 2026-07-15)
+
+Patterns: zod `ZodType.check(...): this` / `optional(): ZodOptional<this>`,
+builder chains like jose `SignJWT.setIssuedAt(): this`, generic classes
+with `merge(other: this): this`.
+
+- [x] `this` in interface members and class methods now lowers to the
+  owning declaration applied to its own type parameters
+  (`Schema[Output, Input, Internals]`) instead of `Named(owner)` +
+  the `JSValue` arity filler (`Schema[JSValue, JSValue, JSValue]`).
+  The substitution is root-scoped: members merged in from `extends`
+  expansion also resolve `this` to the derived struct, matching TS
+  semantics and keeping every substituted param in scope.
+  Implemented in `decl_this_owner_type` / `decl_replace_this_type`
+  (now recursing through `Func` params and returns as well, so
+  `apply((this) => R)`-style callback params stop leaking a raw
+  `This` opaque type). zod: SCAFFOLD JSValue fallback entries
+  748 -> 648; the whole fluent core (`check` / `clone` / `optional` /
+  `nullable` / `describe` / ...) keeps `Schema[Output, Input, Internals]`.
+
+### 9. Generic free functions export via monomorphized glue (done 2026-07-15)
+
+Previously every `pub fn[T] ...` free function was omitted from
+`link.js.exports` and listed in `AUTOLINK_DIAGNOSTICS.md`.
+
+- [x] Unconstrained generic free functions now export through autolink
+  glue: type parameters are instantiated at an opaque
+  `#external pub type TsMbtGenericAny` (values cross the JS boundary
+  unchanged, which is exactly parametric behavior), the glue wrapper is
+  therefore non-generic and exportable, and the emitted `.d.ts` keeps the
+  original generic signature (`export function identity<T>(value: T): T`).
+- [x] Bare `T?` returns unwrap to `value | undefined` via a
+  `tsmbt_generic_undefined()` extern, because `Option[TsMbtGenericAny]`
+  crosses the boundary in the boxed `{_0}` representation.
+- [x] Eligibility is decided by `mbti_generic_glue_return_plan` and shared
+  by the glue emitter, the runtime-inaccessible screening, and the
+  diagnostics list. Ineligible (stay omitted): trait bounds (`[T : Show]`),
+  type params inside tuples (MoonBit tuples are not JS arrays), type params
+  under `Option` anywhere except the bare top-level return, and optional
+  params (`name? : T`).
+- Runtime verified with a node smoke: `identity(obj) === obj`,
+  `identity(undefined) === undefined`, `first([]) === undefined`,
+  `first([10, 20]) === 10`; `tsc --strict` accepts a typed generic consumer
+  of the emitted `.d.ts`.
+- Next increments: generic methods on non-generic owners (same
+  monomorphization through the facade path), then generic owners.
+
 ### Non-Goals (still)
 
 - [ ] Do not turn this list into a checklist for "all of TypeScript". Each item
@@ -1031,9 +1088,11 @@ v7.0.2). Truth comes from vendored name manifests
 variant is NOTRUN, and the TS6-era deprecated-compiler-option
 diagnostics (TS5107/TS5101) were removed from the checker accordingly.
 
-State: whole-corpus **TP 2329 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 405 /
+State: whole-corpus **TP 2335 / FP 0 / PFLEGAL 0 / TN 1750 / MISS 399 /
 NOTRUN 14** via `scripts/checker_conformance_oracle.sh --max-fp 0
---max-legal-parsefail 3`.
+--max-legal-parsefail 0`. Batch BR emptied the legal-parse-failure
+budget (decoratorOnClass3, defaultExportWithOverloads01, parser768531)
+and the gate now enforces 0.
 
 Batch BE (TS7-only miss mining, +51 TP) worked the misses newly exposed
 by the oracle switch:
@@ -1272,6 +1331,25 @@ primitive spreads:
   value against the target interface's number index signature
   (`var o: I = { [+"foo"]: "" }` where `[s: number]: boolean` —
   computedPropertyNamesContextualType10_ES5/ES6).
+Batch BQ (+6 TP, TP 2335 / MISS 399) took the TS7057 generator cluster
+and the deferred genericRestArity tuple arity:
+- TS7057: in a generator lacking a return-type annotation (under
+  noImplicitAny), a `yield` whose RESULT is consumed with no contextual
+  type — three syntactically decidable shapes: unannotated Ident
+  binding (`const value = yield`), a generic call argument whose
+  matching parameter is a bare type param with no explicit type args
+  (`f(yield)`), and `yield yield`. Unused results, annotated bindings,
+  destructuring targets, and `f<string>(yield)` abstain
+  (generatorImplicitAny, generatorTypeCheck50,
+  generatorReturnTypeInference + NonStrict).
+- TS2554 generic-rest-tuple arity: `call<TS extends unknown[]>(handler:
+  (...args: TS) => void, ...args: TS)` needs exactly 1 + handler-param
+  count arguments. The parser substitutes the tuple param with its
+  bound, so the carve keys on the substituted single-type-param shape
+  (`(...args: unknown[]/any[]) => R` + same-bound rest) with a
+  syntactic all-required arrow handler (genericRestArity,
+  genericRestArityStrict). A non-generic `unknown[]`-rest signature
+  abstains.
 Documented dead ends from this round: YieldExpression10_es6 (an
 object-literal method's name in the backstop is indistinguishable from
 a legal self-referential named function expression property);

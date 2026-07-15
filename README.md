@@ -348,11 +348,19 @@ Supported surface:
   trait impl relationships.
 - Opt-in facade wrappers for local non-generic methods and constructors via
   `mbt2ts facade-scaffold`, including async constructors and methods.
+- Unconstrained generic free functions (`pub fn[T] identity(T) -> T`) export
+  through a monomorphized glue wrapper: each type parameter is instantiated
+  at an opaque `TsMbtGenericAny` boundary type (values cross the JS boundary
+  unchanged) while the emitted `.d.ts` keeps the full generic signature.
+  Bare `T?` returns unwrap to `value | undefined` at the boundary.
 
 Unsupported or limited surface:
 
-- Generic methods, generic constructors, trait methods, and generic functions
-  are not exported directly by JS autolink.
+- Generic methods, generic constructors, trait methods, and generic
+  functions with trait bounds are not exported by JS autolink. Generic free
+  functions whose type parameters appear inside tuples or non-top-level
+  `Option` payloads also stay omitted (their runtime representation would
+  not match the declared TypeScript signature).
 - Public members omitted from the runtime export surface are listed in
   `AUTOLINK_DIAGNOSTICS.md`.
 - External MoonBit imports are left as bare TypeScript imports unless an

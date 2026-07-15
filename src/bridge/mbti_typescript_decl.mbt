@@ -133,6 +133,14 @@ priv struct MbtiAutolinkGlueDecl {
   runtime_export_name : String
   ts_decl : String
   mbt_decl : String
+  // True when the glue wrapper monomorphizes an unconstrained generic
+  // function through the opaque `TsMbtGenericAny` boundary type; the
+  // rendered glue file declares that type once when any decl needs it.
+  uses_generic_any : Bool
+  // True when the wrapper unwraps a bare `T?` return to
+  // `value | undefined`; the rendered glue file declares the
+  // `tsmbt_generic_undefined` extern once when any decl needs it.
+  uses_generic_undefined : Bool
 }
 
 ///|
@@ -914,6 +922,7 @@ fn parse_mbti_imports(source : String) -> Array[MbtiImportRef] {
 ///|
 fn collect_mbti_omitted_autolink_members(source : String) -> Array[String] {
   let members : Array[String] = []
+  let imports = parse_mbti_imports(source)
   for line_view in source.split("\n") {
     let line = line_view.to_owned()
     match strip_mbti_public_prefix(line, "fn") {
@@ -929,7 +938,15 @@ fn collect_mbti_omitted_autolink_members(source : String) -> Array[String] {
             } else {
               rest[:open_idx].trim().to_owned()
             }
+            // Glue-eligible generic free functions now get a monomorphized
+            // wrapper, so they are no longer omitted. Ones that use
+            // private types are re-added by the runtime-inaccessible
+            // screening below.
+            let has_generic_glue = !name.contains("::") &&
+              rest.has_prefix("[") &&
+              mbti_line_is_glue_eligible_generic_free_fn(line, imports)
             if (name.contains("::") || rest.has_prefix("[")) &&
+              !has_generic_glue &&
               !members.contains(name) {
               members.push(name)
             }
@@ -945,6 +962,30 @@ fn collect_mbti_omitted_autolink_members(source : String) -> Array[String] {
     }
   }
   members
+}
+
+///|
+fn mbti_line_is_glue_eligible_generic_free_fn(
+  line : String,
+  imports : Array[MbtiImportRef],
+) -> Bool {
+  let parsed = parse_mbti_function_signature(line.trim().to_owned(), imports, []) catch {
+    _ => return false
+  }
+  match parsed {
+    Some((None, _, fn_type_params, params_src, return_src, _)) => {
+      if fn_type_params.length() == 0 {
+        return false
+      }
+      let raw_params = match parse_mbti_raw_facade_params(params_src, "") {
+        Some(params) => params
+        None => return false
+      }
+      mbti_generic_glue_return_plan(fn_type_params, raw_params, return_src)
+      is Some(_)
+    }
+    _ => false
+  }
 }
 
 ///|
@@ -969,18 +1010,12 @@ fn collect_runtime_inaccessible_free_function_names(
           fn_name,
           fn_type_params,
           params_src,
-          _return_src,
+          return_src,
           _is_async,
         ) = signature
         match owner_name {
           None => {
             let export_name = sanitize_ts_identifier(fn_name, "fn")
-            if fn_type_params.length() > 0 {
-              if !names.contains(export_name) {
-                names.push(export_name)
-              }
-              continue
-            }
             let raw_params = match
               parse_mbti_raw_facade_params(params_src, "") {
               Some(params) => params
@@ -990,6 +1025,21 @@ fn collect_runtime_inaccessible_free_function_names(
                 }
                 continue
               }
+            }
+            if fn_type_params.length() > 0 &&
+              mbti_generic_glue_return_plan(
+                fn_type_params, raw_params, return_src,
+              )
+              is None {
+              // No monomorphized glue wrapper exists for this generic
+              // shape (trait bound, tuple, or non-top-level Option), so
+              // it stays runtime-inaccessible. Glue-eligible generics
+              // fall through to the same private-type screening as
+              // non-generic functions.
+              if !names.contains(export_name) {
+                names.push(export_name)
+              }
+              continue
             }
             let fn_type_param_names = type_param_names(fn_type_params)
             let return_src_with_effect = mbti_return_source_with_effect_from_function_line(
@@ -1213,6 +1263,228 @@ fn mbti_qualify_root_type_refs_for_glue(
         prev != Some('.') &&
         prev != Some('@') {
         rendered += "@\{source_alias}.\{ident}"
+      } else {
+        rendered += ident
+      }
+    } else {
+      rendered += c.to_string()
+      idx += 1
+    }
+  }
+  rendered
+}
+
+///|
+/// Name of the opaque `#external` boundary type used to monomorphize
+/// unconstrained generic functions for the JS runtime export surface.
+/// Values pass through the JS boundary unchanged, so instantiating an
+/// unconstrained type parameter at this type preserves the function's
+/// runtime behavior while the TypeScript declaration keeps the generic
+/// signature.
+const MBTI_GENERIC_ANY_TYPE_NAME : String = "TsMbtGenericAny"
+
+///|
+/// A generic function is glue-eligible only when every type parameter is
+/// unconstrained: a bound like `[T : Show]` would make the `TsMbtGenericAny`
+/// instantiation fail to compile.
+fn mbti_type_params_are_unbounded(type_params : Array[MbtiTypeParam]) -> Bool {
+  for type_param in type_params {
+    if type_param.extends_ty is Some(_) {
+      return false
+    }
+  }
+  true
+}
+
+///|
+priv enum MbtiGenericGlueReturn {
+  MbtiGenericGlueReturnDirect
+  MbtiGenericGlueReturnOptionUnwrap
+}
+
+///|
+/// Decide whether an unconstrained generic free function can cross the
+/// JS autolink boundary through a `TsMbtGenericAny` monomorphized glue
+/// wrapper, and how its return value must be handled.
+///
+/// Type parameters may appear bare, inside `Array[...]`, inside function
+/// types, or inside applied type constructors. Two contexts are rejected
+/// because the runtime representation would not match the declared
+/// TypeScript signature once the parameter is instantiated at the opaque
+/// boundary type:
+/// - tuples (`(T, U)` crosses as an opaque MoonBit value, not a JS array)
+/// - `Option` (`T?` boxes as `{_0}` when the payload can itself be
+///   `undefined`), except a bare `T?` at the top level of the return
+///   type, where the wrapper unwraps to `value | undefined` explicitly.
+fn mbti_generic_glue_return_plan(
+  fn_type_params : Array[MbtiTypeParam],
+  raw_params : Array[MbtiRawFacadeParam],
+  return_src : String,
+) -> MbtiGenericGlueReturn? {
+  if fn_type_params.length() == 0 {
+    return None
+  }
+  if !mbti_type_params_are_unbounded(fn_type_params) {
+    return None
+  }
+  let names = type_param_names(fn_type_params)
+  for param in raw_params {
+    if !mbti_src_mentions_type_param(param.ty_src, names) {
+      continue
+    }
+    if param.optional {
+      // `name? : T` crosses as `T | undefined` on the JS side but the
+      // glue would receive it as a boxed Option payload.
+      return None
+    }
+    if !mbti_generic_type_src_is_boundary_safe(param.ty_src, names) {
+      return None
+    }
+  }
+  let trimmed_return = return_src.trim().to_owned()
+  if trimmed_return.has_suffix("?") {
+    let inner = trimmed_return[:trimmed_return.length() - 1].trim().to_owned()
+    if !mbti_src_mentions_type_param(inner, names) {
+      return Some(MbtiGenericGlueReturnDirect)
+    }
+    if names.contains(inner) {
+      return Some(MbtiGenericGlueReturnOptionUnwrap)
+    }
+    return None
+  }
+  if mbti_src_mentions_type_param(trimmed_return, names) &&
+    !mbti_generic_type_src_is_boundary_safe(trimmed_return, names) {
+    return None
+  }
+  Some(MbtiGenericGlueReturnDirect)
+}
+
+///|
+fn mbti_src_mentions_type_param(
+  source : String,
+  type_param_names : Array[String],
+) -> Bool {
+  let mut idx = 0
+  while idx < source.length() {
+    let c = mbti_char_at(source, idx)
+    if mbti_is_identifier_start(c) {
+      let start = idx
+      idx += 1
+      while idx < source.length() &&
+            mbti_is_identifier_continue(mbti_char_at(source, idx)) {
+        idx += 1
+      }
+      let ident = source[start:idx].to_owned()
+      let prev = if start > 0 {
+        Some(mbti_char_at(source, start - 1))
+      } else {
+        None
+      }
+      if type_param_names.contains(ident) &&
+        prev != Some('.') &&
+        prev != Some('@') {
+        return true
+      }
+    } else {
+      idx += 1
+    }
+  }
+  false
+}
+
+///|
+fn mbti_generic_type_src_is_boundary_safe(
+  source : String,
+  type_param_names : Array[String],
+) -> Bool {
+  if !mbti_src_mentions_type_param(source, type_param_names) {
+    return true
+  }
+  // Coarse but conservative: any Option marker or tuple anywhere in a
+  // type-parameter-carrying source rejects the whole function.
+  if source.contains("?") {
+    return false
+  }
+  !mbti_src_contains_tuple(source)
+}
+
+///|
+/// Detects a tuple type anywhere in the source: a parenthesized group
+/// with a top-level comma that is not immediately followed by `->`
+/// (which would make it a function parameter list instead).
+fn mbti_src_contains_tuple(source : String) -> Bool {
+  let mut idx = 0
+  while idx < source.length() {
+    if mbti_char_at(source, idx) == '(' {
+      match find_matching(source, idx, '(', ')') {
+        Some(close_idx) => {
+          let mut depth = 0
+          let mut has_top_level_comma = false
+          let mut inner_idx = idx + 1
+          while inner_idx < close_idx {
+            let c = mbti_char_at(source, inner_idx)
+            if c == '(' || c == '[' {
+              depth += 1
+            } else if c == ')' || c == ']' {
+              depth -= 1
+            } else if c == ',' && depth == 0 {
+              has_top_level_comma = true
+            }
+            inner_idx += 1
+          }
+          if has_top_level_comma {
+            let mut after_idx = close_idx + 1
+            while after_idx < source.length() &&
+                  mbti_char_at(source, after_idx) == ' ' {
+              after_idx += 1
+            }
+            let is_fn_params = after_idx + 1 < source.length() &&
+              mbti_char_at(source, after_idx) == '-' &&
+              mbti_char_at(source, after_idx + 1) == '>'
+            if !is_fn_params {
+              return true
+            }
+          }
+        }
+        None => ()
+      }
+    }
+    idx += 1
+  }
+  false
+}
+
+///|
+/// Replace identifier occurrences of function-level type parameters with
+/// the opaque boundary type, leaving qualified refs (`@pkg.T` / `x.T`)
+/// untouched. Mirrors the tokenizer in
+/// `mbti_qualify_root_type_refs_for_glue`.
+fn replace_mbti_type_param_refs(
+  source : String,
+  type_param_names : Array[String],
+  replacement : String,
+) -> String {
+  let mut rendered = ""
+  let mut idx = 0
+  while idx < source.length() {
+    let c = mbti_char_at(source, idx)
+    if mbti_is_identifier_start(c) {
+      let start = idx
+      idx += 1
+      while idx < source.length() &&
+            mbti_is_identifier_continue(mbti_char_at(source, idx)) {
+        idx += 1
+      }
+      let ident = source[start:idx].to_owned()
+      let prev = if start > 0 {
+        Some(mbti_char_at(source, start - 1))
+      } else {
+        None
+      }
+      if type_param_names.contains(ident) &&
+        prev != Some('.') &&
+        prev != Some('@') {
+        rendered += replacement
       } else {
         rendered += ident
       }
@@ -1594,7 +1866,14 @@ fn collect_mbti_autolink_glue_decls(
         )
         match owner_name {
           None => {
-            if fn_type_params.length() > 0 {
+            // Unconstrained generic free functions get a monomorphized
+            // glue wrapper: every type parameter is instantiated at the
+            // opaque `TsMbtGenericAny` boundary type (values pass through
+            // the JS boundary unchanged), while the public .d.ts keeps
+            // the generic signature. Bounded generics stay omitted — the
+            // boundary type cannot satisfy a trait bound.
+            let is_generic = fn_type_params.length() > 0
+            if is_generic && !mbti_type_params_are_unbounded(fn_type_params) {
               continue
             }
             let raw_params = match
@@ -1607,32 +1886,103 @@ fn collect_mbti_autolink_glue_decls(
               ) {
               continue
             }
+            let mut option_unwrap_return = false
+            if is_generic {
+              match
+                mbti_generic_glue_return_plan(
+                  fn_type_params, raw_params, glue_return_src,
+                ) {
+                Some(MbtiGenericGlueReturnOptionUnwrap) =>
+                  option_unwrap_return = true
+                Some(MbtiGenericGlueReturnDirect) => ()
+                None => continue
+              }
+            }
+            let glue_type_param_names = if is_generic {
+              []
+            } else {
+              fn_type_param_names
+            }
+            let glue_return_src = if is_generic {
+              replace_mbti_type_param_refs(
+                glue_return_src,
+                fn_type_param_names,
+                MBTI_GENERIC_ANY_TYPE_NAME,
+              )
+            } else {
+              glue_return_src
+            }
+            let glue_return_src_with_effect = if is_generic {
+              replace_mbti_type_param_refs(
+                glue_return_src_with_effect,
+                fn_type_param_names,
+                MBTI_GENERIC_ANY_TYPE_NAME,
+              )
+            } else {
+              glue_return_src_with_effect
+            }
+            let raw_params = if is_generic {
+              let substituted : Array[MbtiRawFacadeParam] = []
+              for param in raw_params {
+                substituted.push({
+                  name: param.name,
+                  ty_src: replace_mbti_type_param_refs(
+                    param.ty_src,
+                    fn_type_param_names,
+                    MBTI_GENERIC_ANY_TYPE_NAME,
+                  ),
+                  optional: param.optional,
+                })
+              }
+              substituted
+            } else {
+              raw_params
+            }
+            let type_param_suffix = if is_generic {
+              ""
+            } else {
+              type_param_suffix
+            }
             let return_ty = mbti_qualify_root_type_refs_for_glue(
-              glue_return_src, local_type_names, fn_type_param_names, source_alias,
+              glue_return_src, local_type_names, glue_type_param_names, source_alias,
             )
             let rendered_mbt_params = render_mbt_glue_params(
-              raw_params, local_type_names, fn_type_param_names, source_alias,
+              raw_params, local_type_names, glue_type_param_names, source_alias,
             )
             let call_args = render_mbt_glue_call_args(raw_params)
             let async_prefix = if is_async { "async " } else { "" }
             let effect_suffix = mbti_qualified_effect_suffix_for_glue(
-              glue_return_src_with_effect, local_type_names, fn_type_param_names,
+              glue_return_src_with_effect, local_type_names, glue_type_param_names,
               source_alias,
             )
             let export_name = sanitize_ts_identifier(fn_name, "fn")
             let runtime_export_name = runtime_export_prefix + export_name
-            let body_expr = if call_args == "" {
+            let call_expr = if call_args == "" {
               "@\{source_alias}.\{fn_name}()"
             } else {
               "@\{source_alias}.\{fn_name}(\{call_args})"
             }
-            let mbt_decl = "pub \{async_prefix}fn\{type_param_suffix} \{runtime_export_name}(\{rendered_mbt_params}) -> \{return_ty}\{effect_suffix} {\n  \{body_expr}\n}"
+            let mbt_decl = if option_unwrap_return {
+              // Return a bare `T?` payload as `value | undefined` so the
+              // JS side sees what the .d.ts declares instead of the boxed
+              // Option representation.
+              let unwrapped_return_ty = if return_ty.has_suffix("?") {
+                return_ty[:return_ty.length() - 1].to_owned()
+              } else {
+                return_ty
+              }
+              "pub \{async_prefix}fn \{runtime_export_name}(\{rendered_mbt_params}) -> \{unwrapped_return_ty}\{effect_suffix} {\n  match \{call_expr} {\n    Some(value) => value\n    None => tsmbt_generic_undefined()\n  }\n}"
+            } else {
+              "pub \{async_prefix}fn\{type_param_suffix} \{runtime_export_name}(\{rendered_mbt_params}) -> \{return_ty}\{effect_suffix} {\n  \{call_expr}\n}"
+            }
             decls.push({
               package_name,
               export_name,
               runtime_export_name,
               ts_decl: "",
               mbt_decl,
+              uses_generic_any: is_generic,
+              uses_generic_undefined: option_unwrap_return,
             })
             free_function_names.push(export_name)
           }
@@ -1735,6 +2085,8 @@ fn collect_mbti_autolink_glue_decls(
                   runtime_export_name: runtime_unique_export_name,
                   ts_decl: facade_ts_decl,
                   mbt_decl: facade_mbt_decl,
+                  uses_generic_any: false,
+                  uses_generic_undefined: false,
                 })
               }
               None => ()
@@ -1869,6 +2221,30 @@ fn render_autolink_glue_mbt(decls : Array[MbtiAutolinkGlueDecl]) -> String {
   sections.push(
     "/// Auto-generated glue wrappers for MoonBit JS package output.",
   )
+  if decls.any(fn(decl) { decl.uses_generic_any }) {
+    sections.push("")
+    sections.push(
+      (
+        #|///|
+        #|/// Opaque boundary type used to monomorphize unconstrained generic
+        #|/// functions for the JS runtime export surface. Values cross the JS
+        #|/// boundary unchanged; the TypeScript declaration keeps the generic
+        #|/// signature.
+        #|#external
+        #|pub type
+      ) +
+      " " +
+      MBTI_GENERIC_ANY_TYPE_NAME,
+    )
+  }
+  if decls.any(fn(decl) { decl.uses_generic_undefined }) {
+    sections.push("")
+    sections.push(
+      "///|\nextern \"js\" fn tsmbt_generic_undefined() -> " +
+      MBTI_GENERIC_ANY_TYPE_NAME +
+      " =\n  \"() => undefined\"",
+    )
+  }
   for decl in decls {
     sections.push("")
     sections.push(decl.mbt_decl)
@@ -5056,6 +5432,7 @@ fn strip_runtime_inaccessible_typescript_members(
   source : String,
   inaccessible_function_names : Array[String],
   runtime_export_names : Array[String],
+  generic_glue_export_names : Array[String],
 ) -> String {
   let lines : Array[String] = []
   let mut in_interface = false
@@ -5099,7 +5476,16 @@ fn strip_runtime_inaccessible_typescript_members(
         if runtime_export_names.contains(name) {
           lines.push(line)
         }
-      _ => {
+      Some(name) => {
+        // Generic function declarations survive only when a monomorphized
+        // glue wrapper gives them a runtime export.
+        if ts_decl_line_is_runtime_inaccessible_function(line) &&
+          !generic_glue_export_names.contains(name) {
+          continue
+        }
+        lines.push(line)
+      }
+      None => {
         if ts_decl_line_is_runtime_inaccessible_function(line) {
           continue
         }
@@ -5138,6 +5524,7 @@ fn strip_runtime_inaccessible_typescript_package_files(
   loaded : LoadedMbtiPackageSources,
   files : Array[MbtiTypescriptPackageFile],
   runtime_export_names? : Array[String] = [],
+  generic_glue_export_names? : Array[String] = [],
 ) -> Array[MbtiTypescriptPackageFile] {
   let inaccessible_by_path : Map[String, Array[String]] = {}
   for package_name in loaded.ordered_packages {
@@ -5167,6 +5554,7 @@ fn strip_runtime_inaccessible_typescript_package_files(
         file.content,
         inaccessible_function_names,
         runtime_export_names,
+        generic_glue_export_names,
       ),
     })
   }
@@ -5289,8 +5677,12 @@ pub async fn emit_typescript_scaffold_bundle_from_mbti_path_with_import_rewrites
   let root_package_name = loaded.root_package_name
   let glue_decls = collect_mbti_bundle_autolink_glue_decls(loaded, false)
   let export_names : Array[String] = []
+  let generic_glue_export_names : Array[String] = []
   for decl in glue_decls {
     export_names.push(decl.runtime_export_name)
+    if decl.uses_generic_any {
+      generic_glue_export_names.push(decl.export_name)
+    }
   }
   let moon_pkg = render_moonbit_js_glue_moon_pkg(loaded, export_names)
   let files = strip_runtime_inaccessible_typescript_package_files(
@@ -5299,6 +5691,7 @@ pub async fn emit_typescript_scaffold_bundle_from_mbti_path_with_import_rewrites
       root_file_path, external_import_spec_rewrites,
     ),
     runtime_export_names=export_names,
+    generic_glue_export_names~,
   )
   let files_with_runtime : Array[MbtiTypescriptPackageFile] = []
   for file in files {
@@ -5345,9 +5738,13 @@ pub async fn emit_typescript_facade_scaffold_bundle_from_mbti_path_with_import_r
   let root_package_name = loaded.root_package_name
   let glue_decls = collect_mbti_bundle_autolink_glue_decls(loaded, true)
   let facade_export_names : Array[String] = []
+  let generic_glue_export_names : Array[String] = []
   let facade_ts_decls_by_path : Map[String, Array[String]] = {}
   for decl in glue_decls {
     facade_export_names.push(decl.runtime_export_name)
+    if decl.uses_generic_any {
+      generic_glue_export_names.push(decl.export_name)
+    }
     if decl.ts_decl != "" {
       match mbti_local_package_segments(root_package_name, decl.package_name) {
         Some(segments) => {
@@ -5368,6 +5765,7 @@ pub async fn emit_typescript_facade_scaffold_bundle_from_mbti_path_with_import_r
       root_file_path, external_import_spec_rewrites,
     ),
     runtime_export_names=facade_export_names,
+    generic_glue_export_names~,
   )
   let files_with_facades : Array[MbtiTypescriptPackageFile] = []
   for file in files {

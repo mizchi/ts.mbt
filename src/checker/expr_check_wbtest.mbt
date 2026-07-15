@@ -14599,3 +14599,79 @@ test "expr_check: buffer nominality, Array targs, primitive spreads, computed in
     0,
   )
 }
+
+///|
+test "expr_check: TS7057 generator yield implicit any + generic rest tuple arity (batch BQ)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS7057: unannotated binding consumes the yield result
+  // (generatorImplicitAny g2).
+  assert_true(issues("function* g() {\n    const value = yield;\n}") > 0)
+  // Annotated bindings are contextually typed (g3).
+  @test.assert_eq(
+    issues("function* g() {\n    const value: string = yield;\n}"),
+    0,
+  )
+  // An annotated generator return type supplies TNext; no implicit any.
+  @test.assert_eq(
+    issues(
+      "function* g(): Generator<number, void, string> {\n    const value = yield 1;\n}",
+    ),
+    0,
+  )
+  // noImplicitAny off: no report.
+  @test.assert_eq(
+    issues("// @strict: false\nfunction* g() {\n    const value = yield;\n}"),
+    0,
+  )
+  // Unused results stay legal (g4).
+  @test.assert_eq(
+    issues(
+      "declare function noop(): void;\nfunction* g4() {\n    yield;\n    yield, noop();\n    (yield);\n    void (yield);\n    for(yield; false; yield);\n}",
+    ),
+    0,
+  )
+  // Destructuring targets are contextually typed by the pattern (g310).
+  @test.assert_eq(
+    issues("function* g() {\n    const [a = 1, b = 2] = yield;\n}"),
+    0,
+  )
+  // `yield yield` feeds the outer operand (generatorTypeCheck50).
+  assert_true(issues("function* g() {\n    yield yield;\n}") > 0)
+  // Generic call argument with no explicit type args (g5); explicit type
+  // arguments contextually type it (g6).
+  assert_true(
+    issues(
+      "declare function f<T>(value: T): void;\nfunction* g5() {\n    f(yield);\n}",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "declare function f<T>(value: T): void;\nfunction* g6() {\n    f<string>(yield);\n}",
+    ),
+    0,
+  )
+  // TS2554: generic rest tuple arity — TS infers to the handler's param
+  // tuple (genericRestArity).
+  let rest_decl = "declare function call<TS extends unknown[]>(\n    handler: (...args: TS) => void,\n    ...args: TS): void;\n"
+  assert_true(issues(rest_decl + "call((x: number, y: number) => x + y);") > 0)
+  assert_true(
+    issues(
+      rest_decl + "call((x: number, y: number) => x + y, 1, 2, 3, 4, 5, 6, 7);",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(rest_decl + "call((x: number, y: number) => x + y, 1, 2);"),
+    0,
+  )
+  // A non-generic unknown[]-rest signature accepts any arity.
+  @test.assert_eq(
+    issues(
+      "declare function call2(\n    handler: (...args: unknown[]) => void,\n    ...args: unknown[]): void;\ncall2((x: number, y: number) => x + y);",
+    ),
+    0,
+  )
+}
