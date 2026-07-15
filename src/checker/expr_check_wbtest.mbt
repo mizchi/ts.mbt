@@ -14412,3 +14412,190 @@ test "expr_check: patterns over primitives/arrays, spread folding, SharedArrayBu
     0,
   )
 }
+
+///|
+test "expr_check: lib directives, decorator signatures, generator returns (batch BM)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2318: `@noLib` removes every required global type; an explicit
+  // `@lib:` without an iterable-granting entry breaks generators; one
+  // without `esnext` breaks `using` (parser509698,
+  // generatorReturnTypeFallback.2, usingDeclarations.9).
+  assert_true(issues("// @noLib: true\ndeclare function foo(): void;") > 0)
+  assert_true(issues("// @lib: es5\nfunction* f() {\n  yield 1;\n}") > 0)
+  @test.assert_eq(
+    issues("// @lib: es5,es2015.iterable\nfunction* f() {\n  yield 1;\n}"),
+    0,
+  )
+  assert_true(issues("// @lib: es2022\n{\n    using a = null;\n}") > 0)
+  @test.assert_eq(issues("// @lib: esnext\n{\n    using a = null;\n}"), 0)
+  @test.assert_eq(issues("{\n    using a = null;\n}"), 0)
+  // TS1238: a class used as a class decorator is not callable
+  // (constructableDecoratorOnClass01); a decorator (or factory result)
+  // requiring more parameters than the runtime passes cannot resolve
+  // (decoratorOnClass8, esDecorators-arguments). Member decorators and
+  // matching arities stay legal (decoratorOnClassAccessor1).
+  assert_true(issues("class CtorDtor {}\n@CtorDtor\nclass C {}") > 0)
+  assert_true(
+    issues(
+      "// @experimentaldecorators: true\ndeclare function dec(): (target: Function, paramIndex: number) => void;\n@dec()\nclass C {}",
+    ) >
+    0,
+  )
+  assert_true(issues("@((a: any, b: any, c: any) => {})\nclass C1 {}") > 0)
+  @test.assert_eq(issues("@((a: any, b: any) => {})\nclass C2 {}"), 0)
+  @test.assert_eq(
+    issues(
+      "// @experimentaldecorators: true\ndeclare function dec<T>(target: any, propertyKey: string, descriptor: T): T;\nclass C {\n    @dec get accessor() { return 1; }\n}",
+    ),
+    0,
+  )
+  // TS2741: a generator declared to return a protocol-extending interface
+  // with extra REQUIRED members (generatorTypeCheck7); optional extras
+  // abstain.
+  assert_true(
+    issues(
+      "interface WeirdIter extends IterableIterator<number> {\n    hello: string;\n}\nfunction* g1(): WeirdIter { }",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "interface SoftIter extends IterableIterator<number> {\n    hello?: string;\n}\nfunction* g2(): SoftIter { yield 1; }",
+    ),
+    0,
+  )
+}
+
+///|
+test "expr_check: TS7053 string-literal keys, Symbol.keyFor, es5 Date.UTC (batch BN)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS7053: a string-literal key provably absent from a fully-literal
+  // object shape, under @strict (binaryIntegerLiteral). Numeric-key
+  // folding stays legal (`0b11010:` provides key `26`), and an
+  // overflow-folded key makes fold-shaped queries abstain.
+  assert_true(
+    issues(
+      "// @strict: true\nvar o = { 0b11010: \"x\", a: 1 };\no[\"0b11010\"];",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @strict: true\nvar o = { 0b11010: \"x\", a: 1 };\no[\"26\"];\no[\"a\"];\no[26];",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues("// @strict: false\nvar o = { a: 1 };\no[\"missing\"];"),
+    0,
+  )
+  // TS2464: `Symbol.keyFor` is a function, never a computed key
+  // (symbolProperty59).
+  assert_true(issues("interface I {\n    [Symbol.keyFor]: string;\n}") > 0)
+  @test.assert_eq(issues("interface I {\n    [Symbol.iterator]: string;\n}"), 0)
+  // TS2554: `Date.UTC(year)` requires the month argument before es2015
+  // (es5DateAPIs); modern libs keep it optional.
+  assert_true(issues("// @lib: es5\nDate.UTC(2017);") > 0)
+  @test.assert_eq(issues("Date.UTC(2017);"), 0)
+  @test.assert_eq(issues("// @lib: es5\nDate.UTC(2017, 1);"), 0)
+}
+
+///|
+test "expr_check: for-in patterns, lib eras, import-eq roots (batch BO)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2491: the left side of for...in is never a destructuring pattern,
+  // declaration or assignment form (for-inStatementsDestructuring/3/4).
+  assert_true(issues("for (var [a, b] in []) {}") > 0)
+  assert_true(issues("var a, b;\nfor ([a, b] in []) { }") > 0)
+  assert_true(issues("var a, b;\nfor ({a, b} in []) { }") > 0)
+  @test.assert_eq(issues("for (var k in { a: 1 }) { }"), 0)
+  // TS2854: top-level `await using` requires target >= es2017
+  // (awaitUsingDeclarations.1).
+  assert_true(
+    issues(
+      "// @target: esnext,es2015\n// @lib: esnext\nawait using d1 = { async [Symbol.asyncDispose]() {} };",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @target: esnext\n// @lib: esnext\nawait using d1 = { async [Symbol.asyncDispose]() {} };",
+    ),
+    0,
+  )
+  // TS2550: `Object.values` / `Object.entries` need the es2017 lib
+  // surface (useObjectValuesAndEntries2/3); `Atomics.waitAsync` needs
+  // es2024 (es2024SharedMemory).
+  assert_true(issues("// @lib: es5\nvar o = { a: 1 };\nObject.values(o);") > 0)
+  assert_true(
+    issues("// @target: es6\nvar o = { a: 1 };\nObject.entries(o);") > 0,
+  )
+  @test.assert_eq(
+    issues("// @lib: es2017\nvar o = { a: 1 };\nObject.values(o);"),
+    0,
+  )
+  @test.assert_eq(issues("var o = { a: 1 };\nObject.values(o);"), 0)
+  assert_true(
+    issues(
+      "// @lib: es2022\nAtomics.waitAsync(new Int32Array(new SharedArrayBuffer(4)), 0, 0);",
+    ) >
+    0,
+  )
+  // TS2503: an entity-reference import alias needs a declared root
+  // namespace (parserImportDeclaration1).
+  assert_true(issues("import TypeScript = TypeScriptServices.TypeScript;") > 0)
+  @test.assert_eq(
+    issues("namespace Ns { export var x = 1; }\nimport N = Ns.x;"),
+    0,
+  )
+  // TS1003-adjacent: a primitive keyword can't be a qualified type-name
+  // segment (parservoidInQualifiedName2).
+  assert_true(issues("var v : x.void;") > 0)
+}
+
+///|
+test "expr_check: buffer nominality, Array targs, primitive spreads, computed index values (batch BP)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2322: SharedArrayBuffer and ArrayBuffer are nominally distinct
+  // (assignSharedArrayBufferToArrayBuffer).
+  assert_true(issues("var foo: ArrayBuffer = new SharedArrayBuffer(1024);") > 0)
+  @test.assert_eq(
+    issues("var foo: SharedArrayBuffer = new SharedArrayBuffer(1024);"),
+    0,
+  )
+  // TS2322: `new Array<T>(n)` keeps the explicit element type
+  // (parserObjectCreation1).
+  assert_true(issues("var autoToken: number[] = new Array<number[]>(1);") > 0)
+  @test.assert_eq(issues("var ok: number[][] = new Array<number[]>(1);"), 0)
+  // TS2698: an object spread of a provably non-object primitive
+  // (spreadNonObject1); object-typed and generic spreads stay legal.
+  assert_true(
+    issues("type S = `${number}`;\ndeclare var s: S;\nvar a = { ...s, y: 6 };") >
+    0,
+  )
+  assert_true(issues("var a = { ...\"str\" };") > 0)
+  @test.assert_eq(issues("var o = { x: 1 };\nvar a = { ...o, y: 6 };"), 0)
+  // TS2322: a provably numeric computed key checks its VALUE against the
+  // target's number index signature
+  // (computedPropertyNamesContextualType10).
+  assert_true(
+    issues(
+      "interface I {\n    [s: number]: boolean;\n}\nvar o: I = {\n    [+\"foo\"]: \"\",\n    [+\"bar\"]: 0\n}",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "interface I {\n    [s: number]: boolean;\n}\nvar o: I = {\n    [+\"foo\"]: true\n}",
+    ),
+    0,
+  )
+}

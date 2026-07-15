@@ -867,6 +867,14 @@ fn Parser::parse_import_equals_decl(
     }
     spec
   } else {
+    // Entity-reference alias (`import X = A.B.C`): record the ROOT name so
+    // the checker can flag a provably undeclared namespace (TS2503 —
+    // parserImportDeclaration1).
+    match self.peek().kind {
+      Ident(root) if self.peek_at(1).kind == Dot =>
+        self.grammar_misuses.push("<import-eq-root>" + root)
+      _ => ()
+    }
     self.skip_until_semicolon()
     ""
   }

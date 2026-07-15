@@ -940,6 +940,15 @@ fn Parser::parse_named_type_tail(
   let mut full_name = first_name
   while self.check(Dot) && self.is_qualified_type_name_part(1) {
     let _ = self.advance()
+    // A primitive-type KEYWORD can never be a qualified type-name segment
+    // (`var v: x.void` — parservoidInQualifiedName2, TS1003/TS2503).
+    match self.peek().kind {
+      VoidType | StringType | NumberType | BooleanType =>
+        self.grammar_misuses.push(
+          "a primitive type keyword cannot appear in a qualified type name",
+        )
+      _ => ()
+    }
     let next_name = self.parse_binding_ident()
     full_name = full_name + "." + next_name
   }

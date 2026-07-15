@@ -1409,6 +1409,14 @@ pub fn Parser::parse_interface(
         let mut symbol_name : String? = None
         match (self.peek().kind, self.peek_at(2).kind, self.peek_at(3).kind) {
           (Ident("Symbol"), Ident(sym), RBracket) if self.peek_at(1).kind == Dot => {
+            // TS2464: `Symbol.for` / `Symbol.keyFor` are FUNCTIONS on
+            // SymbolConstructor, not symbols — they can never be a
+            // computed property key (symbolProperty59).
+            if sym == "keyFor" || sym == "for" {
+              self.grammar_misuses.push(
+                "a computed property name must be of type `string`, `number`, `symbol`, or `any` — `Symbol.\{sym}` is a function",
+              )
+            }
             let _ = self.advance()
             let _ = self.advance()
             let _ = self.advance()

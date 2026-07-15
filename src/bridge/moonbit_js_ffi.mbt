@@ -1155,6 +1155,36 @@ fn ffi_synthesize_inline_union(
 }
 
 ///|
+/// Erase a generic callable's OWN type-parameter names to `Any` (rendered
+/// `JSValue`). MoonBit forbids `extern "js" fn[T]`, so a member typed
+/// `<E>(expected: E) => void` (vitest's `Assertion.toBe`) lowers to its
+/// value shape with `E` widened — without this the whole member degrades
+/// to a `JSValue` property and loses its method wrapper.
+fn ffi_erase_generic_names(
+  t : @ast.TsType,
+  names : Array[String],
+) -> @ast.TsType {
+  fn go(x : @ast.TsType) -> @ast.TsType {
+    ffi_erase_generic_names(x, names)
+  }
+
+  match t {
+    Named(n) => if names.contains(n) { Any } else { t }
+    Array(i) => Array(go(i))
+    Rest(i) => Rest(go(i))
+    Union(items) => Union(items.map(go))
+    Intersection(items) => Intersection(items.map(go))
+    Tuple(items) => Tuple(items.map(go))
+    Func(ps, r) => Func(ps.map(go), go(r))
+    Constructor(ps, r, a) => Constructor(ps.map(go), go(r), a)
+    Applied(n, args) => Applied(n, args.map(go))
+    Object(fields) => Object(fields.map(fn(f) { (f.0, go(f.1)) }))
+    GenericFunc(inner_names, inner) => GenericFunc(inner_names, go(inner))
+    _ => t
+  }
+}
+
+///|
 fn ffi_function_field_type_name(
   state : MoonBitJsFfiState,
   type_ : @ast.TsType,
@@ -1174,6 +1204,10 @@ fn ffi_function_field_type_name(
   }
   match type_ {
     Func(params, return_type) => ffi_func_type_name(state, params, return_type)
+    // A member's own generic binder is erased at the FFI boundary
+    // (`toBe: <E>(expected: E) => void` — vitest's Assertion).
+    GenericFunc(names, inner) =>
+      ffi_function_field_type_name(state, ffi_erase_generic_names(inner, names))
     _ => ffi_type_name(state, type_)
   }
 }
@@ -1221,7 +1255,7 @@ fn ffi_struct_field_type_name(
     Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) =>
       ffi_struct_field_type_name(state, @checker.normalize_literal_type(type_))
     Array(inner) => "Array[" + ffi_struct_field_type_name(state, inner) + "]"
-    Func(_, _) => ffi_function_field_type_name(state, type_)
+    Func(_, _) | GenericFunc(_, _) => ffi_function_field_type_name(state, type_)
     Named(name) if ffi_named_type_is_primitive_enum_in(state.enums, name) =>
       ffi_type_identifier(name, "GeneratedEnum")
     Applied(name, _) if ffi_named_type_is_primitive_enum_in(state.enums, name) =>
@@ -1243,6 +1277,11 @@ fn ffi_function_type_parts(
       }
       Some((params, param_types, ffi_type_name(state, return_type)))
     }
+    // A member's own generic binder is erased at the FFI boundary
+    // (`toBe: <E>(expected: E) => void` — vitest's Assertion), matching
+    // the struct-field rendering so `(self.<field>)(args)` type-checks.
+    GenericFunc(names, inner) =>
+      ffi_function_type_parts(state, ffi_erase_generic_names(inner, names))
     _ => None
   }
 }

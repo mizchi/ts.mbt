@@ -77,6 +77,15 @@ priv struct Resolver {
   // literal fails every overload (the `raw` member only exists on
   // engine-created template objects), which is TS2769/TS2345.
   template_tag_funcs : Map[String, Bool]
+  // Module-level `noImplicitAny` effective flag (strict directives),
+  // threaded through the resolver so expression-level rules (TS7053)
+  // can gate without widening `CheckCtx`.
+  mut no_implicit_any : Bool
+  // Lib-era evidence from `@lib:` / `@target:` directives (parser
+  // markers): the es2017 object surface (`Object.values`) or the es2024
+  // shared-memory surface (`Atomics.waitAsync`) is missing (TS2550).
+  mut lib_lacks_es2017 : Bool
+  mut lib_lacks_es2024 : Bool
 }
 
 ///|
@@ -96,6 +105,9 @@ fn Resolver::empty() -> Resolver {
     namespace_value_decls: {},
     namespace_exports: {},
     template_tag_funcs: {},
+    no_implicit_any: false,
+    lib_lacks_es2017: false,
+    lib_lacks_es2024: false,
   }
 }
 
@@ -6024,7 +6036,18 @@ fn infer_expr(
   match expr {
     // Explicit type arguments are erased for inference: the call's value
     // type is the inner call's type.
-    TypeArgs(_, inner) => infer_expr(env, resolver, inner)
+    TypeArgs(targs, inner) => {
+      // `new Array<T>(n)` constructs a `T[]` — keep the explicit element
+      // type so a mismatched declared annotation flags
+      // (`var a: number[] = new Array<number[]>(1)` — parserObjectCreation1).
+      if inner is New("Array", _) &&
+        targs.length() == 1 &&
+        resolver.classes.get("Array") is None &&
+        resolver.interfaces.get("Array") is None {
+        return @ast.TsType::Array(targs[0])
+      }
+      infer_expr(env, resolver, inner)
+    }
     NumberLit(_) | IntLit(_) => @ast.TsType::Number
     BigIntLit(_) => @ast.TsType::BigInt
     BoolLit(_) => @ast.TsType::Boolean
@@ -10985,8 +11008,41 @@ fn check_object_lit_against_target(
     // Computed / symbol property keys (`@@computed:N`) can't be matched against
     // declared members by name — TypeScript resolves the computed key to a
     // symbol / literal we don't evaluate, so neither "excess" nor "missing"
-    // applies. Skip them.
+    // applies. But when the computed key is provably NUMERIC and the target
+    // interface declares a number index signature, the VALUE must satisfy
+    // the index value type (`var o: I = { [+"foo"]: "" }` where
+    // `[s: number]: boolean` — computedPropertyNamesContextualType10).
     if key.has_prefix("@@computed:") {
+      match value {
+        ComputedProp(kexpr, vexpr) => {
+          let num_value_ty : @ast.TsType? = match resolver.unwrap(target) {
+            Named(n) =>
+              match resolver.interfaces.get(n) {
+                Some(iface) => {
+                  let mut found : @ast.TsType? = None
+                  for sig in iface.index_signatures {
+                    if sig.0 is (Number | Int) && found is None {
+                      found = Some(sig.1)
+                    }
+                  }
+                  found
+                }
+                None => None
+              }
+            _ => None
+          }
+          match num_value_ty {
+            Some(vt) =>
+              if is_checkable(vt) &&
+                resolver.unwrap(infer_expr(env, resolver, kexpr))
+                is (Number | NumberLiteral(_) | Int) {
+                check_expr_against(env, vexpr, vt, ctx, "\{sub_path}[computed]")
+              }
+            None => ()
+          }
+        }
+        _ => ()
+      }
       continue
     }
     match resolver.lookup_field(target, key) {
@@ -14300,6 +14356,22 @@ fn check_ident_binding_decl(
   // `Any`, which TS doesn't flag either). The stored flag records whether the
   // binding is block-scoped (`let` / `const`); a `var` read inside a computed
   // property key is exempt from TS2454 (see the read sites).
+  // TS2322: `SharedArrayBuffer` and `ArrayBuffer` are nominally distinct
+  // lib types (`var foo: ArrayBuffer = new SharedArrayBuffer(1024)` —
+  // assignSharedArrayBufferToArrayBuffer). Both must be lib-provided
+  // (no user declarations) for the verdict to hold.
+  if init is New("SharedArrayBuffer", _) &&
+    ctx.resolver.unwrap(declared) is Named("ArrayBuffer") &&
+    ctx.resolver.classes.get("ArrayBuffer") is None &&
+    ctx.resolver.interfaces.get("ArrayBuffer") is None &&
+    ctx.resolver.classes.get("SharedArrayBuffer") is None &&
+    ctx.resolver.interfaces.get("SharedArrayBuffer") is None {
+    record(
+      ctx,
+      "binding `\{name}` init",
+      "type `SharedArrayBuffer` is not assignable to type `ArrayBuffer`",
+    )
+  }
   match init {
     Var("__ts_no_init__") =>
       // TS2454 fires only under strict-null-checks (TS treats
@@ -15070,6 +15142,14 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       env.restore_from(pre)
     }
     ForIn(_, binding, declared, iter, body) => {
+      // TS2491/TS2461: the left side of `for...in` can never be a
+      // destructuring pattern, in either the declaration or assignment
+      // form (for-inStatementsDestructuring/3/4).
+      if binding is (@ast.TsBinding::Array(_) | @ast.TsBinding::Object(_)) {
+        record_unfiltered(
+          ctx, "for-in binding", "the left-hand side of a `for...in` statement cannot be a destructuring pattern",
+        )
+      }
       // `for (key in obj)` — `key` is always `string` in JS/TS.
       // A declared type that doesn't accept `string` is an error.
       check_call_args_in_expr(env, iter, ctx)
@@ -15724,6 +15804,28 @@ fn check_call_args_in_expr(
       check_private_name_access(ctx, meth)
       check_member_accessibility(env, ctx, receiver, meth)
       check_super_abstract_access(ctx, receiver, meth)
+      // TS2550: es2017+/es2024+ static surface used under an older lib
+      // (parser-marker evidence): `Object.values` / `Object.entries`
+      // arrived in es2017 (useObjectValuesAndEntries2/3), `Atomics.waitAsync`
+      // in es2024 (es2024SharedMemory).
+      if ctx.resolver.lib_lacks_es2017 &&
+        receiver is Var("Object") &&
+        (meth == "values" || meth == "entries") &&
+        ctx.resolver.globals.get("Object") is None {
+        record(
+          ctx,
+          "call `Object.\{meth}`",
+          "property `\{meth}` does not exist on `ObjectConstructor` with the current `lib`",
+        )
+      }
+      if ctx.resolver.lib_lacks_es2024 &&
+        receiver is Var("Atomics") &&
+        meth == "waitAsync" &&
+        ctx.resolver.globals.get("Atomics") is None {
+        record(
+          ctx, "call `Atomics.waitAsync`", "property `waitAsync` does not exist on `Atomics` with the current `lib`",
+        )
+      }
       // TS2345 (strict bind/call/apply): `f.apply(x, arguments)` where `f`
       // is a ZERO-parameter function — `IArguments` is never assignable to
       // the empty parameter tuple `[]`
@@ -16493,6 +16595,30 @@ fn check_call_args_in_expr(
       for ent in entries {
         check_call_args_in_expr(env, ent.1, ctx)
       }
+      // TS2698: an object-literal spread of a provably NON-OBJECT value
+      // (`{ ...s }` where `s` is a string / template-literal / numeric
+      // type — spreadNonObject1). Named / generic / union operands
+      // abstain.
+      for ent in entries {
+        if ent.0.has_prefix("@@spread") {
+          match ctx.resolver.unwrap(infer_expr(env, ctx.resolver, ent.1)) {
+            String_
+            | Number
+            | Boolean
+            | BigInt
+            | Symbol
+            | Literal(_)
+            | NumberLiteral(_)
+            | BigIntLiteral(_)
+            | BooleanLiteral(_)
+            | TemplateLiteralType(_, _) =>
+              record(
+                ctx, "object spread", "spread types may only be created from object types",
+              )
+            _ => ()
+          }
+        }
+      }
       // TS2783: an explicitly-written property that a LATER spread in the
       // same literal always overwrites (`{ b: 1, ...ab }` where `ab`'s type
       // declares `b` as required). Optional members, unions, generics, and
@@ -16818,6 +16944,90 @@ fn check_call_args_in_expr(
           "index access",
           "cannot index into `\{type_display(recv_ty)}`",
         )
+      }
+      // TS7053: a string-literal key indexing a fully-literal-keyed object
+      // shape that provably lacks it (`obj1["0b11010"]` where the literal
+      // declared `0b11010:` — the KEY folds to `26`, the string does not;
+      // binaryIntegerLiteral). Only fires under `@strict` (the diagnostic
+      // is a noImplicitAny error) and only when every key is a plain
+      // literal (an index signature / spread / symbol key makes the key
+      // set open).
+      if ctx.resolver.no_implicit_any && idx is StringLit(key) {
+        // Numeric object keys fold to a canonical decimal spelling
+        // (`0b11010:` becomes key `26`, overflowing literals become
+        // `Infinity` / `9.67e+24`). Our fold may differ from tsc's for
+        // the exotic forms, so a key spelling is only "certain" when it
+        // is a short digit run; a QUERY that could itself be a numeric
+        // fold (only `[0-9.eE+-]` chars, or Infinity/NaN) must abstain
+        // whenever an uncertain field key exists. `"0b11010"` contains
+        // `b` — never a fold — so it stays decidable.
+        fn fold_shaped(k : String) -> Bool {
+          if k == "Infinity" || k == "-Infinity" || k == "NaN" {
+            return true
+          }
+          if k.length() == 0 {
+            return false
+          }
+          for c in k {
+            let ok = (c >= '0' && c <= '9') ||
+              c == '.' ||
+              c == 'e' ||
+              c == 'E' ||
+              c == '+' ||
+              c == '-'
+            if !ok {
+              return false
+            }
+          }
+          true
+        }
+
+        // At most 9 digits: our lexer folds OVERFLOWING binary/octal
+        // literals through a 32-bit wrap (tsc folds them to `Infinity` /
+        // exponent form), and those artifacts land in the 10-digit range —
+        // treat them as uncertain spellings.
+        fn short_digits(k : String) -> Bool {
+          if k.length() == 0 || k.length() > 9 {
+            return false
+          }
+          for c in k {
+            if c < '0' || c > '9' {
+              return false
+            }
+          }
+          true
+        }
+
+        match recv_ty {
+          Object(fields) => {
+            let mut all_plain = fields.length() > 0
+            let mut found = false
+            let mut uncertain_fold_key = false
+            for f in fields {
+              match f.0 {
+                Literal(k) => {
+                  if k.has_prefix("<") || k.has_prefix("@@") {
+                    all_plain = false
+                  } else if k == key {
+                    found = true
+                  }
+                  if fold_shaped(k) && !short_digits(k) {
+                    uncertain_fold_key = true
+                  }
+                }
+                _ => all_plain = false
+              }
+            }
+            if all_plain && !found && !(fold_shaped(key) && uncertain_fold_key) {
+              record(
+                ctx,
+                "index access",
+                "element implicitly has an `any` type: `\"\{key}\"` cannot be used to index the object shape",
+              )
+            }
+          }
+          _ => ()
+        }
       }
       // TS2493 ("Tuple type has no element at index N"): a fixed-length
       // tuple indexed by an out-of-range numeric literal. Tuples that
@@ -24613,6 +24823,263 @@ fn check_lib_global_redeclaration(module_ : @ast.TsModule) -> Array[ExprIssue] {
 }
 
 ///|
+/// TS2318 from lib-set directives (parser markers): `@noLib: true`
+/// removes every required global type (parser509698); an explicit
+/// `@lib:` list without an iterable-granting entry lacks
+/// `IterableIterator`, which generators require
+/// (generatorReturnTypeFallback.2); one without `esnext` lacks
+/// `Disposable`, which `using` declarations require
+/// (usingDeclarations.9 / awaitUsingDeclarations.9).
+fn check_lib_directive_globals(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  let mut nolib = false
+  let mut lacks_iterable = false
+  let mut lacks_esnext = false
+  let mut has_using = false
+  for gm in module_.grammar_misuses {
+    if gm == "<nolib>" {
+      nolib = true
+    }
+    if gm == "<lib-lacks-iterable>" {
+      lacks_iterable = true
+    }
+    if gm == "<lib-lacks-esnext>" {
+      lacks_esnext = true
+    }
+    if gm == "<has-using>" {
+      has_using = true
+    }
+  }
+  if nolib {
+    issues.push({
+      path: "lib",
+      message: "cannot find required global types (compiling with `noLib`)",
+    })
+    return issues
+  }
+  if lacks_iterable {
+    let mut has_generator = false
+    for f in module_.funcs {
+      if f.is_generator {
+        has_generator = true
+      }
+    }
+    if has_generator {
+      issues.push({
+        path: "lib",
+        message: "cannot find global type `IterableIterator` (not in the `lib` set)",
+      })
+    }
+    // TS2554 under a pre-ES2015 lib: `Date.UTC` requires the month
+    // argument until es2015 made it optional (`Date.UTC(2017)` —
+    // es5DateAPIs).
+    for stmt in module_.top_level_stmts {
+      match stmt {
+        Expr(MethodCall(Var("Date"), "UTC", args)) =>
+          if args.length() == 1 {
+            issues.push({
+              path: "call `Date.UTC`",
+              message: "expected 2-7 arguments, but got 1 (the `month` argument is required before es2015)",
+            })
+          }
+        _ => ()
+      }
+    }
+  }
+  if lacks_esnext && has_using {
+    issues.push({
+      path: "lib",
+      message: "cannot find global type `Disposable` (not in the `lib` set)",
+    })
+  }
+  // TS2854: a top-level `await using` requires target >= es2017 — the
+  // conformance multi-target directives include pre-es2017 variants
+  // (awaitUsingDeclarations.1-3).
+  let mut tl_await_using = false
+  let mut target_below_2017 = false
+  for gm in module_.grammar_misuses {
+    if gm == "<top-level-await-using>" {
+      tl_await_using = true
+    }
+    if gm == "<target-below-es2017>" {
+      target_below_2017 = true
+    }
+  }
+  if tl_await_using && target_below_2017 {
+    issues.push({
+      path: "top-level `await using`",
+      message: "top-level `await using` statements require `target` es2017 or higher",
+    })
+  }
+  issues
+}
+
+///|
+/// Required-parameter count of a callable TYPE: parameters that are
+/// neither rest nor optional (`T | undefined`). `None` when the type
+/// isn't a plain function shape.
+fn callable_required_arity(resolver : Resolver, t : @ast.TsType) -> Int? {
+  match resolver.unwrap(t) {
+    GenericFunc(_, inner) => callable_required_arity(resolver, inner)
+    Func(ps, _) => {
+      let mut required = 0
+      for p in ps {
+        match p {
+          Rest(_) => ()
+          other => if !type_accepts_undefined(other) { required += 1 }
+        }
+      }
+      Some(required)
+    }
+    _ => None
+  }
+}
+
+///|
+/// Required-parameter count of a SYNTACTIC callable (inline decorator
+/// arrows / function expressions).
+fn syntactic_required_arity(params : Array[@ast.TsParam]) -> Int {
+  let mut required = 0
+  for p in params {
+    if !p.is_rest && p.default is None {
+      required += 1
+    }
+  }
+  required
+}
+
+///|
+/// TS1238: a class decorator whose signature cannot match the runtime
+/// invocation. The runtime passes 1 argument under legacy
+/// `experimentalDecorators` and 2 under standard ES decorators, so a
+/// decorator (or decorator-factory RESULT) requiring MORE parameters can
+/// never resolve (esDecorators-arguments, decoratorOnClass8), and a
+/// CLASS used as a decorator is not callable at all
+/// (constructableDecoratorOnClass01). Zero-parameter decorators also
+/// error in tsc but are left alone here (the corpus carries legal-looking
+/// shapes we can't distinguish cheaply).
+fn check_class_decorator_signatures(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  let mut legacy = false
+  for gm in module_.grammar_misuses {
+    if gm == "<experimental-decorators>" {
+      legacy = true
+    }
+  }
+  let runtime_arity = if legacy { 1 } else { 2 }
+  for cls in module_.classes {
+    for d in cls.decorators {
+      let required : Int? = match d {
+        Var(n) =>
+          if resolver.classes.get(n) is Some(_) &&
+            resolver.globals.get(n) is None {
+            issues.push({
+              path: "class \{cls.name} decorator",
+              message: "unable to resolve signature of class decorator when called as an expression: this expression is not callable",
+            })
+            None
+          } else {
+            match resolver.globals.get(n) {
+              Some(t) => callable_required_arity(resolver, t)
+              None => None
+            }
+          }
+        ArrowFunc(params, _, _, _) => Some(syntactic_required_arity(params))
+        FuncExpr(f) =>
+          if f.name == "<class>" {
+            None
+          } else {
+            Some(syntactic_required_arity(f.params))
+          }
+        Call(n, _) =>
+          match resolver.globals.get(n) {
+            Some(t) =>
+              match resolver.unwrap(t) {
+                GenericFunc(_, Func(_, ret)) | Func(_, ret) =>
+                  callable_required_arity(resolver, ret)
+                _ => None
+              }
+            None => None
+          }
+        CallExpr(Var(n), _) =>
+          match resolver.globals.get(n) {
+            Some(t) =>
+              match resolver.unwrap(t) {
+                GenericFunc(_, Func(_, ret)) | Func(_, ret) =>
+                  callable_required_arity(resolver, ret)
+                _ => None
+              }
+            None => None
+          }
+        _ => None
+      }
+      match required {
+        Some(r) =>
+          if r > runtime_arity {
+            issues.push({
+              path: "class \{cls.name} decorator",
+              message: "unable to resolve signature of class decorator when called as an expression: the runtime will invoke the decorator with \{runtime_arity} arguments, but the decorator expects \{r}",
+            })
+          }
+        None => ()
+      }
+    }
+  }
+  issues
+}
+
+///|
+/// TS2741 for a generator whose DECLARED return type is an interface
+/// extending the iteration protocol with extra REQUIRED members: the
+/// generator object never carries them (`function* g1(): WeirdIter {}` —
+/// generatorTypeCheck7). Optional extras abstain.
+fn check_generator_interface_returns(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  for f in module_.funcs {
+    if !f.is_generator {
+      continue
+    }
+    let ret_name = match f.return_type {
+      Named(n) => n
+      Applied(n, _) => n
+      _ => continue
+    }
+    match resolver.interfaces.get(ret_name) {
+      Some(iface) => {
+        let mut extends_iter_proto = false
+        for en in iface.extends_names {
+          if en == "IterableIterator" || en == "Iterator" || en == "Generator" {
+            extends_iter_proto = true
+          }
+        }
+        if !extends_iter_proto {
+          continue
+        }
+        for fl in iface.fields {
+          if !fl.0.has_prefix("<") &&
+            !fl.0.has_prefix("@@") &&
+            !type_accepts_undefined(fl.1) {
+            issues.push({
+              path: "function \{f.name}",
+              message: "property `\{fl.0}` is missing in the generator object but required in type `\{ret_name}`",
+            })
+            break
+          }
+        }
+      }
+      None => ()
+    }
+  }
+  issues
+}
+
+///|
 fn check_duplicate_index_signatures(
   module_ : @ast.TsModule,
 ) -> Array[ExprIssue] {
@@ -24788,6 +25255,15 @@ fn check_module_function_bodies_layered(
   }
   let strict_property_init = strict_root.strict_property_initialization
   let strict_null_checks = strict_root.strict_null_checks
+  resolver.no_implicit_any = strict_root.no_implicit_any
+  for gm in strict_root.grammar_misuses {
+    if gm == "<lib-lacks-es2017>" {
+      resolver.lib_lacks_es2017 = true
+    }
+    if gm == "<lib-lacks-es2024>" {
+      resolver.lib_lacks_es2024 = true
+    }
+  }
   // Brand-keyed private declarations recorded by the parser (own layer plus
   // the outermost root -- namespace bodies re-parse with a fresh parser, so
   // their recordings live on their own TsModule). Populated before body
@@ -25121,6 +25597,18 @@ fn check_module_function_bodies_layered(
     }
     // TS2403 for lib-global `var` redeclarations (script scope only).
     for issue in check_lib_global_redeclaration(module_) {
+      all.push(issue)
+    }
+    // TS2318 from lib-set directives (@noLib / restricted @lib).
+    for issue in check_lib_directive_globals(module_) {
+      all.push(issue)
+    }
+    // TS1238 class-decorator signature mismatches.
+    for issue in check_class_decorator_signatures(module_, resolver) {
+      all.push(issue)
+    }
+    // TS2741 generator returns declared as protocol-extending interfaces.
+    for issue in check_generator_interface_returns(module_, resolver) {
       all.push(issue)
     }
   }
@@ -25511,6 +25999,21 @@ fn check_module_function_bodies_layered(
       if gm == "<allowunreachable-on>" {
         continue
       }
+      // Markers, not errors: lib-set / target directive evidence and
+      // decorator mode, consumed by `check_lib_directive_globals` and the
+      // decorator signature checks. (`<nolib>` IS the error condition
+      // itself, but it's surfaced there with a proper message.)
+      if gm == "<nolib>" ||
+        gm == "<lib-lacks-iterable>" ||
+        gm == "<lib-lacks-esnext>" ||
+        gm == "<lib-lacks-es2017>" ||
+        gm == "<lib-lacks-es2024>" ||
+        gm == "<target-below-es2017>" ||
+        gm == "<top-level-await-using>" ||
+        gm == "<has-using>" ||
+        gm == "<experimental-decorators>" {
+        continue
+      }
       // Markers, not errors: module-syntax evidence and a top-level
       // binding named `await`, combined into TS1262 above.
       if gm == "<module-syntax>" || gm == "<top-await-name>" {
@@ -25539,6 +26042,30 @@ fn check_module_function_bodies_layered(
           all.push({
             path: "export = \{key}",
             message: "cannot find name `\{key}`",
+          })
+        }
+        continue
+      }
+      // TS2503: the ROOT of an entity-reference import alias
+      // (`import X = A.B`) must be a declared namespace / value
+      // (parserImportDeclaration1). Same resolution contract as
+      // `<export-eq>` above.
+      if gm.has_prefix("<import-eq-root>") {
+        let key = gm["<import-eq-root>".length():].to_string()
+        let values = match computed_key_values {
+          Some(v) => v
+          None => {
+            let v = module_value_name_set(module_)
+            computed_key_values = Some(v)
+            v
+          }
+        }
+        if !values.contains(key) &&
+          !is_typeof_value_keyword(key) &&
+          !is_lib_global_value(key) {
+          all.push({
+            path: "import = \{key}",
+            message: "cannot find namespace `\{key}`",
           })
         }
         continue

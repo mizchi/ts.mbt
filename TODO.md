@@ -1031,7 +1031,7 @@ v7.0.2). Truth comes from vendored name manifests
 variant is NOTRUN, and the TS6-era deprecated-compiler-option
 diagnostics (TS5107/TS5101) were removed from the checker accordingly.
 
-State: whole-corpus **TP 2296 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 438 /
+State: whole-corpus **TP 2329 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 405 /
 NOTRUN 14** via `scripts/checker_conformance_oracle.sh --max-fp 0
 --max-legal-parsefail 3`.
 
@@ -1188,6 +1188,90 @@ Batch BL (+7 TP, TP 2296 / MISS 438) worked the TS2339 cluster:
   ArrayBuffer's `resizable` / `detached` / `resize`), and the surface
   registers as fully modeled so member misses are definite
   (`sab.length` — useSharedArrayBuffer6).
+Batch BM (+9 TP, TP 2305 / MISS 429) took lib-set directives,
+decorator signatures, and generator interface returns:
+- TS2318 via parser markers: `@noLib: true` removes every required
+  global type (parser509698); an explicit `@lib:` list without a
+  full-year ES2015+ lib / `es2015.iterable` lacks `IterableIterator`
+  for generators (generatorReturnTypeFallback.2, types.forAwait); one
+  without `esnext` lacks `Disposable` for `using` declarations
+  (usingDeclarations.9 / awaitUsingDeclarations.9 — the block-scoped
+  `using` lowering records the marker too).
+- TS1238 (`check_class_decorator_signatures`): a CLASS used as a class
+  decorator is not callable (constructableDecoratorOnClass01); a
+  decorator or factory result whose REQUIRED arity exceeds the runtime
+  invocation (1 arg legacy / 2 standard, `<experimental-decorators>`
+  marker) can never resolve (decoratorOnClass8, esDecorators-arguments).
+  Zero-parameter decorators also error in tsc but are deliberately
+  skipped. The parser now captures class decorators BEFORE the body
+  parse — member decorators share `pending_decorators` and previously
+  either leaked onto the next declaration or (after the first fix)
+  masqueraded as class decorators (decoratorOnClassAccessor1 FP'd, and
+  the base-less IIFE route plus `parse_class_stub` never attached them
+  at all).
+- TS2741 (`check_generator_interface_returns`): a generator whose
+  declared return type is an interface extending
+  Iterator/IterableIterator/Generator with extra REQUIRED members can
+  never satisfy it (generatorTypeCheck7); optional extras abstain.
+Batch BN (+6 TP, TP 2311 / MISS 423) took index keys and lib-era
+signatures:
+- TS7053: a string-literal key indexing a fully-literal-keyed object
+  shape that provably lacks it, gated on the module's `noImplicitAny`
+  (threaded through a new `Resolver.no_implicit_any` flag). Numeric
+  keys fold (`0b11010:` provides `26`), and since OUR lexer folds
+  OVERFLOWING binary/octal literals through a 32-bit wrap while tsc
+  folds to `Infinity`/exponent form, fold-shaped queries abstain when
+  any >9-digit folded key exists — `"0b11010"` contains `b` (never a
+  fold) and stays decidable (binaryIntegerLiteral/ES6,
+  octalIntegerLiteral/ES6).
+- TS2464: `Symbol.keyFor` is a FUNCTION on SymbolConstructor, never a
+  computed property key (symbolProperty59; `Symbol.for` lexes as a
+  keyword and can't reach the match arm).
+- TS2554: `Date.UTC(year)` requires the month argument before es2015 —
+  fires only under the `<lib-lacks-iterable>` (pre-ES2015 lib) marker
+  (es5DateAPIs).
+Deferred: genericRestArity/Strict need tuple-arity inference from the
+handler parameter (`call<TS extends unknown[]>(handler: (...args: TS)
+=> void, ...args: TS)` — expected count = 1 + handler params), which
+requires threading callee type-params into the arity checker;
+unionTypeReduction2 needs union call-signature reduction.
+Batch BO (+12 TP, TP 2323 / MISS 411) continued the small clusters:
+- TS2491: the left side of `for...in` is never a destructuring pattern,
+  declaration or assignment form (for-inStatementsDestructuring/2/3/4,
+  parserForInStatement8 — always-error, `record_unfiltered`).
+- TS2854: a TOP-LEVEL `await using` requires target >= es2017 — new
+  `<top-level-await-using>` and `<target-below-es2017>` parser markers
+  (multi-target conformance directives list pre-es2017 variants —
+  awaitUsingDeclarations.1; .2/.3 parse through other shapes and stay
+  misses).
+- TS2550: `Object.values` / `Object.entries` need the es2017 lib
+  surface, `Atomics.waitAsync` needs es2024 — `<lib-lacks-es2017>` /
+  `<lib-lacks-es2024>` markers (explicit `@lib:` lacking the year, or
+  no `@lib:` with an explicit sub-es2017 `@target:`), threaded through
+  new `Resolver.lib_lacks_es2017/es2024` flags to the MethodCall carve
+  (useObjectValuesAndEntries2/3, es2024SharedMemory).
+- TS2503: an entity-reference import alias (`import X = A.B`) whose
+  ROOT is provably undeclared — `<import-eq-root>` marker, resolved
+  with the same contract as `<export-eq>` (parserImportDeclaration1,
+  scannerImportDeclaration1).
+- TS1003-adjacent: a primitive-type keyword can never be a qualified
+  type-name segment (`var v: x.void` — parservoidInQualifiedName2).
+Batch BP (+6 TP, TP 2329 / MISS 405) took TS2322 subclusters and
+primitive spreads:
+- `SharedArrayBuffer` and `ArrayBuffer` are nominally distinct lib
+  types: `var foo: ArrayBuffer = new SharedArrayBuffer(...)` flags when
+  neither name has a user declaration
+  (assignSharedArrayBufferToArrayBuffer).
+- `new Array<T>(n)` keeps the explicit element type (`Array(T)`), so a
+  mismatched declared annotation flags (parserObjectCreation1).
+- TS2698: an object-literal spread of a provably non-object primitive
+  (string / numeric / template-literal-typed operand) — named /
+  generic / union operands abstain (spreadNonObject1,
+  spreadTypeVariable as a bonus flip).
+- A provably NUMERIC computed key in an object literal checks its
+  value against the target interface's number index signature
+  (`var o: I = { [+"foo"]: "" }` where `[s: number]: boolean` —
+  computedPropertyNamesContextualType10_ES5/ES6).
 Documented dead ends from this round: YieldExpression10_es6 (an
 object-literal method's name in the backstop is indistinguishable from
 a legal self-referential named function expression property);

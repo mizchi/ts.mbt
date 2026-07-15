@@ -308,6 +308,14 @@ fn Parser::parse_var_like(
   //   keys provably lacks a `[Symbol.dispose]()` / `[Symbol.asyncDispose]()`
   //   method (symbol-keyed / computed / spread entries abstain).
   if using_kw != "" {
+    // Marker for the lib-directive TS2318 rule: a `using` declaration
+    // requires the `Disposable` global type (usingDeclarations.9).
+    self.grammar_misuses.push("<has-using>")
+    // TS2854 evidence: a TOP-LEVEL `await using` requires target >=
+    // es2017 (awaitUsingDeclarations.1-3 run pre-es2017 variants).
+    if using_kw == "await using" && !self.in_function {
+      self.grammar_misuses.push("<top-level-await-using>")
+    }
     for st in stmts {
       match st {
         Var(b, _, init) | Let(b, _, init) | Const(b, _, init) => {
@@ -1224,6 +1232,10 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
       let init = self.parse_expr()
       let _ = self.match_(Semicolon)
       let using_kw = if is_await_using { "await using" } else { "using" }
+      // Marker for the lib-directive TS2318 rule (`Disposable` global —
+      // usingDeclarations.9's block-scoped form lowers here, not through
+      // `parse_var_like`).
+      self.grammar_misuses.push("<has-using>")
       // Later declarators of a multi-declarator `using` land inside the
       // init as a comma chain (`using a = null, [b] = null, c = null`
       // parses `null, ([b] = null), (c = null)`). A destructuring
