@@ -77,6 +77,10 @@ priv struct Resolver {
   // literal fails every overload (the `raw` member only exists on
   // engine-created template objects), which is TS2769/TS2345.
   template_tag_funcs : Map[String, Bool]
+  // Module-level `noImplicitAny` effective flag (strict directives),
+  // threaded through the resolver so expression-level rules (TS7053)
+  // can gate without widening `CheckCtx`.
+  mut no_implicit_any : Bool
 }
 
 ///|
@@ -96,6 +100,7 @@ fn Resolver::empty() -> Resolver {
     namespace_value_decls: {},
     namespace_exports: {},
     template_tag_funcs: {},
+    no_implicit_any: false,
   }
 }
 
@@ -16819,6 +16824,90 @@ fn check_call_args_in_expr(
           "cannot index into `\{type_display(recv_ty)}`",
         )
       }
+      // TS7053: a string-literal key indexing a fully-literal-keyed object
+      // shape that provably lacks it (`obj1["0b11010"]` where the literal
+      // declared `0b11010:` — the KEY folds to `26`, the string does not;
+      // binaryIntegerLiteral). Only fires under `@strict` (the diagnostic
+      // is a noImplicitAny error) and only when every key is a plain
+      // literal (an index signature / spread / symbol key makes the key
+      // set open).
+      if ctx.resolver.no_implicit_any && idx is StringLit(key) {
+        // Numeric object keys fold to a canonical decimal spelling
+        // (`0b11010:` becomes key `26`, overflowing literals become
+        // `Infinity` / `9.67e+24`). Our fold may differ from tsc's for
+        // the exotic forms, so a key spelling is only "certain" when it
+        // is a short digit run; a QUERY that could itself be a numeric
+        // fold (only `[0-9.eE+-]` chars, or Infinity/NaN) must abstain
+        // whenever an uncertain field key exists. `"0b11010"` contains
+        // `b` — never a fold — so it stays decidable.
+        fn fold_shaped(k : String) -> Bool {
+          if k == "Infinity" || k == "-Infinity" || k == "NaN" {
+            return true
+          }
+          if k.length() == 0 {
+            return false
+          }
+          for c in k {
+            let ok = (c >= '0' && c <= '9') ||
+              c == '.' ||
+              c == 'e' ||
+              c == 'E' ||
+              c == '+' ||
+              c == '-'
+            if !ok {
+              return false
+            }
+          }
+          true
+        }
+
+        // At most 9 digits: our lexer folds OVERFLOWING binary/octal
+        // literals through a 32-bit wrap (tsc folds them to `Infinity` /
+        // exponent form), and those artifacts land in the 10-digit range —
+        // treat them as uncertain spellings.
+        fn short_digits(k : String) -> Bool {
+          if k.length() == 0 || k.length() > 9 {
+            return false
+          }
+          for c in k {
+            if c < '0' || c > '9' {
+              return false
+            }
+          }
+          true
+        }
+
+        match recv_ty {
+          Object(fields) => {
+            let mut all_plain = fields.length() > 0
+            let mut found = false
+            let mut uncertain_fold_key = false
+            for f in fields {
+              match f.0 {
+                Literal(k) => {
+                  if k.has_prefix("<") || k.has_prefix("@@") {
+                    all_plain = false
+                  } else if k == key {
+                    found = true
+                  }
+                  if fold_shaped(k) && !short_digits(k) {
+                    uncertain_fold_key = true
+                  }
+                }
+                _ => all_plain = false
+              }
+            }
+            if all_plain && !found && !(fold_shaped(key) && uncertain_fold_key) {
+              record(
+                ctx,
+                "index access",
+                "element implicitly has an `any` type: `\"\{key}\"` cannot be used to index the object shape",
+              )
+            }
+          }
+          _ => ()
+        }
+      }
       // TS2493 ("Tuple type has no element at index N"): a fixed-length
       // tuple indexed by an out-of-range numeric literal. Tuples that
       // carry a `...rest` element accept any index, so we skip those.
@@ -24660,6 +24749,21 @@ fn check_lib_directive_globals(module_ : @ast.TsModule) -> Array[ExprIssue] {
         message: "cannot find global type `IterableIterator` (not in the `lib` set)",
       })
     }
+    // TS2554 under a pre-ES2015 lib: `Date.UTC` requires the month
+    // argument until es2015 made it optional (`Date.UTC(2017)` —
+    // es5DateAPIs).
+    for stmt in module_.top_level_stmts {
+      match stmt {
+        Expr(MethodCall(Var("Date"), "UTC", args)) =>
+          if args.length() == 1 {
+            issues.push({
+              path: "call `Date.UTC`",
+              message: "expected 2-7 arguments, but got 1 (the `month` argument is required before es2015)",
+            })
+          }
+        _ => ()
+      }
+    }
   }
   if lacks_esnext && has_using {
     issues.push({
@@ -25011,6 +25115,7 @@ fn check_module_function_bodies_layered(
   }
   let strict_property_init = strict_root.strict_property_initialization
   let strict_null_checks = strict_root.strict_null_checks
+  resolver.no_implicit_any = strict_root.no_implicit_any
   // Brand-keyed private declarations recorded by the parser (own layer plus
   // the outermost root -- namespace bodies re-parse with a fresh parser, so
   // their recordings live on their own TsModule). Populated before body

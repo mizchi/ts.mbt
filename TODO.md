@@ -1031,7 +1031,7 @@ v7.0.2). Truth comes from vendored name manifests
 variant is NOTRUN, and the TS6-era deprecated-compiler-option
 diagnostics (TS5107/TS5101) were removed from the checker accordingly.
 
-State: whole-corpus **TP 2305 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 429 /
+State: whole-corpus **TP 2311 / FP 0 / PFLEGAL 3 / TN 1747 / MISS 423 /
 NOTRUN 14** via `scripts/checker_conformance_oracle.sh --max-fp 0
 --max-legal-parsefail 3`.
 
@@ -1213,6 +1213,28 @@ decorator signatures, and generator interface returns:
   declared return type is an interface extending
   Iterator/IterableIterator/Generator with extra REQUIRED members can
   never satisfy it (generatorTypeCheck7); optional extras abstain.
+Batch BN (+6 TP, TP 2311 / MISS 423) took index keys and lib-era
+signatures:
+- TS7053: a string-literal key indexing a fully-literal-keyed object
+  shape that provably lacks it, gated on the module's `noImplicitAny`
+  (threaded through a new `Resolver.no_implicit_any` flag). Numeric
+  keys fold (`0b11010:` provides `26`), and since OUR lexer folds
+  OVERFLOWING binary/octal literals through a 32-bit wrap while tsc
+  folds to `Infinity`/exponent form, fold-shaped queries abstain when
+  any >9-digit folded key exists — `"0b11010"` contains `b` (never a
+  fold) and stays decidable (binaryIntegerLiteral/ES6,
+  octalIntegerLiteral/ES6).
+- TS2464: `Symbol.keyFor` is a FUNCTION on SymbolConstructor, never a
+  computed property key (symbolProperty59; `Symbol.for` lexes as a
+  keyword and can't reach the match arm).
+- TS2554: `Date.UTC(year)` requires the month argument before es2015 —
+  fires only under the `<lib-lacks-iterable>` (pre-ES2015 lib) marker
+  (es5DateAPIs).
+Deferred: genericRestArity/Strict need tuple-arity inference from the
+handler parameter (`call<TS extends unknown[]>(handler: (...args: TS)
+=> void, ...args: TS)` — expected count = 1 + handler params), which
+requires threading callee type-params into the arity checker;
+unionTypeReduction2 needs union call-signature reduction.
 Documented dead ends from this round: YieldExpression10_es6 (an
 object-literal method's name in the backstop is indistinguishable from
 a legal self-referential named function expression property);

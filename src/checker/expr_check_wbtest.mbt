@@ -14467,3 +14467,39 @@ test "expr_check: lib directives, decorator signatures, generator returns (batch
     0,
   )
 }
+
+///|
+test "expr_check: TS7053 string-literal keys, Symbol.keyFor, es5 Date.UTC (batch BN)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS7053: a string-literal key provably absent from a fully-literal
+  // object shape, under @strict (binaryIntegerLiteral). Numeric-key
+  // folding stays legal (`0b11010:` provides key `26`), and an
+  // overflow-folded key makes fold-shaped queries abstain.
+  assert_true(
+    issues(
+      "// @strict: true\nvar o = { 0b11010: \"x\", a: 1 };\no[\"0b11010\"];",
+    ) >
+    0,
+  )
+  @test.assert_eq(
+    issues(
+      "// @strict: true\nvar o = { 0b11010: \"x\", a: 1 };\no[\"26\"];\no[\"a\"];\no[26];",
+    ),
+    0,
+  )
+  @test.assert_eq(
+    issues("// @strict: false\nvar o = { a: 1 };\no[\"missing\"];"),
+    0,
+  )
+  // TS2464: `Symbol.keyFor` is a function, never a computed key
+  // (symbolProperty59).
+  assert_true(issues("interface I {\n    [Symbol.keyFor]: string;\n}") > 0)
+  @test.assert_eq(issues("interface I {\n    [Symbol.iterator]: string;\n}"), 0)
+  // TS2554: `Date.UTC(year)` requires the month argument before es2015
+  // (es5DateAPIs); modern libs keep it optional.
+  assert_true(issues("// @lib: es5\nDate.UTC(2017);") > 0)
+  @test.assert_eq(issues("Date.UTC(2017);"), 0)
+  @test.assert_eq(issues("// @lib: es5\nDate.UTC(2017, 1);"), 0)
+}
