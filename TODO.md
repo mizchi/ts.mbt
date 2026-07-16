@@ -1213,11 +1213,12 @@ flattening, landed separately):
   `params_from_pairs`): `object()` shapes are built from MoonBit without
   hand-written externs. Runtime: object schema accepts a matching user
   object and rejects a non-object.
-- Remaining ergonomic gap: GENERIC owners (ZodObject, ZodError) stay
-  opaque — `object(...)` still casts to `Schema[...]` for the parse
-  surface, and `error.issues` reads through a one-line extern accessor.
-  Follow-up: per-generic-owner facade wrappers (same monomorphization as
-  the mbt2ts generic-method glue).
+- [x] GENERIC owners reach the parse surface via the `as_schema` identity
+  upcast (zod module hook): `as_schema(object(Some(shape), None))
+  .safeParse(...)` — runtime-verified. MoonBit's nominal structs cannot
+  express the extends relation, so the upcast makes it callable; a
+  full per-generic-owner facade (monomorphized method wrappers like the
+  mbt2ts generic-method glue) remains the eventual principled shape.
 
 ### Non-Goals (still)
 
