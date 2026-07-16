@@ -46,7 +46,7 @@ priv struct MoonBitJsFfiState {
 }
 
 ///|
-let ffi_function_field_method_wrapper_limit : Int = 8
+let ffi_function_field_method_wrapper_limit : Int = 128
 
 ///|
 fn ffi_is_ascii_letter(c : Char) -> Bool {
@@ -3363,6 +3363,11 @@ fn ffi_is_react_router_module_spec(module_spec : String) -> Bool {
 }
 
 ///|
+fn ffi_is_zod_module_spec(module_spec : String) -> Bool {
+  module_spec == "zod" || module_spec.contains("/zod")
+}
+
+///|
 fn ffi_is_jose_module_spec(module_spec : String) -> Bool {
   module_spec == "jose" || module_spec.contains("/jose")
 }
@@ -5554,6 +5559,33 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     handled_export_names.push(func.name)
   }
 
+  if ffi_is_zod_module_spec(module_spec) {
+    // `object()`'s shape is `$ZodLooseShape = Record<string, any>` — an
+    // opaque handle MoonBit could never construct. The builder pairs
+    // schema values with their keys the same way react-router's
+    // `params_from_pairs` does.
+    push_unique_ffi_section(
+      seen_ffi_binding_names,
+      ffi_sections,
+      ffi_fn_decl_key("loose_shape_from_pairs"),
+      "pub extern \"js\" fn loose_shape_from_pairs(keys : Array[String], values : Array[JSValue]) -> Core__ZodLooseShape = \"__ts_mbt_record_from_pairs\"",
+    )
+    push_unique_bridge_binding(
+      seen_bridge_binding_names, bridge_lines, "__ts_mbt_record_from_pairs", "export function __ts_mbt_record_from_pairs(keys, values) { const out = {}; for (let i = 0; i < keys.length; i++) out[keys[i]] = values[i]; return out; }",
+    )
+    // Every schema interface ultimately extends ZodType, but MoonBit's
+    // nominal structs cannot upcast, and GENERIC owners (ZodObject,
+    // ZodDiscriminatedUnion, ...) do not flatten their generic base
+    // (measured surface explosion) — parse / safeParse live on `Schema`
+    // only. The identity upcast makes the extends relation callable:
+    // `as_schema(object(...)).safeParse(...)` without a hand-written cast.
+    push_unique_ffi_section(
+      seen_ffi_binding_names,
+      ffi_sections,
+      ffi_fn_decl_key("as_schema"),
+      "pub fn[T] as_schema(schema : T) -> Schema[JSValue, JSValue, JSValue] {\n  unsafeCast(schema)\n}",
+    )
+  }
   if ffi_is_react_router_module_spec(module_spec) {
     push_unique_ffi_section(
       seen_ffi_binding_names,

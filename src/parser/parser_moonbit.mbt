@@ -27,7 +27,7 @@ fn generic_preserved_type_arity(state : MoonBitDeclState, name : String) -> Int 
 }
 
 ///|
-let moonbit_function_field_method_wrapper_limit : Int = 16
+let moonbit_function_field_method_wrapper_limit : Int = 128
 
 ///|
 fn is_ascii_letter(c : Char) -> Bool {

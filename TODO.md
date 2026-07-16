@@ -1191,6 +1191,35 @@ returning the output handle.
   aliases stay opaque — the StringRecordOf* synthetics are equally
   unconstructible today).
 
+### 14. zod full-feature pillars 2-3: error issues + object shapes (done 2026-07-16)
+
+Runtime-verified continuations of #13 (pillar 1, generic-base
+flattening, landed separately):
+
+- [x] Pillar 2 — union aliases whose members cannot be
+  runtime-discriminated join to their nearest COMMON BASE interface
+  (`decl_join_union_alias_to_common_base`): zod's
+  `$ZodIssue = $ZodIssueInvalidType | ... (11 members)` — all
+  `$`-prefixed, so tagged lowering rejects every constructor name — all
+  extend `$ZodIssueBase`, and the reference now lands on
+  `pub(all) struct UnderscoreZodIssueBase { code : String?, input :
+  JSValue?, path : Array[PropertyKey], message : String }` instead of an
+  opaque handle. Nested union-alias members
+  (`$ZodIssueInvalidUnion = NoMatch | MultipleMatch`) recurse; tagged- /
+  enum-lowerable unions never reach the join. Runtime:
+  `issues[0].message` / `.code == "invalid_type"` read directly.
+- [x] Pillar 3 — `loose_shape_from_pairs(keys, values) ->
+  Core__ZodLooseShape` (zod module hook, same pattern as react-router's
+  `params_from_pairs`): `object()` shapes are built from MoonBit without
+  hand-written externs. Runtime: object schema accepts a matching user
+  object and rejects a non-object.
+- [x] GENERIC owners reach the parse surface via the `as_schema` identity
+  upcast (zod module hook): `as_schema(object(Some(shape), None))
+  .safeParse(...)` — runtime-verified. MoonBit's nominal structs cannot
+  express the extends relation, so the upcast makes it callable; a
+  full per-generic-owner facade (monomorphized method wrappers like the
+  mbt2ts generic-method glue) remains the eventual principled shape.
+
 ### Non-Goals (still)
 
 - [ ] Do not turn this list into a checklist for "all of TypeScript". Each item

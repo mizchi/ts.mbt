@@ -743,23 +743,30 @@ EOF
 test "real-world zod bridge smoke" {
   let _ = number(None)
   let _ = boolean(None)
-  let schema : Schema[JSValue, JSValue, JSValue] = unsafeCast(string(None))
-  let ok = schema.safeParse(unsafeCast("hello"), None)
-  if !ok.success {
+  // Concrete schemas expose the flattened ZodType surface directly.
+  let s = string(None)
+  if !s.safeParse(unsafeCast("hello"), None).success {
     abort("expected zod safeParse success")
   }
-  let bad = schema.safeParse(unsafeCast(42), None)
-  if bad.success {
+  if s.safeParse(unsafeCast(42), None).success {
     abort("expected zod safeParse failure")
   }
-  let email : Schema[JSValue, JSValue, JSValue] = unsafeCast(
-    string(None).email(None),
-  )
+  let email = string(None).email(None)
   if !email.safeParse(unsafeCast("a@b.co"), None).success {
     abort("expected zod email success")
   }
   if email.safeParse(unsafeCast("nope"), None).success {
     abort("expected zod email failure")
+  }
+  // Generic owners (ZodObject) reach the surface via the as_schema upcast;
+  // the shape is built with the loose_shape_from_pairs module hook.
+  let shape = loose_shape_from_pairs(
+    ["name"],
+    [unsafeCast(string(None))],
+  )
+  let obj = as_schema(object(Some(shape), None))
+  if obj.safeParse(unsafeCast("not an object"), None).success {
+    abort("expected zod object failure")
   }
 }
 EOF
@@ -1279,14 +1286,16 @@ EOF
 fn main {
   let _ = @sut.number(None)
   let _ = @sut.boolean(None)
-  let schema : @sut.Schema[@sut.JSValue, @sut.JSValue, @sut.JSValue] = @sut.unsafeCast(
-    @sut.string(None),
-  )
-  if !schema.safeParse(@sut.unsafeCast("hello"), None).success {
+  let s = @sut.string(None)
+  if !s.safeParse(@sut.unsafeCast("hello"), None).success {
     abort("expected zod safeParse success")
   }
-  if schema.safeParse(@sut.unsafeCast(42), None).success {
+  if s.safeParse(@sut.unsafeCast(42), None).success {
     abort("expected zod safeParse failure")
+  }
+  let obj = @sut.as_schema(@sut.object(None, None))
+  if obj.safeParse(@sut.unsafeCast("nope"), None).success {
+    abort("expected zod object failure")
   }
 }
 EOF
