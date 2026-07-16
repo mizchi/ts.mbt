@@ -2853,3 +2853,26 @@ test "bridge: exclusive object union joins into one readable shape" {
   )
   assert_eq(plain, None)
 }
+
+///|
+async test "bridge: concrete interfaces flatten generic bases with substituted args" {
+  // A CONCRETE root (`StrSchema`, no type params of its own) inherits its
+  // generic base's members with the extends arguments substituted:
+  // `Base<string>.parse(value: unknown): T` arrives as
+  // `parse : (JSValue) -> String`. Generic roots keep the old
+  // no-expansion behavior (expansion measurably explodes the surface).
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/generic-base-expansion-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("/// kind : String"))
+  assert_true(actual.contains("/// parse : (JSValue) -> String"))
+  assert_true(actual.contains("/// label : String"))
+}

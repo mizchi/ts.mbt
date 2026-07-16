@@ -6525,6 +6525,8 @@ fn append_interface_origin_fields(
   seen_origins : Array[String],
   internal_members : Array[String],
   deprecated_members : Array[String],
+  subst : Array[(String, @ast.TsType)],
+  root_is_concrete : Bool,
 ) -> Unit {
   let origin_key = decl_key(origin.info.record.path, origin.iface.name)
   if seen_origins.contains(origin_key) {
@@ -6544,22 +6546,9 @@ fn append_interface_origin_fields(
       deprecated_members.push(name)
     }
   }
-  for base_name in origin.iface.extends_names {
-    match
-      resolve_interface_origin(origin.info, base_name, modules, canonical_types) {
-      Some(base_origin) =>
-        if should_expand_interface_base(base_origin) {
-          // Base members merged into the derived struct keep the ROOT
-          // `this_owner`: `this` in an inherited member denotes the
-          // derived type, and only the root's type params are in scope.
-          append_interface_origin_fields(
-            base_origin, this_owner, modules, canonical_types, fields, readonly_fields,
-            seen_field_names, seen_origins, internal_members, deprecated_members,
-          )
-        }
-      None => ()
-    }
-  }
+  // OWN fields first, bases after: a derived redeclaration narrows its
+  // base member (`ZodString`'s `_zod` vs the raw `_ZodType` one) and the
+  // seen-set gives the first pusher precedence.
   for field in origin.iface.fields {
     let (field_name, field_type) = field
     // A generic METHOD's constrained type parameters are substituted with
@@ -6575,7 +6564,7 @@ fn append_interface_origin_fields(
       decl_substitute_method_type_param_bounds(
         origin.iface,
         field_name,
-        field_type,
+        decl_apply_subst(field_type, subst),
       ),
       0,
     )
@@ -6593,6 +6582,69 @@ fn append_interface_origin_fields(
       canonical_types,
     )
   }
+  for base_index, base_name in origin.iface.extends_names {
+    match
+      resolve_interface_origin(origin.info, base_name, modules, canonical_types) {
+      Some(base_origin) => {
+        // Generic bases expand when the derived interface supplied a
+        // full argument list (`_ZodString<T> extends _ZodType<T>`,
+        // `_ZodType<Internals> extends ZodType<any, any, Internals>`):
+        // the arguments — rewritten through the CURRENT substitution —
+        // become the base's parameter bindings, so `ZodString` inherits
+        // `parse` with `Internals := $ZodStringInternals<string>`.
+        // Non-generic bases expand as before with an empty env; a
+        // generic base referenced BARE (no arguments) keeps the old
+        // no-expansion behavior.
+        let base_params = base_origin.iface.type_params
+        let raw_args = if base_index < origin.iface.extends_args.length() {
+          origin.iface.extends_args[base_index]
+        } else {
+          []
+        }
+        // Only CONCRETE roots (no type parameters of their own — zod's
+        // ZodString / ZodEmail / ZodNumber...) flatten their generic
+        // bases: expanding generic roots multiplies every base member
+        // across every instantiation context and measurably explodes
+        // the widened surface.
+        let expandable = should_expand_interface_base(base_origin) ||
+          (root_is_concrete && base_params.length() == raw_args.length())
+        if expandable {
+          let base_subst : Array[(String, @ast.TsType)] = []
+          if base_params.length() == raw_args.length() {
+            for i, param in base_params {
+              base_subst.push((param, decl_apply_subst(raw_args[i], subst)))
+            }
+          }
+          // Base members merged into the derived struct keep the ROOT
+          // `this_owner`: `this` in an inherited member denotes the
+          // derived type, and only the root's type params are in scope.
+          append_interface_origin_fields(
+            base_origin, this_owner, modules, canonical_types, fields, readonly_fields,
+            seen_field_names, seen_origins, internal_members, deprecated_members,
+            base_subst, root_is_concrete,
+          )
+        }
+      }
+      None => ()
+    }
+  }
+}
+
+///|
+fn decl_apply_subst(
+  t : @ast.TsType,
+  subst : Array[(String, @ast.TsType)],
+) -> @ast.TsType {
+  if subst.length() == 0 {
+    return t
+  }
+  let params : Array[String] = []
+  let args : Array[@ast.TsType] = []
+  for pair in subst {
+    params.push(pair.0)
+    args.push(pair.1)
+  }
+  substitute_type_alias_params(t, params, args)
 }
 
 ///|
@@ -7034,6 +7086,8 @@ fn clone_resolved_interface_origin(
     seen_origins,
     internal_members,
     deprecated_members,
+    [],
+    origin.iface.type_params.length() == 0,
   )
   {
     name: origin.export_name,
@@ -7388,6 +7442,8 @@ fn clone_exported_interface(
     seen_origins,
     internal_members,
     deprecated_members,
+    [],
+    exported.iface.type_params.length() == 0,
   )
   {
     name: exported.export_name,

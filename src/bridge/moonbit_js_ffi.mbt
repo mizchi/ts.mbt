@@ -46,7 +46,7 @@ priv struct MoonBitJsFfiState {
 }
 
 ///|
-let ffi_function_field_method_wrapper_limit : Int = 8
+let ffi_function_field_method_wrapper_limit : Int = 128
 
 ///|
 fn ffi_is_ascii_letter(c : Char) -> Bool {
