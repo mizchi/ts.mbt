@@ -724,17 +724,70 @@ EOF
 extern "js" fn realworld_hono_options() -> HonoOptions[Env] =
   #| () => ({ strict: true })
 
+extern "js" fn realworld_hono_resolve(r : Response) -> Promise[Response] =
+  #| (r) => Promise.resolve(r)
+
+extern "js" fn realworld_hono_key(s : String) -> Key =
+  #| (s) => s
+
+extern "js" fn realworld_hono_str(v : JSValue) -> String =
+  #| (v) => String(v)
+
+extern "js" fn realworld_hono_roundtrip(app : Hono[JSValue, JSValue, JSValue]) -> Unit =
+  #| (app) => {
+  #|   globalThis.__tsmbt_pending = (async () => {
+  #|     const ok = await app.fetch(new Request("http://localhost/"));
+  #|     if (ok.status !== 200 || (await ok.text()) !== "hello from moonbit") {
+  #|       console.error("hono sync route failed"); process.exit(1);
+  #|     }
+  #|     const a = await app.fetch(new Request("http://localhost/async"));
+  #|     if (a.status !== 200 || (await a.text()) !== "async moonbit") {
+  #|       console.error("hono async route failed"); process.exit(1);
+  #|     }
+  #|     const m = await app.fetch(new Request("http://localhost/mw"));
+  #|     if (m.status !== 200 || (await m.text()) !== "from middleware") {
+  #|       console.error("hono middleware failed"); process.exit(1);
+  #|     }
+  #|     const missing = await app.fetch(new Request("http://localhost/nope"));
+  #|     if (missing.status !== 404) { console.error("hono 404 failed"); process.exit(1); }
+  #|   })();
+  #| }
+
 fn realworld_hono_handler(
   c : Context[JSValue, JSValue, JSValue],
 ) -> Response {
   c.text("hello from moonbit", None, None)
 }
 
+fn realworld_hono_async_handler(
+  c : Context[JSValue, JSValue, JSValue],
+) -> Promise[Response] {
+  realworld_hono_resolve(c.text("async moonbit", None, None))
+}
+
+fn realworld_hono_mw(
+  c : Context[JSValue, JSValue, JSValue],
+  next : () -> Promise[Unit],
+) -> Promise[Unit] {
+  c.set(realworld_hono_key("who"), unsafeCast("from middleware"))
+  next()
+}
+
+fn realworld_hono_mw_handler(
+  c : Context[JSValue, JSValue, JSValue],
+) -> Response {
+  c.text(realworld_hono_str(c.get(realworld_hono_key("who"))), None, None)
+}
+
 test "real-world hono bridge smoke" {
   let app : Hono[JSValue, JSValue, JSValue] = new_hono(
     Some(realworld_hono_options()),
   )
+  app.use_middleware(None, realworld_hono_mw)
   let _ = app.get("/", realworld_hono_handler)
+  app.get_async("/async", realworld_hono_async_handler)
+  let _ = app.get("/mw", realworld_hono_mw_handler)
+  realworld_hono_roundtrip(app)
 }
 EOF
       ;;
