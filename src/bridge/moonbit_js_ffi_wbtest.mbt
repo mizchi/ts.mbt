@@ -5480,3 +5480,17 @@ test "bridge: FFI struct decl drops internal and JSValue-widened deprecated memb
   assert_true(actual.contains("name : String"))
   assert_true(actual.contains("keep : String"))
 }
+
+///|
+test "bridge: struct JS converter passes class instances and preserves internals" {
+  let state = ffi_string_subset_test_state([])
+  let decl = ffi_struct_js_converter_decl(state, "BaseSchema", [
+    ("kind", @ast.TsType::Literal("schema")),
+  ])
+  // A class instance can never be a MoonBit-constructed struct — raw
+  // library handles (drizzle's SQL) pass through with their prototype.
+  assert_true(decl.contains("Object.getPrototypeOf(value)"))
+  // Plain-object handles keep undeclared internals (valibot's `~run`)
+  // via the spread; declared fields overwrite in place.
+  assert_true(decl.contains("const result = { ...value };"))
+}

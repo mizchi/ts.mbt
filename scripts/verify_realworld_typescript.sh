@@ -865,11 +865,29 @@ EOF
       ;;
     valibot)
       cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn realworld_valibot_success(r : JSValue) -> Bool =
+  #| (r) => r.success === true
+
 test "real-world valibot bridge smoke" {
-  let _ = string()
   let _ = number()
   let _ = boolean()
   let _ = uuid()
+  let s : BaseSchema[JSValue, JSValue, BaseIssue[JSValue]] = unsafeCast(string())
+  if !realworld_valibot_success(safeParse(s, unsafeCast("hello"), None)) {
+    abort("expected valibot safeParse success")
+  }
+  if realworld_valibot_success(safeParse(s, unsafeCast(42), None)) {
+    abort("expected valibot safeParse failure")
+  }
+  let piped : BaseSchema[JSValue, JSValue, BaseIssue[JSValue]] = unsafeCast(
+    pipe(s, [unsafeCast(minLength(3.0))]),
+  )
+  if !realworld_valibot_success(safeParse(piped, unsafeCast("abcd"), None)) {
+    abort("expected valibot pipe success")
+  }
+  if realworld_valibot_success(safeParse(piped, unsafeCast("ab"), None)) {
+    abort("expected valibot pipe failure")
+  }
 }
 EOF
       ;;

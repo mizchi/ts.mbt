@@ -2116,9 +2116,14 @@ fn ffi_enum_runtime_js_converter_decl(enum_ : @ast.TsEnumDecl) -> String? {
       None => return None
     }
   }
+  // Values that came FROM the library round-trip through MoonBit as raw
+  // JS (opaque handles cast into struct types — valibot's `string()`
+  // result flowing back into `parse(schema, ...)`); converting an
+  // already-JS literal again must be identity, not an error.
   lines.push(
-    "    default: throw new Error(\"unexpected \{type_name} tag: \" + value);",
+    "    default: if (typeof value === \"string\" || typeof value === \"number\") return value;",
   )
+  lines.push("    throw new Error(\"unexpected \{type_name} tag: \" + value);")
   lines.push("  }")
   lines.push("}")
   lines.push("")
@@ -2191,9 +2196,12 @@ fn ffi_enum_bridge_js_converter_decl(enum_ : @ast.TsEnumDecl) -> String? {
           }
       }
   }
+  // Same idempotency as the runtime converter: a raw library value cast
+  // into the struct type carries the JS literal already.
   lines.push(
-    "    default: throw new Error(\"unexpected \{type_name} tag: \" + value);",
+    "    default: if (typeof value === \"string\" || typeof value === \"number\") return value;",
   )
+  lines.push("    throw new Error(\"unexpected \{type_name} tag: \" + value);")
   lines.push("  }")
   lines.push("}")
   lines.push("")
@@ -2889,6 +2897,52 @@ fn ffi_struct_has_call_signature(fields : Array[(String, @ast.TsType)]) -> Bool 
 }
 
 ///|
+/// JS test for "this field currently carries the MoonBit representation":
+/// enum fields cross as tag ints, optional fields as `$tag` boxes. `None`
+/// when the field type has no cheaply probeable MoonBit form.
+fn ffi_struct_field_moonbit_repr_test(
+  state : MoonBitJsFfiState,
+  field_type : @ast.TsType,
+  access : String,
+) -> String? {
+  let box_test = "(\{access} !== null && typeof \{access} === \"object\" && \"$tag\" in \{access})"
+  match @checker.classify_optional_like_union(field_type) {
+    Some((collapsed, true)) =>
+      // `Option[Enum]` crosses UNBOXED (the enum tag int), so an
+      // optional enum field probes for both representations.
+      return if ffi_named_type_is_generated_enum(state, collapsed) {
+        Some("(\{box_test} || typeof \{access} === \"number\")")
+      } else {
+        Some(box_test)
+      }
+    _ => ()
+  }
+  if ffi_named_type_is_generated_enum(state, field_type) {
+    return Some("typeof \{access} === \"number\"")
+  }
+  None
+}
+
+///|
+fn ffi_named_type_is_generated_enum(
+  state : MoonBitJsFfiState,
+  t : @ast.TsType,
+) -> Bool {
+  match t {
+    Named(n) => {
+      let ident = ffi_type_identifier(n, "OpaqueType")
+      for enum_ in state.enums {
+        if ffi_type_identifier(enum_.name, "GeneratedEnum") == ident {
+          return true
+        }
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+///|
 fn ffi_struct_js_converter_decl(
   state : MoonBitJsFfiState,
   name : String,
@@ -2906,7 +2960,45 @@ fn ffi_struct_js_converter_decl(
     lines.push("  if (typeof value === \"function\") return value;")
     lines.push("  const result = (...args) => value[\"_call_\"](...args);")
   } else {
-    lines.push("  const result = {};")
+    // A CLASS instance whose declared fields show no trace of MoonBit
+    // representation (enum fields as tag ints, option/union fields as
+    // `$tag` boxes) is a raw library handle round-tripping through the
+    // boundary — pass it through untouched; a spread would sever its
+    // prototype (drizzle's `SQL.getSQL`). MoonBit structs ALSO compile
+    // to classes, so the prototype check alone cannot discriminate —
+    // the repr probes keep genuinely MoonBit-built values converting.
+    let repr_tests : Array[String] = []
+    for field in fields {
+      let (field_name, field_type) = field
+      // Probe the MOONBIT-side key (the sanitized identifier the struct
+      // declares — `type` becomes `type_`), matching the field reads in
+      // the conversion body below.
+      let safe_name = ffi_sanitize_identifier(field_name, "field")
+      match
+        ffi_struct_field_moonbit_repr_test(
+          state,
+          field_type,
+          "value[\"\{json_escape_string(safe_name)}\"]",
+        ) {
+        Some(probe) => repr_tests.push(probe)
+        None => ()
+      }
+    }
+    let repr_guard = if repr_tests.length() == 0 {
+      "false"
+    } else {
+      repr_tests.join(" || ")
+    }
+    lines.push(
+      "  const __proto = Object.getPrototypeOf(value); if (__proto !== null && __proto !== Object.prototype && !(\{repr_guard})) return value;",
+    )
+    // Spread the ORIGINAL value first: handle-like structs round-trip
+    // raw library objects (valibot's `string()` result flowing back into
+    // `parse(schema, ...)`) whose behavior lives on undeclared internals
+    // (`~run`, prototype-less methods). Rebuilding from declared fields
+    // alone strips those; the spread preserves them and the per-field
+    // assignments below overwrite only what needs conversion.
+    lines.push("  const result = { ...value };")
   }
   lines.push("  let field;")
   for field in fields {
@@ -2925,7 +3017,7 @@ fn ffi_struct_js_converter_decl(
     lines.push("  field = \{converted_field};")
     if ffi_type_is_optional(field_type) {
       lines.push(
-        "  if (field !== undefined) result[\"\{target_key}\"] = field;",
+        "  if (field !== undefined) result[\"\{target_key}\"] = field; else delete result[\"\{target_key}\"];",
       )
     } else {
       lines.push("  result[\"\{target_key}\"] = field;")
@@ -3161,6 +3253,30 @@ fn ffi_params_call_args_with_names(
 }
 
 ///|
+fn ffi_func_has_rest_param(func : @ast.TsFunc) -> Bool {
+  for param in func.params {
+    if param.is_rest || param.type_ is Rest(_) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn ffi_import_has_rest_param(import_ : @ast.TsImport) -> Bool {
+  for i, item in import_.params {
+    let (_, type_) = item
+    if type_ is Rest(_) {
+      return true
+    }
+    if i < import_.param_is_rest.length() && import_.param_is_rest[i] {
+      return true
+    }
+  }
+  false
+}
+
+///|
 fn ffi_import_call_args_with_names(
   state : MoonBitJsFfiState,
   import_ : @ast.TsImport,
@@ -3169,9 +3285,35 @@ fn ffi_import_call_args_with_names(
   let args : Array[String] = []
   for i, item in import_.params {
     let (_, type_) = item
-    args.push(ffi_type_js_converter_expr(state, type_, names[i]))
+    let is_rest = i < import_.param_is_rest.length() && import_.param_is_rest[i]
+    if is_rest && !(type_ is Rest(_)) {
+      args.push(
+        "...(" + ffi_type_js_converter_expr(state, type_, names[i]) + ")",
+      )
+    } else {
+      args.push(ffi_call_arg_with_rest_spread(state, type_, names[i]))
+    }
   }
   args
+}
+
+///|
+/// A rest parameter (`pipe(schema, ...items)`) is surfaced to MoonBit as
+/// `Array[T]` but the runtime call must SPREAD it — passing the array as
+/// a single positional argument hands the library the array itself as
+/// its first variadic item (valibot: `item.~run is not a function`).
+fn ffi_call_arg_with_rest_spread(
+  state : MoonBitJsFfiState,
+  type_ : @ast.TsType,
+  name : String,
+) -> String {
+  match type_ {
+    @ast.TsType::Rest(inner) =>
+      "...(" +
+      ffi_type_js_converter_expr(state, @ast.TsType::Array(inner), name) +
+      ")"
+    _ => ffi_type_js_converter_expr(state, type_, name)
+  }
 }
 
 ///|
@@ -3182,7 +3324,16 @@ fn ffi_func_call_args_with_names(
 ) -> Array[String] {
   let args : Array[String] = []
   for i, param in func.params {
-    args.push(ffi_type_js_converter_expr(state, param.type_, names[i]))
+    // `TsParam.is_rest` carries the ARRAY type as written (`...checks:
+    // Check[]` -> `Array(Check)`); the `Rest(element)` shape appears when
+    // the rest-ness lives in the type itself. Both spread.
+    if param.is_rest && !(param.type_ is Rest(_)) {
+      args.push(
+        "...(" + ffi_type_js_converter_expr(state, param.type_, names[i]) + ")",
+      )
+    } else {
+      args.push(ffi_call_arg_with_rest_spread(state, param.type_, names[i]))
+    }
   }
   args
 }
@@ -3195,7 +3346,7 @@ fn ffi_callable_value_call_args_with_names(
 ) -> Array[String] {
   let args : Array[String] = []
   for i, param in params {
-    args.push(ffi_type_js_converter_expr(state, param, names[i]))
+    args.push(ffi_call_arg_with_rest_spread(state, param, names[i]))
   }
   args
 }
@@ -5180,10 +5331,15 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         )
       }
       None =>
+        // Rest params force the bridge glue: a direct `= "sql"` binding
+        // receives the MoonBit array as ONE positional argument, but a
+        // variadic runtime export (`sql(strings, ...values)`) needs the
+        // spread only the glue can produce.
         if ffi_can_use_direct_runtime_export(module_spec, runtime_export_name) &&
           !ffi_runtime_export_requires_bridge(runtime_export_name) &&
           !needs_js_arg_conversion &&
-          !needs_js_return_conversion {
+          !needs_js_return_conversion &&
+          !ffi_import_has_rest_param(import_) {
           push_unique_ffi_section(
             seen_ffi_binding_names,
             ffi_sections,
@@ -5205,7 +5361,9 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
               module_spec, runtime_export_name, binding_name,
             ) {
             Some(reexport_line) =>
-              if !needs_js_arg_conversion && !needs_js_return_conversion {
+              if !needs_js_arg_conversion &&
+                !needs_js_return_conversion &&
+                !ffi_import_has_rest_param(import_) {
                 push_unique_bridge_binding(
                   seen_bridge_binding_names, bridge_lines, binding_name, reexport_line,
                 )
@@ -5400,10 +5558,15 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         )
       }
       None =>
+        // Rest params force the bridge glue: a direct `= "sql"` binding
+        // receives the MoonBit array as ONE positional argument, but a
+        // variadic runtime export (`sql(strings, ...values)`) needs the
+        // spread only the glue can produce.
         if ffi_can_use_direct_runtime_export(module_spec, runtime_export_name) &&
           !ffi_runtime_export_requires_bridge(runtime_export_name) &&
           !needs_js_arg_conversion &&
-          !needs_js_return_conversion {
+          !needs_js_return_conversion &&
+          !ffi_func_has_rest_param(func) {
           push_unique_ffi_section(
             seen_ffi_binding_names,
             ffi_sections,
@@ -5425,7 +5588,9 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
               module_spec, runtime_export_name, binding_name,
             ) {
             Some(reexport_line) =>
-              if !needs_js_arg_conversion && !needs_js_return_conversion {
+              if !needs_js_arg_conversion &&
+                !needs_js_return_conversion &&
+                !ffi_func_has_rest_param(func) {
                 push_unique_bridge_binding(
                   seen_bridge_binding_names, bridge_lines, binding_name, reexport_line,
                 )

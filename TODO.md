@@ -1249,6 +1249,45 @@ that `c.set`s a variable before `next()` with the handler reading it via
   `{id: string}`) is TS type-level computation — same fundamental limit
   as zod's `z.infer`.
 
+### 16. valibot + drizzle run end-to-end; boundary conversion fixes (done 2026-07-16)
+
+Runtime-verified with node against regenerated packages. valibot:
+`parse` / `safeParse` accept/reject and `pipe(string(), [minLength(3)])`
+length validation. drizzle-orm: the `sql` tagged template builds an SQL
+object from MoonBit (template-strings array via a tiny extern) and
+`and_()` combines wrappers.
+
+Four GENERAL boundary fixes fell out (all bugs any handle-round-tripping
+package would hit):
+
+- [x] Enum `to_js` converters are idempotent: a raw library value cast
+  into a struct type carries the JS literal already (valibot's
+  `string()` result flowing back into `parse(schema, ...)` crashed on
+  "unexpected BaseSchemaKind tag: schema").
+- [x] Struct `to_js` converters pass CLASS instances through untouched
+  (MoonBit structs compile to plain objects, so an instance is always a
+  raw library handle — spreading severed drizzle `SQL`'s prototype) and
+  spread plain objects instead of rebuilding from declared fields
+  (rebuilding stripped valibot's `~run` internals). Optional fields
+  delete their key when absent instead of leaving a tagged None.
+- [x] REST parameters spread at the call site in all three glue paths
+  (import / func / callable) — `pipe(schema, ...items)` received the
+  MoonBit array as its first variadic item ("item.~run is not a
+  function"). Imports use `TsImport.param_is_rest`; funcs use
+  `TsParam.is_rest`. Rest-param imports also FORCE the bridge glue —
+  a direct `= "sql"` binding can never spread.
+- [x] The decl emitter's reserved-word list synced to the FFI's 74-name
+  list (`and` / `or` / `not` / ...): drizzle's `and` was emitted as
+  callable `and_` but the mbti/decl surface advertised the uncallable
+  bare name.
+- realworld valibot smoke upgraded from construct-only to
+  safeParse + pipe round-trips.
+- Known cross-cutting gap (same family as zod's raw-typed result
+  fields): matching a `T?` EXTERN RETURN with MoonBit `match` can crash
+  on the raw `value | undefined` repr when MoonBit expects the tagged
+  box — optional extern returns need repr-aware boxing glue. Reads via
+  a small extern accessor work today.
+
 ### Non-Goals (still)
 
 - [ ] Do not turn this list into a checklist for "all of TypeScript". Each item
