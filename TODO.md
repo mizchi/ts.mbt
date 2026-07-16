@@ -1096,6 +1096,101 @@ on nearly every validator (`min`, `max`, `length`, `regex`, ...). The
   corpus may drift downward next time it is regenerated — the budget file
   encodes upper bounds, so this is safe, but expect diffs there.
 
+### 11. zod fallback batch 2: decl-path subset, hidden members, bounds, lib prelude, predicate folding (done 2026-07-15)
+
+Five lowerings driven by the remaining zod JSValue-fallback clusters. zod
+SCAFFOLD fallback entries: 565 -> 241 (and the entries that remain are
+dominated by `data: unknown` params and `unknown | Promise<unknown>`
+callback returns, where `JSValue` is the semantically correct type).
+
+- [x] The string-subset policy now also covers the DECL emitter
+  (`moonbit_type_name` in `parser_moonbit.mbt` mirrors the FFI rule) and
+  accepts `Applied(*Params, ...)` shapes — qualified aliases like
+  `core.$ZodEmailParams` resolve into applied generic aliases the decl
+  layer cannot expand, and previously missed the `Named`-only match.
+  Every classic factory (`email` / `uuid` / `cuid` / ... ~40 fns) and the
+  `ZodString` format methods now take `String?`.
+- [x] `@internal` members are omitted from bridge scaffolds entirely
+  (tsc's stripInternal semantics); `@deprecated` members survive only
+  while they type naturally — one that could only widen to `JSValue`
+  (zod's `_def` / `_input` / `_output`) is dropped. Tags are parsed from
+  member-level JSDoc (`TsInterface.internal_members` /
+  `deprecated_members`), travel through `extends` flattening, and gate
+  both the decl emitter and the FFI struct decl + its bridge.js converter.
+- [x] Constrained generic METHOD type params substitute their bounds at
+  the boundary (`TsInterface.method_type_param_bounds`, applied in
+  `append_interface_origin_fields`): every argument for a
+  `pipe<T extends $ZodType>(target: T)` slot satisfies the bound, so
+  `pipe` / `or` / `and` / `apply` / `refine` keep natural signatures.
+  `brand<T extends PropertyKey>` folds its conditional return to `this`
+  through the same substitution.
+- [x] lib.d.ts prelude: `scripts/gen_lib_globals.sh` missed
+  `declare type` aliases — PropertyKey, PromiseConstructorLike, and the
+  *Decorator aliases are now in the generated registry, and
+  `is_well_known_type_name` delegates to it, so ambient lib types no
+  longer surface as unresolved-reference notes.
+- [x] `extends_decision`: a plain-return function never extends a
+  predicate-return signature (tsc: source "must be a type predicate").
+  Folds `Ch extends (arg: any) => arg is infer R ? ... : this` to its
+  false branch — `refine` returns `Schema[Output, Input, Internals]`
+  instead of `JSValue`.
+- Note: per-package JSValue counts in the env-gated realworld METRICS
+  corpus will drift down on regeneration (budgets are upper bounds).
+
+### 12. Indexed access on constrained type params (done 2026-07-15)
+
+zod: `def: Internals["def"]` / `type: Internals["def"]["type"]` with
+`Internals extends core.$ZodTypeInternals<Output, Input>`.
+Fallback entries 241 -> 225.
+
+- [x] `decl_eval_bound_indexed_access`: a `P["key"]` access whose base is
+  one of the owning interface's CONSTRAINED type parameters resolves by
+  looking the key up in the bound's field surface — through the qualified
+  namespace import (`core.`), the barrel `export * from "./schemas.js"`
+  (new `decl_resolve_interface_origin_deep` walks
+  `record.reexports`), and the bound's own `extends` chain. Chained
+  accesses evaluate inside-out, tracking the module each intermediate
+  name is relative to; resolved names map back to canonical export names
+  where the surface has one. Generic targets substitute supplied type
+  arguments; a field that still references the target's own params
+  without matching arguments is rejected (capture risk) and keeps the
+  old widening.
+- zod: `def : UnderscoreZodTypeDef` (typed opaque handle instead of
+  `JSValue`), `type_ : SchemaType` / `ZodTypeType` (enum of the schema
+  kind literal union).
+
+### 13. zod runs end-to-end from MoonBit (done 2026-07-16)
+
+Runtime-verified (node, `moon test --target js` against the generated
+package): construct -> chain -> `safeParse` -> read the result. The four
+smoke cases: string schema accept/reject, `.email()` format
+validation, `object()` schema over an extern-built shape, and `parse`
+returning the output handle.
+
+- [x] `decl_exclusive_union_alias_interface_spec`: an applied generic
+  alias behind a namespace import / barrel whose body folds through the
+  mutually-exclusive object-union idiom (`{success: true, data: T,
+  error?: never} | {success: false, data?: never, error: E}`)
+  synthesizes a named interface — `safeParse` now returns
+  `pub(all) struct ZodSafeParseResult { success : Bool, data :
+  Core_output, error : ZodError[Core_output] }`. Shared by the lowering
+  and the utility-interface collection walk so the struct is both
+  referenced and emitted. Blanket cross-module alias inlining was
+  measured to REGRESS (225 -> 418 fallbacks) and is deliberately not
+  done; the inline fires only when the fold succeeds.
+- [x] Exclusive fields keep their RAW passthrough type (no Option
+  wrapper): generic-owner method wrappers return the raw JS object
+  without conversion glue, and MoonBit's tagged Option representation
+  crashes on the raw `undefined` the absent branch carries.
+- [x] realworld zod smoke upgraded from construct-only to
+  safeParse success/failure + email format round-trips.
+- Known ergonomic gaps (deliberate, documented): concrete schemas
+  (ZodString...) need `unsafeCast` to `Schema[...]` to reach
+  `parse` / `safeParse` (generic base expansion is future work);
+  `object()`'s shape is built with a small extern (`Record<string, any>`
+  aliases stay opaque — the StringRecordOf* synthetics are equally
+  unconstructible today).
+
 ### Non-Goals (still)
 
 - [ ] Do not turn this list into a checklist for "all of TypeScript". Each item

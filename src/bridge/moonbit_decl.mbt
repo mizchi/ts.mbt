@@ -2876,6 +2876,9 @@ fn props_with_children_named_interface_spec(
         index_signatures: origin.iface.index_signatures,
         type_param_bounds: [],
         method_type_params: [],
+        method_type_param_bounds: [],
+        internal_members: [],
+        deprecated_members: [],
       })
     }
     None => None
@@ -2927,6 +2930,9 @@ fn props_with_children_interface_spec(
         index_signatures: [],
         type_param_bounds: [],
         method_type_params: [],
+        method_type_param_bounds: [],
+        internal_members: [],
+        deprecated_members: [],
       })
     }
     _ =>
@@ -3043,6 +3049,9 @@ fn component_props_with_ref_interface_spec(
             index_signatures: origin.iface.index_signatures,
             type_param_bounds: [],
             method_type_params: [],
+            method_type_param_bounds: [],
+            internal_members: [],
+            deprecated_members: [],
           })
         }
         None => None
@@ -3209,6 +3218,9 @@ fn utility_mapped_interface_spec(
         index_signatures: origin.iface.index_signatures,
         type_param_bounds: [],
         method_type_params: [],
+        method_type_param_bounds: [],
+        internal_members: [],
+        deprecated_members: [],
       })
     }
     None => None
@@ -3273,6 +3285,9 @@ fn utility_projection_interface_spec(
         index_signatures: [],
         type_param_bounds: [],
         method_type_params: [],
+        method_type_param_bounds: [],
+        internal_members: [],
+        deprecated_members: [],
       })
     }
     None => None
@@ -4079,6 +4094,9 @@ fn type_alias_record_to_interface_fields(
     index_signatures: [],
     type_param_bounds: [],
     method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members: [],
+    deprecated_members: [],
   })
 }
 
@@ -4170,6 +4188,9 @@ fn project_interface_fields(
     index_signatures: [],
     type_param_bounds: [],
     method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members: [],
+    deprecated_members: [],
   })
 }
 
@@ -4201,6 +4222,9 @@ fn map_interface_fields(
     index_signatures: iface.index_signatures,
     type_param_bounds: [],
     method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members: [],
+    deprecated_members: [],
   })
 }
 
@@ -4266,6 +4290,9 @@ fn type_alias_object_to_interface(
         index_signatures: [],
         type_param_bounds: [],
         method_type_params: [],
+        method_type_param_bounds: [],
+        internal_members: [],
+        deprecated_members: [],
       })
     }
     _ => None
@@ -4678,6 +4705,323 @@ fn applied_type_alias(
   }
 }
 
+///|
+/// `find_type_alias_decl` plus qualified-namespace redirect and
+/// `export * from "./sub.js"` barrel traversal, mirroring
+/// `decl_resolve_interface_origin_deep`: zod's `parse.ZodSafeParseResult`
+/// names a generic alias declared behind the `parse` namespace import.
+fn decl_find_type_alias_deep(
+  info : DeclModuleInfo,
+  modules : Map[String, DeclModuleInfo],
+  name : String,
+  visited_paths : Array[String],
+) -> (@ast.TsTypeAlias, DeclModuleInfo)? {
+  let (lookup_info, tail) = match
+    redirect_qualified_named(info, modules, Named(name)) {
+    (target_info, Named(t)) => (target_info, t)
+    _ => (info, name)
+  }
+  decl_find_type_alias_deep_local(lookup_info, modules, tail, visited_paths)
+}
+
+///|
+fn decl_find_type_alias_deep_local(
+  info : DeclModuleInfo,
+  modules : Map[String, DeclModuleInfo],
+  name : String,
+  visited_paths : Array[String],
+) -> (@ast.TsTypeAlias, DeclModuleInfo)? {
+  if visited_paths.contains(info.record.path) {
+    return None
+  }
+  visited_paths.push(info.record.path)
+  match find_type_alias_decl(info.module_, name) {
+    Some(ta) => return Some((ta, info))
+    None => ()
+  }
+  for edge in info.record.reexports {
+    match edge.kind {
+      All =>
+        match modules.get(edge.resolved_path) {
+          Some(target_info) =>
+            match
+              decl_find_type_alias_deep_local(
+                target_info, modules, name, visited_paths,
+              ) {
+              Some(found) => return Some(found)
+              None => ()
+            }
+          None => ()
+        }
+      _ => ()
+    }
+  }
+  None
+}
+
+///|
+/// Inline an applied generic alias that lives behind a namespace import /
+/// barrel (`parse.ZodSafeParseResult<T>`): substitute the type arguments,
+/// lower the body IN ITS DECLARING MODULE so nested names resolve, fold
+/// mutually-exclusive object unions, and map the result's names back to
+/// canonical export names.
+fn decl_inline_qualified_applied_alias(
+  info : DeclModuleInfo,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+  name : String,
+  args : Array[@ast.TsType],
+) -> @ast.TsType? {
+  match
+    decl_exclusive_union_alias_interface_spec(
+      info, modules, canonical_types, name, args,
+    ) {
+    Some(iface) => Some(Named(iface.name))
+    None => None
+  }
+}
+
+///|
+/// Synthesize a named interface for an applied generic alias whose body
+/// folds through the mutually-exclusive object-union idiom
+/// (`parse.ZodSafeParseResult<T>` -> interface ZodSafeParseResult
+/// {success: boolean, data?: ..., error?: ...}). Blanket cross-module
+/// alias inlining regresses more than it fixes, so this fires ONLY when
+/// the fold succeeds; everything else keeps the opaque named reference.
+/// Shared by the lowering and the utility-interface collection walk so
+/// the synthesized struct is both referenced and emitted.
+fn decl_exclusive_union_alias_interface_spec(
+  info : DeclModuleInfo,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+  name : String,
+  args : Array[@ast.TsType],
+) -> @ast.TsInterface? {
+  let (ta, ta_info) = match decl_find_type_alias_deep(info, modules, name, []) {
+    Some(found) => found
+    None => return None
+  }
+  if ta.type_params.length() != args.length() || args.length() == 0 {
+    return None
+  }
+  if type_alias_is_recursive(ta_info.module_, ta) {
+    return None
+  }
+  let substituted = substitute_type_alias_params(ta.type_, ta.type_params, args)
+  let lowered = lower_react_utility_type(
+    ta_info, substituted, modules, canonical_types,
+  )
+  let joined = match decl_join_never_exclusive_object_union(lowered) {
+    Some(j) => decl_rewrite_names_to_exports(ta_info, canonical_types, j)
+    None => return None
+  }
+  let iface_fields : Array[(String, @ast.TsType)] = []
+  match joined {
+    Object(fields) =>
+      for f in fields {
+        match f.0 {
+          @ast.TsType::Literal(key) => iface_fields.push((key, f.1))
+          _ => return None
+        }
+      }
+    _ => return None
+  }
+  let iface_name = decl_alias_synthetic_interface_name(name)
+  if iface_name == "" {
+    return None
+  }
+  Some({
+    name: iface_name,
+    type_params: [],
+    type_param_bounds: [],
+    extends_names: [],
+    extends_args: [],
+    fields: iface_fields,
+    readonly_fields: [],
+    index_signatures: [],
+    method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members: [],
+    deprecated_members: [],
+  })
+}
+
+///|
+/// `parse.ZodSafeParseResult` -> `ZodSafeParseResult`: unqualified tail,
+/// leading `$` / `_` markers stripped. Empty when nothing valid remains.
+fn decl_alias_synthetic_interface_name(name : String) -> String {
+  let tail = match name.rev_find(".") {
+    Some(pos) => name[pos + 1:].to_owned()
+    None => name
+  }
+  let mut idx = 0
+  while idx < tail.length() &&
+        (tail[idx].unsafe_to_char() == '$' || tail[idx].unsafe_to_char() == '_') {
+    idx += 1
+  }
+  let core = tail[idx:tail.length()].to_owned()
+  for c in core {
+    if !((c >= 'A' && c <= 'Z') ||
+      (c >= 'a' && c <= 'z') ||
+      (c >= '0' && c <= '9') ||
+      c == '_') {
+      return ""
+    }
+  }
+  core
+}
+
+///|
+fn decl_type_is_never_ish(t : @ast.TsType) -> Bool {
+  match t {
+    Never => true
+    Union(items) => {
+      for it in items {
+        match it {
+          Never | Undefined => ()
+          _ => return false
+        }
+      }
+      items.length() > 0
+    }
+    _ => false
+  }
+}
+
+///|
+/// Fold the mutually-exclusive-fields idiom into one object shape:
+/// `{success: true, data: T, error?: never} | {success: false,
+/// data?: never, error: E}` (zod's ZodSafeParseResult) becomes
+/// `{success: boolean, data?: T, error?: E}`. Only fires when every
+/// member is an object literal over the SAME literal key set, boolean
+/// discriminants disagree, and each remaining key is either identical
+/// across members or `?: never` in the members that lack it — that
+/// guarantee makes the join faithful for reads.
+fn decl_join_never_exclusive_object_union(t : @ast.TsType) -> @ast.TsType? {
+  let members = match t {
+    Union(items) => items
+    _ => return None
+  }
+  if members.length() < 2 {
+    return None
+  }
+  let shapes : Array[Array[(String, @ast.TsType)]] = []
+  for member in members {
+    let fields = match member {
+      Object(fields) => fields
+      _ => return None
+    }
+    let shape : Array[(String, @ast.TsType)] = []
+    for f in fields {
+      match f.0 {
+        @ast.TsType::Literal(key) => shape.push((key, f.1))
+        _ => return None
+      }
+    }
+    shapes.push(shape)
+  }
+  fn shape_lookup(
+    shape : Array[(String, @ast.TsType)],
+    key : String,
+  ) -> @ast.TsType? {
+    for entry in shape {
+      if entry.0 == key {
+        return Some(entry.1)
+      }
+    }
+    None
+  }
+
+  let out : Array[(@ast.TsType, @ast.TsType)] = []
+  let mut saw_disagreeing_bool = false
+  for entry in shapes[0] {
+    let (key, _) = entry
+    let per_member : Array[@ast.TsType] = []
+    for shape in shapes {
+      match shape_lookup(shape, key) {
+        Some(ty) => per_member.push(ty)
+        // Same-key-set requirement: a key missing from any member
+        // breaks the idiom.
+        None => return None
+      }
+    }
+    let mut all_bool_literal = true
+    let mut all_equal = true
+    for ty in per_member {
+      if !(ty is BooleanLiteral(_)) {
+        all_bool_literal = false
+      }
+      if ty != per_member[0] {
+        all_equal = false
+      }
+    }
+    if all_equal {
+      out.push((Literal(key), per_member[0]))
+      continue
+    }
+    if all_bool_literal {
+      saw_disagreeing_bool = true
+      out.push((Literal(key), Boolean))
+      continue
+    }
+    // Exclusive field: `?: never` wherever it is absent, one real type
+    // everywhere else.
+    let mut real : @ast.TsType? = None
+    let mut saw_never = false
+    for ty in per_member {
+      if decl_type_is_never_ish(ty) {
+        saw_never = true
+      } else {
+        match real {
+          None => real = Some(ty)
+          Some(existing) => if existing != ty { return None }
+        }
+      }
+    }
+    match (real, saw_never) {
+      // The exclusive field keeps its RAW type, not an Option wrapper:
+      // the generic-owner method wrappers return the zod result object
+      // without conversion glue, and MoonBit's tagged Option
+      // representation crashes on the raw `undefined` the absent branch
+      // carries. An opaque passthrough handle tolerates undefined; the
+      // boolean discriminant gates which field is populated.
+      (Some(real_ty), true) => {
+        let bare = match real_ty {
+          Union(items) => {
+            let kept : Array[@ast.TsType] = []
+            for it in items {
+              match it {
+                Undefined | Never => ()
+                other => kept.push(other)
+              }
+            }
+            if kept.length() == 1 {
+              kept[0]
+            } else if kept.length() > 1 {
+              Union(kept)
+            } else {
+              return None
+            }
+          }
+          _ => real_ty
+        }
+        out.push((Literal(key), bare))
+      }
+      _ => return None
+    }
+  }
+  // Every member must contribute only keys the first member has.
+  for shape in shapes {
+    if shape.length() != shapes[0].length() {
+      return None
+    }
+  }
+  if !saw_disagreeing_bool {
+    return None
+  }
+  Some(Object(out))
+}
+
 // `decl_infer_marker_name`, `decl_match_infer_pattern`, and
 // `decl_substitute_inferred_type` were duplicates of the helpers now in
 // `mizchi/ts/checker`. Bridge calls `@checker.match_infer_pattern` etc.
@@ -5074,15 +5418,25 @@ fn lower_react_utility_type(
       match applied_type_alias(info, name, args) {
         Some(resolved) =>
           lower_react_utility_type(info, resolved, modules, canonical_types)
-        None => {
-          let next_args : Array[@ast.TsType] = []
-          for arg in args {
-            next_args.push(
-              lower_react_utility_type(info, arg, modules, canonical_types),
-            )
+        None =>
+          // Cross-module / namespace-qualified generic aliases
+          // (`parse.ZodSafeParseResult<T>`) inline through the deep
+          // alias lookup; the same-module fast path above stays first.
+          match
+            decl_inline_qualified_applied_alias(
+              info, modules, canonical_types, name, args,
+            ) {
+            Some(inlined) => inlined
+            None => {
+              let next_args : Array[@ast.TsType] = []
+              for arg in args {
+                next_args.push(
+                  lower_react_utility_type(info, arg, modules, canonical_types),
+                )
+              }
+              Applied(name, next_args)
+            }
           }
-          Applied(name, next_args)
-        }
       }
     }
     TemplateLiteralType(parts, type_args) => {
@@ -5361,12 +5715,35 @@ fn collect_react_utility_interfaces_from_type(
         info, filter_type, modules, canonical_types, seen_names, interfaces,
       )
     }
-    Applied(_, args) =>
+    Applied(name, args) => {
+      // Mirror of the lowering's exclusive-union alias inline
+      // (`parse.ZodSafeParseResult<T>` -> synthesized interface): the
+      // lowering emits `Named(ZodSafeParseResult)`, this walk registers
+      // the interface body so it gets a struct decl.
+      match
+        decl_exclusive_union_alias_interface_spec(
+          info, modules, canonical_types, name, args,
+        ) {
+        Some(iface) => {
+          if !seen_names.contains(iface.name) {
+            seen_names.push(iface.name)
+            interfaces.push(iface)
+          }
+          for field in iface.fields {
+            let (_, field_type) = field
+            collect_react_utility_interfaces_from_type(
+              info, field_type, modules, canonical_types, seen_names, interfaces,
+            )
+          }
+        }
+        None => ()
+      }
       for arg in args {
         collect_react_utility_interfaces_from_type(
           info, arg, modules, canonical_types, seen_names, interfaces,
         )
       }
+    }
     Array(inner) =>
       collect_react_utility_interfaces_from_type(
         info, inner, modules, canonical_types, seen_names, interfaces,
@@ -5589,6 +5966,9 @@ fn tuple_result_interface_spec(
           index_signatures: [],
           type_param_bounds: [],
           method_type_params: [],
+          method_type_param_bounds: [],
+          internal_members: [],
+          deprecated_members: [],
         },
       })
     }
@@ -5637,6 +6017,9 @@ fn inline_object_result_interface_spec(
           index_signatures: [],
           type_param_bounds: [],
           method_type_params: [],
+          method_type_param_bounds: [],
+          internal_members: [],
+          deprecated_members: [],
         },
       })
     None => None
@@ -5994,6 +6377,9 @@ fn normalize_specialized_node_interfaces(
       index_signatures: [],
       type_param_bounds: [],
       method_type_params: [],
+      method_type_param_bounds: [],
+      internal_members: [],
+      deprecated_members: [],
     })
   }
   if needs_crypto_helpers {
@@ -6008,6 +6394,9 @@ fn normalize_specialized_node_interfaces(
         index_signatures: [],
         type_param_bounds: [],
         method_type_params: [],
+        method_type_param_bounds: [],
+        internal_members: [],
+        deprecated_members: [],
       })
     }
     if !exported_names.contains("GenerateKeyOptions") {
@@ -6021,6 +6410,9 @@ fn normalize_specialized_node_interfaces(
         index_signatures: [],
         type_param_bounds: [],
         method_type_params: [],
+        method_type_param_bounds: [],
+        internal_members: [],
+        deprecated_members: [],
       })
     }
     if !exported_names.contains("DiffieHellmanOptions") {
@@ -6037,6 +6429,9 @@ fn normalize_specialized_node_interfaces(
         index_signatures: [],
         type_param_bounds: [],
         method_type_params: [],
+        method_type_param_bounds: [],
+        internal_members: [],
+        deprecated_members: [],
       })
     }
   }
@@ -6055,6 +6450,9 @@ fn normalize_specialized_node_interfaces(
       index_signatures: [],
       type_param_bounds: [],
       method_type_params: [],
+      method_type_param_bounds: [],
+      internal_members: [],
+      deprecated_members: [],
     })
   }
   interfaces
@@ -6125,12 +6523,27 @@ fn append_interface_origin_fields(
   readonly_fields : Array[String],
   seen_field_names : Array[String],
   seen_origins : Array[String],
+  internal_members : Array[String],
+  deprecated_members : Array[String],
 ) -> Unit {
   let origin_key = decl_key(origin.info.record.path, origin.iface.name)
   if seen_origins.contains(origin_key) {
     return
   }
   seen_origins.push(origin_key)
+  // `@internal` / `@deprecated` tags travel with the member into the
+  // flattened derived surface: `_def` is declared (and tagged) on the
+  // root `ZodType` but reaches consumers through every derived schema.
+  for name in origin.iface.internal_members {
+    if !internal_members.contains(name) {
+      internal_members.push(name)
+    }
+  }
+  for name in origin.iface.deprecated_members {
+    if !deprecated_members.contains(name) {
+      deprecated_members.push(name)
+    }
+  }
   for base_name in origin.iface.extends_names {
     match
       resolve_interface_origin(origin.info, base_name, modules, canonical_types) {
@@ -6141,7 +6554,7 @@ fn append_interface_origin_fields(
           // derived type, and only the root's type params are in scope.
           append_interface_origin_fields(
             base_origin, this_owner, modules, canonical_types, fields, readonly_fields,
-            seen_field_names, seen_origins,
+            seen_field_names, seen_origins, internal_members, deprecated_members,
           )
         }
       None => ()
@@ -6149,6 +6562,23 @@ fn append_interface_origin_fields(
   }
   for field in origin.iface.fields {
     let (field_name, field_type) = field
+    // A generic METHOD's constrained type parameters are substituted with
+    // their bounds at the bridge boundary: every argument for a
+    // `pipe<T extends $ZodType>(target: T)` slot satisfies `$ZodType`, so
+    // the boundary typed at the bound is sound for params and keeps the
+    // member natural instead of widening the `T` references to `JSValue`.
+    // Unconstrained method generics keep the existing widening.
+    let bounded_type = decl_eval_bound_indexed_access(
+      origin,
+      modules,
+      canonical_types,
+      decl_substitute_method_type_param_bounds(
+        origin.iface,
+        field_name,
+        field_type,
+      ),
+      0,
+    )
     append_lowered_interface_field(
       fields,
       readonly_fields,
@@ -6157,12 +6587,428 @@ fn append_interface_origin_fields(
       origin.export_name,
       this_owner,
       field_name,
-      field_type,
+      bounded_type,
       origin.iface.readonly_fields.contains(field_name),
       modules,
       canonical_types,
     )
   }
+}
+
+///|
+/// Evaluate `P["key"]` indexed accesses whose base is one of the owning
+/// interface's CONSTRAINED type parameters by looking the key up in the
+/// bound's field surface (zod: `def: Internals["def"]` with
+/// `Internals extends $ZodTypeInternals<O, I>` resolves through the
+/// bound's extends chain to `$ZodTypeDef`). Chained accesses
+/// (`Internals["def"]["type"]`) evaluate inside-out. Anything that cannot
+/// be resolved keeps its original shape and widens as before.
+fn decl_eval_bound_indexed_access(
+  origin : ResolvedInterfaceOrigin,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+  t : @ast.TsType,
+  depth : Int,
+) -> @ast.TsType {
+  if depth > 8 {
+    return t
+  }
+  fn go(x : @ast.TsType) -> @ast.TsType {
+    decl_eval_bound_indexed_access(
+      origin,
+      modules,
+      canonical_types,
+      x,
+      depth + 1,
+    )
+  }
+
+  match t {
+    IndexedAccess(_, _) =>
+      match
+        decl_eval_indexed_chain(origin, modules, canonical_types, t, depth) {
+        Some((resolved, resolved_info)) =>
+          // The resolved field type's names live in the module that
+          // declares the looked-up interface; map them to canonical
+          // export names where the surface has one so later passes
+          // resolve them like any other exported reference.
+          decl_rewrite_names_to_exports(
+            resolved_info, canonical_types, resolved,
+          )
+        None => t
+      }
+    Func(ps, r) => {
+      let out : Array[@ast.TsType] = []
+      for p in ps {
+        out.push(go(p))
+      }
+      Func(out, go(r))
+    }
+    Union(items) => {
+      let out : Array[@ast.TsType] = []
+      for it in items {
+        out.push(go(it))
+      }
+      Union(out)
+    }
+    Array(inner) => Array(go(inner))
+    Applied(n, args) => {
+      let out : Array[@ast.TsType] = []
+      for a in args {
+        out.push(go(a))
+      }
+      Applied(n, out)
+    }
+    Tuple(items) => {
+      let out : Array[@ast.TsType] = []
+      for it in items {
+        out.push(go(it))
+      }
+      Tuple(out)
+    }
+    _ => t
+  }
+}
+
+///|
+fn decl_iface_type_param_bound(
+  iface : @ast.TsInterface,
+  param : String,
+) -> @ast.TsType? {
+  if !iface.type_params.contains(param) {
+    return None
+  }
+  for pair in iface.type_param_bounds {
+    let (name, bound) = pair
+    if name == param {
+      return Some(bound)
+    }
+  }
+  None
+}
+
+///|
+/// Resolve an `IndexedAccess` chain to its field type, tracking the module
+/// whose namespace the intermediate names live in: `Internals["def"]`
+/// looks the key up in the BOUND's declaring module (core), and the
+/// chained `["type"]` must resolve `$ZodTypeDef` there, not in the entry.
+/// Returns the resolved type together with that module.
+fn decl_eval_indexed_chain(
+  origin : ResolvedInterfaceOrigin,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+  t : @ast.TsType,
+  depth : Int,
+) -> (@ast.TsType, DeclModuleInfo)? {
+  if depth > 8 {
+    return None
+  }
+  match t {
+    IndexedAccess(base, key) => {
+      let key_name = match key {
+        @ast.TsType::Literal(k) => k
+        _ => return None
+      }
+      let (base_ty, base_info) = match
+        decl_eval_indexed_chain(
+          origin,
+          modules,
+          canonical_types,
+          base,
+          depth + 1,
+        ) {
+        Some(pair) => pair
+        None => return None
+      }
+      // A constrained type parameter of the OWNING interface stands in
+      // for its bound: any instantiation's `P["key"]` is the bound's
+      // `key` member (or a subtype), so the bound's field type is a
+      // sound upper approximation for the boundary.
+      let resolved_base = match base_ty {
+        Named(p) if base_info.record.path == origin.info.record.path =>
+          match decl_iface_type_param_bound(origin.iface, p) {
+            Some(bound) => bound
+            None => base_ty
+          }
+        _ => base_ty
+      }
+      decl_lookup_field_in_named_interface(
+        base_info, modules, canonical_types, resolved_base, key_name,
+      )
+    }
+    Named(_) | Applied(_, _) => Some((t, origin.info))
+    _ => None
+  }
+}
+
+///|
+/// Look `key` up in the field surface of the interface `base_ty` names,
+/// walking its `extends` chain. Generic targets substitute their supplied
+/// type arguments; a found field that still references the target's own
+/// type parameters without matching arguments is rejected (capture risk).
+/// Returns the field type and the module its names are relative to.
+fn decl_lookup_field_in_named_interface(
+  lookup_from : DeclModuleInfo,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+  base_ty : @ast.TsType,
+  key : String,
+) -> (@ast.TsType, DeclModuleInfo)? {
+  let (raw_name, args) = match base_ty {
+    Named(n) => (n, ([] : Array[@ast.TsType]))
+    Applied(n, type_args) => (n, type_args)
+    _ => return None
+  }
+  // Bounds are routinely qualified (`core.$ZodTypeInternals<O, I>`):
+  // resolve the namespace-import head to its source module first.
+  let (lookup_info, name) = match
+    redirect_qualified_named(lookup_from, modules, Named(raw_name)) {
+    (target_info, Named(tail)) => (target_info, tail)
+    _ => (lookup_from, raw_name)
+  }
+  let visited_paths : Array[String] = []
+  let target = match
+    decl_resolve_interface_origin_deep(
+      lookup_info, name, modules, canonical_types, visited_paths,
+    ) {
+    Some(t) => t
+    None => return None
+  }
+  let visited : Array[String] = []
+  let found = match
+    decl_lookup_field_via_extends(
+      target, key, modules, canonical_types, visited,
+    ) {
+    Some(f) => f
+    None => return None
+  }
+  let target_params = target.iface.type_params
+  if decl_type_references_any_param(found, target_params) {
+    if target_params.length() > 0 && args.length() == target_params.length() {
+      return Some(
+        (substitute_type_alias_params(found, target_params, args), target.info),
+      )
+    }
+    return None
+  }
+  Some((found, target.info))
+}
+
+///|
+/// Rewrite `Named` / `Applied` heads to their canonical export names when
+/// the bridge surface has one, so a type resolved in another module's
+/// namespace links up with the emitted structs instead of degrading to an
+/// opaque companion.
+fn decl_rewrite_names_to_exports(
+  info : DeclModuleInfo,
+  canonical_types : Map[String, String],
+  t : @ast.TsType,
+) -> @ast.TsType {
+  fn go(x : @ast.TsType) -> @ast.TsType {
+    decl_rewrite_names_to_exports(info, canonical_types, x)
+  }
+
+  match t {
+    Named(n) =>
+      match resolve_exported_type_name(info, n, canonical_types) {
+        Some(export_name) => Named(export_name)
+        None => t
+      }
+    Applied(n, args) => {
+      let out : Array[@ast.TsType] = []
+      for a in args {
+        out.push(go(a))
+      }
+      match resolve_exported_type_name(info, n, canonical_types) {
+        Some(export_name) => Applied(export_name, out)
+        None => Applied(n, out)
+      }
+    }
+    Union(items) => {
+      let out : Array[@ast.TsType] = []
+      for it in items {
+        out.push(go(it))
+      }
+      Union(out)
+    }
+    Array(inner) => Array(go(inner))
+    Func(ps, r) => {
+      let out : Array[@ast.TsType] = []
+      for p in ps {
+        out.push(go(p))
+      }
+      Func(out, go(r))
+    }
+    _ => t
+  }
+}
+
+///|
+/// `resolve_interface_origin` plus `export * from "./sub.js"` barrel
+/// traversal: zod's `core/index.d.ts` only re-exports, so
+/// `core.$ZodTypeInternals` is declared one star-re-export hop away.
+fn decl_resolve_interface_origin_deep(
+  info : DeclModuleInfo,
+  name : String,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+  visited_paths : Array[String],
+) -> ResolvedInterfaceOrigin? {
+  if visited_paths.contains(info.record.path) {
+    return None
+  }
+  visited_paths.push(info.record.path)
+  match resolve_interface_origin(info, name, modules, canonical_types) {
+    Some(t) => return Some(t)
+    None => ()
+  }
+  for edge in info.record.reexports {
+    match edge.kind {
+      All =>
+        match modules.get(edge.resolved_path) {
+          Some(target_info) =>
+            match
+              decl_resolve_interface_origin_deep(
+                target_info, name, modules, canonical_types, visited_paths,
+              ) {
+              Some(found) => return Some(found)
+              None => ()
+            }
+          None => ()
+        }
+      _ => ()
+    }
+  }
+  None
+}
+
+///|
+fn decl_lookup_field_via_extends(
+  target : ResolvedInterfaceOrigin,
+  key : String,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+  visited : Array[String],
+) -> @ast.TsType? {
+  let target_key = decl_key(target.info.record.path, target.iface.name)
+  if visited.contains(target_key) {
+    return None
+  }
+  visited.push(target_key)
+  for field in target.iface.fields {
+    if field.0 == key {
+      return Some(field.1)
+    }
+  }
+  for base_name in target.iface.extends_names {
+    match
+      resolve_interface_origin(target.info, base_name, modules, canonical_types) {
+      Some(base_origin) =>
+        match
+          decl_lookup_field_via_extends(
+            base_origin, key, modules, canonical_types, visited,
+          ) {
+          Some(found) =>
+            // A base-declared field may reference the BASE's own type
+            // parameters; without the derived interface's extends_args
+            // substitution this would capture — bail conservatively.
+            if decl_type_references_any_param(
+                found,
+                base_origin.iface.type_params,
+              ) {
+              return None
+            } else {
+              return Some(found)
+            }
+          None => ()
+        }
+      None => ()
+    }
+  }
+  None
+}
+
+///|
+fn decl_type_references_any_param(
+  t : @ast.TsType,
+  params : Array[String],
+) -> Bool {
+  if params.length() == 0 {
+    return false
+  }
+  fn go(x : @ast.TsType) -> Bool {
+    decl_type_references_any_param(x, params)
+  }
+
+  match t {
+    Named(n) => params.contains(n)
+    Applied(n, args) => {
+      if params.contains(n) {
+        return true
+      }
+      for a in args {
+        if go(a) {
+          return true
+        }
+      }
+      false
+    }
+    Array(inner) | Rest(inner) | Keyof(inner) => go(inner)
+    Union(items) | Intersection(items) | Tuple(items) => {
+      for it in items {
+        if go(it) {
+          return true
+        }
+      }
+      false
+    }
+    Func(ps, r) => {
+      for p in ps {
+        if go(p) {
+          return true
+        }
+      }
+      go(r)
+    }
+    Object(fields) => {
+      for f in fields {
+        if go(f.0) || go(f.1) {
+          return true
+        }
+      }
+      false
+    }
+    IndexedAccess(base, k) => go(base) || go(k)
+    Conditional(a, b, c, d) => go(a) || go(b) || go(c) || go(d)
+    _ => false
+  }
+}
+
+///|
+fn decl_substitute_method_type_param_bounds(
+  iface : @ast.TsInterface,
+  field_name : String,
+  field_type : @ast.TsType,
+) -> @ast.TsType {
+  let mut bounds : Array[(String, @ast.TsType)] = []
+  for entry in iface.method_type_param_bounds {
+    let (member_name, member_bounds) = entry
+    if member_name == field_name {
+      bounds = member_bounds
+      break
+    }
+  }
+  if bounds.length() == 0 {
+    return field_type
+  }
+  let params : Array[String] = []
+  let args : Array[@ast.TsType] = []
+  for pair in bounds {
+    let (param_name, bound) = pair
+    params.push(param_name)
+    args.push(bound)
+  }
+  substitute_type_alias_params(field_type, params, args)
 }
 
 ///|
@@ -6175,6 +7021,8 @@ fn clone_resolved_interface_origin(
   let readonly_fields : Array[String] = []
   let seen_field_names : Array[String] = []
   let seen_origins : Array[String] = []
+  let internal_members : Array[String] = []
+  let deprecated_members : Array[String] = []
   append_interface_origin_fields(
     origin,
     decl_this_owner_type(origin.export_name, origin.iface.type_params),
@@ -6184,6 +7032,8 @@ fn clone_resolved_interface_origin(
     readonly_fields,
     seen_field_names,
     seen_origins,
+    internal_members,
+    deprecated_members,
   )
   {
     name: origin.export_name,
@@ -6195,6 +7045,9 @@ fn clone_resolved_interface_origin(
     index_signatures: origin.iface.index_signatures,
     type_param_bounds: [],
     method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members,
+    deprecated_members,
   }
 }
 
@@ -6522,6 +7375,8 @@ fn clone_exported_interface(
   let readonly_fields : Array[String] = []
   let seen_field_names : Array[String] = []
   let seen_origins : Array[String] = []
+  let internal_members : Array[String] = []
+  let deprecated_members : Array[String] = []
   append_interface_origin_fields(
     { info, export_name: exported.export_name, iface: exported.iface },
     decl_this_owner_type(exported.export_name, exported.iface.type_params),
@@ -6531,6 +7386,8 @@ fn clone_exported_interface(
     readonly_fields,
     seen_field_names,
     seen_origins,
+    internal_members,
+    deprecated_members,
   )
   {
     name: exported.export_name,
@@ -6542,6 +7399,9 @@ fn clone_exported_interface(
     index_signatures: exported.iface.index_signatures,
     type_param_bounds: [],
     method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members,
+    deprecated_members,
   }
 }
 

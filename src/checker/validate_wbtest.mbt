@@ -44,6 +44,9 @@ fn iface(
     index_signatures: [],
     type_param_bounds: [],
     method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members: [],
+    deprecated_members: [],
   }
 }
 
@@ -120,6 +123,9 @@ test "validate_module: ignores generic parameters in scope" {
     index_signatures: [],
     type_param_bounds: [],
     method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members: [],
+    deprecated_members: [],
   })
   let unresolved = unresolved_type_references(mod)
   assert_eq(unresolved.length(), 0)
@@ -156,4 +162,50 @@ test "validate_module: still surfaces genuinely undeclared function refs" {
   let unresolved = unresolved_type_references(mod)
   assert_eq(unresolved.length(), 1)
   assert_eq(unresolved[0], "Missing")
+}
+
+///|
+test "validate_module: lib.d.ts ambient type aliases resolve (PropertyKey)" {
+  // `declare type` lib aliases (PropertyKey, PromiseConstructorLike, the
+  // *Decorator aliases) come from the generated lib-globals registry; a
+  // reference to them is never an unresolved type.
+  let module_ = {
+    ..empty_module(),
+    funcs: [
+      {
+        name: "brand",
+        type_params: [],
+        const_type_params: [],
+        type_param_bounds: [],
+        params: [
+          {
+            name: "value",
+            binding: None,
+            type_: @ast.TsType::Named("PropertyKey"),
+            default: None,
+            is_rest: false,
+          },
+          {
+            name: "dec",
+            binding: None,
+            type_: @ast.TsType::Named("ClassDecorator"),
+            default: None,
+            is_rest: false,
+          },
+          {
+            name: "tpl",
+            binding: None,
+            type_: @ast.TsType::Named("TemplateStringsArray"),
+            default: None,
+            is_rest: false,
+          },
+        ],
+        return_type: @ast.TsType::Applied("ThisType", [@ast.TsType::String_]),
+        body: { stmts: [], stmt_positions: [] },
+        is_generator: false,
+        is_async: false,
+      },
+    ],
+  }
+  assert_eq(unresolved_type_references(module_), [])
 }

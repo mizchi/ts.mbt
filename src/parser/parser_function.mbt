@@ -1325,7 +1325,27 @@ pub fn Parser::parse_interface(
   let readonly_fields : Array[String] = []
   let index_signatures : Array[(@ast.TsType, @ast.TsType)] = []
   let method_type_params : Array[(String, Array[String])] = []
+  let method_type_param_bounds : Array[(String, Array[(String, @ast.TsType)])] = []
+  let internal_members : Array[String] = []
+  let deprecated_members : Array[String] = []
   while !self.check(RBrace) && !self.check(Eof) {
+    // A JSDoc block directly above the member attaches to its first
+    // token (which may be a `readonly` / accessibility modifier, so the
+    // position is captured before modifier consumption). `@internal` /
+    // `@deprecated` tags are recorded per member name below.
+    let mut member_is_internal = false
+    let mut member_is_deprecated = false
+    match self.jsdoc_at_pos.get(self.peek().pos) {
+      Some(jb) =>
+        for t in jb.tags {
+          match t {
+            Internal => member_is_internal = true
+            Deprecated(_) => member_is_deprecated = true
+            _ => ()
+          }
+        }
+      None => ()
+    }
     // TS1070: an accessibility modifier (`private` / `public` / `protected`)
     // is never valid on an interface member. Record it, consume the keyword,
     // and parse the member as usual (the `readonly` modifier — which IS legal —
@@ -1651,8 +1671,10 @@ pub fn Parser::parse_interface(
     // Capture method-level type parameters `<T>` so the checker can keep
     // a generic method's shadowing type parameter distinct from the
     // interface's own. (Only meaningful for method signatures; harmless
-    // on properties, which never carry `<...>`.)
-    let (m_type_params, _) = self.parse_type_param_names_and_bounds()
+    // on properties, which never carry `<...>`.) Constraint bounds are
+    // kept alongside so the bridge can substitute them at the FFI
+    // boundary (`pipe<T extends $ZodType>` types its param as `$ZodType`).
+    let (m_type_params, m_type_param_bounds) = self.parse_type_param_names_and_bounds()
     // Check for optional marker ?
     let is_optional = self.match_(Question)
     // Method signature: name(...): T or name<T>(...): U
@@ -1696,6 +1718,9 @@ pub fn Parser::parse_interface(
         )
         if m_type_params.length() > 0 {
           method_type_params.push((field_name, m_type_params))
+          if m_type_param_bounds.length() > 0 {
+            method_type_param_bounds.push((field_name, m_type_param_bounds))
+          }
         }
       }
     } else if self.check(Colon) {
@@ -1733,6 +1758,17 @@ pub fn Parser::parse_interface(
     if is_readonly_field {
       readonly_fields.push(field_name)
     }
+    if field_name != "<index_signature>" &&
+      field_name != "<call>" &&
+      field_name != "<new>" &&
+      field_name != "<computed>" {
+      if member_is_internal && !internal_members.contains(field_name) {
+        internal_members.push(field_name)
+      }
+      if member_is_deprecated && !deprecated_members.contains(field_name) {
+        deprecated_members.push(field_name)
+      }
+    }
     // Skip trailing semicolon or comma (both optional)
     if self.check(Semicolon) || self.check(Comma) {
       let _ = self.advance()
@@ -1750,6 +1786,9 @@ pub fn Parser::parse_interface(
     readonly_fields,
     index_signatures,
     method_type_params,
+    method_type_param_bounds,
+    internal_members,
+    deprecated_members,
   }
 }
 
@@ -1826,6 +1865,9 @@ fn type_alias_object_fields_to_interface(
         index_signatures: [],
         type_param_bounds: [],
         method_type_params: [],
+        method_type_param_bounds: [],
+        internal_members: [],
+        deprecated_members: [],
       })
     }
     _ => None

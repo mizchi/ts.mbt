@@ -44,6 +44,9 @@ fn iface_for_check(
     index_signatures: [],
     type_param_bounds: [],
     method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members: [],
+    deprecated_members: [],
   }
 }
 
@@ -285,6 +288,9 @@ test "check_module: detects interface extends cycle" {
     index_signatures: [],
     type_param_bounds: [],
     method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members: [],
+    deprecated_members: [],
   })
   m.interfaces.push({
     name: "B",
@@ -296,6 +302,9 @@ test "check_module: detects interface extends cycle" {
     index_signatures: [],
     type_param_bounds: [],
     method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members: [],
+    deprecated_members: [],
   })
   let report = check_module(m)
   let cycles = report.issues.filter(fn(i) { i.kind == InterfaceExtendsCycle })
@@ -315,6 +324,9 @@ test "check_module: terminating extends chain is fine" {
     index_signatures: [],
     type_param_bounds: [],
     method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members: [],
+    deprecated_members: [],
   })
   m.interfaces.push({
     name: "Dog",
@@ -326,6 +338,9 @@ test "check_module: terminating extends chain is fine" {
     index_signatures: [],
     type_param_bounds: [],
     method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members: [],
+    deprecated_members: [],
   })
   let report = check_module(m)
   let cycles = report.issues.filter(fn(i) { i.kind == InterfaceExtendsCycle })
@@ -410,6 +425,9 @@ test "check_module: arity check ignores generic params in scope" {
     index_signatures: [],
     type_param_bounds: [],
     method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members: [],
+    deprecated_members: [],
   })
   let report = check_module(m)
   let arity_issues = report.issues.filter(fn(i) {

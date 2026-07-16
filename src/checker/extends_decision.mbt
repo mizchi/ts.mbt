@@ -105,6 +105,23 @@ pub fn extends_decision(source : @ast.TsType, target : @ast.TsType) -> Bool? {
     ) => return Some(false)
     _ => ()
   }
+  // A function whose return is not a type predicate never extends a
+  // function typed with a predicate return: tsc evaluates
+  // `((x: any) => boolean) extends ((x: any) => x is string)` to `false`
+  // (a source signature "must be a type predicate"). This folds the
+  // pervasive `Ch extends (arg: any) => arg is infer R ? ... : this`
+  // refinement pattern to its false branch for plain-return callbacks.
+  // `any`-returning sources stay undecided out of caution; the general
+  // Func-vs-Func relation is left to the assignability layer.
+  match (source, target) {
+    (Func(_, src_ret), Func(_, tgt_ret)) =>
+      match (src_ret, tgt_ret) {
+        (TypePredicate(_, _) | AssertsPredicate(_, _) | Any, _) => ()
+        (_, TypePredicate(_, _) | AssertsPredicate(_, _)) => return Some(false)
+        _ => ()
+      }
+    _ => ()
+  }
   match (source, target) {
     (
       Number

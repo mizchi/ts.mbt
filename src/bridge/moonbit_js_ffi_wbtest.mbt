@@ -4789,6 +4789,9 @@ test "bridge: FFI struct generation deduplicates sanitized field names" {
     index_signatures: [],
     type_param_bounds: [],
     method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members: [],
+    deprecated_members: [],
   }
   let actual = ffi_struct_decl_to_moonbit(state, iface)
   assert_eq(count_occurrences_in_ffi_output(actual, "  _new_ : DateType"), 1)
@@ -4861,6 +4864,9 @@ test "bridge: FFI struct generation sanitizes keyword and discard fields" {
     index_signatures: [],
     type_param_bounds: [],
     method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members: [],
+    deprecated_members: [],
   }
   let actual = ffi_struct_decl_to_moonbit(state, iface)
   assert_true(actual.contains("  declare_ : DeclarationParser"))
@@ -4909,6 +4915,9 @@ test "bridge: FFI struct generation adds method wrappers for function fields" {
     index_signatures: [],
     type_param_bounds: [],
     method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members: [],
+    deprecated_members: [],
   }
   let actual = ffi_struct_decl_to_moonbit(state, iface)
   assert_true(actual.contains("  createIdentifier : (String) -> Identifier"))
@@ -4952,6 +4961,9 @@ test "bridge: FFI struct method wrappers unwrap optional arguments" {
     index_signatures: [],
     type_param_bounds: [],
     method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members: [],
+    deprecated_members: [],
   }
   let actual = ffi_struct_decl_to_moonbit(state, iface)
   assert_true(
@@ -5064,6 +5076,9 @@ test "bridge: FFI struct generation keeps generic method wrappers non-extern" {
     index_signatures: [],
     type_param_bounds: [],
     method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members: [],
+    deprecated_members: [],
   }
   let actual = ffi_struct_decl_to_moonbit(state, iface)
   assert_true(
@@ -5103,6 +5118,9 @@ test "bridge: FFI struct generation caps method wrappers but keeps function fiel
     index_signatures: [],
     type_param_bounds: [],
     method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members: [],
+    deprecated_members: [],
   }
   let actual = ffi_struct_decl_to_moonbit(state, iface)
   assert_true(actual.contains("  call2 : () -> Unit"))
@@ -5148,6 +5166,9 @@ test "bridge: FFI struct generation keeps callable wrapper beyond cap" {
     index_signatures: [],
     type_param_bounds: [],
     method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members: [],
+    deprecated_members: [],
   }
   let actual = ffi_struct_decl_to_moonbit(state, iface)
   assert_true(actual.contains("  _call_ : (String) -> Assertion"))
@@ -5225,6 +5246,9 @@ test "bridge: FFI struct preserves selected interface type parameters locally" {
     index_signatures: [],
     type_param_bounds: [],
     method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members: [],
+    deprecated_members: [],
   }
   let actual = ffi_struct_decl_to_moonbit(state, iface)
   assert_true(actual.contains("pub(all) struct StatsBase[T]"))
@@ -5405,4 +5429,54 @@ test "bridge: FFI string-subset abstains for three-member unions" {
   )
   assert_eq(actual, "JSValue")
   assert_true(state.needs_js_any)
+}
+
+///|
+test "bridge: FFI string-subset accepts Applied *Params shapes" {
+  // A qualified alias that resolved into an applied generic alias the decl
+  // layer cannot expand (`StringFormatParams<$ZodEmail, "when">`) keeps
+  // the `*Params` suffix and subsets to String all the same.
+  let state = ffi_string_subset_test_state([])
+  let actual = ffi_type_name(
+    state,
+    @ast.TsType::Union([
+      @ast.TsType::String_,
+      @ast.TsType::Applied("StringFormatParams", [
+        @ast.TsType::Named("$ZodEmail"),
+      ]),
+    ]),
+  )
+  assert_eq(actual, "String")
+  assert_false(state.needs_js_any)
+}
+
+///|
+test "bridge: FFI struct decl drops internal and JSValue-widened deprecated members" {
+  let state = ffi_string_subset_test_state([])
+  let iface : @ast.TsInterface = {
+    name: "Schema",
+    type_params: [],
+    type_param_bounds: [],
+    extends_names: [],
+    extends_args: [],
+    fields: [
+      ("run", @ast.TsType::String_),
+      ("_def", @ast.TsType::TypeOf("Internals")),
+      ("name", @ast.TsType::String_),
+      ("keep", @ast.TsType::String_),
+    ],
+    readonly_fields: [],
+    index_signatures: [],
+    method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members: ["run"],
+    deprecated_members: ["_def", "name"],
+  }
+  let actual = ffi_struct_decl_to_moonbit(state, iface)
+  // @internal never surfaces; @deprecated members survive only while they
+  // type naturally ("name" stays, the JSValue-widened "_def" is dropped).
+  assert_false(actual.contains("run : String"))
+  assert_false(actual.contains("_def"))
+  assert_true(actual.contains("name : String"))
+  assert_true(actual.contains("keep : String"))
 }

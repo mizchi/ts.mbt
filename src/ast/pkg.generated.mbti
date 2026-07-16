@@ -279,6 +279,9 @@ pub(all) struct TsInterface {
   readonly_fields : Array[String]
   index_signatures : Array[(TsType, TsType)]
   method_type_params : Array[(String, Array[String])]
+  method_type_param_bounds : Array[(String, Array[(String, TsType)])]
+  internal_members : Array[String]
+  deprecated_members : Array[String]
 } derive(@debug.Debug)
 pub impl Show for TsInterface
 

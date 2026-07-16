@@ -741,9 +741,26 @@ EOF
     zod)
       cat > "$out/bridge_test.mbt" <<'EOF'
 test "real-world zod bridge smoke" {
-  let _ = string(None)
   let _ = number(None)
   let _ = boolean(None)
+  let schema : Schema[JSValue, JSValue, JSValue] = unsafeCast(string(None))
+  let ok = schema.safeParse(unsafeCast("hello"), None)
+  if !ok.success {
+    abort("expected zod safeParse success")
+  }
+  let bad = schema.safeParse(unsafeCast(42), None)
+  if bad.success {
+    abort("expected zod safeParse failure")
+  }
+  let email : Schema[JSValue, JSValue, JSValue] = unsafeCast(
+    string(None).email(None),
+  )
+  if !email.safeParse(unsafeCast("a@b.co"), None).success {
+    abort("expected zod email success")
+  }
+  if email.safeParse(unsafeCast("nope"), None).success {
+    abort("expected zod email failure")
+  }
 }
 EOF
       ;;
@@ -1260,9 +1277,17 @@ EOF
     zod)
       cat > "$smoke_dir/main.mbt" <<'EOF'
 fn main {
-  let _ = @sut.string(None)
   let _ = @sut.number(None)
   let _ = @sut.boolean(None)
+  let schema : @sut.Schema[@sut.JSValue, @sut.JSValue, @sut.JSValue] = @sut.unsafeCast(
+    @sut.string(None),
+  )
+  if !schema.safeParse(@sut.unsafeCast("hello"), None).success {
+    abort("expected zod safeParse success")
+  }
+  if schema.safeParse(@sut.unsafeCast(42), None).success {
+    abort("expected zod safeParse failure")
+  }
 }
 EOF
       ;;

@@ -2736,3 +2736,120 @@ async test "bridge: qualified React.ReactNode renders as opaque ReactNode in mbt
   assert_false(actual.contains("element : JSValue?"))
   assert_false(actual.contains("element : JSValue?"))
 }
+
+///|
+test "bridge: generic method type params substitute their bounds at the boundary" {
+  let iface : @ast.TsInterface = {
+    name: "Schema",
+    type_params: [],
+    type_param_bounds: [],
+    extends_names: [],
+    extends_args: [],
+    fields: [
+      (
+        "pipe",
+        @ast.TsType::Func(
+          [@ast.TsType::Named("T")],
+          @ast.TsType::Applied("ZodPipe", [@ast.TsType::Named("T")]),
+        ),
+      ),
+    ],
+    readonly_fields: [],
+    index_signatures: [],
+    method_type_params: [("pipe", ["T"])],
+    method_type_param_bounds: [
+      ("pipe", [("T", @ast.TsType::Named("$ZodType"))]),
+    ],
+    internal_members: [],
+    deprecated_members: [],
+  }
+  let substituted = decl_substitute_method_type_param_bounds(
+    iface,
+    "pipe",
+    iface.fields[0].1,
+  )
+  assert_eq(
+    substituted,
+    @ast.TsType::Func(
+      [@ast.TsType::Named("$ZodType")],
+      @ast.TsType::Applied("ZodPipe", [@ast.TsType::Named("$ZodType")]),
+    ),
+  )
+  // Members without recorded bounds pass through untouched.
+  let untouched = decl_substitute_method_type_param_bounds(
+    iface,
+    "other",
+    iface.fields[0].1,
+  )
+  assert_eq(untouched, iface.fields[0].1)
+}
+
+///|
+async test "bridge: indexed access on constrained type params resolves through bounds" {
+  // `def: Internals["def"]` with `Internals extends core.$ZodTypeInternals`
+  // looks the key up in the bound's field surface — through the qualified
+  // namespace import, the barrel `export * from "./schemas.js"`, and the
+  // bound's own extends chain. The chained `["type"]` continues resolving
+  // in the bound's declaring module and lands on the literal union.
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/indexed-bound-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("/// def : UnderscoreZodTypeDef"))
+  assert_false(actual.contains("/// def : JSValue"))
+  assert_true(actual.contains("/// type : ZodTypeType"))
+  assert_false(actual.contains("/// type : JSValue"))
+}
+
+///|
+test "bridge: exclusive object union joins into one readable shape" {
+  // zod's ZodSafeParseResult idiom: `{success: true, data: T, error?: never}
+  // | {success: false, data?: never, error: E}` folds to
+  // `{success: boolean, data: T, error: E}` — exclusive fields keep their
+  // RAW type (no Option wrapper) because the generic-owner method wrappers
+  // return the raw JS object without conversion glue.
+  let success_member = @ast.TsType::Object([
+    (@ast.TsType::Literal("success"), @ast.TsType::BooleanLiteral(true)),
+    (@ast.TsType::Literal("data"), @ast.TsType::Named("Out")),
+    (
+      @ast.TsType::Literal("error"),
+      @ast.TsType::Union([@ast.TsType::Never, @ast.TsType::Undefined]),
+    ),
+  ])
+  let error_member = @ast.TsType::Object([
+    (@ast.TsType::Literal("success"), @ast.TsType::BooleanLiteral(false)),
+    (
+      @ast.TsType::Literal("data"),
+      @ast.TsType::Union([@ast.TsType::Never, @ast.TsType::Undefined]),
+    ),
+    (@ast.TsType::Literal("error"), @ast.TsType::Named("ZodError")),
+  ])
+  let joined = decl_join_never_exclusive_object_union(
+    @ast.TsType::Union([success_member, error_member]),
+  )
+  assert_eq(
+    joined,
+    Some(
+      @ast.TsType::Object([
+        (@ast.TsType::Literal("success"), @ast.TsType::Boolean),
+        (@ast.TsType::Literal("data"), @ast.TsType::Named("Out")),
+        (@ast.TsType::Literal("error"), @ast.TsType::Named("ZodError")),
+      ]),
+    ),
+  )
+  // Without a disagreeing boolean discriminant the fold abstains.
+  let plain = decl_join_never_exclusive_object_union(
+    @ast.TsType::Union([
+      @ast.TsType::Object([(@ast.TsType::Literal("a"), @ast.TsType::String_)]),
+      @ast.TsType::Object([(@ast.TsType::Literal("a"), @ast.TsType::Number)]),
+    ]),
+  )
+  assert_eq(plain, None)
+}
