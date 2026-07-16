@@ -2876,3 +2876,24 @@ async test "bridge: concrete interfaces flatten generic bases with substituted a
   assert_true(actual.contains("/// parse : (JSValue) -> String"))
   assert_true(actual.contains("/// label : String"))
 }
+
+///|
+async test "bridge: undiscriminable union aliases join to their common base" {
+  // zod's `$ZodIssue` idiom: `$`-prefixed member interfaces reject tagged
+  // lowering, but every member (including the NESTED union alias
+  // `$IssueUnionKind`) extends `$IssueBase` — the reference lands on the
+  // base struct instead of an opaque handle.
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/union-common-base-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("/// issues : Array[UnderscoreIssueBase]"))
+  assert_true(actual.contains("UnderscoreIssueBase"))
+}

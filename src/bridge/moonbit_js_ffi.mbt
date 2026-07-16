@@ -3363,6 +3363,11 @@ fn ffi_is_react_router_module_spec(module_spec : String) -> Bool {
 }
 
 ///|
+fn ffi_is_zod_module_spec(module_spec : String) -> Bool {
+  module_spec == "zod" || module_spec.contains("/zod")
+}
+
+///|
 fn ffi_is_jose_module_spec(module_spec : String) -> Bool {
   module_spec == "jose" || module_spec.contains("/jose")
 }
@@ -5554,6 +5559,21 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     handled_export_names.push(func.name)
   }
 
+  if ffi_is_zod_module_spec(module_spec) {
+    // `object()`'s shape is `$ZodLooseShape = Record<string, any>` — an
+    // opaque handle MoonBit could never construct. The builder pairs
+    // schema values with their keys the same way react-router's
+    // `params_from_pairs` does.
+    push_unique_ffi_section(
+      seen_ffi_binding_names,
+      ffi_sections,
+      ffi_fn_decl_key("loose_shape_from_pairs"),
+      "pub extern \"js\" fn loose_shape_from_pairs(keys : Array[String], values : Array[JSValue]) -> Core__ZodLooseShape = \"__ts_mbt_record_from_pairs\"",
+    )
+    push_unique_bridge_binding(
+      seen_bridge_binding_names, bridge_lines, "__ts_mbt_record_from_pairs", "export function __ts_mbt_record_from_pairs(keys, values) { const out = {}; for (let i = 0; i < keys.length; i++) out[keys[i]] = values[i]; return out; }",
+    )
+  }
   if ffi_is_react_router_module_spec(module_spec) {
     push_unique_ffi_section(
       seen_ffi_binding_names,

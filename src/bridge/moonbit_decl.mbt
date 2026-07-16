@@ -4847,6 +4847,173 @@ fn decl_exclusive_union_alias_interface_spec(
 }
 
 ///|
+/// Join a union ALIAS whose members cannot be runtime-discriminated to
+/// their nearest common base interface: zod's
+/// `$ZodIssue = $ZodIssueInvalidType | $ZodIssueTooBig | ...` (eleven
+/// `$`-prefixed interfaces, so tagged lowering rejects every constructor
+/// name) all extend `$ZodIssueBase { code?, input?, path, message }` —
+/// referencing the BASE is a sound upper approximation and turns the
+/// previously opaque handle into a readable struct. Members that CAN
+/// tag-lower keep the existing enum path (the alias never reaches here).
+fn decl_join_union_alias_to_common_base(
+  info : DeclModuleInfo,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+  name : String,
+) -> @ast.TsType? {
+  let (ta, ta_info) = match decl_find_type_alias_deep(info, modules, name, []) {
+    Some(found) => found
+    None => return None
+  }
+  if ta.type_params.length() != 0 {
+    return None
+  }
+  let members = match ta.type_ {
+    Union(items) => items
+    _ => return None
+  }
+  if members.length() < 2 || members.length() > 32 {
+    return None
+  }
+  // A tag-lowerable union keeps the enum path.
+  match tagged_union_cases(members) {
+    Some(_) => return None
+    None => ()
+  }
+  let mut common : Array[String]? = None
+  for member in members {
+    let ancestors : Array[String] = []
+    if !decl_member_ancestor_names(
+        ta_info, modules, canonical_types, member, ancestors, 0,
+      ) {
+      return None
+    }
+    if ancestors.length() == 0 {
+      return None
+    }
+    common = match common {
+      None => Some(ancestors)
+      Some(existing) => {
+        let kept : Array[String] = []
+        for a in existing {
+          if ancestors.contains(a) {
+            kept.push(a)
+          }
+        }
+        Some(kept)
+      }
+    }
+  }
+  match common {
+    Some(shared) if shared.length() > 0 => {
+      let base_name = shared[0]
+      match
+        resolve_interface_origin(ta_info, base_name, modules, canonical_types) {
+        Some(base_origin) => Some(Named(base_origin.export_name))
+        None => Some(Named(base_name))
+      }
+    }
+    _ => None
+  }
+}
+
+///|
+/// Ancestor names for one union member: an interface contributes its
+/// extends chain; a member that is itself a (non-generic) union ALIAS —
+/// zod's `$ZodIssueInvalidUnion = ...NoMatch | ...MultipleMatch` —
+/// recurses into its members, requiring EVERY leaf to contribute.
+/// Returns false when any leaf is unresolvable.
+fn decl_member_ancestor_names(
+  info : DeclModuleInfo,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+  member : @ast.TsType,
+  out : Array[String],
+  depth : Int,
+) -> Bool {
+  if depth > 4 {
+    return false
+  }
+  let member_name = match member {
+    Named(n) => n
+    Applied(n, _) => n
+    _ => return false
+  }
+  match resolve_interface_origin(info, member_name, modules, canonical_types) {
+    Some(origin) => {
+      decl_collect_ancestor_names(origin, modules, canonical_types, out, 0)
+      return true
+    }
+    None => ()
+  }
+  match decl_find_type_alias_deep(info, modules, member_name, []) {
+    Some((ta, ta_info)) if ta.type_params.length() == 0 =>
+      match ta.type_ {
+        Union(items) => {
+          for item in items {
+            if !decl_member_ancestor_names(
+                ta_info,
+                modules,
+                canonical_types,
+                item,
+                out,
+                depth + 1,
+              ) {
+              return false
+            }
+          }
+          true
+        }
+        Named(_) | Applied(_, _) =>
+          decl_member_ancestor_names(
+            ta_info,
+            modules,
+            canonical_types,
+            ta.type_,
+            out,
+            depth + 1,
+          )
+        _ => false
+      }
+    _ => false
+  }
+}
+
+///|
+fn decl_collect_ancestor_names(
+  origin : ResolvedInterfaceOrigin,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+  out : Array[String],
+  depth : Int,
+) -> Unit {
+  if depth > 8 {
+    return
+  }
+  for base_name in origin.iface.extends_names {
+    let tail = match base_name.rev_find(".") {
+      Some(pos) => base_name[pos + 1:].to_owned()
+      None => base_name
+    }
+    if !out.contains(tail) {
+      out.push(tail)
+    }
+    match
+      resolve_interface_origin(origin.info, base_name, modules, canonical_types) {
+      Some(base_origin) =>
+        decl_collect_ancestor_names(
+          base_origin,
+          modules,
+          canonical_types,
+          out,
+          depth + 1,
+        )
+      None => ()
+    }
+  }
+}
+
+///|
 /// `parse.ZodSafeParseResult` -> `ZodSafeParseResult`: unqualified tail,
 /// leading `$` / `_` markers stripped. Empty when nothing valid remains.
 fn decl_alias_synthetic_interface_name(name : String) -> String {
@@ -5439,6 +5606,19 @@ fn lower_react_utility_type(
           }
       }
     }
+    Named(name) =>
+      // A union alias whose members can't be runtime-discriminated but
+      // share a base interface references the base instead of an opaque
+      // handle (zod's `$ZodIssue` -> `$ZodIssueBase`). Tag-lowerable
+      // aliases never reach this (the guard re-checks), and non-alias /
+      // non-union names fall through untouched.
+      match
+        decl_join_union_alias_to_common_base(
+          info, modules, canonical_types, name,
+        ) {
+        Some(joined) => joined
+        None => type_
+      }
     TemplateLiteralType(parts, type_args) => {
       // Lower each interpolated arg, inline same-module alias bodies
       // (`type Channel = "info" | "warn"` becomes the union itself),
