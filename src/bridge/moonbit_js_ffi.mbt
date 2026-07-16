@@ -3368,6 +3368,17 @@ fn ffi_is_zod_module_spec(module_spec : String) -> Bool {
 }
 
 ///|
+/// Exact-package match only: a bare `contains("/hono")` also matches
+/// fixture paths like `.../hono-options-entry.d.ts`, injecting the hono
+/// hooks into minimal surfaces that lack Context / Response / the full
+/// Hono arity and breaking their compile.
+fn ffi_is_hono_module_spec(module_spec : String) -> Bool {
+  module_spec == "hono" ||
+  module_spec.has_suffix("/hono") ||
+  module_spec.contains("/hono/")
+}
+
+///|
 fn ffi_is_jose_module_spec(module_spec : String) -> Bool {
   module_spec == "jose" || module_spec.contains("/jose")
 }
@@ -5584,6 +5595,29 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       ffi_sections,
       ffi_fn_decl_key("as_schema"),
       "pub fn[T] as_schema(schema : T) -> Schema[JSValue, JSValue, JSValue] {\n  unsafeCast(schema)\n}",
+    )
+  }
+  if ffi_is_hono_module_spec(module_spec) {
+    // Real-world handlers are async (`(c) => Promise<Response>`), but the
+    // HandlerInterface overload the generator picks is the sync one. The
+    // async registration hooks pass the MoonBit closure through raw —
+    // closures ARE JS functions on the js backend, and hono awaits
+    // whatever the handler returns.
+    push_unique_ffi_section(
+      seen_ffi_binding_names,
+      ffi_sections,
+      ffi_fn_decl_key("hono_get_async"),
+      "extern \"js\" fn _hono_route_async_extern_js(app : JSValue, method_name : String, path : String, handler : JSValue) -> Unit =\n  #| (app, method, path, handler) => { app[method](path, handler) }\n\npub fn[E, S, BasePath] Hono::get_async(self : Hono[E, S, BasePath], path : String, handler : (Context[JSValue, JSValue, JSValue]) -> Promise[Response]) -> Unit {\n  _hono_route_async_extern_js(unsafeCast(self), \"get\", path, unsafeCast(handler))\n}\n\npub fn[E, S, BasePath] Hono::post_async(self : Hono[E, S, BasePath], path : String, handler : (Context[JSValue, JSValue, JSValue]) -> Promise[Response]) -> Unit {\n  _hono_route_async_extern_js(unsafeCast(self), \"post\", path, unsafeCast(handler))\n}\n\npub fn[E, S, BasePath] Hono::put_async(self : Hono[E, S, BasePath], path : String, handler : (Context[JSValue, JSValue, JSValue]) -> Promise[Response]) -> Unit {\n  _hono_route_async_extern_js(unsafeCast(self), \"put\", path, unsafeCast(handler))\n}\n\npub fn[E, S, BasePath] Hono::delete_async(self : Hono[E, S, BasePath], path : String, handler : (Context[JSValue, JSValue, JSValue]) -> Promise[Response]) -> Unit {\n  _hono_route_async_extern_js(unsafeCast(self), \"delete\", path, unsafeCast(handler))\n}",
+    )
+    // Middleware: `(c, next) => Promise<void>` with `next : () =>
+    // Promise<void>`. Pre-processing middleware calls next() and returns
+    // its promise; post-processing (after-next sequencing) needs Promise
+    // combinators and stays raw-JS territory for now.
+    push_unique_ffi_section(
+      seen_ffi_binding_names,
+      ffi_sections,
+      ffi_fn_decl_key("hono_use_middleware"),
+      "extern \"js\" fn _hono_use_middleware_extern_js(app : JSValue, path : JSValue, mw : JSValue) -> Unit =\n  #| (app, path, mw) => { const u = (path == null ? undefined : (typeof path === \"object\" && \"$tag\" in path ? (path.$tag === 1 ? path._0 : undefined) : path)); if (u === undefined) { app.use(mw) } else { app.use(u, mw) } }\n\npub fn[E, S, BasePath] Hono::use_middleware(self : Hono[E, S, BasePath], path : String?, mw : (Context[JSValue, JSValue, JSValue], () -> Promise[Unit]) -> Promise[Unit]) -> Unit {\n  _hono_use_middleware_extern_js(unsafeCast(self), unsafeCast(path), unsafeCast(mw))\n}",
     )
   }
   if ffi_is_react_router_module_spec(module_spec) {

@@ -1220,6 +1220,35 @@ flattening, landed separately):
   full per-generic-owner facade (monomorphized method wrappers like the
   mbt2ts generic-method glue) remains the eventual principled shape.
 
+### 15. hono runs end-to-end: async handlers + middleware (done 2026-07-16)
+
+Runtime-verified (node, `app.fetch(new Request(...))` round-trips through
+MoonBit handlers): sync route via the existing `Context::text` wrapper
+(`c.text("...", None, None)` — the generic-owner method glue was ALREADY
+emitted for Context's callable-interface properties; the earlier "mbti
+declares it but it doesn't exist" reading was wrong, the decl is the
+method form), an async route returning `Promise[Response]`, a middleware
+that `c.set`s a variable before `next()` with the handler reading it via
+`c.get`, and 404 fallback.
+
+- [x] hono module hooks (same pattern as zod's `as_schema`):
+  `Hono::get_async / post_async / put_async / delete_async(path,
+  (Context) -> Promise[Response])` — the HandlerInterface overload the
+  generator picks is sync-only, but hono awaits whatever the handler
+  returns and MoonBit closures ARE JS functions on the js backend, so the
+  hooks register the closure raw with a typed surface.
+- [x] `Hono::use_middleware(path?, (Context, () -> Promise[Unit]) ->
+  Promise[Unit])`: pre-processing middleware calls `next()` and returns
+  its promise. Post-processing (sequencing AFTER next resolves) needs
+  Promise combinators on the MoonBit side and stays raw-JS territory.
+- [x] realworld hono smoke upgraded from register-only to the full
+  fetch round-trip (sync + async + middleware + 404).
+- Remaining hono gaps (documented, not blocking): `app.fetch` returns
+  `JSValue` (Response | Promise union), route methods return `HonoBase`
+  (chain loses generics), path-param TYPE inference (`/users/:id` ->
+  `{id: string}`) is TS type-level computation — same fundamental limit
+  as zod's `z.infer`.
+
 ### Non-Goals (still)
 
 - [ ] Do not turn this list into a checklist for "all of TypeScript". Each item
