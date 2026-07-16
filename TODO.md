@@ -1159,6 +1159,38 @@ Fallback entries 241 -> 225.
   `JSValue`), `type_ : SchemaType` / `ZodTypeType` (enum of the schema
   kind literal union).
 
+### 13. zod runs end-to-end from MoonBit (done 2026-07-16)
+
+Runtime-verified (node, `moon test --target js` against the generated
+package): construct -> chain -> `safeParse` -> read the result. The four
+smoke cases: string schema accept/reject, `.email()` format
+validation, `object()` schema over an extern-built shape, and `parse`
+returning the output handle.
+
+- [x] `decl_exclusive_union_alias_interface_spec`: an applied generic
+  alias behind a namespace import / barrel whose body folds through the
+  mutually-exclusive object-union idiom (`{success: true, data: T,
+  error?: never} | {success: false, data?: never, error: E}`)
+  synthesizes a named interface — `safeParse` now returns
+  `pub(all) struct ZodSafeParseResult { success : Bool, data :
+  Core_output, error : ZodError[Core_output] }`. Shared by the lowering
+  and the utility-interface collection walk so the struct is both
+  referenced and emitted. Blanket cross-module alias inlining was
+  measured to REGRESS (225 -> 418 fallbacks) and is deliberately not
+  done; the inline fires only when the fold succeeds.
+- [x] Exclusive fields keep their RAW passthrough type (no Option
+  wrapper): generic-owner method wrappers return the raw JS object
+  without conversion glue, and MoonBit's tagged Option representation
+  crashes on the raw `undefined` the absent branch carries.
+- [x] realworld zod smoke upgraded from construct-only to
+  safeParse success/failure + email format round-trips.
+- Known ergonomic gaps (deliberate, documented): concrete schemas
+  (ZodString...) need `unsafeCast` to `Schema[...]` to reach
+  `parse` / `safeParse` (generic base expansion is future work);
+  `object()`'s shape is built with a small extern (`Record<string, any>`
+  aliases stay opaque — the StringRecordOf* synthetics are equally
+  unconstructible today).
+
 ### Non-Goals (still)
 
 - [ ] Do not turn this list into a checklist for "all of TypeScript". Each item

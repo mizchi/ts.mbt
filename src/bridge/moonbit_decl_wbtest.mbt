@@ -2807,3 +2807,49 @@ async test "bridge: indexed access on constrained type params resolves through b
   assert_true(actual.contains("/// type : ZodTypeType"))
   assert_false(actual.contains("/// type : JSValue"))
 }
+
+///|
+test "bridge: exclusive object union joins into one readable shape" {
+  // zod's ZodSafeParseResult idiom: `{success: true, data: T, error?: never}
+  // | {success: false, data?: never, error: E}` folds to
+  // `{success: boolean, data: T, error: E}` — exclusive fields keep their
+  // RAW type (no Option wrapper) because the generic-owner method wrappers
+  // return the raw JS object without conversion glue.
+  let success_member = @ast.TsType::Object([
+    (@ast.TsType::Literal("success"), @ast.TsType::BooleanLiteral(true)),
+    (@ast.TsType::Literal("data"), @ast.TsType::Named("Out")),
+    (
+      @ast.TsType::Literal("error"),
+      @ast.TsType::Union([@ast.TsType::Never, @ast.TsType::Undefined]),
+    ),
+  ])
+  let error_member = @ast.TsType::Object([
+    (@ast.TsType::Literal("success"), @ast.TsType::BooleanLiteral(false)),
+    (
+      @ast.TsType::Literal("data"),
+      @ast.TsType::Union([@ast.TsType::Never, @ast.TsType::Undefined]),
+    ),
+    (@ast.TsType::Literal("error"), @ast.TsType::Named("ZodError")),
+  ])
+  let joined = decl_join_never_exclusive_object_union(
+    @ast.TsType::Union([success_member, error_member]),
+  )
+  assert_eq(
+    joined,
+    Some(
+      @ast.TsType::Object([
+        (@ast.TsType::Literal("success"), @ast.TsType::Boolean),
+        (@ast.TsType::Literal("data"), @ast.TsType::Named("Out")),
+        (@ast.TsType::Literal("error"), @ast.TsType::Named("ZodError")),
+      ]),
+    ),
+  )
+  // Without a disagreeing boolean discriminant the fold abstains.
+  let plain = decl_join_never_exclusive_object_union(
+    @ast.TsType::Union([
+      @ast.TsType::Object([(@ast.TsType::Literal("a"), @ast.TsType::String_)]),
+      @ast.TsType::Object([(@ast.TsType::Literal("a"), @ast.TsType::Number)]),
+    ]),
+  )
+  assert_eq(plain, None)
+}

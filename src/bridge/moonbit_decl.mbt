@@ -4705,6 +4705,323 @@ fn applied_type_alias(
   }
 }
 
+///|
+/// `find_type_alias_decl` plus qualified-namespace redirect and
+/// `export * from "./sub.js"` barrel traversal, mirroring
+/// `decl_resolve_interface_origin_deep`: zod's `parse.ZodSafeParseResult`
+/// names a generic alias declared behind the `parse` namespace import.
+fn decl_find_type_alias_deep(
+  info : DeclModuleInfo,
+  modules : Map[String, DeclModuleInfo],
+  name : String,
+  visited_paths : Array[String],
+) -> (@ast.TsTypeAlias, DeclModuleInfo)? {
+  let (lookup_info, tail) = match
+    redirect_qualified_named(info, modules, Named(name)) {
+    (target_info, Named(t)) => (target_info, t)
+    _ => (info, name)
+  }
+  decl_find_type_alias_deep_local(lookup_info, modules, tail, visited_paths)
+}
+
+///|
+fn decl_find_type_alias_deep_local(
+  info : DeclModuleInfo,
+  modules : Map[String, DeclModuleInfo],
+  name : String,
+  visited_paths : Array[String],
+) -> (@ast.TsTypeAlias, DeclModuleInfo)? {
+  if visited_paths.contains(info.record.path) {
+    return None
+  }
+  visited_paths.push(info.record.path)
+  match find_type_alias_decl(info.module_, name) {
+    Some(ta) => return Some((ta, info))
+    None => ()
+  }
+  for edge in info.record.reexports {
+    match edge.kind {
+      All =>
+        match modules.get(edge.resolved_path) {
+          Some(target_info) =>
+            match
+              decl_find_type_alias_deep_local(
+                target_info, modules, name, visited_paths,
+              ) {
+              Some(found) => return Some(found)
+              None => ()
+            }
+          None => ()
+        }
+      _ => ()
+    }
+  }
+  None
+}
+
+///|
+/// Inline an applied generic alias that lives behind a namespace import /
+/// barrel (`parse.ZodSafeParseResult<T>`): substitute the type arguments,
+/// lower the body IN ITS DECLARING MODULE so nested names resolve, fold
+/// mutually-exclusive object unions, and map the result's names back to
+/// canonical export names.
+fn decl_inline_qualified_applied_alias(
+  info : DeclModuleInfo,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+  name : String,
+  args : Array[@ast.TsType],
+) -> @ast.TsType? {
+  match
+    decl_exclusive_union_alias_interface_spec(
+      info, modules, canonical_types, name, args,
+    ) {
+    Some(iface) => Some(Named(iface.name))
+    None => None
+  }
+}
+
+///|
+/// Synthesize a named interface for an applied generic alias whose body
+/// folds through the mutually-exclusive object-union idiom
+/// (`parse.ZodSafeParseResult<T>` -> interface ZodSafeParseResult
+/// {success: boolean, data?: ..., error?: ...}). Blanket cross-module
+/// alias inlining regresses more than it fixes, so this fires ONLY when
+/// the fold succeeds; everything else keeps the opaque named reference.
+/// Shared by the lowering and the utility-interface collection walk so
+/// the synthesized struct is both referenced and emitted.
+fn decl_exclusive_union_alias_interface_spec(
+  info : DeclModuleInfo,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+  name : String,
+  args : Array[@ast.TsType],
+) -> @ast.TsInterface? {
+  let (ta, ta_info) = match decl_find_type_alias_deep(info, modules, name, []) {
+    Some(found) => found
+    None => return None
+  }
+  if ta.type_params.length() != args.length() || args.length() == 0 {
+    return None
+  }
+  if type_alias_is_recursive(ta_info.module_, ta) {
+    return None
+  }
+  let substituted = substitute_type_alias_params(ta.type_, ta.type_params, args)
+  let lowered = lower_react_utility_type(
+    ta_info, substituted, modules, canonical_types,
+  )
+  let joined = match decl_join_never_exclusive_object_union(lowered) {
+    Some(j) => decl_rewrite_names_to_exports(ta_info, canonical_types, j)
+    None => return None
+  }
+  let iface_fields : Array[(String, @ast.TsType)] = []
+  match joined {
+    Object(fields) =>
+      for f in fields {
+        match f.0 {
+          @ast.TsType::Literal(key) => iface_fields.push((key, f.1))
+          _ => return None
+        }
+      }
+    _ => return None
+  }
+  let iface_name = decl_alias_synthetic_interface_name(name)
+  if iface_name == "" {
+    return None
+  }
+  Some({
+    name: iface_name,
+    type_params: [],
+    type_param_bounds: [],
+    extends_names: [],
+    extends_args: [],
+    fields: iface_fields,
+    readonly_fields: [],
+    index_signatures: [],
+    method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members: [],
+    deprecated_members: [],
+  })
+}
+
+///|
+/// `parse.ZodSafeParseResult` -> `ZodSafeParseResult`: unqualified tail,
+/// leading `$` / `_` markers stripped. Empty when nothing valid remains.
+fn decl_alias_synthetic_interface_name(name : String) -> String {
+  let tail = match name.rev_find(".") {
+    Some(pos) => name[pos + 1:].to_owned()
+    None => name
+  }
+  let mut idx = 0
+  while idx < tail.length() &&
+        (tail[idx].unsafe_to_char() == '$' || tail[idx].unsafe_to_char() == '_') {
+    idx += 1
+  }
+  let core = tail[idx:tail.length()].to_owned()
+  for c in core {
+    if !((c >= 'A' && c <= 'Z') ||
+      (c >= 'a' && c <= 'z') ||
+      (c >= '0' && c <= '9') ||
+      c == '_') {
+      return ""
+    }
+  }
+  core
+}
+
+///|
+fn decl_type_is_never_ish(t : @ast.TsType) -> Bool {
+  match t {
+    Never => true
+    Union(items) => {
+      for it in items {
+        match it {
+          Never | Undefined => ()
+          _ => return false
+        }
+      }
+      items.length() > 0
+    }
+    _ => false
+  }
+}
+
+///|
+/// Fold the mutually-exclusive-fields idiom into one object shape:
+/// `{success: true, data: T, error?: never} | {success: false,
+/// data?: never, error: E}` (zod's ZodSafeParseResult) becomes
+/// `{success: boolean, data?: T, error?: E}`. Only fires when every
+/// member is an object literal over the SAME literal key set, boolean
+/// discriminants disagree, and each remaining key is either identical
+/// across members or `?: never` in the members that lack it — that
+/// guarantee makes the join faithful for reads.
+fn decl_join_never_exclusive_object_union(t : @ast.TsType) -> @ast.TsType? {
+  let members = match t {
+    Union(items) => items
+    _ => return None
+  }
+  if members.length() < 2 {
+    return None
+  }
+  let shapes : Array[Array[(String, @ast.TsType)]] = []
+  for member in members {
+    let fields = match member {
+      Object(fields) => fields
+      _ => return None
+    }
+    let shape : Array[(String, @ast.TsType)] = []
+    for f in fields {
+      match f.0 {
+        @ast.TsType::Literal(key) => shape.push((key, f.1))
+        _ => return None
+      }
+    }
+    shapes.push(shape)
+  }
+  fn shape_lookup(
+    shape : Array[(String, @ast.TsType)],
+    key : String,
+  ) -> @ast.TsType? {
+    for entry in shape {
+      if entry.0 == key {
+        return Some(entry.1)
+      }
+    }
+    None
+  }
+
+  let out : Array[(@ast.TsType, @ast.TsType)] = []
+  let mut saw_disagreeing_bool = false
+  for entry in shapes[0] {
+    let (key, _) = entry
+    let per_member : Array[@ast.TsType] = []
+    for shape in shapes {
+      match shape_lookup(shape, key) {
+        Some(ty) => per_member.push(ty)
+        // Same-key-set requirement: a key missing from any member
+        // breaks the idiom.
+        None => return None
+      }
+    }
+    let mut all_bool_literal = true
+    let mut all_equal = true
+    for ty in per_member {
+      if !(ty is BooleanLiteral(_)) {
+        all_bool_literal = false
+      }
+      if ty != per_member[0] {
+        all_equal = false
+      }
+    }
+    if all_equal {
+      out.push((Literal(key), per_member[0]))
+      continue
+    }
+    if all_bool_literal {
+      saw_disagreeing_bool = true
+      out.push((Literal(key), Boolean))
+      continue
+    }
+    // Exclusive field: `?: never` wherever it is absent, one real type
+    // everywhere else.
+    let mut real : @ast.TsType? = None
+    let mut saw_never = false
+    for ty in per_member {
+      if decl_type_is_never_ish(ty) {
+        saw_never = true
+      } else {
+        match real {
+          None => real = Some(ty)
+          Some(existing) => if existing != ty { return None }
+        }
+      }
+    }
+    match (real, saw_never) {
+      // The exclusive field keeps its RAW type, not an Option wrapper:
+      // the generic-owner method wrappers return the zod result object
+      // without conversion glue, and MoonBit's tagged Option
+      // representation crashes on the raw `undefined` the absent branch
+      // carries. An opaque passthrough handle tolerates undefined; the
+      // boolean discriminant gates which field is populated.
+      (Some(real_ty), true) => {
+        let bare = match real_ty {
+          Union(items) => {
+            let kept : Array[@ast.TsType] = []
+            for it in items {
+              match it {
+                Undefined | Never => ()
+                other => kept.push(other)
+              }
+            }
+            if kept.length() == 1 {
+              kept[0]
+            } else if kept.length() > 1 {
+              Union(kept)
+            } else {
+              return None
+            }
+          }
+          _ => real_ty
+        }
+        out.push((Literal(key), bare))
+      }
+      _ => return None
+    }
+  }
+  // Every member must contribute only keys the first member has.
+  for shape in shapes {
+    if shape.length() != shapes[0].length() {
+      return None
+    }
+  }
+  if !saw_disagreeing_bool {
+    return None
+  }
+  Some(Object(out))
+}
+
 // `decl_infer_marker_name`, `decl_match_infer_pattern`, and
 // `decl_substitute_inferred_type` were duplicates of the helpers now in
 // `mizchi/ts/checker`. Bridge calls `@checker.match_infer_pattern` etc.
@@ -5101,15 +5418,25 @@ fn lower_react_utility_type(
       match applied_type_alias(info, name, args) {
         Some(resolved) =>
           lower_react_utility_type(info, resolved, modules, canonical_types)
-        None => {
-          let next_args : Array[@ast.TsType] = []
-          for arg in args {
-            next_args.push(
-              lower_react_utility_type(info, arg, modules, canonical_types),
-            )
+        None =>
+          // Cross-module / namespace-qualified generic aliases
+          // (`parse.ZodSafeParseResult<T>`) inline through the deep
+          // alias lookup; the same-module fast path above stays first.
+          match
+            decl_inline_qualified_applied_alias(
+              info, modules, canonical_types, name, args,
+            ) {
+            Some(inlined) => inlined
+            None => {
+              let next_args : Array[@ast.TsType] = []
+              for arg in args {
+                next_args.push(
+                  lower_react_utility_type(info, arg, modules, canonical_types),
+                )
+              }
+              Applied(name, next_args)
+            }
           }
-          Applied(name, next_args)
-        }
       }
     }
     TemplateLiteralType(parts, type_args) => {
@@ -5388,12 +5715,35 @@ fn collect_react_utility_interfaces_from_type(
         info, filter_type, modules, canonical_types, seen_names, interfaces,
       )
     }
-    Applied(_, args) =>
+    Applied(name, args) => {
+      // Mirror of the lowering's exclusive-union alias inline
+      // (`parse.ZodSafeParseResult<T>` -> synthesized interface): the
+      // lowering emits `Named(ZodSafeParseResult)`, this walk registers
+      // the interface body so it gets a struct decl.
+      match
+        decl_exclusive_union_alias_interface_spec(
+          info, modules, canonical_types, name, args,
+        ) {
+        Some(iface) => {
+          if !seen_names.contains(iface.name) {
+            seen_names.push(iface.name)
+            interfaces.push(iface)
+          }
+          for field in iface.fields {
+            let (_, field_type) = field
+            collect_react_utility_interfaces_from_type(
+              info, field_type, modules, canonical_types, seen_names, interfaces,
+            )
+          }
+        }
+        None => ()
+      }
       for arg in args {
         collect_react_utility_interfaces_from_type(
           info, arg, modules, canonical_types, seen_names, interfaces,
         )
       }
+    }
     Array(inner) =>
       collect_react_utility_interfaces_from_type(
         info, inner, modules, canonical_types, seen_names, interfaces,
