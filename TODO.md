@@ -1427,6 +1427,24 @@ both the name and the type diverged. Fixed from both sides:
 
 ## TS Checker Conformance (current state, 2026-07-17 — TypeScript 7)
 
+Batch BV (2026-07-17): driving the BU-audit residuals down —
+lib.d.ts 569 -> 14 issues (103/108 files clean), @types/node 41 -> 14
+(80/88 clean); oracle unchanged (TP 2342 / FP 0 / TN 1750). Fixes:
+(a) interface-extends member compat now skips OVERLOADED members —
+tsc compares the whole overload set, and the pairwise entry comparison
+misfired 464 times on lib.dom's `addEventListener` specialization
+pattern alone; (b) `check_type_undeclared_tps` skips callable members
+of object-literal types (the parser discards signature-level type
+params there — Process.finalization's `register<T>`), and accumulates
+method type params across ALL same-name overload entries instead of
+letting the last overload win (lib.dom `querySelector<K>`/`<E>`);
+(c) TS2307 abstains for `node:*` / classic Node builtin specifiers and
+inside ambient-module declaration bundles. Remaining residuals (28
+total): timers' `RefCounted` cross-scope refs, lib.dom accessor-pair
+`get`/`set` duplicate-identifier misparse, type-param DEFAULTS in the
+arity check (TokenForOptions), CallableFunction/Function member compat,
+undici-types cross-package import.
+
 Batch BU (2026-07-17): full-surface parse audit of `typescript@6.0.3`
 `lib*.d.ts` (108 files) and `@types/node@26.1.1` (88 files): 196/196
 parse clean (0 parse errors); `@types/node` emits substantive decl

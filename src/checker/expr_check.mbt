@@ -24393,10 +24393,14 @@ fn walk_module_undeclared_tps(
         continue
       }
       // A generic method field carries its own fresh type parameters.
+      // Accumulate across ALL same-name entries: an overloaded method has
+      // one entry per overload (lib.dom's `querySelector<K>` /
+      // `querySelector<E>` set), and the fields are keyed by name only,
+      // so each field must see the union of the overloads' binders.
       let mut mscope = iscope
       for entry in iface.method_type_params {
         if entry.0 == field.0 {
-          mscope = scope_extend(iscope, entry.1)
+          mscope = scope_extend(mscope, entry.1)
         }
       }
       check_type_undeclared_tps(
@@ -24511,6 +24515,13 @@ fn check_type_undeclared_tps(
         match p.0 {
           Literal(key) if is_signature_sentinel(key) => continue
           _ => ()
+        }
+        // Same for generic METHOD members (`{ register<T>(ref: T): void }`,
+        // @types/node's `Process.finalization`): the object-member parser
+        // discards a signature's own type parameters, so a `Named` inside
+        // a callable value could be a perfectly-scoped generic we lost.
+        if type_mentions_callable(p.1) {
+          continue
         }
         check_type_undeclared_tps(p.1, scope, declared, issues, path)
       }
@@ -26318,9 +26329,43 @@ fn check_module_function_bodies_layered(
       let ambient_specs : Map[String, Unit] = {}
       for aug in module_.module_augmentations {
         ambient_specs[aug.0] = ()
+        // `declare module "node:fs"` also provides the unprefixed "fs"
+        // spec and vice versa — @types/node declares each builtin under
+        // one spelling and imports it under the other.
+        if aug.0.has_prefix("node:") {
+          ambient_specs[aug.0["node:".length():].to_string()] = ()
+        } else {
+          ambient_specs["node:" + aug.0] = ()
+        }
+      }
+      // A file that declares ANY ambient external module is a declaration
+      // bundle whose sibling imports (`node:util` from encoding.d.ts,
+      // `undici-types` from fetch.d.ts) resolve against the surrounding
+      // package, which a single-file check cannot see — abstain entirely.
+      let is_ambient_module_bundle = module_.module_augmentations.length() > 0
+      // Classic (unprefixed) Node builtin module names — the set stable
+      // across Node versions that @types/node declares and imports.
+      let node_builtins = [
+        "assert", "async_hooks", "buffer", "child_process", "cluster", "console",
+        "constants", "crypto", "dgram", "diagnostics_channel", "dns", "domain", "events",
+        "fs", "http", "http2", "https", "inspector", "module", "net", "os", "path",
+        "perf_hooks", "process", "punycode", "querystring", "readline", "repl", "stream",
+        "string_decoder", "timers", "tls", "trace_events", "tty", "url", "util",
+        "v8", "vm", "wasi", "worker_threads", "zlib", "sqlite", "test",
+      ]
+      // `node:*` (and their unprefixed aliases) are environment-provided
+      // Node builtins — a single-file check can never resolve them, and
+      // the bridge flows resolve them through the module resolver.
+      let is_node_builtin_spec = fn(spec : String) -> Bool {
+        spec.has_prefix("node:") ||
+        ambient_specs.contains("node:" + spec) ||
+        node_builtins.contains(spec)
       }
       for spec in module_.import_module_specs {
-        if spec != "tslib" && !ambient_specs.contains(spec) {
+        if spec != "tslib" &&
+          !is_ambient_module_bundle &&
+          !is_node_builtin_spec(spec) &&
+          !ambient_specs.contains(spec) {
           all.push({
             path: "import `\{spec}`",
             message: "cannot find module `\{spec}`",
@@ -28355,6 +28400,35 @@ fn check_interface_extends_compat(
       for f in base.fields {
         base_fields[f.0] = f.1
       }
+      // Overload sets: when either side declares the member more than
+      // once, tsc compares the WHOLE set (any-overload satisfies), so a
+      // pairwise entry comparison is wrong — lib.dom's specialized
+      // `addEventListener<K extends keyof ...>` + string-overload pattern
+      // misfired 464 times. Count and skip those members below.
+      let derived_counts : Map[String, Int] = {}
+      for df in iface.fields {
+        derived_counts[df.0] = match derived_counts.get(df.0) {
+          Some(n) => n + 1
+          None => 1
+        }
+      }
+      let base_counts : Map[String, Int] = {}
+      for f in base.fields {
+        base_counts[f.0] = match base_counts.get(f.0) {
+          Some(n) => n + 1
+          None => 1
+        }
+      }
+      fn member_is_overloaded(name : String) -> Bool {
+        (match derived_counts.get(name) {
+          Some(n) => n > 1
+          None => false
+        }) ||
+        (match base_counts.get(name) {
+          Some(n) => n > 1
+          None => false
+        })
+      }
       for df in iface.fields {
         match base_fields.get(df.0) {
           Some(btype) => {
@@ -28388,7 +28462,8 @@ fn check_interface_extends_compat(
                 path: "interface \{iface.name}",
                 message: "interface incorrectly extends `\{base_name}`: property `\{df.0}` of type `\{type_display(df.1)}` is not assignable to the base type `\{type_display(btype)}`",
               })
-            } else if callable_member_incompatible(
+            } else if !member_is_overloaded(df.0) &&
+              callable_member_incompatible(
                 resolver.unwrap(d_payload),
                 resolver.unwrap(b_payload),
                 ignore_return=df.0 == "<call>" || df.0 == "<new>",
