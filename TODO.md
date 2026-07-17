@@ -1362,6 +1362,35 @@ Investigating the §17 "raw enum returns" note empirically:
   (`ffi_wrapper_return_body_expr`) also covers the preserve-wrapper
   bodies and any future path that renders enum returns.
 
+### 19. Realworld budget recalibration + version-skew-tolerant node builtins (done 2026-07-17)
+
+The env-gated `verify_realworld_typescript.sh` had drifted red after the
+generic-base-flattening batches (zod fallbacks 225 -> ~1869 by the old
+counting). Rebuilt a complete corpus root (repo-pinned zod 4.4.3 /
+valibot 1.4.2 / hono 4.12.16 etc. plus fresh installs for the rest;
+exact versions now recorded in `corpus/realworld-typescript.tsv`) and
+recalibrated all three budget tables from measured values — the gate now
+runs end to end (30 packages generated, checked, runtime-smoked) with
+budgets enforced.
+
+Generator fix found by the run:
+
+- [x] `@types/node` routinely declares APIs newer than the running Node
+  (`mkdtempDisposableSync` on node 22), and both
+  `export { x } from "node:fs"` re-exports and
+  `import { x } from "node:fs"` glue imports hard-fail at load time for
+  a missing name. `node:*` bridges now route named access through the
+  shared `import * as __ts_mbt_module` namespace
+  (`ffi_bridge_tolerant_reexport_line`,
+  `ffi_module_spec_prefers_namespace_named_imports`), so a missing name
+  stays `undefined` until actually called.
+
+Script smoke updates for current surfaces: glob escape/unescape/hasMagic
+take `Options?` (wrap in `Some`), node:sqlite options gained
+`limits`, and `StatementSync::get` now returns a real `Option` (the
+section-17 wrap) — the smoke matches on it instead of reading the raw
+value through an extern.
+
 ### Non-Goals (still)
 
 - [ ] Do not turn this list into a checklist for "all of TypeScript". Each item

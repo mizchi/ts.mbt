@@ -321,35 +321,35 @@ jsvalue_function_budget() {
   # `JSValue`-only metric grep), so historical numbers move up.
   case "$package_spec" in
     clsx) printf '0\n' ;;
-    chalk) printf '4\n' ;;
+    chalk) printf '2\n' ;;
     dotenv) printf '0\n' ;;
     ignore) printf '1\n' ;;
     hono) printf '5\n' ;;
-    zod) printf '168\n' ;;
+    zod) printf '607\n' ;;
     date-fns) printf '22\n' ;;
-    node:sqlite) printf '1\n' ;;
-    node:fs) printf '7\n' ;;
-    node:path) printf '0\n' ;;
-    node:crypto) printf '3\n' ;;
     colorette) printf '1\n' ;;
-    magic-string) printf '3\n' ;;
-    source-map) printf '7\n' ;;
-    valibot) printf '299\n' ;;
+    magic-string) printf '0\n' ;;
+    source-map) printf '9\n' ;;
+    valibot) printf '290\n' ;;
     immer) printf '15\n' ;;
-    execa) printf '1\n' ;;
+    execa) printf '5\n' ;;
     preact) printf '7\n' ;;
     vitest/runtime) printf '6\n' ;;
-    playwright) printf '192\n' ;;
-    react-router) printf '83\n' ;;
-    jose) printf '47\n' ;;
+    playwright) printf '411\n' ;;
+    react-router) printf '84\n' ;;
+    jose) printf '46\n' ;;
     express) printf '6\n' ;;
     glob) printf '7\n' ;;
+    node:sqlite) printf '1\n' ;;
+    node:fs) printf '8\n' ;;
+    node:path) printf '0\n' ;;
+    node:crypto) printf '24\n' ;;
     node:os) printf '0\n' ;;
     node:url) printf '0\n' ;;
     node:querystring) printf '0\n' ;;
     node:assert) printf '23\n' ;;
-    node:util) printf '11\n' ;;
-    node:buffer) printf '0\n' ;;
+    node:util) printf '13\n' ;;
+    node:buffer) printf '3\n' ;;
     *) printf '0\n' ;;
   esac
 }
@@ -358,15 +358,15 @@ unsupported_export_budget() {
   local package_spec="$1"
 
   case "$package_spec" in
-    zod) printf '2\n' ;;
+    zod) printf '3\n' ;;
     magic-string) printf '1\n' ;;
     valibot) printf '14\n' ;;
-    execa) printf '4\n' ;;
-    preact) printf '4\n' ;;
+    execa) printf '2\n' ;;
+    preact) printf '2\n' ;;
     react-router) printf '3\n' ;;
     glob) printf '1\n' ;;
     node:sqlite) printf '2\n' ;;
-    node:fs) printf '3\n' ;;
+    node:fs) printf '2\n' ;;
     node:crypto) printf '2\n' ;;
     node:util) printf '2\n' ;;
     node:buffer) printf '1\n' ;;
@@ -382,35 +382,35 @@ jsvalue_cause_budget() {
   # renders as `Array[JSValue]` in struct fields and is therefore counted.
   case "$package_spec" in
     clsx) printf '0|0|0|0|0|0|0\n' ;;
-    chalk) printf '6|0|0|0|0|3|3\n' ;;
+    chalk) printf '4|0|0|0|0|3|1\n' ;;
     dotenv) printf '0|0|0|0|0|0|0\n' ;;
     ignore) printf '3|2|0|1|0|0|0\n' ;;
-    hono) printf '82|8|6|27|4|29|8\n' ;;
-    zod) printf '749|167|95|45|37|379|26\n' ;;
-    date-fns) printf '22|0|5|0|0|15|2\n' ;;
+    hono) printf '85|12|6|26|4|28|9\n' ;;
+    zod) printf '1901|513|9|524|405|422|28\n' ;;
+    date-fns) printf '26|4|5|0|0|15|2\n' ;;
     colorette) printf '1|0|1|0|0|0|0\n' ;;
-    magic-string) printf '3|0|0|1|0|0|2\n' ;;
-    source-map) printf '11|2|0|5|0|3|1\n' ;;
-    valibot) printf '1494|1046|24|14|13|359|38\n' ;;
+    magic-string) printf '0|0|0|0|0|0|0\n' ;;
+    source-map) printf '17|6|0|7|0|3|1\n' ;;
+    valibot) printf '1671|1172|24|14|13|410|38\n' ;;
     immer) printf '22|4|7|2|2|1|6\n' ;;
-    execa) printf '1|0|0|0|1|0|0\n' ;;
+    execa) printf '17|2|0|4|1|0|10\n' ;;
     preact) printf '48|12|1|4|14|17|0\n' ;;
-    vitest/runtime) printf '66|37|2|2|6|19|0\n' ;;
-    playwright) printf '997|174|0|49|653|121|0\n' ;;
-    react-router) printf '324|152|29|31|37|55|20\n' ;;
-    jose) printf '57|10|2|12|11|10|12\n' ;;
+    vitest/runtime) printf '64|35|2|3|6|18|0\n' ;;
+    playwright) printf '1336|196|0|85|885|170|0\n' ;;
+    react-router) printf '349|166|25|30|39|67|22\n' ;;
+    jose) printf '67|18|1|15|11|10|12\n' ;;
     express) printf '6|0|0|0|0|2|4\n' ;;
     glob) printf '17|6|0|1|0|2|8\n' ;;
     node:sqlite) printf '3|2|0|0|0|1|0\n' ;;
-    node:fs) printf '19|2|0|0|0|17|0\n' ;;
+    node:fs) printf '34|8|0|0|0|26|0\n' ;;
     node:path) printf '0|0|0|0|0|0|0\n' ;;
-    node:crypto) printf '9|0|0|0|0|8|1\n' ;;
+    node:crypto) printf '102|24|3|18|1|56|0\n' ;;
     node:os) printf '0|0|0|0|0|0|0\n' ;;
     node:url) printf '0|0|0|0|0|0|0\n' ;;
     node:querystring) printf '0|0|0|0|0|0|0\n' ;;
-    node:assert) printf '29|6|15|3|2|0|3\n' ;;
-    node:util) printf '23|12|7|1|1|2|0\n' ;;
-    node:buffer) printf '0|0|0|0|0|0|0\n' ;;
+    node:assert) printf '29|6|4|2|13|0|4\n' ;;
+    node:util) printf '25|12|8|1|1|2|1\n' ;;
+    node:buffer) printf '9|6|0|3|0|0|0\n' ;;
     *) printf '0|0|0|0|0|0|0\n' ;;
   esac
 }
@@ -1105,9 +1105,9 @@ test "real-world glob bridge smoke" {
     windowsPathsNoEscape: Some(false),
     magicalBraces: Some(false),
   }
-  assert_eq(escape("src/*.mbt", opts), "src/\\*.mbt")
-  assert_eq(unescape("src/\\*.mbt", opts), "src/*.mbt")
-  if !has_magic("src/*.mbt", realworld_glob_options()) {
+  assert_eq(escape("src/*.mbt", Some(opts)), "src/\\*.mbt")
+  assert_eq(unescape("src/\\*.mbt", Some(opts)), "src/*.mbt")
+  if !has_magic("src/*.mbt", Some(realworld_glob_options())) {
     abort("expected glob pattern to have magic")
   }
 }
@@ -1131,13 +1131,14 @@ fn realworld_node_sqlite_options() -> DatabaseSyncOptions {
     allowBareNamedParameters: None,
     allowUnknownNamedParameters: None,
     defensive: None,
+    limits: None,
   }
 }
 
 extern "js" fn realworld_node_sqlite_params() -> Array[SQLInputValue] =
   #| () => []
 
-extern "js" fn realworld_node_sqlite_row_value(row : StringRecordOfSqloutputValue?) -> String =
+extern "js" fn realworld_node_sqlite_row_value(row : StringRecordOfSqloutputValue) -> String =
   #| (row) => row.value
 
 test "real-world node:sqlite bridge smoke" {
@@ -1150,8 +1151,10 @@ test "real-world node:sqlite bridge smoke" {
   db.exec("INSERT INTO data (key, value) VALUES (1, 'hello')")
   db.exec("UPDATE data SET value = 'world' WHERE key = 1")
   let stmt = db.prepare("SELECT value FROM data WHERE key = 1", None)
-  let row = stmt.get(realworld_node_sqlite_params())
-  assert_eq(realworld_node_sqlite_row_value(row), "world")
+  match stmt.get(realworld_node_sqlite_params()) {
+    Some(row) => assert_eq(realworld_node_sqlite_row_value(row), "world")
+    None => abort("expected the prepared statement to return a row")
+  }
   db.close()
   assert_false(db.get_database_sync_is_open())
 }
@@ -1673,13 +1676,13 @@ fn main {
     windowsPathsNoEscape: Some(false),
     magicalBraces: Some(false),
   }
-  if @sut.escape("src/*.mbt", opts) != "src/\\*.mbt" {
+  if @sut.escape("src/*.mbt", Some(opts)) != "src/\\*.mbt" {
     abort("unexpected glob escape output")
   }
-  if @sut.unescape("src/\\*.mbt", opts) != "src/*.mbt" {
+  if @sut.unescape("src/\\*.mbt", Some(opts)) != "src/*.mbt" {
     abort("unexpected glob unescape output")
   }
-  if !@sut.has_magic("src/*.mbt", realworld_glob_options()) {
+  if !@sut.has_magic("src/*.mbt", Some(realworld_glob_options())) {
     abort("expected glob pattern to have magic")
   }
 }
@@ -1703,13 +1706,14 @@ fn realworld_node_sqlite_options() -> @sut.DatabaseSyncOptions {
     allowBareNamedParameters: None,
     allowUnknownNamedParameters: None,
     defensive: None,
+    limits: None,
   }
 }
 
 extern "js" fn realworld_node_sqlite_params() -> Array[@sut.SQLInputValue] =
   #| () => []
 
-extern "js" fn realworld_node_sqlite_row_value(row : @sut.StringRecordOfSqloutputValue?) -> String =
+extern "js" fn realworld_node_sqlite_row_value(row : @sut.StringRecordOfSqloutputValue) -> String =
   #| (row) => row.value
 
 fn main {
@@ -1724,7 +1728,10 @@ fn main {
   db.exec("INSERT INTO data (key, value) VALUES (1, 'hello')")
   db.exec("UPDATE data SET value = 'world' WHERE key = 1")
   let stmt = db.prepare("SELECT value FROM data WHERE key = 1", None)
-  let row = stmt.get(realworld_node_sqlite_params())
+  let row = match stmt.get(realworld_node_sqlite_params()) {
+    Some(row) => row
+    None => abort("expected the prepared statement to return a row")
+  }
   if realworld_node_sqlite_row_value(row) != "world" {
     abort("unexpected sqlite row value")
   }

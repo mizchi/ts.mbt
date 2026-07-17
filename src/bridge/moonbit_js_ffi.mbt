@@ -4636,6 +4636,14 @@ fn ffi_module_spec_uses_public_exports(module_spec : String) -> Bool {
 fn ffi_module_spec_prefers_namespace_named_imports(
   module_spec : String,
 ) -> Bool {
+  // `node:*` builtins: `@types/node` routinely declares APIs newer than
+  // the running Node, and a static `import { x } from "node:fs"` hard
+  // fails at load time when `x` is missing from the runtime. Namespace
+  // access degrades a missing name to `undefined` until it is actually
+  // called.
+  if module_spec.has_prefix("node:") {
+    return true
+  }
   ffi_module_spec_uses_public_exports(module_spec) && !module_spec.contains(":")
 }
 
@@ -4684,6 +4692,30 @@ fn ffi_bridge_reexport_line(
     )
   }
   None
+}
+
+///|
+/// `node:*` variant of `ffi_bridge_reexport_line`: a static
+/// `export { x } from "node:fs"` hard-fails at import time when the
+/// running Node predates the installed `@types/node` surface. Routing
+/// through the shared `import * as __ts_mbt_module` namespace keeps a
+/// missing name as `undefined` until it is actually called.
+fn ffi_bridge_tolerant_reexport_line(
+  seen_import_keys : Array[String],
+  bridge_imports : Array[MoonBitBridgeImport],
+  runtime_export_name : String,
+  binding_name : String,
+) -> String? {
+  if ffi_runtime_export_requires_bridge(runtime_export_name) {
+    return None
+  }
+  if runtime_export_name != "default" && !ffi_is_js_ident(runtime_export_name) {
+    return None
+  }
+  let access = ensure_bridge_module_runtime_access(
+    seen_import_keys, bridge_imports, runtime_export_name,
+  )
+  Some("export const \{binding_name} = \{access};")
 }
 
 ///|
@@ -5736,9 +5768,15 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
             ffi_import_decl_to_moonbit(state, import_),
           )
           match
-            ffi_bridge_reexport_line(
-              module_spec, runtime_export_name, binding_name,
-            ) {
+            (if module_spec.has_prefix("node:") {
+              ffi_bridge_tolerant_reexport_line(
+                seen_bridge_import_keys, bridge_imports, runtime_export_name, binding_name,
+              )
+            } else {
+              ffi_bridge_reexport_line(
+                module_spec, runtime_export_name, binding_name,
+              )
+            }) {
             Some(reexport_line) =>
               if !needs_js_arg_conversion &&
                 !needs_js_return_conversion &&
@@ -5963,9 +6001,15 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
             ffi_func_decl_to_moonbit(state, func),
           )
           match
-            ffi_bridge_reexport_line(
-              module_spec, runtime_export_name, binding_name,
-            ) {
+            (if module_spec.has_prefix("node:") {
+              ffi_bridge_tolerant_reexport_line(
+                seen_bridge_import_keys, bridge_imports, runtime_export_name, binding_name,
+              )
+            } else {
+              ffi_bridge_reexport_line(
+                module_spec, runtime_export_name, binding_name,
+              )
+            }) {
             Some(reexport_line) =>
               if !needs_js_arg_conversion &&
                 !needs_js_return_conversion &&
