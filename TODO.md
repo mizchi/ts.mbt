@@ -1425,7 +1425,20 @@ both the name and the type diverged. Fixed from both sides:
 - [ ] Do not pursue `any` / `unknown` AST distinction unless a downstream
   consumer needs it; the JSValue count is unaffected.
 
-## TS Checker Conformance (current state, 2026-07-12 — TypeScript 7)
+## TS Checker Conformance (current state, 2026-07-17 — TypeScript 7)
+
+Batch BR (2026-07-17): TP 2333 -> 2338, MISS 401 -> 396, FP / PFLEGAL
+still 0. Bodiless generator declarations (`declare namespace M {
+function *g(): any }`, generator overload signatures, bodiless `*m()`
+class methods) are always-error grammar misuses recorded at parse time
+(generatorInAmbientContext2/4.d, generatorOverloads1/2/3);
+`Constructor(...)` joined `is_definitely_not_callable` (a
+construct-signature value called without `new` is TS2348 — inference
+doesn't reach it for the remaining corpus cases yet, but the predicate
+is sound). Remaining 396 MISS is a long tail (top cluster TS2322 at 30,
+71 files with TS7-only baselines).
+
+## TS Checker Conformance (current state, 2026-07-12, superseded above — TypeScript 7)
 
 The oracle now correlates against **TypeScript 7** (typescript-go
 v7.0.2). Truth comes from vendored name manifests

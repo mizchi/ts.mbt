@@ -2233,6 +2233,14 @@ fn Parser::parse_class_body(
       // tsc does not flag an overload signature whose implementation
       // carries the return annotation.)
       let _ = had_return_annotation
+      // TS1221 / overload-signature rule: a bodiless `*method()` is
+      // always an error — generators are not allowed in ambient
+      // contexts, and an overload signature cannot be a generator.
+      if is_generator && !has_body_block {
+        self.grammar_misuses.push(
+          "a generator requires a body: `*\{method_name}` cannot be an ambient declaration or overload signature",
+        )
+      }
       let body = if consumed_semi {
         @ast.TsBlock::{ stmts: [], stmt_positions: [] }
       } else if !self.check(LBrace) {

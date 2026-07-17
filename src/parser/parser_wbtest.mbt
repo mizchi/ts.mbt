@@ -7176,3 +7176,45 @@ test "parser: legal shapes formerly in the PFLEGAL budget (batch BR)" {
   let p4 = Parser::from_source("var y = (x) / 2;")
   let _ = p4.parse_module()
 }
+
+///|
+test "parser: bodiless generator declarations are grammar misuses (TS1221 family)" {
+  // Ambient / overload-signature generators are always errors; only the
+  // implementation may carry the `*`.
+  let ambient = Parser::from_source(
+    "declare namespace M {\n    function *generator(): any;\n}",
+  ).parse_module()
+  let mut hits = 0
+  for ns in ambient.namespaces {
+    for gm in ns.module_.grammar_misuses {
+      if gm.contains("a generator requires a body") {
+        hits += 1
+      }
+    }
+  }
+  for gm in ambient.grammar_misuses {
+    if gm.contains("a generator requires a body") {
+      hits += 1
+    }
+  }
+  assert_true(hits >= 1)
+  // A generator implementation with a body stays clean, even alongside
+  // non-generator overload signatures (generatorOverloads5 shape).
+  let legal = Parser::from_source(
+    "namespace M {\n    function f(s: string): Iterable<any>;\n    function* f(s: any): Iterable<any> { }\n}",
+  ).parse_module()
+  let mut legal_hits = 0
+  for ns in legal.namespaces {
+    for gm in ns.module_.grammar_misuses {
+      if gm.contains("a generator requires a body") {
+        legal_hits += 1
+      }
+    }
+  }
+  for gm in legal.grammar_misuses {
+    if gm.contains("a generator requires a body") {
+      legal_hits += 1
+    }
+  }
+  assert_eq(legal_hits, 0)
+}

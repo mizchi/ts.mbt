@@ -384,9 +384,22 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
     }
   }
 
+  // TS1221 / overload-signature rule: a bodiless `function*` is always an
+  // error — generators are not allowed in ambient contexts, and an
+  // overload signature cannot be declared as a generator. Only the
+  // implementation (the decl WITH a body) may carry the `*`.
+  fn record_bodiless_generator(p : Parser, fname : String) -> Unit {
+    if is_generator {
+      p.grammar_misuses.push(
+        "a generator requires a body: `function* \{fname}` cannot be an ambient declaration or overload signature",
+      )
+    }
+  }
+
   if self.check(Semicolon) {
     record_implicit_any_return(self, name)
     record_signature_param_initializer(self, params)
+    record_bodiless_generator(self, name)
     let _ = self.advance()
     return {
       name,
@@ -403,6 +416,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   if !self.check(LBrace) {
     record_implicit_any_return(self, name)
     record_signature_param_initializer(self, params)
+    record_bodiless_generator(self, name)
     return {
       name,
       type_params,

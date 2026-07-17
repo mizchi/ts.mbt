@@ -5363,6 +5363,10 @@ fn is_definitely_not_callable(ty : @ast.TsType) -> Bool {
     | Array(_)
     | Tuple(_)
     | TemplateLiteralType(_, _) => true
+    // TS2348: a construct-signature-only value (`new () => T`,
+    // `{ new(): T }`) must be invoked with `new`; a bare call is never
+    // legal. `NewExpr` callees don't route through this predicate.
+    Constructor(_, _, _) => true
     _ => false
   }
 }
