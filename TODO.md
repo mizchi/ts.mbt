@@ -1427,6 +1427,13 @@ both the name and the type diverged. Fixed from both sides:
 
 ## TS Checker Conformance (current state, 2026-07-17 — TypeScript 7)
 
+Batch BT (2026-07-17): TP 2341 -> 2342, MISS 393 -> 392, FP / PFLEGAL
+still 0. Class-expression member bodies no longer inherit control-flow
+narrowing: the parser lowers `class { ... }` expressions to a `<class>`
+IIFE, and `check_funcexpr_with_context` now rebinds captured variables at
+their DECLARED types for that marker — class members execute after the
+guard region, so tsc does not narrow into them (typeGuardInClass).
+
 Batch BS (2026-07-17): TP 2338 -> 2341, MISS 396 -> 393, FP / PFLEGAL
 still 0. Mining the TS2322 cluster (30 files, 17 single-code): (a) a
 concrete primitive assigned to an opaque generic indexed access

@@ -11781,8 +11781,21 @@ fn check_funcexpr_with_context(
   sub_path : String,
 ) -> Unit {
   let env = ExprEnv::new()
+  // `<class>` marks the parser's class-expression IIFE lowering. Class
+  // member bodies execute after the guard region ends, so TypeScript does
+  // NOT carry control-flow narrowing into them (typeGuardInClass) —
+  // rebind captured variables at their declared types.
+  let reset_narrowing = f.name == "<class>"
   for entry in outer.full_snapshot() {
-    env.bind(entry.0, entry.1)
+    let captured = if reset_narrowing {
+      match outer.lookup_declared(entry.0) {
+        Some(d) => d
+        None => entry.1
+      }
+    } else {
+      entry.1
+    }
+    env.bind(entry.0, captured)
   }
   let param_names : Array[String] = []
   let mut i = 0
