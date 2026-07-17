@@ -1097,19 +1097,91 @@ fn bridge_return_type_contains_nested_enum(
 }
 
 ///|
-fn render_bridge_public_wrapper(fn_decl : BridgeTopLevelFnDecl) -> String? {
-  render_bridge_public_wrapper_with_converters(
-    fn_decl,
-    [],
-    bridge_value_fn_name(fn_decl.public_name),
-  )
+/// Opaque (`declare pub type X`) names from the `.mbti` surface. Optional
+/// returns of these types (plus `JSValue` / `Double` / arrays / function
+/// types) use MoonBit's boxed `Option` repr, so raw `value | undefined`
+/// extern returns break `match` — see `ffi_option_return_inner_is_boxed`
+/// in `moonbit_js_ffi.mbt`, whose unboxed/boxed split this mirrors from
+/// the `.mbti` side.
+fn collect_bridge_opaque_type_names(bridge_mbti : String) -> Array[String] {
+  let names : Array[String] = []
+  let prefix = "declare pub type "
+  for line_view in bridge_mbti.split("\n") {
+    let line = line_view.to_owned().trim().to_owned()
+    if !line.has_prefix(prefix) {
+      continue
+    }
+    let rest = line[prefix.length():].to_owned()
+    let name = match rest.find("[") {
+      Some(index) => rest[:index].to_owned()
+      None => rest
+    }
+    let trimmed = name.trim().to_owned()
+    if trimmed != "" && !names.contains(trimmed) {
+      names.push(trimmed)
+    }
+  }
+  names
 }
+
+///|
+fn bridge_optional_return_needs_wrap(
+  opaque_type_names : Array[String],
+  return_type : String,
+) -> Bool {
+  let inner = match ffi_rendered_return_type_optional_inner(return_type) {
+    Some(inner) => inner
+    None => return false
+  }
+  // Function / tuple types are always boxed.
+  if inner.has_prefix("(") {
+    return true
+  }
+  if inner == "JSValue" || inner == "Double" || inner == "Float" {
+    return true
+  }
+  if inner.has_prefix("Array[") ||
+    inner.has_prefix("FixedArray[") ||
+    inner.has_prefix("Map[") ||
+    inner.has_prefix("Promise[") ||
+    inner.has_prefix("Iter[") {
+    return true
+  }
+  let base = match inner.find("[") {
+    Some(index) => inner[:index].to_owned()
+    None => inner
+  }
+  opaque_type_names.contains(base)
+}
+
+///|
+fn bridge_fn_decl_needs_option_return_wrap(
+  fn_decl : BridgeTopLevelFnDecl,
+  converters : Array[BridgeEnumConverter],
+  opaque_type_names : Array[String],
+) -> Bool {
+  // Enum-converted returns already produce MoonBit values via
+  // `_from_js_optional`; wrapping them again would be wrong.
+  match find_bridge_enum_converter_for_type(converters, fn_decl.return_type) {
+    Some(_) => return false
+    None => ()
+  }
+  bridge_optional_return_needs_wrap(opaque_type_names, fn_decl.return_type)
+}
+
+///|
+/// Mirror of `ffi_option_return_wrap_helper_decls` in
+/// `moonbit_js_ffi.mbt` for packages where only the top-level wrapper
+/// pass needs it. `contains` checks on the definition keep the two
+/// injection points from duplicating it.
+let bridge_option_return_wrap_helper_decls : String = "extern \"js\" fn __ts_mbt_option_return_is_absent(value : JSValue) -> Bool =\n  #| (value) => value === undefined || value === null\n\nfn[T] __ts_mbt_option_return_value(raw : JSValue) -> T = \"%identity\"\n\nfn[T] __ts_mbt_wrap_option_return(raw : JSValue) -> T? {\n  if __ts_mbt_option_return_is_absent(raw) {\n    None\n  } else {\n    Some(__ts_mbt_option_return_value(raw))\n  }\n}"
 
 ///|
 fn render_bridge_public_wrapper_with_converters(
   fn_decl : BridgeTopLevelFnDecl,
   converters : Array[BridgeEnumConverter],
   internal_name : String,
+  wrap_option_return? : Bool = false,
 ) -> String? {
   if bridge_value_identifier_needs_suffix(fn_decl.public_name) {
     return None
@@ -1118,7 +1190,11 @@ fn render_bridge_public_wrapper_with_converters(
     fn_decl, converters,
   )
   if internal_name == "" ||
-    (!needs_conversion && internal_name == fn_decl.public_name) {
+    (
+      !needs_conversion &&
+      !wrap_option_return &&
+      internal_name == fn_decl.public_name
+    ) {
     return None
   }
   let param_decls = parse_bridge_param_decls(fn_decl.params_src)
@@ -1136,11 +1212,14 @@ fn render_bridge_public_wrapper_with_converters(
   } else {
     internal_name + "(" + call_args.join(", ") + ")"
   }
-  let body_expr = bridge_return_expr_for_type(
-    converters,
-    fn_decl.return_type,
-    call_expr,
-  )
+  let body_expr = if wrap_option_return {
+    // The raw extern keeps its declared `T?` return type, but the value
+    // crossing the boundary is the raw JS `value | undefined | null` —
+    // construct the `Option` on the MoonBit side instead of trusting it.
+    "__ts_mbt_wrap_option_return(unsafeCast(\{call_expr}))"
+  } else {
+    bridge_return_expr_for_type(converters, fn_decl.return_type, call_expr)
+  }
   Some(
     "pub fn \{fn_decl.public_name}(\{fn_decl.params_src}) -> \{fn_decl.return_type} {\n  \{body_expr}\n}",
   )
@@ -1199,7 +1278,9 @@ fn add_bridge_public_wrappers(
   let enum_converters = collect_bridge_enum_converters(
     bridge_mbti, next_bridge_mbt,
   )
+  let opaque_type_names = collect_bridge_opaque_type_names(bridge_mbti)
   let wrappers : Array[String] = []
+  let mut used_option_return_wrap = false
   for line_view in bridge_mbti.split("\n") {
     let line = line_view.to_owned().trim().to_owned()
     match parse_bridge_top_level_fn_decl_line(line) {
@@ -1208,19 +1289,21 @@ fn add_bridge_public_wrappers(
         let needs_conversion = bridge_fn_decl_needs_enum_conversion(
           fn_decl, enum_converters,
         )
-        let internal_name = if needs_conversion &&
+        let needs_option_wrap = bridge_fn_decl_needs_option_return_wrap(
+          fn_decl, enum_converters, opaque_type_names,
+        )
+        let internal_name = if (needs_conversion || needs_option_wrap) &&
           base_internal_name == fn_decl.public_name {
           base_internal_name + "_raw"
         } else {
           base_internal_name
         }
-        let wrapper = if enum_converters.length() == 0 {
-          render_bridge_public_wrapper(fn_decl)
-        } else {
-          render_bridge_public_wrapper_with_converters(
-            fn_decl, enum_converters, internal_name,
-          )
-        }
+        let wrapper = render_bridge_public_wrapper_with_converters(
+          fn_decl,
+          enum_converters,
+          internal_name,
+          wrap_option_return=needs_option_wrap,
+        )
         match wrapper {
           Some(wrapper) => {
             let raw_decl = "pub extern \"js\" fn \{base_internal_name}("
@@ -1230,6 +1313,9 @@ fn add_bridge_public_wrappers(
                 new="extern \"js\" fn \{internal_name}(",
               )
               wrappers.push(wrapper)
+              if needs_option_wrap {
+                used_option_return_wrap = true
+              }
             }
           }
           None => ()
@@ -1241,6 +1327,14 @@ fn add_bridge_public_wrappers(
   let helpers : Array[String] = [
     "pub fn[A, B] unsafeCast(value : A) -> B = \"%identity\"",
   ]
+  if used_option_return_wrap &&
+    !next_bridge_mbt.contains("fn[T] __ts_mbt_wrap_option_return") {
+    helpers.push(bridge_option_return_wrap_helper_decls)
+    // The helper references `JSValue`; make sure the package declares it.
+    if !next_bridge_mbt.contains("type JSValue") {
+      next_bridge_mbt = "#external\ntype JSValue\n\n" + next_bridge_mbt
+    }
+  }
   for helper in collect_bridge_type_guard_helpers(bridge_mbti, next_bridge_mbt) {
     // Widen `Token` to `Token[JSValue]` etc. when the target type was
     // emitted with generic parameters so the guard's `unsafeCast` lands

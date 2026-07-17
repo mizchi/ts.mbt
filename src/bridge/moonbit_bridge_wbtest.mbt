@@ -1031,7 +1031,12 @@ test "bridge: bridge public wrapper skips reserved public names" {
     arg_names: ["value"],
     return_type: "String",
   }
-  match render_bridge_public_wrapper(decl) {
+  match
+    render_bridge_public_wrapper_with_converters(
+      decl,
+      [],
+      bridge_value_fn_name(decl.public_name),
+    ) {
     Some(_) => fail("reserved public names should not generate wrappers")
     None => ()
   }
@@ -1048,7 +1053,12 @@ test "bridge: bridge top-level fn parser keeps function-typed parameters intact"
         decl.params_src,
         "text : String, pos : Double, cb : (Double, Double, CommentKind, Bool) -> U",
       )
-      match render_bridge_public_wrapper(decl) {
+      match
+        render_bridge_public_wrapper_with_converters(
+          decl,
+          [],
+          bridge_value_fn_name(decl.public_name),
+        ) {
         Some(wrapper) =>
           assert_true(
             wrapper.contains("for_each_leading_comment_range(text, pos, cb)"),
@@ -1096,4 +1106,52 @@ test "bridge mbti: index-signature accessors are exposed in the interface" {
   // interface form.
   assert_false(exposed.contains("extern"))
   assert_false(exposed.contains("self[key]"))
+}
+
+///|
+test "bridge: boxed optional returns get a MoonBit-side Option wrapper" {
+  // `Option[T]` is only unboxed for String/Int/struct/enum payloads on
+  // the JS backend; opaque handles, JSValue, Double and arrays use the
+  // `{$tag, _0}` box, so raw `value | undefined` extern returns must be
+  // rebuilt via `__ts_mbt_wrap_option_return`.
+  let opaque : Array[String] = ["SQL", "JSValue"]
+  assert_true(bridge_optional_return_needs_wrap(opaque, "SQL[JSValue]?"))
+  assert_true(bridge_optional_return_needs_wrap(opaque, "JSValue?"))
+  assert_true(bridge_optional_return_needs_wrap(opaque, "Double?"))
+  assert_true(bridge_optional_return_needs_wrap(opaque, "Array[String]?"))
+  assert_true(
+    bridge_optional_return_needs_wrap(opaque, "((String) -> JSValue)?"),
+  )
+  // Unboxed payloads keep the raw passthrough.
+  assert_false(bridge_optional_return_needs_wrap(opaque, "String?"))
+  assert_false(bridge_optional_return_needs_wrap(opaque, "Bool?"))
+  // The trailing `?` of a function-typed return binds to the function's
+  // result, not the whole type.
+  assert_false(
+    bridge_optional_return_needs_wrap(
+      opaque, "() -> ((PropsForRenderer) -> JSValue)?",
+    ),
+  )
+  assert_false(bridge_optional_return_needs_wrap(opaque, "SQL[JSValue]"))
+}
+
+///|
+test "bridge: top-level optional extern demotes to raw plus Option wrapper" {
+  let bridge_mbti =
+    #|declare pub type JSValue
+    #|declare pub type SQL[T]
+    #|declare pub fn and_(conditions : Array[SQLWrapper?]) -> SQL[JSValue]?
+  let bridge_mbt =
+    #|#external
+    #|pub type JSValue
+    #|
+    #|pub extern "js" fn and_(conditions : Array[SQLWrapper?]) -> SQL[JSValue]? = "__ts_mbt_and"
+  let rewritten = add_bridge_public_wrappers(bridge_mbti, bridge_mbt)
+  assert_true(rewritten.contains("extern \"js\" fn and__raw("))
+  assert_true(
+    rewritten.contains(
+      "pub fn and_(conditions : Array[SQLWrapper?]) -> SQL[JSValue]? {\n  __ts_mbt_wrap_option_return(unsafeCast(and__raw(conditions)))\n}",
+    ),
+  )
+  assert_true(rewritten.contains("fn[T] __ts_mbt_wrap_option_return"))
 }

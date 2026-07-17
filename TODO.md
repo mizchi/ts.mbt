@@ -1286,7 +1286,46 @@ package would hit):
   fields): matching a `T?` EXTERN RETURN with MoonBit `match` can crash
   on the raw `value | undefined` repr when MoonBit expects the tagged
   box — optional extern returns need repr-aware boxing glue. Reads via
-  a small extern accessor work today.
+  a small extern accessor work today. **Fixed in §17.**
+
+### 17. Optional extern returns construct `Option` on the MoonBit side (done 2026-07-17)
+
+Follow-up to the §16 known gap. Empirical repr table for `Option[T]` on
+the JS backend: `String` / `Int` / struct instances / enum instances are
+unboxed (`Some` = raw value, `None` = `undefined`); `Bool` uses the `-1`
+sentinel; everything else — `JSValue`, `Double`, arrays, opaque
+`#external` handles, generics, function/tuple types — uses a `{$tag, _0}`
+box. A raw `value | undefined` extern return against a boxed `Option` is
+not just crash-prone: a real value silently matches as `None`.
+
+- [x] `__ts_mbt_wrap_option_return[T](raw : JSValue) -> T?` helper pair
+  (absence check treats `undefined` and `null` as `None`; `%identity`
+  cast for `Some`) injected once per generated package, from either the
+  FFI emission (`ffi_option_return_wrap_helper_decls`) or the top-level
+  wrapper pass (`bridge_option_return_wrap_helper_decls`), `contains`
+  checks dedup the two.
+- [x] Top-level `pub extern` fns with boxed-optional returns are demoted
+  to `<name>_raw` externs plus a public wrapper by
+  `add_bridge_public_wrappers` (same mechanism as enum-converter
+  wrappers). Covers drizzle `and_` / `or_`, zod `getErrorMap`.
+- [x] Class-method / getter `preserve` wrapper bodies use the wrap helper
+  instead of a bare `unsafeCast` when the return is boxed-optional
+  (drizzle `SQL::if_`, `One::get_one_config`, hono `Context` getters).
+- [x] Non-preserve method / getter / index-accessor / function-field
+  externs with boxed-optional returns emit a private raw extern
+  (`_*_opt_ret_js`, `self` renamed `this_`) plus a public wrapper via
+  `ffi_option_return_extern_pair` (valibot `ObjectEntries::op_get`).
+- [x] The trailing `?` of a function-typed return
+  (`() -> ((Props) -> JSValue)?`) binds to the function's result — a
+  depth-0 `->` scan (`ffi_rendered_return_type_optional_inner`) keeps
+  those on the raw passthrough.
+- Verified: drizzle `match and_([...])` sees `Some` for real values and
+  `None` for `undefined` (previously silent-`None` / crash); zod,
+  valibot, hono scaffold smokes stay green.
+- Still open (pre-existing, unrelated to Option): non-optional generated
+  ENUM returns cross as raw strings (`nextFlag -> NodeFlag`), relying on
+  idempotent to_js converters for round-trips; matching them in MoonBit
+  needs a return-side `_from_js` conversion.
 
 ### Non-Goals (still)
 
