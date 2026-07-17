@@ -1325,7 +1325,42 @@ not just crash-prone: a real value silently matches as `None`.
 - Still open (pre-existing, unrelated to Option): non-optional generated
   ENUM returns cross as raw strings (`nextFlag -> NodeFlag`), relying on
   idempotent to_js converters for round-trips; matching them in MoonBit
-  needs a return-side `_from_js` conversion.
+  needs a return-side `_from_js` conversion. **Resolved in §18** — the
+  note was partly stale: top-level enum returns were already converted
+  by the wrapper pass; the real broken vectors were index-signature
+  accessors and empty structs.
+
+### 18. Enum-typed accessors + index-signature-only interfaces (done 2026-07-17)
+
+Investigating the §17 "raw enum returns" note empirically:
+
+- Top-level fn enum returns were ALREADY converted
+  (`nextFlag -> NodeFlag` demotes to a `String` raw extern + a wrapper
+  calling `__ts_mbt_node_flag_from_js`) — the note was wrong about them.
+- Class/interface METHOD returns never render enum types (they degrade
+  to `String` at the ffi surface), so they exchange raw strings
+  correctly at runtime; zero real-package occurrences. The decl-layer
+  `.mbti` still advertises the enum names there — a surface divergence,
+  not a runtime bug.
+- The genuinely broken vectors, both fixed:
+  - [x] `op_get` on `[k: string]: "a" | "b"` returned the raw string
+    typed as the enum (match misbehaved) and `op_set` wrote MoonBit tag
+    ints into the JS object. Both now route through
+    `ffi_converted_return_extern_pair` / a `_to_js` wrapper pair
+    (`ffi_rendered_generated_enum_info` decides; composes with the §17
+    Option wrap for the `Enum?` getter return).
+  - [x] Index-signature-only interfaces lowered to ZERO-FIELD structs,
+    which MoonBit's JS backend value-erases — the instance compiled to
+    `undefined` and every accessor crashed. Zero-field interface
+    lowering now emits `#external pub type X` (matching what the decl
+    layer already advertised in `.mbti`).
+- Verified at runtime via the extended `realworld-literal-options`
+  fixture: a `FlagMachine` class (method / getter / optional-method
+  returns) plus a `FlagTable` index-signature interface with
+  `op_get` -> `Some(R)` / missing -> `None` / `op_set(A)` round-trip.
+- Return-side enum conversion machinery
+  (`ffi_wrapper_return_body_expr`) also covers the preserve-wrapper
+  bodies and any future path that renders enum returns.
 
 ### Non-Goals (still)
 

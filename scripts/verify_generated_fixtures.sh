@@ -388,6 +388,43 @@ test "generated bridge package converts real-world literal option fields" {
     _ => abort("expected Hono mode option to cross as a primitive string")
   }
 }
+
+test "class methods and enum index signatures work at runtime" {
+  let machine = new_flag_machine()
+  // Method returns degrade to String at the ffi surface — raw values
+  // must cross unconverted.
+  if FlagMachine::advance(machine) != "r" {
+    abort("expected advance() to return the raw flag string")
+  }
+  if FlagMachine::get_flag_machine_mode(machine) != "strict" {
+    abort("expected the mode getter to return the raw string")
+  }
+  match FlagMachine::peek(machine) {
+    Some("w") => ()
+    _ => abort("expected peek() to see the next flag")
+  }
+  let _ = FlagMachine::advance(machine)
+  let _ = FlagMachine::advance(machine)
+  match FlagMachine::peek(machine) {
+    None => ()
+    Some(_) => abort("expected peek() past the end to be None")
+  }
+  // Index-signature accessors convert enum values in both directions.
+  let table = flagTable()
+  match table.op_get("primary") {
+    Some(R) => ()
+    _ => abort("expected op_get to convert the raw flag string to the enum")
+  }
+  match table.op_get("missing") {
+    None => ()
+    Some(_) => abort("expected op_get on a missing key to be None")
+  }
+  table.op_set("extra", A)
+  match table.op_get("extra") {
+    Some(A) => ()
+    _ => abort("expected op_set to write the raw string back")
+  }
+}
 EOF
 
   moon -C "$root" check --target js

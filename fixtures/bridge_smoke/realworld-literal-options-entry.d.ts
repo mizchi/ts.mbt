@@ -30,3 +30,16 @@ export interface HonoProbeOptions {
 }
 
 export declare function createHonoProbe(options: HonoProbeOptions): HonoMode;
+
+export declare class FlagMachine {
+  constructor();
+  readonly mode: HonoMode;
+  advance(): NodeFlag;
+  peek(): NodeFlag | undefined;
+}
+
+export interface FlagTable {
+  [key: string]: NodeFlag;
+}
+
+export declare function flagTable(): FlagTable;
