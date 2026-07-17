@@ -22835,6 +22835,18 @@ fn check_overload_void_return(module_ : @ast.TsModule) -> Array[ExprIssue] {
   // Group same-name declarations in source order.
   let by_name : Map[String, Array[@ast.TsType]] = {}
   let order : Array[String] = []
+  // Functions written inside a `declare module "spec" { ... }` body are
+  // ambient overload signatures with no implementation; the trailing
+  // void-return heuristic below assumes the last decl is the
+  // implementation, which doesn't hold there (@types/node crypto's
+  // `randomInt` / `verify`). Exempt them by name.
+  let ambient_module_fns : Map[String, Unit] = {}
+  for entry in module_.module_augmentations {
+    let (_, aug) = entry
+    for af in aug.funcs {
+      ambient_module_fns[af.name] = ()
+    }
+  }
   for f in module_.funcs {
     match by_name.get(f.name) {
       Some(arr) => arr.push(f.return_type)
@@ -22860,6 +22872,9 @@ fn check_overload_void_return(module_ : @ast.TsModule) -> Array[ExprIssue] {
   }
 
   for name in order {
+    if ambient_module_fns.contains(name) {
+      continue
+    }
     match by_name.get(name) {
       Some(rets) if rets.length() >= 2 =>
         if rets[rets.length() - 1] is Void {
@@ -27366,10 +27381,21 @@ fn check_native_class_property_initializers(
   if !strict_property_init {
     return issues
   }
+  // Classes written inside a `declare module "spec" { ... }` body are
+  // ambient by construction; the parser flattens them into
+  // `module_.classes` without the `declare` flag, so exempt them by name
+  // (@types/node's `declare module "util" { class MIMEType { ... } }`).
+  let ambient_module_classes : Map[String, Unit] = {}
+  for entry in module_.module_augmentations {
+    let (_, aug) = entry
+    for c in aug.classes {
+      ambient_module_classes[c.name] = ()
+    }
+  }
   for decl in module_.classes {
     // Ambient `declare class` decls don't get strict-init checking
     // -- TS itself only enforces it on runtime class bodies.
-    if decl.is_declare {
+    if decl.is_declare || ambient_module_classes.contains(decl.name) {
       continue
     }
     // Abstract classes can declare `abstract x: T` fields that

@@ -184,6 +184,31 @@ pub fn check_dts_top_level_modifiers(
       exported[gm["<export-value>".length():].to_string()] = ()
     }
   }
+  // Declarations written inside a `declare module "spec" { ... }` body are
+  // ambient by construction and exempt from the rule, but the parser also
+  // flattens them into the surrounding module's decl lists (so resolution
+  // flows that don't consult `module_augmentations` still see them) —
+  // exempt everything the augmentations contributed, by name
+  // (@types/node's `declare module "node:fs" { function rename(...) }`).
+  for entry in module_.module_augmentations {
+    let (_, aug) = entry
+    for f in aug.funcs {
+      exported[f.name] = ()
+    }
+    for e in aug.enums {
+      exported[e.name] = ()
+    }
+    for c in aug.classes {
+      exported[c.name] = ()
+    }
+    for stmt in aug.top_level_stmts {
+      match stmt {
+        Var(Ident(n), _, _) | Let(Ident(n), _, _) | Const(Ident(n), _, _) =>
+          exported[n] = ()
+        _ => ()
+      }
+    }
+  }
   fn flag(kind : String, name : String) -> Unit {
     if !exported.contains(name) {
       issues.push({

@@ -1427,6 +1427,22 @@ both the name and the type diverged. Fixed from both sides:
 
 ## TS Checker Conformance (current state, 2026-07-17 — TypeScript 7)
 
+Batch BU (2026-07-17): full-surface parse audit of `typescript@6.0.3`
+`lib*.d.ts` (108 files) and `@types/node@26.1.1` (88 files): 196/196
+parse clean (0 parse errors); `@types/node` emits substantive decl
+surfaces (fs 459 / crypto 552 / util 106 MoonBit decls), `lib.*` files
+are global ambient scripts with an intentionally empty export surface.
+Checker false positives found by the audit and fixed (all
+`declare module "spec" { ... }` body exemptions — the parser flattens
+those bodies into the parent module without ambient flags): TS1046
+top-level-modifier (197 hits in fs alone), TS2564 strict-property-init
+(util's MIMEType), and the trailing-void overload heuristic (crypto's
+randomInt / verify). After the fixes @types/node checks 69/88 files
+fully clean (41 residual issues, mostly interface-generic `T` scoping
+and cross-file globals); lib.d.ts residuals concentrate in lib.dom
+(482 of 569, deep DOM hierarchy modeling limits). Oracle unchanged
+(TP 2342 / FP 0).
+
 Batch BT (2026-07-17): TP 2341 -> 2342, MISS 393 -> 392, FP / PFLEGAL
 still 0. Class-expression member bodies no longer inherit control-flow
 narrowing: the parser lowers `class { ... }` expressions to a `<class>`
