@@ -40,3 +40,23 @@ export function createHonoProbe(options) {
   }
   return "loose";
 }
+
+export class FlagMachine {
+  constructor() {
+    this.flags = ["r", "w", "a"];
+    this.index = 0;
+    this.mode = "strict";
+  }
+  advance() {
+    const flag = this.flags[this.index];
+    this.index += 1;
+    return flag;
+  }
+  peek() {
+    return this.flags[this.index];
+  }
+}
+
+export function flagTable() {
+  return { primary: "r", fallback: "w" };
+}

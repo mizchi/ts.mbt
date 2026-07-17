@@ -384,9 +384,22 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
     }
   }
 
+  // TS1221 / overload-signature rule: a bodiless `function*` is always an
+  // error — generators are not allowed in ambient contexts, and an
+  // overload signature cannot be declared as a generator. Only the
+  // implementation (the decl WITH a body) may carry the `*`.
+  fn record_bodiless_generator(p : Parser, fname : String) -> Unit {
+    if is_generator {
+      p.grammar_misuses.push(
+        "a generator requires a body: `function* \{fname}` cannot be an ambient declaration or overload signature",
+      )
+    }
+  }
+
   if self.check(Semicolon) {
     record_implicit_any_return(self, name)
     record_signature_param_initializer(self, params)
+    record_bodiless_generator(self, name)
     let _ = self.advance()
     return {
       name,
@@ -403,6 +416,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   if !self.check(LBrace) {
     record_implicit_any_return(self, name)
     record_signature_param_initializer(self, params)
+    record_bodiless_generator(self, name)
     return {
       name,
       type_params,
@@ -932,11 +946,16 @@ fn Parser::parse_type_param_names_bounds_and_const_flags(
   let const_flags : Array[Bool] = []
   let bounds : Array[(String, @ast.TsType)] = []
   self.last_type_params_had_default = false
+  self.last_type_params_min_required = 0
   // Tracked in a local (not the parser field) because parsing a parameter's
   // bound can recursively invoke this function for a nested generic function
   // type and clobber the field; the field is assigned once at the end from
   // this local so the outermost call's value wins.
   let mut had_default = false
+  // Index of the first defaulted parameter (-1 = none yet). TS requires
+  // defaulted parameters to be trailing, so this is also the minimum legal
+  // type-argument count for the declaration.
+  let mut min_required = -1
   if !self.check(Lt) {
     return (names, const_flags, bounds)
   }
@@ -1027,6 +1046,9 @@ fn Parser::parse_type_param_names_bounds_and_const_flags(
     }
     if self.match_(Eq) {
       had_default = true
+      if min_required < 0 {
+        min_required = names.length() - 1
+      }
       self.skip_type_param_tail_until_delim()
     }
     if self.check(Comma) {
@@ -1039,6 +1061,11 @@ fn Parser::parse_type_param_names_bounds_and_const_flags(
     }
   }
   self.last_type_params_had_default = had_default
+  self.last_type_params_min_required = if min_required < 0 {
+    names.length()
+  } else {
+    min_required
+  }
   (names, const_flags, bounds)
 }
 
@@ -1307,6 +1334,14 @@ pub fn Parser::parse_interface(
       "<generic-noarg-required>\{name}",
     )
   }
+  // Minimum legal type-argument count (leading parameters without a
+  // default). Consulted by the checker's TS2314 under-application check so
+  // `Iterable<T, TReturn = any, TNext = any>` accepts 1..3 arguments.
+  if type_params.length() > 0 {
+    self.interface_member_modifier_misuses.push(
+      "<generic-min-arity>\{name}=\{self.last_type_params_min_required}",
+    )
+  }
   // TS1277: a `const` modifier on a type parameter is only valid on a
   // function, method, or class. An interface's own type-parameter list is
   // none of those, so `interface I<const T>` is always an error. Record it
@@ -1363,6 +1398,27 @@ pub fn Parser::parse_interface(
     if self.can_consume_interface_readonly_modifier() {
       let _ = self.advance()
       is_readonly_field = true
+    }
+    // Interface accessor members (TS 5.4+, used by modern lib files:
+    // `get maxByteLength(): number;` in lib.es2024.arraybuffer). Consume
+    // the `get` / `set` keyword and treat the member as a plain property
+    // — a getter contributes its return type (readonly), a setter its
+    // parameter type. Bare members NAMED `get` / `set` (followed by
+    // `(` / `<` / `:` / `?`) keep the old path.
+    let mut accessor_kind : String? = None
+    match self.peek().kind {
+      Ident(n) if (n == "get" || n == "set") &&
+        self.peek_at(1).kind != LParen &&
+        self.peek_at(1).kind != Lt &&
+        self.peek_at(1).kind != Colon &&
+        self.peek_at(1).kind != Question &&
+        self.peek_at(1).kind != Semicolon &&
+        self.peek_at(1).kind != Comma &&
+        self.peek_at(1).kind != RBrace => {
+        let _ = self.advance()
+        accessor_kind = Some(n)
+      }
+      _ => ()
     }
     // Parse field/method name
     let field_name : String = match self.peek().kind {
@@ -1704,8 +1760,25 @@ pub fn Parser::parse_interface(
       for param in method_params {
         param_types.push(param.type_)
       }
-      let field_type = @ast.TsType::Func(param_types, return_type)
-      if field_name != "<index_signature>" {
+      // Accessor members contribute PROPERTY types, not method types: a
+      // getter its return type (readonly), a setter its parameter type.
+      // A get/set pair for the same name dedups to one field entry.
+      let field_type = match accessor_kind {
+        Some("get") => {
+          readonly_fields.push(field_name)
+          return_type
+        }
+        Some("set") =>
+          if param_types.length() > 0 {
+            param_types[0]
+          } else {
+            @ast.TsType::Any
+          }
+        _ => @ast.TsType::Func(param_types, return_type)
+      }
+      let accessor_pair_seen = accessor_kind is Some(_) &&
+        fields.iter().any(fn(f) { f.0 == field_name })
+      if field_name != "<index_signature>" && !accessor_pair_seen {
         fields.push(
           (
             field_name,
@@ -1996,6 +2069,11 @@ fn Parser::parse_type_alias_after_type_keyword(
   if type_params.length() > 0 && not(self.last_type_params_had_default) {
     self.interface_member_modifier_misuses.push(
       "<generic-noarg-required>\{name}",
+    )
+  }
+  if type_params.length() > 0 {
+    self.interface_member_modifier_misuses.push(
+      "<generic-min-arity>\{name}=\{self.last_type_params_min_required}",
     )
   }
   // TS1277: a `const` modifier on a type-alias type parameter is invalid
@@ -2664,6 +2742,11 @@ fn Parser::parse_declare_class(
       not(self.last_type_params_had_default) {
       self.interface_member_modifier_misuses.push(
         "<generic-noarg-required>\{name}",
+      )
+    }
+    if name != "" && names.length() > 0 {
+      self.interface_member_modifier_misuses.push(
+        "<generic-min-arity>\{name}=\{self.last_type_params_min_required}",
       )
     }
     class_type_param_bound_len = self.push_local_type_param_bounds(

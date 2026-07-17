@@ -127,6 +127,7 @@ pub struct Parser {
   mut pending_class_base_expr : @ast.TsExpr?
   mut pending_call_type_args : Array[@ast.TsType]
   mut last_type_params_had_default : Bool
+  mut last_type_params_min_required : Int
   local_type_param_bounds : Array[(String, @ast.TsType)]
   pending_decorators : Array[@ast.TsExpr]
   param_property_scopes : Array[Array[(String, Bool, String)]]

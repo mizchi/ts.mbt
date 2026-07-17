@@ -43,6 +43,10 @@ priv struct MoonBitJsFfiState {
   // pass can decide whether to write the corresponding extern declaration.
   mut needs_js_any : Bool
   mut needs_promise : Bool
+  // Set when any emitted decl routes an optional return through
+  // `__ts_mbt_wrap_option_return`, so the emission pass appends the
+  // shared helper definitions exactly once.
+  mut needs_option_return_wrap : Bool
 }
 
 ///|
@@ -1501,41 +1505,42 @@ fn ffi_function_field_method_decl(
         Some(
           "pub \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} {\n  (self.\{field_name})(\{args_src})\n}",
         )
-      } else if field_name == "_call_" {
-        let js_params : Array[String] = ["self"]
-        for arg in args {
-          js_params.push(arg)
-        }
-        let js_params_src = js_params.join(", ")
-        Some(
-          "pub extern \"js\" \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} =\n  #| (\{js_params_src}) => self(\{js_args_src})",
-        )
-      } else if receiver_type == "Assertion" {
-        let js_params : Array[String] = ["self"]
-        for arg in args {
-          js_params.push(arg)
-        }
-        let js_params_src = js_params.join(", ")
-        let js_call = ffi_js_access("self", js_field_name) +
-          "(" +
-          js_args_src +
-          ")"
-        Some(
-          "pub extern \"js\" \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} =\n  #| (\{js_params_src}) => \{js_call}",
-        )
       } else {
         let js_params : Array[String] = ["self"]
         for arg in args {
           js_params.push(arg)
         }
         let js_params_src = js_params.join(", ")
-        let js_call = ffi_js_access("self", js_field_name) +
-          "(" +
-          js_args_src +
-          ")"
-        Some(
-          "pub extern \"js\" \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} =\n  #| (\{js_params_src}) => \{js_call}",
-        )
+        let js_call = if field_name == "_call_" {
+          "self(\{js_args_src})"
+        } else {
+          ffi_js_access("self", js_field_name) + "(" + js_args_src + ")"
+        }
+        let forward_args : Array[String] = ["self"]
+        for arg in args {
+          forward_args.push(arg)
+        }
+        let extern_params = "this_ : " +
+          params_src["self : ".length():].to_owned()
+        match
+          ffi_converted_return_extern_pair(
+            state,
+            ffi_to_snake_case(receiver_type) +
+            "_" +
+            ffi_to_snake_case(field_name),
+            "\{receiver_type}::\{field_name}",
+            params_src,
+            extern_params,
+            forward_args,
+            return_type,
+            "\n  #| (\{js_params_src}) => \{js_call}",
+          ) {
+          Some(pair) => Some(pair)
+          None =>
+            Some(
+              "pub extern \"js\" \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} =\n  #| (\{js_params_src}) => \{js_call}",
+            )
+        }
       }
     }
     None => None
@@ -1667,10 +1672,19 @@ fn ffi_struct_decl_to_moonbit(
     }
   }
   ffi_restore_local_type_params(state, local_type_param_len)
-  if method_lines.length() == 0 {
-    lines.join("\n")
+  // A zero-field struct is value-erased by MoonBit's JS backend (the
+  // instance compiles to `undefined`), which breaks every accessor that
+  // receives `self` — index-signature-only interfaces (`FlagTable`)
+  // must stay opaque handles instead.
+  let type_decl = if seen_fields.length() == 0 {
+    "#warnings(\"-3\")\n#external\npub type \{type_name}\{type_param_suffix}"
   } else {
-    lines.join("\n") + "\n\n" + method_lines.join("\n\n")
+    lines.join("\n")
+  }
+  if method_lines.length() == 0 {
+    type_decl
+  } else {
+    type_decl + "\n\n" + method_lines.join("\n\n")
   }
 }
 
@@ -1700,10 +1714,41 @@ fn ffi_index_signature_accessor_decls(
   } else {
     value_name + "?"
   }
-  let getter = "pub extern \"js\" fn \{type_name}::op_get(self : \{type_name}, key : \{key_name}) -> \{getter_return} =\n" +
-    "  #| (self, key) => { const v = self[key]; return v === undefined ? null : v; }"
-  let setter = "pub extern \"js\" fn \{type_name}::op_set(self : \{type_name}, key : \{key_name}, value : \{value_name}) -> Unit =\n" +
-    "  #| (self, key, value) => { self[key] = value; }"
+  let getter = match
+    ffi_converted_return_extern_pair(
+      state,
+      ffi_to_snake_case(type_name) + "_op_get",
+      "\{type_name}::op_get",
+      "self : \{type_name}, key : \{key_name}",
+      "this_ : \{type_name}, key : \{key_name}",
+      ["self", "key"],
+      getter_return,
+      "\n  #| (self, key) => self[key]",
+    ) {
+    Some(pair) => pair
+    None =>
+      "pub extern \"js\" fn \{type_name}::op_get(self : \{type_name}, key : \{key_name}) -> \{getter_return} =\n" +
+      "  #| (self, key) => { const v = self[key]; return v === undefined ? null : v; }"
+  }
+  let setter = match ffi_rendered_generated_enum_info(state, value_name) {
+    // Enum-typed values cross as MoonBit tag ints unless converted —
+    // write the raw string / number via the package's `_to_js` helper.
+    Some((enum_name, raw_type, is_optional)) => {
+      let to_js_name = if is_optional {
+        ffi_enum_to_js_name(enum_name) + "_optional"
+      } else {
+        ffi_enum_to_js_name(enum_name)
+      }
+      let raw_value_type = if is_optional { raw_type + "?" } else { raw_type }
+      let extern_name = "_\{ffi_to_snake_case(type_name)}_op_set_ret_conv_js"
+      let extern_decl = "extern \"js\" fn \{extern_name}(this_ : \{type_name}, key : \{key_name}, value : \{raw_value_type}) -> Unit =\n  #| (self, key, value) => { self[key] = value; }"
+      let wrapper_decl = "pub fn \{type_name}::op_set(self : \{type_name}, key : \{key_name}, value : \{value_name}) -> Unit {\n  \{extern_name}(self, key, \{to_js_name}(value))\n}"
+      extern_decl + "\n\n" + wrapper_decl
+    }
+    None =>
+      "pub extern \"js\" fn \{type_name}::op_set(self : \{type_name}, key : \{key_name}, value : \{value_name}) -> Unit =\n" +
+      "  #| (self, key, value) => { self[key] = value; }"
+  }
   Some([getter, setter])
 }
 
@@ -2116,9 +2161,14 @@ fn ffi_enum_runtime_js_converter_decl(enum_ : @ast.TsEnumDecl) -> String? {
       None => return None
     }
   }
+  // Values that came FROM the library round-trip through MoonBit as raw
+  // JS (opaque handles cast into struct types — valibot's `string()`
+  // result flowing back into `parse(schema, ...)`); converting an
+  // already-JS literal again must be identity, not an error.
   lines.push(
-    "    default: throw new Error(\"unexpected \{type_name} tag: \" + value);",
+    "    default: if (typeof value === \"string\" || typeof value === \"number\") return value;",
   )
+  lines.push("    throw new Error(\"unexpected \{type_name} tag: \" + value);")
   lines.push("  }")
   lines.push("}")
   lines.push("")
@@ -2191,9 +2241,12 @@ fn ffi_enum_bridge_js_converter_decl(enum_ : @ast.TsEnumDecl) -> String? {
           }
       }
   }
+  // Same idempotency as the runtime converter: a raw library value cast
+  // into the struct type carries the JS literal already.
   lines.push(
-    "    default: throw new Error(\"unexpected \{type_name} tag: \" + value);",
+    "    default: if (typeof value === \"string\" || typeof value === \"number\") return value;",
   )
+  lines.push("    throw new Error(\"unexpected \{type_name} tag: \" + value);")
   lines.push("  }")
   lines.push("}")
   lines.push("")
@@ -2889,6 +2942,52 @@ fn ffi_struct_has_call_signature(fields : Array[(String, @ast.TsType)]) -> Bool 
 }
 
 ///|
+/// JS test for "this field currently carries the MoonBit representation":
+/// enum fields cross as tag ints, optional fields as `$tag` boxes. `None`
+/// when the field type has no cheaply probeable MoonBit form.
+fn ffi_struct_field_moonbit_repr_test(
+  state : MoonBitJsFfiState,
+  field_type : @ast.TsType,
+  access : String,
+) -> String? {
+  let box_test = "(\{access} !== null && typeof \{access} === \"object\" && \"$tag\" in \{access})"
+  match @checker.classify_optional_like_union(field_type) {
+    Some((collapsed, true)) =>
+      // `Option[Enum]` crosses UNBOXED (the enum tag int), so an
+      // optional enum field probes for both representations.
+      return if ffi_named_type_is_generated_enum(state, collapsed) {
+        Some("(\{box_test} || typeof \{access} === \"number\")")
+      } else {
+        Some(box_test)
+      }
+    _ => ()
+  }
+  if ffi_named_type_is_generated_enum(state, field_type) {
+    return Some("typeof \{access} === \"number\"")
+  }
+  None
+}
+
+///|
+fn ffi_named_type_is_generated_enum(
+  state : MoonBitJsFfiState,
+  t : @ast.TsType,
+) -> Bool {
+  match t {
+    Named(n) => {
+      let ident = ffi_type_identifier(n, "OpaqueType")
+      for enum_ in state.enums {
+        if ffi_type_identifier(enum_.name, "GeneratedEnum") == ident {
+          return true
+        }
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+///|
 fn ffi_struct_js_converter_decl(
   state : MoonBitJsFfiState,
   name : String,
@@ -2906,7 +3005,45 @@ fn ffi_struct_js_converter_decl(
     lines.push("  if (typeof value === \"function\") return value;")
     lines.push("  const result = (...args) => value[\"_call_\"](...args);")
   } else {
-    lines.push("  const result = {};")
+    // A CLASS instance whose declared fields show no trace of MoonBit
+    // representation (enum fields as tag ints, option/union fields as
+    // `$tag` boxes) is a raw library handle round-tripping through the
+    // boundary — pass it through untouched; a spread would sever its
+    // prototype (drizzle's `SQL.getSQL`). MoonBit structs ALSO compile
+    // to classes, so the prototype check alone cannot discriminate —
+    // the repr probes keep genuinely MoonBit-built values converting.
+    let repr_tests : Array[String] = []
+    for field in fields {
+      let (field_name, field_type) = field
+      // Probe the MOONBIT-side key (the sanitized identifier the struct
+      // declares — `type` becomes `type_`), matching the field reads in
+      // the conversion body below.
+      let safe_name = ffi_sanitize_identifier(field_name, "field")
+      match
+        ffi_struct_field_moonbit_repr_test(
+          state,
+          field_type,
+          "value[\"\{json_escape_string(safe_name)}\"]",
+        ) {
+        Some(probe) => repr_tests.push(probe)
+        None => ()
+      }
+    }
+    let repr_guard = if repr_tests.length() == 0 {
+      "false"
+    } else {
+      repr_tests.join(" || ")
+    }
+    lines.push(
+      "  const __proto = Object.getPrototypeOf(value); if (__proto !== null && __proto !== Object.prototype && !(\{repr_guard})) return value;",
+    )
+    // Spread the ORIGINAL value first: handle-like structs round-trip
+    // raw library objects (valibot's `string()` result flowing back into
+    // `parse(schema, ...)`) whose behavior lives on undeclared internals
+    // (`~run`, prototype-less methods). Rebuilding from declared fields
+    // alone strips those; the spread preserves them and the per-field
+    // assignments below overwrite only what needs conversion.
+    lines.push("  const result = { ...value };")
   }
   lines.push("  let field;")
   for field in fields {
@@ -2925,7 +3062,7 @@ fn ffi_struct_js_converter_decl(
     lines.push("  field = \{converted_field};")
     if ffi_type_is_optional(field_type) {
       lines.push(
-        "  if (field !== undefined) result[\"\{target_key}\"] = field;",
+        "  if (field !== undefined) result[\"\{target_key}\"] = field; else delete result[\"\{target_key}\"];",
       )
     } else {
       lines.push("  result[\"\{target_key}\"] = field;")
@@ -3095,6 +3232,295 @@ fn ffi_tagged_union_return_is_safe_to_wrap(
 }
 
 ///|
+/// MoonBit's JS backend leaves `Option[T]` unboxed (`Some` = raw value,
+/// `None` = `undefined`) only for payloads whose values can never be
+/// `undefined`-shaped: `String` / `Int` / generated struct and enum
+/// instances. Everything else — `JSValue`, `Double`, arrays, opaque
+/// `#external` handles, generics, function types — uses a `{$tag, _0}`
+/// box, so an extern that returns the raw JS `value | undefined` breaks
+/// `match`: a real value silently reads as `None` and `undefined`
+/// crashes on `.$tag`. Returns `true` when the rendered inner type needs
+/// the MoonBit-side `__ts_mbt_wrap_option_return` treatment.
+fn ffi_option_return_inner_is_boxed(
+  state : MoonBitJsFfiState,
+  inner : String,
+) -> Bool {
+  match inner {
+    // `Bool?` stays on the existing `-1` sentinel glue
+    // (`__ts_mbt_wrap_bool_option`); wrapping it here would turn the
+    // sentinel into `Some(-1)`.
+    "String" | "Int" | "Bool" | "Unit" | "Byte" | "Char" => return false
+    _ => ()
+  }
+  let base = match inner.find("[") {
+    Some(index) => inner[:index].to_owned()
+    None => inner
+  }
+  if state.struct_type_names.contains(base) {
+    return false
+  }
+  for entry in state.tagged_union_decls_by_name {
+    let (name, _) = entry
+    if name == base || ffi_type_identifier(name, "OpaqueType") == base {
+      return false
+    }
+  }
+  for enum_ in state.enums {
+    if ffi_type_identifier(enum_.name, "GeneratedEnum") == base {
+      return false
+    }
+  }
+  true
+}
+
+///|
+/// A rendered `... ?` return type is only optional-overall when the `?`
+/// binds to the whole type. For a function type like
+/// `() -> ((Props) -> JSValue)?` the trailing `?` belongs to the
+/// function's result — a depth-0 `->` before it gives that away.
+fn ffi_rendered_return_type_optional_inner(return_type_src : String) -> String? {
+  if !return_type_src.has_suffix("?") {
+    return None
+  }
+  let inner = return_type_src[:return_type_src.length() - 1]
+    .to_owned()
+    .trim()
+    .to_owned()
+  if inner == "" {
+    return None
+  }
+  let mut depth = 0
+  let mut prev = ' '
+  for c in inner {
+    if c == '(' || c == '[' {
+      depth += 1
+    } else if c == ')' || c == ']' {
+      depth -= 1
+    } else if c == '>' && prev == '-' && depth == 0 {
+      return None
+    }
+    prev = c
+  }
+  Some(inner)
+}
+
+///|
+fn ffi_option_return_needs_wrap(
+  state : MoonBitJsFfiState,
+  return_type_src : String,
+) -> Bool {
+  match ffi_rendered_return_type_optional_inner(return_type_src) {
+    Some(inner) => ffi_option_return_inner_is_boxed(state, inner)
+    None => false
+  }
+}
+
+///|
+/// Shared helper definitions appended to the FFI output when any decl
+/// routes an optional return through `__ts_mbt_wrap_option_return`.
+/// Self-contained (no `unsafeCast` dependency) so `ts2mbt ffi` output
+/// still compiles on its own; `moonbit_bridge.mbt` injects an identical
+/// copy for its top-level wrappers when this one is absent.
+let ffi_option_return_wrap_helper_decls : String = "extern \"js\" fn __ts_mbt_option_return_is_absent(value : JSValue) -> Bool =\n  #| (value) => value === undefined || value === null\n\nfn[T] __ts_mbt_option_return_value(raw : JSValue) -> T = \"%identity\"\n\nfn[T] __ts_mbt_wrap_option_return(raw : JSValue) -> T? {\n  if __ts_mbt_option_return_is_absent(raw) {\n    None\n  } else {\n    Some(__ts_mbt_option_return_value(raw))\n  }\n}"
+
+///|
+/// When a rendered type is a generated enum (or an optional one), the
+/// raw JS value at the boundary is the enum's raw string / number — not
+/// MoonBit's tag repr — so crossing it needs the package's
+/// `__ts_mbt_<enum>_from_js` / `_to_js` converters. Returns
+/// `(enum_type_name, raw_type, is_optional)` when that applies.
+fn ffi_rendered_generated_enum_info(
+  state : MoonBitJsFfiState,
+  type_src : String,
+) -> (String, String, Bool)? {
+  let (inner, is_optional) = match
+    ffi_rendered_return_type_optional_inner(type_src) {
+    Some(inner) => (inner, true)
+    None => (type_src, false)
+  }
+  for enum_ in state.enums {
+    if ffi_type_identifier(enum_.name, "GeneratedEnum") == inner {
+      match ffi_enum_raw_type(enum_) {
+        // The raw-type set mirrors the case sets that actually get
+        // converters emitted (string / int / double-int).
+        Some(raw_type) => return Some((inner, raw_type, is_optional))
+        None => return None
+      }
+    }
+  }
+  None
+}
+
+///|
+fn ffi_return_generated_enum_glue(
+  state : MoonBitJsFfiState,
+  return_type_src : String,
+) -> (String, String, Bool)? {
+  match ffi_rendered_generated_enum_info(state, return_type_src) {
+    Some((enum_name, raw_type, is_optional)) =>
+      Some((ffi_enum_from_js_name(enum_name), raw_type, is_optional))
+    None => None
+  }
+}
+
+///|
+/// Argument expression for a value crossing INTO JS: generated-enum
+/// params carry MoonBit tag ints and need the package's `_to_js`
+/// converter; everything else passes through.
+fn ffi_enum_arg_expr(
+  state : MoonBitJsFfiState,
+  rendered_type : String,
+  arg : String,
+) -> String {
+  match ffi_rendered_generated_enum_info(state, rendered_type) {
+    Some((enum_name, _, true)) =>
+      "\{ffi_enum_to_js_name(enum_name)}_optional(\{arg})"
+    Some((enum_name, _, false)) => "\{ffi_enum_to_js_name(enum_name)}(\{arg})"
+    None => arg
+  }
+}
+
+///|
+/// Raw boundary type for an enum-typed param on a private raw extern
+/// (`NodeFlag` -> `String`, `NodeFlag?` -> `String?`); non-enum types
+/// keep their rendered form.
+fn ffi_enum_param_raw_type(
+  state : MoonBitJsFfiState,
+  rendered_type : String,
+) -> String {
+  match ffi_rendered_generated_enum_info(state, rendered_type) {
+    Some((_, raw_type, true)) => raw_type + "?"
+    Some((_, raw_type, false)) => raw_type
+    None => rendered_type
+  }
+}
+
+///|
+/// Body expression for wrapper fns whose raw extern returns `JSValue`
+/// (the `preserve` class-method / getter paths): route generated-enum
+/// and boxed-optional returns through the package converters instead of
+/// a bare `unsafeCast`.
+fn ffi_wrapper_return_body_expr(
+  state : MoonBitJsFfiState,
+  return_type_src : String,
+  call_expr : String,
+) -> String {
+  match ffi_return_generated_enum_glue(state, return_type_src) {
+    Some((from_js_name, _, true)) => {
+      state.needs_option_return_wrap = true
+      "match __ts_mbt_wrap_option_return(\{call_expr}) {\n    Some(raw_value) => Some(\{from_js_name}(raw_value))\n    None => None\n  }"
+    }
+    Some((from_js_name, _, false)) =>
+      "\{from_js_name}(unsafeCast(\{call_expr}))"
+    None =>
+      if ffi_option_return_needs_wrap(state, return_type_src) {
+        state.needs_option_return_wrap = true
+        "__ts_mbt_wrap_option_return(\{call_expr})"
+      } else {
+        "unsafeCast(\{call_expr})"
+      }
+  }
+}
+
+///|
+fn ffi_return_extern_pair_decl(
+  extern_base : String,
+  public_name : String,
+  params_src : String,
+  extern_params_src : String,
+  raw_return_type : String,
+  return_type : String,
+  target : String,
+  body_expr : String,
+) -> String {
+  let extern_name = "_\{extern_base}_ret_conv_js"
+  let extern_decl = "extern \"js\" fn \{extern_name}(\{extern_params_src}) -> \{raw_return_type} =\{target}"
+  let wrapper_decl = "pub fn \{public_name}(\{params_src}) -> \{return_type} {\n  \{body_expr}\n}"
+  extern_decl + "\n\n" + wrapper_decl
+}
+
+///|
+/// Render a binding whose return value needs MoonBit-side conversion —
+/// boxed-optional (`Option` repr) or generated-enum (raw string /
+/// number repr) — as a private raw extern plus a public wrapper.
+/// Returns `None` when the declared return can cross raw, so callers
+/// fall through to the plain extern form. `target` is everything after
+/// the extern's `=` (either `" \"binding\""` or `"\n  #| (...) => body"`).
+fn ffi_converted_return_extern_pair(
+  state : MoonBitJsFfiState,
+  extern_base : String,
+  public_name : String,
+  params_src : String,
+  extern_params_src : String,
+  arg_names : Array[String],
+  return_type : String,
+  target : String,
+  force? : Bool = false,
+) -> String? {
+  let extern_name = "_\{extern_base}_ret_conv_js"
+  let call = extern_name + "(" + arg_names.join(", ") + ")"
+  match ffi_return_generated_enum_glue(state, return_type) {
+    Some((from_js_name, _, true)) => {
+      state.needs_option_return_wrap = true
+      state.needs_js_any = true
+      Some(
+        ffi_return_extern_pair_decl(
+          extern_base,
+          public_name,
+          params_src,
+          extern_params_src,
+          "JSValue",
+          return_type,
+          target,
+          "match __ts_mbt_wrap_option_return(\{call}) {\n    Some(raw_value) => Some(\{from_js_name}(raw_value))\n    None => None\n  }",
+        ),
+      )
+    }
+    Some((from_js_name, raw_type, false)) =>
+      Some(
+        ffi_return_extern_pair_decl(
+          extern_base,
+          public_name,
+          params_src,
+          extern_params_src,
+          raw_type,
+          return_type,
+          target,
+          "\{from_js_name}(\{call})",
+        ),
+      )
+    None =>
+      if ffi_option_return_needs_wrap(state, return_type) {
+        state.needs_option_return_wrap = true
+        state.needs_js_any = true
+        Some(
+          ffi_return_extern_pair_decl(
+            extern_base,
+            public_name,
+            params_src,
+            extern_params_src,
+            "JSValue",
+            return_type,
+            target,
+            "__ts_mbt_wrap_option_return(\{call})",
+          ),
+        )
+      } else if force {
+        // Param-side conversion (enum args) forced the pair; the return
+        // crosses raw.
+        Some(
+          ffi_return_extern_pair_decl(
+            extern_base, public_name, params_src, extern_params_src, return_type,
+            return_type, target, call,
+          ),
+        )
+      } else {
+        None
+      }
+  }
+}
+
+///|
 fn ffi_import_needs_js_return_conversion(
   state : MoonBitJsFfiState,
   import_ : @ast.TsImport,
@@ -3161,6 +3587,30 @@ fn ffi_params_call_args_with_names(
 }
 
 ///|
+fn ffi_func_has_rest_param(func : @ast.TsFunc) -> Bool {
+  for param in func.params {
+    if param.is_rest || param.type_ is Rest(_) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn ffi_import_has_rest_param(import_ : @ast.TsImport) -> Bool {
+  for i, item in import_.params {
+    let (_, type_) = item
+    if type_ is Rest(_) {
+      return true
+    }
+    if i < import_.param_is_rest.length() && import_.param_is_rest[i] {
+      return true
+    }
+  }
+  false
+}
+
+///|
 fn ffi_import_call_args_with_names(
   state : MoonBitJsFfiState,
   import_ : @ast.TsImport,
@@ -3169,9 +3619,35 @@ fn ffi_import_call_args_with_names(
   let args : Array[String] = []
   for i, item in import_.params {
     let (_, type_) = item
-    args.push(ffi_type_js_converter_expr(state, type_, names[i]))
+    let is_rest = i < import_.param_is_rest.length() && import_.param_is_rest[i]
+    if is_rest && !(type_ is Rest(_)) {
+      args.push(
+        "...(" + ffi_type_js_converter_expr(state, type_, names[i]) + ")",
+      )
+    } else {
+      args.push(ffi_call_arg_with_rest_spread(state, type_, names[i]))
+    }
   }
   args
+}
+
+///|
+/// A rest parameter (`pipe(schema, ...items)`) is surfaced to MoonBit as
+/// `Array[T]` but the runtime call must SPREAD it — passing the array as
+/// a single positional argument hands the library the array itself as
+/// its first variadic item (valibot: `item.~run is not a function`).
+fn ffi_call_arg_with_rest_spread(
+  state : MoonBitJsFfiState,
+  type_ : @ast.TsType,
+  name : String,
+) -> String {
+  match type_ {
+    @ast.TsType::Rest(inner) =>
+      "...(" +
+      ffi_type_js_converter_expr(state, @ast.TsType::Array(inner), name) +
+      ")"
+    _ => ffi_type_js_converter_expr(state, type_, name)
+  }
 }
 
 ///|
@@ -3182,7 +3658,16 @@ fn ffi_func_call_args_with_names(
 ) -> Array[String] {
   let args : Array[String] = []
   for i, param in func.params {
-    args.push(ffi_type_js_converter_expr(state, param.type_, names[i]))
+    // `TsParam.is_rest` carries the ARRAY type as written (`...checks:
+    // Check[]` -> `Array(Check)`); the `Rest(element)` shape appears when
+    // the rest-ness lives in the type itself. Both spread.
+    if param.is_rest && !(param.type_ is Rest(_)) {
+      args.push(
+        "...(" + ffi_type_js_converter_expr(state, param.type_, names[i]) + ")",
+      )
+    } else {
+      args.push(ffi_call_arg_with_rest_spread(state, param.type_, names[i]))
+    }
   }
   args
 }
@@ -3195,7 +3680,7 @@ fn ffi_callable_value_call_args_with_names(
 ) -> Array[String] {
   let args : Array[String] = []
   for i, param in params {
-    args.push(ffi_type_js_converter_expr(state, param, names[i]))
+    args.push(ffi_call_arg_with_rest_spread(state, param, names[i]))
   }
   args
 }
@@ -3668,6 +4153,9 @@ fn ffi_class_method_decl_to_moonbit(
   }
   let params : Array[String] = []
   let arg_names : Array[String] = []
+  let arg_exprs : Array[String] = []
+  let extern_param_decls : Array[String] = []
+  let mut has_enum_param = false
   let js_args : Array[String] = []
   if !class_method.is_static {
     params.push("self : \{class_self_type_with_params}")
@@ -3675,14 +4163,28 @@ fn ffi_class_method_decl_to_moonbit(
   for param in class_method.params {
     let (name, type_) = param
     let safe_name = ffi_sanitize_identifier(name, "arg")
-    let safe_type = ffi_type_name(state, type_)
+    // Field-style rendering resolves literal-union aliases to their
+    // generated enums (`NodeFlag` instead of `String`); the matching
+    // `_to_js` conversion happens in `arg_exprs` below.
+    let safe_type = ffi_struct_field_type_name(state, type_)
     arg_names.push(safe_name)
+    let arg_expr = ffi_enum_arg_expr(state, safe_type, safe_name)
+    if arg_expr != safe_name {
+      has_enum_param = true
+    }
+    arg_exprs.push(arg_expr)
+    extern_param_decls.push(
+      "\{safe_name} : \{ffi_enum_param_raw_type(state, safe_type)}",
+    )
     js_args.push(
       ffi_inline_js_arg_expr_with_state(Some(state), type_, safe_name),
     )
     params.push("\{safe_name} : \{safe_type}")
   }
-  let raw_return_type = ffi_type_name(state, class_method.return_type)
+  let raw_return_type = ffi_struct_field_type_name(
+    state,
+    class_method.return_type,
+  )
   let return_type = match raw_return_type {
     "This" => class_self_type_with_params
     "This?" => class_self_type_with_params + "?"
@@ -3714,15 +4216,20 @@ fn ffi_class_method_decl_to_moonbit(
     if !class_method.is_static {
       cast_args.push("unsafeCast(self)")
     }
-    for arg in arg_names {
-      cast_args.push("unsafeCast(\{arg})")
+    for arg_expr in arg_exprs {
+      cast_args.push("unsafeCast(\{arg_expr})")
     }
     let cast_args_src = cast_args.join(", ")
     let method_name = ffi_value_fn_name(class_method.name)
     if class_method.is_static {
       let extern_name = "_\{fn_name}_extern_js"
       let extern_decl = "extern \"js\" fn \{extern_name}(\{extern_params_src}) -> JSValue = \"\{binding_name}\""
-      let wrapper_decl = "pub \{fn_prefix} \{fn_name}(\{method_params}) -> \{return_type} {\n  unsafeCast(\{extern_name}(\{cast_args_src}))\n}"
+      let body_expr = ffi_wrapper_return_body_expr(
+        state,
+        return_type,
+        "\{extern_name}(\{cast_args_src})",
+      )
+      let wrapper_decl = "pub \{fn_prefix} \{fn_name}(\{method_params}) -> \{return_type} {\n  \{body_expr}\n}"
       "\{extern_decl}\n\n\{wrapper_decl}"
     } else {
       let js_params : Array[String] = ["self"]
@@ -3741,11 +4248,31 @@ fn ffi_class_method_decl_to_moonbit(
       } else {
         method_params
       }
-      let wrapper_decl = "pub \{fn_prefix} \{class_type_name}::\{method_name}(\{instance_params}) -> \{return_type} {\n  unsafeCast(\{extern_name}(\{cast_args_src}))\n}"
+      let body_expr = ffi_wrapper_return_body_expr(
+        state,
+        return_type,
+        "\{extern_name}(\{cast_args_src})",
+      )
+      let wrapper_decl = "pub \{fn_prefix} \{class_type_name}::\{method_name}(\{instance_params}) -> \{return_type} {\n  \{body_expr}\n}"
       "\{extern_decl}\n\n\{wrapper_decl}"
     }
   } else if class_method.is_static {
-    "pub extern \"js\" fn \{fn_name}(\{method_params}) -> \{return_type} = \"\{binding_name}\""
+    match
+      ffi_converted_return_extern_pair(
+        state,
+        fn_name,
+        fn_name,
+        method_params,
+        extern_param_decls.join(", "),
+        arg_exprs,
+        return_type,
+        " \"\{binding_name}\"",
+        force=has_enum_param,
+      ) {
+      Some(pair) => pair
+      None =>
+        "pub extern \"js\" fn \{fn_name}(\{method_params}) -> \{return_type} = \"\{binding_name}\""
+    }
   } else {
     let js_params : Array[String] = ["self"]
     for arg in arg_names {
@@ -3767,7 +4294,32 @@ fn ffi_class_method_decl_to_moonbit(
     // Reserved-word sanitization in `ffi_value_fn_name` keeps the
     // identifier safe (e.g. `match` -> `match_`).
     let method_name = ffi_value_fn_name(class_method.name)
-    "pub extern \"js\" fn \{class_type_name}::\{method_name}(\{instance_params}) -> \{return_type} =\n  #| (\{js_param_list}) => \{js_call}"
+    // Raw extern's first param can't be named `self` — MoonBit parses
+    // `extern "js" fn foo(self : T, ...)` as a deprecated method decl.
+    let forward_args : Array[String] = ["self"]
+    for arg_expr in arg_exprs {
+      forward_args.push(arg_expr)
+    }
+    let extern_params : Array[String] = ["this_ : \{class_type_name}"]
+    for decl in extern_param_decls {
+      extern_params.push(decl)
+    }
+    match
+      ffi_converted_return_extern_pair(
+        state,
+        fn_name,
+        "\{class_type_name}::\{method_name}",
+        instance_params,
+        extern_params.join(", "),
+        forward_args,
+        return_type,
+        "\n  #| (\{js_param_list}) => \{js_call}",
+        force=has_enum_param,
+      ) {
+      Some(pair) => pair
+      None =>
+        "pub extern \"js\" fn \{class_type_name}::\{method_name}(\{instance_params}) -> \{return_type} =\n  #| (\{js_param_list}) => \{js_call}"
+    }
   }
   ffi_restore_local_type_params(state, class_local_len)
   result
@@ -3805,7 +4357,10 @@ fn ffi_class_property_getter_decl_to_moonbit(
     class_.name,
     class_property.name,
   )
-  let return_type = ffi_type_name(state, class_property.type_)
+  // Field-style rendering resolves literal-union aliases to their
+  // generated enums; the `_from_js` conversion happens in the wrapper
+  // body / converted pair below.
+  let return_type = ffi_struct_field_type_name(state, class_property.type_)
   let getter_params = params.join(", ")
   let result = if preserve {
     state.needs_js_any = true
@@ -3813,21 +4368,61 @@ fn ffi_class_property_getter_decl_to_moonbit(
     let extern_name = "_\{fn_name}_extern_js"
     if class_property.is_static {
       let extern_decl = "extern \"js\" fn \{extern_name}() -> JSValue = \"\{binding_name}\""
-      let wrapper_decl = "pub \{fn_prefix} \{fn_name}(\{getter_params}) -> \{return_type} {\n  unsafeCast(\{extern_name}())\n}"
+      let body_expr = ffi_wrapper_return_body_expr(
+        state,
+        return_type,
+        "\{extern_name}()",
+      )
+      let wrapper_decl = "pub \{fn_prefix} \{fn_name}(\{getter_params}) -> \{return_type} {\n  \{body_expr}\n}"
       "\{extern_decl}\n\n\{wrapper_decl}"
     } else {
       let js_get = ffi_js_access("self", class_property.name)
       // First param can't be named `self` — MoonBit parses
       // `extern "js" fn foo(self : T, ...)` as a deprecated method.
       let extern_decl = "extern \"js\" fn \{extern_name}(this_ : JSValue) -> JSValue =\n  #| (self) => \{js_get}"
-      let wrapper_decl = "pub \{fn_prefix} \{class_type_name}::\{fn_name}(\{getter_params}) -> \{return_type} {\n  unsafeCast(\{extern_name}(unsafeCast(self)))\n}"
+      let body_expr = ffi_wrapper_return_body_expr(
+        state,
+        return_type,
+        "\{extern_name}(unsafeCast(self))",
+      )
+      let wrapper_decl = "pub \{fn_prefix} \{class_type_name}::\{fn_name}(\{getter_params}) -> \{return_type} {\n  \{body_expr}\n}"
       "\{extern_decl}\n\n\{wrapper_decl}"
     }
   } else if class_property.is_static {
-    "pub extern \"js\" fn \{fn_name}(\{getter_params}) -> \{return_type} = \"\{binding_name}\""
+    match
+      ffi_converted_return_extern_pair(
+        state,
+        fn_name,
+        fn_name,
+        getter_params,
+        getter_params,
+        [],
+        return_type,
+        " \"\{binding_name}\"",
+      ) {
+      Some(pair) => pair
+      None =>
+        "pub extern \"js\" fn \{fn_name}(\{getter_params}) -> \{return_type} = \"\{binding_name}\""
+    }
   } else {
     let js_get = ffi_js_access("self", class_property.name)
-    "pub extern \"js\" fn \{class_type_name}::\{fn_name}(\{getter_params}) -> \{return_type} =\n  #| (self) => \{js_get}"
+    let extern_params = "this_ : " +
+      getter_params["self : ".length():].to_owned()
+    match
+      ffi_converted_return_extern_pair(
+        state,
+        fn_name,
+        "\{class_type_name}::\{fn_name}",
+        getter_params,
+        extern_params,
+        ["self"],
+        return_type,
+        "\n  #| (self) => \{js_get}",
+      ) {
+      Some(pair) => pair
+      None =>
+        "pub extern \"js\" fn \{class_type_name}::\{fn_name}(\{getter_params}) -> \{return_type} =\n  #| (self) => \{js_get}"
+    }
   }
   ffi_restore_local_type_params(state, class_local_len)
   result
@@ -3857,8 +4452,12 @@ fn ffi_class_property_setter_decl_to_moonbit(
   if !class_property.is_static {
     params.push("self : \{class_self_type_with_params}")
   }
-  let value_type = ffi_type_name(state, class_property.type_)
+  // Field-style rendering resolves literal-union aliases to their
+  // generated enums; the `_to_js` conversion happens in `value_expr`.
+  let value_type = ffi_struct_field_type_name(state, class_property.type_)
   params.push("value : \{value_type}")
+  let value_expr = ffi_enum_arg_expr(state, value_type, "value")
+  let value_raw_type = ffi_enum_param_raw_type(state, value_type)
   let fn_name = "set_" +
     ffi_to_snake_case(class_.name) +
     "_" +
@@ -3874,25 +4473,39 @@ fn ffi_class_property_setter_decl_to_moonbit(
     let extern_name = "_\{fn_name}_extern_js"
     if class_property.is_static {
       let extern_decl = "extern \"js\" fn \{extern_name}(value : JSValue) -> Unit = \"\{binding_name}\""
-      let wrapper_decl = "pub \{fn_prefix} \{fn_name}(\{setter_params}) -> Unit {\n  \{extern_name}(unsafeCast(value))\n}"
+      let wrapper_decl = "pub \{fn_prefix} \{fn_name}(\{setter_params}) -> Unit {\n  \{extern_name}(unsafeCast(\{value_expr}))\n}"
       Some("\{extern_decl}\n\n\{wrapper_decl}")
     } else {
       let js_set = ffi_js_access("self", class_property.name)
       // First param can't be named `self` — MoonBit parses
       // `extern "js" fn foo(self : T, ...)` as a deprecated method.
       let extern_decl = "extern \"js\" fn \{extern_name}(this_ : JSValue, value : JSValue) -> Unit =\n  #| (self, value) => (\{js_set} = value)"
-      let wrapper_decl = "pub \{fn_prefix} \{class_type_name}::\{fn_name}(\{setter_params}) -> Unit {\n  \{extern_name}(unsafeCast(self), unsafeCast(value))\n}"
+      let wrapper_decl = "pub \{fn_prefix} \{class_type_name}::\{fn_name}(\{setter_params}) -> Unit {\n  \{extern_name}(unsafeCast(self), unsafeCast(\{value_expr}))\n}"
       Some("\{extern_decl}\n\n\{wrapper_decl}")
     }
   } else if class_property.is_static {
-    Some(
-      "pub extern \"js\" fn \{fn_name}(\{setter_params}) -> Unit = \"\{binding_name}\"",
-    )
+    if value_expr != "value" {
+      let extern_name = "_\{fn_name}_ret_conv_js"
+      let extern_decl = "extern \"js\" fn \{extern_name}(value : \{value_raw_type}) -> Unit = \"\{binding_name}\""
+      let wrapper_decl = "pub fn \{fn_name}(\{setter_params}) -> Unit {\n  \{extern_name}(\{value_expr})\n}"
+      Some("\{extern_decl}\n\n\{wrapper_decl}")
+    } else {
+      Some(
+        "pub extern \"js\" fn \{fn_name}(\{setter_params}) -> Unit = \"\{binding_name}\"",
+      )
+    }
   } else {
     let js_set = ffi_js_access("self", class_property.name)
-    Some(
-      "pub extern \"js\" fn \{class_type_name}::\{fn_name}(\{setter_params}) -> Unit =\n  #| (self, value) => (\{js_set} = value)",
-    )
+    if value_expr != "value" {
+      let extern_name = "_\{fn_name}_ret_conv_js"
+      let extern_decl = "extern \"js\" fn \{extern_name}(this_ : \{class_type_name}, value : \{value_raw_type}) -> Unit =\n  #| (self, value) => (\{js_set} = value)"
+      let wrapper_decl = "pub fn \{class_type_name}::\{fn_name}(\{setter_params}) -> Unit {\n  \{extern_name}(self, \{value_expr})\n}"
+      Some("\{extern_decl}\n\n\{wrapper_decl}")
+    } else {
+      Some(
+        "pub extern \"js\" fn \{class_type_name}::\{fn_name}(\{setter_params}) -> Unit =\n  #| (self, value) => (\{js_set} = value)",
+      )
+    }
   }
   ffi_restore_local_type_params(state, class_local_len)
   result
@@ -4107,6 +4720,14 @@ fn ffi_module_spec_uses_public_exports(module_spec : String) -> Bool {
 fn ffi_module_spec_prefers_namespace_named_imports(
   module_spec : String,
 ) -> Bool {
+  // `node:*` builtins: `@types/node` routinely declares APIs newer than
+  // the running Node, and a static `import { x } from "node:fs"` hard
+  // fails at load time when `x` is missing from the runtime. Namespace
+  // access degrades a missing name to `undefined` until it is actually
+  // called.
+  if module_spec.has_prefix("node:") {
+    return true
+  }
   ffi_module_spec_uses_public_exports(module_spec) && !module_spec.contains(":")
 }
 
@@ -4155,6 +4776,30 @@ fn ffi_bridge_reexport_line(
     )
   }
   None
+}
+
+///|
+/// `node:*` variant of `ffi_bridge_reexport_line`: a static
+/// `export { x } from "node:fs"` hard-fails at import time when the
+/// running Node predates the installed `@types/node` surface. Routing
+/// through the shared `import * as __ts_mbt_module` namespace keeps a
+/// missing name as `undefined` until it is actually called.
+fn ffi_bridge_tolerant_reexport_line(
+  seen_import_keys : Array[String],
+  bridge_imports : Array[MoonBitBridgeImport],
+  runtime_export_name : String,
+  binding_name : String,
+) -> String? {
+  if ffi_runtime_export_requires_bridge(runtime_export_name) {
+    return None
+  }
+  if runtime_export_name != "default" && !ffi_is_js_ident(runtime_export_name) {
+    return None
+  }
+  let access = ensure_bridge_module_runtime_access(
+    seen_import_keys, bridge_imports, runtime_export_name,
+  )
+  Some("export const \{binding_name} = \{access};")
 }
 
 ///|
@@ -4749,6 +5394,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     synthesized_inline_unions: {},
     needs_js_any: false,
     needs_promise: false,
+    needs_option_return_wrap: false,
   }
   let type_aliases_by_type_name = ffi_type_alias_map_by_type_name(modules)
   let emitted_type_names : Array[String] = []
@@ -5180,10 +5826,15 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         )
       }
       None =>
+        // Rest params force the bridge glue: a direct `= "sql"` binding
+        // receives the MoonBit array as ONE positional argument, but a
+        // variadic runtime export (`sql(strings, ...values)`) needs the
+        // spread only the glue can produce.
         if ffi_can_use_direct_runtime_export(module_spec, runtime_export_name) &&
           !ffi_runtime_export_requires_bridge(runtime_export_name) &&
           !needs_js_arg_conversion &&
-          !needs_js_return_conversion {
+          !needs_js_return_conversion &&
+          !ffi_import_has_rest_param(import_) {
           push_unique_ffi_section(
             seen_ffi_binding_names,
             ffi_sections,
@@ -5201,11 +5852,19 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
             ffi_import_decl_to_moonbit(state, import_),
           )
           match
-            ffi_bridge_reexport_line(
-              module_spec, runtime_export_name, binding_name,
-            ) {
+            (if module_spec.has_prefix("node:") {
+              ffi_bridge_tolerant_reexport_line(
+                seen_bridge_import_keys, bridge_imports, runtime_export_name, binding_name,
+              )
+            } else {
+              ffi_bridge_reexport_line(
+                module_spec, runtime_export_name, binding_name,
+              )
+            }) {
             Some(reexport_line) =>
-              if !needs_js_arg_conversion && !needs_js_return_conversion {
+              if !needs_js_arg_conversion &&
+                !needs_js_return_conversion &&
+                !ffi_import_has_rest_param(import_) {
                 push_unique_bridge_binding(
                   seen_bridge_binding_names, bridge_lines, binding_name, reexport_line,
                 )
@@ -5400,10 +6059,15 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         )
       }
       None =>
+        // Rest params force the bridge glue: a direct `= "sql"` binding
+        // receives the MoonBit array as ONE positional argument, but a
+        // variadic runtime export (`sql(strings, ...values)`) needs the
+        // spread only the glue can produce.
         if ffi_can_use_direct_runtime_export(module_spec, runtime_export_name) &&
           !ffi_runtime_export_requires_bridge(runtime_export_name) &&
           !needs_js_arg_conversion &&
-          !needs_js_return_conversion {
+          !needs_js_return_conversion &&
+          !ffi_func_has_rest_param(func) {
           push_unique_ffi_section(
             seen_ffi_binding_names,
             ffi_sections,
@@ -5421,11 +6085,19 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
             ffi_func_decl_to_moonbit(state, func),
           )
           match
-            ffi_bridge_reexport_line(
-              module_spec, runtime_export_name, binding_name,
-            ) {
+            (if module_spec.has_prefix("node:") {
+              ffi_bridge_tolerant_reexport_line(
+                seen_bridge_import_keys, bridge_imports, runtime_export_name, binding_name,
+              )
+            } else {
+              ffi_bridge_reexport_line(
+                module_spec, runtime_export_name, binding_name,
+              )
+            }) {
             Some(reexport_line) =>
-              if !needs_js_arg_conversion && !needs_js_return_conversion {
+              if !needs_js_arg_conversion &&
+                !needs_js_return_conversion &&
+                !ffi_func_has_rest_param(func) {
                 push_unique_bridge_binding(
                   seen_bridge_binding_names, bridge_lines, binding_name, reexport_line,
                 )
@@ -6004,6 +6676,9 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   }
   if state.needs_promise {
     ffi_sections.insert(2, "#external\npub type Promise[X]")
+  }
+  if state.needs_option_return_wrap {
+    ffi_sections.push(ffi_option_return_wrap_helper_decls)
   }
 
   let rendered_bridge_lines : Array[String] = [

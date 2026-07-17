@@ -2233,6 +2233,14 @@ fn Parser::parse_class_body(
       // tsc does not flag an overload signature whose implementation
       // carries the return annotation.)
       let _ = had_return_annotation
+      // TS1221 / overload-signature rule: a bodiless `*method()` is
+      // always an error — generators are not allowed in ambient
+      // contexts, and an overload signature cannot be a generator.
+      if is_generator && !has_body_block {
+        self.grammar_misuses.push(
+          "a generator requires a body: `*\{method_name}` cannot be an ambient declaration or overload signature",
+        )
+      }
       let body = if consumed_semi {
         @ast.TsBlock::{ stmts: [], stmt_positions: [] }
       } else if !self.check(LBrace) {
@@ -2530,6 +2538,11 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       not(self.last_type_params_had_default) {
       self.interface_member_modifier_misuses.push(
         "<generic-noarg-required>\{class_name}",
+      )
+    }
+    if class_name != "" && names.length() > 0 {
+      self.interface_member_modifier_misuses.push(
+        "<generic-min-arity>\{class_name}=\{self.last_type_params_min_required}",
       )
     }
     class_type_param_bound_len = self.push_local_type_param_bounds(
@@ -3337,6 +3350,11 @@ fn Parser::parse_class_decl_with_abstract(
       not(self.last_type_params_had_default) {
       self.interface_member_modifier_misuses.push(
         "<generic-noarg-required>\{name}",
+      )
+    }
+    if name != "" && name != "<class>" && names.length() > 0 {
+      self.interface_member_modifier_misuses.push(
+        "<generic-min-arity>\{name}=\{self.last_type_params_min_required}",
       )
     }
     class_type_param_bound_len = self.push_local_type_param_bounds(

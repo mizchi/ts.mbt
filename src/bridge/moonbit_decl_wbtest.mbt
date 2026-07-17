@@ -809,7 +809,7 @@ async test "bridge: emit MoonBit declarations for exported classes" {
   )
   assert_true(
     actual.contains(
-      "declare pub fn counter_inc(self : Counter, delta : Double) -> Double",
+      "declare pub fn Counter::inc(self : Counter, delta : Double) -> Double",
     ),
   )
   assert_true(
@@ -832,7 +832,7 @@ async test "bridge: emit MoonBit declarations for abstract exported classes with
   }
   assert_true(actual.contains("declare pub type Shape"))
   assert_true(
-    actual.contains("declare pub fn shape_area(self : Shape) -> Double"),
+    actual.contains("declare pub fn Shape::area(self : Shape) -> Double"),
   )
   assert_false(actual.contains("declare pub fn new_shape("))
 }
@@ -852,17 +852,17 @@ async test "bridge: emit MoonBit declarations for exported class properties" {
   }
   assert_true(
     actual.contains(
-      "declare pub fn get_counter_state_current(self : CounterState) -> Double",
+      "declare pub fn CounterState::get_counter_state_current(self : CounterState) -> Double",
     ),
   )
   assert_true(
     actual.contains(
-      "declare pub fn get_counter_state_label(self : CounterState) -> String",
+      "declare pub fn CounterState::get_counter_state_label(self : CounterState) -> String",
     ),
   )
   assert_true(
     actual.contains(
-      "declare pub fn set_counter_state_label(self : CounterState, value : String) -> Unit",
+      "declare pub fn CounterState::set_counter_state_label(self : CounterState, value : String) -> Unit",
     ),
   )
   assert_true(
@@ -1179,7 +1179,7 @@ async test "bridge: emit MoonBit declarations collapse overloads by generated bi
     ),
   )
   assert_eq(
-    count_occurrences_in_decl_output(actual, "declare pub fn counter_value"),
+    count_occurrences_in_decl_output(actual, "declare pub fn Counter::value"),
     1,
   )
   assert_eq(
@@ -1570,7 +1570,7 @@ async test "bridge: emit MoonBit declarations from runtime default exported clas
   )
   assert_true(
     actual.contains(
-      "declare pub fn default_inc(self : Default, delta : Double) -> Double",
+      "declare pub fn Default::inc(self : Default, delta : Double) -> Double",
     ),
   )
   assert_true(
@@ -2054,7 +2054,7 @@ async test "bridge: emit MoonBit declarations lowers Pick and Omit utility types
   )
   assert_true(
     actual.contains(
-      "declare pub fn get_utility_error_issues(self : UtilityError) -> Array[User]",
+      "declare pub fn UtilityError::get_utility_error_issues(self : UtilityError) -> Array[User]",
     ),
   )
   assert_false(actual.contains("declare pub type JSValue"))

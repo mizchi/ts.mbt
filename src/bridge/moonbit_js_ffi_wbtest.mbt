@@ -535,6 +535,7 @@ test "bridge: FFI type name treats generic intersections with empty object as op
     synthesized_inline_unions: {},
     needs_js_any: false,
     needs_promise: false,
+    needs_option_return_wrap: false,
   }
   let actual = ffi_type_name(
     state,
@@ -562,6 +563,7 @@ test "bridge: FFI type name collapses named option intersections" {
     synthesized_inline_unions: {},
     needs_js_any: false,
     needs_promise: false,
+    needs_option_return_wrap: false,
   }
   let actual = ffi_type_name(
     state,
@@ -592,6 +594,7 @@ test "bridge: FFI type name preserves optional complex unions when widened" {
     synthesized_inline_unions: {},
     needs_js_any: false,
     needs_promise: false,
+    needs_option_return_wrap: false,
   }
   let actual = ffi_type_name(
     state,
@@ -622,6 +625,7 @@ test "bridge: FFI type name renders declared generic applications" {
     synthesized_inline_unions: {},
     needs_js_any: false,
     needs_promise: false,
+    needs_option_return_wrap: false,
   }
   let actual = ffi_type_name(
     state,
@@ -645,6 +649,7 @@ test "bridge: FFI type name lowers bigint primitive" {
     synthesized_inline_unions: {},
     needs_js_any: false,
     needs_promise: false,
+    needs_option_return_wrap: false,
   }
   assert_eq(ffi_type_name(state, @ast.TsType::BigInt), "Int64")
   assert_false(state.needs_js_any)
@@ -664,6 +669,7 @@ test "bridge: FFI type name lowers tuple payloads to arrays" {
     synthesized_inline_unions: {},
     needs_js_any: false,
     needs_promise: false,
+    needs_option_return_wrap: false,
   }
   assert_eq(ffi_type_name(state, @ast.TsType::Tuple([])), "Array[Unit]")
   assert_eq(
@@ -691,6 +697,7 @@ test "bridge: FFI type name lowers function types" {
     synthesized_inline_unions: {},
     needs_js_any: false,
     needs_promise: false,
+    needs_option_return_wrap: false,
   }
   assert_eq(
     ffi_type_name(
@@ -719,6 +726,7 @@ test "bridge: FFI struct field type parenthesizes optional function types" {
     synthesized_inline_unions: {},
     needs_js_any: false,
     needs_promise: false,
+    needs_option_return_wrap: false,
   }
   assert_eq(
     ffi_struct_field_type_name(
@@ -774,6 +782,7 @@ test "bridge: FFI type name widens likely generic placeholders" {
     synthesized_inline_unions: {},
     needs_js_any: false,
     needs_promise: false,
+    needs_option_return_wrap: false,
   }
   assert_eq(ffi_type_name(state, @ast.TsType::Named("T")), "JSValue")
   assert_eq(ffi_type_name(state, @ast.TsType::Named("K")), "JSValue")
@@ -4774,6 +4783,7 @@ test "bridge: FFI struct generation deduplicates sanitized field names" {
     synthesized_inline_unions: {},
     needs_js_any: false,
     needs_promise: false,
+    needs_option_return_wrap: false,
   }
   let iface : @ast.TsInterface = {
     name: "GenericDateConstructor",
@@ -4839,6 +4849,7 @@ test "bridge: FFI struct generation sanitizes keyword and discard fields" {
     synthesized_inline_unions: {},
     needs_js_any: false,
     needs_promise: false,
+    needs_option_return_wrap: false,
   }
   let iface : @ast.TsInterface = {
     name: "Scope",
@@ -4896,6 +4907,7 @@ test "bridge: FFI struct generation adds method wrappers for function fields" {
     synthesized_inline_unions: {},
     needs_js_any: false,
     needs_promise: false,
+    needs_option_return_wrap: false,
   }
   let iface : @ast.TsInterface = {
     name: "NodeFactory",
@@ -4942,6 +4954,7 @@ test "bridge: FFI struct method wrappers unwrap optional arguments" {
     synthesized_inline_unions: {},
     needs_js_any: false,
     needs_promise: false,
+    needs_option_return_wrap: false,
   }
   let iface : @ast.TsInterface = {
     name: "SignJWT",
@@ -4989,6 +5002,7 @@ test "bridge: FFI class methods unwrap optional arguments" {
     synthesized_inline_unions: {},
     needs_js_any: false,
     needs_promise: false,
+    needs_option_return_wrap: false,
   }
   let class_ : @ast.TsClassDecl = {
     name: "SignJWT",
@@ -5060,6 +5074,7 @@ test "bridge: FFI struct generation keeps generic method wrappers non-extern" {
     synthesized_inline_unions: {},
     needs_js_any: false,
     needs_promise: false,
+    needs_option_return_wrap: false,
   }
   let iface : @ast.TsInterface = {
     name: "StatsBase",
@@ -5103,6 +5118,7 @@ test "bridge: FFI struct generation caps method wrappers but keeps function fiel
     synthesized_inline_unions: {},
     needs_js_any: false,
     needs_promise: false,
+    needs_option_return_wrap: false,
   }
   let iface : @ast.TsInterface = {
     name: "LargeApi",
@@ -5145,6 +5161,7 @@ test "bridge: FFI struct generation keeps callable wrapper beyond cap" {
     synthesized_inline_unions: {},
     needs_js_any: false,
     needs_promise: false,
+    needs_option_return_wrap: false,
   }
   let iface : @ast.TsInterface = {
     name: "ExpectStatic",
@@ -5194,6 +5211,7 @@ test "bridge: FFI struct JS converter emits callable wrappers for call signature
     synthesized_inline_unions: {},
     needs_js_any: false,
     needs_promise: false,
+    needs_option_return_wrap: false,
   }
   let actual = ffi_struct_js_converter_decl(state, "ForwardRefRenderFunction", [
     (
@@ -5232,6 +5250,7 @@ test "bridge: FFI struct preserves selected interface type parameters locally" {
     synthesized_inline_unions: {},
     needs_js_any: false,
     needs_promise: false,
+    needs_option_return_wrap: false,
   }
   let iface : @ast.TsInterface = {
     name: "StatsBase",
@@ -5366,6 +5385,7 @@ fn ffi_string_subset_test_state(declared : Array[String]) -> MoonBitJsFfiState {
     synthesized_inline_unions: {},
     needs_js_any: false,
     needs_promise: false,
+    needs_option_return_wrap: false,
   }
 }
 
@@ -5479,4 +5499,18 @@ test "bridge: FFI struct decl drops internal and JSValue-widened deprecated memb
   assert_false(actual.contains("_def"))
   assert_true(actual.contains("name : String"))
   assert_true(actual.contains("keep : String"))
+}
+
+///|
+test "bridge: struct JS converter passes class instances and preserves internals" {
+  let state = ffi_string_subset_test_state([])
+  let decl = ffi_struct_js_converter_decl(state, "BaseSchema", [
+    ("kind", @ast.TsType::Literal("schema")),
+  ])
+  // A class instance can never be a MoonBit-constructed struct — raw
+  // library handles (drizzle's SQL) pass through with their prototype.
+  assert_true(decl.contains("Object.getPrototypeOf(value)"))
+  // Plain-object handles keep undeclared internals (valibot's `~run`)
+  // via the spread; declared fields overwrite in place.
+  assert_true(decl.contains("const result = { ...value };"))
 }

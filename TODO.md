@@ -1249,6 +1249,174 @@ that `c.set`s a variable before `next()` with the handler reading it via
   `{id: string}`) is TS type-level computation — same fundamental limit
   as zod's `z.infer`.
 
+### 16. valibot + drizzle run end-to-end; boundary conversion fixes (done 2026-07-16)
+
+Runtime-verified with node against regenerated packages. valibot:
+`parse` / `safeParse` accept/reject and `pipe(string(), [minLength(3)])`
+length validation. drizzle-orm: the `sql` tagged template builds an SQL
+object from MoonBit (template-strings array via a tiny extern) and
+`and_()` combines wrappers.
+
+Four GENERAL boundary fixes fell out (all bugs any handle-round-tripping
+package would hit):
+
+- [x] Enum `to_js` converters are idempotent: a raw library value cast
+  into a struct type carries the JS literal already (valibot's
+  `string()` result flowing back into `parse(schema, ...)` crashed on
+  "unexpected BaseSchemaKind tag: schema").
+- [x] Struct `to_js` converters pass CLASS instances through untouched
+  (MoonBit structs compile to plain objects, so an instance is always a
+  raw library handle — spreading severed drizzle `SQL`'s prototype) and
+  spread plain objects instead of rebuilding from declared fields
+  (rebuilding stripped valibot's `~run` internals). Optional fields
+  delete their key when absent instead of leaving a tagged None.
+- [x] REST parameters spread at the call site in all three glue paths
+  (import / func / callable) — `pipe(schema, ...items)` received the
+  MoonBit array as its first variadic item ("item.~run is not a
+  function"). Imports use `TsImport.param_is_rest`; funcs use
+  `TsParam.is_rest`. Rest-param imports also FORCE the bridge glue —
+  a direct `= "sql"` binding can never spread.
+- [x] The decl emitter's reserved-word list synced to the FFI's 74-name
+  list (`and` / `or` / `not` / ...): drizzle's `and` was emitted as
+  callable `and_` but the mbti/decl surface advertised the uncallable
+  bare name.
+- realworld valibot smoke upgraded from construct-only to
+  safeParse + pipe round-trips.
+- Known cross-cutting gap (same family as zod's raw-typed result
+  fields): matching a `T?` EXTERN RETURN with MoonBit `match` can crash
+  on the raw `value | undefined` repr when MoonBit expects the tagged
+  box — optional extern returns need repr-aware boxing glue. Reads via
+  a small extern accessor work today. **Fixed in §17.**
+
+### 17. Optional extern returns construct `Option` on the MoonBit side (done 2026-07-17)
+
+Follow-up to the §16 known gap. Empirical repr table for `Option[T]` on
+the JS backend: `String` / `Int` / struct instances / enum instances are
+unboxed (`Some` = raw value, `None` = `undefined`); `Bool` uses the `-1`
+sentinel; everything else — `JSValue`, `Double`, arrays, opaque
+`#external` handles, generics, function/tuple types — uses a `{$tag, _0}`
+box. A raw `value | undefined` extern return against a boxed `Option` is
+not just crash-prone: a real value silently matches as `None`.
+
+- [x] `__ts_mbt_wrap_option_return[T](raw : JSValue) -> T?` helper pair
+  (absence check treats `undefined` and `null` as `None`; `%identity`
+  cast for `Some`) injected once per generated package, from either the
+  FFI emission (`ffi_option_return_wrap_helper_decls`) or the top-level
+  wrapper pass (`bridge_option_return_wrap_helper_decls`), `contains`
+  checks dedup the two.
+- [x] Top-level `pub extern` fns with boxed-optional returns are demoted
+  to `<name>_raw` externs plus a public wrapper by
+  `add_bridge_public_wrappers` (same mechanism as enum-converter
+  wrappers). Covers drizzle `and_` / `or_`, zod `getErrorMap`.
+- [x] Class-method / getter `preserve` wrapper bodies use the wrap helper
+  instead of a bare `unsafeCast` when the return is boxed-optional
+  (drizzle `SQL::if_`, `One::get_one_config`, hono `Context` getters).
+- [x] Non-preserve method / getter / index-accessor / function-field
+  externs with boxed-optional returns emit a private raw extern
+  (`_*_opt_ret_js`, `self` renamed `this_`) plus a public wrapper via
+  `ffi_option_return_extern_pair` (valibot `ObjectEntries::op_get`).
+- [x] The trailing `?` of a function-typed return
+  (`() -> ((Props) -> JSValue)?`) binds to the function's result — a
+  depth-0 `->` scan (`ffi_rendered_return_type_optional_inner`) keeps
+  those on the raw passthrough.
+- Verified: drizzle `match and_([...])` sees `Some` for real values and
+  `None` for `undefined` (previously silent-`None` / crash); zod,
+  valibot, hono scaffold smokes stay green.
+- Still open (pre-existing, unrelated to Option): non-optional generated
+  ENUM returns cross as raw strings (`nextFlag -> NodeFlag`), relying on
+  idempotent to_js converters for round-trips; matching them in MoonBit
+  needs a return-side `_from_js` conversion. **Resolved in §18** — the
+  note was partly stale: top-level enum returns were already converted
+  by the wrapper pass; the real broken vectors were index-signature
+  accessors and empty structs.
+
+### 18. Enum-typed accessors + index-signature-only interfaces (done 2026-07-17)
+
+Investigating the §17 "raw enum returns" note empirically:
+
+- Top-level fn enum returns were ALREADY converted
+  (`nextFlag -> NodeFlag` demotes to a `String` raw extern + a wrapper
+  calling `__ts_mbt_node_flag_from_js`) — the note was wrong about them.
+- Class/interface METHOD returns never render enum types (they degrade
+  to `String` at the ffi surface), so they exchange raw strings
+  correctly at runtime; zero real-package occurrences. The decl-layer
+  `.mbti` still advertises the enum names there — a surface divergence,
+  not a runtime bug.
+- The genuinely broken vectors, both fixed:
+  - [x] `op_get` on `[k: string]: "a" | "b"` returned the raw string
+    typed as the enum (match misbehaved) and `op_set` wrote MoonBit tag
+    ints into the JS object. Both now route through
+    `ffi_converted_return_extern_pair` / a `_to_js` wrapper pair
+    (`ffi_rendered_generated_enum_info` decides; composes with the §17
+    Option wrap for the `Enum?` getter return).
+  - [x] Index-signature-only interfaces lowered to ZERO-FIELD structs,
+    which MoonBit's JS backend value-erases — the instance compiled to
+    `undefined` and every accessor crashed. Zero-field interface
+    lowering now emits `#external pub type X` (matching what the decl
+    layer already advertised in `.mbti`).
+- Verified at runtime via the extended `realworld-literal-options`
+  fixture: a `FlagMachine` class (method / getter / optional-method
+  returns) plus a `FlagTable` index-signature interface with
+  `op_get` -> `Some(R)` / missing -> `None` / `op_set(A)` round-trip.
+- Return-side enum conversion machinery
+  (`ffi_wrapper_return_body_expr`) also covers the preserve-wrapper
+  bodies and any future path that renders enum returns.
+
+### 19. Realworld budget recalibration + version-skew-tolerant node builtins (done 2026-07-17)
+
+The env-gated `verify_realworld_typescript.sh` had drifted red after the
+generic-base-flattening batches (zod fallbacks 225 -> ~1869 by the old
+counting). Rebuilt a complete corpus root (repo-pinned zod 4.4.3 /
+valibot 1.4.2 / hono 4.12.16 etc. plus fresh installs for the rest;
+exact versions now recorded in `corpus/realworld-typescript.tsv`) and
+recalibrated all three budget tables from measured values — the gate now
+runs end to end (30 packages generated, checked, runtime-smoked) with
+budgets enforced.
+
+Generator fix found by the run:
+
+- [x] `@types/node` routinely declares APIs newer than the running Node
+  (`mkdtempDisposableSync` on node 22), and both
+  `export { x } from "node:fs"` re-exports and
+  `import { x } from "node:fs"` glue imports hard-fail at load time for
+  a missing name. `node:*` bridges now route named access through the
+  shared `import * as __ts_mbt_module` namespace
+  (`ffi_bridge_tolerant_reexport_line`,
+  `ffi_module_spec_prefers_namespace_named_imports`), so a missing name
+  stays `undefined` until actually called.
+
+Script smoke updates for current surfaces: glob escape/unescape/hasMagic
+take `Options?` (wrap in `Some`), node:sqlite options gained
+`limits`, and `StatementSync::get` now returns a real `Option` (the
+section-17 wrap) — the smoke matches on it instead of reading the raw
+value through an extern.
+
+### 20. decl/ffi method surfaces aligned; methods carry real enum types (done 2026-07-17)
+
+`bridge.mbti` advertised `declare pub fn flag_machine_advance(self) -> NodeFlag`
+while `bridge.mbt` implemented `FlagMachine::advance(self) -> String` —
+both the name and the type diverged. Fixed from both sides:
+
+- [x] FFI class methods / getters / setters render param and return
+  types with the field-style resolver (`ffi_struct_field_type_name`),
+  so literal-union aliases surface as their generated enums instead of
+  degrading to `String`. Conversions ride the section-18 machinery:
+  enum returns via `ffi_converted_return_extern_pair` /
+  `ffi_wrapper_return_body_expr`, enum params via new
+  `ffi_enum_arg_expr` / `ffi_enum_param_raw_type` (`force~` pairs when
+  only params need conversion; preserve-path wrappers convert before
+  the `unsafeCast`). Setters got the same treatment.
+- [x] Decl layer emits instance members as `Type::method` /
+  `Type::get_x` / `Type::set_x` (snake-cased, reserved-suffixed) to
+  match the FFI's naming; statics stay top-level `<class>_<method>`.
+- Verified: `.mbti` and `.mbt` now agree line-for-line on the
+  `FlagMachine` fixture (`FlagMachine::advance(self) -> NodeFlag` in
+  both), and the runtime fixture matches enum constructors directly on
+  method returns (`match advance(m) { R => ... }`,
+  `peek() -> NodeFlag?` composes enum from_js with the Option wrap).
+- Full gates green including the env-gated realworld corpus (30
+  packages) and the drizzle / valibot / hono / zod scaffold smokes.
+
 ### Non-Goals (still)
 
 - [ ] Do not turn this list into a checklist for "all of TypeScript". Each item
@@ -1257,7 +1425,105 @@ that `c.set`s a variable before `next()` with the handler reading it via
 - [ ] Do not pursue `any` / `unknown` AST distinction unless a downstream
   consumer needs it; the JSValue count is unaffected.
 
-## TS Checker Conformance (current state, 2026-07-12 — TypeScript 7)
+## TS Checker Conformance (current state, 2026-07-17 — TypeScript 7)
+
+Batch BW (2026-07-17): lib.d.ts / @types/node checker issues driven to
+ZERO — 108/108 lib files and 88/88 @types/node files check fully clean.
+Fixes: (a) the type-param-arity check learned MINIMUM arity — the parser
+records `<generic-min-arity>NAME=K` (leading params without a default)
+at every generic declaration site, ambient `declare module` / `declare
+global` sub-parses propagate the suppression-only sentinels to the outer
+module (they were parsed by a fresh Parser and lost), and `check_arity`
+flags under-application only below the minimum (`Iterable<T, TReturn =
+any, TNext = any>` legally takes 1..3 args; TokenForOptions likewise) —
+this replaced an unsound exact-arity rule that also cost 4 lucky TPs
+(conditionalTypes1 / inferTypes1 / recursiveMappedTypes /
+varianceAnnotations under-apply LEGALLY and were flagged for the wrong
+reason; TP 2342 -> 2338, FP still 0); (b) interface accessor syntax
+(TS 5.4 `get x(): T` in interfaces, lib.es2024/lib.dom) parses as a
+readonly-property pair; (c) interface-extends member compat exempts
+generic methods (CallableFunction.call), covariant Named returns via the
+extends chain (getElementById), optional-over-required when the derived
+member is `any` (BeforeUnloadEvent.returnValue), optional-method
+overload duplicates (Process.send), and tuple members whose elements
+narrow covariantly through the extends chain (http2
+ClientHttp2SessionEventMap `stream`: ClientHttp2Stream extends
+Http2Stream); (d) TS2307 abstains in `declare global` bundles
+(fetch/streams/undici-types) and for node builtin subpaths
+(`stream/web`); (e) arity check tolerates type-param defaults declared
+only via merged declarations (min across duplicates).
+
+Batch BV (2026-07-17): driving the BU-audit residuals down —
+lib.d.ts 569 -> 14 issues (103/108 files clean), @types/node 41 -> 14
+(80/88 clean); oracle unchanged (TP 2342 / FP 0 / TN 1750). Fixes:
+(a) interface-extends member compat now skips OVERLOADED members —
+tsc compares the whole overload set, and the pairwise entry comparison
+misfired 464 times on lib.dom's `addEventListener` specialization
+pattern alone; (b) `check_type_undeclared_tps` skips callable members
+of object-literal types (the parser discards signature-level type
+params there — Process.finalization's `register<T>`), and accumulates
+method type params across ALL same-name overload entries instead of
+letting the last overload win (lib.dom `querySelector<K>`/`<E>`);
+(c) TS2307 abstains for `node:*` / classic Node builtin specifiers and
+inside ambient-module declaration bundles. Remaining residuals (28
+total): timers' `RefCounted` cross-scope refs, lib.dom accessor-pair
+`get`/`set` duplicate-identifier misparse, type-param DEFAULTS in the
+arity check (TokenForOptions), CallableFunction/Function member compat,
+undici-types cross-package import.
+
+Batch BU (2026-07-17): full-surface parse audit of `typescript@6.0.3`
+`lib*.d.ts` (108 files) and `@types/node@26.1.1` (88 files): 196/196
+parse clean (0 parse errors); `@types/node` emits substantive decl
+surfaces (fs 459 / crypto 552 / util 106 MoonBit decls), `lib.*` files
+are global ambient scripts with an intentionally empty export surface.
+Checker false positives found by the audit and fixed (all
+`declare module "spec" { ... }` body exemptions — the parser flattens
+those bodies into the parent module without ambient flags): TS1046
+top-level-modifier (197 hits in fs alone), TS2564 strict-property-init
+(util's MIMEType), and the trailing-void overload heuristic (crypto's
+randomInt / verify). After the fixes @types/node checks 69/88 files
+fully clean (41 residual issues, mostly interface-generic `T` scoping
+and cross-file globals); lib.d.ts residuals concentrate in lib.dom
+(482 of 569, deep DOM hierarchy modeling limits). Oracle unchanged
+(TP 2342 / FP 0).
+
+Batch BT (2026-07-17): TP 2341 -> 2342, MISS 393 -> 392, FP / PFLEGAL
+still 0. Class-expression member bodies no longer inherit control-flow
+narrowing: the parser lowers `class { ... }` expressions to a `<class>`
+IIFE, and `check_funcexpr_with_context` now rebinds captured variables at
+their DECLARED types for that marker — class members execute after the
+guard region, so tsc does not narrow into them (typeGuardInClass).
+
+Batch BS (2026-07-17): TP 2338 -> 2341, MISS 396 -> 393, FP / PFLEGAL
+still 0. Mining the TS2322 cluster (30 files, 17 single-code): (a) a
+concrete primitive assigned to an opaque generic indexed access
+(`tp: T[P]; tp = s`) is always TS2322 — matches both the raw
+`IndexedAccess(Named(T), _)` annotation and the bound-substituted
+`IndexedAccess(_, Keyof(...))` shape parameter registration produces
+(nonPrimitiveConstraintOfIndexAccessType); (b) `x: T & U` with
+union-of-primitive constraints is bounded by the member-set intersection
+of the bounds — a target union missing one of the members rejects it
+(intersectionWithUnionConstraint, plus one multi-code file). Assessment
+of the remaining TS2322 files: functionExpressionContextualTyping2 /
+contextuallyTypeCommaOperator02 / typeGuardInClass (class-expression
+narrowing reset) / callChain.3 / objectLiteralNormalization /
+typeFromPropertyAssignment31 look feasible next; generatorTypeCheck8
+(iterator protocol compat), symbolProperty46 (symbol-keyed accessors),
+conditionalTypesExcessProperties, templateLiteralTypes7 need deeper
+machinery.
+
+Batch BR (2026-07-17): TP 2333 -> 2338, MISS 401 -> 396, FP / PFLEGAL
+still 0. Bodiless generator declarations (`declare namespace M {
+function *g(): any }`, generator overload signatures, bodiless `*m()`
+class methods) are always-error grammar misuses recorded at parse time
+(generatorInAmbientContext2/4.d, generatorOverloads1/2/3);
+`Constructor(...)` joined `is_definitely_not_callable` (a
+construct-signature value called without `new` is TS2348 — inference
+doesn't reach it for the remaining corpus cases yet, but the predicate
+is sound). Remaining 396 MISS is a long tail (top cluster TS2322 at 30,
+71 files with TS7-only baselines).
+
+## TS Checker Conformance (current state, 2026-07-12, superseded above — TypeScript 7)
 
 The oracle now correlates against **TypeScript 7** (typescript-go
 v7.0.2). Truth comes from vendored name manifests

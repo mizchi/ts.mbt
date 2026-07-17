@@ -274,33 +274,71 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
       }
     }
   }
+  // Minimum legal type-argument count per generic declaration, recorded by
+  // the parser as `<generic-min-arity>NAME=K` (K = leading parameters
+  // without a default). Merged declarations keep the smallest K --
+  // TypeScript merges type-parameter defaults across declarations, so the
+  // most permissive minimum is the sound choice for an FP-free check.
+  let min_arities : Map[String, Int] = {}
+  for entry in module_.interface_member_modifier_misuses {
+    if entry.has_prefix("<generic-min-arity>") {
+      let rest = entry.substring(start="<generic-min-arity>".length())
+      match rest.find("=") {
+        Some(eq_pos) => {
+          let nm = rest.substring(start=0, end=eq_pos)
+          let k = @string.parse_int(rest.substring(start=eq_pos + 1)) catch {
+            _ => continue
+          }
+          match min_arities.get(nm) {
+            Some(prev) => if k < prev { min_arities[nm] = k }
+            None => min_arities[nm] = k
+          }
+        }
+        None => ()
+      }
+    }
+  }
   for iface in module_.interfaces {
     let scope = scope_with_iface_params(iface)
     for field in iface.fields {
-      check_arity(field.1, scope, arities, noarg_required, issues)
+      check_arity(field.1, scope, arities, noarg_required, min_arities, issues)
     }
   }
   for ta in module_.type_aliases {
     let scope = ta.type_params
-    check_arity(ta.type_, scope, arities, noarg_required, issues)
+    check_arity(ta.type_, scope, arities, noarg_required, min_arities, issues)
   }
   for f in module_.funcs {
     let scope : Array[String] = []
     for p in f.params {
-      check_arity(p.type_, scope, arities, noarg_required, issues)
+      check_arity(p.type_, scope, arities, noarg_required, min_arities, issues)
     }
-    check_arity(f.return_type, scope, arities, noarg_required, issues)
+    check_arity(
+      f.return_type,
+      scope,
+      arities,
+      noarg_required,
+      min_arities,
+      issues,
+    )
   }
   for i in module_.imports {
     let scope : Array[String] = []
     for p in i.params {
-      check_arity(p.1, scope, arities, noarg_required, issues)
+      check_arity(p.1, scope, arities, noarg_required, min_arities, issues)
     }
-    check_arity(i.return_type, scope, arities, noarg_required, issues)
+    check_arity(
+      i.return_type,
+      scope,
+      arities,
+      noarg_required,
+      min_arities,
+      issues,
+    )
   }
   for v in module_.values {
     let scope : Array[String] = []
-    check_arity(v.type_, scope, arities, noarg_required, issues)
+    check_arity(v.type_, scope, arities, noarg_required, min_arities, issues)
   }
   // Top-level `var`/`let`/`const` declarations whose annotation references a
   // declared type (`var v: C<string>`) -- these live in `top_level_stmts`,
@@ -308,7 +346,7 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
   for stmt in module_.top_level_stmts {
     match stmt {
       Var(_, t, _) | Let(_, t, _) | Const(_, t, _) =>
-        check_arity(t, [], arities, noarg_required, issues)
+        check_arity(t, [], arities, noarg_required, min_arities, issues)
       _ => ()
     }
   }
@@ -785,6 +823,7 @@ fn check_arity(
   scope : Array[String],
   arities : Map[String, Int],
   noarg_required : Map[String, Unit],
+  min_arities : Map[String, Int],
   issues : Array[TypeIssue],
 ) -> Unit {
   match type_ {
@@ -812,8 +851,17 @@ fn check_arity(
     Applied(name, args) => {
       if !scope.contains(name) {
         match arities.get(name) {
-          Some(expected) =>
-            if expected != args.length() {
+          Some(expected) => {
+            // Too many args is always an error; too few is an error only
+            // below the declaration's minimum (leading parameters without a
+            // default) -- `Iterable<T, TReturn = any, TNext = any>` legally
+            // takes 1..3 arguments. Declarations parsed before the sentinel
+            // existed fall back to the exact-arity rule.
+            let min_required = match min_arities.get(name) {
+              Some(m) => if m < expected { m } else { expected }
+              None => expected
+            }
+            if args.length() > expected || args.length() < min_required {
               let already = issues
                 .iter()
                 .any(fn(i) {
@@ -827,42 +875,44 @@ fn check_arity(
                 })
               }
             }
+          }
           None => ()
         }
       }
       for a in args {
-        check_arity(a, scope, arities, noarg_required, issues)
+        check_arity(a, scope, arities, noarg_required, min_arities, issues)
       }
     }
-    Array(inner) => check_arity(inner, scope, arities, noarg_required, issues)
+    Array(inner) =>
+      check_arity(inner, scope, arities, noarg_required, min_arities, issues)
     Tuple(items) =>
       for it in items {
-        check_arity(it, scope, arities, noarg_required, issues)
+        check_arity(it, scope, arities, noarg_required, min_arities, issues)
       }
     Object(fields) =>
       for f in fields {
-        check_arity(f.0, scope, arities, noarg_required, issues)
-        check_arity(f.1, scope, arities, noarg_required, issues)
+        check_arity(f.0, scope, arities, noarg_required, min_arities, issues)
+        check_arity(f.1, scope, arities, noarg_required, min_arities, issues)
       }
     Func(params, ret) => {
       for p in params {
-        check_arity(p, scope, arities, noarg_required, issues)
+        check_arity(p, scope, arities, noarg_required, min_arities, issues)
       }
-      check_arity(ret, scope, arities, noarg_required, issues)
+      check_arity(ret, scope, arities, noarg_required, min_arities, issues)
     }
     Union(items) | Intersection(items) =>
       for m in items {
-        check_arity(m, scope, arities, noarg_required, issues)
+        check_arity(m, scope, arities, noarg_required, min_arities, issues)
       }
     Conditional(c, e, t, f) => {
-      check_arity(c, scope, arities, noarg_required, issues)
-      check_arity(e, scope, arities, noarg_required, issues)
-      check_arity(t, scope, arities, noarg_required, issues)
-      check_arity(f, scope, arities, noarg_required, issues)
+      check_arity(c, scope, arities, noarg_required, min_arities, issues)
+      check_arity(e, scope, arities, noarg_required, min_arities, issues)
+      check_arity(t, scope, arities, noarg_required, min_arities, issues)
+      check_arity(f, scope, arities, noarg_required, min_arities, issues)
     }
     IndexedAccess(b, k) => {
-      check_arity(b, scope, arities, noarg_required, issues)
-      check_arity(k, scope, arities, noarg_required, issues)
+      check_arity(b, scope, arities, noarg_required, min_arities, issues)
+      check_arity(k, scope, arities, noarg_required, min_arities, issues)
     }
     _ => ()
   }

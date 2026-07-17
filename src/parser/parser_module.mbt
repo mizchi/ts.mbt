@@ -536,6 +536,26 @@ fn parse_ambient_external_module_source(
 }
 
 ///|
+/// Ambient module / global bodies are sub-parsed with a fresh parser, so
+/// internal sentinel entries recorded during that parse never reach the
+/// outer module's `interface_member_modifier_misuses` channel. Re-emit the
+/// suppression-only sentinels (`<generic-min-arity>`, `<type-param-name>`)
+/// on the outer parser -- both can only make checks MORE permissive, so
+/// propagating them is FP-free. Error-introducing sentinels
+/// (`<generic-noarg-required>`) intentionally stay scoped to the body.
+fn Parser::propagate_suppression_sentinels(
+  self : Parser,
+  module_ : @ast.TsModule,
+) -> Unit {
+  for entry in module_.interface_member_modifier_misuses {
+    if entry.has_prefix("<generic-min-arity>") ||
+      entry.has_prefix("<type-param-name>") {
+      self.interface_member_modifier_misuses.push(entry)
+    }
+  }
+}
+
+///|
 fn Parser::parse_ambient_external_module_decl(
   self : Parser,
 ) -> @ast.TsModule? raise ParseError {
@@ -561,7 +581,9 @@ fn Parser::parse_ambient_external_module_decl_with_spec(
       let spec = self.expect_str_literal()
       if self.check(LBrace) {
         let body_source = self.parse_declaration_block_source()
-        Some((spec, parse_ambient_external_module_source(body_source)))
+        let module_ = parse_ambient_external_module_source(body_source)
+        self.propagate_suppression_sentinels(module_)
+        Some((spec, module_))
       } else {
         self.skip_declaration_block()
         Some((spec, empty_ts_module()))
@@ -700,6 +722,7 @@ fn Parser::parse_namespace_decl_with_mode(
     if self.check(LBrace) {
       let body_source = self.parse_declaration_block_source()
       let augmented = parse_ambient_external_module_source(body_source)
+      self.propagate_suppression_sentinels(augmented)
       let ns : @ast.TsNamespaceDecl = { name: "<global>", module_: augmented }
       return Some((None, Some(ns)))
     } else {
