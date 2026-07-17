@@ -1240,6 +1240,14 @@ fn class_decl_to_moonbit_sections(
       to_snake_case(class_.name) +
       "_" +
       to_snake_case(class_property.name)
+    // Instance accessors live under the type on the FFI side
+    // (`FlagMachine::get_flag_machine_mode`); mirror that here so the
+    // advertised `.mbti` surface matches what `bridge.mbt` implements.
+    let getter_decl_name = if class_property.is_static {
+      getter_name
+    } else {
+      "\{type_name}::\{getter_name}"
+    }
     let getter_params : Array[String] = []
     if !class_property.is_static {
       getter_params.push("self : \{receiver_type}")
@@ -1249,14 +1257,19 @@ fn class_decl_to_moonbit_sections(
     push_unique_decl_section(
       seen_binding_names,
       sections,
-      getter_name,
-      "///|\ndeclare pub \{property_fn_prefix} \{getter_name}(\{getter_params_str}) -> \{getter_type}",
+      getter_decl_name,
+      "///|\ndeclare pub \{property_fn_prefix} \{getter_decl_name}(\{getter_params_str}) -> \{getter_type}",
     )
     if !class_property.is_readonly {
       let setter_name = "set_" +
         to_snake_case(class_.name) +
         "_" +
         to_snake_case(class_property.name)
+      let setter_decl_name = if class_property.is_static {
+        setter_name
+      } else {
+        "\{type_name}::\{setter_name}"
+      }
       let setter_params : Array[String] = []
       if !class_property.is_static {
         setter_params.push("self : \{receiver_type}")
@@ -1266,8 +1279,8 @@ fn class_decl_to_moonbit_sections(
       push_unique_decl_section(
         seen_binding_names,
         sections,
-        setter_name,
-        "///|\ndeclare pub \{property_fn_prefix} \{setter_name}(\{setter_params_str}) -> Unit",
+        setter_decl_name,
+        "///|\ndeclare pub \{property_fn_prefix} \{setter_decl_name}(\{setter_params_str}) -> Unit",
       )
     }
   }
@@ -1298,10 +1311,17 @@ fn class_decl_to_moonbit_sections(
       "This?" => receiver_type + "?"
       _ => raw_return
     }
+    // Instance methods live under the type on the FFI side
+    // (`Hono::get`, reserved words suffixed like `match_`); statics stay
+    // top-level `<class>_<method>` functions — mirror both here.
     let fn_name = if class_method.is_static {
       "\{to_snake_case(class_.name)}_\{to_snake_case(class_method.name)}"
     } else {
-      "\{to_snake_case(class_.name)}_\{to_snake_case(class_method.name)}"
+      let mut method_name = to_snake_case(class_method.name)
+      if value_identifier_needs_suffix(method_name) {
+        method_name += "_"
+      }
+      "\{type_name}::\{method_name}"
     }
     let method_params = params.join(", ")
     // Static methods skip the class-level type-params (they don't have

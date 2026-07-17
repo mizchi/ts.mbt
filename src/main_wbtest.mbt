@@ -4797,7 +4797,7 @@ async test "emit_moonbit_decl_text handles runtime default exported classes" {
   }
   assert_true(actual.contains("declare pub type Default"))
   assert_true(actual.contains("declare pub fn new_default("))
-  assert_true(actual.contains("declare pub fn default_inc("))
+  assert_true(actual.contains("declare pub fn Default::inc("))
 }
 
 ///|

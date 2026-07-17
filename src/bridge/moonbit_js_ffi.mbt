@@ -3364,6 +3364,38 @@ fn ffi_return_generated_enum_glue(
 }
 
 ///|
+/// Argument expression for a value crossing INTO JS: generated-enum
+/// params carry MoonBit tag ints and need the package's `_to_js`
+/// converter; everything else passes through.
+fn ffi_enum_arg_expr(
+  state : MoonBitJsFfiState,
+  rendered_type : String,
+  arg : String,
+) -> String {
+  match ffi_rendered_generated_enum_info(state, rendered_type) {
+    Some((enum_name, _, true)) =>
+      "\{ffi_enum_to_js_name(enum_name)}_optional(\{arg})"
+    Some((enum_name, _, false)) => "\{ffi_enum_to_js_name(enum_name)}(\{arg})"
+    None => arg
+  }
+}
+
+///|
+/// Raw boundary type for an enum-typed param on a private raw extern
+/// (`NodeFlag` -> `String`, `NodeFlag?` -> `String?`); non-enum types
+/// keep their rendered form.
+fn ffi_enum_param_raw_type(
+  state : MoonBitJsFfiState,
+  rendered_type : String,
+) -> String {
+  match ffi_rendered_generated_enum_info(state, rendered_type) {
+    Some((_, raw_type, true)) => raw_type + "?"
+    Some((_, raw_type, false)) => raw_type
+    None => rendered_type
+  }
+}
+
+///|
 /// Body expression for wrapper fns whose raw extern returns `JSValue`
 /// (the `preserve` class-method / getter paths): route generated-enum
 /// and boxed-optional returns through the package converters instead of
@@ -3423,6 +3455,7 @@ fn ffi_converted_return_extern_pair(
   arg_names : Array[String],
   return_type : String,
   target : String,
+  force? : Bool = false,
 ) -> String? {
   let extern_name = "_\{extern_base}_ret_conv_js"
   let call = extern_name + "(" + arg_names.join(", ") + ")"
@@ -3470,6 +3503,15 @@ fn ffi_converted_return_extern_pair(
             return_type,
             target,
             "__ts_mbt_wrap_option_return(\{call})",
+          ),
+        )
+      } else if force {
+        // Param-side conversion (enum args) forced the pair; the return
+        // crosses raw.
+        Some(
+          ffi_return_extern_pair_decl(
+            extern_base, public_name, params_src, extern_params_src, return_type,
+            return_type, target, call,
           ),
         )
       } else {
@@ -4111,6 +4153,9 @@ fn ffi_class_method_decl_to_moonbit(
   }
   let params : Array[String] = []
   let arg_names : Array[String] = []
+  let arg_exprs : Array[String] = []
+  let extern_param_decls : Array[String] = []
+  let mut has_enum_param = false
   let js_args : Array[String] = []
   if !class_method.is_static {
     params.push("self : \{class_self_type_with_params}")
@@ -4118,14 +4163,28 @@ fn ffi_class_method_decl_to_moonbit(
   for param in class_method.params {
     let (name, type_) = param
     let safe_name = ffi_sanitize_identifier(name, "arg")
-    let safe_type = ffi_type_name(state, type_)
+    // Field-style rendering resolves literal-union aliases to their
+    // generated enums (`NodeFlag` instead of `String`); the matching
+    // `_to_js` conversion happens in `arg_exprs` below.
+    let safe_type = ffi_struct_field_type_name(state, type_)
     arg_names.push(safe_name)
+    let arg_expr = ffi_enum_arg_expr(state, safe_type, safe_name)
+    if arg_expr != safe_name {
+      has_enum_param = true
+    }
+    arg_exprs.push(arg_expr)
+    extern_param_decls.push(
+      "\{safe_name} : \{ffi_enum_param_raw_type(state, safe_type)}",
+    )
     js_args.push(
       ffi_inline_js_arg_expr_with_state(Some(state), type_, safe_name),
     )
     params.push("\{safe_name} : \{safe_type}")
   }
-  let raw_return_type = ffi_type_name(state, class_method.return_type)
+  let raw_return_type = ffi_struct_field_type_name(
+    state,
+    class_method.return_type,
+  )
   let return_type = match raw_return_type {
     "This" => class_self_type_with_params
     "This?" => class_self_type_with_params + "?"
@@ -4157,8 +4216,8 @@ fn ffi_class_method_decl_to_moonbit(
     if !class_method.is_static {
       cast_args.push("unsafeCast(self)")
     }
-    for arg in arg_names {
-      cast_args.push("unsafeCast(\{arg})")
+    for arg_expr in arg_exprs {
+      cast_args.push("unsafeCast(\{arg_expr})")
     }
     let cast_args_src = cast_args.join(", ")
     let method_name = ffi_value_fn_name(class_method.name)
@@ -4204,10 +4263,11 @@ fn ffi_class_method_decl_to_moonbit(
         fn_name,
         fn_name,
         method_params,
-        method_params,
-        arg_names,
+        extern_param_decls.join(", "),
+        arg_exprs,
         return_type,
         " \"\{binding_name}\"",
+        force=has_enum_param,
       ) {
       Some(pair) => pair
       None =>
@@ -4237,21 +4297,24 @@ fn ffi_class_method_decl_to_moonbit(
     // Raw extern's first param can't be named `self` — MoonBit parses
     // `extern "js" fn foo(self : T, ...)` as a deprecated method decl.
     let forward_args : Array[String] = ["self"]
-    for arg in arg_names {
-      forward_args.push(arg)
+    for arg_expr in arg_exprs {
+      forward_args.push(arg_expr)
     }
-    let extern_params = "this_ : " +
-      instance_params["self : ".length():].to_owned()
+    let extern_params : Array[String] = ["this_ : \{class_type_name}"]
+    for decl in extern_param_decls {
+      extern_params.push(decl)
+    }
     match
       ffi_converted_return_extern_pair(
         state,
         fn_name,
         "\{class_type_name}::\{method_name}",
         instance_params,
-        extern_params,
+        extern_params.join(", "),
         forward_args,
         return_type,
         "\n  #| (\{js_param_list}) => \{js_call}",
+        force=has_enum_param,
       ) {
       Some(pair) => pair
       None =>
@@ -4294,7 +4357,10 @@ fn ffi_class_property_getter_decl_to_moonbit(
     class_.name,
     class_property.name,
   )
-  let return_type = ffi_type_name(state, class_property.type_)
+  // Field-style rendering resolves literal-union aliases to their
+  // generated enums; the `_from_js` conversion happens in the wrapper
+  // body / converted pair below.
+  let return_type = ffi_struct_field_type_name(state, class_property.type_)
   let getter_params = params.join(", ")
   let result = if preserve {
     state.needs_js_any = true
@@ -4386,8 +4452,12 @@ fn ffi_class_property_setter_decl_to_moonbit(
   if !class_property.is_static {
     params.push("self : \{class_self_type_with_params}")
   }
-  let value_type = ffi_type_name(state, class_property.type_)
+  // Field-style rendering resolves literal-union aliases to their
+  // generated enums; the `_to_js` conversion happens in `value_expr`.
+  let value_type = ffi_struct_field_type_name(state, class_property.type_)
   params.push("value : \{value_type}")
+  let value_expr = ffi_enum_arg_expr(state, value_type, "value")
+  let value_raw_type = ffi_enum_param_raw_type(state, value_type)
   let fn_name = "set_" +
     ffi_to_snake_case(class_.name) +
     "_" +
@@ -4403,25 +4473,39 @@ fn ffi_class_property_setter_decl_to_moonbit(
     let extern_name = "_\{fn_name}_extern_js"
     if class_property.is_static {
       let extern_decl = "extern \"js\" fn \{extern_name}(value : JSValue) -> Unit = \"\{binding_name}\""
-      let wrapper_decl = "pub \{fn_prefix} \{fn_name}(\{setter_params}) -> Unit {\n  \{extern_name}(unsafeCast(value))\n}"
+      let wrapper_decl = "pub \{fn_prefix} \{fn_name}(\{setter_params}) -> Unit {\n  \{extern_name}(unsafeCast(\{value_expr}))\n}"
       Some("\{extern_decl}\n\n\{wrapper_decl}")
     } else {
       let js_set = ffi_js_access("self", class_property.name)
       // First param can't be named `self` — MoonBit parses
       // `extern "js" fn foo(self : T, ...)` as a deprecated method.
       let extern_decl = "extern \"js\" fn \{extern_name}(this_ : JSValue, value : JSValue) -> Unit =\n  #| (self, value) => (\{js_set} = value)"
-      let wrapper_decl = "pub \{fn_prefix} \{class_type_name}::\{fn_name}(\{setter_params}) -> Unit {\n  \{extern_name}(unsafeCast(self), unsafeCast(value))\n}"
+      let wrapper_decl = "pub \{fn_prefix} \{class_type_name}::\{fn_name}(\{setter_params}) -> Unit {\n  \{extern_name}(unsafeCast(self), unsafeCast(\{value_expr}))\n}"
       Some("\{extern_decl}\n\n\{wrapper_decl}")
     }
   } else if class_property.is_static {
-    Some(
-      "pub extern \"js\" fn \{fn_name}(\{setter_params}) -> Unit = \"\{binding_name}\"",
-    )
+    if value_expr != "value" {
+      let extern_name = "_\{fn_name}_ret_conv_js"
+      let extern_decl = "extern \"js\" fn \{extern_name}(value : \{value_raw_type}) -> Unit = \"\{binding_name}\""
+      let wrapper_decl = "pub fn \{fn_name}(\{setter_params}) -> Unit {\n  \{extern_name}(\{value_expr})\n}"
+      Some("\{extern_decl}\n\n\{wrapper_decl}")
+    } else {
+      Some(
+        "pub extern \"js\" fn \{fn_name}(\{setter_params}) -> Unit = \"\{binding_name}\"",
+      )
+    }
   } else {
     let js_set = ffi_js_access("self", class_property.name)
-    Some(
-      "pub extern \"js\" fn \{class_type_name}::\{fn_name}(\{setter_params}) -> Unit =\n  #| (self, value) => (\{js_set} = value)",
-    )
+    if value_expr != "value" {
+      let extern_name = "_\{fn_name}_ret_conv_js"
+      let extern_decl = "extern \"js\" fn \{extern_name}(this_ : \{class_type_name}, value : \{value_raw_type}) -> Unit =\n  #| (self, value) => (\{js_set} = value)"
+      let wrapper_decl = "pub fn \{class_type_name}::\{fn_name}(\{setter_params}) -> Unit {\n  \{extern_name}(self, \{value_expr})\n}"
+      Some("\{extern_decl}\n\n\{wrapper_decl}")
+    } else {
+      Some(
+        "pub extern \"js\" fn \{class_type_name}::\{fn_name}(\{setter_params}) -> Unit =\n  #| (self, value) => (\{js_set} = value)",
+      )
+    }
   }
   ffi_restore_local_type_params(state, class_local_len)
   result

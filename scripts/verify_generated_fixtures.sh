@@ -391,17 +391,19 @@ test "generated bridge package converts real-world literal option fields" {
 
 test "class methods and enum index signatures work at runtime" {
   let machine = new_flag_machine()
-  // Method returns degrade to String at the ffi surface — raw values
-  // must cross unconverted.
-  if FlagMachine::advance(machine) != "r" {
-    abort("expected advance() to return the raw flag string")
+  // Method params/returns render generated enums and convert at the
+  // boundary, matching the `.mbti` surface.
+  match FlagMachine::advance(machine) {
+    R => ()
+    _ => abort("expected advance() to convert the raw flag string")
   }
-  if FlagMachine::get_flag_machine_mode(machine) != "strict" {
-    abort("expected the mode getter to return the raw string")
+  match FlagMachine::get_flag_machine_mode(machine) {
+    Strict => ()
+    _ => abort("expected the mode getter to convert to the enum")
   }
   match FlagMachine::peek(machine) {
-    Some("w") => ()
-    _ => abort("expected peek() to see the next flag")
+    Some(W) => ()
+    _ => abort("expected peek() to see Some(W)")
   }
   let _ = FlagMachine::advance(machine)
   let _ = FlagMachine::advance(machine)

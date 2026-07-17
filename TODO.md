@@ -1391,6 +1391,32 @@ take `Options?` (wrap in `Some`), node:sqlite options gained
 section-17 wrap) — the smoke matches on it instead of reading the raw
 value through an extern.
 
+### 20. decl/ffi method surfaces aligned; methods carry real enum types (done 2026-07-17)
+
+`bridge.mbti` advertised `declare pub fn flag_machine_advance(self) -> NodeFlag`
+while `bridge.mbt` implemented `FlagMachine::advance(self) -> String` —
+both the name and the type diverged. Fixed from both sides:
+
+- [x] FFI class methods / getters / setters render param and return
+  types with the field-style resolver (`ffi_struct_field_type_name`),
+  so literal-union aliases surface as their generated enums instead of
+  degrading to `String`. Conversions ride the section-18 machinery:
+  enum returns via `ffi_converted_return_extern_pair` /
+  `ffi_wrapper_return_body_expr`, enum params via new
+  `ffi_enum_arg_expr` / `ffi_enum_param_raw_type` (`force~` pairs when
+  only params need conversion; preserve-path wrappers convert before
+  the `unsafeCast`). Setters got the same treatment.
+- [x] Decl layer emits instance members as `Type::method` /
+  `Type::get_x` / `Type::set_x` (snake-cased, reserved-suffixed) to
+  match the FFI's naming; statics stay top-level `<class>_<method>`.
+- Verified: `.mbti` and `.mbt` now agree line-for-line on the
+  `FlagMachine` fixture (`FlagMachine::advance(self) -> NodeFlag` in
+  both), and the runtime fixture matches enum constructors directly on
+  method returns (`match advance(m) { R => ... }`,
+  `peek() -> NodeFlag?` composes enum from_js with the Option wrap).
+- Full gates green including the env-gated realworld corpus (30
+  packages) and the drizzle / valibot / hono / zod scaffold smokes.
+
 ### Non-Goals (still)
 
 - [ ] Do not turn this list into a checklist for "all of TypeScript". Each item
