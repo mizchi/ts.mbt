@@ -7852,6 +7852,109 @@ fn check_expr_against(
     }
     _ => ()
   }
+  // (1a-2) A concrete primitive never flows into an UNSUBSTITUTED indexed
+  // access over an in-scope type parameter (`tp: T[P]; tp = s`): whatever
+  // `T` instantiates to, `T[P]` could be a narrower literal type, so tsc
+  // only admits `any` / `never` / the same `T[P]`
+  // (nonPrimitiveConstraintOfIndexAccessType). The resolver substitutes
+  // resolvable bounds before this point, so anything still shaped
+  // `IndexedAccess(Named(param), _)` here is genuinely opaque.
+  // The resolver erases an unresolvable `T[P]` to `Any` (permissive
+  // default), so match the RAW declared annotation here: when the base is
+  // an in-scope type parameter the erasure was pure information loss.
+  match (src_shape, expected) {
+    (
+      String_
+      | Literal(_)
+      | Number
+      | Int
+      | NumberLiteral(_)
+      | Boolean
+      | BooleanLiteral(_)
+      | BigInt
+      | BigIntLiteral(_)
+      | Symbol,
+      IndexedAccess(base_t, key_t),
+    ) if (base_t is Named(base) && ctx.in_scope_type_params.contains(base)) ||
+      // Parameter registration substitutes in-scope type params with their
+      // bounds, leaving shapes like `IndexedAccess(Any, Keyof(Named("T")))`
+      // — the `keyof` key marks it as the same opaque generic access.
+      key_t is Keyof(_) ||
+      (key_t is Named(key) && ctx.in_scope_type_params.contains(key)) => {
+      record_unfiltered(
+        ctx,
+        sub_path,
+        "`\{type_display(src_shape)}` is not assignable to the generic indexed access `\{type_display(expected)}`",
+      )
+      return
+    }
+    _ => ()
+  }
+  // (1a-3) `x: T & U` with union-of-primitive constraints is bounded by
+  // the member-set intersection of the two bounds: parameter registration
+  // substitutes the in-scope type params with their bounds, so the value
+  // arrives here as `Intersection([Union(...), Union(...)])` directly
+  // (`T extends string | number | undefined` & `U extends string | null |
+  // undefined` can only ever hold `string | undefined`;
+  // intersectionWithUnionConstraint). Both unions must consist solely of
+  // primitive-ish members so the intersection is exact.
+  match (src_shape, expected_shape) {
+    (Intersection([Union(ms_a), Union(ms_b)]), Union(_)) => {
+      let simple = fn(t : @ast.TsType) -> Bool {
+        t
+        is (String_
+        | Number
+        | Int
+        | Boolean
+        | BigInt
+        | Symbol
+        | Null
+        | Undefined)
+      }
+      let mut all_simple = true
+      for m in ms_a {
+        if !simple(m) {
+          all_simple = false
+        }
+      }
+      for m in ms_b {
+        if !simple(m) {
+          all_simple = false
+        }
+      }
+      if all_simple {
+        let combined : Array[@ast.TsType] = []
+        for m in ms_a {
+          if ms_b.contains(m) {
+            combined.push(m)
+          }
+        }
+        // Under non-strict null checks `null` / `undefined` flow
+        // everywhere; drop them from the requirement there.
+        let effective : Array[@ast.TsType] = []
+        for m in combined {
+          if ctx.strict_null_checks || !(m is (Null | Undefined)) {
+            effective.push(m)
+          }
+        }
+        let mut all_ok = true
+        for m in effective {
+          if !is_assignable_to(m, expected_shape) {
+            all_ok = false
+          }
+        }
+        if effective.length() > 0 && !all_ok {
+          record_unfiltered(
+            ctx,
+            sub_path,
+            "`\{type_display(src_shape)}` (bounded by the intersection of its constraints) is not assignable to `\{type_display(expected_shape)}`",
+          )
+          return
+        }
+      }
+    }
+    _ => ()
+  }
   // (1b) A generator object has no call signatures, so a `Generator<...>`
   // value (e.g. the result of calling a generator IIFE) never satisfies a
   // function-typed slot (generatorTypeCheck31's `yield function* () {..} ()`

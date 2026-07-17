@@ -1427,6 +1427,24 @@ both the name and the type diverged. Fixed from both sides:
 
 ## TS Checker Conformance (current state, 2026-07-17 — TypeScript 7)
 
+Batch BS (2026-07-17): TP 2338 -> 2341, MISS 396 -> 393, FP / PFLEGAL
+still 0. Mining the TS2322 cluster (30 files, 17 single-code): (a) a
+concrete primitive assigned to an opaque generic indexed access
+(`tp: T[P]; tp = s`) is always TS2322 — matches both the raw
+`IndexedAccess(Named(T), _)` annotation and the bound-substituted
+`IndexedAccess(_, Keyof(...))` shape parameter registration produces
+(nonPrimitiveConstraintOfIndexAccessType); (b) `x: T & U` with
+union-of-primitive constraints is bounded by the member-set intersection
+of the bounds — a target union missing one of the members rejects it
+(intersectionWithUnionConstraint, plus one multi-code file). Assessment
+of the remaining TS2322 files: functionExpressionContextualTyping2 /
+contextuallyTypeCommaOperator02 / typeGuardInClass (class-expression
+narrowing reset) / callChain.3 / objectLiteralNormalization /
+typeFromPropertyAssignment31 look feasible next; generatorTypeCheck8
+(iterator protocol compat), symbolProperty46 (symbol-keyed accessors),
+conditionalTypesExcessProperties, templateLiteralTypes7 need deeper
+machinery.
+
 Batch BR (2026-07-17): TP 2333 -> 2338, MISS 401 -> 396, FP / PFLEGAL
 still 0. Bodiless generator declarations (`declare namespace M {
 function *g(): any }`, generator overload signatures, bodiless `*m()`
