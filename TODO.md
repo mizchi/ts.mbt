@@ -1427,6 +1427,32 @@ both the name and the type diverged. Fixed from both sides:
 
 ## TS Checker Conformance (current state, 2026-07-17 — TypeScript 7)
 
+Batch BW (2026-07-17): lib.d.ts / @types/node checker issues driven to
+ZERO — 108/108 lib files and 88/88 @types/node files check fully clean.
+Fixes: (a) the type-param-arity check learned MINIMUM arity — the parser
+records `<generic-min-arity>NAME=K` (leading params without a default)
+at every generic declaration site, ambient `declare module` / `declare
+global` sub-parses propagate the suppression-only sentinels to the outer
+module (they were parsed by a fresh Parser and lost), and `check_arity`
+flags under-application only below the minimum (`Iterable<T, TReturn =
+any, TNext = any>` legally takes 1..3 args; TokenForOptions likewise) —
+this replaced an unsound exact-arity rule that also cost 4 lucky TPs
+(conditionalTypes1 / inferTypes1 / recursiveMappedTypes /
+varianceAnnotations under-apply LEGALLY and were flagged for the wrong
+reason; TP 2342 -> 2338, FP still 0); (b) interface accessor syntax
+(TS 5.4 `get x(): T` in interfaces, lib.es2024/lib.dom) parses as a
+readonly-property pair; (c) interface-extends member compat exempts
+generic methods (CallableFunction.call), covariant Named returns via the
+extends chain (getElementById), optional-over-required when the derived
+member is `any` (BeforeUnloadEvent.returnValue), optional-method
+overload duplicates (Process.send), and tuple members whose elements
+narrow covariantly through the extends chain (http2
+ClientHttp2SessionEventMap `stream`: ClientHttp2Stream extends
+Http2Stream); (d) TS2307 abstains in `declare global` bundles
+(fetch/streams/undici-types) and for node builtin subpaths
+(`stream/web`); (e) arity check tolerates type-param defaults declared
+only via merged declarations (min across duplicates).
+
 Batch BV (2026-07-17): driving the BU-audit residuals down —
 lib.d.ts 569 -> 14 issues (103/108 files clean), @types/node 41 -> 14
 (80/88 clean); oracle unchanged (TP 2342 / FP 0 / TN 1750). Fixes:

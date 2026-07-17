@@ -58,6 +58,11 @@ pub struct Parser {
   // `<...>`) is TS2314. Read immediately after the call by the class /
   // interface / type-alias parsers.
   mut last_type_params_had_default : Bool
+  // Companion to `last_type_params_had_default`: the number of leading type
+  // parameters WITHOUT a default in the list just parsed (TS requires
+  // defaulted parameters to be trailing, so this is the minimum legal
+  // type-argument count). `Iterable<T, TReturn = any, TNext = any>` -> 1.
+  mut last_type_params_min_required : Int
   local_type_param_bounds : Array[(String, @ast.TsType)]
   // Decorator expressions parsed at the statement level that should be
   // attached to the next class declaration. The class parsers drain
@@ -266,6 +271,7 @@ pub fn Parser::new_with_strict_and_jsx(
     last_runtime_class_decl: None,
     pending_class_base_expr: None,
     last_type_params_had_default: false,
+    last_type_params_min_required: 0,
     local_type_param_bounds: [],
     pending_decorators: [],
     param_property_scopes: [],
@@ -436,6 +442,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     last_runtime_class_decl: None,
     pending_class_base_expr: None,
     last_type_params_had_default: false,
+    last_type_params_min_required: 0,
     local_type_param_bounds: [],
     pending_decorators: [],
     param_property_scopes: [],

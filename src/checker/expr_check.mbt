@@ -22215,6 +22215,80 @@ fn check_accessor_pair_types(
 }
 
 ///|
+/// TS accepts a derived interface member that narrows a base tuple element
+/// covariantly through the declared `extends` chain --
+/// `"stream": [ClientHttp2Stream, ...]` over `"stream": [Http2Stream, ...]`
+/// where `interface ClientHttp2Stream extends Http2Stream`. The structural
+/// comparison can't see that relation when the interfaces are mutually
+/// recursive, so exempt tuples whose only differing elements are `Named`
+/// references related by the extends chain (identical elements pass on
+/// their rendered form).
+fn tuple_covariant_by_extends(
+  d : @ast.TsType,
+  b : @ast.TsType,
+  resolver : Resolver,
+) -> Bool {
+  fn named_extends_reaches(from : String, to : String) -> Bool {
+    if from == to {
+      return true
+    }
+    let mut frontier = [from]
+    let visited : Map[String, Unit] = {}
+    for _ in 0..<16 {
+      let next : Array[String] = []
+      for n in frontier {
+        if visited.contains(n) {
+          continue
+        }
+        visited[n] = ()
+        match resolver.interfaces.get(n) {
+          Some(i) =>
+            for en in i.extends_names {
+              if en == to {
+                return true
+              }
+              next.push(en)
+            }
+          None => ()
+        }
+      }
+      if next.length() == 0 {
+        break
+      }
+      frontier = next
+    }
+    false
+  }
+
+  match (d, b) {
+    (Tuple(ds), Tuple(bs)) if ds.length() == bs.length() => {
+      let mut saw_extends_pair = false
+      for i, de in ds {
+        let be = bs[i]
+        if "\{de}" == "\{be}" {
+          continue
+        }
+        match (de, be) {
+          (Named(dn), Named(bn)) =>
+            if named_extends_reaches(dn, bn) {
+              saw_extends_pair = true
+            } else {
+              return false
+            }
+          _ =>
+            if !is_assignable_to(resolver.unwrap(de), resolver.unwrap(be)) &&
+              !is_structurally_assignable_named(de, be, resolver) {
+              return false
+            }
+        }
+      }
+      saw_extends_pair
+    }
+    _ => false
+  }
+}
+
+///|
 /// TS2430 ("Interface 'D' incorrectly extends interface 'B'."): a derived
 /// interface re-declares a base member with a type that is not assignable
 /// to the base's. Only decidable pairs are judged: both sides concrete,
@@ -22284,7 +22358,8 @@ fn check_interface_extends_member_compat(
           !type_has_call_signature(fty, resolver) &&
           !type_has_call_signature(bty, resolver) &&
           !is_assignable_to(resolver.unwrap(fty), resolver.unwrap(bty)) &&
-          !is_structurally_assignable_named(fty, bty, resolver) {
+          !is_structurally_assignable_named(fty, bty, resolver) &&
+          !tuple_covariant_by_extends(fty, bty, resolver) {
           issues.push({
             path: "interface \{iface.name}",
             message: "interface `\{iface.name}` incorrectly extends interface `\{base_name}`: types of property `\{fname}` are incompatible",
@@ -22336,6 +22411,14 @@ fn type_mentions_callable(ty : @ast.TsType) -> Bool {
 fn check_unresolved_signature_type_refs(
   module_ : @ast.TsModule,
 ) -> Array[ExprIssue] {
+  // Ambient declaration bundles (`declare module "spec" { ... }` files
+  // like @types/node's) merge their namespaces ACROSS sibling files —
+  // `NodeJS.RefCounted` is declared in globals.d.ts and extended from
+  // timers.d.ts. A single-file check cannot see the siblings, so every
+  // unresolved name here would be a false positive; abstain entirely.
+  if module_.module_augmentations.length() > 0 {
+    return []
+  }
   let declared : Map[String, Unit] = {}
   fn collect_declared(m : @ast.TsModule) -> Unit {
     for iface in m.interfaces {
@@ -25614,6 +25697,11 @@ fn member_name_duplicates(
     }
     let is_method = match f.1 {
       Func(_, _) => true
+      // Optional methods wrap as `Func | Undefined`
+      // (`send?(...): boolean` overloads in @types/node's Process) —
+      // they are overloads, not duplicate properties.
+      Union([Func(_, _), Undefined]) | Union([Undefined, Func(_, _)]) => true
+      GenericFunc(_, _) => true
       _ => false
     }
     if !is_method {
@@ -26342,7 +26430,16 @@ fn check_module_function_bodies_layered(
       // bundle whose sibling imports (`node:util` from encoding.d.ts,
       // `undici-types` from fetch.d.ts) resolve against the surrounding
       // package, which a single-file check cannot see — abstain entirely.
-      let is_ambient_module_bundle = module_.module_augmentations.length() > 0
+      let mut is_ambient_module_bundle = module_.module_augmentations.length() >
+        0
+      // `declare global { ... }` files (@types/node's fetch.d.ts) are
+      // declaration bundles too: their imports resolve against sibling
+      // package files a single-file check cannot see.
+      for ns in module_.namespaces {
+        if ns.name == "<global>" {
+          is_ambient_module_bundle = true
+        }
+      }
       // Classic (unprefixed) Node builtin module names — the set stable
       // across Node versions that @types/node declares and imports.
       let node_builtins = [
@@ -26359,7 +26456,12 @@ fn check_module_function_bodies_layered(
       let is_node_builtin_spec = fn(spec : String) -> Bool {
         spec.has_prefix("node:") ||
         ambient_specs.contains("node:" + spec) ||
-        node_builtins.contains(spec)
+        node_builtins.contains(spec) ||
+        // Builtin subpaths (`stream/web`, `timers/promises`).
+        (match spec.find("/") {
+          Some(i) => node_builtins.contains(spec[:i].to_string())
+          None => false
+        })
       }
       for spec in module_.import_module_specs {
         if spec != "tslib" &&
@@ -26638,6 +26740,7 @@ fn check_module_function_bodies_layered(
       } else if member == "<object-member-no-separator>" {
         all.push({ path: "object type", message: "`;` expected" })
       } else if member.has_prefix("<generic-noarg-required>") ||
+        member.has_prefix("<generic-min-arity>") ||
         member.has_prefix("<type-param-name>") {
         // Consumed by the TS2314 arity check in `check_module`, not a
         // diagnostic of its own -- skip it here.
@@ -28429,6 +28532,79 @@ fn check_interface_extends_compat(
           None => false
         })
       }
+      // Interface method generics live in `method_type_params`, not in the
+      // field type (the field stores a plain `Func`), so the GenericFunc
+      // exclusion inside `callable_member_incompatible` never sees them —
+      // lib.es5's `CallableFunction.call<T, A, R>` misfired. Skip those.
+      fn member_is_generic_method(name : String) -> Bool {
+        iface.method_type_params.iter().any(fn(e) { e.0 == name }) ||
+        base.method_type_params.iter().any(fn(e) { e.0 == name })
+      }
+      // Derived return `HTMLElement | null` refining base `Element | null`
+      // is legal covariance; the structural compare can't decide huge DOM
+      // interfaces, so walk the extends chain instead.
+      fn named_reaches(from : String, to : String) -> Bool {
+        if from == to {
+          return true
+        }
+        let mut frontier = [from]
+        let visited : Map[String, Unit] = {}
+        for _ in 0..<16 {
+          let next : Array[String] = []
+          for n in frontier {
+            if visited.contains(n) {
+              continue
+            }
+            visited[n] = ()
+            match iface_by_name.get(n) {
+              Some(i) =>
+                for en in i.extends_names {
+                  if en == to {
+                    return true
+                  }
+                  next.push(en)
+                }
+              None => ()
+            }
+          }
+          if next.length() == 0 {
+            break
+          }
+          frontier = next
+        }
+        false
+      }
+      fn strip_nullish(t : @ast.TsType) -> @ast.TsType {
+        match t {
+          Union(ms) => {
+            let core : Array[@ast.TsType] = []
+            for m in ms {
+              if !(m is (Null | Undefined)) {
+                core.push(m)
+              }
+            }
+            if core.length() == 1 {
+              core[0]
+            } else {
+              t
+            }
+          }
+          _ => t
+        }
+      }
+      fn returns_covariant_by_extends(
+        d : @ast.TsType,
+        b : @ast.TsType,
+      ) -> Bool {
+        match (d, b) {
+          (Func(dp, dr), Func(bp, br)) if dp.length() == bp.length() =>
+            match (strip_nullish(dr), strip_nullish(br)) {
+              (Named(dn), Named(bn)) => named_reaches(dn, bn)
+              _ => false
+            }
+          _ => false
+        }
+      }
       for df in iface.fields {
         match base_fields.get(df.0) {
           Some(btype) => {
@@ -28463,6 +28639,11 @@ fn check_interface_extends_compat(
                 message: "interface incorrectly extends `\{base_name}`: property `\{df.0}` of type `\{type_display(df.1)}` is not assignable to the base type `\{type_display(btype)}`",
               })
             } else if !member_is_overloaded(df.0) &&
+              !member_is_generic_method(df.0) &&
+              !returns_covariant_by_extends(
+                resolver.unwrap(d_payload),
+                resolver.unwrap(b_payload),
+              ) &&
               callable_member_incompatible(
                 resolver.unwrap(d_payload),
                 resolver.unwrap(b_payload),
@@ -28472,7 +28653,10 @@ fn check_interface_extends_compat(
                 path: "interface \{iface.name}",
                 message: "interface incorrectly extends `\{base_name}`: member `\{df.0}` signature is not assignable to the base signature",
               })
-            } else if d_optional && !b_optional {
+            } else if d_optional && !b_optional && !(df.1 is Any) {
+              // `any` accepts undefined but is not an optional member —
+              // lib.dom overrides `returnValue: boolean` with
+              // `returnValue: any` legally.
               issues.push({
                 path: "interface \{iface.name}",
                 message: "interface incorrectly extends `\{base_name}`: property `\{df.0}` is optional but required in the base",
