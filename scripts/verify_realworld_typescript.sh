@@ -334,6 +334,7 @@ jsvalue_function_budget() {
     immer) printf '15\n' ;;
     execa) printf '5\n' ;;
     preact) printf '7\n' ;;
+    react) printf '30\n' ;;
     vitest/runtime) printf '6\n' ;;
     playwright) printf '411\n' ;;
     react-router) printf '84\n' ;;
@@ -395,6 +396,7 @@ jsvalue_cause_budget() {
     immer) printf '22|4|7|2|2|1|6\n' ;;
     execa) printf '17|2|0|4|1|0|10\n' ;;
     preact) printf '48|12|1|4|14|17|0\n' ;;
+    react) printf '129|43|8|24|34|14|6\n' ;;
     vitest/runtime) printf '64|35|2|3|6|18|0\n' ;;
     playwright) printf '1336|196|0|85|885|170|0\n' ;;
     react-router) printf '349|166|25|30|39|67|22\n' ;;
@@ -446,7 +448,7 @@ realworld_fallback_policy() {
     zod | valibot)
       printf 'budgeted-fallback|Schema/parser generics are intentionally smoke-tested and budgeted, not treated as naturally typed MoonBit APIs yet.\n'
       ;;
-    preact)
+    preact | react)
       printf 'budgeted-fallback|JSX/component/children generics are intentionally budgeted until a dedicated JSX/component binding layer exists.\n'
       ;;
     playwright)
@@ -922,6 +924,28 @@ extern "js" fn realworld_preact_children() -> Array[ComponentChildren] =
 test "real-world preact bridge smoke" {
   let _ = h(Input, None, realworld_preact_children())
   let _ = createRef()
+}
+EOF
+      ;;
+    react)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn realworld_react_vnode(
+  elem : DetailedReactHTMLElement[
+    InputHTMLAttributes[HTMLInputElement],
+    HTMLInputElement,
+  ],
+) -> VNode =
+  #| (e) => e
+
+test "real-world react bridge smoke" {
+  let elem = createElement("input", None, [])
+  if !isValidElement(realworld_react_vnode(elem)) {
+    abort("expected a valid react element")
+  }
+  let _ = createRef()
+  if !get_version().has_prefix("19") {
+    abort("unexpected react version")
+  }
 }
 EOF
       ;;
@@ -1472,6 +1496,28 @@ extern "js" fn realworld_preact_children() -> Array[@sut.ComponentChildren] =
 fn main {
   let _ = @sut.h(@sut.Input, None, realworld_preact_children())
   let _ = @sut.createRef()
+}
+EOF
+      ;;
+    react)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+extern "js" fn realworld_react_vnode(
+  elem : @sut.DetailedReactHTMLElement[
+    @sut.InputHTMLAttributes[@sut.HTMLInputElement],
+    @sut.HTMLInputElement,
+  ],
+) -> @sut.VNode =
+  #| (e) => e
+
+fn main {
+  let elem = @sut.createElement("input", None, [])
+  if !@sut.isValidElement(realworld_react_vnode(elem)) {
+    abort("expected a valid react element")
+  }
+  let _ = @sut.createRef()
+  if !@sut.get_version().has_prefix("19") {
+    abort("unexpected react version")
+  }
 }
 EOF
       ;;

@@ -1427,6 +1427,16 @@ both the name and the type diverged. Fixed from both sides:
 
 ## TS Checker Conformance (current state, 2026-07-17 — TypeScript 7)
 
+react joined the real-world gate as the 21st package (2026-07-18):
+`package|react|react|` resolves types through @types/react, the bridge
+emits a 3,898-line surface (83 types / 58 functions / 117 structs), and
+the smoke tests exercise createElement / isValidElement / createRef /
+version end-to-end on react@19.2.4 (both the in-package test and the
+build-smoke main). Budgets calibrated from measured metrics (JSValue
+functions 30, cause split 129|43|8|24|34|14|6, unsupported exports 0);
+policy budgeted-fallback alongside preact until a dedicated
+JSX/component binding layer exists.
+
 Batch BX (2026-07-18): @types/react@19.2.17 audit — 13/13 files parse
 clean and the declaration bodies check clean; the only reports were
 TS2307 module-resolution complaints for imports that DO resolve on disk
