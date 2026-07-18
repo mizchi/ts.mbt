@@ -1427,6 +1427,24 @@ both the name and the type diverged. Fixed from both sides:
 
 ## TS Checker Conformance (current state, 2026-07-17 — TypeScript 7)
 
+Batch BX (2026-07-18): @types/react@19.2.17 audit — 13/13 files parse
+clean and the declaration bodies check clean; the only reports were
+TS2307 module-resolution complaints for imports that DO resolve on disk
+(`csstype` is a declared dependency of @types/react, `./` is the
+package-root self-import in jsx-runtime). tscheck now resolves module
+specifiers against the filesystem for files living under node_modules
+(relative specs probe the usual `.d.ts` / `index.d.ts` candidates; bare
+specs walk up to `node_modules/<pkg>` / `node_modules/@types/<pkg>`)
+and suppresses TS2307 when the import resolves. Conformance corpora
+live outside node_modules, so the oracle is unchanged (TP 2338 / FP 0 /
+TN 1750); truly-missing modules inside node_modules are still flagged
+(verified by negative control). All three real-world declaration
+surfaces are now fully clean: lib.d.ts 108/108, @types/node 88/88,
+@types/react 13/13. `ts2mbt decl` emits a 3,135-line MoonBit surface
+from @types/react (useState and the hook family included). The
+rwcorpus package.json now pins every gate package (plus @types/react
+and @types/express) so `npm install` no longer prunes them.
+
 Batch BW (2026-07-17): lib.d.ts / @types/node checker issues driven to
 ZERO — 108/108 lib files and 88/88 @types/node files check fully clean.
 Fixes: (a) the type-param-arity check learned MINIMUM arity — the parser
