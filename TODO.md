@@ -1437,6 +1437,27 @@ functions 30, cause split 129|43|8|24|34|14|6, unsupported exports 0);
 policy budgeted-fallback alongside preact until a dedicated
 JSX/component binding layer exists.
 
+Corpus expansion round 2 (2026-07-18): nine more npm packages verified
+end-to-end and added to the real-world gate (30 packages + 10 node
+builtins now): ms, nanoid, dayjs, qs, yaml, superstruct, eventemitter3,
+mitt, marked -- each with a runtime bridge smoke that calls a real API
+and asserts the result (ms "1m", nanoid length, dayjs format, qs
+parse/stringify, yaml roundtrip, superstruct assert/validate,
+eventemitter3 on/listenerCount, mitt on/emit handler count, marked
+"# hello" -> <h1>). Two real-package bugs found by the probe and fixed:
+(a) parser -- `export default function mitt<T>(...): U;` (bodiless named
+default in a .d.ts) crashed the module-block path at the missing `{`;
+named defaults now route through the declaration parser like the
+checker path already did; (b) bridge -- the .mbti fn-decl line parser
+used `rev_find(")")` for the parameter-list close paren, which grabs the
+RETURN type's paren when a value getter has a curried function type
+(marked's `get_use_` emitted unparseable MoonBit); it now depth-scans to
+the paren matching the open. Probe leftovers documented: semver / 
+picomatch / deepmerge surface as JSValue-only or empty (default-export
+function naturalization gap), tracked as a future bridge target. Oracle
+unchanged (TP 2338 / FP 0 / TN 1750); corpus react pin moved to 19.2.7
+(react-router peer floor).
+
 Batch BX (2026-07-18): @types/react@19.2.17 audit — 13/13 files parse
 clean and the declaration bodies check clean; the only reports were
 TS2307 module-resolution complaints for imports that DO resolve on disk

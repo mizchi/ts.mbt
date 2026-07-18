@@ -1112,6 +1112,29 @@ test "parser: parse declare const in module" {
 }
 
 ///|
+test "parser: module block bodiless named default function export (mitt)" {
+  // `export default function mitt<T>(all?: T): U;` in a .d.ts has no body
+  // -- the expression parser rejects it at the missing `{`, so named
+  // defaults must route through the declaration parser.
+  let src =
+    #|export declare type EventType = string | symbol;
+    #|export default function mitt<Events extends Record<string, unknown>>(all?: Events): Events;
+  let module_ = parse_module_block_from_source(src) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  let mut saw_default = false
+  for export_ in module_.exports {
+    if export_.export_name == "default" && export_.local_name == "mitt" {
+      saw_default = true
+    }
+  }
+  assert_eq(saw_default, true)
+}
+
+///|
 test "parser: parse module block export metadata for interface and declare function" {
   let src =
     #|export interface Point {

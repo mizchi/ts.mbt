@@ -335,6 +335,15 @@ jsvalue_function_budget() {
     execa) printf '5\n' ;;
     preact) printf '7\n' ;;
     react) printf '30\n' ;;
+    ms) printf '1\n' ;;
+    nanoid) printf '0\n' ;;
+    dayjs) printf '3\n' ;;
+    qs) printf '2\n' ;;
+    yaml) printf '69\n' ;;
+    superstruct) printf '54\n' ;;
+    eventemitter3) printf '0\n' ;;
+    mitt) printf '1\n' ;;
+    marked) printf '14\n' ;;
     vitest/runtime) printf '6\n' ;;
     playwright) printf '411\n' ;;
     react-router) printf '84\n' ;;
@@ -366,6 +375,10 @@ unsupported_export_budget() {
     preact) printf '2\n' ;;
     react-router) printf '3\n' ;;
     glob) printf '1\n' ;;
+    yaml) printf '3\n' ;;
+    superstruct) printf '1\n' ;;
+    mitt) printf '1\n' ;;
+    marked) printf '3\n' ;;
     node:sqlite) printf '2\n' ;;
     node:fs) printf '2\n' ;;
     node:crypto) printf '2\n' ;;
@@ -397,6 +410,15 @@ jsvalue_cause_budget() {
     execa) printf '17|2|0|4|1|0|10\n' ;;
     preact) printf '48|12|1|4|14|17|0\n' ;;
     react) printf '129|43|8|24|34|14|6\n' ;;
+    ms) printf '1|0|0|0|0|0|1\n' ;;
+    nanoid) printf '0|0|0|0|0|0|0\n' ;;
+    dayjs) printf '3|0|1|0|1|0|1\n' ;;
+    qs) printf '8|2|1|0|0|0|5\n' ;;
+    yaml) printf '179|34|7|84|0|20|34\n' ;;
+    superstruct) printf '81|4|0|15|0|57|5\n' ;;
+    eventemitter3) printf '16|0|0|0|5|6|5\n' ;;
+    mitt) printf '10|4|0|2|3|1|0\n' ;;
+    marked) printf '57|10|0|0|20|13|14\n' ;;
     vitest/runtime) printf '64|35|2|3|6|18|0\n' ;;
     playwright) printf '1336|196|0|85|885|170|0\n' ;;
     react-router) printf '349|166|25|30|39|67|22\n' ;;
@@ -442,7 +464,7 @@ realworld_fallback_policy() {
     node:assert | node:util)
       printf 'naturalize-target|Shrink remaining Node built-in overload/unknown fallbacks toward zero for the common API surface.\n'
       ;;
-    date-fns | magic-string | source-map | node:sqlite | node:fs)
+    date-fns | magic-string | source-map | yaml | marked | node:sqlite | node:fs)
       printf 'naturalize-target|Keep reducing fallback around finite option bags, tuple results, and class/value helper APIs.\n'
       ;;
     zod | valibot)
@@ -454,7 +476,7 @@ realworld_fallback_policy() {
     playwright)
       printf 'budgeted-fallback|Large event/callback-heavy API is smoke-tested; only selected launch/device/options surfaces are naturalization targets.\n'
       ;;
-    chalk | dotenv | ignore | colorette | immer | execa | vitest/runtime | express)
+    chalk | dotenv | ignore | colorette | immer | execa | vitest/runtime | express | ms | nanoid | dayjs | qs | superstruct | eventemitter3 | mitt)
       printf 'low-fallback-maintain|Current fallback is small and explicitly budgeted; naturalize only when a real smoke use case needs it.\n'
       ;;
     *)
@@ -945,6 +967,110 @@ test "real-world react bridge smoke" {
   let _ = createRef()
   if !get_version().has_prefix("19") {
     abort("unexpected react version")
+  }
+}
+EOF
+      ;;
+    ms)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+test "real-world ms bridge smoke" {
+  assert_eq(default(60000, None), "1m")
+}
+EOF
+      ;;
+    nanoid)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+test "real-world nanoid bridge smoke" {
+  assert_eq(nanoid(Some(10)).length(), 10)
+  assert_eq(get_url_alphabet().length(), 64)
+}
+EOF
+      ;;
+    dayjs)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn realworld_dayjs_format(d : Dayjs_Dayjs) -> String =
+  #| (d) => d.format("YYYY")
+
+test "real-world dayjs bridge smoke" {
+  let d = default(None)
+  assert_eq(realworld_dayjs_format(d).length(), 4)
+}
+EOF
+      ;;
+    qs)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn realworld_qs_obj() -> JSValue =
+  #| () => ({ a: "1" })
+
+test "real-world qs bridge smoke" {
+  let parsed = parse("a=1&b=2", None)
+  if parsed.op_get("a") is None {
+    abort("expected parsed key a")
+  }
+  assert_eq(stringify(realworld_qs_obj(), None), "a=1")
+}
+EOF
+      ;;
+    yaml)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+test "real-world yaml bridge smoke" {
+  let doc = parse("a: 1", None)
+  assert_eq(stringify(doc, None), "a: 1\n")
+}
+EOF
+      ;;
+    superstruct)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn realworld_ss_string_value() -> JSValue =
+  #| () => "hello"
+
+test "real-world superstruct bridge smoke" {
+  let s : Struct[JSValue, JSValue] = unsafeCast(string())
+  assert_(realworld_ss_string_value(), s, None)
+  let _ = validate(realworld_ss_string_value(), s, None)
+}
+EOF
+      ;;
+    eventemitter3)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn realworld_ee3_event() -> EventEmitter_EventNames =
+  #| () => "ping"
+
+test "real-world eventemitter3 bridge smoke" {
+  let ee : Default[JSValue, JSValue] = new_default()
+  let listener : EventEmitter_EventListener = unsafeCast(fn(_args : Array[JSValue]) -> Unit {  })
+  let _ = ee.on(realworld_ee3_event(), listener, None)
+  assert_eq(ee.listener_count(realworld_ee3_event()), 1)
+}
+EOF
+      ;;
+    mitt)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn realworld_mitt_event() -> JSValue =
+  #| () => "ping"
+
+extern "js" fn realworld_mitt_counter() -> Ref[Int] =
+  #| () => ({ val: 0 })
+
+extern "js" fn realworld_mitt_handler(counter : Ref[Int]) -> EmitterOnArg1Callback =
+  #| (counter) => () => { counter.val++ }
+
+test "real-world mitt bridge smoke" {
+  let emitter = default(None)
+  let counter = realworld_mitt_counter()
+  emitter.on(realworld_mitt_event(), realworld_mitt_handler(counter))
+  emitter.emit(realworld_mitt_event(), realworld_mitt_event())
+  assert_eq(counter.val, 1)
+}
+EOF
+      ;;
+    marked)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+test "real-world marked bridge smoke" {
+  let html = marked_string_marked_options_optional("# hello", None)
+  let rendered : String = unsafeCast(html)
+  if !rendered.contains("<h1>hello</h1>") {
+    abort("unexpected marked output: \{rendered}")
   }
 }
 EOF
@@ -1517,6 +1643,115 @@ fn main {
   let _ = @sut.createRef()
   if !@sut.get_version().has_prefix("19") {
     abort("unexpected react version")
+  }
+}
+EOF
+      ;;
+    ms)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+fn main {
+  if @sut.default(60000, None) != "1m" {
+    abort("unexpected ms output")
+  }
+}
+EOF
+      ;;
+    nanoid)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+fn main {
+  if @sut.nanoid(Some(10)).length() != 10 {
+    abort("unexpected nanoid length")
+  }
+}
+EOF
+      ;;
+    dayjs)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+extern "js" fn realworld_dayjs_format(d : @sut.Dayjs_Dayjs) -> String =
+  #| (d) => d.format("YYYY")
+
+fn main {
+  if realworld_dayjs_format(@sut.default(None)).length() != 4 {
+    abort("unexpected dayjs format")
+  }
+}
+EOF
+      ;;
+    qs)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+fn main {
+  let parsed = @sut.parse("a=1&b=2", None)
+  if parsed.op_get("a") is None {
+    abort("expected parsed key a")
+  }
+}
+EOF
+      ;;
+    yaml)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+fn main {
+  let doc = @sut.parse("a: 1", None)
+  if @sut.stringify(doc, None) != "a: 1\n" {
+    abort("unexpected yaml roundtrip")
+  }
+}
+EOF
+      ;;
+    superstruct)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+extern "js" fn realworld_ss_string_value() -> @sut.JSValue =
+  #| () => "hello"
+
+fn main {
+  let s : @sut.Struct[@sut.JSValue, @sut.JSValue] = @sut.unsafeCast(@sut.string())
+  @sut.assert_(realworld_ss_string_value(), s, None)
+}
+EOF
+      ;;
+    eventemitter3)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+extern "js" fn realworld_ee3_event() -> @sut.EventEmitter_EventNames =
+  #| () => "ping"
+
+fn main {
+  let ee : @sut.Default[@sut.JSValue, @sut.JSValue] = @sut.new_default()
+  let listener : @sut.EventEmitter_EventListener = @sut.unsafeCast(fn(_args : Array[@sut.JSValue]) -> Unit {  })
+  let _ = ee.on(realworld_ee3_event(), listener, None)
+  if ee.listener_count(realworld_ee3_event()) != 1 {
+    abort("unexpected listener count")
+  }
+}
+EOF
+      ;;
+    mitt)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+extern "js" fn realworld_mitt_event() -> @sut.JSValue =
+  #| () => "ping"
+
+extern "js" fn realworld_mitt_counter() -> Ref[Int] =
+  #| () => ({ val: 0 })
+
+extern "js" fn realworld_mitt_handler(counter : Ref[Int]) -> @sut.EmitterOnArg1Callback =
+  #| (counter) => () => { counter.val++ }
+
+fn main {
+  let emitter = @sut.default(None)
+  let counter = realworld_mitt_counter()
+  emitter.on(realworld_mitt_event(), realworld_mitt_handler(counter))
+  emitter.emit(realworld_mitt_event(), realworld_mitt_event())
+  if counter.val != 1 {
+    abort("unexpected mitt counter")
+  }
+}
+EOF
+      ;;
+    marked)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+fn main {
+  let html = @sut.marked_string_marked_options_optional("# hello", None)
+  let rendered : String = @sut.unsafeCast(html)
+  if !rendered.contains("<h1>hello</h1>") {
+    abort("unexpected marked output")
   }
 }
 EOF

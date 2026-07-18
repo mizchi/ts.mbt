@@ -2461,7 +2461,21 @@ fn Parser::parse_export_decl_for_module(
       return (stmts, exports, reexports)
     }
     if self.check(Function) {
-      let func = self.parse_function_expr()
+      // A NAMED default may be a bodiless declaration signature
+      // (`export default function mitt<T>(...): T;` in a .d.ts) which the
+      // expression parser rejects at the missing `{`. Route named defaults
+      // through the declaration parser, which tolerates missing bodies --
+      // mirroring `parse_export_decl`'s handling of the same form.
+      let is_named = match self.peek_at(1).kind {
+        Ident(_) => true
+        Star => self.peek_at(2).kind is Ident(_)
+        _ => false
+      }
+      let func = if is_named {
+        self.parse_function()
+      } else {
+        self.parse_function_expr()
+      }
       if func.name != "<anon>" {
         stmts.push(Let(@ast.TsBinding::Ident(func.name), Any, FuncExpr(func)))
         exports.push({ local_name: func.name, export_name: "default" })
