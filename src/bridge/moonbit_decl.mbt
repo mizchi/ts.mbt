@@ -683,7 +683,96 @@ async fn build_decl_module_map(
     )
     modules[record.path] = load_decl_module_info(record, seeded_const_values)
   }
+  // Fold `/// <reference path>` files into their referrer: the referenced
+  // files carry AMBIENT declarations (e.g. @types/lodash's common/*.d.ts
+  // augmenting `interface LoDashStatic` through `declare module "lodash"`
+  // bodies the parser already flattens). Same-name interfaces merge their
+  // fields (TS declaration merging); other decl kinds append.
+  for record in graph.modules {
+    if record.references.length() == 0 {
+      continue
+    }
+    guard modules.get(record.path) is Some(target) else { continue }
+    for ref_path in record.references {
+      guard modules.get(ref_path) is Some(extra) else { continue }
+      merge_referenced_decl_module(target.module_, extra.module_)
+    }
+  }
   modules
+}
+
+///|
+fn merge_referenced_decl_module(
+  target : @ast.TsModule,
+  extra : @ast.TsModule,
+) -> Unit {
+  for iface in extra.interfaces {
+    let mut merged = false
+    for existing in target.interfaces {
+      if existing.name == iface.name &&
+        existing.type_params.length() == iface.type_params.length() {
+        for field in iface.fields {
+          existing.fields.push(field)
+        }
+        for entry in iface.method_type_params {
+          existing.method_type_params.push(entry)
+        }
+        for name in iface.extends_names {
+          if !existing.extends_names.contains(name) {
+            existing.extends_names.push(name)
+            existing.extends_args.push([])
+          }
+        }
+        merged = true
+        break
+      }
+    }
+    if !merged {
+      target.interfaces.push(iface)
+    }
+  }
+  for ta in extra.type_aliases {
+    let mut exists = false
+    for existing in target.type_aliases {
+      if existing.name == ta.name {
+        exists = true
+        break
+      }
+    }
+    if !exists {
+      target.type_aliases.push(ta)
+    }
+  }
+  for func in extra.funcs {
+    target.funcs.push(func)
+  }
+  for value in extra.values {
+    let mut exists = false
+    for existing in target.values {
+      if existing.name == value.name {
+        exists = true
+        break
+      }
+    }
+    if !exists {
+      target.values.push(value)
+    }
+  }
+  for class_ in extra.classes {
+    let mut exists = false
+    for existing in target.classes {
+      if existing.name == class_.name {
+        exists = true
+        break
+      }
+    }
+    if !exists {
+      target.classes.push(class_)
+    }
+  }
+  for enum_ in extra.enums {
+    target.enums.push(enum_)
+  }
 }
 
 ///|
@@ -2276,6 +2365,82 @@ fn resolve_decl_from_local_name(
 }
 
 ///|
+/// See the call site in `collect_exported_decls`: for a default export
+/// whose local is a value declared with a Named interface type, append the
+/// interface's function-typed fields as exported module functions rooted
+/// at `default.<member>`.
+fn append_exported_value_interface_methods(
+  info : DeclModuleInfo,
+  export_ : ResolvedExport,
+  local_name : String,
+  funcs : Array[ExportedFuncDecl],
+) -> Unit {
+  guard find_value_decl(info.module_, local_name) is Some(value) else { return }
+  let iface_name = match value.type_ {
+    Named(n) =>
+      // Qualified references (`_.LoDashStatic`) resolve by their last
+      // segment; the parser flattens the namespace's declarations.
+      match n.rev_find(".") {
+        Some(idx) => n.substring(start=idx + 1).to_string()
+        None => n
+      }
+    _ => return
+  }
+  guard find_interface_decl(info.module_, iface_name) is Some(iface) else {
+    return
+  }
+  if iface.type_params.length() > 0 {
+    return
+  }
+  let seen : Map[String, Unit] = {}
+  for func in funcs {
+    seen[func.export_name] = ()
+  }
+  for field in iface.fields {
+    let (fname, ftype) = field
+    if fname.has_prefix("@@") || fname == "<computed>" || fname == "" {
+      continue
+    }
+    if seen.contains(fname) {
+      continue
+    }
+    let (type_params, callable) = match ftype {
+      GenericFunc(names, inner) => (names, inner)
+      other => ([], other)
+    }
+    guard callable is Func(param_types, return_type) else { continue }
+    let params : Array[@ast.TsParam] = []
+    for i, param_type in param_types {
+      params.push({
+        name: "arg\{i}",
+        binding: None,
+        is_rest: false,
+        type_: param_type,
+        default: None,
+      })
+    }
+    seen[fname] = ()
+    funcs.push({
+      source_path: export_.source_path,
+      local_name_prefix: "",
+      export_name: fname,
+      source_export_name: "default." + fname,
+      func: {
+        name: fname,
+        type_params,
+        const_type_params: [],
+        type_param_bounds: [],
+        params,
+        return_type,
+        body: { stmts: [], stmt_positions: [] },
+        is_generator: false,
+        is_async: false,
+      },
+    })
+  }
+}
+
+///|
 fn collect_exported_decls(
   graph : ModuleGraph,
   export_surface : Array[ResolvedExport],
@@ -2384,7 +2549,7 @@ fn collect_exported_decls(
     }
     if export_.export_name == "default" {
       match modules.get(export_.source_path) {
-        Some(info) =>
+        Some(info) => {
           match find_namespace_decl(info.module_, local_name) {
             Some(namespace_) =>
               append_exported_namespace_members(
@@ -2400,6 +2565,16 @@ fn collect_exported_decls(
               )
             None => ()
           }
+          // `export =` of a VALUE whose declared type is an interface full
+          // of callable members (@types/lodash: `declare const _:
+          // _.LoDashStatic; export = _;`) -- surface each function-typed
+          // member as a module function reachable at runtime through the
+          // default export (`default_.chunk`). First declaration of each
+          // member name wins; overload refinement stays out of scope.
+          append_exported_value_interface_methods(
+            info, export_, local_name, funcs,
+          )
+        }
         None => ()
       }
     }
@@ -3752,7 +3927,34 @@ fn typeof_class_constructor_params_type(
 }
 
 ///|
+/// Re-entrancy guard for `typeof_value_query_type`: `typeof X` where X's
+/// own (object) type mentions `typeof X` again -- directly or through a
+/// sibling const -- must abstain instead of expanding forever (minimatch's
+/// `const minimatch: { defaults: (d) => typeof minimatch }`). Keyed by
+/// module path + query; generation is single-threaded.
+let typeof_value_query_visiting : Map[String, Unit] = {}
+
+///|
 fn typeof_value_query_type(
+  info : DeclModuleInfo,
+  query : String,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> @ast.TsType? {
+  let visit_key = info.record.path + "\u{0}" + query
+  if typeof_value_query_visiting.contains(visit_key) {
+    return None
+  }
+  typeof_value_query_visiting[visit_key] = ()
+  let result = typeof_value_query_type_inner(
+    info, query, modules, canonical_types,
+  )
+  typeof_value_query_visiting.remove(visit_key)
+  result
+}
+
+///|
+fn typeof_value_query_type_inner(
   info : DeclModuleInfo,
   query : String,
   modules : Map[String, DeclModuleInfo],

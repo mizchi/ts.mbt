@@ -27,6 +27,12 @@ struct ResolvedModuleRecord {
   module_block : @ast.TsModuleBlock
   imports : Array[ResolvedImportEdge]
   reexports : Array[ResolvedReExportEdge]
+  // Resolved paths of `/// <reference path="..." />` directives. The
+  // referenced files contribute AMBIENT declarations (e.g. @types/lodash's
+  // common/*.d.ts augmenting `interface LoDashStatic` via
+  // `declare module "lodash"`); the decl layer folds them into the
+  // referencing module's surface.
+  references : Array[String]
 } derive(Debug)
 
 ///|
@@ -228,7 +234,34 @@ async fn load_module_record(
         }
     }
   }
-  loaded[path] = { path, module_block, imports, reexports }
+  let references : Array[String] = []
+  for line_view in content.split("\n") {
+    let line = line_view.to_owned().trim().to_owned()
+    if !line.has_prefix("/// <reference path=\"") {
+      continue
+    }
+    let rest = line.substring(start="/// <reference path=\"".length())
+    let ref_rel = match rest.find("\"") {
+      Some(end_idx) => rest.substring(start=0, end=end_idx).to_string()
+      None => continue
+    }
+    let base_dir = match path.rev_find("/") {
+      Some(idx) => path.substring(start=0, end=idx).to_string()
+      None => "."
+    }
+    let ref_path = base_dir + "/" + ref_rel
+    let ref_exists = @fs.exists(ref_path) catch { _ => false }
+    if !ref_exists {
+      continue
+    }
+    if !references.contains(ref_path) {
+      references.push(ref_path)
+    }
+    load_module_record(ref_path, loaded, visiting) catch {
+      _ => ()
+    }
+  }
+  loaded[path] = { path, module_block, imports, reexports, references }
   let _ = visiting.pop()
 }
 

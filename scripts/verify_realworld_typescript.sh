@@ -321,7 +321,7 @@ jsvalue_function_budget() {
   # `JSValue`-only metric grep), so historical numbers move up.
   case "$package_spec" in
     clsx) printf '0\n' ;;
-    chalk) printf '2\n' ;;
+    chalk) printf '3\n' ;;
     dotenv) printf '0\n' ;;
     ignore) printf '1\n' ;;
     hono) printf '5\n' ;;
@@ -400,7 +400,7 @@ jsvalue_cause_budget() {
   # renders as `Array[JSValue]` in struct fields and is therefore counted.
   case "$package_spec" in
     clsx) printf '0|0|0|0|0|0|0\n' ;;
-    chalk) printf '4|0|0|0|0|3|1\n' ;;
+    chalk) printf '5|0|0|0|0|4|1\n' ;;
     dotenv) printf '0|0|0|0|0|0|0\n' ;;
     ignore) printf '3|2|0|1|0|0|0\n' ;;
     hono) printf '85|12|6|26|4|28|9\n' ;;

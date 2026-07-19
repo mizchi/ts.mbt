@@ -4739,14 +4739,14 @@ fn ffi_runtime_export_name_for_module(
   public_name : String,
   source_name : String,
 ) -> String {
-  if source_name.contains(".") {
-    return source_name
-  }
   match runtime_module_resolved_path {
     Some(resolved_path) if source_path == resolved_path => return source_name
     _ => ()
   }
   if source_path == module_spec {
+    return source_name
+  }
+  if source_name.contains(".") {
     return source_name
   }
   if ffi_module_spec_uses_public_exports(module_spec) {
@@ -5231,11 +5231,57 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       base_func_export_names.push(exported.export_name)
     }
   }
+  // The runtime module is imported by its PUBLIC surface. A runtime name
+  // whose root is a SUB-module's export (uuid re-exports sub defaults:
+  // `export { default as v3 } from "./v3.js"`, members arrive as
+  // `default.DNS`) must be re-rooted at the top-level alias -- otherwise
+  // the glue emits `import default_ from "uuid"`, which crashes at load
+  // time because the public package has no default export.
+  let public_alias_by_source : Map[String, String] = {}
+  if ffi_module_spec_uses_public_exports(module_spec) {
+    for export_ in export_surface {
+      if export_.export_name.contains(".") || export_.kind is Ambiguous {
+        continue
+      }
+      let key = export_.source_path + "\u{0}" + export_.source_export_name
+      if !public_alias_by_source.contains(key) {
+        public_alias_by_source[key] = export_.export_name
+      }
+    }
+  }
+  fn reroot_runtime_export_name(
+    source_path : String,
+    runtime_name : String,
+  ) -> String {
+    // When the runtime import already targets the SOURCE module (the
+    // entry re-exports from the runtime package itself, or the source IS
+    // the entry), the source-side name is the correct access path --
+    // rewriting `CounterState` to its public alias would read a name the
+    // imported module does not export.
+    match runtime_module_resolved_path {
+      Some(resolved_path) if source_path == resolved_path => return runtime_name
+      _ => ()
+    }
+    if source_path == module_spec {
+      return runtime_name
+    }
+    let (root, rest) = match runtime_name.find(".") {
+      Some(idx) =>
+        (
+          runtime_name.substring(start=0, end=idx).to_string(),
+          runtime_name.substring(start=idx).to_string(),
+        )
+      None => (runtime_name, "")
+    }
+    match public_alias_by_source.get(source_path + "\u{0}" + root) {
+      Some(alias) if alias != root => alias + rest
+      _ => runtime_name
+    }
+  }
+
   let import_runtime_export_names : Map[String, String] = {}
   for exported in emitted_exported_imports {
-    import_runtime_export_names[exported.export_name] = if base_import_export_names.contains(
-        exported.export_name,
-      ) {
+    let raw = if base_import_export_names.contains(exported.export_name) {
       ffi_runtime_export_name_for_module(
         module_spec,
         runtime_module_resolved_path,
@@ -5246,12 +5292,14 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     } else {
       exported.source_export_name
     }
+    import_runtime_export_names[exported.export_name] = reroot_runtime_export_name(
+      exported.source_path,
+      raw,
+    )
   }
   let func_runtime_export_names : Map[String, String] = {}
   for exported in emitted_exported_funcs {
-    func_runtime_export_names[exported.export_name] = if base_func_export_names.contains(
-        exported.export_name,
-      ) {
+    let raw = if base_func_export_names.contains(exported.export_name) {
       ffi_runtime_export_name_for_module(
         module_spec,
         runtime_module_resolved_path,
@@ -5262,25 +5310,35 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     } else {
       exported.source_export_name
     }
+    func_runtime_export_names[exported.export_name] = reroot_runtime_export_name(
+      exported.source_path,
+      raw,
+    )
   }
   let value_runtime_export_names : Map[String, String] = {}
   for exported in exported_values {
-    value_runtime_export_names[exported.export_name] = ffi_runtime_export_name_for_module(
-      module_spec,
-      runtime_module_resolved_path,
+    value_runtime_export_names[exported.export_name] = reroot_runtime_export_name(
       exported.source_path,
-      exported.export_name,
-      exported.source_export_name,
+      ffi_runtime_export_name_for_module(
+        module_spec,
+        runtime_module_resolved_path,
+        exported.source_path,
+        exported.export_name,
+        exported.source_export_name,
+      ),
     )
   }
   let class_runtime_export_names : Map[String, String] = {}
   for exported in exported_classes {
-    class_runtime_export_names[exported.export_name] = ffi_runtime_export_name_for_module(
-      module_spec,
-      runtime_module_resolved_path,
+    class_runtime_export_names[exported.export_name] = reroot_runtime_export_name(
       exported.source_path,
-      exported.export_name,
-      exported.source_export_name,
+      ffi_runtime_export_name_for_module(
+        module_spec,
+        runtime_module_resolved_path,
+        exported.source_path,
+        exported.export_name,
+        exported.source_export_name,
+      ),
     )
   }
   let namespace_import_roots = bridge_namespace_import_roots_for_export_equals(
