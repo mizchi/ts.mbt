@@ -2049,6 +2049,32 @@ fn main {
     fn(n : Int) { if n != 3 { abort("unexpected axios.all count") } },
     fn(_err) { abort("axios.all rejected") },
   )
+  // MoonBit-native async integration: `.wait()` awaits inside an async
+  // fn, and a rejected promise (connection refused on a closed port)
+  // surfaces as the catchable JsRejection error.
+  async fn smoke_async() -> Unit {
+    let awaited = @sut.all(vals).wait()
+    if awaited.length() != 3 {
+      abort("unexpected awaited axios.all count")
+    }
+    let core : @sut.Axios = @sut.unsafeCast(@sut.get_default())
+    let mut rejected = false
+    let resp : @sut.JSValue = core
+      .get("http://127.0.0.1:1/unreachable", None)
+      .wait() catch {
+      @sut.JsRejection(_) => {
+        rejected = true
+        @sut.unsafeCast(0)
+      }
+      _ => @sut.unsafeCast(0)
+    }
+    ignore(resp)
+    if !rejected {
+      abort("expected axios rejection to surface as JsRejection")
+    }
+  }
+
+  @sut.run_async(smoke_async)
   // Typed JSValue constructors: object_from_pairs builds a heterogeneous
   // config object without unsafeCast.
   let probe = @sut.JSValue::object_from_pairs([

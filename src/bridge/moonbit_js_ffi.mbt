@@ -6406,6 +6406,25 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       ffi_fn_decl_key("promise_then"),
       "extern \"js\" fn _promise_then_extern_js(p : JSValue, on_ok : (JSValue) -> Unit) -> Unit = \"__ts_mbt_promise_then\"\n\nextern \"js\" fn _promise_then_catch_extern_js(p : JSValue, on_ok : (JSValue) -> Unit, on_err : (JSValue) -> Unit) -> Unit = \"__ts_mbt_promise_then_catch\"\n\nextern \"js\" fn _promise_map_extern_js(p : JSValue, f : (JSValue) -> JSValue) -> JSValue = \"__ts_mbt_promise_map\"\n\npub fn[T] Promise::then(self : Promise[T], on_ok : (T) -> Unit) -> Unit {\n  _promise_then_extern_js(unsafeCast(self), unsafeCast(on_ok))\n}\n\npub fn[T] Promise::then_catch(self : Promise[T], on_ok : (T) -> Unit, on_err : (JSValue) -> Unit) -> Unit {\n  _promise_then_catch_extern_js(unsafeCast(self), unsafeCast(on_ok), on_err)\n}\n\npub fn[T, U] Promise::map(self : Promise[T], f : (T) -> U) -> Promise[U] {\n  unsafeCast(_promise_map_extern_js(unsafeCast(self), unsafeCast(f)))\n}",
     )
+    // MoonBit-native async integration: `Promise::wait` suspends the
+    // enclosing `async fn` until the promise settles (the JS backend
+    // compiles async fns to CPS, and `%async.suspend` hands us the two
+    // continuations to route resolution/rejection into), a rejected
+    // promise surfaces as the catchable `JsRejection` error, and
+    // `run_async` kicks an async fn from a sync context (an unhandled
+    // async error exits non-zero so failures stay loud). Usage:
+    //
+    //   async fn work() -> Unit {
+    //     let res = fetchSomething(...).wait()   // await
+    //     ...
+    //   }
+    //   fn main { run_async(work) }
+    push_unique_ffi_section(
+      seen_ffi_binding_names,
+      ffi_sections,
+      ffi_fn_decl_key("promise_wait"),
+      "pub suberror JsRejection {\n  JsRejection(JSValue)\n}\n\nasync fn _promise_suspend_js(f : ((JSValue) -> Unit, (Error) -> Unit) -> Unit) -> JSValue = \"%async.suspend\"\n\npub async fn[T] Promise::wait(self : Promise[T]) -> T {\n  let raw = _promise_suspend_js(fn(ok, err) {\n    _promise_then_catch_extern_js(unsafeCast(self), ok, fn(e) { err(JsRejection(e)) })\n  })\n  unsafeCast(raw)\n}\n\nextern \"js\" fn _run_async_extern_js(f : async () -> Unit) -> Unit =\n  #| (f) => { f((_ok) => {}, (e) => { console.error(\"unhandled async error:\", e); if (typeof process !== \"undefined\" && process.exit) process.exit(1); else throw e; }) }\n\npub fn run_async(f : async () -> Unit) -> Unit {\n  _run_async_extern_js(f)\n}",
+    )
   }
   if ffi_is_zod_module_spec(module_spec) {
     // `object()`'s shape is `$ZodLooseShape = Record<string, any>` — an

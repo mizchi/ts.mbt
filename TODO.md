@@ -1468,6 +1468,28 @@ Gate coverage: the axios build smoke now chains
 function's default-size and explicit-size paths. Budgets recalibrated
 (the Promise layer + constructors add lines/JSValue refs per package).
 
+MoonBit-native async integration (follow-up, same day): the JS backend
+compiles `async fn` to CPS (an async fn value crosses to JS as a
+2-continuation function — probed empirically; a GENERIC
+`%async.suspend` intrinsic ICEs moonc v0.10.4, so the intrinsic stays
+monomorphic on JSValue and only the public wrapper is generic). Every
+package with a Promise surface now also ships:
+
+- `Promise::wait(self : Promise[T]) -> T` — suspends the enclosing
+  `async fn` until the promise settles; `await` in all but name.
+- `pub suberror JsRejection { JsRejection(JSValue) }` — a rejected
+  promise raises it, so `.wait() catch { JsRejection(e) => ... }`
+  handles JS failures as ordinary MoonBit errors.
+- `run_async(f : async () -> Unit)` — kicks an async fn from a sync
+  context (main / tests); unhandled async errors exit non-zero.
+
+Verified end-to-end on real axios: `all(vals).wait()` resolves inside
+an async fn, and a connection-refused `get` surfaces as a caught
+`JsRejection`. The axios build smoke covers both paths via
+`run_async(smoke_async)`. The signature surface stays `-> Promise[T]`
+(non-breaking; fire-and-forget and combinator use keep the raw
+promise) — `.wait()` is the conversion point into async MoonBit.
+
 ## Performance Tuning Round 1 (2026-07-19)
 
 Profiled with `moon bench --target native` + callgrind over the release
