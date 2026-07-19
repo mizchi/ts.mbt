@@ -1425,6 +1425,49 @@ both the name and the type diverged. Fixed from both sides:
 - [ ] Do not pursue `any` / `unknown` AST distinction unless a downstream
   consumer needs it; the JSValue count is unaffected.
 
+## Seamlessness Round 1 (2026-07-19)
+
+A fresh-user walkthrough (npm install -> ts2mbt -> moon build -> node,
+done twice: zod standalone and a 4-dep nanoid/ms/date-fns/axios app)
+graded end-to-end usability at ~70% and surfaced four gaps, fixed in
+priority order and each re-verified end-to-end in the walkthrough apps:
+
+1. Promise consumption API: `Promise[T]` was opaque — async results
+   could only be consumed from hand-written JS externs. Every generated
+   package whose surface mentions `Promise[` now ships
+   `Promise::then(on_ok)` (rejections stay loud), `Promise::then_catch`
+   and `Promise::map`, backed by three `__ts_mbt_promise_*` bridge.js
+   bindings. `axios.all(...).map(...).then_catch(...)` chains in pure
+   MoonBit. Emission forces the self-contained JSValue/Promise decls
+   (`state.needs_js_any/needs_promise`) since a surface can mention
+   Promise only in doc comments.
+2. Returned-function option unwrap (bug found by the walkthrough):
+   `customAlphabet(...)` returns `(size?) => id`; MoonBit `None` reached
+   the raw JS closure as `null`, JS default parameters never fired, and
+   the id came back empty. `ffi_type_js_return_expr` now wraps
+   Func-typed returns so each call routes args through the same converters
+   direct parameters get (`ffi_returned_func_needs_arg_wrap`).
+3. `ts2mbt generate` / `vendor` wiring: the `@tsmbt-bridge/*` `file:`
+   dependencies are now written into the consumer's `package.json` in
+   place (line-oriented insertion preserves formatting; copy-paste
+   fallback when the shape defeats it) instead of a hint that silently
+   vanished without `moon.mod.json`; packages that ship no declarations
+   (`ms` without `@types/ms`) get a WARNING naming the `@types/`
+   package instead of a silent function-less bridge; the moon.pkg
+   import hint derives from `--out` instead of hardcoding
+   `internal/generated`; AGENTS.md text matches the real behavior.
+4. Typed JSValue constructors: `JSValue::from_string/from_double/
+   from_int/from_bool/from_array` (identity externs) and
+   `JSValue::object_from_pairs` (heterogeneous object literals) replace
+   bare `unsafeCast` at the input boundary, emitted wherever the
+   package declares JSValue.
+
+Gate coverage: the axios build smoke now chains
+`all().map().then_catch()` and builds a heterogeneous object via
+`object_from_pairs`; the nanoid build smoke checks the returned
+function's default-size and explicit-size paths. Budgets recalibrated
+(the Promise layer + constructors add lines/JSValue refs per package).
+
 ## Performance Tuning Round 1 (2026-07-19)
 
 Profiled with `moon bench --target native` + callgrind over the release

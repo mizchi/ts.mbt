@@ -3195,6 +3195,34 @@ fn ffi_type_needs_js_return_conversion_with_state(
   }
   match type_ {
     Named(name) => ffi_tagged_union_return_is_safe_to_wrap(state, name)
+    Func(_, _) => ffi_returned_func_needs_arg_wrap(state, type_)
+    _ => false
+  }
+}
+
+///|
+/// True when a FUNCTION-typed return value needs a JS-side wrapper: the
+/// returned function's future arguments never pass through the bridge
+/// glue that direct parameters get, so any parameter whose MoonBit
+/// lowering differs from the raw JS value (Option boxes, bool options,
+/// generated enums, tagged unions) silently corrupts calls — e.g.
+/// nanoid's `customAlphabet(...)` returns `(size?) => id`, and a
+/// MoonBit `None` reached it as `null`, which JS default parameters
+/// ignore.
+fn ffi_returned_func_needs_arg_wrap(
+  state : MoonBitJsFfiState,
+  type_ : @ast.TsType,
+) -> Bool {
+  match type_ {
+    Func(fn_params, _) => {
+      for i, p in fn_params {
+        let probe = "a\{i}"
+        if ffi_type_js_converter_expr(state, p, probe) != probe {
+          return true
+        }
+      }
+      false
+    }
     _ => false
   }
 }
@@ -3567,6 +3595,21 @@ fn ffi_type_js_return_expr(
     Named(name) if ffi_tagged_union_return_is_safe_to_wrap(state, name) => {
       let from_name = tagged_union_from_js_function_name(name)
       "\{from_name}(\{expr})"
+    }
+    Func(fn_params, _) if ffi_returned_func_needs_arg_wrap(state, type_) => {
+      // Wrap the returned function once so each future call routes its
+      // arguments through the same converters direct parameters get
+      // (see `ffi_returned_func_needs_arg_wrap`).
+      let arg_names : Array[String] = []
+      let converted : Array[String] = []
+      for i, p in fn_params {
+        let a = "a\{i}"
+        arg_names.push(a)
+        converted.push(ffi_type_js_converter_expr(state, p, a))
+      }
+      let args_src = arg_names.join(", ")
+      let converted_src = converted.join(", ")
+      "((__fn_) => (\{args_src}) => __fn_(\{converted_src}))(\{expr})"
     }
     _ => expr
   }
@@ -6325,6 +6368,45 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     handled_export_names.push(func.name)
   }
 
+  // Universal Promise consumption layer: any surface that produces a
+  // `Promise[T]` gets typed callback access from MoonBit. Attaching
+  // callbacks is the only portable consumption model on the js target
+  // (there is no blocking wait): `then` runs a fulfillment callback and
+  // leaves rejections unhandled so failures stay loud, `then_catch`
+  // routes rejections to a handler, and `map` chains a transformation
+  // into a new promise. Emitted only when the generated surface
+  // mentions `Promise[`, so promise-free packages stay byte-identical.
+  let mut ffi_surface_mentions_promise = false
+  for section in ffi_sections {
+    if section.contains("Promise[") {
+      ffi_surface_mentions_promise = true
+      break
+    }
+  }
+  if ffi_surface_mentions_promise {
+    // The helpers cross the boundary as JSValue and hang methods off
+    // `Promise`; a surface can mention `Promise[` in doc comments or
+    // inline externs without either self-contained declaration having
+    // been forced yet (seen in the fixture and example corpora), so
+    // force both.
+    state.needs_js_any = true
+    state.needs_promise = true
+    push_unique_bridge_binding(
+      seen_bridge_binding_names, bridge_lines, "__ts_mbt_promise_then", "export function __ts_mbt_promise_then(p, ok) { Promise.resolve(p).then(ok); }",
+    )
+    push_unique_bridge_binding(
+      seen_bridge_binding_names, bridge_lines, "__ts_mbt_promise_then_catch", "export function __ts_mbt_promise_then_catch(p, ok, err) { Promise.resolve(p).then(ok, err); }",
+    )
+    push_unique_bridge_binding(
+      seen_bridge_binding_names, bridge_lines, "__ts_mbt_promise_map", "export function __ts_mbt_promise_map(p, f) { return Promise.resolve(p).then(f); }",
+    )
+    push_unique_ffi_section(
+      seen_ffi_binding_names,
+      ffi_sections,
+      ffi_fn_decl_key("promise_then"),
+      "extern \"js\" fn _promise_then_extern_js(p : JSValue, on_ok : (JSValue) -> Unit) -> Unit = \"__ts_mbt_promise_then\"\n\nextern \"js\" fn _promise_then_catch_extern_js(p : JSValue, on_ok : (JSValue) -> Unit, on_err : (JSValue) -> Unit) -> Unit = \"__ts_mbt_promise_then_catch\"\n\nextern \"js\" fn _promise_map_extern_js(p : JSValue, f : (JSValue) -> JSValue) -> JSValue = \"__ts_mbt_promise_map\"\n\npub fn[T] Promise::then(self : Promise[T], on_ok : (T) -> Unit) -> Unit {\n  _promise_then_extern_js(unsafeCast(self), unsafeCast(on_ok))\n}\n\npub fn[T] Promise::then_catch(self : Promise[T], on_ok : (T) -> Unit, on_err : (JSValue) -> Unit) -> Unit {\n  _promise_then_catch_extern_js(unsafeCast(self), unsafeCast(on_ok), on_err)\n}\n\npub fn[T, U] Promise::map(self : Promise[T], f : (T) -> U) -> Promise[U] {\n  unsafeCast(_promise_map_extern_js(unsafeCast(self), unsafeCast(f)))\n}",
+    )
+  }
   if ffi_is_zod_module_spec(module_spec) {
     // `object()`'s shape is `$ZodLooseShape = Record<string, any>` — an
     // opaque handle MoonBit could never construct. The builder pairs
