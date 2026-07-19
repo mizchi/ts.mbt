@@ -1428,7 +1428,7 @@ both the name and the type diverged. Fixed from both sides:
 ## Performance Tuning Round 1 (2026-07-19)
 
 Profiled with `moon bench --target native` + callgrind over the release
-`tscheck` binary (`--parse` / full, `--iters N`). Three landed batches,
+`tscheck` binary (`--parse` / full, `--iters N`). Four landed batches,
 all behavior-preserving (full suite 2523 green, oracle byte-identical
 TP 2338 / FP 0 / TN 1750 / MISS 396, every gate green):
 
@@ -1459,14 +1459,27 @@ Measured (release tscheck, per iteration):
 - generic-heavy check phase 26 -> 19ms
 - moon bench parser fixtures -17%..-38%
 
-Remaining known sinks (next round candidates): JSX speculative
-sub-parsing re-lexes substrings per `<` attempt (structural; a
-file-extension-driven `allow_jsx` would eliminate it for `.ts` but
-changes oracle-visible parse behavior for @filename .tsx embeds --
-needs oracle-gated validation); refcount+alloc runtime overhead is
+4. Paren-JSX speculation gated on `allow_jsx` (batch 4): tscheck was
+   already extension-driven (`.tsx` only), but THREE paren-path JSX
+   attempts (`try_parse_parenthesized_jsx_expr` + the two
+   `peek_at(1)==Lt` temp parses in `parse_parenthesized_expr` /
+   `parse_primary`) ignored the flag, so every `(<any>x)` cast in a
+   `.ts` file ran the full JSX source scan + nested embed sub-parses
+   and threw the work away. All three now early-out in `.ts` mode --
+   tsc-aligned (`(<T>x)` is a parenthesized type assertion there).
+   parserharness.ts parse 30 -> 11ms (44ms pre-round; -75% total),
+   full check 49 -> 35ms, byte-identical diagnostics and oracle
+   results. `moon bench` cast fixture split into `.tsx`-mode (4.96ms,
+   speculation still exercised) and `.ts`-mode (3.51ms) variants.
+
+Remaining known sinks (next round candidates): `.tsx`-mode JSX
+speculation still re-lexes substrings per `<` attempt (only matters
+for real `.tsx` sources now); refcount+alloc runtime overhead is
 ~25-30% of remaining profiles (only fixable by allocating less, e.g.
-token payload interning); `TokenKind::equal`/`Parser::peek/check` are
-~8% of body-heavy parses (derived Eq on payload enum).
+token payload interning); `Parser::peek/check` + `TokenKind::equal`
+are ~30% of body-heavy `.ts` parses (each peek copies a Token and
+refcounts its payload; a tag-int fast path would need parser-wide
+changes).
 
 ## TS Checker Conformance (current state, 2026-07-17 — TypeScript 7)
 

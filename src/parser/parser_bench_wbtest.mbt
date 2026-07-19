@@ -259,11 +259,29 @@ test "bench parser: JSDoc-heavy (300 documented decls)" (it : @bench.T) {
 }
 
 ///|
-test "bench parser: old-style cast heavy (200 funcs, JSX speculation)" (
+/// `.tsx` mode: `<T>expr` in expression position triggers the JSX
+/// speculation scan (tsc would reject old-style casts here, but the
+/// parser still has to disambiguate — this tracks that path's cost).
+test "bench parser: old-style cast heavy (200 funcs, .tsx JSX speculation)" (
   it : @bench.T,
 ) {
   it.bench(fn() {
     let module_ = Parser::from_source(cast_heavy_200).parse_module() catch {
+      _ => return
+    }
+    it.keep(module_.funcs.length())
+  })
+}
+
+///|
+/// `.ts` mode (`allow_jsx` off): the same casts parse as type
+/// assertions with no JSX speculation — the mode tscheck uses for every
+/// non-`.tsx` file.
+test "bench parser: old-style cast heavy (200 funcs, .ts assertion mode)" (
+  it : @bench.T,
+) {
+  it.bench(fn() {
+    let module_ = Parser::from_source_with_jsx(cast_heavy_200, false).parse_module() catch {
       _ => return
     }
     it.keep(module_.funcs.length())

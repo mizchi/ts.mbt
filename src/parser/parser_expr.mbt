@@ -1176,7 +1176,7 @@ fn Parser::try_skip_call_type_args(self : Parser, expr : @ast.TsExpr) -> Bool {
 fn Parser::parse_parenthesized_expr(
   self : Parser,
 ) -> @ast.TsExpr raise ParseError {
-  if self.peek_at(1).kind == Lt {
+  if self.allow_jsx && self.peek_at(1).kind == Lt {
     let temp = { ..self, pos: self.pos + 1 }
     if temp.is_jsx_element_start() {
       let jsx_expr = temp.parse_jsx_element_expr()
@@ -1832,6 +1832,12 @@ fn Parser::scan_jsx_source_end_with_embeds(
 fn Parser::try_parse_parenthesized_jsx_expr(
   self : Parser,
 ) -> (Bool, Array[@ast.TsExpr]) {
+  // `.ts` mode (`allow_jsx` off) never parses JSX — `(<T>x)` is a
+  // parenthesized type assertion there, and the speculative source scan
+  // below is expensive on cast-heavy legacy sources.
+  if !self.allow_jsx {
+    return (false, [])
+  }
   if self.src.length() == 0 || !self.check(LParen) {
     return (false, [])
   }
@@ -2980,7 +2986,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
         // checker still recurses into the embedded sub-expressions.
         @ast.TsExpr::JsxElement("", [], paren_embeds)
         // functioncheck
-      } else if self.peek_at(1).kind == Lt {
+      } else if self.allow_jsx && self.peek_at(1).kind == Lt {
         let temp = { ..self, pos: self.pos + 1 }
         if temp.is_jsx_element_start() {
           let jsx_expr = temp.parse_jsx_element_expr()
