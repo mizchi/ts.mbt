@@ -1428,9 +1428,11 @@ both the name and the type diverged. Fixed from both sides:
 ## Performance Tuning Round 1 (2026-07-19)
 
 Profiled with `moon bench --target native` + callgrind over the release
-`tscheck` binary (`--parse` / full, `--iters N`). Four landed batches,
-all behavior-preserving (full suite 2523 green, oracle byte-identical
-TP 2338 / FP 0 / TN 1750 / MISS 396, every gate green):
+`tscheck` binary (`--parse` / full, `--iters N`; use
+`--toggle-collect=<mangled check entry>` to isolate the check phase from
+the parse). Five landed batches, all behavior-preserving (full suite
+2523 green, oracle byte-identical TP 2338 / FP 0 / TN 1750 / MISS 396,
+every gate green):
 
 1. Parser whole-source rescans (`20ff7e7`): `from_source_with_jsx`
    lowered the FULL source 3x per parse (`@noImplicitThis` x2,
@@ -1472,14 +1474,29 @@ Measured (release tscheck, per iteration):
    results. `moon bench` cast fixture split into `.tsx`-mode (4.96ms,
    speculation still exercised) and `.ts`-mode (3.51ms) variants.
 
+5. Module-pass allocation hoists (batch 5, check-phase Ir on
+   dom.generated.d.ts 552M -> 473M, -14%): `check_structural_duplicates`
+   and `walk_module_undeclared_tps` interpolated their diagnostic path
+   string (`"interface \{name}"` etc.) once per FIELD/PARAM instead of
+   per declaration — hoisted; `walk_module_undeclared_tps` also did a
+   linear scan of `method_type_params` per field (quadratic on lib.dom
+   interfaces) — now grouped once per interface;
+   `check_interface_extends_compat` rebuilt the base interface's
+   field/overload-count maps once per (derived, base) EDGE — popular DOM
+   bases like `Event` are extended by hundreds of interfaces — now
+   cached per base name, and the derived counts hoisted out of the
+   bases loop.
+
 Remaining known sinks (next round candidates): `.tsx`-mode JSX
 speculation still re-lexes substrings per `<` attempt (only matters
 for real `.tsx` sources now); refcount+alloc runtime overhead is
-~25-30% of remaining profiles (only fixable by allocating less, e.g.
-token payload interning); `Parser::peek/check` + `TokenKind::equal`
-are ~30% of body-heavy `.ts` parses (each peek copies a Token and
-refcounts its payload; a tag-int fast path would need parser-wide
-changes).
+~29% of the remaining check-phase profile and ~25-30% of parse (only
+fixable by allocating less); String-keyed Map probes are ~8% of the
+check phase spread across all passes (an interned-name or ID-keyed
+resolver would be a deep refactor); `Parser::peek/check` +
+`TokenKind::equal` are ~30% of body-heavy `.ts` parses (each peek
+copies a Token and refcounts its payload; a tag-int fast path would
+need parser-wide changes).
 
 ## TS Checker Conformance (current state, 2026-07-17 — TypeScript 7)
 
