@@ -1437,6 +1437,22 @@ functions 30, cause split 129|43|8|24|34|14|6, unsupported exports 0);
 policy budgeted-fallback alongside preact until a dedicated
 JSX/component binding layer exists.
 
+Top-download expansion (2026-07-19): eight of npm's most-downloaded
+packages verified end-to-end and added to the real-world gate (41
+packages + 10 node builtins = 51 entries): axios (getUri asserted
+against baseURL+url config), commander (option parse --debug ->
+opts.debug), debug (enable/enabled/disable + logger factory), chokidar
+(FSWatcher construct + close), pino (logger level from options),
+lodash (camelCase / kebabCase / chunk -- 435 declared functions from
+the fixed reference-following + value-interface surface), uuid
+(validate / version after the glue fix), minimatch (filter matcher
+after the segfault fix). ws deferred: cjs-module-lexer does not expose
+its `Server` alias as an ESM named export, so the generated static
+binding is undefined at runtime -- needs interop-tolerant class
+bindings (same family as the node:* tolerance) before it can join.
+rxjs / ajv / undici structurally healthy (method-surface heavy),
+queued as budgeted-fallback candidates.
+
 Default-export / export= naturalization (2026-07-18): the two
 structural gaps behind the probe's weak surfaces are fixed and the
 corpus grew to 33 packages. (a) Module resolver: a raw `.js` "main"

@@ -347,6 +347,14 @@ jsvalue_function_budget() {
     semver) printf '33\n' ;;
     picomatch) printf '5\n' ;;
     deepmerge) printf '4\n' ;;
+    axios) printf '60\n' ;;
+    commander) printf '25\n' ;;
+    debug) printf '5\n' ;;
+    chokidar) printf '3\n' ;;
+    pino) printf '8\n' ;;
+    lodash) printf '288\n' ;;
+    uuid) printf '1\n' ;;
+    minimatch) printf '10\n' ;;
     vitest/runtime) printf '6\n' ;;
     playwright) printf '411\n' ;;
     react-router) printf '84\n' ;;
@@ -382,6 +390,7 @@ unsupported_export_budget() {
     superstruct) printf '1\n' ;;
     mitt) printf '1\n' ;;
     marked) printf '3\n' ;;
+    minimatch) printf '1\n' ;;
 
     node:sqlite) printf '2\n' ;;
     node:fs) printf '2\n' ;;
@@ -426,6 +435,14 @@ jsvalue_cause_budget() {
     semver) printf '33|0|30|2|0|0|1\n' ;;
     picomatch) printf '11|6|4|0|0|0|1\n' ;;
     deepmerge) printf '14|8|0|2|0|3|1\n' ;;
+    axios) printf '188|78|4|18|1|54|33\n' ;;
+    commander) printf '26|0|0|10|3|3|10\n' ;;
+    debug) printf '19|6|0|1|0|12|0\n' ;;
+    chokidar) printf '3|0|0|1|0|0|2\n' ;;
+    pino) printf '51|38|4|1|0|4|4\n' ;;
+    lodash) printf '1643|444|121|252|49|771|6\n' ;;
+    uuid) printf '1|0|1|0|0|0|0\n' ;;
+    minimatch) printf '10|0|0|2|0|3|5\n' ;;
     vitest/runtime) printf '64|35|2|3|6|18|0\n' ;;
     playwright) printf '1336|196|0|85|885|170|0\n' ;;
     react-router) printf '349|166|25|30|39|67|22\n' ;;
@@ -471,7 +488,7 @@ realworld_fallback_policy() {
     node:assert | node:util)
       printf 'naturalize-target|Shrink remaining Node built-in overload/unknown fallbacks toward zero for the common API surface.\n'
       ;;
-    date-fns | magic-string | source-map | yaml | marked | node:sqlite | node:fs)
+    date-fns | magic-string | source-map | yaml | marked | axios | pino | lodash | node:sqlite | node:fs)
       printf 'naturalize-target|Keep reducing fallback around finite option bags, tuple results, and class/value helper APIs.\n'
       ;;
     zod | valibot)
@@ -483,7 +500,7 @@ realworld_fallback_policy() {
     playwright)
       printf 'budgeted-fallback|Large event/callback-heavy API is smoke-tested; only selected launch/device/options surfaces are naturalization targets.\n'
       ;;
-    chalk | dotenv | ignore | colorette | immer | execa | vitest/runtime | express | ms | nanoid | dayjs | qs | superstruct | eventemitter3 | mitt | semver | picomatch | deepmerge)
+    chalk | dotenv | ignore | colorette | immer | execa | vitest/runtime | express | ms | nanoid | dayjs | qs | superstruct | eventemitter3 | mitt | semver | picomatch | deepmerge | commander | debug | chokidar | uuid | minimatch)
       printf 'low-fallback-maintain|Current fallback is small and explicitly budgeted; naturalize only when a real smoke use case needs it.\n'
       ;;
     *)
@@ -1122,6 +1139,110 @@ test "real-world deepmerge bridge smoke" {
   let merged = default(realworld_dm_obj_a(), realworld_dm_obj_b(), None)
   if !realworld_dm_has(merged, "a") || !realworld_dm_has(merged, "b") {
     abort("expected merged object with both keys")
+  }
+}
+EOF
+      ;;
+    axios)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn realworld_axios_config() -> AxiosRequestConfig[JSValue] =
+  #| () => ({ url: "/users/1", baseURL: "https://example.test" })
+
+test "real-world axios bridge smoke" {
+  let axios_core : Axios = unsafeCast(get_default())
+  let uri = axios_core.get_uri(Some(realworld_axios_config()))
+  assert_eq(uri, "https://example.test/users/1")
+  let _ = create(None)
+}
+EOF
+      ;;
+    commander)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn realworld_cmd_debug_flag(opts : OptionValues) -> Bool =
+  #| (opts) => opts.debug === true
+
+test "real-world commander bridge smoke" {
+  let cmd = new_command(Some("app"))
+    .option("-d, --debug", Some("enable debug"), None)
+    .parse(Some(["node", "app", "--debug"]), None)
+  if !realworld_cmd_debug_flag(cmd.opts()) {
+    abort("expected --debug flag to parse")
+  }
+}
+EOF
+      ;;
+    debug)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+test "real-world debug bridge smoke" {
+  let dbg : Debug = unsafeCast(get_default())
+  dbg.enable("tsmbt:*")
+  if !dbg.enabled("tsmbt:probe") {
+    abort("expected namespace to be enabled")
+  }
+  let _ = dbg.disable()
+  let logger = dbg._call_("tsmbt:probe")
+  let _ = logger
+}
+EOF
+      ;;
+    chokidar)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+test "real-world chokidar bridge smoke" {
+  let watcher = new_fswatcher(None)
+  let _ = watcher.close()
+}
+EOF
+      ;;
+    pino)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn realworld_pino_options() -> Pino_LoggerOptions =
+  #| () => ({ level: "warn" })
+
+extern "js" fn realworld_pino_level(logger : Pino_Logger) -> String =
+  #| (logger) => logger.level
+
+test "real-world pino bridge smoke" {
+  let logger = default(realworld_pino_options(), None)
+  assert_eq(realworld_pino_level(logger), "warn")
+}
+EOF
+      ;;
+    lodash)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn realworld_lodash_list() -> ArrayLike =
+  #| () => [1, 2, 3, 4, 5]
+
+test "real-world lodash bridge smoke" {
+  assert_eq(camelCase(Some("hello world")), "helloWorld")
+  assert_eq(kebabCase(Some("helloWorld")), "hello-world")
+  let chunks = chunk(Some(realworld_lodash_list()), Some(2))
+  assert_eq(chunks.length(), 3)
+}
+EOF
+      ;;
+    uuid)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+test "real-world uuid bridge smoke" {
+  let nil_uuid = "00000000-0000-0000-0000-000000000000"
+  if !validate(unsafeCast(nil_uuid)) {
+    abort("expected NIL uuid to validate")
+  }
+  if validate(unsafeCast("not-a-uuid")) {
+    abort("expected invalid string to fail validation")
+  }
+  assert_eq(version(nil_uuid), 0)
+}
+EOF
+      ;;
+    minimatch)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+test "real-world minimatch bridge smoke" {
+  let is_foo = filter("*.foo", None)
+  if !is_foo("bar.foo") {
+    abort("expected *.foo to match bar.foo")
+  }
+  if is_foo("bar.baz") {
+    abort("expected *.foo not to match bar.baz")
   }
 }
 EOF
@@ -1847,6 +1968,97 @@ fn main {
   let merged = @sut.default(realworld_dm_obj_a(), realworld_dm_obj_b(), None)
   if !realworld_dm_has(merged, "a") || !realworld_dm_has(merged, "b") {
     abort("expected merged object with both keys")
+  }
+}
+EOF
+      ;;
+    axios)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+extern "js" fn realworld_axios_config() -> @sut.AxiosRequestConfig[@sut.JSValue] =
+  #| () => ({ url: "/users/1", baseURL: "https://example.test" })
+
+fn main {
+  let axios_core : @sut.Axios = @sut.unsafeCast(@sut.get_default())
+  if axios_core.get_uri(Some(realworld_axios_config())) != "https://example.test/users/1" {
+    abort("unexpected axios uri")
+  }
+}
+EOF
+      ;;
+    commander)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+extern "js" fn realworld_cmd_debug_flag(opts : @sut.OptionValues) -> Bool =
+  #| (opts) => opts.debug === true
+
+fn main {
+  let cmd = @sut.new_command(Some("app"))
+    .option("-d, --debug", Some("enable debug"), None)
+    .parse(Some(["node", "app", "--debug"]), None)
+  if !realworld_cmd_debug_flag(cmd.opts()) {
+    abort("expected --debug flag to parse")
+  }
+}
+EOF
+      ;;
+    debug)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+fn main {
+  let dbg : @sut.Debug = @sut.unsafeCast(@sut.get_default())
+  dbg.enable("tsmbt:*")
+  if !dbg.enabled("tsmbt:probe") {
+    abort("expected namespace to be enabled")
+  }
+}
+EOF
+      ;;
+    chokidar)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+fn main {
+  let watcher = @sut.new_fswatcher(None)
+  let _ = watcher.close()
+}
+EOF
+      ;;
+    pino)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+extern "js" fn realworld_pino_options() -> @sut.Pino_LoggerOptions =
+  #| () => ({ level: "warn" })
+
+extern "js" fn realworld_pino_level(logger : @sut.Pino_Logger) -> String =
+  #| (logger) => logger.level
+
+fn main {
+  let logger = @sut.default(realworld_pino_options(), None)
+  if realworld_pino_level(logger) != "warn" {
+    abort("unexpected pino level")
+  }
+}
+EOF
+      ;;
+    lodash)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+fn main {
+  if @sut.camelCase(Some("hello world")) != "helloWorld" {
+    abort("unexpected lodash camelCase")
+  }
+}
+EOF
+      ;;
+    uuid)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+fn main {
+  if !@sut.validate(@sut.unsafeCast("00000000-0000-0000-0000-000000000000")) {
+    abort("expected NIL uuid to validate")
+  }
+}
+EOF
+      ;;
+    minimatch)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+fn main {
+  let is_foo = @sut.filter("*.foo", None)
+  if !is_foo("bar.foo") {
+    abort("expected *.foo to match bar.foo")
   }
 }
 EOF
