@@ -3848,6 +3848,15 @@ fn ffi_is_react_router_module_spec(module_spec : String) -> Bool {
 }
 
 ///|
+/// Exact-package match only (mirrors the hono guard): fixture entries like
+/// `.../react-entry.d.ts` must not receive the hook layer.
+fn ffi_is_react_module_spec(module_spec : String) -> Bool {
+  module_spec == "react" ||
+  module_spec.has_suffix("/react") ||
+  module_spec.contains("/react/")
+}
+
+///|
 fn ffi_is_zod_module_spec(module_spec : String) -> Bool {
   module_spec == "zod" || module_spec.contains("/zod")
 }
@@ -4739,14 +4748,14 @@ fn ffi_runtime_export_name_for_module(
   public_name : String,
   source_name : String,
 ) -> String {
-  if source_name.contains(".") {
-    return source_name
-  }
   match runtime_module_resolved_path {
     Some(resolved_path) if source_path == resolved_path => return source_name
     _ => ()
   }
   if source_path == module_spec {
+    return source_name
+  }
+  if source_name.contains(".") {
     return source_name
   }
   if ffi_module_spec_uses_public_exports(module_spec) {
@@ -4947,6 +4956,7 @@ fn bridge_namespace_import_roots_for_export_equals(
 fn render_bridge_import_line(
   module_spec : String,
   bridge_imports : Array[MoonBitBridgeImport],
+  sibling_aliases : Map[String, Array[String]],
 ) -> String? {
   if bridge_imports.is_empty() {
     return None
@@ -4982,9 +4992,24 @@ fn render_bridge_import_line(
       }
       for binding in named_bindings {
         let (imported_name, local_name) = binding
-        lines.push(
-          "const \{local_name} = \{ffi_js_access(namespace_local, imported_name)};",
-        )
+        // cjs-module-lexer only detects statically-analyzable exports, so a
+        // CJS alias re-export (ws's `Server` for `WebSocketServer`) can be
+        // missing from the ESM namespace even though it exists at require
+        // time. Fall back through the sibling aliases of the same source
+        // entity so the binding degrades to the detectable name.
+        let mut access_expr = ffi_js_access(namespace_local, imported_name)
+        match sibling_aliases.get(imported_name) {
+          Some(alternates) =>
+            for alternate in alternates {
+              if ffi_is_js_ident(alternate) {
+                access_expr = access_expr +
+                  " ?? " +
+                  ffi_js_access(namespace_local, alternate)
+              }
+            }
+          None => ()
+        }
+        lines.push("const \{local_name} = \{access_expr};")
       }
     } else {
       let import_specs : Array[String] = []
@@ -5231,11 +5256,57 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       base_func_export_names.push(exported.export_name)
     }
   }
+  // The runtime module is imported by its PUBLIC surface. A runtime name
+  // whose root is a SUB-module's export (uuid re-exports sub defaults:
+  // `export { default as v3 } from "./v3.js"`, members arrive as
+  // `default.DNS`) must be re-rooted at the top-level alias -- otherwise
+  // the glue emits `import default_ from "uuid"`, which crashes at load
+  // time because the public package has no default export.
+  let public_alias_by_source : Map[String, String] = {}
+  if ffi_module_spec_uses_public_exports(module_spec) {
+    for export_ in export_surface {
+      if export_.export_name.contains(".") || export_.kind is Ambiguous {
+        continue
+      }
+      let key = export_.source_path + "\u{0}" + export_.source_export_name
+      if !public_alias_by_source.contains(key) {
+        public_alias_by_source[key] = export_.export_name
+      }
+    }
+  }
+  fn reroot_runtime_export_name(
+    source_path : String,
+    runtime_name : String,
+  ) -> String {
+    // When the runtime import already targets the SOURCE module (the
+    // entry re-exports from the runtime package itself, or the source IS
+    // the entry), the source-side name is the correct access path --
+    // rewriting `CounterState` to its public alias would read a name the
+    // imported module does not export.
+    match runtime_module_resolved_path {
+      Some(resolved_path) if source_path == resolved_path => return runtime_name
+      _ => ()
+    }
+    if source_path == module_spec {
+      return runtime_name
+    }
+    let (root, rest) = match runtime_name.find(".") {
+      Some(idx) =>
+        (
+          runtime_name.substring(start=0, end=idx).to_string(),
+          runtime_name.substring(start=idx).to_string(),
+        )
+      None => (runtime_name, "")
+    }
+    match public_alias_by_source.get(source_path + "\u{0}" + root) {
+      Some(alias) if alias != root => alias + rest
+      _ => runtime_name
+    }
+  }
+
   let import_runtime_export_names : Map[String, String] = {}
   for exported in emitted_exported_imports {
-    import_runtime_export_names[exported.export_name] = if base_import_export_names.contains(
-        exported.export_name,
-      ) {
+    let raw = if base_import_export_names.contains(exported.export_name) {
       ffi_runtime_export_name_for_module(
         module_spec,
         runtime_module_resolved_path,
@@ -5246,12 +5317,14 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     } else {
       exported.source_export_name
     }
+    import_runtime_export_names[exported.export_name] = reroot_runtime_export_name(
+      exported.source_path,
+      raw,
+    )
   }
   let func_runtime_export_names : Map[String, String] = {}
   for exported in emitted_exported_funcs {
-    func_runtime_export_names[exported.export_name] = if base_func_export_names.contains(
-        exported.export_name,
-      ) {
+    let raw = if base_func_export_names.contains(exported.export_name) {
       ffi_runtime_export_name_for_module(
         module_spec,
         runtime_module_resolved_path,
@@ -5262,25 +5335,35 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     } else {
       exported.source_export_name
     }
+    func_runtime_export_names[exported.export_name] = reroot_runtime_export_name(
+      exported.source_path,
+      raw,
+    )
   }
   let value_runtime_export_names : Map[String, String] = {}
   for exported in exported_values {
-    value_runtime_export_names[exported.export_name] = ffi_runtime_export_name_for_module(
-      module_spec,
-      runtime_module_resolved_path,
+    value_runtime_export_names[exported.export_name] = reroot_runtime_export_name(
       exported.source_path,
-      exported.export_name,
-      exported.source_export_name,
+      ffi_runtime_export_name_for_module(
+        module_spec,
+        runtime_module_resolved_path,
+        exported.source_path,
+        exported.export_name,
+        exported.source_export_name,
+      ),
     )
   }
   let class_runtime_export_names : Map[String, String] = {}
   for exported in exported_classes {
-    class_runtime_export_names[exported.export_name] = ffi_runtime_export_name_for_module(
-      module_spec,
-      runtime_module_resolved_path,
+    class_runtime_export_names[exported.export_name] = reroot_runtime_export_name(
       exported.source_path,
-      exported.export_name,
-      exported.source_export_name,
+      ffi_runtime_export_name_for_module(
+        module_spec,
+        runtime_module_resolved_path,
+        exported.source_path,
+        exported.export_name,
+        exported.source_export_name,
+      ),
     )
   }
   let namespace_import_roots = bridge_namespace_import_roots_for_export_equals(
@@ -6292,6 +6375,55 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       "extern \"js\" fn _hono_use_middleware_extern_js(app : JSValue, path : JSValue, mw : JSValue) -> Unit =\n  #| (app, path, mw) => { const u = (path == null ? undefined : (typeof path === \"object\" && \"$tag\" in path ? (path.$tag === 1 ? path._0 : undefined) : path)); if (u === undefined) { app.use(mw) } else { app.use(u, mw) } }\n\npub fn[E, S, BasePath] Hono::use_middleware(self : Hono[E, S, BasePath], path : String?, mw : (Context[JSValue, JSValue, JSValue], () -> Promise[Unit]) -> Promise[Unit]) -> Unit {\n  _hono_use_middleware_extern_js(unsafeCast(self), unsafeCast(path), unsafeCast(mw))\n}",
     )
   }
+  if ffi_is_react_module_spec(module_spec) {
+    // JSX/component layer: a MoonBit closure IS a React function
+    // component at runtime. `element_of_component` mounts one via
+    // React.createElement, and `use_state_typed` exposes useState as a
+    // generically-typed (value, setter) pair. Both route through the
+    // module's own runtime bindings so alias re-rooting keeps working.
+    let create_element_access = ensure_bridge_runtime_access(
+      seen_bridge_import_keys,
+      bridge_imports,
+      namespace_import_roots,
+      runtime_export_name_for(func_runtime_export_names, "createElement"),
+    )
+    let use_state_access = ensure_bridge_runtime_access(
+      seen_bridge_import_keys,
+      bridge_imports,
+      namespace_import_roots,
+      runtime_export_name_for(func_runtime_export_names, "useState"),
+    )
+    push_unique_bridge_binding(
+      seen_bridge_binding_names,
+      bridge_lines,
+      "__ts_mbt_element_of_component",
+      "export function __ts_mbt_element_of_component(component, props, children) { return \{create_element_access}(component, props ?? null, ...children); }",
+    )
+    push_unique_ffi_section(
+      seen_ffi_binding_names,
+      ffi_sections,
+      ffi_fn_decl_key("element_of_component"),
+      "extern \"js\" fn _element_of_component_extern_js(component : (JSValue) -> JSValue, props : JSValue, children : Array[JSValue]) -> JSValue = \"__ts_mbt_element_of_component\"\n\npub fn[Props] element_of_component(component : (Props) -> JSValue, props : Props?, children : Array[JSValue]) -> JSValue {\n  _element_of_component_extern_js(unsafeCast(component), unsafeCast(props), children)\n}",
+    )
+    push_unique_bridge_binding(
+      seen_bridge_binding_names,
+      bridge_lines,
+      "__ts_mbt_use_state_pair",
+      "export function __ts_mbt_use_state_pair(initial) { return \{use_state_access}(initial); }",
+    )
+    push_unique_bridge_binding(
+      seen_bridge_binding_names, bridge_lines, "__ts_mbt_state_pair_value", "export function __ts_mbt_state_pair_value(pair) { return pair[0]; }",
+    )
+    push_unique_bridge_binding(
+      seen_bridge_binding_names, bridge_lines, "__ts_mbt_state_pair_set", "export function __ts_mbt_state_pair_set(pair, value) { pair[1](value); }",
+    )
+    push_unique_ffi_section(
+      seen_ffi_binding_names,
+      ffi_sections,
+      ffi_fn_decl_key("use_state_typed"),
+      "extern \"js\" fn _use_state_pair_extern_js(initial : JSValue) -> JSValue = \"__ts_mbt_use_state_pair\"\n\nextern \"js\" fn _state_pair_value_extern_js(pair : JSValue) -> JSValue = \"__ts_mbt_state_pair_value\"\n\nextern \"js\" fn _state_pair_set_extern_js(pair : JSValue, value : JSValue) -> Unit = \"__ts_mbt_state_pair_set\"\n\npub fn[S] use_state_typed(initial : S) -> (S, (S) -> Unit) {\n  let pair = _use_state_pair_extern_js(unsafeCast(initial))\n  (\n    unsafeCast(_state_pair_value_extern_js(pair)),\n    fn(value : S) { _state_pair_set_extern_js(pair, unsafeCast(value)) },\n  )\n}",
+    )
+  }
   if ffi_is_react_router_module_spec(module_spec) {
     push_unique_ffi_section(
       seen_ffi_binding_names,
@@ -6684,7 +6816,72 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   let rendered_bridge_lines : Array[String] = [
     "// AUTO-GENERATED by `ts2mbt` (mizchi/ts). DO NOT EDIT -- your changes", "// will be lost on the next `ts2mbt generate` / `ts2mbt vendor`.",
   ]
-  match render_bridge_import_line(module_spec, bridge_imports) {
+  let sibling_aliases : Map[String, Array[String]] = {}
+  let names_by_source : Map[String, Array[String]] = {}
+  for export_ in export_surface {
+    if export_.export_name.contains(".") || export_.kind is Ambiguous {
+      continue
+    }
+    let key = export_.source_path + "\u{0}" + export_.source_export_name
+    match names_by_source.get(key) {
+      Some(names) =>
+        if !names.contains(export_.export_name) {
+          names.push(export_.export_name)
+        }
+      None => names_by_source[key] = [export_.export_name]
+    }
+  }
+  // A value declared as `typeof X` is a runtime alias of X even though it
+  // is a separate declaration (@types/ws: `class Server` with
+  // `const WebSocketServer: typeof Server`, where the interface half of
+  // WebSocketServer wins the decl resolution and the value never reaches
+  // `exported_values`). Scan the source modules' raw value decls instead.
+  let alias_scanned_paths : Map[String, Unit] = {}
+  for export_ in export_surface {
+    if export_.export_name.contains(".") || export_.kind is Ambiguous {
+      continue
+    }
+    if alias_scanned_paths.contains(export_.source_path) {
+      continue
+    }
+    alias_scanned_paths[export_.source_path] = ()
+    guard modules.get(export_.source_path) is Some(info) else { continue }
+    for value in info.module_.values {
+      match value.type_ {
+        TypeOf(query) =>
+          if !query.contains(".") &&
+            !query.contains("import(") &&
+            query != value.name {
+            let key = export_.source_path + "\u{0}" + query
+            match names_by_source.get(key) {
+              Some(names) =>
+                if !names.contains(value.name) {
+                  names.push(value.name)
+                }
+              None => names_by_source[key] = [query, value.name]
+            }
+          }
+        _ => ()
+      }
+    }
+  }
+  for entry in names_by_source {
+    let names = entry.1
+    if names.length() < 2 {
+      continue
+    }
+    for name in names {
+      let alternates : Array[String] = []
+      for other in names {
+        if other != name {
+          alternates.push(other)
+        }
+      }
+      sibling_aliases[name] = alternates
+    }
+  }
+  match
+    render_bridge_import_line(module_spec, bridge_imports, sibling_aliases) {
     Some(import_line) => {
       rendered_bridge_lines.push(import_line)
       rendered_bridge_lines.push("")

@@ -620,6 +620,7 @@ async fn main {
           deprecations: {},
           pure_declarations: {},
           type_aliases: [],
+          has_export_equals: false,
         })
         let module_ = (try
           @parser.parse_module_from_source_with_const_values(entry_source, {})
@@ -742,6 +743,7 @@ async fn main {
             deprecations: {},
             pure_declarations: {},
             type_aliases: [],
+            has_export_equals: false,
           })
           let entry_module = (try
             @parser.parse_module_from_source_with_const_values(entry_source, {})

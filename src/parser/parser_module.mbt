@@ -2377,6 +2377,7 @@ fn Parser::parse_export_decl_for_module(
     raise ParseError("Unsupported export statement")
   }
   if self.match_(Eq) {
+    self.collected_export_equals = true
     let expr = self.parse_expr()
     // TS2304: `export = name` references the value namespace; record the
     // bare-identifier shape so the checker can flag a provably undeclared
@@ -2461,7 +2462,21 @@ fn Parser::parse_export_decl_for_module(
       return (stmts, exports, reexports)
     }
     if self.check(Function) {
-      let func = self.parse_function_expr()
+      // A NAMED default may be a bodiless declaration signature
+      // (`export default function mitt<T>(...): T;` in a .d.ts) which the
+      // expression parser rejects at the missing `{`. Route named defaults
+      // through the declaration parser, which tolerates missing bodies --
+      // mirroring `parse_export_decl`'s handling of the same form.
+      let is_named = match self.peek_at(1).kind {
+        Ident(_) => true
+        Star => self.peek_at(2).kind is Ident(_)
+        _ => false
+      }
+      let func = if is_named {
+        self.parse_function()
+      } else {
+        self.parse_function_expr()
+      }
       if func.name != "<anon>" {
         stmts.push(Let(@ast.TsBinding::Ident(func.name), Any, FuncExpr(func)))
         exports.push({ local_name: func.name, export_name: "default" })
@@ -4022,6 +4037,7 @@ fn Parser::parse_module_block_with_const_values(
       deprecations: self.collected_deprecations,
       pure_declarations: self.collected_pure_declarations,
       type_aliases: self.collected_type_aliases,
+      has_export_equals: self.collected_export_equals,
     },
     const_values,
   )

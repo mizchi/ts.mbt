@@ -683,7 +683,96 @@ async fn build_decl_module_map(
     )
     modules[record.path] = load_decl_module_info(record, seeded_const_values)
   }
+  // Fold `/// <reference path>` files into their referrer: the referenced
+  // files carry AMBIENT declarations (e.g. @types/lodash's common/*.d.ts
+  // augmenting `interface LoDashStatic` through `declare module "lodash"`
+  // bodies the parser already flattens). Same-name interfaces merge their
+  // fields (TS declaration merging); other decl kinds append.
+  for record in graph.modules {
+    if record.references.length() == 0 {
+      continue
+    }
+    guard modules.get(record.path) is Some(target) else { continue }
+    for ref_path in record.references {
+      guard modules.get(ref_path) is Some(extra) else { continue }
+      merge_referenced_decl_module(target.module_, extra.module_)
+    }
+  }
   modules
+}
+
+///|
+fn merge_referenced_decl_module(
+  target : @ast.TsModule,
+  extra : @ast.TsModule,
+) -> Unit {
+  for iface in extra.interfaces {
+    let mut merged = false
+    for existing in target.interfaces {
+      if existing.name == iface.name &&
+        existing.type_params.length() == iface.type_params.length() {
+        for field in iface.fields {
+          existing.fields.push(field)
+        }
+        for entry in iface.method_type_params {
+          existing.method_type_params.push(entry)
+        }
+        for name in iface.extends_names {
+          if !existing.extends_names.contains(name) {
+            existing.extends_names.push(name)
+            existing.extends_args.push([])
+          }
+        }
+        merged = true
+        break
+      }
+    }
+    if !merged {
+      target.interfaces.push(iface)
+    }
+  }
+  for ta in extra.type_aliases {
+    let mut exists = false
+    for existing in target.type_aliases {
+      if existing.name == ta.name {
+        exists = true
+        break
+      }
+    }
+    if !exists {
+      target.type_aliases.push(ta)
+    }
+  }
+  for func in extra.funcs {
+    target.funcs.push(func)
+  }
+  for value in extra.values {
+    let mut exists = false
+    for existing in target.values {
+      if existing.name == value.name {
+        exists = true
+        break
+      }
+    }
+    if !exists {
+      target.values.push(value)
+    }
+  }
+  for class_ in extra.classes {
+    let mut exists = false
+    for existing in target.classes {
+      if existing.name == class_.name {
+        exists = true
+        break
+      }
+    }
+    if !exists {
+      target.classes.push(class_)
+    }
+  }
+  for enum_ in extra.enums {
+    target.enums.push(enum_)
+  }
 }
 
 ///|
@@ -2195,16 +2284,61 @@ fn resolve_decl_from_local_name(
                                         match import_decl.namespace_binding {
                                           Some(imported_local_name) =>
                                             if imported_local_name == local_name {
-                                              resolved = Value({
-                                                source_path,
-                                                local_name_prefix: "",
-                                                export_name,
-                                                source_export_name,
-                                                value: {
-                                                  name: local_name,
-                                                  type_: @ast.TsType::Any,
-                                                },
-                                              })
+                                              // `import X = require("./sub")`
+                                              // binds the sub-module's
+                                              // `module.exports`. When that
+                                              // module uses `export =` (the
+                                              // parser records `<export-eq>`),
+                                              // X IS the assigned entity --
+                                              // resolve through the module's
+                                              // `default` export so callable
+                                              // surfaces stay callable
+                                              // (semver / picomatch @types
+                                              // re-export style). Plain
+                                              // namespace objects keep the
+                                              // Any-typed value fallback.
+                                              let target_is_export_equals = match
+                                                modules.get(edge.resolved_path) {
+                                                Some(target_info) => {
+                                                  let mut found = false
+                                                  for
+                                                    misuse in target_info.module_.grammar_misuses {
+                                                    if misuse.has_prefix(
+                                                        "<export-eq>",
+                                                      ) {
+                                                      found = true
+                                                      break
+                                                    }
+                                                  }
+                                                  found
+                                                }
+                                                None => false
+                                              }
+                                              if target_is_export_equals {
+                                                resolved = resolve_decl_from_export_name(
+                                                  export_name,
+                                                  edge.resolved_path,
+                                                  "default",
+                                                  graph,
+                                                  modules,
+                                                  surface_cache,
+                                                  visiting,
+                                                )
+                                              }
+                                              match resolved {
+                                                Missing =>
+                                                  resolved = Value({
+                                                    source_path,
+                                                    local_name_prefix: "",
+                                                    export_name,
+                                                    source_export_name,
+                                                    value: {
+                                                      name: local_name,
+                                                      type_: @ast.TsType::Any,
+                                                    },
+                                                  })
+                                                _ => ()
+                                              }
                                             }
                                           None => ()
                                         }
@@ -2228,6 +2362,178 @@ fn resolve_decl_from_local_name(
   }
   let _ = visiting.pop()
   result
+}
+
+///|
+/// A VALUE export whose declared type carries a call signature
+/// (`export declare const minimatch: { (p, pattern): boolean; ... }`, or
+/// chalk's `const chalk: ChalkInstance`) is callable at runtime under its
+/// own export name. Surface the richest call signature (most parameters)
+/// as a module function so `minimatch(p, pattern)` works from MoonBit.
+fn append_exported_value_call_signature(
+  info : DeclModuleInfo,
+  export_ : ResolvedExport,
+  value : @ast.TsValueDecl,
+  funcs : Array[ExportedFuncDecl],
+) -> Unit {
+  if export_.export_name.contains(".") {
+    return
+  }
+  for func in funcs {
+    if func.export_name == export_.export_name {
+      return
+    }
+  }
+  let fields = match value.type_ {
+    Object(fields) => fields
+    Named(n) => {
+      let iface_name = match n.rev_find(".") {
+        Some(idx) => n.substring(start=idx + 1).to_string()
+        None => n
+      }
+      match find_interface_decl(info.module_, iface_name) {
+        Some(iface) if iface.type_params.length() == 0 => {
+          let object_fields : Array[(@ast.TsType, @ast.TsType)] = []
+          for field in iface.fields {
+            object_fields.push((Literal(field.0), field.1))
+          }
+          object_fields
+        }
+        _ => return
+      }
+    }
+    _ => return
+  }
+  let mut best : @ast.TsType? = None
+  let mut best_params = -1
+  for field in fields {
+    let field_name = match field.0 {
+      Literal(name) => name
+      _ => continue
+    }
+    if field_name != "<call>" {
+      continue
+    }
+    let callable = match field.1 {
+      GenericFunc(_, inner) => inner
+      other => other
+    }
+    match callable {
+      Func(params, _) =>
+        if params.length() > best_params {
+          best = Some(callable)
+          best_params = params.length()
+        }
+      _ => ()
+    }
+  }
+  guard best is Some(Func(param_types, return_type)) else { return }
+  let params : Array[@ast.TsParam] = []
+  for i, param_type in param_types {
+    params.push({
+      name: "arg\{i}",
+      binding: None,
+      is_rest: false,
+      type_: param_type,
+      default: None,
+    })
+  }
+  funcs.push({
+    source_path: export_.source_path,
+    local_name_prefix: "",
+    export_name: export_.export_name,
+    source_export_name: export_.source_export_name,
+    func: {
+      name: export_.export_name,
+      type_params: [],
+      const_type_params: [],
+      type_param_bounds: [],
+      params,
+      return_type,
+      body: { stmts: [], stmt_positions: [] },
+      is_generator: false,
+      is_async: false,
+    },
+  })
+}
+
+///|
+/// See the call site in `collect_exported_decls`: for a default export
+/// whose local is a value declared with a Named interface type, append the
+/// interface's function-typed fields as exported module functions rooted
+/// at `default.<member>`.
+fn append_exported_value_interface_methods(
+  info : DeclModuleInfo,
+  export_ : ResolvedExport,
+  local_name : String,
+  funcs : Array[ExportedFuncDecl],
+) -> Unit {
+  guard find_value_decl(info.module_, local_name) is Some(value) else { return }
+  let iface_name = match value.type_ {
+    Named(n) =>
+      // Qualified references (`_.LoDashStatic`) resolve by their last
+      // segment; the parser flattens the namespace's declarations.
+      match n.rev_find(".") {
+        Some(idx) => n.substring(start=idx + 1).to_string()
+        None => n
+      }
+    _ => return
+  }
+  guard find_interface_decl(info.module_, iface_name) is Some(iface) else {
+    return
+  }
+  if iface.type_params.length() > 0 {
+    return
+  }
+  let seen : Map[String, Unit] = {}
+  for func in funcs {
+    seen[func.export_name] = ()
+  }
+  for field in iface.fields {
+    let (fname, ftype) = field
+    if fname.has_prefix("@@") ||
+      fname == "<computed>" ||
+      fname == "" ||
+      fname.has_prefix("<") {
+      continue
+    }
+    if seen.contains(fname) {
+      continue
+    }
+    let (type_params, callable) = match ftype {
+      GenericFunc(names, inner) => (names, inner)
+      other => ([], other)
+    }
+    guard callable is Func(param_types, return_type) else { continue }
+    let params : Array[@ast.TsParam] = []
+    for i, param_type in param_types {
+      params.push({
+        name: "arg\{i}",
+        binding: None,
+        is_rest: false,
+        type_: param_type,
+        default: None,
+      })
+    }
+    seen[fname] = ()
+    funcs.push({
+      source_path: export_.source_path,
+      local_name_prefix: "",
+      export_name: fname,
+      source_export_name: "default." + fname,
+      func: {
+        name: fname,
+        type_params,
+        const_type_params: [],
+        type_param_bounds: [],
+        params,
+        return_type,
+        body: { stmts: [], stmt_positions: [] },
+        is_generator: false,
+        is_async: false,
+      },
+    })
+  }
 }
 
 ///|
@@ -2339,7 +2645,7 @@ fn collect_exported_decls(
     }
     if export_.export_name == "default" {
       match modules.get(export_.source_path) {
-        Some(info) =>
+        Some(info) => {
           match find_namespace_decl(info.module_, local_name) {
             Some(namespace_) =>
               append_exported_namespace_members(
@@ -2355,6 +2661,16 @@ fn collect_exported_decls(
               )
             None => ()
           }
+          // `export =` of a VALUE whose declared type is an interface full
+          // of callable members (@types/lodash: `declare const _:
+          // _.LoDashStatic; export = _;`) -- surface each function-typed
+          // member as a module function reachable at runtime through the
+          // default export (`default_.chunk`). First declaration of each
+          // member name wins; overload refinement stays out of scope.
+          append_exported_value_interface_methods(
+            info, export_, local_name, funcs,
+          )
+        }
         None => ()
       }
     }
@@ -2376,7 +2692,19 @@ fn collect_exported_decls(
       TypeAlias(exported) => type_aliases.push(exported)
       Import(exported) => imports.push(exported)
       Function(exported) => funcs.push(exported)
-      Value(exported) => values.push(exported)
+      Value(exported) => {
+        values.push(exported)
+        match modules.get(exported.source_path) {
+          Some(value_info) =>
+            append_exported_value_call_signature(
+              value_info,
+              export_,
+              exported.value,
+              funcs,
+            )
+          None => ()
+        }
+      }
       Class(exported) =>
         if export_.type_only {
           let properties : Array[@ast.TsClassPropertyDecl] = []
@@ -3707,7 +4035,34 @@ fn typeof_class_constructor_params_type(
 }
 
 ///|
+/// Re-entrancy guard for `typeof_value_query_type`: `typeof X` where X's
+/// own (object) type mentions `typeof X` again -- directly or through a
+/// sibling const -- must abstain instead of expanding forever (minimatch's
+/// `const minimatch: { defaults: (d) => typeof minimatch }`). Keyed by
+/// module path + query; generation is single-threaded.
+let typeof_value_query_visiting : Map[String, Unit] = {}
+
+///|
 fn typeof_value_query_type(
+  info : DeclModuleInfo,
+  query : String,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> @ast.TsType? {
+  let visit_key = info.record.path + "\u{0}" + query
+  if typeof_value_query_visiting.contains(visit_key) {
+    return None
+  }
+  typeof_value_query_visiting[visit_key] = ()
+  let result = typeof_value_query_type_inner(
+    info, query, modules, canonical_types,
+  )
+  typeof_value_query_visiting.remove(visit_key)
+  result
+}
+
+///|
+fn typeof_value_query_type_inner(
   info : DeclModuleInfo,
   query : String,
   modules : Map[String, DeclModuleInfo],
@@ -9359,6 +9714,13 @@ fn decl_overload_type_suffix(type_ : @ast.TsType) -> String? {
     Boolean | BooleanLiteral(_) => Some("bool")
     BigInt | BigIntLiteral(_) => Some("bigint")
     Symbol => Some("symbol")
+    // A literal `undefined` parameter slot appears in overload sets that
+    // discriminate by "this argument must be absent" (uuid's
+    // `v4(options?, buf?: undefined, offset?): string` -- the optional
+    // marker wraps it into `Undefined | Undefined`).
+    Undefined => Some("undefined")
+    Union(members) if members.length() > 0 &&
+      members.iter().all(fn(m) { m is Undefined }) => Some("undefined")
     Named(name) if name != "any" && name != "Function" =>
       Some(decl_to_snake_case(name))
     Array(inner) =>
@@ -9689,6 +10051,13 @@ fn exported_import_overload_wrappers(
     if overloads.length() < 2 {
       continue
     }
+    // The signature to skip is the one the BASE export actually carries
+    // (`find_import_decl` picks the least-widened overload overall, which
+    // is not necessarily `preferred[0]` once different-return overloads
+    // survive dedup -- uuid's `v4(): string` vs `v4(...): TBuf`).
+    let base_clone = clone_exported_import(
+      exported, info, modules, canonical_types,
+    )
     let preferred : Array[@ast.TsImport] = []
     for import_ in overloads {
       push_preferred_import_decl(
@@ -9723,10 +10092,22 @@ fn exported_import_overload_wrappers(
         modules,
         canonical_types,
       )
-      if decl_import_same_signature(clone, preferred[0]) {
+      if decl_import_same_signature(clone, base_clone) {
         continue
       }
-      if decl_import_wider_than_any_same_param_preferred(clone, preferred) {
+      // "Wider" only disqualifies against a preferred pick with the SAME
+      // return type -- a different return means a genuinely different API
+      // (uuid's string-returning `v4()` next to the TBuf overload).
+      let mut clone_is_wider = false
+      for item in preferred {
+        if decl_normalize_overload_signature_type(item.return_type) ==
+          decl_normalize_overload_signature_type(clone.return_type) &&
+          decl_import_wider_same_param_overload(clone, item) {
+          clone_is_wider = true
+          break
+        }
+      }
+      if clone_is_wider {
         continue
       }
       if decl_import_should_skip_broad_node_wrapper(clone) {
@@ -9776,6 +10157,10 @@ fn exported_func_overload_wrappers(
     if overloads.length() < 2 {
       continue
     }
+    // See the import variant above: skip the BASE export's own signature.
+    let base_clone = clone_exported_func(
+      exported, info, modules, canonical_types,
+    )
     let preferred : Array[@ast.TsFunc] = []
     for func in overloads {
       push_preferred_func_decl(
@@ -9810,10 +10195,20 @@ fn exported_func_overload_wrappers(
         modules,
         canonical_types,
       )
-      if decl_func_same_signature(clone, preferred[0]) {
+      if decl_func_same_signature(clone, base_clone) {
         continue
       }
-      if decl_func_wider_than_any_same_param_preferred(clone, preferred) {
+      // See the import variant above: different returns stay.
+      let mut clone_is_wider = false
+      for item in preferred {
+        if decl_normalize_overload_signature_type(item.return_type) ==
+          decl_normalize_overload_signature_type(clone.return_type) &&
+          decl_func_wider_same_param_overload(clone, item) {
+          clone_is_wider = true
+          break
+        }
+      }
+      if clone_is_wider {
         continue
       }
       if decl_func_should_skip_broad_node_wrapper(clone) {

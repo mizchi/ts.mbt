@@ -1427,6 +1427,133 @@ both the name and the type diverged. Fixed from both sides:
 
 ## TS Checker Conformance (current state, 2026-07-17 — TypeScript 7)
 
+react joined the real-world gate as the 21st package (2026-07-18):
+`package|react|react|` resolves types through @types/react, the bridge
+emits a 3,898-line surface (83 types / 58 functions / 117 structs), and
+the smoke tests exercise createElement / isValidElement / createRef /
+version end-to-end on react@19.2.4 (both the in-package test and the
+build-smoke main). Budgets calibrated from measured metrics (JSValue
+functions 30, cause split 129|43|8|24|34|14|6, unsupported exports 0);
+policy budgeted-fallback alongside preact until a dedicated
+JSX/component binding layer exists.
+
+JSX/component layer v1 (2026-07-19): a MoonBit closure IS a React
+function component at runtime, and the generated react bridge now ships
+the glue to use it typed. When the module spec is exactly `react`, the
+ffi emits `element_of_component[Props]((Props) -> JSValue, Props?,
+Array[JSValue]) -> JSValue` (React.createElement over a MoonBit
+closure) and `use_state_typed[S](S) -> (S, (S) -> Unit)` (useState as a
+generically-typed value/setter pair; the setter re-enters React through
+the captured dispatch). Proven end-to-end in the gate: a counter
+component defined entirely in MoonBit -- `use_state_typed(41)` +
+`createElement("div", ...)` -- mounts via `element_of_component` and
+`react-dom/server`'s renderToString returns `<div>41</div>`. The
+injected layer adds zero JSValue-metric regressions (react budgets
+unchanged); react's fallback policy note now records the layer.
+Remaining for v2: typed intrinsic-element props (attribute structs),
+useEffect/useReducer typed wrappers, preact parity, and a react-dom
+corpus entry. Oracle unchanged (TP 2338 / FP 0 / TN 1750).
+
+Flagship-callable round (2026-07-19): three surface gaps closed and ws
+joins the gate (42 packages + 10 node builtins = 52 entries). (a) ws
+interop: cjs-module-lexer misses CJS alias re-exports, so the glue's
+named class bindings now fall back through sibling aliases of the same
+runtime entity -- statically-known siblings from the export surface
+plus `const Y: typeof X` value aliases (`const Server =
+__ts_mbt_module.Server ?? __ts_mbt_module.WebSocketServer`); a
+noServer WebSocketServer constructs and closes from MoonBit. (b) Call
+signatures on VALUE exports surface as callable module functions: the
+richest `<call>` signature of a const's inline object type or Named
+interface emits under the export's own name --
+`minimatch("bar.foo", "*.foo", None) -> Bool` and chalk's
+`default(...) -> String` now work directly. (c) Overload variants that
+differ only in RETURN type survive wrapper emission: the base-signature
+skip compares against the export's actual base (not `preferred[0]`),
+the "wider" disqualifier only applies against same-return picks, and
+`undefined`-typed parameter slots get a suffix -- uuid's `v4():
+string` emits as `v4_version4_options_optional_undefined_number_optional`
+and generates+validates a real v4 at smoke time. The broader
+push_preferred collapse stays param-count-keyed (loosening it regressed
+the React fixture's namespace-member naturalization). Budgets
+recalibrated for uuid / valibot / immer / superstruct / lodash.
+Oracle unchanged (TP 2338 / FP 0 / TN 1750); moon test 2523/2523.
+
+Top-download expansion (2026-07-19): eight of npm's most-downloaded
+packages verified end-to-end and added to the real-world gate (41
+packages + 10 node builtins = 51 entries): axios (getUri asserted
+against baseURL+url config), commander (option parse --debug ->
+opts.debug), debug (enable/enabled/disable + logger factory), chokidar
+(FSWatcher construct + close), pino (logger level from options),
+lodash (camelCase / kebabCase / chunk -- 435 declared functions from
+the fixed reference-following + value-interface surface), uuid
+(validate / version after the glue fix), minimatch (filter matcher
+after the segfault fix). ws deferred: cjs-module-lexer does not expose
+its `Server` alias as an ESM named export, so the generated static
+binding is undefined at runtime -- needs interop-tolerant class
+bindings (same family as the node:* tolerance) before it can join.
+rxjs / ajv / undici structurally healthy (method-surface heavy),
+queued as budgeted-fallback candidates.
+
+Default-export / export= naturalization (2026-07-18): the two
+structural gaps behind the probe's weak surfaces are fixed and the
+corpus grew to 33 packages. (a) Module resolver: a raw `.js` "main"
+no longer shadows tsc's implicit package-root `index.d.ts` lookup in
+Types mode (deepmerge ships index.d.ts with `"main": "dist/cjs.js"`
+and no `types` field -- the whole declaration surface was erased);
+resolution now retries declaration-ish results first, then root
+index.d.ts, then the raw script as last resort. (b) Export semantics:
+`TsModuleBlock.has_export_equals` records CJS `export =`, and
+`resolve_imported_binding_export` forwards a namespace import binding
+(`import X = require("./sub")` / `import * as X`) through the target's
+`default` export when the target uses `export =` -- X IS the assigned
+entity, so `export { X as valid }` re-export chains (@types/semver's 42
+per-function files, @types/picomatch) now surface callable typed
+functions instead of `get_*() -> JSValue` getters. Results: semver 97
+callable externs (valid/clean/major smoke-tested), picomatch callable
+`default(glob) -> Matcher` (match/non-match smoke), deepmerge callable
+`default` merge (both-keys smoke) -- all three added to the gate with
+calibrated budgets (33 packages + 10 builtins = 43 entries green).
+Oracle unchanged (TP 2338 / FP 0 / TN 1750), moon test 2523/2523.
+
+Corpus expansion round 2 (2026-07-18): nine more npm packages verified
+end-to-end and added to the real-world gate (30 packages + 10 node
+builtins now): ms, nanoid, dayjs, qs, yaml, superstruct, eventemitter3,
+mitt, marked -- each with a runtime bridge smoke that calls a real API
+and asserts the result (ms "1m", nanoid length, dayjs format, qs
+parse/stringify, yaml roundtrip, superstruct assert/validate,
+eventemitter3 on/listenerCount, mitt on/emit handler count, marked
+"# hello" -> <h1>). Two real-package bugs found by the probe and fixed:
+(a) parser -- `export default function mitt<T>(...): U;` (bodiless named
+default in a .d.ts) crashed the module-block path at the missing `{`;
+named defaults now route through the declaration parser like the
+checker path already did; (b) bridge -- the .mbti fn-decl line parser
+used `rev_find(")")` for the parameter-list close paren, which grabs the
+RETURN type's paren when a value getter has a curried function type
+(marked's `get_use_` emitted unparseable MoonBit); it now depth-scans to
+the paren matching the open. Probe leftovers documented: semver / 
+picomatch / deepmerge surface as JSValue-only or empty (default-export
+function naturalization gap), tracked as a future bridge target. Oracle
+unchanged (TP 2338 / FP 0 / TN 1750); corpus react pin moved to 19.2.7
+(react-router peer floor).
+
+Batch BX (2026-07-18): @types/react@19.2.17 audit — 13/13 files parse
+clean and the declaration bodies check clean; the only reports were
+TS2307 module-resolution complaints for imports that DO resolve on disk
+(`csstype` is a declared dependency of @types/react, `./` is the
+package-root self-import in jsx-runtime). tscheck now resolves module
+specifiers against the filesystem for files living under node_modules
+(relative specs probe the usual `.d.ts` / `index.d.ts` candidates; bare
+specs walk up to `node_modules/<pkg>` / `node_modules/@types/<pkg>`)
+and suppresses TS2307 when the import resolves. Conformance corpora
+live outside node_modules, so the oracle is unchanged (TP 2338 / FP 0 /
+TN 1750); truly-missing modules inside node_modules are still flagged
+(verified by negative control). All three real-world declaration
+surfaces are now fully clean: lib.d.ts 108/108, @types/node 88/88,
+@types/react 13/13. `ts2mbt decl` emits a 3,135-line MoonBit surface
+from @types/react (useState and the hook family included). The
+rwcorpus package.json now pins every gate package (plus @types/react
+and @types/express) so `npm install` no longer prunes them.
+
 Batch BW (2026-07-17): lib.d.ts / @types/node checker issues driven to
 ZERO — 108/108 lib files and 88/88 @types/node files check fully clean.
 Fixes: (a) the type-param-arity check learned MINIMUM arity — the parser

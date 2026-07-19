@@ -1043,6 +1043,27 @@ test "bridge: bridge public wrapper skips reserved public names" {
 }
 
 ///|
+test "bridge: bridge top-level fn parser handles curried function return types" {
+  // The value getter for `export declare const use: (...) => typeof marked`
+  // renders a CURRIED function return type. The parameter-list close paren
+  // is the one MATCHING the open -- not the last `)` on the line, which
+  // belongs to the return type (marked's `get_use_`).
+  let line = "declare pub fn get_use_() -> (Array[MarkedExtension]) -> (String, MarkedOptions) -> Promise[String]"
+  match parse_bridge_top_level_fn_decl_line(line) {
+    Some(decl) => {
+      @test.assert_eq(decl.public_name, "get_use_")
+      @test.assert_eq(decl.params_src, "")
+      @test.assert_eq(decl.arg_names.length(), 0)
+      @test.assert_eq(
+        decl.return_type,
+        "(Array[MarkedExtension]) -> (String, MarkedOptions) -> Promise[String]",
+      )
+    }
+    None => fail("expected the curried-return getter line to parse")
+  }
+}
+
+///|
 test "bridge: bridge top-level fn parser keeps function-typed parameters intact" {
   let line = "declare pub fn forEachLeadingCommentRange(text : String, pos : Double, cb : (Double, Double, CommentKind, Bool) -> U) -> U?"
   match parse_bridge_top_level_fn_decl_line(line) {

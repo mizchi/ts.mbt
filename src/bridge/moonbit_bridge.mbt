@@ -277,6 +277,30 @@ fn bridge_to_pascal_case(name : String) -> String {
 }
 
 ///|
+/// Index of the `)` matching the `(` at `open_index`, or `None` when
+/// unbalanced. A plain `rev_find(")")` is wrong for value getters whose
+/// return type is itself a (curried) function type -- the last `)` on the
+/// line belongs to the RETURN type, not the parameter list
+/// (`declare pub fn get_use_() -> (A) -> (B) -> C`).
+fn bridge_find_matching_paren(text : String, open_index : Int) -> Int? {
+  let mut depth = 0
+  for i, c in text.iter2() {
+    if i < open_index {
+      continue
+    }
+    if c == '(' {
+      depth += 1
+    } else if c == ')' {
+      depth -= 1
+      if depth == 0 {
+        return Some(i)
+      }
+    }
+  }
+  None
+}
+
+///|
 fn parse_bridge_top_level_fn_decl_line(line : String) -> BridgeTopLevelFnDecl? {
   let prefix = "declare pub fn "
   if !line.has_prefix(prefix) {
@@ -284,7 +308,10 @@ fn parse_bridge_top_level_fn_decl_line(line : String) -> BridgeTopLevelFnDecl? {
   }
   let rest = line[prefix.length():].to_owned()
   let open = rest.find("(")
-  let close = rest.rev_find(")")
+  let close = match open {
+    Some(open_index) => bridge_find_matching_paren(rest, open_index)
+    None => None
+  }
   match open {
     Some(open_index) =>
       match close {
@@ -331,7 +358,10 @@ fn parse_bridge_pub_extern_fn_decl_line(line : String) -> BridgeTopLevelFnDecl? 
   }
   let rest = line[prefix.length():].to_owned()
   let open = rest.find("(")
-  let close = rest.rev_find(")")
+  let close = match open {
+    Some(open_index) => bridge_find_matching_paren(rest, open_index)
+    None => None
+  }
   match open {
     Some(open_index) =>
       match close {
