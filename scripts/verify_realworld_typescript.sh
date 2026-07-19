@@ -441,13 +441,13 @@ jsvalue_cause_budget() {
     debug) printf '19|6|0|1|0|12|0\n' ;;
     chokidar) printf '3|0|0|1|0|0|2\n' ;;
     pino) printf '51|38|4|1|0|4|4\n' ;;
-    lodash) printf '1643|444|121|252|49|771|7\n' ;;
+    lodash) printf '1643|444|120|252|49|771|7\n' ;;
     uuid) printf '5|0|5|0|0|0|0\n' ;;
     minimatch) printf '10|0|0|2|0|3|5\n' ;;
     ws) printf '43|28|0|3|2|4|6\n' ;;
     vitest/runtime) printf '64|35|2|3|6|18|0\n' ;;
     playwright) printf '1336|196|0|85|885|170|0\n' ;;
-    react-router) printf '349|166|25|30|39|67|22\n' ;;
+    react-router) printf '347|164|25|30|39|67|22\n' ;;
     jose) printf '67|18|1|15|11|10|12\n' ;;
     express) printf '6|0|0|0|0|2|4\n' ;;
     glob) printf '17|6|0|1|0|2|8\n' ;;
@@ -1877,6 +1877,16 @@ fn main {
   if @sut.nanoid(Some(10)).length() != 10 {
     abort("unexpected nanoid length")
   }
+  // Returned-function option unwrap: the closure customAlphabet returns
+  // takes `Double?`; a MoonBit `None` must reach JS as `undefined` so the
+  // default size (8) fires — the unwrapped `null` used to yield "".
+  let hex_id = @sut.customAlphabet("0123456789abcdef", Some(8))
+  if hex_id(None).length() != 8 {
+    abort("customAlphabet returned-function lost its default size")
+  }
+  if hex_id(Some(12)).length() != 12 {
+    abort("customAlphabet returned-function ignored explicit size")
+  }
 }
 EOF
       ;;
@@ -2025,6 +2035,27 @@ fn main {
   if axios_core.get_uri(Some(realworld_axios_config())) != "https://example.test/users/1" {
     abort("unexpected axios uri")
   }
+  // Promise consumption layer: axios.all resolves locally (no network),
+  // and the callbacks run before node drains the event loop, so a wrong
+  // count aborts the smoke with a non-zero exit.
+  let vals : Array[@sut.JSValue] = [
+    @sut.JSValue::from_int(1),
+    @sut.JSValue::from_int(2),
+    @sut.JSValue::from_int(3),
+  ]
+  @sut.all(vals)
+  .map(fn(items : Array[@sut.JSValue]) -> Int { items.length() })
+  .then_catch(
+    fn(n : Int) { if n != 3 { abort("unexpected axios.all count") } },
+    fn(_err) { abort("axios.all rejected") },
+  )
+  // Typed JSValue constructors: object_from_pairs builds a heterogeneous
+  // config object without unsafeCast.
+  let probe = @sut.JSValue::object_from_pairs([
+    ("name", @sut.JSValue::from_string("tsmbt")),
+    ("count", @sut.JSValue::from_int(42)),
+  ])
+  ignore(probe)
 }
 EOF
       ;;

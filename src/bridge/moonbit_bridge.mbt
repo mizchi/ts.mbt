@@ -1272,6 +1272,19 @@ fn inject_bridge_public_type_aliases(
     !next_bridge_mbt.contains("#external\npub type JSValue") {
     next_bridge_mbt = "#external\npub type JSValue\n\n" + next_bridge_mbt
   }
+  if (
+      bridge_mbti.contains("declare pub type JSValue") ||
+      next_bridge_mbt.contains("#external\npub type JSValue")
+    ) &&
+    !next_bridge_mbt.contains("pub fn JSValue::from_string") {
+    // Typed entry points into the JSValue boundary: primitives are
+    // identity-representable on the js backend, and the pair builder
+    // covers heterogeneous object literals (`{ name: "x", age: 42 }`)
+    // that MoonBit map/struct literals can't express — both previously
+    // forced callers through bare `unsafeCast`.
+    let jsvalue_constructors = "pub fn JSValue::from_string(value : String) -> JSValue = \"%identity\"\n\npub fn JSValue::from_double(value : Double) -> JSValue = \"%identity\"\n\npub fn JSValue::from_int(value : Int) -> JSValue = \"%identity\"\n\npub fn JSValue::from_bool(value : Bool) -> JSValue = \"%identity\"\n\npub fn JSValue::from_array(value : Array[JSValue]) -> JSValue = \"%identity\"\n\nextern \"js\" fn __ts_mbt_js_object_from_pairs(keys : Array[String], values : Array[JSValue]) -> JSValue =\n  #| (keys, values) => { const out = {}; for (let i = 0; i < keys.length; i++) out[keys[i]] = values[i]; return out; }\n\npub fn JSValue::object_from_pairs(pairs : Array[(String, JSValue)]) -> JSValue {\n  let keys : Array[String] = []\n  let values : Array[JSValue] = []\n  for pair in pairs {\n    keys.push(pair.0)\n    values.push(pair.1)\n  }\n  __ts_mbt_js_object_from_pairs(keys, values)\n}"
+    next_bridge_mbt = jsvalue_constructors + "\n\n" + next_bridge_mbt
+  }
   let type_aliases : Array[String] = []
   let implemented_type_names = collect_bridge_implemented_type_names(
     next_bridge_mbt,
