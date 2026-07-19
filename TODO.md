@@ -1425,6 +1425,49 @@ both the name and the type diverged. Fixed from both sides:
 - [ ] Do not pursue `any` / `unknown` AST distinction unless a downstream
   consumer needs it; the JSValue count is unaffected.
 
+## Performance Tuning Round 1 (2026-07-19)
+
+Profiled with `moon bench --target native` + callgrind over the release
+`tscheck` binary (`--parse` / full, `--iters N`). Three landed batches,
+all behavior-preserving (full suite 2523 green, oracle byte-identical
+TP 2338 / FP 0 / TN 1750 / MISS 396, every gate green):
+
+1. Parser whole-source rescans (`20ff7e7`): `from_source_with_jsx`
+   lowered the FULL source 3x per parse (`@noImplicitThis` x2,
+   `@filename:`); all whole-source markers now come from one
+   `scan_source_directive_flags` pass over `@` positions. The ~10
+   conformance-header detectors each sliced+lowered their own 1KB head
+   -- multiplied by JSX speculation re-entering `from_source_with_jsx`
+   on sub-sources (2k+ nested parses on parserharness.ts); the head is
+   now computed once per parse and threaded through. `parse_jsdoc_block`
+   rewritten single-pass over StringViews (was 3+ owned strings per
+   comment line); the lexer passes the comment span without copying.
+2. Checker structural scans (`58527b4`): `iface_extends_reaches` was
+   O(ifaces^2 x chain) via per-step rescans of every interface decl
+   (~7.5% of a dom.generated.d.ts run) -- now a prebuilt name->extends
+   adjacency map + hash-set DFS. `is_lib_global_value`/`_type` (generated
+   1k/2.2k-arm string matches, probed once per reference; 9.6% of a
+   generic-heavy run) now memoize per name via gen_lib_globals.sh.
+3. Bench coverage: `moon bench` gains JSDoc-heavy (300 documented
+   decls) and old-style-cast-heavy (200 funcs, JSX speculation) parser
+   fixtures so both optimized paths regress visibly.
+
+Measured (release tscheck, per iteration):
+- es5.d.ts parse 11.7ms -> 6.1ms (~19 -> ~36 MB/s); full check 15 -> 9.7ms
+- dom.generated.d.ts parse 115 -> 60ms; full 170 -> ~100ms
+- parserharness.ts parse 44 -> 30ms; full 60 -> 49ms
+- generic-heavy check phase 26 -> 19ms
+- moon bench parser fixtures -17%..-38%
+
+Remaining known sinks (next round candidates): JSX speculative
+sub-parsing re-lexes substrings per `<` attempt (structural; a
+file-extension-driven `allow_jsx` would eliminate it for `.ts` but
+changes oracle-visible parse behavior for @filename .tsx embeds --
+needs oracle-gated validation); refcount+alloc runtime overhead is
+~25-30% of remaining profiles (only fixable by allocating less, e.g.
+token payload interning); `TokenKind::equal`/`Parser::peek/check` are
+~8% of body-heavy parses (derived Eq on payload enum).
+
 ## TS Checker Conformance (current state, 2026-07-17 — TypeScript 7)
 
 react joined the real-world gate as the 21st package (2026-07-18):
