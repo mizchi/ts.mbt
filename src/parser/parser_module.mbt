@@ -2377,6 +2377,7 @@ fn Parser::parse_export_decl_for_module(
     raise ParseError("Unsupported export statement")
   }
   if self.match_(Eq) {
+    self.collected_export_equals = true
     let expr = self.parse_expr()
     // TS2304: `export = name` references the value namespace; record the
     // bare-identifier shape so the checker can flag a provably undeclared
@@ -4036,6 +4037,7 @@ fn Parser::parse_module_block_with_const_values(
       deprecations: self.collected_deprecations,
       pure_declarations: self.collected_pure_declarations,
       type_aliases: self.collected_type_aliases,
+      has_export_equals: self.collected_export_equals,
     },
     const_values,
   )

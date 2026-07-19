@@ -344,6 +344,9 @@ jsvalue_function_budget() {
     eventemitter3) printf '0\n' ;;
     mitt) printf '1\n' ;;
     marked) printf '14\n' ;;
+    semver) printf '33\n' ;;
+    picomatch) printf '5\n' ;;
+    deepmerge) printf '4\n' ;;
     vitest/runtime) printf '6\n' ;;
     playwright) printf '411\n' ;;
     react-router) printf '84\n' ;;
@@ -379,6 +382,7 @@ unsupported_export_budget() {
     superstruct) printf '1\n' ;;
     mitt) printf '1\n' ;;
     marked) printf '3\n' ;;
+
     node:sqlite) printf '2\n' ;;
     node:fs) printf '2\n' ;;
     node:crypto) printf '2\n' ;;
@@ -419,6 +423,9 @@ jsvalue_cause_budget() {
     eventemitter3) printf '16|0|0|0|5|6|5\n' ;;
     mitt) printf '10|4|0|2|3|1|0\n' ;;
     marked) printf '57|10|0|0|20|13|14\n' ;;
+    semver) printf '33|0|30|2|0|0|1\n' ;;
+    picomatch) printf '11|6|4|0|0|0|1\n' ;;
+    deepmerge) printf '14|8|0|2|0|3|1\n' ;;
     vitest/runtime) printf '64|35|2|3|6|18|0\n' ;;
     playwright) printf '1336|196|0|85|885|170|0\n' ;;
     react-router) printf '349|166|25|30|39|67|22\n' ;;
@@ -476,7 +483,7 @@ realworld_fallback_policy() {
     playwright)
       printf 'budgeted-fallback|Large event/callback-heavy API is smoke-tested; only selected launch/device/options surfaces are naturalization targets.\n'
       ;;
-    chalk | dotenv | ignore | colorette | immer | execa | vitest/runtime | express | ms | nanoid | dayjs | qs | superstruct | eventemitter3 | mitt)
+    chalk | dotenv | ignore | colorette | immer | execa | vitest/runtime | express | ms | nanoid | dayjs | qs | superstruct | eventemitter3 | mitt | semver | picomatch | deepmerge)
       printf 'low-fallback-maintain|Current fallback is small and explicitly budgeted; naturalize only when a real smoke use case needs it.\n'
       ;;
     *)
@@ -1071,6 +1078,50 @@ test "real-world marked bridge smoke" {
   let rendered : String = unsafeCast(html)
   if !rendered.contains("<h1>hello</h1>") {
     abort("unexpected marked output: \{rendered}")
+  }
+}
+EOF
+      ;;
+    semver)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+test "real-world semver bridge smoke" {
+  assert_eq(valid(Some(unsafeCast("1.2.3")), None), Some("1.2.3"))
+  assert_eq(clean(" 1.2.3 ", None), Some("1.2.3"))
+  assert_eq(major(unsafeCast("2.4.6"), None), 2)
+}
+EOF
+      ;;
+    picomatch)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn realworld_pm_match(m : Picomatch_Matcher, input : String) -> Bool =
+  #| (m, input) => m(input)
+
+test "real-world picomatch bridge smoke" {
+  let matcher = default(unsafeCast("*.ts"), None, None)
+  if !realworld_pm_match(matcher, "a.ts") {
+    abort("expected *.ts to match a.ts")
+  }
+  if realworld_pm_match(matcher, "a.js") {
+    abort("expected *.ts not to match a.js")
+  }
+}
+EOF
+      ;;
+    deepmerge)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn realworld_dm_obj_a() -> Partial =
+  #| () => ({ a: 1 })
+
+extern "js" fn realworld_dm_obj_b() -> Partial =
+  #| () => ({ b: 2 })
+
+extern "js" fn realworld_dm_has(v : JSValue, key : String) -> Bool =
+  #| (v, key) => Object.prototype.hasOwnProperty.call(v, key)
+
+test "real-world deepmerge bridge smoke" {
+  let merged = default(realworld_dm_obj_a(), realworld_dm_obj_b(), None)
+  if !realworld_dm_has(merged, "a") || !realworld_dm_has(merged, "b") {
+    abort("expected merged object with both keys")
   }
 }
 EOF
@@ -1752,6 +1803,50 @@ fn main {
   let rendered : String = @sut.unsafeCast(html)
   if !rendered.contains("<h1>hello</h1>") {
     abort("unexpected marked output")
+  }
+}
+EOF
+      ;;
+    semver)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+fn main {
+  if @sut.valid(Some(@sut.unsafeCast("1.2.3")), None) != Some("1.2.3") {
+    abort("unexpected semver valid")
+  }
+  if @sut.major(@sut.unsafeCast("2.4.6"), None) != 2 {
+    abort("unexpected semver major")
+  }
+}
+EOF
+      ;;
+    picomatch)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+extern "js" fn realworld_pm_match(m : @sut.Picomatch_Matcher, input : String) -> Bool =
+  #| (m, input) => m(input)
+
+fn main {
+  let matcher = @sut.default(@sut.unsafeCast("*.ts"), None, None)
+  if !realworld_pm_match(matcher, "a.ts") {
+    abort("expected *.ts to match a.ts")
+  }
+}
+EOF
+      ;;
+    deepmerge)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+extern "js" fn realworld_dm_obj_a() -> @sut.Partial =
+  #| () => ({ a: 1 })
+
+extern "js" fn realworld_dm_obj_b() -> @sut.Partial =
+  #| () => ({ b: 2 })
+
+extern "js" fn realworld_dm_has(v : @sut.JSValue, key : String) -> Bool =
+  #| (v, key) => Object.prototype.hasOwnProperty.call(v, key)
+
+fn main {
+  let merged = @sut.default(realworld_dm_obj_a(), realworld_dm_obj_b(), None)
+  if !realworld_dm_has(merged, "a") || !realworld_dm_has(merged, "b") {
+    abort("expected merged object with both keys")
   }
 }
 EOF

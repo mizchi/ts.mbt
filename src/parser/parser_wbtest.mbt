@@ -1112,6 +1112,32 @@ test "parser: parse declare const in module" {
 }
 
 ///|
+test "parser: module block records export= (CJS export assignment)" {
+  // `import X = require(...)` of an `export =` module binds the ASSIGNED
+  // entity; the bridge export resolution keys off this flag to forward
+  // through the module's `default` export (semver / picomatch @types).
+  let src =
+    #|declare function f(x: number): number;
+    #|export = f;
+  let module_ = parse_module_block_from_source(src) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.has_export_equals, true)
+  let src2 =
+    #|export declare function g(x: number): number;
+  let module2 = parse_module_block_from_source(src2) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module2.has_export_equals, false)
+}
+
+///|
 test "parser: module block bodiless named default function export (mitt)" {
   // `export default function mitt<T>(all?: T): U;` in a .d.ts has no body
   // -- the expression parser rejects it at the missing `{`, so named

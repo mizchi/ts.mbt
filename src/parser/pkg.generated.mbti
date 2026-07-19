@@ -161,6 +161,7 @@ pub struct Parser {
   collected_deprecations : Map[String, String]
   collected_pure_declarations : Map[String, Bool]
   collected_type_aliases : Array[@ast.TsTypeAlias]
+  mut collected_export_equals : Bool
 } derive(@debug.Debug)
 pub fn Parser::from_source(String) -> Self
 pub fn Parser::from_source_with_jsx(String, Bool) -> Self

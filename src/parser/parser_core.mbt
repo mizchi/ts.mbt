@@ -225,6 +225,8 @@ pub struct Parser {
   // `export type T = …`. Threaded out via `TsModuleBlock` so the
   // bundle can run whole-program type-driven passes.
   collected_type_aliases : Array[@ast.TsTypeAlias]
+  // Set when the module block parses `export = <expr>`.
+  mut collected_export_equals : Bool
 } derive(Debug)
 
 ///|
@@ -305,6 +307,7 @@ pub fn Parser::new_with_strict_and_jsx(
     collected_deprecations: {},
     collected_pure_declarations: {},
     collected_type_aliases: [],
+    collected_export_equals: false,
   }
 }
 
@@ -476,6 +479,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     collected_deprecations: {},
     collected_pure_declarations: {},
     collected_type_aliases: [],
+    collected_export_equals: false,
   }
 }
 

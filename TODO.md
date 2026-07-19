@@ -1437,6 +1437,27 @@ functions 30, cause split 129|43|8|24|34|14|6, unsupported exports 0);
 policy budgeted-fallback alongside preact until a dedicated
 JSX/component binding layer exists.
 
+Default-export / export= naturalization (2026-07-18): the two
+structural gaps behind the probe's weak surfaces are fixed and the
+corpus grew to 33 packages. (a) Module resolver: a raw `.js` "main"
+no longer shadows tsc's implicit package-root `index.d.ts` lookup in
+Types mode (deepmerge ships index.d.ts with `"main": "dist/cjs.js"`
+and no `types` field -- the whole declaration surface was erased);
+resolution now retries declaration-ish results first, then root
+index.d.ts, then the raw script as last resort. (b) Export semantics:
+`TsModuleBlock.has_export_equals` records CJS `export =`, and
+`resolve_imported_binding_export` forwards a namespace import binding
+(`import X = require("./sub")` / `import * as X`) through the target's
+`default` export when the target uses `export =` -- X IS the assigned
+entity, so `export { X as valid }` re-export chains (@types/semver's 42
+per-function files, @types/picomatch) now surface callable typed
+functions instead of `get_*() -> JSValue` getters. Results: semver 97
+callable externs (valid/clean/major smoke-tested), picomatch callable
+`default(glob) -> Matcher` (match/non-match smoke), deepmerge callable
+`default` merge (both-keys smoke) -- all three added to the gate with
+calibrated budgets (33 packages + 10 builtins = 43 entries green).
+Oracle unchanged (TP 2338 / FP 0 / TN 1750), moon test 2523/2523.
+
 Corpus expansion round 2 (2026-07-18): nine more npm packages verified
 end-to-end and added to the real-world gate (30 packages + 10 node
 builtins now): ms, nanoid, dayjs, qs, yaml, superstruct, eventemitter3,

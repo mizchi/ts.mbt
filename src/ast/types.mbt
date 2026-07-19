@@ -1014,6 +1014,11 @@ pub(all) struct TsModuleBlock {
   // passes (e.g. discriminant-tag string→number rewrite) can
   // enumerate every declared shape.
   type_aliases : Array[TsTypeAlias]
+  // True when the module uses `export = <expr>` (CJS export assignment).
+  // An `import X = require(...)` of such a module binds the ASSIGNED
+  // entity, not a namespace object -- the bridge export resolution
+  // forwards through the module's `default` export in that case.
+  has_export_equals : Bool
 } derive(Debug)
 
 // ============================================

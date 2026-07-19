@@ -2195,16 +2195,61 @@ fn resolve_decl_from_local_name(
                                         match import_decl.namespace_binding {
                                           Some(imported_local_name) =>
                                             if imported_local_name == local_name {
-                                              resolved = Value({
-                                                source_path,
-                                                local_name_prefix: "",
-                                                export_name,
-                                                source_export_name,
-                                                value: {
-                                                  name: local_name,
-                                                  type_: @ast.TsType::Any,
-                                                },
-                                              })
+                                              // `import X = require("./sub")`
+                                              // binds the sub-module's
+                                              // `module.exports`. When that
+                                              // module uses `export =` (the
+                                              // parser records `<export-eq>`),
+                                              // X IS the assigned entity --
+                                              // resolve through the module's
+                                              // `default` export so callable
+                                              // surfaces stay callable
+                                              // (semver / picomatch @types
+                                              // re-export style). Plain
+                                              // namespace objects keep the
+                                              // Any-typed value fallback.
+                                              let target_is_export_equals = match
+                                                modules.get(edge.resolved_path) {
+                                                Some(target_info) => {
+                                                  let mut found = false
+                                                  for
+                                                    misuse in target_info.module_.grammar_misuses {
+                                                    if misuse.has_prefix(
+                                                        "<export-eq>",
+                                                      ) {
+                                                      found = true
+                                                      break
+                                                    }
+                                                  }
+                                                  found
+                                                }
+                                                None => false
+                                              }
+                                              if target_is_export_equals {
+                                                resolved = resolve_decl_from_export_name(
+                                                  export_name,
+                                                  edge.resolved_path,
+                                                  "default",
+                                                  graph,
+                                                  modules,
+                                                  surface_cache,
+                                                  visiting,
+                                                )
+                                              }
+                                              match resolved {
+                                                Missing =>
+                                                  resolved = Value({
+                                                    source_path,
+                                                    local_name_prefix: "",
+                                                    export_name,
+                                                    source_export_name,
+                                                    value: {
+                                                      name: local_name,
+                                                      type_: @ast.TsType::Any,
+                                                    },
+                                                  })
+                                                _ => ()
+                                              }
                                             }
                                           None => ()
                                         }

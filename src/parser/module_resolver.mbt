@@ -761,6 +761,13 @@ async fn find_nearest_ancestor_file(
 }
 
 ///|
+/// True when the resolved path is a plain JavaScript artifact rather than
+/// a TypeScript declaration / source file.
+fn resolved_path_is_scriptish(path : String) -> Bool {
+  path.has_suffix(".js") || path.has_suffix(".cjs") || path.has_suffix(".mjs")
+}
+
+///|
 fn resolve_conditional_mapping_targets(
   mapping_obj : String,
   specifier : String,
@@ -1144,6 +1151,32 @@ async fn resolve_package_entry(
         let preferred_fields = match mode {
           Types => ["types", "typings", "main", "module"]
           Runtime => ["main", "module", "types", "typings"]
+        }
+        // Types mode resolves in two passes: a raw `.js` "main" is a valid
+        // LAST resort, but it must not shadow tsc's implicit package-root
+        // `index.d.ts` lookup -- deepmerge ships `index.d.ts` with
+        // `"main": "dist/cjs.js"` and no `types` field, and accepting
+        // `dist/cjs.js` first erases the whole declaration surface.
+        for field in preferred_fields {
+          match find_json_field(pkg, field) {
+            Some(String(target)) =>
+              match resolve_package_target(package_root, target, mode) {
+                Some(path) =>
+                  if mode is Runtime || !resolved_path_is_scriptish(path) {
+                    return Some(path)
+                  }
+                None => ()
+              }
+            _ => ()
+          }
+        }
+        if mode is Types {
+          for index_name in ["index.d.ts", "index.d.mts", "index.d.cts"] {
+            let candidate = normalize_path(join_path(package_root, index_name))
+            if file_exists(candidate) {
+              return Some(candidate)
+            }
+          }
         }
         for field in preferred_fields {
           match find_json_field(pkg, field) {

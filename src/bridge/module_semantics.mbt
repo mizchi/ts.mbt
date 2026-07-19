@@ -389,6 +389,31 @@ fn resolve_imported_binding_export(
       }
       _ => ()
     }
+    match import_decl.namespace_binding {
+      Some(bound_local_name) if bound_local_name == local_name =>
+        // `import X = require("./sub")` (and `import * as X`) over a module
+        // that uses `export =` binds the ASSIGNED entity, not a namespace
+        // object -- forward to the target module's `default` export so a
+        // callable `export = fn` stays callable through re-export chains
+        // (the @types/semver and @types/picomatch index files). Modules
+        // without `export =` keep the namespace-object handling downstream.
+        match records.get(edge.resolved_path) {
+          Some(target) if target.module_block.has_export_equals => {
+            let dep_exports = resolve_export_surface_from_map(
+              edge.resolved_path,
+              records,
+              cache,
+              visiting,
+            )
+            match find_named_export(dep_exports, "default") {
+              Some(dep_export) => return Some(dep_export)
+              None => ()
+            }
+          }
+          _ => ()
+        }
+      _ => ()
+    }
   }
   None
 }
