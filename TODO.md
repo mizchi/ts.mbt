@@ -1437,6 +1437,23 @@ functions 30, cause split 129|43|8|24|34|14|6, unsupported exports 0);
 policy budgeted-fallback alongside preact until a dedicated
 JSX/component binding layer exists.
 
+JSX/component layer v1 (2026-07-19): a MoonBit closure IS a React
+function component at runtime, and the generated react bridge now ships
+the glue to use it typed. When the module spec is exactly `react`, the
+ffi emits `element_of_component[Props]((Props) -> JSValue, Props?,
+Array[JSValue]) -> JSValue` (React.createElement over a MoonBit
+closure) and `use_state_typed[S](S) -> (S, (S) -> Unit)` (useState as a
+generically-typed value/setter pair; the setter re-enters React through
+the captured dispatch). Proven end-to-end in the gate: a counter
+component defined entirely in MoonBit -- `use_state_typed(41)` +
+`createElement("div", ...)` -- mounts via `element_of_component` and
+`react-dom/server`'s renderToString returns `<div>41</div>`. The
+injected layer adds zero JSValue-metric regressions (react budgets
+unchanged); react's fallback policy note now records the layer.
+Remaining for v2: typed intrinsic-element props (attribute structs),
+useEffect/useReducer typed wrappers, preact parity, and a react-dom
+corpus entry. Oracle unchanged (TP 2338 / FP 0 / TN 1750).
+
 Flagship-callable round (2026-07-19): three surface gaps closed and ws
 joins the gate (42 packages + 10 node builtins = 52 entries). (a) ws
 interop: cjs-module-lexer misses CJS alias re-exports, so the glue's

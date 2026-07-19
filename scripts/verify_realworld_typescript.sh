@@ -496,8 +496,11 @@ realworld_fallback_policy() {
     zod | valibot)
       printf 'budgeted-fallback|Schema/parser generics are intentionally smoke-tested and budgeted, not treated as naturally typed MoonBit APIs yet.\n'
       ;;
-    preact | react)
+    preact)
       printf 'budgeted-fallback|JSX/component/children generics are intentionally budgeted until a dedicated JSX/component binding layer exists.\n'
+      ;;
+    react)
+      printf 'budgeted-fallback|Component layer v1 (element_of_component + use_state_typed, SSR smoke-tested); remaining JSX/attribute generics stay budgeted.\n'
       ;;
     playwright)
       printf 'budgeted-fallback|Large event/callback-heavy API is smoke-tested; only selected launch/device/options surfaces are naturalization targets.\n'
@@ -985,6 +988,9 @@ extern "js" fn realworld_react_vnode(
 ) -> VNode =
   #| (e) => e
 
+extern "js" fn realworld_render_to_string(element : JSValue) -> String =
+  #| (element) => require("react-dom/server").renderToString(element)
+
 test "real-world react bridge smoke" {
   let elem = createElement("input", None, [])
   if !isValidElement(realworld_react_vnode(elem)) {
@@ -994,6 +1000,15 @@ test "real-world react bridge smoke" {
   if !get_version().has_prefix("19") {
     abort("unexpected react version")
   }
+}
+
+test "real-world react component layer smoke" {
+  let counter = fn(_props : JSValue) -> JSValue {
+    let (count, _set_count) = use_state_typed(41)
+    unsafeCast(createElement("div", None, [unsafeCast(count)]))
+  }
+  let element = element_of_component(counter, None, [])
+  assert_eq(realworld_render_to_string(element), "<div>41</div>")
 }
 EOF
       ;;
@@ -1839,10 +1854,11 @@ fn main {
   if !@sut.isValidElement(realworld_react_vnode(elem)) {
     abort("expected a valid react element")
   }
-  let _ = @sut.createRef()
-  if !@sut.get_version().has_prefix("19") {
-    abort("unexpected react version")
+  let counter = fn(_props : @sut.JSValue) -> @sut.JSValue {
+    let (count, _set_count) = @sut.use_state_typed(41)
+    @sut.unsafeCast(@sut.createElement("div", None, [@sut.unsafeCast(count)]))
   }
+  let _ = @sut.element_of_component(counter, None, [])
 }
 EOF
       ;;

@@ -3848,6 +3848,15 @@ fn ffi_is_react_router_module_spec(module_spec : String) -> Bool {
 }
 
 ///|
+/// Exact-package match only (mirrors the hono guard): fixture entries like
+/// `.../react-entry.d.ts` must not receive the hook layer.
+fn ffi_is_react_module_spec(module_spec : String) -> Bool {
+  module_spec == "react" ||
+  module_spec.has_suffix("/react") ||
+  module_spec.contains("/react/")
+}
+
+///|
 fn ffi_is_zod_module_spec(module_spec : String) -> Bool {
   module_spec == "zod" || module_spec.contains("/zod")
 }
@@ -6364,6 +6373,55 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       ffi_sections,
       ffi_fn_decl_key("hono_use_middleware"),
       "extern \"js\" fn _hono_use_middleware_extern_js(app : JSValue, path : JSValue, mw : JSValue) -> Unit =\n  #| (app, path, mw) => { const u = (path == null ? undefined : (typeof path === \"object\" && \"$tag\" in path ? (path.$tag === 1 ? path._0 : undefined) : path)); if (u === undefined) { app.use(mw) } else { app.use(u, mw) } }\n\npub fn[E, S, BasePath] Hono::use_middleware(self : Hono[E, S, BasePath], path : String?, mw : (Context[JSValue, JSValue, JSValue], () -> Promise[Unit]) -> Promise[Unit]) -> Unit {\n  _hono_use_middleware_extern_js(unsafeCast(self), unsafeCast(path), unsafeCast(mw))\n}",
+    )
+  }
+  if ffi_is_react_module_spec(module_spec) {
+    // JSX/component layer: a MoonBit closure IS a React function
+    // component at runtime. `element_of_component` mounts one via
+    // React.createElement, and `use_state_typed` exposes useState as a
+    // generically-typed (value, setter) pair. Both route through the
+    // module's own runtime bindings so alias re-rooting keeps working.
+    let create_element_access = ensure_bridge_runtime_access(
+      seen_bridge_import_keys,
+      bridge_imports,
+      namespace_import_roots,
+      runtime_export_name_for(func_runtime_export_names, "createElement"),
+    )
+    let use_state_access = ensure_bridge_runtime_access(
+      seen_bridge_import_keys,
+      bridge_imports,
+      namespace_import_roots,
+      runtime_export_name_for(func_runtime_export_names, "useState"),
+    )
+    push_unique_bridge_binding(
+      seen_bridge_binding_names,
+      bridge_lines,
+      "__ts_mbt_element_of_component",
+      "export function __ts_mbt_element_of_component(component, props, children) { return \{create_element_access}(component, props ?? null, ...children); }",
+    )
+    push_unique_ffi_section(
+      seen_ffi_binding_names,
+      ffi_sections,
+      ffi_fn_decl_key("element_of_component"),
+      "extern \"js\" fn _element_of_component_extern_js(component : (JSValue) -> JSValue, props : JSValue, children : Array[JSValue]) -> JSValue = \"__ts_mbt_element_of_component\"\n\npub fn[Props] element_of_component(component : (Props) -> JSValue, props : Props?, children : Array[JSValue]) -> JSValue {\n  _element_of_component_extern_js(unsafeCast(component), unsafeCast(props), children)\n}",
+    )
+    push_unique_bridge_binding(
+      seen_bridge_binding_names,
+      bridge_lines,
+      "__ts_mbt_use_state_pair",
+      "export function __ts_mbt_use_state_pair(initial) { return \{use_state_access}(initial); }",
+    )
+    push_unique_bridge_binding(
+      seen_bridge_binding_names, bridge_lines, "__ts_mbt_state_pair_value", "export function __ts_mbt_state_pair_value(pair) { return pair[0]; }",
+    )
+    push_unique_bridge_binding(
+      seen_bridge_binding_names, bridge_lines, "__ts_mbt_state_pair_set", "export function __ts_mbt_state_pair_set(pair, value) { pair[1](value); }",
+    )
+    push_unique_ffi_section(
+      seen_ffi_binding_names,
+      ffi_sections,
+      ffi_fn_decl_key("use_state_typed"),
+      "extern \"js\" fn _use_state_pair_extern_js(initial : JSValue) -> JSValue = \"__ts_mbt_use_state_pair\"\n\nextern \"js\" fn _state_pair_value_extern_js(pair : JSValue) -> JSValue = \"__ts_mbt_state_pair_value\"\n\nextern \"js\" fn _state_pair_set_extern_js(pair : JSValue, value : JSValue) -> Unit = \"__ts_mbt_state_pair_set\"\n\npub fn[S] use_state_typed(initial : S) -> (S, (S) -> Unit) {\n  let pair = _use_state_pair_extern_js(unsafeCast(initial))\n  (\n    unsafeCast(_state_pair_value_extern_js(pair)),\n    fn(value : S) { _state_pair_set_extern_js(pair, unsafeCast(value)) },\n  )\n}",
     )
   }
   if ffi_is_react_router_module_spec(module_spec) {
