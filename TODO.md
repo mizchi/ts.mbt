@@ -1437,6 +1437,30 @@ functions 30, cause split 129|43|8|24|34|14|6, unsupported exports 0);
 policy budgeted-fallback alongside preact until a dedicated
 JSX/component binding layer exists.
 
+Flagship-callable round (2026-07-19): three surface gaps closed and ws
+joins the gate (42 packages + 10 node builtins = 52 entries). (a) ws
+interop: cjs-module-lexer misses CJS alias re-exports, so the glue's
+named class bindings now fall back through sibling aliases of the same
+runtime entity -- statically-known siblings from the export surface
+plus `const Y: typeof X` value aliases (`const Server =
+__ts_mbt_module.Server ?? __ts_mbt_module.WebSocketServer`); a
+noServer WebSocketServer constructs and closes from MoonBit. (b) Call
+signatures on VALUE exports surface as callable module functions: the
+richest `<call>` signature of a const's inline object type or Named
+interface emits under the export's own name --
+`minimatch("bar.foo", "*.foo", None) -> Bool` and chalk's
+`default(...) -> String` now work directly. (c) Overload variants that
+differ only in RETURN type survive wrapper emission: the base-signature
+skip compares against the export's actual base (not `preferred[0]`),
+the "wider" disqualifier only applies against same-return picks, and
+`undefined`-typed parameter slots get a suffix -- uuid's `v4():
+string` emits as `v4_version4_options_optional_undefined_number_optional`
+and generates+validates a real v4 at smoke time. The broader
+push_preferred collapse stays param-count-keyed (loosening it regressed
+the React fixture's namespace-member naturalization). Budgets
+recalibrated for uuid / valibot / immer / superstruct / lodash.
+Oracle unchanged (TP 2338 / FP 0 / TN 1750); moon test 2523/2523.
+
 Top-download expansion (2026-07-19): eight of npm's most-downloaded
 packages verified end-to-end and added to the real-world gate (41
 packages + 10 node builtins = 51 entries): axios (getUri asserted

@@ -2365,6 +2365,99 @@ fn resolve_decl_from_local_name(
 }
 
 ///|
+/// A VALUE export whose declared type carries a call signature
+/// (`export declare const minimatch: { (p, pattern): boolean; ... }`, or
+/// chalk's `const chalk: ChalkInstance`) is callable at runtime under its
+/// own export name. Surface the richest call signature (most parameters)
+/// as a module function so `minimatch(p, pattern)` works from MoonBit.
+fn append_exported_value_call_signature(
+  info : DeclModuleInfo,
+  export_ : ResolvedExport,
+  value : @ast.TsValueDecl,
+  funcs : Array[ExportedFuncDecl],
+) -> Unit {
+  if export_.export_name.contains(".") {
+    return
+  }
+  for func in funcs {
+    if func.export_name == export_.export_name {
+      return
+    }
+  }
+  let fields = match value.type_ {
+    Object(fields) => fields
+    Named(n) => {
+      let iface_name = match n.rev_find(".") {
+        Some(idx) => n.substring(start=idx + 1).to_string()
+        None => n
+      }
+      match find_interface_decl(info.module_, iface_name) {
+        Some(iface) if iface.type_params.length() == 0 => {
+          let object_fields : Array[(@ast.TsType, @ast.TsType)] = []
+          for field in iface.fields {
+            object_fields.push((Literal(field.0), field.1))
+          }
+          object_fields
+        }
+        _ => return
+      }
+    }
+    _ => return
+  }
+  let mut best : @ast.TsType? = None
+  let mut best_params = -1
+  for field in fields {
+    let field_name = match field.0 {
+      Literal(name) => name
+      _ => continue
+    }
+    if field_name != "<call>" {
+      continue
+    }
+    let callable = match field.1 {
+      GenericFunc(_, inner) => inner
+      other => other
+    }
+    match callable {
+      Func(params, _) =>
+        if params.length() > best_params {
+          best = Some(callable)
+          best_params = params.length()
+        }
+      _ => ()
+    }
+  }
+  guard best is Some(Func(param_types, return_type)) else { return }
+  let params : Array[@ast.TsParam] = []
+  for i, param_type in param_types {
+    params.push({
+      name: "arg\{i}",
+      binding: None,
+      is_rest: false,
+      type_: param_type,
+      default: None,
+    })
+  }
+  funcs.push({
+    source_path: export_.source_path,
+    local_name_prefix: "",
+    export_name: export_.export_name,
+    source_export_name: export_.source_export_name,
+    func: {
+      name: export_.export_name,
+      type_params: [],
+      const_type_params: [],
+      type_param_bounds: [],
+      params,
+      return_type,
+      body: { stmts: [], stmt_positions: [] },
+      is_generator: false,
+      is_async: false,
+    },
+  })
+}
+
+///|
 /// See the call site in `collect_exported_decls`: for a default export
 /// whose local is a value declared with a Named interface type, append the
 /// interface's function-typed fields as exported module functions rooted
@@ -2398,7 +2491,10 @@ fn append_exported_value_interface_methods(
   }
   for field in iface.fields {
     let (fname, ftype) = field
-    if fname.has_prefix("@@") || fname == "<computed>" || fname == "" {
+    if fname.has_prefix("@@") ||
+      fname == "<computed>" ||
+      fname == "" ||
+      fname.has_prefix("<") {
       continue
     }
     if seen.contains(fname) {
@@ -2596,7 +2692,19 @@ fn collect_exported_decls(
       TypeAlias(exported) => type_aliases.push(exported)
       Import(exported) => imports.push(exported)
       Function(exported) => funcs.push(exported)
-      Value(exported) => values.push(exported)
+      Value(exported) => {
+        values.push(exported)
+        match modules.get(exported.source_path) {
+          Some(value_info) =>
+            append_exported_value_call_signature(
+              value_info,
+              export_,
+              exported.value,
+              funcs,
+            )
+          None => ()
+        }
+      }
       Class(exported) =>
         if export_.type_only {
           let properties : Array[@ast.TsClassPropertyDecl] = []
@@ -9606,6 +9714,13 @@ fn decl_overload_type_suffix(type_ : @ast.TsType) -> String? {
     Boolean | BooleanLiteral(_) => Some("bool")
     BigInt | BigIntLiteral(_) => Some("bigint")
     Symbol => Some("symbol")
+    // A literal `undefined` parameter slot appears in overload sets that
+    // discriminate by "this argument must be absent" (uuid's
+    // `v4(options?, buf?: undefined, offset?): string` -- the optional
+    // marker wraps it into `Undefined | Undefined`).
+    Undefined => Some("undefined")
+    Union(members) if members.length() > 0 &&
+      members.iter().all(fn(m) { m is Undefined }) => Some("undefined")
     Named(name) if name != "any" && name != "Function" =>
       Some(decl_to_snake_case(name))
     Array(inner) =>
@@ -9936,6 +10051,13 @@ fn exported_import_overload_wrappers(
     if overloads.length() < 2 {
       continue
     }
+    // The signature to skip is the one the BASE export actually carries
+    // (`find_import_decl` picks the least-widened overload overall, which
+    // is not necessarily `preferred[0]` once different-return overloads
+    // survive dedup -- uuid's `v4(): string` vs `v4(...): TBuf`).
+    let base_clone = clone_exported_import(
+      exported, info, modules, canonical_types,
+    )
     let preferred : Array[@ast.TsImport] = []
     for import_ in overloads {
       push_preferred_import_decl(
@@ -9970,10 +10092,22 @@ fn exported_import_overload_wrappers(
         modules,
         canonical_types,
       )
-      if decl_import_same_signature(clone, preferred[0]) {
+      if decl_import_same_signature(clone, base_clone) {
         continue
       }
-      if decl_import_wider_than_any_same_param_preferred(clone, preferred) {
+      // "Wider" only disqualifies against a preferred pick with the SAME
+      // return type -- a different return means a genuinely different API
+      // (uuid's string-returning `v4()` next to the TBuf overload).
+      let mut clone_is_wider = false
+      for item in preferred {
+        if decl_normalize_overload_signature_type(item.return_type) ==
+          decl_normalize_overload_signature_type(clone.return_type) &&
+          decl_import_wider_same_param_overload(clone, item) {
+          clone_is_wider = true
+          break
+        }
+      }
+      if clone_is_wider {
         continue
       }
       if decl_import_should_skip_broad_node_wrapper(clone) {
@@ -10023,6 +10157,10 @@ fn exported_func_overload_wrappers(
     if overloads.length() < 2 {
       continue
     }
+    // See the import variant above: skip the BASE export's own signature.
+    let base_clone = clone_exported_func(
+      exported, info, modules, canonical_types,
+    )
     let preferred : Array[@ast.TsFunc] = []
     for func in overloads {
       push_preferred_func_decl(
@@ -10057,10 +10195,20 @@ fn exported_func_overload_wrappers(
         modules,
         canonical_types,
       )
-      if decl_func_same_signature(clone, preferred[0]) {
+      if decl_func_same_signature(clone, base_clone) {
         continue
       }
-      if decl_func_wider_than_any_same_param_preferred(clone, preferred) {
+      // See the import variant above: different returns stay.
+      let mut clone_is_wider = false
+      for item in preferred {
+        if decl_normalize_overload_signature_type(item.return_type) ==
+          decl_normalize_overload_signature_type(clone.return_type) &&
+          decl_func_wider_same_param_overload(clone, item) {
+          clone_is_wider = true
+          break
+        }
+      }
+      if clone_is_wider {
         continue
       }
       if decl_func_should_skip_broad_node_wrapper(clone) {

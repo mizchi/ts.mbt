@@ -330,8 +330,8 @@ jsvalue_function_budget() {
     colorette) printf '1\n' ;;
     magic-string) printf '0\n' ;;
     source-map) printf '9\n' ;;
-    valibot) printf '290\n' ;;
-    immer) printf '15\n' ;;
+    valibot) printf '291\n' ;;
+    immer) printf '16\n' ;;
     execa) printf '5\n' ;;
     preact) printf '7\n' ;;
     react) printf '30\n' ;;
@@ -340,7 +340,7 @@ jsvalue_function_budget() {
     dayjs) printf '3\n' ;;
     qs) printf '2\n' ;;
     yaml) printf '69\n' ;;
-    superstruct) printf '54\n' ;;
+    superstruct) printf '56\n' ;;
     eventemitter3) printf '0\n' ;;
     mitt) printf '1\n' ;;
     marked) printf '14\n' ;;
@@ -353,8 +353,9 @@ jsvalue_function_budget() {
     chokidar) printf '3\n' ;;
     pino) printf '8\n' ;;
     lodash) printf '288\n' ;;
-    uuid) printf '1\n' ;;
+    uuid) printf '5\n' ;;
     minimatch) printf '10\n' ;;
+    ws) printf '6\n' ;;
     vitest/runtime) printf '6\n' ;;
     playwright) printf '411\n' ;;
     react-router) printf '84\n' ;;
@@ -418,8 +419,8 @@ jsvalue_cause_budget() {
     colorette) printf '1|0|1|0|0|0|0\n' ;;
     magic-string) printf '0|0|0|0|0|0|0\n' ;;
     source-map) printf '17|6|0|7|0|3|1\n' ;;
-    valibot) printf '1671|1172|24|14|13|410|38\n' ;;
-    immer) printf '22|4|7|2|2|1|6\n' ;;
+    valibot) printf '1672|1172|24|14|13|411|38\n' ;;
+    immer) printf '23|4|7|2|3|1|6\n' ;;
     execa) printf '17|2|0|4|1|0|10\n' ;;
     preact) printf '48|12|1|4|14|17|0\n' ;;
     react) printf '129|43|8|24|34|14|6\n' ;;
@@ -428,7 +429,7 @@ jsvalue_cause_budget() {
     dayjs) printf '3|0|1|0|1|0|1\n' ;;
     qs) printf '8|2|1|0|0|0|5\n' ;;
     yaml) printf '179|34|7|84|0|20|34\n' ;;
-    superstruct) printf '81|4|0|15|0|57|5\n' ;;
+    superstruct) printf '83|4|0|15|0|59|5\n' ;;
     eventemitter3) printf '16|0|0|0|5|6|5\n' ;;
     mitt) printf '10|4|0|2|3|1|0\n' ;;
     marked) printf '57|10|0|0|20|13|14\n' ;;
@@ -440,9 +441,10 @@ jsvalue_cause_budget() {
     debug) printf '19|6|0|1|0|12|0\n' ;;
     chokidar) printf '3|0|0|1|0|0|2\n' ;;
     pino) printf '51|38|4|1|0|4|4\n' ;;
-    lodash) printf '1643|444|121|252|49|771|6\n' ;;
-    uuid) printf '1|0|1|0|0|0|0\n' ;;
+    lodash) printf '1643|444|121|252|49|771|7\n' ;;
+    uuid) printf '5|0|5|0|0|0|0\n' ;;
     minimatch) printf '10|0|0|2|0|3|5\n' ;;
+    ws) printf '43|28|0|3|2|4|6\n' ;;
     vitest/runtime) printf '64|35|2|3|6|18|0\n' ;;
     playwright) printf '1336|196|0|85|885|170|0\n' ;;
     react-router) printf '349|166|25|30|39|67|22\n' ;;
@@ -488,7 +490,7 @@ realworld_fallback_policy() {
     node:assert | node:util)
       printf 'naturalize-target|Shrink remaining Node built-in overload/unknown fallbacks toward zero for the common API surface.\n'
       ;;
-    date-fns | magic-string | source-map | yaml | marked | axios | pino | lodash | node:sqlite | node:fs)
+    date-fns | magic-string | source-map | yaml | marked | axios | pino | lodash | ws | node:sqlite | node:fs)
       printf 'naturalize-target|Keep reducing fallback around finite option bags, tuple results, and class/value helper APIs.\n'
       ;;
     zod | valibot)
@@ -1222,28 +1224,53 @@ EOF
       ;;
     uuid)
       cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn realworld_uuid_absent() -> JSValue =
+  #| () => undefined
+
 test "real-world uuid bridge smoke" {
-  let nil_uuid = "00000000-0000-0000-0000-000000000000"
-  if !validate(unsafeCast(nil_uuid)) {
-    abort("expected NIL uuid to validate")
+  let id = v4_version4_options_optional_undefined_number_optional(
+    None,
+    realworld_uuid_absent(),
+    None,
+  )
+  assert_eq(id.length(), 36)
+  if !validate(unsafeCast(id)) {
+    abort("expected generated uuid to validate")
   }
+  assert_eq(version(id), 4)
   if validate(unsafeCast("not-a-uuid")) {
     abort("expected invalid string to fail validation")
   }
-  assert_eq(version(nil_uuid), 0)
 }
 EOF
       ;;
     minimatch)
       cat > "$out/bridge_test.mbt" <<'EOF'
 test "real-world minimatch bridge smoke" {
-  let is_foo = filter("*.foo", None)
-  if !is_foo("bar.foo") {
+  if !minimatch("bar.foo", "*.foo", None) {
     abort("expected *.foo to match bar.foo")
   }
-  if is_foo("bar.baz") {
-    abort("expected *.foo not to match bar.baz")
+  if minimatch("bar.foo", "*.bar", None) {
+    abort("expected *.bar not to match bar.foo")
   }
+  let is_foo = filter("*.foo", None)
+  if !is_foo("bar.foo") {
+    abort("expected filter matcher to match")
+  }
+}
+EOF
+      ;;
+    ws)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn realworld_ws_server_options() -> WebSocketServerOptions[JSValue, JSValue] =
+  #| () => ({ noServer: true })
+
+test "real-world ws bridge smoke" {
+  let server : Server[JSValue, JSValue] = new_server(
+    Some(realworld_ws_server_options()),
+    None,
+  )
+  server.close(None)
 }
 EOF
       ;;
@@ -2056,10 +2083,23 @@ EOF
     minimatch)
       cat > "$smoke_dir/main.mbt" <<'EOF'
 fn main {
-  let is_foo = @sut.filter("*.foo", None)
-  if !is_foo("bar.foo") {
+  if !@sut.minimatch("bar.foo", "*.foo", None) {
     abort("expected *.foo to match bar.foo")
   }
+}
+EOF
+      ;;
+    ws)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+extern "js" fn realworld_ws_server_options() -> @sut.WebSocketServerOptions[@sut.JSValue, @sut.JSValue] =
+  #| () => ({ noServer: true })
+
+fn main {
+  let server : @sut.Server[@sut.JSValue, @sut.JSValue] = @sut.new_server(
+    Some(realworld_ws_server_options()),
+    None,
+  )
+  server.close(None)
 }
 EOF
       ;;
