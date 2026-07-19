@@ -2258,6 +2258,26 @@ fn ffi_enum_bridge_js_converter_decl(enum_ : @ast.TsEnumDecl) -> String? {
 }
 
 ///|
+/// The self-contained `Promise::wait` / `run_async` layer: no external
+/// MoonBit dependencies, awaiting via a raw `%async.suspend` whose
+/// continuations are driven straight from the JS microtask queue, and
+/// rejections surfacing as the matchable `JsRejection` error.
+pub let bridge_promise_wait_self_contained_section : String = "pub suberror JsRejection {\n  JsRejection(JSValue)\n}\n\nasync fn _promise_suspend_js(f : ((JSValue) -> Unit, (Error) -> Unit) -> Unit) -> JSValue = \"%async.suspend\"\n\npub async fn[T] Promise::wait(self : Promise[T]) -> T {\n  let raw = _promise_suspend_js(fn(ok, err) {\n    _promise_then_catch_extern_js(unsafeCast(self), ok, fn(e) { err(JsRejection(e)) })\n  })\n  unsafeCast(raw)\n}\n\nextern \"js\" fn _run_async_extern_js(f : async () -> Unit) -> Unit =\n  #| (f) => { f((_ok) => {}, (e) => { console.error(\"unhandled async error:\", e); if (typeof process !== \"undefined\" && process.exit) process.exit(1); else throw e; }) }\n\npub fn run_async(f : async () -> Unit) -> Unit {\n  _run_async_extern_js(f)\n}"
+
+///|
+/// The `moonbitlang/async` integration variant of the same section,
+/// substituted by the package emitter when the consumer module already
+/// depends on `moonbitlang/async`: the bridge promise identity-casts
+/// into `@js_async.Promise` (`.std()`), and `Promise::wait` delegates to
+/// the official coroutine-scheduled wait — which composes with
+/// `async fn main`, `@async.with_timeout`, task groups, and cancellation
+/// via the optional `abort_controller`. `JsRejection` stays declared for
+/// source compatibility, but delegated rejections raise `@js_async`'s
+/// own error type. Requires `moonbitlang/async/js_async` in the
+/// generated package's `moon.pkg` imports.
+pub let bridge_promise_wait_async_integration_section : String = "pub suberror JsRejection {\n  JsRejection(JSValue)\n}\n\npub fn[T] Promise::std(self : Promise[T]) -> @js_async.Promise[T] = \"%identity\"\n\npub async fn[T] Promise::wait(self : Promise[T], abort_controller? : @js_async.AbortController) -> T {\n  match abort_controller {\n    Some(controller) => self.std().wait(abort_controller=controller)\n    None => self.std().wait()\n  }\n}\n\nextern \"js\" fn _run_async_extern_js(f : async () -> Unit) -> Unit =\n  #| (f) => { f((_ok) => {}, (e) => { console.error(\"unhandled async error:\", e); if (typeof process !== \"undefined\" && process.exit) process.exit(1); else throw e; }) }\n\npub fn run_async(f : async () -> Unit) -> Unit {\n  _run_async_extern_js(f)\n}"
+
+///|
 fn ffi_direct_module_decl(module_spec : String, decl : String) -> String {
   "#module(\"" + ffi_escape_moonbit_string(module_spec) + "\")\n" + decl
 }
@@ -6423,7 +6443,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       seen_ffi_binding_names,
       ffi_sections,
       ffi_fn_decl_key("promise_wait"),
-      "pub suberror JsRejection {\n  JsRejection(JSValue)\n}\n\nasync fn _promise_suspend_js(f : ((JSValue) -> Unit, (Error) -> Unit) -> Unit) -> JSValue = \"%async.suspend\"\n\npub async fn[T] Promise::wait(self : Promise[T]) -> T {\n  let raw = _promise_suspend_js(fn(ok, err) {\n    _promise_then_catch_extern_js(unsafeCast(self), ok, fn(e) { err(JsRejection(e)) })\n  })\n  unsafeCast(raw)\n}\n\nextern \"js\" fn _run_async_extern_js(f : async () -> Unit) -> Unit =\n  #| (f) => { f((_ok) => {}, (e) => { console.error(\"unhandled async error:\", e); if (typeof process !== \"undefined\" && process.exit) process.exit(1); else throw e; }) }\n\npub fn run_async(f : async () -> Unit) -> Unit {\n  _run_async_extern_js(f)\n}",
+      bridge_promise_wait_self_contained_section,
     )
   }
   if ffi_is_zod_module_spec(module_spec) {

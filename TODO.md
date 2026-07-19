@@ -1490,6 +1490,28 @@ an async fn, and a connection-refused `get` surfaces as a caught
 (non-breaking; fire-and-forget and combinator use keep the raw
 promise) — `.wait()` is the conversion point into async MoonBit.
 
+moonbitlang/async integration mode (follow-up): when the consumer
+module (nearest manifest walking up from the OUTPUT dir; `_build/`
+outputs excluded, same rationale as the package.json wiring guard)
+depends on `moonbitlang/async`, the emitter swaps the self-contained
+`Promise::wait` for a delegation to `moonbitlang/async/js_async` —
+which 0.18+ ships exactly for this: an `#external Promise[X]` with a
+coroutine-scheduled `wait(abort_controller?)`. The generated package
+gains `Promise::std()` (identity cast to `@js_async.Promise`) and the
+`moon.pkg` import; `run_async` / `then` / `then_catch` / `map` stay.
+Consequences, all probe-verified E2E on real axios: `async fn main`
+works directly (the compiler requires importing moonbitlang/async for
+async main — this IS the seamless entry, no `run_async` needed),
+`@async.with_timeout` composes over bridge promises, and cancellation
+plumbs through the official `AbortController`. Adding the dep to
+moon.mod + re-running `ts2mbt generate` is the whole upgrade. Both
+section texts live side by side in moonbit_js_ffi.mbt so the modes
+cannot drift. Probes also confirmed the raw-CPS self-contained `wait`
+keeps working under the @async event loop, and that a typealias-based
+deep integration (`pub typealias @js_async.Promise as Promise`)
+compiles and runs — deferred because methods cannot be defined on a
+foreign aliased type, which would fracture the then/map surface.
+
 ## Performance Tuning Round 1 (2026-07-19)
 
 Profiled with `moon bench --target native` + callgrind over the release
