@@ -38,11 +38,29 @@ grep -hoP '^\s*(?:interface|type|declare\s+(?:class|abstract class|namespace|enu
   | sort -u > /tmp/lib_type_names.txt
 
 emit_match() {
-  # $1 = fn name, $2 = names file. Emits a single match arm of the form
+  # $1 = fn name, $2 = names file. Emits a memoized predicate: the raw
+  # match spans thousands of arms and callers probe the same module-local
+  # names once per *reference*, so the wrapper caches per distinct name.
+  # The `_uncached` match emits arms of the form
   #   "a" | "b" | ... => true
   # wrapped across lines; continuation lines start with "| " so adjacent
   # lines join into one alternation without producing an empty alternative.
+  echo "let $1_memo : Map[String, Bool] = {}"
+  echo ""
+  echo "///|"
   echo "fn $1(name : String) -> Bool {"
+  echo "  match $1_memo.get(name) {"
+  echo "    Some(v) => v"
+  echo "    None => {"
+  echo "      let v = $1_uncached(name)"
+  echo "      $1_memo[name] = v"
+  echo "      v"
+  echo "    }"
+  echo "  }"
+  echo "}"
+  echo ""
+  echo "///|"
+  echo "fn $1_uncached(name : String) -> Bool {"
   echo "  match name {"
   awk '{ printf "\"%s\"", $0; if (NR % 6 == 0) printf "\n" ; else printf " " }
        END { if (NR % 6 != 0) printf "\n" }' "$2" \

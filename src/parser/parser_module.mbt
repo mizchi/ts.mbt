@@ -3615,12 +3615,8 @@ fn Parser::parse_module_with_seeded_const_values_internal(
     ),
     no_implicit_any: detect_no_implicit_any(module_head),
     strict_null_checks: detect_strict_null_checks(module_head),
-    use_define_for_class_fields: detect_use_define_for_class_fields(
-      module_head,
-    ),
-    deprecated_compiler_options: detect_deprecated_compiler_options(
-      module_head,
-    ),
+    use_define_for_class_fields: detect_use_define_for_class_fields(module_head),
+    deprecated_compiler_options: detect_deprecated_compiler_options(module_head),
     parameter_property_misuses: self.param_property_misuses,
     strict_mode_misuses: self.strict_mode_misuses,
     invalid_decorator_uses: self.invalid_decorator_uses,

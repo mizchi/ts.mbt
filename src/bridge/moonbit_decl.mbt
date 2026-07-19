@@ -9844,32 +9844,6 @@ fn decl_func_wider_same_param_overload(
 }
 
 ///|
-fn decl_import_wider_than_any_same_param_preferred(
-  candidate : @ast.TsImport,
-  preferred : Array[@ast.TsImport],
-) -> Bool {
-  for item in preferred {
-    if decl_import_wider_same_param_overload(candidate, item) {
-      return true
-    }
-  }
-  false
-}
-
-///|
-fn decl_func_wider_than_any_same_param_preferred(
-  candidate : @ast.TsFunc,
-  preferred : Array[@ast.TsFunc],
-) -> Bool {
-  for item in preferred {
-    if decl_func_wider_same_param_overload(candidate, item) {
-      return true
-    }
-  }
-  false
-}
-
-///|
 fn decl_type_is_string_nonshared_buffer_union(type_ : @ast.TsType) -> Bool {
   match type_ {
     Union(items) => {
