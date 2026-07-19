@@ -60,76 +60,90 @@ pub fn JsdocBlock::is_empty(self : JsdocBlock) -> Bool {
 /// comment isn't a JSDoc block (`/* … */` without the double
 /// asterisk) or is empty.
 pub fn parse_jsdoc_block(text : String) -> JsdocBlock? {
-  // Must start with `/**` and end with `*/`. Single-asterisk
-  // `/* … */` comments aren't JSDoc; we still scan them for
-  // inline `@__PURE__` markers separately.
+  parse_jsdoc_block_view(text[:])
+}
+
+///|
+/// View-based implementation of `parse_jsdoc_block`. Runs once per
+/// `/**` comment during lexing, so it stays single-pass and slices the
+/// comment span in place — building per-line owned strings here used to
+/// dominate whole-file parse profiles on comment-heavy inputs like
+/// es5.d.ts.
+fn parse_jsdoc_block_view(text : StringView) -> JsdocBlock? {
   if !text.has_prefix("/**") {
     return None
   }
-  let body_start = 3
   let body_end = if text.has_suffix("*/") {
     text.length() - 2
   } else {
     text.length()
   }
-  if body_end <= body_start {
+  if body_end <= 3 {
     return None
   }
-  let raw = text[body_start:body_end].to_owned()
-  // Strip the leading `*` (with optional space) on each line —
-  // standard JSDoc convention puts a `*` at column 0 of every
-  // continuation line. Without this we'd leak `*` chars into
-  // descriptions.
-  let cleaned = strip_jsdoc_line_prefixes(raw)
-  // Split into description + tags. The first `@tag` at the start
-  // of a line marks the boundary. Lines before the first tag
-  // form the description.
-  let mut description = ""
+  let body = text[3:body_end]
+  // Accumulators. The description and each tag's content are built by
+  // appending cleaned line views separated by '\n', matching the old
+  // join("\n") shape exactly.
+  let description = StringBuilder::new()
+  let mut description_started = false
   let tags : Array[JsdocTag] = []
   let mut current_tag_name = ""
-  let mut current_tag_content : Array[String] = []
+  let tag_content = StringBuilder::new()
   let mut in_description = true
-  for line_view in cleaned.split("\n") {
-    let line = line_view.to_owned()
-    let trimmed = line.trim_start()
+  fn flush_tag() {
+    tags.push(
+      interpret_tag(
+        current_tag_name,
+        tag_content.to_string().trim_end().to_owned(),
+      ),
+    )
+  }
+
+  for line in body.split("\n") {
+    // Strip the leading `*` (with optional space) that the JSDoc
+    // convention puts on every continuation line; lines without the
+    // marker keep their original indentation.
+    let star_trimmed = line.trim_start()
+    let cleaned = if star_trimmed.has_prefix("* ") {
+      star_trimmed[2:]
+    } else if star_trimmed.has_prefix("*") {
+      star_trimmed[1:]
+    } else {
+      line
+    }
+    let trimmed = cleaned.trim_start()
     if trimmed.has_prefix("@") {
       // Flush whatever we were collecting.
       if !in_description {
-        tags.push(
-          interpret_tag(
-            current_tag_name,
-            current_tag_content.join("\n").trim_end().to_owned(),
-          ),
-        )
-      } else if description != "" {
-        description = description.trim_end().to_owned()
+        flush_tag()
+        tag_content.reset()
       }
       in_description = false
-      // Split into tag name + rest. Tag name is `[a-zA-Z_]+` or
+      // Split into tag name + rest. Tag name is `[a-zA-Z0-9_]+` or
       // the special `__PURE__` / `__NO_SIDE_EFFECTS__` marker.
-      let rest = trimmed[1:].to_owned()
-      let (name, body) = split_tag_head(rest)
+      let (name, body_view) = split_tag_head(trimmed[1:])
       current_tag_name = name
-      current_tag_content = [body]
+      tag_content.write_view(body_view)
     } else if in_description {
-      if description != "" {
-        description = description + "\n"
+      if description_started {
+        description.write_char('\n')
       }
-      description = description + line
+      description.write_view(cleaned)
+      description_started = description_started || cleaned.length() > 0
     } else {
-      current_tag_content.push(line)
+      tag_content.write_char('\n')
+      tag_content.write_view(cleaned)
     }
   }
   // Flush the trailing tag.
   if !in_description {
-    tags.push(
-      interpret_tag(
-        current_tag_name,
-        current_tag_content.join("\n").trim_end().to_owned(),
-      ),
-    )
+    flush_tag()
   }
-  let block : JsdocBlock = { description: description.trim().to_owned(), tags }
+  let block : JsdocBlock = {
+    description: description.to_string().trim().to_owned(),
+    tags,
+  }
   if block.is_empty() {
     None
   } else {
@@ -138,27 +152,9 @@ pub fn parse_jsdoc_block(text : String) -> JsdocBlock? {
 }
 
 ///|
-fn strip_jsdoc_line_prefixes(s : String) -> String {
-  let out : Array[String] = []
-  for line_view in s.split("\n") {
-    let line = line_view.to_owned()
-    let trimmed = line.trim_start().to_owned()
-    let cleaned = if trimmed.has_prefix("* ") {
-      trimmed[2:].to_owned()
-    } else if trimmed.has_prefix("*") {
-      trimmed[1:].to_owned()
-    } else {
-      line
-    }
-    out.push(cleaned)
-  }
-  out.join("\n")
-}
-
-///|
 /// Split a tag line (post-`@`) into `(tag_name, rest)`.
 /// `paramName description` → `("paramName", "description")`.
-fn split_tag_head(s : String) -> (String, String) {
+fn split_tag_head(s : StringView) -> (String, StringView) {
   let mut i = 0
   while i < s.length() {
     let c = s[i]
@@ -175,7 +171,7 @@ fn split_tag_head(s : String) -> (String, String) {
     return ("", s)
   }
   let name = s[0:i].to_owned()
-  let rest = s[i:].to_owned().trim_start().to_owned()
+  let rest = s[i:].trim_start()
   (name, rest)
 }
 
