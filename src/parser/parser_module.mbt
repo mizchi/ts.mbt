@@ -3596,6 +3596,9 @@ fn Parser::parse_module_with_seeded_const_values_internal(
       }
     }
   }
+  // Shared leading window for the directive detectors below (one slice
+  // instead of one per detector).
+  let module_head = source_head(self.src)
   {
     funcs,
     interfaces,
@@ -3608,12 +3611,12 @@ fn Parser::parse_module_with_seeded_const_values_internal(
     module_augmentations,
     top_level_stmts,
     strict_property_initialization: detect_strict_property_initialization(
-      self.src,
+      module_head,
     ),
-    no_implicit_any: detect_no_implicit_any(self.src),
-    strict_null_checks: detect_strict_null_checks(self.src),
-    use_define_for_class_fields: detect_use_define_for_class_fields(self.src),
-    deprecated_compiler_options: detect_deprecated_compiler_options(self.src),
+    no_implicit_any: detect_no_implicit_any(module_head),
+    strict_null_checks: detect_strict_null_checks(module_head),
+    use_define_for_class_fields: detect_use_define_for_class_fields(module_head),
+    deprecated_compiler_options: detect_deprecated_compiler_options(module_head),
     parameter_property_misuses: self.param_property_misuses,
     strict_mode_misuses: self.strict_mode_misuses,
     invalid_decorator_uses: self.invalid_decorator_uses,
@@ -3642,10 +3645,8 @@ fn Parser::parse_module_with_seeded_const_values_internal(
 /// `.d.ts` / `.ts` bridge inputs never carry them, so this stays empty for
 /// them. Returns one canonical option string per detected deprecation, in a
 /// stable order.
-fn detect_deprecated_compiler_options(src : String) -> Array[String] {
+fn detect_deprecated_compiler_options(head : String) -> Array[String] {
   let out : Array[String] = []
-  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
-  let head = src[:head_len].to_owned()
   let head_lower = head.to_lower()
   // Value-specific: the `@target:` directive's comma list.
   match head.find("@target:") {
@@ -3729,10 +3730,7 @@ fn detect_deprecated_compiler_options(src : String) -> Array[String] {
 /// files in or out of strict mode. Default is `true`: the tsc-
 /// generated baselines for files *without* a directive include
 /// TS2564, so emitting matches the baseline.
-fn detect_strict_property_initialization(src : String) -> Bool {
-  // Only scan the first ~1 KB; directives always live at the top.
-  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
-  let head = src[:head_len].to_owned()
+fn detect_strict_property_initialization(head : String) -> Bool {
   // Explicit opt-outs.
   if head.contains("@strict: false") || head.contains("@strict:false") {
     return false
@@ -3752,9 +3750,7 @@ fn detect_strict_property_initialization(src : String) -> Bool {
 /// `detect_strict_property_initialization`, but ignores
 /// `@strictPropertyInitialization: false` and honours an explicit
 /// `@strictNullChecks: false` opt-out instead.
-fn detect_strict_null_checks(src : String) -> Bool {
-  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
-  let head = src[:head_len].to_owned()
+fn detect_strict_null_checks(head : String) -> Bool {
   if head.contains("@strict: false") || head.contains("@strict:false") {
     return false
   }
@@ -3773,9 +3769,7 @@ fn detect_strict_null_checks(src : String) -> Bool {
 /// Fires on explicit `// @useDefineForClassFields: true` directives,
 /// otherwise falls back to the TS default for the target (es2022+ /
 /// esnext default to true).
-fn detect_use_define_for_class_fields(src : String) -> Bool {
-  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
-  let head = src[:head_len].to_owned()
+fn detect_use_define_for_class_fields(head : String) -> Bool {
   if head.contains("@useDefineForClassFields: true") ||
     head.contains("@useDefineForClassFields:true") {
     return true

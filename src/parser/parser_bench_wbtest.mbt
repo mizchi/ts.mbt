@@ -137,6 +137,64 @@ let wide_500 : String = build_wide_interface(500)
 let wide_2000 : String = build_wide_interface(2000)
 
 ///|
+/// JSDoc-heavy fixture: every declaration carries a multi-line doc
+/// comment with tags, mirroring real `.d.ts` inputs (es5.d.ts is ~60%
+/// comments by volume). Tracks the lexer's comment scan +
+/// `parse_jsdoc_block` path, which dominated whole-file profiles before
+/// the view-based rewrite.
+fn build_jsdoc_heavy(decl_count : Int) -> String {
+  let buf = StringBuilder::new()
+  for i in 0..<decl_count {
+    let n = i.to_string()
+    buf.write_string("/**\n")
+    buf.write_string(
+      " * Reads the value of entry " + n + " from the backing store.\n",
+    )
+    buf.write_string(" * Second description line with more prose text.\n")
+    buf.write_string(" * @param key" + n + " - the lookup key\n")
+    buf.write_string(" * @param options optional retrieval options\n")
+    buf.write_string(" * @returns {Entry" + n + "} the resolved entry\n")
+    buf.write_string(" * @deprecated use readEntryV2 instead\n")
+    buf.write_string(" */\n")
+    buf.write_string(
+      "declare function readEntry" +
+      n +
+      "(key" +
+      n +
+      ": string, options?: object): Entry" +
+      n +
+      ";\n",
+    )
+    buf.write_string("interface Entry" + n + " { value: string }\n")
+  }
+  buf.to_string()
+}
+
+///|
+let jsdoc_heavy_300 : String = build_jsdoc_heavy(300)
+
+///|
+/// Old-style-cast-heavy fixture: `<Type>expr` casts in expression
+/// position trigger the JSX speculation path (scan + nested sub-parse)
+/// when `allow_jsx` is on, the dominant cost on legacy TS sources like
+/// parserharness.ts. Tracks the speculative re-parse overhead.
+fn build_cast_heavy(func_count : Int) -> String {
+  let buf = StringBuilder::new()
+  for i in 0..<func_count {
+    let n = i.to_string()
+    buf.write_string("function conv" + n + "(x: unknown): number {\n")
+    buf.write_string("  const a = <any>x;\n")
+    buf.write_string("  const b = <number>(<any>a);\n")
+    buf.write_string("  return <number>b + " + n + ";\n")
+    buf.write_string("}\n")
+  }
+  buf.to_string()
+}
+
+///|
+let cast_heavy_200 : String = build_cast_heavy(200)
+
+///|
 test "bench parser: small mixed declarations (~9 decls)" (it : @bench.T) {
   it.bench(fn() {
     let module_ = Parser::from_source(small_source).parse_module() catch {
@@ -187,6 +245,46 @@ test "bench parser: wide interface (2000 fields)" (it : @bench.T) {
       _ => return
     }
     it.keep(module_.interfaces.length())
+  })
+}
+
+///|
+test "bench parser: JSDoc-heavy (300 documented decls)" (it : @bench.T) {
+  it.bench(fn() {
+    let module_ = Parser::from_source(jsdoc_heavy_300).parse_module() catch {
+      _ => return
+    }
+    it.keep(module_.funcs.length())
+  })
+}
+
+///|
+/// `.tsx` mode: `<T>expr` in expression position triggers the JSX
+/// speculation scan (tsc would reject old-style casts here, but the
+/// parser still has to disambiguate — this tracks that path's cost).
+test "bench parser: old-style cast heavy (200 funcs, .tsx JSX speculation)" (
+  it : @bench.T,
+) {
+  it.bench(fn() {
+    let module_ = Parser::from_source(cast_heavy_200).parse_module() catch {
+      _ => return
+    }
+    it.keep(module_.funcs.length())
+  })
+}
+
+///|
+/// `.ts` mode (`allow_jsx` off): the same casts parse as type
+/// assertions with no JSX speculation — the mode tscheck uses for every
+/// non-`.tsx` file.
+test "bench parser: old-style cast heavy (200 funcs, .ts assertion mode)" (
+  it : @bench.T,
+) {
+  it.bench(fn() {
+    let module_ = Parser::from_source_with_jsx(cast_heavy_200, false).parse_module() catch {
+      _ => return
+    }
+    it.keep(module_.funcs.length())
   })
 }
 

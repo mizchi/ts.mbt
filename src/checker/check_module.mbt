@@ -121,9 +121,27 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
 
   // 3b. Interface extends-chain cycles: `interface A extends B {}` followed
   //     by `interface B extends A {}` — TypeScript rejects, synthesized
-  //     output must not produce.
+  //     output must not produce. Adjacency is built once (merged across
+  //     same-name declarations) so each interface's check is a plain DFS
+  //     instead of rescanning every declaration at every step.
+  let iface_edges : Map[String, Array[String]] = {}
   for iface in module_.interfaces {
-    if iface_extends_reaches(module_, iface.name, iface.extends_names, []) {
+    match iface_edges.get(iface.name) {
+      Some(edges) =>
+        for n in iface.extends_names {
+          edges.push(n)
+        }
+      None => iface_edges[iface.name] = iface.extends_names.copy()
+    }
+  }
+  for iface in module_.interfaces {
+    let visited : Map[String, Unit] = {}
+    if iface_extends_reaches(
+        iface_edges,
+        iface.name,
+        iface.extends_names,
+        visited,
+      ) {
       issues.push({
         kind: InterfaceExtendsCycle,
         name: iface.name,
@@ -785,11 +803,17 @@ fn scope_with_iface_params(iface : @ast.TsInterface) -> Array[String] {
 }
 
 ///|
+/// Whether `target` is reachable from `extends_names` over the interface
+/// extends graph (`edges` maps an interface name to the union of its
+/// declarations' extends lists). `visited` persists across branches — for
+/// fixed-target reachability a globally-marked DFS gives the same answer
+/// as the backtracking walk this replaced, without re-exploring shared
+/// ancestors from every path.
 fn iface_extends_reaches(
-  module_ : @ast.TsModule,
+  edges : Map[String, Array[String]],
   target : String,
   extends_names : Array[String],
-  visited : Array[String],
+  visited : Map[String, Unit],
 ) -> Bool {
   for name in extends_names {
     if name == target {
@@ -798,20 +822,14 @@ fn iface_extends_reaches(
     if visited.contains(name) {
       continue
     }
-    for iface in module_.interfaces {
-      if iface.name == name {
-        visited.push(name)
-        let reached = iface_extends_reaches(
-          module_,
-          target,
-          iface.extends_names,
-          visited,
-        )
-        let _ = visited.pop()
-        if reached {
+    match edges.get(name) {
+      Some(next) => {
+        visited[name] = ()
+        if iface_extends_reaches(edges, target, next, visited) {
           return true
         }
       }
+      None => ()
     }
   }
   false

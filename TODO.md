@@ -1425,6 +1425,79 @@ both the name and the type diverged. Fixed from both sides:
 - [ ] Do not pursue `any` / `unknown` AST distinction unless a downstream
   consumer needs it; the JSValue count is unaffected.
 
+## Performance Tuning Round 1 (2026-07-19)
+
+Profiled with `moon bench --target native` + callgrind over the release
+`tscheck` binary (`--parse` / full, `--iters N`; use
+`--toggle-collect=<mangled check entry>` to isolate the check phase from
+the parse). Five landed batches, all behavior-preserving (full suite
+2523 green, oracle byte-identical TP 2338 / FP 0 / TN 1750 / MISS 396,
+every gate green):
+
+1. Parser whole-source rescans (`20ff7e7`): `from_source_with_jsx`
+   lowered the FULL source 3x per parse (`@noImplicitThis` x2,
+   `@filename:`); all whole-source markers now come from one
+   `scan_source_directive_flags` pass over `@` positions. The ~10
+   conformance-header detectors each sliced+lowered their own 1KB head
+   -- multiplied by JSX speculation re-entering `from_source_with_jsx`
+   on sub-sources (2k+ nested parses on parserharness.ts); the head is
+   now computed once per parse and threaded through. `parse_jsdoc_block`
+   rewritten single-pass over StringViews (was 3+ owned strings per
+   comment line); the lexer passes the comment span without copying.
+2. Checker structural scans (`58527b4`): `iface_extends_reaches` was
+   O(ifaces^2 x chain) via per-step rescans of every interface decl
+   (~7.5% of a dom.generated.d.ts run) -- now a prebuilt name->extends
+   adjacency map + hash-set DFS. `is_lib_global_value`/`_type` (generated
+   1k/2.2k-arm string matches, probed once per reference; 9.6% of a
+   generic-heavy run) now memoize per name via gen_lib_globals.sh.
+3. Bench coverage: `moon bench` gains JSDoc-heavy (300 documented
+   decls) and old-style-cast-heavy (200 funcs, JSX speculation) parser
+   fixtures so both optimized paths regress visibly.
+
+Measured (release tscheck, per iteration):
+- es5.d.ts parse 11.7ms -> 6.1ms (~19 -> ~36 MB/s); full check 15 -> 9.7ms
+- dom.generated.d.ts parse 115 -> 60ms; full 170 -> ~100ms
+- parserharness.ts parse 44 -> 30ms; full 60 -> 49ms
+- generic-heavy check phase 26 -> 19ms
+- moon bench parser fixtures -17%..-38%
+
+4. Paren-JSX speculation gated on `allow_jsx` (batch 4): tscheck was
+   already extension-driven (`.tsx` only), but THREE paren-path JSX
+   attempts (`try_parse_parenthesized_jsx_expr` + the two
+   `peek_at(1)==Lt` temp parses in `parse_parenthesized_expr` /
+   `parse_primary`) ignored the flag, so every `(<any>x)` cast in a
+   `.ts` file ran the full JSX source scan + nested embed sub-parses
+   and threw the work away. All three now early-out in `.ts` mode --
+   tsc-aligned (`(<T>x)` is a parenthesized type assertion there).
+   parserharness.ts parse 30 -> 11ms (44ms pre-round; -75% total),
+   full check 49 -> 35ms, byte-identical diagnostics and oracle
+   results. `moon bench` cast fixture split into `.tsx`-mode (4.96ms,
+   speculation still exercised) and `.ts`-mode (3.51ms) variants.
+
+5. Module-pass allocation hoists (batch 5, check-phase Ir on
+   dom.generated.d.ts 552M -> 473M, -14%): `check_structural_duplicates`
+   and `walk_module_undeclared_tps` interpolated their diagnostic path
+   string (`"interface \{name}"` etc.) once per FIELD/PARAM instead of
+   per declaration — hoisted; `walk_module_undeclared_tps` also did a
+   linear scan of `method_type_params` per field (quadratic on lib.dom
+   interfaces) — now grouped once per interface;
+   `check_interface_extends_compat` rebuilt the base interface's
+   field/overload-count maps once per (derived, base) EDGE — popular DOM
+   bases like `Event` are extended by hundreds of interfaces — now
+   cached per base name, and the derived counts hoisted out of the
+   bases loop.
+
+Remaining known sinks (next round candidates): `.tsx`-mode JSX
+speculation still re-lexes substrings per `<` attempt (only matters
+for real `.tsx` sources now); refcount+alloc runtime overhead is
+~29% of the remaining check-phase profile and ~25-30% of parse (only
+fixable by allocating less); String-keyed Map probes are ~8% of the
+check phase spread across all passes (an interned-name or ID-keyed
+resolver would be a deep refactor); `Parser::peek/check` +
+`TokenKind::equal` are ~30% of body-heavy `.ts` parses (each peek
+copies a Token and refcounts its payload; a tag-int fast path would
+need parser-wide changes).
+
 ## TS Checker Conformance (current state, 2026-07-17 — TypeScript 7)
 
 react joined the real-world gate as the 21st package (2026-07-18):

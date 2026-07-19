@@ -23704,15 +23704,13 @@ fn check_structural_duplicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
   // synthesized into an interface by the parser, so the interface loop
   // below already covers it -- no separate type-alias pass is needed.
   for iface in module_.interfaces {
+    let ipath = "interface \{iface.name}"
     for name in member_name_duplicates(iface.fields) {
-      issues.push({
-        path: "interface \{iface.name}",
-        message: "duplicate identifier `\{name}`",
-      })
+      issues.push({ path: ipath, message: "duplicate identifier `\{name}`" })
     }
     // Nested object type-literals inside field types.
     for f in iface.fields {
-      collect_type_dup_issues(f.1, "interface \{iface.name}", issues)
+      collect_type_dup_issues(f.1, ipath, issues)
     }
   }
   // Object type-literals in other declaration positions: alias bodies,
@@ -23726,16 +23724,18 @@ fn check_structural_duplicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
     }
   }
   for f in module_.funcs {
+    let fpath = "function \{f.name}"
     for p in f.params {
-      collect_type_dup_issues(p.type_, "function \{f.name}", issues)
+      collect_type_dup_issues(p.type_, fpath, issues)
     }
-    collect_type_dup_issues(f.return_type, "function \{f.name}", issues)
+    collect_type_dup_issues(f.return_type, fpath, issues)
   }
   for imp in module_.imports {
+    let ipath = "function \{imp.name}"
     for p in imp.params {
-      collect_type_dup_issues(p.1, "function \{imp.name}", issues)
+      collect_type_dup_issues(p.1, ipath, issues)
     }
-    collect_type_dup_issues(imp.return_type, "function \{imp.name}", issues)
+    collect_type_dup_issues(imp.return_type, ipath, issues)
   }
   for v in module_.values {
     collect_type_dup_issues(v.type_, "value \{v.name}", issues)
@@ -24429,44 +24429,40 @@ fn walk_module_undeclared_tps(
 ) -> Unit {
   for f in module_.funcs {
     let scope = scope_extend(tp_scope, f.type_params)
+    let fpath = "function \{f.name}"
     for p in f.params {
-      check_type_undeclared_tps(
-        p.type_,
-        scope,
-        declared,
-        issues,
-        "function \{f.name}",
-      )
+      check_type_undeclared_tps(p.type_, scope, declared, issues, fpath)
     }
-    check_type_undeclared_tps(
-      f.return_type,
-      scope,
-      declared,
-      issues,
-      "function \{f.name}",
-    )
+    check_type_undeclared_tps(f.return_type, scope, declared, issues, fpath)
   }
   for imp in module_.imports {
     let scope = scope_extend(tp_scope, imp.type_params)
+    let ipath = "function \{imp.name}"
     for p in imp.params {
-      check_type_undeclared_tps(
-        p.1,
-        scope,
-        declared,
-        issues,
-        "function \{imp.name}",
-      )
+      check_type_undeclared_tps(p.1, scope, declared, issues, ipath)
     }
-    check_type_undeclared_tps(
-      imp.return_type,
-      scope,
-      declared,
-      issues,
-      "function \{imp.name}",
-    )
+    check_type_undeclared_tps(imp.return_type, scope, declared, issues, ipath)
   }
   for iface in module_.interfaces {
     let iscope = scope_extend(tp_scope, iface.type_params)
+    let ipath = "interface \{iface.name}"
+    // A generic method field carries its own fresh type parameters.
+    // Accumulate across ALL same-name entries: an overloaded method has
+    // one entry per overload (lib.dom's `querySelector<K>` /
+    // `querySelector<E>` set), and the fields are keyed by name only,
+    // so each field must see the union of the overloads' binders.
+    // Group once per interface — the per-field linear scan over
+    // `method_type_params` was quadratic on lib.dom-sized interfaces.
+    let method_tps_by_name : Map[String, Array[String]] = {}
+    for entry in iface.method_type_params {
+      match method_tps_by_name.get(entry.0) {
+        Some(acc) =>
+          for tp in entry.1 {
+            acc.push(tp)
+          }
+        None => method_tps_by_name[entry.0] = entry.1.copy()
+      }
+    }
     for field in iface.fields {
       // Call / construct / index signatures (`<T>(x: T): T`) declare their own
       // generic parameters under a sentinel field name that doesn't key into
@@ -24475,55 +24471,25 @@ fn walk_module_undeclared_tps(
       if is_signature_sentinel(field.0) {
         continue
       }
-      // A generic method field carries its own fresh type parameters.
-      // Accumulate across ALL same-name entries: an overloaded method has
-      // one entry per overload (lib.dom's `querySelector<K>` /
-      // `querySelector<E>` set), and the fields are keyed by name only,
-      // so each field must see the union of the overloads' binders.
-      let mut mscope = iscope
-      for entry in iface.method_type_params {
-        if entry.0 == field.0 {
-          mscope = scope_extend(mscope, entry.1)
-        }
+      let mscope = match method_tps_by_name.get(field.0) {
+        Some(tps) => scope_extend(iscope, tps)
+        None => iscope
       }
-      check_type_undeclared_tps(
-        field.1,
-        mscope,
-        declared,
-        issues,
-        "interface \{iface.name}",
-      )
+      check_type_undeclared_tps(field.1, mscope, declared, issues, ipath)
     }
   }
   for c in module_.classes {
     let cscope = scope_extend(tp_scope, c.type_params)
+    let cpath = "class \{c.name}"
     for prop in c.properties {
-      check_type_undeclared_tps(
-        prop.type_,
-        cscope,
-        declared,
-        issues,
-        "class \{c.name}",
-      )
+      check_type_undeclared_tps(prop.type_, cscope, declared, issues, cpath)
     }
     for m in c.methods {
       let mscope = scope_extend(cscope, m.type_params)
       for p in m.params {
-        check_type_undeclared_tps(
-          p.1,
-          mscope,
-          declared,
-          issues,
-          "class \{c.name}",
-        )
+        check_type_undeclared_tps(p.1, mscope, declared, issues, cpath)
       }
-      check_type_undeclared_tps(
-        m.return_type,
-        mscope,
-        declared,
-        issues,
-        "class \{c.name}",
-      )
+      check_type_undeclared_tps(m.return_type, mscope, declared, issues, cpath)
     }
   }
   for v in module_.values {
@@ -28482,12 +28448,56 @@ fn check_interface_extends_compat(
       _ => false
     }
   }
+  // Field map + overload counts per BASE interface, built once per name
+  // instead of once per (derived, base) edge — popular DOM bases like
+  // `Event` / `Node` are extended by hundreds of interfaces. Keyed by
+  // name, which is exactly how bases resolve (`iface_by_name`).
+  let base_fields_cache : Map[
+    String,
+    (Map[String, @ast.TsType], Map[String, Int]),
+  ] = {}
+  fn base_field_maps(
+    name : String,
+    base : @ast.TsInterface,
+  ) -> (Map[String, @ast.TsType], Map[String, Int]) {
+    match base_fields_cache.get(name) {
+      Some(v) => v
+      None => {
+        let fields : Map[String, @ast.TsType] = {}
+        let counts : Map[String, Int] = {}
+        for f in base.fields {
+          fields[f.0] = f.1
+          counts[f.0] = match counts.get(f.0) {
+            Some(n) => n + 1
+            None => 1
+          }
+        }
+        let v = (fields, counts)
+        base_fields_cache[name] = v
+        v
+      }
+    }
+  }
+
   for iface in module_.interfaces {
     if iface.type_params.length() > 0 {
       continue
     }
     if iface.extends_names.length() == 0 {
       continue
+    }
+    // Overload sets: when either side declares the member more than
+    // once, tsc compares the WHOLE set (any-overload satisfies), so a
+    // pairwise entry comparison is wrong — lib.dom's specialized
+    // `addEventListener<K extends keyof ...>` + string-overload pattern
+    // misfired 464 times. Count once per derived declaration (NOT per
+    // base edge) and skip those members below.
+    let derived_counts : Map[String, Int] = {}
+    for df in iface.fields {
+      derived_counts[df.0] = match derived_counts.get(df.0) {
+        Some(n) => n + 1
+        None => 1
+      }
     }
     for bi, base_name in iface.extends_names {
       // Skip bases supplied with type arguments (`extends Foo<X>`).
@@ -28498,30 +28508,8 @@ fn check_interface_extends_compat(
         Some(b) => b
         None => continue
       }
-      // Base field name -> (type, accepts-undefined).
-      let base_fields : Map[String, @ast.TsType] = {}
-      for f in base.fields {
-        base_fields[f.0] = f.1
-      }
-      // Overload sets: when either side declares the member more than
-      // once, tsc compares the WHOLE set (any-overload satisfies), so a
-      // pairwise entry comparison is wrong — lib.dom's specialized
-      // `addEventListener<K extends keyof ...>` + string-overload pattern
-      // misfired 464 times. Count and skip those members below.
-      let derived_counts : Map[String, Int] = {}
-      for df in iface.fields {
-        derived_counts[df.0] = match derived_counts.get(df.0) {
-          Some(n) => n + 1
-          None => 1
-        }
-      }
-      let base_counts : Map[String, Int] = {}
-      for f in base.fields {
-        base_counts[f.0] = match base_counts.get(f.0) {
-          Some(n) => n + 1
-          None => 1
-        }
-      }
+      // Base field name -> (type, overload count).
+      let (base_fields, base_counts) = base_field_maps(base_name, base)
       fn member_is_overloaded(name : String) -> Bool {
         (match derived_counts.get(name) {
           Some(n) => n > 1

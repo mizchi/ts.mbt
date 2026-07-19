@@ -418,7 +418,7 @@ fn Lexer::skip_whitespace(self : Lexer) -> Unit {
             // inline `@__PURE__` marker); JSDoc `/** … */` goes
             // through the structured parser so individual tags
             // are queryable downstream.
-            let comment_text = self.src[comment_start:self.pos].to_owned()
+            let comment_text = self.src[comment_start:self.pos]
             // Quick-and-cheap markers — these still drive the
             // existing `pure_marker_positions` /
             // `internal_marker_positions` tables for callers that
@@ -433,7 +433,7 @@ fn Lexer::skip_whitespace(self : Lexer) -> Unit {
             // last block wins when multiple stack up before one
             // declaration.
             if comment_text.has_prefix("/**") {
-              match parse_jsdoc_block(comment_text) {
+              match parse_jsdoc_block_view(comment_text) {
                 Some(jb) => self.pending_jsdoc = Some(jb)
                 None => ()
               }

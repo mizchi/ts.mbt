@@ -326,6 +326,12 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
   let lexer = Lexer::new(src)
   let tokens = lexer.tokenize()
   let in_strict = detect_use_strict_prologue(src)
+  // The conformance-header detectors below all scan the same leading
+  // window. Slice + lowercase it once — JSX speculation re-enters
+  // `from_source_with_jsx` on sub-sources, so per-detector copies used to
+  // multiply across every speculative parse.
+  let head = source_head(src)
+  let head_lower = head.to_lower()
   let grammar_misuses : Array[String] = []
   if lexer.invalid_char_count > 0 {
     grammar_misuses.push("invalid character in source")
@@ -333,17 +339,21 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
   if lexer.unterminated_template {
     grammar_misuses.push("unterminated template literal")
   }
+  // Whole-source directive markers, collected in one pass (each used to
+  // be its own full-source scan — two of them via lowered copies).
+  let (has_ts_suppression, noimplicitthis_off, has_filename_directive) = scan_source_directive_flags(
+    src,
+  )
   // Marker: the file uses `@ts-ignore` / `@ts-expect-error` suppression
   // comments somewhere. Our issues carry no line positions, so rules
   // whose corpus counter-examples are suppressed lines (the computed-key
   // TS2465/TS1166 family) abstain for the whole file when set.
-  if src.contains("@ts-ignore") || src.contains("@ts-expect-error") {
+  if has_ts_suppression {
     grammar_misuses.push("<ts-suppression-present>")
   }
   // TS2683 opt-out: `@noImplicitThis: false` disables the implicit-any
   // `this` diagnostics for the file.
-  if src.to_lower().contains("@noimplicitthis: false") ||
-    src.to_lower().contains("@noimplicitthis:false") {
+  if noimplicitthis_off {
     grammar_misuses.push("<noimplicitthis-off>")
   }
   for _i in 0..<lexer.invalid_radix_digit_count {
@@ -362,7 +372,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
   }
   // Module-scoped flag marker for the override checks (TS4114 fires only
   // under `@noImplicitOverride: true`); TS4112/TS4113 are unconditional.
-  if detect_no_implicit_override(src) {
+  if detect_no_implicit_override(head) {
     grammar_misuses.push("<noimplicitoverride-on>")
   }
   // TS2318 evidence: lib-set directives that provably remove global types
@@ -372,10 +382,10 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
   // lacks `IterableIterator` (needed by generators —
   // generatorReturnTypeFallback.2), and one without `esnext` lacks
   // `Disposable` (needed by `using` — usingDeclarations.9).
-  if detect_nolib(src) {
+  if detect_nolib(head_lower) {
     grammar_misuses.push("<nolib>")
   }
-  match detect_lib_list(src) {
+  match detect_lib_list(head_lower) {
     Some(libs) => {
       if !lib_list_grants_iterable(libs) {
         grammar_misuses.push("<lib-lacks-iterable>")
@@ -394,7 +404,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
       // No explicit `@lib:` — the default lib follows the target, so an
       // explicit `@target:` list capped below es2017 also lacks the
       // es2017 surface (useObjectValuesAndEntries3's `@target: es6`).
-      match detect_target_list(src) {
+      match detect_target_list(head_lower) {
         Some(targets) =>
           if !target_list_reaches_es2017(targets) {
             grammar_misuses.push("<lib-lacks-es2017>")
@@ -404,7 +414,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
   }
   // TS2854 evidence: a top-level `await using` needs target >= es2017;
   // conformance files list their variant targets in one directive.
-  match detect_target_list(src) {
+  match detect_target_list(head_lower) {
     Some(targets) =>
       if target_list_has_below_es2017(targets) {
         grammar_misuses.push("<target-below-es2017>")
@@ -413,12 +423,13 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
   }
   // Decorator-mode marker so checker-side decorator signature rules can
   // pick the runtime invocation arity (legacy = 1 arg, standard = 2).
-  if detect_experimental_decorators(src) {
+  let experimental_decorators = detect_experimental_decorators(head_lower)
+  if experimental_decorators {
     grammar_misuses.push("<experimental-decorators>")
   }
   // Marker for the TS2695 comma-operator check, which tsc disables under
   // `@allowUnreachableCode: true`.
-  if detect_allow_unreachable_code(src) {
+  if detect_allow_unreachable_code(head) {
     grammar_misuses.push("<allowunreachable-on>")
   }
   {
@@ -455,18 +466,18 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     grammar_misuses,
     imported_binding_names: [],
     import_module_specs: [],
-    multi_file_source: detect_filename_directives(src),
+    multi_file_source: has_filename_directive,
     class_base_type_args: [],
     no_bound_inline: false,
-    target_es6_plus: detect_target_es6_plus(src),
-    no_implicit_any: detect_no_implicit_any(src),
-    experimental_decorators: detect_experimental_decorators(src),
+    target_es6_plus: detect_target_es6_plus(head_lower),
+    no_implicit_any: detect_no_implicit_any(head),
+    experimental_decorators,
     template_invalid_escape_positions: lexer.template_invalid_escape_positions,
     record_implicit_any_params: false,
     class_decl_no_heritage: false,
     in_class_expr_body: false,
     written_any_params: {},
-    directive_strict: detect_directive_strict(src),
+    directive_strict: detect_directive_strict(head),
     param_optional_initializer_misuses: [],
     interface_member_modifier_misuses: [],
     collected_class_dups: [],
@@ -723,9 +734,7 @@ fn detect_use_strict_prologue(src : String) -> Bool {
 /// list contains `true`. Multi-variant directives (`@alwaysStrict: true,
 /// false`) count -- at least one tsc variant runs strict, so a strict-mode
 /// grammar misuse is an error in that variant's baseline.
-fn detect_directive_strict(src : String) -> Bool {
-  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
-  let head = src[:head_len].to_owned()
+fn detect_directive_strict(head : String) -> Bool {
   for directive in ["@alwaysStrict:", "@strict:"] {
     match head.find(directive) {
       Some(i) => {
@@ -777,12 +786,102 @@ fn Parser::rollback_recordings(
 }
 
 ///|
+/// Exact match of `needle` against `src` starting at position `i`.
+fn matches_at(src : String, i : Int, needle : String) -> Bool {
+  let n = needle.length()
+  if i + n > src.length() {
+    return false
+  }
+  for j in 0..<n {
+    if src[i + j] != needle[j] {
+      return false
+    }
+  }
+  true
+}
+
+///|
+/// ASCII-case-insensitive match of lowercase-ASCII `needle` against
+/// `src` starting at position `i` (code-unit compare, A-Z folded).
+fn matches_ascii_ci_at(src : String, i : Int, needle : String) -> Bool {
+  let n = needle.length()
+  if i + n > src.length() {
+    return false
+  }
+  for j in 0..<n {
+    let mut c = src[i + j].to_int()
+    if c >= 65 && c <= 90 {
+      c = c + 32
+    }
+    if c != needle[j].to_int() {
+      return false
+    }
+  }
+  true
+}
+
+///|
+/// One pass over the whole source collecting every marker that
+/// `from_source_with_jsx` needs from arbitrary positions:
+///
+///   .0  `@ts-ignore` / `@ts-expect-error` (case-sensitive)
+///   .1  `@noImplicitThis:` + optional single space + `false`
+///       (case-insensitive)
+///   .2  `@filename:` (case-insensitive)
+///
+/// All markers start with `@`, so the scan only inspects positions whose
+/// code unit is `@`. Replaces five separate full-source scans, two of
+/// which lowered a full mutable copy of the source per call.
+fn scan_source_directive_flags(src : String) -> (Bool, Bool, Bool) {
+  let mut suppression = false
+  let mut noimplicitthis_off = false
+  let mut filename = false
+  let at_code = '@'.to_int()
+  let m = src.length()
+  for i in 0..<m {
+    if src[i].to_int() != at_code {
+      continue
+    }
+    if !suppression &&
+      (
+        matches_at(src, i, "@ts-ignore") ||
+        matches_at(src, i, "@ts-expect-error")
+      ) {
+      suppression = true
+    }
+    if !noimplicitthis_off && matches_ascii_ci_at(src, i, "@noimplicitthis:") {
+      let mut j = i + "@noimplicitthis:".length()
+      if j < m && src[j].to_int() == ' '.to_int() {
+        j += 1
+      }
+      if matches_ascii_ci_at(src, j, "false") {
+        noimplicitthis_off = true
+      }
+    }
+    if !filename && matches_ascii_ci_at(src, i, "@filename:") {
+      filename = true
+    }
+    if suppression && noimplicitthis_off && filename {
+      break
+    }
+  }
+  (suppression, noimplicitthis_off, filename)
+}
+
+///|
+/// The leading window the conformance-header detectors scan: the first
+/// 1024 UTF-16 code units of the source, as an owned string. Computed
+/// once per `from_source_with_jsx` and threaded through every detector.
+fn source_head(src : String) -> String {
+  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
+  src[:head_len].to_owned()
+}
+
+///|
 /// True when the conformance header names an ES2015+ target
 /// (`@target: es6` / `es2015` .. `esnext`), in any position of the
-/// comma list.
-fn detect_target_es6_plus(src : String) -> Bool {
-  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
-  let head = src[:head_len].to_owned().to_lower()
+/// comma list. `head` is the pre-lowered leading window.
+fn detect_target_es6_plus(head : String) -> Bool {
   match head.find("@target:") {
     Some(i) => {
       let rest = head[i + "@target:".length():].to_owned()
@@ -806,10 +905,8 @@ fn detect_target_es6_plus(src : String) -> Bool {
 /// noImplicitAny from the conformance header. Default `true` (matching the
 /// baselines for directive-less files); `@strict: false` /
 /// `@noImplicitAny: false` opt out, explicit `@noImplicitAny: true` wins
-/// over `@strict: false`.
-fn detect_no_implicit_any(src : String) -> Bool {
-  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
-  let head = src[:head_len].to_owned()
+/// over `@strict: false`. `head` is the (case-preserved) leading window.
+fn detect_no_implicit_any(head : String) -> Bool {
   if head.contains("@noImplicitAny: true") ||
     head.contains("@noImplicitAny:true") {
     return true
@@ -827,10 +924,8 @@ fn detect_no_implicit_any(src : String) -> Bool {
 ///|
 /// True when the conformance header enables `@noImplicitOverride`.
 /// Default OFF (unlike noImplicitAny): tsc only checks missing `override`
-/// modifiers under the explicit flag.
-fn detect_no_implicit_override(src : String) -> Bool {
-  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
-  let head = src[:head_len].to_owned()
+/// modifiers under the explicit flag. `head` is the case-preserved window.
+fn detect_no_implicit_override(head : String) -> Bool {
   head.contains("@noImplicitOverride: true") ||
   head.contains("@noImplicitOverride:true")
 }
@@ -838,27 +933,16 @@ fn detect_no_implicit_override(src : String) -> Bool {
 ///|
 /// True when the conformance header enables `@allowUnreachableCode`.
 /// tsc gates the TS2695 comma-operator check on this flag being off.
-fn detect_allow_unreachable_code(src : String) -> Bool {
-  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
-  let head = src[:head_len].to_owned()
+/// `head` is the case-preserved leading window.
+fn detect_allow_unreachable_code(head : String) -> Bool {
   head.contains("@allowUnreachableCode: true") ||
   head.contains("@allowUnreachableCode:true")
 }
 
 ///|
-/// True when the source embeds `@filename:` conformance directives (any
-/// case variant) -- i.e. a multi-file test concatenated into one parse.
-fn detect_filename_directives(src : String) -> Bool {
-  src.to_lower().contains("@filename:")
-}
-
-///|
-/// True when the leading test-header directives enable legacy decorators
-/// (`// @experimentaldecorators: true`). Parameter decorators are legal
-/// only in that mode.
-fn detect_nolib(src : String) -> Bool {
-  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
-  let head = src[:head_len].to_owned().to_lower()
+/// True when the leading test-header directives set `@noLib: true`.
+/// `head` is the pre-lowered leading window.
+fn detect_nolib(head : String) -> Bool {
   match head.find("@nolib:") {
     Some(idx) => {
       let after = head[idx + "@nolib:".length():].to_owned()
@@ -874,10 +958,8 @@ fn detect_nolib(src : String) -> Bool {
 
 ///|
 /// The raw (lower-cased, comma-separated) `@lib:` directive value from the
-/// test-header comment block, if present.
-fn detect_lib_list(src : String) -> String? {
-  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
-  let head = src[:head_len].to_owned().to_lower()
+/// test-header comment block, if present. `head` is the pre-lowered window.
+fn detect_lib_list(head : String) -> String? {
   match head.find("@lib:") {
     Some(idx) => {
       let after = head[idx + "@lib:".length():].to_owned()
@@ -912,10 +994,8 @@ fn lib_list_grants_iterable(libs : String) -> Bool {
 
 ///|
 /// The raw (lower-cased, comma-separated) `@target:` directive value, if
-/// present.
-fn detect_target_list(src : String) -> String? {
-  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
-  let head = src[:head_len].to_owned().to_lower()
+/// present. `head` is the pre-lowered leading window.
+fn detect_target_list(head : String) -> String? {
   match head.find("@target:") {
     Some(idx) => {
       let after = head[idx + "@target:".length():].to_owned()
@@ -995,9 +1075,8 @@ fn target_list_has_below_es2017(targets : String) -> Bool {
 }
 
 ///|
-fn detect_experimental_decorators(src : String) -> Bool {
-  let head_len = if src.length() < 1024 { src.length() } else { 1024 }
-  let head = src[:head_len].to_owned().to_lower()
+/// `@experimentalDecorators: true` from the pre-lowered leading window.
+fn detect_experimental_decorators(head : String) -> Bool {
   match head.find("@experimentaldecorators:") {
     Some(idx) => {
       let after = head[idx + "@experimentaldecorators:".length():].to_owned()
