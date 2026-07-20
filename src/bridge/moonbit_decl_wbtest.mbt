@@ -3040,3 +3040,32 @@ async test "bridge: merge trailing-param member overloads" {
     ),
   )
 }
+
+///|
+async test "bridge: typeof value references resolve to callable shapes" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/typeof-inference-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // `typeof ip` of a generic overloaded function resolves to a callable
+  // shape with bound-substituted type params instead of `JSValue`.
+  assert_true(actual.contains("reference : () -> IpAction[String, JSValue]"))
+  // `ReturnType<typeof addPairToJSMap>` reduces through the resolved
+  // function type -- no bare `ReturnType` opaque type leaks.
+  assert_false(actual.contains("declare pub type ReturnType"))
+  assert_false(actual.contains("-> ReturnType"))
+  // Ambient `static readonly X = "lit"` members type from the literal
+  // (single-case enum) instead of `JSValue`.
+  assert_true(
+    actual.contains(
+      "declare pub fn get_scalar_block_folded() -> ScalarBLOCK_FOLDED",
+    ),
+  )
+}

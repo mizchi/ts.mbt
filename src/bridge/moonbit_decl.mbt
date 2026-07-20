@@ -4077,7 +4077,15 @@ fn typeof_value_query_type_inner(
       let type_ = typeof_import_decl_to_func_type(
         info, import_, modules, canonical_types,
       )
-      if typeof_value_type_is_stable(info, type_) {
+      // A callable shape keeps its value even with widened (`any` /
+      // `unknown`) slots inside -- they render as `JSValue` params while
+      // the arity and callability stay real. Only non-callable results
+      // keep the strict stability requirement.
+      if typeof_value_type_is_stable(
+          info,
+          type_,
+          allow_widened=type_ is Func(_, _),
+        ) {
         Some(type_)
       } else {
         None
@@ -4086,10 +4094,52 @@ fn typeof_value_query_type_inner(
     None =>
       match find_func_decl(info.module_, name) {
         Some(func) => {
-          let type_ = typeof_func_decl_to_func_type(
-            info, func, modules, canonical_types,
+          // Merge sibling overloads that only append trailing params
+          // (same return) into one signature; otherwise keep the
+          // least-widening declaration picked by `find_func_decl`.
+          let overloads = find_func_decls(info.module_, name)
+          let mut has_type_params = func.type_params.length() > 0
+          let mut merged : @ast.TsType? = None
+          let mut merge_failed = false
+          for overload in overloads {
+            if overload.type_params.length() > 0 {
+              has_type_params = true
+            }
+            if merge_failed {
+              continue
+            }
+            let next = typeof_func_decl_to_func_type(
+              info, overload, modules, canonical_types,
+            )
+            match merged {
+              None => merged = Some(next)
+              Some(acc) =>
+                match decl_merge_overload_func_types(acc, next) {
+                  Some(joined) => merged = Some(joined)
+                  None => {
+                    merged = None
+                    merge_failed = true
+                  }
+                }
+            }
+          }
+          let type_ = match merged {
+            Some(joined) => joined
+            None =>
+              typeof_func_decl_to_func_type(
+                info, func, modules, canonical_types,
+              )
+          }
+          // Bound substitution can legitimately leave widened (`Any`)
+          // slots behind for unbounded type params; a callable shape
+          // with widened slots still beats collapsing the whole
+          // reference to `JSValue`.
+          let stable = typeof_value_type_is_stable(
+            info,
+            type_,
+            allow_widened=has_type_params || type_ is Func(_, _),
           )
-          if typeof_value_type_is_stable(info, type_) {
+          if stable {
             Some(type_)
           } else {
             None
@@ -4148,15 +4198,52 @@ fn typeof_func_decl_to_func_type(
   modules : Map[String, DeclModuleInfo],
   canonical_types : Map[String, String],
 ) -> @ast.TsType {
+  // A generic function's `typeof` still has a stable callable shape once
+  // every type parameter is replaced by its declared bound (`Any` when
+  // unbounded). Bounds may reference earlier params
+  // (`<A extends string, B extends Foo<A>>`), so resolve them
+  // left-to-right before substituting into the signature.
+  let tp_names : Array[String] = []
+  let tp_bounds : Array[@ast.TsType] = []
+  for tp in func.type_params {
+    tp_names.push(tp)
+    let mut bound : @ast.TsType = Any
+    for pair in func.type_param_bounds {
+      if pair.0 == tp {
+        bound = pair.1
+        break
+      }
+    }
+    tp_bounds.push(bound)
+  }
+  for i in 0..<tp_bounds.length() {
+    let mut substituted = tp_bounds[i]
+    for j in 0..<i {
+      substituted = substitute_type_alias_params(substituted, [tp_names[j]], [
+        tp_bounds[j],
+      ])
+    }
+    tp_bounds[i] = substituted
+  }
   let params : Array[@ast.TsType] = []
   for param in func.params {
+    let substituted = if tp_names.length() == 0 {
+      param.type_
+    } else {
+      substitute_type_alias_params(param.type_, tp_names, tp_bounds)
+    }
     params.push(
-      lower_react_utility_type(info, param.type_, modules, canonical_types),
+      lower_react_utility_type(info, substituted, modules, canonical_types),
     )
+  }
+  let substituted_return = if tp_names.length() == 0 {
+    func.return_type
+  } else {
+    substitute_type_alias_params(func.return_type, tp_names, tp_bounds)
   }
   Func(
     params,
-    lower_react_utility_type(info, func.return_type, modules, canonical_types),
+    lower_react_utility_type(info, substituted_return, modules, canonical_types),
   )
 }
 
@@ -4164,24 +4251,35 @@ fn typeof_func_decl_to_func_type(
 fn typeof_value_type_is_stable(
   info : DeclModuleInfo,
   type_ : @ast.TsType,
+  allow_widened? : Bool = false,
 ) -> Bool {
   match @checker.classify_optional_like_union(type_) {
-    Some((collapsed, _)) => return typeof_value_type_is_stable(info, collapsed)
+    Some((collapsed, _)) =>
+      return typeof_value_type_is_stable(info, collapsed, allow_widened~)
     None => ()
   }
   match @checker.classify_transparent_intersection(type_) {
-    Some(inner) => return typeof_value_type_is_stable(info, inner)
+    Some(inner) =>
+      return typeof_value_type_is_stable(info, inner, allow_widened~)
     None => ()
   }
   match type_ {
-    Any | Never | Null | Undefined | TypeOf(_) => false
+    // `null` / `undefined` / `never` are concrete types: as nested type
+    // arguments (`Action<T, undefined>`) they don't destabilize the
+    // reference. `Any` stays gated behind `allow_widened`
+    // (bound-substituted generic signatures), where the widened slots
+    // render as `JSValue` inside an otherwise callable shape instead of
+    // collapsing the whole value.
+    Never | Null | Undefined => true
+    Any | Unknown | NonPrimitiveObject => allow_widened
+    TypeOf(_) => false
     Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) => true
     Number | Int | BigInt | Boolean | String_ | Void => true
-    Named(name) => typeof_named_type_is_stable(info, name)
-    Array(inner) => typeof_value_type_is_stable(info, inner)
+    Named(name) => typeof_named_type_is_stable(info, name, allow_widened~)
+    Array(inner) => typeof_value_type_is_stable(info, inner, allow_widened~)
     Tuple(items) => {
       for item in items {
-        if !typeof_value_type_is_stable(info, item) {
+        if !typeof_value_type_is_stable(info, item, allow_widened~) {
           return false
         }
       }
@@ -4189,18 +4287,18 @@ fn typeof_value_type_is_stable(
     }
     Func(params, return_type) => {
       for param in params {
-        if !typeof_value_type_is_stable(info, param) {
+        if !typeof_value_type_is_stable(info, param, allow_widened~) {
           return false
         }
       }
-      typeof_value_type_is_stable(info, return_type)
+      typeof_value_type_is_stable(info, return_type, allow_widened~)
     }
     Applied(name, args) => {
-      if !typeof_named_type_is_stable(info, name) {
+      if !typeof_named_type_is_stable(info, name, allow_widened~) {
         return false
       }
       for arg in args {
-        if !typeof_value_type_is_stable(info, arg) {
+        if !typeof_value_type_is_stable(info, arg, allow_widened~) {
           return false
         }
       }
@@ -4208,7 +4306,7 @@ fn typeof_value_type_is_stable(
     }
     Union(items) | Intersection(items) => {
       for item in items {
-        if !typeof_value_type_is_stable(info, item) {
+        if !typeof_value_type_is_stable(info, item, allow_widened~) {
           return false
         }
       }
@@ -4219,17 +4317,21 @@ fn typeof_value_type_is_stable(
 }
 
 ///|
-fn typeof_named_type_is_stable(info : DeclModuleInfo, name : String) -> Bool {
+fn typeof_named_type_is_stable(
+  info : DeclModuleInfo,
+  name : String,
+  allow_widened? : Bool = false,
+) -> Bool {
   if name == "Array" ||
     name == "ReadonlyArray" ||
     name == "Promise" ||
     name == "PromiseLike" {
     return true
   }
-  if name == "any" ||
-    name == "unknown" ||
-    name == "Function" ||
-    name.contains(".") {
+  if name == "any" || name == "unknown" || name == "Function" {
+    return allow_widened
+  }
+  if name.contains(".") {
     return false
   }
   match find_interface_decl_recursive(info.module_, name) {
@@ -5977,20 +6079,30 @@ fn lower_react_utility_type(
         None => lowered
       }
     }
-    Applied("ReturnType", [Func(_, return_type)]) =>
-      lower_react_utility_type(info, return_type, modules, canonical_types)
+    Applied("ReturnType", [operand]) => {
+      // Lower the operand first so `ReturnType<typeof f>` (and any other
+      // indirection that resolves to a callable) reduces instead of
+      // leaking a bare `ReturnType` reference into the surface.
+      let lowered = lower_react_utility_type(
+        info, operand, modules, canonical_types,
+      )
+      match lowered {
+        Func(_, return_type) => return_type
+        _ => Applied("ReturnType", [lowered])
+      }
+    }
     Applied("Awaited", [inner_type]) =>
       utility_awaited_type(
         lower_react_utility_type(info, inner_type, modules, canonical_types),
       )
-    Applied("Parameters", [Func(params, _)]) => {
-      let lowered_params : Array[@ast.TsType] = []
-      for param in params {
-        lowered_params.push(
-          lower_react_utility_type(info, param, modules, canonical_types),
-        )
+    Applied("Parameters", [operand]) => {
+      let lowered = lower_react_utility_type(
+        info, operand, modules, canonical_types,
+      )
+      match lowered {
+        Func(params, _) => Tuple(params)
+        _ => Applied("Parameters", [lowered])
       }
-      Tuple(lowered_params)
     }
     Applied("ConstructorParameters", [Constructor(params, _, _)]) => {
       // Standalone `new (...args) => T` typedef: extract the param
@@ -10849,6 +10961,42 @@ fn clone_exported_value(
 }
 
 ///|
+/// Unannotated class properties whose initializer is a literal
+/// (`static readonly BLOCK_FOLDED = "BLOCK_FOLDED"`) infer their type
+/// from the initializer expression instead of widening to `JSValue`.
+/// Only primitive inferences are taken; anything else keeps the
+/// declared (widened) type.
+fn decl_infer_literal_property_type(
+  class_ : @ast.TsClassDecl,
+  class_property : @ast.TsClassPropertyDecl,
+) -> @ast.TsClassPropertyDecl {
+  if class_property.type_ != @ast.TsType::Any || !class_property.has_initializer {
+    return class_property
+  }
+  let inits = if class_property.is_static {
+    class_.static_field_inits
+  } else {
+    class_.instance_field_inits
+  }
+  let mut init : @ast.TsExpr? = None
+  for pair in inits {
+    if pair.0 == class_property.name {
+      init = Some(pair.1)
+      break
+    }
+  }
+  let inferred = match init {
+    Some(expr) => infer_decl_expr_type(expr, [])
+    None => @ast.TsType::Any
+  }
+  match inferred {
+    Number | Int | Boolean | String_ | BigInt =>
+      { ..class_property, type_: inferred }
+    _ => class_property
+  }
+}
+
+///|
 fn clone_class_property_in_scope(
   class_property : @ast.TsClassPropertyDecl,
   class_name : String,
@@ -11283,7 +11431,7 @@ fn append_class_origin_members(
   }
   for class_property in origin.class_.properties {
     let cloned_property = clone_class_property_in_scope(
-      class_property,
+      decl_infer_literal_property_type(origin.class_, class_property),
       origin.class_.name,
       origin.info,
       origin.local_name_prefix,

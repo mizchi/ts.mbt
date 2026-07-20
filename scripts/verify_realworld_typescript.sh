@@ -339,7 +339,7 @@ jsvalue_function_budget() {
     nanoid) printf '0\n' ;;
     dayjs) printf '3\n' ;;
     qs) printf '2\n' ;;
-    yaml) printf '67\n' ;;
+    yaml) printf '62\n' ;;
     superstruct) printf '56\n' ;;
     eventemitter3) printf '0\n' ;;
     mitt) printf '1\n' ;;
@@ -347,7 +347,7 @@ jsvalue_function_budget() {
     semver) printf '33\n' ;;
     picomatch) printf '5\n' ;;
     deepmerge) printf '4\n' ;;
-    axios) printf '61\n' ;;
+    axios) printf '37\n' ;;
     commander) printf '23\n' ;;
     debug) printf '5\n' ;;
     chokidar) printf '3\n' ;;
@@ -422,7 +422,13 @@ jsvalue_cause_budget() {
     colorette) printf '1|0|1|0|0|0|0\n' ;;
     magic-string) printf '0|0|0|0|0|0|0\n' ;;
     source-map) printf '17|6|0|7|0|3|1\n' ;;
-    valibot) printf '1738|1166|24|13|16|481|38\n' ;;
+    # 2026-07-20 typeof-value resolution: ~190 `reference: typeof action`
+    # members resolve from bare `JSValue` to callable shapes. unknown/any
+    # drops (-240) while surface/tuple grow: each resolved field now also
+    # emits method decls whose `IpAction[String, JSValue]` rendering
+    # matches the tuple/array `JSValue]` pattern first. Net: same widening,
+    # more usable callable surface.
+    valibot) printf '1858|926|24|13|22|835|38\n' ;;
     immer) printf '23|4|7|2|3|1|6\n' ;;
     execa) printf '17|2|0|4|1|0|10\n' ;;
     preact) printf '50|12|1|4|14|19|0\n' ;;
@@ -431,7 +437,7 @@ jsvalue_cause_budget() {
     nanoid) printf '0|0|0|0|0|0|0\n' ;;
     dayjs) printf '3|0|1|0|1|0|1\n' ;;
     qs) printf '8|2|1|0|0|0|5\n' ;;
-    yaml) printf '177|34|7|83|0|20|33\n' ;;
+    yaml) printf '172|34|7|83|0|20|28\n' ;;
     superstruct) printf '82|4|0|14|0|59|5\n' ;;
     eventemitter3) printf '16|0|0|0|5|6|5\n' ;;
     mitt) printf '10|4|0|2|3|1|0\n' ;;
@@ -439,7 +445,7 @@ jsvalue_cause_budget() {
     semver) printf '33|0|30|2|0|0|1\n' ;;
     picomatch) printf '11|6|4|0|0|0|1\n' ;;
     deepmerge) printf '14|8|0|2|0|3|1\n' ;;
-    axios) printf '190|68|4|17|0|69|32\n' ;;
+    axios) printf '166|62|4|21|0|75|4\n' ;;
     commander) printf '24|0|0|9|2|3|10\n' ;;
     debug) printf '17|4|0|1|0|12|0\n' ;;
     chokidar) printf '3|0|0|1|0|0|2\n' ;;

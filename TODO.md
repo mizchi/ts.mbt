@@ -1797,6 +1797,59 @@ hatches. Remaining ranked: mutating config headers inside interceptors
 (AxiosHeaders methods), Buffer.toString, JSValue value slots (zod
 shape values need per-value casts).
 
+Round 8 (same day) — checker-driven JSValue concretization round 2:
+`typeof` value queries. Mining the generated corpus surfaced one
+dominant inferable cluster: `readonly reference: typeof someFunction`
+members (valibot declares ~190, axios exposes `typeof Axios` /
+`typeof isCancel` style statics, glob/yaml similar) all collapsed to
+bare `JSValue` because `typeof` of a GENERIC or overloaded function
+never resolved. Fixes, all in the decl lowering:
+
+- `typeof_func_decl_to_func_type` substitutes each type parameter by
+  its declared bound (`Any` when unbounded; bounds may reference
+  earlier params, so they resolve left-to-right) before lowering, so
+  a generic function's `typeof` still yields a concrete callable
+  shape (`typeof ip` -> `() -> IpAction[String, JSValue]`).
+- the resolver now collects sibling overloads (`find_func_decls`) and
+  merges the round-7 trailing-param pattern into one signature before
+  falling back to the least-widening pick.
+- `typeof_value_type_is_stable` learned that `null` / `undefined` /
+  `never` are CONCRETE types (an `Action<T, undefined>` type argument
+  was destabilizing the whole reference), and gained an
+  `allow_widened~` mode — used whenever the resolved shape is a
+  callable — under which `any` / `unknown` / `object` slots are
+  acceptable: they render as `JSValue` params while arity and
+  callability stay real.
+- `ReturnType<...>` / `Parameters<...>` lower their operand FIRST, so
+  `ReturnType<typeof addPairToJSMap>` reduces through the resolved
+  function type. This also kills a real leak: yaml's `Pair::toJSON`
+  previously rendered `-> ReturnType` backed by a synthesized
+  `declare pub type ReturnType` opaque extern.
+- ambient classes (`declare class`) parse `static readonly X = "lit"`
+  literal initializers into literal TYPES (parser_function.mbt was
+  discarding the initializer expression) — string/bool/int literals
+  only, mirroring tsc's own inference so the TS7 oracle is safe by
+  construction; yaml's `Scalar.BLOCK_FOLDED` getters now return
+  single-case enums instead of `JSValue`. A bridge-side
+  `decl_infer_literal_property_type` covers runtime-class clones the
+  same way via `static_field_inits`.
+
+Fixture `typeof-inference-entry.d.ts` + wbtest pin all three
+behaviors. Oracle: TP 2338 / FP 0 / PFLEGAL 0 / TN 1750 — byte-equal
+to the recorded baseline. Corpus (5 budget rows recalibrated): axios
+JSValue functions 61 -> 37 and surface 190 -> 166; yaml 67 -> 62 /
+177 -> 172; valibot unknown/any 1166 -> 926 (-240) with surface
+1738 -> 1858 — the resolved `reference` members now emit callable
+method decls whose `IpAction[String, JSValue]` rendering the cause
+heuristic files under tuple/array, i.e. the same widening now ships
+usable callable surface instead of a bare `JSValue` slot.
+
+Remaining inferable clusters recorded for later rounds: `expects:
+null` literal members (~104 in valibot) still widen — typing them
+needs an opaque null representation decision; value-or-function
+unions (`ErrorMessage<T> = string | ((issue) => string)`, ~157
+`message` members) need an untagged-union construction story.
+
 Profiled with `moon bench --target native` + callgrind over the release
 `tscheck` binary (`--parse` / full, `--iters N`; use
 `--toggle-collect=<mangled check entry>` to isolate the check phase from
