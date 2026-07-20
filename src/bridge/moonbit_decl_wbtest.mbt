@@ -2899,3 +2899,39 @@ async test "bridge: undiscriminable union aliases join to their common base" {
   assert_true(actual.contains("/// issues : Array[UnderscoreIssueBase]"))
   assert_true(actual.contains("UnderscoreIssueBase"))
 }
+
+///|
+async test "bridge: specialize conditional interface members at concrete instantiations" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/conditional-member-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // The generic definition cannot decide `V extends Ack` — its member
+  // stays widened — but each concrete instantiation gets a synthesized
+  // monomorphic interface with the conditional resolved by the checker:
+  // Payload lacks Ack's required `ok` field (false branch, an async
+  // handler slot that lowers), Ack trivially extends itself (true
+  // branch, a plain sync callback).
+  assert_true(actual.contains("declare pub type Channel[V]"))
+  assert_true(
+    actual.contains(
+      "declare pub fn ChannelPayload::post(self : ChannelPayload, arg0 : async (Payload) -> Payload raise) -> Double",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn ChannelAck::post(self : ChannelAck, arg0 : () -> Unit) -> Double",
+    ),
+  )
+  assert_true(
+    actual.contains("declare pub fn payloadChannel() -> ChannelPayload"),
+  )
+  assert_true(actual.contains("declare pub fn ackChannel() -> ChannelAck"))
+}

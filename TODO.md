@@ -1657,10 +1657,42 @@ recalibrated from a nobudget collection run. Gate fixture grew
 sanitized-member getter) and `runAction`; both RUN in both promise
 layers.
 
-Still open (recorded, separate categories): axios's real
-`interceptors.request.use` sits behind a member-level CONDITIONAL type
-(`V extends AxiosResponse ? ... : ...`) that needs per-instantiation
-member specialization, and overloaded members still widen to JSValue.
+Round 4 (same day) — checker-driven JSValue concretization: the
+member-level conditional case is CLOSED. `Applied(GenericIface, args)`
+references whose members hide behind conditionals over the interface's
+own type params now specialize into synthesized monomorphic interfaces
+(`decl_conditional_member_interface_spec`, mirroring the
+exclusive-union alias synthesis: shared by the lowering and the
+collection walk, fires only when EVERY conditional member decides).
+The decision is a decl-layer structural `extends` (name equality ->
+true; a required target field missing from the source's
+extends-chain-merged fields -> false; anything else undecided) — the
+shared checker `extends_decision` is deliberately untouched since it
+feeds the TS7 oracle. A resolved branch then rides the whole earlier
+pipeline: alias inlining -> `| null` optional collapse -> union-return
+normalization -> async-callback lowering. Net effect on real axios:
+
+  interceptors.use : JSValue   (before)
+  AxiosInterceptorManagerInternalAxiosRequestConfig::use_(
+    self, (async (InternalAxiosRequestConfig[JSValue]) ->
+    InternalAxiosRequestConfig[JSValue] raise)?, ...)   (after)
+
+and the realworld axios smoke now registers a MoonBit async fn as a
+REQUEST INTERCEPTOR on a real axios instance (axios awaits the
+from_async promise; a marker count proves exactly one run; the
+connection-refused rejection still catches). A recursion guard
+(in-progress set + first-registration-only field walks) keeps
+self-referential instantiations from looping — date-fns crashed the
+first version. Fixture: `conditional-member-entry.d.ts` pins both
+branch outcomes (Payload lacks Ack's required field -> async handler
+slot; Ack extends itself -> sync callback).
+
+Surveyed but NOT concretizable via the checker (recorded): zod's
+remaining JSValue params are TS `unknown` (honest widening); playwright
+residuals are anonymous OBJECT-LITERAL option params (needs synthesized
+option structs, an emitter feature); overloaded members still widen
+(`interceptors` property itself is an anonymous-object type — one typed
+extern bridges to the specialized manager until then).
 
 Profiled with `moon bench --target native` + callgrind over the release
 `tscheck` binary (`--parse` / full, `--iters N`; use

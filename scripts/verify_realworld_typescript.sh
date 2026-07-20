@@ -347,7 +347,7 @@ jsvalue_function_budget() {
     semver) printf '33\n' ;;
     picomatch) printf '5\n' ;;
     deepmerge) printf '4\n' ;;
-    axios) printf '60\n' ;;
+    axios) printf '62\n' ;;
     commander) printf '24\n' ;;
     debug) printf '5\n' ;;
     chokidar) printf '3\n' ;;
@@ -439,7 +439,7 @@ jsvalue_cause_budget() {
     semver) printf '33|0|30|2|0|0|1\n' ;;
     picomatch) printf '11|6|4|0|0|0|1\n' ;;
     deepmerge) printf '14|8|0|2|0|3|1\n' ;;
-    axios) printf '185|76|4|18|0|54|33\n' ;;
+    axios) printf '195|76|4|18|0|64|33\n' ;;
     commander) printf '25|0|0|10|2|3|10\n' ;;
     debug) printf '19|6|0|1|0|12|0\n' ;;
     chokidar) printf '3|0|0|1|0|0|2\n' ;;
@@ -2036,6 +2036,18 @@ EOF
 extern "js" fn realworld_axios_config() -> @sut.AxiosRequestConfig[@sut.JSValue] =
   #| () => ({ url: "/users/1", baseURL: "https://example.test" })
 
+// The `interceptors` property is an anonymous-object type (still
+// JSValue); one typed extern bridges to the SPECIALIZED manager struct
+// that the conditional-member specialization synthesizes.
+extern "js" fn realworld_request_interceptors(a : @sut.AxiosInstance) -> @sut.AxiosInterceptorManagerInternalAxiosRequestConfig =
+  #| (a) => a.interceptors.request
+
+extern "js" fn realworld_mark_config(c : @sut.InternalAxiosRequestConfig[@sut.JSValue]) -> @sut.InternalAxiosRequestConfig[@sut.JSValue] =
+  #| (c) => { globalThis.__tsmbt_intercepted = (globalThis.__tsmbt_intercepted || 0) + 1; return c; }
+
+extern "js" fn realworld_intercepted_count() -> Int =
+  #| () => globalThis.__tsmbt_intercepted || 0
+
 fn main {
   let axios_core : @sut.Axios = @sut.unsafeCast(@sut.get_default())
   if axios_core.get_uri(Some(realworld_axios_config())) != "https://example.test/users/1" {
@@ -2077,6 +2089,41 @@ fn main {
     ignore(resp)
     if !rejected {
       abort("expected axios rejection to surface as JsRejection")
+    }
+    // Conditional-member specialization: `AxiosInterceptorManager<V>`'s
+    // `use` hides behind `V extends AxiosResponse ? ... : ...`; the
+    // request instantiation resolves to the request-interceptor
+    // signature and a MoonBit ASYNC fn slots straight in — axios awaits
+    // the promise the from_async glue returns before dispatching, so
+    // the marker count proves the interceptor really ran.
+    let instance = @sut.create(None)
+    let mgr = realworld_request_interceptors(instance)
+    let _ = mgr.use_(
+      Some(async fn(config) {
+        // Await a locally-resolved promise first, so axios really
+        // suspends on the handler before the marker runs.
+        let _ = @sut.all([]).wait()
+        realworld_mark_config(config)
+      }),
+      None,
+      None,
+    )
+    let instance_core : @sut.Axios = @sut.unsafeCast(instance)
+    let mut intercepted_rejected = false
+    let iresp : @sut.JSValue = instance_core
+      .get("http://127.0.0.1:1/unreachable", None)
+      .wait() catch {
+      _ => {
+        intercepted_rejected = true
+        @sut.unsafeCast(0)
+      }
+    }
+    ignore(iresp)
+    if !intercepted_rejected {
+      abort("expected intercepted request to reject")
+    }
+    if realworld_intercepted_count() != 1 {
+      abort("expected the async request interceptor to run exactly once")
     }
   }
 

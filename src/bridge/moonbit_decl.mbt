@@ -5202,6 +5202,218 @@ fn decl_exclusive_union_alias_interface_spec(
 }
 
 ///|
+/// Merge an interface's own field NAMES with its full `extends` chain,
+/// for the structural refutation below. Returns `false` when any link
+/// of the chain cannot be resolved (the decision must then stay
+/// undecided rather than wrongly refuting via missing members).
+fn decl_collect_interface_field_names_recursive(
+  info : DeclModuleInfo,
+  name : String,
+  acc : Map[String, Unit],
+  depth : Int,
+) -> Bool {
+  if depth > 8 {
+    return false
+  }
+  let iface = match find_interface_decl_recursive(info.module_, name) {
+    Some(iface) => iface
+    None => return false
+  }
+  for field in iface.fields {
+    acc[field.0] = ()
+  }
+  for base in iface.extends_names {
+    if !decl_collect_interface_field_names_recursive(info, base, acc, depth + 1) {
+      return false
+    }
+  }
+  true
+}
+
+///|
+/// Structural three-valued `extends` decision for two NAMED interfaces,
+/// used only by the conditional-member specialization below. The shared
+/// checker `extends_decision` stays untouched on purpose — it feeds the
+/// TS7 oracle and must not learn bridge-local module resolution.
+/// `Some(true)` on name equality; `Some(false)` when the target
+/// declares a REQUIRED field whose name is absent from the source's
+/// extends-chain-merged fields (TS structural assignability is refuted
+/// by a missing required member); `None` for everything else.
+fn decl_named_extends_decision(
+  info : DeclModuleInfo,
+  source_name : String,
+  target_name : String,
+) -> Bool? {
+  if source_name == target_name {
+    return Some(true)
+  }
+  let target = match find_interface_decl_recursive(info.module_, target_name) {
+    Some(iface) => iface
+    None => return None
+  }
+  if target.index_signatures.length() > 0 {
+    return None
+  }
+  let source_field_names : Map[String, Unit] = Map::new()
+  if !decl_collect_interface_field_names_recursive(
+      info, source_name, source_field_names, 0,
+    ) {
+    return None
+  }
+  for field in target.fields {
+    let (field_name, field_type) = field
+    let is_optional = match @checker.classify_optional_like_union(field_type) {
+      Some((_, optional)) => optional
+      None => false
+    }
+    if !is_optional && !(source_field_names.get(field_name) is Some(_)) {
+      return Some(false)
+    }
+  }
+  None
+}
+
+///|
+/// In-progress guard for the conditional-member specialization below.
+/// Entries are pushed on entry and removed on exit, so the map stays
+/// empty between top-level emissions.
+let decl_conditional_spec_in_progress : Map[String, Unit] = Map::new()
+
+///|
+fn decl_conditional_member_interface_spec_fields(
+  info : DeclModuleInfo,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+  iface : @ast.TsInterface,
+  args : Array[@ast.TsType],
+) -> Array[(String, @ast.TsType)]? {
+  let mut has_conditional_member = false
+  let spec_fields : Array[(String, @ast.TsType)] = []
+  for field in iface.fields {
+    let (field_name, field_type) = field
+    let substituted = substitute_type_alias_params(
+      field_type,
+      iface.type_params,
+      args,
+    )
+    match substituted {
+      Conditional(Named(check_name), Named(cond_target), t_branch, f_branch) => {
+        has_conditional_member = true
+        let chosen = match
+          decl_named_extends_decision(info, check_name, cond_target) {
+          Some(true) => t_branch
+          Some(false) => f_branch
+          None => return None
+        }
+        spec_fields.push(
+          (
+            field_name,
+            lower_react_utility_type(info, chosen, modules, canonical_types),
+          ),
+        )
+      }
+      Conditional(_, _, _, _) => return None
+      _ =>
+        spec_fields.push(
+          (
+            field_name,
+            lower_react_utility_type(
+              info, substituted, modules, canonical_types,
+            ),
+          ),
+        )
+    }
+  }
+  if !has_conditional_member {
+    return None
+  }
+  Some(spec_fields)
+}
+
+///|
+/// Synthesize a monomorphic interface for an APPLIED GENERIC INTERFACE
+/// whose members hide behind conditional types over the interface's own
+/// type params — axios's `AxiosInterceptorManager<V>` declares
+/// `use: V extends AxiosResponse ? AxiosResponseInterceptorUse<V> :
+/// AxiosRequestInterceptorUse<V>`. At the generic definition the
+/// condition is undecidable and the member widens to JSValue; at a
+/// concrete instantiation the branch IS decidable, so the reference
+/// lowers to `Named(<Iface><Args>)` with every member substituted and
+/// each direct conditional resolved (the chosen branch then flows
+/// through the normal lowering: alias inlining, union-return
+/// normalization, async-callback lowering). Mirrors the
+/// exclusive-union alias synthesis above: fires ONLY when every
+/// conditional member resolves definitively — anything else keeps the
+/// opaque generic reference. Shared by the lowering and the
+/// utility-interface collection walk so the synthesized struct is both
+/// referenced and emitted.
+fn decl_conditional_member_interface_spec(
+  info : DeclModuleInfo,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+  name : String,
+  args : Array[@ast.TsType],
+) -> @ast.TsInterface? {
+  let iface = match find_interface_decl_recursive(info.module_, name) {
+    Some(iface) => iface
+    None => return None
+  }
+  if iface.type_params.length() != args.length() || args.length() == 0 {
+    return None
+  }
+  if iface.index_signatures.length() > 0 || iface.extends_names.length() > 0 {
+    return None
+  }
+  // Only Named args participate: they name the synthesized interface.
+  // (A free type param from an enclosing generic also arrives as Named,
+  // but then no conditional decides and the spec bails below.)
+  let arg_names : Array[String] = []
+  for arg in args {
+    match arg {
+      Named(arg_name) => arg_names.push(arg_name)
+      _ => return None
+    }
+  }
+  let mut spec_name = name
+  for arg_name in arg_names {
+    spec_name += decl_to_pascal_case(arg_name)
+  }
+  if spec_name.length() > 64 {
+    return None
+  }
+  // Self-recursive (or mutually recursive) instantiations would loop
+  // forever through the internal lowering calls (date-fns): while a
+  // specialization is being built, a nested reference to it keeps the
+  // opaque generic form instead.
+  if decl_conditional_spec_in_progress.get(spec_name) is Some(_) {
+    return None
+  }
+  decl_conditional_spec_in_progress[spec_name] = ()
+  let maybe_fields = decl_conditional_member_interface_spec_fields(
+    info, modules, canonical_types, iface, args,
+  )
+  decl_conditional_spec_in_progress.remove(spec_name)
+  let spec_fields = match maybe_fields {
+    Some(fields) => fields
+    None => return None
+  }
+  Some({
+    name: spec_name,
+    type_params: [],
+    type_param_bounds: [],
+    extends_names: [],
+    extends_args: [],
+    fields: spec_fields,
+    readonly_fields: iface.readonly_fields,
+    index_signatures: [],
+    method_type_params: iface.method_type_params,
+    method_type_param_bounds: iface.method_type_param_bounds,
+    internal_members: iface.internal_members,
+    deprecated_members: iface.deprecated_members,
+  })
+}
+
+///|
 /// Join a union ALIAS whose members cannot be runtime-discriminated to
 /// their nearest common base interface: zod's
 /// `$ZodIssue = $ZodIssueInvalidType | $ZodIssueTooBig | ...` (eleven
@@ -5949,15 +6161,27 @@ fn lower_react_utility_type(
               info, modules, canonical_types, name, args,
             ) {
             Some(inlined) => inlined
-            None => {
-              let next_args : Array[@ast.TsType] = []
-              for arg in args {
-                next_args.push(
-                  lower_react_utility_type(info, arg, modules, canonical_types),
-                )
+            None =>
+              // Instantiated generic INTERFACE with conditional members
+              // (axios's AxiosInterceptorManager<V>): specialize when
+              // the checker can decide every conditional.
+              match
+                decl_conditional_member_interface_spec(
+                  info, modules, canonical_types, name, args,
+                ) {
+                Some(spec) => Named(spec.name)
+                None => {
+                  let next_args : Array[@ast.TsType] = []
+                  for arg in args {
+                    next_args.push(
+                      lower_react_utility_type(
+                        info, arg, modules, canonical_types,
+                      ),
+                    )
+                  }
+                  Applied(name, next_args)
+                }
               }
-              Applied(name, next_args)
-            }
           }
       }
     }
@@ -6271,7 +6495,30 @@ fn collect_react_utility_interfaces_from_type(
             )
           }
         }
-        None => ()
+        None =>
+          // Mirror of the lowering's conditional-member interface
+          // specialization: register the synthesized monomorphic
+          // interface so `Named(<Iface><Args>)` gets a struct decl.
+          match
+            decl_conditional_member_interface_spec(
+              info, modules, canonical_types, name, args,
+            ) {
+            Some(iface) =>
+              // Field recursion only on FIRST registration: a
+              // specialized member can reference its own instantiation,
+              // and re-walking an already-seen spec's fields would loop.
+              if !seen_names.contains(iface.name) {
+                seen_names.push(iface.name)
+                interfaces.push(iface)
+                for field in iface.fields {
+                  let (_, field_type) = field
+                  collect_react_utility_interfaces_from_type(
+                    info, field_type, modules, canonical_types, seen_names, interfaces,
+                  )
+                }
+              }
+            None => ()
+          }
       }
       for arg in args {
         collect_react_utility_interfaces_from_type(
