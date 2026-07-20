@@ -1301,3 +1301,43 @@ test "parser: async callback lowering shapes" {
     is None,
   )
 }
+
+///|
+test "bridge: prune upcast helpers whose base arity mismatches the emitted decl" {
+  let bridge_mbti =
+    #|declare pub type Widget[T]
+    #|declare pub type Plain
+    #|declare pub fn[T] Fancy::asWidget(self : Fancy[T]) -> Widget[T]
+    #|declare pub fn[T] Broken::asWidget(self : Broken[T]) -> Widget[T, T, T]
+    #|declare pub fn Handle::asPlain(self : Handle) -> Plain
+    #|declare pub fn Ghost::asMissing(self : Ghost) -> Missing
+  let bridge_mbt =
+    #|pub(all) struct Widget[T] {
+    #|  value : T
+    #|}
+    #|
+    #|#external
+    #|pub type Plain
+    #|
+    #|pub fn[T] Fancy::asWidget(self : Fancy[T]) -> Widget[T] = "%identity"
+    #|
+    #|pub fn[T] Broken::asWidget(self : Broken[T]) -> Widget[T, T, T] = "%identity"
+    #|
+    #|pub fn Handle::asPlain(self : Handle) -> Plain = "%identity"
+    #|
+    #|pub fn Ghost::asMissing(self : Ghost) -> Missing = "%identity"
+  let (pruned_mbti, pruned_mbt) = prune_mismatched_upcast_helpers(
+    bridge_mbti, bridge_mbt,
+  )
+  // Matching arity and zero-arity opaque targets survive; sanitization
+  // collisions (arity mismatch) and unemitted targets are dropped from
+  // BOTH surfaces.
+  assert_true(pruned_mbt.contains("Fancy::asWidget"))
+  assert_true(pruned_mbt.contains("Handle::asPlain"))
+  assert_false(pruned_mbt.contains("Broken::asWidget"))
+  assert_false(pruned_mbt.contains("Ghost::asMissing"))
+  assert_true(pruned_mbti.contains("Fancy::asWidget"))
+  assert_true(pruned_mbti.contains("Handle::asPlain"))
+  assert_false(pruned_mbti.contains("Broken::asWidget"))
+  assert_false(pruned_mbti.contains("Ghost::asMissing"))
+}

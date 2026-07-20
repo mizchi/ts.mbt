@@ -1737,6 +1737,54 @@ fn ffi_struct_decl_to_moonbit(
       }
     }
   }
+  // Upcast helpers along the `extends` chain: TypeScript's implicit
+  // interface subtyping does not map onto MoonBit's nominal structs, so
+  // `interface AxiosInstance extends Axios` previously forced an
+  // unsafeCast at every base-surface call. `asAxios()` / `asSchema()`
+  // are sound %identity views (same runtime object), named after the
+  // existing type-guard helper convention.
+  let fn_prefix = ffi_function_type_param_prefix(active_type_params)
+  let self_type = type_name + type_param_suffix
+  let seen_upcasts : Array[String] = []
+  for i, base_name in iface.extends_names {
+    let base_args = if i < iface.extends_args.length() {
+      iface.extends_args[i]
+    } else {
+      []
+    }
+    // Clamp to the EMITTED base arity: the source declaration's type
+    // params can outnumber what the struct emitter preserved (zod's
+    // `_ZodType<A, B, C>` emits as `UnderscoreZodType[Internals]`), and
+    // a mismatched Applied reference would not compile. Extra/missing
+    // args degrade to JSValue slots.
+    let emitted_arity = match state.generic_type_params_by_name.get(base_name) {
+      Some(params) => params.length()
+      None => 0
+    }
+    let base_type : @ast.TsType = if emitted_arity == 0 {
+      Named(base_name)
+    } else if base_args.length() == emitted_arity {
+      Applied(base_name, base_args)
+    } else {
+      let widened : Array[@ast.TsType] = []
+      for _ in 0..<emitted_arity {
+        widened.push(Any)
+      }
+      Applied(base_name, widened)
+    }
+    let rendered = ffi_struct_field_type_name(state, base_type)
+    match @parser.moonbit_upcast_helper_name(rendered) {
+      Some(helper_name) =>
+        if !seen_upcasts.contains(helper_name) &&
+          !seen_fields.contains(helper_name) {
+          seen_upcasts.push(helper_name)
+          method_lines.push(
+            "pub \{fn_prefix} \{type_name}::\{helper_name}(self : \{self_type}) -> \{rendered} = \"%identity\"",
+          )
+        }
+      None => ()
+    }
+  }
   ffi_restore_local_type_params(state, local_type_param_len)
   // A zero-field struct is value-erased by MoonBit's JS backend (the
   // instance compiles to `undefined`), which breaks every accessor that

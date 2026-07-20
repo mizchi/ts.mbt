@@ -2935,3 +2935,40 @@ async test "bridge: specialize conditional interface members at concrete instant
   )
   assert_true(actual.contains("declare pub fn ackChannel() -> ChannelAck"))
 }
+
+///|
+async test "bridge: upcast helpers for unflattened extends bases" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/extends-upcast-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // Class bases and generic-over-generic bases cannot flatten their
+  // members into the derived struct, so the emitters generate sound
+  // %identity upcast helpers instead of leaving consumers to unsafeCast.
+  assert_true(
+    actual.contains(
+      "declare pub fn EngineHandle::asEngine(self : EngineHandle) -> Engine",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn[T] DerivedGeneric::asWide(self : DerivedGeneric[T]) -> Wide[T]",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn[T] DerivedGeneric::asBase(self : DerivedGeneric[T]) -> Base",
+    ),
+  )
+  // A CONCRETE root flattens its bases (Derived::describe is inherited
+  // directly), so no upcast helper is emitted for it.
+  assert_true(actual.contains("declare pub fn Derived::describe"))
+  assert_false(actual.contains("Derived::asBase"))
+}

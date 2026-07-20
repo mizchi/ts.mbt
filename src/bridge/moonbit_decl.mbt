@@ -5254,7 +5254,7 @@ fn decl_named_extends_decision(
   if target.index_signatures.length() > 0 {
     return None
   }
-  let source_field_names : Map[String, Unit] = Map::new()
+  let source_field_names : Map[String, Unit] = Map([])
   if !decl_collect_interface_field_names_recursive(
       info, source_name, source_field_names, 0,
     ) {
@@ -5277,7 +5277,7 @@ fn decl_named_extends_decision(
 /// In-progress guard for the conditional-member specialization below.
 /// Entries are pushed on entry and removed on exit, so the map stays
 /// empty between top-level emissions.
-let decl_conditional_spec_in_progress : Map[String, Unit] = Map::new()
+let decl_conditional_spec_in_progress : Map[String, Unit] = Map([])
 
 ///|
 fn decl_conditional_member_interface_spec_fields(
@@ -7247,6 +7247,59 @@ fn should_expand_interface_base(origin : ResolvedInterfaceOrigin) -> Bool {
 }
 
 ///|
+/// Direct `extends` bases that `append_interface_origin_fields` does
+/// NOT flatten into the clone (generic roots over generic bases —
+/// zod's ZodObject over Schema — and class bases like axios's
+/// `interface AxiosInstance extends Axios`). The cloners record these
+/// on the cloned interface so the emitters can generate `as<Base>()`
+/// upcast helpers: the members are absent from the derived struct, and
+/// the helper replaces the unsafeCast TypeScript's implicit subtyping
+/// used to force. The expandable condition MUST mirror
+/// `append_interface_origin_fields`.
+fn decl_unflattened_interface_bases(
+  origin : ResolvedInterfaceOrigin,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> (Array[String], Array[Array[@ast.TsType]]) {
+  let names : Array[String] = []
+  let args_lists : Array[Array[@ast.TsType]] = []
+  let root_is_concrete = origin.iface.type_params.length() == 0
+  for base_index, base_name in origin.iface.extends_names {
+    let raw_args = if base_index < origin.iface.extends_args.length() {
+      origin.iface.extends_args[base_index]
+    } else {
+      []
+    }
+    let rewritten_args : Array[@ast.TsType] = []
+    for arg in raw_args {
+      rewritten_args.push(
+        decl_rewrite_names_to_exports(origin.info, canonical_types, arg),
+      )
+    }
+    match
+      resolve_interface_origin(origin.info, base_name, modules, canonical_types) {
+      Some(base_origin) => {
+        let base_params = base_origin.iface.type_params
+        let expandable = should_expand_interface_base(base_origin) ||
+          (root_is_concrete && base_params.length() == raw_args.length())
+        if !expandable {
+          names.push(base_origin.export_name)
+          args_lists.push(rewritten_args)
+        }
+      }
+      None => {
+        // Class bases (and anything else the interface resolver cannot
+        // see). Unknown names render as JSValue downstream and the
+        // helper-name derivation skips them, so recording is safe.
+        names.push(base_name)
+        args_lists.push(rewritten_args)
+      }
+    }
+  }
+  (names, args_lists)
+}
+
+///|
 fn append_lowered_interface_field(
   fields : Array[(String, @ast.TsType)],
   readonly_fields : Array[String],
@@ -7871,11 +7924,14 @@ fn clone_resolved_interface_origin(
     [],
     origin.iface.type_params.length() == 0,
   )
+  let (unflattened_bases, unflattened_args) = decl_unflattened_interface_bases(
+    origin, modules, canonical_types,
+  )
   {
     name: origin.export_name,
     type_params: origin.iface.type_params,
-    extends_names: [],
-    extends_args: [],
+    extends_names: unflattened_bases,
+    extends_args: unflattened_args,
     fields,
     readonly_fields: readonly_fields_for_fields(readonly_fields, fields),
     index_signatures: origin.iface.index_signatures,
@@ -8227,11 +8283,16 @@ fn clone_exported_interface(
     [],
     exported.iface.type_params.length() == 0,
   )
+  let (unflattened_bases, unflattened_args) = decl_unflattened_interface_bases(
+    { info, export_name: exported.export_name, iface: exported.iface },
+    modules,
+    canonical_types,
+  )
   {
     name: exported.export_name,
     type_params: exported.iface.type_params,
-    extends_names: [],
-    extends_args: [],
+    extends_names: unflattened_bases,
+    extends_args: unflattened_args,
     fields,
     readonly_fields: readonly_fields_for_fields(readonly_fields, fields),
     index_signatures: exported.iface.index_signatures,

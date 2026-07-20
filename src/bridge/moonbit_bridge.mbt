@@ -925,6 +925,154 @@ fn collect_bridge_type_guard_helpers(
 }
 
 ///|
+/// Arity of every type DECLARED in the assembled source text, scanned
+/// from `pub(all) struct X[..]` / `pub type X[..]` /
+/// `declare pub type X[..]` lines. Used to validate generated upcast
+/// helpers against what actually got emitted.
+fn bridge_declared_type_arities(text : String) -> Map[String, Int] {
+  let arities : Map[String, Int] = Map([])
+  for line_view in text.split("\n") {
+    let line = line_view.to_owned().trim().to_owned()
+    let rest = if line.has_prefix("pub(all) struct ") {
+      line["pub(all) struct ".length():].to_owned()
+    } else if line.has_prefix("pub type ") && !line.contains(" = ") {
+      line["pub type ".length():].to_owned()
+    } else if line.has_prefix("declare pub type ") {
+      line["declare pub type ".length():].to_owned()
+    } else {
+      continue
+    }
+    let name_end = match rest.find("[") {
+      Some(index) => index
+      None =>
+        match rest.find(" ") {
+          Some(index) => index
+          None => rest.length()
+        }
+    }
+    let name = rest[:name_end].to_owned().trim().to_owned()
+    if name == "" {
+      continue
+    }
+    let arity = match rest.find("[") {
+      Some(open) =>
+        match bridge_find_matching_paren_char(rest, open, '[', ']') {
+          Some(close) =>
+            bridge_split_top_level_commas(rest[open + 1:close].to_owned()).length()
+          None => 0
+        }
+      None => 0
+    }
+    // First declaration wins (matches how duplicate emissions resolve).
+    if !(arities.get(name) is Some(_)) {
+      arities[name] = arity
+    }
+  }
+  arities
+}
+
+///|
+fn bridge_find_matching_paren_char(
+  text : String,
+  open_index : Int,
+  open_char : Char,
+  close_char : Char,
+) -> Int? {
+  let mut depth = 0
+  for i, c in text.iter2() {
+    if i < open_index {
+      continue
+    }
+    if c == open_char {
+      depth += 1
+    } else if c == close_char {
+      depth -= 1
+      if depth == 0 {
+        return Some(i)
+      }
+    }
+  }
+  None
+}
+
+///|
+/// Validate a generated `::as<Base>` upcast helper line against the
+/// arities actually emitted: TypeScript names that collide after
+/// sanitization (zod's `$ZodType<3 params>` and `_ZodType<1 param>`
+/// both become `UnderscoreZodType`) can leave the helper referencing an
+/// arity the surviving declaration does not have. Returns `false` when
+/// the helper must be dropped.
+fn bridge_upcast_helper_line_is_valid(
+  line : String,
+  arities : Map[String, Int],
+) -> Bool {
+  let marker = "::as"
+  if !line.contains(marker) || !line.contains("(self : ") {
+    return true
+  }
+  let arrow = match line.find(") -> ") {
+    Some(index) => index
+    None => return true
+  }
+  let mut ret = line[arrow + ") -> ".length():].to_owned().trim().to_owned()
+  if ret.has_suffix(" = \"%identity\"") {
+    ret = ret[:ret.length() - " = \"%identity\"".length()]
+      .to_owned()
+      .trim()
+      .to_owned()
+  }
+  let (head, args_count) = match ret.find("[") {
+    Some(open) =>
+      match bridge_find_matching_paren_char(ret, open, '[', ']') {
+        Some(close) =>
+          (
+            ret[:open].to_owned(),
+            bridge_split_top_level_commas(ret[open + 1:close].to_owned()).length(),
+          )
+        None => (ret[:open].to_owned(), 0)
+      }
+    None => (ret, 0)
+  }
+  match arities.get(head) {
+    Some(declared) => declared == args_count
+    None => false
+  }
+}
+
+///|
+/// Drop upcast helper lines whose base reference does not match the
+/// emitted declaration (see `bridge_upcast_helper_line_is_valid`).
+/// Applied to BOTH the mbt and the mbti with the mbt's arities, so the
+/// two surfaces keep the same helper set.
+fn prune_mismatched_upcast_helpers(
+  bridge_mbti : String,
+  bridge_mbt : String,
+) -> (String, String) {
+  let arities = bridge_declared_type_arities(bridge_mbt)
+  let keep_mbt : Array[String] = []
+  for line_view in bridge_mbt.split("\n") {
+    let line = line_view.to_owned()
+    if line.contains("::as") &&
+      line.contains("%identity") &&
+      !bridge_upcast_helper_line_is_valid(line.trim().to_owned(), arities) {
+      continue
+    }
+    keep_mbt.push(line)
+  }
+  let keep_mbti : Array[String] = []
+  for line_view in bridge_mbti.split("\n") {
+    let line = line_view.to_owned()
+    if line.has_prefix("declare pub") &&
+      line.contains("::as") &&
+      !bridge_upcast_helper_line_is_valid(line.trim().to_owned(), arities) {
+      continue
+    }
+    keep_mbti.push(line)
+  }
+  (keep_mbti.join("\n"), keep_mbt.join("\n"))
+}
+
+///|
 fn add_bridge_ergonomic_helper_decls(
   bridge_mbti : String,
   bridge_mbt : String,
@@ -1548,8 +1696,11 @@ pub async fn emit_moonbit_ts_bridge_package_bundle_from_entry_path(
   let public_bridge_mbti = expose_bridge_struct_decls_in_mbti(
     wrapped_bridge_mbti, bridge_mbt,
   )
-  let bridge_mbti = add_bridge_ergonomic_helper_decls(
+  let pre_prune_mbti = add_bridge_ergonomic_helper_decls(
     public_bridge_mbti, bridge_mbt,
+  )
+  let (bridge_mbti, bridge_mbt) = prune_mismatched_upcast_helpers(
+    pre_prune_mbti, bridge_mbt,
   )
   {
     entry_path: bundle.entry_path,

@@ -1694,6 +1694,38 @@ option structs, an emitter feature); overloaded members still widen
 (`interceptors` property itself is an anonymous-object type — one typed
 extern bridges to the specialized manager until then).
 
+Round 5 (same day) — extends upcast helpers, closing the dominant
+naturalness friction from the 3-package evaluation (an idiomatic
+zod+axios+node:fs app needed 7 escape hatches, of which inheritance
+casts were the largest class). Interfaces whose `extends` bases do NOT
+flatten (generic roots over generic bases — ZodObject over its zod
+core base — and class bases — `interface AxiosInstance extends Axios`)
+now emit sound `%identity` upcast helpers named after the type-guard
+convention: `instance.asAxios().get(...)` replaces
+`(unsafeCast(instance) : Axios).get(...)`. Pieces:
+
+- `decl_unflattened_interface_bases` records skipped bases on the
+  cloned interfaces (both cloners), mirroring the flatten decision in
+  `append_interface_origin_fields`;
+- both emitters (ffi struct decl + decl interface decl) render the
+  helper with the base reference clamped to the EMITTED arity (source
+  `_ZodType<A,B,C>` vs emitted `UnderscoreZodType[Internals]`);
+- a text-level `prune_mismatched_upcast_helpers` pass drops helpers
+  whose base reference still cannot match the surviving declaration —
+  zod's `$ZodType`/`_ZodType` SANITIZATION COLLISION (both become
+  `UnderscoreZodType` with different arities) makes some mismatches
+  undetectable earlier; the prune keeps mbt and mbti in lockstep.
+
+Budget note: helpers whose base type args widen to JSValue count into
+the fallback metrics (react +14 "JSValue functions" are all usable
+`asComponent`-style helpers; valibot +68 surface lines likewise) — 10
+rows recalibrated. Naturalness evaluation delta: the 3-package app's
+escape hatches drop 7 -> 6 (asAxios), with ZodObject->Schema still
+needing a cast because zod's base chain hides behind the sanitization
+collision. Remaining hatches ranked: anonymous object-literal
+properties/params, overloaded members, JSValue value slots, and the
+zod name collision (needs collision-aware type identifiers).
+
 Profiled with `moon bench --target native` + callgrind over the release
 `tscheck` binary (`--parse` / full, `--iters N`; use
 `--toggle-collect=<mangled check entry>` to isolate the check phase from

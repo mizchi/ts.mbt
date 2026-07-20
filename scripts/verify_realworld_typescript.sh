@@ -325,7 +325,7 @@ jsvalue_function_budget() {
     dotenv) printf '0\n' ;;
     ignore) printf '1\n' ;;
     hono) printf '5\n' ;;
-    zod) printf '525\n' ;;
+    zod) printf '526\n' ;;
     date-fns) printf '22\n' ;;
     colorette) printf '1\n' ;;
     magic-string) printf '0\n' ;;
@@ -334,7 +334,7 @@ jsvalue_function_budget() {
     immer) printf '16\n' ;;
     execa) printf '5\n' ;;
     preact) printf '7\n' ;;
-    react) printf '31\n' ;;
+    react) printf '45\n' ;;
     ms) printf '1\n' ;;
     nanoid) printf '0\n' ;;
     dayjs) printf '3\n' ;;
@@ -355,7 +355,7 @@ jsvalue_function_budget() {
     lodash) printf '288\n' ;;
     uuid) printf '5\n' ;;
     minimatch) printf '10\n' ;;
-    ws) printf '6\n' ;;
+    ws) printf '7\n' ;;
     vitest/runtime) printf '6\n' ;;
     playwright) printf '411\n' ;;
     react-router) printf '82\n' ;;
@@ -417,22 +417,22 @@ jsvalue_cause_budget() {
     # from the conditional/mapped bucket into callback/function (their
     # rendered `Promise[...]` now matches the callback pattern first).
     hono) printf '85|12|6|24|6|28|9\n' ;;
-    zod) printf '1631|423|9|254|405|512|28\n' ;;
+    zod) printf '1633|423|9|255|405|513|28\n' ;;
     date-fns) printf '26|4|5|0|0|15|2\n' ;;
     colorette) printf '1|0|1|0|0|0|0\n' ;;
     magic-string) printf '0|0|0|0|0|0|0\n' ;;
     source-map) printf '17|6|0|7|0|3|1\n' ;;
-    valibot) printf '1658|1160|24|8|14|414|38\n' ;;
+    valibot) printf '1726|1160|24|13|16|475|38\n' ;;
     immer) printf '23|4|7|2|3|1|6\n' ;;
     execa) printf '17|2|0|4|1|0|10\n' ;;
-    preact) printf '48|12|1|4|14|17|0\n' ;;
-    react) printf '130|43|7|24|34|16|6\n' ;;
+    preact) printf '50|12|1|4|14|19|0\n' ;;
+    react) printf '151|43|7|26|34|35|6\n' ;;
     ms) printf '1|0|0|0|0|0|1\n' ;;
     nanoid) printf '0|0|0|0|0|0|0\n' ;;
     dayjs) printf '3|0|1|0|1|0|1\n' ;;
     qs) printf '8|2|1|0|0|0|5\n' ;;
     yaml) printf '179|34|7|84|0|20|34\n' ;;
-    superstruct) printf '83|4|0|15|0|59|5\n' ;;
+    superstruct) printf '82|4|0|14|0|59|5\n' ;;
     eventemitter3) printf '16|0|0|0|5|6|5\n' ;;
     mitt) printf '10|4|0|2|3|1|0\n' ;;
     marked) printf '55|8|0|0|20|13|14\n' ;;
@@ -444,10 +444,10 @@ jsvalue_cause_budget() {
     debug) printf '19|6|0|1|0|12|0\n' ;;
     chokidar) printf '3|0|0|1|0|0|2\n' ;;
     pino) printf '51|38|4|1|0|4|4\n' ;;
-    lodash) printf '1643|444|120|252|49|771|7\n' ;;
+    lodash) printf '1648|444|120|252|49|776|7\n' ;;
     uuid) printf '5|0|5|0|0|0|0\n' ;;
     minimatch) printf '10|0|0|2|0|3|5\n' ;;
-    ws) printf '43|28|0|3|2|4|6\n' ;;
+    ws) printf '44|28|0|3|2|5|6\n' ;;
     vitest/runtime) printf '64|35|2|3|6|18|0\n' ;;
     # 2026-07-20 async-callback lowering: one promise-callback signature
     # moved from the tuple/array bucket into callback/function (the

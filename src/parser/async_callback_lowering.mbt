@@ -147,6 +147,36 @@ pub fn moonbit_async_callback_lowering(
 }
 
 ///|
+/// Name of the generated upcast helper for a rendered `extends` base
+/// (`Schema[A, B]` -> `asSchema`), shared by the decl and ffi layers so
+/// the two method surfaces stay aligned. Returns `None` when the base
+/// widened away (`JSValue` / `Any`) or is not a plain type identifier —
+/// no helper is emitted for those.
+pub fn moonbit_upcast_helper_name(rendered_base : String) -> String? {
+  let head = match rendered_base.find("[") {
+    Some(index) => rendered_base[:index].to_owned()
+    None => rendered_base
+  }
+  if head == "" || head == "JSValue" || head == "Any" || head == "This" {
+    return None
+  }
+  let mut first = true
+  for c in head {
+    let is_letter = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+    let is_digit = c >= '0' && c <= '9'
+    if first {
+      if !is_letter && c != '_' {
+        return None
+      }
+      first = false
+    } else if !is_letter && !is_digit && c != '_' {
+      return None
+    }
+  }
+  Some("as" + head)
+}
+
+///|
 /// The expression converting a lowered public argument back into the
 /// raw promise-returning callback the extern / JS side expects. Emitted
 /// code lives inside the generated bridge package, where the injected

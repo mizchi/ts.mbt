@@ -1091,6 +1091,47 @@ fn interface_decl_to_moonbit(
   lines.push(
     "declare pub type \{type_name}\{moonbit_type_param_suffix(active_type_params)}",
   )
+  // Upcast helpers along the `extends` chain — mirror of the ffi side
+  // (`ffi_struct_decl_to_moonbit`): sound %identity views replacing the
+  // unsafeCast that TypeScript's implicit interface subtyping used to
+  // force at every base-surface call.
+  let upcast_fn_prefix = moonbit_function_type_param_prefix(active_type_params)
+  let upcast_self_type = type_name +
+    moonbit_type_param_suffix(active_type_params)
+  let seen_upcasts : Array[String] = []
+  for i, base_name in iface.extends_names {
+    let base_args = if i < iface.extends_args.length() {
+      iface.extends_args[i]
+    } else {
+      []
+    }
+    // Clamp to the EMITTED base arity — mirror of the ffi side (extra
+    // or missing source args degrade to JSValue slots).
+    let emitted_arity = generic_preserved_type_arity(state, base_name)
+    let base_type : @ast.TsType = if emitted_arity == 0 {
+      Named(base_name)
+    } else if base_args.length() == emitted_arity {
+      Applied(base_name, base_args)
+    } else {
+      let widened : Array[@ast.TsType] = []
+      for _ in 0..<emitted_arity {
+        widened.push(Any)
+      }
+      Applied(base_name, widened)
+    }
+    let rendered = moonbit_type_name(state, base_type)
+    match moonbit_upcast_helper_name(rendered) {
+      Some(helper_name) =>
+        if !seen_upcasts.contains(helper_name) &&
+          !seen_method_names.contains(helper_name) {
+          seen_upcasts.push(helper_name)
+          method_decls.push(
+            "///|\ndeclare pub \{upcast_fn_prefix} \{type_name}::\{helper_name}(self : \{upcast_self_type}) -> \{rendered}",
+          )
+        }
+      None => ()
+    }
+  }
   restore_local_type_params(state, local_type_param_len)
   if method_decls.length() == 0 {
     lines.join("\n")
