@@ -200,6 +200,12 @@ fn build_bench_jsx_heavy(components : Int, callsites : Int) -> String {
 let bench_generic_heavy_100 : String = build_bench_generic_heavy(100)
 
 ///|
+let bench_generic_heavy_200 : String = build_bench_generic_heavy(200)
+
+///|
+let bench_generic_heavy_400 : String = build_bench_generic_heavy(400)
+
+///|
 let bench_jsx_heavy : String = build_bench_jsx_heavy(20, 100)
 
 ///|
@@ -312,6 +318,38 @@ test "bench checker: generic-heavy (100 helpers, 100 call sites)" (
 ) {
   let module_ = @parser.parse_module_from_source_with_const_values(
     bench_generic_heavy_100,
+    {},
+  ) catch {
+    _ => return
+  }
+  it.bench(fn() {
+    let issues = check_module_function_bodies(module_)
+    it.keep(issues.length())
+  })
+}
+
+///|
+test "bench checker: generic-heavy (200 helpers, 200 call sites)" (
+  it : @bench.T,
+) {
+  let module_ = @parser.parse_module_from_source_with_const_values(
+    bench_generic_heavy_200,
+    {},
+  ) catch {
+    _ => return
+  }
+  it.bench(fn() {
+    let issues = check_module_function_bodies(module_)
+    it.keep(issues.length())
+  })
+}
+
+///|
+test "bench checker: generic-heavy (400 helpers, 400 call sites)" (
+  it : @bench.T,
+) {
+  let module_ = @parser.parse_module_from_source_with_const_values(
+    bench_generic_heavy_400,
     {},
   ) catch {
     _ => return
