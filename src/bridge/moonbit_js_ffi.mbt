@@ -270,6 +270,15 @@ fn ffi_to_snake_case(name : String) -> String {
 
 ///|
 fn ffi_type_identifier(name : String, fallback : String) -> String {
+  // `$` maps to a distinct "Dollar" token BEFORE char sanitization:
+  // otherwise `$ZodType` and `_ZodType` both collapse to
+  // `UnderscoreZodType` (zod v4 ships BOTH, with different arities),
+  // and every downstream reference silently picks the wrong shape.
+  let name = if name.contains("$") {
+    name.replace_all(old="$", new="Dollar")
+  } else {
+    name
+  }
   let sanitized = ffi_sanitize_identifier_chars(name, fallback)
   if sanitized == "" || ffi_trim_underscores(sanitized) == "" {
     return fallback
@@ -6621,7 +6630,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       seen_ffi_binding_names,
       ffi_sections,
       ffi_fn_decl_key("loose_shape_from_pairs"),
-      "pub extern \"js\" fn loose_shape_from_pairs(keys : Array[String], values : Array[JSValue]) -> Core__ZodLooseShape = \"__ts_mbt_record_from_pairs\"",
+      "pub extern \"js\" fn loose_shape_from_pairs(keys : Array[String], values : Array[JSValue]) -> Core_DollarZodLooseShape = \"__ts_mbt_record_from_pairs\"",
     )
     push_unique_bridge_binding(
       seen_bridge_binding_names, bridge_lines, "__ts_mbt_record_from_pairs", "export function __ts_mbt_record_from_pairs(keys, values) { const out = {}; for (let i = 0; i < keys.length; i++) out[keys[i]] = values[i]; return out; }",

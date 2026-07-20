@@ -2804,7 +2804,7 @@ async test "bridge: indexed access on constrained type params resolves through b
       return
     }
   }
-  assert_true(actual.contains("/// def : UnderscoreZodTypeDef"))
+  assert_true(actual.contains("/// def : DollarZodTypeDef"))
   assert_false(actual.contains("/// def : JSValue"))
   assert_true(actual.contains("/// type : ZodTypeType"))
   assert_false(actual.contains("/// type : JSValue"))
@@ -2896,8 +2896,8 @@ async test "bridge: undiscriminable union aliases join to their common base" {
       return
     }
   }
-  assert_true(actual.contains("/// issues : Array[UnderscoreIssueBase]"))
-  assert_true(actual.contains("UnderscoreIssueBase"))
+  assert_true(actual.contains("/// issues : Array[DollarIssueBase]"))
+  assert_true(actual.contains("DollarIssueBase"))
 }
 
 ///|
@@ -3004,6 +3004,39 @@ async test "bridge: synthesize structs for anonymous object members and params" 
   assert_true(
     actual.contains(
       "declare pub fn Client::send(self : Client, url : String, options : ClientSendOptions?) -> Promise[String]",
+    ),
+  )
+}
+
+///|
+async test "bridge: merge trailing-param member overloads" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/member-overload-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // Canonical TS overload pattern (extra trailing params, same return)
+  // merges to one signature with the extras optionalized — instead of
+  // silently dropping every declaration after the first.
+  assert_true(
+    actual.contains(
+      "declare pub fn Store::get(self : Store, arg0 : String, arg1 : String?) -> String",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn Codec::encode(self : Codec, value : String, pretty : Bool?) -> String",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn Codec::decode(self : Codec, raw : String) -> String",
     ),
   )
 }

@@ -5412,10 +5412,11 @@ test "bridge: FFI type name subsets undeclared string-or-Params unions to String
 
 ///|
 test "bridge: FFI string-subset abstains when the Params type is declared" {
-  // `$ZodCheckMinLengthParams` sanitizes to `UnderscoreZodCheckMinLengthParams`;
-  // when that type is declared on the bridge surface the union keeps the
-  // JSValue fallback instead of silently dropping the reachable object form.
-  let state = ffi_string_subset_test_state(["UnderscoreZodCheckMinLengthParams"])
+  // `$ZodCheckMinLengthParams` sanitizes to `DollarZodCheckMinLengthParams`
+  // (`$` gets its own token so `$X` / `_X` cannot collide); when that type
+  // is declared on the bridge surface the union keeps the JSValue fallback
+  // instead of silently dropping the reachable object form.
+  let state = ffi_string_subset_test_state(["DollarZodCheckMinLengthParams"])
   let actual = ffi_type_name(
     state,
     @ast.TsType::Union([

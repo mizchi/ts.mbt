@@ -7552,10 +7552,6 @@ fn append_lowered_interface_field(
   modules : Map[String, DeclModuleInfo],
   canonical_types : Map[String, String],
 ) -> Unit {
-  if seen_field_names.contains(field_name) {
-    return
-  }
-  seen_field_names.push(field_name)
   // `this` in a member type always denotes the interface the struct is
   // being generated for (the root of the extends expansion), applied to
   // that struct's own type parameters — those are exactly the params in
@@ -7573,19 +7569,33 @@ fn append_lowered_interface_field(
       this_owner,
     ),
   )
-  fields.push(
-    (
-      field_name,
-      decl_rewrite_inline_object_member_type(
-        owner_name,
-        field_name,
-        decl_rewrite_inline_callback_params_in_func_type(
-          owner_name + "_" + field_name,
-          lowered_type,
-        ),
-      ),
+  let final_type = decl_rewrite_inline_object_member_type(
+    owner_name,
+    field_name,
+    decl_rewrite_inline_callback_params_in_func_type(
+      owner_name + "_" + field_name,
+      lowered_type,
     ),
   )
+  if seen_field_names.contains(field_name) {
+    // Method overload: widen the kept signature when this one only
+    // appends trailing params (`get(key)` / `get(key, fallback)` merge
+    // to `get(key, fallback?)`); anything else keeps the first
+    // declaration, matching the old behavior.
+    for i, existing in fields {
+      if existing.0 != field_name {
+        continue
+      }
+      match decl_merge_overload_func_types(existing.1, final_type) {
+        Some(merged) => fields[i] = (field_name, merged)
+        None => ()
+      }
+      break
+    }
+    return
+  }
+  seen_field_names.push(field_name)
+  fields.push((field_name, final_type))
   if is_readonly {
     readonly_fields.push(field_name)
   }
@@ -11109,6 +11119,68 @@ fn class_method_key(class_method : @ast.TsClassMethodDecl) -> String {
 }
 
 ///|
+fn decl_optionalize_type(type_ : @ast.TsType) -> @ast.TsType {
+  match @checker.classify_optional_like_union(type_) {
+    Some((_, true)) => type_
+    _ =>
+      match type_ {
+        Undefined => type_
+        _ => @ast.TsType::Union([type_, Undefined])
+      }
+  }
+}
+
+///|
+/// Merge two overload signatures when one's params are a strict prefix
+/// of the other's (the canonical TS overload pattern — extra trailing
+/// params) and the returns agree: the merged signature keeps the longer
+/// param list with the extra params OPTIONALIZED, so both call shapes
+/// stay expressible. `None` for anything else (the caller keeps the
+/// first-declared signature, matching the old behavior).
+fn decl_merge_overload_param_lists(
+  a : Array[@ast.TsType],
+  b : Array[@ast.TsType],
+) -> Array[@ast.TsType]? {
+  let (short, long) = if a.length() <= b.length() { (a, b) } else { (b, a) }
+  if short.length() == long.length() {
+    return None
+  }
+  for i, t in short {
+    if long[i] != t {
+      return None
+    }
+  }
+  let merged : Array[@ast.TsType] = []
+  for i, t in long {
+    if i < short.length() {
+      merged.push(t)
+    } else {
+      merged.push(decl_optionalize_type(t))
+    }
+  }
+  Some(merged)
+}
+
+///|
+fn decl_merge_overload_func_types(
+  a : @ast.TsType,
+  b : @ast.TsType,
+) -> @ast.TsType? {
+  match (a, b) {
+    (Func(pa, ra), Func(pb, rb)) => {
+      if ra != rb {
+        return None
+      }
+      match decl_merge_overload_param_lists(pa, pb) {
+        Some(merged) => Some(@ast.TsType::Func(merged, ra))
+        None => None
+      }
+    }
+    _ => None
+  }
+}
+
+///|
 fn append_class_property_once(
   properties : Array[@ast.TsClassPropertyDecl],
   seen_property_keys : Array[String],
@@ -11130,6 +11202,43 @@ fn append_class_method_once(
 ) -> Unit {
   let key = class_method_key(class_method)
   if seen_method_keys.contains(key) {
+    // Overload: widen the kept signature when this one only appends
+    // trailing params (`encode(v)` / `encode(v, pretty)` merge to
+    // `encode(v, pretty?)`); anything else keeps the first declaration.
+    for i, existing in methods {
+      if class_method_key(existing) != key ||
+        existing.is_static != class_method.is_static ||
+        existing.return_type != class_method.return_type ||
+        existing.type_params.length() > 0 ||
+        class_method.type_params.length() > 0 {
+        continue
+      }
+      let existing_types : Array[@ast.TsType] = []
+      for param in existing.params {
+        existing_types.push(param.1)
+      }
+      let incoming_types : Array[@ast.TsType] = []
+      for param in class_method.params {
+        incoming_types.push(param.1)
+      }
+      match decl_merge_overload_param_lists(existing_types, incoming_types) {
+        Some(merged) => {
+          let longer_names = if class_method.params.length() >
+            existing.params.length() {
+            class_method.params
+          } else {
+            existing.params
+          }
+          let merged_params : Array[(String, @ast.TsType)] = []
+          for j, t in merged {
+            merged_params.push((longer_names[j].0, t))
+          }
+          methods[i] = { ..existing, params: merged_params }
+        }
+        None => ()
+      }
+      break
+    }
     return
   }
   seen_method_keys.push(key)

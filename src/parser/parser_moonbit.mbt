@@ -219,6 +219,13 @@ fn sanitize_identifier(name : String, fallback : String) -> String {
 
 ///|
 fn moonbit_type_identifier(name : String, fallback : String) -> String {
+  // `$` maps to a distinct "Dollar" token BEFORE char sanitization —
+  // mirror of `ffi_type_identifier` (zod's `$ZodType` vs `_ZodType`).
+  let name = if name.contains("$") {
+    name.replace_all(old="$", new="Dollar")
+  } else {
+    name
+  }
   let sanitized = sanitize_identifier_chars(name, fallback)
   if sanitized == "" || is_all_underscores(sanitized) {
     return fallback

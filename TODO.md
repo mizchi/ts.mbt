@@ -1759,6 +1759,44 @@ the synthesized structs' own JSValue-typed fields — new usable
 surface, not lost signal). Naturalness evaluation: the 3-package app
 drops to 5 escape hatches (interceptors extern eliminated).
 
+Round 7 (same day) — overloaded-member merging + collision-free type
+identifiers, the two hatches picked from the round-6 ranking.
+
+Overload merging (`src/bridge/moonbit_decl.mbt`): the canonical TS
+overload pattern — same member re-declared with extra TRAILING params
+and the same return type — previously kept only the first declaration
+(rest silently dropped, callers lost the richer arity). Now
+`decl_merge_overload_param_lists` merges into the LONGEST signature
+with the extra params optionalized (`decl_optionalize_type` wraps in
+`| undefined` unless already optional-like), applied in
+`append_class_method_once` (guards: same key / static / return, no
+method-level type params) and in `append_lowered_interface_field`
+(which was restructured so lowering + inline-object rewrites compute
+the final type BEFORE the merge attempt). `Store::get(key)` +
+`get(key, fallback)` becomes `get(self, key : String, fallback :
+String?)`. Fixture `member-overload-entry.d.ts` + wbtest cover the
+interface and class forms; the mitt gate smoke needed `emit(ev,
+Some(ev))` since `emit`'s second param is now merged-optional.
+
+Collision-free identifiers: `$` in TS type names now sanitizes to a
+distinct `Dollar` token in BOTH identifier paths (`ffi_type_identifier`
+/ `moonbit_type_identifier`) instead of the generic `Underscore`
+mangle, so zod's `$ZodType` (DollarZodType) no longer collides with
+`_ZodType` (UnderscoreZodType). That collision was what forced the
+round-5 prune to drop zod's upcast helpers; with distinct names the
+helpers survive with precise type args and the fully generated chain
+`user_schema.asUnderscoreZodType().asZodType().safeParse(input, None)`
+runs end-to-end — the last hand `unsafeCast` in the eval app's zod
+path is gone. The zod domain glue return type follows the rename
+(`Core_DollarZodLooseShape`).
+
+Gates: full suite 2532 green, all scaffold/fixture/example/realworld
+gates green, budget recalibration ZERO drift (the merges and renames
+net out). Naturalness evaluation: the 3-package app drops to 4 escape
+hatches. Remaining ranked: mutating config headers inside interceptors
+(AxiosHeaders methods), Buffer.toString, JSValue value slots (zod
+shape values need per-value casts).
+
 Profiled with `moon bench --target native` + callgrind over the release
 `tscheck` binary (`--parse` / full, `--iters N`; use
 `--toggle-collect=<mangled check entry>` to isolate the check phase from

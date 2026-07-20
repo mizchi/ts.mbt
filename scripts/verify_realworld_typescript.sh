@@ -1106,7 +1106,9 @@ test "real-world mitt bridge smoke" {
   let emitter = default(None)
   let counter = realworld_mitt_counter()
   emitter.on(realworld_mitt_event(), realworld_mitt_handler(counter))
-  emitter.emit(realworld_mitt_event(), realworld_mitt_event())
+  // `emit` overloads (`emit(type)` / `emit(type, event)`) merge to one
+  // signature with the trailing param optionalized.
+  emitter.emit(realworld_mitt_event(), Some(realworld_mitt_event()))
   assert_eq(counter.val, 1)
 }
 EOF
@@ -1969,7 +1971,9 @@ fn main {
   let emitter = @sut.default(None)
   let counter = realworld_mitt_counter()
   emitter.on(realworld_mitt_event(), realworld_mitt_handler(counter))
-  emitter.emit(realworld_mitt_event(), realworld_mitt_event())
+  // `emit` overloads (`emit(type)` / `emit(type, event)`) merge to one
+  // signature with the trailing param optionalized.
+  emitter.emit(realworld_mitt_event(), Some(realworld_mitt_event()))
   if counter.val != 1 {
     abort("unexpected mitt counter")
   }
