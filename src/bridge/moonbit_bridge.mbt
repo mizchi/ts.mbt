@@ -430,6 +430,121 @@ fn parse_bridge_param_decls(params_src : String) -> Array[BridgeParamDecl] {
 }
 
 ///|
+/// Pieces of a rendered callback param type `(A, B) -> Promise[T]` — a
+/// JS callback that must return a promise. Such params lower to
+/// `async (A, B) -> T raise` on the public wrapper (glued back through
+/// `Promise::from_async`), so a MoonBit `async fn` can be passed where
+/// TypeScript expects an async callback (`useActionState`-style
+/// actions, promise-returning handlers). Optional callbacks
+/// (`((...) -> Promise[T])?`) and optional payloads stay on the raw
+/// promise-returning form. Returns `(callback_param_types, payload)`.
+fn bridge_async_callback_param_parts(
+  type_name : String,
+) -> (Array[String], String)? {
+  if !type_name.has_prefix("(") {
+    return None
+  }
+  let close = match bridge_find_matching_paren(type_name, 0) {
+    Some(index) => index
+    None => return None
+  }
+  let after = type_name[close + 1:].to_owned().trim().to_owned()
+  if !after.has_prefix("->") {
+    return None
+  }
+  let ret = after[2:].to_owned().trim().to_owned()
+  if !ret.has_prefix("Promise[") || !ret.has_suffix("]") {
+    return None
+  }
+  let payload = ret["Promise[".length():ret.length() - 1]
+    .to_owned()
+    .trim()
+    .to_owned()
+  if payload == "" {
+    return None
+  }
+  let params : Array[String] = []
+  let params_src = type_name[1:close].to_owned()
+  if params_src.trim() != "" {
+    for item in bridge_split_top_level_commas(params_src) {
+      if item != "" {
+        params.push(item)
+      }
+    }
+  }
+  Some((params, payload))
+}
+
+///|
+fn bridge_async_callback_lowered_type(
+  params : Array[String],
+  payload : String,
+) -> String {
+  let params_src = params.join(", ")
+  "async (\{params_src}) -> \{payload} raise"
+}
+
+///|
+/// Glue turning a public `async (A, B) -> T raise` argument back into
+/// the raw promise-returning callback the extern expects.
+fn bridge_async_callback_glue_expr(arg_name : String, arity : Int) -> String {
+  let cb_params : Array[String] = []
+  for i in 0..<arity {
+    cb_params.push("__ts_mbt_cb_a\{i}")
+  }
+  let cb_params_src = cb_params.join(", ")
+  "fn(\{cb_params_src}) { Promise::from_async(async fn() raise { \{arg_name}(\{cb_params_src}) }) }"
+}
+
+///|
+fn bridge_fn_decl_has_async_callback_param(
+  fn_decl : BridgeTopLevelFnDecl,
+) -> Bool {
+  for param in parse_bridge_param_decls(fn_decl.params_src) {
+    if bridge_async_callback_param_parts(param.type_name) is Some(_) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+/// Rebuild a params_src with every async-callback param lowered.
+/// Returns `None` when nothing lowers (the params_src stays as-is).
+fn bridge_lowered_async_callback_params_src(params_src : String) -> String? {
+  if params_src.trim() == "" {
+    return None
+  }
+  let mut lowered_any = false
+  let rebuilt : Array[String] = []
+  for item in bridge_split_top_level_commas(params_src) {
+    if item == "" {
+      continue
+    }
+    match item.find(":") {
+      Some(index) => {
+        let name = item[:index].to_owned().trim().to_owned()
+        let type_name = item[index + 1:].to_owned().trim().to_owned()
+        match bridge_async_callback_param_parts(type_name) {
+          Some((cb_params, payload)) => {
+            lowered_any = true
+            let lowered = bridge_async_callback_lowered_type(cb_params, payload)
+            rebuilt.push("\{name} : \{lowered}")
+          }
+          None => rebuilt.push("\{name} : \{type_name}")
+        }
+      }
+      None => rebuilt.push(item)
+    }
+  }
+  if lowered_any {
+    Some(rebuilt.join(", "))
+  } else {
+    None
+  }
+}
+
+///|
 fn parse_bridge_public_type_name_line(line : String) -> String? {
   let prefix = "declare pub type "
   let rest = if line.has_prefix(prefix) {
@@ -1219,10 +1334,14 @@ fn render_bridge_public_wrapper_with_converters(
   let needs_conversion = bridge_fn_decl_needs_enum_conversion(
     fn_decl, converters,
   )
+  let lowered_params_src = bridge_lowered_async_callback_params_src(
+    fn_decl.params_src,
+  )
   if internal_name == "" ||
     (
       !needs_conversion &&
       !wrap_option_return &&
+      lowered_params_src is None &&
       internal_name == fn_decl.public_name
     ) {
     return None
@@ -1235,7 +1354,16 @@ fn render_bridge_public_wrapper_with_converters(
     } else {
       ""
     }
-    call_args.push(bridge_arg_expr_for_type(converters, arg_name, type_name))
+    match bridge_async_callback_param_parts(type_name) {
+      Some((cb_params, _)) =>
+        call_args.push(
+          bridge_async_callback_glue_expr(arg_name, cb_params.length()),
+        )
+      None =>
+        call_args.push(
+          bridge_arg_expr_for_type(converters, arg_name, type_name),
+        )
+    }
   }
   let call_expr = if call_args.length() == 0 {
     internal_name + "()"
@@ -1250,8 +1378,12 @@ fn render_bridge_public_wrapper_with_converters(
   } else {
     bridge_return_expr_for_type(converters, fn_decl.return_type, call_expr)
   }
+  let public_params_src = match lowered_params_src {
+    Some(src) => src
+    None => fn_decl.params_src
+  }
   Some(
-    "pub fn \{fn_decl.public_name}(\{fn_decl.params_src}) -> \{fn_decl.return_type} {\n  \{body_expr}\n}",
+    "pub fn \{fn_decl.public_name}(\{public_params_src}) -> \{fn_decl.return_type} {\n  \{body_expr}\n}",
   )
 }
 
@@ -1311,13 +1443,18 @@ fn inject_bridge_public_type_aliases(
 }
 
 ///|
+/// Returns the rewritten `(bridge_mbt, bridge_mbti)` pair: the mbt gains
+/// the natural-name public wrappers, and any `declare pub fn` line whose
+/// wrapper lowered an async-callback param is rewritten to the lowered
+/// signature so the interface keeps describing the real public surface.
 fn add_bridge_public_wrappers(
   bridge_mbti : String,
   bridge_mbt : String,
-) -> String {
+) -> (String, String) {
   let mut next_bridge_mbt = inject_bridge_public_type_aliases(
     bridge_mbti, bridge_mbt,
   )
+  let mut next_bridge_mbti = bridge_mbti
   let enum_converters = collect_bridge_enum_converters(
     bridge_mbti, next_bridge_mbt,
   )
@@ -1335,7 +1472,12 @@ fn add_bridge_public_wrappers(
         let needs_option_wrap = bridge_fn_decl_needs_option_return_wrap(
           fn_decl, enum_converters, opaque_type_names,
         )
-        let internal_name = if (needs_conversion || needs_option_wrap) &&
+        let has_async_callback = bridge_fn_decl_has_async_callback_param(
+          fn_decl,
+        )
+        let internal_name = if (
+            needs_conversion || needs_option_wrap || has_async_callback
+          ) &&
           base_internal_name == fn_decl.public_name {
           base_internal_name + "_raw"
         } else {
@@ -1358,6 +1500,20 @@ fn add_bridge_public_wrappers(
               wrappers.push(wrapper)
               if needs_option_wrap {
                 used_option_return_wrap = true
+              }
+              match
+                bridge_lowered_async_callback_params_src(fn_decl.params_src) {
+                Some(lowered_src) => {
+                  let old_decl = "declare pub fn \{fn_decl.public_name}(\{fn_decl.params_src}) -> \{fn_decl.return_type}"
+                  let new_decl = "declare pub fn \{fn_decl.public_name}(\{lowered_src}) -> \{fn_decl.return_type}"
+                  if next_bridge_mbti.contains(old_decl) {
+                    next_bridge_mbti = next_bridge_mbti.replace(
+                      old=old_decl,
+                      new=new_decl,
+                    )
+                  }
+                }
+                None => ()
               }
             }
           }
@@ -1409,11 +1565,12 @@ fn add_bridge_public_wrappers(
       sections.push(helper)
     }
   }
-  if sections.length() == 0 {
+  let final_bridge_mbt = if sections.length() == 0 {
     next_bridge_mbt
   } else {
     next_bridge_mbt + "\n\n" + sections.join("\n\n")
   }
+  (final_bridge_mbt, next_bridge_mbti)
 }
 
 ///|
@@ -1448,9 +1605,12 @@ pub async fn emit_moonbit_ts_bridge_package_bundle_from_entry_path(
     bundle.decl_mbt,
     export_surface,
   )
-  let bridge_mbt = add_bridge_public_wrappers(base_bridge_mbti, bundle.ffi_mbt)
+  let (bridge_mbt, wrapped_bridge_mbti) = add_bridge_public_wrappers(
+    base_bridge_mbti,
+    bundle.ffi_mbt,
+  )
   let public_bridge_mbti = expose_bridge_struct_decls_in_mbti(
-    base_bridge_mbti, bridge_mbt,
+    wrapped_bridge_mbti, bridge_mbt,
   )
   let bridge_mbti = add_bridge_ergonomic_helper_decls(
     public_bridge_mbti, bridge_mbt,

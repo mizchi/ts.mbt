@@ -1561,7 +1561,45 @@ sync `request`. Fallout: integration-mode `JsRejection` is `pub(all)`
 error), and the node_fs smoke unlinks its sync scratch file instead
 of leaving it at the repo root.
 
-## Performance Tuning Round 1 (2026-07-19)
+Async-callback lowering (2026-07-20): the REVERSE direction now works —
+TS APIs that RECEIVE `(...) => Promise<T>` callbacks (React 19
+`useActionState`-style actions, promise-returning handlers) accept a
+MoonBit `async fn` directly. Top-level fn params rendered as
+`(A, B) -> Promise[T]` lower to `async (A, B) -> T raise` on the
+natural-name public wrapper (and in `bridge.mbti`), glued back through
+a new `Promise::from_async` emitted in both promise layers. Design
+facts, all probe-verified before landing:
+
+- MoonBit JS CPS ABI: an async fn that completes WITHOUT suspending
+  calls neither continuation — it returns `Result[Option[T], Error]`
+  directly. A naive `new Promise((res, rej) => f(args, res, rej))`
+  wrapper silently drops synchronous raises. The self-contained
+  `Promise::from_async` therefore performs resolve/reject INSIDE a
+  noraise Unit wrapper async fn, so the trampoline can ignore the
+  sync-completion return value safely.
+- Integration mode must spawn: a callback CPS-started raw from JS has
+  no coroutine context and `@js_async.Promise::wait` panics.
+  `@js_async.Promise::from_async` (which `@coroutine.spawn`s — its doc
+  marks it "for exporting MoonBit code to JavaScript") is the delegate;
+  the integration `run_async` now also spawns through it (the previous
+  raw-CPS trampoline would panic on the first integration-mode wait).
+- `run_async` accepts `async () -> Unit raise` in both modes and
+  reports errors through an explicit catch (console.error + exit 1) —
+  synchronous raises included.
+- Not lowered (recorded friction): optional callbacks
+  (`((...) -> Promise[T])?`), interface/struct-field callbacks, class
+  method callback params, and union-typed handler slots
+  (`V | Promise<V>`, axios interceptors).
+
+Tests: bridge wbtest pins the lowering (wrapper + glue + `_raw`
+demotion + mbti rewrite + non-promise/optional callbacks staying raw)
+and the section coherence (`Promise::from_async` identical signature in
+both layers, integration run_async spawning via @js_async). The
+realworld gate grew `verify_async_callback_app` twice (self-contained +
+integration): a `useStateAction`-shaped fixture package is vendored,
+surface markers asserted, then the app RUNS a MoonBit async fn as the
+action — awaited TS promise inside the callback, two dispatches folding
+state, and a synchronous raise surfacing as a caught rejection.
 
 Profiled with `moon bench --target native` + callgrind over the release
 `tscheck` binary (`--parse` / full, `--iters N`; use

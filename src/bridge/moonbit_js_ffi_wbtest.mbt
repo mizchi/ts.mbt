@@ -5552,9 +5552,27 @@ test "bridge: promise layer section variants stay coherent" {
       bridge_promise_wait_self_contained_section, bridge_promise_wait_async_integration_section,
     ] {
     assert_true(section.contains("pub async fn[T] Promise::wait"))
-    assert_true(section.contains("pub fn run_async(f : async () -> Unit)"))
+    assert_true(
+      section.contains("pub fn run_async(f : async () -> Unit raise)"),
+    )
+    // The MoonBit-async -> JS-promise direction: async callbacks lower
+    // through this in both modes, so it must exist with an identical
+    // signature in each.
+    assert_true(
+      section.contains(
+        "pub fn[T] Promise::from_async(f : async () -> T raise) -> Promise[T]",
+      ),
+    )
     assert_true(section.contains("suberror JsRejection"))
   }
+  // The integration-mode run_async must spawn through @js_async: a raw
+  // CPS start has no coroutine context and panics on the first
+  // integration-mode wait inside `f`.
+  assert_true(
+    bridge_promise_wait_async_integration_section.contains(
+      "@js_async.Promise::from_async",
+    ),
+  )
   assert_true(
     bridge_promise_wait_self_contained_section.contains(
       "pub suberror JsRejection",

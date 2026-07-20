@@ -3125,6 +3125,234 @@ EOF
 
 verify_async_integration_app
 
+write_async_callback_fixture_package() {
+  # A useStateAction-style surface: TS receives `(...) => Promise<T>`
+  # callbacks and awaits them (React 19 useActionState shape). The
+  # runtime `dispatch` awaits the action, so the app only passes if the
+  # lowered MoonBit async fn really produced a JS promise.
+  local pkg_root="$1/state-action"
+  mkdir -p "$pkg_root"
+  cat > "$pkg_root/package.json" <<'EOF'
+{ "name": "state-action", "version": "1.0.0", "main": "index.js", "types": "index.d.ts" }
+EOF
+  cat > "$pkg_root/index.d.ts" <<'EOF'
+export interface ActionHandle<S, P> {
+  dispatch(payload: P): Promise<S>;
+  getState(): S;
+}
+export declare function useStateAction<S, P>(
+  action: (state: S, payload: P) => Promise<S>,
+  initialState: S,
+): ActionHandle<S, P>;
+export declare function delayValue(value: string, ms: number): Promise<string>;
+EOF
+  cat > "$pkg_root/index.js" <<'EOF'
+export function useStateAction(action, initialState) {
+  let state = initialState;
+  return {
+    dispatch: async (payload) => {
+      state = await action(state, payload);
+      return state;
+    },
+    getState: () => state,
+  };
+}
+export function delayValue(value, ms) {
+  return new Promise((resolve) => setTimeout(() => resolve(value), ms));
+}
+EOF
+}
+
+async_callback_smoke_body() {
+  # Shared assertions for both modes. Callers wrap this in either
+  # `async fn main` (integration) or `run_async` (self-contained).
+  cat <<'EOF'
+extern "js" fn js_to_string(v : @sa.JSValue) -> String =
+  #| (v) => String(v)
+
+async fn action_impl(state : @sa.JSValue, payload : @sa.JSValue) -> @sa.JSValue {
+  // Await a real TS promise INSIDE the callback before combining.
+  let delayed = @sa.delayValue(js_to_string(payload), 10).wait()
+  @sa.JSValue::from_string(js_to_string(state) + "+" + delayed)
+}
+
+suberror ActionBoom {
+  ActionBoom(String)
+}
+
+// Raises BEFORE any suspension on purpose: the MoonBit CPS ABI returns
+// a Result instead of calling the continuations for sync completion,
+// and the from_async glue must still turn that into a rejection.
+#warnings("-67")
+async fn failing_action(_state : @sa.JSValue, _payload : @sa.JSValue) -> @sa.JSValue raise {
+  raise ActionBoom("boom")
+}
+
+async fn async_callback_smoke() -> Unit {
+  // A MoonBit async fn passed straight into the TS async-callback slot.
+  let handle = @sa.useStateAction(action_impl, @sa.JSValue::from_string("s0"))
+  let s1 = handle.dispatch(@sa.JSValue::from_string("p1")).wait()
+  if js_to_string(s1) != "s0+p1" {
+    abort("unexpected state after first dispatch: " + js_to_string(s1))
+  }
+  let s2 = handle.dispatch(@sa.JSValue::from_string("p2")).wait()
+  if js_to_string(s2) != "s0+p1+p2" {
+    abort("unexpected state after second dispatch")
+  }
+  if js_to_string(handle.getState()) != "s0+p1+p2" {
+    abort("unexpected getState")
+  }
+  // A raising action must surface as a promise rejection.
+  let failing = @sa.useStateAction(failing_action, @sa.JSValue::from_string("s0"))
+  let caught = try {
+    let _ = failing.dispatch(@sa.JSValue::from_string("p")).wait()
+    false
+  } catch {
+    _ => true
+  }
+  if !caught {
+    abort("expected raising action to reject")
+  }
+}
+EOF
+}
+
+verify_async_callback_app() {
+  # End-to-end proof that `(...) => Promise<T>` callback params lower to
+  # MoonBit `async (...) -> T raise` and actually RUN, in both promise
+  # layers: the self-contained one and the moonbitlang/async one.
+  local mode="$1" # self-contained | integration
+  local root="_build/realworld-typescript"
+  local app="$root/async-callback-app-$mode"
+
+  echo "== async-callback ($mode mode)"
+
+  rm -rf "$app"
+  mkdir -p "$app/src/main" "$app/node_modules"
+  write_async_callback_fixture_package "$app/node_modules"
+
+  if [ "$mode" = "integration" ]; then
+    cat > "$app/moon.mod.json" <<'EOF'
+{
+  "name": "realworld/async_callback_integration",
+  "version": "0.1.0",
+  "source": "src",
+  "preferred-target": "js",
+  "deps": { "moonbitlang/async": "0.18.1" }
+}
+EOF
+  else
+    cat > "$app/moon.mod.json" <<'EOF'
+{
+  "name": "realworld/async_callback_sc",
+  "version": "0.1.0",
+  "source": "src",
+  "preferred-target": "js"
+}
+EOF
+  fi
+
+  (
+    cd "$app"
+    run_logged "$repo_root/$log_root/async_callback_${mode}_vendor.log" \
+      moon run "$repo_root/src/cmd/ts2mbt" -- vendor state-action --out src/bridges
+  )
+
+  local bridge="$app/src/bridges/state_action/bridge.mbt"
+  local mbti="$app/src/bridges/state_action/bridge.mbti"
+  # The lowered public surface + glue must be present in both modes, and
+  # the interface must describe the lowered signature (not the raw one).
+  if ! grep -q "pub fn useStateAction(action : async (JSValue, JSValue) -> JSValue raise" "$bridge"; then
+    echo "expected lowered async-callback wrapper in $mode bridge" >&2
+    exit 1
+  fi
+  if ! grep -q "Promise::from_async(async fn() raise" "$bridge"; then
+    echo "expected from_async glue in $mode bridge" >&2
+    exit 1
+  fi
+  if ! grep -q "declare pub fn useStateAction(action : async (JSValue, JSValue) -> JSValue raise" "$mbti"; then
+    echo "expected lowered async-callback signature in $mode bridge.mbti" >&2
+    exit 1
+  fi
+  if [ "$mode" = "integration" ]; then
+    if ! grep -q "@js_async.Promise::from_async" "$bridge"; then
+      echo "expected @js_async delegation in integration bridge" >&2
+      exit 1
+    fi
+  else
+    if ! grep -q "_promise_ctor_extern_js" "$bridge"; then
+      echo "expected self-contained promise ctor in bridge" >&2
+      exit 1
+    fi
+  fi
+
+  if [ "$mode" = "integration" ]; then
+    # `async fn main` requires importing moonbitlang/async (error 4037);
+    # the `@async.sleep(1)` keeps that import used so the build stays
+    # warning-clean under warning_guard.
+    cat > "$app/src/main/moon.pkg" <<'EOF'
+import {
+  "moonbitlang/async",
+  "realworld/async_callback_integration/bridges/state_action" @sa,
+}
+
+pkgtype(kind: "executable")
+EOF
+    {
+      async_callback_smoke_body
+      cat <<'EOF'
+
+async fn main {
+  async_callback_smoke()
+  @async.sleep(1)
+  println("ASYNC-CALLBACK-OK")
+}
+EOF
+    } > "$app/src/main/main.mbt"
+  else
+    cat > "$app/src/main/moon.pkg" <<'EOF'
+import {
+  "realworld/async_callback_sc/bridges/state_action" @sa,
+}
+
+pkgtype(kind: "executable")
+EOF
+    {
+      async_callback_smoke_body
+      cat <<'EOF'
+
+fn main {
+  @sa.run_async(async fn() {
+    async_callback_smoke()
+    println("ASYNC-CALLBACK-OK")
+  })
+}
+EOF
+    } > "$app/src/main/main.mbt"
+  fi
+
+  (
+    cd "$app"
+    run_logged "$repo_root/$log_root/async_callback_${mode}_build.log" \
+      moon build --target js
+  )
+
+  local run_log="$repo_root/$log_root/async_callback_${mode}_run.log"
+  if ! (cd "$app" && node _build/js/debug/build/main/main.js) \
+    > "$run_log" 2>&1; then
+    echo "async callback app ($mode) failed; see $run_log" >&2
+    exit 1
+  fi
+  if ! grep -q "ASYNC-CALLBACK-OK" "$run_log"; then
+    echo "async callback app ($mode) did not reach the OK marker; see $run_log" >&2
+    exit 1
+  fi
+  echo "async-callback app ok ($mode)"
+}
+
+verify_async_callback_app self-contained
+verify_async_callback_app integration
+
 append_fallback_policy_report
 
 echo "metrics written to $metrics_file"

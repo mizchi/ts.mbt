@@ -1167,7 +1167,7 @@ test "bridge: top-level optional extern demotes to raw plus Option wrapper" {
     #|pub type JSValue
     #|
     #|pub extern "js" fn and_(conditions : Array[SQLWrapper?]) -> SQL[JSValue]? = "__ts_mbt_and"
-  let rewritten = add_bridge_public_wrappers(bridge_mbti, bridge_mbt)
+  let (rewritten, _) = add_bridge_public_wrappers(bridge_mbti, bridge_mbt)
   assert_true(rewritten.contains("extern \"js\" fn and__raw("))
   assert_true(
     rewritten.contains(
@@ -1175,4 +1175,71 @@ test "bridge: top-level optional extern demotes to raw plus Option wrapper" {
     ),
   )
   assert_true(rewritten.contains("fn[T] __ts_mbt_wrap_option_return"))
+}
+
+///|
+test "bridge: async-callback params lower to async fns with from_async glue" {
+  let bridge_mbti =
+    #|declare pub type JSValue
+    #|declare pub type Promise[X]
+    #|declare pub fn useStateAction(action : (JSValue, JSValue) -> Promise[JSValue], initialState : JSValue) -> JSValue
+    #|declare pub fn subscribe(listener : () -> Promise[Unit]) -> Unit
+    #|declare pub fn keep(cb : (JSValue) -> JSValue, opt : ((JSValue) -> Promise[JSValue])?) -> Unit
+  let bridge_mbt =
+    #|#external
+    #|pub type JSValue
+    #|
+    #|#external
+    #|pub type Promise[X]
+    #|
+    #|pub extern "js" fn use_state_action(action : (JSValue, JSValue) -> Promise[JSValue], initialState : JSValue) -> JSValue = "useStateAction"
+    #|
+    #|pub extern "js" fn subscribe(listener : () -> Promise[Unit]) -> Unit = "subscribe"
+    #|
+    #|pub extern "js" fn keep(cb : (JSValue) -> JSValue, opt : ((JSValue) -> Promise[JSValue])?) -> Unit = "keep"
+  let (mbt, mbti) = add_bridge_public_wrappers(bridge_mbti, bridge_mbt)
+  // Natural-name wrapper: public signature takes the MoonBit async fn,
+  // the demoted extern keeps the raw promise-returning callback, glue
+  // converts through Promise::from_async.
+  assert_true(
+    mbt.contains(
+      "pub fn useStateAction(action : async (JSValue, JSValue) -> JSValue raise, initialState : JSValue) -> JSValue {",
+    ),
+  )
+  assert_true(
+    mbt.contains(
+      "use_state_action(fn(__ts_mbt_cb_a0, __ts_mbt_cb_a1) { Promise::from_async(async fn() raise { action(__ts_mbt_cb_a0, __ts_mbt_cb_a1) }) }, initialState)",
+    ),
+  )
+  // A snake-named export needs the `_raw` demotion so the lowered
+  // wrapper can keep the public name; zero-arg callbacks lower too.
+  assert_true(mbt.contains("extern \"js\" fn subscribe_raw("))
+  assert_true(
+    mbt.contains(
+      "pub fn subscribe(listener : async () -> Unit raise) -> Unit {\n  subscribe_raw(fn() { Promise::from_async(async fn() raise { listener() }) })\n}",
+    ),
+  )
+  // Non-promise callbacks and optional callbacks stay raw: no wrapper.
+  assert_true(mbt.contains("pub extern \"js\" fn keep("))
+  // The interface follows the lowered public surface.
+  assert_true(
+    mbti.contains(
+      "declare pub fn useStateAction(action : async (JSValue, JSValue) -> JSValue raise, initialState : JSValue) -> JSValue",
+    ),
+  )
+  assert_true(
+    mbti.contains(
+      "declare pub fn subscribe(listener : async () -> Unit raise) -> Unit",
+    ),
+  )
+  assert_false(
+    mbti.contains(
+      "declare pub fn useStateAction(action : (JSValue, JSValue) -> Promise[JSValue]",
+    ),
+  )
+  assert_true(
+    mbti.contains(
+      "declare pub fn keep(cb : (JSValue) -> JSValue, opt : ((JSValue) -> Promise[JSValue])?) -> Unit",
+    ),
+  )
 }
