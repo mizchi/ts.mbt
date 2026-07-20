@@ -1544,6 +1544,23 @@ StringValue(...))` — flat convenience constructors like the existing
 and web-platform types (Response.status / .text) still need one-line
 externs until a lib.dom prelude exists.
 
+Run-verification tests (2026-07-20): the arc is now pinned by tests
+that RUN the converted code, not just inspect it. A wbtest keeps the
+two Promise-layer section texts coherent (self-contained =
+`%async.suspend` + JsRejection-raising rejections; integration =
+`Promise::std` + AbortController + `Promise.resolve` leniency, no
+suspend intrinsic; both share wait / run_async / JsRejection). The
+realworld gate grew `verify_async_integration_app`: a fresh consumer
+app depending on moonbitlang/async vendors axios + hono, asserts the
+generated bridges actually switched to integration mode, then builds
+warning-clean (under warning_guard) and executes `async fn main`
+covering awaited `axios.all`, `@async.with_timeout` composition,
+AbortController plumbing, and the bare-Response leniency on hono's
+sync `request`. Fallout: integration-mode `JsRejection` is `pub(all)`
+(nothing constructs it in that mode — rejections raise `@js_async`'s
+error), and the node_fs smoke unlinks its sync scratch file instead
+of leaving it at the repo root.
+
 ## Performance Tuning Round 1 (2026-07-19)
 
 Profiled with `moon bench --target native` + callgrind over the release
