@@ -968,7 +968,13 @@ fn interface_function_field_method_decl(
       let params : Array[String] = []
       for i, param_type in param_types {
         let arg_name = "arg" + i.to_string()
-        params.push("\{arg_name} : \{param_type}")
+        // Mirror of the ffi side: async-callback params surface as
+        // MoonBit async fns on the public method.
+        let public_type = match moonbit_async_callback_lowering(param_type) {
+          Some(lowering) => lowering.lowered_type
+          None => param_type
+        }
+        params.push("\{arg_name} : \{public_type}")
       }
       let params_src = if params.length() == 0 {
         "self : \{self_type}"
@@ -1303,7 +1309,13 @@ fn class_decl_to_moonbit_sections(
       let (param_name, param_type) = param
       let safe_name = sanitize_value_identifier(param_name, "arg")
       let safe_type = moonbit_type_name(state, param_type)
-      params.push("\{safe_name} : \{safe_type}")
+      // Mirror of the ffi side: async-callback params surface as
+      // MoonBit async fns on the public method.
+      let public_type = match moonbit_async_callback_lowering(safe_type) {
+        Some(lowering) => lowering.lowered_type
+        None => safe_type
+      }
+      params.push("\{safe_name} : \{public_type}")
     }
     let raw_return = moonbit_type_name(state, class_method.return_type)
     let return_type = match raw_return {

@@ -1601,6 +1601,31 @@ surface markers asserted, then the app RUNS a MoonBit async fn as the
 action — awaited TS promise inside the callback, two dispatches folding
 state, and a synchronous raise surfacing as a caught rejection.
 
+Round 2 (same day) — remaining callback positions: the lowering moved
+into a shared `@parser.moonbit_async_callback_lowering` helper (one
+detector for the decl `.mbti` and ffi `bridge.mbt` renderings, so the
+divergence gate keeps them identical) and now also covers:
+
+- optional callbacks `((...) -> Promise[T])?` -> `(async (...) -> T
+  raise)?` with `Option::map` glue (Some/None structure preserved);
+- interface methods / function-field method wrappers, both receiver
+  shapes: generic receivers via the `(self.field)(glue)` wrapper,
+  non-generic receivers via a forced extern/wrapper pair whose extern
+  keeps the raw promise-returning callback types;
+- class methods (instance + static, preserve and extern-pair paths),
+  reusing the enum-param pair mechanics.
+
+Struct FIELD types deliberately stay raw: fields are identity views
+over JS objects (a stored JS function is not CPS-callable), so the
+conversion point is the method wrapper / `Promise::from_async` at
+construction time. Budget note: one playwright promise-callback
+signature moved from the tuple/array bucket into callback/function
+(885->886 / 170->169, total unchanged) — recalibrated. The gate
+fixture package grew `onCommit` (generic interface method), `Notifier`
+(non-generic interface method), `TaskQueue` (class methods), and
+`runWithFallback` (optional callback, Some + None) — all RUN in both
+promise layers.
+
 Profiled with `moon bench --target native` + callgrind over the release
 `tscheck` binary (`--parse` / full, `--iters N`; use
 `--toggle-collect=<mangled check entry>` to isolate the check phase from

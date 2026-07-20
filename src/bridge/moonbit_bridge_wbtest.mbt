@@ -1219,8 +1219,15 @@ test "bridge: async-callback params lower to async fns with from_async glue" {
       "pub fn subscribe(listener : async () -> Unit raise) -> Unit {\n  subscribe_raw(fn() { Promise::from_async(async fn() raise { listener() }) })\n}",
     ),
   )
-  // Non-promise callbacks and optional callbacks stay raw: no wrapper.
-  assert_true(mbt.contains("pub extern \"js\" fn keep("))
+  // Optional callbacks lower too — Option::map glue keeps Some/None
+  // structure while converting the payload; the non-promise callback
+  // param stays raw inside the same signature.
+  assert_true(mbt.contains("extern \"js\" fn keep_raw("))
+  assert_true(
+    mbt.contains(
+      "pub fn keep(cb : (JSValue) -> JSValue, opt : (async (JSValue) -> JSValue raise)?) -> Unit {\n  keep_raw(cb, opt.map(fn(__ts_mbt_cb_f) { fn(__ts_mbt_cb_a0) { Promise::from_async(async fn() raise { __ts_mbt_cb_f(__ts_mbt_cb_a0) }) } }))\n}",
+    ),
+  )
   // The interface follows the lowered public surface.
   assert_true(
     mbti.contains(
@@ -1239,7 +1246,58 @@ test "bridge: async-callback params lower to async fns with from_async glue" {
   )
   assert_true(
     mbti.contains(
-      "declare pub fn keep(cb : (JSValue) -> JSValue, opt : ((JSValue) -> Promise[JSValue])?) -> Unit",
+      "declare pub fn keep(cb : (JSValue) -> JSValue, opt : (async (JSValue) -> JSValue raise)?) -> Unit",
     ),
+  )
+}
+
+///|
+test "parser: async callback lowering shapes" {
+  // Plain, zero-arg, optional, and rejected shapes.
+  match @parser.moonbit_async_callback_lowering("(JSValue) -> Promise[Unit]") {
+    Some(lowering) => {
+      assert_eq(lowering.lowered_type, "async (JSValue) -> Unit raise")
+      assert_eq(lowering.arity, 1)
+      assert_false(lowering.is_optional)
+    }
+    None => fail("expected plain callback to lower")
+  }
+  match @parser.moonbit_async_callback_lowering("() -> Promise[String]") {
+    Some(lowering) => {
+      assert_eq(lowering.lowered_type, "async () -> String raise")
+      assert_eq(lowering.arity, 0)
+    }
+    None => fail("expected zero-arg callback to lower")
+  }
+  match
+    @parser.moonbit_async_callback_lowering(
+      "((String, Map[String, JSValue]) -> Promise[Array[JSValue]])?",
+    ) {
+    Some(lowering) => {
+      assert_eq(
+        lowering.lowered_type,
+        "(async (String, Map[String, JSValue]) -> Array[JSValue] raise)?",
+      )
+      assert_eq(lowering.arity, 2)
+      assert_true(lowering.is_optional)
+    }
+    None => fail("expected optional callback to lower")
+  }
+  // Not lowered: non-promise return, named alias, optional payload,
+  // bare promise value, higher-order function returning a callback.
+  assert_true(
+    @parser.moonbit_async_callback_lowering("(JSValue) -> JSValue") is None,
+  )
+  assert_true(@parser.moonbit_async_callback_lowering("SomeCallback") is None)
+  assert_true(
+    @parser.moonbit_async_callback_lowering("(JSValue) -> Promise[Unit]?")
+    is None,
+  )
+  assert_true(
+    @parser.moonbit_async_callback_lowering("Promise[JSValue]") is None,
+  )
+  assert_true(
+    @parser.moonbit_async_callback_lowering("() -> (JSValue) -> Promise[Unit]")
+    is None,
   )
 }

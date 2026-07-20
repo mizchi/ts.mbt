@@ -1477,14 +1477,30 @@ fn ffi_function_field_method_decl(
         _ => return_type
       }
       let params : Array[String] = ["self : \{self_type}"]
+      let raw_params : Array[String] = ["this_ : \{self_type}"]
       let args : Array[String] = []
+      let arg_exprs : Array[String] = []
+      let mut has_lowered_callback = false
       for i, param_type in param_types {
         let arg_name = "arg" + i.to_string()
-        params.push("\{arg_name} : \{param_type}")
+        raw_params.push("\{arg_name} : \{param_type}")
+        match @parser.moonbit_async_callback_lowering(param_type) {
+          Some(lowering) => {
+            has_lowered_callback = true
+            params.push("\{arg_name} : \{lowering.lowered_type}")
+            arg_exprs.push(
+              @parser.moonbit_async_callback_glue_expr(arg_name, lowering),
+            )
+          }
+          None => {
+            params.push("\{arg_name} : \{param_type}")
+            arg_exprs.push(arg_name)
+          }
+        }
         args.push(arg_name)
       }
       let params_src = params.join(", ")
-      let args_src = args.join(", ")
+      let args_src = arg_exprs.join(", ")
       let js_args : Array[String] = []
       for i, arg in args {
         js_args.push(
@@ -1517,11 +1533,14 @@ fn ffi_function_field_method_decl(
           ffi_js_access("self", js_field_name) + "(" + js_args_src + ")"
         }
         let forward_args : Array[String] = ["self"]
-        for arg in args {
-          forward_args.push(arg)
+        for arg_expr in arg_exprs {
+          forward_args.push(arg_expr)
         }
-        let extern_params = "this_ : " +
-          params_src["self : ".length():].to_owned()
+        // Lowered async-callback params force the extern/wrapper pair:
+        // the extern keeps the raw promise-returning callback types
+        // while the public wrapper takes MoonBit async fns and passes
+        // the from_async glue closures through.
+        let extern_params = raw_params.join(", ")
         match
           ffi_converted_return_extern_pair(
             state,
@@ -1534,6 +1553,7 @@ fn ffi_function_field_method_decl(
             forward_args,
             return_type,
             "\n  #| (\{js_params_src}) => \{js_call}",
+            force=has_lowered_callback,
           ) {
           Some(pair) => Some(pair)
           None =>
@@ -4252,18 +4272,35 @@ fn ffi_class_method_decl_to_moonbit(
     // `_to_js` conversion happens in `arg_exprs` below.
     let safe_type = ffi_struct_field_type_name(state, type_)
     arg_names.push(safe_name)
-    let arg_expr = ffi_enum_arg_expr(state, safe_type, safe_name)
-    if arg_expr != safe_name {
-      has_enum_param = true
+    match @parser.moonbit_async_callback_lowering(safe_type) {
+      Some(lowering) => {
+        // Async-callback param: public wrapper takes a MoonBit async fn;
+        // the extern keeps the raw promise-returning callback type and
+        // receives the from_async glue closure. Reuses the enum-param
+        // pair mechanics (has_enum_param forces the extern/wrapper
+        // split).
+        has_enum_param = true
+        arg_exprs.push(
+          @parser.moonbit_async_callback_glue_expr(safe_name, lowering),
+        )
+        extern_param_decls.push("\{safe_name} : \{safe_type}")
+        params.push("\{safe_name} : \{lowering.lowered_type}")
+      }
+      None => {
+        let arg_expr = ffi_enum_arg_expr(state, safe_type, safe_name)
+        if arg_expr != safe_name {
+          has_enum_param = true
+        }
+        arg_exprs.push(arg_expr)
+        extern_param_decls.push(
+          "\{safe_name} : \{ffi_enum_param_raw_type(state, safe_type)}",
+        )
+        params.push("\{safe_name} : \{safe_type}")
+      }
     }
-    arg_exprs.push(arg_expr)
-    extern_param_decls.push(
-      "\{safe_name} : \{ffi_enum_param_raw_type(state, safe_type)}",
-    )
     js_args.push(
       ffi_inline_js_arg_expr_with_state(Some(state), type_, safe_name),
     )
-    params.push("\{safe_name} : \{safe_type}")
   }
   let raw_return_type = ffi_struct_field_type_name(
     state,

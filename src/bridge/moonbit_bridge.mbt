@@ -430,78 +430,15 @@ fn parse_bridge_param_decls(params_src : String) -> Array[BridgeParamDecl] {
 }
 
 ///|
-/// Pieces of a rendered callback param type `(A, B) -> Promise[T]` — a
-/// JS callback that must return a promise. Such params lower to
-/// `async (A, B) -> T raise` on the public wrapper (glued back through
-/// `Promise::from_async`), so a MoonBit `async fn` can be passed where
-/// TypeScript expects an async callback (`useActionState`-style
-/// actions, promise-returning handlers). Optional callbacks
-/// (`((...) -> Promise[T])?`) and optional payloads stay on the raw
-/// promise-returning form. Returns `(callback_param_types, payload)`.
-fn bridge_async_callback_param_parts(
-  type_name : String,
-) -> (Array[String], String)? {
-  if !type_name.has_prefix("(") {
-    return None
-  }
-  let close = match bridge_find_matching_paren(type_name, 0) {
-    Some(index) => index
-    None => return None
-  }
-  let after = type_name[close + 1:].to_owned().trim().to_owned()
-  if !after.has_prefix("->") {
-    return None
-  }
-  let ret = after[2:].to_owned().trim().to_owned()
-  if !ret.has_prefix("Promise[") || !ret.has_suffix("]") {
-    return None
-  }
-  let payload = ret["Promise[".length():ret.length() - 1]
-    .to_owned()
-    .trim()
-    .to_owned()
-  if payload == "" {
-    return None
-  }
-  let params : Array[String] = []
-  let params_src = type_name[1:close].to_owned()
-  if params_src.trim() != "" {
-    for item in bridge_split_top_level_commas(params_src) {
-      if item != "" {
-        params.push(item)
-      }
-    }
-  }
-  Some((params, payload))
-}
-
-///|
-fn bridge_async_callback_lowered_type(
-  params : Array[String],
-  payload : String,
-) -> String {
-  let params_src = params.join(", ")
-  "async (\{params_src}) -> \{payload} raise"
-}
-
-///|
-/// Glue turning a public `async (A, B) -> T raise` argument back into
-/// the raw promise-returning callback the extern expects.
-fn bridge_async_callback_glue_expr(arg_name : String, arity : Int) -> String {
-  let cb_params : Array[String] = []
-  for i in 0..<arity {
-    cb_params.push("__ts_mbt_cb_a\{i}")
-  }
-  let cb_params_src = cb_params.join(", ")
-  "fn(\{cb_params_src}) { Promise::from_async(async fn() raise { \{arg_name}(\{cb_params_src}) }) }"
-}
-
-///|
+/// Async-callback lowering (`(A, B) -> Promise[T]` params accepting a
+/// MoonBit `async fn`, optional form included) is shared with the decl
+/// layer so `.mbti` and `bridge.mbt` cannot drift — see
+/// `@parser.moonbit_async_callback_lowering` for the shape rules.
 fn bridge_fn_decl_has_async_callback_param(
   fn_decl : BridgeTopLevelFnDecl,
 ) -> Bool {
   for param in parse_bridge_param_decls(fn_decl.params_src) {
-    if bridge_async_callback_param_parts(param.type_name) is Some(_) {
+    if @parser.moonbit_async_callback_lowering(param.type_name) is Some(_) {
       return true
     }
   }
@@ -525,11 +462,10 @@ fn bridge_lowered_async_callback_params_src(params_src : String) -> String? {
       Some(index) => {
         let name = item[:index].to_owned().trim().to_owned()
         let type_name = item[index + 1:].to_owned().trim().to_owned()
-        match bridge_async_callback_param_parts(type_name) {
-          Some((cb_params, payload)) => {
+        match @parser.moonbit_async_callback_lowering(type_name) {
+          Some(lowering) => {
             lowered_any = true
-            let lowered = bridge_async_callback_lowered_type(cb_params, payload)
-            rebuilt.push("\{name} : \{lowered}")
+            rebuilt.push("\{name} : \{lowering.lowered_type}")
           }
           None => rebuilt.push("\{name} : \{type_name}")
         }
@@ -1354,10 +1290,10 @@ fn render_bridge_public_wrapper_with_converters(
     } else {
       ""
     }
-    match bridge_async_callback_param_parts(type_name) {
-      Some((cb_params, _)) =>
+    match @parser.moonbit_async_callback_lowering(type_name) {
+      Some(lowering) =>
         call_args.push(
-          bridge_async_callback_glue_expr(arg_name, cb_params.length()),
+          @parser.moonbit_async_callback_glue_expr(arg_name, lowering),
         )
       None =>
         call_args.push(

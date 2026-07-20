@@ -446,7 +446,10 @@ jsvalue_cause_budget() {
     minimatch) printf '10|0|0|2|0|3|5\n' ;;
     ws) printf '43|28|0|3|2|4|6\n' ;;
     vitest/runtime) printf '64|35|2|3|6|18|0\n' ;;
-    playwright) printf '1336|196|0|85|885|170|0\n' ;;
+    # 2026-07-20 async-callback lowering: one promise-callback signature
+    # moved from the tuple/array bucket into callback/function (the
+    # lowered wrapper line matches the callback pattern first).
+    playwright) printf '1336|196|0|85|886|169|0\n' ;;
     react-router) printf '347|164|25|30|39|67|22\n' ;;
     jose) printf '67|18|1|15|11|10|12\n' ;;
     express) printf '6|0|0|0|0|2|4\n' ;;
@@ -3135,27 +3138,64 @@ write_async_callback_fixture_package() {
   cat > "$pkg_root/package.json" <<'EOF'
 { "name": "state-action", "version": "1.0.0", "main": "index.js", "types": "index.d.ts" }
 EOF
+  # Covers every async-callback lowering position: top-level fn param,
+  # optional param, generic-interface method (field-wrapper path),
+  # non-generic-interface method (extern-pair path), and class method.
   cat > "$pkg_root/index.d.ts" <<'EOF'
 export interface ActionHandle<S, P> {
   dispatch(payload: P): Promise<S>;
   getState(): S;
+  onCommit(listener: (state: S) => Promise<void>): void;
+}
+export interface Notifier {
+  notify(fn: () => Promise<string>): Promise<string>;
 }
 export declare function useStateAction<S, P>(
   action: (state: S, payload: P) => Promise<S>,
   initialState: S,
 ): ActionHandle<S, P>;
+export declare function makeNotifier(): Notifier;
+export declare function runWithFallback(
+  input: string,
+  action?: (input: string) => Promise<string>,
+): Promise<string>;
+export declare class TaskQueue {
+  constructor();
+  push(task: () => Promise<string>): void;
+  drain(): Promise<string>;
+}
 export declare function delayValue(value: string, ms: number): Promise<string>;
 EOF
   cat > "$pkg_root/index.js" <<'EOF'
 export function useStateAction(action, initialState) {
   let state = initialState;
+  const listeners = [];
   return {
     dispatch: async (payload) => {
       state = await action(state, payload);
+      for (const l of listeners) await l(state);
       return state;
     },
     getState: () => state,
+    onCommit: (l) => { listeners.push(l); },
   };
+}
+export function makeNotifier() {
+  return {
+    notify: async (fn) => "notified:" + (await fn()),
+  };
+}
+export async function runWithFallback(input, action) {
+  return action ? await action(input) : input + "-default";
+}
+export class TaskQueue {
+  constructor() { this.tasks = []; }
+  push(task) { this.tasks.push(task); }
+  async drain() {
+    const out = [];
+    for (const t of this.tasks) out.push(await t());
+    return out.join(",");
+  }
 }
 export function delayValue(value, ms) {
   return new Promise((resolve) => setTimeout(() => resolve(value), ms));
@@ -3188,12 +3228,24 @@ async fn failing_action(_state : @sa.JSValue, _payload : @sa.JSValue) -> @sa.JSV
   raise ActionBoom("boom")
 }
 
+let commits : Array[String] = []
+
+async fn on_commit_impl(state : @sa.JSValue) -> Unit {
+  let s = @sa.delayValue(js_to_string(state), 5).wait()
+  commits.push(s)
+}
+
 async fn async_callback_smoke() -> Unit {
-  // A MoonBit async fn passed straight into the TS async-callback slot.
+  // A MoonBit async fn passed straight into the TS async-callback slot,
+  // plus an interface method on a generic receiver (field-wrapper path).
   let handle = @sa.useStateAction(action_impl, @sa.JSValue::from_string("s0"))
+  handle.onCommit(on_commit_impl)
   let s1 = handle.dispatch(@sa.JSValue::from_string("p1")).wait()
   if js_to_string(s1) != "s0+p1" {
     abort("unexpected state after first dispatch: " + js_to_string(s1))
+  }
+  if commits.length() != 1 || commits[0] != "s0+p1" {
+    abort("expected onCommit listener to run")
   }
   let s2 = handle.dispatch(@sa.JSValue::from_string("p2")).wait()
   if js_to_string(s2) != "s0+p1+p2" {
@@ -3201,6 +3253,32 @@ async fn async_callback_smoke() -> Unit {
   }
   if js_to_string(handle.getState()) != "s0+p1+p2" {
     abort("unexpected getState")
+  }
+  // Interface method on a non-generic receiver (extern-pair path).
+  let notifier = @sa.makeNotifier()
+  let notified = notifier.notify(async fn() {
+    @sa.delayValue("ping", 5).wait()
+  }).wait()
+  if notified != "notified:ping" {
+    abort("unexpected notify result: " + notified)
+  }
+  // Class method path.
+  let queue = @sa.new_task_queue()
+  queue.push(async fn() { @sa.delayValue("a", 5).wait() })
+  queue.push(async fn() { @sa.delayValue("b", 1).wait() })
+  if queue.drain().wait() != "a,b" {
+    abort("unexpected drain result")
+  }
+  // Optional callback: Some(async fn) and None keep working.
+  let with_action = @sa.runWithFallback(
+    "in",
+    Some(async fn(input) { @sa.delayValue(input, 5).wait() + "!" }),
+  ).wait()
+  if with_action != "in!" {
+    abort("unexpected optional-callback result: " + with_action)
+  }
+  if @sa.runWithFallback("in", None).wait() != "in-default" {
+    abort("unexpected fallback result")
   }
   // A raising action must surface as a promise rejection.
   let failing = @sa.useStateAction(failing_action, @sa.JSValue::from_string("s0"))
@@ -3272,6 +3350,28 @@ EOF
   fi
   if ! grep -q "declare pub fn useStateAction(action : async (JSValue, JSValue) -> JSValue raise" "$mbti"; then
     echo "expected lowered async-callback signature in $mode bridge.mbti" >&2
+    exit 1
+  fi
+  # Method positions lower too, in both layers (the realworld decl/ffi
+  # divergence check needs the surfaces to agree).
+  if ! grep -q "TaskQueue::push(self : TaskQueue, task : async () -> String raise)" "$bridge"; then
+    echo "expected lowered class-method callback in $mode bridge" >&2
+    exit 1
+  fi
+  if ! grep -q "TaskQueue::push(self : TaskQueue, task : async () -> String raise)" "$mbti"; then
+    echo "expected lowered class-method callback in $mode bridge.mbti" >&2
+    exit 1
+  fi
+  if ! grep -q "onCommit(self : ActionHandle\[S, P\], arg0 : async (S) -> Unit raise)" "$bridge"; then
+    echo "expected lowered generic-interface-method callback in $mode bridge" >&2
+    exit 1
+  fi
+  if ! grep -q "Notifier::notify(self : Notifier, arg0 : async () -> String raise)" "$bridge"; then
+    echo "expected lowered interface-method callback in $mode bridge" >&2
+    exit 1
+  fi
+  if ! grep -q "runWithFallback(input : String, action : (async (String) -> String raise)?)" "$bridge"; then
+    echo "expected lowered optional callback in $mode bridge" >&2
     exit 1
   fi
   if [ "$mode" = "integration" ]; then
