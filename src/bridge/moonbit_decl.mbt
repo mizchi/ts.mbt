@@ -7300,6 +7300,245 @@ fn decl_unflattened_interface_bases(
 }
 
 ///|
+/// Registry of structs synthesized for ANONYMOUS object-literal types
+/// in member positions (`interceptors: { request: ...; response: ... }`
+/// on axios, `click(selector, options?: { button?; timeout? })` on
+/// playwright). Populated during interface cloning, drained into the
+/// interfaces list at both emitters' assembly points, and cleared at
+/// the start of each decl emission so `ts2mbt generate` package loops
+/// do not leak synthesized shapes across packages. The decl emitter
+/// runs before the ffi emitter inside a package bundle, so the ffi
+/// drain always sees a superset — the mbti/mbt expose pass evens out
+/// the surfaces.
+let decl_synthesized_object_interfaces : Map[String, @ast.TsInterface] = Map([])
+
+///|
+fn decl_reset_synthesized_object_interfaces() -> Unit {
+  decl_synthesized_object_interfaces.clear()
+}
+
+///|
+fn decl_drain_synthesized_object_interfaces(
+  interfaces : Array[@ast.TsInterface],
+) -> Unit {
+  for _, iface in decl_synthesized_object_interfaces {
+    let mut present = false
+    for existing in interfaces {
+      if existing.name == iface.name {
+        present = true
+        break
+      }
+    }
+    if !present {
+      interfaces.push(iface)
+    }
+  }
+}
+
+///|
+/// Extract `(name, type)` struct fields from an anonymous object
+/// literal. `None` when the shape cannot become a struct: non-literal
+/// keys (computed / index-like), empty, or implausibly wide.
+fn decl_object_literal_struct_fields(
+  obj_fields : Array[(@ast.TsType, @ast.TsType)],
+) -> Array[(String, @ast.TsType)]? {
+  if obj_fields.length() == 0 || obj_fields.length() > 24 {
+    return None
+  }
+  let fields : Array[(String, @ast.TsType)] = []
+  let seen : Array[String] = []
+  for field in obj_fields {
+    let (key, value) = field
+    match key {
+      Literal(name) => {
+        if name == "" || seen.contains(name) {
+          return None
+        }
+        seen.push(name)
+        fields.push((name, value))
+      }
+      _ => return None
+    }
+  }
+  Some(fields)
+}
+
+///|
+/// Synthesize (or reuse) a named struct for an anonymous object type.
+/// Returns the `Named` reference on success. A name that was already
+/// synthesized with a DIFFERENT shape stays widened — two members
+/// producing the same `<Owner><Member>` name with different bodies
+/// must not silently share a struct.
+fn decl_synthesize_object_interface(
+  name : String,
+  obj_fields : Array[(@ast.TsType, @ast.TsType)],
+) -> @ast.TsType? {
+  if name.length() > 64 {
+    return None
+  }
+  let fields = match decl_object_literal_struct_fields(obj_fields) {
+    Some(fields) => fields
+    None => return None
+  }
+  match decl_synthesized_object_interfaces.get(name) {
+    Some(existing) =>
+      if existing.fields == fields {
+        Some(Named(name))
+      } else {
+        None
+      }
+    None => {
+      decl_synthesized_object_interfaces[name] = {
+        name,
+        type_params: [],
+        type_param_bounds: [],
+        extends_names: [],
+        extends_args: [],
+        fields,
+        readonly_fields: [],
+        index_signatures: [],
+        method_type_params: [],
+        method_type_param_bounds: [],
+        internal_members: [],
+        deprecated_members: [],
+      }
+      Some(Named(name))
+    }
+  }
+}
+
+///|
+/// Rewrite anonymous object literals reachable from a MEMBER type into
+/// synthesized named structs: the direct property type (optional or
+/// not), and object-typed params / returns of a function-typed member.
+/// Runs on the LOWERED member type, so nested types are already in
+/// their final shape.
+fn decl_rewrite_inline_object_member_type(
+  owner_name : String,
+  member_name : String,
+  type_ : @ast.TsType,
+) -> @ast.TsType {
+  let base_name = decl_to_pascal_case(owner_name) +
+    decl_to_pascal_case(member_name)
+  match @checker.classify_optional_like_union(type_) {
+    Some((Object(obj_fields), is_optional)) =>
+      match decl_synthesize_object_interface(base_name, obj_fields) {
+        Some(named) =>
+          if is_optional {
+            return @ast.TsType::Union([named, Undefined])
+          } else {
+            return named
+          }
+        None => return type_
+      }
+    _ => ()
+  }
+  match type_ {
+    Object(obj_fields) =>
+      match decl_synthesize_object_interface(base_name, obj_fields) {
+        Some(named) => named
+        None => type_
+      }
+    Func(params, return_type) => {
+      let mut rewrote = false
+      let mut object_param_index = 0
+      let new_params : Array[@ast.TsType] = []
+      for param in params {
+        let synth_name = if object_param_index == 0 {
+          base_name + "Options"
+        } else {
+          base_name + "Options\{object_param_index}"
+        }
+        let rewritten = match @checker.classify_optional_like_union(param) {
+          Some((Object(obj_fields), is_optional)) =>
+            match decl_synthesize_object_interface(synth_name, obj_fields) {
+              Some(named) => {
+                object_param_index += 1
+                rewrote = true
+                if is_optional {
+                  @ast.TsType::Union([named, Undefined])
+                } else {
+                  named
+                }
+              }
+              None => param
+            }
+          _ =>
+            match param {
+              Object(obj_fields) =>
+                match decl_synthesize_object_interface(synth_name, obj_fields) {
+                  Some(named) => {
+                    object_param_index += 1
+                    rewrote = true
+                    named
+                  }
+                  None => param
+                }
+              _ => param
+            }
+        }
+        new_params.push(rewritten)
+      }
+      let new_return = match return_type {
+        Object(obj_fields) =>
+          match
+            decl_synthesize_object_interface(base_name + "Result", obj_fields) {
+            Some(named) => {
+              rewrote = true
+              named
+            }
+            None => return_type
+          }
+        _ => return_type
+      }
+      if rewrote {
+        @ast.TsType::Func(new_params, new_return)
+      } else {
+        type_
+      }
+    }
+    _ => type_
+  }
+}
+
+///|
+/// Object-literal PARAM of a class method: `send(url, options?: {..})`
+/// synthesizes `<Class><Method><Param>` (`ClientSendOptions`). Mirrors
+/// the Func-param arm of `decl_rewrite_inline_object_member_type` with
+/// the param name available for naming.
+fn decl_rewrite_inline_object_class_method_param(
+  class_name : String,
+  method_name : String,
+  param_name : String,
+  type_ : @ast.TsType,
+) -> @ast.TsType {
+  let synth_name = decl_to_pascal_case(class_name) +
+    decl_to_pascal_case(method_name) +
+    decl_to_pascal_case(if param_name == "" { "options" } else { param_name })
+  match @checker.classify_optional_like_union(type_) {
+    Some((Object(obj_fields), is_optional)) =>
+      match decl_synthesize_object_interface(synth_name, obj_fields) {
+        Some(named) =>
+          if is_optional {
+            @ast.TsType::Union([named, Undefined])
+          } else {
+            named
+          }
+        None => type_
+      }
+    _ =>
+      match type_ {
+        Object(obj_fields) =>
+          match decl_synthesize_object_interface(synth_name, obj_fields) {
+            Some(named) => named
+            None => type_
+          }
+        _ => type_
+      }
+  }
+}
+
+///|
 fn append_lowered_interface_field(
   fields : Array[(String, @ast.TsType)],
   readonly_fields : Array[String],
@@ -7337,9 +7576,13 @@ fn append_lowered_interface_field(
   fields.push(
     (
       field_name,
-      decl_rewrite_inline_callback_params_in_func_type(
-        owner_name + "_" + field_name,
-        lowered_type,
+      decl_rewrite_inline_object_member_type(
+        owner_name,
+        field_name,
+        decl_rewrite_inline_callback_params_in_func_type(
+          owner_name + "_" + field_name,
+          lowered_type,
+        ),
       ),
     ),
   )
@@ -10606,19 +10849,23 @@ fn clone_class_property_in_scope(
 ) -> @ast.TsClassPropertyDecl {
   {
     name: class_property.name,
-    type_: decl_specialize_generated_class_property_type(
+    type_: decl_rewrite_inline_object_member_type(
       class_name,
       class_property.name,
-      lower_react_utility_type(
-        info,
-        rewrite_type_refs_in_scope(
+      decl_specialize_generated_class_property_type(
+        class_name,
+        class_property.name,
+        lower_react_utility_type(
           info,
-          local_name_prefix,
-          class_property.type_,
+          rewrite_type_refs_in_scope(
+            info,
+            local_name_prefix,
+            class_property.type_,
+            canonical_types,
+          ),
+          modules,
           canonical_types,
         ),
-        modules,
-        canonical_types,
       ),
     ),
     is_static: class_property.is_static,
@@ -10656,16 +10903,21 @@ fn clone_class_method_in_scope(
     params.push(
       (
         param_name,
-        decl_rewrite_inline_callback_param_type(
-          class_name + "_" + class_method.name,
+        decl_rewrite_inline_object_class_method_param(
+          class_name,
+          class_method.name,
           param_name,
-          param_index,
-          decl_specialize_generated_class_method_param_type(
-            class_name,
-            class_method.name,
+          decl_rewrite_inline_callback_param_type(
+            class_name + "_" + class_method.name,
             param_name,
             param_index,
-            lowered_param_type,
+            decl_specialize_generated_class_method_param_type(
+              class_name,
+              class_method.name,
+              param_name,
+              param_index,
+              lowered_param_type,
+            ),
           ),
         ),
       ),
@@ -11053,6 +11305,10 @@ fn clone_exported_class(
 pub async fn emit_moonbit_decl_from_entry_path(
   entry_path : String,
 ) -> String raise ModuleGraphError {
+  // New emission, new synthesized-object registry. The decl emitter
+  // runs FIRST in a package bundle, so the paired ffi emission keeps
+  // (a superset of) the same synthesized shapes.
+  decl_reset_synthesized_object_interfaces()
   let graph = load_type_module_graph(entry_path)
   let export_surface = resolve_export_surface(graph)
   let modules = build_decl_module_map(graph)
@@ -11204,6 +11460,9 @@ pub async fn emit_moonbit_decl_from_entry_path(
       None => ()
     }
   }
+  // After BOTH interface and class cloning: class properties also
+  // synthesize object structs (axios's `interceptors`).
+  decl_drain_synthesized_object_interfaces(interfaces)
   let values : Array[@ast.TsValueDecl] = []
   for exported in exported_values {
     match modules.get(exported.source_path) {

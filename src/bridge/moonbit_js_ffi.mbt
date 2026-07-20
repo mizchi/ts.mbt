@@ -5459,6 +5459,9 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   let classes = normalize_classes_for_ffi(
     exported_classes, graph, modules, class_surface_cache, canonical_types,
   )
+  // After BOTH interface and class cloning: class properties also
+  // synthesize object structs (axios's `interceptors`).
+  decl_drain_synthesized_object_interfaces(interfaces)
   enum_lowering_rewrite_anonymous_enum_surfaces(
     enums, interfaces, imports, funcs, values, classes,
   )

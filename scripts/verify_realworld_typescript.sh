@@ -325,7 +325,7 @@ jsvalue_function_budget() {
     dotenv) printf '0\n' ;;
     ignore) printf '1\n' ;;
     hono) printf '5\n' ;;
-    zod) printf '526\n' ;;
+    zod) printf '485\n' ;;
     date-fns) printf '22\n' ;;
     colorette) printf '1\n' ;;
     magic-string) printf '0\n' ;;
@@ -339,39 +339,39 @@ jsvalue_function_budget() {
     nanoid) printf '0\n' ;;
     dayjs) printf '3\n' ;;
     qs) printf '2\n' ;;
-    yaml) printf '69\n' ;;
+    yaml) printf '67\n' ;;
     superstruct) printf '56\n' ;;
     eventemitter3) printf '0\n' ;;
     mitt) printf '1\n' ;;
-    marked) printf '14\n' ;;
+    marked) printf '13\n' ;;
     semver) printf '33\n' ;;
     picomatch) printf '5\n' ;;
     deepmerge) printf '4\n' ;;
-    axios) printf '62\n' ;;
-    commander) printf '24\n' ;;
+    axios) printf '61\n' ;;
+    commander) printf '23\n' ;;
     debug) printf '5\n' ;;
     chokidar) printf '3\n' ;;
     pino) printf '8\n' ;;
-    lodash) printf '288\n' ;;
+    lodash) printf '289\n' ;;
     uuid) printf '5\n' ;;
     minimatch) printf '10\n' ;;
     ws) printf '7\n' ;;
     vitest/runtime) printf '6\n' ;;
-    playwright) printf '411\n' ;;
-    react-router) printf '82\n' ;;
+    playwright) printf '200\n' ;;
+    react-router) printf '79\n' ;;
     jose) printf '46\n' ;;
     express) printf '6\n' ;;
     glob) printf '7\n' ;;
     node:sqlite) printf '1\n' ;;
     node:fs) printf '8\n' ;;
     node:path) printf '0\n' ;;
-    node:crypto) printf '24\n' ;;
+    node:crypto) printf '16\n' ;;
     node:os) printf '0\n' ;;
     node:url) printf '0\n' ;;
     node:querystring) printf '0\n' ;;
     node:assert) printf '23\n' ;;
     node:util) printf '13\n' ;;
-    node:buffer) printf '3\n' ;;
+    node:buffer) printf '2\n' ;;
     *) printf '0\n' ;;
   esac
 }
@@ -416,57 +416,57 @@ jsvalue_cause_budget() {
     # 2026-07-20 union-return normalization: two hono signatures moved
     # from the conditional/mapped bucket into callback/function (their
     # rendered `Promise[...]` now matches the callback pattern first).
-    hono) printf '85|12|6|24|6|28|9\n' ;;
-    zod) printf '1633|423|9|255|405|513|28\n' ;;
+    hono) printf '86|14|6|24|6|28|8\n' ;;
+    zod) printf '1498|333|9|210|405|513|28\n' ;;
     date-fns) printf '26|4|5|0|0|15|2\n' ;;
     colorette) printf '1|0|1|0|0|0|0\n' ;;
     magic-string) printf '0|0|0|0|0|0|0\n' ;;
     source-map) printf '17|6|0|7|0|3|1\n' ;;
-    valibot) printf '1726|1160|24|13|16|475|38\n' ;;
+    valibot) printf '1738|1166|24|13|16|481|38\n' ;;
     immer) printf '23|4|7|2|3|1|6\n' ;;
     execa) printf '17|2|0|4|1|0|10\n' ;;
     preact) printf '50|12|1|4|14|19|0\n' ;;
-    react) printf '151|43|7|26|34|35|6\n' ;;
+    react) printf '149|41|7|26|34|35|6\n' ;;
     ms) printf '1|0|0|0|0|0|1\n' ;;
     nanoid) printf '0|0|0|0|0|0|0\n' ;;
     dayjs) printf '3|0|1|0|1|0|1\n' ;;
     qs) printf '8|2|1|0|0|0|5\n' ;;
-    yaml) printf '179|34|7|84|0|20|34\n' ;;
+    yaml) printf '177|34|7|83|0|20|33\n' ;;
     superstruct) printf '82|4|0|14|0|59|5\n' ;;
     eventemitter3) printf '16|0|0|0|5|6|5\n' ;;
     mitt) printf '10|4|0|2|3|1|0\n' ;;
-    marked) printf '55|8|0|0|20|13|14\n' ;;
+    marked) printf '48|12|0|0|16|13|7\n' ;;
     semver) printf '33|0|30|2|0|0|1\n' ;;
     picomatch) printf '11|6|4|0|0|0|1\n' ;;
     deepmerge) printf '14|8|0|2|0|3|1\n' ;;
-    axios) printf '195|76|4|18|0|64|33\n' ;;
-    commander) printf '25|0|0|10|2|3|10\n' ;;
-    debug) printf '19|6|0|1|0|12|0\n' ;;
+    axios) printf '190|68|4|17|0|69|32\n' ;;
+    commander) printf '24|0|0|9|2|3|10\n' ;;
+    debug) printf '17|4|0|1|0|12|0\n' ;;
     chokidar) printf '3|0|0|1|0|0|2\n' ;;
-    pino) printf '51|38|4|1|0|4|4\n' ;;
-    lodash) printf '1648|444|120|252|49|776|7\n' ;;
+    pino) printf '57|44|4|1|0|4|4\n' ;;
+    lodash) printf '1651|444|121|254|49|776|7\n' ;;
     uuid) printf '5|0|5|0|0|0|0\n' ;;
     minimatch) printf '10|0|0|2|0|3|5\n' ;;
-    ws) printf '44|28|0|3|2|5|6\n' ;;
-    vitest/runtime) printf '64|35|2|3|6|18|0\n' ;;
+    ws) printf '40|24|0|3|2|5|6\n' ;;
+    vitest/runtime) printf '60|31|2|3|6|18|0\n' ;;
     # 2026-07-20 async-callback lowering: one promise-callback signature
     # moved from the tuple/array bucket into callback/function (the
     # lowered wrapper line matches the callback pattern first).
-    playwright) printf '1336|196|0|85|868|187|0\n' ;;
-    react-router) printf '341|159|23|30|40|67|22\n' ;;
+    playwright) printf '827|288|0|58|288|191|2\n' ;;
+    react-router) printf '380|190|21|29|45|77|18\n' ;;
     jose) printf '67|18|1|15|11|10|12\n' ;;
     express) printf '6|0|0|0|0|2|4\n' ;;
     glob) printf '17|6|0|1|0|2|8\n' ;;
     node:sqlite) printf '3|2|0|0|0|1|0\n' ;;
     node:fs) printf '34|8|0|0|0|26|0\n' ;;
     node:path) printf '0|0|0|0|0|0|0\n' ;;
-    node:crypto) printf '102|24|3|18|1|56|0\n' ;;
+    node:crypto) printf '78|8|3|10|1|56|0\n' ;;
     node:os) printf '0|0|0|0|0|0|0\n' ;;
     node:url) printf '0|0|0|0|0|0|0\n' ;;
     node:querystring) printf '0|0|0|0|0|0|0\n' ;;
     node:assert) printf '29|6|4|2|13|0|4\n' ;;
-    node:util) printf '25|12|8|1|1|2|1\n' ;;
-    node:buffer) printf '9|6|0|3|0|0|0\n' ;;
+    node:util) printf '23|10|8|1|1|2|1\n' ;;
+    node:buffer) printf '6|4|0|2|0|0|0\n' ;;
     *) printf '0|0|0|0|0|0|0\n' ;;
   esac
 }

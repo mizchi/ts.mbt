@@ -2972,3 +2972,38 @@ async test "bridge: upcast helpers for unflattened extends bases" {
   assert_true(actual.contains("declare pub fn Derived::describe"))
   assert_false(actual.contains("Derived::asBase"))
 }
+
+///|
+async test "bridge: synthesize structs for anonymous object members and params" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/inline-object-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // Interface property + interface method param + class property +
+  // class method param each synthesize a `<Owner><Member>(<Param>)`
+  // struct instead of widening to JSValue.
+  assert_true(actual.contains("declare pub type PanelLayout"))
+  assert_true(
+    actual.contains(
+      "declare pub fn Panel::resize(self : Panel, arg0 : PanelResizeOptions) -> Unit",
+    ),
+  )
+  assert_true(actual.contains("declare pub type ClientHandlers"))
+  assert_true(
+    actual.contains(
+      "declare pub fn Client::get_client_handlers(self : Client) -> ClientHandlers",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn Client::send(self : Client, url : String, options : ClientSendOptions?) -> Promise[String]",
+    ),
+  )
+}

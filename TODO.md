@@ -1726,6 +1726,39 @@ collision. Remaining hatches ranked: anonymous object-literal
 properties/params, overloaded members, JSValue value slots, and the
 zod name collision (needs collision-aware type identifiers).
 
+Round 6 (same day) — anonymous object-literal synthesis, the top-ranked
+remaining hatch. `Object(fields)` types in member positions now
+synthesize named structs (`<Owner><Member>` for properties,
+`<Owner><Method><Param>` / `<Owner><Member>Options` for params,
+`...Result` for returns), registered through a per-emission registry
+(populated during cloning, drained after interface AND class cloning in
+both layers — the decl emitter runs first in a package bundle so the
+ffi drain sees a superset, and the expose pass evens the surfaces).
+Rewrite sites: interface fields (`append_lowered_interface_field`),
+class properties (`clone_class_property_in_scope`), class method
+params (`clone_class_method_in_scope`), and Func-typed member
+params/returns. Guards: literal keys only, 1..24 fields, same-name
+different-shape collisions stay widened.
+
+Everything composes: axios's `interceptors` property becomes
+`AxiosInterceptors { request : AxiosInterceptorManagerInternal
+AxiosRequestConfig; ... }` — the round-4 conditional-member
+specialization landing inside a round-6 synthesized struct — so the
+fully generated chain
+`instance.asAxios().get_axios_interceptors().request.use_(Some(async
+fn(config) { ... }))` runs with ZERO hand externs. playwright options
+params become real structs with their literal-union fields enum-ized
+(`ElementHandle::click(self, ElementHandleClickOptions?)`, 255
+synthesized option structs).
+
+Corpus effect (28 budget rows recalibrated): playwright JSValue-typed
+functions 411 -> 200 and JSValue surface 1336 -> 827; zod 526 -> 485;
+node:crypto 24 -> 16; net -639 JSValue surface lines across changed
+rows (small increases in valibot / pino / react-router / lodash are
+the synthesized structs' own JSValue-typed fields — new usable
+surface, not lost signal). Naturalness evaluation: the 3-package app
+drops to 5 escape hatches (interceptors extern eliminated).
+
 Profiled with `moon bench --target native` + callgrind over the release
 `tscheck` binary (`--parse` / full, `--iters N`; use
 `--toggle-collect=<mangled check entry>` to isolate the check phase from
