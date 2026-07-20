@@ -2462,6 +2462,7 @@ fn main {
   if realworld_node_fs_to_string(data) != "hello from moonbit" {
     abort("unexpected file content")
   }
+  @sut.unlinkSync(path)
   // `<fn>.__promisify__` declarations must lower to util.promisify(fn):
   // the literal runtime member does not exist, so the pre-fix glue was a
   // guaranteed TypeError on all 45 node:fs *Promisify surfaces.
@@ -2997,6 +2998,132 @@ while IFS='|' read -r kind package_spec module_name types_path; do
       ;;
   esac
 done < "$corpus_file"
+
+verify_async_integration_app() {
+  # End-to-end proof that the moonbitlang/async integration mode both
+  # ACTIVATES (consumer moon.mod carries the dep -> generated bridges
+  # swap to the js_async-delegating Promise layer) and RUNS: awaited
+  # values, with_timeout composition over a bridge promise, official
+  # AbortController plumbing, and the Promise.resolve leniency for
+  # TS-declared-Promise-but-bare-value returns (hono's sync-handler
+  # `request`). Uses the cached moonbitlang/async registry package.
+  local root="_build/realworld-typescript"
+  local app="$root/async-integration-app"
+
+  echo "== async-integration (moonbitlang/async consumer app)"
+
+  rm -rf "$app"
+  mkdir -p "$app/src/main"
+  ensure_project_node_modules "$app" "$(node_modules_root_for_spec axios)"
+
+  cat > "$app/moon.mod.json" <<'EOF'
+{
+  "name": "realworld/async_integration",
+  "version": "0.1.0",
+  "source": "src",
+  "preferred-target": "js",
+  "deps": { "moonbitlang/async": "0.18.1" }
+}
+EOF
+
+  (
+    cd "$app"
+    run_logged "$repo_root/$log_root/async_integration_vendor_axios.log" \
+      moon run "$repo_root/src/cmd/ts2mbt" -- vendor axios --out src/bridges
+    run_logged "$repo_root/$log_root/async_integration_vendor_hono.log" \
+      moon run "$repo_root/src/cmd/ts2mbt" -- vendor hono --out src/bridges
+  )
+
+  # Integration-mode markers must be present in the generated packages.
+  for pkg in axios hono; do
+    if ! grep -q "Promise::std" "$app/src/bridges/$pkg/bridge.mbt"; then
+      echo "expected integration-mode Promise::std in $pkg bridge" >&2
+      exit 1
+    fi
+    if ! grep -q "moonbitlang/async/js_async" "$app/src/bridges/$pkg/moon.pkg"; then
+      echo "expected js_async import in $pkg moon.pkg" >&2
+      exit 1
+    fi
+  done
+
+  cat > "$app/src/main/moon.pkg" <<'EOF'
+import {
+  "moonbitlang/async",
+  "moonbitlang/async/js_async",
+  "realworld/async_integration/bridges/axios",
+  "realworld/async_integration/bridges/hono",
+}
+
+pkgtype(kind: "executable")
+EOF
+
+  cat > "$app/src/main/main.mbt" <<'EOF'
+extern "js" fn smoke_response_status(res : @hono.JSValue) -> Int =
+  #| (res) => res.status
+
+fn smoke_hono_handler(c : @hono.Context[@hono.JSValue, @hono.JSValue, @hono.JSValue]) -> @hono.Response {
+  c.text("async ok", None, None)
+}
+
+async fn main {
+  // Awaiting a bridge promise directly under async fn main.
+  let vals : Array[@axios.JSValue] = [
+    @axios.JSValue::from_int(1),
+    @axios.JSValue::from_int(2),
+    @axios.JSValue::from_int(3),
+  ]
+  if @axios.all(vals).wait().length() != 3 {
+    abort("unexpected awaited axios.all count")
+  }
+  // Structured concurrency composes over bridge promises.
+  let timed = try {
+    @async.with_timeout(5000, async fn() { @axios.all(vals).wait() })
+  } catch {
+    _ => abort("expected with_timeout over bridge promise to succeed")
+  }
+  if timed.length() != 3 {
+    abort("unexpected with_timeout result count")
+  }
+  // Official AbortController plumbs through the integration wait.
+  let controller = @js_async.AbortController::new()
+  if @axios.all(vals).wait(abort_controller=controller).length() != 3 {
+    abort("unexpected cancellable wait count")
+  }
+  // Promise.resolve leniency: hono's sync-handler `request` returns a
+  // bare Response at runtime despite the Promise-typed declaration.
+  let app : @hono.Hono[@hono.JSValue, @hono.JSValue, @hono.JSValue] = @hono.new_hono(None)
+  let _ = app.get("/hello", smoke_hono_handler)
+  let res_p : @hono.Promise[@hono.JSValue] = @hono.unsafeCast(
+    app.request(@hono.unsafeCast("http://localhost/hello"), None, None, None),
+  )
+  let res = res_p.wait()
+  if smoke_response_status(res) != 200 {
+    abort("unexpected hono roundtrip status")
+  }
+  println("ASYNC-INTEGRATION-OK")
+}
+EOF
+
+  (
+    cd "$app"
+    run_logged "$repo_root/$log_root/async_integration_build.log" \
+      moon build --target js
+  )
+
+  local run_log="$repo_root/$log_root/async_integration_run.log"
+  if ! (cd "$app" && node _build/js/debug/build/main/main.js) \
+    > "$run_log" 2>&1; then
+    echo "async integration app failed; see $run_log" >&2
+    exit 1
+  fi
+  if ! grep -q "ASYNC-INTEGRATION-OK" "$run_log"; then
+    echo "async integration app did not reach the OK marker; see $run_log" >&2
+    exit 1
+  fi
+  echo "async-integration app ok"
+}
+
+verify_async_integration_app
 
 append_fallback_policy_report
 

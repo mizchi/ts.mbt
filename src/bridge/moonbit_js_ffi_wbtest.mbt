@@ -5514,3 +5514,55 @@ test "bridge: struct JS converter passes class instances and preserves internals
   // via the spread; declared fields overwrite in place.
   assert_true(decl.contains("const result = { ...value };"))
 }
+
+///|
+test "bridge: promise layer section variants stay coherent" {
+  // The self-contained layer awaits via the raw CPS intrinsic and
+  // surfaces rejections as the matchable JsRejection error.
+  assert_true(
+    bridge_promise_wait_self_contained_section.contains("%async.suspend"),
+  )
+  assert_true(
+    bridge_promise_wait_self_contained_section.contains("err(JsRejection(e))"),
+  )
+  // The moonbitlang/async integration variant delegates to js_async
+  // (official coroutine scheduling + AbortController cancellation) and
+  // normalizes through Promise.resolve so `.wait()` stays as lenient as
+  // JS `await` for TS-declared-Promise-but-bare-value returns.
+  assert_true(
+    bridge_promise_wait_async_integration_section.contains("Promise::std"),
+  )
+  assert_true(
+    bridge_promise_wait_async_integration_section.contains(
+      "@js_async.AbortController",
+    ),
+  )
+  assert_true(
+    bridge_promise_wait_async_integration_section.contains("Promise.resolve(p)"),
+  )
+  assert_false(
+    bridge_promise_wait_async_integration_section.contains("%async.suspend"),
+  )
+  // Both modes keep the same entry surface: wait + run_async, plus the
+  // JsRejection declaration for source compatibility. The integration
+  // variant never constructs JsRejection (rejections raise @js_async's
+  // error), so it must be pub(all) to stay unused-constructor-clean.
+  for
+    section in [
+      bridge_promise_wait_self_contained_section, bridge_promise_wait_async_integration_section,
+    ] {
+    assert_true(section.contains("pub async fn[T] Promise::wait"))
+    assert_true(section.contains("pub fn run_async(f : async () -> Unit)"))
+    assert_true(section.contains("suberror JsRejection"))
+  }
+  assert_true(
+    bridge_promise_wait_self_contained_section.contains(
+      "pub suberror JsRejection",
+    ),
+  )
+  assert_true(
+    bridge_promise_wait_async_integration_section.contains(
+      "pub(all) suberror JsRejection",
+    ),
+  )
+}
