@@ -427,7 +427,13 @@ fn moonbit_func_type_name(
     param_types.push(moonbit_type_name(state, param))
   }
   let params_src = param_types.join(", ")
-  let return_src = moonbit_type_name(state, return_type)
+  // Callback returns of the `T | Promise<T>` shape read as `Promise[T]`
+  // (mirrors the ffi renderers; sound with the resolve-lenient wait and
+  // required for the async-callback lowering on sync-or-async slots).
+  let return_src = moonbit_type_name(
+    state,
+    @checker.normalize_promise_like_union_return(return_type),
+  )
   "(\{params_src}) -> \{return_src}"
 }
 
@@ -940,7 +946,16 @@ fn moonbit_function_type_parts(
       for param in params {
         param_types.push(moonbit_type_name(state, param))
       }
-      Some((param_types, moonbit_type_name(state, return_type)))
+      // Mirror of `moonbit_func_type_name` on the return position.
+      Some(
+        (
+          param_types,
+          moonbit_type_name(
+            state,
+            @checker.normalize_promise_like_union_return(return_type),
+          ),
+        ),
+      )
     }
     _ => None
   }

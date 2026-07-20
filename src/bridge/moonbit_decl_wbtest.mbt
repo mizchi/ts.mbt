@@ -1851,7 +1851,9 @@ async test "bridge: emit MoonBit declarations from export-as-namespace hook tupl
   )
   assert_true(
     actual.contains(
-      "declare pub fn useActionState(action : UseActionStateActionCallback, initialState : State, permalink : String?) -> UseActionStateResult",
+      // Structural promise-returning callback (the union return reads as
+      // Promise[State]); no opaque synthesized name.
+      "declare pub fn useActionState(action : (State) -> Promise[State], initialState : State, permalink : String?) -> UseActionStateResult",
     ),
   )
 }

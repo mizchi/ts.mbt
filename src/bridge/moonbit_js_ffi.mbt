@@ -741,7 +741,13 @@ fn ffi_func_type_name(
     param_types.push(ffi_type_name(state, param))
   }
   let params_src = param_types.join(", ")
-  let return_src = ffi_type_name(state, return_type)
+  // Callback returns of the `T | Promise<T>` shape read as `Promise[T]`
+  // (sound with the resolve-lenient `Promise::wait`, and it lets the
+  // async-callback lowering fire on sync-or-async handler slots).
+  let return_src = ffi_type_name(
+    state,
+    @checker.normalize_promise_like_union_return(return_type),
+  )
   "(\{params_src}) -> \{return_src}"
 }
 
@@ -1091,7 +1097,12 @@ fn ffi_type_alias_func_target_name(
   for param in params {
     param_types.push(ffi_type_alias_target_name(state, param))
   }
-  let return_src = ffi_type_alias_target_name(state, return_type)
+  // Same rule as `ffi_func_type_name`: `T | Promise<T>` returns read as
+  // `Promise[T]` so function aliases match the inline renderings.
+  let return_src = ffi_type_alias_target_name(
+    state,
+    @checker.normalize_promise_like_union_return(return_type),
+  )
   "(" + param_types.join(", ") + ") -> " + return_src
 }
 
@@ -1333,7 +1344,19 @@ fn ffi_function_type_parts(
       for param in params {
         param_types.push(ffi_type_name(state, param))
       }
-      Some((params, param_types, ffi_type_name(state, return_type)))
+      // Mirror of `ffi_func_type_name`: `T | Promise<T>` returns read as
+      // `Promise[T]` so the method wrappers stay consistent with the
+      // struct-field rendering of the same member.
+      Some(
+        (
+          params,
+          param_types,
+          ffi_type_name(
+            state,
+            @checker.normalize_promise_like_union_return(return_type),
+          ),
+        ),
+      )
     }
     // A member's own generic binder is erased at the FFI boundary
     // (`toBe: <E>(expected: E) => void` — vitest's Assertion), matching
@@ -1518,9 +1541,32 @@ fn ffi_function_field_method_decl(
       // pure-MoonBit wrapper form which accesses the underlying function
       // field via `self.<field>(...)`.
       if receiver_type_params.length() > 0 {
-        Some(
-          "pub \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} {\n  (self.\{field_name})(\{args_src})\n}",
-        )
+        if field_name != js_field_name && field_name != "_call_" {
+          // Sanitized member names (`use` -> `use_`): the struct field is
+          // a raw view over the JS object, so `self.use_` would read a
+          // property that does not exist. Fetch the function through a
+          // monomorphic property-get extern under the REAL JS name and
+          // cast it back to the field's function type (the receiver's
+          // type params are in scope on the wrapper).
+          state.needs_js_any = true
+          // The field name goes in VERBATIM: it is unique within the
+          // receiver struct, while its snake_case can collide
+          // (playwright's `$eval` / `$$eval` both snake to `eval`).
+          let getter_name = "_" +
+            ffi_to_snake_case(receiver_type) +
+            "_" +
+            field_name +
+            "_get_extern_js"
+          let raw_param_types_src = param_types.join(", ")
+          let field_fn_type = "(\{raw_param_types_src}) -> \{return_type}"
+          let getter_decl = "extern \"js\" fn \{getter_name}(target : JSValue) -> JSValue =\n  #| (o) => \{ffi_js_access("o", js_field_name)}"
+          let wrapper_decl = "pub \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} {\n  let field_fn : \{field_fn_type} = unsafeCast(\{getter_name}(unsafeCast(self)))\n  field_fn(\{args_src})\n}"
+          Some(getter_decl + "\n\n" + wrapper_decl)
+        } else {
+          Some(
+            "pub \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} {\n  (self.\{field_name})(\{args_src})\n}",
+          )
+        }
       } else {
         let js_params : Array[String] = ["self"]
         for arg in args {

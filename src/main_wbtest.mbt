@@ -4965,7 +4965,7 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace hook tuple
   )
   assert_true(
     bridge_mbti.contains(
-      "declare pub fn useActionState(action : UseActionStateActionCallback, initialState : State, permalink : String?) -> UseActionStateResult",
+      "declare pub fn useActionState(action : async (State) -> State raise, initialState : State, permalink : String?) -> UseActionStateResult",
     ),
   )
   assert_true(
@@ -4990,7 +4990,9 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace hook tuple
   )
   assert_true(
     bridge_mbt.contains(
-      "pub fn useActionState(action : UseActionStateActionCallback, initialState : State, permalink : String?) -> UseActionStateResult {\n  use_action_state(action, initialState, permalink)\n}",
+      // The scaffold surface takes a MoonBit async fn directly: the
+      // wrapper glues it back into a promise-returning JS callback.
+      "pub fn useActionState(action : async (State) -> State raise, initialState : State, permalink : String?) -> UseActionStateResult {\n  use_action_state(fn(__ts_mbt_cb_a0) { Promise::from_async(async fn() raise { action(__ts_mbt_cb_a0) }) }, initialState, permalink)\n}",
     ),
   )
   assert_true(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))

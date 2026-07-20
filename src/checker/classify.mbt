@@ -185,6 +185,61 @@ pub fn reduce_uniform_union(t : @ast.TsType) -> @ast.TsType {
 }
 
 ///|
+/// `T | Promise<T>` (any arm order; `PromiseLike<T>` arms allowed) — the
+/// shape TypeScript async-callback returns take when sync handlers are
+/// also accepted (axios interceptors, middleware, `useActionState`
+/// actions). Returns the shared payload `T`. Exactly one non-promise
+/// arm is required and every promise arm must carry the same payload.
+pub fn classify_promise_like_union(type_ : @ast.TsType) -> @ast.TsType? {
+  match type_ {
+    Union(parts) => {
+      let mut payload : @ast.TsType? = None
+      let promise_payloads : Array[@ast.TsType] = []
+      for part in parts {
+        match part {
+          Applied(name, args) if (name == "Promise" || name == "PromiseLike") &&
+            args.length() == 1 => promise_payloads.push(args[0])
+          other =>
+            match payload {
+              None => payload = Some(other)
+              Some(_) => return None
+            }
+        }
+      }
+      if promise_payloads.length() == 0 {
+        return None
+      }
+      match payload {
+        Some(t) => {
+          for p in promise_payloads {
+            if p != t {
+              return None
+            }
+          }
+          Some(t)
+        }
+        None => None
+      }
+    }
+    _ => None
+  }
+}
+
+///|
+/// Normalize a callback RETURN type for bridge rendering: `T | Promise<T>`
+/// reads as `Promise<T>`. Sound in both directions given the generated
+/// `Promise::wait` is `Promise.resolve`-lenient (a bare `T` coming back
+/// from a JS handler still awaits), and it lets the async-callback
+/// lowering accept a MoonBit `async fn` where TS also allows sync
+/// handlers. Non-matching types pass through unchanged.
+pub fn normalize_promise_like_union_return(type_ : @ast.TsType) -> @ast.TsType {
+  match classify_promise_like_union(type_) {
+    Some(payload) => Applied("Promise", [payload])
+    None => type_
+  }
+}
+
+///|
 // Inspect a Union and decide whether it can be represented as
 // `inner` (with `is_optional` indicating Null/Undefined membership). Returns
 // None for unions that cannot be collapsed.

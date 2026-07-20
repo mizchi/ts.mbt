@@ -9470,6 +9470,19 @@ fn decl_synthetic_callback_type_for_param(
 }
 
 ///|
+/// Promise-returning callbacks must keep their structural form: the
+/// async-callback lowering (`async (...) -> T raise` public params via
+/// `Promise::from_async` glue) only fires on structural
+/// `(...) -> Promise[T]` renderings, and an opaque synthesized name
+/// would erase both the structure and that ergonomics.
+fn decl_callback_return_is_promise_like(return_type : @ast.TsType) -> Bool {
+  match return_type {
+    Applied(name, _) => name == "Promise" || name == "PromiseLike"
+    _ => @checker.classify_promise_like_union(return_type) is Some(_)
+  }
+}
+
+///|
 fn decl_rewrite_inline_callback_param_type(
   owner_name : String,
   param_name : String,
@@ -9477,28 +9490,36 @@ fn decl_rewrite_inline_callback_param_type(
   type_ : @ast.TsType,
 ) -> @ast.TsType {
   match @checker.classify_optional_like_union(type_) {
-    Some((Func(_, _), is_optional)) =>
-      match
-        decl_synthetic_callback_type_for_param(
-          owner_name, param_name, param_index,
-        ) {
-        Some(named) =>
-          if is_optional {
-            Union([named, Undefined])
-          } else {
-            named
-          }
-        None => type_
+    Some((Func(_, func_return), is_optional)) =>
+      if decl_callback_return_is_promise_like(func_return) {
+        type_
+      } else {
+        match
+          decl_synthetic_callback_type_for_param(
+            owner_name, param_name, param_index,
+          ) {
+          Some(named) =>
+            if is_optional {
+              Union([named, Undefined])
+            } else {
+              named
+            }
+          None => type_
+        }
       }
     _ =>
       match type_ {
-        Func(_, _) =>
-          match
-            decl_synthetic_callback_type_for_param(
-              owner_name, param_name, param_index,
-            ) {
-            Some(named) => named
-            None => type_
+        Func(_, func_return) =>
+          if decl_callback_return_is_promise_like(func_return) {
+            type_
+          } else {
+            match
+              decl_synthetic_callback_type_for_param(
+                owner_name, param_name, param_index,
+              ) {
+              Some(named) => named
+              None => type_
+            }
           }
         _ => type_
       }

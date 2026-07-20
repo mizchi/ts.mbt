@@ -325,16 +325,16 @@ jsvalue_function_budget() {
     dotenv) printf '0\n' ;;
     ignore) printf '1\n' ;;
     hono) printf '5\n' ;;
-    zod) printf '607\n' ;;
+    zod) printf '525\n' ;;
     date-fns) printf '22\n' ;;
     colorette) printf '1\n' ;;
     magic-string) printf '0\n' ;;
     source-map) printf '9\n' ;;
-    valibot) printf '291\n' ;;
+    valibot) printf '289\n' ;;
     immer) printf '16\n' ;;
     execa) printf '5\n' ;;
     preact) printf '7\n' ;;
-    react) printf '30\n' ;;
+    react) printf '31\n' ;;
     ms) printf '1\n' ;;
     nanoid) printf '0\n' ;;
     dayjs) printf '3\n' ;;
@@ -348,7 +348,7 @@ jsvalue_function_budget() {
     picomatch) printf '5\n' ;;
     deepmerge) printf '4\n' ;;
     axios) printf '60\n' ;;
-    commander) printf '25\n' ;;
+    commander) printf '24\n' ;;
     debug) printf '5\n' ;;
     chokidar) printf '3\n' ;;
     pino) printf '8\n' ;;
@@ -358,7 +358,7 @@ jsvalue_function_budget() {
     ws) printf '6\n' ;;
     vitest/runtime) printf '6\n' ;;
     playwright) printf '411\n' ;;
-    react-router) printf '84\n' ;;
+    react-router) printf '82\n' ;;
     jose) printf '46\n' ;;
     express) printf '6\n' ;;
     glob) printf '7\n' ;;
@@ -413,17 +413,20 @@ jsvalue_cause_budget() {
     chalk) printf '5|0|0|0|0|4|1\n' ;;
     dotenv) printf '0|0|0|0|0|0|0\n' ;;
     ignore) printf '3|2|0|1|0|0|0\n' ;;
-    hono) printf '85|12|6|26|4|28|9\n' ;;
-    zod) printf '1901|513|9|524|405|422|28\n' ;;
+    # 2026-07-20 union-return normalization: two hono signatures moved
+    # from the conditional/mapped bucket into callback/function (their
+    # rendered `Promise[...]` now matches the callback pattern first).
+    hono) printf '85|12|6|24|6|28|9\n' ;;
+    zod) printf '1631|423|9|254|405|512|28\n' ;;
     date-fns) printf '26|4|5|0|0|15|2\n' ;;
     colorette) printf '1|0|1|0|0|0|0\n' ;;
     magic-string) printf '0|0|0|0|0|0|0\n' ;;
     source-map) printf '17|6|0|7|0|3|1\n' ;;
-    valibot) printf '1672|1172|24|14|13|411|38\n' ;;
+    valibot) printf '1658|1160|24|8|14|414|38\n' ;;
     immer) printf '23|4|7|2|3|1|6\n' ;;
     execa) printf '17|2|0|4|1|0|10\n' ;;
     preact) printf '48|12|1|4|14|17|0\n' ;;
-    react) printf '129|43|8|24|34|14|6\n' ;;
+    react) printf '130|43|7|24|34|16|6\n' ;;
     ms) printf '1|0|0|0|0|0|1\n' ;;
     nanoid) printf '0|0|0|0|0|0|0\n' ;;
     dayjs) printf '3|0|1|0|1|0|1\n' ;;
@@ -432,12 +435,12 @@ jsvalue_cause_budget() {
     superstruct) printf '83|4|0|15|0|59|5\n' ;;
     eventemitter3) printf '16|0|0|0|5|6|5\n' ;;
     mitt) printf '10|4|0|2|3|1|0\n' ;;
-    marked) printf '57|10|0|0|20|13|14\n' ;;
+    marked) printf '55|8|0|0|20|13|14\n' ;;
     semver) printf '33|0|30|2|0|0|1\n' ;;
     picomatch) printf '11|6|4|0|0|0|1\n' ;;
     deepmerge) printf '14|8|0|2|0|3|1\n' ;;
-    axios) printf '188|78|4|18|1|54|33\n' ;;
-    commander) printf '26|0|0|10|3|3|10\n' ;;
+    axios) printf '185|76|4|18|0|54|33\n' ;;
+    commander) printf '25|0|0|10|2|3|10\n' ;;
     debug) printf '19|6|0|1|0|12|0\n' ;;
     chokidar) printf '3|0|0|1|0|0|2\n' ;;
     pino) printf '51|38|4|1|0|4|4\n' ;;
@@ -449,8 +452,8 @@ jsvalue_cause_budget() {
     # 2026-07-20 async-callback lowering: one promise-callback signature
     # moved from the tuple/array bucket into callback/function (the
     # lowered wrapper line matches the callback pattern first).
-    playwright) printf '1336|196|0|85|886|169|0\n' ;;
-    react-router) printf '347|164|25|30|39|67|22\n' ;;
+    playwright) printf '1336|196|0|85|868|187|0\n' ;;
+    react-router) printf '341|159|23|30|40|67|22\n' ;;
     jose) printf '67|18|1|15|11|10|12\n' ;;
     express) printf '6|0|0|0|0|2|4\n' ;;
     glob) printf '17|6|0|1|0|2|8\n' ;;
@@ -3164,6 +3167,15 @@ export declare class TaskQueue {
   push(task: () => Promise<string>): void;
   drain(): Promise<string>;
 }
+export interface Interceptor<V> {
+  use(onFulfilled?: (value: V) => V | Promise<V>): number;
+  run(value: V): Promise<V>;
+}
+export declare function makeInterceptor(): Interceptor<string>;
+export declare function runAction(
+  action: (input: string) => Promise<string>,
+  input: string,
+): Promise<string>;
 export declare function delayValue(value: string, ms: number): Promise<string>;
 EOF
   cat > "$pkg_root/index.js" <<'EOF'
@@ -3196,6 +3208,16 @@ export class TaskQueue {
     for (const t of this.tasks) out.push(await t());
     return out.join(",");
   }
+}
+export function makeInterceptor() {
+  const handlers = [];
+  return {
+    use: (onFulfilled) => { handlers.push(onFulfilled); return handlers.length - 1; },
+    run: async (v) => { for (const h of handlers) if (h) v = await h(v); return v; },
+  };
+}
+export async function runAction(action, input) {
+  return await action(input);
 }
 export function delayValue(value, ms) {
   return new Promise((resolve) => setTimeout(() => resolve(value), ms));
@@ -3279,6 +3301,27 @@ async fn async_callback_smoke() -> Unit {
   }
   if @sa.runWithFallback("in", None).wait() != "in-default" {
     abort("unexpected fallback result")
+  }
+  // Union-return handler slot (`(v: V) => V | Promise<V>`) normalizes to
+  // Promise[V] and lowers; `use` also exercises the sanitized-member
+  // (`use` -> `use_`) property-get path on a generic receiver.
+  let interceptor = @sa.makeInterceptor()
+  let _ = interceptor.use_(
+    Some(async fn(v) { @sa.delayValue(v, 5).wait() + ">async" }),
+  )
+  let _ = interceptor.use_(None)
+  let intercepted = interceptor.run("v0").wait()
+  if intercepted != "v0>async" {
+    abort("unexpected interceptor result: " + intercepted)
+  }
+  // Short-owner promise callbacks keep their structural form (no opaque
+  // synthesized RunActionActionCallback) and lower.
+  let ran = @sa.runAction(
+    async fn(input) { @sa.delayValue(input, 5).wait() + "?" },
+    "go",
+  ).wait()
+  if ran != "go?" {
+    abort("unexpected runAction result: " + ran)
   }
   // A raising action must surface as a promise rejection.
   let failing = @sa.useStateAction(failing_action, @sa.JSValue::from_string("s0"))
@@ -3372,6 +3415,26 @@ EOF
   fi
   if ! grep -q "runWithFallback(input : String, action : (async (String) -> String raise)?)" "$bridge"; then
     echo "expected lowered optional callback in $mode bridge" >&2
+    exit 1
+  fi
+  # Union `V | Promise<V>` handler returns normalize to Promise[V] and
+  # lower; the sanitized `use` member goes through the property-get
+  # extern instead of a nonexistent `self.use_` field read.
+  if ! grep -q "Interceptor::use_(self : Interceptor\[V\], arg0 : (async (V) -> V raise)?)" "$bridge"; then
+    echo "expected lowered union-return handler in $mode bridge" >&2
+    exit 1
+  fi
+  if ! grep -q '(o) => o.use$' "$bridge"; then
+    echo "expected property-get extern for sanitized member in $mode bridge" >&2
+    exit 1
+  fi
+  # Promise-returning callbacks on short-named owners stay structural.
+  if grep -q "RunActionActionCallback" "$bridge"; then
+    echo "unexpected opaque synthesized callback type in $mode bridge" >&2
+    exit 1
+  fi
+  if ! grep -q "runAction(action : async (String) -> String raise, input : String)" "$bridge"; then
+    echo "expected structural lowered runAction in $mode bridge" >&2
     exit 1
   fi
   if [ "$mode" = "integration" ]; then

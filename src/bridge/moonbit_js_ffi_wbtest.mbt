@@ -3902,7 +3902,10 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace hook tup
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn use_action_state(action : UseActionStateActionCallback, initialState : State, permalink : String?) -> UseActionStateResult = \"__ts_mbt_use_action_state\"",
+      // The `State | Promise<State>` action return normalizes to
+      // Promise[State], so the callback keeps its structural form (the
+      // package wrapper pass then lowers it to a MoonBit async fn).
+      "pub extern \"js\" fn use_action_state(action : (State) -> Promise[State], initialState : State, permalink : String?) -> UseActionStateResult = \"__ts_mbt_use_action_state\"",
     ),
   )
   assert_true(

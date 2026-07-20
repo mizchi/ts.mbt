@@ -1626,6 +1626,42 @@ fixture package grew `onCommit` (generic interface method), `Notifier`
 `runWithFallback` (optional callback, Some + None) — all RUN in both
 promise layers.
 
+Round 3 (same day) — the last two recorded frictions:
+
+- Union handler returns `V | Promise<V>` (axios-interceptor shape,
+  React 19 `useActionState`): a new
+  `@checker.classify_promise_like_union` /
+  `normalize_promise_like_union_return` pair rewrites callback RETURN
+  unions of exactly {T, Promise<T>/PromiseLike<T>} to `Promise[T]` in
+  every Func-type renderer of both layers (ffi inline + alias, decl
+  inline + method parts). Sound both ways because `Promise::wait` is
+  resolve-lenient in both modes, and it lets the async-callback
+  lowering fire on sync-or-async slots. React's `useActionState`
+  scaffold surface is now literally `action : async (State) -> State
+  raise` (three hook-tuple test expectations updated from the opaque
+  `UseActionStateActionCallback` form).
+- Short-owner opaque callback synthesis: `decl_rewrite_inline_callback_
+  param_type` now SKIPS the `<Owner><Param>Callback` substitution when
+  the callback returns promise-like, so `runAction`-style exports keep
+  the structural form and lower like everything else.
+
+Fallout fixed along the way: the round-2 property-get extern for
+sanitized members deduped by snake_case and collided on playwright's
+`$eval` / `$$eval` — the getter name now embeds the field name
+verbatim (unique per struct). Corpus effect of the normalization is a
+net naturalization win — zod JSValue fallback 1901 -> 1631 lines and
+JSValue-typed functions 607 -> 525, with smaller wins in valibot /
+axios / marked / commander / react-router — 13 budget rows
+recalibrated from a nobudget collection run. Gate fixture grew
+`Interceptor` (union-return `use` handler — also regression-covers the
+sanitized-member getter) and `runAction`; both RUN in both promise
+layers.
+
+Still open (recorded, separate categories): axios's real
+`interceptors.request.use` sits behind a member-level CONDITIONAL type
+(`V extends AxiosResponse ? ... : ...`) that needs per-instantiation
+member specialization, and overloaded members still widen to JSValue.
+
 Profiled with `moon bench --target native` + callgrind over the release
 `tscheck` binary (`--parse` / full, `--iters N`; use
 `--toggle-collect=<mangled check entry>` to isolate the check phase from
