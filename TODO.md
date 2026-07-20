@@ -1512,6 +1512,38 @@ deep integration (`pub typealias @js_async.Promise as Promise`)
 compiles and runs — deferred because methods cannot be defined on a
 foreign aliased type, which would fracture the then/map surface.
 
+Cross-API validation (same day): a four-package showcase app
+(moonbitlang/async consumer) runs `async fn main` over node:fs
+promises (write -> read roundtrip), jose (generateSecret -> SignJWT
+builder chain -> sign -> 3-segment JWT), hono (in-process
+`app.request` roundtrip, status 200 + body), and axios.all — exit 0,
+no run_async, no hand-written awaits. The walkthrough surfaced and
+fixed two real generator/runtime gaps:
+
+- `<fn>.__promisify__` declarations (@types/node's alias for "the
+  promisified form of fn") lowered to a literal runtime member access
+  that does not exist — a guaranteed TypeError on all 45 node:fs
+  `*Promisify` surfaces. `ffi_js_member_access_or_promisify` now
+  lowers them to `util.promisify(fn)` (honoring promisify.custom),
+  with the `node:util` import injected only when used. The node:fs
+  build smoke covers write/readFilePromisify + `.wait()` end-to-end
+  via `run_async`.
+- `@js_async.Promise::wait` calls `.then` on the raw value, but
+  TS-declared Promise returns are sometimes plain values at runtime
+  (hono's sync-handler `request` returns a bare Response). The
+  integration-mode `wait` now normalizes through `Promise.resolve`
+  first, matching JS `await` leniency (the self-contained wait was
+  already lenient via its then_catch glue).
+
+Remaining friction observed in the showcase (recorded, not blocking):
+hono's `fetch` / `request` returns are JSValue-typed (one unsafeCast
+to `Promise[...]` before waiting), union params take nested
+constructors (`PathOrFileDescriptor::PathLikeValue(PathLike::
+StringValue(...))` — flat convenience constructors like the existing
+`path_like_from_string` hooks cover node:fs but not every package),
+and web-platform types (Response.status / .text) still need one-line
+externs until a lib.dom prelude exists.
+
 ## Performance Tuning Round 1 (2026-07-19)
 
 Profiled with `moon bench --target native` + callgrind over the release

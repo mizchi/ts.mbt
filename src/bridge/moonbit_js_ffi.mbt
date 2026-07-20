@@ -2275,7 +2275,7 @@ pub let bridge_promise_wait_self_contained_section : String = "pub suberror JsRe
 /// source compatibility, but delegated rejections raise `@js_async`'s
 /// own error type. Requires `moonbitlang/async/js_async` in the
 /// generated package's `moon.pkg` imports.
-pub let bridge_promise_wait_async_integration_section : String = "pub suberror JsRejection {\n  JsRejection(JSValue)\n}\n\npub fn[T] Promise::std(self : Promise[T]) -> @js_async.Promise[T] = \"%identity\"\n\npub async fn[T] Promise::wait(self : Promise[T], abort_controller? : @js_async.AbortController) -> T {\n  match abort_controller {\n    Some(controller) => self.std().wait(abort_controller=controller)\n    None => self.std().wait()\n  }\n}\n\nextern \"js\" fn _run_async_extern_js(f : async () -> Unit) -> Unit =\n  #| (f) => { f((_ok) => {}, (e) => { console.error(\"unhandled async error:\", e); if (typeof process !== \"undefined\" && process.exit) process.exit(1); else throw e; }) }\n\npub fn run_async(f : async () -> Unit) -> Unit {\n  _run_async_extern_js(f)\n}"
+pub let bridge_promise_wait_async_integration_section : String = "pub suberror JsRejection {\n  JsRejection(JSValue)\n}\n\npub fn[T] Promise::std(self : Promise[T]) -> @js_async.Promise[T] = \"%identity\"\n\nextern \"js\" fn _promise_resolve_extern_js(p : JSValue) -> JSValue =\n  #| (p) => Promise.resolve(p)\n\npub async fn[T] Promise::wait(self : Promise[T], abort_controller? : @js_async.AbortController) -> T {\n  // TS-declared Promise returns are sometimes plain values at runtime\n  // (hono's sync-handler `request` returns a bare Response); normalize\n  // through Promise.resolve so `.wait()` is as lenient as JS `await`.\n  let normalized : @js_async.Promise[T] = unsafeCast(_promise_resolve_extern_js(unsafeCast(self)))\n  match abort_controller {\n    Some(controller) => normalized.wait(abort_controller=controller)\n    None => normalized.wait()\n  }\n}\n\nextern \"js\" fn _run_async_extern_js(f : async () -> Unit) -> Unit =\n  #| (f) => { f((_ok) => {}, (e) => { console.error(\"unhandled async error:\", e); if (typeof process !== \"undefined\" && process.exit) process.exit(1); else throw e; }) }\n\npub fn run_async(f : async () -> Unit) -> Unit {\n  _run_async_extern_js(f)\n}"
 
 ///|
 fn ffi_direct_module_decl(module_spec : String, decl : String) -> String {
@@ -4922,9 +4922,29 @@ fn ensure_bridge_runtime_access(
     namespace_import_roots.contains(root_name),
   )
   for member_name in ffi_runtime_export_member_names(runtime_export_name) {
-    access = ffi_js_access(access, member_name)
+    access = ffi_js_member_access_or_promisify(access, member_name)
   }
   access
+}
+
+///|
+/// `<fn>.__promisify__` is @types/node's declaration-only alias for
+/// "the promisified form of <fn>" — no runtime member of that name
+/// exists (calling it was a guaranteed TypeError; node:fs alone
+/// declares 45 such surfaces). Lower the member access to
+/// `util.promisify(<fn>)`, which also honors custom
+/// `util.promisify.custom` symbols (fs.write's multi-value callback
+/// etc.). The final render injects the `node:util` import only when
+/// this wrapper actually appears.
+fn ffi_js_member_access_or_promisify(
+  access : String,
+  member_name : String,
+) -> String {
+  if member_name == "__promisify__" {
+    "__ts_mbt_promisify(\{access})"
+  } else {
+    ffi_js_access(access, member_name)
+  }
 }
 
 ///|
@@ -4941,7 +4961,7 @@ fn ensure_bridge_module_runtime_access(
     ffi_runtime_export_root_name(runtime_export_name),
   )
   for member_name in ffi_runtime_export_member_names(runtime_export_name) {
-    access = ffi_js_access(access, member_name)
+    access = ffi_js_member_access_or_promisify(access, member_name)
   }
   access
 }
@@ -7008,6 +7028,22 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       rendered_bridge_lines.push("")
     }
     None => ()
+  }
+  // `__ts_mbt_promisify` backs the `<fn>.__promisify__` lowering (see
+  // `ffi_js_member_access_or_promisify`); import node:util only when a
+  // wrapped access actually made it into the output.
+  let mut bridge_uses_promisify = false
+  for line in bridge_lines {
+    if line.contains("__ts_mbt_promisify(") {
+      bridge_uses_promisify = true
+      break
+    }
+  }
+  if bridge_uses_promisify {
+    rendered_bridge_lines.push(
+      "import { promisify as __ts_mbt_promisify } from \"node:util\";",
+    )
+    rendered_bridge_lines.push("")
   }
   if bridge_needs_option_unwrap || !bridge_struct_converter_lines.is_empty() {
     rendered_bridge_lines.push(

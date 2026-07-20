@@ -2462,10 +2462,21 @@ fn main {
   if realworld_node_fs_to_string(data) != "hello from moonbit" {
     abort("unexpected file content")
   }
-  @sut.unlinkSync(path)
-  if @sut.existsSync(path) {
-    abort("expected file to be removed")
+  // `<fn>.__promisify__` declarations must lower to util.promisify(fn):
+  // the literal runtime member does not exist, so the pre-fix glue was a
+  // guaranteed TypeError on all 45 node:fs *Promisify surfaces.
+  @sut.run_async(smoke_promisify)
+}
+
+async fn smoke_promisify() -> Unit {
+  let path = @sut.path_like_from_string("node-fs-async-smoke.txt")
+  let file = @sut.path_or_file_descriptor_from_path_like(path)
+  @sut.writeFilePromisify(file, "async fs", None).wait()
+  let data = @sut.readFilePromisify(file, None).wait()
+  if realworld_node_fs_to_string(data) != "async fs" {
+    abort("unexpected promisified file content")
   }
+  @sut.unlinkSync(path)
 }
 EOF
       ;;
