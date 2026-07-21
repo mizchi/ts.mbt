@@ -963,6 +963,7 @@ pub async fn emit_moonbit_bridge_package(
   module_spec : String,
   output_dir : String,
   bare_module_specifier? : String? = None,
+  moonbitlang_async_integration? : Bool = false,
 ) -> Bool {
   let bundle = emit_moonbit_bridge_package_texts(file_path, module_spec) catch {
     @bridge.ModuleGraphError::ReadError(msg)
@@ -971,6 +972,34 @@ pub async fn emit_moonbit_bridge_package(
       println("Emit error: \{cli_clean_error(msg)}")
       return false
     }
+  }
+  // moonbitlang/async integration: when the consumer module already
+  // depends on `moonbitlang/async`, swap the self-contained
+  // `Promise::wait` for the delegation variant (official coroutine
+  // scheduling + AbortController cancellation; composes with
+  // `async fn main` / `@async.with_timeout`) and import
+  // `moonbitlang/async/js_async` in the generated package. Both section
+  // texts live side by side in the ffi emitter so they can't drift.
+  let mut bundle_bridge_mbt = bundle.bridge_mbt
+  let mut bundle_moon_pkg = bundle.moon_pkg
+  if moonbitlang_async_integration &&
+    bundle_bridge_mbt.contains(
+      @bridge.bridge_promise_wait_self_contained_section,
+    ) {
+    bundle_bridge_mbt = bundle_bridge_mbt.replace(
+      old=@bridge.bridge_promise_wait_self_contained_section,
+      new=@bridge.bridge_promise_wait_async_integration_section,
+    )
+    if bundle_moon_pkg.trim() == "" {
+      bundle_moon_pkg = "import {\n  \"moonbitlang/async/js_async\",\n}\n"
+    } else {
+      println(
+        "note: generated moon.pkg is non-empty; add \"moonbitlang/async/js_async\" to its imports for the async integration",
+      )
+    }
+    println(
+      "async integration: Promise::wait delegates to moonbitlang/async/js_async (consumer depends on moonbitlang/async)",
+    )
   }
   if !@fs.exists(output_dir) {
     let _ = ensure_dir_tree(output_dir) catch {
@@ -990,12 +1019,11 @@ pub async fn emit_moonbit_bridge_package(
     None => default_bridge_bare_specifier(output_dir)
   }
   let bridge_mbt = rewrite_bridge_package_module_path(
-    bundle.bridge_mbt,
-    resolved_specifier,
+    bundle_bridge_mbt, resolved_specifier,
   )
   let package_json = render_bridge_package_json(resolved_specifier)
   let files : Array[(String, String)] = [
-    ("moon.pkg", bundle.moon_pkg),
+    ("moon.pkg", bundle_moon_pkg),
     ("bridge.mbti", bundle.bridge_mbti),
     ("package.json", package_json),
   ]
@@ -1150,6 +1178,9 @@ pub async fn emit_moonbit_scaffold_from_ts(
       module_spec,
       output_dir,
       bare_module_specifier~,
+      moonbitlang_async_integration=consumer_depends_on_moonbitlang_async(
+        output_dir,
+      ),
     ) {
     return false
   }
@@ -1568,6 +1599,40 @@ async fn emit_moonbit_bridge_package_texts(
   @bridge.emit_moonbit_ts_bridge_package_bundle_from_entry_path(
     file_path, module_spec,
   )
+}
+
+///|
+/// True when the consumer moon module — the nearest `moon.mod.json` /
+/// `moon.mod` walking up from the OUTPUT directory, i.e. the module
+/// that will actually import the generated bridge — depends on
+/// `moonbitlang/async`. Drives the generated Promise layer's
+/// `moonbitlang/async/js_async` integration: adding the dependency and
+/// re-running `ts2mbt generate` is the whole upgrade. Anchoring on the
+/// output (not the working directory) keeps repo-internal gate probes,
+/// which generate into their own dependency-free scratch modules, in
+/// the self-contained mode regardless of where the CLI runs.
+async fn consumer_depends_on_moonbitlang_async(output_dir : String) -> Bool {
+  // Outputs under `_build/` are throwaway scaffolds (example / fixture
+  // gates); their nearest manifest is whatever repo they run inside, not
+  // a real consumer. Same guard as the package.json auto-wiring.
+  if output_dir.has_prefix("_build/") || output_dir.contains("/_build/") {
+    return false
+  }
+  let module_root = match find_nearest_moon_mod_dir(output_dir) {
+    Some(root) => root
+    None => return false
+  }
+  for manifest in ["moon.mod.json", "moon.mod"] {
+    let path = main_join_path(module_root, manifest)
+    if !@fs.exists(path) {
+      continue
+    }
+    let source = @fs.read_file(path).text() catch { _ => continue }
+    if source.contains("moonbitlang/async") {
+      return true
+    }
+  }
+  false
 }
 
 ///|

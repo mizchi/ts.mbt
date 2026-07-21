@@ -4077,7 +4077,15 @@ fn typeof_value_query_type_inner(
       let type_ = typeof_import_decl_to_func_type(
         info, import_, modules, canonical_types,
       )
-      if typeof_value_type_is_stable(info, type_) {
+      // A callable shape keeps its value even with widened (`any` /
+      // `unknown`) slots inside -- they render as `JSValue` params while
+      // the arity and callability stay real. Only non-callable results
+      // keep the strict stability requirement.
+      if typeof_value_type_is_stable(
+          info,
+          type_,
+          allow_widened=type_ is Func(_, _),
+        ) {
         Some(type_)
       } else {
         None
@@ -4086,10 +4094,52 @@ fn typeof_value_query_type_inner(
     None =>
       match find_func_decl(info.module_, name) {
         Some(func) => {
-          let type_ = typeof_func_decl_to_func_type(
-            info, func, modules, canonical_types,
+          // Merge sibling overloads that only append trailing params
+          // (same return) into one signature; otherwise keep the
+          // least-widening declaration picked by `find_func_decl`.
+          let overloads = find_func_decls(info.module_, name)
+          let mut has_type_params = func.type_params.length() > 0
+          let mut merged : @ast.TsType? = None
+          let mut merge_failed = false
+          for overload in overloads {
+            if overload.type_params.length() > 0 {
+              has_type_params = true
+            }
+            if merge_failed {
+              continue
+            }
+            let next = typeof_func_decl_to_func_type(
+              info, overload, modules, canonical_types,
+            )
+            match merged {
+              None => merged = Some(next)
+              Some(acc) =>
+                match decl_merge_overload_func_types(acc, next) {
+                  Some(joined) => merged = Some(joined)
+                  None => {
+                    merged = None
+                    merge_failed = true
+                  }
+                }
+            }
+          }
+          let type_ = match merged {
+            Some(joined) => joined
+            None =>
+              typeof_func_decl_to_func_type(
+                info, func, modules, canonical_types,
+              )
+          }
+          // Bound substitution can legitimately leave widened (`Any`)
+          // slots behind for unbounded type params; a callable shape
+          // with widened slots still beats collapsing the whole
+          // reference to `JSValue`.
+          let stable = typeof_value_type_is_stable(
+            info,
+            type_,
+            allow_widened=has_type_params || type_ is Func(_, _),
           )
-          if typeof_value_type_is_stable(info, type_) {
+          if stable {
             Some(type_)
           } else {
             None
@@ -4148,15 +4198,52 @@ fn typeof_func_decl_to_func_type(
   modules : Map[String, DeclModuleInfo],
   canonical_types : Map[String, String],
 ) -> @ast.TsType {
+  // A generic function's `typeof` still has a stable callable shape once
+  // every type parameter is replaced by its declared bound (`Any` when
+  // unbounded). Bounds may reference earlier params
+  // (`<A extends string, B extends Foo<A>>`), so resolve them
+  // left-to-right before substituting into the signature.
+  let tp_names : Array[String] = []
+  let tp_bounds : Array[@ast.TsType] = []
+  for tp in func.type_params {
+    tp_names.push(tp)
+    let mut bound : @ast.TsType = Any
+    for pair in func.type_param_bounds {
+      if pair.0 == tp {
+        bound = pair.1
+        break
+      }
+    }
+    tp_bounds.push(bound)
+  }
+  for i in 0..<tp_bounds.length() {
+    let mut substituted = tp_bounds[i]
+    for j in 0..<i {
+      substituted = substitute_type_alias_params(substituted, [tp_names[j]], [
+        tp_bounds[j],
+      ])
+    }
+    tp_bounds[i] = substituted
+  }
   let params : Array[@ast.TsType] = []
   for param in func.params {
+    let substituted = if tp_names.length() == 0 {
+      param.type_
+    } else {
+      substitute_type_alias_params(param.type_, tp_names, tp_bounds)
+    }
     params.push(
-      lower_react_utility_type(info, param.type_, modules, canonical_types),
+      lower_react_utility_type(info, substituted, modules, canonical_types),
     )
+  }
+  let substituted_return = if tp_names.length() == 0 {
+    func.return_type
+  } else {
+    substitute_type_alias_params(func.return_type, tp_names, tp_bounds)
   }
   Func(
     params,
-    lower_react_utility_type(info, func.return_type, modules, canonical_types),
+    lower_react_utility_type(info, substituted_return, modules, canonical_types),
   )
 }
 
@@ -4164,24 +4251,35 @@ fn typeof_func_decl_to_func_type(
 fn typeof_value_type_is_stable(
   info : DeclModuleInfo,
   type_ : @ast.TsType,
+  allow_widened? : Bool = false,
 ) -> Bool {
   match @checker.classify_optional_like_union(type_) {
-    Some((collapsed, _)) => return typeof_value_type_is_stable(info, collapsed)
+    Some((collapsed, _)) =>
+      return typeof_value_type_is_stable(info, collapsed, allow_widened~)
     None => ()
   }
   match @checker.classify_transparent_intersection(type_) {
-    Some(inner) => return typeof_value_type_is_stable(info, inner)
+    Some(inner) =>
+      return typeof_value_type_is_stable(info, inner, allow_widened~)
     None => ()
   }
   match type_ {
-    Any | Never | Null | Undefined | TypeOf(_) => false
+    // `null` / `undefined` / `never` are concrete types: as nested type
+    // arguments (`Action<T, undefined>`) they don't destabilize the
+    // reference. `Any` stays gated behind `allow_widened`
+    // (bound-substituted generic signatures), where the widened slots
+    // render as `JSValue` inside an otherwise callable shape instead of
+    // collapsing the whole value.
+    Never | Null | Undefined => true
+    Any | Unknown | NonPrimitiveObject => allow_widened
+    TypeOf(_) => false
     Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) => true
     Number | Int | BigInt | Boolean | String_ | Void => true
-    Named(name) => typeof_named_type_is_stable(info, name)
-    Array(inner) => typeof_value_type_is_stable(info, inner)
+    Named(name) => typeof_named_type_is_stable(info, name, allow_widened~)
+    Array(inner) => typeof_value_type_is_stable(info, inner, allow_widened~)
     Tuple(items) => {
       for item in items {
-        if !typeof_value_type_is_stable(info, item) {
+        if !typeof_value_type_is_stable(info, item, allow_widened~) {
           return false
         }
       }
@@ -4189,18 +4287,18 @@ fn typeof_value_type_is_stable(
     }
     Func(params, return_type) => {
       for param in params {
-        if !typeof_value_type_is_stable(info, param) {
+        if !typeof_value_type_is_stable(info, param, allow_widened~) {
           return false
         }
       }
-      typeof_value_type_is_stable(info, return_type)
+      typeof_value_type_is_stable(info, return_type, allow_widened~)
     }
     Applied(name, args) => {
-      if !typeof_named_type_is_stable(info, name) {
+      if !typeof_named_type_is_stable(info, name, allow_widened~) {
         return false
       }
       for arg in args {
-        if !typeof_value_type_is_stable(info, arg) {
+        if !typeof_value_type_is_stable(info, arg, allow_widened~) {
           return false
         }
       }
@@ -4208,7 +4306,7 @@ fn typeof_value_type_is_stable(
     }
     Union(items) | Intersection(items) => {
       for item in items {
-        if !typeof_value_type_is_stable(info, item) {
+        if !typeof_value_type_is_stable(info, item, allow_widened~) {
           return false
         }
       }
@@ -4219,17 +4317,21 @@ fn typeof_value_type_is_stable(
 }
 
 ///|
-fn typeof_named_type_is_stable(info : DeclModuleInfo, name : String) -> Bool {
+fn typeof_named_type_is_stable(
+  info : DeclModuleInfo,
+  name : String,
+  allow_widened? : Bool = false,
+) -> Bool {
   if name == "Array" ||
     name == "ReadonlyArray" ||
     name == "Promise" ||
     name == "PromiseLike" {
     return true
   }
-  if name == "any" ||
-    name == "unknown" ||
-    name == "Function" ||
-    name.contains(".") {
+  if name == "any" || name == "unknown" || name == "Function" {
+    return allow_widened
+  }
+  if name.contains(".") {
     return false
   }
   match find_interface_decl_recursive(info.module_, name) {
@@ -5132,7 +5234,40 @@ fn decl_inline_qualified_applied_alias(
       info, modules, canonical_types, name, args,
     ) {
     Some(iface) => Some(Named(iface.name))
-    None => None
+    None => {
+      // Cross-module instantiated union alias with a function member
+      // (`ErrorMessage<Issue>` behind a barrel): substitute + lower in
+      // the declaring module, then try the tagged-union naming.
+      let (ta, ta_info) = match
+        decl_find_type_alias_deep(info, modules, name, []) {
+        Some(found) => found
+        None => return None
+      }
+      if ta.type_params.length() != args.length() || args.length() == 0 {
+        return None
+      }
+      if type_alias_is_recursive(ta_info.module_, ta) {
+        return None
+      }
+      let substituted = substitute_type_alias_params(
+        ta.type_,
+        ta.type_params,
+        args,
+      )
+      let lowered = lower_react_utility_type(
+        ta_info, substituted, modules, canonical_types,
+      )
+      match
+        decl_instantiated_union_alias_name(
+          ta_info.record.path,
+          name,
+          args,
+          lowered,
+        ) {
+        Some(synth_name) => Some(Named(synth_name))
+        None => None
+      }
+    }
   }
 }
 
@@ -5198,6 +5333,218 @@ fn decl_exclusive_union_alias_interface_spec(
     method_type_param_bounds: [],
     internal_members: [],
     deprecated_members: [],
+  })
+}
+
+///|
+/// Merge an interface's own field NAMES with its full `extends` chain,
+/// for the structural refutation below. Returns `false` when any link
+/// of the chain cannot be resolved (the decision must then stay
+/// undecided rather than wrongly refuting via missing members).
+fn decl_collect_interface_field_names_recursive(
+  info : DeclModuleInfo,
+  name : String,
+  acc : Map[String, Unit],
+  depth : Int,
+) -> Bool {
+  if depth > 8 {
+    return false
+  }
+  let iface = match find_interface_decl_recursive(info.module_, name) {
+    Some(iface) => iface
+    None => return false
+  }
+  for field in iface.fields {
+    acc[field.0] = ()
+  }
+  for base in iface.extends_names {
+    if !decl_collect_interface_field_names_recursive(info, base, acc, depth + 1) {
+      return false
+    }
+  }
+  true
+}
+
+///|
+/// Structural three-valued `extends` decision for two NAMED interfaces,
+/// used only by the conditional-member specialization below. The shared
+/// checker `extends_decision` stays untouched on purpose — it feeds the
+/// TS7 oracle and must not learn bridge-local module resolution.
+/// `Some(true)` on name equality; `Some(false)` when the target
+/// declares a REQUIRED field whose name is absent from the source's
+/// extends-chain-merged fields (TS structural assignability is refuted
+/// by a missing required member); `None` for everything else.
+fn decl_named_extends_decision(
+  info : DeclModuleInfo,
+  source_name : String,
+  target_name : String,
+) -> Bool? {
+  if source_name == target_name {
+    return Some(true)
+  }
+  let target = match find_interface_decl_recursive(info.module_, target_name) {
+    Some(iface) => iface
+    None => return None
+  }
+  if target.index_signatures.length() > 0 {
+    return None
+  }
+  let source_field_names : Map[String, Unit] = Map([])
+  if !decl_collect_interface_field_names_recursive(
+      info, source_name, source_field_names, 0,
+    ) {
+    return None
+  }
+  for field in target.fields {
+    let (field_name, field_type) = field
+    let is_optional = match @checker.classify_optional_like_union(field_type) {
+      Some((_, optional)) => optional
+      None => false
+    }
+    if !is_optional && !(source_field_names.get(field_name) is Some(_)) {
+      return Some(false)
+    }
+  }
+  None
+}
+
+///|
+/// In-progress guard for the conditional-member specialization below.
+/// Entries are pushed on entry and removed on exit, so the map stays
+/// empty between top-level emissions.
+let decl_conditional_spec_in_progress : Map[String, Unit] = Map([])
+
+///|
+fn decl_conditional_member_interface_spec_fields(
+  info : DeclModuleInfo,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+  iface : @ast.TsInterface,
+  args : Array[@ast.TsType],
+) -> Array[(String, @ast.TsType)]? {
+  let mut has_conditional_member = false
+  let spec_fields : Array[(String, @ast.TsType)] = []
+  for field in iface.fields {
+    let (field_name, field_type) = field
+    let substituted = substitute_type_alias_params(
+      field_type,
+      iface.type_params,
+      args,
+    )
+    match substituted {
+      Conditional(Named(check_name), Named(cond_target), t_branch, f_branch) => {
+        has_conditional_member = true
+        let chosen = match
+          decl_named_extends_decision(info, check_name, cond_target) {
+          Some(true) => t_branch
+          Some(false) => f_branch
+          None => return None
+        }
+        spec_fields.push(
+          (
+            field_name,
+            lower_react_utility_type(info, chosen, modules, canonical_types),
+          ),
+        )
+      }
+      Conditional(_, _, _, _) => return None
+      _ =>
+        spec_fields.push(
+          (
+            field_name,
+            lower_react_utility_type(
+              info, substituted, modules, canonical_types,
+            ),
+          ),
+        )
+    }
+  }
+  if !has_conditional_member {
+    return None
+  }
+  Some(spec_fields)
+}
+
+///|
+/// Synthesize a monomorphic interface for an APPLIED GENERIC INTERFACE
+/// whose members hide behind conditional types over the interface's own
+/// type params — axios's `AxiosInterceptorManager<V>` declares
+/// `use: V extends AxiosResponse ? AxiosResponseInterceptorUse<V> :
+/// AxiosRequestInterceptorUse<V>`. At the generic definition the
+/// condition is undecidable and the member widens to JSValue; at a
+/// concrete instantiation the branch IS decidable, so the reference
+/// lowers to `Named(<Iface><Args>)` with every member substituted and
+/// each direct conditional resolved (the chosen branch then flows
+/// through the normal lowering: alias inlining, union-return
+/// normalization, async-callback lowering). Mirrors the
+/// exclusive-union alias synthesis above: fires ONLY when every
+/// conditional member resolves definitively — anything else keeps the
+/// opaque generic reference. Shared by the lowering and the
+/// utility-interface collection walk so the synthesized struct is both
+/// referenced and emitted.
+fn decl_conditional_member_interface_spec(
+  info : DeclModuleInfo,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+  name : String,
+  args : Array[@ast.TsType],
+) -> @ast.TsInterface? {
+  let iface = match find_interface_decl_recursive(info.module_, name) {
+    Some(iface) => iface
+    None => return None
+  }
+  if iface.type_params.length() != args.length() || args.length() == 0 {
+    return None
+  }
+  if iface.index_signatures.length() > 0 || iface.extends_names.length() > 0 {
+    return None
+  }
+  // Only Named args participate: they name the synthesized interface.
+  // (A free type param from an enclosing generic also arrives as Named,
+  // but then no conditional decides and the spec bails below.)
+  let arg_names : Array[String] = []
+  for arg in args {
+    match arg {
+      Named(arg_name) => arg_names.push(arg_name)
+      _ => return None
+    }
+  }
+  let mut spec_name = name
+  for arg_name in arg_names {
+    spec_name += decl_to_pascal_case(arg_name)
+  }
+  if spec_name.length() > 64 {
+    return None
+  }
+  // Self-recursive (or mutually recursive) instantiations would loop
+  // forever through the internal lowering calls (date-fns): while a
+  // specialization is being built, a nested reference to it keeps the
+  // opaque generic form instead.
+  if decl_conditional_spec_in_progress.get(spec_name) is Some(_) {
+    return None
+  }
+  decl_conditional_spec_in_progress[spec_name] = ()
+  let maybe_fields = decl_conditional_member_interface_spec_fields(
+    info, modules, canonical_types, iface, args,
+  )
+  decl_conditional_spec_in_progress.remove(spec_name)
+  let spec_fields = match maybe_fields {
+    Some(fields) => fields
+    None => return None
+  }
+  Some({
+    name: spec_name,
+    type_params: [],
+    type_param_bounds: [],
+    extends_names: [],
+    extends_args: [],
+    fields: spec_fields,
+    readonly_fields: iface.readonly_fields,
+    index_signatures: [],
+    method_type_params: iface.method_type_params,
+    method_type_param_bounds: iface.method_type_param_bounds,
+    internal_members: iface.internal_members,
+    deprecated_members: iface.deprecated_members,
   })
 }
 
@@ -5391,6 +5738,26 @@ fn decl_alias_synthetic_interface_name(name : String) -> String {
     }
   }
   core
+}
+
+///|
+/// `[T, ...T[]]` (and `[T, T, ...T[]]`): a tuple whose trailing rest
+/// element type equals every fixed element. Returns the element type.
+fn decl_nonempty_tuple_element(items : Array[@ast.TsType]) -> @ast.TsType? {
+  if items.length() < 2 {
+    return None
+  }
+  let element = match items[items.length() - 1] {
+    Rest(Array(inner)) => inner
+    Rest(inner) => inner
+    _ => return None
+  }
+  for i in 0..<(items.length() - 1) {
+    if items[i] != element {
+      return None
+    }
+  }
+  Some(element)
 }
 
 ///|
@@ -5765,20 +6132,30 @@ fn lower_react_utility_type(
         None => lowered
       }
     }
-    Applied("ReturnType", [Func(_, return_type)]) =>
-      lower_react_utility_type(info, return_type, modules, canonical_types)
+    Applied("ReturnType", [operand]) => {
+      // Lower the operand first so `ReturnType<typeof f>` (and any other
+      // indirection that resolves to a callable) reduces instead of
+      // leaking a bare `ReturnType` reference into the surface.
+      let lowered = lower_react_utility_type(
+        info, operand, modules, canonical_types,
+      )
+      match lowered {
+        Func(_, return_type) => return_type
+        _ => Applied("ReturnType", [lowered])
+      }
+    }
     Applied("Awaited", [inner_type]) =>
       utility_awaited_type(
         lower_react_utility_type(info, inner_type, modules, canonical_types),
       )
-    Applied("Parameters", [Func(params, _)]) => {
-      let lowered_params : Array[@ast.TsType] = []
-      for param in params {
-        lowered_params.push(
-          lower_react_utility_type(info, param, modules, canonical_types),
-        )
+    Applied("Parameters", [operand]) => {
+      let lowered = lower_react_utility_type(
+        info, operand, modules, canonical_types,
+      )
+      match lowered {
+        Func(params, _) => Tuple(params)
+        _ => Applied("Parameters", [lowered])
       }
-      Tuple(lowered_params)
     }
     Applied("ConstructorParameters", [Constructor(params, _, _)]) => {
       // Standalone `new (...args) => T` typedef: extract the param
@@ -5938,8 +6315,21 @@ fn lower_react_utility_type(
         }
       }
       match applied_type_alias(info, name, args) {
-        Some(resolved) =>
-          lower_react_utility_type(info, resolved, modules, canonical_types)
+        Some(resolved) => {
+          let inlined = lower_react_utility_type(
+            info, resolved, modules, canonical_types,
+          )
+          match
+            decl_instantiated_union_alias_name(
+              info.record.path,
+              name,
+              args,
+              inlined,
+            ) {
+            Some(synth_name) => Named(synth_name)
+            None => inlined
+          }
+        }
         None =>
           // Cross-module / namespace-qualified generic aliases
           // (`parse.ZodSafeParseResult<T>`) inline through the deep
@@ -5949,15 +6339,27 @@ fn lower_react_utility_type(
               info, modules, canonical_types, name, args,
             ) {
             Some(inlined) => inlined
-            None => {
-              let next_args : Array[@ast.TsType] = []
-              for arg in args {
-                next_args.push(
-                  lower_react_utility_type(info, arg, modules, canonical_types),
-                )
+            None =>
+              // Instantiated generic INTERFACE with conditional members
+              // (axios's AxiosInterceptorManager<V>): specialize when
+              // the checker can decide every conditional.
+              match
+                decl_conditional_member_interface_spec(
+                  info, modules, canonical_types, name, args,
+                ) {
+                Some(spec) => Named(spec.name)
+                None => {
+                  let next_args : Array[@ast.TsType] = []
+                  for arg in args {
+                    next_args.push(
+                      lower_react_utility_type(
+                        info, arg, modules, canonical_types,
+                      ),
+                    )
+                  }
+                  Applied(name, next_args)
+                }
               }
-              Applied(name, next_args)
-            }
           }
       }
     }
@@ -6023,7 +6425,14 @@ fn lower_react_utility_type(
           lower_react_utility_type(info, item, modules, canonical_types),
         )
       }
-      Tuple(next_items)
+      // Nonempty-array idiom `[T, ...T[]]` (valibot / zod `issues`):
+      // every fixed element equals the rest's element type, so the
+      // MoonBit surface is just `Array[T]` — a tuple would widen to
+      // `Array[JSValue]` anyway and lose the element type.
+      match decl_nonempty_tuple_element(next_items) {
+        Some(element) => Array(element)
+        None => Tuple(next_items)
+      }
     }
     Object(fields) => {
       let next_fields : Array[(@ast.TsType, @ast.TsType)] = []
@@ -6079,10 +6488,55 @@ fn lower_react_utility_type(
           lower_react_utility_type(info, item, modules, canonical_types),
         )
       }
-      Intersection(next_types)
+      // Record-and-class intersection (axios's `AxiosRequestHeaders =
+      // RawAxiosRequestHeaders & AxiosHeaders`): the CLASS half carries
+      // the usable surface (get/set/has methods); the record half is
+      // index-signature sugar the class API already covers. Keeping the
+      // intersection would widen the whole member to an opaque name.
+      match decl_intersection_single_class(info, next_types) {
+        Some(class_ref) => class_ref
+        None => Intersection(next_types)
+      }
     }
     _ => type_
   }
+}
+
+///|
+/// The single declared-CLASS member of an intersection whose OTHER
+/// members are all record-ish (object literals, `Partial<...>` /
+/// `Record<...>` applications, or aliases that do not resolve to a
+/// class or interface). `None` when zero or several classes, or when a
+/// sibling is an interface (dropping its fields would lose surface).
+fn decl_intersection_single_class(
+  info : DeclModuleInfo,
+  types : Array[@ast.TsType],
+) -> @ast.TsType? {
+  let mut class_ref : @ast.TsType? = None
+  for item in types {
+    let head = match item {
+      Named(name) => Some(name)
+      Applied(name, _) => Some(name)
+      _ => None
+    }
+    match head {
+      Some(name) =>
+        if find_class_decl_recursive(info.module_, name) is Some(_) {
+          match class_ref {
+            Some(_) => return None
+            None => class_ref = Some(item)
+          }
+        } else if find_interface_decl_recursive(info.module_, name) is Some(_) {
+          return None
+        }
+      None =>
+        match item {
+          Object(_) | Struct(_, _) => ()
+          _ => return None
+        }
+    }
+  }
+  class_ref
 }
 
 ///|
@@ -6271,7 +6725,68 @@ fn collect_react_utility_interfaces_from_type(
             )
           }
         }
-        None => ()
+        None =>
+          // Mirror of the lowering's conditional-member interface
+          // specialization: register the synthesized monomorphic
+          // interface so `Named(<Iface><Args>)` gets a struct decl.
+          match
+            decl_conditional_member_interface_spec(
+              info, modules, canonical_types, name, args,
+            ) {
+            Some(iface) =>
+              // Field recursion only on FIRST registration: a
+              // specialized member can reference its own instantiation,
+              // and re-walking an already-seen spec's fields would loop.
+              if !seen_names.contains(iface.name) {
+                seen_names.push(iface.name)
+                interfaces.push(iface)
+                for field in iface.fields {
+                  let (_, field_type) = field
+                  collect_react_utility_interfaces_from_type(
+                    info, field_type, modules, canonical_types, seen_names, interfaces,
+                  )
+                }
+              }
+            None =>
+              // Mirror of the instantiated union alias naming
+              // (`ErrorMessage<Issue>` -> ErrorMessageOfIssue enum):
+              // walk the substituted body so interfaces referenced ONLY
+              // from the enum's case payloads (function params) still
+              // get their declarations collected.
+              match decl_find_type_alias_deep(info, modules, name, []) {
+                Some((ta, ta_info)) =>
+                  if ta.type_params.length() == args.length() &&
+                    args.length() > 0 &&
+                    !type_alias_is_recursive(ta_info.module_, ta) {
+                    let substituted = substitute_type_alias_params(
+                      ta.type_,
+                      ta.type_params,
+                      args,
+                    )
+                    let lowered = lower_react_utility_type(
+                      ta_info, substituted, modules, canonical_types,
+                    )
+                    match
+                      decl_instantiated_union_alias_name(
+                        ta_info.record.path,
+                        name,
+                        args,
+                        lowered,
+                      ) {
+                      Some(synth_name) =>
+                        if !seen_names.contains(synth_name) {
+                          seen_names.push(synth_name)
+                          collect_react_utility_interfaces_from_type(
+                            ta_info, lowered, modules, canonical_types, seen_names,
+                            interfaces,
+                          )
+                        }
+                      None => ()
+                    }
+                  }
+                None => ()
+              }
+          }
       }
       for arg in args {
         collect_react_utility_interfaces_from_type(
@@ -7000,6 +7515,663 @@ fn should_expand_interface_base(origin : ResolvedInterfaceOrigin) -> Bool {
 }
 
 ///|
+/// Direct `extends` bases that `append_interface_origin_fields` does
+/// NOT flatten into the clone (generic roots over generic bases —
+/// zod's ZodObject over Schema — and class bases like axios's
+/// `interface AxiosInstance extends Axios`). The cloners record these
+/// on the cloned interface so the emitters can generate `as<Base>()`
+/// upcast helpers: the members are absent from the derived struct, and
+/// the helper replaces the unsafeCast TypeScript's implicit subtyping
+/// used to force. The expandable condition MUST mirror
+/// `append_interface_origin_fields`.
+fn decl_unflattened_interface_bases(
+  origin : ResolvedInterfaceOrigin,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> (Array[String], Array[Array[@ast.TsType]]) {
+  let names : Array[String] = []
+  let args_lists : Array[Array[@ast.TsType]] = []
+  let root_is_concrete = origin.iface.type_params.length() == 0
+  for base_index, base_name in origin.iface.extends_names {
+    let raw_args = if base_index < origin.iface.extends_args.length() {
+      origin.iface.extends_args[base_index]
+    } else {
+      []
+    }
+    let rewritten_args : Array[@ast.TsType] = []
+    for arg in raw_args {
+      rewritten_args.push(
+        decl_rewrite_names_to_exports(origin.info, canonical_types, arg),
+      )
+    }
+    match
+      resolve_interface_origin(origin.info, base_name, modules, canonical_types) {
+      Some(base_origin) => {
+        let base_params = base_origin.iface.type_params
+        let expandable = should_expand_interface_base(base_origin) ||
+          (root_is_concrete && base_params.length() == raw_args.length())
+        if !expandable {
+          names.push(base_origin.export_name)
+          args_lists.push(rewritten_args)
+        }
+      }
+      None => {
+        // Class bases (and anything else the interface resolver cannot
+        // see). Unknown names render as JSValue downstream and the
+        // helper-name derivation skips them, so recording is safe.
+        names.push(base_name)
+        args_lists.push(rewritten_args)
+      }
+    }
+  }
+  (names, args_lists)
+}
+
+///|
+/// Registry of structs synthesized for ANONYMOUS object-literal types
+/// in member positions (`interceptors: { request: ...; response: ... }`
+/// on axios, `click(selector, options?: { button?; timeout? })` on
+/// playwright). Populated during interface cloning, drained into the
+/// interfaces list at both emitters' assembly points, and cleared at
+/// the start of each decl emission so `ts2mbt generate` package loops
+/// do not leak synthesized shapes across packages. The decl emitter
+/// runs before the ffi emitter inside a package bundle, so the ffi
+/// drain always sees a superset — the mbti/mbt expose pass evens out
+/// the surfaces.
+let decl_synthesized_object_interfaces : Map[String, @ast.TsInterface] = Map([])
+
+///|
+fn decl_reset_synthesized_object_interfaces() -> Unit {
+  decl_synthesized_object_interfaces.clear()
+}
+
+///|
+fn decl_drain_synthesized_object_interfaces(
+  interfaces : Array[@ast.TsInterface],
+) -> Unit {
+  for _, iface in decl_synthesized_object_interfaces {
+    let mut present = false
+    for existing in interfaces {
+      if existing.name == iface.name {
+        present = true
+        break
+      }
+    }
+    if !present {
+      interfaces.push(iface)
+    }
+  }
+}
+
+///|
+/// Instantiated generic union aliases (`ErrorMessage<Issue>` for
+/// `type ErrorMessage<T> = string | ((issue: T) => string)`) whose
+/// substituted body is a tag-discriminable union WITH a function
+/// member. Anonymous inline synthesis refuses function members, so
+/// these previously widened to `JSValue`; naming the instantiation
+/// reuses the exported tagged-union machinery wholesale (enum decl,
+/// `<name>_from_*` constructors, JS converter glue). Keyed by the
+/// synthesized name; populated during lowering, drained into the
+/// emitted tagged-union list by both layers.
+let decl_synthesized_union_aliases : Map[String, ExportedTaggedUnionDecl] = Map([],
+)
+
+///|
+/// A member whose type is exactly the `null` literal type (valibot's
+/// `readonly expects: null`) is a concrete, always-null slot. Reference
+/// the shared opaque `JSNull` companion instead of widening to
+/// `JSValue`; referenced-but-undeclared names get their opaque decl
+/// emitted automatically by both layers.
+fn decl_null_member_type(type_ : @ast.TsType) -> @ast.TsType {
+  match type_ {
+    Null => Named("JSNull")
+    _ => type_
+  }
+}
+
+///|
+/// Event-map overload specialization. Members overloaded on a literal
+/// first param followed by a callback
+/// (`on(event: 'close', listener: (page) => void)` x56 in playwright)
+/// merge to nothing under the trailing-param rule, so only the first
+/// declaration survived, widened. Each such overload family (>= 2
+/// distinct literals) synthesizes per-literal companion members
+/// (`on_close(listener)`); the FFI consults this registry to call the
+/// ORIGINAL JS member with the literal injected
+/// (`self.on("close", listener)`).
+/// (owner interface, companion member) -> (JS member name, literal).
+let decl_event_member_specials : Map[String, (String, String)] = Map([])
+
+///|
+/// (owner interface, member) -> recorded (literal, companion Func type)
+/// overloads, so the FIRST overload's companion can be synthesized
+/// retroactively when the second literal arrives.
+let decl_event_member_families : Map[String, Array[(String, @ast.TsType)]] = Map([],
+)
+
+///|
+fn decl_reset_event_member_specials() -> Unit {
+  decl_event_member_specials.clear()
+  decl_event_member_families.clear()
+  decl_event_class_families.clear()
+}
+
+///|
+fn decl_event_member_special(
+  owner : String,
+  member : String,
+) -> (String, String)? {
+  decl_event_member_specials.get(owner + "\u{0}" + member)
+}
+
+///|
+/// Identifier-safe suffix for an event-name literal: letters and digits
+/// keep, separator punctuation (`-` `_` `:` `.` and space) maps to `_`,
+/// anything else abstains. Must start with a letter.
+fn decl_event_literal_suffix(value : String) -> String? {
+  if value.length() == 0 || value.length() > 40 {
+    return None
+  }
+  let first = value[0].unsafe_to_char()
+  if !((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z')) {
+    return None
+  }
+  let out = StringBuilder::new()
+  for c in value {
+    if (c >= 'a' && c <= 'z') ||
+      (c >= 'A' && c <= 'Z') ||
+      (c >= '0' && c <= '9') {
+      out.write_char(c)
+    } else if c == '-' || c == '_' || c == ':' || c == '.' || c == ' ' {
+      out.write_char('_')
+    } else {
+      return None
+    }
+  }
+  Some(out.to_string())
+}
+
+///|
+/// `(literal, listener...) -> ret` shape of an event-map overload:
+/// literal first param, at least one following param whose type is a
+/// function (the listener). Returns the literal plus the companion's
+/// param list (the literal dropped).
+fn decl_event_literal_overload_parts(
+  t : @ast.TsType,
+) -> (String, Array[@ast.TsType], @ast.TsType)? {
+  match t {
+    Func(params, ret) =>
+      if params.length() >= 2 {
+        match (params[0], params[1]) {
+          (Literal(value), Func(_, _)) => {
+            let rest : Array[@ast.TsType] = []
+            for i in 1..<params.length() {
+              // Event listener returns are ignored by the emitter side
+              // (`listener: (page) => any`); normalize them to `void` so
+              // the companion takes a plain `(Page) -> Unit` callback.
+              let entry = match params[i] {
+                Func(cb_params, Any | Unknown) =>
+                  @ast.TsType::Func(cb_params, Void)
+                other => other
+              }
+              rest.push(entry)
+            }
+            Some((value, rest, ret))
+          }
+          _ => None
+        }
+      } else {
+        None
+      }
+    _ => None
+  }
+}
+
+///|
+/// Class-method twin of `decl_event_member_families`: (owner class,
+/// method) -> recorded (literal, companion method) overloads.
+let decl_event_class_families : Map[
+  String,
+  Array[(String, @ast.TsClassMethodDecl)],
+] = Map([])
+
+///|
+fn decl_maybe_synthesize_class_event_companions(
+  methods : Array[@ast.TsClassMethodDecl],
+  seen_method_keys : Array[String],
+  owner_name : String,
+  raw_method : @ast.TsClassMethodDecl,
+  clone : (@ast.TsClassMethodDecl) -> @ast.TsClassMethodDecl,
+) -> Unit {
+  // Detection runs on the RAW method: the clone rewrites the listener
+  // to a named opaque callback, hiding the `(Literal, Func)` shape.
+  if raw_method.is_static || raw_method.type_params.length() > 0 {
+    return
+  }
+  if raw_method.params.length() < 2 {
+    return
+  }
+  let literal = match raw_method.params[0].1 {
+    Literal(value) => value
+    _ => return
+  }
+  match raw_method.params[1].1 {
+    Func(_, _) => ()
+    _ => return
+  }
+  let suffix = match decl_event_literal_suffix(literal) {
+    Some(suffix) => suffix
+    None => return
+  }
+  let rest_params : Array[(String, @ast.TsType)] = []
+  for i in 1..<raw_method.params.length() {
+    // Listener returns declared `any` / `unknown` normalize to `void`
+    // in the companion — mirror of the interface path.
+    let (param_name, param_type) = raw_method.params[i]
+    let entry_type = match param_type {
+      Func(cb_params, Any | Unknown) => @ast.TsType::Func(cb_params, Void)
+      other => other
+    }
+    rest_params.push((param_name, entry_type))
+  }
+  let companion = clone({
+    ..raw_method,
+    name: raw_method.name + "_" + suffix,
+    params: rest_params,
+  })
+  let family_key = owner_name + "\u{0}" + raw_method.name
+  let family = match decl_event_class_families.get(family_key) {
+    Some(family) => family
+    None => {
+      let family : Array[(String, @ast.TsClassMethodDecl)] = []
+      decl_event_class_families[family_key] = family
+      family
+    }
+  }
+  let mut recorded = false
+  for entry in family {
+    if entry.0 == literal {
+      recorded = true
+      break
+    }
+  }
+  if !recorded {
+    family.push((literal, companion))
+  }
+  // Same activation rule and per-clone re-push as the interface path.
+  if family.length() >= 2 {
+    for entry in family {
+      let (entry_literal, entry_companion) = entry
+      append_class_method_once(methods, seen_method_keys, entry_companion)
+      decl_event_member_specials[owner_name + "\u{0}" + entry_companion.name] = (
+        raw_method.name,
+        entry_literal,
+      )
+    }
+  }
+}
+
+///|
+fn decl_push_event_companion(
+  fields : Array[(String, @ast.TsType)],
+  seen_field_names : Array[String],
+  owner_name : String,
+  member_name : String,
+  literal : String,
+  companion_type : @ast.TsType,
+) -> Unit {
+  let suffix = match decl_event_literal_suffix(literal) {
+    Some(suffix) => suffix
+    None => return
+  }
+  let companion_name = member_name + "_" + suffix
+  if seen_field_names.contains(companion_name) {
+    return
+  }
+  seen_field_names.push(companion_name)
+  fields.push((companion_name, companion_type))
+  decl_event_member_specials[owner_name + "\u{0}" + companion_name] = (
+    member_name, literal,
+  )
+}
+
+///|
+fn decl_maybe_synthesize_event_companions(
+  fields : Array[(String, @ast.TsType)],
+  seen_field_names : Array[String],
+  owner_name : String,
+  member_name : String,
+  final_type : @ast.TsType,
+) -> Unit {
+  let (literal, rest, ret) = match
+    decl_event_literal_overload_parts(final_type) {
+    Some(parts) => parts
+    None => return
+  }
+  if decl_event_literal_suffix(literal) is None {
+    return
+  }
+  let family_key = owner_name + "\u{0}" + member_name
+  let family = match decl_event_member_families.get(family_key) {
+    Some(family) => family
+    None => {
+      let family : Array[(String, @ast.TsType)] = []
+      decl_event_member_families[family_key] = family
+      family
+    }
+  }
+  let companion_type = @ast.TsType::Func(rest, ret)
+  let mut recorded = false
+  for entry in family {
+    if entry.0 == literal {
+      recorded = true
+      break
+    }
+  }
+  if !recorded {
+    family.push((literal, companion_type))
+  }
+  // Families only activate at two distinct literals: a lone
+  // literal-first method is not an event map. Push ALL recorded
+  // companions into the CURRENT clone's fields on every arrival — the
+  // decl and FFI layers each clone the interface, and the per-clone
+  // `seen_field_names` keeps this idempotent.
+  if family.length() >= 2 {
+    for entry in family {
+      decl_push_event_companion(
+        fields,
+        seen_field_names,
+        owner_name,
+        member_name,
+        entry.0,
+        entry.1,
+      )
+    }
+  }
+}
+
+///|
+fn decl_reset_synthesized_union_aliases() -> Unit {
+  decl_synthesized_union_aliases.clear()
+}
+
+///|
+fn decl_drain_synthesized_union_aliases(
+  out : Array[ExportedTaggedUnionDecl],
+) -> Unit {
+  for _, entry in decl_synthesized_union_aliases {
+    let mut present = false
+    for existing in out {
+      if existing.decl.name == entry.decl.name {
+        present = true
+        break
+      }
+    }
+    if !present {
+      out.push(entry)
+    }
+  }
+}
+
+///|
+/// Try to name an instantiated generic union alias whose LOWERED body
+/// is a union containing at least one function member and that the
+/// tagged-union alias rules accept. Returns the synthesized name after
+/// registering the decl; `None` leaves the caller's inline behavior
+/// unchanged (unions without function members already inline or
+/// synthesize anonymously).
+fn decl_instantiated_union_alias_name(
+  source_path : String,
+  name : String,
+  args : Array[@ast.TsType],
+  lowered_body : @ast.TsType,
+) -> String? {
+  let members = match lowered_body {
+    Union(items) => items
+    _ => return None
+  }
+  let mut has_func = false
+  for member in members {
+    if member is Func(_, _) {
+      has_func = true
+      break
+    }
+  }
+  if !has_func {
+    return None
+  }
+  let synth_name = utility_record_type_suffix(Applied(name, args))
+  if synth_name == "" {
+    return None
+  }
+  match decl_synthesized_union_aliases.get(synth_name) {
+    Some(_) => return Some(synth_name)
+    None => ()
+  }
+  let synthetic : @ast.TsTypeAlias = {
+    name: synth_name,
+    type_params: [],
+    type_param_bounds: [],
+    type_: lowered_body,
+  }
+  match tagged_union_type_alias_decl(synthetic) {
+    Some(decl) => {
+      decl_synthesized_union_aliases[synth_name] = {
+        source_path,
+        local_name: synth_name,
+        export_name: synth_name,
+        decl,
+      }
+      Some(synth_name)
+    }
+    None => None
+  }
+}
+
+///|
+/// Extract `(name, type)` struct fields from an anonymous object
+/// literal. `None` when the shape cannot become a struct: non-literal
+/// keys (computed / index-like), empty, or implausibly wide.
+fn decl_object_literal_struct_fields(
+  obj_fields : Array[(@ast.TsType, @ast.TsType)],
+) -> Array[(String, @ast.TsType)]? {
+  if obj_fields.length() == 0 || obj_fields.length() > 24 {
+    return None
+  }
+  let fields : Array[(String, @ast.TsType)] = []
+  let seen : Array[String] = []
+  for field in obj_fields {
+    let (key, value) = field
+    match key {
+      Literal(name) => {
+        if name == "" || seen.contains(name) {
+          return None
+        }
+        seen.push(name)
+        fields.push((name, value))
+      }
+      _ => return None
+    }
+  }
+  Some(fields)
+}
+
+///|
+/// Synthesize (or reuse) a named struct for an anonymous object type.
+/// Returns the `Named` reference on success. A name that was already
+/// synthesized with a DIFFERENT shape stays widened — two members
+/// producing the same `<Owner><Member>` name with different bodies
+/// must not silently share a struct.
+fn decl_synthesize_object_interface(
+  name : String,
+  obj_fields : Array[(@ast.TsType, @ast.TsType)],
+) -> @ast.TsType? {
+  if name.length() > 64 {
+    return None
+  }
+  let fields = match decl_object_literal_struct_fields(obj_fields) {
+    Some(fields) => fields
+    None => return None
+  }
+  match decl_synthesized_object_interfaces.get(name) {
+    Some(existing) =>
+      if existing.fields == fields {
+        Some(Named(name))
+      } else {
+        None
+      }
+    None => {
+      decl_synthesized_object_interfaces[name] = {
+        name,
+        type_params: [],
+        type_param_bounds: [],
+        extends_names: [],
+        extends_args: [],
+        fields,
+        readonly_fields: [],
+        index_signatures: [],
+        method_type_params: [],
+        method_type_param_bounds: [],
+        internal_members: [],
+        deprecated_members: [],
+      }
+      Some(Named(name))
+    }
+  }
+}
+
+///|
+/// Rewrite anonymous object literals reachable from a MEMBER type into
+/// synthesized named structs: the direct property type (optional or
+/// not), and object-typed params / returns of a function-typed member.
+/// Runs on the LOWERED member type, so nested types are already in
+/// their final shape.
+fn decl_rewrite_inline_object_member_type(
+  owner_name : String,
+  member_name : String,
+  type_ : @ast.TsType,
+) -> @ast.TsType {
+  let base_name = decl_to_pascal_case(owner_name) +
+    decl_to_pascal_case(member_name)
+  match @checker.classify_optional_like_union(type_) {
+    Some((Object(obj_fields), is_optional)) =>
+      match decl_synthesize_object_interface(base_name, obj_fields) {
+        Some(named) =>
+          if is_optional {
+            return @ast.TsType::Union([named, Undefined])
+          } else {
+            return named
+          }
+        None => return type_
+      }
+    _ => ()
+  }
+  match type_ {
+    Object(obj_fields) =>
+      match decl_synthesize_object_interface(base_name, obj_fields) {
+        Some(named) => named
+        None => type_
+      }
+    Func(params, return_type) => {
+      let mut rewrote = false
+      let mut object_param_index = 0
+      let new_params : Array[@ast.TsType] = []
+      for param in params {
+        let synth_name = if object_param_index == 0 {
+          base_name + "Options"
+        } else {
+          base_name + "Options\{object_param_index}"
+        }
+        let rewritten = match @checker.classify_optional_like_union(param) {
+          Some((Object(obj_fields), is_optional)) =>
+            match decl_synthesize_object_interface(synth_name, obj_fields) {
+              Some(named) => {
+                object_param_index += 1
+                rewrote = true
+                if is_optional {
+                  @ast.TsType::Union([named, Undefined])
+                } else {
+                  named
+                }
+              }
+              None => param
+            }
+          _ =>
+            match param {
+              Object(obj_fields) =>
+                match decl_synthesize_object_interface(synth_name, obj_fields) {
+                  Some(named) => {
+                    object_param_index += 1
+                    rewrote = true
+                    named
+                  }
+                  None => param
+                }
+              _ => param
+            }
+        }
+        new_params.push(rewritten)
+      }
+      let new_return = match return_type {
+        Object(obj_fields) =>
+          match
+            decl_synthesize_object_interface(base_name + "Result", obj_fields) {
+            Some(named) => {
+              rewrote = true
+              named
+            }
+            None => return_type
+          }
+        _ => return_type
+      }
+      if rewrote {
+        @ast.TsType::Func(new_params, new_return)
+      } else {
+        type_
+      }
+    }
+    _ => type_
+  }
+}
+
+///|
+/// Object-literal PARAM of a class method: `send(url, options?: {..})`
+/// synthesizes `<Class><Method><Param>` (`ClientSendOptions`). Mirrors
+/// the Func-param arm of `decl_rewrite_inline_object_member_type` with
+/// the param name available for naming.
+fn decl_rewrite_inline_object_class_method_param(
+  class_name : String,
+  method_name : String,
+  param_name : String,
+  type_ : @ast.TsType,
+) -> @ast.TsType {
+  let synth_name = decl_to_pascal_case(class_name) +
+    decl_to_pascal_case(method_name) +
+    decl_to_pascal_case(if param_name == "" { "options" } else { param_name })
+  match @checker.classify_optional_like_union(type_) {
+    Some((Object(obj_fields), is_optional)) =>
+      match decl_synthesize_object_interface(synth_name, obj_fields) {
+        Some(named) =>
+          if is_optional {
+            @ast.TsType::Union([named, Undefined])
+          } else {
+            named
+          }
+        None => type_
+      }
+    _ =>
+      match type_ {
+        Object(obj_fields) =>
+          match decl_synthesize_object_interface(synth_name, obj_fields) {
+            Some(named) => named
+            None => type_
+          }
+        _ => type_
+      }
+  }
+}
+
+///|
 fn append_lowered_interface_field(
   fields : Array[(String, @ast.TsType)],
   readonly_fields : Array[String],
@@ -7013,10 +8185,6 @@ fn append_lowered_interface_field(
   modules : Map[String, DeclModuleInfo],
   canonical_types : Map[String, String],
 ) -> Unit {
-  if seen_field_names.contains(field_name) {
-    return
-  }
-  seen_field_names.push(field_name)
   // `this` in a member type always denotes the interface the struct is
   // being generated for (the root of the extends expansion), applied to
   // that struct's own type parameters — those are exactly the params in
@@ -7034,8 +8202,9 @@ fn append_lowered_interface_field(
       this_owner,
     ),
   )
-  fields.push(
-    (
+  let final_type = decl_null_member_type(
+    decl_rewrite_inline_object_member_type(
+      owner_name,
       field_name,
       decl_rewrite_inline_callback_params_in_func_type(
         owner_name + "_" + field_name,
@@ -7043,6 +8212,31 @@ fn append_lowered_interface_field(
       ),
     ),
   )
+  // Detect on the PRE-rewrite lowering: the inline-callback naming pass
+  // replaces the listener's function type with a named opaque callback,
+  // which would hide the `(Literal, Func)` event shape.
+  decl_maybe_synthesize_event_companions(
+    fields, seen_field_names, owner_name, field_name, lowered_type,
+  )
+  if seen_field_names.contains(field_name) {
+    // Method overload: widen the kept signature when this one only
+    // appends trailing params (`get(key)` / `get(key, fallback)` merge
+    // to `get(key, fallback?)`); anything else keeps the first
+    // declaration, matching the old behavior.
+    for i, existing in fields {
+      if existing.0 != field_name {
+        continue
+      }
+      match decl_merge_overload_func_types(existing.1, final_type) {
+        Some(merged) => fields[i] = (field_name, merged)
+        None => ()
+      }
+      break
+    }
+    return
+  }
+  seen_field_names.push(field_name)
+  fields.push((field_name, final_type))
   if is_readonly {
     readonly_fields.push(field_name)
   }
@@ -7624,16 +8818,19 @@ fn clone_resolved_interface_origin(
     [],
     origin.iface.type_params.length() == 0,
   )
+  let (unflattened_bases, unflattened_args) = decl_unflattened_interface_bases(
+    origin, modules, canonical_types,
+  )
   {
     name: origin.export_name,
     type_params: origin.iface.type_params,
-    extends_names: [],
-    extends_args: [],
+    extends_names: unflattened_bases,
+    extends_args: unflattened_args,
     fields,
     readonly_fields: readonly_fields_for_fields(readonly_fields, fields),
     index_signatures: origin.iface.index_signatures,
     type_param_bounds: [],
-    method_type_params: [],
+    method_type_params: origin.iface.method_type_params,
     method_type_param_bounds: [],
     internal_members,
     deprecated_members,
@@ -7980,16 +9177,21 @@ fn clone_exported_interface(
     [],
     exported.iface.type_params.length() == 0,
   )
+  let (unflattened_bases, unflattened_args) = decl_unflattened_interface_bases(
+    { info, export_name: exported.export_name, iface: exported.iface },
+    modules,
+    canonical_types,
+  )
   {
     name: exported.export_name,
     type_params: exported.iface.type_params,
-    extends_names: [],
-    extends_args: [],
+    extends_names: unflattened_bases,
+    extends_args: unflattened_args,
     fields,
     readonly_fields: readonly_fields_for_fields(readonly_fields, fields),
     index_signatures: exported.iface.index_signatures,
     type_param_bounds: [],
-    method_type_params: [],
+    method_type_params: exported.iface.method_type_params,
     method_type_param_bounds: [],
     internal_members,
     deprecated_members,
@@ -9470,6 +10672,19 @@ fn decl_synthetic_callback_type_for_param(
 }
 
 ///|
+/// Promise-returning callbacks must keep their structural form: the
+/// async-callback lowering (`async (...) -> T raise` public params via
+/// `Promise::from_async` glue) only fires on structural
+/// `(...) -> Promise[T]` renderings, and an opaque synthesized name
+/// would erase both the structure and that ergonomics.
+fn decl_callback_return_is_promise_like(return_type : @ast.TsType) -> Bool {
+  match return_type {
+    Applied(name, _) => name == "Promise" || name == "PromiseLike"
+    _ => @checker.classify_promise_like_union(return_type) is Some(_)
+  }
+}
+
+///|
 fn decl_rewrite_inline_callback_param_type(
   owner_name : String,
   param_name : String,
@@ -9477,28 +10692,36 @@ fn decl_rewrite_inline_callback_param_type(
   type_ : @ast.TsType,
 ) -> @ast.TsType {
   match @checker.classify_optional_like_union(type_) {
-    Some((Func(_, _), is_optional)) =>
-      match
-        decl_synthetic_callback_type_for_param(
-          owner_name, param_name, param_index,
-        ) {
-        Some(named) =>
-          if is_optional {
-            Union([named, Undefined])
-          } else {
-            named
-          }
-        None => type_
+    Some((Func(_, func_return), is_optional)) =>
+      if decl_callback_return_is_promise_like(func_return) {
+        type_
+      } else {
+        match
+          decl_synthetic_callback_type_for_param(
+            owner_name, param_name, param_index,
+          ) {
+          Some(named) =>
+            if is_optional {
+              Union([named, Undefined])
+            } else {
+              named
+            }
+          None => type_
+        }
       }
     _ =>
       match type_ {
-        Func(_, _) =>
-          match
-            decl_synthetic_callback_type_for_param(
-              owner_name, param_name, param_index,
-            ) {
-            Some(named) => named
-            None => type_
+        Func(_, func_return) =>
+          if decl_callback_return_is_promise_like(func_return) {
+            type_
+          } else {
+            match
+              decl_synthetic_callback_type_for_param(
+                owner_name, param_name, param_index,
+              ) {
+              Some(named) => named
+              None => type_
+            }
           }
         _ => type_
       }
@@ -10267,6 +11490,42 @@ fn clone_exported_value(
 }
 
 ///|
+/// Unannotated class properties whose initializer is a literal
+/// (`static readonly BLOCK_FOLDED = "BLOCK_FOLDED"`) infer their type
+/// from the initializer expression instead of widening to `JSValue`.
+/// Only primitive inferences are taken; anything else keeps the
+/// declared (widened) type.
+fn decl_infer_literal_property_type(
+  class_ : @ast.TsClassDecl,
+  class_property : @ast.TsClassPropertyDecl,
+) -> @ast.TsClassPropertyDecl {
+  if class_property.type_ != @ast.TsType::Any || !class_property.has_initializer {
+    return class_property
+  }
+  let inits = if class_property.is_static {
+    class_.static_field_inits
+  } else {
+    class_.instance_field_inits
+  }
+  let mut init : @ast.TsExpr? = None
+  for pair in inits {
+    if pair.0 == class_property.name {
+      init = Some(pair.1)
+      break
+    }
+  }
+  let inferred = match init {
+    Some(expr) => infer_decl_expr_type(expr, [])
+    None => @ast.TsType::Any
+  }
+  match inferred {
+    Number | Int | Boolean | String_ | BigInt =>
+      { ..class_property, type_: inferred }
+    _ => class_property
+  }
+}
+
+///|
 fn clone_class_property_in_scope(
   class_property : @ast.TsClassPropertyDecl,
   class_name : String,
@@ -10277,19 +11536,25 @@ fn clone_class_property_in_scope(
 ) -> @ast.TsClassPropertyDecl {
   {
     name: class_property.name,
-    type_: decl_specialize_generated_class_property_type(
-      class_name,
-      class_property.name,
-      lower_react_utility_type(
-        info,
-        rewrite_type_refs_in_scope(
-          info,
-          local_name_prefix,
-          class_property.type_,
-          canonical_types,
+    type_: decl_null_member_type(
+      decl_rewrite_inline_object_member_type(
+        class_name,
+        class_property.name,
+        decl_specialize_generated_class_property_type(
+          class_name,
+          class_property.name,
+          lower_react_utility_type(
+            info,
+            rewrite_type_refs_in_scope(
+              info,
+              local_name_prefix,
+              class_property.type_,
+              canonical_types,
+            ),
+            modules,
+            canonical_types,
+          ),
         ),
-        modules,
-        canonical_types,
       ),
     ),
     is_static: class_property.is_static,
@@ -10327,16 +11592,21 @@ fn clone_class_method_in_scope(
     params.push(
       (
         param_name,
-        decl_rewrite_inline_callback_param_type(
-          class_name + "_" + class_method.name,
+        decl_rewrite_inline_object_class_method_param(
+          class_name,
+          class_method.name,
           param_name,
-          param_index,
-          decl_specialize_generated_class_method_param_type(
-            class_name,
-            class_method.name,
+          decl_rewrite_inline_callback_param_type(
+            class_name + "_" + class_method.name,
             param_name,
             param_index,
-            lowered_param_type,
+            decl_specialize_generated_class_method_param_type(
+              class_name,
+              class_method.name,
+              param_name,
+              param_index,
+              lowered_param_type,
+            ),
           ),
         ),
       ),
@@ -10528,6 +11798,68 @@ fn class_method_key(class_method : @ast.TsClassMethodDecl) -> String {
 }
 
 ///|
+fn decl_optionalize_type(type_ : @ast.TsType) -> @ast.TsType {
+  match @checker.classify_optional_like_union(type_) {
+    Some((_, true)) => type_
+    _ =>
+      match type_ {
+        Undefined => type_
+        _ => @ast.TsType::Union([type_, Undefined])
+      }
+  }
+}
+
+///|
+/// Merge two overload signatures when one's params are a strict prefix
+/// of the other's (the canonical TS overload pattern — extra trailing
+/// params) and the returns agree: the merged signature keeps the longer
+/// param list with the extra params OPTIONALIZED, so both call shapes
+/// stay expressible. `None` for anything else (the caller keeps the
+/// first-declared signature, matching the old behavior).
+fn decl_merge_overload_param_lists(
+  a : Array[@ast.TsType],
+  b : Array[@ast.TsType],
+) -> Array[@ast.TsType]? {
+  let (short, long) = if a.length() <= b.length() { (a, b) } else { (b, a) }
+  if short.length() == long.length() {
+    return None
+  }
+  for i, t in short {
+    if long[i] != t {
+      return None
+    }
+  }
+  let merged : Array[@ast.TsType] = []
+  for i, t in long {
+    if i < short.length() {
+      merged.push(t)
+    } else {
+      merged.push(decl_optionalize_type(t))
+    }
+  }
+  Some(merged)
+}
+
+///|
+fn decl_merge_overload_func_types(
+  a : @ast.TsType,
+  b : @ast.TsType,
+) -> @ast.TsType? {
+  match (a, b) {
+    (Func(pa, ra), Func(pb, rb)) => {
+      if ra != rb {
+        return None
+      }
+      match decl_merge_overload_param_lists(pa, pb) {
+        Some(merged) => Some(@ast.TsType::Func(merged, ra))
+        None => None
+      }
+    }
+    _ => None
+  }
+}
+
+///|
 fn append_class_property_once(
   properties : Array[@ast.TsClassPropertyDecl],
   seen_property_keys : Array[String],
@@ -10549,6 +11881,43 @@ fn append_class_method_once(
 ) -> Unit {
   let key = class_method_key(class_method)
   if seen_method_keys.contains(key) {
+    // Overload: widen the kept signature when this one only appends
+    // trailing params (`encode(v)` / `encode(v, pretty)` merge to
+    // `encode(v, pretty?)`); anything else keeps the first declaration.
+    for i, existing in methods {
+      if class_method_key(existing) != key ||
+        existing.is_static != class_method.is_static ||
+        existing.return_type != class_method.return_type ||
+        existing.type_params.length() > 0 ||
+        class_method.type_params.length() > 0 {
+        continue
+      }
+      let existing_types : Array[@ast.TsType] = []
+      for param in existing.params {
+        existing_types.push(param.1)
+      }
+      let incoming_types : Array[@ast.TsType] = []
+      for param in class_method.params {
+        incoming_types.push(param.1)
+      }
+      match decl_merge_overload_param_lists(existing_types, incoming_types) {
+        Some(merged) => {
+          let longer_names = if class_method.params.length() >
+            existing.params.length() {
+            class_method.params
+          } else {
+            existing.params
+          }
+          let merged_params : Array[(String, @ast.TsType)] = []
+          for j, t in merged {
+            merged_params.push((longer_names[j].0, t))
+          }
+          methods[i] = { ..existing, params: merged_params }
+        }
+        None => ()
+      }
+      break
+    }
     return
   }
   seen_method_keys.push(key)
@@ -10593,7 +11962,7 @@ fn append_class_origin_members(
   }
   for class_property in origin.class_.properties {
     let cloned_property = clone_class_property_in_scope(
-      class_property,
+      decl_infer_literal_property_type(origin.class_, class_property),
       origin.class_.name,
       origin.info,
       origin.local_name_prefix,
@@ -10617,6 +11986,23 @@ fn append_class_origin_members(
     }
   }
   for class_method in origin.class_.methods {
+    decl_maybe_synthesize_class_event_companions(
+      methods,
+      seen_method_keys,
+      origin.class_.name,
+      class_method,
+      fn(raw) {
+        clone_class_method_in_scope(
+          raw,
+          origin.class_.name,
+          this_owner,
+          origin.info,
+          origin.local_name_prefix,
+          modules,
+          canonical_types,
+        )
+      },
+    )
     append_class_method_once(
       methods,
       seen_method_keys,
@@ -10724,6 +12110,12 @@ fn clone_exported_class(
 pub async fn emit_moonbit_decl_from_entry_path(
   entry_path : String,
 ) -> String raise ModuleGraphError {
+  // New emission, new synthesized-object registry. The decl emitter
+  // runs FIRST in a package bundle, so the paired ffi emission keeps
+  // (a superset of) the same synthesized shapes.
+  decl_reset_synthesized_object_interfaces()
+  decl_reset_synthesized_union_aliases()
+  decl_reset_event_member_specials()
   let graph = load_type_module_graph(entry_path)
   let export_surface = resolve_export_surface(graph)
   let modules = build_decl_module_map(graph)
@@ -10767,17 +12159,12 @@ pub async fn emit_moonbit_decl_from_entry_path(
         tagged_union_declared_names.push(tagged.decl.name)
         for entry in tagged.decl.cases {
           let (_, inner) = entry
-          let inner_named = match inner {
-            @ast.TsType::Named(name) => Some(name)
-            @ast.TsType::Array(@ast.TsType::Named(name)) => Some(name)
-            _ => None
-          }
-          match inner_named {
-            Some(name) =>
-              if !tagged_union_referenced_inner_names.contains(name) {
-                tagged_union_referenced_inner_names.push(name)
-              }
-            None => ()
+          let named_refs : Array[String] = []
+          tagged_union_case_named_refs(inner, named_refs)
+          for name in named_refs {
+            if !tagged_union_referenced_inner_names.contains(name) {
+              tagged_union_referenced_inner_names.push(name)
+            }
           }
         }
       }
@@ -10875,6 +12262,9 @@ pub async fn emit_moonbit_decl_from_entry_path(
       None => ()
     }
   }
+  // After BOTH interface and class cloning: class properties also
+  // synthesize object structs (axios's `interceptors`).
+  decl_drain_synthesized_object_interfaces(interfaces)
   let values : Array[@ast.TsValueDecl] = []
   for exported in exported_values {
     match modules.get(exported.source_path) {
@@ -10892,6 +12282,37 @@ pub async fn emit_moonbit_decl_from_entry_path(
         type_aliases.push(
           clone_exported_type_alias(exported, info, modules, canonical_types),
         )
+      None => ()
+    }
+  }
+  // Instantiated generic union aliases registered during the cloning
+  // passes above (`ErrorMessage<Issue>` -> ErrorMessageOfIssue): render
+  // their enum sections now, mirroring the exported tagged-union loop.
+  let synthesized_union_aliases : Array[ExportedTaggedUnionDecl] = []
+  decl_drain_synthesized_union_aliases(synthesized_union_aliases)
+  for tagged in synthesized_union_aliases {
+    if tagged_union_declared_names.contains(tagged.decl.name) {
+      continue
+    }
+    match
+      tagged_union_decl_to_moonbit_section_with_arity(
+        tagged.decl,
+        tagged_union_arity_registry,
+      ) {
+      Some(section) => {
+        tagged_union_sections.push(section)
+        tagged_union_declared_names.push(tagged.decl.name)
+        for entry in tagged.decl.cases {
+          let (_, inner) = entry
+          let named_refs : Array[String] = []
+          tagged_union_case_named_refs(inner, named_refs)
+          for name in named_refs {
+            if !tagged_union_referenced_inner_names.contains(name) {
+              tagged_union_referenced_inner_names.push(name)
+            }
+          }
+        }
+      }
       None => ()
     }
   }
@@ -10950,7 +12371,8 @@ pub async fn emit_moonbit_decl_from_entry_path(
     if issue.kind is UnresolvedReference &&
       (
         tagged_union_declared_names.contains(issue.name) ||
-        synthetic_callback_type_names.contains(issue.name)
+        synthetic_callback_type_names.contains(issue.name) ||
+        issue.name == "JSNull"
       ) {
       continue
     }

@@ -1851,7 +1851,9 @@ async test "bridge: emit MoonBit declarations from export-as-namespace hook tupl
   )
   assert_true(
     actual.contains(
-      "declare pub fn useActionState(action : UseActionStateActionCallback, initialState : State, permalink : String?) -> UseActionStateResult",
+      // Structural promise-returning callback (the union return reads as
+      // Promise[State]); no opaque synthesized name.
+      "declare pub fn useActionState(action : (State) -> Promise[State], initialState : State, permalink : String?) -> UseActionStateResult",
     ),
   )
 }
@@ -2802,7 +2804,7 @@ async test "bridge: indexed access on constrained type params resolves through b
       return
     }
   }
-  assert_true(actual.contains("/// def : UnderscoreZodTypeDef"))
+  assert_true(actual.contains("/// def : DollarZodTypeDef"))
   assert_false(actual.contains("/// def : JSValue"))
   assert_true(actual.contains("/// type : ZodTypeType"))
   assert_false(actual.contains("/// type : JSValue"))
@@ -2894,6 +2896,355 @@ async test "bridge: undiscriminable union aliases join to their common base" {
       return
     }
   }
-  assert_true(actual.contains("/// issues : Array[UnderscoreIssueBase]"))
-  assert_true(actual.contains("UnderscoreIssueBase"))
+  assert_true(actual.contains("/// issues : Array[DollarIssueBase]"))
+  assert_true(actual.contains("DollarIssueBase"))
+}
+
+///|
+async test "bridge: specialize conditional interface members at concrete instantiations" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/conditional-member-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // The generic definition cannot decide `V extends Ack` — its member
+  // stays widened — but each concrete instantiation gets a synthesized
+  // monomorphic interface with the conditional resolved by the checker:
+  // Payload lacks Ack's required `ok` field (false branch, an async
+  // handler slot that lowers), Ack trivially extends itself (true
+  // branch, a plain sync callback).
+  assert_true(actual.contains("declare pub type Channel[V]"))
+  assert_true(
+    actual.contains(
+      "declare pub fn ChannelPayload::post(self : ChannelPayload, arg0 : async (Payload) -> Payload raise) -> Double",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn ChannelAck::post(self : ChannelAck, arg0 : () -> Unit) -> Double",
+    ),
+  )
+  assert_true(
+    actual.contains("declare pub fn payloadChannel() -> ChannelPayload"),
+  )
+  assert_true(actual.contains("declare pub fn ackChannel() -> ChannelAck"))
+}
+
+///|
+async test "bridge: upcast helpers for unflattened extends bases" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/extends-upcast-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // Class bases and generic-over-generic bases cannot flatten their
+  // members into the derived struct, so the emitters generate sound
+  // %identity upcast helpers instead of leaving consumers to unsafeCast.
+  assert_true(
+    actual.contains(
+      "declare pub fn EngineHandle::asEngine(self : EngineHandle) -> Engine",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn[T] DerivedGeneric::asWide(self : DerivedGeneric[T]) -> Wide[T]",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn[T] DerivedGeneric::asBase(self : DerivedGeneric[T]) -> Base",
+    ),
+  )
+  // A CONCRETE root flattens its bases (Derived::describe is inherited
+  // directly), so no upcast helper is emitted for it.
+  assert_true(actual.contains("declare pub fn Derived::describe"))
+  assert_false(actual.contains("Derived::asBase"))
+}
+
+///|
+async test "bridge: synthesize structs for anonymous object members and params" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/inline-object-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // Interface property + interface method param + class property +
+  // class method param each synthesize a `<Owner><Member>(<Param>)`
+  // struct instead of widening to JSValue.
+  assert_true(actual.contains("declare pub type PanelLayout"))
+  assert_true(
+    actual.contains(
+      "declare pub fn Panel::resize(self : Panel, arg0 : PanelResizeOptions) -> Unit",
+    ),
+  )
+  assert_true(actual.contains("declare pub type ClientHandlers"))
+  assert_true(
+    actual.contains(
+      "declare pub fn Client::get_client_handlers(self : Client) -> ClientHandlers",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn Client::send(self : Client, url : String, options : ClientSendOptions?) -> Promise[String]",
+    ),
+  )
+}
+
+///|
+async test "bridge: merge trailing-param member overloads" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/member-overload-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // Canonical TS overload pattern (extra trailing params, same return)
+  // merges to one signature with the extras optionalized — instead of
+  // silently dropping every declaration after the first.
+  assert_true(
+    actual.contains(
+      "declare pub fn Store::get(self : Store, arg0 : String, arg1 : String?) -> String",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn Codec::encode(self : Codec, value : String, pretty : Bool?) -> String",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn Codec::decode(self : Codec, raw : String) -> String",
+    ),
+  )
+}
+
+///|
+async test "bridge: typeof value references resolve to callable shapes" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/typeof-inference-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // `typeof ip` of a generic overloaded function resolves to a callable
+  // shape with bound-substituted type params instead of `JSValue`.
+  assert_true(actual.contains("reference : () -> IpAction[String, JSValue]"))
+  // `ReturnType<typeof addPairToJSMap>` reduces through the resolved
+  // function type -- no bare `ReturnType` opaque type leaks.
+  assert_false(actual.contains("declare pub type ReturnType"))
+  assert_false(actual.contains("-> ReturnType"))
+  // Ambient `static readonly X = "lit"` members type from the literal
+  // (single-case enum) instead of `JSValue`.
+  assert_true(
+    actual.contains(
+      "declare pub fn get_scalar_block_folded() -> ScalarBLOCK_FOLDED",
+    ),
+  )
+}
+
+///|
+async test "bridge: instantiated union aliases and null members" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/union-alias-instantiation-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // `ErrorMessage<Issue>` (generic `string | fn` union alias) instantiates
+  // to a named tagged-union enum instead of widening to `JSValue`.
+  assert_true(actual.contains("pub(all) enum ErrorMessageOfIssue {"))
+  assert_true(actual.contains("/// readonly message : ErrorMessageOfIssue?"))
+  assert_true(
+    actual.contains(
+      "declare pub fn check(message : ErrorMessageOfIssue?) -> CheckAction",
+    ),
+  )
+  // A member typed exactly `null` references the shared opaque JSNull
+  // companion instead of JSValue, without an unresolved-reference note.
+  assert_true(actual.contains("/// readonly expects : JSNull"))
+  assert_true(actual.contains("declare pub type JSNull"))
+  assert_false(actual.contains("Unresolved type reference JSNull"))
+}
+
+///|
+async test "bridge: inline value-or-function unions synthesize shaped enums" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/inline-fn-union-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // Anonymous `boolean | fn` members synthesize tagged-union aliases with
+  // the function SHAPE in the name, so the two members with different
+  // signatures stay distinct instead of widening to JSValue (or merging).
+  assert_true(
+    actual.contains(
+      "uniqueKeys : Auto_BoolValue_or_FnParsedNodeParsedNodeToBoolValue?",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "sortMapEntries : Auto_BoolValue_or_FnPairPairToDoubleValue?",
+    ),
+  )
+}
+
+///|
+async test "bridge: event-map overloads synthesize per-literal companions" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/event-map-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // `on(event: 'close', listener)` x3 distinct literals -> typed
+  // per-event companions alongside the widened base member.
+  assert_true(
+    actual.contains(
+      "declare pub fn Browser::on_close(self : Browser, arg0 : (Browser) -> Unit) -> Browser",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn Browser::on_console(self : Browser, arg0 : (ConsoleMessage) -> Unit) -> Browser",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn Browser::once_page(self : Browser, arg0 : (Page) -> Unit) -> Browser",
+    ),
+  )
+  // CLASS-method event maps specialize the same way (ws / chokidar /
+  // node:fs watchers).
+  assert_true(
+    actual.contains(
+      "declare pub fn Watcher::on_change(self : Watcher, listener : (String) -> Unit) -> Watcher",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn Watcher::on_error(self : Watcher, listener : (Error_) -> Unit) -> Watcher",
+    ),
+  )
+}
+
+///|
+test "decl: nonempty tuple normalizes to array" {
+  // `[T, ...T[]]` (valibot / zod `issues`) is a nonempty ARRAY for the
+  // bridge surface; a tuple would widen to `Array[JSValue]`.
+  assert_eq(
+    decl_nonempty_tuple_element([
+      @ast.TsType::Named("BaseIssue"),
+      @ast.TsType::Rest(@ast.TsType::Array(@ast.TsType::Named("BaseIssue"))),
+    ]),
+    Some(@ast.TsType::Named("BaseIssue")),
+  )
+  // Mixed fixed elements refuse.
+  assert_eq(
+    decl_nonempty_tuple_element([
+      @ast.TsType::String_,
+      @ast.TsType::Rest(@ast.TsType::Array(@ast.TsType::Named("BaseIssue"))),
+    ]),
+    None,
+  )
+  // No trailing rest refuses.
+  assert_eq(
+    decl_nonempty_tuple_element([@ast.TsType::String_, @ast.TsType::Number]),
+    None,
+  )
+}
+
+///|
+async test "bridge: record-and-class intersection resolves to the class" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/intersection-class-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // `RawHeaders & HeaderBag` (axios's AxiosRequestHeaders shape): the
+  // class half carries the usable surface, so the alias passes through
+  // to it and `config.headers.set(...)` type-checks.
+  assert_true(actual.contains("pub type RequestHeaders = HeaderBag"))
+  assert_true(
+    actual.contains(
+      "declare pub fn HeaderBag::set(self : HeaderBag, name : String, value : String) -> HeaderBag",
+    ),
+  )
+  assert_false(actual.contains("Unresolved type reference RequestHeaders"))
+}
+
+///|
+async test "bridge: method-level generics survive on generic owners" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/chain-generics-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // `map<U>` on a generic owner keeps its own binder on the wrapper
+  // (previously U widened to JSValue on every chain-style API).
+  assert_true(
+    actual.contains(
+      "declare pub fn[T, U] CollectionChain::map(self : CollectionChain[T], arg0 : (T) -> U) -> CollectionChain[U]",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn[T] CollectionChain::first(self : CollectionChain[T]) -> T",
+    ),
+  )
 }

@@ -430,6 +430,57 @@ fn parse_bridge_param_decls(params_src : String) -> Array[BridgeParamDecl] {
 }
 
 ///|
+/// Async-callback lowering (`(A, B) -> Promise[T]` params accepting a
+/// MoonBit `async fn`, optional form included) is shared with the decl
+/// layer so `.mbti` and `bridge.mbt` cannot drift — see
+/// `@parser.moonbit_async_callback_lowering` for the shape rules.
+fn bridge_fn_decl_has_async_callback_param(
+  fn_decl : BridgeTopLevelFnDecl,
+) -> Bool {
+  for param in parse_bridge_param_decls(fn_decl.params_src) {
+    if @parser.moonbit_async_callback_lowering(param.type_name) is Some(_) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+/// Rebuild a params_src with every async-callback param lowered.
+/// Returns `None` when nothing lowers (the params_src stays as-is).
+fn bridge_lowered_async_callback_params_src(params_src : String) -> String? {
+  if params_src.trim() == "" {
+    return None
+  }
+  let mut lowered_any = false
+  let rebuilt : Array[String] = []
+  for item in bridge_split_top_level_commas(params_src) {
+    if item == "" {
+      continue
+    }
+    match item.find(":") {
+      Some(index) => {
+        let name = item[:index].to_owned().trim().to_owned()
+        let type_name = item[index + 1:].to_owned().trim().to_owned()
+        match @parser.moonbit_async_callback_lowering(type_name) {
+          Some(lowering) => {
+            lowered_any = true
+            rebuilt.push("\{name} : \{lowering.lowered_type}")
+          }
+          None => rebuilt.push("\{name} : \{type_name}")
+        }
+      }
+      None => rebuilt.push(item)
+    }
+  }
+  if lowered_any {
+    Some(rebuilt.join(", "))
+  } else {
+    None
+  }
+}
+
+///|
 fn parse_bridge_public_type_name_line(line : String) -> String? {
   let prefix = "declare pub type "
   let rest = if line.has_prefix(prefix) {
@@ -874,6 +925,154 @@ fn collect_bridge_type_guard_helpers(
 }
 
 ///|
+/// Arity of every type DECLARED in the assembled source text, scanned
+/// from `pub(all) struct X[..]` / `pub type X[..]` /
+/// `declare pub type X[..]` lines. Used to validate generated upcast
+/// helpers against what actually got emitted.
+fn bridge_declared_type_arities(text : String) -> Map[String, Int] {
+  let arities : Map[String, Int] = Map([])
+  for line_view in text.split("\n") {
+    let line = line_view.to_owned().trim().to_owned()
+    let rest = if line.has_prefix("pub(all) struct ") {
+      line["pub(all) struct ".length():].to_owned()
+    } else if line.has_prefix("pub type ") && !line.contains(" = ") {
+      line["pub type ".length():].to_owned()
+    } else if line.has_prefix("declare pub type ") {
+      line["declare pub type ".length():].to_owned()
+    } else {
+      continue
+    }
+    let name_end = match rest.find("[") {
+      Some(index) => index
+      None =>
+        match rest.find(" ") {
+          Some(index) => index
+          None => rest.length()
+        }
+    }
+    let name = rest[:name_end].to_owned().trim().to_owned()
+    if name == "" {
+      continue
+    }
+    let arity = match rest.find("[") {
+      Some(open) =>
+        match bridge_find_matching_paren_char(rest, open, '[', ']') {
+          Some(close) =>
+            bridge_split_top_level_commas(rest[open + 1:close].to_owned()).length()
+          None => 0
+        }
+      None => 0
+    }
+    // First declaration wins (matches how duplicate emissions resolve).
+    if !(arities.get(name) is Some(_)) {
+      arities[name] = arity
+    }
+  }
+  arities
+}
+
+///|
+fn bridge_find_matching_paren_char(
+  text : String,
+  open_index : Int,
+  open_char : Char,
+  close_char : Char,
+) -> Int? {
+  let mut depth = 0
+  for i, c in text.iter2() {
+    if i < open_index {
+      continue
+    }
+    if c == open_char {
+      depth += 1
+    } else if c == close_char {
+      depth -= 1
+      if depth == 0 {
+        return Some(i)
+      }
+    }
+  }
+  None
+}
+
+///|
+/// Validate a generated `::as<Base>` upcast helper line against the
+/// arities actually emitted: TypeScript names that collide after
+/// sanitization (zod's `$ZodType<3 params>` and `_ZodType<1 param>`
+/// both become `UnderscoreZodType`) can leave the helper referencing an
+/// arity the surviving declaration does not have. Returns `false` when
+/// the helper must be dropped.
+fn bridge_upcast_helper_line_is_valid(
+  line : String,
+  arities : Map[String, Int],
+) -> Bool {
+  let marker = "::as"
+  if !line.contains(marker) || !line.contains("(self : ") {
+    return true
+  }
+  let arrow = match line.find(") -> ") {
+    Some(index) => index
+    None => return true
+  }
+  let mut ret = line[arrow + ") -> ".length():].to_owned().trim().to_owned()
+  if ret.has_suffix(" = \"%identity\"") {
+    ret = ret[:ret.length() - " = \"%identity\"".length()]
+      .to_owned()
+      .trim()
+      .to_owned()
+  }
+  let (head, args_count) = match ret.find("[") {
+    Some(open) =>
+      match bridge_find_matching_paren_char(ret, open, '[', ']') {
+        Some(close) =>
+          (
+            ret[:open].to_owned(),
+            bridge_split_top_level_commas(ret[open + 1:close].to_owned()).length(),
+          )
+        None => (ret[:open].to_owned(), 0)
+      }
+    None => (ret, 0)
+  }
+  match arities.get(head) {
+    Some(declared) => declared == args_count
+    None => false
+  }
+}
+
+///|
+/// Drop upcast helper lines whose base reference does not match the
+/// emitted declaration (see `bridge_upcast_helper_line_is_valid`).
+/// Applied to BOTH the mbt and the mbti with the mbt's arities, so the
+/// two surfaces keep the same helper set.
+fn prune_mismatched_upcast_helpers(
+  bridge_mbti : String,
+  bridge_mbt : String,
+) -> (String, String) {
+  let arities = bridge_declared_type_arities(bridge_mbt)
+  let keep_mbt : Array[String] = []
+  for line_view in bridge_mbt.split("\n") {
+    let line = line_view.to_owned()
+    if line.contains("::as") &&
+      line.contains("%identity") &&
+      !bridge_upcast_helper_line_is_valid(line.trim().to_owned(), arities) {
+      continue
+    }
+    keep_mbt.push(line)
+  }
+  let keep_mbti : Array[String] = []
+  for line_view in bridge_mbti.split("\n") {
+    let line = line_view.to_owned()
+    if line.has_prefix("declare pub") &&
+      line.contains("::as") &&
+      !bridge_upcast_helper_line_is_valid(line.trim().to_owned(), arities) {
+      continue
+    }
+    keep_mbti.push(line)
+  }
+  (keep_mbti.join("\n"), keep_mbt.join("\n"))
+}
+
+///|
 fn add_bridge_ergonomic_helper_decls(
   bridge_mbti : String,
   bridge_mbt : String,
@@ -1219,10 +1418,14 @@ fn render_bridge_public_wrapper_with_converters(
   let needs_conversion = bridge_fn_decl_needs_enum_conversion(
     fn_decl, converters,
   )
+  let lowered_params_src = bridge_lowered_async_callback_params_src(
+    fn_decl.params_src,
+  )
   if internal_name == "" ||
     (
       !needs_conversion &&
       !wrap_option_return &&
+      lowered_params_src is None &&
       internal_name == fn_decl.public_name
     ) {
     return None
@@ -1235,7 +1438,16 @@ fn render_bridge_public_wrapper_with_converters(
     } else {
       ""
     }
-    call_args.push(bridge_arg_expr_for_type(converters, arg_name, type_name))
+    match @parser.moonbit_async_callback_lowering(type_name) {
+      Some(lowering) =>
+        call_args.push(
+          @parser.moonbit_async_callback_glue_expr(arg_name, lowering),
+        )
+      None =>
+        call_args.push(
+          bridge_arg_expr_for_type(converters, arg_name, type_name),
+        )
+    }
   }
   let call_expr = if call_args.length() == 0 {
     internal_name + "()"
@@ -1250,8 +1462,12 @@ fn render_bridge_public_wrapper_with_converters(
   } else {
     bridge_return_expr_for_type(converters, fn_decl.return_type, call_expr)
   }
+  let public_params_src = match lowered_params_src {
+    Some(src) => src
+    None => fn_decl.params_src
+  }
   Some(
-    "pub fn \{fn_decl.public_name}(\{fn_decl.params_src}) -> \{fn_decl.return_type} {\n  \{body_expr}\n}",
+    "pub fn \{fn_decl.public_name}(\{public_params_src}) -> \{fn_decl.return_type} {\n  \{body_expr}\n}",
   )
 }
 
@@ -1311,13 +1527,18 @@ fn inject_bridge_public_type_aliases(
 }
 
 ///|
+/// Returns the rewritten `(bridge_mbt, bridge_mbti)` pair: the mbt gains
+/// the natural-name public wrappers, and any `declare pub fn` line whose
+/// wrapper lowered an async-callback param is rewritten to the lowered
+/// signature so the interface keeps describing the real public surface.
 fn add_bridge_public_wrappers(
   bridge_mbti : String,
   bridge_mbt : String,
-) -> String {
+) -> (String, String) {
   let mut next_bridge_mbt = inject_bridge_public_type_aliases(
     bridge_mbti, bridge_mbt,
   )
+  let mut next_bridge_mbti = bridge_mbti
   let enum_converters = collect_bridge_enum_converters(
     bridge_mbti, next_bridge_mbt,
   )
@@ -1335,7 +1556,12 @@ fn add_bridge_public_wrappers(
         let needs_option_wrap = bridge_fn_decl_needs_option_return_wrap(
           fn_decl, enum_converters, opaque_type_names,
         )
-        let internal_name = if (needs_conversion || needs_option_wrap) &&
+        let has_async_callback = bridge_fn_decl_has_async_callback_param(
+          fn_decl,
+        )
+        let internal_name = if (
+            needs_conversion || needs_option_wrap || has_async_callback
+          ) &&
           base_internal_name == fn_decl.public_name {
           base_internal_name + "_raw"
         } else {
@@ -1358,6 +1584,20 @@ fn add_bridge_public_wrappers(
               wrappers.push(wrapper)
               if needs_option_wrap {
                 used_option_return_wrap = true
+              }
+              match
+                bridge_lowered_async_callback_params_src(fn_decl.params_src) {
+                Some(lowered_src) => {
+                  let old_decl = "declare pub fn \{fn_decl.public_name}(\{fn_decl.params_src}) -> \{fn_decl.return_type}"
+                  let new_decl = "declare pub fn \{fn_decl.public_name}(\{lowered_src}) -> \{fn_decl.return_type}"
+                  if next_bridge_mbti.contains(old_decl) {
+                    next_bridge_mbti = next_bridge_mbti.replace(
+                      old=old_decl,
+                      new=new_decl,
+                    )
+                  }
+                }
+                None => ()
               }
             }
           }
@@ -1409,11 +1649,12 @@ fn add_bridge_public_wrappers(
       sections.push(helper)
     }
   }
-  if sections.length() == 0 {
+  let final_bridge_mbt = if sections.length() == 0 {
     next_bridge_mbt
   } else {
     next_bridge_mbt + "\n\n" + sections.join("\n\n")
   }
+  (final_bridge_mbt, next_bridge_mbti)
 }
 
 ///|
@@ -1448,12 +1689,18 @@ pub async fn emit_moonbit_ts_bridge_package_bundle_from_entry_path(
     bundle.decl_mbt,
     export_surface,
   )
-  let bridge_mbt = add_bridge_public_wrappers(base_bridge_mbti, bundle.ffi_mbt)
-  let public_bridge_mbti = expose_bridge_struct_decls_in_mbti(
-    base_bridge_mbti, bridge_mbt,
+  let (bridge_mbt, wrapped_bridge_mbti) = add_bridge_public_wrappers(
+    base_bridge_mbti,
+    bundle.ffi_mbt,
   )
-  let bridge_mbti = add_bridge_ergonomic_helper_decls(
+  let public_bridge_mbti = expose_bridge_struct_decls_in_mbti(
+    wrapped_bridge_mbti, bridge_mbt,
+  )
+  let pre_prune_mbti = add_bridge_ergonomic_helper_decls(
     public_bridge_mbti, bridge_mbt,
+  )
+  let (bridge_mbti, bridge_mbt) = prune_mismatched_upcast_helpers(
+    pre_prune_mbti, bridge_mbt,
   )
   {
     entry_path: bundle.entry_path,

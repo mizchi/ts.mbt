@@ -3902,7 +3902,10 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace hook tup
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn use_action_state(action : UseActionStateActionCallback, initialState : State, permalink : String?) -> UseActionStateResult = \"__ts_mbt_use_action_state\"",
+      // The `State | Promise<State>` action return normalizes to
+      // Promise[State], so the callback keeps its structural form (the
+      // package wrapper pass then lowers it to a MoonBit async fn).
+      "pub extern \"js\" fn use_action_state(action : (State) -> Promise[State], initialState : State, permalink : String?) -> UseActionStateResult = \"__ts_mbt_use_action_state\"",
     ),
   )
   assert_true(
@@ -5096,9 +5099,17 @@ test "bridge: FFI struct generation keeps generic method wrappers non-extern" {
     deprecated_members: [],
   }
   let actual = ffi_struct_decl_to_moonbit(state, iface)
+  // Members on generic-preserved receivers fetch a BOUND closure through
+  // a monomorphic getter — `(self.isFile)()` would extract the prototype
+  // method and call it with `this` undefined.
   assert_true(
     actual.contains(
-      "pub fn[T] StatsBase::isFile(self : StatsBase[T]) -> Bool {\n  (self.isFile)()\n}",
+      "extern \"js\" fn _stats_base_isFile_get_extern_js(target : JSValue) -> JSValue =\n  #| (o) => (...args) => o.isFile(...args)",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "pub fn[T] StatsBase::isFile(self : StatsBase[T]) -> Bool {\n  let field_fn : () -> Bool = unsafeCast(_stats_base_isFile_get_extern_js(unsafeCast(self)))\n  field_fn()\n}",
     ),
   )
   assert_false(actual.contains("pub extern \"js\" fn[T]"))
@@ -5409,10 +5420,11 @@ test "bridge: FFI type name subsets undeclared string-or-Params unions to String
 
 ///|
 test "bridge: FFI string-subset abstains when the Params type is declared" {
-  // `$ZodCheckMinLengthParams` sanitizes to `UnderscoreZodCheckMinLengthParams`;
-  // when that type is declared on the bridge surface the union keeps the
-  // JSValue fallback instead of silently dropping the reachable object form.
-  let state = ffi_string_subset_test_state(["UnderscoreZodCheckMinLengthParams"])
+  // `$ZodCheckMinLengthParams` sanitizes to `DollarZodCheckMinLengthParams`
+  // (`$` gets its own token so `$X` / `_X` cannot collide); when that type
+  // is declared on the bridge surface the union keeps the JSValue fallback
+  // instead of silently dropping the reachable object form.
+  let state = ffi_string_subset_test_state(["DollarZodCheckMinLengthParams"])
   let actual = ffi_type_name(
     state,
     @ast.TsType::Union([
@@ -5513,4 +5525,74 @@ test "bridge: struct JS converter passes class instances and preserves internals
   // Plain-object handles keep undeclared internals (valibot's `~run`)
   // via the spread; declared fields overwrite in place.
   assert_true(decl.contains("const result = { ...value };"))
+}
+
+///|
+test "bridge: promise layer section variants stay coherent" {
+  // The self-contained layer awaits via the raw CPS intrinsic and
+  // surfaces rejections as the matchable JsRejection error.
+  assert_true(
+    bridge_promise_wait_self_contained_section.contains("%async.suspend"),
+  )
+  assert_true(
+    bridge_promise_wait_self_contained_section.contains("err(JsRejection(e))"),
+  )
+  // The moonbitlang/async integration variant delegates to js_async
+  // (official coroutine scheduling + AbortController cancellation) and
+  // normalizes through Promise.resolve so `.wait()` stays as lenient as
+  // JS `await` for TS-declared-Promise-but-bare-value returns.
+  assert_true(
+    bridge_promise_wait_async_integration_section.contains("Promise::std"),
+  )
+  assert_true(
+    bridge_promise_wait_async_integration_section.contains(
+      "@js_async.AbortController",
+    ),
+  )
+  assert_true(
+    bridge_promise_wait_async_integration_section.contains("Promise.resolve(p)"),
+  )
+  assert_false(
+    bridge_promise_wait_async_integration_section.contains("%async.suspend"),
+  )
+  // Both modes keep the same entry surface: wait + run_async, plus the
+  // JsRejection declaration for source compatibility. The integration
+  // variant never constructs JsRejection (rejections raise @js_async's
+  // error), so it must be pub(all) to stay unused-constructor-clean.
+  for
+    section in [
+      bridge_promise_wait_self_contained_section, bridge_promise_wait_async_integration_section,
+    ] {
+    assert_true(section.contains("pub async fn[T] Promise::wait"))
+    assert_true(
+      section.contains("pub fn run_async(f : async () -> Unit raise)"),
+    )
+    // The MoonBit-async -> JS-promise direction: async callbacks lower
+    // through this in both modes, so it must exist with an identical
+    // signature in each.
+    assert_true(
+      section.contains(
+        "pub fn[T] Promise::from_async(f : async () -> T raise) -> Promise[T]",
+      ),
+    )
+    assert_true(section.contains("suberror JsRejection"))
+  }
+  // The integration-mode run_async must spawn through @js_async: a raw
+  // CPS start has no coroutine context and panics on the first
+  // integration-mode wait inside `f`.
+  assert_true(
+    bridge_promise_wait_async_integration_section.contains(
+      "@js_async.Promise::from_async",
+    ),
+  )
+  assert_true(
+    bridge_promise_wait_self_contained_section.contains(
+      "pub suberror JsRejection",
+    ),
+  )
+  assert_true(
+    bridge_promise_wait_async_integration_section.contains(
+      "pub(all) suberror JsRejection",
+    ),
+  )
 }

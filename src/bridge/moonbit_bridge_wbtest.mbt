@@ -1167,7 +1167,7 @@ test "bridge: top-level optional extern demotes to raw plus Option wrapper" {
     #|pub type JSValue
     #|
     #|pub extern "js" fn and_(conditions : Array[SQLWrapper?]) -> SQL[JSValue]? = "__ts_mbt_and"
-  let rewritten = add_bridge_public_wrappers(bridge_mbti, bridge_mbt)
+  let (rewritten, _) = add_bridge_public_wrappers(bridge_mbti, bridge_mbt)
   assert_true(rewritten.contains("extern \"js\" fn and__raw("))
   assert_true(
     rewritten.contains(
@@ -1175,4 +1175,169 @@ test "bridge: top-level optional extern demotes to raw plus Option wrapper" {
     ),
   )
   assert_true(rewritten.contains("fn[T] __ts_mbt_wrap_option_return"))
+}
+
+///|
+test "bridge: async-callback params lower to async fns with from_async glue" {
+  let bridge_mbti =
+    #|declare pub type JSValue
+    #|declare pub type Promise[X]
+    #|declare pub fn useStateAction(action : (JSValue, JSValue) -> Promise[JSValue], initialState : JSValue) -> JSValue
+    #|declare pub fn subscribe(listener : () -> Promise[Unit]) -> Unit
+    #|declare pub fn keep(cb : (JSValue) -> JSValue, opt : ((JSValue) -> Promise[JSValue])?) -> Unit
+  let bridge_mbt =
+    #|#external
+    #|pub type JSValue
+    #|
+    #|#external
+    #|pub type Promise[X]
+    #|
+    #|pub extern "js" fn use_state_action(action : (JSValue, JSValue) -> Promise[JSValue], initialState : JSValue) -> JSValue = "useStateAction"
+    #|
+    #|pub extern "js" fn subscribe(listener : () -> Promise[Unit]) -> Unit = "subscribe"
+    #|
+    #|pub extern "js" fn keep(cb : (JSValue) -> JSValue, opt : ((JSValue) -> Promise[JSValue])?) -> Unit = "keep"
+  let (mbt, mbti) = add_bridge_public_wrappers(bridge_mbti, bridge_mbt)
+  // Natural-name wrapper: public signature takes the MoonBit async fn,
+  // the demoted extern keeps the raw promise-returning callback, glue
+  // converts through Promise::from_async.
+  assert_true(
+    mbt.contains(
+      "pub fn useStateAction(action : async (JSValue, JSValue) -> JSValue raise, initialState : JSValue) -> JSValue {",
+    ),
+  )
+  assert_true(
+    mbt.contains(
+      "use_state_action(fn(__ts_mbt_cb_a0, __ts_mbt_cb_a1) { Promise::from_async(async fn() raise { action(__ts_mbt_cb_a0, __ts_mbt_cb_a1) }) }, initialState)",
+    ),
+  )
+  // A snake-named export needs the `_raw` demotion so the lowered
+  // wrapper can keep the public name; zero-arg callbacks lower too.
+  assert_true(mbt.contains("extern \"js\" fn subscribe_raw("))
+  assert_true(
+    mbt.contains(
+      "pub fn subscribe(listener : async () -> Unit raise) -> Unit {\n  subscribe_raw(fn() { Promise::from_async(async fn() raise { listener() }) })\n}",
+    ),
+  )
+  // Optional callbacks lower too — Option::map glue keeps Some/None
+  // structure while converting the payload; the non-promise callback
+  // param stays raw inside the same signature.
+  assert_true(mbt.contains("extern \"js\" fn keep_raw("))
+  assert_true(
+    mbt.contains(
+      "pub fn keep(cb : (JSValue) -> JSValue, opt : (async (JSValue) -> JSValue raise)?) -> Unit {\n  keep_raw(cb, opt.map(fn(__ts_mbt_cb_f) { fn(__ts_mbt_cb_a0) { Promise::from_async(async fn() raise { __ts_mbt_cb_f(__ts_mbt_cb_a0) }) } }))\n}",
+    ),
+  )
+  // The interface follows the lowered public surface.
+  assert_true(
+    mbti.contains(
+      "declare pub fn useStateAction(action : async (JSValue, JSValue) -> JSValue raise, initialState : JSValue) -> JSValue",
+    ),
+  )
+  assert_true(
+    mbti.contains(
+      "declare pub fn subscribe(listener : async () -> Unit raise) -> Unit",
+    ),
+  )
+  assert_false(
+    mbti.contains(
+      "declare pub fn useStateAction(action : (JSValue, JSValue) -> Promise[JSValue]",
+    ),
+  )
+  assert_true(
+    mbti.contains(
+      "declare pub fn keep(cb : (JSValue) -> JSValue, opt : (async (JSValue) -> JSValue raise)?) -> Unit",
+    ),
+  )
+}
+
+///|
+test "parser: async callback lowering shapes" {
+  // Plain, zero-arg, optional, and rejected shapes.
+  match @parser.moonbit_async_callback_lowering("(JSValue) -> Promise[Unit]") {
+    Some(lowering) => {
+      assert_eq(lowering.lowered_type, "async (JSValue) -> Unit raise")
+      assert_eq(lowering.arity, 1)
+      assert_false(lowering.is_optional)
+    }
+    None => fail("expected plain callback to lower")
+  }
+  match @parser.moonbit_async_callback_lowering("() -> Promise[String]") {
+    Some(lowering) => {
+      assert_eq(lowering.lowered_type, "async () -> String raise")
+      assert_eq(lowering.arity, 0)
+    }
+    None => fail("expected zero-arg callback to lower")
+  }
+  match
+    @parser.moonbit_async_callback_lowering(
+      "((String, Map[String, JSValue]) -> Promise[Array[JSValue]])?",
+    ) {
+    Some(lowering) => {
+      assert_eq(
+        lowering.lowered_type,
+        "(async (String, Map[String, JSValue]) -> Array[JSValue] raise)?",
+      )
+      assert_eq(lowering.arity, 2)
+      assert_true(lowering.is_optional)
+    }
+    None => fail("expected optional callback to lower")
+  }
+  // Not lowered: non-promise return, named alias, optional payload,
+  // bare promise value, higher-order function returning a callback.
+  assert_true(
+    @parser.moonbit_async_callback_lowering("(JSValue) -> JSValue") is None,
+  )
+  assert_true(@parser.moonbit_async_callback_lowering("SomeCallback") is None)
+  assert_true(
+    @parser.moonbit_async_callback_lowering("(JSValue) -> Promise[Unit]?")
+    is None,
+  )
+  assert_true(
+    @parser.moonbit_async_callback_lowering("Promise[JSValue]") is None,
+  )
+  assert_true(
+    @parser.moonbit_async_callback_lowering("() -> (JSValue) -> Promise[Unit]")
+    is None,
+  )
+}
+
+///|
+test "bridge: prune upcast helpers whose base arity mismatches the emitted decl" {
+  let bridge_mbti =
+    #|declare pub type Widget[T]
+    #|declare pub type Plain
+    #|declare pub fn[T] Fancy::asWidget(self : Fancy[T]) -> Widget[T]
+    #|declare pub fn[T] Broken::asWidget(self : Broken[T]) -> Widget[T, T, T]
+    #|declare pub fn Handle::asPlain(self : Handle) -> Plain
+    #|declare pub fn Ghost::asMissing(self : Ghost) -> Missing
+  let bridge_mbt =
+    #|pub(all) struct Widget[T] {
+    #|  value : T
+    #|}
+    #|
+    #|#external
+    #|pub type Plain
+    #|
+    #|pub fn[T] Fancy::asWidget(self : Fancy[T]) -> Widget[T] = "%identity"
+    #|
+    #|pub fn[T] Broken::asWidget(self : Broken[T]) -> Widget[T, T, T] = "%identity"
+    #|
+    #|pub fn Handle::asPlain(self : Handle) -> Plain = "%identity"
+    #|
+    #|pub fn Ghost::asMissing(self : Ghost) -> Missing = "%identity"
+  let (pruned_mbti, pruned_mbt) = prune_mismatched_upcast_helpers(
+    bridge_mbti, bridge_mbt,
+  )
+  // Matching arity and zero-arity opaque targets survive; sanitization
+  // collisions (arity mismatch) and unemitted targets are dropped from
+  // BOTH surfaces.
+  assert_true(pruned_mbt.contains("Fancy::asWidget"))
+  assert_true(pruned_mbt.contains("Handle::asPlain"))
+  assert_false(pruned_mbt.contains("Broken::asWidget"))
+  assert_false(pruned_mbt.contains("Ghost::asMissing"))
+  assert_true(pruned_mbti.contains("Fancy::asWidget"))
+  assert_true(pruned_mbti.contains("Handle::asPlain"))
+  assert_false(pruned_mbti.contains("Broken::asWidget"))
+  assert_false(pruned_mbti.contains("Ghost::asMissing"))
 }

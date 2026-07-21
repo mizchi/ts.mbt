@@ -213,3 +213,62 @@ test "simplify_union: deeply nested unions are flattened" {
   assert_true(simplified.contains(Number))
   assert_true(simplified.contains(Boolean))
 }
+
+///|
+test "classify_promise_like_union: T | Promise<T> shapes" {
+  // The canonical sync-or-async handler return (axios interceptors,
+  // middleware): payload surfaces, arm order does not matter, and
+  // PromiseLike arms count as promise arms.
+  assert_eq(
+    classify_promise_like_union(
+      Union([Named("V"), Applied("Promise", [Named("V")])]),
+    ),
+    Some(Named("V")),
+  )
+  assert_eq(
+    classify_promise_like_union(Union([Applied("Promise", [String_]), String_])),
+    Some(String_),
+  )
+  assert_eq(
+    classify_promise_like_union(
+      Union([
+        Named("V"),
+        Applied("Promise", [Named("V")]),
+        Applied("PromiseLike", [Named("V")]),
+      ]),
+    ),
+    Some(Named("V")),
+  )
+  // Rejected shapes: mismatched payloads, extra non-promise arms, no
+  // promise arm at all, promise-only unions, non-unions.
+  assert_eq(
+    classify_promise_like_union(
+      Union([Named("V"), Applied("Promise", [String_])]),
+    ),
+    None,
+  )
+  assert_eq(
+    classify_promise_like_union(
+      Union([Named("V"), String_, Applied("Promise", [Named("V")])]),
+    ),
+    None,
+  )
+  assert_eq(classify_promise_like_union(Union([Named("V"), String_])), None)
+  assert_eq(
+    classify_promise_like_union(Union([Applied("Promise", [Named("V")])])),
+    None,
+  )
+  assert_eq(classify_promise_like_union(Applied("Promise", [Named("V")])), None)
+  // The normalizer rewrites matches to Promise<T> and passes the rest
+  // through untouched.
+  assert_eq(
+    normalize_promise_like_union_return(
+      Union([Named("V"), Applied("Promise", [Named("V")])]),
+    ),
+    Applied("Promise", [Named("V")]),
+  )
+  assert_eq(
+    normalize_promise_like_union_return(Union([Named("V"), String_])),
+    Union([Named("V"), String_]),
+  )
+}

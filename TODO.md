@@ -1468,7 +1468,619 @@ Gate coverage: the axios build smoke now chains
 function's default-size and explicit-size paths. Budgets recalibrated
 (the Promise layer + constructors add lines/JSValue refs per package).
 
-## Performance Tuning Round 1 (2026-07-19)
+MoonBit-native async integration (follow-up, same day): the JS backend
+compiles `async fn` to CPS (an async fn value crosses to JS as a
+2-continuation function — probed empirically; a GENERIC
+`%async.suspend` intrinsic ICEs moonc v0.10.4, so the intrinsic stays
+monomorphic on JSValue and only the public wrapper is generic). Every
+package with a Promise surface now also ships:
+
+- `Promise::wait(self : Promise[T]) -> T` — suspends the enclosing
+  `async fn` until the promise settles; `await` in all but name.
+- `pub suberror JsRejection { JsRejection(JSValue) }` — a rejected
+  promise raises it, so `.wait() catch { JsRejection(e) => ... }`
+  handles JS failures as ordinary MoonBit errors.
+- `run_async(f : async () -> Unit)` — kicks an async fn from a sync
+  context (main / tests); unhandled async errors exit non-zero.
+
+Verified end-to-end on real axios: `all(vals).wait()` resolves inside
+an async fn, and a connection-refused `get` surfaces as a caught
+`JsRejection`. The axios build smoke covers both paths via
+`run_async(smoke_async)`. The signature surface stays `-> Promise[T]`
+(non-breaking; fire-and-forget and combinator use keep the raw
+promise) — `.wait()` is the conversion point into async MoonBit.
+
+moonbitlang/async integration mode (follow-up): when the consumer
+module (nearest manifest walking up from the OUTPUT dir; `_build/`
+outputs excluded, same rationale as the package.json wiring guard)
+depends on `moonbitlang/async`, the emitter swaps the self-contained
+`Promise::wait` for a delegation to `moonbitlang/async/js_async` —
+which 0.18+ ships exactly for this: an `#external Promise[X]` with a
+coroutine-scheduled `wait(abort_controller?)`. The generated package
+gains `Promise::std()` (identity cast to `@js_async.Promise`) and the
+`moon.pkg` import; `run_async` / `then` / `then_catch` / `map` stay.
+Consequences, all probe-verified E2E on real axios: `async fn main`
+works directly (the compiler requires importing moonbitlang/async for
+async main — this IS the seamless entry, no `run_async` needed),
+`@async.with_timeout` composes over bridge promises, and cancellation
+plumbs through the official `AbortController`. Adding the dep to
+moon.mod + re-running `ts2mbt generate` is the whole upgrade. Both
+section texts live side by side in moonbit_js_ffi.mbt so the modes
+cannot drift. Probes also confirmed the raw-CPS self-contained `wait`
+keeps working under the @async event loop, and that a typealias-based
+deep integration (`pub typealias @js_async.Promise as Promise`)
+compiles and runs — deferred because methods cannot be defined on a
+foreign aliased type, which would fracture the then/map surface.
+
+Cross-API validation (same day): a four-package showcase app
+(moonbitlang/async consumer) runs `async fn main` over node:fs
+promises (write -> read roundtrip), jose (generateSecret -> SignJWT
+builder chain -> sign -> 3-segment JWT), hono (in-process
+`app.request` roundtrip, status 200 + body), and axios.all — exit 0,
+no run_async, no hand-written awaits. The walkthrough surfaced and
+fixed two real generator/runtime gaps:
+
+- `<fn>.__promisify__` declarations (@types/node's alias for "the
+  promisified form of fn") lowered to a literal runtime member access
+  that does not exist — a guaranteed TypeError on all 45 node:fs
+  `*Promisify` surfaces. `ffi_js_member_access_or_promisify` now
+  lowers them to `util.promisify(fn)` (honoring promisify.custom),
+  with the `node:util` import injected only when used. The node:fs
+  build smoke covers write/readFilePromisify + `.wait()` end-to-end
+  via `run_async`.
+- `@js_async.Promise::wait` calls `.then` on the raw value, but
+  TS-declared Promise returns are sometimes plain values at runtime
+  (hono's sync-handler `request` returns a bare Response). The
+  integration-mode `wait` now normalizes through `Promise.resolve`
+  first, matching JS `await` leniency (the self-contained wait was
+  already lenient via its then_catch glue).
+
+Remaining friction observed in the showcase (recorded, not blocking):
+hono's `fetch` / `request` returns are JSValue-typed (one unsafeCast
+to `Promise[...]` before waiting), union params take nested
+constructors (`PathOrFileDescriptor::PathLikeValue(PathLike::
+StringValue(...))` — flat convenience constructors like the existing
+`path_like_from_string` hooks cover node:fs but not every package),
+and web-platform types (Response.status / .text) still need one-line
+externs until a lib.dom prelude exists.
+
+Run-verification tests (2026-07-20): the arc is now pinned by tests
+that RUN the converted code, not just inspect it. A wbtest keeps the
+two Promise-layer section texts coherent (self-contained =
+`%async.suspend` + JsRejection-raising rejections; integration =
+`Promise::std` + AbortController + `Promise.resolve` leniency, no
+suspend intrinsic; both share wait / run_async / JsRejection). The
+realworld gate grew `verify_async_integration_app`: a fresh consumer
+app depending on moonbitlang/async vendors axios + hono, asserts the
+generated bridges actually switched to integration mode, then builds
+warning-clean (under warning_guard) and executes `async fn main`
+covering awaited `axios.all`, `@async.with_timeout` composition,
+AbortController plumbing, and the bare-Response leniency on hono's
+sync `request`. Fallout: integration-mode `JsRejection` is `pub(all)`
+(nothing constructs it in that mode — rejections raise `@js_async`'s
+error), and the node_fs smoke unlinks its sync scratch file instead
+of leaving it at the repo root.
+
+Async-callback lowering (2026-07-20): the REVERSE direction now works —
+TS APIs that RECEIVE `(...) => Promise<T>` callbacks (React 19
+`useActionState`-style actions, promise-returning handlers) accept a
+MoonBit `async fn` directly. Top-level fn params rendered as
+`(A, B) -> Promise[T]` lower to `async (A, B) -> T raise` on the
+natural-name public wrapper (and in `bridge.mbti`), glued back through
+a new `Promise::from_async` emitted in both promise layers. Design
+facts, all probe-verified before landing:
+
+- MoonBit JS CPS ABI: an async fn that completes WITHOUT suspending
+  calls neither continuation — it returns `Result[Option[T], Error]`
+  directly. A naive `new Promise((res, rej) => f(args, res, rej))`
+  wrapper silently drops synchronous raises. The self-contained
+  `Promise::from_async` therefore performs resolve/reject INSIDE a
+  noraise Unit wrapper async fn, so the trampoline can ignore the
+  sync-completion return value safely.
+- Integration mode must spawn: a callback CPS-started raw from JS has
+  no coroutine context and `@js_async.Promise::wait` panics.
+  `@js_async.Promise::from_async` (which `@coroutine.spawn`s — its doc
+  marks it "for exporting MoonBit code to JavaScript") is the delegate;
+  the integration `run_async` now also spawns through it (the previous
+  raw-CPS trampoline would panic on the first integration-mode wait).
+- `run_async` accepts `async () -> Unit raise` in both modes and
+  reports errors through an explicit catch (console.error + exit 1) —
+  synchronous raises included.
+- Not lowered (recorded friction): optional callbacks
+  (`((...) -> Promise[T])?`), interface/struct-field callbacks, class
+  method callback params, and union-typed handler slots
+  (`V | Promise<V>`, axios interceptors).
+
+Tests: bridge wbtest pins the lowering (wrapper + glue + `_raw`
+demotion + mbti rewrite + non-promise/optional callbacks staying raw)
+and the section coherence (`Promise::from_async` identical signature in
+both layers, integration run_async spawning via @js_async). The
+realworld gate grew `verify_async_callback_app` twice (self-contained +
+integration): a `useStateAction`-shaped fixture package is vendored,
+surface markers asserted, then the app RUNS a MoonBit async fn as the
+action — awaited TS promise inside the callback, two dispatches folding
+state, and a synchronous raise surfacing as a caught rejection.
+
+Round 2 (same day) — remaining callback positions: the lowering moved
+into a shared `@parser.moonbit_async_callback_lowering` helper (one
+detector for the decl `.mbti` and ffi `bridge.mbt` renderings, so the
+divergence gate keeps them identical) and now also covers:
+
+- optional callbacks `((...) -> Promise[T])?` -> `(async (...) -> T
+  raise)?` with `Option::map` glue (Some/None structure preserved);
+- interface methods / function-field method wrappers, both receiver
+  shapes: generic receivers via the `(self.field)(glue)` wrapper,
+  non-generic receivers via a forced extern/wrapper pair whose extern
+  keeps the raw promise-returning callback types;
+- class methods (instance + static, preserve and extern-pair paths),
+  reusing the enum-param pair mechanics.
+
+Struct FIELD types deliberately stay raw: fields are identity views
+over JS objects (a stored JS function is not CPS-callable), so the
+conversion point is the method wrapper / `Promise::from_async` at
+construction time. Budget note: one playwright promise-callback
+signature moved from the tuple/array bucket into callback/function
+(885->886 / 170->169, total unchanged) — recalibrated. The gate
+fixture package grew `onCommit` (generic interface method), `Notifier`
+(non-generic interface method), `TaskQueue` (class methods), and
+`runWithFallback` (optional callback, Some + None) — all RUN in both
+promise layers.
+
+Round 3 (same day) — the last two recorded frictions:
+
+- Union handler returns `V | Promise<V>` (axios-interceptor shape,
+  React 19 `useActionState`): a new
+  `@checker.classify_promise_like_union` /
+  `normalize_promise_like_union_return` pair rewrites callback RETURN
+  unions of exactly {T, Promise<T>/PromiseLike<T>} to `Promise[T]` in
+  every Func-type renderer of both layers (ffi inline + alias, decl
+  inline + method parts). Sound both ways because `Promise::wait` is
+  resolve-lenient in both modes, and it lets the async-callback
+  lowering fire on sync-or-async slots. React's `useActionState`
+  scaffold surface is now literally `action : async (State) -> State
+  raise` (three hook-tuple test expectations updated from the opaque
+  `UseActionStateActionCallback` form).
+- Short-owner opaque callback synthesis: `decl_rewrite_inline_callback_
+  param_type` now SKIPS the `<Owner><Param>Callback` substitution when
+  the callback returns promise-like, so `runAction`-style exports keep
+  the structural form and lower like everything else.
+
+Fallout fixed along the way: the round-2 property-get extern for
+sanitized members deduped by snake_case and collided on playwright's
+`$eval` / `$$eval` — the getter name now embeds the field name
+verbatim (unique per struct). Corpus effect of the normalization is a
+net naturalization win — zod JSValue fallback 1901 -> 1631 lines and
+JSValue-typed functions 607 -> 525, with smaller wins in valibot /
+axios / marked / commander / react-router — 13 budget rows
+recalibrated from a nobudget collection run. Gate fixture grew
+`Interceptor` (union-return `use` handler — also regression-covers the
+sanitized-member getter) and `runAction`; both RUN in both promise
+layers.
+
+Round 4 (same day) — checker-driven JSValue concretization: the
+member-level conditional case is CLOSED. `Applied(GenericIface, args)`
+references whose members hide behind conditionals over the interface's
+own type params now specialize into synthesized monomorphic interfaces
+(`decl_conditional_member_interface_spec`, mirroring the
+exclusive-union alias synthesis: shared by the lowering and the
+collection walk, fires only when EVERY conditional member decides).
+The decision is a decl-layer structural `extends` (name equality ->
+true; a required target field missing from the source's
+extends-chain-merged fields -> false; anything else undecided) — the
+shared checker `extends_decision` is deliberately untouched since it
+feeds the TS7 oracle. A resolved branch then rides the whole earlier
+pipeline: alias inlining -> `| null` optional collapse -> union-return
+normalization -> async-callback lowering. Net effect on real axios:
+
+  interceptors.use : JSValue   (before)
+  AxiosInterceptorManagerInternalAxiosRequestConfig::use_(
+    self, (async (InternalAxiosRequestConfig[JSValue]) ->
+    InternalAxiosRequestConfig[JSValue] raise)?, ...)   (after)
+
+and the realworld axios smoke now registers a MoonBit async fn as a
+REQUEST INTERCEPTOR on a real axios instance (axios awaits the
+from_async promise; a marker count proves exactly one run; the
+connection-refused rejection still catches). A recursion guard
+(in-progress set + first-registration-only field walks) keeps
+self-referential instantiations from looping — date-fns crashed the
+first version. Fixture: `conditional-member-entry.d.ts` pins both
+branch outcomes (Payload lacks Ack's required field -> async handler
+slot; Ack extends itself -> sync callback).
+
+Surveyed but NOT concretizable via the checker (recorded): zod's
+remaining JSValue params are TS `unknown` (honest widening); playwright
+residuals are anonymous OBJECT-LITERAL option params (needs synthesized
+option structs, an emitter feature); overloaded members still widen
+(`interceptors` property itself is an anonymous-object type — one typed
+extern bridges to the specialized manager until then).
+
+Round 5 (same day) — extends upcast helpers, closing the dominant
+naturalness friction from the 3-package evaluation (an idiomatic
+zod+axios+node:fs app needed 7 escape hatches, of which inheritance
+casts were the largest class). Interfaces whose `extends` bases do NOT
+flatten (generic roots over generic bases — ZodObject over its zod
+core base — and class bases — `interface AxiosInstance extends Axios`)
+now emit sound `%identity` upcast helpers named after the type-guard
+convention: `instance.asAxios().get(...)` replaces
+`(unsafeCast(instance) : Axios).get(...)`. Pieces:
+
+- `decl_unflattened_interface_bases` records skipped bases on the
+  cloned interfaces (both cloners), mirroring the flatten decision in
+  `append_interface_origin_fields`;
+- both emitters (ffi struct decl + decl interface decl) render the
+  helper with the base reference clamped to the EMITTED arity (source
+  `_ZodType<A,B,C>` vs emitted `UnderscoreZodType[Internals]`);
+- a text-level `prune_mismatched_upcast_helpers` pass drops helpers
+  whose base reference still cannot match the surviving declaration —
+  zod's `$ZodType`/`_ZodType` SANITIZATION COLLISION (both become
+  `UnderscoreZodType` with different arities) makes some mismatches
+  undetectable earlier; the prune keeps mbt and mbti in lockstep.
+
+Budget note: helpers whose base type args widen to JSValue count into
+the fallback metrics (react +14 "JSValue functions" are all usable
+`asComponent`-style helpers; valibot +68 surface lines likewise) — 10
+rows recalibrated. Naturalness evaluation delta: the 3-package app's
+escape hatches drop 7 -> 6 (asAxios), with ZodObject->Schema still
+needing a cast because zod's base chain hides behind the sanitization
+collision. Remaining hatches ranked: anonymous object-literal
+properties/params, overloaded members, JSValue value slots, and the
+zod name collision (needs collision-aware type identifiers).
+
+Round 6 (same day) — anonymous object-literal synthesis, the top-ranked
+remaining hatch. `Object(fields)` types in member positions now
+synthesize named structs (`<Owner><Member>` for properties,
+`<Owner><Method><Param>` / `<Owner><Member>Options` for params,
+`...Result` for returns), registered through a per-emission registry
+(populated during cloning, drained after interface AND class cloning in
+both layers — the decl emitter runs first in a package bundle so the
+ffi drain sees a superset, and the expose pass evens the surfaces).
+Rewrite sites: interface fields (`append_lowered_interface_field`),
+class properties (`clone_class_property_in_scope`), class method
+params (`clone_class_method_in_scope`), and Func-typed member
+params/returns. Guards: literal keys only, 1..24 fields, same-name
+different-shape collisions stay widened.
+
+Everything composes: axios's `interceptors` property becomes
+`AxiosInterceptors { request : AxiosInterceptorManagerInternal
+AxiosRequestConfig; ... }` — the round-4 conditional-member
+specialization landing inside a round-6 synthesized struct — so the
+fully generated chain
+`instance.asAxios().get_axios_interceptors().request.use_(Some(async
+fn(config) { ... }))` runs with ZERO hand externs. playwright options
+params become real structs with their literal-union fields enum-ized
+(`ElementHandle::click(self, ElementHandleClickOptions?)`, 255
+synthesized option structs).
+
+Corpus effect (28 budget rows recalibrated): playwright JSValue-typed
+functions 411 -> 200 and JSValue surface 1336 -> 827; zod 526 -> 485;
+node:crypto 24 -> 16; net -639 JSValue surface lines across changed
+rows (small increases in valibot / pino / react-router / lodash are
+the synthesized structs' own JSValue-typed fields — new usable
+surface, not lost signal). Naturalness evaluation: the 3-package app
+drops to 5 escape hatches (interceptors extern eliminated).
+
+Round 7 (same day) — overloaded-member merging + collision-free type
+identifiers, the two hatches picked from the round-6 ranking.
+
+Overload merging (`src/bridge/moonbit_decl.mbt`): the canonical TS
+overload pattern — same member re-declared with extra TRAILING params
+and the same return type — previously kept only the first declaration
+(rest silently dropped, callers lost the richer arity). Now
+`decl_merge_overload_param_lists` merges into the LONGEST signature
+with the extra params optionalized (`decl_optionalize_type` wraps in
+`| undefined` unless already optional-like), applied in
+`append_class_method_once` (guards: same key / static / return, no
+method-level type params) and in `append_lowered_interface_field`
+(which was restructured so lowering + inline-object rewrites compute
+the final type BEFORE the merge attempt). `Store::get(key)` +
+`get(key, fallback)` becomes `get(self, key : String, fallback :
+String?)`. Fixture `member-overload-entry.d.ts` + wbtest cover the
+interface and class forms; the mitt gate smoke needed `emit(ev,
+Some(ev))` since `emit`'s second param is now merged-optional.
+
+Collision-free identifiers: `$` in TS type names now sanitizes to a
+distinct `Dollar` token in BOTH identifier paths (`ffi_type_identifier`
+/ `moonbit_type_identifier`) instead of the generic `Underscore`
+mangle, so zod's `$ZodType` (DollarZodType) no longer collides with
+`_ZodType` (UnderscoreZodType). That collision was what forced the
+round-5 prune to drop zod's upcast helpers; with distinct names the
+helpers survive with precise type args and the fully generated chain
+`user_schema.asUnderscoreZodType().asZodType().safeParse(input, None)`
+runs end-to-end — the last hand `unsafeCast` in the eval app's zod
+path is gone. The zod domain glue return type follows the rename
+(`Core_DollarZodLooseShape`).
+
+Gates: full suite 2532 green, all scaffold/fixture/example/realworld
+gates green, budget recalibration ZERO drift (the merges and renames
+net out). Naturalness evaluation: the 3-package app drops to 4 escape
+hatches. Remaining ranked: mutating config headers inside interceptors
+(AxiosHeaders methods), Buffer.toString, JSValue value slots (zod
+shape values need per-value casts).
+
+Round 8 (same day) — checker-driven JSValue concretization round 2:
+`typeof` value queries. Mining the generated corpus surfaced one
+dominant inferable cluster: `readonly reference: typeof someFunction`
+members (valibot declares ~190, axios exposes `typeof Axios` /
+`typeof isCancel` style statics, glob/yaml similar) all collapsed to
+bare `JSValue` because `typeof` of a GENERIC or overloaded function
+never resolved. Fixes, all in the decl lowering:
+
+- `typeof_func_decl_to_func_type` substitutes each type parameter by
+  its declared bound (`Any` when unbounded; bounds may reference
+  earlier params, so they resolve left-to-right) before lowering, so
+  a generic function's `typeof` still yields a concrete callable
+  shape (`typeof ip` -> `() -> IpAction[String, JSValue]`).
+- the resolver now collects sibling overloads (`find_func_decls`) and
+  merges the round-7 trailing-param pattern into one signature before
+  falling back to the least-widening pick.
+- `typeof_value_type_is_stable` learned that `null` / `undefined` /
+  `never` are CONCRETE types (an `Action<T, undefined>` type argument
+  was destabilizing the whole reference), and gained an
+  `allow_widened~` mode — used whenever the resolved shape is a
+  callable — under which `any` / `unknown` / `object` slots are
+  acceptable: they render as `JSValue` params while arity and
+  callability stay real.
+- `ReturnType<...>` / `Parameters<...>` lower their operand FIRST, so
+  `ReturnType<typeof addPairToJSMap>` reduces through the resolved
+  function type. This also kills a real leak: yaml's `Pair::toJSON`
+  previously rendered `-> ReturnType` backed by a synthesized
+  `declare pub type ReturnType` opaque extern.
+- ambient classes (`declare class`) parse `static readonly X = "lit"`
+  literal initializers into literal TYPES (parser_function.mbt was
+  discarding the initializer expression) — string/bool/int literals
+  only, mirroring tsc's own inference so the TS7 oracle is safe by
+  construction; yaml's `Scalar.BLOCK_FOLDED` getters now return
+  single-case enums instead of `JSValue`. A bridge-side
+  `decl_infer_literal_property_type` covers runtime-class clones the
+  same way via `static_field_inits`.
+
+Fixture `typeof-inference-entry.d.ts` + wbtest pin all three
+behaviors. Oracle: TP 2338 / FP 0 / PFLEGAL 0 / TN 1750 — byte-equal
+to the recorded baseline. Corpus (5 budget rows recalibrated): axios
+JSValue functions 61 -> 37 and surface 190 -> 166; yaml 67 -> 62 /
+177 -> 172; valibot unknown/any 1166 -> 926 (-240) with surface
+1738 -> 1858 — the resolved `reference` members now emit callable
+method decls whose `IpAction[String, JSValue]` rendering the cause
+heuristic files under tuple/array, i.e. the same widening now ships
+usable callable surface instead of a bare `JSValue` slot.
+
+Remaining inferable clusters recorded for later rounds: `expects:
+null` literal members (~104 in valibot) still widen — typing them
+needs an opaque null representation decision; value-or-function
+unions (`ErrorMessage<T> = string | ((issue) => string)`, ~157
+`message` members) need an untagged-union construction story.
+
+Round 9 (same day) — both recorded clusters landed.
+
+Instantiated generic union aliases: NON-generic `string | fn` union
+aliases already lowered to tagged-union enums with constructors and JS
+converter glue; the gap was the APPLIED generic form
+(`ErrorMessage<Issue>`), which inlined to an anonymous union that the
+inline synthesizer refuses (function members) and so widened to
+JSValue. `decl_instantiated_union_alias_name` now names the
+instantiation (`ErrorMessageOfIssue` via the utility suffix namer)
+when the substituted+lowered body is a union WITH a function member
+that `tagged_union_type_alias_decl` accepts, registering it in a
+`decl_synthesized_union_aliases` registry (reset at decl-emit start;
+drained by the decl emitter after all cloning and merged into the
+FFI's exported tagged unions — decl runs first in a bundle, mirroring
+the round-6 object-struct registry). Hooked into both the same-module
+`applied_type_alias` inline path and the qualified/cross-module
+`decl_inline_qualified_applied_alias`, plus the collection-walk
+mirror so interfaces referenced ONLY from the enum's function-typed
+case payloads still get their declarations (valibot's ArrayIssue /
+VariantIssue / MapIssue / RecordIssue / SetIssue compiled only after
+this). The case-payload dependency scan got a shared helper
+(`tagged_union_case_named_refs`) that walks Func params/returns —
+both the decl opaque-companion list and the FFI external-type marking
+previously only saw bare `Named` / `Array(Named)` payloads.
+
+`null` literal members: a member typed exactly `null` (valibot's
+`readonly expects: null`, ~98 members) now references a shared opaque
+`JSNull` companion instead of widening — referenced-but-undeclared
+names already get their opaque decl emitted by both layers, so the
+representation costs one `declare pub type JSNull` line; the name is
+exempted from the emit-time unresolved-reference sanity note.
+
+Fixture `union-alias-instantiation-entry.d.ts` + wbtest pin both.
+valibot corpus effect (2 budget rows): JSValue surface 1858 -> 1437
+(-421), unknown/any 926 -> 504; 140 ErrorMessageOf* enums, message
+members now `ErrorMessageOfIpIssueOfTinput1?`-style typed enums with
+`..._from_string` constructors and typeof-discriminated from_js glue.
+zod/yaml rows unchanged (zod's message unions were already
+string-subset-lowered; yaml's value-or-function members are anonymous
+inline unions — still open, needs an inline construction story).
+
+Round 10 (same day) — ANONYMOUS inline value-or-function unions, the
+last recorded value-or-function gap. `ffi_synthesize_inline_union`
+refused every union with a function member (a guard from the react
+hooks era whose motivating case — `S | (() => S)` with S widened —
+can't reach synthesis anyway: the widened arm has no runtime
+discriminator). Lifting it needed two safety pieces:
+
+- SHAPE-tagged constructor names: a structural alias name that spells
+  every function case as bare `FnValue` would merge yaml's
+  `uniqueKeys: boolean | ((a: ParsedNode, b: ParsedNode) => boolean)`
+  and `sortMapEntries: boolean | ((a: Pair, b: Pair) => number)` into
+  one `Auto_BoolValue_or_FnValue` with whichever payload registered
+  first. `moonbit_inline_union_func_case_name` (parser package, shared
+  by the decl renderer and the bridge FFI so both compute identical
+  names) encodes params and return into the case name:
+  `Auto_BoolValue_or_FnPairPairToDoubleValue` vs
+  `Auto_BoolValue_or_FnParsedNodeParsedNodeToBoolValue`. All three FFI
+  sites that derive the synthetic name now go through one
+  `ffi_inline_union_shaped_cases` helper.
+- at most ONE function member per union: every function case
+  discriminates via `typeof === "function"`, so a second would be
+  indistinguishable at the boundary — both sides refuse those.
+- Named siblings must be RUNTIME-DISCRIMINABLE: a function-armed union
+  only synthesizes when every Named member is a well-known JS global
+  constructor (`moonbit_inline_union_runtime_named_ok`: RegExp / URL /
+  URLPattern / Date / Buffer / typed arrays / ...) whose `instanceof`
+  works in the generated converter. The first attempt (reject local
+  type params) missed `useState(initialState: S | (() => S))` — its
+  `S` isn't registered as a local param on that path — and the
+  generated from_js tested `value instanceof S` against a name that
+  doesn't exist in bridge.js. Interfaces / aliases / type params all
+  fail the allowlist, so only truly discriminable unions synthesize.
+
+The synthesized-inline emission loop also switched its payload
+dependency scan to `tagged_union_case_named_refs` (playwright's
+`(url: URL) => boolean` case needed the `URL` external companion that
+the old bare-Named scan missed). Fixture `inline-fn-union-entry.d.ts`
++ wbtest pin the two-distinct-signatures case.
+
+Corpus (net, after the runtime-named guard): playwright's
+`page.route(...)` family now takes
+`Auto_RegExpValue_or_StringValue_or_URLPatternValue_or_FnURLToBoolValue`
+instead of JSValue (functions 200 -> 196, surface 827 -> 811); yaml
+172 -> 168 with uniqueKeys/sortMapEntries typed; node:fs 34 -> 28;
+lodash 1651 -> 1644; pino / zod / axios / node:util small drops;
+react unchanged (its candidate unions all carry interface-typed value
+arms that the guard correctly refuses).
+
+Round 11 (same day) — event-map literal-overload specialization, the
+top pick from the unlock survey. Interface members overloaded on a
+literal first param followed by a listener
+(`on(event: 'close', listener: (page) => void)` x56 event names on
+playwright's Page alone) merge to nothing under the round-7
+trailing-param rule, so only the first declaration survived with both
+params widened. Each such family (>= 2 distinct literals — a lone
+literal-first method is not an event map; and the second param must be
+a function, so literal dispatch like react's `createElement('div')`
+stays untouched) now synthesizes per-literal companion members:
+`on_close((Browser) -> Unit) -> Browser`. Pieces:
+
+- detection runs on the PRE-rewrite lowering in
+  `append_lowered_interface_field` (the inline-callback naming pass
+  would otherwise hide the `(Literal, Func)` shape behind a named
+  opaque callback);
+- `decl_event_member_families` records (literal, companion type) per
+  owner+member so the FIRST overload's companion appears retroactively
+  when the second literal arrives; companions re-push into every clone
+  (the decl and FFI layers each clone the interface — the per-clone
+  `seen_field_names` keeps it idempotent);
+- `decl_event_member_specials` maps each companion to
+  (JS member, literal); the FFI emits
+  `#| (self, arg0) => self.on("close", arg0)` — and on
+  generic-preserved receivers a BOUND-closure getter
+  (`(o) => (...args) => o.on("close", ...args)`) so `this` survives;
+- listener returns declared `any` / `unknown` normalize to `void` in
+  the companion (`(page) => any` is fire-and-forget for the emitter) —
+  without this every companion line carried a spurious `JSValue`
+  return and playwright's metric tripled.
+
+Runtime-verified: a generated `browser.on_close(fn(_b) { ... })`
+registers through the real `.on("close", ...)` and fires (smoke in
+scratch; fixture `event-map-entry.d.ts` + wbtest pin the shapes).
+playwright gains 76 typed `on_* / once_*` methods; JSValue functions
+196 -> 191 with surface 811 -> 842 (+31: companions whose payload
+types still widen — new usable surface). Class-METHOD event maps
+(ws / chokidar / node:fs watchers) are not yet specialized — the same
+registry approach extends to `append_class_method_once` +
+`ffi_class_method_decl_to_moonbit`; recorded as the next step.
+
+Round 12 (same day) — nonempty-tuple normalization (#2 of the unlock
+survey). `[T, ...T[]]` (valibot / zod `issues` fields) is a nonempty
+ARRAY for the bridge surface; as a tuple it widened to
+`Array[JSValue]` and lost the element type. `decl_nonempty_tuple_element`
+recognizes a trailing rest whose element equals every fixed element
+and the Tuple lowering arm rewrites to `Array(element)`; boundary
+representation is unchanged (a JS array either way). Elements that
+resolve concretely now surface (`issues : Array[BaseIssue[TInput_1]]?`);
+the ~70 that remain `Array[JSValue]` carry `InferIssue<TSchema>`
+conditional elements — honest widening. Zero budget drift. The
+common-base ELEMENT join half of the survey item turned out to be
+already covered: `Array(Named(alias))` lowers the alias through
+`decl_join_union_alias_to_common_base` on the Named arm.
+
+Round 13 (same day) — record-and-class intersections (#5 of the
+survey: the axios eval-app's last interceptor hatch). axios's
+`AxiosRequestHeaders = RawAxiosRequestHeaders & AxiosHeaders` widened
+to an unresolved opaque name, so `config.headers` inside an
+interceptor had NO usable surface even though the `AxiosHeaders`
+CLASS (set / get / has / set_content_type / ...) was fully generated.
+`decl_intersection_single_class` resolves an intersection to its
+single declared-CLASS member when every sibling is record-ish (object
+literals, `Partial<...>` / `Record<...>` applications, aliases that
+resolve to neither class nor interface — an interface sibling
+refuses, dropping its fields would lose surface). The alias now emits
+`pub type AxiosRequestHeaders = AxiosHeaders` (transparent) and
+`config.headers.set(Some("X-Trace"), Some(v), None)` type-checks —
+compile-verified against the generated axios package. Fixture
+`intersection-class-entry.d.ts` + wbtest pin the rule. Zero budget
+drift.
+
+Survey status: #1 event maps (interfaces) DONE round 11, #2 nonempty
+tuples DONE round 12, #5 AxiosHeaders DONE round 13. Remaining: #3
+schema value slots (zod `loose_shape_from_pairs` still takes
+`Array[JSValue]`; a `$ZodType`-bounded value slot + upcast-at-call is
+the sketch), #4 lodash chain generics (big, budgeted), and the
+class-METHOD event maps follow-up from round 11 (ws / chokidar /
+node:fs watchers).
+
+Round 14 (same day) — #3 schema value slots + #4 method-level
+generics, closing the survey.
+
+#3: the zod module hook gains a TYPED shape builder alongside the raw
+one — `loose_shape_of(keys, values : Array[Schema[JSValue, JSValue,
+JSValue]])` accepts the same upper bound `as_schema` produces, so the
+gate smoke's shape entry is now
+`loose_shape_of(["name"], [as_schema(string(None))])` with no
+per-value unsafeCast.
+
+#4: `map<U>(fn: (item: T) => U): CollectionChain<U>` on a GENERIC
+owner widened U to JSValue on every chain-style API. The member's own
+binder now survives on the pure-MoonBit wrapper:
+`fn[T, U] CollectionChain::map(self, (T) -> U) -> CollectionChain[U]`.
+Pieces:
+- both interface cloners now CARRY `method_type_params` (they emitted
+  `[]`, so the renderers never saw the binder);
+- both renderers thread the member's binder (interface methods carry
+  it out-of-band in `iface.method_type_params`; inline object members
+  as `GenericFunc`) — the decl side pushes it as local type params and
+  emits a combined prefix, the FFI side routes through a monomorphic
+  getter returning a BOUND closure and a `pub fn[T, U]` wrapper
+  (generic externs are forbidden; a plain fn casting the fetched
+  closure is not);
+- binder names whose occurrences were widened away are FILTERED from
+  the prefix (`*_rendered_mentions_param` token scan) — an unused fn
+  type parameter is a hard error [4027] (zod's `register` / `brand`
+  hit this immediately);
+- while smoking this against a real prototype-method implementation,
+  the PRE-EXISTING generic-receiver form `(self.first)()` turned out
+  to lose `this` (extracts the prototype method, calls it unbound —
+  TypeError on any class-based library). ALL generic-receiver members
+  now fetch a bound closure (`(o) => (...args) => o.first(...args)`)
+  through the getter; the gate's sanitized-member marker moved to the
+  bound form.
+
+Runtime-verified: `c.map(fn(x : Double) { x.to_string() })` returns a
+usable `CollectionChain[String]` and `compact()/first()` no longer
+throw on class-implemented chains. Fixture `chain-generics-entry.d.ts`
++ wbtest; the StatsBase wbtest moved to the bound-getter expectation.
+Corpus (8 rows): playwright JSValue functions 191 -> 179, lodash
+288 -> 286 with surface 1644 -> 1634, zod 1497 -> 1493, source-map
+-1; pino +1 line (a preserved generic slot now renders — new usable
+surface). Top-level generic FUNCTIONS (`chain<T>(items)`) still widen
+— that path has no receiver to hang a getter on; recorded as open.
+
+Round 15 (same day) — CLASS-method event maps, the round-11
+follow-up. Detection had to run on the RAW method (the clone rewrites
+the listener to a named opaque callback, hiding the `(Literal, Func)`
+shape — the same trap the interface path hit); the companion is built
+from the raw method (first param dropped, `any`/`unknown` listener
+returns normalized to `void`) and THEN cloned through
+`clone_class_method_in_scope`, with the same >= 2-distinct-literals
+activation, per-clone re-push, and `decl_event_member_specials`
+registration. The FFI class-method emitter consults the registry and
+injects the literal at both instance js_call sites
+(`(self, listener) => self.on("change", listener)`). ws gains 18
+typed `on_*` companions (`WebSocket::on_message` etc.; surface +12 —
+companions whose payload types still widen); chokidar's FSWatcher
+declares no literal overloads of its own (EventEmitter inheritance)
+so it is unaffected. Fixture `event-map-entry.d.ts` extended with the
+Watcher class + wbtest.
 
 Profiled with `moon bench --target native` + callgrind over the release
 `tscheck` binary (`--parse` / full, `--iters N`; use

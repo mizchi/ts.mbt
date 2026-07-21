@@ -270,6 +270,15 @@ fn ffi_to_snake_case(name : String) -> String {
 
 ///|
 fn ffi_type_identifier(name : String, fallback : String) -> String {
+  // `$` maps to a distinct "Dollar" token BEFORE char sanitization:
+  // otherwise `$ZodType` and `_ZodType` both collapse to
+  // `UnderscoreZodType` (zod v4 ships BOTH, with different arities),
+  // and every downstream reference silently picks the wrong shape.
+  let name = if name.contains("$") {
+    name.replace_all(old="$", new="Dollar")
+  } else {
+    name
+  }
   let sanitized = ffi_sanitize_identifier_chars(name, fallback)
   if sanitized == "" || ffi_trim_underscores(sanitized) == "" {
     return fallback
@@ -741,7 +750,13 @@ fn ffi_func_type_name(
     param_types.push(ffi_type_name(state, param))
   }
   let params_src = param_types.join(", ")
-  let return_src = ffi_type_name(state, return_type)
+  // Callback returns of the `T | Promise<T>` shape read as `Promise[T]`
+  // (sound with the resolve-lenient `Promise::wait`, and it lets the
+  // async-callback lowering fire on sync-or-async handler slots).
+  let return_src = ffi_type_name(
+    state,
+    @checker.normalize_promise_like_union_return(return_type),
+  )
   "(\{params_src}) -> \{return_src}"
 }
 
@@ -1091,7 +1106,12 @@ fn ffi_type_alias_func_target_name(
   for param in params {
     param_types.push(ffi_type_alias_target_name(state, param))
   }
-  let return_src = ffi_type_alias_target_name(state, return_type)
+  // Same rule as `ffi_func_type_name`: `T | Promise<T>` returns read as
+  // `Promise[T]` so function aliases match the inline renderings.
+  let return_src = ffi_type_alias_target_name(
+    state,
+    @checker.normalize_promise_like_union_return(return_type),
+  )
   "(" + param_types.join(", ") + ") -> " + return_src
 }
 
@@ -1165,22 +1185,72 @@ fn ffi_string_subset_union_text(
 /// Returns `None` when the union cannot be discriminated at the JS boundary
 /// or when any case payload is not MoonBit-renderable; callers fall back to
 /// the existing `@js.Any` widening.
+/// Tagged-union cases for an inline union with function cases renamed
+/// to their SHAPE-tagged constructor (mirrors the decl renderer's
+/// `moonbit_inline_union_func_case_name`), so every site that derives
+/// the synthetic alias name agrees. `None` when the union does not
+/// tag-lower or a rename collides.
+fn ffi_inline_union_shaped_cases(
+  parts : Array[@ast.TsType],
+) -> Array[(String, @ast.TsType)]? {
+  let raw_cases = match tagged_union_cases(parts) {
+    Some(c) => c
+    None => return None
+  }
+  let cases : Array[(String, @ast.TsType)] = []
+  let seen_case_names : Array[String] = []
+  for entry in raw_cases {
+    let (case_name, inner) = entry
+    let renamed = match inner {
+      @ast.TsType::Func(fparams, fret) =>
+        @parser.moonbit_inline_union_func_case_name(fparams, fret)
+      _ => case_name
+    }
+    if seen_case_names.contains(renamed) {
+      return None
+    }
+    seen_case_names.push(renamed)
+    cases.push((renamed, inner))
+  }
+  Some(cases)
+}
+
+///|
 fn ffi_synthesize_inline_union(
   state : MoonBitJsFfiState,
   parts : Array[@ast.TsType],
 ) -> String? {
-  // Function members are accepted for EXPORTED alias lowering (their
-  // boundary stays passthrough), but inline synthesis would generate a
-  // wrapper whose conversion glue can't produce the enum from a raw
-  // value (`useState(initialState: S | (() => S))` — the JSValue
-  // argument has no path into `Auto_SValue_or_FnValue`). Keep such
-  // inline unions on the JSValue fallback.
+  // At most ONE function member: every function case discriminates via
+  // `typeof === "function"`, so a second one would be indistinguishable
+  // at the boundary. (Widened members like `S | (() => S)` with S ->
+  // JSValue never reach synthesis — the S case has no discriminator.)
+  let mut func_members = 0
   for part in parts {
     if part is Func(_, _) {
-      return None
+      func_members += 1
+      if func_members > 1 {
+        return None
+      }
     }
   }
-  let cases = match tagged_union_cases(parts) {
+  // A function-armed union only synthesizes when every Named sibling
+  // is a well-known JS global whose `instanceof` discriminator works at
+  // runtime. A bare type parameter or interface member
+  // (`useState(initialState: S | (() => S))`) has no runtime binding —
+  // the from_js converter would test `value instanceof S` against a
+  // name that does not exist in the bridge module.
+  if func_members > 0 {
+    for part in parts {
+      match part {
+        Named(name) | Applied(name, _) =>
+          if !@parser.moonbit_inline_union_runtime_named_ok(name) {
+            return None
+          }
+        _ => ()
+      }
+    }
+  }
+  let cases = match ffi_inline_union_shaped_cases(parts) {
     Some(c) => c
     None => return None
   }
@@ -1333,7 +1403,19 @@ fn ffi_function_type_parts(
       for param in params {
         param_types.push(ffi_type_name(state, param))
       }
-      Some((params, param_types, ffi_type_name(state, return_type)))
+      // Mirror of `ffi_func_type_name`: `T | Promise<T>` returns read as
+      // `Promise[T]` so the method wrappers stay consistent with the
+      // struct-field rendering of the same member.
+      Some(
+        (
+          params,
+          param_types,
+          ffi_type_name(
+            state,
+            @checker.normalize_promise_like_union_return(return_type),
+          ),
+        ),
+      )
     }
     // A member's own generic binder is erased at the FFI boundary
     // (`toBe: <E>(expected: E) => void` — vitest's Assertion), matching
@@ -1433,7 +1515,7 @@ fn ffi_inline_js_tagged_union_to_js(
         // original `Union(parts)` shape, so re-derive the synthesised name
         // and route through its `_to_js` converter.
         @ast.TsType::Union(parts) =>
-          match tagged_union_cases(parts) {
+          match ffi_inline_union_shaped_cases(parts) {
             Some(cases) => {
               let name = ffi_inline_union_synthesized_name(cases)
               match s.tagged_union_decls_by_name.get(name) {
@@ -1463,7 +1545,46 @@ fn ffi_function_field_method_decl(
   field_name : String,
   js_field_name : String,
   field_type : @ast.TsType,
+  event_special? : (String, String)? = None,
+  method_type_params? : Array[String] = [],
 ) -> String? {
+  // Event companion (`on_close`): call the ORIGINAL JS member with the
+  // event literal injected as the first argument.
+  let (js_field_name, injected_literal) = match event_special {
+    Some((js_member, literal)) => (js_member, Some(literal))
+    None => (js_field_name, None)
+  }
+  // A member's own generic binder (`map<U>(fn: (item: T) => U):
+  // CollectionChain<U>`) survives on the pure-MoonBit wrapper: MoonBit
+  // forbids generic externs, so the wrapper fetches a BOUND closure
+  // through a monomorphic getter and carries `fn[T, U]` itself.
+  let (generic_names, generic_inner) = match field_type {
+    GenericFunc(names, inner) => (names, inner)
+    _ => (method_type_params, field_type)
+  }
+  match generic_inner {
+    Func(_, _) if generic_names.length() > 0 => {
+      let extra : Array[String] = []
+      for n in generic_names {
+        if !receiver_type_params.contains(n) && !extra.contains(n) {
+          extra.push(n)
+        }
+      }
+      if extra.length() > 0 {
+        let saved = ffi_push_local_type_params(state, extra)
+        let generic_result = ffi_generic_member_method_decl(
+          state, receiver_type, receiver_type_params, extra, field_name, js_field_name,
+          generic_inner,
+        )
+        ffi_restore_local_type_params(state, saved)
+        match generic_result {
+          Some(decl) => return Some(decl)
+          None => ()
+        }
+      }
+    }
+    _ => ()
+  }
   match ffi_function_type_parts(state, field_type) {
     Some((source_param_types, param_types, return_type)) => {
       let self_type = ffi_receiver_self_type(
@@ -1477,14 +1598,30 @@ fn ffi_function_field_method_decl(
         _ => return_type
       }
       let params : Array[String] = ["self : \{self_type}"]
+      let raw_params : Array[String] = ["this_ : \{self_type}"]
       let args : Array[String] = []
+      let arg_exprs : Array[String] = []
+      let mut has_lowered_callback = false
       for i, param_type in param_types {
         let arg_name = "arg" + i.to_string()
-        params.push("\{arg_name} : \{param_type}")
+        raw_params.push("\{arg_name} : \{param_type}")
+        match @parser.moonbit_async_callback_lowering(param_type) {
+          Some(lowering) => {
+            has_lowered_callback = true
+            params.push("\{arg_name} : \{lowering.lowered_type}")
+            arg_exprs.push(
+              @parser.moonbit_async_callback_glue_expr(arg_name, lowering),
+            )
+          }
+          None => {
+            params.push("\{arg_name} : \{param_type}")
+            arg_exprs.push(arg_name)
+          }
+        }
         args.push(arg_name)
       }
       let params_src = params.join(", ")
-      let args_src = args.join(", ")
+      let args_src = arg_exprs.join(", ")
       let js_args : Array[String] = []
       for i, arg in args {
         js_args.push(
@@ -1495,16 +1632,65 @@ fn ffi_function_field_method_decl(
           ),
         )
       }
-      let js_args_src = js_args.join(", ")
+      let js_args_src = match injected_literal {
+        Some(literal) =>
+          if js_args.length() == 0 {
+            "\"\{literal}\""
+          } else {
+            "\"\{literal}\", " + js_args.join(", ")
+          }
+        None => js_args.join(", ")
+      }
       let fn_prefix = ffi_function_type_param_prefix(receiver_type_params)
       // MoonBit's `extern "js" fn[T]` is forbidden ([4008]), so any method
       // on a generic-preserved receiver has to fall through to the
       // pure-MoonBit wrapper form which accesses the underlying function
       // field via `self.<field>(...)`.
       if receiver_type_params.length() > 0 {
-        Some(
-          "pub \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} {\n  (self.\{field_name})(\{args_src})\n}",
-        )
+        match injected_literal {
+          Some(literal) => {
+            // Bound closure with the literal pre-applied: `o.on` fetched
+            // bare would lose its `this`, so the getter returns
+            // `(...args) => o.on("close", ...args)` instead.
+            state.needs_js_any = true
+            let getter_name = "_" +
+              ffi_to_snake_case(receiver_type) +
+              "_" +
+              field_name +
+              "_get_extern_js"
+            let raw_param_types_src = param_types.join(", ")
+            let field_fn_type = "(\{raw_param_types_src}) -> \{return_type}"
+            let getter_decl = "extern \"js\" fn \{getter_name}(target : JSValue) -> JSValue =\n  #| (o) => (...args) => \{ffi_js_access("o", js_field_name)}(\"\{literal}\", ...args)"
+            let wrapper_decl = "pub \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} {\n  let field_fn : \{field_fn_type} = unsafeCast(\{getter_name}(unsafeCast(self)))\n  field_fn(\{args_src})\n}"
+            return Some(getter_decl + "\n\n" + wrapper_decl)
+          }
+          None => ()
+        }
+        if field_name != "_call_" {
+          // Members on generic-preserved receivers route through a
+          // monomorphic getter returning a BOUND closure —
+          // `(self.first)()` would extract the prototype method and
+          // call it with `this` undefined, and sanitized member names
+          // (`use` -> `use_`) don't exist on the raw object at all.
+          state.needs_js_any = true
+          // The field name goes in VERBATIM: it is unique within the
+          // receiver struct, while its snake_case can collide
+          // (playwright's `$eval` / `$$eval` both snake to `eval`).
+          let getter_name = "_" +
+            ffi_to_snake_case(receiver_type) +
+            "_" +
+            field_name +
+            "_get_extern_js"
+          let raw_param_types_src = param_types.join(", ")
+          let field_fn_type = "(\{raw_param_types_src}) -> \{return_type}"
+          let getter_decl = "extern \"js\" fn \{getter_name}(target : JSValue) -> JSValue =\n  #| (o) => (...args) => \{ffi_js_access("o", js_field_name)}(...args)"
+          let wrapper_decl = "pub \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} {\n  let field_fn : \{field_fn_type} = unsafeCast(\{getter_name}(unsafeCast(self)))\n  field_fn(\{args_src})\n}"
+          Some(getter_decl + "\n\n" + wrapper_decl)
+        } else {
+          Some(
+            "pub \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} {\n  (self.\{field_name})(\{args_src})\n}",
+          )
+        }
       } else {
         let js_params : Array[String] = ["self"]
         for arg in args {
@@ -1517,11 +1703,14 @@ fn ffi_function_field_method_decl(
           ffi_js_access("self", js_field_name) + "(" + js_args_src + ")"
         }
         let forward_args : Array[String] = ["self"]
-        for arg in args {
-          forward_args.push(arg)
+        for arg_expr in arg_exprs {
+          forward_args.push(arg_expr)
         }
-        let extern_params = "this_ : " +
-          params_src["self : ".length():].to_owned()
+        // Lowered async-callback params force the extern/wrapper pair:
+        // the extern keeps the raw promise-returning callback types
+        // while the public wrapper takes MoonBit async fns and passes
+        // the from_async glue closures through.
+        let extern_params = raw_params.join(", ")
         match
           ffi_converted_return_extern_pair(
             state,
@@ -1534,6 +1723,7 @@ fn ffi_function_field_method_decl(
             forward_args,
             return_type,
             "\n  #| (\{js_params_src}) => \{js_call}",
+            force=has_lowered_callback,
           ) {
           Some(pair) => Some(pair)
           None =>
@@ -1542,6 +1732,134 @@ fn ffi_function_field_method_decl(
             )
         }
       }
+    }
+    None => None
+  }
+}
+
+///|
+/// True when `name` appears as a standalone identifier token inside a
+/// rendered MoonBit type string. Method type params that only occurred
+/// in dropped/widened positions must not be declared on the wrapper —
+/// an unused fn type parameter is a hard error ([4027]).
+fn ffi_rendered_mentions_param(rendered : String, name : String) -> Bool {
+  if name == "" {
+    return false
+  }
+  let padded = " " + rendered + " "
+  let n = name.length()
+  fn is_ident(c : Char) -> Bool {
+    (c >= 'a' && c <= 'z') ||
+    (c >= 'A' && c <= 'Z') ||
+    (c >= '0' && c <= '9') ||
+    c == '_'
+  }
+
+  let mut i = 1
+  while i + n < padded.length() {
+    let mut matches = true
+    for j in 0..<n {
+      if padded[i + j] != name[j] {
+        matches = false
+        break
+      }
+    }
+    if matches {
+      let before = padded[i - 1].unsafe_to_char()
+      let after = padded[i + n].unsafe_to_char()
+      if !is_ident(before) && !is_ident(after) {
+        return true
+      }
+    }
+    i += 1
+  }
+  false
+}
+
+///|
+fn ffi_event_js_args_src(literal : String?, js_args : Array[String]) -> String {
+  match literal {
+    Some(value) =>
+      if js_args.length() == 0 {
+        "\"\{value}\""
+      } else {
+        "\"\{value}\", " + js_args.join(", ")
+      }
+    None => js_args.join(", ")
+  }
+}
+
+///|
+fn ffi_iface_method_type_params(
+  iface : @ast.TsInterface,
+  member_name : String,
+) -> Array[String] {
+  for entry in iface.method_type_params {
+    if entry.0 == member_name {
+      return entry.1
+    }
+  }
+  []
+}
+
+///|
+/// Pure-MoonBit wrapper for a member with its OWN generic binder. The
+/// getter returns a bound closure (`(o) => (...args) => o.map(...args)`)
+/// so `this` survives, and the wrapper declares the combined
+/// receiver+member type params — generic externs are forbidden, but a
+/// plain `pub fn[T, U]` casting the fetched closure is not.
+fn ffi_generic_member_method_decl(
+  state : MoonBitJsFfiState,
+  receiver_type : String,
+  receiver_type_params : Array[String],
+  method_extra_type_params : Array[String],
+  field_name : String,
+  js_field_name : String,
+  inner : @ast.TsType,
+) -> String? {
+  match ffi_function_type_parts(state, inner) {
+    Some((_, param_types, raw_return)) => {
+      let self_type = ffi_receiver_self_type(
+        receiver_type, receiver_type_params,
+      )
+      let return_type = match raw_return {
+        "This" => self_type
+        "This?" => self_type + "?"
+        _ => raw_return
+      }
+      let params : Array[String] = ["self : \{self_type}"]
+      let args : Array[String] = []
+      for i, param_type in param_types {
+        let arg_name = "arg" + i.to_string()
+        params.push("\{arg_name} : \{param_type}")
+        args.push(arg_name)
+      }
+      let combined : Array[String] = []
+      for tp in receiver_type_params {
+        combined.push(tp)
+      }
+      let rendered_surface = param_types.join(", ") + " " + return_type
+      for tp in method_extra_type_params {
+        if ffi_rendered_mentions_param(
+            rendered_surface,
+            @parser.moonbit_sanitize_type_param_name(tp),
+          ) {
+          combined.push(tp)
+        }
+      }
+      let fn_prefix = ffi_function_type_param_prefix(combined)
+      state.needs_js_any = true
+      let getter_name = "_" +
+        ffi_to_snake_case(receiver_type) +
+        "_" +
+        field_name +
+        "_generic_get_extern_js"
+      let field_fn_type = "(" + param_types.join(", ") + ") -> " + return_type
+      let getter_decl = "extern \"js\" fn \{getter_name}(target : JSValue) -> JSValue =\n  #| (o) => (...args) => \{ffi_js_access("o", js_field_name)}(...args)"
+      let params_src = params.join(", ")
+      let args_src = args.join(", ")
+      let wrapper_decl = "pub \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} {\n  let field_fn : \{field_fn_type} = unsafeCast(\{getter_name}(unsafeCast(self)))\n  field_fn(\{args_src})\n}"
+      Some(getter_decl + "\n\n" + wrapper_decl)
     }
     None => None
   }
@@ -1644,7 +1962,14 @@ fn ffi_struct_decl_to_moonbit(
       method_wrapper_count < state.function_field_method_wrapper_limit {
       match
         ffi_function_field_method_decl(
-          state, type_name, active_type_params, field_name, name, type_,
+          state,
+          type_name,
+          active_type_params,
+          field_name,
+          name,
+          type_,
+          event_special=decl_event_member_special(iface.name, name),
+          method_type_params=ffi_iface_method_type_params(iface, name),
         ) {
         Some(method_decl) => {
           method_lines.push(method_decl)
@@ -1669,6 +1994,54 @@ fn ffi_struct_decl_to_moonbit(
           }
         None => ()
       }
+    }
+  }
+  // Upcast helpers along the `extends` chain: TypeScript's implicit
+  // interface subtyping does not map onto MoonBit's nominal structs, so
+  // `interface AxiosInstance extends Axios` previously forced an
+  // unsafeCast at every base-surface call. `asAxios()` / `asSchema()`
+  // are sound %identity views (same runtime object), named after the
+  // existing type-guard helper convention.
+  let fn_prefix = ffi_function_type_param_prefix(active_type_params)
+  let self_type = type_name + type_param_suffix
+  let seen_upcasts : Array[String] = []
+  for i, base_name in iface.extends_names {
+    let base_args = if i < iface.extends_args.length() {
+      iface.extends_args[i]
+    } else {
+      []
+    }
+    // Clamp to the EMITTED base arity: the source declaration's type
+    // params can outnumber what the struct emitter preserved (zod's
+    // `_ZodType<A, B, C>` emits as `UnderscoreZodType[Internals]`), and
+    // a mismatched Applied reference would not compile. Extra/missing
+    // args degrade to JSValue slots.
+    let emitted_arity = match state.generic_type_params_by_name.get(base_name) {
+      Some(params) => params.length()
+      None => 0
+    }
+    let base_type : @ast.TsType = if emitted_arity == 0 {
+      Named(base_name)
+    } else if base_args.length() == emitted_arity {
+      Applied(base_name, base_args)
+    } else {
+      let widened : Array[@ast.TsType] = []
+      for _ in 0..<emitted_arity {
+        widened.push(Any)
+      }
+      Applied(base_name, widened)
+    }
+    let rendered = ffi_struct_field_type_name(state, base_type)
+    match @parser.moonbit_upcast_helper_name(rendered) {
+      Some(helper_name) =>
+        if !seen_upcasts.contains(helper_name) &&
+          !seen_fields.contains(helper_name) {
+          seen_upcasts.push(helper_name)
+          method_lines.push(
+            "pub \{fn_prefix} \{type_name}::\{helper_name}(self : \{self_type}) -> \{rendered} = \"%identity\"",
+          )
+        }
+      None => ()
     }
   }
   ffi_restore_local_type_params(state, local_type_param_len)
@@ -2256,6 +2629,38 @@ fn ffi_enum_bridge_js_converter_decl(enum_ : @ast.TsEnumDecl) -> String? {
   lines.push("}")
   Some(lines.join("\n"))
 }
+
+///|
+/// The self-contained `Promise::wait` / `Promise::from_async` /
+/// `run_async` layer: no external MoonBit dependencies, awaiting via a
+/// raw `%async.suspend` whose continuations are driven straight from
+/// the JS microtask queue, and rejections surfacing as the matchable
+/// `JsRejection` error.
+///
+/// ABI note: a MoonBit `async fn` started from JS via its CPS form
+/// `f(args.., ok, err)` does NOT call either continuation when it
+/// completes without suspending — it returns a `Result` value instead.
+/// The `_start_async_extern_js` trampoline therefore only ever starts
+/// wrapper fns that perform ALL their effects (resolve / reject /
+/// error reporting) inside a `try`/`catch` in the wrapper body, so the
+/// ignored return value can never carry a dropped error.
+pub let bridge_promise_wait_self_contained_section : String = "pub suberror JsRejection {\n  JsRejection(JSValue)\n}\n\nasync fn _promise_suspend_js(f : ((JSValue) -> Unit, (Error) -> Unit) -> Unit) -> JSValue = \"%async.suspend\"\n\npub async fn[T] Promise::wait(self : Promise[T]) -> T {\n  let raw = _promise_suspend_js(fn(ok, err) {\n    _promise_then_catch_extern_js(unsafeCast(self), ok, fn(e) { err(JsRejection(e)) })\n  })\n  unsafeCast(raw)\n}\n\n// Starts a MoonBit async fn from a sync context. Only ever called with\n// wrapper fns that never raise and perform all effects in their body:\n// an async fn that completes without suspending returns its result\n// instead of calling the continuations, so this trampoline must not be\n// trusted with error delivery.\nextern \"js\" fn _start_async_extern_js(f : async () -> Unit) -> Unit =\n  #| (f) => { f((_ok) => {}, (_e) => {}) }\n\nextern \"js\" fn _async_error_exit_extern_js(err : JSValue) -> Unit =\n  #| (e) => { console.error(\"unhandled async error:\", e); if (typeof process !== \"undefined\" && process.exit) process.exit(1); else throw e; }\n\nextern \"js\" fn _promise_ctor_extern_js(executor : ((JSValue) -> Unit, (JSValue) -> Unit) -> Unit) -> JSValue =\n  #| (executor) => new Promise((resolve, reject) => executor(resolve, reject))\n\n/// Lift a MoonBit async fn into a JS promise: raises become rejections,\n/// including raises that happen before the first suspension.\npub fn[T] Promise::from_async(f : async () -> T raise) -> Promise[T] {\n  unsafeCast(_promise_ctor_extern_js(fn(resolve, reject) {\n    _start_async_extern_js(async fn() {\n      try {\n        let value = f()\n        resolve(unsafeCast(value))\n      } catch {\n        e => reject(unsafeCast(e))\n      }\n    })\n  }))\n}\n\npub fn run_async(f : async () -> Unit raise) -> Unit {\n  _start_async_extern_js(async fn() {\n    try f() catch {\n      e => _async_error_exit_extern_js(unsafeCast(e))\n    }\n  })\n}"
+
+///|
+/// The `moonbitlang/async` integration variant of the same section,
+/// substituted by the package emitter when the consumer module already
+/// depends on `moonbitlang/async`: the bridge promise identity-casts
+/// into `@js_async.Promise` (`.std()`), and `Promise::wait` delegates to
+/// the official coroutine-scheduled wait — which composes with
+/// `async fn main`, `@async.with_timeout`, task groups, and cancellation
+/// via the optional `abort_controller`. `JsRejection` stays declared for
+/// source compatibility, but delegated rejections raise `@js_async`'s
+/// own error type — nothing in the bridge constructs it here, so it is
+/// `pub(all)` (constructible by consumers) to keep the generated package
+/// free of unused-constructor warnings. Requires
+/// `moonbitlang/async/js_async` in the generated package's `moon.pkg`
+/// imports.
+pub let bridge_promise_wait_async_integration_section : String = "pub(all) suberror JsRejection {\n  JsRejection(JSValue)\n}\n\npub fn[T] Promise::std(self : Promise[T]) -> @js_async.Promise[T] = \"%identity\"\n\nextern \"js\" fn _promise_resolve_extern_js(p : JSValue) -> JSValue =\n  #| (p) => Promise.resolve(p)\n\npub async fn[T] Promise::wait(self : Promise[T], abort_controller? : @js_async.AbortController) -> T {\n  // TS-declared Promise returns are sometimes plain values at runtime\n  // (hono's sync-handler `request` returns a bare Response); normalize\n  // through Promise.resolve so `.wait()` is as lenient as JS `await`.\n  let normalized : @js_async.Promise[T] = unsafeCast(_promise_resolve_extern_js(unsafeCast(self)))\n  match abort_controller {\n    Some(controller) => normalized.wait(abort_controller=controller)\n    None => normalized.wait()\n  }\n}\n\n/// Lift a MoonBit async fn into a JS promise: raises become rejections.\n/// Delegates to @js_async so the fn body runs inside a spawned\n/// coroutine — `.wait()` inside the fn needs that context.\npub fn[T] Promise::from_async(f : async () -> T raise) -> Promise[T] {\n  unsafeCast(@js_async.Promise::from_async(f))\n}\n\nextern \"js\" fn _async_error_exit_extern_js(err : JSValue) -> Unit =\n  #| (e) => { console.error(\"unhandled async error:\", e); if (typeof process !== \"undefined\" && process.exit) process.exit(1); else throw e; }\n\npub fn run_async(f : async () -> Unit raise) -> Unit {\n  // Spawn through @js_async so `f` gets a coroutine context (a raw CPS\n  // start would panic on the first integration-mode `.wait()`). Errors\n  // are reported here, so the ignored promise can never reject.\n  ignore(@js_async.Promise::from_async(async fn() {\n    try f() catch {\n      e => _async_error_exit_extern_js(unsafeCast(e))\n    }\n  }))\n}"
 
 ///|
 fn ffi_direct_module_decl(module_spec : String, decl : String) -> String {
@@ -2849,7 +3254,7 @@ fn ffi_type_js_converter_expr(
     // MoonBit `{$tag, _0}` shape gets unwrapped to the raw JS value
     // before reaching the call.
     Union(parts) =>
-      match tagged_union_cases(parts) {
+      match ffi_inline_union_shaped_cases(parts) {
         Some(cases) => {
           let synth_name = ffi_inline_union_synthesized_name(cases)
           match state.tagged_union_decls_by_name.get(synth_name) {
@@ -4195,6 +4600,13 @@ fn ffi_class_method_decl_to_moonbit(
   // actually adding value at the call site.
   let preserve = ffi_should_preserve_class_type_params(class_) &&
     !class_method.is_static
+  // Event companion (`on_close`): call the ORIGINAL JS member with the
+  // event literal injected as the first argument.
+  let (event_js_member, event_literal) = match
+    decl_event_member_special(class_.name, class_method.name) {
+    Some((js_member, literal)) => (js_member, Some(literal))
+    None => (class_method.name, (None : String?))
+  }
   let class_type_params = if preserve { class_.type_params } else { [] }
   let class_local_len = ffi_push_local_type_params(state, class_type_params)
   let class_type_name = ffi_class_type_name(class_.name)
@@ -4220,18 +4632,35 @@ fn ffi_class_method_decl_to_moonbit(
     // `_to_js` conversion happens in `arg_exprs` below.
     let safe_type = ffi_struct_field_type_name(state, type_)
     arg_names.push(safe_name)
-    let arg_expr = ffi_enum_arg_expr(state, safe_type, safe_name)
-    if arg_expr != safe_name {
-      has_enum_param = true
+    match @parser.moonbit_async_callback_lowering(safe_type) {
+      Some(lowering) => {
+        // Async-callback param: public wrapper takes a MoonBit async fn;
+        // the extern keeps the raw promise-returning callback type and
+        // receives the from_async glue closure. Reuses the enum-param
+        // pair mechanics (has_enum_param forces the extern/wrapper
+        // split).
+        has_enum_param = true
+        arg_exprs.push(
+          @parser.moonbit_async_callback_glue_expr(safe_name, lowering),
+        )
+        extern_param_decls.push("\{safe_name} : \{safe_type}")
+        params.push("\{safe_name} : \{lowering.lowered_type}")
+      }
+      None => {
+        let arg_expr = ffi_enum_arg_expr(state, safe_type, safe_name)
+        if arg_expr != safe_name {
+          has_enum_param = true
+        }
+        arg_exprs.push(arg_expr)
+        extern_param_decls.push(
+          "\{safe_name} : \{ffi_enum_param_raw_type(state, safe_type)}",
+        )
+        params.push("\{safe_name} : \{safe_type}")
+      }
     }
-    arg_exprs.push(arg_expr)
-    extern_param_decls.push(
-      "\{safe_name} : \{ffi_enum_param_raw_type(state, safe_type)}",
-    )
     js_args.push(
       ffi_inline_js_arg_expr_with_state(Some(state), type_, safe_name),
     )
-    params.push("\{safe_name} : \{safe_type}")
   }
   let raw_return_type = ffi_struct_field_type_name(
     state,
@@ -4289,9 +4718,9 @@ fn ffi_class_method_decl_to_moonbit(
         js_params.push(arg)
       }
       let js_param_list = js_params.join(", ")
-      let js_call = ffi_js_access("self", class_method.name) +
+      let js_call = ffi_js_access("self", event_js_member) +
         "(" +
-        js_args.join(", ") +
+        ffi_event_js_args_src(event_literal, js_args) +
         ")"
       let extern_name = "_\{fn_name}_extern_js"
       let extern_decl = "extern \"js\" fn \{extern_name}(\{extern_params_src}) -> JSValue =\n  #| (\{js_param_list}) => \{js_call}"
@@ -4331,9 +4760,9 @@ fn ffi_class_method_decl_to_moonbit(
       js_params.push(arg)
     }
     let js_param_list = js_params.join(", ")
-    let js_call = ffi_js_access("self", class_method.name) +
+    let js_call = ffi_js_access("self", event_js_member) +
       "(" +
-      js_args.join(", ") +
+      ffi_event_js_args_src(event_literal, js_args) +
       ")"
     let instance_params = if method_params == "" {
       "self : \{class_type_name}"
@@ -4902,9 +5331,29 @@ fn ensure_bridge_runtime_access(
     namespace_import_roots.contains(root_name),
   )
   for member_name in ffi_runtime_export_member_names(runtime_export_name) {
-    access = ffi_js_access(access, member_name)
+    access = ffi_js_member_access_or_promisify(access, member_name)
   }
   access
+}
+
+///|
+/// `<fn>.__promisify__` is @types/node's declaration-only alias for
+/// "the promisified form of <fn>" — no runtime member of that name
+/// exists (calling it was a guaranteed TypeError; node:fs alone
+/// declares 45 such surfaces). Lower the member access to
+/// `util.promisify(<fn>)`, which also honors custom
+/// `util.promisify.custom` symbols (fs.write's multi-value callback
+/// etc.). The final render injects the `node:util` import only when
+/// this wrapper actually appears.
+fn ffi_js_member_access_or_promisify(
+  access : String,
+  member_name : String,
+) -> String {
+  if member_name == "__promisify__" {
+    "__ts_mbt_promisify(\{access})"
+  } else {
+    ffi_js_access(access, member_name)
+  }
 }
 
 ///|
@@ -4921,7 +5370,7 @@ fn ensure_bridge_module_runtime_access(
     ffi_runtime_export_root_name(runtime_export_name),
   )
   for member_name in ffi_runtime_export_member_names(runtime_export_name) {
-    access = ffi_js_access(access, member_name)
+    access = ffi_js_member_access_or_promisify(access, member_name)
   }
   access
 }
@@ -5276,6 +5725,9 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   let classes = normalize_classes_for_ffi(
     exported_classes, graph, modules, class_surface_cache, canonical_types,
   )
+  // After BOTH interface and class cloning: class properties also
+  // synthesize object structs (axios's `interceptors`).
+  decl_drain_synthesized_object_interfaces(interfaces)
   enum_lowering_rewrite_anonymous_enum_surfaces(
     enums, interfaces, imports, funcs, values, classes,
   )
@@ -5488,6 +5940,10 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       generic_type_params_by_name[class_type_name] = class_.type_params
     }
   }
+  // Merge instantiated generic union aliases registered during the
+  // normalize passes above (decl emission runs first in a package
+  // bundle, so the registry already holds the full set).
+  decl_drain_synthesized_union_aliases(exported_tagged_unions)
   let tagged_union_decls_by_name : Map[String, BridgeTaggedUnionDecl] = {}
   for tagged in exported_tagged_unions {
     let type_name = ffi_type_identifier(tagged.decl.name, "OpaqueType")
@@ -5658,16 +6114,10 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       // declares N as an enum, struct, or class.
       for entry in tagged.decl.cases {
         let (_, inner) = entry
-        let inner_named = match inner {
-          @ast.TsType::Named(name) => Some(name)
-          @ast.TsType::Array(@ast.TsType::Named(name)) => Some(name)
-          _ => None
-        }
-        match inner_named {
-          Some(inner_name) => {
-            let _ = ffi_mark_external_type(state, inner_name)
-          }
-          None => ()
+        let named_refs : Array[String] = []
+        tagged_union_case_named_refs(inner, named_refs)
+        for inner_name in named_refs {
+          let _ = ffi_mark_external_type(state, inner_name)
         }
       }
       emitted_type_names.push(type_name)
@@ -6406,6 +6856,25 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       ffi_fn_decl_key("promise_then"),
       "extern \"js\" fn _promise_then_extern_js(p : JSValue, on_ok : (JSValue) -> Unit) -> Unit = \"__ts_mbt_promise_then\"\n\nextern \"js\" fn _promise_then_catch_extern_js(p : JSValue, on_ok : (JSValue) -> Unit, on_err : (JSValue) -> Unit) -> Unit = \"__ts_mbt_promise_then_catch\"\n\nextern \"js\" fn _promise_map_extern_js(p : JSValue, f : (JSValue) -> JSValue) -> JSValue = \"__ts_mbt_promise_map\"\n\npub fn[T] Promise::then(self : Promise[T], on_ok : (T) -> Unit) -> Unit {\n  _promise_then_extern_js(unsafeCast(self), unsafeCast(on_ok))\n}\n\npub fn[T] Promise::then_catch(self : Promise[T], on_ok : (T) -> Unit, on_err : (JSValue) -> Unit) -> Unit {\n  _promise_then_catch_extern_js(unsafeCast(self), unsafeCast(on_ok), on_err)\n}\n\npub fn[T, U] Promise::map(self : Promise[T], f : (T) -> U) -> Promise[U] {\n  unsafeCast(_promise_map_extern_js(unsafeCast(self), unsafeCast(f)))\n}",
     )
+    // MoonBit-native async integration: `Promise::wait` suspends the
+    // enclosing `async fn` until the promise settles (the JS backend
+    // compiles async fns to CPS, and `%async.suspend` hands us the two
+    // continuations to route resolution/rejection into), a rejected
+    // promise surfaces as the catchable `JsRejection` error, and
+    // `run_async` kicks an async fn from a sync context (an unhandled
+    // async error exits non-zero so failures stay loud). Usage:
+    //
+    //   async fn work() -> Unit {
+    //     let res = fetchSomething(...).wait()   // await
+    //     ...
+    //   }
+    //   fn main { run_async(work) }
+    push_unique_ffi_section(
+      seen_ffi_binding_names,
+      ffi_sections,
+      ffi_fn_decl_key("promise_wait"),
+      bridge_promise_wait_self_contained_section,
+    )
   }
   if ffi_is_zod_module_spec(module_spec) {
     // `object()`'s shape is `$ZodLooseShape = Record<string, any>` — an
@@ -6416,7 +6885,17 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       seen_ffi_binding_names,
       ffi_sections,
       ffi_fn_decl_key("loose_shape_from_pairs"),
-      "pub extern \"js\" fn loose_shape_from_pairs(keys : Array[String], values : Array[JSValue]) -> Core__ZodLooseShape = \"__ts_mbt_record_from_pairs\"",
+      "pub extern \"js\" fn loose_shape_from_pairs(keys : Array[String], values : Array[JSValue]) -> Core_DollarZodLooseShape = \"__ts_mbt_record_from_pairs\"",
+    )
+    // Typed shape builder: the value slots are schemas, so accept the
+    // same upper bound `as_schema` produces — the shape entry reads
+    // `loose_shape_of(["name"], [as_schema(string_(None))])` with no
+    // per-value unsafeCast in user code.
+    push_unique_ffi_section(
+      seen_ffi_binding_names,
+      ffi_sections,
+      ffi_fn_decl_key("loose_shape_of"),
+      "pub fn loose_shape_of(keys : Array[String], values : Array[Schema[JSValue, JSValue, JSValue]]) -> Core_DollarZodLooseShape {\n  loose_shape_from_pairs(keys, unsafeCast(values))\n}",
     )
     push_unique_bridge_binding(
       seen_bridge_binding_names, bridge_lines, "__ts_mbt_record_from_pairs", "export function __ts_mbt_record_from_pairs(keys, values) { const out = {}; for (let i = 0; i < keys.length; i++) out[keys[i]] = values[i]; return out; }",
@@ -6815,16 +7294,10 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       emitted_type_names.push(synth_name)
       for entry in decl.cases {
         let (_, inner) = entry
-        let inner_named = match inner {
-          @ast.TsType::Named(name) => Some(name)
-          @ast.TsType::Array(@ast.TsType::Named(name)) => Some(name)
-          _ => None
-        }
-        match inner_named {
-          Some(inner_name) => {
-            let _ = ffi_mark_external_type(state, inner_name)
-          }
-          None => ()
+        let named_refs : Array[String] = []
+        tagged_union_case_named_refs(inner, named_refs)
+        for inner_name in named_refs {
+          let _ = ffi_mark_external_type(state, inner_name)
         }
       }
       match
@@ -6969,6 +7442,22 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       rendered_bridge_lines.push("")
     }
     None => ()
+  }
+  // `__ts_mbt_promisify` backs the `<fn>.__promisify__` lowering (see
+  // `ffi_js_member_access_or_promisify`); import node:util only when a
+  // wrapped access actually made it into the output.
+  let mut bridge_uses_promisify = false
+  for line in bridge_lines {
+    if line.contains("__ts_mbt_promisify(") {
+      bridge_uses_promisify = true
+      break
+    }
+  }
+  if bridge_uses_promisify {
+    rendered_bridge_lines.push(
+      "import { promisify as __ts_mbt_promisify } from \"node:util\";",
+    )
+    rendered_bridge_lines.push("")
   }
   if bridge_needs_option_unwrap || !bridge_struct_converter_lines.is_empty() {
     rendered_bridge_lines.push(

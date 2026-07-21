@@ -325,53 +325,53 @@ jsvalue_function_budget() {
     dotenv) printf '0\n' ;;
     ignore) printf '1\n' ;;
     hono) printf '5\n' ;;
-    zod) printf '607\n' ;;
+    zod) printf '484\n' ;;
     date-fns) printf '22\n' ;;
     colorette) printf '1\n' ;;
     magic-string) printf '0\n' ;;
-    source-map) printf '9\n' ;;
-    valibot) printf '291\n' ;;
+    source-map) printf '8\n' ;;
+    valibot) printf '295\n' ;;
     immer) printf '16\n' ;;
     execa) printf '5\n' ;;
     preact) printf '7\n' ;;
-    react) printf '30\n' ;;
+    react) printf '45\n' ;;
     ms) printf '1\n' ;;
     nanoid) printf '0\n' ;;
     dayjs) printf '3\n' ;;
     qs) printf '2\n' ;;
-    yaml) printf '69\n' ;;
+    yaml) printf '62\n' ;;
     superstruct) printf '56\n' ;;
     eventemitter3) printf '0\n' ;;
     mitt) printf '1\n' ;;
-    marked) printf '14\n' ;;
+    marked) printf '13\n' ;;
     semver) printf '33\n' ;;
     picomatch) printf '5\n' ;;
     deepmerge) printf '4\n' ;;
-    axios) printf '60\n' ;;
-    commander) printf '25\n' ;;
+    axios) printf '37\n' ;;
+    commander) printf '23\n' ;;
     debug) printf '5\n' ;;
     chokidar) printf '3\n' ;;
     pino) printf '8\n' ;;
-    lodash) printf '288\n' ;;
+    lodash) printf '286\n' ;;
     uuid) printf '5\n' ;;
     minimatch) printf '10\n' ;;
-    ws) printf '6\n' ;;
+    ws) printf '7\n' ;;
     vitest/runtime) printf '6\n' ;;
-    playwright) printf '411\n' ;;
-    react-router) printf '84\n' ;;
+    playwright) printf '179\n' ;;
+    react-router) printf '79\n' ;;
     jose) printf '46\n' ;;
     express) printf '6\n' ;;
     glob) printf '7\n' ;;
     node:sqlite) printf '1\n' ;;
     node:fs) printf '8\n' ;;
     node:path) printf '0\n' ;;
-    node:crypto) printf '24\n' ;;
+    node:crypto) printf '16\n' ;;
     node:os) printf '0\n' ;;
     node:url) printf '0\n' ;;
     node:querystring) printf '0\n' ;;
     node:assert) printf '23\n' ;;
     node:util) printf '13\n' ;;
-    node:buffer) printf '3\n' ;;
+    node:buffer) printf '2\n' ;;
     *) printf '0\n' ;;
   esac
 }
@@ -413,54 +413,65 @@ jsvalue_cause_budget() {
     chalk) printf '5|0|0|0|0|4|1\n' ;;
     dotenv) printf '0|0|0|0|0|0|0\n' ;;
     ignore) printf '3|2|0|1|0|0|0\n' ;;
-    hono) printf '85|12|6|26|4|28|9\n' ;;
-    zod) printf '1901|513|9|524|405|422|28\n' ;;
+    # 2026-07-20 union-return normalization: two hono signatures moved
+    # from the conditional/mapped bucket into callback/function (their
+    # rendered `Promise[...]` now matches the callback pattern first).
+    hono) printf '86|14|6|24|6|28|8\n' ;;
+    zod) printf '1493|333|8|206|405|513|28\n' ;;
     date-fns) printf '26|4|5|0|0|15|2\n' ;;
     colorette) printf '1|0|1|0|0|0|0\n' ;;
     magic-string) printf '0|0|0|0|0|0|0\n' ;;
-    source-map) printf '17|6|0|7|0|3|1\n' ;;
-    valibot) printf '1672|1172|24|14|13|411|38\n' ;;
+    source-map) printf '16|6|0|7|0|2|1\n' ;;
+    # 2026-07-20 typeof-value resolution: ~190 `reference: typeof action`
+    # members resolve from bare `JSValue` to callable shapes; the same
+    # day's instantiated union aliases (`ErrorMessage<Issue>` ->
+    # ErrorMessageOf* enums, 140 of them) and `expects: null` -> JSNull
+    # then removed another ~420 surface lines (unknown/any 1166 -> 504).
+    valibot) printf '1437|504|23|11|23|830|46\n' ;;
     immer) printf '23|4|7|2|3|1|6\n' ;;
     execa) printf '17|2|0|4|1|0|10\n' ;;
-    preact) printf '48|12|1|4|14|17|0\n' ;;
-    react) printf '129|43|8|24|34|14|6\n' ;;
+    preact) printf '50|12|1|4|14|19|0\n' ;;
+    react) printf '149|41|7|26|34|35|6\n' ;;
     ms) printf '1|0|0|0|0|0|1\n' ;;
     nanoid) printf '0|0|0|0|0|0|0\n' ;;
     dayjs) printf '3|0|1|0|1|0|1\n' ;;
     qs) printf '8|2|1|0|0|0|5\n' ;;
-    yaml) printf '179|34|7|84|0|20|34\n' ;;
-    superstruct) printf '83|4|0|15|0|59|5\n' ;;
+    yaml) printf '168|32|7|81|0|20|28\n' ;;
+    superstruct) printf '82|4|0|14|0|59|5\n' ;;
     eventemitter3) printf '16|0|0|0|5|6|5\n' ;;
     mitt) printf '10|4|0|2|3|1|0\n' ;;
-    marked) printf '57|10|0|0|20|13|14\n' ;;
+    marked) printf '48|12|0|0|16|13|7\n' ;;
     semver) printf '33|0|30|2|0|0|1\n' ;;
     picomatch) printf '11|6|4|0|0|0|1\n' ;;
     deepmerge) printf '14|8|0|2|0|3|1\n' ;;
-    axios) printf '188|78|4|18|1|54|33\n' ;;
-    commander) printf '26|0|0|10|3|3|10\n' ;;
-    debug) printf '19|6|0|1|0|12|0\n' ;;
+    axios) printf '164|60|4|21|0|75|4\n' ;;
+    commander) printf '24|0|0|9|2|3|10\n' ;;
+    debug) printf '17|4|0|1|0|12|0\n' ;;
     chokidar) printf '3|0|0|1|0|0|2\n' ;;
-    pino) printf '51|38|4|1|0|4|4\n' ;;
-    lodash) printf '1643|444|120|252|49|771|7\n' ;;
+    pino) printf '56|42|4|1|0|5|4\n' ;;
+    lodash) printf '1634|440|120|250|51|766|7\n' ;;
     uuid) printf '5|0|5|0|0|0|0\n' ;;
     minimatch) printf '10|0|0|2|0|3|5\n' ;;
-    ws) printf '43|28|0|3|2|4|6\n' ;;
-    vitest/runtime) printf '64|35|2|3|6|18|0\n' ;;
-    playwright) printf '1336|196|0|85|885|170|0\n' ;;
-    react-router) printf '347|164|25|30|39|67|22\n' ;;
+    ws) printf '52|24|0|3|2|17|6\n' ;;
+    vitest/runtime) printf '60|31|2|3|6|18|0\n' ;;
+    # 2026-07-20 async-callback lowering: one promise-callback signature
+    # moved from the tuple/array bucket into callback/function (the
+    # lowered wrapper line matches the callback pattern first).
+    playwright) printf '829|302|0|65|286|174|2\n' ;;
+    react-router) printf '378|188|21|29|45|77|18\n' ;;
     jose) printf '67|18|1|15|11|10|12\n' ;;
     express) printf '6|0|0|0|0|2|4\n' ;;
     glob) printf '17|6|0|1|0|2|8\n' ;;
     node:sqlite) printf '3|2|0|0|0|1|0\n' ;;
-    node:fs) printf '34|8|0|0|0|26|0\n' ;;
+    node:fs) printf '28|2|0|0|0|26|0\n' ;;
     node:path) printf '0|0|0|0|0|0|0\n' ;;
-    node:crypto) printf '102|24|3|18|1|56|0\n' ;;
+    node:crypto) printf '78|8|3|10|1|56|0\n' ;;
     node:os) printf '0|0|0|0|0|0|0\n' ;;
     node:url) printf '0|0|0|0|0|0|0\n' ;;
     node:querystring) printf '0|0|0|0|0|0|0\n' ;;
     node:assert) printf '29|6|4|2|13|0|4\n' ;;
-    node:util) printf '25|12|8|1|1|2|1\n' ;;
-    node:buffer) printf '9|6|0|3|0|0|0\n' ;;
+    node:util) printf '21|8|8|1|1|2|1\n' ;;
+    node:buffer) printf '6|4|0|2|0|0|0\n' ;;
     *) printf '0|0|0|0|0|0|0\n' ;;
   esac
 }
@@ -865,11 +876,10 @@ test "real-world zod bridge smoke" {
     abort("expected zod email failure")
   }
   // Generic owners (ZodObject) reach the surface via the as_schema upcast;
-  // the shape is built with the loose_shape_from_pairs module hook.
-  let shape = loose_shape_from_pairs(
-    ["name"],
-    [unsafeCast(string(None))],
-  )
+  // the shape is built with the TYPED loose_shape_of module hook — the
+  // value slots take the same Schema upper bound as_schema produces, so
+  // no per-value unsafeCast remains.
+  let shape = loose_shape_of(["name"], [as_schema(string(None))])
   let obj = as_schema(object(Some(shape), None))
   if obj.safeParse(unsafeCast("not an object"), None).success {
     abort("expected zod object failure")
@@ -1100,7 +1110,9 @@ test "real-world mitt bridge smoke" {
   let emitter = default(None)
   let counter = realworld_mitt_counter()
   emitter.on(realworld_mitt_event(), realworld_mitt_handler(counter))
-  emitter.emit(realworld_mitt_event(), realworld_mitt_event())
+  // `emit` overloads (`emit(type)` / `emit(type, event)`) merge to one
+  // signature with the trailing param optionalized.
+  emitter.emit(realworld_mitt_event(), Some(realworld_mitt_event()))
   assert_eq(counter.val, 1)
 }
 EOF
@@ -1963,7 +1975,9 @@ fn main {
   let emitter = @sut.default(None)
   let counter = realworld_mitt_counter()
   emitter.on(realworld_mitt_event(), realworld_mitt_handler(counter))
-  emitter.emit(realworld_mitt_event(), realworld_mitt_event())
+  // `emit` overloads (`emit(type)` / `emit(type, event)`) merge to one
+  // signature with the trailing param optionalized.
+  emitter.emit(realworld_mitt_event(), Some(realworld_mitt_event()))
   if counter.val != 1 {
     abort("unexpected mitt counter")
   }
@@ -2030,6 +2044,18 @@ EOF
 extern "js" fn realworld_axios_config() -> @sut.AxiosRequestConfig[@sut.JSValue] =
   #| () => ({ url: "/users/1", baseURL: "https://example.test" })
 
+// The `interceptors` property is an anonymous-object type (still
+// JSValue); one typed extern bridges to the SPECIALIZED manager struct
+// that the conditional-member specialization synthesizes.
+extern "js" fn realworld_request_interceptors(a : @sut.AxiosInstance) -> @sut.AxiosInterceptorManagerInternalAxiosRequestConfig =
+  #| (a) => a.interceptors.request
+
+extern "js" fn realworld_mark_config(c : @sut.InternalAxiosRequestConfig[@sut.JSValue]) -> @sut.InternalAxiosRequestConfig[@sut.JSValue] =
+  #| (c) => { globalThis.__tsmbt_intercepted = (globalThis.__tsmbt_intercepted || 0) + 1; return c; }
+
+extern "js" fn realworld_intercepted_count() -> Int =
+  #| () => globalThis.__tsmbt_intercepted || 0
+
 fn main {
   let axios_core : @sut.Axios = @sut.unsafeCast(@sut.get_default())
   if axios_core.get_uri(Some(realworld_axios_config())) != "https://example.test/users/1" {
@@ -2049,6 +2075,67 @@ fn main {
     fn(n : Int) { if n != 3 { abort("unexpected axios.all count") } },
     fn(_err) { abort("axios.all rejected") },
   )
+  // MoonBit-native async integration: `.wait()` awaits inside an async
+  // fn, and a rejected promise (connection refused on a closed port)
+  // surfaces as the catchable JsRejection error.
+  async fn smoke_async() -> Unit {
+    let awaited = @sut.all(vals).wait()
+    if awaited.length() != 3 {
+      abort("unexpected awaited axios.all count")
+    }
+    let core : @sut.Axios = @sut.unsafeCast(@sut.get_default())
+    let mut rejected = false
+    let resp : @sut.JSValue = core
+      .get("http://127.0.0.1:1/unreachable", None)
+      .wait() catch {
+      @sut.JsRejection(_) => {
+        rejected = true
+        @sut.unsafeCast(0)
+      }
+      _ => @sut.unsafeCast(0)
+    }
+    ignore(resp)
+    if !rejected {
+      abort("expected axios rejection to surface as JsRejection")
+    }
+    // Conditional-member specialization: `AxiosInterceptorManager<V>`'s
+    // `use` hides behind `V extends AxiosResponse ? ... : ...`; the
+    // request instantiation resolves to the request-interceptor
+    // signature and a MoonBit ASYNC fn slots straight in — axios awaits
+    // the promise the from_async glue returns before dispatching, so
+    // the marker count proves the interceptor really ran.
+    let instance = @sut.create(None)
+    let mgr = realworld_request_interceptors(instance)
+    let _ = mgr.use_(
+      Some(async fn(config) {
+        // Await a locally-resolved promise first, so axios really
+        // suspends on the handler before the marker runs.
+        let _ = @sut.all([]).wait()
+        realworld_mark_config(config)
+      }),
+      None,
+      None,
+    )
+    let instance_core : @sut.Axios = @sut.unsafeCast(instance)
+    let mut intercepted_rejected = false
+    let iresp : @sut.JSValue = instance_core
+      .get("http://127.0.0.1:1/unreachable", None)
+      .wait() catch {
+      _ => {
+        intercepted_rejected = true
+        @sut.unsafeCast(0)
+      }
+    }
+    ignore(iresp)
+    if !intercepted_rejected {
+      abort("expected intercepted request to reject")
+    }
+    if realworld_intercepted_count() != 1 {
+      abort("expected the async request interceptor to run exactly once")
+    }
+  }
+
+  @sut.run_async(smoke_async)
   // Typed JSValue constructors: object_from_pairs builds a heterogeneous
   // config object without unsafeCast.
   let probe = @sut.JSValue::object_from_pairs([
@@ -2437,9 +2524,21 @@ fn main {
     abort("unexpected file content")
   }
   @sut.unlinkSync(path)
-  if @sut.existsSync(path) {
-    abort("expected file to be removed")
+  // `<fn>.__promisify__` declarations must lower to util.promisify(fn):
+  // the literal runtime member does not exist, so the pre-fix glue was a
+  // guaranteed TypeError on all 45 node:fs *Promisify surfaces.
+  @sut.run_async(smoke_promisify)
+}
+
+async fn smoke_promisify() -> Unit {
+  let path = @sut.path_like_from_string("node-fs-async-smoke.txt")
+  let file = @sut.path_or_file_descriptor_from_path_like(path)
+  @sut.writeFilePromisify(file, "async fs", None).wait()
+  let data = @sut.readFilePromisify(file, None).wait()
+  if realworld_node_fs_to_string(data) != "async fs" {
+    abort("unexpected promisified file content")
   }
+  @sut.unlinkSync(path)
 }
 EOF
       ;;
@@ -2960,6 +3059,517 @@ while IFS='|' read -r kind package_spec module_name types_path; do
       ;;
   esac
 done < "$corpus_file"
+
+verify_async_integration_app() {
+  # End-to-end proof that the moonbitlang/async integration mode both
+  # ACTIVATES (consumer moon.mod carries the dep -> generated bridges
+  # swap to the js_async-delegating Promise layer) and RUNS: awaited
+  # values, with_timeout composition over a bridge promise, official
+  # AbortController plumbing, and the Promise.resolve leniency for
+  # TS-declared-Promise-but-bare-value returns (hono's sync-handler
+  # `request`). Uses the cached moonbitlang/async registry package.
+  local root="_build/realworld-typescript"
+  local app="$root/async-integration-app"
+
+  echo "== async-integration (moonbitlang/async consumer app)"
+
+  rm -rf "$app"
+  mkdir -p "$app/src/main"
+  ensure_project_node_modules "$app" "$(node_modules_root_for_spec axios)"
+
+  cat > "$app/moon.mod.json" <<'EOF'
+{
+  "name": "realworld/async_integration",
+  "version": "0.1.0",
+  "source": "src",
+  "preferred-target": "js",
+  "deps": { "moonbitlang/async": "0.18.1" }
+}
+EOF
+
+  (
+    cd "$app"
+    run_logged "$repo_root/$log_root/async_integration_vendor_axios.log" \
+      moon run "$repo_root/src/cmd/ts2mbt" -- vendor axios --out src/bridges
+    run_logged "$repo_root/$log_root/async_integration_vendor_hono.log" \
+      moon run "$repo_root/src/cmd/ts2mbt" -- vendor hono --out src/bridges
+  )
+
+  # Integration-mode markers must be present in the generated packages.
+  for pkg in axios hono; do
+    if ! grep -q "Promise::std" "$app/src/bridges/$pkg/bridge.mbt"; then
+      echo "expected integration-mode Promise::std in $pkg bridge" >&2
+      exit 1
+    fi
+    if ! grep -q "moonbitlang/async/js_async" "$app/src/bridges/$pkg/moon.pkg"; then
+      echo "expected js_async import in $pkg moon.pkg" >&2
+      exit 1
+    fi
+  done
+
+  cat > "$app/src/main/moon.pkg" <<'EOF'
+import {
+  "moonbitlang/async",
+  "moonbitlang/async/js_async",
+  "realworld/async_integration/bridges/axios",
+  "realworld/async_integration/bridges/hono",
+}
+
+pkgtype(kind: "executable")
+EOF
+
+  cat > "$app/src/main/main.mbt" <<'EOF'
+extern "js" fn smoke_response_status(res : @hono.JSValue) -> Int =
+  #| (res) => res.status
+
+fn smoke_hono_handler(c : @hono.Context[@hono.JSValue, @hono.JSValue, @hono.JSValue]) -> @hono.Response {
+  c.text("async ok", None, None)
+}
+
+async fn main {
+  // Awaiting a bridge promise directly under async fn main.
+  let vals : Array[@axios.JSValue] = [
+    @axios.JSValue::from_int(1),
+    @axios.JSValue::from_int(2),
+    @axios.JSValue::from_int(3),
+  ]
+  if @axios.all(vals).wait().length() != 3 {
+    abort("unexpected awaited axios.all count")
+  }
+  // Structured concurrency composes over bridge promises.
+  let timed = try {
+    @async.with_timeout(5000, async fn() { @axios.all(vals).wait() })
+  } catch {
+    _ => abort("expected with_timeout over bridge promise to succeed")
+  }
+  if timed.length() != 3 {
+    abort("unexpected with_timeout result count")
+  }
+  // Official AbortController plumbs through the integration wait.
+  let controller = @js_async.AbortController::new()
+  if @axios.all(vals).wait(abort_controller=controller).length() != 3 {
+    abort("unexpected cancellable wait count")
+  }
+  // Promise.resolve leniency: hono's sync-handler `request` returns a
+  // bare Response at runtime despite the Promise-typed declaration.
+  let app : @hono.Hono[@hono.JSValue, @hono.JSValue, @hono.JSValue] = @hono.new_hono(None)
+  let _ = app.get("/hello", smoke_hono_handler)
+  let res_p : @hono.Promise[@hono.JSValue] = @hono.unsafeCast(
+    app.request(@hono.unsafeCast("http://localhost/hello"), None, None, None),
+  )
+  let res = res_p.wait()
+  if smoke_response_status(res) != 200 {
+    abort("unexpected hono roundtrip status")
+  }
+  println("ASYNC-INTEGRATION-OK")
+}
+EOF
+
+  (
+    cd "$app"
+    run_logged "$repo_root/$log_root/async_integration_build.log" \
+      moon build --target js
+  )
+
+  local run_log="$repo_root/$log_root/async_integration_run.log"
+  if ! (cd "$app" && node _build/js/debug/build/main/main.js) \
+    > "$run_log" 2>&1; then
+    echo "async integration app failed; see $run_log" >&2
+    exit 1
+  fi
+  if ! grep -q "ASYNC-INTEGRATION-OK" "$run_log"; then
+    echo "async integration app did not reach the OK marker; see $run_log" >&2
+    exit 1
+  fi
+  echo "async-integration app ok"
+}
+
+verify_async_integration_app
+
+write_async_callback_fixture_package() {
+  # A useStateAction-style surface: TS receives `(...) => Promise<T>`
+  # callbacks and awaits them (React 19 useActionState shape). The
+  # runtime `dispatch` awaits the action, so the app only passes if the
+  # lowered MoonBit async fn really produced a JS promise.
+  local pkg_root="$1/state-action"
+  mkdir -p "$pkg_root"
+  cat > "$pkg_root/package.json" <<'EOF'
+{ "name": "state-action", "version": "1.0.0", "main": "index.js", "types": "index.d.ts" }
+EOF
+  # Covers every async-callback lowering position: top-level fn param,
+  # optional param, generic-interface method (field-wrapper path),
+  # non-generic-interface method (extern-pair path), and class method.
+  cat > "$pkg_root/index.d.ts" <<'EOF'
+export interface ActionHandle<S, P> {
+  dispatch(payload: P): Promise<S>;
+  getState(): S;
+  onCommit(listener: (state: S) => Promise<void>): void;
+}
+export interface Notifier {
+  notify(fn: () => Promise<string>): Promise<string>;
+}
+export declare function useStateAction<S, P>(
+  action: (state: S, payload: P) => Promise<S>,
+  initialState: S,
+): ActionHandle<S, P>;
+export declare function makeNotifier(): Notifier;
+export declare function runWithFallback(
+  input: string,
+  action?: (input: string) => Promise<string>,
+): Promise<string>;
+export declare class TaskQueue {
+  constructor();
+  push(task: () => Promise<string>): void;
+  drain(): Promise<string>;
+}
+export interface Interceptor<V> {
+  use(onFulfilled?: (value: V) => V | Promise<V>): number;
+  run(value: V): Promise<V>;
+}
+export declare function makeInterceptor(): Interceptor<string>;
+export declare function runAction(
+  action: (input: string) => Promise<string>,
+  input: string,
+): Promise<string>;
+export declare function delayValue(value: string, ms: number): Promise<string>;
+EOF
+  cat > "$pkg_root/index.js" <<'EOF'
+export function useStateAction(action, initialState) {
+  let state = initialState;
+  const listeners = [];
+  return {
+    dispatch: async (payload) => {
+      state = await action(state, payload);
+      for (const l of listeners) await l(state);
+      return state;
+    },
+    getState: () => state,
+    onCommit: (l) => { listeners.push(l); },
+  };
+}
+export function makeNotifier() {
+  return {
+    notify: async (fn) => "notified:" + (await fn()),
+  };
+}
+export async function runWithFallback(input, action) {
+  return action ? await action(input) : input + "-default";
+}
+export class TaskQueue {
+  constructor() { this.tasks = []; }
+  push(task) { this.tasks.push(task); }
+  async drain() {
+    const out = [];
+    for (const t of this.tasks) out.push(await t());
+    return out.join(",");
+  }
+}
+export function makeInterceptor() {
+  const handlers = [];
+  return {
+    use: (onFulfilled) => { handlers.push(onFulfilled); return handlers.length - 1; },
+    run: async (v) => { for (const h of handlers) if (h) v = await h(v); return v; },
+  };
+}
+export async function runAction(action, input) {
+  return await action(input);
+}
+export function delayValue(value, ms) {
+  return new Promise((resolve) => setTimeout(() => resolve(value), ms));
+}
+EOF
+}
+
+async_callback_smoke_body() {
+  # Shared assertions for both modes. Callers wrap this in either
+  # `async fn main` (integration) or `run_async` (self-contained).
+  cat <<'EOF'
+extern "js" fn js_to_string(v : @sa.JSValue) -> String =
+  #| (v) => String(v)
+
+async fn action_impl(state : @sa.JSValue, payload : @sa.JSValue) -> @sa.JSValue {
+  // Await a real TS promise INSIDE the callback before combining.
+  let delayed = @sa.delayValue(js_to_string(payload), 10).wait()
+  @sa.JSValue::from_string(js_to_string(state) + "+" + delayed)
+}
+
+suberror ActionBoom {
+  ActionBoom(String)
+}
+
+// Raises BEFORE any suspension on purpose: the MoonBit CPS ABI returns
+// a Result instead of calling the continuations for sync completion,
+// and the from_async glue must still turn that into a rejection.
+#warnings("-67")
+async fn failing_action(_state : @sa.JSValue, _payload : @sa.JSValue) -> @sa.JSValue raise {
+  raise ActionBoom("boom")
+}
+
+let commits : Array[String] = []
+
+async fn on_commit_impl(state : @sa.JSValue) -> Unit {
+  let s = @sa.delayValue(js_to_string(state), 5).wait()
+  commits.push(s)
+}
+
+async fn async_callback_smoke() -> Unit {
+  // A MoonBit async fn passed straight into the TS async-callback slot,
+  // plus an interface method on a generic receiver (field-wrapper path).
+  let handle = @sa.useStateAction(action_impl, @sa.JSValue::from_string("s0"))
+  handle.onCommit(on_commit_impl)
+  let s1 = handle.dispatch(@sa.JSValue::from_string("p1")).wait()
+  if js_to_string(s1) != "s0+p1" {
+    abort("unexpected state after first dispatch: " + js_to_string(s1))
+  }
+  if commits.length() != 1 || commits[0] != "s0+p1" {
+    abort("expected onCommit listener to run")
+  }
+  let s2 = handle.dispatch(@sa.JSValue::from_string("p2")).wait()
+  if js_to_string(s2) != "s0+p1+p2" {
+    abort("unexpected state after second dispatch")
+  }
+  if js_to_string(handle.getState()) != "s0+p1+p2" {
+    abort("unexpected getState")
+  }
+  // Interface method on a non-generic receiver (extern-pair path).
+  let notifier = @sa.makeNotifier()
+  let notified = notifier.notify(async fn() {
+    @sa.delayValue("ping", 5).wait()
+  }).wait()
+  if notified != "notified:ping" {
+    abort("unexpected notify result: " + notified)
+  }
+  // Class method path.
+  let queue = @sa.new_task_queue()
+  queue.push(async fn() { @sa.delayValue("a", 5).wait() })
+  queue.push(async fn() { @sa.delayValue("b", 1).wait() })
+  if queue.drain().wait() != "a,b" {
+    abort("unexpected drain result")
+  }
+  // Optional callback: Some(async fn) and None keep working.
+  let with_action = @sa.runWithFallback(
+    "in",
+    Some(async fn(input) { @sa.delayValue(input, 5).wait() + "!" }),
+  ).wait()
+  if with_action != "in!" {
+    abort("unexpected optional-callback result: " + with_action)
+  }
+  if @sa.runWithFallback("in", None).wait() != "in-default" {
+    abort("unexpected fallback result")
+  }
+  // Union-return handler slot (`(v: V) => V | Promise<V>`) normalizes to
+  // Promise[V] and lowers; `use` also exercises the sanitized-member
+  // (`use` -> `use_`) property-get path on a generic receiver.
+  let interceptor = @sa.makeInterceptor()
+  let _ = interceptor.use_(
+    Some(async fn(v) { @sa.delayValue(v, 5).wait() + ">async" }),
+  )
+  let _ = interceptor.use_(None)
+  let intercepted = interceptor.run("v0").wait()
+  if intercepted != "v0>async" {
+    abort("unexpected interceptor result: " + intercepted)
+  }
+  // Short-owner promise callbacks keep their structural form (no opaque
+  // synthesized RunActionActionCallback) and lower.
+  let ran = @sa.runAction(
+    async fn(input) { @sa.delayValue(input, 5).wait() + "?" },
+    "go",
+  ).wait()
+  if ran != "go?" {
+    abort("unexpected runAction result: " + ran)
+  }
+  // A raising action must surface as a promise rejection.
+  let failing = @sa.useStateAction(failing_action, @sa.JSValue::from_string("s0"))
+  let caught = try {
+    let _ = failing.dispatch(@sa.JSValue::from_string("p")).wait()
+    false
+  } catch {
+    _ => true
+  }
+  if !caught {
+    abort("expected raising action to reject")
+  }
+}
+EOF
+}
+
+verify_async_callback_app() {
+  # End-to-end proof that `(...) => Promise<T>` callback params lower to
+  # MoonBit `async (...) -> T raise` and actually RUN, in both promise
+  # layers: the self-contained one and the moonbitlang/async one.
+  local mode="$1" # self-contained | integration
+  local root="_build/realworld-typescript"
+  local app="$root/async-callback-app-$mode"
+
+  echo "== async-callback ($mode mode)"
+
+  rm -rf "$app"
+  mkdir -p "$app/src/main" "$app/node_modules"
+  write_async_callback_fixture_package "$app/node_modules"
+
+  if [ "$mode" = "integration" ]; then
+    cat > "$app/moon.mod.json" <<'EOF'
+{
+  "name": "realworld/async_callback_integration",
+  "version": "0.1.0",
+  "source": "src",
+  "preferred-target": "js",
+  "deps": { "moonbitlang/async": "0.18.1" }
+}
+EOF
+  else
+    cat > "$app/moon.mod.json" <<'EOF'
+{
+  "name": "realworld/async_callback_sc",
+  "version": "0.1.0",
+  "source": "src",
+  "preferred-target": "js"
+}
+EOF
+  fi
+
+  (
+    cd "$app"
+    run_logged "$repo_root/$log_root/async_callback_${mode}_vendor.log" \
+      moon run "$repo_root/src/cmd/ts2mbt" -- vendor state-action --out src/bridges
+  )
+
+  local bridge="$app/src/bridges/state_action/bridge.mbt"
+  local mbti="$app/src/bridges/state_action/bridge.mbti"
+  # The lowered public surface + glue must be present in both modes, and
+  # the interface must describe the lowered signature (not the raw one).
+  if ! grep -q "pub fn useStateAction(action : async (JSValue, JSValue) -> JSValue raise" "$bridge"; then
+    echo "expected lowered async-callback wrapper in $mode bridge" >&2
+    exit 1
+  fi
+  if ! grep -q "Promise::from_async(async fn() raise" "$bridge"; then
+    echo "expected from_async glue in $mode bridge" >&2
+    exit 1
+  fi
+  if ! grep -q "declare pub fn useStateAction(action : async (JSValue, JSValue) -> JSValue raise" "$mbti"; then
+    echo "expected lowered async-callback signature in $mode bridge.mbti" >&2
+    exit 1
+  fi
+  # Method positions lower too, in both layers (the realworld decl/ffi
+  # divergence check needs the surfaces to agree).
+  if ! grep -q "TaskQueue::push(self : TaskQueue, task : async () -> String raise)" "$bridge"; then
+    echo "expected lowered class-method callback in $mode bridge" >&2
+    exit 1
+  fi
+  if ! grep -q "TaskQueue::push(self : TaskQueue, task : async () -> String raise)" "$mbti"; then
+    echo "expected lowered class-method callback in $mode bridge.mbti" >&2
+    exit 1
+  fi
+  if ! grep -q "onCommit(self : ActionHandle\[S, P\], arg0 : async (S) -> Unit raise)" "$bridge"; then
+    echo "expected lowered generic-interface-method callback in $mode bridge" >&2
+    exit 1
+  fi
+  if ! grep -q "Notifier::notify(self : Notifier, arg0 : async () -> String raise)" "$bridge"; then
+    echo "expected lowered interface-method callback in $mode bridge" >&2
+    exit 1
+  fi
+  if ! grep -q "runWithFallback(input : String, action : (async (String) -> String raise)?)" "$bridge"; then
+    echo "expected lowered optional callback in $mode bridge" >&2
+    exit 1
+  fi
+  # Union `V | Promise<V>` handler returns normalize to Promise[V] and
+  # lower; the sanitized `use` member goes through the property-get
+  # extern instead of a nonexistent `self.use_` field read.
+  if ! grep -q "Interceptor::use_(self : Interceptor\[V\], arg0 : (async (V) -> V raise)?)" "$bridge"; then
+    echo "expected lowered union-return handler in $mode bridge" >&2
+    exit 1
+  fi
+  if ! grep -q '(o) => (...args) => o.use(...args)' "$bridge"; then
+    echo "expected bound-closure getter for sanitized member in $mode bridge" >&2
+    exit 1
+  fi
+  # Promise-returning callbacks on short-named owners stay structural.
+  if grep -q "RunActionActionCallback" "$bridge"; then
+    echo "unexpected opaque synthesized callback type in $mode bridge" >&2
+    exit 1
+  fi
+  if ! grep -q "runAction(action : async (String) -> String raise, input : String)" "$bridge"; then
+    echo "expected structural lowered runAction in $mode bridge" >&2
+    exit 1
+  fi
+  if [ "$mode" = "integration" ]; then
+    if ! grep -q "@js_async.Promise::from_async" "$bridge"; then
+      echo "expected @js_async delegation in integration bridge" >&2
+      exit 1
+    fi
+  else
+    if ! grep -q "_promise_ctor_extern_js" "$bridge"; then
+      echo "expected self-contained promise ctor in bridge" >&2
+      exit 1
+    fi
+  fi
+
+  if [ "$mode" = "integration" ]; then
+    # `async fn main` requires importing moonbitlang/async (error 4037);
+    # the `@async.sleep(1)` keeps that import used so the build stays
+    # warning-clean under warning_guard.
+    cat > "$app/src/main/moon.pkg" <<'EOF'
+import {
+  "moonbitlang/async",
+  "realworld/async_callback_integration/bridges/state_action" @sa,
+}
+
+pkgtype(kind: "executable")
+EOF
+    {
+      async_callback_smoke_body
+      cat <<'EOF'
+
+async fn main {
+  async_callback_smoke()
+  @async.sleep(1)
+  println("ASYNC-CALLBACK-OK")
+}
+EOF
+    } > "$app/src/main/main.mbt"
+  else
+    cat > "$app/src/main/moon.pkg" <<'EOF'
+import {
+  "realworld/async_callback_sc/bridges/state_action" @sa,
+}
+
+pkgtype(kind: "executable")
+EOF
+    {
+      async_callback_smoke_body
+      cat <<'EOF'
+
+fn main {
+  @sa.run_async(async fn() {
+    async_callback_smoke()
+    println("ASYNC-CALLBACK-OK")
+  })
+}
+EOF
+    } > "$app/src/main/main.mbt"
+  fi
+
+  (
+    cd "$app"
+    run_logged "$repo_root/$log_root/async_callback_${mode}_build.log" \
+      moon build --target js
+  )
+
+  local run_log="$repo_root/$log_root/async_callback_${mode}_run.log"
+  if ! (cd "$app" && node _build/js/debug/build/main/main.js) \
+    > "$run_log" 2>&1; then
+    echo "async callback app ($mode) failed; see $run_log" >&2
+    exit 1
+  fi
+  if ! grep -q "ASYNC-CALLBACK-OK" "$run_log"; then
+    echo "async callback app ($mode) did not reach the OK marker; see $run_log" >&2
+    exit 1
+  fi
+  echo "async-callback app ok ($mode)"
+}
+
+verify_async_callback_app self-contained
+verify_async_callback_app integration
 
 append_fallback_policy_report
 

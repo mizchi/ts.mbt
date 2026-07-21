@@ -2990,7 +2990,16 @@ fn Parser::parse_declare_class(
       property_type = self.parse_type()
     }
     let has_initializer = if self.match_(Eq) {
-      let _ = self.parse_assignment()
+      let init_expr = self.parse_assignment()
+      // Ambient classes carry no runtime initializer, but tsc still
+      // types the legal `static readonly X = <literal>` form from its
+      // literal. Mirror that instead of leaving the member `any`.
+      if property_type is Any {
+        match ambient_literal_property_type(init_expr, is_readonly) {
+          Some(inferred) => property_type = inferred
+          None => ()
+        }
+      }
       true
     } else {
       false
@@ -3055,5 +3064,44 @@ fn Parser::parse_declare_class(
       }
       d
     },
+  }
+}
+
+///|
+/// Literal type of an ambient class property initializer
+/// (`declare class C { static readonly X = "lit" }`). tsc types the
+/// readonly form as the literal itself and the (illegal-but-tolerated)
+/// non-readonly form as the widened primitive. Restricted to literals
+/// whose type reconstruction is exact; anything else abstains.
+fn ambient_literal_property_type(
+  expr : @ast.TsExpr,
+  is_readonly : Bool,
+) -> @ast.TsType? {
+  match expr {
+    @ast.TsExpr::StringLit(value) =>
+      Some(
+        if is_readonly {
+          @ast.TsType::Literal(value)
+        } else {
+          @ast.TsType::String_
+        },
+      )
+    @ast.TsExpr::BoolLit(value) =>
+      Some(
+        if is_readonly {
+          @ast.TsType::BooleanLiteral(value)
+        } else {
+          @ast.TsType::Boolean
+        },
+      )
+    @ast.TsExpr::IntLit(value) =>
+      Some(
+        if is_readonly {
+          @ast.TsType::NumberLiteral(value.to_string())
+        } else {
+          @ast.TsType::Int
+        },
+      )
+    _ => None
   }
 }
