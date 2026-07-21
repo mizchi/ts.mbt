@@ -3157,6 +3157,18 @@ async test "bridge: event-map overloads synthesize per-literal companions" {
       "declare pub fn Browser::once_page(self : Browser, arg0 : (Page) -> Unit) -> Browser",
     ),
   )
+  // CLASS-method event maps specialize the same way (ws / chokidar /
+  // node:fs watchers).
+  assert_true(
+    actual.contains(
+      "declare pub fn Watcher::on_change(self : Watcher, listener : (String) -> Unit) -> Watcher",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn Watcher::on_error(self : Watcher, listener : (Error_) -> Unit) -> Watcher",
+    ),
+  )
 }
 
 ///|

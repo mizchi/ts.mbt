@@ -13,3 +13,10 @@ export interface Browser {
   newPage(): Page;
 }
 export declare function launch(): Browser;
+
+export declare class Watcher {
+  on(event: 'change', listener: (path: string) => void): this;
+  on(event: 'error', listener: (err: Error) => void): this;
+  close(): void;
+}
+export declare function watch(path: string): Watcher;

@@ -1777,6 +1777,19 @@ fn ffi_rendered_mentions_param(rendered : String, name : String) -> Bool {
 }
 
 ///|
+fn ffi_event_js_args_src(literal : String?, js_args : Array[String]) -> String {
+  match literal {
+    Some(value) =>
+      if js_args.length() == 0 {
+        "\"\{value}\""
+      } else {
+        "\"\{value}\", " + js_args.join(", ")
+      }
+    None => js_args.join(", ")
+  }
+}
+
+///|
 fn ffi_iface_method_type_params(
   iface : @ast.TsInterface,
   member_name : String,
@@ -4587,6 +4600,13 @@ fn ffi_class_method_decl_to_moonbit(
   // actually adding value at the call site.
   let preserve = ffi_should_preserve_class_type_params(class_) &&
     !class_method.is_static
+  // Event companion (`on_close`): call the ORIGINAL JS member with the
+  // event literal injected as the first argument.
+  let (event_js_member, event_literal) = match
+    decl_event_member_special(class_.name, class_method.name) {
+    Some((js_member, literal)) => (js_member, Some(literal))
+    None => (class_method.name, (None : String?))
+  }
   let class_type_params = if preserve { class_.type_params } else { [] }
   let class_local_len = ffi_push_local_type_params(state, class_type_params)
   let class_type_name = ffi_class_type_name(class_.name)
@@ -4698,9 +4718,9 @@ fn ffi_class_method_decl_to_moonbit(
         js_params.push(arg)
       }
       let js_param_list = js_params.join(", ")
-      let js_call = ffi_js_access("self", class_method.name) +
+      let js_call = ffi_js_access("self", event_js_member) +
         "(" +
-        js_args.join(", ") +
+        ffi_event_js_args_src(event_literal, js_args) +
         ")"
       let extern_name = "_\{fn_name}_extern_js"
       let extern_decl = "extern \"js\" fn \{extern_name}(\{extern_params_src}) -> JSValue =\n  #| (\{js_param_list}) => \{js_call}"
@@ -4740,9 +4760,9 @@ fn ffi_class_method_decl_to_moonbit(
       js_params.push(arg)
     }
     let js_param_list = js_params.join(", ")
-    let js_call = ffi_js_access("self", class_method.name) +
+    let js_call = ffi_js_access("self", event_js_member) +
       "(" +
-      js_args.join(", ") +
+      ffi_event_js_args_src(event_literal, js_args) +
       ")"
     let instance_params = if method_params == "" {
       "self : \{class_type_name}"

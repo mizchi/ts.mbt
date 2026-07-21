@@ -452,7 +452,7 @@ jsvalue_cause_budget() {
     lodash) printf '1634|440|120|250|51|766|7\n' ;;
     uuid) printf '5|0|5|0|0|0|0\n' ;;
     minimatch) printf '10|0|0|2|0|3|5\n' ;;
-    ws) printf '40|24|0|3|2|5|6\n' ;;
+    ws) printf '52|24|0|3|2|17|6\n' ;;
     vitest/runtime) printf '60|31|2|3|6|18|0\n' ;;
     # 2026-07-20 async-callback lowering: one promise-callback signature
     # moved from the tuple/array bucket into callback/function (the

@@ -2065,6 +2065,23 @@ Corpus (8 rows): playwright JSValue functions 191 -> 179, lodash
 surface). Top-level generic FUNCTIONS (`chain<T>(items)`) still widen
 — that path has no receiver to hang a getter on; recorded as open.
 
+Round 15 (same day) — CLASS-method event maps, the round-11
+follow-up. Detection had to run on the RAW method (the clone rewrites
+the listener to a named opaque callback, hiding the `(Literal, Func)`
+shape — the same trap the interface path hit); the companion is built
+from the raw method (first param dropped, `any`/`unknown` listener
+returns normalized to `void`) and THEN cloned through
+`clone_class_method_in_scope`, with the same >= 2-distinct-literals
+activation, per-clone re-push, and `decl_event_member_specials`
+registration. The FFI class-method emitter consults the registry and
+injects the literal at both instance js_call sites
+(`(self, listener) => self.on("change", listener)`). ws gains 18
+typed `on_*` companions (`WebSocket::on_message` etc.; surface +12 —
+companions whose payload types still widen); chokidar's FSWatcher
+declares no literal overloads of its own (EventEmitter inheritance)
+so it is unaffected. Fixture `event-map-entry.d.ts` extended with the
+Watcher class + wbtest.
+
 Profiled with `moon bench --target native` + callgrind over the release
 `tscheck` binary (`--parse` / full, `--iters N`; use
 `--toggle-collect=<mangled check entry>` to isolate the check phase from

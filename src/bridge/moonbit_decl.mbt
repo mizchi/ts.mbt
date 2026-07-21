@@ -7653,6 +7653,7 @@ let decl_event_member_families : Map[String, Array[(String, @ast.TsType)]] = Map
 fn decl_reset_event_member_specials() -> Unit {
   decl_event_member_specials.clear()
   decl_event_member_families.clear()
+  decl_event_class_families.clear()
 }
 
 ///|
@@ -7723,6 +7724,90 @@ fn decl_event_literal_overload_parts(
         None
       }
     _ => None
+  }
+}
+
+///|
+/// Class-method twin of `decl_event_member_families`: (owner class,
+/// method) -> recorded (literal, companion method) overloads.
+let decl_event_class_families : Map[
+  String,
+  Array[(String, @ast.TsClassMethodDecl)],
+] = Map([])
+
+///|
+fn decl_maybe_synthesize_class_event_companions(
+  methods : Array[@ast.TsClassMethodDecl],
+  seen_method_keys : Array[String],
+  owner_name : String,
+  raw_method : @ast.TsClassMethodDecl,
+  clone : (@ast.TsClassMethodDecl) -> @ast.TsClassMethodDecl,
+) -> Unit {
+  // Detection runs on the RAW method: the clone rewrites the listener
+  // to a named opaque callback, hiding the `(Literal, Func)` shape.
+  if raw_method.is_static || raw_method.type_params.length() > 0 {
+    return
+  }
+  if raw_method.params.length() < 2 {
+    return
+  }
+  let literal = match raw_method.params[0].1 {
+    Literal(value) => value
+    _ => return
+  }
+  match raw_method.params[1].1 {
+    Func(_, _) => ()
+    _ => return
+  }
+  let suffix = match decl_event_literal_suffix(literal) {
+    Some(suffix) => suffix
+    None => return
+  }
+  let rest_params : Array[(String, @ast.TsType)] = []
+  for i in 1..<raw_method.params.length() {
+    // Listener returns declared `any` / `unknown` normalize to `void`
+    // in the companion — mirror of the interface path.
+    let (param_name, param_type) = raw_method.params[i]
+    let entry_type = match param_type {
+      Func(cb_params, Any | Unknown) => @ast.TsType::Func(cb_params, Void)
+      other => other
+    }
+    rest_params.push((param_name, entry_type))
+  }
+  let companion = clone({
+    ..raw_method,
+    name: raw_method.name + "_" + suffix,
+    params: rest_params,
+  })
+  let family_key = owner_name + "\u{0}" + raw_method.name
+  let family = match decl_event_class_families.get(family_key) {
+    Some(family) => family
+    None => {
+      let family : Array[(String, @ast.TsClassMethodDecl)] = []
+      decl_event_class_families[family_key] = family
+      family
+    }
+  }
+  let mut recorded = false
+  for entry in family {
+    if entry.0 == literal {
+      recorded = true
+      break
+    }
+  }
+  if !recorded {
+    family.push((literal, companion))
+  }
+  // Same activation rule and per-clone re-push as the interface path.
+  if family.length() >= 2 {
+    for entry in family {
+      let (entry_literal, entry_companion) = entry
+      append_class_method_once(methods, seen_method_keys, entry_companion)
+      decl_event_member_specials[owner_name + "\u{0}" + entry_companion.name] = (
+        raw_method.name,
+        entry_literal,
+      )
+    }
   }
 }
 
@@ -11901,6 +11986,23 @@ fn append_class_origin_members(
     }
   }
   for class_method in origin.class_.methods {
+    decl_maybe_synthesize_class_event_companions(
+      methods,
+      seen_method_keys,
+      origin.class_.name,
+      class_method,
+      fn(raw) {
+        clone_class_method_in_scope(
+          raw,
+          origin.class_.name,
+          this_owner,
+          origin.info,
+          origin.local_name_prefix,
+          modules,
+          canonical_types,
+        )
+      },
+    )
     append_class_method_once(
       methods,
       seen_method_keys,
