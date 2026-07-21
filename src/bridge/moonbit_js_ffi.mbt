@@ -1185,22 +1185,72 @@ fn ffi_string_subset_union_text(
 /// Returns `None` when the union cannot be discriminated at the JS boundary
 /// or when any case payload is not MoonBit-renderable; callers fall back to
 /// the existing `@js.Any` widening.
+/// Tagged-union cases for an inline union with function cases renamed
+/// to their SHAPE-tagged constructor (mirrors the decl renderer's
+/// `moonbit_inline_union_func_case_name`), so every site that derives
+/// the synthetic alias name agrees. `None` when the union does not
+/// tag-lower or a rename collides.
+fn ffi_inline_union_shaped_cases(
+  parts : Array[@ast.TsType],
+) -> Array[(String, @ast.TsType)]? {
+  let raw_cases = match tagged_union_cases(parts) {
+    Some(c) => c
+    None => return None
+  }
+  let cases : Array[(String, @ast.TsType)] = []
+  let seen_case_names : Array[String] = []
+  for entry in raw_cases {
+    let (case_name, inner) = entry
+    let renamed = match inner {
+      @ast.TsType::Func(fparams, fret) =>
+        @parser.moonbit_inline_union_func_case_name(fparams, fret)
+      _ => case_name
+    }
+    if seen_case_names.contains(renamed) {
+      return None
+    }
+    seen_case_names.push(renamed)
+    cases.push((renamed, inner))
+  }
+  Some(cases)
+}
+
+///|
 fn ffi_synthesize_inline_union(
   state : MoonBitJsFfiState,
   parts : Array[@ast.TsType],
 ) -> String? {
-  // Function members are accepted for EXPORTED alias lowering (their
-  // boundary stays passthrough), but inline synthesis would generate a
-  // wrapper whose conversion glue can't produce the enum from a raw
-  // value (`useState(initialState: S | (() => S))` — the JSValue
-  // argument has no path into `Auto_SValue_or_FnValue`). Keep such
-  // inline unions on the JSValue fallback.
+  // At most ONE function member: every function case discriminates via
+  // `typeof === "function"`, so a second one would be indistinguishable
+  // at the boundary. (Widened members like `S | (() => S)` with S ->
+  // JSValue never reach synthesis — the S case has no discriminator.)
+  let mut func_members = 0
   for part in parts {
     if part is Func(_, _) {
-      return None
+      func_members += 1
+      if func_members > 1 {
+        return None
+      }
     }
   }
-  let cases = match tagged_union_cases(parts) {
+  // A function-armed union only synthesizes when every Named sibling
+  // is a well-known JS global whose `instanceof` discriminator works at
+  // runtime. A bare type parameter or interface member
+  // (`useState(initialState: S | (() => S))`) has no runtime binding —
+  // the from_js converter would test `value instanceof S` against a
+  // name that does not exist in the bridge module.
+  if func_members > 0 {
+    for part in parts {
+      match part {
+        Named(name) | Applied(name, _) =>
+          if !@parser.moonbit_inline_union_runtime_named_ok(name) {
+            return None
+          }
+        _ => ()
+      }
+    }
+  }
+  let cases = match ffi_inline_union_shaped_cases(parts) {
     Some(c) => c
     None => return None
   }
@@ -1465,7 +1515,7 @@ fn ffi_inline_js_tagged_union_to_js(
         // original `Union(parts)` shape, so re-derive the synthesised name
         // and route through its `_to_js` converter.
         @ast.TsType::Union(parts) =>
-          match tagged_union_cases(parts) {
+          match ffi_inline_union_shaped_cases(parts) {
             Some(cases) => {
               let name = ffi_inline_union_synthesized_name(cases)
               match s.tagged_union_decls_by_name.get(name) {
@@ -3004,7 +3054,7 @@ fn ffi_type_js_converter_expr(
     // MoonBit `{$tag, _0}` shape gets unwrapped to the raw JS value
     // before reaching the call.
     Union(parts) =>
-      match tagged_union_cases(parts) {
+      match ffi_inline_union_shaped_cases(parts) {
         Some(cases) => {
           let synth_name = ffi_inline_union_synthesized_name(cases)
           match state.tagged_union_decls_by_name.get(synth_name) {
@@ -7027,16 +7077,10 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       emitted_type_names.push(synth_name)
       for entry in decl.cases {
         let (_, inner) = entry
-        let inner_named = match inner {
-          @ast.TsType::Named(name) => Some(name)
-          @ast.TsType::Array(@ast.TsType::Named(name)) => Some(name)
-          _ => None
-        }
-        match inner_named {
-          Some(inner_name) => {
-            let _ = ffi_mark_external_type(state, inner_name)
-          }
-          None => ()
+        let named_refs : Array[String] = []
+        tagged_union_case_named_refs(inner, named_refs)
+        for inner_name in named_refs {
+          let _ = ffi_mark_external_type(state, inner_name)
         }
       }
       match

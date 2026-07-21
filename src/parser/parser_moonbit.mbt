@@ -587,8 +587,30 @@ fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
     }
     // Outside a Tuple element, a bare `Rest(T)` behaves like `Array(T)`.
     Rest(inner) => "Array[" + moonbit_type_name(state, inner) + "]"
-    Union(parts) =>
-      match inline_union_synthesized_name_from_parts(parts) {
+    Union(parts) => {
+      // Mirror of the FFI guard: a function-armed union only
+      // synthesizes when every Named sibling is a well-known JS global
+      // whose `instanceof` discriminator works at runtime. A bare type
+      // parameter or interface member (`S | (() => S)`) has no runtime
+      // binding — keep the JSValue widening.
+      let mut inline_fn_member = false
+      let mut inline_undiscriminable_member = false
+      for part in parts {
+        match part {
+          @ast.TsType::Func(_, _) => inline_fn_member = true
+          @ast.TsType::Named(n) | @ast.TsType::Applied(n, _) =>
+            if !moonbit_inline_union_runtime_named_ok(n) {
+              inline_undiscriminable_member = true
+            }
+          _ => ()
+        }
+      }
+      let synthesized = if inline_fn_member && inline_undiscriminable_member {
+        None
+      } else {
+        inline_union_synthesized_name_from_parts(parts)
+      }
+      match synthesized {
         Some(name) => name
         None =>
           if moonbit_string_params_subset_union(state, parts) {
@@ -598,6 +620,7 @@ fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
             "JSValue"
           }
       }
+    }
     _ => {
       state.needs_jsvalue = true
       "JSValue"
@@ -727,6 +750,8 @@ fn inline_union_constructor_name_for_part(t : @ast.TsType) -> String? {
     @ast.TsType::Array(@ast.TsType::Named(name)) =>
       inline_union_named_constructor_name(name + "Array")
     @ast.TsType::Named(name) => inline_union_named_constructor_name(name)
+    @ast.TsType::Func(params, return_type) =>
+      Some(moonbit_inline_union_func_case_name(params, return_type))
     @ast.TsType::Literal(value) =>
       inline_union_literal_string_constructor(value)
     @ast.TsType::NumberLiteral(value) =>
@@ -825,6 +850,93 @@ fn inline_union_named_constructor_name(name : String) -> String? {
 }
 
 ///|
+/// Named union members whose `instanceof` discriminator actually works at
+/// runtime: well-known JS global constructors. A function-armed inline
+/// union only synthesizes when every Named sibling is one of these —
+/// interfaces, type aliases, and type parameters have no runtime binding,
+/// so `value instanceof Name` would throw in the generated converter.
+pub fn moonbit_inline_union_runtime_named_ok(name : String) -> Bool {
+  match name {
+    "RegExp"
+    | "Date"
+    | "Error"
+    | "URL"
+    | "URLPattern"
+    | "URLSearchParams"
+    | "Promise"
+    | "Map"
+    | "Set"
+    | "WeakMap"
+    | "WeakSet"
+    | "ArrayBuffer"
+    | "SharedArrayBuffer"
+    | "DataView"
+    | "Uint8Array"
+    | "Int8Array"
+    | "Uint16Array"
+    | "Int16Array"
+    | "Uint32Array"
+    | "Int32Array"
+    | "Float32Array"
+    | "Float64Array"
+    | "BigInt64Array"
+    | "BigUint64Array"
+    | "Blob"
+    | "File"
+    | "FormData"
+    | "Headers"
+    | "Request"
+    | "Response"
+    | "ReadableStream"
+    | "WritableStream"
+    | "AbortSignal"
+    | "AbortController"
+    | "Buffer" => true
+    _ => false
+  }
+}
+
+///|
+/// Deterministic constructor / alias-name component for a FUNCTION member
+/// of an inline union (`boolean | ((a: Pair, b: Pair) => number)`). The
+/// shape is encoded in the name so two same-package unions with different
+/// function signatures never merge into one synthetic alias
+/// (`FnPairPairToDoubleValue` vs `FnParsedNodeParsedNodeToBoolValue`).
+/// Shared by the decl renderer and the bridge FFI so both compute the
+/// same synthetic name. Positions with no direct tag encode as `X`
+/// (matching the payload renderer's local JSValue widening).
+pub fn moonbit_inline_union_func_case_name(
+  params : Array[@ast.TsType],
+  return_type : @ast.TsType,
+) -> String {
+  let mut name = "Fn"
+  for param in params {
+    name += inline_union_func_type_tag(param)
+  }
+  name += "To" + inline_union_func_type_tag(return_type) + "Value"
+  name
+}
+
+///|
+fn inline_union_func_type_tag(t : @ast.TsType) -> String {
+  match t {
+    @ast.TsType::Number => "Double"
+    @ast.TsType::Int => "Int"
+    @ast.TsType::String_ => "String"
+    @ast.TsType::Boolean => "Bool"
+    @ast.TsType::BigInt => "Int64"
+    @ast.TsType::Void | @ast.TsType::Undefined => "Unit"
+    @ast.TsType::Array(inner) => inline_union_func_type_tag(inner) + "Array"
+    @ast.TsType::Named(n) | @ast.TsType::Applied(n, _) =>
+      match inline_union_named_constructor_name(n) {
+        Some(_) => n
+        None => "X"
+      }
+    _ => "X"
+  }
+}
+
+///|
 fn inline_union_member_is_literal_like(t : @ast.TsType) -> Bool {
   match t {
     @ast.TsType::Literal(_) => true
@@ -850,7 +962,17 @@ fn inline_union_synthesized_name_from_parts(
   }
   let names : Array[String] = []
   let mut has_non_literal = false
+  // At most ONE function member: the runtime discriminator for every
+  // function case is `typeof === "function"`, so a second one would be
+  // indistinguishable at the boundary.
+  let mut func_members = 0
   for entry in parts {
+    if entry is @ast.TsType::Func(_, _) {
+      func_members += 1
+      if func_members > 1 {
+        return None
+      }
+    }
     if !inline_union_member_is_literal_like(entry) {
       has_non_literal = true
     }

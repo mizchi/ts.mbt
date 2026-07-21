@@ -3098,3 +3098,31 @@ async test "bridge: instantiated union aliases and null members" {
   assert_true(actual.contains("declare pub type JSNull"))
   assert_false(actual.contains("Unresolved type reference JSNull"))
 }
+
+///|
+async test "bridge: inline value-or-function unions synthesize shaped enums" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/inline-fn-union-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // Anonymous `boolean | fn` members synthesize tagged-union aliases with
+  // the function SHAPE in the name, so the two members with different
+  // signatures stay distinct instead of widening to JSValue (or merging).
+  assert_true(
+    actual.contains(
+      "uniqueKeys : Auto_BoolValue_or_FnParsedNodeParsedNodeToBoolValue?",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "sortMapEntries : Auto_BoolValue_or_FnPairPairToDoubleValue?",
+    ),
+  )
+}

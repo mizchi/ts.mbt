@@ -1891,6 +1891,54 @@ zod/yaml rows unchanged (zod's message unions were already
 string-subset-lowered; yaml's value-or-function members are anonymous
 inline unions — still open, needs an inline construction story).
 
+Round 10 (same day) — ANONYMOUS inline value-or-function unions, the
+last recorded value-or-function gap. `ffi_synthesize_inline_union`
+refused every union with a function member (a guard from the react
+hooks era whose motivating case — `S | (() => S)` with S widened —
+can't reach synthesis anyway: the widened arm has no runtime
+discriminator). Lifting it needed two safety pieces:
+
+- SHAPE-tagged constructor names: a structural alias name that spells
+  every function case as bare `FnValue` would merge yaml's
+  `uniqueKeys: boolean | ((a: ParsedNode, b: ParsedNode) => boolean)`
+  and `sortMapEntries: boolean | ((a: Pair, b: Pair) => number)` into
+  one `Auto_BoolValue_or_FnValue` with whichever payload registered
+  first. `moonbit_inline_union_func_case_name` (parser package, shared
+  by the decl renderer and the bridge FFI so both compute identical
+  names) encodes params and return into the case name:
+  `Auto_BoolValue_or_FnPairPairToDoubleValue` vs
+  `Auto_BoolValue_or_FnParsedNodeParsedNodeToBoolValue`. All three FFI
+  sites that derive the synthetic name now go through one
+  `ffi_inline_union_shaped_cases` helper.
+- at most ONE function member per union: every function case
+  discriminates via `typeof === "function"`, so a second would be
+  indistinguishable at the boundary — both sides refuse those.
+- Named siblings must be RUNTIME-DISCRIMINABLE: a function-armed union
+  only synthesizes when every Named member is a well-known JS global
+  constructor (`moonbit_inline_union_runtime_named_ok`: RegExp / URL /
+  URLPattern / Date / Buffer / typed arrays / ...) whose `instanceof`
+  works in the generated converter. The first attempt (reject local
+  type params) missed `useState(initialState: S | (() => S))` — its
+  `S` isn't registered as a local param on that path — and the
+  generated from_js tested `value instanceof S` against a name that
+  doesn't exist in bridge.js. Interfaces / aliases / type params all
+  fail the allowlist, so only truly discriminable unions synthesize.
+
+The synthesized-inline emission loop also switched its payload
+dependency scan to `tagged_union_case_named_refs` (playwright's
+`(url: URL) => boolean` case needed the `URL` external companion that
+the old bare-Named scan missed). Fixture `inline-fn-union-entry.d.ts`
++ wbtest pin the two-distinct-signatures case.
+
+Corpus (net, after the runtime-named guard): playwright's
+`page.route(...)` family now takes
+`Auto_RegExpValue_or_StringValue_or_URLPatternValue_or_FnURLToBoolValue`
+instead of JSValue (functions 200 -> 196, surface 827 -> 811); yaml
+172 -> 168 with uniqueKeys/sortMapEntries typed; node:fs 34 -> 28;
+lodash 1651 -> 1644; pino / zod / axios / node:util small drops;
+react unchanged (its candidate unions all carry interface-typed value
+arms that the guard correctly refuses).
+
 Profiled with `moon bench --target native` + callgrind over the release
 `tscheck` binary (`--parse` / full, `--iters N`; use
 `--toggle-collect=<mangled check entry>` to isolate the check phase from

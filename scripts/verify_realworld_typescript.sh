@@ -325,7 +325,7 @@ jsvalue_function_budget() {
     dotenv) printf '0\n' ;;
     ignore) printf '1\n' ;;
     hono) printf '5\n' ;;
-    zod) printf '485\n' ;;
+    zod) printf '484\n' ;;
     date-fns) printf '22\n' ;;
     colorette) printf '1\n' ;;
     magic-string) printf '0\n' ;;
@@ -352,12 +352,12 @@ jsvalue_function_budget() {
     debug) printf '5\n' ;;
     chokidar) printf '3\n' ;;
     pino) printf '8\n' ;;
-    lodash) printf '289\n' ;;
+    lodash) printf '288\n' ;;
     uuid) printf '5\n' ;;
     minimatch) printf '10\n' ;;
     ws) printf '7\n' ;;
     vitest/runtime) printf '6\n' ;;
-    playwright) printf '200\n' ;;
+    playwright) printf '196\n' ;;
     react-router) printf '79\n' ;;
     jose) printf '46\n' ;;
     express) printf '6\n' ;;
@@ -417,7 +417,7 @@ jsvalue_cause_budget() {
     # from the conditional/mapped bucket into callback/function (their
     # rendered `Promise[...]` now matches the callback pattern first).
     hono) printf '86|14|6|24|6|28|8\n' ;;
-    zod) printf '1498|333|9|210|405|513|28\n' ;;
+    zod) printf '1497|333|8|210|405|513|28\n' ;;
     date-fns) printf '26|4|5|0|0|15|2\n' ;;
     colorette) printf '1|0|1|0|0|0|0\n' ;;
     magic-string) printf '0|0|0|0|0|0|0\n' ;;
@@ -436,7 +436,7 @@ jsvalue_cause_budget() {
     nanoid) printf '0|0|0|0|0|0|0\n' ;;
     dayjs) printf '3|0|1|0|1|0|1\n' ;;
     qs) printf '8|2|1|0|0|0|5\n' ;;
-    yaml) printf '172|34|7|83|0|20|28\n' ;;
+    yaml) printf '168|32|7|81|0|20|28\n' ;;
     superstruct) printf '82|4|0|14|0|59|5\n' ;;
     eventemitter3) printf '16|0|0|0|5|6|5\n' ;;
     mitt) printf '10|4|0|2|3|1|0\n' ;;
@@ -444,12 +444,12 @@ jsvalue_cause_budget() {
     semver) printf '33|0|30|2|0|0|1\n' ;;
     picomatch) printf '11|6|4|0|0|0|1\n' ;;
     deepmerge) printf '14|8|0|2|0|3|1\n' ;;
-    axios) printf '166|62|4|21|0|75|4\n' ;;
+    axios) printf '164|60|4|21|0|75|4\n' ;;
     commander) printf '24|0|0|9|2|3|10\n' ;;
     debug) printf '17|4|0|1|0|12|0\n' ;;
     chokidar) printf '3|0|0|1|0|0|2\n' ;;
-    pino) printf '57|44|4|1|0|4|4\n' ;;
-    lodash) printf '1651|444|121|254|49|776|7\n' ;;
+    pino) printf '55|42|4|1|0|4|4\n' ;;
+    lodash) printf '1644|440|120|252|49|776|7\n' ;;
     uuid) printf '5|0|5|0|0|0|0\n' ;;
     minimatch) printf '10|0|0|2|0|3|5\n' ;;
     ws) printf '40|24|0|3|2|5|6\n' ;;
@@ -457,20 +457,20 @@ jsvalue_cause_budget() {
     # 2026-07-20 async-callback lowering: one promise-callback signature
     # moved from the tuple/array bucket into callback/function (the
     # lowered wrapper line matches the callback pattern first).
-    playwright) printf '827|288|0|58|288|191|2\n' ;;
-    react-router) printf '380|190|21|29|45|77|18\n' ;;
+    playwright) printf '811|284|0|58|276|191|2\n' ;;
+    react-router) printf '378|188|21|29|45|77|18\n' ;;
     jose) printf '67|18|1|15|11|10|12\n' ;;
     express) printf '6|0|0|0|0|2|4\n' ;;
     glob) printf '17|6|0|1|0|2|8\n' ;;
     node:sqlite) printf '3|2|0|0|0|1|0\n' ;;
-    node:fs) printf '34|8|0|0|0|26|0\n' ;;
+    node:fs) printf '28|2|0|0|0|26|0\n' ;;
     node:path) printf '0|0|0|0|0|0|0\n' ;;
     node:crypto) printf '78|8|3|10|1|56|0\n' ;;
     node:os) printf '0|0|0|0|0|0|0\n' ;;
     node:url) printf '0|0|0|0|0|0|0\n' ;;
     node:querystring) printf '0|0|0|0|0|0|0\n' ;;
     node:assert) printf '29|6|4|2|13|0|4\n' ;;
-    node:util) printf '23|10|8|1|1|2|1\n' ;;
+    node:util) printf '21|8|8|1|1|2|1\n' ;;
     node:buffer) printf '6|4|0|2|0|0|0\n' ;;
     *) printf '0|0|0|0|0|0|0\n' ;;
   esac
