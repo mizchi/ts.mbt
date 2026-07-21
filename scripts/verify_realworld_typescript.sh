@@ -329,7 +329,7 @@ jsvalue_function_budget() {
     date-fns) printf '22\n' ;;
     colorette) printf '1\n' ;;
     magic-string) printf '0\n' ;;
-    source-map) printf '9\n' ;;
+    source-map) printf '8\n' ;;
     valibot) printf '295\n' ;;
     immer) printf '16\n' ;;
     execa) printf '5\n' ;;
@@ -352,12 +352,12 @@ jsvalue_function_budget() {
     debug) printf '5\n' ;;
     chokidar) printf '3\n' ;;
     pino) printf '8\n' ;;
-    lodash) printf '288\n' ;;
+    lodash) printf '286\n' ;;
     uuid) printf '5\n' ;;
     minimatch) printf '10\n' ;;
     ws) printf '7\n' ;;
     vitest/runtime) printf '6\n' ;;
-    playwright) printf '191\n' ;;
+    playwright) printf '179\n' ;;
     react-router) printf '79\n' ;;
     jose) printf '46\n' ;;
     express) printf '6\n' ;;
@@ -417,11 +417,11 @@ jsvalue_cause_budget() {
     # from the conditional/mapped bucket into callback/function (their
     # rendered `Promise[...]` now matches the callback pattern first).
     hono) printf '86|14|6|24|6|28|8\n' ;;
-    zod) printf '1497|333|8|210|405|513|28\n' ;;
+    zod) printf '1493|333|8|206|405|513|28\n' ;;
     date-fns) printf '26|4|5|0|0|15|2\n' ;;
     colorette) printf '1|0|1|0|0|0|0\n' ;;
     magic-string) printf '0|0|0|0|0|0|0\n' ;;
-    source-map) printf '17|6|0|7|0|3|1\n' ;;
+    source-map) printf '16|6|0|7|0|2|1\n' ;;
     # 2026-07-20 typeof-value resolution: ~190 `reference: typeof action`
     # members resolve from bare `JSValue` to callable shapes; the same
     # day's instantiated union aliases (`ErrorMessage<Issue>` ->
@@ -448,8 +448,8 @@ jsvalue_cause_budget() {
     commander) printf '24|0|0|9|2|3|10\n' ;;
     debug) printf '17|4|0|1|0|12|0\n' ;;
     chokidar) printf '3|0|0|1|0|0|2\n' ;;
-    pino) printf '55|42|4|1|0|4|4\n' ;;
-    lodash) printf '1644|440|120|252|49|776|7\n' ;;
+    pino) printf '56|42|4|1|0|5|4\n' ;;
+    lodash) printf '1634|440|120|250|51|766|7\n' ;;
     uuid) printf '5|0|5|0|0|0|0\n' ;;
     minimatch) printf '10|0|0|2|0|3|5\n' ;;
     ws) printf '40|24|0|3|2|5|6\n' ;;
@@ -457,7 +457,7 @@ jsvalue_cause_budget() {
     # 2026-07-20 async-callback lowering: one promise-callback signature
     # moved from the tuple/array bucket into callback/function (the
     # lowered wrapper line matches the callback pattern first).
-    playwright) printf '842|302|0|65|286|187|2\n' ;;
+    playwright) printf '829|302|0|65|286|174|2\n' ;;
     react-router) printf '378|188|21|29|45|77|18\n' ;;
     jose) printf '67|18|1|15|11|10|12\n' ;;
     express) printf '6|0|0|0|0|2|4\n' ;;
@@ -876,11 +876,10 @@ test "real-world zod bridge smoke" {
     abort("expected zod email failure")
   }
   // Generic owners (ZodObject) reach the surface via the as_schema upcast;
-  // the shape is built with the loose_shape_from_pairs module hook.
-  let shape = loose_shape_from_pairs(
-    ["name"],
-    [unsafeCast(string(None))],
-  )
+  // the shape is built with the TYPED loose_shape_of module hook — the
+  // value slots take the same Schema upper bound as_schema produces, so
+  // no per-value unsafeCast remains.
+  let shape = loose_shape_of(["name"], [as_schema(string(None))])
   let obj = as_schema(object(Some(shape), None))
   if obj.safeParse(unsafeCast("not an object"), None).success {
     abort("expected zod object failure")
@@ -3480,8 +3479,8 @@ EOF
     echo "expected lowered union-return handler in $mode bridge" >&2
     exit 1
   fi
-  if ! grep -q '(o) => o.use$' "$bridge"; then
-    echo "expected property-get extern for sanitized member in $mode bridge" >&2
+  if ! grep -q '(o) => (...args) => o.use(...args)' "$bridge"; then
+    echo "expected bound-closure getter for sanitized member in $mode bridge" >&2
     exit 1
   fi
   # Promise-returning callbacks on short-named owners stay structural.

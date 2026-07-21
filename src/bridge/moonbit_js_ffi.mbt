@@ -1546,12 +1546,44 @@ fn ffi_function_field_method_decl(
   js_field_name : String,
   field_type : @ast.TsType,
   event_special? : (String, String)? = None,
+  method_type_params? : Array[String] = [],
 ) -> String? {
   // Event companion (`on_close`): call the ORIGINAL JS member with the
   // event literal injected as the first argument.
   let (js_field_name, injected_literal) = match event_special {
     Some((js_member, literal)) => (js_member, Some(literal))
     None => (js_field_name, None)
+  }
+  // A member's own generic binder (`map<U>(fn: (item: T) => U):
+  // CollectionChain<U>`) survives on the pure-MoonBit wrapper: MoonBit
+  // forbids generic externs, so the wrapper fetches a BOUND closure
+  // through a monomorphic getter and carries `fn[T, U]` itself.
+  let (generic_names, generic_inner) = match field_type {
+    GenericFunc(names, inner) => (names, inner)
+    _ => (method_type_params, field_type)
+  }
+  match generic_inner {
+    Func(_, _) if generic_names.length() > 0 => {
+      let extra : Array[String] = []
+      for n in generic_names {
+        if !receiver_type_params.contains(n) && !extra.contains(n) {
+          extra.push(n)
+        }
+      }
+      if extra.length() > 0 {
+        let saved = ffi_push_local_type_params(state, extra)
+        let generic_result = ffi_generic_member_method_decl(
+          state, receiver_type, receiver_type_params, extra, field_name, js_field_name,
+          generic_inner,
+        )
+        ffi_restore_local_type_params(state, saved)
+        match generic_result {
+          Some(decl) => return Some(decl)
+          None => ()
+        }
+      }
+    }
+    _ => ()
   }
   match ffi_function_type_parts(state, field_type) {
     Some((source_param_types, param_types, return_type)) => {
@@ -1634,13 +1666,12 @@ fn ffi_function_field_method_decl(
           }
           None => ()
         }
-        if field_name != js_field_name && field_name != "_call_" {
-          // Sanitized member names (`use` -> `use_`): the struct field is
-          // a raw view over the JS object, so `self.use_` would read a
-          // property that does not exist. Fetch the function through a
-          // monomorphic property-get extern under the REAL JS name and
-          // cast it back to the field's function type (the receiver's
-          // type params are in scope on the wrapper).
+        if field_name != "_call_" {
+          // Members on generic-preserved receivers route through a
+          // monomorphic getter returning a BOUND closure —
+          // `(self.first)()` would extract the prototype method and
+          // call it with `this` undefined, and sanitized member names
+          // (`use` -> `use_`) don't exist on the raw object at all.
           state.needs_js_any = true
           // The field name goes in VERBATIM: it is unique within the
           // receiver struct, while its snake_case can collide
@@ -1652,7 +1683,7 @@ fn ffi_function_field_method_decl(
             "_get_extern_js"
           let raw_param_types_src = param_types.join(", ")
           let field_fn_type = "(\{raw_param_types_src}) -> \{return_type}"
-          let getter_decl = "extern \"js\" fn \{getter_name}(target : JSValue) -> JSValue =\n  #| (o) => \{ffi_js_access("o", js_field_name)}"
+          let getter_decl = "extern \"js\" fn \{getter_name}(target : JSValue) -> JSValue =\n  #| (o) => (...args) => \{ffi_js_access("o", js_field_name)}(...args)"
           let wrapper_decl = "pub \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} {\n  let field_fn : \{field_fn_type} = unsafeCast(\{getter_name}(unsafeCast(self)))\n  field_fn(\{args_src})\n}"
           Some(getter_decl + "\n\n" + wrapper_decl)
         } else {
@@ -1701,6 +1732,121 @@ fn ffi_function_field_method_decl(
             )
         }
       }
+    }
+    None => None
+  }
+}
+
+///|
+/// True when `name` appears as a standalone identifier token inside a
+/// rendered MoonBit type string. Method type params that only occurred
+/// in dropped/widened positions must not be declared on the wrapper —
+/// an unused fn type parameter is a hard error ([4027]).
+fn ffi_rendered_mentions_param(rendered : String, name : String) -> Bool {
+  if name == "" {
+    return false
+  }
+  let padded = " " + rendered + " "
+  let n = name.length()
+  fn is_ident(c : Char) -> Bool {
+    (c >= 'a' && c <= 'z') ||
+    (c >= 'A' && c <= 'Z') ||
+    (c >= '0' && c <= '9') ||
+    c == '_'
+  }
+
+  let mut i = 1
+  while i + n < padded.length() {
+    let mut matches = true
+    for j in 0..<n {
+      if padded[i + j] != name[j] {
+        matches = false
+        break
+      }
+    }
+    if matches {
+      let before = padded[i - 1].unsafe_to_char()
+      let after = padded[i + n].unsafe_to_char()
+      if !is_ident(before) && !is_ident(after) {
+        return true
+      }
+    }
+    i += 1
+  }
+  false
+}
+
+///|
+fn ffi_iface_method_type_params(
+  iface : @ast.TsInterface,
+  member_name : String,
+) -> Array[String] {
+  for entry in iface.method_type_params {
+    if entry.0 == member_name {
+      return entry.1
+    }
+  }
+  []
+}
+
+///|
+/// Pure-MoonBit wrapper for a member with its OWN generic binder. The
+/// getter returns a bound closure (`(o) => (...args) => o.map(...args)`)
+/// so `this` survives, and the wrapper declares the combined
+/// receiver+member type params — generic externs are forbidden, but a
+/// plain `pub fn[T, U]` casting the fetched closure is not.
+fn ffi_generic_member_method_decl(
+  state : MoonBitJsFfiState,
+  receiver_type : String,
+  receiver_type_params : Array[String],
+  method_extra_type_params : Array[String],
+  field_name : String,
+  js_field_name : String,
+  inner : @ast.TsType,
+) -> String? {
+  match ffi_function_type_parts(state, inner) {
+    Some((_, param_types, raw_return)) => {
+      let self_type = ffi_receiver_self_type(
+        receiver_type, receiver_type_params,
+      )
+      let return_type = match raw_return {
+        "This" => self_type
+        "This?" => self_type + "?"
+        _ => raw_return
+      }
+      let params : Array[String] = ["self : \{self_type}"]
+      let args : Array[String] = []
+      for i, param_type in param_types {
+        let arg_name = "arg" + i.to_string()
+        params.push("\{arg_name} : \{param_type}")
+        args.push(arg_name)
+      }
+      let combined : Array[String] = []
+      for tp in receiver_type_params {
+        combined.push(tp)
+      }
+      let rendered_surface = param_types.join(", ") + " " + return_type
+      for tp in method_extra_type_params {
+        if ffi_rendered_mentions_param(
+            rendered_surface,
+            @parser.moonbit_sanitize_type_param_name(tp),
+          ) {
+          combined.push(tp)
+        }
+      }
+      let fn_prefix = ffi_function_type_param_prefix(combined)
+      state.needs_js_any = true
+      let getter_name = "_" +
+        ffi_to_snake_case(receiver_type) +
+        "_" +
+        field_name +
+        "_generic_get_extern_js"
+      let field_fn_type = "(" + param_types.join(", ") + ") -> " + return_type
+      let getter_decl = "extern \"js\" fn \{getter_name}(target : JSValue) -> JSValue =\n  #| (o) => (...args) => \{ffi_js_access("o", js_field_name)}(...args)"
+      let params_src = params.join(", ")
+      let args_src = args.join(", ")
+      let wrapper_decl = "pub \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} {\n  let field_fn : \{field_fn_type} = unsafeCast(\{getter_name}(unsafeCast(self)))\n  field_fn(\{args_src})\n}"
+      Some(getter_decl + "\n\n" + wrapper_decl)
     }
     None => None
   }
@@ -1810,6 +1956,7 @@ fn ffi_struct_decl_to_moonbit(
           name,
           type_,
           event_special=decl_event_member_special(iface.name, name),
+          method_type_params=ffi_iface_method_type_params(iface, name),
         ) {
         Some(method_decl) => {
           method_lines.push(method_decl)
@@ -6719,6 +6866,16 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       ffi_sections,
       ffi_fn_decl_key("loose_shape_from_pairs"),
       "pub extern \"js\" fn loose_shape_from_pairs(keys : Array[String], values : Array[JSValue]) -> Core_DollarZodLooseShape = \"__ts_mbt_record_from_pairs\"",
+    )
+    // Typed shape builder: the value slots are schemas, so accept the
+    // same upper bound `as_schema` produces — the shape entry reads
+    // `loose_shape_of(["name"], [as_schema(string_(None))])` with no
+    // per-value unsafeCast in user code.
+    push_unique_ffi_section(
+      seen_ffi_binding_names,
+      ffi_sections,
+      ffi_fn_decl_key("loose_shape_of"),
+      "pub fn loose_shape_of(keys : Array[String], values : Array[Schema[JSValue, JSValue, JSValue]]) -> Core_DollarZodLooseShape {\n  loose_shape_from_pairs(keys, unsafeCast(values))\n}",
     )
     push_unique_bridge_binding(
       seen_bridge_binding_names, bridge_lines, "__ts_mbt_record_from_pairs", "export function __ts_mbt_record_from_pairs(keys, values) { const out = {}; for (let i = 0; i < keys.length; i++) out[keys[i]] = values[i]; return out; }",

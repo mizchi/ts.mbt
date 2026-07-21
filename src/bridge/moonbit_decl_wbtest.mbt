@@ -3209,3 +3209,30 @@ async test "bridge: record-and-class intersection resolves to the class" {
   )
   assert_false(actual.contains("Unresolved type reference RequestHeaders"))
 }
+
+///|
+async test "bridge: method-level generics survive on generic owners" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/chain-generics-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // `map<U>` on a generic owner keeps its own binder on the wrapper
+  // (previously U widened to JSValue on every chain-style API).
+  assert_true(
+    actual.contains(
+      "declare pub fn[T, U] CollectionChain::map(self : CollectionChain[T], arg0 : (T) -> U) -> CollectionChain[U]",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn[T] CollectionChain::first(self : CollectionChain[T]) -> T",
+    ),
+  )
+}

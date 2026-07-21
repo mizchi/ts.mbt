@@ -584,8 +584,8 @@ EOF
   grep_generated_mbt "$out" 'pub extern "js" fn ExpectStatic::_call_(self : ExpectStatic'
   # Generic-preserved receivers can't host `extern "js"` (MoonBit forbids
   # `extern "js" fn[T]`), so the FFI emits a pure-MoonBit wrapper.
-  grep_generated_mbt "$out" 'pub fn[T] Assertion::toBe(self : Assertion[T]'
-  grep_generated_mbt "$out" 'pub fn[T] Assertion::toEqual(self : Assertion[T]'
+  grep_generated_mbt "$out" 'pub fn[T, E] Assertion::toBe(self : Assertion[T], arg0 : E)'
+  grep_generated_mbt "$out" 'pub fn[T, E] Assertion::toEqual(self : Assertion[T], arg0 : E)'
   grep_generated_mbt "$out" 'pub extern "js" fn get_expect() -> ExpectStatic'
   grep_generated_mbt "$out" 'pub extern "js" fn get_assert() -> Chai_Assert'
   grep_generated_mbt "$out" 'pub extern "js" fn get_vi() -> VitestUtils'

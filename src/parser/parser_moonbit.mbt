@@ -1097,6 +1097,43 @@ fn interface_function_field_method_decl(
   receiver_type_params : Array[String],
   field_name : String,
   field_type : @ast.TsType,
+  method_type_params? : Array[String] = [],
+) -> String? {
+  // A member's own generic binder (`map<U>(fn: (item: T) => U):
+  // CollectionChain<U>`) survives on the pure-MoonBit wrapper: render
+  // the inner function with U as a local type param and emit a
+  // combined `fn[T, U]` prefix instead of erasing U to JSValue.
+  // Interface METHOD declarations carry their binder out-of-band in
+  // `iface.method_type_params` (threaded here via `method_type_params~`);
+  // inline object members carry it as `GenericFunc`.
+  let (effective_type, declared_names) = match field_type {
+    @ast.TsType::GenericFunc(names, inner) => (inner, names)
+    _ => (field_type, method_type_params)
+  }
+  let method_extra_type_params : Array[String] = []
+  for n in declared_names {
+    if !receiver_type_params.contains(n) &&
+      !method_extra_type_params.contains(n) {
+      method_extra_type_params.push(n)
+    }
+  }
+  let method_local_len = push_local_type_params(state, method_extra_type_params)
+  let result = interface_function_field_method_decl_inner(
+    state, receiver_type, receiver_type_params, method_extra_type_params, field_name,
+    effective_type,
+  )
+  restore_local_type_params(state, method_local_len)
+  result
+}
+
+///|
+fn interface_function_field_method_decl_inner(
+  state : MoonBitDeclState,
+  receiver_type : String,
+  receiver_type_params : Array[String],
+  method_extra_type_params : Array[String],
+  field_name : String,
+  field_type : @ast.TsType,
 ) -> String? {
   match moonbit_function_type_parts(state, field_type) {
     Some((param_types, raw_return)) => {
@@ -1125,13 +1162,78 @@ fn interface_function_field_method_decl(
       } else {
         "self : \{self_type}, " + params.join(", ")
       }
-      let fn_prefix = moonbit_function_type_param_prefix(receiver_type_params)
+      let combined_type_params : Array[String] = []
+      for tp in receiver_type_params {
+        combined_type_params.push(tp)
+      }
+      let rendered_surface = params_src + " " + return_type
+      for tp in method_extra_type_params {
+        if moonbit_rendered_mentions_param(
+            rendered_surface,
+            moonbit_sanitize_type_param_name(tp),
+          ) {
+          combined_type_params.push(tp)
+        }
+      }
+      let fn_prefix = moonbit_function_type_param_prefix(combined_type_params)
       Some(
         "///|\ndeclare pub \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type}",
       )
     }
     None => None
   }
+}
+
+///|
+/// True when `name` appears as a standalone identifier token inside a
+/// rendered MoonBit type string. Method type params that only occurred
+/// in dropped/widened positions must not be declared on the wrapper —
+/// an unused fn type parameter is a hard error ([4027]).
+fn moonbit_rendered_mentions_param(rendered : String, name : String) -> Bool {
+  if name == "" {
+    return false
+  }
+  let padded = " " + rendered + " "
+  let n = name.length()
+  fn is_ident(c : Char) -> Bool {
+    (c >= 'a' && c <= 'z') ||
+    (c >= 'A' && c <= 'Z') ||
+    (c >= '0' && c <= '9') ||
+    c == '_'
+  }
+
+  let mut i = 1
+  while i + n < padded.length() {
+    let mut matches = true
+    for j in 0..<n {
+      if padded[i + j] != name[j] {
+        matches = false
+        break
+      }
+    }
+    if matches {
+      let before = padded[i - 1].unsafe_to_char()
+      let after = padded[i + n].unsafe_to_char()
+      if !is_ident(before) && !is_ident(after) {
+        return true
+      }
+    }
+    i += 1
+  }
+  false
+}
+
+///|
+fn moonbit_iface_method_type_params(
+  iface : @ast.TsInterface,
+  member_name : String,
+) -> Array[String] {
+  for entry in iface.method_type_params {
+    if entry.0 == member_name {
+      return entry.1
+    }
+  }
+  []
 }
 
 ///|
@@ -1206,7 +1308,12 @@ fn interface_decl_to_moonbit(
       !seen_method_names.contains(method_name) {
       match
         interface_function_field_method_decl(
-          state, type_name, active_type_params, method_name, type_,
+          state,
+          type_name,
+          active_type_params,
+          method_name,
+          type_,
+          method_type_params=moonbit_iface_method_type_params(iface, name),
         ) {
         Some(method_decl) => {
           seen_method_names.push(method_name)

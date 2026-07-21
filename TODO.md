@@ -2019,6 +2019,52 @@ the sketch), #4 lodash chain generics (big, budgeted), and the
 class-METHOD event maps follow-up from round 11 (ws / chokidar /
 node:fs watchers).
 
+Round 14 (same day) — #3 schema value slots + #4 method-level
+generics, closing the survey.
+
+#3: the zod module hook gains a TYPED shape builder alongside the raw
+one — `loose_shape_of(keys, values : Array[Schema[JSValue, JSValue,
+JSValue]])` accepts the same upper bound `as_schema` produces, so the
+gate smoke's shape entry is now
+`loose_shape_of(["name"], [as_schema(string(None))])` with no
+per-value unsafeCast.
+
+#4: `map<U>(fn: (item: T) => U): CollectionChain<U>` on a GENERIC
+owner widened U to JSValue on every chain-style API. The member's own
+binder now survives on the pure-MoonBit wrapper:
+`fn[T, U] CollectionChain::map(self, (T) -> U) -> CollectionChain[U]`.
+Pieces:
+- both interface cloners now CARRY `method_type_params` (they emitted
+  `[]`, so the renderers never saw the binder);
+- both renderers thread the member's binder (interface methods carry
+  it out-of-band in `iface.method_type_params`; inline object members
+  as `GenericFunc`) — the decl side pushes it as local type params and
+  emits a combined prefix, the FFI side routes through a monomorphic
+  getter returning a BOUND closure and a `pub fn[T, U]` wrapper
+  (generic externs are forbidden; a plain fn casting the fetched
+  closure is not);
+- binder names whose occurrences were widened away are FILTERED from
+  the prefix (`*_rendered_mentions_param` token scan) — an unused fn
+  type parameter is a hard error [4027] (zod's `register` / `brand`
+  hit this immediately);
+- while smoking this against a real prototype-method implementation,
+  the PRE-EXISTING generic-receiver form `(self.first)()` turned out
+  to lose `this` (extracts the prototype method, calls it unbound —
+  TypeError on any class-based library). ALL generic-receiver members
+  now fetch a bound closure (`(o) => (...args) => o.first(...args)`)
+  through the getter; the gate's sanitized-member marker moved to the
+  bound form.
+
+Runtime-verified: `c.map(fn(x : Double) { x.to_string() })` returns a
+usable `CollectionChain[String]` and `compact()/first()` no longer
+throw on class-implemented chains. Fixture `chain-generics-entry.d.ts`
++ wbtest; the StatsBase wbtest moved to the bound-getter expectation.
+Corpus (8 rows): playwright JSValue functions 191 -> 179, lodash
+288 -> 286 with surface 1644 -> 1634, zod 1497 -> 1493, source-map
+-1; pino +1 line (a preserved generic slot now renders — new usable
+surface). Top-level generic FUNCTIONS (`chain<T>(items)`) still widen
+— that path has no receiver to hang a getter on; recorded as open.
+
 Profiled with `moon bench --target native` + callgrind over the release
 `tscheck` binary (`--parse` / full, `--iters N`; use
 `--toggle-collect=<mangled check entry>` to isolate the check phase from

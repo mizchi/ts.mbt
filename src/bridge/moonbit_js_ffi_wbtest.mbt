@@ -5099,9 +5099,17 @@ test "bridge: FFI struct generation keeps generic method wrappers non-extern" {
     deprecated_members: [],
   }
   let actual = ffi_struct_decl_to_moonbit(state, iface)
+  // Members on generic-preserved receivers fetch a BOUND closure through
+  // a monomorphic getter — `(self.isFile)()` would extract the prototype
+  // method and call it with `this` undefined.
   assert_true(
     actual.contains(
-      "pub fn[T] StatsBase::isFile(self : StatsBase[T]) -> Bool {\n  (self.isFile)()\n}",
+      "extern \"js\" fn _stats_base_isFile_get_extern_js(target : JSValue) -> JSValue =\n  #| (o) => (...args) => o.isFile(...args)",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "pub fn[T] StatsBase::isFile(self : StatsBase[T]) -> Bool {\n  let field_fn : () -> Bool = unsafeCast(_stats_base_isFile_get_extern_js(unsafeCast(self)))\n  field_fn()\n}",
     ),
   )
   assert_false(actual.contains("pub extern \"js\" fn[T]"))
