@@ -3184,3 +3184,28 @@ test "decl: nonempty tuple normalizes to array" {
     None,
   )
 }
+
+///|
+async test "bridge: record-and-class intersection resolves to the class" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/intersection-class-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // `RawHeaders & HeaderBag` (axios's AxiosRequestHeaders shape): the
+  // class half carries the usable surface, so the alias passes through
+  // to it and `config.headers.set(...)` type-checks.
+  assert_true(actual.contains("pub type RequestHeaders = HeaderBag"))
+  assert_true(
+    actual.contains(
+      "declare pub fn HeaderBag::set(self : HeaderBag, name : String, value : String) -> HeaderBag",
+    ),
+  )
+  assert_false(actual.contains("Unresolved type reference RequestHeaders"))
+}

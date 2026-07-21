@@ -1994,6 +1994,31 @@ common-base ELEMENT join half of the survey item turned out to be
 already covered: `Array(Named(alias))` lowers the alias through
 `decl_join_union_alias_to_common_base` on the Named arm.
 
+Round 13 (same day) — record-and-class intersections (#5 of the
+survey: the axios eval-app's last interceptor hatch). axios's
+`AxiosRequestHeaders = RawAxiosRequestHeaders & AxiosHeaders` widened
+to an unresolved opaque name, so `config.headers` inside an
+interceptor had NO usable surface even though the `AxiosHeaders`
+CLASS (set / get / has / set_content_type / ...) was fully generated.
+`decl_intersection_single_class` resolves an intersection to its
+single declared-CLASS member when every sibling is record-ish (object
+literals, `Partial<...>` / `Record<...>` applications, aliases that
+resolve to neither class nor interface — an interface sibling
+refuses, dropping its fields would lose surface). The alias now emits
+`pub type AxiosRequestHeaders = AxiosHeaders` (transparent) and
+`config.headers.set(Some("X-Trace"), Some(v), None)` type-checks —
+compile-verified against the generated axios package. Fixture
+`intersection-class-entry.d.ts` + wbtest pin the rule. Zero budget
+drift.
+
+Survey status: #1 event maps (interfaces) DONE round 11, #2 nonempty
+tuples DONE round 12, #5 AxiosHeaders DONE round 13. Remaining: #3
+schema value slots (zod `loose_shape_from_pairs` still takes
+`Array[JSValue]`; a `$ZodType`-bounded value slot + upcast-at-call is
+the sketch), #4 lodash chain generics (big, budgeted), and the
+class-METHOD event maps follow-up from round 11 (ws / chokidar /
+node:fs watchers).
+
 Profiled with `moon bench --target native` + callgrind over the release
 `tscheck` binary (`--parse` / full, `--iters N`; use
 `--toggle-collect=<mangled check entry>` to isolate the check phase from

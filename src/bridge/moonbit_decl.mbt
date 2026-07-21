@@ -6488,10 +6488,55 @@ fn lower_react_utility_type(
           lower_react_utility_type(info, item, modules, canonical_types),
         )
       }
-      Intersection(next_types)
+      // Record-and-class intersection (axios's `AxiosRequestHeaders =
+      // RawAxiosRequestHeaders & AxiosHeaders`): the CLASS half carries
+      // the usable surface (get/set/has methods); the record half is
+      // index-signature sugar the class API already covers. Keeping the
+      // intersection would widen the whole member to an opaque name.
+      match decl_intersection_single_class(info, next_types) {
+        Some(class_ref) => class_ref
+        None => Intersection(next_types)
+      }
     }
     _ => type_
   }
+}
+
+///|
+/// The single declared-CLASS member of an intersection whose OTHER
+/// members are all record-ish (object literals, `Partial<...>` /
+/// `Record<...>` applications, or aliases that do not resolve to a
+/// class or interface). `None` when zero or several classes, or when a
+/// sibling is an interface (dropping its fields would lose surface).
+fn decl_intersection_single_class(
+  info : DeclModuleInfo,
+  types : Array[@ast.TsType],
+) -> @ast.TsType? {
+  let mut class_ref : @ast.TsType? = None
+  for item in types {
+    let head = match item {
+      Named(name) => Some(name)
+      Applied(name, _) => Some(name)
+      _ => None
+    }
+    match head {
+      Some(name) =>
+        if find_class_decl_recursive(info.module_, name) is Some(_) {
+          match class_ref {
+            Some(_) => return None
+            None => class_ref = Some(item)
+          }
+        } else if find_interface_decl_recursive(info.module_, name) is Some(_) {
+          return None
+        }
+      None =>
+        match item {
+          Object(_) | Struct(_, _) => ()
+          _ => return None
+        }
+    }
+  }
+  class_ref
 }
 
 ///|
