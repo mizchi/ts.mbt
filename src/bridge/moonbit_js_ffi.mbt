@@ -5683,6 +5683,10 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       generic_type_params_by_name[class_type_name] = class_.type_params
     }
   }
+  // Merge instantiated generic union aliases registered during the
+  // normalize passes above (decl emission runs first in a package
+  // bundle, so the registry already holds the full set).
+  decl_drain_synthesized_union_aliases(exported_tagged_unions)
   let tagged_union_decls_by_name : Map[String, BridgeTaggedUnionDecl] = {}
   for tagged in exported_tagged_unions {
     let type_name = ffi_type_identifier(tagged.decl.name, "OpaqueType")
@@ -5853,16 +5857,10 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       // declares N as an enum, struct, or class.
       for entry in tagged.decl.cases {
         let (_, inner) = entry
-        let inner_named = match inner {
-          @ast.TsType::Named(name) => Some(name)
-          @ast.TsType::Array(@ast.TsType::Named(name)) => Some(name)
-          _ => None
-        }
-        match inner_named {
-          Some(inner_name) => {
-            let _ = ffi_mark_external_type(state, inner_name)
-          }
-          None => ()
+        let named_refs : Array[String] = []
+        tagged_union_case_named_refs(inner, named_refs)
+        for inner_name in named_refs {
+          let _ = ffi_mark_external_type(state, inner_name)
         }
       }
       emitted_type_names.push(type_name)

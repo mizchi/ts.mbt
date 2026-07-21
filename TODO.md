@@ -1850,6 +1850,47 @@ needs an opaque null representation decision; value-or-function
 unions (`ErrorMessage<T> = string | ((issue) => string)`, ~157
 `message` members) need an untagged-union construction story.
 
+Round 9 (same day) — both recorded clusters landed.
+
+Instantiated generic union aliases: NON-generic `string | fn` union
+aliases already lowered to tagged-union enums with constructors and JS
+converter glue; the gap was the APPLIED generic form
+(`ErrorMessage<Issue>`), which inlined to an anonymous union that the
+inline synthesizer refuses (function members) and so widened to
+JSValue. `decl_instantiated_union_alias_name` now names the
+instantiation (`ErrorMessageOfIssue` via the utility suffix namer)
+when the substituted+lowered body is a union WITH a function member
+that `tagged_union_type_alias_decl` accepts, registering it in a
+`decl_synthesized_union_aliases` registry (reset at decl-emit start;
+drained by the decl emitter after all cloning and merged into the
+FFI's exported tagged unions — decl runs first in a bundle, mirroring
+the round-6 object-struct registry). Hooked into both the same-module
+`applied_type_alias` inline path and the qualified/cross-module
+`decl_inline_qualified_applied_alias`, plus the collection-walk
+mirror so interfaces referenced ONLY from the enum's function-typed
+case payloads still get their declarations (valibot's ArrayIssue /
+VariantIssue / MapIssue / RecordIssue / SetIssue compiled only after
+this). The case-payload dependency scan got a shared helper
+(`tagged_union_case_named_refs`) that walks Func params/returns —
+both the decl opaque-companion list and the FFI external-type marking
+previously only saw bare `Named` / `Array(Named)` payloads.
+
+`null` literal members: a member typed exactly `null` (valibot's
+`readonly expects: null`, ~98 members) now references a shared opaque
+`JSNull` companion instead of widening — referenced-but-undeclared
+names already get their opaque decl emitted by both layers, so the
+representation costs one `declare pub type JSNull` line; the name is
+exempted from the emit-time unresolved-reference sanity note.
+
+Fixture `union-alias-instantiation-entry.d.ts` + wbtest pin both.
+valibot corpus effect (2 budget rows): JSValue surface 1858 -> 1437
+(-421), unknown/any 926 -> 504; 140 ErrorMessageOf* enums, message
+members now `ErrorMessageOfIpIssueOfTinput1?`-style typed enums with
+`..._from_string` constructors and typeof-discriminated from_js glue.
+zod/yaml rows unchanged (zod's message unions were already
+string-subset-lowered; yaml's value-or-function members are anonymous
+inline unions — still open, needs an inline construction story).
+
 Profiled with `moon bench --target native` + callgrind over the release
 `tscheck` binary (`--parse` / full, `--iters N`; use
 `--toggle-collect=<mangled check entry>` to isolate the check phase from

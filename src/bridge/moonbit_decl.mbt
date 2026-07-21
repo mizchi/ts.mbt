@@ -5234,7 +5234,40 @@ fn decl_inline_qualified_applied_alias(
       info, modules, canonical_types, name, args,
     ) {
     Some(iface) => Some(Named(iface.name))
-    None => None
+    None => {
+      // Cross-module instantiated union alias with a function member
+      // (`ErrorMessage<Issue>` behind a barrel): substitute + lower in
+      // the declaring module, then try the tagged-union naming.
+      let (ta, ta_info) = match
+        decl_find_type_alias_deep(info, modules, name, []) {
+        Some(found) => found
+        None => return None
+      }
+      if ta.type_params.length() != args.length() || args.length() == 0 {
+        return None
+      }
+      if type_alias_is_recursive(ta_info.module_, ta) {
+        return None
+      }
+      let substituted = substitute_type_alias_params(
+        ta.type_,
+        ta.type_params,
+        args,
+      )
+      let lowered = lower_react_utility_type(
+        ta_info, substituted, modules, canonical_types,
+      )
+      match
+        decl_instantiated_union_alias_name(
+          ta_info.record.path,
+          name,
+          args,
+          lowered,
+        ) {
+        Some(synth_name) => Some(Named(synth_name))
+        None => None
+      }
+    }
   }
 }
 
@@ -6262,8 +6295,21 @@ fn lower_react_utility_type(
         }
       }
       match applied_type_alias(info, name, args) {
-        Some(resolved) =>
-          lower_react_utility_type(info, resolved, modules, canonical_types)
+        Some(resolved) => {
+          let inlined = lower_react_utility_type(
+            info, resolved, modules, canonical_types,
+          )
+          match
+            decl_instantiated_union_alias_name(
+              info.record.path,
+              name,
+              args,
+              inlined,
+            ) {
+            Some(synth_name) => Named(synth_name)
+            None => inlined
+          }
+        }
         None =>
           // Cross-module / namespace-qualified generic aliases
           // (`parse.ZodSafeParseResult<T>`) inline through the deep
@@ -6629,7 +6675,45 @@ fn collect_react_utility_interfaces_from_type(
                   )
                 }
               }
-            None => ()
+            None =>
+              // Mirror of the instantiated union alias naming
+              // (`ErrorMessage<Issue>` -> ErrorMessageOfIssue enum):
+              // walk the substituted body so interfaces referenced ONLY
+              // from the enum's case payloads (function params) still
+              // get their declarations collected.
+              match decl_find_type_alias_deep(info, modules, name, []) {
+                Some((ta, ta_info)) =>
+                  if ta.type_params.length() == args.length() &&
+                    args.length() > 0 &&
+                    !type_alias_is_recursive(ta_info.module_, ta) {
+                    let substituted = substitute_type_alias_params(
+                      ta.type_,
+                      ta.type_params,
+                      args,
+                    )
+                    let lowered = lower_react_utility_type(
+                      ta_info, substituted, modules, canonical_types,
+                    )
+                    match
+                      decl_instantiated_union_alias_name(
+                        ta_info.record.path,
+                        name,
+                        args,
+                        lowered,
+                      ) {
+                      Some(synth_name) =>
+                        if !seen_names.contains(synth_name) {
+                          seen_names.push(synth_name)
+                          collect_react_utility_interfaces_from_type(
+                            ta_info, lowered, modules, canonical_types, seen_names,
+                            interfaces,
+                          )
+                        }
+                      None => ()
+                    }
+                  }
+                None => ()
+              }
           }
       }
       for arg in args {
@@ -7448,6 +7532,110 @@ fn decl_drain_synthesized_object_interfaces(
 }
 
 ///|
+/// Instantiated generic union aliases (`ErrorMessage<Issue>` for
+/// `type ErrorMessage<T> = string | ((issue: T) => string)`) whose
+/// substituted body is a tag-discriminable union WITH a function
+/// member. Anonymous inline synthesis refuses function members, so
+/// these previously widened to `JSValue`; naming the instantiation
+/// reuses the exported tagged-union machinery wholesale (enum decl,
+/// `<name>_from_*` constructors, JS converter glue). Keyed by the
+/// synthesized name; populated during lowering, drained into the
+/// emitted tagged-union list by both layers.
+let decl_synthesized_union_aliases : Map[String, ExportedTaggedUnionDecl] = Map([],
+)
+
+///|
+/// A member whose type is exactly the `null` literal type (valibot's
+/// `readonly expects: null`) is a concrete, always-null slot. Reference
+/// the shared opaque `JSNull` companion instead of widening to
+/// `JSValue`; referenced-but-undeclared names get their opaque decl
+/// emitted automatically by both layers.
+fn decl_null_member_type(type_ : @ast.TsType) -> @ast.TsType {
+  match type_ {
+    Null => Named("JSNull")
+    _ => type_
+  }
+}
+
+///|
+fn decl_reset_synthesized_union_aliases() -> Unit {
+  decl_synthesized_union_aliases.clear()
+}
+
+///|
+fn decl_drain_synthesized_union_aliases(
+  out : Array[ExportedTaggedUnionDecl],
+) -> Unit {
+  for _, entry in decl_synthesized_union_aliases {
+    let mut present = false
+    for existing in out {
+      if existing.decl.name == entry.decl.name {
+        present = true
+        break
+      }
+    }
+    if !present {
+      out.push(entry)
+    }
+  }
+}
+
+///|
+/// Try to name an instantiated generic union alias whose LOWERED body
+/// is a union containing at least one function member and that the
+/// tagged-union alias rules accept. Returns the synthesized name after
+/// registering the decl; `None` leaves the caller's inline behavior
+/// unchanged (unions without function members already inline or
+/// synthesize anonymously).
+fn decl_instantiated_union_alias_name(
+  source_path : String,
+  name : String,
+  args : Array[@ast.TsType],
+  lowered_body : @ast.TsType,
+) -> String? {
+  let members = match lowered_body {
+    Union(items) => items
+    _ => return None
+  }
+  let mut has_func = false
+  for member in members {
+    if member is Func(_, _) {
+      has_func = true
+      break
+    }
+  }
+  if !has_func {
+    return None
+  }
+  let synth_name = utility_record_type_suffix(Applied(name, args))
+  if synth_name == "" {
+    return None
+  }
+  match decl_synthesized_union_aliases.get(synth_name) {
+    Some(_) => return Some(synth_name)
+    None => ()
+  }
+  let synthetic : @ast.TsTypeAlias = {
+    name: synth_name,
+    type_params: [],
+    type_param_bounds: [],
+    type_: lowered_body,
+  }
+  match tagged_union_type_alias_decl(synthetic) {
+    Some(decl) => {
+      decl_synthesized_union_aliases[synth_name] = {
+        source_path,
+        local_name: synth_name,
+        export_name: synth_name,
+        decl,
+      }
+      Some(synth_name)
+    }
+    None => None
+  }
+}
+
+///|
 /// Extract `(name, type)` struct fields from an anonymous object
 /// literal. `None` when the shape cannot become a struct: non-literal
 /// keys (computed / index-like), empty, or implausibly wide.
@@ -7681,12 +7869,14 @@ fn append_lowered_interface_field(
       this_owner,
     ),
   )
-  let final_type = decl_rewrite_inline_object_member_type(
-    owner_name,
-    field_name,
-    decl_rewrite_inline_callback_params_in_func_type(
-      owner_name + "_" + field_name,
-      lowered_type,
+  let final_type = decl_null_member_type(
+    decl_rewrite_inline_object_member_type(
+      owner_name,
+      field_name,
+      decl_rewrite_inline_callback_params_in_func_type(
+        owner_name + "_" + field_name,
+        lowered_type,
+      ),
     ),
   )
   if seen_field_names.contains(field_name) {
@@ -11007,22 +11197,24 @@ fn clone_class_property_in_scope(
 ) -> @ast.TsClassPropertyDecl {
   {
     name: class_property.name,
-    type_: decl_rewrite_inline_object_member_type(
-      class_name,
-      class_property.name,
-      decl_specialize_generated_class_property_type(
+    type_: decl_null_member_type(
+      decl_rewrite_inline_object_member_type(
         class_name,
         class_property.name,
-        lower_react_utility_type(
-          info,
-          rewrite_type_refs_in_scope(
+        decl_specialize_generated_class_property_type(
+          class_name,
+          class_property.name,
+          lower_react_utility_type(
             info,
-            local_name_prefix,
-            class_property.type_,
+            rewrite_type_refs_in_scope(
+              info,
+              local_name_prefix,
+              class_property.type_,
+              canonical_types,
+            ),
+            modules,
             canonical_types,
           ),
-          modules,
-          canonical_types,
         ),
       ),
     ),
@@ -11566,6 +11758,7 @@ pub async fn emit_moonbit_decl_from_entry_path(
   // runs FIRST in a package bundle, so the paired ffi emission keeps
   // (a superset of) the same synthesized shapes.
   decl_reset_synthesized_object_interfaces()
+  decl_reset_synthesized_union_aliases()
   let graph = load_type_module_graph(entry_path)
   let export_surface = resolve_export_surface(graph)
   let modules = build_decl_module_map(graph)
@@ -11609,17 +11802,12 @@ pub async fn emit_moonbit_decl_from_entry_path(
         tagged_union_declared_names.push(tagged.decl.name)
         for entry in tagged.decl.cases {
           let (_, inner) = entry
-          let inner_named = match inner {
-            @ast.TsType::Named(name) => Some(name)
-            @ast.TsType::Array(@ast.TsType::Named(name)) => Some(name)
-            _ => None
-          }
-          match inner_named {
-            Some(name) =>
-              if !tagged_union_referenced_inner_names.contains(name) {
-                tagged_union_referenced_inner_names.push(name)
-              }
-            None => ()
+          let named_refs : Array[String] = []
+          tagged_union_case_named_refs(inner, named_refs)
+          for name in named_refs {
+            if !tagged_union_referenced_inner_names.contains(name) {
+              tagged_union_referenced_inner_names.push(name)
+            }
           }
         }
       }
@@ -11740,6 +11928,37 @@ pub async fn emit_moonbit_decl_from_entry_path(
       None => ()
     }
   }
+  // Instantiated generic union aliases registered during the cloning
+  // passes above (`ErrorMessage<Issue>` -> ErrorMessageOfIssue): render
+  // their enum sections now, mirroring the exported tagged-union loop.
+  let synthesized_union_aliases : Array[ExportedTaggedUnionDecl] = []
+  decl_drain_synthesized_union_aliases(synthesized_union_aliases)
+  for tagged in synthesized_union_aliases {
+    if tagged_union_declared_names.contains(tagged.decl.name) {
+      continue
+    }
+    match
+      tagged_union_decl_to_moonbit_section_with_arity(
+        tagged.decl,
+        tagged_union_arity_registry,
+      ) {
+      Some(section) => {
+        tagged_union_sections.push(section)
+        tagged_union_declared_names.push(tagged.decl.name)
+        for entry in tagged.decl.cases {
+          let (_, inner) = entry
+          let named_refs : Array[String] = []
+          tagged_union_case_named_refs(inner, named_refs)
+          for name in named_refs {
+            if !tagged_union_referenced_inner_names.contains(name) {
+              tagged_union_referenced_inner_names.push(name)
+            }
+          }
+        }
+      }
+      None => ()
+    }
+  }
   enum_lowering_rewrite_anonymous_enum_surfaces(
     enums, interfaces, imports, funcs, values, classes,
   )
@@ -11795,7 +12014,8 @@ pub async fn emit_moonbit_decl_from_entry_path(
     if issue.kind is UnresolvedReference &&
       (
         tagged_union_declared_names.contains(issue.name) ||
-        synthetic_callback_type_names.contains(issue.name)
+        synthetic_callback_type_names.contains(issue.name) ||
+        issue.name == "JSNull"
       ) {
       continue
     }

@@ -330,7 +330,7 @@ jsvalue_function_budget() {
     colorette) printf '1\n' ;;
     magic-string) printf '0\n' ;;
     source-map) printf '9\n' ;;
-    valibot) printf '289\n' ;;
+    valibot) printf '295\n' ;;
     immer) printf '16\n' ;;
     execa) printf '5\n' ;;
     preact) printf '7\n' ;;
@@ -423,12 +423,11 @@ jsvalue_cause_budget() {
     magic-string) printf '0|0|0|0|0|0|0\n' ;;
     source-map) printf '17|6|0|7|0|3|1\n' ;;
     # 2026-07-20 typeof-value resolution: ~190 `reference: typeof action`
-    # members resolve from bare `JSValue` to callable shapes. unknown/any
-    # drops (-240) while surface/tuple grow: each resolved field now also
-    # emits method decls whose `IpAction[String, JSValue]` rendering
-    # matches the tuple/array `JSValue]` pattern first. Net: same widening,
-    # more usable callable surface.
-    valibot) printf '1858|926|24|13|22|835|38\n' ;;
+    # members resolve from bare `JSValue` to callable shapes; the same
+    # day's instantiated union aliases (`ErrorMessage<Issue>` ->
+    # ErrorMessageOf* enums, 140 of them) and `expects: null` -> JSNull
+    # then removed another ~420 surface lines (unknown/any 1166 -> 504).
+    valibot) printf '1437|504|23|11|23|830|46\n' ;;
     immer) printf '23|4|7|2|3|1|6\n' ;;
     execa) printf '17|2|0|4|1|0|10\n' ;;
     preact) printf '50|12|1|4|14|19|0\n' ;;

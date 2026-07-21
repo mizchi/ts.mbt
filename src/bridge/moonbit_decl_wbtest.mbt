@@ -3069,3 +3069,32 @@ async test "bridge: typeof value references resolve to callable shapes" {
     ),
   )
 }
+
+///|
+async test "bridge: instantiated union aliases and null members" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/union-alias-instantiation-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // `ErrorMessage<Issue>` (generic `string | fn` union alias) instantiates
+  // to a named tagged-union enum instead of widening to `JSValue`.
+  assert_true(actual.contains("pub(all) enum ErrorMessageOfIssue {"))
+  assert_true(actual.contains("/// readonly message : ErrorMessageOfIssue?"))
+  assert_true(
+    actual.contains(
+      "declare pub fn check(message : ErrorMessageOfIssue?) -> CheckAction",
+    ),
+  )
+  // A member typed exactly `null` references the shared opaque JSNull
+  // companion instead of JSValue, without an unresolved-reference note.
+  assert_true(actual.contains("/// readonly expects : JSNull"))
+  assert_true(actual.contains("declare pub type JSNull"))
+  assert_false(actual.contains("Unresolved type reference JSNull"))
+}

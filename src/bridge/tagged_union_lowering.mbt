@@ -801,3 +801,52 @@ pub fn tagged_union_type_alias_decl(
     None => None
   }
 }
+
+///|
+/// Collect the Named heads a tagged-union case payload references,
+/// including function-typed payloads' parameter / return types (the
+/// instantiated `string | ((issue: T) => string)` aliases put their
+/// interface references inside the `FnValue` case). Callers use the
+/// result to pre-declare opaque companions; names that cannot appear
+/// verbatim in a declaration (qualified or `$`-mangled) are skipped —
+/// the renderer widens those payloads anyway.
+pub fn tagged_union_case_named_refs(
+  t : @ast.TsType,
+  out : Array[String],
+) -> Unit {
+  fn keep(name : String) -> Bool {
+    name != "" && !name.contains("$") && !name.contains(".")
+  }
+
+  match t {
+    @ast.TsType::Named(name) =>
+      if keep(name) && !out.contains(name) {
+        out.push(name)
+      }
+    @ast.TsType::Applied(name, args) => {
+      if keep(name) && !out.contains(name) {
+        out.push(name)
+      }
+      for arg in args {
+        tagged_union_case_named_refs(arg, out)
+      }
+    }
+    @ast.TsType::Array(inner) | @ast.TsType::Rest(inner) =>
+      tagged_union_case_named_refs(inner, out)
+    @ast.TsType::Func(params, return_type) => {
+      for param in params {
+        tagged_union_case_named_refs(param, out)
+      }
+      tagged_union_case_named_refs(return_type, out)
+    }
+    @ast.TsType::Union(items) | @ast.TsType::Intersection(items) =>
+      for item in items {
+        tagged_union_case_named_refs(item, out)
+      }
+    @ast.TsType::Tuple(items) =>
+      for item in items {
+        tagged_union_case_named_refs(item, out)
+      }
+    _ => ()
+  }
+}
