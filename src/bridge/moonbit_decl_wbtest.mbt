@@ -3126,3 +3126,35 @@ async test "bridge: inline value-or-function unions synthesize shaped enums" {
     ),
   )
 }
+
+///|
+async test "bridge: event-map overloads synthesize per-literal companions" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/event-map-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // `on(event: 'close', listener)` x3 distinct literals -> typed
+  // per-event companions alongside the widened base member.
+  assert_true(
+    actual.contains(
+      "declare pub fn Browser::on_close(self : Browser, arg0 : (Browser) -> Unit) -> Browser",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn Browser::on_console(self : Browser, arg0 : (ConsoleMessage) -> Unit) -> Browser",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn Browser::once_page(self : Browser, arg0 : (Page) -> Unit) -> Browser",
+    ),
+  )
+}

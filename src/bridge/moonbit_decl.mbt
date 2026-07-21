@@ -7558,6 +7558,182 @@ fn decl_null_member_type(type_ : @ast.TsType) -> @ast.TsType {
 }
 
 ///|
+/// Event-map overload specialization. Members overloaded on a literal
+/// first param followed by a callback
+/// (`on(event: 'close', listener: (page) => void)` x56 in playwright)
+/// merge to nothing under the trailing-param rule, so only the first
+/// declaration survived, widened. Each such overload family (>= 2
+/// distinct literals) synthesizes per-literal companion members
+/// (`on_close(listener)`); the FFI consults this registry to call the
+/// ORIGINAL JS member with the literal injected
+/// (`self.on("close", listener)`).
+/// (owner interface, companion member) -> (JS member name, literal).
+let decl_event_member_specials : Map[String, (String, String)] = Map([])
+
+///|
+/// (owner interface, member) -> recorded (literal, companion Func type)
+/// overloads, so the FIRST overload's companion can be synthesized
+/// retroactively when the second literal arrives.
+let decl_event_member_families : Map[String, Array[(String, @ast.TsType)]] = Map([],
+)
+
+///|
+fn decl_reset_event_member_specials() -> Unit {
+  decl_event_member_specials.clear()
+  decl_event_member_families.clear()
+}
+
+///|
+fn decl_event_member_special(
+  owner : String,
+  member : String,
+) -> (String, String)? {
+  decl_event_member_specials.get(owner + "\u{0}" + member)
+}
+
+///|
+/// Identifier-safe suffix for an event-name literal: letters and digits
+/// keep, separator punctuation (`-` `_` `:` `.` and space) maps to `_`,
+/// anything else abstains. Must start with a letter.
+fn decl_event_literal_suffix(value : String) -> String? {
+  if value.length() == 0 || value.length() > 40 {
+    return None
+  }
+  let first = value[0].unsafe_to_char()
+  if !((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z')) {
+    return None
+  }
+  let out = StringBuilder::new()
+  for c in value {
+    if (c >= 'a' && c <= 'z') ||
+      (c >= 'A' && c <= 'Z') ||
+      (c >= '0' && c <= '9') {
+      out.write_char(c)
+    } else if c == '-' || c == '_' || c == ':' || c == '.' || c == ' ' {
+      out.write_char('_')
+    } else {
+      return None
+    }
+  }
+  Some(out.to_string())
+}
+
+///|
+/// `(literal, listener...) -> ret` shape of an event-map overload:
+/// literal first param, at least one following param whose type is a
+/// function (the listener). Returns the literal plus the companion's
+/// param list (the literal dropped).
+fn decl_event_literal_overload_parts(
+  t : @ast.TsType,
+) -> (String, Array[@ast.TsType], @ast.TsType)? {
+  match t {
+    Func(params, ret) =>
+      if params.length() >= 2 {
+        match (params[0], params[1]) {
+          (Literal(value), Func(_, _)) => {
+            let rest : Array[@ast.TsType] = []
+            for i in 1..<params.length() {
+              // Event listener returns are ignored by the emitter side
+              // (`listener: (page) => any`); normalize them to `void` so
+              // the companion takes a plain `(Page) -> Unit` callback.
+              let entry = match params[i] {
+                Func(cb_params, Any | Unknown) =>
+                  @ast.TsType::Func(cb_params, Void)
+                other => other
+              }
+              rest.push(entry)
+            }
+            Some((value, rest, ret))
+          }
+          _ => None
+        }
+      } else {
+        None
+      }
+    _ => None
+  }
+}
+
+///|
+fn decl_push_event_companion(
+  fields : Array[(String, @ast.TsType)],
+  seen_field_names : Array[String],
+  owner_name : String,
+  member_name : String,
+  literal : String,
+  companion_type : @ast.TsType,
+) -> Unit {
+  let suffix = match decl_event_literal_suffix(literal) {
+    Some(suffix) => suffix
+    None => return
+  }
+  let companion_name = member_name + "_" + suffix
+  if seen_field_names.contains(companion_name) {
+    return
+  }
+  seen_field_names.push(companion_name)
+  fields.push((companion_name, companion_type))
+  decl_event_member_specials[owner_name + "\u{0}" + companion_name] = (
+    member_name, literal,
+  )
+}
+
+///|
+fn decl_maybe_synthesize_event_companions(
+  fields : Array[(String, @ast.TsType)],
+  seen_field_names : Array[String],
+  owner_name : String,
+  member_name : String,
+  final_type : @ast.TsType,
+) -> Unit {
+  let (literal, rest, ret) = match
+    decl_event_literal_overload_parts(final_type) {
+    Some(parts) => parts
+    None => return
+  }
+  if decl_event_literal_suffix(literal) is None {
+    return
+  }
+  let family_key = owner_name + "\u{0}" + member_name
+  let family = match decl_event_member_families.get(family_key) {
+    Some(family) => family
+    None => {
+      let family : Array[(String, @ast.TsType)] = []
+      decl_event_member_families[family_key] = family
+      family
+    }
+  }
+  let companion_type = @ast.TsType::Func(rest, ret)
+  let mut recorded = false
+  for entry in family {
+    if entry.0 == literal {
+      recorded = true
+      break
+    }
+  }
+  if !recorded {
+    family.push((literal, companion_type))
+  }
+  // Families only activate at two distinct literals: a lone
+  // literal-first method is not an event map. Push ALL recorded
+  // companions into the CURRENT clone's fields on every arrival — the
+  // decl and FFI layers each clone the interface, and the per-clone
+  // `seen_field_names` keeps this idempotent.
+  if family.length() >= 2 {
+    for entry in family {
+      decl_push_event_companion(
+        fields,
+        seen_field_names,
+        owner_name,
+        member_name,
+        entry.0,
+        entry.1,
+      )
+    }
+  }
+}
+
+///|
 fn decl_reset_synthesized_union_aliases() -> Unit {
   decl_synthesized_union_aliases.clear()
 }
@@ -7878,6 +8054,12 @@ fn append_lowered_interface_field(
         lowered_type,
       ),
     ),
+  )
+  // Detect on the PRE-rewrite lowering: the inline-callback naming pass
+  // replaces the listener's function type with a named opaque callback,
+  // which would hide the `(Literal, Func)` event shape.
+  decl_maybe_synthesize_event_companions(
+    fields, seen_field_names, owner_name, field_name, lowered_type,
   )
   if seen_field_names.contains(field_name) {
     // Method overload: widen the kept signature when this one only
@@ -11759,6 +11941,7 @@ pub async fn emit_moonbit_decl_from_entry_path(
   // (a superset of) the same synthesized shapes.
   decl_reset_synthesized_object_interfaces()
   decl_reset_synthesized_union_aliases()
+  decl_reset_event_member_specials()
   let graph = load_type_module_graph(entry_path)
   let export_surface = resolve_export_surface(graph)
   let modules = build_decl_module_map(graph)

@@ -1939,6 +1939,47 @@ lodash 1651 -> 1644; pino / zod / axios / node:util small drops;
 react unchanged (its candidate unions all carry interface-typed value
 arms that the guard correctly refuses).
 
+Round 11 (same day) — event-map literal-overload specialization, the
+top pick from the unlock survey. Interface members overloaded on a
+literal first param followed by a listener
+(`on(event: 'close', listener: (page) => void)` x56 event names on
+playwright's Page alone) merge to nothing under the round-7
+trailing-param rule, so only the first declaration survived with both
+params widened. Each such family (>= 2 distinct literals — a lone
+literal-first method is not an event map; and the second param must be
+a function, so literal dispatch like react's `createElement('div')`
+stays untouched) now synthesizes per-literal companion members:
+`on_close((Browser) -> Unit) -> Browser`. Pieces:
+
+- detection runs on the PRE-rewrite lowering in
+  `append_lowered_interface_field` (the inline-callback naming pass
+  would otherwise hide the `(Literal, Func)` shape behind a named
+  opaque callback);
+- `decl_event_member_families` records (literal, companion type) per
+  owner+member so the FIRST overload's companion appears retroactively
+  when the second literal arrives; companions re-push into every clone
+  (the decl and FFI layers each clone the interface — the per-clone
+  `seen_field_names` keeps it idempotent);
+- `decl_event_member_specials` maps each companion to
+  (JS member, literal); the FFI emits
+  `#| (self, arg0) => self.on("close", arg0)` — and on
+  generic-preserved receivers a BOUND-closure getter
+  (`(o) => (...args) => o.on("close", ...args)`) so `this` survives;
+- listener returns declared `any` / `unknown` normalize to `void` in
+  the companion (`(page) => any` is fire-and-forget for the emitter) —
+  without this every companion line carried a spurious `JSValue`
+  return and playwright's metric tripled.
+
+Runtime-verified: a generated `browser.on_close(fn(_b) { ... })`
+registers through the real `.on("close", ...)` and fires (smoke in
+scratch; fixture `event-map-entry.d.ts` + wbtest pin the shapes).
+playwright gains 76 typed `on_* / once_*` methods; JSValue functions
+196 -> 191 with surface 811 -> 842 (+31: companions whose payload
+types still widen — new usable surface). Class-METHOD event maps
+(ws / chokidar / node:fs watchers) are not yet specialized — the same
+registry approach extends to `append_class_method_once` +
+`ffi_class_method_decl_to_moonbit`; recorded as the next step.
+
 Profiled with `moon bench --target native` + callgrind over the release
 `tscheck` binary (`--parse` / full, `--iters N`; use
 `--toggle-collect=<mangled check entry>` to isolate the check phase from

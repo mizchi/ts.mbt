@@ -1545,7 +1545,14 @@ fn ffi_function_field_method_decl(
   field_name : String,
   js_field_name : String,
   field_type : @ast.TsType,
+  event_special? : (String, String)? = None,
 ) -> String? {
+  // Event companion (`on_close`): call the ORIGINAL JS member with the
+  // event literal injected as the first argument.
+  let (js_field_name, injected_literal) = match event_special {
+    Some((js_member, literal)) => (js_member, Some(literal))
+    None => (js_field_name, None)
+  }
   match ffi_function_type_parts(state, field_type) {
     Some((source_param_types, param_types, return_type)) => {
       let self_type = ffi_receiver_self_type(
@@ -1593,13 +1600,40 @@ fn ffi_function_field_method_decl(
           ),
         )
       }
-      let js_args_src = js_args.join(", ")
+      let js_args_src = match injected_literal {
+        Some(literal) =>
+          if js_args.length() == 0 {
+            "\"\{literal}\""
+          } else {
+            "\"\{literal}\", " + js_args.join(", ")
+          }
+        None => js_args.join(", ")
+      }
       let fn_prefix = ffi_function_type_param_prefix(receiver_type_params)
       // MoonBit's `extern "js" fn[T]` is forbidden ([4008]), so any method
       // on a generic-preserved receiver has to fall through to the
       // pure-MoonBit wrapper form which accesses the underlying function
       // field via `self.<field>(...)`.
       if receiver_type_params.length() > 0 {
+        match injected_literal {
+          Some(literal) => {
+            // Bound closure with the literal pre-applied: `o.on` fetched
+            // bare would lose its `this`, so the getter returns
+            // `(...args) => o.on("close", ...args)` instead.
+            state.needs_js_any = true
+            let getter_name = "_" +
+              ffi_to_snake_case(receiver_type) +
+              "_" +
+              field_name +
+              "_get_extern_js"
+            let raw_param_types_src = param_types.join(", ")
+            let field_fn_type = "(\{raw_param_types_src}) -> \{return_type}"
+            let getter_decl = "extern \"js\" fn \{getter_name}(target : JSValue) -> JSValue =\n  #| (o) => (...args) => \{ffi_js_access("o", js_field_name)}(\"\{literal}\", ...args)"
+            let wrapper_decl = "pub \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} {\n  let field_fn : \{field_fn_type} = unsafeCast(\{getter_name}(unsafeCast(self)))\n  field_fn(\{args_src})\n}"
+            return Some(getter_decl + "\n\n" + wrapper_decl)
+          }
+          None => ()
+        }
         if field_name != js_field_name && field_name != "_call_" {
           // Sanitized member names (`use` -> `use_`): the struct field is
           // a raw view over the JS object, so `self.use_` would read a
@@ -1769,7 +1803,13 @@ fn ffi_struct_decl_to_moonbit(
       method_wrapper_count < state.function_field_method_wrapper_limit {
       match
         ffi_function_field_method_decl(
-          state, type_name, active_type_params, field_name, name, type_,
+          state,
+          type_name,
+          active_type_params,
+          field_name,
+          name,
+          type_,
+          event_special=decl_event_member_special(iface.name, name),
         ) {
         Some(method_decl) => {
           method_lines.push(method_decl)

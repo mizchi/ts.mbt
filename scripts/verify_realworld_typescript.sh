@@ -357,7 +357,7 @@ jsvalue_function_budget() {
     minimatch) printf '10\n' ;;
     ws) printf '7\n' ;;
     vitest/runtime) printf '6\n' ;;
-    playwright) printf '196\n' ;;
+    playwright) printf '191\n' ;;
     react-router) printf '79\n' ;;
     jose) printf '46\n' ;;
     express) printf '6\n' ;;
@@ -457,7 +457,7 @@ jsvalue_cause_budget() {
     # 2026-07-20 async-callback lowering: one promise-callback signature
     # moved from the tuple/array bucket into callback/function (the
     # lowered wrapper line matches the callback pattern first).
-    playwright) printf '811|284|0|58|276|191|2\n' ;;
+    playwright) printf '842|302|0|65|286|187|2\n' ;;
     react-router) printf '378|188|21|29|45|77|18\n' ;;
     jose) printf '67|18|1|15|11|10|12\n' ;;
     express) printf '6|0|0|0|0|2|4\n' ;;
