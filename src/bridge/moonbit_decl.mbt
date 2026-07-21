@@ -5741,6 +5741,26 @@ fn decl_alias_synthetic_interface_name(name : String) -> String {
 }
 
 ///|
+/// `[T, ...T[]]` (and `[T, T, ...T[]]`): a tuple whose trailing rest
+/// element type equals every fixed element. Returns the element type.
+fn decl_nonempty_tuple_element(items : Array[@ast.TsType]) -> @ast.TsType? {
+  if items.length() < 2 {
+    return None
+  }
+  let element = match items[items.length() - 1] {
+    Rest(Array(inner)) => inner
+    Rest(inner) => inner
+    _ => return None
+  }
+  for i in 0..<(items.length() - 1) {
+    if items[i] != element {
+      return None
+    }
+  }
+  Some(element)
+}
+
+///|
 fn decl_type_is_never_ish(t : @ast.TsType) -> Bool {
   match t {
     Never => true
@@ -6405,7 +6425,14 @@ fn lower_react_utility_type(
           lower_react_utility_type(info, item, modules, canonical_types),
         )
       }
-      Tuple(next_items)
+      // Nonempty-array idiom `[T, ...T[]]` (valibot / zod `issues`):
+      // every fixed element equals the rest's element type, so the
+      // MoonBit surface is just `Array[T]` — a tuple would widen to
+      // `Array[JSValue]` anyway and lose the element type.
+      match decl_nonempty_tuple_element(next_items) {
+        Some(element) => Array(element)
+        None => Tuple(next_items)
+      }
     }
     Object(fields) => {
       let next_fields : Array[(@ast.TsType, @ast.TsType)] = []

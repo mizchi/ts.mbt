@@ -1980,6 +1980,20 @@ types still widen — new usable surface). Class-METHOD event maps
 registry approach extends to `append_class_method_once` +
 `ffi_class_method_decl_to_moonbit`; recorded as the next step.
 
+Round 12 (same day) — nonempty-tuple normalization (#2 of the unlock
+survey). `[T, ...T[]]` (valibot / zod `issues` fields) is a nonempty
+ARRAY for the bridge surface; as a tuple it widened to
+`Array[JSValue]` and lost the element type. `decl_nonempty_tuple_element`
+recognizes a trailing rest whose element equals every fixed element
+and the Tuple lowering arm rewrites to `Array(element)`; boundary
+representation is unchanged (a JS array either way). Elements that
+resolve concretely now surface (`issues : Array[BaseIssue[TInput_1]]?`);
+the ~70 that remain `Array[JSValue]` carry `InferIssue<TSchema>`
+conditional elements — honest widening. Zero budget drift. The
+common-base ELEMENT join half of the survey item turned out to be
+already covered: `Array(Named(alias))` lowers the alias through
+`decl_join_union_alias_to_common_base` on the Named arm.
+
 Profiled with `moon bench --target native` + callgrind over the release
 `tscheck` binary (`--parse` / full, `--iters N`; use
 `--toggle-collect=<mangled check entry>` to isolate the check phase from

@@ -3158,3 +3158,29 @@ async test "bridge: event-map overloads synthesize per-literal companions" {
     ),
   )
 }
+
+///|
+test "decl: nonempty tuple normalizes to array" {
+  // `[T, ...T[]]` (valibot / zod `issues`) is a nonempty ARRAY for the
+  // bridge surface; a tuple would widen to `Array[JSValue]`.
+  assert_eq(
+    decl_nonempty_tuple_element([
+      @ast.TsType::Named("BaseIssue"),
+      @ast.TsType::Rest(@ast.TsType::Array(@ast.TsType::Named("BaseIssue"))),
+    ]),
+    Some(@ast.TsType::Named("BaseIssue")),
+  )
+  // Mixed fixed elements refuse.
+  assert_eq(
+    decl_nonempty_tuple_element([
+      @ast.TsType::String_,
+      @ast.TsType::Rest(@ast.TsType::Array(@ast.TsType::Named("BaseIssue"))),
+    ]),
+    None,
+  )
+  // No trailing rest refuses.
+  assert_eq(
+    decl_nonempty_tuple_element([@ast.TsType::String_, @ast.TsType::Number]),
+    None,
+  )
+}
