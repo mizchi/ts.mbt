@@ -873,10 +873,11 @@ verify_typescript_to_moonbit_typescript_ast_example() {
   rm -rf "$root"
   mkdir -p "$root"
 
+  echo "Generating TypeScript AST bridge"
   moon run src/cmd/ts2mbt -- \
     --input node_modules/typescript/lib/typescript.d.ts \
     --out "$out" \
-    --module-spec typescript >/dev/null
+    --module-spec typescript
 
   write_js_any_stub "$out"
 
@@ -911,6 +912,7 @@ EOF
   grep_generated_mbt "$out" 'pub fn[T] TransformationResult::dispose(self : TransformationResult[T]) -> Unit'
   grep -F 'No structural unsupported exports were detected' "$out/SCAFFOLD_DIAGNOSTICS.md" >/dev/null
   moon -C "$out" check --target js
+  echo "Running TypeScript AST bridge runtime smoke"
   run_typescript_ast_build_smoke "$out" "examples/typescript_to_moonbit_typescript_ast"
 }
 
@@ -949,9 +951,10 @@ EOF
 }
 EOF
 
+  echo "Generating Drizzle bridge"
   moon run src/cmd/ts2mbt -- \
     generate --package-json "$root/package.json" \
-    --out "$root/internal/generated" >/dev/null
+    --out "$root/internal/generated"
 
   cat > "$root/cmd/main/moon.pkg" <<'EOF'
 import {
