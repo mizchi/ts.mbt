@@ -21,6 +21,10 @@
 // mutually exclusive for now — the source position table doesn't
 // survive the rename pass yet.
 
+// Every input is type-checked before it is transformed. `mtsc` uses the
+// checker’s strict entry point so diagnostics match `tscheck --strict`, and
+// never writes JavaScript when the checker finds an issue.
+
 ///|
 priv struct MtscOptions {
   mut input : String?
@@ -96,6 +100,7 @@ fn mtsc_print_usage() -> Unit {
   println("Usage: mtsc <input.ts> [options]")
   println("")
   println("Compile a single TypeScript / TSX entrypoint to JavaScript.")
+  println("Type errors are reported and prevent JavaScript output.")
   println("")
   println("Options:")
   println("  --out, -o <file>          Write JS to <file> (default: stdout)")
@@ -528,6 +533,112 @@ async fn mtsc_path_exists(path : String) -> Bool {
 }
 
 ///|
+/// Parse a source file and run the full strict expression/body checker.
+/// Kept separate from CLI output so the checker contract can be tested
+/// directly.
+fn mtsc_is_unresolved_import_binding(
+  issue : @checker.ExprIssue,
+  imported_binding_names : Array[String],
+) -> Bool {
+  for name in imported_binding_names {
+    if issue.message == "cannot find name `\{name}`" {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn mtsc_collect_type_issues(
+  source : String,
+  allow_jsx : Bool,
+) -> Result[Array[@checker.ExprIssue], String] {
+  let module_ = @parser.Parser::from_source_with_jsx(source, allow_jsx).parse_module() catch {
+    e => return Err("\{e}")
+  }
+  let issues : Array[@checker.ExprIssue] = []
+  for issue in @checker.check_module_function_bodies(module_) {
+    // The checker runs on a parsed source file rather than a linked module
+    // graph, so imported value bindings have no declaration available to its
+    // resolver. They are nevertheless valid names in this module; suppress
+    // only that known single-file false positive. The bundled dependency is
+    // checked independently below, so type errors in it are still reported.
+    if !mtsc_is_unresolved_import_binding(issue, module_.imported_binding_names) {
+      issues.push(issue)
+    }
+  }
+  Ok(issues)
+}
+
+///|
+/// Print checker diagnostics for one input and return whether it is clean.
+fn mtsc_typecheck_source(source : String, path : String) -> Bool {
+  let issues = match mtsc_collect_type_issues(source, path.has_suffix(".tsx")) {
+    Ok(issues) => issues
+    Err(e) => {
+      println("mtsc: parse error in \{path}: \{e}")
+      return false
+    }
+  }
+  if issues.length() == 0 {
+    return true
+  }
+  for issue in issues {
+    println("mtsc: type error in \{path} [\{issue.path}]: \{issue.message}")
+  }
+  false
+}
+
+///|
+#cfg(any(target="native", target="llvm"))
+extern "c" fn mtsc_native_exit(code : Int) = "exit"
+
+///|
+#cfg(target="js")
+extern "js" fn mtsc_js_try_exit(code : Int) -> Bool =
+  #| function(code) {
+  #|   if (typeof process !== "undefined" && typeof process.exit === "function") {
+  #|     process.exit(code);
+  #|     return true;
+  #|   }
+  #|   return false;
+  #| }
+
+///|
+#cfg(target="wasm")
+fn mtsc_wasm_exit(code : Int) -> Unit = "wasi_snapshot_preview1" "proc_exit"
+
+///|
+#cfg(target="wasm-gc")
+fn mtsc_wasm_gc_exit(code : Int) -> Unit = "__moonbit_sys_unstable" "exit"
+
+///|
+#cfg(any(target="native", target="llvm"))
+fn mtsc_exit_type_error() -> Unit {
+  mtsc_native_exit(1)
+}
+
+///|
+#cfg(target="js")
+fn mtsc_exit_type_error() -> Unit {
+  if !mtsc_js_try_exit(1) {
+    panic()
+  }
+}
+
+///|
+#cfg(target="wasm")
+fn mtsc_exit_type_error() -> Unit {
+  mtsc_wasm_exit(1)
+}
+
+///|
+#cfg(target="wasm-gc")
+fn mtsc_exit_type_error() -> Unit {
+  mtsc_wasm_gc_exit(1)
+}
+
+///|
 async fn main {
   let argv = @env.args()
   if argv.length() < 2 {
@@ -581,6 +692,16 @@ async fn main {
       Err(e) => {
         println("mtsc: \{e}")
         return
+      }
+    }
+    for path in files.keys() {
+      match files.get(path) {
+        Some(source) =>
+          if !mtsc_typecheck_source(source, path) {
+            mtsc_exit_type_error()
+            return
+          }
+        None => ()
       }
     }
     // `type_props` collects every property name declared in an
@@ -805,6 +926,10 @@ async fn main {
       println("mtsc: read error \{input_path}: \{e}")
       return
     }
+  }
+  if !mtsc_typecheck_source(source, input_path) {
+    mtsc_exit_type_error()
+    return
   }
   let result = @transform.transform_source_full(
     source,

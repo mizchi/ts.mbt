@@ -22,5 +22,5 @@ preferred_target = "native"
 source = "src"
 
 options(
-  exclude: [ "fixtures", "typescript" ],
+  exclude: [ "fixtures", "typescript", "src/cmd/tscheck" ],
 )
