@@ -333,15 +333,17 @@ extern "js" fn test_hono_route_response(app : Hono[JSValue, JSValue, JSValue], r
   #|   return `${res.status}:${route.method}:${route.path}:${res.headers.get("content-type")}`;
   #| }
 
+fn[A, B] test_unsafe_cast(value : A) -> B = "%identity"
+
 test "generated real Hono bridge smoke" {
   let app : Hono[JSValue, JSValue, JSValue] = new_hono(None)
   let _ = app.get("/hello", test_hono_handler)
   let undefined_ = test_undefined()
   let res = app.request(
-    unsafeCast("/hello"),
-    unsafeCast(undefined_),
-    unsafeCast(undefined_),
-    unsafeCast(undefined_),
+    test_unsafe_cast("/hello"),
+    test_unsafe_cast(undefined_),
+    test_unsafe_cast(undefined_),
+    test_unsafe_cast(undefined_),
   )
   assert_eq(
     test_hono_route_response(app, res),
@@ -461,13 +463,15 @@ extern "js" fn test_forward_ref_render() -> ForwardRefRenderFunction[JSValue, JS
 extern "js" fn test_transition_scope() -> TransitionFunction =
   #| () => () => undefined
 
+fn[A, B] test_unsafe_cast(value : A) -> B = "%identity"
+
 test "generated @types/react bridge smoke" {
   let element = createElement("div", Some(test_props()), test_children())
   // `cloneElement` is typed against the generic `DetailedReactHTMLElement[
   // HTMLAttributes[JSValue], HTMLElement]` but `createElement("div", ...)`
-  // resolves to a more specific instantiation; unsafeCast bridges them.
-  let _ = cloneElement(unsafeCast(element), None, test_children())
-  assert_true(isValidElement(unsafeCast(element)))
+  // resolves to a more specific instantiation; the test helper bridges them.
+  let _ = cloneElement(test_unsafe_cast(element), None, test_children())
+  assert_true(isValidElement(test_unsafe_cast(element)))
   let _ = memo(test_function_component(), None)
   let _ = forwardRef(test_forward_ref_render())
   startTransition(test_transition_scope())
@@ -507,10 +511,12 @@ extern "js" fn test_forward_ref_render() -> @sut.ForwardRefRenderFunction[@sut.J
 extern "js" fn test_transition_scope() -> @sut.TransitionFunction =
   #| () => () => undefined
 
+fn[A, B] test_unsafe_cast(value : A) -> B = "%identity"
+
 fn main {
   let element = @sut.createElement("div", Some(test_props()), test_children())
-  let _ = @sut.cloneElement(@sut.unsafeCast(element), None, test_children())
-  if !@sut.isValidElement(@sut.unsafeCast(element)) {
+  let _ = @sut.cloneElement(test_unsafe_cast(element), None, test_children())
+  if !@sut.isValidElement(test_unsafe_cast(element)) {
     abort("expected generated React element to be valid")
   }
   let _ = @sut.memo(test_function_component(), None)
@@ -561,6 +567,8 @@ extern "js" fn test_vitest_vi(vi : VitestUtils) -> Unit =
   #|   if (!vi.isMockFunction(fn)) throw new Error("expected vi.fn mock");
   #| }
 
+fn[A, B] test_unsafe_cast(value : A) -> B = "%identity"
+
 test "generated real Vitest bridge smoke" {
   let expect = get_expect()
   // Build assertions to ensure the generic-preserved chain compiles. The
@@ -568,8 +576,8 @@ test "generated real Vitest bridge smoke" {
   // wrapper whose `(self.toBe)(arg)` form loses chai's `this`-bound
   // method receiver, so don't actually invoke `.toBe` here — the
   // `vi.fn` smoke below exercises the runtime path.
-  let _ = expect._call_(unsafeCast(test_number()), None)
-  let _ = expect._call_(unsafeCast(test_object()), None)
+  let _ = expect._call_(test_unsafe_cast(test_number()), None)
+  let _ = expect._call_(test_unsafe_cast(test_object()), None)
   test_vitest_vi(get_vi())
 }
 EOF

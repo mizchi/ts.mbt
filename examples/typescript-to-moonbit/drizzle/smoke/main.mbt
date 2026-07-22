@@ -76,6 +76,8 @@ extern "js" fn row_str(rows : @sut.JSValue, i : Int, k : String) -> String =
 extern "js" fn smoke_print_ok() -> Unit =
   #| () => console.log("ok")
 
+fn[A, B] test_unsafe_cast(value : A) -> B = "%identity"
+
 fn main {
   // Build a `users` schema using drizzle's runtime sqliteTable + column
   // builders. The result is structurally a drizzle Table at JS level;
@@ -87,7 +89,7 @@ fn main {
   let age_col = sqlite_integer_js("age")
   let columns = make_columns_object_js(id_col, name_col, email_col, age_col)
   let users = sqlite_table_js("users", columns)
-  let typed_users : @sut.Table[@sut.JSValue] = @sut.unsafeCast(users)
+  let typed_users : @sut.Table[@sut.JSValue] = test_unsafe_cast(users)
   let _ = typed_users
 
   // Run an INSERT + SELECT round-trip against Node 24's built-in
