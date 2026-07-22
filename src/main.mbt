@@ -258,9 +258,37 @@ priv struct MoonbitJsBuildContext {
 }
 
 ///|
+fn parse_moon_mod_dsl_string_field(
+  source : String,
+  field_name : String,
+) -> String? {
+  let prefix = field_name + " ="
+  for line_view in source.split("\n") {
+    let line = line_view.trim().to_owned()
+    if !line.has_prefix(prefix) {
+      continue
+    }
+    let value = line[prefix.length():line.length()].trim().to_owned()
+    if value.length() < 2 || value[0].unsafe_to_char() != '"' {
+      return None
+    }
+    let closing = value[1:].find("\"")
+    match closing {
+      Some(index) => return Some(value[1:index + 1].to_owned())
+      None => return None
+    }
+  }
+  None
+}
+
+///|
 fn parse_moon_mod_string_field(source : String, field_name : String) -> String? {
-  let json = @json.parse(source) catch { _ => return None }
-  guard json is Object(members) else { return None }
+  let json = @json.parse(source) catch {
+    _ => return parse_moon_mod_dsl_string_field(source, field_name)
+  }
+  guard json is Object(members) else {
+    return parse_moon_mod_dsl_string_field(source, field_name)
+  }
   for pair in members {
     let (name, value) = pair
     if name == field_name {
@@ -326,6 +354,22 @@ async fn find_nearest_moon_mod_dir(start_dir : String) -> String? {
 }
 
 ///|
+/// Read the active module manifest after preferring the current DSL form.
+/// MoonBit accepts both forms during migration, but a project may have only
+/// `moon.mod`, so callers must not assume the legacy JSON manifest exists.
+async fn read_moon_mod_source(module_root : String) -> String? {
+  for manifest in ["moon.mod", "moon.mod.json"] {
+    let path = main_join_path(module_root, manifest)
+    if !@fs.exists(path) {
+      continue
+    }
+    let source = @fs.read_file(path).text() catch { _ => continue }
+    return Some(source)
+  }
+  None
+}
+
+///|
 fn strip_dir_prefix(root : String, path : String) -> String? {
   if path == root {
     return Some("")
@@ -354,9 +398,9 @@ async fn resolve_moonbit_js_build_context(
     Some(root) => @fs.realpath(root) catch { _ => root }
     None => return None
   }
-  let moon_mod_path = main_join_path(module_root, "moon.mod.json")
-  let moon_mod_source = @fs.read_file(moon_mod_path).text() catch {
-    _ => return None
+  let moon_mod_source = match read_moon_mod_source(module_root) {
+    Some(source) => source
+    None => return None
   }
   let source_root_rel = match
     parse_moon_mod_string_field(moon_mod_source, "source") {
@@ -519,6 +563,7 @@ fn collect_async_js_export_modes_from_glue(
 ///|
 fn render_async_js_export_wrappers(
   async_exports : Array[(String, String, Bool)],
+  adapt_public_values : Bool,
 ) -> Array[String] {
   if async_exports.length() == 0 {
     return []
@@ -559,8 +604,13 @@ fn render_async_js_export_wrappers(
   for item in async_exports {
     let (local_name, export_name, preserve_result) = item
     let preserve_result_js = if preserve_result { "true" } else { "false" }
+    let resolve_adapter = if adapt_public_values {
+      "__tsmbt_public_return"
+    } else {
+      "(value) => value"
+    }
     lines.push(
-      "export function \{export_name}(...args) { const callArgs = args.slice(); while (callArgs.length < \{local_name}.length - 2) { callArgs.push(undefined); } return __tsmbt_async_result_to_promise((ok, err) => \{local_name}(...callArgs, ok, err), \{preserve_result_js}); }",
+      "export function \{export_name}(...args) { const callArgs = args.slice(); while (callArgs.length < \{local_name}.length - 2) { callArgs.push(undefined); } return __tsmbt_async_result_to_promise((ok, err) => \{local_name}(...callArgs, (value) => ok(\{resolve_adapter}(value)), err), \{preserve_result_js}); }",
     )
   }
   lines
@@ -570,6 +620,7 @@ fn render_async_js_export_wrappers(
 fn rewrite_async_js_exports(
   source : String,
   async_modes : Map[String, Bool],
+  adapt_public_values? : Bool = false,
 ) -> String {
   if async_modes.length() == 0 {
     return source
@@ -616,7 +667,10 @@ fn rewrite_async_js_exports(
       }
     }
     if !inserted_wrappers && trimmed.has_prefix("//# sourceMappingURL=") {
-      for wrapper_line in render_async_js_export_wrappers(async_exports) {
+      for
+        wrapper_line in render_async_js_export_wrappers(
+          async_exports, adapt_public_values,
+        ) {
         output_lines.push(wrapper_line)
       }
       inserted_wrappers = true
@@ -624,7 +678,10 @@ fn rewrite_async_js_exports(
     output_lines.push(line)
   }
   if !inserted_wrappers {
-    for wrapper_line in render_async_js_export_wrappers(async_exports) {
+    for
+      wrapper_line in render_async_js_export_wrappers(
+        async_exports, adapt_public_values,
+      ) {
       output_lines.push(wrapper_line)
     }
   }
@@ -632,9 +689,115 @@ fn rewrite_async_js_exports(
 }
 
 ///|
+/// Replace MoonBit glue exports with small JavaScript boundary wrappers.
+/// The raw JS backend exposes classes and positional enum fields; the
+/// adapter generated from the MBTI converts those return values to the public
+/// structural values described by the emitted `.d.ts` file.
+fn rewrite_runtime_boundary_js_exports(
+  source : String,
+  adapter_js : String,
+  runtime_export_names : Array[String],
+  async_modes : Map[String, Bool],
+) -> String {
+  if runtime_export_names.length() == 0 {
+    return source
+  }
+  let output_lines : Array[String] = []
+  let wrapped_exports : Array[(String, String)] = []
+  let mut inserted_wrappers = false
+  for line_view in source.split("\n") {
+    let line = line_view.to_owned()
+    let trimmed = line.trim().to_owned()
+    if trimmed.has_prefix("export {") {
+      match (line.find("{"), line.rev_find("}")) {
+        (Some(open_idx), Some(close_idx)) if close_idx > open_idx => {
+          let inner = line[open_idx + 1:close_idx].to_owned()
+          let kept_specs : Array[String] = []
+          for raw_spec in inner.split(",") {
+            let spec = raw_spec.trim().to_owned()
+            if spec == "" {
+              continue
+            }
+            let (local_name, export_name) = match spec.find(" as ") {
+              Some(as_idx) =>
+                (
+                  spec[:as_idx].trim().to_owned(),
+                  spec[as_idx + " as ".length():spec.length()].trim().to_owned(),
+                )
+              None => (spec, spec)
+            }
+            if runtime_export_names.contains(export_name) &&
+              !async_modes.contains(export_name) {
+              wrapped_exports.push((local_name, export_name))
+            } else {
+              kept_specs.push(spec)
+            }
+          }
+          if kept_specs.length() > 0 {
+            output_lines.push("export { " + kept_specs.join(", ") + " }")
+          }
+          continue
+        }
+        _ => ()
+      }
+    }
+    if !inserted_wrappers && trimmed.has_prefix("//# sourceMappingURL=") {
+      output_lines.push(adapter_js)
+      for pair in wrapped_exports {
+        let (local_name, export_name) = pair
+        let raw_name = "__tsmbt_raw_export_" + export_name
+        output_lines.push("const \{raw_name} = \{local_name};")
+        output_lines.push(
+          "export function \{export_name}(...args) { return __tsmbt_public_return(\{raw_name}(...args.map((arg) => __tsmbt_raw_argument(arg)))); }",
+        )
+      }
+      inserted_wrappers = true
+    }
+    output_lines.push(line)
+  }
+  if !inserted_wrappers {
+    output_lines.push(adapter_js)
+    for pair in wrapped_exports {
+      let (local_name, export_name) = pair
+      let raw_name = "__tsmbt_raw_export_" + export_name
+      output_lines.push("const \{raw_name} = \{local_name};")
+      output_lines.push(
+        "export function \{export_name}(...args) { return __tsmbt_public_return(\{raw_name}(...args.map((arg) => __tsmbt_raw_argument(arg)))); }",
+      )
+    }
+  }
+  output_lines.join("\n")
+}
+
+///|
+async fn rewrite_runtime_boundary_js_exports_file(
+  path : String,
+  adapter_js : String,
+  runtime_export_names : Array[String],
+  async_modes : Map[String, Bool],
+) -> Bool {
+  if runtime_export_names.length() == 0 {
+    return true
+  }
+  let source = @fs.read_file(path).text() catch {
+    e => {
+      println("Read error: \{e}")
+      return false
+    }
+  }
+  write_text_file(
+    path,
+    rewrite_runtime_boundary_js_exports(
+      source, adapter_js, runtime_export_names, async_modes,
+    ),
+  )
+}
+
+///|
 async fn rewrite_async_js_exports_file(
   path : String,
   async_modes : Map[String, Bool],
+  adapt_public_values? : Bool = false,
 ) -> Bool {
   if async_modes.length() == 0 {
     return true
@@ -645,7 +808,10 @@ async fn rewrite_async_js_exports_file(
       return false
     }
   }
-  write_text_file(path, rewrite_async_js_exports(source, async_modes))
+  write_text_file(
+    path,
+    rewrite_async_js_exports(source, async_modes, adapt_public_values~),
+  )
 }
 
 ///|
@@ -714,9 +880,22 @@ async fn build_moonbit_js_runtime_from_mbti(
     remove_moonbit_js_glue_dir(context.glue_dir_path)
     return false
   }
+  let async_modes = collect_async_js_export_modes_from_glue(
+    bundle.autolink_glue_mbt,
+  )
+  if !rewrite_runtime_boundary_js_exports_file(
+      output_js_path,
+      bundle.runtime_value_adapter_js,
+      bundle.runtime_boundary_export_names,
+      async_modes,
+    ) {
+    remove_moonbit_js_glue_dir(context.glue_dir_path)
+    return false
+  }
   if !rewrite_async_js_exports_file(
       output_js_path,
-      collect_async_js_export_modes_from_glue(bundle.autolink_glue_mbt),
+      async_modes,
+      adapt_public_values=bundle.runtime_boundary_export_names.length() > 0,
     ) {
     remove_moonbit_js_glue_dir(context.glue_dir_path)
     return false
@@ -964,6 +1143,7 @@ pub async fn emit_moonbit_bridge_package(
   output_dir : String,
   bare_module_specifier? : String? = None,
   moonbitlang_async_integration? : Bool = false,
+  runtime_validation? : Bool = false,
 ) -> Bool {
   let bundle = emit_moonbit_bridge_package_texts(file_path, module_spec) catch {
     @bridge.ModuleGraphError::ReadError(msg)
@@ -1021,34 +1201,73 @@ pub async fn emit_moonbit_bridge_package(
   let bridge_mbt = rewrite_bridge_package_module_path(
     bundle_bridge_mbt, resolved_specifier,
   )
+  let (bridge_mbti, bridge_mbt) = if runtime_validation {
+    add_bridge_runtime_validation(bundle.bridge_mbti, bridge_mbt)
+  } else {
+    (bundle.bridge_mbti, bridge_mbt)
+  }
   let package_json = render_bridge_package_json(resolved_specifier)
   let files : Array[(String, String)] = [
     ("moon.pkg", bundle_moon_pkg),
-    ("bridge.mbti", bundle.bridge_mbti),
+    ("bridge.mbti", bridge_mbti),
     ("package.json", package_json),
   ]
   for file in bridge_package_mbt_files(bridge_mbt, force_split=false) {
     files.push(file)
   }
   files.push(("bridge.js", bundle.bridge_js))
-  // Refresh the sibling `node_modules/@tsmbt-bridge/<safe>` symlink so
-  // `require("@tsmbt-bridge/<safe>")` from generated test code lands at
-  // the bridge dir. The vendor flow expects users to also list this
-  // bridge as a `file:` dependency; `pnpm install` then replaces our
-  // symlink with its own pnpm-managed link, but both states resolve to
-  // the same bridge directory.
-  if !ensure_bridge_node_modules_link(output_dir, resolved_specifier) {
-    return false
-  }
+  // Stage every generated file beside its destination first.  A rename in
+  // one directory is atomic, so a reader observes either the old complete
+  // file or the new complete file — never a truncated bridge while Vite or
+  // Moon is rebuilding.  Only these reserved, generator-owned temporary
+  // paths and the named generated files are touched; user-authored files in
+  // the output directory are left alone.
   for file in files {
     let (name, content) = file
-    let path = join_output_path(output_dir, name)
-    let _ = @fs.write_file(path, string_to_bytes(content), create=0o644) catch {
+    let stage_path = join_output_path(
+      output_dir,
+      bridge_package_stage_file_name(name),
+    )
+    let _ = @fs.write_file(stage_path, string_to_bytes(content), create=0o644) catch {
       e => {
         println("Write error: \{e}")
         return false
       }
     }
+  }
+  for file in files {
+    let (name, _) = file
+    let stage_path = join_output_path(
+      output_dir,
+      bridge_package_stage_file_name(name),
+    )
+    let output_path = join_output_path(output_dir, name)
+    let _ = @async_fs.rename(stage_path, output_path, replace=true) catch {
+      e => {
+        println("Write error: could not publish \{output_path}: \{e}")
+        return false
+      }
+    }
+  }
+  // MoonBit now uses the DSL manifest. Remove the legacy JSON manifest only
+  // after every current generated file has been published successfully, so a
+  // migration cannot leave the output directory without a valid manifest.
+  let legacy_manifest = join_output_path(output_dir, "moon.pkg.json")
+  if @fs.exists(legacy_manifest) {
+    let _ = @fs.remove(legacy_manifest) catch {
+      e => {
+        println(
+          "Write error: could not remove legacy manifest \{legacy_manifest}: \{e}",
+        )
+        return false
+      }
+    }
+  }
+  // Refresh the sibling `node_modules/@tsmbt-bridge/<safe>` symlink only
+  // after the package is fully published, so it never points consumers at a
+  // directory with staged-but-unpublished output.
+  if !ensure_bridge_node_modules_link(output_dir, resolved_specifier) {
+    return false
   }
   println("Wrote MoonBit bridge package to \{output_dir}")
   true
@@ -1452,6 +1671,121 @@ fn rewrite_bridge_package_module_path(
 }
 
 ///|
+/// Runtime validation is deliberately opt-in. It protects generated
+/// structural structs at a JS boundary without changing the default bridge
+/// size or adding checks to every call. Supported fields are primitive
+/// `String`, `Bool`, `Int`, and `Double`; other declared fields are checked
+/// for presence and keep their static MoonBit contract.
+fn bridge_runtime_validation_field_check(
+  field : String,
+  type_ : String,
+) -> String {
+  let value = "value[\"\{field}\"]"
+  let (inner_type, optional) = if type_.has_suffix("?") {
+    (type_[:type_.length() - 1].to_owned().trim().to_owned(), true)
+  } else {
+    (type_, false)
+  }
+  let required_check = match inner_type {
+    "String" => "typeof \{value} === \"string\""
+    "Bool" => "typeof \{value} === \"boolean\""
+    "Int" | "Double" => "typeof \{value} === \"number\""
+    _ => "\"\{field}\" in value"
+  }
+  if optional {
+    "(\{value} === undefined || \{required_check})"
+  } else {
+    required_check
+  }
+}
+
+///|
+/// Append public `validate<Type>` functions for generated structural structs.
+/// Invalid values become `None`; callers can reject them before an
+/// `%identity` conversion exposes the value as the generated MoonBit type.
+fn add_bridge_runtime_validation(
+  bridge_mbti : String,
+  bridge_mbt : String,
+) -> (String, String) {
+  let mut mbti = bridge_mbti
+  let mut mbt = bridge_mbt
+  let mbti_sections : Array[String] = []
+  let mbt_sections : Array[String] = []
+  for block in bridge_package_split_top_level_blocks(bridge_mbt) {
+    // Generated doc comments share the top-level block with the declaration,
+    // so locate the struct line rather than requiring the block to start with
+    // it.
+    let mut struct_line : String? = None
+    for line_view in block.split("\n") {
+      let line = line_view.to_owned().trim().to_owned()
+      if line.has_prefix("pub(all) struct ") {
+        struct_line = Some(line)
+        break
+      }
+    }
+    let declaration = match struct_line {
+      Some(line) => line
+      None => continue
+    }
+    let prefix = "pub(all) struct "
+    let rest = declaration[prefix.length():].to_owned()
+    let open_index = match rest.find("{") {
+      Some(index) => index
+      None => continue
+    }
+    let type_name = rest[:open_index].to_owned().trim().to_owned()
+    if type_name == "" || type_name.contains("[") {
+      continue
+    }
+    let checks : Array[String] = [
+      "value !== null", "typeof value === \"object\"",
+    ]
+    for line_view in block.split("\n") {
+      let line = line_view.to_owned().trim().to_owned()
+      match line.find(":") {
+        Some(separator) if !line.has_prefix("pub") => {
+          let field = line[:separator].to_owned().trim().to_owned()
+          let type_ = line[separator + 1:].to_owned().trim().to_owned()
+          if field != "" && type_ != "" {
+            checks.push(bridge_runtime_validation_field_check(field, type_))
+          }
+        }
+        _ => ()
+      }
+    }
+    let validator_name = "validate\{type_name}"
+    let internal_name = "__ts_mbt_validate_\{type_name}"
+    let public_decl = "declare pub fn \{validator_name}(value : JSValue) -> \{type_name}?"
+    if !mbti.contains(public_decl) {
+      mbti_sections.push(
+        "///|\n/// Validates the runtime structural shape of `\{type_name}`.\n\{public_decl}",
+      )
+    }
+    let condition = checks.join(" && ")
+    let body = "extern \"js\" fn \{internal_name}(value : JSValue) -> Bool =\n  #| (value) => \{condition}\n\npub fn \{validator_name}(value : JSValue) -> \{type_name}? {\n  if \{internal_name}(value) {\n    Some(unsafeCast(value))\n  } else {\n    None\n  }\n}"
+    if !mbt.contains("fn \{validator_name}(") {
+      mbt_sections.push(body)
+    }
+  }
+  if mbt_sections.length() == 0 {
+    return (mbti, mbt)
+  }
+  if !mbti.contains("declare pub type JSValue") {
+    mbti = "#external\ndeclare pub type JSValue\n\n" + mbti
+  }
+  if !mbt.contains("type JSValue") {
+    mbt = "#external\ntype JSValue\n\n" + mbt
+  }
+  if !mbt.contains("fn[A, B] unsafeCast(value : A) -> B") {
+    mbt += "\n\nfn[A, B] unsafeCast(value : A) -> B = \"%identity\""
+  }
+  (
+    mbti + "\n\n" + mbti_sections.join("\n\n"),
+    mbt + "\n\n" + mbt_sections.join("\n\n"),
+  )
+}
+
+///|
 let bridge_package_split_line_threshold : Int = 2000
 
 ///|
@@ -1642,6 +1976,14 @@ fn join_output_path(base : String, child : String) -> String {
   } else {
     base + "/" + child
   }
+}
+
+///|
+/// Reserved adjacent staging name for a generator-owned bridge file.  The
+/// file remains in the destination directory so publishing with `rename` is
+/// an atomic operation on every supported target.
+fn bridge_package_stage_file_name(name : String) -> String {
+  ".tsmbt-next-" + name
 }
 
 ///|

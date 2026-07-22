@@ -227,7 +227,10 @@ EOF
   fi
 
   printf '{ "type": "module" }\n' > "$(dirname "$built_js")/package.json"
-  node --input-type=module - <<EOF
+  # This is a runtime smoke, so bypass warning_guard.sh's `node()` wrapper.
+  # The wrapper is useful for compile commands, but it can turn a runtime
+  # warning emitted by the current Node release into an opaque test failure.
+  command node --input-type=module - <<EOF
 await import("./$built_js");
 EOF
 }
@@ -333,15 +336,17 @@ extern "js" fn test_hono_route_response(app : Hono[JSValue, JSValue, JSValue], r
   #|   return `${res.status}:${route.method}:${route.path}:${res.headers.get("content-type")}`;
   #| }
 
+fn[A, B] test_unsafe_cast(value : A) -> B = "%identity"
+
 test "generated real Hono bridge smoke" {
   let app : Hono[JSValue, JSValue, JSValue] = new_hono(None)
   let _ = app.get("/hello", test_hono_handler)
   let undefined_ = test_undefined()
   let res = app.request(
-    unsafeCast("/hello"),
-    unsafeCast(undefined_),
-    unsafeCast(undefined_),
-    unsafeCast(undefined_),
+    test_unsafe_cast("/hello"),
+    test_unsafe_cast(undefined_),
+    test_unsafe_cast(undefined_),
+    test_unsafe_cast(undefined_),
   )
   assert_eq(
     test_hono_route_response(app, res),
@@ -461,13 +466,15 @@ extern "js" fn test_forward_ref_render() -> ForwardRefRenderFunction[JSValue, JS
 extern "js" fn test_transition_scope() -> TransitionFunction =
   #| () => () => undefined
 
+fn[A, B] test_unsafe_cast(value : A) -> B = "%identity"
+
 test "generated @types/react bridge smoke" {
   let element = createElement("div", Some(test_props()), test_children())
   // `cloneElement` is typed against the generic `DetailedReactHTMLElement[
   // HTMLAttributes[JSValue], HTMLElement]` but `createElement("div", ...)`
-  // resolves to a more specific instantiation; unsafeCast bridges them.
-  let _ = cloneElement(unsafeCast(element), None, test_children())
-  assert_true(isValidElement(unsafeCast(element)))
+  // resolves to a more specific instantiation; the test helper bridges them.
+  let _ = cloneElement(test_unsafe_cast(element), None, test_children())
+  assert_true(isValidElement(test_unsafe_cast(element)))
   let _ = memo(test_function_component(), None)
   let _ = forwardRef(test_forward_ref_render())
   startTransition(test_transition_scope())
@@ -507,10 +514,12 @@ extern "js" fn test_forward_ref_render() -> @sut.ForwardRefRenderFunction[@sut.J
 extern "js" fn test_transition_scope() -> @sut.TransitionFunction =
   #| () => () => undefined
 
+fn[A, B] test_unsafe_cast(value : A) -> B = "%identity"
+
 fn main {
   let element = @sut.createElement("div", Some(test_props()), test_children())
-  let _ = @sut.cloneElement(@sut.unsafeCast(element), None, test_children())
-  if !@sut.isValidElement(@sut.unsafeCast(element)) {
+  let _ = @sut.cloneElement(test_unsafe_cast(element), None, test_children())
+  if !@sut.isValidElement(test_unsafe_cast(element)) {
     abort("expected generated React element to be valid")
   }
   let _ = @sut.memo(test_function_component(), None)
@@ -561,6 +570,8 @@ extern "js" fn test_vitest_vi(vi : VitestUtils) -> Unit =
   #|   if (!vi.isMockFunction(fn)) throw new Error("expected vi.fn mock");
   #| }
 
+fn[A, B] test_unsafe_cast(value : A) -> B = "%identity"
+
 test "generated real Vitest bridge smoke" {
   let expect = get_expect()
   // Build assertions to ensure the generic-preserved chain compiles. The
@@ -568,8 +579,8 @@ test "generated real Vitest bridge smoke" {
   // wrapper whose `(self.toBe)(arg)` form loses chai's `this`-bound
   // method receiver, so don't actually invoke `.toBe` here — the
   // `vi.fn` smoke below exercises the runtime path.
-  let _ = expect._call_(unsafeCast(test_number()), None)
-  let _ = expect._call_(unsafeCast(test_object()), None)
+  let _ = expect._call_(test_unsafe_cast(test_number()), None)
+  let _ = expect._call_(test_unsafe_cast(test_object()), None)
   test_vitest_vi(get_vi())
 }
 EOF
@@ -862,13 +873,16 @@ verify_typescript_to_moonbit_typescript_ast_example() {
   rm -rf "$root"
   mkdir -p "$root"
 
+  echo "Generating TypeScript AST bridge"
   moon run src/cmd/ts2mbt -- \
     --input node_modules/typescript/lib/typescript.d.ts \
     --out "$out" \
-    --module-spec typescript >/dev/null
+    --module-spec typescript
 
+  echo "Writing TypeScript AST JS stubs"
   write_js_any_stub "$out"
 
+  echo "Writing TypeScript AST MoonBit manifest"
   cat > "$out/moon.mod.json" <<'EOF'
 {
   "name": "examples/typescript_to_moonbit_typescript_ast",
@@ -881,16 +895,21 @@ verify_typescript_to_moonbit_typescript_ast_example() {
 }
 EOF
 
-  [ -f "$out/moon.pkg" ]
-  [ -f "$out/bridge.mbti" ]
-  [ -f "$out/bridge.mbt" ]
-  [ -f "$out/bridge.js" ]
-  [ -f "$out/SCAFFOLD_DIAGNOSTICS.md" ]
+  echo "Checking TypeScript AST bridge artifacts"
+  for generated_file in moon.pkg bridge.mbti bridge.mbt bridge.js SCAFFOLD_DIAGNOSTICS.md; do
+    if [ ! -f "$out/$generated_file" ]; then
+      echo "TypeScript AST bridge is missing $generated_file" >&2
+      find "$out" -maxdepth 1 -type f -exec basename {} \; | sort >&2
+      exit 1
+    fi
+  done
   grep_generated_mbt "$out" 'pub fn createSourceFile(fileName : String, sourceText : String, languageVersionOrOptions : ScriptTarget, setParentNodes : Bool?, scriptKind : ScriptKind?) -> SourceFile'
   grep_generated_mbt "$out" 'pub extern "js" fn transform(source : SourceFile, transformers : Array[(TransformationContext) -> (SourceFile) -> SourceFile], compilerOptions : CompilerOptions?) -> TransformationResult[Node]'
   grep_generated_mbt "$out" 'pub fn visitEachChild(node : Node, visitor : (Node) -> Node, context : TransformationContext?) -> Node'
   grep_generated_mbt "$out" 'pub fn isIdentifier(node : Node) -> Bool'
-  grep_generated_mbt "$out" 'pub fn[A, B] unsafeCast(value : A) -> B = "%identity"'
+  # `unsafeCast` is an implementation helper; keeping it private ensures the
+  # generated package does not expose an unchecked escape hatch to consumers.
+  grep_generated_mbt "$out" 'fn[A, B] unsafeCast(value : A) -> B = "%identity"'
   grep_generated_mbt "$out" 'pub fn Node::asIdentifier(self : Node) -> Identifier?'
   grep_generated_mbt "$out" '  createIdentifier : (String) -> Identifier'
   grep_generated_mbt "$out" 'pub extern "js" fn NodeFactory::createIdentifier(self : NodeFactory, arg0 : String) -> Identifier'
@@ -900,6 +919,7 @@ EOF
   grep_generated_mbt "$out" 'pub fn[T] TransformationResult::dispose(self : TransformationResult[T]) -> Unit'
   grep -F 'No structural unsupported exports were detected' "$out/SCAFFOLD_DIAGNOSTICS.md" >/dev/null
   moon -C "$out" check --target js
+  echo "Running TypeScript AST bridge runtime smoke"
   run_typescript_ast_build_smoke "$out" "examples/typescript_to_moonbit_typescript_ast"
 }
 
@@ -938,9 +958,10 @@ EOF
 }
 EOF
 
+  echo "Generating Hono server bridges"
   moon run src/cmd/ts2mbt -- \
     generate --package-json "$root/package.json" \
-    --out "$root/internal/generated" >/dev/null
+    --out "$root/internal/generated"
 
   cat > "$root/cmd/main/moon.pkg" <<'EOF'
 import {
@@ -1086,11 +1107,12 @@ EOF
 EOF
 
   local output
-  # `node:sqlite` is built-in on Node 24+ and emits an experimental
-  # warning. Bypass the script's `node()` wrapper (which treats
-  # warnings as fatal) with `command node`, and route stderr to
-  # /dev/null so the captured stdout stays equal to "ok".
-  output="$(command node --experimental-sqlite "$built_js" 2>/dev/null)"
+  # `node:sqlite` is built-in on Node 24+. It emitted an experimental
+  # warning in older Node 24 releases, while current Node 24 rejects the
+  # removed `--experimental-sqlite` flag. Bypass the script's `node()`
+  # wrapper. Keep stderr visible if the runtime fails, while only stdout
+  # participates in the expected `ok` assertion.
+  output="$(command node "$built_js")"
   if [ "$output" != "ok" ]; then
     echo "expected drizzle smoke to print 'ok', got: $output" >&2
     exit 1

@@ -16,6 +16,8 @@ extern "js" fn test_hono_route_response(
   #|   return `${res.status}:${route.method}:${route.path}:${res.headers.get("content-type")}`;
   #| }
 
+fn[A, B] test_unsafe_cast(value : A) -> B = "%identity"
+
 fn main {
   let app : @sut.Hono[@sut.JSValue, @sut.JSValue, @sut.JSValue] = @sut.new_hono(
     None,
@@ -23,10 +25,10 @@ fn main {
   let _ = app.get("/hello", test_hono_handler)
   let undefined_ = test_undefined()
   let res = app.request(
-    @sut.unsafeCast("/hello"),
-    @sut.unsafeCast(undefined_),
-    @sut.unsafeCast(undefined_),
-    @sut.unsafeCast(undefined_),
+    test_unsafe_cast("/hello"),
+    test_unsafe_cast(undefined_),
+    test_unsafe_cast(undefined_),
+    test_unsafe_cast(undefined_),
   )
   if test_hono_route_response(app, res) != "200:GET:/hello:text/plain;charset=UTF-8" {
     abort("unexpected Hono route response")

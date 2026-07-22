@@ -2,12 +2,14 @@ fn script_target() -> @sut.ScriptTarget {
   @sut.ScriptTarget::ES2024
 }
 
+fn[A, B] test_unsafe_cast(value : A) -> B = "%identity"
+
 fn rename_identifier(identifier : @sut.Identifier) -> @sut.Node {
-  let text : String = @sut.unsafeCast(identifier.escapedText)
+  let text : String = test_unsafe_cast(identifier.escapedText)
   if text == "value" {
-    @sut.unsafeCast(@sut.get_factory().createIdentifier("renamed"))
+    test_unsafe_cast(@sut.get_factory().createIdentifier("renamed"))
   } else {
-    @sut.unsafeCast(identifier)
+    test_unsafe_cast(identifier)
   }
 }
 
@@ -27,7 +29,7 @@ fn transformer_factory(
   context : @sut.TransformationContext
 ) -> (@sut.SourceFile) -> @sut.SourceFile {
   fn(source_file) {
-    match visit_node(@sut.unsafeCast(source_file), context).asSourceFile() {
+    match visit_node(test_unsafe_cast(source_file), context).asSourceFile() {
       Some(source_file) => source_file
       None => abort("expected transformer result to remain a SourceFile")
     }

@@ -220,11 +220,43 @@ fn merge_interfaces(
 }
 
 ///|
+/// Build a resolver for one self-contained module. Graph-aware callers use
+/// `ingest_type_module` and `ingest_module` directly, while checker benchmarks
+/// use this helper to isolate the cost of the ordinary single-module setup.
 fn Resolver::from_module(module_ : @ast.TsModule) -> Resolver {
   let r = Resolver::empty()
   Resolver::ingest_module(r, module_, "")
   collect_module_value_names(module_, r.declared_value_names)
   r
+}
+
+///|
+/// Import only type declarations from another ES module. Value declarations
+/// intentionally stay out of `globals`: an embedding must still provide the
+/// concrete bindings it resolved for the current module's runtime imports.
+fn Resolver::ingest_type_module(
+  r : Resolver,
+  module_ : @ast.TsModule,
+  prefix : String,
+) -> Unit {
+  let types = Resolver::empty()
+  Resolver::ingest_module(types, module_, prefix)
+  for name, interface_ in types.interfaces {
+    match r.interfaces.get(name) {
+      Some(existing) =>
+        r.interfaces[name] = merge_interfaces(existing, interface_)
+      None => r.interfaces[name] = interface_
+    }
+  }
+  for name, class_ in types.classes {
+    r.classes[name] = class_
+  }
+  for name, alias_ in types.type_aliases {
+    r.type_aliases[name] = alias_
+  }
+  for name, enum_ in types.enums {
+    r.enums[name] = enum_
+  }
 }
 
 ///|
@@ -18705,7 +18737,40 @@ fn check_function_body_with(
 pub fn check_module_function_bodies(
   module_ : @ast.TsModule,
 ) -> Array[ExprIssue] {
-  check_module_function_bodies_layered(module_, [], false)
+  check_module_function_bodies_layered(module_, [], false, [], [])
+}
+
+///|
+/// Check a module with caller-supplied value bindings. This is intended for
+/// embeddings that resolve ES module imports outside the checker: each pair
+/// binds the import's local name to its resolved exported value type.
+///
+/// The checker remains filesystem- and bundler-independent; callers own
+/// module resolution and can provide only the bindings they can prove.
+pub fn check_module_function_bodies_with_globals(
+  module_ : @ast.TsModule,
+  globals : Array[(String, @ast.TsType)],
+) -> Array[ExprIssue] {
+  check_module_function_bodies_layered(module_, [], false, [], globals)
+}
+
+///|
+/// Check a module with caller-supplied runtime bindings and the type
+/// declarations reachable through those bindings. This keeps ES-module
+/// resolution outside the checker while preserving structural checks for
+/// parameters such as `import type { User } from "./model"`.
+pub fn check_module_function_bodies_with_context(
+  module_ : @ast.TsModule,
+  globals : Array[(String, @ast.TsType)],
+  type_modules : Array[@ast.TsModule],
+) -> Array[ExprIssue] {
+  check_module_function_bodies_layered(
+    module_,
+    [],
+    false,
+    type_modules,
+    globals,
+  )
 }
 
 ///|
@@ -19738,7 +19803,7 @@ fn check_circular_type_params(module_ : @ast.TsModule) -> Array[ExprIssue] {
 pub fn check_module_function_bodies_permissive(
   module_ : @ast.TsModule,
 ) -> Array[ExprIssue] {
-  check_module_function_bodies_layered(module_, [], true)
+  check_module_function_bodies_layered(module_, [], true, [], [])
 }
 
 ///|
@@ -25752,22 +25817,28 @@ fn check_module_function_bodies_layered(
   module_ : @ast.TsModule,
   outer_modules : Array[@ast.TsModule],
   permissive : Bool,
+  type_modules : Array[@ast.TsModule],
+  extra_globals : Array[(String, @ast.TsType)],
 ) -> Array[ExprIssue] {
-  let resolver = if outer_modules.length() == 0 {
-    Resolver::from_module(module_)
+  let resolver = Resolver::empty()
+  for type_module in type_modules {
+    Resolver::ingest_type_module(resolver, type_module, "")
+  }
+  if outer_modules.length() == 0 {
+    Resolver::ingest_module(resolver, module_, "")
+    collect_module_value_names(module_, resolver.declared_value_names)
   } else {
-    let r = Resolver::empty()
     for o in outer_modules {
-      Resolver::ingest_module(r, o, "")
+      Resolver::ingest_module(resolver, o, "")
     }
-    Resolver::ingest_module(r, module_, "")
+    Resolver::ingest_module(resolver, module_, "")
     // TS2304 backstop: collect declared value names from the *outermost*
     // module, which recurses into every nested namespace. This lets code
     // inside a namespace reference outer-scope (and sibling-namespace)
     // bindings unqualified without tripping a "cannot find name" false
-    // positive. `from_module` already does this for the top-level entry.
-    collect_module_value_names(outer_modules[0], r.declared_value_names)
-    r
+    // positive. The top-level branch above applies the same collection to its
+    // current module.
+    collect_module_value_names(outer_modules[0], resolver.declared_value_names)
   }
   // Strict-mode flag comes from the *outermost* (top-level) module's
   // header directive; namespace-nested modules don't carry their own
@@ -25780,6 +25851,10 @@ fn check_module_function_bodies_layered(
   }
   let strict_property_init = strict_root.strict_property_initialization
   let strict_null_checks = strict_root.strict_null_checks
+  for global in extra_globals {
+    resolver.globals[global.0] = global.1
+    resolver.declared_value_names[global.0] = true
+  }
   resolver.no_implicit_any = strict_root.no_implicit_any
   for gm in strict_root.grammar_misuses {
     if gm == "<lib-lacks-es2017>" {
@@ -26777,6 +26852,8 @@ fn check_module_function_bodies_layered(
       ns.module_,
       next_outers,
       permissive,
+      type_modules,
+      extra_globals,
     )
     let prefix = if ns.name == "<global>" {
       "declare global"

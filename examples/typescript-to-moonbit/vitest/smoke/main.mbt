@@ -11,13 +11,15 @@ extern "js" fn test_vitest_vi(vi : @sut.VitestUtils) -> Unit =
   #|   if (!vi.isMockFunction(fn)) throw new Error("expected vi.fn mock");
   #| }
 
+fn[A, B] test_unsafe_cast(value : A) -> B = "%identity"
+
 fn main {
   let expect = @sut.get_expect()
   // Build assertions to ensure the generic-preserved chain compiles. The
   // generic-preserved `Assertion[T]` falls through to a pure-MoonBit
   // wrapper whose `(self.toBe)(arg)` form loses chai's `this`-bound
   // method receiver, so don't actually invoke `.toBe` here.
-  let _ = expect._call_(@sut.unsafeCast(test_number()), None)
-  let _ = expect._call_(@sut.unsafeCast(test_object()), None)
+  let _ = expect._call_(test_unsafe_cast(test_number()), None)
+  let _ = expect._call_(test_unsafe_cast(test_object()), None)
   test_vitest_vi(@sut.get_vi())
 }

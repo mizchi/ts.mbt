@@ -13,10 +13,12 @@ extern "js" fn test_forward_ref_render() -> @sut.ForwardRefRenderFunction =
 extern "js" fn test_transition_scope() -> @sut.TransitionFunction =
   #| () => () => undefined
 
+fn[A, B] test_unsafe_cast(value : A) -> B = "%identity"
+
 fn main {
   let element = @sut.createElement("div", Some(test_props()), test_children())
   let _ = @sut.cloneElement(element, None, test_children())
-  if !@sut.isValidElement(@sut.unsafeCast(element)) {
+  if !@sut.isValidElement(test_unsafe_cast(element)) {
     abort("expected generated React element to be valid")
   }
   let _ = @sut.memo(test_function_component(), None)

@@ -1,0 +1,41 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "mizchi/ts/mtsc"
+
+// Values
+pub fn check_module_graph(MtscModuleGraph) -> String
+
+pub fn check_module_sources(Array[MtscModuleSource]) -> String
+
+pub fn check_source(String, Bool) -> String
+
+pub fn collect_type_issues(String, Bool) -> Result[Array[MtscTypeIssue], String]
+
+// Errors
+
+// Types and methods
+pub(all) struct MtscModuleEdge {
+  importerPath : String
+  moduleSpecifier : String
+  targetPath : String
+}
+
+pub(all) struct MtscModuleGraph {
+  modules : Array[MtscModuleSource]
+  edges : Array[MtscModuleEdge]
+}
+
+pub(all) struct MtscModuleSource {
+  path : String
+  source : String
+  allowJsx : Bool
+}
+
+pub(all) struct MtscTypeIssue {
+  path : String
+  message : String
+}
+
+// Type aliases
+
+// Traits
+

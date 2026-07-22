@@ -624,8 +624,10 @@ extern "js" fn test_ref() -> Ref[JSValue] =
 extern "js" fn test_children() -> Array[JSValue] =
   #| () => []
 
+fn[A, B] test_unsafe_cast(value : A) -> B = "%identity"
+
 test "generated React package scaffold smoke" {
-  let element : ReactElement[JSValue, JSValue] = unsafeCast(createElement(
+  let element : ReactElement[JSValue, JSValue] = test_unsafe_cast(createElement(
     "div",
     Some(test_dom_attributes()),
     test_children(),
@@ -668,8 +670,10 @@ extern "js" fn test_ref() -> @sut.Ref[@sut.JSValue] =
 extern "js" fn test_children() -> Array[@sut.JSValue] =
   #| () => []
 
+fn[A, B] test_unsafe_cast(value : A) -> B = "%identity"
+
 fn main {
-  let element : @sut.ReactElement[@sut.JSValue, @sut.JSValue] = @sut.unsafeCast(
+  let element : @sut.ReactElement[@sut.JSValue, @sut.JSValue] = test_unsafe_cast(
     @sut.createElement(
       "div",
       Some(test_dom_attributes()),

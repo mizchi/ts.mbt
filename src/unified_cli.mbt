@@ -304,12 +304,9 @@ async fn ghq_module_name_candidate_repo_paths(
     if !(kind is @fs.FileKind::Directory) {
       continue
     }
-    let moon_mod_path = main_join_path(repo_path, "moon.mod.json")
-    if !main_file_exists(moon_mod_path) {
-      continue
-    }
-    let moon_mod_source = @fs.read_file(moon_mod_path).text() catch {
-      _ => continue
+    let moon_mod_source = match read_moon_mod_source(repo_path) {
+      Some(source) => source
+      None => continue
     }
     match parse_moon_mod_string_field(moon_mod_source, "name") {
       Some(module_name) if module_name == input => paths.push(repo_path)
