@@ -879,8 +879,10 @@ verify_typescript_to_moonbit_typescript_ast_example() {
     --out "$out" \
     --module-spec typescript
 
+  echo "Writing TypeScript AST JS stubs"
   write_js_any_stub "$out"
 
+  echo "Writing TypeScript AST MoonBit manifest"
   cat > "$out/moon.mod.json" <<'EOF'
 {
   "name": "examples/typescript_to_moonbit_typescript_ast",
@@ -893,6 +895,7 @@ verify_typescript_to_moonbit_typescript_ast_example() {
 }
 EOF
 
+  echo "Checking TypeScript AST bridge artifacts"
   for generated_file in moon.pkg bridge.mbti bridge.mbt bridge.js SCAFFOLD_DIAGNOSTICS.md; do
     if [ ! -f "$out/$generated_file" ]; then
       echo "TypeScript AST bridge is missing $generated_file" >&2
