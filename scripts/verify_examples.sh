@@ -923,6 +923,60 @@ EOF
   run_typescript_ast_build_smoke "$out" "examples/typescript_to_moonbit_typescript_ast"
 }
 
+# A consumer-shaped example: one MoonBit executable imports both the
+# TypeScript compiler API and Node's `node:fs` bridge. Keeping its source under
+# examples/ makes the package imports and the two-stage generation workflow
+# copyable without reading this verification harness.
+verify_typescript_node_imports_example() {
+  local root="_build/examples/typescript-to-moonbit-typescript-node-imports"
+  local node_fs_types
+  node_fs_types="$(find "$repo_root/node_modules" -path '*/@types/node/fs.d.ts' -type f -print -quit)"
+  if [ -z "$node_fs_types" ]; then
+    echo "@types/node/fs.d.ts is required for the TypeScript + node:fs example" >&2
+    exit 1
+  fi
+
+  rm -rf "$root"
+  mkdir -p "$root"
+  cp examples/typescript-to-moonbit/typescript-node-imports/moon.mod.json "$root/"
+  cp examples/typescript-to-moonbit/typescript-node-imports/package.json "$root/"
+  cp -R examples/typescript-to-moonbit/typescript-node-imports/src "$root/"
+
+  (
+    cd "$root"
+    moon run "$repo_root/src/cmd/ts2mbt" -- \
+      --input "$repo_root/node_modules/typescript/lib/typescript.d.ts" \
+      --out src/internal/generated/typescript \
+      --module-spec typescript
+    moon run "$repo_root/src/cmd/ts2mbt" -- \
+      --input "$node_fs_types" \
+      --out src/internal/generated/node_fs \
+      --module-spec node:fs
+  )
+
+  [ -f "$root/src/internal/generated/typescript/bridge.mbt" ]
+  [ -f "$root/src/internal/generated/typescript/bridge.js" ]
+  [ -f "$root/src/internal/generated/node_fs/bridge.mbt" ]
+  [ -f "$root/src/internal/generated/node_fs/bridge.js" ]
+
+  moon -C "$root" check --target js
+  moon -C "$root" build --target js src/main
+
+  local built_js
+  built_js="$(find "$root/_build/js/debug/build/main" -type f -name '*.js' | head -n 1)"
+  if [ -z "$built_js" ]; then
+    echo "moon build did not emit JS for the TypeScript + node:fs example" >&2
+    exit 1
+  fi
+
+  local output
+  output="$(command node "$built_js")"
+  if [ "$output" != "ok" ]; then
+    echo "expected TypeScript + node:fs example to print 'ok', got: $output" >&2
+    exit 1
+  fi
+}
+
 # `ts2mbt generate` E2E: synthesize a tiny consumer project that
 # depends on both `hono` and `@hono/node-server`, drive the bridge
 # pipeline through the canonical `generate` command, and run the
@@ -1132,4 +1186,5 @@ verify_typescript_to_moonbit_reducer_example
 verify_typescript_to_moonbit_default_class_example
 verify_typescript_to_moonbit_const_table_example
 verify_typescript_to_moonbit_typescript_ast_example
+verify_typescript_node_imports_example
 verify_typescript_to_moonbit_drizzle_example

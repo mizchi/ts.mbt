@@ -274,6 +274,10 @@ trailing underscore (e.g. `match` → `match_`). The generated
 `SCAFFOLD_DIAGNOSTICS.md` records anything that was widened to
 `JSValue` so you know where the typed surface ends.
 
+For a complete two-bridge consumer — importing the TypeScript compiler API and
+Node's `node:fs` from one `moon.pkg`, then running both at runtime — see
+[`examples/typescript-to-moonbit/typescript-node-imports`](./examples/typescript-to-moonbit/typescript-node-imports/).
+
 Build & run as usual: `moon run <your-pkg> --target js`. With
 `"preferred-target": "js"` in `moon.mod.json` you can drop the
 `--target js` flag.

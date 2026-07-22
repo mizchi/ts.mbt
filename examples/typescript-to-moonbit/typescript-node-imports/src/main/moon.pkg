@@ -1,0 +1,8 @@
+import {
+  "examples/typescript_node_imports/internal/generated/node_fs" @fs,
+  "examples/typescript_node_imports/internal/generated/typescript" @ts,
+}
+
+options(
+  "is-main": true,
+)
