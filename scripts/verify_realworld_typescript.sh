@@ -3083,7 +3083,7 @@ verify_async_integration_app() {
   "version": "0.1.0",
   "source": "src",
   "preferred-target": "js",
-  "deps": { "moonbitlang/async": "0.18.1" }
+  "deps": { "moonbitlang/async": "0.20.2" }
 }
 EOF
 
@@ -3414,7 +3414,7 @@ verify_async_callback_app() {
   "version": "0.1.0",
   "source": "src",
   "preferred-target": "js",
-  "deps": { "moonbitlang/async": "0.18.1" }
+  "deps": { "moonbitlang/async": "0.20.2" }
 }
 EOF
   else

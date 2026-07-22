@@ -2,7 +2,7 @@
 package "mizchi/ts"
 
 // Values
-pub const CLI_VERSION : String = "0.3.0"
+pub const CLI_VERSION : String = "0.4.0"
 
 pub fn cli_bail(String) -> Unit
 
@@ -26,7 +26,7 @@ pub async fn emit_js_link_config_from_mbti(String, String?) -> Bool
 
 pub async fn emit_moonbit_bridge(String, String, String?, String?, String?) -> Bool
 
-pub async fn emit_moonbit_bridge_package(String, String, String, bare_module_specifier? : String?) -> Bool
+pub async fn emit_moonbit_bridge_package(String, String, String, bare_module_specifier? : String?, moonbitlang_async_integration? : Bool) -> Bool
 
 pub async fn emit_moonbit_decl(String, String?) -> Bool
 

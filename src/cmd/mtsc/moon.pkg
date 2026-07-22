@@ -3,6 +3,7 @@ import {
   "moonbitlang/core/env",
   "mizchi/x/fs",
   "mizchi/ts/ast",
+  "mizchi/ts/checker",
   "mizchi/ts/parser",
   "mizchi/ts/transform",
 }

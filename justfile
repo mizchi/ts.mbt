@@ -13,7 +13,11 @@ test:
 
 # Run tests with filter
 test-filter filter:
-    moon test --target native --filter '{{filter}}'
+    moon test --target native --filter '{{ filter }}'
+
+# Run the development-only TypeScript checker on a source file
+tscheck *ARGS:
+    moon run --target native src/cmd/tscheck -- {{ ARGS }}
 
 # Format code
 fmt:
@@ -109,7 +113,7 @@ bridge-quality:
 # Requires `moon build --target native` and the populated `typescript`
 # submodule. Opt-in (not part of `ci`).
 checker-conformance-oracle *ARGS:
-    bash scripts/checker_conformance_oracle.sh {{ARGS}}
+    bash scripts/checker_conformance_oracle.sh {{ ARGS }}
 
 # Soundness gate: build the native binary and fail if the checker reports
 # more conformance false positives than the current budget. The oracle

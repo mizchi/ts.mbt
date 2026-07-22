@@ -1,9 +1,9 @@
 name = "mizchi/ts"
 
-version = "0.3.0"
+version = "0.4.0"
 
 import {
-  "moonbitlang/async@0.14.2",
+  "moonbitlang/async@0.20.2",
   "mizchi/x@0.2.2",
 }
 
@@ -22,5 +22,5 @@ preferred_target = "native"
 source = "src"
 
 options(
-  exclude: [ "fixtures", "typescript" ],
+  exclude: [ "fixtures", "typescript", "src/cmd/tscheck" ],
 )
