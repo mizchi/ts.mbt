@@ -1094,11 +1094,12 @@ EOF
 EOF
 
   local output
-  # `node:sqlite` is built-in on Node 24+ and emits an experimental
-  # warning. Bypass the script's `node()` wrapper (which treats
-  # warnings as fatal) with `command node`, and route stderr to
-  # /dev/null so the captured stdout stays equal to "ok".
-  output="$(command node --experimental-sqlite "$built_js" 2>/dev/null)"
+  # `node:sqlite` is built-in on Node 24+. It emitted an experimental
+  # warning in older Node 24 releases, while current Node 24 rejects the
+  # removed `--experimental-sqlite` flag. Bypass the script's `node()`
+  # wrapper and suppress stderr so the captured stdout remains exactly
+  # "ok" across both releases.
+  output="$(command node "$built_js" 2>/dev/null)"
   if [ "$output" != "ok" ]; then
     echo "expected drizzle smoke to print 'ok', got: $output" >&2
     exit 1
