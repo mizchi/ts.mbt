@@ -907,7 +907,9 @@ EOF
   grep_generated_mbt "$out" 'pub extern "js" fn transform(source : SourceFile, transformers : Array[(TransformationContext) -> (SourceFile) -> SourceFile], compilerOptions : CompilerOptions?) -> TransformationResult[Node]'
   grep_generated_mbt "$out" 'pub fn visitEachChild(node : Node, visitor : (Node) -> Node, context : TransformationContext?) -> Node'
   grep_generated_mbt "$out" 'pub fn isIdentifier(node : Node) -> Bool'
-  grep_generated_mbt "$out" 'pub fn[A, B] unsafeCast(value : A) -> B = "%identity"'
+  # `unsafeCast` is an implementation helper; keeping it private ensures the
+  # generated package does not expose an unchecked escape hatch to consumers.
+  grep_generated_mbt "$out" 'fn[A, B] unsafeCast(value : A) -> B = "%identity"'
   grep_generated_mbt "$out" 'pub fn Node::asIdentifier(self : Node) -> Identifier?'
   grep_generated_mbt "$out" '  createIdentifier : (String) -> Identifier'
   grep_generated_mbt "$out" 'pub extern "js" fn NodeFactory::createIdentifier(self : NodeFactory, arg0 : String) -> Identifier'
