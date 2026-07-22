@@ -533,41 +533,14 @@ async fn mtsc_path_exists(path : String) -> Bool {
 }
 
 ///|
-/// Parse a source file and run the full strict expression/body checker.
-/// Kept separate from CLI output so the checker contract can be tested
-/// directly.
-fn mtsc_is_unresolved_import_binding(
-  issue : @checker.ExprIssue,
-  imported_binding_names : Array[String],
-) -> Bool {
-  for name in imported_binding_names {
-    if issue.message == "cannot find name `\{name}`" {
-      return true
-    }
-  }
-  false
-}
-
-///|
+/// Compatibility wrapper for the command's focused tests. The checker itself
+/// lives in `mizchi/ts/mtsc` so the JavaScript module and CLI use one strict
+/// implementation.
 fn mtsc_collect_type_issues(
   source : String,
   allow_jsx : Bool,
-) -> Result[Array[@checker.ExprIssue], String] {
-  let module_ = @parser.Parser::from_source_with_jsx(source, allow_jsx).parse_module() catch {
-    e => return Err("\{e}")
-  }
-  let issues : Array[@checker.ExprIssue] = []
-  for issue in @checker.check_module_function_bodies(module_) {
-    // The checker runs on a parsed source file rather than a linked module
-    // graph, so imported value bindings have no declaration available to its
-    // resolver. They are nevertheless valid names in this module; suppress
-    // only that known single-file false positive. The bundled dependency is
-    // checked independently below, so type errors in it are still reported.
-    if !mtsc_is_unresolved_import_binding(issue, module_.imported_binding_names) {
-      issues.push(issue)
-    }
-  }
-  Ok(issues)
+) -> Result[Array[@mtsc_core.MtscTypeIssue], String] {
+  @mtsc_core.collect_type_issues(source, allow_jsx)
 }
 
 ///|

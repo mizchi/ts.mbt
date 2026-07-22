@@ -132,6 +132,33 @@ Shared `--input` flow flags:
 - `--no-facade` (`mbt2ts` only) — skip facade-wrapper generation and emit
   only top-level free-function glue.
 
+## Public integration contract
+
+The following are the supported integration APIs for the current `0.4.x`
+series. Treat generated files as outputs: consume their documented package
+surface, rather than importing temporary MoonBit glue or build artifacts.
+
+- **MoonBit → TypeScript CLI:** `mbt2ts --input <pkg-or-mbti> --out <dir>` is
+  the canonical package-generation command. It generates facade wrappers by
+  default; `--no-facade`, `--strict`, `--diagnostics`, and
+  `--import-rewrites` are its supported controls. The named subcommands remain
+  lower-level stage APIs for tooling.
+- **Vite integration:** use `moonbit({ tsBridge: { generatorRoot, entries } })`
+  to check a TypeScript module graph before generating a MoonBit bridge, and
+  `moonbit({ npmPackage: { entry, outDir } })` to generate a publishable npm
+  package. `generatorRoot` and `command` are shared when `npmPackage` is used
+  with `tsBridge`; `facade` and `bundle` default to `true`, and
+  `runtimeValidation` defaults to `false`.
+- **Generated npm package:** `index.js`, `index.d.ts`, `package.json`, and
+  `AUTOLINK_DIAGNOSTICS.md` are its public artifacts. Structs are plain
+  objects, enum values use `$tag`, and opaque declaration brands prevent a
+  TypeScript lookalike from being passed back as a MoonBit value. Trait methods
+  and temporary glue files are not part of that API.
+- **`mtsc` checker:** Vite builds and imports the MoonBit JS module directly;
+  its sole JS ABI is `checkModuleGraph`. `checkSource`,
+  `checkModuleSources`, and the command-line checker are implementation and
+  development APIs, not consumer-facing interfaces.
+
 ## Generate / vendor (TypeScript -> MoonBit)
 
 When you're consuming a MoonBit package and want bridges for the
@@ -317,17 +344,24 @@ Current export model:
   to the temporary glue package, then exposes those wrappers from the built
   JS and the matching package `.d.ts`. Async wrappers are exposed as
   Promise-returning JavaScript functions.
-- Public MoonBit traits are declaration-only structural TypeScript interfaces.
-  `pub impl Trait for Type` is represented by `extends Trait` / type
-  intersections in `.d.ts` output, but trait methods are not generated as
-  runtime bridge exports.
+- Scaffold runtime wrappers normalize public MoonBit structs and enums into
+  ordinary JavaScript objects; enum cases use a `$tag` discriminant. Their
+  `.d.ts` values carry an internal opaque brand, so a returned value can be
+  passed back to MoonBit but a plain TypeScript lookalike cannot.
+- MoonBit trait methods are not part of this plain-object npm boundary.
+  `mbt2ts decl` continues to describe traits, while scaffold declarations
+  remove trait intersections from runtime-normalized structs and enums.
 - Generated glue declarations, runtime export lists, package `exports`, and
   child-package re-export files are sorted deterministically to keep scaffold
   diffs reviewable.
 - The temporary `moon.pkg` and wrapper `.mbt` files are build inputs
   only; they are not written to the final TypeScript package.
-- Recursive `.mbti` resolution only rewrites imports that stay under the same
-  root package prefix. External imports remain bare specifiers.
+- Recursive `.mbti` resolution rewrites imports that stay under the same root
+  package prefix. Unmapped external MoonBit values in public function
+  parameters/results are omitted from the npm surface and listed in
+  `AUTOLINK_DIAGNOSTICS.md`; nested external slots become `unknown` so the
+  declaration remains standalone. An explicit import rewrite opts into the
+  mapped TypeScript package instead.
 - `mbt2ts package` and `mbt2ts scaffold`
   accept an optional JSON object for external import rewrites, for example
   `{ "moonbitlang/core/debug": "demo-debug" }`.
@@ -385,6 +419,10 @@ Lower-level commands are also available:
 # full bridge package
 ts2mbt package path/to/entry.d.ts /runtime/module.js out/moonbit-pkg
 
+# opt in to public validate<Type>(JSValue) -> Type? boundary functions for
+# generated structural types; normal bridge calls stay unchecked
+ts2mbt package-validated path/to/entry.d.ts /runtime/module.js out/moonbit-pkg
+
 # inspect generated decl/ffi/bridge snippets without writing a package
 ts2mbt bridge path/to/entry.d.ts /runtime/module.js
 ts2mbt ffi path/to/entry.d.ts /runtime/module.js
@@ -405,7 +443,13 @@ module state.
   to `String` / `Bool` instead of being widened to `JSValue`.
 - Generated bridge packages preserve camelCase top-level export names in
   their public MoonBit API, even when the internal JS extern binding is
-  lowered to snake_case.
+  lowered to snake_case. Value exports use the explicit public
+  `get_<snake_case>()` convention. Internal conversion and identity-cast
+  helpers are private implementation details and never appear in `bridge.mbti`.
+- `package-validated` is an opt-in boundary-safety mode: generated structural
+  types get public `validate<Type>(value : JSValue) -> Type?` functions. It
+  checks supported primitive fields at runtime and returns `None` for invalid
+  values without changing the default bridge API or adding per-call checks.
 
 Supported surface:
 

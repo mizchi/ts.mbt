@@ -29,6 +29,7 @@ pub fn ts2mbt_help_lines() -> Array[String] {
     "  ffi <ts-entry> <module-spec> [ffi-out] [bridge-out] Emit MoonBit JS FFI stubs and ESM bridge from a TypeScript entrypoint",
     "  bridge <ts-entry> <module-spec> [decl-out] [ffi-out] [bridge-out] Emit a full MoonBit bridge bundle from a TypeScript entrypoint",
     "  package <ts-entry> <module-spec> <out-dir> Emit a generated MoonBit bridge package directory",
+    "  package-validated <ts-entry> <module-spec> <out-dir> Emit a bridge package with opt-in structural runtime validators",
     "  scaffold <ts-entry> <module-spec> <out-dir> Emit a MoonBit bridge scaffold from a TypeScript entrypoint",
   ]
 }
@@ -294,6 +295,22 @@ async fn ts2mbt_main_async() -> Unit {
         3,
         "ts2mbt package: expected <ts-entry> <module-spec> <out-dir>",
         async fn(p) { @ts.emit_moonbit_bridge_package(p[0], p[1], p[2]) },
+      )
+    "package-validated" =>
+      ts2mbt_dispatch(
+        args,
+        2,
+        "package-validated",
+        3,
+        "ts2mbt package-validated: expected <ts-entry> <module-spec> <out-dir>",
+        async fn(p) {
+          @ts.emit_moonbit_bridge_package(
+            p[0],
+            p[1],
+            p[2],
+            runtime_validation=true,
+          )
+        },
       )
     "scaffold" =>
       ts2mbt_dispatch(

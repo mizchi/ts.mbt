@@ -1074,6 +1074,98 @@ async test "bridge: emit TypeScript scaffold bundle from mbti combines autolink 
   assert_true(bundle.autolink_diagnostics_md.contains("- `render`"))
   assert_true(bundle.autolink_diagnostics_md.contains("Item::new"))
   assert_eq(bundle.files.length(), 2)
+  assert_true(
+    bundle.runtime_value_adapter_js.contains(
+      "[\"Holder\", [\"item\"]]",
+    ),
+  )
+  assert_true(bundle.runtime_boundary_export_names.contains("make"))
+  let mut root_content = ""
+  for file in bundle.files {
+    if file.relative_path == "index.d.ts" {
+      root_content = file.content
+    }
+  }
+  assert_true(root_content.contains("declare const __tsmbt_raw: unique symbol;"))
+  assert_true(
+    root_content.contains(
+      "export interface Holder { readonly [__tsmbt_raw]: unknown; }",
+    ),
+  )
+}
+
+///|
+test "bridge: strips public functions that expose an external MoonBit type" {
+  let source =
+    #|package "demo/api"
+    #|
+    #|import {
+    #|  "demo/core" @core,
+    #|}
+    #|
+    #|pub type ExternalDocument = @core.Document
+    #|
+    #|pub fn document_to_json(@core.Document) -> String
+    #|pub fn render_external(ExternalDocument) -> String
+    #|pub fn render(String) -> String
+  let names = collect_runtime_inaccessible_free_function_names(
+    source,
+    external_import_aliases=["core"],
+  )
+  assert_true(names.contains("document_to_json"))
+  assert_true(names.contains("render_external"))
+  assert_false(names.contains("render"))
+  let declaration = parse_mbti_to_typescript(source) catch {
+    _ => fail("could not parse declaration")
+  }
+  let stripped = strip_unused_typescript_type_imports(
+    rewrite_external_moonbit_typescript_refs_to_unknown(
+    strip_runtime_inaccessible_typescript_members(
+      declaration, names, [], [],
+    ),
+    ["core"],
+    ),
+  )
+  assert_false(stripped.contains("document_to_json"))
+  assert_false(stripped.contains("render_external"))
+  assert_true(stripped.contains("export function render(s: string): string;"))
+  assert_true(stripped.contains("export type ExternalDocument = unknown;"))
+  assert_false(stripped.contains("import type"))
+  let sources : Map[String, String] = {}
+  sources["demo/api"] = source
+  let diagnostics = render_autolink_diagnostics_md(
+    "demo/api", ["demo/api"], sources,
+  )
+  assert_true(diagnostics.contains("- `document_to_json`"))
+  let glue_decls = collect_mbti_autolink_glue_decls(
+    "demo/api", source, "tsmbt_source", false, Map([]), "", ["core"],
+  ) catch {
+    _ => fail("could not collect autolink glue")
+  }
+  assert_eq(glue_decls.length(), 1)
+  assert_eq(glue_decls[0].export_name, "render")
+  let mapped_sources : Map[String, String] = {}
+  mapped_sources["demo/api"] = source
+  let import_rewrites : Map[String, String] = {}
+  import_rewrites["demo/core"] = "@demo/core-types"
+  let mapped_glue_decls = collect_mbti_bundle_autolink_glue_decls(
+    {
+      root_package_name: "demo/api",
+      ordered_packages: ["demo/api"],
+      package_sources: mapped_sources,
+    },
+    false,
+    allowed_external_import_spec_rewrites=import_rewrites,
+  ) catch {
+    _ => fail("could not collect mapped autolink glue")
+  }
+  // An explicit declaration-module rewrite is an opt-in integration point.
+  assert_true(mapped_glue_decls.any(fn(decl) {
+    decl.export_name == "document_to_json"
+  }))
+  assert_true(mapped_glue_decls.any(fn(decl) {
+    decl.export_name == "render_external"
+  }))
 }
 
 ///|
@@ -1121,7 +1213,7 @@ async test "bridge: emit TypeScript scaffold bundle exposes child package runtim
 }
 
 ///|
-async test "bridge: emit TypeScript scaffold bundle from mbti rewrites external imports through configured map" {
+async test "bridge: emit TypeScript scaffold bundle removes an unused configured external import" {
   let import_rewrites : Map[String, String] = {}
   import_rewrites["moonbitlang/core/debug"] = "demo-debug"
   let bundle = emit_typescript_scaffold_bundle_from_mbti_path_with_import_rewrites(
@@ -1139,9 +1231,9 @@ async test "bridge: emit TypeScript scaffold bundle from mbti rewrites external 
   }
   assert_true(bundle.package_json.contains("\"name\": \"@demo/pkg\""))
   assert_true(bundle.autolink_diagnostics_md.contains("Item::new"))
-  assert_true(
-    root_content.contains("import type * as debug from \"demo-debug\";"),
-  )
+  // `render` is a trait-bound generic and therefore is not part of the npm
+  // boundary. Its configured type import must disappear with that declaration.
+  assert_false(root_content.contains("import type * as debug"))
   assert_false(root_content.contains("\"moonbitlang/core/debug\""))
 }
 
@@ -1638,4 +1730,31 @@ async test "bridge: generic methods on non-generic owners export via monomorphiz
   // Trait-bounded methods stay omitted.
   assert_false(bundle.autolink_glue_mbt.contains("counter_describe"))
   assert_false(bundle.moon_pkg.contains("counter_describe"))
+}
+
+///|
+async test "bridge: npm structural value declarations omit MoonBit trait members" {
+  let bundle = emit_typescript_scaffold_bundle_from_mbti_path(
+    "fixtures/mbti_typescript/basic.pkg.generated.mbti",
+  ) catch {
+    MbtiTypescriptDeclError::ReadError(msg)
+    | MbtiTypescriptDeclError::ParseError(msg) =>
+      fail("MBTI scaffold bundle emit error: \{msg}")
+  }
+  let mut ts_decls = ""
+  for file in bundle.files {
+    if file.relative_path == "index.d.ts" {
+      ts_decls = file.content
+    }
+  }
+  // The runtime adapter returns plain JavaScript objects, so MoonBit's
+  // Eq/Show/etc. instance members must not appear on their npm-facing types.
+  assert_true(ts_decls.contains("export interface Box<T> {"))
+  assert_false(ts_decls.contains("export interface Box<T> extends"))
+  assert_true(
+    ts_decls.contains(
+      "export type ParseError = (({ $tag: \"InvalidFormat\"; _0: string } | { $tag: \"Overflow\"; _0: number; _1: string })) & { readonly [__tsmbt_raw]: unknown };",
+    ),
+  )
+  assert_false(ts_decls.contains("& Show & Eq<ParseError>"))
 }

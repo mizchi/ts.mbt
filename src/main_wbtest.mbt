@@ -26,6 +26,16 @@ fn wbtest_tmp_project_benchmark_root(name : String) -> String {
 }
 
 ///|
+async test "mtsc JavaScript module exposes only the Vite graph checker ABI" {
+  let manifest = @fs.read_file("src/mtsc/moon.pkg").text() catch {
+    e => fail("failed to read mtsc package manifest: \{e}")
+  }
+  assert_true(manifest.contains("\"check_module_graph:checkModuleGraph\""))
+  assert_false(manifest.contains("check_source:checkSource"))
+  assert_false(manifest.contains("check_module_sources:checkModuleSources"))
+}
+
+///|
 async fn wbtest_collect_relative_files(
   root : String,
   relative_dir : String,
@@ -425,7 +435,8 @@ async test "emit_unified_tsmbt_scaffold emits MoonBit to TypeScript scaffold fro
     ].join("\n"),
   )
   assert_true(root_decl.contains("import type * as child from \"./child\";"))
-  assert_true(root_js.contains("export {"))
+  assert_true(root_js.contains("function __tsmbt_public_return(value)"))
+  assert_true(root_js.contains("export function create(...args)"))
   assert_true(package_json.contains("\"name\": \"@examples/counter\""))
   assert_true(package_json.contains("\"type\": \"module\""))
   assert_true(
@@ -799,7 +810,8 @@ async test "emit_typescript_scaffold_from_mbti writes declaration package metada
   assert_true(diagnostics_md.contains("Counter::label"))
   assert_true(root_decl.contains("import type * as child from \"./child\";"))
   assert_false(root_decl.contains("counter_label"))
-  assert_true(root_js.contains("export {"))
+  assert_true(root_js.contains("function __tsmbt_public_return(value)"))
+  assert_true(root_js.contains("export function create(...args)"))
 }
 
 ///|
@@ -908,7 +920,70 @@ async test "emit_typescript_scaffold_from_mbti handles moon.mod source subdir" {
   }
   assert_true(package_json.contains("\"name\": \"@fixture/source-subdir-pkg\""))
   assert_true(root_decl.contains("export function make(s: string): Cell;"))
-  assert_true(root_js.contains("export {"))
+  assert_true(root_js.contains("function __tsmbt_public_return(value)"))
+  assert_true(root_js.contains("export function make(...args)"))
+}
+
+///|
+async test "emit_typescript_scaffold_from_mbti handles DSL moon.mod source subdir" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "mbti_typescript_scaffold_dsl_source_subdir",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  let pkg_dir = wbtest_join_path(root, "src/pkg")
+  ensure_dir_tree(pkg_dir)
+  @fs.write_file(
+    wbtest_join_path(root, "moon.mod"),
+    (
+      #|name = "fixture/dsl-source-subdir"
+      #|version = "0.1.0"
+      #|source = "src"
+    ),
+    create=0o644,
+  )
+  @fs.write_file(wbtest_join_path(pkg_dir, "moon.pkg"), "", create=0o644)
+  @fs.write_file(
+    wbtest_join_path(pkg_dir, "pkg.mbt"),
+    (
+      #|///|
+      #|pub struct Cell {
+      #|  value : String
+      #|}
+      #|
+      #|///|
+      #|pub fn make(value : String) -> Cell {
+      #|  { value }
+      #|}
+    ),
+    create=0o644,
+  )
+  let (info_exit, info_output) = @process.collect_output_merged(
+    "moon",
+    ["-C", root, "info"],
+    cwd=".",
+  )
+  if info_exit != 0 {
+    fail("moon info failed: \{info_output.text()}")
+  }
+  let out = wbtest_join_path(root, "dist")
+  assert_true(
+    emit_typescript_scaffold_from_mbti(
+      wbtest_join_path(pkg_dir, "pkg.generated.mbti"),
+      out,
+      None,
+    ),
+  )
+  let package_json = @fs.read_file(wbtest_join_path(out, "package.json")).text() catch {
+    e => fail("failed to read DSL source-subdir package.json: \{e}")
+  }
+  let root_js = @fs.read_file(wbtest_join_path(out, "index.js")).text() catch {
+    e => fail("failed to read DSL source-subdir index.js: \{e}")
+  }
+  assert_true(
+    package_json.contains("\"name\": \"@fixture/dsl-source-subdir-pkg\""),
+  )
+  assert_true(root_js.contains("function __tsmbt_public_return(value)"))
+  assert_true(root_js.contains("export function make(...args)"))
 }
 
 ///|
@@ -1279,6 +1354,14 @@ async test "emit_moonbit_bridge_package writes package files to output dir" {
     "fixtures/resolver/project/types/runtime-function-entry.ts", "/runtime/runtime-function.js",
     root,
   )
+  let legacy_manifest = wbtest_join_path(root, "moon.pkg.json")
+  let _ = @fs.write_file(legacy_manifest, string_to_bytes("{}\n"))
+  let user_file = wbtest_join_path(root, "user-authored.mbt")
+  let _ = @fs.write_file(user_file, string_to_bytes("// keep\n"))
+  let _ = emit_moonbit_bridge_package(
+    "fixtures/resolver/project/types/runtime-function-entry.ts", "/runtime/runtime-function.js",
+    root,
+  )
   let pkg_json = @fs.read_file(wbtest_join_path(root, "moon.pkg")).text() catch {
     e => {
       fail("Read error: \{e}")
@@ -1304,6 +1387,9 @@ async test "emit_moonbit_bridge_package writes package files to output dir" {
     }
   }
   @test.assert_eq(pkg_json, "")
+  assert_false(@fs.exists(legacy_manifest))
+  assert_true(@fs.exists(user_file))
+  assert_false(@fs.exists(wbtest_join_path(root, ".tsmbt-next-bridge.mbt")))
   assert_true(bridge_mbti.contains("declare pub fn scalePoint("))
   assert_true(
     bridge_mbt.contains(
@@ -1316,7 +1402,53 @@ async test "emit_moonbit_bridge_package writes package files to output dir" {
     ),
   )
   assert_false(bridge_js.contains("__ts_mbt_scale_point"))
+  assert_false(bridge_mbt.contains("unsafeCast"))
   let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+test "bridge runtime validation emits public validators without exposing unsafeCast" {
+  let bridge_mbti =
+    #|/// TS interface RuntimePoint
+    #|pub(all) struct RuntimePoint {
+    #|  x : Double
+    #|  label : String
+    #|}
+  let bridge_mbt =
+    #|/// TS interface RuntimePoint
+    #|pub(all) struct RuntimePoint {
+    #|  x : Double
+    #|  label : String
+    #|}
+  let (mbti, mbt) = add_bridge_runtime_validation(bridge_mbti, bridge_mbt)
+  assert_true(
+    mbti.contains(
+      "declare pub fn validateRuntimePoint(value : JSValue) -> RuntimePoint?",
+    ),
+  )
+  assert_true(
+    mbt.contains("fn __ts_mbt_validate_RuntimePoint(value : JSValue) -> Bool"),
+  )
+  assert_true(mbt.contains("typeof value[\"x\"] === \"number\""))
+  assert_true(mbt.contains("typeof value[\"label\"] === \"string\""))
+  assert_true(mbt.contains("fn[A, B] unsafeCast(value : A) -> B"))
+  assert_false(mbti.contains("unsafeCast"))
+}
+
+///|
+test "bridge runtime validation permits absent optional primitive fields" {
+  let bridge_mbt =
+    #|pub(all) struct OptionalProfile {
+    #|  name : String
+    #|  age : Double?
+    #|}
+  let (_, mbt) = add_bridge_runtime_validation("", bridge_mbt)
+  assert_true(
+    mbt.contains(
+      "(value[\"age\"] === undefined || typeof value[\"age\"] === \"number\")",
+    ),
+  )
+  assert_false(mbt.contains("\"age\" in value"))
 }
 
 ///|
@@ -5819,5 +5951,28 @@ test "compute_vendor_root: nested source path stacks under module root" {
   @test.assert_eq(
     compute_vendor_root("/proj", mod_json),
     "/proj/packages/lib/internal/generated",
+  )
+}
+
+///|
+test "npm runtime boundary wraps generated MoonBit exports" {
+  let source =
+    #|const raw_parse = (value) => value;
+    #|const untouched = 1;
+    #|export { raw_parse as parse, untouched };
+    #|//# sourceMappingURL=glue.js.map
+  let modes : Map[String, Bool] = {}
+  let rewritten = rewrite_runtime_boundary_js_exports(
+    source,
+    "function __tsmbt_public_return(value) { return value; }\nfunction __tsmbt_raw_argument(value) { return value; }",
+    ["parse"],
+    modes,
+  )
+  assert_true(rewritten.contains("export { untouched }"))
+  assert_true(rewritten.contains("const __tsmbt_raw_export_parse = raw_parse;"))
+  assert_true(
+    rewritten.contains(
+      "export function parse(...args) { return __tsmbt_public_return(__tsmbt_raw_export_parse(...args.map(__tsmbt_raw_argument))); }",
+    ),
   )
 }

@@ -25,6 +25,10 @@ pub fn check_module_function_bodies(@ast.TsModule) -> Array[ExprIssue]
 
 pub fn check_module_function_bodies_permissive(@ast.TsModule) -> Array[ExprIssue]
 
+pub fn check_module_function_bodies_with_context(@ast.TsModule, Array[(String, @ast.TsType)], Array[@ast.TsModule]) -> Array[ExprIssue]
+
+pub fn check_module_function_bodies_with_globals(@ast.TsModule, Array[(String, @ast.TsType)]) -> Array[ExprIssue]
+
 pub fn classify_optional_like_union(@ast.TsType) -> (@ast.TsType, Bool)?
 
 pub fn classify_promise_like_union(@ast.TsType) -> @ast.TsType?

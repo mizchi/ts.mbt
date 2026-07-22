@@ -1090,10 +1090,6 @@ fn add_bridge_ergonomic_helper_decls(
       None => ()
     }
   }
-  let unsafe_cast_decl = "declare pub fn[A, B] unsafeCast(value : A) -> B"
-  if !next_bridge_mbti.contains(unsafe_cast_decl) {
-    next_bridge_mbti += "\n\n///|\n" + unsafe_cast_decl
-  }
   for helper in collect_bridge_type_guard_helpers(bridge_mbti, bridge_mbt) {
     let helper_decl = "declare pub fn \{helper.helper_name}(self : \{helper.source_type}) -> \{helper.target_type}?"
     if !next_bridge_mbti.contains(helper_decl) {
@@ -1607,9 +1603,7 @@ fn add_bridge_public_wrappers(
       None => ()
     }
   }
-  let helpers : Array[String] = [
-    "pub fn[A, B] unsafeCast(value : A) -> B = \"%identity\"",
-  ]
+  let helpers : Array[String] = []
   if used_option_return_wrap &&
     !next_bridge_mbt.contains("fn[T] __ts_mbt_wrap_option_return") {
     helpers.push(bridge_option_return_wrap_helper_decls)
@@ -1641,6 +1635,14 @@ fn add_bridge_public_wrappers(
     )
   }
   let sections : Array[String] = []
+  let helper_text = helpers.join("\n")
+  if (
+      next_bridge_mbt.contains("unsafeCast(") ||
+      helper_text.contains("unsafeCast(")
+    ) &&
+    !next_bridge_mbt.contains("fn[A, B] unsafeCast(value : A) -> B") {
+    sections.push("fn[A, B] unsafeCast(value : A) -> B = \"%identity\"")
+  }
   for wrapper in wrappers {
     sections.push(wrapper)
   }

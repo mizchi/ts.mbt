@@ -987,7 +987,7 @@ async test "bridge: emit MoonBit TS bridge package bundle exposes namespace expo
 }
 
 ///|
-async test "bridge: emit MoonBit TS bridge package bundle adds ergonomic cast and guard helpers" {
+async test "bridge: emit MoonBit TS bridge package bundle keeps cast helper internal" {
   let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
     "fixtures/resolver/project/types/type-guard-entry.d.ts", "/runtime/type-guard.js",
   ) catch {
@@ -999,16 +999,13 @@ async test "bridge: emit MoonBit TS bridge package bundle adds ergonomic cast an
       return
     }
   }
-  assert_true(
-    bundle.bridge_mbti.contains(
-      "declare pub fn[A, B] unsafeCast(value : A) -> B",
-    ),
-  )
+  assert_false(bundle.bridge_mbti.contains("unsafeCast"))
   assert_true(
     bundle.bridge_mbt.contains(
-      "pub fn[A, B] unsafeCast(value : A) -> B = \"%identity\"",
+      "fn[A, B] unsafeCast(value : A) -> B = \"%identity\"",
     ),
   )
+  assert_false(bundle.bridge_mbt.contains("pub fn[A, B] unsafeCast"))
   assert_true(
     bundle.bridge_mbti.contains(
       "declare pub fn asIdentifier(self : Node) -> Identifier?",

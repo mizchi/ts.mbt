@@ -602,15 +602,17 @@ pub fn compute_vendor_root(
 }
 
 ///|
-/// Resolve `<moon.mod source>/internal/generated` from the cwd's
-/// nearest `moon.mod.json`. Returns `None` if no module is found.
+/// Resolve `<moon.mod source>/internal/generated` from the cwd's nearest
+/// module manifest. Returns `None` if no module is found.
 async fn resolve_default_vendor_root() -> String? {
   let module_root = match find_nearest_moon_mod_dir(".") {
     Some(root) => root
     None => return None
   }
-  let moon_mod_path = main_join_path(module_root, "moon.mod.json")
-  let source = @fs.read_file(moon_mod_path).text() catch { _ => return None }
+  let source = match read_moon_mod_source(module_root) {
+    Some(source) => source
+    None => return None
+  }
   Some(compute_vendor_root(module_root, source))
 }
 

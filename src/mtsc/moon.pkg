@@ -1,0 +1,14 @@
+import {
+  "mizchi/ts/ast",
+  "mizchi/ts/checker",
+  "mizchi/ts/parser",
+}
+
+options(
+  link: {
+    "js": {
+      "exports": [ "check_module_graph:checkModuleGraph" ],
+      "format": "esm",
+    },
+  },
+)
