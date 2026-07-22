@@ -1156,6 +1156,14 @@ fn mbti_raw_facade_uses_external_import_types(
 }
 
 ///|
+/// MoonBit core collection and reference values are represented by stable
+/// JavaScript shapes in the generated package surface. They do not require a
+/// separately published MoonBit package at the npm boundary.
+fn mbti_import_requires_external_runtime_boundary(module_spec : String) -> Bool {
+  !module_spec.has_prefix("moonbitlang/core/")
+}
+
+///|
 fn parse_mbti_package_name(source : String) -> String? {
   for line_view in source.split("\n") {
     let trimmed = line_view.trim().to_owned()
@@ -1196,7 +1204,8 @@ fn render_autolink_diagnostics_md(
     let external_import_aliases : Array[String] = []
     for import_ref in parse_mbti_imports(source) {
       if mbti_local_package_segments(root_package_name, import_ref.module_spec)
-        is None {
+        is None &&
+        mbti_import_requires_external_runtime_boundary(import_ref.module_spec) {
         if !allowed_external_import_spec_rewrites.contains(
             import_ref.module_spec,
           ) {
@@ -2352,6 +2361,9 @@ fn collect_mbti_bundle_autolink_glue_decls(
               import_ref.module_spec,
             )
             is None &&
+            mbti_import_requires_external_runtime_boundary(
+              import_ref.module_spec,
+            ) &&
             !allowed_external_import_spec_rewrites.contains(
               import_ref.module_spec,
             ) {
@@ -6159,6 +6171,34 @@ fn mbti_ts_line_declares_type(line : String, name : String) -> Bool {
 }
 
 ///|
+fn mbti_ts_interface_generic_params(line : String, name : String) -> String {
+  let trimmed = line.trim().to_owned()
+  let prefix = "export interface " + name
+  if !trimmed.has_prefix(prefix) {
+    return ""
+  }
+  let suffix = trimmed[prefix.length():trimmed.length()].trim().to_owned()
+  if !suffix.has_prefix("<") {
+    return ""
+  }
+  let mut depth = 0
+  let mut idx = 0
+  while idx < suffix.length() {
+    let c = mbti_char_at(suffix, idx)
+    if c == '<' {
+      depth += 1
+    } else if c == '>' {
+      depth -= 1
+      if depth == 0 {
+        return suffix[:idx + 1].to_owned()
+      }
+    }
+    idx += 1
+  }
+  ""
+}
+
+///|
 /// The npm runtime adapter materializes structs as plain JavaScript objects.
 /// Their MoonBit trait implementations are not callable at this boundary and
 /// must not be advertised by the declaration surface.
@@ -6252,8 +6292,16 @@ fn add_mbti_runtime_value_brands(
   }
   let additions : Array[String] = ["declare const __tsmbt_raw: unique symbol;"]
   for struct_name in struct_names {
+    let mut generic_params = ""
+    for line in lines {
+      let found = mbti_ts_interface_generic_params(line, struct_name)
+      if found != "" {
+        generic_params = found
+        break
+      }
+    }
     additions.push(
-      "export interface \{struct_name} { readonly [__tsmbt_raw]: unknown; }",
+      "export interface \{struct_name}\{generic_params} { readonly [__tsmbt_raw]: unknown; }",
     )
   }
   additions.join("\n") + "\n\n" + lines.join("\n")
@@ -6309,6 +6357,7 @@ fn strip_runtime_inaccessible_typescript_package_files(
           import_ref.module_spec,
         )
         is None &&
+        mbti_import_requires_external_runtime_boundary(import_ref.module_spec) &&
         !allowed_external_import_spec_rewrites.contains(import_ref.module_spec) {
         external_import_aliases.push(import_ref.alias_name)
       }

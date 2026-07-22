@@ -1273,6 +1273,17 @@ async test "bridge: emit TypeScript scaffold bundle keeps optional named params 
   }
   assert_true(root_content.contains("export function identity<T>"))
   assert_false(root_content.contains("export function make_secret"))
+  assert_true(root_content.contains("export function update_ref"))
+  assert_true(
+    root_content.contains(
+      "export interface CallbackBox<T> { readonly [__tsmbt_raw]: unknown; }",
+    ),
+  )
+  assert_false(
+    root_content.contains(
+      "export interface CallbackBox { readonly [__tsmbt_raw]: unknown; }",
+    ),
+  )
   assert_true(
     bundle.autolink_glue_mbt.contains(
       "pub fn consume_callbacks(handler : (String, Int) -> Unit, on_error : ((Error) -> Unit)?, required : Array[String]) -> Unit {",

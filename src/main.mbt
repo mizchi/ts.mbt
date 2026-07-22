@@ -748,7 +748,7 @@ fn rewrite_runtime_boundary_js_exports(
         let raw_name = "__tsmbt_raw_export_" + export_name
         output_lines.push("const \{raw_name} = \{local_name};")
         output_lines.push(
-          "export function \{export_name}(...args) { return __tsmbt_public_return(\{raw_name}(...args.map(__tsmbt_raw_argument))); }",
+          "export function \{export_name}(...args) { return __tsmbt_public_return(\{raw_name}(...args.map((arg) => __tsmbt_raw_argument(arg)))); }",
         )
       }
       inserted_wrappers = true
@@ -762,7 +762,7 @@ fn rewrite_runtime_boundary_js_exports(
       let raw_name = "__tsmbt_raw_export_" + export_name
       output_lines.push("const \{raw_name} = \{local_name};")
       output_lines.push(
-        "export function \{export_name}(...args) { return __tsmbt_public_return(\{raw_name}(...args.map(__tsmbt_raw_argument))); }",
+        "export function \{export_name}(...args) { return __tsmbt_public_return(\{raw_name}(...args.map((arg) => __tsmbt_raw_argument(arg)))); }",
       )
     }
   }

@@ -5972,7 +5972,7 @@ test "npm runtime boundary wraps generated MoonBit exports" {
   assert_true(rewritten.contains("const __tsmbt_raw_export_parse = raw_parse;"))
   assert_true(
     rewritten.contains(
-      "export function parse(...args) { return __tsmbt_public_return(__tsmbt_raw_export_parse(...args.map(__tsmbt_raw_argument))); }",
+      "export function parse(...args) { return __tsmbt_public_return(__tsmbt_raw_export_parse(...args.map((arg) => __tsmbt_raw_argument(arg)))); }",
     ),
   )
 }
