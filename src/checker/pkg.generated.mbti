@@ -27,6 +27,8 @@ pub fn check_module_function_bodies_permissive(@ast.TsModule) -> Array[ExprIssue
 
 pub fn classify_optional_like_union(@ast.TsType) -> (@ast.TsType, Bool)?
 
+pub fn classify_promise_like_union(@ast.TsType) -> @ast.TsType?
+
 pub fn classify_transparent_intersection(@ast.TsType) -> @ast.TsType?
 
 pub fn collect_referenced_names(@ast.TsType) -> Array[String]
@@ -84,6 +86,8 @@ pub fn match_infer_pattern(@ast.TsType, @ast.TsType, Map[String, @ast.TsType]) -
 pub fn module_alias_resolver(@ast.TsModule, include_standard? : Bool) -> (String) -> AliasBinding?
 
 pub fn normalize_literal_type(@ast.TsType) -> @ast.TsType
+
+pub fn normalize_promise_like_union_return(@ast.TsType) -> @ast.TsType
 
 pub fn reduce_uniform_union(@ast.TsType) -> @ast.TsType
 

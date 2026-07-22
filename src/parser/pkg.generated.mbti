@@ -21,7 +21,17 @@ pub fn emit_moonbit_decl_with_sections_types_and_arities(@ast.TsModule, Array[St
 
 pub fn lower_enum_decl_to_runtime_stmts(@ast.TsEnumDecl) -> Array[@ast.TsStmt]
 
+pub fn moonbit_async_callback_glue_expr(String, AsyncCallbackLowering) -> String
+
+pub fn moonbit_async_callback_lowering(String) -> AsyncCallbackLowering?
+
+pub fn moonbit_inline_union_func_case_name(Array[@ast.TsType], @ast.TsType) -> String
+
+pub fn moonbit_inline_union_runtime_named_ok(String) -> Bool
+
 pub fn moonbit_sanitize_type_param_name(String) -> String
+
+pub fn moonbit_upcast_helper_name(String) -> String?
 
 pub fn parse_block_from_source(String) -> @ast.TsBlock raise ParseError
 
@@ -52,6 +62,12 @@ pub(all) suberror ParseError {
 pub impl Show for ParseError
 
 // Types and methods
+pub struct AsyncCallbackLowering {
+  lowered_type : String
+  arity : Int
+  is_optional : Bool
+}
+
 pub(all) struct JsdocBlock {
   description : String
   tags : Array[JsdocTag]

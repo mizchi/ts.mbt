@@ -9,6 +9,10 @@ import {
 // Values
 pub fn apply_oracle_resolutions(@ast.TsModule, Map[String, @ast.TsType]) -> Unit
 
+pub let bridge_promise_wait_async_integration_section : String
+
+pub let bridge_promise_wait_self_contained_section : String
+
 pub async fn collect_moonbit_ts_scaffold_unsupported_exports(String) -> Array[String] raise ModuleGraphError
 
 pub async fn emit_moonbit_decl_from_entry_path(String) -> String raise ModuleGraphError
@@ -54,6 +58,8 @@ pub fn tagged_union_bridge_js_converter_decls_with_nested(BridgeTaggedUnionDecl,
 pub fn tagged_union_case_discriminator(@ast.TsType) -> TaggedUnionCaseDiscriminator?
 
 pub fn tagged_union_case_is_no_payload(@ast.TsType) -> Bool
+
+pub fn tagged_union_case_named_refs(@ast.TsType, Array[String]) -> Unit
 
 pub fn tagged_union_cases(Array[@ast.TsType]) -> Array[(String, @ast.TsType)]?
 
