@@ -227,7 +227,10 @@ EOF
   fi
 
   printf '{ "type": "module" }\n' > "$(dirname "$built_js")/package.json"
-  node --input-type=module - <<EOF
+  # This is a runtime smoke, so bypass warning_guard.sh's `node()` wrapper.
+  # The wrapper is useful for compile commands, but it can turn a runtime
+  # warning emitted by the current Node release into an opaque test failure.
+  command node --input-type=module - <<EOF
 await import("./$built_js");
 EOF
 }
@@ -1097,18 +1100,9 @@ EOF
   # `node:sqlite` is built-in on Node 24+. It emitted an experimental
   # warning in older Node 24 releases, while current Node 24 rejects the
   # removed `--experimental-sqlite` flag. Bypass the script's `node()`
-  # wrapper and suppress stderr so the captured stdout remains exactly
-  # "ok" across both releases.
-  local drizzle_node_stderr
-  drizzle_node_stderr="$(mktemp)"
-  if output="$(command node "$built_js" 2>"$drizzle_node_stderr")"; then
-    :
-  else
-    local drizzle_node_status=$?
-    echo "drizzle smoke process failed:" >&2
-    sed -n '1,200p' "$drizzle_node_stderr" >&2
-    return "$drizzle_node_status"
-  fi
+  # wrapper. Keep stderr visible if the runtime fails, while only stdout
+  # participates in the expected `ok` assertion.
+  output="$(command node "$built_js")"
   if [ "$output" != "ok" ]; then
     echo "expected drizzle smoke to print 'ok', got: $output" >&2
     exit 1
