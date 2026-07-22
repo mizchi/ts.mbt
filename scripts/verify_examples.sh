@@ -1099,7 +1099,16 @@ EOF
   # removed `--experimental-sqlite` flag. Bypass the script's `node()`
   # wrapper and suppress stderr so the captured stdout remains exactly
   # "ok" across both releases.
-  output="$(command node "$built_js" 2>/dev/null)"
+  local drizzle_node_stderr
+  drizzle_node_stderr="$(mktemp)"
+  if output="$(command node "$built_js" 2>"$drizzle_node_stderr")"; then
+    :
+  else
+    local drizzle_node_status=$?
+    echo "drizzle smoke process failed:" >&2
+    sed -n '1,200p' "$drizzle_node_stderr" >&2
+    return "$drizzle_node_status"
+  fi
   if [ "$output" != "ok" ]; then
     echo "expected drizzle smoke to print 'ok', got: $output" >&2
     exit 1
