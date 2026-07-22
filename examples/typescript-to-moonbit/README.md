@@ -33,3 +33,4 @@ Additional TypeScript -> MoonBit patterns are available under:
 - `node-sqlite/`
 - `node-fs/`
 - `typescript-ast/`
+- `typescript-node-imports/` (a complete consumer that imports both bridges)

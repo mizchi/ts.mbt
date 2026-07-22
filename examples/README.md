@@ -47,6 +47,8 @@ Input:
 - `typescript-to-moonbit/node-sqlite/smoke/main.mbt`
 - `typescript-to-moonbit/node-fs/smoke/main.mbt`
 - `typescript-to-moonbit/typescript-ast/smoke/main.mbt`
+- `typescript-to-moonbit/typescript-node-imports/` (complete MoonBit consumer
+  importing both the TypeScript compiler API and `node:fs`)
 
 Generate a MoonBit bridge package:
 
