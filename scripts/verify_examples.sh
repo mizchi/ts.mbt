@@ -893,11 +893,13 @@ verify_typescript_to_moonbit_typescript_ast_example() {
 }
 EOF
 
-  [ -f "$out/moon.pkg" ]
-  [ -f "$out/bridge.mbti" ]
-  [ -f "$out/bridge.mbt" ]
-  [ -f "$out/bridge.js" ]
-  [ -f "$out/SCAFFOLD_DIAGNOSTICS.md" ]
+  for generated_file in moon.pkg bridge.mbti bridge.mbt bridge.js SCAFFOLD_DIAGNOSTICS.md; do
+    if [ ! -f "$out/$generated_file" ]; then
+      echo "TypeScript AST bridge is missing $generated_file" >&2
+      find "$out" -maxdepth 1 -type f -exec basename {} \; | sort >&2
+      exit 1
+    fi
+  done
   grep_generated_mbt "$out" 'pub fn createSourceFile(fileName : String, sourceText : String, languageVersionOrOptions : ScriptTarget, setParentNodes : Bool?, scriptKind : ScriptKind?) -> SourceFile'
   grep_generated_mbt "$out" 'pub extern "js" fn transform(source : SourceFile, transformers : Array[(TransformationContext) -> (SourceFile) -> SourceFile], compilerOptions : CompilerOptions?) -> TransformationResult[Node]'
   grep_generated_mbt "$out" 'pub fn visitEachChild(node : Node, visitor : (Node) -> Node, context : TransformationContext?) -> Node'
@@ -951,7 +953,7 @@ EOF
 }
 EOF
 
-  echo "Generating Drizzle bridge"
+  echo "Generating Hono server bridges"
   moon run src/cmd/ts2mbt -- \
     generate --package-json "$root/package.json" \
     --out "$root/internal/generated"
