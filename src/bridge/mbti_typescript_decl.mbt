@@ -1007,23 +1007,19 @@ fn collect_mbti_public_type_aliases_with_external_import_types(
   let aliases : Array[(String, String)] = []
   for line_view in source.split("\n") {
     let trimmed = line_view.trim().to_owned()
-    if !trimmed.has_prefix("pub type ") &&
-      !trimmed.has_prefix("pub(all) type ") {
+    if !trimmed.has_prefix("pub type ") && !trimmed.has_prefix("pub(all) type ") {
       continue
     }
     let equals_idx = match trimmed.find("=") {
       Some(idx) => idx
       None => continue
     }
-    let alias_decl = parse_type_alias_decl(
-      trimmed, imports, used_aliases,
-    ) catch {
+    let alias_decl = parse_type_alias_decl(trimmed, imports, used_aliases) catch {
       _ => continue
     }
-    aliases.push((
-      alias_decl.name,
-      trimmed[equals_idx + 1:trimmed.length()].to_owned(),
-    ))
+    aliases.push(
+      (alias_decl.name, trimmed[equals_idx + 1:trimmed.length()].to_owned()),
+    )
   }
   let names : Array[String] = []
   let mut changed = true
@@ -1037,8 +1033,10 @@ fn collect_mbti_public_type_aliases_with_external_import_types(
           mentions_external_import = true
         }
       }
-      if (mentions_external_import ||
-          mbti_type_source_mentions_private_local_type(body, names, [])) &&
+      if (
+          mentions_external_import ||
+          mbti_type_source_mentions_private_local_type(body, names, [])
+        ) &&
         !names.contains(name) {
         names.push(name)
         changed = true
@@ -1058,10 +1056,9 @@ fn collect_runtime_inaccessible_free_function_names(
   let private_type_names = collect_root_mbti_private_type_names(source) catch {
     _ => []
   }
-  let external_type_alias_names =
-    collect_mbti_public_type_aliases_with_external_import_types(
-      source, external_import_aliases,
-    )
+  let external_type_alias_names = collect_mbti_public_type_aliases_with_external_import_types(
+    source, external_import_aliases,
+  )
   let names : Array[String] = []
   for line_view in source.split("\n") {
     let trimmed = line_view.trim().to_owned()
@@ -1110,16 +1107,18 @@ fn collect_runtime_inaccessible_free_function_names(
             let return_src_with_effect = mbti_return_source_with_effect_from_function_line(
               trimmed,
             )
-            if (mbti_raw_facade_uses_private_types(
-                raw_params, return_src_with_effect, private_type_names, fn_type_param_names,
-              ) || mbti_raw_facade_uses_external_import_types(
-                raw_params, return_src_with_effect, external_import_aliases,
-              ) || mbti_raw_facade_uses_private_types(
-                raw_params,
-                return_src_with_effect,
-                external_type_alias_names,
-                fn_type_param_names,
-              )) &&
+            if (
+                mbti_raw_facade_uses_private_types(
+                  raw_params, return_src_with_effect, private_type_names, fn_type_param_names,
+                ) ||
+                mbti_raw_facade_uses_external_import_types(
+                  raw_params, return_src_with_effect, external_import_aliases,
+                ) ||
+                mbti_raw_facade_uses_private_types(
+                  raw_params, return_src_with_effect, external_type_alias_names,
+                  fn_type_param_names,
+                )
+              ) &&
               !names.contains(export_name) {
               names.push(export_name)
             }
@@ -1196,7 +1195,8 @@ fn render_autolink_diagnostics_md(
     }
     let external_import_aliases : Array[String] = []
     for import_ref in parse_mbti_imports(source) {
-      if mbti_local_package_segments(root_package_name, import_ref.module_spec) is None {
+      if mbti_local_package_segments(root_package_name, import_ref.module_spec)
+        is None {
         if !allowed_external_import_spec_rewrites.contains(
             import_ref.module_spec,
           ) {
@@ -1205,9 +1205,11 @@ fn render_autolink_diagnostics_md(
       }
     }
     let omitted_members = collect_mbti_omitted_autolink_members(source)
-    for name in collect_runtime_inaccessible_free_function_names(
-      source, external_import_aliases=external_import_aliases,
-    ) {
+    for
+      name in collect_runtime_inaccessible_free_function_names(
+        source,
+        external_import_aliases~,
+      ) {
       if !omitted_members.contains(name) {
         omitted_members.push(name)
       }
@@ -1932,10 +1934,9 @@ fn collect_mbti_autolink_glue_decls(
 ) -> Array[MbtiAutolinkGlueDecl] raise MbtiTypescriptDeclError {
   let imports = parse_mbti_imports(source)
   let used_aliases : Array[String] = []
-  let external_type_alias_names =
-    collect_mbti_public_type_aliases_with_external_import_types(
-      source, external_import_aliases,
-    )
+  let external_type_alias_names = collect_mbti_public_type_aliases_with_external_import_types(
+    source, external_import_aliases,
+  )
   let local_type_params = collect_root_mbti_local_type_params(source)
   let local_type_names : Array[String] = []
   for pair in local_type_params {
@@ -2002,13 +2003,12 @@ fn collect_mbti_autolink_glue_decls(
             }
             if mbti_raw_facade_uses_private_types(
                 raw_params, glue_return_src_with_effect, private_type_names, fn_type_param_names,
-              ) || mbti_raw_facade_uses_external_import_types(
+              ) ||
+              mbti_raw_facade_uses_external_import_types(
                 raw_params, return_src_with_effect, external_import_aliases,
-              ) || mbti_raw_facade_uses_private_types(
-                raw_params,
-                return_src_with_effect,
-                external_type_alias_names,
-                fn_type_param_names,
+              ) ||
+              mbti_raw_facade_uses_private_types(
+                raw_params, return_src_with_effect, external_type_alias_names, fn_type_param_names,
               ) {
               continue
             }
@@ -2164,12 +2164,12 @@ fn collect_mbti_autolink_glue_decls(
                     ),
                     private_type_names,
                     fn_type_param_names,
-                  ) || mbti_raw_facade_uses_external_import_types(
+                  ) ||
+                  mbti_raw_facade_uses_external_import_types(
                     raw_params, return_src_with_effect, external_import_aliases,
-                  ) || mbti_raw_facade_uses_private_types(
-                    raw_params,
-                    return_src_with_effect,
-                    external_type_alias_names,
+                  ) ||
+                  mbti_raw_facade_uses_private_types(
+                    raw_params, return_src_with_effect, external_type_alias_names,
                     fn_type_param_names,
                   ) {
                   continue
@@ -2348,8 +2348,10 @@ fn collect_mbti_bundle_autolink_glue_decls(
           local_package_import_alias_rewrites[import_ref.alias_name] = alias_name
         _ =>
           if mbti_local_package_segments(
-              loaded.root_package_name, import_ref.module_spec,
-            ) is None &&
+              loaded.root_package_name,
+              import_ref.module_spec,
+            )
+            is None &&
             !allowed_external_import_spec_rewrites.contains(
               import_ref.module_spec,
             ) {
@@ -3722,9 +3724,8 @@ fn parse_enum_like_block_decl(
             let field_names : Array[String] = []
             for field in fields {
               match field.find(":") {
-                Some(colon_idx) => field_names.push(
-                  field[:colon_idx].trim().to_owned(),
-                )
+                Some(colon_idx) =>
+                  field_names.push(field[:colon_idx].trim().to_owned())
                 None => ()
               }
             }
@@ -3767,9 +3768,12 @@ fn parse_enum_like_block_decl(
 /// advertised by generated `.d.ts` files, so npm output normalizes every
 /// known public value before returning it to JavaScript.
 fn mbti_runtime_js_string(value : String) -> String {
-  "\"" + value.replace(old="\\", new="\\\\").replace(old="\"", new="\\\"") + "\""
+  "\"" +
+  value.replace(old="\\", new="\\\\").replace(old="\"", new="\\\"") +
+  "\""
 }
 
+///|
 fn mbti_runtime_struct_field_names(fields : Array[String]) -> Array[String] {
   let names : Array[String] = []
   for field in fields {
@@ -3781,9 +3785,8 @@ fn mbti_runtime_struct_field_names(fields : Array[String]) -> Array[String] {
   names
 }
 
-fn render_mbti_runtime_struct_descriptor(
-  decl : MbtiStructDecl,
-) -> String {
+///|
+fn render_mbti_runtime_struct_descriptor(decl : MbtiStructDecl) -> String {
   let fields : Array[String] = []
   for name in mbti_runtime_struct_field_names(decl.fields) {
     fields.push(mbti_runtime_js_string(name))
@@ -3791,9 +3794,8 @@ fn render_mbti_runtime_struct_descriptor(
   "[\{mbti_runtime_js_string(decl.name)}, [\{fields.join(", ")}]]"
 }
 
-fn render_mbti_runtime_enum_descriptor(
-  decl : MbtiEnumLikeDecl,
-) -> String {
+///|
+fn render_mbti_runtime_enum_descriptor(decl : MbtiEnumLikeDecl) -> String {
   let variants : Array[String] = []
   for pair in decl.variant_fields {
     let (variant_name, fields) = pair
@@ -3808,6 +3810,7 @@ fn render_mbti_runtime_enum_descriptor(
   "[\{mbti_runtime_js_string(decl.name)}, [\{variants.join(", ")}]]"
 }
 
+///|
 fn render_mbti_runtime_value_adapter_js(
   loaded : LoadedMbtiPackageSources,
 ) -> String raise MbtiTypescriptDeclError {
@@ -3837,7 +3840,9 @@ fn render_mbti_runtime_value_adapter_js(
       }
       if trimmed.has_prefix("pub enum ") || trimmed.has_prefix("pub(all) enum ") {
         let (block, next_idx) = collect_brace_block(lines, idx)
-        let decl = parse_enum_like_block_decl(block, "enum", imports, used_aliases)
+        let decl = parse_enum_like_block_decl(
+          block, "enum", imports, used_aliases,
+        )
         enum_descriptors.push(render_mbti_runtime_enum_descriptor(decl))
         idx = next_idx
         continue
@@ -3845,7 +3850,9 @@ fn render_mbti_runtime_value_adapter_js(
       if trimmed.has_prefix("pub suberror ") ||
         trimmed.has_prefix("pub(all) suberror ") {
         let (block, next_idx) = collect_brace_block(lines, idx)
-        let decl = parse_enum_like_block_decl(block, "suberror", imports, used_aliases)
+        let decl = parse_enum_like_block_decl(
+          block, "suberror", imports, used_aliases,
+        )
         enum_descriptors.push(render_mbti_runtime_enum_descriptor(decl))
         idx = next_idx
         continue
@@ -3944,15 +3951,14 @@ fn render_mbti_runtime_value_adapter_js(
     #|    for (const item of value) output.add(__tsmbt_raw_argument(item, seen));
     #|    return output;
     #|  }
-  #|  return value;
-  #|}
-  return adapter.replace(
-    old="__TSMBT_RUNTIME_STRUCTS__",
-    new=struct_descriptors.join(",\n"),
-  ).replace(
-    old="__TSMBT_RUNTIME_ENUMS__",
-    new=enum_descriptors.join(",\n"),
-  )
+    #|  return value;
+    #|}
+  return adapter
+    .replace(
+      old="__TSMBT_RUNTIME_STRUCTS__",
+      new=struct_descriptors.join(",\n"),
+    )
+    .replace(old="__TSMBT_RUNTIME_ENUMS__", new=enum_descriptors.join(",\n"))
 }
 
 ///|
@@ -5994,7 +6000,9 @@ fn collect_typescript_external_type_import_aliases(
       None => continue
     }
     let alias_name = rest[:from_idx].trim().to_owned()
-    let spec_src = rest[from_idx + " from ".length():rest.length()].trim().to_owned()
+    let spec_src = rest[from_idx + " from ".length():rest.length()]
+      .trim()
+      .to_owned()
     if alias_name == "" || spec_src.length() < 3 {
       continue
     }
@@ -6136,6 +6144,7 @@ fn mbti_runtime_structural_type_names(
   (structs, enums)
 }
 
+///|
 fn mbti_ts_line_declares_type(line : String, name : String) -> Bool {
   let trimmed = line.trim().to_owned()
   let prefix = "export type " + name
@@ -6153,7 +6162,10 @@ fn mbti_ts_line_declares_type(line : String, name : String) -> Bool {
 /// The npm runtime adapter materializes structs as plain JavaScript objects.
 /// Their MoonBit trait implementations are not callable at this boundary and
 /// must not be advertised by the declaration surface.
-fn strip_mbti_runtime_struct_interface_traits(line : String, name : String) -> String {
+fn strip_mbti_runtime_struct_interface_traits(
+  line : String,
+  name : String,
+) -> String {
   let prefix = "export interface " + name
   let trimmed = line.trim().to_owned()
   if !trimmed.has_prefix(prefix) {
@@ -6167,8 +6179,9 @@ fn strip_mbti_runtime_struct_interface_traits(line : String, name : String) -> S
     Some(idx) if idx > extends_idx => idx
     _ => return line
   }
-  line[:extends_idx].to_owned() + " " +
-    line[open_brace_idx:line.length()].to_owned()
+  line[:extends_idx].to_owned() +
+  " " +
+  line[open_brace_idx:line.length()].to_owned()
 }
 
 ///|
@@ -6198,6 +6211,7 @@ fn mbti_runtime_enum_shape_without_traits(rhs : String) -> String {
   trimmed
 }
 
+///|
 fn add_mbti_runtime_value_brands(
   source : String,
   declaration : String,
@@ -6291,17 +6305,18 @@ fn strip_runtime_inaccessible_typescript_package_files(
     let external_import_aliases : Array[String] = []
     for import_ref in parse_mbti_imports(source) {
       if mbti_local_package_segments(
-          loaded.root_package_name, import_ref.module_spec,
-        ) is None &&
-        !allowed_external_import_spec_rewrites.contains(
+          loaded.root_package_name,
           import_ref.module_spec,
-        ) {
+        )
+        is None &&
+        !allowed_external_import_spec_rewrites.contains(import_ref.module_spec) {
         external_import_aliases.push(import_ref.alias_name)
       }
     }
     let relative_path = mbti_bundle_relative_path_from_segments(segments)
     inaccessible_by_path[relative_path] = collect_runtime_inaccessible_free_function_names(
-      source, external_import_aliases=external_import_aliases,
+      source,
+      external_import_aliases~,
     )
     source_by_path[relative_path] = source
   }
@@ -6323,10 +6338,10 @@ fn strip_runtime_inaccessible_typescript_package_files(
       Some(source) => source
       None => ""
     }
-    let external_type_import_aliases =
-      collect_typescript_external_type_import_aliases(
-        file.content, allowed_external_module_specs,
-      )
+    let external_type_import_aliases = collect_typescript_external_type_import_aliases(
+      file.content,
+      allowed_external_module_specs,
+    )
     stripped.push({
       relative_path: file.relative_path,
       content: add_mbti_runtime_value_brands(
@@ -6503,7 +6518,8 @@ pub async fn emit_typescript_scaffold_bundle_from_mbti_path_with_import_rewrites
       root_package_name, files_with_runtime,
     ),
     autolink_diagnostics_md: render_autolink_diagnostics_md(
-      root_package_name, loaded.ordered_packages,
+      root_package_name,
+      loaded.ordered_packages,
       loaded.package_sources,
       allowed_external_import_spec_rewrites=external_import_spec_rewrites,
     ),
@@ -6594,7 +6610,8 @@ pub async fn emit_typescript_facade_scaffold_bundle_from_mbti_path_with_import_r
       root_package_name, files_with_facades,
     ),
     autolink_diagnostics_md: render_autolink_diagnostics_md(
-      root_package_name, loaded.ordered_packages,
+      root_package_name,
+      loaded.ordered_packages,
       loaded.package_sources,
       allowed_external_import_spec_rewrites=external_import_spec_rewrites,
     ),

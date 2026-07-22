@@ -1075,9 +1075,7 @@ async test "bridge: emit TypeScript scaffold bundle from mbti combines autolink 
   assert_true(bundle.autolink_diagnostics_md.contains("Item::new"))
   assert_eq(bundle.files.length(), 2)
   assert_true(
-    bundle.runtime_value_adapter_js.contains(
-      "[\"Holder\", [\"item\"]]",
-    ),
+    bundle.runtime_value_adapter_js.contains("[\"Holder\", [\"item\"]]"),
   )
   assert_true(bundle.runtime_boundary_export_names.contains("make"))
   let mut root_content = ""
@@ -1086,7 +1084,9 @@ async test "bridge: emit TypeScript scaffold bundle from mbti combines autolink 
       root_content = file.content
     }
   }
-  assert_true(root_content.contains("declare const __tsmbt_raw: unique symbol;"))
+  assert_true(
+    root_content.contains("declare const __tsmbt_raw: unique symbol;"),
+  )
   assert_true(
     root_content.contains(
       "export interface Holder { readonly [__tsmbt_raw]: unknown; }",
@@ -1108,10 +1108,9 @@ test "bridge: strips public functions that expose an external MoonBit type" {
     #|pub fn document_to_json(@core.Document) -> String
     #|pub fn render_external(ExternalDocument) -> String
     #|pub fn render(String) -> String
-  let names = collect_runtime_inaccessible_free_function_names(
-    source,
-    external_import_aliases=["core"],
-  )
+  let names = collect_runtime_inaccessible_free_function_names(source, external_import_aliases=[
+    "core",
+  ])
   assert_true(names.contains("document_to_json"))
   assert_true(names.contains("render_external"))
   assert_false(names.contains("render"))
@@ -1120,10 +1119,8 @@ test "bridge: strips public functions that expose an external MoonBit type" {
   }
   let stripped = strip_unused_typescript_type_imports(
     rewrite_external_moonbit_typescript_refs_to_unknown(
-    strip_runtime_inaccessible_typescript_members(
-      declaration, names, [], [],
-    ),
-    ["core"],
+      strip_runtime_inaccessible_typescript_members(declaration, names, [], []),
+      ["core"],
     ),
   )
   assert_false(stripped.contains("document_to_json"))
@@ -1134,11 +1131,19 @@ test "bridge: strips public functions that expose an external MoonBit type" {
   let sources : Map[String, String] = {}
   sources["demo/api"] = source
   let diagnostics = render_autolink_diagnostics_md(
-    "demo/api", ["demo/api"], sources,
+    "demo/api",
+    ["demo/api"],
+    sources,
   )
   assert_true(diagnostics.contains("- `document_to_json`"))
   let glue_decls = collect_mbti_autolink_glue_decls(
-    "demo/api", source, "tsmbt_source", false, Map([]), "", ["core"],
+    "demo/api",
+    source,
+    "tsmbt_source",
+    false,
+    Map([]),
+    "",
+    ["core"],
   ) catch {
     _ => fail("could not collect autolink glue")
   }
@@ -1160,12 +1165,12 @@ test "bridge: strips public functions that expose an external MoonBit type" {
     _ => fail("could not collect mapped autolink glue")
   }
   // An explicit declaration-module rewrite is an opt-in integration point.
-  assert_true(mapped_glue_decls.any(fn(decl) {
-    decl.export_name == "document_to_json"
-  }))
-  assert_true(mapped_glue_decls.any(fn(decl) {
-    decl.export_name == "render_external"
-  }))
+  assert_true(
+    mapped_glue_decls.any(fn(decl) { decl.export_name == "document_to_json" }),
+  )
+  assert_true(
+    mapped_glue_decls.any(fn(decl) { decl.export_name == "render_external" }),
+  )
 }
 
 ///|
