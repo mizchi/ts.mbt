@@ -3,7 +3,7 @@ name = "mizchi/ts"
 version = "0.3.0"
 
 import {
-  "moonbitlang/async@0.14.2",
+  "moonbitlang/async@0.20.2",
   "mizchi/x@0.2.2",
 }
 

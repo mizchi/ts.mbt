@@ -4,6 +4,12 @@ import {
   "mizchi/ts/ast",
 }
 
+// The checker predates these compiler migration diagnostics. Keep the strict
+// warning gate for every other diagnostic while the mechanical cleanup is
+// performed separately.
+
+warnings = "-0020-0035-0082"
+
 import {
   "mizchi/ts/parser",
   "mizchi/x/fs",
