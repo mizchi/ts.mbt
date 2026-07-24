@@ -1636,9 +1636,14 @@ fn add_bridge_public_wrappers(
   }
   let sections : Array[String] = []
   let helper_text = helpers.join("\n")
+  // The PUBLIC WRAPPERS also cast (`__ts_mbt_wrap_option_return(
+  // unsafeCast(...))` on option-return glue); scanning only the base
+  // text left semver's bridge referencing an undeclared helper.
+  let wrapper_text = wrappers.join("\n")
   if (
       next_bridge_mbt.contains("unsafeCast(") ||
-      helper_text.contains("unsafeCast(")
+      helper_text.contains("unsafeCast(") ||
+      wrapper_text.contains("unsafeCast(")
     ) &&
     !next_bridge_mbt.contains("fn[A, B] unsafeCast(value : A) -> B") {
     sections.push("fn[A, B] unsafeCast(value : A) -> B = \"%identity\"")

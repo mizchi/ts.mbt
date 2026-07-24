@@ -785,6 +785,9 @@ EOF
       ;;
     hono)
       cat > "$out/bridge_test.mbt" <<'EOF'
+///|
+fn[A, B] test_cast(value : A) -> B = "%identity"
+
 extern "js" fn realworld_hono_options() -> HonoOptions[Env] =
   #| () => ({ strict: true })
 
@@ -833,7 +836,7 @@ fn realworld_hono_mw(
   c : Context[JSValue, JSValue, JSValue],
   next : () -> Promise[Unit],
 ) -> Promise[Unit] {
-  c.set(realworld_hono_key("who"), unsafeCast("from middleware"))
+  c.set(realworld_hono_key("who"), test_cast("from middleware"))
   next()
 }
 
@@ -857,22 +860,25 @@ EOF
       ;;
     zod)
       cat > "$out/bridge_test.mbt" <<'EOF'
+///|
+fn[A, B] test_cast(value : A) -> B = "%identity"
+
 test "real-world zod bridge smoke" {
   let _ = number(None)
   let _ = boolean(None)
   // Concrete schemas expose the flattened ZodType surface directly.
   let s = string(None)
-  if !s.safeParse(unsafeCast("hello"), None).success {
+  if !s.safeParse(test_cast("hello"), None).success {
     abort("expected zod safeParse success")
   }
-  if s.safeParse(unsafeCast(42), None).success {
+  if s.safeParse(test_cast(42), None).success {
     abort("expected zod safeParse failure")
   }
   let email = string(None).email(None)
-  if !email.safeParse(unsafeCast("a@b.co"), None).success {
+  if !email.safeParse(test_cast("a@b.co"), None).success {
     abort("expected zod email success")
   }
-  if email.safeParse(unsafeCast("nope"), None).success {
+  if email.safeParse(test_cast("nope"), None).success {
     abort("expected zod email failure")
   }
   // Generic owners (ZodObject) reach the surface via the as_schema upcast;
@@ -881,7 +887,7 @@ test "real-world zod bridge smoke" {
   // no per-value unsafeCast remains.
   let shape = loose_shape_of(["name"], [as_schema(string(None))])
   let obj = as_schema(object(Some(shape), None))
-  if obj.safeParse(unsafeCast("not an object"), None).success {
+  if obj.safeParse(test_cast("not an object"), None).success {
     abort("expected zod object failure")
   }
 }
@@ -928,6 +934,9 @@ EOF
       ;;
     valibot)
       cat > "$out/bridge_test.mbt" <<'EOF'
+///|
+fn[A, B] test_cast(value : A) -> B = "%identity"
+
 extern "js" fn realworld_valibot_success(r : JSValue) -> Bool =
   #| (r) => r.success === true
 
@@ -935,20 +944,20 @@ test "real-world valibot bridge smoke" {
   let _ = number()
   let _ = boolean()
   let _ = uuid()
-  let s : BaseSchema[JSValue, JSValue, BaseIssue[JSValue]] = unsafeCast(string())
-  if !realworld_valibot_success(safeParse(s, unsafeCast("hello"), None)) {
+  let s : BaseSchema[JSValue, JSValue, BaseIssue[JSValue]] = test_cast(string())
+  if !realworld_valibot_success(safeParse(s, test_cast("hello"), None)) {
     abort("expected valibot safeParse success")
   }
-  if realworld_valibot_success(safeParse(s, unsafeCast(42), None)) {
+  if realworld_valibot_success(safeParse(s, test_cast(42), None)) {
     abort("expected valibot safeParse failure")
   }
-  let piped : BaseSchema[JSValue, JSValue, BaseIssue[JSValue]] = unsafeCast(
-    pipe(s, [unsafeCast(minLength(3.0))]),
+  let piped : BaseSchema[JSValue, JSValue, BaseIssue[JSValue]] = test_cast(
+    pipe(s, [test_cast(minLength(3.0))]),
   )
-  if !realworld_valibot_success(safeParse(piped, unsafeCast("abcd"), None)) {
+  if !realworld_valibot_success(safeParse(piped, test_cast("abcd"), None)) {
     abort("expected valibot pipe success")
   }
-  if realworld_valibot_success(safeParse(piped, unsafeCast("ab"), None)) {
+  if realworld_valibot_success(safeParse(piped, test_cast("ab"), None)) {
     abort("expected valibot pipe failure")
   }
 }
@@ -990,6 +999,9 @@ EOF
       ;;
     react)
       cat > "$out/bridge_test.mbt" <<'EOF'
+///|
+fn[A, B] test_cast(value : A) -> B = "%identity"
+
 extern "js" fn realworld_react_vnode(
   elem : DetailedReactHTMLElement[
     InputHTMLAttributes[HTMLInputElement],
@@ -1015,7 +1027,7 @@ test "real-world react bridge smoke" {
 test "real-world react component layer smoke" {
   let counter = fn(_props : JSValue) -> JSValue {
     let (count, _set_count) = use_state_typed(41)
-    unsafeCast(createElement("div", None, [unsafeCast(count)]))
+    test_cast(createElement("div", None, [test_cast(count)]))
   }
   let element = element_of_component(counter, None, [])
   assert_eq(realworld_render_to_string(element), "<div>41</div>")
@@ -1072,11 +1084,14 @@ EOF
       ;;
     superstruct)
       cat > "$out/bridge_test.mbt" <<'EOF'
+///|
+fn[A, B] test_cast(value : A) -> B = "%identity"
+
 extern "js" fn realworld_ss_string_value() -> JSValue =
   #| () => "hello"
 
 test "real-world superstruct bridge smoke" {
-  let s : Struct[JSValue, JSValue] = unsafeCast(string())
+  let s : Struct[JSValue, JSValue] = test_cast(string())
   assert_(realworld_ss_string_value(), s, None)
   let _ = validate(realworld_ss_string_value(), s, None)
 }
@@ -1084,12 +1099,15 @@ EOF
       ;;
     eventemitter3)
       cat > "$out/bridge_test.mbt" <<'EOF'
+///|
+fn[A, B] test_cast(value : A) -> B = "%identity"
+
 extern "js" fn realworld_ee3_event() -> EventEmitter_EventNames =
   #| () => "ping"
 
 test "real-world eventemitter3 bridge smoke" {
   let ee : Default[JSValue, JSValue] = new_default()
-  let listener : EventEmitter_EventListener = unsafeCast(fn(_args : Array[JSValue]) -> Unit {  })
+  let listener : EventEmitter_EventListener = test_cast(fn(_args : Array[JSValue]) -> Unit {  })
   let _ = ee.on(realworld_ee3_event(), listener, None)
   assert_eq(ee.listener_count(realworld_ee3_event()), 1)
 }
@@ -1119,9 +1137,12 @@ EOF
       ;;
     marked)
       cat > "$out/bridge_test.mbt" <<'EOF'
+///|
+fn[A, B] test_cast(value : A) -> B = "%identity"
+
 test "real-world marked bridge smoke" {
   let html = marked_string_marked_options_optional("# hello", None)
-  let rendered : String = unsafeCast(html)
+  let rendered : String = test_cast(html)
   if !rendered.contains("<h1>hello</h1>") {
     abort("unexpected marked output: \{rendered}")
   }
@@ -1130,20 +1151,26 @@ EOF
       ;;
     semver)
       cat > "$out/bridge_test.mbt" <<'EOF'
+///|
+fn[A, B] test_cast(value : A) -> B = "%identity"
+
 test "real-world semver bridge smoke" {
-  assert_eq(valid(Some(unsafeCast("1.2.3")), None), Some("1.2.3"))
+  assert_eq(valid(Some(test_cast("1.2.3")), None), Some("1.2.3"))
   assert_eq(clean(" 1.2.3 ", None), Some("1.2.3"))
-  assert_eq(major(unsafeCast("2.4.6"), None), 2)
+  assert_eq(major(test_cast("2.4.6"), None), 2)
 }
 EOF
       ;;
     picomatch)
       cat > "$out/bridge_test.mbt" <<'EOF'
+///|
+fn[A, B] test_cast(value : A) -> B = "%identity"
+
 extern "js" fn realworld_pm_match(m : Picomatch_Matcher, input : String) -> Bool =
   #| (m, input) => m(input)
 
 test "real-world picomatch bridge smoke" {
-  let matcher = default(unsafeCast("*.ts"), None, None)
+  let matcher = default(test_cast("*.ts"), None, None)
   if !realworld_pm_match(matcher, "a.ts") {
     abort("expected *.ts to match a.ts")
   }
@@ -1174,11 +1201,14 @@ EOF
       ;;
     axios)
       cat > "$out/bridge_test.mbt" <<'EOF'
+///|
+fn[A, B] test_cast(value : A) -> B = "%identity"
+
 extern "js" fn realworld_axios_config() -> AxiosRequestConfig[JSValue] =
   #| () => ({ url: "/users/1", baseURL: "https://example.test" })
 
 test "real-world axios bridge smoke" {
-  let axios_core : Axios = unsafeCast(get_default())
+  let axios_core : Axios = test_cast(get_default())
   let uri = axios_core.get_uri(Some(realworld_axios_config()))
   assert_eq(uri, "https://example.test/users/1")
   let _ = create(None)
@@ -1202,8 +1232,11 @@ EOF
       ;;
     debug)
       cat > "$out/bridge_test.mbt" <<'EOF'
+///|
+fn[A, B] test_cast(value : A) -> B = "%identity"
+
 test "real-world debug bridge smoke" {
-  let dbg : Debug = unsafeCast(get_default())
+  let dbg : Debug = test_cast(get_default())
   dbg.enable("tsmbt:*")
   if !dbg.enabled("tsmbt:probe") {
     abort("expected namespace to be enabled")
@@ -1251,6 +1284,9 @@ EOF
       ;;
     uuid)
       cat > "$out/bridge_test.mbt" <<'EOF'
+///|
+fn[A, B] test_cast(value : A) -> B = "%identity"
+
 extern "js" fn realworld_uuid_absent() -> JSValue =
   #| () => undefined
 
@@ -1261,11 +1297,11 @@ test "real-world uuid bridge smoke" {
     None,
   )
   assert_eq(id.length(), 36)
-  if !validate(unsafeCast(id)) {
+  if !validate(test_cast(id)) {
     abort("expected generated uuid to validate")
   }
   assert_eq(version(id), 4)
-  if validate(unsafeCast("not-a-uuid")) {
+  if validate(test_cast("not-a-uuid")) {
     abort("expected invalid string to fail validation")
   }
 }
@@ -1733,18 +1769,21 @@ EOF
       ;;
     zod)
       cat > "$smoke_dir/main.mbt" <<'EOF'
+///|
+fn[A, B] test_cast(value : A) -> B = "%identity"
+
 fn main {
   let _ = @sut.number(None)
   let _ = @sut.boolean(None)
   let s = @sut.string(None)
-  if !s.safeParse(@sut.unsafeCast("hello"), None).success {
+  if !s.safeParse(test_cast("hello"), None).success {
     abort("expected zod safeParse success")
   }
-  if s.safeParse(@sut.unsafeCast(42), None).success {
+  if s.safeParse(test_cast(42), None).success {
     abort("expected zod safeParse failure")
   }
   let obj = @sut.as_schema(@sut.object(None, None))
-  if obj.safeParse(@sut.unsafeCast("nope"), None).success {
+  if obj.safeParse(test_cast("nope"), None).success {
     abort("expected zod object failure")
   }
 }
@@ -1853,6 +1892,9 @@ EOF
       ;;
     react)
       cat > "$smoke_dir/main.mbt" <<'EOF'
+///|
+fn[A, B] test_cast(value : A) -> B = "%identity"
+
 extern "js" fn realworld_react_vnode(
   elem : @sut.DetailedReactHTMLElement[
     @sut.InputHTMLAttributes[@sut.HTMLInputElement],
@@ -1868,7 +1910,7 @@ fn main {
   }
   let counter = fn(_props : @sut.JSValue) -> @sut.JSValue {
     let (count, _set_count) = @sut.use_state_typed(41)
-    @sut.unsafeCast(@sut.createElement("div", None, [@sut.unsafeCast(count)]))
+    test_cast(@sut.createElement("div", None, [test_cast(count)]))
   }
   let _ = @sut.element_of_component(counter, None, [])
 }
@@ -1936,23 +1978,29 @@ EOF
       ;;
     superstruct)
       cat > "$smoke_dir/main.mbt" <<'EOF'
+///|
+fn[A, B] test_cast(value : A) -> B = "%identity"
+
 extern "js" fn realworld_ss_string_value() -> @sut.JSValue =
   #| () => "hello"
 
 fn main {
-  let s : @sut.Struct[@sut.JSValue, @sut.JSValue] = @sut.unsafeCast(@sut.string())
+  let s : @sut.Struct[@sut.JSValue, @sut.JSValue] = test_cast(@sut.string())
   @sut.assert_(realworld_ss_string_value(), s, None)
 }
 EOF
       ;;
     eventemitter3)
       cat > "$smoke_dir/main.mbt" <<'EOF'
+///|
+fn[A, B] test_cast(value : A) -> B = "%identity"
+
 extern "js" fn realworld_ee3_event() -> @sut.EventEmitter_EventNames =
   #| () => "ping"
 
 fn main {
   let ee : @sut.Default[@sut.JSValue, @sut.JSValue] = @sut.new_default()
-  let listener : @sut.EventEmitter_EventListener = @sut.unsafeCast(fn(_args : Array[@sut.JSValue]) -> Unit {  })
+  let listener : @sut.EventEmitter_EventListener = test_cast(fn(_args : Array[@sut.JSValue]) -> Unit {  })
   let _ = ee.on(realworld_ee3_event(), listener, None)
   if ee.listener_count(realworld_ee3_event()) != 1 {
     abort("unexpected listener count")
@@ -1986,9 +2034,12 @@ EOF
       ;;
     marked)
       cat > "$smoke_dir/main.mbt" <<'EOF'
+///|
+fn[A, B] test_cast(value : A) -> B = "%identity"
+
 fn main {
   let html = @sut.marked_string_marked_options_optional("# hello", None)
-  let rendered : String = @sut.unsafeCast(html)
+  let rendered : String = test_cast(html)
   if !rendered.contains("<h1>hello</h1>") {
     abort("unexpected marked output")
   }
@@ -1997,11 +2048,14 @@ EOF
       ;;
     semver)
       cat > "$smoke_dir/main.mbt" <<'EOF'
+///|
+fn[A, B] test_cast(value : A) -> B = "%identity"
+
 fn main {
-  if @sut.valid(Some(@sut.unsafeCast("1.2.3")), None) != Some("1.2.3") {
+  if @sut.valid(Some(test_cast("1.2.3")), None) != Some("1.2.3") {
     abort("unexpected semver valid")
   }
-  if @sut.major(@sut.unsafeCast("2.4.6"), None) != 2 {
+  if @sut.major(test_cast("2.4.6"), None) != 2 {
     abort("unexpected semver major")
   }
 }
@@ -2009,11 +2063,14 @@ EOF
       ;;
     picomatch)
       cat > "$smoke_dir/main.mbt" <<'EOF'
+///|
+fn[A, B] test_cast(value : A) -> B = "%identity"
+
 extern "js" fn realworld_pm_match(m : @sut.Picomatch_Matcher, input : String) -> Bool =
   #| (m, input) => m(input)
 
 fn main {
-  let matcher = @sut.default(@sut.unsafeCast("*.ts"), None, None)
+  let matcher = @sut.default(test_cast("*.ts"), None, None)
   if !realworld_pm_match(matcher, "a.ts") {
     abort("expected *.ts to match a.ts")
   }
@@ -2041,6 +2098,9 @@ EOF
       ;;
     axios)
       cat > "$smoke_dir/main.mbt" <<'EOF'
+///|
+fn[A, B] test_cast(value : A) -> B = "%identity"
+
 extern "js" fn realworld_axios_config() -> @sut.AxiosRequestConfig[@sut.JSValue] =
   #| () => ({ url: "/users/1", baseURL: "https://example.test" })
 
@@ -2057,7 +2117,7 @@ extern "js" fn realworld_intercepted_count() -> Int =
   #| () => globalThis.__tsmbt_intercepted || 0
 
 fn main {
-  let axios_core : @sut.Axios = @sut.unsafeCast(@sut.get_default())
+  let axios_core : @sut.Axios = test_cast(@sut.get_default())
   if axios_core.get_uri(Some(realworld_axios_config())) != "https://example.test/users/1" {
     abort("unexpected axios uri")
   }
@@ -2083,16 +2143,16 @@ fn main {
     if awaited.length() != 3 {
       abort("unexpected awaited axios.all count")
     }
-    let core : @sut.Axios = @sut.unsafeCast(@sut.get_default())
+    let core : @sut.Axios = test_cast(@sut.get_default())
     let mut rejected = false
     let resp : @sut.JSValue = core
       .get("http://127.0.0.1:1/unreachable", None)
       .wait() catch {
       @sut.JsRejection(_) => {
         rejected = true
-        @sut.unsafeCast(0)
+        test_cast(0)
       }
-      _ => @sut.unsafeCast(0)
+      _ => test_cast(0)
     }
     ignore(resp)
     if !rejected {
@@ -2116,14 +2176,14 @@ fn main {
       None,
       None,
     )
-    let instance_core : @sut.Axios = @sut.unsafeCast(instance)
+    let instance_core : @sut.Axios = test_cast(instance)
     let mut intercepted_rejected = false
     let iresp : @sut.JSValue = instance_core
       .get("http://127.0.0.1:1/unreachable", None)
       .wait() catch {
       _ => {
         intercepted_rejected = true
-        @sut.unsafeCast(0)
+        test_cast(0)
       }
     }
     ignore(iresp)
@@ -2163,8 +2223,11 @@ EOF
       ;;
     debug)
       cat > "$smoke_dir/main.mbt" <<'EOF'
+///|
+fn[A, B] test_cast(value : A) -> B = "%identity"
+
 fn main {
-  let dbg : @sut.Debug = @sut.unsafeCast(@sut.get_default())
+  let dbg : @sut.Debug = test_cast(@sut.get_default())
   dbg.enable("tsmbt:*")
   if !dbg.enabled("tsmbt:probe") {
     abort("expected namespace to be enabled")
@@ -2207,8 +2270,11 @@ EOF
       ;;
     uuid)
       cat > "$smoke_dir/main.mbt" <<'EOF'
+///|
+fn[A, B] test_cast(value : A) -> B = "%identity"
+
 fn main {
-  if !@sut.validate(@sut.unsafeCast("00000000-0000-0000-0000-000000000000")) {
+  if !@sut.validate(test_cast("00000000-0000-0000-0000-000000000000")) {
     abort("expected NIL uuid to validate")
   }
 }
@@ -3119,6 +3185,9 @@ pkgtype(kind: "executable")
 EOF
 
   cat > "$app/src/main/main.mbt" <<'EOF'
+///|
+fn[A, B] test_cast(value : A) -> B = "%identity"
+
 extern "js" fn smoke_response_status(res : @hono.JSValue) -> Int =
   #| (res) => res.status
 
@@ -3154,8 +3223,8 @@ async fn main {
   // bare Response at runtime despite the Promise-typed declaration.
   let app : @hono.Hono[@hono.JSValue, @hono.JSValue, @hono.JSValue] = @hono.new_hono(None)
   let _ = app.get("/hello", smoke_hono_handler)
-  let res_p : @hono.Promise[@hono.JSValue] = @hono.unsafeCast(
-    app.request(@hono.unsafeCast("http://localhost/hello"), None, None, None),
+  let res_p : @hono.Promise[@hono.JSValue] = test_cast(
+    app.request(test_cast("http://localhost/hello"), None, None, None),
   )
   let res = res_p.wait()
   if smoke_response_status(res) != 200 {
