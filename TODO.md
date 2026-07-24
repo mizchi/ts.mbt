@@ -2065,6 +2065,50 @@ Corpus (8 rows): playwright JSValue functions 191 -> 179, lodash
 surface). Top-level generic FUNCTIONS (`chain<T>(items)`) still widen
 — that path has no receiver to hang a getter on; recorded as open.
 
+Round 16 — rebase onto upstream 0.4.0 and compatibility repair.
+Upstream landed the API finalization while the arc merged:
+`moon.mod.json` -> `moon.mod`, the new `mtsc` type-check CLI,
+`moonbitlang/async` 0.20.2 (needs `moon update`), and — most
+relevantly — `unsafeCast` is no longer exported from generated
+bridges (emitted privately, and only when the generated code itself
+uses it). Two fixes to get the gates green again:
+
+- generator regression: the conditional `unsafeCast` emission scanned
+  only the base bridge text and helper decls, but the PUBLIC WRAPPERS
+  also cast (`__ts_mbt_wrap_option_return(unsafeCast(...))` on
+  option-return glue) — semver's bridge referenced an undeclared
+  helper and failed to compile. The scan now includes the wrapper
+  text.
+- the real-world gate smokes migrated from `@sut.unsafeCast` /
+  in-package `unsafeCast` to a test-local `%identity` helper
+  (`test_cast`), matching the convention upstream used for the repo
+  examples.
+
+JSValue-reduction mining on the rebased corpus (recorded so future
+rounds don't re-mine): the remaining top buckets are dominated by
+HONEST widenings —
+
+- zod's callback bucket (405) is mostly `unknown` DATA params on
+  Promise-returning parse methods (`parseAsync(arg0 : JSValue)`),
+  plus `refine`'s `Promise<unknown>` callbacks;
+- playwright's residuals are `PageFunction` / `Serializable` generic
+  evaluate surfaces and the widened BASE event members (the typed
+  per-event companions exist; re-typing the base `(Worker) -> JSValue`
+  listener returns would change public param types — out of scope
+  under the compatibility constraint);
+- lodash's tuple/conditional buckets are iteratee unions
+  (`fn | string | object` with type-param members, correctly refused
+  by the round-10 runtime-discriminability guard) and `T[keyof T]`
+  projections over bare type params;
+- react-router's unknowns are `Promise<any>` returns (Cookie.parse).
+
+The unresolved-reference survey shows no large resolvable clusters —
+per-package residuals are single qualified names (`util.X`,
+`YAMLSeq.Parsed`) and the `__tsmbt_infer` sentinel. Systematic
+compat-safe reductions from d.ts information are effectively
+exhausted; further JSValue drops need either dishonest narrowing or
+per-domain glue.
+
 Round 15 (same day) — CLASS-method event maps, the round-11
 follow-up. Detection had to run on the RAW method (the clone rewrites
 the listener to a named opaque callback, hiding the `(Literal, Func)`
