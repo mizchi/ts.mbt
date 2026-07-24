@@ -2065,6 +2065,34 @@ Corpus (8 rows): playwright JSValue functions 191 -> 179, lodash
 surface). Top-level generic FUNCTIONS (`chain<T>(items)`) still widen
 — that path has no receiver to hang a getter on; recorded as open.
 
+Round 18 — zod natural end-to-end + JSValue read-side accessors.
+The zod flow already ran (chained validators `string().min(3)` /
+`number().int()` / `.optional()`, `loose_shape_of` + `object()`,
+`as_schema(...).safeParse` success and failure, issue `message` /
+`path` via the `asDollarZodError` upcast) — what was missing was
+READING results back: `ZodSafeParseResult.data` is the opaque
+`Core_output` handle and issue path segments are opaque
+`PropertyKey`s, with no exported way to inspect either since
+`unsafeCast` went private. The generated JSValue boundary gained a
+read side mirroring the round-95 constructors:
+
+- `JSValue::of[T]` — views ANY value (opaque handles included) as the
+  dynamic type; `%identity`, always sound on the js backend.
+- `get(key)` (undefined for absent), `is_nullish`, and typeof-checked
+  `as_string` / `as_double` / `as_bool` / `as_array` returning
+  `None` on mismatch instead of blindly casting, plus `stringify`
+  (JSON.stringify with a String() fallback).
+
+Emitted in the same conditionally-added block as the constructors
+(the file-splitting pass distributes them across bridge.mbt /
+converters.mbt / guards.mbt / externs.mbt). Verified end-to-end and
+added as a second zod gate smoke: parse `{name, age, bio?}`, read
+`data.get("name").as_string() == "mizchi"`, absent optional reads
+nullish, `as_double` refuses a string; failure path checks 2 issues
+with message + path key readback. The pre-existing zod smoke's inputs
+migrated from `test_cast` to the typed `JSValue::from_*`
+constructors. Budgets: zero drift (the helpers are not decl surface).
+
 Round 17 — react-router / playwright end-to-end runnability. Three
 generator features plus one long-standing runtime bug fix, driven by
 actually running the bridges (memory-router navigation; chromium

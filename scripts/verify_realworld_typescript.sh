@@ -859,35 +859,89 @@ EOF
       ;;
     zod)
       cat > "$out/bridge_test.mbt" <<'EOF'
-///|
-fn[A, B] test_cast(value : A) -> B = "%identity"
-
 test "real-world zod bridge smoke" {
   let _ = number(None)
   let _ = boolean(None)
-  // Concrete schemas expose the flattened ZodType surface directly.
+  // Concrete schemas expose the flattened ZodType surface directly;
+  // inputs are built with the typed JSValue constructors.
   let s = string(None)
-  if !s.safeParse(test_cast("hello"), None).success {
+  if !s.safeParse(JSValue::from_string("hello"), None).success {
     abort("expected zod safeParse success")
   }
-  if s.safeParse(test_cast(42), None).success {
+  if s.safeParse(JSValue::from_int(42), None).success {
     abort("expected zod safeParse failure")
   }
   let email = string(None).email(None)
-  if !email.safeParse(test_cast("a@b.co"), None).success {
+  if !email.safeParse(JSValue::from_string("a@b.co"), None).success {
     abort("expected zod email success")
   }
-  if email.safeParse(test_cast("nope"), None).success {
+  if email.safeParse(JSValue::from_string("nope"), None).success {
     abort("expected zod email failure")
   }
+}
+
+test "real-world zod object schema end-to-end" {
   // Generic owners (ZodObject) reach the surface via the as_schema upcast;
   // the shape is built with the TYPED loose_shape_of module hook — the
   // value slots take the same Schema upper bound as_schema produces, so
-  // no per-value unsafeCast remains.
-  let shape = loose_shape_of(["name"], [as_schema(string(None))])
-  let obj = as_schema(object(Some(shape), None))
-  if obj.safeParse(test_cast("not an object"), None).success {
+  // no per-value unsafeCast remains. Validators chain naturally.
+  let shape = loose_shape_of(
+    ["name", "age", "bio"],
+    [
+      as_schema(string(None).min(3.0, None)),
+      as_schema(number(None).int(None)),
+      as_schema(string(None).optional()),
+    ],
+  )
+  let user = as_schema(object(Some(shape), None))
+  let good = JSValue::object_from_pairs([
+    ("name", JSValue::from_string("mizchi")),
+    ("age", JSValue::from_double(42.0)),
+  ])
+  let ok = user.safeParse(good, None)
+  if !ok.success {
+    abort("expected zod object success")
+  }
+  // Parsed data reads back through the JSValue read-side accessors:
+  // `JSValue::of` views the opaque `Core_output` handle as the dynamic
+  // type, `get`/`as_*` inspect it with runtime typeof checks.
+  let data = JSValue::of(ok.data)
+  match data.get("name").as_string() {
+    Some(name) => if name != "mizchi" { abort("unexpected parsed name") }
+    None => abort("expected parsed name string")
+  }
+  match data.get("age").as_double() {
+    Some(age) => if age != 42.0 { abort("unexpected parsed age") }
+    None => abort("expected parsed age number")
+  }
+  if !data.get("bio").is_nullish() {
+    abort("expected absent bio to read as nullish")
+  }
+  if data.get("name").as_double() is Some(_) {
+    abort("as_double must refuse a string")
+  }
+  // Failure path: issues surface with message and path.
+  let bad = JSValue::object_from_pairs([
+    ("name", JSValue::from_string("mi")),
+    ("age", JSValue::from_string("not a number")),
+  ])
+  let res = user.safeParse(bad, None)
+  if res.success {
     abort("expected zod object failure")
+  }
+  let issues = res.error.asDollarZodError().issues
+  if issues.length() != 2 {
+    abort("expected 2 zod issues")
+  }
+  if issues[0].message == "" {
+    abort("expected zod issue message")
+  }
+  match JSValue::of(issues[0].path[0]).as_string() {
+    Some(key) =>
+      if key != "name" && key != "age" {
+        abort("unexpected zod issue path key: " + key)
+      }
+    None => abort("expected string zod issue path segment")
   }
 }
 EOF
