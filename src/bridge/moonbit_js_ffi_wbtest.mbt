@@ -134,12 +134,12 @@ async test "bridge: emit MoonBit JS FFI bundle from ambient external module" {
   )
   assert_true(
     bundle.bridge_js.contains(
-      "field = __ts_mbt_unwrap_bool_option(field);\n  if (field !== undefined) result[\"open\"] = field;",
+      "field = globalThis.__ts_mbt_js_convs.__ts_mbt_unwrap_bool_option(field);\n  if (field !== undefined) result[\"open\"] = field;",
     ),
   )
   assert_true(
     bundle.bridge_js.contains(
-      "return new DatabaseSync(path, __ts_mbt_to_js_database_sync_options(options));",
+      "return new DatabaseSync(path, globalThis.__ts_mbt_js_convs.__ts_mbt_to_js_database_sync_options(options));",
     ),
   )
   assert_true(bundle.bridge_js.contains("SQLITE_OK"))
@@ -1165,7 +1165,7 @@ async test "bridge: emit callable wrappers for natural function-valued const exp
   )
   assert_true(
     bundle.bridge_js.contains(
-      "export function __ts_mbt_escape(arg0, arg1) { return __ts_mbt_module.escape(arg0, __ts_mbt_to_js_glob_options(arg1)); }",
+      "export function __ts_mbt_escape(arg0, arg1) { return __ts_mbt_module.escape(arg0, globalThis.__ts_mbt_js_convs.__ts_mbt_to_js_glob_options(arg1)); }",
     ),
   )
 }
@@ -3421,7 +3421,7 @@ async test "bridge: emit MoonBit JS FFI bundle binds bare package aliases to pub
   )
   assert_true(
     bundle.bridge_js.contains(
-      "export function __ts_mbt_decorate_maybe(label, prefix) { return decorateMaybe(label, __ts_mbt_unwrap_option(prefix)); }",
+      "export function __ts_mbt_decorate_maybe(label, prefix) { return decorateMaybe(label, globalThis.__ts_mbt_js_convs.__ts_mbt_unwrap_option(prefix)); }",
     ),
   )
   assert_false(bundle.bridge_js.contains("surround as __ts_mbt_decorate"))
@@ -3523,7 +3523,7 @@ async test "bridge: emit MoonBit JS FFI bundle imports export-equals namespace m
   )
   assert_true(
     bundle.bridge_js.contains(
-      "export function __ts_mbt_path_basename(path_, suffix) { return path.basename(path_, __ts_mbt_unwrap_option(suffix)); }",
+      "export function __ts_mbt_path_basename(path_, suffix) { return path.basename(path_, globalThis.__ts_mbt_js_convs.__ts_mbt_unwrap_option(suffix)); }",
     ),
   )
   assert_true(
@@ -3717,7 +3717,7 @@ async test "bridge: emit MoonBit JS FFI bundle from declaration-merged namespace
   )
   assert_true(
     bundle.bridge_js.contains(
-      "export function __ts_mbt_make_with_options(input, options) { return make.withOptions(input, __ts_mbt_to_js_make_options(options)); }",
+      "export function __ts_mbt_make_with_options(input, options) { return make.withOptions(input, globalThis.__ts_mbt_js_convs.__ts_mbt_to_js_make_options(options)); }",
     ),
   )
   assert_true(bundle.ffi_mbt.contains("#external\npub type Tool"))
@@ -3833,7 +3833,7 @@ async test "bridge: emit MoonBit JS FFI bundle from callback APIs with synthetic
   )
   assert_true(
     bundle.bridge_js.contains(
-      "export function __ts_mbt_maybe_emit(label, listener) { return maybeEmit(label, __ts_mbt_unwrap_option(listener)); }",
+      "export function __ts_mbt_maybe_emit(label, listener) { return maybeEmit(label, globalThis.__ts_mbt_js_convs.__ts_mbt_unwrap_option(listener)); }",
     ),
   )
   assert_false(bundle.ffi_mbt.contains("Unsupported export emitEvent"))
@@ -3930,7 +3930,7 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace hook tup
   )
   assert_true(
     bundle.bridge_js.contains(
-      "export function __ts_mbt_use_action_state(action, initialState, permalink) { const tuple_ = default_.useActionState(action, initialState, __ts_mbt_unwrap_option(permalink)); return { state: tuple_[0], dispatch: tuple_[1], isPending: tuple_[2] }; }",
+      "export function __ts_mbt_use_action_state(action, initialState, permalink) { const tuple_ = default_.useActionState(action, initialState, globalThis.__ts_mbt_js_convs.__ts_mbt_unwrap_option(permalink)); return { state: tuple_[0], dispatch: tuple_[1], isPending: tuple_[2] }; }",
     ),
   )
 }
@@ -4378,7 +4378,7 @@ async test "bridge: emit MoonBit JS FFI bundle from exported jsx-dev-runtime sig
   )
   assert_true(
     bundle.bridge_js.contains(
-      "export function __ts_mbt_jsx_dev(type_, props, key, isStatic, source, self) { return jsxDEV(type_, props, __ts_mbt_unwrap_option(key), isStatic, __ts_mbt_to_js_jsxsource(source), __ts_mbt_unwrap_option(self)); }",
+      "export function __ts_mbt_jsx_dev(type_, props, key, isStatic, source, self) { return jsxDEV(type_, props, globalThis.__ts_mbt_js_convs.__ts_mbt_unwrap_option(key), isStatic, globalThis.__ts_mbt_js_convs.__ts_mbt_to_js_jsxsource(source), globalThis.__ts_mbt_js_convs.__ts_mbt_unwrap_option(self)); }",
     ),
   )
 }
@@ -4735,12 +4735,12 @@ async test "bridge: emit MoonBit JS FFI bundle from fixture React JSX runtime pa
   )
   assert_true(
     bundle.bridge_js.contains(
-      "export function __ts_mbt_jsx(type_, props, key) { return jsx(type_, __ts_mbt_to_js_button_htmlattributes(props), __ts_mbt_unwrap_option(key)); }",
+      "export function __ts_mbt_jsx(type_, props, key) { return jsx(type_, globalThis.__ts_mbt_js_convs.__ts_mbt_to_js_button_htmlattributes(props), globalThis.__ts_mbt_js_convs.__ts_mbt_unwrap_option(key)); }",
     ),
   )
   assert_true(
     bundle.bridge_js.contains(
-      "export function __ts_mbt_jsxs(type_, props, key) { return jsxs(type_, __ts_mbt_to_js_button_htmlattributes(props), __ts_mbt_unwrap_option(key)); }",
+      "export function __ts_mbt_jsxs(type_, props, key) { return jsxs(type_, globalThis.__ts_mbt_js_convs.__ts_mbt_to_js_button_htmlattributes(props), globalThis.__ts_mbt_js_convs.__ts_mbt_unwrap_option(key)); }",
     ),
   )
 }
@@ -4988,7 +4988,9 @@ test "bridge: FFI struct method wrappers unwrap optional arguments" {
     ),
   )
   assert_true(actual.contains("self.setIssuedAt("))
-  assert_true(actual.contains("arg0.$tag === 1 ? arg0._0 : undefined"))
+  assert_true(
+    actual.contains("globalThis.__ts_mbt_js_convs.__ts_mbt_unwrap_option(arg0)"),
+  )
 }
 
 ///|
@@ -5060,7 +5062,11 @@ test "bridge: FFI class methods unwrap optional arguments" {
   )
   assert_true(actual.contains("#| (self, input) =>"))
   assert_true(actual.contains("self.setIssuedAt("))
-  assert_true(actual.contains("input.$tag === 1 ? input._0 : undefined"))
+  assert_true(
+    actual.contains(
+      "globalThis.__ts_mbt_js_convs.__ts_mbt_unwrap_option(input)",
+    ),
+  )
 }
 
 ///|
@@ -5104,7 +5110,7 @@ test "bridge: FFI struct generation keeps generic method wrappers non-extern" {
   // method and call it with `this` undefined.
   assert_true(
     actual.contains(
-      "extern \"js\" fn _stats_base_isFile_get_extern_js(target : JSValue) -> JSValue =\n  #| (o) => (...args) => o.isFile(...args)",
+      "extern \"js\" fn _stats_base_isFile_get_extern_js(target : JSValue) -> JSValue =\n  #| (o) => () => o.isFile()",
     ),
   )
   assert_true(

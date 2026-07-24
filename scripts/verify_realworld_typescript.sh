@@ -324,14 +324,14 @@ jsvalue_function_budget() {
     chalk) printf '3\n' ;;
     dotenv) printf '0\n' ;;
     ignore) printf '1\n' ;;
-    hono) printf '5\n' ;;
+    hono) printf '9\n' ;;
     zod) printf '484\n' ;;
     date-fns) printf '22\n' ;;
     colorette) printf '1\n' ;;
     magic-string) printf '0\n' ;;
     source-map) printf '8\n' ;;
     valibot) printf '295\n' ;;
-    immer) printf '16\n' ;;
+    immer) printf '20\n' ;;
     execa) printf '5\n' ;;
     preact) printf '7\n' ;;
     react) printf '45\n' ;;
@@ -347,17 +347,17 @@ jsvalue_function_budget() {
     semver) printf '33\n' ;;
     picomatch) printf '5\n' ;;
     deepmerge) printf '4\n' ;;
-    axios) printf '37\n' ;;
+    axios) printf '39\n' ;;
     commander) printf '23\n' ;;
     debug) printf '5\n' ;;
     chokidar) printf '3\n' ;;
     pino) printf '8\n' ;;
-    lodash) printf '286\n' ;;
+    lodash) printf '285\n' ;;
     uuid) printf '5\n' ;;
     minimatch) printf '10\n' ;;
     ws) printf '7\n' ;;
-    vitest/runtime) printf '6\n' ;;
-    playwright) printf '179\n' ;;
+    vitest/runtime) printf '7\n' ;;
+    playwright) printf '201\n' ;;
     react-router) printf '79\n' ;;
     jose) printf '46\n' ;;
     express) printf '6\n' ;;
@@ -392,7 +392,6 @@ unsupported_export_budget() {
     mitt) printf '1\n' ;;
     marked) printf '3\n' ;;
     minimatch) printf '1\n' ;;
-
     node:sqlite) printf '2\n' ;;
     node:fs) printf '2\n' ;;
     node:crypto) printf '2\n' ;;
@@ -416,7 +415,7 @@ jsvalue_cause_budget() {
     # 2026-07-20 union-return normalization: two hono signatures moved
     # from the conditional/mapped bucket into callback/function (their
     # rendered `Promise[...]` now matches the callback pattern first).
-    hono) printf '86|14|6|24|6|28|8\n' ;;
+    hono) printf '98|18|10|28|6|28|8\n' ;;
     zod) printf '1493|333|8|206|405|513|28\n' ;;
     date-fns) printf '26|4|5|0|0|15|2\n' ;;
     colorette) printf '1|0|1|0|0|0|0\n' ;;
@@ -428,7 +427,7 @@ jsvalue_cause_budget() {
     # ErrorMessageOf* enums, 140 of them) and `expects: null` -> JSNull
     # then removed another ~420 surface lines (unknown/any 1166 -> 504).
     valibot) printf '1437|504|23|11|23|830|46\n' ;;
-    immer) printf '23|4|7|2|3|1|6\n' ;;
+    immer) printf '35|6|10|4|5|4|6\n' ;;
     execa) printf '17|2|0|4|1|0|10\n' ;;
     preact) printf '50|12|1|4|14|19|0\n' ;;
     react) printf '149|41|7|26|34|35|6\n' ;;
@@ -444,20 +443,20 @@ jsvalue_cause_budget() {
     semver) printf '33|0|30|2|0|0|1\n' ;;
     picomatch) printf '11|6|4|0|0|0|1\n' ;;
     deepmerge) printf '14|8|0|2|0|3|1\n' ;;
-    axios) printf '164|60|4|21|0|75|4\n' ;;
+    axios) printf '170|60|4|21|0|81|4\n' ;;
     commander) printf '24|0|0|9|2|3|10\n' ;;
     debug) printf '17|4|0|1|0|12|0\n' ;;
     chokidar) printf '3|0|0|1|0|0|2\n' ;;
     pino) printf '56|42|4|1|0|5|4\n' ;;
-    lodash) printf '1634|440|120|250|51|766|7\n' ;;
+    lodash) printf '1850|456|120|254|55|940|25\n' ;;
     uuid) printf '5|0|5|0|0|0|0\n' ;;
     minimatch) printf '10|0|0|2|0|3|5\n' ;;
     ws) printf '52|24|0|3|2|17|6\n' ;;
-    vitest/runtime) printf '60|31|2|3|6|18|0\n' ;;
+    vitest/runtime) printf '63|31|3|5|6|18|0\n' ;;
     # 2026-07-20 async-callback lowering: one promise-callback signature
     # moved from the tuple/array bucket into callback/function (the
     # lowered wrapper line matches the callback pattern first).
-    playwright) printf '829|302|0|65|286|174|2\n' ;;
+    playwright) printf '865|302|0|67|299|195|2\n' ;;
     react-router) printf '378|188|21|29|45|77|18\n' ;;
     jose) printf '67|18|1|15|11|10|12\n' ;;
     express) printf '6|0|0|0|0|2|4\n' ;;
@@ -1371,6 +1370,51 @@ test "real-world vitest environments bridge smoke" {
 EOF
       ;;
     playwright)
+      # Chromium end-to-end smoke, opt-in: set TSMBT_PLAYWRIGHT_EXECUTABLE
+      # to a chromium binary (e.g. /opt/pw-browsers/chromium) to launch a
+      # real browser through the generated bridge. Without it, only the
+      # compile-only smoke below runs — CI does not ship browser binaries.
+      if [ -n "${TSMBT_PLAYWRIGHT_EXECUTABLE:-}" ]; then
+        cat > "$out/pw_e2e_test.mbt" <<EOF
+///|
+test "real-world playwright chromium end-to-end" {
+  async fn e2e() -> Unit {
+    let opts : LaunchOptions = {
+      args: Some(["--no-sandbox", "--disable-dev-shm-usage"]),
+      artifactsDir: None,
+      channel: None,
+      chromiumSandbox: Some(false),
+      downloadsPath: None,
+      env: None,
+      executablePath: Some("${TSMBT_PLAYWRIGHT_EXECUTABLE}"),
+      firefoxUserPrefs: None,
+      handleSIGHUP: None,
+      handleSIGINT: None,
+      handleSIGTERM: None,
+      headless: Some(true),
+      ignoreDefaultArgs: None,
+      logger: None,
+      proxy: None,
+      slowMo: None,
+      timeout: Some(30000.0),
+      tracesDir: None,
+    }
+    let browser = get_chromium().launch(Some(opts)).wait()
+    let page = browser.newPage(None).wait()
+    let _resp = page
+      .goto("data:text/html,<title>tsmbt</title><h1>ok</h1>", None)
+      .wait()
+    let title = page.title().wait()
+    if title != "tsmbt" {
+      abort("unexpected page title: " + title)
+    }
+    browser.close(None).wait()
+  }
+
+  run_async(e2e)
+}
+EOF
+      fi
       cat > "$out/bridge_test.mbt" <<'EOF'
 test "real-world playwright bridge smoke" {
   // Compile-only smoke: exercise the public surface so the generated
@@ -1428,6 +1472,56 @@ test "real-world react-router bridge smoke" {
   assert_eq(resolved.pathname, "/docs/api")
   assert_eq(resolved.search, "")
   assert_eq(resolved.hash, "")
+}
+
+fn smoke_route(path : String) -> RouteObject {
+  let base : BaseRouteObject = {
+    caseSensitive: None,
+    path: Some(path),
+    id: None,
+    middleware: None,
+    loader: None,
+    action: None,
+    shouldRevalidate: None,
+    handle: None,
+    lazy_: None,
+    component: None,
+    element: None,
+    errorBoundary: None,
+    errorElement: None,
+    hydrateFallback: None,
+    hydrateFallbackElement: None,
+  }
+  NonIndexRouteObjectValue(base)
+}
+
+test "real-world react-router memory router navigates" {
+  let opts : MemoryRouterOpts = {
+    basename: None,
+    getContext: None,
+    future: None,
+    hydrationData: None,
+    initialEntries: Some([StringValue("/")]),
+    initialIndex: None,
+    instrumentations: None,
+    dataStrategy: None,
+    patchRoutesOnNavigation: None,
+  }
+  let router = createMemoryRouter(
+    [smoke_route("/"), smoke_route("/about")],
+    Some(opts),
+  )
+  let initialized = router.initialize()
+  assert_eq(initialized.state.location.asPath().pathname, "/")
+  // `navigate(to, opts?)` survives as the `navigate_to` overload
+  // companion next to the delta form `navigate(delta)`.
+  let _promise = router.navigate_to(Some(StringValue("/about")), None)
+  assert_eq(router.state.location.asPath().pathname, "/about")
+  // Struct payload through the tagged union exercises the
+  // globalThis-registered bridge.js converter from an extern lambda.
+  let back : PathPartial = { pathname: Some("/"), search: None, hash: None }
+  let _promise2 = router.navigate_to(Some(PathPartialValue(back)), None)
+  assert_eq(router.state.location.asPath().pathname, "/")
 }
 EOF
       ;;
@@ -3548,7 +3642,7 @@ EOF
     echo "expected lowered union-return handler in $mode bridge" >&2
     exit 1
   fi
-  if ! grep -q '(o) => (...args) => o.use(...args)' "$bridge"; then
+  if ! grep -q '(o) => (arg0) => o.use(' "$bridge"; then
     echo "expected bound-closure getter for sanitized member in $mode bridge" >&2
     exit 1
   fi

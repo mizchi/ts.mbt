@@ -1437,6 +1437,17 @@ fn ffi_inline_js_arg_expr_with_state(
   type_ : @ast.TsType,
   expr : String,
 ) -> String {
+  // With full state available, use the same deep converter the bridge
+  // glue applies (struct converters, array item mapping, tagged unions):
+  // method args used to get only the shallow option/tag unwrap, which
+  // forwarded MoonBit option boxes inside options structs straight into
+  // the library (playwright's `launch({args: Some([...])})`). The
+  // helpers it references resolve through the globalThis registry, which
+  // is in scope for extern lambdas.
+  match state {
+    Some(s) => return ffi_type_js_converter_expr(s, type_, expr)
+    None => ()
+  }
   match @checker.classify_optional_like_union(type_) {
     Some((collapsed, is_optional)) => {
       if !is_optional {
@@ -1546,13 +1557,19 @@ fn ffi_function_field_method_decl(
   js_field_name : String,
   field_type : @ast.TsType,
   event_special? : (String, String)? = None,
+  js_member_override? : String? = None,
   method_type_params? : Array[String] = [],
 ) -> String? {
   // Event companion (`on_close`): call the ORIGINAL JS member with the
-  // event literal injected as the first argument.
+  // event literal injected as the first argument. Overload companions
+  // (`navigate_to`) alias the JS member without injecting anything.
   let (js_field_name, injected_literal) = match event_special {
     Some((js_member, literal)) => (js_member, Some(literal))
-    None => (js_field_name, None)
+    None =>
+      match js_member_override {
+        Some(js_member) => (js_member, None)
+        None => (js_field_name, None)
+      }
   }
   // A member's own generic binder (`map<U>(fn: (item: T) => U):
   // CollectionChain<U>`) survives on the pure-MoonBit wrapper: MoonBit
@@ -1660,7 +1677,17 @@ fn ffi_function_field_method_decl(
               "_get_extern_js"
             let raw_param_types_src = param_types.join(", ")
             let field_fn_type = "(\{raw_param_types_src}) -> \{return_type}"
-            let getter_decl = "extern \"js\" fn \{getter_name}(target : JSValue) -> JSValue =\n  #| (o) => (...args) => \{ffi_js_access("o", js_field_name)}(\"\{literal}\", ...args)"
+            // Named getter params with the same per-arg JS conversions the
+            // extern path applies (`(...args)` would forward raw MoonBit
+            // reprs — option boxes, enum tags — straight into the library).
+            let getter_params_src = args.join(", ")
+            let converted_args_src = js_args.join(", ")
+            let getter_call_args = if js_args.length() == 0 {
+              "\"\{literal}\""
+            } else {
+              "\"\{literal}\", " + converted_args_src
+            }
+            let getter_decl = "extern \"js\" fn \{getter_name}(target : JSValue) -> JSValue =\n  #| (o) => (\{getter_params_src}) => \{ffi_js_access("o", js_field_name)}(\{getter_call_args})"
             let wrapper_decl = "pub \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} {\n  let field_fn : \{field_fn_type} = unsafeCast(\{getter_name}(unsafeCast(self)))\n  field_fn(\{args_src})\n}"
             return Some(getter_decl + "\n\n" + wrapper_decl)
           }
@@ -1683,7 +1710,11 @@ fn ffi_function_field_method_decl(
             "_get_extern_js"
           let raw_param_types_src = param_types.join(", ")
           let field_fn_type = "(\{raw_param_types_src}) -> \{return_type}"
-          let getter_decl = "extern \"js\" fn \{getter_name}(target : JSValue) -> JSValue =\n  #| (o) => (...args) => \{ffi_js_access("o", js_field_name)}(...args)"
+          // Same per-arg JS conversions as the extern path — see the
+          // event-companion branch above.
+          let getter_params_src = args.join(", ")
+          let converted_args_src = js_args.join(", ")
+          let getter_decl = "extern \"js\" fn \{getter_name}(target : JSValue) -> JSValue =\n  #| (o) => (\{getter_params_src}) => \{ffi_js_access("o", js_field_name)}(\{converted_args_src})"
           let wrapper_decl = "pub \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} {\n  let field_fn : \{field_fn_type} = unsafeCast(\{getter_name}(unsafeCast(self)))\n  field_fn(\{args_src})\n}"
           Some(getter_decl + "\n\n" + wrapper_decl)
         } else {
@@ -1818,7 +1849,7 @@ fn ffi_generic_member_method_decl(
   inner : @ast.TsType,
 ) -> String? {
   match ffi_function_type_parts(state, inner) {
-    Some((_, param_types, raw_return)) => {
+    Some((source_param_types, param_types, raw_return)) => {
       let self_type = ffi_receiver_self_type(
         receiver_type, receiver_type_params,
       )
@@ -1829,10 +1860,18 @@ fn ffi_generic_member_method_decl(
       }
       let params : Array[String] = ["self : \{self_type}"]
       let args : Array[String] = []
+      let js_args : Array[String] = []
       for i, param_type in param_types {
         let arg_name = "arg" + i.to_string()
         params.push("\{arg_name} : \{param_type}")
         args.push(arg_name)
+        js_args.push(
+          ffi_inline_js_arg_expr_with_state(
+            Some(state),
+            source_param_types[i],
+            arg_name,
+          ),
+        )
       }
       let combined : Array[String] = []
       for tp in receiver_type_params {
@@ -1855,7 +1894,13 @@ fn ffi_generic_member_method_decl(
         field_name +
         "_generic_get_extern_js"
       let field_fn_type = "(" + param_types.join(", ") + ") -> " + return_type
-      let getter_decl = "extern \"js\" fn \{getter_name}(target : JSValue) -> JSValue =\n  #| (o) => (...args) => \{ffi_js_access("o", js_field_name)}(...args)"
+      // Named getter params with the extern path's per-arg JS conversions —
+      // `(...args)` forwarded raw MoonBit reprs (option boxes, enum tags)
+      // straight into the library (playwright `launch(options)` rejected
+      // the boxed `args` array).
+      let getter_params_src = args.join(", ")
+      let converted_args_src = js_args.join(", ")
+      let getter_decl = "extern \"js\" fn \{getter_name}(target : JSValue) -> JSValue =\n  #| (o) => (\{getter_params_src}) => \{ffi_js_access("o", js_field_name)}(\{converted_args_src})"
       let params_src = params.join(", ")
       let args_src = args.join(", ")
       let wrapper_decl = "pub \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} {\n  let field_fn : \{field_fn_type} = unsafeCast(\{getter_name}(unsafeCast(self)))\n  field_fn(\{args_src})\n}"
@@ -1969,6 +2014,7 @@ fn ffi_struct_decl_to_moonbit(
           name,
           type_,
           event_special=decl_event_member_special(iface.name, name),
+          js_member_override=decl_overload_member_alias(iface.name, name),
           method_type_params=ffi_iface_method_type_params(iface, name),
         ) {
         Some(method_decl) => {
@@ -2865,10 +2911,22 @@ fn ffi_struct_converter_name(type_name : String) -> String {
 }
 
 ///|
+/// Cross-file bridge.js helper reference. Extern `#|` lambdas compile
+/// into the MoonBit package's own JS module, where bridge.js top-level
+/// `function __ts_mbt_*` definitions are NOT in scope — a bare call was
+/// a runtime ReferenceError (react-router's `navigate(PathPartial)`).
+/// bridge.js registers every helper on `globalThis.__ts_mbt_js_convs`
+/// at load, and all generated call sites route through that registry,
+/// which resolves in both contexts.
+pub fn ffi_js_helper_ref(helper_name : String) -> String {
+  "globalThis.__ts_mbt_js_convs." + helper_name
+}
+
+///|
 fn ffi_struct_converter_call_expr(name : String, expr : String) -> String {
   let type_name = ffi_type_identifier(name, "OpaqueType")
   let converter_name = ffi_struct_converter_name(type_name)
-  "\{converter_name}(\{expr})"
+  "\{ffi_js_helper_ref(converter_name)}(\{expr})"
 }
 
 ///|
@@ -3188,7 +3246,8 @@ fn ffi_type_js_converter_expr(
         return ffi_type_js_converter_expr(state, collapsed, expr)
       }
       return match collapsed {
-        Boolean => "__ts_mbt_unwrap_bool_option(\{expr})"
+        Boolean =>
+          "\{ffi_js_helper_ref("__ts_mbt_unwrap_bool_option")}(\{expr})"
         Struct(name, _) => ffi_struct_converter_call_expr(name, expr)
         Named(name) if ffi_named_type_is_generated_struct(state, name) =>
           ffi_struct_converter_call_expr(name, expr)
@@ -3209,11 +3268,11 @@ fn ffi_type_js_converter_expr(
               )
               "(\{expr} == null ? undefined : \{converted})"
             }
-            None => "__ts_mbt_unwrap_option(\{expr})"
+            None => "\{ffi_js_helper_ref("__ts_mbt_unwrap_option")}(\{expr})"
           }
         Applied(name, _) if ffi_named_type_is_generated_struct(state, name) =>
           ffi_struct_converter_call_expr(name, expr)
-        _ => "__ts_mbt_unwrap_option(\{expr})"
+        _ => "\{ffi_js_helper_ref("__ts_mbt_unwrap_option")}(\{expr})"
       }
     }
     None => ()
@@ -3978,7 +4037,7 @@ fn ffi_type_js_return_expr(
   match @checker.classify_optional_like_union(type_) {
     Some((collapsed, is_optional)) => {
       if is_optional && collapsed == Boolean {
-        return "__ts_mbt_wrap_bool_option(\{expr})"
+        return "\{ffi_js_helper_ref("__ts_mbt_wrap_bool_option")}(\{expr})"
       }
       // `Hires?` returns: MoonBit JS encodes `Option[T]` for non-primitive
       // `T` as the raw value with `undefined` for `None` (instead of the
@@ -7459,7 +7518,11 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     )
     rendered_bridge_lines.push("")
   }
-  if bridge_needs_option_unwrap || !bridge_struct_converter_lines.is_empty() {
+  // Always defined: method externs reference these through the
+  // `globalThis.__ts_mbt_js_convs` registry regardless of whether the
+  // bridge glue itself needed them.
+  ignore(bridge_needs_option_unwrap)
+  {
     rendered_bridge_lines.push(
       "function __ts_mbt_unwrap_option(value) { if (value == null) return undefined; if (typeof value === \"object\" && \"$tag\" in value) return value.$tag === 1 ? value._0 : undefined; return value; }",
     )
@@ -7483,6 +7546,43 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   }
   for line in bridge_lines {
     rendered_bridge_lines.push(line)
+  }
+
+  // Register every top-level `function __ts_mbt_*` helper on
+  // `globalThis.__ts_mbt_js_convs`: extern `#|` lambdas live in the
+  // MoonBit package's own JS module where bridge.js names are out of
+  // scope, so every generated cross-file helper call goes through this
+  // registry (see `ffi_js_helper_ref`).
+  let registry_helper_names : Array[String] = []
+  for rendered_line in rendered_bridge_lines {
+    for text_line in rendered_line.split("\n") {
+      let trimmed = text_line.to_owned().trim().to_owned()
+      let def = if trimmed.has_prefix("export function __ts_mbt_") {
+        trimmed["export function ".length():].to_owned()
+      } else if trimmed.has_prefix("function __ts_mbt_") {
+        trimmed["function ".length():].to_owned()
+      } else {
+        continue
+      }
+      let helper_name = match def.find("(") {
+        Some(idx) => def[:idx].to_owned()
+        None => continue
+      }
+      if !registry_helper_names.contains(helper_name) {
+        registry_helper_names.push(helper_name)
+      }
+    }
+  }
+  if registry_helper_names.length() > 0 {
+    rendered_bridge_lines.push("")
+    rendered_bridge_lines.push(
+      "const __ts_mbt_js_convs_reg = globalThis.__ts_mbt_js_convs = globalThis.__ts_mbt_js_convs || {};",
+    )
+    for helper_name in registry_helper_names {
+      rendered_bridge_lines.push(
+        "__ts_mbt_js_convs_reg.\{helper_name} = \{helper_name};",
+      )
+    }
   }
 
   {

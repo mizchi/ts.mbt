@@ -7654,6 +7654,7 @@ fn decl_reset_event_member_specials() -> Unit {
   decl_event_member_specials.clear()
   decl_event_member_families.clear()
   decl_event_class_families.clear()
+  decl_overload_member_aliases.clear()
 }
 
 ///|
@@ -7888,6 +7889,122 @@ fn decl_maybe_synthesize_event_companions(
       )
     }
   }
+}
+
+///|
+/// Non-mergeable member overloads. When a later overload differs from the
+/// kept signature in a way the trailing-param rule can't merge
+/// (react-router's `navigate(delta: number)` vs `navigate(to: To | null,
+/// opts?)`), the old behavior silently dropped it. Instead, synthesize a
+/// companion member suffixed by the FIRST param's type (`navigate_to`)
+/// that calls the SAME JS member; the FFI consults this registry for the
+/// original JS name. (owner interface, companion member) -> JS member.
+let decl_overload_member_aliases : Map[String, String] = Map([])
+
+///|
+fn decl_overload_member_alias(owner : String, member : String) -> String? {
+  decl_overload_member_aliases.get(owner + "\u{0}" + member)
+}
+
+///|
+/// Companion suffix for a non-mergeable overload: overload sets
+/// discriminate on their first argument, so its (optional-stripped) type
+/// names the companion. Zero params reads as the "call with nothing"
+/// variant.
+fn decl_member_overload_suffix(params : Array[@ast.TsType]) -> String? {
+  if params.length() == 0 {
+    return Some("no_args")
+  }
+  let core = match @checker.classify_optional_like_union(params[0]) {
+    Some((inner, _)) => inner
+    None => params[0]
+  }
+  decl_overload_type_suffix(core)
+}
+
+///|
+fn decl_push_overload_companion(
+  fields : Array[(String, @ast.TsType)],
+  seen_field_names : Array[String],
+  owner_name : String,
+  member_name : String,
+  existing_type : @ast.TsType,
+  final_type : @ast.TsType,
+) -> Unit {
+  let params = match final_type {
+    Func(params, _) => params
+    GenericFunc(_, Func(params, _)) => params
+    _ => return
+  }
+  let existing_params = match existing_type {
+    Func(existing_params, _) => existing_params
+    GenericFunc(_, Func(existing_params, _)) => existing_params
+    _ => return
+  }
+  // Literal-first overloads are event maps; that pass owns them.
+  if params.length() > 0 && params[0] is Literal(_) {
+    return
+  }
+  if existing_params.length() > 0 && existing_params[0] is Literal(_) {
+    return
+  }
+  // Same param list (an overload set discriminating only on the return
+  // type, or an exact duplicate): a suffixed twin would add nothing.
+  if params.length() == existing_params.length() {
+    let mut all_same = true
+    for i, param in params {
+      if decl_normalize_overload_signature_type(param) !=
+        decl_normalize_overload_signature_type(existing_params[i]) {
+        all_same = false
+        break
+      }
+    }
+    if all_same {
+      return
+    }
+  }
+  let suffix = match decl_member_overload_suffix(params) {
+    Some(suffix) => suffix
+    None => return
+  }
+  let companion_name = member_name + "_" + suffix
+  if seen_field_names.contains(companion_name) {
+    return
+  }
+  seen_field_names.push(companion_name)
+  fields.push((companion_name, final_type))
+  decl_overload_member_aliases[owner_name + "\u{0}" + companion_name] = member_name
+}
+
+///|
+/// Wrapper-budget priority: synthesized companions (event-map and
+/// overload twins) sort behind primary members, so a large companion
+/// family (playwright Page's ~110 `on_*` / `once_*`) can't starve base
+/// members (`goto`, `title`) of their method wrappers under the
+/// per-interface wrapper limit. Struct construction is by field name,
+/// so the order is otherwise cosmetic; the decl and FFI emitters both
+/// consume this order, keeping their method surfaces aligned.
+fn decl_sort_companion_fields_last(
+  owner_name : String,
+  fields : Array[(String, @ast.TsType)],
+) -> Array[(String, @ast.TsType)] {
+  let primaries : Array[(String, @ast.TsType)] = []
+  let companions : Array[(String, @ast.TsType)] = []
+  for field in fields {
+    if decl_event_member_special(owner_name, field.0) is Some(_) ||
+      decl_overload_member_alias(owner_name, field.0) is Some(_) {
+      companions.push(field)
+    } else {
+      primaries.push(field)
+    }
+  }
+  if companions.length() == 0 {
+    return fields
+  }
+  for companion in companions {
+    primaries.push(companion)
+  }
+  primaries
 }
 
 ///|
@@ -8221,17 +8338,25 @@ fn append_lowered_interface_field(
   if seen_field_names.contains(field_name) {
     // Method overload: widen the kept signature when this one only
     // appends trailing params (`get(key)` / `get(key, fallback)` merge
-    // to `get(key, fallback?)`); anything else keeps the first
-    // declaration, matching the old behavior.
+    // to `get(key, fallback?)`); a signature that can't merge gets a
+    // suffixed companion member instead of being dropped.
+    let mut unmerged : @ast.TsType? = None
     for i, existing in fields {
       if existing.0 != field_name {
         continue
       }
       match decl_merge_overload_func_types(existing.1, final_type) {
         Some(merged) => fields[i] = (field_name, merged)
-        None => ()
+        None => unmerged = Some(existing.1)
       }
       break
+    }
+    match unmerged {
+      Some(existing_type) =>
+        decl_push_overload_companion(
+          fields, seen_field_names, owner_name, field_name, existing_type, final_type,
+        )
+      None => ()
     }
     return
   }
@@ -8821,6 +8946,7 @@ fn clone_resolved_interface_origin(
   let (unflattened_bases, unflattened_args) = decl_unflattened_interface_bases(
     origin, modules, canonical_types,
   )
+  let fields = decl_sort_companion_fields_last(origin.export_name, fields)
   {
     name: origin.export_name,
     type_params: origin.iface.type_params,
@@ -9182,6 +9308,7 @@ fn clone_exported_interface(
     modules,
     canonical_types,
   )
+  let fields = decl_sort_companion_fields_last(exported.export_name, fields)
   {
     name: exported.export_name,
     type_params: exported.iface.type_params,

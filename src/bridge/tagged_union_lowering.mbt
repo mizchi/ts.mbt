@@ -544,10 +544,18 @@ pub fn tagged_union_to_js_expression_with_nested(
           @ast.TsType::Named(name) =>
             match nested.get(name) {
               Some(_) =>
-                tagged_union_to_js_function_name(name) + "(" + expr + "._0)"
+                // Registry-qualified: this expression is inlined into
+                // extern lambdas where bridge.js names are out of scope.
+                ffi_js_helper_ref(tagged_union_to_js_function_name(name)) +
+                "(" +
+                expr +
+                "._0)"
               None =>
                 if struct_converter_names.contains(name) {
-                  ffi_struct_converter_name(name) + "(" + expr + "._0)"
+                  ffi_js_helper_ref(ffi_struct_converter_name(name)) +
+                  "(" +
+                  expr +
+                  "._0)"
                 } else {
                   expr + "._0"
                 }

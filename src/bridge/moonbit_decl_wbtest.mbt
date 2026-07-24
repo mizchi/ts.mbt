@@ -3172,6 +3172,42 @@ async test "bridge: event-map overloads synthesize per-literal companions" {
 }
 
 ///|
+async test "bridge: non-mergeable overloads synthesize suffixed companions" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/overload-companion-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // `navigate(to: number)` / `navigate(to: To | null, opts?)` can't merge
+  // under the trailing-param rule; the second overload used to be dropped.
+  // It now survives as a companion suffixed by its first param's type,
+  // calling the same JS member.
+  assert_true(
+    actual.contains(
+      "declare pub fn Router::navigate(self : Router, arg0 : Double) -> Promise[Unit]",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn Router::navigate_to(self : Router, arg0 : To?, arg1 : NavigateOptions?) -> Promise[Unit]",
+    ),
+  )
+  // Trailing-param overloads still merge in place — no `fetch_string` twin.
+  assert_true(
+    actual.contains(
+      "declare pub fn Router::fetch(self : Router, arg0 : String, arg1 : String?) -> Promise[Unit]",
+    ),
+  )
+  assert_false(actual.contains("fetch_string"))
+}
+
+///|
 test "decl: nonempty tuple normalizes to array" {
   // `[T, ...T[]]` (valibot / zod `issues`) is a nonempty ARRAY for the
   // bridge surface; a tuple would widen to `Array[JSValue]`.

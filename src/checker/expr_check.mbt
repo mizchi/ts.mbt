@@ -223,6 +223,7 @@ fn merge_interfaces(
 /// Build a resolver for one self-contained module. Graph-aware callers use
 /// `ingest_type_module` and `ingest_module` directly, while checker benchmarks
 /// use this helper to isolate the cost of the ordinary single-module setup.
+#warnings("-1")
 fn Resolver::from_module(module_ : @ast.TsModule) -> Resolver {
   let r = Resolver::empty()
   Resolver::ingest_module(r, module_, "")

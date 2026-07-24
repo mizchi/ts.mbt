@@ -2065,6 +2065,64 @@ Corpus (8 rows): playwright JSValue functions 191 -> 179, lodash
 surface). Top-level generic FUNCTIONS (`chain<T>(items)`) still widen
 — that path has no receiver to hang a getter on; recorded as open.
 
+Round 17 — react-router / playwright end-to-end runnability. Three
+generator features plus one long-standing runtime bug fix, driven by
+actually running the bridges (memory-router navigation; chromium
+launch -> goto -> title):
+
+- non-mergeable member overload companions: a later interface-method
+  overload the trailing-param rule can't merge used to be DROPPED
+  (react-router's `navigate(to: To | null, opts?)` lost to the
+  doc-private `navigate(delta: number)`). It now synthesizes a
+  companion suffixed by the first param's type (`navigate_to`),
+  registered in `decl_overload_member_aliases` so the FFI calls the
+  ORIGINAL JS member (`js_member_override~`). Literal-first overloads
+  stay with the event-map pass; same-param-list overloads (return-only
+  differences, duplicates) refuse. Fixture
+  `overload-companion-entry.d.ts` + wbtest. playwright also gains
+  `waitForSelector_string` / `connectOverCDP_*`-style companions.
+- wrapper-budget priority: synthesized companions now sort BEHIND
+  primary members in cloned interfaces
+  (`decl_sort_companion_fields_last`, applied in both cloners so the
+  decl and FFI surfaces stay aligned) — playwright Page's ~110
+  `on_*`/`once_*` companions were eating the 128-per-interface method
+  wrapper budget and starving `goto`/`title` of their wrappers.
+- generic-receiver getters convert args: the bound-closure getters
+  (`(o) => (...args) => o.launch(...args)`) forwarded RAW MoonBit
+  reprs into the library — playwright rejected `launch(options)`
+  because `args : Array[String]?` crossed as the `{_0: [...]}` option
+  box. Getters now take named params and apply the same per-arg JS
+  conversions as the extern path.
+- bridge.js helper scope bug (pre-existing, runtime): extern `#|`
+  lambdas compile into the MoonBit package's own JS module, where
+  bridge.js `function __ts_mbt_*` helpers are NOT in scope — any
+  method arg needing a struct converter crashed with ReferenceError
+  (`navigate_to(PathPartialValue(...))` reproduced it). bridge.js now
+  registers every top-level `__ts_mbt_*` helper on
+  `globalThis.__ts_mbt_js_convs` at load, and all generated cross-file
+  helper references route through the registry (works in both
+  contexts). With that legal, method args upgraded from the shallow
+  option/tag unwrap to the FULL converter (struct converters, array
+  item mapping) — `ffi_inline_js_arg_expr_with_state` delegates to
+  `ffi_type_js_converter_expr` when state is present.
+
+Runtime-verified end-to-end and added as gate smokes:
+react-router `createMemoryRouter([...routes]) -> initialize() ->
+navigate_to("/about" and PathPartialValue) -> state.location.asPath()`
+(in the react_router bridge smoke); playwright chromium
+`get_chromium().launch(executablePath) -> newPage -> goto(data: URL)
+-> title == "tsmbt" -> close` (opt-in via TSMBT_PLAYWRIGHT_EXECUTABLE
+— CI ships no browser binaries; set it to /opt/pw-browsers/chromium
+in this environment). Also fixed upstream `moon check --deny-warn`
+red: `Resolver::from_module` is bench-only, annotated
+`#warnings("-1")`.
+
+Known limitation recorded: the globalThis registry is keyed by
+converter NAME; two different bridge packages loaded in one app that
+define converters for same-named types share slots (shape probes make
+misconversion unlikely; namespacing per package is the follow-up if
+it ever bites).
+
 Round 16 — rebase onto upstream 0.4.0 and compatibility repair.
 Upstream landed the API finalization while the arc merged:
 `moon.mod.json` -> `moon.mod`, the new `mtsc` type-check CLI,
