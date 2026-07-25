@@ -282,7 +282,7 @@ EOF
   # generic public wrapper that `unsafeCast`s through it).
   grep_generated_mbt "$out" 'extern "js" fn _new_hono_extern_js(options : JSValue) -> JSValue'
   grep_generated_mbt "$out" 'pub fn[E] new_hono(options : HonoOptions[E]?) -> Hono[E]'
-  grep_generated_mbt "$out" 'pub fn createApp(options : HonoOptions[JSValue]) -> Hono[JSValue]'
+  grep_generated_mbt "$out" 'pub fn[E] createApp(options : HonoOptions[E]) -> Hono[E]'
   moon -C "$out" check --target js
   moon -C "$out" test --target js
   run_typescript_to_moonbit_js_build_smoke "$out" "examples/typescript_to_moonbit_hono" <<'EOF'
@@ -473,7 +473,10 @@ test "generated @types/react bridge smoke" {
   // `cloneElement` is typed against the generic `DetailedReactHTMLElement[
   // HTMLAttributes[JSValue], HTMLElement]` but `createElement("div", ...)`
   // resolves to a more specific instantiation; the test helper bridges them.
-  let _ = cloneElement(test_unsafe_cast(element), None, test_children())
+  let base : DetailedReactHTMLElement[HTMLAttributes[JSValue], HTMLElement] = test_unsafe_cast(
+    element,
+  )
+  let _ = cloneElement(base, None, test_children())
   assert_true(isValidElement(test_unsafe_cast(element)))
   let _ = memo(test_function_component(), None)
   let _ = forwardRef(test_forward_ref_render())
@@ -488,9 +491,9 @@ EOF
   [ -f "$out/bridge.js" ]
   [ -f "$out/SCAFFOLD_DIAGNOSTICS.md" ]
   grep_generated_mbt "$out" 'pub fn createElement(type_ : String, props : JSValue?, children : Array[JSValue]) -> DetailedReactHTMLElement['
-  grep_generated_mbt "$out" 'pub fn cloneElement(element : DetailedReactHTMLElement[HTMLAttributes[JSValue], HTMLElement], props : HTMLAttributes[JSValue]?, children : Array[JSValue]) -> DetailedReactHTMLElement['
+  grep_generated_mbt "$out" 'pub fn[T] cloneElement(element : DetailedReactHTMLElement[HTMLAttributes[T], HTMLElement], props : HTMLAttributes[T]?, children : Array[JSValue]) -> DetailedReactHTMLElement['
   grep_generated_mbt "$out" 'pub extern "js" fn memo(component : FunctionComponent[JSValue], propsAreEqual : MemoPropsAreEqualCallback?) -> NamedExoticComponent[JSValue]'
-  grep_generated_mbt "$out" 'pub fn forwardRef(render : ForwardRefRenderFunction[JSValue, JSValue]) -> ForwardRefExoticComponent[JSValue]'
+  grep_generated_mbt "$out" 'pub fn[T, P] forwardRef(render : ForwardRefRenderFunction[T, P]) -> ForwardRefExoticComponent[JSValue]'
   grep_generated_mbt "$out" 'pub fn useState(initialState : JSValue) -> UseStateResult'
   grep_generated_mbt "$out" 'pub fn useTransition() -> UseTransitionResult'
   grep_generated_mbt "$out" 'pub fn startTransition(scope : TransitionFunction) -> Unit'
@@ -518,7 +521,11 @@ fn[A, B] test_unsafe_cast(value : A) -> B = "%identity"
 
 fn main {
   let element = @sut.createElement("div", Some(test_props()), test_children())
-  let _ = @sut.cloneElement(test_unsafe_cast(element), None, test_children())
+  let base : @sut.DetailedReactHTMLElement[
+    @sut.HTMLAttributes[@sut.JSValue],
+    @sut.HTMLElement,
+  ] = test_unsafe_cast(element)
+  let _ = @sut.cloneElement(base, None, test_children())
   if !@sut.isValidElement(test_unsafe_cast(element)) {
     abort("expected generated React element to be valid")
   }

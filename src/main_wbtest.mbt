@@ -5012,13 +5012,13 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace declaratio
   assert_true(bridge_mbti.contains("pub(all) struct Context[T] {"))
   assert_true(
     bridge_mbti.contains(
-      "declare pub fn createContext(defaultValue : JSValue) -> Context[JSValue]",
+      "declare pub fn[T] createContext(defaultValue : T) -> Context[T]",
     ),
   )
   assert_true(bridge_mbti.contains("declare pub fn get_default() -> JSValue"))
   assert_true(
     bridge_mbt.contains(
-      "pub fn createContext(defaultValue : JSValue) -> Context[JSValue] {\n  create_context(defaultValue)\n}",
+      "pub fn[T] createContext(defaultValue : T) -> Context[T] {\n  create_context(defaultValue)\n}",
     ),
   )
   assert_true(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
@@ -5042,7 +5042,7 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace ambient me
   assert_true(bridge_mbti.contains("declare pub type Component"))
   assert_true(
     bridge_mbti.contains(
-      "declare pub fn useContext(context : Context[JSValue]) -> JSValue",
+      "declare pub fn[T] useContext(context : Context[T]) -> T",
     ),
   )
   assert_true(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
@@ -5077,12 +5077,12 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace hook tuple
   assert_true(bridge_mbti.contains("pub(all) struct UseActionStateResult"))
   assert_true(
     bridge_mbti.contains(
-      "declare pub fn useState(initialState : JSValue) -> UseStateResult",
+      "declare pub fn[S] useState(initialState : S) -> UseStateResult",
     ),
   )
   assert_true(
     bridge_mbti.contains(
-      "declare pub fn useReducer(reducer : UseReducerReducerCallback, initialState : JSValue) -> UseReducerResult",
+      "declare pub fn[S] useReducer(reducer : UseReducerReducerCallback, initialState : S) -> UseReducerResult",
     ),
   )
   assert_true(
@@ -5092,22 +5092,22 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace hook tuple
   )
   assert_true(
     bridge_mbti.contains(
-      "declare pub fn useOptimistic(passthrough : State) -> UseOptimisticResult",
+      "declare pub fn[State] useOptimistic(passthrough : State) -> UseOptimisticResult",
     ),
   )
   assert_true(
     bridge_mbti.contains(
-      "declare pub fn useActionState(action : async (State) -> State raise, initialState : State, permalink : String?) -> UseActionStateResult",
+      "declare pub fn[State] useActionState(action : async (State) -> State raise, initialState : State, permalink : String?) -> UseActionStateResult",
     ),
   )
   assert_true(
     bridge_mbt.contains(
-      "pub fn useState(initialState : JSValue) -> UseStateResult {\n  use_state(initialState)\n}",
+      "pub fn[S] useState(initialState : S) -> UseStateResult {\n  use_state(initialState)\n}",
     ),
   )
   assert_true(
     bridge_mbt.contains(
-      "pub fn useReducer(reducer : UseReducerReducerCallback, initialState : JSValue) -> UseReducerResult {\n  use_reducer(reducer, initialState)\n}",
+      "pub fn[S] useReducer(reducer : UseReducerReducerCallback, initialState : S) -> UseReducerResult {\n  use_reducer(reducer, initialState)\n}",
     ),
   )
   assert_true(
@@ -5117,14 +5117,14 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace hook tuple
   )
   assert_true(
     bridge_mbt.contains(
-      "pub fn useOptimistic(passthrough : State) -> UseOptimisticResult {\n  use_optimistic(passthrough)\n}",
+      "pub fn[State] useOptimistic(passthrough : State) -> UseOptimisticResult {\n  use_optimistic(passthrough)\n}",
     ),
   )
   assert_true(
     bridge_mbt.contains(
       // The scaffold surface takes a MoonBit async fn directly: the
       // wrapper glues it back into a promise-returning JS callback.
-      "pub fn useActionState(action : async (State) -> State raise, initialState : State, permalink : String?) -> UseActionStateResult {\n  use_action_state(fn(__ts_mbt_cb_a0) { Promise::from_async(async fn() raise { action(__ts_mbt_cb_a0) }) }, initialState, permalink)\n}",
+      "pub fn[State] useActionState(action : async (State) -> State raise, initialState : State, permalink : String?) -> UseActionStateResult {\n  use_action_state(fn(__ts_mbt_cb_a0) { Promise::from_async(async fn() raise { action(__ts_mbt_cb_a0) }) }, initialState, permalink)\n}",
     ),
   )
   assert_true(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))

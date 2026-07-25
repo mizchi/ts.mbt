@@ -102,7 +102,7 @@ test "parser: emit MoonBit declarations lowers tuple fields to arrays" {
 }
 
 ///|
-test "parser: emit MoonBit declarations widens discarded function type parameters" {
+test "parser: emit MoonBit declarations preserves function type parameters" {
   let src =
     #|declare function identity<T>(value: T): T;
     #|declare function pair<K, V>(key: K, value: V): void;
@@ -112,13 +112,9 @@ test "parser: emit MoonBit declarations widens discarded function type parameter
       return
     }
   }
+  assert_true(actual.contains("declare pub fn[T] identity(value : T) -> T"))
   assert_true(
-    actual.contains("declare pub fn identity(value : JSValue) -> JSValue"),
-  )
-  assert_true(
-    actual.contains(
-      "declare pub fn pair(key : JSValue, value : JSValue) -> Unit",
-    ),
+    actual.contains("declare pub fn[K, V] pair(key : K, value : V) -> Unit"),
   )
   assert_false(actual.contains("declare pub type T"))
   assert_false(actual.contains("declare pub type K"))

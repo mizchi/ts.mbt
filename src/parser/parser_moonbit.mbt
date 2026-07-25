@@ -1381,6 +1381,28 @@ fn import_decl_to_moonbit(
   state : MoonBitDeclState,
   import_ : @ast.TsImport,
 ) -> String {
+  // Generic binders survive on the decl surface — mirror of the FFI
+  // side's `ffi_generic_fn_facade`. Binders must be inferrable from
+  // ARGUMENTS; return-only binders keep the widened form.
+  let fn_name = sanitize_value_identifier(import_.name, "generated_fn")
+  if import_.type_params.length() > 0 {
+    let saved = push_local_type_params(state, import_.type_params)
+    let params : Array[String] = []
+    for item in import_.params {
+      let (name, type_) = item
+      let param_name = sanitize_value_identifier(name, "arg")
+      let param_type = moonbit_type_name(state, type_)
+      params.push("\{param_name} : \{param_type}")
+    }
+    let return_type = moonbit_type_name(state, import_.return_type)
+    restore_local_type_params(state, saved)
+    let params_str = params.join(", ")
+    match moonbit_kept_fn_prefix(import_.type_params, params_str, return_type) {
+      Some(fn_prefix) =>
+        return "///|\ndeclare pub \{fn_prefix} \{fn_name}(\{params_str}) -> \{return_type}"
+      None => ()
+    }
+  }
   let params : Array[String] = []
   for item in import_.params {
     let (name, type_) = item
@@ -1389,9 +1411,36 @@ fn import_decl_to_moonbit(
     params.push("\{param_name} : \{param_type}")
   }
   let return_type = moonbit_type_name(state, import_.return_type)
-  let fn_name = sanitize_value_identifier(import_.name, "generated_fn")
   let params_str = params.join(", ")
   "///|\ndeclare pub fn \{fn_name}(\{params_str}) -> \{return_type}"
+}
+
+///|
+/// `fn[T, U]` prefix keeping the binders that surface in the rendered
+/// PARAMS ([4027] hard-errors on unused fn type parameters). Returns
+/// `None` — caller keeps the widened form — when no binder survives or
+/// when a binder appears ONLY in the return type (uninferrable at call
+/// sites; MoonBit would default it to Unit with a warning).
+fn moonbit_kept_fn_prefix(
+  type_params : Array[String],
+  rendered_params : String,
+  rendered_return : String,
+) -> String? {
+  let kept : Array[String] = []
+  for tp in type_params {
+    let sanitized = moonbit_sanitize_type_param_name(tp)
+    if moonbit_rendered_mentions_param(rendered_params, sanitized) {
+      if !kept.contains(tp) {
+        kept.push(tp)
+      }
+    } else if moonbit_rendered_mentions_param(rendered_return, sanitized) {
+      return None
+    }
+  }
+  if kept.length() == 0 {
+    return None
+  }
+  Some(moonbit_function_type_param_prefix(kept))
 }
 
 ///|
@@ -1406,22 +1455,40 @@ fn value_decl_to_moonbit(
 
 ///|
 fn func_decl_to_moonbit(state : MoonBitDeclState, func : @ast.TsFunc) -> String {
-  let params : Array[String] = []
-  let mut next_index = 0
-  for param in func.params {
-    let param_name = if param.name == "" {
-      let generated = "arg" + next_index.to_string()
-      next_index += 1
-      generated
-    } else {
-      param.name
-    }
-    let safe_name = sanitize_value_identifier(param_name, "arg")
-    let param_type = moonbit_type_name(state, param.type_)
-    params.push("\{safe_name} : \{param_type}")
-  }
-  let return_type = moonbit_type_name(state, func.return_type)
+  // Generic binders survive — mirror of `import_decl_to_moonbit` above.
   let fn_name = sanitize_value_identifier(func.name, "generated_fn")
+  fn render_params(out : Array[String]) -> Unit {
+    let mut next_index = 0
+    for param in func.params {
+      let param_name = if param.name == "" {
+        let generated = "arg" + next_index.to_string()
+        next_index += 1
+        generated
+      } else {
+        param.name
+      }
+      let safe_name = sanitize_value_identifier(param_name, "arg")
+      let param_type = moonbit_type_name(state, param.type_)
+      out.push("\{safe_name} : \{param_type}")
+    }
+  }
+
+  if func.type_params.length() > 0 {
+    let saved = push_local_type_params(state, func.type_params)
+    let params : Array[String] = []
+    render_params(params)
+    let return_type = moonbit_type_name(state, func.return_type)
+    restore_local_type_params(state, saved)
+    let params_str = params.join(", ")
+    match moonbit_kept_fn_prefix(func.type_params, params_str, return_type) {
+      Some(fn_prefix) =>
+        return "///|\ndeclare pub \{fn_prefix} \{fn_name}(\{params_str}) -> \{return_type}"
+      None => ()
+    }
+  }
+  let params : Array[String] = []
+  render_params(params)
+  let return_type = moonbit_type_name(state, func.return_type)
   let params_str = params.join(", ")
   "///|\ndeclare pub fn \{fn_name}(\{params_str}) -> \{return_type}"
 }

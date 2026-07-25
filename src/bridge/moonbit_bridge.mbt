@@ -1608,6 +1608,108 @@ fn add_bridge_public_wrappers(
       None => ()
     }
   }
+  // Generic facades (`declare pub fn[T] createContext(...)`): the
+  // camelCase naturalization above only parses non-generic decl lines.
+  // The facade wrapper in bridge.mbt is a plain `pub fn[T] create_context`
+  // (not an extern), so the natural-name wrapper delegates to it and the
+  // snake_case original demotes to package-private, mirroring the
+  // extern demotion in the non-generic flow.
+  for line_view in bridge_mbti.split("\n") {
+    let line = line_view.to_owned().trim().to_owned()
+    let generic_prefix = "declare pub fn["
+    if !line.has_prefix(generic_prefix) {
+      continue
+    }
+    let rest = line["declare pub ".length():].to_owned()
+    let binder_close = match rest.find("]") {
+      Some(index) => index
+      None => continue
+    }
+    let fn_prefix = rest[:binder_close + 1].to_owned()
+    let sig = rest[binder_close + 1:].to_owned().trim().to_owned()
+    let open = match sig.find("(") {
+      Some(index) => index
+      None => continue
+    }
+    let close = match bridge_find_matching_paren(sig, open) {
+      Some(index) => index
+      None => continue
+    }
+    let public_name = sig[:open].to_owned().trim().to_owned()
+    if public_name.contains("::") {
+      continue
+    }
+    let internal_name = bridge_value_fn_name(public_name)
+    if internal_name == public_name {
+      continue
+    }
+    let params_src = sig[open + 1:close].to_owned()
+    let after = sig[close + 1:].to_owned().trim().to_owned()
+    if !after.has_prefix("->") {
+      continue
+    }
+    let return_type = after[2:].to_owned().trim().to_owned()
+    if bridge_value_identifier_needs_suffix(public_name) {
+      continue
+    }
+    let facade_decl = "pub \{fn_prefix} \{internal_name}("
+    if !next_bridge_mbt.contains(facade_decl) {
+      continue
+    }
+    // Promise-returning callback params lower to MoonBit async fns on
+    // the public wrapper — same lowering as the non-generic flow.
+    let param_decls = parse_bridge_param_decls(params_src)
+    let arg_names : Array[String] = []
+    if params_src.trim() != "" {
+      for item in bridge_split_top_level_commas(params_src) {
+        if item == "" {
+          continue
+        }
+        match item.find(":") {
+          Some(index) =>
+            arg_names.push(item[:index].to_owned().trim().to_owned())
+          None => arg_names.push(item)
+        }
+      }
+    }
+    let call_args : Array[String] = []
+    for i, arg_name in arg_names {
+      let type_name = if i < param_decls.length() {
+        param_decls[i].type_name
+      } else {
+        ""
+      }
+      match @parser.moonbit_async_callback_lowering(type_name) {
+        Some(lowering) =>
+          call_args.push(
+            @parser.moonbit_async_callback_glue_expr(arg_name, lowering),
+          )
+        None => call_args.push(arg_name)
+      }
+    }
+    let public_params_src = match
+      bridge_lowered_async_callback_params_src(params_src) {
+      Some(lowered_src) => {
+        let old_decl = "declare pub \{fn_prefix} \{public_name}(\{params_src}) -> \{return_type}"
+        let new_decl = "declare pub \{fn_prefix} \{public_name}(\{lowered_src}) -> \{return_type}"
+        if next_bridge_mbti.contains(old_decl) {
+          next_bridge_mbti = next_bridge_mbti.replace(
+            old=old_decl,
+            new=new_decl,
+          )
+        }
+        lowered_src
+      }
+      None => params_src
+    }
+    next_bridge_mbt = next_bridge_mbt.replace(
+      old=facade_decl,
+      new="\{fn_prefix} \{internal_name}(",
+    )
+    wrappers.push(
+      "pub \{fn_prefix} \{public_name}(\{public_params_src}) -> \{return_type} {\n  \{internal_name}(\{call_args.join(", ")})\n}",
+    )
+  }
   let helpers : Array[String] = []
   if used_option_return_wrap &&
     !next_bridge_mbt.contains("fn[T] __ts_mbt_wrap_option_return") {

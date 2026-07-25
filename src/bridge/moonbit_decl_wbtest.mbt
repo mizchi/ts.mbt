@@ -1632,7 +1632,7 @@ async test "bridge: emit MoonBit declarations from export-as-namespace assignmen
   assert_true(actual.contains("declare pub type Context"))
   assert_true(
     actual.contains(
-      "declare pub fn createContext(defaultValue : JSValue) -> Context",
+      "declare pub fn[T] createContext(defaultValue : T) -> Context[T]",
     ),
   )
   assert_true(actual.contains("declare pub fn get_default() -> JSValue"))
@@ -1654,9 +1654,7 @@ async test "bridge: emit MoonBit declarations from export-as-namespace ambient m
   assert_true(actual.contains("declare pub fn get_version() -> String"))
   assert_true(actual.contains("declare pub type Component"))
   assert_true(
-    actual.contains(
-      "declare pub fn useContext(context : Context[JSValue]) -> JSValue",
-    ),
+    actual.contains("declare pub fn[T] useContext(context : Context[T]) -> T"),
   )
 }
 
@@ -1833,12 +1831,12 @@ async test "bridge: emit MoonBit declarations from export-as-namespace hook tupl
   assert_true(actual.contains("/// isPending : Bool"))
   assert_true(
     actual.contains(
-      "declare pub fn useState(initialState : JSValue) -> UseStateResult",
+      "declare pub fn[S] useState(initialState : S) -> UseStateResult",
     ),
   )
   assert_true(
     actual.contains(
-      "declare pub fn useReducer(reducer : UseReducerReducerCallback, initialState : JSValue) -> UseReducerResult",
+      "declare pub fn[S] useReducer(reducer : UseReducerReducerCallback, initialState : S) -> UseReducerResult",
     ),
   )
   assert_true(
@@ -1846,14 +1844,14 @@ async test "bridge: emit MoonBit declarations from export-as-namespace hook tupl
   )
   assert_true(
     actual.contains(
-      "declare pub fn useOptimistic(passthrough : State) -> UseOptimisticResult",
+      "declare pub fn[State] useOptimistic(passthrough : State) -> UseOptimisticResult",
     ),
   )
   assert_true(
     actual.contains(
       // Structural promise-returning callback (the union return reads as
       // Promise[State]); no opaque synthesized name.
-      "declare pub fn useActionState(action : (State) -> Promise[State], initialState : State, permalink : String?) -> UseActionStateResult",
+      "declare pub fn[State] useActionState(action : (State) -> Promise[State], initialState : State, permalink : String?) -> UseActionStateResult",
     ),
   )
 }
@@ -2400,7 +2398,7 @@ async test "bridge: emit MoonBit declarations from imported object type alias me
   )
   assert_true(
     actual.contains(
-      "declare pub fn createApp(options : HonoOptions[JSValue]) -> Hono[JSValue]",
+      "declare pub fn[E] createApp(options : HonoOptions[E]) -> Hono[E]",
     ),
   )
 }
@@ -2586,12 +2584,10 @@ async test "bridge: recursive type alias overload wrappers do not overflow" {
       return
     }
   }
-  assert_true(
-    actual.contains("declare pub fn format(value : JSValue) -> Format"),
-  )
+  assert_true(actual.contains("declare pub fn[T] format(value : T) -> Format"))
   assert_true(
     actual.contains(
-      "declare pub fn format_t_string_optional(value : JSValue, fallback : String?) -> Format",
+      "declare pub fn[T] format_t_string_optional(value : T, fallback : String?) -> Format",
     ),
   )
 }

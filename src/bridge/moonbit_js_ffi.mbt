@@ -4193,19 +4193,109 @@ fn ffi_callable_value_call_args_with_names(
 }
 
 ///|
+/// Generic top-level function facade. MoonBit forbids generic externs,
+/// so `declare function produce<Base>(base: Base, ...): Base` used to
+/// render its binders as opaque external types (immer's `Base`, lodash's
+/// `TrapAny`) — typed at the boundary but inexpressible at call sites.
+/// The facade keeps the binders on a pure-MoonBit wrapper over a
+/// monomorphic JSValue extern (the same split generic METHODS use);
+/// binders that never surface in the rendered signature are dropped
+/// ([4027]), and an all-dropped set falls back to the widened form.
+fn ffi_generic_fn_facade(
+  state : MoonBitJsFfiState,
+  fn_name : String,
+  binding_target : String,
+  type_params : Array[String],
+  param_names : Array[String],
+  param_types : Array[@ast.TsType],
+  return_type : @ast.TsType,
+  direct_module_spec? : String? = None,
+) -> String? {
+  if type_params.length() == 0 {
+    return None
+  }
+  let saved = ffi_push_local_type_params(state, type_params)
+  let rendered_params : Array[String] = []
+  for i, type_ in param_types {
+    rendered_params.push(param_names[i] + " : " + ffi_type_name(state, type_))
+  }
+  let rendered_return = ffi_type_name(state, return_type)
+  ffi_restore_local_type_params(state, saved)
+  // Binders must be inferrable from ARGUMENTS: one that only surfaces in
+  // the return (react's `createRef<T>(): RefObject<T>`) would force an
+  // annotation on every call (and silently default to Unit without one),
+  // so such signatures keep the widened form.
+  let rendered_params_surface = rendered_params.join(", ")
+  let kept : Array[String] = []
+  for tp in type_params {
+    let sanitized = @parser.moonbit_sanitize_type_param_name(tp)
+    if ffi_rendered_mentions_param(rendered_params_surface, sanitized) {
+      if !kept.contains(tp) {
+        kept.push(tp)
+      }
+    } else if ffi_rendered_mentions_param(rendered_return, sanitized) {
+      return None
+    }
+  }
+  if kept.length() == 0 {
+    return None
+  }
+  state.needs_js_any = true
+  let extern_name = "_" + fn_name + "_generic_extern_js"
+  let extern_params : Array[String] = []
+  let cast_args : Array[String] = []
+  for param_name in param_names {
+    extern_params.push("\{param_name} : JSValue")
+    cast_args.push("unsafeCast(\{param_name})")
+  }
+  let mut extern_decl = "extern \"js\" fn \{extern_name}(\{extern_params.join(", ")}) -> JSValue = \"\{binding_target}\""
+  match direct_module_spec {
+    Some(module_spec) =>
+      extern_decl = ffi_direct_module_decl(module_spec, extern_decl)
+    None => ()
+  }
+  let fn_prefix = ffi_function_type_param_prefix(kept)
+  let call_src = "\{extern_name}(\{cast_args.join(", ")})"
+  let body = if rendered_return == "Unit" {
+    "  ignore(\{call_src})"
+  } else {
+    "  unsafeCast(\{call_src})"
+  }
+  let wrapper_decl = "pub \{fn_prefix} \{fn_name}(\{rendered_params.join(", ")}) -> \{rendered_return} {\n\{body}\n}"
+  Some(extern_decl + "\n\n" + wrapper_decl)
+}
+
+///|
 fn ffi_import_decl_to_moonbit(
   state : MoonBitJsFfiState,
   import_ : @ast.TsImport,
 ) -> String {
   let params : Array[String] = []
+  let param_names : Array[String] = []
+  let param_types : Array[@ast.TsType] = []
   for item in import_.params {
     let (name, type_) = item
     let param_name = ffi_sanitize_identifier(name, "arg")
     let param_type = ffi_type_name(state, type_)
     params.push("\{param_name} : \{param_type}")
+    param_names.push(param_name)
+    param_types.push(type_)
   }
   let return_type = ffi_type_name(state, import_.return_type)
   let fn_name = ffi_value_fn_name(import_.name)
+  match
+    ffi_generic_fn_facade(
+      state,
+      fn_name,
+      ffi_binding_name(import_.name),
+      import_.type_params,
+      param_names,
+      param_types,
+      import_.return_type,
+    ) {
+    Some(facade) => return facade
+    None => ()
+  }
   let params_str = params.join(", ")
   "pub extern \"js\" fn \{fn_name}(\{params_str}) -> \{return_type} = \"\{ffi_binding_name(import_.name)}\""
 }
@@ -4218,14 +4308,32 @@ fn ffi_import_decl_to_moonbit_direct(
   module_spec : String,
 ) -> String {
   let params : Array[String] = []
+  let param_names : Array[String] = []
+  let param_types : Array[@ast.TsType] = []
   for item in import_.params {
     let (name, type_) = item
     let param_name = ffi_sanitize_identifier(name, "arg")
     let param_type = ffi_type_name(state, type_)
     params.push("\{param_name} : \{param_type}")
+    param_names.push(param_name)
+    param_types.push(type_)
   }
   let return_type = ffi_type_name(state, import_.return_type)
   let fn_name = ffi_value_fn_name(import_.name)
+  match
+    ffi_generic_fn_facade(
+      state,
+      fn_name,
+      runtime_export_name,
+      import_.type_params,
+      param_names,
+      param_types,
+      import_.return_type,
+      direct_module_spec=Some(module_spec),
+    ) {
+    Some(facade) => return facade
+    None => ()
+  }
   let params_str = params.join(", ")
   ffi_direct_module_decl(
     module_spec,
@@ -4280,6 +4388,8 @@ fn ffi_func_decl_to_moonbit(
   func : @ast.TsFunc,
 ) -> String {
   let params : Array[String] = []
+  let param_names : Array[String] = []
+  let param_types : Array[@ast.TsType] = []
   let mut next_index = 0
   for param in func.params {
     let param_name = if param.name == "" {
@@ -4292,9 +4402,24 @@ fn ffi_func_decl_to_moonbit(
     let safe_name = ffi_sanitize_identifier(param_name, "arg")
     let safe_type = ffi_type_name(state, param.type_)
     params.push("\{safe_name} : \{safe_type}")
+    param_names.push(safe_name)
+    param_types.push(param.type_)
   }
   let return_type = ffi_type_name(state, func.return_type)
   let fn_name = ffi_value_fn_name(func.name)
+  match
+    ffi_generic_fn_facade(
+      state,
+      fn_name,
+      ffi_binding_name(func.name),
+      func.type_params,
+      param_names,
+      param_types,
+      func.return_type,
+    ) {
+    Some(facade) => return facade
+    None => ()
+  }
   let params_str = params.join(", ")
   "pub extern \"js\" fn \{fn_name}(\{params_str}) -> \{return_type} = \"\{ffi_binding_name(func.name)}\""
 }
@@ -4307,6 +4432,8 @@ fn ffi_func_decl_to_moonbit_direct(
   module_spec : String,
 ) -> String {
   let params : Array[String] = []
+  let param_names : Array[String] = []
+  let param_types : Array[@ast.TsType] = []
   let mut next_index = 0
   for param in func.params {
     let param_name = if param.name == "" {
@@ -4319,9 +4446,25 @@ fn ffi_func_decl_to_moonbit_direct(
     let safe_name = ffi_sanitize_identifier(param_name, "arg")
     let safe_type = ffi_type_name(state, param.type_)
     params.push("\{safe_name} : \{safe_type}")
+    param_names.push(safe_name)
+    param_types.push(param.type_)
   }
   let return_type = ffi_type_name(state, func.return_type)
   let fn_name = ffi_value_fn_name(func.name)
+  match
+    ffi_generic_fn_facade(
+      state,
+      fn_name,
+      runtime_export_name,
+      func.type_params,
+      param_names,
+      param_types,
+      func.return_type,
+      direct_module_spec=Some(module_spec),
+    ) {
+    Some(facade) => return facade
+    None => ()
+  }
   let params_str = params.join(", ")
   ffi_direct_module_decl(
     module_spec,

@@ -3604,7 +3604,12 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace assignme
   }
   assert_true(
     bundle.ffi_mbt.contains(
-      "extern \"js\" fn create_context(defaultValue : JSValue) -> Context[JSValue] = \"__ts_mbt_create_context\"",
+      "extern \"js\" fn _create_context_generic_extern_js(defaultValue : JSValue) -> JSValue = \"__ts_mbt_create_context\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub fn[T] create_context(defaultValue : T) -> Context[T] {",
     ),
   )
   assert_true(bundle.ffi_mbt.contains("pub(all) struct Context[T] {"))
@@ -3882,12 +3887,12 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace hook tup
   assert_true(bundle.ffi_mbt.contains("  isPending : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn use_state(initialState : JSValue) -> UseStateResult = \"__ts_mbt_use_state\"",
+      "pub fn[S] use_state(initialState : S) -> UseStateResult {",
     ),
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn use_reducer(reducer : UseReducerReducerCallback, initialState : JSValue) -> UseReducerResult = \"__ts_mbt_use_reducer\"",
+      "pub fn[S] use_reducer(reducer : UseReducerReducerCallback, initialState : S) -> UseReducerResult {",
     ),
   )
   assert_true(
@@ -3897,7 +3902,7 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace hook tup
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn use_optimistic(passthrough : State) -> UseOptimisticResult = \"__ts_mbt_use_optimistic\"",
+      "pub fn[State] use_optimistic(passthrough : State) -> UseOptimisticResult {",
     ),
   )
   assert_true(
@@ -3905,7 +3910,7 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace hook tup
       // The `State | Promise<State>` action return normalizes to
       // Promise[State], so the callback keeps its structural form (the
       // package wrapper pass then lowers it to a MoonBit async fn).
-      "pub extern \"js\" fn use_action_state(action : (State) -> Promise[State], initialState : State, permalink : String?) -> UseActionStateResult = \"__ts_mbt_use_action_state\"",
+      "pub fn[State] use_action_state(action : (State) -> Promise[State], initialState : State, permalink : String?) -> UseActionStateResult {",
     ),
   )
   assert_true(
@@ -4498,7 +4503,7 @@ async test "bridge: emit MoonBit JS FFI bundle from imported object type alias m
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "extern \"js\" fn create_app(options : HonoOptions[JSValue]) -> Hono[JSValue] = \"__ts_mbt_create_app\"",
+      "pub fn[E] create_app(options : HonoOptions[E]) -> Hono[E] {",
     ),
   )
 }

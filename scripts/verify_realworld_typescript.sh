@@ -325,29 +325,29 @@ jsvalue_function_budget() {
     dotenv) printf '0\n' ;;
     ignore) printf '1\n' ;;
     hono) printf '9\n' ;;
-    zod) printf '484\n' ;;
+    zod) printf '480\n' ;;
     date-fns) printf '22\n' ;;
     colorette) printf '1\n' ;;
     magic-string) printf '0\n' ;;
     source-map) printf '8\n' ;;
-    valibot) printf '295\n' ;;
-    immer) printf '20\n' ;;
+    valibot) printf '291\n' ;;
+    immer) printf '19\n' ;;
     execa) printf '5\n' ;;
-    preact) printf '7\n' ;;
-    react) printf '45\n' ;;
+    preact) printf '5\n' ;;
+    react) printf '36\n' ;;
     ms) printf '1\n' ;;
     nanoid) printf '0\n' ;;
-    dayjs) printf '3\n' ;;
+    dayjs) printf '2\n' ;;
     qs) printf '2\n' ;;
     yaml) printf '62\n' ;;
-    superstruct) printf '56\n' ;;
+    superstruct) printf '43\n' ;;
     eventemitter3) printf '0\n' ;;
     mitt) printf '1\n' ;;
     marked) printf '13\n' ;;
     semver) printf '33\n' ;;
     picomatch) printf '5\n' ;;
     deepmerge) printf '4\n' ;;
-    axios) printf '39\n' ;;
+    axios) printf '38\n' ;;
     commander) printf '23\n' ;;
     debug) printf '5\n' ;;
     chokidar) printf '3\n' ;;
@@ -358,7 +358,7 @@ jsvalue_function_budget() {
     ws) printf '7\n' ;;
     vitest/runtime) printf '7\n' ;;
     playwright) printf '201\n' ;;
-    react-router) printf '79\n' ;;
+    react-router) printf '75\n' ;;
     jose) printf '46\n' ;;
     express) printf '6\n' ;;
     glob) printf '7\n' ;;
@@ -416,7 +416,7 @@ jsvalue_cause_budget() {
     # from the conditional/mapped bucket into callback/function (their
     # rendered `Promise[...]` now matches the callback pattern first).
     hono) printf '98|18|10|28|6|28|8\n' ;;
-    zod) printf '1493|333|8|206|405|513|28\n' ;;
+    zod) printf '1490|333|8|205|405|511|28\n' ;;
     date-fns) printf '26|4|5|0|0|15|2\n' ;;
     colorette) printf '1|0|1|0|0|0|0\n' ;;
     magic-string) printf '0|0|0|0|0|0|0\n' ;;
@@ -427,23 +427,23 @@ jsvalue_cause_budget() {
     # ErrorMessageOf* enums, 140 of them) and `expects: null` -> JSNull
     # then removed another ~420 surface lines (unknown/any 1166 -> 504).
     valibot) printf '1437|504|23|11|23|830|46\n' ;;
-    immer) printf '35|6|10|4|5|4|6\n' ;;
+    immer) printf '34|6|9|4|5|4|6\n' ;;
     execa) printf '17|2|0|4|1|0|10\n' ;;
-    preact) printf '50|12|1|4|14|19|0\n' ;;
-    react) printf '149|41|7|26|34|35|6\n' ;;
+    preact) printf '49|12|1|4|15|17|0\n' ;;
+    react) printf '143|41|6|25|33|32|6\n' ;;
     ms) printf '1|0|0|0|0|0|1\n' ;;
     nanoid) printf '0|0|0|0|0|0|0\n' ;;
-    dayjs) printf '3|0|1|0|1|0|1\n' ;;
+    dayjs) printf '2|0|1|0|0|0|1\n' ;;
     qs) printf '8|2|1|0|0|0|5\n' ;;
     yaml) printf '168|32|7|81|0|20|28\n' ;;
-    superstruct) printf '82|4|0|14|0|59|5\n' ;;
+    superstruct) printf '78|4|5|14|0|49|6\n' ;;
     eventemitter3) printf '16|0|0|0|5|6|5\n' ;;
     mitt) printf '10|4|0|2|3|1|0\n' ;;
     marked) printf '48|12|0|0|16|13|7\n' ;;
     semver) printf '33|0|30|2|0|0|1\n' ;;
     picomatch) printf '11|6|4|0|0|0|1\n' ;;
     deepmerge) printf '14|8|0|2|0|3|1\n' ;;
-    axios) printf '170|60|4|21|0|81|4\n' ;;
+    axios) printf '169|60|4|21|0|80|4\n' ;;
     commander) printf '24|0|0|9|2|3|10\n' ;;
     debug) printf '17|4|0|1|0|12|0\n' ;;
     chokidar) printf '3|0|0|1|0|0|2\n' ;;
@@ -457,7 +457,7 @@ jsvalue_cause_budget() {
     # moved from the tuple/array bucket into callback/function (the
     # lowered wrapper line matches the callback pattern first).
     playwright) printf '865|302|0|67|299|195|2\n' ;;
-    react-router) printf '378|188|21|29|45|77|18\n' ;;
+    react-router) printf '374|188|19|29|45|75|18\n' ;;
     jose) printf '67|18|1|15|11|10|12\n' ;;
     express) printf '6|0|0|0|0|2|4\n' ;;
     glob) printf '17|6|0|1|0|2|8\n' ;;
@@ -3655,7 +3655,7 @@ EOF
   local mbti="$app/src/bridges/state_action/bridge.mbti"
   # The lowered public surface + glue must be present in both modes, and
   # the interface must describe the lowered signature (not the raw one).
-  if ! grep -q "pub fn useStateAction(action : async (JSValue, JSValue) -> JSValue raise" "$bridge"; then
+  if ! grep -q "pub fn\\[S, P\\] useStateAction(action : async (S, P) -> S raise" "$bridge"; then
     echo "expected lowered async-callback wrapper in $mode bridge" >&2
     exit 1
   fi
@@ -3663,7 +3663,7 @@ EOF
     echo "expected from_async glue in $mode bridge" >&2
     exit 1
   fi
-  if ! grep -q "declare pub fn useStateAction(action : async (JSValue, JSValue) -> JSValue raise" "$mbti"; then
+  if ! grep -q "declare pub fn\\[S, P\\] useStateAction(action : async (S, P) -> S raise" "$mbti"; then
     echo "expected lowered async-callback signature in $mode bridge.mbti" >&2
     exit 1
   fi

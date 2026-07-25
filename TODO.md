@@ -2065,6 +2065,35 @@ Corpus (8 rows): playwright JSValue functions 191 -> 179, lodash
 surface). Top-level generic FUNCTIONS (`chain<T>(items)`) still widen
 — that path has no receiver to hang a getter on; recorded as open.
 
+Round 19 — generic top-level function facades. `declare function
+useContext<T>(context: Context<T>): T` used to render its binders as
+opaque external types (immer's `Base`, lodash's `TrapAny`) or widen
+them to JSValue. Top-level generic functions now keep their binders
+the same way generic METHODS do: a monomorphic JSValue extern plus a
+`pub fn[T]` wrapper that `%identity`-casts through it
+(`ffi_generic_fn_facade`, hooked into all four emitters — TsFunc and
+TsImport, name-binding and direct-module). The decl surface mirrors
+with a `declare pub fn[T]` prefix; the camelCase natural-name wrapper
+layer learned to parse generic decl lines (delegating wrapper +
+snake_case facade demotion) INCLUDING the async-callback lowering, so
+`useActionState<State>` surfaces as
+`fn[State] useActionState(action : async (State) -> State raise, ...)`.
+
+Inferrability guard: a binder that only surfaces in the RETURN type
+(react's `createRef<T>(): RefObject<T>`) bails to the widened form —
+keeping it would force an annotation on every call and silently
+default to Unit without one ([0013]); the react gate smoke caught
+exactly that. Binders must appear in a parameter position.
+
+Corpus effect (all budget deltas DOWN): react 45 -> 36 JSValue
+functions, superstruct 56 -> 43, react-router 79 -> 75, zod 484 ->
+480, valibot 295 -> 291, plus immer / preact / dayjs / axios singles.
+The async-callback app now runtime-verifies the typed facade end to
+end (`fn[S, P] useStateAction` -> dispatch -> onCommit -> rejection).
+Examples/gate markers updated (hono `fn[E] createApp`, react-types
+`fn[T] cloneElement` with an annotated receiver in the smokes,
+`fn[T, P] forwardRef`).
+
 Round 18 — zod natural end-to-end + JSValue read-side accessors.
 The zod flow already ran (chained validators `string().min(3)` /
 `number().int()` / `.optional()`, `loose_shape_of` + `object()`,
