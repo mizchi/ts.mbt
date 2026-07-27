@@ -16,6 +16,12 @@ fn wbtest_basename(path : String) -> String {
 }
 
 ///|
+test "types package hint rewrites scoped package names" {
+  assert_eq(types_package_hint("@scope/no-types"), "@types/scope__no-types")
+  assert_eq(types_package_hint("no-types"), "@types/no-types")
+}
+
+///|
 fn wbtest_tmp_neverthrow_like_root(name : String) -> String {
   "/tmp/ts_mbt_neverthrow_like_" + name
 }
