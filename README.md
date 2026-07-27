@@ -24,14 +24,16 @@ $ ls src/internal/generated/
 hono/  zod/  types__react/  ...
 ```
 
-MoonBit -> TypeScript (emit a build-backed `.d.ts` package from a MoonBit
-package):
+MoonBit -> TypeScript (build the current MoonBit package and prepare an npm
+publish directory):
 
 ```bash
 $ moon install mizchi/ts/cmd/mbt2ts
-$ mbt2ts --input mizchi/foo --out dist
-$ ls dist/
-index.js  package.json  AUTOLINK_DIAGNOSTICS.md  ...
+$ cd my-moonbit-library
+$ mbt2ts --pkg
+$ ls npm/
+bin/  index.js  index.d.ts  mtsc/  package.json  AUTOLINK_DIAGNOSTICS.md  ...
+$ cd npm && npm publish --access public
 ```
 
 End-to-end Hono walkthrough: [docs/quick-start.md](./docs/quick-start.md).
@@ -65,7 +67,7 @@ Install whichever direction(s) you need; each binary is independent.
 
 ```bash
 moon install mizchi/ts/cmd/ts2mbt   # TS  -> MoonBit (generate / vendor / scaffold)
-moon install mizchi/ts/cmd/mbt2ts   # MoonBit -> TS  (decl / scaffold / facade-scaffold)
+moon install mizchi/ts/cmd/mbt2ts   # MoonBit -> TS  (npm package / decl / scaffold)
 
 # Or install both binaries in one go
 moon install mizchi/ts/...
@@ -86,13 +88,18 @@ Bridge generation is split into two binaries, one per direction:
 - `ts2mbt` — TypeScript `.d.ts` / `.ts` entrypoint → MoonBit bridge package
   (`bridge.mbti`, `bridge.mbt`, `bridge.js`, `moon.pkg`).
 
-Each CLI exposes a high-level `--input ... --out ...` "do everything" flow
-plus low-level subcommands.
+`mbt2ts` has a project-oriented `--pkg` command for publishing and retains a
+lower-level `--input ... --out ...` flow for tooling that already has an
+interface. `ts2mbt` exposes a high-level `--input ... --out ...` flow plus
+low-level subcommands.
 
 ```bash
-# MoonBit -> TypeScript. Run `moon info` first so pkg.generated.mbti exists.
-# This creates temporary MoonBit glue code, runs `moon build --target js`,
-# and emits a TypeScript package backed by the built JS output.
+# MoonBit -> npm. `--pkg` runs `moon info`, uses the version in moon.mod,
+# builds facade glue with `moon build --target js`, and defaults to ./npm.
+mbt2ts --pkg
+cd npm && npm publish --access public
+
+# Lower-level MoonBit -> TypeScript flow for an existing interface.
 mbt2ts --input mizchi/foo --out dist
 
 # TypeScript -> MoonBit. For bare npm-style inputs, the runtime module spec
@@ -108,9 +115,27 @@ ts2mbt --input path/to/entry.d.ts --module-spec /runtime/module.js --out dist
 ts2mbt --input neverthrow --out dist --diagnostics dist/diagnostics.md --strict
 ```
 
-The MoonBit -> TypeScript unified path emits facade glue by default, builds
-it with `moon build --target js`, and copies the built JS to `index.js`;
-pass `--no-facade` to emit only top-level free-function glue.
+`mbt2ts --pkg` emits facade glue by default, builds it with `moon build
+--target js`, and copies the built JS to `index.js`; pass `--no-facade` to
+emit only top-level free-function glue. Every library subdirectory containing
+`moon.pkg` is emitted as an npm subpath export: for example `src/mtsc` becomes
+`@scope/package/mtsc`. Command packages are not library subpath exports; a
+package that defines `main` is compiled to `bin/<command>.js` and registered in
+`package.json#bin` instead; paths excluded by `moon.mod` are kept private. It
+takes the package version, description, license,
+and repository from `moon.mod` / `moon.mod.json`, copies an optional project
+`README` and license file, and adds a `files` allowlist so `npm/` can be
+published as generated.
+
+`--pkg` options:
+
+- `--out <dir>` — override `./npm`. Relative paths remain relative to the
+  MoonBit module root.
+- `--import-rewrites <json>` — map MoonBit package imports to public
+  TypeScript specifiers.
+- `--strict` / `--no-strict` — fail when generated autolink diagnostics report
+  omitted members.
+- `--no-facade` — generate only top-level free-function glue.
 
 Shared `--input` flow flags:
 
@@ -138,10 +163,13 @@ The following are the supported integration APIs for the current `0.4.x`
 series. Treat generated files as outputs: consume their documented package
 surface, rather than importing temporary MoonBit glue or build artifacts.
 
-- **MoonBit → TypeScript CLI:** `mbt2ts --input <pkg-or-mbti> --out <dir>` is
-  the canonical package-generation command. It generates facade wrappers by
-  default; `--no-facade`, `--strict`, `--diagnostics`, and
-  `--import-rewrites` are its supported controls. The named subcommands remain
+- **MoonBit → npm CLI:** `mbt2ts --pkg` is the canonical publish workflow. It
+  discovers the enclosing module, runs `moon info`, and generates `npm/` with
+  the manifest version, root and library-submodule npm exports, JS, and `.d.ts`
+  files. Packages with `main` are npm `bin` commands rather than subpath
+  exports. `--out`, `--no-facade`, `--strict`, and `--import-rewrites` are
+  supported controls.
+  `mbt2ts --input <pkg-or-mbti> --out <dir>` and the named subcommands remain
   lower-level stage APIs for tooling.
 - **Vite integration:** use `moonbit({ tsBridge: { generatorRoot, entries } })`
   to check a TypeScript module graph before generating a MoonBit bridge, and

@@ -530,6 +530,53 @@ async fn copy_binary_file(from : String, to : String) -> Bool {
 }
 
 ///|
+/// Publish a staged generated bridge file. The async filesystem's atomic
+/// rename is only available to the native backend today; the JS fallback
+/// writes the complete staging contents before removing that staging file.
+/// Keeping this target-specific boundary lets the bridge generator itself be
+/// built for JavaScript and therefore published through `mbt2ts --pkg`.
+#cfg(not(target="js"))
+async fn publish_staged_bridge_file(
+  stage_path : String,
+  output_path : String,
+) -> Bool {
+  let _ = @async_fs.rename(stage_path, output_path, replace=true) catch {
+    e => {
+      println("Write error: could not publish \{output_path}: \{e}")
+      return false
+    }
+  }
+  true
+}
+
+///|
+#cfg(target="js")
+async fn publish_staged_bridge_file(
+  stage_path : String,
+  output_path : String,
+) -> Bool {
+  let bytes = @fs.read_file(stage_path) catch {
+    e => {
+      println("Write error: could not read staged file \{stage_path}: \{e}")
+      return false
+    }
+  }
+  let _ = @fs.write_file(output_path, bytes, create=0o644) catch {
+    e => {
+      println("Write error: could not publish \{output_path}: \{e}")
+      return false
+    }
+  }
+  let _ = @fs.remove(stage_path) catch {
+    e => {
+      println("Write error: could not remove staged file \{stage_path}: \{e}")
+      return false
+    }
+  }
+  true
+}
+
+///|
 async fn remove_moonbit_js_glue_dir(path : String) -> Unit {
   let _ = @fs.rmdir(path, recursive=true) catch { _ => () }
 }
@@ -1242,11 +1289,8 @@ pub async fn emit_moonbit_bridge_package(
       bridge_package_stage_file_name(name),
     )
     let output_path = join_output_path(output_dir, name)
-    let _ = @async_fs.rename(stage_path, output_path, replace=true) catch {
-      e => {
-        println("Write error: could not publish \{output_path}: \{e}")
-        return false
-      }
+    if !publish_staged_bridge_file(stage_path, output_path) {
+      return false
     }
   }
   // MoonBit now uses the DSL manifest. Remove the legacy JSON manifest only
@@ -1988,9 +2032,50 @@ fn bridge_package_stage_file_name(name : String) -> String {
 
 ///|
 fn string_to_bytes(s : String) -> Bytes {
+  // MoonBit strings are indexed by UTF-16 code units. Generated source can
+  // contain documentation and string literals outside ASCII, so truncating a
+  // unit to its low byte produces malformed JavaScript and declaration files.
   let arr : Array[Byte] = []
-  for i = 0; i < s.length(); i = i + 1 {
-    arr.push((s[i].to_int() & 0xFF).to_byte())
+  let mut i = 0
+  while i < s.length() {
+    let unit = s[i].to_int()
+    if unit < 0x80 {
+      arr.push(unit.to_byte())
+      i += 1
+    } else if unit < 0x800 {
+      arr.push(((unit >> 6) | 0xC0).to_byte())
+      arr.push(((unit & 0x3F) | 0x80).to_byte())
+      i += 1
+    } else if unit >= 0xD800 && unit < 0xDC00 {
+      if i + 1 < s.length() {
+        let low = s[i + 1].to_int()
+        if low >= 0xDC00 && low < 0xE000 {
+          let code_point = (((unit - 0xD800) << 10) | (low - 0xDC00)) + 0x10000
+          arr.push(((code_point >> 18) | 0xF0).to_byte())
+          arr.push((((code_point >> 12) & 0x3F) | 0x80).to_byte())
+          arr.push((((code_point >> 6) & 0x3F) | 0x80).to_byte())
+          arr.push(((code_point & 0x3F) | 0x80).to_byte())
+          i += 2
+          continue
+        }
+      }
+      // Unpaired high surrogate: encode the Unicode replacement character.
+      arr.push((0xEF : Int).to_byte())
+      arr.push((0xBF : Int).to_byte())
+      arr.push((0xBD : Int).to_byte())
+      i += 1
+    } else if unit >= 0xDC00 && unit < 0xE000 {
+      // Stray low surrogate: encode the Unicode replacement character.
+      arr.push((0xEF : Int).to_byte())
+      arr.push((0xBF : Int).to_byte())
+      arr.push((0xBD : Int).to_byte())
+      i += 1
+    } else {
+      arr.push(((unit >> 12) | 0xE0).to_byte())
+      arr.push((((unit >> 6) & 0x3F) | 0x80).to_byte())
+      arr.push(((unit & 0x3F) | 0x80).to_byte())
+      i += 1
+    }
   }
   Bytes::from_array(arr)
 }
