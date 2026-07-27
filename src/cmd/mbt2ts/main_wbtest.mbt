@@ -3,6 +3,10 @@ test "mbt2ts keeps the unified package generator as its public CLI contract" {
   let help = mbt2ts_help_lines()
   assert_eq(
     help[0],
+    "  --pkg [--out <dir>] [--strict] [--no-facade] [--import-rewrites <json>] Build current MoonBit library packages and write an npm-publishable package to ./npm",
+  )
+  assert_eq(
+    help[1],
     "  --input <pkg-or-mbti> --out <dir> [--diagnostics <path>] [--strict] [--no-facade] [--import-rewrites <json>] Generate a complete build-backed TypeScript package from a MoonBit pkg.generated.mbti",
   )
   assert_true(
