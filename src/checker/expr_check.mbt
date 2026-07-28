@@ -12127,7 +12127,7 @@ fn interface_method_arity_reliable(
     return false
   }
   match sig_ty {
-    Some(Func(ps, _)) => {
+    Some(Func(ps, _)) | Some(CallableMeta(Func(ps, _), _)) => {
       for p in ps {
         if p is Rest(_) {
           return false
@@ -25886,6 +25886,22 @@ fn check_duplicate_index_signatures(
 fn member_name_duplicates(
   fields : Array[(String, @ast.TsType)],
 ) -> Array[String] {
+  fn is_method_type(type_ : @ast.TsType) -> Bool {
+    match type_ {
+      // Parameter optionality is carried outside the callable's semantic
+      // shape. It must not turn `foo(x?, y?)` overloads into duplicate
+      // property declarations.
+      CallableMeta(inner, _) => is_method_type(inner)
+      Func(_, _) | GenericFunc(_, _, _) => true
+      // Optional methods wrap as `Func | Undefined`
+      // (`send?(...): boolean` overloads in @types/node's Process) —
+      // they are overloads, not duplicate properties.
+      Union([Func(_, _), Undefined]) | Union([Undefined, Func(_, _)]) => true
+      Union([CallableMeta(_, _), Undefined])
+      | Union([Undefined, CallableMeta(_, _)]) => true
+      _ => false
+    }
+  }
   let count : Map[String, Int] = {}
   let has_property : Map[String, Bool] = {}
   let order : Array[String] = []
@@ -25904,16 +25920,7 @@ fn member_name_duplicates(
         order.push(name)
       }
     }
-    let is_method = match f.1 {
-      Func(_, _) => true
-      // Optional methods wrap as `Func | Undefined`
-      // (`send?(...): boolean` overloads in @types/node's Process) —
-      // they are overloads, not duplicate properties.
-      Union([Func(_, _), Undefined]) | Union([Undefined, Func(_, _)]) => true
-      GenericFunc(_, _, _) => true
-      _ => false
-    }
-    if !is_method {
+    if !is_method_type(f.1) {
       has_property[name] = true
     }
   }
@@ -25968,6 +25975,8 @@ fn collect_type_dup_issues(
       }
       collect_type_dup_issues(ret, label, issues)
     }
+    CallableMeta(inner, _) | GenericFunc(_, _, inner) =>
+      collect_type_dup_issues(inner, label, issues)
     Union(ms) | Intersection(ms) =>
       for m in ms {
         collect_type_dup_issues(m, label, issues)

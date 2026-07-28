@@ -820,13 +820,15 @@ extern "js" fn realworld_hono_roundtrip(app : Hono[JSValue, JSValue, JSValue]) -
 fn realworld_hono_handler(
   c : Context[JSValue, JSValue, JSValue],
 ) -> Response {
-  c.text("hello from moonbit", None, None)
+  unsafeCast(c.text(unsafeCast("hello from moonbit"), None, None))
 }
 
 fn realworld_hono_async_handler(
   c : Context[JSValue, JSValue, JSValue],
 ) -> Promise[Response] {
-  realworld_hono_resolve(c.text("async moonbit", None, None))
+  realworld_hono_resolve(
+    unsafeCast(c.text(unsafeCast("async moonbit"), None, None)),
+  )
 }
 
 fn realworld_hono_mw(
@@ -840,7 +842,13 @@ fn realworld_hono_mw(
 fn realworld_hono_mw_handler(
   c : Context[JSValue, JSValue, JSValue],
 ) -> Response {
-  c.text(realworld_hono_str(c.get(realworld_hono_key("who"))), None, None)
+  unsafeCast(
+    c.text(
+      unsafeCast(realworld_hono_str(c.get(realworld_hono_key("who")))),
+      None,
+      None,
+    ),
+  )
 }
 
 test "real-world hono bridge smoke" {
@@ -1720,7 +1728,7 @@ extern "js" fn realworld_hono_options() -> @sut.HonoOptions[@sut.Env] =
 fn realworld_hono_handler(
   c : @sut.Context[@sut.JSValue, @sut.JSValue, @sut.JSValue],
 ) -> @sut.Response {
-  c.text("hello from moonbit", None, None)
+  unsafeCast(c.text(unsafeCast("hello from moonbit"), None, None))
 }
 
 fn main {
@@ -3123,7 +3131,7 @@ extern "js" fn smoke_response_status(res : @hono.JSValue) -> Int =
   #| (res) => res.status
 
 fn smoke_hono_handler(c : @hono.Context[@hono.JSValue, @hono.JSValue, @hono.JSValue]) -> @hono.Response {
-  c.text("async ok", None, None)
+  unsafeCast(c.text(unsafeCast("async ok"), None, None))
 }
 
 async fn main {

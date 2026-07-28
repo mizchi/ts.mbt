@@ -19,11 +19,15 @@ extern "js" fn make_serve_options(
 extern "js" fn smoke_exit_ok() -> Unit =
   #| () => { console.log("ok"); process.exit(0); }
 
+fn[A, B] smoke_unsafe_cast(value : A) -> B = "%identity"
+
 fn main {
   let app : @sut.Hono[@sut.JSValue, @sut.JSValue, @sut.JSValue] = @sut.new_hono(
     None,
   )
-  let _ = app.get("/", fn(c) { c.text("hello", None, None) })
+  let _ = app.get("/", fn(c) {
+    smoke_unsafe_cast(c.text(smoke_unsafe_cast("hello"), None, None))
+  })
   let opts = make_serve_options(app, 0)
   let _ = @sut_node_server.serve(opts, Some(fn(_info) { smoke_exit_ok() }))
 }

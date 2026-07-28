@@ -3358,6 +3358,10 @@ fn ffi_struct_field_is_call_signature(
   }
   match field_type {
     Func(_, _) => true
+    CallableMeta(inner, _) =>
+      ffi_struct_field_is_call_signature(field_name, inner)
+    GenericFunc(_, _, inner) =>
+      ffi_struct_field_is_call_signature(field_name, inner)
     _ => false
   }
 }
@@ -4834,6 +4838,79 @@ fn ffi_class_method_decl_to_moonbit(
 }
 
 ///|
+/// Resolve a callable interface type to its call signature. This is kept at
+/// the FFI boundary because `TextRespond`-style aliases are runtime function
+/// properties even though their declaration names look like ordinary object
+/// types to MoonBit.
+fn ffi_callable_interface_signature(
+  interfaces : Array[@ast.TsInterface],
+  type_ : @ast.TsType,
+) -> @ast.TsType? {
+  let name = match type_ {
+    Named(n) | Applied(n, _) => n
+    _ => return None
+  }
+  let target_name = ffi_type_identifier(name, "OpaqueType")
+  for iface in interfaces {
+    if ffi_type_identifier(iface.name, "OpaqueType") != target_name {
+      continue
+    }
+    for field in iface.fields {
+      if ffi_struct_field_is_call_signature(field.0, field.1) {
+        return Some(field.1)
+      }
+    }
+  }
+  None
+}
+
+///|
+/// Generate a call-shaped convenience method for a class property whose
+/// declared type is callable. TypeScript libraries commonly expose bound
+/// methods as fields (`request: (input, init?) => Response`); keeping only a
+/// getter forces MoonBit callers to extract a closure and loses the natural
+/// `client.request(...)` API.
+fn ffi_class_callable_property_method_decl_to_moonbit(
+  state : MoonBitJsFfiState,
+  class_ : @ast.TsClassDecl,
+  class_property : @ast.TsClassPropertyDecl,
+  interfaces : Array[@ast.TsInterface],
+) -> String? {
+  if class_property.is_static {
+    return None
+  }
+  let preserve = ffi_should_preserve_class_type_params(class_)
+  let type_params = if preserve { class_.type_params } else { [] }
+  let local_type_param_len = ffi_push_local_type_params(state, type_params)
+  let direct = ffi_function_field_method_decl(
+    state,
+    ffi_class_type_name(class_.name),
+    type_params,
+    ffi_value_fn_name(class_property.name),
+    class_property.name,
+    class_property.type_,
+  )
+  let result = match direct {
+    Some(decl) => Some(decl)
+    None =>
+      match ffi_callable_interface_signature(interfaces, class_property.type_) {
+        Some(signature) =>
+          ffi_function_field_method_decl(
+            state,
+            ffi_class_type_name(class_.name),
+            type_params,
+            ffi_value_fn_name(class_property.name),
+            class_property.name,
+            signature,
+          )
+        None => None
+      }
+  }
+  ffi_restore_local_type_params(state, local_type_param_len)
+  result
+}
+
+///|
 fn ffi_class_property_getter_decl_to_moonbit(
   state : MoonBitJsFfiState,
   class_ : @ast.TsClassDecl,
@@ -6259,6 +6336,35 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
           )
         None => ()
       }
+      // A callable property is a bound method in many `.d.ts` APIs
+      // (`request: (...) => Response`). Expose the natural method form in
+      // addition to the getter/setter surface, unless a declaration-style
+      // method with the same name already owns that API.
+      let has_declared_method = class_.methods
+        .iter()
+        .any(fn(class_method) {
+          class_method.name == class_property.name &&
+          class_method.is_static == class_property.is_static
+        })
+      if !has_declared_method {
+        match
+          ffi_class_callable_property_method_decl_to_moonbit(
+            state, class_, class_property, interfaces,
+          ) {
+          Some(decl) =>
+            push_unique_ffi_section(
+              seen_ffi_binding_names,
+              ffi_sections,
+              ffi_fn_decl_key(
+                ffi_to_snake_case(class_.name) +
+                "_" +
+                ffi_to_snake_case(class_property.name),
+              ),
+              decl,
+            )
+          None => ()
+        }
+      }
     }
     for class_method in class_.methods {
       push_unique_ffi_section(
@@ -7176,7 +7282,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         ),
       ),
     )
-    match value.type_ {
+    match callable_value_type {
       Func(params, return_type) =>
         if ffi_callable_value_should_emit_wrapper(state, params, return_type) {
           let binding_name = ffi_binding_name(value.name)

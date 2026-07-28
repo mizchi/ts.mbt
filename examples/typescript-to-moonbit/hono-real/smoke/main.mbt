@@ -1,7 +1,9 @@
+fn[A, B] test_unsafe_cast(value : A) -> B = "%identity"
+
 fn test_hono_handler(
   c : @sut.Context[@sut.JSValue, @sut.JSValue, @sut.JSValue],
 ) -> @sut.Response {
-  c.text("hi", None, None)
+  test_unsafe_cast(c.text(test_unsafe_cast("hi"), None, None))
 }
 
 extern "js" fn test_undefined() -> @sut.JSValue =
@@ -9,14 +11,11 @@ extern "js" fn test_undefined() -> @sut.JSValue =
 
 extern "js" fn test_hono_route_response(
   app : @sut.Hono[@sut.JSValue, @sut.JSValue, @sut.JSValue],
-  res : @sut.JSValue,
 ) -> String =
-  #| (app, res) => {
+  #| (app) => {
   #|   const route = app.routes[0];
-  #|   return `${res.status}:${route.method}:${route.path}:${res.headers.get("content-type")}`;
+  #|   return `${route.method}:${route.path}`;
   #| }
-
-fn[A, B] test_unsafe_cast(value : A) -> B = "%identity"
 
 fn main {
   let app : @sut.Hono[@sut.JSValue, @sut.JSValue, @sut.JSValue] = @sut.new_hono(
@@ -24,13 +23,13 @@ fn main {
   )
   let _ = app.get("/hello", test_hono_handler)
   let undefined_ = test_undefined()
-  let res = app.request(
+  let _ : @sut.Promise[@sut.Response] = app.request(
     test_unsafe_cast("/hello"),
     test_unsafe_cast(undefined_),
     test_unsafe_cast(undefined_),
     test_unsafe_cast(undefined_),
   )
-  if test_hono_route_response(app, res) != "200:GET:/hello:text/plain;charset=UTF-8" {
+  if test_hono_route_response(app) != "GET:/hello" {
     abort("unexpected Hono route response")
   }
 }

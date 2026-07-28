@@ -465,6 +465,22 @@ test "expr_check: same-name interface method overloads are not duplicates" {
 }
 
 ///|
+test "expr_check: optional interface method overloads are not duplicates" {
+  // Optional parameters keep callable source metadata, but remain legal
+  // overloads rather than repeated property declarations.
+  let src =
+    #|interface I {
+    #|  foo(x: number): void;
+    #|  foo(x: number, y?: number): void;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  for i in issues {
+    assert_true(!i.message.contains("duplicate identifier `foo`"))
+  }
+}
+
+///|
 test "expr_check: argument count mismatch on top-level function call" {
   let src =
     #|function add(a: number, b: number): number { return a + b; }
