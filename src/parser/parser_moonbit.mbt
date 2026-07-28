@@ -1107,7 +1107,7 @@ fn interface_function_field_method_decl(
   // `iface.method_type_params` (threaded here via `method_type_params~`);
   // inline object members carry it as `GenericFunc`.
   let (effective_type, declared_names) = match field_type {
-    @ast.TsType::GenericFunc(names, inner) => (inner, names)
+    @ast.TsType::GenericFunc(names, _, inner) => (inner, names)
     _ => (field_type, method_type_params)
   }
   let method_extra_type_params : Array[String] = []

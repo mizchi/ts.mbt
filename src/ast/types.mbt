@@ -47,14 +47,20 @@ pub(all) enum TsType {
   Struct(String, Array[(String, TsType)]) // name, fields (for codegen)
   Func(Array[TsType], TsType) // params, return
   // A function type that declares its own generic type parameters:
-  // `<S>(x: S) => T`. Wraps the underlying `Func` (or `Constructor`) and
-  // carries the bound type-parameter names so the checker can add them to
-  // scope. Type-parameter names are erased everywhere the function type's
+  // `<S extends X>(x: S) => T`. Wraps the underlying `Func` (or
+  // `Constructor`) and carries both the binder names and their constraints so
+  // the checker can add them to scope without losing the declared shape.
+  // Type-parameter names are erased everywhere the function type's
   // *value* shape matters (assignability, emit, bridge), so those consumers
   // peel the wrapper to the inner callable; only scope-aware checks read the
   // names. Kept as a wrapper (rather than a field on `Func`) so the pervasive
   // `Func(params, ret)` match sites stay unchanged.
-  GenericFunc(Array[String], TsType)
+  GenericFunc(Array[String], Array[(String, TsType)], TsType)
+  // Source-level optionality of callable parameters. `Func` and
+  // `Constructor` retain semantic `T | undefined` parameter types; this
+  // wrapper records which positions were written with `?` so a later union
+  // reduction can distinguish them from explicit `T | undefined` unions.
+  CallableMeta(TsType, Array[Bool])
   // Constructor type: `new (...args) => T` or `abstract new (...) => T`.
   // Stored separately from `Func` so utility passes (`ConstructorParameters`,
   // `InstanceType`) can pattern-match on the call form, and so a bridge
@@ -458,6 +464,9 @@ pub(all) struct TsParam {
   name : String
   binding : TsBinding?
   is_rest : Bool
+  // `x?: T` and `x: T | undefined` are semantically similar but retain
+  // distinct source-level arity rules in callable union reduction.
+  is_optional : Bool
   type_ : TsType
   default : TsExpr? // ()
 } derive(Debug)

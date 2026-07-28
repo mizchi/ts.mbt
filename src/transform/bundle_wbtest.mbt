@@ -532,6 +532,24 @@ test "dts: optional field round-trips to `x?: T` instead of `T | undefined`" {
 }
 
 ///|
+test "dts: preserves callable optional syntax and generic constraints" {
+  let src = "export type Callback = <T extends string>(value?: T) => T;\n" +
+    "export type Maker = new <U extends number>(value?: U) => U;\n" +
+    "export function optional(value?: string): void {}\n" +
+    "export function explicit(value: string | undefined): void {}\n"
+  let module_ = @parser.parse_module_from_source_with_const_values(src, {})
+  let dts = emit_entry_dts(
+    module_,
+    ["Callback", "Maker", "optional", "explicit"],
+    {},
+  )
+  assert_true(dts.contains("<T extends string>(arg0?: T) => T"))
+  assert_true(dts.contains("new <U extends number>(arg0?: U) => U"))
+  assert_true(dts.contains("function optional(value?: string)"))
+  assert_true(dts.contains("function explicit(value: string | undefined)"))
+}
+
+///|
 test "dts: infer marker prints as `infer T` (not `__tsmbt_infer<T>`)" {
   let src = "export type R<T> = T extends (...args: any) => infer Ret ? Ret : never;\n"
   let module_ = @parser.parse_module_from_source_with_const_values(src, {})

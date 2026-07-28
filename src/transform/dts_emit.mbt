@@ -287,7 +287,15 @@ fn emit_function_decl(buf : StringBuilder, f : @ast.TsFunc) -> Unit {
     if p.is_rest {
       buf.write_string("...")
     }
-    let (is_optional, ty) = unwrap_optional_field_type(p.type_)
+    // `TsParam.is_optional` records source syntax. Do not turn an explicit
+    // `x: T | undefined` into `x?: T` during declaration emission.
+    let (widened_optional, unwrapped_ty) = unwrap_optional_field_type(p.type_)
+    let is_optional = p.is_optional || p.default is Some(_)
+    let ty = if is_optional && widened_optional {
+      unwrapped_ty
+    } else {
+      p.type_
+    }
     buf.write_string(p.name)
     if is_optional && !p.is_rest {
       buf.write_string("?")
@@ -392,6 +400,69 @@ fn emit_type_params(buf : StringBuilder, params : Array[String]) -> Unit {
 /// Emit a `TsType` as TypeScript syntax. Handles every variant the
 /// parser produces, including conditional / mapped / index-access
 /// / template literal types — the modern type vocabulary.
+fn emit_callable_params(
+  buf : StringBuilder,
+  params : Array[@ast.TsType],
+  optional_params : Array[Bool],
+) -> Unit {
+  for i, p in params {
+    if i > 0 {
+      buf.write_string(", ")
+    }
+    let is_optional = i < optional_params.length() && optional_params[i]
+    let (widened_optional, unwrapped_ty) = unwrap_optional_field_type(p)
+    match p {
+      Rest(inner) => {
+        buf.write_string("...arg")
+        buf.write_string(i.to_string())
+        buf.write_string(": ")
+        emit_type(buf, inner)
+      }
+      _ => {
+        buf.write_string("arg")
+        buf.write_string(i.to_string())
+        if is_optional {
+          buf.write_string("?")
+        }
+        buf.write_string(": ")
+        emit_type(
+          buf,
+          if is_optional && widened_optional {
+            unwrapped_ty
+          } else {
+            p
+          },
+        )
+      }
+    }
+  }
+}
+
+///|
+fn emit_callable_type(
+  buf : StringBuilder,
+  type_params : Array[String],
+  type_param_bounds : Array[(String, @ast.TsType)],
+  params : Array[@ast.TsType],
+  optional_params : Array[Bool],
+  ret : @ast.TsType,
+  is_constructor : Bool,
+  is_abstract : Bool,
+) -> Unit {
+  if is_abstract {
+    buf.write_string("abstract ")
+  }
+  if is_constructor {
+    buf.write_string("new ")
+  }
+  emit_type_params_with_bounds(buf, type_params, type_param_bounds)
+  buf.write_string("(")
+  emit_callable_params(buf, params, optional_params)
+  buf.write_string(") => ")
+  emit_type(buf, ret)
+}
+
+///|
 fn emit_type(buf : StringBuilder, ty : @ast.TsType) -> Unit {
   match ty {
     NonPrimitiveObject => buf.write_string("object")
@@ -467,40 +538,79 @@ fn emit_type(buf : StringBuilder, ty : @ast.TsType) -> Unit {
         buf.write_string(" }")
       }
     Struct(name, _) => buf.write_string(name)
-    Func(params, ret) => {
-      buf.write_string("(")
-      for i, p in params {
-        if i > 0 {
-          buf.write_string(", ")
-        }
-        buf.write_string("arg")
-        buf.write_string(i.to_string())
-        buf.write_string(": ")
-        emit_type(buf, p)
-      }
-      buf.write_string(") => ")
-      emit_type(buf, ret)
-    }
-    // Emit the underlying callable; the generic binder prefix is dropped (as
-    // it was before the `GenericFunc` wrapper existed).
-    GenericFunc(_, inner) => emit_type(buf, inner)
-    Constructor(params, ret, is_abstract) => {
-      if is_abstract {
-        buf.write_string("abstract ")
-      }
-      buf.write_string("new (")
-      for i, p in params {
-        if i > 0 {
-          buf.write_string(", ")
-        }
-        buf.write_string("arg")
-        buf.write_string(i.to_string())
-        buf.write_string(": ")
-        emit_type(buf, p)
-      }
-      buf.write_string(") => ")
-      emit_type(buf, ret)
-    }
+    Func(params, ret) =>
+      emit_callable_type(buf, [], [], params, [], ret, false, false)
+    CallableMeta(Func(params, ret), optional_params) =>
+      emit_callable_type(
+        buf,
+        [],
+        [],
+        params,
+        optional_params,
+        ret,
+        false,
+        false,
+      )
+    Constructor(params, ret, is_abstract) =>
+      emit_callable_type(buf, [], [], params, [], ret, true, is_abstract)
+    CallableMeta(Constructor(params, ret, is_abstract), optional_params) =>
+      emit_callable_type(
+        buf,
+        [],
+        [],
+        params,
+        optional_params,
+        ret,
+        true,
+        is_abstract,
+      )
+    GenericFunc(type_params, type_param_bounds, Func(params, ret)) =>
+      emit_callable_type(
+        buf,
+        type_params,
+        type_param_bounds,
+        params,
+        [],
+        ret,
+        false,
+        false,
+      )
+    GenericFunc(
+      type_params,
+      type_param_bounds,
+      CallableMeta(Func(params, ret), optional_params)
+    ) =>
+      emit_callable_type(
+        buf, type_params, type_param_bounds, params, optional_params, ret, false,
+        false,
+      )
+    GenericFunc(
+      type_params,
+      type_param_bounds,
+      Constructor(params, ret, is_abstract)
+    ) =>
+      emit_callable_type(
+        buf,
+        type_params,
+        type_param_bounds,
+        params,
+        [],
+        ret,
+        true,
+        is_abstract,
+      )
+    GenericFunc(
+      type_params,
+      type_param_bounds,
+      CallableMeta(Constructor(params, ret, is_abstract), optional_params)
+    ) =>
+      emit_callable_type(
+        buf, type_params, type_param_bounds, params, optional_params, ret, true,
+        is_abstract,
+      )
+    // This wrapper normally contains a `Func` or `Constructor`. Preserve a
+    // non-callable fallback instead of failing declaration generation.
+    CallableMeta(inner, _) | GenericFunc(_, _, inner) => emit_type(buf, inner)
     Union(items) =>
       for i, it in items {
         if i > 0 {

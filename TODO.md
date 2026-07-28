@@ -2592,8 +2592,7 @@ signatures:
 Deferred: genericRestArity/Strict need tuple-arity inference from the
 handler parameter (`call<TS extends unknown[]>(handler: (...args: TS)
 => void, ...args: TS)` — expected count = 1 + handler params), which
-requires threading callee type-params into the arity checker;
-unionTypeReduction2 needs union call-signature reduction.
+requires threading callee type-params into the arity checker.
 Batch BO (+12 TP, TP 2323 / MISS 411) continued the small clusters:
 - TS2491: the left side of `for...in` is never a destructuring pattern,
   declaration or assignment form (for-inStatementsDestructuring/2/3/4,
@@ -2688,18 +2687,11 @@ parser768531 (regex/division ambiguity needs parser-fed lexer context).
 
 ### Design constraints / known dead ends (re-attempt only with design work)
 
-- `x?: T` and `x: T | undefined` are IDENTICAL post-parse (optionality is
-  widened into the type), so any rule needing to distinguish them
-  (unionTypeReduction2's TS2554) is blocked on a representation change.
 - The parser ERASES constrained type params to their bounds
   (`TS extends unknown[]` -> `Array(Unknown)`) in signature positions,
   making generic and non-generic spellings indistinguishable at check time
   (genericRestArity's variadic-handler shape). Un-erasing would also unlock
   constraint-carrying inference (wrappedAndRecursiveConstraints4).
-- Class computed METHOD keys erase to `<computed>`; symbol-keyed member
-  comparison needs the key expression retained (symbolProperty cluster,
-  TS2411 computed-property cluster).
-- Construct signatures erase their type-param lists at parse.
 - `moon check --deny-warn` fails on ~226 PRE-EXISTING deprecated-API
   warnings from toolchain drift; `moon test --target native` is the gate.
 - The `do-while` checker arm deliberately leaks body rebinds past the loop;

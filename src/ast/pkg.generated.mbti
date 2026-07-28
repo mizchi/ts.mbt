@@ -351,6 +351,7 @@ pub(all) struct TsParam {
   name : String
   binding : TsBinding?
   is_rest : Bool
+  is_optional : Bool
   type_ : TsType
   default : TsExpr?
 } derive(@debug.Debug)
@@ -432,7 +433,8 @@ pub(all) enum TsType {
   Object(Array[(TsType, TsType)])
   Struct(String, Array[(String, TsType)])
   Func(Array[TsType], TsType)
-  GenericFunc(Array[String], TsType)
+  GenericFunc(Array[String], Array[(String, TsType)], TsType)
+  CallableMeta(TsType, Array[Bool])
   Constructor(Array[TsType], TsType, Bool)
   Union(Array[TsType])
   Intersection(Array[TsType])
@@ -504,4 +506,3 @@ pub impl Show for TypedStmt
 // Type aliases
 
 // Traits
-

@@ -988,16 +988,19 @@ test "parser: parse interface method signature as function field" {
     iface.fields[1],
     (
       "printNode",
-      @ast.TsType::Func(
-        [
-          @ast.TsType::Named("EmitHint"),
-          @ast.TsType::Named("Node"),
-          @ast.TsType::Union([
-            @ast.TsType::Named("SourceFile"),
-            @ast.TsType::Undefined,
-          ]),
-        ],
-        String_,
+      @ast.TsType::CallableMeta(
+        @ast.TsType::Func(
+          [
+            @ast.TsType::Named("EmitHint"),
+            @ast.TsType::Named("Node"),
+            @ast.TsType::Union([
+              @ast.TsType::Named("SourceFile"),
+              @ast.TsType::Undefined,
+            ]),
+          ],
+          String_,
+        ),
+        [false, false, true],
       ),
     ),
   )
@@ -4269,8 +4272,59 @@ test "parser: parse generic function property type" {
   // (`<E>(expected: E) => void`) now lowers to `GenericFunc` carrying the
   // bound names, wrapping the underlying `Func`.
   match module_.interfaces[0].fields[0].1 {
-    GenericFunc(["E"], Func(params, Void)) => assert_eq(params.length(), 1)
+    GenericFunc(["E"], [], Func(params, Void)) => assert_eq(params.length(), 1)
     _ => fail("expected generic function property to lower to GenericFunc")
+  }
+}
+
+///|
+test "parser: retain callable type parameter constraints" {
+  let src =
+    #|interface Callbacks {
+    #|  map: <T extends string>(value: T) => T;
+    #|  make: new <U extends number>(value: U) => U;
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  let fields = module_.interfaces[0].fields
+  match fields[0].1 {
+    GenericFunc(["T"], [("T", String_)], Func(params, Named("T"))) =>
+      assert_eq(params.length(), 1)
+    _ => fail("expected generic function constraint to remain in the AST")
+  }
+  match fields[1].1 {
+    GenericFunc(["U"], [("U", Number)], Constructor(params, Named("U"), _)) =>
+      assert_eq(params.length(), 1)
+    _ => fail("expected construct signature constraint to remain in the AST")
+  }
+}
+
+///|
+test "parser: retain optional callable parameter syntax" {
+  match parse_type_from_source("(value?: string) => void") {
+    CallableMeta(Func([Union([String_, Undefined])], Void), [true]) => ()
+    _ => fail("expected optional parameter metadata to remain in the AST")
+  }
+  match parse_type_from_source("(value: string | undefined) => void") {
+    CallableMeta(_, _) =>
+      fail("an explicit undefined union is not an optional parameter")
+    Func([Union([String_, Undefined])], Void) => ()
+    _ => fail("expected an ordinary function type")
+  }
+  match parse_type_from_source("{ f(value?: string): void }") {
+    Object(
+      [
+        (
+          Literal("f"),
+          CallableMeta(Func([Union([String_, Undefined])], Void), [true]),
+        ),
+      ]
+    ) => ()
+    _ => fail("expected object method optionality to remain in the AST")
   }
 }
 
@@ -6016,9 +6070,11 @@ test "parser: parse function type with destructured parameter" {
   assert_eq(module_.values.length(), 1)
   assert_eq(module_.values[0].name, "escape")
   match module_.values[0].type_ {
-    @ast.TsType::Func(params, @ast.TsType::String_) =>
-      assert_eq(params.length(), 2)
-    other => fail("expected function type, got \{other}")
+    @ast.TsType::CallableMeta(
+      @ast.TsType::Func(params, @ast.TsType::String_),
+      [false, true]
+    ) => assert_eq(params.length(), 2)
+    other => fail("expected optional function type metadata, got \{other}")
   }
 }
 

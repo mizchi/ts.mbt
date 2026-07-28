@@ -12501,6 +12501,42 @@ test "expr_check: identity keys and union callee arity (batch AH)" {
 }
 
 ///|
+test "expr_check: union callable arity preserves source optional syntax" {
+  // `x?: T` widens to `x: T | undefined` semantically, but it is still
+  // omittable at a call site.  A union can only omit an argument when EVERY
+  // member permits omission, so the required `x: "hello" | undefined` arm
+  // makes `z.f()` invalid (unionTypeReduction2).
+  let issues = check_module_function_bodies_permissive(
+    parse_module_or_empty(
+      (
+        #|function f6(
+        #|  x: (value: "hello" | undefined) => void,
+        #|  y: (value?: string) => void,
+        #|) {
+        #|  const z = !!true ? x : y
+        #|  z()
+        #|}
+        #|function f5(
+        #|  x: (value: string | undefined) => void,
+        #|  y: (value?: "hello") => void,
+        #|) {
+        #|  const z = !!true ? x : y
+        #|  z()
+        #|}
+      ),
+    ),
+  )
+  let mut saw_arity = false
+  for issue in issues {
+    if issue.path.contains("call") && issue.message.contains("at least 1") {
+      assert_true(issue.path.contains("function f6"))
+      saw_arity = true
+    }
+  }
+  assert_true(saw_arity)
+}
+
+///|
 test "expr_check: TS2352 cast overlap (batch AI)" {
   let issues = fn(src : String) -> Int {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()

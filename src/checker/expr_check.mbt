@@ -710,6 +710,7 @@ fn Resolver::ingest_module(
         name: p.0,
         binding: None,
         is_rest,
+        is_optional: false,
         type_: p.1,
         default: None,
       })
@@ -1003,6 +1004,30 @@ fn required_arity_from_types(params : Array[@ast.TsType]) -> Int {
     // A rest parameter (`...args: T[]`, stored as `Rest(...)`) accepts zero
     // arguments, so it never raises the required count.
     if !(params[i] is Rest(_)) && !type_accepts_undefined_param(params[i]) {
+      last_required = i + 1
+    }
+    i = i + 1
+  }
+  last_required
+}
+
+///|
+/// Minimum arity for a parsed callable type.  Unlike
+/// `required_arity_from_types`, this keeps source-level `?` information from
+/// `CallableMeta`: an explicit `x: T | undefined` remains required, whereas
+/// `x?: T` is omittable.  A bare `Func` has no optional syntax marker and is
+/// therefore treated as having only required (non-rest, non-void) slots.
+fn required_arity_from_callable_source(
+  params : Array[@ast.TsType],
+  optional_params : Array[Bool],
+) -> Int {
+  let mut last_required = 0
+  let mut i = 0
+  while i < params.length() {
+    let optional = i < optional_params.length() && optional_params[i]
+    // `void` parameters are omittable in TypeScript even when they were not
+    // spelled with `?`.
+    if !(params[i] is Rest(_)) && !optional && !(params[i] is Void) {
       last_required = i + 1
     }
     i = i + 1
@@ -1508,7 +1533,8 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
       // read the wrapper directly. Peel it here so the rest of the resolver
       // sees the plain `Func` / `Constructor` exactly as before this variant
       // existed.
-      GenericFunc(_, inner) => cur = inner
+      GenericFunc(_, _, inner) => cur = inner
+      CallableMeta(inner, _) => cur = inner
       _ => keep_going = false
     }
   }
@@ -3283,6 +3309,7 @@ fn Resolver::lookup_method_sig(
   meth : String,
 ) -> (Array[@ast.TsType], @ast.TsType)? {
   match self.lookup_field(recv, meth) {
+    Some(CallableMeta(Func(ps, ret), _)) => Some((ps, ret))
     Some(Func(ps, ret)) => Some((ps, ret))
     _ => None
   }
@@ -3492,6 +3519,7 @@ fn Resolver::lookup_constructor_sig(
               name: p.0,
               binding: None,
               is_rest,
+              is_optional: false,
               type_: p.1,
               default: None,
             })
@@ -3553,6 +3581,7 @@ fn Resolver::lookup_inherited_constructor_sig(
           name: p.0,
           binding: None,
           is_rest,
+          is_optional: false,
           type_: p.1,
           default: None,
         })
@@ -7029,8 +7058,9 @@ fn type_param_occurs(tp : String, t : @ast.TsType) -> Bool {
       type_param_occurs(tp, r)
     // A generic function type shadows `tp` when it re-declares the same name;
     // otherwise `tp` may occur free in the underlying callable.
-    GenericFunc(names, inner) =>
+    GenericFunc(names, _, inner) =>
       !names.contains(tp) && type_param_occurs(tp, inner)
+    CallableMeta(inner, _) => type_param_occurs(tp, inner)
     Conditional(a, b, c, d) =>
       type_param_occurs(tp, a) ||
       type_param_occurs(tp, b) ||
@@ -10407,11 +10437,13 @@ fn single_call_signature_params(
 
 ///|
 /// TS2554 for a union-of-functions callee whose members have *different*
-/// signatures: a call through a union must be valid for every constituent,
-/// so fewer arguments than the largest member minimum always fails, and --
-/// when every member has a bounded parameter list -- more arguments than
-/// the largest member maximum also fails. Members with rest parameters
-/// lift the upper bound; any non-`Func` member or spread argument
+/// signatures. TypeScript first reduces same-arity union signatures to the
+/// narrowest parameter domain: `(x: "a" | undefined)` beats
+/// `(x?: string)`, while `(x?: "a")` beats `(x: string | undefined)`.
+/// Its source optionality then determines the minimum arity. When no member
+/// dominates, the union remains callable with the lowest member minimum.
+/// A bounded maximum is still the largest member maximum. Members with rest
+/// parameters lift that bound; any non-callable member or spread argument
 /// abstains.
 fn check_union_callee_arity(
   ctx : CheckCtx,
@@ -10426,21 +10458,28 @@ fn check_union_callee_arity(
     }
   }
   let mut max_min = 0
+  let mut min_min : Int? = None
+  let member_params : Array[(Array[@ast.TsType], Array[Bool])] = []
   let mut all_bounded = true
   let mut max_max = 0
   for m in members {
-    match ctx.resolver.unwrap(m) {
-      Func(ps, _) => {
+    match callable_source_params(m, ctx.resolver) {
+      Some((ps, optional_params)) => {
         let mut has_rest = false
         for p in ps {
           if p is Rest(_) {
             has_rest = true
           }
         }
-        let min_ = required_arity_from_types(ps)
+        let min_ = required_arity_from_callable_source(ps, optional_params)
+        match min_min {
+          None => min_min = Some(min_)
+          Some(prev) => if min_ < prev { min_min = Some(min_) }
+        }
         if min_ > max_min {
           max_min = min_
         }
+        member_params.push((ps, optional_params))
         if has_rest {
           all_bounded = false
         } else if ps.length() > max_max {
@@ -10449,6 +10488,43 @@ fn check_union_callee_arity(
       }
       _ => return
     }
+  }
+  // A strictly narrower parameter domain is the signature TypeScript uses
+  // for union-call reduction. This is exactly the source context where
+  // `CallableMeta` matters: `?` is selected from that member instead of
+  // being reconstructed from the widened `T | undefined` type.
+  let mut dominant_min : Int? = None
+  for i in 0..<member_params.length() {
+    let mut dominates_all = true
+    let mut strictly_narrower = false
+    for j in 0..<member_params.length() {
+      if i == j {
+        continue
+      }
+      match
+        callable_params_narrower_than(member_params[i].0, member_params[j].0) {
+        Some(is_strict) => if is_strict { strictly_narrower = true }
+        None => dominates_all = false
+      }
+    }
+    if dominates_all && strictly_narrower {
+      let min_ = required_arity_from_callable_source(
+        member_params[i].0,
+        member_params[i].1,
+      )
+      match dominant_min {
+        None => dominant_min = Some(min_)
+        Some(prev) => if min_ > prev { dominant_min = Some(min_) }
+      }
+    }
+  }
+  match dominant_min {
+    Some(min_) => max_min = min_
+    None =>
+      match min_min {
+        Some(min_) => max_min = min_
+        None => return
+      }
   }
   let n = args.length()
   if n < max_min {
@@ -10464,6 +10540,95 @@ fn check_union_callee_arity(
       "expected at most \{max_max} argument(s), got \{n}",
     )
   }
+}
+
+///|
+/// `Some(true)` when every `left` parameter is assignable to its `right`
+/// counterpart and at least one is strictly narrower. `Some(false)` means
+/// equal domains; `None` means neither signature can safely dominate (arity
+/// differs or a rest parameter participates).
+fn callable_params_narrower_than(
+  left : Array[@ast.TsType],
+  right : Array[@ast.TsType],
+) -> Bool? {
+  if left.length() != right.length() {
+    return None
+  }
+  let mut strict = false
+  for i in 0..<left.length() {
+    if left[i] is Rest(_) || right[i] is Rest(_) {
+      return None
+    }
+    if !is_assignable_to(left[i], right[i]) {
+      return None
+    }
+    if !is_assignable_to(right[i], left[i]) {
+      strict = true
+    }
+  }
+  Some(strict)
+}
+
+///|
+/// Recover a callable's parameter list together with source optionality.
+/// `CallableMeta` is intentionally inspected before `Resolver::unwrap`,
+/// because the resolver erases metadata for ordinary semantic operations.
+fn callable_source_params(
+  ty : @ast.TsType,
+  resolver : Resolver,
+) -> (Array[@ast.TsType], Array[Bool])? {
+  // Do not start with `Resolver::unwrap`: it deliberately erases
+  // `CallableMeta`, while callable-union arity needs the source spelling of
+  // `?`. Resolve aliases here and stop once the wrapper is reached.
+  fn go(
+    current : @ast.TsType,
+    remaining_alias_hops : Int,
+  ) -> (Array[@ast.TsType], Array[Bool])? {
+    match current {
+      CallableMeta(Func(params, _), optional_params) =>
+        Some((params, optional_params))
+      GenericFunc(_, _, inner) => go(inner, remaining_alias_hops)
+      Named(name) if remaining_alias_hops > 0 =>
+        match resolver.type_aliases.get(name) {
+          Some(alias) => go(alias.type_, remaining_alias_hops - 1)
+          None =>
+            match resolver.unwrap(current) {
+              Func(params, _) => Some((params, []))
+              _ => None
+            }
+        }
+      Applied(name, args) if remaining_alias_hops > 0 =>
+        match resolver.type_aliases.get(name) {
+          Some(alias) if alias.type_params.length() > 0 => {
+            let bindings : Map[String, @ast.TsType] = Map([])
+            let limit = if args.length() < alias.type_params.length() {
+              args.length()
+            } else {
+              alias.type_params.length()
+            }
+            for i in 0..<limit {
+              bindings[alias.type_params[i]] = args[i]
+            }
+            go(
+              substitute_params(alias.type_, bindings),
+              remaining_alias_hops - 1,
+            )
+          }
+          _ =>
+            match resolver.unwrap(current) {
+              Func(params, _) => Some((params, []))
+              _ => None
+            }
+        }
+      _ =>
+        match resolver.unwrap(current) {
+          Func(params, _) => Some((params, []))
+          _ => None
+        }
+    }
+  }
+
+  go(ty, 32)
 }
 
 ///|
@@ -12711,6 +12876,7 @@ fn type_display(ty : @ast.TsType) -> String {
       }
       "(" + parts.join(", ") + ") => " + type_display(ret)
     }
+    CallableMeta(inner, _) => type_display(inner)
     Tuple(items) => {
       let parts : Array[String] = []
       for a in items {
@@ -16227,17 +16393,27 @@ fn check_call_args_in_expr(
           _ => ()
         }
       }
-      let callee_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, callee))
+      // Keep the raw type alongside its semantic shape. `Resolver::unwrap`
+      // intentionally peels `CallableMeta`, but union arity needs the
+      // source-level distinction between `x?: T` and `x: T | undefined`.
+      let raw_callee_ty = infer_expr(env, ctx.resolver, callee)
+      let callee_ty = ctx.resolver.unwrap(raw_callee_ty)
       match callee_ty {
         Func(params, _) => check_arguments(env, params, args, ctx, "call")
         // A union callee whose members share one identical call signature is
         // callable with those parameters (`{ (a:number):X } | { (a:number):Y
         // }`); check the arguments against them.
-        Union(_) =>
+        Union(_) => {
+          // A call through a union must satisfy every constituent's minimum
+          // arity. Run this before the common-signature route: two callables
+          // can have identical widened parameter types while differing in
+          // whether that parameter was written with `?`.
+          check_union_callee_arity(ctx, raw_callee_ty, args, "call")
           match union_common_call_params(callee_ty, ctx.resolver) {
             Some(params) => check_arguments(env, params, args, ctx, "call")
             None => ()
           }
+        }
         other =>
           // `recv["method"](args)` is a method call with a computed
           // string-literal key — semantically identical to `recv.method(args)`.
@@ -22405,8 +22581,9 @@ fn check_interface_extends_member_compat(
         // signature-assignability check and compare bivariantly -- skip
         // them here to avoid double reporting.
         let callable = match (fty, bty) {
-          (Func(_, _) | GenericFunc(_, _) | Constructor(_, _, _), _)
-          | (_, Func(_, _) | GenericFunc(_, _) | Constructor(_, _, _)) => true
+          (Func(_, _) | GenericFunc(_, _, _) | Constructor(_, _, _), _)
+          | (_, Func(_, _) | GenericFunc(_, _, _) | Constructor(_, _, _)) =>
+            true
           _ => false
         }
         if callable {
@@ -22458,7 +22635,8 @@ fn check_interface_extends_member_compat(
 /// have had their own type parameters discarded at parse.
 fn type_mentions_callable(ty : @ast.TsType) -> Bool {
   match ty {
-    Func(_, _) | GenericFunc(_, _) | Constructor(_, _, _) => true
+    Func(_, _) | GenericFunc(_, _, _) | Constructor(_, _, _) => true
+    CallableMeta(inner, _) => type_mentions_callable(inner)
     Array(inner) | Keyof(inner) | Rest(inner) => type_mentions_callable(inner)
     Tuple(items) | Union(items) | Intersection(items) =>
       items.iter().any(fn(it) { type_mentions_callable(it) })
@@ -24651,7 +24829,7 @@ fn check_type_undeclared_tps(
     }
     // A generic function type binds its own type parameters: add them to
     // scope before descending so `<S>(x: S) => T` does not flag `S`.
-    GenericFunc(names, inner) => {
+    GenericFunc(names, _, inner) => {
       let inner_scope = scope_extend(scope, names)
       check_type_undeclared_tps(inner, inner_scope, declared, issues, path)
     }
@@ -25505,7 +25683,7 @@ fn check_lib_directive_globals(module_ : @ast.TsModule) -> Array[ExprIssue] {
 /// isn't a plain function shape.
 fn callable_required_arity(resolver : Resolver, t : @ast.TsType) -> Int? {
   match resolver.unwrap(t) {
-    GenericFunc(_, inner) => callable_required_arity(resolver, inner)
+    GenericFunc(_, _, inner) => callable_required_arity(resolver, inner)
     Func(ps, _) => {
       let mut required = 0
       for p in ps {
@@ -25583,7 +25761,7 @@ fn check_class_decorator_signatures(
           match resolver.globals.get(n) {
             Some(t) =>
               match resolver.unwrap(t) {
-                GenericFunc(_, Func(_, ret)) | Func(_, ret) =>
+                GenericFunc(_, _, Func(_, ret)) | Func(_, ret) =>
                   callable_required_arity(resolver, ret)
                 _ => None
               }
@@ -25593,7 +25771,7 @@ fn check_class_decorator_signatures(
           match resolver.globals.get(n) {
             Some(t) =>
               match resolver.unwrap(t) {
-                GenericFunc(_, Func(_, ret)) | Func(_, ret) =>
+                GenericFunc(_, _, Func(_, ret)) | Func(_, ret) =>
                   callable_required_arity(resolver, ret)
                 _ => None
               }
@@ -25732,7 +25910,7 @@ fn member_name_duplicates(
       // (`send?(...): boolean` overloads in @types/node's Process) —
       // they are overloads, not duplicate properties.
       Union([Func(_, _), Undefined]) | Union([Undefined, Func(_, _)]) => true
-      GenericFunc(_, _) => true
+      GenericFunc(_, _, _) => true
       _ => false
     }
     if !is_method {
@@ -25929,7 +26107,14 @@ fn check_module_function_bodies_layered(
           None
         }
         let is_rest = i < meth.param_is_rest.length() && meth.param_is_rest[i]
-        params.push({ name: p.0, binding: None, is_rest, type_: p.1, default })
+        params.push({
+          name: p.0,
+          binding: None,
+          is_rest,
+          is_optional: false,
+          type_: p.1,
+          default,
+        })
       }
       // Merge class-level + method-level type parameters so the body
       // sees the same in-scope generics that TypeScript does.
@@ -26002,7 +26187,14 @@ fn check_module_function_bodies_layered(
       }
       let is_rest = i < cls.constructor_param_is_rest.length() &&
         cls.constructor_param_is_rest[i]
-      params.push({ name: p.0, binding: None, is_rest, type_: p.1, default })
+      params.push({
+        name: p.0,
+        binding: None,
+        is_rest,
+        is_optional: false,
+        type_: p.1,
+        default,
+      })
     }
     let synth : @ast.TsFunc = {
       name: cls.name + ".constructor",
@@ -27156,7 +27348,7 @@ fn is_concrete_primitive_or_literal(ty : @ast.TsType) -> Bool {
 /// function-type assignability check away from `<S>(...) => T` shapes, which
 /// can be made compatible by instantiating their type parameters.
 fn not_generic_func(ty : @ast.TsType) -> Bool {
-  !(ty is GenericFunc(_, _))
+  !(ty is GenericFunc(_, _, _))
 }
 
 ///|
