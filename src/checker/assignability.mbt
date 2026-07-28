@@ -514,7 +514,7 @@ fn is_assignable_to_inner(
         | Array(_)
         | Tuple(_)
         | Func(_, _)
-        | GenericFunc(_, _)
+        | GenericFunc(_, _, _)
         | Constructor(_, _, _) => true
         String_
         | Literal(_)

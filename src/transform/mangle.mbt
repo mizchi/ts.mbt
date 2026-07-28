@@ -2907,6 +2907,7 @@ fn rename_param_list(
       name: new_name,
       binding: new_binding,
       is_rest: p.is_rest,
+      is_optional: p.is_optional,
       type_: p.type_,
       default: new_default,
     })
@@ -3287,6 +3288,7 @@ fn rename_properties_in_expr(
           name: p.name,
           binding: new_binding,
           is_rest: p.is_rest,
+          is_optional: p.is_optional,
           type_: p.type_,
           default: new_default,
         })
@@ -3314,6 +3316,7 @@ fn rename_properties_in_expr(
           name: p.name,
           binding: new_binding,
           is_rest: p.is_rest,
+          is_optional: p.is_optional,
           type_: p.type_,
           default: new_default,
         })

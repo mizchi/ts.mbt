@@ -4992,6 +4992,139 @@ test "bridge: FFI struct method wrappers unwrap optional arguments" {
 }
 
 ///|
+test "bridge: FFI struct method wrappers unwrap callable optionality metadata" {
+  let state : MoonBitJsFfiState = {
+    declared_type_names: [],
+    struct_type_names: [],
+    generic_type_params_by_name: {},
+    enums: [],
+    external_type_names: [],
+    local_type_param_names: [],
+    function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
+    tagged_union_decls_by_name: {},
+    synthesized_inline_unions: {},
+    needs_js_any: false,
+    needs_promise: false,
+    needs_option_return_wrap: false,
+  }
+  let iface : @ast.TsInterface = {
+    name: "RequestClient",
+    type_params: [],
+    extends_names: [],
+    extends_args: [],
+    fields: [
+      (
+        "request",
+        @ast.TsType::CallableMeta(
+          @ast.TsType::Func(
+            [
+              @ast.TsType::String_,
+              @ast.TsType::Union([
+                @ast.TsType::Named("RequestInit"),
+                @ast.TsType::Undefined,
+              ]),
+            ],
+            @ast.TsType::Named("Response"),
+          ),
+          [false, true],
+        ),
+      ),
+    ],
+    readonly_fields: [],
+    index_signatures: [],
+    type_param_bounds: [],
+    method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members: [],
+    deprecated_members: [],
+  }
+  let actual = ffi_struct_decl_to_moonbit(state, iface)
+  assert_true(
+    actual.contains(
+      "pub extern \"js\" fn RequestClient::request(self : RequestClient, arg0 : String, arg1 : RequestInit?) -> Response =",
+    ),
+  )
+}
+
+///|
+test "bridge: FFI class callable property gets a natural method wrapper" {
+  let state : MoonBitJsFfiState = {
+    declared_type_names: [],
+    struct_type_names: [],
+    generic_type_params_by_name: {},
+    enums: [],
+    external_type_names: [],
+    local_type_param_names: [],
+    function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
+    tagged_union_decls_by_name: {},
+    synthesized_inline_unions: {},
+    needs_js_any: false,
+    needs_promise: false,
+    needs_option_return_wrap: false,
+  }
+  let class_ : @ast.TsClassDecl = {
+    name: "RequestClient",
+    type_params: [],
+    type_param_bounds: [],
+    computed_field_keys: [],
+    base_names: [],
+    implements_names: [],
+    base_expr: None,
+    static_field_inits: [],
+    static_blocks: [],
+    instance_field_inits: [],
+    constructor_params: None,
+    constructor_param_is_rest: [],
+    constructor_param_defaults: [],
+    constructor_body: None,
+    properties: [],
+    methods: [],
+    is_abstract: false,
+    is_constructible: true,
+    index_signatures: [],
+    static_index_signatures: [],
+    decorators: [],
+    is_declare: true,
+    private_members: [],
+    protected_members: [],
+    abstract_members: [],
+    duplicate_member_names: [],
+  }
+  let property : @ast.TsClassPropertyDecl = {
+    name: "request",
+    type_: @ast.TsType::CallableMeta(
+      @ast.TsType::Func(
+        [
+          @ast.TsType::String_,
+          @ast.TsType::Union([
+            @ast.TsType::Named("RequestInit"),
+            @ast.TsType::Undefined,
+          ]),
+        ],
+        @ast.TsType::Named("Response"),
+      ),
+      [false, true],
+    ),
+    is_static: false,
+    is_readonly: false,
+    is_accessor: false,
+    has_initializer: false,
+    has_definite_assertion: false,
+  }
+  let actual = ffi_class_callable_property_method_decl_to_moonbit(
+    state,
+    class_,
+    property,
+    [],
+  ).unwrap()
+  assert_true(
+    actual.contains(
+      "pub extern \"js\" fn RequestClient::request(self : RequestClient, arg0 : String, arg1 : RequestInit?) -> Response =",
+    ),
+  )
+}
+
+///|
 test "bridge: FFI class methods unwrap optional arguments" {
   let state : MoonBitJsFfiState = {
     declared_type_names: [],

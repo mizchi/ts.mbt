@@ -265,7 +265,7 @@ fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
   if is_optional && not(default is None) {
     self.param_optional_initializer_misuses.push(name)
   }
-  { name, binding: Some(binding), is_rest, type_, default }
+  { name, binding: Some(binding), is_rest, is_optional, type_, default }
 }
 
 ///|
@@ -1774,7 +1774,7 @@ pub fn Parser::parse_interface(
           } else {
             @ast.TsType::Any
           }
-        _ => @ast.TsType::Func(param_types, return_type)
+        _ => callable_func_type_from_params(method_params, return_type)
       }
       let accessor_pair_seen = accessor_kind is Some(_) &&
         fields.iter().any(fn(f) { f.0 == field_name })

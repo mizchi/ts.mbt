@@ -845,6 +845,12 @@ fn ffi_callable_value_should_emit_wrapper(
 
 ///|
 fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
+  // Parameter optionality is AST metadata. It affects arity checking, but
+  // not the MoonBit representation of a callable value itself.
+  match type_ {
+    CallableMeta(inner, _) => return ffi_type_name(state, inner)
+    _ => ()
+  }
   // Unresolved `infer X extends Bound` markers collapse to the bound
   // type at the FFI boundary. Bare `infer X` markers (no bound) fall
   // through to the existing JSValue widening below.
@@ -1039,6 +1045,10 @@ fn ffi_type_alias_target_name(
   state : MoonBitJsFfiState,
   type_ : @ast.TsType,
 ) -> String {
+  match type_ {
+    CallableMeta(inner, _) => return ffi_type_alias_target_name(state, inner)
+    _ => ()
+  }
   match @checker.classify_optional_like_union(type_) {
     Some((collapsed, _)) => {
       let rendered = ffi_type_alias_target_name(state, collapsed)
@@ -1304,10 +1314,13 @@ fn ffi_erase_generic_names(
     Intersection(items) => Intersection(items.map(go))
     Tuple(items) => Tuple(items.map(go))
     Func(ps, r) => Func(ps.map(go), go(r))
+    CallableMeta(inner, optional_params) =>
+      CallableMeta(go(inner), optional_params)
     Constructor(ps, r, a) => Constructor(ps.map(go), go(r), a)
     Applied(n, args) => Applied(n, args.map(go))
     Object(fields) => Object(fields.map(fn(f) { (f.0, go(f.1)) }))
-    GenericFunc(inner_names, inner) => GenericFunc(inner_names, go(inner))
+    GenericFunc(inner_names, bounds, inner) =>
+      GenericFunc(inner_names, bounds, go(inner))
     _ => t
   }
 }
@@ -1317,6 +1330,10 @@ fn ffi_function_field_type_name(
   state : MoonBitJsFfiState,
   type_ : @ast.TsType,
 ) -> String {
+  match type_ {
+    CallableMeta(inner, _) => return ffi_function_field_type_name(state, inner)
+    _ => ()
+  }
   match @checker.classify_optional_like_union(type_) {
     Some((collapsed, is_optional)) => {
       let rendered = ffi_function_field_type_name(state, collapsed)
@@ -1334,7 +1351,7 @@ fn ffi_function_field_type_name(
     Func(params, return_type) => ffi_func_type_name(state, params, return_type)
     // A member's own generic binder is erased at the FFI boundary
     // (`toBe: <E>(expected: E) => void` — vitest's Assertion).
-    GenericFunc(names, inner) =>
+    GenericFunc(names, _, inner) =>
       ffi_function_field_type_name(state, ffi_erase_generic_names(inner, names))
     _ => ffi_type_name(state, type_)
   }
@@ -1362,6 +1379,10 @@ fn ffi_struct_field_type_name(
   state : MoonBitJsFfiState,
   type_ : @ast.TsType,
 ) -> String {
+  match type_ {
+    CallableMeta(inner, _) => return ffi_struct_field_type_name(state, inner)
+    _ => ()
+  }
   match @checker.classify_optional_like_union(type_) {
     Some((collapsed, is_optional)) => {
       let rendered = ffi_struct_field_type_name(state, collapsed)
@@ -1383,7 +1404,8 @@ fn ffi_struct_field_type_name(
     Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) =>
       ffi_struct_field_type_name(state, @checker.normalize_literal_type(type_))
     Array(inner) => "Array[" + ffi_struct_field_type_name(state, inner) + "]"
-    Func(_, _) | GenericFunc(_, _) => ffi_function_field_type_name(state, type_)
+    Func(_, _) | GenericFunc(_, _, _) =>
+      ffi_function_field_type_name(state, type_)
     Named(name) if ffi_named_type_is_primitive_enum_in(state.enums, name) =>
       ffi_type_identifier(name, "GeneratedEnum")
     Applied(name, _) if ffi_named_type_is_primitive_enum_in(state.enums, name) =>
@@ -1398,6 +1420,7 @@ fn ffi_function_type_parts(
   type_ : @ast.TsType,
 ) -> (Array[@ast.TsType], Array[String], String)? {
   match type_ {
+    CallableMeta(inner, _) => ffi_function_type_parts(state, inner)
     Func(params, return_type) => {
       let param_types : Array[String] = []
       for param in params {
@@ -1420,7 +1443,7 @@ fn ffi_function_type_parts(
     // A member's own generic binder is erased at the FFI boundary
     // (`toBe: <E>(expected: E) => void` — vitest's Assertion), matching
     // the struct-field rendering so `(self.<field>)(args)` type-checks.
-    GenericFunc(names, inner) =>
+    GenericFunc(names, _, inner) =>
       ffi_function_type_parts(state, ffi_erase_generic_names(inner, names))
     _ => None
   }
@@ -1548,6 +1571,10 @@ fn ffi_function_field_method_decl(
   event_special? : (String, String)? = None,
   method_type_params? : Array[String] = [],
 ) -> String? {
+  let field_type = match field_type {
+    CallableMeta(inner, _) => inner
+    _ => field_type
+  }
   // Event companion (`on_close`): call the ORIGINAL JS member with the
   // event literal injected as the first argument.
   let (js_field_name, injected_literal) = match event_special {
@@ -1559,7 +1586,7 @@ fn ffi_function_field_method_decl(
   // forbids generic externs, so the wrapper fetches a BOUND closure
   // through a monomorphic getter and carries `fn[T, U]` itself.
   let (generic_names, generic_inner) = match field_type {
-    GenericFunc(names, inner) => (names, inner)
+    GenericFunc(names, _, inner) => (names, inner)
     _ => (method_type_params, field_type)
   }
   match generic_inner {
@@ -3331,6 +3358,10 @@ fn ffi_struct_field_is_call_signature(
   }
   match field_type {
     Func(_, _) => true
+    CallableMeta(inner, _) =>
+      ffi_struct_field_is_call_signature(field_name, inner)
+    GenericFunc(_, _, inner) =>
+      ffi_struct_field_is_call_signature(field_name, inner)
     _ => false
   }
 }
@@ -4807,6 +4838,79 @@ fn ffi_class_method_decl_to_moonbit(
 }
 
 ///|
+/// Resolve a callable interface type to its call signature. This is kept at
+/// the FFI boundary because `TextRespond`-style aliases are runtime function
+/// properties even though their declaration names look like ordinary object
+/// types to MoonBit.
+fn ffi_callable_interface_signature(
+  interfaces : Array[@ast.TsInterface],
+  type_ : @ast.TsType,
+) -> @ast.TsType? {
+  let name = match type_ {
+    Named(n) | Applied(n, _) => n
+    _ => return None
+  }
+  let target_name = ffi_type_identifier(name, "OpaqueType")
+  for iface in interfaces {
+    if ffi_type_identifier(iface.name, "OpaqueType") != target_name {
+      continue
+    }
+    for field in iface.fields {
+      if ffi_struct_field_is_call_signature(field.0, field.1) {
+        return Some(field.1)
+      }
+    }
+  }
+  None
+}
+
+///|
+/// Generate a call-shaped convenience method for a class property whose
+/// declared type is callable. TypeScript libraries commonly expose bound
+/// methods as fields (`request: (input, init?) => Response`); keeping only a
+/// getter forces MoonBit callers to extract a closure and loses the natural
+/// `client.request(...)` API.
+fn ffi_class_callable_property_method_decl_to_moonbit(
+  state : MoonBitJsFfiState,
+  class_ : @ast.TsClassDecl,
+  class_property : @ast.TsClassPropertyDecl,
+  interfaces : Array[@ast.TsInterface],
+) -> String? {
+  if class_property.is_static {
+    return None
+  }
+  let preserve = ffi_should_preserve_class_type_params(class_)
+  let type_params = if preserve { class_.type_params } else { [] }
+  let local_type_param_len = ffi_push_local_type_params(state, type_params)
+  let direct = ffi_function_field_method_decl(
+    state,
+    ffi_class_type_name(class_.name),
+    type_params,
+    ffi_value_fn_name(class_property.name),
+    class_property.name,
+    class_property.type_,
+  )
+  let result = match direct {
+    Some(decl) => Some(decl)
+    None =>
+      match ffi_callable_interface_signature(interfaces, class_property.type_) {
+        Some(signature) =>
+          ffi_function_field_method_decl(
+            state,
+            ffi_class_type_name(class_.name),
+            type_params,
+            ffi_value_fn_name(class_property.name),
+            class_property.name,
+            signature,
+          )
+        None => None
+      }
+  }
+  ffi_restore_local_type_params(state, local_type_param_len)
+  result
+}
+
+///|
 fn ffi_class_property_getter_decl_to_moonbit(
   state : MoonBitJsFfiState,
   class_ : @ast.TsClassDecl,
@@ -6232,6 +6336,35 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
           )
         None => ()
       }
+      // A callable property is a bound method in many `.d.ts` APIs
+      // (`request: (...) => Response`). Expose the natural method form in
+      // addition to the getter/setter surface, unless a declaration-style
+      // method with the same name already owns that API.
+      let has_declared_method = class_.methods
+        .iter()
+        .any(fn(class_method) {
+          class_method.name == class_property.name &&
+          class_method.is_static == class_property.is_static
+        })
+      if !has_declared_method {
+        match
+          ffi_class_callable_property_method_decl_to_moonbit(
+            state, class_, class_property, interfaces,
+          ) {
+          Some(decl) =>
+            push_unique_ffi_section(
+              seen_ffi_binding_names,
+              ffi_sections,
+              ffi_fn_decl_key(
+                ffi_to_snake_case(class_.name) +
+                "_" +
+                ffi_to_snake_case(class_property.name),
+              ),
+              decl,
+            )
+          None => ()
+        }
+      }
     }
     for class_method in class_.methods {
       push_unique_ffi_section(
@@ -7097,7 +7230,11 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   }
 
   for value in values {
-    match value.type_ {
+    let callable_value_type = match value.type_ {
+      CallableMeta(inner, _) => inner
+      _ => value.type_
+    }
+    match callable_value_type {
       Struct(name, fields) => {
         let type_name = ffi_type_identifier(name, "OpaqueType")
         if !state.declared_type_names.contains(type_name) {
@@ -7145,7 +7282,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         ),
       ),
     )
-    match value.type_ {
+    match callable_value_type {
       Func(params, return_type) =>
         if ffi_callable_value_should_emit_wrapper(state, params, return_type) {
           let binding_name = ffi_binding_name(value.name)

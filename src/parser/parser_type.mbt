@@ -3,6 +3,45 @@
 // ============================================
 
 ///|
+/// Preserve the source spelling of optional callable parameters without
+/// changing the existing `T | undefined` semantic representation. Wrapping
+/// only when needed leaves ordinary function types structurally unchanged.
+fn callable_type_with_optionality(
+  callable : @ast.TsType,
+  optional_params : Array[Bool],
+) -> @ast.TsType {
+  for is_optional in optional_params {
+    if is_optional {
+      return @ast.TsType::CallableMeta(callable, optional_params)
+    }
+  }
+  callable
+}
+
+///|
+/// Build a function type from declaration-style parameters while retaining
+/// both the existing value-level shape and source optionality metadata.
+fn callable_func_type_from_params(
+  params : Array[@ast.TsParam],
+  return_type : @ast.TsType,
+) -> @ast.TsType {
+  let types : Array[@ast.TsType] = []
+  let optional : Array[Bool] = []
+  for param in params {
+    // Declaration-style rest parameters already carry their array-shaped
+    // element type (`...checks: string[]` -> `Array[String]`). Keep the
+    // existing representation used by interface/object members; function
+    // *type* syntax builds `Rest` directly in `parse_paren_or_function_type`.
+    types.push(param.type_)
+    optional.push(param.is_optional)
+  }
+  callable_type_with_optionality(
+    @ast.TsType::Func(types, return_type),
+    optional,
+  )
+}
+
+///|
 /// The member-name spelling of a keyword token, for object-type members
 /// whose key happens to be a keyword (`{ type: T }`, `{ function: T }`).
 /// `New` is handled separately (construct-signature ambiguity).
@@ -78,6 +117,7 @@ fn Parser::parse_paren_or_function_type(
   }
 
   let param_types : Array[@ast.TsType] = []
+  let param_optional : Array[Bool] = []
   let mut can_be_function_type = true
   while true {
     let is_rest = self.match_ellipsis()
@@ -103,6 +143,7 @@ fn Parser::parse_paren_or_function_type(
     // param reasoning sees it as omittable.
     let pty = if is_optional { wrap_optional_ts_type(pty) } else { pty }
     param_types.push(if is_rest { Rest(pty) } else { pty })
+    param_optional.push(is_optional)
     if self.match_(Comma) {
       if self.check(RParen) {
         break
@@ -112,7 +153,10 @@ fn Parser::parse_paren_or_function_type(
     break
   }
   if can_be_function_type && self.match_(RParen) && self.match_(Arrow) {
-    return Func(param_types, self.parse_type())
+    return callable_type_with_optionality(
+      Func(param_types, self.parse_type()),
+      param_optional,
+    )
   }
 
   self.pos = saved_pos
@@ -134,11 +178,10 @@ fn Parser::parse_constructor_tail(
   // Capture the constructor type's own generic parameters (`new <T>(x: T) =>
   // T`) so scope-aware checks can see the binder; the names are erased for
   // the value shape (see `GenericFunc`).
-  let tp_names = if self.check(Lt) {
-    let (names, _) = self.parse_type_param_names_and_bounds()
-    names
+  let (tp_names, tp_bounds) = if self.check(Lt) {
+    self.parse_type_param_names_and_bounds()
   } else {
-    []
+    ([], [])
   }
   if !self.check(LParen) {
     return Any
@@ -146,6 +189,7 @@ fn Parser::parse_constructor_tail(
   let saved = self.pos
   let _ = self.expect(LParen)
   let param_types : Array[@ast.TsType] = []
+  let param_optional : Array[Bool] = []
   if !self.match_(RParen) {
     let mut ok = true
     while true {
@@ -166,6 +210,7 @@ fn Parser::parse_constructor_tail(
       // function-type and declaration parameters.
       let pty = if is_optional { wrap_optional_ts_type(pty) } else { pty }
       param_types.push(if is_rest { Rest(pty) } else { pty })
+      param_optional.push(is_optional)
       if self.match_(Comma) {
         if self.check(RParen) {
           break
@@ -185,9 +230,12 @@ fn Parser::parse_constructor_tail(
     return Any
   }
   let ret = self.parse_type()
-  let ctor = @ast.TsType::Constructor(param_types, ret, is_abstract)
+  let ctor = callable_type_with_optionality(
+    @ast.TsType::Constructor(param_types, ret, is_abstract),
+    param_optional,
+  )
   if tp_names.length() > 0 {
-    GenericFunc(tp_names, ctor)
+    GenericFunc(tp_names, tp_bounds, ctor)
   } else {
     ctor
   }
@@ -732,11 +780,9 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
         } else {
           @ast.TsType::Void
         }
-        let param_types : Array[@ast.TsType] = []
-        for param in method_params {
-          param_types.push(param.type_)
-        }
-        let field_type = @ast.TsType::Func(param_types, return_type)
+        let field_type = callable_func_type_from_params(
+          method_params, return_type,
+        )
         fields.push(
           (
             Literal(field_name),
@@ -1009,12 +1055,12 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
   let tok = self.peek()
   let base_type : @ast.TsType = match tok.kind {
     Lt => {
-      let (tp_names, _bounds) = self.parse_type_param_names_and_bounds()
+      let (tp_names, tp_bounds) = self.parse_type_param_names_and_bounds()
       if self.check(LParen) {
         match self.parse_paren_or_function_type() {
-          Func(_, _) | Constructor(_, _, _) as func_type =>
+          Func(_, _) | Constructor(_, _, _) | CallableMeta(_, _) as func_type =>
             if tp_names.length() > 0 {
-              @ast.TsType::GenericFunc(tp_names, func_type)
+              @ast.TsType::GenericFunc(tp_names, tp_bounds, func_type)
             } else {
               func_type
             }

@@ -1182,6 +1182,7 @@ fn merge_func_param_types(
       name: param.name,
       binding: param.binding,
       is_rest: param.is_rest,
+      is_optional: param.is_optional,
       type_: next_type,
       default: param.default,
     })
@@ -2415,7 +2416,7 @@ fn append_exported_value_call_signature(
       continue
     }
     let callable = match field.1 {
-      GenericFunc(_, inner) => inner
+      GenericFunc(_, _, inner) => inner
       other => other
     }
     match callable {
@@ -2434,6 +2435,7 @@ fn append_exported_value_call_signature(
       name: "arg\{i}",
       binding: None,
       is_rest: false,
+      is_optional: false,
       type_: param_type,
       default: None,
     })
@@ -2501,7 +2503,7 @@ fn append_exported_value_interface_methods(
       continue
     }
     let (type_params, callable) = match ftype {
-      GenericFunc(names, inner) => (names, inner)
+      GenericFunc(names, _, inner) => (names, inner)
       other => ([], other)
     }
     guard callable is Func(param_types, return_type) else { continue }
@@ -2511,6 +2513,7 @@ fn append_exported_value_interface_methods(
         name: "arg\{i}",
         binding: None,
         is_rest: false,
+        is_optional: false,
         type_: param_type,
         default: None,
       })
@@ -3765,6 +3768,7 @@ fn utility_record_type_suffix(type_ : @ast.TsType) -> String {
     None => ()
   }
   match type_ {
+    CallableMeta(inner, _) => utility_record_type_suffix(inner)
     NonPrimitiveObject => "Object"
     Literal(value) => {
       let suffix = decl_to_pascal_case(value)
@@ -3808,7 +3812,7 @@ fn utility_record_type_suffix(type_ : @ast.TsType) -> String {
     }
     Func(_, return_type) =>
       "FunctionTo" + utility_record_type_suffix(return_type)
-    GenericFunc(_, inner) => utility_record_type_suffix(inner)
+    GenericFunc(_, _, inner) => utility_record_type_suffix(inner)
     Union(items) => {
       let parts : Array[String] = []
       for item in items {
@@ -6960,6 +6964,36 @@ fn rewrite_type_refs_in_scope(
         ),
       )
     }
+    CallableMeta(inner, optional_params) =>
+      CallableMeta(
+        rewrite_type_refs_in_scope(
+          info, local_name_prefix, inner, canonical_types,
+        ),
+        optional_params,
+      )
+    GenericFunc(names, bounds, inner) => {
+      let next_bounds : Array[(String, @ast.TsType)] = []
+      for bound in bounds {
+        next_bounds.push(
+          (
+            bound.0,
+            rewrite_type_refs_in_scope(
+              info,
+              local_name_prefix,
+              bound.1,
+              canonical_types,
+            ),
+          ),
+        )
+      }
+      GenericFunc(
+        names,
+        next_bounds,
+        rewrite_type_refs_in_scope(
+          info, local_name_prefix, inner, canonical_types,
+        ),
+      )
+    }
     Union(types) => {
       let next_types : Array[@ast.TsType] = []
       for item in types {
@@ -8425,6 +8459,15 @@ fn decl_eval_bound_indexed_access(
       }
       Func(out, go(r))
     }
+    CallableMeta(inner, optional_params) =>
+      CallableMeta(go(inner), optional_params)
+    GenericFunc(names, bounds, inner) => {
+      let next_bounds : Array[(String, @ast.TsType)] = []
+      for bound in bounds {
+        next_bounds.push((bound.0, go(bound.1)))
+      }
+      GenericFunc(names, next_bounds, go(inner))
+    }
     Union(items) => {
       let out : Array[@ast.TsType] = []
       for it in items {
@@ -8751,6 +8794,15 @@ fn decl_type_references_any_param(
       }
       go(r)
     }
+    CallableMeta(inner, _) => go(inner)
+    GenericFunc(_, bounds, inner) => {
+      for bound in bounds {
+        if go(bound.1) {
+          return true
+        }
+      }
+      go(inner)
+    }
     Object(fields) => {
       for f in fields {
         if go(f.0) || go(f.1) {
@@ -8947,6 +8999,10 @@ fn collect_interface_dependencies_from_type(
         info, return_type, modules, canonical_types, seen_names, interfaces,
       )
     }
+    CallableMeta(inner, _) | GenericFunc(_, _, inner) =>
+      collect_interface_dependencies_from_type(
+        info, inner, modules, canonical_types, seen_names, interfaces,
+      )
     _ => ()
   }
 }
@@ -11177,6 +11233,7 @@ fn clone_exported_func(
       name: param.name,
       binding: param.binding,
       is_rest: param.is_rest,
+      is_optional: param.is_optional,
       type_: decl_rewrite_inline_callback_param_type(
         callback_owner_name,
         param.name,

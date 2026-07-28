@@ -184,6 +184,7 @@ test "validate_module: lib.d.ts ambient type aliases resolve (PropertyKey)" {
             type_: @ast.TsType::Named("PropertyKey"),
             default: None,
             is_rest: false,
+            is_optional: false,
           },
           {
             name: "dec",
@@ -191,6 +192,7 @@ test "validate_module: lib.d.ts ambient type aliases resolve (PropertyKey)" {
             type_: @ast.TsType::Named("ClassDecorator"),
             default: None,
             is_rest: false,
+            is_optional: false,
           },
           {
             name: "tpl",
@@ -198,6 +200,7 @@ test "validate_module: lib.d.ts ambient type aliases resolve (PropertyKey)" {
             type_: @ast.TsType::Named("TemplateStringsArray"),
             default: None,
             is_rest: false,
+            is_optional: false,
           },
         ],
         return_type: @ast.TsType::Applied("ThisType", [@ast.TsType::String_]),

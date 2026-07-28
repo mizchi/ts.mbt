@@ -377,13 +377,15 @@ fn substitute_params(
     // A generic function type's own type parameters shadow the substitution:
     // drop them from the bindings before recursing into the callable so an
     // outer `T` substitution doesn't capture an inner `<T>`.
-    GenericFunc(names, inner) => {
+    GenericFunc(names, bounds, inner) => {
       let mut inner_bindings = bindings
       for n in names {
         inner_bindings = scoped_without(inner_bindings, n)
       }
-      GenericFunc(names, substitute_params(inner, inner_bindings))
+      GenericFunc(names, bounds, substitute_params(inner, inner_bindings))
     }
+    CallableMeta(inner, optional_params) =>
+      CallableMeta(substitute_params(inner, bindings), optional_params)
     _ => type_
   }
 }

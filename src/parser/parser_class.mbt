@@ -2799,6 +2799,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
                   name: rest_name,
                   binding: Some(@ast.TsBinding::Ident(rest_name)),
                   is_rest: true,
+                  is_optional: false,
                   type_: @ast.TsType::Any,
                   default: None,
                 },
@@ -2990,6 +2991,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
             name: rest_name,
             binding: Some(@ast.TsBinding::Ident(rest_name)),
             is_rest: true,
+            is_optional: false,
             type_: Any,
             default: None,
           }
@@ -3587,6 +3589,7 @@ fn Parser::parse_class_decl_with_abstract(
                   name: rest_name,
                   binding: Some(@ast.TsBinding::Ident(rest_name)),
                   is_rest: true,
+                  is_optional: false,
                   type_: @ast.TsType::Any,
                   default: None,
                 },
@@ -3757,6 +3760,7 @@ fn Parser::parse_class_decl_with_abstract(
             name: rest_name,
             binding: Some(@ast.TsBinding::Ident(rest_name)),
             is_rest: true,
+            is_optional: false,
             type_: Any,
             default: None,
           }
