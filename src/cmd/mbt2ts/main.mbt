@@ -1,7 +1,7 @@
 ///|
 fn mbt2ts_print_usage() -> Unit {
   println(
-    "Usage: mbt2ts [--input <pkg-or-mbti> --out <dir>] [<subcommand> args...]",
+    "Usage: mbt2ts --pkg [options] | [--input <pkg-or-mbti> --out <dir>] [<subcommand> args...]",
   )
   println("")
   println(
@@ -24,6 +24,7 @@ fn mbt2ts_print_usage() -> Unit {
 /// stable.
 pub fn mbt2ts_help_lines() -> Array[String] {
   [
+    "  --pkg [--out <dir>] [--strict] [--no-facade] [--import-rewrites <json>] Build current MoonBit library packages and write an npm-publishable package to ./npm",
     "  --input <pkg-or-mbti> --out <dir> [--diagnostics <path>] [--strict] [--no-facade] [--import-rewrites <json>] Generate a complete build-backed TypeScript package from a MoonBit pkg.generated.mbti",
     "  decl <mbti> [out] Emit TypeScript declarations directly from a MoonBit .mbti interface",
     "  link-config <mbti> [out] Emit MoonBit link.js.exports config from a .mbti interface",
@@ -68,6 +69,12 @@ async fn mbt2ts_main_async() -> Unit {
   }
   if @ts.cli_token_is_version(args[1]) {
     @ts.cli_print_version("mbt2ts")
+    return
+  }
+  if args[1] == "--pkg" {
+    if !@ts.run_mbt_to_ts_pkg_cli(args, 2, print_help=mbt2ts_print_usage) {
+      @ts.cli_fail("mbt2ts")
+    }
     return
   }
   if args[1].has_prefix("--") || args[1] == "-h" {

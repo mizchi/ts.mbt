@@ -128,6 +128,8 @@ pub struct MbtiTypescriptScaffoldBundle {
   package_json : String
   autolink_diagnostics_md : String
   autolink_glue_mbt : String
+  runtime_value_adapter_js : String
+  runtime_boundary_export_names : Array[String]
   files : Array[MbtiTypescriptPackageFile]
 }
 

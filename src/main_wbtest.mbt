@@ -16,6 +16,12 @@ fn wbtest_basename(path : String) -> String {
 }
 
 ///|
+test "types package hint rewrites scoped package names" {
+  assert_eq(types_package_hint("@scope/no-types"), "@types/scope__no-types")
+  assert_eq(types_package_hint("no-types"), "@types/no-types")
+}
+
+///|
 fn wbtest_tmp_neverthrow_like_root(name : String) -> String {
   "/tmp/ts_mbt_neverthrow_like_" + name
 }
@@ -33,6 +39,20 @@ async test "mtsc JavaScript module exposes only the Vite graph checker ABI" {
   assert_true(manifest.contains("\"check_module_graph:checkModuleGraph\""))
   assert_false(manifest.contains("check_source:checkSource"))
   assert_false(manifest.contains("check_module_sources:checkModuleSources"))
+}
+
+///|
+async test "write_text_file preserves UTF-8 text in generated outputs" {
+  let root = wbtest_tmp_project_benchmark_root("write_text_file_utf8")
+  let _ = try? @fs.rmdir(root, recursive=true)
+  ensure_dir_tree(root)
+  let path = wbtest_join_path(root, "unicode.txt")
+  let expected = "MoonBit — 日本語 😀\n"
+  assert_true(write_text_file(path, expected))
+  let actual = @fs.read_file(path).text() catch {
+    e => fail("generated text was not valid UTF-8: \{e}")
+  }
+  assert_eq(actual, expected)
 }
 
 ///|
@@ -984,6 +1004,192 @@ async test "emit_typescript_scaffold_from_mbti handles DSL moon.mod source subdi
   )
   assert_true(root_js.contains("function __tsmbt_public_return(value)"))
   assert_true(root_js.contains("export function make(...args)"))
+}
+
+///|
+async test "emit_typescript_npm_package_from_project creates a publishable npm directory" {
+  let root = wbtest_tmp_project_benchmark_root("mbt2ts_pkg_publishable")
+  let _ = try? @fs.rmdir(root, recursive=true)
+  let source_root = wbtest_join_path(root, "src")
+  ensure_dir_tree(source_root)
+  @fs.write_file(
+    wbtest_join_path(root, "moon.mod.json"),
+    (
+      #|{
+      #|  "name": "fixture/npm-ready",
+      #|  "version": "1.2.3",
+      #|  "description": "A publishable MoonBit fixture",
+      #|  "license": "Apache-2.0",
+      #|  "repository": "https://github.com/fixture/npm-ready",
+      #|  "source": "src",
+      #|  "preferred-target": "js"
+      #|}
+    ),
+    create=0o644,
+  )
+  @fs.write_file(wbtest_join_path(source_root, "moon.pkg"), "", create=0o644)
+  @fs.write_file(
+    wbtest_join_path(source_root, "lib.mbt"),
+    (
+      #|///|
+      #|pub fn greet(name : String) -> String {
+      #|  "Hello, " + name
+      #|}
+    ),
+    create=0o644,
+  )
+  @fs.write_file(
+    wbtest_join_path(root, "README.md"),
+    "# fixture npm package\n",
+    create=0o644,
+  )
+  @fs.write_file(
+    wbtest_join_path(root, "LICENSE"),
+    "Apache-2.0\n",
+    create=0o644,
+  )
+
+  assert_true(
+    emit_typescript_npm_package_from_project(root, None, None, false, true),
+  )
+
+  let npm_dir = wbtest_join_path(root, "npm")
+  let package_json = @fs.read_file(wbtest_join_path(npm_dir, "package.json")).text() catch {
+    e => fail("failed to read generated npm package.json: \{e}")
+  }
+  assert_true(package_json.contains("\"name\": \"@fixture/npm-ready\""))
+  assert_true(package_json.contains("\"version\": \"1.2.3\""))
+  assert_true(
+    package_json.contains("\"description\": \"A publishable MoonBit fixture\""),
+  )
+  assert_true(package_json.contains("\"license\": \"Apache-2.0\""))
+  assert_true(
+    package_json.contains(
+      "\"repository\": { \"type\": \"git\", \"url\": \"git+https://github.com/fixture/npm-ready.git\" }",
+    ),
+  )
+  assert_true(package_json.contains("\"files\": ["))
+  assert_true(package_json.contains("\"index.d.ts\""))
+  assert_true(package_json.contains("\"index.js\""))
+  assert_false(package_json.contains("**/*.d.ts"))
+  assert_true(@fs.exists(wbtest_join_path(npm_dir, "index.js")))
+  assert_true(@fs.exists(wbtest_join_path(npm_dir, "index.d.ts")))
+  assert_true(@fs.exists(wbtest_join_path(npm_dir, "README.md")))
+  assert_true(@fs.exists(wbtest_join_path(npm_dir, "LICENSE")))
+  let (pack_exit, pack_output) = @process.collect_output_merged(
+    "npm",
+    ["pack", "--dry-run"],
+    cwd=npm_dir,
+  )
+  if pack_exit != 0 {
+    fail("npm pack --dry-run failed: \{pack_output.text()}")
+  }
+}
+
+///|
+async test "emit_typescript_npm_package_from_project exports unreferenced source submodules" {
+  let root = wbtest_tmp_project_benchmark_root("mbt2ts_pkg_submodule_exports")
+  let _ = try? @fs.rmdir(root, recursive=true)
+  let source_root = wbtest_join_path(root, "src")
+  let mtsc_root = wbtest_join_path(source_root, "mtsc")
+  let command_root = wbtest_join_path(source_root, "cmd/checker")
+  let ignored_command_root = wbtest_join_path(source_root, "cmd/ignored")
+  ensure_dir_tree(mtsc_root)
+  ensure_dir_tree(command_root)
+  ensure_dir_tree(ignored_command_root)
+  @fs.write_file(
+    wbtest_join_path(root, "moon.mod.json"),
+    (
+      #|{
+      #|  "name": "fixture/npm-submodule-exports",
+      #|  "version": "1.2.3",
+      #|  "source": "src",
+      #|  "preferred-target": "js",
+      #|  "options": { "exclude": ["src/cmd/ignored"] }
+      #|}
+    ),
+    create=0o644,
+  )
+  @fs.write_file(
+    wbtest_join_path(source_root, "moon.pkg"),
+    "pkgtype(kind: \"executable\")\n",
+    create=0o644,
+  )
+  @fs.write_file(
+    wbtest_join_path(source_root, "root.mbt"),
+    "pub fn root_value() -> String { \"root\" }\n",
+    create=0o644,
+  )
+  @fs.write_file(
+    wbtest_join_path(source_root, "main.mbt"),
+    "pub fn main_helper() -> String { \"helper\" }\nfn main { println(\"root command\") }\n",
+    create=0o644,
+  )
+  @fs.write_file(wbtest_join_path(mtsc_root, "moon.pkg"), "", create=0o644)
+  @fs.write_file(
+    wbtest_join_path(mtsc_root, "checker.mbt"),
+    "pub fn check_source(source : String) -> String { if source == \"bad\" { \"type error\" } else { \"\" } }\n",
+    create=0o644,
+  )
+  @fs.write_file(
+    wbtest_join_path(command_root, "moon.pkg"),
+    "pkgtype(kind: \"executable\")\n",
+    create=0o644,
+  )
+  @fs.write_file(
+    wbtest_join_path(command_root, "main.mbt"),
+    "fn main { println(\"checker command\") }\n",
+    create=0o644,
+  )
+  @fs.write_file(
+    wbtest_join_path(ignored_command_root, "moon.pkg"),
+    "pkgtype(kind: \"executable\")\n",
+    create=0o644,
+  )
+  @fs.write_file(
+    wbtest_join_path(ignored_command_root, "main.mbt"),
+    "fn main { println(\"ignored command\") }\n",
+    create=0o644,
+  )
+
+  assert_true(
+    emit_typescript_npm_package_from_project(root, None, None, false, true),
+  )
+
+  let npm_dir = wbtest_join_path(root, "npm")
+  let package_json = @fs.read_file(wbtest_join_path(npm_dir, "package.json")).text() catch {
+    e => fail("failed to read generated submodule package.json: \{e}")
+  }
+  let mtsc_decl = @fs.read_file(wbtest_join_path(npm_dir, "mtsc/index.d.ts")).text() catch {
+    e => fail("failed to read generated mtsc declaration: \{e}")
+  }
+  assert_true(
+    package_json.contains(
+      "\"./mtsc\": { \"types\": \"./mtsc/index.d.ts\", \"import\": \"./mtsc/index.js\" }",
+    ),
+  )
+  assert_true(@fs.exists(wbtest_join_path(npm_dir, "mtsc/index.js")))
+  assert_true(mtsc_decl.contains("export function check_source"))
+  assert_true(package_json.contains("\"bin\": {"))
+  assert_true(package_json.contains("\"checker\": \"./bin/checker.js\""))
+  let command_bin = @fs.read_file(wbtest_join_path(npm_dir, "bin/checker.js")).text() catch {
+    e => fail("failed to read generated command bin: \{e}")
+  }
+  assert_true(command_bin.has_prefix("#!/usr/bin/env node\n"))
+  assert_false(package_json.contains("\"./cmd/checker\""))
+  assert_true(
+    package_json.contains(
+      "\"npm-submodule-exports\": \"./bin/npm-submodule-exports.js\"",
+    ),
+  )
+  let root_command_bin = @fs.read_file(
+    wbtest_join_path(npm_dir, "bin/npm-submodule-exports.js"),
+  ).text() catch {
+    e => fail("failed to read generated root command bin: \{e}")
+  }
+  assert_true(root_command_bin.has_prefix("#!/usr/bin/env node\n"))
+  assert_false(package_json.contains("\"ignored\": \"./bin/ignored.js\""))
+  assert_false(@fs.exists(wbtest_join_path(npm_dir, "bin/ignored.js")))
 }
 
 ///|

@@ -13,6 +13,22 @@
 ///
 /// `vendor_root_override` overrides the output root. Defaults to
 /// `<moon-mod source>/internal/generated`.
+fn types_package_hint(pkg_spec : String) -> String {
+  if pkg_spec.has_prefix("@") {
+    match pkg_spec.find("/") {
+      Some(idx) =>
+        "@types/" +
+        pkg_spec[1:idx].to_owned() +
+        "__" +
+        pkg_spec[idx + 1:].to_owned()
+      None => "@types/\{pkg_spec}"
+    }
+  } else {
+    "@types/\{pkg_spec}"
+  }
+}
+
+///|
 pub async fn ts2mbt_vendor_package(
   pkg_spec : String,
   module_spec_override? : String? = None,
@@ -48,18 +64,7 @@ pub async fn ts2mbt_vendor_package(
   if entry_path.has_suffix(".js") ||
     entry_path.has_suffix(".cjs") ||
     entry_path.has_suffix(".mjs") {
-    let types_pkg_hint = if pkg_spec.has_prefix("@") {
-      match pkg_spec.find("/") {
-        Some(idx) =>
-          "@types/" +
-          pkg_spec.substring(start=1, end=idx).to_string() +
-          "__" +
-          pkg_spec.substring(start=idx + 1).to_string()
-        None => "@types/\{pkg_spec}"
-      }
-    } else {
-      "@types/\{pkg_spec}"
-    }
+    let types_pkg_hint = types_package_hint(pkg_spec)
     println(
       "vendor: WARNING '\{pkg_spec}' ships no TypeScript declarations (resolved \{entry_path}); the generated API surface will be minimal — try `npm i -D \{types_pkg_hint}` and re-run",
     )
