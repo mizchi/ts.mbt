@@ -295,6 +295,36 @@ fn surface_escape_class(
       }
     None => ()
   }
+  // The instance's runtime shape. A field declared without an
+  // initializer (`alphaTop: number;`) erases completely under
+  // `useDefineForClassFields: false`, so the only thing that puts the
+  // property on the object is `this.alphaTop = …` in the constructor —
+  // and that write lives in a statement, whose property name the
+  // expression visitor never sees. Without this, every field of an
+  // escaping class instance looked manglable.
+  //
+  // `prop_assigns` is indexed by receiver name across the whole block,
+  // so `this` collects the writes of every class in the bundle. That
+  // over-reserves when one class escapes and another doesn't; the
+  // alternative — a per-class scan — buys precision we don't need yet,
+  // and erring this way only costs bytes.
+  //
+  // Note the filter: only mtsc's synthesised markers are excluded, NOT
+  // `decl.private_members`. TypeScript's `private` is a compile-time
+  // convention with no runtime effect, so a `private` field is right
+  // there in `Object.keys` and `JSON.stringify` output. Real `#x`
+  // fields are desugared to `__private_brand__…` markers, which the
+  // marker check does catch.
+  match w.prop_assigns.get("this") {
+    Some(writes) =>
+      for entry in writes {
+        if !is_internal_marker_prop(entry.0) {
+          w.reserved[entry.0] = true
+          surface_escape_expr(w, entry.1, depth + 1)
+        }
+      }
+    None => ()
+  }
   for base in decl.base_names {
     surface_enqueue(w, base)
   }

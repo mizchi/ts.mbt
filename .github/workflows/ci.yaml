@@ -80,7 +80,9 @@ jobs:
       # Differential validation of `mtsc --mangle-properties`: each case in
       # fixtures/mangle-safety is compiled with and without property
       # mangling, both bundles are run under Node, and the observations are
-      # diffed. A difference means a renamed property was observable.
+      # diffed. A difference means a renamed property was observable. The
+      # recipe also re-derives fixtures/mangle-safety/generated from the
+      # safety model and fails if the checked-in cases have drifted.
       - name: Verify mangle safety
         run: just verify-mangle-safety
 

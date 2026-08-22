@@ -138,4 +138,9 @@ clean:
 # Validate `--mangle-properties` against the mangle-safety corpus
 verify-mangle-safety *ARGS:
     moon build --target native
+    node scripts/generate_mangle_cases.mjs --check
     node scripts/verify_mangle_safety.mjs {{ ARGS }}
+
+# Regenerate the machine-derived mangle-safety cases
+gen-mangle-cases:
+    node scripts/generate_mangle_cases.mjs

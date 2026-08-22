@@ -1,0 +1,23 @@
+{
+  "origin": "generated — scripts/generate_mangle_cases.mjs",
+  "generated": true,
+  "what": "An instance of a bundle-internal class that is handed to a function imported from an external package. Observation depth external, so the expectation is derived, not authored.",
+  "externals": [
+    "ext-sink"
+  ],
+  "stubs": {
+    "ext-sink": "export function send(value) {\n  // Read the names back out so a rename is observable.\n  console.log('ext-sink.send', JSON.stringify(value));\n}\n"
+  },
+  "exports": [
+    "total"
+  ],
+  "expectKeep": [
+    "alphaTop",
+    "alphaWrap",
+    "alphaDeep"
+  ],
+  "expectMangle": [
+    "omegaCtl"
+  ],
+  "expectStatus": "pass"
+}

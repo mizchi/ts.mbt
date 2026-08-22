@@ -100,6 +100,50 @@ pub fn collect_externally_visible_props(
       _ => collect_object_literal_keys(sink.expr, reserved_literals)
     }
   }
+  // Phase 4d: a value observed *recursively* exposes its whole tree, not
+  // just the keys sitting on its own initializer.
+  //
+  // `reserved_props_from_observability` treats `RecursiveProps` and
+  // `DirectProps` identically — both collect the binding's first-level
+  // keys — even though the lattice exists precisely to tell them apart.
+  // So `console.log(payload)` reserved `payload`'s own keys and left the
+  // nested ones to the dead-property pass, and a payload whose keys
+  // aren't on a literal initializer at all (built by an internal
+  // function, assigned in a constructor, an element of an array)
+  // reserved nothing whatsoever.
+  //
+  // Walking a value tree from a set of roots is what door 1 already
+  // does from the entry's exports, and it resolves exactly the shapes
+  // that were missing here: nested literals, array elements, an
+  // internal function's returns, a class's members. Same walk, different
+  // roots.
+  let recursive_roots : Map[String, Bool] = {}
+  for entry in obs_map {
+    let (sym_id, obs) = entry
+    let sym = graph.symbols[sym_id]
+    match obs {
+      RecursiveProps | External => recursive_roots[sym.name] = true
+      // `Object.keys(x)` / `for-in x` enumerate ONE level, and keeping
+      // that distinction is where the precision lives: the nested key
+      // under an enumerated object stays manglable. But the one-level
+      // rule is `collect_direct_props`, which reads the keys off the
+      // binding's own object literal — so it finds nothing at all when
+      // the value came from a function, an array element or a
+      // constructor. Keep the precise rule exactly when we can see the
+      // literal, and fall back to the whole tree when we can't.
+      DirectProps =>
+        if !has_object_literal_def(sym) {
+          recursive_roots[sym.name] = true
+        }
+      _ => ()
+    }
+  }
+  let reserved_tree : Map[String, Bool] = {}
+  if recursive_roots.size() > 0 {
+    for n in exported_surface_props(block, recursive_roots) {
+      reserved_tree[n] = true
+    }
+  }
   // Phase 4c: a binding whose value CAME FROM outside — `const ret =
   // external.f(...)`, `const cfg = JSON.parse(text)`, the `r` in
   // `rows.map(r => r.id)` when `rows` is host-shaped — carries a shape
@@ -139,6 +183,11 @@ pub fn collect_externally_visible_props(
     }
   }
   for k in reserved_literals.keys() {
+    if !is_internal_marker_prop(k) {
+      reserved[k] = true
+    }
+  }
+  for k in reserved_tree.keys() {
     if !is_internal_marker_prop(k) {
       reserved[k] = true
     }
@@ -207,6 +256,19 @@ pub fn undeclared_referenced_names(block : @ast.TsBlock) -> Map[String, Bool] {
 /// something else in the analysis reaches them.
 fn is_dynamically_bound_name(name : String) -> Bool {
   name == "this" || name == "super" || name == "arguments"
+}
+
+///|
+/// Does this binding hold an object literal we can read keys off
+/// directly? Decides whether the one-level `DirectProps` rule has
+/// anything to work with.
+fn has_object_literal_def(sym : Symbol) -> Bool {
+  for d in sym.defs {
+    if d.init is Some(@ast.TsExpr::ObjectLit(_)) {
+      return true
+    }
+  }
+  false
 }
 
 ///|

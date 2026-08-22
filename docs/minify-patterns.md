@@ -158,6 +158,69 @@ corpus に 2 件足しました（`just verify-mangle-safety`）。
 baseline は素の `--bundle` なので、消してはいけない call を消せば
 必ず 2 つの観測がずれます。
 
+## テストパターンを払い出す
+
+pass ごとに case を手書きしていると、corpus は「誰かが思いついた状況」の
+集合になります。これは解析側で一度やらかしたのと同じ失敗の形で、
+思いつかなかった状況の場所にちょうど穴が空きます。
+
+そこで **モデルから払い出す**方向に変えました
+（`scripts/generate_mangle_cases.mjs`、`just gen-mangle-cases`）。
+軸は 2 つです。
+
+- **carrier** — property を持つ値の作り方。top-level object literal /
+  内部関数の戻り値 / class instance / array の要素。
+- **exit** — 値の出口と、sink の観測の深さ。出口なし / `console.log` /
+  `JSON.stringify` / `fetch` body / external package の関数 / nested な
+  host chain / `Object.keys` / `for-in`。
+
+期待値は**書かず、導出**します。
+
+| 観測の深さ | 予約されるべき名前 |
+| --- | --- |
+| `none` | なし |
+| `direct` (`Object.keys` / `for-in`) | 第 1 階層の key だけ |
+| `recursive` (`JSON.stringify` / `console.log` / request body) | 木全体 |
+| `external` (foreign callee) | 木全体 |
+
+carrier 側は「観測される値から名前までの階層のずれ」を宣言します
+（array 要素は 1 段深いので、`Object.keys(array)` は `"0"` を列挙する
+だけで要素の key は露出しません）。この 2 つを掛けるだけで
+`expectKeep` / `expectMangle` が決まります。4 carrier × 8 exit = 32 件。
+
+### 初回実行で出た 4 件
+
+全部本物の安全性違反でした。差分実行が独立に裏付けています。
+
+| 症状 | 原因 | 対処 |
+| --- | --- | --- |
+| `console.log(payload)` で nested key (`{ wrap: { deep } }` の `deep`) が **削除**される | `reserved_props_from_observability` が `RecursiveProps` と `DirectProps` を同じ `collect_direct_props` で処理していた。lattice は区別しているのに予約側が使っていない | Phase 4d を追加 |
+| 内部関数の戻り値を sink に渡すと key が**何も**予約されない（`const payload = build(); console.log(payload)` → `console.log({})`） | `collect_direct_props` は binding 自身の ObjectLit init しか読まない | 同上 |
+| array の要素の key が予約されない（`[{ … }]` → `[{}]`） | 同上 | 同上 |
+| class instance の field が rename される（`{"a":1,"b":{}}`） | `surface_escape_class` が `this.x = …` の**書き込み**を見ていなかった。`useDefineForClassFields: false` では初期化子の無い field 宣言は完全に消えるので、runtime shape を作るのは constructor の代入だけ | `prop_assigns["this"]` を参照 |
+
+最初の 3 件は「値の木を root から歩く」という同じ walk を欲しがっていて、
+それは door 1 が export された binding からやっていることそのままです。
+root だけ差し替えて再利用しました（Phase 4d）。
+
+`DirectProps` の 1 階層精度は残す価値があるので
+（`Object.keys` された object の nested key は本当に mangle 可能）、
+「literal が見えているときだけ 1 階層規則、見えないときは木全体に倒す」
+という形にしています。
+
+4 件目は **door 1 のバグでもあります**。field を constructor でしか
+代入しない exported class は、field 名が rename され得る状態でした。
+なお `this` 書き込みの収集では `decl.private_members` で絞っていません
+— TypeScript の `private` は compile 時の約束で runtime には残るので、
+`JSON.stringify` すれば普通に見えます。真の `#x` は parser が
+`__private_brand__…` に脱糖するので marker 判定側で落ちます。
+
+### 生成物の扱い
+
+`fixtures/mangle-safety/generated/` は commit します（CI が走るため）。
+`just verify-mangle-safety` が `--check` で再生成して差分を検出するので、
+generator と fixture が乖離できません。
+
 ## 未実装パターンの証明義務
 
 「安全に拡張できる範囲」を具体的に残しておくための節です。実装より

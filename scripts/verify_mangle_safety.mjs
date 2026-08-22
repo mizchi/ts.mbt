@@ -385,10 +385,23 @@ function firstDiagnostic(res) {
 // Driver
 // ---------------------------------------------------------------
 
-const caseNames = fs
-  .readdirSync(CORPUS, { withFileTypes: true })
-  .filter((d) => d.isDirectory() && fs.existsSync(path.join(CORPUS, d.name, "case.json")))
-  .map((d) => d.name)
+// Cases live either directly under the corpus root (the hand-written
+// ones) or one level down, so the machine-generated matrix can sit in
+// its own directory without drowning the listing. A case is any
+// directory holding a `case.json`; names keep their relative path, so
+// `--case generated/literal-console-log` addresses one of them.
+function collectCases(dir, prefix = "") {
+  const out = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (fs.existsSync(path.join(dir, entry.name, "case.json"))) out.push(rel);
+    else if (prefix === "") out.push(...collectCases(path.join(dir, entry.name), rel));
+  }
+  return out;
+}
+
+const caseNames = collectCases(CORPUS)
   .sort()
   .filter((n) => onlyCase === null || n === onlyCase);
 
@@ -409,7 +422,7 @@ for (const res of results) {
   if (mark === "REGR") regressions++;
   if (mark === "FIXD") fixed++;
   console.log(
-    `  [${mark}] ${res.name.padEnd(24)} ${res.status}${res.status === expected ? "" : ` (expected ${expected})`}`,
+    `  [${mark}] ${res.name.padEnd(38)} ${res.status}${res.status === expected ? "" : ` (expected ${expected})`}`,
   );
   if (res.detail) console.log(`         ${res.detail}`);
   for (const f of res.failures) console.log(`         ✗ ${f}`);
