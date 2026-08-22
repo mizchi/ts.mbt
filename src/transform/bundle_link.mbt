@@ -112,6 +112,15 @@ fn link_module_graph(
       if imp.type_only || imp.side_effect_only {
         continue
       }
+      // An EXTERNAL `import * as ns from "pkg"` keeps its binding: the
+      // import header is re-emitted verbatim at the top of the bundle,
+      // so the name is fixed. Renaming it here rewrote every `ns.member`
+      // reference to a name nothing declared — external bindings are
+      // pre-reserved in `taken`, so the mint below fired on the very
+      // binding it was meant to protect.
+      if m.resolved_imports.get(imp.module_spec) is None {
+        continue
+      }
       match imp.namespace_binding {
         Some(ns_local) => {
           let final_name = if !taken.contains(ns_local) {

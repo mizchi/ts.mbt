@@ -1,6 +1,6 @@
 {
   "origin": "packelyze fixtures/case03-global",
-  "what": "Ambient global declared in a sibling .d.ts. Everything reachable through it is external ABI.",
+  "what": "Ambient global declared in a sibling .d.ts. Everything reachable through it is external ABI, so the stub records what it is handed \u2014 a name only reached through a host global is only observable if the stub uses it.",
   "exports": [
     "foo"
   ],
@@ -9,8 +9,8 @@
     "x",
     "y"
   ],
-  "globals": [
-    "MyGlobal"
-  ],
-  "expectStatus": "pass"
+  "expectStatus": "pass",
+  "globalStubs": {
+    "MyGlobal": "{ foo: \"FOO\", bar: 7, f: (input) => { console.log(\"MyGlobal.f\", input); return { y: input.x * 2 }; } }"
+  }
 }

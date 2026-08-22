@@ -168,11 +168,26 @@ pub fn undeclared_referenced_names(block : @ast.TsBlock) -> Map[String, Bool] {
   collect_var_refs_in_block(block, referenced)
   let out : Map[String, Bool] = {}
   for name in referenced.keys() {
-    if !declared.contains(name) {
+    if !declared.contains(name) && !is_dynamically_bound_name(name) {
       out[name] = true
     }
   }
   out
+}
+
+///|
+/// Names that are never "provided by the host" even though no
+/// declaration binds them. `this` is the important one: it is bound by
+/// the call, so `this.field` inside a bundle-internal method is an
+/// internal access, and treating it as external would reserve the
+/// property surface of every class and object literal in the bundle.
+///
+/// The exception this accepts: a callback handed to an external API can
+/// have `this` bound to a foreign object (`external.on("x", function ()
+/// { this.foo })`). That receiver's names would then be reserved only if
+/// something else in the analysis reaches them.
+fn is_dynamically_bound_name(name : String) -> Bool {
+  name == "this" || name == "super" || name == "arguments"
 }
 
 ///|

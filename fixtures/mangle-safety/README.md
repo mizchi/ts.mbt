@@ -23,9 +23,28 @@ just verify-mangle-safety --case case04-internal
 
 ## What each case asserts
 
-`scripts/verify_mangle_safety.mjs` compiles every entry twice — once
-with plain `--bundle`, once with
-`--bundle --mangle-properties --reserve-entry-exports` — and then:
+`scripts/verify_mangle_safety.mjs` observes the same public API three
+times and compares:
+
+| variant | what it is |
+| --- | --- |
+| `reference` | the case's original TypeScript, run through Node's type stripping — no compiler of ours involved |
+| `baseline` | `mtsc --bundle` |
+| `mangled` | `mtsc --bundle --mangle-properties --reserve-entry-exports` |
+
+All three go through one child-process runner
+(`scripts/lib/observe-runner.mjs`), so a difference between them is a
+difference in the *module*, never in how it was watched.
+
+`baseline` vs `mangled` catches an unsafe rename. `reference` vs
+`baseline` catches the other half: a bug present in *both* our outputs —
+class-method DCE deleting a public method was exactly that, the two mtsc
+variants agreed with each other and were both wrong. Node's type
+stripping only handles erasable syntax, so a case using a parameter
+property, the `module` keyword, or a type imported in value form reports
+the reference leg as unavailable rather than as a disagreement.
+
+Then it:
 
 1. **Export surface.** Every name in `case.json`'s `exports` must be
    exported by both bundles. A dropped `export … from` is a failure
@@ -41,6 +60,11 @@ with plain `--bundle`, once with
    break). `expectMangle` names are the compression opportunities
    packelyze took; keeping one is reported as a missed opportunity,
    not a failure, because staying conservative is always sound.
+4. **Mutation self-check.** One `expectKeep` name is deliberately
+   renamed in the mangled bundle, and the run must notice. A case whose
+   driver never exercises the names it claims to protect gives a hollow
+   guarantee, and this is what stops the corpus from going green on
+   nothing. It found two such cases on its first run.
 
 ## `case.json`
 
@@ -51,7 +75,9 @@ with plain `--bundle`, once with
 | `entry` | entry file (default `index.ts`) |
 | `externals` | bare specifiers passed as `--external` |
 | `stubs` | `{ specifier: moduleSource }` written into a local `node_modules` so the bundle can run |
-| `globals` | host globals to define before running (`window`, …) |
+| `globals` | host globals to define as empty objects before running (`window`, …) |
+| `globalStubs` | `{ name: "<js expression>" }` — a host global with a real body, for when a name is only reachable through one |
+| `reference` | set `false` to skip the reference leg for this case |
 | `fakeTimers` | run `setTimeout` callbacks on the microtask queue |
 | `run` | set `false` to skip execution |
 | `exports` | names the entry is expected to export |
