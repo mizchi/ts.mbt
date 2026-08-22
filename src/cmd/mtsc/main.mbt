@@ -563,6 +563,71 @@ fn mtsc_typecheck_source(source : String, path : String) -> Bool {
 }
 
 ///|
+/// Refuse input that carries a construct the emitter would silently
+/// erase. Right now that is exactly one thing: a `namespace N { … }`
+/// (or `module N { … }`) holding runtime members. The statement
+/// parser skips those bodies, so the JS came out with every
+/// `N.member` reference intact and nothing declaring `N` — a
+/// `ReferenceError` at load time, with no diagnostic. Failing the
+/// compile is the honest outcome until the lowering exists.
+///
+/// Ambient `declare namespace` bodies are erased legitimately (they
+/// declare no runtime members), so they don't trip this.
+fn mtsc_reject_unsupported(source : String, path : String) -> Bool {
+  let module_ = match
+    (try
+      @parser.Parser::from_source_with_jsx(source, path.has_suffix(".tsx")).parse_module()
+    catch {
+      _ => Err("")
+    } noraise {
+      m => Ok(m)
+    }) {
+    Ok(m) => m
+    // Parse failures are reported by the type-check pass; don't
+    // double-report here.
+    Err(_) => return true
+  }
+  let offenders : Array[String] = []
+  fn scan(prefix : String, namespaces : Array[@ast.TsNamespaceDecl]) -> Unit {
+    for ns in namespaces {
+      let qualified = if prefix == "" {
+        ns.name
+      } else {
+        prefix + "." + ns.name
+      }
+      if !ns.is_declare && namespace_has_runtime_members(ns.module_) {
+        offenders.push(qualified)
+      }
+      scan(qualified, ns.module_.namespaces)
+    }
+  }
+
+  scan("", module_.namespaces)
+  if offenders.length() == 0 {
+    return true
+  }
+  for name in offenders {
+    println(
+      "mtsc: unsupported in \{path}: `namespace \{name}` declares runtime members, which mtsc cannot lower yet (the body would be erased and every `\{name}.member` reference would fail at load time). Move the members to module scope, or keep the namespace type-only.",
+    )
+  }
+  false
+}
+
+///|
+/// True when a namespace body declares something that has to exist at
+/// runtime: a statement, a function, a value, a class, or an enum.
+/// Only consulted for non-ambient namespaces, where every one of
+/// those is a real declaration rather than a type-level signature.
+fn namespace_has_runtime_members(module_ : @ast.TsModule) -> Bool {
+  module_.top_level_stmts.length() > 0 ||
+  module_.enums.length() > 0 ||
+  module_.funcs.length() > 0 ||
+  module_.values.length() > 0 ||
+  module_.classes.length() > 0
+}
+
+///|
 #cfg(any(target="native", target="llvm"))
 extern "c" fn mtsc_native_exit(code : Int) = "exit"
 
@@ -671,6 +736,9 @@ async fn main {
       match files.get(path) {
         Some(source) =>
           if !mtsc_typecheck_source(source, path) {
+            mtsc_exit_type_error()
+            return
+          } else if !mtsc_reject_unsupported(source, path) {
             mtsc_exit_type_error()
             return
           }
@@ -901,6 +969,10 @@ async fn main {
     }
   }
   if !mtsc_typecheck_source(source, input_path) {
+    mtsc_exit_type_error()
+    return
+  }
+  if !mtsc_reject_unsupported(source, input_path) {
     mtsc_exit_type_error()
     return
   }

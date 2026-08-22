@@ -74,7 +74,26 @@ pub fn collect_externally_visible_props(
   // here.
   let obs_map = analyze_observability(graph, scoped_sinks)
   let reserved_obs = reserved_props_from_observability(graph, obs_map)
+  // Phase 4b: a sink argument that IS an object literal
+  // (`external.send({ id: 1 })`, `JSON.stringify({ body })`) has no
+  // free variable for the flow analysis to seed, so Phase 4 never
+  // sees it. Its keys leave the bundle all the same — the foreign
+  // callee reads them by name — so reserve them straight off the
+  // literal, nested levels included.
+  let reserved_literals : Map[String, Bool] = {}
+  for entry in scoped_sinks {
+    let (sink, _) = entry
+    match sink.observation {
+      StringifyOnly => ()
+      _ => collect_object_literal_keys(sink.expr, reserved_literals)
+    }
+  }
   let reserved : Map[String, Bool] = {}
+  for k in reserved_literals.keys() {
+    if !is_internal_marker_prop(k) {
+      reserved[k] = true
+    }
+  }
   for k in reserved_external.keys() {
     // Internal mtsc markers (`__private_brand__N__X`, `__super_proto`,
     // `__brand__`) are synthesised private — no external consumer can
@@ -1058,6 +1077,10 @@ fn collect_reflection_sinks_expr(
 ///|
 /// Record every literal key in an object literal so it survives
 /// the reflection pass. Used by `JSON.stringify({foo: 1})` etc.
+///
+/// Recurses through nested literals: `JSON.stringify({ a: { b: 1 } })`
+/// serializes `b` just as visibly as `a`, and an array of literals
+/// (`send([{ id: 1 }])`) carries its element keys out too.
 fn collect_object_literal_keys(
   expr : @ast.TsExpr,
   out : Map[String, Bool],
@@ -1068,7 +1091,22 @@ fn collect_object_literal_keys(
         if ent.0 != "..." {
           out[ent.0] = true
         }
+        collect_object_literal_keys(ent.1, out)
       }
+    ArrayLit(items) =>
+      for it in items {
+        collect_object_literal_keys(it, out)
+      }
+    Spread(inner)
+    | As(inner, _)
+    | Satisfies(inner, _)
+    | NonNull(inner)
+    | TypeArgs(_, inner)
+    | Await(inner) => collect_object_literal_keys(inner, out)
+    Cond(_, t, e) => {
+      collect_object_literal_keys(t, out)
+      collect_object_literal_keys(e, out)
+    }
     _ => ()
   }
 }

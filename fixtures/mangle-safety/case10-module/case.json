@@ -1,0 +1,28 @@
+{
+  "origin": "packelyze fixtures/case10-module",
+  "what": "Internal module / namespace, a global augmentation, and a namespace import from an external package.",
+  "externals": [
+    "myModule"
+  ],
+  "globals": [
+    "window"
+  ],
+  "stubs": {
+    "myModule": "export function myFunction(input) { console.log(\"myModule.myFunction\", input); return `ret:${input}`; }\n"
+  },
+  "exports": [
+    "messages"
+  ],
+  "expectKeep": [
+    "myFunction",
+    "myCustomFunction",
+    "internal",
+    "namespace",
+    "window"
+  ],
+  "expectMangle": [
+    "getInternalMessage",
+    "getNamespaceMessage"
+  ],
+  "expectStatus": "blocked-compile"
+}

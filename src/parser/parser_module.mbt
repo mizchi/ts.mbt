@@ -723,7 +723,11 @@ fn Parser::parse_namespace_decl_with_mode(
       let body_source = self.parse_declaration_block_source()
       let augmented = parse_ambient_external_module_source(body_source)
       self.propagate_suppression_sentinels(augmented)
-      let ns : @ast.TsNamespaceDecl = { name: "<global>", module_: augmented }
+      let ns : @ast.TsNamespaceDecl = {
+        name: "<global>",
+        module_: augmented,
+        is_declare: true,
+      }
       return Some((None, Some(ns)))
     } else {
       // bare `global` without a block — just skip to semicolon
@@ -836,7 +840,11 @@ fn Parser::parse_namespace_decl_with_mode(
           module_ => module_
         }
       }
-      let next_namespace : @ast.TsNamespaceDecl = { name, module_ }
+      let next_namespace : @ast.TsNamespaceDecl = {
+        name,
+        module_,
+        is_declare: body_is_ambient,
+      }
       Some(next_namespace)
     }
     _ => {

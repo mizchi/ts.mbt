@@ -1,0 +1,19 @@
+{
+  "origin": "packelyze fixtures/case17-re-export",
+  "what": "`export { … } from`, a renamed type re-export, and `export *`. Everything they surface is public.",
+  "exports": [
+    "subFunction",
+    "nestedFunction",
+    "publicFunction",
+    "allExportedFunction"
+  ],
+  "expectKeep": [
+    "id",
+    "subValue",
+    "nestedValue",
+    "pubValue",
+    "name",
+    "age"
+  ],
+  "expectStatus": "pass"
+}

@@ -1,0 +1,14 @@
+{
+  "origin": "packelyze fixtures/case20-objectRest",
+  "what": "A private helper's result spread into a public shape: the spread carries the private keys into the public one.",
+  "exports": [
+    "getChanges"
+  ],
+  "expectKeep": [
+    "fileName",
+    "content",
+    "start",
+    "end"
+  ],
+  "expectStatus": "blocked-compile"
+}

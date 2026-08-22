@@ -1,0 +1,13 @@
+{
+  "origin": "packelyze fixtures/case08-typeargs",
+  "what": "Call with an explicit type argument. The callee is a local function, so the mangler renames it and must rewrite the call site too.",
+  "exports": [
+    "v"
+  ],
+  "expectKeep": [
+    "type",
+    "payload",
+    "x"
+  ],
+  "expectStatus": "pass"
+}

@@ -1,0 +1,40 @@
+{
+  "origin": "packelyze fixtures/case02-class",
+  "what": "Class members: private / static / #private / accessors / implements / abstract / generics.",
+  "exports": [
+    "C",
+    "C3",
+    "C4",
+    "C6",
+    "Calculator",
+    "Circle",
+    "GenericClass",
+    "OptionalClass",
+    "stringInstance"
+  ],
+  "expectKeep": [
+    "foo",
+    "sv",
+    "getValue",
+    "setValue",
+    "add",
+    "subtract",
+    "result",
+    "radius",
+    "area",
+    "requiredMethod",
+    "requiredProp",
+    "c2",
+    "c3",
+    "pubVal",
+    "pub"
+  ],
+  "expectMangle": [
+    "pv",
+    "privVal",
+    "svp",
+    "spfoo",
+    "c2_internal"
+  ],
+  "expectStatus": "blocked-compile"
+}

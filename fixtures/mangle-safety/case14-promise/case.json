@@ -1,0 +1,18 @@
+{
+  "origin": "packelyze fixtures/case14-promise",
+  "what": "Internal payload shapes flowing through Promise.all / Promise.race, projected onto an exported shape.",
+  "exports": [
+    "run",
+    "run2"
+  ],
+  "expectKeep": [
+    "id",
+    "value"
+  ],
+  "expectMangle": [
+    "__id",
+    "__value"
+  ],
+  "fakeTimers": true,
+  "expectStatus": "blocked-compile"
+}

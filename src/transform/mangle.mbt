@@ -2509,6 +2509,11 @@ fn rename_expr(expr : @ast.TsExpr, scope : ScopeFrame) -> @ast.TsExpr {
       }
       Call(scope.resolve(name), new_args)
     }
+    // `foo<number>(x)` parses as a TypeArgs wrapper around the call.
+    // Without this arm the wrapper fell through to `_ => expr` and the
+    // callee kept its pre-mangle name while its declaration was
+    // renamed — a `ReferenceError` at the call site.
+    TypeArgs(tys, inner) => TypeArgs(tys, rename_expr(inner, scope))
     CallExpr(callee, args) => {
       let new_args : Array[@ast.TsExpr] = []
       for a in args {
@@ -3378,6 +3383,10 @@ fn rename_properties_in_expr(
         },
       )
     PureCall(inner) => PureCall(rename_properties_in_expr(inner, prop_map))
+    // Same wrapper as in `rename_expr`: property accesses inside a
+    // call carrying explicit type arguments still need renaming.
+    TypeArgs(tys, inner) =>
+      TypeArgs(tys, rename_properties_in_expr(inner, prop_map))
     _ => expr
   }
 }

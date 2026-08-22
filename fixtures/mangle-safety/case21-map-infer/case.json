@@ -1,0 +1,16 @@
+{
+  "origin": "packelyze fixtures/case21-map-infer",
+  "what": "Array.map with an explicit type argument: input shape is private, the mapped shape reaches an export.",
+  "exports": [
+    "starts",
+    "mapped"
+  ],
+  "expectKeep": [
+    "start",
+    "end"
+  ],
+  "expectMangle": [
+    "length"
+  ],
+  "expectStatus": "blocked-compile"
+}

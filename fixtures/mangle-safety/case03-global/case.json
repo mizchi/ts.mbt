@@ -1,0 +1,16 @@
+{
+  "origin": "packelyze fixtures/case03-global",
+  "what": "Ambient global declared in a sibling .d.ts. Everything reachable through it is external ABI.",
+  "exports": [
+    "foo"
+  ],
+  "expectKeep": [
+    "f",
+    "x",
+    "y"
+  ],
+  "globals": [
+    "MyGlobal"
+  ],
+  "expectStatus": "blocked-compile"
+}

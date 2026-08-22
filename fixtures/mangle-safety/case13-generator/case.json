@@ -1,0 +1,18 @@
+{
+  "origin": "packelyze fixtures/case13-generator",
+  "what": "Sync generator consumed internally (its element shape is private) vs an exported async generator (its element shape is public).",
+  "exports": [
+    "run",
+    "asyncObjectGenerator"
+  ],
+  "expectKeep": [
+    "id",
+    "data",
+    "value"
+  ],
+  "expectMangle": [
+    "foo"
+  ],
+  "fakeTimers": true,
+  "expectStatus": "pass"
+}

@@ -556,6 +556,25 @@ pub fn bundle_modules(
         extra_reserved.push(n)
       }
       if opts.mangle_properties {
+        // Door 1: the bundle's own export surface. Every property
+        // name reachable from a value the entry exports is part of
+        // the package ABI, whether or not any type declaration
+        // mentions it — an exported function returning an inferred
+        // `{ first, rest }` publishes those two names as surely as a
+        // declared interface would. `type_props.mbt` only sees
+        // declared shapes and only in the entry module, so without
+        // this walk the dead-property pass happily deleted keys the
+        // consumer reads.
+        let exported_locals : Map[String, Bool] = {}
+        for ex in entry_export_bindings(modules, link_renames, entry) {
+          if ex.from_external is None {
+            exported_locals[ex.local_name] = true
+          }
+        }
+        for n in exported_surface_props(combined, exported_locals) {
+          extra_reserved.push(n)
+        }
+        // Door 2: values that leave through a sink.
         let externals = external_import_bindings(external_imports)
         let escapes = collect_externally_visible_props(combined, externals)
         let mut wildcard = false
@@ -692,21 +711,18 @@ pub fn bundle_modules(
     // their pre-mangle (post-link) name and the mangle pass takes
     // care of substituting them since the export ref counts as a
     // use.
-    match modules.get(entry) {
-      Some(em) =>
-        if em.export_specs.length() > 0 {
-          // Chain link-renames then mangle-renames: link first
-          // (`app` -> `app`) then mangle (`app` -> `aq`). The
-          // bundle output's `export default <name>` must use the
-          // POST-mangle short form because that's what survives in
-          // the body.
-          let entry_renames = compose_renames(
-            link_renames.get(entry).unwrap_or({}),
-            mangle_export_renames,
-          )
-          emit_entry_exports(e, em, entry_renames)
-        }
-      None => ()
+    // `entry_export_bindings` already resolved each name through
+    // the link renames, so only the mangle pass's renames are
+    // left to apply here (`app` -> `aq`). The bundle output's
+    // `export default <name>` must use the POST-mangle short form
+    // because that's what survives in the body.
+    let entry_exports = entry_export_bindings(modules, link_renames, entry)
+    if entry_exports.length() > 0 {
+      let declared : Map[String, Bool] = {}
+      for n in collect_top_level_decl_names(combined) {
+        declared[n] = true
+      }
+      emit_entry_exports(e, entry_exports, mangle_export_renames, declared)
     }
   } else {
     for i, path in order {
@@ -751,9 +767,21 @@ pub fn bundle_modules(
       // Per-module emit path: surface the entry module's exports
       // at the tail (mirror of the combined-emit branch above).
       if path == entry {
-        if m.export_specs.length() > 0 {
-          let entry_renames = link_renames.get(entry).unwrap_or({})
-          emit_entry_exports(e, m, entry_renames)
+        let entry_exports = entry_export_bindings(modules, link_renames, entry)
+        if entry_exports.length() > 0 {
+          // Per-module emit keeps each module's stmts separate, so
+          // the "does a binding exist" check spans every module.
+          let declared : Map[String, Bool] = {}
+          for other in order {
+            match modules.get(other) {
+              Some(node) =>
+                for n in collect_top_level_decl_names(node.block) {
+                  declared[n] = true
+                }
+              None => ()
+            }
+          }
+          emit_entry_exports(e, entry_exports, {}, declared)
         }
       }
     }
@@ -1168,27 +1196,74 @@ fn decode_combined_position(encoded : Int) -> (Int, Int) {
 /// post-link form.
 fn emit_entry_exports(
   e : Emitter,
-  m : ModuleNode,
+  exports : Array[BundleExport],
   renames : Map[String, String],
+  declared : Map[String, Bool],
 ) -> Unit {
-  // Group default vs named.
+  // Passthrough re-exports of external modules keep their `from`
+  // clause: the binding lives in the other package, so there's
+  // nothing in the bundle to name.
+  for ex in exports {
+    match ex.from_external {
+      Some(spec) => {
+        e.write("export")
+        e.space()
+        if ex.local_name == "*" && ex.export_name.has_prefix("*:") {
+          e.write("*")
+        } else if ex.local_name == "*" {
+          e.write("* as ")
+          e.write(ex.export_name)
+        } else {
+          e.write("{")
+          e.space()
+          e.write(ex.local_name)
+          if ex.local_name != ex.export_name {
+            e.write(" as ")
+            e.write(ex.export_name)
+          }
+          e.space()
+          e.write("}")
+        }
+        e.write(" from ")
+        e.write("\"")
+        e.write(spec)
+        e.write("\"")
+        e.semi()
+        e.nl()
+      }
+      None => ()
+    }
+  }
+  // Group default vs named. An export whose local has no top-level
+  // binding in the bundle was a type (`export type { T }`, an
+  // exported `interface`, …); TypeScript erases those, so emitting
+  // them would produce a bundle that fails to load.
+  let resolve = (name : String) => renames.get(name).unwrap_or(name)
+  let keep = (local_ : String) => {
+    declared.is_empty() || declared.contains(local_)
+  }
   let default_local : String? = {
     let mut found : String? = None
-    for spec in m.export_specs {
-      if spec.export_name == "default" {
-        found = Some(renames.get(spec.local_name).unwrap_or(spec.local_name))
+    for ex in exports {
+      if ex.from_external is None &&
+        ex.export_name == "default" &&
+        keep(resolve(ex.local_name)) {
+        found = Some(resolve(ex.local_name))
         break
       }
     }
     found
   }
   let named : Array[(String, String)] = []
-  for spec in m.export_specs {
-    if spec.export_name == "default" {
+  for ex in exports {
+    if ex.from_external is Some(_) || ex.export_name == "default" {
       continue
     }
-    let local_ = renames.get(spec.local_name).unwrap_or(spec.local_name)
-    named.push((local_, spec.export_name))
+    let local_ = resolve(ex.local_name)
+    if !keep(local_) {
+      continue
+    }
+    named.push((local_, ex.export_name))
   }
   match default_local {
     Some(local_) => {

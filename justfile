@@ -134,3 +134,8 @@ update:
 # Clean build artifacts
 clean:
     rm -rf _build target
+
+# Validate `--mangle-properties` against the mangle-safety corpus
+verify-mangle-safety *ARGS:
+    moon build --target native
+    node scripts/verify_mangle_safety.mjs {{ ARGS }}

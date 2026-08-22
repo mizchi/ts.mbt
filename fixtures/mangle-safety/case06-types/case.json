@@ -1,0 +1,16 @@
+{
+  "origin": "packelyze fixtures/case06-types",
+  "what": "Discriminated union in an exported signature, plus an indexed-access return type (C[\"payload\"]).",
+  "exports": [
+    "foo",
+    "createPayloadOfC"
+  ],
+  "expectKeep": [
+    "type",
+    "payload",
+    "a",
+    "b",
+    "c"
+  ],
+  "expectStatus": "pass"
+}

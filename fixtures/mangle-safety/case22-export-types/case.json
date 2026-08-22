@@ -1,0 +1,13 @@
+{
+  "origin": "packelyze fixtures/case22-export-types",
+  "what": "Exported values whose types come from a type-only re-export chain.",
+  "exports": [
+    "fooCreator",
+    "additional"
+  ],
+  "expectKeep": [
+    "foo",
+    "addition"
+  ],
+  "expectStatus": "pass"
+}

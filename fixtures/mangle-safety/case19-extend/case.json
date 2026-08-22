@@ -1,0 +1,13 @@
+{
+  "origin": "packelyze fixtures/case19-extend",
+  "what": "Object spread widening a base shape into an intersection type, both of them exported.",
+  "exports": [
+    "extend"
+  ],
+  "expectKeep": [
+    "fileName",
+    "original",
+    "to"
+  ],
+  "expectStatus": "blocked-compile"
+}

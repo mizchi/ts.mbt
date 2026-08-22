@@ -1,0 +1,23 @@
+{
+  "origin": "packelyze fixtures/case18-export-type",
+  "what": "Type-only re-exports, an interface implemented by an object literal, and a helper whose shape stays private.",
+  "exports": [
+    "createObj",
+    "indirect",
+    "items",
+    "runLocal"
+  ],
+  "expectKeep": [
+    "xxx",
+    "yyy",
+    "zzz",
+    "v1",
+    "v2",
+    "indirect",
+    "item"
+  ],
+  "expectMangle": [
+    "local"
+  ],
+  "expectStatus": "pass"
+}

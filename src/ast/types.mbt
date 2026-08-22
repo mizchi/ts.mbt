@@ -806,6 +806,15 @@ pub(all) struct TsClassDecl {
 pub(all) struct TsNamespaceDecl {
   name : String
   module_ : TsModule
+  // True for ambient declarations (`declare namespace N { … }`,
+  // `declare module "m" { … }`, `declare global { … }`) — the body
+  // declares types only and is erased with no runtime trace. False
+  // for a plain `namespace N { … }` / `module N { … }`, whose body
+  // has to exist at runtime. Consumers that lower or reject
+  // namespaces need to tell the two apart; the member lists alone
+  // can't (`function f(): void {}` and an ambient `function f():
+  // void;` both arrive with an empty body).
+  is_declare : Bool
 } derive(Debug)
 
 ///|

@@ -1,0 +1,8 @@
+{
+  "origin": "packelyze fixtures/case00-simple",
+  "what": "Smallest possible entry: one exported const.",
+  "exports": [
+    "x"
+  ],
+  "expectStatus": "pass"
+}

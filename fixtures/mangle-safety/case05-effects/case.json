@@ -1,0 +1,12 @@
+{
+  "origin": "packelyze fixtures/case05-effects",
+  "what": "A local-only shape whose value reaches JSON.stringify inside a fetch body. The property name leaves the bundle by value, so it must survive.",
+  "exports": [
+    "run"
+  ],
+  "expectKeep": [
+    "body",
+    "method"
+  ],
+  "expectStatus": "pass"
+}

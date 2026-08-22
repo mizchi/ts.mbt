@@ -1,0 +1,16 @@
+{
+  "origin": "packelyze fixtures/case25-sublocal",
+  "what": "Two hops of re-export: the entry re-exports one name out of a module that itself re-exports others.",
+  "externals": [
+    "node:path"
+  ],
+  "exports": [
+    "subItem"
+  ],
+  "expectMangle": [
+    "subLocal",
+    "local",
+    "pub"
+  ],
+  "expectStatus": "pass"
+}
