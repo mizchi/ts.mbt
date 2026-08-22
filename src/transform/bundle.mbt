@@ -762,8 +762,8 @@ pub fn bundle_modules(
       }
     }
     let export_surface : Map[String, Bool] = {}
-    for n in
-      exported_surface_props(
+    for
+      n in exported_surface_props(
         { stmts: all_stmts, stmt_positions: [] },
         export_roots,
       ) {

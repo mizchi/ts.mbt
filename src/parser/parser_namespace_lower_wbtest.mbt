@@ -21,9 +21,8 @@ fn ns_assigned_members(block : @ast.TsBlock, name : String) -> Array[String] {
             out.push(prop)
           }
         @ast.TsStmt::Block(inner) => walk(inner)
-        @ast.TsStmt::Expr(
-          @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), _)
-        ) => walk(f.body)
+        @ast.TsStmt::Expr(@ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), _)) =>
+          walk(f.body)
         @ast.TsStmt::Expr(
           @ast.TsExpr::MethodCall(
             @ast.TsExpr::Var("Object"),
@@ -73,12 +72,13 @@ fn ns_declares_var(block : @ast.TsBlock, name : String) -> Bool {
 ///|
 test "namespace lowering: exported members are assigned onto the object" {
   let block = ns_block_of(
-    #|namespace N {
-    #|  const secret = 1;
-    #|  export function f() { return secret; }
-    #|  export const label = "x";
-    #|}
-    ,
+    (
+      #|namespace N {
+      #|  const secret = 1;
+      #|  export function f() { return secret; }
+      #|  export const label = "x";
+      #|}
+    ),
   )
   assert_true(ns_declares_var(block, "N"))
   let members = ns_assigned_members(block, "N")
@@ -94,11 +94,12 @@ test "namespace lowering: `export let` is published as a live getter" {
   // mutates the binding, so the lowering routes mutable exports through
   // `Object.defineProperty`.
   let block = ns_block_of(
-    #|namespace C {
-    #|  export let count = 0;
-    #|  export function inc() { count = count + 1; }
-    #|}
-    ,
+    (
+      #|namespace C {
+      #|  export let count = 0;
+      #|  export function inc() { count = count + 1; }
+      #|}
+    ),
   )
   let members = ns_assigned_members(block, "C")
   assert_true(members.contains("count"))
@@ -108,11 +109,14 @@ test "namespace lowering: `export let` is published as a live getter" {
     for stmt in b.stmts {
       match stmt {
         @ast.TsStmt::Block(inner) => walk(inner)
+        @ast.TsStmt::Expr(@ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), _)) =>
+          walk(f.body)
         @ast.TsStmt::Expr(
-          @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), _)
-        ) => walk(f.body)
-        @ast.TsStmt::Expr(
-          @ast.TsExpr::MethodCall(@ast.TsExpr::Var("Object"), "defineProperty", _)
+          @ast.TsExpr::MethodCall(
+            @ast.TsExpr::Var("Object"),
+            "defineProperty",
+            _
+          )
         ) => has_define_property = true
         _ => ()
       }
@@ -126,12 +130,13 @@ test "namespace lowering: `export let` is published as a live getter" {
 ///|
 test "namespace lowering: a type-only member gets no runtime assignment" {
   let block = ns_block_of(
-    #|namespace T {
-    #|  export type Shape = { v: number };
-    #|  export interface Other { w: number }
-    #|  export const value = 1;
-    #|}
-    ,
+    (
+      #|namespace T {
+      #|  export type Shape = { v: number };
+      #|  export interface Other { w: number }
+      #|  export const value = 1;
+      #|}
+    ),
   )
   let members = ns_assigned_members(block, "T")
   assert_true(members.contains("value"))
@@ -142,13 +147,14 @@ test "namespace lowering: a type-only member gets no runtime assignment" {
 ///|
 test "namespace lowering: `export namespace` lowers and stays exported" {
   let parsed = Parser::from_source(
+    (
       #|export namespace P {
       #|  export function hello() { return "hi"; }
       #|}
-    ).parse_module_block()
-    catch {
-      e => abort("parse error: \{e}")
-    }
+    ),
+  ).parse_module_block() catch {
+    e => abort("parse error: \{e}")
+  }
   assert_true(ns_declares_var(parsed.block, "P"))
   assert_true(ns_assigned_members(parsed.block, "P").contains("hello"))
   let mut exported = false
@@ -163,12 +169,13 @@ test "namespace lowering: `export namespace` lowers and stays exported" {
 ///|
 test "namespace lowering: a nested namespace lowers too" {
   let block = ns_block_of(
-    #|namespace Outer {
-    #|  export namespace Inner {
-    #|    export const v = 1;
-    #|  }
-    #|}
-    ,
+    (
+      #|namespace Outer {
+      #|  export namespace Inner {
+      #|    export const v = 1;
+      #|  }
+      #|}
+    ),
   )
   assert_true(ns_declares_var(block, "Outer"))
   assert_true(ns_assigned_members(block, "Outer").contains("Inner"))
@@ -185,10 +192,11 @@ test "namespace lowering: an empty namespace still declares the object" {
 test "namespace lowering: a dotted path is left alone" {
   // `namespace A.B { … }` isn't modelled; it must not be half-lowered.
   let block = ns_block_of(
-    #|namespace A.B {
-    #|  export const v = 1;
-    #|}
-    ,
+    (
+      #|namespace A.B {
+      #|  export const v = 1;
+      #|}
+    ),
   )
   assert_false(ns_declares_var(block, "A"))
 }

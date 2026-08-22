@@ -88,18 +88,14 @@ fn Parser::parse_lowered_namespace(
     // An empty namespace still declares the object.
     return Some({ name, stmt: namespace_object_decl(name), enums: [] })
   }
-  let parsed = try Parser::from_source_with_jsx(
-      body_source, self.allow_jsx,
-    ).parse_module_block() catch {
+  let parsed = try
+    Parser::from_source_with_jsx(body_source, self.allow_jsx).parse_module_block()
+  catch {
     _ => return None
   } noraise {
     block => block
   }
-  Some({
-    name,
-    stmt: lower_namespace_block(name, parsed),
-    enums: parsed.enums,
-  })
+  Some({ name, stmt: lower_namespace_block(name, parsed), enums: parsed.enums })
 }
 
 ///|

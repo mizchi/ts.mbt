@@ -2732,10 +2732,7 @@ fn Parser::parse_export_decl_for_module(
       match self.parse_lowered_namespace() {
         Some(lowered) => {
           stmts.push(lowered.stmt)
-          exports.push({
-            local_name: lowered.name,
-            export_name: lowered.name,
-          })
+          exports.push({ local_name: lowered.name, export_name: lowered.name })
         }
         None => self.skip_declaration_block()
       }

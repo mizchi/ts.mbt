@@ -457,9 +457,9 @@ async fn mtsc_load_bundle_files(
       // package's declarations in, so those stay skipped.
       let spec = imp.module_spec
       if imp.type_only &&
-        !(
-          spec.has_prefix("./") || spec.has_prefix("../") || spec.has_prefix("/")
-        ) {
+        !(spec.has_prefix("./") ||
+        spec.has_prefix("../") ||
+        spec.has_prefix("/")) {
         continue
       }
       if spec.has_prefix("./") || spec.has_prefix("../") || spec.has_prefix("/") {
@@ -501,9 +501,9 @@ async fn mtsc_load_bundle_files(
       // Same reasoning as the type-only import above.
       let spec = re.module_spec
       if re.type_only &&
-        !(
-          spec.has_prefix("./") || spec.has_prefix("../") || spec.has_prefix("/")
-        ) {
+        !(spec.has_prefix("./") ||
+        spec.has_prefix("../") ||
+        spec.has_prefix("/")) {
         continue
       }
       if spec.has_prefix("./") || spec.has_prefix("../") || spec.has_prefix("/") {
@@ -556,11 +556,11 @@ async fn mtsc_load_bundle_files(
       _ => continue
     }
     files[ambient] = source
-    let parsed = (try @parser.Parser::from_source(source).parse_module() catch {
+    let parsed = try @parser.Parser::from_source(source).parse_module() catch {
       e => Err(e)
     } noraise {
       m => Ok(m)
-    })
+    }
     match parsed {
       Ok(module_) =>
         for n in @transform.type_declared_property_names(module_) {
@@ -578,9 +578,7 @@ async fn mtsc_load_bundle_files(
 /// file deeper in the tree belongs to whatever entry sits next to it.
 async fn mtsc_sibling_declaration_files(entry_path : String) -> Array[String] {
   let dir = mtsc_dirname(entry_path)
-  let names = @fs.readdir(dir, sort=true) catch {
-    _ => return []
-  }
+  let names = @fs.readdir(dir, sort=true) catch { _ => return [] }
   let out : Array[String] = []
   for name in names {
     if name.has_suffix(".d.ts") {

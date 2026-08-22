@@ -204,20 +204,26 @@ fn index_prop_assigns(w : SurfaceWalk, block : @ast.TsBlock) -> Unit {
   }
   // Function bodies and `Object.defineProperty` calls, wherever they sit
   // in an expression.
-  surface_visit_exprs_block(block, e => match e {
-    @ast.TsExpr::FuncExpr(f) => index_prop_assigns(w, f.body)
-    @ast.TsExpr::ArrowFunc(_, _, ArrowBlock(b), _) => index_prop_assigns(w, b)
-    @ast.TsExpr::PropAssignExpr(@ast.TsExpr::Var(n), prop, value) =>
-      record(n, prop, value)
-    @ast.TsExpr::MethodCall(@ast.TsExpr::Var("Object"), "defineProperty", args) =>
-      if args.length() >= 3 {
-        match (args[0], args[1]) {
-          (@ast.TsExpr::Var(n), @ast.TsExpr::StringLit(prop)) =>
-            record(n, prop, args[2])
-          _ => ()
+  surface_visit_exprs_block(block, e => {
+    match e {
+      @ast.TsExpr::FuncExpr(f) => index_prop_assigns(w, f.body)
+      @ast.TsExpr::ArrowFunc(_, _, ArrowBlock(b), _) => index_prop_assigns(w, b)
+      @ast.TsExpr::PropAssignExpr(@ast.TsExpr::Var(n), prop, value) =>
+        record(n, prop, value)
+      @ast.TsExpr::MethodCall(
+        @ast.TsExpr::Var("Object"),
+        "defineProperty",
+        args
+      ) =>
+        if args.length() >= 3 {
+          match (args[0], args[1]) {
+            (@ast.TsExpr::Var(n), @ast.TsExpr::StringLit(prop)) =>
+              record(n, prop, args[2])
+            _ => ()
+          }
         }
-      }
-    _ => ()
+      _ => ()
+    }
   })
 }
 

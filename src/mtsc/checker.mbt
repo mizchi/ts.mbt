@@ -487,7 +487,9 @@ pub fn collect_module_graph_issues(
   }
   for module_ in parsed_modules {
     let (globals, import_diagnostics) = graph_import_globals(
-      module_, parsed_modules, graph.edges,
+      module_,
+      parsed_modules,
+      graph.edges,
     )
     for entry in ambient_globals {
       globals.push(entry)

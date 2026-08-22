@@ -1393,6 +1393,17 @@ fn Resolver::unwrap_containers(
   self : Resolver,
   ty : @ast.TsType,
 ) -> @ast.TsType {
+  // Fast path. Only a container layer can hide a `Named` from the
+  // resolver-free comparison, and only a `Named` / `Applied` can resolve
+  // INTO a container. Everything else — every primitive, every object /
+  // struct / function shape — behaves exactly as `unwrap`, so decide
+  // that before allocating anything: this runs on every assignability
+  // diagnostic.
+  match ty {
+    Array(_) | Rest(_) | Tuple(_) | Union(_) | Intersection(_) => ()
+    Named(_) | Applied(_, _) => ()
+    _ => return self.unwrap(ty)
+  }
   let aborted = [false]
   let out = self.unwrap_containers_at(ty, 0, [], aborted)
   if aborted[0] {
