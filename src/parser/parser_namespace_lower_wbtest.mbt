@@ -204,9 +204,11 @@ test "namespace lowering: a dotted path is left alone" {
 ///|
 test "value declarations: a numeric literal is `number`, not `int`" {
   // TypeScript has one numeric type. `Int` is the MoonBit bridge's
-  // marker; recording it for a TS `const` made the binding
+  // marker; recording it for a TS value declaration made the binding
   // unassignable to a `number` slot and to itself after arithmetic.
-  let module_ = Parser::from_source("const v = 1;\n").parse_module() catch {
+  // `TsModule.values` records exported value declarations, which is
+  // where this inference is consulted.
+  let module_ = Parser::from_source("export const v = 1;\n").parse_module() catch {
     e => abort("parse error: \{e}")
   }
   let mut found = false

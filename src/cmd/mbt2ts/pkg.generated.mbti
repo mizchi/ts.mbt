@@ -11,4 +11,3 @@ pub fn mbt2ts_help_lines() -> Array[String]
 // Type aliases
 
 // Traits
-

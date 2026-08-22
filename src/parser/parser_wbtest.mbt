@@ -4222,7 +4222,10 @@ async test "parser: parse export-as-namespace sanitize fixture in module block" 
 }
 
 ///|
-test "parser: skip plain namespace declaration in module block" {
+test "parser: lower plain namespace declaration in module block" {
+  // A namespace is a runtime value: its body used to be skipped, which
+  // left `Samples.EventCounter` referencing nothing. It now lowers to
+  // the object declaration plus an IIFE that fills it in.
   let src =
     #|namespace Samples {
     #|  export class EventCounter {
@@ -4235,7 +4238,24 @@ test "parser: skip plain namespace declaration in module block" {
       return
     }
   }
-  assert_eq(module_.block.stmts.length(), 0)
+  assert_eq(module_.block.stmts.length(), 1)
+  let mut declares_object = false
+  let mut calls_initializer = false
+  match module_.block.stmts[0] {
+    @ast.TsStmt::Block(inner) =>
+      for stmt in inner.stmts {
+        match stmt {
+          @ast.TsStmt::Var(@ast.TsBinding::Ident("Samples"), _, _) =>
+            declares_object = true
+          @ast.TsStmt::Expr(@ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(_), _)) =>
+            calls_initializer = true
+          _ => ()
+        }
+      }
+    _ => ()
+  }
+  assert_true(declares_object)
+  assert_true(calls_initializer)
 }
 
 ///|

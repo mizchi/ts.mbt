@@ -65,4 +65,3 @@ pub enum CliArgScan {
 // Type aliases
 
 // Traits
-

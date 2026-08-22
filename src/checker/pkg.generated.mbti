@@ -167,4 +167,3 @@ pub(all) enum TypeIssueKind {
 // Type aliases
 
 // Traits
-

@@ -31,7 +31,7 @@ pub fn build_symbol_graph_with_sinks(@ast.TsBlock, Map[String, Bool]) -> (Symbol
 
 pub fn bundle_modules(Map[String, String], String, BundleOptions) -> Result[BundleOutput, String]
 
-pub fn class_method_dce_block(@ast.TsBlock) -> @ast.TsBlock
+pub fn class_method_dce_block(@ast.TsBlock, keep? : Map[String, Bool]) -> @ast.TsBlock
 
 pub fn collect_externally_visible_props(@ast.TsBlock, Map[String, Bool]) -> Array[String]
 
@@ -42,6 +42,8 @@ pub fn drop_dead_properties_block(@ast.TsBlock, Map[String, Bool]) -> @ast.TsBlo
 pub fn emit_entry_dts(@ast.TsModule, Array[String], Map[String, String]) -> String
 
 pub fn entry_export_property_names(@ast.TsModule, Array[String]) -> Array[String]
+
+pub fn exported_surface_props(@ast.TsBlock, Map[String, Bool]) -> Array[String]
 
 pub fn external_import_bindings(Array[@ast.TsImportDecl]) -> Map[String, Bool]
 
@@ -101,17 +103,25 @@ pub fn transform_source_full(String, JsxConfig, with_sourcemap? : Bool, source_p
 
 pub fn transform_source_with(String, JsxConfig) -> Result[String, String]
 
-pub fn treeshake_block(@ast.TsBlock) -> @ast.TsBlock
+pub fn treeshake_block(@ast.TsBlock, roots? : Map[String, Bool]) -> @ast.TsBlock
 
 pub fn type_declared_property_names(@ast.TsModule) -> Array[String]
 
 pub fn type_fold_block(@ast.TsBlock, type_aliases? : Array[@ast.TsTypeAlias]) -> @ast.TsBlock
+
+pub fn undeclared_referenced_names(@ast.TsBlock) -> Map[String, Bool]
 
 pub fn vlq_encode(Int) -> String
 
 // Errors
 
 // Types and methods
+pub(all) struct BundleExport {
+  local_name : String
+  export_name : String
+  from_external : String?
+}
+
 pub(all) struct BundleOptions {
   jsx : JsxConfig
   with_sourcemap : Bool
@@ -190,6 +200,11 @@ pub(all) struct LineIndex {
 }
 pub fn LineIndex::new(String) -> Self
 pub fn LineIndex::position(Self, Int) -> Position
+
+pub(all) struct LinkRenames {
+  locals : Map[String, Map[String, String]]
+  namespaces : Map[String, Map[String, String]]
+}
 
 pub(all) enum LiteralKind {
   LitNumeric
@@ -365,4 +380,3 @@ pub type ScopeId = Int
 pub type SymbolId = Int
 
 // Traits
-

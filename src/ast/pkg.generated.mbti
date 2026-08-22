@@ -331,6 +331,7 @@ pub impl Show for TsModuleBlock
 pub(all) struct TsNamespaceDecl {
   name : String
   module_ : TsModule
+  is_declare : Bool
 } derive(@debug.Debug)
 
 pub(all) struct TsObjectBinding {

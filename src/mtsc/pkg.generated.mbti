@@ -8,11 +8,19 @@ pub fn check_module_sources(Array[MtscModuleSource]) -> String
 
 pub fn check_source(String, Bool) -> String
 
+pub fn collect_module_graph_issues(MtscModuleGraph) -> Array[MtscGraphIssue]
+
 pub fn collect_type_issues(String, Bool) -> Result[Array[MtscTypeIssue], String]
 
 // Errors
 
 // Types and methods
+pub(all) struct MtscGraphIssue {
+  modulePath : String
+  path : String
+  message : String
+}
+
 pub(all) struct MtscModuleEdge {
   importerPath : String
   moduleSpecifier : String
@@ -38,4 +46,3 @@ pub(all) struct MtscTypeIssue {
 // Type aliases
 
 // Traits
-
