@@ -1347,34 +1347,6 @@ fn emit_entry_exports(
 }
 
 ///|
-/// Chain two rename maps: `first` is applied to the original name,
-/// then `second` is applied to the result. Output is a fresh map
-/// where each key from `first` (or that survives the chain) maps
-/// to the final name post-`second`.
-fn compose_renames(
-  first : Map[String, String],
-  second : Map[String, String],
-) -> Map[String, String] {
-  let out : Map[String, String] = {}
-  // Walk every input that either map touched.
-  let seen : Map[String, Bool] = {}
-  for k in first.keys() {
-    seen[k] = true
-  }
-  for k in second.keys() {
-    seen[k] = true
-  }
-  for k in seen.keys() {
-    let after_first = first.get(k).unwrap_or(k)
-    let after_second = second.get(after_first).unwrap_or(after_first)
-    if after_second != k {
-      out[k] = after_second
-    }
-  }
-  out
-}
-
-///|
 /// True when `name` is one of mtsc's internal property markers that
 /// user code can never reach (they're synthesized by the parser).
 /// Used by the wildcard-mangle-property fallback: even when a

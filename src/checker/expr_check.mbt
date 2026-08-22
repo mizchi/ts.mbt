@@ -220,17 +220,6 @@ fn merge_interfaces(
 }
 
 ///|
-/// Build a resolver for one self-contained module. Graph-aware callers use
-/// `ingest_type_module` and `ingest_module` directly, while checker benchmarks
-/// use this helper to isolate the cost of the ordinary single-module setup.
-fn Resolver::from_module(module_ : @ast.TsModule) -> Resolver {
-  let r = Resolver::empty()
-  Resolver::ingest_module(r, module_, "")
-  collect_module_value_names(module_, r.declared_value_names)
-  r
-}
-
-///|
 /// Import only type declarations from another ES module. Value declarations
 /// intentionally stay out of `globals`: an embedding must still provide the
 /// concrete bindings it resolved for the current module's runtime imports.
@@ -20195,16 +20184,6 @@ pub fn check_module_function_bodies_permissive(
 }
 
 ///|
-/// Body of `check_module_function_bodies` parameterized by the chain of
-/// enclosing ancestor modules. When `outer_modules` is empty this is the
-/// public entry point and we use `Resolver::from_module` (which preserves
-/// `Outer.Inner.Foo` prefixed registration for namespace member access).
-/// For nested namespaces we build a layered resolver instead: ancestors
-/// are ingested first at bare names so inner code can reference
-/// outer-scope types unqualified (the way TypeScript scoping works),
-/// then this module is ingested to shadow on top.
-
-///|
 /// True for the interface-member sentinel keys the parser uses for call /
 /// construct / computed / index signatures, which are not real named members
 /// and may legitimately repeat.
@@ -26212,6 +26191,14 @@ fn collect_type_dup_issues(
 }
 
 ///|
+/// Body of `check_module_function_bodies` parameterized by the chain of
+/// enclosing ancestor modules. When `outer_modules` is empty this is the
+/// public entry point: the module is ingested at bare names, which
+/// preserves `Outer.Inner.Foo` prefixed registration for namespace member
+/// access. For nested namespaces we build a layered resolver instead —
+/// ancestors are ingested first at bare names so inner code can reference
+/// outer-scope types unqualified (the way TypeScript scoping works), then
+/// this module is ingested to shadow on top.
 fn check_module_function_bodies_layered(
   module_ : @ast.TsModule,
   outer_modules : Array[@ast.TsModule],

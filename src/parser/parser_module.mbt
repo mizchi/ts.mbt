@@ -866,16 +866,6 @@ fn Parser::parse_namespace_decl_value(
 }
 
 ///|
-fn Parser::parse_namespace_decl_value_runtime(
-  self : Parser,
-) -> @ast.TsValueDecl? raise ParseError {
-  match self.parse_namespace_decl_runtime() {
-    Some((value, _)) => value
-    None => None
-  }
-}
-
-///|
 fn Parser::parse_import_equals_decl(
   self : Parser,
   local_name : String,

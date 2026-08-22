@@ -33,7 +33,7 @@
 /// A lowered namespace: the statement to emit, the name it binds, and
 /// any enums its body declared (the caller registers those so
 /// const-enum inlining can still see them).
-struct LoweredNamespace {
+priv struct LoweredNamespace {
   name : String
   stmt : @ast.TsStmt
   enums : Array[@ast.TsEnumDecl]

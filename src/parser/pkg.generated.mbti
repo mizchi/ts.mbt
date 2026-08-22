@@ -119,8 +119,6 @@ pub fn Lexer::next_token(Self) -> Token
 pub fn Lexer::tokenize(Self) -> Array[Token]
 pub impl Show for Lexer
 
-type LoweredNamespace
-
 pub struct Parser {
   tokens : Array[Token]
   mut pos : Int
