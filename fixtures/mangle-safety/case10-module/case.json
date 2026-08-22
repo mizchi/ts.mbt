@@ -24,6 +24,5 @@
     "getInternalMessage",
     "getNamespaceMessage"
   ],
-  "expectStatus": "pass",
-  "blockedReason": "same namespace-lowering gap as case09."
+  "expectStatus": "pass"
 }

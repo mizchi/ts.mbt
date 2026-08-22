@@ -12,6 +12,5 @@
     "cat",
     "bird"
   ],
-  "expectStatus": "pass",
-  "blockedReason": "checker: indexed access into a mapped type (`Info[\"dog\"]` where `Info` is `{ [K in Animal]: … }`)."
+  "expectStatus": "pass"
 }

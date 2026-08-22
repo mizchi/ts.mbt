@@ -63,3 +63,7 @@ with plain `--bundle`, once with
 harness fails only when a case does *worse* than its recorded status.
 When a fix makes a case do better, the harness says so and
 `node scripts/verify_mangle_safety.mjs --update` re-records it.
+
+All 25 cases currently record `pass`, so any regression — a compile
+that stops working, a renamed property that turns out to be
+observable — fails the run.

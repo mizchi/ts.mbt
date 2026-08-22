@@ -18,6 +18,5 @@
     "Green",
     "Blue"
   ],
-  "expectStatus": "pass",
-  "blockedReason": "mtsc cannot lower `namespace N { … }` with runtime members; the compile is now refused rather than emitting broken JS."
+  "expectStatus": "pass"
 }
