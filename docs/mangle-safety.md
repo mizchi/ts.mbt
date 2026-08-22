@@ -92,27 +92,26 @@ corpus は packelyze の `packages/transformer/fixtures`（`case00`〜`case25`�
 
 ### 現在の結果
 
-25 件中 **18 件 pass、7 件 blocked**（下記のギャップで compile が通らない）、
-安全性違反 0 件。
+25 件中 **25 件 pass**、安全性違反 0 件。
 
-初回実行では 12 件が fail しました。内訳と対処:
+初回実行では 12 件が fail、7 件が checker / emit のギャップで compile
+できませんでした。内訳と対処:
 
 | 症状 | 原因 | 対処 |
 | --- | --- | --- |
-| exported const / function が返す object の key が **削除** される（case18/22/23/24） | reserved set が entry module の *宣言された* 型からしか作られていなかった。他 module の型で注釈された値や、推論された return shape は誰も読まないと判定され dead-property pass が消していた | `export_surface.mbt` を追加 |
+| exported const / function が返す object の key が **削除** される（case18/22/23/24） | reserved set が entry module の *宣言された* 型からしか作られていなかった。他 module の型で注釈された値も、推論された return shape も誰も読まないと判定され dead-property pass が消していた | `export_surface.mbt` を追加 |
 | exported 関数の推論 return shape の key が rename される（case16） | 同上 | 同上 |
 | external module の呼び出しに渡した literal の key が削除される（case15） | object literal は free variable を持たないので flow 解析の種にならなかった | sink literal の key を直接予約 |
 | entry が `export { x } from "./sub"` だけのとき bundle に export が 1 つも出ない（case01/17/18/25） | `emit_entry_exports` が entry 自身の `export` spec しか見ていなかった | re-export を linker 経由で解決して emit（`export *`・bare specifier passthrough 含む） |
 | `export type { T }` が値 export として emit され bundle が load 不能（case18） | `TsExportSpec` に type-only の区別がない | runtime binding を持たない export 名を落とす |
 | `foo<T>(x)` の callee が rename されず `ReferenceError`（case08） | `TypeArgs` wrapper が両 renamer の catch-all に落ちていた | `TypeArgs` arm を追加 |
-| `namespace N { … }` の body が消え、`N.member` 参照だけが残る（case09/10） | statement parser が namespace body を skip する | runtime member を持つ非 ambient namespace を **hard error** に（下記） |
-
-`expectMangle` に挙がっていて実際には保持された名前は「missed
-opportunity」として報告され、fail にはなりません。保守的に倒すのは常に
-健全なので、圧縮率の話であって安全性の話ではありません。現在の
-missed opportunity は `local` / `subLocal` / `prop1` / `prop2` / `vvv` /
-`foo` — いずれも「値の出自を解決できず object 全体を escape 扱いにした」
-ケースです。
+| exported class の public method が **削除** される（case02） | class-method DCE の「使われている」判定が bundle 内の access だけを見ていた。consumer だけが呼ぶ method は dead に見える | export surface を `keep` set として渡す |
+| `namespace N { … }` の body が消え、`N.member` 参照だけが残る（case09/10） | statement parser が namespace body を skip する | IIFE への lowering を実装（下記） |
+| ambient global（`declare const MyGlobal`）が解決できない（case03） | entry の隣の `.d.ts` を program に含めていなかった | sibling `.d.ts` を ambient script として読み込む |
+| import された型が解決できず、同一 shape が mismatch になる（case19/20） | file ごとに checker を走らせていた | module graph 全体を検査する `collect_module_graph_issues` に接続 |
+| mapped type への indexed access が解決しない（case11） | `simplify_indexed_access` は resolver を持たず、`Named` base で `Any` を返す | base を先に resolve してから simplify |
+| constructor の default parameter が arity に反映されない（case02） | `lookup_constructor_sig` が `constructor_param_defaults` を捨てていた | default を signature に通す |
+| `{ a, ...spread }` の spread member が推論 shape から落ちる（case20） | `infer_block_return` が block の local binding を見ていなかった | return を推論する前に local を bind |
 
 ### 検証の副産物: `--treeshake` が export を落としていた
 
@@ -129,91 +128,94 @@ const unused = 3;
 状態でした。`treeshake_block(block, roots~)` に entry の export 名を渡す
 ようにしました。
 
-## 残っているギャップ
+## 実装したもの（旧「残っているギャップ」）
 
-corpus の 7 件はこれらで blocked です。それぞれ最小再現を添えます。
+corpus の 7 件を blocked にしていたギャップはすべて塞ぎました。要点だけ:
 
-### 1. runtime member を持つ namespace の lowering がない（case09, case10）
-
-```ts
-export namespace MyNamespace {
-  export function foo() {}
-}
-MyNamespace.foo();
-```
-
-statement parser は namespace body を skip するので、以前は
-`MyNamespace.foo()` だけが残り `MyNamespace` を宣言する code が無い JS が
-無診断で出ていました。現在は mtsc が compile を拒否します:
-
-```
-mtsc: unsupported in index.ts: `namespace MyNamespace` declares runtime
-members, which mtsc cannot lower yet …
-```
-
-ambient（`declare namespace` / `declare global` / `declare module "x"`）は
-正当に erase されるので通ります。`TsNamespaceDecl.is_declare` がこの区別を
-持ちます。本来の修正は
-`var N; (function (N) { … })(N || (N = {}))` への lowering です。
-
-### 2. cross-module の型解決が CLI checker に無い（case19, case20）
+### runtime namespace の lowering（case09, case10）
 
 ```ts
-// types.ts
-export type Loc = { fileName: string };
-// index.ts
-import type { Loc } from "./types";
-export function extend(names: string[]): Loc[] {
-  return names.map((fileName) => ({ fileName }));  // ← 誤検出
+namespace N {
+  const secret = 1;
+  export function f() { return secret; }
 }
 ```
 
-`mtsc` は file ごとに checker を走らせるので、import された `Loc` は
-解決できません。解決できない `Named` が array element 位置にあると、
-top-level にある場合の「解決不能なら判定しない」規則が効かず、同一の
-shape が mismatch として報告されます。`@mtsc.check_module_graph` は
-module graph 全体を解決できるので、CLI の `--bundle` path をそちらに
-繋ぐのが本筋です。
+statement parser は namespace body を skip していたので、`N.f()` だけが
+残り `N` を宣言する code の無い JS が無診断で出ていました。
+`src/parser/parser_namespace_lower.mbt` が TypeScript と同じ形へ lowering
+します。
 
-### 3. mapped type への indexed access（case11）
-
-```ts
-type Animal = "dog" | "cat";
-type Info = { [K in Animal]: { name: K } };
-let x: Info["dog"] = { name: "dog" };  // property `name` does not exist on `Info["dog" (string)]`
+```js
+var N = N || {};
+(function (N) {
+  const secret = 1;
+  function f() { return secret; }
+  N.f = f;
+})(N);
 ```
 
-### 4. constructor の default parameter が arity に反映されない（case02）
+`let`（`var`）ではなく `var` + `N || {}` なのは declaration merging の
+ため — 2 つ目の `namespace N { … }` が同じ object を再利用します。
+`export let` は再代入されうるので snapshot ではなく
+`Object.defineProperty` の getter で公開し、読み取りが live であることを
+保ちます（外から `N.x = v` と書いた場合は local に伝播しません。TS は
+参照側を書き換えることでこれを実現しており、そこまではやっていません）。
 
-```ts
-class Calculator {
-  constructor(private value: number = 0) {}
-}
-new Calculator();  // expected 1 argument(s), got 0
-```
+lowering できない形（`module "foo" { … }` のような quoted name、
+`namespace A.B { … }` の dotted path、`declare global`）は従来どおり
+skip します。ambient（`declare namespace` など）は正当に erase される
+ので対象外です。
 
-### 5. sibling `.d.ts` の ambient 宣言を読まない（case03）
+namespace の member は IIFE の中で `N.f = f` として付けられるため、
+export surface 解析にも「escape する object へ代入された property 名は
+公開されている」という規則を追加しました。
 
-```ts
-// env.d.ts
-declare const MyGlobal: { foo: string };
-// index.ts
-export const foo = () => MyGlobal.foo;  // cannot find name `MyGlobal`
-```
+### module graph 単位の型検査（case19, case20）
 
-`mtsc` は entry から relative import を辿るだけで、同じ directory の
-ambient declaration file を program に含めません。
+`mtsc` は file ごとに checker を走らせていたので、import された型は
+すべて未解決でした。`@mtsc.collect_module_graph_issues` に接続し、
+type-only の relative import も loader が読み込むようにしました
+（bundle には出ませんが、型を宣言している module が必要です）。
+import 解決の diagnostic は CLI では落としています — 型としてのみ使う
+値形式 import（`import { LocalObj } from "./types"` で `LocalObj` が
+type alias、TypeScript としては合法）と、本当に存在しない export を
+この層では区別できないためです。
 
-### 6. namespace 内の `const v = 1` が `int` に落ちる
+### ambient `.d.ts`（case03）
 
-case09 の縮小中に見つかった別件です。
+entry と同じ directory の `.d.ts` を program に含め、import / export を
+持たない script 形式の宣言ファイルを ambient として全 module の scope に
+入れます。`tsc` は tsconfig の `include` でこれを行いますが、mtsc は
+tsconfig を読まないので `env.d.ts` / `globals.d.ts` 慣習に合わせました。
 
-```ts
-export namespace N {
-  export const v = 1;
-  export function foo(): number { return v; }  // expected `number` but got `int`
-}
-```
+あわせて、**bundle が宣言していない名前は host のもの**という規則を
+mangler に追加しました。ambient global の property surface は host の ABI
+であり、`MyGlobal.f({ x: 1 })` の引数 key も `MyGlobal.f()` の戻り値から
+読む key も rename できません。
+
+### checker のギャップ 3 件
+
+- mapped type への indexed access（`Info["dog"]`）: `simplify_indexed_access`
+  は resolver を持たないので `Named` base で `Any` を返していました。
+  resolver 側で base を先に解決してから simplify します。
+- constructor の default parameter: `lookup_constructor_sig` が
+  `constructor_param_defaults` を捨てていたため、`new C()` が TS2554 に
+  なっていました。
+- object spread の推論: `infer_block_return` が block の local binding を
+  bind していなかったため、`const r = f(); return { a, ...r }` の spread
+  member が推論 shape から落ちていました。
+- namespace 内の `const v = 1` が `int` になり `number` に代入できない件は、
+  assignability に `Int → Number` を追加しました（TypeScript の数値型は
+  1 つで、`Int` はこの AST の整数マーカーです）。
+
+## 既知の制約
+
+- `export let x` を namespace 内部で再代入した場合、外から `N.x = v` と
+  書いても local には伝播しません（読み取りは getter 経由で live）。
+- `namespace A.B { … }`（dotted path）と `module "foo" { … }` は lowering
+  対象外で、従来どおり erase されます。
+- `mtsc` の import 解決 diagnostic は CLI では出しません（上記）。
 
 ## この検証で入った checker の変更
 
@@ -240,6 +242,19 @@ TypeScript 7 conformance corpus に対する計測: false positive 0 件（budge
 精度が上がり、退行はありません。case14 と case21 がこの修正で unblock
 されました。
 
+変更後の計測（TypeScript 7 conformance corpus）: false positive 0 件
+（budget どおり）、true positive 2,338 → 2,339、true negative 1,749 →
+1,750。精度が上がり、退行はありません。
+
 ```bash
 just verify-checker-soundness
 ```
+
+なお `unwrap_containers` は union / intersection の member まで展開します
+（`type Ext = Base & { to: string }` が同等の object literal と一致しな
+かった）。展開の all-or-nothing 規則は同じです。
+
+`infer_block_return` の local binding は、child env に copy するのでは
+なく caller の env に足して抜けるときに外す形にしています。`full_snapshot`
+は `vars` しか運ばないので copy すると `declared` slot が落ち、推論が悪化
+して conformance に false positive が 1 件出ました。

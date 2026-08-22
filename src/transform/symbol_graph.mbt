@@ -958,6 +958,17 @@ fn sg_record_sinks_in_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
                 ({ expr: a, observation: Recursive }, w.current_scope),
               )
             }
+          } else if w.externals.contains(name) {
+            // `external.send({ id: 1 })` — a method call on an external
+            // receiver hands its arguments across the bundle boundary
+            // exactly like `send({ id: 1 })` does. Without this the
+            // argument's keys looked unobserved and were renamed (or
+            // dropped) while the foreign callee still read them by name.
+            for a in args {
+              w.scoped_sinks.push(
+                ({ expr: a, observation: ExternalCallArg }, w.current_scope),
+              )
+            }
           }
         _ => ()
       }

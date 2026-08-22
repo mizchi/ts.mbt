@@ -399,6 +399,132 @@ fn graph_import_globals(
 /// import edges; this package then performs deterministic parsing, local
 /// checking, and value-level import contract propagation without reading the
 /// filesystem or knowing about a particular bundler.
+pub(all) struct MtscGraphIssue {
+  modulePath : String
+  path : String
+  message : String
+}
+
+///|
+/// True for a `.d.ts` whose declarations are ambient — global to the
+/// whole program. A declaration file that imports or exports anything is
+/// a module in its own right, so its declarations stay local to it.
+fn is_ambient_script_module(module_ : ParsedMtscModule) -> Bool {
+  if !module_.source.path.has_suffix(".d.ts") {
+    return false
+  }
+  module_.module_block.imports.is_empty() &&
+  module_.module_block.exports.is_empty() &&
+  module_.module_block.reexports.is_empty()
+}
+
+///|
+/// Value-level bindings a module declares, in the (name, type) shape the
+/// checker takes for globals.
+fn module_value_bindings(
+  module_ : @ast.TsModule,
+) -> Array[(String, @ast.TsType)] {
+  let out : Array[(String, @ast.TsType)] = []
+  for value in module_.values {
+    out.push((value.name, value.type_))
+  }
+  for func in module_.funcs {
+    out.push((func.name, function_value_type(func)))
+  }
+  for class_ in module_.classes {
+    out.push((class_.name, @ast.TsType::Named(class_.name)))
+  }
+  for enum_ in module_.enums {
+    out.push((enum_.name, @ast.TsType::Named(enum_.name)))
+  }
+  out
+}
+
+///|
+/// Type-check a resolved module graph and return the diagnostics.
+///
+/// This is what a multi-file CLI wants: checking each file in isolation
+/// leaves every imported type unresolvable, and a checker that cannot
+/// see `type Loc = { … }` from the module that declares it either stays
+/// silent on real errors or reports a mismatch between two identical
+/// shapes. Resolution stays the caller's job — hand over the module
+/// sources plus the import edges between them.
+///
+/// `check_module_graph` flattens the same information into one string
+/// for the JavaScript ABI; the CLI needs it structured so it can format
+/// and count diagnostics itself.
+pub fn collect_module_graph_issues(
+  graph : MtscModuleGraph,
+) -> Array[MtscGraphIssue] {
+  let parsed_modules : Array[ParsedMtscModule] = []
+  let issues : Array[MtscGraphIssue] = []
+  for source in graph.modules {
+    match parse_graph_module(source) {
+      Ok(module_) => parsed_modules.push(module_)
+      Err(e) =>
+        issues.push({
+          modulePath: source.path,
+          path: "parse",
+          message: "parse error: \{e}",
+        })
+    }
+  }
+  // Ambient declaration files are part of every module's scope: that is
+  // what makes `declare const MyGlobal: …` in an `env.d.ts` visible from
+  // a source file that never imports it. Only script-shaped `.d.ts`
+  // files count — one carrying its own imports / exports is a module,
+  // and its declarations are private to it.
+  let ambient_globals : Array[(String, @ast.TsType)] = []
+  let ambient_modules : Array[@ast.TsModule] = []
+  for module_ in parsed_modules {
+    if !is_ambient_script_module(module_) {
+      continue
+    }
+    ambient_modules.push(module_.module_)
+    for entry in module_value_bindings(module_.module_) {
+      ambient_globals.push(entry)
+    }
+  }
+  for module_ in parsed_modules {
+    let (globals, import_diagnostics) = graph_import_globals(
+      module_, parsed_modules, graph.edges,
+    )
+    for entry in ambient_globals {
+      globals.push(entry)
+    }
+    for diagnostic in import_diagnostics {
+      issues.push({
+        modulePath: module_.source.path,
+        path: "import",
+        message: diagnostic,
+      })
+    }
+    let type_modules = graph_type_modules(module_, parsed_modules, graph.edges)
+    for ambient in ambient_modules {
+      type_modules.push(ambient)
+    }
+    match
+      collect_type_issues_from_module(module_.module_, globals, type_modules) {
+      Err(e) =>
+        issues.push({
+          modulePath: module_.source.path,
+          path: "parse",
+          message: "parse error: \{e}",
+        })
+      Ok(found) =>
+        for issue in found {
+          issues.push({
+            modulePath: module_.source.path,
+            path: issue.path,
+            message: issue.message,
+          })
+        }
+    }
+  }
+  issues
+}
+
+///|
 pub fn check_module_graph(graph : MtscModuleGraph) -> String {
   let parsed_modules : Array[ParsedMtscModule] = []
   let diagnostics : Array[String] = []

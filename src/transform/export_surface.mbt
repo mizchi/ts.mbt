@@ -51,11 +51,13 @@ pub fn exported_surface_props(
     decls: {},
     classes: {},
     funcs: {},
+    prop_assigns: {},
     reserved: {},
     visited: {},
     queue: [],
   }
   index_top_level_decls(w, block)
+  index_prop_assigns(w, block)
   for name in exported_locals.keys() {
     surface_enqueue(w, name)
   }
@@ -67,6 +69,18 @@ pub fn exported_surface_props(
     }
     match w.classes.get(name) {
       Some(decl) => surface_escape_class(w, decl, 0)
+      None => ()
+    }
+    // Anything written onto this object is part of what the consumer
+    // reads off it.
+    match w.prop_assigns.get(name) {
+      Some(assigns) =>
+        for entry in assigns {
+          if !is_internal_marker_prop(entry.0) {
+            w.reserved[entry.0] = true
+          }
+          surface_escape_expr(w, entry.1, 1)
+        }
       None => ()
     }
   }
@@ -86,6 +100,11 @@ priv struct SurfaceWalk {
   // Top-level `function f(…) { … }` declarations, for resolving a
   // call whose result escapes back to the callee's returns.
   funcs : Map[String, @ast.TsFunc]
+  // `NAME.prop = value` / `Object.defineProperty(NAME, "prop", …)`
+  // sites, keyed by NAME. A namespace's members arrive this way (the
+  // lowering assigns them onto the namespace object inside an IIFE), as
+  // does any `Foo.prototype.m = …` style declaration.
+  prop_assigns : Map[String, Array[(String, @ast.TsExpr)]]
   // Property names that must survive mangling.
   reserved : Map[String, Bool]
   // Names already processed, so a cyclic reference terminates.
@@ -127,6 +146,79 @@ fn index_top_level_decls(w : SurfaceWalk, block : @ast.TsBlock) -> Unit {
       _ => ()
     }
   }
+}
+
+///|
+/// Index `NAME.prop = value` and
+/// `Object.defineProperty(NAME, "prop", { get: … })` sites anywhere in
+/// the block, nested function bodies included — a namespace's members
+/// are assigned inside an IIFE, so a top-level-only scan misses them.
+fn index_prop_assigns(w : SurfaceWalk, block : @ast.TsBlock) -> Unit {
+  fn record(name : String, prop : String, value : @ast.TsExpr) -> Unit {
+    match w.prop_assigns.get(name) {
+      Some(arr) => arr.push((prop, value))
+      None => w.prop_assigns[name] = [(prop, value)]
+    }
+  }
+
+  for stmt in block.stmts {
+    match stmt {
+      PropAssign(@ast.TsExpr::Var(n), prop, value) => record(n, prop, value)
+      _ => ()
+    }
+    // Nested statement blocks (the namespace lowering wraps its two
+    // statements in one) and nested function bodies.
+    match stmt {
+      Block(inner) => index_prop_assigns(w, inner)
+      If(_, t, e) => {
+        index_prop_assigns(w, t)
+        match e {
+          Some(b) => index_prop_assigns(w, b)
+          None => ()
+        }
+      }
+      While(_, b)
+      | DoWhile(_, b)
+      | With(_, b)
+      | For(_, _, _, b)
+      | ForOf(_, _, _, _, b)
+      | ForAwaitOf(_, _, _, _, b)
+      | ForIn(_, _, _, _, b) => index_prop_assigns(w, b)
+      Try(b, _, c, f) => {
+        index_prop_assigns(w, b)
+        match c {
+          Some(cb) => index_prop_assigns(w, cb)
+          None => ()
+        }
+        match f {
+          Some(fb) => index_prop_assigns(w, fb)
+          None => ()
+        }
+      }
+      Switch(_, cases) =>
+        for case_ in cases {
+          index_prop_assigns(w, case_.body)
+        }
+      _ => ()
+    }
+  }
+  // Function bodies and `Object.defineProperty` calls, wherever they sit
+  // in an expression.
+  surface_visit_exprs_block(block, e => match e {
+    @ast.TsExpr::FuncExpr(f) => index_prop_assigns(w, f.body)
+    @ast.TsExpr::ArrowFunc(_, _, ArrowBlock(b), _) => index_prop_assigns(w, b)
+    @ast.TsExpr::PropAssignExpr(@ast.TsExpr::Var(n), prop, value) =>
+      record(n, prop, value)
+    @ast.TsExpr::MethodCall(@ast.TsExpr::Var("Object"), "defineProperty", args) =>
+      if args.length() >= 3 {
+        match (args[0], args[1]) {
+          (@ast.TsExpr::Var(n), @ast.TsExpr::StringLit(prop)) =>
+            record(n, prop, args[2])
+          _ => ()
+        }
+      }
+    _ => ()
+  })
 }
 
 ///|

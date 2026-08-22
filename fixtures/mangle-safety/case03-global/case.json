@@ -12,6 +12,6 @@
   "globals": [
     "MyGlobal"
   ],
-  "expectStatus": "blocked-compile",
+  "expectStatus": "pass",
   "blockedReason": "mtsc does not add a sibling ambient `.d.ts` to the program, so `declare const MyGlobal` is unresolvable."
 }

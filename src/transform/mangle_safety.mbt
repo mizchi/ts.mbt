@@ -88,7 +88,37 @@ pub fn collect_externally_visible_props(
       _ => collect_object_literal_keys(sink.expr, reserved_literals)
     }
   }
+  // Phase 4c: a binding whose value CAME FROM outside — `const ret =
+  // external.f(...)` — carries a shape the host owns. The chain walk in
+  // Phase 3 stops at the binding, and the backward flow only runs from
+  // sinks, so reserve the property names read on such a binding here.
+  let reserved_from_external : Map[String, Bool] = {}
+  for sym in graph.symbols {
+    let mut from_external = false
+    for d in sym.defs {
+      match d.init {
+        Some(init) =>
+          if is_external_chain(init, external_bindings) {
+            from_external = true
+          }
+        None => ()
+      }
+    }
+    if from_external {
+      for u in sym.uses {
+        match u.context {
+          PropReceiver(p) => reserved_from_external[p] = true
+          _ => ()
+        }
+      }
+    }
+  }
   let reserved : Map[String, Bool] = {}
+  for k in reserved_from_external.keys() {
+    if !is_internal_marker_prop(k) {
+      reserved[k] = true
+    }
+  }
   for k in reserved_literals.keys() {
     if !is_internal_marker_prop(k) {
       reserved[k] = true
@@ -112,6 +142,35 @@ pub fn collect_externally_visible_props(
   let out : Array[String] = []
   for k in reserved.keys() {
     out.push(k)
+  }
+  out
+}
+
+///|
+/// Names the block references but never declares, in any scope. Such a
+/// name can only come from the host — an ambient global from a `.d.ts`,
+/// a runtime built-in, a script-tag global — so every property read on
+/// it belongs to somebody else's ABI and must not be renamed.
+///
+/// The symbol graph supplies "declared anywhere" (it records every
+/// binding in every scope) and the reference walk supplies "mentioned
+/// anywhere". A name that some inner scope happens to declare is
+/// treated as internal even if another scope reads it as a global; that
+/// is the one imprecision here, and the built-in reserved list already
+/// covers the real runtime globals.
+pub fn undeclared_referenced_names(block : @ast.TsBlock) -> Map[String, Bool] {
+  let graph = build_symbol_graph(block, {})
+  let declared : Map[String, Bool] = {}
+  for sym in graph.symbols {
+    declared[sym.name] = true
+  }
+  let referenced : Map[String, Bool] = {}
+  collect_var_refs_in_block(block, referenced)
+  let out : Map[String, Bool] = {}
+  for name in referenced.keys() {
+    if !declared.contains(name) {
+      out[name] = true
+    }
   }
   out
 }

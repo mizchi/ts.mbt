@@ -1444,6 +1444,24 @@ fn Resolver::unwrap_containers_at(
       }
       Tuple(out)
     }
+    // A `Named` member of a union / intersection is just as opaque to the
+    // resolver-free comparison as one inside an array:
+    // `type Ext = Base & { to: string }` never matched an object literal
+    // carrying both halves' fields, because `Base` stayed a name.
+    Union(parts) => {
+      let out : Array[@ast.TsType] = []
+      for p in parts {
+        out.push(self.unwrap_element(p, depth + 1, path, aborted))
+      }
+      Union(out)
+    }
+    Intersection(parts) => {
+      let out : Array[@ast.TsType] = []
+      for p in parts {
+        out.push(self.unwrap_element(p, depth + 1, path, aborted))
+      }
+      Intersection(out)
+    }
     other => other
   }
 }
@@ -1617,11 +1635,18 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
       // `T[K]` indexed access — resolve via simplify_type first; if still
       // unresolved, try lookup_field when the base is a Named/Applied type.
       IndexedAccess(base, key) => {
-        let simplified = simplify_type(cur)
+        // Resolve the base through the resolver BEFORE simplifying.
+        // `simplify_indexed_access` carries no resolver, so a `Named`
+        // base hits its catch-all and yields `Any` — which then reads as
+        // a fully-modeled receiver with no members, and a legitimate
+        // `Info["dog"].name` was reported as a missing property. With the
+        // base resolved (a mapped type becomes an `Object`, an alias
+        // becomes its body) the simplifier can do its job.
+        let resolved_base = self.unwrap(base)
+        let simplified = simplify_type(IndexedAccess(resolved_base, key))
         match simplified {
-          IndexedAccess(_, _) => {
-            // simplify couldn't resolve it; try resolver-aware field lookup.
-            let resolved_base = self.unwrap(base)
+          IndexedAccess(_, _) =>
+            // Still unresolved: try a resolver-aware field lookup.
             match key {
               Literal(name) =>
                 match self.lookup_field(resolved_base, name) {
@@ -1630,7 +1655,12 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
                 }
               _ => keep_going = false
             }
-          }
+          // `simplify_indexed_access` reports "couldn't resolve" as `Any`.
+          // Keep the original shape in that case: callers distinguish an
+          // unmodeled receiver from a modeled one, and `Any` claims the
+          // latter — which is how `Info["dog"].name` came to be reported
+          // as a missing property.
+          Any if !(resolved_base is Any) => keep_going = false
           _ => cur = simplified
         }
       }
@@ -3630,13 +3660,18 @@ fn Resolver::lookup_constructor_sig(
             types.push(p.1)
             let is_rest = idx < cls.constructor_param_is_rest.length() &&
               cls.constructor_param_is_rest[idx]
+            let default = if idx < cls.constructor_param_defaults.length() {
+              cls.constructor_param_defaults[idx]
+            } else {
+              None
+            }
             sig.push({
               name: p.0,
               binding: None,
               is_rest,
-              is_optional: false,
+              is_optional: default is Some(_),
               type_: p.1,
-              default: None,
+              default,
             })
           }
           Some((types, sig))
@@ -11902,10 +11937,35 @@ fn infer_block_return(
   resolver : Resolver,
   block : @ast.TsBlock,
 ) -> @ast.TsType {
+  // Locals declared before the `return` are part of what the return
+  // expression means: `const r = apply(x); return { a, ...r }` has to
+  // know `r`'s type to spread `r`'s fields, and without them the
+  // inferred shape silently lost every spread member.
+  //
+  // The bindings go into the caller's env and are removed again on the
+  // way out. Copying into a child env instead loses the `declared`
+  // slots (`full_snapshot` carries only `vars`), and inference is worse
+  // for it — that cost a conformance false positive. A name the caller
+  // already binds is left alone, so nothing it owns is disturbed.
+  let added : Array[String] = []
   let mut acc : @ast.TsType = @ast.TsType::Undefined
   let mut first = true
   for stmt in block.stmts {
     match stmt {
+      Var(@ast.TsBinding::Ident(name), declared, init)
+      | Let(@ast.TsBinding::Ident(name), declared, init)
+      | Const(@ast.TsBinding::Ident(name), declared, init) =>
+        if env.lookup(name) is None {
+          let ty = if is_checkable(declared) {
+            declared
+          } else {
+            infer_expr(env, resolver, init)
+          }
+          if is_checkable(ty) {
+            env.bind(name, ty)
+            added.push(name)
+          }
+        }
       Return(Some(e)) => {
         let t = infer_expr(env, resolver, e)
         if first {
@@ -11922,6 +11982,10 @@ fn infer_block_return(
         }
       _ => ()
     }
+  }
+  for name in added {
+    let _ = env.vars.remove(name)
+    let _ = env.declared.remove(name)
   }
   if first {
     @ast.TsType::Undefined

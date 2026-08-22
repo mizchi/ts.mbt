@@ -1703,7 +1703,12 @@ fn collect_value_decls_from_stmt(
 fn value_decl_infer_type_from_expr(expr : @ast.TsExpr) -> @ast.TsType {
   match expr {
     @ast.TsExpr::NumberLit(_) => @ast.TsType::Number
-    @ast.TsExpr::IntLit(_) => @ast.TsType::Int
+    // TypeScript has ONE numeric type: `const v = 1` is `number`, not an
+    // integral subtype. Recording `Int` here made a namespace-level
+    // `const v = 1` unassignable to a `: number` slot, and `count =
+    // count + 1` unassignable back to its own binding. `Int` stays the
+    // MoonBit bridge's marker, which is parsed elsewhere.
+    @ast.TsExpr::IntLit(_) => @ast.TsType::Number
     @ast.TsExpr::BoolLit(_) => @ast.TsType::Boolean
     @ast.TsExpr::StringLit(_) => @ast.TsType::String_
     @ast.TsExpr::NullLit => @ast.TsType::Null
@@ -2720,10 +2725,18 @@ fn Parser::parse_export_decl_for_module(
   match self.peek().kind {
     Ident(name) if name == "namespace" || name == "module" || name == "global" => {
       // Non-declare `export namespace X { ... }` — body may contain
-      // runtime class bodies and statements.
-      match self.parse_namespace_decl_value_runtime() {
-        Some(value) =>
-          exports.push({ local_name: value.name, export_name: value.name })
+      // runtime class bodies and statements. Parse twice: the type side
+      // registers the namespace as an exported value, and the runtime
+      // side lowers the body so `X.member` resolves at load time (see
+      // `parse_runtime_namespace_stmt`).
+      match self.parse_lowered_namespace() {
+        Some(lowered) => {
+          stmts.push(lowered.stmt)
+          exports.push({
+            local_name: lowered.name,
+            export_name: lowered.name,
+          })
+        }
         None => self.skip_declaration_block()
       }
       return (stmts, exports, reexports)
@@ -3973,12 +3986,22 @@ fn Parser::parse_module_block_with_const_values(
       continue
     }
     if self.is_namespace_decl_start() {
-      // Namespaces aren't retained on `TsModuleBlock`, but enums declared
-      // inside them must still be registered. Parse the body and hoist any
-      // nested enums rather than dropping the whole block.
-      match self.parse_namespace_decl_runtime() {
-        Some((_, Some(ns))) => collect_enums_recursive(ns.module_, enums)
-        _ => ()
+      // Namespaces aren't retained on `TsModuleBlock` as declarations,
+      // but they are runtime values: the body's exported members have to
+      // exist under the namespace object. Parse the body twice — once
+      // for the type side (so enums declared inside are registered) and
+      // once for the runtime lowering. Two parses of a namespace body is
+      // not a hot path, and it keeps both sides reading the same source
+      // rather than reconstructing one from the other.
+      match self.parse_lowered_namespace() {
+        Some(lowered) => {
+          stmts.push(lowered.stmt)
+          for e in lowered.enums {
+            enums.push(e)
+          }
+        }
+        // Not a lowerable form (ambient module name, dotted path).
+        None => self.skip_declaration_block()
       }
       continue
     }

@@ -372,6 +372,18 @@ pub fn bundle_modules(
   // (which re-exports `Hono as HonoBase`) leaves `HonoBase` as a
   // free variable in the consumer.
   let link_renames = link_module_graph(modules, order, external_imports)
+  // Names the bundle will export. Used three times below: as the members
+  // class-method DCE must keep (a consumer calls them even when nothing
+  // inside the bundle does), as treeshake roots (nothing inside the
+  // bundle has to reference an exported binding), and as the starting
+  // point for the property mangler's escape analysis.
+  let entry_exports = entry_export_bindings(modules, link_renames, entry)
+  let export_roots : Map[String, Bool] = {}
+  for ex in entry_exports {
+    if ex.from_external is None {
+      export_roots[ex.local_name] = true
+    }
+  }
   let mut mangle_export_renames : Map[String, String] = {}
   let e = Emitter::new(pretty=!opts.minify)
   if opts.with_sourcemap {
@@ -512,10 +524,15 @@ pub fn bundle_modules(
     // couldn't be lifted to native class syntax. These are pure mtsc
     // internals with no runtime effect once the lift pass has run.
     combined = strip_super_proto_stmts(combined)
+    let export_surface : Map[String, Bool] = {}
+    for n in exported_surface_props(combined, export_roots) {
+      export_surface[n] = true
+    }
     // Class-method DCE: drop methods on native class declarations
-    // that nothing in the bundle accesses by name. Gated on the
-    // absence of reflection / dynamic-key access in the bundle.
-    combined = class_method_dce_block(combined)
+    // that nothing in the bundle accesses by name — except the ones
+    // the export surface reaches, which the consumer calls. Gated on
+    // the absence of reflection / dynamic-key access in the bundle.
+    combined = class_method_dce_block(combined, keep=export_surface)
     // Type-aware constant folding: `typeof x === "string"` /
     // `x === null` etc. when the bound `x` carries a primitive
     // type annotation. Runs BEFORE the regular fold so the
@@ -529,16 +546,6 @@ pub fn bundle_modules(
     // mangle renames whatever survived; inline collapses single-
     // use bindings into their unique reference; peephole finally
     // compacts the result with `x += y` and `void 0` rewrites.
-    // Names the bundle will export. They are treeshake roots — nothing
-    // inside the bundle has to reference an exported binding — and the
-    // starting point for the export-surface escape analysis below.
-    let entry_exports = entry_export_bindings(modules, link_renames, entry)
-    let export_roots : Map[String, Bool] = {}
-    for ex in entry_exports {
-      if ex.from_external is None {
-        export_roots[ex.local_name] = true
-      }
-    }
     if opts.fold {
       combined = fold_block(combined)
     }
@@ -575,11 +582,24 @@ pub fn bundle_modules(
         // declared shapes and only in the entry module, so without
         // this walk the dead-property pass happily deleted keys the
         // consumer reads.
+        for n in export_surface.keys() {
+          extra_reserved.push(n)
+        }
+        // Recompute on the post-fold block as well: folding can turn a
+        // reference into the literal it names, which surfaces keys the
+        // first walk could not see through.
         for n in exported_surface_props(combined, export_roots) {
           extra_reserved.push(n)
         }
         // Door 2: values that leave through a sink.
         let externals = external_import_bindings(external_imports)
+        // A name the bundle never declares is provided by the host — an
+        // ambient global out of a `.d.ts`, or a runtime built-in. Reading
+        // a property off one is reading somebody else's ABI, so treat
+        // those bindings as external too.
+        for n in undeclared_referenced_names(combined).keys() {
+          externals[n] = true
+        }
         let escapes = collect_externally_visible_props(combined, externals)
         let mut wildcard = false
         for n in escapes {
@@ -728,6 +748,27 @@ pub fn bundle_modules(
       emit_entry_exports(e, entry_exports, mangle_export_renames, declared)
     }
   } else {
+    // The per-module emit keeps each module's statements separate, but
+    // the export surface spans the whole graph — an exported class can
+    // live in any module. Concatenate a read-only view to analyse.
+    let all_stmts : Array[@ast.TsStmt] = []
+    for path in order {
+      match modules.get(path) {
+        Some(node) =>
+          for st in node.block.stmts {
+            all_stmts.push(st)
+          }
+        None => ()
+      }
+    }
+    let export_surface : Map[String, Bool] = {}
+    for n in
+      exported_surface_props(
+        { stmts: all_stmts, stmt_positions: [] },
+        export_roots,
+      ) {
+      export_surface[n] = true
+    }
     for i, path in order {
       let m = match modules.get(path) {
         Some(node) => node
@@ -758,7 +799,10 @@ pub fn bundle_modules(
           None => ()
         }
       }
-      let lifted_block = class_method_dce_block(iife_class_lift_block(m.block))
+      let lifted_block = class_method_dce_block(
+        iife_class_lift_block(m.block),
+        keep=export_surface,
+      )
       for j, stmt in lifted_block.stmts {
         if opts.with_sourcemap && j < lifted_block.stmt_positions.length() {
           let src_pos = e.line_index.position(lifted_block.stmt_positions[j])

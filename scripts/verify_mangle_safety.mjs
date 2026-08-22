@@ -78,6 +78,22 @@ const MTSC = findMtsc();
 // what the two bundles actually produced.
 // ---------------------------------------------------------------
 
+// Own enumerable members a function/class carries (statics, and the
+// prototype's methods) — renaming one of those IS observable.
+function functionMembers(fn) {
+  const out = new Set();
+  for (const key of Object.getOwnPropertyNames(fn)) {
+    if (key !== "length" && key !== "name" && key !== "prototype") out.add(key);
+  }
+  const proto = fn.prototype;
+  if (proto) {
+    for (const key of Object.getOwnPropertyNames(proto)) {
+      if (key !== "constructor") out.add(key);
+    }
+  }
+  return [...out].sort();
+}
+
 function serialize(value, seen = new Set()) {
   if (value === undefined) return { $: "undefined" };
   if (value === null) return null;
@@ -85,7 +101,10 @@ function serialize(value, seen = new Set()) {
   if (t === "number" || t === "string" || t === "boolean") return value;
   if (t === "bigint") return { $: "bigint", v: value.toString() };
   if (t === "symbol") return { $: "symbol", v: String(value) };
-  if (t === "function") return { $: "function", name: value.name };
+  // Deliberately NOT recording `value.name`: renaming a local binding
+  // changes `Function.name`, and no minifier preserves it. What matters
+  // is the export name (checked separately) and the members.
+  if (t === "function") return { $: "function", members: functionMembers(value) };
   if (seen.has(value)) return { $: "cycle" };
   seen.add(value);
   try {
@@ -360,6 +379,8 @@ function propertyAppears(code, name) {
     new RegExp(`(^|[\\s{;])${id}\\s*\\(`, "m"),
     new RegExp(`["'\`]${id}["'\`]`),
     new RegExp(`\\[\\s*["']${id}["']\\s*\\]`),
+    // Class field declaration: `static sv = 1` / `count = 0`.
+    new RegExp(`(^|[\\s{;])(static\\s+)?${id}\\s*=[^=]`, "m"),
   ];
   return patterns.some((p) => p.test(code));
 }

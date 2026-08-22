@@ -706,6 +706,13 @@ fn is_assignable_to_inner(
     (TemplateLiteralType(s_parts, s_args), TemplateLiteralType(t_parts, t_args)) =>
       template_assignable(s_parts, s_args, t_parts, t_args, bivariant_params)
     (NumberLiteral(_), Number) => true
+    // `Int` is this AST's marker for an integral numeric — the value
+    // side of `const v = 1` records it, and the MoonBit bridge uses it
+    // for `Int`. TypeScript has one numeric type, so an `Int` value
+    // satisfies a `number` slot; `const v = 1` inside a namespace used
+    // to fail against a `: number` return for exactly this reason.
+    (Int, Number) => true
+    (NumberLiteral(_), Int) => true
     (BigIntLiteral(_), BigInt) => true
     (BooleanLiteral(_), Boolean) => true
     // `undefined` is assignable to `void` (a `void` location holds

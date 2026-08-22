@@ -40,9 +40,19 @@
 // When the bundle clears those, drop every method whose name
 // doesn't appear in the bundle's syntactic access set. The
 // `constructor` is always kept (it's the body of `new C(...)`).
+//
+// One more input is needed for a *library* bundle: the bundle's own
+// consumer. `class C { c3() {} }` exported from the entry has a
+// public `c3` even when nothing inside the bundle calls it — the
+// syntactic access set says "unused" and the method would be
+// deleted. `keep` carries the names the export-surface analysis
+// found reachable from the entry's exports; they are never dropped.
 
 ///|
-pub fn class_method_dce_block(block : @ast.TsBlock) -> @ast.TsBlock {
+pub fn class_method_dce_block(
+  block : @ast.TsBlock,
+  keep? : Map[String, Bool] = {},
+) -> @ast.TsBlock {
   // 1. Cheap exit when neither shape of class is present: no
   //    NativeClassStmt/Expr AND no IIFE-lowered class. (The IIFE
   //    pattern is `let X = function () { … return X; }();`.)
@@ -61,6 +71,10 @@ pub fn class_method_dce_block(block : @ast.TsBlock) -> @ast.TsBlock {
   //    defeat the DCE on the IIFE-lowered form.
   let accessed : Map[String, Bool] = {}
   collect_static_accesses_block_skipping_iife(block, iife_classes, accessed)
+  // Externally visible members count as accesses.
+  for name in keep.keys() {
+    accessed[name] = true
+  }
   // 4. Rewrite native class statements, filtering their method lists.
   let new_stmts : Array[@ast.TsStmt] = []
   for s in block.stmts {

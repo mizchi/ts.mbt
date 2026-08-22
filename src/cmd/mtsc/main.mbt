@@ -381,6 +381,10 @@ async fn mtsc_load_bundle_files(
   aliases : Map[String, String],
   externals : Map[String, Bool],
   type_props : Map[String, Bool],
+  // Import / re-export edges discovered along the way, in the shape the
+  // graph checker wants: resolution is the CLI's job, and the checker
+  // needs the edges to resolve a type declared in another module.
+  edges : Array[@mtsc_core.MtscModuleEdge],
 ) -> Result[Unit, String] {
   // Sequential DFS over the import graph. moonbitlang/async runs on
   // a cooperative single-threaded scheduler, so spawning per-file
@@ -445,16 +449,30 @@ async fn mtsc_load_bundle_files(
       type_props[n] = true
     }
     for imp in mb.imports {
-      if imp.type_only {
+      // A type-only import contributes no runtime code, so the bundler
+      // skips it — but the CHECKER needs the module that declares the
+      // type, or `import type { Loc } from "./types"` leaves `Loc`
+      // unresolvable and identical shapes read as mismatches. Load and
+      // edge relative type-only imports; a bare one would drag a whole
+      // package's declarations in, so those stay skipped.
+      let spec = imp.module_spec
+      if imp.type_only &&
+        !(
+          spec.has_prefix("./") || spec.has_prefix("../") || spec.has_prefix("/")
+        ) {
         continue
       }
-      let spec = imp.module_spec
       if spec.has_prefix("./") || spec.has_prefix("../") || spec.has_prefix("/") {
         let combined = if spec.has_prefix("/") {
           mtsc_normalize(spec)
         } else {
           mtsc_normalize(mtsc_join_path(mtsc_dirname(resolved), spec))
         }
+        edges.push({
+          importerPath: resolved,
+          moduleSpecifier: spec,
+          targetPath: mtsc_resolve_existing(combined),
+        })
         queue.push(combined)
         continue
       }
@@ -467,6 +485,11 @@ async fn mtsc_load_bundle_files(
       match @parser.resolve_runtime_module_specifier(resolved, spec) {
         Some(found) => {
           aliases[spec] = found
+          edges.push({
+            importerPath: resolved,
+            moduleSpecifier: spec,
+            targetPath: found,
+          })
           queue.push(found)
         }
         None => ()
@@ -475,16 +498,25 @@ async fn mtsc_load_bundle_files(
     // Re-exports (`export * from "./a"`, `export { X } from "./a"`)
     // also pull `./a` into the bundle. Mirror the import loop.
     for re in mb.reexports {
-      if re.type_only {
+      // Same reasoning as the type-only import above.
+      let spec = re.module_spec
+      if re.type_only &&
+        !(
+          spec.has_prefix("./") || spec.has_prefix("../") || spec.has_prefix("/")
+        ) {
         continue
       }
-      let spec = re.module_spec
       if spec.has_prefix("./") || spec.has_prefix("../") || spec.has_prefix("/") {
         let combined = if spec.has_prefix("/") {
           mtsc_normalize(spec)
         } else {
           mtsc_normalize(mtsc_join_path(mtsc_dirname(resolved), spec))
         }
+        edges.push({
+          importerPath: resolved,
+          moduleSpecifier: spec,
+          targetPath: mtsc_resolve_existing(combined),
+        })
         queue.push(combined)
         continue
       }
@@ -497,13 +529,65 @@ async fn mtsc_load_bundle_files(
       match @parser.resolve_runtime_module_specifier(resolved, spec) {
         Some(found) => {
           aliases[spec] = found
+          edges.push({
+            importerPath: resolved,
+            moduleSpecifier: spec,
+            targetPath: found,
+          })
           queue.push(found)
         }
         None => ()
       }
     }
   }
+  // Ambient declaration files (`declare const MyGlobal: …`) belong to the
+  // program even though nothing imports them — that is the whole point of
+  // an ambient declaration. `tsc` picks them up through tsconfig's
+  // `include`; with no tsconfig to read, take the `.d.ts` files sitting in
+  // the entry's own directory, which is where the `env.d.ts` /
+  // `globals.d.ts` convention puts them.
+  for ambient in mtsc_sibling_declaration_files(entry_path) {
+    if files.contains(ambient) {
+      continue
+    }
+    let source = @fs.read_file(ambient).text() catch {
+      // A directory read that fails is not fatal here: the file is
+      // supplementary, not part of the module graph.
+      _ => continue
+    }
+    files[ambient] = source
+    let parsed = (try @parser.Parser::from_source(source).parse_module() catch {
+      e => Err(e)
+    } noraise {
+      m => Ok(m)
+    })
+    match parsed {
+      Ok(module_) =>
+        for n in @transform.type_declared_property_names(module_) {
+          type_props[n] = true
+        }
+      Err(_) => ()
+    }
+  }
   Ok(())
+}
+
+///|
+/// `.d.ts` files in the same directory as `entry_path`, sorted for a
+/// deterministic program. Nested directories are not scanned: an ambient
+/// file deeper in the tree belongs to whatever entry sits next to it.
+async fn mtsc_sibling_declaration_files(entry_path : String) -> Array[String] {
+  let dir = mtsc_dirname(entry_path)
+  let names = @fs.readdir(dir, sort=true) catch {
+    _ => return []
+  }
+  let out : Array[String] = []
+  for name in names {
+    if name.has_suffix(".d.ts") {
+      out.push(mtsc_normalize(mtsc_join_path(dir, name)))
+    }
+  }
+  out
 }
 
 ///|
@@ -511,7 +595,9 @@ async fn mtsc_resolve_existing(base : String) -> String {
   if mtsc_path_exists(base) {
     return base
   }
-  let exts = [".ts", ".tsx", ".js", ".mjs", ".jsx"]
+  // `.d.ts` is in the list because a declaration-only module is a
+  // legitimate target of `import type { X } from "./types"`.
+  let exts = [".ts", ".tsx", ".d.ts", ".js", ".mjs", ".jsx"]
   for ext in exts {
     let cand = base + ext
     if mtsc_path_exists(cand) {
@@ -563,68 +649,65 @@ fn mtsc_typecheck_source(source : String, path : String) -> Bool {
 }
 
 ///|
-/// Refuse input that carries a construct the emitter would silently
-/// erase. Right now that is exactly one thing: a `namespace N { … }`
-/// (or `module N { … }`) holding runtime members. The statement
-/// parser skips those bodies, so the JS came out with every
-/// `N.member` reference intact and nothing declaring `N` — a
-/// `ReferenceError` at load time, with no diagnostic. Failing the
-/// compile is the honest outcome until the lowering exists.
+/// Print checker diagnostics for a whole resolved module graph and
+/// return whether it is clean.
 ///
-/// Ambient `declare namespace` bodies are erased legitimately (they
-/// declare no runtime members), so they don't trip this.
-fn mtsc_reject_unsupported(source : String, path : String) -> Bool {
-  let module_ = match
-    (try
-      @parser.Parser::from_source_with_jsx(source, path.has_suffix(".tsx")).parse_module()
-    catch {
-      _ => Err("")
-    } noraise {
-      m => Ok(m)
-    }) {
-    Ok(m) => m
-    // Parse failures are reported by the type-check pass; don't
-    // double-report here.
-    Err(_) => return true
-  }
-  let offenders : Array[String] = []
-  fn scan(prefix : String, namespaces : Array[@ast.TsNamespaceDecl]) -> Unit {
-    for ns in namespaces {
-      let qualified = if prefix == "" {
-        ns.name
-      } else {
-        prefix + "." + ns.name
-      }
-      if !ns.is_declare && namespace_has_runtime_members(ns.module_) {
-        offenders.push(qualified)
-      }
-      scan(qualified, ns.module_.namespaces)
+/// Only files that look like real modules are handed over: the loader
+/// keys `files` by both the resolved path and the extension-less form a
+/// specifier spelled (`./sub` -> `/dir/sub`), and passing the same
+/// source twice would double every diagnostic.
+fn mtsc_typecheck_graph(
+  files : Map[String, String],
+  edges : Array[@mtsc_core.MtscModuleEdge],
+) -> Bool {
+  let modules : Array[@mtsc_core.MtscModuleSource] = []
+  for path in files.keys() {
+    if !mtsc_is_module_path(path) {
+      continue
+    }
+    match files.get(path) {
+      Some(source) =>
+        modules.push({
+          path,
+          source,
+          allowJsx: path.has_suffix(".tsx") || path.has_suffix(".jsx"),
+        })
+      None => ()
     }
   }
-
-  scan("", module_.namespaces)
-  if offenders.length() == 0 {
+  let reported : Array[@mtsc_core.MtscGraphIssue] = []
+  for issue in @mtsc_core.collect_module_graph_issues({ modules, edges }) {
+    // Import-resolution diagnostics are dropped here. They are part of
+    // the stricter contract the Vite integration wants, but this CLI
+    // cannot tell a type-only use of a value-form import
+    // (`import { LocalObj } from "./types"` where `LocalObj` is a type
+    // alias — legal TypeScript) from a genuinely missing export, and
+    // reporting the first would reject valid programs.
+    if issue.path == "import" {
+      continue
+    }
+    reported.push(issue)
+  }
+  if reported.length() == 0 {
     return true
   }
-  for name in offenders {
+  for issue in reported {
     println(
-      "mtsc: unsupported in \{path}: `namespace \{name}` declares runtime members, which mtsc cannot lower yet (the body would be erased and every `\{name}.member` reference would fail at load time). Move the members to module scope, or keep the namespace type-only.",
+      "mtsc: type error in \{issue.modulePath} [\{issue.path}]: \{issue.message}",
     )
   }
   false
 }
 
 ///|
-/// True when a namespace body declares something that has to exist at
-/// runtime: a statement, a function, a value, a class, or an enum.
-/// Only consulted for non-ambient namespaces, where every one of
-/// those is a real declaration rather than a type-level signature.
-fn namespace_has_runtime_members(module_ : @ast.TsModule) -> Bool {
-  module_.top_level_stmts.length() > 0 ||
-  module_.enums.length() > 0 ||
-  module_.funcs.length() > 0 ||
-  module_.values.length() > 0 ||
-  module_.classes.length() > 0
+/// True for a path that names a source file we should type-check.
+fn mtsc_is_module_path(path : String) -> Bool {
+  path.has_suffix(".ts") ||
+  path.has_suffix(".tsx") ||
+  path.has_suffix(".mts") ||
+  path.has_suffix(".js") ||
+  path.has_suffix(".mjs") ||
+  path.has_suffix(".jsx")
 }
 
 ///|
@@ -716,6 +799,7 @@ async fn main {
   }
   if opts.bundle {
     let files : Map[String, String] = {}
+    let edges : Array[@mtsc_core.MtscModuleEdge] = []
     let aliases : Map[String, String] = {}
     let type_props : Map[String, Bool] = {}
     match
@@ -725,6 +809,7 @@ async fn main {
         aliases,
         opts.externals,
         type_props,
+        edges,
       ) {
       Ok(_) => ()
       Err(e) => {
@@ -732,18 +817,13 @@ async fn main {
         return
       }
     }
-    for path in files.keys() {
-      match files.get(path) {
-        Some(source) =>
-          if !mtsc_typecheck_source(source, path) {
-            mtsc_exit_type_error()
-            return
-          } else if !mtsc_reject_unsupported(source, path) {
-            mtsc_exit_type_error()
-            return
-          }
-        None => ()
-      }
+    // Type-check the whole graph in one go. Checking each file alone
+    // leaves every imported type unresolvable, which both hides real
+    // errors and invents fake ones — an identical shape compared against
+    // an imported alias reads as a mismatch.
+    if !mtsc_typecheck_graph(files, edges) {
+      mtsc_exit_type_error()
+      return
     }
     // `type_props` collects every property name declared in an
     // interface / type alias / class across the input. We DON'T
@@ -969,10 +1049,6 @@ async fn main {
     }
   }
   if !mtsc_typecheck_source(source, input_path) {
-    mtsc_exit_type_error()
-    return
-  }
-  if !mtsc_reject_unsupported(source, input_path) {
     mtsc_exit_type_error()
     return
   }

@@ -160,10 +160,18 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
       self.collected_type_aliases.push(self.parse_type_alias())
       Empty
     }
-    _ if self.is_namespace_decl_start() => {
-      self.skip_declaration_block()
-      Empty
-    }
+    _ if self.is_namespace_decl_start() =>
+      // `namespace N { … }` declares a runtime object; lower it so the
+      // body's exported members exist. Forms the lowering doesn't model
+      // (ambient module names, dotted paths, `global { … }`) fall back
+      // to the old skip.
+      match self.parse_lowered_namespace() {
+        Some(lowered) => lowered.stmt
+        None => {
+          self.skip_declaration_block()
+          Empty
+        }
+      }
     Ident(name) if name == "enum" => {
       // Plain `enum E { … }` at stmt level. Parse + lower inline
       // so the resulting `var E = {}; …` lands in the runtime block.
