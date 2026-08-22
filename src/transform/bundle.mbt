@@ -529,11 +529,21 @@ pub fn bundle_modules(
     // mangle renames whatever survived; inline collapses single-
     // use bindings into their unique reference; peephole finally
     // compacts the result with `x += y` and `void 0` rewrites.
+    // Names the bundle will export. They are treeshake roots — nothing
+    // inside the bundle has to reference an exported binding — and the
+    // starting point for the export-surface escape analysis below.
+    let entry_exports = entry_export_bindings(modules, link_renames, entry)
+    let export_roots : Map[String, Bool] = {}
+    for ex in entry_exports {
+      if ex.from_external is None {
+        export_roots[ex.local_name] = true
+      }
+    }
     if opts.fold {
       combined = fold_block(combined)
     }
     if opts.treeshake {
-      combined = treeshake_block(combined)
+      combined = treeshake_block(combined, roots=export_roots)
     }
     if opts.mangle {
       // Type-driven safety for property mangling: walk the merged
@@ -565,13 +575,7 @@ pub fn bundle_modules(
         // declared shapes and only in the entry module, so without
         // this walk the dead-property pass happily deleted keys the
         // consumer reads.
-        let exported_locals : Map[String, Bool] = {}
-        for ex in entry_export_bindings(modules, link_renames, entry) {
-          if ex.from_external is None {
-            exported_locals[ex.local_name] = true
-          }
-        }
-        for n in exported_surface_props(combined, exported_locals) {
+        for n in exported_surface_props(combined, export_roots) {
           extra_reserved.push(n)
         }
         // Door 2: values that leave through a sink.
@@ -667,7 +671,7 @@ pub fn bundle_modules(
         // unreachable. A lightweight treeshake pass removes them
         // before the final peephole compaction.
         if opts.treeshake {
-          combined = treeshake_block(combined)
+          combined = treeshake_block(combined, roots=export_roots)
         }
       }
       combined = peephole_block(combined)
@@ -716,7 +720,6 @@ pub fn bundle_modules(
     // left to apply here (`app` -> `aq`). The bundle output's
     // `export default <name>` must use the POST-mangle short form
     // because that's what survives in the body.
-    let entry_exports = entry_export_bindings(modules, link_renames, entry)
     if entry_exports.length() > 0 {
       let declared : Map[String, Bool] = {}
       for n in collect_top_level_decl_names(combined) {

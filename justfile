@@ -125,7 +125,7 @@ verify-checker-soundness:
     bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0
 
 # Full CI check
-ci: fmt check test verify-mbti-dts verify-scaffolds verify-generated-fixtures verify-examples verify-checker-soundness
+ci: fmt check test verify-mbti-dts verify-scaffolds verify-generated-fixtures verify-examples verify-mangle-safety verify-checker-soundness
 
 # Update dependencies
 update:

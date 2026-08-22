@@ -1372,6 +1372,121 @@ fn resolver_eval_mapped_remap(
 }
 
 ///|
+
+///|
+/// `unwrap`, then again inside container layers. `Resolver::unwrap` only
+/// peels the outermost type, which is all most rules need — but the
+/// resolver-free `is_assignable_to` can't resolve a `Named` it finds
+/// nested inside `Array` / `Tuple` / `Rest`, so a comparison of
+/// `I[]` against `{ … }[]` failed even when `I` aliases that exact
+/// shape.
+///
+/// Expansion is all-or-nothing. A recursive alias
+/// (`type A = [string, ...B]; type B = [string, ...A]`) cannot be
+/// expanded to a fixed point, and a *partial* expansion is worse than
+/// none: one side ends up eight levels deep with a `Named` tail while
+/// the other still reads as the alias, and two equivalent types compare
+/// unequal. So when the walk revisits an alias name along one path, or
+/// runs past the depth bound, the whole result falls back to the
+/// original type and the caller behaves as it did before.
+fn Resolver::unwrap_containers(
+  self : Resolver,
+  ty : @ast.TsType,
+) -> @ast.TsType {
+  let aborted = [false]
+  let out = self.unwrap_containers_at(ty, 0, [], aborted)
+  if aborted[0] {
+    // Fall back to the plain outer-layer unwrap — exactly what every
+    // caller used before container expansion existed.
+    self.unwrap(ty)
+  } else {
+    out
+  }
+}
+
+///|
+fn Resolver::unwrap_containers_at(
+  self : Resolver,
+  ty : @ast.TsType,
+  depth : Int,
+  seen : Array[String],
+  aborted : Array[Bool],
+) -> @ast.TsType {
+  if depth >= 8 {
+    aborted[0] = true
+    return ty
+  }
+  // Names peeled along this path. A repeat means the alias is
+  // recursive, so the expansion can't finish.
+  let path = match ty {
+    Named(n) | Applied(n, _) => {
+      if seen.contains(n) {
+        aborted[0] = true
+        return ty
+      }
+      let next : Array[String] = []
+      for v in seen {
+        next.push(v)
+      }
+      next.push(n)
+      next
+    }
+    _ => seen
+  }
+  let unwrapped = self.unwrap(ty)
+  match unwrapped {
+    Array(inner) => Array(self.unwrap_element(inner, depth + 1, path, aborted))
+    Rest(inner) => Rest(self.unwrap_element(inner, depth + 1, path, aborted))
+    Tuple(items) => {
+      let out : Array[@ast.TsType] = []
+      for it in items {
+        out.push(self.unwrap_element(it, depth + 1, path, aborted))
+      }
+      Tuple(out)
+    }
+    other => other
+  }
+}
+
+///|
+/// An element type inside a container. Same as `unwrap_containers_at`,
+/// plus: a plain interface reference becomes its structural equivalent.
+/// `Resolver::unwrap` deliberately leaves interfaces alone — most rules
+/// want the name — but the resolver-free element comparison can't see
+/// through one, so `interface I { n: number }; const xs: I[] = …`
+/// mismatched against an identical inferred shape.
+///
+/// Only interfaces that ARE exactly their own field list qualify: no
+/// `extends` (inherited members would go missing), no index signature
+/// (unbounded key set), no type parameters (no substitution here). An
+/// interface outside that subset is left as a `Named`, which keeps
+/// today's behaviour rather than risking a new wrong verdict.
+fn Resolver::unwrap_element(
+  self : Resolver,
+  ty : @ast.TsType,
+  depth : Int,
+  seen : Array[String],
+  aborted : Array[Bool],
+) -> @ast.TsType {
+  let unwrapped = self.unwrap_containers_at(ty, depth, seen, aborted)
+  match unwrapped {
+    Named(n) =>
+      match self.interfaces.get(n) {
+        Some(iface) =>
+          if iface.extends_names.is_empty() &&
+            iface.index_signatures.is_empty() &&
+            iface.type_params.is_empty() {
+            Struct(n, iface.fields)
+          } else {
+            unwrapped
+          }
+        None => unwrapped
+      }
+    other => other
+  }
+}
+
+///|
 fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
   let seen : Map[String, Bool] = {}
   let mut cur = ty
@@ -8656,9 +8771,13 @@ fn check_expr_against(
     }
   }
   // Unwrap type aliases before assignability check so `type Str = string`
-  // correctly assigns to `string` without a false mismatch.
-  let inferred_u = ctx.resolver.unwrap(inferred)
-  let expected_u = ctx.resolver.unwrap(expected)
+  // correctly assigns to `string` without a false mismatch. Container
+  // layers are unwrapped too: `is_assignable_to` carries no resolver, so
+  // an alias left sitting inside `Array` / `Tuple` never resolves and
+  // `type I = { n: number }; const xs: I[] = [1].map(n => ({ n }))`
+  // reported a mismatch between two identical shapes.
+  let inferred_u = ctx.resolver.unwrap_containers(inferred)
+  let expected_u = ctx.resolver.unwrap_containers(expected)
   // TS2322 / TS2345: a concrete string literal assigned to a template-literal
   // type pattern is an error when the pattern can't produce that literal
   // (`const x: `a${string}` = "hello"`). `is_assignable_to`'s pattern matcher

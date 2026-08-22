@@ -36,5 +36,6 @@
     "spfoo",
     "c2_internal"
   ],
-  "expectStatus": "blocked-compile"
+  "expectStatus": "blocked-compile",
+  "blockedReason": "checker: a constructor default parameter is not reflected in arity (`constructor(private v: number = 0)` then `new C()`)."
 }

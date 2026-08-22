@@ -77,6 +77,13 @@ jobs:
       - name: Verify examples
         run: just verify-examples
 
+      # Differential validation of `mtsc --mangle-properties`: each case in
+      # fixtures/mangle-safety is compiled with and without property
+      # mangling, both bundles are run under Node, and the observations are
+      # diffed. A difference means a renamed property was observable.
+      - name: Verify mangle safety
+        run: just verify-mangle-safety
+
   # Soundness gate against the TypeScript conformance corpus. Kept in a
   # separate job because it needs the (large) `typescript` submodule, which
   # the main `test` job deliberately skips to stay fast.

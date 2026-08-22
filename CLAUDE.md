@@ -28,6 +28,16 @@ product surfaces now.
   table (`Exclude` / `Extract` / `NonNullable` / `Awaited` / `ReturnType` /
   `Parameters`), and module-level validation
   (`unresolved_type_references`, `check_module`).
+- `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
+  tree-shaking, and the property mangler. Its safety story is type-driven and
+  has two halves — `export_surface.mbt` (names reachable from the entry's
+  exports) and `mangle_safety.mbt` + `flow_analysis.mbt` (names that reach a
+  side-effect sink). Both feed the reserved set that gates
+  `--mangle-properties` and the dead-property pass; see
+  [`docs/mangle-safety.md`](./docs/mangle-safety.md) and the
+  `fixtures/mangle-safety` corpus (`just verify-mangle-safety`), which
+  compiles each case with and without mangling, runs both bundles under Node,
+  and treats any observable difference as a safety violation.
 - `src/bridge` consumes `src/checker` for every type-shape decision and runs
   `@checker.check_module` on the synthesized output as a sanity gate. It also
   keeps domain-specific specialization for Node FS / React / Hono / crypto /
@@ -43,12 +53,15 @@ typescript.mbt/
     ├── ast/                 # Shared AST types
     ├── parser/              # TypeScript / JavaScript parser + module resolver
     ├── checker/             # Declaration-level TS type system
+    ├── transform/           # mtsc pipeline: bundle / fold / treeshake / mangle
+    ├── mtsc/                # Checker entry points for the mtsc CLI + JS ABI
     ├── bridge/              # Bridge code generation (both directions)
     ├── main.mbt             # `mizchi/ts` library: bridge entry helpers
     ├── unified_cli.mbt      # `--input ... --out ...` unified driver
     └── cmd/
         ├── ts2mbt/main.mbt  # CLI binary: TypeScript -> MoonBit
-        └── mbt2ts/main.mbt  # CLI binary: MoonBit -> TypeScript
+        ├── mbt2ts/main.mbt  # CLI binary: MoonBit -> TypeScript
+        └── mtsc/main.mbt    # CLI binary: TypeScript -> JavaScript
 ```
 
 ## Dependencies
@@ -72,6 +85,9 @@ moon fmt
 
 # Generate type definitions
 moon info
+
+# Validate `--mangle-properties` against the mangle-safety corpus
+just verify-mangle-safety
 ```
 
 ## Notes

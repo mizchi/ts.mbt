@@ -230,15 +230,17 @@ fn surface_escape_expr(
     FuncExpr(f) => surface_escape_func_body(w, f.params, f.body, depth + 1)
     ArrowFunc(params, _, body, _) =>
       match body {
-        ArrowExpr(e) => {
-          surface_escape_params(
+        // `(o) => o.x` is a body with one return. Model it as such so
+        // the parameter scan sees `o.x` — an expression-bodied arrow
+        // publishes its parameter shape exactly like a block-bodied
+        // one does.
+        ArrowExpr(e) =>
+          surface_escape_func_body(
             w,
             params,
-            { stmts: [], stmt_positions: [] },
-            depth,
+            { stmts: [@ast.TsStmt::Return(Some(e))], stmt_positions: [] },
+            depth + 1,
           )
-          surface_escape_expr(w, e, depth + 1)
-        }
         ArrowBlock(b) => surface_escape_func_body(w, params, b, depth + 1)
       }
     NativeClassExpr(decl, _) => surface_escape_class(w, decl, depth + 1)

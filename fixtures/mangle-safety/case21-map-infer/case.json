@@ -12,5 +12,5 @@
   "expectMangle": [
     "length"
   ],
-  "expectStatus": "blocked-compile"
+  "expectStatus": "pass"
 }

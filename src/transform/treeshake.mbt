@@ -25,7 +25,10 @@ priv struct DeclEntry {
 /// Drop top-level declarations that no live statement transitively
 /// references. Only run me on a flattened bundle block — sub-blocks
 /// (function bodies, control flow) are left alone.
-pub fn treeshake_block(block : @ast.TsBlock) -> @ast.TsBlock {
+pub fn treeshake_block(
+  block : @ast.TsBlock,
+  roots? : Map[String, Bool] = {},
+) -> @ast.TsBlock {
   // Flatten fold's multi-declarator Block wrappers (`const a=1, b=2;`
   // is stored as `Block([Const(a), Const(b)])`) back into individual
   // top-level statements so each declarator can be independently
@@ -44,11 +47,14 @@ pub fn treeshake_block(block : @ast.TsBlock) -> @ast.TsBlock {
     stmts: flat_stmts,
     stmt_positions: block.stmt_positions,
   }
-  treeshake_flat_block(flat_block)
+  treeshake_flat_block(flat_block, roots)
 }
 
 ///|
-fn treeshake_flat_block(block : @ast.TsBlock) -> @ast.TsBlock {
+fn treeshake_flat_block(
+  block : @ast.TsBlock,
+  roots : Map[String, Bool],
+) -> @ast.TsBlock {
   // Pass 1: classify every stmt as either a droppable declaration
   // (single name + pure rhs) or a side-effect root. Build a name ->
   // DeclEntry index for the BFS.
@@ -134,6 +140,16 @@ fn treeshake_flat_block(block : @ast.TsBlock) -> @ast.TsBlock {
   // root (non-droppable) stmt. Walk the stmt's full expression tree.
   let live : Map[String, Bool] = {}
   let worklist : Array[String] = []
+  // Caller-supplied roots: the names the bundle EXPORTS. Nothing inside
+  // the bundle has to reference an exported binding, so without this
+  // seed `export function pub() {}` looked dead and the emit was left
+  // with an export clause naming a declaration that no longer existed.
+  for name in roots.keys() {
+    if !live.contains(name) {
+      live[name] = true
+      worklist.push(name)
+    }
+  }
   for i, stmt in block.stmts {
     if is_decl[i] {
       continue

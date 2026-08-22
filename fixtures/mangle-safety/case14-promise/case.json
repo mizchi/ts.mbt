@@ -14,5 +14,5 @@
     "__value"
   ],
   "fakeTimers": true,
-  "expectStatus": "blocked-compile"
+  "expectStatus": "pass"
 }

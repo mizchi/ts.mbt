@@ -78,6 +78,7 @@ install 後は `~/.moon/bin/` を `$PATH` に追加します。source checkout �
 - [`docs/ts2mbt.md`](./docs/ts2mbt.md) — `SCAFFOLD_DIAGNOSTICS.md`、vendor と bridge。
 - [`docs/mbt2ts.md`](./docs/mbt2ts.md) — `AUTOLINK_DIAGNOSTICS.md`、npm publish。
 - [`docs/mtsc.md`](./docs/mtsc.md) — checker の CLI、ABI、既知ギャップ。
+- [`docs/mangle-safety.md`](./docs/mangle-safety.md) — 型追跡による安全な property mangling と、その検証 corpus。
 - [`examples/`](./examples/) — `just verify-examples` で検証する runnable fixture。
 
 ## Development

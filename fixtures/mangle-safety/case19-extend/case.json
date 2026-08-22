@@ -9,5 +9,6 @@
     "original",
     "to"
   ],
-  "expectStatus": "blocked-compile"
+  "expectStatus": "blocked-compile",
+  "blockedReason": "checker: `mtsc` type-checks each file alone, so an imported `type Loc` is unresolvable and an identical inferred shape reads as a mismatch. `@mtsc.check_module_graph` resolves the graph; the CLI does not use it yet."
 }

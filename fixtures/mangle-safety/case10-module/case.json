@@ -24,5 +24,6 @@
     "getInternalMessage",
     "getNamespaceMessage"
   ],
-  "expectStatus": "blocked-compile"
+  "expectStatus": "blocked-compile",
+  "blockedReason": "same namespace-lowering gap as case09."
 }

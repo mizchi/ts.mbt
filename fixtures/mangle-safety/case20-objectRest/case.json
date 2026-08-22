@@ -10,5 +10,6 @@
     "start",
     "end"
   ],
-  "expectStatus": "blocked-compile"
+  "expectStatus": "blocked-compile",
+  "blockedReason": "same cross-module type-resolution gap as case19."
 }
