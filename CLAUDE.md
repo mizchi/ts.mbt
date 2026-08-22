@@ -37,7 +37,12 @@ product surfaces now.
   across the boundary, and `pure_builtins.mbt` is the allowlist that keeps
   ordinary built-in calls from poisoning everything that flows through them.
   Both halves feed the reserved set that gates
-  `--mangle-properties` and the dead-property pass; see
+  `--mangle-properties` and the dead-property pass. The DCE side has its
+  own proof obligation instead: `purity.mbt` decides which internal
+  functions and host statics are effect-free, and `treeshake.mbt`
+  deletes a call only once that proof clears it. Every pass and what it
+  has to prove is catalogued in
+  [`docs/minify-patterns.md`](./docs/minify-patterns.md); see also
   [`docs/mangle-safety.md`](./docs/mangle-safety.md) and the
   `fixtures/mangle-safety` corpus (`just verify-mangle-safety`), which
   compiles each case with and without mangling, runs both bundles under Node,

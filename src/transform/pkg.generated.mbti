@@ -103,7 +103,7 @@ pub fn transform_source_full(String, JsxConfig, with_sourcemap? : Bool, source_p
 
 pub fn transform_source_with(String, JsxConfig) -> Result[String, String]
 
-pub fn treeshake_block(@ast.TsBlock, roots? : Map[String, Bool]) -> @ast.TsBlock
+pub fn treeshake_block(@ast.TsBlock, roots? : Map[String, Bool], pure_calls? : Map[String, Bool]) -> @ast.TsBlock
 
 pub fn type_declared_property_names(@ast.TsModule) -> Array[String]
 

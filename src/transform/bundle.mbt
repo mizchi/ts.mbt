@@ -402,6 +402,11 @@ pub fn bundle_modules(
   let sources_content : Array[String] = []
   let module_paths : Array[String] = []
   let warnings : Array[String] = []
+  // `@__PURE__` / `@__NO_SIDE_EFFECTS__` annotations, keyed by the name
+  // each declaration carries in the MERGED block. Filled alongside the
+  // diagnostic run below and consumed by the second purity run, the
+  // one whose result is allowed to delete code.
+  let linked_assumed_pure : Map[String, Bool] = {}
   // Run the purity / impure-getter diagnostic over a combined
   // view of every module's lowered stmts. Doing this once up
   // front, BEFORE the optimization passes restructure the AST,
@@ -423,6 +428,19 @@ pub fn bundle_modules(
       }
       for n in m.pure_declarations.keys() {
         assumed_pure[n] = true
+      }
+    }
+    // Carry the per-module annotations forward under their POST-link
+    // names: the treeshake pass runs on the merged block, where
+    // `helper` from two modules has become `helper` and `helper$0`.
+    for path in order {
+      let m = match modules.get(path) {
+        Some(node) => node
+        None => continue
+      }
+      let renames = link_renames.locals.get(path).unwrap_or({})
+      for n in m.pure_declarations.keys() {
+        linked_assumed_pure[renames.get(n).unwrap_or(n)] = true
       }
     }
     let report = analyze_purity_with(
@@ -549,8 +567,23 @@ pub fn bundle_modules(
     if opts.fold {
       combined = fold_block(combined)
     }
+    // Purity, re-derived on the MERGED block so its names match what
+    // treeshake sees. The early run above answers a different question
+    // (diagnostics, unconditionally, on the pre-link AST); this one is
+    // load-bearing, and a call it clears gets deleted. Anything the
+    // proof can't reach stays put — a name absent from this set is
+    // simply treated as a side-effect root, exactly as before.
+    let proven_pure = if opts.treeshake {
+      analyze_purity_with(combined, linked_assumed_pure).pure_functions
+    } else {
+      {}
+    }
     if opts.treeshake {
-      combined = treeshake_block(combined, roots=export_roots)
+      combined = treeshake_block(
+        combined,
+        roots=export_roots,
+        pure_calls=proven_pure,
+      )
     }
     if opts.mangle {
       // Type-driven safety for property mangling: walk the merged
@@ -691,7 +724,11 @@ pub fn bundle_modules(
         // unreachable. A lightweight treeshake pass removes them
         // before the final peephole compaction.
         if opts.treeshake {
-          combined = treeshake_block(combined, roots=export_roots)
+          combined = treeshake_block(
+            combined,
+            roots=export_roots,
+            pure_calls=proven_pure,
+          )
         }
       }
       combined = peephole_block(combined)

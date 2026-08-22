@@ -22,6 +22,12 @@ allowlist from the opposite direction — that it doesn't launder a call
 result's provenance (`case28`), and that it still keeps an ordinary
 internal accumulator manglable (`case30`).
 
+`case31` and `case32` cover a different proof obligation — not "can this
+name be renamed?" but "can this call be deleted?". They pass
+`--treeshake` through `mtscArgs`, so the pass under test runs on the
+mangled variant only and the baseline is the control. See
+[`docs/minify-patterns.md`](../../docs/minify-patterns.md).
+
 Run it with:
 
 ```bash
@@ -88,6 +94,7 @@ Then it:
 | `reference` | set `false` to skip the reference leg for this case |
 | `fakeTimers` | run `setTimeout` callbacks on the microtask queue |
 | `run` | set `false` to skip execution |
+| `mtscArgs` | extra flags for the mangled compile only, so a case can exercise a pass the baseline leaves off (`--treeshake`) |
 | `exports` | names the entry is expected to export |
 | `expectKeep` | property names that must survive |
 | `expectMangle` | property names that are provably private |
@@ -98,6 +105,7 @@ harness fails only when a case does *worse* than its recorded status.
 When a fix makes a case do better, the harness says so and
 `node scripts/verify_mangle_safety.mjs --update` re-records it.
 
-All 30 cases currently record `pass`, so any regression — a compile
+All 32 cases currently record `pass`, so any regression — a compile
 that stops working, a renamed property that turns out to be
-observable — fails the run.
+observable, a dropped call that turns out to have had an effect —
+fails the run.

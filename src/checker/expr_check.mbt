@@ -3223,6 +3223,14 @@ fn global_namespace_method(ns : String, meth : String) -> @ast.TsType? {
     ("JSON", "stringify") => Some(@ast.TsType::Func([any], s))
     // Array.*
     ("Array", "isArray") => Some(@ast.TsType::Func([any], b))
+    // `from(iterable, mapFn?, thisArg?)`.
+    ("Array", "from") =>
+      Some(
+        @ast.TsType::Func(
+          [any, @ast.TsType::Rest(@ast.TsType::Array(any))],
+          @ast.TsType::Array(any),
+        ),
+      )
     ("Array", "of") =>
       Some(
         @ast.TsType::Func(
@@ -3230,7 +3238,6 @@ fn global_namespace_method(ns : String, meth : String) -> @ast.TsType? {
           @ast.TsType::Array(any),
         ),
       )
-    ("Array", "from") => Some(@ast.TsType::Func([any], @ast.TsType::Array(any)))
     // Boolean
     ("Boolean", "constructor") => Some(@ast.TsType::Func([any], b))
     // Symbol.*
@@ -3262,9 +3269,9 @@ fn global_namespace_method(ns : String, meth : String) -> @ast.TsType? {
         ),
       )
     // console.* — every method accepts any arg list and returns void.
-    // Modelled with a single-arg `Func` so the universally common
-    // `console.log("msg")` call validates; multi-arg calls fall through
-    // to the contextual-typing fallback.
+    // Modelled as a rest parameter (the same `Rest(Array(T))` shape the
+    // parser produces for `...args: T[]`) so `console.log(a, b)` and
+    // the zero-argument `console.groupEnd()` both validate.
     ("console", "log")
     | ("console", "info")
     | ("console", "warn")
@@ -3283,7 +3290,13 @@ fn global_namespace_method(ns : String, meth : String) -> @ast.TsType? {
     | ("console", "timeEnd")
     | ("console", "timeLog")
     | ("console", "assert")
-    | ("console", "dirxml") => Some(@ast.TsType::Func([any], @ast.TsType::Void))
+    | ("console", "dirxml") =>
+      Some(
+        @ast.TsType::Func(
+          [@ast.TsType::Rest(@ast.TsType::Array(any))],
+          @ast.TsType::Void,
+        ),
+      )
     _ => None
   }
 }

@@ -32,16 +32,124 @@ pub(all) struct ImpureGetter {
 }
 
 ///|
-/// Built-in globals whose method calls are observably pure.
-/// Method calls anchored on these names propagate purity rather
-/// than impurity. Functions and properties on these globals
-/// don't have side effects on the surrounding program.
-let pure_global_methods : Array[String] = [
-  "Math", "JSON", "Object", "Array", "String", "Number", "Boolean", "Symbol", "BigInt",
-  "Date", "RegExp", "Int8Array", "Uint8Array", "Int16Array", "Uint16Array", "Int32Array",
-  "Uint32Array", "Float32Array", "Float64Array", "BigInt64Array", "BigUint64Array",
-  "Map", "Set", "WeakMap", "WeakSet", "Promise", "Reflect", "Proxy",
-]
+/// `NS.meth(...)` on a host global — does the call leave the rest of
+/// the program untouched?
+///
+/// **Not the same question** as `pure_builtins.mbt`'s
+/// `is_pure_static_member`, which asks whether a call lets its
+/// argument's property *names* escape the bundle. `console.log(x)` is
+/// listed there (its observation is modelled precisely as a sink) and
+/// must never be listed here, because it writes to stdout. Two tables,
+/// two questions; keep them apart.
+///
+/// This check used to be per-*namespace*: every method on `Object` /
+/// `Reflect` / `Proxy` counted as pure. That is wrong for the mutators
+/// — `Object.assign(target, src)` writes into `target`,
+/// `Object.freeze(x)` makes `x` non-extensible, `Reflect.set` stores —
+/// and the imprecision stops being harmless the moment the result is
+/// used to *delete* code rather than to print a warning.
+///
+/// `argc` matters for the array factories: `Array.from(xs)` allocates,
+/// but `Array.from(xs, fn)` invokes `fn`, whose effects are not ours to
+/// discard.
+fn is_effect_free_static_call(ns : String, meth : String, argc : Int) -> Bool {
+  match ns {
+    // Every member takes and returns numbers.
+    "Math" => true
+    // `stringify` reaches `toJSON` and getters; the pass reports an
+    // impure getter as a diagnostic of its own, and every minifier in
+    // use treats these two as pure.
+    "JSON" => meth == "parse" || meth == "stringify"
+    "Object" =>
+      match meth {
+        "keys"
+        | "values"
+        | "entries"
+        | "fromEntries"
+        | "create"
+        | "getOwnPropertyNames"
+        | "getOwnPropertySymbols"
+        | "getOwnPropertyDescriptor"
+        | "getOwnPropertyDescriptors"
+        | "getPrototypeOf"
+        | "is"
+        | "hasOwn"
+        | "isFrozen"
+        | "isSealed"
+        | "isExtensible" => true
+        // Excluded, all of them writers: `assign`, `defineProperty`,
+        // `defineProperties`, `freeze`, `seal`, `preventExtensions`,
+        // `setPrototypeOf`.
+        _ => false
+      }
+    "Reflect" =>
+      match meth {
+        "get"
+        | "has"
+        | "ownKeys"
+        | "getPrototypeOf"
+        | "getOwnPropertyDescriptor"
+        | "isExtensible" => true
+        // Excluded: `set`, `deleteProperty`, `defineProperty`,
+        // `setPrototypeOf`, `preventExtensions`, and `apply` /
+        // `construct`, which run arbitrary code.
+        _ => false
+      }
+    "Number" =>
+      match meth {
+        "isInteger"
+        | "isSafeInteger"
+        | "isFinite"
+        | "isNaN"
+        | "parseFloat"
+        | "parseInt" => true
+        _ => false
+      }
+    "String" =>
+      match meth {
+        "fromCharCode" | "fromCodePoint" | "raw" => true
+        _ => false
+      }
+    "Date" =>
+      // Not idempotent, but `now()` changes nothing — dropping an
+      // unused one is unobservable.
+      match meth {
+        "now" | "parse" | "UTC" => true
+        _ => false
+      }
+    "Symbol" =>
+      // `Symbol.for` registers in the cross-realm symbol registry;
+      // `keyFor` only reads it.
+      meth == "keyFor"
+    "Promise" =>
+      // `resolve` alone. An unused `Promise.reject(x)` produces an
+      // unhandled rejection, and dropping `all` / `race` / `any`
+      // changes which promise the runtime reports as unhandled.
+      meth == "resolve"
+    // `of` allocates; `from` invokes its optional mapper.
+    "Array"
+    | "Int8Array"
+    | "Uint8Array"
+    | "Uint8ClampedArray"
+    | "Int16Array"
+    | "Uint16Array"
+    | "Int32Array"
+    | "Uint32Array"
+    | "Float32Array"
+    | "Float64Array"
+    | "BigInt64Array"
+    | "BigUint64Array" =>
+      match meth {
+        "isArray" | "of" => true
+        "from" => argc <= 1
+        _ => false
+      }
+    // Deliberately absent: `Proxy` (its traps run arbitrary code) and
+    // `Map` / `Set` / `WeakMap` / `WeakSet`, whose only statics
+    // (`groupBy`) invoke a callback.
+    _ => false
+  }
+}
 
 ///|
 /// Names of pure top-level functions the JS runtime ships with —
@@ -391,12 +499,12 @@ fn walk_expr_for_purity(
         walk_expr_for_purity(a, inside_func, yield_)
       }
     }
-    MethodCall(recv, _, args) => {
-      // Method calls on well-known pure globals (`Math.floor`,
+    MethodCall(recv, meth, args) => {
+      // Method calls on well-known effect-free statics (`Math.floor`,
       // `JSON.parse`) don't escape. Anything else is a black
       // box — treat as side effect.
       let recv_pure = match recv {
-        Var(name) => pure_global_methods.contains(name)
+        Var(name) => is_effect_free_static_call(name, meth, args.length())
         _ => false
       }
       if !recv_pure && !inside_func {
@@ -892,9 +1000,9 @@ fn signature_pure_expr(expr : @ast.TsExpr, locals : Map[String, Bool]) -> Bool {
       }
       true
     }
-    MethodCall(recv, _, args) => {
+    MethodCall(recv, meth, args) => {
       let recv_ok = match recv {
-        Var(n) => pure_global_methods.contains(n)
+        Var(n) => is_effect_free_static_call(n, meth, args.length())
         _ => false
       }
       if !recv_ok {
