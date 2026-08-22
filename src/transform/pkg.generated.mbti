@@ -27,7 +27,7 @@ pub fn build_switch_fold_table(@ast.TsBlock) -> SwitchFoldTable
 
 pub fn build_symbol_graph(@ast.TsBlock, Map[String, Bool]) -> SymbolGraph
 
-pub fn build_symbol_graph_with_sinks(@ast.TsBlock, Map[String, Bool]) -> (SymbolGraph, Array[(Sink, Int)])
+pub fn build_symbol_graph_with_sinks(@ast.TsBlock, Map[String, Bool], host_shaped? : Map[String, Bool], host_returning? : Map[String, Bool]) -> (SymbolGraph, Array[(Sink, Int)])
 
 pub fn bundle_modules(Map[String, String], String, BundleOptions) -> Result[BundleOutput, String]
 
@@ -151,6 +151,8 @@ pub(all) struct BundleOutput {
   modules : Array[String]
   warnings : Array[String]
 }
+
+type CalleeClass derive(Eq, Show)
 
 pub(all) struct Def {
   init : @ast.TsExpr?

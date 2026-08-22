@@ -32,7 +32,11 @@ product surfaces now.
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
   exports) and `mangle_safety.mbt` + `flow_analysis.mbt` (names that reach a
-  side-effect sink). Both feed the reserved set that gates
+  side-effect sink). The sink half is fail-closed: `callee_provenance.mbt`
+  treats a call whose callee it can't prove bundle-internal as a hand-off
+  across the boundary, and `pure_builtins.mbt` is the allowlist that keeps
+  ordinary built-in calls from poisoning everything that flows through them.
+  Both halves feed the reserved set that gates
   `--mangle-properties` and the dead-property pass; see
   [`docs/mangle-safety.md`](./docs/mangle-safety.md) and the
   `fixtures/mangle-safety` corpus (`just verify-mangle-safety`), which

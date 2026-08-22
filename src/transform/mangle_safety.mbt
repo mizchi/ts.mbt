@@ -50,8 +50,20 @@ pub fn collect_externally_visible_props(
   // run the backward-flow observability propagation, and reserve
   // only the property names actually visible from the resulting
   // observable bindings.
-  let (graph, scoped_sinks) = build_symbol_graph_with_sinks(
+  // Phase 0: whole-block provenance. Which binding names hold a value
+  // the host owns, and which bundle functions hand one back. The graph
+  // walk needs this up front so it can classify each call site by
+  // "can I prove the callee is internal?" rather than by "is this one
+  // of the calls I know to be dangerous?" — see
+  // `callee_provenance.mbt` for why that inversion matters.
+  let (host_shaped, host_returning) = host_provenance_names(
     block, external_bindings,
+  )
+  let (graph, scoped_sinks) = build_symbol_graph_with_sinks(
+    block,
+    external_bindings,
+    host_shaped~,
+    host_returning~,
   )
   let numeric = infer_numeric_symbols(graph)
   let numeric_names = numeric_name_set(graph, numeric)
@@ -89,12 +101,19 @@ pub fn collect_externally_visible_props(
     }
   }
   // Phase 4c: a binding whose value CAME FROM outside — `const ret =
-  // external.f(...)` — carries a shape the host owns. The chain walk in
-  // Phase 3 stops at the binding, and the backward flow only runs from
-  // sinks, so reserve the property names read on such a binding here.
+  // external.f(...)`, `const cfg = JSON.parse(text)`, the `r` in
+  // `rows.map(r => r.id)` when `rows` is host-shaped — carries a shape
+  // the host owns. The chain walk in Phase 3 stops at the binding, and
+  // the backward flow only runs from sinks, so reserve the property
+  // names read on such a binding here.
+  //
+  // Note the direction: for a value coming IN, the names our code
+  // reads off it are exactly the names that must survive — a name we
+  // never read can't be broken by renaming ours. The wildcard is for
+  // the other direction, a value going OUT to a body we can't see.
   let reserved_from_external : Map[String, Bool] = {}
   for sym in graph.symbols {
-    let mut from_external = false
+    let mut from_external = host_shaped.contains(sym.name)
     for d in sym.defs {
       match d.init {
         Some(init) =>

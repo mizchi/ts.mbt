@@ -3166,7 +3166,13 @@ fn global_namespace_method(ns : String, meth : String) -> @ast.TsType? {
           @ast.TsType::Array(@ast.TsType::Tuple([s, any])),
         ),
       )
-    ("Object", "assign") => Some(@ast.TsType::Func([any, any], any))
+    ("Object", "assign") =>
+      Some(
+        @ast.TsType::Func(
+          [any, @ast.TsType::Rest(@ast.TsType::Array(any))],
+          any,
+        ),
+      )
     ("Object", "freeze") => Some(@ast.TsType::Func([any], any))
     ("Object", "isFrozen") => Some(@ast.TsType::Func([any], b))
     ("Object", "create") => Some(@ast.TsType::Func([any], any))
@@ -3202,12 +3208,16 @@ fn global_namespace_method(ns : String, meth : String) -> @ast.TsType? {
     | ("Math", "asinh")
     | ("Math", "acosh")
     | ("Math", "atanh") => Some(@ast.TsType::Func([n], n))
-    ("Math", "pow") | ("Math", "atan2") | ("Math", "hypot") =>
-      Some(@ast.TsType::Func([n, n], n))
-    ("Math", "max") | ("Math", "min") => Some(@ast.TsType::Func([n], n))
+    ("Math", "pow") | ("Math", "atan2") => Some(@ast.TsType::Func([n, n], n))
+    // Variadic: `max(...values: number[])`. Modelled with the same
+    // `Rest(Array(T))` shape the parser produces for a declared rest
+    // parameter, so the arity check accepts any number of arguments
+    // instead of exactly one.
+    ("Math", "max") | ("Math", "min") | ("Math", "hypot") =>
+      Some(@ast.TsType::Func([@ast.TsType::Rest(@ast.TsType::Array(n))], n))
     ("Math", "random") => Some(@ast.TsType::Func([], n))
-    ("Math", "fround") | ("Math", "clz32") | ("Math", "imul") =>
-      Some(@ast.TsType::Func([n], n))
+    ("Math", "imul") => Some(@ast.TsType::Func([n, n], n))
+    ("Math", "fround") | ("Math", "clz32") => Some(@ast.TsType::Func([n], n))
     // Number.*
     ("Number", "isInteger")
     | ("Number", "isSafeInteger")
@@ -3216,15 +3226,21 @@ fn global_namespace_method(ns : String, meth : String) -> @ast.TsType? {
     ("Number", "parseFloat") => Some(@ast.TsType::Func([s], n))
     ("Number", "parseInt") => Some(@ast.TsType::Func([s, n], n))
     // String.* (constructor namespace, not prototype)
-    ("String", "fromCharCode") => Some(@ast.TsType::Func([n], s))
-    ("String", "fromCodePoint") => Some(@ast.TsType::Func([n], s))
+    ("String", "fromCharCode") | ("String", "fromCodePoint") =>
+      Some(@ast.TsType::Func([@ast.TsType::Rest(@ast.TsType::Array(n))], s))
     ("String", "raw") => Some(@ast.TsType::Func([any], s))
     // JSON.*
     ("JSON", "parse") => Some(@ast.TsType::Func([s], any))
     ("JSON", "stringify") => Some(@ast.TsType::Func([any], s))
     // Array.*
     ("Array", "isArray") => Some(@ast.TsType::Func([any], b))
-    ("Array", "of") => Some(@ast.TsType::Func([any], @ast.TsType::Array(any)))
+    ("Array", "of") =>
+      Some(
+        @ast.TsType::Func(
+          [@ast.TsType::Rest(@ast.TsType::Array(any))],
+          @ast.TsType::Array(any),
+        ),
+      )
     ("Array", "from") => Some(@ast.TsType::Func([any], @ast.TsType::Array(any)))
     // Boolean
     ("Boolean", "constructor") => Some(@ast.TsType::Func([any], b))
@@ -3234,7 +3250,9 @@ fn global_namespace_method(ns : String, meth : String) -> @ast.TsType? {
     // Date.*
     ("Date", "now") => Some(@ast.TsType::Func([], n))
     ("Date", "parse") => Some(@ast.TsType::Func([s], n))
-    ("Date", "UTC") => Some(@ast.TsType::Func([n], n))
+    // `UTC(year, monthIndex, ...rest)` — up to seven components.
+    ("Date", "UTC") =>
+      Some(@ast.TsType::Func([n, @ast.TsType::Rest(@ast.TsType::Array(n))], n))
     // Promise.*
     ("Promise", "resolve") =>
       Some(@ast.TsType::Func([any], @ast.TsType::Applied("Promise", [any])))

@@ -4,15 +4,23 @@ A validation corpus for `mtsc --mangle-properties`: does the
 type-tracking analysis rename *only* the properties that no outside
 observer can see?
 
-The cases are ported from
+`case00` … `case25` are ported from
 [packelyze](https://github.com/mizchi/packelyze)'s
-`packages/transformer/fixtures` (`case00` … `case25`, minus the
-duplicate `case07-missing`), which is the prior art this analysis
-extends. The TypeScript sources are kept verbatim so the two
-implementations can be compared case by case; `_expected.js` snapshots
-are not copied — the expectations live in each case's `case.json`
-instead, expressed as behaviour rather than as one particular
-mangler's output.
+`packages/transformer/fixtures` (minus the duplicate `case07-missing`),
+which is the prior art this analysis extends. The TypeScript sources are
+kept verbatim so the two implementations can be compared case by case;
+`_expected.js` snapshots are not copied — the expectations live in each
+case's `case.json` instead, expressed as behaviour rather than as one
+particular mangler's output.
+
+`case26` onward are ts.mbt's own, added when the sink rule was inverted
+from "enumerate the dangerous calls" to "a call escapes unless the
+callee is provably internal". Three of them (`case26`, `case27`,
+`case29`) were each confirmed to fail against the pre-inversion binary
+before being recorded as `pass`; the other two guard the pure-builtin
+allowlist from the opposite direction — that it doesn't launder a call
+result's provenance (`case28`), and that it still keeps an ordinary
+internal accumulator manglable (`case30`).
 
 Run it with:
 
@@ -90,6 +98,6 @@ harness fails only when a case does *worse* than its recorded status.
 When a fix makes a case do better, the harness says so and
 `node scripts/verify_mangle_safety.mjs --update` re-records it.
 
-All 25 cases currently record `pass`, so any regression — a compile
+All 30 cases currently record `pass`, so any regression — a compile
 that stops working, a renamed property that turns out to be
 observable — fails the run.

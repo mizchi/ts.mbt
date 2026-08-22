@@ -1,0 +1,18 @@
+{
+  "origin": "ts.mbt — regression for the inverted sink rule",
+  "what": "A sink two links down a host chain. `HostBridge.channel.post(record)` hands `record` to the host exactly as `HostBridge.post(record)` would, but the old catalog only matched a bare-identifier receiver, so `record`'s keys looked unobserved.",
+  "exports": [
+    "report"
+  ],
+  "expectKeep": [
+    "channel",
+    "post",
+    "tickKind",
+    "tickAmount",
+    "echoedValue"
+  ],
+  "expectStatus": "pass",
+  "globalStubs": {
+    "HostBridge": "{ channel: { post: (msg) => { console.log(\"post\", msg.tickKind, msg.tickAmount); return { echoedValue: msg.tickAmount * 2 }; } } }"
+  }
+}

@@ -259,9 +259,18 @@ pub fn build_symbol_graph(
 /// passing, etc.) discovered during the walk, each tagged with
 /// the scope they were found in so callers can do scope-aware
 /// `Var(...)` lookup when classifying them.
+/// `host_shaped` / `host_returning` carry the whole-block provenance
+/// facts from `host_provenance_names`: which binding names hold a
+/// value the host owns, and which bundle functions return one. The
+/// walk consults them to classify every call site — a call whose
+/// callee isn't provably internal hands its arguments across the
+/// bundle boundary. Callers that only want the symbol graph (no sink
+/// analysis) can leave both empty.
 pub fn build_symbol_graph_with_sinks(
   block : @ast.TsBlock,
   external_local_names : Map[String, Bool],
+  host_shaped? : Map[String, Bool] = {},
+  host_returning? : Map[String, Bool] = {},
 ) -> (SymbolGraph, Array[(Sink, ScopeId)]) {
   let g : SymbolGraph = {
     scopes: [],
@@ -285,6 +294,8 @@ pub fn build_symbol_graph_with_sinks(
     enclosing_func: None,
     enclosing_def: None,
     externals: external_local_names,
+    host_roots: host_shaped,
+    host_returning,
     scoped_sinks: [],
   }
   for s in block.stmts {
@@ -309,6 +320,13 @@ priv struct SgWalker {
   mut enclosing_def : SymbolId?
   // External binding name set carried for sink classification.
   externals : Map[String, Bool]
+  // Whole-block provenance facts (see `callee_provenance.mbt`):
+  // binding names whose value the host owns, and bundle functions
+  // that return one. Together with the live scope chain they decide
+  // whether a call site is internal, an allowlisted built-in, or a
+  // hand-off across the bundle boundary.
+  host_roots : Map[String, Bool]
+  host_returning : Map[String, Bool]
   // Collected sinks, paired with the scope they were observed in
   // so `reserve_props_from_sink` can resolve `Var(...)` arguments
   // through the right name lookup chain.
@@ -905,7 +923,8 @@ fn sg_record_sinks_in_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
           )
         }
       }
-    MethodCall(recv, m, args) =>
+    MethodCall(recv, m, args) => {
+      // The precisely-modelled reflection built-ins first.
       match recv {
         @ast.TsExpr::Var(name) =>
           if name == "Object" {
@@ -958,62 +977,20 @@ fn sg_record_sinks_in_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
                 ({ expr: a, observation: Recursive }, w.current_scope),
               )
             }
-          } else if w.externals.contains(name) {
-            // `external.send({ id: 1 })` — a method call on an external
-            // receiver hands its arguments across the bundle boundary
-            // exactly like `send({ id: 1 })` does. Without this the
-            // argument's keys looked unobserved and were renamed (or
-            // dropped) while the foreign callee still read them by name.
-            for a in args {
-              w.scoped_sinks.push(
-                ({ expr: a, observation: ExternalCallArg }, w.current_scope),
-              )
-            }
           }
         _ => ()
       }
-    Call(callee, args) =>
-      if w.externals.contains(callee) {
-        for a in args {
-          w.scoped_sinks.push(
-            ({ expr: a, observation: ExternalCallArg }, w.current_scope),
-          )
-        }
-      }
-    CallExpr(callee, args) => {
-      let is_external = match callee {
-        @ast.TsExpr::Var(n) => w.externals.contains(n)
-        _ => false
-      }
-      if is_external {
-        for a in args {
-          w.scoped_sinks.push(
-            ({ expr: a, observation: ExternalCallArg }, w.current_scope),
-          )
-        }
-      }
+      // Then the general rule. `external.send({ id: 1 })`,
+      // `crypto.subtle.digest(alg, data)`, `client.post(payload)` where
+      // `client` came back from a foreign factory — each hands its
+      // arguments to a body the analysis can't see, so every property
+      // name on them escapes. The precise cases above are exempted by
+      // the `pure_builtins` allowlist, so they don't get a redundant
+      // wildcard on top of their exact reservation.
+      sg_record_foreign_call_args(w, expr)
     }
-    New(name, args) =>
-      if w.externals.contains(name) {
-        for a in args {
-          w.scoped_sinks.push(
-            ({ expr: a, observation: ExternalCallArg }, w.current_scope),
-          )
-        }
-      }
-    NewExpr(callee, args) => {
-      let is_external = match callee {
-        @ast.TsExpr::Var(n) => w.externals.contains(n)
-        _ => false
-      }
-      if is_external {
-        for a in args {
-          w.scoped_sinks.push(
-            ({ expr: a, observation: ExternalCallArg }, w.current_scope),
-          )
-        }
-      }
-    }
+    Call(_, _) | CallExpr(_, _) | New(_, _) | NewExpr(_, _) =>
+      sg_record_foreign_call_args(w, expr)
     PropAssignExpr(target, _prop, rhs) =>
       if is_external_chain_for_sink(target, w.externals) {
         w.scoped_sinks.push(
@@ -1021,6 +998,40 @@ fn sg_record_sinks_in_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
         )
       }
     _ => ()
+  }
+}
+
+///|
+/// The provenance question, asked from the walker's current position.
+///
+/// The one thing the pre-pass couldn't answer is here: `resolves`
+/// consults the live scope chain, so a name no enclosing scope
+/// declares is treated as host-provided. That is the fail-closed leg
+/// of the rule — an ambient global out of a `.d.ts`, a script-tag
+/// global, a typo'd reference all land on the safe side.
+fn sg_callee_ctx(w : SgWalker) -> CalleeCtx {
+  {
+    roots: w.host_roots,
+    host_returning: w.host_returning,
+    resolves: fn(n) { sg_lookup(w.g, w.current_scope, n) is Some(_) },
+  }
+}
+
+///|
+/// Record every argument of `expr` as escaping, when `expr` is a call
+/// whose callee the analysis can't prove internal.
+fn sg_record_foreign_call_args(w : SgWalker, expr : @ast.TsExpr) -> Unit {
+  if !call_site_is_foreign(expr, sg_callee_ctx(w)) {
+    return
+  }
+  match call_site_args(expr) {
+    Some(args) =>
+      for a in args {
+        w.scoped_sinks.push(
+          ({ expr: a, observation: ExternalCallArg }, w.current_scope),
+        )
+      }
+    None => ()
   }
 }
 

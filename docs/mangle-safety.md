@@ -64,6 +64,58 @@ sink から後ろ向きに伝播させます。sink に届く値が literal
 可能性を証明できない場合（`obj[runtimeKey]` のような完全に動的な access）
 は wildcard になり、property mangling 自体が抑止されます。
 
+### sink の列挙ではなく callee の provenance で決める
+
+Door 2 の判定は当初「危険な呼び出しの列挙」でした。`fetch`、`console.*`、
+`JSON.stringify`、import された binding —— 知っている sink に当たったら
+引数を escape させ、それ以外は素通り。この形は原理的に完成しません。
+`postMessage`、`structuredClone`、`Response.json`、IndexedDB、次に増える
+Web API —— 誰も列挙しなかった名前はすべて「rename したが consumer は
+古い名前で読む」という silent hole になります。
+
+そこで規則を反転させました（`src/transform/callee_provenance.mbt`）。
+
+> **callee が bundle 内部だと *証明* できない呼び出しは、引数が escape する。**
+
+証明できる例外は 2 つだけです。
+
+1. callee が bundle の宣言する binding に解決される（= 本体が解析対象
+   なので、flow 解析の `FuncArg` / `FuncReturn` edge が面倒を見る）。
+2. callee が `src/transform/pure_builtins.mbt` の allowlist に載っている。
+
+allowlist には性質の違う 2 種類が入ります。**name-blind** な built-in
+（`Math.max(a, b)` は数値しか見ない、`parseInt(s)` は文字列しか見ない、
+`new Map(pairs)` は index で読む）と、**すでに精密に model 済み**の
+built-in（`Object.keys(x)` は `DirectKeys` sink、`JSON.stringify(x)` /
+`console.log(x)` は `Recursive` sink）です。後者を一般規則にも通すと、
+正確な予約が wildcard に置き換わって bundle 全体の property mangling が
+止まります。
+
+この allowlist は飾りではなく荷重を受けています。`Math` を allowlist から
+外すと、下の case30 の `runningSum` / `largest` は rename されなくなります
+（実測）。
+
+provenance は値についても同じ向きに定義されます。`value_is_host_shaped(e)`
+は「`e` の値を host が所有しているか」を答え、`classify_callee` と相互再帰
+します —— foreign call の戻り値は host-shaped で、host-shaped な値を呼ぶのは
+foreign call です。`host_provenance_names` が block 全体でこの連立を不動点
+まで解いてから symbol graph の walk が始まるので、walk 時点では各 call site
+の callee の出自が既知です。伝播するのは:
+
+- `const cfg = JSON.parse(text)` —— 引数は escape しないが、結果の key は
+  runtime の文字列由来なので host のもの
+- `const client = createClient(); client.transmit(payload)` —— `client` は
+  local binding だが値は foreign factory 由来
+- `function load() { return remote.read(); }` —— 薄い wrapper は出自を
+  洗浄しない
+- `rows.map(row => row.id)` —— foreign call に渡した callback の parameter は
+  host が埋めるので、そこから読む名前は host のもの
+
+入ってくる値と出ていく値で予約の形が違う点は意識して分けています。入って
+くる host-shaped な値については、**自分の code が読み書きする名前だけ**を
+予約すれば十分です（読まない名前は rename しようがない）。wildcard が必要
+なのは逆向き —— 解析できない本体に値を渡す側だけです。
+
 ## 検証: `fixtures/mangle-safety`
 
 モデルが正しいと主張するには、実際に壊れないことを示す必要があります。
@@ -85,14 +137,16 @@ just verify-mangle-safety
 just verify-mangle-safety --case case04-internal
 ```
 
-corpus は packelyze の `packages/transformer/fixtures`（`case00`〜`case25`、
-重複の `case07-missing` を除く 25 件）を TypeScript source ごと移植した
-ものです。`_expected.js` は持ち込まず、期待値は「特定の mangler の出力」
-ではなく「振る舞い」として `case.json` に書いています。
+corpus の 25 件は packelyze の `packages/transformer/fixtures`
+（`case00`〜`case25`、重複の `case07-missing` を除く）を TypeScript source
+ごと移植したものです。`_expected.js` は持ち込まず、期待値は「特定の
+mangler の出力」ではなく「振る舞い」として `case.json` に書いています。
+`case26` 以降は ts.mbt 側で追加した 5 件で、sink 規則の反転で塞いだ穴と
+allowlist の効きを固定しています。
 
 ### 現在の結果
 
-25 件中 **25 件 pass**、安全性違反 0 件。
+30 件中 **30 件 pass**、安全性違反 0 件。
 
 初回実行では 12 件が fail、7 件が checker / emit のギャップで compile
 できませんでした。内訳と対処:
@@ -112,6 +166,34 @@ corpus は packelyze の `packages/transformer/fixtures`（`case00`〜`case25`�
 | mapped type への indexed access が解決しない（case11） | `simplify_indexed_access` は resolver を持たず、`Named` base で `Any` を返す | base を先に resolve してから simplify |
 | constructor の default parameter が arity に反映されない（case02） | `lookup_constructor_sig` が `constructor_param_defaults` を捨てていた | default を signature に通す |
 | `{ a, ...spread }` の spread member が推論 shape から落ちる（case20） | `infer_block_return` が block の local binding を見ていなかった | return を推論する前に local を bind |
+
+### 反転で塞いだ穴（case26〜case30）
+
+sink 列挙から callee provenance への反転で塞がった穴は、反転前の binary で
+実際に fail することを確認してから corpus に固定しました。
+
+| case | 形 | 反転前の挙動 |
+| --- | --- | --- |
+| case26-host-chain | `HostBridge.channel.post(record)` | receiver が bare identifier でないので sink として認識されず、`record` の key が **削除** された（`const b = {}`） |
+| case27-foreign-factory | `const client = createClient(); client.transmit({…})` | `client` は local binding なので内部呼び出しに見え、引数の key が rename された |
+| case29-callback-shape | `HostList.each(row => … row.rowCaption …)` | callback parameter から読む名前は誰も予約しておらず rename された |
+
+3 件はいずれも「観測可能な振る舞いが変わった」として検出されます
+（`"first:1"` → `"undefined:undefined"` など）。残る 2 件は逆向きの
+regression guard です。
+
+| case | 何を固定するか |
+| --- | --- |
+| case28-json-shape | `JSON.parse` は allowlist に載るが、その **結果** は host-shaped —— allowlist が出自を洗浄しないこと |
+| case30-pure-builtins | `Math.max` / `new Map` / `Map#set` を通る内部 accumulator が rename され続けること（allowlist が荷重を受けていること） |
+
+case30 は checker の穴も 1 つ露出させました。`Math.max` / `Math.min` /
+`Math.hypot` / `Object.assign` / `String.fromCharCode` / `String.fromCodePoint`
+/ `Array.of` / `Date.UTC` は可変長ですが、`global_namespace_method` が
+固定 arity で model していたため `Math.max(a, b)` が TS2554 になっていました
+（`Math.imul` は逆に 2 引数を 1 引数として model していました）。parser が
+rest parameter に使うのと同じ `Rest(Array(T))` 形に直しています。conformance
+の計測値は変わりません（FP 0 / TP 2,339 / TN 1,750）。
 
 ### 検証の副産物: `--treeshake` が export を落としていた
 
@@ -216,6 +298,26 @@ mangler に追加しました。ambient global の property surface は host の
 - `namespace A.B { … }`（dotted path）と `module "foo" { … }` は lowering
   対象外で、従来どおり erase されます。
 - `mtsc` の import 解決 diagnostic は CLI では出しません（上記）。
+
+provenance 解析については、名前を挙げられる範囲で次の 3 つが残っています。
+いずれも「反転して塞いだ穴」より狭く、塞ぐには別の道具（expression 単位の
+型伝播 / import 由来の binding 集合の追加配線）が必要です。
+
+- **built-in namespace 名を shadow する import.** allowlist の判定は名前
+  一致です。`import { Map } from "immutable"` のように built-in と同名の
+  binding を import すると、built-in 側の答え（pure constructor）を返します。
+  *宣言された* shadow（`const Math = …`）は symbol graph で検出して除外
+  しますが、import header は symbol graph に binding を作らないので見え
+  ません。
+- **内部 object が保持する foreign 関数.** `const o = { cb: ext.f }; o.cb(x)`
+  は receiver が内部なので内部呼び出しと判定します（反転前と同じ扱い）。
+- **export された関数の callback parameter.** `export function run(cb) { cb(payload) }`
+  の `cb` は consumer が渡すので foreign ですが、parameter の出自を
+  「export surface から到達可能か」で判定する配線はまだありません。
+- **provenance は名前単位.** `host_provenance_names` は symbol graph が
+  できる前に走るので、ある scope で host-shaped と判定した `data` は
+  bundle 全体の `data` を host-shaped にします。過剰予約側に倒れるので
+  安全性は保たれますが、精度は落ちます。
 
 ## この検証で入った checker の変更
 

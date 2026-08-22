@@ -1,0 +1,12 @@
+{
+  "origin": "ts.mbt — regression for the inverted sink rule",
+  "what": "`JSON.parse` is on the pure allowlist because its argument is a string. Its result is not: the keys come from runtime text, so the names the bundle reads off it must survive. Guards the allowlist against laundering provenance.",
+  "exports": [
+    "load"
+  ],
+  "expectKeep": [
+    "retryCount",
+    "timeoutMs"
+  ],
+  "expectStatus": "pass"
+}
