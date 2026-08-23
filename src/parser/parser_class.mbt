@@ -2076,7 +2076,15 @@ fn Parser::parse_class_body(
         self.peek_at(1).kind != Semicolon &&
         self.peek_at(1).kind != Eq &&
         self.peek_at(1).kind != Comma &&
-        self.peek_at(1).kind != RBrace => {
+        self.peek_at(1).kind != RBrace &&
+        // `get!: T` (definite assignment) and `get?: T` (optional) are
+        // fields too — the `!` / `?` binds to the field NAME, so a
+        // getter can never be spelled that way. Hono declares its
+        // route methods exactly like this (`get!: HandlerInterface<…>`,
+        // `post!`, `delete!`), and without these two the whole
+        // package failed to parse.
+        self.peek_at(1).kind != Bang &&
+        self.peek_at(1).kind != Question => {
         let _ = self.advance()
         accessor_kind = Some(n)
         // TS1042: `async` cannot modify an accessor (`async get foo()`).

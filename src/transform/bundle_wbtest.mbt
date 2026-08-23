@@ -2570,3 +2570,50 @@ test "bundle: a .js specifier resolves to the .ts file" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+/// `import { X } from "./m"; export { X }` in the entry, where another
+/// module in the bundle also declares something called `X`.
+///
+/// The entry never declared `X`, so the entry's link-rename map has
+/// nothing for it and the bare name used to fall through — straight into
+/// whatever other module happened to declare that name in the merged
+/// block. Hono is built exactly this way: `hono-base.ts` declares
+/// `class Hono` and re-exports it as `HonoBase`, `hono.ts` declares
+/// `class Hono extends HonoBase`, and the entry re-exports that. The
+/// bundle exported the abstract BASE class, so every route registration
+/// failed on a `router` the base never sets — and nothing threw at
+/// import time to say so.
+test "bundle: an entry re-export resolves past a name collision" {
+  let files = vfs([
+    (
+      "base.ts", "class Widget {\n  label: string;\n  constructor(l: string) { this.label = l; }\n  describe(): string { return \"base:\" + this.label; }\n}\nexport { Widget as WidgetBase };\n",
+    ),
+    (
+      "mid.ts", "import { WidgetBase } from \"./base.js\";\nexport class Widget extends WidgetBase {\n  describe(): string { return \"derived:\" + this.label; }\n}\n",
+    ),
+    ("entry.ts", "import { Widget } from \"./mid.js\";\nexport { Widget };\n"),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      // The exported local must be the DERIVED class, which the linker
+      // renamed to avoid the collision.
+      assert_false(out.js.contains("export { Widget };"))
+      assert_true(out.js.contains("as Widget }"))
+      assert_true(out.js.contains("derived:"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: an entry re-export of an uncontested name is untouched" {
+  let files = vfs([
+    ("mid.ts", "export const value = 7;\n"),
+    ("entry.ts", "import { value } from \"./mid.js\";\nexport { value };\n"),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => assert_true(out.js.contains("export { value }"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}

@@ -535,6 +535,53 @@ pub(all) struct BundleExport {
 }
 
 ///|
+/// Resolve an entry export whose local name is an imported binding, by
+/// following the import to the declaring module and applying that
+/// module's link renames — the same walk `resolve_export` does for
+/// `export … from`.
+///
+/// `None` when the name is not imported, or is imported from outside
+/// the bundle (the external-import substitution handles those), so the
+/// caller falls back to the name as written.
+fn entry_export_via_import(
+  em : ModuleNode,
+  modules : Map[String, ModuleNode],
+  renames : LinkRenames,
+  local_name : String,
+) -> String? {
+  for decl in em.import_decls {
+    let imported = if decl.default_binding is Some(n) && n == local_name {
+      Some("default")
+    } else {
+      let mut found : String? = None
+      for b in decl.named_bindings {
+        if b.1 == local_name {
+          found = Some(b.0)
+        }
+      }
+      found
+    }
+    match imported {
+      Some(name) =>
+        match em.resolved_imports.get(decl.module_spec) {
+          Some(path) =>
+            return resolve_export(
+              modules,
+              renames.locals,
+              renames.namespaces,
+              path,
+              name,
+            )
+          // A bare specifier: not part of the bundle.
+          None => return None
+        }
+      None => ()
+    }
+  }
+  None
+}
+
+///|
 /// Resolve everything the entry module exports — its own `export`
 /// specs *and* its `export … from "./m"` re-exports — into the
 /// binding names they refer to in the merged block.
@@ -569,11 +616,25 @@ fn entry_export_bindings(
   }
   let entry_locals = renames.locals.get(entry).unwrap_or({})
   for spec in em.export_specs {
-    push(
-      entry_locals.get(spec.local_name).unwrap_or(spec.local_name),
-      spec.export_name,
-      None,
-    )
+    match entry_locals.get(spec.local_name) {
+      // The entry declared it, and linking may have renamed it.
+      Some(renamed) => push(renamed, spec.export_name, None)
+      None =>
+        // Nothing in the entry's rename map. Either the entry declared
+        // it under a name nothing collided with, or — the case that was
+        // broken — the name is an IMPORTED binding the entry re-exports
+        // (`import { X } from "./m"; export { X }`). The entry never
+        // declared it, so the bare name falls through into whatever
+        // OTHER module happens to declare that name in the merged
+        // block. Hono exports `Hono` exactly this way while
+        // `hono-base.ts` also declares a class called `Hono`, so the
+        // bundle exported the abstract base: every route registration
+        // then failed on a `router` the base never sets.
+        match entry_export_via_import(em, modules, renames, spec.local_name) {
+          Some(resolved) => push(resolved, spec.export_name, None)
+          None => push(spec.local_name, spec.export_name, None)
+        }
+    }
   }
   for re in em.reexport_specs {
     if re.type_only {

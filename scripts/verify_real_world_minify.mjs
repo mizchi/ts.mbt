@@ -21,6 +21,12 @@
 //              Not runnable on its own (it is one module of a graph), so
 //              the assertion is that it compiles and that the output
 //              parses.
+//   hono       honojs/hono cloned from git and bundled from its 188
+//              TypeScript source files — no npm, no prebuilt dist. Then
+//              driven through routing, middleware, params, JSON and
+//              error handling, with the responses diffed. This is the
+//              target that exercises TS source directly, and the one
+//              that found the linker exporting the wrong class.
 //
 // Needs network access on the first run: packages come from npm and
 // checker.ts from the TypeScript repo, cached under _build/real-world.
@@ -377,6 +383,132 @@ function verifyTypescript() {
 }
 
 // ---------------------------------------------------------------------
+// hono: a TypeScript library, cloned and bundled from source. The point
+// of this target is that nothing prebuilt is involved — mtsc does the
+// TS -> JS -> bundle -> minify job that tsc + a bundler + terser would
+// otherwise split between them.
+// ---------------------------------------------------------------------
+
+const HONO_APP = `// Exercise routing, middleware, params, query, JSON, headers, 404 and
+// error handling — enough that a bad rename or a mis-linked export shows
+// up as a changed response rather than as nothing at all.
+import { Hono } from "./hono.mjs";
+const app = new Hono();
+app.use("*", async (c, next) => {
+  await next();
+  c.header("X-Trace", "on");
+});
+app.get("/", (c) => c.text("root"));
+app.get("/users/:id", (c) => c.json({ id: c.req.param("id"), q: c.req.query("q") ?? null }));
+app.post("/echo", async (c) => c.json({ got: await c.req.json() }));
+app.get("/boom", () => {
+  throw new Error("boom");
+});
+app.notFound((c) => c.text("nope", 404));
+app.onError((e, c) => c.json({ error: e.message }, 500));
+const calls = [
+  ["GET", "http://x/"],
+  ["GET", "http://x/users/42?q=hi"],
+  ["POST", "http://x/echo", JSON.stringify({ a: 1, nested: { b: [1, 2] } })],
+  ["GET", "http://x/boom"],
+  ["GET", "http://x/missing"],
+];
+const out = [];
+for (const [method, url, body] of calls) {
+  const res = await app.fetch(
+    new Request(url, {
+      method,
+      body: body ?? undefined,
+      headers: body ? { "content-type": "application/json" } : {},
+    }),
+  );
+  out.push({
+    url,
+    status: res.status,
+    trace: res.headers.get("X-Trace"),
+    contentType: res.headers.get("content-type"),
+    body: await res.text(),
+  });
+}
+console.log(JSON.stringify(out, null, 2));
+`;
+
+function verifyHono() {
+  const dir = path.join(WORK, "hono");
+  const checkout = path.join(dir, "hono");
+  fs.mkdirSync(dir, { recursive: true });
+  if (!fs.existsSync(path.join(checkout, "src", "index.ts"))) {
+    const r = run("git", [
+      "clone",
+      "--depth",
+      "1",
+      "https://github.com/honojs/hono",
+      checkout,
+    ], { timeout: 900_000 });
+    if (r.status !== 0) {
+      record("hono", false, "git clone failed (needs network)");
+      return;
+    }
+  }
+  const entry = path.join(checkout, "src", "index.ts");
+  const app = path.join(dir, "app.mjs");
+  fs.writeFileSync(app, HONO_APP);
+
+  // The unminified bundle is the reference: mtsc already did TS -> JS
+  // there, so a later difference is the minifier's and not the
+  // compiler's.
+  const base = path.join(dir, "base.mjs");
+  const b = minify(entry, base, ["--bundle"]);
+  if (!b.ok) {
+    record("hono", false, `bundle failed (${b.why})`);
+    return;
+  }
+  fs.copyFileSync(base, path.join(dir, "hono.mjs"));
+  const want = run("node", [app], { cwd: dir });
+  if (want.status !== 0) {
+    record("hono", false, `bundle does not run: ${(want.stderr || "").split("\n").slice(0, 2).join(" ")}`);
+    return;
+  }
+  const out = path.join(dir, "min.mjs");
+  const m = minify(entry, out, ["--bundle", "--minify", "--mangle", "--mangle-properties"]);
+  if (!m.ok) {
+    record("hono", false, `minify failed (${m.why})`);
+    return;
+  }
+  const p = parses(out);
+  if (!p.ok) {
+    record("hono", false, p.why);
+    return;
+  }
+  fs.copyFileSync(out, path.join(dir, "hono.mjs"));
+  const got = run("node", [app], { cwd: dir });
+  fs.copyFileSync(base, path.join(dir, "hono.mjs"));
+  if (got.status !== 0) {
+    record("hono", false, `minified run failed: ${(got.stderr || "").split("\n").slice(0, 2).join(" ")}`);
+    return;
+  }
+  if (got.stdout !== want.stdout) {
+    fs.writeFileSync(path.join(dir, "baseline.json"), want.stdout);
+    fs.writeFileSync(path.join(dir, "got.json"), got.stdout);
+    record("hono", false, `responses differ (see ${path.relative(ROOT, dir)}/{baseline,got}.json)`);
+    return;
+  }
+  const srcFiles = run("bash", [
+    "-c",
+    `find ${JSON.stringify(path.join(checkout, "src"))} -name '*.ts' ! -name '*.test.ts' | wc -l`,
+  ]);
+  const before = fs.statSync(base).size;
+  const after = fs.statSync(out).size;
+  record(
+    "hono",
+    true,
+    `${(srcFiles.stdout || "?").trim()} TS source files -> ${bytes(after)} bytes ` +
+      `(${100 - Math.round((after * 100) / before)}% under the unminified bundle), identical responses`,
+  );
+  if (!keep) fs.rmSync(out, { force: true });
+}
+
+// ---------------------------------------------------------------------
 // checker.ts: 3 MB of real TypeScript source. One module of a graph, so
 // the bar is "compiles, and the output parses".
 // ---------------------------------------------------------------------
@@ -415,7 +547,12 @@ function verifyCheckerSource() {
 }
 
 console.log("real-world minify validation\n");
-const targets = { react: verifyReact, typescript: verifyTypescript, "checker.ts": verifyCheckerSource };
+const targets = {
+  hono: verifyHono,
+  react: verifyReact,
+  typescript: verifyTypescript,
+  "checker.ts": verifyCheckerSource,
+};
 for (const [name, fn] of Object.entries(targets)) {
   if (only && only !== name) continue;
   fn();

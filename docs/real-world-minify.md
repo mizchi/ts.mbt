@@ -5,15 +5,16 @@
 せん。そこで、公開されている実コードを minify して、同じ観測が返るかを
 確かめました。
 
-対象は 3 つ（+ terser との size 比較）。
+対象は 4 つ（+ terser との size 比較）。
 
 | 対象 | 何を見るか |
 | --- | --- |
 | React 18.3.1（react / react-dom / scheduler） | 実行して観測が一致するか |
+| hono（git clone、TS source 188 file） | npm を経由せず TS source を直接通し、HTTP 応答が一致するか |
 | TypeScript 5.7.3（`src/compiler/checker.ts` と `lib/typescript.js`） | 3 MB / 9 MB の実 source を通せるか、出力が有効な JS か、compiler として動くか |
 
 結論を先に書くと、**この検証を始めた時点では 1 つも通りませんでした**。
-8 件の bug を潰して通るようになりました。うち 5 件は corpus では原理的に
+11 件の bug を潰して通るようになりました。うち 8 件は corpus では原理的に
 出ない種類のものです。
 
 ## 見つかった bug
@@ -337,6 +338,48 @@ mangling は抑止されます。上の表で `mtsc` と `mtsc +props` が byte 
 
 `--explain-mangle` を screening に使って、実在の TypeScript library を
 当たった結果:
+
+### hono: git clone した TS source を直接 minify
+
+npm の dist を経由せず、`git clone honojs/hono` から `src/index.ts` を
+entry に 188 file を bundle します。tsc + bundler + terser が分担する
+仕事を mtsc が 1 段で行う形です。挙動は routing / middleware / params /
+JSON / 404 / error handler を実際に叩いて response を diff します。
+
+| variant | bytes | gzip | 挙動 |
+| --- | --- | --- | --- |
+| `--bundle`（未 minify） | 61,950 | 13,922 | baseline |
+| mtsc `--minify` | 44,788 | 11,982 | 一致 |
+| mtsc `--minify --mangle` | 30,283 | 9,685 | 一致 |
+| mtsc `+ --mangle-properties` | 23,382 | 9,256 | 一致 |
+| terser `--compress --mangle` | 25,677 | 7,902 | 一致 |
+| terser `+ --mangle-props` | 18,130 | 7,302 | **response が違う** |
+
+正直に読むと **terser のほうが強い**（identifier のみで 25,677 対 30,283、
+gzip では 7,902 対 9,685）。terser の `--compress` は mtsc が持たない
+最適化（dead code、inlining、sequence 化など）を多数持つので、当然の差
+です。`+props` を足すと raw では terser の既定を下回りますが（23,382 対
+25,677）、gzip では負けます。
+
+この target で重要なのは byte 数ではありません。**clone した TS source を
+直接通すと、npm の dist では出なかった bug が 3 件出ました。**
+
+| # | 症状 | 原因 |
+| --- | --- | --- |
+| 9 | `./client` が読めない | `@fs.exists` が **directory にも true** を返すので、module path として directory を採用して "Is a directory" で死んでいた。`client/index.ts` に落ちる前に短絡していた |
+| 10 | `src/hono-base.ts` が parse できない | `get!: T` / `get?: T` という **field**。`get` は contextual keyword なので accessor と解釈して `!` で失敗。hono は route method を全部この形で宣言している |
+| 11 | **export される class が間違っている** | 下記 |
+
+11 が深刻です。hono は `hono-base.ts` が `class Hono` を宣言して
+`HonoBase` として re-export し、`hono.ts` が `class Hono extends HonoBase`
+を宣言し、entry がそれを re-export します。linker は衝突する後者を
+`Hono$1` に rename しますが、**entry の `export { Hono }` は import した
+binding なので entry の rename map に載っておらず**、素の名前が merged
+block の別宣言（= 抽象 base class）に解決されていました。
+
+結果、bundle は base class を export し、`app.use(...)` が base が絶対に
+設定しない `router` を触って落ちます。import 時には何も起きないので、
+**動かして response を見るまで分からない**種類の bug です。
 
 | target | 形 | 結果 | wildcard の理由 |
 | --- | --- | --- | --- |

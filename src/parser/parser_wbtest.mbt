@@ -7390,3 +7390,39 @@ test "parser: real type arguments still parse" {
     assert_true(block.stmts.length() >= 1)
   }
 }
+
+///|
+/// `get` and `set` are contextual: a class member called `get` is a
+/// getter only when a method body can follow. `get!: T` and `get?: T`
+/// are FIELDS — the `!` / `?` binds to the name, so no getter can be
+/// spelled that way. Hono declares its route methods exactly like this
+/// (`get!: HandlerInterface<…>`, `post!`, `delete!`), and the whole
+/// package failed to parse on the first one.
+test "parser: `get` and `set` are field names before `!` and `?`" {
+  let cases = [
+    "class A { get!: number; }", "class A { set!: number; }", "class A { get?: number; }",
+    "class A { set?: number; }",
+    // The forms already handled, kept so the guard list stays honest.
+     "class A { get: number = 1; }", "class A { get; }", "class A { get = 2; }",
+  ]
+  for src in cases {
+    let block = parse_block_from_source(src) catch {
+      e => fail("should parse: \{src} -> \{e}")
+    }
+    assert_true(block.stmts.length() >= 1)
+  }
+}
+
+///|
+test "parser: a real accessor still parses" {
+  let cases = [
+    "class A { get value() { return 1; } }", "class A { set value(v: number) {} }",
+    "class A { get items(): number[] { return []; } }", "class A { static get id() { return 1; } }",
+  ]
+  for src in cases {
+    let block = parse_block_from_source(src) catch {
+      e => fail("should parse: \{src} -> \{e}")
+    }
+    assert_true(block.stmts.length() >= 1)
+  }
+}

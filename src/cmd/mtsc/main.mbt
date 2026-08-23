@@ -441,7 +441,17 @@ async fn mtsc_load_bundle_files(
       e => return Err("read error \{resolved}: \{e}")
     }
     files[resolved] = source
-    if disk_path != resolved && !files.contains(disk_path) {
+    // The extension-less form is also keyed, so the bundler can look up
+    // the specifier a module actually spelled (`./sub` -> `/dir/sub`).
+    // But ONLY when resolution just appended an extension. When it went
+    // through `<dir>/index.ts`, the alias names a DIRECTORY, and a
+    // module keyed by a directory path resolves its own relative
+    // imports one level too high: `src/router/trie-router` +
+    // `./router` becomes `src/router/router`. Hono hits this on its
+    // first router import.
+    if disk_path != resolved &&
+      resolved.has_prefix(disk_path + ".") &&
+      !files.contains(disk_path) {
       files[disk_path] = source
     }
     let mb = @parser.Parser::from_source(source).parse_module_block() catch {
@@ -653,7 +663,7 @@ fn mtsc_ts_equivalents(base : String) -> Array[String] {
 
 ///|
 async fn mtsc_resolve_existing(base : String) -> String {
-  if mtsc_path_exists(base) {
+  if mtsc_file_exists(base) {
     return base
   }
   // A specifier that spells `.js` may name a `.ts` file. That is not a
@@ -664,7 +674,7 @@ async fn mtsc_resolve_existing(base : String) -> String {
   // zod, and TypeScript's own compiler (`./_namespaces/ts.js`), both
   // fail on their first import.
   for cand in mtsc_ts_equivalents(base) {
-    if mtsc_path_exists(cand) {
+    if mtsc_file_exists(cand) {
       return cand
     }
   }
@@ -673,13 +683,13 @@ async fn mtsc_resolve_existing(base : String) -> String {
   let exts = [".ts", ".tsx", ".d.ts", ".js", ".mjs", ".jsx"]
   for ext in exts {
     let cand = base + ext
-    if mtsc_path_exists(cand) {
+    if mtsc_file_exists(cand) {
       return cand
     }
   }
   for ext in exts {
     let cand = base + "/index" + ext
-    if mtsc_path_exists(cand) {
+    if mtsc_file_exists(cand) {
       return cand
     }
   }
@@ -689,6 +699,19 @@ async fn mtsc_resolve_existing(base : String) -> String {
 ///|
 async fn mtsc_path_exists(path : String) -> Bool {
   @fs.exists(path)
+}
+
+///|
+/// A path that names a readable FILE. `@fs.exists` also answers `true`
+/// for a directory, and a directory is not a module: `import "./client"`
+/// next to a `client/` directory used to resolve to the directory
+/// itself, and the read then failed with "Is a directory" instead of
+/// falling through to `client/index.ts`.
+async fn mtsc_file_exists(path : String) -> Bool {
+  if !@fs.exists(path) {
+    return false
+  }
+  (@fs.kind(path) catch { _ => return false }) is Regular
 }
 
 ///|
