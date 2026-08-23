@@ -6896,6 +6896,11 @@ fn infer_expr(
     }
     ObjectLit(entries) => {
       let fields : Array[(@ast.TsType, @ast.TsType)] = []
+      // Set when a spread operand's shape can't be enumerated. The result
+      // then has to stay OPEN: closing it over just the keys we could see
+      // turns every read of a spread-in member into a false
+      // "property does not exist".
+      let mut opaque_spread = false
       for entry in entries {
         // Object spread `{ ...expr }` is encoded by the parser with key
         // "@@spread:N". Infer the spread source type and merge its declared
@@ -6903,13 +6908,23 @@ fn infer_expr(
         // "@@spread:N" key.
         if entry.0.has_prefix("@@spread:") {
           let spread_ty = infer_expr(env, resolver, entry.1)
-          for f in collect_declared_fields(spread_ty, resolver) {
-            fields.push((@ast.TsType::Literal(f.0), f.1))
+          if spread_shape_is_known(spread_ty, resolver) {
+            for f in collect_declared_fields(spread_ty, resolver) {
+              fields.push((@ast.TsType::Literal(f.0), f.1))
+            }
+          } else {
+            opaque_spread = true
           }
         } else {
           let val_ty = infer_expr(env, resolver, entry.1)
           fields.push((@ast.TsType::Literal(entry.0), val_ty))
         }
+      }
+      if opaque_spread {
+        // An `[k: string]: any` entry. `lookup_field_core` matches the
+        // literal keys first, so the fields we DID resolve keep their
+        // precise types and only the unknown remainder goes permissive.
+        fields.push((@ast.TsType::String_, @ast.TsType::Any))
       }
       @ast.TsType::Object(fields)
     }
@@ -11632,6 +11647,36 @@ fn check_object_lit_against_target(
       "\{sub_path}.\{name}",
       "property `\{name}` is required by `\{type_display(target)}`",
     )
+  }
+}
+
+///|
+/// Can `collect_declared_fields` enumerate this type's members
+/// exhaustively? Only a concrete object shape can — and the answer has to
+/// be conservative, because the caller uses it to decide whether an object
+/// literal's key set is closed.
+///
+/// The case that made this necessary: a module-level `const base = { a: 1 }`
+/// carries no annotation, so inside a function body `base` infers as `Any`,
+/// `collect_declared_fields` returns nothing, and `{ ...base, b: 2 }` closed
+/// over `{ b }` alone — making `merged.a` a false positive on perfectly
+/// legal TypeScript.
+fn spread_shape_is_known(ty : @ast.TsType, resolver : Resolver) -> Bool {
+  match resolver.unwrap(ty) {
+    Object(_) | Struct(_, _) => true
+    // Every member of a union / intersection has to be enumerable for the
+    // combination to be.
+    Union(members) | Intersection(members) => {
+      for m in members {
+        if !spread_shape_is_known(m, resolver) {
+          return false
+        }
+      }
+      members.length() > 0
+    }
+    // A `Named` / `Applied` reference is enumerable exactly when the
+    // resolver actually holds the declaration.
+    _ => collect_declared_fields(ty, resolver).length() > 0
   }
 }
 

@@ -14727,3 +14727,88 @@ test "expr_check: TS7057 generator yield implicit any + generic rest tuple arity
     0,
   )
 }
+
+// ---------------------------------------------------------------------------
+// Object spread and the closed/open question. `{ ...src, k: v }` merges
+// `src`'s members — but only when `src`'s shape can actually be enumerated.
+// When it can't, closing the result over the keys we DID see reports a
+// read of a spread-in member as missing, which is a false positive on
+// legal TypeScript.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: spread of an unannotated module const keeps the literal open" {
+  // `base` has no annotation, so inside the function body it infers as
+  // `Any` and contributes no fields. The result must stay open rather
+  // than close over `{ b }` alone.
+  let src =
+    #|const base = { a: 1 };
+    #|function build(): number {
+    #|  const merged = { ...base, b: 2 };
+    #|  return merged.a + merged.b;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  @test.assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: spread of a known shape still closes the literal" {
+  // The other direction: when the operand's members ARE enumerable, the
+  // result is exhaustive and an undeclared read is still an error.
+  let src =
+    #|type Base = { a: number };
+    #|const base: Base = { a: 1 };
+    #|function build(): number {
+    #|  const merged = { ...base, b: 2 };
+    #|  return merged.a + merged.b + merged.nope;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("`nope`") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: a known spread contributes its members to the result" {
+  // Merged-in members keep their types, so a mismatched use of one is
+  // still caught — the open/closed fix must not degrade to `Any`
+  // wholesale.
+  let src =
+    #|type Base = { a: number };
+    #|const base: Base = { a: 1 };
+    #|function build(): string {
+    #|  const merged = { ...base, b: "s" };
+    #|  return merged.a;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("number") || i.message.contains("string") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: spread of a resolvable parameter stays closed" {
+  let src =
+    #|interface Opts { keep: number }
+    #|function build(o: Opts): number {
+    #|  const merged = { ...o, extra: 1 };
+    #|  return merged.keep + merged.extra + merged.absent;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("`absent`") {
+      found = true
+    }
+  }
+  assert_true(found)
+}

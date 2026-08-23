@@ -54,6 +54,7 @@ allowlist です。同じ名前が両方に載る／片方だけに載るのが�
 | method devirtualization | class が bundle 内部・未継承、method が値として取られない、receiver が escape しない | 未実装 |
 | shape-colored property slots | 同一 slot を共有する 2 名が同じ shape に同時に載らない（式単位の型伝播が必要） | opt-in / 未証明 (`--mangle-properties-shape-color`) |
 | dead class field elimination | field 名が read されず export surface 外、initializer が純粋 | 未実装（`dead_props` は ObjectLit のみ） |
+| spread 結果への private name 参照を error にする | 型に「この object は spread 由来」という情報が必要 | 未実装（下記の TP 1 件と引き換え） |
 
 ## 実装: inferred-purity DCE
 
@@ -241,6 +242,40 @@ carrier に spread / conditional / `Map` 経由、exit に export された関�
   しまう。`...base` が `a: base` になり、merge ではなく入れ子になる別の
   object が出る（意味が変わる miscompile）
 - `mangle.mbt` の property 収集 — sentinel を property 名として数える
+
+### 3 巡目: 生成器が checker の false positive を掘り出した
+
+`spread` carrier を書いたときに、生成 case ではなく手元の repro で
+checker の FP が出ました。
+
+```ts
+const base = { a: 1 };
+function build(): number {
+  const merged = { ...base, b: 2 };
+  return merged.a + merged.b;   // ← property `a` does not exist on `{ b: number }`
+}
+```
+
+`base` に注釈が無いので function body の中では `Any` に推論され、
+`collect_declared_fields` が何も返さず、`{ ...base, b: 2 }` が
+**見えた key だけで閉じて**いました。正しい TypeScript に対する誤検出です。
+
+向きの問題としては sink 解析と同じで、**分からないときは閉じてはいけない**。
+spread operand の shape を列挙できないときは結果の object 型を開いたまま
+にします（`[k: string]: any` entry を足す）。列挙できるときは従来どおり
+閉じるので、`{ ...knownBase, b: 2 }` に対する `.nope` は今も error です。
+
+conformance の計測は **FP 0 / PFLEGAL 0 / TN 1750 のまま、TP が 2,339 →
+2,338**。減った 1 件は `privateNameAndObjectRestSpread` で、TS が error に
+する理由は「spread は private field (`#x`) を copy しないので
+`{ ...other }.#prop` は参照できない」という**専用の規則**です。ts.mbt は
+その規則を model しておらず、閉じた object の missing-property 判定に
+たまたま引っかかっていただけでした。model していた検出ではなく偶然の
+検出を 1 件失った、という取引です。
+
+原理的に取り戻すなら「spread 結果に対する private name 参照は常に
+error」という規則を足すことになります（型に「spread 由来」の情報を
+持たせる必要があるので、未実装の欄に置いています）。
 
 ### 生成物の扱い
 
