@@ -1052,9 +1052,17 @@ fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
     // `stmts` spliced inline. Saves the `else ` keyword (5 bytes) and the
     // braces (2 bytes) for every such pattern.
     match ps {
+      // The braces are not only control flow: a `let` / `const` / class
+      // inside the else block is scoped BY them, and splicing it into
+      // the enclosing block can collide with a same-named binding
+      // already there — a SyntaxError, so nothing in the file loads.
+      // `block_declares_lexical` (fold.mbt) is the same guard the
+      // else-hoist in `fold_stmt_into` uses; this is the second copy of
+      // that rewrite and it needs the same condition.
       If(cond, then_block, Some(else_block)) if block_ends_with_terminator(
           then_block,
-        ) => {
+        ) &&
+        !block_declares_lexical(else_block) => {
         stmts.push(If(cond, then_block, None))
         for es in else_block.stmts {
           stmts.push(es)

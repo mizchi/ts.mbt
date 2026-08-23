@@ -1687,3 +1687,70 @@ test "fold: Number(\"42\") folds to integer 42" {
   assert_false(out.contains("Number"), msg="expected Number removed: \{out}")
   assert_true(out.contains("42"), msg="expected 42: \{out}")
 }
+
+///|
+/// The else-hoist is a control-flow rewrite, and block braces are not
+/// only about control flow. Hoisting an `else` whose body declares a
+/// `let` moves that binding into the enclosing scope, where a
+/// same-named binding may already live — a SyntaxError, so the whole
+/// file stops loading rather than misbehaving quietly. Real shape, from
+/// `checker.ts`: two `let resultType` in one `switch` block, legal
+/// because one of them was nested inside an `else`.
+test "fold: else-hoist stops at a block-scoped declaration" {
+  let files : Map[String, String] = {
+    "entry.ts": (
+      #|declare function g(n: number): void;
+      #|export function f(a: number): number {
+      #|  if (a > 0) {
+      #|    g(1);
+      #|    return 1;
+      #|  }
+      #|  else {
+      #|    let r: number;
+      #|    r = a + 1;
+      #|    g(r);
+      #|    return r;
+      #|  }
+      #|  let r: number;
+      #|  r = 0;
+      #|  g(r);
+      #|  return r;
+      #|}
+      #|
+    ),
+  }
+  // Both hoist sites — `fold_stmt_into` and the peephole pass — have to
+  // hold, so run every combination that reaches one of them.
+  for flags in [(true, false), (false, true), (true, true)] {
+    let opts = BundleOptions::default().with_fold(flags.0).with_minify(flags.1)
+    match bundle_modules(files, "entry.ts", opts) {
+      // The `else` has to survive: it is the scope, not just the branch.
+      Ok(out) => assert_true(out.js.contains("else"))
+      Err(e) => fail("bundle error: \{e}")
+    }
+  }
+}
+
+///|
+test "fold: else-hoist still fires when the else declares nothing" {
+  let files : Map[String, String] = {
+    "entry.ts": (
+      #|declare function g(n: number): void;
+      #|export function f(a: number): number {
+      #|  if (a > 0) {
+      #|    return 1;
+      #|  }
+      #|  else {
+      #|    g(a);
+      #|    return 2;
+      #|  }
+      #|}
+      #|
+    ),
+  }
+  let opts = BundleOptions::default().with_fold(true).with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_false(out.js.contains("else"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
