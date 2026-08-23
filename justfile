@@ -141,6 +141,13 @@ verify-mangle-safety *ARGS:
     node scripts/generate_mangle_cases.mjs --check
     node scripts/verify_mangle_safety.mjs {{ ARGS }}
 
+# Minify real published packages (react, the TypeScript compiler) and
+# check they still behave. Needs network access on the first run, so it
+# is deliberately not part of `ci`.
+verify-real-world *ARGS:
+    moon build --target native
+    node scripts/verify_real_world_minify.mjs {{ ARGS }}
+
 # Regenerate the machine-derived mangle-safety cases
 gen-mangle-cases:
     node scripts/generate_mangle_cases.mjs

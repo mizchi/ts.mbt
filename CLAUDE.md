@@ -46,7 +46,10 @@ product surfaces now.
   [`docs/mangle-safety.md`](./docs/mangle-safety.md) and the
   `fixtures/mangle-safety` corpus (`just verify-mangle-safety`), which
   compiles each case with and without mangling, runs both bundles under Node,
-  and treats any observable difference as a safety violation.
+  and treats any observable difference as a safety violation. A corpus only
+  covers situations somebody thought of, so `just verify-real-world`
+  minifies real published packages (React, the TypeScript compiler) and
+  diffs their behaviour — see [`docs/real-world-minify.md`](./docs/real-world-minify.md).
 - `src/bridge` consumes `src/checker` for every type-shape decision and runs
   `@checker.check_module` on the synthesized output as a sanity gate. It also
   keeps domain-specific specialization for Node FS / React / Hono / crypto /

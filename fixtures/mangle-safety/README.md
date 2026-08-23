@@ -50,6 +50,12 @@ Its first run found four distinct safety violations, and widening the axes found
 with `just gen-mangle-cases`; `just verify-mangle-safety` fails if the
 checked-in cases have drifted from the generator.
 
+What this corpus cannot cover is size: the bugs that need a file large
+enough for two distant tokens to interact don't appear in a
+fifty-line fixture. `scripts/verify_real_world_minify.mjs`
+(`just verify-real-world`) minifies real published packages instead —
+see [`docs/real-world-minify.md`](../../docs/real-world-minify.md).
+
 Run it with:
 
 ```bash

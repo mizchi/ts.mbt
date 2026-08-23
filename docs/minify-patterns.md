@@ -318,6 +318,16 @@ Closure で意味があるのは、devirtualize した後に inliner が本体�
 汎用 inliner が入ったら再評価する価値があります。それまでは実装しない
 方が正しい。
 
+## 実コードでの検証
+
+corpus と生成器で埋められるのは「軸として思いついた次元」だけです。
+公開されている実コード（React 18.3.1 の全 runtime file、TypeScript 5.7.3 の
+`checker.ts` と `lib/typescript.js`）を minify して実行する検証を別に
+持っています。始めた時点で 1 つも通らず、parser 1 件・scope 2 件・emit 1 件・
+CLI 2 件の bug が出ました。詳細と数値は
+[`docs/real-world-minify.md`](./real-world-minify.md)、実行は
+`just verify-real-world` です。
+
 ## 最適化されなかった理由を出す (`--explain-mangle`)
 
 安全側に倒れる解析の既定の結果は「最適化されなかった」です。これは
