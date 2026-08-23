@@ -383,6 +383,30 @@ pub fn transform_source_full(
 }
 
 ///|
+/// Should this declaration's initializer be left out?
+///
+/// Two different reasons, and only one of them is an optimization.
+///
+/// `Var("__ts_no_init__")` is not an expression at all — it is the
+/// marker the parser synthesises for `let x: T;`, a declaration that has
+/// no initializer in the source. Emitting it produces `let x =
+/// __ts_no_init__`, which is a `ReferenceError` the moment the line
+/// runs. It has to be dropped in every mode; the minify flag has
+/// nothing to do with it.
+///
+/// `undefined` / `void 0` is the optimization: `let x;` initialises to
+/// `undefined` anyway, so the initializer is inert and worth its bytes
+/// only in pretty output.
+fn omit_declaration_init(e : Emitter, init : @ast.TsExpr) -> Bool {
+  match init {
+    @ast.TsExpr::Var("__ts_no_init__") => true
+    @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _)
+    | @ast.TsExpr::Var("undefined") => !e.pretty
+    _ => false
+  }
+}
+
+///|
 fn emit_block(e : Emitter, block : @ast.TsBlock) -> Unit {
   e.open_block()
   let stmts = block.stmts
@@ -731,12 +755,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       e.word("var")
       e.sep_after_word(binding_leading_byte(binding))
       emit_binding(e, binding)
-      let is_undef_init = match init {
-        UnaryOp(@ast.TsUnaryOp::Void, _) => true
-        Var("undefined") | Var("__ts_no_init__") => true
-        _ => false
-      }
-      if !e.pretty && is_undef_init {
+      if omit_declaration_init(e, init) {
         // Drop `= void 0` — `var x;` is semantically identical.
       } else {
         e.space()
@@ -755,12 +774,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       // `undefined` default costs nothing). Skip the `= void 0`
       // produced by the peephole pass and the raw `Var("undefined")`
       // from the parser for uninitialized declarations.
-      let is_undef_init = match init {
-        UnaryOp(@ast.TsUnaryOp::Void, _) => true
-        Var("undefined") | Var("__ts_no_init__") => true
-        _ => false
-      }
-      if !e.pretty && is_undef_init {
+      if omit_declaration_init(e, init) {
         // Emit with no initializer — matches `let x;` which the
         // JS engine initialises to `undefined` automatically.
       } else {
@@ -785,12 +799,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       emit_binding(e, binding)
       // In minify mode, `const` is downgraded to `let`, so `= void 0`
       // initializers can be dropped (plain `let x` is equivalent).
-      let is_undef_init = match init {
-        UnaryOp(@ast.TsUnaryOp::Void, _) => true
-        Var("undefined") | Var("__ts_no_init__") => true
-        _ => false
-      }
-      if !e.pretty && is_undef_init {
+      if omit_declaration_init(e, init) {
         ()
       } else {
         e.space()
@@ -1337,12 +1346,7 @@ fn try_emit_multi_decl_inline(e : Emitter, block : @ast.TsBlock) -> Bool {
         emit_binding(e, b)
         // In minify mode, `const` is downgraded to `let` (see `emitted_kind`
         // above), so dropping a `= void 0` initializer is safe for all kinds.
-        let is_undef_init = match init {
-          UnaryOp(@ast.TsUnaryOp::Void, _) => true
-          Var("undefined") | Var("__ts_no_init__") => true
-          _ => false
-        }
-        if !e.pretty && is_undef_init {
+        if omit_declaration_init(e, init) {
           ()
         } else {
           e.space()

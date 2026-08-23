@@ -267,3 +267,46 @@ test "transform: mangle does not rename runtime jsx helpers" {
   // `props` got renamed inside the arrow function.
   assert_false(out.js.contains("props.title"))
 }
+
+///|
+/// `let x: T;` has no initializer in the source. The parser records that
+/// as `Var("__ts_no_init__")`, a marker — not an expression — and every
+/// emit path has to drop it. Emitting it produced
+/// `let x = __ts_no_init__`, which throws `ReferenceError` the moment
+/// the line runs, and it was only dropped under `--minify`: plain
+/// `mtsc --bundle` shipped the throw.
+test "emit: an uninitialized declaration has no initializer" {
+  let files : Map[String, String] = {
+    "entry.ts": (
+      #|export function h(a: number): number {
+      #|  let r: number;
+      #|  r = a + 1;
+      #|  return r;
+      #|}
+      #|
+    ),
+  }
+  for minify in [false, true] {
+    let opts = BundleOptions::default().with_minify(minify)
+    match bundle_modules(files, "entry.ts", opts) {
+      Ok(out) => {
+        assert_false(out.js.contains("__ts_no_init__"))
+        assert_true(out.js.contains("let r"))
+      }
+      Err(e) => fail("bundle error: \{e}")
+    }
+  }
+}
+
+///|
+test "emit: an explicit `undefined` initializer survives pretty output" {
+  // The marker is always dropped; `= undefined` is a real expression and
+  // only an optimization, so it stays where bytes do not matter.
+  let files : Map[String, String] = {
+    "entry.ts": "export let v: number | undefined = undefined;\n",
+  }
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => assert_true(out.js.contains("undefined"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
