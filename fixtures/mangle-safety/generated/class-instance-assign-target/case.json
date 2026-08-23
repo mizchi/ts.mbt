@@ -1,0 +1,18 @@
+{
+  "origin": "generated — scripts/generate_mangle_cases.mjs",
+  "generated": true,
+  "what": "An instance of a bundle-internal class that is copied with `Object.assign` into an exported object. Observation depth recursive, so the expectation is derived, not authored.",
+  "exports": [
+    "copy",
+    "total"
+  ],
+  "expectKeep": [
+    "alphaTop",
+    "alphaWrap",
+    "alphaDeep"
+  ],
+  "expectMangle": [
+    "omegaCtl"
+  ],
+  "expectStatus": "pass"
+}

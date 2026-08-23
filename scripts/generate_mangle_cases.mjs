@@ -121,6 +121,19 @@ const CARRIERS = {
         `const payload = store.get("k")!;`,
       ].join("\n"),
   },
+  getterLiteral: {
+    what: "an object literal whose members are getters",
+    // Getters declared in a literal are own enumerable properties, so
+    // `Object.keys` and `JSON.stringify` see them exactly like data
+    // members — unlike getters on a class prototype.
+    decl: () =>
+      [
+        `const payload = {`,
+        `  get ${TOP}(): number { return 1; },`,
+        `  get ${WRAP}(): { ${DEEP}: number } { return { ${DEEP}: 2 }; },`,
+        `};`,
+      ].join("\n"),
+  },
   arrayElement: {
     what: "an object inside an array",
     decl: () => `const payload = [{ ${TOP}: 1, ${WRAP}: { ${DEEP}: 2 } }];`,
@@ -254,6 +267,26 @@ const EXITS = {
     stmts: () => [`export const pairs = Object.entries(payloadRef);`],
     exports: ["pairs"],
   },
+  inOperator: {
+    what: "is probed with the `in` operator",
+    // `"k" in obj` exposes exactly the one name the string spells, and
+    // nothing else — the depth ladder can't say that, so the exit names
+    // it. Renaming the property without rewriting the string literal
+    // flips the boolean.
+    depth: "none",
+    exposes: (offset) => (offset === 0 ? [TOP] : []),
+    stmts: () => [`export const probed = "${TOP}" in payloadRef;`],
+    exports: ["probed"],
+  },
+  assignTarget: {
+    what: "is copied with `Object.assign` into an exported object",
+    // `Object.assign` is shallow, so the copy's first level is the
+    // source's first level and the nested values are shared references —
+    // the whole tree reaches the consumer.
+    depth: "recursive",
+    stmts: () => [`export const copy = Object.assign({}, payloadRef);`],
+    exports: ["copy"],
+  },
   objectKeys: {
     what: "has its own keys enumerated with `Object.keys`",
     depth: "direct",
@@ -290,16 +323,19 @@ function levelOf(offset) {
 //   direct     one level of keys (`Object.keys`, `for-in`)
 //   recursive  the whole tree (`JSON.stringify`, `console.log`, a body)
 //   external   the whole tree; a foreign callee can read anything
-function keptNames(depth, offset) {
+function keptNames(depth, offset, exit) {
+  // An exit that exposes a specific, named set says so directly; the
+  // depth ladder only describes the enumerate/serialize family.
+  if (exit?.exposes) return exit.exposes(offset);
   const level = levelOf(offset);
   const reach = { none: 0, direct: 1, recursive: Infinity, external: Infinity }[depth];
   if (reach === undefined) throw new Error(`unknown exit depth ${depth}`);
   return [TOP, WRAP, DEEP].filter((n) => level[n] <= reach);
 }
 
-function mangledNames(depth, offset) {
+function mangledNames(depth, offset, exit) {
   // The control value never leaves, whatever the exit does.
-  const kept = new Set(keptNames(depth, offset));
+  const kept = new Set(keptNames(depth, offset, exit));
   return [CTL, ...[TOP, WRAP, DEEP].filter((n) => !kept.has(n))];
 }
 
@@ -323,8 +359,8 @@ function renderCase(carrierKey, exitKey) {
   lines.push(`// Carrier: ${carrier.what}.`);
   lines.push(`// Exit:    ${exit.what} (observation depth: ${exit.depth}).`);
   lines.push(`//`);
-  lines.push(`// Derived expectation: keep [${keptNames(exit.depth, offset).join(", ") || "nothing"}],`);
-  lines.push(`// mangle [${mangledNames(exit.depth, offset).join(", ")}].`);
+  lines.push(`// Derived expectation: keep [${keptNames(exit.depth, offset, exit).join(", ") || "nothing"}],`);
+  lines.push(`// mangle [${mangledNames(exit.depth, offset, exit).join(", ")}].`);
   lines.push("");
   for (const imp of exit.imports ?? []) lines.push(imp);
   if ((exit.imports ?? []).length > 0) lines.push("");
@@ -347,8 +383,8 @@ function renderCase(carrierKey, exitKey) {
     what: `${carrier.what[0].toUpperCase()}${carrier.what.slice(1)} that ${exit.what}. Observation depth ${exit.depth}, so the expectation is derived, not authored.`,
     ...(exit.json ?? {}),
     exports,
-    expectKeep: [...keptNames(exit.depth, offset), ...(exit.keeps ?? [])],
-    expectMangle: mangledNames(exit.depth, offset),
+    expectKeep: [...keptNames(exit.depth, offset, exit), ...(exit.keeps ?? [])],
+    expectMangle: mangledNames(exit.depth, offset, exit),
     expectStatus: "pass",
   };
 

@@ -176,7 +176,19 @@ pub fn collect_externally_visible_props(
       }
     }
   }
+  // `"k" in obj` names a property with a string the mangler does not
+  // rewrite, so `k` has to survive. In practice any object whose literal
+  // keys COULD be renamed is also reachable by the walks above, which
+  // reserve those keys anyway — but resting safety on that coincidence
+  // is not the same as proving it, so probe names are reserved outright.
+  let reserved_in_probes : Map[String, Bool] = {}
+  collect_in_probe_names_block(block, reserved_in_probes)
   let reserved : Map[String, Bool] = {}
+  for k in reserved_in_probes.keys() {
+    if !is_internal_marker_prop(k) {
+      reserved[k] = true
+    }
+  }
   for k in reserved_from_external.keys() {
     if !is_internal_marker_prop(k) {
       reserved[k] = true
@@ -241,6 +253,24 @@ pub fn undeclared_referenced_names(block : @ast.TsBlock) -> Map[String, Bool] {
     }
   }
   out
+}
+
+///|
+/// Property names spelled by a string on the left of an `in`.
+///
+/// Uses the export-surface pass's whole-block expression visitor, which
+/// already descends into nested function bodies, so this needs no walk of
+/// its own.
+fn collect_in_probe_names_block(
+  block : @ast.TsBlock,
+  out : Map[String, Bool],
+) -> Unit {
+  surface_visit_exprs_block(block, e => {
+    match e {
+      @ast.TsExpr::BinOp(In, @ast.TsExpr::StringLit(k), _) => out[k] = true
+      _ => ()
+    }
+  })
 }
 
 ///|

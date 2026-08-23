@@ -1,0 +1,17 @@
+{
+  "origin": "generated — scripts/generate_mangle_cases.mjs",
+  "generated": true,
+  "what": "An object inside an array that is probed with the `in` operator. Observation depth none, so the expectation is derived, not authored.",
+  "exports": [
+    "probed",
+    "total"
+  ],
+  "expectKeep": [],
+  "expectMangle": [
+    "omegaCtl",
+    "alphaTop",
+    "alphaWrap",
+    "alphaDeep"
+  ],
+  "expectStatus": "pass"
+}

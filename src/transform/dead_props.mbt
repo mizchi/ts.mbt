@@ -229,6 +229,13 @@ fn collect_read_property_names_expr(
         collect_read_property_names_expr(a, out)
       }
     }
+    // `"k" in obj` asks about the property named by the string. Dropping
+    // `k` from the object flips the answer, and the operator carries no
+    // `PropAccess` for the ordinary read scan to see.
+    BinOp(In, @ast.TsExpr::StringLit(k), r) => {
+      out[k] = true
+      collect_read_property_names_expr(r, out)
+    }
     BinOp(_, l, r) => {
       collect_read_property_names_expr(l, out)
       collect_read_property_names_expr(r, out)

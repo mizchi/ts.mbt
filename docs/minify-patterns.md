@@ -251,7 +251,7 @@ pass ごとに case を手書きしていると、corpus は「誰かが思い�
 carrier 側は「観測される値から名前までの階層のずれ」を宣言します
 （array 要素は 1 段深いので、`Object.keys(array)` は `"0"` を列挙する
 だけで要素の key は露出しません）。この 2 つを掛けるだけで
-`expectKeep` / `expectMangle` が決まります。7 carrier × 12 exit = 84 件。
+`expectKeep` / `expectMangle` が決まります。8 carrier × 14 exit = 112 件。
 
 ### 初回実行で出た 4 件
 
@@ -338,6 +338,27 @@ conformance の計測は **FP 0 / PFLEGAL 0 / TN 1750 のまま、TP が 2,339 �
 原理的に取り戻すなら「spread 結果に対する private name 参照は常に
 error」という規則を足すことになります（型に「spread 由来」の情報を
 持たせる必要があるので、未実装の欄に置いています）。
+
+### 4 巡目: getter / `in` / `Object.assign` の target
+
+carrier に「getter だけの object literal」、exit に `in` 演算子と
+`Object.assign` の target 側を足して 8 × 14 = 112 件。
+
+exit の観測を深さの梯子だけで表せない形が出たので、exit が「露出する名前を
+名指しする」上書き (`exposes`) を入れました。`"k" in obj` は **その 1 名
+だけ**を露出し、木でも第 1 階層でもありません。
+
+| 症状 | 原因 | 対処 |
+| --- | --- | --- |
+| `Object.assign({}, payload)` の結果を export すると nested key が削除される | `assign` の source を `DirectKeys` として model していた。assign は浅いコピーなので値は同一参照で、nested な名前は target と一緒に出ていく | source を `Recursive` に |
+
+`in` 演算子の case は**全部通りました**。理由は追ってあります —
+literal key を rename できる object は、`in` 式の被演算子として
+export surface / observability の walk からも必ず到達するので、key は
+どちらにせよ予約されます。つまり穴ではなく偶然でした。ただし
+「偶然そうなっている」と「証明されている」は別なので、
+`"k" in obj` の `k` は明示的に予約し、`dead_props` の read 集合にも
+数えるようにしました（`BinOp(In, StringLit(k), _)`）。
 
 ### 生成物の扱い
 

@@ -946,11 +946,15 @@ fn sg_record_sinks_in_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
                     ({ expr: a, observation: Recursive }, w.current_scope),
                   )
                 }
+              // `Object.assign(target, …sources)` copies each source's own
+              // first-level properties onto `target` — but the VALUES are
+              // the same references, so a nested name travels with them
+              // wherever `target` goes. `Recursive`, not `DirectKeys`.
               "assign" =>
                 for i, a in args {
                   if i > 0 {
                     w.scoped_sinks.push(
-                      ({ expr: a, observation: DirectKeys }, w.current_scope),
+                      ({ expr: a, observation: Recursive }, w.current_scope),
                     )
                   }
                 }
