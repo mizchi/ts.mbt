@@ -47,6 +47,10 @@ pub fn emit_entry_dts(@ast.TsModule, Array[String], Map[String, String]) -> Stri
 
 pub fn entry_export_property_names(@ast.TsModule, Array[String]) -> Array[String]
 
+pub fn escape_breakdown(@ast.TsBlock, Map[String, Bool]) -> EscapeBreakdown
+
+pub fn explain_dead_fields(@ast.TsBlock, Map[String, Bool]) -> Array[String]
+
 pub fn exported_surface_props(@ast.TsBlock, Map[String, Bool]) -> Array[String]
 
 pub fn external_import_bindings(Array[@ast.TsImportDecl]) -> Map[String, Bool]
@@ -54,6 +58,8 @@ pub fn external_import_bindings(Array[@ast.TsImportDecl]) -> Map[String, Bool]
 pub fn extract_jsx_pragmas(String, JsxConfig) -> JsxConfig
 
 pub fn fold_block(@ast.TsBlock) -> @ast.TsBlock
+
+pub fn format_escape_explanation(EscapeBreakdown) -> Array[String]
 
 pub fn iife_class_lift_block(@ast.TsBlock) -> @ast.TsBlock
 
@@ -93,9 +99,9 @@ pub fn numeric_name_set(SymbolGraph, Map[Int, Bool]) -> Map[String, Bool]
 
 pub fn peephole_block(@ast.TsBlock) -> @ast.TsBlock
 
-pub fn plan_discriminant_ints(@ast.TsBlock, Map[String, Bool]) -> DiscriminantPlan
+pub fn plan_discriminant_ints(@ast.TsBlock, Map[String, Bool], declines? : Array[String]) -> DiscriminantPlan
 
-pub fn plan_unused_params(@ast.TsBlock, keep? : Map[String, Bool]) -> ArityPlan
+pub fn plan_unused_params(@ast.TsBlock, keep? : Map[String, Bool], declines? : Array[String]) -> ArityPlan
 
 pub fn reserve_props_from_sink(Sink, Int, SymbolGraph, Map[String, Bool], Map[String, Bool]) -> Unit
 
@@ -145,9 +151,11 @@ pub(all) struct BundleOptions {
   fold : Bool
   aliases : Map[String, String]
   extra_reserved_props : Array[String]
+  explain : Bool
 }
 pub fn BundleOptions::default() -> Self
 pub fn BundleOptions::with_aliases(Self, Map[String, String]) -> Self
+pub fn BundleOptions::with_explain(Self, Bool) -> Self
 pub fn BundleOptions::with_extra_reserved_props(Self, Array[String]) -> Self
 pub fn BundleOptions::with_fold(Self, Bool) -> Self
 pub fn BundleOptions::with_mangle(Self, Bool) -> Self
@@ -162,6 +170,7 @@ pub(all) struct BundleOutput {
   sourcemap : String?
   modules : Array[String]
   warnings : Array[String]
+  explain : Array[String]
 }
 
 type CalleeClass derive(Eq, Show)
@@ -172,6 +181,16 @@ pub(all) struct Def {
 
 pub(all) struct DiscriminantPlan {
   maps : Map[String, Map[String, Int]]
+}
+
+pub(all) struct EscapeBreakdown {
+  external_chain : Array[String]
+  sink_observability : Array[String]
+  sink_literal : Array[String]
+  host_shaped : Array[String]
+  value_tree : Array[String]
+  in_probe : Array[String]
+  wildcard_reasons : Array[String]
 }
 
 pub(all) struct FlowEdge {

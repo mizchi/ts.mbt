@@ -62,6 +62,10 @@ priv struct MtscOptions {
   externals : Map[String, Bool]
   mut mangle : Bool
   mut mangle_properties : Bool
+  // `--explain-mangle`: print why each minify decision went the way it
+  // did instead of only doing it. Implies the mangle passes, since a
+  // decision has to be made before it can be explained.
+  mut explain_mangle : Bool
   mut mangle_properties_shape_color : Bool
   mut sourcemap : Bool
   mut jsx_runtime : String?
@@ -86,6 +90,7 @@ fn mtsc_options_new() -> MtscOptions {
     externals: {},
     mangle: false,
     mangle_properties: false,
+    explain_mangle: false,
     mangle_properties_shape_color: false,
     sourcemap: false,
     jsx_runtime: None,
@@ -133,6 +138,9 @@ fn mtsc_print_usage() -> Unit {
   )
   println("  --mangle                  Rename non-exported local identifiers")
   println("  --mangle-properties       Also rename non-reserved property keys")
+  println(
+    "  --explain-mangle          Report why each minify decision went the way it did",
+  )
   println(
     "  --mangle-properties-shape-color  Use shape-coloring property rename (opt-in, experimental)",
   )
@@ -196,6 +204,11 @@ fn mtsc_parse_args(argv : Array[String]) -> Result[MtscOptions, String] {
       "--mangle-properties" => {
         opts.mangle = true
         opts.mangle_properties = true
+      }
+      "--explain-mangle" => {
+        opts.mangle = true
+        opts.mangle_properties = true
+        opts.explain_mangle = true
       }
       "--mangle-properties-shape-color" => {
         opts.mangle = true
@@ -918,6 +931,7 @@ async fn main {
       .with_fold(opts.fold)
       .with_aliases(aliases)
       .with_extra_reserved_props(extra_reserved)
+      .with_explain(opts.explain_mangle)
     let bundle_opts = { ..bundle_opts, jsx: jsx_cfg }
     let result = @transform.bundle_modules(files, input_path, bundle_opts)
     let out = match result {
@@ -931,6 +945,9 @@ async fn main {
       for w in out.warnings {
         println("mtsc: " + w)
       }
+    }
+    for line in out.explain {
+      println(line)
     }
     match opts.out {
       Some(path) => {

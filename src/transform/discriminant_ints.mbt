@@ -88,8 +88,12 @@ fn disc_note_compared(scan : DiscScan, name : String, lit : String) -> Unit {
 pub fn plan_discriminant_ints(
   block : @ast.TsBlock,
   reserved : Map[String, Bool],
+  declines? : Array[String] = [],
 ) -> DiscriminantPlan {
   if reserved.contains("*") {
+    declines.push(
+      "every tag: the escape analysis reserved the wildcard, which suppresses this pass along with property mangling",
+    )
     return { maps: {} }
   }
   let scan : DiscScan = {
@@ -102,7 +106,20 @@ pub fn plan_discriminant_ints(
   let maps : Map[String, Map[String, Int]] = {}
   for entry in scan.writes {
     let (name, literals) = entry
-    if scan.blocked.contains(name) || reserved.contains(name) {
+    if scan.blocked.contains(name) {
+      declines.push(
+        "`" +
+        name +
+        "`: read somewhere other than an equality comparison or a `switch` discriminant — interpolated, passed on, compared relationally, or used for truthiness (a tag string is truthy and 0 is not) — or written with something other than a plain string literal",
+      )
+      continue
+    }
+    if reserved.contains(name) {
+      declines.push(
+        "`" +
+        name +
+        "`: the name is in the escape set, so the whole object can be seen from outside (serialized, enumerated, probed, handed to a foreign callee, or exported)",
+      )
       continue
     }
     if is_internal_marker_prop(name) {
@@ -111,6 +128,11 @@ pub fn plan_discriminant_ints(
     // Nobody reads it — nothing to gain, and `dead_props` is the pass
     // that should be dealing with it.
     if scan.read_count.get(name).unwrap_or(0) == 0 {
+      declines.push(
+        "`" +
+        name +
+        "`: written but never read — a matter for the dead-property pass",
+      )
       continue
     }
     // Every literal the code compares against has to be one the code can
@@ -128,6 +150,11 @@ pub fn plan_discriminant_ints(
       None => ()
     }
     if !closed {
+      declines.push(
+        "`" +
+        name +
+        "`: compared against a literal the code never writes, so that comparison is always false and renumbering would have to invent a value to keep it false",
+      )
       continue
     }
     let numbering : Map[String, Int] = {}

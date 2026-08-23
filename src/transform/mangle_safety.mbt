@@ -44,178 +44,28 @@ pub fn collect_externally_visible_props(
   block : @ast.TsBlock,
   external_bindings : Map[String, Bool],
 ) -> Array[String] {
-  // Phase 1-4 of the observability analysis: build the symbol
-  // graph (also collecting reflection / I/O sinks tagged with
-  // scope), infer numeric bindings for the IndexAccess fallback,
-  // run the backward-flow observability propagation, and reserve
-  // only the property names actually visible from the resulting
-  // observable bindings.
-  // Phase 0: whole-block provenance. Which binding names hold a value
-  // the host owns, and which bundle functions hand one back. The graph
-  // walk needs this up front so it can classify each call site by
-  // "can I prove the callee is internal?" rather than by "is this one
-  // of the calls I know to be dangerous?" — see
-  // `callee_provenance.mbt` for why that inversion matters.
-  let (host_shaped, host_returning) = host_provenance_names(
-    block, external_bindings,
-  )
-  let (graph, scoped_sinks) = build_symbol_graph_with_sinks(
-    block,
-    external_bindings,
-    host_shaped~,
-    host_returning~,
-  )
-  let numeric = infer_numeric_symbols(graph)
-  let numeric_names = numeric_name_set(graph, numeric)
-  // Phase 2: bindings whose TS annotation is a closed string-literal
-  // type or a union of string literals. Used by the IndexAssign sites
-  // below to narrow `external.obj[k] = v` to the exact key set when
-  // `k`'s static type permits only specific strings — instead of the
-  // wildcard fallback that blocked all property mangling.
-  let literal_idx_names = literal_string_name_set(graph)
-  let reserved_external : Map[String, Bool] = {}
-  collect_props_on_external_block(
-    block, external_bindings, reserved_external, numeric_names, literal_idx_names,
-  )
-  // Phase 4: backward-propagate observability from sinks through
-  // FuncReturn / FuncArg edges so a value reaching a sink via a
-  // function parameter or return still tracks back to its
-  // originating bindings. The result subsumes Phase 3's sink
-  // reservation (which used to run alongside) because every
-  // resolved sink-arg ends up as a seeded observable symbol
-  // here.
-  let obs_map = analyze_observability(graph, scoped_sinks)
-  let reserved_obs = reserved_props_from_observability(graph, obs_map)
-  // Phase 4b: a sink argument that IS an object literal
-  // (`external.send({ id: 1 })`, `JSON.stringify({ body })`) has no
-  // free variable for the flow analysis to seed, so Phase 4 never
-  // sees it. Its keys leave the bundle all the same — the foreign
-  // callee reads them by name — so reserve them straight off the
-  // literal, nested levels included.
-  let reserved_literals : Map[String, Bool] = {}
-  for entry in scoped_sinks {
-    let (sink, _) = entry
-    match sink.observation {
-      StringifyOnly => ()
-      _ => collect_object_literal_keys(sink.expr, reserved_literals)
-    }
-  }
-  // Phase 4d: a value observed *recursively* exposes its whole tree, not
-  // just the keys sitting on its own initializer.
-  //
-  // `reserved_props_from_observability` treats `RecursiveProps` and
-  // `DirectProps` identically — both collect the binding's first-level
-  // keys — even though the lattice exists precisely to tell them apart.
-  // So `console.log(payload)` reserved `payload`'s own keys and left the
-  // nested ones to the dead-property pass, and a payload whose keys
-  // aren't on a literal initializer at all (built by an internal
-  // function, assigned in a constructor, an element of an array)
-  // reserved nothing whatsoever.
-  //
-  // Walking a value tree from a set of roots is what door 1 already
-  // does from the entry's exports, and it resolves exactly the shapes
-  // that were missing here: nested literals, array elements, an
-  // internal function's returns, a class's members. Same walk, different
-  // roots.
-  let recursive_roots : Map[String, Bool] = {}
-  for entry in obs_map {
-    let (sym_id, obs) = entry
-    let sym = graph.symbols[sym_id]
-    match obs {
-      RecursiveProps | External => recursive_roots[sym.name] = true
-      // `Object.keys(x)` / `for-in x` enumerate ONE level, and keeping
-      // that distinction is where the precision lives: the nested key
-      // under an enumerated object stays manglable. But the one-level
-      // rule is `collect_direct_props`, which reads the keys off the
-      // binding's own object literal — so it finds nothing at all when
-      // the value came from a function, an array element or a
-      // constructor. Keep the precise rule exactly when we can see the
-      // literal, and fall back to the whole tree when we can't.
-      DirectProps =>
-        if !has_object_literal_def(sym) {
-          recursive_roots[sym.name] = true
-        }
-      _ => ()
-    }
-  }
-  let reserved_tree : Map[String, Bool] = {}
-  if recursive_roots.size() > 0 {
-    for n in exported_surface_props(block, recursive_roots) {
-      reserved_tree[n] = true
-    }
-  }
-  // Phase 4c: a binding whose value CAME FROM outside — `const ret =
-  // external.f(...)`, `const cfg = JSON.parse(text)`, the `r` in
-  // `rows.map(r => r.id)` when `rows` is host-shaped — carries a shape
-  // the host owns. The chain walk in Phase 3 stops at the binding, and
-  // the backward flow only runs from sinks, so reserve the property
-  // names read on such a binding here.
-  //
-  // Note the direction: for a value coming IN, the names our code
-  // reads off it are exactly the names that must survive — a name we
-  // never read can't be broken by renaming ours. The wildcard is for
-  // the other direction, a value going OUT to a body we can't see.
-  let reserved_from_external : Map[String, Bool] = {}
-  for sym in graph.symbols {
-    let mut from_external = host_shaped.contains(sym.name)
-    for d in sym.defs {
-      match d.init {
-        Some(init) =>
-          if is_external_chain(init, external_bindings) {
-            from_external = true
-          }
-        None => ()
-      }
-    }
-    if from_external {
-      for u in sym.uses {
-        match u.context {
-          PropReceiver(p) => reserved_from_external[p] = true
-          _ => ()
-        }
-      }
-    }
-  }
-  // `"k" in obj` names a property with a string the mangler does not
-  // rewrite, so `k` has to survive. In practice any object whose literal
-  // keys COULD be renamed is also reachable by the walks above, which
-  // reserve those keys anyway — but resting safety on that coincidence
-  // is not the same as proving it, so probe names are reserved outright.
-  let reserved_in_probes : Map[String, Bool] = {}
-  collect_in_probe_names_block(block, reserved_in_probes)
+  // A merge over `escape_breakdown`, which computes the same reserved
+  // set in pieces and keeps the reason for each. Deliberately not a
+  // second implementation: `--explain-mangle` has to describe the
+  // decision this function makes, not a re-derivation of it that can
+  // drift.
+  let b = escape_breakdown(block, external_bindings)
   let reserved : Map[String, Bool] = {}
-  for k in reserved_in_probes.keys() {
-    if !is_internal_marker_prop(k) {
-      reserved[k] = true
-    }
-  }
-  for k in reserved_from_external.keys() {
-    if !is_internal_marker_prop(k) {
-      reserved[k] = true
-    }
-  }
-  for k in reserved_literals.keys() {
-    if !is_internal_marker_prop(k) {
-      reserved[k] = true
-    }
-  }
-  for k in reserved_tree.keys() {
-    if !is_internal_marker_prop(k) {
-      reserved[k] = true
-    }
-  }
-  for k in reserved_external.keys() {
-    // Internal mtsc markers (`__private_brand__N__X`, `__super_proto`,
-    // `__brand__`) are synthesised private — no external consumer can
-    // reference them by their desugared names. Exclude them from the
-    // escaped-property set so the property mangler can still shorten them
-    // even when the containing object is transitively exported.
-    if !is_internal_marker_prop(k) {
-      reserved[k] = true
-    }
-  }
-  for k in reserved_obs.keys() {
-    if !is_internal_marker_prop(k) {
+  for
+    group in [
+      b.external_chain,
+      b.sink_observability,
+      b.sink_literal,
+      b.host_shaped,
+      b.value_tree,
+      b.in_probe,
+    ] {
+    for k in group {
+      // Internal mtsc markers (`__private_brand__N__X`, `__super_proto`,
+      // `__brand__`) are synthesised private — no external consumer can
+      // reference them by their desugared names, so they stay manglable
+      // even when the containing object is transitively exported.
+      // `sorted_names` has already dropped them.
       reserved[k] = true
     }
   }

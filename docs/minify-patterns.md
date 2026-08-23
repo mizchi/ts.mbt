@@ -317,6 +317,69 @@ Closure で意味があるのは、devirtualize した後に inliner が本体�
 汎用 inliner が入ったら再評価する価値があります。それまでは実装しない
 方が正しい。
 
+## 最適化されなかった理由を出す (`--explain-mangle`)
+
+安全側に倒れる解析の既定の結果は「最適化されなかった」です。これは
+正しい挙動ですが、利用者から見ると失敗と区別できません。判定は
+yes/no で足りても、**人間が必要とするのは「どの規則が、どの式で
+発火して、何を変えれば通るか」**です。
+
+`--explain-mangle`（`mangle_explain.mbt`）はそれを出します。設計上の
+要点は 1 つだけで、**説明を別実装にしない**ことです。
+
+- `escape_breakdown` が予約集合を「理由ごとの部分集合」として計算する。
+- `collect_externally_visible_props` はその merge だけを行う。
+
+判定と説明が同じ 1 回の解析から出るので、説明だけが古くなる余地が
+ありません。逆向き（説明用に再解析する）にすると、その 2 つが食い違った
+ときに嘘の説明を出すほうが、説明が無いより悪くなります。
+
+出力は pass の依存順 —— escape → parameter → field → tag —— に並びます。
+wildcard が出た時点で後続 3 pass は連鎖して止まるので、その連鎖も明示
+します。
+
+```
+property mangling: why names are reserved
+
+  SUPPRESSED — the analysis reserved the wildcard, so no
+  user-declared property name is renamed. Causes:
+    * binding `cfg` crosses the bundle boundary and carries no closed
+      type annotation, so every name on it is assumed reachable — …
+
+  read off an external import or ambient global (3)
+    info post channel
+  literal key handed straight to a sink (1)
+    stage
+  reachable through an observed value tree (2)
+    retries timeoutMs
+
+dead class fields: why a write survived
+
+  the wildcard above forced every property name in the bundle
+  into the reserved set, so nothing here can proceed.
+```
+
+wildcard の帰属は 2 経路あります。
+
+1. `External` として観測される binding のうち、閉じた key 集合を持つ
+   型注釈が無いもの → その **binding 名**を出す。
+2. external chain 上の `obj[k]` で `k` を特定できないもの → その
+   **chain の root 名**を出す。
+
+「どこかで何かが起きた」ではなく名前を出すのが要件です。1 つの binding が
+bundle 全体の property mangling を落とすので、名前が分からないと直せません。
+
+残り 3 pass（parameter 削除、dead field、discriminant tag）は
+`plan_*` / `explain_*` に `declines` の out-param を足して、
+発火しなかった条件をそのまま文にしています。条件ごとに文が違うので、
+「7 条件のうちどれで落ちたか」が出力から一意に決まります。
+
+検証は `mangle_explain_wbtest.mbt` です。最初の test が
+「`escape_breakdown` の部分集合を merge した結果 == `collect_externally_visible_props`
+の結果」を 8 種類の source で確認します。説明の内容ではなく、
+**説明が説明している対象と一致していること**が壊れやすい側なので、
+そこを最初に押さえます。
+
 ## テストパターンを払い出す
 
 pass ごとに case を手書きしていると、corpus は「誰かが思いついた状況」の
@@ -462,12 +525,13 @@ export surface / observability の walk からも必ず到達するので、key 
 `just verify-mangle-safety` が `--check` で再生成して差分を検出するので、
 generator と fixture が乖離できません。
 
-## 未実装パターンの証明義務
+## 証明義務の記述
 
 「安全に拡張できる範囲」を具体的に残しておくための節です。実装より
-証明義務の記述が本体です。
+証明義務の記述が本体なので、実装済みになったものも記述を残しています
+（下の 2 件は実装済み。3 件目以降が未実装）。
 
-### 未使用 parameter 削除
+### 未使用 parameter 削除（実装済み）
 
 `function f(a, b) { return a; }` の `b` と、全 call site の 2 番目の
 引数を落とす。必要な証明:
@@ -484,16 +548,23 @@ generator と fixture が乖離できません。
 1 と 2 は既にある道具でそのまま書けます。`Function.length` の観測は
 現実には誰も依存していませんが、厳密には 3 に足すべき条件です。
 
-### discriminant literal → int
+### discriminant literal → int（実装済み）
 
 `type Shape = { kind: "circle"; r: number } | { kind: "square"; s: number }`
 の `"circle"` / `"square"` を `0` / `1` にする。必要な証明は
 「その property の**値**が door 1・2 に到達しない」で、今の
 observability lattice は **binding** 単位なので足りません
 （`obj` が観測されるかは分かるが、`obj.kind` の値だけが観測されるかは
-分からない）。per-(binding, property) に lattice を細分するのが前提
-条件です。`fetch(url + obj.kind)` のように名前は漏れないが値だけ漏れる
-形があるので、property mangling の可否とは独立に判定が必要です。
+分からない）。per-(binding, property) に lattice を細分するのが本来の
+前提条件で、`fetch(url + obj.kind)` のように名前は漏れないが値だけ漏れる
+形があるためです。
+
+実装 (`discriminant_ints.mbt`) は lattice を細分する代わりに、
+**値の read 側を全部列挙できる形に限る**方向で証明義務を満たしています
+——直接の read が equality 比較か `switch` 判別子だけ、という条件です。
+それ以外の read（interpolation、他へ渡す、truthiness）が 1 つでもあれば
+名前ごと降ります。lattice の細分は依然として「もっと広く効かせる」ための
+残作業です。
 
 ### method devirtualization
 

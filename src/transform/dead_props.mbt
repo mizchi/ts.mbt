@@ -856,3 +856,101 @@ fn is_value_pure(expr : @ast.TsExpr) -> Bool {
     _ => false
   }
 }
+
+///|
+/// Why each `this.x = …` / `obj.x = …` write survived the dead-field
+/// rule. Feeds `--explain-mangle`; the ordinary path never calls it.
+pub fn explain_dead_fields(
+  block : @ast.TsBlock,
+  reserved : Map[String, Bool],
+) -> Array[String] {
+  let read_props : Map[String, Bool] = {}
+  collect_read_property_names_block(block, read_props)
+  let out : Array[String] = []
+  let seen : Map[String, Bool] = {}
+  fn note(reason : String) -> Unit {
+    if !seen.contains(reason) {
+      seen[reason] = true
+      out.push(reason)
+    }
+  }
+
+  fn consider(name : String, value : @ast.TsExpr) -> Unit {
+    if reserved.contains("*") {
+      note(
+        "every field: the escape analysis reserved the wildcard, which suppresses this pass along with property mangling",
+      )
+    } else if reserved.contains(name) {
+      note(
+        "`" +
+        name +
+        "`: the name is in the escape set, so something outside can see the field",
+      )
+    } else if read_props.contains(name) {
+      note("`" + name + "`: something reads it")
+    } else if !is_value_pure(value) {
+      note(
+        "`" +
+        name +
+        "`: the assigned value has a side effect, which has to keep happening even though the field is dead",
+      )
+    }
+  }
+
+  fn walk(b : @ast.TsBlock) -> Unit {
+    for s in b.stmts {
+      match s {
+        PropAssign(_, name, value) => consider(name, value)
+        Expr(@ast.TsExpr::PropAssignExpr(_, name, value)) =>
+          consider(name, value)
+        Block(inner) => walk(inner)
+        If(_, t, e) => {
+          walk(t)
+          match e {
+            Some(eb) => walk(eb)
+            None => ()
+          }
+        }
+        While(_, inner)
+        | DoWhile(_, inner)
+        | With(_, inner)
+        | For(_, _, _, inner)
+        | ForOf(_, _, _, _, inner)
+        | ForAwaitOf(_, _, _, _, inner)
+        | ForIn(_, _, _, _, inner) => walk(inner)
+        Try(bb, _, c, f) => {
+          walk(bb)
+          match c {
+            Some(cb) => walk(cb)
+            None => ()
+          }
+          match f {
+            Some(fb) => walk(fb)
+            None => ()
+          }
+        }
+        Switch(_, cases) =>
+          for c in cases {
+            walk(c.body)
+          }
+        Label(_, inner) => walk({ stmts: [inner], stmt_positions: [] })
+        NativeClassStmt(decl, ctor) => {
+          match ctor {
+            Some(f) => walk(f.body)
+            None => ()
+          }
+          for m in decl.methods {
+            match m.body {
+              Some(mb) => walk(mb)
+              None => ()
+            }
+          }
+        }
+        _ => ()
+      }
+    }
+  }
+
+  walk(block)
+  out
+}

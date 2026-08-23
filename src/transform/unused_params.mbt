@@ -93,6 +93,7 @@ fn record_call(
 pub fn plan_unused_params(
   block : @ast.TsBlock,
   keep? : Map[String, Bool] = {},
+  declines? : Array[String] = [],
 ) -> ArityPlan {
   let scan : ParamScan = {
     params: {},
@@ -111,10 +112,20 @@ pub fn plan_unused_params(
   let keep_count : Map[String, Int] = {}
   for entry in scan.params {
     let (name, params) = entry
-    if keep.contains(name) || scan.written.contains(name) {
+    if keep.contains(name) {
+      declines.push(
+        "`" + name + "`: the entry exports it, so its arity is package ABI",
+      )
+      continue
+    }
+    if scan.written.contains(name) {
+      declines.push("`" + name + "`: the binding is reassigned")
       continue
     }
     if scan.constructed.contains(name) {
+      declines.push(
+        "`" + name + "`: used as a constructor (`new " + name + "`)",
+      )
       continue
     }
     // (3) Every reference is a callee. `Call(name, …)` stores the callee
@@ -122,6 +133,11 @@ pub fn plan_unused_params(
     // only have to balance for the `CallExpr` shape.
     if scan.var_hits.get(name).unwrap_or(0) >
       scan.callee_hits.get(name).unwrap_or(0) {
+      declines.push(
+        "`" +
+        name +
+        "`: referenced somewhere other than as a callee — held as a value, passed to a call, or reached through `.call` / `.apply` / `.length`, any of which lets someone else pick the argument count",
+      )
       continue
     }
     let body = match scan.bodies.get(name) {
@@ -140,6 +156,11 @@ pub fn plan_unused_params(
       }
     }
     if !plain {
+      declines.push(
+        "`" +
+        name +
+        "`: a parameter is destructured, a rest parameter, or has a default (dropping a defaulted parameter would stop evaluating the default)",
+      )
       continue
     }
     // (4) `arguments` sees the real argument list whatever the
@@ -147,6 +168,11 @@ pub fn plan_unused_params(
     let referenced : Map[String, Bool] = {}
     collect_var_refs_in_block(body, referenced)
     if referenced.contains("arguments") {
+      declines.push(
+        "`" +
+        name +
+        "`: the body reads `arguments`, which sees the real argument list whatever the parameters say",
+      )
       continue
     }
     // (6) How many trailing parameters does the body ignore?
@@ -157,6 +183,7 @@ pub fn plan_unused_params(
       i = i - 1
     }
     if droppable == 0 {
+      declines.push("`" + name + "`: every parameter is read by the body")
       continue
     }
     // (7) Narrow the drop to what every call site can actually spare.
@@ -198,6 +225,12 @@ pub fn plan_unused_params(
     }
     if allowed > 0 {
       keep_count[name] = params.length() - allowed
+    } else {
+      declines.push(
+        "`" +
+        name +
+        "`: a call site passes a spread, or an argument in a dropped position has a side effect and must still be evaluated",
+      )
     }
   }
   { keep_count, }

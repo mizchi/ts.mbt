@@ -29,10 +29,59 @@ mtsc <input.ts> [options]
 - `--dts` — `--bundle` と併用して entry の `.d.ts` を出力。
 - `--sourcemap` — output の隣に v3 source map を出力。
 - `--mangle`、`--mangle-properties` — internal name / property の rename。
+- `--explain-mangle` — `--mangle-properties` が「なぜその名前を rename しな
+  かったか」を出力（下記）。
+
 - `--jsx-runtime automatic|classic`、`--jsx-import-source <pkg>`、`--jsx-dev` — JSX
   transform の設定。
 
 すべてのオプションは `mtsc --help` で確認できます。
+
+## `--explain-mangle`
+
+`--mangle-properties` は安全側に倒れる解析なので、「rename されなかった」が
+既定の結果です。その理由を出すのがこの flag です（`--mangle` と
+`--mangle-properties` を暗黙に有効化します）。
+
+```sh
+mtsc --bundle src/index.ts --external ext --explain-mangle --out dist/index.js
+```
+
+出力は 4 つの pass に対応する 4 節で、読む順に並びます。最初の節が
+「なぜ property 名を予約したか」で、そこに `*`（wildcard）が出た場合は
+残り 3 pass も連鎖して止まるため、まずここを消す必要があります。
+
+```
+property mangling: why names are reserved
+
+  SUPPRESSED — the analysis reserved the wildcard, so no
+  user-declared property name is renamed. Causes:
+    * binding `cfg` crosses the bundle boundary and carries no closed
+      type annotation, so every name on it is assumed reachable — …
+
+  read off an external import or ambient global (3)
+    info post channel
+  literal key handed straight to a sink (1)
+    stage
+  reachable through an observed value tree (2)
+    retries timeoutMs
+
+trailing-parameter trimming: why a function kept its arity
+
+  * `announce`: the entry exports it, so its arity is package ABI
+…
+```
+
+節の見出しがそのまま予約の理由です。`retries` が消えないのは
+「観測される値の木から到達できる」からで、`stage` が消えないのは
+「sink に直接渡した literal の key だから」——どちらも直し方が違います。
+解析の分類そのものは [`docs/mangle-safety.md`](./mangle-safety.md)、pass ごとの
+証明義務は [`docs/minify-patterns.md`](./minify-patterns.md) にあります。
+
+実装上の要点として、この出力は判定を再計算したものではありません。
+`collect_externally_visible_props` は `escape_breakdown` の結果を merge する
+だけの関数で、説明と判定が同じ 1 回の解析から出ます。説明だけが古くなる
+ことがないようにするためです。
 
 ## Module graph checker ABI
 

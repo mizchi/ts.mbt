@@ -79,6 +79,11 @@ pub(all) struct BundleOptions {
   // public type surface and can't be renamed even when
   // `--mangle-properties` is otherwise safe.
   extra_reserved_props : Array[String]
+  // When `true`, collect a human-readable account of every minify
+  // decision into `BundleOutput.explain` instead of only acting on it.
+  // `--explain-mangle` is the reason the analyses keep their reasons
+  // rather than just their answers.
+  explain : Bool
 }
 
 ///|
@@ -94,7 +99,16 @@ pub fn BundleOptions::default() -> BundleOptions {
     fold: false,
     aliases: {},
     extra_reserved_props: [],
+    explain: false,
   }
+}
+
+///|
+pub fn BundleOptions::with_explain(
+  self : BundleOptions,
+  e : Bool,
+) -> BundleOptions {
+  { ..self, explain: e }
 }
 
 ///|
@@ -190,6 +204,9 @@ pub(all) struct BundleOutput {
   // limited to impure-getter detection; future passes can append
   // here. Empty when nothing is amiss.
   warnings : Array[String]
+  // `--explain-mangle` output: why each minify decision went the way it
+  // did. Empty unless `BundleOptions.explain` was set.
+  explain : Array[String]
 }
 
 // ---------------------------------------------------------------------------
@@ -402,6 +419,20 @@ pub fn bundle_modules(
   let sources_content : Array[String] = []
   let module_paths : Array[String] = []
   let warnings : Array[String] = []
+  // `--explain-mangle` output, gathered per section and concatenated in
+  // a fixed reading order at the end. The passes run in pipeline order,
+  // which is not the order a person wants to read the answer in: the
+  // escape analysis is what everything else depends on, so it goes
+  // first even though parameter trimming happens earlier.
+  let explain : Array[String] = []
+  let explain_escape : Array[String] = []
+  let explain_params : Array[String] = []
+  let explain_fields : Array[String] = []
+  let explain_tags : Array[String] = []
+  // Set when the escape analysis reserved the wildcard. Every later
+  // section then declines everything, and saying so once beats
+  // repeating "it's reserved" for each name.
+  let mut explain_wildcard = false
   // `@__PURE__` / `@__NO_SIDE_EFFECTS__` annotations, keyed by the name
   // each declaration carries in the MERGED block. Filled alongside the
   // diagnostic run below and consumed by the second purity run, the
@@ -590,10 +621,24 @@ pub fn bundle_modules(
       // function's arity is part of the package ABI, and everything else
       // the proof needs (is `f` ever used as a VALUE rather than called?)
       // is decided from the merged block itself.
+      let param_declines : Array[String] = []
       combined = drop_unused_params_block(
         combined,
-        plan_unused_params(combined, keep=export_roots),
+        plan_unused_params(combined, keep=export_roots, declines=param_declines),
       )
+      if opts.explain {
+        explain_params.push("")
+        explain_params.push(
+          "trailing-parameter trimming: why a function kept its arity",
+        )
+        explain_params.push("")
+        if param_declines.length() == 0 {
+          explain_params.push("  nothing declined.")
+        }
+        for line in param_declines {
+          explain_params.push("  * " + line)
+        }
+      }
       // Type-driven safety for property mangling: walk the merged
       // block looking for property accesses on bindings that
       // escape the bundle (external imports) and reflection sinks
@@ -641,6 +686,14 @@ pub fn bundle_modules(
         for n in undeclared_referenced_names(combined).keys() {
           externals[n] = true
         }
+        if opts.explain {
+          for
+            line in format_escape_explanation(
+              escape_breakdown(combined, externals),
+            ) {
+            explain_escape.push(line)
+          }
+        }
         let escapes = collect_externally_visible_props(combined, externals)
         let mut wildcard = false
         for n in escapes {
@@ -650,6 +703,7 @@ pub fn bundle_modules(
             extra_reserved.push(n)
           }
         }
+        explain_wildcard = wildcard
         if wildcard {
           // User-declared property names can't be safely renamed
           // (dynamic `obj[runtime_key]` access reaches arbitrary
@@ -691,10 +745,50 @@ pub fn bundle_modules(
         // keys, never values, so without this the tag strings survive
         // minification in full even though nothing outside ever sees
         // them.
+        if opts.explain {
+          explain_fields.push("")
+          explain_fields.push("dead class fields: why a write survived")
+          explain_fields.push("")
+          if explain_wildcard {
+            explain_fields.push(
+              "  the wildcard above forced every property name in the bundle",
+            )
+            explain_fields.push(
+              "  into the reserved set, so nothing here can proceed.",
+            )
+          }
+          let field_reasons = explain_dead_fields(combined, reserved_set)
+          if field_reasons.length() == 0 {
+            explain_fields.push("  nothing declined.")
+          }
+          for line in field_reasons {
+            explain_fields.push("  * " + line)
+          }
+        }
+        let tag_declines : Array[String] = []
         combined = apply_discriminant_ints(
           combined,
-          plan_discriminant_ints(combined, reserved_set),
+          plan_discriminant_ints(combined, reserved_set, declines=tag_declines),
         )
+        if opts.explain {
+          explain_tags.push("")
+          explain_tags.push("discriminant tags: why a tag kept its strings")
+          explain_tags.push("")
+          if explain_wildcard {
+            explain_tags.push(
+              "  the wildcard above forced every property name in the bundle",
+            )
+            explain_tags.push(
+              "  into the reserved set, so nothing here can proceed.",
+            )
+          }
+          if tag_declines.length() == 0 {
+            explain_tags.push("  nothing declined.")
+          }
+          for line in tag_declines {
+            explain_tags.push("  * " + line)
+          }
+        }
       }
       // External `import` headers (`import os from "os"`, etc.)
       // sit OUTSIDE `combined` and are emitted by the linker around
@@ -893,7 +987,22 @@ pub fn bundle_modules(
       Some(b.to_json_multi(sources, sources_content, output_path="bundle.js"))
     None => None
   }
-  Ok({ js: e.to_string(), sourcemap: sm_json, modules: module_paths, warnings })
+  if opts.explain {
+    explain.push("mtsc --explain-mangle")
+    for
+      section in [explain_escape, explain_params, explain_fields, explain_tags] {
+      for line in section {
+        explain.push(line)
+      }
+    }
+  }
+  Ok({
+    js: e.to_string(),
+    sourcemap: sm_json,
+    modules: module_paths,
+    warnings,
+    explain,
+  })
 }
 
 // Detect the esbuild-style CJS-wrapper pattern:
