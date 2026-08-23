@@ -169,10 +169,12 @@ pass ごとに case を手書きしていると、corpus は「誰かが思い�
 軸は 2 つです。
 
 - **carrier** — property を持つ値の作り方。top-level object literal /
-  内部関数の戻り値 / class instance / array の要素。
+  内部関数の戻り値 / class instance / array の要素 / spread で組んだ
+  literal / conditional の分岐 / `Map` に入れて出した値。
 - **exit** — 値の出口と、sink の観測の深さ。出口なし / `console.log` /
   `JSON.stringify` / `fetch` body / external package の関数 / nested な
-  host chain / `Object.keys` / `for-in`。
+  host chain / `Object.keys` / `for-in` / `Object.entries` /
+  export された関数の戻り値 / `throw` / `structuredClone`。
 
 期待値は**書かず、導出**します。
 
@@ -186,7 +188,7 @@ pass ごとに case を手書きしていると、corpus は「誰かが思い�
 carrier 側は「観測される値から名前までの階層のずれ」を宣言します
 （array 要素は 1 段深いので、`Object.keys(array)` は `"0"` を列挙する
 だけで要素の key は露出しません）。この 2 つを掛けるだけで
-`expectKeep` / `expectMangle` が決まります。4 carrier × 8 exit = 32 件。
+`expectKeep` / `expectMangle` が決まります。7 carrier × 12 exit = 84 件。
 
 ### 初回実行で出た 4 件
 
@@ -214,6 +216,31 @@ root だけ差し替えて再利用しました（Phase 4d）。
 — TypeScript の `private` は compile 時の約束で runtime には残るので、
 `JSON.stringify` すれば普通に見えます。真の `#x` は parser が
 `__private_brand__…` に脱糖するので marker 判定側で落ちます。
+
+### 軸を足した 2 巡目
+
+carrier に spread / conditional / `Map` 経由、exit に export された関数の
+戻り値 / `throw` / `structuredClone` / `Object.entries` を足して
+7 × 12 = 84 件にしたところ、さらに 3 件出ました。
+
+| 症状 | 原因 | 対処 |
+| --- | --- | --- |
+| `Map` に入れて出した値の key が予約されない（全 exit で fail） | 値の木の walk は receiver の initializer（`new Map()`）しか見ない。`store.set("k", v)` で入れた `v` と `store.get("k")` の結果が繋がっていない | receiver 名ごとに `set` / `add` / `push` などの引数を index（`container_writes`） |
+| `Object.entries(x)` / `Object.values(x)` で nested key が漏れる | `keys` と同じ `DirectKeys` sink として model していた。`entries` / `values` は **値**も渡すので、その中の名前も一緒に出ていく | `values` / `entries` を `Recursive` に |
+| spread した key が `for-in` / `Object.keys` から漏れる（`{...base, wrap}` の `base` 由来の key が削除） | 1 階層規則が literal の entry key を読むが、spread entry の key は property 名ではない sentinel。読める分だけ読んで残りを落としていた | sentinel を含む literal では 1 階層規則を使わず木全体に倒す |
+
+3 件目を直したら、**それまで通っていた 4 件が赤くなりました**。sentinel key
+（`"..."` と `@@spread:N` と `@@computed:N` の 3 通りがある）が
+「予約済みの property 名」として扱われていたのに依存していたためです。
+偶然の予約に頼っていただけで、正しい修正は sentinel を property 名として
+扱わないことでした。3 箇所直しています。
+
+- `dead_props.mbt` — `"..."` だけを除外していたので、`@@spread:N` entry が
+  dead key として**削除**される
+- `mangle.mbt` の property renamer — 同じく `@@spread:N` を rename して
+  しまう。`...base` が `a: base` になり、merge ではなく入れ子になる別の
+  object が出る（意味が変わる miscompile）
+- `mangle.mbt` の property 収集 — sentinel を property 名として数える
 
 ### 生成物の扱い
 

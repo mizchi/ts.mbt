@@ -1,0 +1,19 @@
+{
+  "origin": "generated — scripts/generate_mangle_cases.mjs",
+  "generated": true,
+  "what": "One of two branches of a conditional that is sent as a `fetch` request body. Observation depth recursive, so the expectation is derived, not authored.",
+  "exports": [
+    "total"
+  ],
+  "expectKeep": [
+    "alphaTop",
+    "alphaWrap",
+    "alphaDeep",
+    "method",
+    "body"
+  ],
+  "expectMangle": [
+    "omegaCtl"
+  ],
+  "expectStatus": "pass"
+}

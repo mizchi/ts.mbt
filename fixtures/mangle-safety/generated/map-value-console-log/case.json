@@ -1,0 +1,17 @@
+{
+  "origin": "generated — scripts/generate_mangle_cases.mjs",
+  "generated": true,
+  "what": "A value stored in and read back out of a `Map` that reaches `console.log`. Observation depth recursive, so the expectation is derived, not authored.",
+  "exports": [
+    "total"
+  ],
+  "expectKeep": [
+    "alphaTop",
+    "alphaWrap",
+    "alphaDeep"
+  ],
+  "expectMangle": [
+    "omegaCtl"
+  ],
+  "expectStatus": "pass"
+}

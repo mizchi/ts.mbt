@@ -540,8 +540,12 @@ fn drop_dead_props_expr(
       let new_entries : Array[(String, @ast.TsExpr)] = []
       for ent in entries {
         let key = ent.0
-        if key == "..." {
-          // Spread — keep it.
+        if is_opaque_object_key(key) {
+          // Not a property name at all: an object spread
+          // (`("...", Spread(e))` or `("@@spread:N", e)`) or a computed
+          // key (`("@@computed:N", ComputedProp(k, v))`). Dropping the
+          // entry deletes the spread, and there is no "is this key
+          // read?" question to ask about it.
           new_entries.push(
             (key, drop_dead_props_expr(ent.1, reserved, read_props)),
           )

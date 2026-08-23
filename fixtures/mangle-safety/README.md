@@ -35,7 +35,7 @@ observes it), and derives each case's `expectKeep` / `expectMangle` from
 the observation depth rather than restating them. That is the same
 argument the analysis itself was rewritten around: a corpus of remembered
 situations has holes exactly where the situations nobody remembered are.
-Its first run found four distinct safety violations — see
+Its first run found four distinct safety violations, and widening the axes found three more — see
 [`docs/minify-patterns.md`](../../docs/minify-patterns.md). Regenerate
 with `just gen-mangle-cases`; `just verify-mangle-safety` fails if the
 checked-in cases have drifted from the generator.
@@ -117,7 +117,7 @@ harness fails only when a case does *worse* than its recorded status.
 When a fix makes a case do better, the harness says so and
 `node scripts/verify_mangle_safety.mjs --update` re-records it.
 
-All 64 cases (32 hand-written, 32 generated) currently record `pass`, so any regression — a compile
+All 116 cases (32 hand-written, 84 generated) currently record `pass`, so any regression — a compile
 that stops working, a renamed property that turns out to be
 observable, a dropped call that turns out to have had an effect —
 fails the run.

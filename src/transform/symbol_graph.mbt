@@ -929,10 +929,21 @@ fn sg_record_sinks_in_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
         @ast.TsExpr::Var(name) =>
           if name == "Object" {
             match m {
-              "keys" | "values" | "entries" | "fromEntries" =>
+              // `keys` hands out the key strings and nothing else, so
+              // one level is the whole observation. `values` /
+              // `entries` hand out the VALUES too, and the names inside
+              // those ride along — an `Object.entries(x)` result that
+              // reaches a consumer exposes `x`'s whole tree.
+              "keys" =>
                 for a in args {
                   w.scoped_sinks.push(
                     ({ expr: a, observation: DirectKeys }, w.current_scope),
+                  )
+                }
+              "values" | "entries" | "fromEntries" =>
+                for a in args {
+                  w.scoped_sinks.push(
+                    ({ expr: a, observation: Recursive }, w.current_scope),
                   )
                 }
               "assign" =>

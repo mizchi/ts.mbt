@@ -52,6 +52,7 @@ pub fn exported_surface_props(
     classes: {},
     funcs: {},
     prop_assigns: {},
+    container_writes: {},
     reserved: {},
     visited: {},
     queue: [],
@@ -83,6 +84,14 @@ pub fn exported_surface_props(
         }
       None => ()
     }
+    // Same for anything stored into it as a container element.
+    match w.container_writes.get(name) {
+      Some(values) =>
+        for v in values {
+          surface_escape_expr(w, v, 1)
+        }
+      None => ()
+    }
   }
   let out : Array[String] = []
   for k in w.reserved.keys() {
@@ -105,6 +114,12 @@ priv struct SurfaceWalk {
   // lowering assigns them onto the namespace object inside an IIFE), as
   // does any `Foo.prototype.m = …` style declaration.
   prop_assigns : Map[String, Array[(String, @ast.TsExpr)]]
+  // `NAME.set(k, v)` / `NAME.push(v)` / `NAME.add(v)` sites, keyed by
+  // NAME. A container the bundle fills in hands those values back out
+  // again — `store.get(k)` returns whatever `store.set(k, …)` put in —
+  // and the receiver's own initializer (`new Map()`) says nothing about
+  // them, so without this index the whole subtree is invisible.
+  container_writes : Map[String, Array[@ast.TsExpr]]
   // Property names that must survive mangling.
   reserved : Map[String, Bool]
   // Names already processed, so a cyclic reference terminates.
@@ -210,6 +225,21 @@ fn index_prop_assigns(w : SurfaceWalk, block : @ast.TsBlock) -> Unit {
       @ast.TsExpr::ArrowFunc(_, _, ArrowBlock(b), _) => index_prop_assigns(w, b)
       @ast.TsExpr::PropAssignExpr(@ast.TsExpr::Var(n), prop, value) =>
         record(n, prop, value)
+      // `store.set(k, v)`, `list.push(v)`, `seen.add(v)` — the value
+      // goes into a container the bundle owns, and comes back out of
+      // `get` / an index / an iteration. The key argument of `set` is
+      // not recorded: it is a value, not a property name.
+      @ast.TsExpr::MethodCall(@ast.TsExpr::Var(n), meth, args) =>
+        if is_container_write(meth) {
+          for i, a in args {
+            if meth != "set" || i > 0 {
+              match w.container_writes.get(n) {
+                Some(arr) => arr.push(a)
+                None => w.container_writes[n] = [a]
+              }
+            }
+          }
+        }
       @ast.TsExpr::MethodCall(
         @ast.TsExpr::Var("Object"),
         "defineProperty",
@@ -225,6 +255,17 @@ fn index_prop_assigns(w : SurfaceWalk, block : @ast.TsBlock) -> Unit {
       _ => ()
     }
   })
+}
+
+///|
+/// Methods that store a value into the receiver, so the receiver hands
+/// that value back later. Read-only members (`get`, `has`, `find`) are
+/// absent: they don't put anything in.
+fn is_container_write(meth : String) -> Bool {
+  match meth {
+    "set" | "add" | "push" | "unshift" | "splice" | "fill" | "concat" => true
+    _ => false
+  }
 }
 
 ///|
@@ -343,7 +384,10 @@ fn surface_escape_expr(
   match expr {
     ObjectLit(entries) =>
       for ent in entries {
-        if !is_internal_marker_prop(ent.0) {
+        // A spread / computed sentinel is not a property name. Its
+        // VALUE still escapes, and following it is how the keys spread
+        // in from elsewhere get reserved.
+        if !is_internal_marker_prop(ent.0) && !is_opaque_object_key(ent.0) {
           w.reserved[ent.0] = true
         }
         surface_escape_expr(w, ent.1, depth + 1)

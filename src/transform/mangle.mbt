@@ -466,7 +466,7 @@ fn collect_props_in_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit {
     }
     ObjectLit(entries) =>
       for ent in entries {
-        if ent.0 != "..." {
+        if !is_opaque_object_key(ent.0) {
           out[ent.0] = true
         }
         collect_props_in_expr(ent.1, out)
@@ -3185,7 +3185,9 @@ fn rename_properties_in_expr(
     ObjectLit(entries) => {
       let out : Array[(String, @ast.TsExpr)] = []
       for ent in entries {
-        let new_key = if ent.0 == "..." {
+        // Renaming a spread / computed sentinel turns `...base` into a
+        // literal key named after the sentinel — a different object.
+        let new_key = if is_opaque_object_key(ent.0) {
           ent.0
         } else {
           rename_prop_key(ent.0, prop_map)

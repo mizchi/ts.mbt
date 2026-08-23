@@ -259,16 +259,48 @@ fn is_dynamically_bound_name(name : String) -> Bool {
 }
 
 ///|
-/// Does this binding hold an object literal we can read keys off
-/// directly? Decides whether the one-level `DirectProps` rule has
-/// anything to work with.
+/// Does this binding hold an object literal we can read the first-level
+/// keys off directly? Decides whether the one-level `DirectProps` rule
+/// has anything to work with.
+///
+/// A spread or computed entry disqualifies the literal:
+/// `{ ...base, wrap: … }` has first-level keys that aren't written here
+/// at all, and reading only the ones that are is exactly how `alphaTop`
+/// got dropped out from under a `for-in`.
 fn has_object_literal_def(sym : Symbol) -> Bool {
   for d in sym.defs {
-    if d.init is Some(@ast.TsExpr::ObjectLit(_)) {
-      return true
+    match d.init {
+      Some(@ast.TsExpr::ObjectLit(entries)) => {
+        let mut opaque = false
+        for ent in entries {
+          if is_opaque_object_key(ent.0) {
+            opaque = true
+          }
+        }
+        if !opaque {
+          return true
+        }
+      }
+      _ => ()
     }
   }
   false
+}
+
+///|
+/// Sentinel keys the AST uses for entries that are NOT a literal
+/// property name. Object spread arrives as either `("...", Spread(e))`
+/// (the JSX-runtime lowering) or `("@@spread:N", e)` (the ordinary
+/// parser path), and a computed key `[k]: v` as `("@@computed:N",
+/// ComputedProp(k, v))` — see `emit_expr`'s ObjectLit arm, which is
+/// where the conventions are consumed.
+///
+/// Two consequences, and both bit: such a key must never be recorded as
+/// a property name to reserve, and its presence means the literal's
+/// first-level key set is NOT statically visible, so any rule that
+/// reads keys straight off the literal has to decline.
+fn is_opaque_object_key(key : String) -> Bool {
+  key == "..." || key.has_prefix("@@spread:") || key.has_prefix("@@computed:")
 }
 
 ///|
@@ -1243,7 +1275,7 @@ fn collect_object_literal_keys(
   match expr {
     ObjectLit(entries) =>
       for ent in entries {
-        if ent.0 != "..." {
+        if !is_opaque_object_key(ent.0) {
           out[ent.0] = true
         }
         collect_object_literal_keys(ent.1, out)
