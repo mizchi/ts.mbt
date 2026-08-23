@@ -130,9 +130,27 @@ function main() { return dir; }      // export は 1 つも無い
 
 README と `docs/mtsc.md` が最初に見せる使い方がこれです。この経路は
 `preserve_top_level` で top-level 名を一切 rename しないので、
-import 宣言をそのまま前に、export 節をそのまま後ろに出せば済みます
-（linker の rename map が要る `--bundle` 経路と違う点）。type-only の
-import / export は runtime に指す先が無いので落とします。
+import 宣言を前に、export 節を後ろに出せば済みます（linker の rename map
+が要る `--bundle` 経路と違う点）。
+
+ただし**そのまま出すと壊れます**。TypeScript は型としてしか使われない
+import を erase し、code はその erase に依存しています。checker.ts は
+**interface** の `SymbolLinks` を import したうえで
+
+```ts
+const SymbolLinks = class implements SymbolLinks { … };
+```
+
+を宣言します。import が消えているから合法な形です。verbatim に出すと
+1 つの名前に宣言が 2 つ並び、SyntaxError で file 全体が読み込まれません。
+
+なので emit する import は「実行される code が実際に参照している binding」
+だけに絞ります（tsc の import elision と同じ判断）。型注釈はこの時点で
+既に erase されているので、残っている参照は値参照です。加えて
+**block が同じ名前を自分で宣言しているなら import は落とす** ——
+参照カウントだけでは足りません。その参照は local 宣言のものだからです。
+side-effect のみの import（`import "./polyfill"`）は評価が目的なので
+無条件に残します。
 
 ### 6. `return` の後の function 宣言が消える（peephole）
 
@@ -243,7 +261,7 @@ property mangling が効いた結果ではありません。react-dom が
 
 ### `src/compiler/checker.ts`
 
-3,065,627 → 1,521,251 bytes（50% 減）、`--minify`、68 秒。
+3,065,627 → 1,537,847 bytes（50% 減）、`--minify`、71 秒。
 `node --check` 通過。
 
 checker.ts 単体は module graph の一部（`./_namespaces/ts.js` に依存）なので

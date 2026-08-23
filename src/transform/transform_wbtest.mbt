@@ -353,3 +353,61 @@ test "transform: a script with no module boundary gains none" {
     Err(e) => fail("transform error: \{e}")
   }
 }
+
+///|
+/// TypeScript erases an import that is only used as a type, and code
+/// relies on that erasure. `checker.ts` imports the INTERFACE
+/// `SymbolLinks` and then declares
+/// `const SymbolLinks = class implements SymbolLinks {…}` — legal,
+/// because the import is gone by the time the class exists. Emitting the
+/// import verbatim produced two declarations of one name, a SyntaxError
+/// that stopped the whole file loading.
+test "transform: an import the runtime never uses is elided" {
+  let src =
+    #|import { join } from "node:path";
+    #|import type { Stats } from "node:fs";
+    #|import { readFileSync } from "node:fs";
+    #|export const p: string = join("a", "b");
+    #|export function size(s: Stats): number { return s.size; }
+    #|
+  match transform_source_full(src, JsxConfig::default()) {
+    Ok(out) => {
+      // Used as a value: kept.
+      assert_true(out.js.contains("join"))
+      // Used only as a type, and never used at all: both gone.
+      assert_false(out.js.contains("Stats"))
+      assert_false(out.js.contains("readFileSync"))
+    }
+    Err(e) => fail("transform error: \{e}")
+  }
+}
+
+///|
+test "transform: a local declaration wins over an imported name" {
+  // A reference count alone is not enough — the reference belongs to the
+  // local declaration, so keeping the import collides with it.
+  let src =
+    #|import { Links } from "./types";
+    #|const Links = class { constructor() { this.brand = 1; } };
+    #|export function make(): unknown { return new Links(); }
+    #|
+  match transform_source_full(src, JsxConfig::default()) {
+    Ok(out) => {
+      assert_false(out.js.contains("import"))
+      assert_true(out.js.contains("new Links"))
+    }
+    Err(e) => fail("transform error: \{e}")
+  }
+}
+
+///|
+test "transform: a side-effect import survives having no bindings" {
+  match
+    transform_source_full(
+      "import \"./polyfill\";\nexport const a = 1;\n",
+      JsxConfig::default(),
+    ) {
+    Ok(out) => assert_true(out.js.contains("./polyfill"))
+    Err(e) => fail("transform error: \{e}")
+  }
+}

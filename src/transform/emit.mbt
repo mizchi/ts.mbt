@@ -360,13 +360,36 @@ pub fn transform_source_full(
     e.write("/jsx-runtime\";")
     e.nl()
   }
-  // The module's own imports, verbatim. `preserve_top_level` keeps every
-  // top-level name unmangled in this path, so the bindings these
-  // introduce still match their use sites.
+  // The module's own imports — but only the bindings the emitted code
+  // actually references. TypeScript erases an import used only in type
+  // position, and code relies on that: `checker.ts` imports the
+  // INTERFACE `SymbolLinks` and separately declares
+  // `const SymbolLinks = class implements SymbolLinks {…}`. Legal,
+  // because the import is gone by the time the class exists. Emitting it
+  // anyway produced two declarations of one name — a SyntaxError.
+  //
+  // Type annotations are erased before this point, so a name still
+  // referenced by the runtime block is a value reference by
+  // construction. `preserve_top_level` keeps every top-level name
+  // unmangled in this path, so those references still match.
+  let value_refs : Map[String, Bool] = {}
+  collect_var_refs_in_block(mangled, value_refs)
+  // A name the block declares itself cannot also be imported: the input
+  // only type-checked because the import was type-only in use, so the
+  // reference the collector sees belongs to the local declaration. This
+  // is the `SymbolLinks` case — a reference count alone keeps the import
+  // alive and the two declarations collide.
+  let locally_declared = declared_top_level_names(mangled)
   for decl in imports {
-    if !decl.type_only {
-      emit_import_decl(e, decl)
-      e.nl()
+    if decl.type_only {
+      continue
+    }
+    match elide_unused_import(decl, value_refs, locally_declared) {
+      Some(kept) => {
+        emit_import_decl(e, kept)
+        e.nl()
+      }
+      None => ()
     }
   }
   // Source-map positions are tied to the unmangled block — when
@@ -395,6 +418,54 @@ pub fn transform_source_full(
     None => None
   }
   Ok({ js: e.to_string(), sourcemap: sm_json })
+}
+
+///|
+/// Drop the bindings of `decl` that the emitted code never references,
+/// and the whole declaration when nothing is left.
+///
+/// A side-effect-only import (`import "./polyfill"`) has no bindings to
+/// keep and must survive regardless — the point of it is the evaluation.
+fn elide_unused_import(
+  decl : @ast.TsImportDecl,
+  refs : Map[String, Bool],
+  locally_declared : Map[String, Bool],
+) -> @ast.TsImportDecl? {
+  fn keep(name : String) -> Bool {
+    refs.contains(name) && !locally_declared.contains(name)
+  }
+
+  if decl.side_effect_only {
+    return Some(decl)
+  }
+  let named : Array[(String, String)] = []
+  let named_type_only : Array[Bool] = []
+  for i, b in decl.named_bindings {
+    // Per-specifier `type` modifiers are erased with the binding.
+    let is_type = i < decl.named_type_only.length() && decl.named_type_only[i]
+    if !is_type && keep(b.1) {
+      named.push(b)
+      named_type_only.push(false)
+    }
+  }
+  let default_binding = match decl.default_binding {
+    Some(n) if keep(n) => Some(n)
+    _ => None
+  }
+  let namespace_binding = match decl.namespace_binding {
+    Some(n) if keep(n) => Some(n)
+    _ => None
+  }
+  if named.length() == 0 && default_binding is None && namespace_binding is None {
+    return None
+  }
+  Some({
+    ..decl,
+    named_bindings: named,
+    named_type_only,
+    default_binding,
+    namespace_binding,
+  })
 }
 
 ///|
