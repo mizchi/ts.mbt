@@ -13,7 +13,7 @@
 | TypeScript 5.7.3（`src/compiler/checker.ts` と `lib/typescript.js`） | 3 MB / 9 MB の実 source を通せるか、出力が有効な JS か、compiler として動くか |
 
 結論を先に書くと、**この検証を始めた時点では 1 つも通りませんでした**。
-7 件の bug を潰して通るようになりました。うち 4 件は corpus では原理的に
+8 件の bug を潰して通るようになりました。うち 5 件は corpus では原理的に
 出ない種類のものです。
 
 ## 見つかった bug
@@ -166,7 +166,39 @@ test は 4 通り回します。名前ではなく function の本体（`-1`）�
 動かす」leg だけ**です。出力は `node --check` を通り、corpus も通り、
 それでも壊れていました。
 
-### 7. TypeScript でない入力を通す手段が無かった（CLI）
+### 7. 自己参照する宣言を return に畳み込む（peephole）
+
+`let x = expr; return x;` → `return expr;` の畳み込みに、**`expr` が `x`
+自身を参照していないかの検査が無かった**。closure に遅延された自己参照は
+普通の JavaScript で、TypeScript の compiler host はまさにその形です。
+
+```js
+const compilerHost = {
+  getSourceFile: getSourceFileWithCache(f => compilerHost.readFile(f)),
+  …
+};
+return compilerHost;
+```
+
+畳み込むと closure が存在しない名前を指します。そして mangle 後は
+`ReferenceError` より悪いことが起きます —— 短い名前が**別の関数のもの**に
+なっていたので `compilerHost.readFile` が別物に解決され、read が throw し、
+`getSourceFile` 自身の `catch { text = "" }` がそれを飲み込みました。
+全 lib file が空文字列として読まれ、source file が 52 → 2 に。
+
+結果、minify した compiler は正しい入力に対して
+`Cannot find name 'Math'` と
+`Property 'toFixed' does not exist on type 'number'` を出し、
+`Box<string>` を `Box<any>` と推論しました。**crash ではなく静かに
+間違った答え**です。
+
+`inline.mbt` は同じ形を既に断っています（closure capture を見ている）。
+peephole の tail fold にだけ guard が無かった、という形でした。
+`expr_refers_to` は意図的に nested function の中まで見ます —— 問題になる
+参照は遅延されたものなので、既存の local-only helper が止まる場所が
+ちょうど間違っています。
+
+### 8. TypeScript でない入力を通す手段が無かった（CLI）
 
 型エラーは既定で出力を止めます。プログラムが間違っているときはそれが
 正しい。しかし**そもそも TypeScript でない入力**に対しては、pipeline
@@ -221,14 +253,24 @@ checker.ts 単体は module graph の一部（`./_namespaces/ts.js` に依存）
 
 ### `lib/typescript.js`（compiler 本体）
 
-9 MB の published bundle を minify し、**minify した compiler で
-TypeScript を compile して**診断を比べます（`scripts/verify_real_world_minify.mjs`）。
-`checker.ts` を含む file なので、これが「checker が動く」の実質的な確認に
-なります。観測は `transpileModule` の出力、`createProgram` +
-`getPreEmitDiagnostics` の診断（code / 行 / message）、`TypeChecker` で
-引いた型の文字列、公開 API の形。
+9,044,103 → 3,581,914 bytes（60% 減）、`--minify --bundle --mangle`、
+約 13 分。`node --check` 通過。
 
-数値と結果は次節の表に入れています。
+9 MB の published bundle を minify し、**minify した compiler で
+TypeScript を compile して**診断を比べます。`checker.ts` を含む file なので、
+これが「checker が動く」の実質的な確認になります。観測は
+`transpileModule` の出力、`createProgram` + `getPreEmitDiagnostics` の
+診断（code / 行 / message）、`TypeChecker` で引いた型の文字列、公開 API の形
+——**すべて一致**。
+
+harness 側の落とし穴を 1 つ記録しておきます。**出力は package の
+`lib/` directory に置く必要があります。** TypeScript は既定の
+`lib.*.d.ts` を自分の file 位置から解決するので、別の場所から動かした
+compiler は lib 無しで型検査してしまい、`Math` が未知の名前になります。
+pristine な copy を `lib/` の外に置くと同じ症状が出るので、最初にこれが
+出たときは「minifier の bug ではない」をその方法で切り分けました
+——そして `lib/` の中に置いて比べたら**本物の差**（bug 7）が残った、
+という順序です。
 
 ## 未修正として残すもの
 
@@ -237,8 +279,8 @@ TypeScript を compile して**診断を比べます（`scripts/verify_real_worl
 - **exhaustive switch の false positive。** 全 case と `default` が
   `return` する switch に対して checker が
   `not all paths return` を出します。
-- **9 MB 入力で 15 分。** 3 MB の checker.ts が 68 秒、9 MB の
-  typescript.js が約 15 分。superlinear なので、どこかに quadratic な
+- **9 MB 入力で 13 分。** 3 MB の checker.ts が 66 秒、9 MB の
+  typescript.js が約 13 分。superlinear なので、どこかに quadratic な
   pass があります。
 
 ## この検証が corpus と違うところ
@@ -256,9 +298,14 @@ corpus の 148 件は「思いついた状況」の集合です。生成器
   両方で落ちていました。「両方の出力に同じ bug がある」を見るために
   reference leg（元の TS を Node の type stripping で実行）を足したのと
   同じ話が、flag の組み合わせについても要ります。
-- 6 は **flag の組み合わせ**が要る。`--mangle` 単体でも `--minify` 単体でも
-  正しく、両方で壊れます。2 も同じ性質でした（`--fold` と `--minify`）。
-  この形の bug は、pass を 1 つずつ検証する test では原理的に出ません。
+- 6 と 7 は **flag の組み合わせ**が要る。`--mangle` 単体でも `--minify`
+  単体でも正しく、両方で壊れます（7 に至っては、畳み込み自体が
+  post-mangle の block でしか発火しません）。2 も同じ性質でした
+  （`--fold` と `--minify`）。この形の bug は、pass を 1 つずつ検証する
+  test では原理的に出ません。
+- 7 は **意味のある入力を意味のある形で実行する**ことが要る。crash も
+  しないし、valid な JS でもあるし、型検査も走って本物のエラーも見つける
+  ——ただし答えが違う。「動いた」で止める検証では通ってしまいます。
 
 そして 3 段の gate のうち、どこで捕まったかが段ごとに違います。
 
@@ -266,8 +313,16 @@ corpus の 148 件は「思いついた状況」の集合です。生成器
 | --- | --- |
 | compile が通るか | 1（parse できない） |
 | 出力が有効な JS か（`node --check`） | 2、3 |
-| 実際に動かして観測が一致するか | 4、5、6 |
+| load して動くか | 6（`ReferenceError`） |
+| **出す答えが同じか** | **7（静かに間違う）** |
+| 実 package の観測が一致するか | 4、5 |
 
-**6 は最後の gate だけが捕まえました。** 出力は `node --check` を通り、
-corpus も 148 件通り、それでも動かすと `ReferenceError` でした。
-「valid な JS を吐いた」は「正しい JS を吐いた」ではありません。
+段が下に行くほど、上の段では見えないものが出ます。6 の時点で
+「`node --check` を通っても正しいとは限らない」でしたが、7 はさらに先で、
+**load できて、実行できて、型検査も走って、本物のエラーも見つけて、
+それでも答えが違う**という形でした。これを捕まえられるのは
+「minify した compiler で実際に compile して診断を比べる」leg だけです。
+
+そして 7 の副産物として、6 の修正で出力が 2,236,316 → 3,581,914 bytes に
+増えました。差の **1.35 MB は削除されていた function 宣言**です。
+「よく縮んだ」は「正しく縮んだ」でもありません。

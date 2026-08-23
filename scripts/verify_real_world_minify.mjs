@@ -336,7 +336,14 @@ function verifyTypescript() {
     return;
   }
 
-  const out = path.join(dir, "typescript.min.js");
+  // The output has to live in the package's own `lib/` directory.
+  // TypeScript resolves its default `lib.*.d.ts` files relative to the
+  // executing file, so a compiler run from anywhere else silently
+  // type-checks against no lib at all — `Math` becomes an unknown name.
+  // A pristine copy placed outside `lib/` reproduces that exactly, which
+  // is how this was ruled out as a minifier bug the first time it showed
+  // up.
+  const out = path.join(dir, "node_modules", "typescript", "lib", "typescript.min.js");
   const m = minify(lib, out, ["--minify", "--bundle", "--mangle"]);
   if (!m.ok) {
     record("typescript", false, `compile failed (${m.why})`);
@@ -366,6 +373,7 @@ function verifyTypescript() {
     `${bytes(b)} -> ${bytes(a)} bytes (${100 - Math.round((a * 100) / b)}% smaller) in ${m.seconds.toFixed(0)}s, compiles TypeScript identically`,
   );
   if (!keep) fs.rmSync(out, { force: true });
+  return;
 }
 
 // ---------------------------------------------------------------------
