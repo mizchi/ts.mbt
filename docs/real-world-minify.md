@@ -13,7 +13,7 @@
 | TypeScript 5.7.3（`src/compiler/checker.ts` と `lib/typescript.js`） | 3 MB / 9 MB の実 source を通せるか、出力が有効な JS か、compiler として動くか |
 
 結論を先に書くと、**この検証を始めた時点では 1 つも通りませんでした**。
-6 件の bug を潰して通るようになりました。うち 3 件は corpus では原理的に
+7 件の bug を潰して通るようになりました。うち 4 件は corpus では原理的に
 出ない種類のものです。
 
 ## 見つかった bug
@@ -134,7 +134,39 @@ import 宣言をそのまま前に、export 節をそのまま後ろに出せば
 （linker の rename map が要る `--bundle` 経路と違う点）。type-only の
 import / export は runtime に指す先が無いので落とします。
 
-### 6. TypeScript でない入力を通す手段が無かった（CLI）
+### 6. `return` の後の function 宣言が消える（peephole）
+
+`return` の後の function 宣言は到達不能ではありません。**hoist される**
+ので、return より前の code から呼べるし、`return f;` で外に渡せます。
+`typescript.js` は全体がこの書き方です。
+
+```js
+var createUIStringComparer = (() => {
+  return createIntlCollatorStringComparer;
+  function createIntlCollatorStringComparer(locale) { … }
+})();
+```
+
+peephole pass は最初の hard terminator で打ち切り、以降を全部落としてい
+ました。結果、minify した compiler は
+`var k2 = (() => d)()` —— **どこにも存在しない名前を return する形**に
+なり、require した瞬間に `ReferenceError: d is not defined`。
+
+`fold_block` は同じ問題を既に正しく扱っていて（宣言を集めて exit の前に
+戻す）、`peep_block` に同じ処理が無かった、という形です。到達不能な文は
+今も落とします。
+
+これも組み合わせでしか出ません。`--mangle` 単体なら rename して残り、
+`--minify` 単体ならこの block に到達せず、**両方指定すると消える**。
+test は 4 通り回します。名前ではなく function の本体（`-1`）を見ています
+——`--fold` を付けると 1 回しか使われない宣言は `return` の中に inline
+されるのが正しい挙動なので、名前や `function` の個数では判定できません。
+
+そして**この bug を捕まえられたのは「minify した compiler を実際に
+動かす」leg だけ**です。出力は `node --check` を通り、corpus も通り、
+それでも壊れていました。
+
+### 7. TypeScript でない入力を通す手段が無かった（CLI）
 
 型エラーは既定で出力を止めます。プログラムが間違っているときはそれが
 正しい。しかし**そもそも TypeScript でない入力**に対しては、pipeline
@@ -224,10 +256,18 @@ corpus の 148 件は「思いついた状況」の集合です。生成器
   両方で落ちていました。「両方の出力に同じ bug がある」を見るために
   reference leg（元の TS を Node の type stripping で実行）を足したのと
   同じ話が、flag の組み合わせについても要ります。
+- 6 は **flag の組み合わせ**が要る。`--mangle` 単体でも `--minify` 単体でも
+  正しく、両方で壊れます。2 も同じ性質でした（`--fold` と `--minify`）。
+  この形の bug は、pass を 1 つずつ検証する test では原理的に出ません。
 
-追加した gate は 2 つです。
+そして 3 段の gate のうち、どこで捕まったかが段ごとに違います。
 
-1. **出力が有効な JS であること。** `node --check`。minifier が invalid な
-   JS を吐くのは minify ではないのに、これまで suite の中で誰も見ていま
-   せんでした。
-2. **実 package の実行差分。** 上の React の表がそれです。
+| gate | 捕まえた bug |
+| --- | --- |
+| compile が通るか | 1（parse できない） |
+| 出力が有効な JS か（`node --check`） | 2、3 |
+| 実際に動かして観測が一致するか | 4、5、6 |
+
+**6 は最後の gate だけが捕まえました。** 出力は `node --check` を通り、
+corpus も 148 件通り、それでも動かすと `ReferenceError` でした。
+「valid な JS を吐いた」は「正しい JS を吐いた」ではありません。
