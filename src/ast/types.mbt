@@ -1032,6 +1032,13 @@ pub(all) struct TsModuleBlock {
   // passes (e.g. discriminant-tag string→number rewrite) can
   // enumerate every declared shape.
   type_aliases : Array[TsTypeAlias]
+  // `interface I { … }` declarations parsed at this module's top level.
+  // Same reason as `type_aliases`: erased at runtime, but a whole-program
+  // pass needs them to decide whether an annotation names a closed key
+  // set. Without them a `const x: I` annotation is indistinguishable
+  // from an opaque named type, which is the difference between a
+  // narrowed reservation and the wildcard.
+  interfaces : Array[TsInterface]
   // True when the module uses `export = <expr>` (CJS export assignment).
   // An `import X = require(...)` of such a module binds the ASSIGNED
   // entity, not a namespace object -- the bridge export resolution

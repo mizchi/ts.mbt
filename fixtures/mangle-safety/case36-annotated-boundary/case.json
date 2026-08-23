@@ -1,0 +1,24 @@
+{
+  "origin": "ts.mbt \u2014 an annotation that names an interface has to narrow the wildcard",
+  "what": "A boundary crossing whose value is annotated with a declared interface. The consumer can only read `topic` / `body`, so only those are reserved and the internal ledger stays manglable. Resolving `Named(\"Envelope\")` through the bundle's own declarations is what makes the advice \"annotate it\" actually work.",
+  "externals": [
+    "ext-bus"
+  ],
+  "stubs": {
+    "ext-bus": "export function publish(env) {\n  console.log(\"publish\", env.topic, env.body);\n}\n"
+  },
+  "exports": [
+    "send",
+    "lastTopicSeen"
+  ],
+  "expectKeep": [
+    "publish",
+    "topic",
+    "body"
+  ],
+  "expectMangle": [
+    "pendingCount",
+    "lastTopic"
+  ],
+  "expectStatus": "pass"
+}

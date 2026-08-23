@@ -147,7 +147,10 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
       self.parse_class_decl_with_abstract(true)
     }
     Interface => {
-      let _ = self.parse_interface()
+      // Erased at runtime, collected for the same reason type aliases
+      // are: a later pass has to be able to resolve an annotation that
+      // names this interface.
+      self.collected_interfaces.push(self.parse_interface())
       Empty
     }
     Type if self.peek_at(1).kind is Ident(_) => {

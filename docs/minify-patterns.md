@@ -53,6 +53,7 @@ allowlist です。同じ名前が両方に載る／片方だけに載るのが�
 | **discriminant literal → int** | **名前が escape 集合に無く、直接 read が全部 equality / `switch` 判別子、書き込みが全部同じ閉集合の string literal** | **実装済（下記）** |
 | method devirtualization | class が bundle 内部・未継承、method が値として取られない、receiver が escape しない | **やらない**（下記の採算計算） |
 | shape-colored property slots | 同一 slot を共有する 2 名が同じ shape に同時に載らない（式単位の型伝播が必要） | opt-in / 未証明 (`--mangle-properties-shape-color`) |
+| **型注釈による wildcard の狭め** | **注釈が閉じた key 集合を持つ（named 型は宣言が見えていて、index signature も不可視 base も無い）** | **実装済**（[`mangle-safety.md`](./mangle-safety.md#型注釈が-wildcard-を狭めるそして注釈が名前でも効く)） |
 | **dead class field elimination** | **field 名がどこからも read されず、escape 解析が予約せず、書く値が純粋** | **実装済（下記）** |
 | spread 結果への private name 参照を error にする | 型に「この object は spread 由来」という情報が必要 | 未実装（下記の TP 1 件と引き換え） |
 
@@ -591,6 +592,17 @@ observability lattice は **binding** 単位なので足りません
 - **purity は top-level 関数宣言しか見ません。** class method、object
   literal の method、nested function は対象外です。安全側（未証明＝
   impure）に倒れます。
+- **`as_const_inline` は assignment の receiver を見落としていました。**
+  `cfg.k = v` は statement (`PropAssign`) と expression
+  (`PropAssignExpr`) の 2 通りで AST に来ます。前者だけが receiver を
+  disqualify していたので、関数本体の中で書き換えられる object は
+  「mutation されていない const」と判定され、全 read site が初期値に
+  inline されていました（`--fold` 単体で再現、mangle と無関係）。
+  同じ形の穴が `AssignExpr` の左辺にもありました。**同じ意味の構文が
+  2 つある所は、片方だけ書いた時点で穴が空きます。** 型注釈の
+  `Named` 解決を入れて corpus に case36 を足したときに出ました ——
+  最適化を 1 つ通せるようにすると、その先で止まっていた別 pass の
+  bug が初めて観測できるようになる、という順序です。
 - **`JSON.stringify` を effect-free 扱いにしています。** `toJSON` と
   getter に到達するので厳密には getter の純粋性に依存します。purity
   pass は impure getter を warning として別途報告しており、実運用の

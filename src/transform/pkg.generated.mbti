@@ -31,11 +31,13 @@ pub fn build_symbol_graph(@ast.TsBlock, Map[String, Bool]) -> SymbolGraph
 
 pub fn build_symbol_graph_with_sinks(@ast.TsBlock, Map[String, Bool], host_shaped? : Map[String, Bool], host_returning? : Map[String, Bool]) -> (SymbolGraph, Array[(Sink, Int)])
 
+pub fn build_type_env(Array[@ast.TsInterface], Array[@ast.TsTypeAlias]) -> Map[String, @ast.TsType]
+
 pub fn bundle_modules(Map[String, String], String, BundleOptions) -> Result[BundleOutput, String]
 
 pub fn class_method_dce_block(@ast.TsBlock, keep? : Map[String, Bool]) -> @ast.TsBlock
 
-pub fn collect_externally_visible_props(@ast.TsBlock, Map[String, Bool]) -> Array[String]
+pub fn collect_externally_visible_props(@ast.TsBlock, Map[String, Bool], type_env? : Map[String, @ast.TsType]) -> Array[String]
 
 pub fn collect_sinks(@ast.TsBlock, Map[String, Bool]) -> Array[Sink]
 
@@ -47,7 +49,7 @@ pub fn emit_entry_dts(@ast.TsModule, Array[String], Map[String, String]) -> Stri
 
 pub fn entry_export_property_names(@ast.TsModule, Array[String]) -> Array[String]
 
-pub fn escape_breakdown(@ast.TsBlock, Map[String, Bool]) -> EscapeBreakdown
+pub fn escape_breakdown(@ast.TsBlock, Map[String, Bool], type_env? : Map[String, @ast.TsType]) -> EscapeBreakdown
 
 pub fn explain_dead_fields(@ast.TsBlock, Map[String, Bool]) -> Array[String]
 
@@ -105,7 +107,7 @@ pub fn plan_unused_params(@ast.TsBlock, keep? : Map[String, Bool], declines? : A
 
 pub fn reserve_props_from_sink(Sink, Int, SymbolGraph, Map[String, Bool], Map[String, Bool]) -> Unit
 
-pub fn reserved_props_from_observability(SymbolGraph, Map[Int, Observability]) -> Map[String, Bool]
+pub fn reserved_props_from_observability(SymbolGraph, Map[Int, Observability], type_env? : Map[String, @ast.TsType]) -> Map[String, Bool]
 
 pub fn switch_fold(@ast.TsBlock, SwitchFoldTable) -> @ast.TsBlock
 

@@ -225,6 +225,12 @@ pub struct Parser {
   // `export type T = …`. Threaded out via `TsModuleBlock` so the
   // bundle can run whole-program type-driven passes.
   collected_type_aliases : Array[@ast.TsTypeAlias]
+  // Interfaces declared anywhere in the module — `interface I { … }`,
+  // `export interface I { … }`, `declare interface I { … }`. Erased at
+  // runtime like a type alias, and threaded out the same way: the
+  // escape analysis resolves a `const x: I` annotation through this to
+  // decide whether `I`'s key set is closed.
+  collected_interfaces : Array[@ast.TsInterface]
   // Set when the module block parses `export = <expr>`.
   mut collected_export_equals : Bool
 } derive(Debug)
@@ -307,6 +313,7 @@ pub fn Parser::new_with_strict_and_jsx(
     collected_deprecations: {},
     collected_pure_declarations: {},
     collected_type_aliases: [],
+    collected_interfaces: [],
     collected_export_equals: false,
   }
 }
@@ -490,6 +497,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     collected_deprecations: {},
     collected_pure_declarations: {},
     collected_type_aliases: [],
+    collected_interfaces: [],
     collected_export_equals: false,
   }
 }

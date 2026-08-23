@@ -1272,6 +1272,61 @@ test "as-const: literal object property read inlines to the value" {
 }
 
 ///|
+test "as-const: a property write inside a function disqualifies the binding" {
+  // The receiver of a property write has to disqualify the candidate,
+  // or every read gets the stale initializer. The statement spelling
+  // (`PropAssign`) already did; the same write arrives as
+  // `PropAssignExpr` from inside a function body, and that arm dropped
+  // the receiver — so `send()` returned 0 forever while the object it
+  // read from was being incremented.
+  let files = vfs([
+    (
+      "entry.ts",
+      "const ledger = { pendingCount: 0, lastTopic: \"\" };\n" +
+      "export function send(topic: string): number {\n" +
+      "  ledger.pendingCount = ledger.pendingCount + 1;\n" +
+      "  ledger.lastTopic = topic;\n" +
+      "  return ledger.pendingCount;\n" +
+      "}\n" +
+      "export function last(): string { return ledger.lastTopic; }\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_treeshake(true).with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // The reads still go through the object.
+      assert_true(out.js.contains("ledger.pendingCount"))
+      assert_true(out.js.contains("ledger.lastTopic"))
+      // And neither read was replaced by the initializer's value.
+      assert_false(out.js.contains("return 0"))
+      assert_false(out.js.contains("return \"\""))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "as-const: a top-level property write also disqualifies it" {
+  // The statement spelling, for symmetry with the test above.
+  let files = vfs([
+    (
+      "entry.ts",
+      "const cfg = { tries: 1 };\n" +
+      "cfg.tries = 5;\n" +
+      "console.log(cfg.tries);\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_treeshake(true).with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_false(out.js.contains("console.log(1)"))
+      assert_true(out.js.contains("cfg.tries"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "as-const: bare reference disqualifies the binding" {
   let files = vfs([
     (

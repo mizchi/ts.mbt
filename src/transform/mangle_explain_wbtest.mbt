@@ -232,6 +232,227 @@ test "explain: a host-shaped read is attributed to the host" {
 }
 
 // ---------------------------------------------------------------------
+// Resolving the annotation the codebase actually writes
+// ---------------------------------------------------------------------
+
+///|
+/// The escape set, with the bundle's own interfaces / aliases resolvable.
+fn escaping_with_types(
+  source : String,
+  interfaces : Array[@ast.TsInterface],
+  aliases : Array[@ast.TsTypeAlias],
+) -> Array[String] raise {
+  let block = @parser.parse_block_from_source(source)
+  let externals : Map[String, Bool] = {}
+  for n in undeclared_referenced_names(block).keys() {
+    externals[n] = true
+  }
+  collect_externally_visible_props(
+    block,
+    externals,
+    type_env=build_type_env(interfaces, aliases),
+  )
+}
+
+///|
+fn iface(
+  name : String,
+  fields : Array[(String, @ast.TsType)],
+  extends? : Array[String] = [],
+  index_sig? : Bool = false,
+) -> @ast.TsInterface {
+  {
+    name,
+    type_params: [],
+    type_param_bounds: [],
+    extends_names: extends,
+    extends_args: [],
+    fields,
+    readonly_fields: [],
+    index_signatures: if index_sig {
+      [(@ast.TsType::String_, @ast.TsType::Number)]
+    } else {
+      []
+    },
+    method_type_params: [],
+    method_type_param_bounds: [],
+    internal_members: [],
+    deprecated_members: [],
+  }
+}
+
+///|
+test "type env: a named interface narrows the wildcard to its keys" {
+  let src =
+    #|const cfg: Cfg = { retries: 3, timeoutMs: 50 };
+    #|HostBridge.channel.post(cfg);
+    #|
+  // Unresolvable: `Cfg` names a shape the analysis can't see.
+  assert_true(escaping_with_types(src, [], []).contains("*"))
+  // Resolvable: the reservation is exactly `Cfg`'s keys.
+  let narrowed = escaping_with_types(
+    src,
+    [
+      iface("Cfg", [
+        ("retries", @ast.TsType::Number),
+        ("timeoutMs", @ast.TsType::Number),
+      ]),
+    ],
+    [],
+  )
+  assert_false(narrowed.contains("*"))
+  assert_true(narrowed.contains("retries"))
+  assert_true(narrowed.contains("timeoutMs"))
+}
+
+///|
+test "type env: a type alias resolves the same way" {
+  let src =
+    #|const cfg: Cfg = { retries: 3 };
+    #|HostBridge.channel.post(cfg);
+    #|
+  let narrowed = escaping_with_types(src, [], [
+    {
+      name: "Cfg",
+      type_params: [],
+      type_param_bounds: [],
+      type_: @ast.TsType::Struct("Cfg", [("retries", @ast.TsType::Number)]),
+    },
+  ])
+  assert_false(narrowed.contains("*"))
+  assert_true(narrowed.contains("retries"))
+}
+
+///|
+test "type env: an index signature keeps the wildcard" {
+  // `[k: string]: number` admits names nobody wrote down, so the
+  // annotation proves nothing.
+  let src =
+    #|const cfg: Bag = { retries: 3 };
+    #|HostBridge.channel.post(cfg);
+    #|
+  let result = escaping_with_types(
+    src,
+    [iface("Bag", [("retries", @ast.TsType::Number)], index_sig=true)],
+    [],
+  )
+  assert_true(result.contains("*"))
+}
+
+///|
+test "type env: an invisible base keeps the wildcard" {
+  // `interface Cfg extends Host` — whatever `Host` declares is part of
+  // what the consumer may read, and we can't see it. Reserving only
+  // `Cfg`'s own keys would rename a name the consumer reads, so the
+  // whole intersection has to fall back.
+  let src =
+    #|const cfg: Cfg = { retries: 3 };
+    #|HostBridge.channel.post(cfg);
+    #|
+  let unresolved = escaping_with_types(
+    src,
+    [iface("Cfg", [("retries", @ast.TsType::Number)], extends=["Host"])],
+    [],
+  )
+  assert_true(unresolved.contains("*"))
+  // With the base visible, both levels are reserved and nothing else.
+  let resolved = escaping_with_types(
+    src,
+    [
+      iface("Cfg", [("retries", @ast.TsType::Number)], extends=["Host"]),
+      iface("Host", [("hostId", @ast.TsType::Number)]),
+    ],
+    [],
+  )
+  assert_false(resolved.contains("*"))
+  assert_true(resolved.contains("retries"))
+  assert_true(resolved.contains("hostId"))
+}
+
+///|
+test "type env: a self-referential interface terminates" {
+  // `interface Node { next: Node }` — the type recurses, the key set
+  // does not.
+  let src =
+    #|const head: Node = { label: "a" };
+    #|HostBridge.channel.post(head);
+    #|
+  let result = escaping_with_types(
+    src,
+    [
+      iface("Node", [
+        ("label", @ast.TsType::String_),
+        ("next", @ast.TsType::Named("Node")),
+      ]),
+    ],
+    [],
+  )
+  assert_false(result.contains("*"))
+  assert_true(result.contains("label"))
+  assert_true(result.contains("next"))
+}
+
+///|
+test "type env: the wildcard explanation goes away once the name resolves" {
+  let block = @parser.parse_block_from_source(
+    (
+      #|const cfg: Cfg = { retries: 3 };
+      #|HostBridge.channel.post(cfg);
+      #|
+    ),
+  )
+  let externals : Map[String, Bool] = {}
+  for n in undeclared_referenced_names(block).keys() {
+    externals[n] = true
+  }
+  let before = escape_breakdown(block, externals)
+  assert_true(before.wildcard_reasons.length() > 0)
+  let after = escape_breakdown(
+    block,
+    externals,
+    type_env=build_type_env(
+      [iface("Cfg", [("retries", @ast.TsType::Number)])],
+      [],
+    ),
+  )
+  assert_eq(after.wildcard_reasons.length(), 0)
+}
+
+///|
+test "type env: the bundler picks up an interface the source declares" {
+  // End to end: the annotation an ordinary TypeScript file writes.
+  let files : Map[String, String] = {
+    "entry.ts": (
+      #|interface Envelope {
+      #|  topic: string;
+      #|  body: string;
+      #|}
+      #|const ledger = { pendingCount: 0 };
+      #|export function send(topic: string, body: string): number {
+      #|  ledger.pendingCount = ledger.pendingCount + 1;
+      #|  const envelope: Envelope = { topic, body };
+      #|  HostBridge.post(envelope);
+      #|  return ledger.pendingCount;
+      #|}
+      #|
+    ),
+  }
+  let opts = BundleOptions::default()
+    .with_mangle(true)
+    .with_mangle_properties(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // The consumer's names survive.
+      assert_true(out.js.contains("topic"))
+      assert_true(out.js.contains("body"))
+      // The internal one does not.
+      assert_false(out.js.contains("pendingCount"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+// ---------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------
 

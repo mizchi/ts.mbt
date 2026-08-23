@@ -243,6 +243,10 @@ priv struct ModuleNode {
   // tag-rewrite / dts-emit / future cross-module type-driven
   // passes consult these.
   type_aliases : Array[@ast.TsTypeAlias]
+  // Interfaces declared in this module. Same role as `type_aliases`:
+  // the escape analysis resolves an annotation that names one of these
+  // to decide whether its key set is closed.
+  interfaces : Array[@ast.TsInterface]
   // For CJS-wrapped modules (esbuild-style `((module)=>{...})({get exports(){return X;}, ...})`),
   // the top-level variable that holds the module's exports after the wrapper runs.
   // Named imports from such a module that can't be resolved via export_specs fall
@@ -492,6 +496,7 @@ pub fn bundle_modules(
   if opts.mangle || opts.treeshake || opts.fold {
     let combined_stmts : Array[@ast.TsStmt] = []
     let combined_type_aliases : Array[@ast.TsTypeAlias] = []
+    let combined_interfaces : Array[@ast.TsInterface] = []
     // Track each combined-statement's origin so the source-map can
     // map it back to its module after mangle / treeshake / fold
     // restructure the AST. Encoding: high 24 bits = source-id (the
@@ -530,6 +535,9 @@ pub fn bundle_modules(
       }
       for ta in m.type_aliases {
         combined_type_aliases.push(ta)
+      }
+      for i in m.interfaces {
+        combined_interfaces.push(i)
       }
     }
     let mut combined : @ast.TsBlock = {
@@ -686,15 +694,27 @@ pub fn bundle_modules(
         for n in undeclared_referenced_names(combined).keys() {
           externals[n] = true
         }
+        // A `const cfg: Cfg = …` that crosses the boundary reserves only
+        // `Cfg`'s keys instead of the wildcard — but only if the analysis
+        // can resolve `Cfg`. Without this the narrowing worked for an
+        // inline object type and silently didn't for the interface an
+        // actual codebase writes.
+        let type_env = build_type_env(
+          combined_interfaces, combined_type_aliases,
+        )
         if opts.explain {
           for
             line in format_escape_explanation(
-              escape_breakdown(combined, externals),
+              escape_breakdown(combined, externals, type_env~),
             ) {
             explain_escape.push(line)
           }
         }
-        let escapes = collect_externally_visible_props(combined, externals)
+        let escapes = collect_externally_visible_props(
+          combined,
+          externals,
+          type_env~,
+        )
         let mut wildcard = false
         for n in escapes {
           if n == "*" {
@@ -1122,6 +1142,7 @@ fn load_module_graph(
     import_decls: mb.imports,
     pure_declarations: mb.pure_declarations,
     type_aliases: mb.type_aliases,
+    interfaces: mb.interfaces,
     export_specs: mb.exports,
     reexport_specs: mb.reexports,
     cjs_exports_var: detect_cjs_exports_var(lowered),
@@ -1251,6 +1272,7 @@ fn load_module_graph(
     import_decls: mb.imports,
     pure_declarations: mb.pure_declarations,
     type_aliases: mb.type_aliases,
+    interfaces: mb.interfaces,
     export_specs: mb.exports,
     reexport_specs: mb.reexports,
     cjs_exports_var,

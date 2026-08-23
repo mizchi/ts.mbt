@@ -50,6 +50,7 @@ pub(all) struct EscapeBreakdown {
 pub fn escape_breakdown(
   block : @ast.TsBlock,
   external_bindings : Map[String, Bool],
+  type_env? : Map[String, @ast.TsType] = {},
 ) -> EscapeBreakdown {
   // Phase 0: whole-block provenance. Which binding names hold a value
   // the host owns, and which bundle functions hand one back. The graph
@@ -80,7 +81,11 @@ pub fn escape_breakdown(
   // FuncArg edges, so a value reaching a sink through a parameter or a
   // return still tracks back to the binding it came from.
   let obs_map = analyze_observability(graph, scoped_sinks)
-  let reserved_obs = reserved_props_from_observability(graph, obs_map)
+  let reserved_obs = reserved_props_from_observability(
+    graph,
+    obs_map,
+    type_env~,
+  )
   // A sink argument that IS an object literal (`external.send({ id: 1 })`)
   // has no free variable to seed, so the flow analysis never sees it.
   // Its keys leave all the same.
@@ -160,11 +165,11 @@ pub fn escape_breakdown(
       let (sym_id, obs) = entry
       if obs is External {
         let sym = graph.symbols[sym_id]
-        if type_observed_keys(sym.ts_type) is None {
+        if type_observed_keys(sym.ts_type, type_env~) is None {
           wildcard_reasons.push(
             "binding `" +
             sym.name +
-            "` crosses the bundle boundary and carries no closed type annotation, so every name on it is assumed reachable — annotating it with an object type whose keys are all literal narrows the reservation to those keys",
+            "` crosses the bundle boundary and carries no closed type annotation, so every name on it is assumed reachable — annotating it with an interface, a type alias, or an inline object type whose keys are all literal narrows the reservation to those keys",
           )
         }
       }

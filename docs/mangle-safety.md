@@ -116,6 +116,46 @@ foreign call です。`host_provenance_names` が block 全体でこの連立を
 予約すれば十分です（読まない名前は rename しようがない）。wildcard が必要
 なのは逆向き —— 解析できない本体に値を渡す側だけです。
 
+### 型注釈が wildcard を狭める（そして注釈が名前でも効く）
+
+出ていく値の wildcard は「解析できない本体が何を読むか分からない」から
+来ています。ここには型による逃げ道があります。値に閉じた key 集合を持つ
+型が付いていれば、consumer はその名前しか**合法に**読めません —— それ以上を
+読むのは consumer 側の型エラーです。なので wildcard の代わりにその key
+集合だけを予約できます。
+
+問題はどう書いた注釈が効くかでした。inline の object type は効くのに、
+実際の codebase が書く `interface` / `type` の名前は効かない —— `Named("Cfg")`
+を解決する手段が transform 層に無く、opaque な named type として `None` に
+落ちていたためです。これは「注釈を付けろ」という助言が黙って無効になる形
+なので、`build_type_env`（`flow_analysis.mbt`）で bundle が parse した
+declaration を name → shape の表にして解決するようにしました。
+`TsModuleBlock.interfaces` はそのために追加した経路です（type alias は
+既に同じ理由で通っていました）。
+
+解決の向きは安全側に倒しています。
+
+- **type 引数は key 集合を変えない。** `Box<string>` と `Box<number>` の
+  key は同じなので `Applied(n, _)` も名前で解決します。key を計算する型
+  （mapped type、`keyof`）には arm が無く `None` に落ちます。
+- **`extends` は intersection として解く。** `interface Cfg extends Host`
+  は `Struct(Cfg fields) & Named("Host")` になるので、`Host` が見えない
+  なら intersection 全体が `None` —— base の名前を落としたまま Cfg の key
+  だけ予約する、という間違いが起きません。
+- **index signature は key 集合を閉じない。** `[k: string]: number` を
+  持つ interface は `Object([(String_, Any)])` として model し、wildcard の
+  ままにします。
+- **自己参照は止まる。** `interface Node { next: Node }` は型としては再帰
+  しますが key 集合は再帰しないので、訪問済み名を持って打ち切ります。
+
+なお注釈で狭まるのは**その binding 自身の key 集合**だけで、入れ子の名前は
+別経路（External を root とする value tree の walk）が予約します。注釈を
+「深い」保証として使っているわけではありません。
+
+固定しているのは `case36-annotated-boundary` で、`Envelope` の
+`topic` / `body` が残り、同じ file の内部 ledger が rename されることを
+実行して確認しています。
+
 ## 検証: `fixtures/mangle-safety`
 
 モデルが正しいと主張するには、実際に壊れないことを示す必要があります。
@@ -141,12 +181,14 @@ corpus の 25 件は packelyze の `packages/transformer/fixtures`
 （`case00`〜`case25`、重複の `case07-missing` を除く）を TypeScript source
 ごと移植したものです。`_expected.js` は持ち込まず、期待値は「特定の
 mangler の出力」ではなく「振る舞い」として `case.json` に書いています。
-`case26` 以降は ts.mbt 側で追加した 5 件で、sink 規則の反転で塞いだ穴と
-allowlist の効きを固定しています。
+`case26` 以降は ts.mbt 側で追加した手書き case で、sink 規則の反転で塞いだ
+穴、allowlist の効き、DCE 系 pass の証明義務、型注釈による wildcard の
+狭まりを固定しています。`generated/` はモデルから払い出した 112 件で、
+軸と生成規則は [`docs/minify-patterns.md`](./minify-patterns.md) にあります。
 
 ### 現在の結果
 
-30 件中 **30 件 pass**、安全性違反 0 件。
+148 件（手書き 36 + 生成 112）中 **148 件 pass**、安全性違反 0 件。
 
 初回実行では 12 件が fail、7 件が checker / emit のギャップで compile
 できませんでした。内訳と対処:

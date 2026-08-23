@@ -43,13 +43,14 @@
 pub fn collect_externally_visible_props(
   block : @ast.TsBlock,
   external_bindings : Map[String, Bool],
+  type_env? : Map[String, @ast.TsType] = {},
 ) -> Array[String] {
   // A merge over `escape_breakdown`, which computes the same reserved
   // set in pieces and keeps the reason for each. Deliberately not a
   // second implementation: `--explain-mangle` has to describe the
   // decision this function makes, not a re-derivation of it that can
   // drift.
-  let b = escape_breakdown(block, external_bindings)
+  let b = escape_breakdown(block, external_bindings, type_env~)
   let reserved : Map[String, Bool] = {}
   for
     group in [

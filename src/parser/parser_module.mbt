@@ -3918,9 +3918,7 @@ fn Parser::parse_module_block_with_const_values(
           let _ = self.advance()
           let _ = self.parse_declare_values()
         }
-        Interface => {
-          let _ = self.parse_interface()
-        }
+        Interface => self.collected_interfaces.push(self.parse_interface())
         Class => {
           let _ = self.parse_declare_class(false)
         }
@@ -3955,7 +3953,7 @@ fn Parser::parse_module_block_with_const_values(
       continue
     }
     if self.check(Interface) {
-      let _ = self.parse_interface()
+      self.collected_interfaces.push(self.parse_interface())
       continue
     }
     match self.peek().kind {
@@ -4049,6 +4047,7 @@ fn Parser::parse_module_block_with_const_values(
       deprecations: self.collected_deprecations,
       pure_declarations: self.collected_pure_declarations,
       type_aliases: self.collected_type_aliases,
+      interfaces: self.collected_interfaces,
       has_export_equals: self.collected_export_equals,
     },
     const_values,
