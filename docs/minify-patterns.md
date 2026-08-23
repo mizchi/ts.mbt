@@ -53,7 +53,7 @@ allowlist です。同じ名前が両方に載る／片方だけに載るのが�
 | discriminant literal → int | その property の**値**が door 1・2 に到達せず、比較相手が常に同じ閉集合の literal | 未実装（per-(binding, property) の値観測が必要） |
 | method devirtualization | class が bundle 内部・未継承、method が値として取られない、receiver が escape しない | 未実装 |
 | shape-colored property slots | 同一 slot を共有する 2 名が同じ shape に同時に載らない（式単位の型伝播が必要） | opt-in / 未証明 (`--mangle-properties-shape-color`) |
-| dead class field elimination | field 名が read されず export surface 外、initializer が純粋 | 未実装（`dead_props` は ObjectLit のみ） |
+| **dead class field elimination** | **field 名がどこからも read されず、escape 解析が予約せず、書く値が純粋** | **実装済（下記）** |
 | spread 結果への private name 参照を error にする | 型に「この object は spread 由来」という情報が必要 | 未実装（下記の TP 1 件と引き換え） |
 
 ## 実装: inferred-purity DCE
@@ -220,6 +220,46 @@ default が外側から読む名前に parameter を rename すると隠れま�
 修正は「param を 1 つも bind する前に、default が参照する名前を外側 scope
 で解決して予約集合に入れる」。class method の param default にも同じ経路が
 あったので両方直しています。
+
+## 実装: dead class field elimination
+
+`this.x = …` は field を存在させる書き込みです。`x` をどこも読まず、
+escape 解析も予約しないなら、その書き込みの唯一の効果は「誰も観測できない
+field があること」です。
+
+`dead_props` が持っていた壁は 1 行でした。
+
+```moonbit
+PropAssign(t, name, v) => {
+  // `obj.x = …` writes to `x`, but it also makes `x` a
+  // potentially-observable name; keep it reserved.
+  out[name] = true      // ← 書き込みを read として数えていた
+```
+
+「書き込み = read」だと write-only field は永遠に落ちません。**書き込みは
+read ではない**に直し、観測可能かどうかは escape 解析 (`reserved`) の答えに
+委ねました。`reserved` は今や `this` 書き込み・`Object.keys`・`in` probe・
+export surface を全部見ているので、この委譲が成立します。
+
+落とすのは `PropAssign` と `Expr(PropAssignExpr(...))` の両方の綴り
+（constructor の field 書き込みは両方混在します）。値が純粋でないときは
+残します — `this.slot = register()` は `slot` が死んでいても走る必要が
+あります。
+
+### 前提として直したこと 2 件
+
+1. **method call が receiver 全体を escape させていた。** `c.add(1)` が
+   渡すのは `add` の**戻り値**で `c` ではありません。receiver 丸ごとを
+   escape させると、method を呼ばれた class の field は全部予約され、
+   この pattern は永久に不発です。known class の method を解決して戻り値
+   だけを escape させ、`this` に触る戻り値（`return this.rows`、fluent な
+   `return this`）は従来どおり receiver ごと escape に倒します。
+2. **`this` 書き込みの索引が bundle 全体だった。** `prop_assigns` は
+   receiver 名で引くので `this` は全 class の union です。1 つ escape する
+   class があると他の全 class の field が予約されます。class ごとの scan に
+   変えました（`index_prop_assigns` を scratch walk に対して再利用）。
+   native class の constructor は `NativeClassStmt(decl, ctor)` の第 2 要素に
+   いるので、そこも索引しています。
 
 ## テストパターンを払い出す
 

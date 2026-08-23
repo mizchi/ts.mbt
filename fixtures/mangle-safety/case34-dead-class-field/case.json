@@ -1,0 +1,19 @@
+{
+  "origin": "ts.mbt — dead class field elimination",
+  "what": "A field only ever written is droppable; the three neighbours are held by a read, an impure value, and a door (`JSON.stringify`, an `in` probe). Every one of them changes what the driver observes if dropped anyway.",
+  "exports": [
+    "report"
+  ],
+  "expectKeep": [
+    "sum",
+    "ticks",
+    "serialized",
+    "hasProbed",
+    "slot",
+    "probed"
+  ],
+  "expectMangle": [
+    "deadSlot"
+  ],
+  "expectStatus": "pass"
+}

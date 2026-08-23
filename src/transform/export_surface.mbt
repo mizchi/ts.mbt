@@ -50,6 +50,7 @@ pub fn exported_surface_props(
   let w = SurfaceWalk::{
     decls: {},
     classes: {},
+    class_ctors: {},
     funcs: {},
     prop_assigns: {},
     container_writes: {},
@@ -106,6 +107,10 @@ priv struct SurfaceWalk {
   decls : Map[String, @ast.TsExpr]
   // Top-level `class X { … }` declarations.
   classes : Map[String, @ast.TsClassDecl]
+  // The constructor of a native class declaration, which the AST keeps
+  // beside the decl rather than on it (`NativeClassStmt(decl, ctor)`).
+  // The instance's field writes usually live here.
+  class_ctors : Map[String, @ast.TsFunc]
   // Top-level `function f(…) { … }` declarations, for resolving a
   // call whose result escapes back to the callee's returns.
   funcs : Map[String, @ast.TsFunc]
@@ -154,7 +159,13 @@ fn index_top_level_decls(w : SurfaceWalk, block : @ast.TsBlock) -> Unit {
           _ => ()
         }
       }
-      NativeClassStmt(decl, _) => w.classes[decl.name] = decl
+      NativeClassStmt(decl, ctor) => {
+        w.classes[decl.name] = decl
+        match ctor {
+          Some(f) => w.class_ctors[decl.name] = f
+          None => ()
+        }
+      }
       // `var a = 1, b = 2;` and the class-lift pass both nest
       // declarations one block deep.
       Block(inner) => index_top_level_decls(w, inner)
@@ -344,11 +355,11 @@ fn surface_escape_class(
   // expression visitor never sees. Without this, every field of an
   // escaping class instance looked manglable.
   //
-  // `prop_assigns` is indexed by receiver name across the whole block,
-  // so `this` collects the writes of every class in the bundle. That
-  // over-reserves when one class escapes and another doesn't; the
-  // alternative — a per-class scan — buys precision we don't need yet,
-  // and erring this way only costs bytes.
+  // Scoped to THIS class's own bodies. The block-wide `prop_assigns`
+  // index keys writes by receiver name, so `this` there is the union of
+  // every class in the bundle — sound, but it means one escaping class
+  // reserves every other class's fields, which leaves dead-field
+  // elimination with nothing to do.
   //
   // Note the filter: only mtsc's synthesised markers are excluded, NOT
   // `decl.private_members`. TypeScript's `private` is a compile-time
@@ -356,19 +367,54 @@ fn surface_escape_class(
   // there in `Object.keys` and `JSON.stringify` output. Real `#x`
   // fields are desugared to `__private_brand__…` markers, which the
   // marker check does catch.
-  match w.prop_assigns.get("this") {
-    Some(writes) =>
-      for entry in writes {
-        if !is_internal_marker_prop(entry.0) {
-          w.reserved[entry.0] = true
-          surface_escape_expr(w, entry.1, depth + 1)
-        }
-      }
-    None => ()
+  for entry in class_this_writes(decl, w.class_ctors.get(decl.name)) {
+    if !is_internal_marker_prop(entry.0) {
+      w.reserved[entry.0] = true
+      surface_escape_expr(w, entry.1, depth + 1)
+    }
   }
   for base in decl.base_names {
     surface_enqueue(w, base)
   }
+}
+
+///|
+/// `this.name = value` writes inside one class's own constructor and
+/// method bodies — the runtime shape of its instances.
+///
+/// Reuses `index_prop_assigns` (which already handles both the statement
+/// and expression spellings, and descends into nested function bodies)
+/// against a scratch walk, so nothing here has to duplicate that walk.
+fn class_this_writes(
+  decl : @ast.TsClassDecl,
+  ctor : @ast.TsFunc?,
+) -> Array[(String, @ast.TsExpr)] {
+  let scratch : SurfaceWalk = {
+    decls: {},
+    classes: {},
+    class_ctors: {},
+    funcs: {},
+    prop_assigns: {},
+    container_writes: {},
+    reserved: {},
+    visited: {},
+    queue: [],
+  }
+  match decl.constructor_body {
+    Some(b) => index_prop_assigns(scratch, b)
+    None => ()
+  }
+  match ctor {
+    Some(f) => index_prop_assigns(scratch, f.body)
+    None => ()
+  }
+  for m in decl.methods {
+    match m.body {
+      Some(b) => index_prop_assigns(scratch, b)
+      None => ()
+    }
+  }
+  scratch.prop_assigns.get("this").unwrap_or([])
 }
 
 ///|
@@ -437,8 +483,25 @@ fn surface_escape_expr(
       surface_escape_expr(w, callee, depth + 1)
       surface_escape_callback_args(w, args, depth)
     }
-    MethodCall(recv, _, args) => {
-      surface_escape_expr(w, recv, depth + 1)
+    MethodCall(recv, meth, args) => {
+      // `c.add(1)` hands out what `add` RETURNS, not `c`. Escaping the
+      // whole receiver is the safe default and was the only behaviour
+      // here, but it reserves every field of every class anyone calls a
+      // method on — which makes dead-field elimination inert.
+      //
+      // So resolve the method on a known class and escape its returns
+      // instead. The fallback stays for everything else, and for the two
+      // shapes where the receiver really does leave: a method that
+      // returns `this` (a fluent API) or one whose return mentions `this`
+      // at all (`return this.rows`), where following the return would
+      // need to know the instance's shape anyway.
+      match surface_method_returns(w, recv, meth) {
+        Some(returns) =>
+          for r in returns {
+            surface_escape_expr(w, r, depth + 1)
+          }
+        None => surface_escape_expr(w, recv, depth + 1)
+      }
       surface_escape_callback_args(w, args, depth)
     }
     New(name, args) | NewExpr(Var(name), args) => {
@@ -492,6 +555,58 @@ fn surface_escape_expr(
     ComputedProp(_, value) => surface_escape_expr(w, value, depth + 1)
     _ => ()
   }
+}
+
+///|
+/// The `return` expressions of `recv.meth(...)`, when `recv` resolves to
+/// an instance of a class this block declares and none of those returns
+/// mentions `this`.
+///
+/// `None` means "couldn't establish it" and the caller falls back to
+/// escaping the receiver whole.
+fn surface_method_returns(
+  w : SurfaceWalk,
+  recv : @ast.TsExpr,
+  meth : String,
+) -> Array[@ast.TsExpr]? {
+  let class_name = match recv {
+    @ast.TsExpr::Var(n) =>
+      match w.decls.get(n) {
+        Some(@ast.TsExpr::New(c, _)) => c
+        Some(@ast.TsExpr::NewExpr(@ast.TsExpr::Var(c), _)) => c
+        _ => return None
+      }
+    _ => return None
+  }
+  let decl = match w.classes.get(class_name) {
+    Some(d) => d
+    None => return None
+  }
+  for m in decl.methods {
+    if m.name != meth {
+      continue
+    }
+    let body = match m.body {
+      Some(b) => b
+      None => return None
+    }
+    let returns : Array[@ast.TsExpr] = []
+    collect_own_returns_block(body, returns)
+    // A return that touches `this` puts part of the instance in the
+    // caller's hands, and resolving which part needs the shape we are
+    // trying to avoid committing to.
+    for r in returns {
+      let refs : Map[String, Bool] = {}
+      collect_var_refs_in_expr(r, refs)
+      if refs.contains("this") {
+        return None
+      }
+    }
+    return Some(returns)
+  }
+  // The name isn't a method on that class — a field holding a function,
+  // an inherited member, a built-in. Not ours to reason about.
+  None
 }
 
 ///|
