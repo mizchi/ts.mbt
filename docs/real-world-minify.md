@@ -5,7 +5,7 @@
 せん。そこで、公開されている実コードを minify して、同じ観測が返るかを
 確かめました。
 
-対象は 2 つ。
+対象は 3 つ（+ terser との size 比較）。
 
 | 対象 | 何を見るか |
 | --- | --- |
@@ -300,6 +300,85 @@ pristine な copy を `lib/` の外に置くと同じ症状が出るので、最
 - **9 MB 入力で 13 分。** 3 MB の checker.ts が 66 秒、9 MB の
   typescript.js が約 13 分。superlinear なので、どこかに quadratic な
   pass があります。
+
+## terser との比較
+
+`scripts/compare_terser.mjs`（`node scripts/compare_terser.mjs`）。全列を
+**実行が通った出力**に対してのみ測ります —— 壊れている出力の byte 数は
+結果ではありません。
+
+React stack 5 file（1,625,744 bytes）:
+
+| variant | bytes | gzip KiB | 減 | 挙動 |
+| --- | --- | --- | --- | --- |
+| mtsc `--mangle` | 493,820 | 150.9 | 70% | 一致 |
+| mtsc `+ --mangle-properties` | 493,820 | 150.9 | 70% | 一致 |
+| terser `--compress --mangle` | 478,129 | 145.2 | 71% | 一致 |
+| terser `+ --mangle-props` | 426,330 | 138.1 | 74% | **throw する** |
+
+読み取れること。
+
+- **既定同士なら terser より 3.3%（gzip 3.9%）大きいだけ。** 一から書いた
+  minifier としては妥当な位置です。
+- **`--mangle-properties` を付けても 1 byte も変わらない。** これは失敗では
+  なく、この target では解析が正しく降りているということです（下記）。
+- **terser の unsafe な property rename の取り分は 11% で、React を壊します。**
+  型駆動の安全な property mangling が奪おうとしている賞金の大きさが
+  これです。上限が 11% だと分かっているのは有用な情報で、
+  「まず正しく、次に 11%」という順序が正しいことも意味します。
+
+## target の選び方（React は不適切）
+
+React は **TypeScript ではない**うえに CJS です。CJS の `exports` /
+`module` は host が所有する object なので wildcard が立ち、property
+mangling は抑止されます。上の表で `mtsc` と `mtsc +props` が byte 単位で
+同一なのがその証拠です。**つまり React は property mangling の主張を
+何も測っていません。**
+
+`--explain-mangle` を screening に使って、実在の TypeScript library を
+当たった結果:
+
+| target | 形 | 結果 | wildcard の理由 |
+| --- | --- | --- | --- |
+| zod 4.4.3 | TS source 116 file（npm に同梱） | bundle 成功 9.4 秒 → 310,621 bytes | `Proxy` / `Object.defineProperty` の handler 引数（`target` / `prop` / `receiver` / `mergedDescriptors`） |
+| valibot 1.4.2 | TS source 557 file | bundle 成功 → 94,881 bytes | quoted property (`~run`) 経由の dispatch と `unknown` 型の入力 |
+| TypeScript `src/compiler` | TS source | **不可** | `diagnosticInformationMap.generated.ts` が build 生成物でリポジトリに無い |
+| @trpc/server | TS source 82 file | **不可** | 自己パッケージ名 import（`@trpc/server`）の path mapping 未対応 |
+
+zod と valibot はどちらも「解析が正しく降りた」ケースです。動的
+dispatch を持つ library では、door 2 が本当に開いています。
+
+ただし valibot は最初、**こちらの過剰な保守性**で降りていました:
+境界を越える `string` 引数（`lang` / `message` —— locale 参照と
+error message）が単独で wildcard を立てていた。primitive は built-in
+以外の property surface を持たないので予約すべき名前が無く、
+これは bug でした（修正済み）。`unknown` / `any` は今も wildcard を
+立てます —— そちらは本当に何の形にもなり得るので正しい判断です。
+
+### 何を target にすべきか
+
+効く順に。
+
+1. **library ではなく application。** app には公開 API が無いので door 1 が
+   ほぼ空になります。解析が想定していた形そのもので、取り分が最大に
+   なるのはここです（`vite-plugin-moonbit` の consumer、あるいは自前の
+   TS アプリ）。
+2. **内部 dispatch が静的な TS library。** `Proxy` を使わない、
+   `Object.defineProperty` を使わない、`obj[dynamicKey]` を使わない、
+   quoted property 経由で呼ばない。zod と valibot を落としたのは
+   この条件です。
+3. **注釈された object 内部を持つもの。** mangle する対象があること。
+4. **公開面が狭いもの。**
+
+そして screening は 1 コマンドで済みます。
+
+```sh
+mtsc <entry.ts> --bundle --explain-mangle --out /dev/null
+```
+
+`SUPPRESSED` なら、その下に**どの binding が原因か**が名前で出ます。
+target 候補が使えるかどうか、使えないなら何を直せば使えるかが、
+これで分かります。
 
 ## この検証が corpus と違うところ
 
