@@ -1183,18 +1183,39 @@ fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
         stmts.pop() |> ignore
         folded = true
       }
-      // `let/const/var x = expr; return x;` → `return expr;`
-      (Let(Ident(vname), _, init), Return(Some(Var(rname)))) if vname == rname => {
+      // `let/const/var x = expr; return x;` → `return expr;` — unless
+      // `expr` refers to `x` itself. A self-referential initializer is
+      // ordinary JavaScript when the reference is deferred into a
+      // closure, and TypeScript's own compiler host is built that way:
+      //
+      //     const compilerHost = {
+      //       getSourceFile: withCache(f => compilerHost.readFile(f)),
+      //       …
+      //     };
+      //     return compilerHost;
+      //
+      // Fold that and the closure points at a name that no longer
+      // exists — or, after mangling, at whatever else now holds the
+      // short name. Here it silently became a different function, so
+      // every lib file read came back empty and the minified compiler
+      // reported `Cannot find name 'Math'`.
+      (Let(Ident(vname), _, init), Return(Some(Var(rname)))) if foldable_tail_decl(
+          vname, rname, init,
+        ) => {
         stmts[n - 2] = Return(Some(peep_expr(init, ctx)))
         stmts.pop() |> ignore
         folded = true
       }
-      (Const(Ident(vname), _, init), Return(Some(Var(rname)))) if vname == rname => {
+      (Const(Ident(vname), _, init), Return(Some(Var(rname)))) if foldable_tail_decl(
+          vname, rname, init,
+        ) => {
         stmts[n - 2] = Return(Some(peep_expr(init, ctx)))
         stmts.pop() |> ignore
         folded = true
       }
-      (Var(Ident(vname), _, init), Return(Some(Var(rname)))) if vname == rname => {
+      (Var(Ident(vname), _, init), Return(Some(Var(rname)))) if foldable_tail_decl(
+          vname, rname, init,
+        ) => {
         stmts[n - 2] = Return(Some(peep_expr(init, ctx)))
         stmts.pop() |> ignore
         folded = true
@@ -1219,6 +1240,30 @@ fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
     return { stmts: result, stmt_positions: [] }
   }
   { stmts, stmt_positions: block.stmt_positions }
+}
+
+///|
+/// `let x = expr; return x;` collapses only when `x` is what is
+/// returned and `expr` does not refer to `x` itself.
+fn foldable_tail_decl(
+  vname : String,
+  rname : String,
+  init : @ast.TsExpr,
+) -> Bool {
+  vname == rname && !expr_refers_to(init, vname)
+}
+
+///|
+/// Does `expr` mention `name` anywhere, nested functions included?
+///
+/// `collect_var_refs_in_expr_local` deliberately stops at a function
+/// boundary. For a self-reference check that is exactly the wrong place
+/// to stop: the reference that matters is the one inside a closure,
+/// where it is legal precisely because it is deferred.
+fn expr_refers_to(expr : @ast.TsExpr, name : String) -> Bool {
+  let refs : Map[String, Bool] = {}
+  collect_var_refs_in_expr(expr, refs)
+  refs.contains(name)
 }
 
 ///|

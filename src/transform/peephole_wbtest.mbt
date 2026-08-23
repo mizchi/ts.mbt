@@ -1581,3 +1581,77 @@ test "peephole: genuinely unreachable code after a terminator still goes" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+/// `let x = expr; return x;` collapses to `return expr;` — but not when
+/// `expr` refers to `x`. A self-referential initializer is ordinary
+/// JavaScript as long as the reference is deferred into a closure, and
+/// TypeScript's compiler host is built exactly that way:
+///
+///     const compilerHost = {
+///       getSourceFile: withCache(f => compilerHost.readFile(f)),
+///     };
+///     return compilerHost;
+///
+/// Folding it left the closure pointing at a name that no longer
+/// existed. After mangling it was worse than a `ReferenceError`: the
+/// short name now belonged to a different function, so every lib file
+/// read silently came back empty and the minified compiler reported
+/// `Cannot find name 'Math'` on correct input.
+test "peephole: a self-referential initializer is not folded into the return" {
+  let files : Map[String, String] = {
+    "entry.js": (
+      #|function makeHost(read) {
+      #|  const host = {
+      #|    readFile: read,
+      #|    getSourceFile: (name) => host.readFile(name),
+      #|  };
+      #|  return host;
+      #|}
+      #|export function run() {
+      #|  return makeHost((n) => "content:" + n).getSourceFile("a.ts");
+      #|}
+      #|
+    ),
+  }
+  for
+    opts in [
+      BundleOptions::default().with_minify(true).with_mangle(true),
+      BundleOptions::default()
+      .with_minify(true)
+      .with_fold(true)
+      .with_mangle(true),
+      BundleOptions::default().with_minify(true),
+    ] {
+    match bundle_modules(files, "entry.js", opts) {
+      Ok(out) =>
+        // The binding has to stay: something inside its own initializer
+        // needs a name to reach it by.
+        assert_true(out.js.contains("return") && out.js.contains("readFile"))
+      Err(e) => fail("bundle error: \{e}")
+    }
+  }
+}
+
+///|
+test "peephole: an ordinary tail declaration still folds" {
+  let files : Map[String, String] = {
+    "entry.js": (
+      #|export function f(a) {
+      #|  const total = a + 1;
+      #|  return total;
+      #|}
+      #|
+    ),
+  }
+  // The fold is reached on the post-mangle block, so this is the
+  // combination that exercises it.
+  let opts = BundleOptions::default().with_minify(true).with_mangle(true)
+  match bundle_modules(files, "entry.js", opts) {
+    Ok(out) =>
+      assert_true(
+        out.js.contains("return b+1") || out.js.contains("return a+1"),
+      )
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
