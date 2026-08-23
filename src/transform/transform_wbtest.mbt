@@ -310,3 +310,46 @@ test "emit: an explicit `undefined` initializer survives pretty output" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+/// A module's boundary is part of the module. The single-file path
+/// emitted only the runtime statements, so `mtsc src/index.ts --out
+/// dist/index.js` — the first command the README shows — produced a file
+/// that referenced its imports without importing them and exported
+/// nothing at all.
+test "transform: single-file output keeps its imports and exports" {
+  let src =
+    #|import { join } from "node:path";
+    #|export const dir = join("a", "b");
+    #|export default function main() { return dir; }
+    #|export { dir as alias };
+    #|export type Only = string;
+    #|
+  for mangle in [false, true] {
+    match transform_source_full(src, JsxConfig::default(), mangle~) {
+      Ok(out) => {
+        assert_true(out.js.contains("import { join } from \"node:path\""))
+        assert_true(out.js.contains("export default main"))
+        assert_true(out.js.contains("dir as alias"))
+        // A type-only export has nothing to point at at runtime.
+        assert_false(out.js.contains("Only"))
+      }
+      Err(e) => fail("transform error: \{e}")
+    }
+  }
+}
+
+///|
+test "transform: a script with no module boundary gains none" {
+  match
+    transform_source_full(
+      "const a = 1;\nconsole.log(a);\n",
+      JsxConfig::default(),
+    ) {
+    Ok(out) => {
+      assert_false(out.js.contains("export"))
+      assert_false(out.js.contains("import"))
+    }
+    Err(e) => fail("transform error: \{e}")
+  }
+}

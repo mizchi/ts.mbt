@@ -13,7 +13,7 @@
 | TypeScript 5.7.3（`src/compiler/checker.ts` と `lib/typescript.js`） | 3 MB / 9 MB の実 source を通せるか、出力が有効な JS か、compiler として動くか |
 
 結論を先に書くと、**この検証を始めた時点では 1 つも通りませんでした**。
-5 件の bug を潰して通るようになりました。うち 3 件は corpus では原理的に
+6 件の bug を潰して通るようになりました。うち 3 件は corpus では原理的に
 出ない種類のものです。
 
 ## 見つかった bug
@@ -111,7 +111,30 @@ module.b.a = …;                   // 出力（`exports` まで rename）
 立って property mangling が抑止されます —— 安全側の判定は最初から正しく
 働いていて、届いていなかっただけです。
 
-### 5. TypeScript でない入力を通す手段が無かった（CLI）
+### 5. 単一ファイル経路が module の境界を落とす（emit）
+
+`mtsc src/index.ts --out dist/index.js`（`--bundle` なし）は
+`transform_source_full` を通り、**runtime 文だけ**を emit していました。
+`mb.imports` / `mb.exports` を再出力しないので:
+
+```ts
+import { join } from "node:path";
+export const dir = join("a", "b");
+export default function main() { return dir; }
+```
+→
+```js
+const dir = join("a", "b");          // join は未定義参照
+function main() { return dir; }      // export は 1 つも無い
+```
+
+README と `docs/mtsc.md` が最初に見せる使い方がこれです。この経路は
+`preserve_top_level` で top-level 名を一切 rename しないので、
+import 宣言をそのまま前に、export 節をそのまま後ろに出せば済みます
+（linker の rename map が要る `--bundle` 経路と違う点）。type-only の
+import / export は runtime に指す先が無いので落とします。
+
+### 6. TypeScript でない入力を通す手段が無かった（CLI）
 
 型エラーは既定で出力を止めます。プログラムが間違っているときはそれが
 正しい。しかし**そもそも TypeScript でない入力**に対しては、pipeline
@@ -159,16 +182,15 @@ property mangling が効いた結果ではありません。react-dom が
 3,065,627 → 1,521,251 bytes（50% 減）、`--minify`、68 秒。
 `node --check` 通過。
 
-checker.ts 単体は module graph の一部なので実行はできません
-（`./_namespaces/ts.js` に依存し、単一ファイル経路は import / export を
-落とすため —— 下の「未修正」参照）。ここで確かめたのは、3 MB の実
-TypeScript を parse して有効な JS を吐けること、そして 1・2・3 の bug が
-すべてこの file で発火していたことです。
+checker.ts 単体は module graph の一部（`./_namespaces/ts.js` に依存）なので
+実行はできません。ここで確かめたのは、3 MB の実 TypeScript を parse して
+有効な JS を吐けること、そして 1・2・3 の bug がすべてこの file で
+発火していたことです。
 
 ### `lib/typescript.js`（compiler 本体）
 
 9 MB の published bundle を minify し、**minify した compiler で
-TypeScript を compile して**診断を比べます（`verify/tsapp.cjs`）。
+TypeScript を compile して**診断を比べます（`scripts/verify_real_world_minify.mjs`）。
 `checker.ts` を含む file なので、これが「checker が動く」の実質的な確認に
 なります。観測は `transpileModule` の出力、`createProgram` +
 `getPreEmitDiagnostics` の診断（code / 行 / message）、`TypeChecker` で
@@ -180,13 +202,6 @@ TypeScript を compile して**診断を比べます（`verify/tsapp.cjs`）。
 
 検証中に見つけたが、この作業の範囲外として報告だけしているもの。
 
-- **単一ファイル経路が import / export を落とす。**
-  `mtsc src/index.ts --out dist/index.js`（`--bundle` なし）は
-  `transform_source_full` を通り、runtime 文だけを emit します。
-  `mb.imports` / `mb.exports` を再出力しないので、
-  `import { join } from "node:path"` は消え（`join` は未定義参照になる）、
-  `export` は 1 つも残りません。README / `docs/mtsc.md` が最初に見せる
-  使い方がこれです。`--bundle` 経路は正しく出力します。
 - **exhaustive switch の false positive。** 全 case と `default` が
   `return` する switch に対して checker が
   `not all paths return` を出します。

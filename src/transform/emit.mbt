@@ -285,17 +285,22 @@ pub fn transform_source_full(
   // declarations even though the parser's stmt-level path drops
   // their runtime stmts. Falls back to the plain block parse if
   // the source isn't a module-shaped fragment.
-  let (block, positions, enums) = try
+  // `imports` / `exports` come along because the module's boundary is
+  // part of the module. Emitting only the runtime statements produced a
+  // file that referenced its imports without importing them and
+  // exported nothing at all — for `mtsc src/index.ts --out dist/index.js`,
+  // the first thing the README shows.
+  let (block, positions, enums, imports, exports) = try
     @parser.parse_module_block_from_source(source)
   catch {
     _ =>
       try @parser.parse_block_from_source_with_positions(source) catch {
         e => return Err("parse error: \{e}")
       } noraise {
-        pair => (pair.0, pair.1, [])
+        pair => (pair.0, pair.1, [], [], [])
       }
   } noraise {
-    mb => (mb.block, mb.block.stmt_positions, mb.enums)
+    mb => (mb.block, mb.block.stmt_positions, mb.enums, mb.imports, mb.exports)
   }
   let cfg = extract_jsx_pragmas(source, base)
   let (lowered_jsx, runtime_refs) = lower_block_with_runtime_imports(cfg, block)
@@ -355,6 +360,15 @@ pub fn transform_source_full(
     e.write("/jsx-runtime\";")
     e.nl()
   }
+  // The module's own imports, verbatim. `preserve_top_level` keeps every
+  // top-level name unmangled in this path, so the bindings these
+  // introduce still match their use sites.
+  for decl in imports {
+    if !decl.type_only {
+      emit_import_decl(e, decl)
+      e.nl()
+    }
+  }
   // Source-map positions are tied to the unmangled block — when
   // mangling reorders or drops statements the position array would
   // need to be updated in lockstep. For now, skip per-statement
@@ -375,11 +389,99 @@ pub fn transform_source_full(
       e.nl()
     }
   }
+  emit_module_exports(e, exports, declared_top_level_names(mangled))
   let sm_json : String? = match e.smap {
     Some(b) => Some(b.to_json(source~, source_path~, output_path~))
     None => None
   }
   Ok({ js: e.to_string(), sourcemap: sm_json })
+}
+
+///|
+/// Every name declared at the top level of `block`.
+///
+/// An export whose local name is not among them has nothing to point at:
+/// a type-only export (`export type T`, erased) or a name a pass
+/// dropped. Emitting it anyway produces a bundle that fails to load,
+/// which is worse than an export the consumer finds missing.
+fn declared_top_level_names(block : @ast.TsBlock) -> Map[String, Bool] {
+  let out : Map[String, Bool] = {}
+  fn note(b : @ast.TsBinding) -> Unit {
+    match b {
+      Ident(n) => out[n] = true
+      _ => ()
+    }
+  }
+
+  for s in block.stmts {
+    match s {
+      Var(b, _, _) | Let(b, _, _) | Const(b, _, _) => note(b)
+      NativeClassStmt(decl, _) => out[decl.name] = true
+      _ => ()
+    }
+  }
+  out
+}
+
+///|
+/// Re-emit the module's `export` clause. Mirrors `emit_entry_exports` in
+/// `bundle.mbt`, minus the linker's rename map: this path leaves every
+/// top-level name alone, so a local name needs no translation.
+fn emit_module_exports(
+  e : Emitter,
+  exports : Array[@ast.TsExportSpec],
+  declared : Map[String, Bool],
+) -> Unit {
+  let named : Array[(String, String)] = []
+  let mut default_local : String? = None
+  for ex in exports {
+    if !declared.contains(ex.local_name) {
+      continue
+    }
+    if ex.export_name == "default" {
+      default_local = Some(ex.local_name)
+    } else {
+      named.push((ex.local_name, ex.export_name))
+    }
+  }
+  if named.length() > 0 || default_local is Some(_) {
+    // The body emitter does not end on a newline in every path; start
+    // the export clause on its own line rather than gluing it to
+    // whatever statement came last.
+    e.nl()
+  }
+  match default_local {
+    Some(local_) => {
+      e.write("export default ")
+      e.write(local_)
+      e.semi()
+      e.nl()
+    }
+    None => ()
+  }
+  if named.length() > 0 {
+    e.write("export")
+    e.space()
+    e.write("{")
+    e.space()
+    for i, pair in named {
+      if i > 0 {
+        e.write(",")
+        e.space()
+      }
+      if pair.0 == pair.1 {
+        e.write(pair.0)
+      } else {
+        e.write(pair.0)
+        e.write(" as ")
+        e.write(pair.1)
+      }
+    }
+    e.space()
+    e.write("}")
+    e.semi()
+    e.nl()
+  }
 }
 
 ///|
