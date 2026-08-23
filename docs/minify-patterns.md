@@ -50,8 +50,8 @@ allowlist です。同じ名前が両方に載る／片方だけに載るのが�
 | 型駆動 fold | `x` の静的型が単一 primitive で、narrowing に依存しない | 実装済 (`type_fold.mbt`) |
 | type predicate inline | `x is T` 注釈があり body が単一 `return expr` | 実装済 (`predicate_inline.mbt`) |
 | **未使用 parameter 削除** | **関数が export surface に無く、参照が全部 callee 位置、`arguments` を読まず、param が全部素の識別子、落とす引数式が純粋、末尾の連続分だけ** | **実装済（下記）** |
-| discriminant literal → int | その property の**値**が door 1・2 に到達せず、比較相手が常に同じ閉集合の literal | 未実装（per-(binding, property) の値観測が必要） |
-| method devirtualization | class が bundle 内部・未継承、method が値として取られない、receiver が escape しない | 未実装 |
+| **discriminant literal → int** | **名前が escape 集合に無く、直接 read が全部 equality / `switch` 判別子、書き込みが全部同じ閉集合の string literal** | **実装済（下記）** |
+| method devirtualization | class が bundle 内部・未継承、method が値として取られない、receiver が escape しない | **やらない**（下記の採算計算） |
 | shape-colored property slots | 同一 slot を共有する 2 名が同じ shape に同時に載らない（式単位の型伝播が必要） | opt-in / 未証明 (`--mangle-properties-shape-color`) |
 | **dead class field elimination** | **field 名がどこからも read されず、escape 解析が予約せず、書く値が純粋** | **実装済（下記）** |
 | spread 結果への private name 参照を error にする | 型に「この object は spread 由来」という情報が必要 | 未実装（下記の TP 1 件と引き換え） |
@@ -260,6 +260,62 @@ export surface を全部見ているので、この委譲が成立します。
    変えました（`index_prop_assigns` を scratch walk に対して再利用）。
    native class の constructor は `NativeClassStmt(decl, ctor)` の第 2 要素に
    いるので、そこも索引しています。
+
+## 実装: discriminant literal → int
+
+```ts
+type Shape = { kind: "circle"; r: number } | { kind: "square"; s: number };
+switch (x.kind) { case "circle": …; case "square": … }
+```
+→ `case 0:` / `case 1:`、`{ kind: 0, r: 2 }`。
+
+`"circle"` は出現ごとに 8 byte、`0` は 1 byte。**property mangling は
+key を rename するだけで value には触らない**ので、bundle の外から誰も
+見ないタグ文字列がそのまま残っていました。
+
+証明の対象は property の**名前ではなく値**で、これは observability
+lattice が答える問い（binding 単位）とは別物です。lattice を細分する
+代わりに、2 条件の組で決めました。
+
+1. **名前が escape 集合に無い。** object 丸ごとが出ていく経路
+   （serialize / enumerate / `in` probe / foreign call / export surface）は
+   すべて名前を予約するので、これで覆えます。
+2. **直接 read が全部 equality 比較か `switch` 判別子**で、相手が同じ
+   閉集合の literal。1 が拾えない残りの経路 —— 名前は隠れたまま**値だけ**が
+   出ていく `return shape.kind` —— をこれで塞ぎます。
+
+加えて 3. 書き込みが全部素の string literal（でないと集合が閉じない）。
+
+それ以外の位置での read は名前ごと失格にします。template literal、引数、
+そして **truthiness 判定**（`if (shape.kind)` は `"circle"` が truthy で
+`0` は falsy）。`==` も `===` と同じ扱いで安全です —— 両辺が同時に数値に
+なり、比較相手は「実際に書かれている literal」に限っているので、結果は
+どの組み合わせでも変わりません。
+
+解析の walk は**親を見る**形にしてあります。普通に到達した
+`PropAccess(_, k)` は bare read として `k` を失格させ、承認される 2 つの形
+（equality 比較と `switch` 判別子）だけが上から access を認識して
+**receiver 側に降りる**ので、その access は bare として数えられません。
+
+## やらないもの: method devirtualization
+
+`obj.m(x)` → `m(obj, x)`。証明義務は書けます（class が bundle 内部・
+未継承、method が値として取られない、receiver が escape しない）。
+やらない理由は採算です。
+
+property mangling が走った後、`obj.m(x)` はすでに `a.b(c)` です。
+devirtualize すると `d(a,c)` —— **同じ 6 文字**。method 定義側は
+`b(x){…}` から `function d(e,x){…}` になり、`function` キーワードと
+カンマの分だけ**増えます**。
+
+Closure で意味があるのは、devirtualize した後に inliner が本体を展開
+できるからです。mtsc の inline pass は「1 回しか使われない const」
+(`inline.mbt`) と「単一 `return expr` の type predicate」
+(`predicate_inline.mbt`) だけで、複文の関数本体を展開する inliner は
+持っていません。前提が無いので、この pass の期待値は 0 か負です。
+
+汎用 inliner が入ったら再評価する価値があります。それまでは実装しない
+方が正しい。
 
 ## テストパターンを払い出す
 

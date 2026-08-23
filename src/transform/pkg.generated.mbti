@@ -13,6 +13,8 @@ pub fn analyze_purity(@ast.TsBlock) -> PurityReport
 
 pub fn analyze_purity_with(@ast.TsBlock, Map[String, Bool]) -> PurityReport
 
+pub fn apply_discriminant_ints(@ast.TsBlock, DiscriminantPlan) -> @ast.TsBlock
+
 pub fn as_const_inline_block(@ast.TsBlock) -> @ast.TsBlock
 
 pub fn auto_reserve_from_module(@ast.TsModuleBlock, @ast.TsModule, ManglerConfig) -> ManglerConfig
@@ -91,6 +93,8 @@ pub fn numeric_name_set(SymbolGraph, Map[Int, Bool]) -> Map[String, Bool]
 
 pub fn peephole_block(@ast.TsBlock) -> @ast.TsBlock
 
+pub fn plan_discriminant_ints(@ast.TsBlock, Map[String, Bool]) -> DiscriminantPlan
+
 pub fn plan_unused_params(@ast.TsBlock, keep? : Map[String, Bool]) -> ArityPlan
 
 pub fn reserve_props_from_sink(Sink, Int, SymbolGraph, Map[String, Bool], Map[String, Bool]) -> Unit
@@ -165,6 +169,10 @@ type CalleeClass derive(Eq, Show)
 pub(all) struct Def {
   init : @ast.TsExpr?
 } derive(@debug.Debug)
+
+pub(all) struct DiscriminantPlan {
+  maps : Map[String, Map[String, Int]]
+}
 
 pub(all) struct FlowEdge {
   from : FlowNode

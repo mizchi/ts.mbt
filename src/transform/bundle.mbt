@@ -685,6 +685,16 @@ pub fn bundle_modules(
           reserved_set[n] = true
         }
         combined = drop_dead_properties_block(combined, reserved_set)
+        // Discriminant tags: a property whose values are a closed set of
+        // string literals, read only by equality comparison, and not in
+        // the escape set, can be renumbered. Property mangling renames
+        // keys, never values, so without this the tag strings survive
+        // minification in full even though nothing outside ever sees
+        // them.
+        combined = apply_discriminant_ints(
+          combined,
+          plan_discriminant_ints(combined, reserved_set),
+        )
       }
       // External `import` headers (`import os from "os"`, etc.)
       // sit OUTSIDE `combined` and are emitted by the linker around
