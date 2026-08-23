@@ -131,3 +131,13 @@ ts2mbt \
 
 Run `just verify-examples` from the repository root to verify these examples
 without writing generated files into `examples/**/dist`.
+
+## Minify measurement
+
+`minify-app/` is not a bridge example. It is an application — five
+modules, no `export` on the entry — that exists so the type-driven
+property rename has something to be measured on. A library is the worst
+case for that pass and an application is the best, and the difference
+turns out to be the whole result: 0 bytes on the React stack, 25% on
+this. See [`minify-app/README.md`](./minify-app/README.md) and
+`node scripts/compare_terser.mjs --only minify-app`.

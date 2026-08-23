@@ -92,7 +92,11 @@ function build(variant, input, output) {
   const started = process.hrtime.bigint();
   let r;
   if (variant.tool === "mtsc") {
-    r = run(MTSC, [input, "--no-check", ...variant.flags, "--out", output]);
+    // `--no-check` is for published `.js` input that was never
+    // TypeScript. A TypeScript entry is expected to type-check, so it
+    // does not get the flag and a diagnostic is a real failure.
+    const noCheck = input.endsWith(".ts") || input.endsWith(".tsx") ? [] : ["--no-check"];
+    r = run(MTSC, [input, ...noCheck, ...variant.flags, "--out", output]);
   } else {
     r = run(TERSER, [input, ...variant.flags, "-o", output]);
   }
@@ -212,6 +216,69 @@ function compareReact() {
 }
 
 // ---------------------------------------------------------------------
+// The example application: no exports, so door 1 is empty. This is the
+// shape the property rename was designed for, and the one a library can
+// never have.
+// ---------------------------------------------------------------------
+
+function compareMinifyApp() {
+  const entry = path.join(ROOT, "examples", "minify-app", "src", "main.ts");
+  if (!fs.existsSync(entry)) {
+    console.log("  minify-app: examples/minify-app is missing");
+    return;
+  }
+  const dir = path.join(WORK, "minify-app");
+  fs.mkdirSync(dir, { recursive: true });
+  // The baseline is the unminified bundle, so terser and mtsc minify the
+  // same input and the comparison is between minifiers rather than
+  // between bundlers.
+  const bundled = path.join(dir, "bundle.mjs");
+  const b = run(MTSC, [entry, "--bundle", "--out", bundled]);
+  if (b.status !== 0) {
+    console.log(`  minify-app: bundle failed: ${(b.stdout || "").split("\n")[0]}`);
+    return;
+  }
+  const want = run("node", [bundled], { cwd: dir });
+  const before = fs.statSync(bundled).size;
+  const rows = [["bundle (no minify)", num(before), kb(gz(bundled)), "\u2014", "baseline"]];
+  const variants = [
+    { key: "mtsc", tool: "mtsc", input: entry, flags: ["--bundle", "--minify", "--mangle"] },
+    {
+      key: "mtsc +props",
+      tool: "mtsc",
+      input: entry,
+      flags: ["--bundle", "--minify", "--mangle", "--mangle-properties"],
+    },
+    { key: "terser", tool: "terser", input: bundled, flags: ["--module", "--compress", "--mangle"] },
+    {
+      key: "terser +props",
+      tool: "terser",
+      input: bundled,
+      flags: ["--module", "--compress", "--mangle", "--mangle-props"],
+    },
+  ];
+  for (const v of variants) {
+    const out = path.join(dir, `${v.key.replace(/[^a-z]/g, "")}.mjs`);
+    const r = build(v, v.input, out);
+    if (r.failed) {
+      rows.push([v.key, "\u2014", "\u2014", "\u2014", `FAILED (${r.failed})`]);
+      continue;
+    }
+    const got = run("node", [out], { cwd: dir });
+    const ok = got.status === 0 && got.stdout === want.stdout;
+    rows.push([
+      v.key,
+      num(r.bytes),
+      kb(r.gzip),
+      `${100 - Math.round((r.bytes * 100) / before)}%`,
+      ok ? "same output" : got.status !== 0 ? "BROKEN (throws)" : "BROKEN (wrong output)",
+    ]);
+  }
+  console.log("\nexamples/minify-app (an application: no exports)\n");
+  table(rows, ["variant", "bytes", "gzip KiB", "smaller", "behaviour"]);
+}
+
+// ---------------------------------------------------------------------
 // The TypeScript compiler: one 9 MB file, and the behaviour check is
 // "does it still compile TypeScript the same way".
 // ---------------------------------------------------------------------
@@ -264,7 +331,11 @@ function compareTypescript() {
 
 console.log("size comparison against terser");
 if (!ensureTerser()) process.exit(2);
-const targets = { react: compareReact, typescript: compareTypescript };
+const targets = {
+  "minify-app": compareMinifyApp,
+  react: compareReact,
+  typescript: compareTypescript,
+};
 for (const [name, fn] of Object.entries(targets)) {
   if (only && only !== name) continue;
   fn();

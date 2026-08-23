@@ -355,14 +355,58 @@ error message）が単独で wildcard を立てていた。primitive は built-i
 これは bug でした（修正済み）。`unknown` / `any` は今も wildcard を
 立てます —— そちらは本当に何の形にもなり得るので正しい判断です。
 
+### 測った: application では 25% 効く
+
+`examples/minify-app`（5 module 301 行、entry に `export` 無し）。
+両者とも同じ **未 minify bundle** を入力にするので、bundler ではなく
+minifier 同士の比較になります。
+
+| variant | bytes | gzip | 挙動 |
+| --- | --- | --- | --- |
+| `--bundle`（未 minify） | 6,242 | 1,940 | baseline |
+| mtsc `--minify --mangle` | 3,413 | 1,388 | 一致 |
+| mtsc `+ --mangle-properties` | **2,561** | **1,134** | 一致 |
+| terser `--compress --mangle` | 3,450 | 1,366 | 一致 |
+| terser `+ --mangle-props` | 2,101 | 1,153 | **出力が違う** |
+
+- **安全な property mangling が identifier mangling の上に 25%**
+  （3,413 → 2,561、gzip では 18%）。React では 0 byte でした。
+  同じ flag・同じ compiler で結果が正反対になり、違いは target の形
+  だけです。
+- **terser の既定より 26% 小さい**（2,561 対 3,450、gzip 17%）。terser は
+  安全だと言われない限り property を rename できないので、既定では
+  1 つも触りません。
+- **terser の unsafe 版は raw では小さいが答えを間違えます** ——
+  `actors=0 rejected=1206`（正しくは `actors=17 rejected=4`）。入力データの
+  field 名を rename したせいで、`candidate[key]` という computed key
+  経由で読む validator が全行を弾きました。`--explain-mangle` が予約
+  すると言っていたのはまさにその名前です。
+- **gzip 後は安全版（1,134）が unsafe 版（1,153）より小さい。** 全部を
+  rename するより、少なく一貫して rename するほうが圧縮が効きます。
+
+`--explain-mangle` の出力:
+
+```
+  enabled — no wildcard; only the names below are reserved.
+
+  read off an external import or ambient global (3)
+    log round MAX_SAFE_INTEGER
+  reaches a side-effect sink (6)
+    length eventId eventKind actorHandle occurredAtMs payloadBytes
+  reachable through an observed value tree (4)
+    eventKind peakBytes occurrences averageBytes
+```
+
+`trustScore` / `burstFactor` / `volumeRank` / `flagged` / `byteTotal` /
+`firstSeenMs` / `displayLabel` / `volumeWeight` などは到達不能と証明
+されて rename されています。
+
 ### 何を target にすべきか
 
 効く順に。
 
 1. **library ではなく application。** app には公開 API が無いので door 1 が
-   ほぼ空になります。解析が想定していた形そのもので、取り分が最大に
-   なるのはここです（`vite-plugin-moonbit` の consumer、あるいは自前の
-   TS アプリ）。
+   ほぼ空になります。上の実測がこれです（`examples/minify-app`）。
 2. **内部 dispatch が静的な TS library。** `Proxy` を使わない、
    `Object.defineProperty` を使わない、`obj[dynamicKey]` を使わない、
    quoted property 経由で呼ばない。zod と valibot を落としたのは
