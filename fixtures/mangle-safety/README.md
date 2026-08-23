@@ -22,7 +22,7 @@ allowlist from the opposite direction — that it doesn't launder a call
 result's provenance (`case28`), and that it still keeps an ordinary
 internal accumulator manglable (`case30`).
 
-`case31` and `case32` cover a different proof obligation — not "can this
+`case31` … `case33` cover a different proof obligation — not "can this
 name be renamed?" but "can this call be deleted?". They pass
 `--treeshake` through `mtscArgs`, so the pass under test runs on the
 mangled variant only and the baseline is the control. See
@@ -117,7 +117,7 @@ harness fails only when a case does *worse* than its recorded status.
 When a fix makes a case do better, the harness says so and
 `node scripts/verify_mangle_safety.mjs --update` re-records it.
 
-All 116 cases (32 hand-written, 84 generated) currently record `pass`, so any regression — a compile
+All 117 cases (33 hand-written, 84 generated) currently record `pass`, so any regression — a compile
 that stops working, a renamed property that turns out to be
 observable, a dropped call that turns out to have had an effect —
 fails the run.

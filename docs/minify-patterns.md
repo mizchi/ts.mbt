@@ -49,7 +49,7 @@ allowlist です。同じ名前が両方に載る／片方だけに載るのが�
 | `as const` / const enum inline | binding が never mutated かつ never escape、access が静的 | 実装済 (`as_const_inline.mbt`, `const_enum_inline.mbt`) |
 | 型駆動 fold | `x` の静的型が単一 primitive で、narrowing に依存しない | 実装済 (`type_fold.mbt`) |
 | type predicate inline | `x is T` 注釈があり body が単一 `return expr` | 実装済 (`predicate_inline.mbt`) |
-| 未使用 parameter 削除 | 関数が export surface に無く foreign call に渡らず、`arguments` を読まず、全 call site が既知で、落とす引数式が純粋 | 未実装（証明義務は既存の道具で書ける） |
+| **未使用 parameter 削除** | **関数が export surface に無く、参照が全部 callee 位置、`arguments` を読まず、param が全部素の識別子、落とす引数式が純粋、末尾の連続分だけ** | **実装済（下記）** |
 | discriminant literal → int | その property の**値**が door 1・2 に到達せず、比較相手が常に同じ閉集合の literal | 未実装（per-(binding, property) の値観測が必要） |
 | method devirtualization | class が bundle 内部・未継承、method が値として取られない、receiver が escape しない | 未実装 |
 | shape-colored property slots | 同一 slot を共有する 2 名が同じ shape に同時に載らない（式単位の型伝播が必要） | opt-in / 未証明 (`--mangle-properties-shape-color`) |
@@ -158,6 +158,68 @@ corpus に 2 件足しました（`just verify-mangle-safety`）。
 `--treeshake` は case の `mtscArgs` で mangled 側だけに渡しています。
 baseline は素の `--bundle` なので、消してはいけない call を消せば
 必ず 2 つの観測がずれます。
+
+## 実装: 未使用 parameter 削除
+
+```ts
+function fmt(value, unusedOpts) { return String(value); }
+fmt(a, {}); fmt(b, {}); fmt(c, {});
+```
+→
+```ts
+function fmt(value) { return String(value); }
+fmt(a); fmt(b); fmt(c);
+```
+
+terser はこれをやりません。関数をまたぐ書き換えで、しかも JS では arity
+が観測可能（`f.length`、`arguments`、host が自分の引数個数で callback を
+呼ぶ）だからです。だからこそここに属します — 「bundle の外から `f` を
+**値として**掴めるか」は `export_surface.mbt` と `callee_provenance.mbt`
+がすでに答えていて、それが証明の全部です。
+
+`src/transform/unused_params.mbt`。1 つの関数について全部成立して初めて
+削ります。
+
+1. top-level の binding で初期化子が関数、かつ再代入されない。
+2. entry が export する名前ではない。export された関数の arity は ABI。
+3. **`f` への参照が全部 callee 位置**。この 1 条件が大半を担います —
+   foreign call に渡らない、escape する object に入らない、`f.call` /
+   `f.apply` / `f.length` で触られない、constructor に使われない、が
+   まとめて出ます。
+4. body が `arguments` を読まない。
+5. param が全部素の識別子（分割代入なし、rest なし、default なし）。
+   落とす param に default があると、その評価が消えます。
+6. 末尾の連続分だけ落とす（間を抜くと位置がずれる）。
+7. 全 call site で、落とす引数が純粋。今は評価されているので、
+   `sideEffect()` を消すと program が変わります。
+
+証明できない部分があれば関数ごと触りません。
+
+### 副産物: mangler の shadowing miscompile
+
+corpus case を書いていて、**parameter 削除とは無関係の**既存バグが出ました。
+
+```ts
+function bump() { … }
+function withDefault(a, unused = bump()) { return a; }
+```
+
+`--mangle-properties` の出力:
+
+```js
+function b() { … }              // bump → b
+function c(b, c = b()) { … }    // param a → b が外の b を shadow
+```
+
+`c = b()` が関数ではなく parameter を呼び、`TypeError: b is not a
+function`。**parameter default は関数自身の scope で評価される**ので、
+default が外側から読む名前に parameter を rename すると隠れます。
+`rename_param_list` は param を先に bind して default を後で rename して
+いたため、衝突を予見できませんでした。
+
+修正は「param を 1 つも bind する前に、default が参照する名前を外側 scope
+で解決して予約集合に入れる」。class method の param default にも同じ経路が
+あったので両方直しています。
 
 ## テストパターンを払い出す
 

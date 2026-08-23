@@ -39,6 +39,8 @@ pub fn collect_sinks(@ast.TsBlock, Map[String, Bool]) -> Array[Sink]
 
 pub fn drop_dead_properties_block(@ast.TsBlock, Map[String, Bool]) -> @ast.TsBlock
 
+pub fn drop_unused_params_block(@ast.TsBlock, ArityPlan) -> @ast.TsBlock
+
 pub fn emit_entry_dts(@ast.TsModule, Array[String], Map[String, String]) -> String
 
 pub fn entry_export_property_names(@ast.TsModule, Array[String]) -> Array[String]
@@ -89,6 +91,8 @@ pub fn numeric_name_set(SymbolGraph, Map[Int, Bool]) -> Map[String, Bool]
 
 pub fn peephole_block(@ast.TsBlock) -> @ast.TsBlock
 
+pub fn plan_unused_params(@ast.TsBlock, keep? : Map[String, Bool]) -> ArityPlan
+
 pub fn reserve_props_from_sink(Sink, Int, SymbolGraph, Map[String, Bool], Map[String, Bool]) -> Unit
 
 pub fn reserved_props_from_observability(SymbolGraph, Map[Int, Observability]) -> Map[String, Bool]
@@ -116,6 +120,10 @@ pub fn vlq_encode(Int) -> String
 // Errors
 
 // Types and methods
+pub(all) struct ArityPlan {
+  keep_count : Map[String, Int]
+}
+
 pub(all) struct BundleExport {
   local_name : String
   export_name : String

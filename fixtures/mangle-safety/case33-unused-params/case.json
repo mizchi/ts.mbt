@@ -1,0 +1,18 @@
+{
+  "origin": "ts.mbt — trailing-parameter trimming",
+  "what": "A dead trailing parameter and its arguments are droppable when the function is never taken as a value. The five neighbours are each blocked by one condition — exported arity, held as a value, an impure argument, `arguments`, a parameter default — and every one of them changes observable behaviour if trimmed anyway.",
+  "exports": [
+    "exported",
+    "report"
+  ],
+  "expectKeep": [
+    "formatted",
+    "exported",
+    "held",
+    "impure",
+    "argCount",
+    "defaulted",
+    "ticks"
+  ],
+  "expectStatus": "pass"
+}

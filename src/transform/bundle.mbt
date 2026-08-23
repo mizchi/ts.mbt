@@ -586,6 +586,14 @@ pub fn bundle_modules(
       )
     }
     if opts.mangle {
+      // Trailing-parameter trimming. Needs the export roots: an exported
+      // function's arity is part of the package ABI, and everything else
+      // the proof needs (is `f` ever used as a VALUE rather than called?)
+      // is decided from the merged block itself.
+      combined = drop_unused_params_block(
+        combined,
+        plan_unused_params(combined, keep=export_roots),
+      )
       // Type-driven safety for property mangling: walk the merged
       // block looking for property accesses on bindings that
       // escape the bundle (external imports) and reflection sinks

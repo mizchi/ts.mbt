@@ -2792,11 +2792,29 @@ fn rename_class_decl_idents(
         // Rename each param and record the mapping in the inner scope.
         let renamed_params : Array[(String, @ast.TsType)] = []
         let renamed_defaults : Array[@ast.TsExpr?] = []
+        // Same shadowing hazard as `rename_param_list`: a default is
+        // evaluated in the method's own scope.
+        let param_reserved : Map[String, Bool] = {}
+        for k in inner.reserved.keys() {
+          param_reserved[k] = true
+        }
+        for d in m.param_defaults {
+          match d {
+            Some(expr) => {
+              let refs : Map[String, Bool] = {}
+              collect_var_refs_expr(expr, refs)
+              for n in refs.keys() {
+                param_reserved[inner.resolve(n)] = true
+              }
+            }
+            None => ()
+          }
+        }
         for i, p in m.params {
           let new_name = if p.0 == "" {
             ""
           } else {
-            inner.bind(p.0, inner.reserved)
+            inner.bind(p.0, param_reserved)
           }
           renamed_params.push((new_name, p.1))
           if i < m.param_defaults.length() {
@@ -2889,12 +2907,51 @@ fn rename_function_expr(f : @ast.TsFunc, scope : ScopeFrame) -> @ast.TsFunc {
 }
 
 ///|
+/// Names an enclosing scope owns that a parameter default reads.
+///
+/// A default is evaluated inside the function's OWN scope, so a parameter
+/// renamed onto one of these shadows the binding the default depends on:
+///
+///     function bump() { … }
+///     function f(a, unused = bump()) { … }
+///     //       ↑ allocated `b`… and `bump` was already renamed to `b`,
+///     //         so `unused = b()` now calls the parameter.
+///
+/// The names are resolved through `scope` BEFORE any parameter is bound,
+/// so what comes back is the enclosing scope's post-rename spelling —
+/// exactly what the allocator must not hand out.
+fn param_default_free_names(
+  params : Array[@ast.TsParam],
+  scope : ScopeFrame,
+  reserved : Map[String, Bool],
+) -> Map[String, Bool] {
+  let out : Map[String, Bool] = {}
+  for k in reserved.keys() {
+    out[k] = true
+  }
+  for p in params {
+    match p.default {
+      Some(d) => {
+        let refs : Map[String, Bool] = {}
+        collect_var_refs_expr(d, refs)
+        for n in refs.keys() {
+          out[scope.resolve(n)] = true
+        }
+      }
+      None => ()
+    }
+  }
+  out
+}
+
+///|
 fn rename_param_list(
   params : Array[@ast.TsParam],
   scope : ScopeFrame,
   reserved : Map[String, Bool],
 ) -> Array[@ast.TsParam] {
   let out : Array[@ast.TsParam] = []
+  let reserved = param_default_free_names(params, scope, reserved)
   for p in params {
     let new_binding : @ast.TsBinding? = match p.binding {
       Some(b) => Some(rename_binding_decl(b, scope, reserved))
