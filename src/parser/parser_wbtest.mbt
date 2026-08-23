@@ -7343,3 +7343,50 @@ test "parser: bodiless generator declarations are grammar misuses (TS1221 family
   }
   assert_eq(legal_hits, 0)
 }
+
+///|
+/// A `<` that is a comparison must not be read as the start of a
+/// type-argument list, however far away a matching `>` happens to sit.
+///
+/// The scan that decides this used to accept ANY token between the two,
+/// so `{ a < b; } c > (1);` balanced across the block's closing brace,
+/// saw the `(` that follows, and committed to `a<…>(1)` as a generic
+/// call — consuming the rest of the file. It takes one relational
+/// operator and one later `> (` to line up, which in a large real source
+/// is a certainty: `src/compiler/checker.ts` and the published
+/// `typescript.js` both failed to parse at all because of it, each
+/// reporting only `Expected RBrace, got Eof` from wherever the input ran
+/// out.
+test "parser: a comparison inside a block is not a type-argument list" {
+  let cases = [
+    "{ a < b; } c > (1);", "if (x) { a < b; } c > (1);", "function f() { a < b; } c > (1);",
+    "while (x) { a < b } c > (1);", "{ a < b; } (c) > (1);",
+  ]
+  for src in cases {
+    let block = parse_block_from_source(src) catch {
+      e => fail("should parse: \{src} -> \{e}")
+    }
+    // Two statements survive in every case: the block and the
+    // comparison. The failure mode was the second one vanishing into
+    // the first's "type arguments".
+    assert_true(block.stmts.length() >= 2)
+  }
+}
+
+///|
+/// The other half: tightening the scan must not reject the type
+/// arguments that legitimately contain braces, parens, brackets or a
+/// member-separating `;`.
+test "parser: real type arguments still parse" {
+  let cases = [
+    "const x = f<string>(1);", "const x = f<Map<string, number>>(2);", "const x = f<{ a: number; b: string }>(3);",
+    "const x = f<(a: number) => void>(cb);", "const x = f<[number, string]>(5);",
+    "const x = tag<number>`t`;", "for (let i = 0, n = 2; i < n; ++i) { g(i); }",
+  ]
+  for src in cases {
+    let block = parse_block_from_source(src) catch {
+      e => fail("should parse: \{src} -> \{e}")
+    }
+    assert_true(block.stmts.length() >= 1)
+  }
+}

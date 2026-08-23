@@ -31,11 +31,30 @@ mtsc <input.ts> [options]
 - `--mangle`、`--mangle-properties` — internal name / property の rename。
 - `--explain-mangle` — `--mangle-properties` が「なぜその名前を rename しな
   かったか」を出力（下記）。
+- `--no-check` — 型エラーを報告するが JavaScript は出力する。TypeScript
+  ではない入力（公開済みの `.js` bundle など）向け。
 
 - `--jsx-runtime automatic|classic`、`--jsx-import-source <pkg>`、`--jsx-dev` — JSX
   transform の設定。
 
 すべてのオプションは `mtsc --help` で確認できます。
+
+`--mangle-properties`（および `--explain-mangle` /
+`--mangle-properties-shape-color`）は `--bundle` を含意します。escape 解析は
+`bundle_modules` の中にしかないので、単一ファイル経路では解析なしで
+property を rename してしまい、CJS の `exports.foo` まで書き換えていました。
+安全な形が 1 つしかない flag は、その経路を自分で選ぶべきです。
+
+## 非 TypeScript 入力: `--no-check`
+
+型エラーは既定で出力を止めます。プログラムが間違っているときはそれが
+正しい挙動ですが、**そもそも TypeScript でない入力**に対しては pipeline
+全体が到達不能になります。公開済みの `.js` bundle では object literal が
+runtime で property を増やすのが普通で、その各箇所が型エラーとして出ます。
+
+`--no-check` は診断を出したうえで emit します。minify / mangle pass を
+実 JS に対して走らせるための escape hatch で、型検査を無効化する意味では
+ありません（診断は今までどおり全部出ます）。
 
 ## `--explain-mangle`
 

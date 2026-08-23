@@ -67,6 +67,14 @@ priv struct MtscOptions {
   // decision has to be made before it can be explained.
   mut explain_mangle : Bool
   mut mangle_properties_shape_color : Bool
+  // `--no-check`: run the transform without letting checker diagnostics
+  // stop the emit. The gate exists because a type error usually means
+  // the program is wrong, but it also makes the whole pipeline
+  // unreachable for input that is not TypeScript in the first place —
+  // a published `.js` bundle, where an object literal grows properties
+  // at runtime and every such site reads as an error. The diagnostics
+  // are still printed; they just stop being fatal.
+  mut no_check : Bool
   mut sourcemap : Bool
   mut jsx_runtime : String?
   mut jsx_import_source : String?
@@ -92,6 +100,7 @@ fn mtsc_options_new() -> MtscOptions {
     mangle_properties: false,
     explain_mangle: false,
     mangle_properties_shape_color: false,
+    no_check: false,
     sourcemap: false,
     jsx_runtime: None,
     jsx_import_source: None,
@@ -137,12 +146,17 @@ fn mtsc_print_usage() -> Unit {
     "  --warn-impure-getters     Warn when a class getter body has a direct side effect (assign, call, mutation)",
   )
   println("  --mangle                  Rename non-exported local identifiers")
-  println("  --mangle-properties       Also rename non-reserved property keys")
+  println(
+    "  --mangle-properties       Also rename non-reserved property keys (implies --bundle)",
+  )
   println(
     "  --explain-mangle          Report why each minify decision went the way it did",
   )
   println(
     "  --mangle-properties-shape-color  Use shape-coloring property rename (opt-in, experimental)",
+  )
+  println(
+    "  --no-check                Report type errors but emit anyway (non-TypeScript input)",
   )
   println("  --sourcemap               Emit <out>.map alongside the JS output")
   println("  --jsx-runtime <mode>      `automatic` (default) or `classic`")
@@ -201,19 +215,31 @@ fn mtsc_parse_args(argv : Array[String]) -> Result[MtscOptions, String] {
         continue
       }
       "--mangle" => opts.mangle = true
+      // Property mangling implies `--bundle`, the way `--treeshake` and
+      // `--fold` already do — and for a stronger reason than they have.
+      // The escape analysis (both doors, the wildcard, the whole safety
+      // story) lives in `bundle_modules`. The single-file path has none
+      // of it, so `--mangle-properties` there renamed whatever it liked,
+      // including a CJS module's `exports.foo` and the keys of an
+      // exported object. A flag whose only safe form is one path should
+      // select that path rather than trust the user to.
       "--mangle-properties" => {
         opts.mangle = true
         opts.mangle_properties = true
+        opts.bundle = true
       }
       "--explain-mangle" => {
         opts.mangle = true
         opts.mangle_properties = true
         opts.explain_mangle = true
+        opts.bundle = true
       }
+      "--no-check" => opts.no_check = true
       "--mangle-properties-shape-color" => {
         opts.mangle = true
         opts.mangle_properties = true
         opts.mangle_properties_shape_color = true
+        opts.bundle = true
       }
       "--sourcemap" => opts.sourcemap = true
       "--jsx-runtime" => {
@@ -832,7 +858,7 @@ async fn main {
     // leaves every imported type unresolvable, which both hides real
     // errors and invents fake ones — an identical shape compared against
     // an imported alias reads as a mismatch.
-    if !mtsc_typecheck_graph(files, edges) {
+    if !mtsc_typecheck_graph(files, edges) && !opts.no_check {
       mtsc_exit_type_error()
       return
     }
@@ -1065,7 +1091,7 @@ async fn main {
       return
     }
   }
-  if !mtsc_typecheck_source(source, input_path) {
+  if !mtsc_typecheck_source(source, input_path) && !opts.no_check {
     mtsc_exit_type_error()
     return
   }

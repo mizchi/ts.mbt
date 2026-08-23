@@ -38,3 +38,31 @@ async test "mtsc known-gap corpus records current missed diagnostics" {
     assert_eq(issues.length(), 0)
   }
 }
+
+///|
+test "mtsc flags: --mangle-properties selects the analyzed path" {
+  // The escape analysis lives in `bundle_modules`. Without `--bundle`
+  // the single-file path renamed property keys with no analysis at all,
+  // including a CJS module's `exports.foo`, so the flag has to bring
+  // the path that can prove the rename safe.
+  for
+    flag in [
+      "--mangle-properties", "--explain-mangle", "--mangle-properties-shape-color",
+    ] {
+    let opts = mtsc_parse_args(["in.ts", flag]).unwrap()
+    assert_true(opts.mangle_properties)
+    assert_true(opts.bundle)
+  }
+  // `--mangle` alone only renames locals, and the single-file path
+  // reserves every top-level name, so it stays where it was.
+  let plain = mtsc_parse_args(["in.ts", "--mangle"]).unwrap()
+  assert_true(plain.mangle)
+  assert_false(plain.mangle_properties)
+  assert_false(plain.bundle)
+}
+
+///|
+test "mtsc flags: --no-check is off unless asked for" {
+  assert_false(mtsc_parse_args(["in.ts"]).unwrap().no_check)
+  assert_true(mtsc_parse_args(["in.ts", "--no-check"]).unwrap().no_check)
+}

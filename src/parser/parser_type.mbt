@@ -2206,6 +2206,15 @@ fn Parser::try_skip_type_args(self : Parser) -> Bool {
   }
   let _ = self.advance() // consume <
   let mut depth = 1
+  // Bracket nesting INSIDE the candidate type-argument list. A type can
+  // contain braces, parens and brackets (`f<{ a: number; b: T }>()`,
+  // `f<(x: A) => B>()`, `f<[A, B]>()`), so those tokens are legal — but
+  // only balanced. An unbalanced closer, or a `;` outside a `{…}`, means
+  // the `<` was a comparison and the scan has already left the
+  // expression it started in.
+  let mut braces = 0
+  let mut parens = 0
+  let mut brackets = 0
   while depth > 0 && !self.check(Eof) {
     match self.peek().kind {
       Lt => {
@@ -2224,6 +2233,73 @@ fn Parser::try_skip_type_args(self : Parser) -> Bool {
         depth -= 3
         let _ = self.advance()
       }
+      LBrace => {
+        braces += 1
+        let _ = self.advance()
+      }
+      RBrace =>
+        // Closing a brace this scan never opened: the `}` belongs to the
+        // block the expression lives in. `{ a < b; } c > (1);` used to
+        // balance `<`…`>` straight across it, commit on the following
+        // `(`, and swallow the rest of the file — which is how a single
+        // relational operator anywhere in a large real-world source
+        // could delete everything after it.
+        if braces == 0 {
+          return false
+        } else {
+          braces -= 1
+          let _ = self.advance()
+        }
+      LParen => {
+        parens += 1
+        let _ = self.advance()
+      }
+      RParen =>
+        if parens == 0 {
+          return false
+        } else {
+          parens -= 1
+          let _ = self.advance()
+        }
+      LBracket => {
+        brackets += 1
+        let _ = self.advance()
+      }
+      RBracket =>
+        if brackets == 0 {
+          return false
+        } else {
+          brackets -= 1
+          let _ = self.advance()
+        }
+      // `;` separates members of an object type, so it is only legal
+      // inside braces. Outside them it ends a statement.
+      Semicolon =>
+        if braces == 0 {
+          return false
+        } else {
+          let _ = self.advance()
+        }
+      // Tokens that can start a statement but can never appear in a
+      // type. Reaching one means the scan has run past the end of the
+      // expression, whatever the bracket counts say.
+      Return
+      | If
+      | Else
+      | Switch
+      | Case
+      | While
+      | Do
+      | For
+      | Break
+      | Continue
+      | Try
+      | Catch
+      | Finally
+      | Throw
+      | Var
+      | Let
+      | Debugger => return false
       _ => {
         let _ = self.advance()
       }
