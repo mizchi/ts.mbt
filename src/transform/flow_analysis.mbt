@@ -464,6 +464,30 @@ fn type_observed_keys(
           None => None
         }
       }
+    // A primitive carries no user-declared property surface. Its members
+    // are built-ins (`length`, `toFixed`, …) which the mangler reserves
+    // globally anyway, so a `string` crossing the boundary reserves
+    // nothing — it must not fall through to the wildcard.
+    //
+    // This mattered more than it looks. On real TypeScript libraries the
+    // bindings that reached a foreign callee were overwhelmingly plain
+    // `string` parameters (valibot: `lang`, `message`; a locale lookup
+    // and an error message), and each one suppressed property mangling
+    // for the entire bundle.
+    Number
+    | Int
+    | Boolean
+    | String_
+    | BigInt
+    | Symbol
+    | Void
+    | Null
+    | Undefined
+    | Never
+    | Literal(_)
+    | NumberLiteral(_)
+    | BigIntLiteral(_)
+    | BooleanLiteral(_) => Some([])
     // `A & B` observes the union of both key sets. Used to model
     // `interface I extends A, B`, so an unresolvable base collapses the
     // whole intersection to `None` rather than silently under-reserving.

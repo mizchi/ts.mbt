@@ -704,3 +704,53 @@ test "explain: the explanation is empty unless asked for" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+/// A primitive crossing the bundle boundary reserves nothing. Its
+/// members are built-ins, which the mangler reserves globally, so there
+/// is no user-declared name on it to protect — and falling through to
+/// the wildcard suppresses property mangling for the whole bundle.
+///
+/// This was the single biggest source of false suppression on real
+/// TypeScript libraries. In valibot every `string` parameter that
+/// reached a dynamic callee (`lang`, `message` — a locale lookup and an
+/// error message) forced the wildcard on its own.
+test "type env: a primitive crossing the boundary reserves nothing" {
+  let src =
+    #|const label: string = "hello";
+    #|const count: number = 2;
+    #|const flag: boolean = true;
+    #|HostBridge.channel.post(label);
+    #|HostBridge.channel.post(count);
+    #|HostBridge.channel.post(flag);
+    #|
+  let block = @parser.parse_block_from_source(src)
+  let externals : Map[String, Bool] = {}
+  for n in undeclared_referenced_names(block).keys() {
+    externals[n] = true
+  }
+  let b = escape_breakdown(block, externals)
+  assert_false(b.sink_observability.contains("*"))
+  assert_eq(b.wildcard_reasons.length(), 0)
+}
+
+///|
+test "type env: an unannotated or opaque crossing still reserves the wildcard" {
+  // The primitive rule must not leak into the cases it does not cover:
+  // no annotation at all, and `unknown` / `any`, still mean "could be
+  // any shape".
+  for
+    src in [
+      "const v = { a: 1 };\nHostBridge.post(v);\n", "const v: unknown = { a: 1 };\nHostBridge.post(v);\n",
+      "const v: any = { a: 1 };\nHostBridge.post(v);\n",
+    ] {
+    let block = @parser.parse_block_from_source(src)
+    let externals : Map[String, Bool] = {}
+    for n in undeclared_referenced_names(block).keys() {
+      externals[n] = true
+    }
+    assert_true(
+      escape_breakdown(block, externals).sink_observability.contains("*"),
+    )
+  }
+}

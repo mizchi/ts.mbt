@@ -628,9 +628,45 @@ async fn mtsc_sibling_declaration_files(entry_path : String) -> Array[String] {
 }
 
 ///|
+/// The TypeScript files a JS-spelled specifier may actually name.
+/// `./x.js` -> `./x.ts`, `./x.tsx`, `./x.d.ts`; `./x.mjs` -> `./x.mts`;
+/// `./x.cjs` -> `./x.cts`. Empty when the path does not end in a JS
+/// extension, so the ordinary extension search runs unchanged.
+fn mtsc_ts_equivalents(base : String) -> Array[String] {
+  for
+    pair in [
+      (".js", [".ts", ".tsx", ".d.ts"]),
+      (".mjs", [".mts", ".d.mts"]),
+      (".cjs", [".cts", ".d.cts"]),
+    ] {
+    if base.has_suffix(pair.0) {
+      let stem = base[0:base.length() - pair.0.length()].to_owned()
+      let out : Array[String] = []
+      for ext in pair.1 {
+        out.push(stem + ext)
+      }
+      return out
+    }
+  }
+  []
+}
+
+///|
 async fn mtsc_resolve_existing(base : String) -> String {
   if mtsc_path_exists(base) {
     return base
+  }
+  // A specifier that spells `.js` may name a `.ts` file. That is not a
+  // quirk — it is what TypeScript's `node16` / `nodenext` / `bundler`
+  // resolution prescribes, so a modern TS codebase writes
+  // `import … from "./external.js"` next to `external.ts`. Without this
+  // rule the whole class of TypeScript-source targets is unreachable:
+  // zod, and TypeScript's own compiler (`./_namespaces/ts.js`), both
+  // fail on their first import.
+  for cand in mtsc_ts_equivalents(base) {
+    if mtsc_path_exists(cand) {
+      return cand
+    }
   }
   // `.d.ts` is in the list because a declaration-only module is a
   // legitimate target of `import type { X } from "./types"`.

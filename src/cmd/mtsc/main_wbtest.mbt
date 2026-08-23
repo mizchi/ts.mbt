@@ -66,3 +66,30 @@ test "mtsc flags: --no-check is off unless asked for" {
   assert_false(mtsc_parse_args(["in.ts"]).unwrap().no_check)
   assert_true(mtsc_parse_args(["in.ts", "--no-check"]).unwrap().no_check)
 }
+
+///|
+/// TypeScript's `node16` / `nodenext` / `bundler` resolution keeps the
+/// EMITTED extension in the specifier, so a TS codebase writes
+/// `import … from "./external.js"` next to `external.ts`. Without this
+/// rule the whole class of TypeScript-source targets is unreachable —
+/// zod and TypeScript's own compiler (`./_namespaces/ts.js`) both fail
+/// on their first import.
+test "mtsc resolve: a .js specifier may name a .ts file" {
+  let cases = [
+    ("./external.js", ["./external.ts", "./external.tsx", "./external.d.ts"]),
+    ("a/b.mjs", ["a/b.mts", "a/b.d.mts"]),
+    ("a/b.cjs", ["a/b.cts", "a/b.d.cts"]),
+  ]
+  for c in cases {
+    let got = mtsc_ts_equivalents(c.0)
+    assert_eq(got.length(), c.1.length())
+    for i, want in c.1 {
+      assert_eq(got[i], want)
+    }
+  }
+  // A specifier that is not JS-spelled leaves the ordinary extension
+  // search alone.
+  assert_eq(mtsc_ts_equivalents("./external").length(), 0)
+  assert_eq(mtsc_ts_equivalents("./external.ts").length(), 0)
+  assert_eq(mtsc_ts_equivalents("./styles.css").length(), 0)
+}

@@ -2547,3 +2547,26 @@ test "bundler: `using` declaration emits try-finally with Symbol.dispose" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+/// The bundler resolves through the same rule as the CLI loader: a
+/// `.js`-spelled specifier may name a `.ts` file, which is what
+/// TypeScript's `node16` / `nodenext` / `bundler` resolution prescribes.
+test "bundle: a .js specifier resolves to the .ts file" {
+  let files = vfs([
+    (
+      "entry.ts", "import { helper } from \"./helper.js\";\nexport const v = helper(2);\n",
+    ),
+    (
+      "helper.ts", "export function helper(n: number): number { return n * 2; }\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      // Inlined, not left as an external import.
+      assert_false(out.js.contains("./helper.js"))
+      assert_true(out.js.contains("* 2"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}

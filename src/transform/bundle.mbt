@@ -283,6 +283,28 @@ fn dirname(path : String) -> String {
 }
 
 ///|
+/// The TypeScript files a JS-spelled specifier may actually name.
+/// Empty for anything that does not end in a JS extension.
+fn ts_equivalents_of(base : String) -> Array[String] {
+  for
+    pair in [
+      (".js", [".ts", ".tsx", ".d.ts"]),
+      (".mjs", [".mts"]),
+      (".cjs", [".cts"]),
+    ] {
+    if base.has_suffix(pair.0) {
+      let stem = base[0:base.length() - pair.0.length()].to_owned()
+      let out : Array[String] = []
+      for ext in pair.1 {
+        out.push(stem + ext)
+      }
+      return out
+    }
+  }
+  []
+}
+
+///|
 /// Try the literal path, then `.ts`, `.tsx`, `.js`, `.mjs`, then
 /// `<path>/index.ts(x)`. Returns the first hit, or the original
 /// path when nothing matched (caller will then surface the
@@ -293,6 +315,14 @@ fn resolve_with_extensions(
 ) -> String {
   if files.contains(base) {
     return base
+  }
+  // `./x.js` may name `x.ts`: TypeScript's `node16` / `nodenext` /
+  // `bundler` resolution says the specifier keeps the emitted
+  // extension, so TS sources import each other that way.
+  for cand in ts_equivalents_of(base) {
+    if files.contains(cand) {
+      return cand
+    }
   }
   let exts = [".ts", ".tsx", ".js", ".mjs", ".jsx"]
   for ext in exts {
