@@ -198,13 +198,27 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
       self.in_async = true
       let func = self.parse_function()
       self.in_async = false
-      Let(@ast.TsBinding::Ident(func.name), Any, FuncExpr(func))
+      if self.last_function_bodiless {
+        Empty
+      } else {
+        Let(@ast.TsBinding::Ident(func.name), Any, FuncExpr(func))
+      }
     }
     Function => {
       // internalfunctiondefine: function name() { ... }
       // Let(name, Any, FuncExpr(func))
       let func = self.parse_function()
-      Let(@ast.TsBinding::Ident(func.name), Any, FuncExpr(func))
+      // A bodyless declaration is an overload signature or an ambient
+      // `declare function`: type-only, and there can be several of them
+      // above the one real implementation. Emitting each as
+      // `function f() {}` put two or three declarations of one name in
+      // the output — a SyntaxError in a module, so nothing loaded.
+      // valibot writes its whole public surface as overload sets.
+      if self.last_function_bodiless {
+        Empty
+      } else {
+        Let(@ast.TsBinding::Ident(func.name), Any, FuncExpr(func))
+      }
     }
     Break => {
       let _ = self.advance()

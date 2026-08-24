@@ -5,16 +5,17 @@
 せん。そこで、公開されている実コードを minify して、同じ観測が返るかを
 確かめました。
 
-対象は 4 つ（+ terser との size 比較）。
+対象は 5 つ（+ terser との size 比較）。
 
 | 対象 | 何を見るか |
 | --- | --- |
 | React 18.3.1（react / react-dom / scheduler） | 実行して観測が一致するか |
 | hono（git clone、TS source 188 file） | npm を経由せず TS source を直接通し、HTTP 応答が一致するか |
+| valibot（git clone、TS source 578 file） | overload set と quoted property dispatch を通せるか、parse 結果が一致するか |
 | TypeScript 5.7.3（`src/compiler/checker.ts` と `lib/typescript.js`） | 3 MB / 9 MB の実 source を通せるか、出力が有効な JS か、compiler として動くか |
 
 結論を先に書くと、**この検証を始めた時点では 1 つも通りませんでした**。
-11 件の bug を潰して通るようになりました。うち 8 件は corpus では原理的に
+12 件の bug を潰して通るようになりました。うち 9 件は corpus では原理的に
 出ない種類のものです。
 
 ## 見つかった bug
@@ -380,6 +381,63 @@ block の別宣言（= 抽象 base class）に解決されていました。
 結果、bundle は base class を export し、`app.use(...)` が base が絶対に
 設定しない `router` を触って落ちます。import 時には何も起きないので、
 **動かして response を見るまで分からない**種類の bug です。
+
+### valibot: overload set だらけの TS source
+
+`git clone fabian-hiller/valibot` から `library/src/index.ts` を entry に
+578 file。hono には無い書き方が入っています —— **公開 API のほぼ全部が
+overload set** で、dispatch は quoted property (`~run`) 経由。
+
+| variant | bytes | gzip | 挙動 |
+| --- | --- | --- | --- |
+| `--bundle`（未 minify） | 228,307 | — | baseline |
+| mtsc `--minify` | 124,172 | 16,383 | 一致 |
+| mtsc `--minify --mangle` | 88,642 | 14,933 | 一致 |
+| mtsc `+ --mangle-properties` | 88,642 | 14,932 | 一致 |
+| terser `--compress --mangle` | 88,226 | 14,615 | 一致 |
+| terser `+ --mangle-props` | 77,093 | 14,107 | **結果が違う** |
+
+挙動は schema / pipe / transform / union / optional と error 側
+（issue kind、dot path、`flatten`、`ValiError`）を実際に parse して比較。
+
+ここでは **mtsc と terser がほぼ並びます**（88,642 対 88,226、gzip でも
+14,933 対 14,615）。`+props` の取り分は 1 byte —— 予告どおり
+quoted property dispatch で wildcard が立つので、property mangling は
+正しく降りています。
+
+そして**この target でしか出ない bug が 1 件**出ました。
+
+### 12. overload signature が runtime 宣言として emit される（parser）
+
+TypeScript の overload signature は body を持ちません。型だけの宣言で、
+1 つの実装の上に 2〜3 個並びます。mtsc はそれぞれを
+`function f() {}` として emit していたので、1 つの名前に宣言が複数並び、
+module では **SyntaxError で file 全体が読み込めません**。
+
+```ts
+export function pick(v: string): string;
+export function pick(v: number): number;
+export function pick(v: string | number): string | number { return v; }
+```
+→
+```js
+function pick$1(v) {}     // signature
+function pick$1(v) {}     // signature
+function pick$1(v) { return v; }
+```
+
+valibot は公開 API のほぼ全部がこの形で、`getDotPath` だけで 1 つの名前に
+3 宣言が出ていました。`$1` という rename が付いているのも症状の一部です
+—— signature が「宣言」として数えられ、衝突回避の rename を誘発していました。
+
+`parse_function` は body 無しを 2 経路で扱っていて（`;` 即終了と
+`{` が来ない場合）、どちらも空 body の `TsFunc` を返すので呼び出し側から
+区別できませんでした。`last_function_bodiless` を parser state に立てて、
+statement 化する 4 箇所（plain / async / export / export default）が
+それを見て statement を落とします。**名前は export されたまま**です ——
+続く実装がその名前を持つので。
+
+`declare function` も同じ経路で消えます（型だけの宣言なので正しい）。
 
 | target | 形 | 結果 | wildcard の理由 |
 | --- | --- | --- | --- |

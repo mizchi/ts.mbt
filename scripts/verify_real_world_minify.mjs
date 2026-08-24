@@ -27,6 +27,10 @@
 //              error handling, with the responses diffed. This is the
 //              target that exercises TS source directly, and the one
 //              that found the linker exporting the wrong class.
+//   valibot    fabian-hiller/valibot, also from a clone: 578 source
+//              files, and idioms hono does not have. It writes its whole
+//              public surface as overload sets, which is how the
+//              signature-emit bug surfaced.
 //
 // Needs network access on the first run: packages come from npm and
 // checker.ts from the TypeScript repo, cached under _build/real-world.
@@ -509,6 +513,123 @@ function verifyHono() {
 }
 
 // ---------------------------------------------------------------------
+// valibot: another TypeScript library from a git clone — 578 source
+// files, and idioms hono does not have (overload sets everywhere,
+// dispatch through a quoted `~run` property).
+// ---------------------------------------------------------------------
+
+const VALIBOT_APP = `// Schemas, pipes, transforms, unions, objects, arrays, optionals, and
+// the error surface (issue kinds, dot paths, flatten, ValiError).
+import * as v from "./valibot.mjs";
+const User = v.object({
+  name: v.pipe(v.string(), v.minLength(2), v.maxLength(20)),
+  age: v.pipe(v.number(), v.integer(), v.minValue(0)),
+  email: v.pipe(v.string(), v.email()),
+  tags: v.array(v.picklist(["a", "b", "c"])),
+  role: v.union([v.literal("admin"), v.literal("user")]),
+  nickname: v.optional(v.string(), "anon"),
+});
+const good = { name: "ada", age: 36, email: "a@b.co", tags: ["a", "c"], role: "admin" };
+const bad = { name: "x", age: -1, email: "nope", tags: ["z"], role: "root" };
+console.log(JSON.stringify({
+  parsed: v.parse(User, good),
+  safeGood: v.safeParse(User, good).success,
+  safeBad: (() => {
+    const r = v.safeParse(User, bad);
+    return {
+      success: r.success,
+      issues: (r.issues ?? []).map((i) => ({
+        kind: i.kind,
+        type: i.type,
+        path: v.getDotPath(i),
+        expected: i.expected,
+      })).sort((x, y) => (x.path < y.path ? -1 : 1)),
+    };
+  })(),
+  transformed: v.parse(v.pipe(v.string(), v.transform((s) => s.length)), "hello"),
+  flattened: (() => {
+    const r = v.safeParse(User, bad);
+    return r.issues ? Object.keys(v.flatten(r.issues).nested ?? {}).sort() : [];
+  })(),
+  thrown: (() => {
+    try {
+      v.parse(User, bad);
+      return null;
+    } catch (e) {
+      return { isValiError: v.isValiError(e), count: e.issues.length };
+    }
+  })(),
+}, null, 2));
+`;
+
+function verifyValibot() {
+  const dir = path.join(WORK, "valibot");
+  const checkout = path.join(dir, "valibot");
+  fs.mkdirSync(dir, { recursive: true });
+  if (!fs.existsSync(path.join(checkout, "library", "src", "index.ts"))) {
+    const r = run("git", [
+      "clone",
+      "--depth",
+      "1",
+      "https://github.com/fabian-hiller/valibot",
+      checkout,
+    ], { timeout: 900_000 });
+    if (r.status !== 0) {
+      record("valibot", false, "git clone failed (needs network)");
+      return;
+    }
+  }
+  const entry = path.join(checkout, "library", "src", "index.ts");
+  const app = path.join(dir, "app.mjs");
+  fs.writeFileSync(app, VALIBOT_APP);
+  const base = path.join(dir, "base.mjs");
+  const b = minify(entry, base, ["--bundle"]);
+  if (!b.ok) {
+    record("valibot", false, `bundle failed (${b.why})`);
+    return;
+  }
+  fs.copyFileSync(base, path.join(dir, "valibot.mjs"));
+  const want = run("node", [app], { cwd: dir });
+  if (want.status !== 0) {
+    record("valibot", false, `bundle does not run: ${(want.stderr || "").split("\n").slice(0, 2).join(" ")}`);
+    return;
+  }
+  const out = path.join(dir, "min.mjs");
+  const m = minify(entry, out, ["--bundle", "--minify", "--mangle", "--mangle-properties"]);
+  if (!m.ok) {
+    record("valibot", false, `minify failed (${m.why})`);
+    return;
+  }
+  const p = parses(out);
+  if (!p.ok) {
+    record("valibot", false, p.why);
+    return;
+  }
+  fs.copyFileSync(out, path.join(dir, "valibot.mjs"));
+  const got = run("node", [app], { cwd: dir });
+  fs.copyFileSync(base, path.join(dir, "valibot.mjs"));
+  if (got.status !== 0) {
+    record("valibot", false, `minified run failed: ${(got.stderr || "").split("\n").slice(0, 2).join(" ")}`);
+    return;
+  }
+  if (got.stdout !== want.stdout) {
+    fs.writeFileSync(path.join(dir, "baseline.json"), want.stdout);
+    fs.writeFileSync(path.join(dir, "got.json"), got.stdout);
+    record("valibot", false, `results differ (see ${path.relative(ROOT, dir)}/{baseline,got}.json)`);
+    return;
+  }
+  const before = fs.statSync(base).size;
+  const after = fs.statSync(out).size;
+  record(
+    "valibot",
+    true,
+    `${bytes(before)} -> ${bytes(after)} bytes ` +
+      `(${100 - Math.round((after * 100) / before)}% under the unminified bundle), identical results`,
+  );
+  if (!keep) fs.rmSync(out, { force: true });
+}
+
+// ---------------------------------------------------------------------
 // checker.ts: 3 MB of real TypeScript source. One module of a graph, so
 // the bar is "compiles, and the output parses".
 // ---------------------------------------------------------------------
@@ -549,6 +670,7 @@ function verifyCheckerSource() {
 console.log("real-world minify validation\n");
 const targets = {
   hono: verifyHono,
+  valibot: verifyValibot,
   react: verifyReact,
   typescript: verifyTypescript,
   "checker.ts": verifyCheckerSource,

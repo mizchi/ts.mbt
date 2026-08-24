@@ -233,6 +233,13 @@ pub struct Parser {
   collected_interfaces : Array[@ast.TsInterface]
   // Set when the module block parses `export = <expr>`.
   mut collected_export_equals : Bool
+  // Set by `parse_function` on every call: `true` when the declaration
+  // it just parsed had NO body — a TypeScript overload signature or an
+  // ambient `declare function`. Both are type-only and must not reach
+  // the runtime statement stream; emitting them produced
+  // `function f() {}` next to the real implementation, which is a
+  // duplicate declaration and a SyntaxError in a module.
+  mut last_function_bodiless : Bool
 } derive(Debug)
 
 ///|
@@ -315,6 +322,7 @@ pub fn Parser::new_with_strict_and_jsx(
     collected_type_aliases: [],
     collected_interfaces: [],
     collected_export_equals: false,
+    last_function_bodiless: false,
   }
 }
 
@@ -499,6 +507,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     collected_type_aliases: [],
     collected_interfaces: [],
     collected_export_equals: false,
+    last_function_bodiless: false,
   }
 }
 

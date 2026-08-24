@@ -2617,3 +2617,36 @@ test "bundle: an entry re-export of an uncontested name is untouched" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+/// The same thing through the bundler, including `export function`: the
+/// name is still exported (the implementation carries it) but only one
+/// declaration is emitted.
+test "bundle: an overload set emits one declaration and still exports" {
+  let files = vfs([
+    (
+      "entry.ts", "export function pick(v: string): string;\nexport function pick(v: number): number;\nexport function pick(v: string | number): string | number {\n  return v;\n}\nexport const out = pick(1);\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      // Two `function pick` declarations would be a SyntaxError; the
+      // collision rename that used to paper over it is gone too.
+      let mut count = 0
+      let mut rest = out.js
+      while true {
+        match rest.find("function pick") {
+          Some(i) => {
+            count += 1
+            rest = rest.substring(start=i + 13)
+          }
+          None => break
+        }
+      }
+      assert_eq(count, 1)
+      assert_true(out.js.contains("pick"))
+      assert_true(out.js.contains("export"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}

@@ -2481,7 +2481,9 @@ fn Parser::parse_export_decl_for_module(
         self.parse_function_expr()
       }
       if func.name != "<anon>" {
-        stmts.push(Let(@ast.TsBinding::Ident(func.name), Any, FuncExpr(func)))
+        if !(is_named && self.last_function_bodiless) {
+          stmts.push(Let(@ast.TsBinding::Ident(func.name), Any, FuncExpr(func)))
+        }
         exports.push({ local_name: func.name, export_name: "default" })
       } else {
         let temp = self.next_temp("__export_default__")
@@ -2582,7 +2584,15 @@ fn Parser::parse_export_decl_for_module(
   }
   if self.check(Function) {
     let func = self.parse_function()
-    stmts.push(Let(@ast.TsBinding::Ident(func.name), Any, FuncExpr(func)))
+    // A bodyless declaration is an overload signature (or ambient
+    // `declare`): type-only, and an overload SET puts several of them
+    // above the one implementation. Each emitted as `function f() {}`
+    // gives one name two or three declarations — a SyntaxError in a
+    // module, so nothing loads. The name is still exported: the
+    // implementation that follows carries it.
+    if !self.last_function_bodiless {
+      stmts.push(Let(@ast.TsBinding::Ident(func.name), Any, FuncExpr(func)))
+    }
     exports.push({ local_name: func.name, export_name: func.name })
     return (stmts, exports, reexports)
   }
@@ -2604,7 +2614,9 @@ fn Parser::parse_export_decl_for_module(
       self.in_async = true
       let func = self.parse_function()
       self.in_async = false
-      stmts.push(Let(@ast.TsBinding::Ident(func.name), Any, FuncExpr(func)))
+      if !self.last_function_bodiless {
+        stmts.push(Let(@ast.TsBinding::Ident(func.name), Any, FuncExpr(func)))
+      }
       exports.push({ local_name: func.name, export_name: func.name })
       return (stmts, exports, reexports)
     }

@@ -7426,3 +7426,47 @@ test "parser: a real accessor still parses" {
     assert_true(block.stmts.length() >= 1)
   }
 }
+
+///|
+/// A TypeScript overload signature has no body. It is type-only, and an
+/// overload SET puts two or three of them above the one implementation.
+/// Emitting each as `function f() {}` gave one name several declarations
+/// — a SyntaxError in a module, so nothing loaded at all. valibot writes
+/// its entire public surface as overload sets, and `getDotPath` alone
+/// produced three declarations of one name.
+test "parser: an overload signature is not a runtime declaration" {
+  let block = parse_block_from_source(
+    (
+      #|function pick(v: string): string;
+      #|function pick(v: number): number;
+      #|function pick(v: string | number): string | number {
+      #|  return v;
+      #|}
+      #|
+    ),
+  )
+  // One declaration survives: the implementation.
+  let mut decls = 0
+  for s in block.stmts {
+    match s {
+      Let(@ast.TsBinding::Ident("pick"), _, _) => decls += 1
+      _ => ()
+    }
+  }
+  assert_eq(decls, 1)
+}
+
+///|
+test "parser: an ambient function declaration is not a runtime declaration" {
+  let block = parse_block_from_source(
+    "declare function ambient(x: number): number;\n",
+  )
+  let mut decls = 0
+  for s in block.stmts {
+    match s {
+      Let(_, _, _) | Const(_, _, _) | Var(_, _, _) => decls += 1
+      _ => ()
+    }
+  }
+  assert_eq(decls, 0)
+}

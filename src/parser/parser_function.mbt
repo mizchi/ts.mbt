@@ -400,6 +400,9 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
     record_implicit_any_return(self, name)
     record_signature_param_initializer(self, params)
     record_bodiless_generator(self, name)
+    // No body: an overload signature or an ambient declaration. Both
+    // are type-only, and the caller drops the statement.
+    self.last_function_bodiless = true
     let _ = self.advance()
     return {
       name,
@@ -417,6 +420,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
     record_implicit_any_return(self, name)
     record_signature_param_initializer(self, params)
     record_bodiless_generator(self, name)
+    self.last_function_bodiless = true
     return {
       name,
       type_params,
@@ -429,6 +433,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
       is_async,
     }
   }
+  self.last_function_bodiless = false
   // Save and set function context (new function scope resets iteration/switch/labels context)
   let prev_generator = self.in_generator
   let prev_async = self.in_async
