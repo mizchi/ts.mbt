@@ -15,10 +15,14 @@
 //
 // Approach:
 //   Use the `SymbolGraph` to propagate a "definitely numeric"
-//   flag. A symbol is numeric when EVERY def (initializer +
-//   reassignment) writes a value that is itself numeric, AND the
-//   binding isn't captured by a closure (a closure could mutate
-//   it from another frame in ways we don't track here).
+//   flag. A symbol is numeric when it carries a `number` / `int`
+//   annotation, or when EVERY def (initializer + reassignment)
+//   writes a value that is itself numeric AND the binding isn't
+//   captured by a closure (an unannotated binding a closure holds
+//   could be mutated from another frame in ways we don't track).
+//   An annotation outranks the closure guard: a write that violates
+//   it isn't a write TypeScript admits, and it is the only proof
+//   available for a parameter, which has no def to walk.
 //
 //   The lattice is two-valued (`Numeric` / `Maybe`) and the
 //   propagation walks until fixed point. In practice 1-2 rounds
@@ -47,13 +51,28 @@ pub fn infer_numeric_symbols(g : SymbolGraph) -> Map[SymbolId, Bool] {
       if numeric.contains(sym.id) {
         continue
       }
+      // A `number` / `int` annotation is proof on its own, and it is
+      // the only proof available for a parameter — a parameter has no
+      // def to walk, so `dispatch(i: number)` used as `middleware[i]`
+      // would otherwise never be recognized. Every write to the
+      // binding has to satisfy the annotation, so the reassignment
+      // walk below has nothing to add.
+      match sym.ts_type {
+        Number | Int => {
+          numeric[sym.id] = true
+          changed = true
+          continue
+        }
+        _ => ()
+      }
       // Closure capture: a nested function could write any value
-      // into this binding. Conservative -> stay Maybe.
+      // into this binding, and without an annotation there is
+      // nothing constraining what. Conservative -> stay Maybe.
       if sym.captured_by_closure {
         continue
       }
-      // No def at all (param without observed init, ambient
-      // import, etc.) -> can't prove anything.
+      // No def at all (param without a numeric annotation or an
+      // observed init, ambient import, etc.) -> can't prove anything.
       if sym.defs.length() == 0 {
         continue
       }
@@ -153,33 +172,33 @@ fn is_expr_numeric(
     CompoundAssignExpr(_, _, _) => true // all compound assigns are numeric
     Seq(_, b) => is_expr_numeric(b, g, numeric)
     // Resolve `Var(n)` through the graph. We don't carry the
-    // current scope here — names go through every scope they could
-    // resolve to. Conservative: only proceed when the name appears
-    // exactly once in `symbols` (= no shadowing). Production
-    // implementations would thread scope info through; the
-    // wildcard fallback keeps us safe either way.
-    @ast.TsExpr::Var(n) =>
-      // Find a UNIQUE matching symbol. Shadowed names give up.
-      lookup_unique_symbol(g, n) is Some(id) && numeric.contains(id)
+    // current scope here — the name could resolve to any binding
+    // that declares it. So require them ALL to be numeric: then it
+    // doesn't matter which one this is.
+    @ast.TsExpr::Var(n) => all_symbols_numeric(g, n, numeric)
     _ => false
   }
 }
 
 ///|
-/// Find the single symbol matching `name` across the whole graph.
-/// Returns `None` when the name doesn't appear or appears more than
-/// once (shadowing in nested scopes — we conservatively decline).
-fn lookup_unique_symbol(g : SymbolGraph, name : String) -> SymbolId? {
-  let mut hit : SymbolId? = None
+/// True when `name` is declared somewhere in the graph and every
+/// binding carrying it is numeric. Without scope info at the use
+/// site that is what it takes to say the use is numeric.
+fn all_symbols_numeric(
+  g : SymbolGraph,
+  name : String,
+  numeric : Map[SymbolId, Bool],
+) -> Bool {
+  let mut seen = false
   for s in g.symbols {
     if s.name == name {
-      if hit is Some(_) {
-        return None // shadowed
+      if !numeric.contains(s.id) {
+        return false
       }
-      hit = Some(s.id)
+      seen = true
     }
   }
-  hit
+  seen
 }
 
 // ---------------------------------------------------------------------------
@@ -202,9 +221,12 @@ pub fn is_index_numeric_with_graph(
 
 ///|
 /// Project the symbol-id-keyed numeric map down to a name-keyed
-/// set, dropping any name that appears more than once in `g`
-/// (shadowing — without scope info the caller can't tell which
-/// binding the name refers to, so conservatively decline).
+/// set. A name qualifies when EVERY binding carrying it is numeric:
+/// the caller has no scope info at the access site, so it cannot
+/// tell which binding `arr[i]` means — but if they are all numeric
+/// it does not need to. (Requiring the name to be unique instead
+/// gave up on `i`, which is declared in a dozen functions of any
+/// real bundle and numeric in all of them.)
 ///
 /// `mangle_safety.collect_props_on_external_*` consumes this so
 /// the IndexAccess wildcard fallback can ask "is `idx` a numeric
@@ -214,13 +236,15 @@ pub fn numeric_name_set(
   g : SymbolGraph,
   numeric : Map[SymbolId, Bool],
 ) -> Map[String, Bool] {
-  let counts : Map[String, Int] = {}
+  let non_numeric : Map[String, Bool] = {}
   for s in g.symbols {
-    counts[s.name] = counts.get(s.name).unwrap_or(0) + 1
+    if !numeric.contains(s.id) {
+      non_numeric[s.name] = true
+    }
   }
   let out : Map[String, Bool] = {}
   for s in g.symbols {
-    if numeric.contains(s.id) && counts.get(s.name).unwrap_or(0) == 1 {
+    if numeric.contains(s.id) && !non_numeric.contains(s.name) {
       out[s.name] = true
     }
   }

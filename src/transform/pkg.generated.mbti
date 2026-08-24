@@ -35,7 +35,7 @@ pub fn build_type_env(Array[@ast.TsInterface], Array[@ast.TsTypeAlias]) -> Map[S
 
 pub fn bundle_modules(Map[String, String], String, BundleOptions) -> Result[BundleOutput, String]
 
-pub fn class_method_dce_block(@ast.TsBlock, keep? : Map[String, Bool]) -> @ast.TsBlock
+pub fn class_method_dce_block(@ast.TsBlock, keep? : Map[String, Bool], explain? : Array[String]?) -> @ast.TsBlock
 
 pub fn collect_externally_visible_props(@ast.TsBlock, Map[String, Bool], type_env? : Map[String, @ast.TsType]) -> Array[String]
 

@@ -463,6 +463,7 @@ pub fn bundle_modules(
   let explain_params : Array[String] = []
   let explain_fields : Array[String] = []
   let explain_tags : Array[String] = []
+  let explain_methods : Array[String] = []
   // Set when the escape analysis reserved the wildcard. Every later
   // section then declines everything, and saying so once beats
   // repeating "it's reserved" for each name.
@@ -619,7 +620,20 @@ pub fn bundle_modules(
     // that nothing in the bundle accesses by name — except the ones
     // the export surface reaches, which the consumer calls. Gated on
     // the absence of reflection / dynamic-key access in the bundle.
-    combined = class_method_dce_block(combined, keep=export_surface)
+    let method_dce_reasons : Array[String] = []
+    combined = class_method_dce_block(
+      combined,
+      keep=export_surface,
+      explain=if opts.explain { Some(method_dce_reasons) } else { None },
+    )
+    if opts.explain {
+      explain_methods.push("")
+      explain_methods.push("unused class methods: what was dropped and why not")
+      explain_methods.push("")
+      for line in method_dce_reasons {
+        explain_methods.push("  " + line)
+      }
+    }
     // Type-aware constant folding: `typeof x === "string"` /
     // `x === null` etc. when the bound `x` carries a primitive
     // type annotation. Runs BEFORE the regular fold so the
@@ -1053,7 +1067,9 @@ pub fn bundle_modules(
   if opts.explain {
     explain.push("mtsc --explain-mangle")
     for
-      section in [explain_escape, explain_params, explain_fields, explain_tags] {
+      section in [
+        explain_escape, explain_params, explain_methods, explain_fields, explain_tags,
+      ] {
       for line in section {
         explain.push(line)
       }

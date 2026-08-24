@@ -69,12 +69,17 @@
 pub fn class_method_dce_block(
   block : @ast.TsBlock,
   keep? : Map[String, Bool] = {},
+  explain? : Array[String]? = None,
 ) -> @ast.TsBlock {
   // 1. Cheap exit when neither shape of class is present: no
   //    NativeClassStmt/Expr AND no IIFE-lowered class. (The IIFE
   //    pattern is `let X = function () { … return X; }();`.)
   let iife_classes = collect_iife_class_names(block)
   if !has_any_native_class(block) && iife_classes.is_empty() {
+    match explain {
+      Some(out) => out.push("nothing to do — the bundle declares no classes.")
+      None => ()
+    }
     return block
   }
   // 2. Bundle-wide reflection / dynamic-access scan. Any hit aborts.
@@ -89,9 +94,18 @@ pub fn class_method_dce_block(
       graph,
       declared_class_names(block),
     ),
+    reasons: [],
   }
-  if block_has_method_sniff(block, facts) {
-    return block
+  // Deliberately not `block_has_method_sniff`, which stops at the
+  // first sink: scanning every top-level statement collects a
+  // reason per module instead of one for the whole bundle, so the
+  // report can rank the blocking patterns. The scan still
+  // short-circuits inside a statement.
+  let mut blocked = false
+  for s in block.stmts {
+    if stmt_has_method_sniff(s, facts) {
+      blocked = true
+    }
   }
   // 3. Collect the set of statically-accessed property names. Any
   //    `e.NAME` or `e["NAME"]` adds NAME, except names assigned
@@ -118,12 +132,124 @@ pub fn class_method_dce_block(
       accessed[name] = true
     }
   }
-  // 4. Rewrite native class statements, filtering their method lists.
+  // 4. Report. The unreached methods are computed from the same
+  //    `accessed` set the rewrite uses, whether or not the scan
+  //    cleared — so when the pass is off the report still says what
+  //    it would have cost.
+  match explain {
+    Some(out) => report_method_dce(block, accessed, facts, blocked, out)
+    None => ()
+  }
+  if blocked {
+    return block
+  }
+  // 5. Rewrite native class statements, filtering their method lists.
   let new_stmts : Array[@ast.TsStmt] = []
   for s in block.stmts {
     new_stmts.push(dce_stmt(s, accessed))
   }
   { stmts: new_stmts, stmt_positions: block.stmt_positions }
+}
+
+///|
+/// The distinct sinks the scan met, most frequent first, so the
+/// report names the *patterns* that block the pass rather than one
+/// arbitrary occurrence. Capped — a bundle with fifty variations of
+/// the same shape has nothing more to say after the first dozen.
+fn rank_sink_reasons(reasons : Array[String]) -> Array[String] {
+  let counts : Map[String, Int] = {}
+  for r in reasons {
+    counts[r] = counts.get(r).unwrap_or(0) + 1
+  }
+  let ranked : Array[(String, Int)] = []
+  for r, n in counts {
+    ranked.push((r, n))
+  }
+  // Selection sort by count, descending. The list is one entry per
+  // distinct sink shape, so it is short.
+  for i in 0..<ranked.length() {
+    let mut best = i
+    for j in (i + 1)..<ranked.length() {
+      if ranked[j].1 > ranked[best].1 {
+        best = j
+      }
+    }
+    if best != i {
+      let tmp = ranked[i]
+      ranked[i] = ranked[best]
+      ranked[best] = tmp
+    }
+  }
+  let out : Array[String] = []
+  let cap = 12
+  out.push("sinks, most frequent first:")
+  for i in 0..<ranked.length() {
+    if i >= cap {
+      out.push(
+        "  … and " +
+        (ranked.length() - cap).to_string() +
+        " more distinct sink shape(s).",
+      )
+      break
+    }
+    out.push("  [x" + ranked[i].1.to_string() + "] " + ranked[i].0)
+  }
+  out
+}
+
+///|
+/// Fill `out` with the `--explain-mangle` section for this pass:
+/// which methods went (or would have gone), and — when the scan
+/// found a sink — the construct that turned the pass off.
+fn report_method_dce(
+  block : @ast.TsBlock,
+  accessed : Map[String, Bool],
+  facts : SniffFacts,
+  blocked : Bool,
+  out : Array[String],
+) -> Unit {
+  let unreached : Array[String] = []
+  for s in block.stmts {
+    match s {
+      NativeClassStmt(decl, _) =>
+        for m in decl.methods {
+          if m.name != "constructor" && !accessed.contains(m.name) {
+            unreached.push(decl.name + "." + m.name)
+          }
+        }
+      _ => ()
+    }
+  }
+  if blocked {
+    out.push(
+      "SUPPRESSED — a sink in the bundle can observe a member name the " +
+      "pass cannot spell out, so every class keeps every method.",
+    )
+    for line in rank_sink_reasons(facts.reasons) {
+      out.push(line)
+    }
+    if unreached.length() == 0 {
+      out.push("nothing would have been dropped anyway.")
+    } else {
+      out.push(
+        "would have dropped " +
+        unreached.length().to_string() +
+        " unreached method(s):",
+      )
+      for name in unreached {
+        out.push("  " + name)
+      }
+    }
+    return
+  }
+  if unreached.length() == 0 {
+    out.push("every declared method is reachable; nothing dropped.")
+  } else {
+    out.push("dropped " + unreached.length().to_string() + " method(s):")
+    for name in unreached {
+      out.push("  " + name)
+    }
+  }
 }
 
 ///|
@@ -137,6 +263,12 @@ struct SniffFacts {
   /// Bindings whose declared type is a keyed container rather than an
   /// object with members — an array, a tuple, a string, a `Record`.
   keyed_containers : Map[String, Bool]
+  /// Every construct the scan judged a sink, in the order it met
+  /// them, so `--explain-mangle` can name what turned the pass off
+  /// instead of just reporting that it is off. Written by the scan
+  /// itself, which is why the explanation cannot drift from the
+  /// decision.
+  reasons : Array[String]
 }
 
 ///|
@@ -192,6 +324,28 @@ fn non_instance_index_names(
 }
 
 ///|
+/// A short rendering of `recv[idx]` for the explain report — enough
+/// to find the access in the source. Shapes the renderer can't name
+/// become `…`.
+fn describe_index_read(recv : @ast.TsExpr, idx : @ast.TsExpr) -> String {
+  describe_index_operand(recv) + "[" + describe_index_operand(idx) + "]"
+}
+
+///|
+fn describe_index_operand(e : @ast.TsExpr) -> String {
+  match e {
+    Var(n) => n
+    StringLit(s) => "\"" + s + "\""
+    PropAccess(inner, p) => describe_index_operand(inner) + "." + p
+    MethodCall(inner, m, _) => describe_index_operand(inner) + "." + m + "()"
+    IndexAccess(inner, k) =>
+      describe_index_operand(inner) + "[" + describe_index_operand(k) + "]"
+    NonNull(inner) | OptionalChain(inner) => describe_index_operand(inner)
+    _ => "…"
+  }
+}
+
+///|
 /// True when the receiver of a computed-key read is a binding whose
 /// declared type makes the read an entry lookup rather than a member
 /// access. Only a bare name qualifies: for a computed receiver
@@ -220,7 +374,7 @@ fn type_is_keyed_container(
         head == "ReadonlyArray" ||
         head == "ReadonlyMap"
       ) &&
-      not(class_names.contains(head))
+      !class_names.contains(head)
     _ => false
   }
 }
@@ -778,6 +932,14 @@ fn expr_has_method_sniff(expr : @ast.TsExpr, facts : SniffFacts) -> Bool {
     MethodCall(@ast.TsExpr::Var(recv), m, args) => {
       let recv_is_reflective = recv == "Object" || recv == "Reflect"
       if recv_is_reflective && method_sniff_methods.contains(m) {
+        facts.reasons.push(
+          "`" +
+          recv +
+          "." +
+          m +
+          "(...)` reports non-enumerable properties, which is what a " +
+          "class prototype method is",
+        )
         return true
       }
       for a in args {
@@ -816,6 +978,13 @@ fn expr_has_method_sniff(expr : @ast.TsExpr, facts : SniffFacts) -> Bool {
       if !is_static_index_for_method_dce(idx) &&
         !is_index_numeric_with_names(idx, facts.numeric) &&
         !receiver_is_keyed_container(recv, facts) {
+        facts.reasons.push(
+          "`" +
+          describe_index_read(recv, idx) +
+          "` reads a member under a computed key that is neither " +
+          "provably numeric nor an entry of a keyed container, so any " +
+          "method could be the one it names",
+        )
         return true
       }
       expr_has_method_sniff(recv, facts) || expr_has_method_sniff(idx, facts)
@@ -834,6 +1003,9 @@ fn expr_has_method_sniff(expr : @ast.TsExpr, facts : SniffFacts) -> Bool {
       // through — be conservative when seeing them by name.
       if name == "Object" || name == "Reflect" {
         // `Object(x)` / `Reflect(x)` — let's just play safe.
+        facts.reasons.push(
+          "a bare `" + name + "(...)` call, which could be any reflection op",
+        )
         return true
       }
       for a in args {
