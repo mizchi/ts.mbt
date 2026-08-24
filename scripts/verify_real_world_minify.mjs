@@ -32,6 +32,16 @@
 //              public surface as overload sets, which is how the
 //              signature-emit bug surfaced.
 //
+// Every target is checked at the MOST aggressive setting the CLI offers
+// (`--minify --mangle --mangle-properties --treeshake --fold`), not a
+// mild one. The reason is empirical: the worst bug this harness has seen
+// needed `--mangle`, `--treeshake` and `--fold` simultaneously — the
+// second treeshake only exists inside the fold branch, and its roots
+// were pre-mangle names, so it deleted the entire export surface. A
+// harness that tests a gentler configuration would have missed it.
+// `typescript.js` is the exception: 9 MB already takes ~13 minutes and
+// `--fold` on top is not worth the wall clock.
+//
 // Needs network access on the first run: packages come from npm and
 // checker.ts from the TypeScript repo, cached under _build/real-world.
 // Not part of `just ci` for that reason.
@@ -132,6 +142,17 @@ function npmInstall(dir, specs) {
   return true;
 }
 
+// The most aggressive combination the CLI offers. See the note at the
+// top: the pass interactions are where the bugs have been.
+const MAX_FLAGS = [
+  "--bundle",
+  "--minify",
+  "--mangle",
+  "--mangle-properties",
+  "--treeshake",
+  "--fold",
+];
+
 const results = [];
 function record(target, pass, detail) {
   results.push({ target, pass, detail });
@@ -228,7 +249,7 @@ function verifyReact() {
   const problems = [];
   for (const f of originals) {
     const out = path.join(dir, `min-${path.basename(f.rel)}`);
-    const m = minify(f.orig, out, ["--minify", "--bundle", "--mangle", "--mangle-properties"]);
+    const m = minify(f.orig, out, MAX_FLAGS);
     if (!m.ok) {
       problems.push(`${path.basename(f.rel)}: compile failed (${m.why})`);
       continue;
@@ -354,7 +375,7 @@ function verifyTypescript() {
   // is how this was ruled out as a minifier bug the first time it showed
   // up.
   const out = path.join(dir, "node_modules", "typescript", "lib", "typescript.min.js");
-  const m = minify(lib, out, ["--minify", "--bundle", "--mangle"]);
+  const m = minify(lib, out, ["--minify", "--bundle", "--mangle", "--treeshake"]);
   if (!m.ok) {
     record("typescript", false, `compile failed (${m.why})`);
     return;
@@ -474,7 +495,7 @@ function verifyHono() {
     return;
   }
   const out = path.join(dir, "min.mjs");
-  const m = minify(entry, out, ["--bundle", "--minify", "--mangle", "--mangle-properties"]);
+  const m = minify(entry, out, MAX_FLAGS);
   if (!m.ok) {
     record("hono", false, `minify failed (${m.why})`);
     return;
@@ -595,7 +616,7 @@ function verifyValibot() {
     return;
   }
   const out = path.join(dir, "min.mjs");
-  const m = minify(entry, out, ["--bundle", "--minify", "--mangle", "--mangle-properties"]);
+  const m = minify(entry, out, MAX_FLAGS);
   if (!m.ok) {
     record("valibot", false, `minify failed (${m.why})`);
     return;
@@ -647,7 +668,7 @@ function verifyCheckerSource() {
     }
   }
   const out = path.join(dir, "checker.min.js");
-  const m = minify(src, out, ["--minify"]);
+  const m = minify(src, out, ["--minify", "--fold"]);
   if (!m.ok) {
     record("checker.ts", false, `compile failed (${m.why})`);
     return;

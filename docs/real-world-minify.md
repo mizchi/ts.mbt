@@ -537,6 +537,33 @@ minifier 同士の比較になります。
 `firstSeenMs` / `displayLabel` / `volumeWeight` などは到達不能と証明
 されて rename されています。
 
+### framework 型の library は構造的に無理
+
+hono の wildcard 原因を全部見ると 50 件あり、`valueIndex` / `keyIndex` /
+`start` / `end` のような明らかな primitive も混じっていますが、残りは
+`c` / `req` / `res` / `context` / `next` / `handlerData` —— **Hono の
+Context と Request そのもの**です。
+
+これは精度の問題ではありません。web framework の仕事は、自分の object を
+**利用者が書いた handler に渡すこと**です。handler は解析対象の外にある
+callee なので、door 2 は定義上開いています。どれだけ解析を精密にしても
+閉じません。
+
+つまり property mangling の適用可否は「library か app か」ではなく、
+**自分の object を外部の code に手渡す設計かどうか**で決まります。
+
+| 形 | property mangling |
+| --- | --- |
+| application（公開 API 無し） | 効く（実測 25%） |
+| 内部が閉じた library | 効きうる |
+| framework（callback に自分の object を渡す） | **構造的に不可** |
+| 動的 dispatch（`Proxy` / quoted property） | **構造的に不可** |
+
+hono で `--mangle-properties` が 6.4 KB 効いたのは、user の property 名では
+なく mtsc が合成した `#private` field の brand（`__private_brand__N__X`）を
+rename した分です。wildcard が立っていても内部 marker だけは安全に
+rename できる、という fallback 経路が働いています。
+
 ### 何を target にすべきか
 
 効く順に。
