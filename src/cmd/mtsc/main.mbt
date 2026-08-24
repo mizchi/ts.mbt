@@ -437,6 +437,19 @@ async fn mtsc_load_bundle_files(
       continue
     }
     let resolved = mtsc_resolve_existing(disk_path)
+    // A relative import that names no file on disk is not a reason to
+    // fail the compile. It is what a build-generated module looks like
+    // from a source checkout: TypeScript's own `checker.ts` imports
+    // `./_namespaces/ts.performance.js`, which its build produces and
+    // the repository does not carry. Treat it the way a bare specifier
+    // is treated — leave the import verbatim and move on. The entry
+    // file itself is exempt: nothing to compile if that is missing.
+    if disk_path != entry_path && !mtsc_file_exists(resolved) {
+      println(
+        "mtsc: unresolved import \{disk_path} — left as an external import",
+      )
+      continue
+    }
     let source = @fs.read_file(resolved).text() catch {
       e => return Err("read error \{resolved}: \{e}")
     }
@@ -1018,6 +1031,11 @@ async fn main {
       .with_aliases(aliases)
       .with_extra_reserved_props(extra_reserved)
       .with_explain(opts.explain_mangle)
+      // The loader above already asked the filesystem about every
+      // relative import and printed a line for each one that is not
+      // there, so the bundler doesn't need to fail over them a second
+      // time — it keeps them verbatim.
+      .with_allow_unresolved_imports(true)
     let bundle_opts = { ..bundle_opts, jsx: jsx_cfg }
     let result = @transform.bundle_modules(files, input_path, bundle_opts)
     let out = match result {

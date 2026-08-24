@@ -148,6 +148,28 @@ test "bundle: missing module fails with a clear error" {
 }
 
 ///|
+test "bundle: an unresolved relative import can be kept as external" {
+  // What a build-generated module looks like from a source checkout:
+  // TypeScript's `checker.ts` imports `./_namespaces/ts.performance.js`,
+  // which its build emits and the repository does not carry. With the
+  // option set the import survives verbatim instead of failing the
+  // bundle — the code that calls through it still needs the binding.
+  let files = vfs([
+    (
+      "entry.ts", "import * as perf from \"./_namespaces/gen.js\";\nperf.mark(\"x\");\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_allow_unresolved_imports(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("./_namespaces/gen.js"))
+      assert_true(out.js.contains("mark"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "bundle: relative paths resolve through ./ and ../" {
   // `entry.ts` lives in `src/`, depends on `./lib.ts` and `../shared.ts`.
   let files = vfs([

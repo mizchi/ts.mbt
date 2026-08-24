@@ -556,6 +556,32 @@ non-enumerable まで見える reflection（`getOwnPropertyNames` /
 `getOwnPropertyDescriptors` / `ownKeys` / `getOwnPropertyDescriptor`）は
 そのまま sink です。
 
+### 16. 解決できない relative import が compile 全体を落とす（CLI / bundle）
+
+`checker.ts` を `--minify --fold` に通すと出力が 1 byte も出ず、exit code は
+0 でした（`--fold` は `--bundle` を含むので import graph を歩きます）。
+
+```
+mtsc: read error _build/real-world/checker/_namespaces/ts.performance.js:
+      No such file or directory
+```
+
+`checker.ts` は `./_namespaces/ts.js` / `ts.moduleSpecifiers.js` /
+`ts.performance.js` を import します。**これらは build 生成物で、
+repository には無い** file です。source checkout を直接 minify するという
+target の性質上、これは異常ではなく普通の状態です。
+
+bare specifier（`react` など）は最初から「vfs に無ければ external として
+そのまま emit」でした。relative specifier にその経路が無かっただけです。
+今は CLI が実 filesystem に問い合わせて 1 行報告し、bundler 側は
+`allow_unresolved_imports` が立っているときだけ verbatim に残します。
+vfs だけで動く呼び出し元は厳格なまま —— `./mising` の typo は今も error
+です（`bundle: missing module fails with a clear error` がそれを守ります）。
+
+checker.ts は 3,065,627 → **1,542,261 byte**（50% 減）で通り、出力は
+parse します。以前の記録（1,535,419）より少し大きいのは、3 つの import が
+verbatim に残るからで、そちらが正しい出力です。
+
 ### 15. `--explain-mangle` が method DCE について何も言わなかった
 
 `--explain-mangle` は property 予約・declined parameter・dead field・

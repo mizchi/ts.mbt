@@ -84,6 +84,10 @@ pub(all) struct BundleOptions {
   // `--explain-mangle` is the reason the analyses keep their reasons
   // rather than just their answers.
   explain : Bool
+  // Keep a relative import the vfs cannot resolve as an external
+  // import instead of failing. Set by the CLI, which has already
+  // asked the real filesystem; in-memory callers stay strict.
+  allow_unresolved_imports : Bool
 }
 
 ///|
@@ -100,7 +104,16 @@ pub fn BundleOptions::default() -> BundleOptions {
     aliases: {},
     extra_reserved_props: [],
     explain: false,
+    allow_unresolved_imports: false,
   }
+}
+
+///|
+pub fn BundleOptions::with_allow_unresolved_imports(
+  self : BundleOptions,
+  v : Bool,
+) -> BundleOptions {
+  { ..self, allow_unresolved_imports: v }
 }
 
 ///|
@@ -394,6 +407,7 @@ pub fn bundle_modules(
       external_imports,
       external_seen,
       opts.aliases,
+      opts.allow_unresolved_imports,
     ) {
     Ok(_) => ()
     Err(e) => return Err(e)
@@ -1137,6 +1151,12 @@ fn load_module_graph(
   external_imports : Array[@ast.TsImportDecl],
   external_seen : Map[String, Bool],
   aliases : Map[String, String],
+  // When set, a relative import the vfs cannot resolve is kept
+  // verbatim as an external import instead of failing the bundle.
+  // Only the CLI sets this, and only because it has already asked the
+  // real filesystem: in-memory callers keep the strict behaviour, so a
+  // mistyped `./mising` is still an error and not a silent external.
+  allow_unresolved : Bool,
 ) -> Result[Unit, String] {
   if modules.contains(path) {
     return Ok(())
@@ -1217,10 +1237,30 @@ fn load_module_graph(
       Some(base_dep) => {
         // Probe extensions in order until the vfs has the file.
         let dep_path = resolve_with_extensions(files, base_dep)
+        // Nothing in the vfs under any extension. That is what a
+        // build-generated module looks like from a source checkout —
+        // TypeScript's `checker.ts` imports
+        // `./_namespaces/ts.performance.js`, which its build emits and
+        // the repository does not carry. Treat it the way a bare
+        // specifier is treated: keep the import verbatim rather than
+        // failing the bundle over a module the caller never had.
+        if allow_unresolved && !files.contains(dep_path) {
+          let key = imp.module_spec +
+            ":" +
+            (match imp.default_binding {
+              Some(s) => s
+              None => ""
+            })
+          if !external_seen.contains(key) {
+            external_seen[key] = true
+            external_imports.push(imp)
+          }
+          continue
+        }
         resolved[imp.module_spec] = dep_path
         match
           load_module_graph(
-            files, dep_path, modules, external_imports, external_seen, aliases,
+            files, dep_path, modules, external_imports, external_seen, aliases, allow_unresolved,
           ) {
           Ok(_) => ()
           Err(e) => return Err(e)
@@ -1239,6 +1279,7 @@ fn load_module_graph(
             match
               load_module_graph(
                 files, dep_path, modules, external_imports, external_seen, aliases,
+                allow_unresolved,
               ) {
               Ok(_) => ()
               Err(e) => return Err(e)
@@ -1251,6 +1292,7 @@ fn load_module_graph(
               match
                 load_module_graph(
                   files, dep_path, modules, external_imports, external_seen, aliases,
+                  allow_unresolved,
                 ) {
                 Ok(_) => ()
                 Err(e) => return Err(e)
@@ -1283,10 +1325,17 @@ fn load_module_graph(
     match resolve_relative(path, re.module_spec) {
       Some(base_dep) => {
         let dep_path = resolve_with_extensions(files, base_dep)
+        // Same as the import loop: a relative target the vfs does not
+        // have is a module the caller never had. A bare re-export
+        // target isn't tracked as external either (see below), so
+        // skipping matches the existing behaviour for that case.
+        if allow_unresolved && !files.contains(dep_path) {
+          continue
+        }
         resolved[re.module_spec] = dep_path
         match
           load_module_graph(
-            files, dep_path, modules, external_imports, external_seen, aliases,
+            files, dep_path, modules, external_imports, external_seen, aliases, allow_unresolved,
           ) {
           Ok(_) => ()
           Err(e) => return Err(e)
@@ -1299,6 +1348,7 @@ fn load_module_graph(
             match
               load_module_graph(
                 files, dep_path, modules, external_imports, external_seen, aliases,
+                allow_unresolved,
               ) {
               Ok(_) => ()
               Err(e) => return Err(e)
@@ -1311,6 +1361,7 @@ fn load_module_graph(
               match
                 load_module_graph(
                   files, dep_path, modules, external_imports, external_seen, aliases,
+                  allow_unresolved,
                 ) {
                 Ok(_) => ()
                 Err(e) => return Err(e)

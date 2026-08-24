@@ -154,9 +154,11 @@ pub(all) struct BundleOptions {
   aliases : Map[String, String]
   extra_reserved_props : Array[String]
   explain : Bool
+  allow_unresolved_imports : Bool
 }
 pub fn BundleOptions::default() -> Self
 pub fn BundleOptions::with_aliases(Self, Map[String, String]) -> Self
+pub fn BundleOptions::with_allow_unresolved_imports(Self, Bool) -> Self
 pub fn BundleOptions::with_explain(Self, Bool) -> Self
 pub fn BundleOptions::with_extra_reserved_props(Self, Array[String]) -> Self
 pub fn BundleOptions::with_fold(Self, Bool) -> Self
