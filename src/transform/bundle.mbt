@@ -885,10 +885,23 @@ pub fn bundle_modules(
         // `if (false) { … }` branches whose declarations are now
         // unreachable. A lightweight treeshake pass removes them
         // before the final peephole compaction.
+        //
+        // The roots have to be the POST-MANGLE names. `export_roots`
+        // holds what the source called them, and the mangler renames
+        // the top level freely (`preserve_top_level: false`), so the
+        // pre-mangle names match nothing here: every root reads as
+        // dead and the pass deletes the entire export surface. On hono
+        // that turned 18 KB into 4 KB with no `export` clause left —
+        // and only with `--mangle --treeshake --fold` together, which
+        // is why nothing simpler caught it.
         if opts.treeshake {
+          let live_roots : Map[String, Bool] = {}
+          for name in export_roots.keys() {
+            live_roots[mangle_export_renames.get(name).unwrap_or(name)] = true
+          }
           combined = treeshake_block(
             combined,
-            roots=export_roots,
+            roots=live_roots,
             pure_calls=proven_pure,
           )
         }

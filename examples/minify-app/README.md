@@ -23,10 +23,15 @@ synthetic event data, with ~30 declared interface fields and no
 | variant | bytes | gzip | vs bundle | behaviour |
 | --- | --- | --- | --- | --- |
 | `--bundle` (no minify) | 6,242 | 1,940 | — | baseline |
-| `--bundle --minify --mangle` | 3,413 | 1,388 | 45% | same output |
-| `+ --mangle-properties` | **2,561** | **1,134** | **59%** | same output |
+| `--minify --mangle --treeshake` | 3,372 | 1,359 | 46% | same output |
+| `+ --mangle-properties` | **2,552** | **1,131** | **59%** | same output |
 | terser `--compress --mangle` | 3,450 | 1,366 | 45% | same output |
 | terser `+ --mangle-props` | 2,101 | 1,153 | 66% | **wrong output** |
+
+`--treeshake` is in the mtsc column because terser's `--compress` drops
+unreferenced top-level declarations by itself once `--module` is set.
+Comparing without it measured mtsc-without-DCE against
+terser-with-DCE.
 
 Both tools minify the same unminified bundle, so the comparison is
 between minifiers rather than between bundlers.

@@ -15,7 +15,7 @@
 | TypeScript 5.7.3（`src/compiler/checker.ts` と `lib/typescript.js`） | 3 MB / 9 MB の実 source を通せるか、出力が有効な JS か、compiler として動くか |
 
 結論を先に書くと、**この検証を始めた時点では 1 つも通りませんでした**。
-12 件の bug を潰して通るようになりました。うち 9 件は corpus では原理的に
+13 件の bug を潰して通るようになりました。うち 10 件は corpus では原理的に
 出ない種類のものです。
 
 ## 見つかった bug
@@ -349,18 +349,29 @@ JSON / 404 / error handler を実際に叩いて response を diff します。
 
 | variant | bytes | gzip | 挙動 |
 | --- | --- | --- | --- |
-| `--bundle`（未 minify） | 61,950 | 13,922 | baseline |
-| mtsc `--minify` | 44,788 | 11,982 | 一致 |
+| `--bundle`（未 minify） | 61,950 | 13,924 | baseline |
 | mtsc `--minify --mangle` | 30,283 | 9,685 | 一致 |
-| mtsc `+ --mangle-properties` | 23,382 | 9,256 | 一致 |
+| mtsc `+ --treeshake` | **24,493** | **7,817** | 一致 |
+| mtsc `+ --mangle-properties` | **18,063** | **7,403** | 一致 |
+| mtsc `+ --fold` | 18,097 | 7,397 | 一致 |
 | terser `--compress --mangle` | 25,677 | 7,902 | 一致 |
-| terser `+ --mangle-props` | 18,130 | 7,302 | **response が違う** |
+| terser `+ --mangle-props` | 18,130 | 7,303 | **response が違う** |
 
-正直に読むと **terser のほうが強い**（identifier のみで 25,677 対 30,283、
-gzip では 7,902 対 9,685）。terser の `--compress` は mtsc が持たない
-最適化（dead code、inlining、sequence 化など）を多数持つので、当然の差
-です。`+props` を足すと raw では terser の既定を下回りますが（23,382 対
-25,677）、gzip では負けます。
+**`--treeshake` を渡すと mtsc が terser を上回ります**（24,493 対 25,677、
+gzip でも 7,817 対 7,902）。そして**安全な** property mangling を足した
+18,063 は、terser の**危険な** `--mangle-props`（18,130、しかも response
+が変わる）より raw で小さい。gzip では terser が 1.4% 上（7,403 対 7,303）
+です。
+
+> **訂正。** 最初にこの表を出したとき「terser のほうが 15% 強い」と
+> 書きましたが、あれは **flag の非対称**でした。terser の `--compress` は
+> `--module` があれば未参照の top-level 宣言を自分で落とします。mtsc 側に
+> `--treeshake` を渡していなかったので、DCE 無しの mtsc と DCE 有りの
+> terser を比べていたことになります。**同じ pass を両側で有効にしないと
+> 数字は何も意味しません。** `scripts/compare_terser.mjs` の mtsc 列には
+> `--treeshake` を入れました。
+
+`--fold` はこの target では効きません（raw ではむしろ 34 byte 増える）。
 
 この target で重要なのは byte 数ではありません。**clone した TS source を
 直接通すと、npm の dist では出なかった bug が 3 件出ました。**
@@ -392,10 +403,16 @@ overload set** で、dispatch は quoted property (`~run`) 経由。
 | --- | --- | --- | --- |
 | `--bundle`（未 minify） | 228,307 | — | baseline |
 | mtsc `--minify` | 124,172 | 16,383 | 一致 |
-| mtsc `--minify --mangle` | 88,642 | 14,933 | 一致 |
+| mtsc `--minify --mangle` | 88,642 | 14,932 | 一致 |
+| mtsc `+ --treeshake` | 88,642 | 14,942 | 一致 |
 | mtsc `+ --mangle-properties` | 88,642 | 14,932 | 一致 |
-| terser `--compress --mangle` | 88,226 | 14,615 | 一致 |
+| terser `--compress --mangle` | 88,226 | 14,614 | 一致 |
 | terser `+ --mangle-props` | 77,093 | 14,107 | **結果が違う** |
+
+`--treeshake` の取り分が 0 なのは、valibot の entry がほぼ全部を
+re-export するので落とせる top-level が無いからです。hono で 5.8 KB
+効いたのは、router 実装のような**内部だけの code** があったからで、
+「library だから効く／効かない」ではなく公開面の広さで決まります。
 
 挙動は schema / pipe / transform / union / optional と error 側
 （issue kind、dot path、`flatten`、`ValiError`）を実際に parse して比較。
@@ -406,6 +423,24 @@ quoted property dispatch で wildcard が立つので、property mangling は
 正しく降りています。
 
 そして**この target でしか出ない bug が 1 件**出ました。
+
+### 13. mangle + treeshake + fold で export surface が全部消える（bundle）
+
+2 回目の treeshake は **mangle 後の block** に対して走ります。root に
+渡していたのは `export_roots` —— source が付けていた名前です。
+top-level は `preserve_top_level: false` で全部 rename されているので、
+**pre-mangle の名前は 1 つも一致せず、全 root が dead と判定されて
+export surface ごと消えます。**
+
+hono では 18 KB が 4 KB になり、`export` 節が 1 つも残りませんでした
+（`SyntaxError: does not provide an export named 'Hono'`）。
+
+`--mangle` / `--treeshake` / `--fold` の **3 つ全部**が必要です ——
+2 回目の treeshake は fold branch の中にしかないので。`--mangle` を外すと
+34,722 byte で正常に動くのが、原因の切り分けになりました。
+
+root を mangle の rename map に通すだけの修正です。pass は無効化して
+いません（到達不能な helper は今も落ちます）。
 
 ### 12. overload signature が runtime 宣言として emit される（parser）
 

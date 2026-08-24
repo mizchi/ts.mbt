@@ -2650,3 +2650,40 @@ test "bundle: an overload set emits one declaration and still exports" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+/// The second treeshake runs on the POST-MANGLE block, so its roots have
+/// to be the post-mangle names. `export_roots` holds what the source
+/// called them, and `preserve_top_level: false` means the mangler
+/// renamed every one — so the pre-mangle names matched nothing, every
+/// root read as dead, and the pass deleted the entire export surface.
+///
+/// It needed `--mangle`, `--treeshake` and `--fold` all three: the
+/// second treeshake only runs inside the fold branch. On hono that
+/// turned 18 KB into 4 KB with no `export` clause left at all.
+test "bundle: fold + treeshake + mangle keeps the export surface" {
+  let files = vfs([
+    (
+      "dep.ts", "export function helper(n: number): number { return n * 3; }\nexport function unused(): number { return 0; }\n",
+    ),
+    (
+      "entry.ts", "import { helper } from \"./dep.js\";\nexport function run(n: number): number { return helper(n) + 1; }\n",
+    ),
+  ])
+  let opts = BundleOptions::default()
+    .with_mangle(true)
+    .with_minify(true)
+    .with_treeshake(true)
+    .with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // The export clause survives, and so does the code behind it.
+      assert_true(out.js.contains("as run"))
+      assert_true(out.js.contains("*3") || out.js.contains("* 3"))
+      // The unreachable helper is still dropped — the fix restores the
+      // roots, it does not disable the pass.
+      assert_false(out.js.contains("return 0"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}

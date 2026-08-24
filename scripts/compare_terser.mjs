@@ -11,17 +11,22 @@
 // labelled BROKEN and its bytes stop being a result.
 //
 // Variants:
-//   mtsc            --minify --bundle --mangle
-//   mtsc +props     --minify --bundle --mangle --mangle-properties
+//   mtsc            --minify --bundle --mangle --treeshake
+//   mtsc +props     …and --mangle-properties
 //                   (the type-driven safe property rename — the thing
 //                   this repo exists to do)
 //   terser          --compress --mangle
-//                   terser's default-safe setting; property mangling is
-//                   off because terser cannot prove it safe.
 //   terser +props   --compress --mangle --mangle-props
 //                   terser's unsafe property rename, for reference. It
 //                   renames every property it sees and leaves
 //                   correctness to the user's test suite.
+//
+// `--treeshake` is in the mtsc column because terser's `--compress`
+// drops unreferenced top-level declarations by itself once `--module`
+// is set. Leaving it out compared mtsc-without-DCE against
+// terser-with-DCE, which put mtsc 15% behind on hono and was an
+// artefact of the flags, not of the tools: with it, mtsc is ahead
+// there. Same passes on both sides or the number means nothing.
 //
 // Gzipped sizes are reported too, since that is what ships.
 //
@@ -112,11 +117,21 @@ function build(variant, input, output) {
 }
 
 const VARIANTS = [
-  { key: "mtsc", tool: "mtsc", flags: ["--minify", "--bundle", "--mangle"] },
+  {
+    key: "mtsc",
+    tool: "mtsc",
+    flags: ["--minify", "--bundle", "--mangle", "--treeshake"],
+  },
   {
     key: "mtsc +props",
     tool: "mtsc",
-    flags: ["--minify", "--bundle", "--mangle", "--mangle-properties"],
+    flags: [
+      "--minify",
+      "--bundle",
+      "--mangle",
+      "--mangle-properties",
+      "--treeshake",
+    ],
   },
   { key: "terser", tool: "terser", flags: ["--compress", "--mangle"] },
   {
@@ -242,12 +257,23 @@ function compareMinifyApp() {
   const before = fs.statSync(bundled).size;
   const rows = [["bundle (no minify)", num(before), kb(gz(bundled)), "\u2014", "baseline"]];
   const variants = [
-    { key: "mtsc", tool: "mtsc", input: entry, flags: ["--bundle", "--minify", "--mangle"] },
+    {
+      key: "mtsc",
+      tool: "mtsc",
+      input: entry,
+      flags: ["--bundle", "--minify", "--mangle", "--treeshake"],
+    },
     {
       key: "mtsc +props",
       tool: "mtsc",
       input: entry,
-      flags: ["--bundle", "--minify", "--mangle", "--mangle-properties"],
+      flags: [
+        "--bundle",
+        "--minify",
+        "--mangle",
+        "--mangle-properties",
+        "--treeshake",
+      ],
     },
     { key: "terser", tool: "terser", input: bundled, flags: ["--module", "--compress", "--mangle"] },
     {
