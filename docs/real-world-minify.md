@@ -18,6 +18,12 @@
 13 件の bug を潰して通るようになりました。うち 10 件は corpus では原理的に
 出ない種類のものです。
 
+その後「hono の使わない機能はもっと落とせるはずだ」を測る過程で 14 件目が
+出ました（#14: 動的 access の read と write が逆に判定されていた）。これは
+size ではなく**正しさ**の bug で、`obj[k]` で dispatch される method が
+削除されていました。同じ調査で `--explain-mangle` に method DCE の section
+を足しています（#15）。
+
 ## 見つかった bug
 
 ### 1. 比較演算子が file を丸ごと食う（parser）
@@ -491,6 +497,88 @@ error message）が単独で wildcard を立てていた。primitive は built-i
 これは bug でした（修正済み）。`unknown` / `any` は今も wildcard を
 立てます —— そちらは本当に何の形にもなり得るので正しい判断です。
 
+### 14. 動的 access の read と write が逆に判定されていた（class_method_dce）
+
+unused class-method DCE は bundle 全体を 1 回 scan して、5 種類の construct
+を「member 名を観測しうる」とまとめて扱い、どれか 1 つでも見つけたら
+pass を止めていました。うち 2 つの判定が逆でした。
+
+**computed key の write** (`obj[k] = v`) は receiver が `this` でない限り
+sink 扱いでした。理由は `C.prototype[k] = v` で prototype を後から
+生やす形があるから。しかし write は既存の名前を**観測しません**し、
+新しい名前を生やしても pass が削除した method が戻ってくるわけでは
+ないので、どの receiver でも sink になりません。
+
+**computed key の read** は逆に、「1 つの property しか触らない」という
+理由で素通しでした。触るのが 1 つでも、**どれを触るのか分からない**のが
+問題です。これは実際に壊れていました。
+
+```ts
+class Handlers {
+  alpha() { return "A" }
+  beta()  { return "B" }
+}
+const h = new Handlers();
+const key = process.argv[2] === "b" ? "beta" : "alpha";
+const fn = (h as any)[key];      // 両方の名前の唯一の出現箇所
+console.log(typeof fn === "function" ? fn.call(h) : "missing");
+```
+
+`alpha` も `beta` も静的 access が無いので両方削除され、出力は
+`missing` / `missing`。正解は `B` / `A` です。
+
+今は read が gate で、2 つの証明のどちらかで通します。
+
+1. **key が数値だと証明できる。**`numeric_vars.mbt` が
+   `arr[i]` / `arr[i + 1]` / `arr[n - 1]` を通します。整数 key は
+   整数 slot しか指せません。
+2. **receiver が member を持つ object ではなく keyed container だと
+   宣言されている。**`table[k]`（`table: Record<string, string>`）は
+   entry を引いているので method には届きません。array / tuple /
+   string / `Record<…>` / index signature 型 / container だけの union。
+
+`delete obj.m` も sink 扱いでした。class の prototype method は
+configurable なので、method が有っても無くても `delete` は同じ `true`
+を返します。instance に対する `delete` は prototype に届きません。
+名前付きの形は access collector が `m` を pin するので、そもそも
+消えません。今は operand を walk するだけです。
+
+`Object.keys / values / entries / assign / fromEntries` と `for...in`、
+spread は**own enumerable property しか見えません**。native class は
+method を prototype 上の **non-enumerable** として置くので、これらでは
+観測できません。`Object.assign(this, opts)` —— まさに hono の
+constructor —— が bundle 全体の method DCE を止めていた形です。
+ただし IIFE 化された `C.prototype.m = f` は own かつ enumerable なので、
+bundle が enumerate している場合は IIFE 側の prototype method を全部
+pin して native class だけ落とします。
+
+non-enumerable まで見える reflection（`getOwnPropertyNames` /
+`getOwnPropertyDescriptors` / `ownKeys` / `getOwnPropertyDescriptor`）は
+そのまま sink です。
+
+### 15. `--explain-mangle` が method DCE について何も言わなかった
+
+`--explain-mangle` は property 予約・declined parameter・dead field・
+discriminant tag を説明していましたが、**class-method DCE については
+無言**でした。呼ばれていない feature が残っていても、pass を読むしか
+理由を知る方法がありませんでした。
+
+新しい section は、scan が出会った sink を重複排除して**頻度順**に並べ、
+gate が通っていたら落ちていた method を列挙します。どちらも rewrite が
+使う `accessed` と同じ scan から出るので、説明と判定がずれません
+（`escape_breakdown` と同じ規律）。説明時は top-level statement の loop
+だけ short-circuit を外します —— これで bundle 全体で 1 つではなく
+module ごとに 1 つ理由が集まります。
+
+同時に numeric 推論の精度も 2 つ直しました。`number` / `int` 注釈は
+それ単独で証明になります —— parameter には walk する def が無いので
+これが唯一の証明で、しかも closure capture guard より優先します
+（注釈に反する write は TypeScript が認める write ではありません）。
+name 単位への射影は「その名前が unique なとき」ではなく
+「**その名前を持つ binding が全部 numeric なとき**」で通します ——
+`i` はどんな実 bundle でも十数個の function で宣言され、そのほぼ全部が
+numeric です。
+
 ### 測った: application では 25% 効く
 
 `examples/minify-app`（5 module 301 行、entry に `export` 無し）。
@@ -563,6 +651,87 @@ hono で `--mangle-properties` が 6.4 KB 効いたのは、user の property �
 なく mtsc が合成した `#private` field の brand（`__private_brand__N__X`）を
 rename した分です。wildcard が立っていても内部 marker だけは安全に
 rename できる、という fallback 経路が働いています。
+
+### hono の「使わない機能」は落ちるのか
+
+property mangling とは別に、**使わない feature 自体を落とせないか**を
+測りました。hono を library として bundle するのではなく、**1 route だけの
+application を entry にして**bundle します。
+
+```ts
+// app-entry.ts
+import { Hono } from './src/index.ts';
+const app = new Hono();
+app.get('/', (c) => c.text('root'));
+const res = await app.fetch(new Request('http://x/'));
+console.log(res.status, await res.text());
+```
+
+`--bundle --minify --mangle --mangle-properties --treeshake --fold`:
+
+| entry | 出力 | gzip |
+| --- | --- | --- |
+| `src/index.ts`（library 全体） | 18,097 | 7,398 |
+| `app-entry.ts`（1 route だけの app） | **18,196** | 7,431 |
+
+**1 byte も減らず、99 byte 増えました。**（app は正しく `200 root` を
+返します。増分は app 自身の code です。）`c.text` しか呼ばない app が、
+`parseBody` / `queries` / `blob` / `Hono.route` / `Hono.mount` まで全部
+抱えています。
+
+原因は 1 つに絞れました。unused class-method DCE の gate です。
+`--explain-mangle` に section を足したので、名前で出ます。
+
+```
+unused class methods: what was dropped and why not
+
+  SUPPRESSED — a sink in the bundle can observe a member name the pass
+  cannot spell out, so every class keeps every method.
+  sinks, most frequent first:
+    [x2] `form[key]` reads a member under a computed key that is neither
+         provably numeric nor an entry of a keyed container, …
+    [x2] `groups[i]` …
+    [x1] `middleware[i]` …
+    [x1] `patternCache[cacheKey]` …
+    [x1] `matchers[method]` …
+    [x1] `req[cacheKey]` …
+    … and 6 more distinct sink shape(s).
+  would have dropped 26 unreached method(s):
+    HonoRequest.param / query / queries / parseBody / json / bytes /
+    blob / addValidatedData / valid / matchedRoutes / routePath
+    Context.event / var
+    Hono.route / mount
+```
+
+18 個の distinct sink があり、**全部が同じ種類**――computed key での
+member read です。1 つでも残れば bundle 全体で pass が止まります
+（inline index signature 型を container として認めて `patternCache` を
+1 つ潰し、17 個)。
+
+落ちるはずだった 26 method の本体は、未 minify の 46,964 byte 中
+3,448 byte。ここが消えれば `_getQueryParam`(1,909) / `parseFormData`(594) /
+`parseBody`(447) / `bufferToFormData`(248) / `getQueryParams`(69) も
+treeshake で連鎖して消えるので、未 minify で **7 KB 前後（15%）**、
+minify + mangle 後で **2〜2.5 KB（11〜14%）**の見込みです。無視できる量では
+ありません。
+
+では 18 個を潰せるか。receiver の宣言を 1 つずつ見ると、3 層に分かれます。
+
+| 層 | 例 | 状況 |
+| --- | --- | --- |
+| 注釈が届く | `patternCache: { [key: string]: Pattern }` | **この作業で通した**（inline の index signature 型を `Record<…>` と同格に扱う。container だけの union も同様に認める） |
+| 注釈が届かない | `const middleware = this.#middleware`、`const tokens = markedPath.match(…) \|\| []`、`const { groups } = extractGroupsFromPath(…)`、`await Promise.all(buffer)` | 初期化子から container を推論すれば届く。name 単位の集約をやめて scope 解決にする必要もある（`i` は bundle 内に十数個あり、注釈なしの `forEach((list, i) =>)` が 1 つあるだけで全部の `i` が失格する） |
+| 原理的に無理 | `req[cacheKey]`、`headers[…]`、`this.#matchResult[…][…][key]` | **本物の動的 member read**。host object から計算した名前で member を引いている。どんな解析でも key を bound できない |
+
+3 層目が残るので、**hono の app bundle は member 単位の DCE では縮みません**。
+property mangling が構造的に不可なのと同じ結論に、別の経路で到達します。
+片方は「自分の object を外部に渡すから」、もう片方は「自分の member を
+計算した名前で引くから」です。
+
+得られたものは 2 つあります。第一に、gate が「何を観測できるか」で
+判定するようになったこと（下の #14 と #15）。第二に、`--explain-mangle`
+が**落ちなかった method と、その理由になった pattern を頻度順に**出すので、
+次に何を直せば効くかが推測ではなく計測になったことです。
 
 ### 何を target にすべきか
 

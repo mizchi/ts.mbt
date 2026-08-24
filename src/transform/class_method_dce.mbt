@@ -375,6 +375,30 @@ fn type_is_keyed_container(
         head == "ReadonlyMap"
       ) &&
       !class_names.contains(head)
+    // An inline index-signature type — `{ [key: string]: Pattern }`.
+    // Same standing as the `Record<string, Pattern>` spelling.
+    Object(fields) => {
+      for f in fields {
+        match f.0 {
+          String_ | Number | Int => return true
+          _ => ()
+        }
+      }
+      false
+    }
+    // `Record<string, string> | Record<string, string[]>` is a keyed
+    // container whichever arm it turns out to be.
+    Union(members) => {
+      if members.is_empty() {
+        return false
+      }
+      for m in members {
+        if !type_is_keyed_container(m, class_names) {
+          return false
+        }
+      }
+      true
+    }
     _ => false
   }
 }
