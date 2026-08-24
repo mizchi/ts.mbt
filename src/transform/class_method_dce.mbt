@@ -21,21 +21,38 @@
 //   const f = new Foo();
 //   f.start();
 //
-// Safety (syntactic, no type info needed). The pass is gated on
-// the bundle never observing method names dynamically:
+// Safety. The pass is gated on the bundle never *observing* a
+// method name it cannot spell out. What that comes down to:
 //
-//   * Any `obj[expr]` with a non-static index — we can't know
-//     which method name is referenced.
-//   * Reflection ops over a class shape: `Object.getOwnProperty
-//     Names`, `Object.getOwnPropertyDescriptors`,
-//     `Reflect.ownKeys`, `Reflect.getOwnPropertyDescriptor`.
-//   * `delete obj.method` — we can't drop a name the program
-//     was already trying to remove at runtime.
-//   * `Object.keys / entries / values / assign / fromEntries`
-//     and spread (`...x`) — these also enumerate object
-//     properties (and may include methods on plain objects;
-//     class methods live on the prototype but the analyzer
-//     can't always tell instances from plain objects apart).
+//   * A dynamic READ `obj[k]` whose key isn't a literal and isn't
+//     provably numeric. It reaches one property under a name we
+//     can't predict, so any method could be the target. `arr[i]`
+//     and `arr[i + 1]` clear the gate via the numeric-variable
+//     inference in `numeric_vars.mbt` — an integer key can only
+//     name an integer slot.
+//   * Reflection over a class shape: `Object.getOwnPropertyNames`,
+//     `Object.getOwnPropertyDescriptors`, `Reflect.ownKeys`,
+//     `Reflect.getOwnPropertyDescriptor`. These see
+//     *non-enumerable* properties, which is exactly what a class
+//     prototype method is.
+//
+// Three shapes that look like sinks but aren't, and so don't gate
+// the pass:
+//
+//   * A dynamic WRITE `obj[k] = v`, at any receiver. Writing never
+//     observes an existing name, and installing a new one cannot
+//     resurrect a method that was deleted.
+//   * `delete obj.m` / `delete obj[k]`. Prototype methods are
+//     configurable, so `delete` yields `true` either way, and a
+//     `delete` on an instance never reaches the prototype. (The
+//     named form pins `m` through the access collector regardless.)
+//   * `Object.keys / values / entries / assign / fromEntries`,
+//     `for...in`, and spread (`...x`) — all of these see only OWN
+//     ENUMERABLE properties, and a native class puts its methods on
+//     the prototype as non-enumerable. They do reach the
+//     IIFE-lowered shape's `C.prototype.m = f`, though, so when the
+//     bundle enumerates anything the pass pins every IIFE-assigned
+//     prototype method and prunes native classes only.
 //
 // When the bundle clears those, drop every method whose name
 // doesn't appear in the bundle's syntactic access set. The
@@ -61,7 +78,19 @@ pub fn class_method_dce_block(
     return block
   }
   // 2. Bundle-wide reflection / dynamic-access scan. Any hit aborts.
-  if block_has_method_sniff(block) {
+  //    The two name sets are what let the scan tell a harmless
+  //    dynamic read from a fatal one: `arr[i]` reads an integer
+  //    slot, `map[k]` reads an entry of a keyed container, and
+  //    `obj[k]` on anything else could name any member at all.
+  let graph = build_symbol_graph(block, {})
+  let facts = {
+    numeric: numeric_name_set(graph, infer_numeric_symbols(graph)),
+    keyed_containers: non_instance_index_names(
+      graph,
+      declared_class_names(block),
+    ),
+  }
+  if block_has_method_sniff(block, facts) {
     return block
   }
   // 3. Collect the set of statically-accessed property names. Any
@@ -75,12 +104,125 @@ pub fn class_method_dce_block(
   for name in keep.keys() {
     accessed[name] = true
   }
+  // 3b. Own-enumerable enumeration downgrade. `Object.keys(x)` and
+  //     friends cannot see a native class's prototype methods (they
+  //     are non-enumerable), but they *can* see the IIFE-lowered
+  //     shape's `C.prototype.m = f`. Rather than abort, keep every
+  //     IIFE-assigned prototype method and let native classes still
+  //     be pruned. `accessed` doubles as the detector: the access
+  //     collector records every `.NAME`, so a bundle that calls
+  //     `Object.assign` has `assign` in it. That over-approximates
+  //     (a `map.keys()` call trips it too) in the safe direction.
+  if block_enumerates_own_props(accessed) {
+    for name in iife_prototype_method_names(block, iife_classes) {
+      accessed[name] = true
+    }
+  }
   // 4. Rewrite native class statements, filtering their method lists.
   let new_stmts : Array[@ast.TsStmt] = []
   for s in block.stmts {
     new_stmts.push(dce_stmt(s, accessed))
   }
   { stmts: new_stmts, stmt_positions: block.stmt_positions }
+}
+
+///|
+/// What the sink scan needs to know about the bundle's bindings to
+/// judge a computed-key read. Both sets are name-keyed and drop
+/// shadowed names, so a hit is a proof about *the* binding of that
+/// name.
+struct SniffFacts {
+  /// Bindings that provably hold a number (`numeric_vars.mbt`).
+  numeric : Map[String, Bool]
+  /// Bindings whose declared type is a keyed container rather than an
+  /// object with members — an array, a tuple, a string, a `Record`.
+  keyed_containers : Map[String, Bool]
+}
+
+///|
+/// Names of classes declared in this bundle. Only their methods can
+/// be deleted, so only their names disqualify a container type below.
+fn declared_class_names(block : @ast.TsBlock) -> Map[String, Bool] {
+  let out : Map[String, Bool] = {}
+  for s in block.stmts {
+    match s {
+      NativeClassStmt(decl, _) => out[decl.name] = true
+      _ => ()
+    }
+  }
+  for n in collect_iife_class_names(block).keys() {
+    out[n] = true
+  }
+  out
+}
+
+///|
+/// Bindings a computed-key read cannot reach a deletable method
+/// through, judged from the annotation the symbol graph recorded.
+///
+/// `routes[k]` where `routes: Record<string, string>` reads an entry
+/// of a plain keyed map; `parts[k]` where `parts: string[]` reads an
+/// array slot. Neither can name a method of a class declared here,
+/// because a value with methods does not satisfy either type — an
+/// index signature rejects a method-valued property, and `T[]`
+/// demands the real `Array` prototype.
+///
+/// The caveat is structural typing: TypeScript would let a class
+/// instance stand in for one of these types if its members happened
+/// to fit. That needs a class whose *every* member matches the
+/// container's value type, which no real code writes on purpose, and
+/// the annotation has to be there in the first place — an
+/// unannotated binding lands on `Any` and is never blessed.
+fn non_instance_index_names(
+  g : SymbolGraph,
+  class_names : Map[String, Bool],
+) -> Map[String, Bool] {
+  let counts : Map[String, Int] = {}
+  for s in g.symbols {
+    counts[s.name] = counts.get(s.name).unwrap_or(0) + 1
+  }
+  let out : Map[String, Bool] = {}
+  for s in g.symbols {
+    if counts.get(s.name).unwrap_or(0) == 1 &&
+      type_is_keyed_container(s.ts_type, class_names) {
+      out[s.name] = true
+    }
+  }
+  out
+}
+
+///|
+/// True when the receiver of a computed-key read is a binding whose
+/// declared type makes the read an entry lookup rather than a member
+/// access. Only a bare name qualifies: for a computed receiver
+/// (`a.b[k]`, `f()[k]`) there is no annotation to consult.
+fn receiver_is_keyed_container(recv : @ast.TsExpr, facts : SniffFacts) -> Bool {
+  match recv {
+    Var(n) => facts.keyed_containers.contains(n)
+    _ => false
+  }
+}
+
+///|
+/// See `non_instance_index_names`. A generic head that happens to
+/// name a class declared in this bundle is declined — `Record` there
+/// would be that class, not the utility type.
+fn type_is_keyed_container(
+  t : @ast.TsType,
+  class_names : Map[String, Bool],
+) -> Bool {
+  match t {
+    Array(_) | Tuple(_) | Rest(_) | String_ => true
+    Applied(head, _) =>
+      (
+        head == "Record" ||
+        head == "Array" ||
+        head == "ReadonlyArray" ||
+        head == "ReadonlyMap"
+      ) &&
+      not(class_names.contains(head))
+    _ => false
+  }
 }
 
 // -- Step 1: cheap "has any class" check ------------------------------
@@ -111,6 +253,91 @@ fn collect_iife_class_names(block : @ast.TsBlock) -> Map[String, Bool] {
     }
   }
   out
+}
+
+///|
+/// True when the bundle observes own enumerable property names
+/// anywhere — `Object.keys` / `values` / `entries` / `assign` /
+/// `fromEntries`, or a `for...in`. Reads the already-collected
+/// access set instead of re-walking the tree: the collector records
+/// the callee name of every `recv.m(...)`, so `Object.assign(...)`
+/// leaves `assign` behind. Any same-named call on an unrelated
+/// receiver trips it too, which only makes the pass more careful.
+fn block_enumerates_own_props(accessed : Map[String, Bool]) -> Bool {
+  if accessed.contains(for_in_sentinel) {
+    return true
+  }
+  for m in own_enum_sniff_methods {
+    if accessed.contains(m) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+/// Every method name assigned as `C.prototype.NAME = …` inside the
+/// body of an IIFE-lowered class. Seeding these into the access set
+/// pins them, which is how the pass restricts itself to native
+/// classes when the bundle enumerates own enumerable properties.
+/// The three statement shapes mirror `iife_method_assignment_is_dead`
+/// so nothing it would delete is left unpinned.
+fn iife_prototype_method_names(
+  block : @ast.TsBlock,
+  iife_classes : Map[String, Bool],
+) -> Array[String] {
+  let out : Array[String] = []
+  for s in block.stmts {
+    match s {
+      Var(
+        @ast.TsBinding::Ident(n),
+        _,
+        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args)
+      )
+      | Let(
+        @ast.TsBinding::Ident(n),
+        _,
+        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args)
+      )
+      | Const(
+        @ast.TsBinding::Ident(n),
+        _,
+        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args)
+      ) =>
+        if args.length() == 0 && iife_classes.contains(n) {
+          for inner in f.body.stmts {
+            match iife_prototype_member_name(inner) {
+              Some(name) => out.push(name)
+              None => ()
+            }
+          }
+        }
+      _ => ()
+    }
+  }
+  out
+}
+
+///|
+/// The `NAME` in `X.prototype.NAME = …` (or `X.prototype.NAME.SUB =
+/// …`), for the statement shapes the IIFE pruner recognizes.
+fn iife_prototype_member_name(stmt : @ast.TsStmt) -> String? {
+  match stmt {
+    PropAssign(@ast.TsExpr::PropAccess(_, "prototype"), name, _) => Some(name)
+    PropAssign(
+      @ast.TsExpr::PropAccess(@ast.TsExpr::PropAccess(_, "prototype"), name),
+      _,
+      _
+    ) => Some(name)
+    Expr(
+      @ast.TsExpr::PropAssignExpr(
+        @ast.TsExpr::PropAccess(_, "prototype"),
+        name,
+        _
+      )
+    ) => Some(name)
+    _ => None
+  }
 }
 
 ///|
@@ -379,17 +606,43 @@ fn expr_has_native_class(expr : @ast.TsExpr) -> Bool {
 
 ///|
 let method_sniff_methods : Array[String] = [
-  // Reflective method-name observation.
+  // Reflective method-name observation. These see *non-enumerable*
+  // properties too, which is exactly what a class prototype method
+  // is, so a bundle containing any of them can observe a name this
+  // pass would delete. Hard abort.
   "getOwnPropertyNames", "getOwnPropertyDescriptors", "ownKeys", "getOwnPropertyDescriptor",
-  // Property enumeration (likely fine for class methods, but the
-  // analyzer can't always distinguish instances from plain objects).
-   "keys", "entries", "values", "assign", "fromEntries",
 ]
 
 ///|
-fn block_has_method_sniff(block : @ast.TsBlock) -> Bool {
+/// Own-enumerable property enumeration. `Object.keys` / `values` /
+/// `entries` / `assign` / `fromEntries` (and `for...in`) only ever
+/// observe **own enumerable** properties, and a native
+/// `class C { m() {} }` puts `m` on the prototype as a
+/// *non-enumerable* property — so none of these can see it, and
+/// they must not abort the pass. (`Object.assign(this, opts)` in a
+/// constructor is the shape that used to disable method DCE for a
+/// whole bundle.)
+///
+/// The IIFE-lowered shape is different: `C.prototype.m = f` creates
+/// an own **enumerable** property of the prototype object, which
+/// `Object.keys(C.prototype)` and `for (const k in instance)` both
+/// report. So when the bundle enumerates anything, the pass keeps
+/// every IIFE-assigned prototype method and prunes native classes
+/// only.
+let own_enum_sniff_methods : Array[String] = [
+  "keys", "entries", "values", "assign", "fromEntries",
+]
+
+///|
+/// Sentinel key recorded in the access set when the bundle contains a
+/// `for...in`. Not a possible JavaScript member name, so it can never
+/// collide with a real access.
+let for_in_sentinel : String = "<for-in>"
+
+///|
+fn block_has_method_sniff(block : @ast.TsBlock, facts : SniffFacts) -> Bool {
   for s in block.stmts {
-    if stmt_has_method_sniff(s) {
+    if stmt_has_method_sniff(s, facts) {
       return true
     }
   }
@@ -397,7 +650,7 @@ fn block_has_method_sniff(block : @ast.TsBlock) -> Bool {
 }
 
 ///|
-fn stmt_has_method_sniff(stmt : @ast.TsStmt) -> Bool {
+fn stmt_has_method_sniff(stmt : @ast.TsStmt, facts : SniffFacts) -> Bool {
   match stmt {
     // for-in iterates property names, but the body itself may or may
     // not access prototype methods; recurse rather than unconditionally
@@ -405,122 +658,113 @@ fn stmt_has_method_sniff(stmt : @ast.TsStmt) -> Bool {
     // ForOf is, since a `for...in` body can still contain calls or
     // computed accesses that are legitimate method-sniff sinks.
     ForIn(_, _, _, iter, body) =>
-      expr_has_method_sniff(iter) || block_has_method_sniff(body)
+      expr_has_method_sniff(iter, facts) || block_has_method_sniff(body, facts)
     Var(_, _, e)
     | Let(_, _, e)
     | Const(_, _, e)
     | Expr(e)
     | Assign(_, e)
     | CompoundAssign(_, _, e)
-    | Throw(e) => expr_has_method_sniff(e)
-    Return(Some(e)) => expr_has_method_sniff(e)
+    | Throw(e) => expr_has_method_sniff(e, facts)
+    Return(Some(e)) => expr_has_method_sniff(e, facts)
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => false
-    IndexAssign(t, idx, v) => {
-      // Computed assignment with non-static index is a sink UNLESS the
-      // receiver is `this`: `this[key] = val` writes to the INSTANCE,
-      // not to the prototype, so prototype-method DCE is still safe.
-      // `Foo.prototype[key] = val` (dynamic prototype augmentation) IS
-      // a sink and correctly falls through to `return true`.
-      if !is_static_index_for_method_dce(idx) {
-        match t {
-          @ast.TsExpr::Var("this") => ()
-          _ => return true
-        }
-      }
-      expr_has_method_sniff(t) ||
-      expr_has_method_sniff(idx) ||
-      expr_has_method_sniff(v)
-    }
-    PropAssign(t, _, v) => expr_has_method_sniff(t) || expr_has_method_sniff(v)
+    IndexAssign(t, idx, v) =>
+      // Computed WRITE, statement form. Not a sink at any receiver:
+      // see the `IndexAssignExpr` arm of `expr_has_method_sniff`.
+      expr_has_method_sniff(t, facts) ||
+      expr_has_method_sniff(idx, facts) ||
+      expr_has_method_sniff(v, facts)
+    PropAssign(t, _, v) =>
+      expr_has_method_sniff(t, facts) || expr_has_method_sniff(v, facts)
     If(c, t, e) => {
-      if expr_has_method_sniff(c) {
+      if expr_has_method_sniff(c, facts) {
         return true
       }
-      if block_has_method_sniff(t) {
+      if block_has_method_sniff(t, facts) {
         return true
       }
       match e {
-        Some(b) => block_has_method_sniff(b)
+        Some(b) => block_has_method_sniff(b, facts)
         None => false
       }
     }
     While(c, body) | DoWhile(c, body) | With(c, body) =>
-      expr_has_method_sniff(c) || block_has_method_sniff(body)
+      expr_has_method_sniff(c, facts) || block_has_method_sniff(body, facts)
     For(init, cond, update, body) => {
       let init_bad = match init {
-        Some(s) => stmt_has_method_sniff(s)
+        Some(s) => stmt_has_method_sniff(s, facts)
         None => false
       }
       if init_bad {
         return true
       }
       let cond_bad = match cond {
-        Some(e) => expr_has_method_sniff(e)
+        Some(e) => expr_has_method_sniff(e, facts)
         None => false
       }
       if cond_bad {
         return true
       }
       let upd_bad = match update {
-        Some(s) => stmt_has_method_sniff(s)
+        Some(s) => stmt_has_method_sniff(s, facts)
         None => false
       }
       if upd_bad {
         return true
       }
-      block_has_method_sniff(body)
+      block_has_method_sniff(body, facts)
     }
     ForOf(_, _, _, iter, body) | ForAwaitOf(_, _, _, iter, body) =>
-      expr_has_method_sniff(iter) || block_has_method_sniff(body)
+      expr_has_method_sniff(iter, facts) || block_has_method_sniff(body, facts)
     Switch(e, cases) => {
-      if expr_has_method_sniff(e) {
+      if expr_has_method_sniff(e, facts) {
         return true
       }
       for c in cases {
         match c.test_expr {
-          Some(te) => if expr_has_method_sniff(te) { return true }
+          Some(te) => if expr_has_method_sniff(te, facts) { return true }
           None => ()
         }
-        if block_has_method_sniff(c.body) {
+        if block_has_method_sniff(c.body, facts) {
           return true
         }
       }
       false
     }
     Try(b, _, cb, fb) => {
-      if block_has_method_sniff(b) {
+      if block_has_method_sniff(b, facts) {
         return true
       }
       let cb_bad = match cb {
-        Some(blk) => block_has_method_sniff(blk)
+        Some(blk) => block_has_method_sniff(blk, facts)
         None => false
       }
       if cb_bad {
         return true
       }
       match fb {
-        Some(blk) => block_has_method_sniff(blk)
+        Some(blk) => block_has_method_sniff(blk, facts)
         None => false
       }
     }
-    Label(_, inner) => stmt_has_method_sniff(inner)
-    Block(b) => block_has_method_sniff(b)
+    Label(_, inner) => stmt_has_method_sniff(inner, facts)
+    Block(b) => block_has_method_sniff(b, facts)
     NativeClassStmt(decl, ctor_body) => {
       // Walk the methods' bodies too — internal reflection on
       // `this` (e.g. `Object.keys(this)`) counts as a sink.
       for m in decl.methods {
         match m.body {
-          Some(b) => if block_has_method_sniff(b) { return true }
+          Some(b) => if block_has_method_sniff(b, facts) { return true }
           None => ()
         }
       }
       for sf in decl.static_field_inits {
-        if expr_has_method_sniff(sf.1) {
+        if expr_has_method_sniff(sf.1, facts) {
           return true
         }
       }
       match ctor_body {
-        Some(f) => block_has_method_sniff(f.body)
+        Some(f) => block_has_method_sniff(f.body, facts)
         None => false
       }
     }
@@ -528,7 +772,7 @@ fn stmt_has_method_sniff(stmt : @ast.TsStmt) -> Bool {
 }
 
 ///|
-fn expr_has_method_sniff(expr : @ast.TsExpr) -> Bool {
+fn expr_has_method_sniff(expr : @ast.TsExpr, facts : SniffFacts) -> Bool {
   match expr {
     // `Object.foo(...)` / `Reflect.foo(...)` reflection sink.
     MethodCall(@ast.TsExpr::Var(recv), m, args) => {
@@ -537,7 +781,7 @@ fn expr_has_method_sniff(expr : @ast.TsExpr) -> Bool {
         return true
       }
       for a in args {
-        if expr_has_method_sniff(a) {
+        if expr_has_method_sniff(a, facts) {
           return true
         }
       }
@@ -548,25 +792,42 @@ fn expr_has_method_sniff(expr : @ast.TsExpr) -> Bool {
     // spreading a class instance never enumerates its methods. Recurse
     // into the inner expression for reflection sinks but do NOT abort
     // just because spread is present.
-    Spread(inner) => expr_has_method_sniff(inner)
-    // `delete x.method` (statement form is `Expr(UnaryOp(Delete, _))`).
-    UnaryOp(@ast.TsUnaryOp::Delete, _) => true
-    // Computed-key access: reading `obj[dynamic]` does not enumerate
-    // all method names — it accesses at most one property. Don't abort
-    // DCE on reads; only writes and explicit reflection ops matter.
-    IndexAccess(recv, idx) =>
-      expr_has_method_sniff(recv) || expr_has_method_sniff(idx)
-    IndexAssignExpr(recv, idx, v) => {
-      if !is_static_index_for_method_dce(idx) {
-        match recv {
-          @ast.TsExpr::Var("this") => ()
-          _ => return true
-        }
+    Spread(inner) => expr_has_method_sniff(inner, facts)
+    // `delete x.method` / `delete x[k]`. Deleting a name is not
+    // observing one: a class prototype method is configurable, so
+    // `delete` evaluates to `true` whether or not the method is
+    // still there, and deleting an own property of an instance never
+    // reaches the prototype at all. Just walk the operand — for
+    // `delete x.m` that is a `PropAccess`, so the access collector
+    // pins `m` and the method survives on its own merits.
+    UnaryOp(@ast.TsUnaryOp::Delete, inner) =>
+      expr_has_method_sniff(inner, facts)
+    // Computed-key READ. `obj[k]` reaches exactly one property, but
+    // not one we can name — if `k` can evaluate to a deletable
+    // method name, dropping that method breaks the dispatch. So a
+    // string-keyed dynamic read aborts unless one of two proofs
+    // clears it. A *numeric* key can only name an integer slot:
+    // `is_index_numeric_with_names` establishes that for the common
+    // `arr[i]` / `arr[i + 1]` / `arr[n - 1]` shapes through the
+    // numeric-variable inference. Otherwise the *receiver* can
+    // settle it — reading an entry out of an array or a `Record`
+    // never reaches a method (see `non_instance_index_names`).
+    IndexAccess(recv, idx) => {
+      if !is_static_index_for_method_dce(idx) &&
+        !is_index_numeric_with_names(idx, facts.numeric) &&
+        !receiver_is_keyed_container(recv, facts) {
+        return true
       }
-      expr_has_method_sniff(recv) ||
-      expr_has_method_sniff(idx) ||
-      expr_has_method_sniff(v)
+      expr_has_method_sniff(recv, facts) || expr_has_method_sniff(idx, facts)
     }
+    // Computed-key WRITE. A write never observes an existing name,
+    // and installing a property under a computed key cannot
+    // resurrect a method this pass deleted, so `obj[k] = v` is not a
+    // sink at any receiver — `C.prototype[k] = v` included.
+    IndexAssignExpr(recv, idx, v) =>
+      expr_has_method_sniff(recv, facts) ||
+      expr_has_method_sniff(idx, facts) ||
+      expr_has_method_sniff(v, facts)
     Call(name, args) => {
       // Bare `Object.keys` style isn't here (that's MethodCall).
       // But common globals named after sinks shouldn't slip
@@ -576,29 +837,29 @@ fn expr_has_method_sniff(expr : @ast.TsExpr) -> Bool {
         return true
       }
       for a in args {
-        if expr_has_method_sniff(a) {
+        if expr_has_method_sniff(a, facts) {
           return true
         }
       }
       false
     }
     CallExpr(callee, args) | NewExpr(callee, args) => {
-      if expr_has_method_sniff(callee) {
+      if expr_has_method_sniff(callee, facts) {
         return true
       }
       for a in args {
-        if expr_has_method_sniff(a) {
+        if expr_has_method_sniff(a, facts) {
           return true
         }
       }
       false
     }
     MethodCall(recv, _, args) => {
-      if expr_has_method_sniff(recv) {
+      if expr_has_method_sniff(recv, facts) {
         return true
       }
       for a in args {
-        if expr_has_method_sniff(a) {
+        if expr_has_method_sniff(a, facts) {
           return true
         }
       }
@@ -606,28 +867,28 @@ fn expr_has_method_sniff(expr : @ast.TsExpr) -> Bool {
     }
     New(_, args) => {
       for a in args {
-        if expr_has_method_sniff(a) {
+        if expr_has_method_sniff(a, facts) {
           return true
         }
       }
       false
     }
     BinOp(_, l, r) | Seq(l, r) =>
-      expr_has_method_sniff(l) || expr_has_method_sniff(r)
+      expr_has_method_sniff(l, facts) || expr_has_method_sniff(r, facts)
     UnaryOp(_, inner)
     | Await(inner)
     | NonNull(inner)
     | OptionalChain(inner)
     | PureCall(inner)
-    | YieldStar(inner) => expr_has_method_sniff(inner)
+    | YieldStar(inner) => expr_has_method_sniff(inner, facts)
     Cond(c, t, e) =>
-      expr_has_method_sniff(c) ||
-      expr_has_method_sniff(t) ||
-      expr_has_method_sniff(e)
-    PropAccess(recv, _) => expr_has_method_sniff(recv)
+      expr_has_method_sniff(c, facts) ||
+      expr_has_method_sniff(t, facts) ||
+      expr_has_method_sniff(e, facts)
+    PropAccess(recv, _) => expr_has_method_sniff(recv, facts)
     ArrayLit(items) => {
       for i in items {
-        if expr_has_method_sniff(i) {
+        if expr_has_method_sniff(i, facts) {
           return true
         }
       }
@@ -635,38 +896,39 @@ fn expr_has_method_sniff(expr : @ast.TsExpr) -> Bool {
     }
     ObjectLit(entries) => {
       for ent in entries {
-        if expr_has_method_sniff(ent.1) {
+        if expr_has_method_sniff(ent.1, facts) {
           return true
         }
       }
       false
     }
-    ComputedProp(k, v) => expr_has_method_sniff(k) || expr_has_method_sniff(v)
+    ComputedProp(k, v) =>
+      expr_has_method_sniff(k, facts) || expr_has_method_sniff(v, facts)
     AssignExpr(_, v) | AssignPattern(_, v) | PropAssignExpr(_, _, v) =>
-      expr_has_method_sniff(v)
+      expr_has_method_sniff(v, facts)
     CompoundAssignExpr(t, _, v) =>
-      expr_has_method_sniff(t) || expr_has_method_sniff(v)
+      expr_has_method_sniff(t, facts) || expr_has_method_sniff(v, facts)
     ArrowFunc(_, _, body, _) =>
       match body {
-        ArrowExpr(e) => expr_has_method_sniff(e)
-        ArrowBlock(b) => block_has_method_sniff(b)
+        ArrowExpr(e) => expr_has_method_sniff(e, facts)
+        ArrowBlock(b) => block_has_method_sniff(b, facts)
       }
-    FuncExpr(f) => block_has_method_sniff(f.body)
+    FuncExpr(f) => block_has_method_sniff(f.body, facts)
     DynamicImport(spec, opts) => {
-      if expr_has_method_sniff(spec) {
+      if expr_has_method_sniff(spec, facts) {
         return true
       }
       match opts {
-        Some(o) => expr_has_method_sniff(o)
+        Some(o) => expr_has_method_sniff(o, facts)
         None => false
       }
     }
     TaggedTemplate(tag, _, _, exprs) => {
-      if expr_has_method_sniff(tag) {
+      if expr_has_method_sniff(tag, facts) {
         return true
       }
       for e in exprs {
-        if expr_has_method_sniff(e) {
+        if expr_has_method_sniff(e, facts) {
           return true
         }
       }
@@ -674,23 +936,23 @@ fn expr_has_method_sniff(expr : @ast.TsExpr) -> Bool {
     }
     TemplateLiteral(_, exprs) => {
       for e in exprs {
-        if expr_has_method_sniff(e) {
+        if expr_has_method_sniff(e, facts) {
           return true
         }
       }
       false
     }
-    As(inner, _) | Satisfies(inner, _) => expr_has_method_sniff(inner)
-    Yield(Some(inner)) => expr_has_method_sniff(inner)
+    As(inner, _) | Satisfies(inner, _) => expr_has_method_sniff(inner, facts)
+    Yield(Some(inner)) => expr_has_method_sniff(inner, facts)
     NativeClassExpr(decl, ctor_body) => {
       for m in decl.methods {
         match m.body {
-          Some(b) => if block_has_method_sniff(b) { return true }
+          Some(b) => if block_has_method_sniff(b, facts) { return true }
           None => ()
         }
       }
       match ctor_body {
-        Some(f) => block_has_method_sniff(f.body)
+        Some(f) => block_has_method_sniff(f.body, facts)
         None => false
       }
     }
@@ -771,9 +1033,17 @@ fn collect_static_accesses_stmt(
       }
       collect_static_accesses_block(body, out)
     }
-    ForOf(_, _, _, iter, body)
-    | ForAwaitOf(_, _, _, iter, body)
-    | ForIn(_, _, _, iter, body) => {
+    ForOf(_, _, _, iter, body) | ForAwaitOf(_, _, _, iter, body) => {
+      collect_static_accesses_expr(iter, out)
+      collect_static_accesses_block(body, out)
+    }
+    ForIn(_, _, _, iter, body) => {
+      // `for (const k in obj)` enumerates own *and* inherited
+      // enumerable keys — it sees an IIFE-lowered
+      // `C.prototype.m = f` even though it cannot see a native
+      // class method. Record it so the pass falls back to
+      // native-class-only pruning.
+      out[for_in_sentinel] = true
       collect_static_accesses_expr(iter, out)
       collect_static_accesses_block(body, out)
     }

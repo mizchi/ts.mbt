@@ -330,6 +330,8 @@ pub(all) enum SinkObservation {
   StringifyOnly
 }
 
+type SniffFacts
+
 pub(all) struct SourceMapBuilder {
   lines : Array[Array[Segment]]
   mut last_out_line : Int

@@ -2167,6 +2167,138 @@ test "class_method_dce: this[dynamic] instance-write does not abort prototype me
 }
 
 ///|
+test "class_method_dce: string-keyed dynamic read keeps every method alive" {
+  // The only mention of `beta` in the program is a dynamic read under a
+  // computed key. Deleting it would turn `h[key]()` into a TypeError, so
+  // the read has to gate the pass: both methods must survive.
+  let src =
+    #|class Handlers {
+    #|  alpha() { return "A"; }
+    #|  beta() { return "B"; }
+    #|}
+    #|const h = new Handlers();
+    #|const key = globalThis.pick;
+    #|const fn = h[key];
+    #|console.log(typeof fn === "function" ? fn.call(h) : "missing");
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("alpha"))
+      assert_true(out.js.contains("beta"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class_method_dce: keyed-container read does not abort prototype method DCE" {
+  // `table[k]` reads an entry out of a `Record`, not a member off an
+  // object with methods, so it must not gate the pass. `unused()` goes.
+  let src =
+    #|class Router {
+    #|  lookup(table: Record<string, string>, k: string) { return table[k]; }
+    #|  unused() { return 99; }
+    #|}
+    #|const r = new Router();
+    #|console.log(r.lookup({ a: "1" }, "a"));
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_false(out.js.contains("unused"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class_method_dce: delete does not abort prototype method DCE" {
+  // `delete` removes a name; it never observes one. A class prototype
+  // method is configurable, so `delete` yields the same `true` whether
+  // the method is there or not — and the deleted name is a static
+  // access, so `keepMe` stays while `unused` still goes.
+  let src =
+    #|class Cleaner {
+    #|  keepMe() { return 1; }
+    #|  unused() { return 99; }
+    #|}
+    #|const c = new Cleaner();
+    #|const bag: Record<string, string> = { keepMe: "x" };
+    #|delete bag.keepMe;
+    #|console.log(c.keepMe(), bag);
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_false(out.js.contains("unused"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class_method_dce: dynamic write on a foreign receiver does not abort DCE" {
+  // `bag[k] = v` writes a name; it cannot observe one, and installing a
+  // property under a computed key cannot bring back a method the pass
+  // deleted. So the write must not gate the pass.
+  let src =
+    #|class Store {
+    #|  put(bag: Record<string, number>, k: string) { bag[k] = 1; }
+    #|  unused() { return 99; }
+    #|}
+    #|const s = new Store();
+    #|s.put({}, "a");
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_false(out.js.contains("unused"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class_method_dce: Object.assign in the constructor does not abort DCE" {
+  // `Object.assign(this, opts)` copies OWN ENUMERABLE properties. A
+  // native class puts its methods on the prototype as non-enumerable,
+  // so the copy can never observe one. This is the shape that used to
+  // disable method DCE for a whole bundle (it is Hono's constructor).
+  let src =
+    #|class App {
+    #|  constructor(opts: Record<string, number>) {
+    #|    Object.assign(this, opts);
+    #|  }
+    #|  run() { return 1; }
+    #|  unused() { return 99; }
+    #|}
+    #|const a = new App({});
+    #|a.run();
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_false(out.js.contains("unused"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class_method_dce: reflection over a class shape still aborts DCE" {
+  // `Object.getOwnPropertyNames(proto)` does see non-enumerable
+  // properties — exactly what a prototype method is — so this one has
+  // to keep gating the pass.
+  let src =
+    #|class Probe {
+    #|  run() { return 1; }
+    #|  unused() { return 99; }
+    #|}
+    #|const p = new Probe();
+    #|console.log(Object.getOwnPropertyNames(Object.getPrototypeOf(p)));
+    #|p.run();
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_true(out.js.contains("unused"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "emit: minify emits !0/!1 for true/false and void 0 for undefined" {
   // In minify mode `true` → `!0` (saves 2 bytes), `false` → `!1` (saves 3
   // bytes), and `undefined` → `void 0` (saves 3 bytes).
