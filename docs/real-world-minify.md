@@ -269,13 +269,16 @@ property mangling が効いた結果ではありません。react-dom が
 
 ### `src/compiler/checker.ts`
 
-3,065,627 → 1,537,847 bytes（50% 減）、`--minify`、71 秒。
+3,065,627 → 1,542,261 bytes（50% 減）、`--minify --fold`、48 秒。
 `node --check` 通過。
 
 checker.ts 単体は module graph の一部（`./_namespaces/ts.js` に依存）なので
 実行はできません。ここで確かめたのは、3 MB の実 TypeScript を parse して
 有効な JS を吐けること、そして 1・2・3 の bug がすべてこの file で
-発火していたことです。
+発火していたことです。#16 が出たのもここです —— 依存先の 3 module は
+build 生成物で repository に無く、それで compile 全体が落ちていました。
+今はその 3 つが verbatim な import として出力に残るので、以前の記録
+（1,537,847）よりわずかに大きくなっています。
 
 ### `lib/typescript.js`（compiler 本体）
 
