@@ -523,6 +523,44 @@ const DYNAMIC_RECEIVERS = {
         `}`,
       ].join("\n"),
   },
+  // The other direction: the computed key is on the WRITE and the
+  // static site is the read. Phase 3+4 has nothing to say here — it
+  // answers "what does something outside observe on this binding",
+  // and a write observes nothing — so a bare binding is as exposed as
+  // any other receiver.
+  writeThenStaticRead: {
+    what: "a computed WRITE, read back through the static name",
+    decl: () =>
+      [
+        `const payload: { ${TOP}?: number } = {};`,
+        `function put(k: string, v: number): void {`,
+        `  (payload as any)[k] = v;`,
+        `}`,
+        `put("${TOP}", 1);`,
+        `const pick = (_k: string): number | undefined => payload.${TOP};`,
+      ].join("\n"),
+  },
+  destructuringKey: {
+    what: "a computed key in a destructuring pattern",
+    decl: () =>
+      [
+        `const payload = { ${TOP}: 1 };`,
+        `function pick(k: string): number | undefined {`,
+        `  const { [k]: v } = payload as any;`,
+        `  return v;`,
+        `}`,
+      ].join("\n"),
+  },
+  inOperator: {
+    what: "the `in` operator with a computed left side",
+    decl: () =>
+      [
+        `const payload = { ${TOP}: 1 };`,
+        `function pick(k: string): number | undefined {`,
+        `  return k in payload ? (payload as any)[k] : undefined;`,
+        `}`,
+      ].join("\n"),
+  },
 };
 
 function renderDynamicCase(shapeKey) {

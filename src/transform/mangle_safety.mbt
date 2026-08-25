@@ -311,6 +311,63 @@ fn type_literal_string_keys(t : @ast.TsType) -> Array[String]? {
 }
 
 ///|
+/// Reserve for a computed key in a destructuring pattern —
+/// `const { [k]: v } = obj`. The pattern reads a property under a name
+/// the mangler cannot see, exactly like `obj[k]`, so an unnarrowed key
+/// takes the wildcard. Without this the property was renamed AND the
+/// dead-property pass dropped its only write, since neither could see
+/// a read.
+fn reserve_computed_binding_keys(
+  b : @ast.TsBinding,
+  out : Map[String, Bool],
+  numeric_names : Map[String, Bool],
+  literal_idx_names : Map[String, Array[String]],
+) -> Unit {
+  match b {
+    Ident(_) | Target(_) => ()
+    Array(ab) => {
+      for item in ab.items {
+        match item {
+          Some(elem) =>
+            reserve_computed_binding_keys(
+              elem.binding,
+              out,
+              numeric_names,
+              literal_idx_names,
+            )
+          None => ()
+        }
+      }
+      match ab.rest {
+        Some(r) =>
+          reserve_computed_binding_keys(
+            r, out, numeric_names, literal_idx_names,
+          )
+        None => ()
+      }
+    }
+    Object(ob) =>
+      for prop in ob.props {
+        match prop.key_expr {
+          Some(k) =>
+            if !reserve_external_index_keys(
+                k, out, numeric_names, literal_idx_names,
+              ) {
+              out["*"] = true
+            }
+          None => ()
+        }
+        reserve_computed_binding_keys(
+          prop.binding,
+          out,
+          numeric_names,
+          literal_idx_names,
+        )
+      }
+  }
+}
+
+///|
 /// True when a computed-index receiver is a plain binding, which is
 /// what Phase 3+4 observability can follow. Anything else —
 /// `this.f[k]`, `a.b[k]`, `f()[k]`, an element of an array — has no
@@ -416,7 +473,13 @@ fn collect_props_on_external_stmt(
   literal_idx_names : Map[String, Array[String]],
 ) -> Unit {
   match stmt {
-    Var(_, _, e) | Let(_, _, e) | Const(_, _, e) | Expr(e) | Throw(e) =>
+    Var(b, _, e) | Let(b, _, e) | Const(b, _, e) => {
+      reserve_computed_binding_keys(b, out, numeric_names, literal_idx_names)
+      collect_props_on_external_expr(
+        e, externals, out, numeric_names, literal_idx_names,
+      )
+    }
+    Expr(e) | Throw(e) =>
       collect_props_on_external_expr(
         e, externals, out, numeric_names, literal_idx_names,
       )
@@ -425,16 +488,21 @@ fn collect_props_on_external_stmt(
         e, externals, out, numeric_names, literal_idx_names,
       )
     IndexAssign(t, idx, v) => {
-      // Local-binding dynamic write: Phase 3+4 handle the
-      // reservation, no wildcard from here. Every other receiver
-      // gets the Phase 2 narrowing — wildcard when the index
-      // expression remains opaque. Writes matter for the same
-      // reason reads do: `obj[k] = v` under a key that arrives as a
-      // string VALUE has to agree with the static `obj.k` sites.
+      // A dynamic WRITE takes the wildcard at ANY receiver when the
+      // key isn't narrowed — a bare binding included, where a read
+      // would have been left to Phase 3+4. The asymmetry is real:
+      // Phase 3+4 answers "what does something outside observe on
+      // this binding", and a write observes nothing. What it does is
+      // install a name the mangler cannot see, while the matching
+      // static site is renamed on its own:
+      //
+      //   const payload: { alphaTop?: number } = {};
+      //   function put(k: string, v: number) { payload[k] = v; }
+      //   put("alphaTop", 1);
+      //   payload.alphaTop        // became `payload.a` — undefined
       if !reserve_external_index_keys(
           idx, out, numeric_names, literal_idx_names,
-        ) &&
-        (is_external_chain(t, externals) || !untracked_index_receiver(t)) {
+        ) {
         out["*"] = true
       }
       collect_props_on_external_expr(
@@ -776,12 +844,11 @@ fn collect_props_on_external_expr(
         v, externals, out, numeric_names, literal_idx_names,
       )
     IndexAssignExpr(recv, idx, v) => {
-      // Local-binding dynamic write — same Phase 2 narrowing as
-      // the statement-level IndexAssign.
+      // Same as the statement-level `IndexAssign`: a write under an
+      // unnarrowed key takes the wildcard at any receiver.
       if !reserve_external_index_keys(
           idx, out, numeric_names, literal_idx_names,
-        ) &&
-        (is_external_chain(recv, externals) || !untracked_index_receiver(recv)) {
+        ) {
         out["*"] = true
       }
       collect_props_on_external_expr(

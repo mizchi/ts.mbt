@@ -2470,6 +2470,17 @@ fn rename_binding_decl(
     Object(ob) => {
       let new_props : Array[@ast.TsObjectBindingProp] = []
       for p in ob.props {
+        // A computed key (`const { [k]: v } = obj`) is an ordinary
+        // value expression evaluated in the ENCLOSING scope, so it has
+        // to be renamed like any other reference. Renamed before the
+        // inner binding is bound, since `k` resolves outside the names
+        // this pattern introduces. Carrying it through verbatim left
+        // `{ [k]: c } = a` in a function whose `k` had become `b` —
+        // a ReferenceError under plain `--mangle`.
+        let new_key_expr : @ast.TsExpr? = match p.key_expr {
+          Some(k) => Some(rename_expr(k, scope))
+          None => None
+        }
         let new_inner = rename_binding_decl(p.binding, scope, reserved)
         let new_default : @ast.TsExpr? = match p.default {
           Some(d) => Some(rename_expr(d, scope))
@@ -2477,7 +2488,7 @@ fn rename_binding_decl(
         }
         new_props.push({
           key: p.key,
-          key_expr: p.key_expr,
+          key_expr: new_key_expr,
           binding: new_inner,
           default: new_default,
         })
@@ -2714,6 +2725,12 @@ fn rename_binding_lhs(
     Object(ob) => {
       let new_props : Array[@ast.TsObjectBindingProp] = []
       for p in ob.props {
+        // Same as the declaration form: a computed key is a value
+        // expression and needs renaming.
+        let new_key_expr : @ast.TsExpr? = match p.key_expr {
+          Some(k) => Some(rename_expr(k, scope))
+          None => None
+        }
         let new_inner = rename_binding_lhs(p.binding, scope)
         let new_default : @ast.TsExpr? = match p.default {
           Some(d) => Some(rename_expr(d, scope))
@@ -2721,7 +2738,7 @@ fn rename_binding_lhs(
         }
         new_props.push({
           key: p.key,
-          key_expr: p.key_expr,
+          key_expr: new_key_expr,
           binding: new_inner,
           default: new_default,
         })
@@ -3497,7 +3514,12 @@ fn rename_properties_in_binding(
         // continues to use the original name.
         new_props.push({
           key: new_key,
-          key_expr: p.key_expr,
+          // A computed key names no property statically, but the
+          // expression can still read one (`{ [cfg.field]: v }`).
+          key_expr: match p.key_expr {
+            Some(k) => Some(rename_properties_in_expr(k, prop_map))
+            None => None
+          },
           binding: if key_was_renamed && p.binding is Ident(b) && b == p.key {
             @ast.TsBinding::Ident(b)
           } else {

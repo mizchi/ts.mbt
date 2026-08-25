@@ -19,12 +19,15 @@
 出ない種類のものです。
 
 その後「hono の使わない機能はもっと落とせるはずだ」を測る過程で、
-**正しさ**の bug が 2 件出ました。#14（動的 access の read と write が逆に
-判定されていて、`obj[k]` で dispatch される method が削除されていた）と、
-#18（`this.f[k]` で読まれる property が rename されていた）。どちらも
-crash ではなく静かに違う答えを返す形です。同じ調査で `--explain-mangle`
-に method DCE の section を足し（#15）、class field 注釈が lowering で
-消えているのを直しました（#17）。
+**正しさ**の bug が 5 件出ました。#14（動的 access の read と write が逆に
+判定されていて、`obj[k]` で dispatch される method が削除されていた）、
+#18（`this.f[k]` で読まれる property が rename されていた）、
+#19（computed key の destructuring が identifier mangling を crash させ、
+同時に property の唯一の write を落としていた）、#20（computed write が
+静的 read と食い違う）。#19 の crash 以外は、crash ではなく静かに違う
+答えを返す形です。同じ調査で `--explain-mangle` に method DCE の section
+を足し（#15）、class field 注釈が lowering で消えているのを直しました
+（#17）。
 
 ## 見つかった bug
 
@@ -561,6 +564,63 @@ non-enumerable まで見える reflection（`getOwnPropertyNames` /
 `getOwnPropertyDescriptors` / `ownKeys` / `getOwnPropertyDescriptor`）は
 そのまま sink です。
 
+### 20. computed write が静的 read と食い違う（mangle_safety）
+
+read の逆向きです。書く側が computed key で、読む側が静的名:
+
+```ts
+const payload: { alphaTop?: number } = {};
+function put(k: string, v: number): void { (payload as any)[k] = v; }
+put("alphaTop", 1);
+export const echoed = payload.alphaTop;      // 1 → undefined
+```
+
+write は `alphaTop` という名前を mangler に見えない形で installします。
+一方 `payload.alphaTop` は普通に rename されるので、両者が食い違います。
+
+read は素の binding receiver なら Phase 3+4 の observability が拾います
+（`dynkey-binding` がそれを証明しています）。write は拾えません ——
+Phase 3+4 が答えるのは「この binding の何を外から観測されるか」で、
+**write は何も観測しない**からです。なので write は receiver を問わず、
+key が narrow できなければ wildcard。
+
+### 19. computed key の destructuring が 2 つの pass を同時に壊す
+
+```ts
+const payload = { alphaTop: 1 };
+function pick(k: string): number | undefined {
+  const { [k]: v } = payload as any;
+  return v;
+}
+export const echoed = pick("alphaTop");
+```
+
+**素の `--mangle` で ReferenceError**。
+
+```js
+function b(b) {
+  const {[k]: c} = a;    // param は b に rename、key の `k` はそのまま
+  return c;
+}
+```
+
+`rename_binding_decl` / `rename_binding_lhs` が
+`TsObjectBindingProp.key_expr` を verbatim に通していました。computed key
+は enclosing scope で評価される**普通の値式**なので、他の参照と同じく
+rename が必要です。property rename 側（3 番目の site）も、
+`{ [cfg.field]: v }` のように式の中の property を読み得るので walk します。
+
+`--mangle-properties` を付けると、同じ形で**もう 1 つ**壊れていました。
+
+```js
+const a = {};              // { alphaTop: 1 } の property が消えている
+```
+
+`dead_props` が「read が無い」と判断して唯一の write を落としていました。
+computed destructuring key を computed read と同じ扱いにして
+`mangle_safety` が wildcard を立てるようにしたので、両方まとめて閉じます
+（`dead_props` は reserved 集合で gate されているため）。
+
 ### 18. `this.f[k]` で読まれる key が rename されていた（mangle_safety）
 
 #17 の corpus case を書いたら、method DCE とは別の pass が落ちました。
@@ -617,14 +677,20 @@ const echoed = (payload as any)["alphaTop"];
 bundle から何も出て行きません。
 
 `scripts/generate_mangle_cases.mjs` に receiver の形を軸として
-7 件払い出しました（`dynkey-*`）。binding / `this` の cast /
+**10 件**払い出しました（`dynkey-*`）。binding / `this` の cast /
 private field / public field / property chain / call 結果 /
-array 要素。bug が 2 件ともここに落ちていたのは、この 6 つに
-「追える symbol」が無く、それぞれ別扱い（か未対応）だったからです。
+array 要素 / computed write / destructuring key / `in` 演算子。
+bug が全部ここに落ちていたのは、この形に「追える symbol」が
+無く、それぞれ別扱い（か未対応）だったからです。
 
-7 件とも harness の mutation self-check を通っています ——
+10 件とも harness の mutation self-check を通っています ——
 `alphaTop` を rename すると観測が変わることが機械的に確認済みで、
 歯の無い case ではありません。
+
+この軸を足してから、**さらに 3 件**（#19 の 2 件と #20）出ました。
+軸として払い出す価値はここにあります —— 1 件目を手で書いた時点では
+「computed read の receiver」しか見えておらず、write 側と
+destructuring 側は思いついていませんでした。
 
 ### 17. class の field 注釈が lowering で消えていた（parser / bundle）
 
