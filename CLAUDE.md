@@ -50,6 +50,11 @@ product surfaces now.
   covers situations somebody thought of, so `just verify-real-world`
   minifies real published packages (React, the TypeScript compiler) and
   diffs their behaviour — see [`docs/real-world-minify.md`](./docs/real-world-minify.md).
+  Neither reaches the case nobody imagined, so `just fuzz-mangle`
+  generates programs from seeds, compiles each with and without mangling,
+  and compares what they observed; a failing program is shrunk to its
+  minimum automatically rather than reported as a seed number — see
+  [`docs/mangle-fuzzing.md`](./docs/mangle-fuzzing.md).
 - `src/bridge` consumes `src/checker` for every type-shape decision and runs
   `@checker.check_module` on the synthesized output as a sanity gate. It also
   keeps domain-specific specialization for Node FS / React / Hono / crypto /

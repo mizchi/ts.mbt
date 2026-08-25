@@ -141,6 +141,18 @@ verify-mangle-safety *ARGS:
     node scripts/generate_mangle_cases.mjs --check
     node scripts/verify_mangle_safety.mjs {{ ARGS }}
 
+# Fuzz the property mangler: generate programs nobody wrote, compile each
+# with and without mangling, run both, compare. A difference is a mangler
+# false positive by construction. Failing programs are shrunk
+# automatically, so a finding arrives as the smallest program that still
+# fails rather than as a seed number.
+#
+#   just fuzz-mangle --iterations 500
+#   just fuzz-mangle --seed 6 --iterations 1 --no-shrink   # reproduce one
+fuzz-mangle *ARGS:
+    moon build --target native --release
+    node scripts/fuzz_mangle.mjs {{ ARGS }}
+
 # Minify real published packages (react, the TypeScript compiler) and
 # check they still behave. Needs network access on the first run, so it
 # is deliberately not part of `ci`.
