@@ -97,6 +97,77 @@ valibot の伸びが一番大きいのは 578 file あって 1 file あたりの
 支配的だからです。残っているのは依然 parse（33〜79%）ですが、今度は
 **1 回分**です。次があるなら parser 本体か、file 単位の並列化になります。
 
+### 「parse が 33〜79%」は測り方の嘘だった
+
+`parser 本体` に手を付ける前に、その 1 行が何を含んでいるのかを分けました。
+`cli: read + parse files` は loader 全体を 1 行にまとめたもので、実際には
+4 つの別物が入っていました。tokenize / recursive descent / file 読み込み +
+UTF-8 decode / **path 解決**です。分けたら順位が入れ替わりました。
+
+```
+valibot   235 ms  59.6%  cli: read files + resolve   ← 内訳を取ると
+           49 ms  12.4%  cli: parse (recursive descent)
+           24 ms   6.1%  cli: tokenize
+```
+
+parse + tokenize は合わせて 18.5%、支配していたのは **module 解決**でした。
+原因は算術です。`mtsc_resolve_existing` は 1 つの import につき最大 13 個の
+候補 path を試し、その各々が `@fs.exists` + `@fs.kind`。1 file を見つける
+のに ~26 syscall です。directory を 1 回 listing して、存在しない候補は
+map 参照で答えるようにしました。listing にある名前だけが `kind` を払い、
+それは import ごとに最大 1 回です。解決結果も memo しました（loader は
+同じ path を edge 記録時と queue 到達時の 2 回解決していた）。
+
+| | 前 | 後 |
+| --- | --- | --- |
+| valibot の解決 | 235 ms | **45 ms** |
+| hono の解決 | 30 ms | **5 ms** |
+
+### parser 本体（分離したあとの本題）
+
+分離して残った recursive descent を callgrind にかけると、費用は
+**二項演算子の precedence cascade** にありました。どの式も演算子を含むか
+どうかに関わらず 11 段を降り、各段が候補演算子ごとに `check` 呼び出しと
+out-of-line の `TokenKind::equal` を払っていました。`parse_assignment` で
+15 個、`parse_comparison` で 6 個です。各段を peek 1 回 + jump table 1 回に
+しました。
+
+式ごとの allocation が 3 つ道連れになりました。`parse_equality` は何も
+判定する前に loop 先頭で closure を作っていました。`parse_unary` は
+`kind == Ident("await")` を比較していて、**その比較のために `Ident` node を
+allocate** していました（`await` は contextual keyword なので識別子として
+来る）。compound assignment の 15 arm はそれぞれ、既に手元にある node と
+構造的に同一の代入先を組み直していました。
+
+```
+checker.ts    parse  120 ms -> 85 ms
+valibot       parse   48 ms -> 43 ms
+```
+
+### 次に出てきたのは parser ではなく scope の複製だった
+
+同じ profile で `String::hash` が 7.4%、`Map[String, TsType]` の操作が
+合わせて 11.5% ありました。`type_fold_block_in` が **block ごとに scope map
+を entry 単位で複製**していて、`checker.ts` で ~100 万回の entry copy です。
+親を指す layer に置き換えました（copy が表現できて素の親 chain が
+できない唯一のもの——annotation のない引数による outer binding の
+shadowing——は `hidden` で持つ）。
+
+| | 前 | 後 |
+| --- | --- | --- |
+| `type-fold`（checker.ts） | 126 ms | **13 ms** |
+| `type-fold`（typescript.js） | 410 ms | **65 ms** |
+
+`--sourcemap` なしのときに全 module の `LineIndex` を作っていたのも
+やめました（誰も読まない表のために 3 MB を走査していた）。
+
+wall clock は `checker.ts` が 843 ms → **631 ms**（5 回の中央値）、
+`typescript.js` が 3.90 s → **3.55 s**。出力は 5 target すべて byte 一致、
+mangle-safety は 161/161 pass です。
+
+いま上に立っているのは `class-method-dce`（checker.ts の 24%、
+typescript.js の 22%）で、parse は 14% です。
+
 ## 見つかった bug
 
 ### 1. 比較演算子が file を丸ごと食う（parser）

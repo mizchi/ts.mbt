@@ -374,7 +374,7 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
     _ => ()
   }
   if self.check(Eq) {
-    match left {
+    return match left {
       Var(name) => {
         // In strict mode, `eval` / `arguments` are not valid assignment
         // targets (TS1100 family). Recorded -- not raised -- so the file
@@ -410,163 +410,39 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
       }
       _ => left
     }
-  } else if self.match_(PlusEq) {
-    let right = self.parse_assignment()
-    match left {
-      Var(name) => CompoundAssignExpr(Var(name), AddAssign, right)
-      PropAccess(obj, prop) =>
-        CompoundAssignExpr(PropAccess(obj, prop), AddAssign, right)
-      IndexAccess(obj, index) =>
-        CompoundAssignExpr(IndexAccess(obj, index), AddAssign, right)
-      // A non-reference LHS (`1 += 2`) is never a valid assignment
-      // target (TS2364). Preserve the node instead of discarding it so
-      // the checker sees the invalid target; pre-existing reference
-      // targets above are unaffected.
-      _ => CompoundAssignExpr(left, AddAssign, right)
-    }
-  } else if self.match_(MinusEq) {
-    let right = self.parse_assignment()
-    match left {
-      Var(name) => CompoundAssignExpr(Var(name), SubAssign, right)
-      PropAccess(obj, prop) =>
-        CompoundAssignExpr(PropAccess(obj, prop), SubAssign, right)
-      IndexAccess(obj, index) =>
-        CompoundAssignExpr(IndexAccess(obj, index), SubAssign, right)
-      _ => CompoundAssignExpr(left, SubAssign, right)
-    }
-  } else if self.match_(StarEq) {
-    let right = self.parse_assignment()
-    match left {
-      Var(name) => CompoundAssignExpr(Var(name), MulAssign, right)
-      PropAccess(obj, prop) =>
-        CompoundAssignExpr(PropAccess(obj, prop), MulAssign, right)
-      IndexAccess(obj, index) =>
-        CompoundAssignExpr(IndexAccess(obj, index), MulAssign, right)
-      _ => CompoundAssignExpr(left, MulAssign, right)
-    }
-  } else if self.match_(SlashEq) {
-    let right = self.parse_assignment()
-    match left {
-      Var(name) => CompoundAssignExpr(Var(name), DivAssign, right)
-      PropAccess(obj, prop) =>
-        CompoundAssignExpr(PropAccess(obj, prop), DivAssign, right)
-      IndexAccess(obj, index) =>
-        CompoundAssignExpr(IndexAccess(obj, index), DivAssign, right)
-      _ => CompoundAssignExpr(left, DivAssign, right)
-    }
-  } else if self.match_(PercentEq) {
-    let right = self.parse_assignment()
-    match left {
-      Var(name) => CompoundAssignExpr(Var(name), ModAssign, right)
-      PropAccess(obj, prop) =>
-        CompoundAssignExpr(PropAccess(obj, prop), ModAssign, right)
-      IndexAccess(obj, index) =>
-        CompoundAssignExpr(IndexAccess(obj, index), ModAssign, right)
-      _ => CompoundAssignExpr(left, ModAssign, right)
-    }
-  } else if self.match_(AmpEq) {
-    let right = self.parse_assignment()
-    match left {
-      Var(name) => CompoundAssignExpr(Var(name), BitAndAssign, right)
-      PropAccess(obj, prop) =>
-        CompoundAssignExpr(PropAccess(obj, prop), BitAndAssign, right)
-      IndexAccess(obj, index) =>
-        CompoundAssignExpr(IndexAccess(obj, index), BitAndAssign, right)
-      _ => CompoundAssignExpr(left, BitAndAssign, right)
-    }
-  } else if self.match_(PipeEq) {
-    let right = self.parse_assignment()
-    match left {
-      Var(name) => CompoundAssignExpr(Var(name), BitOrAssign, right)
-      PropAccess(obj, prop) =>
-        CompoundAssignExpr(PropAccess(obj, prop), BitOrAssign, right)
-      IndexAccess(obj, index) =>
-        CompoundAssignExpr(IndexAccess(obj, index), BitOrAssign, right)
-      _ => CompoundAssignExpr(left, BitOrAssign, right)
-    }
-  } else if self.match_(CaretEq) {
-    let right = self.parse_assignment()
-    match left {
-      Var(name) => CompoundAssignExpr(Var(name), BitXorAssign, right)
-      PropAccess(obj, prop) =>
-        CompoundAssignExpr(PropAccess(obj, prop), BitXorAssign, right)
-      IndexAccess(obj, index) =>
-        CompoundAssignExpr(IndexAccess(obj, index), BitXorAssign, right)
-      _ => CompoundAssignExpr(left, BitXorAssign, right)
-    }
-  } else if self.match_(LtLtEq) {
-    let right = self.parse_assignment()
-    match left {
-      Var(name) => CompoundAssignExpr(Var(name), ShlAssign, right)
-      PropAccess(obj, prop) =>
-        CompoundAssignExpr(PropAccess(obj, prop), ShlAssign, right)
-      IndexAccess(obj, index) =>
-        CompoundAssignExpr(IndexAccess(obj, index), ShlAssign, right)
-      _ => CompoundAssignExpr(left, ShlAssign, right)
-    }
-  } else if self.match_(GtGtEq) {
-    let right = self.parse_assignment()
-    match left {
-      Var(name) => CompoundAssignExpr(Var(name), ShrAssign, right)
-      PropAccess(obj, prop) =>
-        CompoundAssignExpr(PropAccess(obj, prop), ShrAssign, right)
-      IndexAccess(obj, index) =>
-        CompoundAssignExpr(IndexAccess(obj, index), ShrAssign, right)
-      _ => CompoundAssignExpr(left, ShrAssign, right)
-    }
-  } else if self.match_(GtGtGtEq) {
-    let right = self.parse_assignment()
-    match left {
-      Var(name) => CompoundAssignExpr(Var(name), UShrAssign, right)
-      PropAccess(obj, prop) =>
-        CompoundAssignExpr(PropAccess(obj, prop), UShrAssign, right)
-      IndexAccess(obj, index) =>
-        CompoundAssignExpr(IndexAccess(obj, index), UShrAssign, right)
-      _ => CompoundAssignExpr(left, UShrAssign, right)
-    }
-  } else if self.match_(StarStarEq) {
-    let right = self.parse_assignment()
-    match left {
-      Var(name) => CompoundAssignExpr(Var(name), PowAssign, right)
-      PropAccess(obj, prop) =>
-        CompoundAssignExpr(PropAccess(obj, prop), PowAssign, right)
-      IndexAccess(obj, index) =>
-        CompoundAssignExpr(IndexAccess(obj, index), PowAssign, right)
-      _ => CompoundAssignExpr(left, PowAssign, right)
-    }
-  } else if self.match_(AmpAmpEq) {
-    let right = self.parse_assignment()
-    match left {
-      Var(name) => CompoundAssignExpr(Var(name), AndAssign, right)
-      PropAccess(obj, prop) =>
-        CompoundAssignExpr(PropAccess(obj, prop), AndAssign, right)
-      IndexAccess(obj, index) =>
-        CompoundAssignExpr(IndexAccess(obj, index), AndAssign, right)
-      _ => CompoundAssignExpr(left, AndAssign, right)
-    }
-  } else if self.match_(PipePipeEq) {
-    let right = self.parse_assignment()
-    match left {
-      Var(name) => CompoundAssignExpr(Var(name), OrAssign, right)
-      PropAccess(obj, prop) =>
-        CompoundAssignExpr(PropAccess(obj, prop), OrAssign, right)
-      IndexAccess(obj, index) =>
-        CompoundAssignExpr(IndexAccess(obj, index), OrAssign, right)
-      _ => CompoundAssignExpr(left, OrAssign, right)
-    }
-  } else if self.match_(QuestionQuestionEq) {
-    let right = self.parse_assignment()
-    match left {
-      Var(name) => CompoundAssignExpr(Var(name), CoalesceAssign, right)
-      PropAccess(obj, prop) =>
-        CompoundAssignExpr(PropAccess(obj, prop), CoalesceAssign, right)
-      IndexAccess(obj, index) =>
-        CompoundAssignExpr(IndexAccess(obj, index), CoalesceAssign, right)
-      _ => CompoundAssignExpr(left, CoalesceAssign, right)
-    }
-  } else {
-    left
   }
+  // Every compound-assignment operator took its own `match_` test, and a
+  // non-assignment expression paid all fifteen on the way out. One jump
+  // table decides which operator it is; the body they all shared follows
+  // once.
+  let compound : @ast.TsCompoundOp? = match self.peek().kind {
+    PlusEq => Some(AddAssign)
+    MinusEq => Some(SubAssign)
+    StarEq => Some(MulAssign)
+    SlashEq => Some(DivAssign)
+    PercentEq => Some(ModAssign)
+    AmpEq => Some(BitAndAssign)
+    PipeEq => Some(BitOrAssign)
+    CaretEq => Some(BitXorAssign)
+    LtLtEq => Some(ShlAssign)
+    GtGtEq => Some(ShrAssign)
+    GtGtGtEq => Some(UShrAssign)
+    StarStarEq => Some(PowAssign)
+    AmpAmpEq => Some(AndAssign)
+    PipePipeEq => Some(OrAssign)
+    QuestionQuestionEq => Some(CoalesceAssign)
+    _ => None
+  }
+  if compound is Some(op) {
+    let _ = self.advance()
+    let right = self.parse_assignment()
+    // The old per-operator bodies rebuilt a `Var` / `PropAccess` /
+    // `IndexAccess` target from its own parts and fell back to `left` for
+    // anything else. Every one of those rebuilds was structurally the
+    // node it came from, so `left` covers all four cases.
+    return CompoundAssignExpr(left, op, right)
+  }
+  left
 }
 
 ///|
@@ -796,18 +672,32 @@ fn Parser::parse_ternary(self : Parser) -> @ast.TsExpr raise ParseError {
   }
 }
 
+// The binary-precedence cascade below dispatches each level with ONE
+// `match` on the peeked token instead of a run of `match_(K)` calls.
+//
+// The rewrite is mechanical — the kinds a level accepts are disjoint, so
+// testing them in one jump table is the same decision the `if`-chain
+// made — but it is worth the churn because the cascade is the parser's
+// hottest path. Every expression in the file descends all eleven levels
+// whether or not it contains an operator, and the old form paid a
+// `check` call plus an out-of-line `TokenKind::equal` per candidate
+// operator on the way down: six of them in `parse_comparison` alone.
+// Together the chain accounted for ~4% of the compile's instructions in
+// pass-through cost alone (callgrind, hono).
+
 ///|
 // / || (OR) and ?? (Nullish Coalesce)
 fn Parser::parse_or(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut left = self.parse_and()
-  while self.check(PipePipe) || self.check(QuestionQuestion) {
-    if self.match_(PipePipe) {
-      let right = self.parse_and()
-      left = BinOp(Or, left, right)
-    } else if self.match_(QuestionQuestion) {
-      let right = self.parse_and()
-      left = BinOp(Coalesce, left, right)
+  while true {
+    let op : @ast.TsBinOp = match self.peek().kind {
+      PipePipe => Or
+      QuestionQuestion => Coalesce
+      _ => break
     }
+    let _ = self.advance()
+    let right = self.parse_and()
+    left = BinOp(op, left, right)
   }
   left
 }
@@ -816,7 +706,8 @@ fn Parser::parse_or(self : Parser) -> @ast.TsExpr raise ParseError {
 // / && (AND)
 fn Parser::parse_and(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut left = self.parse_bit_or()
-  while self.match_(AmpAmp) {
+  while self.peek().kind is AmpAmp {
+    let _ = self.advance()
     let right = self.parse_bit_or()
     left = BinOp(And, left, right)
   }
@@ -827,7 +718,8 @@ fn Parser::parse_and(self : Parser) -> @ast.TsExpr raise ParseError {
 // / | (OR)
 fn Parser::parse_bit_or(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut left = self.parse_bit_xor()
-  while self.match_(Pipe) {
+  while self.peek().kind is Pipe {
+    let _ = self.advance()
     let right = self.parse_bit_xor()
     left = BinOp(BitOr, left, right)
   }
@@ -838,7 +730,8 @@ fn Parser::parse_bit_or(self : Parser) -> @ast.TsExpr raise ParseError {
 // / ^ (XOR)
 fn Parser::parse_bit_xor(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut left = self.parse_bit_and()
-  while self.match_(Caret) {
+  while self.peek().kind is Caret {
+    let _ = self.advance()
     let right = self.parse_bit_and()
     left = BinOp(BitXor, left, right)
   }
@@ -849,7 +742,8 @@ fn Parser::parse_bit_xor(self : Parser) -> @ast.TsExpr raise ParseError {
 // / & (AND)
 fn Parser::parse_bit_and(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut left = self.parse_equality()
-  while self.match_(Amp) {
+  while self.peek().kind is Amp {
+    let _ = self.advance()
     let right = self.parse_equality()
     left = BinOp(BitAnd, left, right)
   }
@@ -861,32 +755,27 @@ fn Parser::parse_bit_and(self : Parser) -> @ast.TsExpr raise ParseError {
 fn Parser::parse_equality(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut left = self.parse_comparison()
   while true {
+    let op : @ast.TsBinOp = match self.peek().kind {
+      EqEqEq => BinEq
+      BangEqEq => BinNe
+      EqEq => AbstractEq
+      BangEq => AbstractNe
+      _ => break
+    }
+    let _ = self.advance()
     // `as T` / `satisfies T` sit at unary precedence in the TS spec,
     // so `a === b as T` is `a === (b as T)`. Without consuming the
     // assertion here the AST would wrap the whole equality and our
     // "always-false" overlap diagnostic would compare the un-cast
     // literals (`"foo" === ("bar" as string)`).
-    let consume_rhs_assertion = fn(
-      right : @ast.TsExpr,
-    ) -> @ast.TsExpr raise ParseError {
-      let (_, wrapped) = self.consume_trailing_assertions_wrap(right)
-      wrapped
-    }
-    if self.match_(EqEqEq) {
-      let right = consume_rhs_assertion(self.parse_comparison())
-      left = BinOp(BinEq, left, right)
-    } else if self.match_(BangEqEq) {
-      let right = consume_rhs_assertion(self.parse_comparison())
-      left = BinOp(BinNe, left, right)
-    } else if self.match_(EqEq) {
-      let right = consume_rhs_assertion(self.parse_comparison())
-      left = BinOp(AbstractEq, left, right)
-    } else if self.match_(BangEq) {
-      let right = consume_rhs_assertion(self.parse_comparison())
-      left = BinOp(AbstractNe, left, right)
-    } else {
-      break
-    }
+    //
+    // This used to be a closure built at the top of the loop body,
+    // which allocated one per expression parsed — including the
+    // overwhelming majority that carry no equality operator at all.
+    let (_, right) = self.consume_trailing_assertions_wrap(
+      self.parse_comparison(),
+    )
+    left = BinOp(op, left, right)
   }
   left
 }
@@ -896,27 +785,18 @@ fn Parser::parse_equality(self : Parser) -> @ast.TsExpr raise ParseError {
 fn Parser::parse_comparison(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut left = self.parse_shift()
   while true {
-    if self.match_(Lt) {
-      let right = self.parse_shift()
-      left = BinOp(BinLt, left, right)
-    } else if self.match_(Le) {
-      let right = self.parse_shift()
-      left = BinOp(BinLe, left, right)
-    } else if self.match_(Gt) {
-      let right = self.parse_shift()
-      left = BinOp(BinGt, left, right)
-    } else if self.match_(Ge) {
-      let right = self.parse_shift()
-      left = BinOp(BinGe, left, right)
-    } else if self.match_(Instanceof) {
-      let right = self.parse_shift()
-      left = BinOp(Instanceof, left, right)
-    } else if self.match_(In) {
-      let right = self.parse_shift()
-      left = BinOp(In, left, right)
-    } else {
-      break
+    let op : @ast.TsBinOp = match self.peek().kind {
+      Lt => BinLt
+      Le => BinLe
+      Gt => BinGt
+      Ge => BinGe
+      Instanceof => Instanceof
+      In => In
+      _ => break
     }
+    let _ = self.advance()
+    let right = self.parse_shift()
+    left = BinOp(op, left, right)
   }
   left
 }
@@ -926,18 +806,15 @@ fn Parser::parse_comparison(self : Parser) -> @ast.TsExpr raise ParseError {
 fn Parser::parse_shift(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut left = self.parse_additive()
   while true {
-    if self.match_(LtLt) {
-      let right = self.parse_additive()
-      left = BinOp(Shl, left, right)
-    } else if self.match_(GtGt) {
-      let right = self.parse_additive()
-      left = BinOp(Shr, left, right)
-    } else if self.match_(GtGtGt) {
-      let right = self.parse_additive()
-      left = BinOp(UShr, left, right)
-    } else {
-      break
+    let op : @ast.TsBinOp = match self.peek().kind {
+      LtLt => Shl
+      GtGt => Shr
+      GtGtGt => UShr
+      _ => break
     }
+    let _ = self.advance()
+    let right = self.parse_additive()
+    left = BinOp(op, left, right)
   }
   left
 }
@@ -947,15 +824,14 @@ fn Parser::parse_shift(self : Parser) -> @ast.TsExpr raise ParseError {
 fn Parser::parse_additive(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut left = self.parse_multiplicative()
   while true {
-    if self.match_(Plus) {
-      let right = self.parse_multiplicative()
-      left = BinOp(Add, left, right)
-    } else if self.match_(Minus) {
-      let right = self.parse_multiplicative()
-      left = BinOp(Sub, left, right)
-    } else {
-      break
+    let op : @ast.TsBinOp = match self.peek().kind {
+      Plus => Add
+      Minus => Sub
+      _ => break
     }
+    let _ = self.advance()
+    let right = self.parse_multiplicative()
+    left = BinOp(op, left, right)
   }
   left
 }
@@ -965,18 +841,15 @@ fn Parser::parse_additive(self : Parser) -> @ast.TsExpr raise ParseError {
 fn Parser::parse_multiplicative(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut left = self.parse_exponent()
   while true {
-    if self.match_(Star) {
-      let right = self.parse_exponent()
-      left = BinOp(Mul, left, right)
-    } else if self.match_(Slash) {
-      let right = self.parse_exponent()
-      left = BinOp(Div, left, right)
-    } else if self.match_(Percent) {
-      let right = self.parse_exponent()
-      left = BinOp(Mod, left, right)
-    } else {
-      break
+    let op : @ast.TsBinOp = match self.peek().kind {
+      Star => Mul
+      Slash => Div
+      Percent => Mod
+      _ => break
     }
+    let _ = self.advance()
+    let right = self.parse_exponent()
+    left = BinOp(op, left, right)
   }
   left
 }
@@ -985,7 +858,8 @@ fn Parser::parse_multiplicative(self : Parser) -> @ast.TsExpr raise ParseError {
 // / ** ()
 fn Parser::parse_exponent(self : Parser) -> @ast.TsExpr raise ParseError {
   let left = self.parse_unary()
-  if self.match_(StarStar) {
+  if self.peek().kind is StarStar {
+    let _ = self.advance()
     let right = self.parse_exponent()
     BinOp(Pow, left, right)
   } else {
@@ -996,40 +870,30 @@ fn Parser::parse_exponent(self : Parser) -> @ast.TsExpr raise ParseError {
 ///|
 // / unaryoperator
 fn Parser::parse_unary(self : Parser) -> @ast.TsExpr raise ParseError {
-  if self.match_(Minus) {
-    let operand = self.parse_unary()
-    UnaryOp(Neg, operand)
-  } else if self.match_(Plus) {
-    let operand = self.parse_unary()
-    UnaryOp(Plus, operand)
-  } else if self.match_(Typeof) {
-    let operand = self.parse_unary()
-    UnaryOp(Typeof, operand)
-  } else if self.match_(Delete) {
-    let operand = self.parse_unary()
-    UnaryOp(Delete, operand)
-  } else if self.match_(VoidType) {
-    let operand = self.parse_unary()
-    UnaryOp(Void, operand)
-  } else if self.match_(Bang) {
-    let operand = self.parse_unary()
-    UnaryOp(Not, operand)
-  } else if self.match_(Tilde) {
-    let operand = self.parse_unary()
-    UnaryOp(BitwiseNot, operand)
-  } else if self.match_(PlusPlus) {
-    // ++x ()
-    let operand = self.parse_unary()
-    UnaryOp(PreInc, operand)
-  } else if self.match_(MinusMinus) {
-    // --x ()
-    let operand = self.parse_unary()
-    UnaryOp(PreDec, operand)
-  } else if self.match_(Yield) {
+  // The prefix operators dispatch in one jump table. `yield` and `await`
+  // stay behind it because each needs more than "consume and recurse".
+  let prefix : @ast.TsUnaryOp? = match self.peek().kind {
+    Minus => Some(Neg)
+    Plus => Some(Plus)
+    Typeof => Some(Typeof)
+    Delete => Some(Delete)
+    VoidType => Some(Void)
+    Bang => Some(Not)
+    Tilde => Some(BitwiseNot)
+    PlusPlus => Some(PreInc) // ++x
+    MinusMinus => Some(PreDec) // --x
+    _ => None
+  }
+  if prefix is Some(op) {
+    let _ = self.advance()
+    return UnaryOp(op, self.parse_unary())
+  }
+  if self.peek().kind is Yield {
+    let _ = self.advance()
     if self.in_generator {
       if self.match_(Star) {
         let expr = self.parse_assignment()
-        YieldStar(expr)
+        return YieldStar(expr)
       } else {
         // yield takes AssignmentExpression as operand (ES6 14.4)
         // Check for end of yield expression
@@ -1044,7 +908,7 @@ fn Parser::parse_unary(self : Parser) -> @ast.TsExpr raise ParseError {
         } else {
           Some(self.parse_assignment())
         }
-        Yield(expr)
+        return Yield(expr)
       }
     } else {
       // TS1163: outside a generator, `yield <expr>` on one line can only be
@@ -1068,19 +932,22 @@ fn Parser::parse_unary(self : Parser) -> @ast.TsExpr raise ParseError {
           "a `yield` expression is only allowed in a generator body",
         )
         let expr = self.parse_assignment()
-        Yield(Some(expr))
+        return Yield(Some(expr))
       } else {
-        Var("yield")
+        return Var("yield")
       }
     }
-  } else if self.peek().kind == Ident("await") {
+  }
+  // `await` is contextual, so it arrives as a plain identifier. Comparing
+  // `kind == Ident("await")` allocated an `Ident` node per expression
+  // parsed — this is the same test without the allocation.
+  if self.peek().kind is Ident("await") {
     // await expression - valid in async functions or top-level await
     let _ = self.advance()
     let expr = self.parse_unary()
-    Await(expr)
-  } else {
-    self.parse_postfix()
+    return Await(expr)
   }
+  self.parse_postfix()
 }
 
 ///|
@@ -1094,13 +961,13 @@ fn Parser::parse_postfix(self : Parser) -> @ast.TsExpr raise ParseError {
     if tok.has_newline_before {
       break
     }
-    if self.match_(PlusPlus) {
-      expr = UnaryOp(PostInc, expr)
-    } else if self.match_(MinusMinus) {
-      expr = UnaryOp(PostDec, expr)
-    } else {
-      break
+    let op : @ast.TsUnaryOp = match tok.kind {
+      PlusPlus => PostInc
+      MinusMinus => PostDec
+      _ => break
     }
+    let _ = self.advance()
+    expr = UnaryOp(op, expr)
   }
   expr
 }

@@ -536,7 +536,10 @@ fn Parser::advance(self : Parser) -> Token {
     return { kind: Gt, pos: self.pending_gt_pos, has_newline_before: false }
   }
   let tok = self.peek()
-  if tok.kind != Eof {
+  // `is Eof` rather than `!= Eof`: the derived `TokenKind::equal` is an
+  // out-of-line call over an enum with payloads, and `advance` runs once
+  // per token in the file. A pattern test is a tag compare.
+  if !(tok.kind is Eof) {
     self.pos += 1
   }
   tok

@@ -393,6 +393,14 @@ fn mtsc_dirname(path : String) -> String {
 }
 
 ///|
+fn mtsc_basename(path : String) -> String {
+  match path.rev_find("/") {
+    Some(i) => path[i + 1:].to_owned()
+    None => path
+  }
+}
+
+///|
 fn mtsc_join_path(dir : String, child : String) -> String {
   if dir == "" {
     child
@@ -475,6 +483,12 @@ async fn mtsc_load_bundle_files(
   // parse of every file in the graph — 0.9 s of the 2.1 s read+parse
   // phase on 9 MB of `typescript.js`. Skip it when nobody asked.
   want_type_props : Bool,
+  // `[tokenize, parse, read+decode, resolve]` micros accumulated across
+  // every file, so `--timing` can separate the lexer from the recursive
+  // descent and both from the filesystem. Reported as four rows because
+  // the single "read + parse files" row hid the actual hot spot: path
+  // resolution, not parsing, was 42-60% of a multi-file compile.
+  parse_split : Array[Double],
   // Every block this walk parses, keyed the way `files` is, so the
   // bundler can reuse them instead of parsing the same sources again.
   // The walk has to parse each file to find its imports, and the
@@ -490,6 +504,20 @@ async fn mtsc_load_bundle_files(
   // a cooperative single-threaded scheduler, so spawning per-file
   // tasks adds task-group overhead without overlapping any real
   // work — the parser itself stays the dominant CPU cost.
+  let mut tokenize_micros = 0.0
+  let mut parse_micros = 0.0
+  let mut read_micros = 0.0
+  let mut resolve_micros = 0.0
+  // Time every `mtsc_resolve_existing` call, cache hits included, so the
+  // row measures what resolution costs the compile rather than what it
+  // costs on a miss.
+  async fn timed_resolve(base : String) -> String {
+    let started = @bench.monotonic_clock_start()
+    let r = mtsc_resolve_existing(base)
+    resolve_micros = resolve_micros + @bench.monotonic_clock_end(started)
+    r
+  }
+
   let queue : Array[String] = [entry_path]
   while queue.length() > 0 {
     let disk_path = queue[queue.length() - 1]
@@ -497,7 +525,7 @@ async fn mtsc_load_bundle_files(
     if files.contains(disk_path) {
       continue
     }
-    let resolved = mtsc_resolve_existing(disk_path)
+    let resolved = timed_resolve(disk_path)
     // A relative import that names no file on disk is not a reason to
     // fail the compile. It is what a build-generated module looks like
     // from a source checkout: TypeScript's own `checker.ts` imports
@@ -511,9 +539,11 @@ async fn mtsc_load_bundle_files(
       )
       continue
     }
+    let read_started = @bench.monotonic_clock_start()
     let source = @fs.read_file(resolved).text() catch {
       e => return Err("read error \{resolved}: \{e}")
     }
+    read_micros = read_micros + @bench.monotonic_clock_end(read_started)
     files[resolved] = source
     // The extension-less form is also keyed, so the bundler can look up
     // the specifier a module actually spelled (`./sub` -> `/dir/sub`).
@@ -528,9 +558,18 @@ async fn mtsc_load_bundle_files(
       !files.contains(disk_path) {
       files[disk_path] = source
     }
-    let mb = @parser.Parser::from_source(source).parse_module_block() catch {
+    // Split so `--timing` says which half of "parse" is which:
+    // tokenizing builds the whole token array up front, walking it is a
+    // separate cost, and the two want different fixes.
+    let tokenize_started = @bench.monotonic_clock_start()
+    let parser = @parser.Parser::from_source(source)
+    tokenize_micros = tokenize_micros +
+      @bench.monotonic_clock_end(tokenize_started)
+    let parse_started = @bench.monotonic_clock_start()
+    let mb = parser.parse_module_block() catch {
       e => return Err("parse \{resolved}: \{e}")
     }
+    parse_micros = parse_micros + @bench.monotonic_clock_end(parse_started)
     // Keyed exactly like `files` above, including the extension-less
     // alias, because the bundler looks a module up by whichever form
     // the importing specifier spelled.
@@ -580,7 +619,7 @@ async fn mtsc_load_bundle_files(
         edges.push({
           importerPath: resolved,
           moduleSpecifier: spec,
-          targetPath: mtsc_resolve_existing(combined),
+          targetPath: timed_resolve(combined),
         })
         queue.push(combined)
         continue
@@ -624,7 +663,7 @@ async fn mtsc_load_bundle_files(
         edges.push({
           importerPath: resolved,
           moduleSpecifier: spec,
-          targetPath: mtsc_resolve_existing(combined),
+          targetPath: timed_resolve(combined),
         })
         queue.push(combined)
         continue
@@ -678,6 +717,10 @@ async fn mtsc_load_bundle_files(
       Err(_) => ()
     }
   }
+  parse_split.push(tokenize_micros)
+  parse_split.push(parse_micros)
+  parse_split.push(read_micros)
+  parse_split.push(resolve_micros)
   Ok(())
 }
 
@@ -722,7 +765,70 @@ fn mtsc_ts_equivalents(base : String) -> Array[String] {
 }
 
 ///|
+/// Resolution caches. A compile is one process over a snapshot of the
+/// tree, so nothing here can go stale within a run.
+///
+/// They exist because module resolution, not parsing, was the largest
+/// phase on every multi-file target once `--timing` could separate it
+/// from reading: 235 ms of valibot's 394 ms (59.6%) and 30 ms of hono's
+/// 71 ms (42.4%), against 12-18% for tokenize plus recursive descent
+/// combined. The cause is arithmetic — `mtsc_resolve_existing` probed up
+/// to thirteen candidate paths per import, and every probe was an
+/// `@fs.exists` plus an `@fs.kind`, so one import cost ~26 syscalls to
+/// find one file.
+///
+/// `mtsc_dir_entries` turns that around: list a directory once, and a
+/// candidate that does not exist is then a map lookup rather than a
+/// syscall. Only a candidate the listing admits costs an `@fs.kind`, and
+/// that is at most one per import.
+let mtsc_dir_entries : Map[String, Map[String, Bool]] = {}
+
+///|
+/// `@fs.kind(path) is Regular`, memoized. Distinct from the listing:
+/// the listing says a *name* is there, this says it is a file and not a
+/// directory.
+let mtsc_regular_files : Map[String, Bool] = {}
+
+///|
+/// `mtsc_resolve_existing` results. The loader resolves the same path
+/// twice per edge — once to record the edge, once when the queue reaches
+/// it — and a module imported from n places is resolved n times.
+let mtsc_resolved_paths : Map[String, String] = {}
+
+///|
+/// The names directly inside `dir`, read once. A directory that cannot
+/// be read caches as empty: that is the same answer every candidate
+/// under it would have got, and it stops a missing directory from being
+/// re-probed per candidate.
+async fn mtsc_dir_listing(dir : String) -> Map[String, Bool] {
+  let key = if dir == "" { "." } else { dir }
+  match mtsc_dir_entries.get(key) {
+    Some(m) => m
+    None => {
+      let m : Map[String, Bool] = {}
+      let names = @fs.readdir(key) catch { _ => [] }
+      for n in names {
+        m[n] = true
+      }
+      mtsc_dir_entries[key] = m
+      m
+    }
+  }
+}
+
+///|
 async fn mtsc_resolve_existing(base : String) -> String {
+  match mtsc_resolved_paths.get(base) {
+    Some(r) => return r
+    None => ()
+  }
+  let r = mtsc_resolve_existing_uncached(base)
+  mtsc_resolved_paths[base] = r
+  r
+}
+
+///|
+async fn mtsc_resolve_existing_uncached(base : String) -> String {
   if mtsc_file_exists(base) {
     return base
   }
@@ -768,10 +874,33 @@ async fn mtsc_path_exists(path : String) -> Bool {
 /// itself, and the read then failed with "Is a directory" instead of
 /// falling through to `client/index.ts`.
 async fn mtsc_file_exists(path : String) -> Bool {
-  if !@fs.exists(path) {
+  match mtsc_regular_files.get(path) {
+    Some(v) => return v
+    None => ()
+  }
+  let base = mtsc_basename(path)
+  // `.` and `..` are not in a listing (`readdir` drops the special
+  // entries) and are directories anyway, so answer without one. An empty
+  // base means a trailing slash, which likewise names a directory.
+  if base == "" || base == "." || base == ".." {
+    mtsc_regular_files[path] = false
     return false
   }
-  (@fs.kind(path) catch { _ => return false }) is Regular
+  // The parent's listing settles non-existence for free. Only a name
+  // that IS there is worth a `kind` syscall.
+  if !mtsc_dir_listing(mtsc_dirname(path)).contains(base) {
+    mtsc_regular_files[path] = false
+    return false
+  }
+  let v = (@fs.kind(path) catch {
+      _ => {
+        mtsc_regular_files[path] = false
+        return false
+      }
+    })
+    is Regular
+  mtsc_regular_files[path] = v
+  v
 }
 
 ///|
@@ -959,6 +1088,7 @@ async fn main {
     let aliases : Map[String, String] = {}
     let type_props : Map[String, Bool] = {}
     let parsed_blocks : Map[String, @ast.TsModuleBlock] = {}
+    let parse_split : Array[Double] = []
     // `--timing` covers the CLI's own work too. The transform pipeline
     // reports its own phases, but the first measurement of `checker.ts`
     // put 731 ms of 31.6 s inside them — everything that mattered was
@@ -977,6 +1107,7 @@ async fn main {
         opts.externals,
         type_props,
         opts.reserve_typed_props,
+        parse_split,
         parsed_blocks,
         edges,
       ) {
@@ -986,10 +1117,27 @@ async fn main {
         return
       }
     }
-    cli_timer.record(
-      "cli: read + parse files",
-      @bench.monotonic_clock_end(load_started),
-    )
+    // Report the lexer and the recursive descent separately, and keep
+    // the remainder (disk reads, path resolution) as its own row.
+    let load_total = @bench.monotonic_clock_end(load_started)
+    if parse_split.length() == 4 {
+      cli_timer.record("cli: tokenize", parse_split[0])
+      cli_timer.record("cli: parse (recursive descent)", parse_split[1])
+      cli_timer.record("cli: read + decode files", parse_split[2])
+      cli_timer.record("cli: resolve module paths", parse_split[3])
+      // Whatever the four measured spans do not account for: queue
+      // bookkeeping, the import walk, the sibling `.d.ts` scan.
+      let rest = load_total -
+        parse_split[0] -
+        parse_split[1] -
+        parse_split[2] -
+        parse_split[3]
+      if rest > 0.0 {
+        cli_timer.record("cli: module graph walk", rest)
+      }
+    } else {
+      cli_timer.record("cli: read + parse files", load_total)
+    }
     // Type-check the whole graph in one go. Checking each file alone
     // leaves every imported type unresolvable, which both hides real
     // errors and invents fake ones — an identical shape compared against
