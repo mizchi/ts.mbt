@@ -1,0 +1,16 @@
+{
+  "origin": "ts.mbt — keyed-container receivers for class-method DCE",
+  "what": "A computed-key read off a PRIVATE `Record` field is an entry lookup, and a private name is lexically the class's own, so the read clears the method-DCE gate. The same read off a PUBLIC field does not: `this.table[k]` in an object literal whose `table` holds a `Worker` really does name a `Worker` method, and clearing it deleted `spare` — the differential run sees `viaDynamic` turn from \"S\" into \"GONE\".",
+  "mtscArgs": [
+    "--treeshake"
+  ],
+  "exports": [
+    "report"
+  ],
+  "expectKeep": [
+    "seeded",
+    "missing",
+    "viaDynamic"
+  ],
+  "expectStatus": "pass"
+}

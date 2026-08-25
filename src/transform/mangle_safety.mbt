@@ -311,6 +311,21 @@ fn type_literal_string_keys(t : @ast.TsType) -> Array[String]? {
 }
 
 ///|
+/// True when a computed-index receiver is a plain binding, which is
+/// what Phase 3+4 observability can follow. Anything else —
+/// `this.f[k]`, `a.b[k]`, `f()[k]`, an element of an array — has no
+/// symbol to attach an observability to, so the caller cannot leave
+/// the key set to a later phase.
+fn untracked_index_receiver(recv : @ast.TsExpr) -> Bool {
+  match recv {
+    Var(_) => true
+    NonNull(inner) | As(inner, _) | Satisfies(inner, _) =>
+      untracked_index_receiver(inner)
+    _ => false
+  }
+}
+
+///|
 // Phase 2 reservation rule for an external-chain `obj[idx]` site.
 // Returns true when the index expression's keys were reserved
 // concretely (caller skips the wildcard fallback), false when the
@@ -405,11 +420,15 @@ fn collect_props_on_external_stmt(
       )
     IndexAssign(t, idx, v) => {
       // Local-binding dynamic write: Phase 3+4 handle the
-      // reservation, no wildcard from here. External-chain
-      // writes get the Phase 2 narrowing — wildcard only when
-      // the index expression remains opaque.
-      if is_external_chain(t, externals) &&
-        !reserve_external_index_keys(idx, out, numeric_names, literal_idx_names) {
+      // reservation, no wildcard from here. Every other receiver
+      // gets the Phase 2 narrowing — wildcard when the index
+      // expression remains opaque. Writes matter for the same
+      // reason reads do: `obj[k] = v` under a key that arrives as a
+      // string VALUE has to agree with the static `obj.k` sites.
+      if !reserve_external_index_keys(
+          idx, out, numeric_names, literal_idx_names,
+        ) &&
+        (is_external_chain(t, externals) || !untracked_index_receiver(t)) {
         out["*"] = true
       }
       collect_props_on_external_expr(
@@ -679,13 +698,28 @@ fn collect_props_on_external_expr(
       )
     }
     IndexAccess(recv, idx) => {
-      // Dynamic indexing on an EXTERNAL chain falls back to `*`
-      // unless the index expression's type pins the key set down
-      // (Phase 2 narrowing). LOCAL bindings stay handled by Phase
-      // 3+4 observability — only properties actually escape to a
-      // sink get reserved, the rest stay drop-eligible.
-      if is_external_chain(recv, externals) &&
-        !reserve_external_index_keys(idx, out, numeric_names, literal_idx_names) {
+      // Dynamic indexing falls back to `*` unless the index
+      // expression's type pins the key set down (Phase 2
+      // narrowing). A LOCAL BINDING receiver is the exception:
+      // Phase 3+4 observability tracks it, so only properties that
+      // really escape to a sink get reserved and the rest stay
+      // drop-eligible.
+      //
+      // Anything else — an external chain, but equally `this.f[k]`,
+      // `a.b[k]`, `f()[k]` — has no binding for Phase 3+4 to track,
+      // so the key set is nobody's to bound and the wildcard is the
+      // only sound answer:
+      //
+      //   class R { #rows: Record<string, string> = { seed: "0" };
+      //             read(k: string) { return this.#rows[k]; } }
+      //   new R().read("seed")
+      //
+      // Renaming `seed` while `"seed"` stays a string VALUE turns
+      // the read into `undefined` — a wrong answer, not a crash.
+      if !reserve_external_index_keys(
+          idx, out, numeric_names, literal_idx_names,
+        ) &&
+        (is_external_chain(recv, externals) || !untracked_index_receiver(recv)) {
         out["*"] = true
       }
       collect_props_on_external_expr(
@@ -738,8 +772,10 @@ fn collect_props_on_external_expr(
     IndexAssignExpr(recv, idx, v) => {
       // Local-binding dynamic write — same Phase 2 narrowing as
       // the statement-level IndexAssign.
-      if is_external_chain(recv, externals) &&
-        !reserve_external_index_keys(idx, out, numeric_names, literal_idx_names) {
+      if !reserve_external_index_keys(
+          idx, out, numeric_names, literal_idx_names,
+        ) &&
+        (is_external_chain(recv, externals) || !untracked_index_receiver(recv)) {
         out["*"] = true
       }
       collect_props_on_external_expr(

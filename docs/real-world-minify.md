@@ -18,11 +18,13 @@
 13 件の bug を潰して通るようになりました。うち 10 件は corpus では原理的に
 出ない種類のものです。
 
-その後「hono の使わない機能はもっと落とせるはずだ」を測る過程で 14 件目が
-出ました（#14: 動的 access の read と write が逆に判定されていた）。これは
-size ではなく**正しさ**の bug で、`obj[k]` で dispatch される method が
-削除されていました。同じ調査で `--explain-mangle` に method DCE の section
-を足しています（#15）。
+その後「hono の使わない機能はもっと落とせるはずだ」を測る過程で、
+**正しさ**の bug が 2 件出ました。#14（動的 access の read と write が逆に
+判定されていて、`obj[k]` で dispatch される method が削除されていた）と、
+#18（`this.f[k]` で読まれる property が rename されていた）。どちらも
+crash ではなく静かに違う答えを返す形です。同じ調査で `--explain-mangle`
+に method DCE の section を足し（#15）、class field 注釈が lowering で
+消えているのを直しました（#17）。
 
 ## 見つかった bug
 
@@ -558,6 +560,41 @@ pin して native class だけ落とします。
 non-enumerable まで見える reflection（`getOwnPropertyNames` /
 `getOwnPropertyDescriptors` / `ownKeys` / `getOwnPropertyDescriptor`）は
 そのまま sink です。
+
+### 18. `this.f[k]` で読まれる key が rename されていた（mangle_safety）
+
+#17 の corpus case を書いたら、method DCE とは別の pass が落ちました。
+`--mangle-properties` **単体**で観測が変わります。
+
+```ts
+class Registry {
+  #rows: Record<string, string> = { seed: "0" };
+  read(k: string): string | undefined { return this.#rows[k]; }
+}
+console.log(new Registry().read("seed"));   // "0" → undefined
+```
+
+`seed` は object literal では**静的な key**、read では**string 値**として
+届きます。前者だけ rename すれば lookup は外れます。crash ではなく
+`undefined` —— 静かに違う答えです。
+
+原因は wildcard の発火条件でした。computed index の read / write は
+external chain の receiver に対してだけ wildcard を立て、それ以外は
+「local binding なら Phase 3+4 の observability が追う」に任せていました。
+`Var` receiver ならその通りです。`this.f[k]` / `a.b[k]` / `f()[k]` には
+**追うべき binding が無い**ので、誰も key 集合を bound しないまま
+mangling が走ります。
+
+今は「index が narrow できない、かつ receiver が素の binding でない」なら
+wildcard を立てます。数値 index（`this.items[i]`）は narrow 側で通るので
+影響しません。実測でも hono / valibot / react / `examples/minify-app` の
+size は 1 byte も変わりませんでした —— それらの bundle は別の理由で
+既に wildcard が立っているか、string key の dynamic read が binding
+receiver だけだったからです。
+
+corpus に `case35-this-field-container` を追加しました。private field
+経由（安全）と public field 経由（危険）の両方を 1 つの case に入れて、
+差分実行で `viaDynamic` と `seeded` の 2 つが同時に見られます。
 
 ### 17. class の field 注釈が lowering で消えていた（parser / bundle）
 

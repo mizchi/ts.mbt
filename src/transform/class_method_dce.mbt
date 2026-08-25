@@ -358,12 +358,33 @@ fn receiver_is_keyed_container(recv : @ast.TsExpr, facts : SniffFacts) -> Bool {
 }
 
 ///|
-/// Property names that are a keyed container on every class in the
-/// bundle that declares them. `this.f` inside a class body is that
-/// class's field, and when all the candidates agree it doesn't matter
-/// which class we are in — which is what lets
+/// The prefix the parser gives a `#private` class field. A property
+/// name carrying it cannot belong to anything but the class body it
+/// was declared in.
+let private_field_brand_prefix : String = "__private_brand__"
+
+///|
+/// Names of **private** fields that are a keyed container on every
+/// class in the bundle that declares them. `this.#f` is provably that
+/// class's field: a private name is lexically scoped to the class
+/// body, so no object literal, no host object, and no function called
+/// with a different receiver can carry it. That is what lets
 /// `const middleware = this.#middleware; middleware[i]` clear the
 /// computed-read gate without an annotation at the local.
+///
+/// Public fields are deliberately excluded. `this.f` says nothing
+/// about which object `this` is:
+///
+///   class Registry { table: Record<string, string> = {}; … }
+///   const holder = {
+///     table: new Worker(),
+///     call(k: string) { return this.table[k]; },   // a Worker's member
+///   };
+///
+/// Reading `Registry`'s annotation for `table` here would clear a read
+/// that really does name a `Worker` method, and `Worker`'s unused
+/// methods would then be deleted out from under it. The parser gives
+/// private fields a brand-prefixed name, which is the test.
 ///
 /// A name any class types as something else is dropped outright, so a
 /// disagreement decides against the promotion.
@@ -380,6 +401,9 @@ fn class_field_containers(
   // real bundle; the walk below only catches classes that still carry
   // `properties` by the time this pass runs.
   for f in class_fields {
+    if !f.0.has_prefix(private_field_brand_prefix) {
+      continue
+    }
     if type_is_keyed_container(f.1, class_names, aliases) {
       container[f.0] = true
     } else {
@@ -390,6 +414,9 @@ fn class_field_containers(
     match s {
       NativeClassStmt(decl, _) =>
         for p in decl.properties {
+          if !p.name.has_prefix(private_field_brand_prefix) {
+            continue
+          }
           if type_is_keyed_container(p.type_, class_names, aliases) {
             container[p.name] = true
           } else {

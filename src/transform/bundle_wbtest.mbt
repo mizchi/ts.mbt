@@ -2304,6 +2304,38 @@ test "class_method_dce: an inferred container receiver is one too" {
 }
 
 ///|
+test "class_method_dce: this.publicField is not a container proof" {
+  // `this.f` says nothing about which object `this` is. `Registry`
+  // types `table` as a `Record`, but the object literal's `table` holds
+  // a `Worker`, and its `this.table[k]` really does name a `Worker`
+  // method — so `spare` has to survive. Reading the class annotation
+  // for a public field deleted it and turned `holder.call("spare")`
+  // into `undefined`.
+  let src =
+    #|class Worker {
+    #|  run(): string { return "R"; }
+    #|  spare(): string { return "S"; }
+    #|}
+    #|class Registry {
+    #|  table: Record<string, string> = {};
+    #|  find(k: string): string | undefined { return this.table[k]; }
+    #|}
+    #|const holder = {
+    #|  table: new Worker(),
+    #|  call(k: string): unknown { return this.table[k]; },
+    #|};
+    #|const r = new Registry();
+    #|const fn = holder.call("spare");
+    #|console.log(r.find("x"), fn);
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_true(out.js.contains("spare()"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "class_method_dce: a class-typed field receiver still gates the pass" {
   // The negative side of the rule. `this.#target[k]` reads a member of
   // a `Worker`, and `k` could name any of them, so `spare` has to
