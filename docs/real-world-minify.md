@@ -19,7 +19,8 @@
 出ない種類のものです。
 
 その後「hono の使わない機能はもっと落とせるはずだ」を測る過程で、
-**正しさ**の bug が 5 件出ました。#14（動的 access の read と write が逆に
+**正しさ**の bug が 7 件出ました（#21 は 2 つ、#22 は checker の
+false positive）。#14（動的 access の read と write が逆に
 判定されていて、`obj[k]` で dispatch される method が削除されていた）、
 #18（`this.f[k]` で読まれる property が rename されていた）、
 #19（computed key の destructuring が identifier mangling を crash させ、
@@ -563,6 +564,59 @@ pin して native class だけ落とします。
 non-enumerable まで見える reflection（`getOwnPropertyNames` /
 `getOwnPropertyDescriptors` / `ownKeys` / `getOwnPropertyDescriptor`）は
 そのまま sink です。
+
+### 22. default 付き parameter が method / arrow で必須扱い（checker）
+
+```ts
+class C { m(n: number = 5): number { return n } }
+new C().m();     // mtsc: expected 1 argument(s), got 0
+const g = (n: number = 5) => n;
+g();             // 同じ
+```
+
+free function と constructor は通ります —— そちらは rich な `TsParam`
+metadata を持つので arity が正確に出ます。method / static method /
+arrow は annotation だけから素の `Func` を組むので、default が
+`param_defaults` に別置きされている事実が型に乗りません。
+
+`(n = 5) => n` を拒否する false positive は、普通の TypeScript を
+弾きます（`--no-check` が必要になっていた理由の 1 つ）。callable 型を
+組むところで、default 付き parameter を `T | undefined` に widen
+するようにしました —— parser が `n?: number` に対して既にやっている
+のと同じ処理なので、`T | undefined` を理解している arity 経路が
+そのまま理解します。6 形（free / method / constructor / arrow /
+`?` / static）を 1 つの test で押さえています。
+
+### 21. binding pattern に隠れた値式（mangle）
+
+pattern は 2 箇所に値式を隠します。element の default と computed key
+です。どちらも enclosing scope で評価されるのに、walker が initializer
+しか見ていませんでした。
+
+**参照の予約漏れ**（静かに違う答え）:
+
+```ts
+const fallback = 9;                                    // → a
+function pick(xs: number[]) { const [first = fallback] = xs; return first; }
+```
+→
+```js
+function b(a) { const [b = a] = a; return b; }   // `a` は今 xs
+```
+
+`fallback` が `pick` の body の自由変数として数えられていないので、
+parameter allocator が同じ短名を割り当て、default が parameter に
+解決されました。`pick([])` は 9 ではなく `[]` を返します。
+
+**rename 漏れ**（crash）: `rename_binding_decl` /
+`rename_binding_lhs` が `key_expr` を verbatim に通していたので、
+`k` を rename した関数に `{ [k]: v }` が残り、**素の `--mangle` で
+ReferenceError**。
+
+`--mangle-properties` を付けると `dead_props` が「read が無い」と
+判断して object literal の唯一の property まで落としていました
+（#19 と同じ形）。corpus に `case37-pattern-default-scope` を
+追加して、両方を差分実行で見ます。
 
 ### 20. computed write が静的 read と食い違う（mangle_safety）
 

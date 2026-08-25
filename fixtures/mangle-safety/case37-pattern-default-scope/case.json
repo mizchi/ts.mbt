@@ -1,0 +1,12 @@
+{
+  "origin": "ts.mbt — binding patterns hide value expressions",
+  "what": "An element default and a computed key inside a destructuring pattern are value expressions evaluated in the enclosing scope. The reference walk that reserves short names skipped both, so a parameter shadowed the default's binding (`chosen` became [] instead of 9), and the rename walk skipped the key (ReferenceError under plain --mangle).",
+  "exports": [
+    "report"
+  ],
+  "expectKeep": [
+    "chosen",
+    "found"
+  ],
+  "expectStatus": "pass"
+}

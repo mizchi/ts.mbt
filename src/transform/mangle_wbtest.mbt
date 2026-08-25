@@ -871,6 +871,45 @@ test "mangle: PureCall wrapper does not hide identifier references" {
 }
 
 ///|
+test "mangle: a pattern default's outer reference is reserved in the scope" {
+  // Regression. `collect_var_refs_stmt` discarded the binding pattern,
+  // so `fallback` was not counted as a free reference of `pick`'s body
+  // and the parameter allocator handed `xs` the same short name:
+  //
+  //   function b(a) { const [b = a] = a; return b; }
+  //
+  // `a` now names the parameter, so the default resolves to the empty
+  // array instead of 9 — a wrong answer, not a crash.
+  let cfg = ManglerConfig::default().with_preserve_top_level(false)
+  let src = "const fallback = 9;\nfunction pick(xs) { const [first = fallback] = xs; return first; }\nconsole.log(pick([]));"
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      // Whatever the parameter is called, the default must not name it.
+      assert_false(js.contains("[b = a] = a"))
+      assert_false(js.contains("[a = a] = a"))
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+test "mangle: a computed destructuring key is renamed with its binding" {
+  // Regression. `rename_binding_decl` carried
+  // `TsObjectBindingProp.key_expr` through verbatim, so the pattern
+  // kept `{ [k]: v }` in a function whose `k` had been renamed —
+  // `ReferenceError: k is not defined` under plain `--mangle`.
+  let cfg = ManglerConfig::default().with_preserve_top_level(false)
+  let src = "function pick(k) { const { [k]: v } = { a: 1 }; return v; }\nconsole.log(pick(\"a\"));"
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      assert_false(js.contains("[k]"))
+      assert_false(js.contains("k)"))
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
 test "mangle: name short-name generator avoids reserved single-letter clashes" {
   // The mangler should skip `a` if it conflicts. Force the issue
   // by reserving `a`.

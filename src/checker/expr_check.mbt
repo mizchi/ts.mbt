@@ -963,6 +963,53 @@ fn type_contains_typeof(ty : @ast.TsType) -> Bool {
 }
 
 ///|
+/// Parameter types for a class method's callable type, with a defaulted
+/// parameter widened to `T | undefined`.
+///
+/// The parser keeps a default initializer on `param_defaults` and leaves
+/// the annotation alone, so a `Func` built straight off `m.params`
+/// claims `m(n: number = 5)` needs its argument. `new C().m()` was
+/// reported as "expected 1 argument(s), got 0" — while the same default
+/// on a free function or on a constructor was accepted, because those
+/// paths carry rich `TsParam` metadata and this one does not. Widening
+/// is what the parser already does for `n?: number`, so every arity
+/// path that understands `T | undefined` understands this too.
+fn method_callable_param_types(
+  m : @ast.TsClassMethodDecl,
+) -> Array[@ast.TsType] {
+  let out : Array[@ast.TsType] = []
+  for i, p in m.params {
+    let has_default = i < m.param_defaults.length() &&
+      m.param_defaults[i] is Some(_)
+    if has_default && !type_accepts_undefined_param(p.1) {
+      out.push(@ast.TsType::Union([p.1, @ast.TsType::Undefined]))
+    } else {
+      out.push(p.1)
+    }
+  }
+  out
+}
+
+///|
+/// Same for a callable built from rich `TsParam` metadata (an arrow or a
+/// function expression). `param_is_optional` already folds in the
+/// default, the `?` marker and the rest flag; a rest parameter keeps its
+/// own type since arity handles `Rest(_)` directly.
+fn callable_param_types(params : Array[@ast.TsParam]) -> Array[@ast.TsType] {
+  let out : Array[@ast.TsType] = []
+  for p in params {
+    if !p.is_rest &&
+      param_is_optional(p) &&
+      !type_accepts_undefined_param(p.type_) {
+      out.push(@ast.TsType::Union([p.type_, @ast.TsType::Undefined]))
+    } else {
+      out.push(p.type_)
+    }
+  }
+  out
+}
+
+///|
 /// Required-argument count for a parameter list: the index of the first
 /// trailing optional / default / rest param. Used to validate `Call(...)`
 /// arity when the rich signature is available.
@@ -3429,11 +3476,9 @@ fn Resolver::lookup_class_field(
   }
   for m in cls.methods {
     if m.name == field && !m.is_static {
-      let param_types : Array[@ast.TsType] = []
-      for p in m.params {
-        param_types.push(p.1)
-      }
-      return Some(@ast.TsType::Func(param_types, m.return_type))
+      return Some(
+        @ast.TsType::Func(method_callable_param_types(m), m.return_type),
+      )
     }
   }
   for base in cls.base_names {
@@ -6840,11 +6885,10 @@ fn infer_expr(
                   }
                   for m in cls.methods {
                     if m.name == name && m.is_static {
-                      let param_types : Array[@ast.TsType] = []
-                      for p in m.params {
-                        param_types.push(p.1)
-                      }
-                      return @ast.TsType::Func(param_types, m.return_type)
+                      return @ast.TsType::Func(
+                        method_callable_param_types(m),
+                        m.return_type,
+                      )
                     }
                   }
                 }
@@ -6930,10 +6974,7 @@ fn infer_expr(
     }
     ComputedProp(_, _) => @ast.TsType::Any
     ArrowFunc(params, declared_ret, body, is_async) => {
-      let param_types : Array[@ast.TsType] = []
-      for p in params {
-        param_types.push(p.type_)
-      }
+      let param_types = callable_param_types(params)
       // Prefer the explicit return-type annotation when one was supplied;
       // fall back to inferring from the body expression for `(x) => expr`
       // or walking return statements for `(x) => { return expr; }` blocks.
@@ -6948,10 +6989,7 @@ fn infer_expr(
       @ast.TsType::Func(param_types, wrap_async_return(is_async, ret))
     }
     FuncExpr(f) => {
-      let param_types : Array[@ast.TsType] = []
-      for p in f.params {
-        param_types.push(p.type_)
-      }
+      let param_types = callable_param_types(f.params)
       // When no explicit return-type annotation was given, walk the body for
       // return statements — same strategy as ArrowBlock. A generator function
       // returns a `Generator` object, not its `return` value, so calling one
@@ -8347,11 +8385,12 @@ fn check_expr_against(
             }
             for meth in cls.methods {
               if !meth.is_static {
-                let ps : Array[@ast.TsType] = []
-                for prm in meth.params {
-                  ps.push(prm.1)
-                }
-                out.push((meth.name, Func(ps, meth.return_type)))
+                out.push(
+                  (
+                    meth.name,
+                    Func(method_callable_param_types(meth), meth.return_type),
+                  ),
+                )
               }
             }
           }
@@ -10969,11 +11008,7 @@ fn class_static_method_param_types(
       return None
     }
   }
-  let types : Array[@ast.TsType] = []
-  for p in m.params {
-    types.push(p.1)
-  }
-  Some(types)
+  Some(method_callable_param_types(m))
 }
 
 ///|
@@ -22615,11 +22650,7 @@ fn check_symbol_index_members(
       } else if meth.accessor == "set" {
         continue
       } else {
-        let ptypes : Array[@ast.TsType] = []
-        for pp in meth.params {
-          ptypes.push(pp.1)
-        }
-        Func(ptypes, ret)
+        Func(method_callable_param_types(meth), ret)
       }
       if is_checkable(member_ty) &&
         is_checkable(idx_value) &&
@@ -29627,11 +29658,12 @@ fn check_interface_extends_compat(
           out.push((m.name, m.params[0].1))
         }
       } else {
-        let ptypes : Array[@ast.TsType] = []
-        for p in m.params {
-          ptypes.push(p.1)
-        }
-        out.push((m.name, @ast.TsType::Func(ptypes, method_ret(m))))
+        out.push(
+          (
+            m.name,
+            @ast.TsType::Func(method_callable_param_types(m), method_ret(m)),
+          ),
+        )
       }
     }
     out
@@ -29732,12 +29764,11 @@ fn check_interface_extends_compat(
             m.name != "<computed>" &&
             !m.name.has_prefix("__private_brand__") &&
             !m.name.has_prefix("#") {
-            let ptypes : Array[@ast.TsType] = []
-            for p in m.params {
-              ptypes.push(p.1)
-            }
             static_fields.push(
-              (m.name, @ast.TsType::Func(ptypes, m.return_type)),
+              (
+                m.name,
+                @ast.TsType::Func(method_callable_param_types(m), m.return_type),
+              ),
             )
           }
         }

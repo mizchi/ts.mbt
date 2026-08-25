@@ -1457,10 +1457,66 @@ fn collect_var_refs_block(
 }
 
 ///|
+/// Names a binding PATTERN references — not the names it introduces.
+/// Pattern element defaults and computed keys are ordinary value
+/// expressions evaluated in the enclosing scope, so a walker that only
+/// looks at the initializer misses them.
+fn collect_var_refs_binding(
+  b : @ast.TsBinding,
+  out : Map[String, Bool],
+) -> Unit {
+  match b {
+    Ident(_) => ()
+    Target(e) => collect_var_refs_expr(e, out)
+    Array(ab) => {
+      for item in ab.items {
+        match item {
+          Some(elem) => {
+            collect_var_refs_binding(elem.binding, out)
+            match elem.default {
+              Some(d) => collect_var_refs_expr(d, out)
+              None => ()
+            }
+          }
+          None => ()
+        }
+      }
+      match ab.rest {
+        Some(r) => collect_var_refs_binding(r, out)
+        None => ()
+      }
+    }
+    Object(ob) =>
+      for prop in ob.props {
+        match prop.key_expr {
+          Some(k) => collect_var_refs_expr(k, out)
+          None => ()
+        }
+        collect_var_refs_binding(prop.binding, out)
+        match prop.default {
+          Some(d) => collect_var_refs_expr(d, out)
+          None => ()
+        }
+      }
+  }
+}
+
+///|
 fn collect_var_refs_stmt(stmt : @ast.TsStmt, out : Map[String, Bool]) -> Unit {
   match stmt {
-    Var(_, _, e) | Let(_, _, e) | Const(_, _, e) =>
+    Var(b, _, e) | Let(b, _, e) | Const(b, _, e) => {
+      // The BINDING hides value expressions: a pattern element's
+      // default (`const [first = fallback] = xs`) and a computed key
+      // (`const { [k]: v } = obj`) both reference outer names. Missing
+      // them left the name unreserved, so a parameter took its short
+      // alias and the default silently resolved to the parameter:
+      //
+      //   const fallback = 9;                    // → a
+      //   function pick(xs) { const [first = fallback] = xs; … }
+      //   function b(a) { const [b = a] = a; … } // `a` is now `xs`
+      collect_var_refs_binding(b, out)
       collect_var_refs_expr(e, out)
+    }
     Assign(name, e) => {
       out[name] = true
       collect_var_refs_expr(e, out)
@@ -1520,7 +1576,12 @@ fn collect_var_refs_stmt(stmt : @ast.TsStmt, out : Map[String, Bool]) -> Unit {
       }
       collect_var_refs_block(b, out)
     }
-    ForOf(_, _, _, e, b) | ForIn(_, _, _, e, b) | ForAwaitOf(_, _, _, e, b) => {
+    ForOf(_, bind, _, e, b)
+    | ForIn(_, bind, _, e, b)
+    | ForAwaitOf(_, bind, _, e, b) => {
+      // Same as a declaration: the loop binding can be a pattern with
+      // defaults and computed keys.
+      collect_var_refs_binding(bind, out)
       collect_var_refs_expr(e, out)
       collect_var_refs_block(b, out)
     }

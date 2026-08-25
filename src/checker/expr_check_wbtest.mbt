@@ -14812,3 +14812,39 @@ test "expr_check: spread of a resolvable parameter stays closed" {
   }
   assert_true(found)
 }
+
+///|
+test "expr_check: a defaulted parameter is omittable on every callable form" {
+  // The parser records a default on `param_defaults` and leaves the
+  // annotation alone. A free function and a constructor carry rich
+  // `TsParam` metadata so their arity was modelled correctly, but a
+  // method, a static method and an arrow build a bare `Func` from the
+  // annotations alone — and claimed the argument was required:
+  //
+  //   mtsc: type error … [call `m`]: expected 1 argument(s), got 0
+  //
+  // A false positive on `(n = 5) => n` rejects perfectly ordinary
+  // TypeScript, so the callable type widens a defaulted parameter the
+  // same way the parser widens `n?: number`.
+  let src =
+    #|function free(n: number = 5): number { return n }
+    #|const arrow = (n: number = 5): number => n
+    #|class C {
+    #|  v: number
+    #|  constructor(n: number = 5) { this.v = n }
+    #|  inst(n: number = 5): number { return n }
+    #|  static stat(n: number = 5): number { return n }
+    #|}
+    #|function callThem(): void {
+    #|  free()
+    #|  arrow()
+    #|  new C()
+    #|  new C().inst()
+    #|  C.stat()
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies_permissive(module_)
+  for i in issues {
+    assert_true(!i.message.contains("argument(s), got 0"))
+  }
+}
