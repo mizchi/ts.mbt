@@ -76,19 +76,26 @@ instrument した 20 個の transform pass の合計は **731 ms** でした。
 | `typescript.js`（9 MB） | 約 390 s | **4.6 s** | byte 一致 |
 | real-world 5 target 全体 | 約 7 分 | **12.5 s** | 5/5 pass |
 
-`just bench-pipeline` で再現します。今の残りは **parse が 78〜94%** で、
-同じ source を **2 回 parse** しています（CLI の loader が import 探索で
-1 回、`load_module_graph` が module graph 構築で 1 回）。次に削るのはそこ
-です。
+4 つ目は **同じ source を 2 回 parse** していたことです。CLI の loader が
+import を辿るために全 file を parse し、`load_module_graph` が module graph
+を組むために**もう一度**全 file を parse していました。loader の結果を
+`BundleOptions.parsed_blocks` で渡すようにして、bundler 側の parse は
+9 MB で 852 ms → **4 ms**。
+
+`just bench-pipeline` で再現します。
 
 ```
-    target          bytes in     wall ms     KiB/s
-    minify-app          8,776         17       491
-    hono              771,362        205      3669
-    valibot         1,588,417       1461      1062     ← 578 file、1 file あたりの固定費が支配
-    checker.ts      3,065,627        949      3155
-    typescript.js  27,301,748       4611      5783
+    target          bytes in    wall ms(前)  wall ms(後)   KiB/s(後)
+    minify-app          8,776         17          16          521
+    hono              771,362        205          86         8799
+    valibot         1,588,417       1461         496         3130   ← 578 file、2.9x
+    checker.ts      3,065,627        949         788         3799
+    typescript.js  27,301,748       4611        3936         6774
 ```
+
+valibot の伸びが一番大きいのは 578 file あって 1 file あたりの固定費が
+支配的だからです。残っているのは依然 parse（33〜79%）ですが、今度は
+**1 回分**です。次があるなら parser 本体か、file 単位の並列化になります。
 
 ## 見つかった bug
 

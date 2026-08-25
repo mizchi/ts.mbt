@@ -92,6 +92,14 @@ pub(all) struct BundleOptions {
   // Off by default: with it off `PhaseTimer` records nothing and the
   // instrumentation is one branch per phase.
   timing : Bool
+  // Already-parsed module blocks, keyed exactly like `files`. A caller
+  // that had to parse each file to find its imports (mtsc's loader
+  // walks the graph off disk before the bundler ever sees it) can hand
+  // the results over instead of paying for a second parse of the same
+  // source. Parsing is 78-94% of a bundle's wall time and it was
+  // happening twice; on 9 MB of `typescript.js` the bundler's own pass
+  // was 850 ms of 5.0 s. Empty map = parse everything here.
+  parsed_blocks : Map[String, @ast.TsModuleBlock]
 }
 
 ///|
@@ -110,7 +118,16 @@ pub fn BundleOptions::default() -> BundleOptions {
     explain: false,
     allow_unresolved_imports: false,
     timing: false,
+    parsed_blocks: {},
   }
+}
+
+///|
+pub fn BundleOptions::with_parsed_blocks(
+  self : BundleOptions,
+  parsed : Map[String, @ast.TsModuleBlock],
+) -> BundleOptions {
+  { ..self, parsed_blocks: parsed }
 }
 
 ///|
@@ -434,6 +451,7 @@ pub fn bundle_modules(
       external_seen,
       opts.aliases,
       opts.allow_unresolved_imports,
+      opts.parsed_blocks,
     ) {
     Ok(_) => ()
     Err(e) => return Err(e)
@@ -1230,6 +1248,9 @@ fn load_module_graph(
   // real filesystem: in-memory callers keep the strict behaviour, so a
   // mistyped `./mising` is still an error and not a silent external.
   allow_unresolved : Bool,
+  // Parses the caller already did, keyed like `files`. See
+  // `BundleOptions.parsed_blocks`.
+  parsed : Map[String, @ast.TsModuleBlock],
 ) -> Result[Unit, String] {
   if modules.contains(path) {
     return Ok(())
@@ -1241,11 +1262,14 @@ fn load_module_graph(
   // Parse as a module block so we get imports + the runtime stmt
   // stream. JSX lowering happens here too so the per-module pragma
   // / config gets resolved against the right source text.
-  let parser = @parser.Parser::from_source(source)
-  let mb = try parser.parse_module_block() catch {
-    e => return Err("parse \{path}: \{e}")
-  } noraise {
-    b => b
+  let mb = match parsed.get(path) {
+    Some(cached) => cached
+    None =>
+      try @parser.Parser::from_source(source).parse_module_block() catch {
+        e => return Err("parse \{path}: \{e}")
+      } noraise {
+        b => b
+      }
   }
   // Reuse the per-file JSX pragma extractor so each module honors
   // its own `/** @jsxImportSource ... */` etc.
@@ -1335,6 +1359,7 @@ fn load_module_graph(
         match
           load_module_graph(
             files, dep_path, modules, external_imports, external_seen, aliases, allow_unresolved,
+            parsed,
           ) {
           Ok(_) => ()
           Err(e) => return Err(e)
@@ -1353,7 +1378,7 @@ fn load_module_graph(
             match
               load_module_graph(
                 files, dep_path, modules, external_imports, external_seen, aliases,
-                allow_unresolved,
+                allow_unresolved, parsed,
               ) {
               Ok(_) => ()
               Err(e) => return Err(e)
@@ -1366,7 +1391,7 @@ fn load_module_graph(
               match
                 load_module_graph(
                   files, dep_path, modules, external_imports, external_seen, aliases,
-                  allow_unresolved,
+                  allow_unresolved, parsed,
                 ) {
                 Ok(_) => ()
                 Err(e) => return Err(e)
@@ -1410,6 +1435,7 @@ fn load_module_graph(
         match
           load_module_graph(
             files, dep_path, modules, external_imports, external_seen, aliases, allow_unresolved,
+            parsed,
           ) {
           Ok(_) => ()
           Err(e) => return Err(e)
@@ -1422,7 +1448,7 @@ fn load_module_graph(
             match
               load_module_graph(
                 files, dep_path, modules, external_imports, external_seen, aliases,
-                allow_unresolved,
+                allow_unresolved, parsed,
               ) {
               Ok(_) => ()
               Err(e) => return Err(e)
@@ -1435,7 +1461,7 @@ fn load_module_graph(
               match
                 load_module_graph(
                   files, dep_path, modules, external_imports, external_seen, aliases,
-                  allow_unresolved,
+                  allow_unresolved, parsed,
                 ) {
                 Ok(_) => ()
                 Err(e) => return Err(e)

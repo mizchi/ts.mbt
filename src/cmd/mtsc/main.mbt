@@ -475,6 +475,12 @@ async fn mtsc_load_bundle_files(
   // parse of every file in the graph — 0.9 s of the 2.1 s read+parse
   // phase on 9 MB of `typescript.js`. Skip it when nobody asked.
   want_type_props : Bool,
+  // Every block this walk parses, keyed the way `files` is, so the
+  // bundler can reuse them instead of parsing the same sources again.
+  // The walk has to parse each file to find its imports, and the
+  // bundler has to parse each file to build the module graph — the same
+  // work, twice, for what is 78-94% of a bundle's wall time.
+  parsed : Map[String, @ast.TsModuleBlock],
   // Import / re-export edges discovered along the way, in the shape the
   // graph checker wants: resolution is the CLI's job, and the checker
   // needs the edges to resolve a type declared in another module.
@@ -524,6 +530,13 @@ async fn mtsc_load_bundle_files(
     }
     let mb = @parser.Parser::from_source(source).parse_module_block() catch {
       e => return Err("parse \{resolved}: \{e}")
+    }
+    // Keyed exactly like `files` above, including the extension-less
+    // alias, because the bundler looks a module up by whichever form
+    // the importing specifier spelled.
+    parsed[resolved] = mb
+    if disk_path != resolved && resolved.has_prefix(disk_path + ".") {
+      parsed[disk_path] = mb
     }
     // Second-pass parse for the TYPE side. The block parser above
     // only sees runtime statements; interfaces / type aliases /
@@ -945,6 +958,7 @@ async fn main {
     let edges : Array[@mtsc_core.MtscModuleEdge] = []
     let aliases : Map[String, String] = {}
     let type_props : Map[String, Bool] = {}
+    let parsed_blocks : Map[String, @ast.TsModuleBlock] = {}
     // `--timing` covers the CLI's own work too. The transform pipeline
     // reports its own phases, but the first measurement of `checker.ts`
     // put 731 ms of 31.6 s inside them — everything that mattered was
@@ -963,6 +977,7 @@ async fn main {
         opts.externals,
         type_props,
         opts.reserve_typed_props,
+        parsed_blocks,
         edges,
       ) {
       Ok(_) => ()
@@ -1095,6 +1110,9 @@ async fn main {
       // time — it keeps them verbatim.
       .with_allow_unresolved_imports(true)
       .with_timing(opts.timing)
+      // Hand the loader's parses over rather than have the bundler
+      // repeat them.
+      .with_parsed_blocks(parsed_blocks)
     let bundle_opts = { ..bundle_opts, jsx: jsx_cfg }
     let bundle_started = @bench.monotonic_clock_start()
     let result = @transform.bundle_modules(files, input_path, bundle_opts)

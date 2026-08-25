@@ -164,6 +164,7 @@ pub(all) struct BundleOptions {
   explain : Bool
   allow_unresolved_imports : Bool
   timing : Bool
+  parsed_blocks : Map[String, @ast.TsModuleBlock]
 }
 pub fn BundleOptions::default() -> Self
 pub fn BundleOptions::with_aliases(Self, Map[String, String]) -> Self
@@ -175,6 +176,7 @@ pub fn BundleOptions::with_mangle(Self, Bool) -> Self
 pub fn BundleOptions::with_mangle_properties(Self, Bool) -> Self
 pub fn BundleOptions::with_mangle_properties_shape_color(Self, Bool) -> Self
 pub fn BundleOptions::with_minify(Self, Bool) -> Self
+pub fn BundleOptions::with_parsed_blocks(Self, Map[String, @ast.TsModuleBlock]) -> Self
 pub fn BundleOptions::with_sourcemap(Self, Bool) -> Self
 pub fn BundleOptions::with_timing(Self, Bool) -> Self
 pub fn BundleOptions::with_treeshake(Self, Bool) -> Self
