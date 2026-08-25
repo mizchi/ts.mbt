@@ -227,6 +227,51 @@ fn seed_from_expr(
       seed_from_expr(e, scope, obs, g, result, worklist)
     }
     BinOp(_, _, r) => seed_from_expr(r, scope, obs, g, result, worklist)
+    // Containers pass the observation through to what they hold. A
+    // value handed to a sink INSIDE an array or as an object-literal
+    // value is observed exactly as much as one handed over directly:
+    // `console.log(o)` and `console.log([o])` both print `o`'s keys.
+    //
+    // Without these arms the seed walk stopped at the container and the
+    // binding inside it was never marked, so its properties stayed
+    // manglable and the dead-property pass deleted them. `console.log`
+    // printed `[ {} ]` where the unmangled bundle printed `[ { k: 1 } ]`.
+    //
+    // `collect_object_literal_keys` already reserved the container's OWN
+    // keys for this reason; what it could not do is follow the values.
+    // Found by `just fuzz-mangle`.
+    ArrayLit(items) =>
+      for item in items {
+        seed_from_expr(item, scope, obs, g, result, worklist)
+      }
+    ObjectLit(entries) =>
+      for ent in entries {
+        seed_from_expr(ent.1, scope, obs, g, result, worklist)
+      }
+    Spread(inner) => seed_from_expr(inner, scope, obs, g, result, worklist)
+    // A template literal stringifies its holes, so the names inside are
+    // observed the way `JSON.stringify` observes them.
+    TemplateLiteral(_, exprs) =>
+      for sub in exprs {
+        seed_from_expr(sub, scope, obs, g, result, worklist)
+      }
+    // A comma expression's VALUE is its right operand; the left is
+    // evaluated and discarded, so only the right is observed.
+    Seq(_, r) => seed_from_expr(r, scope, obs, g, result, worklist)
+    // `console.log(new C())` observes the INSTANCE, so C's members are
+    // observable — but an anonymous `new` has no binding to seed, which
+    // is why a binding held the fix (`const i = new C(); log(i)` was
+    // already correct) and the direct form was not. Seed the class
+    // declaration's own symbol instead;
+    // `reserved_props_from_observability` turns an observed `ClassDecl`
+    // into that class's member names.
+    New(name, _) =>
+      match lookup_symbol_in_scope(g, scope, name) {
+        Some(id) => bump_obs(id, obs, result, worklist)
+        None => ()
+      }
+    NewExpr(callee, _) =>
+      seed_from_expr(callee, scope, obs, g, result, worklist)
     As(inner, _)
     | Satisfies(inner, _)
     | NonNull(inner)
@@ -325,6 +370,11 @@ pub fn reserved_props_from_observability(
   g : SymbolGraph,
   obs_map : Map[SymbolId, Observability],
   type_env? : Map[String, @ast.TsType] = {},
+  // Class name -> its own member names, from `class_member_names`. A
+  // `ClassDecl` symbol has no initializer for `collect_direct_props` to
+  // read, so without this an observed class contributes nothing and its
+  // fields are deleted as dead.
+  class_members? : Map[String, Array[String]] = {},
 ) -> Map[String, Bool] {
   let out : Map[String, Bool] = {}
   // Linker-synthesised namespace stand-ins (`const ns = { exp1:
@@ -350,6 +400,19 @@ pub fn reserved_props_from_observability(
   for entry in obs_map {
     let (sym_id, obs) = entry
     let sym = g.symbols[sym_id]
+    // An observed class contributes the members its instances carry.
+    // `console.log(new C())` prints C's own enumerable fields, so those
+    // names are observable even though nothing in the bundle reads them
+    // — which is exactly what the dead-field pass was deleting.
+    if sym.kind is ClassDecl && obs_at_least_direct(obs) {
+      match class_members.get(sym.name) {
+        Some(names) =>
+          for n in names {
+            out[n] = true
+          }
+        None => ()
+      }
+    }
     match obs {
       Hidden | ViaStringify => ()
       DirectProps => collect_direct_props(sym, out)
@@ -545,6 +608,89 @@ pub fn build_type_env(
     }
   }
   env
+}
+
+///|
+fn obs_at_least_direct(obs : Observability) -> Bool {
+  match obs {
+    DirectProps | RecursiveProps | External => true
+    Hidden | ViaStringify => false
+  }
+}
+
+///|
+/// Every member name a class puts on its instances or on itself:
+/// declared methods, static fields, and the `this.x = …` writes the
+/// constructor performs (which is what a `class C { x = 1 }` field
+/// lowers to).
+///
+/// Keyed by class name. Two classes sharing a name across modules merge,
+/// which over-reserves rather than under-reserves.
+pub fn class_member_names(block : @ast.TsBlock) -> Map[String, Array[String]] {
+  let out : Map[String, Array[String]] = {}
+  fn record(class_name : String, member : String) -> Unit {
+    let names = match out.get(class_name) {
+      Some(existing) => existing
+      None => {
+        let fresh : Array[String] = []
+        out[class_name] = fresh
+        fresh
+      }
+    }
+    if !names.contains(member) {
+      names.push(member)
+    }
+  }
+
+  fn visit_stmt(s : @ast.TsStmt) -> Unit {
+    match s {
+      @ast.TsStmt::NativeClassStmt(decl, ctor) => {
+        for m in decl.methods {
+          record(decl.name, m.name)
+        }
+        for sf in decl.static_field_inits {
+          record(decl.name, sf.0)
+        }
+        // Instance fields arrive as constructor assignments.
+        match ctor {
+          Some(f) =>
+            for cs in f.body.stmts {
+              match cs {
+                @ast.TsStmt::PropAssign(@ast.TsExpr::Var("this"), n, _) =>
+                  record(decl.name, n)
+                @ast.TsStmt::Expr(
+                  @ast.TsExpr::PropAssignExpr(@ast.TsExpr::Var("this"), n, _)
+                ) => record(decl.name, n)
+                _ => ()
+              }
+            }
+          None => ()
+        }
+      }
+      @ast.TsStmt::Block(b) =>
+        for inner in b.stmts {
+          visit_stmt(inner)
+        }
+      @ast.TsStmt::If(_, t, e) => {
+        for inner in t.stmts {
+          visit_stmt(inner)
+        }
+        match e {
+          Some(b) =>
+            for inner in b.stmts {
+              visit_stmt(inner)
+            }
+          None => ()
+        }
+      }
+      _ => ()
+    }
+  }
+
+  for s in block.stmts {
+    visit_stmt(s)
+  }
+  out
 }
 
 ///|

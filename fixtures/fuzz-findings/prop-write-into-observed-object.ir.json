@@ -1,0 +1,117 @@
+{
+  "seed": 253,
+  "shape": "sink",
+  "types": [],
+  "decls": [],
+  "body": [
+    {
+      "k": "for",
+      "brake": "brake4",
+      "test": {
+        "k": "var",
+        "name": "obj"
+      },
+      "body": [
+        {
+          "k": "block",
+          "body": [
+            {
+              "k": "for",
+              "brake": "brake5",
+              "test": {
+                "k": "template",
+                "quasis": [
+                  "k",
+                  ""
+                ],
+                "exprs": [
+                  {
+                    "k": "cond",
+                    "test": {
+                      "k": "member",
+                      "obj": {
+                        "k": "var",
+                        "name": "bag"
+                      },
+                      "prop": "alpha"
+                    },
+                    "then": {
+                      "k": "member",
+                      "obj": {
+                        "k": "var",
+                        "name": "bag"
+                      },
+                      "prop": "alpha"
+                    },
+                    "else_": {
+                      "k": "member",
+                      "obj": {
+                        "k": "var",
+                        "name": "obj"
+                      },
+                      "prop": "r"
+                    }
+                  }
+                ]
+              },
+              "body": [
+                {
+                  "k": "expr",
+                  "expr": {
+                    "k": "assign",
+                    "op": "=",
+                    "target": {
+                      "k": "index",
+                      "obj": {
+                        "k": "var",
+                        "name": "obj"
+                      },
+                      "index": {
+                        "k": "lit",
+                        "value": "'q'"
+                      }
+                    },
+                    "value": {
+                      "k": "object",
+                      "props": [
+                        {
+                          "spread": true,
+                          "value": {
+                            "k": "var",
+                            "name": "bag"
+                          }
+                        },
+                        {
+                          "key": "g7",
+                          "value": {
+                            "k": "index",
+                            "obj": {
+                              "k": "var",
+                              "name": "arr"
+                            },
+                            "index": {
+                              "k": "lit",
+                              "value": "2"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "observe": [
+    {
+      "k": "var",
+      "name": "obj"
+    }
+  ],
+  "exports": [],
+  "nodeCount": 23
+}

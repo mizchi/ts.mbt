@@ -75,13 +75,23 @@ function encode(value, seen = new Map()) {
     .map((key) => [key, encode(value[key], seen)]);
   // The prototype's methods are part of what a caller can reach, and
   // `Object.keys` cannot see them, so they are collected separately.
+  //
+  // `proto !== Object.prototype` is NOT the test, even though it reads
+  // like it: the script shape runs in a `vm` context with its own
+  // intrinsics, so a plain object made in there has a DIFFERENT
+  // `Object.prototype` than this realm's. The comparison failed, the
+  // whole of `Object.prototype` (`__defineGetter__`, `__proto__`, …)
+  // got enumerated, and it showed up as a difference between the
+  // reference leg (imported here) and the compiled legs (run in the vm)
+  // — a mismatch reported against the compiler that was entirely mine.
+  // The constructor's name is realm-independent.
   const proto = Object.getPrototypeOf(value);
-  const protoMembers =
-    proto && proto !== Object.prototype
-      ? Object.getOwnPropertyNames(proto)
-          .filter((key) => key !== "constructor")
-          .sort()
-      : [];
+  const protoIsPlain = !proto || proto.constructor?.name === "Object";
+  const protoMembers = protoIsPlain
+    ? []
+    : Object.getOwnPropertyNames(proto)
+        .filter((key) => key !== "constructor")
+        .sort();
   return ["object", id, entries, protoMembers];
 }
 

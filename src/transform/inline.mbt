@@ -598,6 +598,33 @@ fn substitute_stmt(
     ForIn(k, b, t, iter, body) =>
       ForIn(k, b, t, substitute_expr(iter, name, rhs), body)
     Switch(e, cases) => Switch(substitute_expr(e, name, rhs), cases)
+    // `try` / `catch` / `finally` bodies each run at most once per
+    // execution of the statement, so substituting into them keeps the
+    // single-evaluation invariant — the same reasoning the `If` arm
+    // above uses. There was no arm here at all, and the omission was
+    // not conservative: `count_var_uses_stmt` counts a use inside a
+    // `try` as LOCAL, so the inliner saw a single-use binding, decided
+    // to inline it, substituted nothing, and dropped the declaration.
+    // The catch body was left calling a function that no longer
+    // existed — "ReferenceError: f0 is not defined".
+    //
+    // The loop arms get away with not substituting because the counter
+    // tags a use inside a loop body as NESTED, which makes the inliner
+    // decline. Two mirrored walkers, and only one of them knew about
+    // `try`. Found by `just fuzz-mangle`.
+    Try(b, cbind, cb, fb) =>
+      Try(
+        substitute_block(b, name, rhs),
+        cbind,
+        match cb {
+          Some(blk) => Some(substitute_block(blk, name, rhs))
+          None => None
+        },
+        match fb {
+          Some(blk) => Some(substitute_block(blk, name, rhs))
+          None => None
+        },
+      )
     Label(lname, inner) => Label(lname, substitute_stmt(inner, name, rhs))
     NativeClassStmt(decl, ctor) => {
       let new_base = match decl.base_expr {
@@ -856,7 +883,11 @@ fn count_var_uses_binding(
         match elem {
           Some(be) => {
             let (l2, n2) = count_var_uses_binding(
-              be.binding, name, 0, 0, inside_func,
+              be.binding,
+              name,
+              0,
+              0,
+              inside_func,
             )
             l = l + l2
             n = n + n2
@@ -884,7 +915,11 @@ fn count_var_uses_binding(
     Object(ob) =>
       for prop in ob.props {
         let (l2, n2) = count_var_uses_binding(
-          prop.binding, name, 0, 0, inside_func,
+          prop.binding,
+          name,
+          0,
+          0,
+          inside_func,
         )
         l = l + l2
         n = n + n2

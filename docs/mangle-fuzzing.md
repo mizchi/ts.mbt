@@ -119,79 +119,105 @@ type stripping で直接実行するので、我々の compiler は一切関与�
 これが無かった最初の版では、16 seed のうち 11 個が「skip」として
 黙って捨てられていました。全部 mtsc のバグでした。
 
-## 見つかったもの（seed 0..119、両 shape）
+## 3 本目の脚を、mismatch にも使う
 
-12 の異なる family。それぞれ最小化済みの再現が
-`_build/fuzz-mangle/` に出ます。
+reference を「baseline が走らなかったとき」だけに使っていた版には、
+もっと大きな穴がありました。baseline と candidate が**違う**とき、
+どちらが悪いのかを訊いていなかったのです。既定で rename を疑う、
+という決めつけです。
 
-| 回数 | 種別 | 症状 | 最小 |
-| --- | --- | --- | --- |
-| 17 | compress | `ReferenceError: keys is not defined` | 14 node |
-| 6 | compress | `TypeError: C.f is not a constructor` | 6 node |
-| 4 | **mangle** | 到達可能な class field が消える | **5 node** |
-| 4 | compress | `TypeError: C.m is not a constructor` | 6 node |
-| 3 | compress | `Identifier 'arr' / 'x' has already been declared` | 4 node |
-| 2 | compress | `Lexical declaration cannot appear in a single-statement context` | 19 node |
-| 1 | **mangle** | mangle 後の bundle が `Identifier 'b' has already been declared` | 24 node |
-| 1 | compress | `Unexpected identifier 'vN'` | 19 node |
-| 1 | compress | `Unexpected token '('` | 14 node |
-| 1 | compress | `Unexpected token 'new'` | 6 node |
-
-### 本題だったもの: 到達可能な field が消える
-
-5 node。`console.log` は sink で、instance はそこに流れ込み、その
-own enumerable property は観測可能です。
+それを教えたのがこれです。
 
 ```ts
-class C0 { c0f0 = 's'; }
+class C0 { #secret = 7; }
 console.log([new C0()]);
 ```
 
-```js
-// baseline: class C0{constructor(){this.c0f0="s"}}console.log([new C0])
-// mangled:  class c{}console.log([new c])
-```
+baseline は `C0 { __private_brand__0__secret: 7 }`、mangle 後は `c {}`。
+「生きている field を消した」と読みました。**元のプログラムを Node で
+走らせると `C0 {}` です。** 本物の `#private` field は own enumerable
+property ではありません。mangle 側が正しく、壊れているのは**unmangled
+な bundle** ——mtsc の private field lowering が `#secret` を普通の
+可視 property にしていました。
+
+なので reference が裁定します。2 つの compile 出力のうち、元と食い違う
+方が悪い。
+
+| | 意味 |
+| --- | --- |
+| reference == baseline | `mangle` —— rename が間違っている |
+| reference == candidate | `lowering` —— 共有 pipeline が間違っていて、mangle が偶然直した |
+| どちらでもない | `both` |
+
+## 見つかったもの
+
+seed 0..299、両 shape、404 comparison。**mangle の偽陽性は 1 件**です。
+残りは lowering / 圧縮側のバグで、mangle は無関係でした。
+
+| 回数 | 種別 | 症状 | 最小 | 状態 |
+| --- | --- | --- | --- | --- |
+| 104 | lowering | `#private` field が own enumerable になる | 5 node | 未修正（[fixtures/fuzz-findings](../fixtures/fuzz-findings)） |
+| 2 | both | 同上（両出力に brand 名が残る経路） | — | 同上 |
+| 2 | compress | `ReferenceError: fN is not defined` | — | 一部修正、残あり |
+| 2 | compress | `Invalid left-hand side expression in prefix operation` | — | 未調査 |
+| 1 | **mangle** | 観測される object への property write を追えていない | 12 node | 未修正（[同](../fixtures/fuzz-findings)） |
+
+### 修正したもの（この campaign が見つけたもの）
+
+最初の 120 seed では 13 comparison に対し 35 が「baseline が壊れている」
+でした。問いを問える状態ではなかったので、まず直しました。
+
+| 症状 | 原因 | 最小 |
+| --- | --- | --- |
+| `C.f is not a constructor` | `new C()` の空引数リスト省略が member access の head では不正 | 6 node |
+| `Identifier 'x' has already been declared` | declarator の初期化子を precedence 0 で出力し、comma 式の括弧が落ちて 2 つ目の declarator になっていた | 4 node |
+| `Lexical declaration cannot appear in a single-statement context` | 宣言だけの block を `do` 本体で de-brace | 19 node |
+| `keys is not defined` | `count_var_uses` が declaration の **binding** を歩かず、computed key 内の参照を数えていなかった | 14 node |
+| `let x=1;let x=2` (mangle 時は同名衝突) | 「multi-declarator の Block」と「本物の nested block」を emit が区別できていなかった | — |
+| `[0]` vs `[-1]` | treeshake の `is_pure_init` が `UnaryOp` の**演算子を無視**（`c--` が pure 扱い） | 4 node |
+| `[12]` vs `[11]` | `[a, f()].length` → `2` の fold が要素の副作用を捨てていた | 6 node |
+| `f0 is not defined` | `count_var_uses` は `try` 内の使用を local と数えるのに、`substitute_stmt` に `Try` の arm が無かった | — |
+
+同じ形のバグが繰り返し出ています——**対になった 2 つの walker のうち
+片方だけが、ある構文を知っている**。`count_var_uses` と
+`collect_var_refs`、`is_pure_init` と `purity.mbt`、`count_var_uses_stmt`
+と `substitute_stmt`。fuzzer が見つけているのは、その非対称です。
+
+結果:
 
 ```
-$ node baseline.mjs   → [ C0 { c0f0: 's' } ]
-$ node mangled.mjs    → [ c {} ]
+最初      13 compared,  35 broken baselines, 10 compress families
+8 修正後  404 compared,   2 broken baselines,  1 mangle finding
 ```
 
-field が消えています。dead-property pass が、**bundle 内で誰も読まないが
-instance が sink に逃げる** field を削っています。class 名の `C0` → `c` は
-正しい rename です（encoder は function の `name` を意図的に見ません。
-local binding を rename すれば `Function.name` は変わり、それを保つ
-minifier は存在しないので、見れば成功した mangle まで失敗報告になります）。
+出力は不変です。161/161 の mangle-safety case、real-world 5 target すべて
+挙動一致（`typescript.js` だけ括弧の分 36 byte 増）。
 
-### 圧縮側: 意味を持つ括弧が落ちる
+## 本題だったもの: 到達可能な field が消える
 
-3 family が同じ場所です。emitter が、外すと parse が変わる括弧を外します。
+これは**修正済み**です。sink に流れ込む値の property が予約されない
+穴が 2 つありました。
 
-```ts
-let v2 = (trace.push(0), x);      // → let v2=trace.push(0),x;
-                                  //   sequence が 2 つ目の declarator になる
-let v2 = (trace.push(0), new C0()); // → let v2=trace.push(0),new C0;
-new C1().c1f0                     // → new C1.c1f0
-                                  //   new の空引数リストは、member access の
-                                  //   対象になるときは省略できない
+```
+console.log(o)      → { k: 1 }        ✓ 元から正しい
+console.log([o])    → [ {} ]          ✗ container を通ると追えない
+console.log({w:o})  → { w: {} }       ✗ 同上
+console.log(new C()) → a {}           ✗ 無名の instance に binding が無い
+const i = new C(); console.log(i)     ✓ binding があれば正しい
 ```
 
-### 圧縮側: computed key が参照として数えられていない
+原因は `seed_from_expr` が **binding を追い、無名の部分式を追わなかった**
+ことです。container（array / object literal / spread / template）の中身へ
+降りるようにし、`New(C, …)` は **class の宣言 symbol** を seed して
+`reserved_props_from_observability` がその member 名に変換するように
+しました（`class_member_names`）。
 
-```ts
-const keys = ['alpha', 'beta'];
-function f1() { const { [keys[0]]: v2 } = bag; }
-```
-
-treeshake が `keys` を未使用と判断して宣言を落とし、`keys[0]` は残ります。
-object binding pattern の `key_expr` を参照収集が歩いていません——
-[以前 mangle 側で直したのと同じ死角](./real-world-minify.md)の、DCE 側です。
+内部だけで読まれる field は今も mangle されます——予約が増えたのは
+観測される経路だけで、real-world 5 target の byte 数は 1 byte も
+変わっていません。
 
 ## 現状と限界
 
-- **圧縮バグが mangling の信号を埋めています。** sink shape の 120 seed で、
-  比較できたのは 13 件、baseline が壊れたのが 35 件。問いを問える状態に
-  するには、まず emitter を直す必要があります。
 - 生成される TypeScript は**型としては正しくありません**。`--no-check` で
   走らせていますし、Node の type stripping も型検査しません。ここで
   探しているのは emit と rename の正しさであって、型検査の正しさでは
@@ -199,5 +225,9 @@ object binding pattern の `key_expr` を参照収集が歩いていません—
 - shape は 2 つ（`sink` / `export`）。export shape の観測は module の
   export 面を外から見るので、内側に観測を書く場合と違って名前が
   到達可能になりません。
-- CI には**入れていません**。campaign が commit する価値のある規模で
-  静かになってから、exit status がそのまま gate になります。
+- CI には**入れていません**。`#private` lowering が 300 seed 中 104 件を
+  占めているので、今 gate にすると常に赤です。それを直せば、exit status
+  がそのまま gate になります。
+- shrink の受理条件は「同じ signature で失敗し続ける」です。signature は
+  throw の name と正規化した message で、値の差はすべて `diff` に
+  まとまります。別々の値バグが 1 つの family に見える可能性は残ります。

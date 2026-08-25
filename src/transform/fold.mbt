@@ -1410,10 +1410,22 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       match (recv_f, p) {
         (StringLit(s), "length") => IntLit(s.length())
         // Only safe when no spread elements — `[...it].length` expands at
-        // runtime to the iterable's count, not 1.
+        // runtime to the iterable's count, not 1 — AND when evaluating
+        // the elements has no observable effect. Folding to the count
+        // DISCARDS the elements, so
+        //
+        //   [b, f0(y, true)].length;
+        //
+        // became `2` and `f0` was never called. The count is right and
+        // the program is wrong. `is_pure_value` lives in this file and
+        // already draws this line for the annihilator folds (`x * 0`);
+        // this fold just was not asking it.
+        //
+        // Found by `just fuzz-mangle`, shrunk to six nodes.
         (ArrayLit(items), "length") if items
           .iter()
-          .all(fn(it) { !(it is Spread(_)) }) => IntLit(items.length())
+          .all(fn(it) { !(it is Spread(_)) && is_pure_value(it) }) =>
+          IntLit(items.length())
         // Well-known Math / Number constants.
         (Var("Math"), "PI") => NumberLit(3.141592653589793)
         (Var("Math"), "E") => NumberLit(2.718281828459045)

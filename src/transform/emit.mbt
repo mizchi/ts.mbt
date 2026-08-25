@@ -1494,11 +1494,37 @@ fn binding_leading_byte(b : @ast.TsBinding) -> Char {
 /// that block with real `{…}` braces breaks scope; emit it as
 /// `let a = 1, b = 2;` instead. Returns true when it handled the
 /// block; the caller falls back to `emit_block` otherwise.
-/// Would `try_emit_multi_decl_inline` unwrap this block into a bare
-/// declaration? Same test as that function's guard, without emitting —
-/// `can_braceless` needs the answer before anything is written.
+/// Is this `Block` the parser's spelling of a multi-declarator
+/// declaration (`let a = 1, b = 2;`) rather than a real nested block?
+///
+/// The distinction decides whether the braces may be dropped, and
+/// getting it wrong is a correctness bug in BOTH directions: keeping
+/// braces on a declarator group makes its bindings block-local when they
+/// belong to the enclosing scope, and dropping them from a real block
+/// merges two scopes —
+///
+///   function f() { { const x = 1; } const x = 2; }
+///
+/// emitted as `function f(){let x=1;let x=2}`, which does not parse.
+/// That one needed no mangling at all; with mangling it was worse,
+/// because two bindings the mangler had renamed independently (each the
+/// first free name in its own scope) collided on the same letter.
+///
+/// `stmt_positions` is the discriminator: `Parser::merge_decl_stmts`,
+/// the only producer of declarator groups, leaves it empty, while
+/// `parse_block` fills one entry per statement. It records the
+/// producer's intent, which is precisely the missing information — a
+/// dedicated AST marker would say it more loudly, and `TsBlock` is
+/// constructed in ~140 places.
+///
+/// Found by `just fuzz-mangle`.
 fn block_is_inline_decl_group(block : @ast.TsBlock) -> Bool {
   if block.stmts.length() == 0 {
+    return false
+  }
+  // A real block carries its statements' positions; a declarator group
+  // never has any.
+  if block.stmt_positions.length() != 0 {
     return false
   }
   let kind = match block.stmts[0] {
@@ -1520,7 +1546,9 @@ fn block_is_inline_decl_group(block : @ast.TsBlock) -> Bool {
 
 ///|
 fn try_emit_multi_decl_inline(e : Emitter, block : @ast.TsBlock) -> Bool {
-  if block.stmts.length() == 0 {
+  // One rule for both the "can this lose its braces" question and the
+  // unwrap itself, so the two cannot drift.
+  if !block_is_inline_decl_group(block) {
     return false
   }
   let kind = match block.stmts[0] {

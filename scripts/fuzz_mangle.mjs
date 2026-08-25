@@ -331,33 +331,79 @@ function signatureOf(outcome, kind) {
   return `${kind}:diff`;
 }
 
-/// Ask the relevant question of one built program.
+/// Which of the three observations is the odd one out.
 ///
-/// For a mangling bug: do baseline and candidate still disagree? For a
-/// compression bug: does the original still run where our baseline
-/// bundle does not?
-function probe(built, shape, kind) {
-  if (kind === "compress") {
-    const [compiled] = runBatch([built], shape);
-    // The baseline completing means the breakage is gone.
-    if (compiled.verdict !== "skipped") return { verdict: "equivalent" };
-    const reference = runReference(built.sourcePath, shape === "export" ? "module" : "sink");
-    if (reference.status !== "completed") return { verdict: "equivalent" };
-    return { verdict: "mismatch", baseline: reference, candidate: compiled.baseline };
+/// Comparing only baseline against candidate says THAT they differ and
+/// blames the rename, and that blame can be wrong. The case that taught
+/// me this:
+///
+///   class C0 { #secret = 7; }
+///   console.log([new C0()]);
+///
+/// baseline printed `C0 { __private_brand__0__secret: 7 }`, mangled
+/// printed `c {}`, and I read that as the mangler deleting a live field.
+/// Node prints `C0 {}` for the original: a real `#private` field is not
+/// an own enumerable property. The MANGLED side was right and the
+/// unmangled bundle was the broken one — mtsc's private-field lowering
+/// turns `#secret` into an ordinary visible property.
+///
+/// So the reference decides. Whichever of the two compiled outputs
+/// disagrees with the original is the one at fault:
+///
+///   reference == baseline   -> "mangle", the rename is wrong
+///   reference == candidate  -> "lowering", the shared pipeline is wrong
+///                              and mangling happened to undo it
+///   neither                 -> "both"
+function attribute(built, shape) {
+  const [compiled] = runBatch([built], shape);
+  if (compiled.verdict === "harness") return { verdict: "harness", message: compiled.message };
+  const reference = runReference(built.sourcePath, shape === "export" ? "module" : "sink");
+  if (reference.status !== "completed") {
+    return { verdict: "skipped", reference, baseline: compiled.baseline };
   }
-  return runBatch([built], shape)[0];
+  const ref = JSON.stringify(reference);
+  const base = JSON.stringify(compiled.baseline);
+  const cand = JSON.stringify(compiled.candidate);
+  if (ref === base && ref === cand) return { verdict: "equivalent" };
+  const kind = ref === base ? "mangle" : ref === cand ? "lowering" : "both";
+  // `baseline` / `candidate` name the two sides of the reported diff:
+  // what SHOULD have happened, and what did.
+  // `baseline` / `candidate` name the two sides of the reported diff:
+  // what SHOULD have happened, and what did. For `lowering` and `both`
+  // that means original-versus-ours, since for `both` the two compiled
+  // outputs usually agree with each other and only differ from the
+  // original — printing them against each other showed no difference at
+  // all and read as a harness fault.
+  if (kind === "mangle") {
+    return {
+      verdict: "mismatch",
+      kind,
+      reference,
+      baseline: compiled.baseline,
+      candidate: compiled.candidate,
+    };
+  }
+  return {
+    verdict: "mismatch",
+    kind,
+    reference,
+    baseline: reference,
+    candidate: compiled.baseline,
+  };
 }
 
 /// The shrinker's oracle: does this candidate program still fail *the
-/// same way*?
+/// same way*? Both the attribution and the signature have to hold, so a
+/// reduction cannot slide from a mangling bug onto a lowering one.
 function makeStillFails(shape, kind, signature) {
   return (candidate) => {
     shrinkProbes += 1;
     const built = compileBoth(candidate, `shrink-${shrinkProbes}`);
     if (!built.ok) return "invalid";
-    const outcome = probe(built, shape, kind);
+    const outcome = attribute(built, shape);
     if (outcome.verdict === "mismatch") {
-      return signatureOf(outcome, kind) === signature ? "fails" : "passes";
+      if (outcome.kind !== kind) return "passes";
+      return signatureOf(outcome, outcome.kind) === signature ? "fails" : "passes";
     }
     // A harness error is not evidence either way; treating it as
     // "invalid" keeps a flaky probe from ending the reduction.
@@ -449,8 +495,8 @@ function recordFailure({ kind, seed, shape, program, entry, outcome }) {
     });
     const rebuilt = compileBoth(reduced.program, `final-${seed}-${shape}`);
     if (rebuilt.ok) {
-      const check = probe(rebuilt, shape, kind);
-      if (check.verdict === "mismatch") {
+      const check = attribute(rebuilt, shape);
+      if (check.verdict === "mismatch" && check.kind === kind) {
         failure.program = reduced.program;
         failure.source = rebuilt.source;
         failure.baseline = rebuilt.baseline;
@@ -468,7 +514,12 @@ function recordFailure({ kind, seed, shape, program, entry, outcome }) {
 
   const paths = saveFailure(failure);
   failures.push(failure);
-  const label = kind === "mangle" ? "MISMATCH" : "BROKEN BASELINE";
+  const label = {
+    mangle: "MANGLE FALSE POSITIVE",
+    lowering: "LOWERING BUG (unmangled side is wrong)",
+    both: "BOTH OUTPUTS WRONG",
+    compress: "BROKEN BASELINE",
+  }[kind] ?? "MISMATCH";
   console.log(`  [${label}] seed ${seed} (${shape})`);
   if (failure.shrink) {
     console.log(
@@ -488,7 +539,7 @@ function describeDifference(outcome, kind = "mangle") {
   const baseline = outcome.baseline?.logs;
   const candidate = outcome.candidate?.logs;
   if (outcome.candidate?.status !== "completed") {
-    const side = kind === "compress" ? "our bundle" : "mangled bundle";
+    const side = kind === "mangle" ? "mangled bundle" : "our bundle";
     return `original ran; ${side} ${outcome.candidate?.status}: ${outcome.candidate?.message ?? ""}`.trim();
   }
   if (!Array.isArray(baseline) || !Array.isArray(candidate)) return "structural difference";
@@ -500,7 +551,13 @@ function describeDifference(outcome, kind = "mangle") {
     const left = JSON.stringify(baseline[i]);
     const right = JSON.stringify(candidate[i]);
     if (left !== right) {
-      return `observation ${i}:\n      baseline  ${truncate(left, 220)}\n      mangled   ${truncate(right, 220)}`;
+      const leftLabel = kind === "mangle" ? "baseline" : "original";
+      const rightLabel = kind === "mangle" ? "mangled" : "our bundle";
+      return (
+        `observation ${i}:\n` +
+        `      ${leftLabel.padEnd(10)}${truncate(left, 200)}\n` +
+        `      ${rightLabel.padEnd(10)}${truncate(right, 200)}`
+      );
     }
   }
   return "difference outside the observation list";
@@ -523,6 +580,8 @@ const summary = {
   brokenBaseline: 0,
   uncompilable: 0,
   harness: 0,
+  // mismatches split by which side the reference says is wrong.
+  byKind: {},
 };
 // Why baselines did not complete, tallied. A campaign whose skip count
 // is high is not testing what it claims to, and the reason is the only
@@ -608,14 +667,26 @@ outer: for (const shape of shapes) {
         continue;
       }
 
+      // The batch says the two compiled outputs differ. Which one is
+      // WRONG is a separate question, and the reference answers it —
+      // blaming the rename by default misattributed every
+      // private-field-lowering bug as a mangler false positive.
+      const attributed = attribute(entry, shape);
+      if (attributed.verdict !== "mismatch") {
+        // The difference did not survive a second look (a flaky
+        // observation, or the reference disagreeing with the batch).
+        summary.harness += 1;
+        continue;
+      }
+      summary.byKind[attributed.kind] = (summary.byKind[attributed.kind] ?? 0) + 1;
       summary.mismatched += 1;
       recordFailure({
-        kind: "mangle",
+        kind: attributed.kind,
         seed: entry.seed,
         shape,
         program: entry.program,
         entry,
-        outcome,
+        outcome: attributed,
       });
       if (families.size >= options.keepGoing) break outer;
     }
@@ -629,11 +700,21 @@ outer: for (const shape of shapes) {
 console.log("");
 console.log(
   `  ${summary.checked} compared, ${summary.skipped} skipped, ` +
-    `${summary.mismatched} mangling mismatch(es), ` +
+    `${summary.mismatched} mismatch(es), ` +
     `${summary.brokenBaseline} broken baseline(s), ` +
     `${summary.uncompilable} did not compile` +
     (summary.harness > 0 ? `, ${summary.harness} harness errors` : ""),
 );
+
+// Which side the reference blamed. `mangle` is the one this tool exists
+// to find; `lowering` means the unmangled bundle is the wrong one.
+const kindCounts = Object.entries(summary.byKind);
+if (kindCounts.length > 0) {
+  console.log(
+    "  attributed: " +
+      kindCounts.map(([kind, count]) => `${count} ${kind}`).join(", "),
+  );
+}
 
 if (families.size > 0) {
   console.log("\n  distinct failure families, most frequent first:\n");

@@ -269,7 +269,24 @@ fn is_pure_init(expr : @ast.TsExpr, pure_calls : Map[String, Bool]) -> Bool {
       }
       true
     }
-    UnaryOp(_, inner) => is_pure_init(inner, pure_calls)
+    // `++` / `--` / `delete` MUTATE, so the operator decides this, not
+    // the operand. Ignoring it made `c--;` a pure expression statement
+    // because `c` is pure, and the statement was dropped:
+    //
+    //   let c = 0; c--; console.log([c]);   printed [0], not [-1]
+    //
+    // A `let y = c--;` whose `y` nobody reads went the same way. It took
+    // `--treeshake` and a statement-position update to show, and
+    // `c -= 1` was unaffected because peephole only rewrites that to
+    // `c--` later, after this pass has run. `purity.mbt` draws the same
+    // distinction correctly — this second predicate did not.
+    //
+    // Found by `just fuzz-mangle`, shrunk to four nodes.
+    UnaryOp(op, inner) =>
+      match op {
+        PreInc | PreDec | PostInc | PostDec | Delete => false
+        _ => is_pure_init(inner, pure_calls)
+      }
     BinOp(_, l, r) => is_pure_init(l, pure_calls) && is_pure_init(r, pure_calls)
     Cond(c, t, e) =>
       is_pure_init(c, pure_calls) &&
