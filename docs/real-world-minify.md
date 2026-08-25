@@ -19,16 +19,22 @@
 出ない種類のものです。
 
 その後「hono の使わない機能はもっと落とせるはずだ」を測る過程で、
-**正しさ**の bug が 7 件出ました（#21 は 2 つ、#22 は checker の
-false positive）。#14（動的 access の read と write が逆に
-判定されていて、`obj[k]` で dispatch される method が削除されていた）、
-#18（`this.f[k]` で読まれる property が rename されていた）、
-#19（computed key の destructuring が identifier mangling を crash させ、
-同時に property の唯一の write を落としていた）、#20（computed write が
-静的 read と食い違う）。#19 の crash 以外は、crash ではなく静かに違う
-答えを返す形です。同じ調査で `--explain-mangle` に method DCE の section
-を足し（#15）、class field 注釈が lowering で消えているのを直しました
-（#17）。
+**正しさ**の bug が 7 件出ました。
+
+| # | 何が起きたか | 出る flag |
+| --- | --- | --- |
+| 14 | 動的 access の read と write の判定が逆で、`obj[k]` で dispatch される method が削除されていた | `--treeshake` |
+| 18 | `this.f[k]` で読まれる property が rename されていた | `--mangle-properties` |
+| 19a | computed key の destructuring が identifier mangling を crash させる | **素の `--mangle`** |
+| 19b | 同じ形で property の唯一の write が落ちる | `--mangle-properties` |
+| 20 | computed write が静的 read と食い違う | `--mangle-properties` |
+| 21a | pattern default の参照が予約されず、parameter が shadow する | **素の `--mangle`** |
+| 21b | pattern の computed key が rename されない（= 19a の予約側） | **素の `--mangle`** |
+| 22 | default 付き parameter が method / arrow で必須扱い（checker の false positive） | 既定 |
+
+19a 以外は crash ではなく**静かに違う答え**を返す形です。同じ調査で
+`--explain-mangle` に method DCE の section を足し（#15）、class field
+注釈が lowering で消えているのを直しました（#17）。
 
 ## 見つかった bug
 
