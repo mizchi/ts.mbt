@@ -318,6 +318,12 @@ fn type_literal_string_keys(t : @ast.TsType) -> Array[String]? {
 /// the key set to a later phase.
 fn untracked_index_receiver(recv : @ast.TsExpr) -> Bool {
   match recv {
+    // `this` is not a binding — no symbol, so nothing for Phase 3+4
+    // to attach an observability to. `(this as any)[k]` on a class
+    // instance reads a member under a name we cannot predict, and
+    // treating it as tracked renamed a field the read still wanted.
+    // Same for the other pseudo-names that parse as identifiers.
+    Var("this") | Var("super") | Var("globalThis") | Var("arguments") => false
     Var(_) => true
     NonNull(inner) | As(inner, _) | Satisfies(inner, _) =>
       untracked_index_receiver(inner)

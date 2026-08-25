@@ -596,6 +596,36 @@ corpus に `case35-this-field-container` を追加しました。private field
 経由（安全）と public field 経由（危険）の両方を 1 つの case に入れて、
 差分実行で `viaDynamic` と `seeded` の 2 つが同時に見られます。
 
+そのあと同じ形を `(this as any)[k]` で試したら**また落ちました**。
+`this` は binding ではない —— symbol が無いので observability を
+付ける先が無い —— のに、receiver 判定が `Var(_)` を一律 tracked と
+見ていました。`this` / `super` / `globalThis` / `arguments` を除外。
+
+### 生成器に 3 本目の軸を足した
+
+ここまでで見つけた正しさの bug 2 件（#14 と #18）は、どちらも
+**carrier × exit のどちらの軸にも乗らない**ところにありました。
+「名前にどう到達するか」です。
+
+```ts
+const payload = { alphaTop: 1 };
+const echoed = (payload as any)["alphaTop"];
+```
+
+宣言では静的 key、read では string 値。片方だけ rename すれば
+`undefined` になります。**exit は関係ありません** —— 上の例は
+bundle から何も出て行きません。
+
+`scripts/generate_mangle_cases.mjs` に receiver の形を軸として
+7 件払い出しました（`dynkey-*`）。binding / `this` の cast /
+private field / public field / property chain / call 結果 /
+array 要素。bug が 2 件ともここに落ちていたのは、この 6 つに
+「追える symbol」が無く、それぞれ別扱い（か未対応）だったからです。
+
+7 件とも harness の mutation self-check を通っています ——
+`alphaTop` を rename すると観測が変わることが機械的に確認済みで、
+歯の無い case ではありません。
+
 ### 17. class の field 注釈が lowering で消えていた（parser / bundle）
 
 computed key の read を通す receiver 側の証明は「宣言型が keyed

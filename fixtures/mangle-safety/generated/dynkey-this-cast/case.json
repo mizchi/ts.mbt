@@ -1,0 +1,14 @@
+{
+  "origin": "generated — scripts/generate_mangle_cases.mjs",
+  "generated": true,
+  "what": "A property reached under a computed key, off `this` inside a method, cast to `any`. The name is a static key at the declaration and a string value at the read; renaming one without the other is a wrong answer, and no exit is involved.",
+  "exports": [
+    "echoed",
+    "total"
+  ],
+  "expectKeep": [
+    "alphaTop"
+  ],
+  "expectMangle": [],
+  "expectStatus": "pass"
+}
