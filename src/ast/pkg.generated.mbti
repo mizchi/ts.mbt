@@ -324,6 +324,8 @@ pub(all) struct TsModuleBlock {
   deprecations : Map[String, String]
   pure_declarations : Map[String, Bool]
   type_aliases : Array[TsTypeAlias]
+  interfaces : Array[TsInterface]
+  class_fields : Array[(String, TsType)]
   has_export_equals : Bool
 } derive(@debug.Debug)
 pub impl Show for TsModuleBlock
@@ -331,6 +333,7 @@ pub impl Show for TsModuleBlock
 pub(all) struct TsNamespaceDecl {
   name : String
   module_ : TsModule
+  is_declare : Bool
 } derive(@debug.Debug)
 
 pub(all) struct TsObjectBinding {

@@ -8,6 +8,21 @@
 // `check_module_function_bodies` over the parsed module.
 
 ///|
+/// Build a resolver for one self-contained module: `Resolver::empty` plus
+/// the single-module ingest, which is what
+/// `check_module_function_bodies_layered` does inline on its top-level
+/// branch. It lives here rather than in `expr_check.mbt` because the
+/// benchmarks are its only callers — they need the resolver build as a
+/// separately timeable step, while the product code has the same three
+/// calls inline alongside the layered-namespace branch.
+fn Resolver::from_module(module_ : @ast.TsModule) -> Resolver {
+  let r = Resolver::empty()
+  Resolver::ingest_module(r, module_, "")
+  collect_module_value_names(module_, r.declared_value_names)
+  r
+}
+
+///|
 let bench_small_source : String =
   #|interface User {
   #|  id: number;

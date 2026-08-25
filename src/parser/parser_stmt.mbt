@@ -147,7 +147,10 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
       self.parse_class_decl_with_abstract(true)
     }
     Interface => {
-      let _ = self.parse_interface()
+      // Erased at runtime, collected for the same reason type aliases
+      // are: a later pass has to be able to resolve an annotation that
+      // names this interface.
+      self.collected_interfaces.push(self.parse_interface())
       Empty
     }
     Type if self.peek_at(1).kind is Ident(_) => {
@@ -160,10 +163,18 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
       self.collected_type_aliases.push(self.parse_type_alias())
       Empty
     }
-    _ if self.is_namespace_decl_start() => {
-      self.skip_declaration_block()
-      Empty
-    }
+    _ if self.is_namespace_decl_start() =>
+      // `namespace N { … }` declares a runtime object; lower it so the
+      // body's exported members exist. Forms the lowering doesn't model
+      // (ambient module names, dotted paths, `global { … }`) fall back
+      // to the old skip.
+      match self.parse_lowered_namespace() {
+        Some(lowered) => lowered.stmt
+        None => {
+          self.skip_declaration_block()
+          Empty
+        }
+      }
     Ident(name) if name == "enum" => {
       // Plain `enum E { … }` at stmt level. Parse + lower inline
       // so the resulting `var E = {}; …` lands in the runtime block.
@@ -187,13 +198,27 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
       self.in_async = true
       let func = self.parse_function()
       self.in_async = false
-      Let(@ast.TsBinding::Ident(func.name), Any, FuncExpr(func))
+      if self.last_function_bodiless {
+        Empty
+      } else {
+        Let(@ast.TsBinding::Ident(func.name), Any, FuncExpr(func))
+      }
     }
     Function => {
       // internalfunctiondefine: function name() { ... }
       // Let(name, Any, FuncExpr(func))
       let func = self.parse_function()
-      Let(@ast.TsBinding::Ident(func.name), Any, FuncExpr(func))
+      // A bodyless declaration is an overload signature or an ambient
+      // `declare function`: type-only, and there can be several of them
+      // above the one real implementation. Emitting each as
+      // `function f() {}` put two or three declarations of one name in
+      // the output — a SyntaxError in a module, so nothing loaded.
+      // valibot writes its whole public surface as overload sets.
+      if self.last_function_bodiless {
+        Empty
+      } else {
+        Let(@ast.TsBinding::Ident(func.name), Any, FuncExpr(func))
+      }
     }
     Break => {
       let _ = self.advance()

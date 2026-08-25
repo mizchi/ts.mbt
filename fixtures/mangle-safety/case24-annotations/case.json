@@ -1,0 +1,12 @@
+{
+  "origin": "packelyze fixtures/case24-annotations",
+  "what": "Members of an exported type stay public even when annotated @internal. `keep.dontmangle` is not in expectKeep: the const-inline pass replaces the read with its literal value before mangling, so the key stops existing at all — packelyze kept it via an @external annotation, mtsc makes it unobservable.",
+  "exports": [
+    "pub"
+  ],
+  "expectKeep": [
+    "pub",
+    "hidden"
+  ],
+  "expectStatus": "pass"
+}

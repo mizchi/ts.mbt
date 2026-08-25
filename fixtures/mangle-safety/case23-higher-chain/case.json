@@ -1,0 +1,14 @@
+{
+  "origin": "packelyze fixtures/case23-higher-chain",
+  "what": "map/filter/map chain: the intermediate element shape is private, the final one is exported.",
+  "exports": [
+    "results"
+  ],
+  "expectKeep": [
+    "www"
+  ],
+  "expectMangle": [
+    "vvv"
+  ],
+  "expectStatus": "pass"
+}

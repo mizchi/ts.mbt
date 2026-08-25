@@ -1,0 +1,15 @@
+{
+  "origin": "ts.mbt — inferred-purity DCE",
+  "what": "A call to a proven-pure bundle-internal function, with its result unread, is droppable — the same conclusion `/* @__PURE__ */` buys by assertion, reached by proof instead. The impure neighbour in the same file must survive: dropping it would lose a console sink, which the differential run reports.",
+  "mtscArgs": [
+    "--treeshake"
+  ],
+  "exports": [
+    "total"
+  ],
+  "expectKeep": [
+    "stage",
+    "at"
+  ],
+  "expectStatus": "pass"
+}

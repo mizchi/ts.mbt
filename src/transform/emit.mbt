@@ -285,17 +285,22 @@ pub fn transform_source_full(
   // declarations even though the parser's stmt-level path drops
   // their runtime stmts. Falls back to the plain block parse if
   // the source isn't a module-shaped fragment.
-  let (block, positions, enums) = try
+  // `imports` / `exports` come along because the module's boundary is
+  // part of the module. Emitting only the runtime statements produced a
+  // file that referenced its imports without importing them and
+  // exported nothing at all — for `mtsc src/index.ts --out dist/index.js`,
+  // the first thing the README shows.
+  let (block, positions, enums, imports, exports) = try
     @parser.parse_module_block_from_source(source)
   catch {
     _ =>
       try @parser.parse_block_from_source_with_positions(source) catch {
         e => return Err("parse error: \{e}")
       } noraise {
-        pair => (pair.0, pair.1, [])
+        pair => (pair.0, pair.1, [], [], [])
       }
   } noraise {
-    mb => (mb.block, mb.block.stmt_positions, mb.enums)
+    mb => (mb.block, mb.block.stmt_positions, mb.enums, mb.imports, mb.exports)
   }
   let cfg = extract_jsx_pragmas(source, base)
   let (lowered_jsx, runtime_refs) = lower_block_with_runtime_imports(cfg, block)
@@ -355,6 +360,38 @@ pub fn transform_source_full(
     e.write("/jsx-runtime\";")
     e.nl()
   }
+  // The module's own imports — but only the bindings the emitted code
+  // actually references. TypeScript erases an import used only in type
+  // position, and code relies on that: `checker.ts` imports the
+  // INTERFACE `SymbolLinks` and separately declares
+  // `const SymbolLinks = class implements SymbolLinks {…}`. Legal,
+  // because the import is gone by the time the class exists. Emitting it
+  // anyway produced two declarations of one name — a SyntaxError.
+  //
+  // Type annotations are erased before this point, so a name still
+  // referenced by the runtime block is a value reference by
+  // construction. `preserve_top_level` keeps every top-level name
+  // unmangled in this path, so those references still match.
+  let value_refs : Map[String, Bool] = {}
+  collect_var_refs_in_block(mangled, value_refs)
+  // A name the block declares itself cannot also be imported: the input
+  // only type-checked because the import was type-only in use, so the
+  // reference the collector sees belongs to the local declaration. This
+  // is the `SymbolLinks` case — a reference count alone keeps the import
+  // alive and the two declarations collide.
+  let locally_declared = declared_top_level_names(mangled)
+  for decl in imports {
+    if decl.type_only {
+      continue
+    }
+    match elide_unused_import(decl, value_refs, locally_declared) {
+      Some(kept) => {
+        emit_import_decl(e, kept)
+        e.nl()
+      }
+      None => ()
+    }
+  }
   // Source-map positions are tied to the unmangled block — when
   // mangling reorders or drops statements the position array would
   // need to be updated in lockstep. For now, skip per-statement
@@ -375,11 +412,171 @@ pub fn transform_source_full(
       e.nl()
     }
   }
+  emit_module_exports(e, exports, declared_top_level_names(mangled))
   let sm_json : String? = match e.smap {
     Some(b) => Some(b.to_json(source~, source_path~, output_path~))
     None => None
   }
   Ok({ js: e.to_string(), sourcemap: sm_json })
+}
+
+///|
+/// Drop the bindings of `decl` that the emitted code never references,
+/// and the whole declaration when nothing is left.
+///
+/// A side-effect-only import (`import "./polyfill"`) has no bindings to
+/// keep and must survive regardless — the point of it is the evaluation.
+fn elide_unused_import(
+  decl : @ast.TsImportDecl,
+  refs : Map[String, Bool],
+  locally_declared : Map[String, Bool],
+) -> @ast.TsImportDecl? {
+  fn keep(name : String) -> Bool {
+    refs.contains(name) && !locally_declared.contains(name)
+  }
+
+  if decl.side_effect_only {
+    return Some(decl)
+  }
+  let named : Array[(String, String)] = []
+  let named_type_only : Array[Bool] = []
+  for i, b in decl.named_bindings {
+    // Per-specifier `type` modifiers are erased with the binding.
+    let is_type = i < decl.named_type_only.length() && decl.named_type_only[i]
+    if !is_type && keep(b.1) {
+      named.push(b)
+      named_type_only.push(false)
+    }
+  }
+  let default_binding = match decl.default_binding {
+    Some(n) if keep(n) => Some(n)
+    _ => None
+  }
+  let namespace_binding = match decl.namespace_binding {
+    Some(n) if keep(n) => Some(n)
+    _ => None
+  }
+  if named.length() == 0 && default_binding is None && namespace_binding is None {
+    return None
+  }
+  Some({
+    ..decl,
+    named_bindings: named,
+    named_type_only,
+    default_binding,
+    namespace_binding,
+  })
+}
+
+///|
+/// Every name declared at the top level of `block`.
+///
+/// An export whose local name is not among them has nothing to point at:
+/// a type-only export (`export type T`, erased) or a name a pass
+/// dropped. Emitting it anyway produces a bundle that fails to load,
+/// which is worse than an export the consumer finds missing.
+fn declared_top_level_names(block : @ast.TsBlock) -> Map[String, Bool] {
+  let out : Map[String, Bool] = {}
+  fn note(b : @ast.TsBinding) -> Unit {
+    match b {
+      Ident(n) => out[n] = true
+      _ => ()
+    }
+  }
+
+  for s in block.stmts {
+    match s {
+      Var(b, _, _) | Let(b, _, _) | Const(b, _, _) => note(b)
+      NativeClassStmt(decl, _) => out[decl.name] = true
+      _ => ()
+    }
+  }
+  out
+}
+
+///|
+/// Re-emit the module's `export` clause. Mirrors `emit_entry_exports` in
+/// `bundle.mbt`, minus the linker's rename map: this path leaves every
+/// top-level name alone, so a local name needs no translation.
+fn emit_module_exports(
+  e : Emitter,
+  exports : Array[@ast.TsExportSpec],
+  declared : Map[String, Bool],
+) -> Unit {
+  let named : Array[(String, String)] = []
+  let mut default_local : String? = None
+  for ex in exports {
+    if !declared.contains(ex.local_name) {
+      continue
+    }
+    if ex.export_name == "default" {
+      default_local = Some(ex.local_name)
+    } else {
+      named.push((ex.local_name, ex.export_name))
+    }
+  }
+  if named.length() > 0 || default_local is Some(_) {
+    // The body emitter does not end on a newline in every path; start
+    // the export clause on its own line rather than gluing it to
+    // whatever statement came last.
+    e.nl()
+  }
+  match default_local {
+    Some(local_) => {
+      e.write("export default ")
+      e.write(local_)
+      e.semi()
+      e.nl()
+    }
+    None => ()
+  }
+  if named.length() > 0 {
+    e.write("export")
+    e.space()
+    e.write("{")
+    e.space()
+    for i, pair in named {
+      if i > 0 {
+        e.write(",")
+        e.space()
+      }
+      if pair.0 == pair.1 {
+        e.write(pair.0)
+      } else {
+        e.write(pair.0)
+        e.write(" as ")
+        e.write(pair.1)
+      }
+    }
+    e.space()
+    e.write("}")
+    e.semi()
+    e.nl()
+  }
+}
+
+///|
+/// Should this declaration's initializer be left out?
+///
+/// Two different reasons, and only one of them is an optimization.
+///
+/// `Var("__ts_no_init__")` is not an expression at all — it is the
+/// marker the parser synthesises for `let x: T;`, a declaration that has
+/// no initializer in the source. Emitting it produces `let x =
+/// __ts_no_init__`, which is a `ReferenceError` the moment the line
+/// runs. It has to be dropped in every mode; the minify flag has
+/// nothing to do with it.
+///
+/// `undefined` / `void 0` is the optimization: `let x;` initialises to
+/// `undefined` anyway, so the initializer is inert and worth its bytes
+/// only in pretty output.
+fn omit_declaration_init(e : Emitter, init : @ast.TsExpr) -> Bool {
+  match init {
+    @ast.TsExpr::Var("__ts_no_init__") => true
+    @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _)
+    | @ast.TsExpr::Var("undefined") => !e.pretty
+    _ => false
+  }
 }
 
 ///|
@@ -731,12 +928,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       e.word("var")
       e.sep_after_word(binding_leading_byte(binding))
       emit_binding(e, binding)
-      let is_undef_init = match init {
-        UnaryOp(@ast.TsUnaryOp::Void, _) => true
-        Var("undefined") | Var("__ts_no_init__") => true
-        _ => false
-      }
-      if !e.pretty && is_undef_init {
+      if omit_declaration_init(e, init) {
         // Drop `= void 0` — `var x;` is semantically identical.
       } else {
         e.space()
@@ -755,12 +947,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       // `undefined` default costs nothing). Skip the `= void 0`
       // produced by the peephole pass and the raw `Var("undefined")`
       // from the parser for uninitialized declarations.
-      let is_undef_init = match init {
-        UnaryOp(@ast.TsUnaryOp::Void, _) => true
-        Var("undefined") | Var("__ts_no_init__") => true
-        _ => false
-      }
-      if !e.pretty && is_undef_init {
+      if omit_declaration_init(e, init) {
         // Emit with no initializer — matches `let x;` which the
         // JS engine initialises to `undefined` automatically.
       } else {
@@ -785,12 +972,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       emit_binding(e, binding)
       // In minify mode, `const` is downgraded to `let`, so `= void 0`
       // initializers can be dropped (plain `let x` is equivalent).
-      let is_undef_init = match init {
-        UnaryOp(@ast.TsUnaryOp::Void, _) => true
-        Var("undefined") | Var("__ts_no_init__") => true
-        _ => false
-      }
-      if !e.pretty && is_undef_init {
+      if omit_declaration_init(e, init) {
         ()
       } else {
         e.space()
@@ -1337,12 +1519,7 @@ fn try_emit_multi_decl_inline(e : Emitter, block : @ast.TsBlock) -> Bool {
         emit_binding(e, b)
         // In minify mode, `const` is downgraded to `let` (see `emitted_kind`
         // above), so dropping a `= void 0` initializer is safe for all kinds.
-        let is_undef_init = match init {
-          UnaryOp(@ast.TsUnaryOp::Void, _) => true
-          Var("undefined") | Var("__ts_no_init__") => true
-          _ => false
-        }
-        if !e.pretty && is_undef_init {
+        if omit_declaration_init(e, init) {
           ()
         } else {
           e.space()

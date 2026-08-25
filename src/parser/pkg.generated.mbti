@@ -177,7 +177,10 @@ pub struct Parser {
   collected_deprecations : Map[String, String]
   collected_pure_declarations : Map[String, Bool]
   collected_type_aliases : Array[@ast.TsTypeAlias]
+  collected_interfaces : Array[@ast.TsInterface]
+  collected_class_fields : Array[(String, @ast.TsType)]
   mut collected_export_equals : Bool
+  mut last_function_bodiless : Bool
 } derive(@debug.Debug)
 pub fn Parser::from_source(String) -> Self
 pub fn Parser::from_source_with_jsx(String, Bool) -> Self
@@ -319,4 +322,3 @@ pub impl Show for TokenKind
 // Type aliases
 
 // Traits
-

@@ -138,13 +138,19 @@ fn scan_stmt_for_unsafe_uses(
   candidates : Map[String, AsConstCandidate],
 ) -> Unit {
   match stmt {
-    Var(_, _, e)
-    | Let(_, _, e)
-    | Const(_, _, e)
-    | Expr(e)
-    | Assign(_, e)
-    | CompoundAssign(_, _, e)
-    | Throw(e) => scan_expr_for_unsafe_uses(e, candidates)
+    Var(_, _, e) | Let(_, _, e) | Const(_, _, e) | Expr(e) | Throw(e) =>
+      scan_expr_for_unsafe_uses(e, candidates)
+    // `NAME = …` / `NAME += …` rebinds the candidate. A top-level
+    // `const` can't legally be reassigned, so this is unreachable in
+    // valid input — which is exactly why it should be spelled out
+    // rather than left to the wildcard arm.
+    Assign(name, e) | CompoundAssign(name, _, e) => {
+      match candidates.get(name) {
+        Some(c) => c.disqualified = true
+        None => ()
+      }
+      scan_expr_for_unsafe_uses(e, candidates)
+    }
     Return(Some(e)) => scan_expr_for_unsafe_uses(e, candidates)
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => ()
     IndexAssign(t, idx, v) => {
@@ -347,8 +353,18 @@ fn flag_all_candidate_refs(
       flag_all_candidate_refs(k, candidates)
       flag_all_candidate_refs(v, candidates)
     }
-    AssignExpr(_, v) | AssignPattern(_, v) | PropAssignExpr(_, _, v) =>
+    AssignExpr(name, v) => {
+      match candidates.get(name) {
+        Some(c) => c.disqualified = true
+        None => ()
+      }
       flag_all_candidate_refs(v, candidates)
+    }
+    AssignPattern(_, v) => flag_all_candidate_refs(v, candidates)
+    PropAssignExpr(recv, _, v) => {
+      flag_all_candidate_refs(recv, candidates)
+      flag_all_candidate_refs(v, candidates)
+    }
     CompoundAssignExpr(t, _, v) => {
       flag_all_candidate_refs(t, candidates)
       flag_all_candidate_refs(v, candidates)
@@ -491,8 +507,17 @@ fn scan_expr_for_unsafe_uses(
       flag_all_candidate_refs(t, candidates)
       scan_expr_for_unsafe_uses(v, candidates)
     }
-    AssignPattern(_, v) | PropAssignExpr(_, _, v) =>
+    AssignPattern(_, v) => scan_expr_for_unsafe_uses(v, candidates)
+    // `NAME.k = …` mutates the object, so its initializer no longer
+    // describes what a read returns. The statement spelling
+    // (`PropAssign`) already flagged the receiver; this is the same
+    // write in expression position, which is how it arrives from
+    // inside a function body — and missing it inlined the stale
+    // initializer at every read site.
+    PropAssignExpr(recv, _, v) => {
+      flag_all_candidate_refs(recv, candidates)
       scan_expr_for_unsafe_uses(v, candidates)
+    }
     IndexAssignExpr(recv, idx, v) => {
       flag_all_candidate_refs(recv, candidates)
       scan_expr_for_unsafe_uses(idx, candidates)

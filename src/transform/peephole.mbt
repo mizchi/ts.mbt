@@ -1043,18 +1043,47 @@ fn peep_decl_rhs(
 ///|
 fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
   let stmts : Array[@ast.TsStmt] = []
-  // Emit statements, stopping after the first hard terminator
-  // (Return / Throw / Break / Continue). Subsequent statements in the
-  // same block are unreachable and can be dropped.
+  // A function declaration after the terminator is NOT unreachable —
+  // it is hoisted, so the code before the `return` can call it, and
+  // `return f;` can hand it out. TypeScript's own `typescript.js` is
+  // built that way:
+  //
+  //     var createUIStringComparer = (() => {
+  //       return createIntlCollatorStringComparer;
+  //       function createIntlCollatorStringComparer(locale) { … }
+  //     })();
+  //
+  // Dropping those left `return f` pointing at nothing, so loading the
+  // minified compiler threw `ReferenceError`. Collected here and
+  // spliced back in before the terminator, the same way `fold_block`
+  // handles it.
+  let hoisted : Array[@ast.TsStmt] = []
+  // Everything else after the first hard terminator (Return / Throw /
+  // Break / Continue) really is unreachable and gets dropped.
+  let mut exited = false
   for s in block.stmts {
+    if exited {
+      if stmt_is_hoisted_function(s) {
+        hoisted.push(peep_stmt(s, ctx))
+      }
+      continue
+    }
     let ps = peep_stmt(s, ctx)
     // `if (c) { …; return; } else { stmts }` → `if (c) { …; return; }` +
     // `stmts` spliced inline. Saves the `else ` keyword (5 bytes) and the
     // braces (2 bytes) for every such pattern.
     match ps {
+      // The braces are not only control flow: a `let` / `const` / class
+      // inside the else block is scoped BY them, and splicing it into
+      // the enclosing block can collide with a same-named binding
+      // already there — a SyntaxError, so nothing in the file loads.
+      // `block_declares_lexical` (fold.mbt) is the same guard the
+      // else-hoist in `fold_stmt_into` uses; this is the second copy of
+      // that rewrite and it needs the same condition.
       If(cond, then_block, Some(else_block)) if block_ends_with_terminator(
           then_block,
-        ) => {
+        ) &&
+        !block_declares_lexical(else_block) => {
         stmts.push(If(cond, then_block, None))
         for es in else_block.stmts {
           stmts.push(es)
@@ -1131,7 +1160,7 @@ fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
       _ => {
         stmts.push(ps)
         match ps {
-          Return(_) | Throw(_) | Break(_) | Continue(_) => break
+          Return(_) | Throw(_) | Break(_) | Continue(_) => exited = true
           _ => ()
         }
       }
@@ -1154,18 +1183,39 @@ fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
         stmts.pop() |> ignore
         folded = true
       }
-      // `let/const/var x = expr; return x;` → `return expr;`
-      (Let(Ident(vname), _, init), Return(Some(Var(rname)))) if vname == rname => {
+      // `let/const/var x = expr; return x;` → `return expr;` — unless
+      // `expr` refers to `x` itself. A self-referential initializer is
+      // ordinary JavaScript when the reference is deferred into a
+      // closure, and TypeScript's own compiler host is built that way:
+      //
+      //     const compilerHost = {
+      //       getSourceFile: withCache(f => compilerHost.readFile(f)),
+      //       …
+      //     };
+      //     return compilerHost;
+      //
+      // Fold that and the closure points at a name that no longer
+      // exists — or, after mangling, at whatever else now holds the
+      // short name. Here it silently became a different function, so
+      // every lib file read came back empty and the minified compiler
+      // reported `Cannot find name 'Math'`.
+      (Let(Ident(vname), _, init), Return(Some(Var(rname)))) if foldable_tail_decl(
+          vname, rname, init,
+        ) => {
         stmts[n - 2] = Return(Some(peep_expr(init, ctx)))
         stmts.pop() |> ignore
         folded = true
       }
-      (Const(Ident(vname), _, init), Return(Some(Var(rname)))) if vname == rname => {
+      (Const(Ident(vname), _, init), Return(Some(Var(rname)))) if foldable_tail_decl(
+          vname, rname, init,
+        ) => {
         stmts[n - 2] = Return(Some(peep_expr(init, ctx)))
         stmts.pop() |> ignore
         folded = true
       }
-      (Var(Ident(vname), _, init), Return(Some(Var(rname)))) if vname == rname => {
+      (Var(Ident(vname), _, init), Return(Some(Var(rname)))) if foldable_tail_decl(
+          vname, rname, init,
+        ) => {
         stmts[n - 2] = Return(Some(peep_expr(init, ctx)))
         stmts.pop() |> ignore
         folded = true
@@ -1173,7 +1223,61 @@ fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
       _ => ()
     }
   }
+  // Put the hoisted declarations back, just before the terminator they
+  // followed. Their position in the source does not matter — hoisting
+  // is what makes them visible — but keeping them inside the block does.
+  if hoisted.length() > 0 {
+    let exit_idx = stmts.length() - 1
+    let result : Array[@ast.TsStmt] = []
+    for j, st in stmts {
+      if j == exit_idx {
+        for h in hoisted {
+          result.push(h)
+        }
+      }
+      result.push(st)
+    }
+    return { stmts: result, stmt_positions: [] }
+  }
   { stmts, stmt_positions: block.stmt_positions }
+}
+
+///|
+/// `let x = expr; return x;` collapses only when `x` is what is
+/// returned and `expr` does not refer to `x` itself.
+fn foldable_tail_decl(
+  vname : String,
+  rname : String,
+  init : @ast.TsExpr,
+) -> Bool {
+  vname == rname && !expr_refers_to(init, vname)
+}
+
+///|
+/// Does `expr` mention `name` anywhere, nested functions included?
+///
+/// `collect_var_refs_in_expr_local` deliberately stops at a function
+/// boundary. For a self-reference check that is exactly the wrong place
+/// to stop: the reference that matters is the one inside a closure,
+/// where it is legal precisely because it is deferred.
+fn expr_refers_to(expr : @ast.TsExpr, name : String) -> Bool {
+  let refs : Map[String, Bool] = {}
+  collect_var_refs_in_expr(expr, refs)
+  refs.contains(name)
+}
+
+///|
+/// A statement that declares a function and therefore hoists. The
+/// parser lowers `function f() {}` to `let f = function f() {}`, which
+/// loses the hoisting in the AST but not in the emitted JavaScript —
+/// `try_emit_function_decl` writes it back out as a declaration.
+fn stmt_is_hoisted_function(s : @ast.TsStmt) -> Bool {
+  match s {
+    Let(_, _, FuncExpr(_))
+    | Var(_, _, FuncExpr(_))
+    | Const(_, _, FuncExpr(_)) => true
+    _ => false
+  }
 }
 
 ///|

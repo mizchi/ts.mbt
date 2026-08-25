@@ -79,6 +79,27 @@ pub(all) struct BundleOptions {
   // public type surface and can't be renamed even when
   // `--mangle-properties` is otherwise safe.
   extra_reserved_props : Array[String]
+  // When `true`, collect a human-readable account of every minify
+  // decision into `BundleOutput.explain` instead of only acting on it.
+  // `--explain-mangle` is the reason the analyses keep their reasons
+  // rather than just their answers.
+  explain : Bool
+  // Keep a relative import the vfs cannot resolve as an external
+  // import instead of failing. Set by the CLI, which has already
+  // asked the real filesystem; in-memory callers stay strict.
+  allow_unresolved_imports : Bool
+  // Measure wall time per pipeline phase into `BundleOutput.timings`.
+  // Off by default: with it off `PhaseTimer` records nothing and the
+  // instrumentation is one branch per phase.
+  timing : Bool
+  // Already-parsed module blocks, keyed exactly like `files`. A caller
+  // that had to parse each file to find its imports (mtsc's loader
+  // walks the graph off disk before the bundler ever sees it) can hand
+  // the results over instead of paying for a second parse of the same
+  // source. Parsing is 78-94% of a bundle's wall time and it was
+  // happening twice; on 9 MB of `typescript.js` the bundler's own pass
+  // was 850 ms of 5.0 s. Empty map = parse everything here.
+  parsed_blocks : Map[String, @ast.TsModuleBlock]
 }
 
 ///|
@@ -94,7 +115,43 @@ pub fn BundleOptions::default() -> BundleOptions {
     fold: false,
     aliases: {},
     extra_reserved_props: [],
+    explain: false,
+    allow_unresolved_imports: false,
+    timing: false,
+    parsed_blocks: {},
   }
+}
+
+///|
+pub fn BundleOptions::with_parsed_blocks(
+  self : BundleOptions,
+  parsed : Map[String, @ast.TsModuleBlock],
+) -> BundleOptions {
+  { ..self, parsed_blocks: parsed }
+}
+
+///|
+pub fn BundleOptions::with_timing(
+  self : BundleOptions,
+  t : Bool,
+) -> BundleOptions {
+  { ..self, timing: t }
+}
+
+///|
+pub fn BundleOptions::with_allow_unresolved_imports(
+  self : BundleOptions,
+  v : Bool,
+) -> BundleOptions {
+  { ..self, allow_unresolved_imports: v }
+}
+
+///|
+pub fn BundleOptions::with_explain(
+  self : BundleOptions,
+  e : Bool,
+) -> BundleOptions {
+  { ..self, explain: e }
 }
 
 ///|
@@ -190,6 +247,12 @@ pub(all) struct BundleOutput {
   // limited to impure-getter detection; future passes can append
   // here. Empty when nothing is amiss.
   warnings : Array[String]
+  // `--explain-mangle` output: why each minify decision went the way it
+  // did. Empty unless `BundleOptions.explain` was set.
+  explain : Array[String]
+  // `(phase label, microseconds)` in execution order. Empty unless
+  // `BundleOptions.timing` was set.
+  timings : Array[(String, Double)]
 }
 
 // ---------------------------------------------------------------------------
@@ -226,6 +289,14 @@ priv struct ModuleNode {
   // tag-rewrite / dts-emit / future cross-module type-driven
   // passes consult these.
   type_aliases : Array[@ast.TsTypeAlias]
+  // Interfaces declared in this module. Same role as `type_aliases`:
+  // the escape analysis resolves an annotation that names one of these
+  // to decide whether its key set is closed.
+  interfaces : Array[@ast.TsInterface]
+  // `(field name, declared type)` for this module's runtime classes.
+  // The class lowering drops the annotation, so a whole-program pass
+  // needs it carried alongside. See `TsModuleBlock.class_fields`.
+  class_fields : Array[(String, @ast.TsType)]
   // For CJS-wrapped modules (esbuild-style `((module)=>{...})({get exports(){return X;}, ...})`),
   // the top-level variable that holds the module's exports after the wrapper runs.
   // Named imports from such a module that can't be resolved via export_specs fall
@@ -262,6 +333,28 @@ fn dirname(path : String) -> String {
 }
 
 ///|
+/// The TypeScript files a JS-spelled specifier may actually name.
+/// Empty for anything that does not end in a JS extension.
+fn ts_equivalents_of(base : String) -> Array[String] {
+  for
+    pair in [
+      (".js", [".ts", ".tsx", ".d.ts"]),
+      (".mjs", [".mts"]),
+      (".cjs", [".cts"]),
+    ] {
+    if base.has_suffix(pair.0) {
+      let stem = base[0:base.length() - pair.0.length()].to_owned()
+      let out : Array[String] = []
+      for ext in pair.1 {
+        out.push(stem + ext)
+      }
+      return out
+    }
+  }
+  []
+}
+
+///|
 /// Try the literal path, then `.ts`, `.tsx`, `.js`, `.mjs`, then
 /// `<path>/index.ts(x)`. Returns the first hit, or the original
 /// path when nothing matched (caller will then surface the
@@ -272,6 +365,14 @@ fn resolve_with_extensions(
 ) -> String {
   if files.contains(base) {
     return base
+  }
+  // `./x.js` may name `x.ts`: TypeScript's `node16` / `nodenext` /
+  // `bundler` resolution says the specifier keeps the emitted
+  // extension, so TS sources import each other that way.
+  for cand in ts_equivalents_of(base) {
+    if files.contains(cand) {
+      return cand
+    }
   }
   let exts = [".ts", ".tsx", ".js", ".mjs", ".jsx"]
   for ext in exts {
@@ -330,11 +431,17 @@ pub fn bundle_modules(
   entry : String,
   opts : BundleOptions,
 ) -> Result[BundleOutput, String] {
+  let timer = if opts.timing {
+    PhaseTimer::new()
+  } else {
+    PhaseTimer::disabled()
+  }
   let modules : Map[String, ModuleNode] = {}
   // External (bare specifier) imports we want to re-emit at the top
   // of the bundle so the consumer's loader / browser handles them.
   let external_imports : Array[@ast.TsImportDecl] = []
   let external_seen : Map[String, Bool] = {}
+  let graph_started = @bench.monotonic_clock_start()
   match
     load_module_graph(
       files,
@@ -343,10 +450,19 @@ pub fn bundle_modules(
       external_imports,
       external_seen,
       opts.aliases,
+      opts.allow_unresolved_imports,
+      opts.parsed_blocks,
     ) {
     Ok(_) => ()
     Err(e) => return Err(e)
   }
+  // Parsing every module and lowering its JSX happens inside the graph
+  // load, so this row usually dominates on a large input — the point of
+  // measuring it is to know when it does NOT.
+  timer.record(
+    "module-graph (parse)",
+    @bench.monotonic_clock_end(graph_started),
+  )
   let order = topological_order(modules, entry)
   // Lift IIFE-lowered classes to native `class Name { … }` syntax on
   // each module individually BEFORE the linker pass. The parser emits
@@ -372,6 +488,18 @@ pub fn bundle_modules(
   // (which re-exports `Hono as HonoBase`) leaves `HonoBase` as a
   // free variable in the consumer.
   let link_renames = link_module_graph(modules, order, external_imports)
+  // Names the bundle will export. Used three times below: as the members
+  // class-method DCE must keep (a consumer calls them even when nothing
+  // inside the bundle does), as treeshake roots (nothing inside the
+  // bundle has to reference an exported binding), and as the starting
+  // point for the property mangler's escape analysis.
+  let entry_exports = entry_export_bindings(modules, link_renames, entry)
+  let export_roots : Map[String, Bool] = {}
+  for ex in entry_exports {
+    if ex.from_external is None {
+      export_roots[ex.local_name] = true
+    }
+  }
   let mut mangle_export_renames : Map[String, String] = {}
   let e = Emitter::new(pretty=!opts.minify)
   if opts.with_sourcemap {
@@ -390,6 +518,26 @@ pub fn bundle_modules(
   let sources_content : Array[String] = []
   let module_paths : Array[String] = []
   let warnings : Array[String] = []
+  // `--explain-mangle` output, gathered per section and concatenated in
+  // a fixed reading order at the end. The passes run in pipeline order,
+  // which is not the order a person wants to read the answer in: the
+  // escape analysis is what everything else depends on, so it goes
+  // first even though parameter trimming happens earlier.
+  let explain : Array[String] = []
+  let explain_escape : Array[String] = []
+  let explain_params : Array[String] = []
+  let explain_fields : Array[String] = []
+  let explain_tags : Array[String] = []
+  let explain_methods : Array[String] = []
+  // Set when the escape analysis reserved the wildcard. Every later
+  // section then declines everything, and saying so once beats
+  // repeating "it's reserved" for each name.
+  let mut explain_wildcard = false
+  // `@__PURE__` / `@__NO_SIDE_EFFECTS__` annotations, keyed by the name
+  // each declaration carries in the MERGED block. Filled alongside the
+  // diagnostic run below and consumed by the second purity run, the
+  // one whose result is allowed to delete code.
+  let linked_assumed_pure : Map[String, Bool] = {}
   // Run the purity / impure-getter diagnostic over a combined
   // view of every module's lowered stmts. Doing this once up
   // front, BEFORE the optimization passes restructure the AST,
@@ -413,6 +561,19 @@ pub fn bundle_modules(
         assumed_pure[n] = true
       }
     }
+    // Carry the per-module annotations forward under their POST-link
+    // names: the treeshake pass runs on the merged block, where
+    // `helper` from two modules has become `helper` and `helper$0`.
+    for path in order {
+      let m = match modules.get(path) {
+        Some(node) => node
+        None => continue
+      }
+      let renames = link_renames.locals.get(path).unwrap_or({})
+      for n in m.pure_declarations.keys() {
+        linked_assumed_pure[renames.get(n).unwrap_or(n)] = true
+      }
+    }
     let report = analyze_purity_with(
       { stmts: combined_for_analysis, stmt_positions: [] },
       assumed_pure,
@@ -431,6 +592,8 @@ pub fn bundle_modules(
   if opts.mangle || opts.treeshake || opts.fold {
     let combined_stmts : Array[@ast.TsStmt] = []
     let combined_type_aliases : Array[@ast.TsTypeAlias] = []
+    let combined_interfaces : Array[@ast.TsInterface] = []
+    let combined_class_fields : Array[(String, @ast.TsType)] = []
     // Track each combined-statement's origin so the source-map can
     // map it back to its module after mangle / treeshake / fold
     // restructure the AST. Encoding: high 24 bits = source-id (the
@@ -470,58 +633,98 @@ pub fn bundle_modules(
       for ta in m.type_aliases {
         combined_type_aliases.push(ta)
       }
+      for i in m.interfaces {
+        combined_interfaces.push(i)
+      }
+      for f in m.class_fields {
+        combined_class_fields.push(f)
+      }
     }
     let mut combined : @ast.TsBlock = {
       stmts: combined_stmts,
       stmt_positions: combined_positions,
     }
     // Type-predicate inline.
-    {
+    timer.phase("predicate-inline", () => {
       let predicates = build_predicate_table(combined)
       if !predicates.entries.is_empty() {
         combined = inline_predicates(combined, predicates)
       }
-    }
+    })
     // Literal-union switch folding. Specializes `dispatch("x", n)`
     // when `dispatch` is a `switch (k) { case ...: return ... }`
     // function whose first param is a closed string-literal union.
-    {
+    timer.phase("switch-fold", () => {
       let sw = build_switch_fold_table(combined)
       if !sw.entries.is_empty() {
         combined = switch_fold(combined, sw)
       }
-    }
+    })
     // `as const` (and equivalent) array/object inline at use sites.
     // Replaces `NAME[i]` / `NAME.k` with the underlying literal value
     // when NAME is a top-level `const` of all-literal-element shape
     // and every reference is a safe static read.
-    combined = as_const_inline_block(combined)
+    combined = timer.phase("as-const-inline", () => {
+      as_const_inline_block(combined)
+    })
     // Discriminant-tag string -> number rewrite. Gated on
     // a bundle-wide no-escape-sink scan; for each closed
     // string-literal discriminated union whose `K` property is
     // never observed outside switch heads and `===`/`!==`
     // comparisons, swap the string tags for small integers.
-    combined = tag_rewrite_block(combined, combined_type_aliases)
+    combined = timer.phase("tag-rewrite", () => {
+      tag_rewrite_block(combined, combined_type_aliases)
+    })
     // Lift the IIFE-lowered class shape back to native
     // `class Name { … }` syntax. Smaller emit, plus
     // `class_method_dce_block` then operates on the structured
     // form (NativeClassStmt) instead of pattern-matching the
     // prototype-assignment chain.
-    combined = iife_class_lift_block(combined)
+    combined = timer.phase("iife-class-lift", () => {
+      iife_class_lift_block(combined)
+    })
     // Strip __super_proto metadata assignments from IIFE bodies that
     // couldn't be lifted to native class syntax. These are pure mtsc
     // internals with no runtime effect once the lift pass has run.
-    combined = strip_super_proto_stmts(combined)
+    combined = timer.phase("strip-super-proto", () => {
+      strip_super_proto_stmts(combined)
+    })
+    let export_surface : Map[String, Bool] = {}
+    timer.phase("export-surface", () => {
+      for n in exported_surface_props(combined, export_roots) {
+        export_surface[n] = true
+      }
+    })
     // Class-method DCE: drop methods on native class declarations
-    // that nothing in the bundle accesses by name. Gated on the
-    // absence of reflection / dynamic-key access in the bundle.
-    combined = class_method_dce_block(combined)
+    // that nothing in the bundle accesses by name — except the ones
+    // the export surface reaches, which the consumer calls. Gated on
+    // the absence of reflection / dynamic-key access in the bundle.
+    let method_dce_reasons : Array[String] = []
+    combined = timer.phase("class-method-dce", () => {
+      class_method_dce_block(
+        combined,
+        keep=export_surface,
+        class_fields=combined_class_fields,
+        type_aliases=combined_type_aliases,
+        explain=if opts.explain { Some(method_dce_reasons) } else { None },
+      )
+    })
+    if opts.explain {
+      explain_methods.push("")
+      explain_methods.push("unused class methods: what was dropped and why not")
+      explain_methods.push("")
+      for line in method_dce_reasons {
+        explain_methods.push("  " + line)
+      }
+    }
     // Type-aware constant folding: `typeof x === "string"` /
     // `x === null` etc. when the bound `x` carries a primitive
     // type annotation. Runs BEFORE the regular fold so the
     // resulting `BoolLit(true/false)` feeds into dead-branch
     // elimination.
-    combined = type_fold_block(combined, type_aliases=combined_type_aliases)
+    combined = timer.phase("type-fold", () => {
+      type_fold_block(combined, type_aliases=combined_type_aliases)
+    })
     // Order: fold -> treeshake -> mangle -> inline -> peephole.
     // Fold turns dead `if (false)` branches into nothing and
     // identity arithmetic into a single operand; treeshake then
@@ -530,12 +733,49 @@ pub fn bundle_modules(
     // use bindings into their unique reference; peephole finally
     // compacts the result with `x += y` and `void 0` rewrites.
     if opts.fold {
-      combined = fold_block(combined)
+      combined = timer.phase("fold", () => fold_block(combined))
+    }
+    // Purity, re-derived on the MERGED block so its names match what
+    // treeshake sees. The early run above answers a different question
+    // (diagnostics, unconditionally, on the pre-link AST); this one is
+    // load-bearing, and a call it clears gets deleted. Anything the
+    // proof can't reach stays put — a name absent from this set is
+    // simply treated as a side-effect root, exactly as before.
+    let proven_pure = if opts.treeshake {
+      timer.phase("purity", () => {
+        analyze_purity_with(combined, linked_assumed_pure).pure_functions
+      })
+    } else {
+      {}
     }
     if opts.treeshake {
-      combined = treeshake_block(combined)
+      combined = timer.phase("treeshake", () => {
+        treeshake_block(combined, roots=export_roots, pure_calls=proven_pure)
+      })
     }
     if opts.mangle {
+      // Trailing-parameter trimming. Needs the export roots: an exported
+      // function's arity is part of the package ABI, and everything else
+      // the proof needs (is `f` ever used as a VALUE rather than called?)
+      // is decided from the merged block itself.
+      let param_declines : Array[String] = []
+      combined = drop_unused_params_block(
+        combined,
+        plan_unused_params(combined, keep=export_roots, declines=param_declines),
+      )
+      if opts.explain {
+        explain_params.push("")
+        explain_params.push(
+          "trailing-parameter trimming: why a function kept its arity",
+        )
+        explain_params.push("")
+        if param_declines.length() == 0 {
+          explain_params.push("  nothing declined.")
+        }
+        for line in param_declines {
+          explain_params.push("  * " + line)
+        }
+      }
       // Type-driven safety for property mangling: walk the merged
       // block looking for property accesses on bindings that
       // escape the bundle (external imports) and reflection sinks
@@ -556,8 +796,54 @@ pub fn bundle_modules(
         extra_reserved.push(n)
       }
       if opts.mangle_properties {
+        // Door 1: the bundle's own export surface. Every property
+        // name reachable from a value the entry exports is part of
+        // the package ABI, whether or not any type declaration
+        // mentions it — an exported function returning an inferred
+        // `{ first, rest }` publishes those two names as surely as a
+        // declared interface would. `type_props.mbt` only sees
+        // declared shapes and only in the entry module, so without
+        // this walk the dead-property pass happily deleted keys the
+        // consumer reads.
+        for n in export_surface.keys() {
+          extra_reserved.push(n)
+        }
+        // Recompute on the post-fold block as well: folding can turn a
+        // reference into the literal it names, which surfaces keys the
+        // first walk could not see through.
+        for n in exported_surface_props(combined, export_roots) {
+          extra_reserved.push(n)
+        }
+        // Door 2: values that leave through a sink.
         let externals = external_import_bindings(external_imports)
-        let escapes = collect_externally_visible_props(combined, externals)
+        // A name the bundle never declares is provided by the host — an
+        // ambient global out of a `.d.ts`, or a runtime built-in. Reading
+        // a property off one is reading somebody else's ABI, so treat
+        // those bindings as external too.
+        for n in undeclared_referenced_names(combined).keys() {
+          externals[n] = true
+        }
+        // A `const cfg: Cfg = …` that crosses the boundary reserves only
+        // `Cfg`'s keys instead of the wildcard — but only if the analysis
+        // can resolve `Cfg`. Without this the narrowing worked for an
+        // inline object type and silently didn't for the interface an
+        // actual codebase writes.
+        let type_env = build_type_env(
+          combined_interfaces, combined_type_aliases,
+        )
+        if opts.explain {
+          for
+            line in format_escape_explanation(
+              escape_breakdown(combined, externals, type_env~),
+            ) {
+            explain_escape.push(line)
+          }
+        }
+        let escapes = collect_externally_visible_props(
+          combined,
+          externals,
+          type_env~,
+        )
         let mut wildcard = false
         for n in escapes {
           if n == "*" {
@@ -566,6 +852,7 @@ pub fn bundle_modules(
             extra_reserved.push(n)
           }
         }
+        explain_wildcard = wildcard
         if wildcard {
           // User-declared property names can't be safely renamed
           // (dynamic `obj[runtime_key]` access reaches arbitrary
@@ -601,6 +888,56 @@ pub fn bundle_modules(
           reserved_set[n] = true
         }
         combined = drop_dead_properties_block(combined, reserved_set)
+        // Discriminant tags: a property whose values are a closed set of
+        // string literals, read only by equality comparison, and not in
+        // the escape set, can be renumbered. Property mangling renames
+        // keys, never values, so without this the tag strings survive
+        // minification in full even though nothing outside ever sees
+        // them.
+        if opts.explain {
+          explain_fields.push("")
+          explain_fields.push("dead class fields: why a write survived")
+          explain_fields.push("")
+          if explain_wildcard {
+            explain_fields.push(
+              "  the wildcard above forced every property name in the bundle",
+            )
+            explain_fields.push(
+              "  into the reserved set, so nothing here can proceed.",
+            )
+          }
+          let field_reasons = explain_dead_fields(combined, reserved_set)
+          if field_reasons.length() == 0 {
+            explain_fields.push("  nothing declined.")
+          }
+          for line in field_reasons {
+            explain_fields.push("  * " + line)
+          }
+        }
+        let tag_declines : Array[String] = []
+        combined = apply_discriminant_ints(
+          combined,
+          plan_discriminant_ints(combined, reserved_set, declines=tag_declines),
+        )
+        if opts.explain {
+          explain_tags.push("")
+          explain_tags.push("discriminant tags: why a tag kept its strings")
+          explain_tags.push("")
+          if explain_wildcard {
+            explain_tags.push(
+              "  the wildcard above forced every property name in the bundle",
+            )
+            explain_tags.push(
+              "  into the reserved set, so nothing here can proceed.",
+            )
+          }
+          if tag_declines.length() == 0 {
+            explain_tags.push("  nothing declined.")
+          }
+          for line in tag_declines {
+            explain_tags.push("  * " + line)
+          }
+        }
       }
       // External `import` headers (`import os from "os"`, etc.)
       // sit OUTSIDE `combined` and are emitted by the linker around
@@ -621,9 +958,9 @@ pub fn bundle_modules(
         // becomes internal once we glue modules together, so the
         // top-level can be renamed freely.
         .with_preserve_top_level(false)
-      let (mangled_block, mangle_renames) = mangle_block_with_renames(
-        combined, mangler_cfg,
-      )
+      let (mangled_block, mangle_renames) = timer.phase("mangle", () => {
+        mangle_block_with_renames(combined, mangler_cfg)
+      })
       combined = mangled_block
       // Carry the mangle pass's rename map forward so the
       // entry-export emit at the bottom can write the right short
@@ -636,22 +973,37 @@ pub fn bundle_modules(
       // shapes collapse before the peephole pass sees them. Gated
       // on `minify` since the inlining produces deeply nested
       // expressions that are unpleasant in pretty mode.
-      combined = inline_block(combined)
+      combined = timer.phase("inline", () => inline_block(combined))
       // Second fold pass: inlining can expose new constant-foldable
       // expressions (e.g. `const N = 3; arr[N]` → `arr[3]` → element
       // access on a literal array). Run fold again before peephole so
       // those collapse before the terminal compaction step.
       if opts.fold {
-        combined = fold_block(combined)
+        combined = timer.phase("fold-2", () => fold_block(combined))
         // Second treeshake: the second fold may produce new dead
         // `if (false) { … }` branches whose declarations are now
         // unreachable. A lightweight treeshake pass removes them
         // before the final peephole compaction.
+        //
+        // The roots have to be the POST-MANGLE names. `export_roots`
+        // holds what the source called them, and the mangler renames
+        // the top level freely (`preserve_top_level: false`), so the
+        // pre-mangle names match nothing here: every root reads as
+        // dead and the pass deletes the entire export surface. On hono
+        // that turned 18 KB into 4 KB with no `export` clause left —
+        // and only with `--mangle --treeshake --fold` together, which
+        // is why nothing simpler caught it.
         if opts.treeshake {
-          combined = treeshake_block(combined)
+          let live_roots : Map[String, Bool] = {}
+          for name in export_roots.keys() {
+            live_roots[mangle_export_renames.get(name).unwrap_or(name)] = true
+          }
+          combined = timer.phase("treeshake-2", () => {
+            treeshake_block(combined, roots=live_roots, pure_calls=proven_pure)
+          })
         }
       }
-      combined = peephole_block(combined)
+      combined = timer.phase("peephole", () => peephole_block(combined))
     }
     let has_combined_positions = combined.stmt_positions.length() ==
       combined.stmts.length()
@@ -692,23 +1044,40 @@ pub fn bundle_modules(
     // their pre-mangle (post-link) name and the mangle pass takes
     // care of substituting them since the export ref counts as a
     // use.
-    match modules.get(entry) {
-      Some(em) =>
-        if em.export_specs.length() > 0 {
-          // Chain link-renames then mangle-renames: link first
-          // (`app` -> `app`) then mangle (`app` -> `aq`). The
-          // bundle output's `export default <name>` must use the
-          // POST-mangle short form because that's what survives in
-          // the body.
-          let entry_renames = compose_renames(
-            link_renames.get(entry).unwrap_or({}),
-            mangle_export_renames,
-          )
-          emit_entry_exports(e, em, entry_renames)
-        }
-      None => ()
+    // `entry_export_bindings` already resolved each name through
+    // the link renames, so only the mangle pass's renames are
+    // left to apply here (`app` -> `aq`). The bundle output's
+    // `export default <name>` must use the POST-mangle short form
+    // because that's what survives in the body.
+    if entry_exports.length() > 0 {
+      let declared : Map[String, Bool] = {}
+      for n in collect_top_level_decl_names(combined) {
+        declared[n] = true
+      }
+      emit_entry_exports(e, entry_exports, mangle_export_renames, declared)
     }
   } else {
+    // The per-module emit keeps each module's statements separate, but
+    // the export surface spans the whole graph — an exported class can
+    // live in any module. Concatenate a read-only view to analyse.
+    let all_stmts : Array[@ast.TsStmt] = []
+    for path in order {
+      match modules.get(path) {
+        Some(node) =>
+          for st in node.block.stmts {
+            all_stmts.push(st)
+          }
+        None => ()
+      }
+    }
+    let export_surface : Map[String, Bool] = {}
+    for
+      n in exported_surface_props(
+        { stmts: all_stmts, stmt_positions: [] },
+        export_roots,
+      ) {
+      export_surface[n] = true
+    }
     for i, path in order {
       let m = match modules.get(path) {
         Some(node) => node
@@ -739,7 +1108,31 @@ pub fn bundle_modules(
           None => ()
         }
       }
-      let lifted_block = class_method_dce_block(iife_class_lift_block(m.block))
+      // Per-module emit path. The field annotations and aliases come
+      // from the whole graph, not just this module: a computed read
+      // here can name a member of a class declared anywhere, so the
+      // proofs that clear it have to be assembled the same way.
+      let all_class_fields : Array[(String, @ast.TsType)] = []
+      let all_type_aliases : Array[@ast.TsTypeAlias] = []
+      for other in order {
+        match modules.get(other) {
+          Some(node) => {
+            for f in node.class_fields {
+              all_class_fields.push(f)
+            }
+            for ta in node.type_aliases {
+              all_type_aliases.push(ta)
+            }
+          }
+          None => ()
+        }
+      }
+      let lifted_block = class_method_dce_block(
+        iife_class_lift_block(m.block),
+        keep=export_surface,
+        class_fields=all_class_fields,
+        type_aliases=all_type_aliases,
+      )
       for j, stmt in lifted_block.stmts {
         if opts.with_sourcemap && j < lifted_block.stmt_positions.length() {
           let src_pos = e.line_index.position(lifted_block.stmt_positions[j])
@@ -751,9 +1144,21 @@ pub fn bundle_modules(
       // Per-module emit path: surface the entry module's exports
       // at the tail (mirror of the combined-emit branch above).
       if path == entry {
-        if m.export_specs.length() > 0 {
-          let entry_renames = link_renames.get(entry).unwrap_or({})
-          emit_entry_exports(e, m, entry_renames)
+        let entry_exports = entry_export_bindings(modules, link_renames, entry)
+        if entry_exports.length() > 0 {
+          // Per-module emit keeps each module's stmts separate, so
+          // the "does a binding exist" check spans every module.
+          let declared : Map[String, Bool] = {}
+          for other in order {
+            match modules.get(other) {
+              Some(node) =>
+                for n in collect_top_level_decl_names(node.block) {
+                  declared[n] = true
+                }
+              None => ()
+            }
+          }
+          emit_entry_exports(e, entry_exports, {}, declared)
         }
       }
     }
@@ -763,7 +1168,25 @@ pub fn bundle_modules(
       Some(b.to_json_multi(sources, sources_content, output_path="bundle.js"))
     None => None
   }
-  Ok({ js: e.to_string(), sourcemap: sm_json, modules: module_paths, warnings })
+  if opts.explain {
+    explain.push("mtsc --explain-mangle")
+    for
+      section in [
+        explain_escape, explain_params, explain_methods, explain_fields, explain_tags,
+      ] {
+      for line in section {
+        explain.push(line)
+      }
+    }
+  }
+  Ok({
+    js: e.to_string(),
+    sourcemap: sm_json,
+    modules: module_paths,
+    warnings,
+    explain,
+    timings: timer.entries,
+  })
 }
 
 // Detect the esbuild-style CJS-wrapper pattern:
@@ -819,6 +1242,15 @@ fn load_module_graph(
   external_imports : Array[@ast.TsImportDecl],
   external_seen : Map[String, Bool],
   aliases : Map[String, String],
+  // When set, a relative import the vfs cannot resolve is kept
+  // verbatim as an external import instead of failing the bundle.
+  // Only the CLI sets this, and only because it has already asked the
+  // real filesystem: in-memory callers keep the strict behaviour, so a
+  // mistyped `./mising` is still an error and not a silent external.
+  allow_unresolved : Bool,
+  // Parses the caller already did, keyed like `files`. See
+  // `BundleOptions.parsed_blocks`.
+  parsed : Map[String, @ast.TsModuleBlock],
 ) -> Result[Unit, String] {
   if modules.contains(path) {
     return Ok(())
@@ -830,11 +1262,14 @@ fn load_module_graph(
   // Parse as a module block so we get imports + the runtime stmt
   // stream. JSX lowering happens here too so the per-module pragma
   // / config gets resolved against the right source text.
-  let parser = @parser.Parser::from_source(source)
-  let mb = try parser.parse_module_block() catch {
-    e => return Err("parse \{path}: \{e}")
-  } noraise {
-    b => b
+  let mb = match parsed.get(path) {
+    Some(cached) => cached
+    None =>
+      try @parser.Parser::from_source(source).parse_module_block() catch {
+        e => return Err("parse \{path}: \{e}")
+      } noraise {
+        b => b
+      }
   }
   // Reuse the per-file JSX pragma extractor so each module honors
   // its own `/** @jsxImportSource ... */` etc.
@@ -883,6 +1318,8 @@ fn load_module_graph(
     import_decls: mb.imports,
     pure_declarations: mb.pure_declarations,
     type_aliases: mb.type_aliases,
+    interfaces: mb.interfaces,
+    class_fields: mb.class_fields,
     export_specs: mb.exports,
     reexport_specs: mb.reexports,
     cjs_exports_var: detect_cjs_exports_var(lowered),
@@ -898,10 +1335,31 @@ fn load_module_graph(
       Some(base_dep) => {
         // Probe extensions in order until the vfs has the file.
         let dep_path = resolve_with_extensions(files, base_dep)
+        // Nothing in the vfs under any extension. That is what a
+        // build-generated module looks like from a source checkout —
+        // TypeScript's `checker.ts` imports
+        // `./_namespaces/ts.performance.js`, which its build emits and
+        // the repository does not carry. Treat it the way a bare
+        // specifier is treated: keep the import verbatim rather than
+        // failing the bundle over a module the caller never had.
+        if allow_unresolved && !files.contains(dep_path) {
+          let key = imp.module_spec +
+            ":" +
+            (match imp.default_binding {
+              Some(s) => s
+              None => ""
+            })
+          if !external_seen.contains(key) {
+            external_seen[key] = true
+            external_imports.push(imp)
+          }
+          continue
+        }
         resolved[imp.module_spec] = dep_path
         match
           load_module_graph(
-            files, dep_path, modules, external_imports, external_seen, aliases,
+            files, dep_path, modules, external_imports, external_seen, aliases, allow_unresolved,
+            parsed,
           ) {
           Ok(_) => ()
           Err(e) => return Err(e)
@@ -920,6 +1378,7 @@ fn load_module_graph(
             match
               load_module_graph(
                 files, dep_path, modules, external_imports, external_seen, aliases,
+                allow_unresolved, parsed,
               ) {
               Ok(_) => ()
               Err(e) => return Err(e)
@@ -932,6 +1391,7 @@ fn load_module_graph(
               match
                 load_module_graph(
                   files, dep_path, modules, external_imports, external_seen, aliases,
+                  allow_unresolved, parsed,
                 ) {
                 Ok(_) => ()
                 Err(e) => return Err(e)
@@ -964,10 +1424,18 @@ fn load_module_graph(
     match resolve_relative(path, re.module_spec) {
       Some(base_dep) => {
         let dep_path = resolve_with_extensions(files, base_dep)
+        // Same as the import loop: a relative target the vfs does not
+        // have is a module the caller never had. A bare re-export
+        // target isn't tracked as external either (see below), so
+        // skipping matches the existing behaviour for that case.
+        if allow_unresolved && !files.contains(dep_path) {
+          continue
+        }
         resolved[re.module_spec] = dep_path
         match
           load_module_graph(
-            files, dep_path, modules, external_imports, external_seen, aliases,
+            files, dep_path, modules, external_imports, external_seen, aliases, allow_unresolved,
+            parsed,
           ) {
           Ok(_) => ()
           Err(e) => return Err(e)
@@ -980,6 +1448,7 @@ fn load_module_graph(
             match
               load_module_graph(
                 files, dep_path, modules, external_imports, external_seen, aliases,
+                allow_unresolved, parsed,
               ) {
               Ok(_) => ()
               Err(e) => return Err(e)
@@ -992,6 +1461,7 @@ fn load_module_graph(
               match
                 load_module_graph(
                   files, dep_path, modules, external_imports, external_seen, aliases,
+                  allow_unresolved, parsed,
                 ) {
                 Ok(_) => ()
                 Err(e) => return Err(e)
@@ -1012,6 +1482,8 @@ fn load_module_graph(
     import_decls: mb.imports,
     pure_declarations: mb.pure_declarations,
     type_aliases: mb.type_aliases,
+    interfaces: mb.interfaces,
+    class_fields: mb.class_fields,
     export_specs: mb.exports,
     reexport_specs: mb.reexports,
     cjs_exports_var,
@@ -1168,27 +1640,74 @@ fn decode_combined_position(encoded : Int) -> (Int, Int) {
 /// post-link form.
 fn emit_entry_exports(
   e : Emitter,
-  m : ModuleNode,
+  exports : Array[BundleExport],
   renames : Map[String, String],
+  declared : Map[String, Bool],
 ) -> Unit {
-  // Group default vs named.
+  // Passthrough re-exports of external modules keep their `from`
+  // clause: the binding lives in the other package, so there's
+  // nothing in the bundle to name.
+  for ex in exports {
+    match ex.from_external {
+      Some(spec) => {
+        e.write("export")
+        e.space()
+        if ex.local_name == "*" && ex.export_name.has_prefix("*:") {
+          e.write("*")
+        } else if ex.local_name == "*" {
+          e.write("* as ")
+          e.write(ex.export_name)
+        } else {
+          e.write("{")
+          e.space()
+          e.write(ex.local_name)
+          if ex.local_name != ex.export_name {
+            e.write(" as ")
+            e.write(ex.export_name)
+          }
+          e.space()
+          e.write("}")
+        }
+        e.write(" from ")
+        e.write("\"")
+        e.write(spec)
+        e.write("\"")
+        e.semi()
+        e.nl()
+      }
+      None => ()
+    }
+  }
+  // Group default vs named. An export whose local has no top-level
+  // binding in the bundle was a type (`export type { T }`, an
+  // exported `interface`, …); TypeScript erases those, so emitting
+  // them would produce a bundle that fails to load.
+  let resolve = (name : String) => renames.get(name).unwrap_or(name)
+  let keep = (local_ : String) => {
+    declared.is_empty() || declared.contains(local_)
+  }
   let default_local : String? = {
     let mut found : String? = None
-    for spec in m.export_specs {
-      if spec.export_name == "default" {
-        found = Some(renames.get(spec.local_name).unwrap_or(spec.local_name))
+    for ex in exports {
+      if ex.from_external is None &&
+        ex.export_name == "default" &&
+        keep(resolve(ex.local_name)) {
+        found = Some(resolve(ex.local_name))
         break
       }
     }
     found
   }
   let named : Array[(String, String)] = []
-  for spec in m.export_specs {
-    if spec.export_name == "default" {
+  for ex in exports {
+    if ex.from_external is Some(_) || ex.export_name == "default" {
       continue
     }
-    let local_ = renames.get(spec.local_name).unwrap_or(spec.local_name)
-    named.push((local_, spec.export_name))
+    let local_ = resolve(ex.local_name)
+    if !keep(local_) {
+      continue
+    }
+    named.push((local_, ex.export_name))
   }
   match default_local {
     Some(local_) => {
@@ -1222,34 +1741,6 @@ fn emit_entry_exports(
     e.semi()
     e.nl()
   }
-}
-
-///|
-/// Chain two rename maps: `first` is applied to the original name,
-/// then `second` is applied to the result. Output is a fresh map
-/// where each key from `first` (or that survives the chain) maps
-/// to the final name post-`second`.
-fn compose_renames(
-  first : Map[String, String],
-  second : Map[String, String],
-) -> Map[String, String] {
-  let out : Map[String, String] = {}
-  // Walk every input that either map touched.
-  let seen : Map[String, Bool] = {}
-  for k in first.keys() {
-    seen[k] = true
-  }
-  for k in second.keys() {
-    seen[k] = true
-  }
-  for k in seen.keys() {
-    let after_first = first.get(k).unwrap_or(k)
-    let after_second = second.get(after_first).unwrap_or(after_first)
-    if after_second != k {
-      out[k] = after_second
-    }
-  }
-  out
 }
 
 ///|

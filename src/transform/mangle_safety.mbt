@@ -43,50 +43,30 @@
 pub fn collect_externally_visible_props(
   block : @ast.TsBlock,
   external_bindings : Map[String, Bool],
+  type_env? : Map[String, @ast.TsType] = {},
 ) -> Array[String] {
-  // Phase 1-4 of the observability analysis: build the symbol
-  // graph (also collecting reflection / I/O sinks tagged with
-  // scope), infer numeric bindings for the IndexAccess fallback,
-  // run the backward-flow observability propagation, and reserve
-  // only the property names actually visible from the resulting
-  // observable bindings.
-  let (graph, scoped_sinks) = build_symbol_graph_with_sinks(
-    block, external_bindings,
-  )
-  let numeric = infer_numeric_symbols(graph)
-  let numeric_names = numeric_name_set(graph, numeric)
-  // Phase 2: bindings whose TS annotation is a closed string-literal
-  // type or a union of string literals. Used by the IndexAssign sites
-  // below to narrow `external.obj[k] = v` to the exact key set when
-  // `k`'s static type permits only specific strings — instead of the
-  // wildcard fallback that blocked all property mangling.
-  let literal_idx_names = literal_string_name_set(graph)
-  let reserved_external : Map[String, Bool] = {}
-  collect_props_on_external_block(
-    block, external_bindings, reserved_external, numeric_names, literal_idx_names,
-  )
-  // Phase 4: backward-propagate observability from sinks through
-  // FuncReturn / FuncArg edges so a value reaching a sink via a
-  // function parameter or return still tracks back to its
-  // originating bindings. The result subsumes Phase 3's sink
-  // reservation (which used to run alongside) because every
-  // resolved sink-arg ends up as a seeded observable symbol
-  // here.
-  let obs_map = analyze_observability(graph, scoped_sinks)
-  let reserved_obs = reserved_props_from_observability(graph, obs_map)
+  // A merge over `escape_breakdown`, which computes the same reserved
+  // set in pieces and keeps the reason for each. Deliberately not a
+  // second implementation: `--explain-mangle` has to describe the
+  // decision this function makes, not a re-derivation of it that can
+  // drift.
+  let b = escape_breakdown(block, external_bindings, type_env~)
   let reserved : Map[String, Bool] = {}
-  for k in reserved_external.keys() {
-    // Internal mtsc markers (`__private_brand__N__X`, `__super_proto`,
-    // `__brand__`) are synthesised private — no external consumer can
-    // reference them by their desugared names. Exclude them from the
-    // escaped-property set so the property mangler can still shorten them
-    // even when the containing object is transitively exported.
-    if !is_internal_marker_prop(k) {
-      reserved[k] = true
-    }
-  }
-  for k in reserved_obs.keys() {
-    if !is_internal_marker_prop(k) {
+  for
+    group in [
+      b.external_chain,
+      b.sink_observability,
+      b.sink_literal,
+      b.host_shaped,
+      b.value_tree,
+      b.in_probe,
+    ] {
+    for k in group {
+      // Internal mtsc markers (`__private_brand__N__X`, `__super_proto`,
+      // `__brand__`) are synthesised private — no external consumer can
+      // reference them by their desugared names, so they stay manglable
+      // even when the containing object is transitively exported.
+      // `sorted_names` has already dropped them.
       reserved[k] = true
     }
   }
@@ -95,6 +75,113 @@ pub fn collect_externally_visible_props(
     out.push(k)
   }
   out
+}
+
+///|
+/// Names the block references but never declares, in any scope. Such a
+/// name can only come from the host — an ambient global from a `.d.ts`,
+/// a runtime built-in, a script-tag global — so every property read on
+/// it belongs to somebody else's ABI and must not be renamed.
+///
+/// The symbol graph supplies "declared anywhere" (it records every
+/// binding in every scope) and the reference walk supplies "mentioned
+/// anywhere". A name that some inner scope happens to declare is
+/// treated as internal even if another scope reads it as a global; that
+/// is the one imprecision here, and the built-in reserved list already
+/// covers the real runtime globals.
+pub fn undeclared_referenced_names(block : @ast.TsBlock) -> Map[String, Bool] {
+  let graph = build_symbol_graph(block, {})
+  let declared : Map[String, Bool] = {}
+  for sym in graph.symbols {
+    declared[sym.name] = true
+  }
+  let referenced : Map[String, Bool] = {}
+  collect_var_refs_in_block(block, referenced)
+  let out : Map[String, Bool] = {}
+  for name in referenced.keys() {
+    if !declared.contains(name) && !is_dynamically_bound_name(name) {
+      out[name] = true
+    }
+  }
+  out
+}
+
+///|
+/// Property names spelled by a string on the left of an `in`.
+///
+/// Uses the export-surface pass's whole-block expression visitor, which
+/// already descends into nested function bodies, so this needs no walk of
+/// its own.
+fn collect_in_probe_names_block(
+  block : @ast.TsBlock,
+  out : Map[String, Bool],
+) -> Unit {
+  surface_visit_exprs_block(block, e => {
+    match e {
+      @ast.TsExpr::BinOp(In, @ast.TsExpr::StringLit(k), _) => out[k] = true
+      _ => ()
+    }
+  })
+}
+
+///|
+/// Names that are never "provided by the host" even though no
+/// declaration binds them. `this` is the important one: it is bound by
+/// the call, so `this.field` inside a bundle-internal method is an
+/// internal access, and treating it as external would reserve the
+/// property surface of every class and object literal in the bundle.
+///
+/// The exception this accepts: a callback handed to an external API can
+/// have `this` bound to a foreign object (`external.on("x", function ()
+/// { this.foo })`). That receiver's names would then be reserved only if
+/// something else in the analysis reaches them.
+fn is_dynamically_bound_name(name : String) -> Bool {
+  name == "this" || name == "super" || name == "arguments"
+}
+
+///|
+/// Does this binding hold an object literal we can read the first-level
+/// keys off directly? Decides whether the one-level `DirectProps` rule
+/// has anything to work with.
+///
+/// A spread or computed entry disqualifies the literal:
+/// `{ ...base, wrap: … }` has first-level keys that aren't written here
+/// at all, and reading only the ones that are is exactly how `alphaTop`
+/// got dropped out from under a `for-in`.
+fn has_object_literal_def(sym : Symbol) -> Bool {
+  for d in sym.defs {
+    match d.init {
+      Some(@ast.TsExpr::ObjectLit(entries)) => {
+        let mut opaque = false
+        for ent in entries {
+          if is_opaque_object_key(ent.0) {
+            opaque = true
+          }
+        }
+        if !opaque {
+          return true
+        }
+      }
+      _ => ()
+    }
+  }
+  false
+}
+
+///|
+/// Sentinel keys the AST uses for entries that are NOT a literal
+/// property name. Object spread arrives as either `("...", Spread(e))`
+/// (the JSX-runtime lowering) or `("@@spread:N", e)` (the ordinary
+/// parser path), and a computed key `[k]: v` as `("@@computed:N",
+/// ComputedProp(k, v))` — see `emit_expr`'s ObjectLit arm, which is
+/// where the conventions are consumed.
+///
+/// Two consequences, and both bit: such a key must never be recorded as
+/// a property name to reserve, and its presence means the literal's
+/// first-level key set is NOT statically visible, so any rule that
+/// reads keys straight off the literal has to decline.
+fn is_opaque_object_key(key : String) -> Bool {
+  key == "..." || key.has_prefix("@@spread:") || key.has_prefix("@@computed:")
 }
 
 ///|
@@ -224,6 +311,84 @@ fn type_literal_string_keys(t : @ast.TsType) -> Array[String]? {
 }
 
 ///|
+/// Reserve for a computed key in a destructuring pattern —
+/// `const { [k]: v } = obj`. The pattern reads a property under a name
+/// the mangler cannot see, exactly like `obj[k]`, so an unnarrowed key
+/// takes the wildcard. Without this the property was renamed AND the
+/// dead-property pass dropped its only write, since neither could see
+/// a read.
+fn reserve_computed_binding_keys(
+  b : @ast.TsBinding,
+  out : Map[String, Bool],
+  numeric_names : Map[String, Bool],
+  literal_idx_names : Map[String, Array[String]],
+) -> Unit {
+  match b {
+    Ident(_) | Target(_) => ()
+    Array(ab) => {
+      for item in ab.items {
+        match item {
+          Some(elem) =>
+            reserve_computed_binding_keys(
+              elem.binding,
+              out,
+              numeric_names,
+              literal_idx_names,
+            )
+          None => ()
+        }
+      }
+      match ab.rest {
+        Some(r) =>
+          reserve_computed_binding_keys(
+            r, out, numeric_names, literal_idx_names,
+          )
+        None => ()
+      }
+    }
+    Object(ob) =>
+      for prop in ob.props {
+        match prop.key_expr {
+          Some(k) =>
+            if !reserve_external_index_keys(
+                k, out, numeric_names, literal_idx_names,
+              ) {
+              out["*"] = true
+            }
+          None => ()
+        }
+        reserve_computed_binding_keys(
+          prop.binding,
+          out,
+          numeric_names,
+          literal_idx_names,
+        )
+      }
+  }
+}
+
+///|
+/// True when a computed-index receiver is a plain binding, which is
+/// what Phase 3+4 observability can follow. Anything else —
+/// `this.f[k]`, `a.b[k]`, `f()[k]`, an element of an array — has no
+/// symbol to attach an observability to, so the caller cannot leave
+/// the key set to a later phase.
+fn untracked_index_receiver(recv : @ast.TsExpr) -> Bool {
+  match recv {
+    // `this` is not a binding — no symbol, so nothing for Phase 3+4
+    // to attach an observability to. `(this as any)[k]` on a class
+    // instance reads a member under a name we cannot predict, and
+    // treating it as tracked renamed a field the read still wanted.
+    // Same for the other pseudo-names that parse as identifiers.
+    Var("this") | Var("super") | Var("globalThis") | Var("arguments") => false
+    Var(_) => true
+    NonNull(inner) | As(inner, _) | Satisfies(inner, _) =>
+      untracked_index_receiver(inner)
+    _ => false
+  }
+}
+
+///|
 // Phase 2 reservation rule for an external-chain `obj[idx]` site.
 // Returns true when the index expression's keys were reserved
 // concretely (caller skips the wildcard fallback), false when the
@@ -308,7 +473,13 @@ fn collect_props_on_external_stmt(
   literal_idx_names : Map[String, Array[String]],
 ) -> Unit {
   match stmt {
-    Var(_, _, e) | Let(_, _, e) | Const(_, _, e) | Expr(e) | Throw(e) =>
+    Var(b, _, e) | Let(b, _, e) | Const(b, _, e) => {
+      reserve_computed_binding_keys(b, out, numeric_names, literal_idx_names)
+      collect_props_on_external_expr(
+        e, externals, out, numeric_names, literal_idx_names,
+      )
+    }
+    Expr(e) | Throw(e) =>
       collect_props_on_external_expr(
         e, externals, out, numeric_names, literal_idx_names,
       )
@@ -317,12 +488,21 @@ fn collect_props_on_external_stmt(
         e, externals, out, numeric_names, literal_idx_names,
       )
     IndexAssign(t, idx, v) => {
-      // Local-binding dynamic write: Phase 3+4 handle the
-      // reservation, no wildcard from here. External-chain
-      // writes get the Phase 2 narrowing — wildcard only when
-      // the index expression remains opaque.
-      if is_external_chain(t, externals) &&
-        !reserve_external_index_keys(idx, out, numeric_names, literal_idx_names) {
+      // A dynamic WRITE takes the wildcard at ANY receiver when the
+      // key isn't narrowed — a bare binding included, where a read
+      // would have been left to Phase 3+4. The asymmetry is real:
+      // Phase 3+4 answers "what does something outside observe on
+      // this binding", and a write observes nothing. What it does is
+      // install a name the mangler cannot see, while the matching
+      // static site is renamed on its own:
+      //
+      //   const payload: { alphaTop?: number } = {};
+      //   function put(k: string, v: number) { payload[k] = v; }
+      //   put("alphaTop", 1);
+      //   payload.alphaTop        // became `payload.a` — undefined
+      if !reserve_external_index_keys(
+          idx, out, numeric_names, literal_idx_names,
+        ) {
         out["*"] = true
       }
       collect_props_on_external_expr(
@@ -592,13 +772,28 @@ fn collect_props_on_external_expr(
       )
     }
     IndexAccess(recv, idx) => {
-      // Dynamic indexing on an EXTERNAL chain falls back to `*`
-      // unless the index expression's type pins the key set down
-      // (Phase 2 narrowing). LOCAL bindings stay handled by Phase
-      // 3+4 observability — only properties actually escape to a
-      // sink get reserved, the rest stay drop-eligible.
-      if is_external_chain(recv, externals) &&
-        !reserve_external_index_keys(idx, out, numeric_names, literal_idx_names) {
+      // Dynamic indexing falls back to `*` unless the index
+      // expression's type pins the key set down (Phase 2
+      // narrowing). A LOCAL BINDING receiver is the exception:
+      // Phase 3+4 observability tracks it, so only properties that
+      // really escape to a sink get reserved and the rest stay
+      // drop-eligible.
+      //
+      // Anything else — an external chain, but equally `this.f[k]`,
+      // `a.b[k]`, `f()[k]` — has no binding for Phase 3+4 to track,
+      // so the key set is nobody's to bound and the wildcard is the
+      // only sound answer:
+      //
+      //   class R { #rows: Record<string, string> = { seed: "0" };
+      //             read(k: string) { return this.#rows[k]; } }
+      //   new R().read("seed")
+      //
+      // Renaming `seed` while `"seed"` stays a string VALUE turns
+      // the read into `undefined` — a wrong answer, not a crash.
+      if !reserve_external_index_keys(
+          idx, out, numeric_names, literal_idx_names,
+        ) &&
+        (is_external_chain(recv, externals) || !untracked_index_receiver(recv)) {
         out["*"] = true
       }
       collect_props_on_external_expr(
@@ -649,10 +844,11 @@ fn collect_props_on_external_expr(
         v, externals, out, numeric_names, literal_idx_names,
       )
     IndexAssignExpr(recv, idx, v) => {
-      // Local-binding dynamic write — same Phase 2 narrowing as
-      // the statement-level IndexAssign.
-      if is_external_chain(recv, externals) &&
-        !reserve_external_index_keys(idx, out, numeric_names, literal_idx_names) {
+      // Same as the statement-level `IndexAssign`: a write under an
+      // unnarrowed key takes the wildcard at any receiver.
+      if !reserve_external_index_keys(
+          idx, out, numeric_names, literal_idx_names,
+        ) {
         out["*"] = true
       }
       collect_props_on_external_expr(
@@ -1058,6 +1254,10 @@ fn collect_reflection_sinks_expr(
 ///|
 /// Record every literal key in an object literal so it survives
 /// the reflection pass. Used by `JSON.stringify({foo: 1})` etc.
+///
+/// Recurses through nested literals: `JSON.stringify({ a: { b: 1 } })`
+/// serializes `b` just as visibly as `a`, and an array of literals
+/// (`send([{ id: 1 }])`) carries its element keys out too.
 fn collect_object_literal_keys(
   expr : @ast.TsExpr,
   out : Map[String, Bool],
@@ -1065,10 +1265,25 @@ fn collect_object_literal_keys(
   match expr {
     ObjectLit(entries) =>
       for ent in entries {
-        if ent.0 != "..." {
+        if !is_opaque_object_key(ent.0) {
           out[ent.0] = true
         }
+        collect_object_literal_keys(ent.1, out)
       }
+    ArrayLit(items) =>
+      for it in items {
+        collect_object_literal_keys(it, out)
+      }
+    Spread(inner)
+    | As(inner, _)
+    | Satisfies(inner, _)
+    | NonNull(inner)
+    | TypeArgs(_, inner)
+    | Await(inner) => collect_object_literal_keys(inner, out)
+    Cond(_, t, e) => {
+      collect_object_literal_keys(t, out)
+      collect_object_literal_keys(e, out)
+    }
     _ => ()
   }
 }

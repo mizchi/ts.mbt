@@ -4222,7 +4222,10 @@ async test "parser: parse export-as-namespace sanitize fixture in module block" 
 }
 
 ///|
-test "parser: skip plain namespace declaration in module block" {
+test "parser: lower plain namespace declaration in module block" {
+  // A namespace is a runtime value: its body used to be skipped, which
+  // left `Samples.EventCounter` referencing nothing. It now lowers to
+  // the object declaration plus an IIFE that fills it in.
   let src =
     #|namespace Samples {
     #|  export class EventCounter {
@@ -4235,7 +4238,24 @@ test "parser: skip plain namespace declaration in module block" {
       return
     }
   }
-  assert_eq(module_.block.stmts.length(), 0)
+  assert_eq(module_.block.stmts.length(), 1)
+  let mut declares_object = false
+  let mut calls_initializer = false
+  match module_.block.stmts[0] {
+    @ast.TsStmt::Block(inner) =>
+      for stmt in inner.stmts {
+        match stmt {
+          @ast.TsStmt::Var(@ast.TsBinding::Ident("Samples"), _, _) =>
+            declares_object = true
+          @ast.TsStmt::Expr(@ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(_), _)) =>
+            calls_initializer = true
+          _ => ()
+        }
+      }
+    _ => ()
+  }
+  assert_true(declares_object)
+  assert_true(calls_initializer)
 }
 
 ///|
@@ -7322,4 +7342,131 @@ test "parser: bodiless generator declarations are grammar misuses (TS1221 family
     }
   }
   assert_eq(legal_hits, 0)
+}
+
+///|
+/// A `<` that is a comparison must not be read as the start of a
+/// type-argument list, however far away a matching `>` happens to sit.
+///
+/// The scan that decides this used to accept ANY token between the two,
+/// so `{ a < b; } c > (1);` balanced across the block's closing brace,
+/// saw the `(` that follows, and committed to `a<…>(1)` as a generic
+/// call — consuming the rest of the file. It takes one relational
+/// operator and one later `> (` to line up, which in a large real source
+/// is a certainty: `src/compiler/checker.ts` and the published
+/// `typescript.js` both failed to parse at all because of it, each
+/// reporting only `Expected RBrace, got Eof` from wherever the input ran
+/// out.
+test "parser: a comparison inside a block is not a type-argument list" {
+  let cases = [
+    "{ a < b; } c > (1);", "if (x) { a < b; } c > (1);", "function f() { a < b; } c > (1);",
+    "while (x) { a < b } c > (1);", "{ a < b; } (c) > (1);",
+  ]
+  for src in cases {
+    let block = parse_block_from_source(src) catch {
+      e => fail("should parse: \{src} -> \{e}")
+    }
+    // Two statements survive in every case: the block and the
+    // comparison. The failure mode was the second one vanishing into
+    // the first's "type arguments".
+    assert_true(block.stmts.length() >= 2)
+  }
+}
+
+///|
+/// The other half: tightening the scan must not reject the type
+/// arguments that legitimately contain braces, parens, brackets or a
+/// member-separating `;`.
+test "parser: real type arguments still parse" {
+  let cases = [
+    "const x = f<string>(1);", "const x = f<Map<string, number>>(2);", "const x = f<{ a: number; b: string }>(3);",
+    "const x = f<(a: number) => void>(cb);", "const x = f<[number, string]>(5);",
+    "const x = tag<number>`t`;", "for (let i = 0, n = 2; i < n; ++i) { g(i); }",
+  ]
+  for src in cases {
+    let block = parse_block_from_source(src) catch {
+      e => fail("should parse: \{src} -> \{e}")
+    }
+    assert_true(block.stmts.length() >= 1)
+  }
+}
+
+///|
+/// `get` and `set` are contextual: a class member called `get` is a
+/// getter only when a method body can follow. `get!: T` and `get?: T`
+/// are FIELDS — the `!` / `?` binds to the name, so no getter can be
+/// spelled that way. Hono declares its route methods exactly like this
+/// (`get!: HandlerInterface<…>`, `post!`, `delete!`), and the whole
+/// package failed to parse on the first one.
+test "parser: `get` and `set` are field names before `!` and `?`" {
+  let cases = [
+    "class A { get!: number; }", "class A { set!: number; }", "class A { get?: number; }",
+    "class A { set?: number; }",
+    // The forms already handled, kept so the guard list stays honest.
+     "class A { get: number = 1; }", "class A { get; }", "class A { get = 2; }",
+  ]
+  for src in cases {
+    let block = parse_block_from_source(src) catch {
+      e => fail("should parse: \{src} -> \{e}")
+    }
+    assert_true(block.stmts.length() >= 1)
+  }
+}
+
+///|
+test "parser: a real accessor still parses" {
+  let cases = [
+    "class A { get value() { return 1; } }", "class A { set value(v: number) {} }",
+    "class A { get items(): number[] { return []; } }", "class A { static get id() { return 1; } }",
+  ]
+  for src in cases {
+    let block = parse_block_from_source(src) catch {
+      e => fail("should parse: \{src} -> \{e}")
+    }
+    assert_true(block.stmts.length() >= 1)
+  }
+}
+
+///|
+/// A TypeScript overload signature has no body. It is type-only, and an
+/// overload SET puts two or three of them above the one implementation.
+/// Emitting each as `function f() {}` gave one name several declarations
+/// — a SyntaxError in a module, so nothing loaded at all. valibot writes
+/// its entire public surface as overload sets, and `getDotPath` alone
+/// produced three declarations of one name.
+test "parser: an overload signature is not a runtime declaration" {
+  let block = parse_block_from_source(
+    (
+      #|function pick(v: string): string;
+      #|function pick(v: number): number;
+      #|function pick(v: string | number): string | number {
+      #|  return v;
+      #|}
+      #|
+    ),
+  )
+  // One declaration survives: the implementation.
+  let mut decls = 0
+  for s in block.stmts {
+    match s {
+      Let(@ast.TsBinding::Ident("pick"), _, _) => decls += 1
+      _ => ()
+    }
+  }
+  assert_eq(decls, 1)
+}
+
+///|
+test "parser: an ambient function declaration is not a runtime declaration" {
+  let block = parse_block_from_source(
+    "declare function ambient(x: number): number;\n",
+  )
+  let mut decls = 0
+  for s in block.stmts {
+    match s {
+      Let(_, _, _) | Const(_, _, _) | Var(_, _, _) => decls += 1
+      _ => ()
+    }
+  }
+  assert_eq(decls, 0)
 }

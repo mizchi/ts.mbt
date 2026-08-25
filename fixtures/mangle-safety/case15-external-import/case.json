@@ -1,0 +1,18 @@
+{
+  "origin": "packelyze fixtures/case15-external-import",
+  "what": "Object literals handed to functions imported from an external package. Their keys are the other package's ABI.",
+  "externals": [
+    "ext-a"
+  ],
+  "stubs": {
+    "ext-a": "export const a = \"a\";\nexport function foo(input) { console.log(\"ext-a.foo\", input); return { xxx: 1 }; }\nexport function restFn(...inputs) { console.log(\"ext-a.restFn\", inputs); }\n"
+  },
+  "exports": [
+    "fooRet"
+  ],
+  "expectKeep": [
+    "foo",
+    "rrr"
+  ],
+  "expectStatus": "pass"
+}

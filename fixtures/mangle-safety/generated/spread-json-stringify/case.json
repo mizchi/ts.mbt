@@ -1,0 +1,18 @@
+{
+  "origin": "generated — scripts/generate_mangle_cases.mjs",
+  "generated": true,
+  "what": "An object literal assembled with a spread that is serialized with `JSON.stringify` and exported. Observation depth recursive, so the expectation is derived, not authored.",
+  "exports": [
+    "encoded",
+    "total"
+  ],
+  "expectKeep": [
+    "alphaTop",
+    "alphaWrap",
+    "alphaDeep"
+  ],
+  "expectMangle": [
+    "omegaCtl"
+  ],
+  "expectStatus": "pass"
+}

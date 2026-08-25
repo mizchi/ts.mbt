@@ -1516,3 +1516,142 @@ test "peephole: c ? expr : void 0 keeps ternary (c && expr has different falsy s
   let out = minify_one("const a = x > 0 ? doSomething(x) : undefined;")
   assert_true(out.contains("?"), msg="expected ternary kept, got: \{out}")
 }
+
+///|
+/// A function declaration after a `return` is not unreachable — it
+/// hoists, so the code before the return can call it and `return f;` can
+/// hand it out. `typescript.js` is built that way, and dropping those
+/// left `return f` pointing at nothing: loading the minified compiler
+/// threw `ReferenceError: d is not defined`.
+test "peephole: a hoisted function after a terminator survives" {
+  let files : Map[String, String] = {
+    "entry.js": (
+      #|var pick = (() => {
+      #|  var chosen;
+      #|  return getDefault;
+      #|  function getDefault(a, b) {
+      #|    return a < b ? -1 : 1;
+      #|  }
+      #|})();
+      #|export function run(a, b) {
+      #|  return pick(a, b);
+      #|}
+      #|
+    ),
+  }
+  // Only the combination broke: mangle renames the declaration, and the
+  // peephole pass is what dropped it.
+  for
+    opts in [
+      BundleOptions::default().with_minify(true).with_mangle(true),
+      BundleOptions::default()
+      .with_minify(true)
+      .with_fold(true)
+      .with_mangle(true),
+      BundleOptions::default().with_minify(true),
+      BundleOptions::default().with_mangle(true),
+    ] {
+    match bundle_modules(files, "entry.js", opts) {
+      // The declaration has to survive in SOME form — kept as a
+      // declaration, or inlined into the `return` when it is used once.
+      // Its body is the only place `-1` appears, and unlike a name it
+      // does not move under mangling.
+      Ok(out) => assert_true(out.js.contains("-1"))
+      Err(e) => fail("bundle error: \{e}")
+    }
+  }
+}
+
+///|
+test "peephole: genuinely unreachable code after a terminator still goes" {
+  let files : Map[String, String] = {
+    "entry.js": (
+      #|export function f(a) {
+      #|  return a + 1;
+      #|  console.log("never");
+      #|}
+      #|
+    ),
+  }
+  // `--fold` is the pass that drops unreachable statements; the point
+  // here is that keeping hoisted declarations did not turn that off.
+  let opts = BundleOptions::default().with_minify(true).with_fold(true)
+  match bundle_modules(files, "entry.js", opts) {
+    Ok(out) => assert_false(out.js.contains("never"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+/// `let x = expr; return x;` collapses to `return expr;` — but not when
+/// `expr` refers to `x`. A self-referential initializer is ordinary
+/// JavaScript as long as the reference is deferred into a closure, and
+/// TypeScript's compiler host is built exactly that way:
+///
+///     const compilerHost = {
+///       getSourceFile: withCache(f => compilerHost.readFile(f)),
+///     };
+///     return compilerHost;
+///
+/// Folding it left the closure pointing at a name that no longer
+/// existed. After mangling it was worse than a `ReferenceError`: the
+/// short name now belonged to a different function, so every lib file
+/// read silently came back empty and the minified compiler reported
+/// `Cannot find name 'Math'` on correct input.
+test "peephole: a self-referential initializer is not folded into the return" {
+  let files : Map[String, String] = {
+    "entry.js": (
+      #|function makeHost(read) {
+      #|  const host = {
+      #|    readFile: read,
+      #|    getSourceFile: (name) => host.readFile(name),
+      #|  };
+      #|  return host;
+      #|}
+      #|export function run() {
+      #|  return makeHost((n) => "content:" + n).getSourceFile("a.ts");
+      #|}
+      #|
+    ),
+  }
+  for
+    opts in [
+      BundleOptions::default().with_minify(true).with_mangle(true),
+      BundleOptions::default()
+      .with_minify(true)
+      .with_fold(true)
+      .with_mangle(true),
+      BundleOptions::default().with_minify(true),
+    ] {
+    match bundle_modules(files, "entry.js", opts) {
+      Ok(out) =>
+        // The binding has to stay: something inside its own initializer
+        // needs a name to reach it by.
+        assert_true(out.js.contains("return") && out.js.contains("readFile"))
+      Err(e) => fail("bundle error: \{e}")
+    }
+  }
+}
+
+///|
+test "peephole: an ordinary tail declaration still folds" {
+  let files : Map[String, String] = {
+    "entry.js": (
+      #|export function f(a) {
+      #|  const total = a + 1;
+      #|  return total;
+      #|}
+      #|
+    ),
+  }
+  // The fold is reached on the post-mangle block, so this is the
+  // combination that exercises it.
+  let opts = BundleOptions::default().with_minify(true).with_mangle(true)
+  match bundle_modules(files, "entry.js", opts) {
+    Ok(out) =>
+      assert_true(
+        out.js.contains("return b+1") || out.js.contains("return a+1"),
+      )
+    Err(e) => fail("bundle error: \{e}")
+  }
+}

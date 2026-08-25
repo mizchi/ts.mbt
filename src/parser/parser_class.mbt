@@ -999,6 +999,26 @@ fn build_runtime_class_decl(
 }
 
 ///|
+
+///|
+/// Record the runtime class declaration just parsed. Sets
+/// `last_runtime_class_decl` (which the module path takes) and also
+/// accumulates the class's field annotations into
+/// `collected_class_fields`, because the lowering does not keep them:
+/// a field with an initializer becomes a constructor assignment, so a
+/// whole-program pass looking at the emitted class sees no types at
+/// all.
+fn Parser::record_runtime_class_decl(
+  self : Parser,
+  decl : @ast.TsClassDecl,
+) -> Unit {
+  self.last_runtime_class_decl = Some(decl)
+  for p in decl.properties {
+    self.collected_class_fields.push((p.name, p.type_))
+  }
+}
+
+///|
 fn Parser::take_last_runtime_class_decl(self : Parser) -> @ast.TsClassDecl? {
   let result = self.last_runtime_class_decl
   self.last_runtime_class_decl = None
@@ -2076,7 +2096,15 @@ fn Parser::parse_class_body(
         self.peek_at(1).kind != Semicolon &&
         self.peek_at(1).kind != Eq &&
         self.peek_at(1).kind != Comma &&
-        self.peek_at(1).kind != RBrace => {
+        self.peek_at(1).kind != RBrace &&
+        // `get!: T` (definite assignment) and `get?: T` (optional) are
+        // fields too — the `!` / `?` binds to the field NAME, so a
+        // getter can never be spelled that way. Hono declares its
+        // route methods exactly like this (`get!: HandlerInterface<…>`,
+        // `post!`, `delete!`), and without these two the whole
+        // package failed to parse.
+        self.peek_at(1).kind != Bang &&
+        self.peek_at(1).kind != Question => {
         let _ = self.advance()
         accessor_kind = Some(n)
         // TS1042: `async` cannot modify an accessor (`async get foo()`).
@@ -2750,7 +2778,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
         decorators: class_decorators,
         is_declare: false,
       }
-      self.last_runtime_class_decl = Some(decorated)
+      self.record_runtime_class_decl(decorated)
       // Add field initializers to the constructor body so `class
       // … extends X { y = 2; constructor() {…} }` doesn't lose
       // its non-static field defaults.
@@ -2901,7 +2929,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     abstract_members: runtime_decl.abstract_members,
     duplicate_member_names: runtime_decl.duplicate_member_names,
   }
-  self.last_runtime_class_decl = Some(decorated)
+  self.record_runtime_class_decl(decorated)
   let instance_assigns : Array[@ast.TsStmt] = []
   let has_instance_private = has_instance_private_elements(elements)
   let has_static_private = has_static_private_elements(elements)
@@ -3526,7 +3554,7 @@ fn Parser::parse_class_decl_with_abstract(
     ..runtime_decl,
     decorators: class_decorators,
   }
-  self.last_runtime_class_decl = Some(runtime_decl)
+  self.record_runtime_class_decl(runtime_decl)
   // When the class extends another class, the IIFE desugar below
   // produces a `super(…)` call outside a real class body — V8
   // rejects that as a SyntaxError. Bypass the desugar and emit
@@ -3659,7 +3687,7 @@ fn Parser::parse_class_decl_with_abstract(
       // statics) so `take_last_runtime_class_decl` — used by the module
       // collector — sees the heritage clause. The earlier assignment at the
       // top of this function recorded only the base-less `runtime_decl`.
-      self.last_runtime_class_decl = Some(decorated_with_statics)
+      self.record_runtime_class_decl(decorated_with_statics)
       return NativeClassStmt(decorated_with_statics, ctor_func)
     }
     None => ()

@@ -1,0 +1,16 @@
+{
+  "origin": "ts.mbt — precision guard for the pure-builtin allowlist",
+  "what": "The allowlist's job. `Math.max(acc.largest, v)` and `new Map()` / `seen.set(...)` are name-blind, so an internal accumulator that flows through them stays manglable. Without the allowlist the inverted rule would send `acc` across the boundary and reserve the whole bundle.",
+  "exports": [
+    "summarize"
+  ],
+  "expectKeep": [
+    "set",
+    "get"
+  ],
+  "expectMangle": [
+    "runningSum",
+    "largest"
+  ],
+  "expectStatus": "pass"
+}

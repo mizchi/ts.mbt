@@ -220,17 +220,6 @@ fn merge_interfaces(
 }
 
 ///|
-/// Build a resolver for one self-contained module. Graph-aware callers use
-/// `ingest_type_module` and `ingest_module` directly, while checker benchmarks
-/// use this helper to isolate the cost of the ordinary single-module setup.
-fn Resolver::from_module(module_ : @ast.TsModule) -> Resolver {
-  let r = Resolver::empty()
-  Resolver::ingest_module(r, module_, "")
-  collect_module_value_names(module_, r.declared_value_names)
-  r
-}
-
-///|
 /// Import only type declarations from another ES module. Value declarations
 /// intentionally stay out of `globals`: an embedding must still provide the
 /// concrete bindings it resolved for the current module's runtime imports.
@@ -974,6 +963,53 @@ fn type_contains_typeof(ty : @ast.TsType) -> Bool {
 }
 
 ///|
+/// Parameter types for a class method's callable type, with a defaulted
+/// parameter widened to `T | undefined`.
+///
+/// The parser keeps a default initializer on `param_defaults` and leaves
+/// the annotation alone, so a `Func` built straight off `m.params`
+/// claims `m(n: number = 5)` needs its argument. `new C().m()` was
+/// reported as "expected 1 argument(s), got 0" — while the same default
+/// on a free function or on a constructor was accepted, because those
+/// paths carry rich `TsParam` metadata and this one does not. Widening
+/// is what the parser already does for `n?: number`, so every arity
+/// path that understands `T | undefined` understands this too.
+fn method_callable_param_types(
+  m : @ast.TsClassMethodDecl,
+) -> Array[@ast.TsType] {
+  let out : Array[@ast.TsType] = []
+  for i, p in m.params {
+    let has_default = i < m.param_defaults.length() &&
+      m.param_defaults[i] is Some(_)
+    if has_default && !type_accepts_undefined_param(p.1) {
+      out.push(@ast.TsType::Union([p.1, @ast.TsType::Undefined]))
+    } else {
+      out.push(p.1)
+    }
+  }
+  out
+}
+
+///|
+/// Same for a callable built from rich `TsParam` metadata (an arrow or a
+/// function expression). `param_is_optional` already folds in the
+/// default, the `?` marker and the rest flag; a rest parameter keeps its
+/// own type since arity handles `Rest(_)` directly.
+fn callable_param_types(params : Array[@ast.TsParam]) -> Array[@ast.TsType] {
+  let out : Array[@ast.TsType] = []
+  for p in params {
+    if !p.is_rest &&
+      param_is_optional(p) &&
+      !type_accepts_undefined_param(p.type_) {
+      out.push(@ast.TsType::Union([p.type_, @ast.TsType::Undefined]))
+    } else {
+      out.push(p.type_)
+    }
+  }
+  out
+}
+
+///|
 /// Required-argument count for a parameter list: the index of the first
 /// trailing optional / default / rest param. Used to validate `Call(...)`
 /// arity when the rich signature is available.
@@ -1372,6 +1408,150 @@ fn resolver_eval_mapped_remap(
 }
 
 ///|
+
+///|
+/// `unwrap`, then again inside container layers. `Resolver::unwrap` only
+/// peels the outermost type, which is all most rules need — but the
+/// resolver-free `is_assignable_to` can't resolve a `Named` it finds
+/// nested inside `Array` / `Tuple` / `Rest`, so a comparison of
+/// `I[]` against `{ … }[]` failed even when `I` aliases that exact
+/// shape.
+///
+/// Expansion is all-or-nothing. A recursive alias
+/// (`type A = [string, ...B]; type B = [string, ...A]`) cannot be
+/// expanded to a fixed point, and a *partial* expansion is worse than
+/// none: one side ends up eight levels deep with a `Named` tail while
+/// the other still reads as the alias, and two equivalent types compare
+/// unequal. So when the walk revisits an alias name along one path, or
+/// runs past the depth bound, the whole result falls back to the
+/// original type and the caller behaves as it did before.
+fn Resolver::unwrap_containers(
+  self : Resolver,
+  ty : @ast.TsType,
+) -> @ast.TsType {
+  // Fast path. Only a container layer can hide a `Named` from the
+  // resolver-free comparison, and only a `Named` / `Applied` can resolve
+  // INTO a container. Everything else — every primitive, every object /
+  // struct / function shape — behaves exactly as `unwrap`, so decide
+  // that before allocating anything: this runs on every assignability
+  // diagnostic.
+  match ty {
+    Array(_) | Rest(_) | Tuple(_) | Union(_) | Intersection(_) => ()
+    Named(_) | Applied(_, _) => ()
+    _ => return self.unwrap(ty)
+  }
+  let aborted = [false]
+  let out = self.unwrap_containers_at(ty, 0, [], aborted)
+  if aborted[0] {
+    // Fall back to the plain outer-layer unwrap — exactly what every
+    // caller used before container expansion existed.
+    self.unwrap(ty)
+  } else {
+    out
+  }
+}
+
+///|
+fn Resolver::unwrap_containers_at(
+  self : Resolver,
+  ty : @ast.TsType,
+  depth : Int,
+  seen : Array[String],
+  aborted : Array[Bool],
+) -> @ast.TsType {
+  if depth >= 8 {
+    aborted[0] = true
+    return ty
+  }
+  // Names peeled along this path. A repeat means the alias is
+  // recursive, so the expansion can't finish.
+  let path = match ty {
+    Named(n) | Applied(n, _) => {
+      if seen.contains(n) {
+        aborted[0] = true
+        return ty
+      }
+      let next : Array[String] = []
+      for v in seen {
+        next.push(v)
+      }
+      next.push(n)
+      next
+    }
+    _ => seen
+  }
+  let unwrapped = self.unwrap(ty)
+  match unwrapped {
+    Array(inner) => Array(self.unwrap_element(inner, depth + 1, path, aborted))
+    Rest(inner) => Rest(self.unwrap_element(inner, depth + 1, path, aborted))
+    Tuple(items) => {
+      let out : Array[@ast.TsType] = []
+      for it in items {
+        out.push(self.unwrap_element(it, depth + 1, path, aborted))
+      }
+      Tuple(out)
+    }
+    // A `Named` member of a union / intersection is just as opaque to the
+    // resolver-free comparison as one inside an array:
+    // `type Ext = Base & { to: string }` never matched an object literal
+    // carrying both halves' fields, because `Base` stayed a name.
+    Union(parts) => {
+      let out : Array[@ast.TsType] = []
+      for p in parts {
+        out.push(self.unwrap_element(p, depth + 1, path, aborted))
+      }
+      Union(out)
+    }
+    Intersection(parts) => {
+      let out : Array[@ast.TsType] = []
+      for p in parts {
+        out.push(self.unwrap_element(p, depth + 1, path, aborted))
+      }
+      Intersection(out)
+    }
+    other => other
+  }
+}
+
+///|
+/// An element type inside a container. Same as `unwrap_containers_at`,
+/// plus: a plain interface reference becomes its structural equivalent.
+/// `Resolver::unwrap` deliberately leaves interfaces alone — most rules
+/// want the name — but the resolver-free element comparison can't see
+/// through one, so `interface I { n: number }; const xs: I[] = …`
+/// mismatched against an identical inferred shape.
+///
+/// Only interfaces that ARE exactly their own field list qualify: no
+/// `extends` (inherited members would go missing), no index signature
+/// (unbounded key set), no type parameters (no substitution here). An
+/// interface outside that subset is left as a `Named`, which keeps
+/// today's behaviour rather than risking a new wrong verdict.
+fn Resolver::unwrap_element(
+  self : Resolver,
+  ty : @ast.TsType,
+  depth : Int,
+  seen : Array[String],
+  aborted : Array[Bool],
+) -> @ast.TsType {
+  let unwrapped = self.unwrap_containers_at(ty, depth, seen, aborted)
+  match unwrapped {
+    Named(n) =>
+      match self.interfaces.get(n) {
+        Some(iface) =>
+          if iface.extends_names.is_empty() &&
+            iface.index_signatures.is_empty() &&
+            iface.type_params.is_empty() {
+            Struct(n, iface.fields)
+          } else {
+            unwrapped
+          }
+        None => unwrapped
+      }
+    other => other
+  }
+}
+
+///|
 fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
   let seen : Map[String, Bool] = {}
   let mut cur = ty
@@ -1502,11 +1682,18 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
       // `T[K]` indexed access — resolve via simplify_type first; if still
       // unresolved, try lookup_field when the base is a Named/Applied type.
       IndexedAccess(base, key) => {
-        let simplified = simplify_type(cur)
+        // Resolve the base through the resolver BEFORE simplifying.
+        // `simplify_indexed_access` carries no resolver, so a `Named`
+        // base hits its catch-all and yields `Any` — which then reads as
+        // a fully-modeled receiver with no members, and a legitimate
+        // `Info["dog"].name` was reported as a missing property. With the
+        // base resolved (a mapped type becomes an `Object`, an alias
+        // becomes its body) the simplifier can do its job.
+        let resolved_base = self.unwrap(base)
+        let simplified = simplify_type(IndexedAccess(resolved_base, key))
         match simplified {
-          IndexedAccess(_, _) => {
-            // simplify couldn't resolve it; try resolver-aware field lookup.
-            let resolved_base = self.unwrap(base)
+          IndexedAccess(_, _) =>
+            // Still unresolved: try a resolver-aware field lookup.
             match key {
               Literal(name) =>
                 match self.lookup_field(resolved_base, name) {
@@ -1515,7 +1702,12 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
                 }
               _ => keep_going = false
             }
-          }
+          // `simplify_indexed_access` reports "couldn't resolve" as `Any`.
+          // Keep the original shape in that case: callers distinguish an
+          // unmodeled receiver from a modeled one, and `Any` claims the
+          // latter — which is how `Info["dog"].name` came to be reported
+          // as a missing property.
+          Any if !(resolved_base is Any) => keep_going = false
           _ => cur = simplified
         }
       }
@@ -3010,7 +3202,13 @@ fn global_namespace_method(ns : String, meth : String) -> @ast.TsType? {
           @ast.TsType::Array(@ast.TsType::Tuple([s, any])),
         ),
       )
-    ("Object", "assign") => Some(@ast.TsType::Func([any, any], any))
+    ("Object", "assign") =>
+      Some(
+        @ast.TsType::Func(
+          [any, @ast.TsType::Rest(@ast.TsType::Array(any))],
+          any,
+        ),
+      )
     ("Object", "freeze") => Some(@ast.TsType::Func([any], any))
     ("Object", "isFrozen") => Some(@ast.TsType::Func([any], b))
     ("Object", "create") => Some(@ast.TsType::Func([any], any))
@@ -3046,12 +3244,16 @@ fn global_namespace_method(ns : String, meth : String) -> @ast.TsType? {
     | ("Math", "asinh")
     | ("Math", "acosh")
     | ("Math", "atanh") => Some(@ast.TsType::Func([n], n))
-    ("Math", "pow") | ("Math", "atan2") | ("Math", "hypot") =>
-      Some(@ast.TsType::Func([n, n], n))
-    ("Math", "max") | ("Math", "min") => Some(@ast.TsType::Func([n], n))
+    ("Math", "pow") | ("Math", "atan2") => Some(@ast.TsType::Func([n, n], n))
+    // Variadic: `max(...values: number[])`. Modelled with the same
+    // `Rest(Array(T))` shape the parser produces for a declared rest
+    // parameter, so the arity check accepts any number of arguments
+    // instead of exactly one.
+    ("Math", "max") | ("Math", "min") | ("Math", "hypot") =>
+      Some(@ast.TsType::Func([@ast.TsType::Rest(@ast.TsType::Array(n))], n))
     ("Math", "random") => Some(@ast.TsType::Func([], n))
-    ("Math", "fround") | ("Math", "clz32") | ("Math", "imul") =>
-      Some(@ast.TsType::Func([n], n))
+    ("Math", "imul") => Some(@ast.TsType::Func([n, n], n))
+    ("Math", "fround") | ("Math", "clz32") => Some(@ast.TsType::Func([n], n))
     // Number.*
     ("Number", "isInteger")
     | ("Number", "isSafeInteger")
@@ -3060,16 +3262,29 @@ fn global_namespace_method(ns : String, meth : String) -> @ast.TsType? {
     ("Number", "parseFloat") => Some(@ast.TsType::Func([s], n))
     ("Number", "parseInt") => Some(@ast.TsType::Func([s, n], n))
     // String.* (constructor namespace, not prototype)
-    ("String", "fromCharCode") => Some(@ast.TsType::Func([n], s))
-    ("String", "fromCodePoint") => Some(@ast.TsType::Func([n], s))
+    ("String", "fromCharCode") | ("String", "fromCodePoint") =>
+      Some(@ast.TsType::Func([@ast.TsType::Rest(@ast.TsType::Array(n))], s))
     ("String", "raw") => Some(@ast.TsType::Func([any], s))
     // JSON.*
     ("JSON", "parse") => Some(@ast.TsType::Func([s], any))
     ("JSON", "stringify") => Some(@ast.TsType::Func([any], s))
     // Array.*
     ("Array", "isArray") => Some(@ast.TsType::Func([any], b))
-    ("Array", "of") => Some(@ast.TsType::Func([any], @ast.TsType::Array(any)))
-    ("Array", "from") => Some(@ast.TsType::Func([any], @ast.TsType::Array(any)))
+    // `from(iterable, mapFn?, thisArg?)`.
+    ("Array", "from") =>
+      Some(
+        @ast.TsType::Func(
+          [any, @ast.TsType::Rest(@ast.TsType::Array(any))],
+          @ast.TsType::Array(any),
+        ),
+      )
+    ("Array", "of") =>
+      Some(
+        @ast.TsType::Func(
+          [@ast.TsType::Rest(@ast.TsType::Array(any))],
+          @ast.TsType::Array(any),
+        ),
+      )
     // Boolean
     ("Boolean", "constructor") => Some(@ast.TsType::Func([any], b))
     // Symbol.*
@@ -3078,7 +3293,9 @@ fn global_namespace_method(ns : String, meth : String) -> @ast.TsType? {
     // Date.*
     ("Date", "now") => Some(@ast.TsType::Func([], n))
     ("Date", "parse") => Some(@ast.TsType::Func([s], n))
-    ("Date", "UTC") => Some(@ast.TsType::Func([n], n))
+    // `UTC(year, monthIndex, ...rest)` — up to seven components.
+    ("Date", "UTC") =>
+      Some(@ast.TsType::Func([n, @ast.TsType::Rest(@ast.TsType::Array(n))], n))
     // Promise.*
     ("Promise", "resolve") =>
       Some(@ast.TsType::Func([any], @ast.TsType::Applied("Promise", [any])))
@@ -3099,9 +3316,9 @@ fn global_namespace_method(ns : String, meth : String) -> @ast.TsType? {
         ),
       )
     // console.* — every method accepts any arg list and returns void.
-    // Modelled with a single-arg `Func` so the universally common
-    // `console.log("msg")` call validates; multi-arg calls fall through
-    // to the contextual-typing fallback.
+    // Modelled as a rest parameter (the same `Rest(Array(T))` shape the
+    // parser produces for `...args: T[]`) so `console.log(a, b)` and
+    // the zero-argument `console.groupEnd()` both validate.
     ("console", "log")
     | ("console", "info")
     | ("console", "warn")
@@ -3120,7 +3337,13 @@ fn global_namespace_method(ns : String, meth : String) -> @ast.TsType? {
     | ("console", "timeEnd")
     | ("console", "timeLog")
     | ("console", "assert")
-    | ("console", "dirxml") => Some(@ast.TsType::Func([any], @ast.TsType::Void))
+    | ("console", "dirxml") =>
+      Some(
+        @ast.TsType::Func(
+          [@ast.TsType::Rest(@ast.TsType::Array(any))],
+          @ast.TsType::Void,
+        ),
+      )
     _ => None
   }
 }
@@ -3253,11 +3476,9 @@ fn Resolver::lookup_class_field(
   }
   for m in cls.methods {
     if m.name == field && !m.is_static {
-      let param_types : Array[@ast.TsType] = []
-      for p in m.params {
-        param_types.push(p.1)
-      }
-      return Some(@ast.TsType::Func(param_types, m.return_type))
+      return Some(
+        @ast.TsType::Func(method_callable_param_types(m), m.return_type),
+      )
     }
   }
   for base in cls.base_names {
@@ -3515,13 +3736,18 @@ fn Resolver::lookup_constructor_sig(
             types.push(p.1)
             let is_rest = idx < cls.constructor_param_is_rest.length() &&
               cls.constructor_param_is_rest[idx]
+            let default = if idx < cls.constructor_param_defaults.length() {
+              cls.constructor_param_defaults[idx]
+            } else {
+              None
+            }
             sig.push({
               name: p.0,
               binding: None,
               is_rest,
-              is_optional: false,
+              is_optional: default is Some(_),
               type_: p.1,
-              default: None,
+              default,
             })
           }
           Some((types, sig))
@@ -6659,11 +6885,10 @@ fn infer_expr(
                   }
                   for m in cls.methods {
                     if m.name == name && m.is_static {
-                      let param_types : Array[@ast.TsType] = []
-                      for p in m.params {
-                        param_types.push(p.1)
-                      }
-                      return @ast.TsType::Func(param_types, m.return_type)
+                      return @ast.TsType::Func(
+                        method_callable_param_types(m),
+                        m.return_type,
+                      )
                     }
                   }
                 }
@@ -6715,6 +6940,11 @@ fn infer_expr(
     }
     ObjectLit(entries) => {
       let fields : Array[(@ast.TsType, @ast.TsType)] = []
+      // Set when a spread operand's shape can't be enumerated. The result
+      // then has to stay OPEN: closing it over just the keys we could see
+      // turns every read of a spread-in member into a false
+      // "property does not exist".
+      let mut opaque_spread = false
       for entry in entries {
         // Object spread `{ ...expr }` is encoded by the parser with key
         // "@@spread:N". Infer the spread source type and merge its declared
@@ -6722,22 +6952,29 @@ fn infer_expr(
         // "@@spread:N" key.
         if entry.0.has_prefix("@@spread:") {
           let spread_ty = infer_expr(env, resolver, entry.1)
-          for f in collect_declared_fields(spread_ty, resolver) {
-            fields.push((@ast.TsType::Literal(f.0), f.1))
+          if spread_shape_is_known(spread_ty, resolver) {
+            for f in collect_declared_fields(spread_ty, resolver) {
+              fields.push((@ast.TsType::Literal(f.0), f.1))
+            }
+          } else {
+            opaque_spread = true
           }
         } else {
           let val_ty = infer_expr(env, resolver, entry.1)
           fields.push((@ast.TsType::Literal(entry.0), val_ty))
         }
       }
+      if opaque_spread {
+        // An `[k: string]: any` entry. `lookup_field_core` matches the
+        // literal keys first, so the fields we DID resolve keep their
+        // precise types and only the unknown remainder goes permissive.
+        fields.push((@ast.TsType::String_, @ast.TsType::Any))
+      }
       @ast.TsType::Object(fields)
     }
     ComputedProp(_, _) => @ast.TsType::Any
     ArrowFunc(params, declared_ret, body, is_async) => {
-      let param_types : Array[@ast.TsType] = []
-      for p in params {
-        param_types.push(p.type_)
-      }
+      let param_types = callable_param_types(params)
       // Prefer the explicit return-type annotation when one was supplied;
       // fall back to inferring from the body expression for `(x) => expr`
       // or walking return statements for `(x) => { return expr; }` blocks.
@@ -6752,10 +6989,7 @@ fn infer_expr(
       @ast.TsType::Func(param_types, wrap_async_return(is_async, ret))
     }
     FuncExpr(f) => {
-      let param_types : Array[@ast.TsType] = []
-      for p in f.params {
-        param_types.push(p.type_)
-      }
+      let param_types = callable_param_types(f.params)
       // When no explicit return-type annotation was given, walk the body for
       // return statements — same strategy as ArrowBlock. A generator function
       // returns a `Generator` object, not its `return` value, so calling one
@@ -8151,11 +8385,12 @@ fn check_expr_against(
             }
             for meth in cls.methods {
               if !meth.is_static {
-                let ps : Array[@ast.TsType] = []
-                for prm in meth.params {
-                  ps.push(prm.1)
-                }
-                out.push((meth.name, Func(ps, meth.return_type)))
+                out.push(
+                  (
+                    meth.name,
+                    Func(method_callable_param_types(meth), meth.return_type),
+                  ),
+                )
               }
             }
           }
@@ -8656,9 +8891,13 @@ fn check_expr_against(
     }
   }
   // Unwrap type aliases before assignability check so `type Str = string`
-  // correctly assigns to `string` without a false mismatch.
-  let inferred_u = ctx.resolver.unwrap(inferred)
-  let expected_u = ctx.resolver.unwrap(expected)
+  // correctly assigns to `string` without a false mismatch. Container
+  // layers are unwrapped too: `is_assignable_to` carries no resolver, so
+  // an alias left sitting inside `Array` / `Tuple` never resolves and
+  // `type I = { n: number }; const xs: I[] = [1].map(n => ({ n }))`
+  // reported a mismatch between two identical shapes.
+  let inferred_u = ctx.resolver.unwrap_containers(inferred)
+  let expected_u = ctx.resolver.unwrap_containers(expected)
   // TS2322 / TS2345: a concrete string literal assigned to a template-literal
   // type pattern is an error when the pattern can't produce that literal
   // (`const x: `a${string}` = "hello"`). `is_assignable_to`'s pattern matcher
@@ -10769,11 +11008,7 @@ fn class_static_method_param_types(
       return None
     }
   }
-  let types : Array[@ast.TsType] = []
-  for p in m.params {
-    types.push(p.1)
-  }
-  Some(types)
+  Some(method_callable_param_types(m))
 }
 
 ///|
@@ -11451,6 +11686,36 @@ fn check_object_lit_against_target(
 }
 
 ///|
+/// Can `collect_declared_fields` enumerate this type's members
+/// exhaustively? Only a concrete object shape can — and the answer has to
+/// be conservative, because the caller uses it to decide whether an object
+/// literal's key set is closed.
+///
+/// The case that made this necessary: a module-level `const base = { a: 1 }`
+/// carries no annotation, so inside a function body `base` infers as `Any`,
+/// `collect_declared_fields` returns nothing, and `{ ...base, b: 2 }` closed
+/// over `{ b }` alone — making `merged.a` a false positive on perfectly
+/// legal TypeScript.
+fn spread_shape_is_known(ty : @ast.TsType, resolver : Resolver) -> Bool {
+  match resolver.unwrap(ty) {
+    Object(_) | Struct(_, _) => true
+    // Every member of a union / intersection has to be enumerable for the
+    // combination to be.
+    Union(members) | Intersection(members) => {
+      for m in members {
+        if !spread_shape_is_known(m, resolver) {
+          return false
+        }
+      }
+      members.length() > 0
+    }
+    // A `Named` / `Applied` reference is enumerable exactly when the
+    // resolver actually holds the declaration.
+    _ => collect_declared_fields(ty, resolver).length() > 0
+  }
+}
+
+///|
 /// Collect the (name, type) pairs an object-shaped target exposes, walking
 /// interface `extends` chains. Returns an empty list for opaque shapes
 /// (classes, applied generics, etc.) so callers don't accidentally flag
@@ -11783,10 +12048,35 @@ fn infer_block_return(
   resolver : Resolver,
   block : @ast.TsBlock,
 ) -> @ast.TsType {
+  // Locals declared before the `return` are part of what the return
+  // expression means: `const r = apply(x); return { a, ...r }` has to
+  // know `r`'s type to spread `r`'s fields, and without them the
+  // inferred shape silently lost every spread member.
+  //
+  // The bindings go into the caller's env and are removed again on the
+  // way out. Copying into a child env instead loses the `declared`
+  // slots (`full_snapshot` carries only `vars`), and inference is worse
+  // for it — that cost a conformance false positive. A name the caller
+  // already binds is left alone, so nothing it owns is disturbed.
+  let added : Array[String] = []
   let mut acc : @ast.TsType = @ast.TsType::Undefined
   let mut first = true
   for stmt in block.stmts {
     match stmt {
+      Var(@ast.TsBinding::Ident(name), declared, init)
+      | Let(@ast.TsBinding::Ident(name), declared, init)
+      | Const(@ast.TsBinding::Ident(name), declared, init) =>
+        if env.lookup(name) is None {
+          let ty = if is_checkable(declared) {
+            declared
+          } else {
+            infer_expr(env, resolver, init)
+          }
+          if is_checkable(ty) {
+            env.bind(name, ty)
+            added.push(name)
+          }
+        }
       Return(Some(e)) => {
         let t = infer_expr(env, resolver, e)
         if first {
@@ -11803,6 +12093,10 @@ fn infer_block_return(
         }
       _ => ()
     }
+  }
+  for name in added {
+    let _ = env.vars.remove(name)
+    let _ = env.declared.remove(name)
   }
   if first {
     @ast.TsType::Undefined
@@ -19983,16 +20277,6 @@ pub fn check_module_function_bodies_permissive(
 }
 
 ///|
-/// Body of `check_module_function_bodies` parameterized by the chain of
-/// enclosing ancestor modules. When `outer_modules` is empty this is the
-/// public entry point and we use `Resolver::from_module` (which preserves
-/// `Outer.Inner.Foo` prefixed registration for namespace member access).
-/// For nested namespaces we build a layered resolver instead: ancestors
-/// are ingested first at bare names so inner code can reference
-/// outer-scope types unqualified (the way TypeScript scoping works),
-/// then this module is ingested to shadow on top.
-
-///|
 /// True for the interface-member sentinel keys the parser uses for call /
 /// construct / computed / index signatures, which are not real named members
 /// and may legitimately repeat.
@@ -22366,11 +22650,7 @@ fn check_symbol_index_members(
       } else if meth.accessor == "set" {
         continue
       } else {
-        let ptypes : Array[@ast.TsType] = []
-        for pp in meth.params {
-          ptypes.push(pp.1)
-        }
-        Func(ptypes, ret)
+        Func(method_callable_param_types(meth), ret)
       }
       if is_checkable(member_ty) &&
         is_checkable(idx_value) &&
@@ -26000,6 +26280,14 @@ fn collect_type_dup_issues(
 }
 
 ///|
+/// Body of `check_module_function_bodies` parameterized by the chain of
+/// enclosing ancestor modules. When `outer_modules` is empty this is the
+/// public entry point: the module is ingested at bare names, which
+/// preserves `Outer.Inner.Foo` prefixed registration for namespace member
+/// access. For nested namespaces we build a layered resolver instead —
+/// ancestors are ingested first at bare names so inner code can reference
+/// outer-scope types unqualified (the way TypeScript scoping works), then
+/// this module is ingested to shadow on top.
 fn check_module_function_bodies_layered(
   module_ : @ast.TsModule,
   outer_modules : Array[@ast.TsModule],
@@ -29370,11 +29658,12 @@ fn check_interface_extends_compat(
           out.push((m.name, m.params[0].1))
         }
       } else {
-        let ptypes : Array[@ast.TsType] = []
-        for p in m.params {
-          ptypes.push(p.1)
-        }
-        out.push((m.name, @ast.TsType::Func(ptypes, method_ret(m))))
+        out.push(
+          (
+            m.name,
+            @ast.TsType::Func(method_callable_param_types(m), method_ret(m)),
+          ),
+        )
       }
     }
     out
@@ -29475,12 +29764,11 @@ fn check_interface_extends_compat(
             m.name != "<computed>" &&
             !m.name.has_prefix("__private_brand__") &&
             !m.name.has_prefix("#") {
-            let ptypes : Array[@ast.TsType] = []
-            for p in m.params {
-              ptypes.push(p.1)
-            }
             static_fields.push(
-              (m.name, @ast.TsType::Func(ptypes, m.return_type)),
+              (
+                m.name,
+                @ast.TsType::Func(method_callable_param_types(m), m.return_type),
+              ),
             )
           }
         }

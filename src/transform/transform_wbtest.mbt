@@ -267,3 +267,147 @@ test "transform: mangle does not rename runtime jsx helpers" {
   // `props` got renamed inside the arrow function.
   assert_false(out.js.contains("props.title"))
 }
+
+///|
+/// `let x: T;` has no initializer in the source. The parser records that
+/// as `Var("__ts_no_init__")`, a marker — not an expression — and every
+/// emit path has to drop it. Emitting it produced
+/// `let x = __ts_no_init__`, which throws `ReferenceError` the moment
+/// the line runs, and it was only dropped under `--minify`: plain
+/// `mtsc --bundle` shipped the throw.
+test "emit: an uninitialized declaration has no initializer" {
+  let files : Map[String, String] = {
+    "entry.ts": (
+      #|export function h(a: number): number {
+      #|  let r: number;
+      #|  r = a + 1;
+      #|  return r;
+      #|}
+      #|
+    ),
+  }
+  for minify in [false, true] {
+    let opts = BundleOptions::default().with_minify(minify)
+    match bundle_modules(files, "entry.ts", opts) {
+      Ok(out) => {
+        assert_false(out.js.contains("__ts_no_init__"))
+        assert_true(out.js.contains("let r"))
+      }
+      Err(e) => fail("bundle error: \{e}")
+    }
+  }
+}
+
+///|
+test "emit: an explicit `undefined` initializer survives pretty output" {
+  // The marker is always dropped; `= undefined` is a real expression and
+  // only an optimization, so it stays where bytes do not matter.
+  let files : Map[String, String] = {
+    "entry.ts": "export let v: number | undefined = undefined;\n",
+  }
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => assert_true(out.js.contains("undefined"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+/// A module's boundary is part of the module. The single-file path
+/// emitted only the runtime statements, so `mtsc src/index.ts --out
+/// dist/index.js` — the first command the README shows — produced a file
+/// that referenced its imports without importing them and exported
+/// nothing at all.
+test "transform: single-file output keeps its imports and exports" {
+  let src =
+    #|import { join } from "node:path";
+    #|export const dir = join("a", "b");
+    #|export default function main() { return dir; }
+    #|export { dir as alias };
+    #|export type Only = string;
+    #|
+  for mangle in [false, true] {
+    match transform_source_full(src, JsxConfig::default(), mangle~) {
+      Ok(out) => {
+        assert_true(out.js.contains("import { join } from \"node:path\""))
+        assert_true(out.js.contains("export default main"))
+        assert_true(out.js.contains("dir as alias"))
+        // A type-only export has nothing to point at at runtime.
+        assert_false(out.js.contains("Only"))
+      }
+      Err(e) => fail("transform error: \{e}")
+    }
+  }
+}
+
+///|
+test "transform: a script with no module boundary gains none" {
+  match
+    transform_source_full(
+      "const a = 1;\nconsole.log(a);\n",
+      JsxConfig::default(),
+    ) {
+    Ok(out) => {
+      assert_false(out.js.contains("export"))
+      assert_false(out.js.contains("import"))
+    }
+    Err(e) => fail("transform error: \{e}")
+  }
+}
+
+///|
+/// TypeScript erases an import that is only used as a type, and code
+/// relies on that erasure. `checker.ts` imports the INTERFACE
+/// `SymbolLinks` and then declares
+/// `const SymbolLinks = class implements SymbolLinks {…}` — legal,
+/// because the import is gone by the time the class exists. Emitting the
+/// import verbatim produced two declarations of one name, a SyntaxError
+/// that stopped the whole file loading.
+test "transform: an import the runtime never uses is elided" {
+  let src =
+    #|import { join } from "node:path";
+    #|import type { Stats } from "node:fs";
+    #|import { readFileSync } from "node:fs";
+    #|export const p: string = join("a", "b");
+    #|export function size(s: Stats): number { return s.size; }
+    #|
+  match transform_source_full(src, JsxConfig::default()) {
+    Ok(out) => {
+      // Used as a value: kept.
+      assert_true(out.js.contains("join"))
+      // Used only as a type, and never used at all: both gone.
+      assert_false(out.js.contains("Stats"))
+      assert_false(out.js.contains("readFileSync"))
+    }
+    Err(e) => fail("transform error: \{e}")
+  }
+}
+
+///|
+test "transform: a local declaration wins over an imported name" {
+  // A reference count alone is not enough — the reference belongs to the
+  // local declaration, so keeping the import collides with it.
+  let src =
+    #|import { Links } from "./types";
+    #|const Links = class { constructor() { this.brand = 1; } };
+    #|export function make(): unknown { return new Links(); }
+    #|
+  match transform_source_full(src, JsxConfig::default()) {
+    Ok(out) => {
+      assert_false(out.js.contains("import"))
+      assert_true(out.js.contains("new Links"))
+    }
+    Err(e) => fail("transform error: \{e}")
+  }
+}
+
+///|
+test "transform: a side-effect import survives having no bindings" {
+  match
+    transform_source_full(
+      "import \"./polyfill\";\nexport const a = 1;\n",
+      JsxConfig::default(),
+    ) {
+    Ok(out) => assert_true(out.js.contains("./polyfill"))
+    Err(e) => fail("transform error: \{e}")
+  }
+}

@@ -25,7 +25,11 @@ priv struct DeclEntry {
 /// Drop top-level declarations that no live statement transitively
 /// references. Only run me on a flattened bundle block — sub-blocks
 /// (function bodies, control flow) are left alone.
-pub fn treeshake_block(block : @ast.TsBlock) -> @ast.TsBlock {
+pub fn treeshake_block(
+  block : @ast.TsBlock,
+  roots? : Map[String, Bool] = {},
+  pure_calls? : Map[String, Bool] = {},
+) -> @ast.TsBlock {
   // Flatten fold's multi-declarator Block wrappers (`const a=1, b=2;`
   // is stored as `Block([Const(a), Const(b)])`) back into individual
   // top-level statements so each declarator can be independently
@@ -44,11 +48,15 @@ pub fn treeshake_block(block : @ast.TsBlock) -> @ast.TsBlock {
     stmts: flat_stmts,
     stmt_positions: block.stmt_positions,
   }
-  treeshake_flat_block(flat_block)
+  treeshake_flat_block(flat_block, roots, pure_calls)
 }
 
 ///|
-fn treeshake_flat_block(block : @ast.TsBlock) -> @ast.TsBlock {
+fn treeshake_flat_block(
+  block : @ast.TsBlock,
+  roots : Map[String, Bool],
+  pure_calls : Map[String, Bool],
+) -> @ast.TsBlock {
   // Pass 1: classify every stmt as either a droppable declaration
   // (single name + pure rhs) or a side-effect root. Build a name ->
   // DeclEntry index for the BFS.
@@ -64,7 +72,7 @@ fn treeshake_flat_block(block : @ast.TsBlock) -> @ast.TsBlock {
       Let(@ast.TsBinding::Ident(name), _, rhs)
       | Const(@ast.TsBinding::Ident(name), _, rhs)
       | Var(@ast.TsBinding::Ident(name), _, rhs) =>
-        if is_pure_init(rhs) {
+        if is_pure_init(rhs, pure_calls) {
           let refs : Map[String, Bool] = {}
           collect_var_refs_in_expr(rhs, refs)
           decl_by_name[name] = decls.length()
@@ -134,6 +142,16 @@ fn treeshake_flat_block(block : @ast.TsBlock) -> @ast.TsBlock {
   // root (non-droppable) stmt. Walk the stmt's full expression tree.
   let live : Map[String, Bool] = {}
   let worklist : Array[String] = []
+  // Caller-supplied roots: the names the bundle EXPORTS. Nothing inside
+  // the bundle has to reference an exported binding, so without this
+  // seed `export function pub() {}` looked dead and the emit was left
+  // with an export clause naming a declaration that no longer existed.
+  for name in roots.keys() {
+    if !live.contains(name) {
+      live[name] = true
+      worklist.push(name)
+    }
+  }
   for i, stmt in block.stmts {
     if is_decl[i] {
       continue
@@ -185,7 +203,7 @@ fn treeshake_flat_block(block : @ast.TsBlock) -> @ast.TsBlock {
       // Drop pure-expression statements at the root level — they
       // have no observable effect even though they aren't decls.
       match stmt {
-        Expr(e) => !is_pure_init(e)
+        Expr(e) => !is_pure_init(e, pure_calls)
         _ => true
       }
     }
@@ -200,9 +218,29 @@ fn treeshake_flat_block(block : @ast.TsBlock) -> @ast.TsBlock {
 }
 
 ///|
+
+///|
+fn all_pure_inits(
+  exprs : Array[@ast.TsExpr],
+  pure_calls : Map[String, Bool],
+) -> Bool {
+  for e in exprs {
+    if !is_pure_init(e, pure_calls) {
+      return false
+    }
+  }
+  true
+}
+
+///|
 /// Return `true` when `expr` is statically pure — safe to drop along
 /// with its enclosing declaration if no live reference remains.
-fn is_pure_init(expr : @ast.TsExpr) -> Bool {
+///
+/// `pure_calls` names the bundle-internal functions a purity proof
+/// cleared (see `purity.mbt`). Empty means "trust nothing but syntax",
+/// which is the behaviour every caller had before the proof was wired
+/// in.
+fn is_pure_init(expr : @ast.TsExpr, pure_calls : Map[String, Bool]) -> Bool {
   match expr {
     NumberLit(_)
     | IntLit(_)
@@ -217,7 +255,7 @@ fn is_pure_init(expr : @ast.TsExpr) -> Bool {
     | NativeClassExpr(_, _) => true
     ArrayLit(items) => {
       for e in items {
-        if !is_pure_init(e) {
+        if !is_pure_init(e, pure_calls) {
           return false
         }
       }
@@ -225,23 +263,43 @@ fn is_pure_init(expr : @ast.TsExpr) -> Bool {
     }
     ObjectLit(entries) => {
       for ent in entries {
-        if !is_pure_init(ent.1) {
+        if !is_pure_init(ent.1, pure_calls) {
           return false
         }
       }
       true
     }
-    UnaryOp(_, inner) => is_pure_init(inner)
-    BinOp(_, l, r) => is_pure_init(l) && is_pure_init(r)
-    Cond(c, t, e) => is_pure_init(c) && is_pure_init(t) && is_pure_init(e)
+    UnaryOp(_, inner) => is_pure_init(inner, pure_calls)
+    BinOp(_, l, r) => is_pure_init(l, pure_calls) && is_pure_init(r, pure_calls)
+    Cond(c, t, e) =>
+      is_pure_init(c, pure_calls) &&
+      is_pure_init(t, pure_calls) &&
+      is_pure_init(e, pure_calls)
     // `/* @__PURE__ */ f(...)` — the user asserted purity, so
     // treeshake can drop the binding when the result is unused.
     PureCall(_) => true
+    // Same conclusion, reached by proof instead of by annotation:
+    // `pure_calls` holds the bundle-internal functions
+    // `analyze_purity` showed write nothing outside their own scope
+    // and call nothing impure, transitively. A call to one of those
+    // whose result nobody reads is as droppable as a literal. The
+    // arguments still have to be pure in their own right — the callee
+    // being harmless says nothing about `f(sideEffect())`.
+    Call(callee, args) =>
+      pure_calls.contains(callee) && all_pure_inits(args, pure_calls)
+    CallExpr(@ast.TsExpr::Var(callee), args) =>
+      pure_calls.contains(callee) && all_pure_inits(args, pure_calls)
+    // An effect-free host static (`Math.max(a, b)`, `Object.keys(o)`).
+    // The table is per-member and excludes every mutator; see
+    // `is_effect_free_static_call`.
+    MethodCall(@ast.TsExpr::Var(ns), meth, args) =>
+      is_effect_free_static_call(ns, meth, args.length()) &&
+      all_pure_inits(args, pure_calls)
     // Template literals are pure when every interpolated expression
     // is pure (the tag-less form just concatenates strings).
     TemplateLiteral(_, exprs) => {
       for e in exprs {
-        if !is_pure_init(e) {
+        if !is_pure_init(e, pure_calls) {
           return false
         }
       }
@@ -252,9 +310,9 @@ fn is_pure_init(expr : @ast.TsExpr) -> Bool {
     As(inner, _)
     | Satisfies(inner, _)
     | NonNull(inner)
-    | OptionalChain(inner) => is_pure_init(inner)
+    | OptionalChain(inner) => is_pure_init(inner, pure_calls)
     // Spread of a pure value is itself pure (used in array literals).
-    Spread(inner) => is_pure_init(inner)
+    Spread(inner) => is_pure_init(inner, pure_calls)
     _ => false
   }
 }

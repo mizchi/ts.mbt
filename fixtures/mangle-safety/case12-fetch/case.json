@@ -1,0 +1,16 @@
+{
+  "origin": "packelyze fixtures/case12-fetch",
+  "what": "Every fetch shape, including a payload serialized into the request body.",
+  "exports": [],
+  "expectKeep": [
+    "key1",
+    "key2",
+    "method",
+    "headers",
+    "body",
+    "ok",
+    "status",
+    "text"
+  ],
+  "expectStatus": "pass"
+}

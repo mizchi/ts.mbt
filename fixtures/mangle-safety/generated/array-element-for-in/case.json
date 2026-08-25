@@ -1,0 +1,17 @@
+{
+  "origin": "generated — scripts/generate_mangle_cases.mjs",
+  "generated": true,
+  "what": "An object inside an array that is enumerated with `for-in`. Observation depth direct, so the expectation is derived, not authored.",
+  "exports": [
+    "seen",
+    "total"
+  ],
+  "expectKeep": [],
+  "expectMangle": [
+    "omegaCtl",
+    "alphaTop",
+    "alphaWrap",
+    "alphaDeep"
+  ],
+  "expectStatus": "pass"
+}

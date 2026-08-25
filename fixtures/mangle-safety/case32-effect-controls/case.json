@@ -1,0 +1,14 @@
+{
+  "origin": "ts.mbt — inferred-purity DCE (negative controls)",
+  "what": "`Object.assign` mutates its target and `Array.from(xs, fn)` invokes its mapper. A per-namespace \"Object and Array are pure\" table drops both and makes `record` look pure, which compiles `out` to 0 instead of 9.",
+  "mtscArgs": [
+    "--treeshake"
+  ],
+  "exports": [
+    "out"
+  ],
+  "expectKeep": [
+    "hits"
+  ],
+  "expectStatus": "pass"
+}

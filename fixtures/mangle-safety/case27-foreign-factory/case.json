@@ -1,0 +1,19 @@
+{
+  "origin": "ts.mbt — regression for the inverted sink rule",
+  "what": "A value handed back by a foreign factory. `client` is a bundle-local binding, so a call on it looked internal; the body of `transmit` belongs to the other package, and the argument's keys are that package's ABI.",
+  "externals": [
+    "ext-net"
+  ],
+  "stubs": {
+    "ext-net": "export function createClient() {\n  return {\n    transmit: (record) => {\n      console.log(\"transmit\", record.recordId, record.noteText);\n      return record.noteText + \":\" + record.recordId;\n    },\n  };\n}\n"
+  },
+  "exports": [
+    "send"
+  ],
+  "expectKeep": [
+    "transmit",
+    "recordId",
+    "noteText"
+  ],
+  "expectStatus": "pass"
+}

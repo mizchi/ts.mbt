@@ -62,10 +62,12 @@ fn collect_read_property_names_stmt(
       collect_read_property_names_expr(idx, out)
       collect_read_property_names_expr(v, out)
     }
-    PropAssign(t, name, v) => {
-      // `obj.x = …` writes to `x`, but it also makes `x` a
-      // potentially-observable name; keep it reserved.
-      out[name] = true
+    PropAssign(t, _name, v) => {
+      // A WRITE is not a read. `this.cache = …` with nothing ever
+      // reading `cache` is a dead field, and the write is what makes it
+      // exist. Whether the name is nonetheless observable — because the
+      // instance is serialized, enumerated, or handed out — is the
+      // escape analysis's answer, and it arrives in `reserved`.
       collect_read_property_names_expr(t, out)
       collect_read_property_names_expr(v, out)
     }
@@ -196,8 +198,8 @@ fn collect_read_property_names_expr(
         collect_read_property_names_expr(a, out)
       }
     }
-    PropAssignExpr(recv, name, v) => {
-      out[name] = true
+    PropAssignExpr(recv, _name, v) => {
+      // Same as the statement form: a write is not a read.
       collect_read_property_names_expr(recv, out)
       collect_read_property_names_expr(v, out)
     }
@@ -228,6 +230,13 @@ fn collect_read_property_names_expr(
       for a in args {
         collect_read_property_names_expr(a, out)
       }
+    }
+    // `"k" in obj` asks about the property named by the string. Dropping
+    // `k` from the object flips the answer, and the operator carries no
+    // `PropAccess` for the ordinary read scan to see.
+    BinOp(In, @ast.TsExpr::StringLit(k), r) => {
+      out[k] = true
+      collect_read_property_names_expr(r, out)
     }
     BinOp(_, l, r) => {
       collect_read_property_names_expr(l, out)
@@ -523,10 +532,56 @@ fn drop_dead_props_block(
   read_props : Map[String, Bool],
 ) -> @ast.TsBlock {
   let stmts : Array[@ast.TsStmt] = []
-  for s in block.stmts {
+  let positions : Array[Int] = []
+  let has_positions = block.stmt_positions.length() == block.stmts.length()
+  for i, s in block.stmts {
+    if is_dead_field_write(s, reserved, read_props) {
+      continue
+    }
     stmts.push(drop_dead_props_stmt(s, reserved, read_props))
+    if has_positions {
+      positions.push(block.stmt_positions[i])
+    }
   }
-  { stmts, stmt_positions: block.stmt_positions }
+  {
+    stmts,
+    stmt_positions: if has_positions {
+      positions
+    } else {
+      block.stmt_positions
+    },
+  }
+}
+
+///|
+/// Is this statement a write to a property nobody reads and nobody can
+/// observe?
+///
+/// `this.slot = 1` in a constructor is what puts `slot` on the instance.
+/// When no `obj.slot` read exists anywhere in the bundle and `slot` isn't
+/// in the escape set — so no `Object.keys`, no `JSON.stringify`, no
+/// `in` probe, no export surface reaches it — the assignment's only
+/// effect is the field's existence, which nothing can see.
+///
+/// The value still has to be pure: `this.slot = register()` must keep
+/// running even when `slot` is dead.
+fn is_dead_field_write(
+  stmt : @ast.TsStmt,
+  reserved : Map[String, Bool],
+  read_props : Map[String, Bool],
+) -> Bool {
+  // Both spellings: the parser produces a `PropAssign` statement for
+  // some paths and an `Expr(PropAssignExpr(...))` for others, and a
+  // constructor's field writes can arrive as a mix of the two.
+  let (name, value) = match stmt {
+    PropAssign(_, n, v) => (n, v)
+    Expr(@ast.TsExpr::PropAssignExpr(_, n, v)) => (n, v)
+    _ => return false
+  }
+  !reserved.contains(name) &&
+  !read_props.contains(name) &&
+  !reserved.contains("*") &&
+  is_value_pure(value)
 }
 
 ///|
@@ -540,8 +595,12 @@ fn drop_dead_props_expr(
       let new_entries : Array[(String, @ast.TsExpr)] = []
       for ent in entries {
         let key = ent.0
-        if key == "..." {
-          // Spread — keep it.
+        if is_opaque_object_key(key) {
+          // Not a property name at all: an object spread
+          // (`("...", Spread(e))` or `("@@spread:N", e)`) or a computed
+          // key (`("@@computed:N", ComputedProp(k, v))`). Dropping the
+          // entry deletes the spread, and there is no "is this key
+          // read?" question to ask about it.
           new_entries.push(
             (key, drop_dead_props_expr(ent.1, reserved, read_props)),
           )
@@ -796,4 +855,102 @@ fn is_value_pure(expr : @ast.TsExpr) -> Bool {
     PropAccess(recv, _) => is_value_pure(recv)
     _ => false
   }
+}
+
+///|
+/// Why each `this.x = …` / `obj.x = …` write survived the dead-field
+/// rule. Feeds `--explain-mangle`; the ordinary path never calls it.
+pub fn explain_dead_fields(
+  block : @ast.TsBlock,
+  reserved : Map[String, Bool],
+) -> Array[String] {
+  let read_props : Map[String, Bool] = {}
+  collect_read_property_names_block(block, read_props)
+  let out : Array[String] = []
+  let seen : Map[String, Bool] = {}
+  fn note(reason : String) -> Unit {
+    if !seen.contains(reason) {
+      seen[reason] = true
+      out.push(reason)
+    }
+  }
+
+  fn consider(name : String, value : @ast.TsExpr) -> Unit {
+    if reserved.contains("*") {
+      note(
+        "every field: the escape analysis reserved the wildcard, which suppresses this pass along with property mangling",
+      )
+    } else if reserved.contains(name) {
+      note(
+        "`" +
+        name +
+        "`: the name is in the escape set, so something outside can see the field",
+      )
+    } else if read_props.contains(name) {
+      note("`" + name + "`: something reads it")
+    } else if !is_value_pure(value) {
+      note(
+        "`" +
+        name +
+        "`: the assigned value has a side effect, which has to keep happening even though the field is dead",
+      )
+    }
+  }
+
+  fn walk(b : @ast.TsBlock) -> Unit {
+    for s in b.stmts {
+      match s {
+        PropAssign(_, name, value) => consider(name, value)
+        Expr(@ast.TsExpr::PropAssignExpr(_, name, value)) =>
+          consider(name, value)
+        Block(inner) => walk(inner)
+        If(_, t, e) => {
+          walk(t)
+          match e {
+            Some(eb) => walk(eb)
+            None => ()
+          }
+        }
+        While(_, inner)
+        | DoWhile(_, inner)
+        | With(_, inner)
+        | For(_, _, _, inner)
+        | ForOf(_, _, _, _, inner)
+        | ForAwaitOf(_, _, _, _, inner)
+        | ForIn(_, _, _, _, inner) => walk(inner)
+        Try(bb, _, c, f) => {
+          walk(bb)
+          match c {
+            Some(cb) => walk(cb)
+            None => ()
+          }
+          match f {
+            Some(fb) => walk(fb)
+            None => ()
+          }
+        }
+        Switch(_, cases) =>
+          for c in cases {
+            walk(c.body)
+          }
+        Label(_, inner) => walk({ stmts: [inner], stmt_positions: [] })
+        NativeClassStmt(decl, ctor) => {
+          match ctor {
+            Some(f) => walk(f.body)
+            None => ()
+          }
+          for m in decl.methods {
+            match m.body {
+              Some(mb) => walk(mb)
+              None => ()
+            }
+          }
+        }
+        _ => ()
+      }
+    }
+  }
+
+  walk(block)
+  out
 }

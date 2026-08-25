@@ -1,0 +1,20 @@
+{
+  "origin": "packelyze fixtures/case01-basic",
+  "what": "Re-export from a sibling module, an internal helper type, and a value read out of another module.",
+  "externals": [
+    "node:path"
+  ],
+  "exports": [
+    "ext",
+    "x",
+    "subItem"
+  ],
+  "expectKeep": [
+    "pub"
+  ],
+  "expectMangle": [
+    "local",
+    "subLocal"
+  ],
+  "expectStatus": "pass"
+}

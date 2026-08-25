@@ -1,0 +1,13 @@
+{
+  "origin": "ts.mbt — pattern defaults outside the body",
+  "what": "A destructured parameter's default and a catch clause's pattern default reference outer names from outside the function body. The reference walk that reserves short names only looked at the body, so the pattern's binder took the same letter as the name its default reads — `{n: a = a}`, a TDZ error under plain --mangle.",
+  "exports": [
+    "report"
+  ],
+  "expectKeep": [
+    "param",
+    "paramDefaulted",
+    "caught"
+  ],
+  "expectStatus": "pass"
+}

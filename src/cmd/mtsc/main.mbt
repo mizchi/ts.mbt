@@ -62,7 +62,27 @@ priv struct MtscOptions {
   externals : Map[String, Bool]
   mut mangle : Bool
   mut mangle_properties : Bool
+  // `--explain-mangle`: print why each minify decision went the way it
+  // did instead of only doing it. Implies the mangle passes, since a
+  // decision has to be made before it can be explained.
+  mut explain_mangle : Bool
   mut mangle_properties_shape_color : Bool
+  // `--no-check`: skip type-checking. The gate exists because a type
+  // error usually means the program is wrong, but it also makes the
+  // whole pipeline unreachable for input that is not TypeScript in the
+  // first place — a published `.js` bundle, where an object literal
+  // grows properties at runtime and every such site reads as an error.
+  //
+  // It SKIPS rather than demotes. The checker is ~95% of a large
+  // compile (29.4 s of 30.6 s on `checker.ts`), and once the caller has
+  // said diagnostics must not stop the emit, running it buys output
+  // nobody acts on. `tscheck` is the way to see diagnostics without an
+  // abort.
+  mut no_check : Bool
+  // `--timing`: report wall time per pipeline phase. The compile is
+  // superlinear in input size and a twenty-pass pipeline gives a guess
+  // nothing to stand on, so the passes report instead.
+  mut timing : Bool
   mut sourcemap : Bool
   mut jsx_runtime : String?
   mut jsx_import_source : String?
@@ -86,7 +106,10 @@ fn mtsc_options_new() -> MtscOptions {
     externals: {},
     mangle: false,
     mangle_properties: false,
+    explain_mangle: false,
     mangle_properties_shape_color: false,
+    no_check: false,
+    timing: false,
     sourcemap: false,
     jsx_runtime: None,
     jsx_import_source: None,
@@ -132,9 +155,20 @@ fn mtsc_print_usage() -> Unit {
     "  --warn-impure-getters     Warn when a class getter body has a direct side effect (assign, call, mutation)",
   )
   println("  --mangle                  Rename non-exported local identifiers")
-  println("  --mangle-properties       Also rename non-reserved property keys")
+  println(
+    "  --mangle-properties       Also rename non-reserved property keys (implies --bundle)",
+  )
+  println(
+    "  --explain-mangle          Report why each minify decision went the way it did",
+  )
   println(
     "  --mangle-properties-shape-color  Use shape-coloring property rename (opt-in, experimental)",
+  )
+  println(
+    "  --no-check                Skip type-checking entirely (non-TypeScript input; the check is ~95% of a large compile)",
+  )
+  println(
+    "  --timing                  Report wall time per pipeline phase (implies --bundle)",
   )
   println("  --sourcemap               Emit <out>.map alongside the JS output")
   println("  --jsx-runtime <mode>      `automatic` (default) or `classic`")
@@ -193,14 +227,35 @@ fn mtsc_parse_args(argv : Array[String]) -> Result[MtscOptions, String] {
         continue
       }
       "--mangle" => opts.mangle = true
+      // Property mangling implies `--bundle`, the way `--treeshake` and
+      // `--fold` already do — and for a stronger reason than they have.
+      // The escape analysis (both doors, the wildcard, the whole safety
+      // story) lives in `bundle_modules`. The single-file path has none
+      // of it, so `--mangle-properties` there renamed whatever it liked,
+      // including a CJS module's `exports.foo` and the keys of an
+      // exported object. A flag whose only safe form is one path should
+      // select that path rather than trust the user to.
       "--mangle-properties" => {
         opts.mangle = true
         opts.mangle_properties = true
+        opts.bundle = true
+      }
+      "--explain-mangle" => {
+        opts.mangle = true
+        opts.mangle_properties = true
+        opts.explain_mangle = true
+        opts.bundle = true
+      }
+      "--no-check" => opts.no_check = true
+      "--timing" => {
+        opts.timing = true
+        opts.bundle = true
       }
       "--mangle-properties-shape-color" => {
         opts.mangle = true
         opts.mangle_properties = true
         opts.mangle_properties_shape_color = true
+        opts.bundle = true
       }
       "--sourcemap" => opts.sourcemap = true
       "--jsx-runtime" => {
@@ -371,6 +426,40 @@ fn mtsc_normalize(path : String) -> String {
 }
 
 ///|
+/// An empty `TsModule`, for the paths that need a value but no
+/// declarations — a type-side parse that failed, or one that was
+/// skipped because nothing downstream reads it.
+fn mtsc_empty_module() -> @ast.TsModule {
+  {
+    funcs: [],
+    interfaces: [],
+    type_aliases: [],
+    imports: [],
+    values: [],
+    classes: [],
+    namespaces: [],
+    enums: [],
+    module_augmentations: [],
+    strict_property_initialization: true,
+    no_implicit_any: true,
+    strict_null_checks: true,
+    use_define_for_class_fields: false,
+    deprecated_compiler_options: [],
+    parameter_property_misuses: [],
+    strict_mode_misuses: [],
+    invalid_decorator_uses: [],
+    grammar_misuses: [],
+    imported_binding_names: [],
+    import_module_specs: [],
+    class_base_type_args: [],
+    param_optional_initializer_misuses: [],
+    interface_member_modifier_misuses: [],
+    class_dup_diagnostics: [],
+    top_level_stmts: [],
+  }
+}
+
+///|
 /// Walk imports starting from `entry_path` and read every reachable
 /// file from disk into `files`. Only relative imports (`./x`, `../y`)
 /// and rooted paths are followed — bare specifiers (`react`, `@scope/x`)
@@ -381,6 +470,21 @@ async fn mtsc_load_bundle_files(
   aliases : Map[String, String],
   externals : Map[String, Bool],
   type_props : Map[String, Bool],
+  // Whether anything downstream reads `type_props`. Only
+  // `--reserve-typed-props` does, and harvesting it costs a full second
+  // parse of every file in the graph — 0.9 s of the 2.1 s read+parse
+  // phase on 9 MB of `typescript.js`. Skip it when nobody asked.
+  want_type_props : Bool,
+  // Every block this walk parses, keyed the way `files` is, so the
+  // bundler can reuse them instead of parsing the same sources again.
+  // The walk has to parse each file to find its imports, and the
+  // bundler has to parse each file to build the module graph — the same
+  // work, twice, for what is 78-94% of a bundle's wall time.
+  parsed : Map[String, @ast.TsModuleBlock],
+  // Import / re-export edges discovered along the way, in the shape the
+  // graph checker wants: resolution is the CLI's job, and the checker
+  // needs the edges to resolve a type declared in another module.
+  edges : Array[@mtsc_core.MtscModuleEdge],
 ) -> Result[Unit, String] {
   // Sequential DFS over the import graph. moonbitlang/async runs on
   // a cooperative single-threaded scheduler, so spawning per-file
@@ -394,15 +498,45 @@ async fn mtsc_load_bundle_files(
       continue
     }
     let resolved = mtsc_resolve_existing(disk_path)
+    // A relative import that names no file on disk is not a reason to
+    // fail the compile. It is what a build-generated module looks like
+    // from a source checkout: TypeScript's own `checker.ts` imports
+    // `./_namespaces/ts.performance.js`, which its build produces and
+    // the repository does not carry. Treat it the way a bare specifier
+    // is treated — leave the import verbatim and move on. The entry
+    // file itself is exempt: nothing to compile if that is missing.
+    if disk_path != entry_path && !mtsc_file_exists(resolved) {
+      println(
+        "mtsc: unresolved import \{disk_path} — left as an external import",
+      )
+      continue
+    }
     let source = @fs.read_file(resolved).text() catch {
       e => return Err("read error \{resolved}: \{e}")
     }
     files[resolved] = source
-    if disk_path != resolved && !files.contains(disk_path) {
+    // The extension-less form is also keyed, so the bundler can look up
+    // the specifier a module actually spelled (`./sub` -> `/dir/sub`).
+    // But ONLY when resolution just appended an extension. When it went
+    // through `<dir>/index.ts`, the alias names a DIRECTORY, and a
+    // module keyed by a directory path resolves its own relative
+    // imports one level too high: `src/router/trie-router` +
+    // `./router` becomes `src/router/router`. Hono hits this on its
+    // first router import.
+    if disk_path != resolved &&
+      resolved.has_prefix(disk_path + ".") &&
+      !files.contains(disk_path) {
       files[disk_path] = source
     }
     let mb = @parser.Parser::from_source(source).parse_module_block() catch {
       e => return Err("parse \{resolved}: \{e}")
+    }
+    // Keyed exactly like `files` above, including the extension-less
+    // alias, because the bundler looks a module up by whichever form
+    // the importing specifier spelled.
+    parsed[resolved] = mb
+    if disk_path != resolved && resolved.has_prefix(disk_path + ".") {
+      parsed[disk_path] = mb
     }
     // Second-pass parse for the TYPE side. The block parser above
     // only sees runtime statements; interfaces / type aliases /
@@ -411,50 +545,43 @@ async fn mtsc_load_bundle_files(
     // declarations. They get added to the bundler's reserved-prop
     // set so the property mangler never renames a name that's
     // part of any module's public type surface.
-    let module_ = @parser.Parser::from_source(source).parse_module() catch {
-      _ =>
-        @ast.TsModule::{
-          funcs: [],
-          interfaces: [],
-          type_aliases: [],
-          imports: [],
-          values: [],
-          classes: [],
-          namespaces: [],
-          enums: [],
-          module_augmentations: [],
-          strict_property_initialization: true,
-          no_implicit_any: true,
-          strict_null_checks: true,
-          use_define_for_class_fields: false,
-          deprecated_compiler_options: [],
-          parameter_property_misuses: [],
-          strict_mode_misuses: [],
-          invalid_decorator_uses: [],
-          grammar_misuses: [],
-          imported_binding_names: [],
-          import_module_specs: [],
-          class_base_type_args: [],
-          param_optional_initializer_misuses: [],
-          interface_member_modifier_misuses: [],
-          class_dup_diagnostics: [],
-          top_level_stmts: [],
-        }
+    let module_ = if want_type_props {
+      @parser.Parser::from_source(source).parse_module() catch {
+        _ => mtsc_empty_module()
+      }
+    } else {
+      mtsc_empty_module()
     }
-    for n in @transform.type_declared_property_names(module_) {
-      type_props[n] = true
+    if want_type_props {
+      for n in @transform.type_declared_property_names(module_) {
+        type_props[n] = true
+      }
     }
     for imp in mb.imports {
-      if imp.type_only {
+      // A type-only import contributes no runtime code, so the bundler
+      // skips it — but the CHECKER needs the module that declares the
+      // type, or `import type { Loc } from "./types"` leaves `Loc`
+      // unresolvable and identical shapes read as mismatches. Load and
+      // edge relative type-only imports; a bare one would drag a whole
+      // package's declarations in, so those stay skipped.
+      let spec = imp.module_spec
+      if imp.type_only &&
+        !(spec.has_prefix("./") ||
+        spec.has_prefix("../") ||
+        spec.has_prefix("/")) {
         continue
       }
-      let spec = imp.module_spec
       if spec.has_prefix("./") || spec.has_prefix("../") || spec.has_prefix("/") {
         let combined = if spec.has_prefix("/") {
           mtsc_normalize(spec)
         } else {
           mtsc_normalize(mtsc_join_path(mtsc_dirname(resolved), spec))
         }
+        edges.push({
+          importerPath: resolved,
+          moduleSpecifier: spec,
+          targetPath: mtsc_resolve_existing(combined),
+        })
         queue.push(combined)
         continue
       }
@@ -467,6 +594,11 @@ async fn mtsc_load_bundle_files(
       match @parser.resolve_runtime_module_specifier(resolved, spec) {
         Some(found) => {
           aliases[spec] = found
+          edges.push({
+            importerPath: resolved,
+            moduleSpecifier: spec,
+            targetPath: found,
+          })
           queue.push(found)
         }
         None => ()
@@ -475,16 +607,25 @@ async fn mtsc_load_bundle_files(
     // Re-exports (`export * from "./a"`, `export { X } from "./a"`)
     // also pull `./a` into the bundle. Mirror the import loop.
     for re in mb.reexports {
-      if re.type_only {
+      // Same reasoning as the type-only import above.
+      let spec = re.module_spec
+      if re.type_only &&
+        !(spec.has_prefix("./") ||
+        spec.has_prefix("../") ||
+        spec.has_prefix("/")) {
         continue
       }
-      let spec = re.module_spec
       if spec.has_prefix("./") || spec.has_prefix("../") || spec.has_prefix("/") {
         let combined = if spec.has_prefix("/") {
           mtsc_normalize(spec)
         } else {
           mtsc_normalize(mtsc_join_path(mtsc_dirname(resolved), spec))
         }
+        edges.push({
+          importerPath: resolved,
+          moduleSpecifier: spec,
+          targetPath: mtsc_resolve_existing(combined),
+        })
         queue.push(combined)
         continue
       }
@@ -497,30 +638,118 @@ async fn mtsc_load_bundle_files(
       match @parser.resolve_runtime_module_specifier(resolved, spec) {
         Some(found) => {
           aliases[spec] = found
+          edges.push({
+            importerPath: resolved,
+            moduleSpecifier: spec,
+            targetPath: found,
+          })
           queue.push(found)
         }
         None => ()
       }
     }
   }
+  // Ambient declaration files (`declare const MyGlobal: …`) belong to the
+  // program even though nothing imports them — that is the whole point of
+  // an ambient declaration. `tsc` picks them up through tsconfig's
+  // `include`; with no tsconfig to read, take the `.d.ts` files sitting in
+  // the entry's own directory, which is where the `env.d.ts` /
+  // `globals.d.ts` convention puts them.
+  for ambient in mtsc_sibling_declaration_files(entry_path) {
+    if files.contains(ambient) {
+      continue
+    }
+    let source = @fs.read_file(ambient).text() catch {
+      // A directory read that fails is not fatal here: the file is
+      // supplementary, not part of the module graph.
+      _ => continue
+    }
+    files[ambient] = source
+    let parsed = try @parser.Parser::from_source(source).parse_module() catch {
+      e => Err(e)
+    } noraise {
+      m => Ok(m)
+    }
+    match parsed {
+      Ok(module_) =>
+        for n in @transform.type_declared_property_names(module_) {
+          type_props[n] = true
+        }
+      Err(_) => ()
+    }
+  }
   Ok(())
 }
 
 ///|
+/// `.d.ts` files in the same directory as `entry_path`, sorted for a
+/// deterministic program. Nested directories are not scanned: an ambient
+/// file deeper in the tree belongs to whatever entry sits next to it.
+async fn mtsc_sibling_declaration_files(entry_path : String) -> Array[String] {
+  let dir = mtsc_dirname(entry_path)
+  let names = @fs.readdir(dir, sort=true) catch { _ => return [] }
+  let out : Array[String] = []
+  for name in names {
+    if name.has_suffix(".d.ts") {
+      out.push(mtsc_normalize(mtsc_join_path(dir, name)))
+    }
+  }
+  out
+}
+
+///|
+/// The TypeScript files a JS-spelled specifier may actually name.
+/// `./x.js` -> `./x.ts`, `./x.tsx`, `./x.d.ts`; `./x.mjs` -> `./x.mts`;
+/// `./x.cjs` -> `./x.cts`. Empty when the path does not end in a JS
+/// extension, so the ordinary extension search runs unchanged.
+fn mtsc_ts_equivalents(base : String) -> Array[String] {
+  for
+    pair in [
+      (".js", [".ts", ".tsx", ".d.ts"]),
+      (".mjs", [".mts", ".d.mts"]),
+      (".cjs", [".cts", ".d.cts"]),
+    ] {
+    if base.has_suffix(pair.0) {
+      let stem = base[0:base.length() - pair.0.length()].to_owned()
+      let out : Array[String] = []
+      for ext in pair.1 {
+        out.push(stem + ext)
+      }
+      return out
+    }
+  }
+  []
+}
+
+///|
 async fn mtsc_resolve_existing(base : String) -> String {
-  if mtsc_path_exists(base) {
+  if mtsc_file_exists(base) {
     return base
   }
-  let exts = [".ts", ".tsx", ".js", ".mjs", ".jsx"]
+  // A specifier that spells `.js` may name a `.ts` file. That is not a
+  // quirk — it is what TypeScript's `node16` / `nodenext` / `bundler`
+  // resolution prescribes, so a modern TS codebase writes
+  // `import … from "./external.js"` next to `external.ts`. Without this
+  // rule the whole class of TypeScript-source targets is unreachable:
+  // zod, and TypeScript's own compiler (`./_namespaces/ts.js`), both
+  // fail on their first import.
+  for cand in mtsc_ts_equivalents(base) {
+    if mtsc_file_exists(cand) {
+      return cand
+    }
+  }
+  // `.d.ts` is in the list because a declaration-only module is a
+  // legitimate target of `import type { X } from "./types"`.
+  let exts = [".ts", ".tsx", ".d.ts", ".js", ".mjs", ".jsx"]
   for ext in exts {
     let cand = base + ext
-    if mtsc_path_exists(cand) {
+    if mtsc_file_exists(cand) {
       return cand
     }
   }
   for ext in exts {
     let cand = base + "/index" + ext
-    if mtsc_path_exists(cand) {
+    if mtsc_file_exists(cand) {
       return cand
     }
   }
@@ -530,6 +759,19 @@ async fn mtsc_resolve_existing(base : String) -> String {
 ///|
 async fn mtsc_path_exists(path : String) -> Bool {
   @fs.exists(path)
+}
+
+///|
+/// A path that names a readable FILE. `@fs.exists` also answers `true`
+/// for a directory, and a directory is not a module: `import "./client"`
+/// next to a `client/` directory used to resolve to the directory
+/// itself, and the read then failed with "Is a directory" instead of
+/// falling through to `client/index.ts`.
+async fn mtsc_file_exists(path : String) -> Bool {
+  if !@fs.exists(path) {
+    return false
+  }
+  (@fs.kind(path) catch { _ => return false }) is Regular
 }
 
 ///|
@@ -560,6 +802,68 @@ fn mtsc_typecheck_source(source : String, path : String) -> Bool {
     println("mtsc: type error in \{path} [\{issue.path}]: \{issue.message}")
   }
   false
+}
+
+///|
+/// Print checker diagnostics for a whole resolved module graph and
+/// return whether it is clean.
+///
+/// Only files that look like real modules are handed over: the loader
+/// keys `files` by both the resolved path and the extension-less form a
+/// specifier spelled (`./sub` -> `/dir/sub`), and passing the same
+/// source twice would double every diagnostic.
+fn mtsc_typecheck_graph(
+  files : Map[String, String],
+  edges : Array[@mtsc_core.MtscModuleEdge],
+) -> Bool {
+  let modules : Array[@mtsc_core.MtscModuleSource] = []
+  for path in files.keys() {
+    if !mtsc_is_module_path(path) {
+      continue
+    }
+    match files.get(path) {
+      Some(source) =>
+        modules.push({
+          path,
+          source,
+          allowJsx: path.has_suffix(".tsx") || path.has_suffix(".jsx"),
+        })
+      None => ()
+    }
+  }
+  let reported : Array[@mtsc_core.MtscGraphIssue] = []
+  for issue in @mtsc_core.collect_module_graph_issues({ modules, edges }) {
+    // Import-resolution diagnostics are dropped here. They are part of
+    // the stricter contract the Vite integration wants, but this CLI
+    // cannot tell a type-only use of a value-form import
+    // (`import { LocalObj } from "./types"` where `LocalObj` is a type
+    // alias — legal TypeScript) from a genuinely missing export, and
+    // reporting the first would reject valid programs.
+    if issue.path == "import" {
+      continue
+    }
+    reported.push(issue)
+  }
+  if reported.length() == 0 {
+    return true
+  }
+  for issue in reported {
+    println(
+      "mtsc: type error in \{issue.modulePath} [\{issue.path}]: \{issue.message}",
+    )
+  }
+  false
+}
+
+///|
+/// True for a path that names a source file we should type-check.
+fn mtsc_is_module_path(path : String) -> Bool {
+  path.has_suffix(".ts") ||
+  path.has_suffix(".tsx") ||
+  path.has_suffix(".mts") ||
+  path.has_suffix(".js") ||
+  path.has_suffix(".mjs") ||
+  path.has_suffix(".jsx")
 }
 
 ///|
@@ -651,8 +955,20 @@ async fn main {
   }
   if opts.bundle {
     let files : Map[String, String] = {}
+    let edges : Array[@mtsc_core.MtscModuleEdge] = []
     let aliases : Map[String, String] = {}
     let type_props : Map[String, Bool] = {}
+    let parsed_blocks : Map[String, @ast.TsModuleBlock] = {}
+    // `--timing` covers the CLI's own work too. The transform pipeline
+    // reports its own phases, but the first measurement of `checker.ts`
+    // put 731 ms of 31.6 s inside them — everything that mattered was
+    // out here.
+    let cli_timer = if opts.timing {
+      @transform.PhaseTimer::new()
+    } else {
+      @transform.PhaseTimer::disabled()
+    }
+    let load_started = @bench.monotonic_clock_start()
     match
       mtsc_load_bundle_files(
         input_path,
@@ -660,6 +976,9 @@ async fn main {
         aliases,
         opts.externals,
         type_props,
+        opts.reserve_typed_props,
+        parsed_blocks,
+        edges,
       ) {
       Ok(_) => ()
       Err(e) => {
@@ -667,14 +986,24 @@ async fn main {
         return
       }
     }
-    for path in files.keys() {
-      match files.get(path) {
-        Some(source) =>
-          if !mtsc_typecheck_source(source, path) {
-            mtsc_exit_type_error()
-            return
-          }
-        None => ()
+    cli_timer.record(
+      "cli: read + parse files",
+      @bench.monotonic_clock_end(load_started),
+    )
+    // Type-check the whole graph in one go. Checking each file alone
+    // leaves every imported type unresolvable, which both hides real
+    // errors and invents fake ones — an identical shape compared against
+    // an imported alias reads as a mismatch.
+    if !opts.no_check {
+      let check_started = @bench.monotonic_clock_start()
+      let check_ok = mtsc_typecheck_graph(files, edges)
+      cli_timer.record(
+        "cli: typecheck",
+        @bench.monotonic_clock_end(check_started),
+      )
+      if !check_ok {
+        mtsc_exit_type_error()
+        return
       }
     }
     // `type_props` collects every property name declared in an
@@ -714,6 +1043,8 @@ async fn main {
           deprecations: {},
           pure_declarations: {},
           type_aliases: [],
+          interfaces: [],
+          class_fields: [],
           has_export_equals: false,
         })
         let module_ = (try
@@ -772,8 +1103,20 @@ async fn main {
       .with_fold(opts.fold)
       .with_aliases(aliases)
       .with_extra_reserved_props(extra_reserved)
+      .with_explain(opts.explain_mangle)
+      // The loader above already asked the filesystem about every
+      // relative import and printed a line for each one that is not
+      // there, so the bundler doesn't need to fail over them a second
+      // time — it keeps them verbatim.
+      .with_allow_unresolved_imports(true)
+      .with_timing(opts.timing)
+      // Hand the loader's parses over rather than have the bundler
+      // repeat them.
+      .with_parsed_blocks(parsed_blocks)
     let bundle_opts = { ..bundle_opts, jsx: jsx_cfg }
+    let bundle_started = @bench.monotonic_clock_start()
     let result = @transform.bundle_modules(files, input_path, bundle_opts)
+    let bundle_micros = @bench.monotonic_clock_end(bundle_started)
     let out = match result {
       Ok(o) => o
       Err(e) => {
@@ -784,6 +1127,26 @@ async fn main {
     if opts.warn_impure_getters {
       for w in out.warnings {
         println("mtsc: " + w)
+      }
+    }
+    for line in out.explain {
+      println(line)
+    }
+    if opts.timing {
+      // The bundle's own phases, then the difference — what
+      // `bundle_modules` spent outside any instrumented pass (linking,
+      // escape analysis, emit).
+      let mut inner = 0.0
+      for t in out.timings {
+        cli_timer.record(t.0, t.1)
+        inner = inner + t.1
+      }
+      let unattributed = bundle_micros - inner
+      if unattributed > 0.0 {
+        cli_timer.record("bundle: link + escape + emit", unattributed)
+      }
+      for line in cli_timer.report() {
+        println(line)
       }
     }
     match opts.out {
@@ -837,6 +1200,8 @@ async fn main {
             deprecations: {},
             pure_declarations: {},
             type_aliases: [],
+            interfaces: [],
+            class_fields: [],
             has_export_equals: false,
           })
           let entry_module = (try
@@ -900,7 +1265,7 @@ async fn main {
       return
     }
   }
-  if !mtsc_typecheck_source(source, input_path) {
+  if !mtsc_typecheck_source(source, input_path) && !opts.no_check {
     mtsc_exit_type_error()
     return
   }

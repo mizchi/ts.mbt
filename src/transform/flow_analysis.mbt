@@ -324,6 +324,7 @@ fn bump_obs(
 pub fn reserved_props_from_observability(
   g : SymbolGraph,
   obs_map : Map[SymbolId, Observability],
+  type_env? : Map[String, @ast.TsType] = {},
 ) -> Map[String, Bool] {
   let out : Map[String, Bool] = {}
   // Linker-synthesised namespace stand-ins (`const ns = { exp1:
@@ -369,7 +370,7 @@ pub fn reserved_props_from_observability(
         // an opaque named type. The Const+ObjectLit pre-pass
         // still catches the linker-synthesised namespace case
         // independently of this fallback.
-        match type_observed_keys(sym.ts_type) {
+        match type_observed_keys(sym.ts_type, type_env~) {
           Some(keys) => {
             for k in keys {
               out[k] = true
@@ -393,7 +394,11 @@ pub fn reserved_props_from_observability(
 // else (index signatures, opaque `Named` references, `Any`,
 // generic shapes) admits unbounded keys and the caller must keep
 // the wildcard.
-fn type_observed_keys(t : @ast.TsType) -> Array[String]? {
+fn type_observed_keys(
+  t : @ast.TsType,
+  type_env? : Map[String, @ast.TsType] = {},
+  seen? : Map[String, Bool] = {},
+) -> Array[String]? {
   match t {
     Struct(_, fields) => {
       let out : Array[String] = []
@@ -419,7 +424,77 @@ fn type_observed_keys(t : @ast.TsType) -> Array[String]? {
     Union(members) => {
       let combined : Array[String] = []
       for m in members {
-        match type_observed_keys(m) {
+        match type_observed_keys(m, type_env~, seen~) {
+          Some(keys) =>
+            for k in keys {
+              if !combined.contains(k) {
+                combined.push(k)
+              }
+            }
+          None => return None
+        }
+      }
+      Some(combined)
+    }
+    // An `interface`/`type` annotation is how a TypeScript codebase
+    // actually spells a closed shape, so resolving the name is the
+    // difference between "annotate it" being advice a user can follow
+    // and advice that silently does nothing. `type_env` holds the
+    // declarations the bundle itself parsed; a name that isn't there
+    // came from somewhere we can't see, and stays unbounded.
+    //
+    // The key set is syntactic, so type ARGUMENTS never change it:
+    // `Box<string>` and `Box<number>` have the same keys. A generic
+    // body that computes its keys (a mapped type, `keyof`) has no arm
+    // here and falls through to `None`, which is the safe answer.
+    Named(n) | Applied(n, _) =>
+      if seen.contains(n) {
+        // A cyclic declaration (`interface Node { next: Node }`) is
+        // fine — the recursion is on the type, not the key set — but
+        // the walk still has to stop.
+        Some([])
+      } else {
+        match type_env.get(n) {
+          Some(resolved) => {
+            seen[n] = true
+            let keys = type_observed_keys(resolved, type_env~, seen~)
+            seen.remove(n)
+            keys
+          }
+          None => None
+        }
+      }
+    // A primitive carries no user-declared property surface. Its members
+    // are built-ins (`length`, `toFixed`, …) which the mangler reserves
+    // globally anyway, so a `string` crossing the boundary reserves
+    // nothing — it must not fall through to the wildcard.
+    //
+    // This mattered more than it looks. On real TypeScript libraries the
+    // bindings that reached a foreign callee were overwhelmingly plain
+    // `string` parameters (valibot: `lang`, `message`; a locale lookup
+    // and an error message), and each one suppressed property mangling
+    // for the entire bundle.
+    Number
+    | Int
+    | Boolean
+    | String_
+    | BigInt
+    | Symbol
+    | Void
+    | Null
+    | Undefined
+    | Never
+    | Literal(_)
+    | NumberLiteral(_)
+    | BigIntLiteral(_)
+    | BooleanLiteral(_) => Some([])
+    // `A & B` observes the union of both key sets. Used to model
+    // `interface I extends A, B`, so an unresolvable base collapses the
+    // whole intersection to `None` rather than silently under-reserving.
+    Intersection(members) => {
+      let combined : Array[String] = []
+      for m in members {
+        match type_observed_keys(m, type_env~, seen~) {
           Some(keys) =>
             for k in keys {
               if !combined.contains(k) {
@@ -433,6 +508,43 @@ fn type_observed_keys(t : @ast.TsType) -> Array[String]? {
     }
     _ => None
   }
+}
+
+///|
+/// The type declarations a bundle parsed, as a name → shape map for
+/// `type_observed_keys`.
+///
+/// An interface becomes an `Intersection` of its own fields and a
+/// `Named` reference per base, so `extends` resolves through the same
+/// recursion and an invisible base yields `None` instead of a key set
+/// that is missing the base's names. An index signature admits
+/// unbounded keys, so it is modelled as one — the caller keeps the
+/// wildcard.
+pub fn build_type_env(
+  interfaces : Array[@ast.TsInterface],
+  type_aliases : Array[@ast.TsTypeAlias],
+) -> Map[String, @ast.TsType] {
+  let env : Map[String, @ast.TsType] = {}
+  for ta in type_aliases {
+    env[ta.name] = ta.type_
+  }
+  for i in interfaces {
+    let own : @ast.TsType = if i.index_signatures.length() > 0 {
+      @ast.TsType::Object([(@ast.TsType::String_, @ast.TsType::Any)])
+    } else {
+      @ast.TsType::Struct(i.name, i.fields)
+    }
+    if i.extends_names.length() == 0 {
+      env[i.name] = own
+    } else {
+      let parts : Array[@ast.TsType] = [own]
+      for b in i.extends_names {
+        parts.push(@ast.TsType::Named(b))
+      }
+      env[i.name] = @ast.TsType::Intersection(parts)
+    }
+  }
+  env
 }
 
 ///|

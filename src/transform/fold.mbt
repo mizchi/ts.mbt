@@ -71,6 +71,45 @@ fn stmt_always_exits(stmt : @ast.TsStmt) -> Bool {
 }
 
 ///|
+/// The else-hoist applies when the then-branch exits and the else block
+/// introduces no block-scoped name of its own.
+fn hoistable_else(then_b : @ast.TsBlock, else_b : @ast.TsBlock) -> Bool {
+  block_always_exits(then_b) && !block_declares_lexical(else_b)
+}
+
+///|
+/// Does `block` introduce a block-scoped binding at its own top level?
+///
+/// The else-hoist below turns `if (c) { return } else { … }` into
+/// `if (c) { return } …`, which is sound for control flow and wrong for
+/// scoping: the `else` braces were the only thing keeping a `let` inside
+/// them from colliding with a same-named binding in the enclosing scope.
+/// TypeScript's own checker has exactly that shape —
+///
+///     case SyntaxKind.AsteriskToken:
+///       if (…) { … return numberType }
+///       else { … let resultType: Type; … }
+///     case SyntaxKind.PlusToken:
+///       … let resultType: Type | undefined; …
+///
+/// — two `let resultType` in one switch block, legal because one of them
+/// is nested. Hoisting the nested one produced
+/// `Identifier 'resultType' has already been declared`, which is a
+/// SyntaxError: the whole file stops loading.
+///
+/// Proving the hoist safe would need the enclosing scope's names. Not
+/// hoisting costs `} else {`; this is the cheap half of that trade.
+fn block_declares_lexical(block : @ast.TsBlock) -> Bool {
+  for s in block.stmts {
+    match s {
+      Let(_, _, _) | Const(_, _, _) | NativeClassStmt(_, _) => return true
+      _ => ()
+    }
+  }
+  false
+}
+
+///|
 /// Returns `true` when `block` always exits on every path —
 /// specifically when the last statement always exits.
 fn block_always_exits(block : @ast.TsBlock) -> Bool {
@@ -551,7 +590,7 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
         // position. Saves `} else {` = ~7 chars in minified output.
         // Only applies when there IS an else block and the then-branch exits.
         match else_emit {
-          Some(else_b) if block_always_exits(then_emit) => {
+          Some(else_b) if hoistable_else(then_emit, else_b) => {
             out.push(If(cond_emit, then_emit, None))
             for s in else_b.stmts {
               out.push(s)

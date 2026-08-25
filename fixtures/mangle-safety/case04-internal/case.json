@@ -1,0 +1,19 @@
+{
+  "origin": "packelyze fixtures/case04-internal",
+  "what": "Function-local types are invisible from outside, so their members are manglable; the exported parameter shape is not.",
+  "exports": [
+    "myfn",
+    "componentLike2"
+  ],
+  "expectKeep": [
+    "input"
+  ],
+  "expectMangle": [
+    "internalPub1",
+    "internalPub2",
+    "hidden",
+    "prop1",
+    "prop2"
+  ],
+  "expectStatus": "pass"
+}

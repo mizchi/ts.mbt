@@ -1,0 +1,16 @@
+{
+  "origin": "packelyze fixtures/case16-destructuring",
+  "what": "Array / object destructuring. The keys of the object an exported function *returns* are public even when the source shape is private.",
+  "exports": [
+    "run"
+  ],
+  "expectKeep": [
+    "first",
+    "rest",
+    "name",
+    "age",
+    "id",
+    "value"
+  ],
+  "expectStatus": "pass"
+}

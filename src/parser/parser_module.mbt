@@ -723,7 +723,11 @@ fn Parser::parse_namespace_decl_with_mode(
       let body_source = self.parse_declaration_block_source()
       let augmented = parse_ambient_external_module_source(body_source)
       self.propagate_suppression_sentinels(augmented)
-      let ns : @ast.TsNamespaceDecl = { name: "<global>", module_: augmented }
+      let ns : @ast.TsNamespaceDecl = {
+        name: "<global>",
+        module_: augmented,
+        is_declare: true,
+      }
       return Some((None, Some(ns)))
     } else {
       // bare `global` without a block — just skip to semicolon
@@ -836,7 +840,11 @@ fn Parser::parse_namespace_decl_with_mode(
           module_ => module_
         }
       }
-      let next_namespace : @ast.TsNamespaceDecl = { name, module_ }
+      let next_namespace : @ast.TsNamespaceDecl = {
+        name,
+        module_,
+        is_declare: body_is_ambient,
+      }
       Some(next_namespace)
     }
     _ => {
@@ -852,16 +860,6 @@ fn Parser::parse_namespace_decl_value(
   self : Parser,
 ) -> @ast.TsValueDecl? raise ParseError {
   match self.parse_namespace_decl() {
-    Some((value, _)) => value
-    None => None
-  }
-}
-
-///|
-fn Parser::parse_namespace_decl_value_runtime(
-  self : Parser,
-) -> @ast.TsValueDecl? raise ParseError {
-  match self.parse_namespace_decl_runtime() {
     Some((value, _)) => value
     None => None
   }
@@ -1695,7 +1693,12 @@ fn collect_value_decls_from_stmt(
 fn value_decl_infer_type_from_expr(expr : @ast.TsExpr) -> @ast.TsType {
   match expr {
     @ast.TsExpr::NumberLit(_) => @ast.TsType::Number
-    @ast.TsExpr::IntLit(_) => @ast.TsType::Int
+    // TypeScript has ONE numeric type: `const v = 1` is `number`, not an
+    // integral subtype. Recording `Int` here made a namespace-level
+    // `const v = 1` unassignable to a `: number` slot, and `count =
+    // count + 1` unassignable back to its own binding. `Int` stays the
+    // MoonBit bridge's marker, which is parsed elsewhere.
+    @ast.TsExpr::IntLit(_) => @ast.TsType::Number
     @ast.TsExpr::BoolLit(_) => @ast.TsType::Boolean
     @ast.TsExpr::StringLit(_) => @ast.TsType::String_
     @ast.TsExpr::NullLit => @ast.TsType::Null
@@ -2478,7 +2481,9 @@ fn Parser::parse_export_decl_for_module(
         self.parse_function_expr()
       }
       if func.name != "<anon>" {
-        stmts.push(Let(@ast.TsBinding::Ident(func.name), Any, FuncExpr(func)))
+        if !(is_named && self.last_function_bodiless) {
+          stmts.push(Let(@ast.TsBinding::Ident(func.name), Any, FuncExpr(func)))
+        }
         exports.push({ local_name: func.name, export_name: "default" })
       } else {
         let temp = self.next_temp("__export_default__")
@@ -2579,7 +2584,15 @@ fn Parser::parse_export_decl_for_module(
   }
   if self.check(Function) {
     let func = self.parse_function()
-    stmts.push(Let(@ast.TsBinding::Ident(func.name), Any, FuncExpr(func)))
+    // A bodyless declaration is an overload signature (or ambient
+    // `declare`): type-only, and an overload SET puts several of them
+    // above the one implementation. Each emitted as `function f() {}`
+    // gives one name two or three declarations — a SyntaxError in a
+    // module, so nothing loads. The name is still exported: the
+    // implementation that follows carries it.
+    if !self.last_function_bodiless {
+      stmts.push(Let(@ast.TsBinding::Ident(func.name), Any, FuncExpr(func)))
+    }
     exports.push({ local_name: func.name, export_name: func.name })
     return (stmts, exports, reexports)
   }
@@ -2601,7 +2614,9 @@ fn Parser::parse_export_decl_for_module(
       self.in_async = true
       let func = self.parse_function()
       self.in_async = false
-      stmts.push(Let(@ast.TsBinding::Ident(func.name), Any, FuncExpr(func)))
+      if !self.last_function_bodiless {
+        stmts.push(Let(@ast.TsBinding::Ident(func.name), Any, FuncExpr(func)))
+      }
       exports.push({ local_name: func.name, export_name: func.name })
       return (stmts, exports, reexports)
     }
@@ -2712,10 +2727,15 @@ fn Parser::parse_export_decl_for_module(
   match self.peek().kind {
     Ident(name) if name == "namespace" || name == "module" || name == "global" => {
       // Non-declare `export namespace X { ... }` — body may contain
-      // runtime class bodies and statements.
-      match self.parse_namespace_decl_value_runtime() {
-        Some(value) =>
-          exports.push({ local_name: value.name, export_name: value.name })
+      // runtime class bodies and statements. Parse twice: the type side
+      // registers the namespace as an exported value, and the runtime
+      // side lowers the body so `X.member` resolves at load time (see
+      // `parse_runtime_namespace_stmt`).
+      match self.parse_lowered_namespace() {
+        Some(lowered) => {
+          stmts.push(lowered.stmt)
+          exports.push({ local_name: lowered.name, export_name: lowered.name })
+        }
         None => self.skip_declaration_block()
       }
       return (stmts, exports, reexports)
@@ -3910,9 +3930,7 @@ fn Parser::parse_module_block_with_const_values(
           let _ = self.advance()
           let _ = self.parse_declare_values()
         }
-        Interface => {
-          let _ = self.parse_interface()
-        }
+        Interface => self.collected_interfaces.push(self.parse_interface())
         Class => {
           let _ = self.parse_declare_class(false)
         }
@@ -3947,7 +3965,7 @@ fn Parser::parse_module_block_with_const_values(
       continue
     }
     if self.check(Interface) {
-      let _ = self.parse_interface()
+      self.collected_interfaces.push(self.parse_interface())
       continue
     }
     match self.peek().kind {
@@ -3965,12 +3983,22 @@ fn Parser::parse_module_block_with_const_values(
       continue
     }
     if self.is_namespace_decl_start() {
-      // Namespaces aren't retained on `TsModuleBlock`, but enums declared
-      // inside them must still be registered. Parse the body and hoist any
-      // nested enums rather than dropping the whole block.
-      match self.parse_namespace_decl_runtime() {
-        Some((_, Some(ns))) => collect_enums_recursive(ns.module_, enums)
-        _ => ()
+      // Namespaces aren't retained on `TsModuleBlock` as declarations,
+      // but they are runtime values: the body's exported members have to
+      // exist under the namespace object. Parse the body twice — once
+      // for the type side (so enums declared inside are registered) and
+      // once for the runtime lowering. Two parses of a namespace body is
+      // not a hot path, and it keeps both sides reading the same source
+      // rather than reconstructing one from the other.
+      match self.parse_lowered_namespace() {
+        Some(lowered) => {
+          stmts.push(lowered.stmt)
+          for e in lowered.enums {
+            enums.push(e)
+          }
+        }
+        // Not a lowerable form (ambient module name, dotted path).
+        None => self.skip_declaration_block()
       }
       continue
     }
@@ -4031,6 +4059,8 @@ fn Parser::parse_module_block_with_const_values(
       deprecations: self.collected_deprecations,
       pure_declarations: self.collected_pure_declarations,
       type_aliases: self.collected_type_aliases,
+      interfaces: self.collected_interfaces,
+      class_fields: self.collected_class_fields,
       has_export_equals: self.collected_export_equals,
     },
     const_values,

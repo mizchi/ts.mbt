@@ -1,0 +1,19 @@
+{
+  "origin": "ts.mbt — discriminant literals to integers",
+  "what": "A property whose values are a closed set of string literals, read only by equality or as a `switch` discriminant, and absent from the escape set, can be renumbered. The five neighbours are each held by one condition: serialization, a value returned out of an export, interpolation, a truthiness test, and a comparison against an unwritten literal.",
+  "exports": [
+    "readB",
+    "report"
+  ],
+  "expectKeep": [
+    "areas",
+    "round",
+    "serialized",
+    "fromB",
+    "interpolated",
+    "truthy",
+    "odd",
+    "tagA"
+  ],
+  "expectStatus": "pass"
+}

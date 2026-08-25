@@ -1,0 +1,17 @@
+{
+  "origin": "generated — scripts/generate_mangle_cases.mjs",
+  "generated": true,
+  "what": "An object inside an array that has its own keys enumerated with `Object.keys`. Observation depth direct, so the expectation is derived, not authored.",
+  "exports": [
+    "names",
+    "total"
+  ],
+  "expectKeep": [],
+  "expectMangle": [
+    "omegaCtl",
+    "alphaTop",
+    "alphaWrap",
+    "alphaDeep"
+  ],
+  "expectStatus": "pass"
+}

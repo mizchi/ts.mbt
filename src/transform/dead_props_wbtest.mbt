@@ -122,3 +122,115 @@ test "type_props: inline object types contribute to the harvest" {
   assert_true(seen.contains("left"))
   assert_true(seen.contains("right"))
 }
+
+// ---------------------------------------------------------------------
+// Dead class fields. A `this.x = …` write is what puts `x` on the
+// instance; when nothing reads `x` and the escape analysis doesn't
+// reserve it, the write's only effect is a field nobody can see.
+// ---------------------------------------------------------------------
+
+///|
+fn dcf_bundle(source : String) -> String raise {
+  let files : Map[String, String] = { "entry.ts": source }
+  let opts = BundleOptions::default().with_mangle_properties(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => out.js
+    Err(e) => {
+      fail("bundle error: \{e}")
+      ""
+    }
+  }
+}
+
+///|
+test "dead-field: a write-only class field is dropped" {
+  let js = dcf_bundle(
+    (
+      #|class Counter {
+      #|  private total: number;
+      #|  private deadSlot: number;
+      #|  constructor() { this.total = 0; this.deadSlot = 42; }
+      #|  add(n: number): number { this.total = this.total + n; return n * 2; }
+      #|}
+      #|const c = new Counter();
+      #|export const out = c.add(1) + c.add(2);
+      #|
+    ),
+  )
+  // The dead field's only distinguishing mark in the output is its
+  // value, since the names are mangled.
+  assert_false(js.contains("42"))
+}
+
+///|
+test "dead-field: a read field survives" {
+  let js = dcf_bundle(
+    (
+      #|class Counter {
+      #|  private total: number;
+      #|  constructor() { this.total = 7; }
+      #|  add(n: number): number { this.total = this.total + n; return n * 2; }
+      #|}
+      #|const c = new Counter();
+      #|export const out = c.add(1);
+      #|
+    ),
+  )
+  assert_true(js.contains("7"))
+}
+
+///|
+test "dead-field: an impure value keeps the write" {
+  let js = dcf_bundle(
+    (
+      #|let ticks = 0;
+      #|function bump(): number { ticks = ticks + 1; return 1; }
+      #|class Holder {
+      #|  private dead: number;
+      #|  constructor() { this.dead = bump() + 4242; }
+      #|  go(n: number): number { return n * 2; }
+      #|}
+      #|const h = new Holder();
+      #|export const out = h.go(1) + ticks;
+      #|
+    ),
+  )
+  // Identifiers get renamed, so the marker is a numeric literal: it can
+  // only still be there if the write survived.
+  assert_true(js.contains("4242"))
+}
+
+///|
+test "dead-field: a field on a serialized instance survives" {
+  // `JSON.stringify` publishes every own key, so the escape analysis
+  // reserves them and nothing may be dropped.
+  let js = dcf_bundle(
+    (
+      #|class Holder {
+      #|  private slot: number;
+      #|  constructor() { this.slot = 42; }
+      #|}
+      #|const h = new Holder();
+      #|export const out = JSON.stringify(h);
+      #|
+    ),
+  )
+  assert_true(js.contains("slot"))
+}
+
+///|
+test "dead-field: an `in` probe keeps the field" {
+  let js = dcf_bundle(
+    (
+      #|class Holder {
+      #|  private slot: number;
+      #|  constructor() { this.slot = 42; }
+      #|  go(n: number): number { return n * 2; }
+      #|}
+      #|const h = new Holder();
+      #|export const out = ("slot" in h ? 1 : 0) + h.go(1);
+      #|
+    ),
+  )
+  assert_true(js.contains("slot"))
+}

@@ -806,6 +806,15 @@ pub(all) struct TsClassDecl {
 pub(all) struct TsNamespaceDecl {
   name : String
   module_ : TsModule
+  // True for ambient declarations (`declare namespace N { … }`,
+  // `declare module "m" { … }`, `declare global { … }`) — the body
+  // declares types only and is erased with no runtime trace. False
+  // for a plain `namespace N { … }` / `module N { … }`, whose body
+  // has to exist at runtime. Consumers that lower or reject
+  // namespaces need to tell the two apart; the member lists alone
+  // can't (`function f(): void {}` and an ambient `function f():
+  // void;` both arrive with an empty body).
+  is_declare : Bool
 } derive(Debug)
 
 ///|
@@ -1023,6 +1032,23 @@ pub(all) struct TsModuleBlock {
   // passes (e.g. discriminant-tag string→number rewrite) can
   // enumerate every declared shape.
   type_aliases : Array[TsTypeAlias]
+  // `interface I { … }` declarations parsed at this module's top level.
+  // Same reason as `type_aliases`: erased at runtime, but a whole-program
+  // pass needs them to decide whether an annotation names a closed key
+  // set. Without them a `const x: I` annotation is indistinguishable
+  // from an opaque named type, which is the difference between a
+  // narrowed reservation and the wildcard.
+  interfaces : Array[TsInterface]
+  // Field declarations of every runtime class at this module's top
+  // level, as `(name, declared type)` pairs — private fields under the
+  // brand name the parser gives them. Whole-program passes need the
+  // annotation, and the class lowering does not keep it: a field with
+  // an initializer becomes a constructor assignment, so by the time
+  // `class_method_dce` sees the class its `properties` are gone. The
+  // pairs are flat rather than per-class because the consumers ask
+  // "does every class that declares `f` type it as X", never "what
+  // does class C declare".
+  class_fields : Array[(String, TsType)]
   // True when the module uses `export = <expr>` (CJS export assignment).
   // An `import X = require(...)` of such a module binds the ASSIGNED
   // entity, not a namespace object -- the bridge export resolution

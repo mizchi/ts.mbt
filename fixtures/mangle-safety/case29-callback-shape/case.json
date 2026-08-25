@@ -1,0 +1,16 @@
+{
+  "origin": "ts.mbt — regression for the inverted sink rule",
+  "what": "Names read off a callback parameter the host fills in. Nothing in the file connects `rowId` / `rowCaption` to an import, so the escape analysis only reaches them by knowing that a callback handed to a foreign call gets host-shaped arguments back.",
+  "exports": [
+    "collect"
+  ],
+  "expectKeep": [
+    "each",
+    "rowId",
+    "rowCaption"
+  ],
+  "expectStatus": "pass",
+  "globalStubs": {
+    "HostList": "{ each: (visit) => { visit({ rowId: 1, rowCaption: \"first\" }); visit({ rowId: 2, rowCaption: \"second\" }); } }"
+  }
+}

@@ -44,7 +44,7 @@ fn link_module_graph(
   modules : Map[String, ModuleNode],
   order : Array[String],
   external_imports : Array[@ast.TsImportDecl],
-) -> Map[String, Map[String, String]] {
+) -> LinkRenames {
   // ---- Phase 1: collect declared names + assign unique renames ----
   // `taken` tracks every name claimed across the bundle so we know
   // when to suffix a later declaration. `rename_per_module[path]`
@@ -110,6 +110,15 @@ fn link_module_graph(
     let ns_locals : Map[String, String] = {}
     for imp in m.import_decls {
       if imp.type_only || imp.side_effect_only {
+        continue
+      }
+      // An EXTERNAL `import * as ns from "pkg"` keeps its binding: the
+      // import header is re-emitted verbatim at the top of the bundle,
+      // so the name is fixed. Renaming it here rewrote every `ns.member`
+      // reference to a name nothing declared — external bindings are
+      // pre-reserved in `taken`, so the mint below fired on the very
+      // binding it was meant to protect.
+      if m.resolved_imports.get(imp.module_spec) is None {
         continue
       }
       match imp.namespace_binding {
@@ -498,7 +507,231 @@ fn link_module_graph(
     }
     modules[path] = { ..m, block: final_block }
   }
-  rename_per_module
+  { locals: rename_per_module, namespaces: namespace_local_renames }
+}
+
+///|
+/// The two rename tables the link pass produces: per-module local
+/// renames, and per-module `import * as ns` / `export * as ns`
+/// namespace-binding renames. Both are needed to resolve an export
+/// name to the binding it ends up as in the merged block.
+pub(all) struct LinkRenames {
+  locals : Map[String, Map[String, String]]
+  namespaces : Map[String, Map[String, String]]
+}
+
+///|
+/// One name the bundle surfaces to its consumer.
+pub(all) struct BundleExport {
+  // Name of the binding inside the merged block. Empty when the
+  // export is a passthrough to an external module.
+  local_name : String
+  // Name the consumer sees.
+  export_name : String
+  // Set for `export … from "<bare-spec>"`, which we can't resolve
+  // to a binding because the target isn't part of the bundle. The
+  // emitter re-emits those as a passthrough `export … from "spec"`.
+  from_external : String?
+}
+
+///|
+/// Resolve an entry export whose local name is an imported binding, by
+/// following the import to the declaring module and applying that
+/// module's link renames — the same walk `resolve_export` does for
+/// `export … from`.
+///
+/// `None` when the name is not imported, or is imported from outside
+/// the bundle (the external-import substitution handles those), so the
+/// caller falls back to the name as written.
+fn entry_export_via_import(
+  em : ModuleNode,
+  modules : Map[String, ModuleNode],
+  renames : LinkRenames,
+  local_name : String,
+) -> String? {
+  for decl in em.import_decls {
+    let imported = if decl.default_binding is Some(n) && n == local_name {
+      Some("default")
+    } else {
+      let mut found : String? = None
+      for b in decl.named_bindings {
+        if b.1 == local_name {
+          found = Some(b.0)
+        }
+      }
+      found
+    }
+    match imported {
+      Some(name) =>
+        match em.resolved_imports.get(decl.module_spec) {
+          Some(path) =>
+            return resolve_export(
+              modules,
+              renames.locals,
+              renames.namespaces,
+              path,
+              name,
+            )
+          // A bare specifier: not part of the bundle.
+          None => return None
+        }
+      None => ()
+    }
+  }
+  None
+}
+
+///|
+/// Resolve everything the entry module exports — its own `export`
+/// specs *and* its `export … from "./m"` re-exports — into the
+/// binding names they refer to in the merged block.
+///
+/// Re-exports used to be dropped entirely: `emit_entry_exports` only
+/// walked `export_specs`, so an entry consisting of nothing but
+/// `export { x } from "./sub"` produced a bundle with no exports at
+/// all. Every name below goes through `resolve_export`, which walks
+/// re-export chains to the declaring module and applies that
+/// module's link renames.
+fn entry_export_bindings(
+  modules : Map[String, ModuleNode],
+  renames : LinkRenames,
+  entry : String,
+) -> Array[BundleExport] {
+  let out : Array[BundleExport] = []
+  let seen : Map[String, Bool] = {}
+  let em = match modules.get(entry) {
+    Some(node) => node
+    None => return out
+  }
+  let push = (local_ : String, exported : String, external : String?) => {
+    if seen.contains(exported) {
+      return
+    }
+    seen[exported] = true
+    out.push({
+      local_name: local_,
+      export_name: exported,
+      from_external: external,
+    })
+  }
+  let entry_locals = renames.locals.get(entry).unwrap_or({})
+  for spec in em.export_specs {
+    match entry_locals.get(spec.local_name) {
+      // The entry declared it, and linking may have renamed it.
+      Some(renamed) => push(renamed, spec.export_name, None)
+      None =>
+        // Nothing in the entry's rename map. Either the entry declared
+        // it under a name nothing collided with, or — the case that was
+        // broken — the name is an IMPORTED binding the entry re-exports
+        // (`import { X } from "./m"; export { X }`). The entry never
+        // declared it, so the bare name falls through into whatever
+        // OTHER module happens to declare that name in the merged
+        // block. Hono exports `Hono` exactly this way while
+        // `hono-base.ts` also declares a class called `Hono`, so the
+        // bundle exported the abstract base: every route registration
+        // then failed on a `router` the base never sets.
+        match entry_export_via_import(em, modules, renames, spec.local_name) {
+          Some(resolved) => push(resolved, spec.export_name, None)
+          None => push(spec.local_name, spec.export_name, None)
+        }
+    }
+  }
+  for re in em.reexport_specs {
+    if re.type_only {
+      continue
+    }
+    let dep_path = em.resolved_imports.get(re.module_spec)
+    let dep = match dep_path {
+      Some(p) => modules.get(p)
+      None => None
+    }
+    match (dep_path, dep) {
+      // Target is part of the bundle: resolve each name to the
+      // binding it became after linking.
+      (Some(path), Some(dep_node)) =>
+        match re.kind {
+          Named(items) =>
+            for it in items {
+              match
+                resolve_export(
+                  modules,
+                  renames.locals,
+                  renames.namespaces,
+                  path,
+                  it.0,
+                ) {
+                Some(resolved) => push(resolved, it.1, None)
+                // No runtime binding behind the name: it was a
+                // type-only specifier inside a value re-export
+                // (`export { type T, v } from "./m"`). Skipping it
+                // is what keeps the emitted `export {}` clause
+                // free of dangling type names.
+                None => ()
+              }
+            }
+          All => {
+            let surface : Map[String, String] = {}
+            for spec in dep_node.export_specs {
+              // `export *` does not forward `default`.
+              if spec.export_name == "default" {
+                continue
+              }
+              match
+                resolve_export(
+                  modules,
+                  renames.locals,
+                  renames.namespaces,
+                  path,
+                  spec.export_name,
+                ) {
+                Some(resolved) => surface[spec.export_name] = resolved
+                None => ()
+              }
+            }
+            enumerate_wildcard_reexports(
+              modules,
+              renames.locals,
+              renames.namespaces,
+              path,
+              surface,
+              {},
+            )
+            for ent in surface {
+              push(ent.1, ent.0, None)
+            }
+          }
+          Namespace(ns_local) => {
+            let ns_final = renames.namespaces
+              .get(path)
+              .unwrap_or({})
+              .get(ns_local)
+              .unwrap_or(
+                renames.namespaces
+                .get(entry)
+                .unwrap_or({})
+                .get(ns_local)
+                .unwrap_or(ns_local),
+              )
+            push(ns_final, ns_local, None)
+          }
+        }
+      // Bare specifier (or an unresolved path): the target isn't in
+      // the bundle, so the export has to stay a passthrough.
+      _ =>
+        match re.kind {
+          Named(items) =>
+            for it in items {
+              push(it.0, it.1, Some(re.module_spec))
+            }
+          // `export * from "pkg"` has no name to key on; emit it
+          // verbatim under a synthetic key so the dedupe map
+          // doesn't collapse two different specifiers.
+          All => push("*", "*:" + re.module_spec, Some(re.module_spec))
+          Namespace(ns_local) => push("*", ns_local, Some(re.module_spec))
+        }
+    }
+  }
+  out
 }
 
 ///|

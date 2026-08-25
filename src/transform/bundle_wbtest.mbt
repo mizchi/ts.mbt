@@ -148,6 +148,28 @@ test "bundle: missing module fails with a clear error" {
 }
 
 ///|
+test "bundle: an unresolved relative import can be kept as external" {
+  // What a build-generated module looks like from a source checkout:
+  // TypeScript's `checker.ts` imports `./_namespaces/ts.performance.js`,
+  // which its build emits and the repository does not carry. With the
+  // option set the import survives verbatim instead of failing the
+  // bundle — the code that calls through it still needs the binding.
+  let files = vfs([
+    (
+      "entry.ts", "import * as perf from \"./_namespaces/gen.js\";\nperf.mark(\"x\");\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_allow_unresolved_imports(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("./_namespaces/gen.js"))
+      assert_true(out.js.contains("mark"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "bundle: relative paths resolve through ./ and ../" {
   // `entry.ts` lives in `src/`, depends on `./lib.ts` and `../shared.ts`.
   let files = vfs([
@@ -1272,6 +1294,61 @@ test "as-const: literal object property read inlines to the value" {
 }
 
 ///|
+test "as-const: a property write inside a function disqualifies the binding" {
+  // The receiver of a property write has to disqualify the candidate,
+  // or every read gets the stale initializer. The statement spelling
+  // (`PropAssign`) already did; the same write arrives as
+  // `PropAssignExpr` from inside a function body, and that arm dropped
+  // the receiver — so `send()` returned 0 forever while the object it
+  // read from was being incremented.
+  let files = vfs([
+    (
+      "entry.ts",
+      "const ledger = { pendingCount: 0, lastTopic: \"\" };\n" +
+      "export function send(topic: string): number {\n" +
+      "  ledger.pendingCount = ledger.pendingCount + 1;\n" +
+      "  ledger.lastTopic = topic;\n" +
+      "  return ledger.pendingCount;\n" +
+      "}\n" +
+      "export function last(): string { return ledger.lastTopic; }\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_treeshake(true).with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // The reads still go through the object.
+      assert_true(out.js.contains("ledger.pendingCount"))
+      assert_true(out.js.contains("ledger.lastTopic"))
+      // And neither read was replaced by the initializer's value.
+      assert_false(out.js.contains("return 0"))
+      assert_false(out.js.contains("return \"\""))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "as-const: a top-level property write also disqualifies it" {
+  // The statement spelling, for symmetry with the test above.
+  let files = vfs([
+    (
+      "entry.ts",
+      "const cfg = { tries: 1 };\n" +
+      "cfg.tries = 5;\n" +
+      "console.log(cfg.tries);\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_treeshake(true).with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_false(out.js.contains("console.log(1)"))
+      assert_true(out.js.contains("cfg.tries"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "as-const: bare reference disqualifies the binding" {
   let files = vfs([
     (
@@ -2112,6 +2189,265 @@ test "class_method_dce: this[dynamic] instance-write does not abort prototype me
 }
 
 ///|
+test "class_method_dce: string-keyed dynamic read keeps every method alive" {
+  // The only mention of `beta` in the program is a dynamic read under a
+  // computed key. Deleting it would turn `h[key]()` into a TypeError, so
+  // the read has to gate the pass: both methods must survive.
+  let src =
+    #|class Handlers {
+    #|  alpha() { return "A"; }
+    #|  beta() { return "B"; }
+    #|}
+    #|const h = new Handlers();
+    #|const key = globalThis.pick;
+    #|const fn = h[key];
+    #|console.log(typeof fn === "function" ? fn.call(h) : "missing");
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("alpha"))
+      assert_true(out.js.contains("beta"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class_method_dce: keyed-container read does not abort prototype method DCE" {
+  // `table[k]` reads an entry out of a `Record`, not a member off an
+  // object with methods, so it must not gate the pass. `unused()` goes.
+  let src =
+    #|class Router {
+    #|  lookup(table: Record<string, string>, k: string) { return table[k]; }
+    #|  unused() { return 99; }
+    #|}
+    #|const r = new Router();
+    #|console.log(r.lookup({ a: "1" }, "a"));
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_false(out.js.contains("unused"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class_method_dce: a Record-typed private field is a keyed container" {
+  // `this.#rows[k]` is an entry lookup, not a member access. The
+  // annotation says so, but the class lowering drops it — a field with
+  // an initializer becomes a constructor assignment — so the pass
+  // reads the field types the parser captured before that happened.
+  let src =
+    #|class Table {
+    #|  #rows: Record<string, string> = {};
+    #|  put(k: string, v: string): void { this.#rows[k] = v; }
+    #|  read(k: string): string | undefined { return this.#rows[k]; }
+    #|  unused(): number { return 99; }
+    #|}
+    #|const t = new Table();
+    #|t.put("a", "1");
+    #|console.log(t.read("a"));
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_false(out.js.contains("unused"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class_method_dce: an alias to a Record is a keyed container" {
+  // How real code spells it: `type MatcherMap<T> = Record<string, T>`
+  // and then `this.#matchers[method]`. Resolving the alias is what
+  // makes the read an entry lookup.
+  let src =
+    #|type SlotMap = Record<string, string>;
+    #|class Registry {
+    #|  #slots: SlotMap = {};
+    #|  find(k: string): string | undefined { return this.#slots[k]; }
+    #|  unused(): number { return 99; }
+    #|}
+    #|const r = new Registry();
+    #|console.log(r.find("a"));
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_false(out.js.contains("unused"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class_method_dce: an inferred container receiver is one too" {
+  // No annotation at either local. `Promise.all` always resolves to an
+  // array, and `s.match(…)` is the `String` method (returning an array
+  // or `null`, and `null[i]` throws either way), so both reads are
+  // element lookups and neither gates the pass.
+  let src =
+    #|class Batch {
+    #|  async run(jobs: Promise<string>[], text: string): Promise<string> {
+    #|    const done = await Promise.all(jobs);
+    #|    const parts = text.match(/./g) || [];
+    #|    return done[0] + parts[0];
+    #|  }
+    #|  unused(): number { return 99; }
+    #|}
+    #|const b = new Batch();
+    #|b.run([], "x");
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_false(out.js.contains("unused"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class_method_dce: this.publicField is not a container proof" {
+  // `this.f` says nothing about which object `this` is. `Registry`
+  // types `table` as a `Record`, but the object literal's `table` holds
+  // a `Worker`, and its `this.table[k]` really does name a `Worker`
+  // method — so `spare` has to survive. Reading the class annotation
+  // for a public field deleted it and turned `holder.call("spare")`
+  // into `undefined`.
+  let src =
+    #|class Worker {
+    #|  run(): string { return "R"; }
+    #|  spare(): string { return "S"; }
+    #|}
+    #|class Registry {
+    #|  table: Record<string, string> = {};
+    #|  find(k: string): string | undefined { return this.table[k]; }
+    #|}
+    #|const holder = {
+    #|  table: new Worker(),
+    #|  call(k: string): unknown { return this.table[k]; },
+    #|};
+    #|const r = new Registry();
+    #|const fn = holder.call("spare");
+    #|console.log(r.find("x"), fn);
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_true(out.js.contains("spare()"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class_method_dce: a class-typed field receiver still gates the pass" {
+  // The negative side of the rule. `this.#target[k]` reads a member of
+  // a `Worker`, and `k` could name any of them, so `spare` has to
+  // survive.
+  let src =
+    #|class Worker {
+    #|  run(): number { return 1; }
+    #|  spare(): number { return 2; }
+    #|}
+    #|class Driver {
+    #|  #target: Worker = new Worker();
+    #|  call(k: string): unknown { return this.#target[k]; }
+    #|}
+    #|const d = new Driver();
+    #|console.log(d.call("run"));
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_true(out.js.contains("spare"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class_method_dce: delete does not abort prototype method DCE" {
+  // `delete` removes a name; it never observes one. A class prototype
+  // method is configurable, so `delete` yields the same `true` whether
+  // the method is there or not — and the deleted name is a static
+  // access, so `keepMe` stays while `unused` still goes.
+  let src =
+    #|class Cleaner {
+    #|  keepMe() { return 1; }
+    #|  unused() { return 99; }
+    #|}
+    #|const c = new Cleaner();
+    #|const bag: Record<string, string> = { keepMe: "x" };
+    #|delete bag.keepMe;
+    #|console.log(c.keepMe(), bag);
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_false(out.js.contains("unused"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class_method_dce: dynamic write on a foreign receiver does not abort DCE" {
+  // `bag[k] = v` writes a name; it cannot observe one, and installing a
+  // property under a computed key cannot bring back a method the pass
+  // deleted. So the write must not gate the pass.
+  let src =
+    #|class Store {
+    #|  put(bag: Record<string, number>, k: string) { bag[k] = 1; }
+    #|  unused() { return 99; }
+    #|}
+    #|const s = new Store();
+    #|s.put({}, "a");
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_false(out.js.contains("unused"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class_method_dce: Object.assign in the constructor does not abort DCE" {
+  // `Object.assign(this, opts)` copies OWN ENUMERABLE properties. A
+  // native class puts its methods on the prototype as non-enumerable,
+  // so the copy can never observe one. This is the shape that used to
+  // disable method DCE for a whole bundle (it is Hono's constructor).
+  let src =
+    #|class App {
+    #|  constructor(opts: Record<string, number>) {
+    #|    Object.assign(this, opts);
+    #|  }
+    #|  run() { return 1; }
+    #|  unused() { return 99; }
+    #|}
+    #|const a = new App({});
+    #|a.run();
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_false(out.js.contains("unused"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class_method_dce: reflection over a class shape still aborts DCE" {
+  // `Object.getOwnPropertyNames(proto)` does see non-enumerable
+  // properties — exactly what a prototype method is — so this one has
+  // to keep gating the pass.
+  let src =
+    #|class Probe {
+    #|  run() { return 1; }
+    #|  unused() { return 99; }
+    #|}
+    #|const p = new Probe();
+    #|console.log(Object.getOwnPropertyNames(Object.getPrototypeOf(p)));
+    #|p.run();
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_true(out.js.contains("unused"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "emit: minify emits !0/!1 for true/false and void 0 for undefined" {
   // In minify mode `true` → `!0` (saves 2 bytes), `false` → `!1` (saves 3
   // bytes), and `undefined` → `void 0` (saves 3 bytes).
@@ -2488,6 +2824,146 @@ test "bundler: `using` declaration emits try-finally with Symbol.dispose" {
         out.js.contains("finally"),
         msg="expected finally block in bundle",
       )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+/// The bundler resolves through the same rule as the CLI loader: a
+/// `.js`-spelled specifier may name a `.ts` file, which is what
+/// TypeScript's `node16` / `nodenext` / `bundler` resolution prescribes.
+test "bundle: a .js specifier resolves to the .ts file" {
+  let files = vfs([
+    (
+      "entry.ts", "import { helper } from \"./helper.js\";\nexport const v = helper(2);\n",
+    ),
+    (
+      "helper.ts", "export function helper(n: number): number { return n * 2; }\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      // Inlined, not left as an external import.
+      assert_false(out.js.contains("./helper.js"))
+      assert_true(out.js.contains("* 2"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+/// `import { X } from "./m"; export { X }` in the entry, where another
+/// module in the bundle also declares something called `X`.
+///
+/// The entry never declared `X`, so the entry's link-rename map has
+/// nothing for it and the bare name used to fall through — straight into
+/// whatever other module happened to declare that name in the merged
+/// block. Hono is built exactly this way: `hono-base.ts` declares
+/// `class Hono` and re-exports it as `HonoBase`, `hono.ts` declares
+/// `class Hono extends HonoBase`, and the entry re-exports that. The
+/// bundle exported the abstract BASE class, so every route registration
+/// failed on a `router` the base never sets — and nothing threw at
+/// import time to say so.
+test "bundle: an entry re-export resolves past a name collision" {
+  let files = vfs([
+    (
+      "base.ts", "class Widget {\n  label: string;\n  constructor(l: string) { this.label = l; }\n  describe(): string { return \"base:\" + this.label; }\n}\nexport { Widget as WidgetBase };\n",
+    ),
+    (
+      "mid.ts", "import { WidgetBase } from \"./base.js\";\nexport class Widget extends WidgetBase {\n  describe(): string { return \"derived:\" + this.label; }\n}\n",
+    ),
+    ("entry.ts", "import { Widget } from \"./mid.js\";\nexport { Widget };\n"),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      // The exported local must be the DERIVED class, which the linker
+      // renamed to avoid the collision.
+      assert_false(out.js.contains("export { Widget };"))
+      assert_true(out.js.contains("as Widget }"))
+      assert_true(out.js.contains("derived:"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: an entry re-export of an uncontested name is untouched" {
+  let files = vfs([
+    ("mid.ts", "export const value = 7;\n"),
+    ("entry.ts", "import { value } from \"./mid.js\";\nexport { value };\n"),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => assert_true(out.js.contains("export { value }"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+/// The same thing through the bundler, including `export function`: the
+/// name is still exported (the implementation carries it) but only one
+/// declaration is emitted.
+test "bundle: an overload set emits one declaration and still exports" {
+  let files = vfs([
+    (
+      "entry.ts", "export function pick(v: string): string;\nexport function pick(v: number): number;\nexport function pick(v: string | number): string | number {\n  return v;\n}\nexport const out = pick(1);\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      // Two `function pick` declarations would be a SyntaxError; the
+      // collision rename that used to paper over it is gone too.
+      let mut count = 0
+      let mut rest = out.js
+      while true {
+        match rest.find("function pick") {
+          Some(i) => {
+            count += 1
+            rest = rest.substring(start=i + 13)
+          }
+          None => break
+        }
+      }
+      assert_eq(count, 1)
+      assert_true(out.js.contains("pick"))
+      assert_true(out.js.contains("export"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+/// The second treeshake runs on the POST-MANGLE block, so its roots have
+/// to be the post-mangle names. `export_roots` holds what the source
+/// called them, and `preserve_top_level: false` means the mangler
+/// renamed every one — so the pre-mangle names matched nothing, every
+/// root read as dead, and the pass deleted the entire export surface.
+///
+/// It needed `--mangle`, `--treeshake` and `--fold` all three: the
+/// second treeshake only runs inside the fold branch. On hono that
+/// turned 18 KB into 4 KB with no `export` clause left at all.
+test "bundle: fold + treeshake + mangle keeps the export surface" {
+  let files = vfs([
+    (
+      "dep.ts", "export function helper(n: number): number { return n * 3; }\nexport function unused(): number { return 0; }\n",
+    ),
+    (
+      "entry.ts", "import { helper } from \"./dep.js\";\nexport function run(n: number): number { return helper(n) + 1; }\n",
+    ),
+  ])
+  let opts = BundleOptions::default()
+    .with_mangle(true)
+    .with_minify(true)
+    .with_treeshake(true)
+    .with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // The export clause survives, and so does the code behind it.
+      assert_true(out.js.contains("as run"))
+      assert_true(out.js.contains("*3") || out.js.contains("* 3"))
+      // The unreachable helper is still dropped — the fix restores the
+      // roots, it does not disable the pass.
+      assert_false(out.js.contains("return 0"))
     }
     Err(e) => fail("bundle error: \{e}")
   }

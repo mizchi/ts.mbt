@@ -466,7 +466,7 @@ fn collect_props_in_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit {
     }
     ObjectLit(entries) =>
       for ent in entries {
-        if ent.0 != "..." {
+        if !is_opaque_object_key(ent.0) {
           out[ent.0] = true
         }
         collect_props_in_expr(ent.1, out)
@@ -1415,11 +1415,31 @@ fn ScopeFrame::is_used_in_chain(self : ScopeFrame, name : String) -> Bool {
 fn ScopeFrame::function_child(
   parent : ScopeFrame,
   body : @ast.TsBlock,
+  // The parameter list, when the caller has one. A parameter's default
+  // and a destructured parameter's pattern are evaluated in this new
+  // scope but written OUTSIDE the body, so a walk of the body alone
+  // misses the outer names they reference — and the parameter binder
+  // then takes the same short alias:
+  //
+  //   const fallback = 9;                                  // → a
+  //   function pick({ n = fallback }) { return n; }
+  //   function b({n: a = a}) { return a; }                  // TDZ
+  params? : Array[@ast.TsParam] = [],
 ) -> ScopeFrame {
   // Collect all Var references inside the body (non-recursive: stops at
   // nested function boundaries so we only see free vars of this level).
   let refs : Map[String, Bool] = {}
   collect_var_refs_block(body, refs)
+  for p in params {
+    match p.binding {
+      Some(b) => collect_var_refs_binding(b, refs)
+      None => ()
+    }
+    match p.default {
+      Some(d) => collect_var_refs_expr(d, refs)
+      None => ()
+    }
+  }
   // For each referenced name, look up its short name via the parent chain.
   // If it was renamed, pre-occupy that short name in the new scope so the
   // param allocator skips it.
@@ -1457,10 +1477,66 @@ fn collect_var_refs_block(
 }
 
 ///|
+/// Names a binding PATTERN references — not the names it introduces.
+/// Pattern element defaults and computed keys are ordinary value
+/// expressions evaluated in the enclosing scope, so a walker that only
+/// looks at the initializer misses them.
+fn collect_var_refs_binding(
+  b : @ast.TsBinding,
+  out : Map[String, Bool],
+) -> Unit {
+  match b {
+    Ident(_) => ()
+    Target(e) => collect_var_refs_expr(e, out)
+    Array(ab) => {
+      for item in ab.items {
+        match item {
+          Some(elem) => {
+            collect_var_refs_binding(elem.binding, out)
+            match elem.default {
+              Some(d) => collect_var_refs_expr(d, out)
+              None => ()
+            }
+          }
+          None => ()
+        }
+      }
+      match ab.rest {
+        Some(r) => collect_var_refs_binding(r, out)
+        None => ()
+      }
+    }
+    Object(ob) =>
+      for prop in ob.props {
+        match prop.key_expr {
+          Some(k) => collect_var_refs_expr(k, out)
+          None => ()
+        }
+        collect_var_refs_binding(prop.binding, out)
+        match prop.default {
+          Some(d) => collect_var_refs_expr(d, out)
+          None => ()
+        }
+      }
+  }
+}
+
+///|
 fn collect_var_refs_stmt(stmt : @ast.TsStmt, out : Map[String, Bool]) -> Unit {
   match stmt {
-    Var(_, _, e) | Let(_, _, e) | Const(_, _, e) =>
+    Var(b, _, e) | Let(b, _, e) | Const(b, _, e) => {
+      // The BINDING hides value expressions: a pattern element's
+      // default (`const [first = fallback] = xs`) and a computed key
+      // (`const { [k]: v } = obj`) both reference outer names. Missing
+      // them left the name unreserved, so a parameter took its short
+      // alias and the default silently resolved to the parameter:
+      //
+      //   const fallback = 9;                    // → a
+      //   function pick(xs) { const [first = fallback] = xs; … }
+      //   function b(a) { const [b = a] = a; … } // `a` is now `xs`
+      collect_var_refs_binding(b, out)
       collect_var_refs_expr(e, out)
+    }
     Assign(name, e) => {
       out[name] = true
       collect_var_refs_expr(e, out)
@@ -1482,8 +1558,17 @@ fn collect_var_refs_stmt(stmt : @ast.TsStmt, out : Map[String, Bool]) -> Unit {
     Return(Some(e)) => collect_var_refs_expr(e, out)
     Return(None) => ()
     Throw(e) => collect_var_refs_expr(e, out)
-    Try(b, _, catch_b, finally_b) => {
+    Try(b, catch_bind, catch_b, finally_b) => {
       collect_var_refs_block(b, out)
+      // The catch BINDING can be a pattern whose default references an
+      // outer name (`catch ({ message = fallback })`). That reference
+      // lives outside every block here, so without this the name is not
+      // reserved and the catch binder takes its short alias:
+      // `catch ({message: a = a})` — a TDZ error.
+      match catch_bind {
+        Some(cb) => collect_var_refs_binding(cb, out)
+        None => ()
+      }
       match catch_b {
         Some(cb) => collect_var_refs_block(cb, out)
         None => ()
@@ -1520,7 +1605,12 @@ fn collect_var_refs_stmt(stmt : @ast.TsStmt, out : Map[String, Bool]) -> Unit {
       }
       collect_var_refs_block(b, out)
     }
-    ForOf(_, _, _, e, b) | ForIn(_, _, _, e, b) | ForAwaitOf(_, _, _, e, b) => {
+    ForOf(_, bind, _, e, b)
+    | ForIn(_, bind, _, e, b)
+    | ForAwaitOf(_, bind, _, e, b) => {
+      // Same as a declaration: the loop binding can be a pattern with
+      // defaults and computed keys.
+      collect_var_refs_binding(bind, out)
       collect_var_refs_expr(e, out)
       collect_var_refs_block(b, out)
     }
@@ -2470,6 +2560,17 @@ fn rename_binding_decl(
     Object(ob) => {
       let new_props : Array[@ast.TsObjectBindingProp] = []
       for p in ob.props {
+        // A computed key (`const { [k]: v } = obj`) is an ordinary
+        // value expression evaluated in the ENCLOSING scope, so it has
+        // to be renamed like any other reference. Renamed before the
+        // inner binding is bound, since `k` resolves outside the names
+        // this pattern introduces. Carrying it through verbatim left
+        // `{ [k]: c } = a` in a function whose `k` had become `b` —
+        // a ReferenceError under plain `--mangle`.
+        let new_key_expr : @ast.TsExpr? = match p.key_expr {
+          Some(k) => Some(rename_expr(k, scope))
+          None => None
+        }
         let new_inner = rename_binding_decl(p.binding, scope, reserved)
         let new_default : @ast.TsExpr? = match p.default {
           Some(d) => Some(rename_expr(d, scope))
@@ -2477,7 +2578,7 @@ fn rename_binding_decl(
         }
         new_props.push({
           key: p.key,
-          key_expr: p.key_expr,
+          key_expr: new_key_expr,
           binding: new_inner,
           default: new_default,
         })
@@ -2509,6 +2610,11 @@ fn rename_expr(expr : @ast.TsExpr, scope : ScopeFrame) -> @ast.TsExpr {
       }
       Call(scope.resolve(name), new_args)
     }
+    // `foo<number>(x)` parses as a TypeArgs wrapper around the call.
+    // Without this arm the wrapper fell through to `_ => expr` and the
+    // callee kept its pre-mangle name while its declaration was
+    // renamed — a `ReferenceError` at the call site.
+    TypeArgs(tys, inner) => TypeArgs(tys, rename_expr(inner, scope))
     CallExpr(callee, args) => {
       let new_args : Array[@ast.TsExpr] = []
       for a in args {
@@ -2588,7 +2694,7 @@ fn rename_expr(expr : @ast.TsExpr, scope : ScopeFrame) -> @ast.TsExpr {
     ArrowFunc(params, ret_ty, body, is_async) => {
       // New function scope — params get short names starting from 0.
       let inner = match body {
-        ArrowBlock(b) => ScopeFrame::function_child(scope, b)
+        ArrowBlock(b) => ScopeFrame::function_child(scope, b, params~)
         ArrowExpr(_) => {
           // Expression body: synthesize a block with a single Return
           // so we can reuse function_child's free-var collection.
@@ -2596,6 +2702,18 @@ fn rename_expr(expr : @ast.TsExpr, scope : ScopeFrame) -> @ast.TsExpr {
           match body {
             ArrowExpr(e) => collect_var_refs_expr(e, refs)
             _ => ()
+          }
+          // Same as `function_child`: a parameter's pattern and default
+          // are written outside the body but evaluated in this scope.
+          for p in params {
+            match p.binding {
+              Some(pb) => collect_var_refs_binding(pb, refs)
+              None => ()
+            }
+            match p.default {
+              Some(d) => collect_var_refs_expr(d, refs)
+              None => ()
+            }
           }
           let used : Map[String, Bool] = {}
           for name, _ in refs {
@@ -2709,6 +2827,12 @@ fn rename_binding_lhs(
     Object(ob) => {
       let new_props : Array[@ast.TsObjectBindingProp] = []
       for p in ob.props {
+        // Same as the declaration form: a computed key is a value
+        // expression and needs renaming.
+        let new_key_expr : @ast.TsExpr? = match p.key_expr {
+          Some(k) => Some(rename_expr(k, scope))
+          None => None
+        }
         let new_inner = rename_binding_lhs(p.binding, scope)
         let new_default : @ast.TsExpr? = match p.default {
           Some(d) => Some(rename_expr(d, scope))
@@ -2716,7 +2840,7 @@ fn rename_binding_lhs(
         }
         new_props.push({
           key: p.key,
-          key_expr: p.key_expr,
+          key_expr: new_key_expr,
           binding: new_inner,
           default: new_default,
         })
@@ -2787,11 +2911,29 @@ fn rename_class_decl_idents(
         // Rename each param and record the mapping in the inner scope.
         let renamed_params : Array[(String, @ast.TsType)] = []
         let renamed_defaults : Array[@ast.TsExpr?] = []
+        // Same shadowing hazard as `rename_param_list`: a default is
+        // evaluated in the method's own scope.
+        let param_reserved : Map[String, Bool] = {}
+        for k in inner.reserved.keys() {
+          param_reserved[k] = true
+        }
+        for d in m.param_defaults {
+          match d {
+            Some(expr) => {
+              let refs : Map[String, Bool] = {}
+              collect_var_refs_expr(expr, refs)
+              for n in refs.keys() {
+                param_reserved[inner.resolve(n)] = true
+              }
+            }
+            None => ()
+          }
+        }
         for i, p in m.params {
           let new_name = if p.0 == "" {
             ""
           } else {
-            inner.bind(p.0, inner.reserved)
+            inner.bind(p.0, param_reserved)
           }
           renamed_params.push((new_name, p.1))
           if i < m.param_defaults.length() {
@@ -2864,7 +3006,7 @@ fn rename_function_expr(f : @ast.TsFunc, scope : ScopeFrame) -> @ast.TsFunc {
   } else {
     ""
   }
-  let inner = ScopeFrame::function_child(scope, f.body)
+  let inner = ScopeFrame::function_child(scope, f.body, params=f.params)
   let new_params = rename_param_list(f.params, inner, inner.reserved)
   // Hoist `var` names from the body into the function frame so
   // block-scoped child frames can resolve them through the chain.
@@ -2884,12 +3026,51 @@ fn rename_function_expr(f : @ast.TsFunc, scope : ScopeFrame) -> @ast.TsFunc {
 }
 
 ///|
+/// Names an enclosing scope owns that a parameter default reads.
+///
+/// A default is evaluated inside the function's OWN scope, so a parameter
+/// renamed onto one of these shadows the binding the default depends on:
+///
+///     function bump() { … }
+///     function f(a, unused = bump()) { … }
+///     //       ↑ allocated `b`… and `bump` was already renamed to `b`,
+///     //         so `unused = b()` now calls the parameter.
+///
+/// The names are resolved through `scope` BEFORE any parameter is bound,
+/// so what comes back is the enclosing scope's post-rename spelling —
+/// exactly what the allocator must not hand out.
+fn param_default_free_names(
+  params : Array[@ast.TsParam],
+  scope : ScopeFrame,
+  reserved : Map[String, Bool],
+) -> Map[String, Bool] {
+  let out : Map[String, Bool] = {}
+  for k in reserved.keys() {
+    out[k] = true
+  }
+  for p in params {
+    match p.default {
+      Some(d) => {
+        let refs : Map[String, Bool] = {}
+        collect_var_refs_expr(d, refs)
+        for n in refs.keys() {
+          out[scope.resolve(n)] = true
+        }
+      }
+      None => ()
+    }
+  }
+  out
+}
+
+///|
 fn rename_param_list(
   params : Array[@ast.TsParam],
   scope : ScopeFrame,
   reserved : Map[String, Bool],
 ) -> Array[@ast.TsParam] {
   let out : Array[@ast.TsParam] = []
+  let reserved = param_default_free_names(params, scope, reserved)
   for p in params {
     let new_binding : @ast.TsBinding? = match p.binding {
       Some(b) => Some(rename_binding_decl(b, scope, reserved))
@@ -3180,7 +3361,9 @@ fn rename_properties_in_expr(
     ObjectLit(entries) => {
       let out : Array[(String, @ast.TsExpr)] = []
       for ent in entries {
-        let new_key = if ent.0 == "..." {
+        // Renaming a spread / computed sentinel turns `...base` into a
+        // literal key named after the sentinel — a different object.
+        let new_key = if is_opaque_object_key(ent.0) {
           ent.0
         } else {
           rename_prop_key(ent.0, prop_map)
@@ -3378,6 +3561,10 @@ fn rename_properties_in_expr(
         },
       )
     PureCall(inner) => PureCall(rename_properties_in_expr(inner, prop_map))
+    // Same wrapper as in `rename_expr`: property accesses inside a
+    // call carrying explicit type arguments still need renaming.
+    TypeArgs(tys, inner) =>
+      TypeArgs(tys, rename_properties_in_expr(inner, prop_map))
     _ => expr
   }
 }
@@ -3429,7 +3616,12 @@ fn rename_properties_in_binding(
         // continues to use the original name.
         new_props.push({
           key: new_key,
-          key_expr: p.key_expr,
+          // A computed key names no property statically, but the
+          // expression can still read one (`{ [cfg.field]: v }`).
+          key_expr: match p.key_expr {
+            Some(k) => Some(rename_properties_in_expr(k, prop_map))
+            None => None
+          },
           binding: if key_was_renamed && p.binding is Ident(b) && b == p.key {
             @ast.TsBinding::Ident(b)
           } else {

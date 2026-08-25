@@ -29,17 +29,125 @@ mtsc <input.ts> [options]
 - `--dts` — `--bundle` と併用して entry の `.d.ts` を出力。
 - `--sourcemap` — output の隣に v3 source map を出力。
 - `--mangle`、`--mangle-properties` — internal name / property の rename。
+- `--explain-mangle` — `--mangle-properties` が「なぜその名前を rename しな
+  かったか」を出力（下記）。
+- `--no-check` — 型エラーを報告するが JavaScript は出力する。TypeScript
+  ではない入力（公開済みの `.js` bundle など）向け。
+
 - `--jsx-runtime automatic|classic`、`--jsx-import-source <pkg>`、`--jsx-dev` — JSX
   transform の設定。
 
 すべてのオプションは `mtsc --help` で確認できます。
 
+`--mangle-properties`（および `--explain-mangle` /
+`--mangle-properties-shape-color`）は `--bundle` を含意します。escape 解析は
+`bundle_modules` の中にしかないので、単一ファイル経路では解析なしで
+property を rename してしまい、CJS の `exports.foo` まで書き換えていました。
+安全な形が 1 つしかない flag は、その経路を自分で選ぶべきです。
+
+## 非 TypeScript 入力: `--no-check`
+
+型エラーは既定で出力を止めます。プログラムが間違っているときはそれが
+正しい挙動ですが、**そもそも TypeScript でない入力**に対しては pipeline
+全体が到達不能になります。公開済みの `.js` bundle では object literal が
+runtime で property を増やすのが普通で、その各箇所が型エラーとして出ます。
+
+`--no-check` は診断を出したうえで emit します。minify / mangle pass を
+実 JS に対して走らせるための escape hatch で、型検査を無効化する意味では
+ありません（診断は今までどおり全部出ます）。
+
+## `--explain-mangle`
+
+`--mangle-properties` は安全側に倒れる解析なので、「rename されなかった」が
+既定の結果です。その理由を出すのがこの flag です（`--mangle` と
+`--mangle-properties` を暗黙に有効化します）。
+
+```sh
+mtsc --bundle src/index.ts --external ext --explain-mangle --out dist/index.js
+```
+
+出力は 4 つの pass に対応する 4 節で、読む順に並びます。最初の節が
+「なぜ property 名を予約したか」で、そこに `*`（wildcard）が出た場合は
+残り 3 pass も連鎖して止まるため、まずここを消す必要があります。
+
+```
+property mangling: why names are reserved
+
+  SUPPRESSED — the analysis reserved the wildcard, so no
+  user-declared property name is renamed. Causes:
+    * binding `cfg` crosses the bundle boundary and carries no closed
+      type annotation, so every name on it is assumed reachable — …
+
+  read off an external import or ambient global (3)
+    info post channel
+  literal key handed straight to a sink (1)
+    stage
+  reachable through an observed value tree (2)
+    retries timeoutMs
+
+trailing-parameter trimming: why a function kept its arity
+
+  * `announce`: the entry exports it, so its arity is package ABI
+…
+```
+
+節の見出しがそのまま予約の理由です。`retries` が消えないのは
+「観測される値の木から到達できる」からで、`stage` が消えないのは
+「sink に直接渡した literal の key だから」——どちらも直し方が違います。
+解析の分類そのものは [`docs/mangle-safety.md`](./mangle-safety.md)、pass ごとの
+証明義務は [`docs/minify-patterns.md`](./minify-patterns.md) にあります。
+
+実装上の要点として、この出力は判定を再計算したものではありません。
+`collect_externally_visible_props` は `escape_breakdown` の結果を merge する
+だけの関数で、説明と判定が同じ 1 回の解析から出ます。説明だけが古くなる
+ことがないようにするためです。
+
 ## Module graph checker ABI
 
 Vite integration が使う公開 JavaScript ABI は `checkModuleGraph` だけです。Vite が
 解決済み module と edge を渡し、`mtsc` は import / re-export を含めて checker を走らせ
-ます。CLI の単一 source checker と `checkSource` / `checkModuleSources` は実装・開発用
-API であり、consumer ABI には含めません。
+ます。`checkSource` / `checkModuleSources` は実装・開発用 API であり、consumer ABI に
+は含めません。
+
+`--bundle` の CLI も同じ graph を通ります（`collect_module_graph_issues`）。file 単位
+で checker を走らせると import された型がすべて未解決になり、実在するエラーを見逃す
+一方で同一 shape を mismatch と誤検出します。graph 検査のために、runtime code を持た
+ない type-only の relative import も loader が読み込みます。
+
+import 解決の diagnostic は CLI では出しません。型としてのみ使う値形式の import
+（`import { LocalObj } from "./types"` で `LocalObj` が type alias — TypeScript として
+は合法）と、本当に存在しない export を、この層では区別できないためです。
+
+## Ambient declaration files
+
+entry と同じ directory の `.d.ts` を program に含めます。import も export も持たない
+script 形式の宣言ファイルは ambient として扱われ、その宣言が全 module の scope に入り
+ます（`declare const MyGlobal: …` を `env.d.ts` に置く慣習）。`tsc` は tsconfig の
+`include` でこれを解決しますが、`mtsc` は tsconfig を読まないので directory 規約に
+従います。
+
+ambient global の property surface は host の ABI です。`--mangle-properties` は
+bundle が宣言していない名前を external として扱い、その property を rename しません。
+
+## Namespace lowering
+
+`namespace N { … }` / `module N { … }` は runtime 値なので、TypeScript と同じ形に
+lowering します。
+
+```js
+var N = N || {};
+(function (N) {
+  /* body */
+  N.member = member;
+})(N);
+```
+
+`var` + `N || {}` は declaration merging のためです。`export let` は
+`Object.defineProperty` の getter で公開し、namespace 内部で再代入されても読み取りが
+live であることを保ちます。lowering 対象外の形（`module "foo" { … }` のような quoted
+name、`namespace A.B { … }` の dotted path、`declare global`）は従来どおり erase され
+ます。ambient（`declare namespace` 等）も erase されます — 型しか宣言していないので
+それが正しい挙動です。
 
 ## TypeScript compatibility snapshot
 
