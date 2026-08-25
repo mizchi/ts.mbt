@@ -11,12 +11,82 @@
 // etc.), the result is statically `true` / `false` and the
 // surrounding fold pass folds it further.
 //
-// Scope tracking is intentionally simple: we maintain a
-// `Map[String, TsType]` that grows as we enter function /
-// arrow bodies (for parameters) and Let / Const / Var
-// declarations. We do NOT do narrowing across `if (typeof x ===
-// "string")` branches — that's full flow-sensitive analysis and
-// out of scope for this pass.
+// Scope tracking is intentionally simple: a chain of layers that
+// grows as we enter blocks, function / arrow bodies (for
+// parameters) and Let / Const / Var declarations. We do NOT do
+// narrowing across `if (typeof x === "string")` branches — that's
+// full flow-sensitive analysis and out of scope for this pass.
+
+///|
+/// One lexical layer of the fold's type environment, pointing at its
+/// parent rather than copying it.
+///
+/// This used to be a plain `Map[String, TsType]` that every block and
+/// every function body copied entry by entry. The copy is what made the
+/// pass expensive on deeply nested code: `checker.ts` spent roughly a
+/// tenth of the whole compile inserting into and re-hashing those
+/// copies (callgrind put ~1M scope-entry copies in `type_fold_block_in`
+/// alone, plus the `String::hash` on each insert). A layer costs two
+/// empty maps regardless of how large the enclosing scope is.
+///
+/// The semantics are the ones copying gave: a write lands in the
+/// innermost layer, so it is visible to the rest of that block and to
+/// blocks nested inside it, and invisible to the parent and to
+/// siblings. `hidden` carries the one thing a copy could express and a
+/// bare parent chain cannot — a parameter with no useful annotation
+/// shadowing an outer binding of the same name, which must read as
+/// "unknown" inside the body rather than falling through to the outer
+/// type.
+priv struct TypeScope {
+  own : Map[String, @ast.TsType]
+  hidden : Map[String, Bool]
+  parent : TypeScope?
+}
+
+///|
+fn TypeScope::root() -> TypeScope {
+  { own: {}, hidden: {}, parent: None }
+}
+
+///|
+fn TypeScope::child(self : TypeScope) -> TypeScope {
+  { own: {}, hidden: {}, parent: Some(self) }
+}
+
+///|
+fn TypeScope::set(self : TypeScope, name : String, ty : @ast.TsType) -> Unit {
+  let _ = self.hidden.remove(name)
+  self.own[name] = ty
+}
+
+///|
+/// Shadow `name` in this layer with no type — the layered form of the
+/// `remove` a copied map used to do.
+fn TypeScope::hide(self : TypeScope, name : String) -> Unit {
+  let _ = self.own.remove(name)
+  self.hidden[name] = true
+}
+
+///|
+fn TypeScope::get(self : TypeScope, name : String) -> @ast.TsType? {
+  let mut cur : TypeScope? = Some(self)
+  while true {
+    match cur {
+      Some(layer) => {
+        match layer.own.get(name) {
+          Some(t) => return Some(t)
+          None => ()
+        }
+        if layer.hidden.contains(name) {
+          return None
+        }
+        cur = layer.parent
+      }
+      None => break
+    }
+  }
+  None
+}
 
 ///|
 pub fn type_fold_block(
@@ -31,7 +101,7 @@ pub fn type_fold_block(
   if !block_needs_type_fold(block) {
     return block
   }
-  let scope : Map[String, @ast.TsType] = {}
+  let scope = TypeScope::root()
   let alias_table : Map[String, @ast.TsType] = {}
   // Cross-module bundles can contribute multiple aliases sharing one
   // name (e.g. two modules each declaring `type Shape = …`). Keying by
@@ -365,16 +435,12 @@ fn expr_needs_type_fold(expr : @ast.TsExpr) -> Bool {
 ///|
 fn type_fold_block_in(
   block : @ast.TsBlock,
-  scope : Map[String, @ast.TsType],
+  scope : TypeScope,
   aliases : Map[String, @ast.TsType],
 ) -> @ast.TsBlock {
-  // Each block introduces a fresh layer — we just copy-extend
-  // the parent scope so we don't pollute siblings.
-  let local_ : Map[String, @ast.TsType] = {}
-  for entry in scope {
-    let (k, v) = entry
-    local_[k] = v
-  }
+  // Each block introduces a fresh layer over the parent, so writes
+  // inside it don't pollute siblings.
+  let local_ = scope.child()
   let stmts : Array[@ast.TsStmt] = []
   for s in block.stmts {
     stmts.push(type_fold_stmt(s, local_, aliases))
@@ -385,7 +451,7 @@ fn type_fold_block_in(
 ///|
 fn type_fold_stmt(
   stmt : @ast.TsStmt,
-  scope : Map[String, @ast.TsType],
+  scope : TypeScope,
   aliases : Map[String, @ast.TsType],
 ) -> @ast.TsStmt {
   match stmt {
@@ -403,7 +469,7 @@ fn type_fold_stmt(
           }
           match effective_type {
             @ast.TsType::Any => ()
-            ty => scope[name] = ty
+            ty => scope.set(name, ty)
           }
         }
         _ => ()
@@ -573,7 +639,7 @@ fn type_fold_stmt(
 ///|
 fn type_fold_expr(
   expr : @ast.TsExpr,
-  scope : Map[String, @ast.TsType],
+  scope : TypeScope,
   aliases : Map[String, @ast.TsType],
 ) -> @ast.TsExpr {
   match expr {
@@ -721,17 +787,14 @@ fn type_fold_expr(
         type_fold_expr(v, scope, aliases),
       )
     ArrowFunc(params, ret, body, is_async) => {
-      let local_ : Map[String, @ast.TsType] = {}
-      for entry in scope {
-        local_[entry.0] = entry.1
-      }
+      let local_ = scope.child()
       for p in params {
         // Parameters always shadow outer bindings with the same name.
         // Remove any outer type first so the outer type is not used
         // inside the function body when the param has no annotation.
-        local_.remove(p.name)
+        local_.hide(p.name)
         if is_useful_type(p.type_) {
-          local_[p.name] = p.type_
+          local_.set(p.name, p.type_)
         }
       }
       let new_body = match body {
@@ -743,17 +806,14 @@ fn type_fold_expr(
       ArrowFunc(params, ret, new_body, is_async)
     }
     FuncExpr(f) => {
-      let local_ : Map[String, @ast.TsType] = {}
-      for entry in scope {
-        local_[entry.0] = entry.1
-      }
+      let local_ = scope.child()
       for p in f.params {
         // Parameters always shadow outer bindings with the same name.
         // Remove any outer type first so the outer type is not used
         // inside the function body when the param has no annotation.
-        local_.remove(p.name)
+        local_.hide(p.name)
         if is_useful_type(p.type_) {
-          local_[p.name] = p.type_
+          local_.set(p.name, p.type_)
         }
       }
       FuncExpr({ ..f, body: type_fold_block_in(f.body, local_, aliases) })
@@ -942,7 +1002,7 @@ fn try_typeof_fold(
   op : @ast.TsBinOp,
   x_name : String,
   lit : String,
-  scope : Map[String, @ast.TsType],
+  scope : TypeScope,
 ) -> Bool? {
   let ty = match scope.get(x_name) {
     Some(t) => t
@@ -968,7 +1028,7 @@ fn try_typeof_fold(
 fn drop_exhaustive_default(
   disc : @ast.TsExpr,
   cases : Array[@ast.TsSwitchCase],
-  scope : Map[String, @ast.TsType],
+  scope : TypeScope,
   aliases : Map[String, @ast.TsType],
 ) -> Array[@ast.TsSwitchCase] {
   if cases.length() == 0 {
@@ -1058,7 +1118,7 @@ fn try_null_check_fold(
   op : @ast.TsBinOp,
   x_name : String,
   rhs_kind : String,
-  scope : Map[String, @ast.TsType],
+  scope : TypeScope,
 ) -> Bool? {
   let ty = match scope.get(x_name) {
     Some(t) => t

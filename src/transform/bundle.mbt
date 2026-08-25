@@ -617,7 +617,17 @@ pub fn bundle_modules(
       combined_source_count = combined_source_count + 1
       sources.push(path)
       sources_content.push(m.source)
-      combined_line_indices.push(LineIndex::new(m.source))
+      // Only the `with_sourcemap` emit path reads this table, and
+      // building an entry scans the module's whole source for line
+      // breaks — 3 MB of it for `checker.ts`, for a map nobody asked
+      // for. Keep the slot so `source_id` still indexes it.
+      combined_line_indices.push(
+        if opts.with_sourcemap {
+          LineIndex::new(m.source)
+        } else {
+          LineIndex::new("")
+        },
+      )
       let has_positions = m.block.stmt_positions.length() ==
         m.block.stmts.length()
       for j, s in m.block.stmts {
