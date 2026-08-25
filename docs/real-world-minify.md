@@ -19,7 +19,7 @@
 出ない種類のものです。
 
 その後「hono の使わない機能はもっと落とせるはずだ」を測る過程で、
-**正しさ**の bug が 7 件出ました。
+**正しさ**の bug が 8 件出ました。
 
 | # | 何が起きたか | 出る flag |
 | --- | --- | --- |
@@ -31,8 +31,10 @@
 | 21a | pattern default の参照が予約されず、parameter が shadow する | **素の `--mangle`** |
 | 21b | pattern の computed key が rename されない（= 19a の予約側） | **素の `--mangle`** |
 | 22 | default 付き parameter が method / arrow で必須扱い（checker の false positive） | 既定 |
+| 23 | parameter list / catch clause の pattern default が予約されず TDZ | **素の `--mangle`** |
 
-19a 以外は crash ではなく**静かに違う答え**を返す形です。同じ調査で
+19a と 23 以外は crash ではなく**静かに違う答え**を返す形です。
+そして 8 件のうち **4 件が property mangling 抜き**で壊れています。同じ調査で
 `--explain-mangle` に method DCE の section を足し（#15）、class field
 注釈が lowering で消えているのを直しました（#17）。
 
@@ -592,6 +594,40 @@ arrow は annotation だけから素の `Func` を組むので、default が
 のと同じ処理なので、`T | undefined` を理解している arity 経路が
 そのまま理解します。6 形（free / method / constructor / arrow /
 `?` / static）を 1 つの test で押さえています。
+
+### 23. body の外に書かれた pattern default（mangle）
+
+#21 と同じ根ですが、pattern が置かれている場所が違います。
+**parameter list** と **catch clause** です。
+
+```ts
+const fallback = 9;
+function pick({ n = fallback }: { n?: number }): number { return n; }
+```
+→
+```js
+function b({n: a = a}) { return a; }
+```
+
+`ReferenceError: Cannot access 'a' before initialization` ——
+**素の `--mangle`** で TDZ です。
+
+`ScopeFrame::function_child` は自由変数を **body から**しか集めて
+いませんでした。parameter の default と分割代入 parameter の pattern は
+この新しい scope で評価されるのに、**body の外に書かれている**ので、
+`fallback` が予約されず、pattern の binder が同じ letter を取ります。
+
+catch も同じ形です（`collect_var_refs_stmt` の `Try` arm が catch
+binding を捨てていた）:
+
+```ts
+try { throw {}; } catch ({ message = label }) { return message; }
+```
+→ `catch ({message: a = a})`
+
+corpus に `case38-param-pattern-scope` を追加しました。
+`{ n = fallback }`、`{ n = fallback } = {}`、catch pattern の 3 形を
+1 case で差分実行します。
 
 ### 21. binding pattern に隠れた値式（mangle）
 

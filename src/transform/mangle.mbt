@@ -1415,11 +1415,31 @@ fn ScopeFrame::is_used_in_chain(self : ScopeFrame, name : String) -> Bool {
 fn ScopeFrame::function_child(
   parent : ScopeFrame,
   body : @ast.TsBlock,
+  // The parameter list, when the caller has one. A parameter's default
+  // and a destructured parameter's pattern are evaluated in this new
+  // scope but written OUTSIDE the body, so a walk of the body alone
+  // misses the outer names they reference — and the parameter binder
+  // then takes the same short alias:
+  //
+  //   const fallback = 9;                                  // → a
+  //   function pick({ n = fallback }) { return n; }
+  //   function b({n: a = a}) { return a; }                  // TDZ
+  params? : Array[@ast.TsParam] = [],
 ) -> ScopeFrame {
   // Collect all Var references inside the body (non-recursive: stops at
   // nested function boundaries so we only see free vars of this level).
   let refs : Map[String, Bool] = {}
   collect_var_refs_block(body, refs)
+  for p in params {
+    match p.binding {
+      Some(b) => collect_var_refs_binding(b, refs)
+      None => ()
+    }
+    match p.default {
+      Some(d) => collect_var_refs_expr(d, refs)
+      None => ()
+    }
+  }
   // For each referenced name, look up its short name via the parent chain.
   // If it was renamed, pre-occupy that short name in the new scope so the
   // param allocator skips it.
@@ -1538,8 +1558,17 @@ fn collect_var_refs_stmt(stmt : @ast.TsStmt, out : Map[String, Bool]) -> Unit {
     Return(Some(e)) => collect_var_refs_expr(e, out)
     Return(None) => ()
     Throw(e) => collect_var_refs_expr(e, out)
-    Try(b, _, catch_b, finally_b) => {
+    Try(b, catch_bind, catch_b, finally_b) => {
       collect_var_refs_block(b, out)
+      // The catch BINDING can be a pattern whose default references an
+      // outer name (`catch ({ message = fallback })`). That reference
+      // lives outside every block here, so without this the name is not
+      // reserved and the catch binder takes its short alias:
+      // `catch ({message: a = a})` — a TDZ error.
+      match catch_bind {
+        Some(cb) => collect_var_refs_binding(cb, out)
+        None => ()
+      }
       match catch_b {
         Some(cb) => collect_var_refs_block(cb, out)
         None => ()
@@ -2665,7 +2694,7 @@ fn rename_expr(expr : @ast.TsExpr, scope : ScopeFrame) -> @ast.TsExpr {
     ArrowFunc(params, ret_ty, body, is_async) => {
       // New function scope — params get short names starting from 0.
       let inner = match body {
-        ArrowBlock(b) => ScopeFrame::function_child(scope, b)
+        ArrowBlock(b) => ScopeFrame::function_child(scope, b, params~)
         ArrowExpr(_) => {
           // Expression body: synthesize a block with a single Return
           // so we can reuse function_child's free-var collection.
@@ -2673,6 +2702,18 @@ fn rename_expr(expr : @ast.TsExpr, scope : ScopeFrame) -> @ast.TsExpr {
           match body {
             ArrowExpr(e) => collect_var_refs_expr(e, refs)
             _ => ()
+          }
+          // Same as `function_child`: a parameter's pattern and default
+          // are written outside the body but evaluated in this scope.
+          for p in params {
+            match p.binding {
+              Some(pb) => collect_var_refs_binding(pb, refs)
+              None => ()
+            }
+            match p.default {
+              Some(d) => collect_var_refs_expr(d, refs)
+              None => ()
+            }
           }
           let used : Map[String, Bool] = {}
           for name, _ in refs {
@@ -2965,7 +3006,7 @@ fn rename_function_expr(f : @ast.TsFunc, scope : ScopeFrame) -> @ast.TsFunc {
   } else {
     ""
   }
-  let inner = ScopeFrame::function_child(scope, f.body)
+  let inner = ScopeFrame::function_child(scope, f.body, params=f.params)
   let new_params = rename_param_list(f.params, inner, inner.reserved)
   // Hoist `var` names from the body into the function frame so
   // block-scoped child frames can resolve them through the chain.

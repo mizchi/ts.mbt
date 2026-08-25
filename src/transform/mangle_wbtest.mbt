@@ -967,3 +967,39 @@ test "mangle: NativeClassStmt method names are collected and shortened (#mangle_
     Err(e) => fail("\{e}")
   }
 }
+
+///|
+test "mangle: a destructured parameter's default is reserved in its scope" {
+  // Regression. `function_child` collected free variables from the BODY
+  // only, so `fallback` — referenced from the parameter list — was not
+  // reserved and the pattern's own binder took its letter:
+  //
+  //   function b({n: a = a}) { return a; }
+  //
+  // `ReferenceError: Cannot access 'a' before initialization`, under
+  // plain `--mangle` with no property mangling involved.
+  let cfg = ManglerConfig::default().with_preserve_top_level(false)
+  let src = "const fallback = 9;\nfunction pick({ n = fallback }) { return n; }\nconsole.log(pick({}));"
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      assert_false(js.contains("a = a"))
+      assert_false(js.contains("b = b"))
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+test "mangle: a catch pattern's default is reserved in its scope" {
+  // Same gap on the other shape that writes a pattern outside a body:
+  // `collect_var_refs_stmt`'s `Try` arm discarded the catch binding.
+  let cfg = ManglerConfig::default().with_preserve_top_level(false)
+  let src = "const label = \"fb\";\nfunction run() { try { throw {}; } catch ({ message = label }) { return message; } }\nconsole.log(run());"
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      assert_false(js.contains("a = a"))
+      assert_false(js.contains("b = b"))
+    }
+    Err(e) => fail("\{e}")
+  }
+}
