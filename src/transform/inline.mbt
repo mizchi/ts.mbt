@@ -837,6 +837,84 @@ fn substitute_expr(
 /// (in the same scope) from refs inside nested function / arrow
 /// bodies. Local + nested are returned via out-parameters so the
 /// caller can decide whether the binding is closure-captured.
+/// Uses of `name` inside a binding pattern: computed keys, defaults, and
+/// assignment targets. These live in the same scope as the declaration
+/// that carries the pattern, so they count as local uses.
+fn count_var_uses_binding(
+  binding : @ast.TsBinding,
+  name : String,
+  local_ : Int,
+  nested : Int,
+  inside_func : Bool,
+) -> (Int, Int) {
+  let mut l = local_
+  let mut n = nested
+  match binding {
+    Ident(_) => ()
+    Array(ab) => {
+      for elem in ab.items {
+        match elem {
+          Some(be) => {
+            let (l2, n2) = count_var_uses_binding(
+              be.binding, name, 0, 0, inside_func,
+            )
+            l = l + l2
+            n = n + n2
+            match be.default {
+              Some(d) => {
+                let (l3, n3) = count_var_uses_expr(d, name, 0, 0, inside_func)
+                l = l + l3
+                n = n + n3
+              }
+              None => ()
+            }
+          }
+          None => ()
+        }
+      }
+      match ab.rest {
+        Some(r) => {
+          let (l2, n2) = count_var_uses_binding(r, name, 0, 0, inside_func)
+          l = l + l2
+          n = n + n2
+        }
+        None => ()
+      }
+    }
+    Object(ob) =>
+      for prop in ob.props {
+        let (l2, n2) = count_var_uses_binding(
+          prop.binding, name, 0, 0, inside_func,
+        )
+        l = l + l2
+        n = n + n2
+        match prop.default {
+          Some(d) => {
+            let (l3, n3) = count_var_uses_expr(d, name, 0, 0, inside_func)
+            l = l + l3
+            n = n + n3
+          }
+          None => ()
+        }
+        match prop.key_expr {
+          Some(k) => {
+            let (l4, n4) = count_var_uses_expr(k, name, 0, 0, inside_func)
+            l = l + l4
+            n = n + n4
+          }
+          None => ()
+        }
+      }
+    Target(e) => {
+      let (l2, n2) = count_var_uses_expr(e, name, 0, 0, inside_func)
+      l = l + l2
+      n = n + n2
+    }
+  }
+  (l, n)
+}
+
+///|
 fn count_var_uses_stmt(
   stmt : @ast.TsStmt,
   name : String,
@@ -847,10 +925,28 @@ fn count_var_uses_stmt(
   let mut l = local_
   let mut n = nested
   match stmt {
-    Var(_, _, e) | Let(_, _, e) | Const(_, _, e) => {
+    Var(b, _, e) | Let(b, _, e) | Const(b, _, e) => {
       let (l2, n2) = count_var_uses_expr(e, name, 0, 0, inside_func)
       l = l + l2
       n = n + n2
+      // A destructuring pattern is not just a list of names to bind: its
+      // computed keys and defaults are expressions that READ other
+      // bindings. Counting only the initializer missed them, so
+      //
+      //   const keys = ['alpha'];
+      //   const { [keys[0]]: v } = bag;
+      //
+      // left `keys` with a use count of zero and the declaration was
+      // dropped, while `keys[0]` stayed in the pattern —
+      // "ReferenceError: keys is not defined". It took `--fold` to
+      // surface: the fold turned the only other reference into a
+      // literal, and this was then the last one.
+      //
+      // `treeshake.mbt`'s own collector walks the binding for exactly
+      // this reason; this counter did not. Found by `just fuzz-mangle`.
+      let (l3, n3) = count_var_uses_binding(b, name, 0, 0, inside_func)
+      l = l + l3
+      n = n + n3
     }
     Assign(n_, e) => {
       if n_ == name {

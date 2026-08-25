@@ -89,6 +89,13 @@ export class Generator {
     // these, so a rename of one is visible.
     this.ownProps = [];
     this.classNames = [];
+    // Instance-reachable and constructor-reachable members, kept apart.
+    // A `static` method is NOT on the instance, so `new C().m()` throws
+    // "not a function" — in the ORIGINAL program, which made the seed a
+    // skip rather than a test. 18 of 120 seeds were being wasted that
+    // way. className -> [prop]
+    this.instanceMembers = new Map();
+    this.staticMembers = new Map();
     this.funcNames = [];
     this.typeNames = [];
   }
@@ -211,6 +218,10 @@ export class Generator {
   classDecl(name) {
     this.classNames.push(name);
     const members = [];
+    const instance = [];
+    const statics = [];
+    this.instanceMembers.set(name, instance);
+    this.staticMembers.set(name, statics);
     const fieldCount = this.int(1, 3);
     for (let i = 0; i < fieldCount; i++) {
       const prop = `${name.toLowerCase()}f${i}`;
@@ -221,6 +232,7 @@ export class Generator {
         init: { k: "lit", value: this.pick(["0", "1", "'s'", "true"]) },
         static: false,
       });
+      instance.push({ prop, callable: false });
     }
     // A `#private` field is unreachable from outside the class body by
     // construction, so it is the one member a mangler may always rename.
@@ -231,13 +243,15 @@ export class Generator {
     for (let i = 0; i < methodCount; i++) {
       const prop = `${name.toLowerCase()}m${i}`;
       this.ownProps.push(prop);
+      const isStatic = this.chance(0.25);
       members.push({
         k: "method",
         name: prop,
         params: ["q0"],
         body: [{ k: "return", expr: this.expr(1) }],
-        static: this.chance(0.25),
+        static: isStatic,
       });
+      (isStatic ? statics : instance).push({ prop, callable: true });
     }
     if (this.chance(0.3)) {
       const prop = `${name.toLowerCase()}g`;
@@ -248,6 +262,7 @@ export class Generator {
         body: [{ k: "return", expr: this.expr(1) }],
         static: false,
       });
+      instance.push({ prop, callable: false });
     }
     return { k: "class", name, members };
   }
@@ -585,12 +600,20 @@ export class Generator {
       case 16: {
         if (this.classNames.length === 0) return this.primary();
         const className = this.pick(this.classNames);
-        const instance = { k: "new", callee: { k: "var", name: className }, args: [] };
-        const prop = this.ownProps.filter((p) => p.startsWith(className.toLowerCase()));
-        if (prop.length === 0) return instance;
-        const target = { k: "member", obj: instance, prop: this.pick(prop) };
+        // Reach a static through the constructor and everything else
+        // through an instance — the distinction the class body drew.
+        const onStatic = this.chance(0.3);
+        const members = (onStatic ? this.staticMembers : this.instanceMembers).get(className) ?? [];
+        const receiver = onStatic
+          ? { k: "var", name: className }
+          : { k: "new", callee: { k: "var", name: className }, args: [] };
+        if (members.length === 0) return receiver;
+        const member = this.pick(members);
+        const target = { k: "member", obj: receiver, prop: member.prop };
         // A method reference has to be called to produce a value.
-        return target.prop.includes("m") ? { k: "call", callee: target, args: [{ k: "lit", value: "1" }] } : target;
+        return member.callable
+          ? { k: "call", callee: target, args: [{ k: "lit", value: "1" }] }
+          : target;
       }
       case 17: {
         const key = this.freshProp();

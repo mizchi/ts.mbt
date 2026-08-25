@@ -677,7 +677,7 @@ fn emit_block(e : Emitter, block : @ast.TsBlock) -> Unit {
                     e.space()
                     e.write("=")
                     e.space()
-                    emit_expr(e, init, 0)
+                    emit_expr(e, init, declarator_init_prec)
                   }
                 }
                 _ => ()
@@ -788,7 +788,7 @@ fn emit_stmts_merged(e : Emitter, stmts : Array[@ast.TsStmt]) -> Unit {
                     e.space()
                     e.write("=")
                     e.space()
-                    emit_expr(e, init, 0)
+                    emit_expr(e, init, declarator_init_prec)
                   }
                 }
                 _ => ()
@@ -899,6 +899,16 @@ fn stmt_ends_in_dangling_if(s : @ast.TsStmt) -> Bool {
 fn can_braceless(stmt : @ast.TsStmt) -> Bool {
   match stmt {
     Let(_, _, _) | Const(_, _, _) => false
+    // A `Block` whose statements are all declarations of one kind is how
+    // the parser represents `let a = 1, b = 2;`, and `emit_stmt` unwraps
+    // it WITHOUT braces — it has to, since real braces would move the
+    // bindings into a new scope. So such a block is a declaration for
+    // brace purposes, and `do { { let v = 1; } } while (…)` de-braced to
+    // `do let v=1;while(…)`: "Lexical declaration cannot appear in a
+    // single-statement context".
+    //
+    // Found by `just fuzz-mangle`.
+    Block(b) => !block_is_inline_decl_group(b)
     // A bare `function foo() {…}` (which our emitter lowers from
     // a `Let(Ident, _, FuncExpr)` pair) also can't sit as a single
     // branch body. Detect the pattern.
@@ -934,7 +944,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
         e.space()
         e.write("=")
         e.space()
-        emit_expr(e, init, 0)
+        emit_expr(e, init, declarator_init_prec)
       }
       e.semi()
     }
@@ -954,7 +964,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
         e.space()
         e.write("=")
         e.space()
-        emit_expr(e, init, 0)
+        emit_expr(e, init, declarator_init_prec)
       }
       e.semi()
     }
@@ -978,7 +988,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
         e.space()
         e.write("=")
         e.space()
-        emit_expr(e, init, 0)
+        emit_expr(e, init, declarator_init_prec)
       }
       e.semi()
     }
@@ -1484,6 +1494,31 @@ fn binding_leading_byte(b : @ast.TsBinding) -> Char {
 /// that block with real `{…}` braces breaks scope; emit it as
 /// `let a = 1, b = 2;` instead. Returns true when it handled the
 /// block; the caller falls back to `emit_block` otherwise.
+/// Would `try_emit_multi_decl_inline` unwrap this block into a bare
+/// declaration? Same test as that function's guard, without emitting —
+/// `can_braceless` needs the answer before anything is written.
+fn block_is_inline_decl_group(block : @ast.TsBlock) -> Bool {
+  if block.stmts.length() == 0 {
+    return false
+  }
+  let kind = match block.stmts[0] {
+    Var(_, _, _) => "var"
+    Let(_, _, _) => "let"
+    Const(_, _, _) => "const"
+    _ => return false
+  }
+  for s in block.stmts {
+    match s {
+      Var(_, _, _) => if kind != "var" { return false }
+      Let(_, _, _) => if kind != "let" { return false }
+      Const(_, _, _) => if kind != "const" { return false }
+      _ => return false
+    }
+  }
+  true
+}
+
+///|
 fn try_emit_multi_decl_inline(e : Emitter, block : @ast.TsBlock) -> Bool {
   if block.stmts.length() == 0 {
     return false
@@ -1525,7 +1560,7 @@ fn try_emit_multi_decl_inline(e : Emitter, block : @ast.TsBlock) -> Bool {
           e.space()
           e.write("=")
           e.space()
-          emit_expr(e, init, 0)
+          emit_expr(e, init, declarator_init_prec)
         }
       }
       _ => ()
@@ -1586,7 +1621,7 @@ fn try_emit_multi_decl_for_head(e : Emitter, stmt : @ast.TsStmt) -> Bool {
         e.space()
         e.write("=")
         e.space()
-        emit_expr(e, init, 0)
+        emit_expr(e, init, declarator_init_prec)
       }
       _ => ()
     }
@@ -1612,7 +1647,7 @@ fn emit_stmt_for_head(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       e.space()
       e.write("=")
       e.space()
-      emit_expr(e, init, 0)
+      emit_expr(e, init, declarator_init_prec)
     }
     Let(b, _, init) => {
       e.word("let")
@@ -1621,7 +1656,7 @@ fn emit_stmt_for_head(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       e.space()
       e.write("=")
       e.space()
-      emit_expr(e, init, 0)
+      emit_expr(e, init, declarator_init_prec)
     }
     Const(b, _, init) => {
       if e.pretty {
@@ -1634,7 +1669,7 @@ fn emit_stmt_for_head(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       e.space()
       e.write("=")
       e.space()
-      emit_expr(e, init, 0)
+      emit_expr(e, init, declarator_init_prec)
     }
     Expr(ex) => emit_expr(e, ex, 0)
     Assign(name, ex) => {
@@ -1810,8 +1845,39 @@ fn emit_binding(e : Emitter, binding : @ast.TsBinding) -> Unit {
 // ---------------------------------------------------------------------------
 
 ///|
+/// Parent precedence for a declarator's initializer.
+///
+/// A declarator `=` takes an AssignmentExpression, and the one thing
+/// that binds looser than that is the comma operator. Emitting an
+/// initializer at precedence 0 dropped its parentheses, which does not
+/// merely reformat the code — it changes what it means:
+///
+///   let v = (trace.push(0), x);   ->   let v = trace.push(0), x;
+///
+/// The sequence became a SECOND declarator, so `x` is redeclared and the
+/// bundle dies with "Identifier 'x' has already been declared". With a
+/// constructor on the right (`(f(), new C())`) it is a syntax error
+/// instead. `emit_args` and the array-literal path already pass 2 for
+/// exactly this reason; the declaration paths did not.
+///
+/// Found by `just fuzz-mangle`, shrunk to four nodes.
+let declarator_init_prec : Int = 2
+
+///|
 fn emit_expr(e : Emitter, expr : @ast.TsExpr, parent_prec : Int) -> Unit {
-  let own = expr_precedence(expr)
+  // `new Foo` with the argument list omitted (the minify-mode saving in
+  // the `New` arm) is NOT a member-expression head: `new C().f` written
+  // that way becomes `new C.f`, which parses as `new (C.f)` and throws
+  // "C.f is not a constructor" at runtime. The saving is only sound when
+  // nothing binds tighter than the `new`, so at member-access precedence
+  // the parentheses have to come back — `(new C).f`, same byte count as
+  // the argument list would have cost.
+  //
+  // Found by `just fuzz-mangle`; it was ten of the first hundred seeds.
+  let own = match expr {
+    @ast.TsExpr::New(_, args) if !e.pretty && args.length() == 0 => 17
+    _ => expr_precedence(expr)
+  }
   let needs_paren = own < parent_prec
   if needs_paren {
     e.write("(")
