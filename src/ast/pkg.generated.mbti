@@ -325,6 +325,7 @@ pub(all) struct TsModuleBlock {
   pure_declarations : Map[String, Bool]
   type_aliases : Array[TsTypeAlias]
   interfaces : Array[TsInterface]
+  class_fields : Array[(String, TsType)]
   has_export_equals : Bool
 } derive(@debug.Debug)
 pub impl Show for TsModuleBlock

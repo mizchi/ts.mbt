@@ -559,6 +559,52 @@ non-enumerable まで見える reflection（`getOwnPropertyNames` /
 `getOwnPropertyDescriptors` / `ownKeys` / `getOwnPropertyDescriptor`）は
 そのまま sink です。
 
+### 17. class の field 注釈が lowering で消えていた（parser / bundle）
+
+computed key の read を通す receiver 側の証明は「宣言型が keyed
+container」でした。ところが最小の形で通りません。
+
+```ts
+class Table {
+  #rows: Record<string, string> = {};
+  put(k: string, v: string): void { this.#rows[k] = v; }
+  read(k: string): string | undefined { return this.#rows[k]; }
+  unused(): number { return 99; }      // 落ちない
+}
+```
+
+理由は lowering です。初期化子を持つ field は constructor への代入に
+なるので、`class_method_dce` が見る `NativeClassStmt` の `properties`
+は**空**です。注釈は parse 時には有って、そこで捨てられていました。
+
+`TsModuleBlock.class_fields` に `(field 名, 宣言型)` を積むようにして
+（private field は brand 名で）、`ModuleNode` 経由で bundle 全体分を
+pass に渡します。per-module emit 経路でも graph 全体から集めます ——
+ある module の computed read は、別の module で宣言された class の
+member を名指しし得るので、証明も全体から組む必要があります。
+
+同時に、注釈が無い binding のための container 推論を
+`container_vars.mbt` として追加しました。`numeric_vars.mbt` と同じ形の
+fixed point で、promote は証明があるときだけ。
+
+| 形 | 根拠 |
+| --- | --- |
+| `[]` / string literal / template literal | 見たまま |
+| `x \|\| y`、`x ?? y`、`c ? x : y` | **両辺**が container のときだけ（`foo \|\| []` の `foo` が object なら container ではない） |
+| `await x` / `x!` | 内側 |
+| `Promise.all(…)` / `Promise.allSettled(…)` | 常に array。bundle 自身が `Promise` を宣言していたら降りる |
+| `s.match(…)` / `s.split(…)` / `s.matchAll(…)`（`s` が `string`） | array か `null`。`null[k]` は method が有っても無くても throw するので、名前は観測されない |
+| `this.f` | bundle 内の**全 class** が `f` を container と宣言しているとき |
+| alias | `type MatcherMap<T> = Record<string, Matcher<T>>` は綴りが違うだけの `Record`。型引数は代入しない —— 訊いているのは最も外側の形で、それは引数に依存しない |
+| inline index signature | `{ [key: string]: Pattern }` は `Record<string, Pattern>` と同格 |
+| container だけの union | どちらの arm でも container |
+
+`this.f[k]` も receiver として認めます（`this.#matchers[method]`）。
+
+hono では 18 個の sink のうち 6 個が消えました。残るのは関数の返り値型
+からの推論が要るもの（`const { groups } = extractGroupsFromPath(…)`）と、
+原理的に無理なもの（`req[cacheKey]`）です。
+
 ### 16. 解決できない relative import が compile 全体を落とす（CLI / bundle）
 
 `checker.ts` を `--minify --fold` に通すと出力が 1 byte も出ず、exit code は
@@ -733,9 +779,10 @@ unused class methods: what was dropped and why not
 ```
 
 18 個の distinct sink があり、**全部が同じ種類**――computed key での
-member read です。1 つでも残れば bundle 全体で pass が止まります
-（inline index signature 型を container として認めて `patternCache` を
-1 つ潰し、17 個)。
+member read です。1 つでも残れば bundle 全体で pass が止まります。
+下の #17 の精度改善で 6 個潰して 12 個になりました（潰すたびに、同じ
+statement 内で隠れていた次の sink が出てくるので、報告される数は
+その分戻ります）。
 
 落ちるはずだった 26 method の本体は、未 minify の 46,964 byte 中
 3,448 byte。ここが消えれば `_getQueryParam`(1,909) / `parseFormData`(594) /
@@ -748,8 +795,8 @@ minify + mangle 後で **2〜2.5 KB（11〜14%）**の見込みです。無視�
 
 | 層 | 例 | 状況 |
 | --- | --- | --- |
-| 注釈が届く | `patternCache: { [key: string]: Pattern }` | **この作業で通した**（inline の index signature 型を `Record<…>` と同格に扱う。container だけの union も同様に認める） |
-| 注釈が届かない | `const middleware = this.#middleware`、`const tokens = markedPath.match(…) \|\| []`、`const { groups } = extractGroupsFromPath(…)`、`await Promise.all(buffer)` | 初期化子から container を推論すれば届く。name 単位の集約をやめて scope 解決にする必要もある（`i` は bundle 内に十数個あり、注釈なしの `forEach((list, i) =>)` が 1 つあるだけで全部の `i` が失格する） |
+| 注釈が届く | `patternCache: { [key: string]: Pattern }`、`this.#matchers[method]`（`type MatcherMap<T> = Record<string, …>`）、`await Promise.all(buffer)` | **この作業で通した**。下の #17 |
+| 注釈が届かない | `const { groups } = extractGroupsFromPath(…)`、`const form: BodyData = …` の連鎖、`this.#tries[method]` | 関数の返り値型からの推論と、name 単位の集約をやめた scope 解決が要る（`i` は bundle 内に十数個あり、注釈なしの `forEach((list, i) =>)` が 1 つあるだけで全部の `i` が失格する） |
 | 原理的に無理 | `req[cacheKey]`、`headers[…]`、`this.#matchResult[…][…][key]` | **本物の動的 member read**。host object から計算した名前で member を引いている。どんな解析でも key を bound できない |
 
 3 層目が残るので、**hono の app bundle は member 単位の DCE では縮みません**。

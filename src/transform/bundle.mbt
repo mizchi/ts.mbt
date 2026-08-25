@@ -260,6 +260,10 @@ priv struct ModuleNode {
   // the escape analysis resolves an annotation that names one of these
   // to decide whether its key set is closed.
   interfaces : Array[@ast.TsInterface]
+  // `(field name, declared type)` for this module's runtime classes.
+  // The class lowering drops the annotation, so a whole-program pass
+  // needs it carried alongside. See `TsModuleBlock.class_fields`.
+  class_fields : Array[(String, @ast.TsType)]
   // For CJS-wrapped modules (esbuild-style `((module)=>{...})({get exports(){return X;}, ...})`),
   // the top-level variable that holds the module's exports after the wrapper runs.
   // Named imports from such a module that can't be resolved via export_specs fall
@@ -542,6 +546,7 @@ pub fn bundle_modules(
     let combined_stmts : Array[@ast.TsStmt] = []
     let combined_type_aliases : Array[@ast.TsTypeAlias] = []
     let combined_interfaces : Array[@ast.TsInterface] = []
+    let combined_class_fields : Array[(String, @ast.TsType)] = []
     // Track each combined-statement's origin so the source-map can
     // map it back to its module after mangle / treeshake / fold
     // restructure the AST. Encoding: high 24 bits = source-id (the
@@ -583,6 +588,9 @@ pub fn bundle_modules(
       }
       for i in m.interfaces {
         combined_interfaces.push(i)
+      }
+      for f in m.class_fields {
+        combined_class_fields.push(f)
       }
     }
     let mut combined : @ast.TsBlock = {
@@ -638,6 +646,8 @@ pub fn bundle_modules(
     combined = class_method_dce_block(
       combined,
       keep=export_surface,
+      class_fields=combined_class_fields,
+      type_aliases=combined_type_aliases,
       explain=if opts.explain { Some(method_dce_reasons) } else { None },
     )
     if opts.explain {
@@ -1039,9 +1049,30 @@ pub fn bundle_modules(
           None => ()
         }
       }
+      // Per-module emit path. The field annotations and aliases come
+      // from the whole graph, not just this module: a computed read
+      // here can name a member of a class declared anywhere, so the
+      // proofs that clear it have to be assembled the same way.
+      let all_class_fields : Array[(String, @ast.TsType)] = []
+      let all_type_aliases : Array[@ast.TsTypeAlias] = []
+      for other in order {
+        match modules.get(other) {
+          Some(node) => {
+            for f in node.class_fields {
+              all_class_fields.push(f)
+            }
+            for ta in node.type_aliases {
+              all_type_aliases.push(ta)
+            }
+          }
+          None => ()
+        }
+      }
       let lifted_block = class_method_dce_block(
         iife_class_lift_block(m.block),
         keep=export_surface,
+        class_fields=all_class_fields,
+        type_aliases=all_type_aliases,
       )
       for j, stmt in lifted_block.stmts {
         if opts.with_sourcemap && j < lifted_block.stmt_positions.length() {
@@ -1222,6 +1253,7 @@ fn load_module_graph(
     pure_declarations: mb.pure_declarations,
     type_aliases: mb.type_aliases,
     interfaces: mb.interfaces,
+    class_fields: mb.class_fields,
     export_specs: mb.exports,
     reexport_specs: mb.reexports,
     cjs_exports_var: detect_cjs_exports_var(lowered),
@@ -1383,6 +1415,7 @@ fn load_module_graph(
     pure_declarations: mb.pure_declarations,
     type_aliases: mb.type_aliases,
     interfaces: mb.interfaces,
+    class_fields: mb.class_fields,
     export_specs: mb.exports,
     reexport_specs: mb.reexports,
     cjs_exports_var,

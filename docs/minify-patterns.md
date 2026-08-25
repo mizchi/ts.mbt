@@ -43,7 +43,7 @@ allowlist です。同じ名前が両方に載る／片方だけに載るのが�
 | identifier mangling | scope 内で一意な rename。top-level は bundle 内部なので自由 | 実装済 (`mangle.mbt`) |
 | property mangling | 名前が door 1・2 のどちらからも到達しない | 実装済 (`mangle_safety.mbt` + `export_surface.mbt` + `callee_provenance.mbt`) |
 | dead property elimination | 上に加えて、値式が純粋 | 実装済 (`dead_props.mbt`) |
-| class method DCE | method 名が bundle 内で read されず、export surface からも到達しない。加えて bundle が「名前を書けない member 観測」をしない —— computed key の **read** は key が数値と証明できるか receiver が keyed container と宣言されているときだけ許す（write / `delete` / own-enumerable 列挙は観測にならないので gate ではない） | 実装済 (`class_method_dce.mbt`) |
+| class method DCE | method 名が bundle 内で read されず、export surface からも到達しない。加えて bundle が「名前を書けない member 観測」をしない —— computed key の **read** は key が数値（`numeric_vars.mbt`）か receiver が keyed container（`container_vars.mbt`）と証明できるときだけ許す（write / `delete` / own-enumerable 列挙は観測にならないので gate ではない） | 実装済 (`class_method_dce.mbt`) |
 | tree-shaking | 宣言が live root から到達不能、かつ initializer が純粋 | 実装済 (`treeshake.mbt`) |
 | **inferred-purity DCE** | **callee が「自分の scope 外に書かない・impure を呼ばない」を推移的に満たす** | **実装済（下記）** |
 | `as const` / const enum inline | binding が never mutated かつ never escape、access が静的 | 実装済 (`as_const_inline.mbt`, `const_enum_inline.mbt`) |
@@ -577,17 +577,17 @@ observability lattice は **binding** 単位なので足りません
 名前ごと降ります。lattice の細分は依然として「もっと広く効かせる」ための
 残作業です。
 
-### computed-key read の精度: 初期化子推論と scope 解決
+### computed-key read の精度: 返り値型推論と scope 解決
 
-class method DCE の gate は今、computed key の read を 2 つの証明のどちらか
-で通します —— key が数値、または receiver の**宣言型**が keyed container。
-どちらも name 単位で集約しているので、実 bundle では次の 2 つで落ちます。
+class method DCE の gate は computed key の read を 2 つの証明のどちらかで
+通します —— key が数値（`numeric_vars.mbt`）、または receiver が keyed
+container（`container_vars.mbt`）。後者は宣言型と、注釈が無い binding の
+ための fixed point（初期化子・alias・`this.f`・`Promise.all`・string
+method）まで見ます。残る穴は 2 つです。
 
-1. **注釈が届かない local。**`const middleware = this.#middleware`、
-   `const tokens = markedPath.match(…) || []`、
-   `const { groups } = extractGroupsFromPath(…)`、
-   `await Promise.all(buffer)`。初期化子から container を推論する
-   fixed point（numeric 推論と同じ形）で届きます。
+1. **関数の返り値型を辿らない。**`const { groups } =
+   extractGroupsFromPath(…)` の `groups` は、呼び先の返り値型注釈まで
+   降りれば container だと分かります。destructuring も同じです。
 2. **name 単位の集約。**`i` は実 bundle では十数個の function で宣言され、
    注釈なしの `forEach((list, i) =>)` が 1 つあるだけで**全部の `i`** が
    失格します。`SymbolGraph` は `IndexReceiver` / `IndexKey` を scope 解決
@@ -596,7 +596,14 @@ class method DCE の gate は今、computed key の read を 2 つの証明の�
    walk から graph に移すことになるので、graph の走査漏れが即
    unsound になります —— そこを構造で保証する設計が要ります。
 
-hono の app bundle はこの 2 つを両方直しても通りません（`req[cacheKey]` /
+もう 1 つ、gate 自体が bundle 全体で all-or-nothing なのも制約です。
+1 つの解決不能な read が、無関係な class の method まで全部守ります。
+class 単位にするには「この read の receiver が C の instance になり得るか」
+を答える必要があり、`new C(…)` の値を flow edge で追う escape 解析
+（`FlowNode` / `FlowEdge` は既にある）になります。追えない位置に漏れたら
+その class は諦める、という fail-closed が要ります。
+
+hono の app bundle はこれら全部を直しても通りません（`req[cacheKey]` /
 `headers[…]` が本物の動的 member read なので）。詳細は
 [`real-world-minify.md`](./real-world-minify.md) の「hono の『使わない機能』
 は落ちるのか」。

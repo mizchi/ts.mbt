@@ -1039,6 +1039,16 @@ pub(all) struct TsModuleBlock {
   // from an opaque named type, which is the difference between a
   // narrowed reservation and the wildcard.
   interfaces : Array[TsInterface]
+  // Field declarations of every runtime class at this module's top
+  // level, as `(name, declared type)` pairs — private fields under the
+  // brand name the parser gives them. Whole-program passes need the
+  // annotation, and the class lowering does not keep it: a field with
+  // an initializer becomes a constructor assignment, so by the time
+  // `class_method_dce` sees the class its `properties` are gone. The
+  // pairs are flat rather than per-class because the consumers ask
+  // "does every class that declares `f` type it as X", never "what
+  // does class C declare".
+  class_fields : Array[(String, TsType)]
   // True when the module uses `export = <expr>` (CJS export assignment).
   // An `import X = require(...)` of such a module binds the ASSIGNED
   // entity, not a namespace object -- the bridge export resolution

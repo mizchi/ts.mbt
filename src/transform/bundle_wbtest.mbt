@@ -2233,6 +2233,101 @@ test "class_method_dce: keyed-container read does not abort prototype method DCE
 }
 
 ///|
+test "class_method_dce: a Record-typed private field is a keyed container" {
+  // `this.#rows[k]` is an entry lookup, not a member access. The
+  // annotation says so, but the class lowering drops it — a field with
+  // an initializer becomes a constructor assignment — so the pass
+  // reads the field types the parser captured before that happened.
+  let src =
+    #|class Table {
+    #|  #rows: Record<string, string> = {};
+    #|  put(k: string, v: string): void { this.#rows[k] = v; }
+    #|  read(k: string): string | undefined { return this.#rows[k]; }
+    #|  unused(): number { return 99; }
+    #|}
+    #|const t = new Table();
+    #|t.put("a", "1");
+    #|console.log(t.read("a"));
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_false(out.js.contains("unused"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class_method_dce: an alias to a Record is a keyed container" {
+  // How real code spells it: `type MatcherMap<T> = Record<string, T>`
+  // and then `this.#matchers[method]`. Resolving the alias is what
+  // makes the read an entry lookup.
+  let src =
+    #|type SlotMap = Record<string, string>;
+    #|class Registry {
+    #|  #slots: SlotMap = {};
+    #|  find(k: string): string | undefined { return this.#slots[k]; }
+    #|  unused(): number { return 99; }
+    #|}
+    #|const r = new Registry();
+    #|console.log(r.find("a"));
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_false(out.js.contains("unused"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class_method_dce: an inferred container receiver is one too" {
+  // No annotation at either local. `Promise.all` always resolves to an
+  // array, and `s.match(…)` is the `String` method (returning an array
+  // or `null`, and `null[i]` throws either way), so both reads are
+  // element lookups and neither gates the pass.
+  let src =
+    #|class Batch {
+    #|  async run(jobs: Promise<string>[], text: string): Promise<string> {
+    #|    const done = await Promise.all(jobs);
+    #|    const parts = text.match(/./g) || [];
+    #|    return done[0] + parts[0];
+    #|  }
+    #|  unused(): number { return 99; }
+    #|}
+    #|const b = new Batch();
+    #|b.run([], "x");
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_false(out.js.contains("unused"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class_method_dce: a class-typed field receiver still gates the pass" {
+  // The negative side of the rule. `this.#target[k]` reads a member of
+  // a `Worker`, and `k` could name any of them, so `spare` has to
+  // survive.
+  let src =
+    #|class Worker {
+    #|  run(): number { return 1; }
+    #|  spare(): number { return 2; }
+    #|}
+    #|class Driver {
+    #|  #target: Worker = new Worker();
+    #|  call(k: string): unknown { return this.#target[k]; }
+    #|}
+    #|const d = new Driver();
+    #|console.log(d.call("run"));
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_true(out.js.contains("spare"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "class_method_dce: delete does not abort prototype method DCE" {
   // `delete` removes a name; it never observes one. A class prototype
   // method is configurable, so `delete` yields the same `true` whether

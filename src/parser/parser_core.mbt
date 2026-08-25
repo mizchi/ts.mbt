@@ -231,6 +231,9 @@ pub struct Parser {
   // escape analysis resolves a `const x: I` annotation through this to
   // decide whether `I`'s key set is closed.
   collected_interfaces : Array[@ast.TsInterface]
+  // `(field name, declared type)` for every runtime class parsed in
+  // this module. See `TsModuleBlock.class_fields`.
+  collected_class_fields : Array[(String, @ast.TsType)]
   // Set when the module block parses `export = <expr>`.
   mut collected_export_equals : Bool
   // Set by `parse_function` on every call: `true` when the declaration
@@ -321,6 +324,7 @@ pub fn Parser::new_with_strict_and_jsx(
     collected_pure_declarations: {},
     collected_type_aliases: [],
     collected_interfaces: [],
+    collected_class_fields: [],
     collected_export_equals: false,
     last_function_bodiless: false,
   }
@@ -506,6 +510,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     collected_pure_declarations: {},
     collected_type_aliases: [],
     collected_interfaces: [],
+    collected_class_fields: [],
     collected_export_equals: false,
     last_function_bodiless: false,
   }

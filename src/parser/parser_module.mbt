@@ -4060,6 +4060,7 @@ fn Parser::parse_module_block_with_const_values(
       pure_declarations: self.collected_pure_declarations,
       type_aliases: self.collected_type_aliases,
       interfaces: self.collected_interfaces,
+      class_fields: self.collected_class_fields,
       has_export_equals: self.collected_export_equals,
     },
     const_values,

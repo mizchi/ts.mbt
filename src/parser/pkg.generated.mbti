@@ -178,6 +178,7 @@ pub struct Parser {
   collected_pure_declarations : Map[String, Bool]
   collected_type_aliases : Array[@ast.TsTypeAlias]
   collected_interfaces : Array[@ast.TsInterface]
+  collected_class_fields : Array[(String, @ast.TsType)]
   mut collected_export_equals : Bool
   mut last_function_bodiless : Bool
 } derive(@debug.Debug)

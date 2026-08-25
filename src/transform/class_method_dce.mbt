@@ -69,6 +69,18 @@
 pub fn class_method_dce_block(
   block : @ast.TsBlock,
   keep? : Map[String, Bool] = {},
+  // `(field name, declared type)` for every runtime class in the
+  // bundle. Needed because the class lowering drops the annotation —
+  // a field with an initializer becomes a constructor assignment, so
+  // the `NativeClassStmt` this pass walks carries no `properties` at
+  // all. Without it `this.#cache[k]` reads as an unbounded member
+  // access and one such read turns the whole pass off.
+  class_fields? : Array[(String, @ast.TsType)] = [],
+  // `type X = …` declarations in the bundle. An alias to a keyed
+  // container is one — `type MatcherMap<T> = Record<string, Matcher<T>>`
+  // is how real code spells the field whose computed reads otherwise
+  // gate the pass.
+  type_aliases? : Array[@ast.TsTypeAlias] = [],
   explain? : Array[String]? = None,
 ) -> @ast.TsBlock {
   // 1. Cheap exit when neither shape of class is present: no
@@ -88,12 +100,26 @@ pub fn class_method_dce_block(
   //    slot, `map[k]` reads an entry of a keyed container, and
   //    `obj[k]` on anything else could name any member at all.
   let graph = build_symbol_graph(block, {})
+  let class_names = declared_class_names(block)
+  let alias_bodies : Map[String, @ast.TsType] = {}
+  for ta in type_aliases {
+    alias_bodies[ta.name] = ta.type_
+  }
+  let container_facts = {
+    class_names,
+    this_fields: class_field_containers(
+      block, class_fields, class_names, alias_bodies,
+    ),
+    strings: string_name_set(graph),
+    aliases: alias_bodies,
+  }
   let facts = {
     numeric: numeric_name_set(graph, infer_numeric_symbols(graph)),
-    keyed_containers: non_instance_index_names(
+    keyed_containers: container_name_set(
       graph,
-      declared_class_names(block),
+      infer_container_symbols(graph, container_facts),
     ),
+    this_fields: container_facts.this_fields,
     reasons: [],
   }
   // Deliberately not `block_has_method_sniff`, which stops at the
@@ -263,6 +289,10 @@ struct SniffFacts {
   /// Bindings whose declared type is a keyed container rather than an
   /// object with members — an array, a tuple, a string, a `Record`.
   keyed_containers : Map[String, Bool]
+  /// Property names every class in the bundle types as a keyed
+  /// container, so `this.f[k]` is an entry lookup. Same set the
+  /// container inference uses for `const x = this.f`.
+  this_fields : Map[String, Bool]
   /// Every construct the scan judged a sink, in the order it met
   /// them, so `--explain-mangle` can name what turned the pass off
   /// instead of just reporting that it is off. Written by the scan
@@ -284,41 +314,6 @@ fn declared_class_names(block : @ast.TsBlock) -> Map[String, Bool] {
   }
   for n in collect_iife_class_names(block).keys() {
     out[n] = true
-  }
-  out
-}
-
-///|
-/// Bindings a computed-key read cannot reach a deletable method
-/// through, judged from the annotation the symbol graph recorded.
-///
-/// `routes[k]` where `routes: Record<string, string>` reads an entry
-/// of a plain keyed map; `parts[k]` where `parts: string[]` reads an
-/// array slot. Neither can name a method of a class declared here,
-/// because a value with methods does not satisfy either type — an
-/// index signature rejects a method-valued property, and `T[]`
-/// demands the real `Array` prototype.
-///
-/// The caveat is structural typing: TypeScript would let a class
-/// instance stand in for one of these types if its members happened
-/// to fit. That needs a class whose *every* member matches the
-/// container's value type, which no real code writes on purpose, and
-/// the annotation has to be there in the first place — an
-/// unannotated binding lands on `Any` and is never blessed.
-fn non_instance_index_names(
-  g : SymbolGraph,
-  class_names : Map[String, Bool],
-) -> Map[String, Bool] {
-  let counts : Map[String, Int] = {}
-  for s in g.symbols {
-    counts[s.name] = counts.get(s.name).unwrap_or(0) + 1
-  }
-  let out : Map[String, Bool] = {}
-  for s in g.symbols {
-    if counts.get(s.name).unwrap_or(0) == 1 &&
-      type_is_keyed_container(s.ts_type, class_names) {
-      out[s.name] = true
-    }
   }
   out
 }
@@ -346,61 +341,71 @@ fn describe_index_operand(e : @ast.TsExpr) -> String {
 }
 
 ///|
-/// True when the receiver of a computed-key read is a binding whose
+/// True when the receiver of a computed-key read is something whose
 /// declared type makes the read an entry lookup rather than a member
-/// access. Only a bare name qualifies: for a computed receiver
-/// (`a.b[k]`, `f()[k]`) there is no annotation to consult.
+/// access — a bare name, or `this.f` inside a class body. For any
+/// other receiver (`a.b[k]`, `f()[k]`) there is no annotation to
+/// consult, so it does not qualify.
 fn receiver_is_keyed_container(recv : @ast.TsExpr, facts : SniffFacts) -> Bool {
   match recv {
     Var(n) => facts.keyed_containers.contains(n)
+    // `this.f[k]` — `f` is a field of the class we are inside, and the
+    // set only holds names every class in the bundle types as a
+    // container, so it does not matter which class that is.
+    PropAccess(@ast.TsExpr::Var("this"), f) => facts.this_fields.contains(f)
     _ => false
   }
 }
 
 ///|
-/// See `non_instance_index_names`. A generic head that happens to
-/// name a class declared in this bundle is declined — `Record` there
-/// would be that class, not the utility type.
-fn type_is_keyed_container(
-  t : @ast.TsType,
+/// Property names that are a keyed container on every class in the
+/// bundle that declares them. `this.f` inside a class body is that
+/// class's field, and when all the candidates agree it doesn't matter
+/// which class we are in — which is what lets
+/// `const middleware = this.#middleware; middleware[i]` clear the
+/// computed-read gate without an annotation at the local.
+///
+/// A name any class types as something else is dropped outright, so a
+/// disagreement decides against the promotion.
+fn class_field_containers(
+  block : @ast.TsBlock,
+  class_fields : Array[(String, @ast.TsType)],
   class_names : Map[String, Bool],
-) -> Bool {
-  match t {
-    Array(_) | Tuple(_) | Rest(_) | String_ => true
-    Applied(head, _) =>
-      (
-        head == "Record" ||
-        head == "Array" ||
-        head == "ReadonlyArray" ||
-        head == "ReadonlyMap"
-      ) &&
-      !class_names.contains(head)
-    // An inline index-signature type — `{ [key: string]: Pattern }`.
-    // Same standing as the `Record<string, Pattern>` spelling.
-    Object(fields) => {
-      for f in fields {
-        match f.0 {
-          String_ | Number | Int => return true
-          _ => ()
-        }
-      }
-      false
+  aliases : Map[String, @ast.TsType],
+) -> Map[String, Bool] {
+  let container : Map[String, Bool] = {}
+  let other : Map[String, Bool] = {}
+  // The annotations the parser captured before the lowering erased
+  // them. This is the source that actually has anything to say on a
+  // real bundle; the walk below only catches classes that still carry
+  // `properties` by the time this pass runs.
+  for f in class_fields {
+    if type_is_keyed_container(f.1, class_names, aliases) {
+      container[f.0] = true
+    } else {
+      other[f.0] = true
     }
-    // `Record<string, string> | Record<string, string[]>` is a keyed
-    // container whichever arm it turns out to be.
-    Union(members) => {
-      if members.is_empty() {
-        return false
-      }
-      for m in members {
-        if !type_is_keyed_container(m, class_names) {
-          return false
-        }
-      }
-      true
-    }
-    _ => false
   }
+  for s in block.stmts {
+    match s {
+      NativeClassStmt(decl, _) =>
+        for p in decl.properties {
+          if type_is_keyed_container(p.type_, class_names, aliases) {
+            container[p.name] = true
+          } else {
+            other[p.name] = true
+          }
+        }
+      _ => ()
+    }
+  }
+  let out : Map[String, Bool] = {}
+  for name in container.keys() {
+    if !other.contains(name) {
+      out[name] = true
+    }
+  }
+  out
 }
 
 // -- Step 1: cheap "has any class" check ------------------------------
@@ -997,7 +1002,7 @@ fn expr_has_method_sniff(expr : @ast.TsExpr, facts : SniffFacts) -> Bool {
     // `arr[i]` / `arr[i + 1]` / `arr[n - 1]` shapes through the
     // numeric-variable inference. Otherwise the *receiver* can
     // settle it — reading an entry out of an array or a `Record`
-    // never reaches a method (see `non_instance_index_names`).
+    // never reaches a method (see `container_vars.mbt`).
     IndexAccess(recv, idx) => {
       if !is_static_index_for_method_dce(idx) &&
         !is_index_numeric_with_names(idx, facts.numeric) &&

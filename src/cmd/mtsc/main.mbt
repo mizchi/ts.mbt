@@ -972,6 +972,7 @@ async fn main {
           pure_declarations: {},
           type_aliases: [],
           interfaces: [],
+          class_fields: [],
           has_export_equals: false,
         })
         let module_ = (try
@@ -1105,6 +1106,7 @@ async fn main {
             pure_declarations: {},
             type_aliases: [],
             interfaces: [],
+            class_fields: [],
             has_export_equals: false,
           })
           let entry_module = (try
