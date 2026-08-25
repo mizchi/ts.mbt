@@ -88,6 +88,10 @@ pub(all) struct BundleOptions {
   // import instead of failing. Set by the CLI, which has already
   // asked the real filesystem; in-memory callers stay strict.
   allow_unresolved_imports : Bool
+  // Measure wall time per pipeline phase into `BundleOutput.timings`.
+  // Off by default: with it off `PhaseTimer` records nothing and the
+  // instrumentation is one branch per phase.
+  timing : Bool
 }
 
 ///|
@@ -105,7 +109,16 @@ pub fn BundleOptions::default() -> BundleOptions {
     extra_reserved_props: [],
     explain: false,
     allow_unresolved_imports: false,
+    timing: false,
   }
+}
+
+///|
+pub fn BundleOptions::with_timing(
+  self : BundleOptions,
+  t : Bool,
+) -> BundleOptions {
+  { ..self, timing: t }
 }
 
 ///|
@@ -220,6 +233,9 @@ pub(all) struct BundleOutput {
   // `--explain-mangle` output: why each minify decision went the way it
   // did. Empty unless `BundleOptions.explain` was set.
   explain : Array[String]
+  // `(phase label, microseconds)` in execution order. Empty unless
+  // `BundleOptions.timing` was set.
+  timings : Array[(String, Double)]
 }
 
 // ---------------------------------------------------------------------------
@@ -398,11 +414,17 @@ pub fn bundle_modules(
   entry : String,
   opts : BundleOptions,
 ) -> Result[BundleOutput, String] {
+  let timer = if opts.timing {
+    PhaseTimer::new()
+  } else {
+    PhaseTimer::disabled()
+  }
   let modules : Map[String, ModuleNode] = {}
   // External (bare specifier) imports we want to re-emit at the top
   // of the bundle so the consumer's loader / browser handles them.
   let external_imports : Array[@ast.TsImportDecl] = []
   let external_seen : Map[String, Bool] = {}
+  let graph_started = @bench.monotonic_clock_start()
   match
     load_module_graph(
       files,
@@ -416,6 +438,13 @@ pub fn bundle_modules(
     Ok(_) => ()
     Err(e) => return Err(e)
   }
+  // Parsing every module and lowering its JSX happens inside the graph
+  // load, so this row usually dominates on a large input — the point of
+  // measuring it is to know when it does NOT.
+  timer.record(
+    "module-graph (parse)",
+    @bench.monotonic_clock_end(graph_started),
+  )
   let order = topological_order(modules, entry)
   // Lift IIFE-lowered classes to native `class Name { … }` syntax on
   // each module individually BEFORE the linker pass. The parser emits
@@ -598,58 +627,70 @@ pub fn bundle_modules(
       stmt_positions: combined_positions,
     }
     // Type-predicate inline.
-    {
+    timer.phase("predicate-inline", () => {
       let predicates = build_predicate_table(combined)
       if !predicates.entries.is_empty() {
         combined = inline_predicates(combined, predicates)
       }
-    }
+    })
     // Literal-union switch folding. Specializes `dispatch("x", n)`
     // when `dispatch` is a `switch (k) { case ...: return ... }`
     // function whose first param is a closed string-literal union.
-    {
+    timer.phase("switch-fold", () => {
       let sw = build_switch_fold_table(combined)
       if !sw.entries.is_empty() {
         combined = switch_fold(combined, sw)
       }
-    }
+    })
     // `as const` (and equivalent) array/object inline at use sites.
     // Replaces `NAME[i]` / `NAME.k` with the underlying literal value
     // when NAME is a top-level `const` of all-literal-element shape
     // and every reference is a safe static read.
-    combined = as_const_inline_block(combined)
+    combined = timer.phase("as-const-inline", () => {
+      as_const_inline_block(combined)
+    })
     // Discriminant-tag string -> number rewrite. Gated on
     // a bundle-wide no-escape-sink scan; for each closed
     // string-literal discriminated union whose `K` property is
     // never observed outside switch heads and `===`/`!==`
     // comparisons, swap the string tags for small integers.
-    combined = tag_rewrite_block(combined, combined_type_aliases)
+    combined = timer.phase("tag-rewrite", () => {
+      tag_rewrite_block(combined, combined_type_aliases)
+    })
     // Lift the IIFE-lowered class shape back to native
     // `class Name { … }` syntax. Smaller emit, plus
     // `class_method_dce_block` then operates on the structured
     // form (NativeClassStmt) instead of pattern-matching the
     // prototype-assignment chain.
-    combined = iife_class_lift_block(combined)
+    combined = timer.phase("iife-class-lift", () => {
+      iife_class_lift_block(combined)
+    })
     // Strip __super_proto metadata assignments from IIFE bodies that
     // couldn't be lifted to native class syntax. These are pure mtsc
     // internals with no runtime effect once the lift pass has run.
-    combined = strip_super_proto_stmts(combined)
+    combined = timer.phase("strip-super-proto", () => {
+      strip_super_proto_stmts(combined)
+    })
     let export_surface : Map[String, Bool] = {}
-    for n in exported_surface_props(combined, export_roots) {
-      export_surface[n] = true
-    }
+    timer.phase("export-surface", () => {
+      for n in exported_surface_props(combined, export_roots) {
+        export_surface[n] = true
+      }
+    })
     // Class-method DCE: drop methods on native class declarations
     // that nothing in the bundle accesses by name — except the ones
     // the export surface reaches, which the consumer calls. Gated on
     // the absence of reflection / dynamic-key access in the bundle.
     let method_dce_reasons : Array[String] = []
-    combined = class_method_dce_block(
-      combined,
-      keep=export_surface,
-      class_fields=combined_class_fields,
-      type_aliases=combined_type_aliases,
-      explain=if opts.explain { Some(method_dce_reasons) } else { None },
-    )
+    combined = timer.phase("class-method-dce", () => {
+      class_method_dce_block(
+        combined,
+        keep=export_surface,
+        class_fields=combined_class_fields,
+        type_aliases=combined_type_aliases,
+        explain=if opts.explain { Some(method_dce_reasons) } else { None },
+      )
+    })
     if opts.explain {
       explain_methods.push("")
       explain_methods.push("unused class methods: what was dropped and why not")
@@ -663,7 +704,9 @@ pub fn bundle_modules(
     // type annotation. Runs BEFORE the regular fold so the
     // resulting `BoolLit(true/false)` feeds into dead-branch
     // elimination.
-    combined = type_fold_block(combined, type_aliases=combined_type_aliases)
+    combined = timer.phase("type-fold", () => {
+      type_fold_block(combined, type_aliases=combined_type_aliases)
+    })
     // Order: fold -> treeshake -> mangle -> inline -> peephole.
     // Fold turns dead `if (false)` branches into nothing and
     // identity arithmetic into a single operand; treeshake then
@@ -672,7 +715,7 @@ pub fn bundle_modules(
     // use bindings into their unique reference; peephole finally
     // compacts the result with `x += y` and `void 0` rewrites.
     if opts.fold {
-      combined = fold_block(combined)
+      combined = timer.phase("fold", () => fold_block(combined))
     }
     // Purity, re-derived on the MERGED block so its names match what
     // treeshake sees. The early run above answers a different question
@@ -681,16 +724,16 @@ pub fn bundle_modules(
     // proof can't reach stays put — a name absent from this set is
     // simply treated as a side-effect root, exactly as before.
     let proven_pure = if opts.treeshake {
-      analyze_purity_with(combined, linked_assumed_pure).pure_functions
+      timer.phase("purity", () => {
+        analyze_purity_with(combined, linked_assumed_pure).pure_functions
+      })
     } else {
       {}
     }
     if opts.treeshake {
-      combined = treeshake_block(
-        combined,
-        roots=export_roots,
-        pure_calls=proven_pure,
-      )
+      combined = timer.phase("treeshake", () => {
+        treeshake_block(combined, roots=export_roots, pure_calls=proven_pure)
+      })
     }
     if opts.mangle {
       // Trailing-parameter trimming. Needs the export roots: an exported
@@ -897,9 +940,9 @@ pub fn bundle_modules(
         // becomes internal once we glue modules together, so the
         // top-level can be renamed freely.
         .with_preserve_top_level(false)
-      let (mangled_block, mangle_renames) = mangle_block_with_renames(
-        combined, mangler_cfg,
-      )
+      let (mangled_block, mangle_renames) = timer.phase("mangle", () => {
+        mangle_block_with_renames(combined, mangler_cfg)
+      })
       combined = mangled_block
       // Carry the mangle pass's rename map forward so the
       // entry-export emit at the bottom can write the right short
@@ -912,13 +955,13 @@ pub fn bundle_modules(
       // shapes collapse before the peephole pass sees them. Gated
       // on `minify` since the inlining produces deeply nested
       // expressions that are unpleasant in pretty mode.
-      combined = inline_block(combined)
+      combined = timer.phase("inline", () => inline_block(combined))
       // Second fold pass: inlining can expose new constant-foldable
       // expressions (e.g. `const N = 3; arr[N]` → `arr[3]` → element
       // access on a literal array). Run fold again before peephole so
       // those collapse before the terminal compaction step.
       if opts.fold {
-        combined = fold_block(combined)
+        combined = timer.phase("fold-2", () => fold_block(combined))
         // Second treeshake: the second fold may produce new dead
         // `if (false) { … }` branches whose declarations are now
         // unreachable. A lightweight treeshake pass removes them
@@ -937,14 +980,12 @@ pub fn bundle_modules(
           for name in export_roots.keys() {
             live_roots[mangle_export_renames.get(name).unwrap_or(name)] = true
           }
-          combined = treeshake_block(
-            combined,
-            roots=live_roots,
-            pure_calls=proven_pure,
-          )
+          combined = timer.phase("treeshake-2", () => {
+            treeshake_block(combined, roots=live_roots, pure_calls=proven_pure)
+          })
         }
       }
-      combined = peephole_block(combined)
+      combined = timer.phase("peephole", () => peephole_block(combined))
     }
     let has_combined_positions = combined.stmt_positions.length() ==
       combined.stmts.length()
@@ -1126,6 +1167,7 @@ pub fn bundle_modules(
     modules: module_paths,
     warnings,
     explain,
+    timings: timer.entries,
   })
 }
 

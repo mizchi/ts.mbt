@@ -150,6 +150,10 @@ pub fn infer_container_symbols(
   while changed && rounds < 16 {
     changed = false
     rounds = rounds + 1
+    // One projection per ROUND. `all_symbols_container` used to scan
+    // every symbol per `Var(n)` lookup inside the round, which made
+    // this quadratic — see the same note in `numeric_vars.mbt`.
+    let name_container = container_name_set(g, containers)
     for sym in g.symbols {
       if containers.contains(sym.id) {
         continue
@@ -175,7 +179,7 @@ pub fn infer_container_symbols(
       for d in sym.defs {
         match d.init {
           Some(e) =>
-            if !is_expr_container(e, g, containers, facts) {
+            if !is_expr_container(e, name_container, facts) {
               all_container = false
               break
             }
@@ -192,10 +196,13 @@ pub fn infer_container_symbols(
         let tentative_added = !containers.contains(sym.id)
         if tentative_added {
           containers[sym.id] = true
+          if name_all_container(g, sym.name, containers) {
+            name_container[sym.name] = true
+          }
         }
         let mut all_rhs = true
         for rhs in sym.reassign_rhs {
-          if !is_expr_container(rhs, g, containers, facts) {
+          if !is_expr_container(rhs, name_container, facts) {
             all_rhs = false
             break
           }
@@ -203,6 +210,7 @@ pub fn infer_container_symbols(
         if !all_rhs {
           if tentative_added {
             let _ = containers.remove(sym.id)
+            let _ = name_container.remove(sym.name)
           }
           all_container = false
         }
@@ -220,8 +228,7 @@ pub fn infer_container_symbols(
 /// Is every value this expression can produce a keyed container?
 fn is_expr_container(
   expr : @ast.TsExpr,
-  g : SymbolGraph,
-  containers : Map[SymbolId, Bool],
+  name_container : Map[String, Bool],
   facts : ContainerFacts,
 ) -> Bool {
   match expr {
@@ -232,15 +239,15 @@ fn is_expr_container(
     BinOp(op, l, r) =>
       match op {
         Or | Coalesce =>
-          is_expr_container(l, g, containers, facts) &&
-          is_expr_container(r, g, containers, facts)
+          is_expr_container(l, name_container, facts) &&
+          is_expr_container(r, name_container, facts)
         _ => false
       }
     Cond(_, t, e) =>
-      is_expr_container(t, g, containers, facts) &&
-      is_expr_container(e, g, containers, facts)
+      is_expr_container(t, name_container, facts) &&
+      is_expr_container(e, name_container, facts)
     Await(inner) | NonNull(inner) =>
-      is_expr_container(inner, g, containers, facts)
+      is_expr_container(inner, name_container, facts)
     // `Promise.all` / `Promise.allSettled` resolve to an array, always.
     // Declined if the bundle declares its own `Promise`.
     MethodCall(@ast.TsExpr::Var("Promise"), m, _) =>
@@ -258,7 +265,7 @@ fn is_expr_container(
     PropAccess(@ast.TsExpr::Var("this"), f) => facts.this_fields.contains(f)
     // Resolve a bare name the way `numeric_vars` does: with no scope
     // at the use site, require every binding of the name to qualify.
-    @ast.TsExpr::Var(n) => all_symbols_container(g, n, containers)
+    @ast.TsExpr::Var(n) => name_container.contains(n)
     _ => false
   }
 }
@@ -273,9 +280,11 @@ fn is_string_receiver(recv : @ast.TsExpr, facts : ContainerFacts) -> Bool {
 }
 
 ///|
-/// True when `name` is declared somewhere and every binding carrying
-/// it is a container — what it takes to judge a use with no scope.
-fn all_symbols_container(
+/// True when `name` is declared somewhere and every binding carrying it
+/// is a container. Only the fixed point's speculative self-promotion
+/// needs this one-off scan; ordinary lookups read the per-round
+/// projection.
+fn name_all_container(
   g : SymbolGraph,
   name : String,
   containers : Map[SymbolId, Bool],

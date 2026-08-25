@@ -1,4 +1,5 @@
 import {
+  "moonbitlang/core/bench",
   "moonbitlang/core/string",
   "moonbitlang/core/strconv",
   "mizchi/ts/ast",

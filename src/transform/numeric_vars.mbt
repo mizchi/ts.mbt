@@ -47,6 +47,11 @@ pub fn infer_numeric_symbols(g : SymbolGraph) -> Map[SymbolId, Bool] {
   while changed && rounds < 16 {
     changed = false
     rounds = rounds + 1
+    // One O(|symbols|) projection per ROUND, rather than one scan of
+    // every symbol per `Var(n)` lookup. The scan-per-lookup form was
+    // quadratic: on 9 MB of `typescript.js` this fixed point and its
+    // container twin were 5.5 s of a 10.9 s compile.
+    let name_numeric = numeric_name_set(g, numeric)
     for sym in g.symbols {
       if numeric.contains(sym.id) {
         continue
@@ -80,7 +85,7 @@ pub fn infer_numeric_symbols(g : SymbolGraph) -> Map[SymbolId, Bool] {
       for d in sym.defs {
         match d.init {
           Some(e) =>
-            if !is_expr_numeric(e, g, numeric) {
+            if !is_expr_numeric_names(e, name_numeric) {
               all_numeric = false
               break
             }
@@ -104,10 +109,15 @@ pub fn infer_numeric_symbols(g : SymbolGraph) -> Map[SymbolId, Bool] {
         let tentative_added = !numeric.contains(sym.id)
         if tentative_added {
           numeric[sym.id] = true
+          // `i = i + 1` has to see its own speculative promotion, and
+          // the round's projection was taken before it.
+          if name_all_numeric(g, sym.name, numeric) {
+            name_numeric[sym.name] = true
+          }
         }
         let mut all_rhs_numeric = true
         for rhs in sym.reassign_rhs {
-          if !is_expr_numeric(rhs, g, numeric) {
+          if !is_expr_numeric_names(rhs, name_numeric) {
             all_rhs_numeric = false
             break
           }
@@ -117,6 +127,7 @@ pub fn infer_numeric_symbols(g : SymbolGraph) -> Map[SymbolId, Bool] {
             // Drop the speculative entry so we don't poison
             // other symbols' analyses later in the round.
             let _ = numeric.remove(sym.id)
+            let _ = name_numeric.remove(sym.name)
           }
           all_numeric = false
         }
@@ -131,60 +142,10 @@ pub fn infer_numeric_symbols(g : SymbolGraph) -> Map[SymbolId, Bool] {
 }
 
 ///|
-/// Is an expression provably a JS number? Mirrors the AST shapes
-/// the JS spec lists as number-typed:
-///   - numeric literals (`Int` / `Number` / `BigInt` only via
-///     conversion are out of scope; tagged separately if needed)
-///   - `+`/`-`/`~` unary on numeric, `++`/`--`
-///   - `-`, `*`, `/`, `%`, `**`, bitwise binary
-///   - `a + b` only when BOTH operands are numeric (string `+` is
-///     overloaded — drop to conservative when either side could be
-///     a string)
-///   - `arr.length` (Array spec)
-///   - `cond ? a : b` when both branches are numeric
-///   - `Var(n)` resolved against the graph + a known-numeric map
-fn is_expr_numeric(
-  expr : @ast.TsExpr,
-  g : SymbolGraph,
-  numeric : Map[SymbolId, Bool],
-) -> Bool {
-  match expr {
-    NumberLit(_) | IntLit(_) | BigIntLit(_) => true
-    PropAccess(_, "length") => true
-    UnaryOp(op, inner) =>
-      match op {
-        Neg | Plus | BitwiseNot => is_expr_numeric(inner, g, numeric)
-        PreInc | PreDec | PostInc | PostDec => true
-        _ => false
-      }
-    BinOp(op, l, r) =>
-      match op {
-        Sub | Mul | Div | Mod | Pow => true
-        BitAnd | BitOr | BitXor | Shl | Shr | UShr => true
-        Add => is_expr_numeric(l, g, numeric) && is_expr_numeric(r, g, numeric)
-        _ => false
-      }
-    Cond(_, t, e) =>
-      is_expr_numeric(t, g, numeric) && is_expr_numeric(e, g, numeric)
-    // `a = N` (assignment expression) — the result is `rhs`. If
-    // rhs is numeric, the whole expression is.
-    AssignExpr(_, rhs) => is_expr_numeric(rhs, g, numeric)
-    CompoundAssignExpr(_, _, _) => true // all compound assigns are numeric
-    Seq(_, b) => is_expr_numeric(b, g, numeric)
-    // Resolve `Var(n)` through the graph. We don't carry the
-    // current scope here — the name could resolve to any binding
-    // that declares it. So require them ALL to be numeric: then it
-    // doesn't matter which one this is.
-    @ast.TsExpr::Var(n) => all_symbols_numeric(g, n, numeric)
-    _ => false
-  }
-}
-
-///|
-/// True when `name` is declared somewhere in the graph and every
-/// binding carrying it is numeric. Without scope info at the use
-/// site that is what it takes to say the use is numeric.
-fn all_symbols_numeric(
+/// True when `name` is declared somewhere and every binding carrying it
+/// is numeric. Only the fixed point's speculative self-promotion needs
+/// this one-off scan; ordinary lookups read the per-round projection.
+fn name_all_numeric(
   g : SymbolGraph,
   name : String,
   numeric : Map[SymbolId, Bool],
@@ -201,11 +162,6 @@ fn all_symbols_numeric(
   seen
 }
 
-// ---------------------------------------------------------------------------
-// Graph-aware version of the existing `is_index_known_numeric`
-// check used by `mangle_safety.collect_props_on_external_expr`.
-// ---------------------------------------------------------------------------
-
 ///|
 /// Same predicate as `is_expr_numeric` but exported for the
 /// property-escape analysis. The dynamic-access wildcard fallback
@@ -216,7 +172,7 @@ pub fn is_index_numeric_with_graph(
   g : SymbolGraph,
   numeric : Map[SymbolId, Bool],
 ) -> Bool {
-  is_expr_numeric(idx, g, numeric)
+  is_expr_numeric_names(idx, numeric_name_set(g, numeric))
 }
 
 ///|

@@ -148,6 +148,14 @@ verify-real-world *ARGS:
     moon build --target native
     node scripts/verify_real_world_minify.mjs {{ ARGS }}
 
+# Where the compile time goes. Runs the same size ladder as
+# `verify-real-world` through `mtsc --timing` and tabulates the phases,
+# so a superlinear pass shows up as falling throughput as input grows.
+# Reads the same cache, so run `verify-real-world` first.
+bench-pipeline *ARGS:
+    moon build --target native --release
+    node scripts/bench_pipeline.mjs {{ ARGS }}
+
 # Regenerate the machine-derived mangle-safety cases
 gen-mangle-cases:
     node scripts/generate_mangle_cases.mjs

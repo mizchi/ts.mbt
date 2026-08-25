@@ -67,14 +67,22 @@ priv struct MtscOptions {
   // decision has to be made before it can be explained.
   mut explain_mangle : Bool
   mut mangle_properties_shape_color : Bool
-  // `--no-check`: run the transform without letting checker diagnostics
-  // stop the emit. The gate exists because a type error usually means
-  // the program is wrong, but it also makes the whole pipeline
-  // unreachable for input that is not TypeScript in the first place —
-  // a published `.js` bundle, where an object literal grows properties
-  // at runtime and every such site reads as an error. The diagnostics
-  // are still printed; they just stop being fatal.
+  // `--no-check`: skip type-checking. The gate exists because a type
+  // error usually means the program is wrong, but it also makes the
+  // whole pipeline unreachable for input that is not TypeScript in the
+  // first place — a published `.js` bundle, where an object literal
+  // grows properties at runtime and every such site reads as an error.
+  //
+  // It SKIPS rather than demotes. The checker is ~95% of a large
+  // compile (29.4 s of 30.6 s on `checker.ts`), and once the caller has
+  // said diagnostics must not stop the emit, running it buys output
+  // nobody acts on. `tscheck` is the way to see diagnostics without an
+  // abort.
   mut no_check : Bool
+  // `--timing`: report wall time per pipeline phase. The compile is
+  // superlinear in input size and a twenty-pass pipeline gives a guess
+  // nothing to stand on, so the passes report instead.
+  mut timing : Bool
   mut sourcemap : Bool
   mut jsx_runtime : String?
   mut jsx_import_source : String?
@@ -101,6 +109,7 @@ fn mtsc_options_new() -> MtscOptions {
     explain_mangle: false,
     mangle_properties_shape_color: false,
     no_check: false,
+    timing: false,
     sourcemap: false,
     jsx_runtime: None,
     jsx_import_source: None,
@@ -156,7 +165,10 @@ fn mtsc_print_usage() -> Unit {
     "  --mangle-properties-shape-color  Use shape-coloring property rename (opt-in, experimental)",
   )
   println(
-    "  --no-check                Report type errors but emit anyway (non-TypeScript input)",
+    "  --no-check                Skip type-checking entirely (non-TypeScript input; the check is ~95% of a large compile)",
+  )
+  println(
+    "  --timing                  Report wall time per pipeline phase (implies --bundle)",
   )
   println("  --sourcemap               Emit <out>.map alongside the JS output")
   println("  --jsx-runtime <mode>      `automatic` (default) or `classic`")
@@ -235,6 +247,10 @@ fn mtsc_parse_args(argv : Array[String]) -> Result[MtscOptions, String] {
         opts.bundle = true
       }
       "--no-check" => opts.no_check = true
+      "--timing" => {
+        opts.timing = true
+        opts.bundle = true
+      }
       "--mangle-properties-shape-color" => {
         opts.mangle = true
         opts.mangle_properties = true
@@ -410,6 +426,40 @@ fn mtsc_normalize(path : String) -> String {
 }
 
 ///|
+/// An empty `TsModule`, for the paths that need a value but no
+/// declarations — a type-side parse that failed, or one that was
+/// skipped because nothing downstream reads it.
+fn mtsc_empty_module() -> @ast.TsModule {
+  {
+    funcs: [],
+    interfaces: [],
+    type_aliases: [],
+    imports: [],
+    values: [],
+    classes: [],
+    namespaces: [],
+    enums: [],
+    module_augmentations: [],
+    strict_property_initialization: true,
+    no_implicit_any: true,
+    strict_null_checks: true,
+    use_define_for_class_fields: false,
+    deprecated_compiler_options: [],
+    parameter_property_misuses: [],
+    strict_mode_misuses: [],
+    invalid_decorator_uses: [],
+    grammar_misuses: [],
+    imported_binding_names: [],
+    import_module_specs: [],
+    class_base_type_args: [],
+    param_optional_initializer_misuses: [],
+    interface_member_modifier_misuses: [],
+    class_dup_diagnostics: [],
+    top_level_stmts: [],
+  }
+}
+
+///|
 /// Walk imports starting from `entry_path` and read every reachable
 /// file from disk into `files`. Only relative imports (`./x`, `../y`)
 /// and rooted paths are followed — bare specifiers (`react`, `@scope/x`)
@@ -420,6 +470,11 @@ async fn mtsc_load_bundle_files(
   aliases : Map[String, String],
   externals : Map[String, Bool],
   type_props : Map[String, Bool],
+  // Whether anything downstream reads `type_props`. Only
+  // `--reserve-typed-props` does, and harvesting it costs a full second
+  // parse of every file in the graph — 0.9 s of the 2.1 s read+parse
+  // phase on 9 MB of `typescript.js`. Skip it when nobody asked.
+  want_type_props : Bool,
   // Import / re-export edges discovered along the way, in the shape the
   // graph checker wants: resolution is the CLI's job, and the checker
   // needs the edges to resolve a type declared in another module.
@@ -477,38 +532,17 @@ async fn mtsc_load_bundle_files(
     // declarations. They get added to the bundler's reserved-prop
     // set so the property mangler never renames a name that's
     // part of any module's public type surface.
-    let module_ = @parser.Parser::from_source(source).parse_module() catch {
-      _ =>
-        @ast.TsModule::{
-          funcs: [],
-          interfaces: [],
-          type_aliases: [],
-          imports: [],
-          values: [],
-          classes: [],
-          namespaces: [],
-          enums: [],
-          module_augmentations: [],
-          strict_property_initialization: true,
-          no_implicit_any: true,
-          strict_null_checks: true,
-          use_define_for_class_fields: false,
-          deprecated_compiler_options: [],
-          parameter_property_misuses: [],
-          strict_mode_misuses: [],
-          invalid_decorator_uses: [],
-          grammar_misuses: [],
-          imported_binding_names: [],
-          import_module_specs: [],
-          class_base_type_args: [],
-          param_optional_initializer_misuses: [],
-          interface_member_modifier_misuses: [],
-          class_dup_diagnostics: [],
-          top_level_stmts: [],
-        }
+    let module_ = if want_type_props {
+      @parser.Parser::from_source(source).parse_module() catch {
+        _ => mtsc_empty_module()
+      }
+    } else {
+      mtsc_empty_module()
     }
-    for n in @transform.type_declared_property_names(module_) {
-      type_props[n] = true
+    if want_type_props {
+      for n in @transform.type_declared_property_names(module_) {
+        type_props[n] = true
+      }
     }
     for imp in mb.imports {
       // A type-only import contributes no runtime code, so the bundler
@@ -911,6 +945,16 @@ async fn main {
     let edges : Array[@mtsc_core.MtscModuleEdge] = []
     let aliases : Map[String, String] = {}
     let type_props : Map[String, Bool] = {}
+    // `--timing` covers the CLI's own work too. The transform pipeline
+    // reports its own phases, but the first measurement of `checker.ts`
+    // put 731 ms of 31.6 s inside them — everything that mattered was
+    // out here.
+    let cli_timer = if opts.timing {
+      @transform.PhaseTimer::new()
+    } else {
+      @transform.PhaseTimer::disabled()
+    }
+    let load_started = @bench.monotonic_clock_start()
     match
       mtsc_load_bundle_files(
         input_path,
@@ -918,6 +962,7 @@ async fn main {
         aliases,
         opts.externals,
         type_props,
+        opts.reserve_typed_props,
         edges,
       ) {
       Ok(_) => ()
@@ -926,13 +971,25 @@ async fn main {
         return
       }
     }
+    cli_timer.record(
+      "cli: read + parse files",
+      @bench.monotonic_clock_end(load_started),
+    )
     // Type-check the whole graph in one go. Checking each file alone
     // leaves every imported type unresolvable, which both hides real
     // errors and invents fake ones — an identical shape compared against
     // an imported alias reads as a mismatch.
-    if !mtsc_typecheck_graph(files, edges) && !opts.no_check {
-      mtsc_exit_type_error()
-      return
+    if !opts.no_check {
+      let check_started = @bench.monotonic_clock_start()
+      let check_ok = mtsc_typecheck_graph(files, edges)
+      cli_timer.record(
+        "cli: typecheck",
+        @bench.monotonic_clock_end(check_started),
+      )
+      if !check_ok {
+        mtsc_exit_type_error()
+        return
+      }
     }
     // `type_props` collects every property name declared in an
     // interface / type alias / class across the input. We DON'T
@@ -1037,8 +1094,11 @@ async fn main {
       // there, so the bundler doesn't need to fail over them a second
       // time — it keeps them verbatim.
       .with_allow_unresolved_imports(true)
+      .with_timing(opts.timing)
     let bundle_opts = { ..bundle_opts, jsx: jsx_cfg }
+    let bundle_started = @bench.monotonic_clock_start()
     let result = @transform.bundle_modules(files, input_path, bundle_opts)
+    let bundle_micros = @bench.monotonic_clock_end(bundle_started)
     let out = match result {
       Ok(o) => o
       Err(e) => {
@@ -1053,6 +1113,23 @@ async fn main {
     }
     for line in out.explain {
       println(line)
+    }
+    if opts.timing {
+      // The bundle's own phases, then the difference — what
+      // `bundle_modules` spent outside any instrumented pass (linking,
+      // escape analysis, emit).
+      let mut inner = 0.0
+      for t in out.timings {
+        cli_timer.record(t.0, t.1)
+        inner = inner + t.1
+      }
+      let unattributed = bundle_micros - inner
+      if unattributed > 0.0 {
+        cli_timer.record("bundle: link + escape + emit", unattributed)
+      }
+      for line in cli_timer.report() {
+        println(line)
+      }
     }
     match opts.out {
       Some(path) => {

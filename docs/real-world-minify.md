@@ -38,6 +38,58 @@
 `--explain-mangle` に method DCE の section を足し（#15）、class field
 注釈が lowering で消えているのを直しました（#17）。
 
+## compile 時間はどこに行っていたか
+
+「重い場所を特定できるようにしたい」から始めて、`mtsc --timing` を
+足しました。pipeline の各 pass が自分の wall time を報告し、CLI 側
+（読み込み・parse・型検査）も同じ表に並びます。
+
+**最初の 1 回で予想が外れました。** `checker.ts`（3 MB）の 31.6 秒のうち、
+instrument した 20 個の transform pass の合計は **731 ms** でした。
+
+```
+     29402 ms   95.9%  cli: typecheck
+       439 ms    1.4%  cli: read + parse files
+       228 ms    0.7%  class-method-dce
+       ...
+     30647 ms  total
+```
+
+**型検査が 95.9%。** しかも `--no-check` を渡した状態です。当時の
+`--no-check` は「診断を出すが fatal にしない」だったので、checker は
+フル実行され、その成果物は**呼び出し側が「止めるな」と言った診断**だけ
+でした。wall clock の 96% をそれに払う取引は成立しません。`--no-check`
+は**検査自体を飛ばす**ようにしました（診断だけ見たいなら `tscheck`）。
+
+次に出たのが自分で入れた quadratic です。9 MB の `typescript.js` で
+`class-method-dce` が 5.5 秒 / 10.9 秒。原因は `numeric_vars.mbt` と
+`container_vars.mbt` の fixed point で、`Var(n)` の照合ごとに
+**全 symbol を走査**していました（round × symbol × symbol）。round ごとに
+1 回だけ name へ射影するようにして 5.5 秒 → 0.7 秒。
+
+`--reserve-typed-props` しか読まない `type_props` の収集が、全 file の
+**2 回目の full parse** だったのも削りました（2.1 秒 → 1.35 秒）。
+
+| target | 前 | 後 | 出力 |
+| --- | --- | --- | --- |
+| `checker.ts`（3 MB） | 31.6 s | **0.95 s** | byte 一致 |
+| `typescript.js`（9 MB） | 約 390 s | **4.6 s** | byte 一致 |
+| real-world 5 target 全体 | 約 7 分 | **12.5 s** | 5/5 pass |
+
+`just bench-pipeline` で再現します。今の残りは **parse が 78〜94%** で、
+同じ source を **2 回 parse** しています（CLI の loader が import 探索で
+1 回、`load_module_graph` が module graph 構築で 1 回）。次に削るのはそこ
+です。
+
+```
+    target          bytes in     wall ms     KiB/s
+    minify-app          8,776         17       491
+    hono              771,362        205      3669
+    valibot         1,588,417       1461      1062     ← 578 file、1 file あたりの固定費が支配
+    checker.ts      3,065,627        949      3155
+    typescript.js  27,301,748       4611      5783
+```
+
 ## 見つかった bug
 
 ### 1. 比較演算子が file を丸ごと食う（parser）

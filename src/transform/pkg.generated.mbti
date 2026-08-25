@@ -163,6 +163,7 @@ pub(all) struct BundleOptions {
   extra_reserved_props : Array[String]
   explain : Bool
   allow_unresolved_imports : Bool
+  timing : Bool
 }
 pub fn BundleOptions::default() -> Self
 pub fn BundleOptions::with_aliases(Self, Map[String, String]) -> Self
@@ -175,6 +176,7 @@ pub fn BundleOptions::with_mangle_properties(Self, Bool) -> Self
 pub fn BundleOptions::with_mangle_properties_shape_color(Self, Bool) -> Self
 pub fn BundleOptions::with_minify(Self, Bool) -> Self
 pub fn BundleOptions::with_sourcemap(Self, Bool) -> Self
+pub fn BundleOptions::with_timing(Self, Bool) -> Self
 pub fn BundleOptions::with_treeshake(Self, Bool) -> Self
 
 pub(all) struct BundleOutput {
@@ -183,6 +185,7 @@ pub(all) struct BundleOutput {
   modules : Array[String]
   warnings : Array[String]
   explain : Array[String]
+  timings : Array[(String, Double)]
 }
 
 type CalleeClass derive(Eq, Show)
@@ -292,6 +295,16 @@ pub(all) enum Observability {
   RecursiveProps
   External
 } derive(Eq, @debug.Debug)
+
+pub(all) struct PhaseTimer {
+  enabled : Bool
+  entries : Array[(String, Double)]
+}
+pub fn PhaseTimer::disabled() -> Self
+pub fn PhaseTimer::new() -> Self
+pub fn[T] PhaseTimer::phase(Self, String, () -> T) -> T
+pub fn PhaseTimer::record(Self, String, Double) -> Unit
+pub fn PhaseTimer::report(Self) -> Array[String]
 
 pub(all) struct Position {
   line : Int
