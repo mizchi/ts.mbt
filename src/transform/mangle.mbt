@@ -3319,7 +3319,35 @@ fn rename_properties_in_class_decl(
     }
     new_props.push({ ..p, name: renamed_name })
   }
-  { ..decl, methods: new_methods, properties: new_props }
+  // Field-initializer KEYS are property-name sites too. They were not
+  // renamed here, which is invisible for a name that stays reserved and
+  // fatal for one that does not: `static #x = 3` reaches emit as a
+  // `static_field_inits` entry, `private_fields.mbt` renamed the READ to
+  // `C.#x`, and the declaration kept the brand — a `#x` with nothing
+  // declaring it.
+  let new_statics : Array[(String, @ast.TsExpr)] = []
+  for e in decl.static_field_inits {
+    let renamed_key = match prop_map.get(e.0) {
+      Some(short) => short
+      None => e.0
+    }
+    new_statics.push((renamed_key, rename_properties_in_expr(e.1, prop_map)))
+  }
+  let new_instances : Array[(String, @ast.TsExpr)] = []
+  for e in decl.instance_field_inits {
+    let renamed_key = match prop_map.get(e.0) {
+      Some(short) => short
+      None => e.0
+    }
+    new_instances.push((renamed_key, rename_properties_in_expr(e.1, prop_map)))
+  }
+  {
+    ..decl,
+    methods: new_methods,
+    properties: new_props,
+    static_field_inits: new_statics,
+    instance_field_inits: new_instances,
+  }
 }
 
 ///|

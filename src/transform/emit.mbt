@@ -4121,7 +4121,9 @@ fn emit_native_class(
     e.nl()
     e.word("static")
     e.sep_after_word('A')
-    if is_valid_js_ident(entry.0) {
+    // A `#private` static is dotted-only too: `static ["#x"] = …` is a
+    // different member entirely.
+    if is_valid_js_ident(entry.0) || is_private_member_name(entry.0) {
       e.write(entry.0)
     } else {
       e.write("[")

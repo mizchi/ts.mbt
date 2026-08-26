@@ -36,10 +36,14 @@
 // and that is correct: a private name is scoped to the class body that
 // declares it, so if one of those classes is nested inside the other,
 // the inner `#secret` shadows the outer one — which is exactly what the
-// source said, because the source declared both. A nested class that
-// only REFERENCES the outer's `#secret` has no entry of its own in
-// `properties`, so nothing is declared for it and the reference
-// resolves outward, again as written.
+// source said, because the source declared both.
+//
+// A nested class that only REFERENCES the outer's `#secret` is the one
+// case where the brand and the field disagree, because the parser brands
+// the reference with the class whose body encloses it rather than the one
+// that declares the field. That reference keeps its brand and reads
+// `undefined`; the argument for leaving it alone is at the bottom of
+// `lower_private_fields`.
 //
 // The IIFE-lowered class shape is not covered. `#` syntax is only legal
 // inside a class body, and that path emits `C.prototype.m = function`
@@ -85,12 +89,11 @@ pub fn lower_private_fields(block : @ast.TsBlock) -> @ast.TsBlock {
   // `#x;` declaration in that body is a SyntaxError. So the rename is
   // driven by the declarations that will be emitted, and keyed by the
   // full brand name rather than by the member name. Keying by member
-  // name looked tempting — it would also fix a nested class reading an
-  // outer private under its own brand — but it renames a DIFFERENT
-  // class's brand that happens to share the member name, and if that
-  // class is one of the shapes below, the result is a parse error.
+  // name renames a DIFFERENT class's brand that happens to share the
+  // member name, and if that class is one of the shapes below, the
+  // result is a parse error rather than a wrong value.
   //
-  // Two sources, both flat scans of a top-level class node:
+  // Three sources, all flat scans of a top-level class node:
   //
   //   * `this.#x = …` at the top level of a constructor. The class
   //     lowering puts every instance field initializer there, a bare
@@ -98,22 +101,21 @@ pub fn lower_private_fields(block : @ast.TsBlock) -> @ast.TsBlock {
   //     same statements to emit the declarations, so the two agree by
   //     construction.
   //   * a private METHOD name, which declares itself as `#m() {}`.
+  //   * a `static_field_inits` entry, which emits as
+  //     `static #x = init;` and declares the member itself.
   //
   // What is deliberately NOT in the set, and so keeps the brand:
   //
-  //   * `static #x = 3` — the class lowering drops static private
-  //     fields outright, initializer and all, so `C.#x` already reads
-  //     `undefined` today. Keeping the brand leaves that bug as it is
-  //     instead of turning it into a parse error.
   //   * a typed field with no initializer (`#x: T | undefined;`), which
   //     produces no constructor assignment either.
   //   * a class the IIFE lift declined, whose members live as
   //     `C.prototype.m = function` in plain statements — there is
   //     nowhere to put a declaration.
   //   * a class nested inside a method, which is not a top-level node
-  //     here.
+  //     here. A reference it makes to an OUTER private is discussed at
+  //     the bottom of this function.
   //
-  // All four are recorded in `fixtures/fuzz-findings/README.md`.
+  // All three are recorded in `fixtures/fuzz-findings/README.md`.
   let declarable : Map[String, Bool] = {}
   for s in block.stmts {
     match s {
@@ -176,6 +178,42 @@ pub fn lower_private_fields(block : @ast.TsBlock) -> @ast.TsBlock {
       None => ()
     }
   }
+  // A nested class reading an OUTER private is NOT remapped, and the
+  // reason is worth writing down, because the remap looks easy.
+  //
+  // The parser brands a `#x` reference with the brand of the class whose
+  // BODY contains it; JS resolves `#x` to the nearest enclosing class
+  // that DECLARES it. So in
+  //
+  //   class Foo { #name = 7; m() { const B = class { g(o) { return o.#name } } } }
+  //
+  // the reference carries B's brand and the field Foo's, and the read
+  // comes back `undefined`.
+  //
+  // Remapping that reference to `#name` fixes it — and breaks the case
+  // one letter away from it:
+  //
+  //   class Foo { #x = 1; m() { const B = class { #x = 2; g() { return this.#x } } } }
+  //
+  // Here B DECLARES its own `#x`, shadowing Foo's, and the program is
+  // correct as written. The two are indistinguishable from the property
+  // NAMES alone — same statement, same member, one brand declarable and
+  // one not, in both — so any gate built out of the name sets this pass
+  // has either remaps both or neither. Remapping both merges B's field
+  // into Foo's, and since the IIFE lift has by then turned B into a
+  // plain `function`, `this.#x = 2` binds to Foo's declaration with a
+  // non-Foo `this`: "Cannot write private member #x to an object whose
+  // class did not declare it". A wrong value became a crash.
+  //
+  // Telling them apart needs to know which class DECLARES the member,
+  // which means reaching the nested class's own declaration list — and a
+  // walker that misses a node shape fails toward the crash, not toward
+  // the wrong value. The fix belongs in the parser, where the scope chain
+  // already exists: brand a `#x` reference with the nearest enclosing
+  // class that declares `#x` rather than with the innermost one, which
+  // needs the class's member set complete before its method bodies are
+  // branded (a second pass over the class subtree once its body closes).
+  // Recorded as open in `fixtures/fuzz-findings/README.md`.
   if map.is_empty() {
     return block
   }
@@ -250,6 +288,13 @@ fn collect_declarable_members(
   for m in decl.methods {
     if private_brand_member(m.name) is Some(_) {
       out[m.name] = true
+    }
+  }
+  // `static #x = init` reaches emit as a `static_field_inits` entry, and
+  // `static #x = init;` in a class body declares the member itself.
+  for e in decl.static_field_inits {
+    if private_brand_member(e.0) is Some(_) {
+      out[e.0] = true
     }
   }
 }

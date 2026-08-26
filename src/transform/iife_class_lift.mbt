@@ -584,9 +584,18 @@ fn classify_iife_body_stmt(
 
 ///|
 fn is_class_metadata_key(name : String) -> Bool {
-  name == "__super_proto" ||
-  name == "__brand__" ||
-  name.has_prefix("__private_brand__")
+  // `__private_brand__N__X` used to be listed here, and it is not
+  // metadata: on the class OBJECT it is a `static #X` member. The class
+  // lowering emits `C.__private_brand__0__stat = 3` for
+  // `static #stat = 3`, this said "internal, drop it", and the field
+  // vanished — initializer and all — so `C.#stat` read `undefined`
+  // instead of 3. A `static #m() {}` went the same way at the
+  // static-method site above.
+  //
+  // The instance form is `this.__private_brand__N__X` inside the
+  // constructor and was never affected, which is why only the static
+  // case was broken.
+  name == "__super_proto" || name == "__brand__"
 }
 
 ///|
