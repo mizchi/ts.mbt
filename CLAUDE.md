@@ -54,7 +54,11 @@ product surfaces now.
   generates programs from seeds, compiles each with and without mangling,
   and compares what they observed; a failing program is shrunk to its
   minimum automatically rather than reported as a seed number — see
-  [`docs/mangle-fuzzing.md`](./docs/mangle-fuzzing.md).
+  [`docs/mangle-fuzzing.md`](./docs/mangle-fuzzing.md). All three hunt
+  code we delete and should not; `just verify-dce-coverage` hunts the
+  opposite — code we keep and could drop — as a table of small programs
+  that each assert a marker is gone, the live markers survive, and stdout
+  still matches Node running the original.
 - `src/bridge` consumes `src/checker` for every type-shape decision and runs
   `@checker.check_module` on the synthesized output as a sanity gate. It also
   keeps domain-specific specialization for Node FS / React / Hono / crypto /

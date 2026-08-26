@@ -125,7 +125,7 @@ verify-checker-soundness:
     bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0
 
 # Full CI check
-ci: fmt check test verify-mbti-dts verify-scaffolds verify-generated-fixtures verify-examples verify-mangle-safety verify-checker-soundness
+ci: fmt check test verify-mbti-dts verify-scaffolds verify-generated-fixtures verify-examples verify-mangle-safety verify-dce-coverage verify-checker-soundness
 
 # Update dependencies
 update:
@@ -140,6 +140,18 @@ verify-mangle-safety *ARGS:
     moon build --target native
     node scripts/generate_mangle_cases.mjs --check
     node scripts/verify_mangle_safety.mjs {{ ARGS }}
+
+# The other direction: dead code we could remove and do not. A table of
+# small programs, each asserting a marker is gone from the bundle, that
+# the live markers survive, and that stdout still matches Node running
+# the original. Fails on a regression against
+# fixtures/dce-coverage/expected.json.
+#
+#   just verify-dce-coverage
+#   just verify-dce-coverage --only unused-label --verbose
+verify-dce-coverage *ARGS:
+    moon build --target native
+    node scripts/verify_dce_coverage.mjs {{ ARGS }}
 
 # Fuzz the property mangler: generate programs nobody wrote, compile each
 # with and without mangling, run both, compare. A difference is a mangler

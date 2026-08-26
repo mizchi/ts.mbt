@@ -112,10 +112,32 @@ pub fn peephole_block(block : @ast.TsBlock) -> @ast.TsBlock {
   let shadowed = block_binds_undefined(block)
   let ctx : PeepCtx = { undefined_shadowed: shadowed }
   let stmts : Array[@ast.TsStmt] = []
-  for s in block.stmts {
-    stmts.push(peep_stmt(s, ctx))
+  let positions : Array[Int] = []
+  // Positions are tracked per surviving statement rather than carried
+  // over wholesale: this loop can now DROP a statement, and a positions
+  // array left at the original length would either be discarded by the
+  // length check downstream or — worse — line up by coincidence and
+  // shift every source-map entry after the hole.
+  let has_positions = block.stmt_positions.length() == block.stmts.length()
+  for i, s in block.stmts {
+    match peep_block_level(peep_stmt(s, ctx)) {
+      Some(kept) => {
+        stmts.push(kept)
+        if has_positions {
+          positions.push(block.stmt_positions[i])
+        }
+      }
+      None => ()
+    }
   }
-  { stmts, stmt_positions: block.stmt_positions }
+  {
+    stmts,
+    stmt_positions: if has_positions {
+      positions
+    } else {
+      block.stmt_positions
+    },
+  }
 }
 
 ///|
@@ -1041,6 +1063,153 @@ fn peep_decl_rhs(
 }
 
 ///|
+/// Rewrites that belong to a statement's position in a LIST rather than
+/// to the statement itself, so every walker over a statement list can
+/// share them. `None` means drop the statement.
+///
+/// Keeping them in one function is deliberate: `peephole_block` (the
+/// top-level entry) and `peep_block` (every nested block) each run their
+/// own loop, and while these two rules lived only in the second one,
+/// nothing at the top level of a module was rewritten at all.
+fn peep_block_level(stmt : @ast.TsStmt) -> @ast.TsStmt? {
+  // An empty block is two bytes of nothing. It has no statements to
+  // scope, so unlike a declarator group there is nothing its braces
+  // could be holding.
+  if stmt is Block(b) && b.stmts.length() == 0 {
+    return None
+  }
+  match stmt {
+    // A label nothing jumps to is dead. `L: for (…) {…}` with no
+    // `break L` / `continue L` inside costs its name plus a colon and
+    // changes nothing.
+    //
+    // Declined when the body re-declares the same label: an inner
+    // `break L` then targets the inner one, and removing the outer label
+    // would change which statement it means.
+    Label(lname, inner) =>
+      if !stmt_targets_label(inner, lname) &&
+        !stmt_redeclares_label(inner, lname) {
+        Some(inner)
+      } else {
+        Some(stmt)
+      }
+    _ => Some(stmt)
+  }
+}
+
+///|
+/// Does anything inside `stmt` jump to the label `name`?
+///
+/// Nested functions are not walked: `break`/`continue` cannot cross a
+/// function boundary, so a label mentioned in there is a different one
+/// (and would be a syntax error if it were not).
+fn stmt_targets_label(stmt : @ast.TsStmt, name : String) -> Bool {
+  match stmt {
+    Break(Some(l)) | Continue(Some(l)) => l == name
+    Block(b) => block_targets_label(b, name)
+    Label(_, inner) => stmt_targets_label(inner, name)
+    If(_, t, e) =>
+      block_targets_label(t, name) ||
+      (match e {
+        Some(b) => block_targets_label(b, name)
+        None => false
+      })
+    While(_, b) | DoWhile(_, b) => block_targets_label(b, name)
+    For(init, _, update, b) =>
+      (match init {
+        Some(i) => stmt_targets_label(i, name)
+        None => false
+      }) ||
+      (match update {
+        Some(u) => stmt_targets_label(u, name)
+        None => false
+      }) ||
+      block_targets_label(b, name)
+    ForOf(_, _, _, _, b) | ForAwaitOf(_, _, _, _, b) | ForIn(_, _, _, _, b) =>
+      block_targets_label(b, name)
+    Switch(_, cases) => {
+      for c in cases {
+        if block_targets_label(c.body, name) {
+          return true
+        }
+      }
+      false
+    }
+    Try(b, _, cb, fb) =>
+      block_targets_label(b, name) ||
+      (match cb {
+        Some(blk) => block_targets_label(blk, name)
+        None => false
+      }) ||
+      (match fb {
+        Some(blk) => block_targets_label(blk, name)
+        None => false
+      })
+    With(_, b) => block_targets_label(b, name)
+    _ => false
+  }
+}
+
+///|
+fn block_targets_label(block : @ast.TsBlock, name : String) -> Bool {
+  for s in block.stmts {
+    if stmt_targets_label(s, name) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+/// Is `name` declared again as a label anywhere inside `stmt`?
+fn stmt_redeclares_label(stmt : @ast.TsStmt, name : String) -> Bool {
+  match stmt {
+    Label(l, inner) => l == name || stmt_redeclares_label(inner, name)
+    Block(b) => block_redeclares_label(b, name)
+    If(_, t, e) =>
+      block_redeclares_label(t, name) ||
+      (match e {
+        Some(b) => block_redeclares_label(b, name)
+        None => false
+      })
+    While(_, b) | DoWhile(_, b) => block_redeclares_label(b, name)
+    For(_, _, _, b) => block_redeclares_label(b, name)
+    ForOf(_, _, _, _, b) | ForAwaitOf(_, _, _, _, b) | ForIn(_, _, _, _, b) =>
+      block_redeclares_label(b, name)
+    Switch(_, cases) => {
+      for c in cases {
+        if block_redeclares_label(c.body, name) {
+          return true
+        }
+      }
+      false
+    }
+    Try(b, _, cb, fb) =>
+      block_redeclares_label(b, name) ||
+      (match cb {
+        Some(blk) => block_redeclares_label(blk, name)
+        None => false
+      }) ||
+      (match fb {
+        Some(blk) => block_redeclares_label(blk, name)
+        None => false
+      })
+    With(_, b) => block_redeclares_label(b, name)
+    _ => false
+  }
+}
+
+///|
+fn block_redeclares_label(block : @ast.TsBlock, name : String) -> Bool {
+  for s in block.stmts {
+    if stmt_redeclares_label(s, name) {
+      return true
+    }
+  }
+  false
+}
+
+///|
 fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
   let stmts : Array[@ast.TsStmt] = []
   // A function declaration after the terminator is NOT unreachable —
@@ -1069,6 +1238,10 @@ fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
       continue
     }
     let ps = peep_stmt(s, ctx)
+    let ps = match peep_block_level(ps) {
+      Some(replacement) => replacement
+      None => continue
+    }
     // `if (c) { …; return; } else { stmts }` → `if (c) { …; return; }` +
     // `stmts` spliced inline. Saves the `else ` keyword (5 bytes) and the
     // braces (2 bytes) for every such pattern.
