@@ -84,13 +84,6 @@ const KNOWN_FINDINGS = [
   // `#secret` is lowered to an ordinary own property, so the UNMANGLED
   // bundle already differs from Node running the original.
   { token: "__private_brand__", why: "#private lowered to an enumerable own property" },
-  // fixtures/fuzz-findings/prop-write-into-observed-object.ts —
-  // `obj[k] = { ...bag }` where `obj` reaches a sink. `obj`'s own keys
-  // stay reserved; what is written INTO it does not, because
-  // `symbol_graph.mbt` adds no flow edge from the assigned value into
-  // the target's symbol. The generated property is named `gN`, and it
-  // is the one that disappears.
-  { token: "-gN", why: "property write into an observed object is not tracked" },
 ];
 
 function knownFinding(signature) {

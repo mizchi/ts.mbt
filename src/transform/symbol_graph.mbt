@@ -117,6 +117,13 @@ pub(all) struct Symbol {
   // walks these to decide whether the binding stays numeric after
   // a write.
   reassign_rhs : Array[@ast.TsExpr]
+  // Values written INTO this binding through a property or index
+  // (`obj.q = v`, `obj[k] = v`, `obj.a.b = v`). A flow edge carries
+  // the target's observability back to the value's own bindings, but
+  // an object LITERAL written here has no binding of its own — its
+  // keys exist only in that expression. `collect_direct_props` reads
+  // this so an observed target reserves them.
+  written_values : Array[@ast.TsExpr]
   // Set when any later statement writes to this binding (`x = ...`,
   // `x += ...`, `++x`, destructuring assignment, etc.).
   mut reassigned : Bool
@@ -398,6 +405,7 @@ fn sg_declare(
         uses: [],
         defs: [],
         reassign_rhs: [],
+        written_values: [],
         reassigned: false,
         captured_by_closure: false,
         ts_type: @ast.TsType::Any,
@@ -626,7 +634,9 @@ fn sg_visit_stmt(w : SgWalker, stmt : @ast.TsStmt) -> Unit {
         Some(id) => {
           w.g.symbols[id].reassigned = true
           w.g.symbols[id].reassign_rhs.push(rhs)
-          for src in expr_immediate_sources(w, rhs) {
+          // `obj = { ...bag }` has the same hole one level up: the
+          // literal used to be the end of the trail.
+          for src in expr_flow_sources(w, rhs) {
             w.g.flow_edges.push({ from: src, to: SymVal(id) })
           }
         }
@@ -654,6 +664,7 @@ fn sg_visit_stmt(w : SgWalker, stmt : @ast.TsStmt) -> Unit {
       sg_visit_expr(w, target)
       sg_visit_expr(w, idx)
       sg_visit_expr(w, val)
+      sg_record_write_into(w, target, val)
     }
     PropAssign(target, prop, val) => {
       // Treat `obj.prop = val` as a `PropReceiver(prop)` use of
@@ -666,6 +677,7 @@ fn sg_visit_stmt(w : SgWalker, stmt : @ast.TsStmt) -> Unit {
         _ => sg_visit_expr(w, target)
       }
       sg_visit_expr(w, val)
+      sg_record_write_into(w, target, val)
     }
     Expr(e) => sg_visit_expr(w, e)
     Throw(e) => {
@@ -1169,11 +1181,13 @@ fn sg_visit_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
         _ => sg_visit_expr(w, target)
       }
       sg_visit_expr(w, rhs)
+      sg_record_write_into(w, target, rhs)
     }
     IndexAssignExpr(target, idx, rhs) => {
       sg_visit_expr(w, target)
       sg_visit_expr(w, idx)
       sg_visit_expr(w, rhs)
+      sg_record_write_into(w, target, rhs)
     }
     BinOp(_, l, r) => {
       sg_visit_expr(w, l)
@@ -1411,6 +1425,102 @@ fn scope_crosses_function_boundary(
 // ---------------------------------------------------------------------------
 // Source extraction: what flow nodes contribute the VALUE of an expr?
 // ---------------------------------------------------------------------------
+
+///|
+/// Sources for a FLOW EDGE, which has to see into a literal.
+///
+/// `collect_immediate_sources` answers `Literal(LitObject)` for an
+/// object or array literal and stops. That is the right answer for the
+/// questions it was written for — the numeric and container inferences
+/// ask "what KIND of value is this", and an object literal is a fresh
+/// object whatever is inside it. A flow edge asks something else: "if
+/// this value is observed, what else becomes observed". For
+/// `{ ...bag, g: c }` the answer includes `bag`.
+///
+/// Kept as a separate function rather than widening the shared one,
+/// because widening it would change what those other inferences see.
+fn collect_flow_sources(
+  w : SgWalker,
+  expr : @ast.TsExpr,
+  out : Array[FlowNode],
+) -> Unit {
+  match expr {
+    ObjectLit(entries) =>
+      for ent in entries {
+        collect_flow_sources(w, ent.1, out)
+      }
+    ArrayLit(items) =>
+      for it in items {
+        collect_flow_sources(w, it, out)
+      }
+    Spread(inner) => collect_flow_sources(w, inner, out)
+    ComputedProp(_, v) => collect_flow_sources(w, v, out)
+    Cond(_, t, e) => {
+      collect_flow_sources(w, t, out)
+      collect_flow_sources(w, e, out)
+    }
+    As(inner, _) | Satisfies(inner, _) | NonNull(inner) =>
+      collect_flow_sources(w, inner, out)
+    _ => collect_immediate_sources(w, expr, out)
+  }
+}
+
+///|
+fn expr_flow_sources(w : SgWalker, expr : @ast.TsExpr) -> Array[FlowNode] {
+  let out : Array[FlowNode] = []
+  collect_flow_sources(w, expr, out)
+  out
+}
+
+///|
+/// `target.prop = val` / `target[i] = val` — the written value is now
+/// reachable from `target`, so an observation of `target` observes it.
+///
+/// This edge was missing entirely. The write side recorded the target as
+/// a `PropReceiver` use, which keeps the TARGET's own keys reserved, and
+/// visited `val` for its own uses — but nothing connected the two. So
+///
+///   obj['q'] = { ...bag, g7: arr[2] };
+///   console.log([obj]);
+///
+/// reserved `p` / `q` / `r` and renamed `alpha`, deleting `beta`,
+/// `gamma` and `g7` as dead. `obj` is observed recursively; what was
+/// written into it was not. Found by `just fuzz-mangle`.
+fn sg_record_write_into(
+  w : SgWalker,
+  target : @ast.TsExpr,
+  val : @ast.TsExpr,
+) -> Unit {
+  match sg_assign_target_root(w, target) {
+    Some(id) => {
+      for src in expr_flow_sources(w, val) {
+        w.g.flow_edges.push({ from: src, to: SymVal(id) })
+      }
+      // The edge covers what the value REFERS to. An object literal
+      // written here also introduces keys of its own — `g7` in
+      // `obj.q = { ...bag, g7: v }` names nothing else in the bundle,
+      // so nothing else can keep it alive.
+      w.g.symbols[id].written_values.push(val)
+    }
+    None => ()
+  }
+}
+
+///|
+/// The binding a write ultimately lands in: `o.a.b = v` writes into
+/// `o`, so `o`'s observability has to reach `v`.
+fn sg_assign_target_root(w : SgWalker, target : @ast.TsExpr) -> SymbolId? {
+  match target {
+    @ast.TsExpr::Var(n) => sg_lookup(w.g, w.current_scope, n)
+    @ast.TsExpr::PropAccess(recv, _) => sg_assign_target_root(w, recv)
+    @ast.TsExpr::IndexAccess(recv, _) => sg_assign_target_root(w, recv)
+    @ast.TsExpr::As(inner, _)
+    | @ast.TsExpr::Satisfies(inner, _)
+    | @ast.TsExpr::NonNull(inner)
+    | @ast.TsExpr::OptionalChain(inner) => sg_assign_target_root(w, inner)
+    _ => None
+  }
+}
 
 ///|
 /// Compute the set of `FlowNode`s that the expression's value could

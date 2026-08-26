@@ -710,6 +710,43 @@ fn collect_direct_props(sym : Symbol, out : Map[String, Bool]) -> Unit {
       _ => ()
     }
   }
+  // Keys of every object literal WRITTEN into this binding. The flow
+  // edge added for `obj.q = { ...bag, g7: v }` carries the target's
+  // observability to `bag`, but `g7` names nothing else in the bundle,
+  // so nothing else could keep it. Collected through nesting, because
+  // an observed target observes the whole shape it holds.
+  for v in sym.written_values {
+    collect_literal_keys(v, out)
+  }
+}
+
+///|
+/// Every property key spelled by an object literal inside `expr`.
+fn collect_literal_keys(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit {
+  match expr {
+    ObjectLit(entries) =>
+      for ent in entries {
+        // The parser spells a spread as `("@@spread:N", expr)` and a
+        // computed key as `("@@computed:N", ComputedProp(k, v))`;
+        // neither is a literal name to reserve.
+        if !ent.0.has_prefix("@@") {
+          out[ent.0] = true
+        }
+        collect_literal_keys(ent.1, out)
+      }
+    ArrayLit(items) =>
+      for it in items {
+        collect_literal_keys(it, out)
+      }
+    Spread(inner) | ComputedProp(_, inner) => collect_literal_keys(inner, out)
+    Cond(_, t, e) => {
+      collect_literal_keys(t, out)
+      collect_literal_keys(e, out)
+    }
+    As(inner, _) | Satisfies(inner, _) | NonNull(inner) =>
+      collect_literal_keys(inner, out)
+    _ => ()
+  }
 }
 
 ///|

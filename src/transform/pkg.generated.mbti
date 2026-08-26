@@ -396,6 +396,7 @@ pub(all) struct Symbol {
   uses : Array[Use]
   defs : Array[Def]
   reassign_rhs : Array[@ast.TsExpr]
+  written_values : Array[@ast.TsExpr]
   mut reassigned : Bool
   mut captured_by_closure : Bool
   mut ts_type : @ast.TsType

@@ -1,5 +1,15 @@
 # Findings from `just fuzz-mangle` that are not fixed yet
 
+Fixed and removed from this list:
+
+- **`prop-write-into-observed-object.ts`** — `obj['q'] = { ...bag }` with
+  `obj` reaching a sink. There was no flow edge from a written value into
+  the target's binding at all, so an observed object kept its own keys
+  and lost everything written into it. Fixed by `sg_record_write_into`
+  (the edge) plus `Symbol::written_values` / `collect_literal_keys` (the
+  keys a written literal introduces, which name nothing else in the
+  bundle). Regression case: `fixtures/mangle-safety/case39-write-into-observed`.
+
 Each file is the smallest program the fuzzer could still fail on, as
 `scripts/lib/fuzz-shrink.mjs` reduced it. They are kept here so an open
 finding stays reproducible after the seed that found it drifts — the
@@ -13,40 +23,6 @@ mtsc <file> --bundle --treeshake --fold --minify --no-check \
     --mangle --mangle-properties --reserve-entry-exports --out /tmp/mangled.mjs
 node <file>; node /tmp/base.mjs; node /tmp/mangled.mjs
 ```
-
-## `prop-write-into-observed-object.ts` — a mangle false positive
-
-```ts
-obj['q'] = { ...bag, g7: arr[2] };
-console.log([obj]);
-```
-
-| | output |
-| --- | --- |
-| original (Node) | `{ p: 0, q: { alpha: 1, beta: 2, gamma: 3, g7: 2 }, r: 2 }` |
-| `--bundle` | same |
-| `+ --mangle-properties` | `{ p: 0, q: { a: 1 }, r: 2 }` |
-
-`obj` reaches `console.log`, so it is observed recursively and its own
-keys (`p`, `q`, `r`) stay reserved. What is WRITTEN into it does not:
-`bag`'s names are spread into the value assigned to `obj.q`, and the
-analysis never connects the two, so `beta` / `gamma` / `g7` are deleted
-as dead and `alpha` is renamed.
-
-The gap is in `symbol_graph.mbt`: `PropAssign(target, prop, val)` records
-the target as a `PropReceiver` use and visits `val`, but adds no flow
-edge from `val` into the target's symbol. Two things are needed, and the
-second is why this is not a one-liner:
-
-1. an edge `val -> SymVal(target)` for `PropAssign` / `IndexAssign` and
-   their expression forms, so the backward pass carries the target's
-   observability into the written value;
-2. sources for the CONTENTS of an object / array literal.
-   `collect_immediate_sources` currently answers `Literal(LitObject)`
-   for one and stops, so a spread inside it is invisible. Widening that
-   function would change what the numeric and container inferences see,
-   so the observability walk needs its own source collector rather than
-   a change to the shared one.
 
 ## `private-field-lowered-enumerable.ts` — a lowering bug
 

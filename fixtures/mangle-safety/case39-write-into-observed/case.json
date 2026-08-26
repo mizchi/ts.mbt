@@ -1,0 +1,23 @@
+{
+  "origin": "ts.mbt — fuzz-mangle finding: property write into an observed object",
+  "what": "`snapshot` reaches JSON.stringify, so its own keys stay reserved. What is WRITTEN into it had no flow edge at all: names arriving through a spread (`alpha` / `beta` / `gamma`) were renamed and deleted, and keys that exist only in the written literal (`revision`, `retries`, `tag`) had nothing else in the bundle to keep them. The string-literal computed write is the spelling that breaks — the dotted form is covered by the PropReceiver use recorded for the target — so both are here, plus a write one level down so the target root has to be walked.",
+  "mtscArgs": [
+    "--treeshake"
+  ],
+  "exports": [
+    "dump"
+  ],
+  "expectKeep": [
+    "alpha",
+    "beta",
+    "gamma",
+    "revision",
+    "soft",
+    "hard",
+    "retries",
+    "depth",
+    "width",
+    "tag"
+  ],
+  "expectStatus": "pass"
+}
