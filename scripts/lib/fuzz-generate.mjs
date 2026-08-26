@@ -179,6 +179,11 @@ export class Generator {
         k: "func",
         name,
         params: ["p0", "p1"],
+        // Announcing the invocation is what makes a DROPPED call
+        // visible, but it also makes the function impure, which stops
+        // the DCE from ever removing it. Both paths matter, so only
+        // some functions announce themselves.
+        entryId: this.chance(0.7) ? this.freshEffect() : undefined,
         body: this.statements(this.int(1, 3), 2, { inFunction: true, loopDepth: 0 }),
       });
     }
@@ -248,6 +253,7 @@ export class Generator {
         k: "method",
         name: prop,
         params: ["q0"],
+        entryId: this.chance(0.7) ? this.freshEffect() : undefined,
         body: [{ k: "return", expr: this.expr(1) }],
         static: isStatic,
       });
@@ -259,6 +265,9 @@ export class Generator {
       members.push({
         k: "getter",
         name: prop,
+        // A getter that announces itself is how "the mangler renamed the
+        // property so the getter never ran" becomes visible.
+        entryId: this.chance(0.7) ? this.freshEffect() : undefined,
         body: [{ k: "return", expr: this.expr(1) }],
         static: false,
       });
@@ -338,7 +347,7 @@ export class Generator {
 
   stmt(depth, ctx) {
     if (depth <= 0) return this.simpleStmt();
-    switch (this.int(0, 16)) {
+    switch (this.int(0, 17)) {
       case 0:
       case 1:
       case 2:
@@ -436,6 +445,16 @@ export class Generator {
       case 14:
         if (ctx.loopDepth > 0) return this.chance(0.5) ? { k: "break" } : { k: "continue" };
         return this.simpleStmt();
+      // THE shape that broke the minified TypeScript compiler: a call
+      // whose result is bound to a variable read only in a position that
+      // is not always evaluated. The single-use inliner deleted the
+      // binding and moved the call into the `?` branch, and the branch
+      // was not taken, so the call never happened.
+      //
+      // The value comparison could not see it — nobody reads the value.
+      // The trace can: the callee announces its own invocation.
+      case 15:
+        return this.effectBindStmt(depth, ctx);
       // A computed-key DELETE. Harmless to the analysis — it observes no
       // name — and the fuzzer's job is to keep proving that, because the
       // conservative reading of `delete` reserved everything.
@@ -449,6 +468,72 @@ export class Generator {
           },
         };
     }
+  }
+
+  /// `let v = <effectful call>;` followed by a use of `v` that is only
+  /// SOMETIMES evaluated.
+  ///
+  /// Three guard shapes, because a minifier's reasoning differs across
+  /// them: a ternary branch, the right of a `&&`, and an `if` body. The
+  /// condition is built from the prelude's mutable counters so it is not
+  /// a literal the folder can settle — and it is written to be false
+  /// most of the time, since a guard that is always taken proves
+  /// nothing.
+  effectBindStmt(depth, ctx) {
+    const name = this.freshVar();
+    const call = {
+      k: "call",
+      callee: { k: "var", name: this.pick(this.funcNames.length ? this.funcNames : ["f0"]) },
+      args: [this.expr(1), this.expr(1)],
+    };
+    const test = {
+      k: "bin",
+      op: this.pick([">", "<", "===", "!=="]),
+      left: { k: "var", name: this.pick(NUMERIC_VARS) },
+      right: { k: "lit", value: String(this.int(0, 200)) },
+    };
+    const use = { k: "var", name };
+    let guarded;
+    switch (this.int(0, 3)) {
+      case 0:
+        guarded = {
+          k: "expr",
+          expr: {
+            k: "assign",
+            op: "=",
+            target: { k: "member", obj: { k: "var", name: "obj" }, prop: this.pick(OBJ_PROPS) },
+            value: { k: "cond", test, then: use, else_: { k: "lit", value: "0" } },
+          },
+        };
+        break;
+      case 1:
+        guarded = {
+          k: "expr",
+          expr: {
+            k: "assign",
+            op: "=",
+            target: { k: "var", name: "c" },
+            value: { k: "logical", op: "&&", left: test, right: use },
+          },
+        };
+        break;
+      default:
+        guarded = {
+          k: "if",
+          test,
+          then: [
+            {
+              k: "expr",
+              expr: { k: "assign", op: "=", target: { k: "var", name: "c" }, value: use },
+            },
+          ],
+        };
+        break;
+    }
+    // A block, because that is where the real case lived: inside a
+    // function body, where the declaration and its single use are
+    // adjacent statements in the same scope.
+    return { k: "block", body: [{ k: "decl", kind: "let", name, init: call }, guarded] };
   }
 
   simpleStmt() {

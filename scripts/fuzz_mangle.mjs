@@ -68,6 +68,35 @@ function findMtsc() {
 // Options
 // ---------------------------------------------------------------
 
+/// Findings already recorded in `fixtures/fuzz-findings/`, with the
+/// mechanism written down and a decision pending. They are reported —
+/// silence would let one get fixed and quietly come back — but they do
+/// not consume the `--keep-going` budget, because a known finding that
+/// fires on a third of seeds otherwise ends every campaign at the seed
+/// where it first appears.
+///
+/// A token here is matched against the family signature as a substring,
+/// so it survives the seed-to-seed variation the signature normalises
+/// away. `--no-known` treats them as new again, which is how you check
+/// whether one is actually fixed.
+const KNOWN_FINDINGS = [
+  // fixtures/fuzz-findings/private-field-lowered-enumerable.ts —
+  // `#secret` is lowered to an ordinary own property, so the UNMANGLED
+  // bundle already differs from Node running the original.
+  { token: "__private_brand__", why: "#private lowered to an enumerable own property" },
+  // fixtures/fuzz-findings/prop-write-into-observed-object.ts —
+  // `obj[k] = { ...bag }` where `obj` reaches a sink. `obj`'s own keys
+  // stay reserved; what is written INTO it does not, because
+  // `symbol_graph.mbt` adds no flow edge from the assigned value into
+  // the target's symbol. The generated property is named `gN`, and it
+  // is the one that disappears.
+  { token: "-gN", why: "property write into an observed object is not tracked" },
+];
+
+function knownFinding(signature) {
+  return KNOWN_FINDINGS.find((k) => signature.includes(k.token));
+}
+
 const options = {
   startSeed: 0,
   iterations: 200,
@@ -76,6 +105,7 @@ const options = {
   shrinkFailures: true,
   shrinkSteps: 400,
   keepGoing: 1,
+  allowKnown: true,
   timeoutMs: 1000,
   batchSize: 40,
   saveDir: path.join(ROOT, "_build", "fuzz-mangle"),
@@ -95,6 +125,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (arg === "--timeout-ms") options.timeoutMs = Number(argv[++i]);
   else if (arg === "--batch-size") options.batchSize = Number(argv[++i]);
   else if (arg === "--save-dir") options.saveDir = path.resolve(argv[++i]);
+  else if (arg === "--no-known") options.allowKnown = false;
   else if (arg === "--quiet") options.quiet = true;
   else if (arg === "--help" || arg === "-h") {
     printHelp();
@@ -328,7 +359,54 @@ function signatureOf(outcome, kind) {
       .replace(/\d+/g, "N");
     return `${kind}:${candidate?.status}:${candidate?.name}:${message}`;
   }
-  return `${kind}:diff`;
+  // A value difference used to be `${kind}:diff` for EVERY case, which
+  // made the family map do the opposite of its job: the first diff found
+  // claimed the family, and every later diff — a different bug, in a
+  // different pass — was counted as a duplicate and dropped. With one
+  // known unfixed finding in the corpus (`#private` lowering) that meant
+  // a campaign effectively stopped at the seed where it first appeared.
+  //
+  // So the signature carries WHAT differs: which observation, and the
+  // tokens that appear on one side and not the other, with generated
+  // identifiers and numbers normalised so `v4` and `v11` still group.
+  return `${kind}:diff:${diffFingerprint(outcome)}`;
+}
+
+/// A stable, coarse description of the first differing observation.
+function diffFingerprint(outcome) {
+  const baseline = outcome.baseline?.logs;
+  const candidate = outcome.candidate?.logs;
+  if (!Array.isArray(baseline) || !Array.isArray(candidate)) return "structural";
+  const rows = Math.max(baseline.length, candidate.length);
+  for (let i = 0; i < rows; i++) {
+    const left = JSON.stringify(baseline[i]);
+    const right = JSON.stringify(candidate[i]);
+    if (left === right) continue;
+    return `${i}:${symmetricTokens(left, right).join(",") || "shape"}`;
+  }
+  return "outside";
+}
+
+/// Identifier-ish tokens present on exactly one side. Numbers and
+/// generated names are folded so that two instances of the same bug on
+/// different seeds land in the same family.
+function symmetricTokens(left, right) {
+  const norm = (text) =>
+    new Set(
+      String(text ?? "")
+        .replace(/\bv\d+\b/g, "vN")
+        .replace(/\bbrake\d+\b/g, "brakeN")
+        .replace(/\d+/g, "N")
+        .match(/[A-Za-z_$][\w$]*/g) ?? [],
+    );
+  const l = norm(left);
+  const r = norm(right);
+  const only = [];
+  for (const token of l) if (!r.has(token)) only.push(`-${token}`);
+  for (const token of r) if (!l.has(token)) only.push(`+${token}`);
+  only.sort();
+  // Long lists say "everything moved", which is itself a family.
+  return only.slice(0, 4);
 }
 
 /// Which of the three observations is the odd one out.
@@ -486,7 +564,14 @@ function recordFailure({ kind, seed, shape, program, entry, outcome }) {
     seen.count += 1;
     return;
   }
-  families.set(failure.signature, { count: 1, seed, kind, shape });
+  const known = options.allowKnown ? knownFinding(failure.signature) : undefined;
+  families.set(failure.signature, { count: 1, seed, kind, shape, known: known?.why });
+  if (known) {
+    if (!options.quiet) {
+      console.log(`  [known] seed ${seed} (${shape}) — ${known.why}`);
+    }
+    return;
+  }
 
   if (options.shrinkFailures) {
     const before = shrinkProbes;
@@ -566,6 +651,14 @@ function describeDifference(outcome, kind = "mangle") {
 function truncate(text, limit) {
   const value = String(text ?? "");
   return value.length > limit ? `${value.slice(0, limit)}…` : value;
+}
+
+/// Families the campaign is here to find. A known finding is recorded
+/// and reported but does not end the run.
+function newFamilyCount() {
+  let count = 0;
+  for (const info of families.values()) if (!info.known) count += 1;
+  return count;
 }
 
 // ---------------------------------------------------------------
@@ -656,7 +749,7 @@ outer: for (const shape of shapes) {
           entry,
           outcome: { verdict: "mismatch", baseline: reference, candidate: outcome.baseline },
         });
-        if (families.size >= options.keepGoing) break outer;
+        if (newFamilyCount() >= options.keepGoing) break outer;
         continue;
       }
       if (outcome.verdict === "harness") {
@@ -688,7 +781,7 @@ outer: for (const shape of shapes) {
         entry,
         outcome: attributed,
       });
-      if (families.size >= options.keepGoing) break outer;
+      if (newFamilyCount() >= options.keepGoing) break outer;
     }
   }
 }
@@ -721,7 +814,8 @@ if (families.size > 0) {
   for (const [signature, info] of [...families].sort((l, r) => r[1].count - l[1].count)) {
     console.log(
       `    ${String(info.count).padStart(4)}x  ${info.kind.padEnd(8)} ` +
-        `first at seed ${info.seed} (${info.shape})  ${signature.slice(0, 96)}`,
+        `first at seed ${info.seed} (${info.shape})  ` +
+        `${info.known ? `[known: ${info.known}] ` : ""}${signature.slice(0, 96)}`,
     );
   }
   console.log("");
@@ -749,4 +843,13 @@ if (failures.length > 0) {
   console.error(`\n  fuzz_mangle: ${failures.length} mismatch(es) — artifacts in ${options.saveDir}`);
   process.exit(1);
 }
-console.log("\n  no mismatch");
+if (newFamilyCount() > 0) {
+  console.error("\n  fuzz_mangle: a new failure family was recorded without an artifact");
+  process.exit(1);
+}
+const knownSeen = families.size;
+console.log(
+  knownSeen > 0
+    ? `\n  no new mismatch (${knownSeen} known finding(s) still reproduce)`
+    : "\n  no mismatch",
+);

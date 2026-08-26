@@ -53,10 +53,12 @@
 //   fn.call(null, a, b)    -> fn(a, b)     (null/undefined this → direct call)
 //   fn.apply(null, arr)    -> fn(...arr)   (null/undefined this → spread call)
 //   void f() (stmt)        -> f()         (return value discarded at stmt level)
-//   x.length !== 0        -> !!x.length  (saves ~4 bytes; also .size)
-//   x.length > 0          -> !!x.length  (saves ~3 bytes)
-//   x.length <= 0         -> !x.length   (saves ~4 bytes)
-//   x.size === 0          -> !x.size
+// (removed) x.length !== 0 -> !!x.length, and the > 0 / <= 0 / === 0
+//   siblings. They assume `.length` is a non-negative number, and the
+//   receiver can be anything: `(0).length` is `undefined`, so
+//   `undefined <= 0` is false while `!undefined` is true, and
+//   `{ length: -1 }` makes `> 0` false while `!!(-1)` is true. Peephole
+//   has no types to consult, and the saving was 3-4 bytes.
 //   x!=null ? x.p : void 0       -> x?.p         (optional chaining, saves ~14 bytes)
 //   x!=null ? x[k] : void 0      -> x?.[k]
 //   x==null ? y : x               -> x ?? y       (flipped nullish coalescing)
@@ -68,9 +70,12 @@
 //   typeof x !== "undefined"    -> x !== void 0
 //   !x ? b : a                  -> x ? a : b   (flip branches, drop negation)
 //   `text` (no exprs)           -> "text"       (saves 2 backtick bytes)
+//   `p${s}` (s a string)        -> "p"+s        (saves 2 bytes; ToString
+//     and ToPrimitive agree only when the hole is already a string)
 //   Number.parseInt(x)          -> parseInt(x)  (saves 7 bytes; same fn per spec)
 //   Number.parseFloat(x)        -> parseFloat(x)
-//   Array.prototype.slice.call(x,0) -> [...x]   (saves ~24 bytes; 0-start copy)
+// (removed) Array.prototype.slice.call(x,0) -> [...x]: `slice` accepts
+//   any array-LIKE, a spread needs an ITERABLE.
 //   switch(x){case a:S}                  -> if(x===a){S}   (enables further if→ternary folds)
 //   switch(x){case a:S default:T}        -> if(x===a){S}else{T}
 //   switch(x){case a:S1 case b:S2 …}    -> if(x===a){S1}else if(x===b){S2}… (all-terminator multi-case)
@@ -81,7 +86,8 @@
 //   x !== true                  -> !x           (saves 6 bytes)
 //   x !== false                 -> x            (saves 7 bytes)
 //   Object.prototype.hasOwnProperty.call(o,k) -> Object.hasOwn(o,k)  (saves ~22 bytes; ES2022)
-//   x.hasOwnProperty(k)                       -> Object.hasOwn(x,k)  (saves ~8 bytes; ES2022)
+// (removed) x.hasOwnProperty(k) -> Object.hasOwn(x,k): replaces
+//   whatever the receiver's own `hasOwnProperty` is with the built-in.
 //   c ? expr : void 0           -> c && expr    (saves ~7 bytes; short-circuit form)
 //   !0 ? a : b                  -> a            (constant condition evaluation)
 //   !1 ? a : b                  -> b            (constant condition evaluation)
@@ -91,12 +97,16 @@
 //   function(p){return e}       -> (p) => e    (saves ~16 bytes; no this/arguments/self-ref)
 //   function(p){stmts}          -> (p) => {stmts} (saves ~9 bytes)
 //   Array.prototype.METHOD.call(arr, args) -> arr.METHOD(args)  (saves ~22 bytes)
-//   x.toString()                -> ""+x         (saves ~9 bytes; same as String(x))
+// (removed) x.toString() -> ""+x: `undefined.toString()` throws where
+//   `"" + undefined` does not, `+` prefers `valueOf` over `toString`,
+//   and a Symbol is the other way round again.
 //   (0, fn)(args)               -> fn(args)      (saves 4 bytes; indirect call in ESM is redundant)
 //   "a" + "b"                -> "ab"           (string literal concatenation folding)
-//   0 + x / x + 0           -> x              (additive identity for integers)
+//   0 + x / x + 0           -> x              (only for a number that
+//     cannot be -0: `undefined + 0` is NaN, `"a" + 0` is "a0",
+//     `-0 + 0` is 0)
 //   n + m / n - m / n * m   -> <result>       (integer literal arithmetic)
-//   x - 0 / x * 1 / 1 * x  -> x              (multiplicative identity)
+//   x - 0 / x * 1 / 1 * x  -> x              (only for a number)
 //   if (!!x) …              -> if (x) …       (strip double negation in condition)
 //   while (!!x) …           -> while (x) …
 //
@@ -1221,6 +1231,15 @@ fn cmp_kind(e : @ast.TsExpr) -> CmpKind {
       }
     // A tag-less template literal is always a string.
     StringLit(_) | TemplateLiteral(_, _) => CmpStr
+    // `+` with a string operand is string concatenation, so the result
+    // is a string whenever it does not throw — and it throws on exactly
+    // the operands (a Symbol) that the other side would throw on too.
+    BinOp(Add, l, r) =>
+      if cmp_kind(l) is CmpStr || cmp_kind(r) is CmpStr {
+        CmpStr
+      } else {
+        CmpUnknown
+      }
     As(inner, _) | Satisfies(inner, _) | NonNull(inner) | TypeArgs(_, inner) =>
       cmp_kind(inner)
     _ => CmpUnknown
@@ -1773,12 +1792,6 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
               UnaryOp(@ast.TsUnaryOp::Not, IntLit(if a == b { 0 } else { 1 }))
             (IntLit(a), IntLit(b)) =>
               UnaryOp(@ast.TsUnaryOp::Not, IntLit(if a == b { 0 } else { 1 }))
-            (PropAccess(_, "length"), IntLit(0))
-            | (PropAccess(_, "size"), IntLit(0)) =>
-              UnaryOp(@ast.TsUnaryOp::Not, lp)
-            (IntLit(0), PropAccess(_, "length"))
-            | (IntLit(0), PropAccess(_, "size")) =>
-              UnaryOp(@ast.TsUnaryOp::Not, rp)
             // `typeof x === "undefined"` → `x === void 0`  (saves ~9 bytes)
             // `"undefined" === typeof x` → `x === void 0`
             // Only safe when x is not a bare Var — undeclared globals like
@@ -1830,12 +1843,6 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
               UnaryOp(@ast.TsUnaryOp::Not, IntLit(if a != b { 0 } else { 1 }))
             (IntLit(a), IntLit(b)) =>
               UnaryOp(@ast.TsUnaryOp::Not, IntLit(if a != b { 0 } else { 1 }))
-            (PropAccess(_, "length"), IntLit(0))
-            | (PropAccess(_, "size"), IntLit(0)) =>
-              UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, lp))
-            (IntLit(0), PropAccess(_, "length"))
-            | (IntLit(0), PropAccess(_, "size")) =>
-              UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, rp))
             // `typeof x !== "undefined"` → `x !== void 0`  (saves ~9 bytes)
             // Only safe when x is not a bare Var — undeclared globals like
             // `document`, `window`, `DOMParser` throw ReferenceError when
@@ -1882,22 +1889,10 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         // `0 < x.length` / `0 >= x.length` — swapped forms
         BinGt =>
           match (lp, rp) {
-            (PropAccess(_, "length"), IntLit(0))
-            | (PropAccess(_, "size"), IntLit(0)) =>
-              UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, lp))
-            (IntLit(0), PropAccess(_, "length"))
-            | (IntLit(0), PropAccess(_, "size")) =>
-              UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, rp))
             _ => BinOp(op, lp, rp)
           }
         BinLe =>
           match (lp, rp) {
-            (PropAccess(_, "length"), IntLit(0))
-            | (PropAccess(_, "size"), IntLit(0)) =>
-              UnaryOp(@ast.TsUnaryOp::Not, lp)
-            (IntLit(0), PropAccess(_, "length"))
-            | (IntLit(0), PropAccess(_, "size")) =>
-              UnaryOp(@ast.TsUnaryOp::Not, rp)
             _ => BinOp(op, lp, rp)
           }
         // `"a" + "b"` → `"ab"`  (string constant folding; saves quotes + operator)
@@ -1907,21 +1902,28 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         Add =>
           match (lp, rp) {
             (StringLit(a), StringLit(b)) => StringLit(a + b)
-            // `0 + x` / `x + 0` → `x`  (identity under addition for numbers).
-            // Only safe when the other operand is an integer literal (so no
-            // string coercion occurs).
-            (IntLit(0), _) => rp
-            (_, IntLit(0)) => lp
             // `n + m` → constant  (integer literal arithmetic folding).
             (IntLit(a), IntLit(b)) => IntLit(a + b)
+            // `0 + x` / `x + 0` → `x`.
+            //
+            // The old comment claimed this was "only safe when the other
+            // operand is an integer literal (so no string coercion
+            // occurs)" — but the pattern matched ANY other operand, so
+            // `undefined + 0` became `undefined` instead of `NaN` and
+            // `"a" + 0` became `"a"` instead of `"a0"`. Even for a
+            // number it needs care: `-0 + 0` is `0` while `-0` is `-0`.
+            // `fold.mbt` gates the same rule; this copy did not.
+            (IntLit(0), _) if is_number_never_negzero(rp) => rp
+            (_, IntLit(0)) if is_number_never_negzero(lp) => lp
             _ => BinOp(op, lp, rp)
           }
         // `n - m` → constant  (integer literal subtraction).
         Sub =>
           match (lp, rp) {
             (IntLit(a), IntLit(b)) => IntLit(a - b)
-            // `x - 0` → `x`
-            (_, IntLit(0)) => lp
+            // `x - 0` → `x`. `-0 - 0` is `-0`, so this one only needs
+            // the operand to be a number at all.
+            (_, IntLit(0)) if is_number_valued(lp) => lp
             _ => BinOp(op, lp, rp)
           }
         // `n * m` → constant  (integer literal multiplication).
@@ -1929,10 +1931,11 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
           match (lp, rp) {
             (IntLit(a), IntLit(b)) => IntLit(a * b)
             // `x * 1` / `1 * x` → `x`
-            (_, IntLit(1)) => lp
-            (IntLit(1), _) => rp
-            // `x * 0` / `0 * x` → `0`  (safe only when x has no side effects,
-            // but IntLit(0) * anything is only folded when BOTH sides are IntLit)
+            (_, IntLit(1)) if is_number_valued(lp) => lp
+            (IntLit(1), _) if is_number_valued(rp) => rp
+            // `x * 0` / `0 * x` → `0` is NOT folded here: `-1 * 0` is
+            // `-0` and `"a" * 0` is `NaN`. `fold.mbt` does it under a
+            // non-negative-number gate.
             _ => BinOp(op, lp, rp)
           }
         _ => BinOp(op, lp, rp)
@@ -2152,7 +2155,16 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
             UnaryOp(@ast.TsUnaryOp::Not, new_args[0]),
           )
         } else if name == "String" {
-          return BinOp(@ast.TsBinOp::Add, StringLit(""), new_args[0])
+          // `String(x)` -> `"" + x` saves 6 bytes and is NOT the same
+          // conversion: `String` calls ToString, `+` calls ToPrimitive
+          // with a DEFAULT hint. A Symbol is the sharp end —
+          // `String(sym)` is `"Symbol(s)"` and `"" + sym` throws — and
+          // any object with both `valueOf` and `toString` differs
+          // quietly. Only take it when the operand is already a string
+          // or a number.
+          if cmp_kind(new_args[0]) is (CmpStr | CmpNum) {
+            return BinOp(@ast.TsBinOp::Add, StringLit(""), new_args[0])
+          }
         }
       }
       Call(name, new_args)
@@ -2251,13 +2263,14 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
             exprs_eq(new_args[1], @ast.TsExpr::IntLit(0))
           )
         ) {
-        match recv_p {
-          PropAccess(
-            PropAccess(@ast.TsExpr::Var("Array"), "prototype"),
-            "slice"
-          ) => return ArrayLit([Spread(new_args[0])])
-          _ => ()
-        }
+        // (removed) `Array.prototype.slice.call(x, 0)` -> `[...x]`.
+        // `slice` works on any array-LIKE — an object with `length` and
+        // index properties — while a spread needs an ITERABLE. So
+        // `Array.prototype.slice.call(0, 0)` is `[]` and `[...0]`
+        // throws, and the same goes for `arguments`-shaped objects in
+        // code that has not been through a transpiler. Found by
+        // `scripts/verify_rule_equivalence.mjs`.
+        ignore(recv_p)
       }
       // `Array.prototype.METHOD.call(arr, arg1, arg2, ...)` → `arr.METHOD(arg1, arg2, ...)`.
       // TypeScript's `__spreadArray` helper and some polyfills call Array
@@ -2300,12 +2313,15 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
           return MethodCall(Var("Object"), "hasOwn", new_args)
         }
       }
-      // `x.hasOwnProperty(key)` → `Object.hasOwn(x, key)` (saves ~8 bytes; ES2022).
-      // The direct `.hasOwnProperty()` call is subtly unsafe if the prototype
-      // chain is modified, but for bundled code it's equivalent and shorter.
-      if m == "hasOwnProperty" && new_args.length() == 1 {
-        return MethodCall(Var("Object"), "hasOwn", [recv_p, new_args[0]])
-      }
+      // (removed) `x.hasOwnProperty(key)` -> `Object.hasOwn(x, key)`.
+      // The old comment said the direct call is "subtly unsafe if the
+      // prototype chain is modified, but for bundled code it's
+      // equivalent" — which gets the direction backwards. The rewrite
+      // REPLACES whatever `x.hasOwnProperty` resolves to with the
+      // built-in, so an object that defines its own `hasOwnProperty`
+      // (a parsed JSON payload, a config bag) stops calling it. The
+      // `Object.prototype.hasOwnProperty.call(x, k)` form above names
+      // the built-in explicitly and is kept.
       // `Object.assign({}, a, b, …)` → `{...a, ...b, …}` (object spread).
       // `Object.assign({x:1}, a, b)` → `{x:1, ...a, ...b}` (literal target).
       // Safe when the first argument is an object literal (creates a fresh
@@ -2416,18 +2432,18 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         exprs_eq(new_args[0], @ast.TsExpr::IntLit(0)) {
         return ArrayLit([Spread(recv_p)])
       }
-      // `x.toString()` → `""+x`  (saves ~9 bytes; same as String(x)).
-      // Safe for all non-Symbol values which is the common case in bundled code.
-      // The no-arg form only — `.toString(radix)` must be preserved.
-      // Never apply to `super.toString()` — `super` is not a valid expression
-      // value in JS; `"" + super` is a SyntaxError outside class methods.
-      let is_super_recv = match recv_p {
-        @ast.TsExpr::Var("super") => true
-        _ => false
-      }
-      if m == "toString" && new_args.length() == 0 && !is_super_recv {
-        return BinOp(@ast.TsBinOp::Add, StringLit(""), recv_p)
-      }
+      // (removed) `x.toString()` -> `"" + x`. Three ways apart:
+      //
+      //   * `undefined.toString()` throws; `"" + undefined` is
+      //     `"undefined"`. Same for `null`.
+      //   * `+` uses ToPrimitive with a DEFAULT hint, so it prefers
+      //     `valueOf`. An object with both — a Date, a boxed number, a
+      //     value object — stringifies differently.
+      //   * a Symbol's `toString()` works while `"" + sym` throws.
+      //
+      // The old comment said "safe for all non-Symbol values", which is
+      // two of those three. Found by
+      // `scripts/verify_rule_equivalence.mjs`.
       MethodCall(recv_p, m, new_args)
     }
     PropAccess(recv, p) => PropAccess(peep_expr(recv, ctx), p)
@@ -2655,7 +2671,16 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         //   `` `${x}` ``       → `""+x`       (saves 2 bytes; empty prefix+suffix)
         //   `` `prefix${x}` `` → `"prefix"+x`  (saves 2 bytes; non-empty prefix OK)
         // Suffix-non-empty forms are NOT shorter: `` `${x}s` `` = `""+x+"s"` (same or longer).
-      } else if new_exprs.length() == 1 && parts.length() == 2 && parts[1] == "" {
+      } else if new_exprs.length() == 1 &&
+        parts.length() == 2 &&
+        parts[1] == "" &&
+        // Template interpolation is ToString; `+` is ToPrimitive with a
+        // DEFAULT hint, which prefers `valueOf`. For an object with both
+        // — a Date, a boxed number, any value object — the two produce
+        // different strings, and for a Symbol one throws and the other
+        // does not. So the saving is only available when the hole is
+        // already a string.
+        cmp_kind(new_exprs[0]) is CmpStr {
         BinOp(@ast.TsBinOp::Add, StringLit(parts[0]), new_exprs[0])
       } else {
         TemplateLiteral(parts, new_exprs)

@@ -231,3 +231,61 @@ const i = new C(); console.log(i)     ✓ binding があれば正しい
 - shrink の受理条件は「同じ signature で失敗し続ける」です。signature は
   throw の name と正規化した message で、値の差はすべて `diff` に
   まとまります。別々の値バグが 1 つの family に見える可能性は残ります。
+
+## 効果トレースを oracle に入れる
+
+最初の版は**観測した値**だけを比べていました。値を誰も読まない呼び出し
+の消失は、それでは原理的に見えません。そして minify した TypeScript
+compiler を殺したのは、まさにその形でした——node に symbol を付ける
+だけの呼び出しが、たまたま false になる条件の下に移されて実行されなく
+なった。値の比較は一致します。module が symbol を持たなくなるだけです。
+
+なので**生成した callable は自分の呼び出しを申告します**。
+
+```ts
+function f0(p0, p1) {
+  if (--callBudget < 0) return 0;
+  trace.push(2);          // これ
+  ...
+}
+```
+
+`trace` は観測列に入っているので、呼び出しの消失・重複・並び替えが値と
+無関係に差分になります。ただし `trace.push` を入れると関数が pure でなく
+なり DCE が絶対に消せなくなるので、**申告するのは 7 割だけ**にして
+「消せる関数」の経路も残しています。
+
+同時に、壊れた形そのものを生成するようにしました。
+
+```ts
+let v = f0(a, b);                        // 副作用のある呼び出し
+obj.p = (c > 137) ? v : 0;               // 唯一の use が条件下
+```
+
+3 通りの guard（ternary の branch、`&&` の右、`if` の body）を作ります。
+条件は prelude の可変カウンタから組み立てるので folder が畳めず、かつ
+たいてい false になるように書いてあります——常に通る guard は何も証明
+しません。
+
+## family の signature が粗すぎた
+
+もう 1 つ、harness 自身の欠陥です。値差分の signature が
+`${kind}:diff` で**すべての値差分が 1 family に潰れていました**。
+最初に見つかった差分が family を占有し、以降の差分——別の pass の別の
+bug——は重複として捨てられます。既知の未修正 finding（`#private` の
+lowering）が seed 2 で出るので、実質的に**campaign は 2 seed で終わって
+いました**。
+
+signature に「どの観測が、どの token で」違うかを入れ、既知 finding は
+報告するが `--keep-going` の予算を消費しないようにしました。結果、
+比較数が 2 → 236 に増え、その場で 2 件の実バグが出ました。
+
+| 見つかったもの | 何 |
+| --- | --- |
+| `+++a` を出力 | `+(++a)` を密着させると `++ (+a)` と読まれて SyntaxError。binary 側（`"" + +x`）には guard があり unary 側には無かった |
+| 宣言を消して呼び出しを残す | single-use inliner が `Block` と `switch` の case body に substitute の arm を持たず、`ReferenceError: f0 is not defined` |
+
+2 件目は `try` で 1 度直したのと同型（walker が 2 つあって片方が知らない）
+なので、**族ごと閉じました**: 置換後に参照が残っていたら inline を諦めて
+宣言を保持します。今後 arm が足りなくても、miscompile ではなく最適化の
+取りこぼしになります。

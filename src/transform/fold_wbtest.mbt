@@ -13,16 +13,25 @@ fn fold_one(src : String) -> String raise {
 }
 
 ///|
-test "fold: x + 0 collapses to x" {
-  let out = fold_one("const y = x + 0;\n")
-  assert_true(out.contains("const y = x;"))
-  assert_false(out.contains("+ 0"))
+test "fold: x + 0 collapses only for a number that is not -0" {
+  // `undefined + 0` is `NaN` and `undefined` is `undefined`; `"a" + 0`
+  // is `"a0"`. And even for numbers, `-0 + 0` is `0` while `-0` is
+  // `-0`, so the operand has to be one that cannot be a negative zero —
+  // a collection size, a bitwise result, a boolean.
+  let known = fold_one("const y = xs.length + 0;\n")
+  assert_true(known.contains("const y = xs.length;"), msg="missed: \{known}")
+  let unknown = fold_one("const y = x + 0;\n")
+  assert_true(unknown.contains("+ 0"), msg="unsound fold: \{unknown}")
 }
 
 ///|
-test "fold: x * 1 collapses to x" {
-  let out = fold_one("const y = x * 1;\n")
-  assert_true(out.contains("const y = x;"))
+test "fold: x * 1 collapses only for a number" {
+  // `-0 * 1` is `-0`, so this one needs no negative-zero care — but
+  // `undefined * 1` is `NaN` and `Symbol() * 1` throws.
+  let known = fold_one("const y = (a | 0) * 1;\n")
+  assert_false(known.contains("* 1"), msg="missed the saving: \{known}")
+  let unknown = fold_one("const y = x * 1;\n")
+  assert_true(unknown.contains("* 1"), msg="unsound fold: \{unknown}")
 }
 
 ///|
@@ -76,9 +85,12 @@ test "fold: x * 0 stays put when x has a possible side effect" {
 }
 
 ///|
-test "fold: x * 0 collapses to 0 when x is pure" {
-  let out = fold_one("const y = z * 0;\n")
-  assert_true(out.contains("const y = 0;"))
+test "fold: x * 0 collapses to 0 only for a non-negative number" {
+  // `-1 * 0` is `-0`, not `0`; `"a" * 0` is `NaN`.
+  let known = fold_one("const y = xs.length * 0;\n")
+  assert_true(known.contains("const y = 0;"), msg="missed: \{known}")
+  let unknown = fold_one("const y = z * 0;\n")
+  assert_true(unknown.contains("* 0"), msg="unsound fold: \{unknown}")
 }
 
 ///|
@@ -429,10 +441,14 @@ test "fold: !(a === b) folds to a !== b" {
 }
 
 ///|
-test "fold: !(a < b) folds to a >= b" {
-  let out = fold_one("const x = !(a < b);\n")
-  assert_true(out.contains(">="))
-  assert_false(out.contains("<"))
+test "fold: !(a < b) folds to a >= b only for non-NaN operands" {
+  // Every NaN comparison is false, so `!(a < b)` is true where
+  // `a >= b` is false — for `a = undefined`, or a string against a
+  // number. `.length` is a non-negative integer, so that pair is safe.
+  let safe = fold_one("const x = !(xs.length < ys.length);\n")
+  assert_true(safe.contains(">="), msg="missed the saving: \{safe}")
+  let unknown = fold_one("const x = !(a < b);\n")
+  assert_true(unknown.contains("!("), msg="unsound rewrite: \{unknown}")
 }
 
 ///|

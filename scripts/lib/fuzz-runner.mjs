@@ -178,6 +178,9 @@ async function observeModule(modulePath, timeoutMs) {
 async function observeNamespace(namespace) {
   const observed = [];
   for (const name of Object.keys(namespace).sort()) {
+    // The effect trace is read at the END, once everything below has
+    // run — see the note there.
+    if (name === "__trace") continue;
     const value = namespace[name];
     observed.push([name, encode(value)]);
     if (typeof value !== "function") continue;
@@ -185,6 +188,14 @@ async function observeNamespace(namespace) {
       observed.push([`${name}()`, callSafely(() => encode(value(...args)))]);
       observed.push([`new ${name}()`, callSafely(() => encode(new value(...args)))]);
     }
+  }
+  // Every generated callable announces its own invocation, so this is
+  // the record of WHAT RAN and in what order — a call that the
+  // optimizer dropped, duplicated, or moved is a difference here even
+  // when every value above agrees. It has to be encoded after the calls
+  // above, or it would only cover module evaluation.
+  if (Object.prototype.hasOwnProperty.call(namespace, "__trace")) {
+    observed.push(["__trace", encode(namespace.__trace)]);
   }
   return { status: "completed", logs: observed };
 }

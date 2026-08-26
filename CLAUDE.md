@@ -56,8 +56,8 @@ product surfaces now.
   `{treeshake, fold, minify, mangle}` over the 9 MB compiler: a
   combination that fails while each of its parts passes is an
   interaction between them, and that is how the single-use inliner's
-  conditional-move bug was located.
-  Neither reaches the case nobody imagined, so `just fuzz-mangle`
+  conditional-move bug was located. None of that reaches the case nobody
+  imagined, so `just fuzz-mangle`
   generates programs from seeds, compiles each with and without mangling,
   and compares what they observed; a failing program is shrunk to its
   minimum automatically rather than reported as a seed number — see
@@ -65,7 +65,16 @@ product surfaces now.
   code we delete and should not; `just verify-dce-coverage` hunts the
   opposite — code we keep and could drop — as a table of small programs
   that each assert a marker is gone, the live markers survive, and stdout
-  still matches Node running the original. `just compare-terser` asks the
+  still matches Node running the original. Orthogonal to all of them,
+  `just verify-rule-equivalence` asks the narrow question about each
+  rewrite on its own: every peephole/fold rule becomes a function body
+  with holes, evaluated across a cross product of counterexample values
+  (`undefined`, `-0`, `NaN`, a Symbol, a BigInt, an object with a
+  poisoned `valueOf`, an array-like with a negative `length`) and
+  compared against Node running the source directly. It found nine
+  rewrites that assumed a type and checked nothing — see
+  [`docs/rule-equivalence.md`](./docs/rule-equivalence.md). And
+  `just compare-terser` asks the
   competitive version of that question: both optimizers start from the
   same unoptimized JS, and a LOSS names a terser compress rule we have
   not ported, while a LOSS *or a tie* on a `type-aware` case means the

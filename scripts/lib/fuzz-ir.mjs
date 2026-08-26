@@ -255,6 +255,23 @@ function printBody(body, depth) {
   return body.map((s) => printStmt(s, depth)).join("");
 }
 
+/// Record that this callable ran.
+///
+/// The oracle used to compare only VALUES, and a call whose result
+/// nobody reads is invisible to that. It is also precisely the shape
+/// that broke the minified TypeScript compiler: a call whose only job
+/// was to attach a symbol to a node, bound to a variable that was read
+/// under a condition that happened to be false. The value comparison
+/// agreed; the module simply never got its symbol.
+///
+/// So every generated callable announces its own invocation. A dropped
+/// call, a duplicated call, and a reordered call are now all differences
+/// in `trace`, whatever the values do.
+function entryTrace(id, depth) {
+  if (id === undefined) return "";
+  return `${pad(depth)}trace.push(${id});\n`;
+}
+
 function printClassMember(member, depth) {
   const p = pad(depth);
   const staticPrefix = member.static ? "static " : "";
@@ -270,11 +287,13 @@ function printClassMember(member, depth) {
     case "method":
       return (
         `${p}${staticPrefix}${member.name}(${member.params.join(", ")}) {\n` +
+        entryTrace(member.entryId, depth + 1) +
         `${printBody(member.body, depth + 1)}${p}}\n`
       );
     case "getter":
       return (
         `${p}${staticPrefix}get ${member.name}() {\n` +
+        entryTrace(member.entryId, depth + 1) +
         `${printBody(member.body, depth + 1)}${p}}\n`
       );
     default:
@@ -293,6 +312,7 @@ function printDecl(decl) {
       return (
         `function ${decl.name}(${params})${decl.ret ? `: ${decl.ret}` : ""} {\n` +
         guard +
+        entryTrace(decl.entryId, 1) +
         printBody(decl.body, 1) +
         `}\n`
       );

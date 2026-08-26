@@ -125,7 +125,7 @@ verify-checker-soundness:
     bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0
 
 # Full CI check
-ci: fmt check test verify-mbti-dts verify-scaffolds verify-generated-fixtures verify-examples verify-mangle-safety verify-dce-coverage verify-checker-soundness
+ci: fmt check test verify-mbti-dts verify-scaffolds verify-generated-fixtures verify-examples verify-mangle-safety verify-dce-coverage verify-rule-equivalence verify-checker-soundness
 
 # Update dependencies
 update:
@@ -167,6 +167,23 @@ verify-dce-coverage *ARGS:
 compare-terser *ARGS:
     moon build --target native --release
     node scripts/compare_terser.mjs {{ ARGS }}
+
+# Every rewrite, checked against every awkward value. Each peephole /
+# fold rule becomes a function body with holes, evaluated across the
+# cross product of a value domain built out of counterexamples —
+# undefined, -0, NaN, a Symbol, a BigInt, an object with a poisoned
+# valueOf, an array-like with a negative length. One compile per rule
+# covers ~600 input pairs, and the result is compared against Node
+# running the TypeScript directly.
+#
+# UNSND means the rewrite is not equivalence-preserving. INERT means it
+# never fired, so the case proves nothing.
+#
+#   just verify-rule-equivalence
+#   just verify-rule-equivalence --rule comparisons --verbose
+verify-rule-equivalence *ARGS:
+    moon build --target native --release
+    node scripts/verify_rule_equivalence.mjs {{ ARGS }}
 
 # Fuzz the property mangler: generate programs nobody wrote, compile each
 # with and without mangling, run both, compare. A difference is a mangler

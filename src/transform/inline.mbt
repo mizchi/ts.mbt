@@ -575,6 +575,28 @@ fn inline_pass(
         }
         let next = input[i + 1]
         let rewritten = substitute_stmt(next, name, rhs)
+        // The declaration is about to be dropped, so the substitution
+        // has to have actually consumed the reference. It is the same
+        // tree walked by two functions — `count_var_uses_stmt` decides
+        // there is exactly one local use, `substitute_stmt` rewrites it
+        // — and every time one of them has been missing a statement
+        // kind, the result was a deleted declaration with a live
+        // reference: "ReferenceError: f0 is not defined". `try` was one
+        // (fixed), then `Block` and `switch` case bodies were two more.
+        //
+        // Rather than keep discovering them one at a time, check the
+        // result. If a reference survived, the pair disagreed about this
+        // construct: keep the declaration and move on. Costs one walk of
+        // a statement that was just walked twice anyway, and turns the
+        // whole family from a miscompilation into a missed optimization.
+        if stmt_references_name(rewritten, name) {
+          out.push(stmt)
+          if has_positions {
+            out_positions.push(input_positions[i])
+          }
+          i = i + 1
+          continue
+        }
         out.push(rewritten)
         if has_positions {
           out_positions.push(input_positions[i + 1])
@@ -732,7 +754,15 @@ fn substitute_stmt(
       ForAwaitOf(k, b, t, substitute_expr(iter, name, rhs), body)
     ForIn(k, b, t, iter, body) =>
       ForIn(k, b, t, substitute_expr(iter, name, rhs), body)
-    Switch(e, cases) => Switch(substitute_expr(e, name, rhs), cases)
+    // A `switch` case body runs at most once per execution of the
+    // statement, the same reasoning the `If` and `Try` arms use.
+    Switch(e, cases) => {
+      let new_cases : Array[@ast.TsSwitchCase] = []
+      for c in cases {
+        new_cases.push({ ..c, body: substitute_block(c.body, name, rhs) })
+      }
+      Switch(substitute_expr(e, name, rhs), new_cases)
+    }
     // `try` / `catch` / `finally` bodies each run at most once per
     // execution of the statement, so substituting into them keeps the
     // single-evaluation invariant — the same reasoning the `If` arm
@@ -761,6 +791,8 @@ fn substitute_stmt(
         },
       )
     Label(lname, inner) => Label(lname, substitute_stmt(inner, name, rhs))
+    // A bare block is a scope, not a repetition — it runs once.
+    Block(b) => Block(substitute_block(b, name, rhs))
     NativeClassStmt(decl, ctor) => {
       let new_base = match decl.base_expr {
         Some(b) => Some(substitute_expr(b, name, rhs))

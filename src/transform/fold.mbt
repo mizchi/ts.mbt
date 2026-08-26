@@ -1017,9 +1017,22 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
         (Not, _) if is_js_truthy(inner_f) => BoolLit(false)
         (Not, _) if is_js_falsy(inner_f) => BoolLit(true)
         // `!(a === b)` → `a !== b` etc. (saves 2 bytes vs `!(...)`).
+        //
+        // The same rewrite lives in `peephole.mbt`, and it was gated
+        // there and not here, which is why the rule-equivalence harness
+        // still reported `!(a < b)` as unsound after the gate went in.
+        // Two implementations of one rule, one of them fixed.
         (Not, BinOp(inner_op, a, b)) =>
           match negate_comparison_op(inner_op) {
-            Some(negated) => BinOp(negated, a, b)
+            Some(negated) =>
+              // Equality negation always holds. Relational negation does
+              // not: every NaN comparison is false, so `!(a < b)` is
+              // true where `a >= b` is false.
+              if is_equality_op(inner_op) || relational_negation_is_safe(a, b) {
+                BinOp(negated, a, b)
+              } else {
+                UnaryOp(op, inner_f)
+              }
             None => UnaryOp(op, inner_f)
           }
         // `!!(comparison)` → `comparison` — comparisons already return
@@ -1028,8 +1041,14 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
         (Not, UnaryOp(@ast.TsUnaryOp::Not, BinOp(inner_op, a, b))) if is_comparison_op(
             inner_op,
           ) => BinOp(inner_op, a, b)
-        (Neg, IntLit(n)) => IntLit(-n)
-        (Neg, NumberLit(n)) => NumberLit(-n)
+        // `-0` is NOT `0`. `Object.is(x, -0)`, `1 / x`, and
+        // `Math.sign` all tell them apart, and MoonBit's `Int` cannot
+        // represent the difference — so folding the negation away turned
+        // every `-0` literal in a program into `0`. It made the
+        // rule-equivalence harness's own encoder report every zero as
+        // negative, which is a good illustration of how quiet this is.
+        (Neg, IntLit(n)) if n != 0 => IntLit(-n)
+        (Neg, NumberLit(n)) if n != 0.0 => NumberLit(-n)
         (BitwiseNot, IntLit(n)) => IntLit(-(n + 1))
         // `~~x` → `x` when x is a pure integer literal (double bitwise-not = identity).
         (BitwiseNot, UnaryOp(@ast.TsUnaryOp::BitwiseNot, inner_inner)) =>
@@ -1613,7 +1632,15 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       let bf = fold_expr(b)
       // `(pure, x)` → `x`: the left side has no observable effect
       // so only the right value matters.
-      if is_pure_value(af) {
+      //
+      // Except that dropping the comma changes what `x` MEANS when `x`
+      // is a member expression and the result is called. `(0, o.m)()`
+      // calls `o.m` with `this` undefined — that is the whole reason
+      // TypeScript emits the form — while `o.m()` binds `this` to `o`.
+      // The comma is load-bearing there, so a member expression keeps
+      // it and lets the caller decide.
+      if is_pure_value(af) &&
+        !(bf is PropAccess(_, _) || bf is IndexAccess(_, _)) {
         bf
       } else {
         Seq(af, bf)
@@ -2992,6 +3019,49 @@ fn strip_trailing_break(block : @ast.TsBlock) -> Array[@ast.TsStmt] {
 }
 
 ///|
+/// Is this expression's value certainly a number? Delegates to the same
+/// classifier the relational-negation gate uses.
+fn is_number_valued(e : @ast.TsExpr) -> Bool {
+  cmp_kind(e) is CmpNum
+}
+
+///|
+/// Certainly a number, and certainly not a negative zero.
+///
+/// A collection size is a non-negative integer, a bitwise operator
+/// returns an int32, and a boolean coerces to 0 or 1 — none of those can
+/// be `-0`, and none of them can produce one when multiplied by zero. A
+/// bare `-0` literal survives as `UnaryOp(Neg, IntLit(0))`, which is
+/// exactly what this has to exclude.
+fn is_number_never_negzero(e : @ast.TsExpr) -> Bool {
+  match e {
+    PropAccess(_, "length") | PropAccess(_, "size") => true
+    BinOp(BitAnd, _, _)
+    | BinOp(BitOr, _, _)
+    | BinOp(BitXor, _, _)
+    | BinOp(Shl, _, _)
+    | BinOp(Shr, _, _)
+    | BinOp(UShr, _, _) => true
+    BoolLit(_) | UnaryOp(@ast.TsUnaryOp::Not, _) => true
+    BinOp(BinEq, _, _)
+    | BinOp(BinNe, _, _)
+    | BinOp(AbstractEq, _, _)
+    | BinOp(AbstractNe, _, _)
+    | BinOp(BinLt, _, _)
+    | BinOp(BinLe, _, _)
+    | BinOp(BinGt, _, _)
+    | BinOp(BinGe, _, _)
+    | BinOp(Instanceof, _, _)
+    | BinOp(In, _, _) => true
+    IntLit(n) => n > 0
+    NumberLit(n) => n > 0.0
+    As(inner, _) | Satisfies(inner, _) | NonNull(inner) =>
+      is_number_never_negzero(inner)
+    _ => false
+  }
+}
+
+///|
 /// Combine two already-folded sub-expressions through `op`,
 /// applying identity / annihilator rewrites where it's safe.
 fn fold_binop(
@@ -3000,37 +3070,30 @@ fn fold_binop(
   r : @ast.TsExpr,
 ) -> @ast.TsExpr {
   match (op, l, r) {
-    // Numeric identity: x + 0, 0 + x, x - 0
-    (Add, _, IntLit(0)) | (Add, _, NumberLit(0.0)) => l
-    (Add, IntLit(0), _) | (Add, NumberLit(0.0), _) =>
-      if is_pure_value(l) {
-        r
-      } else {
-        BinOp(op, l, r)
-      }
-    (Sub, _, IntLit(0)) | (Sub, _, NumberLit(0.0)) => l
-    // x * 1, 1 * x, x / 1
-    (Mul, _, IntLit(1)) | (Mul, _, NumberLit(1.0)) => l
-    (Mul, IntLit(1), _) | (Mul, NumberLit(1.0), _) =>
-      if is_pure_value(l) {
-        r
-      } else {
-        BinOp(op, l, r)
-      }
-    (Div, _, IntLit(1)) | (Div, _, NumberLit(1.0)) => l
-    // x * 0, 0 * x — only safe to fold when the other side is pure.
-    (Mul, _, IntLit(0)) | (Mul, _, NumberLit(0.0)) =>
-      if is_pure_value(l) {
-        IntLit(0)
-      } else {
-        BinOp(op, l, r)
-      }
-    (Mul, IntLit(0), _) | (Mul, NumberLit(0.0), _) =>
-      if is_pure_value(r) {
-        IntLit(0)
-      } else {
-        BinOp(op, l, r)
-      }
+    // Numeric identity: x + 0, 0 + x, x - 0, x * 1, x / 1, x * 0.
+    //
+    // None of these hold for a non-number. `undefined + 0` is `NaN` and
+    // `undefined` is `undefined`; `"a" - 0` is `NaN` and `"a"` is
+    // `"a"`; `Symbol() * 1` throws where the Symbol does not. The rule
+    // catalogue said "for integers" and nothing established that the
+    // operand was one.
+    //
+    // `+ 0` and `* 0` need more than "a number": `-0 + 0` is `0` while
+    // `-0` is `-0`, and `-1 * 0` is `-0` rather than `0`. So those two
+    // want an operand that is a number AND cannot be, or produce, a
+    // negative zero — a collection size, a bitwise result, a boolean.
+    (Add, _, IntLit(0)) | (Add, _, NumberLit(0.0)) if is_number_never_negzero(l) =>
+      l
+    (Add, IntLit(0), _) | (Add, NumberLit(0.0), _) if is_number_never_negzero(r) =>
+      r
+    (Sub, _, IntLit(0)) | (Sub, _, NumberLit(0.0)) if is_number_valued(l) => l
+    (Mul, _, IntLit(1)) | (Mul, _, NumberLit(1.0)) if is_number_valued(l) => l
+    (Mul, IntLit(1), _) | (Mul, NumberLit(1.0), _) if is_number_valued(r) => r
+    (Div, _, IntLit(1)) | (Div, _, NumberLit(1.0)) if is_number_valued(l) => l
+    (Mul, _, IntLit(0)) | (Mul, _, NumberLit(0.0)) if is_number_never_negzero(l) =>
+      IntLit(0)
+    (Mul, IntLit(0), _) | (Mul, NumberLit(0.0), _) if is_number_never_negzero(r) =>
+      IntLit(0)
     // Boolean short-circuit — BoolLit cases come first; then extend
     // to integer / string / null literals whose truthiness is known.
     (And, BoolLit(true), _) => r

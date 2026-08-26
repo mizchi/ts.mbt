@@ -2047,6 +2047,17 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
               e.sep_after_word(expr_leading_byte(inner))
             _ => ()
           }
+          // A sign operator whose operand LEADS with the same sign
+          // merges into a different token: `+(++a)` printed tight is
+          // `+++a`, which JS reads as `++ (+a)` — "Invalid left-hand
+          // side expression in prefix operation". `right_needs_token_
+          // separator` already handles this for the binary case
+          // (`"" + +x`); the unary-on-unary case had no such guard, and
+          // the fuzzer produced it as soon as it could get past the
+          // known finding that used to end every campaign.
+          if unary_merges_with_operand(op, inner) {
+            e.write(" ")
+          }
           emit_expr(e, inner, 16)
         }
       }
@@ -3713,6 +3724,32 @@ fn binop_precedence(op : @ast.TsBinOp) -> Int {
     Add | Sub => 13
     Mul | Div | Mod => 14
     Pow => 15
+  }
+}
+
+///|
+/// Would printing this prefix operator immediately before its operand
+/// produce a different token? `+` before `+x` / `++x` gives `+++x`, and
+/// `-` before `-x` / `--x` gives `---x`.
+///
+/// Parenthesising the operand would also work and costs two bytes; a
+/// single space costs one.
+fn unary_merges_with_operand(op : @ast.TsUnaryOp, inner : @ast.TsExpr) -> Bool {
+  let leader = match inner {
+    UnaryOp(o, _) =>
+      match o {
+        Plus | PreInc => '+'
+        Neg | PreDec => '-'
+        _ => '?'
+      }
+    // `a++` and `a--` lead with whatever `a` leads with, so only the
+    // PREFIX forms can collide here.
+    _ => '?'
+  }
+  match op {
+    Plus | PreInc => leader == '+'
+    Neg | PreDec => leader == '-'
+    _ => false
   }
 }
 
