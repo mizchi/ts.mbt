@@ -1079,8 +1079,10 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
         // `"0"`) require computed-index form — `recv.~standard =
         // …` is a hard parse error. Reserved words (`return` /
         // `for` / …) ARE valid in member-access position post-ES5,
-        // so they keep the dotted form.
-        if is_valid_js_ident(stripped) {
+        // so they keep the dotted form. A `#private` name is dotted
+        // too and can NEVER be bracketed — `o["#x"]` is a different
+        // property entirely.
+        if is_valid_js_ident(stripped) || is_private_member_name(stripped) {
           e.write(".")
           e.write(stripped)
         } else {
@@ -2277,7 +2279,8 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
     PropAccess(recv, name) => {
       emit_expr(e, recv, 18)
       let stripped = strip_internal_prop_marker(name)
-      if is_valid_js_ident(stripped) {
+      // A `#private` name is dotted and can never be bracketed.
+      if is_valid_js_ident(stripped) || is_private_member_name(stripped) {
         e.write(".")
         e.write(stripped)
       } else {
@@ -4090,6 +4093,30 @@ fn emit_native_class(
   // ident names (`"~standard"` / `"a-b"`) need bracket syntax
   // (`static ["~standard"] = init;`) — `static ~standard = …` is a
   // hard parse error.
+  // Private field declarations (`#secret;`). A `#` name only exists
+  // inside the class body that declares it, so `this.#secret = 7` in
+  // the constructor needs the declaration to be here — without it the
+  // assignment is a SyntaxError. The initializer stays in the
+  // constructor where the lowering put it; a bare declaration reads
+  // `undefined` and is immediately overwritten, which is what the
+  // source's own field initializer did.
+  //
+  // The class's own fields are exactly the `this.#x = …` statements at
+  // the TOP LEVEL of the constructor: the class lowering puts every
+  // instance field initializer there, including a bare `#x;` (as
+  // `this.#x = void 0`). `decl.properties` is empty on a lifted class,
+  // so it is not the source. Scanning only the top level is also what
+  // keeps this right for a nested class — its own fields live inside
+  // its own class node, and a reference to an OUTER `#x` is never an
+  // assignment at this level.
+  for name in class_private_this_assigns(decl, ctor_func) {
+    if !is_private_member_name(name) {
+      continue
+    }
+    e.nl()
+    e.write(name)
+    e.semi()
+  }
   for entry in decl.static_field_inits {
     e.nl()
     e.word("static")

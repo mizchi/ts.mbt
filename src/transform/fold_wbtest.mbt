@@ -1770,3 +1770,29 @@ test "fold: else-hoist still fires when the else declares nothing" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "fold: a truthy-by-construction condition keeps its side effects" {
+  // An object or array literal is truthy whatever is inside it, and its
+  // contents still have to be evaluated. This folded to the then-branch
+  // and `f()` never ran — invisible to a value comparison, because
+  // nothing reads the object. Found by the fuzzer's effect trace.
+  let out = fold_one("if ({ g: f() }) { sink(1); }\n")
+  assert_true(out.contains("f()"), msg="dropped the call: \{out}")
+  assert_true(out.contains("sink(1)"), msg="lost the branch: \{out}")
+}
+
+///|
+test "fold: a falsy-by-construction condition keeps its side effects" {
+  let out = fold_one("if (\"\" && f()) { sink(1); } else { sink(2); }\n")
+  assert_true(out.contains("sink(2)"), msg="lost the else: \{out}")
+}
+
+///|
+test "fold: a pure truthy condition is still dropped entirely" {
+  // The rule has to stay a rule: nothing is lost by not evaluating a
+  // literal, so the condition goes.
+  let out = fold_one("if (1) { sink(1); }\n")
+  assert_false(out.contains("if"), msg="kept the if: \{out}")
+  assert_true(out.contains("sink(1)"), msg="lost the branch: \{out}")
+}

@@ -2,6 +2,24 @@
 
 Fixed and removed from this list:
 
+- **`private-field-lowered-enumerable.ts`** — `#secret` was lowered to
+  `__private_brand__N__secret`, an ordinary own enumerable property, so
+  `JSON.stringify` / `Object.keys` / `for...in` / spread all saw it where
+  a real private field is invisible. It was the fuzzer's largest family
+  (62 of 63 mismatches on a 150-seed campaign). Fixed by
+  `src/transform/private_fields.mbt`, which renames the brand to `#x`
+  once it can prove a declaration will be emitted for it.
+  Regression cases: `src/transform/private_fields_wbtest.mbt`.
+
+  Four shapes deliberately keep the brand, because a `#x` with no
+  declaration in scope is a SyntaxError rather than a wrong value:
+  `static #x` (the class lowering drops it outright, so `C.#x` already
+  reads `undefined`), a typed field with no initializer, a class the
+  IIFE lift declined, and a class nested inside a method. A fifth is a
+  brand referenced from outside its class node — mtsc lowers an accessor
+  to `Object.defineProperty(C.prototype, …, { get() { return this.#x } })`
+  beside the class, and hono's `Context` does exactly that.
+
 - **`prop-write-into-observed-object.ts`** — `obj['q'] = { ...bag }` with
   `obj` reaching a sink. There was no flow edge from a written value into
   the target's binding at all, so an observed object kept its own keys
@@ -23,31 +41,3 @@ mtsc <file> --bundle --treeshake --fold --minify --no-check \
     --mangle --mangle-properties --reserve-entry-exports --out /tmp/mangled.mjs
 node <file>; node /tmp/base.mjs; node /tmp/mangled.mjs
 ```
-
-## `private-field-lowered-enumerable.ts` — a lowering bug
-
-```ts
-class C0 { #secret = 7; }
-console.log([new C0()]);
-```
-
-| | output |
-| --- | --- |
-| original (Node) | `[ C0 {} ]` |
-| `--bundle` | `[ C0 { __private_brand__0__secret: 7 } ]` |
-| `+ --mangle-properties` | `[ c {} ]` |
-
-Here the MANGLED output is the correct one. A real `#private` field is
-not an own enumerable property, so `console.log`, `Object.keys` and
-`JSON.stringify` cannot see it; mtsc lowers `#secret` to an ordinary
-`this.__private_brand__0__secret` property, which all three do see. The
-mangler is right to treat the brand as internal and drop the dead write.
-
-This was the fuzzer's single largest family (104 of 300 seeds), and
-until the reference leg was consulted on every mismatch it was
-misreported as a mangler false positive — the unmangled bundle looked
-authoritative because it was the unmangled one.
-
-Fixing it means emitting real `#`-private syntax rather than a branded
-property, which is a target-compatibility decision as much as a
-correctness one.

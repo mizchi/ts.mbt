@@ -699,6 +699,15 @@ pub fn bundle_modules(
     combined = timer.phase("strip-super-proto", () => {
       strip_super_proto_stmts(combined)
     })
+    // `__private_brand__N__x` -> `#x`. Runs AFTER the IIFE lift so the
+    // classes that made it to native syntax get real private syntax,
+    // and BEFORE everything that reasons about property names — the
+    // export surface, class-method DCE and the mangler all need to see
+    // `#x`, which is unreachable from outside its class body by
+    // construction. See `private_fields.mbt`.
+    combined = timer.phase("private-fields", () => {
+      lower_private_fields(combined)
+    })
     let export_surface : Map[String, Bool] = {}
     timer.phase("export-surface", () => {
       for n in exported_surface_props(combined, export_roots) {

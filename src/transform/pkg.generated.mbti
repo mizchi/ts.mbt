@@ -83,6 +83,8 @@ pub fn is_index_numeric_with_graph(@ast.TsExpr, SymbolGraph, Map[Int, Bool]) -> 
 
 pub fn is_index_numeric_with_names(@ast.TsExpr, Map[String, Bool]) -> Bool
 
+pub fn is_private_member_name(String) -> Bool
+
 pub fn lookup_symbol_in_scope(SymbolGraph, Int, String) -> Int?
 
 pub fn lower_block_with_runtime_imports(JsxConfig, @ast.TsBlock) -> (@ast.TsBlock, Array[String])
@@ -96,6 +98,8 @@ pub fn lower_jsx_in_block(JsxConfig, @ast.TsBlock) -> @ast.TsBlock
 pub fn lower_jsx_in_expr(JsxConfig, @ast.TsExpr) -> @ast.TsExpr
 
 pub fn lower_jsx_in_stmt(JsxConfig, @ast.TsStmt) -> @ast.TsStmt
+
+pub fn lower_private_fields(@ast.TsBlock) -> @ast.TsBlock
 
 pub fn mangle_block(@ast.TsBlock, ManglerConfig) -> @ast.TsBlock
 

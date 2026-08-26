@@ -315,6 +315,14 @@ fn propagate_to_flow_source_visited(
         return
       }
       visited[fid] = true
+      // Also mark the function's own binding. An object literal
+      // RETURNED by the function introduces keys that exist nowhere
+      // else — `return { ...obj, g10: v }` — and nothing else in the
+      // bundle can keep them. `symbol_graph.mbt` records the return
+      // expressions on the function's symbol, and
+      // `collect_direct_props` reserves their literal keys, but only
+      // for a symbol the observability map contains.
+      bump_obs(fid, obs, result, worklist)
       match g.funcs.get(fid) {
         Some(info) =>
           for ret in info.returns {

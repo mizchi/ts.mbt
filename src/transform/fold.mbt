@@ -478,6 +478,18 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
       // Generalised: any statically truthy/falsy literal may fold the
       // branch. `is_js_truthy` / `is_js_falsy` cover `BoolLit`,
       // `IntLit(0)`, `StringLit("")`, `NullLit`, and friends.
+      //
+      // They also cover an object or array literal, which is truthy
+      // whatever is INSIDE it — and its contents still have to be
+      // evaluated. `if ({ ...bag, g: f() }) { … }` folded to the
+      // then-branch and `f()` never ran. So keep the condition as a
+      // statement of its own when it is not a pure value. The fuzzer's
+      // effect trace found this; a value comparison could not, because
+      // nothing reads the object.
+      let folds = is_js_truthy(cond_f) || is_js_falsy(cond_f)
+      if folds && !is_pure_value(cond_f) {
+        out.push(Expr(cond_f))
+      }
       if is_js_truthy(cond_f) {
         // Then-branch wins; splice its statements in directly so
         // subsequent passes (treeshake, mangle) see them at the

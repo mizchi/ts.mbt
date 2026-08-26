@@ -80,10 +80,6 @@ function findMtsc() {
 /// away. `--no-known` treats them as new again, which is how you check
 /// whether one is actually fixed.
 const KNOWN_FINDINGS = [
-  // fixtures/fuzz-findings/private-field-lowered-enumerable.ts —
-  // `#secret` is lowered to an ordinary own property, so the UNMANGLED
-  // bundle already differs from Node running the original.
-  { token: "__private_brand__", why: "#private lowered to an enumerable own property" },
 ];
 
 function knownFinding(signature) {

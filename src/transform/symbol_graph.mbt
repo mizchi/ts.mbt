@@ -696,6 +696,12 @@ fn sg_visit_stmt(w : SgWalker, stmt : @ast.TsStmt) -> Unit {
           for src in srcs {
             w.g.flow_edges.push({ from: src, to: FuncReturn(fid) })
           }
+          // The returned EXPRESSION, for the same reason
+          // `sg_record_write_into` records a written one: an object
+          // literal returned from here introduces keys that exist
+          // nowhere else in the bundle, so nothing else can keep them
+          // alive. `collect_direct_props` reads this list.
+          w.g.symbols[fid].written_values.push(e)
           // Also record on `FuncInfo.returns` so Phase 4 can walk
           // the actual source nodes without re-iterating
           // `flow_edges` for every observable function.

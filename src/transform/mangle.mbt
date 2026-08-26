@@ -607,6 +607,13 @@ fn build_property_rename_map(
     if n.has_prefix("@@") {
       continue
     }
+    // A `#private` name is already unreachable from outside its class
+    // body, so there is nothing to hide — and renaming it would drop
+    // the `#`, turning a private field back into an ordinary visible
+    // property. `private_fields.mbt` puts these here.
+    if is_private_member_name(n) {
+      continue
+    }
     candidates.push(n)
   }
   candidates.sort()
@@ -658,6 +665,11 @@ fn build_property_rename_map_colored(
       continue
     }
     if n.has_prefix("@@") {
+      continue
+    }
+    // See the note in `build_property_rename_map`: renaming a
+    // `#private` name would drop the `#`.
+    if is_private_member_name(n) {
       continue
     }
     candidates.push(n)
