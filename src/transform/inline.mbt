@@ -639,6 +639,13 @@ fn try_inline(
   if uses_in_next != 1 || captures_in_next != 0 {
     return false
   }
+  // An initializer that only produces a value may be moved anywhere the
+  // use is. One with an effect may only be moved to a position that is
+  // reached unconditionally, once, and before any other effect — see
+  // `inline_defer.mbt` for the binder bug this was hiding.
+  if !is_safe_to_defer(rhs) && !use_accepts_impure_init(input[i + 1], name) {
+    return false
+  }
   // No other statement in this block (skipping i and i+1).
   for j in 0..<input.length() {
     if j == i || j == i + 1 {

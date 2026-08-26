@@ -397,10 +397,33 @@ test "peephole: !(a !== b) folds to a === b" {
 }
 
 ///|
-test "peephole: !(a < b) folds to a >= b" {
-  let out = peep_one("const r = !(a < b);\n")
+test "peephole: !(a < b) folds to a >= b when both sides are numbers" {
+  // Written with bare names before, which is the unsound case: for
+  // `a = undefined`, `!(a < b)` is true and `a >= b` is false, because
+  // every NaN comparison is false. `.length` is a non-negative integer,
+  // so this pair cannot go through NaN.
+  let out = peep_one("const r = !(xs.length < ys.length);\n")
   assert_true(out.contains(">="), msg="expected >= but got: \{out}")
   assert_false(out.contains("<"))
+}
+
+///|
+test "peephole: !(a < b) is kept when either side could be NaN" {
+  let out = peep_one("const r = !(a < b);\n")
+  assert_true(out.contains("!(a < b)"), msg="unsound rewrite: \{out}")
+}
+
+///|
+test "peephole: !(a < b) is kept when the sides are a string and a number" {
+  // `!("x" < 3)` is true; `"x" >= 3` is false.
+  let out = peep_one("const r = !(\"x\" < n.length);\n")
+  assert_false(out.contains(">="), msg="unsound rewrite: \{out}")
+}
+
+///|
+test "peephole: !(a === b) still folds — equality never goes through NaN" {
+  let out = peep_one("const r = !(a === b);\n")
+  assert_true(out.contains("!=="), msg="expected !== but got: \{out}")
 }
 
 ///|
@@ -1365,28 +1388,37 @@ test "peephole: if(x==null){x=y} → x??=y" {
 }
 
 ///|
-test "peephole: x===true → x, x===false → !x" {
-  // if(x===true) y() → x&&y() after short-circuit fold; no boolean literal remains
-  let r1 = minify_one("if (x === true) y();")
+test "peephole: b===true → b, b===false → !b for a boolean operand" {
+  // These used to be written with a bare `x`, which is unsound: for
+  // `x = 1`, `x === true` is false while `x` is truthy. The rewrite is
+  // gated on the operand being provably boolean now, so the cases have
+  // to supply one.
+  let r1 = minify_one("if ((a < b) === true) y();")
   assert_false(r1.contains("==="), msg="expected no === after fold, got: \{r1}")
   assert_false(
     r1.contains("true") || r1.contains("!0"),
     msg="expected no bool lit, got: \{r1}",
   )
-  let r2 = minify_one("if (x === false) y();")
+  let r2 = minify_one("if ((a < b) === false) y();")
   assert_false(
     r2.contains("==="),
     msg="expected no === in false-fold, got: \{r2}",
   )
-  assert_true(r2.contains("!x"), msg="expected !x from x===false, got: \{r2}")
+  assert_true(
+    r2.contains("!(a<b)"),
+    msg="expected !(a<b) from ===false, got: \{r2}",
+  )
 }
 
 ///|
-test "peephole: x!==true → !x, x!==false → x" {
-  let r1 = minify_one("if (x !== true) y();")
+test "peephole: b!==true → !b, b!==false → b for a boolean operand" {
+  let r1 = minify_one("if ((a < b) !== true) y();")
   assert_false(r1.contains("!=="), msg="expected no !== after fold, got: \{r1}")
-  assert_true(r1.contains("!x"), msg="expected !x from x!==true, got: \{r1}")
-  let r2 = minify_one("if (x !== false) y();")
+  assert_true(
+    r1.contains("!(a<b)"),
+    msg="expected !(a<b) from !==true, got: \{r1}",
+  )
+  let r2 = minify_one("if ((a < b) !== false) y();")
   assert_false(r2.contains("!=="), msg="expected no !== after fold, got: \{r2}")
   assert_false(
     r2.contains("false") || r2.contains("!1"),
@@ -1777,4 +1809,48 @@ test "peephole: a computed string key that is an identifier is folded" {
   let out = minify_one("const o = { [\"count\"]: 1 };\n")
   assert_true(out.contains("count:1"), msg="not folded: \{out}")
   assert_false(out.contains("[\"count\"]"), msg="not folded: \{out}")
+}
+
+// ---------------------------------------------------------------
+// Boolean comparison rewrites need a boolean
+// ---------------------------------------------------------------
+//
+// `x === true` -> `x` and its three siblings are sound only when `x` is
+// a boolean. Nothing checked that, and TypeScript's binder writes
+// `symbol.constEnumOnlyModule !== false` on a field that is `undefined`
+// most of the time — `undefined !== false` is `true`, but the rewrite
+// left `undefined` behind.
+
+///|
+test "peephole: `x !== false` on a bare name is not dropped" {
+  let out = minify_one("const r = obj.flag !== false;\n")
+  assert_true(out.contains("!=="), msg="dropped the comparison: \{out}")
+}
+
+///|
+test "peephole: `x === true` on a bare name is not dropped" {
+  let out = minify_one("const r = obj.flag === true;\n")
+  assert_true(out.contains("!0") || out.contains("true"), msg="dropped: \{out}")
+}
+
+///|
+test "peephole: `x === false` on a bare name does not become `!x`" {
+  // `0 === false` is false; `!0` is true.
+  let out = minify_one("const r = n === false;\n")
+  assert_false(out.contains("r=!n"), msg="rewrote to !x: \{out}")
+}
+
+///|
+test "peephole: a comparison result compared to false still folds" {
+  // `(a < b) !== false` IS `a < b` — the operand is provably boolean,
+  // so the saving is still taken.
+  let out = minify_one("const r = (a < b) !== false;\n")
+  assert_false(out.contains("!=="), msg="missed the saving: \{out}")
+  assert_true(out.contains("a<b"), msg="missed the saving: \{out}")
+}
+
+///|
+test "peephole: a negation compared to true still folds" {
+  let out = minify_one("const r = !flag === true;\n")
+  assert_false(out.contains("==="), msg="missed the saving: \{out}")
 }

@@ -187,6 +187,20 @@ verify-real-world *ARGS:
     moon build --target native
     node scripts/verify_real_world_minify.mjs {{ ARGS }}
 
+# Every combination of {treeshake, fold, minify, mangle} on the 9 MB
+# published TypeScript compiler, each run afterwards AS a compiler and
+# compared against the pristine copy. `verify-real-world` checks the one
+# shipping flag set; this checks all sixteen, so a failure names the pass
+# — a combination that breaks while each of its parts passes is an
+# interaction between them. Needs `verify-real-world` to have populated
+# the cache first.
+#
+#   just verify-pass-lattice
+#   just verify-pass-lattice --only fold+minify --keep
+verify-pass-lattice *ARGS:
+    moon build --target native --release
+    node scripts/verify_pass_lattice.mjs {{ ARGS }}
+
 # Where the compile time goes. Runs the same size ladder as
 # `verify-real-world` through `mtsc --timing` and tabulates the phases,
 # so a superlinear pass shows up as falling throughput as input grows.

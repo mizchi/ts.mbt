@@ -426,8 +426,8 @@ build 生成物で repository に無く、それで compile 全体が落ちて�
 
 ### `lib/typescript.js`（compiler 本体）
 
-9,044,103 → 3,581,914 bytes（60% 減）、`--minify --bundle --mangle`、
-約 13 分。`node --check` 通過。
+9,044,103 → 3,586,949 bytes（60% 減）、`--minify --bundle --mangle`、
+4 秒。`node --check` 通過。
 
 9 MB の published bundle を minify し、**minify した compiler で
 TypeScript を compile して**診断を比べます。`checker.ts` を含む file なので、
@@ -435,18 +435,67 @@ TypeScript を compile して**診断を比べます。`checker.ts` を含む fi
 `transpileModule` の出力、`createProgram` + `getPreEmitDiagnostics` の
 診断（code / 行 / message）、`TypeChecker` で引いた型の文字列、公開 API の形。
 
-> **現状この target は FAIL です。** 一度は一致していましたが、その後
-> 2 件の bug が入りました。1 件目（binding pattern の default に隠れた
-> `this`）は修正済みで、`this.major` を読む `Version.prototype.with` が
-> arrow に変換されて `Cannot read properties of undefined (reading
-> 'major')` を投げていました。それを直すと**その裏にもう 1 件**あり、
-> 今は binder の `declareModuleMember` で
-> `Cannot read properties of undefined (reading 'exports')`
-> ——`container.symbol` が undefined になっています。
-> 2 件目は commit `6fb8549` 時点でも（1 件目の裏で）同じ stack で再現し、
-> 新しい compress rule（`inline` / `typeofs` / `loops` /
-> `computed_props`）を全部切っても消えないので、**それらとは無関係の
-> 既存 bug**です。未修正として下に記録します。
+**すべて一致**します。ただし一度この target は FAIL していて、2 件の
+bug を潰して戻しました。どちらも「実コードでしか出ない」形なので、
+見つけ方ごと記録しておきます。
+
+**1 件目: binding pattern の default に隠れた `this`。**
+`function → arrow` 変換は body が `this` を読まないことが条件ですが、
+それを判定する walker 3 つが揃って「宣言の initializer だけ見て
+binding pattern を見ない」実装でした。
+
+```js
+Version.prototype.with = function (fields) {
+  let { major: m = this.major } = fields;   // この this が見えていない
+  ...
+};
+```
+
+arrow に変換され、`this` が instance ではなく module を指し、
+`Cannot read properties of undefined (reading 'major')`。TypeScript 自身の
+`semver.ts` がまさにこの書き方です。
+
+**2 件目: 副作用のある initializer を条件分岐の中に移動していた。**
+1 件目を直すと裏から出てきました。single-use inliner が
+
+```js
+let symbol = declareSymbolAndAddToSymbolTable(node, 512, 110735);
+file.patternAmbientModules = append(file.patternAmbientModules,
+  pattern && !isString(pattern) ? { pattern, symbol } : undefined);
+```
+
+を、`symbol` の唯一の use（`?` の then 側）に畳み込みました。
+`declare module "buffer"` は名前に `*` を含まないので条件は false
+——**module の symbol を作る呼び出しがまるごと実行されない**。その
+module 内の `type` 宣言が全部 `container.symbol.exports` で死にます。
+
+これが厄介なのは、corpus や fuzzer では原理的に出ないところです。
+「値としては使われず、副作用だけが目的の呼び出し」が「たまたま false
+になる条件」の下に置かれている、という組み合わせが要るからです。
+それは普通のコードにしかありません。
+
+**どう特定したか。** flag を 1 つずつ足す ladder を回しました
+（[`just verify-pass-lattice`](../scripts/verify_pass_lattice.mjs)）。
+
+```
+minify              ok
+fold                ok
+fold+minify         FAIL      <- pass 単体ではなく相互作用
+```
+
+これで「fold が作った形を inline が誤って畳んでいる」まで絞れます。
+あとは名前が残っている variant（`fold+minify` は mangle なし）と
+正常な variant を**関数単位で diff** すれば、`bindModuleDeclaration`
+1 個に落ちます。3.5 MB の minified を読む必要はありません。
+
+同じ diff から 3 件目も出ました。`x !== false` → `x` の書き換えです
+（`symbol.constEnumOnlyModule !== false` は field が `undefined` のとき
+`true`、`x` は `undefined`）。`x === true` / `x === false` /
+`x !== true` も同型で、コメントには "x is already boolean" と書いて
+あったのに何も確認していませんでした。operand が boolean と証明できる
+場合だけに絞りました。ついでに `!(a < b)` → `a >= b` も同じ穴です
+（`a` が `undefined` なら `!(a<b)` は true、`a>=b` は false）——
+NaN を経由しないと証明できる場合だけに絞りました。
 
 harness 側の落とし穴を 1 つ記録しておきます。**出力は package の
 `lib/` directory に置く必要があります。** TypeScript は既定の
@@ -464,18 +513,8 @@ pristine な copy を `lib/` の外に置くと同じ症状が出るので、最
 - **exhaustive switch の false positive。** 全 case と `default` が
   `return` する switch に対して checker が
   `not all paths return` を出します。
-- **9 MB 入力で 13 分。** 3 MB の checker.ts が 66 秒、9 MB の
-  typescript.js が約 13 分。superlinear なので、どこかに quadratic な
-  pass があります。
-- **`typescript.js` の binder で `container.symbol` が undefined。**
-  上記の 2 件目。minify した compiler が自身の
-  `declareModuleMember` で `Cannot read properties of undefined
-  (reading 'exports')` を投げます。`checker.ts`（3 MB の TS source）/
-  react / hono / valibot はすべて通るので、この 9 MB の UMD bundle
-  固有の書き方——namespace IIFE、getter/setter を持つ CJS interop
-  shim、`super[name]` を渡す arrow——のどれかに関係しているはずですが、
-  3.5 MB の minified 出力から binder の分岐を追う作業になるので、
-  今回の範囲に入れていません。
+- ~~**9 MB 入力で 13 分。**~~ parser の hot spot を潰した後は
+  typescript.js が 4 秒、checker.ts が 1 秒です。
 
 ## terser との比較
 

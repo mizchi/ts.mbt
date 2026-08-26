@@ -98,6 +98,25 @@ case は 2 group あります。
 `sequences`（連続する文を `,` で 1 文に潰す）が 3 件に効いていて、
 単独の rule としては次に大きい移植候補です。
 
+## 型を見ずに型を仮定していた 3 件
+
+この作業の副産物として、既存の rule に「型が分かっている前提で書かれて
+いるが、何も確認していない」ものが 3 件見つかりました。どれも実コード
+（TypeScript compiler 本体）で実際に壊れています。詳細は
+[`docs/real-world-minify.md`](./real-world-minify.md) にありますが、
+分類だけ書いておくと:
+
+| 書き換え | 前提 | 反例 |
+| --- | --- | --- |
+| `x === true` → `x`、`x === false` → `!x`、`x !== true` → `!x`、`x !== false` → `x` | `x` が boolean | `x = 1` で `x === true` は false、`x` は truthy |
+| `!(a < b)` → `a >= b`（と 3 兄弟） | 比較が NaN を経由しない | `a = undefined` で `!(a<b)` は true、`a>=b` は false |
+| single-use inliner が副作用のある initializer を移動 | use 位置が無条件 | `?` の取られない branch に移動して呼び出しが消える |
+
+これらは byte を数えるだけの harness では見つかりません。**出力を実行
+して観測を比べる**harness と、**実際に大きい実コード**の両方が必要
+でした。前者だけなら corpus と fuzzer が通ってしまい、後者だけなら
+「動いた」で終わります。
+
 ## 未移植のままにしている判断
 
 `unsafe_*` family は移植しません。`unsafe_math`、`unsafe_proto`、

@@ -50,6 +50,13 @@ product surfaces now.
   covers situations somebody thought of, so `just verify-real-world`
   minifies real published packages (React, the TypeScript compiler) and
   diffs their behaviour — see [`docs/real-world-minify.md`](./docs/real-world-minify.md).
+  That runs each target under the one shipping flag set, which says
+  *whether* the pipeline is broken but not *which pass*, so
+  `just verify-pass-lattice` runs all sixteen combinations of
+  `{treeshake, fold, minify, mangle}` over the 9 MB compiler: a
+  combination that fails while each of its parts passes is an
+  interaction between them, and that is how the single-use inliner's
+  conditional-move bug was located.
   Neither reaches the case nobody imagined, so `just fuzz-mangle`
   generates programs from seeds, compiles each with and without mangling,
   and compares what they observed; a failing program is shrunk to its

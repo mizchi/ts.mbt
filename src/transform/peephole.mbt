@@ -1173,6 +1173,109 @@ fn typeof_undefined_operand(expr : @ast.TsExpr) -> (String, Bool)? {
 }
 
 ///|
+/// What kind of value is this expression certainly? Only used to decide
+/// whether a relational comparison can produce NaN.
+priv enum CmpKind {
+  CmpNum
+  CmpStr
+  CmpUnknown
+}
+
+///|
+fn cmp_kind(e : @ast.TsExpr) -> CmpKind {
+  match e {
+    IntLit(_) | BigIntLit(_) => CmpNum
+    // `NaN` itself is spelled as a name, and a literal NaN cannot be
+    // written, so a numeric literal here is a real number.
+    NumberLit(_) => CmpNum
+    // A boolean coerces to 0 or 1.
+    BoolLit(_) | UnaryOp(@ast.TsUnaryOp::Not, _) => CmpNum
+    // Every bitwise operator returns a 32-bit integer.
+    BinOp(BitAnd, _, _)
+    | BinOp(BitOr, _, _)
+    | BinOp(BitXor, _, _)
+    | BinOp(Shl, _, _)
+    | BinOp(Shr, _, _)
+    | BinOp(UShr, _, _) => CmpNum
+    // A comparison is a boolean, so it too coerces to 0 or 1.
+    BinOp(BinEq, _, _)
+    | BinOp(BinNe, _, _)
+    | BinOp(AbstractEq, _, _)
+    | BinOp(AbstractNe, _, _)
+    | BinOp(BinLt, _, _)
+    | BinOp(BinLe, _, _)
+    | BinOp(BinGt, _, _)
+    | BinOp(BinGe, _, _)
+    | BinOp(Instanceof, _, _)
+    | BinOp(In, _, _) => CmpNum
+    // A collection size is a non-negative integer.
+    PropAccess(_, "length") | PropAccess(_, "size") => CmpNum
+    // `~x` is a 32-bit integer whatever `x` was.
+    UnaryOp(@ast.TsUnaryOp::BitwiseNot, _) => CmpNum
+    // `-x` is a number, but `-"abc"` is NaN — so only when `x` already
+    // was a number.
+    UnaryOp(@ast.TsUnaryOp::Neg, inner) =>
+      match cmp_kind(inner) {
+        CmpNum => CmpNum
+        _ => CmpUnknown
+      }
+    // A tag-less template literal is always a string.
+    StringLit(_) | TemplateLiteral(_, _) => CmpStr
+    As(inner, _) | Satisfies(inner, _) | NonNull(inner) | TypeArgs(_, inner) =>
+      cmp_kind(inner)
+    _ => CmpUnknown
+  }
+}
+
+///|
+/// May `!(a REL b)` be rewritten as `a INV_REL b`? Only when the
+/// comparison cannot go through NaN.
+fn relational_negation_is_safe(a : @ast.TsExpr, b : @ast.TsExpr) -> Bool {
+  match (cmp_kind(a), cmp_kind(b)) {
+    (CmpNum, CmpNum) | (CmpStr, CmpStr) => true
+    _ => false
+  }
+}
+
+///|
+/// Is this expression's value certainly a boolean?
+///
+/// `x === true` -> `x` and its three siblings are only sound for a
+/// boolean `x`, and peephole runs on the erased AST with no types to
+/// consult, so the answer has to come from the expression's own shape.
+/// A bare `Var` is never accepted: that is exactly the case that was
+/// getting this wrong.
+fn expr_is_boolean_valued(e : @ast.TsExpr) -> Bool {
+  match e {
+    BoolLit(_) => true
+    UnaryOp(@ast.TsUnaryOp::Not, _) => true
+    // Every equality and relational operator yields a boolean.
+    BinOp(BinEq, _, _)
+    | BinOp(BinNe, _, _)
+    | BinOp(AbstractEq, _, _)
+    | BinOp(AbstractNe, _, _)
+    | BinOp(BinLt, _, _)
+    | BinOp(BinLe, _, _)
+    | BinOp(BinGt, _, _)
+    | BinOp(BinGe, _, _)
+    | BinOp(Instanceof, _, _)
+    | BinOp(In, _, _) => true
+    // `&&` / `||` / `??` return one of their operands, so both have to
+    // be booleans.
+    BinOp(And, l, r) | BinOp(Or, l, r) | BinOp(Coalesce, l, r) =>
+      expr_is_boolean_valued(l) && expr_is_boolean_valued(r)
+    Cond(_, t, f) => expr_is_boolean_valued(t) && expr_is_boolean_valued(f)
+    // `Boolean(x)` — the global. A bundle that shadows `Boolean` has
+    // bigger problems than this rewrite.
+    Call("Boolean", args) => args.length() == 1
+    Seq(_, b) => expr_is_boolean_valued(b)
+    As(inner, _) | Satisfies(inner, _) | NonNull(inner) | TypeArgs(_, inner) =>
+      expr_is_boolean_valued(inner)
+    _ => false
+  }
+}
+
+///|
 /// Is this condition true every time it is evaluated? Only the literal
 /// spellings — anything requiring evaluation is not this function's
 /// business.
@@ -1696,17 +1799,25 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
                 x,
                 UnaryOp(@ast.TsUnaryOp::Void, IntLit(0)),
               )
-            // `x === true` / `x === !0` → `x`  (saves 7 bytes; x is already boolean)
+            // `x === true` / `x === !0` → `x`  (saves 7 bytes)
+            // `x === false` / `x === !1` → `!x`  (saves 6 bytes)
+            //
+            // Only when `x` IS a boolean. The comment here used to
+            // assert that and nothing checked it: for `x = 1`,
+            // `x === true` is false while `x` is truthy; for `x = 0`,
+            // `x === false` is false while `!x` is true.
             (x, BoolLit(true))
             | (BoolLit(true), x)
             | (x, UnaryOp(@ast.TsUnaryOp::Not, IntLit(0)))
-            | (UnaryOp(@ast.TsUnaryOp::Not, IntLit(0)), x) => x
-            // `x === false` / `x === !1` → `!x`  (saves 6 bytes)
+            | (UnaryOp(@ast.TsUnaryOp::Not, IntLit(0)), x) if expr_is_boolean_valued(
+                x,
+              ) => x
             (x, BoolLit(false))
             | (BoolLit(false), x)
             | (x, UnaryOp(@ast.TsUnaryOp::Not, IntLit(1)))
-            | (UnaryOp(@ast.TsUnaryOp::Not, IntLit(1)), x) =>
-              UnaryOp(@ast.TsUnaryOp::Not, x)
+            | (UnaryOp(@ast.TsUnaryOp::Not, IntLit(1)), x) if expr_is_boolean_valued(
+                x,
+              ) => UnaryOp(@ast.TsUnaryOp::Not, x)
             (lp, rp) => BinOp(op, lp, rp)
           }
         BinNe =>
@@ -1745,16 +1856,25 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
                 UnaryOp(@ast.TsUnaryOp::Void, IntLit(0)),
               )
             // `x !== true` / `x !== !0` → `!x`  (saves 6 bytes)
+            // `x !== false` / `x !== !1` → `x`  (saves 7 bytes)
+            //
+            // Same gate as `===`, and this is the one caught in the
+            // wild: `symbol.constEnumOnlyModule !== false` is `true`
+            // when the field is `undefined`, while
+            // `symbol.constEnumOnlyModule` is `undefined`. TypeScript's
+            // binder writes exactly that.
             (x, BoolLit(true))
             | (BoolLit(true), x)
             | (x, UnaryOp(@ast.TsUnaryOp::Not, IntLit(0)))
-            | (UnaryOp(@ast.TsUnaryOp::Not, IntLit(0)), x) =>
-              UnaryOp(@ast.TsUnaryOp::Not, x)
-            // `x !== false` / `x !== !1` → `x`  (saves 7 bytes)
+            | (UnaryOp(@ast.TsUnaryOp::Not, IntLit(0)), x) if expr_is_boolean_valued(
+                x,
+              ) => UnaryOp(@ast.TsUnaryOp::Not, x)
             (x, BoolLit(false))
             | (BoolLit(false), x)
             | (x, UnaryOp(@ast.TsUnaryOp::Not, IntLit(1)))
-            | (UnaryOp(@ast.TsUnaryOp::Not, IntLit(1)), x) => x
+            | (UnaryOp(@ast.TsUnaryOp::Not, IntLit(1)), x) if expr_is_boolean_valued(
+                x,
+              ) => x
             (lp, rp) => BinOp(op, lp, rp)
           }
         // `x.length > 0` → `!!x.length`  (saves ~3 bytes; length is non-negative)
@@ -1830,10 +1950,26 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
           BinOp(@ast.TsBinOp::AbstractNe, a, b)
         BinOp(@ast.TsBinOp::AbstractNe, a, b) =>
           BinOp(@ast.TsBinOp::AbstractEq, a, b)
-        BinOp(@ast.TsBinOp::BinLt, a, b) => BinOp(@ast.TsBinOp::BinGe, a, b)
-        BinOp(@ast.TsBinOp::BinLe, a, b) => BinOp(@ast.TsBinOp::BinGt, a, b)
-        BinOp(@ast.TsBinOp::BinGt, a, b) => BinOp(@ast.TsBinOp::BinLe, a, b)
-        BinOp(@ast.TsBinOp::BinGe, a, b) => BinOp(@ast.TsBinOp::BinLt, a, b)
+        // The RELATIONAL negations are not the same shape of fact as the
+        // equality ones above. `!(a < b)` is `a >= b` only when the
+        // comparison is not NaN-based, and every NaN comparison is false,
+        // so both `a < b` and `a >= b` come out false while `!(a < b)` is
+        // true:
+        //
+        //   a = undefined, b = 1 -> !(a < b) is true,  a >= b is false
+        //   a = "x",       b = 3 -> !(a < b) is true,  a >= b is false
+        //
+        // `undefined` is not an exotic input, so this is gated on both
+        // operands being comparable without NaN — two numbers, or two
+        // strings. See `relational_negation_is_safe`.
+        BinOp(@ast.TsBinOp::BinLt, a, b) if relational_negation_is_safe(a, b) =>
+          BinOp(@ast.TsBinOp::BinGe, a, b)
+        BinOp(@ast.TsBinOp::BinLe, a, b) if relational_negation_is_safe(a, b) =>
+          BinOp(@ast.TsBinOp::BinGt, a, b)
+        BinOp(@ast.TsBinOp::BinGt, a, b) if relational_negation_is_safe(a, b) =>
+          BinOp(@ast.TsBinOp::BinLe, a, b)
+        BinOp(@ast.TsBinOp::BinGe, a, b) if relational_negation_is_safe(a, b) =>
+          BinOp(@ast.TsBinOp::BinLt, a, b)
         // `!!(comparison)` → `comparison`
         UnaryOp(@ast.TsUnaryOp::Not, bool_expr) if is_bool_expr(bool_expr) =>
           bool_expr
