@@ -24,7 +24,7 @@
   "unused-static-method": "PASS",
   "unused-getter": "PASS",
   "unread-object-property": "PASS",
-  "unused-trailing-param": "GATED",
+  "unused-trailing-param": "PASS",
   "unused-catch-binding": "PASS",
   "empty-statements": "PASS",
   "empty-block": "PASS",

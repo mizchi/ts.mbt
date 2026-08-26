@@ -2868,6 +2868,101 @@ fn func_body_references_name_as_free_var(
 }
 
 ///|
+/// Every expression nested inside a binding pattern: a computed key, a
+/// default value, or an assignment target.
+///
+/// Three walkers over the same tree — `stmt_references_name` here,
+/// `stmt_uses_this` and `stmt_uses_super` in `peephole.mbt` — each
+/// matched `Let(b, _, e)` and then looked only at `e`. So
+///
+///   let { major: m = this.major } = fields;
+///
+/// hid its `this` completely: the binding pattern was never visited by
+/// anything but `binding_introduces_name`, which only answers "what does
+/// this pattern DECLARE". peephole's `function` -> arrow conversion is
+/// gated on exactly the question those walkers answer, so
+///
+///   Version.prototype.with = function (fields) {
+///     let { major: m = this.major } = fields;
+///     ...
+///   };
+///
+/// became an arrow, `this` resolved to the module instead of the
+/// instance, and the minified TypeScript compiler threw
+/// `Cannot read properties of undefined (reading 'major')` on its own
+/// `semver.ts`. Found by `just verify-real-world`.
+///
+/// One collector, three callers — the alternative is the same omission
+/// made three times, which is what happened.
+fn binding_subexprs(b : @ast.TsBinding) -> Array[@ast.TsExpr] {
+  let out : Array[@ast.TsExpr] = []
+  collect_binding_subexprs(b, out)
+  out
+}
+
+///|
+fn collect_binding_subexprs(
+  b : @ast.TsBinding,
+  out : Array[@ast.TsExpr],
+) -> Unit {
+  match b {
+    Ident(_) => ()
+    Target(e) => out.push(e)
+    Array(ab) => {
+      for elem in ab.items {
+        match elem {
+          Some(be) => {
+            collect_binding_subexprs(be.binding, out)
+            match be.default {
+              Some(d) => out.push(d)
+              None => ()
+            }
+          }
+          None => ()
+        }
+      }
+      match ab.rest {
+        Some(r) => collect_binding_subexprs(r, out)
+        None => ()
+      }
+    }
+    Object(ob) =>
+      for prop in ob.props {
+        match prop.key_expr {
+          Some(k) => out.push(k)
+          None => ()
+        }
+        collect_binding_subexprs(prop.binding, out)
+        match prop.default {
+          Some(d) => out.push(d)
+          None => ()
+        }
+      }
+  }
+}
+
+///|
+/// Every expression nested in a parameter list: a default value, plus
+/// anything inside a destructuring parameter's pattern. A parameter
+/// default is evaluated in the function's own scope, so
+/// `function (x = this.y) {}` reads the callee's `this` and must block
+/// the arrow conversion the same way a body reference does.
+fn param_subexprs(params : Array[@ast.TsParam]) -> Array[@ast.TsExpr] {
+  let out : Array[@ast.TsExpr] = []
+  for p in params {
+    match p.default {
+      Some(d) => out.push(d)
+      None => ()
+    }
+    match p.binding {
+      Some(b) => collect_binding_subexprs(b, out)
+      None => ()
+    }
+  }
+  out
+}
+
+///|
 fn binding_introduces_name(b : @ast.TsBinding, name : String) -> Bool {
   match b {
     Ident(n) => n == name
@@ -2912,8 +3007,13 @@ fn block_references_name(block : @ast.TsBlock, name : String) -> Bool {
 fn stmt_references_name(stmt : @ast.TsStmt, name : String) -> Bool {
   match stmt {
     Var(b, _, e) | Let(b, _, e) | Const(b, _, e) => {
-      if binding_introduces_name(b, name) {
-        return expr_references_name(e, name)
+      // Computed keys and defaults inside the pattern are ordinary
+      // expressions evaluated here; `binding_introduces_name` only
+      // answers what the pattern declares.
+      for sub in binding_subexprs(b) {
+        if expr_references_name(sub, name) {
+          return true
+        }
       }
       expr_references_name(e, name)
     }
@@ -2966,6 +3066,11 @@ fn stmt_references_name(stmt : @ast.TsStmt, name : String) -> Bool {
     ForOf(_, b, _, iter, body)
     | ForAwaitOf(_, b, _, iter, body)
     | ForIn(_, b, _, iter, body) => {
+      for sub in binding_subexprs(b) {
+        if expr_references_name(sub, name) {
+          return true
+        }
+      }
       if binding_introduces_name(b, name) {
         return expr_references_name(iter, name)
       }
@@ -2974,6 +3079,15 @@ fn stmt_references_name(stmt : @ast.TsStmt, name : String) -> Bool {
     Try(t, catch_b, catch_body, finally_) => {
       if block_references_name(t, name) {
         return true
+      }
+      match catch_b {
+        Some(bb) =>
+          for sub in binding_subexprs(bb) {
+            if expr_references_name(sub, name) {
+              return true
+            }
+          }
+        None => ()
       }
       let catch_hits = match catch_body {
         Some(b) => {
@@ -3078,7 +3192,14 @@ fn expr_references_name(e : @ast.TsExpr, name : String) -> Bool {
     AssignExpr(n, v) => n == name || expr_references_name(v, name)
     CompoundAssignExpr(t, _, v) =>
       expr_references_name(t, name) || expr_references_name(v, name)
-    AssignPattern(_, v) => expr_references_name(v, name)
+    AssignPattern(b, v) => {
+      for sub in binding_subexprs(b) {
+        if expr_references_name(sub, name) {
+          return true
+        }
+      }
+      expr_references_name(v, name)
+    }
     PropAssignExpr(recv, _, v) =>
       expr_references_name(recv, name) || expr_references_name(v, name)
     IndexAssignExpr(recv, idx, v) =>
@@ -3105,6 +3226,15 @@ fn expr_references_name(e : @ast.TsExpr, name : String) -> Bool {
     }
     FuncExpr(g) => func_body_references_name_as_free_var(g, name)
     ArrowFunc(params, _, body, _) => {
+      // Parameter defaults are evaluated when the arrow is CALLED, but
+      // they still live inside the arrow's scope — and an arrow inherits
+      // `this` / `super` from its enclosing context, so a default that
+      // reads them is a reference from out here.
+      for sub in param_subexprs(params) {
+        if expr_references_name(sub, name) {
+          return true
+        }
+      }
       for p in params {
         if p.name == name {
           return false

@@ -35,6 +35,8 @@ pub fn build_type_env(Array[@ast.TsInterface], Array[@ast.TsTypeAlias]) -> Map[S
 
 pub fn bundle_modules(Map[String, String], String, BundleOptions) -> Result[BundleOutput, String]
 
+pub fn class_member_names(@ast.TsBlock) -> Map[String, Array[String]]
+
 pub fn class_method_dce_block(@ast.TsBlock, keep? : Map[String, Bool], class_fields? : Array[(String, @ast.TsType)], type_aliases? : Array[@ast.TsTypeAlias], explain? : Array[String]?) -> @ast.TsBlock
 
 pub fn collect_externally_visible_props(@ast.TsBlock, Map[String, Bool], type_env? : Map[String, @ast.TsType]) -> Array[String]
@@ -71,7 +73,7 @@ pub fn infer_container_symbols(SymbolGraph, ContainerFacts) -> Map[Int, Bool]
 
 pub fn infer_numeric_symbols(SymbolGraph) -> Map[Int, Bool]
 
-pub fn inline_block(@ast.TsBlock) -> @ast.TsBlock
+pub fn inline_block(@ast.TsBlock, keep? : Map[String, Bool]) -> @ast.TsBlock
 
 pub fn inline_const_enums(@ast.TsBlock, Map[String, @ast.TsExpr]) -> @ast.TsBlock
 
@@ -111,7 +113,7 @@ pub fn plan_unused_params(@ast.TsBlock, keep? : Map[String, Bool], declines? : A
 
 pub fn reserve_props_from_sink(Sink, Int, SymbolGraph, Map[String, Bool], Map[String, Bool]) -> Unit
 
-pub fn reserved_props_from_observability(SymbolGraph, Map[Int, Observability], type_env? : Map[String, @ast.TsType]) -> Map[String, Bool]
+pub fn reserved_props_from_observability(SymbolGraph, Map[Int, Observability], type_env? : Map[String, @ast.TsType], class_members? : Map[String, Array[String]]) -> Map[String, Bool]
 
 pub fn string_name_set(SymbolGraph) -> Map[String, Bool]
 

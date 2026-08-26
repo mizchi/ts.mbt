@@ -433,8 +433,20 @@ build 生成物で repository に無く、それで compile 全体が落ちて�
 TypeScript を compile して**診断を比べます。`checker.ts` を含む file なので、
 これが「checker が動く」の実質的な確認になります。観測は
 `transpileModule` の出力、`createProgram` + `getPreEmitDiagnostics` の
-診断（code / 行 / message）、`TypeChecker` で引いた型の文字列、公開 API の形
-——**すべて一致**。
+診断（code / 行 / message）、`TypeChecker` で引いた型の文字列、公開 API の形。
+
+> **現状この target は FAIL です。** 一度は一致していましたが、その後
+> 2 件の bug が入りました。1 件目（binding pattern の default に隠れた
+> `this`）は修正済みで、`this.major` を読む `Version.prototype.with` が
+> arrow に変換されて `Cannot read properties of undefined (reading
+> 'major')` を投げていました。それを直すと**その裏にもう 1 件**あり、
+> 今は binder の `declareModuleMember` で
+> `Cannot read properties of undefined (reading 'exports')`
+> ——`container.symbol` が undefined になっています。
+> 2 件目は commit `6fb8549` 時点でも（1 件目の裏で）同じ stack で再現し、
+> 新しい compress rule（`inline` / `typeofs` / `loops` /
+> `computed_props`）を全部切っても消えないので、**それらとは無関係の
+> 既存 bug**です。未修正として下に記録します。
 
 harness 側の落とし穴を 1 つ記録しておきます。**出力は package の
 `lib/` directory に置く必要があります。** TypeScript は既定の
@@ -455,6 +467,15 @@ pristine な copy を `lib/` の外に置くと同じ症状が出るので、最
 - **9 MB 入力で 13 分。** 3 MB の checker.ts が 66 秒、9 MB の
   typescript.js が約 13 分。superlinear なので、どこかに quadratic な
   pass があります。
+- **`typescript.js` の binder で `container.symbol` が undefined。**
+  上記の 2 件目。minify した compiler が自身の
+  `declareModuleMember` で `Cannot read properties of undefined
+  (reading 'exports')` を投げます。`checker.ts`（3 MB の TS source）/
+  react / hono / valibot はすべて通るので、この 9 MB の UMD bundle
+  固有の書き方——namespace IIFE、getter/setter を持つ CJS interop
+  shim、`super[name]` を渡す arrow——のどれかに関係しているはずですが、
+  3.5 MB の minified 出力から binder の分岐を追う作業になるので、
+  今回の範囲に入れていません。
 
 ## terser との比較
 

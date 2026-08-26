@@ -58,7 +58,12 @@ product surfaces now.
   code we delete and should not; `just verify-dce-coverage` hunts the
   opposite — code we keep and could drop — as a table of small programs
   that each assert a marker is gone, the live markers survive, and stdout
-  still matches Node running the original.
+  still matches Node running the original. `just compare-terser` asks the
+  competitive version of that question: both optimizers start from the
+  same unoptimized JS, and a LOSS names a terser compress rule we have
+  not ported, while a LOSS *or a tie* on a `type-aware` case means the
+  type-driven pass did not fire — see
+  [`docs/terser-parity.md`](./docs/terser-parity.md).
 - `src/bridge` consumes `src/checker` for every type-shape decision and runs
   `@checker.check_module` on the synthesized output as a sanity gate. It also
   keeps domain-specific specialization for Node FS / React / Hono / crypto /

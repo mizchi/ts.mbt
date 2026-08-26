@@ -259,6 +259,15 @@ pub fn fold_block(block : @ast.TsBlock) -> @ast.TsBlock {
       | Const(_, _, FuncExpr(_)) => true
       _ => false
     }
+    // terser's `drop_debugger`. The peephole pass drops these too, but
+    // it runs LAST, and by then the opportunity has passed: a
+    // `debugger` inside `function f() { debugger; return 1; }` makes the
+    // body two statements, so `call_inline.mbt` declines the function
+    // and `console.log(f())` never collapses to `console.log(1)`.
+    // Dropping it here, before inlining, is what makes that work.
+    if s is Debugger {
+      continue
+    }
     if exited {
       if is_hoisted_func {
         // Collect hoisted funcs to splice in before the return.
@@ -970,8 +979,32 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
 /// see literals that only appear after lower-level folds (e.g.
 /// `1 + 0 + x` -> `1 + x` -> after the outer add fold, `1 + x`
 /// stays put because `1` isn't an identity element for `+`).
+/// Is this expression `undefined`, however it is spelled? `void <pure>`
+/// evaluates its operand and yields `undefined`; with a literal operand
+/// there is nothing to evaluate.
+fn expr_is_literal_undefined(expr : @ast.TsExpr) -> Bool {
+  match expr {
+    Var("undefined") => true
+    UnaryOp(@ast.TsUnaryOp::Void, inner) => is_pure_value(inner)
+    _ => false
+  }
+}
+
+///|
+fn both_literal_undefined(l : @ast.TsExpr, r : @ast.TsExpr) -> Bool {
+  expr_is_literal_undefined(l) && expr_is_literal_undefined(r)
+}
+
+///|
 fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
   match expr {
+    // Both sides `undefined`. This shows up after a call is inlined —
+    // `f(undefined)` with a body of `void 0 === x` becomes
+    // `void 0 === void 0`, which is 14 bytes for a constant.
+    BinOp(BinEq, l, r) | BinOp(AbstractEq, l, r) if both_literal_undefined(l, r) =>
+      BoolLit(true)
+    BinOp(BinNe, l, r) | BinOp(AbstractNe, l, r) if both_literal_undefined(l, r) =>
+      BoolLit(false)
     BinOp(op, l, r) => {
       let lf = fold_expr(l)
       let rf = fold_expr(r)

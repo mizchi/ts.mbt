@@ -134,7 +134,11 @@ console.log("live");`,
 }
 console.log(f());`,
     absent: ["deadmark_after", "deadmark_unreach"],
-    present: ["return 1", "console.log"],
+    // NOT `return 1`: once `call_inline.mbt` landed, `f()` collapses to
+    // `1` at the call site and the function is dropped altogether, so
+    // the output is strictly better and the marker was asserting an
+    // implementation detail. `console.log` is the real liveness anchor.
+    present: ["console.log"],
   },
   {
     name: "after-throw",

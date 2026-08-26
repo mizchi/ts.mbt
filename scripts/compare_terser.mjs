@@ -1,371 +1,591 @@
-// Size comparison against terser, on the same real files.
+// mtsc against terser, rule by rule.
 //
-// `verify_real_world_minify.mjs` answers "is the output still correct".
-// This answers "how much smaller is it, next to the tool everyone
-// actually uses". Both matter, and neither substitutes for the other: a
-// minifier that wins on bytes by breaking the program has not won.
+// Two questions, and they need different setups.
 //
-// So every column here is measured on output that ran. For React the
-// harness re-runs the same render under each variant and reports whether
-// the observations still match; a variant that changes behaviour is
-// labelled BROKEN and its bytes stop being a result.
+//   1. Where does terser beat us? Every loss is a compress rule we have
+//      not ported, and the case that loses names it.
+//   2. Where should we beat terser? terser has no type information, so
+//      anything mtsc concludes from a TypeScript type is out of its
+//      reach. Those cases are the reason this project exists, and a
+//      TIE on one of them is a failure — it means the type-driven pass
+//      did not fire.
 //
-// Variants:
-//   mtsc            --minify --bundle --mangle --treeshake
-//   mtsc +props     …and --mangle-properties
-//                   (the type-driven safe property rename — the thing
-//                   this repo exists to do)
-//   terser          --compress --mangle
-//   terser +props   --compress --mangle --mangle-props
-//                   terser's unsafe property rename, for reference. It
-//                   renames every property it sees and leaves
-//                   correctness to the user's test suite.
+// Fairness. terser cannot parse TypeScript, so a direct `in.ts`
+// comparison would measure our parser, not our optimizer. Both sides
+// start from the same JavaScript instead:
 //
-// `--treeshake` is in the mtsc column because terser's `--compress`
-// drops unreferenced top-level declarations by itself once `--module`
-// is set. Leaving it out compared mtsc-without-DCE against
-// terser-with-DCE, which put mtsc 15% behind on hono and was an
-// artefact of the flags, not of the tools: with it, mtsc is ahead
-// there. Same passes on both sides or the number means nothing.
+//   in.ts --[mtsc --bundle, no optimization]--> plain.mjs
+//            |                                    |
+//            +-- terser (compress + mangle) ------+-- bytes, behaviour
+//            +-- mtsc (full pipeline) ------------+
 //
-// Gzipped sizes are reported too, since that is what ships.
+// Property mangling is reported separately. terser's `mangle.properties`
+// is off by default and its own documentation calls it unsafe without a
+// hand-maintained reserved list; mtsc derives that list from the types.
+// Comparing our property mangling against terser's default is the
+// type-aware advantage, and comparing it against terser's opt-in
+// property mangling is a correctness comparison, not a size one — so the
+// harness runs that variant too and reports whether terser's output
+// still behaves.
 //
-//   node scripts/compare_terser.mjs
-//   node scripts/compare_terser.mjs --only react
+// Usage:
+//   node scripts/compare_terser.mjs [--only <name>] [--group <group>]
+//                                   [--verbose] [--update]
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import zlib from "node:zlib";
 import { fileURLToPath } from "node:url";
+import { minify } from "terser";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const WORK = path.join(ROOT, "_build", "real-world");
-const TERSER_DIR = path.join(WORK, "terser");
-const TERSER = path.join(TERSER_DIR, "node_modules", ".bin", "terser");
+const EXPECTED = path.join(ROOT, "fixtures", "terser-parity", "expected.json");
 
 const MTSC_CANDIDATES = [
   path.join(ROOT, "_build", "native", "release", "build", "cmd", "mtsc", "mtsc.exe"),
   path.join(ROOT, "_build", "native", "debug", "build", "cmd", "mtsc", "mtsc.exe"),
 ];
-const MTSC = MTSC_CANDIDATES.find((c) => fs.existsSync(c));
-if (!MTSC) {
-  console.error("mtsc binary not found. Run `moon build --target native` first.");
+
+function findMtsc() {
+  for (const candidate of MTSC_CANDIDATES) if (fs.existsSync(candidate)) return candidate;
+  console.error("compare_terser: mtsc binary not found. Run `moon build --target native`.");
   process.exit(2);
 }
 
+// No optimization: this is the shared starting point, not a contender.
+const PLAIN_FLAGS = ["--bundle", "--no-check"];
+const MTSC_FLAGS = ["--bundle", "--treeshake", "--fold", "--minify", "--no-check", "--mangle"];
+const MTSC_PROP_FLAGS = [...MTSC_FLAGS, "--mangle-properties", "--reserve-entry-exports"];
+
+// terser at full strength, minus the unsafe_* family (which changes
+// semantics by design and is not a fair comparison for a compiler that
+// refuses to). `passes: 3` because terser is single-pass by default and
+// we run several passes ourselves; giving it fewer would flatter us.
+const TERSER_OPTIONS = {
+  compress: { passes: 3, module: true, toplevel: true },
+  mangle: { toplevel: true },
+  format: { comments: false },
+  module: true,
+};
+
+// ---------------------------------------------------------------
+// Cases
+// ---------------------------------------------------------------
+//
+// `group: "terser-rule"` — one per compress option, so a LOSS names the
+//   rule we have not ported. The option each case exercises is in
+//   `rule`, taken from terser's own defaults list in
+//   `node_modules/terser/lib/compress/index.js`.
+//
+// `group: "type-aware"` — something only a type checker can conclude.
+//   A tie or a loss here is the interesting failure.
+
+const CASES = [
+  // ============ terser compress rules ============
+  {
+    group: "terser-rule",
+    rule: "evaluate",
+    name: "constant-arithmetic",
+    source: `export const r = 2 * 3 + 4 - 1;
+console.log(r);`,
+  },
+  {
+    group: "terser-rule",
+    rule: "booleans",
+    name: "boolean-normalisation",
+    source: `export function f(a: boolean) { return a ? true : false; }
+console.log(f(true));`,
+  },
+  {
+    group: "terser-rule",
+    rule: "comparisons",
+    name: "comparison-simplification",
+    source: `export function f(a: number, b: number) { return !(a <= b); }
+console.log(f(1, 2));`,
+  },
+  {
+    group: "terser-rule",
+    rule: "conditionals",
+    name: "if-to-ternary",
+    source: `export function f(c: boolean) { if (c) { return 1; } else { return 2; } }
+console.log(f(true));`,
+  },
+  {
+    group: "terser-rule",
+    rule: "dead_code",
+    name: "unreachable-after-return",
+    source: `export function f() { return 1; console.log("gone"); }
+console.log(f());`,
+  },
+  {
+    group: "terser-rule",
+    rule: "drop_debugger",
+    name: "debugger-statement",
+    source: `export function f() { debugger; return 1; }
+console.log(f());`,
+  },
+  {
+    group: "terser-rule",
+    rule: "unused",
+    name: "unused-declarations",
+    source: `const unusedThing = 1;
+function unusedFn() { return 2; }
+console.log("live");`,
+  },
+  {
+    group: "terser-rule",
+    rule: "join_vars",
+    name: "join-consecutive-vars",
+    source: `let a = 1;
+let b = 2;
+let c = 3;
+console.log(a + b + c);`,
+  },
+  {
+    group: "terser-rule",
+    rule: "sequences",
+    name: "join-statements-with-comma",
+    source: `export function f(g: { p: (n: number) => void }) { g.p(1); g.p(2); g.p(3); }
+f({ p(n) { console.log(n); } });`,
+  },
+  {
+    group: "terser-rule",
+    rule: "if_return",
+    name: "if-return-to-negation",
+    source: `export function f(c: boolean, g: { p: () => void }) { if (c) { return; } g.p(); }
+f(false, { p() { console.log("called"); } });`,
+  },
+  {
+    group: "terser-rule",
+    rule: "properties",
+    name: "quoted-property-to-dot",
+    source: `export function f(o: Record<string, number>) { return o["key"]; }
+console.log(f({ key: 7 }));`,
+  },
+  {
+    group: "terser-rule",
+    rule: "computed_props",
+    name: "computed-literal-key",
+    source: `export const o = { ["key"]: 1 };
+console.log(o.key);`,
+  },
+  {
+    group: "terser-rule",
+    rule: "loops",
+    name: "while-true-to-for",
+    source: `export function f() { let i = 0; while (true) { i++; if (i > 2) return i; } }
+console.log(f());`,
+  },
+  {
+    group: "terser-rule",
+    rule: "switches",
+    name: "switch-dead-arms",
+    source: `export function f() {
+  switch (2) {
+    case 1: return "a";
+    case 2: return "b";
+    default: return "c";
+  }
+}
+console.log(f());`,
+  },
+  {
+    group: "terser-rule",
+    rule: "typeofs",
+    name: "typeof-undefined",
+    source: `export function f(x: unknown) { return typeof x === "undefined"; }
+console.log(f(undefined));`,
+  },
+  {
+    group: "terser-rule",
+    rule: "collapse_vars",
+    name: "collapse-single-use-var",
+    source: `export function f(g: { p: (n: number) => number }) { const t = g.p(1); return t + 1; }
+console.log(f({ p(n) { return n; } }));`,
+  },
+  {
+    group: "terser-rule",
+    rule: "reduce_vars",
+    name: "propagate-const-value",
+    source: `const k = 5;
+export function f() { return k * 2; }
+console.log(f());`,
+  },
+  {
+    group: "terser-rule",
+    rule: "inline",
+    name: "inline-single-use-function",
+    source: `function helper(n: number) { return n + 1; }
+console.log(helper(2));`,
+  },
+  {
+    group: "terser-rule",
+    rule: "hoist_props",
+    name: "hoist-object-properties",
+    source: `const cfg = { a: 1, b: 2 };
+console.log(cfg.a + cfg.b);`,
+  },
+  {
+    group: "terser-rule",
+    rule: "side_effects",
+    name: "drop-pure-statement",
+    source: `1 + 2;
+[1, 2, 3];
+({ a: 1 });
+console.log("live");`,
+  },
+  {
+    group: "terser-rule",
+    rule: "negate_iife",
+    name: "negate-iife",
+    source: `(function () { globalThis.__sink = 1; })();
+console.log("live");`,
+  },
+  {
+    group: "terser-rule",
+    rule: "lhs_constants",
+    name: "constant-on-the-right",
+    source: `export function f(a: number) { return 1 === a; }
+console.log(f(1));`,
+  },
+  {
+    group: "terser-rule",
+    rule: "arrows",
+    name: "function-expression-to-arrow",
+    source: `export const f = function (n: number) { return n + 1; };
+console.log(f(1));`,
+  },
+  {
+    group: "terser-rule",
+    rule: "directives",
+    name: "redundant-use-strict",
+    source: `"use strict";
+export function f() { "use strict"; return 1; }
+console.log(f());`,
+  },
+  {
+    group: "terser-rule",
+    rule: "keep_fargs",
+    name: "unused-trailing-parameter",
+    source: `export function f(a: number, unusedB: number) { return a; }
+console.log(f(1, 2));`,
+  },
+
+  // ============ type-aware: mtsc should win ============
+  {
+    group: "type-aware",
+    rule: "typeof on an annotated binding",
+    name: "typeof-narrowed-by-annotation",
+    // terser cannot know `s` is a string, so it must keep the branch.
+    source: `export function f(s: string) {
+  if (typeof s === "string") { return "yes"; }
+  return "no-this-is-dead";
+}
+console.log(f("x"));`,
+  },
+  {
+    group: "type-aware",
+    rule: "null check on a non-nullable type",
+    name: "null-check-on-number",
+    source: `export function f(n: number) {
+  if (n === null) { return "dead-branch"; }
+  return n + 1;
+}
+console.log(f(1));`,
+  },
+  {
+    group: "type-aware",
+    rule: "switch over a literal union",
+    name: "switch-literal-union",
+    source: `type Mode = "a" | "b";
+export function f(m: Mode) {
+  switch (m) {
+    case "a": return 1;
+    case "b": return 2;
+    default: return "unreachable-default";
+  }
+}
+console.log(f("a"));`,
+  },
+  {
+    group: "type-aware",
+    rule: "interface-typed property surface",
+    name: "internal-only-property-names",
+    // Every property here is internal: no export exposes them and
+    // nothing observes their names. mtsc can rename them from the type
+    // graph; terser cannot without a hand-written reserved list.
+    source: `interface Internal { alphaValue: number; betaValue: number; gammaValue: number }
+const state: Internal = { alphaValue: 1, betaValue: 2, gammaValue: 3 };
+export function total() { return state.alphaValue + state.betaValue + state.gammaValue; }
+console.log(total());`,
+    properties: true,
+  },
+  {
+    group: "type-aware",
+    rule: "const enum inlining",
+    name: "const-enum",
+    source: `const enum Level { Low = 1, High = 2 }
+export function f() { return Level.Low + Level.High; }
+console.log(f());`,
+    // `const enum` is NOT erasable syntax, so Node's type stripping
+    // refuses to run the original and cannot serve as the behavioural
+    // reference. State the expected output instead.
+    expect: "3\n",
+  },
+  {
+    group: "type-aware",
+    rule: "as const object inlining",
+    name: "as-const-object",
+    source: `const table = { first: 10, second: 20 } as const;
+export function f() { return table.first + table.second; }
+console.log(f());`,
+  },
+  {
+    group: "type-aware",
+    rule: "unreachable method by type",
+    name: "unused-method-on-typed-class",
+    source: `class Service {
+  used() { return 1; }
+  neverCalledAnywhere() { return 2; }
+}
+const s = new Service();
+console.log(s.used());`,
+    properties: true,
+  },
+];
+
+// ---------------------------------------------------------------
+// Runner
+// ---------------------------------------------------------------
+
 const args = process.argv.slice(2);
 let only = null;
+let group = null;
+let verbose = false;
+let update = false;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === "--only") only = args[++i];
+  else if (args[i] === "--group") group = args[++i];
+  else if (args[i] === "--verbose") verbose = true;
+  else if (args[i] === "--update") update = true;
   else {
-    console.error(`unknown argument: ${args[i]}`);
+    console.error(`compare_terser: unknown argument ${args[i]}`);
     process.exit(2);
   }
 }
 
-function run(cmd, argv, opts = {}) {
-  return spawnSync(cmd, argv, {
-    encoding: "utf8",
-    maxBuffer: 1 << 28,
-    timeout: opts.timeout ?? 3_600_000,
-    cwd: opts.cwd ?? WORK,
-  });
+const MTSC = findMtsc();
+const WORK = fs.mkdtempSync(path.join(os.tmpdir(), "terser-parity-"));
+
+function run(command, argv, options = {}) {
+  return spawnSync(command, argv, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, ...options });
 }
 
-function ensureTerser() {
-  if (fs.existsSync(TERSER)) return true;
-  fs.mkdirSync(TERSER_DIR, { recursive: true });
-  const pkg = path.join(TERSER_DIR, "package.json");
-  if (!fs.existsSync(pkg)) {
-    fs.writeFileSync(pkg, JSON.stringify({ name: "t", private: true, type: "commonjs" }) + "\n");
-  }
-  const r = run("npm", ["install", "--no-audit", "--no-fund", "terser"], { cwd: TERSER_DIR });
-  if (r.status !== 0) {
-    console.error("  npm install terser failed (needs network)");
-    return false;
-  }
-  return true;
-}
-
-const gz = (file) => zlib.gzipSync(fs.readFileSync(file), { level: 9 }).length;
-const num = (n) => n.toLocaleString("en-US");
-const kb = (n) => (n / 1024).toFixed(1);
-
-// One variant. Returns {bytes, gzip, seconds} or {failed}.
-function build(variant, input, output) {
-  const started = process.hrtime.bigint();
-  let r;
-  if (variant.tool === "mtsc") {
-    // `--no-check` is for published `.js` input that was never
-    // TypeScript. A TypeScript entry is expected to type-check, so it
-    // does not get the flag and a diagnostic is a real failure.
-    const noCheck = input.endsWith(".ts") || input.endsWith(".tsx") ? [] : ["--no-check"];
-    r = run(MTSC, [input, ...noCheck, ...variant.flags, "--out", output]);
-  } else {
-    r = run(TERSER, [input, ...variant.flags, "-o", output]);
-  }
-  const seconds = Number(process.hrtime.bigint() - started) / 1e9;
-  if (r.status !== 0 || !fs.existsSync(output) || fs.statSync(output).size === 0) {
-    return { failed: (r.stderr || r.stdout || "").split("\n").filter(Boolean).slice(-1)[0] || `exit ${r.status}` };
-  }
-  const parse = run("node", ["--check", output]);
-  if (parse.status !== 0) {
-    return { failed: "output does not parse" };
-  }
-  return { bytes: fs.statSync(output).size, gzip: gz(output), seconds };
-}
-
-const VARIANTS = [
-  {
-    key: "mtsc",
-    tool: "mtsc",
-    flags: ["--minify", "--bundle", "--mangle", "--treeshake"],
-  },
-  {
-    key: "mtsc +props",
-    tool: "mtsc",
-    flags: [
-      "--minify",
-      "--bundle",
-      "--mangle",
-      "--mangle-properties",
-      "--treeshake",
-    ],
-  },
-  { key: "terser", tool: "terser", flags: ["--compress", "--mangle"] },
-  {
-    key: "terser +props",
-    tool: "terser",
-    flags: ["--compress", "--mangle", "--mangle-props"],
-  },
-];
-
-const REACT_FILES = [
-  "node_modules/react/cjs/react.development.js",
-  "node_modules/react-dom/cjs/react-dom-server-legacy.node.development.js",
-  "node_modules/react-dom/cjs/react-dom-server.node.development.js",
-  "node_modules/react-dom/cjs/react-dom.development.js",
-  "node_modules/scheduler/cjs/scheduler.development.js",
-];
-
-function table(rows, headers) {
-  const widths = headers.map((h, i) =>
-    Math.max(h.length, ...rows.map((r) => String(r[i]).length)),
+/// Run a module and capture what it printed. `globals` are installed
+/// first, because a case that declares an ambient global has to have one
+/// at runtime.
+function observe(modulePath, globals) {
+  const prelude = Object.entries(globals ?? {})
+    .map(([name, expr]) => `globalThis.${name} = ${expr};`)
+    .join("\n");
+  const harness = `${modulePath}.run.mjs`;
+  fs.writeFileSync(
+    harness,
+    `${prelude}\nawait import(${JSON.stringify(`file://${modulePath}`)});\n`,
   );
-  const line = (cells) =>
-    "  " + cells.map((c, i) => String(c).padStart(i === 0 ? -widths[i] : widths[i])).join("  ");
-  const pad = (cells) =>
-    "  " +
-    cells
-      .map((c, i) => (i === 0 ? String(c).padEnd(widths[i]) : String(c).padStart(widths[i])))
-      .join("  ");
-  console.log(pad(headers));
-  console.log("  " + widths.map((w) => "-".repeat(w)).join("  "));
-  for (const r of rows) console.log(pad(r));
-  void line;
+  const result = run(process.execPath, [harness]);
+  return { ok: result.status === 0, out: result.stdout ?? "", err: result.stderr ?? "" };
 }
 
-// ---------------------------------------------------------------------
-// React: minify all five runtime files per variant, then re-run the same
-// render so a byte count is never reported for output that misbehaves.
-// ---------------------------------------------------------------------
-
-function compareReact() {
-  const dir = path.join(WORK, "react");
-  const app = path.join(dir, "app.cjs");
-  if (!fs.existsSync(app)) {
-    console.log("  react: run verify_real_world_minify.mjs first (sets up the workspace)");
-    return;
-  }
-  const files = REACT_FILES.map((rel) => ({
-    rel,
-    abs: path.join(dir, rel),
-    orig: path.join(dir, `orig-${path.basename(rel)}`),
-  })).filter((f) => fs.existsSync(f.orig) || fs.existsSync(f.abs));
-  for (const f of files) if (!fs.existsSync(f.orig)) fs.copyFileSync(f.abs, f.orig);
-
-  const baseline = run("node", [app], { cwd: dir });
-  const before = files.reduce((n, f) => n + fs.statSync(f.orig).size, 0);
-  const beforeGz = files.reduce((n, f) => n + gz(f.orig), 0);
-
-  const rows = [["original", num(before), kb(beforeGz), "—", "—", "baseline"]];
-  for (const v of VARIANTS) {
-    let bytes = 0;
-    let gzip = 0;
-    let seconds = 0;
-    let failed = null;
-    const outs = [];
-    for (const f of files) {
-      const out = path.join(dir, `cmp-${v.key.replace(/[^a-z]/g, "")}-${path.basename(f.rel)}`);
-      const r = build(v, f.orig, out);
-      if (r.failed) {
-        failed = `${path.basename(f.rel)}: ${r.failed}`;
-        break;
-      }
-      bytes += r.bytes;
-      gzip += r.gzip;
-      seconds += r.seconds;
-      outs.push({ f, out });
-    }
-    if (failed) {
-      rows.push([v.key, "—", "—", "—", "—", `FAILED (${failed})`]);
-      continue;
-    }
-    for (const o of outs) fs.copyFileSync(o.out, o.f.abs);
-    const got = run("node", [app], { cwd: dir });
-    for (const f of files) fs.copyFileSync(f.orig, f.abs);
-    const ok = got.status === 0 && got.stdout === baseline.stdout;
-    rows.push([
-      v.key,
-      num(bytes),
-      kb(gzip),
-      `${100 - Math.round((bytes * 100) / before)}%`,
-      `${seconds.toFixed(1)}s`,
-      ok ? "same observations" : got.status !== 0 ? "BROKEN (throws)" : "BROKEN (differs)",
-    ]);
-    for (const o of outs) fs.rmSync(o.out, { force: true });
-  }
-  console.log("\nreact + react-dom + scheduler (5 files)\n");
-  table(rows, ["variant", "bytes", "gzip KiB", "smaller", "time", "behaviour"]);
-}
-
-// ---------------------------------------------------------------------
-// The example application: no exports, so door 1 is empty. This is the
-// shape the property rename was designed for, and the one a library can
-// never have.
-// ---------------------------------------------------------------------
-
-function compareMinifyApp() {
-  const entry = path.join(ROOT, "examples", "minify-app", "src", "main.ts");
-  if (!fs.existsSync(entry)) {
-    console.log("  minify-app: examples/minify-app is missing");
-    return;
-  }
-  const dir = path.join(WORK, "minify-app");
+async function checkCase(testCase) {
+  const dir = path.join(WORK, testCase.name);
   fs.mkdirSync(dir, { recursive: true });
-  // The baseline is the unminified bundle, so terser and mtsc minify the
-  // same input and the comparison is between minifiers rather than
-  // between bundlers.
-  const bundled = path.join(dir, "bundle.mjs");
-  const b = run(MTSC, [entry, "--bundle", "--out", bundled]);
-  if (b.status !== 0) {
-    console.log(`  minify-app: bundle failed: ${(b.stdout || "").split("\n")[0]}`);
-    return;
+  const sourcePath = path.join(dir, "in.ts");
+  fs.writeFileSync(sourcePath, testCase.source);
+
+  // Behavioural baseline: the original, run by Node itself — unless the
+  // case declares one, which is for syntax Node's type stripping refuses
+  // (`const enum` is not erasable).
+  const reference = testCase.expect !== undefined
+    ? { ok: true, out: testCase.expect, err: "" }
+    : observe(sourcePath, testCase.globals);
+  if (!reference.ok) {
+    return { verdict: "BADCASE", detail: firstLine(reference.err) };
   }
-  const want = run("node", [bundled], { cwd: dir });
-  const before = fs.statSync(bundled).size;
-  const rows = [["bundle (no minify)", num(before), kb(gz(bundled)), "\u2014", "baseline"]];
-  const variants = [
-    {
-      key: "mtsc",
-      tool: "mtsc",
-      input: entry,
-      flags: ["--bundle", "--minify", "--mangle", "--treeshake"],
-    },
-    {
-      key: "mtsc +props",
-      tool: "mtsc",
-      input: entry,
-      flags: [
-        "--bundle",
-        "--minify",
-        "--mangle",
-        "--mangle-properties",
-        "--treeshake",
-      ],
-    },
-    { key: "terser", tool: "terser", input: bundled, flags: ["--module", "--compress", "--mangle"] },
-    {
-      key: "terser +props",
-      tool: "terser",
-      input: bundled,
-      flags: ["--module", "--compress", "--mangle", "--mangle-props"],
-    },
-  ];
-  for (const v of variants) {
-    const out = path.join(dir, `${v.key.replace(/[^a-z]/g, "")}.mjs`);
-    const r = build(v, v.input, out);
-    if (r.failed) {
-      rows.push([v.key, "\u2014", "\u2014", "\u2014", `FAILED (${r.failed})`]);
-      continue;
+
+  // The shared starting point.
+  const plainPath = path.join(dir, "plain.mjs");
+  const plain = run(MTSC, [sourcePath, ...PLAIN_FLAGS, "--out", plainPath]);
+  if (plain.status !== 0 || !fs.existsSync(plainPath)) {
+    return { verdict: "BADCASE", detail: `plain compile failed: ${firstLine(plain.stdout, plain.stderr)}` };
+  }
+
+  // ---- terser ----
+  const plainCode = fs.readFileSync(plainPath, "utf8");
+  let terserCode = null;
+  try {
+    const result = await minify(plainCode, TERSER_OPTIONS);
+    terserCode = result.code ?? "";
+  } catch (error) {
+    return { verdict: "BADCASE", detail: `terser failed: ${error.message}` };
+  }
+  const terserPath = path.join(dir, "terser.mjs");
+  fs.writeFileSync(terserPath, terserCode);
+  const terserRun = observe(terserPath, testCase.globals);
+
+  // ---- mtsc ----
+  const flags = testCase.properties ? MTSC_PROP_FLAGS : MTSC_FLAGS;
+  const mtscPath = path.join(dir, "mtsc.mjs");
+  const compiled = run(MTSC, [sourcePath, ...flags, "--out", mtscPath]);
+  if (compiled.status !== 0 || !fs.existsSync(mtscPath)) {
+    return { verdict: "BROKEN", detail: `mtsc failed: ${firstLine(compiled.stdout, compiled.stderr)}` };
+  }
+  const mtscCode = fs.readFileSync(mtscPath, "utf8");
+  const mtscRun = observe(mtscPath, testCase.globals);
+
+  const report = {
+    plainBytes: plainCode.length,
+    terserBytes: terserCode.length,
+    mtscBytes: mtscCode.length,
+    terserOk: terserRun.ok && terserRun.out === reference.out,
+    mtscOk: mtscRun.ok && mtscRun.out === reference.out,
+    terserCode,
+    mtscCode,
+  };
+
+  // Our own correctness comes first: a smaller bundle that misbehaves is
+  // not a win, and this harness must never report one as such.
+  if (!report.mtscOk) {
+    return {
+      verdict: "BROKEN",
+      detail: mtscRun.ok
+        ? `output differs: ${JSON.stringify(reference.out)} vs ${JSON.stringify(mtscRun.out)}`
+        : `mtsc bundle threw: ${firstLine(mtscRun.err)}`,
+      ...report,
+    };
+  }
+  // terser misbehaving is a data point, not our problem — it happens
+  // with property mangling, which is the whole argument for deriving the
+  // reserved set from types.
+  if (!report.terserOk) {
+    return { verdict: "TERSER_BROKE", detail: "terser's output does not match", ...report };
+  }
+
+  const delta = report.mtscBytes - report.terserBytes;
+  if (delta > 0) return { verdict: "LOSS", detail: `+${delta} bytes vs terser`, ...report };
+  if (delta < 0) return { verdict: "WIN", detail: `${delta} bytes vs terser`, ...report };
+  return { verdict: "TIE", detail: "same size", ...report };
+}
+
+function firstLine(...streams) {
+  for (const stream of streams) {
+    const line = (stream ?? "")
+      .split("\n")
+      .map((l) => l.trim())
+      .find((l) => l.length > 0);
+    if (line) return line;
+  }
+  return "(no output)";
+}
+
+const expected = fs.existsSync(EXPECTED) ? JSON.parse(fs.readFileSync(EXPECTED, "utf8")) : {};
+
+console.log("mtsc vs terser 5.50.0\n");
+
+const results = {};
+const counts = {};
+let regressions = 0;
+const lossesByRule = [];
+const tiedTypeAware = [];
+
+for (const testCase of CASES) {
+  if (only && only !== testCase.name) continue;
+  if (group && group !== testCase.group) continue;
+  const result = await checkCase(testCase);
+  results[testCase.name] = result.verdict;
+  counts[result.verdict] = (counts[result.verdict] ?? 0) + 1;
+
+  const was = expected[testCase.name];
+  let tag = "     ";
+  if (was && was !== result.verdict) {
+    const better = ["WIN", "TIE", "TERSER_BROKE"];
+    if (better.indexOf(result.verdict) < better.indexOf(was) && result.verdict !== "LOSS") {
+      tag = " NEW ";
+    } else {
+      tag = "REGR!";
+      regressions += 1;
     }
-    const got = run("node", [out], { cwd: dir });
-    const ok = got.status === 0 && got.stdout === want.stdout;
-    rows.push([
-      v.key,
-      num(r.bytes),
-      kb(r.gzip),
-      `${100 - Math.round((r.bytes * 100) / before)}%`,
-      ok ? "same output" : got.status !== 0 ? "BROKEN (throws)" : "BROKEN (wrong output)",
-    ]);
   }
-  console.log("\nexamples/minify-app (an application: no exports)\n");
-  table(rows, ["variant", "bytes", "gzip KiB", "smaller", "behaviour"]);
+
+  const mark = {
+    WIN: " win",
+    TIE: " tie",
+    LOSS: "LOSS",
+    BROKEN: "FAIL",
+    TERSER_BROKE: "t-ko",
+    BADCASE: "??  ",
+  }[result.verdict];
+  const sizes =
+    result.mtscBytes !== undefined
+      ? `${String(result.mtscBytes).padStart(5)} vs ${String(result.terserBytes).padStart(5)}`
+      : "".padStart(14);
+  console.log(`  [${mark}]${tag} ${testCase.name.padEnd(34)} ${sizes}  ${result.detail ?? ""}`);
+  if (verbose && result.mtscCode) {
+    console.log(`         mtsc:   ${result.mtscCode.replace(/\n/g, " ")}`);
+    console.log(`         terser: ${result.terserCode.replace(/\n/g, " ")}`);
+  }
+
+  if (result.verdict === "LOSS") {
+    lossesByRule.push({ rule: testCase.rule, name: testCase.name, delta: result.mtscBytes - result.terserBytes });
+  }
+  if (testCase.group === "type-aware" && result.verdict === "TIE") {
+    tiedTypeAware.push({ rule: testCase.rule, name: testCase.name });
+  }
 }
 
-// ---------------------------------------------------------------------
-// The TypeScript compiler: one 9 MB file, and the behaviour check is
-// "does it still compile TypeScript the same way".
-// ---------------------------------------------------------------------
+// ---------------------------------------------------------------
+// Report
+// ---------------------------------------------------------------
 
-function compareTypescript() {
-  const dir = path.join(WORK, "typescript");
-  const lib = path.join(dir, "node_modules", "typescript", "lib", "typescript.js");
-  const app = path.join(dir, "tsapp.cjs");
-  if (!fs.existsSync(lib) || !fs.existsSync(app)) {
-    console.log("  typescript: run verify_real_world_minify.mjs first (sets up the workspace)");
-    return;
-  }
-  const baseline = run("node", [app, lib], { cwd: dir });
-  const before = fs.statSync(lib).size;
-  const rows = [["original", num(before), kb(gz(lib)), "—", "—", "baseline"]];
-  for (const v of VARIANTS) {
-    // The compiler resolves its default lib files relative to its own
-    // path, so every variant has to run from inside `lib/`.
-    const out = path.join(
-      dir,
-      "node_modules",
-      "typescript",
-      "lib",
-      `cmp-${v.key.replace(/[^a-z]/g, "")}.js`,
-    );
-    const r = build(v, lib, out);
-    if (r.failed) {
-      rows.push([v.key, "—", "—", "—", "—", `FAILED (${r.failed})`]);
-      continue;
-    }
-    const got = run("node", [app, out], { cwd: dir });
-    const ok = got.status === 0 && got.stdout === baseline.stdout;
-    rows.push([
-      v.key,
-      num(r.bytes),
-      kb(r.gzip),
-      `${100 - Math.round((r.bytes * 100) / before)}%`,
-      `${r.seconds.toFixed(0)}s`,
-      ok
-        ? "same diagnostics"
-        : got.status !== 0
-          ? "BROKEN (throws)"
-          : "BROKEN (wrong diagnostics)",
-    ]);
-    fs.rmSync(out, { force: true });
-  }
-  console.log("\ntypescript.js (the compiler, 9 MB)\n");
-  table(rows, ["variant", "bytes", "gzip KiB", "smaller", "time", "behaviour"]);
-}
-
-console.log("size comparison against terser");
-if (!ensureTerser()) process.exit(2);
-const targets = {
-  "minify-app": compareMinifyApp,
-  react: compareReact,
-  typescript: compareTypescript,
-};
-for (const [name, fn] of Object.entries(targets)) {
-  if (only && only !== name) continue;
-  fn();
-}
+console.log("");
 console.log(
-  "\n  terser does not read TypeScript, so `checker.ts` has no comparable column.",
+  `  ${counts.WIN ?? 0} win, ${counts.TIE ?? 0} tie, ${counts.LOSS ?? 0} loss, ` +
+    `${counts.TERSER_BROKE ?? 0} terser-misbehaved, ${counts.BROKEN ?? 0} mtsc-broken, ` +
+    `${counts.BADCASE ?? 0} bad case(s)`,
 );
+
+if (lossesByRule.length > 0) {
+  console.log("\n  terser rules we have not ported, worst first:\n");
+  for (const loss of lossesByRule.sort((l, r) => r.delta - l.delta)) {
+    console.log(`    +${String(loss.delta).padStart(4)} bytes  ${loss.rule.padEnd(24)} ${loss.name}`);
+  }
+}
+
+if (tiedTypeAware.length > 0) {
+  console.log("\n  type-aware cases where we only TIED — the type pass did not fire:\n");
+  for (const tie of tiedTypeAware) {
+    console.log(`    ${tie.rule.padEnd(34)} ${tie.name}`);
+  }
+}
+
+if (update) {
+  fs.mkdirSync(path.dirname(EXPECTED), { recursive: true });
+  fs.writeFileSync(EXPECTED, `${JSON.stringify(results, null, 2)}\n`);
+  console.log(`\n  wrote ${path.relative(ROOT, EXPECTED)}`);
+}
+
+fs.rmSync(WORK, { recursive: true, force: true });
+
+if ((counts.BADCASE ?? 0) > 0) {
+  console.error("\n  a case's own source does not run — fix the case, not the compiler");
+  process.exit(2);
+}
+if ((counts.BROKEN ?? 0) > 0) {
+  console.error("\n  mtsc produced a bundle that misbehaves — that is a correctness bug");
+  process.exit(1);
+}
+if (regressions > 0) {
+  console.error(`\n  ${regressions} regression(s) against ${path.relative(ROOT, EXPECTED)}`);
+  process.exit(1);
+}

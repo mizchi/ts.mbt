@@ -34,13 +34,50 @@
 /// Inline single-use const / let bindings throughout a block.
 /// Recurses into nested function bodies so the optimization runs
 /// inside every scope.
-pub fn inline_block(block : @ast.TsBlock) -> @ast.TsBlock {
+pub fn inline_block(
+  block : @ast.TsBlock,
+  // Names that must keep their declaration whatever their use count:
+  // the bundle's export surface. Inlining a single-use binding deletes
+  // its declaration, and for an exported name that leaves the `export`
+  // clause pointing at nothing —
+  //
+  //   export const r = 2 * 3 + 4 - 1;   ->   console.log(9);export{r}
+  //
+  // which is a SyntaxError, so the module does not load at all. The
+  // treeshake call below this one in `bundle.mbt` has taken export roots
+  // since a similar bug on hono; this pass never did.
+  keep? : Map[String, Bool] = {},
+) -> @ast.TsBlock {
+  inline_block_in(block, collect_trivial_fns(block), keep)
+}
+
+///|
+/// Descend into a block that is a NEW SCOPE, dropping from the
+/// trivial-function table every name that scope re-binds. See the
+/// "Scope narrowing" section of `call_inline.mbt` for why a table
+/// carried unchanged into a nested scope silently miscompiles mangled
+/// code. Every recursive descent goes through here; only the top-level
+/// entry point calls `inline_block_in` directly.
+fn inline_nested_block(
+  block : @ast.TsBlock,
+  tbl : Map[String, TrivialFn],
+  keep : Map[String, Bool],
+) -> @ast.TsBlock {
+  inline_block_in(block, narrow_for_block(tbl, block), keep)
+}
+
+///|
+fn inline_block_in(
+  block : @ast.TsBlock,
+  tbl : Map[String, TrivialFn],
+  keep : Map[String, Bool],
+) -> @ast.TsBlock {
   // First, recurse into nested blocks (function bodies, control
   // flow). That way the OUTER pass sees already-inlined inner
   // statements; the win compounds through wrapper functions.
   let stmts : Array[@ast.TsStmt] = []
   for s in block.stmts {
-    stmts.push(inline_into_stmt(s))
+    stmts.push(inline_into_stmt(s, tbl))
   }
   let positions = if block.stmt_positions.length() == block.stmts.length() {
     block.stmt_positions
@@ -88,11 +125,11 @@ pub fn inline_block(block : @ast.TsBlock) -> @ast.TsBlock {
   // need two passes — first to inline `a` into `b`, then to inline `b` into `use(b)`.
   // Each pass either reduces the statement count or makes no progress, so the loop
   // terminates in O(chain_length) iterations, typically 2–3.
-  let mut cur = inline_pass(flattened, flat_positions)
+  let mut cur = inline_pass(flattened, flat_positions, keep)
   let mut prev_len = flattened.length()
   while cur.stmts.length() < prev_len {
     prev_len = cur.stmts.length()
-    cur = inline_pass(cur.stmts, cur.stmt_positions)
+    cur = inline_pass(cur.stmts, cur.stmt_positions, keep)
   }
   cur
 }
@@ -129,86 +166,135 @@ fn is_multi_decl_block(block : @ast.TsBlock) -> Bool {
 
 ///|
 /// Recurse: rebuild a stmt with its nested blocks/exprs inlined.
-fn inline_into_stmt(stmt : @ast.TsStmt) -> @ast.TsStmt {
+fn inline_into_stmt(
+  stmt : @ast.TsStmt,
+  tbl : Map[String, TrivialFn],
+) -> @ast.TsStmt {
   match stmt {
-    Var(b, t, rhs) => Var(b, t, inline_into_expr(rhs))
-    Let(b, t, rhs) => Let(b, t, inline_into_expr(rhs))
-    Const(b, t, rhs) => Const(b, t, inline_into_expr(rhs))
-    Assign(n, rhs) => Assign(n, inline_into_expr(rhs))
-    CompoundAssign(n, op, rhs) => CompoundAssign(n, op, inline_into_expr(rhs))
+    Var(b, t, rhs) => Var(b, t, inline_into_expr(rhs, tbl))
+    Let(b, t, rhs) => Let(b, t, inline_into_expr(rhs, tbl))
+    Const(b, t, rhs) => Const(b, t, inline_into_expr(rhs, tbl))
+    Assign(n, rhs) => Assign(n, inline_into_expr(rhs, tbl))
+    CompoundAssign(n, op, rhs) =>
+      CompoundAssign(n, op, inline_into_expr(rhs, tbl))
     IndexAssign(target, idx, val) =>
       IndexAssign(
-        inline_into_expr(target),
-        inline_into_expr(idx),
-        inline_into_expr(val),
+        inline_into_expr(target, tbl),
+        inline_into_expr(idx, tbl),
+        inline_into_expr(val, tbl),
       )
     PropAssign(target, prop, val) =>
-      PropAssign(inline_into_expr(target), prop, inline_into_expr(val))
-    Expr(e) => Expr(inline_into_expr(e))
-    Return(Some(e)) => Return(Some(inline_into_expr(e)))
+      PropAssign(
+        inline_into_expr(target, tbl),
+        prop,
+        inline_into_expr(val, tbl),
+      )
+    Expr(e) => Expr(inline_into_expr(e, tbl))
+    Return(Some(e)) => Return(Some(inline_into_expr(e, tbl)))
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => stmt
-    Throw(e) => Throw(inline_into_expr(e))
+    Throw(e) => Throw(inline_into_expr(e, tbl))
     If(c, t, e) =>
       If(
-        inline_into_expr(c),
-        inline_block(t),
+        inline_into_expr(c, tbl),
+        inline_nested_block(t, tbl, {}),
         match e {
-          Some(b) => Some(inline_block(b))
+          Some(b) => Some(inline_nested_block(b, tbl, {}))
           None => None
         },
       )
-    While(c, body) => While(inline_into_expr(c), inline_block(body))
-    DoWhile(c, body) => DoWhile(inline_into_expr(c), inline_block(body))
-    With(c, body) => With(inline_into_expr(c), inline_block(body))
-    For(init, cond, update, body) =>
+    While(c, body) =>
+      While(inline_into_expr(c, tbl), inline_nested_block(body, tbl, {}))
+    DoWhile(c, body) =>
+      DoWhile(inline_into_expr(c, tbl), inline_nested_block(body, tbl, {}))
+    With(c, body) =>
+      With(inline_into_expr(c, tbl), inline_nested_block(body, tbl, {}))
+    For(init, cond, update, body) => {
+      // `for (let a = 0; …)` binds `a` for the head AND the body, and
+      // neither is the body block's own declaration list.
+      let inner = match init {
+        Some(s) => {
+          let names : Array[String] = []
+          collect_stmt_bound_names(s, names)
+          narrow_trivial_fns(tbl, names)
+        }
+        None => tbl
+      }
       For(
         match init {
-          Some(s) => Some(inline_into_stmt(s))
+          Some(s) => Some(inline_into_stmt(s, inner))
           None => None
         },
         match cond {
-          Some(e) => Some(inline_into_expr(e))
+          Some(e) => Some(inline_into_expr(e, inner))
           None => None
         },
         match update {
-          Some(s) => Some(inline_into_stmt(s))
+          Some(s) => Some(inline_into_stmt(s, inner))
           None => None
         },
-        inline_block(body),
+        inline_nested_block(body, inner, {}),
       )
+    }
+    // The loop variable is bound OUTSIDE the body block, so the body's
+    // own narrowing does not see it.
     ForOf(k, b, t, iter, body) =>
-      ForOf(k, b, t, inline_into_expr(iter), inline_block(body))
+      ForOf(
+        k,
+        b,
+        t,
+        inline_into_expr(iter, tbl),
+        inline_nested_block(body, narrow_for_binding(tbl, b), {}),
+      )
     ForAwaitOf(k, b, t, iter, body) =>
-      ForAwaitOf(k, b, t, inline_into_expr(iter), inline_block(body))
+      ForAwaitOf(
+        k,
+        b,
+        t,
+        inline_into_expr(iter, tbl),
+        inline_nested_block(body, narrow_for_binding(tbl, b), {}),
+      )
     ForIn(k, b, t, iter, body) =>
-      ForIn(k, b, t, inline_into_expr(iter), inline_block(body))
+      ForIn(
+        k,
+        b,
+        t,
+        inline_into_expr(iter, tbl),
+        inline_nested_block(body, narrow_for_binding(tbl, b), {}),
+      )
     Switch(e, cases) => {
       let new_cases : Array[@ast.TsSwitchCase] = []
       for c in cases {
         new_cases.push({
           test_expr: match c.test_expr {
-            Some(te) => Some(inline_into_expr(te))
+            Some(te) => Some(inline_into_expr(te, tbl))
             None => None
           },
-          body: inline_block(c.body),
+          body: inline_nested_block(c.body, tbl, {}),
         })
       }
-      Switch(inline_into_expr(e), new_cases)
+      Switch(inline_into_expr(e, tbl), new_cases)
     }
     Try(b, bnd, cb, fb) =>
       Try(
-        inline_block(b),
+        inline_nested_block(b, tbl, {}),
         bnd,
+        // The catch parameter is bound outside the catch block.
         match cb {
-          Some(blk) => Some(inline_block(blk))
+          Some(blk) => {
+            let inner = match bnd {
+              Some(bb) => narrow_for_binding(tbl, bb)
+              None => tbl
+            }
+            Some(inline_nested_block(blk, inner, {}))
+          }
           None => None
         },
         match fb {
-          Some(blk) => Some(inline_block(blk))
+          Some(blk) => Some(inline_nested_block(blk, tbl, {}))
           None => None
         },
       )
-    Label(name, inner) => Label(name, inline_into_stmt(inner))
+    Label(name, inner) => Label(name, inline_into_stmt(inner, tbl))
     Block(b) =>
       // The parser wraps `let a = 1, b = 2;` as
       // `Block({stmts:[Let(a, …), Let(b, …)]})` but emit unwraps
@@ -224,27 +310,34 @@ fn inline_into_stmt(stmt : @ast.TsStmt) -> @ast.TsStmt {
       if is_multi_decl_block(b) {
         Block(b)
       } else {
-        Block(inline_block(b))
+        Block(inline_nested_block(b, tbl, {}))
       }
     NativeClassStmt(decl, ctor) => {
       let new_ctor = match ctor {
-        Some(f) => Some({ ..f, body: inline_block(f.body) })
+        Some(f) =>
+          Some({
+            ..f,
+            body: inline_nested_block(f.body, narrow_for_func(tbl, f), {}),
+          })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
       for m in decl.methods {
         let new_body = match m.body {
-          Some(b) => Some(inline_block(b))
+          Some(b) =>
+            Some(
+              inline_nested_block(b, narrow_for_named_params(tbl, m.params), {}),
+            )
           None => None
         }
         new_methods.push({ ..m, body: new_body })
       }
       let new_static_fields : Array[(String, @ast.TsExpr)] = []
       for sf in decl.static_field_inits {
-        new_static_fields.push((sf.0, inline_into_expr(sf.1)))
+        new_static_fields.push((sf.0, inline_into_expr(sf.1, tbl)))
       }
       let new_base_expr = match decl.base_expr {
-        Some(b) => Some(inline_into_expr(b))
+        Some(b) => Some(inline_into_expr(b, tbl))
         None => None
       }
       NativeClassStmt(
@@ -261,137 +354,165 @@ fn inline_into_stmt(stmt : @ast.TsStmt) -> @ast.TsStmt {
 }
 
 ///|
-fn inline_into_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
+fn inline_into_expr(
+  expr : @ast.TsExpr,
+  tbl : Map[String, TrivialFn],
+) -> @ast.TsExpr {
+  // terser's `inline` rule, hosted on this walker because it already
+  // visits every expression and runs at the right point in the pipeline:
+  // before `fold-2` (so a substituted `2 + 1` still collapses to `3`)
+  // and before `treeshake-2` (so a function whose last call was inlined
+  // is then removed). See `call_inline.mbt` for what qualifies.
+  match try_inline_trivial_call(expr, tbl) {
+    Some(replacement) => return inline_into_expr(replacement, tbl)
+    None => ()
+  }
   match expr {
     FuncExpr(f) => {
-      let new_body = inline_block(f.body)
+      let inner = narrow_for_func(tbl, f)
+      let new_body = inline_nested_block(f.body, inner, {})
       FuncExpr({ ..f, body: new_body })
     }
     ArrowFunc(params, ret, body, is_async) => {
+      let inner = narrow_for_params(tbl, params)
       let new_body = match body {
-        ArrowExpr(e) => @ast.TsArrowBody::ArrowExpr(inline_into_expr(e))
-        ArrowBlock(b) => @ast.TsArrowBody::ArrowBlock(inline_block(b))
+        ArrowExpr(e) => @ast.TsArrowBody::ArrowExpr(inline_into_expr(e, inner))
+        ArrowBlock(b) =>
+          @ast.TsArrowBody::ArrowBlock(inline_nested_block(b, inner, {}))
       }
       ArrowFunc(params, ret, new_body, is_async)
     }
-    BinOp(op, l, r) => BinOp(op, inline_into_expr(l), inline_into_expr(r))
-    UnaryOp(op, inner) => UnaryOp(op, inline_into_expr(inner))
+    BinOp(op, l, r) =>
+      BinOp(op, inline_into_expr(l, tbl), inline_into_expr(r, tbl))
+    UnaryOp(op, inner) => UnaryOp(op, inline_into_expr(inner, tbl))
     Cond(c, t, e) =>
-      Cond(inline_into_expr(c), inline_into_expr(t), inline_into_expr(e))
+      Cond(
+        inline_into_expr(c, tbl),
+        inline_into_expr(t, tbl),
+        inline_into_expr(e, tbl),
+      )
     Call(name, args) => {
       let new_args : Array[@ast.TsExpr] = []
       for a in args {
-        new_args.push(inline_into_expr(a))
+        new_args.push(inline_into_expr(a, tbl))
       }
       Call(name, new_args)
     }
     CallExpr(callee, args) => {
       let new_args : Array[@ast.TsExpr] = []
       for a in args {
-        new_args.push(inline_into_expr(a))
+        new_args.push(inline_into_expr(a, tbl))
       }
-      CallExpr(inline_into_expr(callee), new_args)
+      CallExpr(inline_into_expr(callee, tbl), new_args)
     }
     New(name, args) => {
       let new_args : Array[@ast.TsExpr] = []
       for a in args {
-        new_args.push(inline_into_expr(a))
+        new_args.push(inline_into_expr(a, tbl))
       }
       New(name, new_args)
     }
     NewExpr(callee, args) => {
       let new_args : Array[@ast.TsExpr] = []
       for a in args {
-        new_args.push(inline_into_expr(a))
+        new_args.push(inline_into_expr(a, tbl))
       }
-      NewExpr(inline_into_expr(callee), new_args)
+      NewExpr(inline_into_expr(callee, tbl), new_args)
     }
     MethodCall(recv, m, args) => {
       let new_args : Array[@ast.TsExpr] = []
       for a in args {
-        new_args.push(inline_into_expr(a))
+        new_args.push(inline_into_expr(a, tbl))
       }
-      MethodCall(inline_into_expr(recv), m, new_args)
+      MethodCall(inline_into_expr(recv, tbl), m, new_args)
     }
-    PropAccess(recv, p) => PropAccess(inline_into_expr(recv), p)
+    PropAccess(recv, p) => PropAccess(inline_into_expr(recv, tbl), p)
     IndexAccess(recv, idx) =>
-      IndexAccess(inline_into_expr(recv), inline_into_expr(idx))
+      IndexAccess(inline_into_expr(recv, tbl), inline_into_expr(idx, tbl))
     ArrayLit(items) => {
       let new_items : Array[@ast.TsExpr] = []
       for i in items {
-        new_items.push(inline_into_expr(i))
+        new_items.push(inline_into_expr(i, tbl))
       }
       ArrayLit(new_items)
     }
     ObjectLit(entries) => {
       let new_entries : Array[(String, @ast.TsExpr)] = []
       for ent in entries {
-        new_entries.push((ent.0, inline_into_expr(ent.1)))
+        new_entries.push((ent.0, inline_into_expr(ent.1, tbl)))
       }
       ObjectLit(new_entries)
     }
-    ComputedProp(k, v) => ComputedProp(inline_into_expr(k), inline_into_expr(v))
-    Spread(inner) => Spread(inline_into_expr(inner))
-    Yield(Some(inner)) => Yield(Some(inline_into_expr(inner)))
-    YieldStar(inner) => YieldStar(inline_into_expr(inner))
-    Await(inner) => Await(inline_into_expr(inner))
-    Seq(a, b) => Seq(inline_into_expr(a), inline_into_expr(b))
-    AssignExpr(n, v) => AssignExpr(n, inline_into_expr(v))
+    ComputedProp(k, v) =>
+      ComputedProp(inline_into_expr(k, tbl), inline_into_expr(v, tbl))
+    Spread(inner) => Spread(inline_into_expr(inner, tbl))
+    Yield(Some(inner)) => Yield(Some(inline_into_expr(inner, tbl)))
+    YieldStar(inner) => YieldStar(inline_into_expr(inner, tbl))
+    Await(inner) => Await(inline_into_expr(inner, tbl))
+    Seq(a, b) => Seq(inline_into_expr(a, tbl), inline_into_expr(b, tbl))
+    AssignExpr(n, v) => AssignExpr(n, inline_into_expr(v, tbl))
     CompoundAssignExpr(t, op, v) =>
-      CompoundAssignExpr(inline_into_expr(t), op, inline_into_expr(v))
-    AssignPattern(b, v) => AssignPattern(b, inline_into_expr(v))
+      CompoundAssignExpr(inline_into_expr(t, tbl), op, inline_into_expr(v, tbl))
+    AssignPattern(b, v) => AssignPattern(b, inline_into_expr(v, tbl))
     PropAssignExpr(recv, p, v) =>
-      PropAssignExpr(inline_into_expr(recv), p, inline_into_expr(v))
+      PropAssignExpr(inline_into_expr(recv, tbl), p, inline_into_expr(v, tbl))
     IndexAssignExpr(recv, idx, v) =>
       IndexAssignExpr(
-        inline_into_expr(recv),
-        inline_into_expr(idx),
-        inline_into_expr(v),
+        inline_into_expr(recv, tbl),
+        inline_into_expr(idx, tbl),
+        inline_into_expr(v, tbl),
       )
     DynamicImport(spec, opts) => {
       let opts_f = match opts {
-        Some(o) => Some(inline_into_expr(o))
+        Some(o) => Some(inline_into_expr(o, tbl))
         None => None
       }
-      DynamicImport(inline_into_expr(spec), opts_f)
+      DynamicImport(inline_into_expr(spec, tbl), opts_f)
     }
     TaggedTemplate(tag, raw, cooked, exprs) => {
       let new_exprs : Array[@ast.TsExpr] = []
       for e in exprs {
-        new_exprs.push(inline_into_expr(e))
+        new_exprs.push(inline_into_expr(e, tbl))
       }
-      TaggedTemplate(inline_into_expr(tag), raw, cooked, new_exprs)
+      TaggedTemplate(inline_into_expr(tag, tbl), raw, cooked, new_exprs)
     }
     TemplateLiteral(parts, exprs) => {
       let new_exprs : Array[@ast.TsExpr] = []
       for e in exprs {
-        new_exprs.push(inline_into_expr(e))
+        new_exprs.push(inline_into_expr(e, tbl))
       }
       TemplateLiteral(parts, new_exprs)
     }
-    As(inner, ty) => As(inline_into_expr(inner), ty)
-    Satisfies(inner, ty) => Satisfies(inline_into_expr(inner), ty)
-    NonNull(inner) => NonNull(inline_into_expr(inner))
-    OptionalChain(inner) => OptionalChain(inline_into_expr(inner))
+    As(inner, ty) => As(inline_into_expr(inner, tbl), ty)
+    Satisfies(inner, ty) => Satisfies(inline_into_expr(inner, tbl), ty)
+    NonNull(inner) => NonNull(inline_into_expr(inner, tbl))
+    OptionalChain(inner) => OptionalChain(inline_into_expr(inner, tbl))
     NativeClassExpr(decl, ctor) => {
       let new_ctor = match ctor {
-        Some(f) => Some({ ..f, body: inline_block(f.body) })
+        Some(f) =>
+          Some({
+            ..f,
+            body: inline_nested_block(f.body, narrow_for_func(tbl, f), {}),
+          })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
       for m in decl.methods {
         let new_body = match m.body {
-          Some(b) => Some(inline_block(b))
+          Some(b) =>
+            Some(
+              inline_nested_block(b, narrow_for_named_params(tbl, m.params), {}),
+            )
           None => None
         }
         new_methods.push({ ..m, body: new_body })
       }
       let new_static_fields : Array[(String, @ast.TsExpr)] = []
       for sf in decl.static_field_inits {
-        new_static_fields.push((sf.0, inline_into_expr(sf.1)))
+        new_static_fields.push((sf.0, inline_into_expr(sf.1, tbl)))
       }
       let new_base_expr = match decl.base_expr {
-        Some(b) => Some(inline_into_expr(b))
+        Some(b) => Some(inline_into_expr(b, tbl))
         None => None
       }
       NativeClassExpr(
@@ -415,6 +536,7 @@ fn inline_into_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
 fn inline_pass(
   input : Array[@ast.TsStmt],
   input_positions : Array[Int],
+  keep : Map[String, Bool],
 ) -> @ast.TsBlock {
   // Reassignment / closure-capture tracking is per-scope, so we
   // collect once over the entire block. A single name reassigned
@@ -435,7 +557,7 @@ fn inline_pass(
     let candidate = match stmt {
       Let(@ast.TsBinding::Ident(name), _, rhs)
       | Const(@ast.TsBinding::Ident(name), _, rhs) =>
-        if try_inline(name, rhs, input, i, reassigned, captured) {
+        if try_inline(name, rhs, input, i, reassigned, captured, keep) {
           Some(name)
         } else {
           None
@@ -479,7 +601,13 @@ fn try_inline(
   i : Int,
   reassigned : Map[String, Bool],
   captured : Map[String, Bool],
+  keep : Map[String, Bool],
 ) -> Bool {
+  // An exported name's declaration has to stay: the `export` clause
+  // names the binding, and inlining removes it.
+  if keep.contains(name) {
+    return false
+  }
   // Reassignment / closure capture of the binding itself.
   if reassigned.contains(name) || captured.contains(name) {
     return false

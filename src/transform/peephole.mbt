@@ -110,7 +110,10 @@
 /// Apply peephole rewrites across a block. Returns a fresh block.
 pub fn peephole_block(block : @ast.TsBlock) -> @ast.TsBlock {
   let shadowed = block_binds_undefined(block)
-  let ctx : PeepCtx = { undefined_shadowed: shadowed }
+  let ctx : PeepCtx = {
+    undefined_shadowed: shadowed,
+    undeclared: undeclared_referenced_names(block),
+  }
   let stmts : Array[@ast.TsStmt] = []
   let positions : Array[Int] = []
   // Positions are tracked per surviving statement rather than carried
@@ -143,6 +146,11 @@ pub fn peephole_block(block : @ast.TsBlock) -> @ast.TsBlock {
 ///|
 priv struct PeepCtx {
   undefined_shadowed : Bool
+  // Names the block references but never declares — host globals, in
+  // other words. `typeof x === "undefined"` is TRUE for an undeclared
+  // `x`, while `void 0 === x` THROWS, so that rewrite is only sound for
+  // a name this bundle declares. Anything absent from here is declared.
+  undeclared : Map[String, Bool]
 }
 
 ///|
@@ -438,7 +446,15 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
           inner
         _ => cp_raw
       }
-      While(cp, peep_block(body, ctx))
+      // terser's `loops`: `for(;;)` is shorter than any spelling of an
+      // always-true `while` condition, and `while (!0)` is what the
+      // BoolLit rewrite above turns `while (true)` into.
+      let body_p = peep_block(body, ctx)
+      if expr_is_always_truthy(cp) {
+        For(None, None, None, body_p)
+      } else {
+        While(cp, body_p)
+      }
     }
     DoWhile(c, body) => DoWhile(peep_expr(c, ctx), peep_block(body, ctx))
     With(c, body) => With(peep_expr(c, ctx), peep_block(body, ctx))
@@ -833,14 +849,18 @@ fn expr_uses_this(e : @ast.TsExpr) -> Bool {
     MethodCall(recv, _, args) =>
       expr_uses_this(recv) || args.iter().any(expr_uses_this)
     AssignExpr(_, v) => expr_uses_this(v)
-    AssignPattern(_, v) => expr_uses_this(v)
+    AssignPattern(b, v) =>
+      binding_subexprs(b).iter().any(expr_uses_this) || expr_uses_this(v)
     CompoundAssignExpr(a, _, b) => expr_uses_this(a) || expr_uses_this(b)
     PropAssignExpr(a, _, b) => expr_uses_this(a) || expr_uses_this(b)
     IndexAssignExpr(a, b, c) =>
       expr_uses_this(a) || expr_uses_this(b) || expr_uses_this(c)
     Seq(a, b) => expr_uses_this(a) || expr_uses_this(b)
-    // Arrow functions share `this` with their enclosing context — recurse.
-    ArrowFunc(_, _, body, _) => arrow_body_uses_this(body)
+    // Arrow functions share `this` with their enclosing context — recurse,
+    // parameter defaults included.
+    ArrowFunc(params, _, body, _) =>
+      param_subexprs(params).iter().any(expr_uses_this) ||
+      arrow_body_uses_this(body)
     // Regular functions and classes introduce their own `this` — don't descend.
     FuncExpr(_) | NativeClassExpr(_, _) => false
     PureCall(inner) => expr_uses_this(inner)
@@ -867,9 +887,10 @@ fn stmt_uses_this(s : @ast.TsStmt) -> Bool {
     @ast.TsStmt::Expr(e) => expr_uses_this(e)
     @ast.TsStmt::Return(Some(e)) => expr_uses_this(e)
     @ast.TsStmt::Return(None) => false
-    @ast.TsStmt::Var(_, _, e)
-    | @ast.TsStmt::Let(_, _, e)
-    | @ast.TsStmt::Const(_, _, e) => expr_uses_this(e)
+    @ast.TsStmt::Var(b, _, e)
+    | @ast.TsStmt::Let(b, _, e)
+    | @ast.TsStmt::Const(b, _, e) =>
+      binding_subexprs(b).iter().any(expr_uses_this) || expr_uses_this(e)
     @ast.TsStmt::Assign(_, e) => expr_uses_this(e)
     @ast.TsStmt::CompoundAssign(_, _, e) => expr_uses_this(e)
     @ast.TsStmt::If(c, t, e) =>
@@ -883,16 +904,19 @@ fn stmt_uses_this(s : @ast.TsStmt) -> Bool {
       cond.map_or(false, expr_uses_this) ||
       update.map_or(false, stmt_uses_this) ||
       block_uses_this(body)
-    @ast.TsStmt::ForOf(_, _, _, iter, body) =>
-      expr_uses_this(iter) || block_uses_this(body)
-    @ast.TsStmt::ForAwaitOf(_, _, _, iter, body) =>
-      expr_uses_this(iter) || block_uses_this(body)
-    @ast.TsStmt::ForIn(_, _, _, iter, body) =>
-      expr_uses_this(iter) || block_uses_this(body)
+    @ast.TsStmt::ForOf(_, b, _, iter, body)
+    | @ast.TsStmt::ForAwaitOf(_, b, _, iter, body)
+    | @ast.TsStmt::ForIn(_, b, _, iter, body) =>
+      binding_subexprs(b).iter().any(expr_uses_this) ||
+      expr_uses_this(iter) ||
+      block_uses_this(body)
     @ast.TsStmt::Block(b) => block_uses_this(b)
     @ast.TsStmt::Throw(e) => expr_uses_this(e)
-    @ast.TsStmt::Try(b, _, cb, fb) =>
+    @ast.TsStmt::Try(b, catch_b, cb, fb) =>
       block_uses_this(b) ||
+      catch_b.map_or(false, fn(cbind) {
+        binding_subexprs(cbind).iter().any(expr_uses_this)
+      }) ||
       cb.map_or(false, block_uses_this) ||
       fb.map_or(false, block_uses_this)
     @ast.TsStmt::Switch(e, cases) =>
@@ -929,18 +953,21 @@ fn expr_uses_super(e : @ast.TsExpr) -> Bool {
     MethodCall(recv, _, args) =>
       expr_uses_super(recv) || args.iter().any(expr_uses_super)
     AssignExpr(_, v) => expr_uses_super(v)
-    AssignPattern(_, v) => expr_uses_super(v)
+    AssignPattern(b, v) =>
+      binding_subexprs(b).iter().any(expr_uses_super) || expr_uses_super(v)
     CompoundAssignExpr(a, _, b) => expr_uses_super(a) || expr_uses_super(b)
     PropAssignExpr(a, _, b) => expr_uses_super(a) || expr_uses_super(b)
     IndexAssignExpr(a, b, c) =>
       expr_uses_super(a) || expr_uses_super(b) || expr_uses_super(c)
     Seq(a, b) => expr_uses_super(a) || expr_uses_super(b)
-    // Arrow functions DO share super with their enclosing context
-    ArrowFunc(_, _, body, _) =>
-      match body {
+    // Arrow functions DO share super with their enclosing context —
+    // parameter defaults included.
+    ArrowFunc(params, _, body, _) =>
+      param_subexprs(params).iter().any(expr_uses_super) ||
+      (match body {
         @ast.TsArrowBody::ArrowExpr(inner) => expr_uses_super(inner)
         @ast.TsArrowBody::ArrowBlock(blk) => block_uses_super(blk)
-      }
+      })
     // Regular function expressions and class expressions introduce their own
     // super binding — do NOT descend into them.
     FuncExpr(_) | NativeClassExpr(_, _) => false
@@ -969,7 +996,8 @@ fn stmt_uses_super(s : @ast.TsStmt) -> Bool {
     Expr(e) => expr_uses_super(e)
     Return(Some(e)) => expr_uses_super(e)
     Throw(e) => expr_uses_super(e)
-    Let(_, _, e) | Const(_, _, e) | Var(_, _, e) => expr_uses_super(e)
+    Let(bd, _, e) | Const(bd, _, e) | Var(bd, _, e) =>
+      binding_subexprs(bd).iter().any(expr_uses_super) || expr_uses_super(e)
     Assign(_, e) => expr_uses_super(e)
     CompoundAssign(_, _, e) => expr_uses_super(e)
     IndexAssign(a, b, c) =>
@@ -985,12 +1013,17 @@ fn stmt_uses_super(s : @ast.TsStmt) -> Bool {
       cond.map_or(false, expr_uses_super) ||
       update.map_or(false, stmt_uses_super) ||
       block_uses_super(body)
-    ForOf(_, _, _, iter, body) | ForIn(_, _, _, iter, body) =>
-      expr_uses_super(iter) || block_uses_super(body)
-    ForAwaitOf(_, _, _, iter, body) =>
-      expr_uses_super(iter) || block_uses_super(body)
-    Try(b, _, catch_b, finally_b) =>
+    ForOf(_, bd, _, iter, body)
+    | ForIn(_, bd, _, iter, body)
+    | ForAwaitOf(_, bd, _, iter, body) =>
+      binding_subexprs(bd).iter().any(expr_uses_super) ||
+      expr_uses_super(iter) ||
+      block_uses_super(body)
+    Try(b, cbind, catch_b, finally_b) =>
       block_uses_super(b) ||
+      cbind.map_or(false, fn(bd) {
+        binding_subexprs(bd).iter().any(expr_uses_super)
+      }) ||
       catch_b.map_or(false, block_uses_super) ||
       finally_b.map_or(false, block_uses_super)
     Switch(e, cases) =>
@@ -1071,7 +1104,98 @@ fn peep_decl_rhs(
 /// top-level entry) and `peep_block` (every nested block) each run their
 /// own loop, and while these two rules lived only in the second one,
 /// nothing at the top level of a module was rewritten at all.
+/// An object-literal entry whose computed key is a plain string literal
+/// naming a valid identifier, as `(key, value)`. The parser stores such
+/// an entry under the `@@computed:N` sentinel with the key expression on
+/// a `ComputedProp` wrapper.
+fn computed_prop_literal_key(
+  entry : (String, @ast.TsExpr),
+) -> (String, @ast.TsExpr)? {
+  if !entry.0.has_prefix("@@computed:") {
+    return None
+  }
+  match entry.1 {
+    @ast.TsExpr::ComputedProp(@ast.TsExpr::StringLit(key), value) =>
+      // `__proto__` is the one valid identifier this rewrite must not
+      // produce: `{ ["__proto__"]: v }` defines an ordinary own
+      // property, while `{ __proto__: v }` SETS THE PROTOTYPE. The two
+      // spellings look interchangeable and are not.
+      if is_valid_js_ident(key) && key != "__proto__" {
+        Some((key, value))
+      } else {
+        None
+      }
+    _ => None
+  }
+}
+
+///|
+/// Recognise `typeof x === "undefined"` and its three siblings, for a
+/// simple named operand. Returns the name and whether the comparison was
+/// negated (`!==` / `!=`).
+///
+/// Both operand orders are accepted: `"undefined" === typeof x` is the
+/// same test written the other way round, and real code has both.
+fn typeof_undefined_operand(expr : @ast.TsExpr) -> (String, Bool)? {
+  let (op, left, right) = match expr {
+    BinOp(op, l, r) => (op, l, r)
+    _ => return None
+  }
+  let negated = match op {
+    BinEq | AbstractEq => false
+    BinNe | AbstractNe => true
+    _ => return None
+  }
+  fn name_of(e : @ast.TsExpr) -> String? {
+    match e {
+      UnaryOp(@ast.TsUnaryOp::Typeof, @ast.TsExpr::Var(n)) => Some(n)
+      _ => None
+    }
+  }
+
+  fn is_undefined_string(e : @ast.TsExpr) -> Bool {
+    e is StringLit("undefined")
+  }
+
+  if is_undefined_string(right) {
+    match name_of(left) {
+      Some(n) => return Some((n, negated))
+      None => ()
+    }
+  }
+  if is_undefined_string(left) {
+    match name_of(right) {
+      Some(n) => return Some((n, negated))
+      None => ()
+    }
+  }
+  None
+}
+
+///|
+/// Is this condition true every time it is evaluated? Only the literal
+/// spellings — anything requiring evaluation is not this function's
+/// business.
+fn expr_is_always_truthy(expr : @ast.TsExpr) -> Bool {
+  match expr {
+    BoolLit(true) => true
+    // `!0`, which is what the BoolLit rewrite emits for `true`.
+    UnaryOp(@ast.TsUnaryOp::Not, IntLit(0)) => true
+    IntLit(n) => n != 0
+    NumberLit(n) => n != 0.0 && n == n
+    StringLit(s) => s != ""
+    _ => false
+  }
+}
+
+///|
 fn peep_block_level(stmt : @ast.TsStmt) -> @ast.TsStmt? {
+  // terser's `drop_debugger`, which is on by default there too. A
+  // `debugger` statement is a development aid; nothing in a minified
+  // bundle wants to break into a debugger at that point.
+  if stmt is Debugger {
+    return None
+  }
   // An empty block is two bytes of nothing. It has no statements to
   // scope, so unlike a declarator group there is nothing its braces
   // could be holding.
@@ -1455,6 +1579,27 @@ fn stmt_is_hoisted_function(s : @ast.TsStmt) -> Bool {
 
 ///|
 fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
+  // terser's `typeofs`: `typeof x === "undefined"` -> `void 0 === x`,
+  // eleven bytes, and it appears in guard code everywhere.
+  //
+  // The two are NOT interchangeable in general: `typeof x` is `"undefined"`
+  // for an UNDECLARED `x`, while `void 0 === x` throws a ReferenceError.
+  // So the rewrite is gated on `x` being a name this bundle declares —
+  // `ctx.undeclared` holds the ones it does not, which are the host
+  // globals a feature test would be probing for. That is exactly the
+  // case that must keep `typeof`.
+  match typeof_undefined_operand(expr) {
+    Some((name, negated)) =>
+      if !ctx.undeclared.contains(name) {
+        let cmp = if negated {
+          @ast.TsBinOp::BinNe
+        } else {
+          @ast.TsBinOp::BinEq
+        }
+        return BinOp(cmp, UnaryOp(@ast.TsUnaryOp::Void, IntLit(0)), Var(name))
+      }
+    None => ()
+  }
   match expr {
     BoolLit(b) =>
       // `true` → `!0` (2 bytes saved), `false` → `!1` (3 bytes saved).
@@ -2168,6 +2313,21 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       }
       ArrayLit(new_items)
     }
+    // terser's `computed_props`: a computed key that is a string
+    // literal is just that key. `{ ["a"]: 1 }` -> `{ a: 1 }`, four
+    // bytes, and it is what a spread-and-rename codemod leaves behind.
+    ObjectLit(entries) if entries
+      .iter()
+      .any(fn(ent) { computed_prop_literal_key(ent) is Some(_) }) => {
+      let rebuilt : Array[(String, @ast.TsExpr)] = []
+      for ent in entries {
+        match computed_prop_literal_key(ent) {
+          Some((key, value)) => rebuilt.push((key, peep_expr(value, ctx)))
+          None => rebuilt.push((ent.0, peep_expr(ent.1, ctx)))
+        }
+      }
+      ObjectLit(rebuilt)
+    }
     ObjectLit(entries) => {
       let new_entries : Array[(String, @ast.TsExpr)] = []
       for ent in entries {
@@ -2311,11 +2471,17 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       // `try_emit_function_decl` from emitting a real function declaration
       // and break forward references.  Also guard against empty-body
       // functions used as constructor bases (arrows lack `.prototype`).
+      // Parameter defaults are evaluated in the callee's scope, so
+      // `function (x = this.y) {}` reads the callee's `this` just as a
+      // body reference would.
+      let param_exprs = param_subexprs(f.params)
       let can_arrow = !f.is_generator &&
         f.name == "" &&
         !folded.stmts.is_empty() &&
         !block_references_name(folded, "this") &&
-        !block_references_name(folded, "arguments")
+        !block_references_name(folded, "arguments") &&
+        !param_exprs.iter().any(fn(e) { expr_references_name(e, "this") }) &&
+        !param_exprs.iter().any(fn(e) { expr_references_name(e, "arguments") })
       if can_arrow {
         let arrow_body = match folded.stmts {
           [Return(Some(inner))] => @ast.TsArrowBody::ArrowExpr(inner)

@@ -1655,3 +1655,126 @@ test "peephole: an ordinary tail declaration still folds" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+// ---------------------------------------------------------------
+// `this` hidden inside a binding pattern
+// ---------------------------------------------------------------
+//
+// The `function` -> arrow conversion is only sound when the body cannot
+// observe the callee's `this`. Three separate walkers answered that
+// question by reading a declaration's INITIALIZER and never its binding
+// pattern, so a `this` reachable only from a destructuring default was
+// invisible. `TypeScript`'s own `Version.prototype.with` is written
+// exactly that way, and the minified compiler threw
+// `Cannot read properties of undefined (reading 'major')` on it.
+//
+// These go through `bundle_modules` rather than `peephole_block`,
+// because the conversion is gated on `f.name == ""` and the parser
+// names an anonymous function expression `<anon>`. Only the mangler
+// clears that, so the rule fires exactly once per pipeline — on the
+// post-mangle peephole pass — and a test that calls `peephole_block`
+// on parsed source passes no matter which way the gate is wired.
+
+///|
+fn bundle_min_mangled(src : String) -> String raise {
+  let files : Map[String, String] = { "entry.js": src }
+  let opts = BundleOptions::default().with_minify(true).with_mangle(true)
+  match bundle_modules(files, "entry.js", opts) {
+    Ok(out) => out.js
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "peephole: `this` in a destructuring default blocks the arrow conversion" {
+  let out = bundle_min_mangled(
+    (
+      #|export const obj = {};
+      #|obj.m = function (o) {
+      #|  let { major: v = this.major } = o;
+      #|  return v;
+      #|};
+      #|
+    ),
+  )
+  assert_false(out.contains("=>"), msg="converted anyway: \{out}")
+}
+
+///|
+test "peephole: `this` in a computed binding key blocks the arrow conversion" {
+  let out = bundle_min_mangled(
+    (
+      #|export const obj = {};
+      #|obj.m = function (o) {
+      #|  let { [this.k]: v } = o;
+      #|  return v;
+      #|};
+      #|
+    ),
+  )
+  assert_false(out.contains("=>"), msg="converted anyway: \{out}")
+}
+
+///|
+test "peephole: `this` in a parameter default blocks the arrow conversion" {
+  let out = bundle_min_mangled(
+    (
+      #|export const obj = {};
+      #|obj.m = function (x = this.y) {
+      #|  return x;
+      #|};
+      #|
+    ),
+  )
+  assert_false(out.contains("=>"), msg="converted anyway: \{out}")
+}
+
+///|
+test "peephole: `this` in a for-of binding default blocks the arrow conversion" {
+  let out = bundle_min_mangled(
+    (
+      #|export const obj = {};
+      #|obj.m = function (rows) {
+      #|  let n = 0;
+      #|  for (const { v = this.base } of rows) n += v;
+      #|  return n;
+      #|};
+      #|
+    ),
+  )
+  assert_false(out.contains("=>"), msg="converted anyway: \{out}")
+}
+
+///|
+test "peephole: a `this`-free destructuring body still becomes an arrow" {
+  // The gate has to stay a gate, not a blanket refusal: nothing here
+  // reads `this`, so the conversion should still happen. Without this
+  // case the four above would also pass on a rule that never fires.
+  let out = bundle_min_mangled(
+    (
+      #|export const obj = {};
+      #|obj.m = function (o) {
+      #|  let { major: v = 0 } = o;
+      #|  return v;
+      #|};
+      #|
+    ),
+  )
+  assert_true(out.contains("=>"), msg="no conversion at all: \{out}")
+}
+
+///|
+test "peephole: a computed `__proto__` key is not folded to a plain one" {
+  // `{ ["__proto__"]: v }` defines an own property; `{ __proto__: v }`
+  // sets the prototype. The rewrite is a byte saving for every other
+  // valid identifier and a semantic change for this one.
+  let out = minify_one("const o = { [\"__proto__\"]: base, x: 1 };\n")
+  assert_true(out.contains("[\"__proto__\"]"), msg="folded: \{out}")
+}
+
+///|
+test "peephole: a computed string key that is an identifier is folded" {
+  let out = minify_one("const o = { [\"count\"]: 1 };\n")
+  assert_true(out.contains("count:1"), msg="not folded: \{out}")
+  assert_false(out.contains("[\"count\"]"), msg="not folded: \{out}")
+}

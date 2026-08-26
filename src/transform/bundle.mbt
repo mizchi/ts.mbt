@@ -979,11 +979,25 @@ pub fn bundle_modules(
       mangle_export_renames = mangle_renames
     }
     if opts.minify {
+      // The export surface, under whatever names it goes by HERE. The
+      // mangler has already run at this point and renames the top level
+      // freely, so `export_roots` (what the source called them) matches
+      // nothing — the same trap the treeshake call below documents.
+      let live_roots : Map[String, Bool] = {}
+      for name in export_roots.keys() {
+        live_roots[mangle_export_renames.get(name).unwrap_or(name)] = true
+      }
       // Inline runs before peephole so `const X = expr; return X`
       // shapes collapse before the peephole pass sees them. Gated
       // on `minify` since the inlining produces deeply nested
       // expressions that are unpleasant in pretty mode.
-      combined = timer.phase("inline", () => inline_block(combined))
+      //
+      // `keep` is the export surface: inlining a single-use binding
+      // deletes its declaration, and for an exported name that leaves
+      // `export { r }` naming nothing, which is a SyntaxError.
+      combined = timer.phase("inline", () => {
+        inline_block(combined, keep=live_roots)
+      })
       // Second fold pass: inlining can expose new constant-foldable
       // expressions (e.g. `const N = 3; arr[N]` → `arr[3]` → element
       // access on a literal array). Run fold again before peephole so
@@ -1004,10 +1018,6 @@ pub fn bundle_modules(
         // and only with `--mangle --treeshake --fold` together, which
         // is why nothing simpler caught it.
         if opts.treeshake {
-          let live_roots : Map[String, Bool] = {}
-          for name in export_roots.keys() {
-            live_roots[mangle_export_renames.get(name).unwrap_or(name)] = true
-          }
           combined = timer.phase("treeshake-2", () => {
             treeshake_block(combined, roots=live_roots, pure_calls=proven_pure)
           })

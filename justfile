@@ -153,6 +153,21 @@ verify-dce-coverage *ARGS:
     moon build --target native
     node scripts/verify_dce_coverage.mjs {{ ARGS }}
 
+# Compare against terser on the same input. Both optimizers start from
+# `mtsc --bundle --no-check` plain JS, so what is measured is optimizer
+# quality rather than TypeScript parsing. Two groups: `terser-rule` cases
+# each aimed at one of terser's compress options, and `type-aware` cases
+# terser cannot win because the saving needs the type system. A LOSS in
+# the second group is a bug; a LOSS in the first is a rule we have not
+# ported yet, and the report ranks them by bytes.
+#
+#   just compare-terser
+#   just compare-terser --only inline --verbose
+#   just compare-terser --update           # re-record expected.json
+compare-terser *ARGS:
+    moon build --target native --release
+    node scripts/compare_terser.mjs {{ ARGS }}
+
 # Fuzz the property mangler: generate programs nobody wrote, compile each
 # with and without mangling, run both, compare. A difference is a mangler
 # false positive by construction. Failing programs are shrunk
