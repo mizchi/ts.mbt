@@ -87,7 +87,7 @@ valibot と immer では実質ゼロ、typebox では**マイナス**です。
 | neverthrow | measured | 元 BLOCKED。export-surface の memo で 420s 未完 → 1 秒未満 |
 | ts-pattern | measured | 元 BLOCKED。同上。ただし `P` が bundle に無い（下記）|
 | zod | measured | 元 BLOCKED。4 件の修正を経て挙動検証まで到達（+1,096 bytes / +0.61% の WIN）|
-| superstruct | **BROKEN** | 元 BLOCKED。同上 → 15ms。ただし挙動が変わる（下記）|
+| superstruct | measured | 元 BLOCKED → 15ms、さらに元 BROKEN → 挙動一致（下記の `.name` reserve）|
 | typebox | size-only | `TTypeArray` は解消。今は別件の TDZ で throw: `IntegerKey` の宣言が使用より後に並ぶ |
 | immer | size-only | bundle が load で throw: module 跨ぎの `const enum ArchType` が emit も inline もされない |
 | remeda | BLOCKED | `setPath.ts` の parse error: `Expected Semicolon, got Extends` |
@@ -235,31 +235,76 @@ export { Pattern, Pattern as P };
 driver は bundle が実際に出している export の範囲に留めてあり
 （`P` を使わない）、この件は独立した bug として残しています。
 
-### corpus が見つけた実挙動の差: class 名が観測される
+### 直したもの 5: class 名が観測される（corpus が見つけた実挙動の差）
 
-superstruct は **BROKEN** を報告します。corpus が実 package で見つけた
-最初の挙動差なので、行は赤のまま残してあります。
+superstruct が **BROKEN** でした。`error.ts:44` の
+`this.name = this.constructor.name` に対して `--mangle` が class 名を
+rename するので、`e.name` が `"StructError"` ではなく `"a"` になります。
 
-`error.ts:44` が `this.name = this.constructor.name` をしており、
-`--mangle` が class 名を rename するので、`e.name` が
-`"StructError"` ではなく `"a"` になります。class 2 つで再現します。
+terser も esbuild も既定で class 名を rename し（`keep_classnames: false`）、
+`.name` を読む library 側が opt out する前提です。ここは逆側を取りました。
+**read がソースに見えている**からです——見えているなら、bundle 全体で
+正しさとバイトを交換する必要はなく、実際に観測されている名前だけ払えます。
+
+`src/transform/observed_names.mbt`。receiver で 3 通りに分けます。
+
+| receiver | 答え |
+| --- | --- |
+| `C.name` / `C["name"]` | `C` だけ reserve |
+| `this.constructor.name`（class body 内）| その class と**その subclass 全部**を reserve |
+| それ以外の `x.constructor.name` | `this` が制約されないので、callable 全部を reserve（fallback）|
+
+#### narrowing を 3 段試して、階層だけが効いた
+
+最初は `.constructor.name` を見たら top-level binding を全部 reserve
+しました。corpus が値段を出しました: **typebox +70%、zod +40%、
+superstruct +31%**。既定にできる数字ではありません。
+
+次に「class と function だけ」に絞りました。**1 byte も変わりませんでした**
+——top-level callable で書かれた library では、それは同じ集合です。
+
+効いたのは**型情報**です。`C` の method 内の `this.constructor` は
+`C` かその subclass であって、無関係な class では絶対にありません。
+これで superstruct は `StructError` 1 個だけの reserve になります。
+
+| target | pass 前 | 全 top-level | class+function | 階層 |
+| --- | --- | --- | --- | --- |
+| superstruct | 10,677 (BROKEN) | 13,993 | 13,993 | **10,702 (+25 byte)** |
+| typebox | 95,093 | 162,047 | 162,047 | 126,884 |
+| zod | 180,260 | 251,868 | 251,868 | 200,335 |
+
+#### 残るコストと、その理由
+
+8 target のうち **6 つは 25 byte 以下**（hono / immer / neverthrow /
+ts-pattern が 0、valibot が +15、superstruct が +25）。
+
+残る 2 つは fallback を踏みます。実際に `this` 以外で読んでいます。
 
 ```ts
-class MyError extends TypeError {}
-[MyError.name, new MyError().constructor.name]
-// plain:   ["MyError","MyError"]
-// mangled: ["a","a"]
+// zod
+throw new core.$ZodEncodeError(inst.constructor.name);
+fn.constructor.name === "AsyncFunction"
+// typebox
+globalThis.Object.getPrototypeOf(left).constructor.name
+IsEqual(proto.constructor.name, 'Object')
 ```
 
-これが **bug かどうかは事実ではなく方針**です。
-`Function.prototype.name` は観測可能なので、この repo 自身の基準
-（観測可能な差はすべて違反）では違反です。一方 terser も esbuild も
-既定で class 名を rename し（`keep_classnames: false`）、`.name` を読む
-library 側が opt out する前提なので、それに合わせるのも筋が通ります。
+zod +11%（180,335 → 200,335）、typebox +33%。
 
-type-aware minifier なら両者より良くできます: class に対する `.name`
-read や `this.constructor.name` は**ソースに見えている**ので、
-その 1 名前だけ reserve すれば済みます。
+**まだ narrowing の余地があります**（未実装）。上の 4 例のうち 2 つは
+結果を**組み込みの名前**（`"AsyncFunction"`、`'Object'`）と比較して
+いるだけで、bundle 内の class 名は無関係です。string literal との比較に
+しか使われていない `.constructor.name` は、どの bundle 名も観測しません。
+もう一段は parameter の型注釈を読むことです（`inst: $ZodType` なら
+候補はその型の実装 class に限られる）。
+
+#### 穴（明記）
+
+`foo().name`（`foo` が class を返す）と `bag.ctor.name` は捕まえられません。
+任意の式の評価結果を知る必要があるからです。`.name` read をすべて危険と
+みなす選択肢はありません——`err.name`、`req.name`、`{name:…}.name` は
+どこにでもあり、ほぼ全 bundle の top-level を reserve することになります。
+**class 名を無条件に rename するより厳密で、証明ではありません。**
 
 ## 残っている既知の未修正
 
@@ -269,7 +314,6 @@ read や `this.constructor.name` は**ソースに見えている**ので、
 | top-level の TDZ | typebox の bundle が `Cannot access 'IntegerKey' before initialization`。`const` の宣言が使用より後に並ぶ |
 | module 跨ぎの `const enum` | immer の bundle が `ArchType is not defined` で load 失敗 |
 | remeda の parse error | `setPath.ts`: `Expected Semicolon, got Extends` |
-| class 名の観測 | superstruct が BROKEN。方針の決定待ち（上記）|
 | property mangler が実 library で不発 | fail-closed な callee-provenance scan が全部 reserve する |
 
 ### 直したもの 4: namespace object に型専用 export が入る

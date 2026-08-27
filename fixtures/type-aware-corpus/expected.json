@@ -9,13 +9,13 @@
     "status": "measured",
     "verdict": "NEUTRAL",
     "delta": 0,
-    "aware": 88768
+    "aware": 88783
   },
   "typebox": {
     "status": "size-only",
     "verdict": "LOSS",
-    "delta": -5100,
-    "aware": 95093
+    "delta": -2018,
+    "aware": 126884
   },
   "immer": {
     "status": "size-only",
@@ -36,16 +36,16 @@
     "aware": 5763
   },
   "superstruct": {
-    "status": "broken",
-    "verdict": "BROKEN",
+    "status": "measured",
+    "verdict": "LOSS",
     "delta": -138,
-    "aware": 10677
+    "aware": 10702
   },
   "zod": {
     "status": "measured",
     "verdict": "WIN",
-    "delta": 1096,
-    "aware": 180260
+    "delta": 788,
+    "aware": 200335
   },
   "remeda": {
     "status": "blocked"

@@ -140,25 +140,13 @@ const CORPUS = [
     name: "superstruct",
     repo: "https://github.com/ianstormtaylor/superstruct",
     entry: "src/index.ts",
-    // Reports BROKEN, and the row is left red on purpose: it is the
-    // first real-world behavioural difference this corpus has found.
-    // `error.ts:44` does `this.name = this.constructor.name`, `--mangle`
-    // renames the class, and `e.name` comes back `"a"` instead of
-    // `"StructError"`. Two classes reproduce it:
-    //
-    //   class MyError extends TypeError {}
-    //   [MyError.name, new MyError().constructor.name]
-    //     -> ["MyError","MyError"] plain, ["a","a"] mangled
-    //
-    // Whether that is a BUG is a policy call rather than a fact.
-    // `Function.prototype.name` is observable, so by this repo's own
-    // standard — any observable difference is a violation — it is one.
-    // But terser and esbuild both rename class names by default
-    // (`keep_classnames: false`) and expect a library that reads `.name`
-    // to opt out, so matching them is defensible too. A type-aware
-    // minifier could do better than either: a `.name` read on a class,
-    // or a `this.constructor.name`, is visible in the source and could
-    // reserve just that one name.
+    // Was BROKEN: `error.ts:44` does
+    // `this.name = this.constructor.name`, `--mangle` renamed the class,
+    // and `e.name` came back `"a"` instead of `"StructError"`. Fixed by
+    // `observed_names.mbt`, and the hierarchy narrowing is what made it
+    // affordable — `this.constructor` in a method of `C` is `C` or a
+    // subclass, so only `StructError` is reserved and the cost is
+    // +25 bytes. Reserving every callable instead cost +31% here.
     driver: "superstruct.driver.mjs",
   },
   // zod and superstruct were both BLOCKED, and both were blamed on the

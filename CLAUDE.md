@@ -101,7 +101,13 @@ product surfaces now.
   files in eighteen minutes (`just verify-graph-walk` gates it now), an
   arrow body losing its parens through an erased `as`, and type-only
   exports landing in a synthesized namespace object. zod went from
-  BLOCKED to a behaviour-checked +0.61% win. See
+  BLOCKED to a behaviour-checked win. It also found the one real
+  behavioural difference so far — `--mangle` renaming a class whose
+  `.name` the bundle reads back — and `observed_names.mbt` reserves just
+  the observed names, narrowed by the class hierarchy because
+  `this.constructor` in a method of `C` is `C` or a subclass: six of
+  eight targets pay 25 bytes or less where reserving every callable cost
+  up to +70%. See
   [`docs/type-aware-measurement.md`](./docs/type-aware-measurement.md).
 - `src/bridge` consumes `src/checker` for every type-shape decision and runs
   `@checker.check_module` on the synthesized output as a sanity gate. It also

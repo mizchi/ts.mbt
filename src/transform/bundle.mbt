@@ -968,6 +968,46 @@ pub fn bundle_modules(
       for n in external_import_bindings(external_imports).keys() {
         external_reserved.push(n)
       }
+      // Names the bundle reads back as `Function.prototype.name`.
+      // Renaming a class changes `C.name` and `this.constructor.name`,
+      // and superstruct's error base assigns the latter to `this.name`,
+      // so `err.name` came back `"a"`. terser renames class names
+      // regardless and expects the library to opt out; the read is
+      // visible in the source, so pay for the ones actually observed and
+      // mangle the rest. See `observed_names.mbt`, including what it
+      // does NOT catch.
+      let (observed_names, observed_all_ctors) = observed_class_names(combined)
+      for n in observed_names {
+        external_reserved.push(n)
+      }
+      if observed_all_ctors {
+        // `<expr>.constructor.name` names no class syntactically, but
+        // `this.constructor` inside a method of `C` is `C` or a subclass
+        // — never an unrelated class. So reserve the classes whose own
+        // bodies read it, closed over their subclasses, and let the rest
+        // of the bundle mangle.
+        //
+        // The blunt versions were both measured. Reserving every
+        // top-level binding: typebox +70%, zod +40%, superstruct +31%.
+        // Narrowing to "classes and functions" changed not one byte,
+        // because in a library written out of top-level callables that is
+        // the same set. The hierarchy is what actually narrows it.
+        let (observing, unconstrained) = classes_observing_own_name(combined)
+        if unconstrained {
+          // The read is outside any top-level class body, so `this` is
+          // unconstrained and the hierarchy says nothing. Fall back to
+          // every callable — expensive, and the only sound answer here.
+          let ctors : Map[String, Bool] = {}
+          constructor_like_top_level(combined, ctors)
+          for n in ctors.keys() {
+            external_reserved.push(n)
+          }
+        } else {
+          for n in observing.keys() {
+            external_reserved.push(n)
+          }
+        }
+      }
       let mangler_cfg = ManglerConfig::default()
         .with_mangle_properties(effective_mangle_props)
         .with_mangle_properties_shape_color(opts.mangle_properties_shape_color)
