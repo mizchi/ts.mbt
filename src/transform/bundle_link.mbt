@@ -257,9 +257,17 @@ fn link_module_graph(
       match imp.namespace_binding {
         Some(ns_local) => {
           let props : Map[String, String] = {}
+          let dep_type_only = type_only_export_names(dep)
           for spec in dep.export_specs {
             // ESM: `import * as ns` does not include `default`.
             if spec.export_name == "default" {
+              continue
+            }
+            // Nor anything with no runtime value: this namespace can be
+            // synthesized as a real object too, and a `type` entry in it
+            // is a load-time ReferenceError.
+            if dep_type_only.contains(spec.local_name) ||
+              dep_type_only.contains(spec.export_name) {
               continue
             }
             match
@@ -317,7 +325,12 @@ fn link_module_graph(
         None => continue
       }
       let props : Map[String, String] = {}
+      let dep_type_only = type_only_export_names(dep)
       for spec in dep.export_specs {
+        if dep_type_only.contains(spec.local_name) ||
+          dep_type_only.contains(spec.export_name) {
+          continue
+        }
         match
           resolve_export(
             modules,
@@ -730,6 +743,35 @@ fn entry_export_bindings(
           Namespace(ns_local) => push("*", ns_local, Some(re.module_spec))
         }
     }
+  }
+  out
+}
+
+///|
+/// Export names of `node` that carry no runtime value, because the
+/// module declares them as a `type` alias or an `interface`.
+///
+/// A synthesized namespace object lists one property per export of its
+/// target, and a type-only export has nothing to point at: the entry
+/// emits `{ JSONType: JSONType, … }` and the bundle dies on load with
+/// `JSONType is not defined`. zod's `export * as util from "./util.js"`
+/// pulls in fifty-odd type aliases that way, and typebox's
+/// `TTypeArray` is the same bug reached through `export *`.
+///
+/// The test is POSITIVE evidence of type-ness — this module declares the
+/// name as a type — rather than absence of evidence of value-ness. That
+/// keeps a value from being dropped by mistake, which would be the worse
+/// failure, but it does mean an exotic type-only export form that is
+/// neither an alias nor an interface here (`import { T } from …; export
+/// { T }`, where the re-export carries no `type` marker) still slips
+/// through. `re.type_only` already covers `export type { … }`.
+fn type_only_export_names(node : ModuleNode) -> Map[String, Bool] {
+  let out : Map[String, Bool] = {}
+  for ta in node.type_aliases {
+    out[ta.name] = true
+  }
+  for i in node.interfaces {
+    out[i.name] = true
   }
   out
 }

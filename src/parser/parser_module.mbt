@@ -2661,11 +2661,13 @@ fn Parser::parse_export_decl_for_module(
       }
       Interface => {
         let iface = self.parse_interface()
+        self.collected_interfaces.push(iface)
         exports.push({ local_name: iface.name, export_name: iface.name })
         return (stmts, exports, reexports)
       }
       Type => {
         let type_alias = self.parse_type_alias()
+        self.collected_type_aliases.push(type_alias)
         exports.push({
           local_name: type_alias.name,
           export_name: type_alias.name,
@@ -2778,6 +2780,12 @@ fn Parser::parse_export_decl_for_module(
   }
   if self.check(Interface) {
     let iface = self.parse_interface()
+    // Record it, not just the export entry. The name is exported and
+    // carries NO runtime value, and every consumer that has only the
+    // export list has to guess: the bundler's synthesized namespace
+    // object guessed "value" and emitted `{ AlsoType: AlsoType, … }`,
+    // which is a load-time ReferenceError.
+    self.collected_interfaces.push(iface)
     exports.push({ local_name: iface.name, export_name: iface.name })
     return (stmts, exports, reexports)
   }

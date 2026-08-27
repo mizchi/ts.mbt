@@ -2968,3 +2968,88 @@ test "bundle: fold + treeshake + mangle keeps the export surface" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "link: a synthesized namespace object leaves type-only exports out" {
+  // The namespace object lists one property per export of its target,
+  // and a `type` alias or an `interface` has nothing to point at. The
+  // bundle emitted `{ OnlyType: OnlyType, … }` and died on load with
+  // `OnlyType is not defined` — zod's
+  // `export * as util from "./util.js"` drags in fifty-odd type aliases
+  // that way, and typebox's `TTypeArray` is the same bug through
+  // `export *`.
+  let files = vfs([
+    (
+      "m.ts",
+      (
+        #|export type OnlyType = { a: number };
+        #|export interface AlsoType { b: string }
+        #|export const value = 1;
+        #|export function fn(): number { return 2; }
+        #|
+      ),
+    ),
+    ("core.ts", "export * as ns from \"./m\";\n"),
+    (
+      "entry.ts",
+      (
+        #|import { ns } from "./core";
+        #|console.log(JSON.stringify([ns.value, ns.fn(), Object.keys(ns)]));
+        #|
+      ),
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_false(
+        out.js.contains("OnlyType"),
+        msg="a type alias reached the namespace object: \{out.js}",
+      )
+      assert_false(
+        out.js.contains("AlsoType"),
+        msg="an interface reached the namespace object: \{out.js}",
+      )
+      // The values it does carry must survive — over-filtering would
+      // trade a load-time crash for a missing property.
+      assert_true(out.js.contains("value"), msg="lost a value: \{out.js}")
+      assert_true(out.js.contains("fn"), msg="lost a function: \{out.js}")
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "link: `import * as ns` skips type-only exports too" {
+  // Same object, reached the other way. An `import * as ns` namespace is
+  // synthesized whenever it escapes member access — here it is spread —
+  // so it has the same hazard.
+  let files = vfs([
+    (
+      "m.ts",
+      (
+        #|export type OnlyType = { a: number };
+        #|export const value = 1;
+        #|
+      ),
+    ),
+    (
+      "entry.ts",
+      (
+        #|import * as ns from "./m";
+        #|const spread = { ...ns };
+        #|console.log(JSON.stringify(spread));
+        #|
+      ),
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_false(
+        out.js.contains("OnlyType"),
+        msg="a type alias reached the namespace object: \{out.js}",
+      )
+      assert_true(out.js.contains("value"), msg="lost a value: \{out.js}")
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
