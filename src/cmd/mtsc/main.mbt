@@ -66,6 +66,9 @@ priv struct MtscOptions {
   // did instead of only doing it. Implies the mangle passes, since a
   // decision has to be made before it can be explained.
   mut explain_mangle : Bool
+  // `--verify`: re-parse the emitted bundle and report any name it
+  // reads that nothing declares. See `docs/type-aware-dce.md` (E1).
+  mut verify : Bool
   mut mangle_properties_shape_color : Bool
   // `--no-check`: skip type-checking. The gate exists because a type
   // error usually means the program is wrong, but it also makes the
@@ -107,6 +110,7 @@ fn mtsc_options_new() -> MtscOptions {
     mangle: false,
     mangle_properties: false,
     explain_mangle: false,
+    verify: false,
     mangle_properties_shape_color: false,
     no_check: false,
     timing: false,
@@ -163,6 +167,9 @@ fn mtsc_print_usage() -> Unit {
   )
   println(
     "  --mangle-properties-shape-color  Use shape-coloring property rename (opt-in, experimental)",
+  )
+  println(
+    "  --verify                  Re-parse the emitted bundle and report any name nothing declares",
   )
   println(
     "  --no-check                Skip type-checking entirely (non-TypeScript input; the check is ~95% of a large compile)",
@@ -246,6 +253,7 @@ fn mtsc_parse_args(argv : Array[String]) -> Result[MtscOptions, String] {
         opts.explain_mangle = true
         opts.bundle = true
       }
+      "--verify" => opts.verify = true
       "--no-check" => opts.no_check = true
       "--timing" => {
         opts.timing = true
@@ -1401,6 +1409,20 @@ async fn main {
     }
     for line in out.explain {
       println(line)
+    }
+    // Verify the OUTPUT. Deliberately after every pass and from the
+    // emitted TEXT: a check that shares the pipeline's in-memory state
+    // can share its bugs.
+    if opts.verify {
+      let violations = @transform.verify_emitted_bundle(out.js)
+      for v in violations {
+        println("mtsc: verify: \{v.detail}")
+      }
+      if violations.length() > 0 {
+        println("mtsc: verify: \{violations.length()} violation(s)")
+      } else {
+        println("mtsc: verify: ok")
+      }
     }
     if opts.timing {
       // The bundle's own phases, then the difference — what

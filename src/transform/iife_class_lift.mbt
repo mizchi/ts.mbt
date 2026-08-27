@@ -695,21 +695,123 @@ fn expr_refs_class_name(expr : @ast.TsExpr, name : String) -> Bool {
 }
 
 ///|
+/// Class-method parameters, with any destructuring pattern moved into
+/// the body.
+///
+/// `TsClassMethodDecl.params` is `Array[(String, TsType)]` — a name and
+/// a type, with **no slot for a binding pattern**. The lift maps a
+/// `TsParam` list into that shape, and for a pattern there is nothing to
+/// map: `p.name` holds the FIRST identifier the pattern binds, so
+///
+///   m({ a, b }) { return a + b }   became   m(a) { return a + b }
+///   n({ a: { b } }) { return b }   became   n(b) { return b }
+///
+/// The first is a ReferenceError. The second is worse — it returns the
+/// argument object instead of throwing, so nothing anywhere reports it.
+/// EVERY class method with a destructured parameter was miscompiled,
+/// under plain `--bundle` with no optimization flag, and neither the
+/// 164-case mangle-safety corpus nor 2800 unit tests contained one.
+/// Excalidraw's `StoreDelta.load({ id, elements: { added, removed,
+/// updated }, … })` is where it surfaced, and it surfaced because the
+/// new output verifier reported `added` / `removed` / `updated` as free
+/// variables (`docs/type-aware-dce.md`, experiment E1).
+///
+/// Rather than widen the AST — and then teach the emitter, the mangler
+/// and the param trimmer about a second place patterns can live — the
+/// pattern is desugared at the point where it would otherwise be lost:
+///
+///   m({ a, b }, c) { … }   ->   m(__pat0, c) { const { a, b } = __pat0; … }
+///
+/// The `const` is an ordinary statement, so every downstream pass
+/// already handles it. Arity is preserved, so `arguments` and
+/// `Function.length` do not move, and a parameter default stays on the
+/// parameter (`m({ a } = {})` becomes `m(__pat0 = {})`).
+///
+/// Not modelled: a LATER parameter's default that reads a name bound by
+/// an EARLIER parameter's pattern (`m({ a }, b = a)`). In real JS `a` is
+/// in scope there; after this desugaring it is not. That shape was
+/// already mis-emitted before this change (`m(a, b = a)`, where `a` is
+/// the whole object), so it is neither fixed nor newly broken.
+fn lifted_method_params(
+  f : @ast.TsFunc,
+) -> (
+  Array[(String, @ast.TsType)],
+  Array[@ast.TsExpr?],
+  Array[Bool],
+  @ast.TsBlock,
+) {
+  let params : Array[(String, @ast.TsType)] = []
+  let param_defaults : Array[@ast.TsExpr?] = []
+  let param_is_rest : Array[Bool] = []
+  let prologue : Array[@ast.TsStmt] = []
+  // Names the body already uses, so the synthesized parameter cannot
+  // shadow one of them.
+  let taken : Map[String, Bool] = {}
+  for i, p in f.params {
+    let is_pattern = match p.binding {
+      Some(@ast.TsBinding::Object(_)) | Some(@ast.TsBinding::Array(_)) => true
+      _ => false
+    }
+    if is_pattern {
+      if taken.is_empty() {
+        let refs : Map[String, Bool] = {}
+        collect_var_refs_in_block(f.body, refs)
+        for n in refs.keys() {
+          taken[n] = true
+        }
+      }
+      let mut synth = "__pat" + i.to_string()
+      let mut bump = 0
+      while taken.contains(synth) {
+        bump = bump + 1
+        synth = "__pat" + i.to_string() + "$" + bump.to_string()
+      }
+      taken[synth] = true
+      params.push((synth, p.type_))
+      match p.binding {
+        Some(b) =>
+          prologue.push(@ast.TsStmt::Const(b, p.type_, @ast.TsExpr::Var(synth)))
+        None => ()
+      }
+    } else {
+      params.push((p.name, p.type_))
+    }
+    param_defaults.push(p.default)
+    param_is_rest.push(p.is_rest)
+  }
+  if prologue.length() == 0 {
+    return (params, param_defaults, param_is_rest, f.body)
+  }
+  let stmts : Array[@ast.TsStmt] = []
+  for st in prologue {
+    stmts.push(st)
+  }
+  for st in f.body.stmts {
+    stmts.push(st)
+  }
+  // Positions survive only when the body already had a full set; the
+  // synthesized statements borrow the first real one so a source-map
+  // entry points inside the method rather than at offset 0.
+  let positions : Array[Int] = []
+  if f.body.stmt_positions.length() == f.body.stmts.length() &&
+    f.body.stmt_positions.length() > 0 {
+    for _ in prologue {
+      positions.push(f.body.stmt_positions[0])
+    }
+    for pos in f.body.stmt_positions {
+      positions.push(pos)
+    }
+  }
+  (params, param_defaults, param_is_rest, { stmts, stmt_positions: positions })
+}
+
+///|
 fn method_decl_from_func(
   name : String,
   f : @ast.TsFunc,
   is_static : Bool,
 ) -> @ast.TsClassMethodDecl {
-  // Map TsParam list back into the class-method shape
-  // (Array[(String, TsType)]).
-  let params : Array[(String, @ast.TsType)] = []
-  let param_defaults : Array[@ast.TsExpr?] = []
-  let param_is_rest : Array[Bool] = []
-  for p in f.params {
-    params.push((p.name, p.type_))
-    param_defaults.push(p.default)
-    param_is_rest.push(p.is_rest)
-  }
+  let (params, param_defaults, param_is_rest, body) = lifted_method_params(f)
   {
     name,
     type_params: f.type_params,
@@ -719,7 +821,7 @@ fn method_decl_from_func(
     param_is_rest,
     return_type: f.return_type,
     is_static,
-    body: Some(f.body),
+    body: Some(body),
     accessor: "",
     key_expr: None,
     is_async: f.is_async,
@@ -735,14 +837,7 @@ fn method_decl_from_func_accessor(
   f : @ast.TsFunc,
   accessor : String,
 ) -> @ast.TsClassMethodDecl {
-  let params : Array[(String, @ast.TsType)] = []
-  let param_defaults : Array[@ast.TsExpr?] = []
-  let param_is_rest : Array[Bool] = []
-  for p in f.params {
-    params.push((p.name, p.type_))
-    param_defaults.push(p.default)
-    param_is_rest.push(p.is_rest)
-  }
+  let (params, param_defaults, param_is_rest, body) = lifted_method_params(f)
   {
     name,
     type_params: f.type_params,
@@ -752,7 +847,7 @@ fn method_decl_from_func_accessor(
     param_is_rest,
     return_type: f.return_type,
     is_static: false,
-    body: Some(f.body),
+    body: Some(body),
     accessor,
     key_expr: None,
     is_async: f.is_async,

@@ -3362,3 +3362,82 @@ test "predicate-inline: a trivial guard with one caller still inlines" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "class method: a destructured parameter survives the class lift" {
+  // `TsClassMethodDecl.params` is `(String, TsType)` — no slot for a
+  // pattern — so the lift collapsed `{ a, b }` to the first name it
+  // bound. `m({ a, b })` became `m(a)` (a ReferenceError) and
+  // `n({ a: { b } })` became `n(b)`, which silently returns the argument
+  // object instead of throwing. Every class method with a destructured
+  // parameter, under plain `--bundle`.
+  //
+  // Found by the output verifier on Excalidraw's `StoreDelta.load({ id,
+  // elements: { added, removed, updated }, … })`, which reported
+  // `added` / `removed` / `updated` as free variables.
+  let src =
+    #|export class C {
+    #|  flat({ a, b }: { a: number; b: number }) { return a + b; }
+    #|  nested({ a: { b } }: { a: { b: number } }) { return b; }
+    #|  renamed({ a: x }: { a: number }) { return x; }
+    #|  mixed(head: number, { a }: { a: number }) { return head + a; }
+    #|  withDefault({ a }: { a: number } = { a: 5 }) { return a; }
+    #|  arrayPattern([p, q]: number[]) { return p + q; }
+    #|  static stat({ a }: { a: number }) { return a; }
+    #|}
+  let files = vfs([("entry.ts", src)])
+  for
+    opts in [
+      BundleOptions::default(),
+      BundleOptions::default().with_treeshake(true).with_fold(true),
+    ] {
+    match bundle_modules(files, "entry.ts", opts) {
+      Ok(out) => {
+        // Every bound name has to be declared somewhere in the method.
+        for name in ["a", "b", "x", "p", "q"] {
+          assert_true(
+            out.js.contains(name),
+            msg="lost the binding `\{name}`: \{out.js}",
+          )
+        }
+        // The pattern moved into the body, so the parameter list holds a
+        // synthesized name and the body holds a destructuring `const`.
+        assert_true(
+          out.js.contains("const {a, b}") || out.js.contains("const{a,b}"),
+          msg="the flat pattern did not reach the body: \{out.js}",
+        )
+        // Arity is preserved: `mixed` still takes two parameters.
+        assert_true(
+          out.js.contains("mixed(head,") || out.js.contains("mixed(head, "),
+          msg="changed the arity of a method: \{out.js}",
+        )
+      }
+      Err(e) => fail("bundle error: \{e}")
+    }
+  }
+}
+
+///|
+test "verify: a dangling reference is reported, a clean bundle is not" {
+  // The verifier re-parses emitted JS, so it can be tested on text.
+  let dangling = verify_emitted_bundle(
+    "const m = new Map([[\"z\", CODES.Z]]);\nconsole.log(m);\n",
+  )
+  assert_true(
+    dangling.length() == 1,
+    msg="expected one violation, got \{dangling}",
+  )
+  assert_true(dangling[0].name == "CODES", msg="wrong name: \{dangling}")
+  // Host globals, imports and `let x;`'s parser sentinel must not be
+  // reported — a verifier that cries wolf gets switched off.
+  let clean = verify_emitted_bundle(
+    (
+      #|import { join } from "node:path";
+      #|let pending;
+      #|const CODES = { Z: "KeyZ" };
+      #|console.log(Math.max(1, 2), JSON.stringify(CODES), join("a", "b"), pending);
+      #|
+    ),
+  )
+  assert_true(clean.length() == 0, msg="false positive: \{clean}")
+}

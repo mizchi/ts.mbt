@@ -1,0 +1,19 @@
+{
+  "origin": "ts.mbt — found by the new output verifier (docs/type-aware-dce.md E1) on Excalidraw's StoreDelta.load",
+  "what": "A class method's destructuring parameter could not be represented in `TsClassMethodDecl.params`, so the class lift kept the first bound name and dropped the pattern. `flat({left, right})` became `flat(left)` (ReferenceError) and `nested({inner: {deep}})` became `nested(deep)`, which returns the argument object instead of throwing. The pattern is now desugared into the body (`m(__pat0) { const {left, right} = __pat0; … }`), so arity is unchanged — `arity` in the report pins that. The keys are read by the caller building the argument, so they are ABI too.",
+  "mtscArgs": [
+    "--treeshake"
+  ],
+  "exports": [
+    "report",
+    "Compute"
+  ],
+  "expectKeep": [
+    "left",
+    "right",
+    "inner",
+    "deep",
+    "extra"
+  ],
+  "expectStatus": "pass"
+}

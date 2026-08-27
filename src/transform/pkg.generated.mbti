@@ -151,6 +151,8 @@ pub fn type_is_keyed_container(@ast.TsType, Map[String, Bool], Map[String, @ast.
 
 pub fn undeclared_referenced_names(@ast.TsBlock) -> Map[String, Bool]
 
+pub fn verify_emitted_bundle(String, externals? : Map[String, Bool]) -> Array[Violation]
+
 pub fn vlq_encode(Int) -> String
 
 // Errors
@@ -427,6 +429,7 @@ pub(all) struct SymbolGraph {
   flow_edges : Array[FlowEdge]
   external_bindings : Map[Int, Bool]
   funcs : Map[Int, FuncInfo]
+  unresolved : Map[String, Int]
 }
 
 pub(all) enum SymbolKind {
@@ -467,6 +470,12 @@ pub(all) enum UseContext {
   PropAssignRHS
   IndexAssignRHS
 } derive(@debug.Debug)
+
+pub(all) struct Violation {
+  kind : String
+  name : String
+  detail : String
+} derive(Show)
 
 // Type aliases
 pub type ScopeId = Int

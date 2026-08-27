@@ -62,6 +62,70 @@ false positive が 0。
 **工数**: 半日。**この plan の中で唯一、他の全項目の前提になります**
 （gate を緩める実験は、緩めた結果壊れたことを検出できないと走れない）。
 
+#### 結果: 成功。半日で 4 件の実バグ
+
+実装は `src/transform/verify.mbt` + `--verify` flag。`SymbolGraph` に
+`unresolved` を持たせ、globals / import binding を引いて残りを報告します。
+
+**corpus 9 target を 1 周した結果**（`--treeshake --fold --minify --mangle`）:
+
+| target | 報告 | 判定 |
+| --- | --- | --- |
+| hono / valibot / typebox / neverthrow / ts-pattern / superstruct | なし | clean |
+| excalidraw | `added` `removed` `updated` `appStateDelta` | **実バグ**（下記、修正済み）|
+| excalidraw | `simplify` | **実バグ**（未修正。4 箇所から呼ばれる関数の宣言が無い）|
+| excalidraw | `type` | 未再現。最小例では出ない → symbol graph の穴の可能性 |
+| zod | `dO` `dP` `dQ` `dR` `dS` `dT` `dU` `dV` | **実バグ**（未修正。`processJSONSchema` 系 8 関数が宣言なしで呼ばれる）|
+| immer | `aK` | **実バグ**（未修正。`let aL=(new az).produce, aM=aK.produceWithPatches.bind(aK), …` — multi-declarator の 1 個目だけ inline されて残り 13 参照が孤立）|
+| immer | `ArchType` | 既知（module 跨ぎ `const enum`）|
+
+false positive は 2 種類出て、両方 allowlist で消えました:
+
+- `__ts_no_init__` — parser の「初期化子なし」sentinel。**出力には存在しない**
+  のに、verifier が出力を**再 parse** するので再生成されて自由変数に見える
+- `addEventListener` 等の web global — `js_runtime_global_names()` は
+  linker の衝突回避用なので「読む名前」を網羅していない
+
+**この 2 件は verifier の設計上の教訓**でもあります。再 parse は
+「pipeline と bug を共有しない」ために選んだ方式で、その代償が
+parser sentinel の再生成。globals 表の網羅がこの check の維持コストです。
+
+#### 見つかった実バグ 1 件目（修正済み）: class method の分割代入引数
+
+`TsClassMethodDecl.params` は `Array[(String, TsType)]` で、
+**pattern を入れる場所がありません**。class lift はパターンを
+「最初に束縛する名前」に潰していました。
+
+```ts
+class C {
+  m({ a, b }) { return a + b }       // → m(a) { return a + b }     ReferenceError
+  n({ a: { b } }) { return b }       // → n(b) { return b }         引数オブジェクトを返す
+}
+```
+
+2 個目が怖い方です——**例外を投げず、間違った値を返す**。
+`--bundle` だけ、最適化 flag なしで起きていて、164 case の
+mangle-safety corpus と 2800 の unit test のどこにも
+「分割代入引数を持つ class method」が無かったので誰も気付いていませんでした。
+checker 側も同じ穴で、`m({ a: x })` の `x` に**パラメータ全体の型**が
+付いていました（`x * 2` が「オブジェクトの乗算」になる）。
+
+修正は境界での desugar です:
+
+```
+m({ a, b }, c) { … }   →   m(__pat0, c) { const { a, b } = __pat0; … }
+```
+
+AST を広げて emitter / mangler / param trimmer に「pattern が住む 2 つ目の
+場所」を教える代わりに、失われる直前で普通の文に落とします。arity は
+保存されるので `arguments` と `Function.length` は動きません。
+`fixtures/mangle-safety/case42-method-destructuring` が 8 形を実行で
+検査し（`arity` も pin）、`bundle_wbtest.mbt` が emit を pin します。
+
+**未修正の 3 件（`simplify` / `dO..dV` / `aK`）は次の作業**です。どれも
+「corpus が measured 判定を出していた target」に入っていました——
+driver がその経路を通らなかっただけで、実行すれば throw します。
+
 ### E2. TDZ 順序チェック
 
 **仮説**: typebox が `Cannot access 'IntegerKey' before initialization` で
@@ -340,6 +404,20 @@ E10 (投機) ──────────────────────�
 Phase 1 は**全部合わせて 2 日**で、今回のバグ 3 件のうち 2 件が機械検出に
 なります。Phase 3 が本題ですが、Phase 1 無しで gate を緩めるのは
 「壊れたことに気付けない状態で削りすぎに近づく」ことなので、順序は動かせません。
+
+## E1 が開けた bug backlog
+
+verifier が指摘してまだ直していないもの。どれも `mtsc --verify` で再現します。
+
+| # | 症状 | 見立て |
+| --- | --- | --- |
+| B1 | excalidraw: `simplify(...)` が 4 箇所から呼ばれるのに宣言が無い | import か再 export の落ち。laser-pointer の `simplify.ts` 由来 |
+| B2 | zod: `dO` 〜 `dV` の 8 関数が宣言なしで呼ばれる（`a._zod.processJSONSchema=(b,json,c)=>dO(a,b,json,c)`）| JSON-schema 系 1 module 分がまとめて消えている |
+| B3 | immer: `let aL=(new az).produce, aM=aK.produceWithPatches.bind(aK), …` で `aK` が未宣言 | multi-declarator の 1 個目だけ inline され、同じ文の残り 13 参照が孤立。**single-use inliner の use 数え漏れ**が最有力 |
+| B4 | excalidraw: `type` が未解決と報告される（`function dx(a){let type=a?.type; …}`）| 最小例で再現せず。`let type` が symbol graph に declare されない経路がある可能性。**graph の穴なら mangler / DCE も同じ穴を見ている** |
+
+B3 と B4 は verifier の副産物として**解析側の穴**を示しているので、
+Phase 2（walker / universe）の優先度に影響します。
 
 ## この plan 自体の失敗条件
 

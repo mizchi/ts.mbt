@@ -64,6 +64,17 @@ pub(all) struct SymbolGraph {
   // wildcard when their return value reaches an observation
   // point because the callee can't be statically identified.
   funcs : Map[SymbolId, FuncInfo]
+  // Names referenced but resolving to no binding, with one scope they
+  // were seen in. Globals live here too (`console`, `Math`), so this is
+  // raw material rather than an error list — `verify.mbt` subtracts the
+  // host's names and reports whatever is left.
+  //
+  // The walk used to drop these on the floor: `sg_record_use`'s `None`
+  // arm read "global / runtime built-in / typo. Nothing to record". The
+  // typo is exactly what a verifier wants, and a deleted-but-still-
+  // referenced binding IS a typo by then. `CODES is not defined` on the
+  // Excalidraw bundle was detectable here without running anything.
+  unresolved : Map[String, ScopeId]
 }
 
 ///|
@@ -286,6 +297,7 @@ pub fn build_symbol_graph_with_sinks(
     flow_edges: [],
     external_bindings: {},
     funcs: {},
+    unresolved: {},
   }
   // Module scope (id 0).
   let module_scope = sg_new_scope(g, None, Module)
@@ -1402,9 +1414,14 @@ fn sg_record_use(w : SgWalker, name : String, context : UseContext) -> Unit {
         }
       }
     }
-    // Unresolved name — global / runtime built-in / typo. Nothing
-    // to record (we don't track unbound references).
-    None => ()
+    // Unresolved: a host global, a runtime built-in, or a binding
+    // some pass deleted while leaving this reference behind. The three
+    // are indistinguishable here — the caller has the host's name list
+    // — so record it and let `verify_block` decide.
+    None =>
+      if not(w.g.unresolved.contains(name)) {
+        w.g.unresolved[name] = w.current_scope
+      }
   }
 }
 

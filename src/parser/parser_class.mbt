@@ -92,6 +92,82 @@ fn is_public_runtime_class_member_name(name : String) -> Bool {
 }
 
 ///|
+/// Class-method parameters for the DECLARATION side, with any
+/// destructuring pattern moved into the body.
+///
+/// `TsClassMethodDecl.params` is `Array[(String, TsType)]` — a name and
+/// a type, with no slot for a binding pattern — so `m({ a: x })` kept
+/// the first bound name (`x`) with the WHOLE parameter's type, and the
+/// checker then read `x * 2` as multiplying an object. The runtime side
+/// had the same hole with a worse outcome (see `lifted_method_params` in
+/// `src/transform/iife_class_lift.mbt`, where the pattern was dropped
+/// from the emitted code entirely).
+///
+/// Same remedy on both sides: desugar at the boundary where the pattern
+/// would otherwise be lost.
+///
+///   m({ a, b }, c) { … }   ->   m(__pat0, c) { const { a, b } = __pat0; … }
+///
+/// The `const` carries the parameter's declared type, so the checker
+/// narrows each bound name through ordinary destructuring rules instead
+/// of seeing one name typed as the whole object.
+fn runtime_class_method_params(
+  func : @ast.TsFunc,
+) -> (
+  Array[(String, @ast.TsType)],
+  Array[@ast.TsExpr?],
+  Array[Bool],
+  @ast.TsBlock,
+) {
+  let params : Array[(String, @ast.TsType)] = []
+  let param_defaults : Array[@ast.TsExpr?] = []
+  let param_is_rest : Array[Bool] = []
+  let prologue : Array[@ast.TsStmt] = []
+  for index, param in func.params {
+    let is_pattern = match param.binding {
+      Some(@ast.TsBinding::Object(_)) | Some(@ast.TsBinding::Array(_)) => true
+      _ => false
+    }
+    if is_pattern {
+      let synth = "__pat" + index.to_string()
+      params.push((synth, param.type_))
+      match param.binding {
+        Some(b) =>
+          prologue.push(
+            @ast.TsStmt::Const(b, param.type_, @ast.TsExpr::Var(synth)),
+          )
+        None => ()
+      }
+    } else {
+      params.push((runtime_class_param_name(param, index), param.type_))
+    }
+    param_defaults.push(param.default)
+    param_is_rest.push(param.is_rest)
+  }
+  if prologue.length() == 0 {
+    return (params, param_defaults, param_is_rest, func.body)
+  }
+  let stmts : Array[@ast.TsStmt] = []
+  for st in prologue {
+    stmts.push(st)
+  }
+  for st in func.body.stmts {
+    stmts.push(st)
+  }
+  let positions : Array[Int] = []
+  if func.body.stmt_positions.length() == func.body.stmts.length() &&
+    func.body.stmt_positions.length() > 0 {
+    for _ in prologue {
+      positions.push(func.body.stmt_positions[0])
+    }
+    for pos in func.body.stmt_positions {
+      positions.push(pos)
+    }
+  }
+  (params, param_defaults, param_is_rest, { stmts, stmt_positions: positions })
+}
+
+///|
 fn runtime_class_param_name(param : @ast.TsParam, index : Int) -> String {
   if param.name != "" {
     return param.name
@@ -712,14 +788,9 @@ fn build_runtime_class_decl(
           // Always record the method (so getters/setters keep their
           // bodies for emit); the `accessor` tag tells the emitter
           // whether to restore `get foo()` / `set foo(v)` syntax.
-          let params : Array[(String, @ast.TsType)] = []
-          let param_defaults : Array[@ast.TsExpr?] = []
-          let param_is_rest : Array[Bool] = []
-          for index, param in func.params {
-            params.push((runtime_class_param_name(param, index), param.type_))
-            param_defaults.push(param.default)
-            param_is_rest.push(param.is_rest)
-          }
+          let (params, param_defaults, param_is_rest, method_body) = runtime_class_method_params(
+            func,
+          )
           let accessor_tag = match accessor_kind {
             Some("get") => "get"
             Some("set") => "set"
@@ -734,10 +805,10 @@ fn build_runtime_class_decl(
             param_is_rest,
             return_type: func.return_type,
             is_static,
-            body: if func.body.stmts.length() == 0 {
+            body: if method_body.stmts.length() == 0 {
               None
             } else {
-              Some(func.body)
+              Some(method_body)
             },
             accessor: accessor_tag,
             key_expr: None,
@@ -783,14 +854,9 @@ fn build_runtime_class_decl(
       // (which the previous code did) made `_op === "OnSuccess"`
       // resolve to `undefined` and runLoop ran forever.
       Method(is_static, Computed(key_expr), accessor_kind, func) => {
-        let params : Array[(String, @ast.TsType)] = []
-        let param_defaults : Array[@ast.TsExpr?] = []
-        let param_is_rest : Array[Bool] = []
-        for index, param in func.params {
-          params.push((runtime_class_param_name(param, index), param.type_))
-          param_defaults.push(param.default)
-          param_is_rest.push(param.is_rest)
-        }
+        let (params, param_defaults, param_is_rest, method_body) = runtime_class_method_params(
+          func,
+        )
         let accessor_tag = match accessor_kind {
           Some("get") => "get"
           Some("set") => "set"
@@ -805,10 +871,10 @@ fn build_runtime_class_decl(
           param_is_rest,
           return_type: func.return_type,
           is_static,
-          body: if func.body.stmts.length() == 0 {
+          body: if method_body.stmts.length() == 0 {
             None
           } else {
-            Some(func.body)
+            Some(method_body)
           },
           accessor: accessor_tag,
           key_expr: Some(key_expr),
