@@ -3221,3 +3221,57 @@ test "link: the namespace object cannot name a binding the bundle lacks" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "class_method_dce: a method called from ANOTHER module survives" {
+  // The pass asks bundle-wide questions — which member names does
+  // anything access, does anything read a member under a computed key —
+  // and the per-module emit path (no `--treeshake` / `--fold` /
+  // `--mangle`) rewrote one module at a time. Handing it that module
+  // reinterpreted "bundle" as "this module": nothing in `state.ts`
+  // accesses `addPoint` by name, so every method went, and the bundle
+  // then called `p.addPoint(…)` on an object without one.
+  //
+  // Found on Excalidraw's laser-pointer package, where it deleted
+  // `addPoint` / `close` / `getStrokeOutline` from `LaserPointer` and
+  // left `shape.ts`'s calls to all three standing. It reproduces with
+  // one flag and five lines, which is the part worth pinning: this is
+  // `mtsc entry.ts --bundle`, the plainest command the README shows.
+  let files = vfs([
+    (
+      "state.ts",
+      (
+        #|export class Pointer {
+        #|  addPoint(p: number) { return p + 1; }
+        #|  close() { return 0; }
+        #|  reallyUnused() { return -1; }
+        #|}
+      ),
+    ),
+    (
+      "entry.ts",
+      (
+        #|import { Pointer } from "./state";
+        #|const p = new Pointer();
+        #|console.log(p.addPoint(1), p.close());
+      ),
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_true(
+        out.js.contains("addPoint"),
+        msg="deleted a method the next module calls: \{out.js}",
+      )
+      assert_true(out.js.contains("close"), msg="deleted `close`: \{out.js}")
+      // The other half of the invariant: a method nothing anywhere
+      // names is still dropped, so the fix widened the analysis rather
+      // than turning the pass off.
+      assert_false(
+        out.js.contains("reallyUnused"),
+        msg="the pass stopped working: \{out.js}",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}

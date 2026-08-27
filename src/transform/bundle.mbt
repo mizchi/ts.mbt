@@ -1196,6 +1196,26 @@ pub fn bundle_modules(
       ) {
       export_surface[n] = true
     }
+    // The same concatenation, lifted, for `class_method_dce_block` to
+    // ANALYSE while it rewrites one module at a time.
+    //
+    // Every question that pass asks is bundle-wide — "which member
+    // names does anything access", "does anything read a member under a
+    // computed key" — and handing it one module answered both about
+    // that module. A class in Excalidraw's `state.ts` lost `addPoint`,
+    // `close` and `getStrokeOutline` because the calls are in
+    // `shape.ts`, and the bundle then called `laserPointer.addPoint(…)`
+    // on an object without one. It reproduces in five lines and one
+    // flag: `mtsc entry.ts --bundle` on a class whose methods are
+    // called from the importing module deleted EVERY method.
+    //
+    // Lifted, because the pass matches on `NativeClassStmt`: the
+    // unlifted concatenation would look like a bundle with no classes
+    // and no accesses. Costs one extra lift of the graph per compile.
+    let dce_scope = iife_class_lift_block({
+      stmts: all_stmts,
+      stmt_positions: [],
+    })
     for i, path in order {
       let m = match modules.get(path) {
         Some(node) => node
@@ -1248,6 +1268,7 @@ pub fn bundle_modules(
       let lifted_block = class_method_dce_block(
         iife_class_lift_block(m.block),
         keep=export_surface,
+        scope=Some(dce_scope),
         class_fields=all_class_fields,
         type_aliases=all_type_aliases,
       )

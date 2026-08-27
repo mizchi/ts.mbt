@@ -37,7 +37,7 @@ pub fn bundle_modules(Map[String, String], String, BundleOptions) -> Result[Bund
 
 pub fn class_member_names(@ast.TsBlock) -> Map[String, Array[String]]
 
-pub fn class_method_dce_block(@ast.TsBlock, keep? : Map[String, Bool], class_fields? : Array[(String, @ast.TsType)], type_aliases? : Array[@ast.TsTypeAlias], explain? : Array[String]?) -> @ast.TsBlock
+pub fn class_method_dce_block(@ast.TsBlock, keep? : Map[String, Bool], scope? : @ast.TsBlock?, class_fields? : Array[(String, @ast.TsType)], type_aliases? : Array[@ast.TsTypeAlias], explain? : Array[String]?) -> @ast.TsBlock
 
 pub fn classes_observing_own_name(@ast.TsBlock) -> (Map[String, Bool], Bool)
 

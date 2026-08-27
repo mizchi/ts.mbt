@@ -106,7 +106,18 @@ product surfaces now.
   `from "."` not recognised as relative) and one fixture that had been
   passing by accident — `case08-typeargs`, where an object literal handed
   to an identity function lost its nested keys because only callback
-  arguments escaped through a call (`surface_escape_returned_args`). It
+  arguments escaped through a call (`surface_escape_returned_args`).
+  Chasing Excalidraw's remaining -1.7% then found the worst bug of the
+  three, and it was in the plainest path there is: `mtsc entry.ts
+  --bundle`, with no optimization flag at all, deleted every method of a
+  class whose call sites are in another module. `class_method_dce_block`
+  asks bundle-wide questions and the per-module emit path handed it one
+  module, so "bundle" quietly became "this module"; it now takes a
+  `scope` (analyse the graph, rewrite the module). That bundle was the
+  corpus's *reference* leg, so the -1.7% was mostly a reference that had
+  already lost 8 KB of methods — the real number is -0.11%. All three
+  legs had agreed with each other the whole time, which is the lesson
+  worth keeping: leg agreement is consistency, not correctness. It
   also found the
   reason four popular packages could not be measured at all, and it took
   four separate fixes to clear them: an unmemoized `export_surface.mbt`

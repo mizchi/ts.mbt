@@ -64,11 +64,26 @@
 // syntactic access set says "unused" and the method would be
 // deleted. `keep` carries the names the export-surface analysis
 // found reachable from the entry's exports; they are never dropped.
+//
+// EVERY question this pass asks is bundle-wide, and the word matters.
+// `scope` exists because one caller rewrites a bundle ONE MODULE AT A
+// TIME, and passing that module as `block` silently reinterpreted
+// "bundle" as "this module": a class in `state.ts` whose methods are
+// called from `shape.ts` had every one of them deleted, because
+// nothing in `state.ts` accessed them by name and the reflection sinks
+// that would have gated the pass were all in other modules. The
+// resulting bundle called `laserPointer.addPoint(…)` on an object with
+// no `addPoint`.
+//
+// So: `block` is what gets REWRITTEN, `scope` is what gets ANALYSED.
 
 ///|
 pub fn class_method_dce_block(
   block : @ast.TsBlock,
   keep? : Map[String, Bool] = {},
+  // The whole bundle, when `block` is one module of it. Defaults to
+  // `block`, which is right for a caller that hands over everything.
+  scope? : @ast.TsBlock? = None,
   // `(field name, declared type)` for every runtime class in the
   // bundle. Needed because the class lowering drops the annotation —
   // a field with an initializer becomes a constructor assignment, so
@@ -94,13 +109,19 @@ pub fn class_method_dce_block(
     }
     return block
   }
+  // Everything from here to the rewrite reads `analysed`, never
+  // `block`. The two differ only for the per-module caller.
+  let (analysed, iife_classes_in_scope) = match scope {
+    Some(b) => (b, collect_iife_class_names(b))
+    None => (block, iife_classes)
+  }
   // 2. Bundle-wide reflection / dynamic-access scan. Any hit aborts.
   //    The two name sets are what let the scan tell a harmless
   //    dynamic read from a fatal one: `arr[i]` reads an integer
   //    slot, `map[k]` reads an entry of a keyed container, and
   //    `obj[k]` on anything else could name any member at all.
-  let graph = build_symbol_graph(block, {})
-  let class_names = declared_class_names(block)
+  let graph = build_symbol_graph(analysed, {})
+  let class_names = declared_class_names(analysed)
   let alias_bodies : Map[String, @ast.TsType] = {}
   for ta in type_aliases {
     alias_bodies[ta.name] = ta.type_
@@ -108,7 +129,7 @@ pub fn class_method_dce_block(
   let container_facts = {
     class_names,
     this_fields: class_field_containers(
-      block, class_fields, class_names, alias_bodies,
+      analysed, class_fields, class_names, alias_bodies,
     ),
     strings: string_name_set(graph),
     aliases: alias_bodies,
@@ -128,7 +149,7 @@ pub fn class_method_dce_block(
   // report can rank the blocking patterns. The scan still
   // short-circuits inside a statement.
   let mut blocked = false
-  for s in block.stmts {
+  for s in analysed.stmts {
     if stmt_has_method_sniff(s, facts) {
       blocked = true
     }
@@ -139,7 +160,9 @@ pub fn class_method_dce_block(
   //    — those are definitions, not uses, and counting them would
   //    defeat the DCE on the IIFE-lowered form.
   let accessed : Map[String, Bool] = {}
-  collect_static_accesses_block_skipping_iife(block, iife_classes, accessed)
+  collect_static_accesses_block_skipping_iife(
+    analysed, iife_classes_in_scope, accessed,
+  )
   // Externally visible members count as accesses.
   for name in keep.keys() {
     accessed[name] = true

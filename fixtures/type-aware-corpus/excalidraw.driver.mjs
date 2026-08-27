@@ -422,6 +422,22 @@ p(
   })(),
 );
 p("freedrawOutline", El.getFreedrawOutlinePoints(freedraw, 1).length > 0);
+// The constant-width branch, which is a DIFFERENT code path: it runs the
+// stroke through `LaserPointer` (`addPoint` in a loop, then
+// `getStrokeOutline`) instead of perfect-freehand. Worth its own line
+// because the first version of this driver only took the other branch,
+// and all three legs agreed while every one of them was missing those
+// methods — the class lives in one module and the calls in another, and
+// class-method DCE had been answering "does anything access this name"
+// per module. A reference leg can be wrong and still be agreed with.
+p(
+  "constantWidthOutline",
+  (() => {
+    const el = { ...freedraw, strokeOptions: { variability: "constant" } };
+    const pts = El.getFreedrawOutlinePoints(el, 1);
+    return [pts.length > 0, pts.length === El.getFreedrawOutlinePoints(freedraw, 1).length];
+  })(),
+);
 
 // ---------------------------------------------------------------------
 // Element copies

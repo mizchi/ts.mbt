@@ -83,7 +83,7 @@ bundle 内と証明できない call を見つけて全部 reserve する）、
 | ts-pattern | 18 | 20,365 | 5,795 | 5,795 | 0 | NEUTRAL |
 | superstruct | 8 | 20,785 | 10,690 | 10,552 | −138 | LOSS |
 | zod | 133 | 648,647 | 200,320 | 200,141 | −179 | NEUTRAL |
-| excalidraw | 95 | 780,163 | 280,297 | 275,409 | −4,888 | LOSS |
+| excalidraw | 95 | 788,070 | 280,297 | 279,994 | −303 | LOSS |
 
 **WIN が 0 件です。** 一つ前の記録では hono が +500、zod が +788 の WIN
 でした。両方消えたのは測り方を変えたからではなく、**その WIN の一部が
@@ -359,7 +359,14 @@ constructor 表が top-level + nested block までなので）。
 1 つ入れると、library では一度も踏まなかった穴が並んで出てきました。
 対象は `packages/element`（52 file / 1 MB の TS）ですが、
 import は tsconfig の `paths` 経由で 5 つの sibling package に届き、
-bundle は**6 package / 95 module / 780 KB** になります。
+bundle は**6 package / 95 module / 788 KB** になります。
+
+見つかったものの内訳: bundle できるまでに 5 件、Node で実行できるまでに
+3 件（2 件は Node 側の事情、1 件は harness 自身の bug）、そして
+**pass の bug が 3 件** —— `TypeArgs` wrapper（19 file、うち 2 つが
+不健全）、export-surface の返り値引数、そして
+class-method DCE の scope。最後の 1 件は最適化 flag を 1 つも
+付けない path にあり、**基準 leg を壊していました**。
 
 ### bundle できるまでに 5 件
 
@@ -499,21 +506,98 @@ callee の return を escape させますが、`return v` の `v` は
 同じ扱いにしています。どの一部かを決めるにはこの pass が計算中の
 shape が必要になります）。hono と zod では byte 数が 1 も動きませんでした。
 
-### 結果は LOSS
+### LOSS の原因を追ったら、基準 leg が壊れていた
 
-excalidraw は aware 280,297 / blind 275,409 で **−4,888 byte（−1.74%）**。
-`aware2` control を引くと −5,669。つまり型を読んでいる方が大きい。
+最初の測定は aware 280,297 / blind 275,409 で **−4,888 byte（−1.74%）**
+でした。「なぜ型を読んでいる方が大きいのか」を追ったのがこの節です。
 
-原因の切り分けを 1 段だけやってあります。tag 比較の出現数
-（`.type==="arrow"` など）は**両 leg で完全に同じ**なので、
-`predicate-inline` が call site に述語本体を撒いて太らせている、
-という一番ありそうな筋ではありません。aware leg は function が 13 個、
-string literal が 4.4 KB 多い——**残っているコードが多い**。
-機構はまだ特定できていません（型があると export surface や
-liveness がより保守的になる方向の効果である、というところまで）。
+まず切り分けの 1 段目。tag 比較の出現数（`.type==="arrow"` など）は
+**両 leg で完全に同じ**なので、`predicate-inline` が call site に
+述語本体を撒いて太らせている、という一番ありそうな筋ではありません。
+aware leg は function が 13 個、string literal が 4.4 KB 多い——
+つまり**残っているコードが多い**。
 
-型を消した方が小さくなる target が 9 個中 3 個、WIN が 0 個。
-これは `--mangle-properties` が実 library で不発だったのと同じ種類の、
+そこで `--mangle` を外した 2 leg（名前が保存される）を作って
+top-level 宣言の集合を diff しました。aware にだけあるものが 13 個、
+blind にだけあるものは 0 個:
+
+```
+FRAME_STYLE add clamp$0 distancePointToSegment douglasPeucker mag
+norm normAngle plerp rot runLength smul sub
+```
+
+`add` / `sub` / `norm` / `rot` / `plerp` / `runLength` /
+`douglasPeucker` は全部 `packages/laser-pointer` の内部関数で、
+`LaserPointer` の method からしか呼ばれていません。そして blind leg の
+`LaserPointer` は `addPoint` / `close` / `getStrokeOutline` を**持って
+いませんでした**。call site は残っているので、blind bundle は
+
+```js
+element.points.map(([x, y]) => laserPointer.addPoint([x, y, 1]));
+return laserPointer.getStrokeOutline().map(…);
+```
+
+を method の無いオブジェクトに対して実行します。しかもこの経路は
+export された `getFreedrawOutlinePoints` から
+`strokeOptions.variability === "constant"` のときに到達します。
+
+さらに悪いことに、これは blind leg の最適化のせいではありませんでした。
+**`unopt.mjs` の時点で既に消えていました**——つまり
+`mtsc entry.ts --bundle`、最適化 flag 無しの一番素の path です。
+5 行 1 flag で再現します:
+
+```ts
+// E.ts
+export class C { m0() { return 0; } m1() { return 1; } }
+// entry.ts
+import { C } from "./E";
+console.log(Object.getOwnPropertyNames(C.prototype).join(","));
+```
+
+`--bundle` → `constructor` だけ。`--bundle --treeshake` →
+`constructor,m0,m1`。**最適化を頼んでいない方が消える**という逆転です。
+
+原因は `class_method_dce_block` の contract 違反でした。この pass の
+質問は全部 bundle 全体についてのものです——「bundle 内のどこかが
+computed key で member を読んでいるか」「どの member 名がどこかで
+access されているか」。ところが per-module emit path（opt flag が
+1 つも無いときに走る path）は**module を 1 つずつ**渡していたので、
+"bundle" が "この module" に読み替わっていました。`state.ts` の中では
+`addPoint` を誰も名前で触らないので全 method が消え、gate になるはずの
+computed-key sink は全部他の module にありました。
+
+修正は `scope` parameter です。`block` は**書き換える対象**、
+`scope` は**解析する対象**。per-module path は graph 全体を lift した
+ものを `scope` に渡します。`bundle_wbtest.mbt` の
+「a method called from ANOTHER module survives」が 2 file で pin して
+います（同時に、どこからも呼ばれない method は今も消えることも
+assert しています——解析を広げたのであって pass を止めたのではない）。
+
+直した後の excalidraw は unopt 788,070 / aware 280,297 /
+blind 279,994 で **−303 byte（−0.11%）**。**−1.74% の LOSS の
+ほぼ全部が、壊れた基準 leg でした。** blind は 8 KB の method が
+既に抜けた bundle を最適化していて、その小ささを型情報の差として
+計上されていたわけです。
+
+### 「3 leg が一致」は「正しい」ではない
+
+これがこの節で一番残しておきたいことです。壊れた `unopt` は
+**reference leg** でした。3 leg すべてが同じ観測を出していたのは、
+3 つが同じ bug を共有していたからです。driver が
+`strokeOptions.variability === "constant"` を通していなかったので、
+消えた method に誰も触らなかった。
+
+corpus の信用条件は「leg 間の一致」であって「正しさ」ではありません。
+一致は**同じ入力から作った 3 つの出力が互換であること**しか言わない。
+driver に constant-width の line を足したので、この経路は今後
+observation で守られます（`fixtures/type-aware-corpus/README.md` に
+driver の書き方として明記）。
+
+### 残る LOSS
+
+型を消した方が小さくなる target は typebox（−2.98%、size-only）と
+superstruct（−138 byte）と excalidraw（−303 byte）。WIN は 0 個。
+`--mangle-properties` が実 library で不発だったのと同じ種類の、
 知っておく価値のある不都合な事実です。
 
 ## 残っている既知の未修正
@@ -525,7 +609,7 @@ liveness がより保守的になる方向の効果である、というとこ�
 | module 跨ぎの `const enum` | immer の bundle が `ArchType is not defined` で load 失敗 |
 | remeda の parse error | `setPath.ts`: `Expected Semicolon, got Extends` |
 | property mangler が実 library で不発 | fail-closed な callee-provenance scan が全部 reserve する |
-| excalidraw が LOSS | aware leg の方が function 13 個 / string 4.4 KB 多い。tag 比較の数は同一なので predicate-inline の膨張ではない。機構は未特定 |
+| excalidraw が僅差で LOSS | −303 byte（−0.11%）。noise floor が 280 byte なのでぎりぎり判定に乗っている。残りの機構は未特定 |
 | CSS modules の値 | `import styles from "./x.module.css"` に `{}` を渡す。class 名 map ではないので `styles.foo` は `undefined` |
 | `TypeArgs` の構造的保証 | 19 file に arm を足したが、次に walker を書く人が落とすのを止める仕組みは無い。`case40` が唯一の網 |
 
