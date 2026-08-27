@@ -76,7 +76,7 @@ valibot と immer では実質ゼロ、typebox では**マイナス**です。
 
 ## corpus に入れられなかったもの
 
-9 個試して測れるようになったのは 8 個です（うち 3 個は bundle が
+9 個試して測れるようになったのは 8 個です（うち 2 個は bundle が
 動かないので `size-only`）。残り 1 個は表に `BLOCKED` として残してあります——理由が finding であり、理由が消えた日に
 そのまま measurement になるからです。
 
@@ -86,9 +86,9 @@ valibot と immer では実質ゼロ、typebox では**マイナス**です。
 | valibot | measured | — |
 | neverthrow | measured | 元 BLOCKED。export-surface の memo で 420s 未完 → 1 秒未満 |
 | ts-pattern | measured | 元 BLOCKED。同上。ただし `P` が bundle に無い（下記）|
-| zod | size-only | 元 BLOCKED。module graph の dedup で 18 分未完 → 230ms。ただし load で throw（下記）|
+| zod | measured | 元 BLOCKED。4 件の修正を経て挙動検証まで到達（+1,096 bytes / +0.61% の WIN）|
 | superstruct | **BROKEN** | 元 BLOCKED。同上 → 15ms。ただし挙動が変わる（下記）|
-| typebox | size-only | bundle が load で throw: 型専用の名前 `TTypeArray` が値として emit されている |
+| typebox | size-only | `TTypeArray` は解消。今は別件の TDZ で throw: `IntegerKey` の宣言が使用より後に並ぶ |
 | immer | size-only | bundle が load で throw: module 跨ぎの `const enum ArchType` が emit も inline もされない |
 | remeda | BLOCKED | `setPath.ts` の parse error: `Expected Semicolon, got Extends` |
 
@@ -266,7 +266,50 @@ read や `this.constructor.name` は**ソースに見えている**ので、
 | 件 | 症状 |
 | --- | --- |
 | alias 付き re-export | `export { X as Y }`（別 module 由来の X）が両方の綴りごと落ちる。ts-pattern の `P` |
-| **`export * as` が型専用 export を namespace object に入れる** | typebox（`TTypeArray is not defined`）と zod（`JSONType is not defined`）は同一原因。2 file で再現: `m.ts` に `export type OnlyType = …; export const value = 1;`、`index.ts` に `export * as ns from "./m.js";` → `const ns = {OnlyType: OnlyType, value: value};` |
+| top-level の TDZ | typebox の bundle が `Cannot access 'IntegerKey' before initialization`。`const` の宣言が使用より後に並ぶ |
 | module 跨ぎの `const enum` | immer の bundle が `ArchType is not defined` で load 失敗 |
 | remeda の parse error | `setPath.ts`: `Expected Semicolon, got Extends` |
+| class 名の観測 | superstruct が BROKEN。方針の決定待ち（上記）|
 | property mangler が実 library で不発 | fail-closed な callee-provenance scan が全部 reserve する |
+
+### 直したもの 4: namespace object に型専用 export が入る
+
+`export * as ns from './m'` は対象の export 1 つごとに property を並べますが、
+型専用の export には指す先がありません。`{OnlyType: OnlyType, …}` を emit して
+load 時に `ReferenceError` になっていました。typebox の `TTypeArray` と
+zod の `JSONType` は同一原因です。2 file で再現します。
+
+```ts
+// m.ts
+export type OnlyType = { a: number };
+export const value = 1;
+// index.ts
+export * as ns from "./m.js";
+```
+
+enumeration site で filter する方針が**収束しませんでした**。site は 3 つ
+（namespace 自身の `export_specs`、`import * as` 経路、
+`enumerate_wildcard_reexports`）あり、zod が到達経路ごとに順番に
+見つけてきました——`$constructor`、`$ZodBranded`、`$RefinementCtx`。
+corpus が文句を言うたびに次の site を patch するのは間違ったループで、
+2 個目で気づくべきでした。
+
+filter は残しつつ（正確で安く、object を小さく保つ）、効く checkを
+**object を組み立てる 1 箇所**に移しました。`synthesize_namespace_bindings_for`
+が、値が bundle のどの binding も指していない entry を落とします——
+どの経路で入ったかに関係なく。enumeration ではなく構成上 fail-closed です。
+
+判定に使う `runtime_bindings` は linker の rename phase 後に 1 回だけ
+計算します（名前が最終形になっている）: 各 module の top-level 宣言を
+その module の rename を通したもの、加えてこの pass 自身が synthesize する
+namespace object（namespace は namespace を持てる）。
+
+test は型 filter が**原理的に**覆えない経路を使っています——
+`import { T } from "./types"; export { T }`（両端に `type` なし）で、
+module は `T` を何も宣言しないので keying する型宣言が存在しません。
+backstop を無効化すると `Ghost: Ghost, real: real` が出て test が落ちます。
+
+副作用として、declaration merging（`export interface $constructor` と
+`export function $constructor` が同居）で値を落とす bug も出ました。
+名前だけを見る filter では両方消えます。型宣言があること **かつ**
+同名の runtime binding が無いこと、の両方を要求するようにしました。

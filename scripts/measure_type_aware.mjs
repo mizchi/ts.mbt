@@ -95,14 +95,17 @@ const CORPUS = [
     name: "typebox",
     repo: "https://github.com/sinclairzx81/typebox",
     entry: "src/index.ts",
-    // Bundles, but the bundle throws on load: `TTypeArray is not
-    // defined`. A type-only name reached a runtime object literal, so
-    // the linker emitted a value reference for something that has no
-    // value. Sizes are still comparable — both legs carry the same
-    // defect — but nothing executes them, so they are reported as
-    // size-only.
+    // The `TTypeArray is not defined` failure this row used to carry was
+    // the type-only namespace entry, and it is fixed. typebox now gets
+    // further and stops on a different bug: `Cannot access 'IntegerKey'
+    // before initialization` — a `const` used by a later top-level
+    // statement that the linker ordered ahead of its declaration. A TDZ
+    // ordering problem, unrelated to types, and its own fix.
+    //
+    // Sizes stay comparable (both legs carry the same defect), but
+    // nothing executes them, so the row is size-only.
     driver: null,
-    sizeOnlyWhy: "bundle throws on load: type-only name `TTypeArray` emitted as a value",
+    sizeOnlyWhy: "bundle throws on load: TDZ, `IntegerKey` used before its declaration is ordered",
   },
   {
     name: "immer",
@@ -174,19 +177,11 @@ const CORPUS = [
     name: "zod",
     repo: "https://github.com/colinhacks/zod",
     entry: "packages/zod/src/index.ts",
-    // Compiles in 230 ms now, and loads far enough to hit the NEXT bug,
-    // which is typebox's: `export * as util from './util.js'`
-    // synthesises a namespace object listing every export, type-only
-    // ones included, and `JSONType` / `AssertEqual` / `Prettify` have no
-    // runtime value. Two files reproduce it:
-    //
-    //   m.ts      export type OnlyType = { a: number };
-    //             export const value = 1;
-    //   index.ts  export * as ns from "./m.js";
-    //
-    // emits `const ns = {OnlyType: OnlyType, value: value};`.
-    driver: null,
-    sizeOnlyWhy: "bundle throws on load: `export * as` puts type-only exports in the namespace object",
+    // Took four fixes to get here from BLOCKED, and it found every one:
+    // the module-graph dedup (18 min -> 230 ms), the arrow body's parens
+    // through an erased `as`, the type-only namespace entries, and the
+    // merged interface-and-function case.
+    driver: "zod.driver.mjs",
   },
   {
     name: "remeda",

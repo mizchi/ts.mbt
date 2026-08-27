@@ -15,7 +15,7 @@
     "status": "size-only",
     "verdict": "LOSS",
     "delta": -5100,
-    "aware": 98584
+    "aware": 95093
   },
   "immer": {
     "status": "size-only",
@@ -42,10 +42,10 @@
     "aware": 10677
   },
   "zod": {
-    "status": "size-only",
+    "status": "measured",
     "verdict": "WIN",
-    "delta": 1834,
-    "aware": 190871
+    "delta": 1096,
+    "aware": 180260
   },
   "remeda": {
     "status": "blocked"
