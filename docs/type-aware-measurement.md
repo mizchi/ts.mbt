@@ -267,16 +267,37 @@ superstruct +31%**。既定にできる数字ではありません。
 `C` かその subclass であって、無関係な class では絶対にありません。
 これで superstruct は `StructError` 1 個だけの reserve になります。
 
-| target | pass 前 | 全 top-level | class+function | 階層 |
-| --- | --- | --- | --- | --- |
-| superstruct | 10,677 (BROKEN) | 13,993 | 13,993 | **10,702 (+25 byte)** |
-| typebox | 95,093 | 162,047 | 162,047 | 126,884 |
-| zod | 180,260 | 251,868 | 251,868 | 200,335 |
+| target | pass 前 | 全 top-level | class+function | 階層 | 階層 + constructor 限定 |
+| --- | --- | --- | --- | --- | --- |
+| superstruct | 10,677 (BROKEN) | 13,993 | 13,993 | 10,702 | **10,690 (+13 byte)** |
+| typebox | 95,093 | 162,047 | 162,047 | 126,884 | 123,172 |
+| zod | 180,260 | 251,868 | 251,868 | 200,335 | 200,325 |
+
+#### 「精密な側は無料」は間違いでした
+
+corpus の 8 target だけを見て、`C.name` → `C` を reserve する側は
+ほぼ無料だと報告しました。**間違いです。9 MB の typescript.js で
+282 KB（7.9%）かかりました。**
+
+原因はコメントに書いて自分で正当化した判断です。`.name` の左にある
+識別子を、**それが constructor かどうか確かめずに** reserve していて、
+「plain object の `.name` なら数バイトの損」と書いていました。
+typescript.js には `constructor.name` が**1 つもありません**。あるのは
+`node.name` / `symbol.name` / `declaration.name` が数千回で、
+`node` / `symbol` / `declaration` を reserve するとコンパイラで最も
+頻出する局所名が丸ごと mangle されなくなります。
+
+反対側の branch 用に既に集めていた constructor 宣言と intersect して
+修正しました。typescript.js は 3,588,243 byte——pass 導入前と**同一**に
+戻りました。
+
+corpus の 8 target はこの種のコストを 1 つも露出させませんでした。
+real-world の 9 MB target が一発で出しました。
 
 #### 残るコストと、その理由
 
-8 target のうち **6 つは 25 byte 以下**（hono / immer / neverthrow /
-ts-pattern が 0、valibot が +15、superstruct が +25）。
+8 target のうち **6 つは 25 byte 以下**（hono / valibot / immer /
+neverthrow / ts-pattern が 0、superstruct が +13）。
 
 残る 2 つは fallback を踏みます。実際に `this` 以外で読んでいます。
 
@@ -289,7 +310,7 @@ globalThis.Object.getPrototypeOf(left).constructor.name
 IsEqual(proto.constructor.name, 'Object')
 ```
 
-zod +11%（180,335 → 200,335）、typebox +33%。
+zod +11%（180,260 → 200,325）、typebox +30%（95,093 → 123,172）。
 
 **まだ narrowing の余地があります**（未実装）。上の 4 例のうち 2 つは
 結果を**組み込みの名前**（`"AsyncFunction"`、`'Object'`）と比較して
@@ -301,9 +322,12 @@ zod +11%（180,335 → 200,335）、typebox +33%。
 #### 穴（明記）
 
 `foo().name`（`foo` が class を返す）と `bag.ctor.name` は捕まえられません。
-任意の式の評価結果を知る必要があるからです。`.name` read をすべて危険と
+任意の式の評価結果を知る必要があるからです。top-level ではなく
+関数本体の中で宣言された class の `C.name` も同様です（caller が持つ
+constructor 表が top-level + nested block までなので）。
+`.name` read をすべて危険と
 みなす選択肢はありません——`err.name`、`req.name`、`{name:…}.name` は
-どこにでもあり、ほぼ全 bundle の top-level を reserve することになります。
+どこにでもあり、typescript.js が示した通り 282 KB の代償になります。
 **class 名を無条件に rename するより厳密で、証明ではありません。**
 
 ## 残っている既知の未修正

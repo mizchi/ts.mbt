@@ -25,7 +25,11 @@
 //   anything else       ignored. See the hole below.
 //
 // THE HOLE, stated plainly: `foo().name` where `foo` returns a class is
-// not caught. Neither is `bag.ctor.name` where `bag.ctor` holds one.
+// not caught. Neither is `bag.ctor.name` where `bag.ctor` holds one, nor
+// `C.name` where `C` is a class declared inside a function body rather
+// than at the top level — the caller's constructor table is top-level
+// (plus nested blocks), because that is what it can enumerate without
+// another walker whose misses fail toward a renamed class.
 // Proving those needs to know what an arbitrary expression evaluates to,
 // and treating every `.name` read as dangerous is not an option —
 // `err.name`, `req.name`, `{name: …}.name` are everywhere, and the pass
@@ -59,9 +63,12 @@ const NAME_OF_CTOR : String = "@@nameof-constructor"
 fn record_name_receiver(recv : @ast.TsExpr, out : Map[String, Bool]) -> Unit {
   match recv {
     // `C.name` — a plain identifier, so the class is named right here.
-    // No check that `C` IS a class: reserving a name that turned out to
-    // be a plain object costs a few bytes, and deciding otherwise would
-    // need the declaration table this walker does not have.
+    // Whether `C` IS a constructor is decided by the CALLER, which has
+    // the declaration table this walker does not: reserving every
+    // identifier on the left of a `.name` read cost 282 KB (7.9%) on the
+    // TypeScript compiler, which writes `node.name` / `symbol.name` /
+    // `declaration.name` thousands of times and would have had its most
+    // common locals frozen.
     @ast.TsExpr::Var(n) => out[NAME_OF_PREFIX + n] = true
     // `x.constructor.name` / `x["constructor"].name`, `this` included.
     @ast.TsExpr::PropAccess(_, "constructor") => out[NAME_OF_CTOR] = true

@@ -977,8 +977,27 @@ pub fn bundle_modules(
       // mangle the rest. See `observed_names.mbt`, including what it
       // does NOT catch.
       let (observed_names, observed_all_ctors) = observed_class_names(combined)
-      for n in observed_names {
-        external_reserved.push(n)
+      // Only names that are CONSTRUCTORS. `observed_class_names` reports
+      // the identifier on the left of a `.name` read without judging
+      // what it holds, and the first version reserved all of them on the
+      // theory that a plain object's `.name` costs a few bytes. On the
+      // 9 MB TypeScript compiler it cost 282 KB — 7.9%. That bundle
+      // never writes `constructor.name`; what it writes is `node.name`,
+      // `symbol.name`, `declaration.name` several thousand times, and
+      // reserving `node` / `symbol` / `declaration` stops the most common
+      // locals in the program from mangling at all.
+      //
+      // So intersect with the declarations that actually have a
+      // meaningful `.name`. A `.name` read on anything else observes an
+      // ordinary property and constrains nothing.
+      if observed_names.length() > 0 {
+        let ctors : Map[String, Bool] = {}
+        constructor_like_top_level(combined, ctors)
+        for n in observed_names {
+          if ctors.contains(n) {
+            external_reserved.push(n)
+          }
+        }
       }
       if observed_all_ctors {
         // `<expr>.constructor.name` names no class syntactically, but
