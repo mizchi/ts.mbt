@@ -758,20 +758,37 @@ fn entry_export_bindings(
 /// pulls in fifty-odd type aliases that way, and typebox's
 /// `TTypeArray` is the same bug reached through `export *`.
 ///
-/// The test is POSITIVE evidence of type-ness — this module declares the
-/// name as a type — rather than absence of evidence of value-ness. That
-/// keeps a value from being dropped by mistake, which would be the worse
-/// failure, but it does mean an exotic type-only export form that is
-/// neither an alias nor an interface here (`import { T } from …; export
-/// { T }`, where the re-export carries no `type` marker) still slips
-/// through. `re.type_only` already covers `export type { … }`.
+/// The test needs BOTH halves, and getting it wrong in either direction
+/// breaks the bundle:
+///
+///   * positive evidence of type-ness — this module declares the name as
+///     an alias or an interface. Without that, filtering on "no runtime
+///     declaration here" would drop a value the module re-exports from
+///     somewhere else.
+///   * negative evidence of value-ness — and no runtime binding under
+///     the same name. TypeScript merges declarations, so one name can be
+///     both: zod's core has `export interface $constructor` next to
+///     `export function $constructor`, and keying on the name alone
+///     dropped the function. `core$3.$constructor is not a function`.
+///
+/// One gap remains, and the code cannot see it from here:
+/// `import { T } from …; export { T }` with no `type` marker on either
+/// end declares nothing locally, so it is kept — a type entry that will
+/// still throw. `isolatedModules` / `verbatimModuleSyntax` forbid that
+/// spelling, and `re.type_only` covers the `export type { … }` form.
 fn type_only_export_names(node : ModuleNode) -> Map[String, Bool] {
+  let runtime : Map[String, Bool] = {}
+  collect_local_decl_names_in_block(node.block, runtime)
   let out : Map[String, Bool] = {}
   for ta in node.type_aliases {
-    out[ta.name] = true
+    if !runtime.contains(ta.name) {
+      out[ta.name] = true
+    }
   }
   for i in node.interfaces {
-    out[i.name] = true
+    if !runtime.contains(i.name) {
+      out[i.name] = true
+    }
   }
   out
 }
@@ -982,9 +999,22 @@ fn enumerate_wildcard_reexports(
           Some(node) => node
           None => continue
         }
+        let dep_type_only = type_only_export_names(dep)
         for spec in dep.export_specs {
           // ESM: `export *` does not re-export `default`.
           if spec.export_name == "default" {
+            continue
+          }
+          // …nor a type-only export. This is the THIRD site that needs
+          // the filter, and it is where zod's `$ZodBranded` came in:
+          // a name re-exported through `export * from "./x.js"` is
+          // declared in `x`, not in the module the namespace names, so
+          // filtering only at the namespace's own `export_specs` misses
+          // it. The check is keyed to the module that DECLARES the name,
+          // which is what makes it right per source rather than per
+          // namespace.
+          if dep_type_only.contains(spec.local_name) ||
+            dep_type_only.contains(spec.export_name) {
             continue
           }
           if !props.contains(spec.export_name) {
