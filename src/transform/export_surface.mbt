@@ -56,6 +56,7 @@ pub fn exported_surface_props(
     container_writes: {},
     reserved: {},
     visited: {},
+    walked: {},
     queue: [],
   }
   index_top_level_decls(w, block)
@@ -70,7 +71,10 @@ pub fn exported_surface_props(
       None => ()
     }
     match w.classes.get(name) {
-      Some(decl) => surface_escape_class(w, decl, 0)
+      Some(decl) =>
+        if surface_should_walk(w, "class:" + name, 0) {
+          surface_escape_class(w, decl, 0)
+        }
       None => ()
     }
     // Anything written onto this object is part of what the consumer
@@ -129,7 +133,56 @@ priv struct SurfaceWalk {
   reserved : Map[String, Bool]
   // Names already processed, so a cyclic reference terminates.
   visited : Map[String, Bool]
+  // The shallowest depth at which a named function body or class has
+  // already been walked. See `surface_should_walk`.
+  walked : Map[String, Int]
   queue : Array[String]
+}
+
+///|
+/// Has this named body already been walked from at least as shallow a
+/// position? If not, claim it at `depth` and say so.
+///
+/// Without this the pass does not finish on real input. A class reached
+/// from N `new C(…)` sites was escaped N times, and each escape walked
+/// every method's returns, which reach more `new` — so the work is
+/// exponential in the call graph's branching, and `SURFACE_MAX_DEPTH`
+/// (96) is nowhere near tight enough to contain it. neverthrow is
+/// 33 KB in five files and did not finish in seven minutes; the
+/// backtrace was `surface_escape_class` <-> `surface_escape_expr` all
+/// the way down, with `class_this_writes` re-walking every method body
+/// at each level.
+///
+/// The memo is keyed on DEPTH rather than being once-only, because
+/// depth is not neutral here: a body first reached at depth 95 gets
+/// truncated by the cap, and if a later path reaches it at depth 2 that
+/// path would have seen further. Skipping it would UNDER-reserve, and
+/// an under-reserved name is a renamed name is a broken consumer. So a
+/// shallower arrival re-walks. Depth only ever decreases, so this
+/// terminates, and on real code a body is walked once or twice.
+///
+/// That depth dimension is reasoned about, not test-covered, and the
+/// distinction is worth stating: re-walking can only ADD names, so it is
+/// the conservative direction, but no case in
+/// `export_surface_wbtest.mbt` distinguishes it from a once-only memo.
+/// Constructing one needs an expression nested deeper than
+/// `SURFACE_MAX_DEPTH`, and at that size the walk is itself pathological
+/// — the attempt ran the test suite past ten minutes. The pre-existing
+/// `fn:` memo was once-only, so this is strictly the safer of the two
+/// regardless.
+///
+/// Only names are keyed, and only names that come from a Map keyed by
+/// that same name (`w.funcs`, `w.classes`), so two different bodies
+/// cannot collide on one key. A class EXPRESSION is walked per
+/// occurrence, which is linear in the AST and needs no memo.
+fn surface_should_walk(w : SurfaceWalk, key : String, depth : Int) -> Bool {
+  match w.walked.get(key) {
+    Some(seen) if seen <= depth => false
+    _ => {
+      w.walked[key] = depth
+      true
+    }
+  }
 }
 
 ///|
@@ -398,6 +451,7 @@ fn class_this_writes(
     container_writes: {},
     reserved: {},
     visited: {},
+    walked: {},
     queue: [],
   }
   match decl.constructor_body {
@@ -471,8 +525,7 @@ fn surface_escape_expr(
     Call(name, args) => {
       match w.funcs.get(name) {
         Some(f) =>
-          if !w.visited.contains("fn:" + name) {
-            w.visited["fn:" + name] = true
+          if surface_should_walk(w, "fn:" + name, depth + 1) {
             surface_escape_func_body(w, f.params, f.body, depth + 1)
           }
         None => surface_enqueue(w, name)
@@ -506,7 +559,10 @@ fn surface_escape_expr(
     }
     New(name, args) | NewExpr(Var(name), args) => {
       match w.classes.get(name) {
-        Some(decl) => surface_escape_class(w, decl, depth + 1)
+        Some(decl) =>
+          if surface_should_walk(w, "class:" + name, depth + 1) {
+            surface_escape_class(w, decl, depth + 1)
+          }
         None => surface_enqueue(w, name)
       }
       surface_escape_callback_args(w, args, depth)

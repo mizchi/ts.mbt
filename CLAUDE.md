@@ -90,10 +90,15 @@ product surfaces now.
   flags — once from the TypeScript source, once from the same code with
   its types erased — with all three legs required to observe the same
   thing. The answer so far is uncomfortable and worth knowing: +2.3% on
-  hono, ~0 on valibot and immer, **-5.2% on typebox**, the property
-  mangler entirely inert on all four, and five of nine candidate
-  packages unable to reach a measurement at all — four of them stuck in
-  an unmemoized `export_surface.mbt` walk that never returns. See
+  hono, ~0 on valibot and immer, **-5.2% on typebox**, and the property
+  mangler entirely inert on every library measured. It also found the
+  reason four popular packages could not be measured at all: an
+  unmemoized `export_surface.mbt` walk that re-escaped a class once per
+  `new` site and never returned (`surface_should_walk` bounds it —
+  neverthrow went from not finishing in 420s to under a second). Two of
+  the four turned out to have different causes entirely, both still
+  open: a parser blowup on recursive conditional types, and a parse
+  phase too slow to finish 133 files in fifteen minutes. See
   [`docs/type-aware-measurement.md`](./docs/type-aware-measurement.md).
 - `src/bridge` consumes `src/checker` for every type-shape decision and runs
   `@checker.check_module` on the synthesized output as a sanity gate. It also

@@ -23,16 +23,22 @@
     "delta": 0,
     "aware": 20826
   },
-  "zod": {
-    "status": "blocked"
-  },
   "neverthrow": {
-    "status": "blocked"
+    "status": "measured",
+    "verdict": "NEUTRAL",
+    "delta": 25,
+    "aware": 5141
+  },
+  "ts-pattern": {
+    "status": "measured",
+    "verdict": "NEUTRAL",
+    "delta": 32,
+    "aware": 5763
   },
   "superstruct": {
     "status": "blocked"
   },
-  "ts-pattern": {
+  "zod": {
     "status": "blocked"
   },
   "remeda": {

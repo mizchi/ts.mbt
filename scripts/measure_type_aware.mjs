@@ -115,29 +115,50 @@ const CORPUS = [
     driver: null,
     sizeOnlyWhy: "bundle throws on load: cross-module `const enum ArchType` neither emitted nor inlined",
   },
-  {
-    name: "zod",
-    repo: "https://github.com/colinhacks/zod",
-    entry: "packages/zod/src/index.ts",
-    blocked: "export-surface blowup: no completion in 240s",
-  },
+  // These two were BLOCKED by the export-surface blowup that
+  // `surface_should_walk` in `export_surface.mbt` now bounds:
+  // neverthrow went from not finishing in 420s to under a second.
+  // `ts-pattern` is the corpus's only exhaustive-match-over-a-
+  // discriminated-union target, which is the shape `tag-rewrite` and
+  // `switch-fold` are built for, so it is the most interesting row here.
   {
     name: "neverthrow",
     repo: "https://github.com/supermacro/neverthrow",
     entry: "src/index.ts",
-    blocked: "export-surface blowup: no completion in 420s on 33 KB / 5 files",
-  },
-  {
-    name: "superstruct",
-    repo: "https://github.com/ianstormtaylor/superstruct",
-    entry: "src/index.ts",
-    blocked: "export-surface blowup: no completion in 90s",
+    driver: "neverthrow.driver.mjs",
   },
   {
     name: "ts-pattern",
     repo: "https://github.com/gvergnaud/ts-pattern",
     entry: "src/index.ts",
-    blocked: "export-surface blowup: no completion in 100s",
+    driver: "ts-pattern.driver.mjs",
+  },
+  {
+    name: "superstruct",
+    repo: "https://github.com/ianstormtaylor/superstruct",
+    entry: "src/index.ts",
+    // Was attributed to the export-surface blowup; it is not. With that
+    // bounded, superstruct still does not finish, and the backtrace is
+    // in the PARSER:
+    //   Parser::parse_conditional_type_tail -> parse_type ->
+    //   parse_intersection_type -> parse_type_operand -> parse_primary_type
+    // on a `type` alias. A separate blowup on recursive conditional
+    // types, with its own fix.
+    driver: "superstruct.driver.mjs",
+    blocked: "parser blowup on a recursive conditional type (parse_conditional_type_tail)",
+  },
+  {
+    name: "zod",
+    repo: "https://github.com/colinhacks/zod",
+    entry: "packages/zod/src/index.ts",
+    // Also once attributed to the export-surface blowup, also not that.
+    // zod is not stuck — sampling its stack twice shows it moving, still
+    // inside `mtsc_load_bundle_files` — it is just far too slow: after
+    // eighteen minutes it had not finished PARSING its 133 source
+    // files. A throughput problem in the parser, distinct from both the
+    // export-surface blowup and superstruct's conditional-type one.
+    driver: "zod.driver.mjs",
+    blocked: "parse phase still running after 1,095s (progressing, not stuck)",
   },
   {
     name: "remeda",
