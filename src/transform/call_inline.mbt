@@ -202,6 +202,7 @@ fn expr_contains_function(expr : @ast.TsExpr) -> Bool {
     | OptionalChain(inner)
     | PureCall(inner)
     | Await(inner)
+    | TypeArgs(_, inner)
     | Spread(inner) => expr_contains_function(inner)
     PropAccess(recv, _) => expr_contains_function(recv)
     IndexAccess(recv, idx) =>

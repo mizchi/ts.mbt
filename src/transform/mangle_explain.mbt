@@ -277,8 +277,11 @@ fn external_chain_root(expr : @ast.TsExpr) -> String {
     | CallExpr(recv, _)
     | NewExpr(recv, _) => external_chain_root(recv)
     Call(n, _) | New(n, _) => n
-    NonNull(i) | OptionalChain(i) | As(i, _) | Satisfies(i, _) =>
-      external_chain_root(i)
+    NonNull(i)
+    | OptionalChain(i)
+    | As(i, _)
+    | Satisfies(i, _)
+    | TypeArgs(_, i) => external_chain_root(i)
     _ => "?"
   }
 }

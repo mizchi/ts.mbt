@@ -401,6 +401,21 @@ fn mtsc_basename(path : String) -> String {
 }
 
 ///|
+/// A specifier the loader resolves against the filesystem itself, rather
+/// than handing to package resolution: relative (`./x`, `../x`, `.`,
+/// `..`) or rooted (`/x`).
+///
+/// One predicate for all four test sites in the graph walk. The import
+/// loop and the re-export loop are mirror images of each other and each
+/// tests this twice — once to decide whether a type-only edge is worth
+/// following, once to pick the resolve branch — so an inlined test is
+/// four copies that have to agree. `.` and `..` were missing from all
+/// four; see `@transform.is_relative_specifier`.
+fn mtsc_is_local_specifier(spec : String) -> Bool {
+  @transform.is_relative_specifier(spec) || spec.has_prefix("/")
+}
+
+///|
 fn mtsc_join_path(dir : String, child : String) -> String {
   if dir == "" {
     child
@@ -465,6 +480,30 @@ fn mtsc_empty_module() -> @ast.TsModule {
     class_dup_diagnostics: [],
     top_level_stmts: [],
   }
+}
+
+///|
+/// Does this path name a file the JavaScript pipeline cannot parse and
+/// has no business parsing — a stylesheet, an image, a font, a media
+/// file? Bundlers resolve these through loaders; a JS-only bundle has
+/// nothing to emit for them.
+///
+/// An extension list rather than "anything not .ts/.tsx/.js": a resolved
+/// path with an unfamiliar extension is more likely a module the
+/// resolver mis-resolved than an asset, and silently emptying that would
+/// turn a resolution bug into missing code rather than an error.
+fn is_non_js_asset_path(path : String) -> Bool {
+  for
+    ext in [
+      ".css", ".scss", ".sass", ".less", ".styl", ".svg", ".png", ".jpg", ".jpeg",
+      ".gif", ".webp", ".avif", ".ico", ".bmp", ".woff", ".woff2", ".ttf", ".otf",
+      ".eot", ".mp3", ".mp4", ".wav", ".ogg", ".webm", ".pdf", ".wasm",
+    ] {
+    if path.has_suffix(ext) {
+      return true
+    }
+  }
+  false
 }
 
 ///|
@@ -578,10 +617,61 @@ async fn mtsc_load_bundle_files(
       continue
     }
     let read_started = @bench.monotonic_clock_start()
-    let source = @fs.read_file(resolved).text() catch {
-      e => return Err("read error \{resolved}: \{e}")
+    // Decide BEFORE reading. A `.woff2` is binary and decoding it as
+    // UTF-8 fails outright (`utf8.Malformed`), so an asset has to be
+    // recognised by its path, not by its contents — and skipping the
+    // read also keeps megabytes of fonts and images out of the compile.
+    let asset = is_non_js_asset_path(resolved)
+    let raw_source = if asset {
+      ""
+    } else {
+      @fs.read_file(resolved).text() catch {
+        e => return Err("read error \{resolved}: \{e}")
+      }
     }
     read_micros = read_micros + @bench.monotonic_clock_end(read_started)
+    // A `.json` import is a module whose default export is the parsed
+    // document. Handing the file to the TypeScript parser instead is a
+    // syntax error on the first key — `Expected Semicolon, got Colon` —
+    // and it takes the whole compile with it. Excalidraw's `i18n.ts`
+    // does `import percentages from "./locales/percentages.json"`, which
+    // is enough to stop its 1 MB element package from bundling at all.
+    //
+    // JSON is a subset of the expression grammar, so the document can
+    // become a module by wrapping it rather than by teaching the parser
+    // a second grammar: `export default <document>;` parses as the
+    // object / array / scalar literal it already is.
+    //
+    // Default export only. That is what an ESM JSON module offers, and
+    // it is what every import of one in the corpus uses;
+    // `resolveJsonModule`'s named imports of top-level keys would need
+    // one `export const` per key and are not synthesized here.
+    //
+    // One semantic difference is worth naming: a `"__proto__"` key in an
+    // object literal sets the prototype instead of becoming an own
+    // property, where `JSON.parse` makes it an own property. A document
+    // with that key is mis-modelled.
+    // An asset import is not JavaScript and has no JavaScript to
+    // contribute. `import "./ContextMenu.scss"` is a side effect a CSS
+    // pipeline resolves, and handing the stylesheet to the TypeScript
+    // parser is `Expected type, got Star` on the first `*` selector.
+    // Excalidraw reaches one from its element package and the whole
+    // compile stops there.
+    //
+    // Synthesize an empty module instead. The side-effect form then
+    // contributes nothing, which is correct for a JS-only bundle. The
+    // value form (`import styles from "./x.module.css"`) gets `{}`,
+    // which is NOT the class-name map a CSS-modules pipeline would
+    // build — a bundle that reads `styles.foo` sees `undefined`. That is
+    // a real limitation, not a fix: without a CSS pipeline there is no
+    // honest value to hand it.
+    let source = if asset {
+      "export default {};\n"
+    } else if resolved.has_suffix(".json") {
+      "export default " + raw_source + ";\n"
+    } else {
+      raw_source
+    }
     files[resolved] = source
     // The extension-less form is also keyed, so the bundler can look up
     // the specifier a module actually spelled (`./sub` -> `/dir/sub`).
@@ -642,13 +732,10 @@ async fn mtsc_load_bundle_files(
       // edge relative type-only imports; a bare one would drag a whole
       // package's declarations in, so those stay skipped.
       let spec = imp.module_spec
-      if imp.type_only &&
-        !(spec.has_prefix("./") ||
-        spec.has_prefix("../") ||
-        spec.has_prefix("/")) {
+      if imp.type_only && !mtsc_is_local_specifier(spec) {
         continue
       }
-      if spec.has_prefix("./") || spec.has_prefix("../") || spec.has_prefix("/") {
+      if mtsc_is_local_specifier(spec) {
         let combined = if spec.has_prefix("/") {
           mtsc_normalize(spec)
         } else {
@@ -686,13 +773,10 @@ async fn mtsc_load_bundle_files(
     for re in mb.reexports {
       // Same reasoning as the type-only import above.
       let spec = re.module_spec
-      if re.type_only &&
-        !(spec.has_prefix("./") ||
-        spec.has_prefix("../") ||
-        spec.has_prefix("/")) {
+      if re.type_only && !mtsc_is_local_specifier(spec) {
         continue
       }
-      if spec.has_prefix("./") || spec.has_prefix("../") || spec.has_prefix("/") {
+      if mtsc_is_local_specifier(spec) {
         let combined = if spec.has_prefix("/") {
           mtsc_normalize(spec)
         } else {

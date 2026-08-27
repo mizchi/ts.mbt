@@ -272,7 +272,13 @@ fn collect_read_property_names_expr(
     | As(inner, _)
     | Satisfies(inner, _)
     | NonNull(inner)
-    | OptionalChain(inner) => collect_read_property_names_expr(inner, out)
+    | OptionalChain(inner)
+    // `f<T>(x)` is a `TypeArgs` wrapper around the call, and a property
+    // read that only happens inside one was invisible here: the pass
+    // concluded nothing reads `o.p` in
+    // `id<number>(o.p)` and deleted the key, so the call got
+    // `undefined`. See the note on `TypeArgs` in `src/ast/types.mbt`.
+    | TypeArgs(_, inner) => collect_read_property_names_expr(inner, out)
     Yield(Some(inner)) => collect_read_property_names_expr(inner, out)
     Cond(c, t, e) => {
       collect_read_property_names_expr(c, out)
@@ -796,6 +802,8 @@ fn drop_dead_props_expr(
     NonNull(inner) => NonNull(drop_dead_props_expr(inner, reserved, read_props))
     OptionalChain(inner) =>
       OptionalChain(drop_dead_props_expr(inner, reserved, read_props))
+    TypeArgs(tys, inner) =>
+      TypeArgs(tys, drop_dead_props_expr(inner, reserved, read_props))
     NativeClassExpr(decl, ctor) => {
       let new_ctor = match ctor {
         Some(f) =>

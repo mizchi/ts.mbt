@@ -157,6 +157,21 @@ pub(all) enum TsExpr {
   // report supplying type arguments to a non-generic callee (TS2558). Kept
   // as a wrapper so the pervasive `Call` / `New` / `MethodCall` match sites
   // stay unchanged.
+  //
+  // WARNING, and it has already cost one release-blocking bug: every
+  // walker over expressions MUST have an arm for this. A pass that
+  // matches `Call` / `New` / `MethodCall` and ends in `_ => ()` does not
+  // "fall through to the inner call" — it sees NOTHING, and the entire
+  // subtree becomes invisible to that analysis. Missing it in
+  // `treeshake.mbt` deleted the declaration of a binding whose only use
+  // was inside `new Map<K, V>([[…, CODES.Z]])`, leaving the reference
+  // standing: `ReferenceError: CODES is not defined` on Excalidraw's
+  // `packages/common/src/keys.ts`. Missing it in `dead_props.mbt` made a
+  // property read invisible and the key was deleted. Nineteen files
+  // peeled `As` / `NonNull` and not this.
+  //
+  // `fixtures/mangle-safety/case40-type-arguments` runs the shapes end
+  // to end, which is the only check that covers a pass nobody audited.
   TypeArgs(Array[TsType], TsExpr)
 
   // function (expression)

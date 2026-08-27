@@ -1083,6 +1083,7 @@ fn is_external_chain_for_sink(
     NonNull(inner)
     | OptionalChain(inner)
     | As(inner, _)
+    | TypeArgs(_, inner)
     | Satisfies(inner, _) => is_external_chain_for_sink(inner, externals)
     _ => false
   }
@@ -1207,6 +1208,7 @@ fn sg_visit_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
     | Satisfies(inner, _)
     | NonNull(inner)
     | OptionalChain(inner)
+    | TypeArgs(_, inner)
     | PureCall(inner) => sg_visit_expr(w, inner)
     Yield(Some(inner)) => sg_visit_expr(w, inner)
     Yield(None) => ()
@@ -1465,7 +1467,7 @@ fn collect_flow_sources(
       collect_flow_sources(w, t, out)
       collect_flow_sources(w, e, out)
     }
-    As(inner, _) | Satisfies(inner, _) | NonNull(inner) =>
+    As(inner, _) | Satisfies(inner, _) | NonNull(inner) | TypeArgs(_, inner) =>
       collect_flow_sources(w, inner, out)
     _ => collect_immediate_sources(w, expr, out)
   }
@@ -1523,6 +1525,7 @@ fn sg_assign_target_root(w : SgWalker, target : @ast.TsExpr) -> SymbolId? {
     @ast.TsExpr::As(inner, _)
     | @ast.TsExpr::Satisfies(inner, _)
     | @ast.TsExpr::NonNull(inner)
+    | @ast.TsExpr::TypeArgs(_, inner)
     | @ast.TsExpr::OptionalChain(inner) => sg_assign_target_root(w, inner)
     _ => None
   }
@@ -1645,6 +1648,7 @@ fn collect_immediate_sources(
     | NonNull(inner)
     | OptionalChain(inner)
     | PureCall(inner)
+    | TypeArgs(_, inner)
     | Await(inner) => collect_immediate_sources(w, inner, out)
     Yield(_) | YieldStar(_) => out.push(Unknown)
     PropAccess(_, _) | IndexAccess(_, _) =>

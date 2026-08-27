@@ -1581,6 +1581,8 @@ fn substitute_var_names_in_expr(
     Spread(inner) => Spread(substitute_var_names_in_expr(inner, map, ns))
     Await(inner) => Await(substitute_var_names_in_expr(inner, map, ns))
     NonNull(inner) => NonNull(substitute_var_names_in_expr(inner, map, ns))
+    TypeArgs(tys, inner) =>
+      TypeArgs(tys, substitute_var_names_in_expr(inner, map, ns))
     OptionalChain(inner) =>
       OptionalChain(substitute_var_names_in_expr(inner, map, ns))
     PureCall(inner) => PureCall(substitute_var_names_in_expr(inner, map, ns))
@@ -2275,7 +2277,8 @@ fn collect_local_decl_names_in_expr(
     | YieldStar(v)
     | Spread(v)
     | UnaryOp(_, v) => collect_local_decl_names_in_expr(v, out)
-    As(v, _) | Satisfies(v, _) => collect_local_decl_names_in_expr(v, out)
+    As(v, _) | Satisfies(v, _) | TypeArgs(_, v) =>
+      collect_local_decl_names_in_expr(v, out)
     Yield(opt) =>
       match opt {
         Some(v) => collect_local_decl_names_in_expr(v, out)

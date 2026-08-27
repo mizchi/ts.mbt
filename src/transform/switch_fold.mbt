@@ -499,6 +499,7 @@ fn switch_fold_expr(expr : @ast.TsExpr, table : SwitchFoldTable) -> @ast.TsExpr 
     As(inner, ty) => As(switch_fold_expr(inner, table), ty)
     Satisfies(inner, ty) => Satisfies(switch_fold_expr(inner, table), ty)
     NonNull(inner) => NonNull(switch_fold_expr(inner, table))
+    TypeArgs(tys, inner) => TypeArgs(tys, switch_fold_expr(inner, table))
     OptionalChain(inner) => OptionalChain(switch_fold_expr(inner, table))
     PureCall(inner) => PureCall(switch_fold_expr(inner, table))
     NativeClassExpr(decl, ctor) => {

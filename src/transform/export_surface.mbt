@@ -524,10 +524,16 @@ fn surface_escape_expr(
     //     through (`.filter(…)`), so it escapes as well.
     Call(name, args) => {
       match w.funcs.get(name) {
-        Some(f) =>
+        Some(f) => {
           if surface_should_walk(w, "fn:" + name, depth + 1) {
             surface_escape_func_body(w, f.params, f.body, depth + 1)
           }
+          // An argument the callee hands straight back leaves with the
+          // call's result. Not memoized with the body walk above: the
+          // arguments differ per call site, so skipping this on a repeat
+          // visit would lose the second caller's literal.
+          surface_escape_returned_args(w, f, args, depth)
+        }
         None => surface_enqueue(w, name)
       }
       surface_escape_callback_args(w, args, depth)
@@ -679,6 +685,60 @@ fn surface_escape_callback_args(
       @ast.TsExpr::FuncExpr(_) | @ast.TsExpr::ArrowFunc(_, _, _, _) =>
         surface_escape_expr(w, a, depth + 1)
       _ => ()
+    }
+  }
+}
+
+///|
+/// Arguments that leave through the call's RETURN value.
+///
+/// `function identity(v) { return v }` publishes its argument: the
+/// object the caller built is the very value the call hands back, so
+/// when the call's result escapes, the literal's keys are ABI.
+///
+/// Nothing covered that. The walk escaped the callee's returns — for
+/// `return v` that is `Var("v")`, a parameter, which resolves to no
+/// top-level binding and stops there — and it escaped arguments only
+/// when they were callbacks. So
+///
+///   export const v = identify({ type: "X", payload: { x: "D" } });
+///
+/// lost `payload` and `x`: nothing inside the bundle reads them and
+/// nothing had reserved them. `case08-typeargs` is exactly that shape
+/// and had been passing for an unrelated reason — the pass that deletes
+/// the keys did not descend into the `TypeArgs` wrapper around the
+/// call, so the keys survived by accident. Fixing the wrapper exposed
+/// this.
+///
+/// A parameter counts as returned when any return expression MENTIONS
+/// it, not only when it is returned bare: `return { wrapped: v }` and
+/// `return v.rows` both hand a piece of the caller's object out, and
+/// deciding which piece would need the shape this pass is computing.
+/// Widening to the whole argument costs a few reserved names.
+fn surface_escape_returned_args(
+  w : SurfaceWalk,
+  f : @ast.TsFunc,
+  args : Array[@ast.TsExpr],
+  depth : Int,
+) -> Unit {
+  let returns : Array[@ast.TsExpr] = []
+  collect_own_returns_block(f.body, returns)
+  if returns.length() == 0 {
+    return
+  }
+  let mentioned : Map[String, Bool] = {}
+  for r in returns {
+    collect_var_refs_in_expr(r, mentioned)
+  }
+  for i, p in f.params {
+    if i >= args.length() {
+      break
+    }
+    // A destructured parameter has no single name to look for; its keys
+    // are already reserved by `surface_reserve_binding_keys`, and what
+    // it forwards is covered by the names bound inside it.
+    if p.name != "" && mentioned.contains(p.name) {
+      surface_escape_expr(w, args[i], depth + 1)
     }
   }
 }

@@ -39,9 +39,13 @@ pub fn class_member_names(@ast.TsBlock) -> Map[String, Array[String]]
 
 pub fn class_method_dce_block(@ast.TsBlock, keep? : Map[String, Bool], class_fields? : Array[(String, @ast.TsType)], type_aliases? : Array[@ast.TsTypeAlias], explain? : Array[String]?) -> @ast.TsBlock
 
+pub fn classes_observing_own_name(@ast.TsBlock) -> (Map[String, Bool], Bool)
+
 pub fn collect_externally_visible_props(@ast.TsBlock, Map[String, Bool], type_env? : Map[String, @ast.TsType]) -> Array[String]
 
 pub fn collect_sinks(@ast.TsBlock, Map[String, Bool]) -> Array[Sink]
+
+pub fn constructor_like_top_level(@ast.TsBlock, Map[String, Bool]) -> Unit
 
 pub fn container_name_set(SymbolGraph, Map[Int, Bool]) -> Map[String, Bool]
 
@@ -83,7 +87,11 @@ pub fn is_index_numeric_with_graph(@ast.TsExpr, SymbolGraph, Map[Int, Bool]) -> 
 
 pub fn is_index_numeric_with_names(@ast.TsExpr, Map[String, Bool]) -> Bool
 
+pub fn is_name_observation_key(String) -> Bool
+
 pub fn is_private_member_name(String) -> Bool
+
+pub fn is_relative_specifier(String) -> Bool
 
 pub fn lookup_symbol_in_scope(SymbolGraph, Int, String) -> Int?
 
@@ -108,6 +116,8 @@ pub fn mangle_block_with_renames(@ast.TsBlock, ManglerConfig) -> (@ast.TsBlock, 
 pub fn mangle_source_with_auto_reserve(String, ManglerConfig) -> Result[String, String]
 
 pub fn numeric_name_set(SymbolGraph, Map[Int, Bool]) -> Map[String, Bool]
+
+pub fn observed_class_names(@ast.TsBlock) -> (Array[String], Bool)
 
 pub fn peephole_block(@ast.TsBlock) -> @ast.TsBlock
 

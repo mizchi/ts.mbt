@@ -309,14 +309,41 @@ priv struct ModuleNode {
 // ---------------------------------------------------------------------------
 
 ///|
-/// Resolve `specifier` relative to `from_path`. Only `./` / `../` /
+/// Does this specifier name a file relative to the importer, rather than
+/// a package?
+///
+/// The obvious spelling of this test is `has_prefix("./") ||
+/// has_prefix("../")`, and it is wrong for two specifiers that are as
+/// relative as any: `"."` and `".."`. Both are FALSE under that test, so
+/// they fall through to bare-specifier handling and the directory they
+/// name is left external.
+///
+/// `import { x } from "."` is how a package's own modules reach their
+/// barrel — Excalidraw's element package writes it, and Node then failed
+/// the bundle with `ERR_UNSUPPORTED_DIR_IMPORT` because the import
+/// survived verbatim into the output.
+///
+/// A shared predicate rather than the test inlined at each site, because
+/// the loader tests this four times (import / re-export, each with a
+/// type-only guard and a resolve branch) and the two loops are mirror
+/// images. Every bug this pass has had in that shape came from one copy
+/// being updated and its mirror not.
+pub fn is_relative_specifier(specifier : String) -> Bool {
+  specifier == "." ||
+  specifier == ".." ||
+  specifier.has_prefix("./") ||
+  specifier.has_prefix("../")
+}
+
+///|
+/// Resolve `specifier` relative to `from_path`. Only relative and
 /// rooted (`/`) specifiers are handled here; bare specifiers (e.g.
 /// `react`) fall through to the caller's external resolver.
 fn resolve_relative(from_path : String, specifier : String) -> String? {
   if specifier.has_prefix("/") {
     return Some(normalize_path(specifier))
   }
-  if !specifier.has_prefix("./") && !specifier.has_prefix("../") {
+  if !is_relative_specifier(specifier) {
     return None
   }
   let dir = dirname(from_path)
@@ -382,7 +409,10 @@ fn resolve_with_extensions(
     }
   }
   for ext in exts {
-    let cand = base + "/index" + ext
+    // `base` is empty when a flat VFS resolves `from "."` — the
+    // importer has no directory component, so the directory the
+    // specifier names is the root itself. `"/index.ts"` is not it.
+    let cand = if base == "" { "index" + ext } else { base + "/index" + ext }
     if files.contains(cand) {
       return cand
     }

@@ -327,6 +327,7 @@ fn collect_du_bindings_expr(
     | NonNull(inner)
     | OptionalChain(inner)
     | PureCall(inner)
+    | TypeArgs(_, inner)
     | YieldStar(inner) =>
       collect_du_bindings_expr(inner, k, literals, alias_to_k, out)
     Cond(c, t, e) => {
@@ -604,6 +605,7 @@ fn collect_sink_args_expr(expr : @ast.TsExpr, out : Array[@ast.TsExpr]) -> Unit 
     | NonNull(inner)
     | OptionalChain(inner)
     | PureCall(inner)
+    | TypeArgs(_, inner)
     | YieldStar(inner) => collect_sink_args_expr(inner, out)
     Cond(c, t, e) => {
       collect_sink_args_expr(c, out)
@@ -706,6 +708,7 @@ fn expr_mentions_k(
     | NonNull(inner)
     | OptionalChain(inner)
     | PureCall(inner)
+    | TypeArgs(_, inner)
     | YieldStar(inner) => expr_mentions_k(inner, k, literals, bindings)
     Cond(c, t, e) =>
       expr_mentions_k(c, k, literals, bindings) ||
@@ -1154,6 +1157,7 @@ fn expr_has_escape_sink(expr : @ast.TsExpr) -> Bool {
     | NonNull(inner)
     | OptionalChain(inner)
     | PureCall(inner)
+    | TypeArgs(_, inner)
     | YieldStar(inner) => expr_has_escape_sink(inner)
     Cond(c, t, e) =>
       expr_has_escape_sink(c) ||
@@ -1515,6 +1519,7 @@ fn prop_uses_safe_expr(
     | NonNull(inner)
     | OptionalChain(inner)
     | PureCall(inner)
+    | TypeArgs(_, inner)
     | YieldStar(inner) => prop_uses_safe_expr(inner, k, lits, false)
     Cond(c, t, e) =>
       prop_uses_safe_expr(c, k, lits, false) &&
@@ -1882,6 +1887,7 @@ fn object_literals_safe_expr(
     | NonNull(inner)
     | OptionalChain(inner)
     | PureCall(inner)
+    | TypeArgs(_, inner)
     | YieldStar(inner) => object_literals_safe_expr(inner, k, lits)
     Cond(c, t, e) =>
       object_literals_safe_expr(c, k, lits) &&
@@ -2329,6 +2335,7 @@ fn tag_rewrite_expr(
     As(inner, ty) => As(tag_rewrite_expr(inner, table), ty)
     Satisfies(inner, ty) => Satisfies(tag_rewrite_expr(inner, table), ty)
     NonNull(inner) => NonNull(tag_rewrite_expr(inner, table))
+    TypeArgs(tys, inner) => TypeArgs(tys, tag_rewrite_expr(inner, table))
     OptionalChain(inner) => OptionalChain(tag_rewrite_expr(inner, table))
     PureCall(inner) => PureCall(tag_rewrite_expr(inner, table))
     NativeClassExpr(decl, ctor) => {

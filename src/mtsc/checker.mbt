@@ -284,6 +284,12 @@ fn find_graph_target(
 
 ///|
 fn is_local_module_specifier(module_specifier : String) -> Bool {
+  // `.` and `..` are relative too — a package's own modules reach their
+  // barrel with `from "."`. Missing them here makes the graph edge for
+  // that import invisible to the checker, so every type the barrel
+  // re-exports reads as unresolved.
+  module_specifier == "." ||
+  module_specifier == ".." ||
   module_specifier.has_prefix("./") ||
   module_specifier.has_prefix("../") ||
   module_specifier.has_prefix("/")

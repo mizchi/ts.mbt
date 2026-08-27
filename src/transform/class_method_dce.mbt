@@ -754,6 +754,7 @@ fn expr_has_native_class(expr : @ast.TsExpr) -> Bool {
     | NonNull(inner)
     | OptionalChain(inner)
     | PureCall(inner)
+    | TypeArgs(_, inner)
     | YieldStar(inner) => expr_has_native_class(inner)
     Cond(c, t, e) =>
       expr_has_native_class(c) ||
@@ -1108,6 +1109,7 @@ fn expr_has_method_sniff(expr : @ast.TsExpr, facts : SniffFacts) -> Bool {
     | NonNull(inner)
     | OptionalChain(inner)
     | PureCall(inner)
+    | TypeArgs(_, inner)
     | YieldStar(inner) => expr_has_method_sniff(inner, facts)
     Cond(c, t, e) =>
       expr_has_method_sniff(c, facts) ||
@@ -1379,6 +1381,7 @@ fn collect_static_accesses_expr(
     | NonNull(inner)
     | OptionalChain(inner)
     | PureCall(inner)
+    | TypeArgs(_, inner)
     | YieldStar(inner) => collect_static_accesses_expr(inner, out)
     Cond(c, t, e) => {
       collect_static_accesses_expr(c, out)
@@ -1839,6 +1842,7 @@ fn dce_expr(expr : @ast.TsExpr, accessed : Map[String, Bool]) -> @ast.TsExpr {
     NonNull(inner) => NonNull(dce_expr(inner, accessed))
     OptionalChain(inner) => OptionalChain(dce_expr(inner, accessed))
     PureCall(inner) => PureCall(dce_expr(inner, accessed))
+    TypeArgs(tys, inner) => TypeArgs(tys, dce_expr(inner, accessed))
     _ => expr
   }
 }

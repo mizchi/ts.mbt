@@ -277,6 +277,7 @@ fn seed_from_expr(
     | NonNull(inner)
     | OptionalChain(inner)
     | PureCall(inner)
+    | TypeArgs(_, inner)
     | Await(inner) => seed_from_expr(inner, scope, obs, g, result, worklist)
     _ => ()
   }
@@ -751,7 +752,7 @@ fn collect_literal_keys(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit {
       collect_literal_keys(t, out)
       collect_literal_keys(e, out)
     }
-    As(inner, _) | Satisfies(inner, _) | NonNull(inner) =>
+    As(inner, _) | Satisfies(inner, _) | NonNull(inner) | TypeArgs(_, inner) =>
       collect_literal_keys(inner, out)
     _ => ()
   }

@@ -1,9 +1,9 @@
 {
   "hono": {
     "status": "measured",
-    "verdict": "WIN",
-    "delta": 500,
-    "aware": 21855
+    "verdict": "NEUTRAL",
+    "delta": 6,
+    "aware": 22349
   },
   "valibot": {
     "status": "measured",
@@ -14,8 +14,8 @@
   "typebox": {
     "status": "size-only",
     "verdict": "LOSS",
-    "delta": -3659,
-    "aware": 123172
+    "delta": -3664,
+    "aware": 123124
   },
   "immer": {
     "status": "size-only",
@@ -26,14 +26,14 @@
   "neverthrow": {
     "status": "measured",
     "verdict": "NEUTRAL",
-    "delta": 25,
-    "aware": 5141
+    "delta": 0,
+    "aware": 5166
   },
   "ts-pattern": {
     "status": "measured",
     "verdict": "NEUTRAL",
-    "delta": 32,
-    "aware": 5763
+    "delta": 0,
+    "aware": 5795
   },
   "superstruct": {
     "status": "measured",
@@ -43,9 +43,15 @@
   },
   "zod": {
     "status": "measured",
-    "verdict": "WIN",
-    "delta": 788,
-    "aware": 200325
+    "verdict": "NEUTRAL",
+    "delta": -179,
+    "aware": 200320
+  },
+  "excalidraw": {
+    "status": "measured",
+    "verdict": "LOSS",
+    "delta": -4888,
+    "aware": 280297
   },
   "remeda": {
     "status": "blocked"

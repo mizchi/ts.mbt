@@ -328,6 +328,7 @@ fn expr_needs_type_fold(expr : @ast.TsExpr) -> Bool {
     | NonNull(inner)
     | OptionalChain(inner)
     | PureCall(inner)
+    | TypeArgs(_, inner)
     | YieldStar(inner) => expr_needs_type_fold(inner)
     Cond(c, t, e) =>
       expr_needs_type_fold(c) ||
@@ -847,6 +848,7 @@ fn type_fold_expr(
     As(inner, ty) => As(type_fold_expr(inner, scope, aliases), ty)
     Satisfies(inner, ty) => Satisfies(type_fold_expr(inner, scope, aliases), ty)
     NonNull(inner) => NonNull(type_fold_expr(inner, scope, aliases))
+    TypeArgs(tys, inner) => TypeArgs(tys, type_fold_expr(inner, scope, aliases))
     OptionalChain(inner) => OptionalChain(type_fold_expr(inner, scope, aliases))
     PureCall(inner) => PureCall(type_fold_expr(inner, scope, aliases))
     NativeClassExpr(decl, ctor) => {

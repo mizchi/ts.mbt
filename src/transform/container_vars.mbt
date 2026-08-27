@@ -246,7 +246,7 @@ fn is_expr_container(
     Cond(_, t, e) =>
       is_expr_container(t, name_container, facts) &&
       is_expr_container(e, name_container, facts)
-    Await(inner) | NonNull(inner) =>
+    Await(inner) | NonNull(inner) | TypeArgs(_, inner) =>
       is_expr_container(inner, name_container, facts)
     // `Promise.all` / `Promise.allSettled` resolve to an array, always.
     // Declined if the bundle declares its own `Promise`.

@@ -453,6 +453,7 @@ fn inline_predicates_expr(
     As(inner, ty) => As(inline_predicates_expr(inner, table), ty)
     Satisfies(inner, ty) => Satisfies(inline_predicates_expr(inner, table), ty)
     NonNull(inner) => NonNull(inline_predicates_expr(inner, table))
+    TypeArgs(tys, inner) => TypeArgs(tys, inline_predicates_expr(inner, table))
     OptionalChain(inner) => OptionalChain(inline_predicates_expr(inner, table))
     PureCall(inner) => PureCall(inline_predicates_expr(inner, table))
     NativeClassExpr(decl, ctor) => {
@@ -588,6 +589,8 @@ fn substitute_param_with_arg(
     Spread(inner) => Spread(substitute_param_with_arg(inner, param_name, arg))
     Await(inner) => Await(substitute_param_with_arg(inner, param_name, arg))
     NonNull(inner) => NonNull(substitute_param_with_arg(inner, param_name, arg))
+    TypeArgs(tys, inner) =>
+      TypeArgs(tys, substitute_param_with_arg(inner, param_name, arg))
     OptionalChain(inner) =>
       OptionalChain(substitute_param_with_arg(inner, param_name, arg))
     As(inner, ty) => As(substitute_param_with_arg(inner, param_name, arg), ty)

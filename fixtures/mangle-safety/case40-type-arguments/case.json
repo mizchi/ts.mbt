@@ -1,0 +1,17 @@
+{
+  "origin": "ts.mbt — found on Excalidraw's packages/common/src/keys.ts: `new Map<K, V>([[…, CODES.Z]])` deleted CODES and left the reference standing",
+  "what": "Every walker over expressions needs a `TypeArgs` arm. `f<T>(x)` wraps the call, so a pass matching Call/New/MethodCall with a catch-all sees NOTHING inside — not a lost optimization but an invisible subtree. Nineteen files peeled `As`/`NonNull` and not this; treeshake's liveness and the read-property collector were both unsound. Each numbered shape here puts the only reference to a binding, a property read, an escaping literal, or a side effect inside such a call. `onlyReadInTypeArgsCall` is deliberately NOT in expectKeep: only the number it holds leaves the bundle, so the key itself is internal and renaming it is correct — what the fixture pins is that the READ stays visible, i.e. that the key is not deleted out from under the call.",
+  "mtscArgs": [
+    "--treeshake"
+  ],
+  "exports": [
+    "report"
+  ],
+  "expectKeep": [
+    "alpha",
+    "beta",
+    "gamma",
+    "label"
+  ],
+  "expectStatus": "pass"
+}

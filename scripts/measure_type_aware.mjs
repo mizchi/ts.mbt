@@ -171,6 +171,58 @@ const CORPUS = [
     // merged interface-and-function case.
     driver: "zod.driver.mjs",
   },
+  // The corpus's only UI application, and its first monorepo: the
+  // element package's imports reach five sibling workspace packages
+  // through tsconfig `paths` declared in a config it only reaches by
+  // `extends`. Five things had to be fixed before it bundled at all —
+  // `.json` imports, `.scss` imports, the binary read that decoded a
+  // `.woff2` as UTF-8, `extends`-inherited `paths`, and `from "."` —
+  // and every one of them was a hole no library-shaped target had
+  // exposed. `docs/type-aware-measurement.md` records them.
+  {
+    name: "excalidraw",
+    repo: "https://github.com/excalidraw/excalidraw",
+    entry: "packages/element/src/index.ts",
+    // The bundle spans six workspace packages, reached through
+    // tsconfig `paths`; the element package alone is 52 of the 95 files.
+    sourceRoots: [
+      "packages/element/src",
+      "packages/common/src",
+      "packages/math/src",
+      "packages/utils/src",
+      "packages/laser-pointer/src",
+      "packages/fractional-indexing/src",
+    ],
+    driver: "excalidraw.driver.mjs",
+    // The bundle keeps its npm dependencies external, so the driver
+    // needs them on disk. Installed into the leg directory, NOT into
+    // the checkout: a `node_modules` next to the sources would make
+    // mtsc resolve and inline these packages instead of leaving them
+    // external, which is a different measurement.
+    deps: [
+      "roughjs@4.6.6",
+      "points-on-curve@1.0.1",
+      "perfect-freehand@1.2.3",
+      "nanoid@5.1.6",
+      "tinycolor2@1.6.0",
+      "lodash.throttle@4.1.1",
+      "es6-promise-pool@2.5.0",
+      "@braintree/sanitize-url@7.1.2",
+    ],
+    // Node cannot load `roughjs/bin/*` at all — extension-less ESM with
+    // no `exports` map, which is to say a bundler-only build. The shims
+    // hand back the real roughjs through the rollup bundle it publishes
+    // as `module`; see `fixtures/type-aware-corpus/excalidraw.shims/`.
+    shims: {
+      "roughjs/bin/rough": "rough.mjs",
+      "roughjs/bin/generator": "generator.mjs",
+      "roughjs/bin/math": "math.mjs",
+      "points-on-curve/lib/curve-to-bezier": "curve-to-bezier.mjs",
+    },
+    // `import.meta.env` is vite's build-time substitution. The driver
+    // sets the global this maps it to.
+    execReplace: [["import.meta.env", "globalThis.__EXCALIDRAW_ENV__"]],
+  },
   {
     name: "remeda",
     repo: "https://github.com/remeda/remeda",
@@ -244,24 +296,106 @@ function compile(input, output, flags, cwd) {
   return { ok: true, seconds, size: fs.statSync(output).size };
 }
 
+// Where a leg's bundle is EXECUTED: a subdirectory of the leg
+// directory, holding the copy of the bundle, the driver, the shims and
+// the `node_modules` the driver needs.
+//
+// Its own subdirectory rather than the leg directory itself, and the
+// reason is not tidiness. mtsc resolves a bare specifier by walking up
+// from the importing file looking for `node_modules`, and the leg
+// directory is the checkout's PARENT — so installing there put
+// `es6-promise-pool` on mtsc's search path and it INLINED the UMD
+// wrapper instead of leaving the import external. The measurement grew
+// 88 KB and the bundle then threw `Cannot set properties of undefined
+// (setting 'PromisePool')`, because a UMD factory assigned to a `root`
+// that does not exist in ESM. `exec/` is not an ancestor of the
+// checkout, so nothing mtsc does can see it.
+const execDir = (dir) => path.join(dir, "exec");
+
+// The npm packages a target's bundle leaves external, installed so the
+// driver can resolve them.
+function installDeps(dir, deps) {
+  if (!deps?.length) return { ok: true };
+  fs.mkdirSync(dir, { recursive: true });
+  const marker = path.join(dir, "node_modules", ".type-aware-deps");
+  const want = deps.slice().sort().join(" ");
+  if (fs.existsSync(marker) && fs.readFileSync(marker, "utf8") === want) {
+    return { ok: true };
+  }
+  fs.writeFileSync(
+    path.join(dir, "package.json"),
+    JSON.stringify({ name: "type-aware-leg", private: true, type: "module" }) + "\n",
+  );
+  const r = spawnSync("npm", ["install", "--no-save", "--no-audit", "--no-fund", "--silent", ...deps], {
+    encoding: "utf8",
+    timeout: 600_000,
+    cwd: dir,
+  });
+  if (r.status !== 0) {
+    return { ok: false, why: `npm install failed: ${(r.stderr || "").trim().split("\n")[0] || `exit ${r.status}`}` };
+  }
+  fs.writeFileSync(marker, want);
+  return { ok: true };
+}
+
+// Turn the leg's output into something Node can load, WITHOUT touching
+// the file the byte count came from.
+//
+// Both rewrites stand in for a step vite performs and Node has no
+// equivalent of: filling in an extension-less deep subpath (which for
+// roughjs also means routing around a `bin/` tree Node cannot load at
+// all), and substituting `import.meta.env`. They are applied to every
+// leg identically, so a difference between legs is still ours.
+function prepareForExecution(dir, target, t) {
+  let src = fs.readFileSync(target, "utf8");
+  for (const [spec, file] of Object.entries(t.shims ?? {})) {
+    const quoted = new RegExp(`(["'])${spec.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}(\\.js)?\\1`, "g");
+    src = src.replace(quoted, `"./shims/${file}"`);
+  }
+  for (const [find, replace] of t.execReplace ?? []) {
+    src = src.split(find).join(replace);
+  }
+  fs.writeFileSync(target, src);
+  if (t.shims) {
+    fs.cpSync(path.join(FIXTURES, `${t.name}.shims`), path.join(dir, "shims"), {
+      recursive: true,
+    });
+  }
+}
+
 // Run one leg's output through the target's driver and return its
 // stdout, or null with a reason.
 //
 // The driver is copied next to the bundle rather than run from
 // `fixtures/`: it imports `./target.mjs`, and a bare specifier resolves
 // against the importing FILE, not the working directory.
-function observe(dir, driverSrc, leg) {
-  const driver = path.join(dir, "driver.mjs");
+function observe(dir, driverSrc, leg, t) {
+  const exec = execDir(dir);
+  fs.mkdirSync(exec, { recursive: true });
+  const driver = path.join(exec, "driver.mjs");
   fs.copyFileSync(driverSrc, driver);
-  fs.copyFileSync(path.join(dir, `${leg}.mjs`), path.join(dir, "target.mjs"));
+  const target = path.join(exec, "target.mjs");
+  fs.copyFileSync(path.join(dir, `${leg}.mjs`), target);
+  prepareForExecution(exec, target, t);
   const r = spawnSync("node", [driver], {
     encoding: "utf8",
     maxBuffer: 1 << 28,
     timeout: 180_000,
-    cwd: dir,
+    cwd: exec,
   });
   if (r.status !== 0) {
-    return { ok: false, why: (r.stderr || "").split("\n").find((l) => l.trim()) || `exit ${r.status}` };
+    // Node prints a source-location banner before the message, so the
+    // first non-empty line is `foo.mjs:123` and says nothing. Take the
+    // first line that carries a diagnostic, and keep the whole stderr on
+    // disk for the ones that need reading.
+    const lines = (r.stderr || "").split("\n").filter((l) => l.trim());
+    const msg =
+      lines.find((l) => /^\s*(\w*Error|Uncaught|SyntaxError|TypeError)\b/.test(l.trim())) ||
+      lines.find((l) => /error/i.test(l)) ||
+      lines[0] ||
+      `exit ${r.status}`;
+    fs.writeFileSync(path.join(dir, `${leg}.stderr`), r.stderr || "");
+    return { ok: false, why: msg.trim().slice(0, 200) };
   }
   return { ok: true, out: r.stdout };
 }
@@ -285,11 +419,23 @@ function resolveCheckout(t) {
   return { dir, cloned: true };
 }
 
-function countSources(checkout, entry) {
-  const srcRoot = path.join(checkout, path.dirname(entry));
+// Source files the target spans.
+//
+// The entry's own directory is the right answer for a single-package
+// library, and wrong for a monorepo: Excalidraw's element package is 52
+// files, but the bundle reaches 95 across six workspace packages, and
+// reporting 52 next to a 780 KB bundle invites the wrong conclusion. A
+// target that spans packages names its roots.
+function countSources(checkout, t) {
+  const roots = (t.sourceRoots ?? [path.dirname(t.entry)]).map((r) =>
+    JSON.stringify(path.join(checkout, r)),
+  );
   const r = spawnSync(
     "bash",
-    ["-c", `find ${JSON.stringify(srcRoot)} -name '*.ts' ! -name '*.test.ts' ! -name '*.spec.ts' | wc -l`],
+    [
+      "-c",
+      `find ${roots.join(" ")} -name '*.ts' ! -name '*.test.ts' ! -name '*.spec.ts' 2>/dev/null | wc -l`,
+    ],
     { encoding: "utf8", timeout: 60_000 },
   );
   return Number((r.stdout || "0").trim()) || 0;
@@ -310,7 +456,7 @@ function measure(t) {
   const dir = path.join(WORK, t.name);
   fs.mkdirSync(dir, { recursive: true });
   const entry = path.join(checkout, t.entry);
-  const files = countSources(checkout, t.entry);
+  const files = countSources(checkout, t);
 
   const unopt = compile(entry, path.join(dir, "unopt.mjs"), ["--bundle"], dir);
   if (!unopt.ok) {
@@ -351,15 +497,19 @@ function measure(t) {
     seconds: aware.seconds,
   };
 
-  if (t.driver) {
+  const installed = installDeps(execDir(dir), t.deps);
+  if (t.driver && !installed.ok) {
+    row.status = "size-only";
+    row.why = installed.why;
+  } else if (t.driver) {
     const driverSrc = path.join(FIXTURES, t.driver);
-    const ref = observe(dir, driverSrc, "unopt");
+    const ref = observe(dir, driverSrc, "unopt", t);
     if (!ref.ok) {
       row.status = "size-only";
       row.why = `unoptimized bundle does not run: ${ref.why}`;
     } else {
       for (const leg of ["aware", "blind"]) {
-        const got = observe(dir, driverSrc, leg);
+        const got = observe(dir, driverSrc, leg, t);
         if (!got.ok) {
           row.status = "broken";
           row.why = `${leg} does not run: ${got.why}`;
@@ -374,8 +524,8 @@ function measure(t) {
         }
       }
     }
-    fs.rmSync(path.join(dir, "target.mjs"), { force: true });
-    fs.rmSync(path.join(dir, "driver.mjs"), { force: true });
+    fs.rmSync(path.join(execDir(dir), "target.mjs"), { force: true });
+    fs.rmSync(path.join(execDir(dir), "driver.mjs"), { force: true });
   }
 
   results.push(row);

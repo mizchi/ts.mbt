@@ -487,6 +487,7 @@ fn inline_into_expr(
     Satisfies(inner, ty) => Satisfies(inline_into_expr(inner, tbl), ty)
     NonNull(inner) => NonNull(inline_into_expr(inner, tbl))
     OptionalChain(inner) => OptionalChain(inline_into_expr(inner, tbl))
+    TypeArgs(tys, inner) => TypeArgs(tys, inline_into_expr(inner, tbl))
     NativeClassExpr(decl, ctor) => {
       let new_ctor = match ctor {
         Some(f) =>
@@ -991,6 +992,7 @@ fn substitute_expr(
     Satisfies(inner, ty) => Satisfies(substitute_expr(inner, name, rhs), ty)
     NonNull(inner) => NonNull(substitute_expr(inner, name, rhs))
     OptionalChain(inner) => OptionalChain(substitute_expr(inner, name, rhs))
+    TypeArgs(tys, inner) => TypeArgs(tys, substitute_expr(inner, name, rhs))
     NativeClassExpr(decl, ctor) => {
       let new_base = match decl.base_expr {
         Some(b) => Some(substitute_expr(b, name, rhs))
@@ -1447,6 +1449,7 @@ fn count_var_uses_expr(
     | As(inner, _)
     | Satisfies(inner, _)
     | NonNull(inner)
+    | TypeArgs(_, inner)
     | OptionalChain(inner) => {
       let (l2, n2) = count_var_uses_expr(inner, name, 0, 0, inside_func)
       l = l + l2
@@ -1828,6 +1831,7 @@ fn collect_reassigned_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit 
     | As(inner, _)
     | Satisfies(inner, _)
     | NonNull(inner)
+    | TypeArgs(_, inner)
     | OptionalChain(inner) => collect_reassigned_expr(inner, out)
     Yield(Some(inner)) => collect_reassigned_expr(inner, out)
     Seq(a, b) => {
@@ -2128,6 +2132,7 @@ fn collect_captured_expr(
     | As(inner, _)
     | Satisfies(inner, _)
     | NonNull(inner)
+    | TypeArgs(_, inner)
     | OptionalChain(inner) => collect_captured_expr(inner, out, inside_func)
     Yield(Some(inner)) => collect_captured_expr(inner, out, inside_func)
     Cond(c, t, e) => {
@@ -2271,6 +2276,7 @@ fn collect_var_refs_in_expr_local(
     | As(inner, _)
     | Satisfies(inner, _)
     | NonNull(inner)
+    | TypeArgs(_, inner)
     | OptionalChain(inner) => collect_var_refs_in_expr_local(inner, out)
     Yield(Some(inner)) => collect_var_refs_in_expr_local(inner, out)
     Cond(c, t, e) => {

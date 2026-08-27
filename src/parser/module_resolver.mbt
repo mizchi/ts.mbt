@@ -993,58 +993,120 @@ async fn resolve_tsconfig_specifier(
   mode : ModuleResolutionMode,
 ) -> String? {
   match find_nearest_ancestor_file(base_path, "tsconfig.json") {
-    Some(tsconfig_path) => {
-      let tsconfig_dir = dirname(tsconfig_path)
-      let tsconfig_src = @fs.read_file(tsconfig_path).text() catch {
-        _ => return None
-      }
-      match find_named_object_range(tsconfig_src, "compilerOptions") {
-        Some((compiler_start, compiler_end)) => {
-          let mut base_dir = ""
-          match
-            find_object_field_value_range(
-              tsconfig_src, compiler_start, compiler_end, "baseUrl",
-            ) {
-            Some((start, _)) =>
-              match parse_json_string_at(tsconfig_src, start) {
-                Some(base_url) =>
-                  base_dir = normalize_path(join_path(tsconfig_dir, base_url))
-                None => ()
-              }
-            None => ()
+    Some(tsconfig_path) =>
+      resolve_tsconfig_specifier_in(tsconfig_path, specifier, mode, 0)
+    None => None
+  }
+}
+
+///|
+/// Try one tsconfig for a `paths` mapping, then the config it `extends`.
+///
+/// Following `extends` is what TypeScript does, and not doing it made
+/// every monorepo invisible: the layout is a `tsconfig.base.json` at the
+/// root holding the `paths` map and one `tsconfig.json` per package that
+/// extends it. Excalidraw is exactly that, and without this its element
+/// package resolved neither `@excalidraw/math` nor `@excalidraw/common`
+/// — they were emitted as external imports, so the bundle was not
+/// self-contained and could not be run or measured.
+///
+/// `paths` are resolved against the directory of the config that
+/// DECLARES them (absent `baseUrl`), which is why the recursion carries
+/// the extended config's own path rather than the original one:
+/// Excalidraw's base sits in `packages/` and writes `./common/src/index.ts`.
+///
+/// `depth` bounds a config chain that extends itself. `extends` as an
+/// ARRAY (TypeScript 5.0) is not handled — only the string form.
+async fn resolve_tsconfig_specifier_in(
+  tsconfig_path : String,
+  specifier : String,
+  mode : ModuleResolutionMode,
+  depth : Int,
+) -> String? {
+  if depth > 8 {
+    return None
+  }
+  let hit = resolve_tsconfig_specifier_here(tsconfig_path, specifier, mode)
+  match hit {
+    Some(found) => return Some(found)
+    None => ()
+  }
+  let tsconfig_dir = dirname(tsconfig_path)
+  let src = @fs.read_file(tsconfig_path).text() catch { _ => return None }
+  match find_object_field_value_range(src, 0, src.length(), "extends") {
+    Some((start, _)) =>
+      match parse_json_string_at(src, start) {
+        Some(parent) => {
+          let joined = normalize_path(join_path(tsconfig_dir, parent))
+          let candidate = if joined.has_suffix(".json") {
+            joined
+          } else {
+            joined + ".json"
           }
-          match
-            find_named_object_range_in_object(
-              tsconfig_src, compiler_start, compiler_end, "paths",
-            ) {
-            Some((paths_start, paths_end)) => {
-              let targets = resolve_string_array_mapping_in_object(
-                tsconfig_src, paths_start, paths_end, specifier,
-              )
-              for target in targets {
-                let candidate = if base_dir == "" {
-                  normalize_path(join_path(tsconfig_dir, target))
-                } else {
-                  normalize_path(join_path(base_dir, target))
-                }
-                match resolve_path_like(candidate, mode) {
-                  Some(path) => return Some(path)
-                  None => ()
-                }
-              }
-            }
-            None => ()
-          }
-          if base_dir != "" {
-            return resolve_path_like(
-              normalize_path(join_path(base_dir, specifier)),
-              mode,
-            )
-          }
-          None
+          resolve_tsconfig_specifier_in(candidate, specifier, mode, depth + 1)
         }
         None => None
       }
+    None => None
+  }
+}
+
+///|
+/// The `paths` / `baseUrl` lookup in ONE tsconfig, with no `extends`
+/// follow-up.
+async fn resolve_tsconfig_specifier_here(
+  tsconfig_path : String,
+  specifier : String,
+  mode : ModuleResolutionMode,
+) -> String? {
+  let tsconfig_dir = dirname(tsconfig_path)
+  let tsconfig_src = @fs.read_file(tsconfig_path).text() catch {
+    _ => return None
+  }
+  match find_named_object_range(tsconfig_src, "compilerOptions") {
+    Some((compiler_start, compiler_end)) => {
+      let mut base_dir = ""
+      match
+        find_object_field_value_range(
+          tsconfig_src, compiler_start, compiler_end, "baseUrl",
+        ) {
+        Some((start, _)) =>
+          match parse_json_string_at(tsconfig_src, start) {
+            Some(base_url) =>
+              base_dir = normalize_path(join_path(tsconfig_dir, base_url))
+            None => ()
+          }
+        None => ()
+      }
+      match
+        find_named_object_range_in_object(
+          tsconfig_src, compiler_start, compiler_end, "paths",
+        ) {
+        Some((paths_start, paths_end)) => {
+          let targets = resolve_string_array_mapping_in_object(
+            tsconfig_src, paths_start, paths_end, specifier,
+          )
+          for target in targets {
+            let candidate = if base_dir == "" {
+              normalize_path(join_path(tsconfig_dir, target))
+            } else {
+              normalize_path(join_path(base_dir, target))
+            }
+            match resolve_path_like(candidate, mode) {
+              Some(path) => return Some(path)
+              None => ()
+            }
+          }
+        }
+        None => ()
+      }
+      if base_dir != "" {
+        return resolve_path_like(
+          normalize_path(join_path(base_dir, specifier)),
+          mode,
+        )
+      }
+      None
     }
     None => None
   }

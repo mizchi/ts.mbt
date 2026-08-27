@@ -89,9 +89,25 @@ product surfaces now.
   target is a package cloned from git and optimized twice with identical
   flags — once from the TypeScript source, once from the same code with
   its types erased — with all three legs required to observe the same
-  thing. The answer so far is uncomfortable and worth knowing: +2.3% on
-  hono, ~0 on valibot and immer, **-5.2% on typebox**, and the property
-  mangler entirely inert on every library measured. It also found the
+  thing. The answer so far is uncomfortable and worth knowing: across
+  nine measured targets there is **no win left** — six neutral and three
+  losses, the largest being -3.0% on typebox and -1.7% on Excalidraw —
+  and the property mangler is entirely inert on every library measured.
+  hono (+500 bytes) and zod (+788) *were* wins until the `TypeArgs` fix
+  below, which is the point: `f<T>(x)` parses as a wrapper node, nineteen
+  passes never peeled it, and the references inside were invisible to
+  liveness — so the type-aware leg had been deleting code it should have
+  kept, and the wrapper does not exist in erased JS, so the unsoundness
+  was exclusive to the type-aware path. Excalidraw, the corpus's only UI
+  application and only monorepo, is what found it, along with five holes
+  that stopped it bundling at all (`.json` and `.scss` imports parsed as
+  TypeScript, a `.woff2` decoded as UTF-8 because the asset check ran
+  after the read, tsconfig `paths` not followed through `"extends"`, and
+  `from "."` not recognised as relative) and one fixture that had been
+  passing by accident — `case08-typeargs`, where an object literal handed
+  to an identity function lost its nested keys because only callback
+  arguments escaped through a call (`surface_escape_returned_args`). It
+  also found the
   reason four popular packages could not be measured at all, and it took
   four separate fixes to clear them: an unmemoized `export_surface.mbt`
   walk that re-escaped a class once per `new` site

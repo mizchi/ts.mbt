@@ -305,6 +305,7 @@ fn flag_all_candidate_refs(
     | NonNull(inner)
     | OptionalChain(inner)
     | PureCall(inner)
+    | TypeArgs(_, inner)
     | YieldStar(inner) => flag_all_candidate_refs(inner, candidates)
     Cond(c, t, e) => {
       flag_all_candidate_refs(c, candidates)
@@ -450,6 +451,7 @@ fn scan_expr_for_unsafe_uses(
     | NonNull(inner)
     | OptionalChain(inner)
     | PureCall(inner)
+    | TypeArgs(_, inner)
     | YieldStar(inner) => scan_expr_for_unsafe_uses(inner, candidates)
     Cond(c, t, e) => {
       scan_expr_for_unsafe_uses(c, candidates)
@@ -912,6 +914,7 @@ fn rewrite_expr(
     As(inner, ty) => As(rewrite_expr(inner, table), ty)
     Satisfies(inner, ty) => Satisfies(rewrite_expr(inner, table), ty)
     NonNull(inner) => NonNull(rewrite_expr(inner, table))
+    TypeArgs(tys, inner) => TypeArgs(tys, rewrite_expr(inner, table))
     OptionalChain(inner) => OptionalChain(rewrite_expr(inner, table))
     PureCall(inner) => PureCall(rewrite_expr(inner, table))
     NativeClassExpr(decl, ctor) => {

@@ -311,6 +311,7 @@ fn collect_sinks_expr(
     | Satisfies(inner, _)
     | NonNull(inner)
     | OptionalChain(inner)
+    | TypeArgs(_, inner)
     | PureCall(inner) => collect_sinks_expr(inner, externals, out)
     Yield(Some(inner)) => collect_sinks_expr(inner, externals, out)
     Yield(None) => ()
@@ -423,6 +424,7 @@ fn is_external_receiver(
     NonNull(inner)
     | OptionalChain(inner)
     | As(inner, _)
+    | TypeArgs(_, inner)
     | Satisfies(inner, _) => is_external_receiver(inner, externals)
     _ => false
   }
@@ -604,6 +606,7 @@ pub fn reserve_props_from_sink(
     | NonNull(inner)
     | OptionalChain(inner)
     | PureCall(inner)
+    | TypeArgs(_, inner)
     | Await(inner) =>
       reserve_props_from_sink(
         { expr: inner, observation: sink.observation },

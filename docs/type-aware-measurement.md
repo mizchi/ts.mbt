@@ -70,13 +70,35 @@ bundle 内と証明できない call を見つけて全部 reserve する）、
 **実際の library に対して property mangler が動いていない**という事実
 自体が、この harness が出した一番大きな発見です。
 
-型情報の寄与は library によって符号が変わります。hono では効き、
-valibot と immer では実質ゼロ、typebox では**マイナス**です。
-最新の数字は `fixtures/type-aware-corpus/expected.json` にあります。
+型情報の寄与は target によって符号が変わります。最新の数字は
+`fixtures/type-aware-corpus/expected.json` にあります。現時点:
+
+| target | files | unopt | aware | blind | delta | 判定 |
+| --- | --- | --- | --- | --- | --- | --- |
+| hono | 188 | 63,192 | 22,349 | 22,355 | +6 | NEUTRAL |
+| valibot | 828 | 228,307 | 88,768 | 88,768 | 0 | NEUTRAL |
+| typebox | 692 | 380,972 | 123,124 | 119,460 | −3,664 | LOSS |
+| immer | 17 | 49,809 | 20,826 | 20,826 | 0 | NEUTRAL |
+| neverthrow | 5 | 9,991 | 5,166 | 5,166 | 0 | NEUTRAL |
+| ts-pattern | 18 | 20,365 | 5,795 | 5,795 | 0 | NEUTRAL |
+| superstruct | 8 | 20,785 | 10,690 | 10,552 | −138 | LOSS |
+| zod | 133 | 648,647 | 200,320 | 200,141 | −179 | NEUTRAL |
+| excalidraw | 95 | 780,163 | 280,297 | 275,409 | −4,888 | LOSS |
+
+**WIN が 0 件です。** 一つ前の記録では hono が +500、zod が +788 の WIN
+でした。両方消えたのは測り方を変えたからではなく、**その WIN の一部が
+不健全な解析の産物だった**からです。理由は下の `TypeArgs` の節にあります。
+要約すると、`f<T>(x)` は `TypeArgs` wrapper として parse され、
+19 個の pass がこの wrapper を剥がしていなかったので、その中にある参照は
+**liveness から見えていませんでした**。見えない参照は死んだ参照なので、
+`aware` leg は生きているコードを削っていました。そして
+`TypeArgs` は型を消した JS には**存在しない**ので、この不健全さは
+type-aware 経路だけのものでした。直すと aware leg が hono で +494 byte
+太り、WIN が消えました。
 
 ## corpus に入れられなかったもの
 
-9 個試して測れるようになったのは 8 個です（うち 2 個は bundle が
+10 個試して測れるようになったのは 9 個です（うち 2 個は bundle が
 動かないので `size-only`）。残り 1 個は表に `BLOCKED` として残してあります——理由が finding であり、理由が消えた日に
 そのまま measurement になるからです。
 
@@ -86,7 +108,8 @@ valibot と immer では実質ゼロ、typebox では**マイナス**です。
 | valibot | measured | — |
 | neverthrow | measured | 元 BLOCKED。export-surface の memo で 420s 未完 → 1 秒未満 |
 | ts-pattern | measured | 元 BLOCKED。同上。ただし `P` が bundle に無い（下記）|
-| zod | measured | 元 BLOCKED。4 件の修正を経て挙動検証まで到達（+1,096 bytes / +0.61% の WIN）|
+| zod | measured | 元 BLOCKED。4 件の修正を経て挙動検証まで到達 |
+| excalidraw | measured | corpus 唯一の UI アプリかつ唯一の monorepo。bundle できるまでに 5 件、実行できるまでに 3 件（下記）|
 | superstruct | measured | 元 BLOCKED → 15ms、さらに元 BROKEN → 挙動一致（下記の `.name` reserve）|
 | typebox | size-only | `TTypeArray` は解消。今は別件の TDZ で throw: `IntegerKey` の宣言が使用より後に並ぶ |
 | immer | size-only | bundle が load で throw: module 跨ぎの `const enum ArchType` が emit も inline もされない |
@@ -330,6 +353,169 @@ constructor 表が top-level + nested block までなので）。
 どこにでもあり、typescript.js が示した通り 282 KB の代償になります。
 **class 名を無条件に rename するより厳密で、証明ではありません。**
 
+## Excalidraw: library ではないものを入れて分かったこと
+
+ここまでの 9 target は全部 library でした。UI アプリケーションを
+1 つ入れると、library では一度も踏まなかった穴が並んで出てきました。
+対象は `packages/element`（52 file / 1 MB の TS）ですが、
+import は tsconfig の `paths` 経由で 5 つの sibling package に届き、
+bundle は**6 package / 95 module / 780 KB** になります。
+
+### bundle できるまでに 5 件
+
+| # | 症状 | 原因 |
+| --- | --- | --- |
+| 1 | `Expected Semicolon, got Colon` | `import percentages from "./locales/percentages.json"` を TypeScript として parse していた |
+| 2 | `Expected type, got Star` | `import "./ContextMenu.scss"` を TypeScript として parse していた（`*` selector） |
+| 3 | `utf8.Malformed` | asset の判定が**read の後**にあり、`.woff2` を UTF-8 として decode していた |
+| 4 | 5 package が external のまま | tsconfig の `paths` が `"extends"` 先の config にあり、追っていなかった |
+| 5 | `ERR_UNSUPPORTED_DIR_IMPORT` | `from "."` が relative と判定されていなかった |
+
+1 と 2 は wrapping で解けます。JSON は式の文法の部分集合なので
+`export default <document>;` に包めば既存の parser がそのまま読み、
+asset は `export default {};` を合成すれば side-effect import は
+何も寄与しません（`import styles from "./x.module.css"` に `{}` を
+渡すのは CSS-modules の class 名 map ではないので、そこは
+**限界であって修正ではありません**）。
+
+3 は順序の問題でした。binary を読んでから「これは asset だ」と気づいても
+遅い。path で決めれば font や画像の megabyte をそもそも読みません。
+
+4 は 2 case の probe で切り分けました——`paths` を inline に書けば
+INLINED、`extends` 経由なら external。`resolve_tsconfig_specifier_in`
+が `"extends"` を深さ 8 まで辿ります（path は宣言した config の
+directory 基準）。ここで bundle が 52 module から 95 module に増えました。
+
+5 は `spec.has_prefix("./")` が `"."` に対して false という一行の話です。
+`"."` と `".."` は relative specifier であり、package の module が
+自分の barrel を指す綴りです。loader はこれを 4 箇所で判定していて
+（import / re-export × type-only guard / resolve 分岐）、
+2 つの loop は互いの鏡像です——このセッションで何度も刺された形なので、
+`@transform.is_relative_specifier` という**述語 1 つ**にしました。
+bundler 側（`resolve_relative`）と checker 側
+（`is_local_module_specifier`）にも同じ穴がありました。
+
+### 実行できるまでに 3 件（うち 2 件は Node 側の事情）
+
+`roughjs` は `bin/` 以下を**拡張子なし ESM**で publish していて
+`exports` map も無いので、`roughjs/bin/rough` は Node では
+どう置いても load できません（`bin/rough.js` 自身が `./canvas` を
+import している）。vite の resolver が埋めている部分です。
+`fixtures/type-aware-corpus/excalidraw.shims/` が 3 つの specifier を
+埋め、いずれも**本物の** roughjs を返します——roughjs が `module` として
+publish している rollup build 経由です。`import.meta.env` も vite の
+build-time 置換なので、driver が立てる global に書き換えます。
+
+どちらも**実行する copy にだけ**適用し、3 leg に同一に適用します。
+測った byte 数は無改変の leg 出力から取っています。
+
+3 件目は harness 自身の bug でした。dependency を leg directory に
+`npm install` したところ、そこは checkout の**親**であり、
+mtsc は bare specifier を importing file から上に辿って解決するので、
+`es6-promise-pool` を external ではなく **inline** し始めました。
+bundle は 88 KB 太り、UMD の factory が ESM に存在しない `root` に
+代入して `Cannot set properties of undefined (setting 'PromisePool')`
+で落ちました。`exec/` subdirectory に移して解決——checkout の
+祖先ではないので mtsc からは見えません。
+
+### そして本題: `TypeArgs` wrapper が 19 個の pass から見えていなかった
+
+3 leg が動くようになって最初に出た差がこれです。
+`aware` leg が load 時に `ReferenceError: CODES is not defined`。
+出所は Excalidraw の `packages/common/src/keys.ts`:
+
+```ts
+export const CODES = { Z: "KeyZ", Y: "KeyY" } as const;
+export const KeyCodeMap = new Map<ValueOf<typeof KEYS>, ValueOf<typeof CODES>>([
+  [KEYS.Z, CODES.Z],
+  [KEYS.Y, CODES.Y],
+]);
+```
+
+`CODES` の宣言が消え、参照 2 個が残っていました。**flag 1 つで再現します**
+（`--treeshake` だけ）。最小形は 3 行で、効いているのは
+`new Map<string, string>(…)` の**明示 type argument** です。これを外すと
+起きません。
+
+`f<T>(x)` / `new C<T>(x)` / `o.m<T>(x)` は
+`TypeArgs([T], <the call>)` として parse されます。この wrapper は
+「`Call` / `New` / `MethodCall` を見ている無数の match site を変えずに
+済ませる」ために入っています。その代償が正確にこれでした:
+**catch-all を持つ walker は内側の call に fall through しません。
+何も見えません。** liveness から見えない参照は死んだ参照なので、
+treeshake は宣言を削り、参照を残しました。
+
+`As` / `NonNull` を剥がしていて `TypeArgs` を剥がしていない file が
+**19 個**ありました。うち不健全だったもの:
+
+| file | 症状 |
+| --- | --- |
+| `treeshake.mbt` | 生きている binding の宣言を削除（上記） |
+| `dead_props.mbt` | property read が見えず、key が削除されて call が `undefined` を受ける |
+| `flow_analysis.mbt` / `sink_catalog.mbt` / `symbol_graph.mbt` | escape / sink 解析の取りこぼし = fail-**open** |
+| `class_method_dce.mbt` | reflection gate と static の liveness |
+| `inline.mbt` | **use counter**。2 回使われている binding が 1 回に見えれば single-use inline が発火する。しかも substitute 側も降りていなかったので、両方直さないと片方だけ壊れる |
+| `bundle_link.mbt` | module 跨ぎの rename。1 箇所だけ rename されない参照が残る |
+
+残りは「最適化の取りこぼし」（安全）でしたが、collector と rewriter が
+**片方だけ**降りていると不整合になるので、全部に arm を足しました。
+
+7 つの probe で確認しています（宣言の liveness、property read、
+外部 sink への literal、class の型引数、method call、side effect）。
+修正前は 5 つが FAIL、修正後は 7 つとも一致します。
+
+**構造的な保証は付けられませんでした。** wrapper を pipeline の
+入口で 1 回剥がす案（そうすれば未 audit の pass も安全）は、
+剥がす側が全 node を網羅する rewriter になり、そこで 1 arm 落とせば
+同じ穴が同じ形で残るので、見送りました。代わりに
+`src/ast/types.mbt` の `TypeArgs` 宣言に**この事故そのものを書いて**、
+`fixtures/mangle-safety/case40-type-arguments` を追加しました——
+6 つの形（binding の唯一の参照、唯一の property read、外部へ escape する
+literal、type argument 付き method call、side effect）を
+end-to-end で走らせます。**誰も audit していない pass を検査できるのは
+これだけです。**
+
+### そのついでに、`case08-typeargs` が偶然通っていたことが分かった
+
+corpus には `case08-typeargs`（packelyze 由来）が最初からありました。
+
+```ts
+function identify<T>(v: T): T { return v; }
+export const v = identify<X>({ type: "X", payload: { x: "D" } });
+```
+
+`TypeArgs` を直したら**これが落ちました**。`payload` と `x` が
+削除されるからです。そして型引数を外しても落ちます——つまり
+**元から壊れていて**、key を削る pass が wrapper の中に降りていなかった
+おかげで生き延びていただけでした。
+
+穴は export-surface 側です。call の結果が escape するとき、walk は
+callee の return を escape させますが、`return v` の `v` は
+**parameter** なので top-level binding に解決されず、そこで止まります。
+引数は callback のときだけ escape させていました。
+`surface_escape_returned_args` が、return 式が parameter に
+言及している場合にその位置の引数を escape させます
+（`return { wrapped: v }` や `return v.rows` も「一部が出ていく」ので
+同じ扱いにしています。どの一部かを決めるにはこの pass が計算中の
+shape が必要になります）。hono と zod では byte 数が 1 も動きませんでした。
+
+### 結果は LOSS
+
+excalidraw は aware 280,297 / blind 275,409 で **−4,888 byte（−1.74%）**。
+`aware2` control を引くと −5,669。つまり型を読んでいる方が大きい。
+
+原因の切り分けを 1 段だけやってあります。tag 比較の出現数
+（`.type==="arrow"` など）は**両 leg で完全に同じ**なので、
+`predicate-inline` が call site に述語本体を撒いて太らせている、
+という一番ありそうな筋ではありません。aware leg は function が 13 個、
+string literal が 4.4 KB 多い——**残っているコードが多い**。
+機構はまだ特定できていません（型があると export surface や
+liveness がより保守的になる方向の効果である、というところまで）。
+
+型を消した方が小さくなる target が 9 個中 3 個、WIN が 0 個。
+これは `--mangle-properties` が実 library で不発だったのと同じ種類の、
+知っておく価値のある不都合な事実です。
+
 ## 残っている既知の未修正
 
 | 件 | 症状 |
@@ -339,6 +525,9 @@ constructor 表が top-level + nested block までなので）。
 | module 跨ぎの `const enum` | immer の bundle が `ArchType is not defined` で load 失敗 |
 | remeda の parse error | `setPath.ts`: `Expected Semicolon, got Extends` |
 | property mangler が実 library で不発 | fail-closed な callee-provenance scan が全部 reserve する |
+| excalidraw が LOSS | aware leg の方が function 13 個 / string 4.4 KB 多い。tag 比較の数は同一なので predicate-inline の膨張ではない。機構は未特定 |
+| CSS modules の値 | `import styles from "./x.module.css"` に `{}` を渡す。class 名 map ではないので `styles.foo` は `undefined` |
+| `TypeArgs` の構造的保証 | 19 file に arm を足したが、次に walker を書く人が落とすのを止める仕組みは無い。`case40` が唯一の網 |
 
 ### 直したもの 4: namespace object に型専用 export が入る
 

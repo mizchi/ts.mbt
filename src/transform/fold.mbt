@@ -1749,6 +1749,7 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
     As(inner, ty) => As(fold_expr(inner), ty)
     Satisfies(inner, ty) => Satisfies(fold_expr(inner), ty)
     NonNull(inner) => NonNull(fold_expr(inner))
+    TypeArgs(tys, inner) => TypeArgs(tys, fold_expr(inner))
     OptionalChain(inner) => {
       let inner_f = fold_expr(inner)
       // `recv?.prop` / `recv?.method(...)` / `recv?.[idx]` — when
@@ -3067,7 +3068,7 @@ fn is_number_never_negzero(e : @ast.TsExpr) -> Bool {
     | BinOp(In, _, _) => true
     IntLit(n) => n > 0
     NumberLit(n) => n > 0.0
-    As(inner, _) | Satisfies(inner, _) | NonNull(inner) =>
+    As(inner, _) | Satisfies(inner, _) | NonNull(inner) | TypeArgs(_, inner) =>
       is_number_never_negzero(inner)
     _ => false
   }
@@ -3486,6 +3487,7 @@ fn is_pure_value(expr : @ast.TsExpr) -> Bool {
     As(inner, _)
     | Satisfies(inner, _)
     | NonNull(inner)
+    | TypeArgs(_, inner)
     | OptionalChain(inner) => is_pure_value(inner)
     // Spread of a pure value is itself pure (e.g. inside an array literal).
     Spread(inner) => is_pure_value(inner)
@@ -3571,7 +3573,8 @@ fn can_be_nullish(expr : @ast.TsExpr) -> Bool {
     // Tag-less template literals always produce a string, never null/undefined.
     TemplateLiteral(_, _) => false
     // TypeScript casts are transparent — delegate to the inner expression.
-    As(inner, _) | Satisfies(inner, _) => can_be_nullish(inner)
+    As(inner, _) | Satisfies(inner, _) | TypeArgs(_, inner) =>
+      can_be_nullish(inner)
     // `x!` asserts the value is non-null/undefined by definition.
     NonNull(_) => false
     _ => true
