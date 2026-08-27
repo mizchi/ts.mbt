@@ -1,0 +1,41 @@
+{
+  "hono": {
+    "status": "measured",
+    "verdict": "WIN",
+    "delta": 499,
+    "aware": 21856
+  },
+  "valibot": {
+    "status": "measured",
+    "verdict": "NEUTRAL",
+    "delta": -2,
+    "aware": 88775
+  },
+  "typebox": {
+    "status": "size-only",
+    "verdict": "LOSS",
+    "delta": -5107,
+    "aware": 98592
+  },
+  "immer": {
+    "status": "size-only",
+    "verdict": "NEUTRAL",
+    "delta": 0,
+    "aware": 20826
+  },
+  "zod": {
+    "status": "blocked"
+  },
+  "neverthrow": {
+    "status": "blocked"
+  },
+  "superstruct": {
+    "status": "blocked"
+  },
+  "ts-pattern": {
+    "status": "blocked"
+  },
+  "remeda": {
+    "status": "blocked"
+  }
+}

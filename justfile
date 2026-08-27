@@ -185,6 +185,24 @@ verify-rule-equivalence *ARGS:
     moon build --target native --release
     node scripts/verify_rule_equivalence.mjs {{ ARGS }}
 
+# What the type information actually buys, in bytes. Each target is a
+# real package cloned from git and optimized twice with identical flags,
+# differing only in the input: the TypeScript SOURCE (so the six
+# type-driven phases can fire) versus the same code with its types
+# erased (so none of them can). `verify-real-world` cannot measure this
+# — it feeds published `.js`, where the answer is zero by construction.
+#
+# All three legs must produce identical observations against the
+# target's driver, or the row is not evidence. Needs network on the
+# first run; shares the `verify-real-world` checkouts where it can.
+#
+#   just measure-type-aware
+#   just measure-type-aware --only hono --verbose
+#   just measure-type-aware --update        # re-record expected.json
+measure-type-aware *ARGS:
+    moon build --target native --release
+    node scripts/measure_type_aware.mjs {{ ARGS }}
+
 # Fuzz the property mangler: generate programs nobody wrote, compile each
 # with and without mangling, run both, compare. A difference is a mangler
 # false positive by construction. Failing programs are shrunk

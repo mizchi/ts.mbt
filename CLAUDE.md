@@ -80,6 +80,21 @@ product surfaces now.
   not ported, while a LOSS *or a tie* on a `type-aware` case means the
   type-driven pass did not fire — see
   [`docs/terser-parity.md`](./docs/terser-parity.md).
+  Every harness above asks whether a pass is *correct*; `just
+  measure-type-aware` asks whether the type-driven half is *worth
+  anything*. It cannot use published `.js`: the six type-reading phases
+  (`predicate-inline`, `switch-fold`, `as-const-inline`, `tag-rewrite`,
+  `class-method-dce`, `type-fold`) fill their tables from parsed
+  TypeScript, so on erased JS the answer is zero by construction. So each
+  target is a package cloned from git and optimized twice with identical
+  flags — once from the TypeScript source, once from the same code with
+  its types erased — with all three legs required to observe the same
+  thing. The answer so far is uncomfortable and worth knowing: +2.3% on
+  hono, ~0 on valibot and immer, **-5.2% on typebox**, the property
+  mangler entirely inert on all four, and five of nine candidate
+  packages unable to reach a measurement at all — four of them stuck in
+  an unmemoized `export_surface.mbt` walk that never returns. See
+  [`docs/type-aware-measurement.md`](./docs/type-aware-measurement.md).
 - `src/bridge` consumes `src/checker` for every type-shape decision and runs
   `@checker.check_module` on the synthesized output as a sanity gate. It also
   keeps domain-specific specialization for Node FS / React / Hono / crypto /
