@@ -750,6 +750,7 @@ pub fn lower_jsx_in_expr(cfg : JsxConfig, expr : @ast.TsExpr) -> @ast.TsExpr {
     Satisfies(inner, ty) => Satisfies(lower_jsx_in_expr(cfg, inner), ty)
     NonNull(inner) => NonNull(lower_jsx_in_expr(cfg, inner))
     TypeArgs(tys, inner) => TypeArgs(tys, lower_jsx_in_expr(cfg, inner))
+    PureCall(inner) => PureCall(lower_jsx_in_expr(cfg, inner))
     OptionalChain(inner) => OptionalChain(lower_jsx_in_expr(cfg, inner))
     FuncExpr(_) => expr // function-expression bodies are not JSX-walked yet
     NativeClassExpr(decl, ctor) => {

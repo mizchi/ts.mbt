@@ -3441,3 +3441,74 @@ test "verify: a dangling reference is reported, a clean bundle is not" {
   )
   assert_true(clean.length() == 0, msg="false positive: \{clean}")
 }
+
+///|
+test "bundle: two unresolved imports from one module both survive" {
+  // `external_imports` was deduplicated on the module SPECIFIER, so the
+  // second `import { … } from "pkg"` was dropped whole — every binding
+  // it introduced became a free variable in the bundle. Excalidraw's
+  // `points-on-curve` import is the case that surfaced it: `simplify`
+  // was called and never declared.
+  let files = vfs([
+    (
+      "entry.ts", "import { curveToBezier } from \"pkg\";\nimport { simplify } from \"pkg\";\nexport const run = () => simplify(curveToBezier([]));\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_allow_unresolved_imports(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("curveToBezier"))
+      assert_true(out.js.contains("simplify"))
+      // Both bindings must be IMPORTED, not merely referenced.
+      let import_lines = out.js.split("\n").filter(l => l.has_prefix("import "))
+      let joined = import_lines.map(l => l.to_string()).join(" | ")
+      assert_true(joined.contains("simplify"))
+      assert_true(joined.contains("curveToBezier"))
+      // And the verifier, which is the check that would have caught the
+      // original bug, must agree.
+      @test.assert_eq(verify_emitted_bundle(out.js).length(), 0)
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: a repeated unresolved specifier is not imported twice" {
+  // The other direction of the same key change: the dedup still has to
+  // fire per BINDING, or the same local name is declared twice and the
+  // bundle is not valid ESM.
+  let files = vfs([
+    (
+      "entry.ts", "import { same } from \"pkg\";\nimport { same } from \"pkg\";\nexport const run = () => same();\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_allow_unresolved_imports(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      let n = out.js.split("\n").filter(l => l.has_prefix("import ")).length()
+      @test.assert_eq(n, 1)
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: a type-only external import never reaches the output" {
+  // `import { type Point } from "pkg"` is TypeScript syntax; emitting it
+  // verbatim makes the bundle stop being JavaScript. Node rejects it at
+  // parse time and the verifier — which parses as TypeScript — cannot.
+  let files = vfs([
+    (
+      "entry.ts", "import type { Point } from \"pkg\";\nimport { type Vec, add } from \"pkg\";\nexport const run = (p: Point, v: Vec) => add(p, v);\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_allow_unresolved_imports(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_false(out.js.contains("import type"))
+      assert_false(out.js.contains("type Vec"))
+      assert_true(out.js.contains("add"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}

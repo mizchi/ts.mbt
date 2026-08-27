@@ -1003,3 +1003,46 @@ test "mangle: a catch pattern's default is reserved in its scope" {
     Err(e) => fail("\{e}")
   }
 }
+
+///|
+test "mangle: a multi-declarator group's names are pre-bound at the top level" {
+  // `let a = 1, b = 2;` is a `Block` of `Let`s in this AST, not two
+  // sibling statements. `rename_block_inline_in`'s prebind recursed into
+  // that wrapper; `mangle_block_impl`'s top-level one did not — so the
+  // group's names were invisible to a reference that PRECEDED the
+  // declaration. That reference resolved to nothing and kept its
+  // original spelling while the declaration was renamed underneath it,
+  // which is a `ReferenceError` under plain `--mangle`.
+  let cfg = ManglerConfig::default().with_preserve_top_level(false)
+  let src = "function f(t) { return isArray(t); }\nlet isArray = Array.isArray, isMap = (t) => t instanceof Map;\nconsole.log(f([]), isMap(new Map()));"
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      // Nothing may still be spelled `isArray` — neither the use nor
+      // the declaration.
+      assert_false(js.contains("isArray(") && js.contains("= Array.isArray"))
+      assert_false(js.contains("isMap"))
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+test "mangle: a real block of declarations still gets its own scope" {
+  // The other half of the same predicate: a genuine `{ let x; let y; }`
+  // has exactly the shape of a declarator group and must NOT be treated
+  // as transparent, or the inner binders land in the enclosing scope and
+  // the post-block references resolve to them.
+  let cfg = ManglerConfig::default().with_preserve_top_level(false)
+  let src = "let x = 1, y = 9;\n{ let x = 2; let y = 3; }\nconsole.log(x, y);"
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      // Whatever the outer pair is named, the trailing `console.log`
+      // must name the SAME two bindings as the first declaration — i.e.
+      // the inner block introduced two fresh names.
+      let first = js.contains("let a = 1, b = 9")
+      assert_true(first)
+      assert_true(js.contains("console.log(a, b)"))
+    }
+    Err(e) => fail("\{e}")
+  }
+}

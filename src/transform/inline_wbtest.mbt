@@ -180,3 +180,30 @@ test "inline: a use inside a try block keeps its declaration" {
   )
   assert_true(no_orphan_call(out, "f0"), msg="orphaned call: \{out}")
 }
+
+///|
+test "inline: a use inside a /*@__PURE__*/ call is counted" {
+  // `count_var_uses_expr` had no `PureCall` arm, and its catch-all
+  // returned the running totals unchanged — so an entire subtree under a
+  // purity annotation was invisible to the use counter. A binding read
+  // twice, once under the wrapper, looked single-use, and the single-use
+  // inliner substituted it away and deleted the declaration, leaving the
+  // wrapped read dangling.
+  let inner : @ast.TsExpr = Call("wrap", [@ast.TsExpr::Var("target")])
+  let (local_, nested) = count_var_uses_expr(
+    PureCall(inner),
+    "target",
+    0,
+    0,
+    false,
+  )
+  assert_eq(local_, 1)
+  assert_eq(nested, 0)
+  // And the same expression without the wrapper must agree, which is the
+  // property the missing arm broke.
+  let (bare_local, bare_nested) = count_var_uses_expr(
+    inner, "target", 0, 0, false,
+  )
+  assert_eq(local_, bare_local)
+  assert_eq(nested, bare_nested)
+}

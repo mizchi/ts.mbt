@@ -452,6 +452,7 @@ fn inline_const_enums_expr(
     Satisfies(inner, ty) => Satisfies(inline_const_enums_expr(inner, table), ty)
     NonNull(inner) => NonNull(inline_const_enums_expr(inner, table))
     TypeArgs(tys, inner) => TypeArgs(tys, inline_const_enums_expr(inner, table))
+    PureCall(inner) => PureCall(inline_const_enums_expr(inner, table))
     OptionalChain(inner) => OptionalChain(inline_const_enums_expr(inner, table))
     NativeClassExpr(decl, ctor) => {
       let new_ctor = match ctor {

@@ -1374,6 +1374,108 @@ fn detect_cjs_exports_var(block : @ast.TsBlock) -> String? {
 }
 
 ///|
+/// Record an import the bundle keeps verbatim, deduplicated by BINDING
+/// rather than by statement.
+///
+/// The dedup key used to be `module_spec + ":" + default_binding`, which
+/// does not mention the named bindings at all. So the second statement
+/// for a specifier was discarded whole:
+///
+///   // a.ts
+///   import { pointsOnBezierCurves } from "points-on-curve";
+///   // b.ts
+///   import { simplify } from "points-on-curve";   // dropped entirely
+///
+/// and every call to `simplify` in the bundle became a free variable.
+/// Excalidraw calls it from four places; `mtsc --verify` is what
+/// reported it (`docs/type-aware-dce.md`, B1). This is the same shape as
+/// the module-graph walk that deduplicated on the import SPECIFIER: a
+/// key that answers a narrower question than the one being asked.
+///
+/// Emitting a second `import { simplify } from "points-on-curve"` next
+/// to the first is valid ESM as long as the LOCAL names differ, which is
+/// what the per-binding key guarantees. Merging into the earlier
+/// statement would save a line and would have to rebuild it in place;
+/// the risk is not worth the bytes, and `--minify` output has one import
+/// clause per statement either way.
+fn record_external_import(
+  external_imports : Array[@ast.TsImportDecl],
+  external_seen : Map[String, Bool],
+  imp : @ast.TsImportDecl,
+) -> Unit {
+  // `import type { X } from "…"` contributes nothing at runtime.
+  if imp.type_only {
+    return
+  }
+  let binds_nothing = imp.default_binding is None &&
+    imp.namespace_binding is None &&
+    imp.named_bindings.length() == 0
+  // `import "./x.css"` binds nothing, so one per specifier is right and
+  // a second copy would duplicate a side effect.
+  if imp.side_effect_only || binds_nothing {
+    let key = "effect:" + imp.module_spec
+    if not(external_seen.contains(key)) {
+      external_seen[key] = true
+      external_imports.push(imp)
+    }
+    return
+  }
+  fn claim(local : String) -> Bool {
+    let key = imp.module_spec + ":bind:" + local
+    if external_seen.contains(key) {
+      false
+    } else {
+      external_seen[key] = true
+      true
+    }
+  }
+
+  let default_binding = match imp.default_binding {
+    Some(n) => if claim("default:" + n) { Some(n) } else { None }
+    None => None
+  }
+  let namespace_binding = match imp.namespace_binding {
+    Some(n) => if claim("ns:" + n) { Some(n) } else { None }
+    None => None
+  }
+  let named_bindings : Array[(String, String)] = []
+  let named_type_only : Array[Bool] = []
+  for i, pair in imp.named_bindings {
+    // A `type` specifier introduces no runtime binding, and emitting one
+    // is worse than dropping it: `import { type Point } from "…"` is
+    // TypeScript syntax, so the bundle stops being JavaScript. Before
+    // the per-binding key below, such specifiers were discarded by luck
+    // — the statement carrying them lost the specifier-level dedup — and
+    // fixing the dedup surfaced them in Excalidraw's output.
+    //
+    // Worth noting for `verify.mbt`: it re-parses with the TypeScript
+    // parser, so it accepts `type` specifiers and CANNOT catch this
+    // class. Node is the oracle that does.
+    let is_type_only = i < imp.named_type_only.length() &&
+      imp.named_type_only[i]
+    if is_type_only {
+      continue
+    }
+    if claim(pair.1) {
+      named_bindings.push(pair)
+      named_type_only.push(false)
+    }
+  }
+  if default_binding is None &&
+    namespace_binding is None &&
+    named_bindings.length() == 0 {
+    return
+  }
+  external_imports.push({
+    ..imp,
+    default_binding,
+    namespace_binding,
+    named_bindings,
+    named_type_only,
+  })
+}
+
+///|
 fn load_module_graph(
   files : Map[String, String],
   path : String,
@@ -1482,16 +1584,7 @@ fn load_module_graph(
         // specifier is treated: keep the import verbatim rather than
         // failing the bundle over a module the caller never had.
         if allow_unresolved && !files.contains(dep_path) {
-          let key = imp.module_spec +
-            ":" +
-            (match imp.default_binding {
-              Some(s) => s
-              None => ""
-            })
-          if !external_seen.contains(key) {
-            external_seen[key] = true
-            external_imports.push(imp)
-          }
+          record_external_import(external_imports, external_seen, imp)
           continue
         }
         resolved[imp.module_spec] = dep_path
@@ -1536,16 +1629,7 @@ fn load_module_graph(
                 Err(e) => return Err(e)
               }
             } else {
-              let key = imp.module_spec +
-                ":" +
-                (match imp.default_binding {
-                  Some(s) => s
-                  None => ""
-                })
-              if !external_seen.contains(key) {
-                external_seen[key] = true
-                external_imports.push(imp)
-              }
+              record_external_import(external_imports, external_seen, imp)
             }
         }
     }

@@ -1982,21 +1982,38 @@ fn mangle_block_impl(
   // class declared later in the source — common pattern in
   // drizzle-orm's circular sql<->column refs) resolve to the
   // same rename as the eventual declaration site.
-  for s in block.stmts {
-    match s {
-      Let(@ast.TsBinding::Ident(name), _, _)
-      | Const(@ast.TsBinding::Ident(name), _, _)
-      | Var(@ast.TsBinding::Ident(name), _, _) =>
-        if !root.renames.contains(name) {
-          let _ = root.bind(name, reserved)
-        }
-      NativeClassStmt(decl, _) =>
-        if decl.name != "" && !root.renames.contains(decl.name) {
-          let _ = root.bind(decl.name, reserved)
-        }
-      _ => ()
+  //
+  // A multi-declarator group (`let a = 1, b = 2;`) is a `Block` in this
+  // AST, not two sibling `Let`s, so it needs the same recursion
+  // `rename_block_inline_in`'s prebind does. Without it the group's
+  // names are invisible here, an earlier statement's reference to one of
+  // them resolves to nothing and keeps its original spelling, and then
+  // the declaration is renamed underneath it: `mtsc --mangle` turned
+  // `function f(t){return isArray(t)?1:2} let isArray=Array.isArray,
+  // isMap=…` into a call to an `isArray` that no longer exists.
+  fn prebind_top_level(stmts : Array[@ast.TsStmt]) -> Unit {
+    for s in stmts {
+      match s {
+        Let(@ast.TsBinding::Ident(name), _, _)
+        | Const(@ast.TsBinding::Ident(name), _, _)
+        | Var(@ast.TsBinding::Ident(name), _, _) =>
+          if !root.renames.contains(name) {
+            let _ = root.bind(name, reserved)
+          }
+        NativeClassStmt(decl, _) =>
+          if decl.name != "" && !root.renames.contains(decl.name) {
+            let _ = root.bind(decl.name, reserved)
+          }
+        Block(b) =>
+          if is_synthetic_multi_decl_block(b) {
+            prebind_top_level(b.stmts)
+          }
+        _ => ()
+      }
     }
   }
+
+  prebind_top_level(block.stmts)
   // Identifier-mangling pass first (so any synthesized identifiers
   // can't collide with property names we're about to rename).
   let new_stmts : Array[@ast.TsStmt] = []
@@ -2041,6 +2058,14 @@ fn collect_top_level_decls(
       Var(b, _, _) | Let(b, _, _) | Const(b, _, _) =>
         collect_binding_names(b, out)
       NativeClassStmt(decl, _) => if decl.name != "" { out[decl.name] = true }
+      // `let a = 1, b = 2;` is a `Block` of `Let`s, and its binders are
+      // top-level all the same. Missing them here left them out of the
+      // reserved set under `preserve_top_level`, so a nested scope was
+      // free to mint the same short name and shadow them.
+      Block(b) =>
+        if is_synthetic_multi_decl_block(b) {
+          collect_top_level_decls(b, out)
+        }
       _ => ()
     }
   }
@@ -2425,31 +2450,20 @@ fn rename_stmt(
 }
 
 ///|
-/// Rename `block` using the given scope without spawning a new
-/// frame. Callers that need a fresh block-scope frame should
-/// allocate it via `ScopeFrame::child(scope)` and pass that to
-/// `rename_block_inline_in` directly — this helper is kept for the
-/// rare callers where the caller already represents the scope they
-/// want the body to inhabit (e.g. the function-body root frame).
+/// Is this `Block` a multi-declarator group (`let a = 1, b = 2;`) rather
+/// than a real block statement?
+///
+/// The question the mangler is really asking is "will the emitter print
+/// braces around this?", because that — not the node's constructor — is
+/// what decides whether the binders end up in the enclosing scope or in
+/// a scope of their own. So defer to the emitter's own predicate instead
+/// of re-deriving the shape check here: two copies of this rule drifted
+/// once already (this one accepted a real `{ let x = 1; let y = 2; }`
+/// that `block_is_inline_decl_group` rejects on `stmt_positions`), and a
+/// mangler that disagrees with the emitter about scope boundaries
+/// renames across them.
 fn is_synthetic_multi_decl_block(b : @ast.TsBlock) -> Bool {
-  if b.stmts.length() < 2 {
-    return false
-  }
-  let kind = match b.stmts[0] {
-    Let(_, _, _) => "let"
-    Const(_, _, _) => "const"
-    Var(_, _, _) => "var"
-    _ => return false
-  }
-  for s in b.stmts {
-    match s {
-      Let(_, _, _) => if kind != "let" { return false }
-      Const(_, _, _) => if kind != "const" { return false }
-      Var(_, _, _) => if kind != "var" { return false }
-      _ => return false
-    }
-  }
-  true
+  block_is_inline_decl_group(b)
 }
 
 ///|

@@ -281,7 +281,8 @@ fn external_chain_root(expr : @ast.TsExpr) -> String {
     | OptionalChain(i)
     | As(i, _)
     | Satisfies(i, _)
-    | TypeArgs(_, i) => external_chain_root(i)
+    | TypeArgs(_, i)
+    | PureCall(i) => external_chain_root(i)
     _ => "?"
   }
 }

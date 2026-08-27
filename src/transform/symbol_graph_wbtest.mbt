@@ -234,3 +234,37 @@ test "symbol_graph: multi-declarator wrapper Block doesn't open a new scope" {
   }
   @test.assert_eq(block_scopes_in_func, 0)
 }
+
+///|
+test "symbol graph: a destructured parameter declares its inner names" {
+  // `sg_declare` was called with `p.name` alone, which for a pattern
+  // parameter is a synthesized placeholder — the names the body actually
+  // reads (`elements`, `type`, `bounds`) were never declared, so every
+  // use of them was recorded as unresolved. Harmless for the mangler
+  // (which has its own walk) but it made the output verifier report a
+  // free variable on every well-formed bundle that destructures in a
+  // parameter list.
+  let g = build_graph(
+    "function draw({ elements, type: kind, bounds: [x, y] = [0, 0], ...rest }) { return [elements, kind, x, y, rest]; }",
+  )
+  for name in ["elements", "kind", "x", "y", "rest"] {
+    assert_false(g.unresolved.contains(name))
+  }
+}
+
+///|
+test "symbol graph: a destructured arrow parameter declares its inner names" {
+  let g = build_graph("const f = ({ a, b: { c } }) => a + c;")
+  for name in ["a", "c"] {
+    assert_false(g.unresolved.contains(name))
+  }
+}
+
+///|
+test "symbol graph: a genuinely free name is still reported" {
+  // The counterpart: the `unresolved` map has to keep saying yes to the
+  // thing it exists to catch, or the verifier built on it is inert.
+  let g = build_graph("function f(a) { return a + missingBinding; }")
+  assert_true(g.unresolved.contains("missingBinding"))
+  assert_false(g.unresolved.contains("a"))
+}

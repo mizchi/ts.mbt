@@ -382,7 +382,7 @@ fn untracked_index_receiver(recv : @ast.TsExpr) -> Bool {
     // Same for the other pseudo-names that parse as identifiers.
     Var("this") | Var("super") | Var("globalThis") | Var("arguments") => false
     Var(_) => true
-    NonNull(inner) | As(inner, _) | Satisfies(inner, _) =>
+    NonNull(inner) | As(inner, _) | Satisfies(inner, _) | PureCall(inner) =>
       untracked_index_receiver(inner)
     _ => false
   }
@@ -752,6 +752,9 @@ fn collect_props_on_external_expr(
     | As(inner, _)
     | Satisfies(inner, _)
     | NonNull(inner)
+    // `/* @__PURE__ */ f(o)` hands `o` to `f` exactly as `f(o)` does;
+    // the annotation is a claim about effects, not a scope.
+    | PureCall(inner)
     | OptionalChain(inner) =>
       collect_props_on_external_expr(
         inner, externals, out, numeric_names, literal_idx_names,
@@ -975,7 +978,8 @@ fn is_external_chain(expr : @ast.TsExpr, externals : Map[String, Bool]) -> Bool 
     NonNull(inner)
     | OptionalChain(inner)
     | As(inner, _)
-    | Satisfies(inner, _) => is_external_chain(inner, externals)
+    | Satisfies(inner, _)
+    | PureCall(inner) => is_external_chain(inner, externals)
     _ => false
   }
 }
@@ -1152,6 +1156,7 @@ fn collect_reflection_sinks_expr(
     | As(inner, _)
     | Satisfies(inner, _)
     | NonNull(inner)
+    | PureCall(inner)
     | OptionalChain(inner) => collect_reflection_sinks_expr(inner, out)
     Yield(Some(inner)) => collect_reflection_sinks_expr(inner, out)
     Cond(c, t, e) => {
@@ -1279,6 +1284,7 @@ fn collect_object_literal_keys(
     | Satisfies(inner, _)
     | NonNull(inner)
     | TypeArgs(_, inner)
+    | PureCall(inner)
     | Await(inner) => collect_object_literal_keys(inner, out)
     Cond(_, t, e) => {
       collect_object_literal_keys(t, out)

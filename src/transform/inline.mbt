@@ -486,6 +486,7 @@ fn inline_into_expr(
     As(inner, ty) => As(inline_into_expr(inner, tbl), ty)
     Satisfies(inner, ty) => Satisfies(inline_into_expr(inner, tbl), ty)
     NonNull(inner) => NonNull(inline_into_expr(inner, tbl))
+    PureCall(inner) => PureCall(inline_into_expr(inner, tbl))
     OptionalChain(inner) => OptionalChain(inline_into_expr(inner, tbl))
     TypeArgs(tys, inner) => TypeArgs(tys, inline_into_expr(inner, tbl))
     NativeClassExpr(decl, ctor) => {
@@ -991,6 +992,7 @@ fn substitute_expr(
     As(inner, ty) => As(substitute_expr(inner, name, rhs), ty)
     Satisfies(inner, ty) => Satisfies(substitute_expr(inner, name, rhs), ty)
     NonNull(inner) => NonNull(substitute_expr(inner, name, rhs))
+    PureCall(inner) => PureCall(substitute_expr(inner, name, rhs))
     OptionalChain(inner) => OptionalChain(substitute_expr(inner, name, rhs))
     TypeArgs(tys, inner) => TypeArgs(tys, substitute_expr(inner, name, rhs))
     NativeClassExpr(decl, ctor) => {
@@ -1450,6 +1452,13 @@ fn count_var_uses_expr(
     | Satisfies(inner, _)
     | NonNull(inner)
     | TypeArgs(_, inner)
+    // `/* @__PURE__ */ immer.produce` is a `PureCall` wrapper, and this
+    // counter had no arm for it — so a binding used fourteen times
+    // through such annotations counted as used once, the inliner
+    // substituted its initializer into the first use and deleted the
+    // declaration. immer's bundle ended up with thirteen references to
+    // a binding that no longer existed.
+    | PureCall(inner)
     | OptionalChain(inner) => {
       let (l2, n2) = count_var_uses_expr(inner, name, 0, 0, inside_func)
       l = l + l2
@@ -1832,6 +1841,7 @@ fn collect_reassigned_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit 
     | Satisfies(inner, _)
     | NonNull(inner)
     | TypeArgs(_, inner)
+    | PureCall(inner)
     | OptionalChain(inner) => collect_reassigned_expr(inner, out)
     Yield(Some(inner)) => collect_reassigned_expr(inner, out)
     Seq(a, b) => {
@@ -2133,6 +2143,7 @@ fn collect_captured_expr(
     | Satisfies(inner, _)
     | NonNull(inner)
     | TypeArgs(_, inner)
+    | PureCall(inner)
     | OptionalChain(inner) => collect_captured_expr(inner, out, inside_func)
     Yield(Some(inner)) => collect_captured_expr(inner, out, inside_func)
     Cond(c, t, e) => {
@@ -2277,6 +2288,7 @@ fn collect_var_refs_in_expr_local(
     | Satisfies(inner, _)
     | NonNull(inner)
     | TypeArgs(_, inner)
+    | PureCall(inner)
     | OptionalChain(inner) => collect_var_refs_in_expr_local(inner, out)
     Yield(Some(inner)) => collect_var_refs_in_expr_local(inner, out)
     Cond(c, t, e) => {

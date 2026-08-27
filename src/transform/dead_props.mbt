@@ -278,7 +278,10 @@ fn collect_read_property_names_expr(
     // concluded nothing reads `o.p` in
     // `id<number>(o.p)` and deleted the key, so the call got
     // `undefined`. See the note on `TypeArgs` in `src/ast/types.mbt`.
-    | TypeArgs(_, inner) => collect_read_property_names_expr(inner, out)
+    | TypeArgs(_, inner)
+    // A `/* @__PURE__ */` wrapper is transparent here too: the read
+    // inside it is a read.
+    | PureCall(inner) => collect_read_property_names_expr(inner, out)
     Yield(Some(inner)) => collect_read_property_names_expr(inner, out)
     Cond(c, t, e) => {
       collect_read_property_names_expr(c, out)
@@ -804,6 +807,8 @@ fn drop_dead_props_expr(
       OptionalChain(drop_dead_props_expr(inner, reserved, read_props))
     TypeArgs(tys, inner) =>
       TypeArgs(tys, drop_dead_props_expr(inner, reserved, read_props))
+    PureCall(inner) =>
+      PureCall(drop_dead_props_expr(inner, reserved, read_props))
     NativeClassExpr(decl, ctor) => {
       let new_ctor = match ctor {
         Some(f) =>

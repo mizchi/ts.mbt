@@ -588,6 +588,48 @@ fn sg_record_binding_type(
 }
 
 ///|
+/// Declare every binding a parameter introduces, and hand back one
+/// representative SymbolId for the parameter position.
+///
+/// Both param-declaration sites used to do `sg_declare(g, scope,
+/// p.name, …)` and nothing else. For a DESTRUCTURING parameter,
+/// `p.name` holds the first identifier the pattern binds, so
+///
+///   ({ alpha, beta }) => alpha + beta
+///   ({ elements: a, type, bounds: c }) => …
+///
+/// declared `alpha` / `a` and left `beta`, `type` and `c` undeclared.
+/// Every use of those resolved to nothing, and `sg_record_use` drops an
+/// unresolved use — so as far as the graph was concerned those bindings
+/// were never read. That is fail-OPEN for everything built on it: the
+/// property mangler's escape analysis, the sink catalog, the
+/// keyed-container inference. A binding whose reads are invisible looks
+/// unobserved, and an unobserved property is a renamable one.
+///
+/// Found by `mtsc --verify` reporting `type` as a free variable on
+/// Excalidraw's `j6 = ({ elements: a, elementsMap: b, bounds: c, type,
+/// … }) => …` (`docs/type-aware-dce.md`, B4).
+///
+/// `FuncInfo.params` wants one id per parameter POSITION so
+/// `FuncArg(fid, i)` can land on it, and a pattern has no single
+/// binding to be. The first name keeps the previous behaviour for that
+/// mapping; what changes is that the rest are now declared too.
+fn sg_declare_param(
+  g : SymbolGraph,
+  scope : ScopeId,
+  p : @ast.TsParam,
+) -> SymbolId {
+  let representative = sg_declare(g, scope, p.name, Param, false)
+  match p.binding {
+    Some(@ast.TsBinding::Object(_) as b)
+    | Some(@ast.TsBinding::Array(_) as b) =>
+      sg_declare_binding(g, b, scope, Param, {})
+    _ => ()
+  }
+  representative
+}
+
+///|
 fn sg_declare_binding(
   g : SymbolGraph,
   b : @ast.TsBinding,
@@ -1254,7 +1296,7 @@ fn sg_visit_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
       // returns / throws don't add func-return edges.
       w.enclosing_func = None
       for p in params {
-        let pid = sg_declare(w.g, w.current_scope, p.name, Param, false)
+        let pid = sg_declare_param(w.g, w.current_scope, p)
         match p.type_ {
           @ast.TsType::Any => ()
           ty => w.g.symbols[pid].ts_type = ty
@@ -1372,7 +1414,7 @@ fn sg_visit_function_body(w : SgWalker, f : @ast.TsFunc) -> Unit {
   // `FuncArg(fid, i)` → param symbol on the backward walk.
   let param_ids : Array[SymbolId] = []
   for p in f.params {
-    let pid = sg_declare(w.g, w.current_scope, p.name, Param, false)
+    let pid = sg_declare_param(w.g, w.current_scope, p)
     match p.type_ {
       @ast.TsType::Any => ()
       ty => w.g.symbols[pid].ts_type = ty
