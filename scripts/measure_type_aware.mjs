@@ -111,12 +111,19 @@ const CORPUS = [
     name: "immer",
     repo: "https://github.com/immerjs/immer",
     entry: "src/immer.ts",
-    // Same shape of problem, different cause: `export const enum
-    // ArchType` is referenced across module boundaries but never
-    // emitted or inlined, so the bundle throws `ArchType is not
-    // defined`.
-    driver: null,
-    sizeOnlyWhy: "bundle throws on load: cross-module `const enum ArchType` neither emitted nor inlined",
+    // Was size-only, for a reason worth keeping in view: `export const
+    // enum ArchType` is declared in one module and read from several
+    // others, a const enum emits no runtime binding, and the
+    // cross-module reads were neither linked nor substituted — so the
+    // bundle threw `ArchType is not defined` at load. The per-module
+    // inline had been taken for the whole job.
+    //
+    // The driver exercises all four `ArchType` dispatch paths on
+    // purpose. `ArchType` picks which proxy implementation handles a
+    // draft, so substituting a wrong literal would route an Array
+    // through the object path and still load cleanly; the values have
+    // to be observed, not just the absence of a throw.
+    driver: "immer.driver.mjs",
   },
   // These two were BLOCKED by the export-surface blowup that
   // `surface_should_walk` in `export_surface.mbt` now bounds:

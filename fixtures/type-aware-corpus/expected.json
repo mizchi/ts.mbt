@@ -15,13 +15,13 @@
     "status": "size-only",
     "verdict": "LOSS",
     "delta": -261,
-    "aware": 119721
+    "aware": 119731
   },
   "immer": {
-    "status": "size-only",
+    "status": "measured",
     "verdict": "NEUTRAL",
     "delta": 0,
-    "aware": 20826
+    "aware": 20370
   },
   "neverthrow": {
     "status": "measured",
@@ -45,13 +45,13 @@
     "status": "measured",
     "verdict": "NEUTRAL",
     "delta": -18,
-    "aware": 200159
+    "aware": 200103
   },
   "excalidraw": {
     "status": "measured",
     "verdict": "LOSS",
     "delta": -303,
-    "aware": 280339
+    "aware": 280380
   },
   "remeda": {
     "status": "blocked"

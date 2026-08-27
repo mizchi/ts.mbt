@@ -112,7 +112,7 @@ type-aware 経路だけのものでした。直すと aware leg が hono で +49
 | excalidraw | measured | corpus 唯一の UI アプリかつ唯一の monorepo。bundle できるまでに 5 件、実行できるまでに 3 件（下記）|
 | superstruct | measured | 元 BLOCKED → 15ms、さらに元 BROKEN → 挙動一致（下記の `.name` reserve）|
 | typebox | size-only | `TTypeArray` は解消。今は別件の TDZ で throw: `IntegerKey` の宣言が使用より後に並ぶ |
-| immer | size-only | bundle が load で throw: module 跨ぎの `const enum ArchType` が emit も inline もされない |
+| immer | measured | 元 size-only。module 跨ぎの `const enum ArchType` を inline するようにして挙動検証まで到達（下記）|
 | remeda | BLOCKED | `setPath.ts` の parse error: `Expected Semicolon, got Extends` |
 
 ### 原因の取り違えを 2 回やった
@@ -696,13 +696,67 @@ excalidraw（−303 byte）の 2 つで、どちらも noise floor
 `--mangle-properties` が実 library で不発だったのと同じ種類の、
 知っておく価値のある不都合な事実です。
 
+## immer: module 跨ぎの `const enum` が消えていた
+
+immer は長いあいだ `size-only` でした。理由は
+`export const enum ArchType` — immer が draft をどの proxy
+実装に回すか決めるための enum で、`utils/common.ts` で宣言され、
+`core/` の複数 module から読まれます。
+
+`const enum` は **runtime binding を一切出しません**。使用側の
+`E.Member` を literal に置き換えるのが仕様で、宣言そのものは消えます。
+mtsc はそれを module 単位でやっていました。つまり
+`load_module_graph` の中で、その module 自身が宣言した enum について
+だけ inline していた。
+
+これは bundle 全体の契約（「`E.Member` の参照は 1 つも残らない」）を
+1 module の宣言集合に対して検査していた、という形です。
+module を跨いだ参照には linker が指す先も無く（binding が無いので）、
+inline も走らない。素通りして bundle に残り、load 時に
+`ArchType is not defined` で throw していました。
+今回で 3 回目の「暗黙の universe」で、class-method DCE が bundle
+全体を見るはずが 1 module しか渡されていなかった件と同じ種類です。
+
+修正は `imported_const_enum_table`: graph を読み終えた時点で、各
+module が **import 経由で読む** const enum の置換表を作り、linker の
+前に inline します。linker が動く時点で `ArchType.Array` は既に `1`
+であるべきで、解決すべき `ArchType` は残っていないべき、という順序。
+
+4 つの形を通します。
+
+| 形 | 扱い |
+| --- | --- |
+| `import { E }` | dep の const enum を local 名で引く |
+| `import { E as F }` | decl を `F` に rename して表を作る（`F.M` も置換される）|
+| `export { E } from "./x"` / `export * from "./x"` | re-export chain を辿る。cycle は `seen` で切る |
+| `import * as K` | `K.E.M` の 2 段 access。path 全体を key にして専用の arm で照合 |
+
+`import * as K` を別扱いにしたのは、synthesize される namespace object
+がその module の **runtime export** を集めたものだからです。const enum
+には runtime export が無いので、通常の namespace member を平坦化する
+pass に任せると落ちます。
+
+`declare const enum` は意図的に置換しません。host が供給するものを
+記述しているだけで、書かれている値が実際に効いている値とは限らない。
+参照は残り、verifier が報告します — 宣言から推測した値を置くよりは、
+そちらが正直な結果です。
+
+driver は 4 つの `ArchType` 経路すべてを踏みます。これは形式的な
+網羅ではなく必要でした: `ArchType` は dispatch そのものなので、
+**間違った literal を置いても bundle は問題なく load します** —
+Array が object 経路に回るだけで。値を観測しないと差が出ません。
+
+結果は `measured` / NEUTRAL / delta 0。size は 20,826 → 20,370 byte
+（両 leg とも）。WIN は増えていません。増えたのは「この行の数字が
+実行された bundle のものだ」という保証だけで、それが元々足りて
+いなかったものです。
+
 ## 残っている既知の未修正
 
 | 件 | 症状 |
 | --- | --- |
 | alias 付き re-export | `export { X as Y }`（別 module 由来の X）が両方の綴りごと落ちる。ts-pattern の `P` |
 | top-level の TDZ | typebox の bundle が `Cannot access 'IntegerKey' before initialization`。`const` の宣言が使用より後に並ぶ |
-| module 跨ぎの `const enum` | immer の bundle が `ArchType is not defined` で load 失敗 |
 | remeda の parse error | `setPath.ts`: `Expected Semicolon, got Extends` |
 | property mangler が実 library で不発 | fail-closed な callee-provenance scan が全部 reserve する |
 | excalidraw が僅差で LOSS | −303 byte（−0.11%）。noise floor が 280 byte なのでぎりぎり判定に乗っている。残りの機構は未特定 |

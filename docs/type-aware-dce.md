@@ -405,19 +405,67 @@ Phase 1 は**全部合わせて 2 日**で、今回のバグ 3 件のうち 2 �
 なります。Phase 3 が本題ですが、Phase 1 無しで gate を緩めるのは
 「壊れたことに気付けない状態で削りすぎに近づく」ことなので、順序は動かせません。
 
-## E1 が開けた bug backlog
+## E1 が開けた bug backlog: 全部潰した
 
-verifier が指摘してまだ直していないもの。どれも `mtsc --verify` で再現します。
+verifier が指摘した 4 件は全部修正済みです。追跡のために原因と
+そこから分かったことを残します。どれも `mtsc --verify` で再現しました。
 
-| # | 症状 | 見立て |
-| --- | --- | --- |
-| B1 | excalidraw: `simplify(...)` が 4 箇所から呼ばれるのに宣言が無い | import か再 export の落ち。laser-pointer の `simplify.ts` 由来 |
-| B2 | zod: `dO` 〜 `dV` の 8 関数が宣言なしで呼ばれる（`a._zod.processJSONSchema=(b,json,c)=>dO(a,b,json,c)`）| JSON-schema 系 1 module 分がまとめて消えている |
-| B3 | immer: `let aL=(new az).produce, aM=aK.produceWithPatches.bind(aK), …` で `aK` が未宣言 | multi-declarator の 1 個目だけ inline され、同じ文の残り 13 参照が孤立。**single-use inliner の use 数え漏れ**が最有力 |
-| B4 | excalidraw: `type` が未解決と報告される（`function dx(a){let type=a?.type; …}`）| 最小例で再現せず。`let type` が symbol graph に declare されない経路がある可能性。**graph の穴なら mangler / DCE も同じ穴を見ている** |
+| # | 症状 | 実際の原因 | 機構 |
+| --- | --- | --- | --- |
+| B1 | excalidraw: `simplify(...)` が 4 箇所から呼ばれるのに宣言が無い | `external_imports` の dedup key が **module specifier** だった。同じ package からの 2 本目の `import { … } from "pkg"` が丸ごと落ち、その binding 全部が自由変数化 | E: dedup の key が間違っている |
+| B2 | zod: `dO` 〜 `dV` の 8 関数が宣言なしで呼ばれる | `PureCall` wrapper に arm を持たない walker が 12 個あった。catch-all が state をそのまま返すので、`/*@__PURE__*/` の下の subtree が丸ごと見えない | A: 部分的な walker |
+| B3 | immer: `let aL=(new az).produce, aM=aK.produceWithPatches.bind(aK), …` で `aK` が未宣言 | 見立て（single-use inliner の use 数え漏れ）は当たりだったが、原因は B2 と同じ `PureCall`。`count_var_uses_expr` に arm が無く、wrapper 下の 1 回が数えられなかった → 2 回読まれる binding が single-use に見え、宣言ごと消えた | A: 同上（数える側なので **soundness** の穴）|
+| B4 | excalidraw: `type` が未解決と報告される | `sg_declare_param` が `p.name` だけを declare していた。pattern 引数の `p.name` は合成 placeholder で、body が実際に読む名前は 1 つも declare されていなかった | B: 契約と評価対象のずれ |
 
-B3 と B4 は verifier の副産物として**解析側の穴**を示しているので、
-Phase 2（walker / universe）の優先度に影響します。
+B2 と B3 が同じ原因だったのが、この backlog で一番情報量のある点です。
+症状は「module 1 つ分が消えた」と「1 文の中の 13 参照が孤立」で
+全く違うのに、原因は同じ 1 行の欠落でした。`TypeArgs` の件と合わせて
+**wrapper node は fail-open の default を持つ**ことが 2 度確認された
+ので、E5（型 wrapper を IR から消す）の優先度が上がります。
+
+B4 は mangler には無害でした（mangler は独自の walk を持つ）。
+無害だからこそ長く残り、**まともな bundle すべてで自由変数を報告する**
+状態になっていた。verifier が切られるのはこの騒音レベルからで、
+verifier を入れた初日に verifier 自身の生存条件を直した形です。
+
+### backlog に無かった 5 件目
+
+B1〜B4 を潰した後、`--fold --mangle` の組み合わせで壊れる例が出ました。
+追ってみると fold は無関係で、**parser 自体**が `let a = 1, b = 2;` を
+`Let` の合成 `Block` にまとめていて、`mangle_block_impl` の top-level
+prebind がそこに降りていなかった（`rename_block_inline_in` の方は
+正しく降りている）。結果、その宣言より **前** にある参照は解決先を
+失って元の綴りのまま残り、宣言だけが rename される。
+
+flag 無しの `mtsc --mangle` で:
+
+```js
+function f(t) { return isArray(t) ? 1 : 2; }
+let isArray = Array.isArray, isMap = (t) => t instanceof Map;
+```
+
+が `function a(a){return isArray(a)?1:2} let b=Array.isArray, …` になり、
+存在しない `isArray` を呼びます。`collect_top_level_decls` も同じ穴を
+持っていて、`preserve_top_level` の下で nested scope が衝突する短名を
+発行できていました。
+
+`is_synthetic_multi_decl_block` は emitter の
+`block_is_inline_decl_group` に委譲するようにしました。mangler が
+本当に訊いているのは「emitter はここに brace を出すか」で、それが
+binder の住む場所を決めるからです。2 つの copy は既にずれていて
+（mangler 側は本物の `{ let x = 1; let y = 2; }` を受け入れる。
+emitter 側は `stmt_positions` で弾く）、**それでも偶然正しい答えを
+出していました**。
+
+### module 跨ぎの `const enum`（immer が `size-only` だった理由）
+
+同時に潰したのがこれで、機構 B の 3 回目です。`const enum` は runtime
+binding を出さないので、module を跨いだ `E.Member` は linker の指す先も
+無く inline も走らず、素通りして `ArchType is not defined` になって
+いました。per-module の inline が bundle 全体の仕事として扱われていた、
+という形。詳細と 4 つの import 形の扱いは
+[`type-aware-measurement.md`](./type-aware-measurement.md) に。
+immer は `size-only` → `measured` になりました。
 
 ## この plan 自体の失敗条件
 

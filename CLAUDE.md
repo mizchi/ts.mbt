@@ -90,8 +90,9 @@ product surfaces now.
   flags — once from the TypeScript source, once from the same code with
   its types erased — with all three legs required to observe the same
   thing. The answer so far is uncomfortable and worth knowing: across
-  nine measured targets there is **no win left** — six neutral and three
-  losses, the largest being -3.0% on typebox and -1.7% on Excalidraw —
+  nine measured targets there is **no win left** — seven neutral and two
+  losses, both inside a byte of the noise floor (-0.22% on typebox,
+  -0.11% on Excalidraw) —
   and the property mangler is entirely inert on every library measured.
   hono (+500 bytes) and zod (+788) *were* wins until the `TypeArgs` fix
   below, which is the point: `f<T>(x)` parses as a wrapper node, nineteen
@@ -136,6 +137,21 @@ product surfaces now.
   eight targets pay 25 bytes or less where reserving every callable cost
   up to +70%. See
   [`docs/type-aware-measurement.md`](./docs/type-aware-measurement.md).
+  Every harness above is a differential: it needs a second thing to
+  compare against, so it only covers inputs somebody arranged.
+  `verify.mbt` (`mtsc --verify`) is the one total check — it re-parses the
+  emitted bundle and asks whether every name it reads resolves to
+  something, sharing no code with the passes that made the deletions. It
+  is deliberately fail-quiet, because a verifier that cries wolf gets
+  turned off. Its first run on the corpus turned four silent liveness
+  bugs into named free variables, and fixing them found a fifth: plain
+  `mtsc --mangle`, no flags, renamed a multi-declarator group while
+  leaving a reference that preceded it spelled the old way. Two of the
+  four were the same missing `PureCall` arm surfacing as two unrelated
+  symptoms — with `TypeArgs` before them, that is twice that a wrapper
+  node's fail-open default has cost a soundness bug, and the reason to
+  expect a third. See
+  [`docs/type-aware-dce.md`](./docs/type-aware-dce.md).
 - `src/bridge` consumes `src/checker` for every type-shape decision and runs
   `@checker.check_module` on the synthesized output as a sanity gate. It also
   keeps domain-specific specialization for Node FS / React / Hono / crypto /

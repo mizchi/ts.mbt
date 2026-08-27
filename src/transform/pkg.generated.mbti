@@ -73,6 +73,8 @@ pub fn format_escape_explanation(EscapeBreakdown) -> Array[String]
 
 pub fn iife_class_lift_block(@ast.TsBlock) -> @ast.TsBlock
 
+pub fn imported_const_enum_table(Array[@ast.TsImportDecl], Map[String, String], (String) -> Array[@ast.TsEnumDecl]?, (String) -> Array[@ast.TsExportSpec]?, (String) -> Array[@ast.TsReExportSpec]?, (String, String) -> String?) -> Map[String, @ast.TsExpr]
+
 pub fn infer_container_symbols(SymbolGraph, ContainerFacts) -> Map[Int, Bool]
 
 pub fn infer_numeric_symbols(SymbolGraph) -> Map[Int, Bool]
@@ -114,6 +116,8 @@ pub fn mangle_block(@ast.TsBlock, ManglerConfig) -> @ast.TsBlock
 pub fn mangle_block_with_renames(@ast.TsBlock, ManglerConfig) -> (@ast.TsBlock, Map[String, String])
 
 pub fn mangle_source_with_auto_reserve(String, ManglerConfig) -> Result[String, String]
+
+pub fn module_const_enums(Array[@ast.TsEnumDecl]) -> Array[@ast.TsEnumDecl]
 
 pub fn numeric_name_set(SymbolGraph, Map[Int, Bool]) -> Map[String, Bool]
 

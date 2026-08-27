@@ -297,6 +297,14 @@ priv struct ModuleNode {
   // The class lowering drops the annotation, so a whole-program pass
   // needs it carried alongside. See `TsModuleBlock.class_fields`.
   class_fields : Array[(String, @ast.TsType)]
+  // `const enum` declarations this module made. A const enum produces
+  // NO runtime binding — every `E.Member` is meant to become a literal —
+  // so a consumer in another module has nothing to link against and the
+  // reference has to be substituted instead. `load_module_graph` can
+  // only substitute the uses it can see, which are this module's; the
+  // cross-module half needs the declarations carried on the node. See
+  // `inline_imported_const_enums`.
+  const_enums : Array[@ast.TsEnumDecl]
   // For CJS-wrapped modules (esbuild-style `((module)=>{...})({get exports(){return X;}, ...})`),
   // the top-level variable that holds the module's exports after the wrapper runs.
   // Named imports from such a module that can't be resolved via export_specs fall
@@ -494,6 +502,36 @@ pub fn bundle_modules(
     @bench.monotonic_clock_end(graph_started),
   )
   let order = topological_order(modules, entry)
+  // Substitute the const-enum members each module reads through its
+  // IMPORTS. `load_module_graph` already inlined each module's own
+  // enums, which had been taken for the whole job — but a const enum
+  // emits no runtime binding, so a cross-module read has nothing for the
+  // linker to point at and had never been substituted either. It just
+  // survived into the bundle as a free variable.
+  //
+  // This runs before the linker for that reason: by the time the linker
+  // is rewriting imported references, `ArchType.Array` should already be
+  // `1` and there should be no `ArchType` left to resolve.
+  for path in order {
+    let m = match modules.get(path) {
+      Some(node) => node
+      None => continue
+    }
+    if m.import_decls.length() == 0 {
+      continue
+    }
+    let table = imported_const_enum_table(
+      m.import_decls,
+      m.resolved_imports,
+      p => modules.get(p).map(n => n.const_enums),
+      p => modules.get(p).map(n => n.export_specs),
+      p => modules.get(p).map(n => n.reexport_specs),
+      (from, spec) => modules.get(from).bind(n => n.resolved_imports.get(spec)),
+    )
+    if table.size() > 0 {
+      modules[path] = { ..m, block: inline_const_enums(m.block, table) }
+    }
+  }
   // Lift IIFE-lowered classes to native `class Name { … }` syntax on
   // each module individually BEFORE the linker pass. The parser emits
   // computed-key temp vars (`let __class_key_0 = expr`) inside the
@@ -1563,6 +1601,7 @@ fn load_module_graph(
     class_fields: mb.class_fields,
     export_specs: mb.exports,
     reexport_specs: mb.reexports,
+    const_enums: module_const_enums(mb.enums),
     cjs_exports_var: detect_cjs_exports_var(lowered),
   }
   // Walk imports, recurse into relative paths, accumulate bare ones.
@@ -1709,6 +1748,7 @@ fn load_module_graph(
     class_fields: mb.class_fields,
     export_specs: mb.exports,
     reexport_specs: mb.reexports,
+    const_enums: module_const_enums(mb.enums),
     cjs_exports_var,
   }
   Ok(())

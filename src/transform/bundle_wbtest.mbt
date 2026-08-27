@@ -3512,3 +3512,92 @@ test "bundle: a type-only external import never reaches the output" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "bundle: a const enum read from another module is substituted" {
+  // A `const enum` emits no runtime binding — every `E.Member` is meant
+  // to become a literal. The per-module inline covered each module's own
+  // enums and had been taken for the whole job, so a cross-module read
+  // had nothing for the linker to point at and had never been
+  // substituted either: it survived into the bundle as a free variable
+  // and immer threw `ArchType is not defined` at load.
+  let files = vfs([
+    (
+      "kinds.ts", "export const enum ArchType { Object = 0, Array = 1, Map = 2 }\n",
+    ),
+    (
+      "entry.ts", "import { ArchType } from \"./kinds\";\nexport const pick = (x: unknown) => Array.isArray(x) ? ArchType.Array : ArchType.Object;\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_false(out.js.contains("ArchType"))
+      assert_true(out.js.contains("1"))
+      @test.assert_eq(verify_emitted_bundle(out.js).length(), 0)
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: a cross-module const enum resolves through alias and re-export" {
+  // `export { E } from "./x"` and `import { E as F }` both have to keep
+  // working, because that is how a package's `index.ts` exposes one.
+  let files = vfs([
+    ("kinds.ts", "export const enum Level { Low = \"low\", High = \"high\" }\n"),
+    ("index.ts", "export { Level } from \"./kinds\";\n"),
+    (
+      "entry.ts", "import { Level as L } from \"./index\";\nexport const top = () => L.High;\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_false(out.js.contains("Level"))
+      assert_true(out.js.contains("\"high\""))
+      @test.assert_eq(verify_emitted_bundle(out.js).length(), 0)
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: a namespace import reaches a cross-module const enum" {
+  // `import * as K` reads it as `K.ArchType.Map`, a two-level access.
+  // The synthesized namespace object carries the module's RUNTIME
+  // exports, and a const enum has none, so the flattening pass that
+  // handles ordinary namespace members would drop this one.
+  let files = vfs([
+    (
+      "kinds.ts", "export const enum ArchType { Object = 0, Array = 1, Map = 2 }\n",
+    ),
+    (
+      "entry.ts", "import * as K from \"./kinds\";\nexport const pick = () => K.ArchType.Map;\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_false(out.js.contains("ArchType"))
+      assert_true(out.js.contains("2"))
+      @test.assert_eq(verify_emitted_bundle(out.js).length(), 0)
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: a declared const enum is left to the host" {
+  // `declare const enum E` describes something the host provides, so the
+  // values written down are not necessarily the ones in effect. The
+  // reference stays, and the verifier is expected to flag it — that is
+  // the honest outcome, not a substitution guessed from a declaration.
+  let files = vfs([
+    ("kinds.ts", "export declare const enum Host { A = 1 }\n"),
+    (
+      "entry.ts", "import { Host } from \"./kinds\";\nexport const v = () => Host.A;\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => assert_true(out.js.contains("Host"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
