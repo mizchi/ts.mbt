@@ -4,10 +4,22 @@
 // almost always have a trivial body (`return cond;`). At every
 // call site `isFoo(value)`, the body's `cond` — with the
 // parameter substituted by the actual argument — is equivalent
-// to the call. Inlining trades a function call for a few extra
-// bytes of the substituted expression; in minify mode the bytes
-// shrink even further, and the unused-after-inline predicate
-// declaration falls out via treeshake.
+// to the call.
+//
+// "Inlining trades a function call for a few extra bytes of the
+// substituted expression … and the unused-after-inline predicate
+// declaration falls out via treeshake" is what this comment used to
+// say, and both halves hold only when the predicate has ONE caller.
+// With several, every call site pays a copy of the body and the
+// declaration stays for the callers that were not inlined. On typebox
+// that cost 5.9 KB, which was the entirety of its -2.98% against the
+// types-erased leg. Worse, the substitution copies the ARGUMENT once
+// per reference to the parameter, so `isOne(bump())` against a
+// three-term guard called `bump()` three times.
+//
+// So the decision is now per call site and asks both questions —
+// `should_inline_predicate`, `arg_is_duplicable`,
+// `PREDICATE_INLINE_MAX_COST`.
 //
 // Constraints (conservative for now):
 //   - The function has exactly one parameter (most type guards
@@ -34,6 +46,217 @@ pub(all) struct PredicateTable {
 pub(all) struct PredicateEntry {
   param_name : String
   body_expr : @ast.TsExpr
+  // How many times the body reads the parameter. The substitution
+  // copies the ARGUMENT once per reference, so this is both a
+  // correctness input and a size input.
+  param_refs : Int
+  // Node count of the body, as a stand-in for the bytes a copy costs.
+  body_cost : Int
+  // Calls to this predicate in the whole block. One call means the
+  // declaration dies after inlining and the trade is unconditionally
+  // good; several mean every copy is paid for again.
+  call_sites : Int
+  // Whether inlining the last caller can actually delete the
+  // declaration. False for anything the bundle exports.
+  removable : Bool
+}
+
+///|
+/// A body this big is not inlined into more than one call site.
+///
+/// typebox is what set this number. `IsExtendsTrueLike` reads
+///
+///   return IsExtendsUnion(value) || IsExtendsTrue(value);
+///
+/// and each of those guards is a five-term conjunction over
+/// `Guard.IsObject` / `HasPropertyKey` / `IsEqual`. Inlining both put
+/// 374 bytes where 46 had been, the two declarations stayed (other call
+/// sites still need them), and across the bundle the pass added
+/// **5.9 KB** — the whole of typebox's -2.98% against the types-erased
+/// leg. The pass's own comment claimed it "trades a function call for a
+/// few extra bytes … and the unused-after-inline predicate declaration
+/// falls out via treeshake". Both halves of that are true only when the
+/// predicate has ONE caller.
+///
+/// 8 nodes is what a guard that pays for itself looks like:
+/// `x === "a"`, `typeof x === "string"`, `x.kind === "a" && x.n > 0`.
+/// Anything larger has to earn its copies, and nothing downstream can
+/// promise that.
+const PREDICATE_INLINE_MAX_COST : Int = 2
+
+///|
+/// Is this argument safe to write more than once?
+///
+/// It has to be, when the body reads its parameter more than once,
+/// because the substitution copies the argument into every one of those
+/// positions. It did not check, and
+///
+///   function isOne(x: number): x is 1 { return x === 1 && x !== 2 && x > 0; }
+///   isOne(bump())
+///
+/// became `bump() === 1 && bump() !== 2 && bump() > 0` — the argument
+/// evaluated three times. `calls` came back 3 instead of 1. A call, an
+/// assignment, `++`, an `await`: any of them changes what the program
+/// does. Even a plain property read is not safe to duplicate, since a
+/// getter runs on each read.
+///
+/// So the allowlist is what cannot observe anything twice: an
+/// identifier, `this`, and literals.
+fn arg_is_duplicable(arg : @ast.TsExpr) -> Bool {
+  match arg {
+    // `this` is `Var("this")` in this AST, so the identifier arm covers
+    // it too.
+    Var(_)
+    | NumberLit(_)
+    | IntLit(_)
+    | BigIntLit(_)
+    | BoolLit(_)
+    | StringLit(_)
+    | NullLit => true
+    // The TypeScript-only wrappers are transparent: `x as Foo` reads
+    // exactly what `x` reads.
+    As(inner, _) | Satisfies(inner, _) | NonNull(inner) | TypeArgs(_, inner) =>
+      arg_is_duplicable(inner)
+    _ => false
+  }
+}
+
+///|
+/// `(node count, references to `param`)` for a predicate body, or `None`
+/// when the body holds a shape this scan does not model.
+///
+/// `None` refuses the inline. Both numbers are load-bearing in the
+/// unsafe direction — undercounting the references duplicates an
+/// effectful argument, undercounting the cost inlines something large —
+/// so an unrecognised node is not counted as a leaf, it stops the
+/// decision.
+fn predicate_body_facts(expr : @ast.TsExpr, param : String) -> (Int, Int)? {
+  fn go(e : @ast.TsExpr) -> (Int, Int)? {
+    match e {
+      Var(n) => Some((1, if n == param { 1 } else { 0 }))
+      NumberLit(_)
+      | IntLit(_)
+      | BigIntLit(_)
+      | BoolLit(_)
+      | StringLit(_)
+      | NullLit
+      | ArrayHole => Some((1, 0))
+      PropAccess(recv, _) =>
+        match go(recv) {
+          Some((c, r)) => Some((c + 1, r))
+          None => None
+        }
+      UnaryOp(_, inner)
+      | Spread(inner)
+      | As(inner, _)
+      | Satisfies(inner, _)
+      | NonNull(inner)
+      | OptionalChain(inner)
+      | TypeArgs(_, inner)
+      | PureCall(inner) =>
+        match go(inner) {
+          Some((c, r)) => Some((c + 1, r))
+          None => None
+        }
+      BinOp(_, l, r) | Seq(l, r) | IndexAccess(l, r) => join(go(l), go(r), 1)
+      Cond(c, t, e2) => join(join(go(c), go(t), 0), go(e2), 1)
+      Call(n, args) => {
+        // The callee name is itself a reference when it happens to be
+        // the parameter (`p(1)` where `p` is the param).
+        let mut acc = Some((1, if n == param { 1 } else { 0 }))
+        for a in args {
+          acc = join(acc, go(a), 0)
+        }
+        acc
+      }
+      CallExpr(callee, args) | NewExpr(callee, args) => {
+        let mut acc = go(callee)
+        for a in args {
+          acc = join(acc, go(a), 0)
+        }
+        match acc {
+          Some((c, r)) => Some((c + 1, r))
+          None => None
+        }
+      }
+      New(n, args) => {
+        let mut acc = Some((1, if n == param { 1 } else { 0 }))
+        for a in args {
+          acc = join(acc, go(a), 0)
+        }
+        acc
+      }
+      MethodCall(recv, _, args) => {
+        let mut acc = go(recv)
+        for a in args {
+          acc = join(acc, go(a), 0)
+        }
+        match acc {
+          Some((c, r)) => Some((c + 1, r))
+          None => None
+        }
+      }
+      ArrayLit(items) => {
+        let mut acc = Some((1, 0))
+        for it in items {
+          acc = join(acc, go(it), 0)
+        }
+        acc
+      }
+      ObjectLit(entries) => {
+        let mut acc = Some((1, 0))
+        for ent in entries {
+          acc = join(acc, go(ent.1), 0)
+        }
+        acc
+      }
+      TemplateLiteral(_, exprs) => {
+        let mut acc = Some((1, 0))
+        for x in exprs {
+          acc = join(acc, go(x), 0)
+        }
+        acc
+      }
+      // A closure in the body captures the parameter rather than
+      // reading it, and counting a capture as one read would let the
+      // argument be duplicated into two closures. Not modelled.
+      _ => None
+    }
+  }
+
+  go(expr)
+}
+
+///|
+/// Add two `(cost, refs)` results plus a cost for the node joining them.
+/// `None` anywhere poisons the result, which is the point.
+fn join(a : (Int, Int)?, b : (Int, Int)?, extra : Int) -> (Int, Int)? {
+  match (a, b) {
+    (Some((c1, r1)), Some((c2, r2))) => Some((c1 + c2 + extra, r1 + r2))
+    _ => None
+  }
+}
+
+///|
+/// Calls to `name` anywhere in the block, in either spelling. Counted on
+/// the pre-inline block, which is the right denominator: what matters is
+/// how many copies the pass is about to make.
+fn count_predicate_calls(block : @ast.TsBlock, out : Map[String, Int]) -> Unit {
+  fn bump(n : String) -> Unit {
+    out[n] = out.get(n).unwrap_or(0) + 1
+  }
+
+  // `surface_visit_exprs_block` already visits every expression in the
+  // block, nested function bodies included, so this needs no traversal
+  // of its own — the one thing a counter must not do is miss a call site
+  // and conclude a predicate has fewer callers than it has.
+  surface_visit_exprs_block(block, e => {
+    match e {
+      Call(n, _) => bump(n)
+      CallExpr(@ast.TsExpr::Var(n), _) => bump(n)
+      _ => ()
+    }
+  })
 }
 
 ///|
@@ -41,15 +264,41 @@ pub(all) struct PredicateEntry {
 /// declarations. Only `Let / Const / Var(Ident(name), _,
 /// FuncExpr({…}))` shapes with a `TypePredicate` return type and
 /// a one-statement `Return(Some(_))` body qualify.
-pub fn build_predicate_table(block : @ast.TsBlock) -> PredicateTable {
+pub fn build_predicate_table(
+  block : @ast.TsBlock,
+  // The bundle's exported top-level names. A predicate the bundle
+  // exports cannot be removed however few callers it has, so the
+  // "one caller, the declaration dies" exemption below does not apply
+  // to it. typebox exports its guards: `IsExtendsUnion` has exactly one
+  // internal caller, was inlined into it on that basis, and then stayed
+  // in the output anyway because it is part of the ABI — 362 bytes
+  // written twice.
+  exported? : Map[String, Bool] = {},
+) -> PredicateTable {
   let entries : Map[String, PredicateEntry] = {}
+  let calls : Map[String, Int] = {}
+  count_predicate_calls(block, calls)
   for stmt in block.stmts {
     match stmt {
       Let(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(f))
       | Const(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(f))
       | Var(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(f)) =>
         match try_extract_predicate(f) {
-          Some(entry) => entries[name] = entry
+          Some((param_name, body_expr)) =>
+            // A body the cost scan cannot model is not inlined at all;
+            // see `predicate_body_facts`.
+            match predicate_body_facts(body_expr, param_name) {
+              Some((cost, refs)) =>
+                entries[name] = {
+                  param_name,
+                  body_expr,
+                  param_refs: refs,
+                  body_cost: cost,
+                  call_sites: calls.get(name).unwrap_or(0),
+                  removable: not(exported.contains(name)),
+                }
+              None => ()
+            }
           None => ()
         }
       _ => ()
@@ -59,7 +308,29 @@ pub fn build_predicate_table(block : @ast.TsBlock) -> PredicateTable {
 }
 
 ///|
-fn try_extract_predicate(f : @ast.TsFunc) -> PredicateEntry? {
+/// Should this particular call site be inlined?
+///
+/// Two independent questions, and the pass used to ask neither.
+///
+///  * Is it SAFE — the substitution copies the argument once per
+///    reference to the parameter, so a body that reads its parameter
+///    twice evaluates the argument twice.
+///  * Is it WORTH IT — every call site pays a copy of the body, and the
+///    declaration only disappears when the last caller is inlined.
+fn should_inline_predicate(entry : PredicateEntry, arg : @ast.TsExpr) -> Bool {
+  if entry.param_refs > 1 && not(arg_is_duplicable(arg)) {
+    return false
+  }
+  // One caller AND removable: the body moves rather than multiplies,
+  // and treeshake takes the declaration. Worth it whatever the size.
+  if entry.call_sites <= 1 && entry.removable {
+    return true
+  }
+  entry.body_cost <= PREDICATE_INLINE_MAX_COST
+}
+
+///|
+fn try_extract_predicate(f : @ast.TsFunc) -> (String, @ast.TsExpr)? {
   // Return type must be `TypePredicate(_, _)`.
   match f.return_type {
     TypePredicate(_, _) => ()
@@ -85,7 +356,7 @@ fn try_extract_predicate(f : @ast.TsFunc) -> PredicateEntry? {
     Some(_) => return None
     None => param.name
   }
-  Some({ param_name: name, body_expr: return_expr })
+  Some((name, return_expr))
 }
 
 ///|
@@ -283,7 +554,7 @@ fn inline_predicates_expr(
     Call(name, args) =>
       match table.entries.get(name) {
         Some(entry) =>
-          if args.length() == 1 {
+          if args.length() == 1 && should_inline_predicate(entry, args[0]) {
             substitute_param_with_arg(
               entry.body_expr,
               entry.param_name,
@@ -314,7 +585,7 @@ fn inline_predicates_expr(
         @ast.TsExpr::Var(name) =>
           match table.entries.get(name) {
             Some(entry) =>
-              if args.length() == 1 {
+              if args.length() == 1 && should_inline_predicate(entry, args[0]) {
                 return substitute_param_with_arg(
                   entry.body_expr,
                   entry.param_name,

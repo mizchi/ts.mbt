@@ -1,0 +1,15 @@
+{
+  "origin": "ts.mbt — found while attributing typebox's -2.98%: predicate-inline copies the argument once per parameter reference",
+  "what": "`isOne(bump())` became `bump() === 1 && bump() !== 2 && bump() > 0` — the argument evaluated three times, `effects` 3 instead of 1. The corpus checks behaviour, so it catches the duplication directly. Case 3 is the control: an identifier argument IS safe to duplicate and must still produce the same answer, so the fix cannot be 'stop inlining'.",
+  "mtscArgs": [
+    "--treeshake"
+  ],
+  "exports": [
+    "report"
+  ],
+  "expectKeep": [
+    "tag",
+    "n"
+  ],
+  "expectStatus": "pass"
+}

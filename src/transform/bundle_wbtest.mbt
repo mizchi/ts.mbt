@@ -3275,3 +3275,90 @@ test "class_method_dce: a method called from ANOTHER module survives" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "predicate-inline: an effectful argument is not duplicated" {
+  // The substitution copies the argument once per reference to the
+  // parameter, and nothing checked that copying it was safe:
+  // `isOne(bump())` became `bump() === 1 && bump() !== 2 && bump() > 0`
+  // and the counter came back 3. `fixtures/mangle-safety/
+  // case41-predicate-argument` runs the shapes; this pins the emit.
+  let src =
+    #|let calls = 0;
+    #|function bump(): number {
+    #|  calls = calls + 1;
+    #|  return 1;
+    #|}
+    #|function isOne(x: number): x is 1 {
+    #|  return x === 1 && x !== 2 && x > 0;
+    #|}
+    #|export const r = isOne(bump());
+    #|console.log(r, calls);
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default().with_treeshake(true).with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      // One evaluation of the argument, so the call has to survive.
+      assert_true(
+        out.js.contains("isOne(bump())"),
+        msg="duplicated an effectful argument: \{out.js}",
+      )
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "predicate-inline: a multi-caller guard is not copied everywhere" {
+  // A body that costs more than `PREDICATE_INLINE_MAX_COST` is inlined
+  // only when there is one caller AND the declaration can then be
+  // deleted. typebox's guards are five-term conjunctions with several
+  // callers each, and inlining them added 5.9 KB — the whole of its
+  // -2.98% against the types-erased leg.
+  let src =
+    #|function isBig(v: { kind: string; n: number; tag: string }): v is { kind: string; n: number; tag: string } {
+    #|  return typeof v.kind === "string" && v.n > 0 && v.tag !== "" && v.kind !== "no";
+    #|}
+    #|export function a(v: { kind: string; n: number; tag: string }) {
+    #|  return isBig(v) ? 1 : 0;
+    #|}
+    #|export function b(v: { kind: string; n: number; tag: string }) {
+    #|  return isBig(v) ? 2 : 0;
+    #|}
+    #|export function c(v: { kind: string; n: number; tag: string }) {
+    #|  return isBig(v) ? 3 : 0;
+    #|}
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default().with_treeshake(true).with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // Three copies of the body would mean three `typeof` reads.
+      let typeofs = out.js.split("typeof ").collect().length() - 1
+      assert_true(
+        typeofs <= 1,
+        msg="copied the guard body to every call site (\{typeofs} copies): \{out.js}",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "predicate-inline: a trivial guard with one caller still inlines" {
+  // The other half: the gate must not turn the pass off. One caller,
+  // body below the cost budget, not exported — the declaration goes.
+  let src =
+    #|function isSet(v: { flag: boolean }): v is { flag: boolean } {
+    #|  return v.flag;
+    #|}
+    #|export const answer = isSet({ flag: true }) ? "y" : "n";
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default().with_treeshake(true).with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      assert_false(
+        out.js.contains("isSet"),
+        msg="the guard survived, so the pass did not fire: \{out.js}",
+      )
+    Err(e) => fail("bundle error: \{e}")
+  }
+}

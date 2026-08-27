@@ -23,7 +23,7 @@ pub fn build_const_enum_table(Array[@ast.TsEnumDecl]) -> Map[String, @ast.TsExpr
 
 pub fn build_enum_inline_table(Array[@ast.TsEnumDecl], include_non_const? : Bool) -> Map[String, @ast.TsExpr]
 
-pub fn build_predicate_table(@ast.TsBlock) -> PredicateTable
+pub fn build_predicate_table(@ast.TsBlock, exported? : Map[String, Bool]) -> PredicateTable
 
 pub fn build_switch_fold_table(@ast.TsBlock) -> SwitchFoldTable
 
@@ -333,6 +333,10 @@ pub fn Position::new(Int, Int) -> Self
 pub(all) struct PredicateEntry {
   param_name : String
   body_expr : @ast.TsExpr
+  param_refs : Int
+  body_cost : Int
+  call_sites : Int
+  removable : Bool
 }
 
 pub(all) struct PredicateTable {

@@ -77,12 +77,12 @@ bundle 内と証明できない call を見つけて全部 reserve する）、
 | --- | --- | --- | --- | --- | --- | --- |
 | hono | 188 | 63,192 | 22,349 | 22,355 | +6 | NEUTRAL |
 | valibot | 828 | 228,307 | 88,768 | 88,768 | 0 | NEUTRAL |
-| typebox | 692 | 380,972 | 123,124 | 119,460 | −3,664 | LOSS |
+| typebox | 692 | 380,972 | 119,721 | 119,460 | −261 | LOSS |
 | immer | 17 | 49,809 | 20,826 | 20,826 | 0 | NEUTRAL |
 | neverthrow | 5 | 9,991 | 5,166 | 5,166 | 0 | NEUTRAL |
 | ts-pattern | 18 | 20,365 | 5,795 | 5,795 | 0 | NEUTRAL |
-| superstruct | 8 | 20,785 | 10,690 | 10,552 | −138 | LOSS |
-| zod | 133 | 648,647 | 200,320 | 200,141 | −179 | NEUTRAL |
+| superstruct | 8 | 20,785 | 10,523 | 10,552 | +29 | NEUTRAL |
+| zod | 133 | 648,647 | 200,159 | 200,141 | −18 | NEUTRAL |
 | excalidraw | 95 | 788,070 | 280,297 | 279,994 | −303 | LOSS |
 
 **WIN が 0 件です。** 一つ前の記録では hono が +500、zod が +788 の WIN
@@ -593,10 +593,106 @@ driver に constant-width の line を足したので、この経路は今後
 observation で守られます（`fixtures/type-aware-corpus/README.md` に
 driver の書き方として明記）。
 
+## typebox の −2.98% を追う: predicate-inline に cost model が無かった
+
+excalidraw と同じ手を typebox（残っていた最大の LOSS）に当てました。
+`--mangle` 無しの 2 leg で宣言の集合を diff——今回は
+**aware だけにある宣言は 0 個**。宣言は同じで、**同じ宣言が大きい**。
+1 宣言あたりの byte 差を取ると 136 個が違い、net +5,857。最大のもの:
+
+```
++374 EncodeBuilder   +362 IsExtendsTrueLike   +287 ExtendsUnion$85
++279 ExtendsTupleToArray   +273 ElementsLeft   +180 IsRefine
+```
+
+中身:
+
+```js
+// blind
+function IsExtendsTrueLike(value) {
+  return IsExtendsUnion(value) || IsExtendsTrue(value);
+}
+// aware
+function IsExtendsTrueLike(value) {
+  return Guard$35.IsObject(value) && Guard$35.HasPropertyKey(value, "~kind") &&
+    Guard$35.HasPropertyKey(value, "inferred") &&
+    Guard$35.IsEqual(value["~kind"], "ExtendsUnion") &&
+    Guard$35.IsObject(value.inferred) || /* IsExtendsTrue の本体も同様 */;
+}
+```
+
+`predicate-inline` が型述語の本体を call site に撒いていました。
+46 byte が 374 byte になり、`IsExtendsUnion` / `IsExtendsTrue` の宣言は
+（他の caller が残っているので）**そのまま残る**。bundle 全体で +5.9 KB
+——typebox の −2.98% はこれが全部でした。
+
+pass 自身の冒頭コメントはこう書いてありました:「関数呼び出しを数バイトの
+式と交換する。inline 後に使われなくなった述語の宣言は treeshake で落ちる」。
+**両方とも caller が 1 つのときだけ真**です。
+
+### 先にもっと悪いものが出た: 引数が複製される
+
+cost の前に soundness でした。substitution は**parameter の出現ごとに
+引数をコピー**し、それが安全かどうかを誰も見ていませんでした。
+
+```ts
+let calls = 0;
+function bump(): number { calls = calls + 1; return 1; }
+function isOne(x: number): x is 1 { return x === 1 && x !== 2 && x > 0; }
+console.log(isOne(bump()), calls);
+```
+
+| | 出力 |
+| --- | --- |
+| `--bundle` | `[true,1]` |
+| `--bundle --treeshake --fold` | `[true,3]` |
+
+emit は `bump() === 1 && bump() !== 2 && bump() > 0`。call でも
+assignment でも `++` でも `await` でも同じで、**普通の property read も
+安全ではありません**（getter が read ごとに走る）。
+`arg_is_duplicable` の許可リストは「2 回観測しても何も起きないもの」——
+識別子（`this` も `Var("this")` なのでここ）と literal だけです。
+それ以外は、本体が parameter を 2 回以上読むなら inline しません。
+
+`fixtures/mangle-safety/case41-predicate-argument` が 4 形を実行で
+検査します。3 番目は**対照**で、識別子の引数は複製して良いので
+inline されてなお同じ答えを出さなければならない——「inline をやめる」で
+逃げられないようにしてあります。
+
+### cost model は測って決めた
+
+budget（本体の node 数）を振って corpus で測りました。
+
+| budget | typebox aware | delta | 判定 |
+| --- | --- | --- | --- |
+| 制限なし（元） | 123,124 | −3,664 | −2.98% |
+| 8 | 121,860 | −2,400 | −1.97% |
+| 6 | 121,427 | −1,967 | −1.62% |
+| 4 | 121,382 | −1,922 | −1.58% |
+| 2 | 119,721 | **−261** | −0.22% |
+| 0 | 119,721 | −261 | −0.22% |
+
+hono / valibot / zod / neverthrow / ts-pattern はどの budget でも
+1 byte も動きません。**superstruct は −138 の LOSS から +29 の NEUTRAL に
+反転**しました。0 と 2 が同じ数字なので、`return x` / `return x.flag`
+のように本当に払える形だけを残す 2 を採用しています。
+
+もう 1 つ gate が必要でした。budget 8 の時点で `IsExtendsUnion` は
+**caller が 1 つ**だったので「宣言が死ぬから常に得」の例外を通って
+いました。ところが typebox は guard を export しているので宣言は死にません。
+`removable`（bundle が export していない）を条件に加えています。
+
+読み取れることは、pass 自体にとって不都合です。**述語の inline は
+それ自体では byte を減らしません。** `x === "a"` に置き換えるだけでも
+`f(x)` より長い。得になるのは後段（`type-fold` / `fold` /
+`tag-rewrite`）が畳めたときだけで、畳めるかどうかは inline を決める
+時点では分かりません。corpus の WIN が 0 なのはそれと整合しています。
+
 ### 残る LOSS
 
-型を消した方が小さくなる target は typebox（−2.98%、size-only）と
-superstruct（−138 byte）と excalidraw（−303 byte）。WIN は 0 個。
+型を消した方が小さくなる target は typebox（−261 byte、size-only）と
+excalidraw（−303 byte）の 2 つで、どちらも noise floor
+（280 byte 前後）のすぐ上。WIN は 0 個。
 `--mangle-properties` が実 library で不発だったのと同じ種類の、
 知っておく価値のある不都合な事実です。
 
@@ -610,6 +706,8 @@ superstruct（−138 byte）と excalidraw（−303 byte）。WIN は 0 個。
 | remeda の parse error | `setPath.ts`: `Expected Semicolon, got Extends` |
 | property mangler が実 library で不発 | fail-closed な callee-provenance scan が全部 reserve する |
 | excalidraw が僅差で LOSS | −303 byte（−0.11%）。noise floor が 280 byte なのでぎりぎり判定に乗っている。残りの機構は未特定 |
+| typebox が僅差で LOSS | −261 byte（−0.22%）。predicate-inline の cost model 導入後の残り。機構は未特定 |
+| 述語 inline の得は後段次第 | inline それ自体は byte を増やす。畳めるかどうかは inline を決める時点で分からないので、budget 2 は「本当に払える形だけ」の近似 |
 | CSS modules の値 | `import styles from "./x.module.css"` に `{}` を渡す。class 名 map ではないので `styles.foo` は `undefined` |
 | `TypeArgs` の構造的保証 | 19 file に arm を足したが、次に walker を書く人が落とすのを止める仕組みは無い。`case40` が唯一の網 |
 

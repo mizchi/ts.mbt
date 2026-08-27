@@ -686,7 +686,7 @@ pub fn bundle_modules(
     }
     // Type-predicate inline.
     timer.phase("predicate-inline", () => {
-      let predicates = build_predicate_table(combined)
+      let predicates = build_predicate_table(combined, exported=export_roots)
       if !predicates.entries.is_empty() {
         combined = inline_predicates(combined, predicates)
       }

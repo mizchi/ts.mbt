@@ -14,8 +14,8 @@
   "typebox": {
     "status": "size-only",
     "verdict": "LOSS",
-    "delta": -3664,
-    "aware": 123124
+    "delta": -261,
+    "aware": 119721
   },
   "immer": {
     "status": "size-only",
@@ -37,15 +37,15 @@
   },
   "superstruct": {
     "status": "measured",
-    "verdict": "LOSS",
-    "delta": -138,
-    "aware": 10690
+    "verdict": "NEUTRAL",
+    "delta": 29,
+    "aware": 10523
   },
   "zod": {
     "status": "measured",
     "verdict": "NEUTRAL",
-    "delta": -179,
-    "aware": 200320
+    "delta": -18,
+    "aware": 200159
   },
   "excalidraw": {
     "status": "measured",
