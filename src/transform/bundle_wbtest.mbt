@@ -3168,3 +3168,56 @@ test "link: a wildcard re-export chain drops type-only names too" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "link: the namespace object cannot name a binding the bundle lacks" {
+  // The backstop, tested through the one arrival path the enumeration
+  // filters do not cover: a name re-exported by `export { T }` after
+  // being imported, with no `type` marker on either end. The module
+  // declares nothing called `T`, so the type filters see no type
+  // declaration to key on and let it through — and the synthesis check
+  // is what stops it reaching the object.
+  //
+  // This is the shape zod hit three times from three different paths
+  // (`$constructor`, `$ZodBranded`, `$RefinementCtx`). Whatever the
+  // path, an entry whose value the bundle never declares must not be
+  // emitted.
+  let files = vfs([
+    (
+      "types.ts",
+      (
+        #|export type Ghost = { a: number };
+        #|export const real = 1;
+        #|
+      ),
+    ),
+    (
+      "mid.ts",
+      (
+        #|import { Ghost, real } from "./types";
+        #|export { Ghost, real };
+        #|
+      ),
+    ),
+    ("core.ts", "export * as ns from \"./mid\";\n"),
+    (
+      "entry.ts",
+      (
+        #|import { ns } from "./core";
+        #|console.log(ns.real);
+        #|
+      ),
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      let obj = namespace_object_text(out.js, "ns")
+      assert_true(obj.contains("real"), msg="lost a value: \{obj}")
+      assert_false(
+        obj.contains("Ghost"),
+        msg="named a binding the bundle never declares: \{obj}",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}

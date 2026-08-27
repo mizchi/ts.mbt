@@ -167,6 +167,38 @@ fn link_module_graph(
     namespace_local_renames[path] = ns_locals
     rename_per_module[path] = module_renames
   }
+  // Every runtime binding the bundle will actually have, under its
+  // FINAL name: each module's top-level declarations, mapped through
+  // that module's renames, plus the namespace objects this pass
+  // synthesizes (a namespace can hold another namespace).
+  //
+  // This exists because filtering type-only exports at the enumeration
+  // sites did not converge. There were three of them — a namespace's own
+  // `export_specs`, the `import * as` path, and
+  // `enumerate_wildcard_reexports` — and zod found each one in turn:
+  // `$constructor`, then `$ZodBranded`, then `$RefinementCtx`, each a
+  // `ReferenceError` on load from a different arrival path. Patching the
+  // next site every time the corpus complained was the wrong loop.
+  //
+  // So the enumeration filters stay (they are precise and cheap, and
+  // they keep the object small), and this is the backstop: at the one
+  // place the object is BUILT, an entry whose value has no runtime
+  // binding cannot be emitted, whichever path put it there. Fail-closed
+  // by construction rather than by enumeration.
+  let runtime_bindings : Map[String, Bool] = {}
+  for path, node in modules {
+    let decls : Map[String, Bool] = {}
+    collect_local_decl_names_in_block(node.block, decls)
+    let renames = rename_per_module.get(path).unwrap_or({})
+    for n in decls.keys() {
+      runtime_bindings[renames.get(n).unwrap_or(n)] = true
+    }
+  }
+  for path, _ in modules {
+    for entry in namespace_local_renames.get(path).unwrap_or({}) {
+      runtime_bindings[entry.1] = true
+    }
+  }
   // ---- Phase 2: build per-module import substitution maps ----
   // `import_subs[path][local_alias_in_importer] = renamed_export_in_exporter`.
   // Walked AFTER phase 1 so we read the post-rename target name.
@@ -473,7 +505,7 @@ fn link_module_graph(
       }
     }
     let synthesized = synthesize_namespace_bindings_for(
-      escaping_namespaces, ns_subs, ns_locals,
+      escaping_namespaces, ns_subs, ns_locals, runtime_bindings,
     )
     // Synthesize `const localAlias = cjsVar.importedName;` for each
     // named import from a CJS-wrapped module (which has no export_specs).
@@ -802,6 +834,7 @@ fn synthesize_namespace_bindings_for(
   escaping_namespaces : Array[String],
   ns_subs : Map[String, Map[String, String]],
   ns_locals : Map[String, String],
+  runtime_bindings : Map[String, Bool],
 ) -> Array[@ast.TsStmt] {
   let out : Array[@ast.TsStmt] = []
   for ns_local in escaping_namespaces {
@@ -812,6 +845,13 @@ fn synthesize_namespace_bindings_for(
     let binding_name = ns_locals.get(ns_local).unwrap_or(ns_local)
     let lit_entries : Array[(String, @ast.TsExpr)] = []
     for p in props {
+      // An entry whose value names nothing the bundle declares is a
+      // `ReferenceError` the moment this object is evaluated. See
+      // `runtime_bindings` at the top of the linker for why the check
+      // lives here and not only at the enumeration sites.
+      if !runtime_bindings.contains(p.1) {
+        continue
+      }
       lit_entries.push((p.0, @ast.TsExpr::Var(p.1)))
     }
     out.push(
