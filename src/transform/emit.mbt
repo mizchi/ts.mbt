@@ -1443,8 +1443,51 @@ fn expr_leading_byte(expr : @ast.TsExpr) -> Char {
     // before the name, handled above by `'a'`.
     ArrowFunc(_, _, _, is_async) => if is_async { 'a' } else { '?' }
     FuncExpr(_) => '?'
+    // Type assertions emit NOTHING of their own — the type is erased —
+    // so the leading byte is the operand's. Missing these was a
+    // SyntaxError, not a stray space: `(o) => ({…}) as T` is an arrow
+    // whose expression body needs parens, and with the assertion
+    // opaque the check below saw no ObjectLit and emitted
+    // `(o) => {...o, k: 1}`, which JS reads as a block. zod writes
+    // exactly that (`({ …core.standardProps(self) }) as
+    // ZodType["~standard"]`) and its whole bundle failed to load.
+    As(inner, _) | Satisfies(inner, _) => expr_leading_byte(inner)
+    NonNull(inner) => expr_leading_byte(inner)
+    // Everything whose emission begins with a LEFT operand: the byte is
+    // that operand's. `{a:1}.b + 1` starts with `{` just as much as
+    // `{a:1}` does, and the postfix / call forms above already walk
+    // their receiver for the same reason.
+    BinOp(_, l, _) => expr_leading_byte(l)
+    Cond(c, _, _) => expr_leading_byte(c)
+    Seq(l, _) => expr_leading_byte(l)
+    CompoundAssignExpr(l, _, _) => expr_leading_byte(l)
+    PropAssignExpr(l, _, _) | IndexAssignExpr(l, _, _) => expr_leading_byte(l)
+    // `'?'` is not "unknown" — it is the answer for everything that
+    // emits an identifier, a keyword, a `(` or an operator first, none
+    // of which can be `{`. Both callers rely on that: the whitespace
+    // decision treats it as "insert a space", which is harmless, and
+    // `expr_starts_with_brace` treats it as "no parens needed", which
+    // is only sound because the shapes that CAN start with `{` are the
+    // ones enumerated above.
     _ => '?'
   }
+}
+
+///|
+/// Does this expression's emitted form begin with `{`?
+///
+/// An arrow's expression body that starts with `{` is read by the JS
+/// parser as a block, so it has to be parenthesised. This used to be a
+/// hand-listed set of shapes — `ObjectLit`, plus three postfix forms
+/// wrapping one — which is the kind of list that goes stale the moment
+/// a new wrapper appears. It did: `As` / `Satisfies` / `NonNull` were
+/// never on it.
+///
+/// Asking `expr_leading_byte` instead asks the same question the JS
+/// parser asks, and the answer is shared with the whitespace decision,
+/// so the two cannot disagree about what a given expression emits.
+fn expr_starts_with_brace(expr : @ast.TsExpr) -> Bool {
+  expr_leading_byte(expr) == '{'
 }
 
 ///|
@@ -2497,16 +2540,12 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
           // expression branch.
           // An arrow expression body that starts with `{` is
           // ambiguous: the JS parser reads it as a block statement.
-          // Any expression whose leftmost token is `{` needs wrapping.
-          let needs_paren_for_obj = match inner {
-            ObjectLit(_) => true
-            // `({...})[k]` / `({...}).prop` — the object literal is
-            // on the left of an index/member access.
-            IndexAccess(ObjectLit(_), _) => true
-            PropAccess(ObjectLit(_), _) => true
-            MethodCall(ObjectLit(_), _, _) => true
-            _ => false
-          }
+          // Any expression whose leftmost token is `{` needs wrapping —
+          // which is exactly what `expr_starts_with_brace` answers, and
+          // it answers it from the same table the emitter uses to
+          // decide whitespace, rather than from a second list of shapes
+          // that has to be kept in step by hand.
+          let needs_paren_for_obj = expr_starts_with_brace(inner)
           if needs_paren_for_obj {
             e.write("(")
             emit_expr(e, inner, 0)

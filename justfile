@@ -125,7 +125,7 @@ verify-checker-soundness:
     bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0
 
 # Full CI check
-ci: fmt check test verify-mbti-dts verify-scaffolds verify-generated-fixtures verify-examples verify-mangle-safety verify-dce-coverage verify-rule-equivalence verify-checker-soundness
+ci: fmt check test verify-mbti-dts verify-scaffolds verify-generated-fixtures verify-examples verify-mangle-safety verify-dce-coverage verify-rule-equivalence verify-graph-walk verify-checker-soundness
 
 # Update dependencies
 update:
@@ -235,6 +235,24 @@ verify-real-world *ARGS:
 verify-pass-lattice *ARGS:
     moon build --target native --release
     node scripts/verify_pass_lattice.mjs {{ ARGS }}
+
+# Does the module-graph walk stay linear in the graph? It did not: the
+# walk deduplicated on the SPECIFIER a module wrote, so `./util.js` ->
+# `util.ts` (resolution REPLACING an extension, which is what
+# TypeScript-with-NodeNext sources write) was never recognised as an
+# already-loaded module, and every repeat visit re-read the file,
+# re-parsed it and re-pushed its imports. On a diamond graph that is
+# 2^depth — zod could not finish parsing 133 files in eighteen minutes.
+#
+# Generates the shape directly and asserts on the GROWTH RATIO between
+# two depths rather than on milliseconds, so the threshold does not
+# depend on the machine. Fast; runs in `ci`.
+#
+#   just verify-graph-walk
+#   just verify-graph-walk --verbose
+verify-graph-walk *ARGS:
+    moon build --target native --release
+    node scripts/verify_graph_walk.mjs {{ ARGS }}
 
 # Where the compile time goes. Runs the same size ladder as
 # `verify-real-world` through `mtsc --timing` and tabulates the phases,

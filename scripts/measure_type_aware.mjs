@@ -137,28 +137,56 @@ const CORPUS = [
     name: "superstruct",
     repo: "https://github.com/ianstormtaylor/superstruct",
     entry: "src/index.ts",
-    // Was attributed to the export-surface blowup; it is not. With that
-    // bounded, superstruct still does not finish, and the backtrace is
-    // in the PARSER:
-    //   Parser::parse_conditional_type_tail -> parse_type ->
-    //   parse_intersection_type -> parse_type_operand -> parse_primary_type
-    // on a `type` alias. A separate blowup on recursive conditional
-    // types, with its own fix.
+    // Reports BROKEN, and the row is left red on purpose: it is the
+    // first real-world behavioural difference this corpus has found.
+    // `error.ts:44` does `this.name = this.constructor.name`, `--mangle`
+    // renames the class, and `e.name` comes back `"a"` instead of
+    // `"StructError"`. Two classes reproduce it:
+    //
+    //   class MyError extends TypeError {}
+    //   [MyError.name, new MyError().constructor.name]
+    //     -> ["MyError","MyError"] plain, ["a","a"] mangled
+    //
+    // Whether that is a BUG is a policy call rather than a fact.
+    // `Function.prototype.name` is observable, so by this repo's own
+    // standard — any observable difference is a violation — it is one.
+    // But terser and esbuild both rename class names by default
+    // (`keep_classnames: false`) and expect a library that reads `.name`
+    // to opt out, so matching them is defensible too. A type-aware
+    // minifier could do better than either: a `.name` read on a class,
+    // or a `this.constructor.name`, is visible in the source and could
+    // reserve just that one name.
     driver: "superstruct.driver.mjs",
-    blocked: "parser blowup on a recursive conditional type (parse_conditional_type_tail)",
   },
+  // zod and superstruct were both BLOCKED, and both were blamed on the
+  // wrong thing twice: first on the export-surface blowup, then — after
+  // one gdb sample landed in `parse_conditional_type_tail` — on a parser
+  // blowup over recursive conditional types. Neither was it. Both write
+  // `.js`-suffixed relative specifiers, which the module-graph walk
+  // failed to recognise as already-loaded, so it re-read and re-parsed
+  // every repeat visit and re-pushed its imports: 2^depth on a diamond
+  // graph. The sample landed in the parser because the parser was being
+  // re-entered exponentially. With the dedup guard in
+  // `mtsc_load_bundle_files`, zod went from not finishing in eighteen
+  // minutes to 227 ms and superstruct to 15 ms. `just verify-graph-walk`
+  // is the gate.
   {
     name: "zod",
     repo: "https://github.com/colinhacks/zod",
     entry: "packages/zod/src/index.ts",
-    // Also once attributed to the export-surface blowup, also not that.
-    // zod is not stuck — sampling its stack twice shows it moving, still
-    // inside `mtsc_load_bundle_files` — it is just far too slow: after
-    // eighteen minutes it had not finished PARSING its 133 source
-    // files. A throughput problem in the parser, distinct from both the
-    // export-surface blowup and superstruct's conditional-type one.
-    driver: "zod.driver.mjs",
-    blocked: "parse phase still running after 1,095s (progressing, not stuck)",
+    // Compiles in 230 ms now, and loads far enough to hit the NEXT bug,
+    // which is typebox's: `export * as util from './util.js'`
+    // synthesises a namespace object listing every export, type-only
+    // ones included, and `JSONType` / `AssertEqual` / `Prettify` have no
+    // runtime value. Two files reproduce it:
+    //
+    //   m.ts      export type OnlyType = { a: number };
+    //             export const value = 1;
+    //   index.ts  export * as ns from "./m.js";
+    //
+    // emits `const ns = {OnlyType: OnlyType, value: value};`.
+    driver: null,
+    sizeOnlyWhy: "bundle throws on load: `export * as` puts type-only exports in the namespace object",
   },
   {
     name: "remeda",

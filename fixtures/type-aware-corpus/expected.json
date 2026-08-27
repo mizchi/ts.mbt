@@ -2,20 +2,20 @@
   "hono": {
     "status": "measured",
     "verdict": "WIN",
-    "delta": 499,
-    "aware": 21856
+    "delta": 500,
+    "aware": 21855
   },
   "valibot": {
     "status": "measured",
     "verdict": "NEUTRAL",
-    "delta": -2,
-    "aware": 88775
+    "delta": 0,
+    "aware": 88768
   },
   "typebox": {
     "status": "size-only",
     "verdict": "LOSS",
-    "delta": -5107,
-    "aware": 98592
+    "delta": -5100,
+    "aware": 98584
   },
   "immer": {
     "status": "size-only",
@@ -36,10 +36,16 @@
     "aware": 5763
   },
   "superstruct": {
-    "status": "blocked"
+    "status": "broken",
+    "verdict": "BROKEN",
+    "delta": -138,
+    "aware": 10677
   },
   "zod": {
-    "status": "blocked"
+    "status": "size-only",
+    "verdict": "WIN",
+    "delta": 1834,
+    "aware": 190871
   },
   "remeda": {
     "status": "blocked"
