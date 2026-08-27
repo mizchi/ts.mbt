@@ -50,6 +50,65 @@ product surfaces now.
   covers situations somebody thought of, so `just verify-real-world`
   minifies real published packages (React, the TypeScript compiler) and
   diffs their behaviour — see [`docs/real-world-minify.md`](./docs/real-world-minify.md).
+  That runs each target under the one shipping flag set, which says
+  *whether* the pipeline is broken but not *which pass*, so
+  `just verify-pass-lattice` runs all sixteen combinations of
+  `{treeshake, fold, minify, mangle}` over the 9 MB compiler: a
+  combination that fails while each of its parts passes is an
+  interaction between them, and that is how the single-use inliner's
+  conditional-move bug was located. None of that reaches the case nobody
+  imagined, so `just fuzz-mangle`
+  generates programs from seeds, compiles each with and without mangling,
+  and compares what they observed; a failing program is shrunk to its
+  minimum automatically rather than reported as a seed number — see
+  [`docs/mangle-fuzzing.md`](./docs/mangle-fuzzing.md). All three hunt
+  code we delete and should not; `just verify-dce-coverage` hunts the
+  opposite — code we keep and could drop — as a table of small programs
+  that each assert a marker is gone, the live markers survive, and stdout
+  still matches Node running the original. Orthogonal to all of them,
+  `just verify-rule-equivalence` asks the narrow question about each
+  rewrite on its own: every peephole/fold rule becomes a function body
+  with holes, evaluated across a cross product of counterexample values
+  (`undefined`, `-0`, `NaN`, a Symbol, a BigInt, an object with a
+  poisoned `valueOf`, an array-like with a negative `length`) and
+  compared against Node running the source directly. It found nine
+  rewrites that assumed a type and checked nothing — see
+  [`docs/rule-equivalence.md`](./docs/rule-equivalence.md). And
+  `just compare-terser` asks the
+  competitive version of that question: both optimizers start from the
+  same unoptimized JS, and a LOSS names a terser compress rule we have
+  not ported, while a LOSS *or a tie* on a `type-aware` case means the
+  type-driven pass did not fire — see
+  [`docs/terser-parity.md`](./docs/terser-parity.md).
+  Every harness above asks whether a pass is *correct*; `just
+  measure-type-aware` asks whether the type-driven half is *worth
+  anything*. It cannot use published `.js`: the six type-reading phases
+  (`predicate-inline`, `switch-fold`, `as-const-inline`, `tag-rewrite`,
+  `class-method-dce`, `type-fold`) fill their tables from parsed
+  TypeScript, so on erased JS the answer is zero by construction. So each
+  target is a package cloned from git and optimized twice with identical
+  flags — once from the TypeScript source, once from the same code with
+  its types erased — with all three legs required to observe the same
+  thing. The answer so far is uncomfortable and worth knowing: +2.3% on
+  hono, ~0 on valibot and immer, **-5.2% on typebox**, and the property
+  mangler entirely inert on every library measured. It also found the
+  reason four popular packages could not be measured at all, and it took
+  four separate fixes to clear them: an unmemoized `export_surface.mbt`
+  walk that re-escaped a class once per `new` site
+  (`surface_should_walk`), a module-graph walk that deduplicated on the
+  import SPECIFIER so `./x.js` -> `x.ts` was re-parsed on every visit —
+  2^depth on a diamond graph, and why zod could not finish parsing 133
+  files in eighteen minutes (`just verify-graph-walk` gates it now), an
+  arrow body losing its parens through an erased `as`, and type-only
+  exports landing in a synthesized namespace object. zod went from
+  BLOCKED to a behaviour-checked win. It also found the one real
+  behavioural difference so far — `--mangle` renaming a class whose
+  `.name` the bundle reads back — and `observed_names.mbt` reserves just
+  the observed names, narrowed by the class hierarchy because
+  `this.constructor` in a method of `C` is `C` or a subclass: six of
+  eight targets pay 25 bytes or less where reserving every callable cost
+  up to +70%. See
+  [`docs/type-aware-measurement.md`](./docs/type-aware-measurement.md).
 - `src/bridge` consumes `src/checker` for every type-shape decision and runs
   `@checker.check_module` on the synthesized output as a sanity gate. It also
   keeps domain-specific specialization for Node FS / React / Hono / crypto /

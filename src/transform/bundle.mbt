@@ -699,6 +699,15 @@ pub fn bundle_modules(
     combined = timer.phase("strip-super-proto", () => {
       strip_super_proto_stmts(combined)
     })
+    // `__private_brand__N__x` -> `#x`. Runs AFTER the IIFE lift so the
+    // classes that made it to native syntax get real private syntax,
+    // and BEFORE everything that reasons about property names — the
+    // export surface, class-method DCE and the mangler all need to see
+    // `#x`, which is unreachable from outside its class body by
+    // construction. See `private_fields.mbt`.
+    combined = timer.phase("private-fields", () => {
+      lower_private_fields(combined)
+    })
     let export_surface : Map[String, Bool] = {}
     timer.phase("export-surface", () => {
       for n in exported_surface_props(combined, export_roots) {
@@ -959,6 +968,65 @@ pub fn bundle_modules(
       for n in external_import_bindings(external_imports).keys() {
         external_reserved.push(n)
       }
+      // Names the bundle reads back as `Function.prototype.name`.
+      // Renaming a class changes `C.name` and `this.constructor.name`,
+      // and superstruct's error base assigns the latter to `this.name`,
+      // so `err.name` came back `"a"`. terser renames class names
+      // regardless and expects the library to opt out; the read is
+      // visible in the source, so pay for the ones actually observed and
+      // mangle the rest. See `observed_names.mbt`, including what it
+      // does NOT catch.
+      let (observed_names, observed_all_ctors) = observed_class_names(combined)
+      // Only names that are CONSTRUCTORS. `observed_class_names` reports
+      // the identifier on the left of a `.name` read without judging
+      // what it holds, and the first version reserved all of them on the
+      // theory that a plain object's `.name` costs a few bytes. On the
+      // 9 MB TypeScript compiler it cost 282 KB — 7.9%. That bundle
+      // never writes `constructor.name`; what it writes is `node.name`,
+      // `symbol.name`, `declaration.name` several thousand times, and
+      // reserving `node` / `symbol` / `declaration` stops the most common
+      // locals in the program from mangling at all.
+      //
+      // So intersect with the declarations that actually have a
+      // meaningful `.name`. A `.name` read on anything else observes an
+      // ordinary property and constrains nothing.
+      if observed_names.length() > 0 {
+        let ctors : Map[String, Bool] = {}
+        constructor_like_top_level(combined, ctors)
+        for n in observed_names {
+          if ctors.contains(n) {
+            external_reserved.push(n)
+          }
+        }
+      }
+      if observed_all_ctors {
+        // `<expr>.constructor.name` names no class syntactically, but
+        // `this.constructor` inside a method of `C` is `C` or a subclass
+        // — never an unrelated class. So reserve the classes whose own
+        // bodies read it, closed over their subclasses, and let the rest
+        // of the bundle mangle.
+        //
+        // The blunt versions were both measured. Reserving every
+        // top-level binding: typebox +70%, zod +40%, superstruct +31%.
+        // Narrowing to "classes and functions" changed not one byte,
+        // because in a library written out of top-level callables that is
+        // the same set. The hierarchy is what actually narrows it.
+        let (observing, unconstrained) = classes_observing_own_name(combined)
+        if unconstrained {
+          // The read is outside any top-level class body, so `this` is
+          // unconstrained and the hierarchy says nothing. Fall back to
+          // every callable — expensive, and the only sound answer here.
+          let ctors : Map[String, Bool] = {}
+          constructor_like_top_level(combined, ctors)
+          for n in ctors.keys() {
+            external_reserved.push(n)
+          }
+        } else {
+          for n in observing.keys() {
+            external_reserved.push(n)
+          }
+        }
+      }
       let mangler_cfg = ManglerConfig::default()
         .with_mangle_properties(effective_mangle_props)
         .with_mangle_properties_shape_color(opts.mangle_properties_shape_color)
@@ -979,11 +1047,25 @@ pub fn bundle_modules(
       mangle_export_renames = mangle_renames
     }
     if opts.minify {
+      // The export surface, under whatever names it goes by HERE. The
+      // mangler has already run at this point and renames the top level
+      // freely, so `export_roots` (what the source called them) matches
+      // nothing — the same trap the treeshake call below documents.
+      let live_roots : Map[String, Bool] = {}
+      for name in export_roots.keys() {
+        live_roots[mangle_export_renames.get(name).unwrap_or(name)] = true
+      }
       // Inline runs before peephole so `const X = expr; return X`
       // shapes collapse before the peephole pass sees them. Gated
       // on `minify` since the inlining produces deeply nested
       // expressions that are unpleasant in pretty mode.
-      combined = timer.phase("inline", () => inline_block(combined))
+      //
+      // `keep` is the export surface: inlining a single-use binding
+      // deletes its declaration, and for an exported name that leaves
+      // `export { r }` naming nothing, which is a SyntaxError.
+      combined = timer.phase("inline", () => {
+        inline_block(combined, keep=live_roots)
+      })
       // Second fold pass: inlining can expose new constant-foldable
       // expressions (e.g. `const N = 3; arr[N]` → `arr[3]` → element
       // access on a literal array). Run fold again before peephole so
@@ -1004,10 +1086,6 @@ pub fn bundle_modules(
         // and only with `--mangle --treeshake --fold` together, which
         // is why nothing simpler caught it.
         if opts.treeshake {
-          let live_roots : Map[String, Bool] = {}
-          for name in export_roots.keys() {
-            live_roots[mangle_export_renames.get(name).unwrap_or(name)] = true
-          }
           combined = timer.phase("treeshake-2", () => {
             treeshake_block(combined, roots=live_roots, pure_calls=proven_pure)
           })

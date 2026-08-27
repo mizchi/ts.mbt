@@ -189,6 +189,23 @@ fn collect_read_property_names_expr(
   match expr {
     PropAccess(recv, name) => {
       out[name] = true
+      // A `.name` read is special: `Function.prototype.name` follows the
+      // identifier, so renaming a class changes what the program
+      // observes. Classify the receiver here — inside the traversal that
+      // is already threaded correctly through every shape — and leave
+      // the answer as a sentinel key in the same map.
+      //
+      // The sentinel encoding is deliberate. Threading a second sink
+      // through ninety-odd arms means one missed pass-through silently
+      // loses a subtree, and losing a subtree here means a renamed class
+      // and a wrong `err.name`. This map is already threaded everywhere
+      // (dead-property elimination depends on it), so riding it cannot
+      // drift. `observed_names.mbt` reads the keys back out; the two
+      // consumers of this map treat them as property names that are
+      // read, which no real property is called.
+      if name == "name" {
+        record_name_receiver(recv, out)
+      }
       collect_read_property_names_expr(recv, out)
     }
     MethodCall(recv, name, args) => {
@@ -206,7 +223,13 @@ fn collect_read_property_names_expr(
     IndexAccess(recv, idx) => {
       // `obj["name"]` — record the literal so we don't drop it.
       match idx {
-        StringLit(s) => out[s] = true
+        StringLit(s) => {
+          out[s] = true
+          // `C["name"]` observes the same thing `C.name` does.
+          if s == "name" {
+            record_name_receiver(recv, out)
+          }
+        }
         _ => ()
       }
       collect_read_property_names_expr(recv, out)

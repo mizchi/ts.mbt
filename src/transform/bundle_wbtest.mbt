@@ -2968,3 +2968,256 @@ test "bundle: fold + treeshake + mangle keeps the export surface" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "link: a synthesized namespace object leaves type-only exports out" {
+  // The namespace object lists one property per export of its target,
+  // and a `type` alias or an `interface` has nothing to point at. The
+  // bundle emitted `{ OnlyType: OnlyType, … }` and died on load with
+  // `OnlyType is not defined` — zod's
+  // `export * as util from "./util.js"` drags in fifty-odd type aliases
+  // that way, and typebox's `TTypeArray` is the same bug through
+  // `export *`.
+  let files = vfs([
+    (
+      "m.ts",
+      (
+        #|export type OnlyType = { a: number };
+        #|export interface AlsoType { b: string }
+        #|export const value = 1;
+        #|export function fn(): number { return 2; }
+        #|
+      ),
+    ),
+    ("core.ts", "export * as ns from \"./m\";\n"),
+    (
+      "entry.ts",
+      (
+        #|import { ns } from "./core";
+        #|console.log(JSON.stringify([ns.value, ns.fn(), Object.keys(ns)]));
+        #|
+      ),
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_false(
+        out.js.contains("OnlyType"),
+        msg="a type alias reached the namespace object: \{out.js}",
+      )
+      assert_false(
+        out.js.contains("AlsoType"),
+        msg="an interface reached the namespace object: \{out.js}",
+      )
+      // The values it does carry must survive — over-filtering would
+      // trade a load-time crash for a missing property.
+      assert_true(out.js.contains("value"), msg="lost a value: \{out.js}")
+      assert_true(out.js.contains("fn"), msg="lost a function: \{out.js}")
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "link: `import * as ns` skips type-only exports too" {
+  // Same object, reached the other way. An `import * as ns` namespace is
+  // synthesized whenever it escapes member access — here it is spread —
+  // so it has the same hazard.
+  let files = vfs([
+    (
+      "m.ts",
+      (
+        #|export type OnlyType = { a: number };
+        #|export const value = 1;
+        #|
+      ),
+    ),
+    (
+      "entry.ts",
+      (
+        #|import * as ns from "./m";
+        #|const spread = { ...ns };
+        #|console.log(JSON.stringify(spread));
+        #|
+      ),
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_false(
+        out.js.contains("OnlyType"),
+        msg="a type alias reached the namespace object: \{out.js}",
+      )
+      assert_true(out.js.contains("value"), msg="lost a value: \{out.js}")
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "link: a merged interface-and-function export stays in the namespace" {
+  // TypeScript merges declarations, so one name can be both a type and
+  // a value. zod's core has `export interface $constructor` next to
+  // `export function $constructor`, and a filter keyed on the name alone
+  // dropped the function: `core.$constructor is not a function`.
+  //
+  // So the type-only test needs negative value-evidence as well as
+  // positive type-evidence.
+  let files = vfs([
+    (
+      "m.ts",
+      (
+        #|export interface Both<T> { (x: T): T }
+        #|export function Both<T>(x: T): T { return x; }
+        #|export type PureType = { a: number };
+        #|
+      ),
+    ),
+    ("core.ts", "export * as ns from \"./m\";\n"),
+    (
+      "entry.ts",
+      (
+        #|import { ns } from "./core";
+        #|console.log(ns.Both(1));
+        #|
+      ),
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      // Assert on the OBJECT, not on the bundle: `Both`'s declaration is
+      // in the output either way, so `out.js.contains("Both")` passes
+      // even when the namespace entry is missing — which is exactly how
+      // the first version of this test failed to catch the bug.
+      let ns = namespace_object_text(out.js, "ns")
+      assert_true(
+        ns.contains("Both"),
+        msg="dropped a value that shares its name with a type: \{ns}",
+      )
+      assert_false(
+        ns.contains("PureType"),
+        msg="a type-only alias reached the namespace object: \{ns}",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+/// The text of the synthesized `const <name> = { … }` object, so a test
+/// can assert on what the namespace carries rather than on what the
+/// whole bundle happens to mention.
+fn namespace_object_text(js : String, name : String) -> String {
+  let head = "const " + name + " = {"
+  match js.find(head) {
+    Some(i) => {
+      let rest = js[i + head.length():].to_owned()
+      match rest.find("}") {
+        Some(j) => rest[:j].to_owned()
+        None => rest
+      }
+    }
+    None => ""
+  }
+}
+
+///|
+test "link: a wildcard re-export chain drops type-only names too" {
+  // The third site that needed the filter, and the one zod's
+  // `$ZodBranded` came in through. `core.ts` re-exports `leaf.ts` with
+  // `export *`, so the namespace's names are declared in `leaf`, not in
+  // the module the namespace names — filtering only the namespace's own
+  // `export_specs` misses every one of them.
+  let files = vfs([
+    (
+      "leaf.ts",
+      (
+        #|export type LeafType = { a: number };
+        #|export interface LeafIface { b: string }
+        #|export const leafValue = 1;
+        #|
+      ),
+    ),
+    ("mid.ts", "export * from \"./leaf\";\n"),
+    ("core.ts", "export * as ns from \"./mid\";\n"),
+    (
+      "entry.ts",
+      (
+        #|import { ns } from "./core";
+        #|console.log(ns.leafValue);
+        #|
+      ),
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      let obj = namespace_object_text(out.js, "ns")
+      assert_true(
+        obj.contains("leafValue"),
+        msg="lost a value from the wildcard chain: \{obj}",
+      )
+      assert_false(
+        obj.contains("LeafType"),
+        msg="a type alias came through the wildcard chain: \{obj}",
+      )
+      assert_false(
+        obj.contains("LeafIface"),
+        msg="an interface came through the wildcard chain: \{obj}",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "link: the namespace object cannot name a binding the bundle lacks" {
+  // The backstop, tested through the one arrival path the enumeration
+  // filters do not cover: a name re-exported by `export { T }` after
+  // being imported, with no `type` marker on either end. The module
+  // declares nothing called `T`, so the type filters see no type
+  // declaration to key on and let it through — and the synthesis check
+  // is what stops it reaching the object.
+  //
+  // This is the shape zod hit three times from three different paths
+  // (`$constructor`, `$ZodBranded`, `$RefinementCtx`). Whatever the
+  // path, an entry whose value the bundle never declares must not be
+  // emitted.
+  let files = vfs([
+    (
+      "types.ts",
+      (
+        #|export type Ghost = { a: number };
+        #|export const real = 1;
+        #|
+      ),
+    ),
+    (
+      "mid.ts",
+      (
+        #|import { Ghost, real } from "./types";
+        #|export { Ghost, real };
+        #|
+      ),
+    ),
+    ("core.ts", "export * as ns from \"./mid\";\n"),
+    (
+      "entry.ts",
+      (
+        #|import { ns } from "./core";
+        #|console.log(ns.real);
+        #|
+      ),
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      let obj = namespace_object_text(out.js, "ns")
+      assert_true(obj.contains("real"), msg="lost a value: \{obj}")
+      assert_false(
+        obj.contains("Ghost"),
+        msg="named a binding the bundle never declares: \{obj}",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}

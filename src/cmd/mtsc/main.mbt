@@ -539,6 +539,44 @@ async fn mtsc_load_bundle_files(
       )
       continue
     }
+    // Already loaded under its real path? Then this is the same module
+    // reached by a different spelling, and there is nothing to do.
+    //
+    // The guard above this loop keys on the SPECIFIER, and for the two
+    // spellings that resolve to one file that is not the same question.
+    // `./util` -> `util.ts` gets an alias entry below, so the specifier
+    // guard catches the second visit. `./util.js` -> `util.ts` cannot:
+    // the alias is only written when resolution APPENDED an extension,
+    // and here it replaced one. So nothing deduplicated the
+    // `.js`-specifier style that TypeScript-with-NodeNext sources use
+    // everywhere, and each repeat visit re-read the file, re-parsed it,
+    // and re-pushed its own imports — which repeat in turn.
+    //
+    // On a diamond-shaped graph that is 2^depth. Measured on a
+    // synthetic chain where every module imports both modules of the
+    // next level: with `.js` specifiers, depth 4/6/8/10/12 took
+    // 9/19/61/217/853 ms, roughly 4x per two levels; with extension-less
+    // specifiers the same graphs were flat at 8-11 ms. zod is that shape
+    // — 133 files, `from "../core/util.js"` 65 times — and had not
+    // finished PARSING after eighteen minutes.
+    if files.contains(resolved) {
+      // Skipping the work is the fix; the alias still has to be written,
+      // or the bundler cannot resolve the specifier this importer wrote.
+      // Same condition as the main path below, for the same reason.
+      if disk_path != resolved &&
+        resolved.has_prefix(disk_path + ".") &&
+        !files.contains(disk_path) {
+        match files.get(resolved) {
+          Some(src) => files[disk_path] = src
+          None => ()
+        }
+        match parsed.get(resolved) {
+          Some(mb) => parsed[disk_path] = mb
+          None => ()
+        }
+      }
+      continue
+    }
     let read_started = @bench.monotonic_clock_start()
     let source = @fs.read_file(resolved).text() catch {
       e => return Err("read error \{resolved}: \{e}")

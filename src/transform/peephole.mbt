@@ -53,10 +53,12 @@
 //   fn.call(null, a, b)    -> fn(a, b)     (null/undefined this → direct call)
 //   fn.apply(null, arr)    -> fn(...arr)   (null/undefined this → spread call)
 //   void f() (stmt)        -> f()         (return value discarded at stmt level)
-//   x.length !== 0        -> !!x.length  (saves ~4 bytes; also .size)
-//   x.length > 0          -> !!x.length  (saves ~3 bytes)
-//   x.length <= 0         -> !x.length   (saves ~4 bytes)
-//   x.size === 0          -> !x.size
+// (removed) x.length !== 0 -> !!x.length, and the > 0 / <= 0 / === 0
+//   siblings. They assume `.length` is a non-negative number, and the
+//   receiver can be anything: `(0).length` is `undefined`, so
+//   `undefined <= 0` is false while `!undefined` is true, and
+//   `{ length: -1 }` makes `> 0` false while `!!(-1)` is true. Peephole
+//   has no types to consult, and the saving was 3-4 bytes.
 //   x!=null ? x.p : void 0       -> x?.p         (optional chaining, saves ~14 bytes)
 //   x!=null ? x[k] : void 0      -> x?.[k]
 //   x==null ? y : x               -> x ?? y       (flipped nullish coalescing)
@@ -68,9 +70,12 @@
 //   typeof x !== "undefined"    -> x !== void 0
 //   !x ? b : a                  -> x ? a : b   (flip branches, drop negation)
 //   `text` (no exprs)           -> "text"       (saves 2 backtick bytes)
+//   `p${s}` (s a string)        -> "p"+s        (saves 2 bytes; ToString
+//     and ToPrimitive agree only when the hole is already a string)
 //   Number.parseInt(x)          -> parseInt(x)  (saves 7 bytes; same fn per spec)
 //   Number.parseFloat(x)        -> parseFloat(x)
-//   Array.prototype.slice.call(x,0) -> [...x]   (saves ~24 bytes; 0-start copy)
+// (removed) Array.prototype.slice.call(x,0) -> [...x]: `slice` accepts
+//   any array-LIKE, a spread needs an ITERABLE.
 //   switch(x){case a:S}                  -> if(x===a){S}   (enables further if→ternary folds)
 //   switch(x){case a:S default:T}        -> if(x===a){S}else{T}
 //   switch(x){case a:S1 case b:S2 …}    -> if(x===a){S1}else if(x===b){S2}… (all-terminator multi-case)
@@ -81,7 +86,8 @@
 //   x !== true                  -> !x           (saves 6 bytes)
 //   x !== false                 -> x            (saves 7 bytes)
 //   Object.prototype.hasOwnProperty.call(o,k) -> Object.hasOwn(o,k)  (saves ~22 bytes; ES2022)
-//   x.hasOwnProperty(k)                       -> Object.hasOwn(x,k)  (saves ~8 bytes; ES2022)
+// (removed) x.hasOwnProperty(k) -> Object.hasOwn(x,k): replaces
+//   whatever the receiver's own `hasOwnProperty` is with the built-in.
 //   c ? expr : void 0           -> c && expr    (saves ~7 bytes; short-circuit form)
 //   !0 ? a : b                  -> a            (constant condition evaluation)
 //   !1 ? a : b                  -> b            (constant condition evaluation)
@@ -91,12 +97,16 @@
 //   function(p){return e}       -> (p) => e    (saves ~16 bytes; no this/arguments/self-ref)
 //   function(p){stmts}          -> (p) => {stmts} (saves ~9 bytes)
 //   Array.prototype.METHOD.call(arr, args) -> arr.METHOD(args)  (saves ~22 bytes)
-//   x.toString()                -> ""+x         (saves ~9 bytes; same as String(x))
+// (removed) x.toString() -> ""+x: `undefined.toString()` throws where
+//   `"" + undefined` does not, `+` prefers `valueOf` over `toString`,
+//   and a Symbol is the other way round again.
 //   (0, fn)(args)               -> fn(args)      (saves 4 bytes; indirect call in ESM is redundant)
 //   "a" + "b"                -> "ab"           (string literal concatenation folding)
-//   0 + x / x + 0           -> x              (additive identity for integers)
+//   0 + x / x + 0           -> x              (only for a number that
+//     cannot be -0: `undefined + 0` is NaN, `"a" + 0` is "a0",
+//     `-0 + 0` is 0)
 //   n + m / n - m / n * m   -> <result>       (integer literal arithmetic)
-//   x - 0 / x * 1 / 1 * x  -> x              (multiplicative identity)
+//   x - 0 / x * 1 / 1 * x  -> x              (only for a number)
 //   if (!!x) …              -> if (x) …       (strip double negation in condition)
 //   while (!!x) …           -> while (x) …
 //
@@ -110,17 +120,47 @@
 /// Apply peephole rewrites across a block. Returns a fresh block.
 pub fn peephole_block(block : @ast.TsBlock) -> @ast.TsBlock {
   let shadowed = block_binds_undefined(block)
-  let ctx : PeepCtx = { undefined_shadowed: shadowed }
-  let stmts : Array[@ast.TsStmt] = []
-  for s in block.stmts {
-    stmts.push(peep_stmt(s, ctx))
+  let ctx : PeepCtx = {
+    undefined_shadowed: shadowed,
+    undeclared: undeclared_referenced_names(block),
   }
-  { stmts, stmt_positions: block.stmt_positions }
+  let stmts : Array[@ast.TsStmt] = []
+  let positions : Array[Int] = []
+  // Positions are tracked per surviving statement rather than carried
+  // over wholesale: this loop can now DROP a statement, and a positions
+  // array left at the original length would either be discarded by the
+  // length check downstream or — worse — line up by coincidence and
+  // shift every source-map entry after the hole.
+  let has_positions = block.stmt_positions.length() == block.stmts.length()
+  for i, s in block.stmts {
+    match peep_block_level(peep_stmt(s, ctx)) {
+      Some(kept) => {
+        stmts.push(kept)
+        if has_positions {
+          positions.push(block.stmt_positions[i])
+        }
+      }
+      None => ()
+    }
+  }
+  {
+    stmts,
+    stmt_positions: if has_positions {
+      positions
+    } else {
+      block.stmt_positions
+    },
+  }
 }
 
 ///|
 priv struct PeepCtx {
   undefined_shadowed : Bool
+  // Names the block references but never declares — host globals, in
+  // other words. `typeof x === "undefined"` is TRUE for an undeclared
+  // `x`, while `void 0 === x` THROWS, so that rewrite is only sound for
+  // a name this bundle declares. Anything absent from here is declared.
+  undeclared : Map[String, Bool]
 }
 
 ///|
@@ -416,7 +456,15 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
           inner
         _ => cp_raw
       }
-      While(cp, peep_block(body, ctx))
+      // terser's `loops`: `for(;;)` is shorter than any spelling of an
+      // always-true `while` condition, and `while (!0)` is what the
+      // BoolLit rewrite above turns `while (true)` into.
+      let body_p = peep_block(body, ctx)
+      if expr_is_always_truthy(cp) {
+        For(None, None, None, body_p)
+      } else {
+        While(cp, body_p)
+      }
     }
     DoWhile(c, body) => DoWhile(peep_expr(c, ctx), peep_block(body, ctx))
     With(c, body) => With(peep_expr(c, ctx), peep_block(body, ctx))
@@ -811,14 +859,18 @@ fn expr_uses_this(e : @ast.TsExpr) -> Bool {
     MethodCall(recv, _, args) =>
       expr_uses_this(recv) || args.iter().any(expr_uses_this)
     AssignExpr(_, v) => expr_uses_this(v)
-    AssignPattern(_, v) => expr_uses_this(v)
+    AssignPattern(b, v) =>
+      binding_subexprs(b).iter().any(expr_uses_this) || expr_uses_this(v)
     CompoundAssignExpr(a, _, b) => expr_uses_this(a) || expr_uses_this(b)
     PropAssignExpr(a, _, b) => expr_uses_this(a) || expr_uses_this(b)
     IndexAssignExpr(a, b, c) =>
       expr_uses_this(a) || expr_uses_this(b) || expr_uses_this(c)
     Seq(a, b) => expr_uses_this(a) || expr_uses_this(b)
-    // Arrow functions share `this` with their enclosing context — recurse.
-    ArrowFunc(_, _, body, _) => arrow_body_uses_this(body)
+    // Arrow functions share `this` with their enclosing context — recurse,
+    // parameter defaults included.
+    ArrowFunc(params, _, body, _) =>
+      param_subexprs(params).iter().any(expr_uses_this) ||
+      arrow_body_uses_this(body)
     // Regular functions and classes introduce their own `this` — don't descend.
     FuncExpr(_) | NativeClassExpr(_, _) => false
     PureCall(inner) => expr_uses_this(inner)
@@ -845,9 +897,10 @@ fn stmt_uses_this(s : @ast.TsStmt) -> Bool {
     @ast.TsStmt::Expr(e) => expr_uses_this(e)
     @ast.TsStmt::Return(Some(e)) => expr_uses_this(e)
     @ast.TsStmt::Return(None) => false
-    @ast.TsStmt::Var(_, _, e)
-    | @ast.TsStmt::Let(_, _, e)
-    | @ast.TsStmt::Const(_, _, e) => expr_uses_this(e)
+    @ast.TsStmt::Var(b, _, e)
+    | @ast.TsStmt::Let(b, _, e)
+    | @ast.TsStmt::Const(b, _, e) =>
+      binding_subexprs(b).iter().any(expr_uses_this) || expr_uses_this(e)
     @ast.TsStmt::Assign(_, e) => expr_uses_this(e)
     @ast.TsStmt::CompoundAssign(_, _, e) => expr_uses_this(e)
     @ast.TsStmt::If(c, t, e) =>
@@ -861,16 +914,19 @@ fn stmt_uses_this(s : @ast.TsStmt) -> Bool {
       cond.map_or(false, expr_uses_this) ||
       update.map_or(false, stmt_uses_this) ||
       block_uses_this(body)
-    @ast.TsStmt::ForOf(_, _, _, iter, body) =>
-      expr_uses_this(iter) || block_uses_this(body)
-    @ast.TsStmt::ForAwaitOf(_, _, _, iter, body) =>
-      expr_uses_this(iter) || block_uses_this(body)
-    @ast.TsStmt::ForIn(_, _, _, iter, body) =>
-      expr_uses_this(iter) || block_uses_this(body)
+    @ast.TsStmt::ForOf(_, b, _, iter, body)
+    | @ast.TsStmt::ForAwaitOf(_, b, _, iter, body)
+    | @ast.TsStmt::ForIn(_, b, _, iter, body) =>
+      binding_subexprs(b).iter().any(expr_uses_this) ||
+      expr_uses_this(iter) ||
+      block_uses_this(body)
     @ast.TsStmt::Block(b) => block_uses_this(b)
     @ast.TsStmt::Throw(e) => expr_uses_this(e)
-    @ast.TsStmt::Try(b, _, cb, fb) =>
+    @ast.TsStmt::Try(b, catch_b, cb, fb) =>
       block_uses_this(b) ||
+      catch_b.map_or(false, fn(cbind) {
+        binding_subexprs(cbind).iter().any(expr_uses_this)
+      }) ||
       cb.map_or(false, block_uses_this) ||
       fb.map_or(false, block_uses_this)
     @ast.TsStmt::Switch(e, cases) =>
@@ -907,18 +963,21 @@ fn expr_uses_super(e : @ast.TsExpr) -> Bool {
     MethodCall(recv, _, args) =>
       expr_uses_super(recv) || args.iter().any(expr_uses_super)
     AssignExpr(_, v) => expr_uses_super(v)
-    AssignPattern(_, v) => expr_uses_super(v)
+    AssignPattern(b, v) =>
+      binding_subexprs(b).iter().any(expr_uses_super) || expr_uses_super(v)
     CompoundAssignExpr(a, _, b) => expr_uses_super(a) || expr_uses_super(b)
     PropAssignExpr(a, _, b) => expr_uses_super(a) || expr_uses_super(b)
     IndexAssignExpr(a, b, c) =>
       expr_uses_super(a) || expr_uses_super(b) || expr_uses_super(c)
     Seq(a, b) => expr_uses_super(a) || expr_uses_super(b)
-    // Arrow functions DO share super with their enclosing context
-    ArrowFunc(_, _, body, _) =>
-      match body {
+    // Arrow functions DO share super with their enclosing context —
+    // parameter defaults included.
+    ArrowFunc(params, _, body, _) =>
+      param_subexprs(params).iter().any(expr_uses_super) ||
+      (match body {
         @ast.TsArrowBody::ArrowExpr(inner) => expr_uses_super(inner)
         @ast.TsArrowBody::ArrowBlock(blk) => block_uses_super(blk)
-      }
+      })
     // Regular function expressions and class expressions introduce their own
     // super binding — do NOT descend into them.
     FuncExpr(_) | NativeClassExpr(_, _) => false
@@ -947,7 +1006,8 @@ fn stmt_uses_super(s : @ast.TsStmt) -> Bool {
     Expr(e) => expr_uses_super(e)
     Return(Some(e)) => expr_uses_super(e)
     Throw(e) => expr_uses_super(e)
-    Let(_, _, e) | Const(_, _, e) | Var(_, _, e) => expr_uses_super(e)
+    Let(bd, _, e) | Const(bd, _, e) | Var(bd, _, e) =>
+      binding_subexprs(bd).iter().any(expr_uses_super) || expr_uses_super(e)
     Assign(_, e) => expr_uses_super(e)
     CompoundAssign(_, _, e) => expr_uses_super(e)
     IndexAssign(a, b, c) =>
@@ -963,12 +1023,17 @@ fn stmt_uses_super(s : @ast.TsStmt) -> Bool {
       cond.map_or(false, expr_uses_super) ||
       update.map_or(false, stmt_uses_super) ||
       block_uses_super(body)
-    ForOf(_, _, _, iter, body) | ForIn(_, _, _, iter, body) =>
-      expr_uses_super(iter) || block_uses_super(body)
-    ForAwaitOf(_, _, _, iter, body) =>
-      expr_uses_super(iter) || block_uses_super(body)
-    Try(b, _, catch_b, finally_b) =>
+    ForOf(_, bd, _, iter, body)
+    | ForIn(_, bd, _, iter, body)
+    | ForAwaitOf(_, bd, _, iter, body) =>
+      binding_subexprs(bd).iter().any(expr_uses_super) ||
+      expr_uses_super(iter) ||
+      block_uses_super(body)
+    Try(b, cbind, catch_b, finally_b) =>
       block_uses_super(b) ||
+      cbind.map_or(false, fn(bd) {
+        binding_subexprs(bd).iter().any(expr_uses_super)
+      }) ||
       catch_b.map_or(false, block_uses_super) ||
       finally_b.map_or(false, block_uses_super)
     Switch(e, cases) =>
@@ -1041,6 +1106,356 @@ fn peep_decl_rhs(
 }
 
 ///|
+/// Rewrites that belong to a statement's position in a LIST rather than
+/// to the statement itself, so every walker over a statement list can
+/// share them. `None` means drop the statement.
+///
+/// Keeping them in one function is deliberate: `peephole_block` (the
+/// top-level entry) and `peep_block` (every nested block) each run their
+/// own loop, and while these two rules lived only in the second one,
+/// nothing at the top level of a module was rewritten at all.
+/// An object-literal entry whose computed key is a plain string literal
+/// naming a valid identifier, as `(key, value)`. The parser stores such
+/// an entry under the `@@computed:N` sentinel with the key expression on
+/// a `ComputedProp` wrapper.
+fn computed_prop_literal_key(
+  entry : (String, @ast.TsExpr),
+) -> (String, @ast.TsExpr)? {
+  if !entry.0.has_prefix("@@computed:") {
+    return None
+  }
+  match entry.1 {
+    @ast.TsExpr::ComputedProp(@ast.TsExpr::StringLit(key), value) =>
+      // `__proto__` is the one valid identifier this rewrite must not
+      // produce: `{ ["__proto__"]: v }` defines an ordinary own
+      // property, while `{ __proto__: v }` SETS THE PROTOTYPE. The two
+      // spellings look interchangeable and are not.
+      if is_valid_js_ident(key) && key != "__proto__" {
+        Some((key, value))
+      } else {
+        None
+      }
+    _ => None
+  }
+}
+
+///|
+/// Recognise `typeof x === "undefined"` and its three siblings, for a
+/// simple named operand. Returns the name and whether the comparison was
+/// negated (`!==` / `!=`).
+///
+/// Both operand orders are accepted: `"undefined" === typeof x` is the
+/// same test written the other way round, and real code has both.
+fn typeof_undefined_operand(expr : @ast.TsExpr) -> (String, Bool)? {
+  let (op, left, right) = match expr {
+    BinOp(op, l, r) => (op, l, r)
+    _ => return None
+  }
+  let negated = match op {
+    BinEq | AbstractEq => false
+    BinNe | AbstractNe => true
+    _ => return None
+  }
+  fn name_of(e : @ast.TsExpr) -> String? {
+    match e {
+      UnaryOp(@ast.TsUnaryOp::Typeof, @ast.TsExpr::Var(n)) => Some(n)
+      _ => None
+    }
+  }
+
+  fn is_undefined_string(e : @ast.TsExpr) -> Bool {
+    e is StringLit("undefined")
+  }
+
+  if is_undefined_string(right) {
+    match name_of(left) {
+      Some(n) => return Some((n, negated))
+      None => ()
+    }
+  }
+  if is_undefined_string(left) {
+    match name_of(right) {
+      Some(n) => return Some((n, negated))
+      None => ()
+    }
+  }
+  None
+}
+
+///|
+/// What kind of value is this expression certainly? Only used to decide
+/// whether a relational comparison can produce NaN.
+priv enum CmpKind {
+  CmpNum
+  CmpStr
+  CmpUnknown
+}
+
+///|
+fn cmp_kind(e : @ast.TsExpr) -> CmpKind {
+  match e {
+    IntLit(_) | BigIntLit(_) => CmpNum
+    // `NaN` itself is spelled as a name, and a literal NaN cannot be
+    // written, so a numeric literal here is a real number.
+    NumberLit(_) => CmpNum
+    // A boolean coerces to 0 or 1.
+    BoolLit(_) | UnaryOp(@ast.TsUnaryOp::Not, _) => CmpNum
+    // Every bitwise operator returns a 32-bit integer.
+    BinOp(BitAnd, _, _)
+    | BinOp(BitOr, _, _)
+    | BinOp(BitXor, _, _)
+    | BinOp(Shl, _, _)
+    | BinOp(Shr, _, _)
+    | BinOp(UShr, _, _) => CmpNum
+    // A comparison is a boolean, so it too coerces to 0 or 1.
+    BinOp(BinEq, _, _)
+    | BinOp(BinNe, _, _)
+    | BinOp(AbstractEq, _, _)
+    | BinOp(AbstractNe, _, _)
+    | BinOp(BinLt, _, _)
+    | BinOp(BinLe, _, _)
+    | BinOp(BinGt, _, _)
+    | BinOp(BinGe, _, _)
+    | BinOp(Instanceof, _, _)
+    | BinOp(In, _, _) => CmpNum
+    // A collection size is a non-negative integer.
+    PropAccess(_, "length") | PropAccess(_, "size") => CmpNum
+    // `~x` is a 32-bit integer whatever `x` was.
+    UnaryOp(@ast.TsUnaryOp::BitwiseNot, _) => CmpNum
+    // `-x` is a number, but `-"abc"` is NaN — so only when `x` already
+    // was a number.
+    UnaryOp(@ast.TsUnaryOp::Neg, inner) =>
+      match cmp_kind(inner) {
+        CmpNum => CmpNum
+        _ => CmpUnknown
+      }
+    // A tag-less template literal is always a string.
+    StringLit(_) | TemplateLiteral(_, _) => CmpStr
+    // `+` with a string operand is string concatenation, so the result
+    // is a string whenever it does not throw — and it throws on exactly
+    // the operands (a Symbol) that the other side would throw on too.
+    BinOp(Add, l, r) =>
+      if cmp_kind(l) is CmpStr || cmp_kind(r) is CmpStr {
+        CmpStr
+      } else {
+        CmpUnknown
+      }
+    As(inner, _) | Satisfies(inner, _) | NonNull(inner) | TypeArgs(_, inner) =>
+      cmp_kind(inner)
+    _ => CmpUnknown
+  }
+}
+
+///|
+/// May `!(a REL b)` be rewritten as `a INV_REL b`? Only when the
+/// comparison cannot go through NaN.
+fn relational_negation_is_safe(a : @ast.TsExpr, b : @ast.TsExpr) -> Bool {
+  match (cmp_kind(a), cmp_kind(b)) {
+    (CmpNum, CmpNum) | (CmpStr, CmpStr) => true
+    _ => false
+  }
+}
+
+///|
+/// Is this expression's value certainly a boolean?
+///
+/// `x === true` -> `x` and its three siblings are only sound for a
+/// boolean `x`, and peephole runs on the erased AST with no types to
+/// consult, so the answer has to come from the expression's own shape.
+/// A bare `Var` is never accepted: that is exactly the case that was
+/// getting this wrong.
+fn expr_is_boolean_valued(e : @ast.TsExpr) -> Bool {
+  match e {
+    BoolLit(_) => true
+    UnaryOp(@ast.TsUnaryOp::Not, _) => true
+    // Every equality and relational operator yields a boolean.
+    BinOp(BinEq, _, _)
+    | BinOp(BinNe, _, _)
+    | BinOp(AbstractEq, _, _)
+    | BinOp(AbstractNe, _, _)
+    | BinOp(BinLt, _, _)
+    | BinOp(BinLe, _, _)
+    | BinOp(BinGt, _, _)
+    | BinOp(BinGe, _, _)
+    | BinOp(Instanceof, _, _)
+    | BinOp(In, _, _) => true
+    // `&&` / `||` / `??` return one of their operands, so both have to
+    // be booleans.
+    BinOp(And, l, r) | BinOp(Or, l, r) | BinOp(Coalesce, l, r) =>
+      expr_is_boolean_valued(l) && expr_is_boolean_valued(r)
+    Cond(_, t, f) => expr_is_boolean_valued(t) && expr_is_boolean_valued(f)
+    // `Boolean(x)` — the global. A bundle that shadows `Boolean` has
+    // bigger problems than this rewrite.
+    Call("Boolean", args) => args.length() == 1
+    Seq(_, b) => expr_is_boolean_valued(b)
+    As(inner, _) | Satisfies(inner, _) | NonNull(inner) | TypeArgs(_, inner) =>
+      expr_is_boolean_valued(inner)
+    _ => false
+  }
+}
+
+///|
+/// Is this condition true every time it is evaluated? Only the literal
+/// spellings — anything requiring evaluation is not this function's
+/// business.
+fn expr_is_always_truthy(expr : @ast.TsExpr) -> Bool {
+  match expr {
+    BoolLit(true) => true
+    // `!0`, which is what the BoolLit rewrite emits for `true`.
+    UnaryOp(@ast.TsUnaryOp::Not, IntLit(0)) => true
+    IntLit(n) => n != 0
+    NumberLit(n) => n != 0.0 && n == n
+    StringLit(s) => s != ""
+    _ => false
+  }
+}
+
+///|
+fn peep_block_level(stmt : @ast.TsStmt) -> @ast.TsStmt? {
+  // terser's `drop_debugger`, which is on by default there too. A
+  // `debugger` statement is a development aid; nothing in a minified
+  // bundle wants to break into a debugger at that point.
+  if stmt is Debugger {
+    return None
+  }
+  // An empty block is two bytes of nothing. It has no statements to
+  // scope, so unlike a declarator group there is nothing its braces
+  // could be holding.
+  if stmt is Block(b) && b.stmts.length() == 0 {
+    return None
+  }
+  match stmt {
+    // A label nothing jumps to is dead. `L: for (…) {…}` with no
+    // `break L` / `continue L` inside costs its name plus a colon and
+    // changes nothing.
+    //
+    // Declined when the body re-declares the same label: an inner
+    // `break L` then targets the inner one, and removing the outer label
+    // would change which statement it means.
+    Label(lname, inner) =>
+      if !stmt_targets_label(inner, lname) &&
+        !stmt_redeclares_label(inner, lname) {
+        Some(inner)
+      } else {
+        Some(stmt)
+      }
+    _ => Some(stmt)
+  }
+}
+
+///|
+/// Does anything inside `stmt` jump to the label `name`?
+///
+/// Nested functions are not walked: `break`/`continue` cannot cross a
+/// function boundary, so a label mentioned in there is a different one
+/// (and would be a syntax error if it were not).
+fn stmt_targets_label(stmt : @ast.TsStmt, name : String) -> Bool {
+  match stmt {
+    Break(Some(l)) | Continue(Some(l)) => l == name
+    Block(b) => block_targets_label(b, name)
+    Label(_, inner) => stmt_targets_label(inner, name)
+    If(_, t, e) =>
+      block_targets_label(t, name) ||
+      (match e {
+        Some(b) => block_targets_label(b, name)
+        None => false
+      })
+    While(_, b) | DoWhile(_, b) => block_targets_label(b, name)
+    For(init, _, update, b) =>
+      (match init {
+        Some(i) => stmt_targets_label(i, name)
+        None => false
+      }) ||
+      (match update {
+        Some(u) => stmt_targets_label(u, name)
+        None => false
+      }) ||
+      block_targets_label(b, name)
+    ForOf(_, _, _, _, b) | ForAwaitOf(_, _, _, _, b) | ForIn(_, _, _, _, b) =>
+      block_targets_label(b, name)
+    Switch(_, cases) => {
+      for c in cases {
+        if block_targets_label(c.body, name) {
+          return true
+        }
+      }
+      false
+    }
+    Try(b, _, cb, fb) =>
+      block_targets_label(b, name) ||
+      (match cb {
+        Some(blk) => block_targets_label(blk, name)
+        None => false
+      }) ||
+      (match fb {
+        Some(blk) => block_targets_label(blk, name)
+        None => false
+      })
+    With(_, b) => block_targets_label(b, name)
+    _ => false
+  }
+}
+
+///|
+fn block_targets_label(block : @ast.TsBlock, name : String) -> Bool {
+  for s in block.stmts {
+    if stmt_targets_label(s, name) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+/// Is `name` declared again as a label anywhere inside `stmt`?
+fn stmt_redeclares_label(stmt : @ast.TsStmt, name : String) -> Bool {
+  match stmt {
+    Label(l, inner) => l == name || stmt_redeclares_label(inner, name)
+    Block(b) => block_redeclares_label(b, name)
+    If(_, t, e) =>
+      block_redeclares_label(t, name) ||
+      (match e {
+        Some(b) => block_redeclares_label(b, name)
+        None => false
+      })
+    While(_, b) | DoWhile(_, b) => block_redeclares_label(b, name)
+    For(_, _, _, b) => block_redeclares_label(b, name)
+    ForOf(_, _, _, _, b) | ForAwaitOf(_, _, _, _, b) | ForIn(_, _, _, _, b) =>
+      block_redeclares_label(b, name)
+    Switch(_, cases) => {
+      for c in cases {
+        if block_redeclares_label(c.body, name) {
+          return true
+        }
+      }
+      false
+    }
+    Try(b, _, cb, fb) =>
+      block_redeclares_label(b, name) ||
+      (match cb {
+        Some(blk) => block_redeclares_label(blk, name)
+        None => false
+      }) ||
+      (match fb {
+        Some(blk) => block_redeclares_label(blk, name)
+        None => false
+      })
+    With(_, b) => block_redeclares_label(b, name)
+    _ => false
+  }
+}
+
+///|
+fn block_redeclares_label(block : @ast.TsBlock, name : String) -> Bool {
+  for s in block.stmts {
+    if stmt_redeclares_label(s, name) {
+      return true
+    }
+  }
+  false
+}
+
+///|
 fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
   let stmts : Array[@ast.TsStmt] = []
   // A function declaration after the terminator is NOT unreachable —
@@ -1069,6 +1484,10 @@ fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
       continue
     }
     let ps = peep_stmt(s, ctx)
+    let ps = match peep_block_level(ps) {
+      Some(replacement) => replacement
+      None => continue
+    }
     // `if (c) { …; return; } else { stmts }` → `if (c) { …; return; }` +
     // `stmts` spliced inline. Saves the `else ` keyword (5 bytes) and the
     // braces (2 bytes) for every such pattern.
@@ -1282,6 +1701,27 @@ fn stmt_is_hoisted_function(s : @ast.TsStmt) -> Bool {
 
 ///|
 fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
+  // terser's `typeofs`: `typeof x === "undefined"` -> `void 0 === x`,
+  // eleven bytes, and it appears in guard code everywhere.
+  //
+  // The two are NOT interchangeable in general: `typeof x` is `"undefined"`
+  // for an UNDECLARED `x`, while `void 0 === x` throws a ReferenceError.
+  // So the rewrite is gated on `x` being a name this bundle declares —
+  // `ctx.undeclared` holds the ones it does not, which are the host
+  // globals a feature test would be probing for. That is exactly the
+  // case that must keep `typeof`.
+  match typeof_undefined_operand(expr) {
+    Some((name, negated)) =>
+      if !ctx.undeclared.contains(name) {
+        let cmp = if negated {
+          @ast.TsBinOp::BinNe
+        } else {
+          @ast.TsBinOp::BinEq
+        }
+        return BinOp(cmp, UnaryOp(@ast.TsUnaryOp::Void, IntLit(0)), Var(name))
+      }
+    None => ()
+  }
   match expr {
     BoolLit(b) =>
       // `true` → `!0` (2 bytes saved), `false` → `!1` (3 bytes saved).
@@ -1352,12 +1792,6 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
               UnaryOp(@ast.TsUnaryOp::Not, IntLit(if a == b { 0 } else { 1 }))
             (IntLit(a), IntLit(b)) =>
               UnaryOp(@ast.TsUnaryOp::Not, IntLit(if a == b { 0 } else { 1 }))
-            (PropAccess(_, "length"), IntLit(0))
-            | (PropAccess(_, "size"), IntLit(0)) =>
-              UnaryOp(@ast.TsUnaryOp::Not, lp)
-            (IntLit(0), PropAccess(_, "length"))
-            | (IntLit(0), PropAccess(_, "size")) =>
-              UnaryOp(@ast.TsUnaryOp::Not, rp)
             // `typeof x === "undefined"` → `x === void 0`  (saves ~9 bytes)
             // `"undefined" === typeof x` → `x === void 0`
             // Only safe when x is not a bare Var — undeclared globals like
@@ -1378,17 +1812,25 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
                 x,
                 UnaryOp(@ast.TsUnaryOp::Void, IntLit(0)),
               )
-            // `x === true` / `x === !0` → `x`  (saves 7 bytes; x is already boolean)
+            // `x === true` / `x === !0` → `x`  (saves 7 bytes)
+            // `x === false` / `x === !1` → `!x`  (saves 6 bytes)
+            //
+            // Only when `x` IS a boolean. The comment here used to
+            // assert that and nothing checked it: for `x = 1`,
+            // `x === true` is false while `x` is truthy; for `x = 0`,
+            // `x === false` is false while `!x` is true.
             (x, BoolLit(true))
             | (BoolLit(true), x)
             | (x, UnaryOp(@ast.TsUnaryOp::Not, IntLit(0)))
-            | (UnaryOp(@ast.TsUnaryOp::Not, IntLit(0)), x) => x
-            // `x === false` / `x === !1` → `!x`  (saves 6 bytes)
+            | (UnaryOp(@ast.TsUnaryOp::Not, IntLit(0)), x) if expr_is_boolean_valued(
+                x,
+              ) => x
             (x, BoolLit(false))
             | (BoolLit(false), x)
             | (x, UnaryOp(@ast.TsUnaryOp::Not, IntLit(1)))
-            | (UnaryOp(@ast.TsUnaryOp::Not, IntLit(1)), x) =>
-              UnaryOp(@ast.TsUnaryOp::Not, x)
+            | (UnaryOp(@ast.TsUnaryOp::Not, IntLit(1)), x) if expr_is_boolean_valued(
+                x,
+              ) => UnaryOp(@ast.TsUnaryOp::Not, x)
             (lp, rp) => BinOp(op, lp, rp)
           }
         BinNe =>
@@ -1401,12 +1843,6 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
               UnaryOp(@ast.TsUnaryOp::Not, IntLit(if a != b { 0 } else { 1 }))
             (IntLit(a), IntLit(b)) =>
               UnaryOp(@ast.TsUnaryOp::Not, IntLit(if a != b { 0 } else { 1 }))
-            (PropAccess(_, "length"), IntLit(0))
-            | (PropAccess(_, "size"), IntLit(0)) =>
-              UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, lp))
-            (IntLit(0), PropAccess(_, "length"))
-            | (IntLit(0), PropAccess(_, "size")) =>
-              UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, rp))
             // `typeof x !== "undefined"` → `x !== void 0`  (saves ~9 bytes)
             // Only safe when x is not a bare Var — undeclared globals like
             // `document`, `window`, `DOMParser` throw ReferenceError when
@@ -1427,16 +1863,25 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
                 UnaryOp(@ast.TsUnaryOp::Void, IntLit(0)),
               )
             // `x !== true` / `x !== !0` → `!x`  (saves 6 bytes)
+            // `x !== false` / `x !== !1` → `x`  (saves 7 bytes)
+            //
+            // Same gate as `===`, and this is the one caught in the
+            // wild: `symbol.constEnumOnlyModule !== false` is `true`
+            // when the field is `undefined`, while
+            // `symbol.constEnumOnlyModule` is `undefined`. TypeScript's
+            // binder writes exactly that.
             (x, BoolLit(true))
             | (BoolLit(true), x)
             | (x, UnaryOp(@ast.TsUnaryOp::Not, IntLit(0)))
-            | (UnaryOp(@ast.TsUnaryOp::Not, IntLit(0)), x) =>
-              UnaryOp(@ast.TsUnaryOp::Not, x)
-            // `x !== false` / `x !== !1` → `x`  (saves 7 bytes)
+            | (UnaryOp(@ast.TsUnaryOp::Not, IntLit(0)), x) if expr_is_boolean_valued(
+                x,
+              ) => UnaryOp(@ast.TsUnaryOp::Not, x)
             (x, BoolLit(false))
             | (BoolLit(false), x)
             | (x, UnaryOp(@ast.TsUnaryOp::Not, IntLit(1)))
-            | (UnaryOp(@ast.TsUnaryOp::Not, IntLit(1)), x) => x
+            | (UnaryOp(@ast.TsUnaryOp::Not, IntLit(1)), x) if expr_is_boolean_valued(
+                x,
+              ) => x
             (lp, rp) => BinOp(op, lp, rp)
           }
         // `x.length > 0` → `!!x.length`  (saves ~3 bytes; length is non-negative)
@@ -1444,22 +1889,10 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         // `0 < x.length` / `0 >= x.length` — swapped forms
         BinGt =>
           match (lp, rp) {
-            (PropAccess(_, "length"), IntLit(0))
-            | (PropAccess(_, "size"), IntLit(0)) =>
-              UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, lp))
-            (IntLit(0), PropAccess(_, "length"))
-            | (IntLit(0), PropAccess(_, "size")) =>
-              UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, rp))
             _ => BinOp(op, lp, rp)
           }
         BinLe =>
           match (lp, rp) {
-            (PropAccess(_, "length"), IntLit(0))
-            | (PropAccess(_, "size"), IntLit(0)) =>
-              UnaryOp(@ast.TsUnaryOp::Not, lp)
-            (IntLit(0), PropAccess(_, "length"))
-            | (IntLit(0), PropAccess(_, "size")) =>
-              UnaryOp(@ast.TsUnaryOp::Not, rp)
             _ => BinOp(op, lp, rp)
           }
         // `"a" + "b"` → `"ab"`  (string constant folding; saves quotes + operator)
@@ -1469,21 +1902,28 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         Add =>
           match (lp, rp) {
             (StringLit(a), StringLit(b)) => StringLit(a + b)
-            // `0 + x` / `x + 0` → `x`  (identity under addition for numbers).
-            // Only safe when the other operand is an integer literal (so no
-            // string coercion occurs).
-            (IntLit(0), _) => rp
-            (_, IntLit(0)) => lp
             // `n + m` → constant  (integer literal arithmetic folding).
             (IntLit(a), IntLit(b)) => IntLit(a + b)
+            // `0 + x` / `x + 0` → `x`.
+            //
+            // The old comment claimed this was "only safe when the other
+            // operand is an integer literal (so no string coercion
+            // occurs)" — but the pattern matched ANY other operand, so
+            // `undefined + 0` became `undefined` instead of `NaN` and
+            // `"a" + 0` became `"a"` instead of `"a0"`. Even for a
+            // number it needs care: `-0 + 0` is `0` while `-0` is `-0`.
+            // `fold.mbt` gates the same rule; this copy did not.
+            (IntLit(0), _) if is_number_never_negzero(rp) => rp
+            (_, IntLit(0)) if is_number_never_negzero(lp) => lp
             _ => BinOp(op, lp, rp)
           }
         // `n - m` → constant  (integer literal subtraction).
         Sub =>
           match (lp, rp) {
             (IntLit(a), IntLit(b)) => IntLit(a - b)
-            // `x - 0` → `x`
-            (_, IntLit(0)) => lp
+            // `x - 0` → `x`. `-0 - 0` is `-0`, so this one only needs
+            // the operand to be a number at all.
+            (_, IntLit(0)) if is_number_valued(lp) => lp
             _ => BinOp(op, lp, rp)
           }
         // `n * m` → constant  (integer literal multiplication).
@@ -1491,10 +1931,11 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
           match (lp, rp) {
             (IntLit(a), IntLit(b)) => IntLit(a * b)
             // `x * 1` / `1 * x` → `x`
-            (_, IntLit(1)) => lp
-            (IntLit(1), _) => rp
-            // `x * 0` / `0 * x` → `0`  (safe only when x has no side effects,
-            // but IntLit(0) * anything is only folded when BOTH sides are IntLit)
+            (_, IntLit(1)) if is_number_valued(lp) => lp
+            (IntLit(1), _) if is_number_valued(rp) => rp
+            // `x * 0` / `0 * x` → `0` is NOT folded here: `-1 * 0` is
+            // `-0` and `"a" * 0` is `NaN`. `fold.mbt` does it under a
+            // non-negative-number gate.
             _ => BinOp(op, lp, rp)
           }
         _ => BinOp(op, lp, rp)
@@ -1512,10 +1953,26 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
           BinOp(@ast.TsBinOp::AbstractNe, a, b)
         BinOp(@ast.TsBinOp::AbstractNe, a, b) =>
           BinOp(@ast.TsBinOp::AbstractEq, a, b)
-        BinOp(@ast.TsBinOp::BinLt, a, b) => BinOp(@ast.TsBinOp::BinGe, a, b)
-        BinOp(@ast.TsBinOp::BinLe, a, b) => BinOp(@ast.TsBinOp::BinGt, a, b)
-        BinOp(@ast.TsBinOp::BinGt, a, b) => BinOp(@ast.TsBinOp::BinLe, a, b)
-        BinOp(@ast.TsBinOp::BinGe, a, b) => BinOp(@ast.TsBinOp::BinLt, a, b)
+        // The RELATIONAL negations are not the same shape of fact as the
+        // equality ones above. `!(a < b)` is `a >= b` only when the
+        // comparison is not NaN-based, and every NaN comparison is false,
+        // so both `a < b` and `a >= b` come out false while `!(a < b)` is
+        // true:
+        //
+        //   a = undefined, b = 1 -> !(a < b) is true,  a >= b is false
+        //   a = "x",       b = 3 -> !(a < b) is true,  a >= b is false
+        //
+        // `undefined` is not an exotic input, so this is gated on both
+        // operands being comparable without NaN — two numbers, or two
+        // strings. See `relational_negation_is_safe`.
+        BinOp(@ast.TsBinOp::BinLt, a, b) if relational_negation_is_safe(a, b) =>
+          BinOp(@ast.TsBinOp::BinGe, a, b)
+        BinOp(@ast.TsBinOp::BinLe, a, b) if relational_negation_is_safe(a, b) =>
+          BinOp(@ast.TsBinOp::BinGt, a, b)
+        BinOp(@ast.TsBinOp::BinGt, a, b) if relational_negation_is_safe(a, b) =>
+          BinOp(@ast.TsBinOp::BinLe, a, b)
+        BinOp(@ast.TsBinOp::BinGe, a, b) if relational_negation_is_safe(a, b) =>
+          BinOp(@ast.TsBinOp::BinLt, a, b)
         // `!!(comparison)` → `comparison`
         UnaryOp(@ast.TsUnaryOp::Not, bool_expr) if is_bool_expr(bool_expr) =>
           bool_expr
@@ -1698,7 +2155,16 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
             UnaryOp(@ast.TsUnaryOp::Not, new_args[0]),
           )
         } else if name == "String" {
-          return BinOp(@ast.TsBinOp::Add, StringLit(""), new_args[0])
+          // `String(x)` -> `"" + x` saves 6 bytes and is NOT the same
+          // conversion: `String` calls ToString, `+` calls ToPrimitive
+          // with a DEFAULT hint. A Symbol is the sharp end —
+          // `String(sym)` is `"Symbol(s)"` and `"" + sym` throws — and
+          // any object with both `valueOf` and `toString` differs
+          // quietly. Only take it when the operand is already a string
+          // or a number.
+          if cmp_kind(new_args[0]) is (CmpStr | CmpNum) {
+            return BinOp(@ast.TsBinOp::Add, StringLit(""), new_args[0])
+          }
         }
       }
       Call(name, new_args)
@@ -1797,13 +2263,14 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
             exprs_eq(new_args[1], @ast.TsExpr::IntLit(0))
           )
         ) {
-        match recv_p {
-          PropAccess(
-            PropAccess(@ast.TsExpr::Var("Array"), "prototype"),
-            "slice"
-          ) => return ArrayLit([Spread(new_args[0])])
-          _ => ()
-        }
+        // (removed) `Array.prototype.slice.call(x, 0)` -> `[...x]`.
+        // `slice` works on any array-LIKE — an object with `length` and
+        // index properties — while a spread needs an ITERABLE. So
+        // `Array.prototype.slice.call(0, 0)` is `[]` and `[...0]`
+        // throws, and the same goes for `arguments`-shaped objects in
+        // code that has not been through a transpiler. Found by
+        // `scripts/verify_rule_equivalence.mjs`.
+        ignore(recv_p)
       }
       // `Array.prototype.METHOD.call(arr, arg1, arg2, ...)` → `arr.METHOD(arg1, arg2, ...)`.
       // TypeScript's `__spreadArray` helper and some polyfills call Array
@@ -1846,12 +2313,15 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
           return MethodCall(Var("Object"), "hasOwn", new_args)
         }
       }
-      // `x.hasOwnProperty(key)` → `Object.hasOwn(x, key)` (saves ~8 bytes; ES2022).
-      // The direct `.hasOwnProperty()` call is subtly unsafe if the prototype
-      // chain is modified, but for bundled code it's equivalent and shorter.
-      if m == "hasOwnProperty" && new_args.length() == 1 {
-        return MethodCall(Var("Object"), "hasOwn", [recv_p, new_args[0]])
-      }
+      // (removed) `x.hasOwnProperty(key)` -> `Object.hasOwn(x, key)`.
+      // The old comment said the direct call is "subtly unsafe if the
+      // prototype chain is modified, but for bundled code it's
+      // equivalent" — which gets the direction backwards. The rewrite
+      // REPLACES whatever `x.hasOwnProperty` resolves to with the
+      // built-in, so an object that defines its own `hasOwnProperty`
+      // (a parsed JSON payload, a config bag) stops calling it. The
+      // `Object.prototype.hasOwnProperty.call(x, k)` form above names
+      // the built-in explicitly and is kept.
       // `Object.assign({}, a, b, …)` → `{...a, ...b, …}` (object spread).
       // `Object.assign({x:1}, a, b)` → `{x:1, ...a, ...b}` (literal target).
       // Safe when the first argument is an object literal (creates a fresh
@@ -1962,18 +2432,18 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         exprs_eq(new_args[0], @ast.TsExpr::IntLit(0)) {
         return ArrayLit([Spread(recv_p)])
       }
-      // `x.toString()` → `""+x`  (saves ~9 bytes; same as String(x)).
-      // Safe for all non-Symbol values which is the common case in bundled code.
-      // The no-arg form only — `.toString(radix)` must be preserved.
-      // Never apply to `super.toString()` — `super` is not a valid expression
-      // value in JS; `"" + super` is a SyntaxError outside class methods.
-      let is_super_recv = match recv_p {
-        @ast.TsExpr::Var("super") => true
-        _ => false
-      }
-      if m == "toString" && new_args.length() == 0 && !is_super_recv {
-        return BinOp(@ast.TsBinOp::Add, StringLit(""), recv_p)
-      }
+      // (removed) `x.toString()` -> `"" + x`. Three ways apart:
+      //
+      //   * `undefined.toString()` throws; `"" + undefined` is
+      //     `"undefined"`. Same for `null`.
+      //   * `+` uses ToPrimitive with a DEFAULT hint, so it prefers
+      //     `valueOf`. An object with both — a Date, a boxed number, a
+      //     value object — stringifies differently.
+      //   * a Symbol's `toString()` works while `"" + sym` throws.
+      //
+      // The old comment said "safe for all non-Symbol values", which is
+      // two of those three. Found by
+      // `scripts/verify_rule_equivalence.mjs`.
       MethodCall(recv_p, m, new_args)
     }
     PropAccess(recv, p) => PropAccess(peep_expr(recv, ctx), p)
@@ -1994,6 +2464,21 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         }
       }
       ArrayLit(new_items)
+    }
+    // terser's `computed_props`: a computed key that is a string
+    // literal is just that key. `{ ["a"]: 1 }` -> `{ a: 1 }`, four
+    // bytes, and it is what a spread-and-rename codemod leaves behind.
+    ObjectLit(entries) if entries
+      .iter()
+      .any(fn(ent) { computed_prop_literal_key(ent) is Some(_) }) => {
+      let rebuilt : Array[(String, @ast.TsExpr)] = []
+      for ent in entries {
+        match computed_prop_literal_key(ent) {
+          Some((key, value)) => rebuilt.push((key, peep_expr(value, ctx)))
+          None => rebuilt.push((ent.0, peep_expr(ent.1, ctx)))
+        }
+      }
+      ObjectLit(rebuilt)
     }
     ObjectLit(entries) => {
       let new_entries : Array[(String, @ast.TsExpr)] = []
@@ -2138,11 +2623,17 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       // `try_emit_function_decl` from emitting a real function declaration
       // and break forward references.  Also guard against empty-body
       // functions used as constructor bases (arrows lack `.prototype`).
+      // Parameter defaults are evaluated in the callee's scope, so
+      // `function (x = this.y) {}` reads the callee's `this` just as a
+      // body reference would.
+      let param_exprs = param_subexprs(f.params)
       let can_arrow = !f.is_generator &&
         f.name == "" &&
         !folded.stmts.is_empty() &&
         !block_references_name(folded, "this") &&
-        !block_references_name(folded, "arguments")
+        !block_references_name(folded, "arguments") &&
+        !param_exprs.iter().any(fn(e) { expr_references_name(e, "this") }) &&
+        !param_exprs.iter().any(fn(e) { expr_references_name(e, "arguments") })
       if can_arrow {
         let arrow_body = match folded.stmts {
           [Return(Some(inner))] => @ast.TsArrowBody::ArrowExpr(inner)
@@ -2180,7 +2671,16 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         //   `` `${x}` ``       → `""+x`       (saves 2 bytes; empty prefix+suffix)
         //   `` `prefix${x}` `` → `"prefix"+x`  (saves 2 bytes; non-empty prefix OK)
         // Suffix-non-empty forms are NOT shorter: `` `${x}s` `` = `""+x+"s"` (same or longer).
-      } else if new_exprs.length() == 1 && parts.length() == 2 && parts[1] == "" {
+      } else if new_exprs.length() == 1 &&
+        parts.length() == 2 &&
+        parts[1] == "" &&
+        // Template interpolation is ToString; `+` is ToPrimitive with a
+        // DEFAULT hint, which prefers `valueOf`. For an object with both
+        // — a Date, a boxed number, any value object — the two produce
+        // different strings, and for a Symbol one throws and the other
+        // does not. So the saving is only available when the hole is
+        // already a string.
+        cmp_kind(new_exprs[0]) is CmpStr {
         BinOp(@ast.TsBinOp::Add, StringLit(parts[0]), new_exprs[0])
       } else {
         TemplateLiteral(parts, new_exprs)

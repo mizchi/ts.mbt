@@ -48,7 +48,107 @@ pub fn treeshake_block(
     stmts: flat_stmts,
     stmt_positions: block.stmt_positions,
   }
-  treeshake_flat_block(flat_block, roots, pure_calls)
+  treeshake_flat_block(
+    drop_dead_stores(flat_block, roots, pure_calls),
+    roots,
+    pure_calls,
+  )
+}
+
+///|
+/// Drop a store to a binding nothing ever READS.
+///
+///     let v = 1;
+///     v = 2;
+///     console.log("live");
+///
+/// Both statements are dead, and neither was being dropped: the main
+/// pass counts a write as a reference, so `v = 2` kept `v` alive and
+/// `v` kept its own declaration alive. Removing the store first lets
+/// the existing liveness walk finish the job.
+///
+/// What makes this safe is what it does NOT do. Only a STATEMENT-level
+/// `v = <pure>` at the top of this block is dropped, and only when `v`
+/// is declared here as a plain binding, is not a root (an export an
+/// importer could read), and is read nowhere — including from a nested
+/// scope, since the reference walk descends into blocks and function
+/// bodies. A store buried inside an `if` is left alone, and the main
+/// pass still counts that one as a reference, so the declaration
+/// survives with it rather than leaving the store assigning to nothing.
+fn drop_dead_stores(
+  block : @ast.TsBlock,
+  roots : Map[String, Bool],
+  pure_calls : Map[String, Bool],
+) -> @ast.TsBlock {
+  // Plain bindings declared by this block. A name declared elsewhere
+  // could be a host global, and `globalThing = 1` is observable.
+  let declared : Map[String, Bool] = {}
+  for stmt in block.stmts {
+    match stmt {
+      Let(@ast.TsBinding::Ident(n), _, _)
+      | Const(@ast.TsBinding::Ident(n), _, _)
+      | Var(@ast.TsBinding::Ident(n), _, _) => declared[n] = true
+      _ => ()
+    }
+  }
+  if declared.is_empty() {
+    return block
+  }
+  // Names that are READ. A statement-level `v = rhs` reads `rhs` but
+  // not `v`; a declaration reads its initializer but not the name it
+  // binds. Everything else goes through the ordinary reference walk,
+  // which counts an assignment target as a reference — deliberately, so
+  // the two rules cannot disagree about a store this pass declines.
+  let reads : Map[String, Bool] = {}
+  for stmt in block.stmts {
+    match stmt {
+      // Both spellings of a statement-level assignment. The parser
+      // produces `Assign` on some paths and `Expr(AssignExpr(...))` on
+      // others, and handling only the first one made this pass a no-op
+      // on exactly the case it was written for.
+      Assign(n, rhs) | Expr(@ast.TsExpr::AssignExpr(n, rhs)) if declared.contains(
+          n,
+        ) => collect_var_refs_in_expr(rhs, reads)
+      Let(@ast.TsBinding::Ident(_), _, rhs)
+      | Const(@ast.TsBinding::Ident(_), _, rhs)
+      | Var(@ast.TsBinding::Ident(_), _, rhs) =>
+        collect_var_refs_in_expr(rhs, reads)
+      _ => collect_var_refs_in_stmt(stmt, reads)
+    }
+  }
+  let kept : Array[@ast.TsStmt] = []
+  let kept_positions : Array[Int] = []
+  let has_positions = block.stmt_positions.length() == block.stmts.length()
+  let mut dropped = false
+  for i, stmt in block.stmts {
+    let drop = match stmt {
+      Assign(n, rhs) | Expr(@ast.TsExpr::AssignExpr(n, rhs)) =>
+        declared.contains(n) &&
+        !reads.contains(n) &&
+        !roots.contains(n) &&
+        is_pure_init(rhs, pure_calls)
+      _ => false
+    }
+    if drop {
+      dropped = true
+      continue
+    }
+    kept.push(stmt)
+    if has_positions {
+      kept_positions.push(block.stmt_positions[i])
+    }
+  }
+  if !dropped {
+    return block
+  }
+  {
+    stmts: kept,
+    stmt_positions: if has_positions {
+      kept_positions
+    } else {
+      block.stmt_positions
+    },
+  }
 }
 
 ///|
@@ -269,7 +369,24 @@ fn is_pure_init(expr : @ast.TsExpr, pure_calls : Map[String, Bool]) -> Bool {
       }
       true
     }
-    UnaryOp(_, inner) => is_pure_init(inner, pure_calls)
+    // `++` / `--` / `delete` MUTATE, so the operator decides this, not
+    // the operand. Ignoring it made `c--;` a pure expression statement
+    // because `c` is pure, and the statement was dropped:
+    //
+    //   let c = 0; c--; console.log([c]);   printed [0], not [-1]
+    //
+    // A `let y = c--;` whose `y` nobody reads went the same way. It took
+    // `--treeshake` and a statement-position update to show, and
+    // `c -= 1` was unaffected because peephole only rewrites that to
+    // `c--` later, after this pass has run. `purity.mbt` draws the same
+    // distinction correctly — this second predicate did not.
+    //
+    // Found by `just fuzz-mangle`, shrunk to four nodes.
+    UnaryOp(op, inner) =>
+      match op {
+        PreInc | PreDec | PostInc | PostDec | Delete => false
+        _ => is_pure_init(inner, pure_calls)
+      }
     BinOp(_, l, r) => is_pure_init(l, pure_calls) && is_pure_init(r, pure_calls)
     Cond(c, t, e) =>
       is_pure_init(c, pure_calls) &&

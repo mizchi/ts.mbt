@@ -125,7 +125,7 @@ verify-checker-soundness:
     bash scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0
 
 # Full CI check
-ci: fmt check test verify-mbti-dts verify-scaffolds verify-generated-fixtures verify-examples verify-mangle-safety verify-checker-soundness
+ci: fmt check test verify-mbti-dts verify-scaffolds verify-generated-fixtures verify-examples verify-mangle-safety verify-dce-coverage verify-rule-equivalence verify-graph-walk verify-checker-soundness
 
 # Update dependencies
 update:
@@ -141,12 +141,118 @@ verify-mangle-safety *ARGS:
     node scripts/generate_mangle_cases.mjs --check
     node scripts/verify_mangle_safety.mjs {{ ARGS }}
 
+# The other direction: dead code we could remove and do not. A table of
+# small programs, each asserting a marker is gone from the bundle, that
+# the live markers survive, and that stdout still matches Node running
+# the original. Fails on a regression against
+# fixtures/dce-coverage/expected.json.
+#
+#   just verify-dce-coverage
+#   just verify-dce-coverage --only unused-label --verbose
+verify-dce-coverage *ARGS:
+    moon build --target native
+    node scripts/verify_dce_coverage.mjs {{ ARGS }}
+
+# Compare against terser on the same input. Both optimizers start from
+# `mtsc --bundle --no-check` plain JS, so what is measured is optimizer
+# quality rather than TypeScript parsing. Two groups: `terser-rule` cases
+# each aimed at one of terser's compress options, and `type-aware` cases
+# terser cannot win because the saving needs the type system. A LOSS in
+# the second group is a bug; a LOSS in the first is a rule we have not
+# ported yet, and the report ranks them by bytes.
+#
+#   just compare-terser
+#   just compare-terser --only inline --verbose
+#   just compare-terser --update           # re-record expected.json
+compare-terser *ARGS:
+    moon build --target native --release
+    node scripts/compare_terser.mjs {{ ARGS }}
+
+# Every rewrite, checked against every awkward value. Each peephole /
+# fold rule becomes a function body with holes, evaluated across the
+# cross product of a value domain built out of counterexamples —
+# undefined, -0, NaN, a Symbol, a BigInt, an object with a poisoned
+# valueOf, an array-like with a negative length. One compile per rule
+# covers ~600 input pairs, and the result is compared against Node
+# running the TypeScript directly.
+#
+# UNSND means the rewrite is not equivalence-preserving. INERT means it
+# never fired, so the case proves nothing.
+#
+#   just verify-rule-equivalence
+#   just verify-rule-equivalence --rule comparisons --verbose
+verify-rule-equivalence *ARGS:
+    moon build --target native --release
+    node scripts/verify_rule_equivalence.mjs {{ ARGS }}
+
+# What the type information actually buys, in bytes. Each target is a
+# real package cloned from git and optimized twice with identical flags,
+# differing only in the input: the TypeScript SOURCE (so the six
+# type-driven phases can fire) versus the same code with its types
+# erased (so none of them can). `verify-real-world` cannot measure this
+# — it feeds published `.js`, where the answer is zero by construction.
+#
+# All three legs must produce identical observations against the
+# target's driver, or the row is not evidence. Needs network on the
+# first run; shares the `verify-real-world` checkouts where it can.
+#
+#   just measure-type-aware
+#   just measure-type-aware --only hono --verbose
+#   just measure-type-aware --update        # re-record expected.json
+measure-type-aware *ARGS:
+    moon build --target native --release
+    node scripts/measure_type_aware.mjs {{ ARGS }}
+
+# Fuzz the property mangler: generate programs nobody wrote, compile each
+# with and without mangling, run both, compare. A difference is a mangler
+# false positive by construction. Failing programs are shrunk
+# automatically, so a finding arrives as the smallest program that still
+# fails rather than as a seed number.
+#
+#   just fuzz-mangle --iterations 500
+#   just fuzz-mangle --seed 6 --iterations 1 --no-shrink   # reproduce one
+fuzz-mangle *ARGS:
+    moon build --target native --release
+    node scripts/fuzz_mangle.mjs {{ ARGS }}
+
 # Minify real published packages (react, the TypeScript compiler) and
 # check they still behave. Needs network access on the first run, so it
 # is deliberately not part of `ci`.
 verify-real-world *ARGS:
     moon build --target native
     node scripts/verify_real_world_minify.mjs {{ ARGS }}
+
+# Every combination of {treeshake, fold, minify, mangle} on the 9 MB
+# published TypeScript compiler, each run afterwards AS a compiler and
+# compared against the pristine copy. `verify-real-world` checks the one
+# shipping flag set; this checks all sixteen, so a failure names the pass
+# — a combination that breaks while each of its parts passes is an
+# interaction between them. Needs `verify-real-world` to have populated
+# the cache first.
+#
+#   just verify-pass-lattice
+#   just verify-pass-lattice --only fold+minify --keep
+verify-pass-lattice *ARGS:
+    moon build --target native --release
+    node scripts/verify_pass_lattice.mjs {{ ARGS }}
+
+# Does the module-graph walk stay linear in the graph? It did not: the
+# walk deduplicated on the SPECIFIER a module wrote, so `./util.js` ->
+# `util.ts` (resolution REPLACING an extension, which is what
+# TypeScript-with-NodeNext sources write) was never recognised as an
+# already-loaded module, and every repeat visit re-read the file,
+# re-parsed it and re-pushed its imports. On a diamond graph that is
+# 2^depth — zod could not finish parsing 133 files in eighteen minutes.
+#
+# Generates the shape directly and asserts on the GROWTH RATIO between
+# two depths rather than on milliseconds, so the threshold does not
+# depend on the machine. Fast; runs in `ci`.
+#
+#   just verify-graph-walk
+#   just verify-graph-walk --verbose
+verify-graph-walk *ARGS:
+    moon build --target native --release
+    node scripts/verify_graph_walk.mjs {{ ARGS }}
 
 # Where the compile time goes. Runs the same size ladder as
 # `verify-real-world` through `mtsc --timing` and tabulates the phases,

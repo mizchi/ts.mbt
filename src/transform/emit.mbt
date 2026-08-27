@@ -677,7 +677,7 @@ fn emit_block(e : Emitter, block : @ast.TsBlock) -> Unit {
                     e.space()
                     e.write("=")
                     e.space()
-                    emit_expr(e, init, 0)
+                    emit_expr(e, init, declarator_init_prec)
                   }
                 }
                 _ => ()
@@ -788,7 +788,7 @@ fn emit_stmts_merged(e : Emitter, stmts : Array[@ast.TsStmt]) -> Unit {
                     e.space()
                     e.write("=")
                     e.space()
-                    emit_expr(e, init, 0)
+                    emit_expr(e, init, declarator_init_prec)
                   }
                 }
                 _ => ()
@@ -899,6 +899,16 @@ fn stmt_ends_in_dangling_if(s : @ast.TsStmt) -> Bool {
 fn can_braceless(stmt : @ast.TsStmt) -> Bool {
   match stmt {
     Let(_, _, _) | Const(_, _, _) => false
+    // A `Block` whose statements are all declarations of one kind is how
+    // the parser represents `let a = 1, b = 2;`, and `emit_stmt` unwraps
+    // it WITHOUT braces — it has to, since real braces would move the
+    // bindings into a new scope. So such a block is a declaration for
+    // brace purposes, and `do { { let v = 1; } } while (…)` de-braced to
+    // `do let v=1;while(…)`: "Lexical declaration cannot appear in a
+    // single-statement context".
+    //
+    // Found by `just fuzz-mangle`.
+    Block(b) => !block_is_inline_decl_group(b)
     // A bare `function foo() {…}` (which our emitter lowers from
     // a `Let(Ident, _, FuncExpr)` pair) also can't sit as a single
     // branch body. Detect the pattern.
@@ -934,7 +944,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
         e.space()
         e.write("=")
         e.space()
-        emit_expr(e, init, 0)
+        emit_expr(e, init, declarator_init_prec)
       }
       e.semi()
     }
@@ -954,7 +964,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
         e.space()
         e.write("=")
         e.space()
-        emit_expr(e, init, 0)
+        emit_expr(e, init, declarator_init_prec)
       }
       e.semi()
     }
@@ -978,7 +988,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
         e.space()
         e.write("=")
         e.space()
-        emit_expr(e, init, 0)
+        emit_expr(e, init, declarator_init_prec)
       }
       e.semi()
     }
@@ -1069,8 +1079,10 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
         // `"0"`) require computed-index form — `recv.~standard =
         // …` is a hard parse error. Reserved words (`return` /
         // `for` / …) ARE valid in member-access position post-ES5,
-        // so they keep the dotted form.
-        if is_valid_js_ident(stripped) {
+        // so they keep the dotted form. A `#private` name is dotted
+        // too and can NEVER be bracketed — `o["#x"]` is a different
+        // property entirely.
+        if is_valid_js_ident(stripped) || is_private_member_name(stripped) {
           e.write(".")
           e.write(stripped)
         } else {
@@ -1431,8 +1443,51 @@ fn expr_leading_byte(expr : @ast.TsExpr) -> Char {
     // before the name, handled above by `'a'`.
     ArrowFunc(_, _, _, is_async) => if is_async { 'a' } else { '?' }
     FuncExpr(_) => '?'
+    // Type assertions emit NOTHING of their own — the type is erased —
+    // so the leading byte is the operand's. Missing these was a
+    // SyntaxError, not a stray space: `(o) => ({…}) as T` is an arrow
+    // whose expression body needs parens, and with the assertion
+    // opaque the check below saw no ObjectLit and emitted
+    // `(o) => {...o, k: 1}`, which JS reads as a block. zod writes
+    // exactly that (`({ …core.standardProps(self) }) as
+    // ZodType["~standard"]`) and its whole bundle failed to load.
+    As(inner, _) | Satisfies(inner, _) => expr_leading_byte(inner)
+    NonNull(inner) => expr_leading_byte(inner)
+    // Everything whose emission begins with a LEFT operand: the byte is
+    // that operand's. `{a:1}.b + 1` starts with `{` just as much as
+    // `{a:1}` does, and the postfix / call forms above already walk
+    // their receiver for the same reason.
+    BinOp(_, l, _) => expr_leading_byte(l)
+    Cond(c, _, _) => expr_leading_byte(c)
+    Seq(l, _) => expr_leading_byte(l)
+    CompoundAssignExpr(l, _, _) => expr_leading_byte(l)
+    PropAssignExpr(l, _, _) | IndexAssignExpr(l, _, _) => expr_leading_byte(l)
+    // `'?'` is not "unknown" — it is the answer for everything that
+    // emits an identifier, a keyword, a `(` or an operator first, none
+    // of which can be `{`. Both callers rely on that: the whitespace
+    // decision treats it as "insert a space", which is harmless, and
+    // `expr_starts_with_brace` treats it as "no parens needed", which
+    // is only sound because the shapes that CAN start with `{` are the
+    // ones enumerated above.
     _ => '?'
   }
+}
+
+///|
+/// Does this expression's emitted form begin with `{`?
+///
+/// An arrow's expression body that starts with `{` is read by the JS
+/// parser as a block, so it has to be parenthesised. This used to be a
+/// hand-listed set of shapes — `ObjectLit`, plus three postfix forms
+/// wrapping one — which is the kind of list that goes stale the moment
+/// a new wrapper appears. It did: `As` / `Satisfies` / `NonNull` were
+/// never on it.
+///
+/// Asking `expr_leading_byte` instead asks the same question the JS
+/// parser asks, and the answer is shared with the whitespace decision,
+/// so the two cannot disagree about what a given expression emits.
+fn expr_starts_with_brace(expr : @ast.TsExpr) -> Bool {
+  expr_leading_byte(expr) == '{'
 }
 
 ///|
@@ -1484,8 +1539,61 @@ fn binding_leading_byte(b : @ast.TsBinding) -> Char {
 /// that block with real `{…}` braces breaks scope; emit it as
 /// `let a = 1, b = 2;` instead. Returns true when it handled the
 /// block; the caller falls back to `emit_block` otherwise.
-fn try_emit_multi_decl_inline(e : Emitter, block : @ast.TsBlock) -> Bool {
+/// Is this `Block` the parser's spelling of a multi-declarator
+/// declaration (`let a = 1, b = 2;`) rather than a real nested block?
+///
+/// The distinction decides whether the braces may be dropped, and
+/// getting it wrong is a correctness bug in BOTH directions: keeping
+/// braces on a declarator group makes its bindings block-local when they
+/// belong to the enclosing scope, and dropping them from a real block
+/// merges two scopes —
+///
+///   function f() { { const x = 1; } const x = 2; }
+///
+/// emitted as `function f(){let x=1;let x=2}`, which does not parse.
+/// That one needed no mangling at all; with mangling it was worse,
+/// because two bindings the mangler had renamed independently (each the
+/// first free name in its own scope) collided on the same letter.
+///
+/// `stmt_positions` is the discriminator: `Parser::merge_decl_stmts`,
+/// the only producer of declarator groups, leaves it empty, while
+/// `parse_block` fills one entry per statement. It records the
+/// producer's intent, which is precisely the missing information — a
+/// dedicated AST marker would say it more loudly, and `TsBlock` is
+/// constructed in ~140 places.
+///
+/// Found by `just fuzz-mangle`.
+fn block_is_inline_decl_group(block : @ast.TsBlock) -> Bool {
   if block.stmts.length() == 0 {
+    return false
+  }
+  // A real block carries its statements' positions; a declarator group
+  // never has any.
+  if block.stmt_positions.length() != 0 {
+    return false
+  }
+  let kind = match block.stmts[0] {
+    Var(_, _, _) => "var"
+    Let(_, _, _) => "let"
+    Const(_, _, _) => "const"
+    _ => return false
+  }
+  for s in block.stmts {
+    match s {
+      Var(_, _, _) => if kind != "var" { return false }
+      Let(_, _, _) => if kind != "let" { return false }
+      Const(_, _, _) => if kind != "const" { return false }
+      _ => return false
+    }
+  }
+  true
+}
+
+///|
+fn try_emit_multi_decl_inline(e : Emitter, block : @ast.TsBlock) -> Bool {
+  // One rule for both the "can this lose its braces" question and the
+  // unwrap itself, so the two cannot drift.
+  if !block_is_inline_decl_group(block) {
     return false
   }
   let kind = match block.stmts[0] {
@@ -1525,7 +1633,7 @@ fn try_emit_multi_decl_inline(e : Emitter, block : @ast.TsBlock) -> Bool {
           e.space()
           e.write("=")
           e.space()
-          emit_expr(e, init, 0)
+          emit_expr(e, init, declarator_init_prec)
         }
       }
       _ => ()
@@ -1586,7 +1694,7 @@ fn try_emit_multi_decl_for_head(e : Emitter, stmt : @ast.TsStmt) -> Bool {
         e.space()
         e.write("=")
         e.space()
-        emit_expr(e, init, 0)
+        emit_expr(e, init, declarator_init_prec)
       }
       _ => ()
     }
@@ -1612,7 +1720,7 @@ fn emit_stmt_for_head(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       e.space()
       e.write("=")
       e.space()
-      emit_expr(e, init, 0)
+      emit_expr(e, init, declarator_init_prec)
     }
     Let(b, _, init) => {
       e.word("let")
@@ -1621,7 +1729,7 @@ fn emit_stmt_for_head(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       e.space()
       e.write("=")
       e.space()
-      emit_expr(e, init, 0)
+      emit_expr(e, init, declarator_init_prec)
     }
     Const(b, _, init) => {
       if e.pretty {
@@ -1634,7 +1742,7 @@ fn emit_stmt_for_head(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       e.space()
       e.write("=")
       e.space()
-      emit_expr(e, init, 0)
+      emit_expr(e, init, declarator_init_prec)
     }
     Expr(ex) => emit_expr(e, ex, 0)
     Assign(name, ex) => {
@@ -1810,8 +1918,39 @@ fn emit_binding(e : Emitter, binding : @ast.TsBinding) -> Unit {
 // ---------------------------------------------------------------------------
 
 ///|
+/// Parent precedence for a declarator's initializer.
+///
+/// A declarator `=` takes an AssignmentExpression, and the one thing
+/// that binds looser than that is the comma operator. Emitting an
+/// initializer at precedence 0 dropped its parentheses, which does not
+/// merely reformat the code — it changes what it means:
+///
+///   let v = (trace.push(0), x);   ->   let v = trace.push(0), x;
+///
+/// The sequence became a SECOND declarator, so `x` is redeclared and the
+/// bundle dies with "Identifier 'x' has already been declared". With a
+/// constructor on the right (`(f(), new C())`) it is a syntax error
+/// instead. `emit_args` and the array-literal path already pass 2 for
+/// exactly this reason; the declaration paths did not.
+///
+/// Found by `just fuzz-mangle`, shrunk to four nodes.
+let declarator_init_prec : Int = 2
+
+///|
 fn emit_expr(e : Emitter, expr : @ast.TsExpr, parent_prec : Int) -> Unit {
-  let own = expr_precedence(expr)
+  // `new Foo` with the argument list omitted (the minify-mode saving in
+  // the `New` arm) is NOT a member-expression head: `new C().f` written
+  // that way becomes `new C.f`, which parses as `new (C.f)` and throws
+  // "C.f is not a constructor" at runtime. The saving is only sound when
+  // nothing binds tighter than the `new`, so at member-access precedence
+  // the parentheses have to come back — `(new C).f`, same byte count as
+  // the argument list would have cost.
+  //
+  // Found by `just fuzz-mangle`; it was ten of the first hundred seeds.
+  let own = match expr {
+    @ast.TsExpr::New(_, args) if !e.pretty && args.length() == 0 => 17
+    _ => expr_precedence(expr)
+  }
   let needs_paren = own < parent_prec
   if needs_paren {
     e.write("(")
@@ -1952,6 +2091,17 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
               // when the operand starts with a non-identifier char.
               e.sep_after_word(expr_leading_byte(inner))
             _ => ()
+          }
+          // A sign operator whose operand LEADS with the same sign
+          // merges into a different token: `+(++a)` printed tight is
+          // `+++a`, which JS reads as `++ (+a)` — "Invalid left-hand
+          // side expression in prefix operation". `right_needs_token_
+          // separator` already handles this for the binary case
+          // (`"" + +x`); the unary-on-unary case had no such guard, and
+          // the fuzzer produced it as soon as it could get past the
+          // known finding that used to end every campaign.
+          if unary_merges_with_operand(op, inner) {
+            e.write(" ")
           }
           emit_expr(e, inner, 16)
         }
@@ -2172,7 +2322,8 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
     PropAccess(recv, name) => {
       emit_expr(e, recv, 18)
       let stripped = strip_internal_prop_marker(name)
-      if is_valid_js_ident(stripped) {
+      // A `#private` name is dotted and can never be bracketed.
+      if is_valid_js_ident(stripped) || is_private_member_name(stripped) {
         e.write(".")
         e.write(stripped)
       } else {
@@ -2389,16 +2540,12 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
           // expression branch.
           // An arrow expression body that starts with `{` is
           // ambiguous: the JS parser reads it as a block statement.
-          // Any expression whose leftmost token is `{` needs wrapping.
-          let needs_paren_for_obj = match inner {
-            ObjectLit(_) => true
-            // `({...})[k]` / `({...}).prop` — the object literal is
-            // on the left of an index/member access.
-            IndexAccess(ObjectLit(_), _) => true
-            PropAccess(ObjectLit(_), _) => true
-            MethodCall(ObjectLit(_), _, _) => true
-            _ => false
-          }
+          // Any expression whose leftmost token is `{` needs wrapping —
+          // which is exactly what `expr_starts_with_brace` answers, and
+          // it answers it from the same table the emitter uses to
+          // decide whitespace, rather than from a second list of shapes
+          // that has to be kept in step by hand.
+          let needs_paren_for_obj = expr_starts_with_brace(inner)
           if needs_paren_for_obj {
             e.write("(")
             emit_expr(e, inner, 0)
@@ -2774,6 +2921,101 @@ fn func_body_references_name_as_free_var(
 }
 
 ///|
+/// Every expression nested inside a binding pattern: a computed key, a
+/// default value, or an assignment target.
+///
+/// Three walkers over the same tree — `stmt_references_name` here,
+/// `stmt_uses_this` and `stmt_uses_super` in `peephole.mbt` — each
+/// matched `Let(b, _, e)` and then looked only at `e`. So
+///
+///   let { major: m = this.major } = fields;
+///
+/// hid its `this` completely: the binding pattern was never visited by
+/// anything but `binding_introduces_name`, which only answers "what does
+/// this pattern DECLARE". peephole's `function` -> arrow conversion is
+/// gated on exactly the question those walkers answer, so
+///
+///   Version.prototype.with = function (fields) {
+///     let { major: m = this.major } = fields;
+///     ...
+///   };
+///
+/// became an arrow, `this` resolved to the module instead of the
+/// instance, and the minified TypeScript compiler threw
+/// `Cannot read properties of undefined (reading 'major')` on its own
+/// `semver.ts`. Found by `just verify-real-world`.
+///
+/// One collector, three callers — the alternative is the same omission
+/// made three times, which is what happened.
+fn binding_subexprs(b : @ast.TsBinding) -> Array[@ast.TsExpr] {
+  let out : Array[@ast.TsExpr] = []
+  collect_binding_subexprs(b, out)
+  out
+}
+
+///|
+fn collect_binding_subexprs(
+  b : @ast.TsBinding,
+  out : Array[@ast.TsExpr],
+) -> Unit {
+  match b {
+    Ident(_) => ()
+    Target(e) => out.push(e)
+    Array(ab) => {
+      for elem in ab.items {
+        match elem {
+          Some(be) => {
+            collect_binding_subexprs(be.binding, out)
+            match be.default {
+              Some(d) => out.push(d)
+              None => ()
+            }
+          }
+          None => ()
+        }
+      }
+      match ab.rest {
+        Some(r) => collect_binding_subexprs(r, out)
+        None => ()
+      }
+    }
+    Object(ob) =>
+      for prop in ob.props {
+        match prop.key_expr {
+          Some(k) => out.push(k)
+          None => ()
+        }
+        collect_binding_subexprs(prop.binding, out)
+        match prop.default {
+          Some(d) => out.push(d)
+          None => ()
+        }
+      }
+  }
+}
+
+///|
+/// Every expression nested in a parameter list: a default value, plus
+/// anything inside a destructuring parameter's pattern. A parameter
+/// default is evaluated in the function's own scope, so
+/// `function (x = this.y) {}` reads the callee's `this` and must block
+/// the arrow conversion the same way a body reference does.
+fn param_subexprs(params : Array[@ast.TsParam]) -> Array[@ast.TsExpr] {
+  let out : Array[@ast.TsExpr] = []
+  for p in params {
+    match p.default {
+      Some(d) => out.push(d)
+      None => ()
+    }
+    match p.binding {
+      Some(b) => collect_binding_subexprs(b, out)
+      None => ()
+    }
+  }
+  out
+}
+
+///|
 fn binding_introduces_name(b : @ast.TsBinding, name : String) -> Bool {
   match b {
     Ident(n) => n == name
@@ -2818,8 +3060,13 @@ fn block_references_name(block : @ast.TsBlock, name : String) -> Bool {
 fn stmt_references_name(stmt : @ast.TsStmt, name : String) -> Bool {
   match stmt {
     Var(b, _, e) | Let(b, _, e) | Const(b, _, e) => {
-      if binding_introduces_name(b, name) {
-        return expr_references_name(e, name)
+      // Computed keys and defaults inside the pattern are ordinary
+      // expressions evaluated here; `binding_introduces_name` only
+      // answers what the pattern declares.
+      for sub in binding_subexprs(b) {
+        if expr_references_name(sub, name) {
+          return true
+        }
       }
       expr_references_name(e, name)
     }
@@ -2872,6 +3119,11 @@ fn stmt_references_name(stmt : @ast.TsStmt, name : String) -> Bool {
     ForOf(_, b, _, iter, body)
     | ForAwaitOf(_, b, _, iter, body)
     | ForIn(_, b, _, iter, body) => {
+      for sub in binding_subexprs(b) {
+        if expr_references_name(sub, name) {
+          return true
+        }
+      }
       if binding_introduces_name(b, name) {
         return expr_references_name(iter, name)
       }
@@ -2880,6 +3132,15 @@ fn stmt_references_name(stmt : @ast.TsStmt, name : String) -> Bool {
     Try(t, catch_b, catch_body, finally_) => {
       if block_references_name(t, name) {
         return true
+      }
+      match catch_b {
+        Some(bb) =>
+          for sub in binding_subexprs(bb) {
+            if expr_references_name(sub, name) {
+              return true
+            }
+          }
+        None => ()
       }
       let catch_hits = match catch_body {
         Some(b) => {
@@ -2984,7 +3245,14 @@ fn expr_references_name(e : @ast.TsExpr, name : String) -> Bool {
     AssignExpr(n, v) => n == name || expr_references_name(v, name)
     CompoundAssignExpr(t, _, v) =>
       expr_references_name(t, name) || expr_references_name(v, name)
-    AssignPattern(_, v) => expr_references_name(v, name)
+    AssignPattern(b, v) => {
+      for sub in binding_subexprs(b) {
+        if expr_references_name(sub, name) {
+          return true
+        }
+      }
+      expr_references_name(v, name)
+    }
     PropAssignExpr(recv, _, v) =>
       expr_references_name(recv, name) || expr_references_name(v, name)
     IndexAssignExpr(recv, idx, v) =>
@@ -3011,6 +3279,15 @@ fn expr_references_name(e : @ast.TsExpr, name : String) -> Bool {
     }
     FuncExpr(g) => func_body_references_name_as_free_var(g, name)
     ArrowFunc(params, _, body, _) => {
+      // Parameter defaults are evaluated when the arrow is CALLED, but
+      // they still live inside the arrow's scope — and an arrow inherits
+      // `this` / `super` from its enclosing context, so a default that
+      // reads them is a reference from out here.
+      for sub in param_subexprs(params) {
+        if expr_references_name(sub, name) {
+          return true
+        }
+      }
       for p in params {
         if p.name == name {
           return false
@@ -3493,6 +3770,32 @@ fn binop_precedence(op : @ast.TsBinOp) -> Int {
 }
 
 ///|
+/// Would printing this prefix operator immediately before its operand
+/// produce a different token? `+` before `+x` / `++x` gives `+++x`, and
+/// `-` before `-x` / `--x` gives `---x`.
+///
+/// Parenthesising the operand would also work and costs two bytes; a
+/// single space costs one.
+fn unary_merges_with_operand(op : @ast.TsUnaryOp, inner : @ast.TsExpr) -> Bool {
+  let leader = match inner {
+    UnaryOp(o, _) =>
+      match o {
+        Plus | PreInc => '+'
+        Neg | PreDec => '-'
+        _ => '?'
+      }
+    // `a++` and `a--` lead with whatever `a` leads with, so only the
+    // PREFIX forms can collide here.
+    _ => '?'
+  }
+  match op {
+    Plus | PreInc => leader == '+'
+    Neg | PreDec => leader == '-'
+    _ => false
+  }
+}
+
+///|
 fn unary_op_str(op : @ast.TsUnaryOp) -> String {
   match op {
     Neg => "-"
@@ -3829,11 +4132,37 @@ fn emit_native_class(
   // ident names (`"~standard"` / `"a-b"`) need bracket syntax
   // (`static ["~standard"] = init;`) — `static ~standard = …` is a
   // hard parse error.
+  // Private field declarations (`#secret;`). A `#` name only exists
+  // inside the class body that declares it, so `this.#secret = 7` in
+  // the constructor needs the declaration to be here — without it the
+  // assignment is a SyntaxError. The initializer stays in the
+  // constructor where the lowering put it; a bare declaration reads
+  // `undefined` and is immediately overwritten, which is what the
+  // source's own field initializer did.
+  //
+  // The class's own fields are exactly the `this.#x = …` statements at
+  // the TOP LEVEL of the constructor: the class lowering puts every
+  // instance field initializer there, including a bare `#x;` (as
+  // `this.#x = void 0`). `decl.properties` is empty on a lifted class,
+  // so it is not the source. Scanning only the top level is also what
+  // keeps this right for a nested class — its own fields live inside
+  // its own class node, and a reference to an OUTER `#x` is never an
+  // assignment at this level.
+  for name in class_private_this_assigns(decl, ctor_func) {
+    if !is_private_member_name(name) {
+      continue
+    }
+    e.nl()
+    e.write(name)
+    e.semi()
+  }
   for entry in decl.static_field_inits {
     e.nl()
     e.word("static")
     e.sep_after_word('A')
-    if is_valid_js_ident(entry.0) {
+    // A `#private` static is dotted-only too: `static ["#x"] = …` is a
+    // different member entirely.
+    if is_valid_js_ident(entry.0) || is_private_member_name(entry.0) {
       e.write(entry.0)
     } else {
       e.write("[")

@@ -167,6 +167,38 @@ fn link_module_graph(
     namespace_local_renames[path] = ns_locals
     rename_per_module[path] = module_renames
   }
+  // Every runtime binding the bundle will actually have, under its
+  // FINAL name: each module's top-level declarations, mapped through
+  // that module's renames, plus the namespace objects this pass
+  // synthesizes (a namespace can hold another namespace).
+  //
+  // This exists because filtering type-only exports at the enumeration
+  // sites did not converge. There were three of them — a namespace's own
+  // `export_specs`, the `import * as` path, and
+  // `enumerate_wildcard_reexports` — and zod found each one in turn:
+  // `$constructor`, then `$ZodBranded`, then `$RefinementCtx`, each a
+  // `ReferenceError` on load from a different arrival path. Patching the
+  // next site every time the corpus complained was the wrong loop.
+  //
+  // So the enumeration filters stay (they are precise and cheap, and
+  // they keep the object small), and this is the backstop: at the one
+  // place the object is BUILT, an entry whose value has no runtime
+  // binding cannot be emitted, whichever path put it there. Fail-closed
+  // by construction rather than by enumeration.
+  let runtime_bindings : Map[String, Bool] = {}
+  for path, node in modules {
+    let decls : Map[String, Bool] = {}
+    collect_local_decl_names_in_block(node.block, decls)
+    let renames = rename_per_module.get(path).unwrap_or({})
+    for n in decls.keys() {
+      runtime_bindings[renames.get(n).unwrap_or(n)] = true
+    }
+  }
+  for path, _ in modules {
+    for entry in namespace_local_renames.get(path).unwrap_or({}) {
+      runtime_bindings[entry.1] = true
+    }
+  }
   // ---- Phase 2: build per-module import substitution maps ----
   // `import_subs[path][local_alias_in_importer] = renamed_export_in_exporter`.
   // Walked AFTER phase 1 so we read the post-rename target name.
@@ -257,9 +289,17 @@ fn link_module_graph(
       match imp.namespace_binding {
         Some(ns_local) => {
           let props : Map[String, String] = {}
+          let dep_type_only = type_only_export_names(dep)
           for spec in dep.export_specs {
             // ESM: `import * as ns` does not include `default`.
             if spec.export_name == "default" {
+              continue
+            }
+            // Nor anything with no runtime value: this namespace can be
+            // synthesized as a real object too, and a `type` entry in it
+            // is a load-time ReferenceError.
+            if dep_type_only.contains(spec.local_name) ||
+              dep_type_only.contains(spec.export_name) {
               continue
             }
             match
@@ -317,7 +357,12 @@ fn link_module_graph(
         None => continue
       }
       let props : Map[String, String] = {}
+      let dep_type_only = type_only_export_names(dep)
       for spec in dep.export_specs {
+        if dep_type_only.contains(spec.local_name) ||
+          dep_type_only.contains(spec.export_name) {
+          continue
+        }
         match
           resolve_export(
             modules,
@@ -460,7 +505,7 @@ fn link_module_graph(
       }
     }
     let synthesized = synthesize_namespace_bindings_for(
-      escaping_namespaces, ns_subs, ns_locals,
+      escaping_namespaces, ns_subs, ns_locals, runtime_bindings,
     )
     // Synthesize `const localAlias = cjsVar.importedName;` for each
     // named import from a CJS-wrapped module (which has no export_specs).
@@ -735,6 +780,52 @@ fn entry_export_bindings(
 }
 
 ///|
+/// Export names of `node` that carry no runtime value, because the
+/// module declares them as a `type` alias or an `interface`.
+///
+/// A synthesized namespace object lists one property per export of its
+/// target, and a type-only export has nothing to point at: the entry
+/// emits `{ JSONType: JSONType, … }` and the bundle dies on load with
+/// `JSONType is not defined`. zod's `export * as util from "./util.js"`
+/// pulls in fifty-odd type aliases that way, and typebox's
+/// `TTypeArray` is the same bug reached through `export *`.
+///
+/// The test needs BOTH halves, and getting it wrong in either direction
+/// breaks the bundle:
+///
+///   * positive evidence of type-ness — this module declares the name as
+///     an alias or an interface. Without that, filtering on "no runtime
+///     declaration here" would drop a value the module re-exports from
+///     somewhere else.
+///   * negative evidence of value-ness — and no runtime binding under
+///     the same name. TypeScript merges declarations, so one name can be
+///     both: zod's core has `export interface $constructor` next to
+///     `export function $constructor`, and keying on the name alone
+///     dropped the function. `core$3.$constructor is not a function`.
+///
+/// One gap remains, and the code cannot see it from here:
+/// `import { T } from …; export { T }` with no `type` marker on either
+/// end declares nothing locally, so it is kept — a type entry that will
+/// still throw. `isolatedModules` / `verbatimModuleSyntax` forbid that
+/// spelling, and `re.type_only` covers the `export type { … }` form.
+fn type_only_export_names(node : ModuleNode) -> Map[String, Bool] {
+  let runtime : Map[String, Bool] = {}
+  collect_local_decl_names_in_block(node.block, runtime)
+  let out : Map[String, Bool] = {}
+  for ta in node.type_aliases {
+    if !runtime.contains(ta.name) {
+      out[ta.name] = true
+    }
+  }
+  for i in node.interfaces {
+    if !runtime.contains(i.name) {
+      out[i.name] = true
+    }
+  }
+  out
+}
+
+///|
 /// Emit one `const ns_local = { exp1: resolved1, exp2: resolved2, ... };`
 /// per namespace import seen in this module. The resulting binding
 /// stands in for the namespace object at runtime, restoring spread /
@@ -743,6 +834,7 @@ fn synthesize_namespace_bindings_for(
   escaping_namespaces : Array[String],
   ns_subs : Map[String, Map[String, String]],
   ns_locals : Map[String, String],
+  runtime_bindings : Map[String, Bool],
 ) -> Array[@ast.TsStmt] {
   let out : Array[@ast.TsStmt] = []
   for ns_local in escaping_namespaces {
@@ -753,6 +845,13 @@ fn synthesize_namespace_bindings_for(
     let binding_name = ns_locals.get(ns_local).unwrap_or(ns_local)
     let lit_entries : Array[(String, @ast.TsExpr)] = []
     for p in props {
+      // An entry whose value names nothing the bundle declares is a
+      // `ReferenceError` the moment this object is evaluated. See
+      // `runtime_bindings` at the top of the linker for why the check
+      // lives here and not only at the enumeration sites.
+      if !runtime_bindings.contains(p.1) {
+        continue
+      }
       lit_entries.push((p.0, @ast.TsExpr::Var(p.1)))
     }
     out.push(
@@ -940,9 +1039,22 @@ fn enumerate_wildcard_reexports(
           Some(node) => node
           None => continue
         }
+        let dep_type_only = type_only_export_names(dep)
         for spec in dep.export_specs {
           // ESM: `export *` does not re-export `default`.
           if spec.export_name == "default" {
+            continue
+          }
+          // …nor a type-only export. This is the THIRD site that needs
+          // the filter, and it is where zod's `$ZodBranded` came in:
+          // a name re-exported through `export * from "./x.js"` is
+          // declared in `x`, not in the module the namespace names, so
+          // filtering only at the namespace's own `export_specs` misses
+          // it. The check is keyed to the module that DECLARES the name,
+          // which is what makes it right per source rather than per
+          // namespace.
+          if dep_type_only.contains(spec.local_name) ||
+            dep_type_only.contains(spec.export_name) {
             continue
           }
           if !props.contains(spec.export_name) {

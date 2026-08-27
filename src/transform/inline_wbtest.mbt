@@ -85,3 +85,98 @@ test "inline: chained single-use decls collapse in one call" {
   assert_false(out.contains("const b"))
   assert_true(out.contains("return (x + 1) * 2"))
 }
+
+// ---------------------------------------------------------------
+// The declaration must not outlive its reference
+// ---------------------------------------------------------------
+//
+// `count_var_uses_stmt` decides there is exactly one local use and
+// `substitute_stmt` rewrites it. They walk the same tree, and every
+// time one of them has been missing a statement kind the result was a
+// dropped declaration with a live reference — "ReferenceError: f0 is
+// not defined". `try` was one, then a bare block and a `switch` case
+// body. The pass now checks its own work, so a future omission declines
+// instead of miscompiling.
+//
+// These go through the full pipeline: the shape only arises after
+// `fold` merges the surrounding declarations, which is why `--minify`
+// alone kept the function and `--fold --minify` dropped it.
+
+///|
+fn pipeline_js(src : String) -> String raise {
+  let files : Map[String, String] = { "entry.js": src }
+  let opts = BundleOptions::default()
+    .with_fold(true)
+    .with_minify(true)
+    .with_treeshake(true)
+  match bundle_modules(files, "entry.js", opts) {
+    Ok(out) => out.js
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+/// Every name the bundle calls must be a name the bundle declares.
+fn no_orphan_call(js : String, name : String) -> Bool {
+  if !js.contains("\{name}(") {
+    return true
+  }
+  js.contains("function \{name}(") || js.contains("\{name}=function")
+}
+
+///|
+test "inline: a use inside a bare block keeps its declaration" {
+  let out = pipeline_js(
+    (
+      #|let c = 0, b = 10;
+      #|const trace = [];
+      #|function f0(p0, p1) { trace.push(0); return 1; }
+      #|{
+      #|  let v3 = f0(10, undefined);
+      #|  c = b === 20 && v3;
+      #|}
+      #|console.log([c, trace]);
+      #|
+    ),
+  )
+  assert_true(no_orphan_call(out, "f0"), msg="orphaned call: \{out}")
+}
+
+///|
+test "inline: a use inside a switch case keeps its declaration" {
+  let out = pipeline_js(
+    (
+      #|let c = 0, k = 1;
+      #|const trace = [];
+      #|function f0(p0) { trace.push(0); return 1; }
+      #|switch (k) {
+      #|  case 1: {
+      #|    let v3 = f0(10);
+      #|    c = v3;
+      #|    break;
+      #|  }
+      #|}
+      #|console.log([c, trace]);
+      #|
+    ),
+  )
+  assert_true(no_orphan_call(out, "f0"), msg="orphaned call: \{out}")
+}
+
+///|
+test "inline: a use inside a try block keeps its declaration" {
+  let out = pipeline_js(
+    (
+      #|let c = 0, b = 10;
+      #|const trace = [];
+      #|function f0(p0) { trace.push(0); return 1; }
+      #|try {
+      #|  let v3 = f0(10);
+      #|  c = b === 20 && v3;
+      #|} catch (e) {}
+      #|console.log([c, trace]);
+      #|
+    ),
+  )
+  assert_true(no_orphan_call(out, "f0"), msg="orphaned call: \{out}")
+}

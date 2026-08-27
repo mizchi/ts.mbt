@@ -259,6 +259,15 @@ pub fn fold_block(block : @ast.TsBlock) -> @ast.TsBlock {
       | Const(_, _, FuncExpr(_)) => true
       _ => false
     }
+    // terser's `drop_debugger`. The peephole pass drops these too, but
+    // it runs LAST, and by then the opportunity has passed: a
+    // `debugger` inside `function f() { debugger; return 1; }` makes the
+    // body two statements, so `call_inline.mbt` declines the function
+    // and `console.log(f())` never collapses to `console.log(1)`.
+    // Dropping it here, before inlining, is what makes that work.
+    if s is Debugger {
+      continue
+    }
     if exited {
       if is_hoisted_func {
         // Collect hoisted funcs to splice in before the return.
@@ -469,6 +478,18 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
       // Generalised: any statically truthy/falsy literal may fold the
       // branch. `is_js_truthy` / `is_js_falsy` cover `BoolLit`,
       // `IntLit(0)`, `StringLit("")`, `NullLit`, and friends.
+      //
+      // They also cover an object or array literal, which is truthy
+      // whatever is INSIDE it — and its contents still have to be
+      // evaluated. `if ({ ...bag, g: f() }) { … }` folded to the
+      // then-branch and `f()` never ran. So keep the condition as a
+      // statement of its own when it is not a pure value. The fuzzer's
+      // effect trace found this; a value comparison could not, because
+      // nothing reads the object.
+      let folds = is_js_truthy(cond_f) || is_js_falsy(cond_f)
+      if folds && !is_pure_value(cond_f) {
+        out.push(Expr(cond_f))
+      }
       if is_js_truthy(cond_f) {
         // Then-branch wins; splice its statements in directly so
         // subsequent passes (treeshake, mangle) see them at the
@@ -970,8 +991,32 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
 /// see literals that only appear after lower-level folds (e.g.
 /// `1 + 0 + x` -> `1 + x` -> after the outer add fold, `1 + x`
 /// stays put because `1` isn't an identity element for `+`).
+/// Is this expression `undefined`, however it is spelled? `void <pure>`
+/// evaluates its operand and yields `undefined`; with a literal operand
+/// there is nothing to evaluate.
+fn expr_is_literal_undefined(expr : @ast.TsExpr) -> Bool {
+  match expr {
+    Var("undefined") => true
+    UnaryOp(@ast.TsUnaryOp::Void, inner) => is_pure_value(inner)
+    _ => false
+  }
+}
+
+///|
+fn both_literal_undefined(l : @ast.TsExpr, r : @ast.TsExpr) -> Bool {
+  expr_is_literal_undefined(l) && expr_is_literal_undefined(r)
+}
+
+///|
 fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
   match expr {
+    // Both sides `undefined`. This shows up after a call is inlined —
+    // `f(undefined)` with a body of `void 0 === x` becomes
+    // `void 0 === void 0`, which is 14 bytes for a constant.
+    BinOp(BinEq, l, r) | BinOp(AbstractEq, l, r) if both_literal_undefined(l, r) =>
+      BoolLit(true)
+    BinOp(BinNe, l, r) | BinOp(AbstractNe, l, r) if both_literal_undefined(l, r) =>
+      BoolLit(false)
     BinOp(op, l, r) => {
       let lf = fold_expr(l)
       let rf = fold_expr(r)
@@ -984,9 +1029,22 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
         (Not, _) if is_js_truthy(inner_f) => BoolLit(false)
         (Not, _) if is_js_falsy(inner_f) => BoolLit(true)
         // `!(a === b)` → `a !== b` etc. (saves 2 bytes vs `!(...)`).
+        //
+        // The same rewrite lives in `peephole.mbt`, and it was gated
+        // there and not here, which is why the rule-equivalence harness
+        // still reported `!(a < b)` as unsound after the gate went in.
+        // Two implementations of one rule, one of them fixed.
         (Not, BinOp(inner_op, a, b)) =>
           match negate_comparison_op(inner_op) {
-            Some(negated) => BinOp(negated, a, b)
+            Some(negated) =>
+              // Equality negation always holds. Relational negation does
+              // not: every NaN comparison is false, so `!(a < b)` is
+              // true where `a >= b` is false.
+              if is_equality_op(inner_op) || relational_negation_is_safe(a, b) {
+                BinOp(negated, a, b)
+              } else {
+                UnaryOp(op, inner_f)
+              }
             None => UnaryOp(op, inner_f)
           }
         // `!!(comparison)` → `comparison` — comparisons already return
@@ -995,8 +1053,14 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
         (Not, UnaryOp(@ast.TsUnaryOp::Not, BinOp(inner_op, a, b))) if is_comparison_op(
             inner_op,
           ) => BinOp(inner_op, a, b)
-        (Neg, IntLit(n)) => IntLit(-n)
-        (Neg, NumberLit(n)) => NumberLit(-n)
+        // `-0` is NOT `0`. `Object.is(x, -0)`, `1 / x`, and
+        // `Math.sign` all tell them apart, and MoonBit's `Int` cannot
+        // represent the difference — so folding the negation away turned
+        // every `-0` literal in a program into `0`. It made the
+        // rule-equivalence harness's own encoder report every zero as
+        // negative, which is a good illustration of how quiet this is.
+        (Neg, IntLit(n)) if n != 0 => IntLit(-n)
+        (Neg, NumberLit(n)) if n != 0.0 => NumberLit(-n)
         (BitwiseNot, IntLit(n)) => IntLit(-(n + 1))
         // `~~x` → `x` when x is a pure integer literal (double bitwise-not = identity).
         (BitwiseNot, UnaryOp(@ast.TsUnaryOp::BitwiseNot, inner_inner)) =>
@@ -1410,10 +1474,22 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       match (recv_f, p) {
         (StringLit(s), "length") => IntLit(s.length())
         // Only safe when no spread elements — `[...it].length` expands at
-        // runtime to the iterable's count, not 1.
+        // runtime to the iterable's count, not 1 — AND when evaluating
+        // the elements has no observable effect. Folding to the count
+        // DISCARDS the elements, so
+        //
+        //   [b, f0(y, true)].length;
+        //
+        // became `2` and `f0` was never called. The count is right and
+        // the program is wrong. `is_pure_value` lives in this file and
+        // already draws this line for the annihilator folds (`x * 0`);
+        // this fold just was not asking it.
+        //
+        // Found by `just fuzz-mangle`, shrunk to six nodes.
         (ArrayLit(items), "length") if items
           .iter()
-          .all(fn(it) { !(it is Spread(_)) }) => IntLit(items.length())
+          .all(fn(it) { !(it is Spread(_)) && is_pure_value(it) }) =>
+          IntLit(items.length())
         // Well-known Math / Number constants.
         (Var("Math"), "PI") => NumberLit(3.141592653589793)
         (Var("Math"), "E") => NumberLit(2.718281828459045)
@@ -1568,7 +1644,15 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       let bf = fold_expr(b)
       // `(pure, x)` → `x`: the left side has no observable effect
       // so only the right value matters.
-      if is_pure_value(af) {
+      //
+      // Except that dropping the comma changes what `x` MEANS when `x`
+      // is a member expression and the result is called. `(0, o.m)()`
+      // calls `o.m` with `this` undefined — that is the whole reason
+      // TypeScript emits the form — while `o.m()` binds `this` to `o`.
+      // The comma is load-bearing there, so a member expression keeps
+      // it and lets the caller decide.
+      if is_pure_value(af) &&
+        !(bf is PropAccess(_, _) || bf is IndexAccess(_, _)) {
         bf
       } else {
         Seq(af, bf)
@@ -2947,6 +3031,49 @@ fn strip_trailing_break(block : @ast.TsBlock) -> Array[@ast.TsStmt] {
 }
 
 ///|
+/// Is this expression's value certainly a number? Delegates to the same
+/// classifier the relational-negation gate uses.
+fn is_number_valued(e : @ast.TsExpr) -> Bool {
+  cmp_kind(e) is CmpNum
+}
+
+///|
+/// Certainly a number, and certainly not a negative zero.
+///
+/// A collection size is a non-negative integer, a bitwise operator
+/// returns an int32, and a boolean coerces to 0 or 1 — none of those can
+/// be `-0`, and none of them can produce one when multiplied by zero. A
+/// bare `-0` literal survives as `UnaryOp(Neg, IntLit(0))`, which is
+/// exactly what this has to exclude.
+fn is_number_never_negzero(e : @ast.TsExpr) -> Bool {
+  match e {
+    PropAccess(_, "length") | PropAccess(_, "size") => true
+    BinOp(BitAnd, _, _)
+    | BinOp(BitOr, _, _)
+    | BinOp(BitXor, _, _)
+    | BinOp(Shl, _, _)
+    | BinOp(Shr, _, _)
+    | BinOp(UShr, _, _) => true
+    BoolLit(_) | UnaryOp(@ast.TsUnaryOp::Not, _) => true
+    BinOp(BinEq, _, _)
+    | BinOp(BinNe, _, _)
+    | BinOp(AbstractEq, _, _)
+    | BinOp(AbstractNe, _, _)
+    | BinOp(BinLt, _, _)
+    | BinOp(BinLe, _, _)
+    | BinOp(BinGt, _, _)
+    | BinOp(BinGe, _, _)
+    | BinOp(Instanceof, _, _)
+    | BinOp(In, _, _) => true
+    IntLit(n) => n > 0
+    NumberLit(n) => n > 0.0
+    As(inner, _) | Satisfies(inner, _) | NonNull(inner) =>
+      is_number_never_negzero(inner)
+    _ => false
+  }
+}
+
+///|
 /// Combine two already-folded sub-expressions through `op`,
 /// applying identity / annihilator rewrites where it's safe.
 fn fold_binop(
@@ -2955,37 +3082,30 @@ fn fold_binop(
   r : @ast.TsExpr,
 ) -> @ast.TsExpr {
   match (op, l, r) {
-    // Numeric identity: x + 0, 0 + x, x - 0
-    (Add, _, IntLit(0)) | (Add, _, NumberLit(0.0)) => l
-    (Add, IntLit(0), _) | (Add, NumberLit(0.0), _) =>
-      if is_pure_value(l) {
-        r
-      } else {
-        BinOp(op, l, r)
-      }
-    (Sub, _, IntLit(0)) | (Sub, _, NumberLit(0.0)) => l
-    // x * 1, 1 * x, x / 1
-    (Mul, _, IntLit(1)) | (Mul, _, NumberLit(1.0)) => l
-    (Mul, IntLit(1), _) | (Mul, NumberLit(1.0), _) =>
-      if is_pure_value(l) {
-        r
-      } else {
-        BinOp(op, l, r)
-      }
-    (Div, _, IntLit(1)) | (Div, _, NumberLit(1.0)) => l
-    // x * 0, 0 * x — only safe to fold when the other side is pure.
-    (Mul, _, IntLit(0)) | (Mul, _, NumberLit(0.0)) =>
-      if is_pure_value(l) {
-        IntLit(0)
-      } else {
-        BinOp(op, l, r)
-      }
-    (Mul, IntLit(0), _) | (Mul, NumberLit(0.0), _) =>
-      if is_pure_value(r) {
-        IntLit(0)
-      } else {
-        BinOp(op, l, r)
-      }
+    // Numeric identity: x + 0, 0 + x, x - 0, x * 1, x / 1, x * 0.
+    //
+    // None of these hold for a non-number. `undefined + 0` is `NaN` and
+    // `undefined` is `undefined`; `"a" - 0` is `NaN` and `"a"` is
+    // `"a"`; `Symbol() * 1` throws where the Symbol does not. The rule
+    // catalogue said "for integers" and nothing established that the
+    // operand was one.
+    //
+    // `+ 0` and `* 0` need more than "a number": `-0 + 0` is `0` while
+    // `-0` is `-0`, and `-1 * 0` is `-0` rather than `0`. So those two
+    // want an operand that is a number AND cannot be, or produce, a
+    // negative zero — a collection size, a bitwise result, a boolean.
+    (Add, _, IntLit(0)) | (Add, _, NumberLit(0.0)) if is_number_never_negzero(l) =>
+      l
+    (Add, IntLit(0), _) | (Add, NumberLit(0.0), _) if is_number_never_negzero(r) =>
+      r
+    (Sub, _, IntLit(0)) | (Sub, _, NumberLit(0.0)) if is_number_valued(l) => l
+    (Mul, _, IntLit(1)) | (Mul, _, NumberLit(1.0)) if is_number_valued(l) => l
+    (Mul, IntLit(1), _) | (Mul, NumberLit(1.0), _) if is_number_valued(r) => r
+    (Div, _, IntLit(1)) | (Div, _, NumberLit(1.0)) if is_number_valued(l) => l
+    (Mul, _, IntLit(0)) | (Mul, _, NumberLit(0.0)) if is_number_never_negzero(l) =>
+      IntLit(0)
+    (Mul, IntLit(0), _) | (Mul, NumberLit(0.0), _) if is_number_never_negzero(r) =>
+      IntLit(0)
     // Boolean short-circuit — BoolLit cases come first; then extend
     // to integer / string / null literals whose truthiness is known.
     (And, BoolLit(true), _) => r

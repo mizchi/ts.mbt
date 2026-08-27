@@ -81,10 +81,16 @@ pub fn escape_breakdown(
   // FuncArg edges, so a value reaching a sink through a parameter or a
   // return still tracks back to the binding it came from.
   let obs_map = analyze_observability(graph, scoped_sinks)
+  // Class members, so an observed class contributes the names its
+  // instances carry. `console.log(new C())` seeds C's own symbol (see
+  // `seed_from_expr`) and this is what turns that into `C`'s field and
+  // method names.
+  let class_members = class_member_names(block)
   let reserved_obs = reserved_props_from_observability(
     graph,
     obs_map,
     type_env~,
+    class_members~,
   )
   // A sink argument that IS an object literal (`external.send({ id: 1 })`)
   // has no free variable to seed, so the flow analysis never sees it.

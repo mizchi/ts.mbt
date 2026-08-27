@@ -28,6 +28,27 @@ fn surface_props_of(source : String, exported : Array[String]) -> Array[String] 
 }
 
 ///|
+/// Same, but with the class lift applied first, as the real pipeline
+/// does: `bundle.mbt` runs `iife-class-lift` before `export-surface`, so
+/// a `class C { … }` reaches this pass as a `NativeClassStmt`. Parsed
+/// straight from source it is still the IIFE-and-prototype-assignment
+/// form, where `w.classes` is empty and every class test would pass
+/// vacuously.
+fn surface_props_of_classes(
+  source : String,
+  exported : Array[String],
+) -> Array[String] {
+  let block = @parser.Parser::from_source(source).parse_module_block() catch {
+    e => abort("parse error: \{e}")
+  }
+  let locals : Map[String, Bool] = {}
+  for n in exported {
+    locals[n] = true
+  }
+  exported_surface_props(iife_class_lift_block(block.block), locals)
+}
+
+///|
 /// Compare a reserved-name set against an expected list. The pass
 /// collects into a `Map`, whose iteration order is unspecified, so
 /// compare as sets rather than as sequences.
@@ -326,4 +347,38 @@ test "mangle: a call with explicit type arguments follows its renamed callee" {
     Ok(out) => assert_false(out.js.contains("identity"))
     Err(e) => fail("bundle error: \{e}")
   }
+}
+
+///|
+test "export surface: a class reached from many sites is still fully reserved" {
+  // The memo in `surface_should_walk` exists because a class reached
+  // from N `new C(…)` sites was escaped N times, and each escape walked
+  // every method's returns, which reach more `new` — exponential in the
+  // call graph's branching. neverthrow is 33 KB in five files and did
+  // not finish in seven minutes.
+  //
+  // The risk in memoizing is the opposite failure: walk the class once,
+  // miss part of its surface, rename a name a consumer reads. So this
+  // pins the surface of a class reached three separate ways — directly
+  // from an export, through a factory function, and from a method of
+  // another class — and every member has to survive.
+  let names = surface_props_of_classes(
+    (
+      #|class Inner {
+      #|  constructor() { this.innerField = 1; }
+      #|  innerMethod() { return { innerKey: 2 }; }
+      #|}
+      #|class Outer {
+      #|  constructor() { this.outerField = new Inner(); }
+      #|  outerMethod() { return new Inner(); }
+      #|}
+      #|function make() { return new Inner(); }
+      #|const entry = { first: new Outer(), second: make(), third: new Inner() };
+    ),
+    ["entry"],
+  )
+  assert_names(names, [
+    "first", "second", "third", "outerField", "outerMethod", "innerField", "innerMethod",
+    "innerKey",
+  ])
 }

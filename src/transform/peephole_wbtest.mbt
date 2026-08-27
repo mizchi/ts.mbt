@@ -397,10 +397,33 @@ test "peephole: !(a !== b) folds to a === b" {
 }
 
 ///|
-test "peephole: !(a < b) folds to a >= b" {
-  let out = peep_one("const r = !(a < b);\n")
+test "peephole: !(a < b) folds to a >= b when both sides are numbers" {
+  // Written with bare names before, which is the unsound case: for
+  // `a = undefined`, `!(a < b)` is true and `a >= b` is false, because
+  // every NaN comparison is false. `.length` is a non-negative integer,
+  // so this pair cannot go through NaN.
+  let out = peep_one("const r = !(xs.length < ys.length);\n")
   assert_true(out.contains(">="), msg="expected >= but got: \{out}")
   assert_false(out.contains("<"))
+}
+
+///|
+test "peephole: !(a < b) is kept when either side could be NaN" {
+  let out = peep_one("const r = !(a < b);\n")
+  assert_true(out.contains("!(a < b)"), msg="unsound rewrite: \{out}")
+}
+
+///|
+test "peephole: !(a < b) is kept when the sides are a string and a number" {
+  // `!("x" < 3)` is true; `"x" >= 3` is false.
+  let out = peep_one("const r = !(\"x\" < n.length);\n")
+  assert_false(out.contains(">="), msg="unsound rewrite: \{out}")
+}
+
+///|
+test "peephole: !(a === b) still folds — equality never goes through NaN" {
+  let out = peep_one("const r = !(a === b);\n")
+  assert_true(out.contains("!=="), msg="expected !== but got: \{out}")
 }
 
 ///|
@@ -570,22 +593,13 @@ test "pretty emit: x[\"prop\"] stays as bracket form" {
 }
 
 ///|
-test "peephole: arr.length === 0 folds to !arr.length" {
+test "peephole: arr.length === 0 keeps the comparison" {
+  // Removed with its three siblings: `{ length: undefined }` makes
+  // `=== 0` false while `!x.length` is true.
   let out = peep_one("const r = arr.length === 0;\n")
-  assert_true(
-    out.contains("!arr.length"),
-    msg="expected !arr.length, got: \{out}",
-  )
-  assert_false(out.contains("=== 0"), msg="expected no === 0, got: \{out}")
-}
-
-///|
-test "peephole: 0 === arr.length folds to !arr.length (reversed)" {
-  let out = peep_one("const r = 0 === arr.length;\n")
-  assert_true(
-    out.contains("!arr.length"),
-    msg="expected !arr.length, got: \{out}",
-  )
+  assert_true(out.contains("=== 0"), msg="rewrote it: \{out}")
+  let flipped = peep_one("const r = 0 === arr.length;\n")
+  assert_true(flipped.contains("==="), msg="rewrote it: \{flipped}")
 }
 
 ///|
@@ -906,13 +920,14 @@ test "peephole: x ? y : x → x && y" {
 }
 
 ///|
-test "peephole: String(x) folds to \"\"+x" {
-  let out = minify_one("const s = String(x);")
-  assert_true(
-    out.contains("\"\""),
-    msg="expected empty string concat, got: \{out}",
-  )
-  assert_false(out.contains("String("), msg="expected no String(), got: \{out}")
+test "peephole: String(x) folds to \"\"+x only for a string or number" {
+  // `String` calls ToString; `+` calls ToPrimitive with a DEFAULT hint.
+  // `String(sym)` is "Symbol(s)" and `"" + sym` throws, and any object
+  // with both `valueOf` and `toString` differs quietly.
+  let known = minify_one("const s = String(n.length);")
+  assert_true(known.contains("\"\""), msg="missed the saving: \{known}")
+  let unknown = minify_one("const s = String(x);")
+  assert_true(unknown.contains("String("), msg="unsound rewrite: \{unknown}")
 }
 
 ///|
@@ -923,23 +938,24 @@ test "peephole: x.y != null ? x.y.z : void 0 → x.y?.z (chained optional)" {
 }
 
 ///|
-test "peephole: `${x}` folds to \"\"+x (single interpolation)" {
-  let out = minify_one("const s = `${x}`;")
-  assert_true(
-    out.contains("\"\""),
-    msg="expected empty string concat, got: \{out}",
-  )
-  assert_false(
-    out.contains("`"),
-    msg="expected no template literal, got: \{out}",
-  )
+test "peephole: `${s}` folds to \"\"+s only when the hole is a string" {
+  // Template interpolation is ToString; `+` is ToPrimitive with a
+  // DEFAULT hint and so prefers `valueOf`. For an object with both they
+  // disagree, and for a Symbol one throws. So the hole has to be a
+  // string already.
+  let known = minify_one("const s = `${\"a\" + b}`;")
+  assert_false(known.contains("`"), msg="missed the saving: \{known}")
+  let unknown = minify_one("const s = `${x}`;")
+  assert_true(unknown.contains("`"), msg="unsound rewrite: \{unknown}")
 }
 
 ///|
-test "peephole: Array.prototype.slice.call(x) folds to [...x]" {
+test "peephole: Array.prototype.slice.call(x) keeps the slice" {
+  // `slice` accepts any array-LIKE; a spread needs an ITERABLE. So
+  // `Array.prototype.slice.call(0, 0)` is `[]` where `[...0]` throws,
+  // and the same holds for any `{ length, 0: … }` bag.
   let out = minify_one("const r = Array.prototype.slice.call(args);")
-  assert_true(out.contains("[..."), msg="expected spread array, got: \{out}")
-  assert_false(out.contains("slice"), msg="expected no slice, got: \{out}")
+  assert_true(out.contains("slice"), msg="rewrote it: \{out}")
 }
 
 ///|
@@ -1058,17 +1074,21 @@ test "peephole: if (c) { stmts } else {} drops empty else" {
 }
 
 ///|
-test "peephole: x.length > 0 → !!x.length" {
-  let out = minify_one("const r = arr.length > 0;")
-  assert_true(out.contains("!!"), msg="expected !!, got: \{out}")
-  assert_false(out.contains(">"), msg="expected no >, got: \{out}")
-}
-
-///|
-test "peephole: x.length <= 0 → !x.length" {
-  let out = minify_one("const r = arr.length <= 0;")
-  assert_true(out.contains("!arr"), msg="expected !arr, got: \{out}")
-  assert_false(out.contains("<="), msg="expected no <=, got: \{out}")
+test "peephole: length comparisons are NOT rewritten to truthiness" {
+  // These four rewrites were removed. `.length` is only a non-negative
+  // number when the receiver is an array or a string, and peephole has
+  // no types: `(0).length` is `undefined`, so `undefined <= 0` is false
+  // while `!undefined` is true, and `{ length: -1 }` makes `> 0` false
+  // while `!!(-1)` is true. Found by
+  // `scripts/verify_rule_equivalence.mjs`.
+  let gt = minify_one("const r = arr.length > 0;")
+  assert_true(gt.contains(">"), msg="rewrote length > 0: \{gt}")
+  let le = minify_one("const r = arr.length <= 0;")
+  assert_true(le.contains("<="), msg="rewrote length <= 0: \{le}")
+  let ne = minify_one("const r = arr.length !== 0;")
+  assert_true(ne.contains("!=="), msg="rewrote length !== 0: \{ne}")
+  let eq = minify_one("const r = arr.size === 0;")
+  assert_true(eq.contains("==="), msg="rewrote size === 0: \{eq}")
 }
 
 ///|
@@ -1200,13 +1220,9 @@ test "peephole: Number.parseFloat → parseFloat" {
 }
 
 ///|
-test "peephole: Array.prototype.slice.call(x, 0) → [...x]" {
+test "peephole: Array.prototype.slice.call(x, 0) keeps the slice" {
   let out = minify_one("const r = Array.prototype.slice.call(arr, 0);")
-  assert_false(out.contains("slice"), msg="expected no slice, got: \{out}")
-  assert_true(
-    out.contains("...arr") || out.contains("arr"),
-    msg="expected spread, got: \{out}",
-  )
+  assert_true(out.contains("slice"), msg="rewrote it: \{out}")
 }
 
 ///|
@@ -1289,13 +1305,11 @@ test "peephole: catch(e) where e is used → binding kept" {
 }
 
 ///|
-test "peephole: template literal with prefix and no suffix → string concat" {
-  let out = minify_one("const r = `prefix${x}`;")
-  assert_false(out.contains("`"), msg="expected no backticks, got: \{out}")
-  assert_true(
-    out.contains("\"prefix\"+x") || out.contains("'prefix'+x"),
-    msg="expected string concat, got: \{out}",
-  )
+test "peephole: prefixed template folds only when the hole is a string" {
+  let known = minify_one("const r = `prefix${\"a\" + x}`;")
+  assert_false(known.contains("`"), msg="missed the saving: \{known}")
+  let unknown = minify_one("const r = `prefix${x}`;")
+  assert_true(unknown.contains("`"), msg="unsound rewrite: \{unknown}")
 }
 
 ///|
@@ -1365,28 +1379,37 @@ test "peephole: if(x==null){x=y} → x??=y" {
 }
 
 ///|
-test "peephole: x===true → x, x===false → !x" {
-  // if(x===true) y() → x&&y() after short-circuit fold; no boolean literal remains
-  let r1 = minify_one("if (x === true) y();")
+test "peephole: b===true → b, b===false → !b for a boolean operand" {
+  // These used to be written with a bare `x`, which is unsound: for
+  // `x = 1`, `x === true` is false while `x` is truthy. The rewrite is
+  // gated on the operand being provably boolean now, so the cases have
+  // to supply one.
+  let r1 = minify_one("if ((a < b) === true) y();")
   assert_false(r1.contains("==="), msg="expected no === after fold, got: \{r1}")
   assert_false(
     r1.contains("true") || r1.contains("!0"),
     msg="expected no bool lit, got: \{r1}",
   )
-  let r2 = minify_one("if (x === false) y();")
+  let r2 = minify_one("if ((a < b) === false) y();")
   assert_false(
     r2.contains("==="),
     msg="expected no === in false-fold, got: \{r2}",
   )
-  assert_true(r2.contains("!x"), msg="expected !x from x===false, got: \{r2}")
+  assert_true(
+    r2.contains("!(a<b)"),
+    msg="expected !(a<b) from ===false, got: \{r2}",
+  )
 }
 
 ///|
-test "peephole: x!==true → !x, x!==false → x" {
-  let r1 = minify_one("if (x !== true) y();")
+test "peephole: b!==true → !b, b!==false → b for a boolean operand" {
+  let r1 = minify_one("if ((a < b) !== true) y();")
   assert_false(r1.contains("!=="), msg="expected no !== after fold, got: \{r1}")
-  assert_true(r1.contains("!x"), msg="expected !x from x!==true, got: \{r1}")
-  let r2 = minify_one("if (x !== false) y();")
+  assert_true(
+    r1.contains("!(a<b)"),
+    msg="expected !(a<b) from !==true, got: \{r1}",
+  )
+  let r2 = minify_one("if ((a < b) !== false) y();")
   assert_false(r2.contains("!=="), msg="expected no !== after fold, got: \{r2}")
   assert_false(
     r2.contains("false") || r2.contains("!1"),
@@ -1413,16 +1436,15 @@ test "peephole: Object.prototype.hasOwnProperty.call → Object.hasOwn" {
 }
 
 ///|
-test "peephole: x.hasOwnProperty(key) → Object.hasOwn(x, key)" {
+test "peephole: x.hasOwnProperty(key) keeps the receiver's own method" {
+  // The rewrite replaced whatever `obj.hasOwnProperty` resolves to with
+  // the built-in, so an object that defines its own — a parsed JSON
+  // payload, a config bag — stopped calling it. The
+  // `Object.prototype.hasOwnProperty.call(obj, key)` form names the
+  // built-in explicitly and is still folded.
   let r = minify_one("obj.hasOwnProperty(key);")
-  assert_true(
-    r.contains("Object.hasOwn"),
-    msg="expected Object.hasOwn, got: \{r}",
-  )
-  assert_false(
-    r.contains("hasOwnProperty"),
-    msg="expected no hasOwnProperty, got: \{r}",
-  )
+  assert_true(r.contains("obj.hasOwnProperty"), msg="rewrote it: \{r}")
+  assert_false(r.contains("XXXnever"), msg="unused, got: \{r}")
 }
 
 ///|
@@ -1451,9 +1473,14 @@ test "peephole: string literal concatenation folding" {
 }
 
 ///|
-test "peephole: additive identity 0 + x → x" {
-  let out = peep_one("const a = 0 + n;")
-  assert_false(out.contains("0 +"), msg="expected no 0 + n, got: \{out}")
+test "peephole: additive identity 0 + x → x only for a safe number" {
+  // `undefined + 0` is `NaN`, `"a" + 0` is `"a0"`, and `-0 + 0` is `0`
+  // where `-0` is `-0`. A collection size is a non-negative integer and
+  // so is safe.
+  let known = minify_one("const a = 0 + n.length;")
+  assert_false(known.contains("0+"), msg="missed the saving: \{known}")
+  let unknown = peep_one("const a = 0 + n;\n")
+  assert_true(unknown.contains("0 + n"), msg="unsound fold: \{unknown}")
 }
 
 ///|
@@ -1474,16 +1501,12 @@ test "peephole: double negation stripped from if condition" {
 }
 
 ///|
-test "peephole: x.toString() → '' + x" {
+test "peephole: x.toString() is kept" {
+  // `undefined.toString()` throws where `"" + undefined` does not, `+`
+  // prefers `valueOf` over `toString`, and a Symbol is the other way
+  // round again.
   let out = minify_one("const s = x.toString();")
-  assert_false(
-    out.contains("toString"),
-    msg="expected no toString(), got: \{out}",
-  )
-  assert_true(
-    out.contains("\"\""),
-    msg="expected empty string prefix, got: \{out}",
-  )
+  assert_true(out.contains("toString"), msg="rewrote it: \{out}")
 }
 
 ///|
@@ -1654,4 +1677,171 @@ test "peephole: an ordinary tail declaration still folds" {
       )
     Err(e) => fail("bundle error: \{e}")
   }
+}
+
+// ---------------------------------------------------------------
+// `this` hidden inside a binding pattern
+// ---------------------------------------------------------------
+//
+// The `function` -> arrow conversion is only sound when the body cannot
+// observe the callee's `this`. Three separate walkers answered that
+// question by reading a declaration's INITIALIZER and never its binding
+// pattern, so a `this` reachable only from a destructuring default was
+// invisible. `TypeScript`'s own `Version.prototype.with` is written
+// exactly that way, and the minified compiler threw
+// `Cannot read properties of undefined (reading 'major')` on it.
+//
+// These go through `bundle_modules` rather than `peephole_block`,
+// because the conversion is gated on `f.name == ""` and the parser
+// names an anonymous function expression `<anon>`. Only the mangler
+// clears that, so the rule fires exactly once per pipeline — on the
+// post-mangle peephole pass — and a test that calls `peephole_block`
+// on parsed source passes no matter which way the gate is wired.
+
+///|
+fn bundle_min_mangled(src : String) -> String raise {
+  let files : Map[String, String] = { "entry.js": src }
+  let opts = BundleOptions::default().with_minify(true).with_mangle(true)
+  match bundle_modules(files, "entry.js", opts) {
+    Ok(out) => out.js
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "peephole: `this` in a destructuring default blocks the arrow conversion" {
+  let out = bundle_min_mangled(
+    (
+      #|export const obj = {};
+      #|obj.m = function (o) {
+      #|  let { major: v = this.major } = o;
+      #|  return v;
+      #|};
+      #|
+    ),
+  )
+  assert_false(out.contains("=>"), msg="converted anyway: \{out}")
+}
+
+///|
+test "peephole: `this` in a computed binding key blocks the arrow conversion" {
+  let out = bundle_min_mangled(
+    (
+      #|export const obj = {};
+      #|obj.m = function (o) {
+      #|  let { [this.k]: v } = o;
+      #|  return v;
+      #|};
+      #|
+    ),
+  )
+  assert_false(out.contains("=>"), msg="converted anyway: \{out}")
+}
+
+///|
+test "peephole: `this` in a parameter default blocks the arrow conversion" {
+  let out = bundle_min_mangled(
+    (
+      #|export const obj = {};
+      #|obj.m = function (x = this.y) {
+      #|  return x;
+      #|};
+      #|
+    ),
+  )
+  assert_false(out.contains("=>"), msg="converted anyway: \{out}")
+}
+
+///|
+test "peephole: `this` in a for-of binding default blocks the arrow conversion" {
+  let out = bundle_min_mangled(
+    (
+      #|export const obj = {};
+      #|obj.m = function (rows) {
+      #|  let n = 0;
+      #|  for (const { v = this.base } of rows) n += v;
+      #|  return n;
+      #|};
+      #|
+    ),
+  )
+  assert_false(out.contains("=>"), msg="converted anyway: \{out}")
+}
+
+///|
+test "peephole: a `this`-free destructuring body still becomes an arrow" {
+  // The gate has to stay a gate, not a blanket refusal: nothing here
+  // reads `this`, so the conversion should still happen. Without this
+  // case the four above would also pass on a rule that never fires.
+  let out = bundle_min_mangled(
+    (
+      #|export const obj = {};
+      #|obj.m = function (o) {
+      #|  let { major: v = 0 } = o;
+      #|  return v;
+      #|};
+      #|
+    ),
+  )
+  assert_true(out.contains("=>"), msg="no conversion at all: \{out}")
+}
+
+///|
+test "peephole: a computed `__proto__` key is not folded to a plain one" {
+  // `{ ["__proto__"]: v }` defines an own property; `{ __proto__: v }`
+  // sets the prototype. The rewrite is a byte saving for every other
+  // valid identifier and a semantic change for this one.
+  let out = minify_one("const o = { [\"__proto__\"]: base, x: 1 };\n")
+  assert_true(out.contains("[\"__proto__\"]"), msg="folded: \{out}")
+}
+
+///|
+test "peephole: a computed string key that is an identifier is folded" {
+  let out = minify_one("const o = { [\"count\"]: 1 };\n")
+  assert_true(out.contains("count:1"), msg="not folded: \{out}")
+  assert_false(out.contains("[\"count\"]"), msg="not folded: \{out}")
+}
+
+// ---------------------------------------------------------------
+// Boolean comparison rewrites need a boolean
+// ---------------------------------------------------------------
+//
+// `x === true` -> `x` and its three siblings are sound only when `x` is
+// a boolean. Nothing checked that, and TypeScript's binder writes
+// `symbol.constEnumOnlyModule !== false` on a field that is `undefined`
+// most of the time — `undefined !== false` is `true`, but the rewrite
+// left `undefined` behind.
+
+///|
+test "peephole: `x !== false` on a bare name is not dropped" {
+  let out = minify_one("const r = obj.flag !== false;\n")
+  assert_true(out.contains("!=="), msg="dropped the comparison: \{out}")
+}
+
+///|
+test "peephole: `x === true` on a bare name is not dropped" {
+  let out = minify_one("const r = obj.flag === true;\n")
+  assert_true(out.contains("!0") || out.contains("true"), msg="dropped: \{out}")
+}
+
+///|
+test "peephole: `x === false` on a bare name does not become `!x`" {
+  // `0 === false` is false; `!0` is true.
+  let out = minify_one("const r = n === false;\n")
+  assert_false(out.contains("r=!n"), msg="rewrote to !x: \{out}")
+}
+
+///|
+test "peephole: a comparison result compared to false still folds" {
+  // `(a < b) !== false` IS `a < b` — the operand is provably boolean,
+  // so the saving is still taken.
+  let out = minify_one("const r = (a < b) !== false;\n")
+  assert_false(out.contains("!=="), msg="missed the saving: \{out}")
+  assert_true(out.contains("a<b"), msg="missed the saving: \{out}")
+}
+
+///|
+test "peephole: a negation compared to true still folds" {
+  let out = minify_one("const r = !flag === true;\n")
+  assert_false(out.contains("==="), msg="missed the saving: \{out}")
 }
