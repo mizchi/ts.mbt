@@ -540,6 +540,26 @@ rename して良いか」）に答えるもので、escape する式の部分木
 主張していて、それがこの bug を見つけた——が、`console.log` の実際の
 semantics より厳しい。
 
+## 修正後の全域 sweep
+
+seed 0..3999、両 shape、**8000 comparison**:
+
+```
+8000 compared, 0 skipped, 6 mismatch(es), 0 broken baseline(s),
+0 did not compile; 7966 checked against the original
+
+distinct failure families, most frequent first:
+     6x  lowering first at seed 1261 (sink)  lowering:diff:0:-cNmN
+```
+
+16 mismatch / 8 family から **6 mismatch / 1 family** へ。残る 1 family は
+上の「追えたが直さなかったもの」——`class_method_dce` の穴だけです。
+
+`did not compile` が **0** になりました（parser の 3 seed が解消）。
+この run は printer の `void` 修正より前に起動しているので
+`34 unusable` が残っていますが、同じ seed 0..699 を修正後に回すと
+`1400 compared … 1400 checked against the original`——unusable は 0 です。
+
 ## それ以前に見つかっていたもの
 
 seed 0..299、両 shape、404 comparison。**mangle の偽陽性は 1 件**です。
