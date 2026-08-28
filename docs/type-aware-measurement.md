@@ -113,7 +113,7 @@ type-aware 経路だけのものでした。直すと aware leg が hono で +49
 | superstruct | measured | 元 BLOCKED → 15ms、さらに元 BROKEN → 挙動一致（下記の `.name` reserve）|
 | typebox | measured | 元 size-only。`Array.from` の rewrite と module 順序の 2 件を直して挙動検証まで到達（下記）|
 | immer | measured | 元 size-only。module 跨ぎの `const enum ArchType` を inline するようにして挙動検証まで到達（下記）|
-| remeda | BLOCKED | `setPath.ts` の parse error: `Expected Semicolon, got Extends` |
+| remeda | measured | 元 BLOCKED。parser の穴（先頭 `|` が conditional tail を落とす）と fold の穴（spread を 1 要素として数える）を直して到達（下記）|
 
 ### 原因の取り違えを 2 回やった
 
@@ -844,12 +844,59 @@ schema は組み上がってしまう** — 組み上がるが、正しくない
 挙動検証付きです。WIN は 0 のままで、増えたのは「表の数字が実行された
 bundle のものだ」という保証だけです。
 
+## remeda: BLOCKED の原因は pass ではなく parser だった
+
+remeda は「pipeline が食えない」ではなく、**1 file がパースできない**
+ために丸ごと BLOCKED でした。`setPath.ts`:
+
+```ts
+type Paths<T, Prefix extends readonly unknown[] = []> =
+  | Prefix
+  | (T extends object ? … : …) extends infer Path
+  ? Readonly<Path>
+  : never;
+```
+
+TS は union に先頭 `|` を許します（1 行 1 member で書けるように）。
+`parse_type` はその装飾に**専用の分岐**を持っていて、union を組んで
+**return** していました——下にある `extends` tail を通らずに。
+結果、check type をその書き方で書いた conditional type は条件を失い、
+`extends` で parse error になる。
+
+装飾なしの `T | string extends …` は通っていました。だから気づかれ
+なかった: **バグに必要なのは union ではなく装飾**でした。
+先頭 `&` にも同じ早期 return がありました。
+
+修正は分岐を消して、装飾を消費してから**同じ path を通す**こと。
+`&` は `parse_intersection_type`（本来の居場所）に移しました。
+
+### そして corpus に入れたら実挙動の差が出た
+
+`reverse([1,2,3])` が `[1,2,3]` を返しました。原因は
+`[...array].reverse()` の fold で、spread を 1 要素として数えていた。
+詳細は [`rule-equivalence.md`](./rule-equivalence.md) に。
+
+corpus に target を足す価値がここに出ています: remeda は
+**BLOCKED → 実挙動の差 → measured** と 2 段で発見をもたらしました。
+1 段目は parser、2 段目は fold で、どちらも他の 9 target では
+出ていなかった形です。
+
+remeda を選んだ理由も残しておきます: ほぼ全 function が data-first /
+data-last の 2 形を持ち、`purry` が `arguments.length` で runtime
+dispatch します。**共有 helper 経由の arity 依存の間接呼び出し**で、
+unused-parameter pass や single-use inliner が「何も変に見えないまま」
+壊せる形です。driver は lazy な `take` の上流呼び出し回数も数えるので、
+評価順を変える fold は答えの誤りではなく回数として出ます。
+
+結果は NEUTRAL、delta +26 byte(0.09%)、noise floor 以下。
+これで corpus は **10 target 全部 measured、BLOCKED も size-only も 0**
+になりました。
+
 ## 残っている既知の未修正
 
 | 件 | 症状 |
 | --- | --- |
 | alias 付き re-export | `export { X as Y }`（別 module 由来の X）が両方の綴りごと落ちる。ts-pattern の `P` |
-| remeda の parse error | `setPath.ts`: `Expected Semicolon, got Extends` |
 | property mangler が実 library で不発 | fail-closed な callee-provenance scan が全部 reserve する |
 | excalidraw が僅差で LOSS | −303 byte（−0.11%）。noise floor が 280 byte なのでぎりぎり判定に乗っている。残りの機構は未特定 |
 | typebox が僅差で LOSS | −261 byte（−0.22%）。predicate-inline の cost model 導入後の残り。機構は未特定 |

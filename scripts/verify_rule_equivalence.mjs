@@ -444,6 +444,76 @@ const CASES = [
     holes: 1,
     body: "const f = function () { return arguments.length; }; return f.apply(null, a);",
   },
+
+  // --- array-literal folds over a SPREAD element
+  //
+  // Second family with the same shape as the built-in methods above, and
+  // the same reason for existing. Every `fold_array_method` case reads
+  // `items` positionally — its length, its order, which element sits
+  // where — and a `Spread` is one AST node standing for however many
+  // values the spread yields at runtime.
+  //
+  // remeda's `reverse` is `return [...array].reverse()`. That is a
+  // one-element `ArrayLit`, reversing one element is a no-op, and the
+  // fold returned `[...array]`: `reverse([1, 2, 3])` gave `[1, 2, 3]`.
+  // The `is_pure_value` guard each fold carries did not help, because a
+  // spread of a variable IS pure — purity was never the question.
+  //
+  // The `.length` fold had already been given a spread guard, by the
+  // fuzzer, and the lesson stopped at that one call site. So: a case per
+  // fold that reads a position.
+  {
+    rule: "arrays",
+    name: "spread-literal-reverse",
+    holes: 1,
+    body: "return [...a].reverse();",
+  },
+  {
+    rule: "arrays",
+    name: "spread-literal-length",
+    holes: 1,
+    body: "return [...a].length;",
+  },
+  {
+    rule: "arrays",
+    name: "spread-literal-index",
+    holes: 1,
+    body: "return [...a][0];",
+  },
+  {
+    rule: "arrays",
+    name: "spread-literal-indexof",
+    holes: 1,
+    body: "return [...a].indexOf(1);",
+  },
+  {
+    rule: "arrays",
+    name: "spread-literal-join",
+    holes: 1,
+    body: "return [...a].join(\"-\");",
+  },
+  {
+    rule: "arrays",
+    name: "spread-literal-includes",
+    holes: 1,
+    body: "return [...a].includes(1);",
+  },
+  {
+    rule: "arrays",
+    name: "spread-literal-slice",
+    holes: 1,
+    body: "return [...a].slice(1);",
+  },
+  {
+    rule: "arrays",
+    name: "spread-literal-concat",
+    body: "return [...a].concat([b]);",
+  },
+  {
+    rule: "arrays",
+    name: "spread-literal-mixed",
+    body: "return [1, ...a, 2].reverse();",
+  },
 ];
 
 // ---------------------------------------------------------------

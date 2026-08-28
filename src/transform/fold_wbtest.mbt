@@ -1796,3 +1796,51 @@ test "fold: a pure truthy condition is still dropped entirely" {
   assert_false(out.contains("if"), msg="kept the if: \{out}")
   assert_true(out.contains("sink(1)"), msg="lost the branch: \{out}")
 }
+
+///|
+test "fold: an array-literal method fold bails on a spread element" {
+  // `[...array].reverse()` parses as a ONE-element `ArrayLit` whose
+  // element is a `Spread`. Reversing one element is a no-op, so the fold
+  // returned `[...array]` — remeda's `reverse` compiled to a shallow
+  // copy and `reverse([1, 2, 3])` gave `[1, 2, 3]`.
+  //
+  // The `is_pure_value` guard the fold already carried did not help: a
+  // spread of a variable IS pure, and purity was never the question.
+  // Position was. Every fold in `fold_array_method` reads `items`
+  // positionally, so the gate is one check for the whole family.
+  let block = @parser.parse_block_from_source(
+    "const r = [...arr].reverse(); const n = [...arr].length; const f = [...arr][0];",
+  )
+  let folded = fold_block(block)
+  let e = Emitter::new(pretty=false)
+  emit_block(e, folded)
+  let out = e.to_string()
+  assert_true(
+    out.contains("reverse"),
+    msg="reverse must survive a spread receiver, got: \{out}",
+  )
+  assert_true(
+    out.contains(".length"),
+    msg="length must survive a spread receiver, got: \{out}",
+  )
+  assert_false(
+    out.contains("=...arr") || out.contains("= ...arr"),
+    msg="an index fold must not emit a bare spread, got: \{out}",
+  )
+}
+
+///|
+test "fold: array-literal method folds still fire without a spread" {
+  // The gate must not turn the folds off wholesale — these are the cases
+  // they exist for.
+  let block = @parser.parse_block_from_source(
+    "const r = [1, 2, 3].reverse(); const n = [1, 2, 3].length; const f = [7, 8][1];",
+  )
+  let folded = fold_block(block)
+  let e = Emitter::new(pretty=false)
+  emit_block(e, folded)
+  let out = e.to_string()
+  assert_false(out.contains("reverse"), msg="expected folded, got: \{out}")
+  assert_false(out.contains(".length"), msg="expected folded, got: \{out}")
+  assert_true(out.contains("3,2,1"), msg="expected [3,2,1], got: \{out}")
+}

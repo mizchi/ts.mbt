@@ -79,7 +79,15 @@ product surfaces now.
   rewrite on `Array.prototype.slice.call` had been removed. Every rewrite
   whose validity depends on the receiver's type now has a case; the
   built-in-method family is the whole of that subset, and gating it cost
-  ~700 bytes across four corpus targets. See
+  ~700 bytes across four corpus targets. A third round found the same
+  shape once more, in the array-literal folds: a `Spread` element was
+  counted as one position, so `[...array].reverse()` — a one-element
+  literal, and reversing one element is a no-op — compiled to
+  `[...array]` and remeda's `reverse` became a shallow copy. Each of
+  those folds already had an `is_pure_value` guard that could not help,
+  because a spread of a variable is perfectly pure; position was the
+  question, not purity. The `.length` fold had been given a spread guard
+  by the fuzzer and the lesson stopped at that one call site. See
   [`docs/rule-equivalence.md`](./docs/rule-equivalence.md). And
   `just compare-terser` asks the
   competitive version of that question: both optimizers start from the
@@ -97,8 +105,8 @@ product surfaces now.
   flags — once from the TypeScript source, once from the same code with
   its types erased — with all three legs required to observe the same
   thing. The answer so far is uncomfortable and worth knowing: across
-  nine measured targets — every one of them behaviour-checked, no
-  `size-only` rows left — there is **no win left**: seven neutral and two
+  ten measured targets — every one behaviour-checked, no `size-only` and
+  no `BLOCKED` rows left — there is **no win left**: eight neutral and two
   losses, both inside a byte of the noise floor (-0.22% on typebox,
   -0.11% on Excalidraw) —
   and the property mangler is entirely inert on every library measured.

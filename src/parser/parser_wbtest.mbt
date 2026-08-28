@@ -7470,3 +7470,71 @@ test "parser: an ambient function declaration is not a runtime declaration" {
   }
   assert_eq(decls, 0)
 }
+
+///|
+test "parser: a leading `|` does not swallow the conditional-type tail" {
+  // TS lets a union carry a leading `|` so it can be written one member
+  // per line. That decoration used to take its own branch in
+  // `parse_type` which built the union and RETURNED — skipping the
+  // `extends …` tail the normal path handles — so a conditional type
+  // whose check type was laid out that way lost its condition and the
+  // file stopped parsing at `extends`.
+  //
+  // remeda's `setPath.ts` is written exactly that way, and one
+  // unparseable file blocked the whole package from the corpus. The
+  // undecorated `T | string extends …` parsed fine throughout, which is
+  // why it went unnoticed: the bug needed the decoration, not the union.
+  let src =
+    #|type Paths<T, P extends readonly unknown[] = []> =
+    #|  | P
+    #|  | (T extends object ? [1] : [2]) extends infer Path
+    #|  ? Readonly<Path>
+    #|  : never;
+    #|export const p: Paths<{ a: 1 }> = [1] as never;
+  let module_ = parse_module_block_from_source(src) catch {
+    e => {
+      fail("expected a parse, got \{e}")
+      return
+    }
+  }
+  @test.assert_eq(module_.block.stmts.length() > 0, true)
+}
+
+///|
+test "parser: a leading `&` does not swallow the conditional-type tail" {
+  // Same decoration on the intersection side, and it had the same
+  // early-return branch.
+  let src =
+    #|type Both<T> =
+    #|  & { a: 1 }
+    #|  & T extends infer X
+    #|  ? Readonly<X>
+    #|  : never;
+    #|export const b: Both<{ c: 2 }> = { a: 1, c: 2 } as never;
+  let module_ = parse_module_block_from_source(src) catch {
+    e => {
+      fail("expected a parse, got \{e}")
+      return
+    }
+  }
+  @test.assert_eq(module_.block.stmts.length() > 0, true)
+}
+
+///|
+test "parser: a leading `|` still parses a plain multi-line union" {
+  // The decoration's ordinary use, so routing it through the shared path
+  // cannot quietly stop accepting it.
+  let src =
+    #|type Kind =
+    #|  | "a"
+    #|  | "b"
+    #|  | "c";
+    #|export const k: Kind = "a";
+  let module_ = parse_module_block_from_source(src) catch {
+    e => {
+      fail("expected a parse, got \{e}")
+      return
+    }
+  }
+  @test.assert_eq(module_.block.stmts.length() > 0, true)
+}

@@ -244,7 +244,23 @@ const CORPUS = [
     name: "remeda",
     repo: "https://github.com/remeda/remeda",
     entry: "packages/remeda/src/index.ts",
-    blocked: 'parse error in setPath.ts: Expected Semicolon, got Extends',
+    // Was BLOCKED, and not on a pass — on the PARSER. `setPath.ts`
+    // writes a conditional type whose check type is a union laid out one
+    // member per line, and the leading `|` took its own branch in
+    // `parse_type` that built the union and returned, skipping the
+    // `extends` tail. `T | string extends …` parsed fine; the bug needed
+    // the decoration, not the union. One unparseable file blocked the
+    // whole package.
+    //
+    // Worth measuring for the calling convention: nearly every function
+    // has a data-first and a data-last form dispatched at runtime by
+    // `purry` on `arguments.length`, which is an arity-sensitive
+    // indirection through a shared helper — the shape an unused-parameter
+    // pass or a single-use inliner can break with nothing looking wrong.
+    // The driver also counts upstream calls through a lazy `take`, so a
+    // fold that changed evaluation order shows up as call counts rather
+    // than as a wrong answer.
+    driver: "remeda.driver.mjs",
   },
 ];
 

@@ -120,9 +120,39 @@ domain にも 1 つ足しました: `{ length: 2, 0: "a", 1: "b" }` —
 `Array.prototype.M.call` で `slice` だけが除外されていたのは示唆的です。
 family 全体の問題を、誰かが踏んだ 1 例として直していた。
 
+## 3 回目: spread 要素を 1 個として数えていた
+
+remeda を corpus に入れたら `reverse([1,2,3])` が `[1,2,3]` を返しました。
+実装は
+
+```ts
+function reverseImplementation<T>(array: readonly T[]): T[] {
+  return [...array].reverse();
+}
+```
+
+これが `return [...array]` にコンパイルされていました。
+`[...array]` は要素 1 個の `ArrayLit`（要素は `Spread`）としてパースされ、
+**1 要素の reverse は no-op** なので `.reverse()` が消えた。
+
+`fold_array_method` の各 fold は `items` を**位置で**読みます——length、
+順序、どの要素がどこにいるか。`Spread` はその全部を壊します:
+runtime に何個の値になるかを構文が言っていない 1 個のノードだからです。
+
+各 fold が既に持っていた `is_pure_value` guard は効きません。
+**変数の spread は完全に pure** で、purity は問題ではなかった。
+位置が問題でした。
+
+そして `.length` fold には**すでに spread guard が付いていました**——
+fuzzer が見つけて、その 1 箇所で終わっていた。`Array.prototype.M.call`
+で `slice` だけが除外されていたのと同じ形です。今回は `items` を位置で
+読む fold 全部に case を書き、guard を 1 つの述語
+(`no_spread_elements`) に集約しました。index fold にも穴があり、
+`[...a][0]` は **`return ...a` という構文エラーを出力**していました。
+
 ## 現在
 
-`50 equivalent, 0 inert, 0 unsound`。
+`59 equivalent, 0 inert, 0 unsound`。
 
 byte の代償は 2 回測ってあります。
 

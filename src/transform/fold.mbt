@@ -1486,9 +1486,7 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
         // this fold just was not asking it.
         //
         // Found by `just fuzz-mangle`, shrunk to six nodes.
-        (ArrayLit(items), "length") if items
-          .iter()
-          .all(fn(it) { !(it is Spread(_)) && is_pure_value(it) }) =>
+        (ArrayLit(items), "length") if array_literal_is_countable(items) =>
           IntLit(items.length())
         // Well-known Math / Number constants.
         (Var("Math"), "PI") => NumberLit(3.141592653589793)
@@ -1531,7 +1529,13 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       let idx_f = fold_expr(idx)
       // `[a,b,c][1]` → `b` only when all other items are pure.
       match (recv_f, idx_f) {
-        (ArrayLit(items), IntLit(i)) =>
+        // The `!(it is Spread(_))` half is not incidental: an element's
+        // POSITION is what this fold reads, and a spread is one node
+        // standing for an unknown number of values. `[...a][0]` is not
+        // `...a`. The `.length` fold above learned this from the fuzzer
+        // and the lesson stopped there; `fold_array_method` had the same
+        // hole and remeda's `[...array].reverse()` fell in it.
+        (ArrayLit(items), IntLit(i)) if no_spread_elements(items) =>
           if i >= 0 && i < items.length() {
             let mut all_others_pure = true
             for j, item in items {
@@ -2532,6 +2536,32 @@ fn fold_string_method(
 }
 
 ///|
+/// Does every element of this array literal occupy exactly one position?
+///
+/// A `Spread` does not: it is one AST node standing for however many
+/// values the spread expression yields at runtime, which the syntax does
+/// not say. Any fold that reads an element's POSITION — a length, an
+/// index, an order, a `join` separator count — is wrong in its presence,
+/// and `is_pure_value` does not stand in for this check because a spread
+/// of a variable is perfectly pure.
+fn no_spread_elements(items : Array[@ast.TsExpr]) -> Bool {
+  for item in items {
+    if item is Spread(_) {
+      return false
+    }
+  }
+  true
+}
+
+///|
+/// `no_spread_elements` plus "every element is safe to drop", which is
+/// what `[…].length` needs: the fold discards the elements, so a side
+/// effect in one of them would go with it.
+fn array_literal_is_countable(items : Array[@ast.TsExpr]) -> Bool {
+  no_spread_elements(items) && items.iter().all(fn(it) { is_pure_value(it) })
+}
+
+///|
 /// Fold Array-literal method calls with constant arguments.
 fn fold_array_method(
   recv : @ast.TsExpr,
@@ -2541,6 +2571,25 @@ fn fold_array_method(
   let items = match recv {
     ArrayLit(items) => items
     _ => return None
+  }
+  // Every fold below reasons about `items` POSITIONALLY — its length, its
+  // order, which element sits where. A `Spread` element breaks all of
+  // that at once: it is one node standing for however many values the
+  // spread expression yields at runtime, which the syntax does not say.
+  //
+  // remeda's `reverse` is `return [...array].reverse()`. That parses as a
+  // one-element `ArrayLit`, reversing one element is a no-op, and the
+  // fold happily returned `[...array]` — `reverse` compiled to a
+  // shallow copy, and `reverse([1, 2, 3])` gave `[1, 2, 3]`. The
+  // `is_pure_value` guards each fold already carries did not catch it,
+  // because a spread of a variable IS pure; purity was never the
+  // question. `[...a].length` -> `1` and `[...a].indexOf(x)` were wrong
+  // the same way.
+  //
+  // An `ArrayHole` (`[1, , 3]`) is a real position, so it does not need
+  // this gate — the folds that care about its VALUE check for a literal.
+  if !no_spread_elements(items) {
+    return None
   }
   match method_ {
     "length" if args.length() == 0 => Some(IntLit(items.length()))
