@@ -3695,3 +3695,67 @@ test "bundle: a type-only request does not order its module" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "bundle: the JSX runtime import is emitted" {
+  // The automatic runtime turns `<div/>` into a call to an IMPORTED
+  // `jsx` / `jsxs` / `Fragment`. `emit.mbt`'s single-file path writes
+  // that import; this one threw the ref list away, so every `.tsx`
+  // bundle came out with those three names free — under plain
+  // `mtsc entry.tsx --bundle`, no optimization flag involved.
+  let files = vfs([
+    (
+      "entry.tsx", "export const A = () => <div><span>x</span></div>;\nexport const B = () => <>frag</>;\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.tsx", BundleOptions::default()) {
+    Ok(out) => {
+      assert_true(
+        out.js.contains("from \"react/jsx-runtime\""),
+        msg="expected the runtime import, got: \{out.js}",
+      )
+      assert_true(out.js.contains("jsx"))
+      assert_true(out.js.contains("Fragment"))
+      @test.assert_eq(verify_emitted_bundle(out.js).length(), 0)
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: the JSX runtime import is deduplicated across modules" {
+  // Two modules each needing `jsx` must not declare it twice. The import
+  // goes through `record_external_import` precisely so the per-binding
+  // dedup and the linker's external-name table apply to it.
+  let files = vfs([
+    ("a.tsx", "export const A = () => <div>a</div>;\n"),
+    ("b.tsx", "export const B = () => <div>b</div>;\n"),
+    (
+      "entry.tsx", "import { A } from \"./a\";\nimport { B } from \"./b\";\nexport const both = () => <div>{A()}{B()}</div>;\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.tsx", BundleOptions::default()) {
+    Ok(out) => {
+      let jsx_imports = out.js
+        .split("\n")
+        .filter(l => {
+          l.has_prefix("import ") && l.to_string().contains("jsx-runtime")
+        })
+        .length()
+      // One statement per distinct binding set is fine; what must not
+      // happen is the same NAME imported twice.
+      let jsx_named = out.js
+        .split("\n")
+        .filter(l => {
+          l.has_prefix("import ") &&
+          l.to_string().contains("jsx-runtime") &&
+          l.to_string().contains("{ jsx ")
+        })
+        .length()
+      assert_true(jsx_imports >= 1)
+      assert_true(jsx_named <= 1)
+      @test.assert_eq(verify_emitted_bundle(out.js).length(), 0)
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}

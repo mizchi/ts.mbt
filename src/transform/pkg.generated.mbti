@@ -270,6 +270,7 @@ pub(all) struct JsxConfig {
   dev : Bool
   pragma_jsx : String
   pragma_jsx_frag : String
+  synthesized_helpers : Map[String, Bool]
 }
 pub fn JsxConfig::default() -> Self
 pub fn JsxConfig::with_dev(Self, Bool) -> Self

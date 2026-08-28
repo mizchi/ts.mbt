@@ -1557,7 +1557,42 @@ fn load_module_graph(
   // Reuse the per-file JSX pragma extractor so each module honors
   // its own `/** @jsxImportSource ... */` etc.
   let jsx_cfg = extract_jsx_pragmas(source, JsxConfig::default())
-  let (lowered_jsx, _refs) = lower_block_with_runtime_imports(jsx_cfg, mb.block)
+  let (lowered_jsx, runtime_refs) = lower_block_with_runtime_imports(
+    jsx_cfg,
+    mb.block,
+  )
+  // The automatic runtime turns `<div/>` into a call to an IMPORTED
+  // `jsx` / `jsxs` / `Fragment`, so the import has to be emitted or the
+  // names resolve to nothing. The single-file path in `emit.mbt` writes
+  // it; this one discarded the ref list, so every `.tsx` bundle came out
+  // with `jsx`, `jsxs` and `Fragment` free — under plain `mtsc
+  // entry.tsx --bundle`, no optimization flag involved. Excalidraw is
+  // the target that surfaced it, through `--verify`.
+  //
+  // Routing it through `record_external_import` rather than emitting it
+  // here is the point: that is where external imports are deduplicated
+  // per binding and where `link_module_graph` learns which top-level
+  // names come from outside the bundle. A hand-written emit would have
+  // to reproduce both, and the mangler would rename `jsx` out from under
+  // the import if it did not.
+  if jsx_cfg.runtime == "automatic" && runtime_refs.length() > 0 {
+    let named : Array[(String, String)] = []
+    let named_type_only : Array[Bool] = []
+    for name in runtime_refs {
+      named.push((name, name))
+      named_type_only.push(false)
+    }
+    record_external_import(external_imports, external_seen, {
+      module_spec: jsx_cfg.import_source + "/jsx-runtime",
+      default_binding: None,
+      namespace_binding: None,
+      named_bindings: named,
+      named_type_only,
+      side_effect_only: false,
+      type_only: false,
+      attributes: [],
+    })
+  }
   // Splice in the runtime form of every `enum` declaration. The
   // parser collects enums on a side list and leaves an `Empty`
   // placeholder in the runtime block — without this step, every

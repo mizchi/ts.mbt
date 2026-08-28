@@ -41,6 +41,27 @@ pub(all) struct JsxConfig {
   // fragment marker (default `"React.Fragment"`).
   pragma_jsx : String
   pragma_jsx_frag : String
+  // Which runtime helpers the lowering actually SYNTHESIZED, filled in
+  // as it goes. An out-channel on a config struct is unusual, so here is
+  // why it earns its place: `lower_automatic` is the single line that
+  // decides between `jsx` / `jsxs` / `jsxDEV` / `jsxsDEV` and whether a
+  // `Fragment` reference is created, and that decision is what the
+  // import must match.
+  //
+  // Deriving it instead by walking the lowered block for those names has
+  // been tried twice and failed twice, in opposite directions. A bespoke
+  // walk with arms for a third of the expression forms MISSED helpers
+  // (JSX inside a function expression got no import). Reusing the
+  // complete `collect_var_refs_in_block` INVENTED them: `Fragment` is an
+  // ordinary local name in React's own sources, so
+  // `react-dom.development.js` — a file with no JSX at all — had
+  // `import { Fragment } from "react/jsx-runtime"` prepended and stopped
+  // parsing. No walk over the output can tell a synthesized reference
+  // from a name that was already there; only the synthesizer knows.
+  //
+  // A `Map` is a reference, so mutating it reaches the caller through
+  // the `{ ..cfg }` copies the pragma extractor makes.
+  synthesized_helpers : Map[String, Bool]
 }
 
 ///|
@@ -50,6 +71,7 @@ pub(all) struct JsxConfig {
 pub fn JsxConfig::default() -> JsxConfig {
   {
     runtime: "automatic",
+    synthesized_helpers: {},
     import_source: "react",
     dev: false,
     pragma_jsx: "React.createElement",
@@ -269,11 +291,33 @@ pub fn lower_jsx_element(
   attrs : Array[(String, @ast.TsExpr?)],
   children : Array[@ast.TsExpr],
 ) -> @ast.TsExpr {
-  // Lower nested children first so the synthesized call carries
-  // fully-lowered JSX values.
+  // Lower the attribute values and the children through the FULL
+  // expression walker, so the synthesized call carries no JSX anywhere
+  // beneath it.
+  //
+  // This used to go through a `lower_jsx_subexpr` that handled a child
+  // which was itself a `JsxElement` and returned everything else
+  // unchanged. A child is usually an expression, not an element —
+  // `{cond && <><span/></>}`, `{c ? <p/> : d}` — and the JSX inside one
+  // was never lowered. The output then contained literal JSX syntax,
+  // which is not JavaScript at all: Node cannot even parse it.
+  //
+  // Attributes had the mirror image of the same hole. The caller in
+  // `lower_jsx_in_expr` lowered them before calling here, but the
+  // recursive path did not, so a NESTED element's attribute values were
+  // skipped: `<div><Foo x={<span/>} /></div>`. Lowering them here means
+  // one place does it for both callers.
+  let lowered_attrs : Array[(String, @ast.TsExpr?)] = []
+  for a in attrs {
+    let new_val : @ast.TsExpr? = match a.1 {
+      Some(v) => Some(lower_jsx_in_expr(cfg, v))
+      None => None
+    }
+    lowered_attrs.push((a.0, new_val))
+  }
   let lowered_children : Array[@ast.TsExpr] = []
   for c in children {
-    lowered_children.push(lower_jsx_subexpr(cfg, c))
+    lowered_children.push(lower_jsx_in_expr(cfg, c))
   }
   // Strip pure whitespace-only string children to match TS / Babel
   // behavior on the automatic runtime. They're never user-visible.
@@ -285,17 +329,9 @@ pub fn lower_jsx_element(
     }
   }
   if cfg.runtime == "classic" {
-    lower_classic(cfg, tag, attrs, trimmed_children)
+    lower_classic(cfg, tag, lowered_attrs, trimmed_children)
   } else {
-    lower_automatic(cfg, tag, attrs, trimmed_children)
-  }
-}
-
-///|
-fn lower_jsx_subexpr(cfg : JsxConfig, expr : @ast.TsExpr) -> @ast.TsExpr {
-  match expr {
-    JsxElement(t, a, c) => lower_jsx_element(cfg, t, a, c)
-    _ => expr
+    lower_automatic(cfg, tag, lowered_attrs, trimmed_children)
   }
 }
 
@@ -402,7 +438,9 @@ fn lower_automatic(
   } else {
     "jsx"
   }
+  cfg.synthesized_helpers[helper] = true
   let type_expr = if tag == "" {
+    cfg.synthesized_helpers["Fragment"] = true
     @ast.TsExpr::Var("Fragment")
   } else {
     tag_to_type_expr(tag)
@@ -655,17 +693,10 @@ pub fn lower_jsx_in_block(
 /// sub-expressions are walked recursively.
 pub fn lower_jsx_in_expr(cfg : JsxConfig, expr : @ast.TsExpr) -> @ast.TsExpr {
   match expr {
-    JsxElement(tag, attrs, children) => {
-      let new_attrs : Array[(String, @ast.TsExpr?)] = []
-      for a in attrs {
-        let new_val : @ast.TsExpr? = match a.1 {
-          Some(v) => Some(lower_jsx_in_expr(cfg, v))
-          None => None
-        }
-        new_attrs.push((a.0, new_val))
-      }
-      lower_jsx_element(cfg, tag, new_attrs, children)
-    }
+    // `lower_jsx_element` lowers the attributes and the children itself,
+    // so both entry points get the same treatment.
+    JsxElement(tag, attrs, children) =>
+      lower_jsx_element(cfg, tag, attrs, children)
     BinOp(op, a, b) =>
       BinOp(op, lower_jsx_in_expr(cfg, a), lower_jsx_in_expr(cfg, b))
     UnaryOp(op, inner) => UnaryOp(op, lower_jsx_in_expr(cfg, inner))
@@ -752,7 +783,13 @@ pub fn lower_jsx_in_expr(cfg : JsxConfig, expr : @ast.TsExpr) -> @ast.TsExpr {
     TypeArgs(tys, inner) => TypeArgs(tys, lower_jsx_in_expr(cfg, inner))
     PureCall(inner) => PureCall(lower_jsx_in_expr(cfg, inner))
     OptionalChain(inner) => OptionalChain(lower_jsx_in_expr(cfg, inner))
-    FuncExpr(_) => expr // function-expression bodies are not JSX-walked yet
+    // `function () { return <div/>; }`. The old comment here said
+    // "function-expression bodies are not JSX-walked yet", and what that
+    // meant in practice is that the JSX survived into the output — so the
+    // bundle was not JavaScript, which Node reports as a syntax error and
+    // no test in this repo was asking about. Excalidraw had one, in a
+    // fragment inside a function expression.
+    FuncExpr(f) => FuncExpr({ ..f, body: lower_jsx_in_block(cfg, f.body) })
     NativeClassExpr(decl, ctor) => {
       let new_ctor = match ctor {
         Some(f) => Some({ ..f, body: lower_jsx_in_block(cfg, f.body) })
@@ -809,23 +846,20 @@ pub fn lower_block_with_runtime_imports(
   cfg : JsxConfig,
   block : @ast.TsBlock,
 ) -> (@ast.TsBlock, Array[String]) {
+  // Start from empty so a config reused across modules reports each
+  // module's own helpers rather than the union so far.
+  cfg.synthesized_helpers.clear()
   let walked = lower_jsx_in_block(cfg, block)
+  // Exactly what the lowering created — see
+  // `JsxConfig.synthesized_helpers` for why this is not a walk over the
+  // output.
+  let refs = cfg.synthesized_helpers
   let needed : Array[String] = []
-  let mut needs_jsx = false
-  let mut needs_jsxs = false
-  let mut needs_jsx_dev = false
-  let mut needs_jsxs_dev = false
-  let mut needs_fragment = false
-  collect_runtime_refs(walked, fn(name) {
-    match name {
-      "jsx" => needs_jsx = true
-      "jsxs" => needs_jsxs = true
-      "jsxDEV" => needs_jsx_dev = true
-      "jsxsDEV" => needs_jsxs_dev = true
-      "Fragment" => needs_fragment = true
-      _ => ()
-    }
-  })
+  let needs_jsx = refs.contains("jsx")
+  let needs_jsxs = refs.contains("jsxs")
+  let needs_jsx_dev = refs.contains("jsxDEV")
+  let needs_jsxs_dev = refs.contains("jsxsDEV")
+  let needs_fragment = refs.contains("Fragment")
   if needs_jsx {
     needed.push("jsx")
   }
@@ -842,99 +876,4 @@ pub fn lower_block_with_runtime_imports(
     needed.push("Fragment")
   }
   (walked, needed)
-}
-
-///|
-fn collect_runtime_refs(block : @ast.TsBlock, mark : (String) -> Unit) -> Unit {
-  for s in block.stmts {
-    collect_refs_stmt(s, mark)
-  }
-}
-
-///|
-fn collect_refs_stmt(stmt : @ast.TsStmt, mark : (String) -> Unit) -> Unit {
-  match stmt {
-    Expr(e) | Return(Some(e)) | Throw(e) => collect_refs_expr(e, mark)
-    Var(_, _, e) | Let(_, _, e) | Const(_, _, e) => collect_refs_expr(e, mark)
-    If(c, t, eopt) => {
-      collect_refs_expr(c, mark)
-      collect_runtime_refs(t, mark)
-      match eopt {
-        Some(b) => collect_runtime_refs(b, mark)
-        None => ()
-      }
-    }
-    While(c, b) | DoWhile(c, b) => {
-      collect_refs_expr(c, mark)
-      collect_runtime_refs(b, mark)
-    }
-    For(_, _, _, b) | ForOf(_, _, _, _, b) | ForIn(_, _, _, _, b) =>
-      collect_runtime_refs(b, mark)
-    Block(b) => collect_runtime_refs(b, mark)
-    _ => ()
-  }
-}
-
-///|
-fn collect_refs_expr(expr : @ast.TsExpr, mark : (String) -> Unit) -> Unit {
-  match expr {
-    Var(name) =>
-      match name {
-        "jsx" | "jsxs" | "jsxDEV" | "jsxsDEV" | "Fragment" => mark(name)
-        _ => ()
-      }
-    CallExpr(callee, args) => {
-      collect_refs_expr(callee, mark)
-      for a in args {
-        collect_refs_expr(a, mark)
-      }
-    }
-    Call(name, args) => {
-      match name {
-        "jsx" | "jsxs" | "jsxDEV" | "jsxsDEV" | "Fragment" => mark(name)
-        _ => ()
-      }
-      for a in args {
-        collect_refs_expr(a, mark)
-      }
-    }
-    BinOp(_, a, b) => {
-      collect_refs_expr(a, mark)
-      collect_refs_expr(b, mark)
-    }
-    PropAccess(r, _) => collect_refs_expr(r, mark)
-    MethodCall(r, _, args) => {
-      collect_refs_expr(r, mark)
-      for a in args {
-        collect_refs_expr(a, mark)
-      }
-    }
-    ObjectLit(entries) =>
-      for ent in entries {
-        collect_refs_expr(ent.1, mark)
-      }
-    ArrayLit(items) =>
-      for i in items {
-        collect_refs_expr(i, mark)
-      }
-    Cond(c, t, e) => {
-      collect_refs_expr(c, mark)
-      collect_refs_expr(t, mark)
-      collect_refs_expr(e, mark)
-    }
-    UnaryOp(_, inner) => collect_refs_expr(inner, mark)
-    Spread(inner) | Await(inner) | YieldStar(inner) =>
-      collect_refs_expr(inner, mark)
-    Yield(opt) =>
-      match opt {
-        Some(e) => collect_refs_expr(e, mark)
-        None => ()
-      }
-    ArrowFunc(_, _, body, _) =>
-      match body {
-        ArrowExpr(e) => collect_refs_expr(e, mark)
-        ArrowBlock(b) => collect_runtime_refs(b, mark)
-      }
-    _ => ()
-  }
 }

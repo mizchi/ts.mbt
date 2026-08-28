@@ -86,6 +86,44 @@ pub fn verify_emitted_bundle(
       allowed[pair.1] = true
     }
   }
+  // Is the output JavaScript at all?
+  //
+  // The re-parse above uses the TypeScript parser, which is what makes
+  // the free-variable check possible — and also means it happily accepts
+  // syntax Node would reject. A pass that leaves TypeScript in the
+  // output therefore passed this verifier silently. It happened twice:
+  // `import { type Point } from "…"` survived a `record_external_import`
+  // change, and un-lowered JSX (`{cond && <><span/></>}`) survived the
+  // whole corpus.
+  //
+  // The check is the re-parse's own product: a JavaScript file cannot
+  // parse to a `JsxElement` or an `As` node, so finding one means the
+  // TEXT contained the construct. No second parser needed.
+  for imp in parsed.imports {
+    if imp.type_only {
+      out.push({
+        kind: "not-javascript",
+        name: imp.module_spec,
+        detail: "the bundle contains `import type … from \"\{imp.module_spec}\"` — TypeScript syntax, so this is not a JavaScript module",
+      })
+    }
+    for i, pair in imp.named_bindings {
+      if i < imp.named_type_only.length() && imp.named_type_only[i] {
+        out.push({
+          kind: "not-javascript",
+          name: pair.0,
+          detail: "the bundle imports `{ type \{pair.0} }` from \"\{imp.module_spec}\" — a `type` specifier is TypeScript syntax, so this is not a JavaScript module",
+        })
+      }
+    }
+  }
+  for kind in typescript_constructs_in_block(parsed.block) {
+    out.push({
+      kind: "not-javascript",
+      name: kind,
+      detail: "the bundle contains a `\{kind}` construct, which is TypeScript and not JavaScript — a lowering pass did not run over it",
+    })
+  }
   let g = build_symbol_graph(parsed.block, {})
   for name in g.unresolved.keys() {
     if allowed.contains(name) {
@@ -98,6 +136,258 @@ pub fn verify_emitted_bundle(
     })
   }
   out
+}
+
+///|
+/// The TypeScript-only constructs present in `block`, as construct names,
+/// each reported once.
+///
+/// Fail-quiet like the rest of this file: the walk below has an arm for
+/// every statement form and for the expression forms that carry
+/// sub-expressions, and ends in a catch-all. A form it does not descend
+/// into hides a violation rather than inventing one — which is the right
+/// direction, and a real cost, so `verify_wbtest.mbt` feeds it each
+/// construct in each position and asserts the detection instead of
+/// assuming it.
+///
+/// `TypeArgs` is deliberately NOT on the list. `f<T>(x)` is TypeScript,
+/// but `a < b > (c)` is valid JavaScript that this parser may resolve the
+/// same way, and a verifier that reports valid output gets turned off.
+fn typescript_constructs_in_block(block : @ast.TsBlock) -> Array[String] {
+  let seen : Map[String, Bool] = {}
+  ts_walk_block(block, seen)
+  let names : Array[String] = []
+  for entry in seen {
+    names.push(entry.0)
+  }
+  names.sort()
+  names
+}
+
+///|
+fn ts_walk_block(block : @ast.TsBlock, seen : Map[String, Bool]) -> Unit {
+  for s in block.stmts {
+    ts_walk_stmt(s, seen)
+  }
+}
+
+///|
+fn ts_walk_exprs(exprs : Array[@ast.TsExpr], seen : Map[String, Bool]) -> Unit {
+  for e in exprs {
+    ts_walk_expr(e, seen)
+  }
+}
+
+///|
+fn ts_walk_class(
+  decl : @ast.TsClassDecl,
+  ctor : @ast.TsFunc?,
+  seen : Map[String, Bool],
+) -> Unit {
+  match ctor {
+    Some(f) => ts_walk_block(f.body, seen)
+    None => ()
+  }
+  for m in decl.methods {
+    match m.body {
+      Some(b) => ts_walk_block(b, seen)
+      None => ()
+    }
+  }
+  for sf in decl.static_field_inits {
+    ts_walk_expr(sf.1, seen)
+  }
+  match decl.base_expr {
+    Some(b) => ts_walk_expr(b, seen)
+    None => ()
+  }
+}
+
+///|
+fn ts_walk_expr(e : @ast.TsExpr, seen : Map[String, Bool]) -> Unit {
+  match e {
+    JsxElement(tag, attrs, children) => {
+      // The tag is in the name so a violation on a 3 MB bundle points at
+      // the construct instead of at the whole file.
+      seen["JSX element <" + tag + ">"] = true
+      for a in attrs {
+        match a.1 {
+          Some(v) => ts_walk_expr(v, seen)
+          None => ()
+        }
+      }
+      ts_walk_exprs(children, seen)
+    }
+    As(inner, _) => {
+      seen["`as` type assertion"] = true
+      ts_walk_expr(inner, seen)
+    }
+    Satisfies(inner, _) => {
+      seen["`satisfies` operator"] = true
+      ts_walk_expr(inner, seen)
+    }
+    NonNull(inner) => {
+      seen["`!` non-null assertion"] = true
+      ts_walk_expr(inner, seen)
+    }
+    // Everything below carries sub-expressions and is otherwise ordinary
+    // JavaScript.
+    BinOp(_, a, b) | Seq(a, b) => {
+      ts_walk_expr(a, seen)
+      ts_walk_expr(b, seen)
+    }
+    UnaryOp(_, i)
+    | Spread(i)
+    | Await(i)
+    | YieldStar(i)
+    | OptionalChain(i)
+    | PureCall(i)
+    | TypeArgs(_, i)
+    | PropAccess(i, _) => ts_walk_expr(i, seen)
+    Cond(c, t, f) => {
+      ts_walk_expr(c, seen)
+      ts_walk_expr(t, seen)
+      ts_walk_expr(f, seen)
+    }
+    Call(_, args) | New(_, args) => ts_walk_exprs(args, seen)
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      ts_walk_expr(callee, seen)
+      ts_walk_exprs(args, seen)
+    }
+    MethodCall(recv, _, args) => {
+      ts_walk_expr(recv, seen)
+      ts_walk_exprs(args, seen)
+    }
+    IndexAccess(a, b) | ComputedProp(a, b) => {
+      ts_walk_expr(a, seen)
+      ts_walk_expr(b, seen)
+    }
+    ArrayLit(items) => ts_walk_exprs(items, seen)
+    ObjectLit(entries) =>
+      for ent in entries {
+        ts_walk_expr(ent.1, seen)
+      }
+    AssignExpr(_, v) | AssignPattern(_, v) => ts_walk_expr(v, seen)
+    CompoundAssignExpr(t, _, v) => {
+      ts_walk_expr(t, seen)
+      ts_walk_expr(v, seen)
+    }
+    PropAssignExpr(recv, _, v) => {
+      ts_walk_expr(recv, seen)
+      ts_walk_expr(v, seen)
+    }
+    IndexAssignExpr(recv, idx, v) => {
+      ts_walk_expr(recv, seen)
+      ts_walk_expr(idx, seen)
+      ts_walk_expr(v, seen)
+    }
+    Yield(opt) =>
+      match opt {
+        Some(i) => ts_walk_expr(i, seen)
+        None => ()
+      }
+    DynamicImport(spec, opts) => {
+      ts_walk_expr(spec, seen)
+      match opts {
+        Some(o) => ts_walk_expr(o, seen)
+        None => ()
+      }
+    }
+    TaggedTemplate(tag, _, _, exprs) => {
+      ts_walk_expr(tag, seen)
+      ts_walk_exprs(exprs, seen)
+    }
+    TemplateLiteral(_, exprs) => ts_walk_exprs(exprs, seen)
+    ArrowFunc(_, _, body, _) =>
+      match body {
+        ArrowExpr(inner) => ts_walk_expr(inner, seen)
+        ArrowBlock(b) => ts_walk_block(b, seen)
+      }
+    FuncExpr(f) => ts_walk_block(f.body, seen)
+    NativeClassExpr(decl, ctor) => ts_walk_class(decl, ctor, seen)
+    _ => ()
+  }
+}
+
+///|
+fn ts_walk_stmt(s : @ast.TsStmt, seen : Map[String, Bool]) -> Unit {
+  match s {
+    Var(_, _, e) | Let(_, _, e) | Const(_, _, e) => ts_walk_expr(e, seen)
+    Expr(e) | Throw(e) | Assign(_, e) | CompoundAssign(_, _, e) =>
+      ts_walk_expr(e, seen)
+    Return(opt) =>
+      match opt {
+        Some(e) => ts_walk_expr(e, seen)
+        None => ()
+      }
+    PropAssign(recv, _, v) => {
+      ts_walk_expr(recv, seen)
+      ts_walk_expr(v, seen)
+    }
+    IndexAssign(recv, idx, v) => {
+      ts_walk_expr(recv, seen)
+      ts_walk_expr(idx, seen)
+      ts_walk_expr(v, seen)
+    }
+    If(c, t, eopt) => {
+      ts_walk_expr(c, seen)
+      ts_walk_block(t, seen)
+      match eopt {
+        Some(b) => ts_walk_block(b, seen)
+        None => ()
+      }
+    }
+    While(c, b) | DoWhile(c, b) | With(c, b) => {
+      ts_walk_expr(c, seen)
+      ts_walk_block(b, seen)
+    }
+    For(init, cond, update, body) => {
+      match init {
+        Some(st) => ts_walk_stmt(st, seen)
+        None => ()
+      }
+      match cond {
+        Some(ex) => ts_walk_expr(ex, seen)
+        None => ()
+      }
+      match update {
+        Some(st) => ts_walk_stmt(st, seen)
+        None => ()
+      }
+      ts_walk_block(body, seen)
+    }
+    ForOf(_, _, _, iter, body)
+    | ForAwaitOf(_, _, _, iter, body)
+    | ForIn(_, _, _, iter, body) => {
+      ts_walk_expr(iter, seen)
+      ts_walk_block(body, seen)
+    }
+    Switch(e, cases) => {
+      ts_walk_expr(e, seen)
+      for c in cases {
+        match c.test_expr {
+          Some(te) => ts_walk_expr(te, seen)
+          None => ()
+        }
+        ts_walk_block(c.body, seen)
+      }
+    }
+    Try(b, _, cb, fb) => {
+      ts_walk_block(b, seen)
+      match cb {
+        Some(x) => ts_walk_block(x, seen)
+        None => ()
+      }
+      match fb {
+        Some(x) => ts_walk_block(x, seen)
+        None => ()
+      }
+    }
+    Block(b) => ts_walk_block(b, seen)
+    Label(_, inner) => ts_walk_stmt(inner, seen)
+    NativeClassStmt(decl, ctor) => ts_walk_class(decl, ctor, seen)
+    _ => ()
+  }
 }
 
 ///|
@@ -138,6 +428,10 @@ fn verifier_extra_globals() -> Array[String] {
     "close", "postMessage", "scrollTo", "scrollBy", "getSelection", "caches", "OffscreenCanvas",
     "createImageBitmap", "ImageData", "FontFace", "fonts", "confirm", "prompt", "screen",
     "history", "top", "parent", "frames", "devicePixelRatio", "visualViewport", "reportError",
+    "ClipboardEvent", "ClipboardItem", "DataTransfer", "Clipboard", "Selection",
+    "Range", "MediaQueryList", "PointerEvent", "TouchEvent", "KeyboardEvent", "MouseEvent",
+    "WheelEvent", "DragEvent", "InputEvent", "FocusEvent", "SVGSVGElement", "HTMLInputElement",
+    "HTMLTextAreaElement", "HTMLDivElement", "HTMLImageElement", "HTMLAnchorElement",
     // Test / bundler injections.
      "describe", "it", "test", "expect", "vi", "jest", "beforeEach", "afterEach",
     "beforeAll", "afterAll",
