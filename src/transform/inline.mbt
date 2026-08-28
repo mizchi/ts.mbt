@@ -147,21 +147,26 @@ fn is_multi_decl_block(block : @ast.TsBlock) -> Bool {
   if block.stmts.length() < 2 {
     return false
   }
-  let kind = match block.stmts[0] {
-    Var(_, _, _) => 0
-    Let(_, _, _) => 1
-    Const(_, _, _) => 2
-    _ => return false
-  }
-  for s in block.stmts {
-    match s {
-      Var(_, _, _) => if kind != 0 { return false }
-      Let(_, _, _) => if kind != 1 { return false }
-      Const(_, _, _) => if kind != 2 { return false }
-      _ => return false
-    }
-  }
-  true
+  // Delegated, not re-derived. This question had FOUR independent
+  // implementations in this package — here, `symbol_graph.mbt`,
+  // `treeshake.mbt` and `emit.mbt` — and each of the first three said in
+  // its comment that it mirrored the emitter's rule while omitting the
+  // one condition that makes the rule sound: the marker that separates
+  // `let a = 1, b = 2` from a REAL block.
+  //
+  // Omitting it here is what shipped a duplicate declaration:
+  //
+  //     switch (n) {
+  //       case 1: { { let v1 = …; let v2 = …; } } break;
+  //       default: const { [k]: v3 } = bag;
+  //     }
+  //
+  // The inner block is all-declarations, so this predicate said "group",
+  // the pass spliced its bindings into the switch's scope, and the
+  // mangler had already given `v1` and `v3` the same name — correctly,
+  // since they were in different scopes when it looked. Output that Node
+  // refuses to parse, under `--minify --mangle`.
+  block_is_inline_decl_group(block)
 }
 
 ///|

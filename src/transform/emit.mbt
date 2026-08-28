@@ -1602,9 +1602,14 @@ fn block_is_inline_decl_group(block : @ast.TsBlock) -> Bool {
   if block.stmts.length() == 0 {
     return false
   }
-  // A real block carries its statements' positions; a declarator group
-  // never has any.
-  if block.stmt_positions.length() != 0 {
+  // A declarator group carries the marker and nothing else. Anything
+  // else — real positions, a stale array, or none at all — is a real
+  // block, which is the safe answer: keeping braces costs bytes, while
+  // dropping them from a real block merges two scopes.
+  if not(
+      block.stmt_positions.length() == 1 &&
+      block.stmt_positions[0] == @ast.DECL_GROUP_POSITION,
+    ) {
     return false
   }
   let kind = match block.stmts[0] {

@@ -1139,3 +1139,26 @@ pub(all) struct TypedFunc {
 pub(all) struct TypedModule {
   funcs : Array[TypedFunc]
 } derive(Debug)
+
+///|
+/// The single `stmt_positions` entry that marks a `TsBlock` as the
+/// spelling of a multi-declarator declaration (`let a = 1, b = 2`)
+/// rather than a real, scope-bearing block.
+///
+/// The distinction is not derivable from the contents — `{ let a = 1;
+/// let b = 2; }` and `let a = 1, b = 2` hold the same statements — so
+/// it has to be recorded by the producer. It used to be recorded as
+/// "`stmt_positions` is empty", which every rewrite that rebuilds a
+/// block erases: `merge_consecutive_decls` shrinks the statement list
+/// without shrinking the positions array, the length mismatch makes the
+/// next pass drop the positions altogether, and a REAL block then reads
+/// as a declarator group. Its braces came off and two `case` arms of one
+/// `switch` ended up declaring the same mangled name.
+///
+/// An explicit marker also fixes the failure DIRECTION. A pass that
+/// drops positions now yields "real block", which keeps braces that were
+/// not needed — bytes, not a duplicate declaration.
+///
+/// Real positions are source byte offsets, so a negative value cannot
+/// collide with one.
+pub const DECL_GROUP_POSITION : Int = -1

@@ -524,24 +524,30 @@ fn stmt_has_unlabeled_break_or_continue(stmt : @ast.TsStmt) -> Bool {
 /// parsed as `Block([Let, Let, …])`): 2+ statements all of the same
 /// declaration kind. Used to decide whether to unbox vs keep braces.
 fn is_fold_multi_decl_block(block : @ast.TsBlock) -> Bool {
+  // Two statements minimum: unboxing a single declaration buys nothing
+  // and `merge_consecutive_decls` never produces a group of one.
   if block.stmts.length() < 2 {
     return false
   }
-  let kind = match block.stmts[0] {
-    @ast.TsStmt::Var(_, _, _) => 0
-    @ast.TsStmt::Let(_, _, _) => 1
-    @ast.TsStmt::Const(_, _, _) => 2
-    _ => return false
-  }
-  for s in block.stmts {
-    match s {
-      @ast.TsStmt::Var(_, _, _) => if kind != 0 { return false }
-      @ast.TsStmt::Let(_, _, _) => if kind != 1 { return false }
-      @ast.TsStmt::Const(_, _, _) => if kind != 2 { return false }
-      _ => return false
-    }
-  }
-  true
+  // Everything else is `block_is_inline_decl_group`'s question, and it
+  // has to be asked with `block_is_inline_decl_group`'s rules.
+  //
+  // This function used to answer it on its own and omitted the
+  // `stmt_positions` check — the one that separates the parser's (and
+  // `merge_consecutive_decls`'s) spelling of `let a = 1, b = 2` from a
+  // REAL block. So fold unboxed real block scopes:
+  //
+  //     function f() {
+  //       { const x = (log.push(1), 1); const y = (log.push(2), 2); }
+  //       const x = 3;
+  //       return x;
+  //     }
+  //
+  // became `const x = …, y = …, x = 3;` under plain `--bundle --fold`,
+  // which does not parse. The emitter's copy of the predicate carries a
+  // comment spelling out that exact hazard, three hundred lines from
+  // here, and this copy did not have the check.
+  block_is_inline_decl_group(block)
 }
 
 ///|
@@ -604,7 +610,14 @@ fn merge_consecutive_decls(stmts : Array[@ast.TsStmt]) -> Array[@ast.TsStmt] {
         if run.length() == 1 {
           out.push(run[0])
         } else {
-          out.push(@ast.TsStmt::Block({ stmts: run, stmt_positions: [] }))
+          // Marked, not position-less: this IS a declarator group, and
+          // the marker is what says so to the emitter and the mangler.
+          out.push(
+            @ast.TsStmt::Block({
+              stmts: run,
+              stmt_positions: [@ast.DECL_GROUP_POSITION],
+            }),
+          )
         }
         i = j
       }

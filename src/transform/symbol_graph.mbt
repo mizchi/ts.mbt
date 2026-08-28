@@ -531,21 +531,8 @@ fn is_multi_decl_wrapper(block : @ast.TsBlock) -> Bool {
   if block.stmts.length() < 2 {
     return false
   }
-  let kind = match block.stmts[0] {
-    Var(_, _, _) => 0
-    Let(_, _, _) => 1
-    Const(_, _, _) => 2
-    _ => return false
-  }
-  for s in block.stmts {
-    match s {
-      Var(_, _, _) => if kind != 0 { return false }
-      Let(_, _, _) => if kind != 1 { return false }
-      Const(_, _, _) => if kind != 2 { return false }
-      _ => return false
-    }
-  }
-  true
+  // See `is_multi_decl_block` in `inline.mbt`: one rule, one place.
+  block_is_inline_decl_group(block)
 }
 
 ///|

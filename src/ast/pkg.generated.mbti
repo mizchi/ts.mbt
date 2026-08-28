@@ -6,6 +6,7 @@ import {
 }
 
 // Values
+pub const DECL_GROUP_POSITION : Int = -1
 
 // Errors
 

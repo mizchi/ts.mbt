@@ -831,6 +831,12 @@ fn is_pure_multi_decl_block(block : @ast.TsBlock) -> Bool {
   if block.stmts.length() < 2 {
     return false
   }
+  // The "is this a declarator group at all" half is one shared rule;
+  // see `is_multi_decl_block` in `inline.mbt`. What stays local is the
+  // PURITY half below, which is this pass's own proof obligation.
+  if !block_is_inline_decl_group(block) {
+    return false
+  }
   let mut kind = ""
   for s in block.stmts {
     match s {
