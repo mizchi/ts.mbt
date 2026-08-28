@@ -877,7 +877,21 @@ export class Generator {
         const receiver = onStatic
           ? { k: "var", name: className }
           : { k: "new", callee: { k: "var", name: className }, args: [] };
-        if (members.length === 0) return receiver;
+        // With no member to read, the receiver itself is the value —
+        // and a BARE CONSTRUCTOR is the one value in this grammar whose
+        // string coercion is its own source text. `bag.gamma += C1`
+        // makes a string containing `class C1 { c1f0 = true; }`,
+        // minification legitimately reformats that, and the harness
+        // reported a mismatch about nothing. (`encode` already refuses
+        // to record a function's source for exactly this reason; by the
+        // time `+=` has run it is an ordinary string and the observer
+        // cannot tell.) An instance coerces to `[object Object]`, which
+        // is stable, so fall back to that. Class values still reach
+        // sinks — through `new C()`, and through the exported class in
+        // the `export` shape.
+        if (members.length === 0) {
+          return { k: "new", callee: { k: "var", name: className }, args: [] };
+        }
         const member = this.pick(members);
         const target = { k: "member", obj: receiver, prop: member.prop };
         // A method reference has to be called to produce a value.

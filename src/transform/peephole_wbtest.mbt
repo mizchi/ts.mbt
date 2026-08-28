@@ -1874,3 +1874,73 @@ test "peephole: a negation compared to true still folds" {
   let out = minify_one("const r = !flag === true;\n")
   assert_false(out.contains("==="), msg="missed the saving: \{out}")
 }
+
+///|
+test "peephole: `x += 1` in expression position becomes PRE-increment" {
+  // `x += 1` evaluates to the NEW value; `x++` evaluates to the OLD
+  // one. Four sites in `peep_expr` produced the post-fix form, so
+  //
+  //     while (--brake > 0 && ((arr[0] += 1) ? keep : (trace.push(4), 10)))
+  //
+  // with `arr[0]` at 0 tested `1` and took the first branch, while the
+  // compiled `arr[0]++` tested `0` and ran a `trace.push` the source
+  // never runs. `++x` and `x++` are the same three bytes.
+  for
+    src in [
+      "const r = (n += 1) ? a : b;\n", "const r = (o.p += 1) ? a : b;\n", "const r = (arr[i] += 1) ? a : b;\n",
+    ] {
+    let out = peep_one(src)
+    assert_true(out.contains("++"), msg="no increment for `\{src}`: \{out}")
+    assert_false(
+      out.contains("]++") || out.contains("p++") || out.contains("n++"),
+      msg="post-increment in expression position for `\{src}`: \{out}",
+    )
+  }
+}
+
+///|
+test "peephole: `x += 1` as a STATEMENT stays post-increment" {
+  // In statement position the value is discarded, so the two spellings
+  // are interchangeable and post-fix is the conventional one. The
+  // normalization lives in `peep_stmt`'s `Expr` arm because `peep_expr`
+  // cannot know whether its caller uses the value.
+  let out = peep_one("n += 1;\n")
+  assert_true(out.contains("n++"), msg="got: \{out}")
+  let dec = peep_one("n -= 1;\n")
+  assert_true(dec.contains("n--"), msg="got: \{dec}")
+}
+
+///|
+test "peephole: `return void f()` keeps the call" {
+  // Ninth site of the same rule as `fold.mbt`'s `Return` arm. Here
+  // there is nowhere to put the effect, so the fold simply declines.
+  let out = peep_one("function f() { return void g(); }\n")
+  assert_true(out.contains("g()"), msg="got: \{out}")
+}
+
+///|
+test "peephole: `return void 0` still drops, the operand being pure" {
+  let out = peep_one("function f() { return void 0; }\n")
+  assert_false(out.contains("void"), msg="got: \{out}")
+}
+
+///|
+test "peephole: a switch with an impure scrutinee is not lowered to ifs" {
+  // The if-else chain tests the scrutinee once per named case, where
+  // the switch evaluates it once. `switch ((trace.push(2), k))` with
+  // two named cases pushed `2` twice.
+  let out = peep_one(
+    "function f() { switch ((eff(), k)) { case 0: return 1; case 1: return 2; default: ; } }\n",
+  )
+  assert_true(out.contains("switch"), msg="got: \{out}")
+}
+
+///|
+test "peephole: a switch with a pure scrutinee still lowers to ifs" {
+  // The paired half — re-evaluating a bare variable is free, so the
+  // rewrite must still fire.
+  let out = peep_one(
+    "function f() { switch (k) { case 0: return 1; case 1: return 2; default: ; } }\n",
+  )
+  assert_false(out.contains("switch"), msg="got: \{out}")
+}

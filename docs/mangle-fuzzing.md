@@ -414,6 +414,105 @@ brace / paren / bracket を数えています。「均衡」の**半分しか**�
 `)` が余りました。`[` と `{` にも同じ形があります
 (`a < [b > (c)]`, `a < {b: (c > (d))}`)。
 
+### 6. `return void f()` が call ごと消える（33 node）
+
+```ts
+function f0(p0, p1) {
+  if (--callBudget < 0) return 0;
+  trace.push(1);
+  return (void f0(a, z));
+}
+```
+
+`f0` の body が `if(--callBudget<0)return 0;trace.push(1)` になり、
+**再帰呼び出しが消えて** `f0` の tree-shake まで走りました。budget が
+減らないので全ての呼び出しが `undefined` を返し、原文が最終的に返す `0`
+にならない。
+
+「値が分かっている条件が実行ごと捨てられる」（前節 2）と**同じ規則の
+8 番目と 9 番目の site**です。`void EXPR` は `EXPR` が何であれ
+`undefined`——そして `EXPR` は走る。`fold.mbt` の `Return` arm と
+`peephole.mbt` の `Return` arm、両方に同じ形で入っていました。
+
+`fold.mbt` は statement 列を作れるので `EXPR; return;` に割り、trailing
+の bare return が剥がれて **`return void f()` より短くなります**。
+`peep_stmt` は 1 文しか返せないので、そこでは fold しないだけです。
+
+### 7. `arr[0] += 1` が `arr[0]++` になる（29 node）
+
+```ts
+while (--brake1 > 0 && (((arr[0] += 1) ? (b ^ arr[2]) : (trace.push(4), 10))))
+```
+
+`arr[0]` は 0 から始まるので `arr[0] += 1` は **1**（truthy）で第 1 枝。
+出力の `arr[0]++` は **0**（falsy）なので `trace.push(4)` が走りました。
+
+`x += 1` は**新しい値**に評価され、`x++` は**古い値**に評価される。
+`peep_expr` の 4 site が post-fix を作っていました。`++x` と `x++` は
+同じ 3 byte なので、これは trade-off ではなく単に演算子の間違いで、
+それが 4 箇所に書かれていた。`compound_step_value` 1 つに集約し、
+statement 位置（値が捨てられ、`x++` が JS の慣習）への戻しは
+`peep_stmt` の `Expr` arm 1 箇所に置きました。
+
+### 8. `switch` の scrutinee が case ごとに再評価される（21 node）
+
+```ts
+switch ((trace.push(2), obj?.['gamma'])) {
+case 0: return (a |= obj?.['gamma']);
+case 1: return (y--);
+default: ;
+}
+```
+
+全 case が terminator で終わる switch は if-else chain に落とします。
+chain は scrutinee を **named case ごとに 1 回**評価するのに対し、
+switch は 1 回だけ。`trace.push(2)` が 2 回走りました。
+
+`is_pure_value(scrutinee)` を要求します（named case が 1 つなら
+1 回しか書かないので不要）。同じ議論が「読むたびに値が変わりうる式」にも
+効きます。single-case の 2 つの arm は `ep` を 1 回しか書かないので
+gate は要りません。
+
+### 9. class の source text を observe していた（harness 側）
+
+`bag.gamma += C1` が `class C1 { c1f0 = true; }` を含む文字列を作り、
+minify が正当に整形を変えるので mismatch になっていました。
+`encode` は関数の source を**わざと記録しない**のに、`+=` が走った後は
+ただの文字列で observer には区別できない。generator 側で、member の
+無い class receiver は **bare constructor ではなく instance** を返す
+ようにしました（instance は `[object Object]` に coerce され安定）。
+class の値は `new C()` と `export` shape 経由で今も sink に届きます。
+
+### 10. `[no-oracle] Rest parameter must be last formal parameter`
+
+23 / 6019 seed が oracle を失っていた理由。**generator の不備ではなく
+Node の bug** でした。
+
+```ts
+const obj: Record<string, number> = { p: 1 };
+let a = 5;
+(({ ...obj, g: 1 } ? 1 : 2), (a--));
+```
+
+Node v22.22.2 の `--experimental-transform-types` はこれを
+
+```js
+{ ...obj, g: 1 } ? 1 : 2, a--;
+```
+
+に変換します。**paren が落ちて `{` が文頭に来る**ので block として
+読まれ、中の `...obj` が module wrapper の rest parameter と解釈されて
+`SyntaxError: Rest parameter must be last formal parameter`。原文は
+完全に正当で、mtsc は正しく compile します。message が構文と全く
+関係ないので、generator の不備に見えます（実際そう記録していました）。
+
+printer 側で、`(` を剥がした先頭が `{` になる expression statement には
+`void` を付けます。`0,` では**駄目**でした——SWC は捨てられる comma の
+定数第 1 引数を落として `{` を先頭に戻します。`void` は捨てられる
+operand ではなく unary operator なので残り、値が捨てられる
+expression statement では意味を変えません。3 本の leg は同じ source を
+走り続けます。
+
 ### 追えたが直さなかったもの
 
 **class の method が消える**（37 node）。

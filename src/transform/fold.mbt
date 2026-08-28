@@ -917,12 +917,29 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
       // `return undefined;` / `return void 0;` → `return;`.
       // Saves the expression bytes; `fold_func_body` then strips the
       // trailing bare `return;` from the body entirely.
-      let normalized : @ast.TsStmt = match ef {
-        Var("undefined") | UnaryOp(@ast.TsUnaryOp::Void, _) =>
-          @ast.TsStmt::Return(None)
-        _ => @ast.TsStmt::Return(Some(ef))
+      //
+      // `void EXPR` is `undefined` whatever `EXPR` is — and `EXPR`
+      // still runs. This arm read the first half as licence to discard
+      // the second, so `return void f();` compiled to a function with
+      // no body and `f` was then tree-shaken away. The fuzzer found it
+      // through a recursive `return void f0(a, z)`: the recursion
+      // vanished, the call-budget counter never ran down, and every
+      // call returned `undefined` where the source eventually returned
+      // `0`. Eighth site of this one rule (`keep_effects` covers the
+      // seven in `fold_binop` and the statement folds); here the
+      // effect becomes a statement of its own, because a `return` has
+      // nowhere to put a `Seq`.
+      match ef {
+        Var("undefined") => out.push(@ast.TsStmt::Return(None))
+        UnaryOp(@ast.TsUnaryOp::Void, inner) =>
+          if is_pure_value(inner) {
+            out.push(@ast.TsStmt::Return(None))
+          } else {
+            out.push(@ast.TsStmt::Expr(inner))
+            out.push(@ast.TsStmt::Return(None))
+          }
+        _ => out.push(@ast.TsStmt::Return(Some(ef)))
       }
-      out.push(normalized)
     }
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => out.push(stmt)
     Throw(e) => out.push(Throw(fold_expr(e)))

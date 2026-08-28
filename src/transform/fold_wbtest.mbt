@@ -1949,3 +1949,23 @@ test "fold: a PURE condition whose value is known is still dropped" {
   let dead_loop = fold_one("while (void 0) { g(); }\n")
   assert_false(dead_loop.contains("g()"), msg="kept a dead loop: \{dead_loop}")
 }
+
+///|
+test "fold: `return void f()` keeps the call" {
+  // `void EXPR` is `undefined` whatever `EXPR` is — and `EXPR` still
+  // runs. The `Return` arm read the first half as licence to discard
+  // the second, so the whole function body vanished and `f` was then
+  // tree-shaken. The fuzzer found it through a recursive
+  // `return void f0(a, z)`: the recursion disappeared, the call-budget
+  // counter never ran down, and every call returned `undefined` where
+  // the source eventually returned `0`. Eighth site of this one rule.
+  let out = fold_one("function f() { return void g(); }\n")
+  assert_true(out.contains("g()"), msg="got: \{out}")
+}
+
+///|
+test "fold: `return void 0` still drops, the operand being pure" {
+  // The paired half — the fix must not be "stop folding `return void`".
+  let out = fold_one("function f() { return void 0; }\n")
+  assert_false(out.contains("void"), msg="got: \{out}")
+}

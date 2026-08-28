@@ -77,7 +77,18 @@ product surfaces now.
   strip-only type stripping refuses `enum`, which made the reference
   leg silently unavailable on exactly the shape that is wrong with no
   optimization flag — `--experimental-transform-types` is what the leg
-  needs, in this harness and in the corpus one. Its first 400 seeds
+  needs, in this harness and in the corpus one. Transform mode brings a
+  hole of its own, whose diagnostic points nowhere near the cause: Node
+  22.22's SWC drops the parens around a comma expression whose first
+  operand is an object literal, so
+  `(({ ...obj, g: 1 } ? 1 : 2), (a--))` re-prints with `{` at statement
+  start, the block that opens swallows the `...obj` as a rest
+  parameter, and 23 of 6019 seeds lost their oracle to "Rest parameter
+  must be last formal parameter" on a program that is valid as written
+  and that mtsc compiles correctly. A leading `0,` does not rescue it —
+  SWC drops a constant first operand of a discarded comma too — but
+  `void` does, being an operator rather than a discardable operand.
+  Its first 400 seeds
   with the new oracle found two bugs nothing else had: `as_const_inline`
   descended into a `delete` operand and read `obj['q']` there as a safe
   keyed read, so `delete obj['q']` compiled to `delete 1` and every
@@ -93,7 +104,17 @@ product surfaces now.
   checker rejects a literal in condition, logical-operand and unary
   position, so that class is reachable only with checking off — the
   published-`.js` path — and lives in `fold_wbtest.mbt` rather than the
-  corpus, which type-checks its sources. All three hunt
+  corpus, which type-checks its sources. Sites eight and nine of the
+  same rule turned up later, both spelled `return void EXPR` — one in
+  `fold.mbt`, one in `peephole.mbt` — where a recursive
+  `return void f0(a, z)` lost its recursion, the call-budget counter
+  never ran down, and every call returned `undefined` where the source
+  eventually returned `0`. And the pattern is not confined to that one
+  rule: `x += 1` -> `x++` was written out at four sites in `peep_expr`,
+  and every one was the wrong operator — `x += 1` evaluates to the NEW
+  value, `x++` to the old, so `(arr[0] += 1) ? a : b` with `arr[0]` at 0
+  took the wrong branch. `++x` is the same three bytes, so nothing was
+  ever traded for it. All three hunt
   code we delete and should not; `just verify-dce-coverage` hunts the
   opposite — code we keep and could drop — as a table of small programs
   that each assert a marker is gone, the live markers survive, and stdout
@@ -304,7 +325,14 @@ product surfaces now.
   required its brace/paren/bracket counts to be ZERO where `depth`
   reached 0, so `a < (b > (c))` consumed `< ( b >`, saw the following
   `(`, and left a stray `)` behind as "Expected RParen, got RParen".
-  Its one un-fixed finding is the biggest open hole in this pipeline:
+  Its last finding is the one place a rewrite duplicated its input:
+  a switch whose every case ends in a terminator is lowered to an
+  if-else chain, and the chain tests the SCRUTINEE once per named case
+  where the switch evaluates it once — so
+  `switch ((trace.push(2), obj?.gamma))` pushed `2` twice. That now
+  requires a pure scrutinee, which also rules out a value that could
+  change between reads. Its one un-fixed finding is the biggest open
+  hole in this pipeline:
   `class C { m() {} } console.log(new C())` deletes `m` under plain
   `mtsc --bundle`, because `class_method_dce`'s `keep` is the export
   surface and nothing else — the pass has no notion of a class value

@@ -348,15 +348,35 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
       // redundant. Saves the 5 chars `void `.
       match ep {
         @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, inner) => Expr(inner)
+        // `++x;` → `x++;`. `peep_expr` produces the PRE-fix form
+        // because it cannot know whether its caller uses the value, and
+        // for `x += 1` the value is the incremented one. Here it is
+        // discarded, so the two are interchangeable and post-fix is the
+        // conventional spelling. Same three bytes either way.
+        @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::PreInc, t) =>
+          Expr(@ast.TsExpr::UnaryOp(@ast.TsUnaryOp::PostInc, t))
+        @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::PreDec, t) =>
+          Expr(@ast.TsExpr::UnaryOp(@ast.TsUnaryOp::PostDec, t))
         _ => Expr(ep)
       }
     }
     Return(Some(e)) => {
       let ep = peep_expr(e, ctx)
       // `return undefined` / `return void 0` → `return` (saves bytes).
+      //
+      // `void EXPR` is `undefined` whatever `EXPR` is, and `EXPR` still
+      // runs — so this may only drop a PURE operand. `fold.mbt`'s
+      // `Return` arm had the identical bug; this is the ninth site of
+      // the one rule. `peep_stmt` returns ONE statement, so there is
+      // nowhere to put the effect: an impure operand simply keeps
+      // `return void EXPR`, which is already what the source said.
+      // `fold.mbt` builds a statement list and can do better there,
+      // splitting it into `EXPR; return;` and then stripping the
+      // trailing bare return.
       match ep {
         Var("undefined") if !ctx.undefined_shadowed => Return(None)
-        UnaryOp(@ast.TsUnaryOp::Void, _) => Return(None)
+        UnaryOp(@ast.TsUnaryOp::Void, inner) if is_pure_value(inner) =>
+          Return(None)
         _ => Return(Some(ep))
       }
     }
@@ -649,8 +669,31 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
           // Check all named cases end with a terminator and have no
           // internal bare breaks (a bare break inside a case targets the
           // switch; lifting to if would make it a SyntaxError).
+          //
+          // The chain also tests the SCRUTINEE once per named case,
+          // where the switch evaluates it once. That is only equivalent
+          // when re-evaluating it is free, and nothing here asked:
+          //
+          //     switch ((trace.push(2), obj?.gamma)) {
+          //     case 0: return a; case 1: return y--; default: ; }
+          //
+          // became two `if`s and pushed `2` twice. Same argument applies
+          // to a value that could change between reads, which purity
+          // also rules out. The single-case arms above spell `ep` exactly
+          // once and so need no such gate — this is the only arm that
+          // duplicates it.
+          let named_count = {
+            let mut n = 0
+            for c in final_cases {
+              if c.test_expr is Some(_) {
+                n = n + 1
+              }
+            }
+            n
+          }
           let all_non_fall_through = {
-            let mut ok = final_cases.length() > 1
+            let mut ok = final_cases.length() > 1 &&
+              (named_count <= 1 || is_pure_value(ep))
             for c in final_cases {
               match c.test_expr {
                 Some(_) => {
@@ -1911,13 +1954,13 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       match rhs_p {
         BinOp(op, @ast.TsExpr::Var(other), value) =>
           if other == name {
-            match (compound_for_binop(op), value) {
-              (Some(AddAssign), @ast.TsExpr::IntLit(1)) =>
-                return UnaryOp(@ast.TsUnaryOp::PostInc, Var(name))
-              (Some(SubAssign), @ast.TsExpr::IntLit(1)) =>
-                return UnaryOp(@ast.TsUnaryOp::PostDec, Var(name))
-              (Some(cop), _) => return CompoundAssignExpr(Var(name), cop, value)
-              _ => ()
+            match compound_for_binop(op) {
+              Some(cop) =>
+                match compound_step_value(cop, value, Var(name)) {
+                  Some(e) => return e
+                  None => return CompoundAssignExpr(Var(name), cop, value)
+                }
+              None => ()
             }
           }
         _ => ()
@@ -2779,14 +2822,12 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
     CompoundAssignExpr(t, op, v) => {
       let tp = peep_expr(t, ctx)
       let vp = peep_expr(v, ctx)
-      // `expr += 1` → `expr++` and `expr -= 1` → `expr--` in expression
-      // position. Saves 2 bytes vs the compound-assign form.
-      match (op, vp) {
-        (AddAssign, @ast.TsExpr::IntLit(1)) =>
-          UnaryOp(@ast.TsUnaryOp::PostInc, tp)
-        (SubAssign, @ast.TsExpr::IntLit(1)) =>
-          UnaryOp(@ast.TsUnaryOp::PostDec, tp)
-        _ => CompoundAssignExpr(tp, op, vp)
+      // `expr += 1` → `++expr` and `expr -= 1` → `--expr` in expression
+      // position. See `compound_step_value` for why it is the PRE-fix
+      // form.
+      match compound_step_value(op, vp, tp) {
+        Some(e) => e
+        None => CompoundAssignExpr(tp, op, vp)
       }
     }
     AssignPattern(b, v) => AssignPattern(b, peep_expr(v, ctx))
@@ -2800,14 +2841,13 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
           Var(tn),
           BinOp(op, @ast.TsExpr::PropAccess(@ast.TsExpr::Var(rn), rp), rhs),
         ) if tn == rn && p == rp =>
-          match (compound_for_binop(op), rhs) {
-            (Some(AddAssign), @ast.TsExpr::IntLit(1)) =>
-              UnaryOp(@ast.TsUnaryOp::PostInc, PropAccess(Var(tn), p))
-            (Some(SubAssign), @ast.TsExpr::IntLit(1)) =>
-              UnaryOp(@ast.TsUnaryOp::PostDec, PropAccess(Var(tn), p))
-            (Some(cop), _) =>
-              CompoundAssignExpr(PropAccess(Var(tn), p), cop, rhs)
-            _ =>
+          match compound_for_binop(op) {
+            Some(cop) =>
+              match compound_step_value(cop, rhs, PropAccess(Var(tn), p)) {
+                Some(e) => e
+                None => CompoundAssignExpr(PropAccess(Var(tn), p), cop, rhs)
+              }
+            None =>
               PropAssignExpr(
                 Var(tn),
                 p,
@@ -2833,14 +2873,15 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
             rhs
           ),
         ) if tn == rn && ik == rk =>
-          match (compound_for_binop(op), rhs) {
-            (Some(AddAssign), @ast.TsExpr::IntLit(1)) =>
-              UnaryOp(@ast.TsUnaryOp::PostInc, IndexAccess(Var(tn), Var(ik)))
-            (Some(SubAssign), @ast.TsExpr::IntLit(1)) =>
-              UnaryOp(@ast.TsUnaryOp::PostDec, IndexAccess(Var(tn), Var(ik)))
-            (Some(cop), _) =>
-              CompoundAssignExpr(IndexAccess(Var(tn), Var(ik)), cop, rhs)
-            _ =>
+          match compound_for_binop(op) {
+            Some(cop) =>
+              match
+                compound_step_value(cop, rhs, IndexAccess(Var(tn), Var(ik))) {
+                Some(e) => e
+                None =>
+                  CompoundAssignExpr(IndexAccess(Var(tn), Var(ik)), cop, rhs)
+              }
+            None =>
               IndexAssignExpr(
                 Var(tn),
                 Var(ik),
@@ -3006,6 +3047,39 @@ fn compound_for_binop(op : @ast.TsBinOp) -> @ast.TsCompoundOp? {
     And => Some(AndAssign)
     Or => Some(OrAssign)
     Coalesce => Some(CoalesceAssign)
+    _ => None
+  }
+}
+
+///|
+/// `target += 1` / `target -= 1` as an increment, for a position where
+/// the expression's VALUE is used. `None` when the operator or the
+/// operand is not a step of one.
+///
+/// The operator has to be the PRE-fix form and four sites had it as
+/// post-fix. `x += 1` evaluates to the NEW value; `x++` evaluates to
+/// the OLD one. So
+///
+///     while (--brake > 0 && ((arr[0] += 1) ? keep : (trace.push(4), 10)))
+///
+/// with `arr[0]` at 0 tests `1` and takes the first branch, while the
+/// compiled `arr[0]++` tests `0` and ran a `trace.push` the source
+/// never runs. `++x` and `x++` are the same three bytes, so this was
+/// never a trade — just the wrong operator, written out four times.
+///
+/// The statement-position rewrites in `peep_stmt` are a different rule
+/// and correctly use the post-fix form: there the value is discarded,
+/// and `x++` is what a JS author would write.
+fn compound_step_value(
+  op : @ast.TsCompoundOp,
+  rhs : @ast.TsExpr,
+  target : @ast.TsExpr,
+) -> @ast.TsExpr? {
+  match (op, rhs) {
+    (AddAssign, @ast.TsExpr::IntLit(1)) =>
+      Some(UnaryOp(@ast.TsUnaryOp::PreInc, target))
+    (SubAssign, @ast.TsExpr::IntLit(1)) =>
+      Some(UnaryOp(@ast.TsUnaryOp::PreDec, target))
     _ => None
   }
 }

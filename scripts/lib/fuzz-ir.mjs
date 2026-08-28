@@ -172,8 +172,33 @@ export function printStmt(node, depth = 0) {
       // literal — as it is in every JS engine, which made these look
       // like mtsc parser bugs until Node rejected them too. Same for a
       // leading `function` or `class`, which would be declarations.
-      const needsParens = /^[{]/.test(text) || /^(function|class)\b/.test(text);
-      return needsParens ? `${p}(${text});\n` : `${p}${text};\n`;
+      // Parens alone are not enough, because a leading `{` can also be
+      // nested INSIDE them and something downstream may re-print the
+      // program with the parens gone. Node 22's
+      // `--experimental-transform-types` — the reference leg — does
+      // exactly that. Given
+      //
+      //     (({ ...obj, g: 1 } ? 1 : 2), (a--));
+      //
+      // it emits `{ ...obj, g: 1 } ? 1 : 2, a--;`, so the `{` opens a
+      // block and the `...obj` inside is read as a rest parameter of the
+      // module wrapper: "Rest parameter must be last formal parameter",
+      // on a program that is valid as written. Reproducible in four
+      // lines on Node v22.22.2, and nothing to do with mtsc, which
+      // compiles it correctly. It cost 23 of 6019 seeds their oracle,
+      // was reported as `[no-oracle] original threw SyntaxError`, and
+      // reads exactly like a generator defect.
+      //
+      // `void` is what survives that re-printing. A leading `0,` does
+      // NOT: SWC drops a constant first operand of a discarded comma
+      // and puts the `{` right back at the front. `void` is a unary
+      // operator rather than a discardable operand, so it stays, and
+      // for an expression statement whose value is already thrown away
+      // it changes nothing. All three legs still run the same source.
+      const bare = text.replace(/^\(+/, "");
+      if (/^[{]/.test(bare)) return `${p}void (${text});\n`;
+      if (/^(function|class)\b/.test(bare)) return `${p}(${text});\n`;
+      return `${p}${text};\n`;
     }
     case "decl": {
       const type = node.type ? `: ${node.type}` : "";
