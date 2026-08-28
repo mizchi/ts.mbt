@@ -108,8 +108,14 @@ product surfaces now.
   ten measured targets — every one behaviour-checked, no `size-only` and
   no `BLOCKED` rows left — there is **no win left**: eight neutral and two
   losses, both inside a byte of the noise floor (-0.22% on typebox,
-  -0.11% on Excalidraw) —
-  and the property mangler is entirely inert on every library measured.
+  -0.11% on Excalidraw). The property mangler was reported inert on
+  every library measured, and that turned out to be one bug rather than
+  a limit: a `const f = (…) => …` had no entry in the graph's function
+  table, so a call to one was treated as opaque and marked `External` —
+  which IS the wildcard, so a single arrow suppressed property mangling
+  for a whole bundle. Giving an arrow its declared name as an identity
+  moves real bytes (hono -9.4%, neverthrow -2.6%) and removed one of the
+  three LOSSes.
   hono (+500 bytes) and zod (+788) *were* wins until the `TypeArgs` fix
   below, which is the point: `f<T>(x)` parses as a wrapper node, nineteen
   passes never peeled it, and the references inside were invisible to

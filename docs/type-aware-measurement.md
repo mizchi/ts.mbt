@@ -974,13 +974,100 @@ identity map（`{ foo: "foo" }`）を返すことですが、**やめました**
 これは今日の他の修正と同じ姿勢です: **できないことを言う**。
 推測は CSS pipeline を実際に持っている呼び出し側に残します。
 
+## property mangler の不発は「fail-closed」ではなく arrow だった
+
+`--mangle-properties` は測定した全 library で **1 byte も動かない**
+状態が続いていました。原因は「解析が fail-closed だから」と記録して
+いましたが、それは粗すぎました。
+
+`--explain-mangle` が答えを持っていました。全 target で原因は 1 種類:
+
+```
+binding `createNeverThrowError` crosses the bundle boundary and
+carries no closed type annotation, so every name on it is assumed
+reachable
+```
+
+neverthrow は **これ 1 件だけ**で全体が suppress されていました。
+`createNeverThrowError` は `throw` される値を返す関数で、body は
+bundle の中にあります。
+
+### 切り分け
+
+4 変種で試したら、generic かどうかでも export かどうかでもなく、
+**arrow 形かどうか**でした。
+
+| 形 | wildcard |
+| --- | --- |
+| `export function make(): W {…}` | 出ない |
+| `export const make = (): W => …` | **出る** |
+
+`symbol_graph.mbt` の arrow arm にはこう書いてありました:
+
+```
+// Arrow has no own SymbolId for the function value itself;
+// returns / throws don't add func-return edges.
+w.enclosing_func = None
+```
+
+`g.funcs` は「この関数の return 経路は全部見えている」を意味する表で、
+そこに無い関数は `seed_from_expr` が **`External`** にします。
+`External` は wildcard です。つまり **body が目の前にある関数を
+不透明扱いして、bundle 全体の property mangling を止めていた**。
+
+arrow に SymbolId が無いのは事実ですが、`const f = (…) => …` の
+**宣言名が identity** です。`sg_visit_decl` は既に
+`enclosing_def` を持っているので、初期化子が直接 arrow のときだけ
+その id を渡します（初期化子の中にネストした arrow は誰の名前でもない）。
+
+### 健全性は「完全な情報がある場所」で確認する
+
+`g.funcs[fid].returns` を信用できるのは、その名前がまだ walk が見た
+関数を保持している間だけです。`let f = () => a; f = external` なら
+記録した returns は候補の 1 つに過ぎません。
+
+再代入は宣言より後にも書けるので、**登録時ではなく消費時**に
+`func_returns_are_complete`（= `!reassigned`）で確認します。
+これは既存の named function の穴（再代入された `function f` を
+無条件に信用していた）も同時に閉じます。
+
+### 結果
+
+| target | mangle のみ | + mangle-properties |
+| --- | --- | --- |
+| hono | 22,350 | **20,243（−2,107 / −9.4%）** |
+| neverthrow | 5,167 | **5,031（−136 / −2.6%）** |
+| typebox | 119,962 | **119,715（−247）** |
+| zod | 200,127 | 200,120（−7）|
+| valibot / immer / ts-pattern / superstruct / remeda | — | 変化なし |
+
+`measure_type_aware.mjs` が `--mangle-properties` を除外していた理由
+（「inert だから」）が消えたので flag set に入れました。副作用として
+**typebox の LOSS が消えました**（−261 → −14 byte、LOSS → NEUTRAL）。
+
+WIN は 0 のままです。property mangling は両 leg にほぼ同じだけ効くので、
+delta は動きません。動いたのは絶対サイズです。
+
+### fuzzer が 2 件の emitter バグを出した
+
+解析を緩めたので fuzzer を 600 seed 回したら、**私の変更とは無関係な**
+token 隣接バグが 2 件出ました。どちらも出力がパースできません。
+
+1. `expr_leading_byte` が**負の数値リテラル**を `'0'` と答えていた。
+   `--fold` が `UnaryOp(Neg, IntLit(3))` を `IntLit(-3)` にするので、
+   `x - -3` が `x--3`（decrement）になる。seed 484。
+2. 1 を直すとき `right_needs_token_separator` の AST 形の二重表を
+   `expr_leading_byte` に集約したら、**`PreInc`/`PreDec` の行を落として**
+   `c + ++a` が `c+++a` になった。seed 73。
+   「2 つの copy を 1 つにする」のは、**残す側が完全なとき**だけ改善です。
+
+800 seed（1600 program）で mismatch 0。
+
 ## 残っている既知の未修正
 
 | 件 | 症状 |
 | --- | --- |
-| property mangler が実 library で不発 | fail-closed な callee-provenance scan が全部 reserve する |
 | excalidraw が僅差で LOSS | −303 byte（−0.11%）。noise floor が 280 byte なのでぎりぎり判定に乗っている。残りの機構は未特定 |
-| typebox が僅差で LOSS | −261 byte（−0.22%）。predicate-inline の cost model 導入後の残り。機構は未特定 |
 | 述語 inline の得は後段次第 | inline それ自体は byte を増やす。畳めるかどうかは inline を決める時点で分からないので、budget 2 は「本当に払える形だけ」の近似 |
 | CSS modules の値 | `import styles from "./x.module.css"` に `{}` を渡す。class 名 map ではないので `styles.foo` は `undefined`。**修正しないと決めた**（下記）。value 形は警告するようにした |
 | `TypeArgs` の構造的保証 | 19 file に arm を足したが、次に walker を書く人が落とすのを止める仕組みは無い。`case40` が唯一の網 |

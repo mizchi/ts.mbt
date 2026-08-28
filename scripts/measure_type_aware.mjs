@@ -60,13 +60,29 @@ const WORK = path.join(ROOT, "_build", "type-aware");
 const FIXTURES = path.join(ROOT, "fixtures", "type-aware-corpus");
 const EXPECTED = path.join(FIXTURES, "expected.json");
 
-// Flags shared by `aware` and `blind`. Deliberately WITHOUT
-// `--mangle-properties`: on every library measured here the property
-// mangler is inert (the fail-closed callee-provenance scan finds calls
-// it cannot prove bundle-internal, so it reserves everything), which
-// means adding it changes no byte on either leg and only lengthens the
-// run. `docs/type-aware-measurement.md` records that result.
-const OPT_FLAGS = ["--treeshake", "--fold", "--minify", "--mangle"];
+// Flags shared by `aware` and `blind`.
+//
+// `--mangle-properties` was deliberately absent for a long time, because
+// the property mangler was inert on every library here: the observability
+// analysis reserved the WILDCARD, so no user-declared property name was
+// renamed and the flag changed no byte on either leg.
+//
+// The cause turned out to be narrower than "the analysis is
+// fail-closed". A `const f = (…) => …` had no entry in the graph's
+// function table — arrows were indexed by a FuncExpr's internal name and
+// have none — so a call to one was treated as opaque and marked
+// `External`, which IS the wildcard. One such arrow poisons the whole
+// bundle, and neverthrow's only cause was a single
+// `export const createNeverThrowError`. With arrows given their
+// declared name as an identity, the flag moves real bytes (hono
+// -2107, -9.4%), so it belongs in the measured set.
+const OPT_FLAGS = [
+  "--treeshake",
+  "--fold",
+  "--minify",
+  "--mangle",
+  "--mangle-properties",
+];
 
 // The corpus. `entry` is relative to the checkout root.
 //

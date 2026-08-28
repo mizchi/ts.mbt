@@ -944,6 +944,90 @@ fn sg_visit_block_in_new_scope(
 }
 
 ///|
+/// Walk an arrow function's parameters and body.
+///
+/// `self_id` is the binding the arrow is assigned to, when there is one.
+/// It matters more than it looks: `g.funcs` is what tells the
+/// observability analysis "the return paths of this function are all
+/// visible", and a function missing from it is treated as opaque —
+/// `seed_from_expr` marks it `External`, which is the wildcard, which
+/// suppresses property mangling for the whole bundle.
+///
+/// So an arrow used to poison the analysis for a reason that had nothing
+/// to do with what it does: the graph indexed return expressions under
+/// the FuncExpr's internal name, an arrow has none, and the arm here set
+/// `enclosing_func = None` with a comment saying so. neverthrow's single
+/// wildcard cause was `export const createNeverThrowError = (…) => …`,
+/// thrown at two call sites — a function whose body is right there in
+/// the bundle.
+///
+/// Soundness rests on the return set being COMPLETE, which is checked
+/// where the information is complete rather than here: `flow_analysis`
+/// falls back to `External` when the binding turns out to be reassigned,
+/// because then the arrow is not the only thing the name can hold.
+fn sg_visit_arrow(
+  w : SgWalker,
+  params : Array[@ast.TsParam],
+  body : @ast.TsArrowBody,
+  self_id : SymbolId?,
+) -> Unit {
+  let outer_scope = w.current_scope
+  let outer_func = w.enclosing_func
+  w.in_closure_depth = w.in_closure_depth + 1
+  w.current_scope = sg_new_scope(w.g, Some(outer_scope), Function)
+  w.enclosing_func = self_id
+  let param_ids : Array[SymbolId] = []
+  for p in params {
+    let pid = sg_declare_param(w.g, w.current_scope, p)
+    match p.type_ {
+      @ast.TsType::Any => ()
+      ty => w.g.symbols[pid].ts_type = ty
+    }
+    param_ids.push(pid)
+  }
+  match self_id {
+    Some(fid) => w.g.funcs[fid] = { params: param_ids, returns: [] }
+    None => ()
+  }
+  match body {
+    ArrowExpr(e) => {
+      sg_visit_expr(w, e)
+      // An expression body IS the return, and there is no `Return`
+      // statement for the walker's `Return` arm to pick up. Recording it
+      // here is not an optimization: an empty `returns` on a registered
+      // function would say "this function returns nothing observable",
+      // which under-reserves.
+      match self_id {
+        Some(fid) => {
+          let srcs = expr_immediate_sources(w, e)
+          for src in srcs {
+            w.g.flow_edges.push({ from: src, to: FuncReturn(fid) })
+          }
+          w.g.symbols[fid].written_values.push(e)
+          match w.g.funcs.get(fid) {
+            Some(info) =>
+              for src in srcs {
+                info.returns.push(src)
+              }
+            None => ()
+          }
+        }
+        None => ()
+      }
+    }
+    ArrowBlock(b) => {
+      sg_declare_block_bindings(w.g, b, w.current_scope, {})
+      for s in b.stmts {
+        sg_visit_stmt(w, s)
+      }
+    }
+  }
+  w.current_scope = outer_scope
+  w.enclosing_func = outer_func
+  w.in_closure_depth = w.in_closure_depth - 1
+}
+
+///|
 fn sg_visit_decl(w : SgWalker, b : @ast.TsBinding, init : @ast.TsExpr) -> Unit {
   // Walk the initializer expression. Use `enclosing_def` to add
   // RHS->LHS flow edges.
@@ -953,7 +1037,15 @@ fn sg_visit_decl(w : SgWalker, b : @ast.TsBinding, init : @ast.TsExpr) -> Unit {
       w.g.symbols[id].defs.push({ init: Some(init) })
       let prev = w.enclosing_def
       w.enclosing_def = Some(id)
-      sg_visit_expr(w, init)
+      // `const f = (x) => …` — the declared name is the arrow's
+      // identity, so its return paths can be recorded. Only a DIRECT
+      // initializer qualifies; an arrow nested inside the initializer
+      // belongs to no name.
+      match init {
+        @ast.TsExpr::ArrowFunc(params, _, body, _) =>
+          sg_visit_arrow(w, params, body, Some(id))
+        _ => sg_visit_expr(w, init)
+      }
       w.enclosing_def = prev
       // Direct RHS sources flow to the LHS binding.
       for src in expr_immediate_sources(w, init) {
@@ -1300,34 +1392,12 @@ fn sg_visit_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
       sg_visit_expr(w, k)
       sg_visit_expr(w, v)
     }
-    ArrowFunc(params, _, body, _is_async) => {
-      let outer_scope = w.current_scope
-      let outer_func = w.enclosing_func
-      w.in_closure_depth = w.in_closure_depth + 1
-      w.current_scope = sg_new_scope(w.g, Some(outer_scope), Function)
-      // Arrow has no own SymbolId for the function value itself;
-      // returns / throws don't add func-return edges.
-      w.enclosing_func = None
-      for p in params {
-        let pid = sg_declare_param(w.g, w.current_scope, p)
-        match p.type_ {
-          @ast.TsType::Any => ()
-          ty => w.g.symbols[pid].ts_type = ty
-        }
-      }
-      match body {
-        ArrowExpr(e) => sg_visit_expr(w, e)
-        ArrowBlock(b) => {
-          sg_declare_block_bindings(w.g, b, w.current_scope, {})
-          for s in b.stmts {
-            sg_visit_stmt(w, s)
-          }
-        }
-      }
-      w.current_scope = outer_scope
-      w.enclosing_func = outer_func
-      w.in_closure_depth = w.in_closure_depth - 1
-    }
+    // An arrow reached as a bare expression has no binding to identify
+    // it by, so its returns cannot be recorded. `sg_visit_decl` calls
+    // `sg_visit_arrow` directly with the declared name when the arrow IS
+    // an initializer, which is the case that matters.
+    ArrowFunc(params, _, body, _is_async) =>
+      sg_visit_arrow(w, params, body, None)
     FuncExpr(f) => sg_visit_function_body(w, f)
     DynamicImport(spec, opts) => {
       sg_visit_expr(w, spec)

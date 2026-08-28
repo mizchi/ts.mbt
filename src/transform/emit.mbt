@@ -1415,17 +1415,43 @@ fn expr_leading_byte(expr : @ast.TsExpr) -> Char {
     ArrayLit(_) => '['
     StringLit(_) => '"'
     TemplateLiteral(_, _) | TaggedTemplate(_, _, _, _) => '`'
-    NumberLit(_) | IntLit(_) => '0'
-    BigIntLit(_) => '0'
+    // A NEGATIVE numeric literal emits a leading `-`, not a digit.
+    // Answering `'0'` here is what let `x - -3` come out as `x--3`,
+    // which lexes as a decrement and does not parse. The AST shape says
+    // "literal"; the emitted TEXT says `-`, and every caller of this
+    // function is asking about the text.
+    //
+    // `--fold` is what makes this reachable: it turns
+    // `UnaryOp(Neg, IntLit(3))` — which the `UnaryOp` arm below reports
+    // correctly — into `IntLit(-3)`. Found by `just fuzz-mangle` at seed
+    // 484.
+    //
+    // Negative zero is included even though the emitter may print it as
+    // `0`: over-reporting costs one space, under-reporting costs a
+    // SyntaxError.
+    NumberLit(v) => if v < 0.0 || 1.0 / v < 0.0 { '-' } else { '0' }
+    IntLit(v) => if v < 0 { '-' } else { '0' }
+    BigIntLit(v) => if v.has_prefix("-") { '-' } else { '0' }
     // In minify mode `BoolLit` emits as `!0`/`!1`; in pretty mode as `true`/`false`.
     BoolLit(_) => '!'
     NullLit => '?'
-    UnaryOp(op, _) =>
+    UnaryOp(op, inner) =>
       match op {
         Not => '!'
         BitwiseNot => '~'
         Neg => '-'
         Plus => '+'
+        // `++x` / `--x` emit the operator first, so the leading byte is
+        // `+` / `-`. The `_ => '?'` this used to fall into is why
+        // `c + ++a` emitted `c+++a`, which lexes as `c++ + a` —
+        // `Invalid left-hand side expression in postfix operation`.
+        // Caught by `just fuzz-mangle` at seed 73, in the same run that
+        // confirmed the negative-literal fix, and against a comment of
+        // mine claiming these could not reach the caller.
+        PreInc => '+'
+        PreDec => '-'
+        // `x++` / `x--` emit the OPERAND first.
+        PostInc | PostDec => expr_leading_byte(inner)
         _ => '?'
       }
     Call(_, _) | New(_, _) | Var(_) => '?'
@@ -3722,17 +3748,22 @@ fn binop_str(op : @ast.TsBinOp) -> String {
 /// increment on the empty string, a SyntaxError. Same for
 /// `- -x` / `< <x` / `> >x`.
 fn right_needs_token_separator(op : @ast.TsBinOp, right : @ast.TsExpr) -> Bool {
-  let right_leader = match right {
-    UnaryOp(o, _) =>
-      match o {
-        Plus | PreInc => '+'
-        Neg | PreDec => '-'
-        Not => '!'
-        BitwiseNot => '~'
-        _ => '?'
-      }
-    _ => '?'
-  }
+  // The question is about TOKENS: would the operator and the first
+  // character of the right operand lex as one? So the leader comes from
+  // `expr_leading_byte`, which answers for the emitted text.
+  //
+  // This used to carry its own `UnaryOp`-only table, which is the same
+  // information stated a second time and missing the case that matters:
+  // a negative numeric literal leads with `-` and was reported as a
+  // digit, so `x - -3` emitted `x--3`.
+  //
+  // `expr_leading_byte` has to know about `++x` / `--x` for this to be
+  // right, and it did not: switching to it without checking dropped the
+  // `PreInc` / `PreDec` rows the old table had, and `c + ++a` came out
+  // as `c+++a`. One fuzz run found it. Consolidating two copies of a
+  // rule is only an improvement when the surviving copy is the complete
+  // one.
+  let right_leader = expr_leading_byte(right)
   match op {
     Add => right_leader == '+'
     Sub => right_leader == '-'

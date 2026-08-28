@@ -3,7 +3,7 @@
     "status": "measured",
     "verdict": "NEUTRAL",
     "delta": 6,
-    "aware": 22349
+    "aware": 20242
   },
   "valibot": {
     "status": "measured",
@@ -13,9 +13,9 @@
   },
   "typebox": {
     "status": "measured",
-    "verdict": "LOSS",
-    "delta": -261,
-    "aware": 119961
+    "verdict": "NEUTRAL",
+    "delta": -14,
+    "aware": 119714
   },
   "immer": {
     "status": "measured",
@@ -27,7 +27,7 @@
     "status": "measured",
     "verdict": "NEUTRAL",
     "delta": 0,
-    "aware": 5166
+    "aware": 5030
   },
   "ts-pattern": {
     "status": "measured",
@@ -45,18 +45,18 @@
     "status": "measured",
     "verdict": "NEUTRAL",
     "delta": -18,
-    "aware": 200126
+    "aware": 200119
   },
   "excalidraw": {
     "status": "measured",
     "verdict": "LOSS",
     "delta": -296,
-    "aware": 280598
+    "aware": 280591
   },
   "remeda": {
     "status": "measured",
     "verdict": "NEUTRAL",
     "delta": 26,
-    "aware": 28595
+    "aware": 28594
   }
 }

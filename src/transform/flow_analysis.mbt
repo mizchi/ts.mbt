@@ -48,6 +48,22 @@ pub(all) enum Observability {
 } derive(Eq, Debug)
 
 ///|
+/// Can this function's recorded return set be trusted as COMPLETE?
+///
+/// `g.funcs[fid].returns` is what lets the analysis look through a call
+/// instead of assuming the wildcard. That is only valid while the name
+/// still holds the function the walk saw: `let f = () => a; f = external`
+/// makes the recorded returns one of several possibilities, and the
+/// analysis would under-reserve.
+///
+/// Checked here rather than at registration because a reassignment can
+/// appear anywhere in the file, including after the declaration — the
+/// walk does not know yet, and this does.
+fn func_returns_are_complete(g : SymbolGraph, fid : SymbolId) -> Bool {
+  !g.symbols[fid].reassigned
+}
+
+///|
 /// Lattice join: max of the two arguments according to the
 /// ordering `Hidden < ViaStringify < DirectProps < RecursiveProps
 /// < External`. Used by the fixed-point loop so observability
@@ -197,11 +213,13 @@ fn seed_from_expr(
       match lookup_symbol_in_scope(g, scope, callee) {
         Some(fid) =>
           match g.funcs.get(fid) {
-            Some(info) =>
+            Some(info) if func_returns_are_complete(g, fid) =>
               for src in info.returns {
                 propagate_to_flow_source(src, obs, g, result, worklist)
               }
-            None => bump_obs(fid, External, result, worklist)
+            // No recorded return set, or one that cannot be trusted:
+            // the callee is opaque, so the wildcard.
+            _ => bump_obs(fid, External, result, worklist)
           }
         None => ()
       }
@@ -213,11 +231,11 @@ fn seed_from_expr(
       match fid {
         Some(id) =>
           match g.funcs.get(id) {
-            Some(info) =>
+            Some(info) if func_returns_are_complete(g, id) =>
               for src in info.returns {
                 propagate_to_flow_source(src, obs, g, result, worklist)
               }
-            None => bump_obs(id, External, result, worklist)
+            _ => bump_obs(id, External, result, worklist)
           }
         None => ()
       }
@@ -325,14 +343,16 @@ fn propagate_to_flow_source_visited(
       // for a symbol the observability map contains.
       bump_obs(fid, obs, result, worklist)
       match g.funcs.get(fid) {
-        Some(info) =>
+        Some(info) if func_returns_are_complete(g, fid) =>
           for ret in info.returns {
             propagate_to_flow_source_visited(
               ret, obs, g, result, worklist, visited,
             )
           }
-        // Anonymous function — can't pin down the source.
-        None => ()
+        // Anonymous function, or a name that does not only ever hold
+        // this one — either way the return set is not the whole story,
+        // so fall back to the wildcard rather than to silence.
+        _ => bump_obs(fid, External, result, worklist)
       }
     }
     FuncArg(_, _) => ()

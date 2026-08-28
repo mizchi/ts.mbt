@@ -106,3 +106,56 @@ test "emit: an arrow body that cannot start with `{` gets no parens" {
     }
   }
 }
+
+///|
+test "emit: a binary operator never merges with its right operand's leader" {
+  // Token adjacency, which is a SyntaxError rather than a wrong value.
+  // Two ways this was broken, both found by `just fuzz-mangle` in
+  // consecutive runs:
+  //
+  //   * `expr_leading_byte` answered `'0'` for a NEGATIVE numeric
+  //     literal, so `x - -3` emitted `x--3` — a decrement. `--fold` is
+  //     what makes it reachable: it turns `UnaryOp(Neg, IntLit(3))`,
+  //     which was reported correctly, into `IntLit(-3)`.
+  //   * consolidating the separator rule onto `expr_leading_byte`
+  //     dropped the `PreInc` / `PreDec` rows the old duplicate table
+  //     had, so `c + ++a` emitted `c+++a` — `c++ + a`.
+  //
+  // Every shape, so a third round has somewhere to fail.
+  // The invariant is that the MERGED token never appears — not that a
+  // particular spelling does. `c + +3` legitimately folds to `c+3`,
+  // because unary `+` on a positive literal is identity and `c+3` is
+  // fine; asserting a `+ +3` spelling would be over-specification that
+  // fights the folder.
+  let cases = [
+    "c + ++a", "c - --a", "c + +a", "c - -a", "c - -3", "c + +3", "c - -0", "c - -1.5",
+    "c - -a - -b",
+  ]
+  for expr in cases {
+    let src = "const r = \{expr};"
+    let block = @parser.parse_block_from_source(src)
+    let folded = fold_block(block)
+    let e = Emitter::new(pretty=false)
+    emit_block(e, folded)
+    let out = e.to_string()
+    assert_false(out.contains("c++"), msg="`\{expr}` produced `c++`: \{out}")
+    assert_false(out.contains("c--"), msg="`\{expr}` produced `c--`: \{out}")
+    assert_false(out.contains("a++"), msg="`\{expr}` produced `a++`: \{out}")
+    assert_false(out.contains("a--"), msg="`\{expr}` produced `a--`: \{out}")
+  }
+}
+
+///|
+test "emit: a postfix operand needs no separator" {
+  // The other direction — `x++` emits the OPERAND first, so its leading
+  // byte is the operand's and no space is owed. Over-separating is only
+  // bytes, but the rule should still say the right thing.
+  for src in ["const r = c + a++;", "const r = c - a--;"] {
+    let block = @parser.parse_block_from_source(src)
+    let e = Emitter::new(pretty=false)
+    emit_block(e, fold_block(block))
+    let out = e.to_string()
+    assert_false(out.contains("+ a++"), msg="expected no space, got: \{out}")
+    assert_false(out.contains("- a--"), msg="expected no space, got: \{out}")
+  }
+}
