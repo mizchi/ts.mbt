@@ -107,7 +107,7 @@ type-aware 経路だけのものでした。直すと aware leg が hono で +49
 | hono | measured | — |
 | valibot | measured | — |
 | neverthrow | measured | 元 BLOCKED。export-surface の memo で 420s 未完 → 1 秒未満 |
-| ts-pattern | measured | 元 BLOCKED。同上。ただし `P` が bundle に無い（下記）|
+| ts-pattern | measured | 元 BLOCKED。`P` / `Pattern` が落ちていたのも修正（下記）|
 | zod | measured | 元 BLOCKED。4 件の修正を経て挙動検証まで到達 |
 | excalidraw | measured | corpus 唯一の UI アプリかつ唯一の monorepo。bundle できるまでに 5 件、実行できるまでに 3 件（下記）|
 | superstruct | measured | 元 BLOCKED → 15ms、さらに元 BROKEN → 挙動一致（下記の `.name` reserve）|
@@ -892,11 +892,67 @@ unused-parameter pass や single-use inliner が「何も変に見えないま�
 これで corpus は **10 target 全部 measured、BLOCKED も size-only も 0**
 になりました。
 
+## ts-pattern: 公開 API の大半が落ちていて、row は NEUTRAL だった
+
+ts-pattern の entry は
+
+```ts
+import * as Pattern from './patterns';
+export { Pattern, Pattern as P };
+```
+
+で、**両方の綴りが bundle から消えていました**。`P` は ts-pattern を
+使う人がまず import するものなので、公開 surface のほぼ全部です。
+
+原因は 2 段でした。
+
+### 1. export specifier は block reference ではない
+
+namespace object（`const Pattern = {...}`）は namespace が **escape**
+するときだけ合成されます。これは正しい設計で、無条件に出すと循環 import
+で TDZ を壊すからです（zod の `iso.js` <-> `schemas.js`）。
+
+しかし escape 判定は module の **block** 内の参照を探します。
+`export { Pattern }` は module のメタデータで、block の中の参照では
+ありません。だから合成されず、`Pattern` は解決先を失い、export list
+からも消える。
+
+`export * as ns from "…"` は既に forced escape 扱いでした。
+by-name の形は同じ事実の別の言い方です。
+
+### 2. `export type { X }` が namespace object に入っていた
+
+1 を直したら `let ns = { Pattern: ns, … }` という**自己参照**が生まれ、
+`Cannot access 'aE' before initialization` になりました。
+
+`patterns.ts` に `export type { Pattern }` があります。これは
+**別 module から import した型の再 export** で、linker の
+type-only 判定は module 自身の `type_aliases` / `interfaces` から
+導出していたので、これが見えていませんでした。
+
+`TsExportSpec` に flag を足すのが素直ですが、この struct は 85 箇所で
+構築されています。代わりに `TsModuleBlock.type_only_exports` として
+**parser が「module がそう言った」ことを記録**するようにしました。
+`TsReExportSpec` は既に `type_only` を持っているので、対称になります。
+
+### driver をバグの周りに書いていた
+
+一番の教訓はこれです。ts-pattern の driver には
+「`P` は bundle に無いので import しない」というコメントが付いていて、
+row は **NEUTRAL** と報告し続けていました。**driver をバグの周りに
+書くと、そのバグを承認してしまう**。
+
+driver は `P` の 13 の使い方（`union` / `array().select()` / `when` /
+`instanceOf` / `optional` / `_` / nested select …）と
+`P === Pattern` を観測するようにしました。
+
+サイズは 5,795 → 8,567 byte に増えています。**以前は公開 API の
+大半を黙って落として小さくなっていた**だけです。
+
 ## 残っている既知の未修正
 
 | 件 | 症状 |
 | --- | --- |
-| alias 付き re-export | `export { X as Y }`（別 module 由来の X）が両方の綴りごと落ちる。ts-pattern の `P` |
 | property mangler が実 library で不発 | fail-closed な callee-provenance scan が全部 reserve する |
 | excalidraw が僅差で LOSS | −303 byte（−0.11%）。noise floor が 280 byte なのでぎりぎり判定に乗っている。残りの機構は未特定 |
 | typebox が僅差で LOSS | −261 byte（−0.22%）。predicate-inline の cost model 導入後の残り。機構は未特定 |

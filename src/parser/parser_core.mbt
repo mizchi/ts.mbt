@@ -235,6 +235,9 @@ pub struct Parser {
   // this module. See `TsModuleBlock.class_fields`.
   collected_class_fields : Array[(String, @ast.TsType)]
   // Set when the module block parses `export = <expr>`.
+  // Names exported with `export type { X }` — no runtime value. See
+  // `TsModuleBlock.type_only_exports`.
+  collected_type_only_exports : Map[String, Bool]
   mut collected_export_equals : Bool
   // Set by `parse_function` on every call: `true` when the declaration
   // it just parsed had NO body — a TypeScript overload signature or an
@@ -325,6 +328,7 @@ pub fn Parser::new_with_strict_and_jsx(
     collected_type_aliases: [],
     collected_interfaces: [],
     collected_class_fields: [],
+    collected_type_only_exports: {},
     collected_export_equals: false,
     last_function_bodiless: false,
   }
@@ -511,6 +515,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     collected_type_aliases: [],
     collected_interfaces: [],
     collected_class_fields: [],
+    collected_type_only_exports: {},
     collected_export_equals: false,
     last_function_bodiless: false,
   }

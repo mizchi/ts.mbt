@@ -1084,6 +1084,23 @@ pub(all) struct TsModuleBlock {
   // completely, so it is not a request at runtime and ordering `y` by it
   // would order a module ESM never evaluates at that point.
   module_request_order : Array[String]
+  // Names this module exports with `export type { X }` (or a
+  // per-specifier `export { type X }`). They have no runtime value, so a
+  // consumer must not put them in a synthesized namespace object or
+  // re-emit them as a value export.
+  //
+  // `TsExportSpec` cannot carry the flag the way `TsReExportSpec` does:
+  // the struct is constructed in 85 places, and a required third field
+  // would touch every one. A set alongside them says the same thing.
+  //
+  // Deriving it instead from the module's own `type_aliases` and
+  // `interfaces` — which is what the bundler did — only finds a type
+  // DECLARED here. `export type { Pattern }` re-exporting a type that
+  // was imported from elsewhere is invisible to that, and ts-pattern's
+  // `patterns.ts` does exactly that: the synthesized namespace object
+  // got a `Pattern: <itself>` entry and the bundle died with
+  // `Cannot access 'aE' before initialization`.
+  type_only_exports : Map[String, Bool]
   // True when the module uses `export = <expr>` (CJS export assignment).
   // An `import X = require(...)` of such a module binds the ASSIGNED
   // entity, not a namespace object -- the bridge export resolution

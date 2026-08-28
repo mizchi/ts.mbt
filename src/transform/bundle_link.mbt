@@ -450,6 +450,20 @@ fn link_module_graph(
     let local_decl_names : Map[String, Bool] = {}
     collect_local_decl_names_in_block(m.block, local_decl_names)
     let forced_escape : Map[String, Bool] = {}
+    // A namespace this module EXPORTS BY NAME — `import * as Pattern
+    // from "./patterns"; export { Pattern, Pattern as P };` — escapes,
+    // and `block_references_var` cannot see it: an export specifier is
+    // module metadata, not a reference in the block. So the object was
+    // never synthesized, `Pattern` resolved to nothing, and BOTH
+    // spellings vanished from the bundle's export list. ts-pattern's
+    // whole public `Pattern` / `P` surface was missing.
+    //
+    // `export * as ns from "…"` was already forced, a few lines down,
+    // for exactly this reason. The by-name form is the same fact stated
+    // differently.
+    for spec in m.export_specs {
+      forced_escape[spec.local_name] = true
+    }
     let filtered_ns_subs : Map[String, Map[String, String]] = {}
     for entry in ns_subs {
       let original_ns = entry.0
@@ -822,6 +836,16 @@ fn type_only_export_names(node : ModuleNode) -> Map[String, Bool] {
   let runtime : Map[String, Bool] = {}
   collect_local_decl_names_in_block(node.block, runtime)
   let out : Map[String, Bool] = {}
+  // What the module SAID is type-only. Deriving it from the module's own
+  // `type_aliases` / `interfaces` below only finds a type DECLARED here;
+  // `export type { Pattern }` re-exporting a type imported from
+  // elsewhere is invisible to that, and ts-pattern's `patterns.ts` does
+  // exactly that.
+  for entry in node.type_only_exports {
+    if !runtime.contains(entry.0) {
+      out[entry.0] = true
+    }
+  }
   for ta in node.type_aliases {
     if !runtime.contains(ta.name) {
       out[ta.name] = true

@@ -15,7 +15,7 @@
     "status": "measured",
     "verdict": "LOSS",
     "delta": -261,
-    "aware": 119960
+    "aware": 119961
   },
   "immer": {
     "status": "measured",
@@ -33,7 +33,7 @@
     "status": "measured",
     "verdict": "NEUTRAL",
     "delta": 0,
-    "aware": 5795
+    "aware": 8567
   },
   "superstruct": {
     "status": "measured",
@@ -51,7 +51,7 @@
     "status": "measured",
     "verdict": "LOSS",
     "delta": -296,
-    "aware": 280606
+    "aware": 280598
   },
   "remeda": {
     "status": "measured",

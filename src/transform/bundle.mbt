@@ -301,6 +301,9 @@ priv struct ModuleNode {
   // imports and re-exports interleaved as they appear. See
   // `TsModuleBlock.module_request_order` and `topological_order`.
   module_request_order : Array[String]
+  // Names this module exports with `export type { X }` — no runtime
+  // value. See `TsModuleBlock.type_only_exports`.
+  type_only_exports : Map[String, Bool]
   // `const enum` declarations this module made. A const enum produces
   // NO runtime binding — every `E.Member` is meant to become a literal —
   // so a consumer in another module has nothing to link against and the
@@ -1642,6 +1645,7 @@ fn load_module_graph(
     reexport_specs: mb.reexports,
     const_enums: module_const_enums(mb.enums),
     module_request_order: mb.module_request_order,
+    type_only_exports: mb.type_only_exports,
     cjs_exports_var: detect_cjs_exports_var(lowered),
   }
   // Walk imports, recurse into relative paths, accumulate bare ones.
@@ -1801,6 +1805,7 @@ fn load_module_graph(
     reexport_specs: mb.reexports,
     const_enums: module_const_enums(mb.enums),
     module_request_order: mb.module_request_order,
+    type_only_exports: mb.type_only_exports,
     cjs_exports_var,
   }
   Ok(())

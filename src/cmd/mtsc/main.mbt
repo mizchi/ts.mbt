@@ -1324,6 +1324,7 @@ async fn main {
           interfaces: [],
           class_fields: [],
           module_request_order: [],
+          type_only_exports: {},
           has_export_equals: false,
         })
         let module_ = (try
@@ -1496,6 +1497,7 @@ async fn main {
             interfaces: [],
             class_fields: [],
             module_request_order: [],
+            type_only_exports: {},
             has_export_equals: false,
           })
           let entry_module = (try

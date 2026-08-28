@@ -2437,6 +2437,10 @@ fn Parser::parse_export_decl_for_module(
       } else {
         for item in items {
           let (local_name, export_name) = item
+          // `export type { X }` with no `from`: a type-only export of a
+          // local or imported name. It has no runtime value.
+          self.collected_type_only_exports[local_name] = true
+          self.collected_type_only_exports[export_name] = true
           exports.push({ local_name, export_name })
         }
       }
@@ -4082,6 +4086,7 @@ fn Parser::parse_module_block_with_const_values(
       interfaces: self.collected_interfaces,
       class_fields: self.collected_class_fields,
       module_request_order,
+      type_only_exports: self.collected_type_only_exports,
       has_export_equals: self.collected_export_equals,
     },
     const_values,

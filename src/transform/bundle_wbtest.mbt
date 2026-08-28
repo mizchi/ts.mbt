@@ -3872,3 +3872,60 @@ test "bundle: a namespace import of an empty module still gets an object" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "bundle: a namespace import re-exported by name survives" {
+  // `import * as Pattern from "./pat"; export { Pattern, Pattern as P };`
+  // dropped BOTH spellings. The namespace object is only synthesized
+  // when the namespace escapes, the escape test looks for a reference in
+  // the module BLOCK, and an export specifier is metadata — not a block
+  // reference. ts-pattern's whole public `P` surface was missing while
+  // its corpus row still reported NEUTRAL, because the driver had been
+  // written around the bug.
+  let files = vfs([
+    (
+      "pat.ts", "export const any = () => \"any\";\nexport const num = () => \"num\";\n",
+    ),
+    (
+      "entry.ts", "import * as Pattern from \"./pat\";\nexport { Pattern, Pattern as P };\nexport const other = () => 1;\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_true(
+        out.js.contains("Pattern = {"),
+        msg="the namespace object was not synthesized: \{out.js}",
+      )
+      assert_true(out.js.contains("Pattern as P"), msg="got: \{out.js}")
+      @test.assert_eq(verify_emitted_bundle(out.js).length(), 0)
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: an `export type` name stays out of the namespace object" {
+  // The other half, and the reason the fix above first produced
+  // `let ns = { Pattern: ns, … }` and a TDZ error. `export type { X }`
+  // re-exporting a type IMPORTED from elsewhere is invisible to a check
+  // derived from the module's own aliases and interfaces, which is what
+  // the linker used — so the parser records what the module SAID.
+  let files = vfs([
+    ("t.ts", "export type Thing = { a: number };\n"),
+    (
+      "pat.ts", "import { Thing } from \"./t\";\nexport type { Thing };\nexport const real = () => 1;\n",
+    ),
+    ("entry.ts", "import * as NS from \"./pat\";\nexport { NS };\n"),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_true(out.js.contains("real: real"), msg="got: \{out.js}")
+      assert_false(
+        out.js.contains("Thing:"),
+        msg="a type-only export reached the namespace object: \{out.js}",
+      )
+      @test.assert_eq(verify_emitted_bundle(out.js).length(), 0)
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
