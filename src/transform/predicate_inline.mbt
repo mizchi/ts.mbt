@@ -56,8 +56,20 @@ pub(all) struct PredicateEntry {
   // declaration dies after inlining and the trade is unconditionally
   // good; several mean every copy is paid for again.
   call_sites : Int
-  // Whether inlining the last caller can actually delete the
-  // declaration. False for anything the bundle exports.
+  // Whether inlining every caller can actually delete the declaration.
+  //
+  // The first version of this asked only "does the entry export it?",
+  // which is the wrong question in two directions and was wrong in
+  // practice: typebox's guards are not in `export_roots` (they leave
+  // through a synthesized namespace object, not a named export) so
+  // every one of them looked removable, none of them was removed, and
+  // the pass cost 362 bytes writing bodies twice.
+  //
+  // What actually has to hold is that a CALL is the only way the name
+  // is mentioned. Anything else — a namespace object literal, a
+  // re-export, a value passed by reference — keeps the declaration
+  // alive no matter how many call sites the pass rewrites, so the
+  // copies are pure cost.
   removable : Bool
 }
 
@@ -78,10 +90,16 @@ pub(all) struct PredicateEntry {
 /// falls out via treeshake". Both halves of that are true only when the
 /// predicate has ONE caller.
 ///
-/// 8 nodes is what a guard that pays for itself looks like:
-/// `x === "a"`, `typeof x === "string"`, `x.kind === "a" && x.n > 0`.
-/// Anything larger has to earn its copies, and nothing downstream can
-/// promise that.
+/// The number was 8 when that paragraph was written and is 2 now, and
+/// moving it again was not what fixed the rest. `just
+/// measure-type-aware --phases` prices the pass on its own, and at
+/// budget 2 it was still -261 bytes on typebox — which was exactly
+/// typebox's whole remaining LOSS against the types-erased leg. The
+/// budget was not the reason: `removable` was lying (see the field's
+/// comment), so bodies were being copied on the strength of a
+/// declaration that was never going to be deleted. With that fixed
+/// the budget only decides how large a body may be copied when the
+/// declaration really does die.
 const PREDICATE_INLINE_MAX_COST : Int = 2
 
 ///|
@@ -238,25 +256,51 @@ fn join(a : (Int, Int)?, b : (Int, Int)?, extra : Int) -> (Int, Int)? {
 }
 
 ///|
-/// Calls to `name` anywhere in the block, in either spelling. Counted on
-/// the pre-inline block, which is the right denominator: what matters is
-/// how many copies the pass is about to make.
-fn count_predicate_calls(block : @ast.TsBlock, out : Map[String, Int]) -> Unit {
-  fn bump(n : String) -> Unit {
-    out[n] = out.get(n).unwrap_or(0) + 1
+/// Mentions of each top-level name anywhere in the block, split into
+/// the two categories the trade depends on: calls, which inlining
+/// rewrites away, and everything else, which it cannot touch.
+///
+/// Counted on the pre-inline block, which is the right denominator:
+/// what matters is how many copies the pass is about to make, and
+/// whether anything is left holding the declaration alive afterwards.
+fn count_predicate_calls(
+  block : @ast.TsBlock,
+  calls : Map[String, Int],
+  other_refs : Map[String, Int],
+) -> Unit {
+  fn bump(m : Map[String, Int], n : String) -> Unit {
+    m[n] = m.get(n).unwrap_or(0) + 1
   }
 
   // `surface_visit_exprs_block` already visits every expression in the
   // block, nested function bodies included, so this needs no traversal
   // of its own — the one thing a counter must not do is miss a call site
   // and conclude a predicate has fewer callers than it has.
+  //
+  // It also visits the CALLEE of a `CallExpr`, so a `CallExpr(Var(n))`
+  // arrives twice: once as the call and once as a bare `Var(n)`. That
+  // is why the non-call tally is `Var` sightings MINUS `CallExpr`
+  // callees rather than a category of its own — miscounting that way
+  // would make every called predicate look permanently referenced.
+  let var_sightings : Map[String, Int] = {}
+  let callee_vars : Map[String, Int] = {}
   surface_visit_exprs_block(block, e => {
     match e {
-      Call(n, _) => bump(n)
-      CallExpr(@ast.TsExpr::Var(n), _) => bump(n)
+      Call(n, _) => bump(calls, n)
+      CallExpr(@ast.TsExpr::Var(n), _) => {
+        bump(calls, n)
+        bump(callee_vars, n)
+      }
+      Var(n) => bump(var_sightings, n)
       _ => ()
     }
   })
+  for name, seen in var_sightings {
+    let as_callee = callee_vars.get(name).unwrap_or(0)
+    if seen > as_callee {
+      other_refs[name] = seen - as_callee
+    }
+  }
 }
 
 ///|
@@ -269,15 +313,22 @@ pub fn build_predicate_table(
   // The bundle's exported top-level names. A predicate the bundle
   // exports cannot be removed however few callers it has, so the
   // "one caller, the declaration dies" exemption below does not apply
-  // to it. typebox exports its guards: `IsExtendsUnion` has exactly one
-  // internal caller, was inlined into it on that basis, and then stayed
-  // in the output anyway because it is part of the ABI — 362 bytes
-  // written twice.
+  // to it.
+  //
+  // This is necessary but nowhere near sufficient, and believing it was
+  // sufficient is what cost typebox 362 bytes: its guards do not appear
+  // in `export_roots` at all — they leave through a namespace object the
+  // linker synthesizes — so they read as removable and were copied. The
+  // reference tally in `count_predicate_calls` is what actually decides
+  // it; this list only covers the export SPECIFIERS, which are
+  // statements rather than expressions and so are invisible to that
+  // walk.
   exported? : Map[String, Bool] = {},
 ) -> PredicateTable {
   let entries : Map[String, PredicateEntry] = {}
   let calls : Map[String, Int] = {}
-  count_predicate_calls(block, calls)
+  let other_refs : Map[String, Int] = {}
+  count_predicate_calls(block, calls, other_refs)
   for stmt in block.stmts {
     match stmt {
       Let(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(f))
@@ -295,7 +346,8 @@ pub fn build_predicate_table(
                   param_refs: refs,
                   body_cost: cost,
                   call_sites: calls.get(name).unwrap_or(0),
-                  removable: not(exported.contains(name)),
+                  removable: not(exported.contains(name)) &&
+                  other_refs.get(name).unwrap_or(0) == 0,
                 }
               None => ()
             }
@@ -326,7 +378,11 @@ fn should_inline_predicate(entry : PredicateEntry, arg : @ast.TsExpr) -> Bool {
   if entry.call_sites <= 1 && entry.removable {
     return true
   }
-  entry.body_cost <= PREDICATE_INLINE_MAX_COST
+  // Several callers: the body is COPIED into each one, and the only gain
+  // is the declaration disappearing — so require that it actually can.
+  // Without `removable` the pass pays N copies AND keeps the original,
+  // which is a loss at every body size, not just a large one.
+  entry.removable && entry.body_cost <= PREDICATE_INLINE_MAX_COST
 }
 
 ///|

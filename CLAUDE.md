@@ -106,9 +106,25 @@ product surfaces now.
   its types erased — with all three legs required to observe the same
   thing. The answer so far is uncomfortable and worth knowing: across
   ten measured targets — every one behaviour-checked, no `size-only` and
-  no `BLOCKED` rows left — there is **no win left**: eight neutral and two
-  losses, both inside a byte of the noise floor (-0.22% on typebox,
-  -0.11% on Excalidraw). The property mangler was reported inert on
+  no `BLOCKED` rows left — there is **one win**: typebox at +247 bytes
+  (0.21%), eight neutral, and one loss inside a byte of the noise floor
+  (-0.11% on Excalidraw). Both of the numbers that moved came from
+  attributing them per pass rather than arguing about them:
+  `--disable-phase` prices each type-reading phase on its own, and it
+  said `predicate-inline` was costing typebox 261 bytes — which was
+  typebox's entire LOSS. The pass's `removable` flag asked "is this name
+  in the entry's export list?" and called that "can the declaration be
+  deleted?"; typebox's guards leave through a linker-synthesized
+  namespace object, so every one of them read as removable, every body
+  got copied, and not one declaration was deleted (836 functions before,
+  836 after). Counting non-call references instead — a call is the only
+  mention inlining rewrites, so the declaration dies only when calls are
+  the only mentions — took the phase to 0 and flipped typebox to the
+  corpus's first WIN, while leaving the two targets the pass does pay off
+  on (superstruct +29, remeda +26) untouched. Four of the six
+  type-reading phases (`switch-fold`, `tag-rewrite`, `class-method-dce`,
+  `type-fold`) still move zero bytes on all ten targets. The property
+  mangler was reported inert on
   every library measured, and that turned out to be one bug rather than
   a limit: a `const f = (…) => …` had no entry in the graph's function
   table, so a call to one was treated as opaque and marked `External` —

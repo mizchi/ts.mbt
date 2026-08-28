@@ -3364,6 +3364,49 @@ test "predicate-inline: a trivial guard with one caller still inlines" {
 }
 
 ///|
+test "predicate-inline: a guard held by a namespace object is not copied" {
+  // What `removable` is supposed to mean, and for a while did not.
+  //
+  // It asked one question — "is the name in the entry's export list?" —
+  // and typebox's guards answer no while being exported all the same:
+  // they leave through a namespace object the linker synthesizes, so
+  // the declaration is referenced by that object literal and survives
+  // every deletion pass. The bodies got copied on the strength of a
+  // declaration that was never going away, and the phase cost typebox
+  // 261 bytes with a trivial-body budget of 2 nodes already in place.
+  //
+  // The invariant a call count cannot see: a CALL is the only mention
+  // inlining rewrites, so the declaration only dies when calls are the
+  // only mentions there are.
+  let src =
+    #|function isSet(v: { flag: boolean }): v is { flag: boolean } {
+    #|  return v.flag;
+    #|}
+    #|const held = { isSet };
+    #|export function a(v: { flag: boolean }) { return isSet(v) ? 1 : 0; }
+    #|export function b(v: { flag: boolean }) { return isSet(v) ? 2 : 0; }
+    #|export const table = held;
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default().with_treeshake(true).with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // `held` keeps the declaration alive, so a copy at each call site
+      // is pure cost: the body must still be behind the one `isSet`.
+      let flag_reads = out.js.split(".flag").collect().length() - 1
+      assert_true(
+        flag_reads <= 1,
+        msg="copied the body into the call sites while the declaration stayed (\{flag_reads} reads): \{out.js}",
+      )
+      assert_true(
+        out.js.contains("isSet"),
+        msg="the declaration was deleted while `held` still references it: \{out.js}",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "class method: a destructured parameter survives the class lift" {
   // `TsClassMethodDecl.params` is `(String, TsType)` — no slot for a
   // pattern — so the lift collapsed `{ a, b }` to the first name it

@@ -75,17 +75,24 @@ bundle 内と証明できない call を見つけて全部 reserve する）、
 
 | target | files | unopt | aware | blind | delta | 判定 |
 | --- | --- | --- | --- | --- | --- | --- |
-| hono | 188 | 63,192 | 22,349 | 22,355 | +6 | NEUTRAL |
+| hono | 188 | 63,192 | 20,242 | 20,248 | +6 | NEUTRAL |
 | valibot | 828 | 228,307 | 88,768 | 88,768 | 0 | NEUTRAL |
-| typebox | 692 | 380,972 | 119,721 | 119,460 | −261 | LOSS |
-| immer | 17 | 49,809 | 20,826 | 20,826 | 0 | NEUTRAL |
-| neverthrow | 5 | 9,991 | 5,166 | 5,166 | 0 | NEUTRAL |
-| ts-pattern | 18 | 20,365 | 5,795 | 5,795 | 0 | NEUTRAL |
+| typebox | 692 | 380,453 | 119,453 | 119,700 | **+247** | **WIN** |
+| immer | 17 | 49,349 | 20,399 | 20,399 | 0 | NEUTRAL |
+| neverthrow | 5 | 9,991 | 5,030 | 5,030 | 0 | NEUTRAL |
+| ts-pattern | 18 | 20,772 | 8,567 | 8,567 | 0 | NEUTRAL |
 | superstruct | 8 | 20,785 | 10,523 | 10,552 | +29 | NEUTRAL |
-| zod | 133 | 648,647 | 200,159 | 200,141 | −18 | NEUTRAL |
-| excalidraw | 95 | 788,070 | 280,297 | 279,994 | −303 | LOSS |
+| zod | 133 | 653,992 | 200,119 | 200,101 | −18 | NEUTRAL |
+| excalidraw | 95 | 788,214 | 280,591 | 280,295 | −296 | LOSS |
+| remeda | 349 | 80,902 | 28,594 | 28,620 | +26 | NEUTRAL |
 
-**WIN が 0 件です。** 一つ前の記録では hono が +500、zod が +788 の WIN
+10 measured: 1 win, 8 neutral, 1 loss。**WIN は typebox の 1 件だけ**で、
+それは長らく LOSS だったものです（`predicate-inline` の `removable` が
+間違った質問に答えていた——下の節）。残る LOSS は excalidraw の −296 で、
+どの phase にも帰属せず、leg 構成の artifact です。
+
+WIN が長く 0 件だったこと自体に理由があります。一つ前の記録では
+hono が +500、zod が +788 の WIN
 でした。両方消えたのは測り方を変えたからではなく、**その WIN の一部が
 不健全な解析の産物だった**からです。理由は下の `TypeArgs` の節にあります。
 要約すると、`f<T>(x)` は `TypeArgs` wrapper として parse され、
@@ -1063,14 +1070,151 @@ token 隣接バグが 2 件出ました。どちらも出力がパースでき�
 
 800 seed（1600 program）で mismatch 0。
 
+## LOSS の機構は pass ではなかった: leg の作り方だった
+
+「excalidraw が僅差で LOSS、機構は未特定」が長く残っていました。
+`--timing` は各 phase の**時間**を言いますが、各 phase が何 byte の
+責任を持つかは誰も言えませんでした。20 pass の pipeline で当てずっぽうは
+根拠になりません。
+
+そこで `--disable-phase <name>` を追加しました。名前は `timer.phase`
+が使っているものと同じなので、`--timing` の出力がそのまま
+「何を切れるか」の一覧になります。
+
+### corpus 全体の帰属（`--phases`、正の値 = その phase が節約した byte）
+
+| target | predicate-inline | switch-fold | as-const-inline | tag-rewrite | class-method-dce | type-fold |
+| --- | --- | --- | --- | --- | --- | --- |
+| typebox | **−261** → 0（修正後） | 0 | 0 | 0 | 0 | 0 |
+| immer | 0 | 0 | 0 | 0 | 0 | 0 |
+| neverthrow | 0 | 0 | 0 | 0 | 0 | 0 |
+| ts-pattern | 0 | 0 | 0 | 0 | 0 | 0 |
+| superstruct | +29 | 0 | 0 | 0 | 0 | 0 |
+| zod | 0 | 0 | 0 | 0 | 0 | 0 |
+| excalidraw | 0 | 0 | **+920** | 0 | 0 | 0 |
+| remeda | +26 | 0 | 0 | 0 | 0 | 0 |
+
+読み取れることが 3 つあります。
+
+**1. 動くのは実質 2 phase だけ。** `switch-fold` / `tag-rewrite` /
+`class-method-dce` / `type-fold` は **corpus 全体で 1 byte も動かして
+いません**。4/6 が完全に不発です。
+
+**2. leg delta = `predicate-inline` の値**、3 target で完全一致:
+
+| target | leg delta | predicate-inline |
+| --- | --- | --- |
+| typebox | −261 | −261 |
+| superstruct | +29 | +29 |
+| remeda | +26 | +26 |
+
+つまり「typebox が僅差で LOSS、機構未特定」の答えは
+**`predicate-inline` が 261 byte 損している**でした。
+`PREDICATE_INLINE_MAX_COST` を 8 → 2 まで絞った後の残りです。
+**そしてその 261 byte は budget の問題ではありませんでした** — 次節。
+
+**3. 唯一の実質的な勝ちは `as-const-inline` の excalidraw +920。**
+そして excalidraw の leg delta は −296 で、どの phase にも帰属しません。
+zod の −18 も同じです。**これらの残差が leg 構成の artifact** です。
+
+### 261 byte の正体: `removable` が別の質問に答えていた
+
+帰属できた次は「なぜ損なのか」です。最初の仮説は **budget が緩い**
+——N 箇所に copy するコストは N×body、得は宣言 1 個分なので、
+break-even は N の関数であって body の大きさだけでは決まらない、という
+話です。そこで multi-call-site の側に `entry.removable` を要求してみた
+ところ、**typebox の数字は 1 byte も動きませんでした**（−261 のまま）。
+
+仮説が外れたので、モデルを足す前に出力を見ました。mangle を切って
+`--disable-phase predicate-inline` の有無で bundle を 2 本出し、
+`function NAME(` を数えます:
+
+```
+funcs on: 836  off: 836
+gone when ON (inlined+removed): (none)
+```
+
+**宣言が 1 つも消えていません。** phase の唯一の得が発生していない、
+つまり全部が純粋なコストです。ON 側が 363 byte 大きく、これは pass の
+comment に前から書いてあった「362 byte written twice」とほぼ一致します。
+数字は既に書かれていて、意味が回収されていなかっただけでした。
+
+`removable` の定義はこうなっていました:
+
+```moonbit
+removable: not(exported.contains(name))
+```
+
+`exported` は entry の named export 一覧です。typebox の guard は
+**そこに載りません** — linker が合成する namespace object 経由で外に
+出るので、named export ではないのです。だから全部が removable に見え、
+`call_sites <= 1 && removable` の免除路が開き、body が copy され、
+宣言は namespace object から参照されているので当然生き残ります。
+
+field 名は「消せるか」ですが、実際に答えていたのは「entry が名前で
+export しているか」でした。後者は前者の**必要条件の一つ**でしかありません。
+
+正しい不変条件は call 数では見えません: inline が書き換えられるのは
+**call だけ**なので、宣言が死ぬのは「call 以外の言及が 0」のときだけ
+です。namespace object literal、re-export、値としての受け渡し —
+どれ一つでも残っていれば、何箇所 rewrite しても宣言は残ります。
+
+そこで counter を calls / other-refs の 2 本立てにしました。`Var(n)` の
+目撃数から `CallExpr(Var(n))` の callee 分を引いたものが other-refs
+です（walker は callee も訪問するので、引かないと呼ばれた述語が全部
+「永久に参照されている」ことになります）。
+
+結果:
+
+| | 修正前 | 修正後 |
+| --- | --- | --- |
+| typebox `predicate-inline` | −261 | **0** |
+| typebox leg delta | −14 | **+247** |
+| typebox 判定 | NEUTRAL | **WIN (0.21%)** |
+| superstruct / remeda | +29 / +26 | +29 / +26（不変） |
+
+corpus 初の WIN です。そして得ている 2 target が変わっていないことが
+重要で、gate は pass を止めたのではなく**払えない取引だけを止めた**
+ことになります。
+
+教訓は既知の family でした: **「必要条件を十分条件として使った」**
+（`exported` に無い = 消せる）。`export_surface.mbt` を持っている repo で
+「export されているか」を named export 一覧だけで判定したのが誤りで、
+bundle は他にも名前を外に出す経路を持っています。
+
+### `blind` は「型を消した同じコード」ではない
+
+`blind` の入力は `unopt.mjs` — **mtsc 自身の emitter を一度通した**
+コードです。その round-trip 自体が最適化になっています
+（`as` が消え、class が lower され、宣言が merge され…）。
+`aware` はそれを受け取りません。
+
+`aware2` leg はこれを price するために作られましたが、測っているのは
+**「すでに最適化された出力に 2 回目を掛けたら何 byte か」**で、
+別のものです。excalidraw では **負の値（2 回目で 843 byte 増える）**
+になり、引くと gap が縮むどころか広がります。
+
+### だから信用すべき数字は per-phase 表
+
+`--phases` を足しました。aware leg を phase ごとに 1 回ずつ落として
+コンパイルし、差を報告します。**control が要りません** — 同じ入力、
+同じ flag、問題の phase だけが違う。
+
+leg delta は「published `.js` を相手にしたら何が起きるか」の答えとして
+残す価値があります（それが元々の問いです）。しかし
+**「型を知っていることは何 byte の価値があるか」への答えは per-phase 表**
+です。
+
 ## 残っている既知の未修正
 
 | 件 | 症状 |
 | --- | --- |
-| excalidraw が僅差で LOSS | −303 byte（−0.11%）。noise floor が 280 byte なのでぎりぎり判定に乗っている。残りの機構は未特定 |
 | 述語 inline の得は後段次第 | inline それ自体は byte を増やす。畳めるかどうかは inline を決める時点で分からないので、budget 2 は「本当に払える形だけ」の近似 |
 | CSS modules の値 | `import styles from "./x.module.css"` に `{}` を渡す。class 名 map ではないので `styles.foo` は `undefined`。**修正しないと決めた**（下記）。value 形は警告するようにした |
 | `TypeArgs` の構造的保証 | 19 file に arm を足したが、次に walker を書く人が落とすのを止める仕組みは無い。`case40` が唯一の網 |
+| ~~`predicate-inline` が typebox で 261 byte 損~~ | **修正済み**。`removable` が「entry の named export に無いか」しか見ておらず、namespace object 経由で外に出る typebox の guard を全部 removable と判定していた。call 以外の言及を数えるようにして 0 に。typebox は corpus 初の WIN (+247) |
+| 述語 inline の得は mangle 後の呼び出しと比べていない | 判定は mangle 前なので、`isExtendsUnion(v)` を基準に価格付けしていて、実際に ship されるのは `a(v)`。body 2 node は既にそれより大きい。`removable` を直した後は corpus 上で損が出ていないので、model を足す根拠が今は無い |
+| 型読み 6 phase のうち 4 つが corpus 全体で不発 | `switch-fold` / `tag-rewrite` / `class-method-dce` / `type-fold` が 1 byte も動かさない。対象の形が corpus に無いのか、gate が閉じすぎなのかは未切り分け |
 
 ### 直したもの 4: namespace object に型専用 export が入る
 

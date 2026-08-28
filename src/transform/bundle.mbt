@@ -88,6 +88,9 @@ pub(all) struct BundleOptions {
   // import instead of failing. Set by the CLI, which has already
   // asked the real filesystem; in-memory callers stay strict.
   allow_unresolved_imports : Bool
+  // Phases the caller switched off, by the name `timer.phase` records.
+  // See `with_disabled_phases`.
+  disabled_phases : Map[String, Bool]
   // Measure wall time per pipeline phase into `BundleOutput.timings`.
   // Off by default: with it off `PhaseTimer` records nothing and the
   // instrumentation is one branch per phase.
@@ -117,6 +120,7 @@ pub fn BundleOptions::default() -> BundleOptions {
     extra_reserved_props: [],
     explain: false,
     allow_unresolved_imports: false,
+    disabled_phases: {},
     timing: false,
     parsed_blocks: {},
   }
@@ -136,6 +140,34 @@ pub fn BundleOptions::with_timing(
   t : Bool,
 ) -> BundleOptions {
   { ..self, timing: t }
+}
+
+///|
+/// Turn a named pipeline phase off, for attribution.
+///
+/// `--timing` says how long each phase takes; nothing said how many
+/// BYTES each one is responsible for, and "the mechanism is
+/// unidentified" sat in the known-unfixed table for two rows because of
+/// it. A twenty-pass pipeline gives a guess nothing to stand on: the
+/// only way to attribute a size delta to a phase is to run without it.
+///
+/// Names are the ones `timer.phase` already uses, so `--timing` output
+/// doubles as the list of what can be switched off.
+pub fn BundleOptions::with_disabled_phases(
+  self : BundleOptions,
+  names : Map[String, Bool],
+) -> BundleOptions {
+  { ..self, disabled_phases: names }
+}
+
+///|
+/// Is this phase enabled? Every gated call site asks by the same name
+/// `timer.phase` records it under.
+pub fn BundleOptions::phase_enabled(
+  self : BundleOptions,
+  name : String,
+) -> Bool {
+  !self.disabled_phases.contains(name)
 }
 
 ///|
@@ -730,36 +762,46 @@ pub fn bundle_modules(
       stmt_positions: combined_positions,
     }
     // Type-predicate inline.
-    timer.phase("predicate-inline", () => {
-      let predicates = build_predicate_table(combined, exported=export_roots)
-      if !predicates.entries.is_empty() {
-        combined = inline_predicates(combined, predicates)
-      }
-    })
+    if opts.phase_enabled("predicate-inline") {
+      timer.phase("predicate-inline", () => {
+        let predicates = build_predicate_table(combined, exported=export_roots)
+        if !predicates.entries.is_empty() {
+          combined = inline_predicates(combined, predicates)
+        }
+      })
+    }
     // Literal-union switch folding. Specializes `dispatch("x", n)`
     // when `dispatch` is a `switch (k) { case ...: return ... }`
     // function whose first param is a closed string-literal union.
-    timer.phase("switch-fold", () => {
-      let sw = build_switch_fold_table(combined)
-      if !sw.entries.is_empty() {
-        combined = switch_fold(combined, sw)
-      }
-    })
+    if opts.phase_enabled("switch-fold") {
+      timer.phase("switch-fold", () => {
+        let sw = build_switch_fold_table(combined)
+        if !sw.entries.is_empty() {
+          combined = switch_fold(combined, sw)
+        }
+      })
+    }
     // `as const` (and equivalent) array/object inline at use sites.
     // Replaces `NAME[i]` / `NAME.k` with the underlying literal value
     // when NAME is a top-level `const` of all-literal-element shape
     // and every reference is a safe static read.
-    combined = timer.phase("as-const-inline", () => {
-      as_const_inline_block(combined)
-    })
+    combined = if opts.phase_enabled("as-const-inline") {
+      timer.phase("as-const-inline", () => as_const_inline_block(combined))
+    } else {
+      combined
+    }
     // Discriminant-tag string -> number rewrite. Gated on
     // a bundle-wide no-escape-sink scan; for each closed
     // string-literal discriminated union whose `K` property is
     // never observed outside switch heads and `===`/`!==`
     // comparisons, swap the string tags for small integers.
-    combined = timer.phase("tag-rewrite", () => {
-      tag_rewrite_block(combined, combined_type_aliases)
-    })
+    combined = if opts.phase_enabled("tag-rewrite") {
+      timer.phase("tag-rewrite", () => {
+        tag_rewrite_block(combined, combined_type_aliases)
+      })
+    } else {
+      combined
+    }
     // Lift the IIFE-lowered class shape back to native
     // `class Name { … }` syntax. Smaller emit, plus
     // `class_method_dce_block` then operates on the structured
@@ -794,15 +836,19 @@ pub fn bundle_modules(
     // the export surface reaches, which the consumer calls. Gated on
     // the absence of reflection / dynamic-key access in the bundle.
     let method_dce_reasons : Array[String] = []
-    combined = timer.phase("class-method-dce", () => {
-      class_method_dce_block(
-        combined,
-        keep=export_surface,
-        class_fields=combined_class_fields,
-        type_aliases=combined_type_aliases,
-        explain=if opts.explain { Some(method_dce_reasons) } else { None },
-      )
-    })
+    combined = if opts.phase_enabled("class-method-dce") {
+      timer.phase("class-method-dce", () => {
+        class_method_dce_block(
+          combined,
+          keep=export_surface,
+          class_fields=combined_class_fields,
+          type_aliases=combined_type_aliases,
+          explain=if opts.explain { Some(method_dce_reasons) } else { None },
+        )
+      })
+    } else {
+      combined
+    }
     if opts.explain {
       explain_methods.push("")
       explain_methods.push("unused class methods: what was dropped and why not")
@@ -816,9 +862,13 @@ pub fn bundle_modules(
     // type annotation. Runs BEFORE the regular fold so the
     // resulting `BoolLit(true/false)` feeds into dead-branch
     // elimination.
-    combined = timer.phase("type-fold", () => {
-      type_fold_block(combined, type_aliases=combined_type_aliases)
-    })
+    combined = if opts.phase_enabled("type-fold") {
+      timer.phase("type-fold", () => {
+        type_fold_block(combined, type_aliases=combined_type_aliases)
+      })
+    } else {
+      combined
+    }
     // Order: fold -> treeshake -> mangle -> inline -> peephole.
     // Fold turns dead `if (false)` branches into nothing and
     // identity arithmetic into a single operand; treeshake then

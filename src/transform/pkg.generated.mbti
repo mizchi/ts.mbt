@@ -185,12 +185,15 @@ pub(all) struct BundleOptions {
   extra_reserved_props : Array[String]
   explain : Bool
   allow_unresolved_imports : Bool
+  disabled_phases : Map[String, Bool]
   timing : Bool
   parsed_blocks : Map[String, @ast.TsModuleBlock]
 }
 pub fn BundleOptions::default() -> Self
+pub fn BundleOptions::phase_enabled(Self, String) -> Bool
 pub fn BundleOptions::with_aliases(Self, Map[String, String]) -> Self
 pub fn BundleOptions::with_allow_unresolved_imports(Self, Bool) -> Self
+pub fn BundleOptions::with_disabled_phases(Self, Map[String, Bool]) -> Self
 pub fn BundleOptions::with_explain(Self, Bool) -> Self
 pub fn BundleOptions::with_extra_reserved_props(Self, Array[String]) -> Self
 pub fn BundleOptions::with_fold(Self, Bool) -> Self

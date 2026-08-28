@@ -69,6 +69,9 @@ priv struct MtscOptions {
   // `--verify`: re-parse the emitted bundle and report any name it
   // reads that nothing declares. See `docs/type-aware-dce.md` (E1).
   mut verify : Bool
+  // `--disable-phase <name>`: run without a named pipeline phase, so a
+  // size delta can be attributed to it. `--timing` names every phase.
+  disabled_phases : Map[String, Bool]
   mut mangle_properties_shape_color : Bool
   // `--no-check`: skip type-checking. The gate exists because a type
   // error usually means the program is wrong, but it also makes the
@@ -111,6 +114,7 @@ fn mtsc_options_new() -> MtscOptions {
     mangle_properties: false,
     explain_mangle: false,
     verify: false,
+    disabled_phases: {},
     mangle_properties_shape_color: false,
     no_check: false,
     timing: false,
@@ -170,6 +174,9 @@ fn mtsc_print_usage() -> Unit {
   )
   println(
     "  --verify                  Re-parse the emitted bundle and report any name nothing declares",
+  )
+  println(
+    "  --disable-phase <name>    Run without a named pipeline phase, to attribute bytes to it (repeatable; --timing lists the names)",
   )
   println(
     "  --no-check                Skip type-checking entirely (non-TypeScript input; the check is ~95% of a large compile)",
@@ -254,6 +261,19 @@ fn mtsc_parse_args(argv : Array[String]) -> Result[MtscOptions, String] {
         opts.bundle = true
       }
       "--verify" => opts.verify = true
+      "--disable-phase" => {
+        if i + 1 >= argv.length() {
+          return Err("missing value for --disable-phase")
+        }
+        for raw in argv[i + 1].split(",") {
+          let name = raw.to_owned().trim().to_owned()
+          if name != "" {
+            opts.disabled_phases[name] = true
+          }
+        }
+        i = i + 2
+        continue
+      }
       "--no-check" => opts.no_check = true
       "--timing" => {
         opts.timing = true
@@ -1445,6 +1465,7 @@ async fn main {
       // there, so the bundler doesn't need to fail over them a second
       // time — it keeps them verbatim.
       .with_allow_unresolved_imports(true)
+      .with_disabled_phases(opts.disabled_phases)
       .with_timing(opts.timing)
       // Hand the loader's parses over rather than have the bundler
       // repeat them.

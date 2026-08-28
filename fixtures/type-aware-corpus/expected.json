@@ -13,9 +13,9 @@
   },
   "typebox": {
     "status": "measured",
-    "verdict": "NEUTRAL",
-    "delta": -14,
-    "aware": 119714
+    "verdict": "WIN",
+    "delta": 247,
+    "aware": 119453
   },
   "immer": {
     "status": "measured",

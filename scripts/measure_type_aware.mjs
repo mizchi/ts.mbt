@@ -49,6 +49,7 @@
 //   node scripts/measure_type_aware.mjs --only hono --verbose
 //   node scripts/measure_type_aware.mjs --update      # re-record expected.json
 //   node scripts/measure_type_aware.mjs --keep        # keep the leg outputs
+//   node scripts/measure_type_aware.mjs --phases      # per-phase byte attribution
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -297,6 +298,7 @@ let verbose = false;
 let keep = false;
 let update = false;
 let legTimeout = 600_000;
+let phases = false;
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
   if (a === "--only") only = args[++i];
@@ -304,6 +306,7 @@ for (let i = 0; i < args.length; i++) {
   else if (a === "--keep") keep = true;
   else if (a === "--update") update = true;
   else if (a === "--timeout") legTimeout = Number(args[++i]) * 1000;
+  else if (a === "--phases") phases = true;
   else {
     console.error(`unknown argument: ${a}`);
     process.exit(2);
@@ -312,6 +315,36 @@ for (let i = 0; i < args.length; i++) {
 
 const MTSC = findMtsc();
 fs.mkdirSync(WORK, { recursive: true });
+
+// The six phases that read type tables. `--phases` compiles the aware
+// leg once per phase with that phase switched off and reports the
+// difference, which answers "what is the type information worth" WITHOUT
+// a control.
+//
+// It exists because the leg delta could not answer it. On Excalidraw the
+// leg delta says the aware leg is 1,139 bytes BEHIND after the
+// double-pass adjustment, and the per-phase table says the six phases
+// SAVE 2,380 bytes there and cost nothing — four of the six are
+// completely inert. Both are true: the residual is not a pass, it is the
+// leg construction. `blind`'s input is not "the same code with types
+// erased", it is the same code after a round-trip through mtsc's own
+// emitter, and that round-trip is itself an optimization the aware leg
+// never gets. The `aware2` control prices a SECOND pass on
+// already-optimized output, which is a different thing — on Excalidraw
+// it comes out negative (a second pass GROWS the bundle by 843 bytes),
+// so subtracting it makes the gap look worse rather than fairer.
+//
+// So this is the number to trust for "does knowing the types pay": it is
+// a direct measurement of the phases in question, on the same input, with
+// nothing to adjust.
+const TYPE_READING_PHASES = [
+  "predicate-inline",
+  "switch-fold",
+  "as-const-inline",
+  "tag-rewrite",
+  "class-method-dce",
+  "type-fold",
+];
 
 function bytes(n) {
   return n.toLocaleString("en-US");
@@ -586,6 +619,55 @@ function measure(t) {
 for (const t of CORPUS) {
   if (only && t.name !== only) continue;
   measure(t);
+}
+
+// ---------------------------------------------------------------------
+// Per-phase attribution (`--phases`)
+// ---------------------------------------------------------------------
+
+if (phases) {
+  console.log("\n  what each type-reading phase is worth\n");
+  console.log(
+    "  a positive number is bytes SAVED by the phase (the bundle grows when it is off)\n",
+  );
+  const header = ["target".padEnd(12), ...TYPE_READING_PHASES.map((p) => p.padStart(17))];
+  console.log("  " + header.join(""));
+  for (const t of CORPUS) {
+    if (only && t.name !== only) continue;
+    const row = results.find((r) => r.name === t.name);
+    if (!row || row.status === "blocked") continue;
+    // `resolveCheckout` rather than `WORK/<name>/<name>`: a `reuse`
+    // target lives under `_build/real-world/…`, and guessing the layout
+    // silently skipped hono and valibot from this table.
+    const { dir: checkout } = resolveCheckout(t);
+    if (!checkout) continue;
+    const dir = path.join(WORK, t.name);
+    fs.mkdirSync(dir, { recursive: true });
+    const entry = path.join(checkout, t.entry);
+    if (!fs.existsSync(entry)) continue;
+    const base = compile(entry, path.join(dir, "phase-base.mjs"), ["--bundle", ...OPT_FLAGS], dir);
+    if (!base.ok) {
+      console.log("  " + t.name.padEnd(12) + "  (baseline failed: " + base.why + ")");
+      continue;
+    }
+    const cells = [];
+    for (const ph of TYPE_READING_PHASES) {
+      const off = compile(
+        entry,
+        path.join(dir, "phase-off.mjs"),
+        ["--bundle", ...OPT_FLAGS, "--disable-phase", ph],
+        dir,
+      );
+      cells.push(off.ok ? bytes(off.size - base.size).padStart(17) : "—".padStart(17));
+    }
+    console.log("  " + t.name.padEnd(12) + cells.join(""));
+    if (!keep) {
+      for (const f of ["phase-base.mjs", "phase-off.mjs"]) {
+        fs.rmSync(path.join(dir, f), { force: true });
+      }
+    }
+  }
+  console.log("");
 }
 
 // ---------------------------------------------------------------------
