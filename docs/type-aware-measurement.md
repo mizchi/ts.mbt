@@ -949,6 +949,31 @@ driver は `P` の 13 の使い方（`union` / `array().select()` / `when` /
 サイズは 5,795 → 8,567 byte に増えています。**以前は公開 API の
 大半を黙って落として小さくなっていた**だけです。
 
+## CSS modules: 直さないと決めた（そして警告にした）
+
+`import styles from "./x.module.css"` に `{}` を渡しているので
+`styles.foo` は `undefined` です。当然の対処は stylesheet を走査して
+identity map（`{ foo: "foo" }`）を返すことですが、**やめました**。
+
+理由は 2 つあります。
+
+1. **loud な失敗を silent な失敗に交換してしまう**。`undefined` は
+   `undefined.length` で throw し、`${styles.foo}` は "undefined" と
+   描画されます。identity map はもっともらしい class 名を返しますが、
+   mtsc は CSS 自体を出さないのでどの rule にも一致しません。
+   **スタイルが当たらないのにエラーも出ない**方が悪い。
+
+2. **効く証拠が無い**。excalidraw の stylesheet import は
+   **76 件すべて side-effect 形**で、これは正しく処理されています。
+   corpus に value 形の CSS import は 1 件もありません。
+
+代わりに value 形を **警告** するようにしました。import 宣言が
+見える enqueue 側で判定するので、side-effect 形は静かなままです
+（そうでなければ 76 件の noise になる）。
+
+これは今日の他の修正と同じ姿勢です: **できないことを言う**。
+推測は CSS pipeline を実際に持っている呼び出し側に残します。
+
 ## 残っている既知の未修正
 
 | 件 | 症状 |
@@ -957,7 +982,7 @@ driver は `P` の 13 の使い方（`union` / `array().select()` / `when` /
 | excalidraw が僅差で LOSS | −303 byte（−0.11%）。noise floor が 280 byte なのでぎりぎり判定に乗っている。残りの機構は未特定 |
 | typebox が僅差で LOSS | −261 byte（−0.22%）。predicate-inline の cost model 導入後の残り。機構は未特定 |
 | 述語 inline の得は後段次第 | inline それ自体は byte を増やす。畳めるかどうかは inline を決める時点で分からないので、budget 2 は「本当に払える形だけ」の近似 |
-| CSS modules の値 | `import styles from "./x.module.css"` に `{}` を渡す。class 名 map ではないので `styles.foo` は `undefined` |
+| CSS modules の値 | `import styles from "./x.module.css"` に `{}` を渡す。class 名 map ではないので `styles.foo` は `undefined`。**修正しないと決めた**（下記）。value 形は警告するようにした |
 | `TypeArgs` の構造的保証 | 19 file に arm を足したが、次に walker を書く人が落とすのを止める仕組みは無い。`case40` が唯一の網 |
 
 ### 直したもの 4: namespace object に型専用 export が入る

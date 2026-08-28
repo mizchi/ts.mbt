@@ -515,6 +515,25 @@ fn is_non_js_asset_path(path : String) -> Bool {
 }
 
 ///|
+/// Is this asset path a STYLESHEET whose import is going to be read as a
+/// value?
+///
+/// The caller only has the resolved path at this point, not the import
+/// declaration that reached it, so this answers the narrower question it
+/// can: is it a stylesheet at all. The side-effect form is by far the
+/// common one and is handled correctly, so warning on every stylesheet
+/// would be noise — which is why the caller pairs this with the
+/// value-form check it can make.
+fn is_stylesheet_path(path : String) -> Bool {
+  for ext in [".css", ".scss", ".sass", ".less", ".styl"] {
+    if path.has_suffix(ext) {
+      return true
+    }
+  }
+  false
+}
+
+///|
 /// Walk imports starting from `entry_path` and read every reachable
 /// file from disk into `files`. Only relative imports (`./x`, `../y`)
 /// and rooted paths are followed — bare specifiers (`react`, `@scope/x`)
@@ -667,12 +686,29 @@ async fn mtsc_load_bundle_files(
     // compile stops there.
     //
     // Synthesize an empty module instead. The side-effect form then
-    // contributes nothing, which is correct for a JS-only bundle. The
-    // value form (`import styles from "./x.module.css"`) gets `{}`,
-    // which is NOT the class-name map a CSS-modules pipeline would
-    // build — a bundle that reads `styles.foo` sees `undefined`. That is
-    // a real limitation, not a fix: without a CSS pipeline there is no
-    // honest value to hand it.
+    // contributes nothing, which is correct for a JS-only bundle.
+    //
+    // The VALUE form (`import styles from "./x.module.css"`) still gets
+    // `{}`, and that is not a fix: it is not the class-name map a
+    // CSS-modules pipeline would build, so a bundle that reads
+    // `styles.foo` sees `undefined`. The import site reports it — the
+    // warning lives at the enqueue below, which is where the import
+    // DECLARATION is in scope and the value form can be told from the
+    // side-effect one — and the reason for not synthesizing something
+    // is worth stating.
+    //
+    // Scanning the stylesheet for class selectors and handing back an
+    // identity map (`{ foo: "foo" }`) was the obvious alternative. It
+    // trades a value that fails LOUDLY — `undefined.length` throws,
+    // `${styles.foo}` renders "undefined" — for one that fails SILENTLY:
+    // a plausible class name that matches no rule, because mtsc emits no
+    // CSS either. Unstyled UI and no error is the worse outcome.
+    //
+    // And there is no evidence it matters. All 76 of Excalidraw's
+    // stylesheet imports are the side-effect form, which is handled
+    // correctly; the corpus has no value-form CSS import at all. So the
+    // honest move is to say what cannot be done rather than to guess,
+    // and to leave the guess for a caller who actually has a pipeline.
     let source = if asset {
       "export default {};\n"
     } else if resolved.has_suffix(".json") {
@@ -744,6 +780,26 @@ async fn mtsc_load_bundle_files(
         continue
       }
       if mtsc_is_local_specifier(spec) {
+        // A stylesheet imported for its VALUE — `import styles from
+        // "./x.module.css"` — is the one asset form mtsc cannot model:
+        // the synthesized module hands back `{}`, so every `styles.foo`
+        // is `undefined` and the failure is silent. Say so here rather
+        // than guessing a class-name map; the note at the asset stub
+        // above says why guessing is worse.
+        //
+        // The side-effect form (`import "./x.scss"`) is correct and
+        // stays silent — all 76 of Excalidraw's stylesheet imports are
+        // that form, which is why this cannot warn on every stylesheet.
+        if is_stylesheet_path(spec) &&
+          (
+            imp.default_binding is Some(_) ||
+            imp.namespace_binding is Some(_) ||
+            imp.named_bindings.length() > 0
+          ) {
+          println(
+            "mtsc: \{resolved} imports `\{spec}` for its value, but mtsc has no CSS pipeline — the import yields `{}`, so every class-name lookup on it is `undefined`",
+          )
+        }
         let combined = if spec.has_prefix("/") {
           mtsc_normalize(spec)
         } else {
