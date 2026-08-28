@@ -968,43 +968,85 @@ test "fold: undefined ?? x folds to x (nullish LHS)" {
 }
 
 ///|
-test "fold: x ^ x → 0 (same-var XOR)" {
+// The bitwise identity / annihilator family, and the reason these six
+// tests read as the inverse of what they used to.
+//
+// Each of them named a rule from a minifier changelog ("AND with
+// all-bits-set is the identity") and asserted the rewrite on a BARE
+// VARIABLE — which is the one operand for which the rule is not true.
+// These operators coerce, and an identity rewrite hands the operand
+// back uncoerced, so with `n = "alpha"`:
+//
+//   n & -1   is 0     and folded to "alpha"
+//   n | n    is 0     and folded to "alpha"
+//   n - n    is NaN   and folded to 0
+//
+// and with `n = 5n`, `n ^ n` is `0n` while `n & 0` throws. The fuzzer
+// found the first of these through a `switch`: `switch ("alpha" & -1)`
+// selects `case 0`, and folding the scrutinee to `"alpha"` ran the
+// `default` instead. Each test now pins BOTH halves — no fold on an
+// operand of unknown type, and the fold still firing where the type is
+// established — so the fix cannot be mistaken for switching the rules
+// off.
+
+///|
+test "fold: x ^ x is NOT 0 for an operand of unknown type" {
+  // `"alpha" ^ "alpha"` is 0, but `5n ^ 5n` is `0n` and a Symbol
+  // throws, so the un-typed operand keeps its operator.
   let out = fold_one("const r = n ^ n;\n")
-  assert_true(out.contains("0"))
-  assert_false(out.contains("^"))
+  assert_true(out.contains("^"))
 }
 
 ///|
-test "fold: x - x → 0 (same-var subtraction)" {
+test "fold: x - x is NOT 0 for an operand of unknown type" {
+  // `"a" - "a"` is NaN, not 0.
   let out = fold_one("const r = n - n;\n")
-  assert_true(out.contains("0"))
-  assert_false(out.contains("- n"))
+  assert_true(out.contains("-"))
 }
 
 ///|
-test "fold: x | x → x (bitwise-OR idempotency)" {
+test "fold: x | x is NOT x for an operand of unknown type" {
   let out = fold_one("const r = n | n;\n")
-  assert_false(out.contains("|"))
+  assert_true(out.contains("|"))
 }
 
 ///|
-test "fold: x & x → x (bitwise-AND idempotency)" {
+test "fold: x & x is NOT x for an operand of unknown type" {
   let out = fold_one("const r = n & n;\n")
-  assert_false(out.contains("&"))
+  assert_true(out.contains("&"))
 }
 
 ///|
-test "fold: x & -1 → x (AND with all-bits identity)" {
+test "fold: x & -1 is NOT x for an operand of unknown type" {
   let out = fold_one("const r = n & -1;\n")
-  assert_false(out.contains("&"))
+  assert_true(out.contains("&"))
+  assert_true(out.contains("-1"))
+}
+
+///|
+test "fold: x & -1 → x when the operand is already an int32" {
+  // A bitwise result IS an int32, so `ToInt32` on it is the identity
+  // and the rule holds. This is the half that keeps the fix honest.
+  let out = fold_one("const r = (a | b) & -1;\n")
+  assert_true(out.contains("a | b"))
   assert_false(out.contains("-1"))
 }
 
 ///|
-test "fold: x | -1 → -1 (OR with all-bits annihilator, pure)" {
-  let out = fold_one("const r = n | -1;\n")
+test "fold: x | -1 → -1 for an operand ToNumber accepts" {
+  // The annihilator does not need the operand's value, only that
+  // coercing it yields a Number rather than a BigInt or a throw. A
+  // string literal qualifies.
+  let out = fold_one("const r = \"alpha\" | -1;\n")
   assert_false(out.contains("|"))
   assert_true(out.contains("-1"))
+}
+
+///|
+test "fold: x | -1 is NOT -1 for an operand of unknown type" {
+  // `5n | -1` throws; folding it to `-1` would swallow the TypeError.
+  let out = fold_one("const r = n | -1;\n")
+  assert_true(out.contains("|"))
 }
 
 ///|
@@ -1065,10 +1107,19 @@ test "fold: if(c){x=e1}else{x=e2} lifts to x=c?e1:e2" {
 }
 
 ///|
-test "fold: x ** 0 folds to 1 for pure x" {
-  let out = fold_one("const y = x ** 0;\n")
+test "fold: x ** 0 folds to 1 for an operand ToNumber accepts" {
+  // Every Number — NaN and Infinity included — to the 0 power is 1.
+  let out = fold_one("const y = \"abc\" ** 0;\n")
   assert_true(out.contains("const y = 1;"))
   assert_false(out.contains("**"))
+}
+
+///|
+test "fold: x ** 0 is NOT 1 for an operand of unknown type" {
+  // `5n ** 0` and `Symbol() ** 0` both throw, and a minifier must not
+  // turn a TypeError into a value.
+  let out = fold_one("const y = x ** 0;\n")
+  assert_true(out.contains("**"))
 }
 
 ///|

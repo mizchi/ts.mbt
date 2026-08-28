@@ -432,6 +432,106 @@ const CASES = [
     name: "math-pow",
     body: "return Math.pow(a, b);",
   },
+
+  // --- bitwise identities and annihilators
+  //
+  // This harness had no bitwise case at all, and six rules in that
+  // table turned out to be wrong: it reports nothing about the rules
+  // nobody wrote a case for, which is the same hole `Array.from(x)`
+  // shipped through. The whole family is here now, not just the ones
+  // that were broken, because what makes them wrong is a property of
+  // the OPERATORS — they coerce, and an identity rewrite hands the
+  // operand back uncoerced — so every rule over them is suspect until
+  // a case says otherwise.
+  //
+  // The operands that matter: a string (`"alpha" & -1` is `0`), a
+  // non-integer (`1.5 & -1` is `1`), a BigInt (`5n ^ 5n` is `0n`, and
+  // mixing throws), a Symbol (throws). All four are in the domain.
+  {
+    rule: "numbers",
+    name: "and-minus-one",
+    holes: 1,
+    body: "return a & -1;",
+  },
+  {
+    rule: "numbers",
+    name: "minus-one-and",
+    holes: 1,
+    body: "return -1 & a;",
+  },
+  {
+    rule: "numbers",
+    name: "and-zero",
+    holes: 1,
+    body: "return a & 0;",
+  },
+  {
+    rule: "numbers",
+    name: "or-minus-one",
+    holes: 1,
+    body: "return a | -1;",
+  },
+  {
+    rule: "numbers",
+    name: "pow-zero",
+    holes: 1,
+    body: "return a ** 0;",
+  },
+  // The self-operand rules. `x | x`, `x & x`, `x ^ x` and `x - x` were
+  // all gated on nothing but "both sides are the same variable", which
+  // proves purity and proves nothing about the arithmetic.
+  {
+    rule: "numbers",
+    name: "self-or",
+    holes: 1,
+    body: "return a | a;",
+  },
+  {
+    rule: "numbers",
+    name: "self-and",
+    holes: 1,
+    body: "return a & a;",
+  },
+  {
+    rule: "numbers",
+    name: "self-xor",
+    holes: 1,
+    body: "return a ^ a;",
+  },
+  {
+    rule: "numbers",
+    name: "self-sub",
+    holes: 1,
+    body: "return a - a;",
+  },
+  // The arithmetic identities that DID have a numeric gate, to pin the
+  // BigInt hole: `is_number_valued` delegated to a classifier that
+  // calls a BigInt literal a number, so `5n - 0` folded to `5n` where
+  // the source throws.
+  {
+    rule: "numbers",
+    name: "sub-zero",
+    holes: 1,
+    body: "return a - 0;",
+  },
+  {
+    rule: "numbers",
+    name: "mul-one",
+    holes: 1,
+    body: "return a * 1;",
+  },
+  {
+    rule: "numbers",
+    name: "div-one",
+    holes: 1,
+    body: "return a / 1;",
+  },
+  {
+    rule: "numbers",
+    name: "add-zero",
+    holes: 1,
+    body: "return a + 0;",
+  },
   {
     rule: "functions",
     name: "call-null-this",

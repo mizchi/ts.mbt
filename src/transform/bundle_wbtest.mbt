@@ -4285,3 +4285,89 @@ test "bundle: an `export type` name stays out of the namespace object" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "mangle: an object ASSIGNED into an observed binding keeps its keys" {
+  // JS has six ways to assign and only the four that go through a
+  // member expression recorded the written value, so the escape
+  // analysis had nothing to reserve for a plain `=` to a variable:
+  //
+  //     let v: any = 1;
+  //     v = { ...obj, g14: 100 };
+  //     console.log([v]);
+  //
+  // dropped `g14` AND `obj`'s own `p`, while the identical program
+  // spelled `bag.beta = { ...obj, g14: 100 }` kept both. The
+  // difference was not a judgement about escape; it was which arm of
+  // the walker the statement landed in. Found by `fuzz-mangle`.
+  let files = vfs([
+    (
+      "entry.ts",
+      "const obj = { p: 0 };\n" +
+      "let v: any = 1;\n" +
+      "v = { ...obj, g14: 100 };\n" +
+      "console.log([v]);\n",
+    ),
+  ])
+  let opts = BundleOptions::default()
+    .with_mangle(true)
+    .with_mangle_properties(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("g14"), msg="got: \{out.js}")
+      assert_true(out.js.contains("p: 0"), msg="got: \{out.js}")
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "mangle: a COMPOUND property write keeps the written object's keys" {
+  // `bag.beta &&= { … }`. The plain-`=` spelling went through
+  // `PropAssignExpr` and recorded the write; the compound spelling
+  // recorded nothing at all, so the fuzzer's
+  // `bag.beta &&= { ...obj, g14: a }` had `g14` deleted and `obj`
+  // emptied while `console.log([bag])` printed them both.
+  let files = vfs([
+    (
+      "entry.ts",
+      "const obj = { p: 0 };\n" +
+      "const bag: any = { beta: 1 };\n" +
+      "bag.beta &&= { ...obj, g14: 100 };\n" +
+      "console.log([bag]);\n",
+    ),
+  ])
+  let opts = BundleOptions::default()
+    .with_mangle(true)
+    .with_mangle_properties(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("g14"), msg="got: \{out.js}")
+      assert_true(out.js.contains("p: 0"), msg="got: \{out.js}")
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "mangle: an object assigned into an UNOBSERVED binding still drops" {
+  // The other half of the two tests above: the fix must reserve
+  // because the value escapes, not because it gave up on the
+  // question. Nothing here reaches a sink, so the dead key goes.
+  let files = vfs([
+    (
+      "entry.ts",
+      "const obj = { p: 0 };\n" +
+      "let v: any = 1;\n" +
+      "v = { ...obj, g14: 100 };\n" +
+      "console.log(1);\n",
+    ),
+  ])
+  let opts = BundleOptions::default()
+    .with_mangle(true)
+    .with_mangle_properties(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_false(out.js.contains("g14"), msg="got: \{out.js}")
+    Err(e) => fail("bundle error: \{e}")
+  }
+}

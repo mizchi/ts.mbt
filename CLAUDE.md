@@ -119,7 +119,25 @@ product surfaces now.
   those folds already had an `is_pure_value` guard that could not help,
   because a spread of a variable is perfectly pure; position was the
   question, not purity. The `.length` fold had been given a spread guard
-  by the fuzzer and the lesson stopped at that one call site. See
+  by the fuzzer and the lesson stopped at that one call site. A fourth
+  round found the family with NO case at all: not one bitwise rule was
+  covered, and six of them were wrong. `x & -1` -> `x` reasoned that
+  AND with all-bits-set is the identity — true of the AND, but the
+  operator also COERCES and the rewrite hands back the uncoerced
+  operand, so `"alpha" & -1` is `0` and compiled to `"alpha"`. The
+  fuzzer found it through `switch ("alpha" & -1)`, which selects
+  `case 0` and ran the `default` instead. Same shape in `x | x` -> `x`,
+  `x - x` -> `0`, `x ^ x` -> `0`, `x & 0` -> `0`, `x | -1` -> `-1` and
+  `x ** 0` -> `1` (the last four swallow a BigInt/Symbol TypeError
+  rather than a value). And `is_number_valued` — the numeric gate the
+  `Add`/`Sub`/`Mul`/`Div` identities ALREADY had — delegated to
+  `cmp_kind`, which calls a BigInt literal `CmpNum`: right for
+  relational comparison, the one place the spec lets BigInt and Number
+  mix, and backwards for arithmetic, where `5n - 0` throws. One
+  definition fixed, not seven call sites. The four self-operand rules
+  were deleted rather than gated: once the gate is right a bare `Var`
+  can never satisfy it and nothing that can is a bare `Var`, so the
+  pattern would be dead code that reads like live code. See
   [`docs/rule-equivalence.md`](./docs/rule-equivalence.md). And
   `just compare-terser` asks the
   competitive version of that question: both optimizers start from the
@@ -271,6 +289,40 @@ product surfaces now.
   left the outer annotation visible. `fixtures/mangle-safety/case43-table-shadowing`
   runs all five against Node, pairing each shadowed read with an
   unshadowed one so the fix cannot be "switch the pass off".
+  A 3400-seed campaign then found the escape analysis missing two of
+  the six ways JS spells an assignment. `sg_record_write_into` was
+  called from the four that go through a member expression and from
+  neither `Assign`/`AssignExpr` nor any `CompoundAssign*`, so
+  `let v: any = 1; v = { ...obj, g14: 100 }; console.log([v])` dropped
+  `g14` and emptied `obj`, while the identical program spelled
+  `bag.beta = { ...obj, g14: 100 }` kept both — the difference was not
+  a judgement about escape but which arm of the walker the statement
+  landed in. `--explain-mangle` said it in one line: "reaches a
+  side-effect sink" was EMPTY. The same campaign found the parser
+  committing to a generic call inside a bracket it had not closed:
+  `try_skip_type_args` aborts on a closer it never opened but never
+  required its brace/paren/bracket counts to be ZERO where `depth`
+  reached 0, so `a < (b > (c))` consumed `< ( b >`, saw the following
+  `(`, and left a stray `)` behind as "Expected RParen, got RParen".
+  Its one un-fixed finding is the biggest open hole in this pipeline:
+  `class C { m() {} } console.log(new C())` deletes `m` under plain
+  `mtsc --bundle`, because `class_method_dce`'s `keep` is the export
+  surface and nothing else — the pass has no notion of a class value
+  crossing the bundle boundary, so a library bundle is protected and an
+  application bundle is not at all. The real-world form is the protocol
+  methods a library never calls itself: `JSON.stringify` calls
+  `toJSON`, `String(x)` calls `toString`, `for…of` calls
+  `Symbol.iterator`, `await` calls `then`. Feeding the pass
+  `collect_externally_visible_props` was tried and reverted: that set
+  answers the property mangler's question ("may this NAME be renamed")
+  and marks a class observed when an instance merely appears in an
+  escaping subtree, so `console.log(new C().live())` reserved
+  everything and three dce-coverage cases regressed. The right gate is
+  `External` observability alone — `console.log` and `JSON.stringify`
+  have KNOWN semantics and do not invoke arbitrary methods — plus a
+  fixed list of the protocol methods the known sinks do invoke;
+  `escape_breakdown` has no External-only slice yet, and that split is
+  the first step.
 - `src/bridge` consumes `src/checker` for every type-shape decision and runs
   `@checker.check_module` on the synthesized output as a sanity gate. It also
   keeps domain-specific specialization for Node FS / React / Hono / crypto /

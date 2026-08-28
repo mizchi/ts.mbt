@@ -150,9 +150,65 @@ fuzzer が見つけて、その 1 箇所で終わっていた。`Array.prototype
 (`no_spread_elements`) に集約しました。index fold にも穴があり、
 `[...a][0]` は **`return ...a` という構文エラーを出力**していました。
 
+## 4 周目: bitwise —— case が 1 件もなかった family
+
+この harness に **bitwise の case は 1 件もありませんでした**。そして
+そのテーブルには誤った rule が 6 件ありました。「case を書いた rule に
+ついてだけ報告し、case のない rule については何も言わない」という穴が、
+`Array.from(x)` に続いて 3 度目に出た形です。
+
+見つけたのは fuzzer で、`switch` 経由でした:
+
+```ts
+switch (('alpha' & -1)) {
+case 0: break;
+default: trace.push(2);      // 走ってはいけない
+}
+```
+
+`'alpha' & -1` は `0` (`ToInt32(NaN)` が `0`) なので `case 0`。ところが
+`x & -1 → x` が発火して scrutinee が `"alpha"` になり、`default` が走った。
+`--bundle --fold` だけで、mangle は無関係です。
+
+原因は 6 rule に共通する 1 つの読み違いです。**これらの演算子は強制変換
+する**のに、identity 書き換えは**変換前の operand を返す**:
+
+| rule | 反例 |
+|---|---|
+| `x & -1 → x` | `"alpha" & -1` は `0`、`1.5 & -1` は `1` |
+| `-1 & x → x` | 同上 |
+| `x \| x → x`, `x & x → x` | `"alpha" \| "alpha"` は `0` |
+| `x - x → 0` | `"a" - "a"` は `NaN`、`5n - 5n` は `0n` |
+| `x & 0 → 0`, `x \| -1 → -1` | `5n & 0` / `5n \| -1` は **throw** |
+| `x ^ x → 0` | `5n ^ 5n` は `0n`、Symbol は throw |
+| `x ** 0 → 1` | `5n ** 0` / `Symbol() ** 0` は throw |
+
+さらに `is_number_valued` —— `Add` / `Sub` / `Mul` / `Div` の identity が
+**すでに持っていた** numeric gate —— が `cmp_kind` に委譲していて、
+`cmp_kind` は **BigInt literal を `CmpNum` と答えます**。関係比較では
+それが正しい（BigInt と Number の混在が許され、NaN を経由しない唯一の
+場所）が、算術では逆で `5n - 0` は throw します。つまり `5n - 0 → 5n`、
+`5n * 1 → 5n`、`5n / 1 → 5n` の 3 件が、gate のある側にも同じ形で
+入っていた。呼び出し側 7 箇所ではなく `is_number_valued` の定義 1 箇所を
+直しました。
+
+gate は 2 つの述語に分けました。identity は
+`is_int32_valued`（値がすでに int32——bitwise/shift の結果、範囲内の整数
+literal）を要求し、annihilator は `is_number_coercible`（`ToNumber` が
+成功して Number を返す——BigInt と Symbol だけを除く）を要求します。
+
+self-operand の 4 rule (`x|x`, `x&x`, `x^x`, `x-x`) は**削除**しました。
+正しく gate すると bare `Var` はどれも満たさず、満たす式は bare `Var`
+でないので、**発火しえない pattern になる**からです。死んだ pattern は
+次に監査する人には生きた pattern に見えます。
+
+case は壊れていた 6 件だけでなく **family 全体**に書きました。誤りの
+原因が rule ではなく**演算子の性質**（強制変換する）なので、case が
+無い rule は全部同じ疑いの下にあります。
+
 ## 現在
 
-`59 equivalent, 0 inert, 0 unsound`。
+`72 equivalent, 0 inert, 0 unsound`。
 
 byte の代償は 2 回測ってあります。
 

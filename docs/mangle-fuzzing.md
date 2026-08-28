@@ -339,6 +339,108 @@ expression is always truthy"）。つまりこの bug は型検査を切った�
 今も畳まれる」対を必ず付けてあります（でないと修正が「fold を止める」
 形になっていないか分かりません）。
 
+## seed 600..3999 —— 6010 comparison、8 family
+
+前節の修正を入れてから 3400 seed 回して 16 mismatch / 8 family。
+うち 4 件を追い、3 件を直しました。
+
+### 3. `'alpha' & -1` が `'alpha'` に畳まれる（16 node）
+
+```ts
+switch (('alpha' & -1)) {
+case 0: break;
+default: (arr[0] ||= `k${(trace.push(2), false)}`);
+}
+```
+
+`'alpha' & -1` は `0` なので `case 0`。`x & -1 → x` が発火して scrutinee
+が `"alpha"` になり `default` が走りました。bitwise の identity /
+annihilator **6 rule**が同じ読み違いを共有していて、この harness には
+bitwise の case が 1 件もなかった。詳細は
+[`rule-equivalence.md`](./rule-equivalence.md) の「4 周目」。
+
+### 4. 代入で入った object の key が消える（9 node）
+
+```ts
+let brake2 = 4;
+while (--brake2 > 0 && ((bag.beta &&= { ...obj, g14: a }))) { }
+console.log([bag, obj]);
+```
+
+`--mangle-properties` 側で `g14` が消え、`obj` の `p`/`q`/`r` も落ちる。
+`--explain-mangle` が答えを一行で出しました:「reaches a side-effect
+sink」が**空**。escape 解析が何も予約していない。
+
+JS には代入が 6 通りあり、**member expression を経由する 4 つだけ**が
+`sg_record_write_into` を呼んでいました:
+
+| 形 | 記録していたか |
+|---|---|
+| `IndexAssign` / `PropAssign`（文） | ✅ |
+| `IndexAssignExpr` / `PropAssignExpr` | ✅ |
+| `Assign` / `AssignExpr`（`v = …`） | ❌ flow edge だけ、written value なし |
+| `CompoundAssign*`（`v \|\|= …`, `bag.beta &&= …`） | ❌ 何もなし |
+
+なので
+
+```ts
+let v: any = 1;
+v = { ...obj, g14: 100 };
+console.log([v]);
+```
+
+は `g14` も `obj` の `p` も落とし、**同じプログラムを
+`bag.beta = { ...obj, g14: 100 }` と書けば両方残る**。escape の判断が
+違ったのではなく、文が walker のどの arm に落ちたかが違っただけです。
+
+`sg_record_written_value(w, id, val)` を切り出して 4 つの arm 全部から
+呼びます。`v += …` は値が算術結果なので key を記録する必要はありませんが、
+**演算子ごとに要否を判断したのがこの arm が何も記録しない状態の入口**
+なので、compound は一律に記録して over-reserve 側に倒しました。
+「escape したから予約する」であって「質問を諦めたから予約する」では
+ないことを、sink に届かない対の case で固定しています。
+
+### 5. `a < (b > (c))` が parse error（parser）
+
+3 seed が `ParseError("Expected RParen, got RParen")` で compile 不能。
+message 自体が意味を成していないのが手がかりでした。
+
+`try_skip_type_args` は `<`…`>` の均衡を見ながら、型が含みうる
+brace / paren / bracket を数えています。「均衡」の**半分しか**見て
+いませんでした——開いていない closer で abort する guard はあるのに、
+`depth` が 0 になった時点で**その 3 つの count が 0 である要求がない**。
+だから `a < (b > (c))` は `< ( b >` まで食って `parens == 1` で停止し、
+呼び出し側は続く `(` を見て `a<(b>(c)` を generic call として commit し、
+`)` が余りました。`[` と `{` にも同じ形があります
+(`a < [b > (c)]`, `a < {b: (c > (d))}`)。
+
+### 追えたが直さなかったもの
+
+**class の method が消える**（37 node）。
+`class C { m() {} } console.log(new C())` が、`mtsc --bundle` だけで
+`m` を削除します。`class_method_dce` の `keep` は export surface だけで、
+**class の値が bundle 境界を越えたという概念がない**——library bundle の
+話しかしていないので、application bundle には保護が一切ありません。
+実コードでの形は `JSON.stringify` が `toJSON` を呼び、`String(x)` が
+`toString` を、`for…of` が `Symbol.iterator` を、`await` が `then` を
+呼ぶという、**library 自身は決して呼ばない protocol method** です。
+
+`collect_externally_visible_props` をそのまま食わせる修正を試して
+**revert しました**。あの集合は property mangler の質問（「この *名前* を
+rename して良いか」）に答えるもので、escape する式の部分木に instance が
+現れただけで class を observed と見なすため、
+`console.log(new C().live())` で全部予約され dce-coverage が 3 件退行
+します。正しい形は `External` observability（`console.log` /
+`JSON.stringify` は semantics が**既知**で、任意の method を呼びはしない）
+に限って pin し、既知 sink が実際に呼ぶ protocol method は固定リストで
+持つこと。`escape_breakdown` に External だけを切り出す口が今はなく、
+そこが最初の一歩です。
+
+`fuzz-runner.mjs` の `functionMembers` が sink で prototype を reflect
+するのが妥当かも、併せて決める必要があります。fail-closed 規則を
+主張していて、それがこの bug を見つけた——が、`console.log` の実際の
+semantics より厳しい。
+
 ## それ以前に見つかっていたもの
 
 seed 0..299、両 shape、404 comparison。**mangle の偽陽性は 1 件**です。

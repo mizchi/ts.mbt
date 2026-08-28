@@ -2219,6 +2219,20 @@ fn Parser::try_skip_type_args(self : Parser) -> Bool {
   // only balanced. An unbalanced closer, or a `;` outside a `{…}`, means
   // the `<` was a comparison and the scan has already left the
   // expression it started in.
+  //
+  // "Balanced" has two halves and this scan only checked one of them.
+  // The closer guards below catch a `}`/`)`/`]` this scan never
+  // opened; the counts also have to be zero at the point `depth`
+  // reaches 0, or the `>` that closed the candidate list was itself
+  // nested inside a bracket the scan opened and never closed — the
+  // same "the scan has left its expression" error, in the other
+  // direction. `a < (b > (c))` is the minimal case: the scan consumes
+  // `< ( b >`, stops at depth 0 with `parens == 1`, and the caller
+  // sees the following `(` and commits to `a<(b>(c)` as a generic
+  // call, leaving a stray `)` behind ("Expected Semicolon, got
+  // RParen"; wrapped in parens it reads "Expected RParen, got
+  // RParen"). Found by the mangle fuzzer, which produced
+  // `(structuredClone(obj) < ({ ...bag } > (obj.q -= false)))`.
   let mut braces = 0
   let mut parens = 0
   let mut brackets = 0
@@ -2312,5 +2326,5 @@ fn Parser::try_skip_type_args(self : Parser) -> Bool {
       }
     }
   }
-  depth <= 0
+  depth <= 0 && braces == 0 && parens == 0 && brackets == 0
 }

@@ -3262,10 +3262,109 @@ fn strip_trailing_break(block : @ast.TsBlock) -> Array[@ast.TsStmt] {
 }
 
 ///|
-/// Is this expression's value certainly a number? Delegates to the same
-/// classifier the relational-negation gate uses.
+/// Is this expression's value certainly a Number? Delegates to the same
+/// classifier the relational-negation gate uses, minus the one case
+/// where the two questions differ.
+///
+/// `cmp_kind` calls a BigInt literal `CmpNum`, and for its own purpose
+/// that is right: relational comparison is the one place the spec lets
+/// a BigInt and a Number mix, and it never goes through NaN, so
+/// `!(5n < 3)` really is `5n >= 3`. Arithmetic is the opposite —
+/// `5n - 0`, `5n * 1` and `5n / 1` all throw "Cannot mix BigInt and
+/// other types" — so every identity rule gated on this predicate was
+/// folding a TypeError away into a value. A BigInt is not a Number,
+/// which is what the name asks, so the exclusion belongs here rather
+/// than at each of the seven call sites.
 fn is_number_valued(e : @ast.TsExpr) -> Bool {
+  if strip_type_wrappers(e) is BigIntLit(_) {
+    return false
+  }
   cmp_kind(e) is CmpNum
+}
+
+///|
+/// Peel the type-only wrappers that carry no runtime value, so a
+/// value-shape question is asked of the expression that actually runs.
+fn strip_type_wrappers(e : @ast.TsExpr) -> @ast.TsExpr {
+  match e {
+    As(inner, _) | Satisfies(inner, _) | NonNull(inner) | TypeArgs(_, inner) =>
+      strip_type_wrappers(inner)
+    _ => e
+  }
+}
+
+///|
+/// Is this expression's value ALREADY an int32, so that `ToInt32` on it
+/// is the identity?
+///
+/// This is the gate an identity rewrite over a bitwise operator needs,
+/// and none of them had it. `x & -1` was rewritten to `x` on the
+/// reasoning that `-1` is all-bits-set — true of the AND, but the
+/// operator also coerces, and the rewrite hands back the UNCOERCED
+/// operand. So `"alpha" & -1` is `0` and compiled to `"alpha"`;
+/// `1.5 & -1` is `1` and compiled to `1.5`. The mangle fuzzer found it
+/// through a switch: `switch ("alpha" & -1)` selects `case 0`, and
+/// folding the scrutinee to `"alpha"` selected the `default` instead,
+/// so a statement that must not run did.
+fn is_int32_valued(e : @ast.TsExpr) -> Bool {
+  match strip_type_wrappers(e) {
+    // A bitwise or shift operator's result is an int32 by definition.
+    BinOp(BitAnd, _, _)
+    | BinOp(BitOr, _, _)
+    | BinOp(BitXor, _, _)
+    | BinOp(Shl, _, _)
+    | BinOp(Shr, _, _)
+    | BinOp(UShr, _, _)
+    | UnaryOp(@ast.TsUnaryOp::BitwiseNot, _) => true
+    // An integer literal, as long as it really fits — `2 ** 32 & -1` is
+    // `0`, not `2 ** 32`.
+    IntLit(n) => n >= -2147483648 && n <= 2147483647
+    _ => false
+  }
+}
+
+///|
+/// Will `ToNumber` on this expression succeed and produce a Number?
+///
+/// The annihilator rewrites over the coercing operators (`x & 0` → `0`,
+/// `x | -1` → `-1`, `x ** 0` → `1`) do not care what the operand's
+/// value is — every Number, string, boolean, `null` and `undefined`
+/// coerces to something the identity swallows. Two types are not like
+/// that: a BigInt coerces to a BigInt, so the result's TYPE is wrong
+/// (`5n ^ 5n` is `0n`, not `0`), and in a mixed expression it throws
+/// outright; a Symbol always throws. Folding either into a value
+/// replaces a TypeError with a result, which is the one direction a
+/// minifier must never go.
+fn is_number_coercible(e : @ast.TsExpr) -> Bool {
+  match strip_type_wrappers(e) {
+    IntLit(_) | NumberLit(_) | BoolLit(_) | StringLit(_) | NullLit => true
+    // A tag-less template literal is a string.
+    TemplateLiteral(_, _) => true
+    // `void x` is `undefined`; `typeof x` is a string; `!x` is a
+    // boolean; `~x` is an int32. None can be a BigInt or a Symbol.
+    UnaryOp(@ast.TsUnaryOp::Void, _)
+    | UnaryOp(@ast.TsUnaryOp::Typeof, _)
+    | UnaryOp(@ast.TsUnaryOp::Not, _)
+    | UnaryOp(@ast.TsUnaryOp::BitwiseNot, _) => true
+    // Bitwise and shift results are int32; comparisons are booleans.
+    BinOp(BitAnd, _, _)
+    | BinOp(BitOr, _, _)
+    | BinOp(BitXor, _, _)
+    | BinOp(Shl, _, _)
+    | BinOp(Shr, _, _)
+    | BinOp(UShr, _, _)
+    | BinOp(BinEq, _, _)
+    | BinOp(BinNe, _, _)
+    | BinOp(AbstractEq, _, _)
+    | BinOp(AbstractNe, _, _)
+    | BinOp(BinLt, _, _)
+    | BinOp(BinLe, _, _)
+    | BinOp(BinGt, _, _)
+    | BinOp(BinGe, _, _)
+    | BinOp(Instanceof, _, _)
+    | BinOp(In, _, _) => true
+    _ => false
+  }
 }
 
 ///|
@@ -3355,14 +3454,31 @@ fn fold_binop(
     // `x && x` → `x` and `x || x` → `x` for same-var operands.
     // Both operators always evaluate to `x` regardless of its value.
     (And, Var(ln), Var(rn)) | (Or, Var(ln), Var(rn)) if ln == rn => Var(ln)
-    // Bitwise idempotency: `x | x → x`, `x & x → x`, `x ^ x → 0`.
-    // String equality on Var names is sufficient since we only match
-    // bare `Var` nodes (no side-effecting sub-expressions).
-    (BitOr, Var(ln), Var(rn)) | (BitAnd, Var(ln), Var(rn)) if ln == rn =>
-      Var(ln)
-    (BitXor, Var(ln), Var(rn)) if ln == rn => IntLit(0)
-    // `x - x → 0` when x is a bare variable (pure, no double evaluation).
-    (Sub, Var(ln), Var(rn)) if ln == rn => IntLit(0)
+    // The self-operand rules — `x | x → x`, `x & x → x`, `x ^ x → 0`,
+    // `x - x → 0` — used to be gated on nothing but "both sides are the
+    // same bare `Var`", which establishes purity and rules out double
+    // evaluation. It does not establish the arithmetic, and the
+    // arithmetic is what these rules claim:
+    //
+    //   * `x | x → x` and `x & x → x` hand the operand back uncoerced,
+    //     so they need it to be an int32 already. A variable holding
+    //     `"alpha"` makes both `0`.
+    //   * `x ^ x → 0` and `x - x → 0` do not need the value, but they
+    //     do need a type: `"alpha" - "alpha"` is `NaN`, `5n ^ 5n` is
+    //     `0n`, `5n - 5n` is `0n`, and a Symbol throws.
+    //
+    // A bare `Var` satisfies none of those — nothing at this point knows
+    // what it holds — and the only expressions that would satisfy them
+    // are not bare `Var`s, so every one of these rules is unsatisfiable
+    // once it is gated correctly. They are deleted rather than left
+    // standing with a guard that can never pass: `x & x` and `x | x`
+    // occur in hand-written JS about as often as they occur in
+    // minifier changelogs, and a dead pattern reads like a live one to
+    // the next person auditing this table.
+    //
+    // `x && x → x` and `x || x → x`, just above, are a different rule
+    // and stay: those operators do not coerce, so returning the operand
+    // really is what they do, whatever its type.
     // Null coalescing: `null ?? x` and `undefined ?? x` → `x`.
     // A non-nullish left operand (any literal that isn't null/undefined)
     // short-circuits to that literal.
@@ -3601,20 +3717,37 @@ fn fold_binop(
     (Shr, IntLit(a), IntLit(b)) => IntLit(a >> b)
     (UShr, IntLit(a), IntLit(b)) =>
       IntLit((a.reinterpret_as_uint() >> b).reinterpret_as_int())
-    // `x & 0` → `0` (annihilator). Safe to fold only when the other operand
-    // is pure — we can't drop a call with side effects.
-    (BitAnd, _, IntLit(0)) if is_pure_value(l) => IntLit(0)
-    (BitAnd, IntLit(0), _) if is_pure_value(r) => IntLit(0)
-    // `x & -1` → `x` (AND with all-bits-set is identity, since -1 = 0xFFFFFFFF in 32-bit).
-    (BitAnd, _, IntLit(-1)) => l
-    (BitAnd, IntLit(-1), _) if is_pure_value(l) => r
-    // `x | -1` → `-1` (OR with all-bits-set is annihilator).
-    (BitOr, _, IntLit(-1)) if is_pure_value(l) => IntLit(-1)
-    (BitOr, IntLit(-1), _) if is_pure_value(r) => IntLit(-1)
-    // `x ** 0` → `1` for any pure x (JS spec: every value including NaN
-    // and Infinity raised to the 0 power equals 1).
+    // The bitwise annihilators and identities. Every one of these needs
+    // TWO facts, and for a long time each had only the first:
+    //
+    //   * the operand is pure, so dropping (or keeping) it does not
+    //     lose an effect; and
+    //   * the operand's TYPE makes the arithmetic claim true. These
+    //     operators coerce, so "AND with all-bits-set is the identity"
+    //     is a statement about int32s, not about JS values.
+    //
+    // `x & 0` → `0` (annihilator): any operand `ToNumber` accepts lands
+    // on 0, so `is_number_coercible` is enough — it only has to rule out
+    // the BigInt whose answer would be `0n` and the Symbol that throws.
+    (BitAnd, _, IntLit(0)) if is_pure_value(l) && is_number_coercible(l) =>
+      IntLit(0)
+    (BitAnd, IntLit(0), _) if is_pure_value(r) && is_number_coercible(r) =>
+      IntLit(0)
+    // `x & -1` → `x` (identity): here the operand's value is handed
+    // back, so it has to be an int32 already. `"alpha" & -1` is `0` and
+    // `1.5 & -1` is `1` — neither is the operand.
+    (BitAnd, _, IntLit(-1)) if is_int32_valued(l) => l
+    (BitAnd, IntLit(-1), _) if is_int32_valued(r) => r
+    // `x | -1` → `-1` (annihilator), same gate as `x & 0`.
+    (BitOr, _, IntLit(-1)) if is_pure_value(l) && is_number_coercible(l) =>
+      IntLit(-1)
+    (BitOr, IntLit(-1), _) if is_pure_value(r) && is_number_coercible(r) =>
+      IntLit(-1)
+    // `x ** 0` → `1`. Every Number — NaN and Infinity included — raised
+    // to the 0 power is 1, but `5n ** 0` and `Symbol() ** 0` both throw
+    // "Cannot mix BigInt and other types" / "Cannot convert a Symbol".
     (Pow, _, IntLit(0)) | (Pow, _, NumberLit(0.0)) =>
-      if is_pure_value(l) {
+      if is_pure_value(l) && is_number_coercible(l) {
         IntLit(1)
       } else {
         BinOp(op, l, r)

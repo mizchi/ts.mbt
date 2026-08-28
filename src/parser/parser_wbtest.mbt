@@ -7538,3 +7538,49 @@ test "parser: a leading `|` still parses a plain multi-line union" {
   }
   @test.assert_eq(module_.block.stmts.length() > 0, true)
 }
+
+///|
+test "parser: a `>` inside an unclosed bracket does not close a type-arg list" {
+  // `try_skip_type_args` scans for a balanced `<`…`>`, counting the
+  // braces, parens and brackets a type may legally contain. It checked
+  // only half of "balanced": a closer it never opened aborted the scan,
+  // but the counts were not required to be ZERO at the point `depth`
+  // reached 0. So on
+  //
+  //     a < (b > (c));
+  //
+  // the scan consumed `< ( b >`, stopped with `parens == 1`, and the
+  // caller saw the following `(` and committed to `a<(b>(c)` as a
+  // generic call — leaving a stray `)` and the nonsensical diagnostic
+  // "Expected RParen, got RParen" (the parenthesized spelling) or
+  // "Expected Semicolon, got RParen" (the bare one). Found by the
+  // mangle fuzzer, which generated
+  // `(structuredClone(obj) < ({ ...bag } > (obj.q -= false)))`.
+  for
+    src in [
+      "a < (b > (c));", "(a < (b > (c)));", "a < [b > (c)];", "a < {b: (c > (d))};",
+    ] {
+    let _ = Parser::from_source_with_jsx(src, false).parse_stmt() catch {
+      e => fail("expected `\{src}` to parse as a comparison: \{e}")
+    }
+  }
+}
+
+///|
+test "parser: a genuinely balanced type-arg list still commits" {
+  // The other half: the added condition must not reject the real
+  // generic-call forms, each of which legally nests one bracket kind.
+  for
+    src in [
+      "const r = f<A>(1);", "const r = f<{ a: number }>(1);", "const r = f<(x: A) => B>(1);",
+      "const r = f<[A, B]>(1);",
+    ] {
+    let stmt = Parser::from_source_with_jsx(src, false).parse_stmt() catch {
+      e => fail("expected `\{src}` to parse as a generic call: \{e}")
+    }
+    match stmt {
+      Const(@ast.TsBinding::Ident("r"), _, _) => ()
+      _ => fail("expected a const statement for `\{src}`")
+    }
+  }
+}

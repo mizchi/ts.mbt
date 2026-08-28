@@ -676,10 +676,10 @@ fn sg_visit_stmt(w : SgWalker, stmt : @ast.TsStmt) -> Unit {
           w.g.symbols[id].reassigned = true
           w.g.symbols[id].reassign_rhs.push(rhs)
           // `obj = { ...bag }` has the same hole one level up: the
-          // literal used to be the end of the trail.
-          for src in expr_flow_sources(w, rhs) {
-            w.g.flow_edges.push({ from: src, to: SymVal(id) })
-          }
+          // literal used to be the end of the trail. Its OWN keys were
+          // still missing until `sg_record_written_value` took over —
+          // see that function.
+          sg_record_written_value(w, id, rhs)
         }
         None => ()
       }
@@ -689,6 +689,12 @@ fn sg_visit_stmt(w : SgWalker, stmt : @ast.TsStmt) -> Unit {
       sg_visit_expr(w, rhs)
       match sg_lookup(w.g, w.current_scope, name) {
         Some(id) => {
+          // `v ||= { g14: 1 }` and `v &&= { g14: 1 }` can leave the rhs
+          // in `v`, so the rhs's keys are observable through `v`. The
+          // arithmetic compounds cannot, but recording them anyway only
+          // over-reserves, and guessing which is which per operator is
+          // how this arm came to record nothing at all.
+          sg_record_written_value(w, id, rhs)
           w.g.symbols[id].reassigned = true
           // `x += expr` evaluates to the new value of `x` =
           // `x <op> expr`; arithmetic ops always produce a number,
@@ -1315,9 +1321,7 @@ fn sg_visit_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
         Some(id) => {
           w.g.symbols[id].reassigned = true
           w.g.symbols[id].reassign_rhs.push(rhs)
-          for src in expr_immediate_sources(w, rhs) {
-            w.g.flow_edges.push({ from: src, to: SymVal(id) })
-          }
+          sg_record_written_value(w, id, rhs)
         }
         None => ()
       }
@@ -1327,6 +1331,12 @@ fn sg_visit_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
     CompoundAssignExpr(target, _, rhs) => {
       sg_visit_expr(w, target)
       sg_visit_expr(w, rhs)
+      // `bag.beta &&= { ...obj, g14: 1 }`. The plain-`=` spelling of
+      // this went through `PropAssignExpr` and recorded the write; the
+      // compound spelling recorded nothing, so the fuzzer's
+      // `bag.beta &&= { ...obj, g14: a }` had `g14` deleted and `obj`
+      // emptied while `console.log([bag])` printed them.
+      sg_record_write_into(w, target, rhs)
     }
     PropAssignExpr(target, prop, rhs) => {
       match target {
@@ -1629,18 +1639,44 @@ fn sg_record_write_into(
   val : @ast.TsExpr,
 ) -> Unit {
   match sg_assign_target_root(w, target) {
-    Some(id) => {
-      for src in expr_flow_sources(w, val) {
-        w.g.flow_edges.push({ from: src, to: SymVal(id) })
-      }
-      // The edge covers what the value REFERS to. An object literal
-      // written here also introduces keys of its own — `g7` in
-      // `obj.q = { ...bag, g7: v }` names nothing else in the bundle,
-      // so nothing else can keep it alive.
-      w.g.symbols[id].written_values.push(val)
-    }
+    Some(id) => sg_record_written_value(w, id, val)
     None => ()
   }
+}
+
+///|
+/// The same recording, for a write whose target is a plain binding
+/// rather than a member expression.
+///
+/// JS has six ways to assign, and only the four that go through a
+/// member expression recorded anything here. `v = { g14: 100 }` and
+/// `v ||= { g14: 100 }` recorded a `reassign_rhs` (for the numeric-vars
+/// pass) and, for plain `=`, a flow edge — but never the written value,
+/// so `collect_direct_props` had nothing to reserve and
+///
+///     let v: any = 1;
+///     v = { ...obj, g14: 100 };
+///     console.log([v]);
+///
+/// dropped `g14` AND `obj`'s own `p`, while the identical program
+/// written as `bag.beta = { ...obj, g14: 100 }` kept both. The
+/// difference was not a judgement about escape; it was which arm of the
+/// walker the statement happened to land in. `v` is not a member
+/// expression, so `sg_assign_target_root` cannot be the entry point and
+/// the recording is factored out here.
+fn sg_record_written_value(
+  w : SgWalker,
+  id : SymbolId,
+  val : @ast.TsExpr,
+) -> Unit {
+  for src in expr_flow_sources(w, val) {
+    w.g.flow_edges.push({ from: src, to: SymVal(id) })
+  }
+  // The edge covers what the value REFERS to. An object literal
+  // written here also introduces keys of its own — `g7` in
+  // `obj.q = { ...bag, g7: v }` names nothing else in the bundle,
+  // so nothing else can keep it alive.
+  w.g.symbols[id].written_values.push(val)
 }
 
 ///|
