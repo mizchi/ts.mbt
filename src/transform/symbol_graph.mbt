@@ -850,6 +850,19 @@ fn sg_visit_stmt(w : SgWalker, stmt : @ast.TsStmt) -> Unit {
             Some(b) => sg_declare_binding(w.g, b, w.current_scope, Catch, {})
             None => ()
           }
+          // The catch body's own declarations, which this arm used to
+          // skip. It opens the scope and walks the statements by hand
+          // instead of going through `sg_visit_block_in_new_scope`, and
+          // the pre-pass that declares a block's bindings lives there —
+          // so `catch (e) { const y = 1; return y; }` left `y`
+          // undeclared, and every reference to it was recorded as
+          // unresolved.
+          //
+          // Same shape as the pattern-parameter hole: harmless to the
+          // mangler, which has its own walk, and enough to make the
+          // output verifier report free variables on well-formed
+          // bundles — six of Excalidraw's eight were this.
+          sg_declare_block_bindings(w.g, cb, w.current_scope, {})
           for s in cb.stmts {
             sg_visit_stmt(w, s)
           }

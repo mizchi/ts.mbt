@@ -1994,12 +1994,8 @@ fn mangle_block_impl(
   fn prebind_top_level(stmts : Array[@ast.TsStmt]) -> Unit {
     for s in stmts {
       match s {
-        Let(@ast.TsBinding::Ident(name), _, _)
-        | Const(@ast.TsBinding::Ident(name), _, _)
-        | Var(@ast.TsBinding::Ident(name), _, _) =>
-          if !root.renames.contains(name) {
-            let _ = root.bind(name, reserved)
-          }
+        Let(b, _, _) | Const(b, _, _) | Var(b, _, _) =>
+          prebind_decl_names(b, root, reserved)
         NativeClassStmt(decl, _) =>
           if decl.name != "" && !root.renames.contains(decl.name) {
             let _ = root.bind(decl.name, reserved)
@@ -2067,6 +2063,79 @@ fn collect_top_level_decls(
           collect_top_level_decls(b, out)
         }
       _ => ()
+    }
+  }
+}
+
+///|
+/// Every name a binding introduces, in the order the pattern writes
+/// them.
+///
+/// `collect_binding_names` answers the same question into a `Map`, which
+/// is fine for a membership test and not for prebinding: the short names
+/// are handed out in iteration order, so a hash order would make the
+/// output depend on the run. Traversal order also matches what the
+/// `Ident` case has always done — statement order — so a pattern and a
+/// plain declaration get names the same way.
+fn binding_names_in_order(binding : @ast.TsBinding) -> Array[String] {
+  let out : Array[String] = []
+  collect_binding_names_ordered(binding, out)
+  out
+}
+
+///|
+fn collect_binding_names_ordered(
+  binding : @ast.TsBinding,
+  out : Array[String],
+) -> Unit {
+  match binding {
+    Ident(n) => out.push(n)
+    Array(ab) => {
+      for elem in ab.items {
+        match elem {
+          Some(be) => collect_binding_names_ordered(be.binding, out)
+          None => ()
+        }
+      }
+      match ab.rest {
+        Some(r) => collect_binding_names_ordered(r, out)
+        None => ()
+      }
+    }
+    Object(ob) => {
+      for p in ob.props {
+        collect_binding_names_ordered(p.binding, out)
+      }
+      match ob.rest {
+        Some(n) => out.push(n)
+        None => ()
+      }
+    }
+    Target(_) => ()
+  }
+}
+
+///|
+/// Pre-bind every name a `let` / `const` declaration introduces, so a
+/// reference that PRECEDES it in source order resolves to the same
+/// rename as the declaration.
+///
+/// The two prebind passes used to match `Let(Ident(name), …)` only, so a
+/// DESTRUCTURING declaration was invisible to them: `const bump = () => {
+/// setValue(1) }; const [value, setValue] = useState(0);` renamed the
+/// declaration and left the earlier closure calling the old name.
+/// `useState` makes that shape ubiquitous in React code — four of
+/// Excalidraw's components hit it under plain `mtsc --mangle`.
+///
+/// Same bug as the multi-declarator group, one binding form over.
+fn prebind_decl_names(
+  binding : @ast.TsBinding,
+  scope : ScopeFrame,
+  reserved : Map[String, Bool],
+) -> Unit {
+  for n in binding_names_in_order(binding) {
+    if !scope.renames.contains(n) {
+      let _ = scope.bind(n, reserved)
     }
   }
 }
@@ -2505,11 +2574,9 @@ fn rename_block_inline_in(
   fn prebind_stmts(stmts : Array[@ast.TsStmt]) -> Unit {
     for s in stmts {
       match s {
-        Let(@ast.TsBinding::Ident(name), _, _)
-        | Const(@ast.TsBinding::Ident(name), _, _) =>
-          if !scope.renames.contains(name) {
-            let _ = scope.bind(name, reserved)
-          }
+        // `var` names are NOT prebound here — see the note below; they
+        // hoist to the enclosing function frame instead.
+        Let(b, _, _) | Const(b, _, _) => prebind_decl_names(b, scope, reserved)
         NativeClassStmt(decl, _) =>
           if decl.name != "" && !scope.renames.contains(decl.name) {
             let _ = scope.bind(decl.name, reserved)

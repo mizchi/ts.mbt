@@ -268,3 +268,38 @@ test "symbol graph: a genuinely free name is still reported" {
   assert_true(g.unresolved.contains("missingBinding"))
   assert_false(g.unresolved.contains("a"))
 }
+
+///|
+test "symbol graph: a catch body's own declarations are declared" {
+  // The `Try` arm opens the catch scope and walks its statements by
+  // hand, and the pre-pass that declares a block's bindings lives in
+  // `sg_visit_block_in_new_scope` — which it does not call. So every
+  // declaration inside a catch body was undeclared and every reference
+  // to one was recorded as unresolved. Six of Excalidraw's eight
+  // reported free variables were this.
+  let g = build_graph(
+    "function f() { try { throw 1; } catch (e) { const y = 1; return y + e; } }",
+  )
+  assert_false(g.unresolved.contains("y"))
+  assert_false(g.unresolved.contains("e"))
+}
+
+///|
+test "symbol graph: an optional catch binding still scopes its body" {
+  // `catch { … }` with no binding is the ES2019 form; the arm has to
+  // handle the body the same way.
+  let g = build_graph(
+    "function f() { try { throw 1; } catch { const z = 1; return z; } }",
+  )
+  assert_false(g.unresolved.contains("z"))
+}
+
+///|
+test "symbol graph: a nested catch sees the outer catch's declarations" {
+  // The exact shape from Excalidraw's `TTDDialog/common.ts`: a `const`
+  // in a catch body, read from a nested `catch` inside it.
+  let g = build_graph(
+    "async function f(api, s) { try { await api.go(s); } catch (err) { const original = err; try { await api.go(s); } catch { return original; } } }",
+  )
+  assert_false(g.unresolved.contains("original"))
+}

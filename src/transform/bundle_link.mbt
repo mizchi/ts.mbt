@@ -327,9 +327,19 @@ fn link_module_graph(
             props,
             {},
           )
-          if !props.is_empty() {
-            namespace_subs[ns_local] = props
-          }
+          // Record even when EMPTY, for the same reason the re-export
+          // path below says so: the phase-3 synthesizer only knows about
+          // namespaces that appear here, so skipping an empty one means
+          // no `const ns = {}` is emitted and a bare reference to `ns`
+          // has nothing to resolve to.
+          //
+          // A module can be empty and still be imported this way.
+          // Excalidraw's `defaultCommandPaletteItems.ts` is literally
+          // `export {};` and `CommandPalette.tsx` passes the namespace
+          // as a value — so the bundle carried a free `defaultItems`.
+          // The lesson had already been learned on the re-export path
+          // and not on this one.
+          namespace_subs[ns_local] = props
         }
         None => ()
       }

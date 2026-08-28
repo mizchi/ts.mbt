@@ -1046,3 +1046,42 @@ test "mangle: a real block of declarations still gets its own scope" {
     Err(e) => fail("\{e}")
   }
 }
+
+///|
+test "mangle: a destructuring declaration's names are pre-bound" {
+  // The two prebind passes matched `Let(Ident(name), …)` only, so a
+  // DESTRUCTURING declaration was invisible to them and a reference that
+  // preceded it kept the old spelling while the declaration was renamed.
+  // `useState` makes the shape ubiquitous: four of Excalidraw's
+  // components hit it under plain `mtsc --mangle`.
+  //
+  // Same bug as the multi-declarator group, one binding form over.
+  let cfg = ManglerConfig::default().with_preserve_top_level(false)
+  let src = "function C() {\n  const bump = () => { setValue(1); };\n  const [value, setValue] = useState(0);\n  return value + (bump(), 0);\n}\nconsole.log(C());"
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      // Nothing may still be spelled `setValue` — neither the use nor
+      // the binder.
+      assert_false(js.contains("setValue"), msg="got: \{js}")
+      assert_false(js.contains("value"), msg="got: \{js}")
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+test "mangle: an object-pattern declaration's names are pre-bound too" {
+  let cfg = ManglerConfig::default().with_preserve_top_level(false)
+  let src = "function C() {\n  const early = () => helper();\n  const { helper, ...restOfIt } = deps();\n  return early() + restOfIt;\n}\nconsole.log(C());"
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      // The property KEY `helper:` stays — keys are only renamed under
+      // `--mangle-properties`. What must be gone is the BINDING, and the
+      // earlier `early` closure must call the renamed one.
+      assert_false(js.contains("=> helper()"), msg="got: \{js}")
+      assert_true(js.contains("helper: "), msg="the key should survive: \{js}")
+      assert_false(js.contains("restOfIt"), msg="got: \{js}")
+    }
+    Err(e) => fail("\{e}")
+  }
+}

@@ -1685,6 +1685,13 @@ fn load_module_graph(
         match aliases.get(imp.module_spec) {
           Some(disk) => {
             let dep_path = resolve_with_extensions(files, disk)
+            // A CommonJS module cannot be concatenated into an ES bundle
+            // — see `module_is_commonjs`. Keep the import verbatim and
+            // let the host resolve it.
+            if dep_is_commonjs(files, dep_path, parsed) {
+              record_external_import(external_imports, external_seen, imp)
+              continue
+            }
             resolved[imp.module_spec] = dep_path
             match
               load_module_graph(
@@ -1698,6 +1705,10 @@ fn load_module_graph(
           None =>
             if files.contains(imp.module_spec) {
               let dep_path = resolve_with_extensions(files, imp.module_spec)
+              if dep_is_commonjs(files, dep_path, parsed) {
+                record_external_import(external_imports, external_seen, imp)
+                continue
+              }
               resolved[imp.module_spec] = dep_path
               match
                 load_module_graph(
@@ -2190,4 +2201,70 @@ fn strip_super_proto_stmt(s : @ast.TsStmt) -> @ast.TsStmt {
       )
     _ => s
   }
+}
+
+///|
+/// Is this module CommonJS (or a UMD wrapper), rather than something that
+/// can be concatenated into an ESM bundle?
+///
+/// Inlining one produces a bundle that cannot load. `module.exports = …`
+/// lands verbatim in an ES module, where `module` is not defined, so it
+/// throws before anything else can go wrong; the importer's default
+/// binding is left a free variable, because nothing declares it; and a
+/// NAMED import resolves by luck when the CJS module happens to declare a
+/// same-named internal function, which is worse than failing — rename the
+/// export (`module.exports = { helper: internalName }`) and the reference
+/// silently points at nothing. `import React, { useState } from "react"`
+/// against a resolved `react/index.js` produced exactly this, and the
+/// same hazard is already recorded for `es6-promise-pool`'s UMD build.
+///
+/// The test: ESM syntax settles it — a file with `import` / `export` is a
+/// module, and the two systems cannot be mixed. Otherwise, a file that
+/// references `module`, `exports` or `require` as a VALUE is CommonJS.
+/// That reads through a UMD wrapper, where the marker sits inside the
+/// factory rather than at the top level, and it uses
+/// `collect_var_refs_in_block` — the walk treeshaking relies on — rather
+/// than a fresh partial one.
+///
+/// A false positive costs an inline, not a miscompile: the import is kept
+/// verbatim and the host resolves it, which is what a bundler does with
+/// any external. So the check is allowed to be blunt.
+fn module_is_commonjs(mb : @ast.TsModuleBlock) -> Bool {
+  if mb.imports.length() > 0 ||
+    mb.exports.length() > 0 ||
+    mb.reexports.length() > 0 {
+    return false
+  }
+  let refs : Map[String, Bool] = {}
+  collect_var_refs_in_block(mb.block, refs)
+  refs.contains("module") ||
+  refs.contains("exports") ||
+  refs.contains("require")
+}
+
+///|
+/// Parse `dep_path` once, cache it in `parsed` so the recursive load
+/// reuses it, and answer whether it is CommonJS. A parse failure is not
+/// this function's business — answer "not CommonJS" and let the recursion
+/// report it.
+fn dep_is_commonjs(
+  files : Map[String, String],
+  dep_path : String,
+  parsed : Map[String, @ast.TsModuleBlock],
+) -> Bool {
+  match parsed.get(dep_path) {
+    Some(mb) => return module_is_commonjs(mb)
+    None => ()
+  }
+  let source = match files.get(dep_path) {
+    Some(s) => s
+    None => return false
+  }
+  let mb = try @parser.Parser::from_source(source).parse_module_block() catch {
+    _ => return false
+  } noraise {
+    b => b
+  }
+  parsed[dep_path] = mb
+  module_is_commonjs(mb)
 }

@@ -3759,3 +3759,116 @@ test "bundle: the JSX runtime import is deduplicated across modules" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "bundle: a CommonJS dependency is kept external, not inlined" {
+  // Inlining one produces a bundle that cannot load: `module.exports =
+  // …` lands verbatim in an ES module where `module` is undefined, and
+  // the default import is left a free variable. `import React, {
+  // useState } from "react"` against a resolved `react/index.js` did
+  // exactly this — eleven free variables in Excalidraw's bundle.
+  let files = vfs([
+    (
+      "node_modules/mylib/index.js", "'use strict';\nfunction helper(x) { return x + 1; }\nmodule.exports = { helper: helper };\n",
+    ),
+    (
+      "entry.ts", "import mylib, { helper } from \"mylib\";\nexport const go = () => helper(1) + mylib.helper(2);\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_aliases({
+    "mylib": "node_modules/mylib/index.js",
+  })
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // The dependency is NOT concatenated…
+      assert_false(
+        out.js.contains("module.exports"),
+        msg="the CJS body was inlined: \{out.js}",
+      )
+      // …and the import survives so the host resolves it.
+      assert_true(
+        out.js.contains("from \"mylib\""),
+        msg="the import was dropped: \{out.js}",
+      )
+      @test.assert_eq(verify_emitted_bundle(out.js).length(), 0)
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: a UMD dependency counts as CommonJS" {
+  // The marker sits inside the factory, not at the top level, so a
+  // top-level-only scan would miss it. `es6-promise-pool` is the shape
+  // this is about.
+  let files = vfs([
+    (
+      "node_modules/umd/index.js", "(function (root, factory) {\n  if (typeof module === \"object\" && module.exports) { module.exports = factory(); }\n  else { root.Umd = factory(); }\n})(this, function () { return { v: 1 }; });\n",
+    ),
+    ("entry.ts", "import Umd from \"umd\";\nexport const go = () => Umd.v;\n"),
+  ])
+  let opts = BundleOptions::default().with_aliases({
+    "umd": "node_modules/umd/index.js",
+  })
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("from \"umd\""))
+      assert_false(out.js.contains("root.Umd"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: an ESM dependency reached by a bare specifier still inlines" {
+  // The check must not turn bare-specifier inlining off wholesale. A
+  // file with `import` / `export` is a module and cannot also be CJS.
+  let files = vfs([
+    ("node_modules/esm/index.js", "export const helper = (x) => x + 1;\n"),
+    (
+      "entry.ts", "import { helper } from \"esm\";\nexport const go = () => helper(1);\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_aliases({
+    "esm": "node_modules/esm/index.js",
+  })
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(
+        out.js.contains("helper = (x) => x + 1"),
+        msg="the ESM dependency was not inlined: \{out.js}",
+      )
+      assert_false(out.js.contains("from \"esm\""))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: a namespace import of an empty module still gets an object" {
+  // `import * as ns from "./m"` where `m` exports nothing. The property
+  // table came out empty and was therefore not recorded, so the phase-3
+  // synthesizer never learned the namespace existed and no
+  // `const ns = {}` was emitted — a bare reference to `ns` had nothing
+  // to resolve to. The re-export path one screen below already said
+  // "always record even when empty"; this path did not.
+  //
+  // Excalidraw's `defaultCommandPaletteItems.ts` is literally
+  // `export {};` and its namespace is passed as a value.
+  let files = vfs([
+    ("empty.ts", "export {};\n"),
+    (
+      "entry.ts", "import * as none from \"./empty\";\nexport const use = () => ({ none });\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_true(
+        out.js.contains("none = {}"),
+        msg="expected a synthesized empty namespace, got: \{out.js}",
+      )
+      @test.assert_eq(verify_emitted_bundle(out.js).length(), 0)
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
