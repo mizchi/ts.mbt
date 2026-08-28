@@ -72,7 +72,14 @@ product surfaces now.
   (`undefined`, `-0`, `NaN`, a Symbol, a BigInt, an object with a
   poisoned `valueOf`, an array-like with a negative `length`) and
   compared against Node running the source directly. It found nine
-  rewrites that assumed a type and checked nothing — see
+  rewrites that assumed a type and checked nothing, and later six more:
+  the harness covers the rules somebody wrote a case for and reports
+  nothing about the rules that have none, so `Array.from(x)` -> `[...x]`
+  shipped for months three lines below a comment explaining why the same
+  rewrite on `Array.prototype.slice.call` had been removed. Every rewrite
+  whose validity depends on the receiver's type now has a case; the
+  built-in-method family is the whole of that subset, and gating it cost
+  ~700 bytes across four corpus targets. See
   [`docs/rule-equivalence.md`](./docs/rule-equivalence.md). And
   `just compare-terser` asks the
   competitive version of that question: both optimizers start from the
@@ -90,7 +97,8 @@ product surfaces now.
   flags — once from the TypeScript source, once from the same code with
   its types erased — with all three legs required to observe the same
   thing. The answer so far is uncomfortable and worth knowing: across
-  nine measured targets there is **no win left** — seven neutral and two
+  nine measured targets — every one of them behaviour-checked, no
+  `size-only` rows left — there is **no win left**: seven neutral and two
   losses, both inside a byte of the noise floor (-0.22% on typebox,
   -0.11% on Excalidraw) —
   and the property mangler is entirely inert on every library measured.

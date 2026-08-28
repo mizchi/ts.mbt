@@ -866,12 +866,25 @@ test "peephole: x == null ? fallback : x → x ?? fallback" {
 }
 
 ///|
-test "peephole: Array.from(x) folds to [...x]" {
-  let out = peep_one("const r = Array.from(items);")
-  assert_true(out.contains("[..."), msg="expected spread array, got: \{out}")
+test "peephole: Array.from(x) folds only when x is provably iterable" {
+  // `Array.from` accepts an array-LIKE; a spread needs an ITERABLE.
+  // `Array.from({ length: 256 })` is 256 `undefined`s and
+  // `[...{ length: 256 }]` throws, which is how typebox's bundle died on
+  // load. A bare `items` proves nothing, so the call stays.
+  let kept = peep_one("const r = Array.from(items);")
+  assert_true(
+    kept.contains("Array.from"),
+    msg="an unprovable receiver must keep the call, got: \{kept}",
+  )
+  // A string literal and a `new Set(…)` name their own type.
+  let folded = peep_one("const r = Array.from(new Set(xs));")
+  assert_true(
+    folded.contains("[..."),
+    msg="expected spread array, got: \{folded}",
+  )
   assert_false(
-    out.contains("Array.from"),
-    msg="expected no Array.from, got: \{out}",
+    folded.contains("Array.from"),
+    msg="expected no Array.from, got: \{folded}",
   )
 }
 
@@ -980,10 +993,12 @@ test "peephole: new Object() folds to {}" {
 }
 
 ///|
-test "peephole: [].concat(a, b) folds to [...a,...b]" {
+test "peephole: [].concat(a, b) is left alone for non-literal arguments" {
+  // `concat` APPENDS a non-array as a single element, so
+  // `[].concat(undefined)` is `[undefined]` while `[...undefined]`
+  // throws. Only array literals are provably spreadable.
   let out = minify_one("const r = [].concat(a, b);")
-  assert_true(out.contains("[..."), msg="expected spread array, got: \{out}")
-  assert_false(out.contains("concat"), msg="expected no concat, got: \{out}")
+  assert_true(out.contains("concat"), msg="expected concat kept, got: \{out}")
 }
 
 ///|
@@ -1118,10 +1133,20 @@ test "peephole: fn.call(null, a, b) → fn(a, b) strips null-this call" {
 }
 
 ///|
-test "peephole: fn.apply(null, args) → fn(...args) strips null-this apply" {
-  let out = minify_one("const r = fn.apply(null, args);")
-  assert_false(out.contains(".apply("), msg="expected no .apply, got: \{out}")
-  assert_true(out.contains("...args"), msg="expected spread, got: \{out}")
+test "peephole: fn.apply(null, args) needs a provably iterable args list" {
+  // `apply` takes an array-LIKE, and also `null` / `undefined` meaning
+  // "no arguments": `f.apply(null, undefined)` calls `f()` where
+  // `f(...undefined)` throws. A bare `args` is not a proof.
+  let kept = minify_one("const r = fn.apply(null, args);")
+  assert_true(
+    kept.contains(".apply("),
+    msg="an unprovable args list must keep .apply, got: \{kept}",
+  )
+  let folded = minify_one("const r = fn.apply(null, [a, b]);")
+  assert_false(
+    folded.contains(".apply("),
+    msg="expected no .apply, got: \{folded}",
+  )
 }
 
 ///|
@@ -1326,10 +1351,12 @@ test "peephole: +new Date() → Date.now()" {
 }
 
 ///|
-test "peephole: arr.slice(0) → [...arr]" {
+test "peephole: arr.slice(0) is left alone" {
+  // `slice` is a method on Array AND on String, and they return
+  // different kinds of thing: `"ab".slice(0)` is `"ab"`, `[..."ab"]` is
+  // `["a", "b"]`. Nothing here proves the receiver is an array.
   let out = minify_one("const r = arr.slice(0);")
-  assert_false(out.contains("slice"), msg="expected no .slice, got: \{out}")
-  assert_true(out.contains("...arr"), msg="expected spread, got: \{out}")
+  assert_true(out.contains("slice"), msg="expected .slice kept, got: \{out}")
 }
 
 ///|
@@ -1520,15 +1547,17 @@ test "peephole: (0, fn)(args) indirect call → fn(args)" {
 }
 
 ///|
-test "peephole: Array.prototype.METHOD.call(arr, ...) → arr.METHOD(...)" {
+test "peephole: Array.prototype.METHOD.call(x, …) is left alone" {
+  // Two ways apart, and the rewrite was on the wrong side of both. The
+  // `.call` form names the built-in explicitly and reaches strings,
+  // `arguments` and `{ length: 2, 0: "a", 1: "b" }`, none of which have
+  // the method; and where the receiver DOES have a same-named method,
+  // the rewrite calls that one instead of the built-in. `slice` was
+  // already excluded here — it was the one instance somebody had hit.
   let out = minify_one("Array.prototype.forEach.call(arr, fn);")
-  assert_false(
-    out.contains("Array.prototype"),
-    msg="expected no Array.prototype, got: \{out}",
-  )
   assert_true(
-    out.contains("arr.forEach("),
-    msg="expected arr.forEach(), got: \{out}",
+    out.contains("Array.prototype"),
+    msg="expected Array.prototype kept, got: \{out}",
   )
 }
 

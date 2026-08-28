@@ -95,17 +95,27 @@ const CORPUS = [
     name: "typebox",
     repo: "https://github.com/sinclairzx81/typebox",
     entry: "src/index.ts",
-    // The `TTypeArray is not defined` failure this row used to carry was
-    // the type-only namespace entry, and it is fixed. typebox now gets
-    // further and stops on a different bug: `Cannot access 'IntegerKey'
-    // before initialization` — a `const` used by a later top-level
-    // statement that the linker ordered ahead of its declaration. A TDZ
-    // ordering problem, unrelated to types, and its own fix.
+    // Was size-only through two separate unloadable-bundle bugs, and
+    // both are worth the note because neither was about types:
     //
-    // Sizes stay comparable (both legs carry the same defect), but
-    // nothing executes them, so the row is size-only.
-    driver: null,
-    sizeOnlyWhy: "bundle throws on load: TDZ, `IntegerKey` used before its declaration is ordered",
+    //   * `Array.from({ length: 256 }).map(…)` in `system/hashing/hash.ts`
+    //     compiled to `[...{ length: 256 }].map(…)`. `Array.from` takes
+    //     an array-LIKE and a spread needs an ITERABLE — a rewrite that
+    //     had never been asked the question, now in
+    //     `scripts/verify_rule_equivalence.mjs` along with the rest of
+    //     the built-in-method family.
+    //   * `types/record.ts` was initialized AFTER
+    //     `indexed/from_object.ts`, whose top level does
+    //     `new RegExp(IntegerKey)`. The module order did not match ESM's
+    //     because dependencies were walked imports-then-re-exports
+    //     rather than in source order, and `src/index.ts` is a barrel
+    //     that puts five `export * from` above one `import * as`.
+    //
+    // The driver reads `Record(Integer(), …)`'s emitted
+    // `patternProperties` back out, because `IntegerKey` is a string:
+    // an order that produced the wrong value instead of throwing would
+    // still build a schema, just not the right one.
+    driver: "typebox.driver.mjs",
   },
   {
     name: "immer",

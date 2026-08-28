@@ -1323,6 +1323,7 @@ async fn main {
           type_aliases: [],
           interfaces: [],
           class_fields: [],
+          module_request_order: [],
           has_export_equals: false,
         })
         let module_ = (try
@@ -1494,6 +1495,7 @@ async fn main {
             type_aliases: [],
             interfaces: [],
             class_fields: [],
+            module_request_order: [],
             has_export_equals: false,
           })
           let entry_module = (try

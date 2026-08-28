@@ -1064,6 +1064,26 @@ pub(all) struct TsModuleBlock {
   // "does every class that declares `f` type it as X", never "what
   // does class C declare".
   class_fields : Array[(String, TsType)]
+  // Every specifier this module REQUESTS at runtime, in the order the
+  // declarations appear in the source — `import … from` and
+  // `export … from` interleaved, which `imports` and `reexports` cannot
+  // express because they are two arrays.
+  //
+  // ESM evaluates a module graph in depth-first post-order over exactly
+  // this sequence, and a flat concatenated bundle gets one chance to
+  // reproduce that. On an acyclic graph any topological order works and
+  // this list is redundant; on a cyclic one it decides which module is
+  // initialized first. typebox's `src/index.ts` is a barrel with five
+  // `export * from './type/…'` above one `import * as Type from
+  // './typebox.ts'`, and walking the imports first sent the traversal
+  // down the wrong subtree — `types/record.ts` landed after a top-level
+  // `new RegExp(IntegerKey)` that reads it, and the bundle threw
+  // `Cannot access 'IntegerKey' before initialization` at load.
+  //
+  // Type-only requests are omitted: `import type { X } from "y"` erases
+  // completely, so it is not a request at runtime and ordering `y` by it
+  // would order a module ESM never evaluates at that point.
+  module_request_order : Array[String]
   // True when the module uses `export = <expr>` (CJS export assignment).
   // An `import X = require(...)` of such a module binds the ASSIGNED
   // entity, not a namespace object -- the bridge export resolution

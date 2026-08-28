@@ -3601,3 +3601,97 @@ test "bundle: a declared const enum is left to the host" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "bundle: dependencies are ordered by source position, not by kind" {
+  // ESM evaluates a module graph depth-first over the module-request
+  // declarations IN SOURCE ORDER, and a flat concatenated bundle gets
+  // one chance to reproduce that. Reading `import_decls` then
+  // `reexport_specs` says "every import, then every re-export", which
+  // is a different order for any file that mixes the two — and a barrel
+  // is exactly such a file. typebox's `src/index.ts` has five
+  // `export * from './type/…'` above one `import * as Type from
+  // './typebox.ts'`, so the traversal descended the wrong subtree first
+  // and `types/record.ts` was emitted after a top-level
+  // `new RegExp(IntegerKey)` that reads it: `Cannot access 'IntegerKey'
+  // before initialization` at load.
+  let files = vfs([
+    (
+      "entry.ts", "export * from \"./first\";\nimport { second } from \"./second\";\nexport const out = second;\n",
+    ),
+    ("first.ts", "export const first = 1;\n"),
+    ("second.ts", "export const second = 2;\n"),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) =>
+      // `first.ts` is requested by the FIRST declaration in the source,
+      // so it must be initialized first.
+      @test.assert_eq(out.modules, ["first.ts", "second.ts", "entry.ts"])
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: a cycle initializes in the order the source requests" {
+  // The shape that made the ordering observable rather than cosmetic. On
+  // an acyclic graph any topological order runs; here `reader.ts` reads
+  // `PATTERN` at its own top level, so the module that declares it has
+  // to be initialized first, and only the source order says which that
+  // is. `holder.ts` imports back from `reader.ts` to close the cycle,
+  // which is what stops the ordering from being forced.
+  //
+  // The traversal is post-order, so the module requested FIRST is the
+  // one whose subtree is entered first and therefore the one that
+  // finishes LAST. Entering `reader.ts` first means its own request for
+  // `holder.ts` completes before it does, which is what puts `PATTERN`
+  // in place. Entering `holder.ts` first inverts that and `reader.ts`
+  // top level runs against an uninitialized `PATTERN` — which real ESM
+  // would also throw on, so this is not mtsc being conservative.
+  //
+  // The first declaration here is a RE-EXPORT and the second an import,
+  // so an imports-then-re-exports walk gets it exactly backwards.
+  let files = vfs([
+    (
+      "entry.ts", "export * from \"./reader\";\nimport { PATTERN } from \"./holder\";\nexport const p = PATTERN;\n",
+    ),
+    (
+      "holder.ts", "import { helper } from \"./reader\";\nexport const PATTERN = \"^p$\";\nexport const viaHelper = () => helper();\n",
+    ),
+    (
+      "reader.ts", "import { PATTERN } from \"./holder\";\nconst compiled = new RegExp(PATTERN);\nexport const read = compiled.source;\nexport const helper = () => 1;\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      let holder = out.modules.search("holder.ts").unwrap()
+      let reader = out.modules.search("reader.ts").unwrap()
+      assert_true(holder < reader)
+      @test.assert_eq(verify_emitted_bundle(out.js).length(), 0)
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: a type-only request does not order its module" {
+  // `import type { X } from "y"` erases completely, so it is not a
+  // module request at runtime and must not decide where `y` is
+  // initialized — ordering by it would place a module ESM never
+  // evaluates at that point.
+  let files = vfs([
+    (
+      "entry.ts", "import type { T } from \"./types\";\nimport { real } from \"./real\";\nexport const out: T = real;\n",
+    ),
+    ("types.ts", "export type T = number;\nexport const alsoValue = 0;\n"),
+    (
+      "real.ts", "import { alsoValue } from \"./types\";\nexport const real = alsoValue + 1;\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) =>
+      // `types.ts` is reached through `real.ts`, not through the erased
+      // `import type`, so it lands where the surviving request puts it.
+      @test.assert_eq(out.modules, ["types.ts", "real.ts", "entry.ts"])
+    Err(e) => fail("bundle error: \{e}")
+  }
+}

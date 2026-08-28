@@ -12,16 +12,16 @@
     "aware": 88768
   },
   "typebox": {
-    "status": "size-only",
+    "status": "measured",
     "verdict": "LOSS",
     "delta": -261,
-    "aware": 119731
+    "aware": 119913
   },
   "immer": {
     "status": "measured",
     "verdict": "NEUTRAL",
     "delta": 0,
-    "aware": 20370
+    "aware": 20399
   },
   "neverthrow": {
     "status": "measured",
@@ -45,13 +45,13 @@
     "status": "measured",
     "verdict": "NEUTRAL",
     "delta": -18,
-    "aware": 200103
+    "aware": 200126
   },
   "excalidraw": {
     "status": "measured",
     "verdict": "LOSS",
-    "delta": -303,
-    "aware": 280380
+    "delta": -296,
+    "aware": 280586
   },
   "remeda": {
     "status": "blocked"

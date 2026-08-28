@@ -97,6 +97,12 @@ const DOMAIN = [
   "{ length: -1 }",
   "{ length: NaN }",
   "{ length: undefined }",
+  // A genuine array-LIKE: `length` plus index properties, and no
+  // `Symbol.iterator`. Every `Array.from(x)` / `Array.prototype.M.call(x)`
+  // / `x.slice(0)` rewrite that reaches for a spread or a method call
+  // assumes this is an Array, and it is the shape those built-ins exist
+  // to handle.
+  '{ length: 2, 0: "a", 1: "b" }',
   "{ size: -1 }",
   "{ toString() { return 's'; }, valueOf() { return 1; } }",
   "{ hasOwnProperty() { return 'own'; } }",
@@ -349,6 +355,94 @@ const CASES = [
     rule: "collapse_vars",
     name: "single-use-binding",
     body: "const t = a + 1; return t * b;",
+  },
+
+  // --- built-in method rewrites
+  //
+  // This block exists because of what it found. typebox's
+  // `Array.from({ length: 256 }).map(…)` was compiled to
+  // `[...{ length: 256 }].map(…)`, which throws: `Array.from` accepts an
+  // array-LIKE and a spread needs an ITERABLE. The rewrite had a comment
+  // saying only that the two-arg form must be left alone, and the
+  // neighbouring `Array.prototype.slice.call` rewrite had already been
+  // removed for EXACTLY this reason — so the knowledge was three lines
+  // away and the rule still shipped.
+  //
+  // The reason it shipped is structural: this harness covers the rules
+  // somebody wrote a case for, and nothing reports which rules have
+  // none. peephole and fold carry ~235 rewrites between them. So every
+  // rewrite whose validity depends on the RECEIVER'S TYPE gets a case
+  // here, whether or not it currently looks suspect — that is the
+  // subset where "assumes a type and checks nothing" can hide.
+  {
+    rule: "arrays",
+    name: "array-from-single-arg",
+    holes: 1,
+    body: "return Array.from(a);",
+  },
+  {
+    rule: "arrays",
+    name: "array-proto-slice-call",
+    holes: 1,
+    body: "return Array.prototype.slice.call(a);",
+  },
+  {
+    rule: "arrays",
+    name: "array-proto-method-call",
+    holes: 1,
+    body: "return Array.prototype.indexOf.call(a, 'a');",
+  },
+  {
+    rule: "arrays",
+    name: "slice-zero",
+    holes: 1,
+    body: "return a.slice(0);",
+  },
+  {
+    rule: "arrays",
+    name: "empty-concat",
+    holes: 1,
+    body: "return [].concat(a);",
+  },
+  {
+    rule: "objects",
+    name: "object-assign-literal-target",
+    body: "return Object.assign({ k: 1 }, a, b);",
+  },
+  {
+    rule: "objects",
+    name: "hasownproperty-call",
+    holes: 1,
+    body: "return Object.prototype.hasOwnProperty.call(a, 'p');",
+  },
+  {
+    rule: "numbers",
+    name: "number-parseint",
+    holes: 1,
+    body: "return Number.parseInt(a);",
+  },
+  {
+    rule: "numbers",
+    name: "number-parsefloat",
+    holes: 1,
+    body: "return Number.parseFloat(a);",
+  },
+  {
+    rule: "numbers",
+    name: "math-pow",
+    body: "return Math.pow(a, b);",
+  },
+  {
+    rule: "functions",
+    name: "call-null-this",
+    holes: 1,
+    body: "const f = function () { return arguments.length; }; return f.call(null, a);",
+  },
+  {
+    rule: "functions",
+    name: "apply-null-this",
+    holes: 1,
+    body: "const f = function () { return arguments.length; }; return f.apply(null, a);",
   },
 ];
 

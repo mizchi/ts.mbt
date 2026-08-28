@@ -72,14 +72,69 @@ corpus / fuzzer / real-world はどれも「このプログラムはまだ正し
 ありました（relational negation と加法単位元）。harness は片方を直した
 直後にもう片方を報告したので、そこで気づけました。
 
+## 2 回目: 表に無い rule は検査されていなかった
+
+typebox の bundle が load で死んでいた原因が
+`Array.from({ length: 256 }).map(…)` -> `[...{ length: 256 }].map(…)`
+でした。`Array.from` は **array-LIKE** を受け、spread は
+**ITERABLE** を要求するので、これは throw します。
+
+問題はこの rule が **表に無かった**ことです。value domain には
+`{ length: 0 }` も `{ length: -1 }` も既に入っていたので、case を
+1 行足すだけで初回から落ちていました。
+
+そして最悪なのは、**3 行下に答えが書いてあった**ことです。
+`Array.prototype.slice.call(x)` -> `[...x]` は同じ理由で削除済みで、
+その理由がコメントとして残っていました。知識は隣にあり、rule は
+出荷されていた。
+
+これは構造的な穴です。この harness は **「誰かが case を書いた rule」**
+だけを検査し、**case が無い rule については何も報告しません**。
+peephole と fold には合わせて ~235 個の rewrite があり、case は
+38 個でした。カバー率は約 16%、しかもどの 84% が未検査かは
+どこにも書かれていない。
+
+そこで方針を変えました: **妥当性が受け側の型に依存する rewrite は、
+怪しく見えるかどうかに関係なく全部 case を書く**。それが
+「型を仮定して何も確認しない」が隠れられる部分集合です。
+built-in method の書き換えがその全体で、11 個。6 個が unsound でした。
+
+| rule | 反例 | 対処 |
+| --- | --- | --- |
+| `Array.from(x)` -> `[...x]` | `Array.from({length:0})` は `[]`、spread は throw | `is_definitely_iterable` |
+| `Array.prototype.M.call(x, …)` -> `x.M(…)` | string / `arguments` / array-like に method が無い。逆に receiver が同名 method を持つ場合は built-in ではなくそれを呼ぶ | 削除 |
+| `x.slice(0)` -> `[...x]` | `"ab".slice(0)` は `"ab"`、`[..."ab"]` は `["a","b"]` | 削除 |
+| `[].concat(a)` -> `[...a]` | `concat` は非 array を 1 要素として append。`[].concat(1)` は `[1]`、`[...1]` は throw | 引数が全部 array literal のときだけ |
+| `Math.pow(a,b)` -> `a**b` | `Math.pow(10n,10n)` は throw、`10n ** 10n` は計算する | 片方が非 BigInt と証明できれば可 |
+| `f.apply(null, a)` -> `f(...a)` | `apply` は array-like も `null`/`undefined`（引数なし）も受ける | `is_definitely_iterable` |
+
+domain にも 1 つ足しました: `{ length: 2, 0: "a", 1: "b" }` —
+`length` と index property を持ち `Symbol.iterator` を持たない、
+本物の array-like。これらの built-in がまさに扱うために存在する形です。
+
+証明は**構文的**で、意図的に狭くしています。`ArrayLit` / `StringLit` /
+`new Set(…)` は自分の型を名乗りますが、`Var` は文脈でどれだけ array に
+見えても証明になりません。型表を読めば広げられる（peephole の
+`PeepCtx` は今それを持っていない）ので、E7 の候補です。
+
+`Array.prototype.M.call` で `slice` だけが除外されていたのは示唆的です。
+family 全体の問題を、誰かが踏んだ 1 例として直していた。
+
 ## 現在
 
-`38 equivalent, 0 inert, 0 unsound`。
+`50 equivalent, 0 inert, 0 unsound`。
 
-byte の代償は測ってあります。`just compare-terser` は
+byte の代償は 2 回測ってあります。
+
+1 回目（初回の 9 件）: `just compare-terser` は
 **25 win / 1 tie / 6 loss で変化なし**——1 件も勝敗が動いていません。
 `.length` 比較や `x.toString()` の 3〜9 byte は、terser の corpus では
 どの case にも効いていなかったということです。
+
+2 回目（built-in method の 6 件）: terser 比は**やはり変化なし**
+（25 / 1 / 6）。ただし実 library では払っています——type-aware corpus の
+9 target のうち 4 つで合計 ~700 byte 増（typebox +182、excalidraw +206、
+immer +29、zod +23）。壊れない側に寄せた分の値段です。
 
 ## 「保証」の範囲
 

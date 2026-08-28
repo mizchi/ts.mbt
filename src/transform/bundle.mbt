@@ -297,6 +297,10 @@ priv struct ModuleNode {
   // The class lowering drops the annotation, so a whole-program pass
   // needs it carried alongside. See `TsModuleBlock.class_fields`.
   class_fields : Array[(String, @ast.TsType)]
+  // Specifiers this module requests at runtime, in source order —
+  // imports and re-exports interleaved as they appear. See
+  // `TsModuleBlock.module_request_order` and `topological_order`.
+  module_request_order : Array[String]
   // `const enum` declarations this module made. A const enum produces
   // NO runtime binding — every `E.Member` is meant to become a literal —
   // so a consumer in another module has nothing to link against and the
@@ -1602,6 +1606,7 @@ fn load_module_graph(
     export_specs: mb.exports,
     reexport_specs: mb.reexports,
     const_enums: module_const_enums(mb.enums),
+    module_request_order: mb.module_request_order,
     cjs_exports_var: detect_cjs_exports_var(lowered),
   }
   // Walk imports, recurse into relative paths, accumulate bare ones.
@@ -1749,6 +1754,7 @@ fn load_module_graph(
     export_specs: mb.exports,
     reexport_specs: mb.reexports,
     const_enums: module_const_enums(mb.enums),
+    module_request_order: mb.module_request_order,
     cjs_exports_var,
   }
   Ok(())
@@ -1758,6 +1764,39 @@ fn load_module_graph(
 /// Build a depth-first dependency order for the entry module: deepest
 /// dependency emits first, the entry emits last. Cycles short-circuit
 /// at the first repeat to keep emit terminating.
+/// The specifiers `node` requests at runtime, in source order.
+///
+/// The parser records this as one interleaved list because `import_decls`
+/// and `reexport_specs` are two arrays and cannot: reading them in turn
+/// says "every import, then every re-export", which is a different order
+/// from the source whenever a file mixes the two. typebox's `src/index.ts`
+/// is a barrel that does — five `export * from` above one `import * as` —
+/// and the traversal went down the wrong subtree first.
+///
+/// Falls back to the two-array reading for a `ModuleNode` built from a
+/// block that predates the field (a hand-constructed test fixture, an
+/// injected module), so the order is never empty when requests exist.
+fn module_request_specs(node : ModuleNode) -> Array[String] {
+  if node.module_request_order.length() > 0 {
+    return node.module_request_order
+  }
+  let out : Array[String] = []
+  for imp in node.import_decls {
+    if imp.type_only {
+      continue
+    }
+    out.push(imp.module_spec)
+  }
+  for re in node.reexport_specs {
+    if re.type_only {
+      continue
+    }
+    out.push(re.module_spec)
+  }
+  out
+}
+
+///|
 fn topological_order(
   modules : Map[String, ModuleNode],
   entry : String,
@@ -1776,9 +1815,32 @@ fn topological_order(
     stack[path] = true
     match modules.get(path) {
       Some(node) =>
-        for entry_ in node.resolved_imports {
-          let (_, dep) = entry_
-          visit(dep)
+        // Visit dependencies in the SOURCE ORDER of this module's
+        // module-request declarations, not in `resolved_imports` map
+        // order. That map is keyed by specifier and its iteration order
+        // is not the source's, which is invisible on an acyclic graph
+        // and decides evaluation order on a cyclic one.
+        //
+        // ESM evaluates a cycle by depth-first post-order from the
+        // entry, in declaration order, and a flat concatenated bundle
+        // has exactly one chance to reproduce that. typebox has such a
+        // cycle: `indexed/from_object.ts` reads `IntegerKey` from
+        // `types/record.ts` in a TOP-LEVEL `new RegExp(IntegerKey)`.
+        // Node puts `record.ts` at 204 and `from_object.ts` at 261; the
+        // map walk emitted them at 328 and 217, and the bundle threw
+        // `Cannot access 'IntegerKey' before initialization` at load.
+        //
+        // `type_only` imports are skipped for the same reason
+        // `load_module_graph` skips them: after erasure there is no
+        // module request, so visiting one would order a module that ESM
+        // never evaluates at that point.
+        for spec in module_request_specs(node) {
+          match node.resolved_imports.get(spec) {
+            Some(dep) => visit(dep)
+            // A bare / external specifier, or one the caller allowed to
+            // go unresolved. Nothing to order.
+            None => ()
+          }
         }
       None => ()
     }

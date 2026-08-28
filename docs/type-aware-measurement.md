@@ -111,7 +111,7 @@ type-aware 経路だけのものでした。直すと aware leg が hono で +49
 | zod | measured | 元 BLOCKED。4 件の修正を経て挙動検証まで到達 |
 | excalidraw | measured | corpus 唯一の UI アプリかつ唯一の monorepo。bundle できるまでに 5 件、実行できるまでに 3 件（下記）|
 | superstruct | measured | 元 BLOCKED → 15ms、さらに元 BROKEN → 挙動一致（下記の `.name` reserve）|
-| typebox | size-only | `TTypeArray` は解消。今は別件の TDZ で throw: `IntegerKey` の宣言が使用より後に並ぶ |
+| typebox | measured | 元 size-only。`Array.from` の rewrite と module 順序の 2 件を直して挙動検証まで到達（下記）|
 | immer | measured | 元 size-only。module 跨ぎの `const enum ArchType` を inline するようにして挙動検証まで到達（下記）|
 | remeda | BLOCKED | `setPath.ts` の parse error: `Expected Semicolon, got Extends` |
 
@@ -751,12 +751,104 @@ Array が object 経路に回るだけで。値を観測しないと差が出ま
 実行された bundle のものだ」という保証だけで、それが元々足りて
 いなかったものです。
 
+## typebox: rewrite の抜けと module 順序で 2 段に壊れていた
+
+typebox も長く `size-only` で、原因は 2 つ、どちらも型とは無関係でした。
+
+### 1. `Array.from(x)` -> `[...x]` に受け側の証明が無かった
+
+`system/hashing/hash.ts` の
+
+```ts
+const Bytes = Array.from({ length: 256 }).map((_, i) => BigInt(i))
+```
+
+が `[...{ length: 256 }].map(…)` になり、load 時に
+`{(intermediate value)} is not iterable` で死んでいました。
+`Array.from` は **array-LIKE**（`length` と index property を持つ
+object）を受けますが、spread は **ITERABLE** を要求します。
+
+同じ理由で `Array.prototype.slice.call(x)` -> `[...x]` は
+**すでに削除済みで、3 行下にその理由がコメントで書いてありました**。
+知識は隣にあって、それでも rule は出荷されていた。理由は構造的です:
+`verify_rule_equivalence.mjs` は「誰かが case を書いた rule」だけを
+検査し、**case が無い rule を報告する仕組みが無い**。peephole と fold
+には合わせて ~235 個の rewrite があり、harness の case は 38 個でした。
+
+そこで **受け側の型に妥当性が依存する rewrite を全部** 表に載せました。
+6 件が unsound と判定されました。
+
+| rule | 反例 | 対処 |
+| --- | --- | --- |
+| `Array.from(x)` -> `[...x]` | `Array.from({length:0})` は `[]`、spread は throw | `is_definitely_iterable` で gate |
+| `Array.prototype.M.call(x, …)` -> `x.M(…)` | string / `arguments` / array-like に method が無い。逆に receiver が同名 method を持つ場合は built-in ではなくそれを呼ぶ | 削除（`slice` だけ除外していたのは、誰かが踏んだ 1 例だっただけ）|
+| `x.slice(0)` -> `[...x]` | `"ab".slice(0)` は `"ab"`、`[..."ab"]` は `["a","b"]` | 削除 |
+| `[].concat(a)` -> `[...a]` | `concat` は非 array を **1 要素として append**。`[].concat(1)` は `[1]`、`[...1]` は throw | 引数が全部 array literal のときだけ |
+| `Math.pow(a,b)` -> `a**b` | `Math.pow(10n,10n)` は throw、`10n ** 10n` は計算する | 片方が BigInt でないと証明できれば可（`Math.pow(x, 2)` は通る）|
+| `f.apply(null, a)` -> `f(...a)` | `apply` は array-like も、`null`/`undefined`（引数なし）も受ける | `is_definitely_iterable` で gate |
+
+証明は**構文的**で、意図的に狭くしています。`Var` は文脈でどれだけ
+array に見えても証明にはなりません。型を読めば広げられる（peephole は
+今 `PeepCtx` に型表を持っていない）ので、これは E7 の候補です。
+
+サイズは払いました: 9 target のうち 4 つで合計 ~700 byte 増えています。
+壊れない側に寄せた分の値段で、記録しておく価値のある数字です。
+
+### 2. module 順序が ESM と違っていた
+
+`Array.from` を直すと、記録されていた TDZ が出てきました:
+`Cannot access 'IntegerKey' before initialization`。
+
+`indexed/from_object.ts` は top-level で
+`const NumericKeyPattern = new RegExp(IntegerKey)` を実行し、
+`IntegerKey` は `types/record.ts` にあります。両者は 23 hop の
+**循環**の中にいるので、どちらが先に初期化されるかは
+ESM の評価順（entry からの depth-first post-order）だけが決めます。
+
+mtsc の `topological_order` は module の依存を
+`resolved_imports`（Map）で辿っていました。これを import 宣言の順に
+直しても**出力は 1 byte も変わりませんでした** — MoonBit の Map が
+挿入順だったからです。実際の原因はその 1 段上でした:
+
+**`import_decls` を全部、その後 `reexport_specs` を全部**、という
+順序は、2 つを混ぜている file では source 順と違います。そして
+barrel はまさにそういう file です。typebox の `src/index.ts`:
+
+```ts
+export * from './type/action/index.ts'
+export * from './type/engine/index.ts'
+export * from './type/extends/index.ts'
+export * from './type/script/index.ts'
+export * from './type/types/index.ts'   // ← record.ts はこの下
+export * as Type from './typebox.ts'
+import * as Type from './typebox.ts'    // ← これを先に辿っていた
+```
+
+`./typebox.ts` の subtree に先に降りたので `record.ts` が遅れ、
+372 module のうち 6 番目から order が分岐していました。
+
+`TsModuleBlock.module_request_order` を追加し、parser が
+import 宣言と re-export 宣言を**パースした順に 1 本の列**へ積むように
+しました。2 つの配列では表現できない情報なので、field が必要でした。
+`import type` は消去後に module request が存在しないので入れません。
+
+修正後、mtsc の順序は 372 module すべてで ESM の DFS post-order と
+一致します。
+
+typebox は `size-only` -> `measured`。driver は
+`Record(Integer(), …)` が出す `patternProperties` を読み返します:
+`IntegerKey` は文字列なので、**throw せずに違う値になった順序でも
+schema は組み上がってしまう** — 組み上がるが、正しくない。
+
+これで corpus の `size-only` は 0 になりました。9 target 全部が
+挙動検証付きです。WIN は 0 のままで、増えたのは「表の数字が実行された
+bundle のものだ」という保証だけです。
+
 ## 残っている既知の未修正
 
 | 件 | 症状 |
 | --- | --- |
 | alias 付き re-export | `export { X as Y }`（別 module 由来の X）が両方の綴りごと落ちる。ts-pattern の `P` |
-| top-level の TDZ | typebox の bundle が `Cannot access 'IntegerKey' before initialization`。`const` の宣言が使用より後に並ぶ |
 | remeda の parse error | `setPath.ts`: `Expected Semicolon, got Extends` |
 | property mangler が実 library で不発 | fail-closed な callee-provenance scan が全部 reserve する |
 | excalidraw が僅差で LOSS | −303 byte（−0.11%）。noise floor が 280 byte なのでぎりぎり判定に乗っている。残りの機構は未特定 |

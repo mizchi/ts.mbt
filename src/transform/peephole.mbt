@@ -2235,19 +2235,47 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
           _ => ()
         }
       }
-      // `Math.pow(x, y)` → `x**y` (saves up to 8 bytes)
+      // `Math.pow(x, y)` → `x**y` (saves up to 8 bytes).
+      //
+      // These two agree on every value but one pair: `Math.pow` coerces
+      // with ToNumber, which THROWS on a BigInt, while `**` computes.
+      // `Math.pow(10n, 10n)` is a TypeError and `10n ** 10n` is
+      // 10000000000. A mixed pair throws either way, so proving that
+      // ONE operand cannot be a BigInt is enough — which a non-BigInt
+      // literal on either side does, and that covers the common
+      // `Math.pow(x, 2)`. Found by
+      // `scripts/verify_rule_equivalence.mjs`.
       if m == "pow" && new_args.length() == 2 {
         match recv_p {
           Var("Math") =>
-            return BinOp(@ast.TsBinOp::Pow, new_args[0], new_args[1])
+            if is_definitely_not_bigint(new_args[0]) ||
+              is_definitely_not_bigint(new_args[1]) {
+              return BinOp(@ast.TsBinOp::Pow, new_args[0], new_args[1])
+            }
           _ => ()
         }
       }
       // `Array.from(x)` → `[...x]` (saves ~6 bytes; single-arg only —
       // two-arg form has a map function and must be left alone).
+      //
+      // Gated on the receiver being provably ITERABLE, which is not the
+      // same set `Array.from` accepts: it also takes an array-LIKE, an
+      // object with `length` and index properties and no
+      // `Symbol.iterator`. `Array.from({ length: 256 })` is 256
+      // `undefined`s; `[...{ length: 256 }]` throws. typebox's
+      // `hash.ts` does exactly that and the bundle died on load.
+      //
+      // The `Array.prototype.slice.call` rewrite three lines below had
+      // already been removed for this same reason, which is the part
+      // worth noticing: the knowledge was adjacent and the rule shipped
+      // anyway, because nothing asked this rule the question. It is in
+      // `scripts/verify_rule_equivalence.mjs` now.
       if m == "from" && new_args.length() == 1 {
         match recv_p {
-          Var("Array") => return ArrayLit([Spread(new_args[0])])
+          Var("Array") =>
+            if is_definitely_iterable(new_args[0]) {
+              return ArrayLit([Spread(new_args[0])])
+            }
           _ => ()
         }
       }
@@ -2272,31 +2300,24 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         // `scripts/verify_rule_equivalence.mjs`.
         ignore(recv_p)
       }
-      // `Array.prototype.METHOD.call(arr, arg1, arg2, ...)` → `arr.METHOD(arg1, arg2, ...)`.
-      // TypeScript's `__spreadArray` helper and some polyfills call Array
-      // prototype methods indirectly. The `.call` form is safe to collapse
-      // when the first argument (the `this` receiver) is a plain array or
-      // a var — the method semantics are the same. Only fold when the
-      // receiver is `Array.prototype.METHOD` (not e.g. `[].METHOD`).
-      // Saves ~22 bytes for methods like forEach, map, filter, reduce, etc.
-      if m == "call" && new_args.length() >= 1 {
-        match recv_p {
-          PropAccess(
-            PropAccess(@ast.TsExpr::Var("Array"), "prototype"),
-            method_name
-          ) if method_name != "slice" => {
-            // Rewrite to `new_args[0].method_name(new_args[1..])`.
-            let rest : Array[@ast.TsExpr] = []
-            for ii, a in new_args {
-              if ii > 0 {
-                rest.push(a)
-              }
-            }
-            return MethodCall(new_args[0], method_name, rest)
-          }
-          _ => ()
-        }
-      }
+      // (removed) `Array.prototype.METHOD.call(x, …)` -> `x.METHOD(…)`.
+      //
+      // The old comment said this is safe "when the first argument is a
+      // plain array or a var", and a var is not a proof of anything.
+      // Two ways apart, and the rewrite is on the wrong side of both:
+      //
+      //   * The `.call` form names the built-in EXPLICITLY and works on
+      //     anything array-like or iterable — a string, `arguments`, a
+      //     NodeList, `{ length: 2, 0: "a", 1: "b" }`. The direct call
+      //     needs the receiver to HAVE that method, so all of those
+      //     become `TypeError: x.indexOf is not a function`.
+      //   * Where the receiver DOES have a same-named method, the
+      //     rewrite calls that one instead of the built-in — the same
+      //     mistake as the removed `x.hasOwnProperty(k)` rewrite below.
+      //
+      // Which is why `slice` was already excluded here: it was the one
+      // instance somebody had hit. Found for the whole family by
+      // `scripts/verify_rule_equivalence.mjs`.
       // `Object.prototype.hasOwnProperty.call(obj, key)` → `Object.hasOwn(obj, key)`
       // ES2022+; saves ~22 bytes and is the modern idiom.
       // Also handles the shorter `{}.hasOwnProperty.call(obj, key)` form.
@@ -2365,13 +2386,20 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
           _ => ()
         }
       }
-      // `[].concat(a, b, …)` → `[...a, ...b, …]` (array spread).
+      // `[].concat([a], [b], …)` → `[a, b, …]` (array spread).
       // TypeScript's `__spreadArray` helper or manual concatenation emits this.
-      // Safe because `concat` on a fresh `[]` never mutates anything and
-      // spread is semantically equivalent for iterable arrays.
+      //
+      // Every argument must be an array LITERAL, and the reason is that
+      // `concat` and spread disagree about non-arrays in the loudest
+      // possible way: `concat` APPENDS a non-array as one element, so
+      // `[].concat(undefined)` is `[undefined]` and `[].concat(1)` is
+      // `[1]`, while `[...undefined]` and `[...1]` both throw. The old
+      // code spread anything that was not a literal. Found by
+      // `scripts/verify_rule_equivalence.mjs`.
       if m == "concat" && new_args.length() >= 1 {
+        let all_array_lits = new_args.iter().all(fn(a) { a is ArrayLit(_) })
         match recv_p {
-          ArrayLit([]) => {
+          ArrayLit([]) if all_array_lits => {
             let items : Array[@ast.TsExpr] = []
             for a in new_args {
               match a {
@@ -2412,7 +2440,14 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         }
       }
       // `fn.apply(null, argsArray)` → `fn(...argsArray)` (saves ~7 bytes).
-      // Only fold the single-arg form where the array arg is known.
+      //
+      // The args list must be provably iterable, and `apply` accepts
+      // more than that: an array-LIKE, and also `null` / `undefined`,
+      // which mean "no arguments". `f.apply(null, undefined)` calls `f()`
+      // and `f(...undefined)` throws. The comment used to say "only fold
+      // the single-arg form where the array arg is known" — the arity was
+      // checked and the "known" was not. Found by
+      // `scripts/verify_rule_equivalence.mjs`.
       if m == "apply" && new_args.length() == 2 {
         let is_null_this = match new_args[0] {
           @ast.TsExpr::NullLit => true
@@ -2420,18 +2455,22 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
           @ast.TsExpr::Var("undefined") if !ctx.undefined_shadowed => true
           _ => false
         }
-        if is_null_this {
+        if is_null_this && is_definitely_iterable(new_args[1]) {
           return CallExpr(recv_p, [Spread(new_args[1])])
         }
       }
-      // `arr.slice(0)` → `[...arr]` (saves ~5 bytes; shallow copy of array).
-      // Only the single-arg form with literal 0 (from-start copy); multi-arg
-      // and non-zero-start forms can't be simplified to a spread.
-      if m == "slice" &&
-        new_args.length() == 1 &&
-        exprs_eq(new_args[0], @ast.TsExpr::IntLit(0)) {
-        return ArrayLit([Spread(recv_p)])
-      }
+      // (removed) `x.slice(0)` -> `[...x]`.
+      //
+      // `slice` is a method on Array AND on String, and the two return
+      // different kinds of thing: `"ab".slice(0)` is the string `"ab"`,
+      // `[..."ab"]` is `["a", "b"]`. It also reaches array-likes through
+      // `.call`, where a spread throws. The old comment reasoned only
+      // about "shallow copy of array" — which is correct about arrays and
+      // says nothing about why the receiver must be one. Found by
+      // `scripts/verify_rule_equivalence.mjs`.
+      //
+      // An `ArrayLit` receiver would be provable, and pointless:
+      // `[...[1, 2]]` is longer than `[1, 2].slice(0)` is worth.
       // (removed) `x.toString()` -> `"" + x`. Three ways apart:
       //
       //   * `undefined.toString()` throws; `"" + undefined` is
@@ -2966,6 +3005,67 @@ fn is_bool_expr(e : @ast.TsExpr) -> Bool {
       }
     @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Not, _) => true
     @ast.TsExpr::BoolLit(_) => true
+    _ => false
+  }
+}
+
+///|
+/// Is `expr` something a spread can consume — i.e. does it certainly
+/// have a `Symbol.iterator`?
+///
+/// This is the guard on every rewrite that replaces a built-in with a
+/// spread, and it exists because those built-ins accept a WIDER set.
+/// `Array.from`, `Array.prototype.slice.call` and `Function.prototype
+/// .apply` all take an array-LIKE — an object with `length` and index
+/// properties — where a spread throws. Three separate rewrites shipped
+/// on the assumption that array-like and iterable are the same set;
+/// they are not, and `{ length: n }` is the common way to say so.
+///
+/// The answer here is syntactic, so it is deliberately narrow: no
+/// expression whose type we cannot read off its own shape qualifies. A
+/// `Var` never does, however obviously an array it looks in context.
+fn is_definitely_iterable(expr : @ast.TsExpr) -> Bool {
+  match expr {
+    // Literals whose iterability is part of the syntax.
+    ArrayLit(_) | StringLit(_) | TemplateLiteral(_, _) => true
+    // `new Set(…)` / `new Map(…)` / `new Array(…)` — the constructor
+    // names the result's type. (A user-shadowed `Set` would break this,
+    // and shadowing a global built-in constructor is already outside
+    // what every other rule in this file assumes.)
+    New("Set", _) | New("Map", _) | New("Array", _) => true
+    // A parenthesized or type-annotated wrapper is transparent here.
+    // Missing this is how a wrapper node costs a rewrite (see the
+    // `TypeArgs` and `PureCall` families), so peel rather than default.
+    TypeArgs(_, inner) | As(inner, _) | Satisfies(inner, _) | NonNull(inner) =>
+      is_definitely_iterable(inner)
+    _ => false
+  }
+}
+
+///|
+/// Can `expr` be ruled out as a BigInt from its shape alone?
+///
+/// Only `Math.pow` -> `**` needs this, and it needs surprisingly little:
+/// the two agree everywhere except when BOTH operands are BigInts
+/// (`Math.pow` coerces with ToNumber, which throws; `**` computes). A
+/// mixed pair throws either way. So one non-BigInt operand licenses the
+/// rewrite, and a plain number literal on either side is enough — which
+/// is the shape `Math.pow(x, 2)` already has.
+fn is_definitely_not_bigint(expr : @ast.TsExpr) -> Bool {
+  match expr {
+    IntLit(_) | NumberLit(_) | StringLit(_) | TemplateLiteral(_, _) => true
+    BoolLit(_) => true
+    NullLit => true
+    ArrayLit(_) | ObjectLit(_) => true
+    // `-x` / `+x` / `~x` / `!x`: the first three already ToNumber their
+    // operand, so a BigInt has thrown before this expression's value
+    // exists; `!x` is a boolean.
+    UnaryOp(Neg, _)
+    | UnaryOp(Plus, _)
+    | UnaryOp(BitwiseNot, _)
+    | UnaryOp(Not, _) => true
+    TypeArgs(_, inner) | As(inner, _) | Satisfies(inner, _) | NonNull(inner) =>
+      is_definitely_not_bigint(inner)
     _ => false
   }
 }
