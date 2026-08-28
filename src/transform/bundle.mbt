@@ -790,6 +790,19 @@ pub fn bundle_modules(
     } else {
       combined
     }
+    // Scalar `const` propagation (terser's `reduce_vars`). Shares
+    // `as_const_inline`'s walker but is its own phase: different
+    // candidates, a different disqualification rule, and `--phases`
+    // can only price a phase that corresponds to one rule. Runs before
+    // `fold` because the point is to put a literal where `fold` can
+    // reach it — `K * 2` folds to nothing, `5 * 2` folds to `10`.
+    combined = if opts.phase_enabled("const-scalar-inline") {
+      timer.phase("const-scalar-inline", () => {
+        const_scalar_inline_block(combined)
+      })
+    } else {
+      combined
+    }
     // Discriminant-tag string -> number rewrite. Gated on
     // a bundle-wide no-escape-sink scan; for each closed
     // string-literal discriminated union whose `K` property is

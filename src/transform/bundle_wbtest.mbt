@@ -1272,6 +1272,42 @@ test "as-const: literal array indexed read inlines to the element" {
 }
 
 ///|
+test "as-const: an inner binding of the same name is not the candidate" {
+  // The pass resolved names against one top-level table with no scope
+  // narrowing anywhere in its walker, so a shadowing declaration — or a
+  // PARAMETER, which no block declares — got the outer constant's
+  // value. A wrong value, not a crash, under plain `--bundle --fold`.
+  let src =
+    #|const S = ["ok", "warn"];
+    #|const O = { k: 1 };
+    #|export function inner() { const S = ["x", "y"]; return S[0]; }
+    #|export function obj() { const O = { k: 99 }; return O.k; }
+    #|export function param(S: string[]) { return S[0]; }
+    #|export function loop(xs: string[][]) { let r = ""; for (const S of xs) { r += S[0]; } return r; }
+    #|export const outer = S[0];
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default().with_treeshake(true).with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // The outer read still inlines — the fix narrows the table, it
+      // does not switch the pass off.
+      assert_true(
+        out.js.contains("\"ok\""),
+        msg="the outer read stopped inlining: \{out.js}",
+      )
+      // Every shadowed read must still go through its own binding.
+      let inlined_into_inner = out.js.contains("return \"ok\"") ||
+        out.js.contains("return 1")
+      assert_false(
+        inlined_into_inner,
+        msg="a shadowed read took the outer constant's value: \{out.js}",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "as-const: literal object property read inlines to the value" {
   let files = vfs([
     (
@@ -3400,6 +3436,200 @@ test "predicate-inline: a guard held by a namespace object is not copied" {
       assert_true(
         out.js.contains("isSet"),
         msg="the declaration was deleted while `held` still references it: \{out.js}",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "if_return: a valueless guard clause becomes a short-circuit" {
+  // terser's `if_return`, the half mtsc did not have: the ternary form
+  // (`if (c) return a; return b` -> `return c ? a : b`) was already
+  // here, but a guard with nothing to return had no rewrite and shipped
+  // `if(c)return;` — 12 bytes for what `c||` says in 4.
+  let src =
+    #|export function one(c: boolean, g: { p: () => void }) { if (c) { return; } g.p(); }
+    #|export function two(c: boolean, g: { p: () => void }) { if (c) { return; } g.p(); g.p(); }
+    #|export function nested(a: boolean, b: boolean, g: { p: () => void }) { if (a) return; if (b) return; g.p(); }
+    #|export function bare(c: boolean) { if (c) { return; } }
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+    .with_treeshake(true)
+    .with_fold(true)
+    .with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(
+        out.js.contains("c||g.p()"),
+        msg="single-statement tail did not short-circuit: \{out.js}",
+      )
+      assert_true(
+        out.js.contains("c||(g.p(),g.p())"),
+        msg="multi-statement tail did not sequence: \{out.js}",
+      )
+      // Nested guards collapse inner-first, and the reassociation in
+      // peephole is what keeps it from shipping as `a||(b||g.p())`.
+      assert_true(
+        out.js.contains("a||b||g.p()"),
+        msg="nested guards did not chain: \{out.js}",
+      )
+      // A guard with a pure condition and nothing after it is the
+      // fall-through spelled out; it should be gone entirely.
+      assert_false(
+        out.js.contains("if(c)return}"),
+        msg="a trailing pure guard survived: \{out.js}",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "if_return: a tail with a lexical declaration is left alone" {
+  // The block form (`if (!c) { tail }`) re-scopes anything the tail
+  // declares, and a closure created BEFORE the guard can read it:
+  // `function h() { return x }` with `let x` in the tail becomes a free
+  // variable. `var` hoists past a block and is fine.
+  let src =
+    #|export function f(c: boolean, sink: (n: number) => void) {
+    #|  function h() { return x; }
+    #|  if (c) return;
+    #|  let x = 7;
+    #|  sink(h());
+    #|}
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+    .with_treeshake(true)
+    .with_fold(true)
+    .with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      assert_true(
+        out.js.contains("if(c)return"),
+        msg="rewrote a tail that declares `let` a closure already reads: \{out.js}",
+      )
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "iife: a side-effect-only wrapper is spliced away" {
+  let src =
+    #|const out: string[] = [];
+    #|(function () { out.push("a"); out.push("b"); })();
+    #|(() => { out.push("c"); })();
+    #|(function () { out.push("t" + typeof this); })();
+    #|(function () { out.push("n" + arguments.length); })();
+    #|(async function () { out.push("z"); })();
+    #|export const result = out;
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+    .with_treeshake(true)
+    .with_fold(true)
+    .with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(
+        out.js.contains("out.push(\"a\");out.push(\"b\")") ||
+        out.js.contains("out.push(\"a\");\nout.push(\"b\")"),
+        msg="the function-form wrapper survived: \{out.js}",
+      )
+      // `this`, `arguments` and `async` all mean the wrapper was
+      // providing something the splice would take away.
+      assert_true(
+        out.js.contains("typeof this"),
+        msg="`this` body was spliced: \{out.js}",
+      )
+      let kept_wrappers = out.js.split("arguments.length").collect().length() -
+        1
+      assert_true(
+        kept_wrappers == 1,
+        msg="`arguments` body was spliced: \{out.js}",
+      )
+      assert_true(
+        out.js.contains("async"),
+        msg="an async wrapper was spliced: \{out.js}",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "sequences: a loop body collapses to one statement and loses braces" {
+  let src =
+    #|export function f() { let i = 0; while (true) { i++; if (i > 2) return i; } }
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+    .with_treeshake(true)
+    .with_fold(true)
+    .with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      // The comma is free; the two braces are the whole win.
+      assert_true(
+        out.js.contains("for(;;)if(i++,i>2)return i"),
+        msg="loop body kept its braces: \{out.js}",
+      )
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "typeofs: an inlined `typeof undefined` check is a constant" {
+  // `fold` has this rule, but `fold-2` runs BEFORE peephole and it is
+  // peephole that rewrites `typeof x === \"undefined\"` to
+  // `x === void 0` — so an inlined `f(undefined)` shipped as
+  // `void 0 === void 0`, 14 bytes for a constant.
+  let src =
+    #|export function f(x: unknown) { return typeof x === "undefined"; }
+    #|export function g(x: unknown) { return typeof x !== "undefined"; }
+    #|export const a = f(undefined);
+    #|export const b = g(undefined);
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+    .with_treeshake(true)
+    .with_fold(true)
+    .with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_false(
+        out.js.contains("void 0===void 0"),
+        msg="the constant comparison survived: \{out.js}",
+      )
+      assert_false(
+        out.js.contains("void 0!==void 0"),
+        msg="the negated constant comparison survived: \{out.js}",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "object method shorthand survives the mangler" {
+  // `{ p() {…} }` is stored as `("p", FuncExpr { name: "p" })` and the
+  // emitter reconstructs the shorthand from `f.name == key`.
+  // `rename_function_expr` dropped the name of every non-self-
+  // referencing function expression — correct for
+  // `exports = function isExtglob()`, wrong here, where the name IS the
+  // key. It re-emitted as `p: function () {…}`, and peephole then made
+  // a `this`-free one an arrow: `p:()=>{…}`, three bytes more.
+  let src =
+    #|const o = { p() { console.log("x"); }, q() { return this; } };
+    #|export const used = o;
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default().with_minify(true).with_mangle(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(
+        out.js.contains("p(){"),
+        msg="method shorthand was expanded by the mangler: \{out.js}",
+      )
+      assert_false(
+        out.js.contains("p:()=>"),
+        msg="a method became an arrow, which is longer AND rebinds `this`: \{out.js}",
       )
     }
     Err(e) => fail("bundle error: \{e}")

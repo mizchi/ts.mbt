@@ -45,7 +45,10 @@ case は 2 group あります。
 
 ## 現状
 
-`25 win, 1 tie, 6 loss`。`type-aware` は 7 件すべて win。
+`31 win, 0 tie, 1 loss`。`type-aware` は 7 件すべて win。
+
+残る 1 件は `computed_props` の +2 byte で、これは**移植しないと判断**
+しました（理由は下記）。
 
 ### この作業で移植した rule
 
@@ -84,19 +87,88 @@ case は 2 group あります。
 1 は「よく最適化された入力ほど壊れる」形なので、rule 自身の unit test
 では絶対に出ません。
 
-### 残っている loss
+### 2 巡目に移植した 5 件
 
-| 差 | rule | 何をすれば埋まるか |
+前の版ではここに 6 件の loss が並んでいました。rule 名は harness が
+option 名で報告しますが、**5 件のうち 4 件は名前が指す rule と実際に
+足りないものが違っていた**ので、まず output を並べて何が違うのかを
+読むところから始めています。
+
+| 差 | 報告された rule | 実際に足りなかったもの |
 | --- | --- | --- |
-| +11 byte | `if_return` | `if (c) return; g();` → `c \|\| g()`。return の有無で分岐を演算子に落とす |
-| +9 byte | `reduce_vars` | top-level `const k = 5` の値を、複数 use があっても use 側に伝播する |
-| +9 byte | `negate_iife` | 正確には terser は IIFE の body を展開し、`sequences` で 1 文に潰している。`negate_iife` 単体ではない |
-| +5 byte | `typeofs` | 移植済みだが、この case では terser がさらに周辺を畳んでいる |
-| +2 byte | `computed_props` | 同上 |
-| +1 byte | `loops` | terser の `sequences` が loop 前後の文を comma 式に merge している |
+| +11 → **-1** | `if_return` | 半分は本物（`if (c) return; g()` → `c \|\| g()`）。残り 3 byte は**こちらの regression**で、mangler が method shorthand を壊していた（下記） |
+| +9 → **-1** | `reduce_vars` | top-level の scalar `const` を use 側に伝播する。新 phase `const-scalar-inline` |
+| +9 → **-1** | `negate_iife` | negation ではなく、**IIFE の body を展開**する話だった。`(function(){ f(); })()` → `f();` |
+| +5 → **-8** | `typeofs` | rule は移植済みだった。`fold` に畳む rule もあった。**phase 順序**の問題で、`void 0 === void 0` を作るのは peephole なのに、畳むのは その前に走る `fold-2` |
+| +1 → **-1** | `loops` | `sequences` の一種。loop body の先頭の式文を最後の文に comma で畳み込むと 1 文になり、**波括弧が落ちる**。comma 自体は byte を節約しない（`a;b` と `a,b` は同じ長さ）——括弧の 2 byte が全部 |
 
-`sequences`（連続する文を `,` で 1 文に潰す）が 3 件に効いていて、
-単独の rule としては次に大きい移植候補です。
+#### method shorthand: 自分で作った 3 byte
+
+`if_return` の case が 11 byte 負けていて、rule 自体は 8 byte 分です。
+残り 3 byte は `{ p() {…} }` が `{ p:()=>{…} }` として出ていたためでした。
+
+parser は method shorthand を `("p", FuncExpr { name: "p" })` として
+持ち、emitter は `f.name == key` で shorthand を復元します。
+mangler の `rename_function_expr` は、自分の名前を参照しない function
+expression の名前を落とします——`module.exports = function isExtglob()`
+には正しい処理ですが、ここでは**名前が binding ではなく key そのもの**
+です。落とすと `p: function () {…}` に戻り、`this` を使わないものは
+peephole が arrow にして `p:()=>{…}` になります。plain `--mangle` で、
+method を持つ object literal すべてが対象でした。
+
+最初の修正は名前を無条件に戻すもので、**別の case で 7 byte 損しました**
+(`collapse_vars`)。body が `return expr` 1 文だけなら arrow の簡潔形の
+方が短いからです:
+
+```
+p(a) { return a }      14 byte
+p: a => a               6 byte
+p() { f(); g() }        4 + body
+p: () => { f(); g() }   7 + body
+```
+
+`is_method_shorthand_worth_keeping` が両方を比べます。1 文 return かつ
+arrow 化が安全なときだけ名前を落とし、それ以外は shorthand を守ります。
+
+#### `typeofs`: rule ではなく phase 順序
+
+`fold_expr` の**先頭の arm** が `both_literal_undefined` を畳みます。
+それでも `console.log(void 0===void 0)` が出ていました。
+
+`typeof x === "undefined"` → `x === void 0` の書き換えは **peephole**
+にあります。pipeline は `fold` → `inline` → `fold-2` → `peephole` で、
+`f(undefined)` を inline した時点では body はまだ `typeof x === …` の形。
+その形を `void 0 === void 0` に変えるのは peephole 自身で、その後には
+何も走りません。rule は 2 箇所に必要でした。
+
+「rule はあるのに発火しない」は、rule が無い場合と区別がつきません。
+`--only <case> --verbose` で出力を見るまで、budget の話だと思って
+定数をいじっていました。
+
+### 残っている loss と、移植しない判断
+
+| 差 | rule | 判断 |
+| --- | --- | --- |
+| +2 byte | `computed_props` | 移植しない。差は `export{a as o}`(14) と `export{o}`(9) で、terser は export 名が既に 1 文字なので local をそのまま使えている |
+
+`export { a as o }` を `export { o }` にするには、mangler が export 名を
+その binding の mangle 名として割り当てる必要があります。損得は:
+
+```
+alias 形  : refs×len(local) + len(local) + 4 + len(export)
+直接形    : refs×len(export) + len(export)
+```
+
+`len(local)=1` として、直接形が勝つのは `refs×(len(export)-1) < 4`。
+export 名が 1 文字なら常に勝ち、2 文字なら refs ≤ 3 まで。**3 文字以上
+なら alias が勝ちます**。実際の library の export 名はほぼ 3 文字以上
+（zod の `z` のような 1 文字は 200 個中 1 個）なので、mangler の割り当て
+に手を入れて得られるのは 1 library あたり数 byte です。
+
+`sequences` は loop body 以外——`if` の body、`else` の body、関数末尾——
+にも効きますが、`if` の body では **dangling else** を作れます
+(`if (c) { x; if (d) y; } else z` の波括弧は制御構造です)。今は loop
+body だけに限定しています。
 
 ## 型を見ずに型を仮定していた 3 件
 

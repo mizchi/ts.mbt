@@ -2756,7 +2756,7 @@ fn rename_expr(expr : @ast.TsExpr, scope : ScopeFrame) -> @ast.TsExpr {
     ObjectLit(entries) => {
       let out : Array[(String, @ast.TsExpr)] = []
       for ent in entries {
-        out.push((ent.0, rename_expr(ent.1, scope)))
+        out.push((ent.0, rename_object_entry_value(ent.0, ent.1, scope)))
       }
       ObjectLit(out)
     }
@@ -3080,6 +3080,84 @@ fn rename_class_decl_idents(
     decorators: new_decorators,
     is_declare: false,
   }
+}
+
+///|
+/// Rename an object-literal property VALUE, keeping a method shorthand
+/// a method shorthand.
+///
+/// `{ p() { … } }` is stored as `("p", FuncExpr { name: "p", … })` and
+/// the emitter reconstructs the shorthand by checking `f.name == key`.
+/// `rename_function_expr` drops the name of any function expression that
+/// does not reference itself — right for `exports = function isExtglob()`,
+/// wrong here, because the name is not a binding at all: it IS the key.
+/// Losing it fell back to `p: function () {…}`, and peephole then made a
+/// `this`-free one an arrow, so `p(){…}` shipped as `p:()=>{…}`. Three
+/// bytes per method, under plain `--mangle`, on any object literal with a
+/// method — and the reason the terser-parity `if_return` case looked 11
+/// bytes behind when the rule itself is worth 8.
+///
+/// Keeping the name is also the safer half: emitted as the shorthand it
+/// binds nothing, whereas `p: function p() {…}` makes `p` a self-binding
+/// inside the body that shadows whatever `p` the body meant.
+fn rename_object_entry_value(
+  key : String,
+  value : @ast.TsExpr,
+  scope : ScopeFrame,
+) -> @ast.TsExpr {
+  match value {
+    FuncExpr(f) if is_method_shorthand_worth_keeping(key, f) => {
+      let renamed = rename_function_expr(f, scope)
+      FuncExpr({ ..renamed, name: key })
+    }
+    _ => rename_expr(value, scope)
+  }
+}
+
+///|
+fn is_method_shorthand_worth_keeping(key : String, f : @ast.TsFunc) -> Bool {
+  f.name == key && key != "" && !object_method_prefers_arrow(f)
+}
+
+///|
+/// Would this object-literal method be SHORTER as a concise arrow?
+///
+/// Two spellings, and which one wins depends entirely on the body:
+///
+///     p(a) { return a }      14 bytes
+///     p: a => a               6 bytes
+///     p() { f(); g() }        4 + body
+///     p: () => { f(); g() }   7 + body
+///
+/// so a single-`return` body wants the arrow and everything else wants
+/// the shorthand. Keeping the name unconditionally cost 7 bytes on the
+/// terser-parity `collapse_vars` case, which is how this got noticed —
+/// the first version of the shorthand fix traded one loss for another.
+///
+/// The arrow only materialises if `peep_expr` can build it, so this
+/// mirrors its safety conditions: an arrow reads `this` and `arguments`
+/// from the enclosing scope, and there is no arrow spelling of a
+/// generator. When they do not hold the conversion will not happen and
+/// the shorthand is both shorter and correct, so the answer is no.
+fn object_method_prefers_arrow(f : @ast.TsFunc) -> Bool {
+  if f.is_generator {
+    return false
+  }
+  if !(f.body.stmts is [Return(Some(_))]) {
+    return false
+  }
+  if block_references_name(f.body, "this") ||
+    block_references_name(f.body, "arguments") {
+    return false
+  }
+  // A parameter default is evaluated in the callee's scope, so it reads
+  // `this` exactly as a body reference would.
+  for e in param_subexprs(f.params) {
+    if expr_references_name(e, "this") || expr_references_name(e, "arguments") {
+      return false
+    }
+  }
+  true
 }
 
 ///|
@@ -3489,7 +3567,19 @@ fn rename_properties_in_expr(
         } else {
           rename_prop_key(ent.0, prop_map)
         }
-        out.push((new_key, rename_properties_in_expr(ent.1, prop_map)))
+        let new_value = rename_properties_in_expr(ent.1, prop_map)
+        // A method shorthand is keyed twice — once as the property key,
+        // once as `FuncExpr.name`, which is how the emitter recognises
+        // it (see `rename_object_entry_value`). Renaming the key alone
+        // desynchronises the pair and the method re-emits as
+        // `newkey: function oldname () {…}`, which is longer and makes
+        // `oldname` a self-binding inside the body.
+        let synced = match new_value {
+          FuncExpr(f) if f.name == ent.0 && ent.0 != "" =>
+            @ast.TsExpr::FuncExpr({ ..f, name: new_key })
+          _ => new_value
+        }
+        out.push((new_key, synced))
       }
       ObjectLit(out)
     }

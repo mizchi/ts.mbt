@@ -59,6 +59,153 @@ fn single_return_expr(block : @ast.TsBlock) -> @ast.TsExpr? {
 }
 
 ///|
+/// `Some(())` when `block` is exactly a valueless `return` — either
+/// `{ return; }` or the braceless `return;` the parser stores as a
+/// one-statement block.
+fn is_bare_return_block(block : @ast.TsBlock) -> Bool {
+  block.stmts.length() == 1 && block.stmts[0] is Return(None)
+}
+
+///|
+/// terser's `if_return`, the guard-clause half: a valueless early return
+/// followed by the rest of the function.
+///
+///     function f(c, g) { if (c) { return; } g.p(); }
+///     function f(c, g) { c || g.p(); }
+///
+/// `if (c) return;` costs 12 bytes to say what `c ||` says in 4. The
+/// ternary half of the rule (`if (c) return a; return b` →
+/// `return c ? a : b`) was already here; this is the case where the
+/// early return carries no value, so there is nothing to build a
+/// ternary out of.
+///
+/// Only valid where falling off the end of the statement list means
+/// "return undefined", which is why this lives in `fold_func_body`
+/// and takes a function BODY. In a loop body or a `try` block the same
+/// rewrite would change which statements run after it.
+///
+/// Two forms, and the guard that picks between them is scoping, not
+/// size: `c || (a, b)` needs the tail to be expressions, and wrapping
+/// the tail in a block instead would put any `let` / `const` / class /
+/// function declaration in it into a NEW scope. A closure created
+/// before the guard can read those:
+///
+///     function f(c) { function h() { return x; } if (c) return; let x = 1; h(); }
+///
+/// so `if (!c) { let x = 1; h(); }` makes `h`'s `x` a free variable.
+/// `var` would survive (it hoists to the function), but the
+/// distinction is not worth the bytes: a tail with any declaration in
+/// it is left alone.
+fn fold_guard_return(block : @ast.TsBlock) -> @ast.TsBlock {
+  let n = block.stmts.length()
+  for i in 0..<n {
+    let cond = match block.stmts[i] {
+      If(c, then_b, None) if is_bare_return_block(then_b) => c
+      _ => continue
+    }
+    let raw_tail : Array[@ast.TsStmt] = []
+    for j in (i + 1)..<n {
+      raw_tail.push(block.stmts[j])
+    }
+    // The tail is itself a function tail, so a guard inside it is the
+    // same rewrite. Collapsing inner-first is what turns
+    // `if (a) return; if (b) return; g()` into `a || b || g()` instead
+    // of stopping at `if (!a) { b || g() }` — and it is why the `||`
+    // form applies at all here, since the recursion is what makes the
+    // inner tail a single expression statement.
+    let tail = fold_guard_return({ stmts: raw_tail, stmt_positions: [] }).stmts
+    let replacement : @ast.TsStmt? = if tail.is_empty() {
+      // `if (c) return;` with nothing after it: the return is the
+      // fall-through, so only `c` itself can still matter.
+      if is_pure_value(cond) {
+        None
+      } else {
+        Some(@ast.TsStmt::Expr(cond))
+      }
+    } else if tail_is_all_expressions(tail) {
+      let mut seq = match tail[0] {
+        Expr(e) => e
+        _ => continue
+      }
+      for j in 1..<tail.length() {
+        match tail[j] {
+          Expr(e) => seq = @ast.TsExpr::Seq(seq, e)
+          _ => continue
+        }
+      }
+      Some(@ast.TsStmt::Expr(fold_expr(BinOp(Or, cond, seq))))
+    } else if tail_declares_lexically(tail) {
+      continue
+    } else {
+      Some(
+        @ast.TsStmt::If(
+          fold_expr(UnaryOp(Not, cond)),
+          { stmts: tail, stmt_positions: [] },
+          None,
+        ),
+      )
+    }
+    let stmts : Array[@ast.TsStmt] = []
+    let pos : Array[Int] = []
+    let has_positions = block.stmt_positions.length() == n
+    for j in 0..<i {
+      stmts.push(block.stmts[j])
+      if has_positions {
+        pos.push(block.stmt_positions[j])
+      }
+    }
+    match replacement {
+      Some(s) => {
+        stmts.push(s)
+        if has_positions {
+          pos.push(block.stmt_positions[i])
+        }
+      }
+      None => ()
+    }
+    return { stmts, stmt_positions: pos }
+  }
+  block
+}
+
+///|
+fn tail_is_all_expressions(tail : Array[@ast.TsStmt]) -> Bool {
+  for s in tail {
+    if !(s is Expr(_)) {
+      return false
+    }
+  }
+  true
+}
+
+///|
+/// Does the tail hold a declaration that a surrounding block would
+/// re-scope? `var` hoists past a block and is safe; everything else
+/// binds where it is written.
+fn tail_declares_lexically(tail : Array[@ast.TsStmt]) -> Bool {
+  for s in tail {
+    if stmt_declares_lexically(s) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn stmt_declares_lexically(stmt : @ast.TsStmt) -> Bool {
+  match stmt {
+    Let(_, _, _) | Const(_, _, _) | NativeClassStmt(_, _) => true
+    // The parser lowers `function f() {}` to `var f = function f() {}`,
+    // which hoists in the source and would stop hoisting inside a new
+    // block. Every other `var` is safe: the binding hoists to the
+    // function either way.
+    Var(_, _, FuncExpr(_)) => true
+    Label(_, inner) => stmt_declares_lexically(inner)
+    _ => false
+  }
+}
+
+///|
 /// Returns `true` when `stmt` unconditionally exits the current
 /// function/block (return / throw / break / continue). Used by
 /// the else-hoist optimization: when an `if` branch always exits,
@@ -129,11 +276,11 @@ fn fold_func_body(block : @ast.TsBlock) -> @ast.TsBlock {
   // Loop until the block stops shrinking so multi-level
   // `if(c1)return e1; if(c2)return e2; return e3;` collapses
   // in one pass rather than requiring re-folding from the outside.
-  let mut cur = fold_func_body_once(block)
+  let mut cur = fold_guard_return(fold_func_body_once(block))
   let mut prev_len = block.stmts.length()
   while cur.stmts.length() < prev_len {
     prev_len = cur.stmts.length()
-    cur = fold_func_body_once(cur)
+    cur = fold_guard_return(fold_func_body_once(cur))
   }
   cur
 }

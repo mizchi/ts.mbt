@@ -3,25 +3,25 @@
     "status": "measured",
     "verdict": "NEUTRAL",
     "delta": 6,
-    "aware": 20242
+    "aware": 20210
   },
   "valibot": {
     "status": "measured",
     "verdict": "NEUTRAL",
     "delta": 0,
-    "aware": 88768
+    "aware": 86982
   },
   "typebox": {
     "status": "measured",
     "verdict": "WIN",
     "delta": 247,
-    "aware": 119453
+    "aware": 119419
   },
   "immer": {
     "status": "measured",
     "verdict": "NEUTRAL",
     "delta": 0,
-    "aware": 20399
+    "aware": 20378
   },
   "neverthrow": {
     "status": "measured",
@@ -39,24 +39,24 @@
     "status": "measured",
     "verdict": "NEUTRAL",
     "delta": 29,
-    "aware": 10523
+    "aware": 10404
   },
   "zod": {
     "status": "measured",
     "verdict": "NEUTRAL",
-    "delta": -18,
-    "aware": 200119
+    "delta": -23,
+    "aware": 199026
   },
   "excalidraw": {
     "status": "measured",
     "verdict": "LOSS",
     "delta": -296,
-    "aware": 280591
+    "aware": 280031
   },
   "remeda": {
     "status": "measured",
     "verdict": "NEUTRAL",
     "delta": 26,
-    "aware": 28594
+    "aware": 28533
   }
 }

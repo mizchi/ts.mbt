@@ -290,12 +290,26 @@ fn expr_contains_function(expr : @ast.TsExpr) -> Bool {
 // So every scope entry drops the names it re-binds. The narrowing is
 // local (only what THIS scope binds) and copies nothing when nothing is
 // shadowed, which is the common case.
+//
+// These helpers are generic in the table's value type because they are
+// not specific to this pass, and the second pass that needed them had
+// gone without: `as_const_inline.mbt` resolved a name against a
+// top-level table with no narrowing at all, so
+//
+//   const S = ["ok", "warn"];
+//   function f() { const S = ["x", "y"]; return S[0]; }
+//   function h(S) { return S[0]; }
+//
+// compiled `f()` and `h(["param"])` to `"ok"` — a wrong VALUE, not a
+// crash, under plain `--bundle --fold`, and for a parameter as much as
+// for an inner declaration. One implementation of scope narrowing, used
+// by every table that resolves names, is the point.
 
 ///|
-fn narrow_trivial_fns(
-  tbl : Map[String, TrivialFn],
+fn[T] narrow_trivial_fns(
+  tbl : Map[String, T],
   shadowed : Array[String],
-) -> Map[String, TrivialFn] {
+) -> Map[String, T] {
   let drop : Array[String] = []
   for n in shadowed {
     if tbl.contains(n) {
@@ -305,7 +319,7 @@ fn narrow_trivial_fns(
   if drop.is_empty() {
     return tbl
   }
-  let out : Map[String, TrivialFn] = {}
+  let out : Map[String, T] = Map::new()
   for k in tbl.keys() {
     if drop.contains(k) {
       continue
@@ -321,10 +335,10 @@ fn narrow_trivial_fns(
 ///|
 /// Narrow by what a nested block's own statement list declares. Nested
 /// blocks inside it narrow themselves when the walk reaches them.
-fn narrow_for_block(
-  tbl : Map[String, TrivialFn],
+fn[T] narrow_for_block(
+  tbl : Map[String, T],
   block : @ast.TsBlock,
-) -> Map[String, TrivialFn] {
+) -> Map[String, T] {
   if tbl.is_empty() {
     return tbl
   }
@@ -406,10 +420,10 @@ fn narrow_for_func(
 }
 
 ///|
-fn narrow_for_params(
-  tbl : Map[String, TrivialFn],
+fn[T] narrow_for_params(
+  tbl : Map[String, T],
   params : Array[@ast.TsParam],
-) -> Map[String, TrivialFn] {
+) -> Map[String, T] {
   if tbl.is_empty() {
     return tbl
   }
@@ -421,10 +435,10 @@ fn narrow_for_params(
 ///|
 /// A class method's parameter list is a `(name, type)` pair list rather
 /// than a `TsParam` list.
-fn narrow_for_named_params(
-  tbl : Map[String, TrivialFn],
+fn[T] narrow_for_named_params(
+  tbl : Map[String, T],
   params : Array[(String, @ast.TsType)],
-) -> Map[String, TrivialFn] {
+) -> Map[String, T] {
   if tbl.is_empty() {
     return tbl
   }
@@ -455,10 +469,10 @@ fn collect_param_bound_names(
 
 ///|
 /// Narrow by a single binding: a loop variable, a catch parameter.
-fn narrow_for_binding(
-  tbl : Map[String, TrivialFn],
+fn[T] narrow_for_binding(
+  tbl : Map[String, T],
   b : @ast.TsBinding,
-) -> Map[String, TrivialFn] {
+) -> Map[String, T] {
   if tbl.is_empty() {
     return tbl
   }

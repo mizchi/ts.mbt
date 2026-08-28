@@ -94,7 +94,23 @@ product surfaces now.
   same unoptimized JS, and a LOSS names a terser compress rule we have
   not ported, while a LOSS *or a tie* on a `type-aware` case means the
   type-driven pass did not fire — see
-  [`docs/terser-parity.md`](./docs/terser-parity.md).
+  [`docs/terser-parity.md`](./docs/terser-parity.md). It stands at
+  31 win / 1 loss, and getting there is a caution about reading a
+  harness's own labels: of the six rules it named, only one was
+  missing as named. `typeofs` was already implemented and simply
+  never ran, because peephole is what BUILDS `void 0 === void 0` and
+  the fold that collapses it sits in `fold-2`, one phase earlier.
+  `negate_iife` was not about negation at all but about splicing a
+  side-effect wrapper's body out. `loops` was `sequences`, where the
+  comma is free and the two braces it lets you drop are the entire
+  win. And 3 of `if_return`'s 11 bytes were a regression of our own:
+  a method shorthand is stored as `("p", FuncExpr { name: "p" })`, so
+  the mangler's "drop the name of any function expression that does
+  not reference itself" turned `p(){…}` into `p:()=>{…}` on every
+  object literal with a method. Restoring the name unconditionally
+  then cost 7 bytes elsewhere, because a single-`return` body really
+  is shorter as `p:a=>a` — the rule has to compare the two spellings,
+  not prefer one.
   Every harness above asks whether a pass is *correct*; `just
   measure-type-aware` asks whether the type-driven half is *worth
   anything*. It cannot use published `.js`: the six type-reading phases
@@ -190,6 +206,27 @@ product surfaces now.
   node's fail-open default has cost a soundness bug, and the reason to
   expect a third. See
   [`docs/type-aware-dce.md`](./docs/type-aware-dce.md).
+  What none of these harnesses caught is the worst bug in this list, and
+  the way it surfaced says why: porting the terser rules meant reading
+  `as_const_inline.mbt`'s walker, and it had no scope narrowing at all.
+  It resolves a name against one top-level table, so
+
+      const S = ["ok", "warn"];
+      function f() { const S = ["x", "y"]; return S[0]; }
+      function h(S) { return S[0]; }
+
+  compiled both `f()` and `h(["param"])` to `"ok"` — a wrong VALUE, not
+  a free variable or a crash, under plain `--bundle --fold`, and for a
+  parameter as readily as for an inner declaration. `call_inline.mbt`
+  had solved exactly this and written it up at the top of the file
+  ("the table is keyed by name and carried into every scope"); the
+  second pass to need it never got it. The narrowing helpers are now
+  generic and shared, and the tables the walker carries live in one
+  struct so a scope boundary cannot narrow one and forget the other.
+  `--verify` cannot see this class of bug — every name still resolves —
+  which is the argument for the execution-differential harnesses, and
+  the argument against believing the corpus covers a pass just because
+  the pass has tests.
 - `src/bridge` consumes `src/checker` for every type-shape decision and runs
   `@checker.check_module` on the synthesized output as a sanity gate. It also
   keeps domain-specific specialization for Node FS / React / Hono / crypto /

@@ -45,6 +45,8 @@ pub fn collect_externally_visible_props(@ast.TsBlock, Map[String, Bool], type_en
 
 pub fn collect_sinks(@ast.TsBlock, Map[String, Bool]) -> Array[Sink]
 
+pub fn const_scalar_inline_block(@ast.TsBlock) -> @ast.TsBlock
+
 pub fn constructor_like_top_level(@ast.TsBlock, Map[String, Bool]) -> Unit
 
 pub fn container_name_set(SymbolGraph, Map[Int, Bool]) -> Map[String, Bool]

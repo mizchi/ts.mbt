@@ -46,7 +46,8 @@ allowlist です。同じ名前が両方に載る／片方だけに載るのが�
 | class method DCE | method 名が bundle 内で read されず、export surface からも到達しない。加えて bundle が「名前を書けない member 観測」をしない —— computed key の **read** は key が数値（`numeric_vars.mbt`）か receiver が keyed container（`container_vars.mbt`）と証明できるときだけ許す（write / `delete` / own-enumerable 列挙は観測にならないので gate ではない） | 実装済 (`class_method_dce.mbt`) |
 | tree-shaking | 宣言が live root から到達不能、かつ initializer が純粋 | 実装済 (`treeshake.mbt`) |
 | **inferred-purity DCE** | **callee が「自分の scope 外に書かない・impure を呼ばない」を推移的に満たす** | **実装済（下記）** |
-| `as const` / const enum inline | binding が never mutated かつ never escape、access が静的 | 実装済 (`as_const_inline.mbt`, `const_enum_inline.mbt`) |
+| `as const` / const enum inline | binding が never mutated かつ never escape、access が静的。**加えて、read 位置の scope でその名前が shadow されていない** | 実装済 (`as_const_inline.mbt`, `const_enum_inline.mbt`) |
+| scalar `const` 伝播 | top-level `const NAME = <primitive literal>`、write が無く、read 位置で shadow されていない。加えて置換が byte で払える（`refs×(len-1) ≤ 4+len`） | 実装済 (`const_scalar_inline.mbt`) |
 | 型駆動 fold | `x` の静的型が単一 primitive で、narrowing に依存しない | 実装済 (`type_fold.mbt`) |
 | type predicate inline | `x is T` 注釈があり body が単一 `return expr` | 実装済 (`predicate_inline.mbt`) |
 | **未使用 parameter 削除** | **関数が export surface に無く、参照が全部 callee 位置、`arguments` を読まず、param が全部素の識別子、落とす引数式が純粋、末尾の連続分だけ** | **実装済（下記）** |
@@ -644,6 +645,33 @@ hono の app bundle はこれら全部を直しても通りません（`req[cach
   `Named` 解決を入れて corpus に case36 を足したときに出ました ——
   最適化を 1 つ通せるようにすると、その先で止まっていた別 pass の
   bug が初めて観測できるようになる、という順序です。
+- **同じ `as_const_inline` に、もっと悪い穴が残っていました: scope を
+  一切見ていませんでした。** 名前を 1 つの top-level table で解決して
+  walker に渡すだけで、narrowing がどこにもありません。
+
+  ```ts
+  const S = ["ok", "warn"];
+  function f() { const S = ["x", "y"]; return S[0]; }
+  function h(S: string[]) { return S[0]; }
+  ```
+
+  `f()` と `h(["param"])` がどちらも `"ok"` になります。**free
+  variable でも crash でもなく、値が違う**。`--bundle --fold` だけで
+  再現し、内側の宣言と同じくらい **parameter** でも起きます（parameter
+  は block が宣言しないので、block だけ見る narrowing では届きません）。
+
+  `call_inline.mbt` は同じ問題を解いていて、file 冒頭にその理由まで
+  書いてあります（「table は名前で引くのに、あらゆる scope に持ち込ま
+  れる」）。それを必要とする 2 つ目の pass には入っていませんでした。
+  narrowing helper を generic にして共有し、walker が運ぶ table を 1 つ
+  の struct にまとめました —— scope 境界で片方だけ narrow して片方を
+  忘れる、という形を型で潰すためです。
+
+  この class の bug は `--verify` では見つかりません（名前はすべて
+  解決します）。出力を**実行して**比べる harness が要る理由であり、
+  「その pass には test があるから corpus が覆っている」と考えては
+  いけない理由です。見つかった経緯も記録しておく価値があります:
+  terser の rule を移植するために walker を読んだから、です。
 - **`JSON.stringify` を effect-free 扱いにしています。** `toJSON` と
   getter に到達するので厳密には getter の純粋性に依存します。purity
   pass は impure getter を warning として別途報告しており、実運用の

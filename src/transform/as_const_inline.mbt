@@ -40,6 +40,79 @@ priv struct AsConstCandidate {
 }
 
 ///|
+/// Both name tables the rewrite walker resolves against, carried as one
+/// value so that adding the second one did not mean touching eighty
+/// call sites — and, more to the point, so that a scope boundary cannot
+/// narrow one of them and forget the other.
+///
+///   * `shapes` — array / object candidates, read through
+///     `NAME[i]` / `NAME.k`. Collected by `as_const_inline_block`.
+///   * `scalars` — primitive `const` candidates, read as a bare `NAME`.
+///     Collected by `const_scalar_inline_block`.
+///
+/// Each entry point fills one and leaves the other empty; they are
+/// separate PHASES (see `const_scalar_inline.mbt`) sharing one walker.
+priv struct AsConstTables {
+  shapes : Map[String, AsConstCandidate]
+  scalars : Map[String, @ast.TsExpr]
+}
+
+///|
+fn AsConstTables::narrow(
+  self : AsConstTables,
+  names : Array[String],
+) -> AsConstTables {
+  {
+    shapes: narrow_trivial_fns(self.shapes, names),
+    scalars: narrow_trivial_fns(self.scalars, names),
+  }
+}
+
+///|
+fn AsConstTables::narrow_block(
+  self : AsConstTables,
+  block : @ast.TsBlock,
+) -> AsConstTables {
+  let names : Array[String] = []
+  collect_block_bound_names(block, names)
+  self.narrow(names)
+}
+
+///|
+fn AsConstTables::narrow_params(
+  self : AsConstTables,
+  params : Array[@ast.TsParam],
+) -> AsConstTables {
+  let names : Array[String] = []
+  collect_param_bound_names(params, names)
+  self.narrow(names)
+}
+
+///|
+fn AsConstTables::narrow_named_params(
+  self : AsConstTables,
+  params : Array[(String, @ast.TsType)],
+) -> AsConstTables {
+  let names : Array[String] = []
+  for pr in params {
+    if pr.0 != "" {
+      names.push(pr.0)
+    }
+  }
+  self.narrow(names)
+}
+
+///|
+fn AsConstTables::narrow_binding(
+  self : AsConstTables,
+  b : @ast.TsBinding,
+) -> AsConstTables {
+  let names : Array[String] = []
+  collect_binding_bound_names(b, names)
+  self.narrow(names)
+}
+
+///|
 pub fn as_const_inline_block(block : @ast.TsBlock) -> @ast.TsBlock {
   // 1. Find candidate top-level bindings.
   let candidates : Map[String, AsConstCandidate] = {}
@@ -74,9 +147,10 @@ pub fn as_const_inline_block(block : @ast.TsBlock) -> @ast.TsBlock {
     return block
   }
   // 4. Rewrite every safe access.
+  let tables : AsConstTables = { shapes: survivors, scalars: Map::new() }
   let new_stmts : Array[@ast.TsStmt] = []
   for s in block.stmts {
-    new_stmts.push(rewrite_stmt(s, survivors))
+    new_stmts.push(rewrite_stmt(s, tables))
   }
   { stmts: new_stmts, stmt_positions: block.stmt_positions }
 }
@@ -597,10 +671,7 @@ fn is_static_index(e : @ast.TsExpr) -> Bool {
 // -- Rewrite phase ----------------------------------------------------
 
 ///|
-fn rewrite_stmt(
-  stmt : @ast.TsStmt,
-  table : Map[String, AsConstCandidate],
-) -> @ast.TsStmt {
+fn rewrite_stmt(stmt : @ast.TsStmt, table : AsConstTables) -> @ast.TsStmt {
   match stmt {
     Var(b, t, e) => Var(b, t, rewrite_expr(e, table))
     Let(b, t, e) => Let(b, t, rewrite_expr(e, table))
@@ -632,28 +703,58 @@ fn rewrite_stmt(
     DoWhile(c, body) =>
       DoWhile(rewrite_expr(c, table), rewrite_block(body, table))
     With(c, body) => With(rewrite_expr(c, table), rewrite_block(body, table))
-    For(init, cond, update, body) =>
+    For(init, cond, update, body) => {
+      // `for (let S = …; …)` scopes `S` over the header and the body.
+      let inner = match init {
+        Some(s) => {
+          let names : Array[String] = []
+          collect_stmt_bound_names(s, names)
+          table.narrow(names)
+        }
+        None => table
+      }
       For(
         match init {
           Some(s) => Some(rewrite_stmt(s, table))
           None => None
         },
         match cond {
-          Some(e) => Some(rewrite_expr(e, table))
+          Some(e) => Some(rewrite_expr(e, inner))
           None => None
         },
         match update {
-          Some(s) => Some(rewrite_stmt(s, table))
+          Some(s) => Some(rewrite_stmt(s, inner))
           None => None
         },
-        rewrite_block(body, table),
+        rewrite_block(body, inner),
       )
+    }
+    // The loop binding scopes the body; the iterable is evaluated
+    // outside it.
     ForOf(k, b, t, iter, body) =>
-      ForOf(k, b, t, rewrite_expr(iter, table), rewrite_block(body, table))
+      ForOf(
+        k,
+        b,
+        t,
+        rewrite_expr(iter, table),
+        rewrite_block(body, table.narrow_binding(b)),
+      )
     ForAwaitOf(k, b, t, iter, body) =>
-      ForAwaitOf(k, b, t, rewrite_expr(iter, table), rewrite_block(body, table))
+      ForAwaitOf(
+        k,
+        b,
+        t,
+        rewrite_expr(iter, table),
+        rewrite_block(body, table.narrow_binding(b)),
+      )
     ForIn(k, b, t, iter, body) =>
-      ForIn(k, b, t, rewrite_expr(iter, table), rewrite_block(body, table))
+      ForIn(
+        k,
+        b,
+        t,
+        rewrite_expr(iter, table),
+        rewrite_block(body, table.narrow_binding(b)),
+      )
     Switch(e, cases) => {
       let new_cases : Array[@ast.TsSwitchCase] = []
       for c in cases {
@@ -667,12 +768,17 @@ fn rewrite_stmt(
       }
       Switch(rewrite_expr(e, table), new_cases)
     }
-    Try(b, bnd, cb, fb) =>
+    Try(b, bnd, cb, fb) => {
+      // The catch parameter scopes the catch block only.
+      let catch_table = match bnd {
+        Some(binding) => table.narrow_binding(binding)
+        None => table
+      }
       Try(
         rewrite_block(b, table),
         bnd,
         match cb {
-          Some(blk) => Some(rewrite_block(blk, table))
+          Some(blk) => Some(rewrite_block(blk, catch_table))
           None => None
         },
         match fb {
@@ -680,17 +786,25 @@ fn rewrite_stmt(
           None => None
         },
       )
+    }
     Label(name, inner) => Label(name, rewrite_stmt(inner, table))
     Block(b) => Block(rewrite_block(b, table))
     NativeClassStmt(decl, ctor) => {
       let new_ctor = match ctor {
-        Some(f) => Some({ ..f, body: rewrite_block(f.body, table) })
+        Some(f) =>
+          Some({
+            ..f,
+            body: rewrite_block(f.body, table.narrow_params(f.params)),
+          })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
       for m in decl.methods {
+        // A class method's parameters are `(name, type)` pairs, not
+        // `TsParam`s.
+        let method_table = table.narrow_named_params(m.params)
         let new_body = match m.body {
-          Some(b) => Some(rewrite_block(b, table))
+          Some(b) => Some(rewrite_block(b, method_table))
           None => None
         }
         new_methods.push({ ..m, body: new_body })
@@ -717,10 +831,17 @@ fn rewrite_stmt(
 }
 
 ///|
-fn rewrite_block(
-  block : @ast.TsBlock,
-  table : Map[String, AsConstCandidate],
-) -> @ast.TsBlock {
+/// Every nested block is a scope. A `let` / `const` / class it declares
+/// shadows a candidate of the same name, and rewriting a read of the
+/// INNER binding with the OUTER binding's value is a wrong value, not a
+/// crash — see the scope-narrowing section of `call_inline.mbt`, whose
+/// helpers this uses.
+///
+/// The top-level entry point deliberately does not come through here:
+/// the candidates are declared in the top-level block, so narrowing by
+/// its own bindings would drop every one of them.
+fn rewrite_block(block : @ast.TsBlock, table : AsConstTables) -> @ast.TsBlock {
+  let table = table.narrow_block(block)
   let stmts : Array[@ast.TsStmt] = []
   for s in block.stmts {
     stmts.push(rewrite_stmt(s, table))
@@ -729,13 +850,20 @@ fn rewrite_block(
 }
 
 ///|
-fn rewrite_expr(
-  expr : @ast.TsExpr,
-  table : Map[String, AsConstCandidate],
-) -> @ast.TsExpr {
+fn rewrite_expr(expr : @ast.TsExpr, table : AsConstTables) -> @ast.TsExpr {
   match expr {
+    // A scalar candidate: the whole read is the name, so this is the
+    // one place `scalars` is consumed. It has to come before the
+    // `IndexAccess(Var(n), …)` / `PropAccess(Var(n), …)` arms only in
+    // the sense that the two tables are disjoint by construction — a
+    // binding is either array/object-shaped or a primitive.
+    Var(n) =>
+      match table.scalars.get(n) {
+        Some(lit) => lit
+        None => expr
+      }
     IndexAccess(@ast.TsExpr::Var(n), idx) =>
-      match (table.get(n), idx) {
+      match (table.shapes.get(n), idx) {
         (Some(c), NumberLit(d)) =>
           match c.shape {
             ArrShape(items) => {
@@ -785,7 +913,7 @@ fn rewrite_expr(
         _ => IndexAccess(@ast.TsExpr::Var(n), rewrite_expr(idx, table))
       }
     PropAccess(@ast.TsExpr::Var(n), p) =>
-      match table.get(n) {
+      match table.shapes.get(n) {
         Some(c) =>
           match c.shape {
             ObjShape(m) =>
@@ -882,13 +1010,24 @@ fn rewrite_expr(
     ComputedProp(k, v) =>
       ComputedProp(rewrite_expr(k, table), rewrite_expr(v, table))
     ArrowFunc(params, ret, body, is_async) => {
+      // Parameters are bindings too, and they are the case that had no
+      // chance of working before: `function h(S) { return S[0] }` reads
+      // the PARAMETER, and `narrow_for_block` cannot see it because a
+      // parameter is not declared by the body block.
+      let table = table.narrow_params(params)
       let new_body = match body {
         ArrowExpr(e) => @ast.TsArrowBody::ArrowExpr(rewrite_expr(e, table))
         ArrowBlock(b) => @ast.TsArrowBody::ArrowBlock(rewrite_block(b, table))
       }
       ArrowFunc(params, ret, new_body, is_async)
     }
-    FuncExpr(f) => FuncExpr({ ..f, body: rewrite_block(f.body, table) })
+    FuncExpr(f) => {
+      // A named function expression also binds its own name inside the
+      // body.
+      let table = table.narrow_params(f.params)
+      let table = if f.name == "" { table } else { table.narrow([f.name]) }
+      FuncExpr({ ..f, body: rewrite_block(f.body, table) })
+    }
     DynamicImport(spec, opts) =>
       DynamicImport(
         rewrite_expr(spec, table),

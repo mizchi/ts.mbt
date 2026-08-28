@@ -134,12 +134,28 @@ pub fn peephole_block(block : @ast.TsBlock) -> @ast.TsBlock {
   let has_positions = block.stmt_positions.length() == block.stmts.length()
   for i, s in block.stmts {
     match peep_block_level(peep_stmt(s, ctx)) {
-      Some(kept) => {
-        stmts.push(kept)
-        if has_positions {
-          positions.push(block.stmt_positions[i])
+      Some(kept) =>
+        // The top level has its own driver: `peep_block` handles every
+        // NESTED block and this loop handles the outermost one. A
+        // statement-level rewrite therefore has to be wired into both,
+        // and the IIFE splice below is the one that matters most here —
+        // a bundle's side-effect wrappers are at the top level almost
+        // by definition.
+        match iife_splice_stmts(kept) {
+          Some(spliced) =>
+            for sp in spliced {
+              stmts.push(sp)
+              if has_positions {
+                positions.push(block.stmt_positions[i])
+              }
+            }
+          None => {
+            stmts.push(kept)
+            if has_positions {
+              positions.push(block.stmt_positions[i])
+            }
+          }
         }
-      }
       None => ()
     }
   }
@@ -459,14 +475,15 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
       // terser's `loops`: `for(;;)` is shorter than any spelling of an
       // always-true `while` condition, and `while (!0)` is what the
       // BoolLit rewrite above turns `while (true)` into.
-      let body_p = peep_block(body, ctx)
+      let body_p = collapse_loop_body(peep_block(body, ctx))
       if expr_is_always_truthy(cp) {
         For(None, None, None, body_p)
       } else {
         While(cp, body_p)
       }
     }
-    DoWhile(c, body) => DoWhile(peep_expr(c, ctx), peep_block(body, ctx))
+    DoWhile(c, body) =>
+      DoWhile(peep_expr(c, ctx), collapse_loop_body(peep_block(body, ctx)))
     With(c, body) => With(peep_expr(c, ctx), peep_block(body, ctx))
     For(init, cond, update, body) =>
       For(
@@ -482,14 +499,32 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
           Some(s) => Some(peep_stmt(s, ctx))
           None => None
         },
-        peep_block(body, ctx),
+        collapse_loop_body(peep_block(body, ctx)),
       )
     ForOf(k, b, t, iter, body) =>
-      ForOf(k, b, t, peep_expr(iter, ctx), peep_block(body, ctx))
+      ForOf(
+        k,
+        b,
+        t,
+        peep_expr(iter, ctx),
+        collapse_loop_body(peep_block(body, ctx)),
+      )
     ForAwaitOf(k, b, t, iter, body) =>
-      ForAwaitOf(k, b, t, peep_expr(iter, ctx), peep_block(body, ctx))
+      ForAwaitOf(
+        k,
+        b,
+        t,
+        peep_expr(iter, ctx),
+        collapse_loop_body(peep_block(body, ctx)),
+      )
     ForIn(k, b, t, iter, body) =>
-      ForIn(k, b, t, peep_expr(iter, ctx), peep_block(body, ctx))
+      ForIn(
+        k,
+        b,
+        t,
+        peep_expr(iter, ctx),
+        collapse_loop_body(peep_block(body, ctx)),
+      )
     Switch(e, cases) => {
       let new_cases : Array[@ast.TsSwitchCase] = []
       for c in cases {
@@ -1456,6 +1491,128 @@ fn block_redeclares_label(block : @ast.TsBlock, name : String) -> Bool {
 }
 
 ///|
+/// terser's `sequences`, in the one position where it pays for itself:
+/// a loop body of leading expression statements plus one final
+/// statement collapses to a single statement, and a single-statement
+/// loop body needs no braces.
+///
+///     for (;;) { i++; if (i > 2) return i; }
+///     for (;;) if (i++, i > 2) return i;
+///
+/// The comma itself is free — `a;b` and `a,b` are the same length — so
+/// the entire win is the two braces, which is why this only fires when
+/// the merge leaves EXACTLY one statement. Evaluation order is
+/// unchanged: a comma expression evaluates left to right and discards
+/// every value but the last, which is what a run of expression
+/// statements does.
+///
+/// Only expression statements are absorbed, so nothing here can move a
+/// declaration into or out of a scope.
+fn collapse_loop_body(b : @ast.TsBlock) -> @ast.TsBlock {
+  let n = b.stmts.length()
+  if n < 2 {
+    return b
+  }
+  for i in 0..<(n - 1) {
+    if !(b.stmts[i] is Expr(_)) {
+      return b
+    }
+  }
+  let mut lead = match b.stmts[0] {
+    Expr(e) => e
+    _ => return b
+  }
+  for i in 1..<(n - 1) {
+    match b.stmts[i] {
+      Expr(e) => lead = @ast.TsExpr::Seq(lead, e)
+      _ => return b
+    }
+  }
+  let merged : @ast.TsStmt = match b.stmts[n - 1] {
+    Expr(e) => Expr(Seq(lead, e))
+    Return(Some(e)) => Return(Some(Seq(lead, e)))
+    Throw(e) => Throw(Seq(lead, e))
+    If(cond, t, e) => If(Seq(lead, cond), t, e)
+    Switch(disc, cases) => Switch(Seq(lead, disc), cases)
+    // `Return(None)`, `Break`, `Continue` carry no expression to merge
+    // into, and a declaration cannot be brace-less anyway.
+    _ => return b
+  }
+  { stmts: [merged], stmt_positions: [] }
+}
+
+///|
+/// The statements a side-effect-only IIFE can be replaced by, or `None`
+/// when it cannot.
+///
+///     (function () { globalThis.__sink = 1; })();
+///     globalThis.__sink = 1;
+///
+/// terser calls its version of this `negate_iife`; the byte win here is
+/// the wrapper itself — 13 bytes for `(function(){})()`, 8 for the arrow
+/// form — not the negation.
+///
+/// The conditions are all about what the wrapper was providing:
+///
+///   * A SCOPE. Any declaration in the body is scoped by the wrapper,
+///     and splicing it out moves the binding into the enclosing scope,
+///     where it can collide with a binding already there (a SyntaxError
+///     for `let`, silent aliasing for `var`). So the body has to be
+///     expression statements and nothing else — which also rules out
+///     `return`, whose value would now have nowhere to go.
+///   * A `this` / `arguments` BINDING, for the `function` form. Called
+///     as `f()`, `this` inside is `undefined` in a module and the body's
+///     `arguments` is its own; spliced out, both mean something else.
+///     An arrow never had either — it reads them from the same
+///     enclosing function the splice lands in — so the arrow form needs
+///     no such check.
+///   * A call BOUNDARY, for `async` / generator wrappers: those do not
+///     run their body to completion at the call site at all.
+fn iife_splice_stmts(stmt : @ast.TsStmt) -> Array[@ast.TsStmt]? {
+  let (body, needs_this_check) = match stmt {
+    Expr(CallExpr(FuncExpr(f), args)) =>
+      if args.is_empty() &&
+        f.params.is_empty() &&
+        !f.is_async &&
+        !f.is_generator {
+        (f.body, true)
+      } else {
+        return None
+      }
+    Expr(CallExpr(ArrowFunc(params, _, body, is_async), args)) =>
+      if args.is_empty() && params.is_empty() && !is_async {
+        match body {
+          @ast.TsArrowBody::ArrowBlock(b) => (b, false)
+          // `(() => sideEffect())()` — the concise form has no
+          // statements to check at all.
+          @ast.TsArrowBody::ArrowExpr(e) => return Some([@ast.TsStmt::Expr(e)])
+        }
+      } else {
+        return None
+      }
+    _ => return None
+  }
+  for s in body.stmts {
+    if !(s is Expr(_)) {
+      return None
+    }
+  }
+  if needs_this_check &&
+    (
+      block_uses_this(body) ||
+      block_uses_super(body) ||
+      block_references_name(body, "arguments")
+    ) {
+    return None
+  }
+  let out : Array[@ast.TsStmt] = []
+  for s in body.stmts {
+    out.push(s)
+  }
+  Some(out)
+}
+
+///|
 fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
   let stmts : Array[@ast.TsStmt] = []
   // A function declaration after the terminator is NOT unreachable —
@@ -1487,6 +1644,16 @@ fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
     let ps = match peep_block_level(ps) {
       Some(replacement) => replacement
       None => continue
+    }
+    // `(function () { sideEffect(); })();` → `sideEffect();`
+    match iife_splice_stmts(ps) {
+      Some(spliced) => {
+        for s in spliced {
+          stmts.push(s)
+        }
+        continue
+      }
+      None => ()
     }
     // `if (c) { …; return; } else { stmts }` → `if (c) { …; return; }` +
     // `stmts` spliced inline. Saves the `else ` keyword (5 bytes) and the
@@ -1763,6 +1930,26 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       // `x === null || x === void 0` → `x == null`  (saves ~13 bytes)
       // `x !== null && x !== void 0` → `x != null`
       match op {
+        // `a || (b || c)` → `(a || b) || c`. `||` and `&&` are
+        // left-associative, so the emitter has to parenthesize a
+        // right-nested one and the parens are 2 bytes for nothing.
+        // Short-circuit order is identical in both spellings: the
+        // operands are still evaluated left to right, and each still
+        // stops the chain on the same value.
+        //
+        // `fold_guard_return` produces exactly this shape — nested
+        // guard clauses collapse inner-first, so `if (a) return;
+        // if (b) return; g()` arrives here as `a || (b || g())`.
+        Or if rp is BinOp(Or, _, _) =>
+          match rp {
+            BinOp(_, rl, rr) => BinOp(Or, BinOp(Or, lp, rl), rr)
+            _ => BinOp(op, lp, rp)
+          }
+        And if rp is BinOp(And, _, _) =>
+          match rp {
+            BinOp(_, rl, rr) => BinOp(And, BinOp(And, lp, rl), rr)
+            _ => BinOp(op, lp, rp)
+          }
         Or =>
           match fold_null_undef_or(lp, rp) {
             Some(e) => e
@@ -1805,6 +1992,23 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
               StringLit("undefined"),
               UnaryOp(@ast.TsUnaryOp::Typeof, @ast.TsExpr::Var(_)),
             ) => BinOp(op, lp, rp)
+            // `typeof void 0 === "undefined"` → `!0`. The rule below
+            // rewrites the whole comparison to `x === void 0`, and when
+            // `x` is itself `void 0` the result is a 14-byte constant
+            // that nothing after this pass will fold: `fold` DOES have
+            // this rule (`both_literal_undefined`), but `fold-2` runs
+            // BEFORE peephole, and it is peephole that creates the
+            // shape. `f(undefined)` inlined into a body of
+            // `typeof x === "undefined"` shipped as
+            // `void 0 === void 0` for exactly that reason.
+            (
+              UnaryOp(@ast.TsUnaryOp::Typeof, @ast.TsExpr::UnaryOp(Void, _)),
+              StringLit("undefined"),
+            )
+            | (
+              StringLit("undefined"),
+              UnaryOp(@ast.TsUnaryOp::Typeof, @ast.TsExpr::UnaryOp(Void, _)),
+            ) => UnaryOp(@ast.TsUnaryOp::Not, IntLit(0))
             (UnaryOp(@ast.TsUnaryOp::Typeof, x), StringLit("undefined"))
             | (StringLit("undefined"), UnaryOp(@ast.TsUnaryOp::Typeof, x)) =>
               BinOp(
@@ -1812,6 +2016,11 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
                 x,
                 UnaryOp(@ast.TsUnaryOp::Void, IntLit(0)),
               )
+            // The same constant, arrived at from the other direction:
+            // an inline substituted `void 0` into a comparison that was
+            // already `x === void 0`.
+            (UnaryOp(Void, a), UnaryOp(Void, b)) if is_pure_value(a) &&
+              is_pure_value(b) => UnaryOp(@ast.TsUnaryOp::Not, IntLit(0))
             // `x === true` / `x === !0` → `x`  (saves 7 bytes)
             // `x === false` / `x === !1` → `!x`  (saves 6 bytes)
             //
@@ -1855,6 +2064,15 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
               StringLit("undefined"),
               UnaryOp(@ast.TsUnaryOp::Typeof, @ast.TsExpr::Var(_)),
             ) => BinOp(op, lp, rp)
+            // The `!==` mirror of the `===` constant above.
+            (
+              UnaryOp(@ast.TsUnaryOp::Typeof, @ast.TsExpr::UnaryOp(Void, _)),
+              StringLit("undefined"),
+            )
+            | (
+              StringLit("undefined"),
+              UnaryOp(@ast.TsUnaryOp::Typeof, @ast.TsExpr::UnaryOp(Void, _)),
+            ) => UnaryOp(@ast.TsUnaryOp::Not, IntLit(1))
             (UnaryOp(@ast.TsUnaryOp::Typeof, x), StringLit("undefined"))
             | (StringLit("undefined"), UnaryOp(@ast.TsUnaryOp::Typeof, x)) =>
               BinOp(
@@ -1862,6 +2080,8 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
                 x,
                 UnaryOp(@ast.TsUnaryOp::Void, IntLit(0)),
               )
+            (UnaryOp(Void, a), UnaryOp(Void, b)) if is_pure_value(a) &&
+              is_pure_value(b) => UnaryOp(@ast.TsUnaryOp::Not, IntLit(1))
             // `x !== true` / `x !== !0` → `!x`  (saves 6 bytes)
             // `x !== false` / `x !== !1` → `x`  (saves 7 bytes)
             //
