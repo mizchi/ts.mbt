@@ -645,6 +645,32 @@ hono の app bundle はこれら全部を直しても通りません（`req[cach
   `Named` 解決を入れて corpus に case36 を足したときに出ました ——
   最適化を 1 つ通せるようにすると、その先で止まっていた別 pass の
   bug が初めて観測できるようになる、という順序です。
+- **`delete obj['q']` が `delete 1` になっていました。**
+  `as_const_inline` の disqualification scan は `UnaryOp(_, inner)` の
+  汎用 arm で `delete` の operand に降り、そこで
+  `IndexAccess(Var(obj), StringLit("q"))` を**安全な keyed read**と
+  読みます。candidate は生き残り、read は古い値に畳まれ、delete 自身も
+  literal に書き換えられて no-op になる。`--bundle --fold` で
+  `undefined undefined` が `1 1` になります。`delete` の operand は
+  read ではなく mutation です。fuzzer の新しい oracle（[mangle-fuzzing.md](./mangle-fuzzing.md)）が
+  見つけました。
+- **値が分かっている条件を、実行ごと捨てていた箇所が 7 つ。**
+  `is_js_truthy` / `is_js_falsy` は「boolean 文脈で何に coerce するか」
+  に答えるのに、呼び出し側は「捨てて良い」として使っていました。
+  食い違う形はちょうど 2 つ: object / array literal は**中身が何であれ**
+  truthy（中身は実行される）、`void EXPR` は `EXPR` が何であれ falsy。
+  8 site を並べたプログラムで **8 個の効果のうち 7 個が消えました**。
+  生き残った 1 つが `if` 文で、そこには**すでに guard とコメントが
+  入っていました**（「fuzzer の効果トレースが見つけた」）。ternary /
+  `!` / `&&` / `||` / dead-loop 3 種 / `Boolean(…)` には入っていない。
+  この repo で 7 回目の「同じ規則を複数箇所に書いて 1 箇所だけ直した」
+  です。`keep_effects` 1 つを全 site から呼ぶ形にしました。
+
+  corpus case にはできません: **mtsc の checker 自身が condition /
+  logical operand / unary 位置の literal を拒否します**。つまりこの bug
+  は型検査を切った入力——published `.js`、`verify-real-world-minify` の
+  経路——でしか届きません。test は `fold_wbtest.mbt` にあり、「純粋な
+  条件は今も畳まれる」対を必ず付けています。
 - **同じ `as_const_inline` に、もっと悪い穴が残っていました: scope を
   一切見ていませんでした。** 名前を 1 つの top-level table で解決して
   walker に渡すだけで、narrowing がどこにもありません。
@@ -701,6 +727,20 @@ hono の app bundle はこれら全部を直しても通りません（`req[cach
   各 pass について「shadow された read は内側を使う」と「shadow されて
   いない read は今も最適化される」を対にしてあるので、修正が
   「pass を止める」形になっていないことも検査します。
+
+  **この case を追加した直後、reference leg が使えていませんでした。**
+  Node の type stripping は既定が strip-only mode で、`enum` を構文
+  エラーにします。case43 には `const enum` があるので reference は
+  `unavailable` になり、harness は自分の 2 つの出力を互いに比べる形に
+  落ちていました —— このファイルが疑うべきだと言っている、まさにその
+  leg agreement です。`pass` と表示されつつ、note に
+  「reference run unavailable」と書いてありました。
+
+  `--experimental-transform-types` に切り替えると Node は enum も
+  変換して実行します。実装は Node のものなので leg の独立性は保たれ
+  ます。unavailable は corpus 全体で 5 → 3 件になりました（残りは
+  `module` keyword と、型を値位置で import している 2 件で、どちらも
+  transform mode でも Node が拒否します）。
 - **`JSON.stringify` を effect-free 扱いにしています。** `toJSON` と
   getter に到達するので厳密には getter の純粋性に依存します。purity
   pass は impure getter を warning として別途報告しており、実運用の

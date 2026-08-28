@@ -61,7 +61,39 @@ product surfaces now.
   generates programs from seeds, compiles each with and without mangling,
   and compares what they observed; a failing program is shrunk to its
   minimum automatically rather than reported as a seed number — see
-  [`docs/mangle-fuzzing.md`](./docs/mangle-fuzzing.md). All three hunt
+  [`docs/mangle-fuzzing.md`](./docs/mangle-fuzzing.md). That comparison
+  is a self-comparison, and for a long time it was the whole oracle:
+  two mtsc outputs agreeing is consistency, not correctness, so a pass
+  wrong BEFORE mangling is wrong identically in both legs and every
+  seed reports "equivalent". That is not a hypothetical — it is how the
+  five scope-narrowing bugs below survived thousands of seeds and were
+  found by reading source instead. The original program, run by Node,
+  is now the oracle for every generated program rather than only for
+  the ones where the two legs already disagreed, and the generator
+  emits the shapes those passes key on (`const enum`, a type guard, a
+  literal-union dispatcher, an `as const` table) each read once
+  normally and once through a scope that re-binds its name. Reverting
+  either fix reproduces the bug as a two-node artifact. Node's default
+  strip-only type stripping refuses `enum`, which made the reference
+  leg silently unavailable on exactly the shape that is wrong with no
+  optimization flag — `--experimental-transform-types` is what the leg
+  needs, in this harness and in the corpus one. Its first 400 seeds
+  with the new oracle found two bugs nothing else had: `as_const_inline`
+  descended into a `delete` operand and read `obj['q']` there as a safe
+  keyed read, so `delete obj['q']` compiled to `delete 1` and every
+  later read folded to the stale value; and seven fold sites treated
+  `is_js_truthy` / `is_js_falsy` as a licence to DISCARD the condition,
+  which it is not for an object or array literal (truthy whatever is
+  inside it, and the inside still runs) or for `void EXPR` (falsy
+  whatever `EXPR` is). A program covering all seven lost seven of its
+  eight calls under `--bundle --fold`. The one that survived was the
+  `if` statement — which already had the guard, and a comment crediting
+  the fuzzer's effect trace for it. Seventh time in this pipeline that
+  one rule was written in several places and fixed in one. mtsc's own
+  checker rejects a literal in condition, logical-operand and unary
+  position, so that class is reachable only with checking off — the
+  published-`.js` path — and lives in `fold_wbtest.mbt` rather than the
+  corpus, which type-checks its sources. All three hunt
   code we delete and should not; `just verify-dce-coverage` hunts the
   opposite — code we keep and could drop — as a table of small programs
   that each assert a marker is gone, the live markers survive, and stdout

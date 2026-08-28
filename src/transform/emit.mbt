@@ -570,11 +570,20 @@ fn emit_module_exports(
 /// `undefined` / `void 0` is the optimization: `let x;` initialises to
 /// `undefined` anyway, so the initializer is inert and worth its bytes
 /// only in pretty output.
+///
+/// "Inert" is about the VALUE, and `void EXPR` is undefined whatever
+/// `EXPR` is — so the operand has to be pure before this may drop it.
+/// It did not check, and `let unused = void trace.push(1);` emitted as
+/// `let unused;` under plain `--minify`: the `push` never ran. Found by
+/// the fuzzer's original-program leg, and the eighth place in this
+/// pipeline where "evaluates to a known value" was read as "may be
+/// discarded" — see `keep_effects` in `fold.mbt` for the other seven.
 fn omit_declaration_init(e : Emitter, init : @ast.TsExpr) -> Bool {
   match init {
     @ast.TsExpr::Var("__ts_no_init__") => true
-    @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _)
-    | @ast.TsExpr::Var("undefined") => !e.pretty
+    @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, inner) =>
+      !e.pretty && is_pure_value(inner)
+    @ast.TsExpr::Var("undefined") => !e.pretty
     _ => false
   }
 }
@@ -667,13 +676,13 @@ fn emit_block(e : Emitter, block : @ast.TsBlock) -> Unit {
                 | @ast.TsStmt::Let(b, _, init)
                 | @ast.TsStmt::Const(b, _, init) => {
                   emit_binding(e, b)
-                  let is_undef_init = match init {
-                    @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _) => true
-                    @ast.TsExpr::Var("undefined") | Var("__ts_no_init__") =>
-                      true
-                    _ => false
-                  }
-                  if !is_undef_init {
+                  // `omit_declaration_init`, not a copy of it. Two
+                  // inline copies lived here and both dropped a
+                  // `void EXPR` initializer whatever `EXPR` was, so
+                  // `let unused = void trace.push(1)` lost the push —
+                  // the same bug the shared helper had, surviving in
+                  // the two places that did not call it.
+                  if !omit_declaration_init(e, init) {
                     e.space()
                     e.write("=")
                     e.space()
@@ -778,13 +787,13 @@ fn emit_stmts_merged(e : Emitter, stmts : Array[@ast.TsStmt]) -> Unit {
                 | @ast.TsStmt::Let(b, _, init)
                 | @ast.TsStmt::Const(b, _, init) => {
                   emit_binding(e, b)
-                  let is_undef_init = match init {
-                    @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _) => true
-                    @ast.TsExpr::Var("undefined") | Var("__ts_no_init__") =>
-                      true
-                    _ => false
-                  }
-                  if !is_undef_init {
+                  // `omit_declaration_init`, not a copy of it. Two
+                  // inline copies lived here and both dropped a
+                  // `void EXPR` initializer whatever `EXPR` was, so
+                  // `let unused = void trace.push(1)` lost the push —
+                  // the same bug the shared helper had, surviving in
+                  // the two places that did not call it.
+                  if !omit_declaration_init(e, init) {
                     e.space()
                     e.write("=")
                     e.space()

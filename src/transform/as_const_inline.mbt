@@ -519,6 +519,21 @@ fn scan_expr_for_unsafe_uses(
       scan_expr_for_unsafe_uses(l, candidates)
       scan_expr_for_unsafe_uses(r, candidates)
     }
+    // `delete NAME[k]` / `delete NAME.k` MUTATES the object, and the
+    // generic unary arm below recursed into the operand where the scan
+    // reads `NAME[k]` as a safe keyed read — so the candidate survived,
+    // its reads folded to stale values, AND the delete itself was
+    // rewritten to `delete <literal>`:
+    //
+    //     const obj = { p: 0, q: 1 };
+    //     delete obj['q'];
+    //     export const v = obj.q;   // undefined
+    //
+    // compiled to `delete 1; const v = 1` under `--bundle --fold`. The
+    // fuzzer's new original-program leg found this; the operand is
+    // flagged the same way an assignment receiver is.
+    UnaryOp(@ast.TsUnaryOp::Delete, inner) =>
+      flag_all_candidate_refs(inner, candidates)
     UnaryOp(_, inner)
     | Spread(inner)
     | Await(inner)
@@ -931,6 +946,12 @@ fn rewrite_expr(expr : @ast.TsExpr, table : AsConstTables) -> @ast.TsExpr {
         None => PropAccess(@ast.TsExpr::Var(n), p)
       }
     BinOp(op, l, r) => BinOp(op, rewrite_expr(l, table), rewrite_expr(r, table))
+    // Substituting into a `delete` operand turns the delete into a
+    // no-op on a literal. The scan above disqualifies any candidate
+    // mentioned here, so this arm should be unreachable for a table
+    // entry — it is the second lock on the same door, because the
+    // failure mode is a silently-skipped mutation rather than a crash.
+    UnaryOp(@ast.TsUnaryOp::Delete, _) => expr
     UnaryOp(op, inner) => UnaryOp(op, rewrite_expr(inner, table))
     Cond(c, t, e) =>
       Cond(

@@ -1844,3 +1844,57 @@ test "fold: array-literal method folds still fire without a spread" {
   assert_false(out.contains(".length"), msg="expected folded, got: \{out}")
   assert_true(out.contains("3,2,1"), msg="expected [3,2,1], got: \{out}")
 }
+
+///|
+test "fold: a condition whose value is known still runs" {
+  // `is_js_truthy` / `is_js_falsy` say what an expression COERCES to.
+  // Seven fold sites read that as "safe to discard", which is a
+  // different claim for exactly two shapes: an object or array literal
+  // is truthy whatever is inside it, and `void EXPR` is falsy whatever
+  // `EXPR` is. Both still have to be evaluated.
+  //
+  // `fold_stmt_into`'s `If` arm already guarded this and said so in a
+  // comment; the six siblings below did not, and a program exercising
+  // all seven lost seven of its eight calls under `--bundle --fold`.
+  //
+  // Reachable only with type-checking off — mtsc's own checker rejects
+  // a literal in condition, logical-operand and unary position — which
+  // is the published-`.js` path that `verify-real-world-minify` uses,
+  // and is why there is no corpus case: the corpus type-checks its
+  // sources. The fuzzer is the ongoing guard; this pins each site.
+  let cases = [
+    // (source, what must survive)
+    ("const r = { g: f() } ? 1 : 2;\n", "f()"),
+    ("const r = [f()] ? 1 : 2;\n", "f()"),
+    ("const r = (void f()) ? 1 : 2;\n", "f()"),
+    ("const r = !{ g: f() };\n", "f()"),
+    ("const r = { g: f() } && 0;\n", "f()"),
+    ("const r = (void f()) || 0;\n", "f()"),
+    ("const r = Boolean({ g: f() });\n", "f()"),
+    ("const r = Boolean(void f());\n", "f()"),
+    ("while (void f()) { g(); }\n", "f()"),
+    ("do { g(); } while (void f());\n", "f()"),
+    ("for (let i = 0; void f(); i++) { g(); }\n", "f()"),
+  ]
+  for c in cases {
+    let out = fold_one(c.0)
+    assert_true(
+      out.contains(c.1),
+      msg="dropped the condition's call\n      source: \{c.0}      folded: \{out}",
+    )
+  }
+}
+
+///|
+test "fold: a PURE condition whose value is known is still dropped" {
+  // The other half. The fix must not turn every proven condition into a
+  // kept expression, or the folds stop paying for themselves.
+  let ternary = fold_one("const r = { g: 1 } ? 1 : 2;\n")
+  assert_true(ternary.contains("const r = 1;"), msg="lost the fold: \{ternary}")
+  let logical = fold_one("const r = { g: 1 } && 7;\n")
+  assert_true(logical.contains("const r = 7;"), msg="lost the fold: \{logical}")
+  let negation = fold_one("const r = ![1];\n")
+  assert_true(negation.contains("false"), msg="lost the fold: \{negation}")
+  let dead_loop = fold_one("while (void 0) { g(); }\n")
+  assert_false(dead_loop.contains("g()"), msg="kept a dead loop: \{dead_loop}")
+}

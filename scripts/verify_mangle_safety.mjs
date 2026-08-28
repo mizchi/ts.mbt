@@ -148,13 +148,27 @@ function writeStubs(caseDir, outDir, stubs) {
 // the same runner, so a difference between them is a difference in the
 // module and never in how it was watched.
 //
-// `stripTypes` runs the module as TypeScript through Node's type
-// stripping and installs the resolution hooks the original sources need
-// (extensionless relative specifiers, stubbed bare specifiers).
+// `stripTypes` runs the module as TypeScript through Node's own
+// TypeScript support and installs the resolution hooks the original
+// sources need (extensionless relative specifiers, stubbed bare
+// specifiers).
+//
+// `--experimental-transform-types`, not `--experimental-strip-types`.
+// Strip-only mode refuses every construct that is not pure annotation —
+// `enum`, `namespace`, parameter properties — and refusing is not
+// neutral here: the reference leg became UNAVAILABLE for those cases and
+// the harness fell back to comparing our own two outputs against each
+// other, which is the leg agreement this whole file exists to distrust.
+// `case43-table-shadowing` is the case that showed it: its `const enum`
+// group is a pass that is wrong under plain `--bundle`, and the note
+// said "reference run unavailable" while the case reported pass.
+//
+// Transform mode is still Node's implementation, not ours, so the leg
+// stays independent — it just does more than erase.
 function observe(modulePath, options, { stripTypes = false, stubRoot = "" } = {}) {
   const argv = [];
   if (stripTypes) {
-    argv.push("--experimental-strip-types", "--no-warnings");
+    argv.push("--experimental-transform-types", "--no-warnings");
     argv.push("--experimental-loader", pathToFileURL(HOOKS).href);
   }
   argv.push(RUNNER, modulePath, JSON.stringify(options));

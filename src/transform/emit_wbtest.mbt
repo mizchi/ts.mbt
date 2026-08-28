@@ -159,3 +159,40 @@ test "emit: a postfix operand needs no separator" {
     assert_false(out.contains("- a--"), msg="expected no space, got: \{out}")
   }
 }
+
+// ---------------------------------------------------------------
+// A `void` initializer whose operand does something
+// ---------------------------------------------------------------
+//
+// `let x;` initialises to `undefined`, so `let x = void 0` may drop its
+// initializer in minify mode. `void EXPR` is undefined whatever `EXPR`
+// is — which makes the VALUE inert and says nothing about the operand.
+// `let unused = void trace.push(1)` emitted as `let unused;` and the
+// `push` never ran, under plain `--minify`.
+//
+// Three copies of the decision existed: `omit_declaration_init` and two
+// inline duplicates in the merged-declarator paths. All three had the
+// bug; fixing the helper alone left the merged paths wrong, which is
+// what `--treeshake --minify` reached.
+
+///|
+test "emit: a void initializer with an effectful operand is kept" {
+  let single = emit_min_one("let unused = void sink(1);\n")
+  assert_true(single.contains("sink(1)"), msg="dropped the operand: \{single}")
+  // The merged-declarator path is a different writer, and it had its
+  // own copy. Two declarations in a row is what triggers the merge.
+  let merged = emit_min_one("let a = void sink(1);\nlet b = void sink(2);\n")
+  assert_true(
+    merged.contains("sink(1)") && merged.contains("sink(2)"),
+    msg="the merged writer dropped an operand: \{merged}",
+  )
+}
+
+///|
+test "emit: a void initializer with a pure operand is still dropped" {
+  // The other half — the byte saving has to survive the fix.
+  let single = emit_min_one("let a = void 0;\n")
+  assert_false(single.contains("void"), msg="lost the saving: \{single}")
+  let merged = emit_min_one("let a = void 0;\nlet b = void 0;\n")
+  assert_false(merged.contains("void"), msg="lost the saving: \{merged}")
+}

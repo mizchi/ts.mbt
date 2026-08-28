@@ -91,6 +91,9 @@ function isIdentName(name) {
 
 export function printExpr(node) {
   switch (node.k) {
+    // Verbatim expression text; see the `raw` declaration arm.
+    case "raw":
+      return node.text;
     case "lit":
       return node.value;
     case "var":
@@ -331,6 +334,20 @@ function printDecl(decl) {
       );
     case "alias":
       return `type ${decl.name} = ${decl.body};\n`;
+    // Verbatim TypeScript, emitted as one atom.
+    //
+    // Used by the name-resolution group (`shadowGroup` in
+    // `fuzz-generate.mjs`), whose shapes are `const enum`, a type-guard
+    // signature, a literal-union `switch` dispatcher and so on — six
+    // constructs that the expression grammar has no nodes for and that
+    // would each need a printer arm to gain nothing, since the group's
+    // whole point is a fixed shape with a fresh NAME.
+    //
+    // The cost is real and bounded: the shrinker cannot reduce inside a
+    // raw node, only drop it. Each shape is therefore its own raw decl,
+    // so a reduction can drop five of six and leave the one that fails.
+    case "raw":
+      return decl.text;
     default:
       throw new Error(`fuzz-ir: cannot print declaration ${decl.k}`);
   }

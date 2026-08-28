@@ -98,6 +98,10 @@ export class Generator {
     this.staticMembers = new Map();
     this.funcNames = [];
     this.typeNames = [];
+    // Reader functions the name-resolution group declared. Exported in
+    // the "export" shape so the observation reaches them from outside
+    // the module, the same way it reaches the generated classes.
+    this.shadowFnNames = [];
   }
 
   // --- RNG helpers ------------------------------------------------
@@ -195,6 +199,17 @@ export class Generator {
       }
     }
 
+    // The name-resolution group. One raw decl per shape so the shrinker
+    // can drop the ones that are not implicated.
+    const shadowReaders = [];
+    const groupCount = this.int(0, 3);
+    for (let i = 0; i < groupCount; i++) {
+      const group = this.shadowGroup(i);
+      decls.push({ k: "raw", text: group.text });
+      for (const reader of group.readers) shadowReaders.push(reader);
+      for (const fn of group.names) this.shadowFnNames.push(fn);
+    }
+
     const body = this.statements(this.int(3, 7), 3, { inFunction: false, loopDepth: 0 });
 
     const program = {
@@ -207,17 +222,187 @@ export class Generator {
       exports: [],
     };
     program.observe = this.observations();
+    // The group's readers have to be OBSERVED or the whole thing is dead
+    // code: treeshake deletes it, and a pass that would have rewritten it
+    // wrongly never gets the chance. `raw` for the same reason the decls
+    // are — these are calls with a fixed shape, not grammar.
+    for (const reader of shadowReaders) {
+      program.observe.push({ k: "raw", text: reader });
+    }
     if (this.shape === "export") program.exports = this.exportList(decls);
     return program;
+  }
+
+  /// The name-resolution group: declarations the optimizer rewrites BY
+  /// NAME, each read once through the name it declares and once through a
+  /// scope that re-binds that name.
+  ///
+  /// The rest of this generator aims at the property mangler. These six
+  /// passes are a different question — they key a bundle-wide table on an
+  /// identifier and substitute at every mention of it — and the grammar
+  /// had no shape that reached any of them, nor any shadowing at all:
+  /// `freshVar` hands out `v0`, `v1`, … so two bindings never share a
+  /// name. Five of the six were wrong for exactly that reason, and all
+  /// five were found by reading their source rather than by fuzzing.
+  ///
+  /// Each shape gets:
+  ///
+  ///   * an outer declaration the pass wants to rewrite;
+  ///   * `shadowed`, a reader whose scope re-binds the name, which must
+  ///     read the INNER binding;
+  ///   * `direct`, a reader that does not shadow, which must still be
+  ///     optimized — otherwise "narrow the table" and "switch the pass
+  ///     off" would look the same from out here.
+  ///
+  /// The shadowing forms rotate over the four that behave differently:
+  /// an inner `const` (a block declares it), a parameter (no block
+  /// declares it — the case a block-level check cannot see), a `catch`
+  /// binding, and a loop variable.
+  shadowGroup(index) {
+    const tag = `s${index}`;
+    const shadow = this.int(0, 4);
+    /// Wrap `body` in a scope that re-binds `name` with `init`.
+    const shadowed = (name, init, body) => {
+      switch (shadow) {
+        case 0:
+          return `function ${tag}Shadowed() {\n  const ${name} = ${init};\n  return ${body};\n}\n`;
+        case 1:
+          return `function ${tag}Shadowed(${name}: any) {\n  return ${body};\n}\n`;
+        case 2:
+          return (
+            `function ${tag}Shadowed() {\n` +
+            `  try { throw ${init}; } catch (${name}) { return ${body}; }\n` +
+            `}\n`
+          );
+        default:
+          return (
+            `function ${tag}Shadowed() {\n` +
+            `  for (const ${name} of [${init}]) { return ${body}; }\n` +
+            `  return 0;\n` +
+            `}\n`
+          );
+      }
+    };
+    /// The argument the shadowed reader needs when the shadow is a
+    /// parameter, and nothing otherwise.
+    const shadowArg = (init) => (shadow === 1 ? init : "");
+
+    switch (this.int(0, 6)) {
+      // as_const_inline: `NAME[i]` folds to the element.
+      case 0: {
+        const name = `${tag}Arr`;
+        return {
+          text:
+            `const ${name} = ['out0', 'out1'];\n` +
+            shadowed(name, `['in0', 'in1']`, `${name}[0]`) +
+            `function ${tag}Direct() { return ${name}[1]; }\n`,
+          readers: [`${tag}Shadowed(${shadowArg(`['in0', 'in1']`)})`, `${tag}Direct()`],
+          names: [`${tag}Shadowed`, `${tag}Direct`],
+        };
+      }
+      // as_const_inline, object form: `NAME.k` folds to the value.
+      case 1: {
+        const name = `${tag}Obj`;
+        return {
+          text:
+            `const ${name} = { k: 11 };\n` +
+            shadowed(name, `{ k: 99 }`, `${name}.k`) +
+            `function ${tag}Direct() { return ${name}.k; }\n`,
+          readers: [`${tag}Shadowed(${shadowArg(`{ k: 99 }`)})`, `${tag}Direct()`],
+          names: [`${tag}Shadowed`, `${tag}Direct`],
+        };
+      }
+      // const_scalar_inline: the literal is substituted at every read.
+      case 2: {
+        const name = `${tag}K`;
+        return {
+          text:
+            `const ${name} = 5;\n` +
+            shadowed(name, `9`, `${name} * 2`) +
+            `function ${tag}Direct() { return ${name} * 2; }\n`,
+          readers: [`${tag}Shadowed(${shadowArg("9")})`, `${tag}Direct()`],
+          names: [`${tag}Shadowed`, `${tag}Direct`],
+        };
+      }
+      // const_enum_inline: `E.M` folds to the member's value. This one
+      // is rewritten under plain `--bundle`, before any optimization
+      // flag, so it is the shape most worth generating.
+      case 3: {
+        const name = `${tag}E`;
+        return {
+          text:
+            `const enum ${name} { M = 3 }\n` +
+            shadowed(name, `{ M: 77 }`, `${name}.M`) +
+            `function ${tag}Direct() { return ${name}.M; }\n`,
+          readers: [`${tag}Shadowed(${shadowArg("{ M: 77 }")})`, `${tag}Direct()`],
+          names: [`${tag}Shadowed`, `${tag}Direct`],
+        };
+      }
+      // predicate_inline: a `x is T` guard's body is substituted at the
+      // call site. The shadow has to be CALLABLE, so the parameter form
+      // takes a function and the others declare one.
+      case 4: {
+        const name = `${tag}Guard`;
+        const inner =
+          shadow === 1
+            ? `function ${tag}Shadowed(${name}: (n: number) => boolean) { return ${name}(4); }\n`
+            : shadow === 0
+              ? `function ${tag}Shadowed() {\n  const ${name} = (n: number) => n === 4;\n  return ${name}(4);\n}\n`
+              : shadow === 2
+                ? `function ${tag}Shadowed() {\n  try { throw (n: number) => n === 4; } catch (${name}: any) { return ${name}(4); }\n}\n`
+                : `function ${tag}Shadowed() {\n  for (const ${name} of [(n: number) => n === 4]) { return ${name}(4); }\n  return false;\n}\n`;
+        return {
+          text:
+            `function ${name}(v: number): v is number { return !v; }\n` +
+            inner +
+            `function ${tag}Direct() { return ${name}(0); }\n`,
+          readers: [
+            `${tag}Shadowed(${shadow === 1 ? `(n: number) => n === 4` : ""})`,
+            `${tag}Direct()`,
+          ],
+          names: [`${tag}Shadowed`, `${tag}Direct`],
+        };
+      }
+      // switch_fold: a literal-union dispatcher is specialized per
+      // argument. Same callability requirement as the guard.
+      default: {
+        const name = `${tag}Dispatch`;
+        const inner =
+          shadow === 1
+            ? `function ${tag}Shadowed(${name}: (k: 'a') => number) { return ${name}('a'); }\n`
+            : shadow === 0
+              ? `function ${tag}Shadowed() {\n  const ${name} = (k: 'a') => 42;\n  return ${name}('a');\n}\n`
+              : shadow === 2
+                ? `function ${tag}Shadowed() {\n  try { throw (k: 'a') => 42; } catch (${name}: any) { return ${name}('a'); }\n}\n`
+                : `function ${tag}Shadowed() {\n  for (const ${name} of [(k: 'a') => 42]) { return ${name}('a'); }\n  return 0;\n}\n`;
+        return {
+          text:
+            `function ${name}(k: 'a' | 'b'): number {\n` +
+            `  switch (k) { case 'a': return 1; case 'b': return 2; }\n` +
+            `}\n` +
+            inner +
+            `function ${tag}Direct() { return ${name}('b'); }\n`,
+          readers: [
+            `${tag}Shadowed(${shadow === 1 ? `(k: 'a') => 42` : ""})`,
+            `${tag}Direct()`,
+          ],
+          names: [`${tag}Shadowed`, `${tag}Direct`],
+        };
+      }
+    }
   }
 
   /// What the module exports. Only relevant to the "export" shape, where
   /// these names are the package ABI and must survive mangling.
   exportList(decls) {
     const candidates = decls.filter((d) => d.k === "class" || d.k === "func").map((d) => d.name);
-    if (candidates.length === 0) return [];
+    if (candidates.length === 0) return this.shadowFnNames.slice();
     const count = this.int(1, candidates.length + 1);
-    return candidates.slice(0, count);
+    // Every group reader is exported unconditionally. In the "export"
+    // shape the epilogue is just `export const __trace = trace`, so a
+    // reader that is not exported is unreachable and gets deleted —
+    // which would make the group generate itself and prove nothing.
+    return [...candidates.slice(0, count), ...this.shadowFnNames];
   }
 
   classDecl(name) {

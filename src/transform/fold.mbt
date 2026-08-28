@@ -915,8 +915,14 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
     Throw(e) => out.push(Throw(fold_expr(e)))
     While(c, body) => {
       let cf = strip_double_negation(fold_expr(c))
-      // `while (0)` / `while ("")` / `while (false)` → dead loop.
-      if !is_js_falsy(cf) {
+      // `while (0)` / `while ("")` / `while (false)` → dead loop. The
+      // condition is still evaluated once before the loop gives up, so
+      // `while (void f()) {}` has to keep calling `f`.
+      if is_js_falsy(cf) {
+        if !is_pure_value(cf) {
+          out.push(Expr(cf))
+        }
+      } else {
         out.push(While(cf, fold_block(body)))
       }
     }
@@ -930,6 +936,11 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
       if is_js_falsy(cf) && !block_has_unlabeled_break_or_continue(body_f) {
         for s in body_f.stmts {
           out.push(s)
+        }
+        // A `do…while` evaluates its condition AFTER the body, so the
+        // effect goes last.
+        if !is_pure_value(cf) {
+          out.push(Expr(cf))
         }
       } else {
         out.push(DoWhile(cf, body_f))
@@ -962,6 +973,15 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
       if cond_always_false {
         match init_f {
           Some(s) => out.push(s)
+          None => ()
+        }
+        // And the condition, which runs once after the initializer
+        // before the loop gives up. `for (; void f(); )` has to keep
+        // calling `f` — the initializer was already spelled out here as
+        // the thing that "may have side effects", and the condition is
+        // the same thing one line down.
+        match cond_f {
+          Some(c) => if !is_pure_value(c) { out.push(Expr(c)) }
           None => ()
         }
         return
@@ -1173,8 +1193,9 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       let inner_f = fold_expr(inner)
       match (op, inner_f) {
         (Not, BoolLit(b)) => BoolLit(!b)
-        (Not, _) if is_js_truthy(inner_f) => BoolLit(false)
-        (Not, _) if is_js_falsy(inner_f) => BoolLit(true)
+        (Not, _) if is_js_truthy(inner_f) =>
+          keep_effects(inner_f, BoolLit(false))
+        (Not, _) if is_js_falsy(inner_f) => keep_effects(inner_f, BoolLit(true))
         // `!(a === b)` → `a !== b` etc. (saves 2 bytes vs `!(...)`).
         //
         // The same rewrite lives in `peephole.mbt`, and it was gated
@@ -1265,9 +1286,9 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
     Cond(c, t, e) => {
       let cf = fold_expr(c)
       if is_js_truthy(cf) {
-        fold_expr(t)
+        keep_effects(cf, fold_expr(t))
       } else if is_js_falsy(cf) {
-        fold_expr(e)
+        keep_effects(cf, fold_expr(e))
       } else {
         // `!!x ? a : b` → `x ? a : b` — double negation doesn't change
         // truthiness; stripping it saves 2 bytes and clarifies intent.
@@ -1425,9 +1446,9 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
             }
           "Boolean" =>
             if is_js_truthy(arg) {
-              BoolLit(true)
+              keep_effects(arg, BoolLit(true))
             } else if is_js_falsy(arg) {
-              BoolLit(false)
+              keep_effects(arg, BoolLit(false))
             } else {
               // `Boolean(x)` → `!!x` for non-literal args.
               // `!!` is always shorter (3 bytes vs 9+ for "Boolean(…)")
@@ -3313,10 +3334,11 @@ fn fold_binop(
     // `&&`/`||` never evaluates the right side when the left side
     // is already determinate — so `r` is unreachable regardless of
     // its purity, and the fold is always safe.
+    // The two arms that YIELD `l` keep its effects already.
     (And, _, _) if is_js_falsy(l) => l
-    (And, _, _) if is_js_truthy(l) => r
+    (And, _, _) if is_js_truthy(l) => keep_effects(l, r)
     (Or, _, _) if is_js_truthy(l) => l
-    (Or, _, _) if is_js_falsy(l) => r
+    (Or, _, _) if is_js_falsy(l) => keep_effects(l, r)
     // `x && x` → `x` and `x || x` → `x` for same-var operands.
     // Both operators always evaluate to `x` regardless of its value.
     (And, Var(ln), Var(rn)) | (Or, Var(ln), Var(rn)) if ln == rn => Var(ln)
@@ -3699,6 +3721,32 @@ fn strip_double_negation(expr : @ast.TsExpr) -> @ast.TsExpr {
   match expr {
     UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, inner)) => inner
     _ => expr
+  }
+}
+
+///|
+/// Replace an expression whose VALUE is statically known with `value`,
+/// keeping whatever the original still has to evaluate.
+///
+/// `is_js_truthy` / `is_js_falsy` answer "what does this coerce to",
+/// and every caller used the answer as "this may be discarded". Those
+/// are different questions for exactly two shapes, and both occur:
+///
+///   * an object or array literal is truthy WHATEVER is inside it, and
+///     the contents still run — `{ g: f() } ? a : b` must call `f`;
+///   * `void EXPR` is falsy whatever `EXPR` is — `void f() || a` must
+///     call `f`.
+///
+/// `fold_stmt_into`'s `If` arm already had this guard, with a comment
+/// crediting the fuzzer's effect trace for finding it. Six sibling
+/// sites did not: the ternary, `!`, `&&`, `||`, the dead-loop drops,
+/// and `Boolean(…)`. A program exercising all seven lost seven of its
+/// eight effects. One rule, written once, applied at each.
+fn keep_effects(original : @ast.TsExpr, value : @ast.TsExpr) -> @ast.TsExpr {
+  if is_pure_value(original) {
+    value
+  } else {
+    Seq(original, value)
   }
 }
 

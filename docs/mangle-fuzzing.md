@@ -147,9 +147,199 @@ property ではありません。mangle 側が正しく、壊れているのは*
 | --- | --- |
 | reference == baseline | `mangle` —— rename が間違っている |
 | reference == candidate | `lowering` —— 共有 pipeline が間違っていて、mangle が偶然直した |
+| baseline == candidate | `lowering` —— 共有 pipeline が間違っていて、mangle は何も変えていない |
 | どちらでもない | `both` |
 
-## 見つかったもの
+## 3 本目の脚を、**一致したとき**にも使う
+
+上の版にはまだ穴があり、そちらの方が大きかった。**baseline と
+candidate が一致したら pass にしていた**のです。
+
+```js
+if (outcome.verdict === "equivalent") {
+  summary.checked += 1;
+  continue;              // ← reference に訊かない
+}
+```
+
+2 つの mtsc 出力が一致することは**consistency であって correctness では
+ない**。mangle より前に壊れている pass は両 leg で同じだけ壊れるので、
+差が出ません。仮定の話ではなく、これが実際に起きていました:
+
+```ts
+const enum E { M = 3 }
+function f() { const E = { M: 77 }; return E.M; }
+```
+
+`f()` は `--bundle` 単体で 3 を返します（正解は 77）。mangle しても
+同じ 3 なので、**全 seed が "equivalent" と報告します**。この形の bug
+は 5 つの pass にあり（[minify-patterns.md](./minify-patterns.md) の
+表）、どれも数千 seed を通り抜けて、最後は pass の source を読んで
+見つかりました。
+
+いまは reference が**全プログラム**の oracle です。batch 単位で 1
+child process にまとめてあり、`--no-reference` で切れます。
+
+### leg が答えられていない数を報告する
+
+答えない leg は、何も見つけない leg と見分けがつきません。それは
+まさにこの leg が捕まえるための bug なので、ここで再現するのは
+みっともない。要約行が参加率を出します:
+
+```
+80 compared, 0 skipped, 0 mismatch(es), … ; 80 checked against the original
+```
+
+最初に走らせたときは `68 checked against the original (12 unusable)`
+で、理由は 1 つでした:
+
+```
+[no-oracle] 12x original threw SyntaxError: TypeScript enum is not supported in strip-only mode
+```
+
+Node の type stripping は既定が strip-only mode で、`enum` を拒否します。
+つまり **`const enum` ——「最適化 flag 無しで壊れる」唯一の形、いちばん
+見張る価値のある形 —— だけが裁定できていなかった**。
+`--experimental-transform-types` に切り替えて 80/80 になりました。実装は
+Node のものなので leg の独立性は変わりません。
+
+同じ穴が corpus harness にもありました。`case43-table-shadowing` は
+「5 pass を独立 reference と比べる」case として足したのに、`const enum`
+のせいで reference が `unavailable` になり、自分の 2 出力を比べる形に
+落ちていました。`pass` と表示され、note に unavailable と書いてある
+状態です。
+
+### 検出力を測る
+
+「leg を足した」と「leg が働く」は別です。narrowing の修正を 1 行
+戻して、campaign が捕まえるかを確認しました。
+
+| 戻した pass | 結果 |
+| --- | --- |
+| `as_const_inline` | seed 14 で `lowering`、214 → **2 node** に縮小 |
+| `const_enum_inline` | seed 11 で `lowering`、`s1Shadowed()` が 3、正解 77 |
+
+artifact は手で書いた case43 とほぼ同じものが、seed から自動で出てきます:
+
+```ts
+const s0K = 5;
+function s0Shadowed() {
+  const s0K = 9;
+  return s0K * 2;
+}
+function s0Direct() { return s0K * 2; }
+console.log([s0Shadowed()]);
+```
+
+1 回目の測定では shrink が `214 -> 214 nodes (0 accepted)` でした。
+shrinker の oracle は `attribute()` の `kind` が一致することを要求し、
+`attribute()` はこの形を `both` に分類していたためです（reference が
+baseline とも candidate とも違う）。`baseline == candidate` なら
+`lowering` ——「rename ではなく共有 pipeline」——と分類するようにして、
+2 node まで落ちました。**分類が粗いと縮小が止まる**、という繋がりは
+事前には見えていませんでした。
+
+## 名前解決を狙う文法
+
+generator は property mangler の証明義務に向いていて、名前解決には
+向いていませんでした。名前は `freshVar()` が `v0`, `v1`, … と一意に
+配るので、**入れ子 scope で同じ名前が 2 回束縛されることが一度も
+ありません**。上の 5 pass に届く形も 1 つもありませんでした。
+
+`shadowGroup` が 6 形（`as const` の array / object、scalar `const`、
+`const enum`、型 guard、literal-union dispatcher）を出し、それぞれに:
+
+- pass が書き換えたい外側の宣言
+- `shadowed` —— 名前を再束縛する scope からの read。**内側**を読まな
+  ければならない
+- `direct` —— shadow しない read。**今も最適化されなければならない**
+  （でないと「table を narrow する」と「pass を止める」が外から
+  区別できません）
+
+shadow の形は 4 通りを回します: 内側 `const`、**parameter**（block が
+宣言しないので block 単位の検査では見えない）、`catch` binding、loop
+変数。
+
+読み手は observe / export に入れます。入れないと dead code になって
+treeshake が消し、間違って書き換えるはずの pass に機会が来ません。
+
+6 形は verbatim text の `raw` node で出しています。printer に 6 個の
+arm を足しても得るものが無い（欲しいのは固定の形と fresh な名前だけ）
+一方で、shrinker が raw node の**内側**を縮小できないという代償が
+あります。だから形ごとに別の raw decl にしてあり、6 個のうち 5 個を
+落として問題の 1 個だけ残す縮小はできます。
+
+## 新しい oracle が実際に見つけたもの
+
+seed 0..399 を回して **4 件**。どれも `lowering`（共有 pipeline 側）で、
+mangle は無関係です。2 件を追いました。
+
+### 1. `delete obj['q']` が `delete 1` になる
+
+artifact（自動縮小、15 node）:
+
+```ts
+const obj: Record<string, number> = { p: 0, q: 1 };
+delete obj['q'];
+export const viaIndex = obj['q'];
+export const viaDot = obj.q;
+```
+
+正解は `undefined undefined`、`--bundle --fold` の出力は `1 1`。
+配列でも同じで `delete arr2[1]` が `delete 20` になります。
+
+`as_const_inline` の disqualification scan には
+`UnaryOp(_, inner) => scan_expr_for_unsafe_uses(inner, …)` という
+汎用 arm があり、`delete obj['q']` の operand に降りると
+`IndexAccess(Var(obj), StringLit("q"))` を**安全な keyed read**として
+読みます。だから candidate は生き残り、read は古い値に畳まれ、
+**delete 自身も literal に書き換えられて no-op になる**。
+
+`delete` の operand は read ではなく mutation です。assignment の
+receiver と同じく `flag_all_candidate_refs` で潰し、rewriter 側でも
+`delete` の operand には触らないようにしました（同じ扉の 2 つ目の鍵。
+失敗の形が crash ではなく「黙って実行されない mutation」なので）。
+
+### 2. 値が分かっている条件が、実行ごと捨てられる
+
+fuzzer の報告は trace 1 個の差でしたが、掘ると **7 箇所**ありました。
+
+`is_js_truthy` / `is_js_falsy` は「boolean 文脈で何に coerce するか」
+に答えます。呼び出し側はそれを「**捨てて良い**」として使っていました。
+この 2 つが食い違う形がちょうど 2 つあり、どちらも実在します:
+
+- object / array literal は**中身が何であれ**truthy。中身は実行される。
+  `{ g: f() } ? a : b` は `f` を呼ぶ。
+- `void EXPR` は `EXPR` が何であれ falsy。`void f() || a` は `f` を呼ぶ。
+
+8 つの site を並べたプログラムで、**8 個の効果のうち 7 個が消えました**
+（`--bundle --fold`、mangle 無し）。
+
+```
+truth              [1,2,3,4,5,6,7,70,8]
+--bundle --fold    [7,70]
+```
+
+生き残った 1 つが `if` 文です。そして `fold_stmt_into` の `If` arm には
+**すでにこの guard が入っていて、コメントに「fuzzer の効果トレースが
+見つけた」と書いてありました**。同じ規則が必要な 6 箇所——ternary、
+`!`、`&&`、`||`、`while` / `do…while` / `for` の dead-loop 削除、
+`Boolean(…)`——には入っていなかった。この repo で**7 回目**の
+「同じ規則を複数箇所に書いて、1 箇所だけ直した」です。
+
+`keep_effects(original, value)` を 1 つ書いて全 site から呼ぶ形に
+しました。`do…while` は条件が body の**後**に走るので、効果の位置も
+そこに合わせています。
+
+corpus case にはできませんでした。**mtsc の checker 自身が、condition
+/ logical operand / unary 位置の literal を拒否します**（"this kind of
+expression is always truthy"）。つまりこの bug は型検査を切った入力
+——published `.js`、`verify-real-world-minify` が使う経路——でしか
+届きません。regression test は `fold_wbtest.mbt` に置き、「純粋な条件は
+今も畳まれる」対を必ず付けてあります（でないと修正が「fold を止める」
+形になっていないか分かりません）。
+
+## それ以前に見つかっていたもの
 
 seed 0..299、両 shape、404 comparison。**mangle の偽陽性は 1 件**です。
 残りは lowering / 圧縮側のバグで、mangle は無関係でした。
