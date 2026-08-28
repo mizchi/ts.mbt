@@ -106,6 +106,92 @@ pub fn build_enum_inline_table(
 }
 
 ///|
+/// Scope narrowing for a table whose keys are DOTTED PATHS.
+///
+/// `narrow_trivial_fns` matches whole keys, but the entries here are
+/// `"E.M"` and `"ns.E.M"` — only the first segment is a name the scope
+/// chain resolves. So a scope that re-binds `E` has to drop every
+/// `E.*` entry:
+///
+///     const enum E { A = 1 }
+///     function f() { const E = { A: 99 }; return E.A; }
+///     function g(E: { A: number }) { return E.A; }
+///
+/// `f()` returned 1 instead of 99 and `g({ A: 7 })` returned 1 instead
+/// of 7 — under plain `--bundle`, with no optimization flag at all.
+/// Wrong values, not crashes.
+fn narrow_const_enum_table(
+  tbl : Map[String, @ast.TsExpr],
+  shadowed : Array[String],
+) -> Map[String, @ast.TsExpr] {
+  if shadowed.is_empty() || tbl.is_empty() {
+    return tbl
+  }
+  let out : Map[String, @ast.TsExpr] = {}
+  let mut dropped = false
+  for k, v in tbl {
+    let head = match k.find(".") {
+      Some(i) => k.substring(start=0, end=i)
+      None => k
+    }
+    if shadowed.contains(head) {
+      dropped = true
+      continue
+    }
+    out[k] = v
+  }
+  if dropped {
+    out
+  } else {
+    tbl
+  }
+}
+
+///|
+fn narrow_const_enums_for_block(
+  tbl : Map[String, @ast.TsExpr],
+  block : @ast.TsBlock,
+) -> Map[String, @ast.TsExpr] {
+  let names : Array[String] = []
+  collect_block_bound_names(block, names)
+  narrow_const_enum_table(tbl, names)
+}
+
+///|
+fn narrow_const_enums_for_params(
+  tbl : Map[String, @ast.TsExpr],
+  params : Array[@ast.TsParam],
+) -> Map[String, @ast.TsExpr] {
+  let names : Array[String] = []
+  collect_param_bound_names(params, names)
+  narrow_const_enum_table(tbl, names)
+}
+
+///|
+fn narrow_const_enums_for_named_params(
+  tbl : Map[String, @ast.TsExpr],
+  params : Array[(String, @ast.TsType)],
+) -> Map[String, @ast.TsExpr] {
+  let names : Array[String] = []
+  for pr in params {
+    if pr.0 != "" {
+      names.push(pr.0)
+    }
+  }
+  narrow_const_enum_table(tbl, names)
+}
+
+///|
+fn narrow_const_enums_for_binding(
+  tbl : Map[String, @ast.TsExpr],
+  b : @ast.TsBinding,
+) -> Map[String, @ast.TsExpr] {
+  let names : Array[String] = []
+  collect_binding_bound_names(b, names)
+  narrow_const_enum_table(tbl, names)
+}
+
+///|
 /// Walk `block` substituting every `PropAccess(Var(E), M)` and
 /// `IndexAccess(Var(E), StringLit(M))` use whose `E.M` lookup hits
 /// the const-enum table. Returns a fresh block.
@@ -175,29 +261,38 @@ fn inline_const_enums_stmt(
         inline_const_enums_expr(c, table),
         inline_const_enums_block(body, table),
       )
-    For(init, cond, update, body) =>
+    For(init, cond, update, body) => {
+      let inner = match init {
+        Some(s) => {
+          let names : Array[String] = []
+          collect_stmt_bound_names(s, names)
+          narrow_const_enum_table(table, names)
+        }
+        None => table
+      }
       For(
         match init {
           Some(s) => Some(inline_const_enums_stmt(s, table))
           None => None
         },
         match cond {
-          Some(e) => Some(inline_const_enums_expr(e, table))
+          Some(e) => Some(inline_const_enums_expr(e, inner))
           None => None
         },
         match update {
-          Some(s) => Some(inline_const_enums_stmt(s, table))
+          Some(s) => Some(inline_const_enums_stmt(s, inner))
           None => None
         },
-        inline_const_enums_block(body, table),
+        inline_const_enums_block(body, inner),
       )
+    }
     ForOf(k, b, t, iter, body) =>
       ForOf(
         k,
         b,
         t,
         inline_const_enums_expr(iter, table),
-        inline_const_enums_block(body, table),
+        inline_const_enums_block(body, narrow_const_enums_for_binding(table, b)),
       )
     ForAwaitOf(k, b, t, iter, body) =>
       ForAwaitOf(
@@ -205,7 +300,7 @@ fn inline_const_enums_stmt(
         b,
         t,
         inline_const_enums_expr(iter, table),
-        inline_const_enums_block(body, table),
+        inline_const_enums_block(body, narrow_const_enums_for_binding(table, b)),
       )
     ForIn(k, b, t, iter, body) =>
       ForIn(
@@ -213,7 +308,7 @@ fn inline_const_enums_stmt(
         b,
         t,
         inline_const_enums_expr(iter, table),
-        inline_const_enums_block(body, table),
+        inline_const_enums_block(body, narrow_const_enums_for_binding(table, b)),
       )
     Switch(e, cases) => {
       let new_cases : Array[@ast.TsSwitchCase] = []
@@ -228,12 +323,16 @@ fn inline_const_enums_stmt(
       }
       Switch(inline_const_enums_expr(e, table), new_cases)
     }
-    Try(b, bnd, cb, fb) =>
+    Try(b, bnd, cb, fb) => {
+      let catch_table = match bnd {
+        Some(binding) => narrow_const_enums_for_binding(table, binding)
+        None => table
+      }
       Try(
         inline_const_enums_block(b, table),
         bnd,
         match cb {
-          Some(blk) => Some(inline_const_enums_block(blk, table))
+          Some(blk) => Some(inline_const_enums_block(blk, catch_table))
           None => None
         },
         match fb {
@@ -241,17 +340,26 @@ fn inline_const_enums_stmt(
           None => None
         },
       )
+    }
     Label(name, inner) => Label(name, inline_const_enums_stmt(inner, table))
     Block(b) => Block(inline_const_enums_block(b, table))
     NativeClassStmt(decl, ctor) => {
       let new_ctor = match ctor {
-        Some(f) => Some({ ..f, body: inline_const_enums_block(f.body, table) })
+        Some(f) =>
+          Some({
+            ..f,
+            body: inline_const_enums_block(
+              f.body,
+              narrow_const_enums_for_params(table, f.params),
+            ),
+          })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
       for m in decl.methods {
+        let method_table = narrow_const_enums_for_named_params(table, m.params)
         let new_body = match m.body {
-          Some(b) => Some(inline_const_enums_block(b, table))
+          Some(b) => Some(inline_const_enums_block(b, method_table))
           None => None
         }
         new_methods.push({ ..m, body: new_body })
@@ -282,6 +390,9 @@ fn inline_const_enums_block(
   block : @ast.TsBlock,
   table : Map[String, @ast.TsExpr],
 ) -> @ast.TsBlock {
+  // Every nested block is a scope; the top-level entry
+  // (`inline_const_enums`) walks statements directly.
+  let table = narrow_const_enums_for_block(table, block)
   let stmts : Array[@ast.TsStmt] = []
   for s in block.stmts {
     stmts.push(inline_const_enums_stmt(s, table))
@@ -427,6 +538,9 @@ fn inline_const_enums_expr(
         inline_const_enums_expr(v, table),
       )
     ArrowFunc(params, ret, body, is_async) => {
+      // A parameter named after the enum is the case no block-level
+      // check can see: `function g(E: { A: number }) { return E.A }`.
+      let table = narrow_const_enums_for_params(table, params)
       let new_body = match body {
         ArrowExpr(e) =>
           @ast.TsArrowBody::ArrowExpr(inline_const_enums_expr(e, table))
@@ -436,6 +550,12 @@ fn inline_const_enums_expr(
       ArrowFunc(params, ret, new_body, is_async)
     }
     FuncExpr(f) => {
+      let table = narrow_const_enums_for_params(table, f.params)
+      let table = if f.name == "" {
+        table
+      } else {
+        narrow_const_enum_table(table, [f.name])
+      }
       let new_body = inline_const_enums_block(f.body, table)
       FuncExpr({ ..f, body: new_body })
     }

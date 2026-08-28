@@ -1308,6 +1308,89 @@ test "as-const: an inner binding of the same name is not the candidate" {
 }
 
 ///|
+test "name tables: a parameter of the same name is not the table entry" {
+  // The same bug in four more passes, found by auditing every table
+  // that resolves a NAME after `as_const_inline` turned one up. A
+  // parameter is the sharpest form: no block declares it, so a
+  // narrowing that only looks at block bindings cannot see it.
+  //
+  // `fixtures/mangle-safety/case43-table-shadowing` runs all of these
+  // against Node with an independent reference leg; this pins the emit
+  // so a regression names the pass.
+  let src =
+    #|const enum Arch { X64 = 1 }
+    #|function isNeg(v: number): v is number { return !v; }
+    #|function dispatch(k: "a" | "b"): number { switch (k) { case "a": return 1; case "b": return 2; } }
+    #|export function archParam(Arch: { X64: number }) { return Arch.X64; }
+    #|export function predParam(isNeg: (n: number) => boolean, v: number) { return isNeg(v); }
+    #|export function swParam(dispatch: (k: "a") => number) { return dispatch("a"); }
+    #|export const archOuter = Arch.X64;
+    #|export const predOuter = isNeg(0);
+    #|export const swOuter = dispatch("b");
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+    .with_treeshake(true)
+    .with_fold(true)
+    .with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // Each parameter read must still be a read of the parameter.
+      assert_true(
+        out.js.contains("Arch.X64") || out.js.contains("Arch[\"X64\"]"),
+        msg="const-enum table substituted over a parameter named Arch: \{out.js}",
+      )
+      assert_true(
+        out.js.contains("isNeg(v)"),
+        msg="predicate table substituted over a parameter named isNeg: \{out.js}",
+      )
+      assert_true(
+        out.js.contains("dispatch(\"a\")"),
+        msg="switch-fold table substituted over a parameter named dispatch: \{out.js}",
+      )
+      // And the unshadowed reads must still be optimized, or the fix
+      // would just be "switch the passes off".
+      assert_false(
+        out.js.contains("Arch.X64;") || out.js.contains("=Arch.X64"),
+        msg="the top-level const-enum read stopped inlining: \{out.js}",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "type-fold: an inner binding with no useful type hides the outer one" {
+  // `TypeScope` already had `hide` for exactly this, and the parameter
+  // path used it; the DECLARATION path did nothing when the type was
+  // not useful, so the outer annotation stayed visible and
+  // `typeof s === "string"` folded to `!0` on the parameter's type.
+  let src =
+    #|export function f(s: string) {
+    #|  { const s = 5 as unknown; return typeof s === "string"; }
+    #|}
+    #|export function g(s: string) { return typeof s === "string"; }
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+    .with_treeshake(true)
+    .with_fold(true)
+    .with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // `f` must keep the runtime check; `g` may fold it away.
+      assert_true(
+        out.js.contains("typeof"),
+        msg="folded the shadowed check on the outer parameter's type: \{out.js}",
+      )
+      assert_true(
+        out.js.contains("return!0") || out.js.contains("return !0"),
+        msg="the unshadowed check stopped folding: \{out.js}",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "as-const: literal object property read inlines to the value" {
   let files = vfs([
     (

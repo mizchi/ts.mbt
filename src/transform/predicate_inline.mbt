@@ -43,6 +43,74 @@ pub(all) struct PredicateTable {
 }
 
 ///|
+/// Scope narrowing, without which the table means the wrong thing the
+/// moment the walk enters a scope that re-binds one of its names.
+///
+///     function isNeg(v: number): v is number { return !v; }
+///     function q(v: number) {
+///       function isNeg(x: number) { return x === 7; }
+///       return isNeg(v);
+///     }
+///
+/// `q(7)` compiled to `!v` — the OUTER body, substituted over a call
+/// that resolves to the local. A wrong value, not a crash. Same for a
+/// parameter named `isNeg`, which no block declares and so no
+/// block-level check can see.
+///
+/// The helpers are shared with every other name-keyed table; the
+/// reasoning is at the top of `call_inline.mbt`.
+fn PredicateTable::narrow(
+  self : PredicateTable,
+  names : Array[String],
+) -> PredicateTable {
+  { entries: narrow_trivial_fns(self.entries, names) }
+}
+
+///|
+fn PredicateTable::narrow_block(
+  self : PredicateTable,
+  block : @ast.TsBlock,
+) -> PredicateTable {
+  let names : Array[String] = []
+  collect_block_bound_names(block, names)
+  self.narrow(names)
+}
+
+///|
+fn PredicateTable::narrow_params(
+  self : PredicateTable,
+  params : Array[@ast.TsParam],
+) -> PredicateTable {
+  let names : Array[String] = []
+  collect_param_bound_names(params, names)
+  self.narrow(names)
+}
+
+///|
+fn PredicateTable::narrow_named_params(
+  self : PredicateTable,
+  params : Array[(String, @ast.TsType)],
+) -> PredicateTable {
+  let names : Array[String] = []
+  for pr in params {
+    if pr.0 != "" {
+      names.push(pr.0)
+    }
+  }
+  self.narrow(names)
+}
+
+///|
+fn PredicateTable::narrow_binding(
+  self : PredicateTable,
+  b : @ast.TsBinding,
+) -> PredicateTable {
+  let names : Array[String] = []
+  collect_binding_bound_names(b, names)
+  self.narrow(names)
+}
+
+///|
 pub(all) struct PredicateEntry {
   param_name : String
   body_expr : @ast.TsExpr
@@ -485,29 +553,38 @@ fn inline_predicates_stmt(
         inline_predicates_expr(c, table),
         inline_predicates_block(body, table),
       )
-    For(init, cond, update, body) =>
+    For(init, cond, update, body) => {
+      let inner = match init {
+        Some(s) => {
+          let names : Array[String] = []
+          collect_stmt_bound_names(s, names)
+          table.narrow(names)
+        }
+        None => table
+      }
       For(
         match init {
           Some(s) => Some(inline_predicates_stmt(s, table))
           None => None
         },
         match cond {
-          Some(e) => Some(inline_predicates_expr(e, table))
+          Some(e) => Some(inline_predicates_expr(e, inner))
           None => None
         },
         match update {
-          Some(s) => Some(inline_predicates_stmt(s, table))
+          Some(s) => Some(inline_predicates_stmt(s, inner))
           None => None
         },
-        inline_predicates_block(body, table),
+        inline_predicates_block(body, inner),
       )
+    }
     ForOf(k, b, t, iter, body) =>
       ForOf(
         k,
         b,
         t,
         inline_predicates_expr(iter, table),
-        inline_predicates_block(body, table),
+        inline_predicates_block(body, table.narrow_binding(b)),
       )
     ForAwaitOf(k, b, t, iter, body) =>
       ForAwaitOf(
@@ -515,7 +592,7 @@ fn inline_predicates_stmt(
         b,
         t,
         inline_predicates_expr(iter, table),
-        inline_predicates_block(body, table),
+        inline_predicates_block(body, table.narrow_binding(b)),
       )
     ForIn(k, b, t, iter, body) =>
       ForIn(
@@ -523,7 +600,7 @@ fn inline_predicates_stmt(
         b,
         t,
         inline_predicates_expr(iter, table),
-        inline_predicates_block(body, table),
+        inline_predicates_block(body, table.narrow_binding(b)),
       )
     Switch(e, cases) => {
       let new_cases : Array[@ast.TsSwitchCase] = []
@@ -538,12 +615,16 @@ fn inline_predicates_stmt(
       }
       Switch(inline_predicates_expr(e, table), new_cases)
     }
-    Try(b, bnd, cb, fb) =>
+    Try(b, bnd, cb, fb) => {
+      let catch_table = match bnd {
+        Some(binding) => table.narrow_binding(binding)
+        None => table
+      }
       Try(
         inline_predicates_block(b, table),
         bnd,
         match cb {
-          Some(blk) => Some(inline_predicates_block(blk, table))
+          Some(blk) => Some(inline_predicates_block(blk, catch_table))
           None => None
         },
         match fb {
@@ -551,17 +632,23 @@ fn inline_predicates_stmt(
           None => None
         },
       )
+    }
     Label(name, inner) => Label(name, inline_predicates_stmt(inner, table))
     Block(b) => Block(inline_predicates_block(b, table))
     NativeClassStmt(decl, ctor) => {
       let new_ctor = match ctor {
-        Some(f) => Some({ ..f, body: inline_predicates_block(f.body, table) })
+        Some(f) =>
+          Some({
+            ..f,
+            body: inline_predicates_block(f.body, table.narrow_params(f.params)),
+          })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
       for m in decl.methods {
+        let method_table = table.narrow_named_params(m.params)
         let new_body = match m.body {
-          Some(b) => Some(inline_predicates_block(b, table))
+          Some(b) => Some(inline_predicates_block(b, method_table))
           None => None
         }
         new_methods.push({ ..m, body: new_body })
@@ -592,6 +679,10 @@ fn inline_predicates_block(
   block : @ast.TsBlock,
   table : PredicateTable,
 ) -> @ast.TsBlock {
+  // Every nested block is a scope. The top-level entry point walks
+  // statements directly, so the candidates' own declarations are not
+  // narrowed away.
+  let table = table.narrow_block(block)
   let stmts : Array[@ast.TsStmt] = []
   for s in block.stmts {
     stmts.push(inline_predicates_stmt(s, table))
@@ -744,6 +835,9 @@ fn inline_predicates_expr(
         inline_predicates_expr(v, table),
       )
     ArrowFunc(params, ret, body, is_async) => {
+      // A parameter shadowing a predicate is the case no block-level
+      // check can see: `function f(isNeg) { return isNeg(v) }`.
+      let table = table.narrow_params(params)
       let new_body = match body {
         ArrowExpr(e) =>
           @ast.TsArrowBody::ArrowExpr(inline_predicates_expr(e, table))
@@ -753,6 +847,9 @@ fn inline_predicates_expr(
       ArrowFunc(params, ret, new_body, is_async)
     }
     FuncExpr(f) => {
+      let table = table.narrow_params(f.params)
+      // A named function expression binds its own name in the body.
+      let table = if f.name == "" { table } else { table.narrow([f.name]) }
       let new_body = inline_predicates_block(f.body, table)
       FuncExpr({ ..f, body: new_body })
     }

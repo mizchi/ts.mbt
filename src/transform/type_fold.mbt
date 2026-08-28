@@ -469,7 +469,20 @@ fn type_fold_stmt(
             infer_type_from_literal(new_init)
           }
           match effective_type {
-            @ast.TsType::Any => ()
+            // No useful type for this binding — but it IS a binding,
+            // so the name must read as unknown from here on rather
+            // than falling through to whatever an OUTER binding of the
+            // same name was annotated as. `hide` is what the parameter
+            // path already does (see `TypeScope`'s comment); the
+            // declaration path let the outer type stay visible, so
+            //
+            //     function f(s: string) {
+            //       { const s = 5 as unknown; return typeof s === "string"; }
+            //     }
+            //
+            // folded to `!0` on the strength of the PARAMETER's type.
+            // A wrong value, not a crash.
+            @ast.TsType::Any => scope.hide(name)
             ty => scope.set(name, ty)
           }
         }

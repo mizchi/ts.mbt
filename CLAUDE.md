@@ -226,7 +226,19 @@ product surfaces now.
   `--verify` cannot see this class of bug — every name still resolves —
   which is the argument for the execution-differential harnesses, and
   the argument against believing the corpus covers a pass just because
-  the pass has tests.
+  the pass has tests. Finding one was the reason to audit every pass
+  that resolves a name against a table, and **four more had it**:
+  `const_enum_inline` (wrong under `--bundle` alone, with no
+  optimization flag), `predicate_inline`, `switch_fold`, and
+  `type_fold`. All five produce a wrong value, none produces a crash
+  or a free variable, and `--verify` detects none of them.
+  `const_enum_inline`'s keys are dotted paths (`"E.M"`), so its
+  narrowing matches the first segment; `type_fold` already had a
+  layered `TypeScope` with a `hide` its parameter path called and its
+  declaration path did not, so an inner `const` with no useful type
+  left the outer annotation visible. `fixtures/mangle-safety/case43-table-shadowing`
+  runs all five against Node, pairing each shadowed read with an
+  unshadowed one so the fix cannot be "switch the pass off".
 - `src/bridge` consumes `src/checker` for every type-shape decision and runs
   `@checker.check_module` on the synthesized output as a sanity gate. It also
   keeps domain-specific specialization for Node FS / React / Hono / crypto /

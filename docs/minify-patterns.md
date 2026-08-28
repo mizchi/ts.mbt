@@ -672,6 +672,35 @@ hono の app bundle はこれら全部を直しても通りません（`req[cach
   「その pass には test があるから corpus が覆っている」と考えては
   いけない理由です。見つかった経緯も記録しておく価値があります:
   terser の rule を移植するために walker を読んだから、です。
+- **同じ形が他に 4 つありました。** 1 件見つかったので、**名前で
+  table を引く pass を全部 audit しました**。narrowing を持っていたのは
+  `call_inline.mbt` だけです。
+
+  | pass | table の key | 壊れる例 | 必要な flag |
+  | --- | --- | --- | --- |
+  | `as_const_inline` | binding 名 | 内側の `const S` / parameter `S` | `--bundle --fold` |
+  | `const_enum_inline` | `"E.M"` / `"ns.E.M"` | 内側の `const E` / parameter `E` | **`--bundle` のみ** |
+  | `predicate_inline` | 述語の名前 | 局所 `function isNeg` / parameter `isNeg` | `--fold --minify` |
+  | `switch_fold` | dispatcher の名前 | parameter `dispatch` | `--fold --minify` |
+  | `type_fold` | binding 名 → 型 | 内側の `const s`（有用な型が無い場合） | `--fold --minify` |
+
+  5 件すべて**値が違う**結果になり、crash も free variable も出ません。
+  `--verify` は 1 件も検出できません。
+
+  `const_enum_inline` の table は key が dotted path なので、narrowing
+  は**先頭 segment**で判定します（`E` が shadow されたら `E.*` を全部
+  落とす）。`type_fold` は `TypeScope` という層構造をすでに持っていて、
+  parameter 側は `hide` を呼んでいました —— **宣言側だけが呼んでいな
+  かった**ので、有用な型が無い内側の宣言に対して外側の annotation が
+  見え続けていました。「同じ規則を 2 箇所に書いて片方だけ直す」の、
+  この repo で 6 回目です。
+
+  corpus case は
+  [`fixtures/mangle-safety/case43-table-shadowing`](../fixtures/mangle-safety)
+  で、5 pass 分を 1 file に入れて Node の独立 reference leg と比べます。
+  各 pass について「shadow された read は内側を使う」と「shadow されて
+  いない read は今も最適化される」を対にしてあるので、修正が
+  「pass を止める」形になっていないことも検査します。
 - **`JSON.stringify` を effect-free 扱いにしています。** `toJSON` と
   getter に到達するので厳密には getter の純粋性に依存します。purity
   pass は impure getter を warning として別途報告しており、実運用の

@@ -36,6 +36,68 @@ pub(all) struct SwitchFoldTable {
 }
 
 ///|
+/// Scope narrowing. The table is keyed by the dispatcher's NAME, so a
+/// scope that re-binds that name means the call resolves somewhere else
+/// and the specialization is wrong:
+///
+///     function dispatch(k: "a" | "b") { switch (k) { … } }
+///     function sw(dispatch: (k: "a") => number) { return dispatch("a"); }
+///
+/// `sw(() => 42)` returned 1 — the outer dispatcher's `case "a"` arm,
+/// substituted over a call to the PARAMETER. A wrong value, not a
+/// crash. The helpers are shared; see the top of `call_inline.mbt`.
+fn SwitchFoldTable::narrow(
+  self : SwitchFoldTable,
+  names : Array[String],
+) -> SwitchFoldTable {
+  { entries: narrow_trivial_fns(self.entries, names) }
+}
+
+///|
+fn SwitchFoldTable::narrow_block(
+  self : SwitchFoldTable,
+  block : @ast.TsBlock,
+) -> SwitchFoldTable {
+  let names : Array[String] = []
+  collect_block_bound_names(block, names)
+  self.narrow(names)
+}
+
+///|
+fn SwitchFoldTable::narrow_params(
+  self : SwitchFoldTable,
+  params : Array[@ast.TsParam],
+) -> SwitchFoldTable {
+  let names : Array[String] = []
+  collect_param_bound_names(params, names)
+  self.narrow(names)
+}
+
+///|
+fn SwitchFoldTable::narrow_named_params(
+  self : SwitchFoldTable,
+  params : Array[(String, @ast.TsType)],
+) -> SwitchFoldTable {
+  let names : Array[String] = []
+  for pr in params {
+    if pr.0 != "" {
+      names.push(pr.0)
+    }
+  }
+  self.narrow(names)
+}
+
+///|
+fn SwitchFoldTable::narrow_binding(
+  self : SwitchFoldTable,
+  b : @ast.TsBinding,
+) -> SwitchFoldTable {
+  let names : Array[String] = []
+  collect_binding_bound_names(b, names)
+  self.narrow(names)
+}
+
+///|
 pub(all) struct SwitchFoldEntry {
   // Parameter names in declaration order.
   param_names : Array[String]
@@ -204,6 +266,9 @@ fn switch_fold_block(
   block : @ast.TsBlock,
   table : SwitchFoldTable,
 ) -> @ast.TsBlock {
+  // Every nested block is a scope; the top-level entry walks statements
+  // directly so the dispatchers' own declarations survive.
+  let table = table.narrow_block(block)
   let stmts : Array[@ast.TsStmt] = []
   for s in block.stmts {
     stmts.push(switch_fold_stmt(s, table))
@@ -247,29 +312,38 @@ fn switch_fold_stmt(stmt : @ast.TsStmt, table : SwitchFoldTable) -> @ast.TsStmt 
       DoWhile(switch_fold_expr(c, table), switch_fold_block(body, table))
     With(c, body) =>
       With(switch_fold_expr(c, table), switch_fold_block(body, table))
-    For(init, cond, update, body) =>
+    For(init, cond, update, body) => {
+      let inner = match init {
+        Some(s) => {
+          let names : Array[String] = []
+          collect_stmt_bound_names(s, names)
+          table.narrow(names)
+        }
+        None => table
+      }
       For(
         match init {
           Some(s) => Some(switch_fold_stmt(s, table))
           None => None
         },
         match cond {
-          Some(e) => Some(switch_fold_expr(e, table))
+          Some(e) => Some(switch_fold_expr(e, inner))
           None => None
         },
         match update {
-          Some(s) => Some(switch_fold_stmt(s, table))
+          Some(s) => Some(switch_fold_stmt(s, inner))
           None => None
         },
-        switch_fold_block(body, table),
+        switch_fold_block(body, inner),
       )
+    }
     ForOf(k, b, t, iter, body) =>
       ForOf(
         k,
         b,
         t,
         switch_fold_expr(iter, table),
-        switch_fold_block(body, table),
+        switch_fold_block(body, table.narrow_binding(b)),
       )
     ForAwaitOf(k, b, t, iter, body) =>
       ForAwaitOf(
@@ -277,7 +351,7 @@ fn switch_fold_stmt(stmt : @ast.TsStmt, table : SwitchFoldTable) -> @ast.TsStmt 
         b,
         t,
         switch_fold_expr(iter, table),
-        switch_fold_block(body, table),
+        switch_fold_block(body, table.narrow_binding(b)),
       )
     ForIn(k, b, t, iter, body) =>
       ForIn(
@@ -285,7 +359,7 @@ fn switch_fold_stmt(stmt : @ast.TsStmt, table : SwitchFoldTable) -> @ast.TsStmt 
         b,
         t,
         switch_fold_expr(iter, table),
-        switch_fold_block(body, table),
+        switch_fold_block(body, table.narrow_binding(b)),
       )
     Switch(e, cases) => {
       let new_cases : Array[@ast.TsSwitchCase] = []
@@ -300,12 +374,16 @@ fn switch_fold_stmt(stmt : @ast.TsStmt, table : SwitchFoldTable) -> @ast.TsStmt 
       }
       Switch(switch_fold_expr(e, table), new_cases)
     }
-    Try(b, bnd, cb, fb) =>
+    Try(b, bnd, cb, fb) => {
+      let catch_table = match bnd {
+        Some(binding) => table.narrow_binding(binding)
+        None => table
+      }
       Try(
         switch_fold_block(b, table),
         bnd,
         match cb {
-          Some(blk) => Some(switch_fold_block(blk, table))
+          Some(blk) => Some(switch_fold_block(blk, catch_table))
           None => None
         },
         match fb {
@@ -313,17 +391,23 @@ fn switch_fold_stmt(stmt : @ast.TsStmt, table : SwitchFoldTable) -> @ast.TsStmt 
           None => None
         },
       )
+    }
     Label(name, inner) => Label(name, switch_fold_stmt(inner, table))
     Block(b) => Block(switch_fold_block(b, table))
     NativeClassStmt(decl, ctor) => {
       let new_ctor = match ctor {
-        Some(f) => Some({ ..f, body: switch_fold_block(f.body, table) })
+        Some(f) =>
+          Some({
+            ..f,
+            body: switch_fold_block(f.body, table.narrow_params(f.params)),
+          })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
       for m in decl.methods {
+        let method_table = table.narrow_named_params(m.params)
         let new_body = match m.body {
-          Some(b) => Some(switch_fold_block(b, table))
+          Some(b) => Some(switch_fold_block(b, method_table))
           None => None
         }
         new_methods.push({ ..m, body: new_body })
@@ -464,6 +548,9 @@ fn switch_fold_expr(expr : @ast.TsExpr, table : SwitchFoldTable) -> @ast.TsExpr 
     ComputedProp(k, v) =>
       ComputedProp(switch_fold_expr(k, table), switch_fold_expr(v, table))
     ArrowFunc(params, ret, body, is_async) => {
+      // A parameter shadowing a dispatcher is the case no block-level
+      // check can see: `function sw(dispatch) { return dispatch("a") }`.
+      let table = table.narrow_params(params)
       let new_body = match body {
         ArrowExpr(e) => @ast.TsArrowBody::ArrowExpr(switch_fold_expr(e, table))
         ArrowBlock(b) =>
@@ -472,6 +559,8 @@ fn switch_fold_expr(expr : @ast.TsExpr, table : SwitchFoldTable) -> @ast.TsExpr 
       ArrowFunc(params, ret, new_body, is_async)
     }
     FuncExpr(f) => {
+      let table = table.narrow_params(f.params)
+      let table = if f.name == "" { table } else { table.narrow([f.name]) }
       let new_body = switch_fold_block(f.body, table)
       FuncExpr({ ..f, body: new_body })
     }
