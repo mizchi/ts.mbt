@@ -1668,21 +1668,18 @@ test "tag-rewrite: discriminated union string tags become integers" {
 /// type-aware corpus it says the same thing for every target: SUPPRESSED
 /// by a computed member read whose key is not provably numeric —
 /// `points[i]`, `elements[index]`, `value[index]`. Probing the shapes
-/// one at a time found exactly one that fails, and it is the most
-/// common array idiom in JavaScript: a CALLBACK parameter carries no
-/// annotation, so `arr.map((v, index) => arr[index])` leaves `index`
-/// unprovable and one such read turns the pass off for the whole
-/// bundle.
+/// one at a time found exactly one that failed, and it was not the one
+/// the shapes suggested: `arr.map((v, index) => arr[index])` failed
+/// because the RECEIVER `pts` is captured by the arrow, and the closure
+/// guard in `container_vars` / `numeric_vars` refused to promote a
+/// captured binding. The guard's premise is a WRITE from a frame the
+/// pass does not follow — and no frame may write a `const`. Exempting
+/// `const` clears every spelling below.
 ///
-/// Every other spelling is already proven: a `for` counter, a `while`
-/// counter, a `for…of` binding, a parameter annotated `number`, an
-/// element of a typed array, a `readonly number[]` receiver.
-///
-/// This test pins the CURRENT behaviour, which is conservative and
-/// therefore correct. When the callback-index inference lands, invert
-/// it rather than deleting it — the point is that the two spellings
-/// disagree.
-test "class-method-dce: a callback index parameter is not provably numeric" {
+/// The `for`-counter spelling was already proven and is kept as the
+/// control: if it ever stops dropping, the failure is in the numeric
+/// inference rather than in the closure guard.
+test "class-method-dce: a const captured by a callback still proves out" {
   let head = "class Widget { live(): number { return 1; } dead(): number { return 2; } }\n" +
     "const w = new Widget();\n" +
     "const pts = [1, 2, 3];\n"
@@ -1690,7 +1687,7 @@ test "class-method-dce: a callback index parameter is not provably numeric" {
     .with_treeshake(true)
     .with_fold(true)
     .with_explain(true)
-  // A `for` counter: proven, so the dead method goes.
+  // Control: a `for` counter, never captured.
   let with_counter = head +
     "let total = 0;\n" +
     "for (let i = 0; i < pts.length; i++) total += pts[i];\n" +
@@ -1702,16 +1699,27 @@ test "class-method-dce: a callback index parameter is not provably numeric" {
     }
     Err(e) => fail("bundle error: \{e}")
   }
-  // The same read through a callback parameter: not proven, so every
-  // method in the bundle survives.
+  // The same read through a callback parameter, which captures `pts`.
   let with_callback = head +
     "const doubled = pts.map((v, index) => pts[index] * v);\n" +
     "process.stdout.write(String(w.live() + doubled[0]) + \"\\n\");\n"
   match bundle_modules(vfs([("entry.ts", with_callback)]), "entry.ts", opts) {
     Ok(out) => {
+      assert_false(out.js.contains("dead"))
+      assert_true(explain_text(out).contains("Widget.dead"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+  // A `let` captured by a closure keeps the guard: a nested frame
+  // really can write it, and the pass does not follow that write.
+  let mutable_capture = head +
+    "let arr: any = pts;\n" +
+    "const read = (k: any) => arr[k];\n" +
+    "process.stdout.write(String(w.live() + read(0)) + \"\\n\");\n"
+  match bundle_modules(vfs([("entry.ts", mutable_capture)]), "entry.ts", opts) {
+    Ok(out) => {
       assert_true(out.js.contains("dead"))
       assert_true(explain_text(out).contains("SUPPRESSED"))
-      assert_true(explain_text(out).contains("pts[index]"))
     }
     Err(e) => fail("bundle error: \{e}")
   }

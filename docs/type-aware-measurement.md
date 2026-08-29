@@ -1311,13 +1311,75 @@ callback 引数には注釈が無いので `infer_numeric_symbols` の
 suppression は **bundle 全体の wildcard** なので、この read 1 つで
 全 class の全 method が残ります。JS で最も一般的な配列 idiom です。
 
-直すには receiver が配列であることの証明が必要で（`Map.prototype.forEach`
-は `(value, key, map)`、`Set` は `(value, value, set)` なので第 2 引数は
-index とは限らず、import された receiver は immutable.js の List か Map か
-分からない）、numeric の誤判定は property mangle の正しさを壊すので、
-**急いで入れず #72 に分離**しました。現状の挙動（保守的に残す = 正しい）は
-`bundle_wbtest.mbt` に固定してあり、推論が入ったら**削除ではなく反転**
-させます。
+#### 追記: 原因は callback の引数ではなく `const` の closure guard だった
+
+上の表を見て「callback 引数に注釈が無いから」と結論したのは**間違い**
+でした。実際に落ちていたのは receiver 側です。`numeric_vars` と
+`container_vars` はどちらも
+
+```moonbit
+// Closure capture: a nested function could write any value into this
+// binding, and without an annotation there is nothing constraining what.
+if sym.captured_by_closure { continue }
+```
+
+を持っていて、`arr.map((v, i) => arr[i])` では **`arr` が arrow に
+capture される**ので container に昇格しません。`i` の方も同時に落ちますが、
+どちらか一方が通れば gate は開くので、原因は capture そのものでした。
+
+この guard の前提は「この pass が追わない frame からの**書き込み**」で、
+**`const` は誰も書けません**。module は strict mode なので代入は throw し、
+binding が取り得る値は def の集合そのもの——それは下の walk が既に
+検査しています。`const` を guard から除外すると、上の表の ❌ が消えます。
+
+`for` counter・`while` counter・`for…of`・注釈付き引数が最初から通って
+いたのは、それらが capture されていなかったからで、index の**形**は
+無関係でした。
+
+`fixtures/mangle-safety/case50-const-captured-by-callback` が Node で
+固定しています。`expectKeep` に `area` を入れたら corpus の
+**mutation self-check に落ちました**——`area` は bundle 内からしか呼ばれず
+mangler が rename して構わないので、「消えない」ことは挙動比較で見るべきで
+`expectKeep` の仕事ではない、という指摘で、正しいです。
+
+#### それでも 10 target は 1 byte も動かない
+
+`const` を除外しても suppression は解けませんでした。census
+（`(numeric な binding 数 / その名前の binding 総数)`）を report に足すと
+理由が数字で出ます:
+
+| target | 残る blocker | census |
+| --- | --- | --- |
+| excalidraw | `points[i]` x14 | **64 / 90** bindings named `i` |
+| excalidraw | `elements[index]` x7 | 26 / 65 |
+| excalidraw / typebox | `…[key]` | **0 / 34**, 0 / 53 |
+| typebox | `properties[left]` x4 | 1 / 158 |
+| zod | `TypeDictionary[issue.expected]` x53 | — (receiver が object literal) |
+| zod | `Reflect.ownKeys(...)` x8 | — (本物の reflection) |
+| immer | `value[DRAFT_STATE]` x7 | 0 / 1 (Symbol key) |
+
+3 種類に分かれます:
+
+1. **`key` 系**: 本当に string key で、receiver に型が無い。拒むのが正しい。
+2. **`i` 系**: 数値だが `numeric_name_set` が**名前単位の全か無か**なので、
+   95 file の bundle で `i` という名前の binding 90 個のうち 26 個が
+   証明できないだけで、**bundle 内の全 `arr[i]` が失格**します。
+3. **`Reflect.ownKeys` / `Object.getOwnPropertyDescriptors`**: 本物の
+   reflection。zod では**これだけで永久に suppress**されます。
+
+`is_expr_container` に `ObjectLit` を足す実験もしました（zod の
+`TypeDictionary[...]` x53 が消えます）。**revert しました**: byte は
+1 も動かない（suppression が全か無かなので、blocker を 53 個消しても
+残り 1 個で同じ）一方、`Object.setPrototypeOf(o, C.prototype)` /
+`o.__proto__ = …` を考慮していない soundness の面が増えるため。
+やるなら guard 込みで、と記録しておきます。
+
+**本当の設計問題は suppression が bundle 全体の wildcard であること**
+です。133 file の bundle のどこかに `Reflect.ownKeys` が 1 つあるだけで
+全 class の全 method が残ります。払いが出るのは per-class に絞る方向——
+`Reflect.ownKeys(x)` が脅かすのは `x` に到達し得る instance の class だけ
+——で、これは `class_members_reachable_off_bundle` で bundle 境界に対して
+やったのと同じ形の推論です。#73 に分離しました。
 
 ### `tag-rewrite` の 0 byte を名前にした
 

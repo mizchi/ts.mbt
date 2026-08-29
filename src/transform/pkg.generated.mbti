@@ -133,6 +133,8 @@ pub fn mangle_source_with_auto_reserve(String, ManglerConfig) -> Result[String, 
 
 pub fn module_const_enums(Array[@ast.TsEnumDecl]) -> Array[@ast.TsEnumDecl]
 
+pub fn numeric_name_census(SymbolGraph, Map[Int, Bool]) -> Map[String, (Int, Int)]
+
 pub fn numeric_name_set(SymbolGraph, Map[Int, Bool]) -> Map[String, Bool]
 
 pub fn observed_class_names(@ast.TsBlock) -> (Array[String], Bool)

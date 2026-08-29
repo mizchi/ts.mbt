@@ -73,7 +73,17 @@ pub fn infer_numeric_symbols(g : SymbolGraph) -> Map[SymbolId, Bool] {
       // Closure capture: a nested function could write any value
       // into this binding, and without an annotation there is
       // nothing constraining what. Conservative -> stay Maybe.
-      if sym.captured_by_closure {
+      //
+      // A `const` is exempt, and not as an optimization: the guard's
+      // premise is a WRITE from a frame this pass does not follow, and
+      // no frame may write a `const`. Modules are strict, so an
+      // assignment throws rather than landing a non-numeric value. The
+      // set of values the binding can hold is exactly its defs, which
+      // the walk below already requires to be numeric. Without this,
+      // `const i = 0` read inside any closure is unprovable, and one
+      // unprovable computed key turns off class-method DCE for the
+      // whole bundle.
+      if sym.captured_by_closure && !(sym.kind is Const) {
         continue
       }
       // No def at all (param without a numeric annotation or an
@@ -203,6 +213,31 @@ pub fn numeric_name_set(
     if numeric.contains(s.id) && !non_numeric.contains(s.name) {
       out[s.name] = true
     }
+  }
+  out
+}
+
+///|
+/// `(bindings carrying this name, how many are provably numeric)`.
+///
+/// `numeric_name_set` is all-or-nothing per NAME, which is sound and,
+/// on a real bundle, the thing that actually blocks the consumers: `i`,
+/// `index`, `key` and `value` are the most reused identifiers there
+/// are, so ONE unprovable binding anywhere disqualifies every
+/// `arr[i]` in the bundle. A diagnostic cannot fix that, but it can say
+/// how close the name came, which is the difference between "one
+/// polluting declaration" and "genuinely ambiguous".
+pub fn numeric_name_census(
+  g : SymbolGraph,
+  numeric : Map[SymbolId, Bool],
+) -> Map[String, (Int, Int)] {
+  let out : Map[String, (Int, Int)] = {}
+  for s in g.symbols {
+    let cur = out.get(s.name).unwrap_or((0, 0))
+    out[s.name] = (
+      cur.0 + 1,
+      cur.1 + (if numeric.contains(s.id) { 1 } else { 0 }),
+    )
   }
   out
 }

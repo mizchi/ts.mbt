@@ -337,10 +337,47 @@ product surfaces now.
   second parameter is an index — `Map.prototype.forEach` is
   `(value, key, map)`, `Set`'s is `(value, value, set)`, and an
   imported receiver could be either — and a false "numeric" claim
-  breaks property-mangle correctness, so it is filed rather than
-  rushed. The current conservative behaviour is pinned in
-  `bundle_wbtest.mbt` with the instruction to INVERT the test when the
-  inference lands, not delete it. The property
+  breaks property-mangle correctness.
+  That diagnosis was WRONG, and the way it was wrong is the lesson:
+  the failing shape and the failing PROOF were different things. What
+  actually fails in `arr.map((v, i) => arr[i])` is the RECEIVER, not
+  the index — `numeric_vars` and `container_vars` both skip any
+  binding marked `captured_by_closure`, so the arrow's mere mention of
+  `arr` kept it from being proven a keyed container, and either proof
+  alone would have opened the gate. The guard's stated premise is a
+  WRITE from a frame the pass does not follow, and no frame may write
+  a `const`: modules are strict, so an assignment throws rather than
+  landing a non-numeric value, and the values the binding can hold are
+  exactly its defs, which the walk already checks. Exempting `const`
+  clears every spelling; the `for`/`while`/`for…of`/annotated-parameter
+  spellings had always worked because they were never captured, and
+  the shape of the index was never the variable.
+  `fixtures/mangle-safety/case50-const-captured-by-callback` pins it
+  under Node, and putting `area` in its `expectKeep` failed the
+  corpus's own mutation self-check — correctly: a method called only
+  from inside the bundle may be renamed, so "it still runs" is the
+  behavioural comparison's job, not `expectKeep`'s.
+  It still buys ZERO bytes on all ten targets, and a census in the
+  report says why in numbers — `(bindings of this name that are
+  provably numeric / all bindings of it)`. Three kinds of blocker:
+  `key`-style string keys correctly refused (excalidraw 0 of 34,
+  typebox 0 of 53); `i`-style numeric keys defeated by
+  `numeric_name_set`'s NAME-level all-or-nothing projection
+  (excalidraw's `i` is 64 of 90, so 26 unprovable bindings disqualify
+  every `arr[i]` in a 95-file bundle); and real reflection —
+  `Reflect.ownKeys` x8 and `Object.getOwnPropertyDescriptors` x2 in
+  zod, which can never be proven away. Adding `ObjectLit` to
+  `is_expr_container` clears zod's top blocker
+  (`TypeDictionary[issue.expected]`, 53 occurrences) and was
+  implemented, measured and REVERTED: zero bytes, because the
+  suppression is all-or-nothing and 53 of 80 blockers is the same as
+  none, against a `__proto__` / `Object.setPrototypeOf` exposure not
+  yet closed. The design problem is the bundle-wide wildcard itself —
+  one `Reflect.ownKeys` anywhere keeps every method of every class —
+  and the fix that would pay is per-receiver suppression, the same
+  reasoning `class_members_reachable_off_bundle` applies at the bundle
+  boundary. Filed, with the numbers, rather than started at the tail of
+  a session. The property
   mangler was reported inert on
   every library measured, and that turned out to be one bug rather than
   a limit: a `const f = (…) => …` had no entry in the graph's function

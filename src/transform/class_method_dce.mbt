@@ -179,8 +179,14 @@ pub fn class_method_dce_block(
     strings: string_name_set(graph),
     aliases: alias_bodies,
   }
+  let numeric_syms = infer_numeric_symbols(graph)
   let facts = {
-    numeric: numeric_name_set(graph, infer_numeric_symbols(graph)),
+    numeric: numeric_name_set(graph, numeric_syms),
+    numeric_census: if explain is Some(_) {
+      numeric_name_census(graph, numeric_syms)
+    } else {
+      {}
+    },
     keyed_containers: container_name_set(
       graph,
       infer_container_symbols(graph, container_facts),
@@ -360,6 +366,13 @@ fn report_method_dce(
 struct SniffFacts {
   /// Bindings that provably hold a number (`numeric_vars.mbt`).
   numeric : Map[String, Bool]
+  /// `name -> (bindings carrying it, how many are provably numeric)`.
+  /// Diagnostic only. `numeric` above is all-or-nothing per name, which
+  /// is sound and, on a bundle of any size, the thing that actually
+  /// blocks this pass: one unprovable `i` anywhere disqualifies every
+  /// `arr[i]`. The census says how close the name came, which separates
+  /// "one polluting declaration" from "genuinely ambiguous".
+  numeric_census : Map[String, (Int, Int)]
   /// Bindings whose declared type is a keyed container rather than an
   /// object with members — an array, a tuple, a string, a `Record`.
   keyed_containers : Map[String, Bool]
@@ -411,6 +424,22 @@ fn describe_index_operand(e : @ast.TsExpr) -> String {
       describe_index_operand(inner) + "[" + describe_index_operand(k) + "]"
     NonNull(inner) | OptionalChain(inner) => describe_index_operand(inner)
     _ => "…"
+  }
+}
+
+///|
+/// When the key is a bare name, how many of the bundle's bindings by
+/// that name are provably numeric. `40 of 41` says the name is one bad
+/// declaration away from clearing the gate; `2 of 30` says it is not.
+fn index_name_census_note(idx : @ast.TsExpr, facts : SniffFacts) -> String {
+  match idx {
+    Var(n) =>
+      match facts.numeric_census.get(n) {
+        Some((total, ok)) if total > 0 && ok < total =>
+          " (\{ok} of \{total} bindings named `\{n}` are provably numeric)"
+        _ => ""
+      }
+    _ => ""
   }
 }
 
@@ -1114,7 +1143,8 @@ fn expr_has_method_sniff(expr : @ast.TsExpr, facts : SniffFacts) -> Bool {
           describe_index_read(recv, idx) +
           "` reads a member under a computed key that is neither " +
           "provably numeric nor an entry of a keyed container, so any " +
-          "method could be the one it names",
+          "method could be the one it names" +
+          index_name_census_note(idx, facts),
         )
         return true
       }
