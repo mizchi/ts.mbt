@@ -1,13 +1,12 @@
 {
   "origin": "packelyze fixtures/case09-complex",
-  "what": "Grab bag: generic class, enum, namespace, mapped type, decorator.",
+  "what": "Grab bag: generic class, enum, namespace, mapped and conditional types. The decorator half moved to `case09b-decorator`: Node's transform mode cannot compile a TypeScript-legacy decorator, so keeping it here cost the whole case its reference leg — every assertion was mtsc against mtsc, which is consistency and not correctness.",
   "exports": [
     "GenericClass",
     "genericFunction",
     "Color",
     "MyNamespace",
-    "mapped",
-    "DecoratorTest"
+    "mapped"
   ],
   "expectKeep": [
     "propA",

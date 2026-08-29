@@ -1243,6 +1243,28 @@ pass の対象は「第 1 引数が閉じた string literal union で、body が
 table が top-level 宣言しか見ないという制限も報告するようにしましたが、
 そもそも候補が無いので開けるものがありません。
 
+report は候補**名**も出すようにしました（数だけでは何を見ればいいか
+分からないので）。実物を見ると 3 件とも entry test の偽陽性です:
+
+| target | 候補 | 実際 |
+| --- | --- | --- |
+| typebox | `LiteralBooleanMapping`, `WithBooleanMapping` | body は `return T.Literal(Guard.IsEqual(input, 'true'))` — **switch が無い**。しかも call site は `S.LiteralBooleanMapping(_0 as 'true' \| 'false')` で**literal ではない** |
+| excalidraw | class の `constructor` | constructor は arm 式に置換できない |
+
+body の gate を広げても払いはありません——**call site gate が
+`StringLit` を要求する**ので、`_0 as ...` では絶対に発火しない。
+
+**では削るべきか。削りません。** terser-parity の
+`switch-literal-union` を勝たせているのはこの pass だけで、あれは
+`type-aware` case——**tie でも失敗扱い**の分類です。そして唯一の
+歴史的 bug（name 単位 table が shadowing した parameter の呼び出しに
+外側の arm を当てた = 誤った値）は
+`fixtures/mangle-safety/case43-table-shadowing` が unshadowed な読みと
+対にして Node で回しています。
+
+結論は「**現状維持。ただし到達範囲を記録して再検討を止める**」です。
+pass の header に測定値と 2 つの残す理由を書きました。
+
 #### `type-fold`: 形はあるが、書かれるのは決まらない時だけ
 
 こちらは逆で、候補 site は**大量にあります**。しかし 1 件も畳めません:

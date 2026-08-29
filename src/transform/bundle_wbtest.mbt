@@ -1726,6 +1726,68 @@ test "class-method-dce: a const captured by a callback still proves out" {
 }
 
 ///|
+/// TypeScript accepts a VALUE-form import of a type — `import { T }`
+/// rather than `import type { T }` — and it has to be erased. Node's
+/// transform mode cannot compile it (it keeps the import, and the
+/// runtime module has no such export), which is why
+/// `fixtures/mangle-safety/case18-export-type` had no reference leg at
+/// all and its every assertion was mtsc against mtsc. The fixture uses
+/// `import type` now and the erasure is pinned here, where the question
+/// actually belongs: it is about compilation, not about mangling.
+test "erase: a value-form import of a type leaves no runtime import" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "import { Shape } from \"./types\";\n" +
+      "const s: Shape = { side: 2 };\n" +
+      "export const area = s.side * s.side;\n",
+    ),
+    ("types.ts", "export type Shape = { side: number };\n"),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_false(out.js.contains("Shape"))
+      assert_false(out.js.contains("./types"))
+      assert_true(out.js.contains("side: 2"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+/// The legacy `module X { … }` spelling of an internal module lowers the
+/// same way `namespace X { … }` does. Node's transform mode rejects the
+/// keyword outright ("`module` keyword is not supported"), which cost
+/// `fixtures/mangle-safety/case10-module` its reference leg; that
+/// fixture says `namespace` now — it already covered `namespace`
+/// separately, so the keyword was the only unique thing in it — and the
+/// keyword is pinned here.
+test "erase: the legacy `module` keyword lowers like `namespace`" {
+  let body = "  const msg = \"hi\";\n" +
+    "  export function get(): string { return msg; }\n" +
+    "}\n" +
+    "export const out = Inner.get();\n"
+  let as_module = bundle_modules(
+    vfs([("entry.ts", "module Inner {\n" + body)]),
+    "entry.ts",
+    BundleOptions::default(),
+  )
+  let as_namespace = bundle_modules(
+    vfs([("entry.ts", "namespace Inner {\n" + body)]),
+    "entry.ts",
+    BundleOptions::default(),
+  )
+  match (as_module, as_namespace) {
+    (Ok(m), Ok(n)) => {
+      assert_eq(m.js, n.js)
+      assert_true(m.js.contains("Inner.get"))
+    }
+    (Err(e), _) => fail("bundle error (module): \{e}")
+    (_, Err(e)) => fail("bundle error (namespace): \{e}")
+  }
+}
+
+///|
 /// Reflection that no analysis can see through is the one blocker the
 /// author, not the compiler, has to act on — so it is a warning rather
 /// than a `--explain-mangle` line. It is reported only when it actually

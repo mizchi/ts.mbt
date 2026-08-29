@@ -46,7 +46,19 @@ product surfaces now.
   [`docs/mangle-safety.md`](./docs/mangle-safety.md) and the
   `fixtures/mangle-safety` corpus (`just verify-mangle-safety`), which
   compiles each case with and without mangling, runs both bundles under Node,
-  and treats any observable difference as a safety violation. A corpus only
+  and treats any observable difference as a safety violation. Every case
+  has an independent oracle — the original TypeScript run by Node — with
+  exactly one declared exception (`case09b-decorator`, where transform
+  mode cannot compile a TypeScript-legacy decorator, and which says so).
+  Three cases had silently lost theirs and the harness had been printing
+  "reference run unavailable" on every run: a value-form import of a type
+  (`import { T }`, which TypeScript accepts and transform mode does not),
+  the legacy `module X {}` keyword, and that decorator. Each was one
+  fixture line, and each left its case comparing mtsc against mtsc, which
+  is consistency and not correctness — the exact failure mode that let
+  five scope-narrowing bugs survive thousands of fuzz seeds, sitting
+  inside the corpus everything else leans on. The two compilation
+  questions moved to unit tests, where they belong. A corpus only
   covers situations somebody thought of, so `just verify-real-world`
   minifies real published packages (React, the TypeScript compiler) and
   diffs their behaviour — see [`docs/real-world-minify.md`](./docs/real-world-minify.md).
@@ -318,10 +330,23 @@ product surfaces now.
   The other three inert phases got the same treatment, and the answer
   was different for each — which is the argument for asking per pass
   rather than reasoning about "the type-driven half". `switch-fold` is
-  SHAPE ABSENT: seven of ten targets contain not one function whose
+  SHAPE ABSENT: seven of the nine targets contain not one function whose
   first parameter is a closed string-literal union, and the three
-  candidates in the other two fail because the body is not exactly one
-  `switch`; there is no gate worth opening. `type-fold` is the
+  candidates in the other two are false positives of that entry test —
+  the report names them now, because a count never says what to look at.
+  typebox's `LiteralBooleanMapping` / `WithBooleanMapping` have no
+  `switch` at all (`return T.Literal(Guard.IsEqual(input, 'true'))`) and
+  both call sites pass `_0 as 'true' | 'false'`, a runtime value, so
+  widening the BODY gate cannot help: the call-site gate needs a
+  `StringLit`. excalidraw's is a class `constructor`, which no widening
+  can replace with an arm expression. Deleting the pass is equally wrong
+  — it is the only thing that wins the terser-parity
+  `switch-literal-union` case, a `type-aware` case where a TIE already
+  counts as a failure — and its one historical bug, the name-keyed table
+  taking the outer dispatcher's arm for a call to a shadowing parameter,
+  is covered under Node by `case43-table-shadowing`. So: kept unchanged,
+  with the measured reach and both reasons written into its header, so
+  the question is not re-litigated. `type-fold` is the
   opposite and the more interesting one — 578 candidate sites across
   the corpus (zod 181, excalidraw 163, remeda 128) and ZERO decided.
   That is not a lookup failing; it is a TAUTOLOGY. A programmer writes

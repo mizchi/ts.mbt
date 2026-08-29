@@ -29,6 +29,32 @@
 //   - At the call site, all non-discriminant arguments must be
 //     trivially safe to substitute (literal or `Var(name)`)
 //     so duplicating or dropping them doesn't change semantics.
+//
+// Reach, measured rather than assumed. This pass moves ZERO bytes on
+// every target of the type-aware corpus, and the reason is that the
+// shape is absent, not that a gate is closed. Seven of the nine targets
+// contain not one function whose first parameter is a closed
+// string-literal union. The three that do are all false positives of
+// that entry test, and `--explain-mangle` names them:
+//
+//   typebox    `LiteralBooleanMapping`, `WithBooleanMapping` — bodies
+//              are a single `return T.Literal(Guard.IsEqual(input,
+//              'true'))`, no switch at all, and both call sites pass
+//              `_0 as 'true' | 'false'`, a runtime value. Widening the
+//              body gate would not help: the CALL-SITE gate still needs
+//              a `StringLit` argument, and there is none.
+//   excalidraw a class `constructor`. A constructor cannot be replaced
+//              by an arm expression under any widening.
+//
+// So do not "fix" the reach — there is nothing there to reach. And do
+// not delete the pass either: it is the only thing that wins the
+// terser-parity `switch-literal-union` case, which is a `type-aware`
+// case where a TIE already counts as a failure. Its one historical bug
+// is the name-keyed table below, which took the outer dispatcher's arm
+// for a call to a shadowing parameter — a wrong value, not a crash —
+// and `fixtures/mangle-safety/case43-table-shadowing` runs that under
+// Node alongside an unshadowed read, so the fix cannot be "switch the
+// pass off".
 
 ///|
 pub(all) struct SwitchFoldTable {
@@ -192,7 +218,7 @@ fn explain_switch_fold_candidates(
   }
   // Functions anywhere in the block whose first parameter IS a closed
   // string-literal union — the pass's target shape, wherever it sits.
-  let all_shaped : Array[SwitchFoldReject?] = []
+  let all_shaped : Array[(String, SwitchFoldReject?)] = []
   collect_switch_fold_shapes_block(block, all_shaped)
   let shaped = all_shaped.length()
   if shaped == 0 {
@@ -215,16 +241,24 @@ fn explain_switch_fold_candidates(
       "  \{shaped - top_shaped} of them are not top-level declarations, and the table only reads top-level ones, so they were never considered.",
     )
   }
-  // Group the rejections by reason.
+  // Group the rejections by reason, and NAME them. A count says how
+  // many; only the names say what to look at, and the whole point of
+  // this report is that "0 bytes" was never actionable on its own.
   let counts : Map[String, Int] = {}
-  for r in all_shaped {
-    match r {
+  let named : Map[String, Array[String]] = {}
+  for entry in all_shaped {
+    match entry.1 {
       Some(rej) => {
         if rej == SwitchFoldReject::NotADispatcher {
           continue
         }
         let l = rej.label()
         counts[l] = counts.get(l).unwrap_or(0) + 1
+        let names = named.get(l).unwrap_or([])
+        if names.length() < 5 {
+          names.push(entry.0)
+        }
+        named[l] = names
       }
       None => ()
     }
@@ -232,7 +266,10 @@ fn explain_switch_fold_candidates(
   let keys = counts.keys().to_array()
   keys.sort()
   for k in keys {
-    out.push("  \{counts.get(k).unwrap_or(0)} rejected: \{k}.")
+    let names = named.get(k).unwrap_or([])
+    out.push(
+      "  \{counts.get(k).unwrap_or(0)} rejected: \{k} (\{names.join(", ")}).",
+    )
   }
 }
 
@@ -243,7 +280,7 @@ fn explain_switch_fold_candidates(
 /// entry shape contribute nothing.
 fn collect_switch_fold_shapes_block(
   block : @ast.TsBlock,
-  out : Array[SwitchFoldReject?],
+  out : Array[(String, SwitchFoldReject?)],
 ) -> Unit {
   for s in block.stmts {
     collect_switch_fold_shapes_stmt(s, out)
@@ -253,12 +290,13 @@ fn collect_switch_fold_shapes_block(
 ///|
 fn collect_switch_fold_shapes_func(
   f : @ast.TsFunc,
-  out : Array[SwitchFoldReject?],
+  out : Array[(String, SwitchFoldReject?)],
 ) -> Unit {
+  let name = if f.name == "" { "<anonymous>" } else { f.name }
   match try_extract_switch_fold(f) {
-    Ok(_) => out.push(None)
+    Ok(_) => out.push((name, None))
     Err(SwitchFoldReject::NotADispatcher) => ()
-    Err(r) => out.push(Some(r))
+    Err(r) => out.push((name, Some(r)))
   }
   collect_switch_fold_shapes_block(f.body, out)
 }
@@ -364,7 +402,7 @@ fn try_extract_switch_fold(
 ///|
 fn collect_switch_fold_shapes_stmt(
   stmt : @ast.TsStmt,
-  out : Array[SwitchFoldReject?],
+  out : Array[(String, SwitchFoldReject?)],
 ) -> Unit {
   match stmt {
     Var(_, _, e) | Let(_, _, e) | Const(_, _, e) | Expr(e) | Assign(_, e) =>
@@ -434,7 +472,7 @@ fn collect_switch_fold_shapes_stmt(
 /// nesting site understates it rather than making it wrong.
 fn collect_switch_fold_shapes_expr(
   expr : @ast.TsExpr,
-  out : Array[SwitchFoldReject?],
+  out : Array[(String, SwitchFoldReject?)],
 ) -> Unit {
   match expr {
     FuncExpr(f) => collect_switch_fold_shapes_func(f, out)

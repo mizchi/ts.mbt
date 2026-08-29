@@ -53,16 +53,3 @@ export const mapped: MyMappedType = {
 
 type MyConditionalType<T> = T extends string ? string : number;
 let conditional: MyConditionalType<'test'> = 'test';
-
-// Decorators
-function log(target: any, propertyName: string | symbol): void {
-  console.log(`log: ${propertyName.toString()}`);
-}
-
-export class DecoratorTest {
-  @log
-  private property: string = 'property';
-}
-
-const decoratorTest = new DecoratorTest();
-

@@ -4,5 +4,4 @@ export default async (mod) => ({
   color: [mod.Color.Red, mod.Color.Green, mod.Color.Blue, mod.Color[0]],
   namespaceFoo: mod.MyNamespace.foo(),
   mapped: mod.mapped,
-  decorated: new mod.DecoratorTest(),
 });
