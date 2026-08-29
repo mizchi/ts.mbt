@@ -295,6 +295,40 @@ namespace の member は IIFE の中で `N.f = f` として付けられるため
 export surface 解析にも「escape する object へ代入された property 名は
 公開されている」という規則を追加しました。
 
+### 既知の不精度: chain の根に observation を付ける
+
+`seed_from_expr` は property / index chain を**根まで遡って** seed します。
+
+```ts
+class C { liveField = 1; deadmark_field = 2; }
+const c = new C();
+console.log(c.liveField);      // 数値 1 が出るだけ
+```
+
+`c.liveField` は数値なので、`c` の property 名は 1 つも観測されません。
+それでも `C` の field 2 つが escape set に入り、`--explain-mangle` は
+`deadmark_field`: the name is in the escape set と言います。
+
+理由は避けようがない形をしています: **`c.liveField` には symbol が無く、
+`c` にしか無い**。observation を付ける先が根しかないので、根に付けて
+深さを over-approximate しています。**健全**（上位集合を予約する）で
+**不精確**（見えない名前を予約する）。
+
+`Call` / `CallExpr` は既に精確です——callee 本体ではなく `returns` に
+伝播します。`MethodCall` は receiver に伝播しますが、method が `this` を
+返しうるので妥当です。残るのは `PropAccess` / `IndexAccess` です。
+
+これが `verify-dce-coverage` の `unused-class-field` が MISS である
+理由で、harness はその理由を各行に印字します。直すには
+**access path に感度のある observability**（または `Observability`
+lattice に深さ）が必要で、patch では済みません。reserved set を
+緩める方向は静かに壊れる方向なので、corpus / fuzzer / type-aware
+measurement を見ながらの独立した変更にすべきです。
+
+現在の挙動は `mangle_wbtest.mbt` に固定してあります。精度が上がったら
+その assertion は**削除せず反転**させる——変更が byte 数だけでなく
+そこに現れるように。
+
 ### module graph 単位の型検査（case19, case20）
 
 `mtsc` は file ごとに checker を走らせていたので、import された型は

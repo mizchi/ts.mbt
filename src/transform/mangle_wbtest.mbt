@@ -1108,3 +1108,51 @@ test "the mangler's built-in list covers every implicitly-invoked protocol" {
     )
   }
 }
+
+///|
+test "escape: a property READ seeds the chain root, over-approximating depth" {
+  // What the analysis does today, pinned so a precision change has a
+  // baseline to move.
+  //
+  // `console.log(c.liveField)` logs the NUMBER 1. No property name of
+  // `c` is observable through it — and yet both of `C`'s fields land in
+  // the escape set, because `seed_from_expr` walks a property chain up
+  // to its ROOT. It has to: `c.liveField` has no symbol of its own,
+  // only `c` does, so the root is the one handle the observation can be
+  // attached to, and attaching it there over-approximates the depth.
+  //
+  // Sound (it reserves a superset) and imprecise (it reserves names
+  // nothing can see). It is why `verify_dce_coverage`'s
+  // `unused-class-field` row is a known MISS. Getting it right needs
+  // access-path-sensitive observability, or a depth on the
+  // `Observability` lattice — not a patch, because loosening the
+  // reserved set is the direction that breaks silently.
+  //
+  // When that lands, this test flips: `deadmark_field` becomes
+  // manglable and the assertion below should be inverted rather than
+  // deleted, so the change is visible here and not only in a byte
+  // count.
+  let files = vfs([
+    (
+      "entry.ts",
+      "class C {\n" +
+      "  liveField = 1;\n" +
+      "  deadmark_field = 2;\n" +
+      "}\n" +
+      "const c = new C();\n" +
+      "export const v = c.liveField;\n" +
+      "console.log(c.liveField);\n",
+    ),
+  ])
+  let opts = BundleOptions::default()
+    .with_mangle(true)
+    .with_mangle_properties(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      assert_true(
+        out.js.contains("deadmark_field"),
+        msg="the chain-root imprecision is gone — invert this assertion and clear the dce-coverage MISS: \{out.js}",
+      )
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
