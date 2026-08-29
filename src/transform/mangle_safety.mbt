@@ -44,13 +44,22 @@ pub fn collect_externally_visible_props(
   block : @ast.TsBlock,
   external_bindings : Map[String, Bool],
   type_env? : Map[String, @ast.TsType] = {},
+  // Forwarded to `escape_breakdown`: which bindings the LINKER created
+  // as namespace objects, so their keys are reserved by fact instead of
+  // by a shape that a library's ordinary dispatch table also has.
+  synthesized_namespaces? : Map[String, Bool]? = None,
 ) -> Array[String] {
   // A merge over `escape_breakdown`, which computes the same reserved
   // set in pieces and keeps the reason for each. Deliberately not a
   // second implementation: `--explain-mangle` has to describe the
   // decision this function makes, not a re-derivation of it that can
   // drift.
-  let b = escape_breakdown(block, external_bindings, type_env~)
+  let b = escape_breakdown(
+    block,
+    external_bindings,
+    type_env~,
+    synthesized_namespaces~,
+  )
   let reserved : Map[String, Bool] = {}
   for
     group in [

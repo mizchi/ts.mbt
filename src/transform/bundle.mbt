@@ -1132,10 +1132,23 @@ pub fn bundle_modules(
         let type_env = build_type_env(
           combined_interfaces, combined_type_aliases,
         )
+        // The linker's own record of which bindings it synthesized as
+        // namespace objects, instead of the structural guess the escape
+        // analysis falls back on. The guess — "a `const` initialized to
+        // an object literal of bare `Var`s" — also matches every
+        // `const handlers = { onClick, onBlur }` and every dispatch
+        // table a library writes: on typebox it reserved 300 of the 340
+        // names in one section of the report, for two real namespaces.
+        let synthesized_namespaces = Some(link_renames.synthesized_namespaces)
         if opts.explain {
           for
             line in format_escape_explanation(
-              escape_breakdown(combined, externals, type_env~),
+              escape_breakdown(
+                combined,
+                externals,
+                type_env~,
+                synthesized_namespaces~,
+              ),
             ) {
             explain_escape.push(line)
           }
@@ -1144,6 +1157,7 @@ pub fn bundle_modules(
           combined,
           externals,
           type_env~,
+          synthesized_namespaces~,
         )
         let mut wildcard = false
         for n in escapes {

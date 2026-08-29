@@ -59,6 +59,14 @@ pub(all) struct EscapeBreakdown {
   // Why the wildcard fired. Empty means the analysis does not suppress
   // property mangling.
   wildcard_reasons : Array[String]
+  // The `sink_observability` set, grouped by the fact that reserved
+  // each name, most names first. The section's label says "reaches a
+  // side-effect sink", which is what its biggest contributor does and
+  // not what the set IS — it also holds an observed class's members,
+  // every DirectProps/RecursiveProps binding's own props, and the
+  // linker's synthesized namespace keys. On typebox the list is 340
+  // names long and the label accounted for none of them.
+  obs_attribution : Array[String]
 }
 
 ///|
@@ -163,6 +171,10 @@ pub fn escape_breakdown(
   block : @ast.TsBlock,
   external_bindings : Map[String, Bool],
   type_env? : Map[String, @ast.TsType] = {},
+  // `LinkRenames.synthesized_namespaces` — which bindings the LINKER
+  // created as namespace objects. `None` falls back to a structural
+  // guess that over-reserves; see `reserved_props_from_observability`.
+  synthesized_namespaces? : Map[String, Bool]? = None,
 ) -> EscapeBreakdown {
   let (graph, obs_map, scoped_sinks, host_shaped_names) = block_observability(
     block, external_bindings,
@@ -187,11 +199,17 @@ pub fn escape_breakdown(
   // `seed_from_expr`) and this is what turns that into `C`'s field and
   // method names.
   let class_members = class_member_names(block)
+  // `name -> the facts that reserved it`, so the report can say WHICH
+  // fact reserved 340 names instead of only that 340 are reserved. See
+  // `obs_attribution_summary`.
+  let obs_provenance : Map[String, Array[String]] = {}
   let reserved_obs = reserved_props_from_observability(
     graph,
     obs_map,
     type_env~,
     class_members~,
+    provenance=Some(obs_provenance),
+    synthesized_namespaces~,
   )
   // A sink argument that IS an object literal (`external.send({ id: 1 })`)
   // has no free variable to seed, so the flow analysis never sees it.
@@ -303,7 +321,62 @@ pub fn escape_breakdown(
     in_probe: sorted_names(reserved_in_probes),
     external_class_members: sorted_names(external_class_members),
     wildcard_reasons,
+    obs_attribution: obs_attribution_summary(obs_provenance),
   }
+}
+
+///|
+/// Group the per-name attribution by FACT and rank by how many names
+/// each fact reserved. One over-broad propagation and three hundred
+/// separate truths look identical in a flat list of names; they look
+/// nothing alike here.
+fn obs_attribution_summary(
+  provenance : Map[String, Array[String]],
+) -> Array[String] {
+  let counts : Map[String, Int] = {}
+  let examples : Map[String, Array[String]] = {}
+  for entry in provenance {
+    let (name, whys) = entry
+    if is_internal_marker_prop(name) {
+      continue
+    }
+    for why in whys {
+      counts[why] = counts.get(why).unwrap_or(0) + 1
+      let ex = examples.get(why).unwrap_or([])
+      if ex.length() < 4 {
+        ex.push(name)
+      }
+      examples[why] = ex
+    }
+  }
+  // Rank by name count, descending, with a stable tie-break so the
+  // report does not shuffle between runs.
+  let facts : Array[(String, Int)] = []
+  for k in counts.keys() {
+    facts.push((k, counts.get(k).unwrap_or(0)))
+  }
+  facts.sort_by(fn(a, b) {
+    if a.1 != b.1 {
+      b.1 - a.1
+    } else if a.0 < b.0 {
+      -1
+    } else if a.0 > b.0 {
+      1
+    } else {
+      0
+    }
+  })
+  let out : Array[String] = []
+  for i in 0..<facts.length() {
+    if i >= 12 {
+      out.push("… and \{facts.length() - 12} more fact(s)")
+      break
+    }
+    let (why, n) = facts[i]
+    let ex = examples.get(why).unwrap_or([])
+    out.push("[x\{n}] \{why} — e.g. \{ex.join(", ")}")
+  }
+  out
 }
 
 ///|
@@ -456,6 +529,15 @@ pub fn format_escape_explanation(b : EscapeBreakdown) -> Array[String] {
     b.external_chain,
   )
   explain_section(out, "reaches a side-effect sink", b.sink_observability)
+  // The label above is one contributor's name, not the set's. Break it
+  // down by the fact that actually did the reserving.
+  if b.obs_attribution.length() > 0 {
+    out.push("  …of which, by the fact that reserved them:")
+    for line in b.obs_attribution {
+      out.push("    " + line)
+    }
+    out.push("")
+  }
   explain_section(out, "literal key handed straight to a sink", b.sink_literal)
   explain_section(out, "read off a host-shaped value", b.host_shaped)
   explain_section(out, "reachable through an observed value tree", b.value_tree)

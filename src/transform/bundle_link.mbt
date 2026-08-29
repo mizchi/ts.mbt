@@ -52,6 +52,9 @@ fn link_module_graph(
   // global form (entries are only present when a rename actually
   // happened — unchanged names stay implicit).
   let taken : Map[String, Bool] = {}
+  // Filled by `synthesize_namespace_bindings_for` below and returned, so
+  // the property mangler can recognise these bindings by fact.
+  let synthesized_namespace_names : Map[String, Bool] = {}
   // Pre-reserve JS globals so a module's local binding (typically a
   // synthesized namespace object — `export * as Symbol from "…"` →
   // `const Symbol = {…}`) doesn't TDZ-shadow the runtime global at
@@ -529,7 +532,7 @@ fn link_module_graph(
       }
     }
     let synthesized = synthesize_namespace_bindings_for(
-      escaping_namespaces, ns_subs, ns_locals, runtime_bindings,
+      escaping_namespaces, ns_subs, ns_locals, runtime_bindings, synthesized_namespace_names,
     )
     // Synthesize `const localAlias = cjsVar.importedName;` for each
     // named import from a CJS-wrapped module (which has no export_specs).
@@ -576,7 +579,11 @@ fn link_module_graph(
     }
     modules[path] = { ..m, block: final_block }
   }
-  { locals: rename_per_module, namespaces: namespace_local_renames }
+  {
+    locals: rename_per_module,
+    namespaces: namespace_local_renames,
+    synthesized_namespaces: synthesized_namespace_names,
+  }
 }
 
 ///|
@@ -587,6 +594,13 @@ fn link_module_graph(
 pub(all) struct LinkRenames {
   locals : Map[String, Map[String, String]]
   namespaces : Map[String, Map[String, String]]
+  // Binding names the linker SYNTHESIZED as namespace objects
+  // (`export * as ns from "…"` becomes `const ns = { exp1: resolved1,
+  // … }`). Their keys have to survive property mangling, and the
+  // mangler used to identify them by shape — which also matched a
+  // library's ordinary `const table = { fnA, fnB, … }`. A fact, not a
+  // guess.
+  synthesized_namespaces : Map[String, Bool]
 }
 
 ///|
@@ -869,6 +883,15 @@ fn synthesize_namespace_bindings_for(
   ns_subs : Map[String, Map[String, String]],
   ns_locals : Map[String, String],
   runtime_bindings : Map[String, Bool],
+  // The binding names this call creates, recorded for the consumer that
+  // has to recognise them later. The property mangler was guessing —
+  // "a `const` whose initializer is an object literal of bare `Var`s" —
+  // and that guess also matches every `const handlers = { onClick,
+  // onBlur }` and every dispatch table a library writes. On typebox it
+  // reserved 300 of the 340 names in one section of the escape report,
+  // for two actual namespace objects. The linker knows which bindings it
+  // made; there is no reason for anyone downstream to infer it.
+  synthesized : Map[String, Bool],
 ) -> Array[@ast.TsStmt] {
   let out : Array[@ast.TsStmt] = []
   for ns_local in escaping_namespaces {
@@ -888,6 +911,7 @@ fn synthesize_namespace_bindings_for(
       }
       lit_entries.push((p.0, @ast.TsExpr::Var(p.1)))
     }
+    synthesized[binding_name] = true
     out.push(
       @ast.TsStmt::Const(
         @ast.TsBinding::Ident(binding_name),

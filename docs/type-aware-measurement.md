@@ -1483,6 +1483,54 @@ typebox で報告された wildcard 理由は**全部この 1 箇所**
 次に見るべきは wildcard ではなく **`reaches a side-effect sink` の 340**
 です。#74 をその内容に書き換えました。
 
+### 340 の内訳: sink でもなかった
+
+「どの事実がこの名前を予約したか」を name ごとに記録し、事実で
+group して名前数で並べる report を足しました。typebox の答え:
+
+```
+reaches a side-effect sink (333)
+  …of which, by the fact that reserved them:
+    [x293] a linker-synthesized namespace object's keys — GraphemeCount, IsMaxLength, …
+    [x23]  read off `type`, whose props a sink observes — name, patternProperties, …
+    [x16]  read off `right`, …
+    [x15]  read off `left`, …
+```
+
+**333 のうち 293 は sink ではありません。** linker が合成した namespace
+object (`export * as ns from …` → `const ns = { exp1: resolved1, … }`) の
+key です。section の label は**最小の寄与を名乗っていました**。
+
+2 つ分かりました。
+
+**1. 判定が形だった。** pre-pass は「object literal（値が全部 bare `Var`）
+で初期化された `const`」で namespace を見分けていて、これは
+`const handlers = { onClick, onBlur }` にも、library が書く dispatch
+table にも当たります。linker は自分が作った binding を知っているので、
+`LinkRenames` に `synthesized_namespaces` を持たせ、**事実**を使うように
+しました（推測は「呼び手が答えられない」場合の fallback として残す——
+過剰予約なので安全側）。ただし推測の過剰は typebox で **300 vs 293 の
+7 名前**で、report の第一印象より遥かに小さかったです。
+
+**2. 天井は 0 byte。** pre-pass に**何も予約させない**版で測ると:
+
+| target | 現状 | pre-pass 無効 |
+| --- | --- | --- |
+| typebox | 119,686 | 119,686 |
+| excalidraw | 279,800 | 279,800 |
+| remeda | 28,533 | 28,533 |
+
+293 名前の予約は**1 byte も払っていません**。別経路で予約されるからです。
+
+### 結論: 予約集合は制約ではない
+
+#74（wildcard）と #77（sink 集合）で 2 回、もっともらしい narrowing を
+実装して測って**両方 0 byte**でした。予約する側は制約ではありません。
+引き算の反対側——mangler が**何を候補にしているか**——が次の問いで、
+#78 に分離しました。typebox の 247 byte は短い名前 20 数個分で、
+120 KB の bundle に対してそれです。候補集合が小さいなら、予約集合の
+実験はずっと**間違った項を測っていた**ことになります。
+
 ### zod を corpus から外した
 
 上の 2 番と同じ理由です。zod は永久に suppress され、しかも**失う method が

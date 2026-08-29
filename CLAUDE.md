@@ -476,8 +476,29 @@ product surfaces now.
   `SUPPRESSED` the same as inert: `--mangle-properties` still saves 247
   bytes on typebox under the wildcard, because the notice means "no
   USER-DECLARED property name is renamed", and the dead-property pass and
-  the discriminant renumbering are neither. The 340-name sink set is what
-  to look at next.
+  the discriminant renumbering are neither.
+  The 340-name sink set was the next suspect, and it is not the blocker
+  either. Every reserved name now carries the FACT that reserved it,
+  grouped and ranked, and the section labelled "reaches a side-effect
+  sink" turns out to name its smallest contributor: 293 of the 333 names
+  are the keys of linker-synthesized namespace objects
+  (`export * as ns from …` becomes `const ns = { exp1: resolved1, … }`).
+  Those were identified by SHAPE — "a `const` initialized to an object
+  literal of bare `Var`s" — which also matches every
+  `const handlers = { onClick, onBlur }` and every dispatch table a
+  library writes; the linker knows which bindings it created, so
+  `LinkRenames` carries `synthesized_namespaces` now and the analysis
+  uses the fact, with the guess kept only as the no-information fallback
+  because it over-reserves. The guess was over-reaching by 7 names on
+  typebox, not by 293 — much less than a first reading of the report
+  suggested. And the ceiling settles it: with the pre-pass reserving
+  NOTHING, typebox is 119,686, excalidraw 279,800, remeda 28,533,
+  byte-for-byte identical, so the whole 293-name reservation costs zero
+  because those names are reserved by another route anyway. Two plausible
+  narrowings of the reserved side, implemented and measured, both zero:
+  the reserved sets are not the constraint. What the mangler CONSIDERS is
+  the other term of that subtraction and the next question — 247 bytes on
+  typebox is a couple of dozen short names against a 120 KB bundle.
   hono (+500 bytes) and zod (+788) *were* wins until the `TypeArgs` fix
   below, which is the point: `f<T>(x)` parses as a wrapper node, nineteen
   passes never peeled it, and the references inside were invisible to

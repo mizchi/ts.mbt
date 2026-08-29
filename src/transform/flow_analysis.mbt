@@ -421,8 +421,46 @@ pub fn reserved_props_from_observability(
   // read, so without this an observed class contributes nothing and its
   // fields are deleted as dead.
   class_members? : Map[String, Array[String]] = {},
+  // `--explain-mangle` attribution: `name -> the facts that reserved
+  // it`. The report's section for this set is labelled "reaches a
+  // side-effect sink", which is what the biggest contributor does but
+  // NOT what the set is — it also holds an observed class's members, the
+  // direct props of every DirectProps/RecursiveProps binding, and the
+  // linker's synthesized namespace keys. On typebox the section lists
+  // 340 names and the label explains none of them, which is why
+  // narrowing the wildcard next door bought zero bytes: nobody could see
+  // which fact was doing the work. Filled only when asked.
+  provenance? : Map[String, Array[String]]? = None,
+  // Binding names the LINKER synthesized as namespace objects, from
+  // `LinkRenames.synthesized_namespaces`. `None` means the caller does
+  // not know, and then the structural guess below is used — it
+  // over-reserves, so not knowing is the safe direction.
+  synthesized_namespaces? : Map[String, Bool]? = None,
 ) -> Map[String, Bool] {
   let out : Map[String, Bool] = {}
+  // One `out[k] = true` plus one attribution, so the two cannot drift.
+  fn keep(k : String, why : String) -> Unit {
+    out[k] = true
+    match provenance {
+      Some(p) => {
+        let seen = p.get(k).unwrap_or([])
+        if !seen.contains(why) {
+          seen.push(why)
+        }
+        p[k] = seen
+      }
+      None => ()
+    }
+  }
+  // `collect_direct_props` writes into a plain map; route it through
+  // `keep` so its names carry the same attribution as everything else.
+  fn keep_direct(sym : Symbol, why : String) -> Unit {
+    let tmp : Map[String, Bool] = {}
+    collect_direct_props(sym, tmp)
+    for k in tmp.keys() {
+      keep(k, why)
+    }
+  }
   // Linker-synthesised namespace stand-ins (`const ns = { exp1:
   // resolved1, … }`, emitted by `synthesize_namespace_bindings_for`
   // in `bundle_link.mbt`) carry their entire member surface in
@@ -439,8 +477,24 @@ pub fn reserved_props_from_observability(
   // few extra literal-key names; the win is "import * as ns"
   // patterns survive property mangling correctly.
   for sym in g.symbols {
-    if sym.kind is Const && is_linker_synthesized_namespace(sym) {
-      collect_direct_props(sym, out)
+    if !(sym.kind is Const) {
+      continue
+    }
+    match synthesized_namespaces {
+      // The linker told us. Two names on typebox instead of the guess's
+      // several dozen.
+      Some(names) =>
+        if names.contains(sym.name) {
+          keep_direct(sym, "a linker-synthesized namespace object's keys")
+        }
+      // Nobody told us, so guess — and the guess over-reserves, which is
+      // the safe direction for a caller that cannot answer.
+      None =>
+        if is_linker_synthesized_namespace(sym) {
+          keep_direct(
+            sym, "an object literal of bare `Var`s, GUESSED to be a linker-synthesized namespace",
+          )
+        }
     }
   }
   for entry in obs_map {
@@ -454,15 +508,20 @@ pub fn reserved_props_from_observability(
       match class_members.get(sym.name) {
         Some(names) =>
           for n in names {
-            out[n] = true
+            keep(n, "a member of observed class `\{sym.name}`")
           }
         None => ()
       }
     }
     match obs {
       Hidden | ViaStringify => ()
-      DirectProps => collect_direct_props(sym, out)
-      RecursiveProps => collect_direct_props(sym, out)
+      DirectProps =>
+        keep_direct(sym, "read off `\{sym.name}`, whose props a sink observes")
+      RecursiveProps =>
+        keep_direct(
+          sym,
+          "read off `\{sym.name}`, observed recursively by a sink",
+        )
       External =>
         // External escapes default to the wildcard because we
         // can't statically know what the foreign callee inspects.
@@ -482,13 +541,13 @@ pub fn reserved_props_from_observability(
         match type_observed_keys(sym.ts_type, type_env~) {
           Some(keys) => {
             for k in keys {
-              out[k] = true
+              keep(k, "declared on `\{sym.name}`, which leaves the bundle")
             }
             // Also include any PropReceiver-observed names —
             // they're real uses the caller might depend on.
-            collect_direct_props(sym, out)
+            keep_direct(sym, "read off `\{sym.name}`, which leaves the bundle")
           }
-          None => out["*"] = true
+          None => keep("*", "`\{sym.name}` leaves the bundle untyped")
         }
     }
   }
