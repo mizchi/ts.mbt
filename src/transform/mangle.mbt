@@ -61,6 +61,11 @@ pub(all) struct ManglerConfig {
   // dynamic-key flows. Has no effect unless `mangle_properties` is
   // also `true`.
   mangle_properties_shape_color : Bool
+  // `--explain-mangle`: where `build_property_rename_map` writes its
+  // candidate census. A field rather than a parameter because every
+  // caller between here and `bundle.mbt` already threads this config
+  // and none of them has any business knowing about a diagnostic.
+  census : Array[String]?
 }
 
 ///|
@@ -71,7 +76,16 @@ pub fn ManglerConfig::default() -> ManglerConfig {
     mangle_properties: false,
     reserved_properties: [],
     mangle_properties_shape_color: false,
+    census: None,
   }
+}
+
+///|
+pub fn ManglerConfig::with_census(
+  self : ManglerConfig,
+  out : Array[String]?,
+) -> ManglerConfig {
+  { ..self, census: out }
 }
 
 ///|
@@ -611,15 +625,25 @@ fn collect_props_in_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit {
 fn build_property_rename_map(
   block : @ast.TsBlock,
   reserved : Map[String, Bool],
+  // `--explain-mangle` census. Two narrowings of the RESERVED side were
+  // implemented and measured at exactly zero bytes before anyone counted
+  // this side of the subtraction: how many property names the mangler
+  // even considers. A reserved-set experiment is meaningless if the
+  // candidate set is empty.
+  census? : Array[String]? = None,
 ) -> Map[String, String] {
   let names : Map[String, Bool] = {}
   collect_property_names(block, names)
+  let mut n_reserved = 0
+  let mut n_sentinel = 0
+  let mut n_private = 0
   // Filter to mangleable names, then sort so the mapping is stable
   // across iteration orders.
   let candidates : Array[String] = []
   for entry in names {
     let n = entry.0
     if reserved.contains(n) {
+      n_reserved = n_reserved + 1
       continue
     }
     // Internal parser sentinels (`@@spread:N`, `@@computed:N`,
@@ -630,6 +654,7 @@ fn build_property_rename_map(
     // misses it, producing invalid output like
     // `{a:[a]:42}` for `{[s]: 42}`.
     if n.has_prefix("@@") {
+      n_sentinel = n_sentinel + 1
       continue
     }
     // A `#private` name is already unreachable from outside its class
@@ -637,11 +662,51 @@ fn build_property_rename_map(
     // the `#`, turning a private field back into an ordinary visible
     // property. `private_fields.mbt` puts these here.
     if is_private_member_name(n) {
+      n_private = n_private + 1
       continue
     }
     candidates.push(n)
   }
   candidates.sort()
+  match census {
+    Some(out) => {
+      out.push(
+        "\{names.size()} distinct property name(s) in the bundle; \{candidates.length()} are candidates.",
+      )
+      out.push(
+        "dropped: \{n_reserved} reserved, \{n_sentinel} parser sentinel, \{n_private} `#private`.",
+      )
+      // How much a rename can possibly save. A name already one or two
+      // characters long is renamed to another one- or two-character
+      // name, so the saving is zero or one byte PER OCCURRENCE — the
+      // same arithmetic the export-alias rule needed.
+      let mut short_names = 0
+      let mut total_len = 0
+      for c in candidates {
+        if c.length() <= 2 {
+          short_names = short_names + 1
+        }
+        total_len = total_len + c.length()
+      }
+      if candidates.length() > 0 {
+        let avg = total_len / candidates.length()
+        out.push(
+          "candidate length: \{avg} chars on average, \{short_names} already <= 2 chars.",
+        )
+        let show = if candidates.length() < 12 {
+          candidates.length()
+        } else {
+          12
+        }
+        let sample : Array[String] = []
+        for i in 0..<show {
+          sample.push(candidates[i])
+        }
+        out.push("e.g. \{sample.join(", ")}")
+      }
+    }
+    None => ()
+  }
   let map : Map[String, String] = {}
   let mut counter = 0
   for n in candidates {
@@ -2057,7 +2122,7 @@ fn mangle_block_impl(
     let prop_map = if cfg.mangle_properties_shape_color {
       build_property_rename_map_colored(renamed, prop_reserved)
     } else {
-      build_property_rename_map(renamed, prop_reserved)
+      build_property_rename_map(renamed, prop_reserved, census=cfg.census)
     }
     rename_properties_in_block(renamed, prop_map)
   } else {

@@ -1364,7 +1364,9 @@ pub fn bundle_modules(
           external_reserved.push(name)
         }
       }
+      let prop_census : Array[String] = []
       let mangler_cfg = ManglerConfig::default()
+        .with_census(if opts.explain { Some(prop_census) } else { None })
         .with_mangle_properties(effective_mangle_props)
         .with_mangle_properties_shape_color(opts.mangle_properties_shape_color)
         .with_reserved_properties(extra_reserved)
@@ -1377,6 +1379,16 @@ pub fn bundle_modules(
         mangle_block_with_renames(combined, mangler_cfg)
       })
       combined = mangled_block
+      if opts.explain && prop_census.length() > 0 {
+        explain_escape.push("")
+        explain_escape.push(
+          "property mangling: what the mangler had to work with",
+        )
+        explain_escape.push("")
+        for line in prop_census {
+          explain_escape.push("  " + line)
+        }
+      }
       // Carry the mangle pass's rename map forward so the
       // entry-export emit at the bottom can write the right short
       // name for `export default app` even after `app` was

@@ -1531,6 +1531,59 @@ table にも当たります。linker は自分が作った binding を知って�
 120 KB の bundle に対してそれです。候補集合が小さいなら、予約集合の
 実験はずっと**間違った項を測っていた**ことになります。
 
+### 候補集合を数えたら 0 だった
+
+予約側の narrowing が 2 回続けて 0 byte だったので、引き算の反対側——
+mangler が**予約前に何を候補にしているか**——を数える census を
+`--explain-mangle` に足しました。答え:
+
+| target | distinct property 名 | 候補 |
+| --- | --- | --- |
+| typebox | 418 | **0** |
+| excalidraw | 909 | **0** |
+| valibot | 147 | **0** |
+| immer | 115 | **0** |
+| remeda | 96 | **0** |
+| ts-pattern | 83 | **0** |
+| superstruct | 54 | **0** |
+| neverthrow | 42 | 1 (`withStackTrace`) |
+| hono | 182 | 6 |
+
+**予約集合は「大きい」のではなく「網羅的」でした。** 全 distinct 名が
+予約されている。だから単一の経路を narrow しても 0 byte になります——
+6 経路が予約している名前は 6 つ全部外さないと候補になりません。#74 と
+#77 の 0 はこれで一貫して説明できます。
+
+そして予約が妥当かどうかも、対象を見れば明らかです: typebox の
+property 名は JSON Schema の**wire format**（`type` / `properties` /
+`items` / `$ref` / `allOf` / `enum` / `pattern`…）、excalidraw は
+`.excalidraw` に serialize される element、remeda は**利用者のデータ**の
+key を触る library。**rename してはいけない名前です。** 不発は欠陥では
+なく正解でした。
+
+### hono の -9.4% は artifact だった
+
+hono だけ 6 候補あり、それが**全部 `__private_brand__0__*`**——
+mtsc が自分で合成した private field の brand 名（約 24 文字）でした。
+
+```
+without --mangle-properties  22,317 bytes, brand 出現 77 箇所
+with    --mangle-properties  20,210 bytes, brand 出現  0 箇所
+delta                        -2,107 bytes (-9.4%)
+```
+
+77 × 約 27 byte ≒ 2,079。**一致します。**
+
+つまり `--mangle-properties` を measured flag に入れる根拠だった
+hono の -9.4% は、**property mangler が別 pass の後片付けをしている
+数字**でした。user が宣言した property 名は、測定した全 target で
+**1 つも rename されていません。**
+
+本当の修正は #79 です: hono の `Context` は本物の `#path` / `#routes`
+などを宣言しているのに `private_fields.mbt` が `#x` に戻せていない。
+`#path` をそのまま emit する方が、どんな mangle 名より短く、構造的に
+正しく、mangler の列から artifact を消せます。
+
 ### zod を corpus から外した
 
 上の 2 番と同じ理由です。zod は永久に suppress され、しかも**失う method が

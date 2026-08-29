@@ -328,8 +328,10 @@ pub(all) struct ManglerConfig {
   mangle_properties : Bool
   reserved_properties : Array[String]
   mangle_properties_shape_color : Bool
+  census : Array[String]?
 }
 pub fn ManglerConfig::default() -> Self
+pub fn ManglerConfig::with_census(Self, Array[String]?) -> Self
 pub fn ManglerConfig::with_mangle_properties(Self, Bool) -> Self
 pub fn ManglerConfig::with_mangle_properties_shape_color(Self, Bool) -> Self
 pub fn ManglerConfig::with_preserve_top_level(Self, Bool) -> Self

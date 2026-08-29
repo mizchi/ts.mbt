@@ -497,8 +497,31 @@ product surfaces now.
   because those names are reserved by another route anyway. Two plausible
   narrowings of the reserved side, implemented and measured, both zero:
   the reserved sets are not the constraint. What the mangler CONSIDERS is
-  the other term of that subtraction and the next question — 247 bytes on
-  typebox is a couple of dozen short names against a 120 KB bundle.
+  the other term of that subtraction, and counting it ends the line of
+  work: a census in the report says how many distinct property names a
+  bundle has and how many survive to be candidates, and the answer is
+  ZERO candidates on typebox (0 of 418), excalidraw (0 of 909), valibot
+  (0 of 147), immer (0 of 115), remeda (0 of 96), ts-pattern (0 of 83)
+  and superstruct (0 of 54); neverthrow has one and hono six. The
+  reserved set is not large, it is EXHAUSTIVE — which is exactly why
+  narrowing any single route measures zero, since a name reserved by six
+  routes needs all six removed. And the reservations are RIGHT: typebox's
+  property names are the JSON-Schema wire format (`type`, `properties`,
+  `items`, `$ref`, `allOf`, `pattern`), excalidraw's are the elements it
+  serializes to `.excalidraw` files, remeda's belong to the caller's own
+  data. Nothing there may be renamed, so the pass being inert is the
+  correct answer and not a defect.
+  Which leaves hono's -2107 bytes (-9.4%), the number that justified
+  putting `--mangle-properties` into the measured flag set. Its six
+  candidates are ALL `__private_brand__0__*` — mtsc's own synthesized
+  private-field brands, about 24 characters each, 77 occurrences,
+  77 x ~27 = the whole delta. Not one USER-DECLARED property name has
+  ever been renamed on any measured target; the pass's entire measured
+  value is cleaning up after `private_fields.mbt`, which failed to lower
+  hono's real `#path` / `#routes` / `#notFoundHandler` back to native
+  private syntax. Emitting `#path` is shorter than any mangled name and
+  correct by construction, so #79 is the actual fix and the -9.4%
+  belongs in the lowering's column, not the mangler's.
   hono (+500 bytes) and zod (+788) *were* wins until the `TypeArgs` fix
   below, which is the point: `f<T>(x)` parses as a wrapper node, nineteen
   passes never peeled it, and the references inside were invisible to
