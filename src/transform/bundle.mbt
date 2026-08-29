@@ -1179,6 +1179,47 @@ pub fn bundle_modules(
           }
         }
       }
+      // Renaming a binding the bundle EXPORTS BY NAME is not free: the
+      // export clause then needs an alias. `export{o}` becomes
+      // `export{a as o}`, so the rename costs `len(new) + 4` there and
+      // saves `len(orig) - len(new)` at each site. Nobody had priced
+      // it, and `compare-terser`'s one remaining LOSS was exactly this:
+      //
+      //   mtsc:   let a={key:1};console.log(a.key);export{a as o}   47
+      //   terser: const o={key:1};console.log(o.key);export{o};     45
+      //
+      // `o` became `a` — the same length, saving nothing — and paid
+      // five bytes for the alias. (The loss was reported under the
+      // `computed_props` label, and that rule is ported and firing;
+      // the harness names the case, not the cause.)
+      //
+      // Scoped to the case that needs no cost model at all: a
+      // SINGLE-CHARACTER export name. The shortest name the mangler can
+      // produce is one character, so renaming such a binding saves
+      // exactly nothing at every site and still pays `len(new) + 4` for
+      // the alias. It is a loss for any bundle, any reference count, any
+      // name the mangler picks.
+      //
+      // The general rule was implemented and measured and does NOT hold
+      // up, so it is not here. `(len(orig) - 1) * sites < 5` — the
+      // optimistic bound, taking `len(new) == 1` on both sides, with
+      // `sites` from `count_name_references` plus the declaration — gave
+      // valibot -54, immer -40, zod -63, excalidraw -231, superstruct
+      // -36 and ts-pattern -3, against remeda +291, typebox +267 and
+      // neverthrow +37: a net LOSS of about 168 bytes across the ten
+      // targets. Break-even (`<=`) was worse still, costing hono 8
+      // bytes where the strict form left it identical. Something the
+      // arithmetic does not model dominates on the targets that
+      // regressed — the reserved names are also withheld from the
+      // generated pool, and `count_name_references` can only undercount
+      // — and a byte optimization that measures worse overall is not
+      // one. The numbers are in the task note so the next attempt
+      // starts from them rather than from the formula.
+      for name in export_roots.keys() {
+        if name.length() == 1 {
+          external_reserved.push(name)
+        }
+      }
       let mangler_cfg = ManglerConfig::default()
         .with_mangle_properties(effective_mangle_props)
         .with_mangle_properties_shape_color(opts.mangle_properties_shape_color)

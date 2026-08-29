@@ -145,14 +145,20 @@ arrow 化が安全なときだけ名前を落とし、それ以外は shorthand 
 `--only <case> --verbose` で出力を見るまで、budget の話だと思って
 定数をいじっていました。
 
-### 残っている loss と、移植しない判断
+### 最後の loss: 1 文字 export だけ移植した
 
-| 差 | rule | 判断 |
-| --- | --- | --- |
-| +2 byte | `computed_props` | 移植しない。差は `export{a as o}`(14) と `export{o}`(9) で、terser は export 名が既に 1 文字なので local をそのまま使えている |
+最後まで残っていた +2 byte は `computed_props` とラベルされていましたが、
+**その rule は移植済みで発火しています**（`{ ["key"]: 1 }` は
+`{ key: 1 }` になる）。harness は case を名指すだけで、原因は名指し
+ません。実際の差はこれです:
 
-`export { a as o }` を `export { o }` にするには、mangler が export 名を
-その binding の mangle 名として割り当てる必要があります。損得は:
+```
+mtsc:   let a={key:1};console.log(o.key);export{a as o}   47
+terser: const o={key:1};console.log(o.key);export{o};     45
+```
+
+mangler が export された `o` を**同じ長さの** `a` に rename し、
+何も節約せずに alias 分を払っていた。損得は:
 
 ```
 alias 形  : refs×len(local) + len(local) + 4 + len(export)
@@ -160,10 +166,26 @@ alias 形  : refs×len(local) + len(local) + 4 + len(export)
 ```
 
 `len(local)=1` として、直接形が勝つのは `refs×(len(export)-1) < 4`。
-export 名が 1 文字なら常に勝ち、2 文字なら refs ≤ 3 まで。**3 文字以上
-なら alias が勝ちます**。実際の library の export 名はほぼ 3 文字以上
-（zod の `z` のような 1 文字は 200 個中 1 個）なので、mangler の割り当て
-に手を入れて得られるのは 1 library あたり数 byte です。
+export 名が 1 文字なら**常に**勝ち、2 文字なら refs ≤ 3 まで、
+3 文字以上なら alias が勝ちます。
+
+**1 文字の場合だけ移植しました。** rename が節約できる byte は
+ちょうど 0 なので、参照回数も mangler が選ぶ名前も関係なく、
+どんな bundle でも必ず損です。cost model を要らない唯一の部分集合です。
+測定: zod **-78 byte**、この case は 47 → 42（最後の loss が win に）、
+他の 9 target と real-world 5 target は byte 単位で不変。
+
+**一般形は実装して測って、落としました。** `(len - 1) × sites < 5`
+——`len(new)=1` を両辺に取った楽観的な上界、`sites` は参照数 + 宣言
+——で測ると valibot -54 / immer -40 / zod -63 / excalidraw -231 /
+superstruct -36 / ts-pattern -3 に対して remeda **+291** / typebox
+**+267** / neverthrow +37 で、10 target 合計で **約 +168 byte の損**
+でした。break-even (`<=`) はさらに悪く、hono を 8 byte 増やします
+（strict `<` なら不変）。上の算術が model していない何かが、退行した
+target では支配的です——予約した名前は**生成 pool からも外れる**ので、
+最も使われる identifier が 1 文字を取れなくなる——そして「測って悪く
+なった byte 最適化」は最適化ではありません。次に触る人が式からでは
+なく数字から始められるように、ここに置いておきます。
 
 `sequences` は loop body 以外——`if` の body、`else` の body、関数末尾——
 にも効きますが、`if` の body では **dangling else** を作れます

@@ -3078,7 +3078,17 @@ test "bundle: fold + treeshake + mangle keeps the export surface" {
   match bundle_modules(files, "entry.ts", opts) {
     Ok(out) => {
       // The export clause survives, and so does the code behind it.
-      assert_true(out.js.contains("as run"))
+      //
+      // Checked as "`run` is exported", not as the alias SPELLING. It
+      // used to assert `as run`, which was incidental: `run` is three
+      // characters and referenced nowhere, so renaming it would save
+      // two bytes and pay five for `export{X as run}`. The bundler now
+      // prices that and keeps the name, making the clause `export{run}`
+      // — the surface this test is about is unchanged either way.
+      assert_true(
+        out.js.contains("as run") || out.js.contains("{run}"),
+        msg="`run` is not exported: \{out.js}",
+      )
       assert_true(out.js.contains("*3") || out.js.contains("* 3"))
       // The unreachable helper is still dropped — the fix restores the
       // roots, it does not disable the pass.

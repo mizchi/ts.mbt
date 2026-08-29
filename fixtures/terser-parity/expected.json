@@ -10,7 +10,7 @@
   "join-statements-with-comma": "WIN",
   "if-return-to-negation": "WIN",
   "quoted-property-to-dot": "WIN",
-  "computed-literal-key": "LOSS",
+  "computed-literal-key": "WIN",
   "while-true-to-for": "WIN",
   "switch-dead-arms": "WIN",
   "typeof-undefined": "WIN",

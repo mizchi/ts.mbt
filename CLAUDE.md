@@ -189,9 +189,24 @@ product surfaces now.
   not ported, while a LOSS *or a tie* on a `type-aware` case means the
   type-driven pass did not fire — see
   [`docs/terser-parity.md`](./docs/terser-parity.md). It stands at
-  31 win / 1 loss, and getting there is a caution about reading a
-  harness's own labels: of the six rules it named, only one was
-  missing as named. `typeofs` was already implemented and simply
+  32 win / 0 loss, and getting there is a caution about reading a
+  harness's own labels: of the seven rules it named, only one was
+  missing as named. The last loss was labelled `computed_props`, and
+  that rule was ported and firing — the real two bytes were the
+  mangler renaming an exported `o` to `a`, the same length, saving
+  nothing and paying five for `export{a as o}`. Renaming an
+  export-clause name costs `len(new) + 4` and saves
+  `(len(orig) - len(new))` per site, and only the single-character case
+  needs no cost model: the saving is exactly zero, so it loses for any
+  reference count and any name the mangler picks. That case is ported
+  (zod -78 bytes, everything else byte-identical). The GENERAL rule was
+  implemented, measured, and dropped: the optimistic bound
+  `(len - 1) * sites < 5` gave -54/-40/-63/-231/-36/-3 on six targets
+  against +291 on remeda and +267 on typebox, a net loss of about 168
+  bytes. Reserving a name also withholds it from the generated pool, so
+  the most-used identifier can lose its one-character slot, and that
+  dominates the alias it saves — the arithmetic is a bound, not a
+  model. `typeofs` was already implemented and simply
   never ran, because peephole is what BUILDS `void 0 === void 0` and
   the fold that collapses it sits in `fold-2`, one phase earlier.
   `negate_iife` was not about negation at all but about splicing a
