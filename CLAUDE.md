@@ -397,6 +397,35 @@ product surfaces now.
   (`console.log` being its only sink) lives in
   `fixtures/mangle-safety/case45-class-escapes-external`, where a real
   external import receives the instance and calls the method back.
+  That protocol list then turned out to stop one step short of the
+  ITERATION protocol, and its own comment is where it stopped: it said
+  a spread obtains an iterator through `Symbol.iterator`, a computed key
+  nothing could drop, without noticing that the object that returns has
+  a `next` which is a plain identifier the pass could and did drop. So
+  `class C { [Symbol.iterator]() { return this } next() {…} }` with
+  `[...new C()]` as its only consumer compiled to a class with no `next`
+  and the spread threw. `mangle.mbt`'s built-in reserved list had
+  `next`/`return`/`throw`/`done`/`value` under a `// Iterator protocol`
+  comment the whole time — renaming was never at risk, only deletion,
+  because `class_method_dce` reads a different set. A unit test now
+  checks the containment so the two cannot drift again, and
+  `fixtures/mangle-safety/case47-iteration-protocol` runs a spread, a
+  `for…of` that breaks (so `return` fires) and a generator under Node.
+  Three constructs the generator had never emitted were probed by hand
+  first. Inheritance came back CLEAN across seventeen shapes — override
+  dispatch, `super.m()`, a three-level chain, a getter override,
+  inherited fields through `JSON.stringify` and `Object.keys`, static
+  inheritance, cross-module `extends`, `instanceof`,
+  `this.constructor.name` — the one apparent difference being
+  `console.log(new Sub())` printing a mangled name, which is
+  `observed_names.mbt`'s stated position (it reserves `.name` reads IN
+  THE SOURCE; `util.inspect` printing a constructor name is not one, and
+  `fuzz-runner`'s `encode` excludes `name` for the same reason). It is
+  in the generator now to KEEP it clean, not because it broke. Async is
+  deliberately absent: the observation is synchronous, so an `async`
+  function's effects land after it and both legs would agree on an empty
+  trace — coverage-shaped and proving nothing. Eight await shapes were
+  checked by hand instead.
 - `src/bridge` consumes `src/checker` for every type-shape decision and runs
   `@checker.check_module` on the synthesized output as a sanity gate. It also
   keeps domain-specific specialization for Node FS / React / Hono / crypto /

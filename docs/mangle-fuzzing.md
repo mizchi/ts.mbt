@@ -638,6 +638,80 @@ receiver が pure な形——ただの変数——で、それは実コード�
 [rule-equivalence](./rule-equivalence.md) と同じ教訓が、generator 側にも
 ありました。
 
+## 文法に無かった 3 つ: inheritance / generator / async
+
+generator が一度も出していなかった構文を 3 つ選んで、まず**手で**探りました。
+
+### inheritance —— 17 probe で異常なし
+
+`class_method_dce` の narrowing、`observed_names` の階層 narrowing、
+private field remap の 3 つが class 階層を読むのに、generator は
+`extends` を一度も出していませんでした。
+
+`--mangle --mangle-properties` 込みで 17 通り試して**すべて一致**:
+override の dispatch、`super.m()`、3 段の chain、getter override、
+継承 field の `JSON.stringify` / `Object.keys`、static 継承、
+module を跨いだ `extends`、`instanceof`、`this.constructor.name`。
+
+1 件だけ差が出たのは `console.log(new Sub())` が `b {}` と出る件ですが、
+これは**仕様通り**です。`observed_names.mbt` の contract は「source に
+書かれた `.name` read を予約する」で、`console.log` が constructor 名を
+出すのは `util.inspect` の挙動であって source read ではありません。
+`fuzz-runner.mjs` の `encode` が `name` を除外しているのも同じ理由です。
+
+健全だと分かった上で、**保ち続けるために** generator に入れました:
+40% の確率で既存 class を継承し、60% の確率で継承 method を override
+して `super.<name>()` を呼ぶ。継承 member は `instanceMembers` に
+引き継ぐので、subclass の instance から読めます。200 seed 中 24 が
+`extends`、11 が `super` を含み、800 comparison で mismatch 0。
+
+### generator —— `next` が消えていた
+
+こちらは**当たり**でした。
+
+```ts
+class Range {
+  [Symbol.iterator]() { return this; }
+  next() { … }
+}
+console.log([...new Range()]);
+```
+
+`next` が削除され、spread が
+`is not a function or its return value is not iterable` で throw。
+
+`implicitly_invoked_protocol_methods`（前節で作った list）は
+`toJSON` / `toString` / `valueOf` / `then` の 4 つで止まっていて、
+**その list 自身のコメントが**「spread は `Symbol.iterator` を呼ぶが
+それは computed key なのでこの pass は落とせない」と書いていました。
+その 1 歩先——`Symbol.iterator` が返す object の **`next`** は
+ただの識別子で、落とせるし落とした——を書いていなかった。
+
+しかも `mangle.mbt` の `mangler_builtin_reserved_properties` には
+`// Iterator protocol` として `next` / `return` / `throw` / `done` /
+`value` が**最初から入っていました**。つまり rename は最初から安全で、
+**削除だけが**危険だった——`class_method_dce` が別の集合を読むからです。
+2 つの list が drift しないよう、unit test で包含関係を検査します。
+
+`for…of` が早期離脱で呼ぶ `return`、`yield*` が呼ぶ `throw` も
+同時に入れました。
+
+generator 側にも入れました: 45% の確率で `function* genN()` と
+hand-rolled iterator class を出し、`[...genN()]` / `[...new genNIter()]`
+を observation に加えます。修正を戻すと **64 comparison 中 16 件**が
+`[BROKEN BASELINE] original ran; our bundle threw: genNIter is not a
+function` として報告されます。
+
+### async —— 意図的に入れていない
+
+observation は同期です。`async` 関数の効果は observation の**後**に
+落ちるので、両 leg が同じ空 trace で一致してしまう——coverage の形を
+した何も証明しない case です。`await` の順序を観測するには runner を
+変える必要があり、generator の仕事ではありません。手で 8 通り
+（`await` 順序、捨てられる `await`、thenable の `then`、`for await`、
+`try/finally` を跨ぐ `await`、async method の mangle）試して全部一致
+することは確認済みです。
+
 ## 修正後の全域 sweep
 
 seed 0..3999、両 shape、**8000 comparison**:

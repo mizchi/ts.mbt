@@ -86,10 +86,12 @@ pub fn collect_externally_visible_props(
 ///   * the members of any class whose VALUE reaches `External`
 ///     observability — the class object or an instance crossed the
 ///     bundle boundary, so the holder can invoke anything on it;
-///   * the protocol methods the KNOWN sinks invoke (`toJSON` for
-///     `JSON.stringify`, `toString`/`valueOf` for string coercion,
-///     `then` for `await`), which no amount of scanning our own source
-///     will find, because a library defines them and never calls them.
+///   * the protocol methods something invokes WITHOUT NAMING them — a
+///     known sink (`toJSON` for `JSON.stringify`, `toString`/`valueOf`
+///     for string coercion) or a language construct (`then` for
+///     `await`, `next` for `for…of` and spread). No amount of scanning
+///     our own source finds these, because a library defines them and
+///     never calls them.
 ///
 /// This is NOT `collect_externally_visible_props`. That function answers
 /// "may this name be renamed" and is right to be broader: it marks a
@@ -112,7 +114,7 @@ pub fn class_members_reachable_off_bundle(
   for n in external_class_member_names(block, external_bindings) {
     out[n] = true
   }
-  for n in sink_invoked_protocol_methods {
+  for n in implicitly_invoked_protocol_methods {
     out[n] = true
   }
   let names : Array[String] = []

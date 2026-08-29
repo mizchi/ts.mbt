@@ -182,6 +182,51 @@ export class Generator {
     // that IS pure — a plain variable — which is also how real code
     // reads a getter. Emitting only the `new` form is why 300 seeds
     // reported nothing with the bug present.
+    // A generator, and a class whose `[Symbol.iterator]` is one.
+    //
+    // Generators are the synchronous half of "code the LANGUAGE calls
+    // without naming it": `[...g()]` and `for…of` obtain an iterator and
+    // then call `next` — and `return` on an early exit — BY NAME.
+    // `class_method_dce` deleted the `next` of a class whose only caller
+    // was a spread, and the mangler's built-in reserved list had the
+    // protocol all along while the DCE pass consulted neither.
+    //
+    // Async is deliberately NOT here. The observation is synchronous, so
+    // an `async` function's effects land after it and both legs would
+    // agree on an empty trace — coverage-shaped and proving nothing.
+    // Covering `await` ordering needs an observation that awaits, which
+    // is a change to the runner, not the generator.
+    this.generatorReaders = [];
+    if (this.chance(0.45)) {
+      const tag = `gen${this.nextEffect}`;
+      const a = this.freshEffect();
+      const b = this.freshEffect();
+      decls.push({
+        k: "raw",
+        text:
+          `function* ${tag}(): Generator<number, void, unknown> {\n` +
+          `  trace.push(${a});\n` +
+          `  yield 1;\n` +
+          `  trace.push(${b});\n` +
+          `  yield 2;\n` +
+          `}\n` +
+          // A hand-rolled iterator class: `[Symbol.iterator]` is a
+          // computed key the pass cannot drop, and `next` is a plain
+          // name it could and did.
+          `class ${tag}Iter {\n` +
+          `  private i = 0;\n` +
+          `  [Symbol.iterator]() { return this; }\n` +
+          `  next(): { value: number; done: boolean } {\n` +
+          `    this.i += 1;\n` +
+          `    return this.i <= 2 ? { value: this.i, done: false } : { value: 0, done: true };\n` +
+          `  }\n` +
+          `}\n` +
+          `function ${tag}Spread() { return [...${tag}()]; }\n` +
+          `function ${tag}IterSpread() { return [...new ${tag}Iter()]; }\n`,
+      });
+      this.generatorReaders.push(`${tag}Spread()`, `${tag}IterSpread()`);
+      this.shadowFnNames.push(`${tag}Spread`, `${tag}IterSpread`);
+    }
     this.getterInstances = [];
     for (const decl of decls) {
       if (decl.k !== "class") continue;
@@ -247,6 +292,12 @@ export class Generator {
     // wrongly never gets the chance. `raw` for the same reason the decls
     // are — these are calls with a fixed shape, not grammar.
     for (const reader of shadowReaders) {
+      program.observe.push({ k: "raw", text: reader });
+    }
+    // The generator readers, observed the same way: `[...g()]` returns
+    // the yielded values AND appends to `trace`, so a dropped `next` or
+    // a dropped `yield` shows in both halves of the comparison.
+    for (const reader of this.generatorReaders ?? []) {
       program.observe.push({ k: "raw", text: reader });
     }
     if (this.shape === "export") program.exports = this.exportList(decls);
@@ -426,10 +477,32 @@ export class Generator {
   }
 
   classDecl(name) {
+    // `extends`, when there is something to extend.
+    //
+    // The generator emitted no inheritance at all, and three passes read
+    // the class hierarchy: `class_method_dce`'s narrowing,
+    // `observed_names`' hierarchy narrowing, and the private-field
+    // remap. Seventeen hand-written probes found the hierarchy sound, so
+    // this is here to KEEP it sound rather than to break it — but a
+    // subclass changes the answer to "which members does an instance
+    // carry" and "which name does `this.constructor` produce", and
+    // neither was ever generated.
+    //
+    // No explicit constructor is emitted, so no `super()` call is
+    // needed: field initializers are legal in a derived class as long as
+    // the class declares no constructor of its own.
+    const base = this.classNames.length > 0 && this.chance(0.4)
+      ? this.pick(this.classNames)
+      : undefined;
     this.classNames.push(name);
     const members = [];
-    const instance = [];
-    const statics = [];
+    // Inherited instance members are reachable off an instance of this
+    // class, so the expression grammar has to know about them —
+    // otherwise a subclass looks like it carries nothing and the
+    // observation never reads through the chain. Statics are inherited
+    // too (`Sub.make()` resolves to `Base.make`).
+    const instance = base ? (this.instanceMembers.get(base) ?? []).slice() : [];
+    const statics = base ? (this.staticMembers.get(base) ?? []).slice() : [];
     this.instanceMembers.set(name, instance);
     this.staticMembers.set(name, statics);
     const fieldCount = this.int(1, 3);
@@ -484,7 +557,41 @@ export class Generator {
       });
       instance.push({ prop, callable: false });
     }
-    return { k: "class", name, members };
+    // An OVERRIDE that calls up the chain. This is the one shape where
+    // the mangler has to rename two declarations in lockstep — the base
+    // method and the override — plus the `super.m()` reference, and get
+    // dynamic dispatch right afterwards.
+    if (base) {
+      const inherited = (this.instanceMembers.get(base) ?? []).filter(
+        (m) => m.callable && !m.prop.startsWith(name.toLowerCase()),
+      );
+      if (inherited.length > 0 && this.chance(0.6)) {
+        const target = this.pick(inherited).prop;
+        members.push({
+          k: "method",
+          name: target,
+          params: ["q0"],
+          entryId: this.freshEffect(),
+          body: [
+            {
+              k: "return",
+              expr: {
+                k: "bin",
+                op: "+",
+                left: { k: "lit", value: "1" },
+                right: {
+                  k: "call",
+                  callee: { k: "member", obj: { k: "raw", text: "super" }, prop: target },
+                  args: [{ k: "lit", value: "0" }],
+                },
+              },
+            },
+          ],
+          static: false,
+        });
+      }
+    }
+    return { k: "class", name, members, extends: base };
   }
 
   // --- Observation ------------------------------------------------

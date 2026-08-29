@@ -227,7 +227,14 @@ let mangler_builtin_reserved_properties : Array[String] = [
    "parse", "stringify", "toJSON",
   // Map / Set
    "size", "has", "get", "set", "delete", "clear", "add",
-  // Iterator protocol
+  // Iterator protocol. `next` / `return` / `throw` also live in
+  // `implicitly_invoked_protocol_methods`, which is the SUBSET the
+  // language invokes without naming — this list is about renaming a
+  // name that belongs to somebody else's ABI, that one is about
+  // deleting a method nothing appears to call. Both facts were here
+  // and `class_method_dce` consulted neither, so a class whose only
+  // caller was `[...x]` lost its `next` and the spread threw. Keep the
+  // two in step: a protocol added there belongs here too.
    "next", "return", "throw", "done", "value",
   // Symbol well-knowns (the property access forms)
    "iterator", "asyncIterator",

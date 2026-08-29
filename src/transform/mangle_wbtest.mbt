@@ -1085,3 +1085,26 @@ test "mangle: an object-pattern declaration's names are pre-bound too" {
     Err(e) => fail("\{e}")
   }
 }
+
+///|
+test "the mangler's built-in list covers every implicitly-invoked protocol" {
+  // Two lists hold overlapping facts: this one says "do not RENAME a
+  // name the host reads", and `implicitly_invoked_protocol_methods` says
+  // "do not DELETE a method the language calls without naming it". The
+  // second is a subset of the first, and it got out of step once
+  // already: `next` was here and not there, so `class_method_dce`
+  // deleted the `next` of a class whose only caller was `[...x]`.
+  //
+  // Checked rather than commented, because the failure is a bundle that
+  // throws at runtime and nothing else in the suite compares the two.
+  let reserved : Map[String, Bool] = {}
+  for n in mangler_builtin_reserved_properties {
+    reserved[n] = true
+  }
+  for n in implicitly_invoked_protocol_methods {
+    assert_true(
+      reserved.contains(n),
+      msg="`\{n}` is invoked implicitly but the mangler may rename it",
+    )
+  }
+}

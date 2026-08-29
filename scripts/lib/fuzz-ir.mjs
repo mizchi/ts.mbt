@@ -347,7 +347,7 @@ function printDecl(decl) {
     }
     case "class":
       return (
-        `class ${decl.name} {\n` +
+        `class ${decl.name}${decl.extends ? ` extends ${decl.extends}` : ""} {\n` +
         decl.members.map((m) => printClassMember(m, 1)).join("") +
         `}\n`
       );

@@ -52,31 +52,52 @@ pub(all) struct Sink {
 }
 
 ///|
-/// Methods the KNOWN sinks call on the values handed to them.
+/// Methods invoked WITHOUT BEING NAMED — by a known sink, or by a
+/// language construct.
 ///
 /// Everything else in this file answers "which property NAMES does this
 /// sink observe". This answers the neighbouring question the catalog
-/// never asked: which methods does it INVOKE? The two come apart, and
+/// never asked: which methods get INVOKED? The two come apart, and
 /// `class_method_dce` needs the second one — a method nothing in the
-/// bundle calls by name is deletable only if no sink calls it either.
+/// bundle calls by name is deletable only if nothing else calls it
+/// either.
 ///
-/// The list is short because the protocols are: `JSON.stringify` calls
-/// `toJSON`, `String(x)` and `` `${x}` `` and `+` call `toString` and
-/// `valueOf`, `await x` calls `then` on any thenable, and a spread or
-/// destructure of an iterable calls `Symbol.iterator` (a computed key,
-/// so not a name this pass can drop in the first place).
+/// The protocols, and who drives each:
+///
+///   * `toJSON` — `JSON.stringify`.
+///   * `toString`, `valueOf` — `String(x)`, `` `${x}` ``, `+`, and every
+///     other `ToPrimitive`.
+///   * `then` — `await x`, and `Promise.resolve(x)` on any thenable.
+///   * `next`, `return`, `throw` — the ITERATION protocol. `for…of`,
+///     spread, array destructuring, `Array.from` and `yield*` obtain an
+///     iterator through `Symbol.iterator` (a computed key, so nothing
+///     this pass could drop) and then call `next` on it BY NAME. That
+///     last step is the one that was missing:
+///
+///         class Range {
+///           [Symbol.iterator]() { return this; }
+///           next() { … }
+///         }
+///         console.log([...new Range()]);
+///
+///     compiled to a class with no `next` and the spread threw. The
+///     comment here used to stop at "`Symbol.iterator` is a computed
+///     key" — one step short of the plain identifier that follows it.
+///     `return` is called on early exit from `for…of` (a `break` or a
+///     throw) and `throw` by `yield*` delegation; both are plain names
+///     too, and both cost nothing to keep.
 ///
 /// It is unconditional rather than derived per sink. Deriving it would
-/// mean tracking which specific sink each class value reaches, and the
-/// win is a handful of method names on classes that define a `toJSON`
-/// nobody calls — `class-method-dce` moves zero bytes on all ten
-/// measured targets, so there is nothing there to buy.
+/// mean tracking which specific sink or construct each class value
+/// reaches, and the win is a handful of method names on classes that
+/// define a `toJSON` nobody calls — `class-method-dce` moves zero bytes
+/// on all ten measured targets, so there is nothing there to buy.
 ///
 /// These are exactly the methods a library defines and never calls
 /// itself, which is why the hole this closes was invisible: the
 /// syntactic access set says "unused" about every one of them.
-pub let sink_invoked_protocol_methods : Array[String] = [
-  "toJSON", "toString", "valueOf", "then",
+pub let implicitly_invoked_protocol_methods : Array[String] = [
+  "toJSON", "toString", "valueOf", "then", "next", "return", "throw",
 ]
 
 ///|

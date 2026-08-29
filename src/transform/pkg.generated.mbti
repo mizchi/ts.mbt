@@ -79,6 +79,8 @@ pub fn format_escape_explanation(EscapeBreakdown) -> Array[String]
 
 pub fn iife_class_lift_block(@ast.TsBlock) -> @ast.TsBlock
 
+pub let implicitly_invoked_protocol_methods : Array[String]
+
 pub fn imported_const_enum_table(Array[@ast.TsImportDecl], Map[String, String], (String) -> Array[@ast.TsEnumDecl]?, (String) -> Array[@ast.TsExportSpec]?, (String) -> Array[@ast.TsReExportSpec]?, (String, String) -> String?) -> Map[String, @ast.TsExpr]
 
 pub fn infer_container_symbols(SymbolGraph, ContainerFacts) -> Map[Int, Bool]
@@ -138,8 +140,6 @@ pub fn plan_unused_params(@ast.TsBlock, keep? : Map[String, Bool], declines? : A
 pub fn reserve_props_from_sink(Sink, Int, SymbolGraph, Map[String, Bool], Map[String, Bool]) -> Unit
 
 pub fn reserved_props_from_observability(SymbolGraph, Map[Int, Observability], type_env? : Map[String, @ast.TsType], class_members? : Map[String, Array[String]]) -> Map[String, Bool]
-
-pub let sink_invoked_protocol_methods : Array[String]
 
 pub fn string_name_set(SymbolGraph) -> Map[String, Bool]
 
