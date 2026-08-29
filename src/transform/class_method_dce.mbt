@@ -76,10 +76,40 @@
 // no `addPoint`.
 //
 // So: `block` is what gets REWRITTEN, `scope` is what gets ANALYSED.
+//
+// The export surface is only HALF of "the bundle's own consumer", and
+// for an application bundle it is the half that does not apply. A class
+// whose constructor or instance is handed to a function this bundle
+// does not own has left: whoever received it can call anything on it,
+// and no amount of scanning our own source will predict which name.
+//
+//     class C { m() {} }
+//     console.log(new C());
+//
+// deleted `m` under plain `mtsc entry.ts --bundle`, no optimization
+// flag. And the general form is not a corner case: `JSON.stringify`
+// calls `toJSON`, `String(x)` calls `toString`, `await x` calls `then`
+// — protocol methods every library defines and none of them calls
+// itself, so the syntactic access set says "unused" about all of them.
+//
+// `off_bundle` is the answer, from
+// `class_members_reachable_off_bundle`. It has NO default, and that is
+// deliberate: `scope` above shows what an innocent-looking default
+// costs, so a caller that cannot supply it gets a pass that declines to
+// run rather than one that quietly deletes reachable methods.
+//
+// It is NOT the property mangler's reserved set. That set answers "may
+// this NAME be renamed" and is right to be broader; deletion is the
+// stronger claim and needs the narrower fact. See
+// `class_members_reachable_off_bundle`.
 
 ///|
 pub fn class_method_dce_block(
   block : @ast.TsBlock,
+  // Members something outside the bundle can invoke, from
+  // `class_members_reachable_off_bundle`. `None` means the caller did
+  // not compute it and the pass does nothing — see the note above.
+  off_bundle : Array[String]?,
   keep? : Map[String, Bool] = {},
   // The whole bundle, when `block` is one module of it. Defaults to
   // `block`, which is right for a caller that hands over everything.
@@ -98,6 +128,21 @@ pub fn class_method_dce_block(
   type_aliases? : Array[@ast.TsTypeAlias] = [],
   explain? : Array[String]? = None,
 ) -> @ast.TsBlock {
+  // 0. The off-bundle question, before anything else. An unanswered one
+  //    means no method may be dropped.
+  let off_bundle_names = match off_bundle {
+    None => {
+      match explain {
+        Some(out) =>
+          out.push(
+            "declined — the caller supplied no off-bundle reachability, so nothing outside could be ruled out.",
+          )
+        None => ()
+      }
+      return block
+    }
+    Some(names) => names
+  }
   // 1. Cheap exit when neither shape of class is present: no
   //    NativeClassStmt/Expr AND no IIFE-lowered class. (The IIFE
   //    pattern is `let X = function () { … return X; }();`.)
@@ -163,8 +208,14 @@ pub fn class_method_dce_block(
   collect_static_accesses_block_skipping_iife(
     analysed, iife_classes_in_scope, accessed,
   )
-  // Externally visible members count as accesses.
+  // Externally visible members count as accesses — both halves of
+  // "externally visible": the export surface, which a library consumer
+  // calls by name, and off-bundle reachability, which is an application
+  // handing a class value to somebody who can call anything on it.
   for name in keep.keys() {
+    accessed[name] = true
+  }
+  for name in off_bundle_names {
     accessed[name] = true
   }
   // 3b. Own-enumerable enumeration downgrade. `Object.keys(x)` and

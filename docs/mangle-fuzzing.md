@@ -513,32 +513,95 @@ operand ではなく unary operator なので残り、値が捨てられる
 expression statement では意味を変えません。3 本の leg は同じ source を
 走り続けます。
 
-### 追えたが直さなかったもの
+### 11. class の method が消える（37 node）
 
-**class の method が消える**（37 node）。
-`class C { m() {} } console.log(new C())` が、`mtsc --bundle` だけで
-`m` を削除します。`class_method_dce` の `keep` は export surface だけで、
-**class の値が bundle 境界を越えたという概念がない**——library bundle の
-話しかしていないので、application bundle には保護が一切ありません。
-実コードでの形は `JSON.stringify` が `toJSON` を呼び、`String(x)` が
-`toString` を、`for…of` が `Symbol.iterator` を、`await` が `then` を
-呼ぶという、**library 自身は決して呼ばない protocol method** です。
+```ts
+class C { m() {} }
+console.log(new C());
+```
 
-`collect_externally_visible_props` をそのまま食わせる修正を試して
-**revert しました**。あの集合は property mangler の質問（「この *名前* を
-rename して良いか」）に答えるもので、escape する式の部分木に instance が
-現れただけで class を observed と見なすため、
-`console.log(new C().live())` で全部予約され dce-coverage が 3 件退行
-します。正しい形は `External` observability（`console.log` /
-`JSON.stringify` は semantics が**既知**で、任意の method を呼びはしない）
-に限って pin し、既知 sink が実際に呼ぶ protocol method は固定リストで
-持つこと。`escape_breakdown` に External だけを切り出す口が今はなく、
-そこが最初の一歩です。
+`mtsc --bundle` だけで `m` が削除されます。`class_method_dce` の `keep`
+は export surface だけで、**class の値が bundle 境界を越えたという概念が
+なかった**——library bundle の話しかしていないので、application bundle
+には保護が一切ありません。実コードでの形は `JSON.stringify` が `toJSON`
+を呼び、`String(x)` が `toString` を、`await` が `then` を呼ぶという、
+**library 自身は決して呼ばない protocol method** です。
 
-`fuzz-runner.mjs` の `functionMembers` が sink で prototype を reflect
-するのが妥当かも、併せて決める必要があります。fail-closed 規則を
-主張していて、それがこの bug を見つけた——が、`console.log` の実際の
-semantics より厳しい。
+#### 最初の試みと、なぜ revert したか
+
+`collect_externally_visible_props` をそのまま食わせたら **dce-coverage が
+3 件退行**しました。あの集合は property mangler の質問——「この *名前* を
+rename して良いか」——に答えるもので、正しく広い: rename は名前が現れる
+全箇所で一貫していなければならないので、escape する式の部分木に instance
+が現れただけで class を observed と見なします。**削除はより強い主張**で、
+より狭い事実を必要とします。`console.log(new C().live())` で全部予約され、
+pass は名前だけ残って何もしなくなりました。
+
+#### 正しい gate
+
+`External` observability **だけ**で pin します。`External` は「値が bundle
+を出た、または semantics が列挙できない sink に届いた」という水準で、
+それ未満は全部**既知の** sink——そして既知の sink は任意の method を
+呼びません。加えて、既知 sink が実際に呼ぶ protocol method
+(`toJSON` / `toString` / `valueOf` / `then`) は固定リストで持ちます
+(`sink_invoked_protocol_methods`)。
+
+`class_members_reachable_off_bundle` が両者を合わせた答えを返し、
+`class_method_dce_block` は `off_bundle` を**デフォルトなしで**取ります。
+`scope` parameter が「無害に見えるデフォルト」の代償を示した通りなので、
+答えを用意できない caller は「黙って到達可能な method を消す」のではなく
+「何もしない」に落ちます。
+
+#### 途中で見つかった 2 つ
+
+**(a) `new C()` が class に繋がっていなかった。**
+`collect_immediate_sources` の `New` arm が `Unknown` を返していたので、
+
+```ts
+const w = new Widget();
+register(w);          // register は外部 import
+```
+
+の backward propagation は `w` で止まり `Widget` に届きませんでした。
+一方 `register(new Widget())` は**届く**——sink seeder が式自身を歩くので。
+**同じプログラムの 2 つの綴りで答えが違い、負ける方が実コードの書き方**
+です。instance の identity は class から来るので、`New` は
+`SymVal(class)` を source にします。
+
+**(b) `analyze_observability` が quadratic だった。**
+worklist が pop するたびに **flow_edges 全体を走査**していました
+(O(symbols × edges))。`FuncArg` 向けの逆引き index は既にあったのに
+`SymVal` 向けが無い。9 MB の TypeScript bundle で
+`mtsc --bundle --mangle` の **43.8s のうち 40s** がここでした。
+`--mangle-properties` しか consumer が無く、その規模の target で
+それを有効にする harness が無かったので見えていなかった。
+`class_method_dce` が全 bundle で同じ質問をするようになって表に出ました。
+
+| | before | after |
+| --- | --- | --- |
+| `--bundle --mangle` | 43.8 s | **4.7 s** |
+| `+ --mangle-properties` | 85.3 s | **7.0 s** |
+
+出力は byte 単位で同一、type-aware corpus も 10 target 全て不変です。
+
+#### fuzzer 側: sink での prototype reflection
+
+seed 1261 自身は **false positive** でした。`console.log`、`util.inspect`、
+`JSON.stringify`、`String(x)`、`Object.keys` の**どれも prototype method
+の存在を観測できません**——`C {}` と出るだけです。observer の
+`functionMembers` / `protoMembers` は、プログラム自身の sink が届かない
+ところまで手を伸ばしていました。
+
+なので sink shape の観測では prototype を reflect しません。export shape
+では**そのまま**です: library bundle の consumer は本当に任意の method を
+呼べるので、そこでは正しい観測です。
+
+そして sink shape が到達できない**本当の危険**——bundle が見えない callee
+に class を渡す形——は corpus に置きました
+(`fixtures/mangle-safety/case45-class-escapes-external`)。実際の external
+import が instance を受け取って method を呼び返し、Node で走ります。
+kept な名前は全て、同じ class か同じ sink 経由の dropped な名前と対に
+してあるので、修正が「pass を止める」形になっていないことが分かります。
 
 ## 修正後の全域 sweep
 

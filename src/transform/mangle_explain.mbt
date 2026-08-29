@@ -39,19 +39,56 @@ pub(all) struct EscapeBreakdown {
   value_tree : Array[String]
   // Names spelled by a `"k" in obj` probe.
   in_probe : Array[String]
+  // Member names of every class whose VALUE reaches `External`
+  // observability — the class object or one of its instances crossed
+  // the bundle boundary, so whoever holds it can invoke anything on it.
+  //
+  // Deliberately NOT part of the merged reserved set: this answers a
+  // different question from the rest of this struct. Everything above
+  // answers "may this NAME be renamed", which is about a name; this
+  // answers "may this class's methods be DELETED", which is about a
+  // value. `class_method_dce` is the only consumer, and the two
+  // questions come apart precisely at the levels below `External`:
+  // `console.log(new C())` observes C's property NAMES (so they must
+  // not be renamed) without being able to CALL anything on the
+  // instance, because `console.log`'s semantics are known. Feeding the
+  // merged set to the DCE pass instead was tried, and it reserved every
+  // method of every class an instance of which appeared anywhere in an
+  // escaping subtree — `console.log(new C().live())` included.
+  external_class_members : Array[String]
   // Why the wildcard fired. Empty means the analysis does not suppress
   // property mangling.
   wildcard_reasons : Array[String]
 }
 
 ///|
-/// Compute the reserved set in pieces. `collect_externally_visible_props`
-/// merges the result; `--explain-mangle` prints it.
-pub fn escape_breakdown(
+/// The graph and the per-symbol observability, which every escape
+/// question starts from.
+///
+/// Factored out because there are now two consumers with very different
+/// appetites: `escape_breakdown` goes on to build the whole reserved set
+/// (a value-tree walk from every recursive root, the external-index
+/// scan, the literal and in-probe collection), and
+/// `class_members_reachable_off_bundle` needs nothing but the
+/// `External` rows. Having the second call the first cost 40 seconds on
+/// the 9 MB TypeScript bundle for a result it then threw 99% of away —
+/// and made plain `mtsc --bundle` pay it, since `class_method_dce` runs
+/// whether or not property mangling is on.
+///
+/// Shared rather than re-derived: the setup is three steps with an
+/// order that matters (host provenance BEFORE the graph walk, so call
+/// sites can be classified by provable-internal rather than
+/// known-dangerous), and this repo has paid for re-derived setup often
+/// enough.
+fn block_observability(
   block : @ast.TsBlock,
   external_bindings : Map[String, Bool],
-  type_env? : Map[String, @ast.TsType] = {},
-) -> EscapeBreakdown {
+) -> (
+  SymbolGraph,
+  Map[SymbolId, Observability],
+  Array[(Sink, ScopeId)],
+  Map[String, Bool],
+) {
   // Phase 0: whole-block provenance. Which binding names hold a value
   // the host owns, and which bundle functions hand one back. The graph
   // walk needs this up front so it can classify each call site by
@@ -67,6 +104,69 @@ pub fn escape_breakdown(
     host_shaped=host_shaped_names,
     host_returning~,
   )
+  (
+    graph,
+    analyze_observability(graph, scoped_sinks),
+    scoped_sinks,
+    host_shaped_names,
+  )
+}
+
+///|
+/// Member names of every class whose VALUE reaches `External`
+/// observability. See `class_members_reachable_off_bundle`, the public
+/// entry point, for what the caller does with it and why this is not
+/// the property mangler's reserved set.
+pub fn external_class_member_names(
+  block : @ast.TsBlock,
+  external_bindings : Map[String, Bool],
+) -> Array[String] {
+  let (graph, obs_map, _, _) = block_observability(block, external_bindings)
+  let class_members = class_member_names(block)
+  let out : Map[String, Bool] = {}
+  collect_external_class_members(graph, obs_map, class_members, out)
+  sorted_names(out)
+}
+
+///|
+/// `seed_from_expr` seeds a `NewExpr(Var(C))` on `C`'s own symbol, and
+/// `collect_immediate_sources`'s `New` arm carries an instance held in a
+/// variable back to it, so asking about the `ClassDecl` symbol covers
+/// both `sink(C)` and `sink(new C())` however the instance was spelled.
+fn collect_external_class_members(
+  graph : SymbolGraph,
+  obs_map : Map[SymbolId, Observability],
+  class_members : Map[String, Array[String]],
+  out : Map[String, Bool],
+) -> Unit {
+  for entry in obs_map {
+    let (sym_id, obs) = entry
+    if obs is External {
+      let sym = graph.symbols[sym_id]
+      if sym.kind is ClassDecl {
+        match class_members.get(sym.name) {
+          Some(names) =>
+            for n in names {
+              out[n] = true
+            }
+          None => ()
+        }
+      }
+    }
+  }
+}
+
+///|
+/// Compute the reserved set in pieces. `collect_externally_visible_props`
+/// merges the result; `--explain-mangle` prints it.
+pub fn escape_breakdown(
+  block : @ast.TsBlock,
+  external_bindings : Map[String, Bool],
+  type_env? : Map[String, @ast.TsType] = {},
+) -> EscapeBreakdown {
+  let (graph, obs_map, scoped_sinks, host_shaped_names) = block_observability(
+    block, external_bindings,
+  )
   let numeric = infer_numeric_symbols(graph)
   let numeric_names = numeric_name_set(graph, numeric)
   // Bindings whose TS annotation is a closed string-literal type or a
@@ -77,10 +177,11 @@ pub fn escape_breakdown(
   collect_props_on_external_block(
     block, external_bindings, reserved_external, numeric_names, literal_idx_names,
   )
-  // Backward-propagate observability from sinks through FuncReturn /
-  // FuncArg edges, so a value reaching a sink through a parameter or a
-  // return still tracks back to the binding it came from.
-  let obs_map = analyze_observability(graph, scoped_sinks)
+  // `obs_map` above is the backward propagation of observability from
+  // sinks through FuncReturn / FuncArg edges, so a value reaching a
+  // sink through a parameter or a return still tracks back to the
+  // binding it came from.
+  //
   // Class members, so an observed class contributes the names its
   // instances carry. `console.log(new C())` seeds C's own symbol (see
   // `seed_from_expr`) and this is what turns that into `C`'s field and
@@ -186,6 +287,13 @@ pub fn escape_breakdown(
       block, external_bindings, numeric_names, literal_idx_names, wildcard_reasons,
     )
   }
+  // The External-only slice, for `class_method_dce` — reported here so
+  // `--explain-mangle` can show it, computed by the same function the
+  // pass itself calls.
+  let external_class_members : Map[String, Bool] = {}
+  collect_external_class_members(
+    graph, obs_map, class_members, external_class_members,
+  )
   {
     external_chain: sorted_names(reserved_external),
     sink_observability: sorted_names(reserved_obs),
@@ -193,6 +301,7 @@ pub fn escape_breakdown(
     host_shaped: sorted_names(reserved_from_external),
     value_tree: sorted_names(reserved_tree),
     in_probe: sorted_names(reserved_in_probes),
+    external_class_members: sorted_names(external_class_members),
     wildcard_reasons,
   }
 }
@@ -351,5 +460,15 @@ pub fn format_escape_explanation(b : EscapeBreakdown) -> Array[String] {
   explain_section(out, "read off a host-shaped value", b.host_shaped)
   explain_section(out, "reachable through an observed value tree", b.value_tree)
   explain_section(out, "named by an `in` probe", b.in_probe)
+  // A different question from the six above, printed here because this
+  // is where a person looks when a method they expected to disappear
+  // did not: those reserve a NAME against renaming, this keeps a class's
+  // methods against DELETION, and the levels below `External` separate
+  // them.
+  explain_section(
+    out,
+    "kept from class-method DCE: the class value left the bundle",
+    b.external_class_members,
+  )
   out
 }

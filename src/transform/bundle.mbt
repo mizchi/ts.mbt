@@ -846,13 +846,27 @@ pub fn bundle_modules(
     })
     // Class-method DCE: drop methods on native class declarations
     // that nothing in the bundle accesses by name — except the ones
-    // the export surface reaches, which the consumer calls. Gated on
-    // the absence of reflection / dynamic-key access in the bundle.
+    // the export surface reaches, which the consumer calls, and the
+    // ones something OFF the bundle can invoke. Gated on the absence
+    // of reflection / dynamic-key access in the bundle.
+    //
+    // The off-bundle set is computed whether or not property mangling
+    // is on: this pass DELETES on the strength of it, so the analysis
+    // is a correctness prerequisite rather than an optimization's.
+    // `mtsc entry.ts --bundle` with no other flag ran this pass and
+    // deleted every method of a class it had handed to `console.log`.
     let method_dce_reasons : Array[String] = []
     combined = if opts.phase_enabled("class-method-dce") {
+      let off_bundle = timer.phase("class-method-dce-reach", () => {
+        class_members_reachable_off_bundle(
+          combined,
+          external_import_bindings(external_imports),
+        )
+      })
       timer.phase("class-method-dce", () => {
         class_method_dce_block(
           combined,
+          Some(off_bundle),
           keep=export_surface,
           class_fields=combined_class_fields,
           type_aliases=combined_type_aliases,
@@ -1324,6 +1338,13 @@ pub fn bundle_modules(
       stmts: all_stmts,
       stmt_positions: [],
     })
+    // Over the same bundle-wide scope, and hoisted out of the loop: it
+    // is loop-invariant, and computing it per module would be one full
+    // escape analysis per file.
+    let dce_off_bundle = class_members_reachable_off_bundle(
+      dce_scope,
+      external_import_bindings(external_imports),
+    )
     for i, path in order {
       let m = match modules.get(path) {
         Some(node) => node
@@ -1375,6 +1396,7 @@ pub fn bundle_modules(
       }
       let lifted_block = class_method_dce_block(
         iife_class_lift_block(m.block),
+        Some(dce_off_bundle),
         keep=export_surface,
         scope=Some(dce_scope),
         class_fields=all_class_fields,

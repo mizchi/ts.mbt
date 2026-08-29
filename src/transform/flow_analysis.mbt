@@ -135,7 +135,17 @@ pub fn analyze_observability(
   // Pre-build a reverse index `FuncArg(fid, i) -> arg expressions
   // landing here` so the parameter-side propagation is O(degree)
   // per param instead of O(edges).
+  //
+  // And the same index for `SymVal` targets, which the propagation loop
+  // below used to find by scanning EVERY flow edge per popped symbol —
+  // O(symbols x edges), i.e. quadratic. That was 40 of the 43 seconds
+  // `mtsc --bundle --mangle` spent on the 9 MB TypeScript bundle. It
+  // had been invisible because the only consumer was
+  // `--mangle-properties`, which nothing in the corpus enables on a
+  // target that size; `class_method_dce` now asks the same question on
+  // every bundle, which is what surfaced it.
   let arg_edges_by_param : Map[SymbolId, Array[FlowNode]] = {}
+  let val_edges_by_sym : Map[SymbolId, Array[FlowNode]] = {}
   for edge in g.flow_edges {
     match edge.to {
       FuncArg(fid, idx) =>
@@ -149,6 +159,11 @@ pub fn analyze_observability(
               }
             }
           None => ()
+        }
+      SymVal(s) =>
+        match val_edges_by_sym.get(s) {
+          Some(arr) => arr.push(edge.from)
+          None => val_edges_by_sym[s] = [edge.from]
         }
       _ => ()
     }
@@ -167,10 +182,12 @@ pub fn analyze_observability(
     let target = result.get(sym).unwrap_or(Hidden)
     // For every inbound edge to SymVal(sym), propagate `target`
     // to the source.
-    for edge in g.flow_edges {
-      if edge.to is SymVal(s) && s == sym {
-        propagate_to_flow_source(edge.from, target, g, result, worklist)
-      }
+    match val_edges_by_sym.get(sym) {
+      Some(sources) =>
+        for src in sources {
+          propagate_to_flow_source(src, target, g, result, worklist)
+        }
+      None => ()
     }
     // If sym is a parameter, every call-site argument also
     // inherits the target.

@@ -37,7 +37,9 @@ pub fn bundle_modules(Map[String, String], String, BundleOptions) -> Result[Bund
 
 pub fn class_member_names(@ast.TsBlock) -> Map[String, Array[String]]
 
-pub fn class_method_dce_block(@ast.TsBlock, keep? : Map[String, Bool], scope? : @ast.TsBlock?, class_fields? : Array[(String, @ast.TsType)], type_aliases? : Array[@ast.TsTypeAlias], explain? : Array[String]?) -> @ast.TsBlock
+pub fn class_members_reachable_off_bundle(@ast.TsBlock, Map[String, Bool]) -> Array[String]
+
+pub fn class_method_dce_block(@ast.TsBlock, Array[String]?, keep? : Map[String, Bool], scope? : @ast.TsBlock?, class_fields? : Array[(String, @ast.TsType)], type_aliases? : Array[@ast.TsTypeAlias], explain? : Array[String]?) -> @ast.TsBlock
 
 pub fn classes_observing_own_name(@ast.TsBlock) -> (Map[String, Bool], Bool)
 
@@ -64,6 +66,8 @@ pub fn escape_breakdown(@ast.TsBlock, Map[String, Bool], type_env? : Map[String,
 pub fn explain_dead_fields(@ast.TsBlock, Map[String, Bool]) -> Array[String]
 
 pub fn exported_surface_props(@ast.TsBlock, Map[String, Bool]) -> Array[String]
+
+pub fn external_class_member_names(@ast.TsBlock, Map[String, Bool]) -> Array[String]
 
 pub fn external_import_bindings(Array[@ast.TsImportDecl]) -> Map[String, Bool]
 
@@ -134,6 +138,8 @@ pub fn plan_unused_params(@ast.TsBlock, keep? : Map[String, Bool], declines? : A
 pub fn reserve_props_from_sink(Sink, Int, SymbolGraph, Map[String, Bool], Map[String, Bool]) -> Unit
 
 pub fn reserved_props_from_observability(SymbolGraph, Map[Int, Observability], type_env? : Map[String, @ast.TsType], class_members? : Map[String, Array[String]]) -> Map[String, Bool]
+
+pub let sink_invoked_protocol_methods : Array[String]
 
 pub fn string_name_set(SymbolGraph) -> Map[String, Bool]
 
@@ -241,6 +247,7 @@ pub(all) struct EscapeBreakdown {
   host_shaped : Array[String]
   value_tree : Array[String]
   in_probe : Array[String]
+  external_class_members : Array[String]
   wildcard_reasons : Array[String]
 }
 

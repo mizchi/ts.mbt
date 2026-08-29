@@ -4371,3 +4371,123 @@ test "mangle: an object assigned into an UNOBSERVED binding still drops" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "class-method-dce: a class handed off the bundle keeps every method" {
+  // The pass's `keep` was the export surface and nothing else, so it had
+  // no notion of a class VALUE crossing the bundle boundary. `Widget` is
+  // not exported and nothing here names `render`; the only caller is the
+  // host that received the instance. Both methods have to stay, because
+  // the bundle cannot know which one the host picks.
+  //
+  // Spelled with a local `const` on purpose. `collect_immediate_sources`
+  // answered `Unknown` for `new C()`, so the backward propagation
+  // stopped at `w` and never reached `Widget`, while the inline
+  // `register(new Widget())` DID reach it because the sink seeder walks
+  // the expression itself. One program, two spellings, two answers — and
+  // the spelling that lost is the one real code uses.
+  let files = vfs([
+    (
+      "entry.ts",
+      "import { register, runAll } from \"host\";\n" +
+      "class Widget {\n" +
+      "  render() { return \"r\"; }\n" +
+      "  neverNamedHere() { return \"n\"; }\n" +
+      "}\n" +
+      "const w = new Widget();\n" +
+      "register(w);\n" +
+      "export const results = runAll();\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_allow_unresolved_imports(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("render"), msg="got: \{out.js}")
+      assert_true(out.js.contains("neverNamedHere"), msg="got: \{out.js}")
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class-method-dce: the inline `new` spelling reaches its class too" {
+  // The spelling that already worked, kept as a pair for the one above:
+  // a fix that made the local-`const` case pass by breaking this one
+  // would look identical in the test count.
+  let files = vfs([
+    (
+      "entry.ts",
+      "import { register, runAll } from \"host\";\n" +
+      "class Widget {\n" +
+      "  render() { return \"r\"; }\n" +
+      "}\n" +
+      "register(new Widget());\n" +
+      "export const results = runAll();\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_allow_unresolved_imports(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_true(out.js.contains("render"), msg="got: \{out.js}")
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class-method-dce: a KNOWN sink does not pin every method" {
+  // The other direction, and the reason the fix is `External`
+  // observability rather than the property mangler's reserved set.
+  // `console.log` and `JSON.stringify` have known semantics: they
+  // observe property NAMES (so those must not be renamed) but invoke
+  // nothing except `toJSON`. Feeding the pass the mangler's set instead
+  // reserved everything any sink touched and turned it off in all but
+  // name.
+  //
+  // So `toJSON` stays — nothing here calls it — and
+  // `notAProtocolMethod` on the same class goes.
+  let files = vfs([
+    (
+      "entry.ts",
+      "class Payload {\n" +
+      "  toJSON() { return { tag: \"p\" }; }\n" +
+      "  notAProtocolMethod() { return \"dead\"; }\n" +
+      "}\n" +
+      "const p = new Payload();\n" +
+      "export const serialized = JSON.stringify(p);\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_true(out.js.contains("toJSON"), msg="got: \{out.js}")
+      assert_false(
+        out.js.contains("notAProtocolMethod"),
+        msg="a known sink pinned a non-protocol method: \{out.js}",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class-method-dce: an unescaped class still loses its dead method" {
+  // The control. Nothing crosses the boundary and only `live` is called,
+  // so `deadWeight` goes — otherwise every assertion above would be
+  // satisfied by a pass that does nothing.
+  let files = vfs([
+    (
+      "entry.ts",
+      "class Local {\n" +
+      "  live() { return 1; }\n" +
+      "  deadWeight() { return 2; }\n" +
+      "}\n" +
+      "const l = new Local();\n" +
+      "export const v = l.live();\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_true(out.js.contains("live"), msg="got: \{out.js}")
+      assert_false(out.js.contains("deadWeight"), msg="got: \{out.js}")
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}

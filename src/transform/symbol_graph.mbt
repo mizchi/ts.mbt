@@ -1613,6 +1613,19 @@ fn collect_flow_sources(
 }
 
 ///|
+/// Peel the type-only wrappers that carry no runtime value, so a
+/// question about the expression that actually runs is asked of it.
+/// `TypeArgs` is the one that has cost this pipeline two soundness bugs
+/// by defaulting to fail-open, so it is peeled here explicitly.
+fn strip_expr_wrappers(e : @ast.TsExpr) -> @ast.TsExpr {
+  match e {
+    As(inner, _) | Satisfies(inner, _) | NonNull(inner) | TypeArgs(_, inner) =>
+      strip_expr_wrappers(inner)
+    _ => e
+  }
+}
+
+///|
 fn expr_flow_sources(w : SgWalker, expr : @ast.TsExpr) -> Array[FlowNode] {
   let out : Array[FlowNode] = []
   collect_flow_sources(w, expr, out)
@@ -1749,7 +1762,33 @@ fn collect_immediate_sources(
         _ => out.push(Unknown)
       }
     MethodCall(_, _, _) => out.push(Unknown)
-    New(_, _) | NewExpr(_, _) => out.push(Unknown)
+    // An instance's identity comes from its class. `const w = new C()`
+    // makes `w` a value of `C`, so an observation of `w` is an
+    // observation of `C`'s members — which is exactly what
+    // `reserved_props_from_observability`'s `ClassDecl` arm already
+    // assumes for the direct case.
+    //
+    // Without this edge the backward propagation stopped at `w`:
+    // `register(w)`, an external callee receiving the instance, never
+    // reached `C`, while the inline `register(new C())` did, because the
+    // sink seeder walks the expression itself. One program, two
+    // spellings, two answers — and the spelling that lost is the one
+    // real code uses. It surfaced as `class_method_dce` deleting the
+    // methods of a class the host holds.
+    New(name, _) =>
+      match sg_lookup(w.g, w.current_scope, name) {
+        Some(id) => out.push(SymVal(id))
+        None => out.push(Unknown)
+      }
+    NewExpr(callee, _) =>
+      match strip_expr_wrappers(callee) {
+        @ast.TsExpr::Var(n) =>
+          match sg_lookup(w.g, w.current_scope, n) {
+            Some(id) => out.push(SymVal(id))
+            None => out.push(Unknown)
+          }
+        _ => out.push(Unknown)
+      }
     NumberLit(_) | IntLit(_) | BigIntLit(_) => out.push(Literal(LitNumeric))
     StringLit(_) | TemplateLiteral(_, _) => out.push(Literal(LitString))
     BoolLit(_) => out.push(Literal(LitBool))

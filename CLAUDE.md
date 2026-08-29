@@ -331,26 +331,49 @@ product surfaces now.
   where the switch evaluates it once — so
   `switch ((trace.push(2), obj?.gamma))` pushed `2` twice. That now
   requires a pure scrutinee, which also rules out a value that could
-  change between reads. Its one un-fixed finding is the biggest open
-  hole in this pipeline:
-  `class C { m() {} } console.log(new C())` deletes `m` under plain
-  `mtsc --bundle`, because `class_method_dce`'s `keep` is the export
-  surface and nothing else — the pass has no notion of a class value
-  crossing the bundle boundary, so a library bundle is protected and an
-  application bundle is not at all. The real-world form is the protocol
+  change between reads. Its last finding was the deepest:
+  `class C { m() {} } console.log(new C())` deleted `m` under plain
+  `mtsc --bundle`, because `class_method_dce`'s `keep` was the export
+  surface and nothing else — the pass had no notion of a class value
+  crossing the bundle boundary, so a library bundle was protected and an
+  application bundle not at all. The real-world form is the protocol
   methods a library never calls itself: `JSON.stringify` calls
-  `toJSON`, `String(x)` calls `toString`, `for…of` calls
-  `Symbol.iterator`, `await` calls `then`. Feeding the pass
-  `collect_externally_visible_props` was tried and reverted: that set
-  answers the property mangler's question ("may this NAME be renamed")
-  and marks a class observed when an instance merely appears in an
-  escaping subtree, so `console.log(new C().live())` reserved
-  everything and three dce-coverage cases regressed. The right gate is
-  `External` observability alone — `console.log` and `JSON.stringify`
-  have KNOWN semantics and do not invoke arbitrary methods — plus a
-  fixed list of the protocol methods the known sinks do invoke;
-  `escape_breakdown` has no External-only slice yet, and that split is
-  the first step.
+  `toJSON`, `String(x)` calls `toString`, `await` calls `then`. Feeding
+  the pass `collect_externally_visible_props` was tried and reverted:
+  that set answers the property mangler's question ("may this NAME be
+  renamed") and is right to be broader, since a rename must be
+  consistent everywhere a name occurs, so it marks a class observed when
+  an instance merely appears in an escaping subtree —
+  `console.log(new C().live())` reserved everything and three
+  dce-coverage cases regressed. Deletion is the stronger claim and needs
+  the narrower fact: `class_members_reachable_off_bundle` pins on
+  `External` observability alone (every level below it is a KNOWN sink,
+  and a known sink invokes nothing arbitrary) plus the fixed
+  `sink_invoked_protocol_methods` list, and `class_method_dce_block`
+  takes it with NO default, so a caller that cannot answer gets a pass
+  that declines rather than one that deletes. Two things turned up
+  underneath. `collect_immediate_sources` answered `Unknown` for
+  `new C()`, so `const w = new Widget(); register(w)` stopped
+  propagating at `w` and never reached `Widget`, while the inline
+  `register(new Widget())` did — one program, two spellings, two
+  answers, and the spelling that lost is the one real code uses. And
+  `analyze_observability`'s worklist scanned every flow edge per popped
+  symbol, O(symbols x edges); it already built a reverse index for
+  `FuncArg` and none for `SymVal`. That was 40 of the 43 seconds
+  `--bundle --mangle` spent on the 9 MB TypeScript bundle, invisible
+  while `--mangle-properties` was the only consumer. Indexed:
+  43.8s -> 4.7s, and 85.3s -> 7.0s with property mangling on, output
+  byte-identical and the type-aware corpus unchanged on all ten
+  targets. Seed 1261 itself was a false positive of the harness —
+  `console.log`, `util.inspect`, `JSON.stringify`, `String(x)` and
+  `Object.keys` all print `C {}` whether or not `C.prototype.m` exists,
+  so `fuzz-runner.mjs` reflecting on a prototype at a `console.log` was
+  reaching past the program's own sinks. It no longer does in the sink
+  shape and still does in the export shape, where a library consumer
+  really can call anything; the hazard the sink shape cannot reach
+  (`console.log` being its only sink) lives in
+  `fixtures/mangle-safety/case45-class-escapes-external`, where a real
+  external import receives the instance and calls the method back.
 - `src/bridge` consumes `src/checker` for every type-shape decision and runs
   `@checker.check_module` on the synthesized output as a sanity gate. It also
   keeps domain-specific specialization for Node FS / React / Hono / crypto /

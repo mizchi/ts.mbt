@@ -52,6 +52,34 @@ pub(all) struct Sink {
 }
 
 ///|
+/// Methods the KNOWN sinks call on the values handed to them.
+///
+/// Everything else in this file answers "which property NAMES does this
+/// sink observe". This answers the neighbouring question the catalog
+/// never asked: which methods does it INVOKE? The two come apart, and
+/// `class_method_dce` needs the second one — a method nothing in the
+/// bundle calls by name is deletable only if no sink calls it either.
+///
+/// The list is short because the protocols are: `JSON.stringify` calls
+/// `toJSON`, `String(x)` and `` `${x}` `` and `+` call `toString` and
+/// `valueOf`, `await x` calls `then` on any thenable, and a spread or
+/// destructure of an iterable calls `Symbol.iterator` (a computed key,
+/// so not a name this pass can drop in the first place).
+///
+/// It is unconditional rather than derived per sink. Deriving it would
+/// mean tracking which specific sink each class value reaches, and the
+/// win is a handful of method names on classes that define a `toJSON`
+/// nobody calls — `class-method-dce` moves zero bytes on all ten
+/// measured targets, so there is nothing there to buy.
+///
+/// These are exactly the methods a library defines and never calls
+/// itself, which is why the hole this closes was invisible: the
+/// syntactic access set says "unused" about every one of them.
+pub let sink_invoked_protocol_methods : Array[String] = [
+  "toJSON", "toString", "valueOf", "then",
+]
+
+///|
 /// Walk `block` and collect every reflection / I/O sink we know
 /// about. Each Sink records the value-being-observed and the
 /// observation kind so the binding-scoped reservation rule can

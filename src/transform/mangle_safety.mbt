@@ -78,6 +78,51 @@ pub fn collect_externally_visible_props(
 }
 
 ///|
+/// Class members that must survive `class_method_dce` because something
+/// outside the bundle can reach them.
+///
+/// Two disjoint sources, and keeping them apart is the whole point:
+///
+///   * the members of any class whose VALUE reaches `External`
+///     observability — the class object or an instance crossed the
+///     bundle boundary, so the holder can invoke anything on it;
+///   * the protocol methods the KNOWN sinks invoke (`toJSON` for
+///     `JSON.stringify`, `toString`/`valueOf` for string coercion,
+///     `then` for `await`), which no amount of scanning our own source
+///     will find, because a library defines them and never calls them.
+///
+/// This is NOT `collect_externally_visible_props`. That function answers
+/// "may this name be renamed" and is right to be broader: it marks a
+/// class observed when an instance appears anywhere in an escaping
+/// subtree, because a rename has to be consistent everywhere the name
+/// occurs. Deletion is a stronger claim and needs the narrower fact —
+/// feeding the broader set here reserved every method of every class
+/// touched by a sink, `console.log(new C().live())` included, and turned
+/// the pass off in all but name.
+pub fn class_members_reachable_off_bundle(
+  block : @ast.TsBlock,
+  external_bindings : Map[String, Bool],
+) -> Array[String] {
+  let out : Map[String, Bool] = {}
+  // `external_class_member_names`, not `escape_breakdown`: the latter
+  // goes on to build the whole reserved set, which took 40 seconds on
+  // the 9 MB TypeScript bundle for a result this function throws 99% of
+  // away — and `class_method_dce` runs whether or not property mangling
+  // is on, so plain `mtsc --bundle` paid it.
+  for n in external_class_member_names(block, external_bindings) {
+    out[n] = true
+  }
+  for n in sink_invoked_protocol_methods {
+    out[n] = true
+  }
+  let names : Array[String] = []
+  for k in out.keys() {
+    names.push(k)
+  }
+  names
+}
+
+///|
 /// Names the block references but never declares, in any scope. Such a
 /// name can only come from the host — an ambient global from a `.d.ts`,
 /// a runtime built-in, a script-tag global — so every property read on

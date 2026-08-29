@@ -1,0 +1,21 @@
+{
+  "origin": "ts.mbt — the hazard the fuzzer's sink shape cannot reach (its only sink is `console.log`, whose semantics are known)",
+  "what": "`class_method_dce`'s `keep` was the export surface and nothing else, so it had no notion of a class VALUE crossing the bundle boundary: `class C { m() {} } console.log(new C())` deleted `m` under plain `mtsc --bundle`. A library bundle was protected; an application bundle was not at all. The real-world form is the protocol methods a library defines and never calls itself — `JSON.stringify` calls `toJSON`, `String(x)` calls `toString`, `await` calls `then`. The pass now takes `class_members_reachable_off_bundle`: the members of any class reaching `External` observability, plus the fixed protocol list. Feeding it the property mangler's reserved set instead was tried and reverted — that set answers 'may this NAME be renamed' and marks a class observed when an instance merely appears in an escaping subtree, which turned the pass off in all but name. Every kept name here is paired with a dropped one on the same class or through the same sink, so the fix cannot be 'switch the pass off'.",
+  "externals": [
+    "host-registry"
+  ],
+  "stubs": {
+    "host-registry": "const handlers = [];\nexport function register(handler) { handlers.push(handler); }\nexport function runAll() { return handlers.map((h) => h.render()); }\n"
+  },
+  "exports": [
+    "results",
+    "serialized",
+    "localValue"
+  ],
+  "expectKeep": [
+    "render",
+    "neverNamedHere",
+    "toJSON"
+  ],
+  "expectStatus": "pass"
+}
