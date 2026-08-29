@@ -304,8 +304,43 @@ product surfaces now.
   pass declined for an unrelated reason. Every observation is an
   exported OBJECT now, and with the gate mutated off the case reports
   `{"kind":0,"r":1}` against the baseline's `{"kind":"circle","r":1}`.
-  `switch-fold`, `class-method-dce` and `type-fold` have not had the
-  same treatment yet. The property
+  The other three inert phases got the same treatment, and the answer
+  was different for each — which is the argument for asking per pass
+  rather than reasoning about "the type-driven half". `switch-fold` is
+  SHAPE ABSENT: seven of ten targets contain not one function whose
+  first parameter is a closed string-literal union, and the three
+  candidates in the other two fail because the body is not exactly one
+  `switch`; there is no gate worth opening. `type-fold` is the
+  opposite and the more interesting one — 578 candidate sites across
+  the corpus (zod 181, excalidraw 163, remeda 128) and ZERO decided.
+  That is not a lookup failing; it is a TAUTOLOGY. A programmer writes
+  `typeof x === "string"` or `x === null` exactly when the annotation
+  does not settle it: zod's sites are `typeof val === "string"` on
+  `unknown`, excalidraw's are `insertionIndex === null` on
+  `number | null`, remeda's are `param === undefined` on
+  `T | undefined`. Flow-sensitive narrowing would not help, because
+  the check IS the narrowing. The report breaks the total down by
+  shape for exactly this reason: "0 of 578" is only actionable once
+  you can see that 320 of them are `typeof` on a union.
+  `class-method-dce` already had a report, and it said the same thing
+  on all ten targets — SUPPRESSED by a computed member read that is
+  "neither provably numeric nor an entry of a keyed container",
+  `points[i]` / `elements[index]` / `value[index]`. Probing the
+  spellings one at a time found exactly ONE that fails, and it is the
+  commonest array idiom in JavaScript: a CALLBACK parameter carries no
+  annotation, so `arr.map((v, index) => arr[index])` leaves `index`
+  unprovable, and since the suppression is a bundle-wide wildcard, one
+  such read keeps every method of every class. A `for` counter, a
+  `while` counter, a `for…of` binding, a parameter annotated `number`
+  and a `readonly number[]` receiver are all already proven. The fix
+  needs the receiver proven to be an array before it can claim the
+  second parameter is an index — `Map.prototype.forEach` is
+  `(value, key, map)`, `Set`'s is `(value, value, set)`, and an
+  imported receiver could be either — and a false "numeric" claim
+  breaks property-mangle correctness, so it is filed rather than
+  rushed. The current conservative behaviour is pinned in
+  `bundle_wbtest.mbt` with the instruction to INVERT the test when the
+  inference lands, not delete it. The property
   mangler was reported inert on
   every library measured, and that turned out to be one bug rather than
   a limit: a `const f = (…) => …` had no entry in the graph's function

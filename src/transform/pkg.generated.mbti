@@ -25,7 +25,7 @@ pub fn build_enum_inline_table(Array[@ast.TsEnumDecl], include_non_const? : Bool
 
 pub fn build_predicate_table(@ast.TsBlock, exported? : Map[String, Bool]) -> PredicateTable
 
-pub fn build_switch_fold_table(@ast.TsBlock) -> SwitchFoldTable
+pub fn build_switch_fold_table(@ast.TsBlock, explain? : Array[String]?) -> SwitchFoldTable
 
 pub fn build_symbol_graph(@ast.TsBlock, Map[String, Bool]) -> SymbolGraph
 
@@ -52,6 +52,10 @@ pub fn const_scalar_inline_block(@ast.TsBlock) -> @ast.TsBlock
 pub fn constructor_like_top_level(@ast.TsBlock, Map[String, Bool]) -> Unit
 
 pub fn container_name_set(SymbolGraph, Map[Int, Bool]) -> Map[String, Bool]
+
+pub fn count_type_fold_sites(@ast.TsBlock) -> Int
+
+pub fn count_type_fold_sites_by_kind(@ast.TsBlock) -> Map[String, Int]
 
 pub fn drop_dead_properties_block(@ast.TsBlock, Map[String, Bool]) -> @ast.TsBlock
 

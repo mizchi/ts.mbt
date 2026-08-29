@@ -1664,6 +1664,159 @@ test "tag-rewrite: discriminated union string tags become integers" {
 }
 
 ///|
+/// `class-method-dce` already had a decline report, and on the
+/// type-aware corpus it says the same thing for every target: SUPPRESSED
+/// by a computed member read whose key is not provably numeric —
+/// `points[i]`, `elements[index]`, `value[index]`. Probing the shapes
+/// one at a time found exactly one that fails, and it is the most
+/// common array idiom in JavaScript: a CALLBACK parameter carries no
+/// annotation, so `arr.map((v, index) => arr[index])` leaves `index`
+/// unprovable and one such read turns the pass off for the whole
+/// bundle.
+///
+/// Every other spelling is already proven: a `for` counter, a `while`
+/// counter, a `for…of` binding, a parameter annotated `number`, an
+/// element of a typed array, a `readonly number[]` receiver.
+///
+/// This test pins the CURRENT behaviour, which is conservative and
+/// therefore correct. When the callback-index inference lands, invert
+/// it rather than deleting it — the point is that the two spellings
+/// disagree.
+test "class-method-dce: a callback index parameter is not provably numeric" {
+  let head = "class Widget { live(): number { return 1; } dead(): number { return 2; } }\n" +
+    "const w = new Widget();\n" +
+    "const pts = [1, 2, 3];\n"
+  let opts = BundleOptions::default()
+    .with_treeshake(true)
+    .with_fold(true)
+    .with_explain(true)
+  // A `for` counter: proven, so the dead method goes.
+  let with_counter = head +
+    "let total = 0;\n" +
+    "for (let i = 0; i < pts.length; i++) total += pts[i];\n" +
+    "process.stdout.write(String(w.live() + total) + \"\\n\");\n"
+  match bundle_modules(vfs([("entry.ts", with_counter)]), "entry.ts", opts) {
+    Ok(out) => {
+      assert_false(out.js.contains("dead"))
+      assert_true(explain_text(out).contains("Widget.dead"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+  // The same read through a callback parameter: not proven, so every
+  // method in the bundle survives.
+  let with_callback = head +
+    "const doubled = pts.map((v, index) => pts[index] * v);\n" +
+    "process.stdout.write(String(w.live() + doubled[0]) + \"\\n\");\n"
+  match bundle_modules(vfs([("entry.ts", with_callback)]), "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("dead"))
+      assert_true(explain_text(out).contains("SUPPRESSED"))
+      assert_true(explain_text(out).contains("pts[index]"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+/// Joins `out.explain` so a test can assert on the report as a whole.
+fn explain_text(out : BundleOutput) -> String {
+  let b = StringBuilder::new()
+  for line in out.explain {
+    b.write_string(line)
+    b.write_string("\n")
+  }
+  b.to_string()
+}
+
+///|
+/// `switch-fold` moved zero bytes on all ten type-aware corpus targets.
+/// The byte count cannot say whether no bundle declares a literal-union
+/// dispatcher or whether one of the later gates refused them, so the
+/// pass reports both counts and the rejecting reason.
+test "switch-fold: the decline report separates absent from refused" {
+  let dispatchers = "function ok(k: \"x\" | \"y\", n: number): number {\n" +
+    "  switch (k) {\n" +
+    "    case \"x\": return n + 1;\n" +
+    "    case \"y\": return n + 2;\n" +
+    "  }\n" +
+    "}\n" +
+    // Same entry shape, but an arm with two statements — a gate, not a
+    // missing shape.
+    "function loose(k: \"a\" | \"b\"): number {\n" +
+    "  switch (k) {\n" +
+    "    case \"a\": { const t = 1; return t; }\n" +
+    "    case \"b\": return 2;\n" +
+    "  }\n" +
+    "}\n" +
+    "export const out = ok(\"x\", 5) + loose(\"a\");\n"
+  let opts = BundleOptions::default().with_fold(true).with_explain(true)
+  match bundle_modules(vfs([("entry.ts", dispatchers)]), "entry.ts", opts) {
+    Ok(out) => {
+      let text = explain_text(out)
+      assert_true(
+        text.contains(
+          "2 function(s) take a closed string-literal union as their first parameter; 1 became specializable",
+        ),
+      )
+      assert_true(text.contains("an arm is not exactly one `return EXPR`"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+  // A bundle with no dispatcher shape at all says so, rather than
+  // reporting a gate that never ran.
+  match
+    bundle_modules(
+      vfs([("entry.ts", "export const out = 1 + 2;\n")]),
+      "entry.ts",
+      opts,
+    ) {
+    Ok(out) =>
+      assert_true(
+        explain_text(out).contains(
+          "no function in the bundle takes a closed string-literal union as its first parameter",
+        ),
+      )
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+/// `type-fold`'s report counts its OWN candidate shapes before and
+/// after the pass rather than re-deriving the decision, so a "0 decided"
+/// answer cannot be an artifact of a second implementation.
+test "type-fold: the decline report counts candidates and decisions" {
+  let src = "function check(s: string, n: number | null): number {\n" +
+    "  let t = 0;\n" +
+    "  if (typeof s === \"string\") t += 1;\n" +
+    "  if (n === null) t += 2;\n" +
+    "  return t;\n" +
+    "}\n" +
+    "export const out = check(\"a\", null);\n"
+  let opts = BundleOptions::default().with_fold(true).with_explain(true)
+  match bundle_modules(vfs([("entry.ts", src)]), "entry.ts", opts) {
+    Ok(out) => {
+      let text = explain_text(out)
+      // `typeof s === "string"` is decided by the annotation; `n === null`
+      // is not, because `number | null` admits both.
+      assert_true(text.contains("2 candidate check(s); 1 decided"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+  match
+    bundle_modules(
+      vfs([("entry.ts", "export const out = 1 + 2;\n")]),
+      "entry.ts",
+      opts,
+    ) {
+    Ok(out) =>
+      assert_true(
+        explain_text(out).contains("The shape this phase decides is absent"),
+      )
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 /// A caller that cannot answer the boundary question gets a pass that
 /// declines, not one that renumbers. The argument is positional and has
 /// no default on purpose: a labelled default would fail OPEN here,

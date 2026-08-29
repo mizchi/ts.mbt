@@ -1214,7 +1214,110 @@ leg delta は「published `.js` を相手にしたら何が起きるか」の答
 | `TypeArgs` の構造的保証 | 19 file に arm を足したが、次に walker を書く人が落とすのを止める仕組みは無い。`case40` が唯一の網 |
 | ~~`predicate-inline` が typebox で 261 byte 損~~ | **修正済み**。`removable` が「entry の named export に無いか」しか見ておらず、namespace object 経由で外に出る typebox の guard を全部 removable と判定していた。call 以外の言及を数えるようにして 0 に。typebox は corpus 初の WIN (+247) |
 | 述語 inline の得は mangle 後の呼び出しと比べていない | 判定は mangle 前なので、`isExtendsUnion(v)` を基準に価格付けしていて、実際に ship されるのは `a(v)`。body 2 node は既にそれより大きい。`removable` を直した後は corpus 上で損が出ていないので、model を足す根拠が今は無い |
-| 型読み 6 phase のうち 4 つが corpus 全体で不発 | `switch-fold` / `class-method-dce` / `type-fold` が 1 byte も動かさない。対象の形が corpus に無いのか、gate が閉じすぎなのかは未切り分け。`tag-rewrite` は切り分け済み（下記） |
+| ~~型読み 6 phase のうち 4 つが corpus 全体で不発~~ | **4 つすべて切り分け済み**。原因は 3 つとも違いました（下記） |
+
+### 不発 4 phase の切り分け結果
+
+`--explain-mangle` に 4 phase 分の decline section を入れて 10 target で
+回した結果です。「0 byte」の理由は phase ごとに全く違いました。
+
+| phase | 0 byte の理由 | 直す価値 |
+| --- | --- | --- |
+| `tag-rewrite` | **gate が閉じすぎ**（named interface）→ 開けた。残りは sink 到達と export signature、つまり library 側の事実 | 開放済み。残りは無し |
+| `switch-fold` | **形が無い**。10 target 中 7 つで候補 0 件 | 無い |
+| `type-fold` | **形はあるが恒真に決まらない**。578 site あって 0 件 decided | 無い（下記） |
+| `class-method-dce` | **gate が閉じすぎ**。全 target で SUPPRESSED、原因を 1 つの形まで特定 | **ある**（#72） |
+
+#### `switch-fold`: 形が無い
+
+pass の対象は「第 1 引数が閉じた string literal union で、body が
+その引数の `switch` 1 つだけ、全 arm が `return EXPR`」という
+かなり狭い idiom です。10 target を見ると:
+
+| target | 第 1 引数が literal union の関数 | 特殊化できた |
+| --- | --- | --- |
+| typebox | 2 | 0（body が `switch` 1 つではない） |
+| excalidraw | 1 | 0（同上。かつ top-level ではない） |
+| 他 8 target | **0** | — |
+
+table が top-level 宣言しか見ないという制限も報告するようにしましたが、
+そもそも候補が無いので開けるものがありません。
+
+#### `type-fold`: 形はあるが、書かれるのは決まらない時だけ
+
+こちらは逆で、候補 site は**大量にあります**。しかし 1 件も畳めません:
+
+| target | 候補 | decided | 内訳 |
+| --- | --- | --- | --- |
+| zod | 181 | 0 | `typeof` x142, `=== undefined` x22, `=== null` x17 |
+| excalidraw | 163 | 0 | `=== null` x88, `typeof` x55, `=== undefined` x20 |
+| remeda | 128 | 0 | `=== undefined` x57, `typeof` x52, `=== null` x19 |
+| typebox | 42 | 0 | `typeof` x41, `=== undefined` x1 |
+| superstruct | 28 | 0 | `typeof` x14, `=== undefined` x9, `=== null` x5 |
+| immer | 23 | 0 | `=== undefined` x9, `typeof` x7, `=== null` x6, `+ ""` x1 |
+| ts-pattern | 13 | 0 | `typeof` x9, `=== null` x2, `=== undefined` x2 |
+| neverthrow / hono / valibot | 0 | — | 形が無い |
+
+**578 site で 0 件**。実 source を読むと理由は明白で、これは gate の
+欠陥ではなく**恒真**です:
+
+```ts
+// zod
+z.custom<string>((val) => typeof val === "string")   // val は unknown
+if (typeof issue === "string") …                     // issue は union
+return typeof defaultValue === "function" ? … : …    // T | (() => T)
+// excalidraw
+if (insertionIndex === null) …    // number | null
+// remeda
+if (param === undefined) …        // T | undefined
+```
+
+`typeof x === "string"` が畳めるのは `x` が単一 primitive の注釈を
+持つときだけで、**人間がその check を書くのは型が決まらないとき**です。
+`x === null` はもっと露骨で、注釈が null を除外していれば畳めますが、
+除外されていれば誰もその check を書きません。flow-sensitive narrowing を
+入れても救われません——check そのものが narrowing なので。
+
+この pass は実コード上でトートロジー的に不発です。`sf1` 相当の
+unit test では 2/2 畳むので機構は動いています。
+
+#### `class-method-dce`: gate が閉じすぎ、原因は callback 引数
+
+この phase は元から decline report を持っていて、10 target すべてで
+同じことを言っていました:
+
+```
+SUPPRESSED — a sink in the bundle can observe a member name the pass
+cannot spell out, so every class keeps every method.
+  [x14] `points[i]` reads a member under a computed key that is neither
+        provably numeric nor an entry of a keyed container
+  [x7]  `elements[index]` …
+  [x4]  `value[index]` …
+```
+
+形を 1 つずつ手で probe して、**落ちるのは 1 つだけ**でした:
+
+| 書き方 | 数値と証明できるか |
+| --- | --- |
+| `for (let i = 0; …) arr[i]` | ✅ |
+| `let i = 0; while (…) arr[i]` | ✅ |
+| `for (const c of rows) c[i]` | ✅ |
+| `function at(i: number) { return arr[i] }` | ✅ |
+| `readonly number[]` の receiver | ✅ |
+| `arr.map((v, index) => arr[index])` | ❌ |
+
+callback 引数には注釈が無いので `infer_numeric_symbols` の
+「注釈が `number`／全 def が数値」のどちらも成立しません。そして
+suppression は **bundle 全体の wildcard** なので、この read 1 つで
+全 class の全 method が残ります。JS で最も一般的な配列 idiom です。
+
+直すには receiver が配列であることの証明が必要で（`Map.prototype.forEach`
+は `(value, key, map)`、`Set` は `(value, value, set)` なので第 2 引数は
+index とは限らず、import された receiver は immutable.js の List か Map か
+分からない）、numeric の誤判定は property mangle の正しさを壊すので、
+**急いで入れず #72 に分離**しました。現状の挙動（保守的に残す = 正しい）は
+`bundle_wbtest.mbt` に固定してあり、推論が入ったら**削除ではなく反転**
+させます。
 
 ### `tag-rewrite` の 0 byte を名前にした
 

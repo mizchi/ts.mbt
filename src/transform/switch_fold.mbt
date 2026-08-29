@@ -109,7 +109,16 @@ pub(all) struct SwitchFoldEntry {
 }
 
 ///|
-pub fn build_switch_fold_table(block : @ast.TsBlock) -> SwitchFoldTable {
+pub fn build_switch_fold_table(
+  block : @ast.TsBlock,
+  // `--explain-mangle`: why the table came out empty. Same reason
+  // `tag_rewrite_block` gained one — the pass moves zero bytes on all
+  // ten type-aware corpus targets, and "zero" means either that no
+  // bundle declares the shape (nothing to fix) or that the shape is
+  // there and a gate refused it (the reason names the fix). The byte
+  // count cannot tell those apart.
+  explain? : Array[String]? = None,
+) -> SwitchFoldTable {
   let entries : Map[String, SwitchFoldEntry] = {}
   for stmt in block.stmts {
     match stmt {
@@ -117,56 +126,186 @@ pub fn build_switch_fold_table(block : @ast.TsBlock) -> SwitchFoldTable {
       | Const(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(f))
       | Var(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(f)) =>
         match try_extract_switch_fold(f) {
-          Some(entry) => entries[name] = entry
-          None => ()
+          Ok(entry) => entries[name] = entry
+          Err(_) => ()
         }
       _ => ()
     }
+  }
+  match explain {
+    Some(out) => explain_switch_fold_candidates(out, block, entries)
+    None => ()
   }
   { entries, }
 }
 
 ///|
-fn try_extract_switch_fold(f : @ast.TsFunc) -> SwitchFoldEntry? {
+/// Why a function with the pass's entry shape did not become an entry.
+/// `NotADispatcher` is the "shape absent" answer — no first parameter,
+/// or one that is not a closed string-literal union — and every other
+/// variant is a gate that could in principle be opened.
+priv enum SwitchFoldReject {
+  NotADispatcher
+  DestructuredOrRestParam
+  BodyNotOneSwitchOnTheParam
+  ArmNotASingleReturn
+  CaseNotAStringLiteral
+  LiteralWithNoArm
+} derive(Eq)
+
+///|
+fn SwitchFoldReject::label(self : SwitchFoldReject) -> String {
+  match self {
+    NotADispatcher => "no closed string-literal union as the first parameter"
+    DestructuredOrRestParam => "a destructured or rest parameter"
+    BodyNotOneSwitchOnTheParam =>
+      "the body is not exactly one `switch` on that parameter"
+    ArmNotASingleReturn => "an arm is not exactly one `return EXPR`"
+    CaseNotAStringLiteral => "a case label is not a string literal"
+    LiteralWithNoArm => "a union literal has no arm and there is no `default`"
+  }
+}
+
+///|
+/// `--explain-mangle` for the pass's candidate step. Counts the whole
+/// block, nested functions included, because the table itself only
+/// reads TOP-LEVEL declarations: a dispatcher declared inside another
+/// function is invisible to it, and whether that is where real code
+/// puts them is exactly the question the byte count cannot answer.
+fn explain_switch_fold_candidates(
+  out : Array[String],
+  block : @ast.TsBlock,
+  entries : Map[String, SwitchFoldEntry],
+) -> Unit {
+  let top : Array[(String, SwitchFoldReject?)] = []
+  for stmt in block.stmts {
+    match stmt {
+      Let(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(f))
+      | Const(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(f))
+      | Var(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(f)) =>
+        match try_extract_switch_fold(f) {
+          Ok(_) => top.push((name, None))
+          Err(r) => top.push((name, Some(r)))
+        }
+      _ => ()
+    }
+  }
+  // Functions anywhere in the block whose first parameter IS a closed
+  // string-literal union — the pass's target shape, wherever it sits.
+  let all_shaped : Array[SwitchFoldReject?] = []
+  collect_switch_fold_shapes_block(block, all_shaped)
+  let shaped = all_shaped.length()
+  if shaped == 0 {
+    out.push(
+      "no candidate at all: no function in the bundle takes a closed string-literal union as its first parameter. The shape this pass specializes is absent.",
+    )
+    return
+  }
+  let mut top_shaped = 0
+  for e in top {
+    if e.1 != Some(SwitchFoldReject::NotADispatcher) {
+      top_shaped = top_shaped + 1
+    }
+  }
+  out.push(
+    "\{shaped} function(s) take a closed string-literal union as their first parameter; \{entries.size()} became specializable.",
+  )
+  if top_shaped < shaped {
+    out.push(
+      "  \{shaped - top_shaped} of them are not top-level declarations, and the table only reads top-level ones, so they were never considered.",
+    )
+  }
+  // Group the rejections by reason.
+  let counts : Map[String, Int] = {}
+  for r in all_shaped {
+    match r {
+      Some(rej) => {
+        if rej == SwitchFoldReject::NotADispatcher {
+          continue
+        }
+        let l = rej.label()
+        counts[l] = counts.get(l).unwrap_or(0) + 1
+      }
+      None => ()
+    }
+  }
+  let keys = counts.keys().to_array()
+  keys.sort()
+  for k in keys {
+    out.push("  \{counts.get(k).unwrap_or(0)} rejected: \{k}.")
+  }
+}
+
+///|
+/// Push one entry per function in the block whose first parameter is a
+/// closed string-literal union: `None` when it is specializable,
+/// `Some(reason)` when a later gate refused it. Functions without the
+/// entry shape contribute nothing.
+fn collect_switch_fold_shapes_block(
+  block : @ast.TsBlock,
+  out : Array[SwitchFoldReject?],
+) -> Unit {
+  for s in block.stmts {
+    collect_switch_fold_shapes_stmt(s, out)
+  }
+}
+
+///|
+fn collect_switch_fold_shapes_func(
+  f : @ast.TsFunc,
+  out : Array[SwitchFoldReject?],
+) -> Unit {
+  match try_extract_switch_fold(f) {
+    Ok(_) => out.push(None)
+    Err(SwitchFoldReject::NotADispatcher) => ()
+    Err(r) => out.push(Some(r))
+  }
+  collect_switch_fold_shapes_block(f.body, out)
+}
+
+///|
+fn try_extract_switch_fold(
+  f : @ast.TsFunc,
+) -> Result[SwitchFoldEntry, SwitchFoldReject] {
   if f.params.length() == 0 {
-    return None
+    return Err(NotADispatcher)
   }
   // First param must carry a closed string-literal union annotation.
   let first = f.params[0]
   let literals = match string_literal_union(first.type_) {
     Some(ls) => ls
-    None => return None
+    None => return Err(NotADispatcher)
   }
   let switch_param_name = match first.binding {
     Some(@ast.TsBinding::Ident(n)) => n
-    Some(_) => return None
+    Some(_) => return Err(DestructuredOrRestParam)
     None => first.name
   }
   // Collect every parameter name; bail on destructured / rest params.
   let param_names : Array[String] = []
   for p in f.params {
     if p.is_rest {
-      return None
+      return Err(DestructuredOrRestParam)
     }
     let n = match p.binding {
       Some(@ast.TsBinding::Ident(s)) => s
-      Some(_) => return None
+      Some(_) => return Err(DestructuredOrRestParam)
       None => p.name
     }
     param_names.push(n)
   }
   // Body must be a single `switch (param) { ... }`.
   if f.body.stmts.length() != 1 {
-    return None
+    return Err(BodyNotOneSwitchOnTheParam)
   }
   let cases = match f.body.stmts[0] {
     Switch(@ast.TsExpr::Var(n), cs) =>
       if n == switch_param_name {
         cs
       } else {
-        return None
+        return Err(BodyNotOneSwitchOnTheParam)
       }
-    _ => return None
+    _ => return Err(BodyNotOneSwitchOnTheParam)
   }
   // Every arm must be `case "lit": return EXPR;`.
   // A single `default: return EXPR;` is also accepted: it acts as a
@@ -177,11 +316,11 @@ fn try_extract_switch_fold(f : @ast.TsFunc) -> SwitchFoldEntry? {
     match c.test_expr {
       Some(@ast.TsExpr::StringLit(s)) => {
         if c.body.stmts.length() != 1 {
-          return None
+          return Err(ArmNotASingleReturn)
         }
         let expr = match c.body.stmts[0] {
           Return(Some(e)) => e
-          _ => return None
+          _ => return Err(ArmNotASingleReturn)
         }
         arms[s] = expr
       }
@@ -189,17 +328,18 @@ fn try_extract_switch_fold(f : @ast.TsFunc) -> SwitchFoldEntry? {
         // `default:` arm — accept exactly one.
         if default_expr is None {
           if c.body.stmts.length() != 1 {
-            return None
+            return Err(ArmNotASingleReturn)
           }
           let expr = match c.body.stmts[0] {
             Return(Some(e)) => e
-            _ => return None
+            _ => return Err(ArmNotASingleReturn)
           }
           default_expr = Some(expr)
         } else {
-          return None // two defaults — shouldn't happen but bail
+          // Two defaults — shouldn't happen but bail.
+          return Err(CaseNotAStringLiteral)
         }
-      _ => return None // non-string, non-default case
+      _ => return Err(CaseNotAStringLiteral)
     }
   }
   // Fill in missing literals from the default arm (if any).
@@ -214,11 +354,140 @@ fn try_extract_switch_fold(f : @ast.TsFunc) -> SwitchFoldEntry? {
       // No default: every literal must have an explicit arm.
       for l in literals {
         if !arms.contains(l) {
-          return None
+          return Err(LiteralWithNoArm)
         }
       }
   }
-  Some({ param_names, switch_param_index: 0, arms })
+  Ok({ param_names, switch_param_index: 0, arms })
+}
+
+///|
+fn collect_switch_fold_shapes_stmt(
+  stmt : @ast.TsStmt,
+  out : Array[SwitchFoldReject?],
+) -> Unit {
+  match stmt {
+    Var(_, _, e) | Let(_, _, e) | Const(_, _, e) | Expr(e) | Assign(_, e) =>
+      collect_switch_fold_shapes_expr(e, out)
+    Return(Some(e)) | Throw(e) => collect_switch_fold_shapes_expr(e, out)
+    PropAssign(_, _, v) => collect_switch_fold_shapes_expr(v, out)
+    If(_, t, e) => {
+      collect_switch_fold_shapes_block(t, out)
+      match e {
+        Some(b) => collect_switch_fold_shapes_block(b, out)
+        None => ()
+      }
+    }
+    While(_, b)
+    | DoWhile(_, b)
+    | With(_, b)
+    | ForOf(_, _, _, _, b)
+    | ForAwaitOf(_, _, _, _, b)
+    | ForIn(_, _, _, _, b)
+    | Block(b) => collect_switch_fold_shapes_block(b, out)
+    For(init, _, update, b) => {
+      match init {
+        Some(s) => collect_switch_fold_shapes_stmt(s, out)
+        None => ()
+      }
+      match update {
+        Some(s) => collect_switch_fold_shapes_stmt(s, out)
+        None => ()
+      }
+      collect_switch_fold_shapes_block(b, out)
+    }
+    Switch(_, cases) =>
+      for c in cases {
+        collect_switch_fold_shapes_block(c.body, out)
+      }
+    Try(b, _, cb, fb) => {
+      collect_switch_fold_shapes_block(b, out)
+      match cb {
+        Some(blk) => collect_switch_fold_shapes_block(blk, out)
+        None => ()
+      }
+      match fb {
+        Some(blk) => collect_switch_fold_shapes_block(blk, out)
+        None => ()
+      }
+    }
+    Label(_, inner) => collect_switch_fold_shapes_stmt(inner, out)
+    NativeClassStmt(decl, ctor) => {
+      match ctor {
+        Some(f) => collect_switch_fold_shapes_func(f, out)
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) => collect_switch_fold_shapes_block(b, out)
+          None => ()
+        }
+      }
+    }
+    _ => ()
+  }
+}
+
+///|
+/// Only descends through the expression forms that can CARRY a
+/// function body. The count is a diagnostic, so missing an exotic
+/// nesting site understates it rather than making it wrong.
+fn collect_switch_fold_shapes_expr(
+  expr : @ast.TsExpr,
+  out : Array[SwitchFoldReject?],
+) -> Unit {
+  match expr {
+    FuncExpr(f) => collect_switch_fold_shapes_func(f, out)
+    ArrowFunc(_, _, body, _) =>
+      match body {
+        ArrowExpr(e) => collect_switch_fold_shapes_expr(e, out)
+        ArrowBlock(b) => collect_switch_fold_shapes_block(b, out)
+      }
+    Call(_, args) | New(_, args) =>
+      for a in args {
+        collect_switch_fold_shapes_expr(a, out)
+      }
+    MethodCall(recv, _, args) => {
+      collect_switch_fold_shapes_expr(recv, out)
+      for a in args {
+        collect_switch_fold_shapes_expr(a, out)
+      }
+    }
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      collect_switch_fold_shapes_expr(callee, out)
+      for a in args {
+        collect_switch_fold_shapes_expr(a, out)
+      }
+    }
+    BinOp(_, l, r) | Seq(l, r) => {
+      collect_switch_fold_shapes_expr(l, out)
+      collect_switch_fold_shapes_expr(r, out)
+    }
+    UnaryOp(_, i)
+    | Await(i)
+    | NonNull(i)
+    | OptionalChain(i)
+    | PureCall(i)
+    | TypeArgs(_, i)
+    | YieldStar(i) => collect_switch_fold_shapes_expr(i, out)
+    Cond(c, t, e) => {
+      collect_switch_fold_shapes_expr(c, out)
+      collect_switch_fold_shapes_expr(t, out)
+      collect_switch_fold_shapes_expr(e, out)
+    }
+    ArrayLit(items) =>
+      for i in items {
+        collect_switch_fold_shapes_expr(i, out)
+      }
+    ObjectLit(entries) =>
+      for ent in entries {
+        collect_switch_fold_shapes_expr(ent.1, out)
+      }
+    AssignExpr(_, v) | PropAssignExpr(_, _, v) =>
+      collect_switch_fold_shapes_expr(v, out)
+    Yield(Some(i)) => collect_switch_fold_shapes_expr(i, out)
+    _ => ()
+  }
 }
 
 ///|

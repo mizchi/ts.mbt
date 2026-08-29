@@ -641,6 +641,8 @@ pub fn bundle_modules(
   // the same reason — one of them saying "nothing declined" tells you
   // nothing about the other.
   let explain_type_tags : Array[String] = []
+  let explain_dispatchers : Array[String] = []
+  let explain_type_checks : Array[String] = []
   let explain_methods : Array[String] = []
   // Set when the escape analysis reserved the wildcard. Every later
   // section then declines everything, and saying so once beats
@@ -779,13 +781,30 @@ pub fn bundle_modules(
     // Literal-union switch folding. Specializes `dispatch("x", n)`
     // when `dispatch` is a `switch (k) { case ...: return ... }`
     // function whose first param is a closed string-literal union.
+    let switch_fold_declines : Array[String] = []
     if opts.phase_enabled("switch-fold") {
       timer.phase("switch-fold", () => {
-        let sw = build_switch_fold_table(combined)
+        let sw = build_switch_fold_table(
+          combined,
+          explain=if opts.explain { Some(switch_fold_declines) } else { None },
+        )
         if !sw.entries.is_empty() {
           combined = switch_fold(combined, sw)
         }
       })
+    }
+    if opts.explain {
+      explain_dispatchers.push("")
+      explain_dispatchers.push(
+        "literal-union dispatchers: why a call was not specialized",
+      )
+      explain_dispatchers.push("")
+      if switch_fold_declines.length() == 0 {
+        explain_dispatchers.push("  nothing declined.")
+      }
+      for line in switch_fold_declines {
+        explain_dispatchers.push("  * " + line)
+      }
     }
     // `as const` (and equivalent) array/object inline at use sites.
     // Replaces `NAME[i]` / `NAME.k` with the underlying literal value
@@ -924,12 +943,60 @@ pub fn bundle_modules(
     // type annotation. Runs BEFORE the regular fold so the
     // resulting `BoolLit(true/false)` feeds into dead-branch
     // elimination.
+    let type_fold_sites_before = if opts.explain &&
+      opts.phase_enabled("type-fold") {
+      count_type_fold_sites(combined)
+    } else {
+      0
+    }
     combined = if opts.phase_enabled("type-fold") {
       timer.phase("type-fold", () => {
         type_fold_block(combined, type_aliases=combined_type_aliases)
       })
     } else {
       combined
+    }
+    if opts.explain {
+      explain_type_checks.push("")
+      explain_type_checks.push(
+        "type-driven checks: how many the annotations decided",
+      )
+      explain_type_checks.push("")
+      if !opts.phase_enabled("type-fold") {
+        explain_type_checks.push("  the phase is disabled.")
+      } else if type_fold_sites_before == 0 {
+        explain_type_checks.push(
+          "  no candidate at all: the bundle contains no `typeof x === \"…\"`, `x === null`, `x === undefined` or `x + \"\"` on a bare binding. The shape this phase decides is absent.",
+        )
+      } else {
+        // Counted, not re-derived: the pass reports how many of its own
+        // candidate shapes survived it, so a "0 folded" answer cannot be
+        // an artifact of a second implementation of the decision.
+        let after = count_type_fold_sites(combined)
+        let folded = type_fold_sites_before - after
+        explain_type_checks.push(
+          "  \{type_fold_sites_before} candidate check(s); \{folded} decided by an annotation in scope.",
+        )
+        // Which shapes they were. A total made mostly of `x === null`
+        // is a pass with nothing to do rather than a lookup that
+        // fails: that check is decidable only when the annotation
+        // EXCLUDES null, and code writes it exactly when it does not.
+        let by_kind = count_type_fold_sites_by_kind(combined)
+        let kinds = by_kind.keys().to_array()
+        kinds.sort()
+        let parts : Array[String] = []
+        for k in kinds {
+          parts.push("\{k} x\{by_kind.get(k).unwrap_or(0)}")
+        }
+        if parts.length() > 0 {
+          explain_type_checks.push("  still standing: \{parts.join(", ")}.")
+        }
+        if folded == 0 {
+          explain_type_checks.push(
+            "  every one was left alone: the binding had no type in scope, or the type it had does not settle the check.",
+          )
+        }
+      }
     }
     // Order: fold -> treeshake -> mangle -> inline -> peephole.
     // Fold turns dead `if (false)` branches into nothing and
@@ -1517,8 +1584,8 @@ pub fn bundle_modules(
     explain.push("mtsc --explain-mangle")
     for
       section in [
-        explain_escape, explain_params, explain_methods, explain_fields, explain_type_tags,
-        explain_tags,
+        explain_escape, explain_params, explain_methods, explain_fields, explain_dispatchers,
+        explain_type_checks, explain_type_tags, explain_tags,
       ] {
       for line in section {
         explain.push(line)
