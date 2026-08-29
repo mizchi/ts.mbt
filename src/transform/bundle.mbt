@@ -635,6 +635,12 @@ pub fn bundle_modules(
   let explain_params : Array[String] = []
   let explain_fields : Array[String] = []
   let explain_tags : Array[String] = []
+  // `tag-rewrite`, the type-driven tag renumbering, is a different pass
+  // from `discriminant_ints` above: it reads declared unions, runs early,
+  // and does not need `--mangle-properties`. Its section is separate for
+  // the same reason — one of them saying "nothing declined" tells you
+  // nothing about the other.
+  let explain_type_tags : Array[String] = []
   let explain_methods : Array[String] = []
   // Set when the escape analysis reserved the wildcard. Every later
   // section then declines everything, and saying so once beats
@@ -808,12 +814,41 @@ pub fn bundle_modules(
     // string-literal discriminated union whose `K` property is
     // never observed outside switch heads and `===`/`!==`
     // comparisons, swap the string tags for small integers.
+    //
+    // It also needs both escape routes that leave no trace in the
+    // bundle's own statements: the export surface (a consumer holding an
+    // exported value, or building one for an exported signature, can
+    // compare its tag against the original string) and a hand-off
+    // through an imported callee.
+    let tag_rewrite_declines : Array[String] = []
     combined = if opts.phase_enabled("tag-rewrite") {
       timer.phase("tag-rewrite", () => {
-        tag_rewrite_block(combined, combined_type_aliases)
+        tag_rewrite_block(
+          combined,
+          combined_type_aliases,
+          Some({
+            exported: export_roots,
+            externals: imported_bindings(external_imports),
+          }),
+          interfaces=combined_interfaces,
+          explain=if opts.explain { Some(tag_rewrite_declines) } else { None },
+        )
       })
     } else {
       combined
+    }
+    if opts.explain {
+      explain_type_tags.push("")
+      explain_type_tags.push(
+        "typed discriminant tags: why a union kept its strings",
+      )
+      explain_type_tags.push("")
+      if tag_rewrite_declines.length() == 0 {
+        explain_type_tags.push("  nothing declined.")
+      }
+      for line in tag_rewrite_declines {
+        explain_type_tags.push("  * " + line)
+      }
     }
     // Lift the IIFE-lowered class shape back to native
     // `class Name { … }` syntax. Smaller emit, plus
@@ -1482,7 +1517,8 @@ pub fn bundle_modules(
     explain.push("mtsc --explain-mangle")
     for
       section in [
-        explain_escape, explain_params, explain_methods, explain_fields, explain_tags,
+        explain_escape, explain_params, explain_methods, explain_fields, explain_type_tags,
+        explain_tags,
       ] {
       for line in section {
         explain.push(line)

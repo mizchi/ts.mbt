@@ -59,19 +59,95 @@
 // `e.K === <id>` (similar for `!==` / `==` / `!=`).
 
 ///|
+/// The two facts about the bundle boundary that `tag_rewrite_block`
+/// cannot derive from the block it is handed.
+pub(all) struct TagRewriteBoundary {
+  // The bundle's exported local names (`export_roots`). The export
+  // surface is an escape route that leaves NO trace inside the bundle:
+  // this pass rewrites a property's VALUE, so
+  // `export const c: Shape = { kind: "circle" }` becoming `{ kind: 0 }`
+  // makes the consumer's `c.kind === "circle"` false, and no sink inside
+  // the bundle mentions it — the consumer's comparison is outside.
+  // `export function area(s: Shape)` is the same hazard mirrored: there
+  // the CONSUMER builds `{ kind: "circle" }` and the bundle compares it
+  // against `0`.
+  //
+  // Deliberately not `exported_surface_props`. That set answers the
+  // property mangler's question — "may this NAME be renamed" — and is
+  // right to be broader: it follows a called function's body, so
+  // `export const out = area(shapes[0])` reserves `kind` even though the
+  // consumer only ever sees a number. Rewriting a value needs the
+  // narrower fact, the same split `class_method_dce` needed against
+  // `collect_externally_visible_props`.
+  exported : Map[String, Bool]
+  // Bindings that name something IMPORTED from outside the bundle. A
+  // call through one hands the argument to code we cannot read, which is
+  // the same escape as a sink — `callee_provenance.mbt` makes the same
+  // fail-closed call for the property mangler. Deliberately not
+  // `external_import_bindings`, which unions in every implicit global:
+  // this pass has its own catalog for those
+  // (`serializing_method_names` / `serializing_callable_names`), and it
+  // is the more precise answer. `Math.max(s.r)` hands off a number, not
+  // the tagged object.
+  externals : Map[String, Bool]
+}
+
+///|
 pub fn tag_rewrite_block(
   block : @ast.TsBlock,
   type_aliases : Array[@ast.TsTypeAlias],
+  // What the pass needs to know about the bundle BOUNDARY. Required and
+  // positional, with no default, for the same reason
+  // `class_method_dce_block` takes its `off_bundle` that way: `None`
+  // means the caller did not compute it and the pass declines. A
+  // labelled default here would fail OPEN — an empty `externals` is
+  // FEWER sinks, not fewer candidates — and a wrapper node's fail-open
+  // default has already cost this pipeline two soundness bugs
+  // (`TypeArgs`, `PureCall`).
+  boundary : TagRewriteBoundary?,
+  // Every `interface` in the bundle. A union declares its variants as
+  // named interfaces far more often than as inline object literals —
+  // `type Shape = Circle | Square` is what real code writes, and
+  // without this table every one of those reads as "not an object" and
+  // the union is rejected before any safety gate runs. Defaults to
+  // empty, which only ever makes the pass find FEWER candidates.
+  interfaces? : Array[@ast.TsInterface] = [],
+  // `--explain-mangle`: one line per reason the pass did nothing. The
+  // pass moved zero bytes on all ten type-aware corpus targets and the
+  // size number cannot say whether that is "no bundle declares the
+  // shape" or "the shape is there and a gate refused it" — those want
+  // opposite fixes, so the pass has to name which one it hit.
+  explain? : Array[String]? = None,
 ) -> @ast.TsBlock {
+  // 0. The boundary question, before anything else. An unanswered one
+  //    means no tag may be renumbered.
+  let (exported, externals) = match boundary {
+    None => {
+      match explain {
+        Some(out) =>
+          out.push(
+            "declined — the caller supplied no bundle-boundary facts, so an exported or handed-off tag could not be ruled out.",
+          )
+        None => ()
+      }
+      return block
+    }
+    Some(b) => (b.exported, b.externals)
+  }
   // 1. Gather discriminant property names + literal sets from
   //    closed string-literal Object-unions, and the map
   //    `alias_name -> K` so we can recognize type-annotated
   //    bindings later.
-  let unions = collect_discriminated_unions(type_aliases)
+  let shapes = collect_named_shapes(interfaces, type_aliases)
+  let unions = collect_discriminated_unions(type_aliases, shapes)
   if unions.is_empty() {
+    match explain {
+      Some(out) => explain_no_union_found(out, type_aliases, shapes)
+      None => ()
+    }
     return block
   }
-  let alias_to_k = collect_alias_to_k(type_aliases)
+  let alias_to_k = collect_alias_to_k(type_aliases, shapes)
   // 2. Per-K escape-sink scan. Instead of one global "any sink
   //    aborts everything" gate, walk every sink-arg expression and
   //    check, per K, whether the arg references something we
@@ -80,23 +156,68 @@ pub fn tag_rewrite_block(
   //    alias that resolves to a K-DU, a function parameter so
   //    annotated, or an inline `ObjectLit` carrying key K).
   //    When K's bindings don't show up in any sink, K survives.
-  let sink_args = collect_escape_sink_args(block)
+  let sink_args = collect_escape_sink_args(block, externals)
+  //    An exported declaration's own value leaves the bundle, so it
+  //    joins the sink args: `export const c = { kind: "circle" }` and
+  //    `export const make = () => ({ kind: "circle" })` both hand a tag
+  //    to the consumer.
+  for e in collect_exported_value_exprs(block, exported) {
+    sink_args.push(e)
+  }
+  //    An exported SIGNATURE is the mirrored hazard, and no expression
+  //    walk can see it: when the consumer builds the value, the bundle
+  //    is the side comparing against a renumbered tag.
+  let exported_type_names = collect_exported_signature_type_names(
+    block, exported,
+  )
   // 3. For each candidate K, verify the safety gates.
   let candidates : Map[String, Map[String, Int]] = {}
   for entry in unions {
     let (k, literals) = entry
+    if k_type_name_is_exported(k, alias_to_k, shapes, exported_type_names)
+      is Some(tname) {
+      match explain {
+        Some(out) =>
+          out.push(
+            "`\{k}` (\{literals.length()} tags) — `\{tname}` is part of the bundle's exported signature, so a consumer builds or reads the tag as a string.",
+          )
+        None => ()
+      }
+      continue
+    }
     let lit_set : Map[String, Bool] = {}
     for s in literals {
       lit_set[s] = true
     }
     let k_bindings = collect_du_bindings_for_k(block, k, lit_set, alias_to_k)
     if any_sink_arg_taints_k(sink_args, k, lit_set, k_bindings) {
+      match explain {
+        Some(out) =>
+          out.push(
+            "`\{k}` (\{literals.length()} tags) — a value carrying it reaches an escape sink, which could read the tag as a string.",
+          )
+        None => ()
+      }
       continue
     }
     if !check_prop_uses_safe(block, k, literals) {
+      match explain {
+        Some(out) =>
+          out.push(
+            "`\{k}` (\{literals.length()} tags) — the property is read somewhere other than a switch head or an equality comparison against one of its tags.",
+          )
+        None => ()
+      }
       continue
     }
     if !check_object_literals_safe(block, k, literals) {
+      match explain {
+        Some(out) =>
+          out.push(
+            "`\{k}` (\{literals.length()} tags) — an object literal gives it a value that is not one of the union's tags, so its shape is unknown.",
+          )
+        None => ()
+      }
       continue
     }
     let id_map : Map[String, Int] = {}
@@ -117,10 +238,414 @@ pub fn tag_rewrite_block(
 }
 
 ///|
+/// `name -> its string-literal properties`, for every named object
+/// shape in the bundle: an `interface` (including the properties it
+/// inherits through `extends`) and a `type X = { … }` alias.
+///
+/// Only string-literal-valued properties are recorded, because that is
+/// the whole of what a discriminant can be. That also makes generic
+/// arguments irrelevant: a property whose type is a type PARAMETER is
+/// `Named(T)`, never `Literal(_)`, so it is not in this table and no
+/// substitution is needed to know that `Circle<Meters>` and
+/// `Circle<Feet>` agree on `kind: "circle"`.
+fn collect_named_shapes(
+  interfaces : Array[@ast.TsInterface],
+  type_aliases : Array[@ast.TsTypeAlias],
+) -> Map[String, Map[String, String]] {
+  let by_name : Map[String, @ast.TsInterface] = {}
+  for i in interfaces {
+    by_name[i.name] = i
+  }
+  let out : Map[String, Map[String, String]] = {}
+  for i in interfaces {
+    let fields : Map[String, String] = {}
+    // Walk the `extends` chain so a discriminant declared on a shared
+    // base counts for every derived variant. `visited` guards the
+    // cyclic declarations a hand-written `.d.ts` can contain; a
+    // derived interface's own field wins over an inherited one.
+    let visited : Map[String, Bool] = {}
+    let queue = [i.name]
+    while queue.pop() is Some(n) {
+      if visited.contains(n) {
+        continue
+      }
+      visited[n] = true
+      let cur = match by_name.get(n) {
+        Some(c) => c
+        None => continue
+      }
+      for f in cur.fields {
+        if f.1 is Literal(s) && !fields.contains(f.0) {
+          fields[f.0] = s
+        }
+      }
+      for b in cur.extends_names {
+        queue.push(b)
+      }
+    }
+    out[i.name] = fields
+  }
+  for ta in type_aliases {
+    if ta.type_ is Object(fs) {
+      let fields : Map[String, String] = {}
+      for f in fs {
+        if f.0 is Literal(k) && f.1 is Literal(v) {
+          fields[k] = v
+        }
+      }
+      out[ta.name] = fields
+    }
+  }
+  out
+}
+
+///|
+/// The VALUES an exported declaration hands to the consumer.
+///
+/// For a plain binding that is its own initializer. For a function or
+/// arrow the initializer itself is useless — `expr_mentions_k` calls
+/// every closure tainted, which would turn the pass off for any bundle
+/// that exports a function — so what leaves is what the function
+/// RETURNS, collected from its body.
+fn collect_exported_value_exprs(
+  block : @ast.TsBlock,
+  exported : Map[String, Bool],
+) -> Array[@ast.TsExpr] {
+  let out : Array[@ast.TsExpr] = []
+  for s in block.stmts {
+    match s {
+      Var(b, _, init) | Let(b, _, init) | Const(b, _, init) => {
+        let mut is_exported = false
+        for n in binding_names_in_order(b) {
+          if exported.contains(n) {
+            is_exported = true
+          }
+        }
+        if !is_exported {
+          continue
+        }
+        match init {
+          FuncExpr(f) => collect_return_exprs(f.body, out)
+          ArrowFunc(_, _, body, _) =>
+            match body {
+              ArrowExpr(e) => out.push(e)
+              ArrowBlock(b2) => collect_return_exprs(b2, out)
+            }
+          _ => out.push(init)
+        }
+      }
+      // An exported class hands over whatever its methods return and
+      // whatever its constructor stores on `this`.
+      NativeClassStmt(decl, ctor) => {
+        if !exported.contains(decl.name) {
+          continue
+        }
+        match ctor {
+          Some(f) => collect_return_exprs(f.body, out)
+          None => ()
+        }
+        for m in decl.methods {
+          match m.body {
+            Some(b) => collect_return_exprs(b, out)
+            None => ()
+          }
+        }
+        for sf in decl.static_field_inits {
+          out.push(sf.1)
+        }
+      }
+      _ => ()
+    }
+  }
+  out
+}
+
+///|
+/// Every `return <expr>` in a block, not descending into a nested
+/// function — a nested function's returns go to its own caller, which
+/// is inside the bundle unless that function itself escapes, and the
+/// escape-sink scan is what covers that.
+fn collect_return_exprs(block : @ast.TsBlock, out : Array[@ast.TsExpr]) -> Unit {
+  for s in block.stmts {
+    collect_return_exprs_stmt(s, out)
+  }
+}
+
+///|
+fn collect_return_exprs_stmt(
+  stmt : @ast.TsStmt,
+  out : Array[@ast.TsExpr],
+) -> Unit {
+  match stmt {
+    Return(Some(e)) => out.push(e)
+    If(_, t, e) => {
+      collect_return_exprs(t, out)
+      match e {
+        Some(b) => collect_return_exprs(b, out)
+        None => ()
+      }
+    }
+    While(_, b)
+    | DoWhile(_, b)
+    | With(_, b)
+    | ForOf(_, _, _, _, b)
+    | ForAwaitOf(_, _, _, _, b)
+    | ForIn(_, _, _, _, b)
+    | Block(b) => collect_return_exprs(b, out)
+    For(init, _, update, b) => {
+      match init {
+        Some(s) => collect_return_exprs_stmt(s, out)
+        None => ()
+      }
+      match update {
+        Some(s) => collect_return_exprs_stmt(s, out)
+        None => ()
+      }
+      collect_return_exprs(b, out)
+    }
+    Switch(_, cases) =>
+      for c in cases {
+        collect_return_exprs(c.body, out)
+      }
+    Try(b, _, cb, fb) => {
+      collect_return_exprs(b, out)
+      match cb {
+        Some(blk) => collect_return_exprs(blk, out)
+        None => ()
+      }
+      match fb {
+        Some(blk) => collect_return_exprs(blk, out)
+        None => ()
+      }
+    }
+    Label(_, inner) => collect_return_exprs_stmt(inner, out)
+    _ => ()
+  }
+}
+
+///|
+/// The type NAMES that appear in the annotations of exported
+/// declarations — the bundle's declared ABI. A union whose name is in
+/// here is one the consumer writes values of.
+fn collect_exported_signature_type_names(
+  block : @ast.TsBlock,
+  exported : Map[String, Bool],
+) -> Map[String, Bool] {
+  let out : Map[String, Bool] = {}
+  for s in block.stmts {
+    match s {
+      Var(b, ty, init) | Let(b, ty, init) | Const(b, ty, init) => {
+        let mut is_exported = false
+        for n in binding_names_in_order(b) {
+          if exported.contains(n) {
+            is_exported = true
+          }
+        }
+        if !is_exported {
+          continue
+        }
+        collect_type_names(ty, out)
+        match init {
+          FuncExpr(f) => collect_func_signature_type_names(f, out)
+          ArrowFunc(params, ret, _, _) => {
+            for p in params {
+              collect_type_names(p.type_, out)
+            }
+            collect_type_names(ret, out)
+          }
+          _ => ()
+        }
+      }
+      NativeClassStmt(decl, ctor) => {
+        if !exported.contains(decl.name) {
+          continue
+        }
+        match ctor {
+          Some(f) => collect_func_signature_type_names(f, out)
+          None => ()
+        }
+        for m in decl.methods {
+          for p in m.params {
+            collect_type_names(p.1, out)
+          }
+          collect_type_names(m.return_type, out)
+        }
+        for pr in decl.properties {
+          collect_type_names(pr.type_, out)
+        }
+      }
+      _ => ()
+    }
+  }
+  out
+}
+
+///|
+fn collect_func_signature_type_names(
+  f : @ast.TsFunc,
+  out : Map[String, Bool],
+) -> Unit {
+  for p in f.params {
+    collect_type_names(p.type_, out)
+  }
+  collect_type_names(f.return_type, out)
+}
+
+///|
+/// Every `Named` / `Applied` name reachable inside a type, so a union
+/// nested in `Shape[]`, `Promise<Shape>` or `{ items: Shape[] }` counts
+/// as exported too.
+fn collect_type_names(ty : @ast.TsType, out : Map[String, Bool]) -> Unit {
+  match ty {
+    Named(n) => out[n] = true
+    Applied(n, args) => {
+      out[n] = true
+      for a in args {
+        collect_type_names(a, out)
+      }
+    }
+    Array(inner) | Rest(inner) => collect_type_names(inner, out)
+    Tuple(items) | Union(items) | Intersection(items) =>
+      for i in items {
+        collect_type_names(i, out)
+      }
+    Object(fields) =>
+      for f in fields {
+        collect_type_names(f.1, out)
+      }
+    Func(params, ret) => {
+      for p in params {
+        collect_type_names(p, out)
+      }
+      collect_type_names(ret, out)
+    }
+    _ => ()
+  }
+}
+
+///|
+/// When K's own declared type name is part of the exported signature,
+/// return it (for the diagnostic). K's type names are the union aliases
+/// that resolve to K plus the individual variant shapes carrying K —
+/// naming one variant exposes the tag just as well as naming the union.
+fn k_type_name_is_exported(
+  k : String,
+  alias_to_k : Map[String, String],
+  shapes : Map[String, Map[String, String]],
+  exported_type_names : Map[String, Bool],
+) -> String? {
+  for name in exported_type_names.keys() {
+    if alias_to_k.get(name) is Some(kk) && kk == k {
+      return Some(name)
+    }
+    if shapes.get(name) is Some(fields) && fields.contains(k) {
+      return Some(name)
+    }
+  }
+  None
+}
+
+///|
+/// `--explain-mangle` for the case that ends the pass before any gate
+/// runs: `collect_discriminated_unions` found nothing. "Nothing" has
+/// two very different causes and the byte count cannot tell them
+/// apart — no alias in the bundle is a multi-variant union at all
+/// (the shape is absent, and nothing about this pass is worth
+/// changing), or aliases ARE unions and `find_common_string_discriminant`
+/// rejected them (the gate is too closed, and the reason names what to
+/// open). Report the counts and the rejecting shape, per alias.
+fn explain_no_union_found(
+  out : Array[String],
+  type_aliases : Array[@ast.TsTypeAlias],
+  shapes : Map[String, Map[String, String]],
+) -> Unit {
+  let mut unions = 0
+  let mut unresolved_variant = 0
+  let mut no_common_key = 0
+  // Which variant shape did the rejection. A named reference that
+  // `shapes` cannot resolve is a variant declared outside the bundle
+  // (an ambient `.d.ts`, a dependency's types) — that is a different
+  // problem from a variant that is genuinely not an object.
+  let labels : Map[String, Int] = {}
+  for ta in type_aliases {
+    match ta.type_ {
+      Union(parts) => {
+        if parts.length() < 2 {
+          continue
+        }
+        unions = unions + 1
+        let mut all_resolved = true
+        for p in parts {
+          if object_string_literal_fields(p, shapes) is None {
+            all_resolved = false
+            let s = type_shape_label(p)
+            labels[s] = labels.get(s).unwrap_or(0) + 1
+          }
+        }
+        if all_resolved {
+          if find_common_string_discriminant(parts, shapes) is None {
+            no_common_key = no_common_key + 1
+          }
+        } else {
+          unresolved_variant = unresolved_variant + 1
+        }
+      }
+      _ => ()
+    }
+  }
+  if unions == 0 {
+    out.push(
+      "no candidate at all: of \{type_aliases.length()} type aliases in the bundle, none is a union of two or more variants. The shape this pass rewrites is absent.",
+    )
+    return
+  }
+  out.push(
+    "no candidate: \{unions} of \{type_aliases.length()} type aliases are multi-variant unions, and every one was rejected.",
+  )
+  if unresolved_variant > 0 {
+    let parts : Array[String] = []
+    for s in labels.keys() {
+      parts.push("\{s} x\{labels.get(s).unwrap_or(0)}")
+    }
+    parts.sort()
+    out.push(
+      "  \{unresolved_variant} had a variant that is not an object shape this pass can read (\{parts.join(", ")}).",
+    )
+  }
+  if no_common_key > 0 {
+    out.push(
+      "  \{no_common_key} were unions of object shapes with no property that is a string literal in every variant.",
+    )
+  }
+}
+
+///|
+/// A one-word label for a type's outermost shape, for the diagnostic
+/// above. Not exhaustive: everything the classifier does not name
+/// individually is "other", which is enough to say whether the
+/// rejecting shape is the one worth teaching the pass about.
+fn type_shape_label(ty : @ast.TsType) -> String {
+  match ty {
+    Named(_) => "named reference"
+    Applied(_, _) => "generic reference"
+    Literal(_) => "string literal"
+    NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) => "literal"
+    Null | Undefined => "null/undefined"
+    Number | Int | Boolean | String_ | BigInt | Symbol => "primitive"
+    Array(_) | Tuple(_) => "array/tuple"
+    Func(_, _) | GenericFunc(_, _, _) => "function"
+    Intersection(_) => "intersection"
+    Union(_) => "nested union"
+    _ => "other"
+  }
+}
+
+///|
 /// Build a name -> K map for every type alias whose body is a
 /// closed string-literal discriminated union with discriminant K.
 fn collect_alias_to_k(
   type_aliases : Array[@ast.TsTypeAlias],
+  shapes : Map[String, Map[String, String]],
 ) -> Map[String, String] {
   let out : Map[String, String] = {}
   for ta in type_aliases {
@@ -129,7 +654,7 @@ fn collect_alias_to_k(
         if parts.length() < 2 {
           continue
         }
-        match find_common_string_discriminant(parts) {
+        match find_common_string_discriminant(parts, shapes) {
           Some((k, _)) => out[ta.name] = k
           None => ()
         }
@@ -415,9 +940,12 @@ fn expr_is_k_du_obj_lit(
 /// Collects every expression that appears as an argument to (or
 /// receiver of) a known escape sink anywhere in the bundle. The
 /// per-K check later inspects these for K-tainted references.
-fn collect_escape_sink_args(block : @ast.TsBlock) -> Array[@ast.TsExpr] {
+fn collect_escape_sink_args(
+  block : @ast.TsBlock,
+  externals : Map[String, Bool],
+) -> Array[@ast.TsExpr] {
   let out : Array[@ast.TsExpr] = []
-  collect_sink_args_block(block, out)
+  collect_sink_args_block(block, out, externals)
   out
 }
 
@@ -425,14 +953,19 @@ fn collect_escape_sink_args(block : @ast.TsBlock) -> Array[@ast.TsExpr] {
 fn collect_sink_args_block(
   block : @ast.TsBlock,
   out : Array[@ast.TsExpr],
+  externals : Map[String, Bool],
 ) -> Unit {
   for s in block.stmts {
-    collect_sink_args_stmt(s, out)
+    collect_sink_args_stmt(s, out, externals)
   }
 }
 
 ///|
-fn collect_sink_args_stmt(stmt : @ast.TsStmt, out : Array[@ast.TsExpr]) -> Unit {
+fn collect_sink_args_stmt(
+  stmt : @ast.TsStmt,
+  out : Array[@ast.TsExpr],
+  externals : Map[String, Bool],
+) -> Unit {
   match stmt {
     Var(_, _, e)
     | Let(_, _, e)
@@ -440,103 +973,115 @@ fn collect_sink_args_stmt(stmt : @ast.TsStmt, out : Array[@ast.TsExpr]) -> Unit 
     | Expr(e)
     | Assign(_, e)
     | CompoundAssign(_, _, e)
-    | Throw(e) => collect_sink_args_expr(e, out)
-    Return(Some(e)) => collect_sink_args_expr(e, out)
+    | Throw(e) => collect_sink_args_expr(e, out, externals)
+    Return(Some(e)) => collect_sink_args_expr(e, out, externals)
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => ()
     IndexAssign(t, idx, v) => {
-      collect_sink_args_expr(t, out)
-      collect_sink_args_expr(idx, out)
-      collect_sink_args_expr(v, out)
+      collect_sink_args_expr(t, out, externals)
+      collect_sink_args_expr(idx, out, externals)
+      collect_sink_args_expr(v, out, externals)
     }
     PropAssign(t, _, v) => {
-      collect_sink_args_expr(t, out)
-      collect_sink_args_expr(v, out)
+      collect_sink_args_expr(t, out, externals)
+      collect_sink_args_expr(v, out, externals)
     }
     If(c, t, e) => {
-      collect_sink_args_expr(c, out)
-      collect_sink_args_block(t, out)
+      collect_sink_args_expr(c, out, externals)
+      collect_sink_args_block(t, out, externals)
       match e {
-        Some(b) => collect_sink_args_block(b, out)
+        Some(b) => collect_sink_args_block(b, out, externals)
         None => ()
       }
     }
     While(c, body) | DoWhile(c, body) | With(c, body) => {
-      collect_sink_args_expr(c, out)
-      collect_sink_args_block(body, out)
+      collect_sink_args_expr(c, out, externals)
+      collect_sink_args_block(body, out, externals)
     }
     For(init, cond, update, body) => {
       match init {
-        Some(s) => collect_sink_args_stmt(s, out)
+        Some(s) => collect_sink_args_stmt(s, out, externals)
         None => ()
       }
       match cond {
-        Some(e) => collect_sink_args_expr(e, out)
+        Some(e) => collect_sink_args_expr(e, out, externals)
         None => ()
       }
       match update {
-        Some(s) => collect_sink_args_stmt(s, out)
+        Some(s) => collect_sink_args_stmt(s, out, externals)
         None => ()
       }
-      collect_sink_args_block(body, out)
+      collect_sink_args_block(body, out, externals)
     }
     // `for-in` enumerates property names — treat the iterable as
     // a sink arg (it observes its discriminant property name).
     ForIn(_, _, _, iter, body) => {
       out.push(iter)
-      collect_sink_args_block(body, out)
+      collect_sink_args_block(body, out, externals)
     }
     ForOf(_, _, _, iter, body) | ForAwaitOf(_, _, _, iter, body) => {
-      collect_sink_args_expr(iter, out)
-      collect_sink_args_block(body, out)
+      collect_sink_args_expr(iter, out, externals)
+      collect_sink_args_block(body, out, externals)
     }
     Switch(e, cases) => {
-      collect_sink_args_expr(e, out)
+      collect_sink_args_expr(e, out, externals)
       for c in cases {
         match c.test_expr {
-          Some(te) => collect_sink_args_expr(te, out)
+          Some(te) => collect_sink_args_expr(te, out, externals)
           None => ()
         }
-        collect_sink_args_block(c.body, out)
+        collect_sink_args_block(c.body, out, externals)
       }
     }
     Try(b, _, cb, fb) => {
-      collect_sink_args_block(b, out)
+      collect_sink_args_block(b, out, externals)
       match cb {
-        Some(blk) => collect_sink_args_block(blk, out)
+        Some(blk) => collect_sink_args_block(blk, out, externals)
         None => ()
       }
       match fb {
-        Some(blk) => collect_sink_args_block(blk, out)
+        Some(blk) => collect_sink_args_block(blk, out, externals)
         None => ()
       }
     }
-    Label(_, inner) => collect_sink_args_stmt(inner, out)
-    Block(b) => collect_sink_args_block(b, out)
+    Label(_, inner) => collect_sink_args_stmt(inner, out, externals)
+    Block(b) => collect_sink_args_block(b, out, externals)
     NativeClassStmt(decl, ctor) => {
       // Scan constructor and method bodies for escape sinks so the
       // tag-rewrite doesn't apply if e.g. `JSON.stringify(x)` appears
       // inside a method body.
       match ctor {
-        Some(f) => collect_sink_args_block(f.body, out)
+        Some(f) => collect_sink_args_block(f.body, out, externals)
         None => ()
       }
       for m in decl.methods {
         match m.body {
-          Some(b) => collect_sink_args_block(b, out)
+          Some(b) => collect_sink_args_block(b, out, externals)
           None => ()
         }
       }
       for sf in decl.static_field_inits {
-        collect_sink_args_expr(sf.1, out)
+        collect_sink_args_expr(sf.1, out, externals)
       }
     }
   }
 }
 
 ///|
-fn collect_sink_args_expr(expr : @ast.TsExpr, out : Array[@ast.TsExpr]) -> Unit {
+fn collect_sink_args_expr(
+  expr : @ast.TsExpr,
+  out : Array[@ast.TsExpr],
+  externals : Map[String, Bool],
+) -> Unit {
   match expr {
     MethodCall(@ast.TsExpr::Var(recv), m, args) => {
+      // A method call on a namespace import (`import * as ext`) or a
+      // named import hands the argument off the bundle.
+      if externals.contains(recv) {
+        for a in args {
+          out.push(a)
+        }
+        return
+      }
       let recv_is_dangerous = recv == "JSON" ||
         recv == "console" ||
         recv == "Object"
@@ -548,27 +1093,31 @@ fn collect_sink_args_expr(expr : @ast.TsExpr, out : Array[@ast.TsExpr]) -> Unit 
         return
       }
       for a in args {
-        collect_sink_args_expr(a, out)
+        collect_sink_args_expr(a, out, externals)
       }
     }
     Call(name, args) => {
-      if serializing_callable_names.contains(name) {
+      // Same fail-closed call for a direct call to an imported name.
+      // `eval` joins them: whatever it runs is unreadable by definition.
+      if serializing_callable_names.contains(name) ||
+        name == "eval" ||
+        externals.contains(name) {
         for a in args {
           out.push(a)
         }
         return
       }
       for a in args {
-        collect_sink_args_expr(a, out)
+        collect_sink_args_expr(a, out, externals)
       }
     }
     Spread(inner) => {
       // Spread of anything: that anything escapes.
       out.push(inner)
-      collect_sink_args_expr(inner, out)
+      collect_sink_args_expr(inner, out, externals)
     }
     TaggedTemplate(tag, _, _, exprs) => {
-      collect_sink_args_expr(tag, out)
+      collect_sink_args_expr(tag, out, externals)
       // Every interpolated expression escapes via the tag function.
       for e in exprs {
         out.push(e)
@@ -581,24 +1130,24 @@ fn collect_sink_args_expr(expr : @ast.TsExpr, out : Array[@ast.TsExpr]) -> Unit 
         }
       }
     MethodCall(recv, _, args) => {
-      collect_sink_args_expr(recv, out)
+      collect_sink_args_expr(recv, out, externals)
       for a in args {
-        collect_sink_args_expr(a, out)
+        collect_sink_args_expr(a, out, externals)
       }
     }
     CallExpr(callee, args) | NewExpr(callee, args) => {
-      collect_sink_args_expr(callee, out)
+      collect_sink_args_expr(callee, out, externals)
       for a in args {
-        collect_sink_args_expr(a, out)
+        collect_sink_args_expr(a, out, externals)
       }
     }
     New(_, args) =>
       for a in args {
-        collect_sink_args_expr(a, out)
+        collect_sink_args_expr(a, out, externals)
       }
     BinOp(_, l, r) | Seq(l, r) => {
-      collect_sink_args_expr(l, out)
-      collect_sink_args_expr(r, out)
+      collect_sink_args_expr(l, out, externals)
+      collect_sink_args_expr(r, out, externals)
     }
     UnaryOp(_, inner)
     | Await(inner)
@@ -606,54 +1155,54 @@ fn collect_sink_args_expr(expr : @ast.TsExpr, out : Array[@ast.TsExpr]) -> Unit 
     | OptionalChain(inner)
     | PureCall(inner)
     | TypeArgs(_, inner)
-    | YieldStar(inner) => collect_sink_args_expr(inner, out)
+    | YieldStar(inner) => collect_sink_args_expr(inner, out, externals)
     Cond(c, t, e) => {
-      collect_sink_args_expr(c, out)
-      collect_sink_args_expr(t, out)
-      collect_sink_args_expr(e, out)
+      collect_sink_args_expr(c, out, externals)
+      collect_sink_args_expr(t, out, externals)
+      collect_sink_args_expr(e, out, externals)
     }
-    PropAccess(recv, _) => collect_sink_args_expr(recv, out)
+    PropAccess(recv, _) => collect_sink_args_expr(recv, out, externals)
     IndexAccess(recv, idx) => {
-      collect_sink_args_expr(recv, out)
-      collect_sink_args_expr(idx, out)
+      collect_sink_args_expr(recv, out, externals)
+      collect_sink_args_expr(idx, out, externals)
     }
     ArrayLit(items) =>
       for i in items {
-        collect_sink_args_expr(i, out)
+        collect_sink_args_expr(i, out, externals)
       }
     ObjectLit(entries) =>
       for ent in entries {
-        collect_sink_args_expr(ent.1, out)
+        collect_sink_args_expr(ent.1, out, externals)
       }
     ComputedProp(k, v) => {
-      collect_sink_args_expr(k, out)
-      collect_sink_args_expr(v, out)
+      collect_sink_args_expr(k, out, externals)
+      collect_sink_args_expr(v, out, externals)
     }
     AssignExpr(_, v) | AssignPattern(_, v) | PropAssignExpr(_, _, v) =>
-      collect_sink_args_expr(v, out)
+      collect_sink_args_expr(v, out, externals)
     CompoundAssignExpr(t, _, v) => {
-      collect_sink_args_expr(t, out)
-      collect_sink_args_expr(v, out)
+      collect_sink_args_expr(t, out, externals)
+      collect_sink_args_expr(v, out, externals)
     }
     IndexAssignExpr(recv, idx, v) => {
-      collect_sink_args_expr(recv, out)
-      collect_sink_args_expr(idx, out)
-      collect_sink_args_expr(v, out)
+      collect_sink_args_expr(recv, out, externals)
+      collect_sink_args_expr(idx, out, externals)
+      collect_sink_args_expr(v, out, externals)
     }
     ArrowFunc(_, _, body, _) =>
       match body {
-        ArrowExpr(e) => collect_sink_args_expr(e, out)
-        ArrowBlock(b) => collect_sink_args_block(b, out)
+        ArrowExpr(e) => collect_sink_args_expr(e, out, externals)
+        ArrowBlock(b) => collect_sink_args_block(b, out, externals)
       }
-    FuncExpr(f) => collect_sink_args_block(f.body, out)
+    FuncExpr(f) => collect_sink_args_block(f.body, out, externals)
     DynamicImport(spec, opts) => {
-      collect_sink_args_expr(spec, out)
+      collect_sink_args_expr(spec, out, externals)
       match opts {
-        Some(o) => collect_sink_args_expr(o, out)
+        Some(o) => collect_sink_args_expr(o, out, externals)
         None => ()
       }
     }
-    Yield(Some(inner)) => collect_sink_args_expr(inner, out)
+    Yield(Some(inner)) => collect_sink_args_expr(inner, out, externals)
     _ => ()
   }
 }
@@ -823,6 +1372,7 @@ fn expr_mentions_k(
 /// order kept so integer IDs stay stable across runs).
 fn collect_discriminated_unions(
   type_aliases : Array[@ast.TsTypeAlias],
+  shapes : Map[String, Map[String, String]],
 ) -> Map[String, Array[String]] {
   let out : Map[String, Array[String]] = {}
   for ta in type_aliases {
@@ -832,7 +1382,7 @@ fn collect_discriminated_unions(
           continue
         }
         // Find a common literal-string property across every part.
-        let common = find_common_string_discriminant(parts)
+        let common = find_common_string_discriminant(parts, shapes)
         match common {
           Some((k, literals)) => {
             let existing = out.get(k).unwrap_or([])
@@ -864,12 +1414,13 @@ fn collect_discriminated_unions(
 /// (one entry per variant).
 fn find_common_string_discriminant(
   parts : Array[@ast.TsType],
+  shapes : Map[String, Map[String, String]],
 ) -> (String, Array[String])? {
   // Each part must be an `Object(fields)` carrying at least one
   // field whose value is `Literal(string)`. Build the set of
   // candidate field names from the first part, then intersect with
   // every subsequent part.
-  let first_fields = match object_string_literal_fields(parts[0]) {
+  let first_fields = match object_string_literal_fields(parts[0], shapes) {
     Some(m) => m
     None => return None
   }
@@ -879,7 +1430,7 @@ fn find_common_string_discriminant(
   }
   let per_part : Array[Map[String, String]] = [first_fields]
   for i in 1..<parts.length() {
-    let m = match object_string_literal_fields(parts[i]) {
+    let m = match object_string_literal_fields(parts[i], shapes) {
       Some(m) => m
       None => return None
     }
@@ -924,7 +1475,10 @@ fn find_common_string_discriminant(
 /// whose key is `Literal(name)` and value is `Literal(s)` — i.e.
 /// the candidate discriminant properties. Returns `None` for any
 /// non-`Object` type.
-fn object_string_literal_fields(ty : @ast.TsType) -> Map[String, String]? {
+fn object_string_literal_fields(
+  ty : @ast.TsType,
+  shapes : Map[String, Map[String, String]],
+) -> Map[String, String]? {
   match ty {
     Object(fields) => {
       let out : Map[String, String] = {}
@@ -941,6 +1495,10 @@ fn object_string_literal_fields(ty : @ast.TsType) -> Map[String, String]? {
       }
       Some(out)
     }
+    // A variant named rather than written out. `shapes` already holds
+    // only string-literal properties, inherited ones included, so the
+    // lookup answers the same question the inline arm does.
+    Named(n) | Applied(n, _) => shapes.get(n)
     _ => None
   }
 }

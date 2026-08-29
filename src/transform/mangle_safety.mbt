@@ -246,7 +246,7 @@ fn is_internal_marker_prop(name : String) -> Bool {
 pub fn external_import_bindings(
   external_imports : Array[@ast.TsImportDecl],
 ) -> Map[String, Bool] {
-  let out : Map[String, Bool] = {}
+  let out = imported_bindings(external_imports)
   // Implicit globals — names that JS / browser / Node provide for
   // free. Property accesses on these all live in someone else's
   // ABI, so they're external by definition. Without this list,
@@ -255,6 +255,21 @@ pub fn external_import_bindings(
   for n in known_global_bindings {
     out[n] = true
   }
+  out
+}
+
+///|
+/// Just the `import` half of `external_import_bindings`, with no
+/// implicit globals. A consumer that already carries its own curated
+/// catalog of which GLOBALS matter to it wants this one: unioning in
+/// every global would answer a question it has already answered more
+/// precisely. `tag_rewrite.mbt` is that consumer — `Math.max(s.r)`
+/// hands off a number, not the tagged object, and its own sink
+/// catalog says so.
+pub fn imported_bindings(
+  external_imports : Array[@ast.TsImportDecl],
+) -> Map[String, Bool] {
+  let out : Map[String, Bool] = {}
   for imp in external_imports {
     match imp.default_binding {
       Some(n) => out[n] = true

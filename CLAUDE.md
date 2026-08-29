@@ -247,8 +247,65 @@ product surfaces now.
   the only mentions — took the phase to 0 and flipped typebox to the
   corpus's first WIN, while leaving the two targets the pass does pay off
   on (superstruct +29, remeda +26) untouched. Four of the six
-  type-reading phases (`switch-fold`, `tag-rewrite`, `class-method-dce`,
-  `type-fold`) still move zero bytes on all ten targets. The property
+  type-reading phases moved zero bytes on all ten targets, and "zero"
+  is two different findings wearing one number — the shape is absent
+  (nothing to fix) or the shape is there and a gate refused it (the
+  reason names the fix). The byte count cannot tell them apart, so
+  `tag-rewrite` now says which: `--explain-mangle` reports the alias
+  count, the multi-variant-union count, and the SHAPE of each rejected
+  variant. The first answer was "gate too closed", and by a wide
+  margin: `object_string_literal_fields` returned `None` for anything
+  but an inline `Object(fields)`, so `type Shape = Circle | Square` —
+  how real code declares a union — was rejected before any safety gate
+  ran, and every union in all ten targets died there (typebox: 51
+  named-reference variants, immer: 19, ts-pattern: 9). Resolving a
+  named reference through the interface table, `extends` included,
+  produces candidates at last: typebox `keyword` (31 tags) and
+  `~kind`, zod `code` and `type`, excalidraw `type` and `status`,
+  ts-pattern `type`. Generic arguments need no substitution — a
+  discriminant is always `Literal(_)` and a type parameter is
+  `Named(T)`, so `Circle<Meters>` and `Circle<Feet>` agree on
+  `kind: "circle"` for free. The bytes are still zero on all ten, and
+  that is now a fact about those libraries rather than about the pass:
+  typebox's `keyword` reaches a sink and its `~kind` leaves through
+  `TDeferred`'s exported signature. Opening the gate first meant
+  fixing what opening it would have spread. `tag_rewrite` did not look
+  at exports AT ALL — `grep export tag_rewrite.mbt` was empty — and it
+  rewrites a property's VALUE, so `export const c: Shape = { kind:
+  "circle" }` compiled to `{ kind: 0 }` under plain
+  `mtsc --bundle --fold` and a consumer's `c.kind === "circle"` was
+  false, demonstrated with a separate consumer module. The bundle's own
+  escape-sink scan cannot see that; the comparison is outside it. The
+  mirrored direction is as real: with only
+  `export function area(s: Shape)` crossing, the CONSUMER builds
+  `{ kind: "circle" }` and the bundle compares it against `0`. Gating
+  on `exported_surface_props` was tried and was wrong — that set
+  answers the mangler's "may this NAME be renamed", follows a called
+  function's body, and reserves `kind` for
+  `export const out = area(shapes[0])` where the consumer only ever
+  sees a number; it broke a legitimate test, which was the correct
+  signal. A value rewrite needs the narrow fact: an exported
+  declaration's own value (a function's RETURNS, not the closure —
+  `expr_mentions_k` taints every closure, so passing the initializer
+  kills the pass for any bundle exporting a function) plus the type
+  names in its signature, which is the only way to see the direction
+  where the consumer constructs the value. Third time this exact split
+  was needed, after `class_method_dce` against
+  `collect_externally_visible_props`. Both facts arrive as one
+  REQUIRED positional `TagRewriteBoundary?`, the way
+  `class_method_dce_block` takes its `off_bundle`: a labelled default
+  would fail open here, since an empty `externals` means fewer SINKS
+  rather than fewer candidates.
+  `fixtures/mangle-safety/case49-tag-rewrite-export-boundary` runs both
+  directions under Node, and its first draft had ZERO detection power:
+  it observed `unitCircle.kind === "circle"` computed inside the
+  bundle, and a comparison rewritten alongside its literal stays true,
+  while a plain `.kind` read elsewhere closed the prop-uses gate so the
+  pass declined for an unrelated reason. Every observation is an
+  exported OBJECT now, and with the gate mutated off the case reports
+  `{"kind":0,"r":1}` against the baseline's `{"kind":"circle","r":1}`.
+  `switch-fold`, `class-method-dce` and `type-fold` have not had the
+  same treatment yet. The property
   mangler was reported inert on
   every library measured, and that turned out to be one bug rather than
   a limit: a `const f = (…) => …` had no entry in the graph's function

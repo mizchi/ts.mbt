@@ -1664,6 +1664,165 @@ test "tag-rewrite: discriminated union string tags become integers" {
 }
 
 ///|
+/// A caller that cannot answer the boundary question gets a pass that
+/// declines, not one that renumbers. The argument is positional and has
+/// no default on purpose: a labelled default would fail OPEN here,
+/// since an empty `externals` means FEWER sinks rather than fewer
+/// candidates, and a fail-open default on a wrapper node has already
+/// cost this pipeline two soundness bugs.
+test "tag-rewrite: no boundary facts means no rewrite" {
+  let src = "type Shape = { kind: \"circle\", r: number } | { kind: \"square\", side: number };\n" +
+    "const c: Shape = { kind: \"circle\", r: 3 };\n" +
+    "const n = c.kind === \"circle\" ? 1 : 2;\n"
+  let block = @parser.parse_module_block_from_source(src).block
+  let aliases = @parser.parse_module_from_source_with_const_values(src, {}).type_aliases
+  let declined : Array[String] = []
+  let kept = tag_rewrite_block(block, aliases, None, explain=Some(declined))
+  // Nothing was rewritten, and the pass said why.
+  assert_eq(kept.stmts.length(), block.stmts.length())
+  assert_eq(declined.length(), 1)
+  assert_true(declined[0].contains("no bundle-boundary facts"))
+  // The same block WITH the facts does fire, so the decline above is
+  // the missing argument and not a property of this program.
+  let fired = tag_rewrite_block(
+    block,
+    aliases,
+    Some({ exported: {}, externals: {} }),
+  )
+  let mut renumbered = false
+  for s in fired.stmts {
+    if s is Const(_, _, ObjectLit(entries)) {
+      for e in entries {
+        if e.0 == "kind" && e.1 is IntLit(_) {
+          renumbered = true
+        }
+      }
+    }
+  }
+  assert_true(renumbered)
+}
+
+///|
+/// The pass rewrites a property's VALUE, so the export surface is an
+/// escape route with no trace inside the bundle at all: a consumer
+/// holding the exported object compares `c.kind === "circle"` and gets
+/// `false`. Demonstrated end-to-end before the gate existed — the
+/// bundle's own escape-sink scan cannot see the consumer's comparison.
+test "tag-rewrite: an exported value keeps its string tags" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "type Shape = { kind: \"circle\", r: number } | { kind: \"square\", side: number };\n" +
+      "export function area(s: Shape): number {\n" +
+      "  switch (s.kind) {\n" +
+      "    case \"circle\": return s.r * s.r;\n" +
+      "    case \"square\": return s.side * s.side;\n" +
+      "  }\n" +
+      "  return 0;\n" +
+      "}\n" +
+      "export const c: Shape = { kind: \"circle\", r: 3 };\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("\"circle\""))
+      assert_true(out.js.contains("\"square\""))
+      assert_false(out.js.contains("kind: 0"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+/// `type Shape = Circle | Square` is how real code declares a union;
+/// an inline object literal per variant is the exception. Every one of
+/// the ten type-aware corpus targets rejected every union it had at
+/// this step, and `--explain-mangle` named the shape.
+test "tag-rewrite: a union of named interfaces is a candidate" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "interface Circle { kind: \"circle\"; r: number }\n" +
+      "interface Square { kind: \"square\"; side: number }\n" +
+      "type Shape = Circle | Square;\n" +
+      "function area(s: Shape): number {\n" +
+      "  switch (s.kind) {\n" +
+      "    case \"circle\": return s.r * s.r;\n" +
+      "    case \"square\": return s.side * s.side;\n" +
+      "  }\n" +
+      "  return 0;\n" +
+      "}\n" +
+      "const c: Shape = { kind: \"circle\", r: 3 };\n" +
+      "const out = area(c);\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_false(out.js.contains("\"circle\""))
+      assert_true(out.js.contains("case 0:"))
+      assert_true(out.js.contains("kind: 0"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+/// The discriminant is often declared once on a shared base rather
+/// than repeated on each variant, so the shape table follows
+/// `extends`.
+test "tag-rewrite: a discriminant inherited through extends counts" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "interface Base { tag: \"base\" }\n" +
+      "interface Leaf extends Base { n: number }\n" +
+      "interface Other { tag: \"other\"; s: string }\n" +
+      "type Node2 = Leaf | Other;\n" +
+      "function pick(x: Node2): number {\n" +
+      "  return x.tag === \"base\" ? x.n : x.s.length;\n" +
+      "}\n" +
+      "const a: Node2 = { tag: \"base\", n: 1 };\n" +
+      "const out = pick(a);\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_false(out.js.contains("\"base\""))
+      assert_true(out.js.contains("tag: 0"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+/// A call through an imported binding hands the value to code the pass
+/// cannot read, which is the same escape as a known sink. Only the
+/// IMPORTED names count here, not every implicit global: the pass has
+/// its own catalog for those, and `Math.max(s.r)` hands off a number
+/// rather than the tagged object.
+test "tag-rewrite: a hand-off through an imported callee aborts it" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "import { inspect } from \"node:util\";\n" +
+      "type Shape = { kind: \"circle\", r: number } | { kind: \"square\", side: number };\n" +
+      "const c: Shape = { kind: \"circle\", r: 3 };\n" +
+      "const seen = inspect(c);\n" +
+      "const n = c.kind === \"circle\" ? 1 : 2;\n" +
+      "globalThis.sink = [seen, n];\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_true(out.js.contains("\"circle\""))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "tag-rewrite: skipped when console.log mentions the bundle" {
   let files = vfs([
     (

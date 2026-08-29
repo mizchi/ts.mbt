@@ -1214,7 +1214,111 @@ leg delta は「published `.js` を相手にしたら何が起きるか」の答
 | `TypeArgs` の構造的保証 | 19 file に arm を足したが、次に walker を書く人が落とすのを止める仕組みは無い。`case40` が唯一の網 |
 | ~~`predicate-inline` が typebox で 261 byte 損~~ | **修正済み**。`removable` が「entry の named export に無いか」しか見ておらず、namespace object 経由で外に出る typebox の guard を全部 removable と判定していた。call 以外の言及を数えるようにして 0 に。typebox は corpus 初の WIN (+247) |
 | 述語 inline の得は mangle 後の呼び出しと比べていない | 判定は mangle 前なので、`isExtendsUnion(v)` を基準に価格付けしていて、実際に ship されるのは `a(v)`。body 2 node は既にそれより大きい。`removable` を直した後は corpus 上で損が出ていないので、model を足す根拠が今は無い |
-| 型読み 6 phase のうち 4 つが corpus 全体で不発 | `switch-fold` / `tag-rewrite` / `class-method-dce` / `type-fold` が 1 byte も動かさない。対象の形が corpus に無いのか、gate が閉じすぎなのかは未切り分け |
+| 型読み 6 phase のうち 4 つが corpus 全体で不発 | `switch-fold` / `class-method-dce` / `type-fold` が 1 byte も動かさない。対象の形が corpus に無いのか、gate が閉じすぎなのかは未切り分け。`tag-rewrite` は切り分け済み（下記） |
+
+### `tag-rewrite` の 0 byte を名前にした
+
+「0 byte」は 2 つの全く違う原因を同じ数字で表します——**形が無い**
+（pass 側に直すものは無い）か、**形はあって gate が拒んだ**
+（拒んだ理由が直す場所を指す）。byte 数はこの 2 つを区別できないので、
+pass 自身に言わせることにしました。`--explain-mangle` に
+`typed discriminant tags:` section を足し、union が 1 つも候補に
+ならなかったときは alias 総数・多変種 union 数・**拒んだ variant の形**を、
+候補になった K が落ちたときはどの gate かを 1 行で出します。
+
+最初の答えは「gate が閉じすぎ」でした。`object_string_literal_fields` は
+`Object(fields)` 以外に `None` を返すので、
+
+```ts
+interface Circle { kind: "circle"; r: number }
+interface Square { kind: "square"; side: number }
+type Shape = Circle | Square;
+```
+
+——実コードが書く形——は variant が `Named(_)` なので、安全 gate に届く前に
+落ちていました。10 target すべてで**全 union がこの段で拒否**されていて、
+`--explain-mangle` は拒んだ形の内訳まで出します（typebox: named
+reference x51、immer: x19、ts-pattern: x9）。interface / `type X = {…}`
+から「string literal 値を持つ property」表を作り、`extends` も辿って
+`Named` / `Applied` を解決するようにしました。generic 引数は無視して
+よい——discriminant は必ず `Literal(_)` で、型 parameter は `Named(T)`
+なので表に入らず、`Circle<Meters>` と `Circle<Feet>` が `kind: "circle"`
+で一致することに substitution は要りません。
+
+結果、候補が出るようになりました:
+
+| target | 開放前 | 開放後 |
+| --- | --- | --- |
+| typebox | union 12 個すべて「variant が object でない」 | `keyword` (31 tags) / `~kind` (2 tags) が候補 |
+| zod | 同様に全拒否 | `code` (2) / `type` (7) が候補 |
+| excalidraw | 同様に全拒否 | `type` (6) / `status` (3) が候補 |
+| ts-pattern | 同様に全拒否 | `type` (2) が候補 |
+| immer | named reference x19 で拒否 | x11 に減り、2 union は「共通 literal key 無し」まで進む |
+| hono / valibot / neverthrow / superstruct / remeda | — | 多変種 union が 0〜13 個で、いずれも本当に DU ではない（primitive / generic reference / tuple） |
+
+**byte は 10 target すべてで依然 0** です。ただし理由が変わりました:
+`keyword` は sink に届き、`~kind` は `TDeferred` として export
+signature に出ます。つまり残りは gate の欠陥ではなく**その bundle に
+関する事実**です。「形が無い」でも「gate が閉じすぎ」でもなく
+「その library では安全でない」——これは pass を直しても動きません。
+
+### 開放して初めて見えた実バグ: export 境界
+
+gate を開ける前に、開けたら広く踏むことになる穴が 1 つ見つかりました。
+`tag_rewrite` は **export を一切見ていませんでした**（`grep -n export
+tag_rewrite.mbt` が空）。この pass は property の**値**を書き換えるので、
+
+```ts
+export const c: Shape = { kind: "circle", r: 3 };
+```
+
+が `{ kind: 0, r: 3 }` になり、consumer の `c.kind === "circle"` が
+`false` になります。`mtsc --bundle --fold` だけで再現します
+（最適化 flag 無しの `--bundle` では pass 自体が走らない）:
+
+```
+$ node consumer.mjs
+kind: 0 matches: false area: 28.259999999999998   # 修正前
+kind: "circle" matches: true area: 28.25999...    # 修正後
+```
+
+bundle 内の escape-sink scan では原理的に見えません——consumer の比較は
+bundle の外にあります。逆向きも同じだけ実害があります:
+`export function area(s: Shape)` だけが渡っている場合、値を作るのは
+**consumer** で、`0` と比べるのが bundle 側です。
+
+gate に `exported_surface_props` を使うのは**間違い**でした。あれは
+property mangler の問い「この名前を rename してよいか」の答えで、
+広いのが正しい——呼ばれた関数の body まで辿るので、
+`export const out = area(shapes[0])`（consumer が見るのは number だけ）
+でも `kind` を予約します。実際それで既存 test が 1 本落ち、それが
+正しい信号でした。値の書き換えには狭い事実が必要で、
+
+- export された宣言**自身の値**（関数は closure ではなく `return` 式。
+  `expr_mentions_k` は closure を無条件に汚染扱いするので、
+  init をそのまま渡すと関数を 1 つ export した bundle で pass が死ぬ）
+- export signature に出る**型名**（consumer が値を作る向きは式の walk
+  では絶対に見えない）
+
+の 2 つを見ます。`class_method_dce` が
+`collect_externally_visible_props` に対して必要とした切り分けと同じ形で、
+**これで 3 回目**です。
+
+同時に、import した callee への hand-off も sink に入れました
+（`callee_provenance.mbt` と同じ fail-closed）。ただし
+`external_import_bindings` ではなく `imported_bindings` — 前者は暗黙
+global を全部混ぜるので、`Math.max(s.r)` が「tagged object を渡した」に
+なってしまいます。この pass は global 用の catalog を自分で持っていて、
+そちらが精度の高い答えです。
+
+`fixtures/mangle-safety/case49-tag-rewrite-export-boundary` が Node で
+両方向を回します。**最初の版は検出力が 0 でした**: 観測が
+bundle 内の `unitCircle.kind === "circle"` で、literal ごと書き換わる
+比較は `=== 0` になって true のまま——さらに別の場所の素の `.kind`
+読みが prop-uses gate を閉じて、pass は無関係な理由で declined
+していました。観測を全部「export された object そのもの」にして、
+gate を落とした build で `{"kind":0,"r":1}` vs baseline の
+`{"kind":"circle","r":1}` が出ることを確認してあります。
 
 ### 直したもの 4: namespace object に型専用 export が入る
 

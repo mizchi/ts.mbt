@@ -81,6 +81,8 @@ pub fn iife_class_lift_block(@ast.TsBlock) -> @ast.TsBlock
 
 pub let implicitly_invoked_protocol_methods : Array[String]
 
+pub fn imported_bindings(Array[@ast.TsImportDecl]) -> Map[String, Bool]
+
 pub fn imported_const_enum_table(Array[@ast.TsImportDecl], Map[String, String], (String) -> Array[@ast.TsEnumDecl]?, (String) -> Array[@ast.TsExportSpec]?, (String) -> Array[@ast.TsReExportSpec]?, (String, String) -> String?) -> Map[String, @ast.TsExpr]
 
 pub fn infer_container_symbols(SymbolGraph, ContainerFacts) -> Map[Int, Bool]
@@ -145,7 +147,7 @@ pub fn string_name_set(SymbolGraph) -> Map[String, Bool]
 
 pub fn switch_fold(@ast.TsBlock, SwitchFoldTable) -> @ast.TsBlock
 
-pub fn tag_rewrite_block(@ast.TsBlock, Array[@ast.TsTypeAlias]) -> @ast.TsBlock
+pub fn tag_rewrite_block(@ast.TsBlock, Array[@ast.TsTypeAlias], TagRewriteBoundary?, interfaces? : Array[@ast.TsInterface], explain? : Array[String]?) -> @ast.TsBlock
 
 pub fn transform_source(String) -> Result[String, String]
 
@@ -461,6 +463,11 @@ pub(all) enum SymbolKind {
   Catch
   ClassDecl
 } derive(Eq, @debug.Debug)
+
+pub(all) struct TagRewriteBoundary {
+  exported : Map[String, Bool]
+  externals : Map[String, Bool]
+}
 
 pub(all) struct TransformOutput {
   js : String

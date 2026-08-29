@@ -330,6 +330,60 @@ flag を落とすと**反転**します:
 `Object.defineProperties` と `Object.create(proto, descriptors)` は
 最初から通っていました。`get` / `set` の accessor pair も同様です。
 
+### 名前ではなく値が bundle 境界を越える: `tag-rewrite`
+
+この文書の他の pass はすべて property の**名前**を扱いますが、
+`tag-rewrite` は**値**を書き換えます——discriminated union の string tag
+を小さい整数に。そして export を一切見ていませんでした
+(`grep -n export src/transform/tag_rewrite.mbt` が空)。
+
+```ts
+// mtsc entry.ts --bundle --fold
+export const c: Shape = { kind: "circle", r: 3 };
+```
+
+が `{ kind: 0, r: 3 }` になり、consumer の `c.kind === "circle"` が
+`false` を返します。別 module の consumer から再現済みで、
+最適化 flag は `--fold` 1 つで足ります。bundle 内の escape-sink scan では
+原理的に見えません——比較は bundle の外です。逆向きも同じで、
+`export function area(s: Shape)` だけが渡っていれば値を作るのは
+consumer、`0` と比べるのが bundle 側です。
+
+gate に `exported_surface_props` を使うのは間違いです。あれは
+「この名前を rename してよいか」の答えで、広いのが正しく、呼ばれた関数の
+body まで辿るので `export const out = area(shapes[0])`（consumer が見るのは
+number だけ）でも `kind` を予約します。実際それで正当な既存 test が
+1 本落ちました。値の書き換えに必要なのは狭い事実——export された宣言
+**自身の値**（関数は closure ではなく `return` 式）と、export signature に
+出る**型名**（consumer が値を作る向きは式の walk では見えない）——で、
+`class_method_dce` が `collect_externally_visible_props` に対して必要と
+した切り分けと同じ形です。
+
+import した callee への hand-off も sink に入れました。ただし
+`external_import_bindings` ではなく新設の `imported_bindings` で、暗黙
+global は混ぜません: 混ぜると `Math.max(s.r)` が「tagged object を
+渡した」になり、この pass が自分で持っている global catalog より
+精度が落ちます。
+
+この 2 つは `TagRewriteBoundary?` という**必須 positional 引数**で渡します
+——`class_method_dce_block` の `off_bundle` と同じ形で、`None` は
+「caller が計算していない」の意味で pass が何もしません。label 付きの
+default にすると**開く方向に失敗**します: `externals` が空なのは候補が
+減ることではなく **sink が減ること**なので。wrapper node の fail-open
+default はこの pipeline で既に 2 回 soundness bug を出しています
+(`TypeArgs`、`PureCall`)。
+
+`fixtures/mangle-safety/case49-tag-rewrite-export-boundary` が両方向を
+Node で回します。**最初の版は検出力 0 でした**——観測が bundle 内の
+`unitCircle.kind === "circle"` で、literal ごと書き換わる比較は
+`=== 0` になって true のまま。さらに別の場所の素の `.kind` 読みが
+prop-uses gate を閉じ、pass は無関係な理由で declined していました。
+観測を全部「export された object そのもの」に変え、gate を落とした
+build で `{"kind":0,"r":1}` vs baseline の `{"kind":"circle","r":1}` が
+出ることを確認しています。「pass を切っただけ」にならない側の保証
+（内部専用の union は今も整数化される）は挙動として観測できないので、
+`bundle_wbtest.mbt` に置いてあります。
+
 ### 既知の不精度: chain の根に observation を付ける
 
 `seed_from_expr` は property / index chain を**根まで遡って** seed します。
