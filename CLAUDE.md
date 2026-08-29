@@ -230,10 +230,21 @@ product surfaces now.
   flags — once from the TypeScript source, once from the same code with
   its types erased — with all three legs required to observe the same
   thing. The answer so far is uncomfortable and worth knowing: across
-  ten measured targets — every one behaviour-checked, no `size-only` and
+  NINE measured targets — every one behaviour-checked, no `size-only` and
   no `BLOCKED` rows left — there is **one win**: typebox at +247 bytes
-  (0.21%), eight neutral, and one loss inside a byte of the noise floor
-  (-0.11% on Excalidraw). Both of the numbers that moved came from
+  (0.21%), seven neutral, and one loss inside a byte of the noise floor
+  (-0.11% on Excalidraw). zod was the tenth and is out: its bundle makes
+  eight `Reflect.ownKeys` calls plus four `Object.getOwnPropertyDescriptor(s)`
+  ones, which enumerate NON-enumerable properties — exactly what a class
+  prototype method is — so class-method DCE is suppressed there by
+  construction and no amount of type information changes the answer. Be
+  precise about what that costs, because it is easy to overstate: zod's
+  own report also says "nothing would have been dropped anyway", so the
+  reflection is not what made zod NEUTRAL. It was a permanent zero for a
+  permanent reason at the price of the corpus's slowest run, and the four
+  bugs it found are covered elsewhere (`verify-graph-walk` for the module
+  walk; fixtures for the erased-`as` arrow parens, the type-only
+  namespace entries and the merged interface-and-function case). Both of the numbers that moved came from
   attributing them per pass rather than arguing about them:
   `--disable-phase` prices each type-reading phase on its own, and it
   said `predicate-inline` was costing typebox 261 bytes — which was
@@ -377,7 +388,23 @@ product surfaces now.
   and the fix that would pay is per-receiver suppression, the same
   reasoning `class_members_reachable_off_bundle` applies at the bundle
   boundary. Filed, with the numbers, rather than started at the tail of
-  a session. The property
+  a session. What DOES ship from that investigation is a warning, because
+  reflection is the one blocker the author rather than the compiler has to
+  act on: `mtsc` now says so by default rather than behind
+  `--explain-mangle`. It is deliberately narrow in three ways. It fires
+  only for the reflection tier — an unprovable computed key is the
+  compiler's problem to improve and blaming the author for it would be
+  wrong. It fires only when the suppression actually COST a method:
+  reflection in a bundle whose every method is reachable anyway lost
+  nothing, and a warning naming a loss that did not happen is a warning
+  people learn to ignore — zod is exactly that case, eight
+  `Reflect.ownKeys` calls and "nothing would have been dropped anyway".
+  And it is silent when the JS itself is going to stdout, where the line
+  would land inside the program; `--warn-reflection` forces it on there,
+  `--no-warn-reflection` off anywhere. `unreached_class_methods` is one
+  function read by both the report and the warning, because a cost
+  computed separately from the report is a cost that can disagree with
+  it. The property
   mangler was reported inert on
   every library measured, and that turned out to be one bug rather than
   a limit: a `const f = (…) => …` had no entry in the graph's function

@@ -41,12 +41,6 @@
     "delta": 29,
     "aware": 10404
   },
-  "zod": {
-    "status": "measured",
-    "verdict": "NEUTRAL",
-    "delta": -23,
-    "aware": 199026
-  },
   "excalidraw": {
     "status": "measured",
     "verdict": "LOSS",

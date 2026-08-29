@@ -266,6 +266,22 @@ pub fn BundleOptions::with_treeshake(
 }
 
 ///|
+/// Collapse repeats, keeping first-seen order. The per-module emit path
+/// runs the class-method scan once per file over one bundle-wide scope,
+/// so a single `Reflect.ownKeys` call is reported once per module.
+fn dedup_reflection_warnings(lines : Array[String]) -> Array[String] {
+  let seen : Map[String, Bool] = {}
+  let out : Array[String] = []
+  for l in lines {
+    if !seen.contains(l) {
+      seen[l] = true
+      out.push(l)
+    }
+  }
+  out
+}
+
+///|
 pub(all) struct BundleOutput {
   // The concatenated JavaScript output.
   js : String
@@ -279,6 +295,15 @@ pub(all) struct BundleOutput {
   // limited to impure-getter detection; future passes can append
   // here. Empty when nothing is amiss.
   warnings : Array[String]
+  // Reflection in the input that no optimization can see through:
+  // `Reflect.ownKeys` and friends enumerate NON-enumerable properties,
+  // which is exactly what a class prototype method is, so one call
+  // anywhere keeps every method of every class in the bundle. Kept
+  // separate from `warnings` because it is not a lint: it is the
+  // compiler reporting that the author's own code, not a missing
+  // analysis, is what stopped an optimization. Empty when the bundle
+  // contains none.
+  reflection_warnings : Array[String]
   // `--explain-mangle` output: why each minify decision went the way it
   // did. Empty unless `BundleOptions.explain` was set.
   explain : Array[String]
@@ -625,6 +650,8 @@ pub fn bundle_modules(
   let sources_content : Array[String] = []
   let module_paths : Array[String] = []
   let warnings : Array[String] = []
+  // Reflection the passes met, for `BundleOutput.reflection_warnings`.
+  let reflection_warnings : Array[String] = []
   // `--explain-mangle` output, gathered per section and concatenated in
   // a fixed reading order at the end. The passes run in pipeline order,
   // which is not the order a person wants to read the answer in: the
@@ -925,6 +952,7 @@ pub fn bundle_modules(
           class_fields=combined_class_fields,
           type_aliases=combined_type_aliases,
           explain=if opts.explain { Some(method_dce_reasons) } else { None },
+          reflection=Some(reflection_warnings),
         )
       })
     } else {
@@ -1544,6 +1572,10 @@ pub fn bundle_modules(
         scope=Some(dce_scope),
         class_fields=all_class_fields,
         type_aliases=all_type_aliases,
+        // This path runs the pass once per MODULE over the same
+        // bundle-wide scope, so the same reflection call is met once per
+        // file. `dedup_reflection_warnings` collapses that at the end.
+        reflection=Some(reflection_warnings),
       )
       for j, stmt in lifted_block.stmts {
         if opts.with_sourcemap && j < lifted_block.stmt_positions.length() {
@@ -1597,6 +1629,7 @@ pub fn bundle_modules(
     sourcemap: sm_json,
     modules: module_paths,
     warnings,
+    reflection_warnings: dedup_reflection_warnings(reflection_warnings),
     explain,
     timings: timer.entries,
   })

@@ -183,28 +183,37 @@ const CORPUS = [
     // +25 bytes. Reserving every callable instead cost +31% here.
     driver: "superstruct.driver.mjs",
   },
-  // zod and superstruct were both BLOCKED, and both were blamed on the
-  // wrong thing twice: first on the export-surface blowup, then — after
-  // one gdb sample landed in `parse_conditional_type_tail` — on a parser
-  // blowup over recursive conditional types. Neither was it. Both write
+  // superstruct was BLOCKED, and was blamed on the wrong thing twice:
+  // first on the export-surface blowup, then — after one gdb sample
+  // landed in `parse_conditional_type_tail` — on a parser blowup over
+  // recursive conditional types. Neither was it. It writes
   // `.js`-suffixed relative specifiers, which the module-graph walk
   // failed to recognise as already-loaded, so it re-read and re-parsed
-  // every repeat visit and re-pushed its imports: 2^depth on a diamond
-  // graph. The sample landed in the parser because the parser was being
-  // re-entered exponentially. With the dedup guard in
-  // `mtsc_load_bundle_files`, zod went from not finishing in eighteen
-  // minutes to 227 ms and superstruct to 15 ms. `just verify-graph-walk`
-  // is the gate.
-  {
-    name: "zod",
-    repo: "https://github.com/colinhacks/zod",
-    entry: "packages/zod/src/index.ts",
-    // Took four fixes to get here from BLOCKED, and it found every one:
-    // the module-graph dedup (18 min -> 230 ms), the arrow body's parens
-    // through an erased `as`, the type-only namespace entries, and the
-    // merged interface-and-function case.
-    driver: "zod.driver.mjs",
-  },
+  // every repeat visit and re-pushed its own imports: 2^depth on a
+  // diamond graph. The sample landed in the parser because the parser
+  // was being re-entered exponentially. With the dedup guard in
+  // `mtsc_load_bundle_files` superstruct went from not finishing to
+  // 15 ms. `just verify-graph-walk` is the gate, and it generates the
+  // diamond shape itself rather than relying on a cloned package.
+  //
+  // zod USED to be the loud case here — 133 files, `.js` specifiers 65
+  // times, eighteen minutes without finishing a parse, then 227 ms —
+  // and it is no longer in the corpus. It cannot answer the question
+  // this harness asks. Its bundle contains eight `Reflect.ownKeys`
+  // calls, two `Object.getOwnPropertyDescriptors` and two
+  // `Object.getOwnPropertyDescriptor`, which enumerate non-enumerable
+  // properties — exactly what a class prototype method is — so
+  // class-method DCE is suppressed on zod by construction and no amount
+  // of type information changes the answer. It is worth being precise
+  // about what that costs, because it is easy to overstate: zod's
+  // report also says "nothing would have been dropped anyway", so the
+  // reflection is not what makes zod a NEUTRAL. Every declared method
+  // is reachable. Keeping it measured a permanent zero for a permanent
+  // reason, at the price of the slowest run in the corpus. The four
+  // bugs it found are all covered elsewhere — `verify-graph-walk` for
+  // the walk, and fixtures for the erased-`as` arrow parens, the
+  // type-only namespace entries and the merged interface-and-function
+  // case.
   // The corpus's only UI application, and its first monorepo: the
   // element package's imports reach five sibling workspace packages
   // through tsconfig `paths` declared in a config it only reaches by

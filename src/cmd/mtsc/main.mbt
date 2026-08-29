@@ -56,6 +56,18 @@ priv struct MtscOptions {
   // etc). Getters in JS are conventionally pure; an impure one
   // is almost always a bug. Off by default to keep output quiet.
   mut warn_impure_getters : Bool
+  // Report reflection in the input that no optimization can see
+  // through — `Reflect.ownKeys` and friends enumerate NON-enumerable
+  // properties, which is exactly what a class prototype method is, so
+  // one call anywhere keeps every method of every class in the bundle.
+  //
+  // On by default, unlike `--warn-impure-getters`, because the author
+  // is the only one who can act on it and should not have to know a
+  // flag exists to find out. Suppressed when the JS itself is going to
+  // stdout: there the diagnostic would land inside the program.
+  // `--warn-reflection` forces it on even then, `--no-warn-reflection`
+  // off.
+  mut warn_reflection : Bool?
   // Bare specifiers the user wants left as `import … from "<spec>"`
   // in the emitted bundle. Anything not on this list is resolved
   // through node_modules / tsconfig paths and inlined when found.
@@ -109,6 +121,7 @@ fn mtsc_options_new() -> MtscOptions {
     reserve_entry_exports: false,
     dts: false,
     warn_impure_getters: false,
+    warn_reflection: None,
     externals: {},
     mangle: false,
     mangle_properties: false,
@@ -166,6 +179,10 @@ fn mtsc_print_usage() -> Unit {
   println(
     "  --mangle-properties       Also rename non-reserved property keys (implies --bundle)",
   )
+  println(
+    "  --warn-reflection         Report reflection that blocks an optimization (default on when -o is given)",
+  )
+  println("  --no-warn-reflection      Silence the reflection report")
   println(
     "  --explain-mangle          Report why each minify decision went the way it did",
   )
@@ -227,6 +244,8 @@ fn mtsc_parse_args(argv : Array[String]) -> Result[MtscOptions, String] {
         opts.bundle = true
       }
       "--warn-impure-getters" => opts.warn_impure_getters = true
+      "--warn-reflection" => opts.warn_reflection = Some(true)
+      "--no-warn-reflection" => opts.warn_reflection = Some(false)
       "--external" => {
         if i + 1 >= argv.length() {
           return Err("missing value for --external")
@@ -1484,6 +1503,24 @@ async fn main {
     if opts.warn_impure_getters {
       for w in out.warnings {
         println("mtsc: " + w)
+      }
+    }
+    // Reflection that stopped an optimization. Default on, except when
+    // the JS is going to stdout and the line would land in the program.
+    let want_reflection = match opts.warn_reflection {
+      Some(v) => v
+      None => opts.out is Some(_)
+    }
+    if want_reflection && out.reflection_warnings.length() > 0 {
+      println(
+        "mtsc: warning: reflection keeps every class method. These enumerate NON-enumerable",
+      )
+      println(
+        "mtsc:          properties, which is exactly what a class prototype method is, so no",
+      )
+      println("mtsc:          analysis can see through them:")
+      for r in out.reflection_warnings {
+        println("mtsc:   " + r)
       }
     }
     for line in out.explain {

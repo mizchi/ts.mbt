@@ -1381,6 +1381,46 @@ mangler が rename して構わないので、「消えない」ことは挙動�
 ——で、これは `class_members_reachable_off_bundle` で bundle 境界に対して
 やったのと同じ形の推論です。#73 に分離しました。
 
+### reflection は warning にした
+
+3 分類のうち reflection だけは**compiler ではなく書いた人しか直せない**
+ので、`--explain-mangle` の中ではなく既定で出す warning にしました。
+
+```
+$ mtsc entry.ts --bundle --treeshake --fold -o out.js
+mtsc: warning: reflection keeps every class method. These enumerate NON-enumerable
+mtsc:          properties, which is exactly what a class prototype method is, so no
+mtsc:          analysis can see through them:
+mtsc:   `Reflect.ownKeys(...)`
+mtsc:   cost: 1 unreached method(s) kept, including `Widget.dead`
+```
+
+意図的に 3 つの意味で狭くしています。
+
+1. **reflection tier だけ。** 証明できない computed key は compiler 側の
+   改善余地なので、書いた人を責めるのは間違いです。
+2. **実際に method を失ったときだけ。** class が無い bundle、
+   全 method が到達可能な bundle では黙ります。**zod がまさにその例**で、
+   `Reflect.ownKeys` を 8 回呼びながら report は
+   "nothing would have been dropped anyway" と言います——
+   reflection は zod の byte を 1 も損させていません。起きていない損失を
+   名指しする warning は無視される warning になります。
+3. **JS を stdout に出しているときは黙る。** 診断行が program の中に
+   混ざるので。`--warn-reflection` で強制 on、`--no-warn-reflection` で off。
+
+`unreached_class_methods` は report と warning が**同じ 1 つの関数**を
+読みます。cost を report と別に計算すると report と食い違い得るからです。
+
+### zod を corpus から外した
+
+上の 2 番と同じ理由です。zod は永久に suppress され、しかも**失う method が
+無い**ので、この harness の問いに答えられません。corpus 最遅の実行時間を
+払って permanent zero を測っていたことになります。zod が見つけた 4 つの
+bug はすべて他で覆われています——module walk は `verify-graph-walk` が
+（zod の clone ではなく diamond graph を自分で生成して）、erased `as` の
+arrow parens・型専用 namespace entry・interface と function の merge は
+fixture が。corpus は **9 target** になりました。
+
 ### `tag-rewrite` の 0 byte を名前にした
 
 「0 byte」は 2 つの全く違う原因を同じ数字で表します——**形が無い**

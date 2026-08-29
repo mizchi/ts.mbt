@@ -1726,6 +1726,78 @@ test "class-method-dce: a const captured by a callback still proves out" {
 }
 
 ///|
+/// Reflection that no analysis can see through is the one blocker the
+/// author, not the compiler, has to act on — so it is a warning rather
+/// than a `--explain-mangle` line. It is reported only when it actually
+/// COST something: reflection in a bundle whose every method is
+/// reachable anyway lost nothing, and a warning naming a loss that did
+/// not happen is a warning people learn to ignore. zod is the real
+/// example of that second case — eight `Reflect.ownKeys` calls, and its
+/// own report says "nothing would have been dropped anyway".
+test "reflection warning: reported only when it costs a method" {
+  let opts = BundleOptions::default().with_treeshake(true).with_fold(true)
+  let head = "class Widget {\n" +
+    "  live(): number { return 1; }\n" +
+    "  dead(): number { return 2; }\n" +
+    "}\n" +
+    "const w = new Widget();\n"
+  // Reflection, a class, and a method nothing reaches: all three.
+  let costly = head +
+    "const names = Reflect.ownKeys(Object.getPrototypeOf(w));\n" +
+    "export const out = w.live() + names.length;\n"
+  match bundle_modules(vfs([("entry.ts", costly)]), "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.reflection_warnings.length() >= 2)
+      assert_true(out.reflection_warnings[0].contains("Reflect.ownKeys"))
+      let mut said_cost = false
+      for r in out.reflection_warnings {
+        if r.contains("cost:") && r.contains("Widget.dead") {
+          said_cost = true
+        }
+      }
+      assert_true(said_cost)
+      // And the method really did survive, which is what the warning
+      // is about.
+      assert_true(out.js.contains("dead"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+  // Reflection with no class in the bundle: nothing to lose.
+  let no_class = "const o = { a: 1, b: 2 };\n" +
+    "export const out = Reflect.ownKeys(o).length;\n"
+  match bundle_modules(vfs([("entry.ts", no_class)]), "entry.ts", opts) {
+    Ok(out) => assert_eq(out.reflection_warnings.length(), 0)
+    Err(e) => fail("bundle error: \{e}")
+  }
+  // A class, but every method reachable: the reflection cost nothing.
+  let no_cost = "class Widget {\n" +
+    "  live(): number { return 1; }\n" +
+    "}\n" +
+    "const w = new Widget();\n" +
+    "const names = Reflect.ownKeys(Object.getPrototypeOf(w));\n" +
+    "export const out = w.live() + names.length;\n"
+  match bundle_modules(vfs([("entry.ts", no_cost)]), "entry.ts", opts) {
+    Ok(out) => assert_eq(out.reflection_warnings.length(), 0)
+    Err(e) => fail("bundle error: \{e}")
+  }
+  // An unprovable computed key is NOT reflection: it is the compiler's
+  // problem to improve, and naming it here would blame the author for
+  // something they cannot fix.
+  let computed_key = head +
+    "const k: string = process.argv[2] ?? \"dead\";\n" +
+    "const bag: any = w;\n" +
+    "export const out = w.live() + (bag[k] === undefined ? 0 : 1);\n"
+  match bundle_modules(vfs([("entry.ts", computed_key)]), "entry.ts", opts) {
+    Ok(out) => {
+      assert_eq(out.reflection_warnings.length(), 0)
+      // Still suppressed — just not by reflection.
+      assert_true(out.js.contains("dead"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 /// Joins `out.explain` so a test can assert on the report as a whole.
 fn explain_text(out : BundleOutput) -> String {
   let b = StringBuilder::new()

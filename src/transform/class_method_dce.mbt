@@ -127,6 +127,15 @@ pub fn class_method_dce_block(
   // gate the pass.
   type_aliases? : Array[@ast.TsTypeAlias] = [],
   explain? : Array[String]? = None,
+  // Reflection the scan met, deduplicated with a count, for the
+  // compiler to warn about. Unlike `explain` this is not a debugging
+  // aid: `Reflect.ownKeys` in one file keeps every method of every
+  // class in the bundle, and the author is the only one who can do
+  // something about it, so they should not have to pass a flag to
+  // find out. Filled whether or not the pass ends up blocked — a
+  // reflection sink that co-occurs with an unprovable computed key is
+  // still a reflection sink the author would want to know about.
+  reflection? : Array[String]? = None,
 ) -> @ast.TsBlock {
   // 0. The off-bundle question, before anything else. An unanswered one
   //    means no method may be dropped.
@@ -193,6 +202,7 @@ pub fn class_method_dce_block(
     ),
     this_fields: container_facts.this_fields,
     reasons: [],
+    reflection: [],
   }
   // Deliberately not `block_has_method_sniff`, which stops at the
   // first sink: scanning every top-level statement collects a
@@ -242,6 +252,46 @@ pub fn class_method_dce_block(
   //    `accessed` set the rewrite uses, whether or not the scan
   //    cleared — so when the pass is off the report still says what
   //    it would have cost.
+  // 4b. Reflection worth telling the author about. Gated on the pass
+  //     having been BLOCKED and on the block actually costing
+  //     something: reflection in a bundle whose every method is
+  //     reachable anyway cost nothing, and a warning that names a loss
+  //     that did not happen is a warning people learn to ignore.
+  match reflection {
+    Some(out) =>
+      if blocked && facts.reflection.length() > 0 {
+        let unreached = unreached_class_methods(block, accessed)
+        if unreached.length() > 0 {
+          // Deduplicated with a count. The scan short-circuits inside a
+          // statement, so the count is a lower bound on the occurrences
+          // rather than an exact tally — enough to rank them, not
+          // enough to quote as a total.
+          let seen : Map[String, Int] = {}
+          let order : Array[String] = []
+          for r in facts.reflection {
+            if !seen.contains(r) {
+              order.push(r)
+            }
+            seen[r] = seen.get(r).unwrap_or(0) + 1
+          }
+          for r in order {
+            let n = seen.get(r).unwrap_or(0)
+            out.push(if n > 1 { "\{r} (x\{n} or more)" } else { r })
+          }
+          // Only the whole-bundle caller can quote a total. The
+          // per-module path (`scope` supplied) sees one file's methods
+          // per call, so it reports the constructs and leaves the
+          // arithmetic alone rather than emitting one partial total per
+          // module.
+          if scope is None {
+            out.push(
+              "cost: \{unreached.length()} unreached method(s) kept, including `\{unreached[0]}`",
+            )
+          }
+        }
+      }
+    None => ()
+  }
   match explain {
     Some(out) => report_method_dce(block, accessed, facts, blocked, out)
     None => ()
@@ -304,16 +354,15 @@ fn rank_sink_reasons(reasons : Array[String]) -> Array[String] {
 }
 
 ///|
-/// Fill `out` with the `--explain-mangle` section for this pass:
-/// which methods went (or would have gone), and — when the scan
-/// found a sink — the construct that turned the pass off.
-fn report_method_dce(
+/// `Class.method` for every declared method nothing in the bundle
+/// accesses by name — what the pass drops, or what a sink cost. One
+/// definition, read by the `--explain-mangle` report and by the
+/// reflection warning: the warning claims a COST, and a cost computed
+/// separately from the report is a cost that can disagree with it.
+fn unreached_class_methods(
   block : @ast.TsBlock,
   accessed : Map[String, Bool],
-  facts : SniffFacts,
-  blocked : Bool,
-  out : Array[String],
-) -> Unit {
+) -> Array[String] {
   let unreached : Array[String] = []
   for s in block.stmts {
     match s {
@@ -326,6 +375,21 @@ fn report_method_dce(
       _ => ()
     }
   }
+  unreached
+}
+
+///|
+/// Fill `out` with the `--explain-mangle` section for this pass:
+/// which methods went (or would have gone), and — when the scan
+/// found a sink — the construct that turned the pass off.
+fn report_method_dce(
+  block : @ast.TsBlock,
+  accessed : Map[String, Bool],
+  facts : SniffFacts,
+  blocked : Bool,
+  out : Array[String],
+) -> Unit {
+  let unreached = unreached_class_methods(block, accessed)
   if blocked {
     out.push(
       "SUPPRESSED — a sink in the bundle can observe a member name the " +
@@ -386,6 +450,15 @@ struct SniffFacts {
   /// itself, which is why the explanation cannot drift from the
   /// decision.
   reasons : Array[String]
+  /// The subset of `reasons` that is REFLECTION: a construct that
+  /// names or enumerates properties the compiler can never spell out,
+  /// so no amount of type information or analysis will ever clear it.
+  /// Separate because the two subsets want opposite responses — an
+  /// unprovable computed key is the compiler's problem to improve,
+  /// while `Reflect.ownKeys` is a fact about the source that only the
+  /// author can change. This one is worth telling the author about,
+  /// and the other is not.
+  reflection : Array[String]
 }
 
 ///|
@@ -1092,6 +1165,7 @@ fn expr_has_method_sniff(expr : @ast.TsExpr, facts : SniffFacts) -> Bool {
     MethodCall(@ast.TsExpr::Var(recv), m, args) => {
       let recv_is_reflective = recv == "Object" || recv == "Reflect"
       if recv_is_reflective && method_sniff_methods.contains(m) {
+        facts.reflection.push("`\{recv}.\{m}(...)`")
         facts.reasons.push(
           "`" +
           recv +
@@ -1164,6 +1238,7 @@ fn expr_has_method_sniff(expr : @ast.TsExpr, facts : SniffFacts) -> Bool {
       // through — be conservative when seeing them by name.
       if name == "Object" || name == "Reflect" {
         // `Object(x)` / `Reflect(x)` — let's just play safe.
+        facts.reflection.push("a bare `\{name}(...)` call")
         facts.reasons.push(
           "a bare `" + name + "(...)` call, which could be any reflection op",
         )
