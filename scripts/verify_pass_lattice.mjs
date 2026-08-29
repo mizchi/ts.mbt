@@ -37,6 +37,30 @@ const APP = path.join(ROOT, "_build/real-world/typescript/tsapp.cjs");
 const OUTDIR = path.join(ROOT, "_build/tsbisect");
 
 const VARIANTS = [
+// A gap worth knowing about, because this harness looks like it should
+// have caught the private-field leak and did not.
+//
+// `lower_private_fields` ran only in the merged pipeline, so bare
+// `--bundle` — the FIRST combination below — emitted mtsc's internal
+// `__private_brand__N__x` verbatim, and a brand is an ordinary own
+// enumerable property, visible to `JSON.stringify` / `Object.keys` /
+// spread / `for-in`. This lattice ran that combination on every run and
+// reported "behave identically" every time, for two independent reasons:
+//
+//   1. The target is a PUBLISHED `.js` bundle. `typescript.js` has no
+//      `#private` fields, no enums, no namespaces, no parameter
+//      properties — so no TypeScript-only lowering is exercised at all,
+//      and there was nothing to leak.
+//   2. Even with such a field present, the only observation is whether
+//      `tsc`'s stdout matches. An extra enumerable property on an
+//      internal object does not reach stdout, so the question could not
+//      see the answer.
+//
+// The reference leg is genuinely independent (the baseline is the
+// ORIGINAL `typescript.js`), which makes this a coverage gap rather than
+// a self-comparison. Closing it wants a second target compiled from
+// TypeScript SOURCE — the `_build/type-aware` clones are already on disk
+// — and an observation that inspects the values, not just stdout.
   { name: "bundle", flags: ["--bundle"] },
   { name: "treeshake", flags: ["--bundle", "--treeshake"] },
   { name: "fold", flags: ["--bundle", "--fold"] },

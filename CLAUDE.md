@@ -558,6 +558,23 @@ product surfaces now.
   a missed opportunity rather than a cost — a `#private` name is
   class-scoped and cannot be anybody's ABI, so it is the one property
   class that needs no proof to rename (#80).
+  `just verify-pass-lattice` is the harness that exists to find exactly
+  this — a pass present in some flag combinations and not others — and it
+  ran the guilty combination (bare `--bundle` is the first entry in its
+  table) on every run and reported "15/15 behave identically". Two
+  independent reasons, both worth knowing: its target is a PUBLISHED
+  `.js` bundle, and `typescript.js` has no `#private` fields, no enums,
+  no namespaces and no parameter properties, so NO TypeScript-only
+  lowering is exercised by that harness at all; and even with such a
+  field present, its only observation is whether `tsc`'s stdout matches,
+  which an extra own enumerable property on an internal object never
+  reaches. Its reference leg is genuinely independent — the baseline is
+  the original `typescript.js` — so this is a coverage gap rather than a
+  self-comparison, and the same lesson as the getter cases that passed
+  while the bug was present: a harness that runs the right input and
+  asks a question the answer cannot reach proves nothing. #81 adds a
+  target compiled from TypeScript SOURCE and an observation that
+  inspects values.
   hono (+500 bytes) and zod (+788) *were* wins until the `TypeArgs` fix
   below, which is the point: `f<T>(x)` parses as a wrapper node, nineteen
   passes never peeled it, and the references inside were invisible to
