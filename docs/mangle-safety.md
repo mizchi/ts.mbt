@@ -295,6 +295,41 @@ namespace の member は IIFE の中で `N.f = f` として付けられるため
 export surface 解析にも「escape する object へ代入された property 名は
 公開されている」という規則を追加しました。
 
+### property descriptor の key は runtime が名前で読む
+
+`Object.defineProperty(o, "p", { … })` は runtime に**名前で読まれる
+object** を渡します。descriptor の key はすべて他人の ABI で、この
+list に入るべき最も明白な例なのに、**6 個のうち 3 個が入っていません
+でした**。
+
+`get` / `set` / `value` は既にありましたが**偶然**です——`get`/`set` は
+Map/Set の、`value` は iterator protocol の項目として。descriptor を
+名指した箇所が無かったので、他で必要とされない 3 つの flag だけが
+抜けていました。
+
+そして壊していたのは mangler の rename ではなく **dead-property pass**
+です。`{ value: 1, enumerable: true }` が `{ value: 1 }` になる。
+`Object.defineProperty` の default は**全部 `false`** なので、`true` の
+flag を落とすと**反転**します:
+
+| flag | 落とすと |
+| --- | --- |
+| `enumerable: true` | `Object.keys` が property を見なくなる（**静かに**） |
+| `writable: true` | 後の代入が strict mode で **throw** |
+| `configurable: true` | `delete` が **throw** |
+
+`false` の flag を落とすのは default と一致するので無害で、最初に
+試した 3 つのうち 2 つが通ってしまったのはそれが理由です
+(`writable: false` / `configurable: false` で試していた)。
+
+`// Property descriptor` group を追加し、list membership を unit test で、
+挙動を `fixtures/mangle-safety/case48-property-descriptor` で Node 上で
+固定しました。case には `false` flag と、落ちるべき通常の dead key も
+対にして入れてあります。
+
+`Object.defineProperties` と `Object.create(proto, descriptors)` は
+最初から通っていました。`get` / `set` の accessor pair も同様です。
+
 ### 既知の不精度: chain の根に observation を付ける
 
 `seed_from_expr` は property / index chain を**根まで遡って** seed します。

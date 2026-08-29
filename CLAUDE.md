@@ -426,6 +426,22 @@ product surfaces now.
   checks the containment so the two cannot drift again, and
   `fixtures/mangle-safety/case47-iteration-protocol` runs a spread, a
   `for…of` that breaks (so `return` fires) and a generator under Node.
+  The same probe-by-hand pass then found the clearest possible case for
+  the mangler's reserved list missing from it: `Object.defineProperty`
+  hands the runtime an object it reads BY NAME, and three of a
+  descriptor's six keys were absent. `get`, `set` and `value` were
+  present only incidentally — under Map/Set and the iterator protocol —
+  so nothing had ever named the descriptor, and the three flags nobody
+  else needed were not there. The breakage was the DEAD-PROPERTY pass
+  rather than a rename: `{ value: 1, enumerable: true }` became
+  `{ value: 1 }`, and since every `defineProperty` default is `false`,
+  dropping a `true` flag inverts it — `Object.keys` silently stopped
+  seeing the property, `writable: true` made a later assignment throw in
+  the module's strict mode, and `configurable: true` made `delete`
+  throw. Dropping a `false` flag is harmless, which is exactly why two
+  of the first three probes passed and the shape looked safe.
+  `Object.defineProperties`, `Object.create(proto, descriptors)` and an
+  accessor pair were all correct already.
   Three constructs the generator had never emitted were probed by hand
   first. Inheritance came back CLEAN across seventeen shapes — override
   dispatch, `super.m()`, a three-level chain, a getter override,

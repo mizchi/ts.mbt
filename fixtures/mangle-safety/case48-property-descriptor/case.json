@@ -1,0 +1,22 @@
+{
+  "origin": "ts.mbt — found by probing `Object.defineProperty`, which no harness had ever generated",
+  "what": "The dead-property pass deleted descriptor flags as unread keys: `{ value: 1, enumerable: true }` became `{ value: 1 }`. Every `Object.defineProperty` default is `false`, so dropping a `true` flag inverts it — `Object.keys` stopped seeing the property, `writable: true` made a later assignment throw in the module's strict mode, and `configurable: true` made `delete` throw. It was NOT the mangler renaming them: `get`, `set` and `value` happened to be in `mangler_builtin_reserved_properties` already — incidentally, under Map/Set and the iterator protocol — so `value` surviving made the shape look safe while the three flags nobody else had needed were absent. There is a `// Property descriptor` group now. A `false` flag is harmless to drop since it matches the default, which is what made two of the three original probes pass and is covered here as `defaultedHolder`.",
+  "mtscArgs": [
+    "--treeshake",
+    "--fold"
+  ],
+  "exports": [
+    "enumerableKeys",
+    "writtenSlot",
+    "stillThere",
+    "viaAccessor",
+    "defaultedKeys",
+    "plainValue"
+  ],
+  "expectKeep": [
+    "enumerable",
+    "writable",
+    "configurable"
+  ],
+  "expectStatus": "pass"
+}

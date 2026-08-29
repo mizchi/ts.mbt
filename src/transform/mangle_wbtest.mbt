@@ -1156,3 +1156,29 @@ test "escape: a property READ seeds the chain root, over-approximating depth" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "the descriptor flags a `defineProperty` reads are all reserved" {
+  // Every `Object.defineProperty` default is `false`, so dropping a
+  // `true` flag INVERTS it — silently for `enumerable`, and into a
+  // throw for `writable` and `configurable`, because a module body is
+  // strict-mode code.
+  //
+  // The dead-property pass was deleting them as unread keys, not the
+  // mangler renaming them: `get` / `set` / `value` were already in the
+  // list incidentally (under Map/Set and the iterator protocol), so
+  // `value` surviving made the shape look safe while the three flags
+  // nobody else had needed were absent. Checked as a list membership
+  // because that is the fact that was wrong; the corpus case
+  // `case48-property-descriptor` checks the behaviour under Node.
+  let reserved : Map[String, Bool] = {}
+  for n in mangler_builtin_reserved_properties {
+    reserved[n] = true
+  }
+  for n in ["enumerable", "configurable", "writable", "get", "set", "value"] {
+    assert_true(
+      reserved.contains(n),
+      msg="`\{n}` is read off a property descriptor by the runtime and is not reserved",
+    )
+  }
+}

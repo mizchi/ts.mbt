@@ -203,6 +203,24 @@ let mangler_builtin_reserved_properties : Array[String] = [
    "isInteger", "isFinite", "isNaN", "isSafeInteger", "parseFloat", "parseInt", "EPSILON",
   "MAX_SAFE_INTEGER", "MIN_SAFE_INTEGER", "MAX_VALUE", "MIN_VALUE", "POSITIVE_INFINITY",
   "NEGATIVE_INFINITY", "NaN",
+  // Property descriptor. `Object.defineProperty(o, "p", { … })` hands
+  // the runtime an object it reads BY NAME, so every key of a
+  // descriptor is somebody else's ABI — the clearest possible case for
+  // this list, and three of the six were missing.
+  //
+  // `get`, `set` and `value` were here already, but incidentally:
+  // `get`/`set` under Map/Set and `value` under the iterator protocol.
+  // Nothing named the descriptor, so the three flags nobody else needed
+  // were absent, and the DEAD-PROPERTY pass dropped them as unread keys
+  // — not the mangler renaming them, which is why `value` surviving
+  // made the shape look safe. `{ value: 1, enumerable: true }` became
+  // `{ value: 1 }`, and since every `defineProperty` default is
+  // `false`, dropping a `true` flag inverts it: `Object.keys` stopped
+  // seeing the property, `writable: true` made an assignment throw in
+  // the module's strict mode, and `configurable: true` made `delete`
+  // throw. Dropping a `false` flag is harmless, which is what made two
+  // of the three probes pass at first.
+   "enumerable", "configurable", "writable",
   // Object statics (the ones not already covered above)
    "assign", "create", "defineProperty", "defineProperties", "freeze", "fromEntries",
   "getOwnPropertyDescriptor", "getOwnPropertyDescriptors", "getOwnPropertyNames",
