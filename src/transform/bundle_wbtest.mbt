@@ -401,7 +401,19 @@ test "bundle: constructor parameter properties become this.x = x" {
 }
 
 ///|
-test "bundle: private fields strip the `#` after brand mangling" {
+/// This used to assert that plain `mtsc --bundle` emits the BRAND
+/// (`__private_brand__0__count`) and no `#count`, which is what it did —
+/// and that was a bug, not a contract. A brand is an ordinary own
+/// ENUMERABLE property, so `JSON.stringify(new Counter())` printed
+/// `{"__private_brand__0__count":0}` where Node prints `{}`.
+/// `lower_private_fields` ran only in the merged path, which is gated on
+/// `--mangle`/`--treeshake`/`--fold`, so every harness that exercises
+/// this path exercised it WITH flags and nothing noticed.
+///
+/// The invariant worth pinning is the one the emit has to satisfy: the
+/// reference is native `#` syntax AND the class body declares it, so the
+/// private name has an enclosing class.
+test "bundle: private fields lower to native `#` syntax, declaration and all" {
   let files = vfs([
     (
       "entry.ts", "class Counter {\n  #count = 0;\n  inc() { this.#count++; return this.#count; }\n  get value() { return this.#count; }\n}\nconst c = new Counter();\n",
@@ -409,14 +421,13 @@ test "bundle: private fields strip the `#` after brand mangling" {
   ])
   match bundle_modules(files, "entry.ts", BundleOptions::default()) {
     Ok(out) => {
-      // The brand prefix is fine, but `#` must not appear in the
-      // emitted identifier — it isn't a legal JS ident char outside
-      // the native `#field` syntax.
+      // `#` is not a legal identifier character outside the native
+      // `#field` syntax, so a brand must never grow one.
       assert_false(out.js.contains("__#"))
-      assert_false(out.js.contains("#count"))
-      // Brand'd field is still namespaced so external access
-      // doesn't collide with public fields.
-      assert_true(out.js.contains("__private_brand__"))
+      assert_false(out.js.contains("__private_brand__"))
+      assert_true(out.js.contains("this.#count"))
+      // The declaration, without which `this.#count` is a SyntaxError.
+      assert_true(out.js.contains("#count;"))
     }
     Err(e) => fail("bundle error: \{e}")
   }
@@ -792,12 +803,18 @@ test "parser: private field reference inside template literal stays mangled" {
   ])
   let opts = BundleOptions::default()
   match bundle_modules(files, "entry.ts", opts) {
-    Ok(out) =>
-      // After lowering, `#index` should be mangled to a brand-
-      // suffixed identifier everywhere — INCLUDING inside the
-      // template-literal interpolation. Output must not contain
-      // a `#index` token outside of a class body.
-      assert_false(out.js.contains("this.#index"))
+    Ok(out) => {
+      // The regression was the template-literal sub-parser losing
+      // `current_class_brand`, which put a raw `#index` OUTSIDE the
+      // class body. The assertion used to be "no `this.#index` in the
+      // output" — which held only because plain `--bundle` never
+      // lowered the brand back. Now it does, and `this.#index` inside
+      // the class body is exactly right; what must hold is that the
+      // enclosing class declares it.
+      assert_true(out.js.contains("this.#index"))
+      assert_true(out.js.contains("#index;"))
+      assert_false(out.js.contains("__private_brand__"))
+    }
     Err(e) => fail("bundle error: \{e}")
   }
 }

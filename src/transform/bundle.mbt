@@ -1591,8 +1591,28 @@ pub fn bundle_modules(
           None => ()
         }
       }
+      // `__private_brand__N__x` -> `#x`, on this path too.
+      //
+      // It only ran in the merged path, which is gated on
+      // `--mangle`/`--treeshake`/`--fold`, so plain `mtsc entry.ts
+      // --bundle` emitted the brand verbatim — and a brand is an
+      // ordinary own ENUMERABLE property, so
+      // `class C { #secret = 7 }` printed
+      // `{"__private_brand__0__secret":7}` through `JSON.stringify`
+      // and showed up in `Object.keys`, where Node gives `{}` and
+      // `[]`. Adding any optimization flag fixed it, which is what
+      // kept it hidden: every harness that runs this path runs it with
+      // flags. Third time a pass has been missing from the per-module
+      // emit path — `class_method_dce_block` was the first two.
+      //
+      // Per-module scope is the right scope: a `#x` reference is legal
+      // only inside the class body that declares it, and the one other
+      // place mtsc emits one (an accessor lowered out to
+      // `Object.defineProperty(C.prototype, KEY, …)`) sits next to that
+      // class in the same module. `lower_private_fields`'s own
+      // statement-count guard sees both.
       let lifted_block = class_method_dce_block(
-        iife_class_lift_block(m.block),
+        lower_private_fields(iife_class_lift_block(m.block)),
         Some(dce_off_bundle),
         keep=export_surface,
         scope=Some(dce_scope),

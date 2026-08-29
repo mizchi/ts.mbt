@@ -522,6 +522,42 @@ product surfaces now.
   private syntax. Emitting `#path` is shorter than any mangled name and
   correct by construction, so #79 is the actual fix and the -9.4%
   belongs in the lowering's column, not the mangler's.
+  And that turned out to be a leak, not just an attribution error.
+  `lower_private_fields` ran ONLY in the merged pipeline, which is gated
+  on `--mangle`/`--treeshake`/`--fold`, so plain `mtsc entry.ts --bundle`
+  emitted the brand verbatim — and a brand is an ordinary own ENUMERABLE
+  property, so `class C { #secret = 7 }` printed
+  `{"__private_brand__0__secret":7}` through `JSON.stringify` and showed
+  up in `Object.keys`, object spread and `for…in`, where Node gives `{}`
+  and `[]`. Adding any optimization flag fixed it, which is exactly why
+  nothing noticed: every harness that exercises the per-module emit path
+  exercises it WITH flags. Third time a pass has been missing from that
+  path; `class_method_dce_block` was the first two. Two of the tests
+  pinning the old output ASSERTED the leak — one required
+  `__private_brand__` to be present and `#count` absent — because they
+  were written against the shape plain `--bundle` happened to produce.
+  The second half was the lowering's own guard, which required a brand to
+  be mentioned by exactly one top-level statement. That also refuses TWO
+  classes each declaring the same private name: the parser numbers brands
+  per module, so hono's `Context.#path` and `Hono.#path` are both
+  `__private_brand__0__path`, and after linking that brand appears in two
+  statements — both of them class nodes that declare it. Each `#x` is
+  scoped to its own class body, so renaming both is right, and the count
+  refused; five of hono's six surviving brands were this rather than the
+  accessor. The guard now asks the precise question — every statement
+  mentioning the brand must be a class node that DECLARES it — which
+  still refuses the real hazard, a computed-key accessor
+  (`get [GET_MATCH_RESULT]()`) that the class lowering hoists out to
+  `Object.defineProperty(C.prototype, KEY, { get() { … this.#x } })`.
+  hono's `--mangle` bundle without property mangling went 22,317 ->
+  21,177 bytes, five of six brands now native, and the leak closed in
+  the configuration that had it. With `--mangle-properties` it goes the
+  other way, 20,210 -> 20,817: the old smaller number was the mangler
+  renaming 24-character brands to one character, and `#notFoundHandler`
+  is 16 characters that the mangler declines to touch. Which is itself
+  a missed opportunity rather than a cost — a `#private` name is
+  class-scoped and cannot be anybody's ABI, so it is the one property
+  class that needs no proof to rename (#80).
   hono (+500 bytes) and zod (+788) *were* wins until the `TypeArgs` fix
   below, which is the point: `f<T>(x)` parses as a wrapper node, nineteen
   passes never peeled it, and the references inside were invisible to

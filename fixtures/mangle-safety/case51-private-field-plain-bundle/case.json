@@ -1,0 +1,14 @@
+{
+  "origin": "ts.mbt — found by asking why hono's `#private` fields never reach native syntax (the property mangler's whole measured value turned out to be renaming the leftover brands)",
+  "what": "`lower_private_fields` maps mtsc's internal `__private_brand__<N>__<member>` back to `#member`, and it ran ONLY in the merged pipeline — which is gated on `--mangle` / `--treeshake` / `--fold`. So plain `mtsc entry.ts --bundle` emitted the brand verbatim, and since a brand is an ordinary own ENUMERABLE property, `JSON.stringify(new Counter())` printed `{\"__private_brand__0__count\":0}` where Node prints `{}`; `Object.keys`, object spread and `for…in` saw it too. Adding any optimization flag fixed it, which is exactly why nothing noticed: every harness that runs the per-module emit path runs it with flags. Third time a pass has been missing from that path — `class_method_dce_block` was the first two. The second half of the fix is the lowering's own guard: it required a brand to be mentioned by exactly one top-level statement, which also refuses TWO classes that each declare the same private name (the parser numbers brands per module, so hono's `Context.#path` and `Hono.#path` are both `__private_brand__0__path`). Each `#x` is scoped to its own class body, so renaming both is right; the guard now asks the precise question — every statement mentioning the brand must be a class node that DECLARES it — which still refuses the real hazard, a computed-key accessor hoisted out to `Object.defineProperty(C.prototype, KEY, { get() { … this.#x } })`. On hono, `--bundle --treeshake --fold --minify --mangle` went 22,317 -> 21,177 bytes with five of six brands now native.",
+  "mtscArgs": [],
+  "exports": [
+    "serialized",
+    "ownKeys",
+    "spread",
+    "enumerated",
+    "description",
+    "gauge"
+  ],
+  "expectStatus": "pass"
+}
