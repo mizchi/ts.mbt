@@ -206,9 +206,53 @@ case は壊れていた 6 件だけでなく **family 全体**に書きました
 原因が rule ではなく**演算子の性質**（強制変換する）なので、case が
 無い rule は全部同じ疑いの下にあります。
 
+## 5 周目: 値の domain に getter が無かった
+
+domain には**poisoned `valueOf`**——coercion の危険——が最初から入って
+いたのに、**getter**——read の危険——が入っていませんでした。property
+read は accessor なら任意のコードを走らせます。
+
+```moonbit
+PropAccess(recv, _) => is_pure_value(recv)
+```
+
+`is_pure_value` は「receiver が pure なら read も pure」と答えていました。
+これは `recv` を**評価する**ことについての主張で、そこから `.p` を
+**読む**ことについての主張ではありません。
+
+```ts
+class Holder { get p() { trace.push(1); return 5; } }
+const h = new Holder();
+```
+
+`--bundle --treeshake --fold` で **4 つの形が getter の body を捨てて
+いました**: 裸の `h.p;`、`void h.p;`、捨てられる comma の左
+`(h.p, 9)`、そして array literal の `.length` fold `[h.p, 1].length`。
+数える / memoize する / log する / 遅延初期化する getter——getter が
+存在する理由そのもの——が走らなくなります。
+
+domain に自己カウントする getter を入れました:
+
+```js
+"{ hits: 0, get tick() { this.hits += 1; return this.hits; } }"
+```
+
+`a.tick` を読むと `a.hits` が増えるので、**比較される値の中に**「read が
+起きたか」が現れます。最初に書いた 2 case は `[n, a.hits]` を返していて
+**通ってしまいました**——array 返り値では差が出ず、optimized 側の body が
+目に見えて `[2, a.hits]` になっていても equivalent と報告されます。
+「効果が起きた」を主張する case は、**比較される値そのものに**それを
+落とさないと coverage の形をした何もしない case になります。scalar
+(`n + a.hits * 10`) に直して 4/4 が検出するようになりました。
+
+健全な答えの代償は先に測りました: TypeScript の 3.5 MB 出力に **+845
+byte (0.02%)**、react +3、checker.ts は **255 byte 減**、hono / valibot /
+terser corpus は変化なし。「この receiver の宣言された shape に accessor
+は無い」という type-driven な例外を正当化するには小さすぎます。
+
 ## 現在
 
-`72 equivalent, 0 inert, 0 unsound`。
+`76 equivalent, 0 inert, 0 unsound`。
 
 byte の代償は 2 回測ってあります。
 

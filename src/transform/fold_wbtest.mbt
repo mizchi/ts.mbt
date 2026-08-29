@@ -1969,3 +1969,37 @@ test "fold: `return void 0` still drops, the operand being pure" {
   let out = fold_one("function f() { return void 0; }\n")
   assert_false(out.contains("void"), msg="got: \{out}")
 }
+
+///|
+test "fold: a property read is not free — a getter may be behind it" {
+  // `is_pure_value(PropAccess(recv, _))` was `is_pure_value(recv)`:
+  // pure whenever the RECEIVER was, which is a statement about
+  // evaluating `recv`, not about reading a property off it. Reading an
+  // accessor runs its body, and four different rules dropped it — a
+  // discarded expression statement, `void EXPR`, the left of a
+  // discarded comma, and the array-literal `.length` fold.
+  //
+  // `h.p` with `h` a plain variable is the shape that mattered;
+  // `new C().p` never was, because `is_pure_value(New(...))` is false
+  // and the read was impure by way of its receiver. That is also why
+  // the fuzz generator could not reach the bug: it only spelled the
+  // `new` form.
+  for
+    src in [
+      "h.p;\n", "void h.p;\n", "const n = (h.p, 9);\n", "const n = [h.p, 1].length;\n",
+    ] {
+    let out = fold_one(src)
+    assert_true(
+      out.contains("h.p"),
+      msg="the read was dropped from `\{src}`: \{out}",
+    )
+  }
+}
+
+///|
+test "fold: the array-length fold still fires on genuinely pure elements" {
+  // The paired half — the fix must not be "stop folding `.length`".
+  let out = fold_one("const n = [1, 2, 3].length;\n")
+  assert_true(out.contains("3"), msg="got: \{out}")
+  assert_false(out.contains("length"), msg="got: \{out}")
+}

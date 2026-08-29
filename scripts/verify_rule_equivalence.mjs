@@ -74,6 +74,15 @@ const OPT_FLAGS = ["--bundle", "--no-check", "--fold", "--minify"];
 // a non-negative integer; the poisoned `valueOf` exists because
 // `x.toString() -> "" + x` assumes they agree; `Symbol` and `BigInt`
 // exist because they throw where every other value converts.
+//
+// The getter is the READ hazard, and it was missing while the poisoned
+// `valueOf` — the COERCION hazard — had been here from the start. A
+// property read runs arbitrary code when the property is an accessor,
+// and `is_pure_value` called `h.p` pure whenever `h` was, which is a
+// statement about evaluating `h` rather than about reading `.p` off it.
+// Four shapes dropped the getter body outright. It counts on itself so
+// the effect is visible in the compared VALUE: `a.hits` after a read of
+// `a.tick` says whether the read happened.
 
 const DOMAIN = [
   "undefined",
@@ -105,6 +114,7 @@ const DOMAIN = [
   '{ length: 2, 0: "a", 1: "b" }',
   "{ size: -1 }",
   "{ toString() { return 's'; }, valueOf() { return 1; } }",
+  "{ hits: 0, get tick() { this.hits += 1; return this.hits; } }",
   "{ hasOwnProperty() { return 'own'; } }",
   "Symbol.for('s')",
   "10n",
@@ -531,6 +541,48 @@ const CASES = [
     name: "add-zero",
     holes: 1,
     body: "return a + 0;",
+  },
+
+  // --- a property READ is not free
+  //
+  // `is_pure_value` answered "pure" for `h.p` whenever `h` was pure,
+  // which is a statement about evaluating `h`, not about reading `.p`
+  // off it. Reading an accessor runs its body. Each of these four
+  // dropped it, and each is a different rule doing so — a discarded
+  // expression statement, the array-literal length fold, a comma whose
+  // left operand is thrown away, and `void EXPR`.
+  //
+  // `a.tick` increments `a.hits`, so returning `a.hits` says whether
+  // the read happened. Every other domain entry answers `undefined`
+  // for both, which is stable across the three legs and costs nothing.
+  {
+    rule: "properties",
+    name: "getter-read-as-statement",
+    holes: 1,
+    body: "a.tick; return a.hits;",
+  },
+  {
+    rule: "properties",
+    name: "getter-read-in-array-length",
+    holes: 1,
+    // Returns a SCALAR that encodes both halves. An array return
+    // compared equal here even with the optimized body visibly reading
+    // `[2, a.hits]` instead of running the getter — so the case looked
+    // like coverage and was not. Anything asserting "the effect
+    // happened" has to land in the compared value itself.
+    body: "const n = [a.tick, 1].length; return n + a.hits * 10;",
+  },
+  {
+    rule: "properties",
+    name: "getter-read-in-discarded-comma",
+    holes: 1,
+    body: "const n = (a.tick, 9); return n + a.hits * 10;",
+  },
+  {
+    rule: "properties",
+    name: "getter-read-under-void",
+    holes: 1,
+    body: "void a.tick; return a.hits;",
   },
   {
     rule: "functions",

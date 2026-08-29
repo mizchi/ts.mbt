@@ -1,0 +1,14 @@
+{
+  "origin": "ts.mbt — found by reading `is_pure_value`, then given detection power in two harnesses",
+  "what": "`is_pure_value(PropAccess(recv, _))` was `is_pure_value(recv)` — pure whenever the RECEIVER was, which is a statement about evaluating `recv` rather than about reading a property off it. A property read runs arbitrary code when the property is an accessor, so four fold rules dropped getter bodies under `--bundle --treeshake --fold`: a bare expression statement, `void EXPR`, the left of a discarded comma, and an array literal whose `.length` is folded. A getter that counts, memoizes, logs or lazily initializes — the reasons getters exist — simply stopped running. The whole class was uncovered: the rule-equivalence domain had an object with a poisoned `valueOf` (the coercion hazard) and none with a getter (the read hazard), and the fuzz generator only ever read a getter off `new C()`, whose receiver was never pure, so the bug was unreachable there. Both are fixed: the domain has a self-counting getter, and the generator binds an instance to a `const` and emits the discarded-read position directly. With the fix reverted the fuzzer now reports 21 mismatches in 209 comparisons, first at seed 7. The sound answer costs +845 bytes on TypeScript's 3.5 MB output (0.02%), 255 fewer on checker.ts, and nothing on hono, valibot or the terser corpus.",
+  "mtscArgs": [
+    "--treeshake",
+    "--fold"
+  ],
+  "exports": [
+    "hits",
+    "ran",
+    "values"
+  ],
+  "expectStatus": "pass"
+}

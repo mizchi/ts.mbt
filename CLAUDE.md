@@ -158,7 +158,30 @@ product surfaces now.
   definition fixed, not seven call sites. The four self-operand rules
   were deleted rather than gated: once the gate is right a bare `Var`
   can never satisfy it and nothing that can is a bare `Var`, so the
-  pattern would be dead code that reads like live code. See
+  pattern would be dead code that reads like live code. A fifth round
+  found the domain itself incomplete: it had carried an object with a
+  poisoned `valueOf` — the COERCION hazard — from the start, and never a
+  getter, the READ hazard. `is_pure_value(PropAccess(recv, _))` was
+  `is_pure_value(recv)`: pure whenever the RECEIVER was, which is a
+  statement about evaluating `recv` and not about reading a property off
+  it. Four rules therefore dropped a getter's body under
+  `--bundle --treeshake --fold` — a bare `h.p;`, `void h.p;`, the left of
+  a discarded comma, and the array-literal `.length` fold — so a getter
+  that counts, memoizes, logs or lazily initializes stopped running.
+  The sound answer costs +845 bytes on TypeScript's 3.5 MB output
+  (0.02%), 255 FEWER on checker.ts, and nothing on hono, valibot or the
+  terser corpus, which is far too little to justify a type-driven "this
+  receiver's declared shape has no accessor" exception. Two lessons
+  about the harnesses came with it. First, a case has to land the
+  assertion in the COMPARED VALUE: two of the four new cases returned
+  `[n, a.hits]` and passed while the optimized body visibly read
+  `[2, a.hits]` instead of running the getter — coverage-shaped and
+  proving nothing until they returned a scalar. Second, the fuzzer had
+  emitted getters for months and could not reach the bug, because it
+  spelled the read as `new C().g` (whose receiver is impure, so the read
+  never was) and never in a value-discarded position; binding an
+  instance to a `const` and emitting the discarded position directly
+  took it from 0 findings in 600 comparisons to 21 in 209. See
   [`docs/rule-equivalence.md`](./docs/rule-equivalence.md). And
   `just compare-terser` asks the
   competitive version of that question: both optimizers start from the

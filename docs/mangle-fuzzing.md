@@ -603,6 +603,41 @@ import が instance を受け取って method を呼び返し、Node で走り�
 kept な名前は全て、同じ class か同じ sink 経由の dropped な名前と対に
 してあるので、修正が「pass を止める」形になっていないことが分かります。
 
+## generator が届いていなかった位置
+
+`is_pure_value` を読んでいて見つけた bug——property read を pure と
+答えていた——を、この campaign は **8000 comparison で 1 件も報告して
+いませんでした**。generator は getter を 30% の確率で出していたのに。
+
+理由が 2 つあり、どちらも「文法にあるつもりだった形が実は無かった」です。
+
+**(a) receiver が `new C()` だった。** getter read は `expr()` の case 16
+から出ていて、そこは `new C().g` を組み立てます。ところが
+`is_pure_value(New(...))` は **false** なので、read は receiver 経由で
+impure と判定され、**この bug の影響を受けません**。影響を受けるのは
+receiver が pure な形——ただの変数——で、それは実コードが getter を読む
+書き方でもあります。class ごとに `const c0Inst = new C0();` を出して、
+そこから読むようにしました。
+
+**(b) 値が捨てられる位置に無かった。** `expr(3)` が bare member read で
+底を打つことはほぼありません——binary op / assignment / call に包まれ、
+どれも**値を使う**ので read は生き残ります。捨てられる位置を直接出す
+`discardedReadStmt()` を足しました: 裸の statement、`void EXPR`、
+捨てられる comma の左、`.length` を取る array literal——4 つの誤っていた
+綴りそのものです。
+
+検出力を測りました。修正を戻した状態で:
+
+| generator | 結果 |
+| --- | --- |
+| 元のまま | 300 seed / 600 comparison で **0 件** |
+| getter が常に自己申告 | やはり **0 件** |
+| + binding から読む / 捨てられる位置 | **209 comparison で 21 件**、最初は seed 7 |
+
+「harness に case を足した」と「harness が検出できる」は別、という
+[rule-equivalence](./rule-equivalence.md) と同じ教訓が、generator 側にも
+ありました。
+
 ## 修正後の全域 sweep
 
 seed 0..3999、両 shape、**8000 comparison**:

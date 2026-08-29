@@ -3850,7 +3850,37 @@ fn is_pure_value(expr : @ast.TsExpr) -> Bool {
       }
       true
     }
-    PropAccess(recv, _) => is_pure_value(recv)
+    // A property READ runs arbitrary code when the property is a
+    // getter, and nothing here can rule that out: `h.p` is a getter
+    // call or a field load depending on a declaration this predicate
+    // cannot see.
+    //
+    // This used to be `is_pure_value(recv)` — pure whenever the
+    // RECEIVER was — which is a statement about evaluating `h`, not
+    // about reading `.p` off it. So with
+    //
+    //     class Holder { get p() { trace.push(1); return 5; } }
+    //     const h = new Holder();
+    //
+    // four separate shapes dropped the getter's body under
+    // `--bundle --treeshake --fold`: the bare statement `h.p;`, the
+    // array-literal fold `[h.p, 1].length`, the discarded comma
+    // `(h.p, 9)`, and `void h.p;`. A getter that counts, memoizes,
+    // logs, or lazily initializes — the reasons getters exist — simply
+    // stopped running.
+    //
+    // The whole class was uncovered: the fuzz generator emits no
+    // accessor at all, and the rule-equivalence domain has an object
+    // with a poisoned `valueOf` (the coercion hazard) but none with a
+    // getter (the read hazard).
+    //
+    // The cost of the sound answer, measured before taking it: +845
+    // bytes on TypeScript's 3.5 MB output (0.02%), +3 on react, 255
+    // FEWER on checker.ts, and nothing at all on hono, valibot or the
+    // terser corpus. Too small to justify a type-driven exception for
+    // "this receiver's declared shape has no accessor", which is where
+    // this would have to go next if it ever mattered.
+    PropAccess(_, _) => false
     // `/* @__PURE__ */ f(...)` — the user asserted purity, so treat
     // the call as having no observable side effects.
     PureCall(_) => true

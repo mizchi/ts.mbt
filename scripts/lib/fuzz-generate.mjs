@@ -173,6 +173,26 @@ export class Generator {
     for (let i = 0; i < classCount; i++) {
       decls.push(this.classDecl(`C${i}`));
     }
+    // One long-lived instance per class that has a getter, so a getter
+    // read can be spelled off a BINDING.
+    //
+    // `new C().g` was never affected by the bug this exists to catch:
+    // `is_pure_value(New(...))` is false, so the read was impure by way
+    // of its receiver and nothing dropped it. The bug needed a receiver
+    // that IS pure — a plain variable — which is also how real code
+    // reads a getter. Emitting only the `new` form is why 300 seeds
+    // reported nothing with the bug present.
+    this.getterInstances = [];
+    for (const decl of decls) {
+      if (decl.k !== "class") continue;
+      const getter = `${decl.name.toLowerCase()}g`;
+      if (!(decl.members ?? []).some((m) => m.k === "getter" && m.name === getter)) {
+        continue;
+      }
+      const inst = `${decl.name.toLowerCase()}Inst`;
+      decls.push({ k: "raw", text: `const ${inst} = new ${decl.name}();\n` });
+      this.getterInstances.push({ inst, getter });
+    }
 
     // Functions, with the shared call budget guard printed for them.
     const funcCount = this.int(1, 3);
@@ -450,9 +470,15 @@ export class Generator {
       members.push({
         k: "getter",
         name: prop,
-        // A getter that announces itself is how "the mangler renamed the
-        // property so the getter never ran" becomes visible.
-        entryId: this.chance(0.7) ? this.freshEffect() : undefined,
+        // A getter that announces itself is how "the getter never ran"
+        // becomes visible, and that is the ONLY thing a getter is here
+        // to detect — so it always announces. It used to do so 70% of
+        // the time, and a silent getter is indistinguishable from a
+        // field: the read can be dropped and nothing in the observation
+        // moves. `is_pure_value` called a property read pure whenever
+        // its receiver was, so four fold rules dropped getter bodies
+        // outright, and 8000 comparisons never reported it.
+        entryId: this.freshEffect(),
         body: [{ k: "return", expr: this.expr(1) }],
         static: false,
       });
@@ -721,8 +747,60 @@ export class Generator {
     return { k: "block", body: [{ k: "decl", kind: "let", name, init: call }, guarded] };
   }
 
+  /// A property read whose VALUE IS THROWN AWAY.
+  ///
+  /// This is the position four fold rules dropped a getter's body from,
+  /// and the generator could not reach it. `expr(3)` almost never
+  /// bottoms out at a bare member read — it wraps one in a binary op, an
+  /// assignment or a call, all of which USE the value, and a used value
+  /// keeps the read alive. 300 seeds with the bug present reported
+  /// nothing.
+  ///
+  /// So the discarded position is emitted directly, in the four
+  /// spellings that were wrong: the bare statement, `void EXPR`, the
+  /// left of a discarded comma, and an array literal whose `.length` is
+  /// taken. `expr(3)` covers reads whose value is used; this covers the
+  /// reads whose value is not, and only the second kind is droppable.
+  discardedReadStmt() {
+    // Prefer a getter: it is the only member whose read has an effect,
+    // so it is the only one that can show the read was dropped. Falls
+    // back to the prelude's plain object, which at least exercises the
+    // rule on a shape whose purity really is provable.
+    let read = { k: "member", obj: { k: "var", name: "bag" }, prop: this.pick(BAG_PROPS) };
+    const instances = this.getterInstances ?? [];
+    if (instances.length > 0) {
+      const { inst, getter } = this.pick(instances);
+      read = { k: "member", obj: { k: "var", name: inst }, prop: getter };
+    }
+    switch (this.int(0, 4)) {
+      case 0:
+        return { k: "expr", expr: read };
+      case 1:
+        return { k: "expr", expr: { k: "unary", op: "void", arg: read } };
+      case 2:
+        return {
+          k: "expr",
+          expr: { k: "seq", left: read, right: { k: "lit", value: "9" } },
+        };
+      default:
+        return {
+          k: "decl",
+          kind: "let",
+          name: this.freshVar(),
+          init: {
+            k: "member",
+            obj: { k: "array", items: [read, { k: "lit", value: "1" }] },
+            prop: "length",
+          },
+        };
+    }
+  }
+
   simpleStmt() {
-    const roll = this.int(0, 10);
+    const roll = this.int(0, 11);
+    if (roll === 10) {
+      return this.discardedReadStmt();
+    }
     if (roll < 2) {
       const name = this.freshVar();
       return { k: "decl", kind: "let", name, init: this.expr(2) };
