@@ -1433,6 +1433,56 @@ mtsc:   cost: 1 unreached method(s) kept, including `Widget.dead`
 `unreached_class_methods` は report と warning が**同じ 1 つの関数**を
 読みます。cost を report と別に計算すると report と食い違い得るからです。
 
+### property mangler の wildcard は blocker では**なかった**
+
+`--mangle-properties` の状態を 9 target で測ったところ、wildcard で
+**6 つが SUPPRESSED**でした（typebox / immer / ts-pattern / superstruct /
+remeda / excalidraw、つまり大きいもの全部）。ACTIVE は hono / valibot /
+neverthrow。原因も `--explain-mangle` が一様に名指しします:
+
+> binding `value` crosses the bundle boundary and carries no closed type
+> annotation, so every name on it is assumed reachable
+
+typebox で報告された wildcard 理由は**全部この 1 箇所**
+(`flow_analysis.mbt` の `External` + closed type 無し) でした。予約自体は
+正しく、爆発半径が広すぎる——型不明の binding は「**その binding 上の
+名前**が不明」であって「bundle 内の全 property 名が到達可能」ではない。
+他の hazard（computed key での組み立て、`for-in`、enumeration builtin へ
+の非 literal 引数、class の prototype method）はそれぞれ**別の wildcard
+を持っている**ので、ここは `collect_direct_props`（注釈ありの枝が既に
+呼んでいるもの）に絞れる——という仮説を立てて、実装しました。
+
+**結果は 0 byte でした。** そして仮説が間違っていました。
+
+| target | 旧 binary | 新 binary |
+| --- | --- | --- |
+| typebox | 119,686 | 119,686 |
+| excalidraw | 279,800 | 279,800 |
+| remeda | 28,533 | 28,533 |
+
+両方の binary で直接測って完全一致。**revert しました**——risk が一番
+高い pass を、払いゼロで緩めることになるので。`is_expr_container` に
+`ObjectLit` を足した実験と同じ判断です。
+
+なぜ 0 なのか。`SUPPRESSED` の下に breakdown が**元から印字されていて**、
+私が `grep -A 12` で切っていただけでした（読み落としです）:
+
+```
+  read off an external import or ambient global (54)
+  reaches a side-effect sink (340)
+  read off a host-shaped value (39)
+```
+
+**340 名前が「side-effect sink に到達する」で予約されている。** wildcard を
+外しても、この集合が既に同じ名前を覆っています。しかも wildcard 下でも
+`--mangle-properties` は typebox で 247 byte 節約します（user-declared
+以外——dead-property pass や discriminant renumbering——が動くため）。
+つまり `SUPPRESSED` は「何も rename しない」ではなく
+「**user-declared な property 名を** rename しない」でした。
+
+次に見るべきは wildcard ではなく **`reaches a side-effect sink` の 340**
+です。#74 をその内容に書き換えました。
+
 ### zod を corpus から外した
 
 上の 2 番と同じ理由です。zod は永久に suppress され、しかも**失う method が

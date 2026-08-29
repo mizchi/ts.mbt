@@ -1260,9 +1260,14 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
         (Neg, IntLit(n)) if n != 0 => IntLit(-n)
         (Neg, NumberLit(n)) if n != 0.0 => NumberLit(-n)
         (BitwiseNot, IntLit(n)) => IntLit(-(n + 1))
-        // `~~x` → `x` when x is a pure integer literal (double bitwise-not = identity).
+        // `~~x` → `x`. The comment used to say "when x is a pure integer
+        // literal" and the guard checked PURITY, which is a different
+        // question. `~~` is an int32 truncation, not an identity:
+        // `~~1.5` is `1`, `~~"alpha"` is `0`, `~~true` is `1`. Only an
+        // expression already known to BE an int32 survives the round
+        // trip — the same gate the bitwise identities need.
         (BitwiseNot, UnaryOp(@ast.TsUnaryOp::BitwiseNot, inner_inner)) =>
-          if is_pure_value(inner_inner) {
+          if is_int32_valued(inner_inner) {
             inner_inner
           } else {
             UnaryOp(op, inner_f)
@@ -1271,20 +1276,29 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
         // `+true` → 1, `+false` → 0, `+null` → 0 (JS numeric coercion).
         (Plus, BoolLit(b)) => IntLit(if b { 1 } else { 0 })
         (Plus, NullLit) => IntLit(0)
-        // `-(-x)` → `x` when x is pure (double negation cancels).
+        // `-(-x)` → `x`. Purity was the wrong question here too, and the
+        // fuzzer found it: unary minus applies ToNumeric, so
+        // `-(-"alpha")` is `NaN` and this rule handed back `"alpha"` —
+        // a wrong VALUE from `--bundle --fold` with nothing else on.
+        // Identity only when `x` is already a number, so ToNumeric is
+        // the identity on it. (`-(-0)` is `0` and `-(-(-0))` is `-0`,
+        // so the zero sign survives; that part was never the problem.)
         (Neg, UnaryOp(@ast.TsUnaryOp::Neg, inner_inner)) =>
-          if is_pure_value(inner_inner) {
+          if is_number_valued(inner_inner) && is_pure_value(inner_inner) {
             inner_inner
           } else {
             UnaryOp(op, inner_f)
           }
-        // `-(a - b)` → `b - a` when both sides are pure.
-        (Neg, BinOp(Sub, a, b)) =>
-          if is_pure_value(a) && is_pure_value(b) {
-            BinOp(Sub, b, a)
-          } else {
-            UnaryOp(op, inner_f)
-          }
+        // `-(a - b)` → `b - a` was DELETED, not gated. The two differ at
+        // zero: `-(1 - 1)` is `-0` and `1 - 1` is `0`, and this file
+        // already says why that matters a few lines up — `Object.is`,
+        // `1 / x` and `Math.sign` all tell them apart, and the
+        // rule-equivalence harness's own encoder does too. Proving
+        // `a - b != 0` is not something this rewrite can do, and there
+        // is no cheaper gate, so there is nothing to keep. Same author,
+        // same file, careful about `-0` for `(Neg, IntLit(n))` and not
+        // here: the sign of zero needs checking at every arithmetic
+        // rewrite, not once.
         // `void PURE_EXPR` → `void 0` — the argument is evaluated for
         // side effects only; since it's pure, replace with the standard
         // `void 0` idiom (saves bytes on complex pure expressions).

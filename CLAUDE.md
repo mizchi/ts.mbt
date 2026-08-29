@@ -126,7 +126,26 @@ product surfaces now.
   and every one was the wrong operator — `x += 1` evaluates to the NEW
   value, `x++` to the old, so `(arr[0] += 1) ? a : b` with `arr[0]` at 0
   took the wrong branch. `++x` is the same three bytes, so nothing was
-  ever traded for it. All three hunt
+  ever traded for it. A later 1200-seed export-shape campaign found the
+  same coercion-vs-purity family once more, in the UNARY operators, and
+  this time a TEST was pinning the bug in place. `-(-x)` -> `x` and
+  `~(~x)` -> `x` were both gated on `is_pure_value`, which says nothing
+  about the ToNumeric each operator applies: `-(-"alpha")` is `NaN` and
+  the rewrite handed back `"alpha"`, `~~1.5` is `1`, `~~"alpha"` is `0`.
+  `fold_wbtest.mbt` asserted that `~~n` folds to `n` for an unannotated
+  `n` — directly below the `x | -1` test that gets the same question
+  right, because the earlier bitwise round fixed the BINARY operators and
+  stopped at the unary ones. A third rule in the cluster,
+  `-(a - b)` -> `b - a`, was DELETED rather than gated: the two differ at
+  zero (`-(1 - 1)` is `-0`), nothing there can prove `a - b != 0`, and
+  the same file explains why `-0` matters twenty lines above, for
+  `(Neg, IntLit(n))`. The sign of zero needs checking at every arithmetic
+  rewrite, not once. The rule-equivalence harness had no case for any of
+  the four unary forms — including the one that is CORRECT, `!!x` in a
+  condition, which has a case now so nobody "fixes" it — and its domain
+  held no non-integer at all, so any rule that TRUNCATES rather than
+  preserves could pass on integers alone; `1.5` and `-1.5` are in it now.
+  All three hunt
   code we delete and should not; `just verify-dce-coverage` hunts the
   opposite — code we keep and could drop — as a table of small programs
   that each assert a marker is gone, the live markers survive, and stdout
@@ -437,7 +456,28 @@ product surfaces now.
   which IS the wildcard, so a single arrow suppressed property mangling
   for a whole bundle. Giving an arrow its declared name as an identity
   moves real bytes (hono -9.4%, neverthrow -2.6%) and removed one of the
-  three LOSSes.
+  three LOSSes. It is still SUPPRESSED by the wildcard on six of the nine
+  targets — typebox, immer, ts-pattern, superstruct, remeda, excalidraw,
+  every large one — and the obvious next move was to narrow that
+  wildcard: every reason reported on typebox came from ONE site
+  (`External` observability with no closed type annotation), the
+  reservation's blast radius is plainly too wide (an unknown-typed
+  binding means the names on THAT binding are unknown, not that every
+  name in the bundle is reachable), and each hazard it was covering has
+  its own separate wildcard already. Implemented, measured on both
+  binaries directly, and REVERTED: typebox 119,686 either way,
+  excalidraw 279,800, remeda 28,533. Zero bytes, in exchange for
+  loosening the riskiest pass in the repo. The premise was wrong and the
+  evidence had been on screen the whole time — the reserved-set
+  breakdown prints BELOW the `SUPPRESSED` notice, and a `grep -A 12` had
+  been cutting it off. It reads: external 54, host-shaped 39, and
+  **`reaches a side-effect sink` 340**. That last set already covers what
+  the wildcard covered, which is why removing it changes nothing. Nor is
+  `SUPPRESSED` the same as inert: `--mangle-properties` still saves 247
+  bytes on typebox under the wildcard, because the notice means "no
+  USER-DECLARED property name is renamed", and the dead-property pass and
+  the discriminant renumbering are neither. The 340-name sink set is what
+  to look at next.
   hono (+500 bytes) and zod (+788) *were* wins until the `TypeArgs` fix
   below, which is the point: `f<T>(x)` parses as a wrapper node, nineteen
   passes never peeled it, and the references inside were invisible to

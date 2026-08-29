@@ -91,6 +91,12 @@ const DOMAIN = [
   "-0",
   "1",
   "-1",
+  // Non-integers. The domain had none, so every rule that TRUNCATES
+  // rather than preserves — `~~x`, `x | 0`, a shift — could pass on
+  // integers alone. `~~1.5` is `1`, which is the canonical
+  // counterexample to reading `~~` as an identity.
+  "1.5",
+  "-1.5",
   "NaN",
   "Infinity",
   '""',
@@ -457,6 +463,42 @@ const CASES = [
   // The operands that matter: a string (`"alpha" & -1` is `0`), a
   // non-integer (`1.5 & -1` is `1`), a BigInt (`5n ^ 5n` is `0n`, and
   // mixing throws), a Symbol (throws). All four are in the domain.
+  // --- unary double-application
+  //
+  // Not one case covered these either, and three of the four rules over
+  // them were wrong. `-(-x)` and `~(~x)` were both gated on PURITY,
+  // which is a statement about side effects and says nothing about the
+  // COERCION each operator applies: `-(-"alpha")` is `NaN`, `~~1.5` is
+  // `1`, `~~"alpha"` is `0`. The fuzzer found the first one at seed 480
+  // (export shape) after these rules had shipped for months. `-(a - b)`
+  // -> `b - a` was deleted rather than gated: the two differ at zero
+  // (`-(1 - 1)` is `-0`), and nothing here can prove `a - b != 0`.
+  {
+    rule: "numbers",
+    name: "neg-neg",
+    holes: 1,
+    body: "return - (- a);",
+  },
+  {
+    rule: "numbers",
+    name: "bitnot-bitnot",
+    holes: 1,
+    body: "return ~ (~ a);",
+  },
+  {
+    rule: "numbers",
+    name: "neg-of-difference",
+    holes: 2,
+    body: "return - (a - b);",
+  },
+  // The boolean-context form IS valid — `if (!!x)` coerces anyway — so
+  // this case exists to keep the correct rule from being "fixed" too.
+  {
+    rule: "numbers",
+    name: "not-not-in-condition",
+    holes: 1,
+    body: "if (!! a) { return 1; } return 2;",
+  },
   {
     rule: "numbers",
     name: "and-minus-one",

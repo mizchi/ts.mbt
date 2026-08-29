@@ -1050,9 +1050,42 @@ test "fold: x | -1 is NOT -1 for an operand of unknown type" {
 }
 
 ///|
-test "fold: ~~x → x (double bitwise-NOT identity, pure)" {
+/// `~~x` is NOT an identity — it is an int32 truncation. This test used
+/// to assert the opposite, and it sat directly below the `x | -1` test
+/// that gets the same question right: the earlier bitwise round fixed
+/// the BINARY operators and stopped at the unary ones, leaving a test
+/// that pinned the unsound rewrite in place. `~~1.5` is `1`,
+/// `~~"alpha"` is `0`, `~~true` is `1`.
+test "fold: ~~x is NOT x for an operand of unknown type" {
   let out = fold_one("const r = ~~n;\n")
+  assert_true(out.contains("~"))
+}
+
+///|
+/// The rewrite still fires where it is sound: a bitwise result is an
+/// int32 already, so the round trip through `~~` cannot change it.
+test "fold: ~~(x | 0) → x | 0, because that operand IS an int32" {
+  let out = fold_one("const r = ~~(n | 0);\n")
   assert_false(out.contains("~"))
+  assert_true(out.contains("|"))
+}
+
+///|
+/// `-(-x)` had the same defect: gated on purity, which says nothing
+/// about the ToNumeric each unary minus applies. The fuzzer found it at
+/// seed 480 in the export shape, as `- (- 'alpha')` folding to
+/// `'alpha'` where JS gives `NaN`.
+test "fold: -(-x) is NOT x for an operand of unknown type" {
+  let out = fold_one("const r = - (- n);\n")
+  assert_true(out.contains("-"))
+  assert_false(out.contains("const r = n"))
+}
+
+///|
+/// And it still fires on a number.
+test "fold: -(-x) → x when the operand is number-annotated" {
+  let out = fold_one("const r = - (- num);\n")
+  assert_true(out.contains("num"))
 }
 
 ///|
