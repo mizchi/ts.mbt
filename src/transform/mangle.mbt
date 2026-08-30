@@ -650,12 +650,34 @@ fn build_property_rename_map(
   collect_property_names(block, names)
   let mut n_reserved = 0
   let mut n_sentinel = 0
-  let mut n_private = 0
   // Filter to mangleable names, then sort so the mapping is stable
   // across iteration orders.
   let candidates : Array[String] = []
+  let mut n_private_kept = 0
   for entry in names {
     let n = entry.0
+    // A `#private` name is the one property class that needs NO proof.
+    // It is class-scoped by language rule: no consumer, no reflection,
+    // no serialization and no computed access can name it, so nothing
+    // outside the class body can observe the rename. That is why this
+    // runs BEFORE the reserved check — the reserved set answers "can
+    // something outside see this name", and for a `#` name the answer is
+    // no whatever the escape analysis concluded. Six of nine measured
+    // targets reserve the wildcard, so leaving privates behind the check
+    // would keep them un-mangled exactly where the pass is otherwise
+    // inert.
+    //
+    // The old skip gave two reasons and only the second was real: there
+    // is "nothing to hide" (true, and irrelevant — this is about BYTES,
+    // and hono's `#notFoundHandler` is 16 characters), and renaming
+    // would "drop the `#`, turning a private field back into an ordinary
+    // visible property" (true of a bare mint, so the mint below keeps
+    // the prefix).
+    if is_private_member_name(n) {
+      n_private_kept = n_private_kept + 1
+      candidates.push(n)
+      continue
+    }
     if reserved.contains(n) {
       n_reserved = n_reserved + 1
       continue
@@ -671,14 +693,6 @@ fn build_property_rename_map(
       n_sentinel = n_sentinel + 1
       continue
     }
-    // A `#private` name is already unreachable from outside its class
-    // body, so there is nothing to hide — and renaming it would drop
-    // the `#`, turning a private field back into an ordinary visible
-    // property. `private_fields.mbt` puts these here.
-    if is_private_member_name(n) {
-      n_private = n_private + 1
-      continue
-    }
     candidates.push(n)
   }
   candidates.sort()
@@ -688,7 +702,7 @@ fn build_property_rename_map(
         "\{names.size()} distinct property name(s) in the bundle; \{candidates.length()} are candidates.",
       )
       out.push(
-        "dropped: \{n_reserved} reserved, \{n_sentinel} parser sentinel, \{n_private} `#private`.",
+        "dropped: \{n_reserved} reserved, \{n_sentinel} parser sentinel; kept \{n_private_kept} `#private` (class-scoped, no proof needed).",
       )
       // How much a rename can possibly save. A name already one or two
       // characters long is renamed to another one- or two-character
@@ -724,13 +738,18 @@ fn build_property_rename_map(
   let map : Map[String, String] = {}
   let mut counter = 0
   for n in candidates {
+    let private_ = is_private_member_name(n)
     let mut candidate = next_short_name(counter)
     counter = counter + 1
-    while reserved.contains(candidate) {
+    // A private mint keeps the `#`, so it lands in the private
+    // namespace: `#a` can never equal a reserved public name, and can
+    // never collide with a public `a` on the same class either — they
+    // are different members in JavaScript.
+    while !private_ && reserved.contains(candidate) {
       candidate = next_short_name(counter)
       counter = counter + 1
     }
-    map[n] = candidate
+    map[n] = if private_ { "#" + candidate } else { candidate }
   }
   map
 }

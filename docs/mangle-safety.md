@@ -795,3 +795,71 @@ mutation self-check を通ります。
 **875,544 → 357,712 byte（59% 減）**、最適化前と最適化後で
 **同一の DOM を render**（root 27 child、body 287 byte、digest 一致、
 unhandled rejection 0）。
+
+## case58: `#private` 名も rename する
+
+property mangler は `#name` を全部飛ばしていました。skip の理由は 2 つ
+書かれており、**本当だったのは 2 つ目だけ**です:
+
+* 「`#private` は外から到達できないので**隠すものが無い**」——正しく、
+  そして無関係です。これは **byte** の話で、hono の
+  `#notFoundHandler` は 16 文字、`#a` は 2 文字。
+* 「rename すると `#` が落ちて、private field が**ただの見える
+  property に戻る**」——bare な mint については正しいので、mint 側で
+  `#` を保つようにしました。
+
+`#private` 名は **証明が一切要らない唯一の property クラス**です。言語
+規則で class scope に閉じており、consumer も reflection も serialization
+も computed access も名指しできない。だから candidate 判定を
+**reserved set より前**に置きました——reserved set は「外から見えるか」に
+答える集合で、`#` 名についてはescape 解析が何と言おうと答えは No です。
+測定 10 target のうち 6 つが wildcard を予約するので、reserved の後ろに
+置いたままだと**pass がもともと不活性な場所でこそ** private が残ります。
+
+mint は `#` を保つので private namespace に落ちます: `#a` は予約済みの
+public 名と等しくなり得ず、同じクラスの public `a` とも衝突しません
+（JavaScript では別メンバー）。異なるクラスの `#path` が両方 `#a` に
+なるのも正しい——それぞれ自分のクラス body で解決します。
+
+### 効果
+
+hono、shipping flag + `--mangle-properties`:
+
+| | bytes |
+| --- | --- |
+| `--mangle` のみ | 20,951 |
+| `+ --mangle-properties`（前） | 20,721 |
+| `+ --mangle-properties`（後） | **18,845** |
+
+**private 名の rename だけで −1,876 byte**、`--mangle-properties` 全体で
+**−2,106 byte（−10.1%）**。他の 9 target は `#private` を持たないので
+byte 完全一致です。
+
+そして #78 の結論がこれで一段はっきりします: property mangler の
+「全 library で candidate 0」は、**escape 解析を必要としない candidate
+クラスが 1 つ存在する**という形で崩れました。
+
+### case の検出力について
+
+`case58` は **safety case で、最適化の pin ではありません**。rename を
+mutation で戻しても pass します——private を rename しないこと自体は何も
+壊さないので、それは正しい挙動です。検出するのは古い skip が名指しして
+いた本当の hazard で、mint から `#` を落とすと **fail します**:
+private がただの property になり、`Object.keys` / `JSON.stringify` /
+spread / `for…in` の 4 つ全部が見えるようになるからです。
+
+byte の側は上の hono の数字と `--explain-mangle` の census 行
+（`kept N #private (class-scoped, no proof needed)`）が押さえます。
+
+### 途中で見つかった checker の 2 つの穴（別件、未修正）
+
+`case58` を書く過程で、fixture が compile できずに 2 回落ちました。
+どちらも mangler とは無関係の checker 側の穴です:
+
+* **`#x in obj`**（ergonomic brand check）が通らない。`in` の左辺が
+  brand 名に lowering され、checker にその entry が無いので
+  `cannot find name __private_brand__0__path`。
+* **`Array.prototype.sort()`** が引数 1 個必須と判定される
+  （comparator は optional）。
+
+どちらも case からは外し、別途 issue にしています。

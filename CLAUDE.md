@@ -557,7 +557,36 @@ product surfaces now.
   is 16 characters that the mangler declines to touch. Which is itself
   a missed opportunity rather than a cost — a `#private` name is
   class-scoped and cannot be anybody's ABI, so it is the one property
-  class that needs no proof to rename (#80).
+  class that needs no proof to rename — done, and it is worth
+  -1,876 bytes on hono by itself (`--mangle-properties` there goes
+  20,721 -> 18,845, and against plain `--mangle`'s 20,951 the pass is
+  now -2,106, -10.1%). The old skip gave two reasons and only the second
+  was real: there is "nothing to hide" (true, and beside the point —
+  `#notFoundHandler` is 16 characters and `#a` is two), and renaming
+  would "drop the `#`, turning a private field back into an ordinary
+  visible property" (true of a bare mint, so the mint keeps the prefix).
+  The candidate check runs BEFORE the reserved set, because that set
+  answers "can something outside see this name" and for a `#` name the
+  answer is no whatever the escape analysis concluded — six of the ten
+  measured targets reserve the wildcard, so leaving privates behind the
+  check would keep them un-mangled exactly where the pass is otherwise
+  inert. Two classes each declaring `#path` both become `#a`, which is
+  correct: they are different members, each resolving in its own class
+  body. This is also the first crack in "candidate 0 on every library" —
+  there is now one candidate class that needs no escape analysis at all.
+  `fixtures/mangle-safety/case58-private-name-mangling` is a SAFETY case
+  rather than an optimization pin: mutating the rename back off leaves it
+  passing, correctly, since declining to rename breaks nothing, while
+  dropping the `#` from the mint fails it on all four ways a private must
+  stay invisible (`Object.keys`, `JSON.stringify`, spread, `for…in`).
+  Writing it turned up two CHECKER holes, both unrelated and both filed
+  rather than fixed: `#x in obj` — the ergonomic brand check, and the
+  idiomatic class type guard — fails with `cannot find name
+  __private_brand__0__path` because the `in` operand is lowered to the
+  brand name the checker has no entry for; and `Array.prototype.sort()`
+  with no comparator is rejected as `expected 1 argument(s), got 0`.
+  Neither is reachable from the corpus because every fixture that would
+  hit them was written around them, which is how they survived.
   `just verify-pass-lattice` is the harness that exists to find exactly
   this — a pass present in some flag combinations and not others — and it
   ran the guilty combination (bare `--bundle` is the first entry in its
