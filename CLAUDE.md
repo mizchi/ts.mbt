@@ -882,6 +882,46 @@ product surfaces now.
   function's effects land after it and both legs would agree on an empty
   trace — coverage-shaped and proving nothing. Eight await shapes were
   checked by hand instead.
+  Re-profiling after all of that found the same shape once more, and
+  this time the largest item was pure waste. On the 9 MB TypeScript
+  compiler under the shipping flags, `class-method-dce` plus its
+  reachability phase were 27.8% of a 7,679 ms compile — and
+  `--disable-phase class-method-dce` produced BYTE-IDENTICAL output,
+  because the pass is SUPPRESSED there by one `all[name]` read in 5,000
+  lines and its own report says "nothing would have been dropped
+  anyway". Two fixes, both about asking the cheap question first.
+  `class_members_reachable_off_bundle` is a full observability analysis
+  and ran unconditionally BEFORE the suppression was known, so
+  `off_bundle` is a thunk now: `None` still means "the caller cannot
+  answer", so the fail-closed property is unchanged — the presence check
+  is up front and only the work moved. And sub-phase timing inside the
+  pass showed the cost split as symbol graph 485 ms, numeric inference
+  226 ms, static accesses 31 ms, container facts 18 ms: the two
+  expensive halves exist only to decide whether a computed key COULD
+  name a method, which is a question about whether a drop is safe, and
+  there is no point asking it when there is nothing to drop. Whether
+  there is anything to drop needs only the static-access set and the
+  export surface, both SUBSETS of the real accessed set, so "nothing
+  unreached" cannot become "something unreached" once the expensive
+  analysis adds names. The pass left the table entirely. Then the
+  biggest number was `bundle: link + escape + emit`, which is a
+  RESIDUAL — the whole bundle call minus the instrumented phases — so
+  the largest cost in the compile was being reported as unattributed;
+  splitting out `escape analysis` (2,165 ms) also exposed that
+  `--explain-mangle` was computing `escape_breakdown` TWICE, once for
+  the per-reason report and once through
+  `collect_externally_visible_props`, so the merge is a separate
+  `merge_escape_breakdown` now. `--mangle` 7,760 -> 5,190 ms (-33%),
+  with `--mangle-properties` 11,800 -> 8,230 ms (-30%), excalidraw
+  2,400 -> 2,050 ms, output byte-identical in every configuration.
+  excalidraw keeps 106 ms of `class-method-dce` — there the early exit
+  does NOT fire, which is what selective looks like — and
+  `bundle_wbtest.mbt` pins both sides of that boundary. Two residuals
+  are left and neither is attributed: link + emit (1,744 ms) and
+  `cli: module graph walk` (316 ms), the latter suspicious because a
+  single file with no imports pays it and 9 MB in one file costs the
+  same as 800 KB across 95. See
+  [`docs/real-world-minify.md`](./docs/real-world-minify.md).
 - `src/bridge` consumes `src/checker` for every type-shape decision and runs
   `@checker.check_module` on the synthesized output as a sanity gate. It also
   keeps domain-specific specialization for Node FS / React / Hono / crypto /

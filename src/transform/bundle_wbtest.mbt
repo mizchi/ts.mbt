@@ -5036,3 +5036,66 @@ test "class-method-dce: an unescaped class still loses its dead method" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+/// The cheap early exit must not change what the pass does.
+///
+/// `class_method_dce_block` now computes the statically-accessed set
+/// first and returns immediately when no declared method is missing from
+/// it, skipping the symbol graph and the numeric inference — 711 ms of
+/// the 1,136 ms the pass cost on the 9 MB TypeScript bundle, where the
+/// report already said "nothing would have been dropped anyway".
+///
+/// The exit is sound because both sets it uses are SUBSETS of the real
+/// accessed set, so "nothing unreached" cannot become "something
+/// unreached" once the expensive analysis adds names. These two cases
+/// pin the boundary from both sides: one where the exit fires and the
+/// pass must leave everything alone, and one where it must NOT fire
+/// because there is a method to drop.
+test "class_method_dce: the cheap exit fires only when nothing is droppable" {
+  // Every method is read statically, so the early exit fires and both
+  // survive. If the exit were wrong in the permissive direction, `beta`
+  // would go.
+  let all_used =
+    #|class Pair {
+    #|  alpha() { return "A"; }
+    #|  beta() { return "B"; }
+    #|}
+    #|const p = new Pair();
+    #|console.log(p.alpha() + p.beta());
+  match
+    bundle_modules(
+      vfs([("entry.ts", all_used)]),
+      "entry.ts",
+      BundleOptions::default(),
+    ) {
+    Ok(out) => {
+      assert_true(out.js.contains("alpha"))
+      assert_true(out.js.contains("beta"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+  // `beta` is never read anywhere, so the exit must NOT fire and the
+  // pass must run and delete it. A too-eager exit shows up here as
+  // `beta` surviving — which is also how a "fix" that simply disabled
+  // the pass would show up.
+  let one_dead =
+    #|class Pair {
+    #|  alpha() { return "A"; }
+    #|  beta() { return "B"; }
+    #|}
+    #|const p = new Pair();
+    #|console.log(p.alpha());
+  match
+    bundle_modules(
+      vfs([("entry.ts", one_dead)]),
+      "entry.ts",
+      BundleOptions::default(),
+    ) {
+    Ok(out) => {
+      assert_true(out.js.contains("alpha"))
+      assert_false(out.js.contains("beta"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}

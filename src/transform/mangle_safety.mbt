@@ -54,12 +54,26 @@ pub fn collect_externally_visible_props(
   // second implementation: `--explain-mangle` has to describe the
   // decision this function makes, not a re-derivation of it that can
   // drift.
-  let b = escape_breakdown(
-    block,
-    external_bindings,
-    type_env~,
-    synthesized_namespaces~,
+  merge_escape_breakdown(
+    escape_breakdown(
+      block,
+      external_bindings,
+      type_env~,
+      synthesized_namespaces~,
+    ),
   )
+}
+
+///|
+/// The merge half of `collect_externally_visible_props`, split out so a
+/// caller that ALREADY has the breakdown does not pay for a second
+/// analysis.
+///
+/// That caller is `--explain-mangle`: it needs the breakdown to print
+/// the per-reason report and the merged set to drive the mangler, and it
+/// was computing the breakdown twice — 2,165 ms each on the 9 MB
+/// TypeScript bundle, which is 25% of that compile paid twice over.
+pub fn merge_escape_breakdown(b : EscapeBreakdown) -> Array[String] {
   let reserved : Map[String, Bool] = {}
   for
     group in [

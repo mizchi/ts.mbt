@@ -938,12 +938,22 @@ pub fn bundle_modules(
     // deleted every method of a class it had handed to `console.log`.
     let method_dce_reasons : Array[String] = []
     combined = if opts.phase_enabled("class-method-dce") {
-      let off_bundle = timer.phase("class-method-dce-reach", () => {
-        class_members_reachable_off_bundle(
-          combined,
-          external_import_bindings(external_imports),
-        )
-      })
+      // Passed as a THUNK so the analysis runs only if the pass gets far
+      // enough to read it. On the 9 MB TypeScript bundle the sniff scan
+      // blocks the pass, and this was 1,270 ms of a 7,679 ms compile
+      // spent on an answer nobody looked at — the output is
+      // byte-identical with the whole phase disabled. The timer stays
+      // inside the closure, so the phase reports the time it actually
+      // spent, which is zero when it is never forced.
+      let dce_scope_for_reach = combined
+      let off_bundle = () => {
+        timer.phase("class-method-dce-reach", () => {
+          class_members_reachable_off_bundle(
+            dce_scope_for_reach,
+            external_import_bindings(external_imports),
+          )
+        })
+      }
       timer.phase("class-method-dce", () => {
         class_method_dce_block(
           combined,
@@ -953,6 +963,7 @@ pub fn bundle_modules(
           type_aliases=combined_type_aliases,
           explain=if opts.explain { Some(method_dce_reasons) } else { None },
           reflection=Some(reflection_warnings),
+          timer~,
         )
       })
     } else {
@@ -1140,25 +1151,32 @@ pub fn bundle_modules(
         // table a library writes: on typebox it reserved 300 of the 340
         // names in one section of the report, for two real namespaces.
         let synthesized_namespaces = Some(link_renames.synthesized_namespaces)
+        // Computed ONCE and used twice. `--explain-mangle` needs the
+        // per-reason breakdown for its report and the merged set to
+        // drive the mangler, and it used to call the analysis for each
+        // — 2,165 ms apiece on the 9 MB TypeScript bundle, 25% of that
+        // compile paid twice over.
+        //
+        // Timed, too: this was the largest number in `--timing` and it
+        // was sitting inside the "link + escape + emit" residual, which
+        // is just the difference between the whole bundle call and the
+        // instrumented phases. The biggest cost in the compile was
+        // being reported as unattributed; a residual is a place to
+        // look, not an answer.
+        let breakdown = timer.phase("escape analysis", () => {
+          escape_breakdown(
+            combined,
+            externals,
+            type_env~,
+            synthesized_namespaces~,
+          )
+        })
         if opts.explain {
-          for
-            line in format_escape_explanation(
-              escape_breakdown(
-                combined,
-                externals,
-                type_env~,
-                synthesized_namespaces~,
-              ),
-            ) {
+          for line in format_escape_explanation(breakdown) {
             explain_escape.push(line)
           }
         }
-        let escapes = collect_externally_visible_props(
-          combined,
-          externals,
-          type_env~,
-          synthesized_namespaces~,
-        )
+        let escapes = merge_escape_breakdown(breakdown)
         let mut wildcard = false
         for n in escapes {
           if n == "*" {
@@ -1576,13 +1594,24 @@ pub fn bundle_modules(
       stmts: all_stmts,
       stmt_positions: [],
     })
-    // Over the same bundle-wide scope, and hoisted out of the loop: it
-    // is loop-invariant, and computing it per module would be one full
-    // escape analysis per file.
-    let dce_off_bundle = class_members_reachable_off_bundle(
-      dce_scope,
-      external_import_bindings(external_imports),
-    )
+    // Over the same bundle-wide scope, and MEMOIZED rather than hoisted:
+    // it is loop-invariant, so computing it per module would be one full
+    // escape analysis per file — and passing it as a thunk means a
+    // bundle whose sniff scan blocks the pass pays for none at all.
+    let dce_off_bundle_memo : Ref[Array[String]?] = Ref::new(None)
+    let dce_off_bundle = () => {
+      match dce_off_bundle_memo.val {
+        Some(v) => v
+        None => {
+          let v = class_members_reachable_off_bundle(
+            dce_scope,
+            external_import_bindings(external_imports),
+          )
+          dce_off_bundle_memo.val = Some(v)
+          v
+        }
+      }
+    }
     for i, path in order {
       let m = match modules.get(path) {
         Some(node) => node

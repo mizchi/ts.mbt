@@ -41,7 +41,7 @@ pub fn class_member_names(@ast.TsBlock) -> Map[String, Array[String]]
 
 pub fn class_members_reachable_off_bundle(@ast.TsBlock, Map[String, Bool]) -> Array[String]
 
-pub fn class_method_dce_block(@ast.TsBlock, Array[String]?, keep? : Map[String, Bool], scope? : @ast.TsBlock?, class_fields? : Array[(String, @ast.TsType)], type_aliases? : Array[@ast.TsTypeAlias], explain? : Array[String]?, reflection? : Array[String]?) -> @ast.TsBlock
+pub fn class_method_dce_block(@ast.TsBlock, (() -> Array[String])?, keep? : Map[String, Bool], scope? : @ast.TsBlock?, class_fields? : Array[(String, @ast.TsType)], type_aliases? : Array[@ast.TsTypeAlias], explain? : Array[String]?, reflection? : Array[String]?, timer? : PhaseTimer) -> @ast.TsBlock
 
 pub fn classes_observing_own_name(@ast.TsBlock) -> (Map[String, Bool], Bool)
 
@@ -136,6 +136,8 @@ pub fn mangle_block(@ast.TsBlock, ManglerConfig) -> @ast.TsBlock
 pub fn mangle_block_with_renames(@ast.TsBlock, ManglerConfig) -> (@ast.TsBlock, Map[String, String])
 
 pub fn mangle_source_with_auto_reserve(String, ManglerConfig) -> Result[String, String]
+
+pub fn merge_escape_breakdown(EscapeBreakdown) -> Array[String]
 
 pub fn module_const_enums(Array[@ast.TsEnumDecl]) -> Array[@ast.TsEnumDecl]
 

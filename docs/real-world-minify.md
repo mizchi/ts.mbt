@@ -1294,3 +1294,110 @@ corpus の 148 件は「思いついた状況」の集合です。生成器
 そして 7 の副産物として、6 の修正で出力が 2,236,316 → 3,581,914 bytes に
 増えました。差の **1.35 MB は削除されていた function 宣言**です。
 「よく縮んだ」は「正しく縮んだ」でもありません。
+
+## profile の取り直し（2 回目）
+
+同じ計測をもう一度回したら、また**残っている最大の項目が「無駄」でした**。
+9 MB の `typescript.js`、shipping flag（`--treeshake --fold --minify
+--mangle`）:
+
+```
+      1270 ms   16.5%  class-method-dce-reach
+       898 ms   11.6%  cli: parse (recursive descent)
+       864 ms   11.2%  class-method-dce
+       794 ms   10.3%  mangle
+       ...
+      7679 ms  total
+```
+
+`class-method-dce` + `class-method-dce-reach` で **27.8%**。そして
+`--disable-phase class-method-dce` の出力は **byte 完全一致**（3,523,263）
+です。`--explain-mangle` はこう言います:
+
+```
+SUPPRESSED — a sink in the bundle can observe a member name the pass
+cannot spell out, so every class keeps every method.
+  [x1] `all[name]` reads a member under a computed key that is neither
+       provably numeric nor an entry of a keyed container
+       (0 of 821 bindings named `name` are provably numeric)
+nothing would have been dropped anyway.
+```
+
+**5,000 行中の 1 箇所** `all[name]` で抑制され、しかも抑制されなくても
+落ちるものが無い。2.1 秒がそれに払われていました。
+
+### 直し 1: 到達性解析を thunk にする（−1,270 ms）
+
+`class_members_reachable_off_bundle` は full observability 解析で、
+抑制判定より**前**に無条件で走っていました。抑制されるなら結果は読まれ
+ません。`off_bundle` を値ではなく **thunk** で渡し、実際に読む場所で
+force します。
+
+`None` は今も「呼び出し側が答えられない」を意味するので fail-closed の
+性質は変わりません——**存在確認は先、計算は後**になっただけです。
+
+### 直し 2: graph を作る前に「落とすものが無い」を確かめる（−711 ms）
+
+pass の内部に sub-phase 計測を通したら、費用の内訳はこうでした:
+
+| step | ms |
+| --- | --- |
+| `dce: symbol graph` | 485 |
+| `dce: numeric inference` | 226 |
+| `dce: static accesses` | **31** |
+| `dce: container facts` | 18 |
+
+graph と numeric inference は「**computed key がメソッドを名指しし得るか**」
+＝ 落とすのが**安全か**を決めるためだけに存在します。**落とすものが無い
+なら聞く必要がありません。** そして落とすものの有無は静的アクセス集合
+（31 ms）と export surface だけで分かります——どちらも本物の accessed 集合の
+**部分集合**なので、「未到達なし」が後から「未到達あり」になることはない。
+
+早期脱出を入れて 1,136 ms → 表から消滅。
+
+### 直し 3: `escape_breakdown` を 2 回計算していた（`--explain-mangle`）
+
+最大の項目は `bundle: link + escape + emit` で、これは**残差**
+（bundle 呼び出し全体 − 計測済み phase）です。**compile 中で最大の費用が
+「不明」として報告されていた**ので phase を足しました:
+
+```
+      2165 ms   25.0%  escape analysis
+      1744 ms   20.1%  bundle: link + escape + emit   ← 残差（link + emit）
+```
+
+そして `--explain-mangle` は per-reason の breakdown と merge 済み集合の
+両方を必要とし、**それぞれのために解析を 1 回ずつ**呼んでいました。
+merge を `merge_escape_breakdown` として切り出し、1 回計算して 2 用途に
+使うようにしました。
+
+### 結果
+
+| 構成 | before | after |
+| --- | --- | --- |
+| `--mangle` | 7,760 ms | **5,190 ms** (−33%) |
+| `+ --mangle-properties` | 11,800 ms | **8,230 ms** (−30%) |
+| excalidraw（95 file, TS source） | 2,400 ms | **2,050 ms** (−15%) |
+
+出力は全構成で byte 完全一致。real-world harness 自身の表示も
+`typescript ... in 7s` → `in 4s`、`checker.ts ... in 2s` → `in 1s`。
+
+excalidraw で `class-method-dce` は 106 ms 残ります——そこでは早期脱出が
+発火しない、つまり**落とすものが実際にある**ということで、脱出が選択的に
+効いている証拠です。`bundle_wbtest.mbt` の境界 test が両側を pin します:
+全メソッドが静的に読まれる場合は両方残る、1 つが未到達なら pass が走って
+消える（後者は「pass を切る」修正でも落ちます）。
+
+### 残っている 2 つの残差
+
+どちらも**まだ帰属できていない**ので、次に触る人はここから始めるべきです。
+
+| 残差 | typescript.js | excalidraw | 中身 |
+| --- | --- | --- | --- |
+| `bundle: link + escape + emit` | 1,744 ms | 318 ms | link と emit（escape は分離済み） |
+| `cli: module graph walk` | 316 ms | 319 ms | queue 管理、import walk、sibling `.d.ts` scan |
+
+後者は特に怪しいです。**import を 1 つも持たない単一ファイル**でも
+316 ms かかり、9 MB（1 file）と 800 KB（95 file）でほぼ同じ値になります
+——サイズ比例でも件数比例でもない。残差は「見る場所」であって答えでは
+ないので、まず phase を足すこと。
