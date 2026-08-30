@@ -298,7 +298,13 @@ gen-mangle-cases:
 #
 #   just compare-terser-bundles
 #   just compare-terser-bundles --rules
+#   just compare-terser-bundles --names
 #   just compare-terser-bundles --only typebox
+#
+# `--names` reports the identifier-length distribution in VARIABLE
+# positions on both sides, and names the long identifiers mtsc keeps and
+# terser renamed away. On typebox that was 46% of the byte gap, all in
+# one name the mangler had been refusing to touch.
 compare-terser-bundles *ARGS:
     moon build --target native --release
     node scripts/compare_terser_bundles.mjs {{ ARGS }}

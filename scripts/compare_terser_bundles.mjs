@@ -51,8 +51,25 @@
 // question, and the structural counts below are the cheap proxy for it.
 // A rule is worth porting only when BOTH say so.
 //
+// `--names` asks the third question, and on typebox it was the one that
+// paid. Bytes alone say "+11,228" and the structural counts say "more
+// functions"; the identifier-length distribution says 5,165 of those
+// bytes are identifier CHARACTERS, and that 828 of mtsc's variable
+// identifiers are four characters long against terser's four — in a
+// bundle where neither has exhausted length 3. A mangled-name
+// distribution cannot look like that, so those are names the mangler
+// declined to rename, and naming them took a 2,440-byte fix.
+//
+// It counts identifiers in VARIABLE positions only. The first version
+// counted every `Identifier` node, which in the TypeScript AST includes
+// property names and object-literal keys — so typebox's JSON-Schema
+// `type` key appeared 856 times and the "length-4 identifiers" column
+// was mostly not identifiers at all. Mixing the mangler's name pool
+// with the wire format answers a different question than the one asked.
+//
 //   node scripts/compare_terser_bundles.mjs
 //   node scripts/compare_terser_bundles.mjs --rules
+//   node scripts/compare_terser_bundles.mjs --names
 //   node scripts/compare_terser_bundles.mjs --only typebox
 
 import { spawnSync } from "node:child_process";
@@ -111,9 +128,11 @@ const RULES = [
 const args = process.argv.slice(2);
 let only = null;
 let rules = false;
+let names = false;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === "--only") only = args[++i];
   else if (args[i] === "--rules") rules = true;
+  else if (args[i] === "--names") names = true;
   else {
     console.error(`unknown argument: ${args[i]}`);
     process.exit(2);
@@ -309,6 +328,79 @@ if (propRows.length) {
       `    ${pad(row.name, 12)} ${padl(n(row.mtsc.length), 9)} -> ${padl(n(row.mtscProps.length), 9)}` +
         ` ${padl(sgn(row.mtscProps.length - row.mtsc.length), 8)}`,
     );
+  }
+  console.log("");
+}
+
+// --------------------------------------------------------------------
+// `--names`: the identifier-length distribution.
+// --------------------------------------------------------------------
+//
+// Only VARIABLE positions — see the header. A property name is not a
+// candidate for the identifier mangler, and counting one makes the
+// column unreadable.
+if (names) {
+  const ts = await import("typescript");
+  const isVarPosition = (nd) => {
+    const p = nd.parent;
+    if (!p) return true;
+    if (ts.isPropertyAccessExpression(p) && p.name === nd) return false;
+    if (ts.isQualifiedName(p) && p.right === nd) return false;
+    if (ts.isPropertyAssignment(p) && p.name === nd) return false;
+    if (ts.isShorthandPropertyAssignment(p) && p.name === nd) return false;
+    if (ts.isMethodDeclaration(p) && p.name === nd) return false;
+    if (ts.isPropertyDeclaration(p) && p.name === nd) return false;
+    if ((ts.isGetAccessor(p) || ts.isSetAccessor(p)) && p.name === nd) return false;
+    if (ts.isImportSpecifier(p) || ts.isExportSpecifier(p)) return false;
+    if (ts.isBindingElement(p) && p.propertyName === nd) return false;
+    return true;
+  };
+  const measure = (code) => {
+    const sf = ts.createSourceFile("x.mjs", code, ts.ScriptTarget.ESNext, true, ts.ScriptKind.JS);
+    const byLen = new Map();
+    const worst = new Map();
+    let total = 0;
+    let chars = 0;
+    const visit = (nd) => {
+      if (ts.isIdentifier(nd) && isVarPosition(nd)) {
+        const L = nd.text.length;
+        byLen.set(L, (byLen.get(L) ?? 0) + 1);
+        if (L >= 4) worst.set(nd.text, (worst.get(nd.text) ?? 0) + 1);
+        total++;
+        chars += L;
+      }
+      nd.forEachChild(visit);
+    };
+    sf.forEachChild(visit);
+    return { byLen, worst, total, chars };
+  };
+
+  console.log("  identifier lengths, VARIABLE positions only\n");
+  const header =
+    `  ${pad("target", 12)} ${pad("side", 7)} ${padl("idents", 8)} ${padl("chars", 9)}` +
+    [1, 2, 3, 4, 5].map((l) => padl(`len${l}`, 7)).join("");
+  console.log(header);
+  for (const row of rows) {
+    if (!row.mtsc || !row.terser) continue;
+    for (const [side, code] of [["terser", row.terser], ["mtsc", row.mtsc]]) {
+      const m = measure(code);
+      console.log(
+        `  ${pad(side === "terser" ? row.name : "", 12)} ${pad(side, 7)} ${padl(n(m.total), 8)} ${padl(n(m.chars), 9)}` +
+          [1, 2, 3, 4, 5].map((l) => padl(n(m.byLen.get(l) ?? 0), 7)).join(""),
+      );
+    }
+  }
+  // A long name in mtsc's output and not in terser's is a name one
+  // mangler renamed and the other did not — which is the actionable
+  // half, so name them rather than only counting them.
+  console.log("\n  mtsc's length>=4 variable identifiers that terser renamed away:\n");
+  for (const row of rows) {
+    if (!row.mtsc || !row.terser) continue;
+    const mine = measure(row.mtsc).worst;
+    const theirs = measure(row.terser).worst;
+    const only4 = [...mine].filter(([k]) => !theirs.has(k)).sort((a, b) => b[1] - a[1]).slice(0, 5);
+    if (!only4.length) continue;
+    console.log(`    ${pad(row.name, 12)} ${only4.map(([k, v]) => `${k} x${v}`).join(", ")}`);
   }
   console.log("");
 }

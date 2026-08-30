@@ -695,6 +695,59 @@ product surfaces now.
   class can be renamed TO it. typebox 119,933 -> 90,056, +51.3% ->
   +13.8%, gzip +27.1% -> +17.4%, and the other eight targets
   byte-identical.
+  The next attribution of that gap said "414 single-call functions mtsc
+  keeps against terser's 113, worth ~5,000 bytes if inlined", and the
+  experiment says the mechanism is wrong twice over. Only 4 of the 371
+  such functions are called in STATEMENT position — the 1% the plan
+  proposed starting from — and 313 already have the `return <expr>`
+  shape `call_inline` structurally accepts, so a statement body was
+  never the blocker. The real blocker was the body-purity REQUIREMENT
+  (586 of ~1,000 functions examined on typebox, against 35 accepted),
+  which is not needed for safety: the body runs once at the call site
+  either way, so what it needs is pure arguments and a size argument,
+  not purity. Relaxing it is -26 bytes on typebox and 0 on the other
+  eight; relaxing the blanket nested-function refusal (394 more
+  candidates, because a one-line TS helper is routinely
+  `return xs.map(x => …)`) is 0, because those then stop at the size
+  gate; and removing the size gate — the ceiling for any cost model on
+  multi-site inlining — is +1,896 on typebox, +1,009 excalidraw, +363
+  superstruct, +306 ts-pattern, +208 hono. A node-count cost model was
+  swept and has no positive region (K=4 already loses 208 on hono). All
+  of it reverted.
+  What DID pay came from measuring the output a different way:
+  `compare-terser-bundles --names` counts identifier lengths in
+  VARIABLE positions, and 5,165 of typebox's 11,228-byte gap was
+  identifier CHARACTERS — with 828 four-character variable identifiers
+  against terser's four, in a bundle where neither has exhausted length
+  3. A mangled-name distribution cannot look like that, so those were
+  names the mangler declined to rename, and they were one name: `type`,
+  824 times, as in `function a6(type, a = {})`. Cause:
+  `mangler_builtin_reserved` is consulted by `ScopeFrame::bind` for two
+  different questions at once — which names the pool may not GENERATE
+  (its purpose: globals and reserved words) and which existing bindings
+  may not be RENAMED. `type`, `namespace`, `declare`, `abstract` and
+  `readonly` are TypeScript CONTEXTUAL keywords and legal JavaScript
+  variable names, in strict mode too, so listing them only ever cost
+  bytes; `interface` / `implements` / `private` / `protected` /
+  `public` / `static` / `enum` are reserved in strict mode and a module
+  is strict, so they stay. Dropping the five: `typescript.js` -13,613,
+  typebox -2,440, react -1,939, excalidraw -236, valibot -99, immer
+  -45, superstruct -8, nothing larger — about -18.4 KB, and typebox's
+  gap +14.2% -> +11.1% with mtsc now smaller on 6 of 9 raw.
+  `fixtures/mangle-safety/case56-contextual-keyword-bindings` covers
+  the safety side under Node: each of the five declared, read, closed
+  over, shadowed by a parameter, shadowed again in a nested function,
+  exported, alongside object KEYS of the same spelling that must not
+  move. The first version of that identifier count was itself the trap
+  this file keeps recording — every `Identifier` node in the TypeScript
+  AST includes property names, so typebox's JSON-Schema `type` key
+  showed up 856 times and the column was mostly not identifiers at all.
+  The remaining 2,701 characters are 421 fewer one-character names,
+  1,499 more two-character ones, and 1,091 more identifier occurrences,
+  and that is a PASS-ORDER question rather than a missing pass: terser
+  inlines and then mangles, so every deleted declaration frees a
+  one-character slot, while mtsc has spent its names before `inline`
+  runs.
   Writing the case for that found a WORSE bug underneath, and it was
   pre-existing: `try_inline_trivial_call` substituted parameters ONE AT
   A TIME, so a later parameter's substitution rewrote a name an earlier

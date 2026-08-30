@@ -177,8 +177,22 @@ let mangler_builtin_reserved : Array[String] = [
   "do", "switch", "case", "default", "break", "continue", "throw", "try", "catch",
   "finally", "new", "delete", "typeof", "instanceof", "void", "in", "of", "yield",
   "await", "async", "import", "export", "from", "as", "extends", "super", "static",
-  "public", "private", "protected", "readonly", "implements", "interface", "type",
-  "namespace", "module", "declare", "abstract", "with", "debugger", "enum",
+  "public", "private", "protected", "implements", "interface", "module", "with",
+  "debugger", "enum",
+  // NOT here, on purpose: `type`, `namespace`, `declare`, `abstract`,
+  // `readonly`. They are TypeScript CONTEXTUAL keywords and perfectly
+  // legal JavaScript variable names, in strict mode too — unlike
+  // `interface` / `implements` / `private` / `protected` / `public` /
+  // `static`, which are reserved in strict mode and a module is strict.
+  //
+  // Listing them cost real bytes, because this set is consulted for two
+  // different questions at once (`ScopeFrame::bind`): which names the
+  // pool may not GENERATE, and which existing bindings may not be
+  // RENAMED. The first is what the list is for; the second is a pure
+  // cost for a name nothing looks up at runtime. typebox declares
+  // `function a6(type, a = {})` all over its bundle — 824 occurrences
+  // of a four-character parameter name in a bundle whose length-3 names
+  // are not even exhausted, against terser's four.
 ]
 
 ///|
