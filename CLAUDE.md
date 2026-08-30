@@ -427,12 +427,84 @@ product surfaces now.
   implemented, measured and REVERTED: zero bytes, because the
   suppression is all-or-nothing and 53 of 80 blockers is the same as
   none, against a `__proto__` / `Object.setPrototypeOf` exposure not
-  yet closed. The design problem is the bundle-wide wildcard itself —
-  one `Reflect.ownKeys` anywhere keeps every method of every class —
-  and the fix that would pay is per-receiver suppression, the same
+  yet closed. The design problem looked like the bundle-wide wildcard
+  itself — one `Reflect.ownKeys` anywhere keeps every method of every
+  class — so the filed next step was per-receiver suppression, the same
   reasoning `class_members_reachable_off_bundle` applies at the bundle
-  boundary. Filed, with the numbers, rather than started at the tail of
-  a session. What DOES ship from that investigation is a warning, because
+  boundary. That is CLOSED now, and by measuring its ceiling before
+  writing any of it, which took one command: the report's
+  `unused class methods` section already says how many methods a
+  suppression COST, and that is the exact upper bound on any narrowing.
+  Eight of the ten targets never reach the suppression at all — the
+  early exit added below says `nothing to do — every declared method is
+  read somewhere static or is on the export surface` — so the sentence
+  above, "it said the same thing on all ten targets", is no longer
+  true. The whole corpus-wide ceiling is **14 methods**: excalidraw 5,
+  hono 18 declarations of 9 distinct names, zero everywhere else. And
+  hono's nine are not headroom, which is the finding that matters:
+  `HonoRequest.param` / `parseBody` / `valid` / `queries` / `blob` /
+  `bytes` / `matchedRoutes` / `routePath` / `addValidatedData` are the
+  public API an application spells as `c.req.param("id")`. Reading them
+  as unreachable was an export-surface HOLE, so opening the gate would
+  have shipped the bug and the wildcard was the only thing stopping it.
+  Four holes, all in one walk, each one enough to make
+  `mtsc entry.ts --bundle` — no optimization flag — delete a method a
+  consumer goes on to call. `index_prop_assigns`'s doc comment says it
+  indexes `NAME.prop = value`, and that one spelling was all it
+  indexed: a compound assignment through a property
+  (`NAME.prop ??= v`, `||=`, `&&=`) had no arm, and that is how real
+  code writes a lazily-created member — hono memoizes `#req`,
+  `#matchResult` and `#path` exactly that way, and a consumer got
+  `TypeError: c.req.param is not a function`. Nor did
+  `NAME["prop"] = v`, which is the same write spelled differently. A
+  key we cannot spell (`NAME[k] = v`) can reserve no name but its value
+  still leaves inside the object, and goes under the `@@computed:`
+  sentinel `is_opaque_object_key` already existed for. Third,
+  `surface_lookup_member` resolved `bag.prop` against the object
+  literal's own entry — `undefined` — and STOPPED, treating a necessary
+  source as a sufficient one; `return bag` was always fine, because
+  widening to the whole object routes through the `prop_assigns` loop,
+  and that is what made the hole look like working code. Fourth,
+  `surface_escape_class` put the value escape INSIDE the
+  `is_internal_marker_prop` filter, so a `#private` field's value never
+  escaped while the identical PUBLIC field's did — ninth time one rule
+  was written in two places and applied in one, and the top-level
+  `prop_assigns` loop sixty lines above had it right. None of the four
+  is reachable by a self-comparison: the deletion happens in every mtsc
+  leg, so two mtsc outputs agree, and `--verify` sees nothing because
+  every name still resolves.
+  Fixing the READ half then introduced a NON-TERMINATION, and the memo
+  that stops it was already twenty lines away in the same file: a
+  recorded write can read the key it writes, which is what an increment
+  is, so `const ledger = { n: 0 }` with
+  `ledger.n = ledger.n + 1` escaped the write, whose left operand is
+  `ledger.n` again. Five lines, 10 ms with `= 1` and never with
+  `= ledger.n + 1`; `case36-annotated-boundary` has exactly that
+  increment and wedged the corpus, which was misread as CPU contention
+  for twenty minutes until `ps` showed three mtsc processes on one
+  fixture. `surface_should_walk`'s own doc comment describes this
+  failure mode ("did not finish in seven minutes"), and the fix is to
+  key it on `(receiver, key)` as well. One ordering matters: `resolved`
+  is set from the entry scan BEFORE the memo can decline, or a second
+  arrival falls through to the widening and the cycle becomes an
+  over-reservation instead of a hang. Two unit tests, and the second is
+  the point — a memo keyed on the KEY alone misses the mutual form
+  (`a.toB = b; b.toA = a`), where neither write mentions its own key.
+  `fixtures/mangle-safety/case60-property-write-spellings` exports each
+  holder and calls the method only from `driver.mjs`, outside the
+  bundle, so nothing in the bundle names it and the export surface is
+  the only thing that can keep it; the comparison is against Node
+  running the same TypeScript. Its first draft handed the inner object
+  to an `--external` module instead and FAILED — correctly, and the
+  reason is worth keeping: an external call routes through off-bundle
+  reachability, a different analysis, which attributes the escaping
+  value to the HOLDER and not to the class held inside it. The case
+  reproduced the bug while proving nothing about the fix, because it
+  never exercised the export surface at all. What the case cannot do is
+  the other direction — a value comparison cannot observe an absence,
+  since the reference leg has the method — and `verify-dce-coverage`
+  plus the corpus byte deltas cover that.
+  What DOES ship from that investigation is a warning, because
   reflection is the one blocker the author rather than the compiler has to
   act on: `mtsc` now says so by default rather than behind
   `--explain-mangle`. It is deliberately narrow in three ways. It fires

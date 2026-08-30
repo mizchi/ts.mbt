@@ -916,3 +916,144 @@ self-check は検出します（`[REGR] case59 blocked-compile … expected
 ほぼ必ず使う形を拒みます。初稿には bare element の形しか無かったので、
 反対方向に間違った signature を pass させました。union の片側しか
 持たない case は、その 2 つを区別できません。
+
+## case60: property 書き込みの 4 つの綴りのうち、index されていたのは 1 つ
+
+これは #73（class-method-DCE の suppression を class 単位に狭める）の
+**天井を測ろうとして**見つかったもので、harness が見つけたものでは
+ありません。そして測った結果、#73 は**やる価値が無い**と分かり、
+代わりに `--bundle` 素の path に入っている本物の不健全性が出てきました。
+
+### まず天井: 10 target 中 8 つで 0
+
+`--explain-mangle` の `unused class methods` 節は、suppress されたときに
+「もし gate が開いていたら何個消えたか」を印字します。それが narrowing の
+上限そのものです。10 target 全部に訊きました:
+
+| target | class-method-dce の判定 | 天井 |
+| --- | --- | --- |
+| typebox / immer / neverthrow / ts-pattern / superstruct / valibot / sprawlens | `nothing to do — every declared method is read somewhere static or is on the export surface` | **0** |
+| remeda | `nothing to do — the bundle declares no classes` | **0** |
+| excalidraw | SUPPRESSED | 5 method |
+| hono | SUPPRESSED | 18 宣言 = **distinct 9 個**、全部 `HonoRequest` |
+
+8 target は suppression に到達すらしません（#88 で入れた early exit が
+「消すものが無い」と言って抜けます）。CLAUDE.md には
+「10 target すべてで SUPPRESSED」と書いてありましたが、**もう正しく
+ありません**。gate を狭める作業の上限は、corpus 全体で
+`5 + 9 = 14 method` です。
+
+### そして hono の 9 個は headroom ではなく、隠れていたバグだった
+
+distinct 9 個は `HonoRequest.param` / `parseBody` / `valid` / `queries` /
+`blob` / `bytes` / `matchedRoutes` / `routePath` / `addValidatedData`
+——hono を使うアプリが `c.req.param("id")` と書く、**その public API
+そのもの**です。それが「到達不能」と判定されているのは最適化の機会では
+なく、export surface の穴です。つまり #73 を実装して gate を開けたら、
+**このバグを出荷していました**。suppression が唯一の防波堤でした。
+
+### 4 つの穴
+
+`index_prop_assigns` の doc comment は「`NAME.prop = value` を index する」
+と書いてあり、実際に index していたのは**その 1 綴りだけ**でした。
+
+```ts
+class Req { param(k: string) { return k } }
+export class Ctx {
+  #req: Req | undefined;
+  get req(): Req { this.#req ??= new Req("r"); return this.#req! }
+}
+```
+
+`mtsc index.ts --bundle`（最適化 flag **無し**）が `Req.param` を削除し、
+consumer 側は `TypeError: c.req.param is not a function`。Node に同じ
+TypeScript を直接走らせると `r:k` を返します。
+
+| 穴 | 綴り | 原因 |
+| --- | --- | --- |
+| H1 | `NAME.prop ??= v`（`\|\|=` / `&&=` も） | `CompoundAssignExpr` の arm が無い。**実コードが lazy member を書く綴り**で、hono の `#req` / `#matchResult` / `#path` がこれ |
+| H2 | `NAME["prop"] = v` | `IndexAssign` / `IndexAssignExpr` の arm が無い。`NAME.prop = v` の別の書き方 |
+| H3 | `return bag.prop` | `surface_lookup_member` が object literal の entry（`undefined`）で解決して**止まる**。literal の entry は `bag.prop` の必要条件であって十分条件ではない。`return bag` は最初から通っていて、それがこれを「動いているように」見せていた |
+| H4 | `this.#priv = v` | `surface_escape_class` が値の escape を `is_internal_marker_prop` の filter の**内側**に置いていた。filter が答えるのは「この NAME を予約してよいか」（否——`__private_brand__0__req` は誰も綴れない）で、値については何も言っていない。**public field の同じ class は通る**のが tell |
+
+H4 は「1 つの規則が 2 箇所に書かれ、1 箇所でしか適用されていない」の
+**9 回目**です。top-level の `prop_assigns` loop（同じ file の 60 行上）は
+escape を filter の外に置いていて、正しかった。
+
+非 literal の computed key（`NAME[k] = v`）は名前が綴れないので予約
+できませんが、値はオブジェクトの中に入って出ていきます。この file に
+既にある `@@computed:` sentinel（`is_opaque_object_key`）に記録して、
+名前の予約だけを外しました。
+
+### H3 の修正が非終了を持ち込んだ（自作のバグ、既にあった memo を使わなかった）
+
+「literal の entry で止めず、記録された write も辿る」を入れた直後、
+corpus が**止まりました**。CPU 競合だと 20 分ほど誤解していましたが、
+`ps` を見ると `case36-annotated-boundary` を処理中の mtsc が 3 本、
+最長 25 分。5 行に最小化できます:
+
+```ts
+const ledger = { n: 0 };
+export function bump() { ledger.n = ledger.n + 1; return ledger.n }
+```
+
+`ledger.n` を escape すると write `ledger.n + 1` を escape し、その左辺は
+また `ledger.n`。`ledger.n = 1` なら 10 ms、`ledger.n + 1` なら永久。
+`case36` はまさにこの increment を持っています。
+
+止めるのは `(receiver, key)` を key にした memo で、**同じ file の
+20 行先に既にあったもの**です——`surface_should_walk` の doc comment が
+「これが無いと実コードで終わらない。neverthrow は 5 file 33 KB で
+7 分たっても終わらなかった」と、この失敗モードそのものを説明しています。
+それを使わなかったのが原因です。
+
+memo の depth keying は保守側に効きます（浅い到達は再walk、深い到達
+——cycle がそれ——は停止）。1 点だけ順序が要る: `resolved` は memo が
+declineする**前に** entry 走査から立てます。さもないと 2 回目の到達が
+下の widening に落ちて、cycle が hang ではなく**過剰予約**に化けます。
+
+unit test を 2 つ入れました。2 つ目が本題で、**key だけを key にした
+memo では捕まらない相互形**です（`a.toB = b; b.toA = a`——どちらの
+write も自分の key を読んでいない）。
+
+### case60 の設計をやり直した: external 経路は別の解析だった
+
+初稿は 6 つの holder の内側のオブジェクトを **`--external` module** に
+渡して、そこで `param` を呼んでいました。corpus で **fail** しました——
+そしてそれは正しい失敗でした。external call に値を渡す経路は
+**off-bundle reachability**（`class_members_reachable_off_bundle`）で、
+export surface とは別の解析です。しかもそちらは escape する値を
+**holder に帰属**させ、その中に入っている class には帰属させません。
+つまり初稿は bug を再現してはいたが、**修正について何も証明していな
+かった**——export surface を一度も通っていないので。
+
+draft 2 は driver 方式にしましたが、**修正を revert しても pass
+しました**——検出力ゼロ、この repo が何度も記録している
+coverage-shaped そのものです。原因は自分が置いた **control class**
+でした。`prop_assigns` は receiver の**名前**で引くので、`this` は
+bundle 内の全 class の**和**になります（`surface_escape_class` の
+comment 自身がそう書いています）。holder 6 つが payload class を
+共有していたため、control の素の
+`this.slot = new Payload(…)`——最初から通っていた唯一の綴り——が
+その class に到達し、**6 つ全員の method を keep していました**。
+
+draft 3 では **holder ごとに専用の payload class と専用の method 名**
+を持たせました。index されない綴りは何にも到達せず、その holder の
+method だけが死にます。`param` を呼ぶのは `driver.mjs`——bundle の
+**外**、コンパイル後です。bundle の中にそれらの名前は 1 つも無いので
+static access collector では pin できず、`--external` を使わないので
+off-bundle reachability も何も足しません。**export surface だけ**が
+keep できます。それが試験対象の経路です。
+
+`bag.counter = bag.counter + 1` も case に入れてあります（上の非終了）。
+
+重要なのは **reference leg が検出している**ことです。この削除は mtsc の
+**全 leg で起きる**ので、mtsc 2 本を比べても一致します——CLAUDE.md が
+何度も記録している self-comparison の失敗そのもので、5 つの
+scope-narrowing bug がそれで数千 seed を生き延びました。ここで比較相手に
+なっているのは Node が同じ TypeScript を走らせた結果です。
+
+この case が**できないこと**も書いておきます。「消しすぎていない」側は
+値比較では見られません（reference leg には method があるので、absence は
+観測できない）。そちらは `just verify-dce-coverage`（marker が消えている
+ことを assert する）と type-aware corpus の byte 差が見ます。
