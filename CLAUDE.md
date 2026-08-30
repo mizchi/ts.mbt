@@ -855,7 +855,40 @@ product surfaces now.
   they are covered by construction and by a unit test at the pass
   boundary, and are NOT claimed to be broken.
   `fixtures/mangle-safety/case55-inlined-value-free-variable` pins it
-  under Node and fails when the value half is mutated off. It costs
+  under Node and fails when the value half is mutated off.
+  The SEVENTH instance is in the LINKER, and it is the last place the
+  question had not been asked. Phase 2 records
+  `subs[local_alias] = resolved` and phase 3 rewrites `Var(local_alias)`
+  to `Var(resolved)` inside the importing module; the walker tracks
+  shadowing of the name it REPLACES and cannot track shadowing of the
+  name it SUBSTITUTES, because that name is not in the map it narrows.
+  `@sprawlens/viz`'s `App.tsx` has
+  `import { parentFileOf as contractParentFileOf }` and, in the same
+  component body, a local `const parentFileOf` — correct as written,
+  two different names. `contractParentFileOf` appears ZERO times in the
+  bundle: every use became `parentFileOf`, which there is the local
+  `const`, and `ReferenceError: Cannot access 'parentFileOf' before
+  initialization` under plain `mtsc --bundle` with no optimization flag.
+  A 265-file preact application bundled and could not run. The other
+  half of the same capture is silent — when the shadowing declaration
+  has already initialized there is no TDZ, just the local function's
+  answer instead of the import's, which `--verify` cannot see either.
+  The fix is NOT a scope walk at the rewrite site: a walk has to model
+  every binder form and the cost of missing one is this bug returning
+  quietly. Instead, phase 2 already computes `resolved != local_alias`,
+  which IS the hazard condition, so a phase 1.5 forces the exporting
+  binding to a MINTED name whenever it holds — `name$N` is not a name
+  source code declares, so no scope can shadow it and no analysis is
+  needed to know that. Only bindings imported under a different alias
+  move, and with `--mangle` the names are replaced anyway, so the
+  corpus is byte-identical.
+  `fixtures/mangle-safety/case57-aliased-import-shadowed-target` runs
+  four shapes under Node — the TDZ form, the silent wrong-value form, a
+  PARAMETER named after the target (no block declares it, the same trap
+  as `case43`), and an unshadowed control that must still reach the
+  import so the fix cannot be "stop substituting" — and fails under
+  mutation. `@sprawlens/viz` now goes 875,544 -> 357,712 bytes (59%)
+  and renders an identical DOM optimized and not. It costs
   nothing: `typescript.js` byte-identical, the nine type-aware targets
   −76 bytes net (typebox +327 and excalidraw +150 against ts-pattern
   −345, immer −192, hono −16, because fewer inlines leave the

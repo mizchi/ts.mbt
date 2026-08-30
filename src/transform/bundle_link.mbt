@@ -188,6 +188,122 @@ fn link_module_graph(
   // place the object is BUILT, an entry whose value has no runtime
   // binding cannot be emitted, whichever path put it there. Fail-closed
   // by construction rather than by enumeration.
+  // ---- Phase 1.5: make every SUBSTITUTED target name unshadowable ----
+  //
+  // Phase 2 records `subs[local_alias] = resolved` and phase 3 rewrites
+  // `Var(local_alias)` to `Var(resolved)` inside the importing module.
+  // The walker tracks shadowing of the name it REPLACES — an inner scope
+  // that re-binds `local_alias` keeps its own binding — and it cannot
+  // track shadowing of the name it SUBSTITUTES, because that name is not
+  // in the map it narrows.
+  //
+  // So a target name the importing module happens to declare in a nested
+  // scope captures the reference. `@sprawlens/viz`'s `App.tsx`:
+  //
+  //   import { parentFileOf as contractParentFileOf } from "@sprawlens/schema";
+  //   const moduleOfId = (id) => currentModuleIdOf()(contractParentFileOf(id));
+  //   ...
+  //   const parentFileOf = (id) => symbolMetaRef.current.get(id)?.fileId ?? …;
+  //
+  // Both inside one component body, and correct as written: the aliased
+  // import and the local `const` are different names. `contractParentFileOf`
+  // appears ZERO times in the bundle — every use became `parentFileOf`,
+  // which at that point resolves to the local `const` and is in TDZ when
+  // the arrow runs. `ReferenceError: Cannot access 'parentFileOf' before
+  // initialization`, under plain `mtsc --bundle`, no optimization flag.
+  //
+  // Seventh instance of the scope-narrowing family and the last place it
+  // had not been asked: `call_inline`, `as_const_inline`,
+  // `const_enum_inline`, `predicate_inline`, `switch_fold` and
+  // `type_fold` all resolve a table by name and narrow; the LINKER
+  // resolves an import by name and did not.
+  //
+  // The fix is not a scope walk at the rewrite site. A walk has to model
+  // every binder form, and the cost of missing one is this bug returning
+  // silently. Instead: when the substituted name differs from the name it
+  // replaces, force the exporting binding to a MINTED name. `name$N` is
+  // not a name source code declares, so no scope can shadow it and no
+  // analysis is needed to know that. `taken` already guarantees the mint
+  // is unique at the top level.
+  //
+  // Only bindings imported under a different alias are touched, and with
+  // `--mangle` on the names are replaced anyway, so the corpus is
+  // byte-identical.
+  let minted_unique : Map[String, Bool] = {}
+  for path, node in modules {
+    for entry in rename_per_module.get(path).unwrap_or({}) {
+      minted_unique[entry.1] = true
+    }
+    ignore(node)
+  }
+  // final name -> (declaring module, its original local name), so a
+  // target name can be traced back to the binding that has to move.
+  let owner_of_final : Map[String, (String, String)] = {}
+  for path, node in modules {
+    let renames = rename_per_module.get(path).unwrap_or({})
+    for name in collect_top_level_decl_names(node.block) {
+      owner_of_final[renames.get(name).unwrap_or(name)] = (path, name)
+    }
+  }
+  for path in order {
+    let m = match modules.get(path) {
+      Some(node) => node
+      None => continue
+    }
+    for imp in m.import_decls {
+      if imp.type_only || imp.side_effect_only {
+        continue
+      }
+      let dep_path = match m.resolved_imports.get(imp.module_spec) {
+        Some(p) => p
+        None => continue
+      }
+      let pairs : Array[(String, String)] = []
+      match imp.default_binding {
+        Some(alias) => pairs.push(("default", alias))
+        None => ()
+      }
+      for nb in imp.named_bindings {
+        pairs.push((nb.0, nb.1))
+      }
+      for pair in pairs {
+        let resolved = match
+          resolve_export(
+            modules,
+            rename_per_module,
+            namespace_local_renames,
+            dep_path,
+            pair.0,
+          ) {
+          Some(r) => r
+          None => continue
+        }
+        // Same name in and out: phase 3 substitutes nothing, so the
+        // importing module's own scopes decide, exactly as in the source.
+        if resolved == pair.1 {
+          continue
+        }
+        if minted_unique.contains(resolved) {
+          continue
+        }
+        let (owner_path, owner_local) = match owner_of_final.get(resolved) {
+          Some(o) => o
+          // Not a top-level binding of any module — a synthesized
+          // namespace object or a CJS var, both of which already carry a
+          // minted name or are handled by their own tables.
+          None => continue
+        }
+        let fresh = mint_unique_name(resolved, taken, suffix_counter)
+        suffix_counter = suffix_counter + 1
+        taken[fresh] = true
+        minted_unique[fresh] = true
+        let owner_renames = rename_per_module.get(owner_path).unwrap_or({})
+        owner_renames[owner_local] = fresh
+        rename_per_module[owner_path] = owner_renames
+        owner_of_final[fresh] = (owner_path, owner_local)
+      }
+    }
+  }
   let runtime_bindings : Map[String, Bool] = {}
   for path, node in modules {
     let decls : Map[String, Bool] = {}

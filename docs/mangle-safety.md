@@ -726,3 +726,72 @@ pass 境界の unit test（`call_inline_wbtest.mbt`）を足しています。ma
 ts-pattern −345、immer −192、hono −16）。inline を減らすと後続の
 single-use binding inliner と treeshake が別の形を見て、しばしば得をする
 ためです。`inline` phase の時間も 397 → 351 ms で悪化していません。
+
+## case57: alias された import の代入先が、参照地点で shadow されている
+
+これが scope narrowing 族の **7 件目**で、最後まで聞かれていなかった場所
+——**linker** です。
+
+linker は `subs[local_alias] = resolved` を記録し、importing module の中で
+`Var(local_alias)` を `Var(resolved)` に書き換えます。書き換え walker は
+**置き換えられる側**の shadow を追跡します（内側 scope が alias を再束縛
+すればそちらが勝つ）。**代入する側**は追跡できません——その名前は walker が
+narrow する map に入っていないので。
+
+`@sprawlens/viz` の `App.tsx`（1 つの component body の中）:
+
+```ts
+import { parentFileOf as contractParentFileOf } from "@sprawlens/schema";
+const moduleOfId = (id) => currentModuleIdOf()(contractParentFileOf(id));
+...
+const parentFileOf = (id) => symbolMetaRef.current.get(id)?.fileId ?? …;
+```
+
+source は正しい——alias された import と局所 `const` は別名です。
+ところが bundle には **`contractParentFileOf` が 0 回**しか出てこない。
+全部 `parentFileOf` になり、その位置では局所 `const` に解決され、
+arrow が render 中に走った時点でまだ TDZ:
+
+```
+ReferenceError: Cannot access 'parentFileOf' before initialization
+```
+
+**素の `mtsc --bundle --no-check`**、最適化 flag なし。265 file の preact
+アプリが「bundle はできるが動かない」状態でした。
+
+失敗の形は 2 つあり、見え方が全く違います:
+
+| 形 | 症状 | `--verify` |
+| --- | --- | --- |
+| shadowing 宣言がまだ走っていない | `ReferenceError`（TDZ） | 見えない |
+| もう走っている | **静かに違う値**（局所関数の答え） | 見えない |
+
+どちらも名前は解決するので verifier には見えません。
+
+### 修正: 書き換え地点で scope を歩くのではなく、代入する名前を mint する
+
+phase 2 は `resolved != local_alias` を**既に計算しています**——それが
+そのまま危険条件です。同名なら phase 3 は何も置換せず、importing module
+の scope が source どおり決める。異なるなら、代入先を **`name$N`**（mint
+名）に強制します。`name$N` は source が宣言する名前ではないので、
+どの scope も shadow できず、それを知るための解析が要りません。
+`taken` が top level の一意性を既に保証しています。
+
+書き換え地点で scope を歩く案は**採りませんでした**。walker が binder の
+形を全部モデルする必要があり、1 つ漏らしたときの代償がこのバグの静かな
+再発だからです。mint 名なら構造的に安全です。
+
+phase 1.5 として phase 1 の直後（`runtime_bindings` を組む前）に置きます。
+触るのは「どこかで別 alias で import されている binding」だけで、
+`--mangle` を付ければ名前はどうせ置き換わるので **corpus は byte 完全一致**。
+
+`fixtures/mangle-safety/case57-aliased-import-shadowed-target` が 4 つ並べ
+ます: TDZ 形、静かに違う値の形、**parameter** で shadow する形（block 宣言
+ではないので block レベルの検査では見えない、`case43` と同じ罠）、そして
+shadow されていない対照（「置換をやめる」修正では落ちる）。
+mutation self-check を通ります。
+
+そして実アプリが動くようになりました: `@sprawlens/viz`
+**875,544 → 357,712 byte（59% 減）**、最適化前と最適化後で
+**同一の DOM を render**（root 27 child、body 287 byte、digest 一致、
+unhandled rejection 0）。
