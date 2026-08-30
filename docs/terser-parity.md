@@ -303,3 +303,55 @@ proxy は測定ではなく「どれを本気で測る価値があるか」を�
 | comparisons（`===`） | 1,037 / 968 | わずか |
 
 **rule は第 1 表と第 2 表の両方が言ったときだけ移植の価値がある。**
+
+### `function` 516 vs 102 の正体: mtsc が arrow を function に戻していた
+
+第 2 表で mtsc と terser が 5 倍離れていた唯一の項目です。追ったら
+**未移植 rule ではなく mtsc 自身の退行**でした。
+
+| excalidraw | `function` | `=>` |
+| --- | --- | --- |
+| unopt (`mtsc --bundle`) | 135 | 1,403 |
+| mtsc (full pipeline) | **516** | **761** |
+
+source の arrow 642 個のうち約 381 個が `function` になっています。
+`peep_decl_rhs` が block-body arrow を `FuncExpr` に変換していて、理由が
+2 つ書かれていて**両方間違っていました**。
+
+**「block arrow は同等の function expression より短くなることはない」** —
+単独の宣言では引き分けです（`function f(a,b){B}` と `let f=(a,b)=>{B}` は
+同じ長さ、単一の素な parameter なら arrow が 2 byte 勝ち）。しかし
+**連続する宣言は `let` を共有する**のに、function 宣言は毎回
+`function ` を丸ごと払います。そして join を行う `fold.mbt` の pass は
+`FuncExpr` 初期化子を**意図的に除外**します——つまり変換は arrow を
+join の射程外に追い出していました。実測 **1 site あたり 6.9 byte**。
+
+**「bundle での TDZ を hoisting で避ける」** — 入力が既に arrow なので、
+元の module で宣言前に呼ぶことは TDZ で不可能です。bundler の module
+順序は ESM の評価順と同じ。hoisting が救うのは初期化中に跨いで呼ぶ
+**import 循環**だけで、それは `const` arrow なら ESM 自身が拒否します。
+つまり変換は**unbundled では動かないコードを動かしていた**。削除で ESM の
+挙動に戻ります。
+
+削除の結果（9 bundle、悪化した target なし）:
+
+| target | before | after | 差 |
+| --- | --- | --- | --- |
+| excalidraw | 279,230 | **276,601** | **−2,629** |
+| hono | 21,139 | 21,007 | −132 |
+| remeda | 28,521 | 28,459 | −62 |
+| ts-pattern | 8,567 | 8,509 | −58 |
+| neverthrow | 5,166 | 5,144 | −22 |
+| immer | 20,383 | 20,367 | −16 |
+| valibot | 86,979 | 86,973 | −6 |
+| **合計** | | | **−2,925** |
+
+`function` は繰り返しの多い長い token なので gzip が得意なはずで、実際
+gzip の取り分は小さい（excalidraw −229、合計 −250 前後）。それでも
+**符号は raw と同じ**なので採用しました。
+
+`--rules` 第 1 表がこの rule を安く値付けしていたことにも意味があります
+（`arrows` は corpus 全体で +311、excalidraw では 0）。**terser 側で安い
+のは terser がその変換をしていないから**で、mtsc 側で高いのは mtsc が
+逆向きの変換をしていたからです。第 2 表が構造カウントを両者で並べるのは
+このためです。

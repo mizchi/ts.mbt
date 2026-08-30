@@ -13,6 +13,20 @@ fn peep_one(src : String) -> String raise {
 }
 
 ///|
+/// Fold then peephole, which is the order `bundle.mbt` uses. Needed
+/// wherever a peephole result depends on something fold produced — the
+/// declarator joining, for instance.
+fn fold_then_peep(src : String) -> String raise {
+  let block = @parser.parse_block_from_source(src)
+  let out = peephole_block(fold_block(block))
+  let e = Emitter::new(pretty=false)
+  for s in out.stmts {
+    emit_stmt(e, s)
+  }
+  e.to_string()
+}
+
+///|
 fn minify_one(src : String) -> String raise {
   let block = @parser.parse_block_from_source(src)
   let folded = peephole_block(block)
@@ -1943,4 +1957,63 @@ test "peephole: a switch with a pure scrutinee still lowers to ifs" {
     "function f() { switch (k) { case 0: return 1; case 1: return 2; default: ; } }\n",
   )
   assert_false(out.contains("switch"), msg="got: \{out}")
+}
+
+///|
+/// A block-body arrow assigned to a name STAYS an arrow.
+///
+/// `peep_decl_rhs` used to convert it to a `FuncExpr` so the emitter
+/// would print `function f(…){…}`, on two grounds that were both wrong:
+/// that the function form is never longer (false once the declarations
+/// join under one `let`), and that hoisting avoids a TDZ problem in
+/// bundles (a hazard that cannot exist for an input that was already an
+/// arrow — ESM would reject the same code unbundled).
+///
+/// It was turning 642 of excalidraw's 1,403 source arrows into
+/// `function`, which is why mtsc emitted 516 `function` keywords where
+/// terser emitted 102. Removing it: -2,925 bytes across nine real
+/// bundles, no target worse.
+///
+/// The two directions this must NOT do are checked alongside, because
+/// both are unsound rather than merely expensive: a function expression
+/// has a dynamic `this` and an arrow's is lexical, so neither conversion
+/// is a spelling choice.
+test "peephole: a block-body arrow is not rewritten to a function" {
+  // Two statements, so nothing folds it to a concise arrow first.
+  // Asserted as "no `function` appeared" rather than by the exact
+  // spelling of the arrow: how the emitter parenthesizes a single
+  // parameter is a separate rule with its own tests, and pinning it here
+  // would make this test fail for an unrelated reason.
+  let out = minify_one(
+    "const f = (a) => { sink(a); return a + 1; };\nsink(f(1));\n",
+  )
+  assert_true(out.contains("=>"))
+  assert_false(out.contains("function"))
+  // Several in a row share one `let`, which is where the bytes are.
+  //
+  // Through FOLD as well as peephole, because the declarator joining
+  // that makes the arrow form cheaper lives in `fold.mbt` — and it
+  // skips `FuncExpr`-initialised declarations by design, which is
+  // exactly why the conversion cost bytes: it moved these out of
+  // join's reach.
+  let many = fold_then_peep(
+    "const f = (a) => { sink(a); return a + 1; };\nconst g = (b) => { sink(b); return b + 2; };\nconst h = (c) => { sink(c); return c + 3; };\nsink(f(1) + g(2) + h(3));\n",
+  )
+  assert_false(many.contains("function"))
+  // One `let` for the three arrows, not three.
+  let lets = many.split("let ").length() - 1
+  assert_eq(lets, 1)
+  // `this` in the body was always excluded, and still is: an arrow's
+  // `this` is lexical, so the conversion would have changed meaning.
+  // With the conversion gone it stays an arrow for that reason too.
+  let with_this = minify_one(
+    "const f = (a) => { sink(this.x); return a; };\nsink(f(1));\n",
+  )
+  assert_true(with_this.contains("=>"))
+  // The opposite direction is the unsound one and must not happen
+  // either: a named `function` expression keeps its form.
+  let named = minify_one(
+    "const f = function (a) { sink(this.x); return a; };\nsink(f(1));\n",
+  )
+  assert_true(named.contains("function"))
 }

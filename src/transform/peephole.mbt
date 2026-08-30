@@ -1126,12 +1126,35 @@ fn stmt_uses_super(s : @ast.TsStmt) -> Bool {
 // Peephole a declaration RHS with special handling for named function bindings.
 // Goals:
 //   1. `let f = function(){}` must NOT become an arrow — keep FuncExpr so
-//      try_emit_function_decl can hoist it as `function f(){}`.
-//   2. `let f = (...) => { block }` (block-body arrow) also converts to FuncExpr
-//      for the same hoisting reason; block arrows are never shorter than the
-//      equivalent function expression, and hoisting avoids TDZ issues in bundles.
-//   3. `let f = x => x+1` and `let f = (x) => { return x+1; }` stay arrows
-//      after peep_expr folds them to concise form (smaller, no hoisting needed).
+//      try_emit_function_decl can hoist it as `function f(){}`. Converting
+//      it would also be unsound: a function expression's `this` is dynamic
+//      and an arrow's is lexical.
+//   2. `let f = x => x+1` and `let f = (x) => { return x+1; }` stay arrows
+//      after peep_expr folds them to concise form.
+//   3. A BLOCK-body arrow stays an arrow too. It used to be converted to a
+//      FuncExpr so the emitter would print `function f(…){…}`, on two
+//      stated grounds, and both were wrong.
+//
+//      "Block arrows are never shorter than the equivalent function
+//      expression" is false once the declarations JOIN. A lone
+//      declaration is a wash — `function f(a,b){B}` and
+//      `let f=(a,b)=>{B}` are the same length, and the arrow wins 2 for a
+//      single simple parameter — but a run of them shares one `let`,
+//      while function declarations each pay `function ` in full.
+//      Measured across nine real bundles: -2,925 bytes, no target worse,
+//      excalidraw alone -2,629 (381 sites, ~6.9 bytes each). It was
+//      turning 642 of excalidraw's 1,403 source arrows into `function`,
+//      which is why mtsc emitted 516 `function` keywords where terser
+//      emitted 102.
+//
+//      "Hoisting avoids TDZ issues in bundles" describes a hazard that
+//      cannot exist here: the input is already an ARROW, so nothing in the
+//      original module could legally call it before its declaration, and
+//      the bundler orders modules the way ESM evaluates them. The one
+//      case hoisting would rescue is an import CYCLE that calls across
+//      during initialization — which ESM itself rejects for a `const`
+//      arrow, so the conversion was making code work that does not work
+//      unbundled. Removing it restores ESM's behaviour.
 
 ///|
 fn peep_decl_rhs(
@@ -1153,34 +1176,7 @@ fn peep_decl_rhs(
       _ => ()
     }
   }
-  let result = peep_expr(rhs, ctx)
-  if name != "" {
-    match result {
-      // Block-body arrow after peephole: convert to FuncExpr for hoisting.
-      // Concise arrows (ArrowExpr body) were either already concise or folded
-      // from `{return expr}` — those stay arrows.
-      @ast.TsExpr::ArrowFunc(
-        params,
-        ret,
-        @ast.TsArrowBody::ArrowBlock(blk),
-        is_async
-      ) if !(block_uses_super(blk) || block_uses_this(blk)) =>
-        @ast.TsExpr::FuncExpr({
-          name: "",
-          type_params: [],
-          type_param_bounds: [],
-          const_type_params: [],
-          params,
-          return_type: ret,
-          body: blk,
-          is_generator: false,
-          is_async,
-        })
-      _ => result
-    }
-  } else {
-    result
-  }
+  peep_expr(rhs, ctx)
 }
 
 ///|
