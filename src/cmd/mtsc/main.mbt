@@ -613,6 +613,25 @@ async fn mtsc_load_bundle_files(
   let mut parse_micros = 0.0
   let mut read_micros = 0.0
   let mut resolve_micros = 0.0
+  // The sibling `.d.ts` scan, separately. It was inside the
+  // "module graph walk" residual, and it is not a walk at all: next to
+  // `node_modules/typescript/lib/typescript.js` there are 98 `.d.ts`
+  // files totalling 3.2 MB, and this read and fully parsed every one of
+  // them. That is what a residual hides.
+  let mut ambient_micros = 0.0
+  // The import / re-export edge walk, which is what the "module graph
+  // walk" residual is actually named after. On a 95-file target it was
+  // 310 ms with no ambient `.d.ts` in sight, so the label had to be
+  // checked rather than believed.
+  let mut edge_micros = 0.0
+  // Bare-specifier resolution (`react`, `roughjs/bin/math`), separately
+  // from the relative path math above it. Both are "module resolution",
+  // and they are not the same cost: one is arithmetic over a cached
+  // directory listing, the other walks `node_modules` and reads
+  // `package.json` `exports` / `typesVersions`. Once `cli: resolve
+  // module paths` became the largest row on a 95-file target there was
+  // no way to act on it without knowing which half it was.
+  let mut bare_micros = 0.0
   // Time every `mtsc_resolve_existing` call, cache hits included, so the
   // row measures what resolution costs the compile rather than what it
   // costs on a miss.
@@ -807,6 +826,17 @@ async fn mtsc_load_bundle_files(
         type_props[n] = true
       }
     }
+    // Bracketed, minus the resolution accumulated inside it. The first
+    // version of this span was a plain wall-clock bracket while
+    // `resolve_micros` accumulated sub-spans INSIDE it, so the two
+    // OVERLAPPED: the edge walk read 358 ms and looked like the largest
+    // item on a 95-file target, when almost all of it was the module
+    // resolution already reported on its own row. An overlapping span
+    // is not a small error — it is a wrong number that reads like a
+    // finding, and it sent this investigation at the wrong function.
+    // Every row here is now disjoint, so they sum.
+    let edges_started = @bench.monotonic_clock_start()
+    let resolve_before_edges = resolve_micros + bare_micros
     for imp in mb.imports {
       // A type-only import contributes no runtime code, so the bundler
       // skips it — but the CHECKER needs the module that declares the
@@ -858,7 +888,10 @@ async fn mtsc_load_bundle_files(
       if aliases.contains(spec) {
         continue
       }
-      match @parser.resolve_runtime_module_specifier(resolved, spec) {
+      let bare_started = @bench.monotonic_clock_start()
+      let bare = @parser.resolve_runtime_module_specifier(resolved, spec)
+      bare_micros = bare_micros + @bench.monotonic_clock_end(bare_started)
+      match bare {
         Some(found) => {
           aliases[spec] = found
           edges.push({
@@ -899,7 +932,10 @@ async fn mtsc_load_bundle_files(
       if aliases.contains(spec) {
         continue
       }
-      match @parser.resolve_runtime_module_specifier(resolved, spec) {
+      let bare_started = @bench.monotonic_clock_start()
+      let bare = @parser.resolve_runtime_module_specifier(resolved, spec)
+      bare_micros = bare_micros + @bench.monotonic_clock_end(bare_started)
+      match bare {
         Some(found) => {
           aliases[spec] = found
           edges.push({
@@ -912,6 +948,9 @@ async fn mtsc_load_bundle_files(
         None => ()
       }
     }
+    edge_micros = edge_micros +
+      @bench.monotonic_clock_end(edges_started) -
+      (resolve_micros + bare_micros - resolve_before_edges)
   }
   // Ambient declaration files (`declare const MyGlobal: …`) belong to the
   // program even though nothing imports them — that is the whole point of
@@ -919,6 +958,7 @@ async fn mtsc_load_bundle_files(
   // `include`; with no tsconfig to read, take the `.d.ts` files sitting in
   // the entry's own directory, which is where the `env.d.ts` /
   // `globals.d.ts` convention puts them.
+  let ambient_started = @bench.monotonic_clock_start()
   for ambient in mtsc_sibling_declaration_files(entry_path) {
     if files.contains(ambient) {
       continue
@@ -929,23 +969,42 @@ async fn mtsc_load_bundle_files(
       _ => continue
     }
     files[ambient] = source
-    let parsed = try @parser.Parser::from_source(source).parse_module() catch {
-      e => Err(e)
-    } noraise {
-      m => Ok(m)
-    }
-    match parsed {
-      Ok(module_) =>
-        for n in @transform.type_declared_property_names(module_) {
-          type_props[n] = true
-        }
-      Err(_) => ()
+    // The PARSE is only here to harvest `type_props`, and only
+    // `--reserve-typed-props` reads that — the same gate the main loop
+    // already applies to its own second parse, which this scan never
+    // got. Next to `typescript.js` that is 98 files and 3.2 MB parsed
+    // to fill a map nobody was going to look at. Fourth time in this
+    // pipeline that a condition was applied in one place and not in the
+    // second consumer.
+    //
+    // The READ stays unconditional: `files[ambient]` is what puts an
+    // ambient declaration into the program for the checker, which is
+    // the point of the scan (`case03`).
+    if want_type_props {
+      let parsed = try
+        @parser.Parser::from_source(source).parse_module()
+      catch {
+        e => Err(e)
+      } noraise {
+        m => Ok(m)
+      }
+      match parsed {
+        Ok(module_) =>
+          for n in @transform.type_declared_property_names(module_) {
+            type_props[n] = true
+          }
+        Err(_) => ()
+      }
     }
   }
+  ambient_micros = ambient_micros + @bench.monotonic_clock_end(ambient_started)
   parse_split.push(tokenize_micros)
   parse_split.push(parse_micros)
   parse_split.push(read_micros)
   parse_split.push(resolve_micros)
+  parse_split.push(ambient_micros)
+  parse_split.push(edge_micros)
+  parse_split.push(bare_micros)
   Ok(())
 }
 
@@ -1345,20 +1404,25 @@ async fn main {
     // Report the lexer and the recursive descent separately, and keep
     // the remainder (disk reads, path resolution) as its own row.
     let load_total = @bench.monotonic_clock_end(load_started)
-    if parse_split.length() == 4 {
+    if parse_split.length() == 7 {
       cli_timer.record("cli: tokenize", parse_split[0])
       cli_timer.record("cli: parse (recursive descent)", parse_split[1])
       cli_timer.record("cli: read + decode files", parse_split[2])
-      cli_timer.record("cli: resolve module paths", parse_split[3])
-      // Whatever the four measured spans do not account for: queue
-      // bookkeeping, the import walk, the sibling `.d.ts` scan.
-      let rest = load_total -
-        parse_split[0] -
-        parse_split[1] -
-        parse_split[2] -
-        parse_split[3]
+      cli_timer.record("cli: resolve relative paths", parse_split[3])
+      cli_timer.record("cli: ambient .d.ts scan", parse_split[4])
+      cli_timer.record("cli: import edge walk", parse_split[5])
+      cli_timer.record("cli: resolve bare specifiers", parse_split[6])
+      // Whatever the measured spans do not account for: queue
+      // bookkeeping, mostly. The sibling `.d.ts` scan used to be in
+      // here and was most of it — on `typescript.js` it read and parsed
+      // 98 files and 3.2 MB. A residual is a place to look, not an
+      // answer, and this one was labelled after the wrong thing.
+      let mut rest = load_total
+      for span in parse_split {
+        rest = rest - span
+      }
       if rest > 0.0 {
-        cli_timer.record("cli: module graph walk", rest)
+        cli_timer.record("cli: load, unattributed", rest)
       }
     } else {
       cli_timer.record("cli: read + parse files", load_total)
@@ -1542,8 +1606,10 @@ async fn main {
     }
     if opts.timing {
       // The bundle's own phases, then the difference — what
-      // `bundle_modules` spent outside any instrumented pass (linking,
-      // escape analysis, emit).
+      // `bundle_modules` spent outside any instrumented pass. Linking,
+      // escape analysis and the emit all used to be in here and all
+      // now have rows of their own; what is left is the statement
+      // concatenation and the per-pass bookkeeping between phases.
       let mut inner = 0.0
       for t in out.timings {
         cli_timer.record(t.0, t.1)
@@ -1551,7 +1617,7 @@ async fn main {
       }
       let unattributed = bundle_micros - inner
       if unattributed > 0.0 {
-        cli_timer.record("bundle: link + escape + emit", unattributed)
+        cli_timer.record("bundle: unattributed", unattributed)
       }
       for line in cli_timer.report() {
         println(line)

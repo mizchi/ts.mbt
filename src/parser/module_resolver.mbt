@@ -709,10 +709,19 @@ fn append_resolution_candidates(
 }
 
 ///|
+/// `@fs.kind` answers, memoized. A compile is one process over a
+/// snapshot of the tree, so nothing here can go stale within a run.
+let path_kinds : Map[String, @fs.FileKind] = {}
+
+///|
 async fn path_kind(path : String) -> @fs.FileKind {
-  @fs.kind(path) catch {
-    _ => @fs.FileKind::Unknown
+  match path_kinds.get(path) {
+    Some(k) => return k
+    None => ()
   }
+  let k = @fs.kind(path) catch { _ => @fs.FileKind::Unknown }
+  path_kinds[path] = k
+  k
 }
 
 ///|
@@ -963,13 +972,60 @@ fn resolve_types_versions_targets(
 }
 
 ///|
+/// File contents by path, memoized, `None` for a file that cannot be
+/// read. Same snapshot argument as `path_kinds` above.
+///
+/// This is the resolver's real cost. `resolve_tsconfig_specifier` runs
+/// per bare specifier per importer, and it re-read every config from
+/// disk each time — twice per level, once for `paths` and again for
+/// `extends`. On Excalidraw's 95 files that is 164 bare specifiers, each
+/// walking a two-level `extends` chain, and it was 277 ms of a 1,536 ms
+/// compile.
+///
+/// The first attempt at this was a memo on the resolution ANSWER keyed
+/// on (mode, importing file, specifier). It measured exactly zero, and
+/// the reason is worth keeping: the key has to include the importer,
+/// because a nested `node_modules` can resolve one specifier two ways —
+/// so 68 importers of `clsx` are 68 distinct keys and share nothing. The
+/// repeats were real and the memo could not see them. What repeats
+/// across importers is the WORK, not the question.
+let read_file_texts : Map[String, String?] = {}
+
+///|
+async fn read_text_file(path : String) -> String? {
+  match read_file_texts.get(path) {
+    Some(v) => return v
+    None => ()
+  }
+  let v : String? = Some(@fs.read_file(path).text()) catch { _ => None }
+  read_file_texts[path] = v
+  v
+}
+
+///|
+/// `@fs.realpath`, memoized. Same reason: it is a syscall per candidate
+/// package root, and the roots repeat across importers.
+let real_paths : Map[String, String] = {}
+
+///|
+async fn cached_realpath(path : String) -> String {
+  match real_paths.get(path) {
+    Some(v) => return v
+    None => ()
+  }
+  let v = @fs.realpath(path) catch { _ => path }
+  real_paths[path] = v
+  v
+}
+
+///|
 async fn read_package_json(package_root : String) -> String? {
-  let canonical_root = @fs.realpath(package_root) catch { _ => package_root }
+  let canonical_root = cached_realpath(package_root)
   let path = normalize_path(join_path(canonical_root, "package.json"))
   if !file_exists(path) {
     return None
   }
-  Some(@fs.read_file(path).text() catch { _ => return None })
+  read_text_file(path)
 }
 
 ///|
@@ -977,8 +1033,9 @@ async fn read_nearest_package_json(base_path : String) -> (String, String)? {
   match find_nearest_ancestor_file(base_path, "package.json") {
     Some(package_json_path) => {
       let package_root = dirname(package_json_path)
-      let package_json = @fs.read_file(package_json_path).text() catch {
-        _ => return None
+      let package_json = match read_text_file(package_json_path) {
+        Some(t) => t
+        None => return None
       }
       Some((package_root, package_json))
     }
@@ -1032,7 +1089,10 @@ async fn resolve_tsconfig_specifier_in(
     None => ()
   }
   let tsconfig_dir = dirname(tsconfig_path)
-  let src = @fs.read_file(tsconfig_path).text() catch { _ => return None }
+  let src = match read_text_file(tsconfig_path) {
+    Some(t) => t
+    None => return None
+  }
   match find_object_field_value_range(src, 0, src.length(), "extends") {
     Some((start, _)) =>
       match parse_json_string_at(src, start) {
@@ -1060,8 +1120,9 @@ async fn resolve_tsconfig_specifier_here(
   mode : ModuleResolutionMode,
 ) -> String? {
   let tsconfig_dir = dirname(tsconfig_path)
-  let tsconfig_src = @fs.read_file(tsconfig_path).text() catch {
-    _ => return None
+  let tsconfig_src = match read_text_file(tsconfig_path) {
+    Some(t) => t
+    None => return None
   }
   match find_named_object_range(tsconfig_src, "compilerOptions") {
     Some((compiler_start, compiler_end)) => {
@@ -1439,9 +1500,7 @@ async fn resolve_module_specifier(
   match resolve_bare_specifier(normalized_base, specifier, mode) {
     Some(path) => Some(path)
     None => {
-      let real_base = @fs.realpath(normalized_base) catch {
-        _ => normalized_base
-      }
+      let real_base = cached_realpath(normalized_base)
       if real_base == normalized_base {
         None
       } else {

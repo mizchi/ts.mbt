@@ -1388,16 +1388,107 @@ excalidraw で `class-method-dce` は 106 ms 残ります——そこでは早�
 全メソッドが静的に読まれる場合は両方残る、1 つが未到達なら pass が走って
 消える（後者は「pass を切る」修正でも落ちます）。
 
-### 残っている 2 つの残差
+### 残っていた 2 つの残差を phase にする
 
-どちらも**まだ帰属できていない**ので、次に触る人はここから始めるべきです。
+残差は**引き算**であって計測ではありません。「一番大きい項目が不明」の
+まま最適化を続けることはできないので、両方に phase を足しました。
+結果として片方は**本物の無駄**で、もう片方は**自分の計測ミス**でした。
 
-| 残差 | typescript.js | excalidraw | 中身 |
-| --- | --- | --- | --- |
-| `bundle: link + escape + emit` | 1,744 ms | 318 ms | link と emit（escape は分離済み） |
-| `cli: module graph walk` | 316 ms | 319 ms | queue 管理、import walk、sibling `.d.ts` scan |
+#### `cli: module graph walk`（316 ms）→ sibling `.d.ts` scan だった
 
-後者は特に怪しいです。**import を 1 つも持たない単一ファイル**でも
-316 ms かかり、9 MB（1 file）と 800 KB（95 file）でほぼ同じ値になります
-——サイズ比例でも件数比例でもない。残差は「見る場所」であって答えでは
-ないので、まず phase を足すこと。
+このラベルは「import を辿る walk」を指していますが、実際に払っていたのは
+別のものでした。`node_modules/typescript/lib/typescript.js` の隣には
+`.d.ts` が **98 file / 3.2 MB** あり、ambient 宣言として program に入れる
+ために全部読み、そして**全部 full parse** していました。
+
+parse の成果物は `type_props` だけで、それを読むのは
+`--reserve-typed-props` だけです。**main loop には既にその gate があり、
+ambient scan には無かった。** 同じ条件を 2 箇所に書いて 1 箇所にしか
+適用していない——このパイプラインで 4 度目です。
+
+read は無条件のままにしました。`files[ambient]` に入れること自体が
+checker のための ambient 宣言の投入で、それが scan の目的です（`case03`）。
+
+4.72 s → 4.51 s。そして残差だったものは `cli: ambient .d.ts scan`
+という 1 行（約 195 ms）になり、top-10 から出ました。
+
+#### `cli: import edge walk` 358 ms → **重複した span**（自分のミス）
+
+excalidraw では edge walk が 338〜358 ms と出て、**最大の項目**に見えました。
+それは間違いです。`edge_micros` は素の wall-clock bracket で、その内側で
+`resolve_micros` が sub-span を積んでいた——**span が重なっていた**ので、
+module resolution の時間が 2 回数えられていました。
+
+`resolve_before_edges` を取って差分を引き、全 row を disjoint にすると
+edge walk は **7 ms** になり、top-10 から消えました。
+
+重なった span は「小さな誤差」ではありません。**発見のように読める
+間違った数字**であり、この調査を実際に間違った関数に向かわせました。
+そして正しい答えは既に `main.mbt` の comment に書いてありました——
+「module resolution が最大の phase であって parsing ではない」。
+
+#### 本命は module resolution だった: 331 ms → 118 ms
+
+disjoint にした表の最大項目は `cli: resolve module paths`（331 ms, 22.1%）
+でした。これを 2 つに割ると:
+
+| | ms |
+| --- | --- |
+| `cli: resolve relative paths` | 53 |
+| `cli: resolve bare specifiers` | **272** |
+
+相対 path の算術は既に cache 済みで、`node_modules` を歩く側は
+**cache が 1 つも無かった**（`module_resolver.mbt` に Map が 0 個）。
+
+**最初の修正は 0 ms でした。** 答え（mode, importer, specifier）を key に
+memo を張ったところ 272 → 277 ms。理由は記録しておく価値があります:
+key に importer を含める**必要がある**（nested `node_modules` は同じ
+specifier を 2 通りに解決しうる）ので、`clsx` を import する 68 file は
+68 個の別 key になり、何も共有しない。繰り返しは実在したのに memo からは
+見えなかった。**importer をまたいで繰り返すのは「問い」ではなく「作業」
+です。**
+
+作業の側を memo しました——`@fs.kind`、file の text read、`@fs.realpath`。
+効いたのは text read です。`resolve_tsconfig_specifier` は
+「bare specifier × importer」ごとに走り、config を毎回 disk から読み直して
+いました。しかも **1 階層あたり 2 回**（`paths` 用と `extends` 用）で、
+excalidraw は 2 階層の `extends` chain です。
+
+272 ms → **71 ms**。excalidraw 全体で 1,536 → 1,405 ms（−8.5%）、
+出力は byte 完全一致。
+
+#### `bundle: link + escape + emit`（1,744 ms）→ 分解して 5.1%
+
+escape analysis は前回分離済みだったので、残りに `bundle: link` と
+`bundle: emit` を足しました。9 MB の `typescript.js` で:
+
+| row | ms |
+| --- | --- |
+| `bundle: emit` | 231 |
+| `bundle: link` | 51 |
+| `observed-names` | 48 |
+| `bundle: unattributed` | **247** |
+
+残差は 1,744 ms / 20.1% から **247 ms / 5.1%** になり、最大項目ではなく
+6 番目になりました。残っているのは statement の連結と phase 間の
+bookkeeping で、これは「誰も計測していない仕事」ではなく「安い仕事」です
+——それが分かっているのが phase を足した意味です。
+
+#### 現在の表（`typescript.js`, 9 MB, shipping flag）
+
+```
+       806 ms   17.1%  mangle
+       629 ms   13.3%  peephole
+       541 ms   11.5%  cli: parse (recursive descent)
+       397 ms    8.4%  inline
+       387 ms    8.2%  cli: read + decode files
+       247 ms    5.1%  bundle: unattributed
+       231 ms    4.7%  bundle: emit
+       207 ms    4.4%  cli: tokenize
+       199 ms    4.2%  cli: ambient .d.ts scan
+       165 ms    3.5%  export-surface
+```
+
+`mangle` と `peephole` が 30.4% で、どちらも本物の仕事です。
+**CLI 側（読み込み・字句・構文解析）が合計 27.6%** で、これは
+「optimizer を速くする」問題ではなく parser の問題です。

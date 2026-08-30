@@ -619,7 +619,9 @@ pub fn bundle_modules(
   // into one binding and `import { HonoBase } from "./hono-base"`
   // (which re-exports `Hono as HonoBase`) leaves `HonoBase` as a
   // free variable in the consumer.
-  let link_renames = link_module_graph(modules, order, external_imports)
+  let link_renames = timer.phase("bundle: link", () => {
+    link_module_graph(modules, order, external_imports)
+  })
   // Names the bundle will export. Used three times below: as the members
   // class-method DCE must keep (a consumer calls them even when nothing
   // inside the bundle does), as treeshake roots (nothing inside the
@@ -1071,10 +1073,16 @@ pub fn bundle_modules(
       // the proof needs (is `f` ever used as a VALUE rather than called?)
       // is decided from the merged block itself.
       let param_declines : Array[String] = []
-      combined = drop_unused_params_block(
-        combined,
-        plan_unused_params(combined, keep=export_roots, declines=param_declines),
-      )
+      combined = timer.phase("drop-unused-params", () => {
+        drop_unused_params_block(
+          combined,
+          plan_unused_params(
+            combined,
+            keep=export_roots,
+            declines=param_declines,
+          ),
+        )
+      })
       if opts.explain {
         explain_params.push("")
         explain_params.push(
@@ -1290,7 +1298,9 @@ pub fn bundle_modules(
       // visible in the source, so pay for the ones actually observed and
       // mangle the rest. See `observed_names.mbt`, including what it
       // does NOT catch.
-      let (observed_names, observed_all_ctors) = observed_class_names(combined)
+      let (observed_names, observed_all_ctors) = timer.phase("observed-names", () => {
+        observed_class_names(combined)
+      })
       // Only names that are CONSTRUCTORS. `observed_class_names` reports
       // the identifier on the left of a `.name` read without judging
       // what it holds, and the first version reserved all of them on the
@@ -1306,7 +1316,9 @@ pub fn bundle_modules(
       // ordinary property and constrains nothing.
       if observed_names.length() > 0 {
         let ctors : Map[String, Bool] = {}
-        constructor_like_top_level(combined, ctors)
+        timer.phase("observed-names: ctor set", () => {
+          constructor_like_top_level(combined, ctors)
+        })
         for n in observed_names {
           if ctors.contains(n) {
             external_reserved.push(n)
@@ -1344,7 +1356,12 @@ pub fn bundle_modules(
           for n in collect_top_level_decl_names(combined) {
             keep_all[n] = true
           }
-          let normalized = inline_block(combined, keep=keep_all)
+          // Timed: this is a whole extra inline pass over the bundle,
+          // run only to decide a reserved set. On 9 MB it is not free,
+          // and it sat inside the bundle residual where nothing said so.
+          let normalized = timer.phase("observed-names: inline probe", () => {
+            inline_block(combined, keep=keep_all)
+          })
           match ctor_name_comparison_literals(normalized) {
             Some(lits) => {
               // Reserving the literal covers both directions: a class
@@ -1501,6 +1518,12 @@ pub fn bundle_modules(
       }
       combined = timer.phase("peephole", () => peephole_block(combined))
     }
+    // The emit, bracketed. It was the last thing inside the
+    // `bundle: link + escape + emit` residual, and a residual names the
+    // work nobody measured — not the work that is cheap. On 9 MB of
+    // `typescript.js` the two halves are very different sizes, and
+    // there was no way to know which without asking.
+    let emit_started = @bench.monotonic_clock_start()
     let has_combined_positions = combined.stmt_positions.length() ==
       combined.stmts.length()
     // In minify mode without source-maps, use the merged-decl emitter so
@@ -1552,6 +1575,7 @@ pub fn bundle_modules(
       }
       emit_entry_exports(e, entry_exports, mangle_export_renames, declared)
     }
+    timer.record("bundle: emit", @bench.monotonic_clock_end(emit_started))
   } else {
     // The per-module emit keeps each module's statements separate, but
     // the export surface spans the whole graph — an exported class can

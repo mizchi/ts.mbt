@@ -916,11 +916,48 @@ product surfaces now.
   2,400 -> 2,050 ms, output byte-identical in every configuration.
   excalidraw keeps 106 ms of `class-method-dce` — there the early exit
   does NOT fire, which is what selective looks like — and
-  `bundle_wbtest.mbt` pins both sides of that boundary. Two residuals
-  are left and neither is attributed: link + emit (1,744 ms) and
-  `cli: module graph walk` (316 ms), the latter suspicious because a
-  single file with no imports pays it and 9 MB in one file costs the
-  same as 800 KB across 95. See
+  `bundle_wbtest.mbt` pins both sides of that boundary. The two
+  residuals left after that round are now phases, and a residual is a
+  subtraction rather than a measurement, so both were worth the phase.
+  One was a real waste: `cli: module graph walk` was not a walk at all
+  but the sibling ambient `.d.ts` scan, which next to
+  `node_modules/typescript/lib/typescript.js` reads AND fully parses 98
+  files and 3.2 MB — where the parse only fills `type_props` and only
+  `--reserve-typed-props` reads that. The main loop had exactly that
+  gate on its own second parse and the ambient scan never got it; fourth
+  time a condition was written in one place and not in the second
+  consumer. The other was MY OWN instrumentation: `cli: import edge
+  walk` read 358 ms and looked like the largest item on a 95-file
+  target, but it was a plain wall-clock bracket while the resolution
+  sub-spans accumulated INSIDE it — the spans OVERLAPPED, so module
+  resolution was counted twice. An overlapping span is not a small
+  error, it is a wrong number that reads like a finding, and it sent the
+  investigation at the wrong function; the right answer was already
+  written in `main.mbt` ("module resolution, not parsing, was the
+  largest phase on every multi-file target"). Made disjoint, the edge
+  walk is 7 ms and the largest row is `cli: resolve module paths` at
+  331 ms — 53 ms of relative path arithmetic against 272 ms of bare
+  specifiers, and `module_resolver.mbt` had no cache of any kind. The
+  first fix bought exactly ZERO: memoizing the ANSWER, keyed on (mode,
+  importing file, specifier), because the key HAS to include the
+  importer (a nested `node_modules` can resolve one specifier two ways)
+  and 68 importers of `clsx` are 68 distinct keys that share nothing.
+  The repeats were real and the memo could not see them: what repeats
+  across importers is the WORK, not the question. Memoizing the work —
+  `@fs.kind`, file text reads, `@fs.realpath` — is what paid, and the
+  text read is where it was: `resolve_tsconfig_specifier` runs per bare
+  specifier per importer and re-read every config from disk each time,
+  twice per level (once for `paths`, once for `extends`), over a
+  two-level `extends` chain. 272 -> 71 ms, excalidraw 1,536 -> 1,405 ms
+  (-8.5%), byte-identical. Splitting `bundle: link` (51 ms),
+  `bundle: emit` (231 ms) and `observed-names` (48 ms) out of the other
+  residual takes it from 1,744 ms / 20.1% to 247 ms / 5.1% — sixth row
+  rather than first, and what is left is statement concatenation and
+  inter-phase bookkeeping, which is now known to be cheap rather than
+  unmeasured. The profile that comes out the far side says the
+  optimizer is no longer the question: `mangle` and `peephole` are
+  30.4% of a 4.8 s compile and both are real work, while reading,
+  tokenizing and parsing are 27.6% between them. See
   [`docs/real-world-minify.md`](./docs/real-world-minify.md).
 - `src/bridge` consumes `src/checker` for every type-shape decision and runs
   `@checker.check_module` on the synthesized output as a sanity gate. It also
