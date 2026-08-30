@@ -4598,6 +4598,53 @@ test "bundle: a type-only request does not order its module" {
 }
 
 ///|
+/// `BundleOptions.jsx` has to actually be used.
+///
+/// Its own comment says "base JSX config for every module; per-file
+/// `@jsxImportSource` overrides it", and `load_module_graph` read
+/// `JsxConfig::default()` instead — so the field was dead in the bundle
+/// path and `mtsc --bundle --jsx-import-source preact` emitted
+/// `react/jsx-runtime`. The flag was parsed, reached `BundleOptions`,
+/// and was ignored; a preact application could not be bundled into
+/// anything that runs. Nothing caught it because React is the only JSX
+/// target in the corpus, and there the default is right by accident.
+test "bundle: BundleOptions.jsx picks the runtime, and a pragma still wins" {
+  let files = vfs([("entry.tsx", "export const A = () => <div>x</div>;\n")])
+  let opts = {
+    ..BundleOptions::default(),
+    jsx: JsxConfig::default().with_import_source("preact"),
+  }
+  match bundle_modules(files, "entry.tsx", opts) {
+    Ok(out) => {
+      assert_true(
+        out.js.contains("from \"preact/jsx-runtime\""),
+        msg="expected preact's runtime, got: \{out.js}",
+      )
+      // With the opening quote: `"preact/jsx-runtime"` CONTAINS
+      // `react/jsx-runtime` as a substring, so the bare form passes
+      // whichever runtime was emitted and proves nothing.
+      assert_false(out.js.contains("\"react/jsx-runtime\""))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+  // A file-level pragma is the highest precedence of the three, so it
+  // has to survive the config now being threaded rather than defaulted.
+  let pragma_files = vfs([
+    (
+      "entry.tsx", "/** @jsxImportSource solid-js */\nexport const A = () => <div>x</div>;\n",
+    ),
+  ])
+  match bundle_modules(pragma_files, "entry.tsx", opts) {
+    Ok(out) =>
+      assert_true(
+        out.js.contains("from \"solid-js/jsx-runtime\""),
+        msg="expected the pragma to win, got: \{out.js}",
+      )
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "bundle: the JSX runtime import is emitted" {
   // The automatic runtime turns `<div/>` into a call to an IMPORTED
   // `jsx` / `jsxs` / `Fragment`. `emit.mbt`'s single-file path writes

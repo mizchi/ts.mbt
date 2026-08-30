@@ -55,6 +55,8 @@ pub async fn resolve_runtime_module_specifier(String, String) -> String?
 
 pub async fn resolve_type_module_specifier(String, String) -> String?
 
+pub async fn tsconfig_compiler_option(String, String) -> String?
+
 // Errors
 pub(all) suberror ParseError {
   ParseError(String)

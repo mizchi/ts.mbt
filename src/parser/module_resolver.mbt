@@ -1511,6 +1511,76 @@ async fn resolve_module_specifier(
 }
 
 ///|
+/// A string `compilerOptions` entry from the nearest `tsconfig.json` to
+/// `base_path`, following `extends` when the nearest config does not set
+/// it.
+///
+/// This exists because mtsc read `paths` out of tsconfig and nothing
+/// else, so a preact / solid / vue-JSX application compiled to
+/// `import { jsx } from "react/jsx-runtime"` and could not run. Every
+/// modern app configures that in tsconfig
+/// (`"jsxImportSource": "preact"`), not with a per-file
+/// `/** @jsxImportSource */` pragma — which is the only form mtsc
+/// supported. A UI application is the shape that exposes it; no
+/// library-shaped target in the corpus has JSX at all.
+///
+/// Nearest-wins, matching TypeScript: a package's own config overrides
+/// the base it extends. `depth` bounds a config that extends itself, the
+/// same way `resolve_tsconfig_specifier_in` does.
+pub async fn tsconfig_compiler_option(
+  base_path : String,
+  name : String,
+) -> String? {
+  match find_nearest_ancestor_file(normalize_path(base_path), "tsconfig.json") {
+    Some(tsconfig_path) => tsconfig_compiler_option_in(tsconfig_path, name, 0)
+    None => None
+  }
+}
+
+///|
+async fn tsconfig_compiler_option_in(
+  tsconfig_path : String,
+  name : String,
+  depth : Int,
+) -> String? {
+  if depth > 8 {
+    return None
+  }
+  let src = match read_text_file(tsconfig_path) {
+    Some(t) => t
+    None => return None
+  }
+  match find_named_object_range(src, "compilerOptions") {
+    Some((start_, end_)) =>
+      match find_object_field_value_range(src, start_, end_, name) {
+        Some((vstart, _)) =>
+          match parse_json_string_at(src, vstart) {
+            Some(v) => return Some(v)
+            None => ()
+          }
+        None => ()
+      }
+    None => ()
+  }
+  match find_object_field_value_range(src, 0, src.length(), "extends") {
+    Some((start_, _)) =>
+      match parse_json_string_at(src, start_) {
+        Some(parent) => {
+          let joined = normalize_path(join_path(dirname(tsconfig_path), parent))
+          let candidate = if joined.has_suffix(".json") {
+            joined
+          } else {
+            joined + ".json"
+          }
+          tsconfig_compiler_option_in(candidate, name, depth + 1)
+        }
+        None => None
+      }
+    None => None
+  }
+}
+
+///|
 pub async fn resolve_type_module_specifier(
   base_path : String,
   specifier : String,

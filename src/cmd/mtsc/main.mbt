@@ -341,8 +341,47 @@ fn mtsc_parse_args(argv : Array[String]) -> Result[MtscOptions, String] {
 }
 
 ///|
-fn mtsc_build_jsx_config(opts : MtscOptions) -> @transform.JsxConfig {
+async fn mtsc_build_jsx_config(
+  opts : MtscOptions,
+  entry_path : String,
+) -> @transform.JsxConfig {
   let mut cfg = @transform.JsxConfig::default()
+  // tsconfig first, then the CLI flags, then (inside the transform) the
+  // per-file pragmas — increasing precedence, matching what TypeScript
+  // does with the same three sources.
+  //
+  // mtsc read `paths` out of tsconfig and nothing else, so a preact /
+  // solid / vue-JSX application compiled to
+  // `import { jsx } from "react/jsx-runtime"` and could not run at all.
+  // The `/** @jsxImportSource preact */` pragma was the only form
+  // supported, and no application uses it — the setting goes in
+  // tsconfig, per package, and in a monorepo it is inherited through
+  // `extends` (sprawlens: `jsx` in the base config, `jsxImportSource`
+  // in the package's own).
+  match @parser.tsconfig_compiler_option(entry_path, "jsx") {
+    Some(jsx) =>
+      // `preserve` and `react-native` leave JSX in the output, which
+      // this pipeline cannot do — it always lowers — so they map to the
+      // automatic runtime rather than being honoured.
+      match jsx {
+        "react" => cfg = cfg.with_runtime("classic")
+        "react-jsxdev" => cfg = cfg.with_runtime("automatic").with_dev(true)
+        _ => cfg = cfg.with_runtime("automatic")
+      }
+    None => ()
+  }
+  match @parser.tsconfig_compiler_option(entry_path, "jsxImportSource") {
+    Some(src) => cfg = cfg.with_import_source(src)
+    None => ()
+  }
+  match @parser.tsconfig_compiler_option(entry_path, "jsxFactory") {
+    Some(f) => cfg = cfg.with_pragma_jsx(f)
+    None => ()
+  }
+  match @parser.tsconfig_compiler_option(entry_path, "jsxFragmentFactory") {
+    Some(f) => cfg = cfg.with_pragma_jsx_frag(f)
+    None => ()
+  }
   match opts.jsx_runtime {
     Some(r) => cfg = cfg.with_runtime(r)
     None => ()
@@ -1361,7 +1400,7 @@ async fn main {
     )
     return
   }
-  let jsx_cfg = mtsc_build_jsx_config(opts)
+  let jsx_cfg = mtsc_build_jsx_config(opts, input_path)
   let output_path = match opts.out {
     Some(p) => p
     None => "output.js"

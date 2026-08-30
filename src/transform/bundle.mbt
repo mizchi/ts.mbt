@@ -554,6 +554,7 @@ pub fn bundle_modules(
       opts.aliases,
       opts.allow_unresolved_imports,
       opts.parsed_blocks,
+      opts.jsx,
     ) {
     Ok(_) => ()
     Err(e) => return Err(e)
@@ -1967,6 +1968,19 @@ fn load_module_graph(
   // Parses the caller already did, keyed like `files`. See
   // `BundleOptions.parsed_blocks`.
   parsed : Map[String, @ast.TsModuleBlock],
+  // `BundleOptions.jsx` — the base every module's own pragmas refine.
+  //
+  // Threaded rather than defaulted because it was DEFAULTED, and that
+  // made `BundleOptions.jsx` dead in the bundle path: the field's own
+  // comment says "base JSX config for every module; per-file
+  // `@jsxImportSource` overrides it" and the code below read
+  // `JsxConfig::default()` instead. So `mtsc --bundle
+  // --jsx-import-source preact` emitted `react/jsx-runtime` — the flag
+  // existed, was parsed, reached `BundleOptions`, and was ignored. A
+  // preact application therefore could not be bundled into anything that
+  // runs, and nothing noticed because the only JSX target in the corpus
+  // is React, where the default is right by accident.
+  base_jsx : JsxConfig,
 ) -> Result[Unit, String] {
   if modules.contains(path) {
     return Ok(())
@@ -1989,7 +2003,7 @@ fn load_module_graph(
   }
   // Reuse the per-file JSX pragma extractor so each module honors
   // its own `/** @jsxImportSource ... */` etc.
-  let jsx_cfg = extract_jsx_pragmas(source, JsxConfig::default())
+  let jsx_cfg = extract_jsx_pragmas(source, base_jsx)
   let (lowered_jsx, runtime_refs) = lower_block_with_runtime_imports(
     jsx_cfg,
     mb.block,
@@ -2104,7 +2118,7 @@ fn load_module_graph(
         match
           load_module_graph(
             files, dep_path, modules, external_imports, external_seen, aliases, allow_unresolved,
-            parsed,
+            parsed, base_jsx,
           ) {
           Ok(_) => ()
           Err(e) => return Err(e)
@@ -2130,7 +2144,7 @@ fn load_module_graph(
             match
               load_module_graph(
                 files, dep_path, modules, external_imports, external_seen, aliases,
-                allow_unresolved, parsed,
+                allow_unresolved, parsed, base_jsx,
               ) {
               Ok(_) => ()
               Err(e) => return Err(e)
@@ -2147,7 +2161,7 @@ fn load_module_graph(
               match
                 load_module_graph(
                   files, dep_path, modules, external_imports, external_seen, aliases,
-                  allow_unresolved, parsed,
+                  allow_unresolved, parsed, base_jsx,
                 ) {
                 Ok(_) => ()
                 Err(e) => return Err(e)
@@ -2182,7 +2196,7 @@ fn load_module_graph(
         match
           load_module_graph(
             files, dep_path, modules, external_imports, external_seen, aliases, allow_unresolved,
-            parsed,
+            parsed, base_jsx,
           ) {
           Ok(_) => ()
           Err(e) => return Err(e)
@@ -2195,7 +2209,7 @@ fn load_module_graph(
             match
               load_module_graph(
                 files, dep_path, modules, external_imports, external_seen, aliases,
-                allow_unresolved, parsed,
+                allow_unresolved, parsed, base_jsx,
               ) {
               Ok(_) => ()
               Err(e) => return Err(e)
@@ -2208,7 +2222,7 @@ fn load_module_graph(
               match
                 load_module_graph(
                   files, dep_path, modules, external_imports, external_seen, aliases,
-                  allow_unresolved, parsed,
+                  allow_unresolved, parsed, base_jsx,
                 ) {
                 Ok(_) => ()
                 Err(e) => return Err(e)
