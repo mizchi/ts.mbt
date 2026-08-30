@@ -601,9 +601,23 @@ product surfaces now.
   the original `typescript.js` — so this is a coverage gap rather than a
   self-comparison, and the same lesson as the getter cases that passed
   while the bug was present: a harness that runs the right input and
-  asks a question the answer cannot reach proves nothing. #81 adds a
-  target compiled from TypeScript SOURCE and an observation that
-  inspects values.
+  asks a question the answer cannot reach proves nothing. CLOSED by a
+  second table: `fixtures/pass-lattice/lowerings.ts` runs the same
+  fifteen combinations over one of every TypeScript-only lowering —
+  `#private` fields instance and static, parameter properties,
+  accessors, `enum`, `const enum`, nested `namespace`,
+  abstract/override — and observes VALUES rather than stdout (own keys,
+  `JSON.stringify`, object spread, `for…in`), with Node running the
+  TypeScript directly as the baseline, so the reference is the language
+  and not another mtsc output. Deliberately NOT a real library: the 9 MB
+  target covers the shape nobody thought of, and what was missing was
+  the lowerings plus a question the answer can reach — one cheap
+  purpose-built compile covers every lowering where a library covers
+  whichever ones it happens to use. Re-introducing the historical bug
+  fails it and names the leaked brands (`counterJson: "{}" ->
+  "{__private_brand__0__count:2,…}"`); the diff names the moved fields,
+  because with fifteen combinations and twenty-five observations
+  "differs" is not something anyone can act on.
   hono (+500 bytes) and zod (+788) *were* wins until the `TypeArgs` fix
   below, which is the point: `f<T>(x)` parses as a wrapper node, nineteen
   passes never peeled it, and the references inside were invisible to
