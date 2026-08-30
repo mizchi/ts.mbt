@@ -1516,6 +1516,34 @@ pub fn bundle_modules(
           })
         }
       }
+      // Second inline pass, after fold-2 and treeshake-2.
+      //
+      // `inline` decides "is this binding used exactly once" and "does
+      // this call have a callee it may expand" on the block as it stands
+      // when the pass runs. Folding and the second treeshake then DELETE
+      // references — a dead `if (false)` branch, a folded comparison —
+      // so a binding that had two uses can have one afterwards, and a
+      // pass that ran earlier cannot know. terser runs its whole
+      // compressor twice (`passes: 2`) for the same reason.
+      //
+      // −520 bytes across the nine type-aware targets and not one of
+      // them larger: excalidraw −420, hono −40, valibot −16, immer −14,
+      // remeda −12, ts-pattern −12, typebox −3, superstruct −3.
+      //
+      // What this is NOT is the pool effect. The hypothesis it was
+      // measured against was that mangling BEFORE inlining is what costs
+      // bytes, since a declaration deleted afterwards recovers only its
+      // own bytes and never frees a one-character slot. Moving `inline`
+      // ahead of `mangle` was implemented and measured and is a net LOSS
+      // (+243 bytes: immer +204 and ts-pattern +331 against gains of
+      // 8–183 elsewhere), and the reason is that the reorder is VACUOUS
+      // — typebox goes from 990 top-level functions to 989. The inliner
+      // is not deleting those declarations in either order, so there is
+      // no pool effect to recover; the gates that refuse them (see
+      // `call_inline.mbt`) have nothing to do with pass order.
+      combined = timer.phase("inline-2", () => {
+        inline_block(combined, keep=live_roots)
+      })
       combined = timer.phase("peephole", () => peephole_block(combined))
     }
     // The emit, bracketed. It was the last thing inside the
