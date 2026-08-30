@@ -40,6 +40,17 @@
 // the corpus while `join_vars` is worth ~15,500. The count and the bytes
 // point at different rules, and only one of them is the objective.
 //
+// READ THE SECOND TABLE. A rule's price to TERSER is not mtsc's
+// headroom, and the difference is not subtle: `join_vars` is the most
+// expensive rule in the first table (+15,522) and worth approximately
+// NOTHING here, because much of what it cleans up is separate
+// declarations terser's own `collapse_vars` / `reduce_vars` produced.
+// On excalidraw mtsc emits 1,645 declaration keywords against terser's
+// 1,714 — it already joins as much or more. The ceiling measures the
+// rule inside terser's pipeline; whether mtsc needs it is a different
+// question, and the structural counts below are the cheap proxy for it.
+// A rule is worth porting only when BOTH say so.
+//
 //   node scripts/compare_terser_bundles.mjs
 //   node scripts/compare_terser_bundles.mjs --rules
 //   node scripts/compare_terser_bundles.mjs --only typebox
@@ -109,6 +120,7 @@ for (let i = 0; i < args.length; i++) {
   }
 }
 
+const count = (s, re) => (s.match(re) ?? []).length;
 const gz = (s) => zlib.gzipSync(Buffer.from(s, "utf8"), { level: 9 }).length;
 const n = (v) => (v == null ? "—" : v.toLocaleString("en-US"));
 const sgn = (v) => (v == null ? "—" : (v > 0 ? "+" : "") + n(v));
@@ -210,7 +222,40 @@ if (rules) {
   console.log(
     `  ${pad("", 12)} ${padl("(gzip)", 9)} ` + RULES.map((r) => padl(sgn(gzTotals[r]), 14)).join(""),
   );
-  console.log("");
+
+  // Does mtsc already do it?
+  //
+  // The table above is terser pricing its rule inside terser's own
+  // pipeline. Some of those rules exist to clean up after terser's
+  // other rules, so a large number there can be a large number of
+  // bytes mtsc never had to spend. `join_vars` is the case in point.
+  //
+  // Each probe is a crude structural count that the rule LOWERS, taken
+  // on both optimizers' output for the same input. mtsc higher than
+  // terser means headroom; mtsc at or below means the rule is already
+  // covered and the price above is not a target. A proxy is not a
+  // measurement — it says which rules are worth measuring properly.
+  const PROBES = {
+    join_vars: ["declaration keywords", (s) => count(s, /\b(?:let|const|var) /g)],
+    sequences: ["statement separators", (s) => count(s, /;/g)],
+    "arrows / reduce_funcs": ["`function` keywords", (s) => count(s, /\bfunction\b/g)],
+    conditionals: ["`if (` statements", (s) => count(s, /\bif\s*\(/g)],
+    comparisons: ["strict comparisons", (s) => count(s, /[=!]==/g)],
+  };
+  console.log("\n  does mtsc already do it? (structural proxies, lower = more optimized)\n");
+  const names = Object.keys(PROBES);
+  console.log(`  ${pad("target", 12)} ` + names.map((k) => padl(k.slice(0, 13), 15)).join(""));
+  for (const row of rows) {
+    if (!row.terser || !row.mtsc) continue;
+    const cells = names.map((k) => {
+      const [, probe] = PROBES[k];
+      const t = probe(row.terser);
+      const m = probe(row.mtsc);
+      return padl(`${m}/${t}`, 15);
+    });
+    console.log(`  ${pad(row.name, 12)} ` + cells.join(""));
+  }
+  console.log(`\n  cells are mtsc/terser. ` + names.map((k) => `${k}: ${PROBES[k][0]}`).join("; ") + "\n");
   process.exit(0);
 }
 

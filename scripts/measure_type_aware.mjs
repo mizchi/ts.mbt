@@ -60,6 +60,7 @@
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import zlib from "node:zlib";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -383,6 +384,21 @@ function bytes(n) {
   return n.toLocaleString("en-US");
 }
 
+// Gzipped size, because that is what ships.
+//
+// Added after `compare_terser_bundles.mjs` showed the two metrics
+// DISAGREE: mtsc was smaller than terser in raw bytes on five of nine
+// targets and on only one gzipped, and remeda was -388 raw / +152
+// gzipped. A saving that gzip would have made anyway is not a saving,
+// so a delta worth acting on has to survive compression.
+function gzipBytes(file) {
+  try {
+    return zlib.gzipSync(fs.readFileSync(file), { level: 9 }).length;
+  } catch {
+    return null;
+  }
+}
+
 function pct(part, whole) {
   if (!whole) return "0.00%";
   return `${((part * 100) / whole).toFixed(2)}%`;
@@ -683,6 +699,8 @@ function measure(t) {
     aware: aware.size,
     blind: blind.size,
     delta,
+    awareGz: gzipBytes(path.join(dir, "aware.mjs")),
+    blindGz: gzipBytes(path.join(dir, "blind.mjs")),
     secondPass,
     adjusted,
     seconds: aware.seconds,
@@ -813,16 +831,19 @@ const pad = (s, n) => String(s).padEnd(n);
 const padl = (s, n) => String(s).padStart(n);
 
 console.log(
-  `  ${pad("target", 12)} ${padl("files", 5)} ${padl("unopt", 10)} ${padl("aware", 9)} ${padl("blind", 9)} ${padl("delta", 8)} ${padl("of aware", 9)}  verdict`,
+  `  ${pad("target", 12)} ${padl("files", 5)} ${padl("unopt", 10)} ${padl("aware", 9)} ${padl("blind", 9)} ${padl("delta", 8)} ${padl("of aware", 9)} ${padl("gz delta", 9)}  verdict`,
 );
 for (const row of results) {
   if (row.status === "blocked" || row.status === "skip") {
-    console.log(`  ${pad(row.name, 12)} ${padl("-", 5)} ${padl("-", 10)} ${padl("-", 9)} ${padl("-", 9)} ${padl("-", 8)} ${padl("-", 9)}  ${row.status === "skip" ? "SKIP" : "BLOCKED"}`);
+    console.log(`  ${pad(row.name, 12)} ${padl("-", 5)} ${padl("-", 10)} ${padl("-", 9)} ${padl("-", 9)} ${padl("-", 8)} ${padl("-", 9)} ${padl("-", 9)}  ${row.status === "skip" ? "SKIP" : "BLOCKED"}`);
     continue;
   }
+  const gzDelta =
+    row.awareGz != null && row.blindGz != null ? row.blindGz - row.awareGz : null;
   console.log(
     `  ${pad(row.name, 12)} ${padl(row.files, 5)} ${padl(bytes(row.unopt), 10)} ${padl(bytes(row.aware), 9)} ${padl(bytes(row.blind), 9)} ` +
-      `${padl((row.delta > 0 ? "+" : "") + bytes(row.delta), 8)} ${padl(pct(row.delta, row.aware), 9)}  ${verdictOf(row)}`,
+      `${padl((row.delta > 0 ? "+" : "") + bytes(row.delta), 8)} ${padl(pct(row.delta, row.aware), 9)} ` +
+      `${padl(gzDelta == null ? "-" : (gzDelta > 0 ? "+" : "") + bytes(gzDelta), 9)}  ${verdictOf(row)}`,
   );
 }
 
