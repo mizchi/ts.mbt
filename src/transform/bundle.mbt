@@ -1309,13 +1309,54 @@ pub fn bundle_modules(
         // the same set. The hierarchy is what actually narrows it.
         let (observing, unconstrained) = classes_observing_own_name(combined)
         if unconstrained {
-          // The read is outside any top-level class body, so `this` is
-          // unconstrained and the hierarchy says nothing. Fall back to
-          // every callable — expensive, and the only sound answer here.
-          let ctors : Map[String, Bool] = {}
-          constructor_like_top_level(combined, ctors)
-          for n in ctors.keys() {
-            external_reserved.push(n)
+          // Before paying for every callable, ask the narrow question:
+          // is every `.constructor.name` read just compared against a
+          // string literal? Then the observation is a boolean, and only
+          // the literals need reserving. See
+          // `ctor_name_comparison_literals`.
+          //
+          // The read has to be looked for in the INLINED form. typebox's
+          // site is `IsEqual(proto.constructor.name, "Object")` with
+          // `IsEqual = (l, r) => l === r`, and `inline_block` is the pass
+          // that turns that into a comparison — it runs after the
+          // mangler, so the analysis has to normalize its own copy.
+          // `keep` is every top-level name, so the copy inlines calls
+          // without deleting declarations.
+          let keep_all : Map[String, Bool] = {}
+          for n in collect_top_level_decl_names(combined) {
+            keep_all[n] = true
+          }
+          let normalized = inline_block(combined, keep=keep_all)
+          match ctor_name_comparison_literals(normalized) {
+            Some(lits) => {
+              // Reserving the literal covers both directions: a class
+              // already called that keeps its name, and no class can be
+              // renamed TO it, because a reserved name is withheld from
+              // the generated pool.
+              for lit in lits {
+                external_reserved.push(lit)
+              }
+              if opts.explain {
+                explain_escape.push("")
+                explain_escape.push(
+                  "  `.constructor.name` is only compared against string literals (" +
+                  lits.length().to_string() +
+                  "), so every callable stays manglable",
+                )
+              }
+            }
+            None => {
+              // The read is outside any top-level class body and in a
+              // position that observes the name itself, so `this` is
+              // unconstrained and the hierarchy says nothing. Fall back
+              // to every callable — expensive, and the only sound answer
+              // here.
+              let ctors : Map[String, Bool] = {}
+              constructor_like_top_level(combined, ctors)
+              for n in ctors.keys() {
+                external_reserved.push(n)
+              }
+            }
           }
         } else {
           for n in observing.keys() {

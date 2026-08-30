@@ -104,13 +104,28 @@ test "call_inline: a body that is not a single return is declined" {
 }
 
 ///|
-test "call_inline: an impure argument keeps the call" {
-  let out = call_inline_one(
+test "call_inline: an impure argument inlines only when the order is exact" {
+  // This test used to assert the opposite, and it was pinning a
+  // LIMITATION rather than a requirement. The purity requirement on
+  // arguments exists to stop duplicating, dropping or reordering an
+  // argument's effects — and `(n) => n + 1` reads its one parameter
+  // once, first, and unconditionally, so `addOne(effect())` and
+  // `effect() + 1` perform the same operations in the same order.
+  // Declining it cost real bytes: `is_pure_value` calls every property
+  // read impure, so one-line helpers were never inlined at any call
+  // site that read a property.
+  let exact = call_inline_one(
     "const addOne = (n) => n + 1;\nconsole.log(addOne(effect()));\n",
   )
-  // The argument must still be evaluated exactly once, so the body is
-  // not moved out to the call site.
-  assert_false(out.contains("effect() + 1"))
+  assert_true(exact.contains("effect() + 1"))
+  // What must still NOT happen: the same argument moved into a position
+  // that might not evaluate. Here the body reads its parameter behind
+  // `||`, so a call that always evaluates `effect()` would become one
+  // that sometimes does not.
+  let guarded = call_inline_one(
+    "const orOne = (n) => cond || n;\nconsole.log(orOne(effect()));\n",
+  )
+  assert_false(guarded.contains("cond || effect()"))
 }
 
 // ---------------------------------------------------------------
@@ -207,4 +222,97 @@ test "call_inline: an unshadowed nested call still inlines" {
     ),
   )
   assert_true(out.contains("2 + 1"), msg="narrowed too far: \{out}")
+}
+
+///|
+/// Parameters must be substituted SIMULTANEOUSLY.
+///
+/// Doing it one at a time lets a later parameter's substitution rewrite
+/// a name an earlier one just introduced, which is a wrong VALUE with no
+/// crash and no free variable. Both arguments here are pure, so this was
+/// reachable long before impure arguments were allowed — and the pass
+/// order makes it likely rather than exotic, because the mangler runs
+/// first and names both parameters and top-level bindings `a`, `b`, `c`.
+///
+/// This is a unit test rather than a corpus case, and that was decided
+/// by measurement rather than taste. A `case55-inline-substitution-
+/// capture` fixture was written first, and with the fix mutated out it
+/// still PASSED: end to end the collision needs the mangler to give a
+/// top-level binding the same short name as a later parameter of the
+/// helper, and on that fixture it gave them different ones. A case that
+/// cannot fail when the bug is present is coverage-shaped and proves
+/// nothing, so it was deleted rather than shipped. Here the names are
+/// the ones written down, and mutating the fix fails this test.
+///
+/// The bug does reach the full pipeline — `const add = (a, b) => a + b;
+/// let b = 3;` with three call sites compiled to 2 / 200 / 14 where the
+/// answers are 4 / 103 / 10 under `--bundle --minify --fold --treeshake
+/// --mangle`. `case54-inline-argument-order` happens to catch it too,
+/// because its `tap` helper does collide after mangling; that is luck,
+/// not coverage, which is exactly why this test exists.
+test "call_inline: parameters substitute simultaneously, not in sequence" {
+  // `a := b` then `b := 1` would give `b + b` -> `1 + 1`.
+  let one = call_inline_one(
+    "const add = (a, b) => a + b;\nlet b = 3;\nconsole.log(add(b, 1));\n",
+  )
+  assert_true(one.contains("b + 1"))
+  assert_false(one.contains("1 + 1"))
+  // Three parameters, the capture reaching across two positions.
+  let two = call_inline_one(
+    "const pick = (a, b, c) => a - b * c;\nlet b = 3;\nlet c = 5;\nconsole.log(pick(b, c, 9));\n",
+  )
+  assert_true(two.contains("b - c * 9"))
+  // The argument's name matching an EARLIER parameter is harmless and
+  // must still inline — the point is the direction, not any collision.
+  let three = call_inline_one(
+    "const sub = (a, b) => a - b;\nlet a = 7;\nconsole.log(sub(2, a));\n",
+  )
+  assert_true(three.contains("2 - a"))
+}
+
+///|
+/// An impure argument may be substituted only when the body reads every
+/// parameter exactly once, in argument order, unconditionally.
+test "call_inline: impure arguments need the body's order to be exact" {
+  // Exact: read once, in order, both operands always evaluated.
+  let exact = call_inline_one(
+    "const isEq = (l, r) => l === r;\nconsole.log(isEq(f().x, g().y));\n",
+  )
+  assert_true(exact.contains("f().x === g().y"))
+  assert_false(exact.contains("isEq("))
+  // Short-circuit: the call always evaluates both arguments, `l || r`
+  // may not.
+  //
+  // Asserted as "the operands were not spliced into the operator"
+  // rather than "the callee's NAME survives": the single-use binding
+  // inliner substitutes the arrow as a value, so the name goes away
+  // while the call stays a call, which is semantically fine.
+  let short = call_inline_one(
+    "const orFn = (l, r) => l || r;\nconsole.log(orFn(f(), g()));\n",
+  )
+  assert_false(short.contains("f() || g()"))
+  // Out of order: substitution would swap two argument evaluations.
+  let swapped = call_inline_one(
+    "const swap = (l, r) => r + l;\nconsole.log(swap(f(), g()));\n",
+  )
+  assert_false(swapped.contains("g() + f()"))
+  // A parameter the body never reads: its argument's effect would go.
+  let dropped = call_inline_one(
+    "const first = (l, r) => l;\nconsole.log(first(f(), g()));\n",
+  )
+  assert_false(dropped.contains("console.log(f())"))
+  // Conditional positions are guarded too.
+  let cond = call_inline_one(
+    "const choose = (c, t, e) => c ? t : e;\nconsole.log(choose(f(), g(), h()));\n",
+  )
+  assert_false(cond.contains("f() ? g() : h()"))
+  // PURE arguments still inline through all of those shapes — the
+  // relaxation adds cases, it must not remove any.
+  // `p` and `q` are reassigned so the single-use binding inliner does
+  // not fold them to literals first, which would make the assertion
+  // about constant folding instead of about this rule.
+  let pureShort = call_inline_one(
+    "const orFn = (l, r) => l || r;\nlet p = 1;\nlet q = 2;\np = p + 0;\nq = q + 0;\nconsole.log(orFn(p, q));\n",
+  )
+  assert_true(pureShort.contains("p || q"))
 }

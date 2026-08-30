@@ -58,6 +58,54 @@ const NAME_OF_PREFIX : String = "@@nameof:"
 const NAME_OF_CTOR : String = "@@nameof-constructor"
 
 ///|
+/// Sentinel prefix for "the bundle compares `<something>.constructor.name`
+/// against this string literal, and does nothing else with it".
+///
+/// Recorded by the equality arm of `collect_read_property_names_expr`
+/// INSTEAD of `NAME_OF_CTOR`, which is what makes the narrowing below
+/// complete by construction: a read in any other position still takes
+/// the generic path and still reserves every callable.
+const NAME_OF_CTOR_EQ_PREFIX : String = "@@nameof-ctor-eq:"
+
+///|
+/// Is this operator an equality comparison, i.e. one whose result
+/// depends on the operand strings only through `===`-style identity?
+///
+/// Relational operators are excluded on purpose. `name < "M"` observes
+/// the name's ORDER, which a rename changes even when no name equals a
+/// literal, so the literal set says nothing there.
+pub fn binop_is_equality(op : @ast.TsBinOp) -> Bool {
+  match op {
+    @ast.TsBinOp::BinEq
+    | @ast.TsBinOp::BinNe
+    | @ast.TsBinOp::AbstractEq
+    | @ast.TsBinOp::AbstractNe => true
+    _ => false
+  }
+}
+
+///|
+/// If `expr` is exactly `<recv>.constructor.name` (or the `["…"]`
+/// spellings of either step), return `<recv>`.
+///
+/// Deliberately narrow: only the shapes `record_name_receiver` would
+/// have classified as `NAME_OF_CTOR`, so the two cannot disagree about
+/// which reads the narrowing accounts for.
+pub fn ctor_name_read_receiver(expr : @ast.TsExpr) -> @ast.TsExpr? {
+  let inner = match expr {
+    @ast.TsExpr::PropAccess(inner, "name") => inner
+    @ast.TsExpr::IndexAccess(inner, @ast.TsExpr::StringLit("name")) => inner
+    _ => return None
+  }
+  match inner {
+    @ast.TsExpr::PropAccess(recv, "constructor") => Some(recv)
+    @ast.TsExpr::IndexAccess(recv, @ast.TsExpr::StringLit("constructor")) =>
+      Some(recv)
+    _ => None
+  }
+}
+
+///|
 /// Classify the receiver of a `.name` read. Called from the read-property
 /// walker; writes its answer as a sentinel key.
 fn record_name_receiver(recv : @ast.TsExpr, out : Map[String, Bool]) -> Unit {
@@ -223,7 +271,49 @@ pub fn classes_observing_own_name(
 ///|
 /// Is this one of the sentinel keys rather than a real property name?
 pub fn is_name_observation_key(key : String) -> Bool {
-  key.has_prefix(NAME_OF_PREFIX) || key == NAME_OF_CTOR
+  key.has_prefix(NAME_OF_PREFIX) ||
+  key == NAME_OF_CTOR ||
+  key.has_prefix(NAME_OF_CTOR_EQ_PREFIX)
+}
+
+///|
+/// Every `.constructor.name` read in this block is compared against a
+/// string literal and used for nothing else: return those literals.
+///
+/// `None` means at least one read is somewhere else, so the caller must
+/// keep reserving every callable. That is decided by whether the trusted
+/// walker produced `NAME_OF_CTOR` at all — the equality arm records the
+/// literal sentinel INSTEAD of it, so an unaccounted read is exactly a
+/// surviving `NAME_OF_CTOR`. Nothing here has to enumerate positions or
+/// reconcile counts, which is the only reason it can be trusted: a
+/// second walker's missed subtree would have failed OPEN.
+///
+/// What reserving the literals buys, precisely. The observation is a
+/// boolean, and it changes only if the set of names reaching the site
+/// gains or loses one of the compared literals. Reserving a literal
+/// stops a class already called that from being renamed AND withholds
+/// the name from the generated pool, so neither direction can flip.
+///
+/// The empty case is real and is the interesting one: a bundle that only
+/// ever compares against `"Object"` reserves nothing at all, because no
+/// bundle class is called `Object` and the mangler never invents that
+/// name.
+pub fn ctor_name_comparison_literals(block : @ast.TsBlock) -> Array[String]? {
+  let read : Map[String, Bool] = {}
+  collect_read_property_names_block(block, read)
+  if read.contains(NAME_OF_CTOR) {
+    return None
+  }
+  let lits : Array[String] = []
+  for k in read.keys() {
+    if k.has_prefix(NAME_OF_CTOR_EQ_PREFIX) {
+      lits.push(k[NAME_OF_CTOR_EQ_PREFIX.length():].to_owned())
+    }
+  }
+  if lits.is_empty() {
+    return None
+  }
+  Some(lits)
 }
 
 ///|

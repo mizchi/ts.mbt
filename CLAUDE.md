@@ -657,6 +657,74 @@ product surfaces now.
   second consumer, and `--verify` detects none of this class: every
   name resolves, it just resolves to the wrong thing. The package entry
   cannot reach it, because nothing imports a barrel's own default.
+  Every harness above measures mtsc against ITSELF or against a
+  case somebody wrote. `just compare-terser-bundles` measures it
+  against terser on real bundles, same input, and that number was very
+  different: `compare-terser` stood at 32 win / 0 loss on 34
+  hand-written cases while mtsc was **+51.6% behind terser on typebox**.
+  Both true — a case corpus covers the rules somebody thought of. Raw
+  bytes now say mtsc is smaller on 5 of 9; GZIPPED it is smaller on 1 of
+  9, and gzip is what ships. remeda is −388 raw and **+152 gzipped**,
+  which means the bytes removed were bytes gzip would have removed
+  anyway, so a harness counting raw bytes scores the wrong thing.
+  typebox's +51.6% was ONE `.name` read in a 5,000-line bundle:
+  `IsEqual(proto.constructor.name, "Object")`. `observed_names.mbt`
+  reserves every callable when a `.name` read's receiver cannot be
+  narrowed to a class hierarchy, `proto.constructor` cannot be, and the
+  fail-closed answer is the wildcard — 119,933 -> 90,042 with the read
+  deleted, 842 top-level functions going from fully spelled out to one
+  or two characters. Two changes recover it, both reusing trusted
+  machinery. `call_inline` required every ARGUMENT to be pure, which
+  since the getter fix excludes every property read, so a one-line
+  `IsEqual` helper was never inlined at any call site reading a
+  property; that requirement exists to stop duplicating, dropping or
+  reordering an argument's effects, and all three are questions about
+  the BODY — when it reads every parameter exactly once, in argument
+  order, unconditionally, substitution reproduces the call's evaluation
+  exactly (`params_read_in_argument_order`, an allowlist so a new node
+  declines rather than assuming an order nobody checked). And
+  `collect_read_property_names_expr` now recognises
+  `<expr>.constructor.name === "lit"` and records the LITERAL instead of
+  the reserve-everything sentinel. Recognising it inside the TRUSTED
+  walker is what makes the narrowing complete by construction: a read in
+  any other position still falls through and still reserves everything,
+  so a missed shape costs bytes rather than correctness — the opposite
+  fail direction from the sentinel channel itself. Reserving the literal
+  does both jobs, because a reserved name is also withheld from the
+  generated pool: a class already called that keeps its name, and no
+  class can be renamed TO it. typebox 119,933 -> 90,056, +51.3% ->
+  +13.8%, gzip +27.1% -> +17.4%, and the other eight targets
+  byte-identical.
+  Writing the case for that found a WORSE bug underneath, and it was
+  pre-existing: `try_inline_trivial_call` substituted parameters ONE AT
+  A TIME, so a later parameter's substitution rewrote a name an earlier
+  one had just introduced. `const add = (a, b) => a + b` with a
+  top-level `let b = 3` compiled `add(b, 1)` to `b + b` and then
+  `1 + 1` — three call sites returning 2 / 200 / 14 where the answers
+  are 4 / 103 / 10, under the shipping flag set, with no crash and no
+  free variable, so `--verify` cannot see it. Both arguments are pure,
+  so it had nothing to do with the relaxation above. What makes it the
+  normal case rather than an exotic one is the pass ORDER: the mangler
+  runs BEFORE inlining, so parameters are named `a`, `b`, `c` and so are
+  the top-level bindings the arguments mention. Fixed by substituting
+  simultaneously, as two phases through the existing one-name
+  substitution via a `@@inline-arg:<i>` placeholder no identifier can
+  equal. It is pinned by a UNIT test rather than a corpus case, and that
+  was decided by measurement: the fixture written first still PASSED
+  with the fix mutated out, because end to end the collision needs the
+  mangler to hand a top-level binding the same short name as a later
+  parameter, and there it did not. A case that cannot fail while the bug
+  is present is coverage-shaped, so it was deleted rather than shipped.
+  `--rules` then asks TERSER to price its own compress rules — run it
+  once per rule with that rule off — which is the ceiling for porting
+  each one, known before writing any of it. It corrected a ranking made
+  by COUNTING: mtsc emits 9x fewer comma-fused statements than terser
+  (valibot 322 vs 36), so `sequences` looked like the biggest gap;
+  priced across nine targets it is +1,500 bytes and sixth of eight,
+  while `join_vars` is +15,522 (+1,875 gzipped) and `conditionals`
+  +8,774. Same failure mode as `computed_props`, `loops` and `typeofs`
+  before it — a label or a count standing in for the objective — except
+  this time it was caught before the work.
   Every harness above is a differential: it needs a second thing to
   compare against, so it only covers inputs somebody arranged.
   `verify.mbt` (`mtsc --verify`) is the one total check — it re-parses the

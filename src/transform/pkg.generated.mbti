@@ -19,6 +19,8 @@ pub fn as_const_inline_block(@ast.TsBlock) -> @ast.TsBlock
 
 pub fn auto_reserve_from_module(@ast.TsModuleBlock, @ast.TsModule, ManglerConfig) -> ManglerConfig
 
+pub fn binop_is_equality(@ast.TsBinOp) -> Bool
+
 pub fn build_const_enum_table(Array[@ast.TsEnumDecl]) -> Map[String, @ast.TsExpr]
 
 pub fn build_enum_inline_table(Array[@ast.TsEnumDecl], include_non_const? : Bool) -> Map[String, @ast.TsExpr]
@@ -56,6 +58,10 @@ pub fn container_name_set(SymbolGraph, Map[Int, Bool]) -> Map[String, Bool]
 pub fn count_type_fold_sites(@ast.TsBlock) -> Int
 
 pub fn count_type_fold_sites_by_kind(@ast.TsBlock) -> Map[String, Int]
+
+pub fn ctor_name_comparison_literals(@ast.TsBlock) -> Array[String]?
+
+pub fn ctor_name_read_receiver(@ast.TsExpr) -> @ast.TsExpr?
 
 pub fn drop_dead_properties_block(@ast.TsBlock, Map[String, Bool]) -> @ast.TsBlock
 

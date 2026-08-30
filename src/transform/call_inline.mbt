@@ -40,6 +40,11 @@
 priv struct TrivialFn {
   params : Array[String]
   body : @ast.TsExpr
+  /// Substituting the arguments reproduces the call's evaluation
+  /// EXACTLY: every parameter is read once, in argument order, and
+  /// unconditionally. When that holds the arguments do not have to be
+  /// pure — see `params_read_in_argument_order`.
+  order_exact : Bool
 }
 
 ///|
@@ -157,7 +162,175 @@ fn trivial_fn_of(own_name : String, rhs : @ast.TsExpr) -> TrivialFn? {
       return None
     }
   }
-  Some({ params: names, body })
+  Some({
+    params: names,
+    body,
+    order_exact: params_read_in_argument_order(body, names),
+  })
+}
+
+///|
+/// Does substituting the arguments into this body reproduce the call's
+/// evaluation exactly?
+///
+/// The purity requirement on arguments in `try_inline_trivial_call` is
+/// there to stop three things: DUPLICATING an argument's effects,
+/// DROPPING them, and REORDERING them. All three are questions about
+/// where the body reads its parameters, not about the arguments — so
+/// when the body reads every parameter exactly once, in the order the
+/// arguments appear, and unconditionally, an impure argument is
+/// perfectly safe:
+///
+///   function IsEqual(left, right) { return left === right }
+///   IsEqual(proto.constructor.name, "Object")
+///     ->  proto.constructor.name === "Object"
+///
+/// A call evaluates its arguments left to right and then the body; the
+/// substituted expression evaluates them in the same order and does the
+/// same comparison. That is not an approximation, it is the same
+/// sequence of operations.
+///
+/// This is why the relaxation matters in practice rather than only in
+/// principle: `is_pure_value` calls a property read IMPURE (correctly —
+/// a getter can do anything), so a one-line `IsEqual` helper was never
+/// inlined at any call site whose argument read a property. typebox
+/// calls it 160 times.
+///
+/// The three ways the exactness can fail, and all are rejected:
+///
+///   * a parameter read behind `&&` / `||` / `??` / `?:` — the call
+///     always evaluates the argument, the substituted form may not
+///   * parameters read out of argument order — `(a, b) => b === a`
+///     would swap two argument evaluations
+///   * a parameter never read — its argument's effects disappear
+///
+/// The walk below is an ALLOWLIST: an expression form it does not know
+/// returns false. A new AST node therefore declines the relaxation
+/// rather than silently claiming an evaluation order it never checked.
+fn params_read_in_argument_order(
+  body : @ast.TsExpr,
+  params : Array[String],
+) -> Bool {
+  if params.is_empty() {
+    return true
+  }
+  let seen : Array[String] = []
+  let ok = Ref::new(true)
+  fn is_param(n : String) -> Bool {
+    params.contains(n)
+  }
+  // Does this subtree mention any parameter at all? Used to reject a
+  // conditionally-evaluated position without having to model it.
+  fn mentions_param(e : @ast.TsExpr) -> Bool {
+    for p in params {
+      let (local_, nested) = count_var_uses_expr(e, p, 0, 0, false)
+      if local_ + nested > 0 {
+        return true
+      }
+    }
+    false
+  }
+  fn walk(e : @ast.TsExpr) -> Unit {
+    if !ok.val {
+      return
+    }
+    match e {
+      // Effect-free leaves.
+      @ast.TsExpr::NumberLit(_)
+      | @ast.TsExpr::IntLit(_)
+      | @ast.TsExpr::BigIntLit(_)
+      | @ast.TsExpr::BoolLit(_)
+      | @ast.TsExpr::StringLit(_)
+      | @ast.TsExpr::NullLit
+      | @ast.TsExpr::ArrayHole => ()
+      @ast.TsExpr::Var(n) => if is_param(n) { seen.push(n) }
+      // Short-circuiting and conditional positions: the call evaluates
+      // every argument, so a parameter read that MIGHT not run breaks
+      // the correspondence. The left operand / condition always runs.
+      @ast.TsExpr::BinOp(@ast.TsBinOp::And, l, r)
+      | @ast.TsExpr::BinOp(@ast.TsBinOp::Or, l, r)
+      | @ast.TsExpr::BinOp(@ast.TsBinOp::Coalesce, l, r) => {
+        walk(l)
+        if mentions_param(r) {
+          ok.val = false
+        }
+      }
+      @ast.TsExpr::Cond(c, t, f) => {
+        walk(c)
+        if mentions_param(t) || mentions_param(f) {
+          ok.val = false
+        }
+      }
+      // Strict left-to-right, both operands always evaluated.
+      @ast.TsExpr::BinOp(_, l, r) => {
+        walk(l)
+        walk(r)
+      }
+      @ast.TsExpr::UnaryOp(_, inner) => walk(inner)
+      @ast.TsExpr::PropAccess(recv, _) => walk(recv)
+      @ast.TsExpr::IndexAccess(recv, idx) => {
+        walk(recv)
+        walk(idx)
+      }
+      @ast.TsExpr::ArrayLit(items) =>
+        for it in items {
+          walk(it)
+        }
+      @ast.TsExpr::Spread(inner) => walk(inner)
+      @ast.TsExpr::ObjectLit(fields) =>
+        for f in fields {
+          walk(f.1)
+        }
+      @ast.TsExpr::Call(_, args) =>
+        for a in args {
+          walk(a)
+        }
+      @ast.TsExpr::CallExpr(callee, args) => {
+        walk(callee)
+        for a in args {
+          walk(a)
+        }
+      }
+      @ast.TsExpr::New(_, args) =>
+        for a in args {
+          walk(a)
+        }
+      @ast.TsExpr::MethodCall(recv, _, args) => {
+        walk(recv)
+        for a in args {
+          walk(a)
+        }
+      }
+      // Erased wrappers. Every walker in this repo has to have these
+      // arms — a `_ => ()` catch-all here would make the subtree
+      // invisible and claim an order it never inspected. This one fails
+      // closed instead, but peeling is still the right answer.
+      @ast.TsExpr::TypeArgs(_, inner)
+      | @ast.TsExpr::As(inner, _)
+      | @ast.TsExpr::NonNull(inner) => walk(inner)
+      // Anything else — an assignment, a template literal, a function
+      // expression, an optional chain, `await`, `yield`. Some are
+      // provably fine; none is needed for the shapes this rule exists
+      // to catch, and guessing is how an evaluation-order rule goes
+      // wrong.
+      _ => ok.val = false
+    }
+  }
+
+  walk(body)
+  if !ok.val {
+    return false
+  }
+  // Every parameter, exactly once, in argument order.
+  if seen.length() != params.length() {
+    return false
+  }
+  for i, p in params {
+    if seen[i] != p {
+      return false
+    }
+  }
+  true
 }
 
 ///|
@@ -515,17 +688,64 @@ fn try_inline_trivial_call(
   if args.length() != fn_.params.length() {
     return None
   }
-  for a in args {
-    // An impure argument has to be evaluated exactly once, in order. A
-    // parameter the body never reads would drop it, and substitution can
-    // move it past other work.
-    if !is_pure_value(a) {
-      return None
+  // An impure argument has to be evaluated exactly once, in order. A
+  // parameter the body never reads would drop it, and substitution can
+  // move it past other work.
+  //
+  // `order_exact` decides those three questions from the BODY, which is
+  // where they are actually decided — see
+  // `params_read_in_argument_order`. When it holds, the substituted
+  // expression performs the same operations in the same sequence as the
+  // call, so the arguments need not be pure.
+  if !fn_.order_exact {
+    for a in args {
+      if !is_pure_value(a) {
+        return None
+      }
     }
   }
+  // Substitute the parameters SIMULTANEOUSLY.
+  //
+  // Doing it sequentially — `for i, p { body = substitute(body, p,
+  // args[i]) }` — lets a later parameter's substitution rewrite a name
+  // that an EARLIER one just introduced:
+  //
+  //   const add = (a, b) => a + b;
+  //   let b = 3;
+  //   add(b, 1)
+  //     a := b   ->  b + b
+  //     b := 1   ->  1 + 1        // 2, and the answer is 4
+  //
+  // Both arguments there are pure, so this was reachable before the
+  // `order_exact` relaxation above — and it produced a WRONG VALUE
+  // under the shipping flag set, not a crash. What made it likely
+  // rather than exotic is the pass ORDER: the mangler runs before this
+  // pass, so parameters are named `a`, `b`, `c` and so are the
+  // top-level bindings the arguments mention. A collision is the normal
+  // case in mangled code, which is the same trap the "Scope narrowing"
+  // section above describes for a different reason.
+  //
+  // Two phases through the existing one-name substitution, rather than a
+  // new simultaneous walker: rename each parameter to a placeholder no
+  // JavaScript identifier can equal, then replace the placeholders. A
+  // placeholder cannot occur inside an argument (arguments come from
+  // parsed source) and cannot equal a parameter name, so neither phase
+  // can capture.
   let mut body = fn_.body
   for i, param in fn_.params {
-    body = substitute_expr(body, param, args[i])
+    body = substitute_expr(body, param, @ast.TsExpr::Var(inline_arg_slot(i)))
+  }
+  for i, _ in fn_.params {
+    body = substitute_expr(body, inline_arg_slot(i), args[i])
   }
   Some(body)
+}
+
+///|
+/// A placeholder name for argument `i` during substitution. `@` is not
+/// valid in a JavaScript identifier, so no parsed source can produce
+/// this name and neither substitution phase can capture the other's
+/// output.
+fn inline_arg_slot(i : Int) -> String {
+  "@@inline-arg:" + i.to_string()
 }

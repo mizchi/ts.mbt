@@ -275,3 +275,30 @@ bench-pipeline *ARGS:
 # Regenerate the machine-derived mangle-safety cases
 gen-mangle-cases:
     node scripts/generate_mangle_cases.mjs
+
+# mtsc against terser on REAL bundles, not hand-written cases.
+#
+# `compare-terser` asks "is the rule we thought of missing?" over 34
+# cases, and it stood at 32 win / 0 loss while mtsc was 51% behind terser
+# on a real library. This asks the blunt question: same input (each
+# type-aware target's unoptimized bundle), terser's compress+mangle
+# against mtsc's full pipeline, raw AND gzipped.
+#
+# GZIP is the number that matters — nobody ships unzipped JS, and the
+# two metrics disagree: mtsc has been smaller raw and larger gzipped on
+# the same target.
+#
+# `--rules` asks TERSER to price its own compress rules, by running it
+# once per rule with that rule off. That is the ceiling for porting each
+# one, measured before writing any of it — and it corrected a ranking
+# that had been made by counting occurrences instead of bytes.
+#
+# Needs `just measure-type-aware` to have run once (it writes the shared
+# unoptimized bundles).
+#
+#   just compare-terser-bundles
+#   just compare-terser-bundles --rules
+#   just compare-terser-bundles --only typebox
+compare-terser-bundles *ARGS:
+    moon build --target native --release
+    node scripts/compare_terser_bundles.mjs {{ ARGS }}

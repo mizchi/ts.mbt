@@ -1,0 +1,21 @@
+{
+  "origin": "ts.mbt — found by a head-to-head against terser 5.50.0 on real bundles (same input, each type-aware target's unopt.mjs). mtsc was +51.6% on typebox, the worst loss by a wide margin.",
+  "what": "`observed_names.mbt` reserves every callable's name bundle-wide when a `.name` read's receiver cannot be narrowed to a class hierarchy. typebox has exactly ONE such read in a ~5,000-line bundle — `IsEqual(proto.constructor.name, \"Object\")` — and it cost 24.9% (119,933 -> 90,042 with the read deleted; 842 top-level functions went from fully spelled out to 1-2 chars). Two changes recover it. First, `call_inline` required every ARGUMENT to be pure, which since the getter fix excludes any property read, so a one-line `IsEqual` helper was never inlined; the purity requirement exists to stop duplicating, dropping or reordering an argument's effects, and all three are questions about the BODY — when it reads every parameter exactly once, in argument order, unconditionally, substitution reproduces the call's evaluation exactly (`params_read_in_argument_order`). Second, `collect_read_property_names_expr` now recognises `<expr>.constructor.name === \"lit\"` and records the LITERAL instead of the reserve-everything sentinel; recognising it inside the trusted walker is what makes the narrowing complete by construction — a read in any other position still falls through and still reserves every callable, so a missed shape costs bytes rather than correctness. Reserving the literal does both jobs: a class already called that keeps its name, and no class can be renamed TO it, because a reserved name is also withheld from the generated pool. typebox: 119,754 -> 90,056, and +51.3% -> +13.8% against terser.",
+  "mtscArgs": [],
+  "exports": [
+    "shapeIsShape",
+    "widgetIsShape",
+    "shapeIsManglerName",
+    "widgetIsManglerName",
+    "objIsPlain",
+    "arrIsPlain",
+    "shapeIsPlain",
+    "shapeViaHelper",
+    "widgetViaHelper",
+    "areas",
+    "eqOrder",
+    "shortCircuit",
+    "swapOrder"
+  ],
+  "expectStatus": "pass"
+}

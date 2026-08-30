@@ -563,3 +563,105 @@ case が `mtscArgs` を持たないのはそのためです。baseline leg が
 この bug は library の package entry では出ません——barrel 自身の
 `export default` を誰も import しないからです。`measure-type-aware --app`
 （application entry を測る）を入れて最初に出てきたのがこれでした。
+
+## case53 / case54: `.name` 読み 1 箇所が bundle 全体の callable を予約していた
+
+実バンドルの head-to-head（`just compare-terser-bundles`）で mtsc は
+typebox で terser に **+51.6%** 負けていました。corpus 中で最悪です。
+原因は 5,000 行中の **1 行**です。
+
+```js
+IsEqual(proto.constructor.name, "Object")
+```
+
+`observed_names.mbt` は `.name` 読みの receiver を class 階層に narrowing
+できないとき、bundle 全体の callable 名を予約します。`proto.constructor`
+は任意の constructor なので narrowing できず、fail-closed で wildcard。
+その 1 行を消すと 119,933 → 90,042 byte（−24.9%）、top-level 関数 842 個が
+フルスペルから 1〜2 文字になります。
+
+修正は 2 段で、どちらも既存の信頼済み機構を再利用しました。
+
+### 83a: `call_inline` の引数純粋性は body の質問だった
+
+`try_inline_trivial_call` は**すべての引数が pure**であることを要求して
+いました。この要求が防いでいるのは 3 つ——引数の効果を**複製**する、
+**落とす**、**並べ替える**——で、3 つとも「body がどこで parameter を
+読むか」の質問です。body が各 parameter を**引数順に、無条件に、正確に
+1 回**読むなら、代入後の式は call と同じ操作を同じ順で行います。近似
+ではなく同一です。
+
+これが実務で効くのは、getter 修正以降 `is_pure_value` が**あらゆる
+property 読みを impure と判定する**からです。1 行の `IsEqual` helper は
+property を読む call site では一度も inline されていませんでした。
+typebox はそれを 160 回呼びます。
+
+`params_read_in_argument_order` は式の形の**allowlist** です。知らない
+node は relaxation を断ります——順序規則で「見ていない形を安全と仮定
+する」のが一番危ないので。
+
+### 83b: 比較されたリテラルだけを予約する
+
+`collect_read_property_names_expr` に `<expr>.constructor.name === "lit"`
+の arm を足し、reserve-everything の sentinel の**代わりに**リテラルを
+記録します。**信頼済み walker の中で認識する**ことが完全性を構成的に
+保証します——他の位置の読みは generic path に落ちて今でも全 callable を
+予約するので、**形を取り逃がすと byte を損するだけで正しさは損なわない**。
+sentinel channel 自身とは逆向きの fail 方向です。
+
+リテラルを予約すると 2 つの仕事が同時に片付きます。
+
+- すでにその名前の class が rename されない（`Shape`）
+- どの class もその名前に rename されない（`"a"`——mangler が最初に配る
+  名前）。予約された名前は**生成 pool からも外れる**ので。
+
+2 番目が素朴な実装が落とす方向で、`case53` は両方を観測します。片方だけ
+の実装は mutation で `shapeIsShape` が true→false、もう片方だけなら
+`shapeIsManglerName` が false→true になります。
+
+`case53` の direction 2 は 1 文字空間**全部**（`a`..`h`）と比較します。
+どの class がどの文字を貰うかは bundle 全体の参照数で決まるので、1 文字
+だけ書いた case は mangler の順序が動いた瞬間に**黙って**検出を止めます。
+空間を覆えば割り当てに依存しません。同時にコストも正直に出ます——1 文字
+8 個の予約は高く、それが「constructor 名を `"a"` と比べる」コードの値段
+です。実コードは `"Object"` と比べるので、コストは 0 です。
+
+結果: typebox 119,933 → **90,056**、terser 比 **+51.3% → +13.8%**、
+gzip も +27.1% → +17.4%。他 8 target は byte 完全一致（この形が無い）。
+
+### そして case54 が本当のバグを掘り出した
+
+`case54` は 83a を覆うために書いた case で、**修正済みのコンパイラで
+落ちました**。下に別のバグがありました。
+
+```js
+const add = (a, b) => a + b;
+let b = 3;
+add(b, 1)
+  a := b   ->  b + b
+  b := 1   ->  1 + 1     // 2、答えは 4
+```
+
+`try_inline_trivial_call` は parameter を**逐次**代入していたので、後の
+parameter の代入が、前の代入が持ち込んだ名前を書き換えていました。
+**引数は両方 pure** なので 83a とは無関係に前から到達可能で、
+`--bundle --minify --fold --treeshake --mangle` で **3 つの call site が
+4/103/10 のところ 2/200/14** を返していました。crash も free variable も
+出ないので `--verify` も検出しません。
+
+**mangle が inline より前に走る**ことがこれを例外ではなく常態にします:
+parameter は `a`,`b`,`c` で、引数が言及する top-level binding も
+`a`,`b`,`c` です。この pass の "Scope narrowing" 節が別の理由で書いて
+いるのと同じ罠です。
+
+修正は同時代入で、既存の 1 名前置換を 2 段に使います: 各 parameter を
+`@@inline-arg:<i>`（JS の識別子になり得ない）に改名してから、placeholder
+を引数に置き換える。どちらの段も capture できません。
+
+pin は **unit test** です。end-to-end の fixture (`case55`) を先に書いた
+のですが、**修正を mutation で戻しても PASS しました**——衝突が起きるには
+mangler が top-level binding と後続 parameter に同じ短名を配る必要があり、
+その fixture では別の名前を配ったからです。バグがあるのに落ちない case は
+coverage の形をしただけの何かなので、出荷せず削除しました。
+`case54` は偶然この bug も捕まえますが（`tap` が mangle 後に衝突する）、
+それは運であって coverage ではない、というのが unit test がある理由です。
