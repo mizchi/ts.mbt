@@ -503,7 +503,21 @@ product surfaces now.
   never exercised the export surface at all. What the case cannot do is
   the other direction — a value comparison cannot observe an absence,
   since the reference leg has the method — and `verify-dce-coverage`
-  plus the corpus byte deltas cover that.
+  plus the corpus byte deltas cover that. The cost of widening the
+  analysis is ZERO bytes on all ten targets, byte-for-byte, and since a
+  zero can also mean "the pass never fires on real code" the confirmation
+  is a separate observation: hono's report went from `SUPPRESSED` plus
+  `would have dropped 18 unreached method(s)` naming
+  `HonoRequest.param` and eight siblings, to `nothing to do — every
+  declared method is read somewhere static or is on the export surface`.
+  Those nine public methods are on the surface now, which is direct
+  evidence the walk follows hono's real `#req ??= new HonoRequest(…)`,
+  and the corpus-wide #73 ceiling drops from 14 methods to 5
+  (excalidraw alone). The bytes not moving is the same conclusion this
+  document reaches from four other directions: the reserved set is not
+  large, it is EXHAUSTIVE, so adding a reservation route changes
+  nothing. `verify-dce-coverage` is unchanged at 31 eliminated /
+  0 broken, which is the check that the widening did not over-reserve.
   What DOES ship from that investigation is a warning, because
   reflection is the one blocker the author rather than the compiler has to
   act on: `mtsc` now says so by default rather than behind

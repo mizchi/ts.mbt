@@ -1057,3 +1057,47 @@ scope-narrowing bug がそれで数千 seed を生き延びました。ここで
 値比較では見られません（reference leg には method があるので、absence は
 観測できない）。そちらは `just verify-dce-coverage`（marker が消えている
 ことを assert する）と type-aware corpus の byte 差が見ます。
+
+### 修正の効果と代償（実測）
+
+soundness 側を広げた修正なので byte を払うのが普通ですが、**10 target
+すべて byte 完全一致**でした:
+
+| target | 修正前 | 修正後 |
+| --- | --- | --- |
+| hono | 18,839 | 18,839 |
+| valibot | 86,861 | 86,861 |
+| typebox | 87,696 | 87,696 |
+| immer | 20,116 | 20,116 |
+| neverthrow | 5,125 | 5,125 |
+| ts-pattern | 8,152 | 8,152 |
+| superstruct | 10,394 | 10,394 |
+| excalidraw | 276,573 | 276,573 |
+| sprawlens | 370,414 | 370,414 |
+| remeda | 28,459 | 28,459 |
+
+0 byte は「pass が実コードで発火していない」の可能性もあるので、そこは
+別の観測で確認します。**hono の判定が変わりました**:
+
+```
+修正前: SUPPRESSED — a sink in the bundle can observe a member name…
+        would have dropped 18 unreached method(s):
+          HonoRequest.param / queries / parseBody / bytes / blob /
+          addValidatedData / valid / matchedRoutes / routePath
+
+修正後: nothing to do — every declared method is read somewhere static
+        or is on the export surface, so the reachability analysis was
+        skipped.
+```
+
+つまり `HonoRequest` の public API 9 個が export surface に**乗るように
+なった**——`#req ??= new HonoRequest(…)` という実物の綴りを辿れている
+直接の証拠です。corpus 全体の #73 天井は **14 method から 5**
+（excalidraw のみ）に下がりました。
+
+byte が動かない理由はこの文書と CLAUDE.md が別の 4 方向から到達している
+結論と同じです: これらの library では当該の名前が**別の経路でも既に
+予約されている**（property 名 candidate は 9 target 中 7 つで 0 個）。
+予約集合は「大きい」のではなく**網羅的**なので、予約経路を 1 つ増やして
+も減らしても byte は動きません。DCE coverage も 31 eliminated /
+0 broken で不変——過剰予約に振れていないことの確認です。
