@@ -1,0 +1,13 @@
+{
+  "origin": "ts.mbt — #93, found because `Object.keys(r).sort()` in the case58 fixture would not compile",
+  "what": "The checker's array-prototype table declared every optional parameter as required and every rest parameter as one slot, so it rejected `arr.sort()`, `arr.slice()`, `arr.join()`, `arr.flat(2)` and `arr.push(a, b)` under the default checking path. The arity check already recovers optionality from parameter TYPES — a parameter whose type accepts `undefined` is omittable, and a `Rest` never raises the required count — so the fix is the table saying what it means. Every form here is compiled by mtsc and run by Node against the same source.",
+  "mtscArgs": [
+    "--treeshake",
+    "--fold",
+    "--minify"
+  ],
+  "exports": [
+    "report"
+  ],
+  "expectStatus": "pass"
+}

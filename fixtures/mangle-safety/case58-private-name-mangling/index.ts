@@ -39,13 +39,9 @@
 // `JSON.stringify`, the spread and the `for…in` all start seeing it.
 // The byte saving is pinned by the number in `docs/mangle-safety.md`
 // (hono -1,876) and by the census line in `--explain-mangle`.
-//
-// NOT covered: `#x in obj`, the ergonomic brand check. mtsc's checker
-// rejects it — `cannot find name __private_brand__0__path` — because the
-// `in` operand is lowered to the brand name and the checker has no entry
-// for it. That is a checker gap, separate from this rename, and it is
-// filed on its own; putting it here would only make this case
-// blocked-compile.
+//   5. `#x in obj`, the ergonomic brand check, still answers for the
+//      renamed name — on an instance, on an unrelated class, and on a
+//      plain object.
 
 class Router {
   #notFoundHandler: (() => string) | null = null;
@@ -70,6 +66,13 @@ class Router {
       (this.#notFoundHandler ? this.#notFoundHandler() : "none")
     );
   }
+  // The `in` operand is a bare `Var` after the parser lowers `#path`, so
+  // it is not a property position: the class body's `this.#path` was
+  // renamed and this was not, leaving a reference to nothing under plain
+  // `--bundle` and a stale `#path` under `--mangle-properties`.
+  static isRouter(v: unknown): boolean {
+    return #path in (v as Router);
+  }
 }
 
 // The same private name in a different class. Independent members.
@@ -93,6 +96,9 @@ for (const k in r) {
 
 export const report = {
   describe: r.describe(),
+  brandOnRouter: Router.isRouter(r),
+  brandOnOther: Router.isRouter(o as unknown as Router),
+  brandOnPlain: Router.isRouter({} as Router),
   otherPath: o.p,
   publicPath: r.path,
   // A private must not appear in any of these, in any leg.

@@ -3638,6 +3638,31 @@ fn rename_properties_in_expr(
   prop_map : Map[String, String],
 ) -> @ast.TsExpr {
   match expr {
+    // `#x in obj` — the ergonomic brand check, standard since ES2022 and
+    // the idiomatic way to write a class type guard. The parser lowers
+    // the `#x` token in that position to a bare `Var`, so it is not a
+    // property position and this walker used to leave it alone: the class
+    // body's `this.#path` was renamed and the `in` operand was not, so
+    // plain `mtsc --bundle` emitted
+    // `__private_brand__0__path in v` — a reference to nothing, throwing
+    // `ReferenceError` — and with `--mangle-properties` the same shape
+    // left `#path` behind while the declaration became `#a`.
+    //
+    // Gated on the name being a private member or a private brand,
+    // because neither can be an ordinary variable: `#x` is not a legal
+    // identifier and the brand prefix is minted only by
+    // `mangle_private_name`. Without the gate this arm would rewrite
+    // `someVar in obj` whenever `someVar` collided with a mangled
+    // property name.
+    BinOp(@ast.TsBinOp::In, @ast.TsExpr::Var(n), rhs) if is_private_member_name(
+        n,
+      ) ||
+      private_brand_member(n) is Some(_) =>
+      BinOp(
+        @ast.TsBinOp::In,
+        @ast.TsExpr::Var(rename_prop_key(n, prop_map)),
+        rename_properties_in_expr(rhs, prop_map),
+      )
     PropAccess(recv, name) =>
       PropAccess(
         rename_properties_in_expr(recv, prop_map),

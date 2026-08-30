@@ -851,15 +851,68 @@ spread / `for…in` の 4 つ全部が見えるようになるからです。
 byte の側は上の hono の数字と `--explain-mangle` の census 行
 （`kept N #private (class-scoped, no proof needed)`）が押さえます。
 
-### 途中で見つかった checker の 2 つの穴（別件、未修正）
+### 途中で見つかった checker の 2 つの穴（修正済み）
 
 `case58` を書く過程で、fixture が compile できずに 2 回落ちました。
-どちらも mangler とは無関係の checker 側の穴です:
+どちらも mangler とは無関係の checker 側の穴で、どちらも fixture を
+**その穴を避ける形に書き換えれば消えます**——それが、この 2 つが
+今まで生き延びた理由そのものです。corpus からこれらに当たる経路が
+無いのは、当たる fixture を誰も書かなかったからで、pass が正しいから
+ではありません。
 
-* **`#x in obj`**（ergonomic brand check）が通らない。`in` の左辺が
-  brand 名に lowering され、checker にその entry が無いので
-  `cannot find name __private_brand__0__path`。
-* **`Array.prototype.sort()`** が引数 1 個必須と判定される
-  （comparator は optional）。
+#### 1. `#x in obj` が `cannot find name __private_brand__0__path`
 
-どちらも case からは外し、別途 issue にしています。
+ES2022 の ergonomic brand check、class の type guard の定型です:
+
+```ts
+static isRouter(v: unknown): boolean { return #path in (v as Router) }
+```
+
+parser は expression 位置の `#x` token を
+`Var("__private_brand__N__x")` に lowering します。brand は class の
+**member** を指す名前で、binding として宣言されるものではないので、
+環境に entry は無く、探しても見つかりません。`check_undefined_name` が
+brand prefix で早期 return します。prefix を条件にしたのは、それが
+曖昧さの無い判定だからです——この綴りを作るのは
+`mangle_private_name` だけで、しかも `#` 始まりの source token に
+対してだけ作ります。
+
+同じ形で **mangler 側にも穴**がありました。`in` の左辺は property
+位置ではないので `rename_properties_in_expr` は素通ししていて、class
+body の `this.#path` は rename され `in` の operand はされない——plain
+`mtsc --bundle` が `__private_brand__0__path in v`、つまり何も指さない
+参照を吐いて `ReferenceError`、`--mangle-properties` では宣言が `#a`
+になって `in` 側に `#path` が残る。`case58` がこの両方を Node で
+押さえます。
+
+#### 2. array built-in の optional / rest 引数が全部「必須 1 個」
+
+`arr.sort()` が `expected 1 argument(s), got 0` で落ちます。
+`array_prototype_member` の table が、**optional 引数を必須として、
+rest 引数を 1 slot として**宣言していました:
+
+| 書き方 | 旧 table の判定 |
+| --- | --- |
+| `arr.sort()` | expected 1, got 0 |
+| `arr.slice()` | expected 2, got 0 |
+| `arr.join()` | expected 1, got 0 |
+| `arr.push(a, b)` | expected 1, got 2 |
+| `arr.flat(2)` | expected 0, got 1 |
+
+表現する機構は最初からあって、table が使っていなかっただけです:
+`required_arity_from_types` は「`undefined` を受ける型の引数は省略可能」
+と読み（parser が `x?: T` を `T | undefined` に広げるので）、`Rest` に
+対しては必須数を上げません。つまり修正は **table が意味を言うだけ**。
+
+`fixtures/mangle-safety/case59-array-builtin-arity` が 18 の形を
+mtsc でコンパイルし、同じ source を Node でも走らせます。mutation
+self-check は検出します（`[REGR] case59 blocked-compile … expected
+1 argument(s), got 0`）。
+
+そして **この case の初稿は、自分がその場で入れたバグを通しました**。
+`concat` の正しい signature は `(T | T[])[]` で、union の両側が
+効いています——旧 table の `Func([arr_t], arr_t)` は `a.concat(9)` を
+拒み、`rest(elem)` と書き直すと `a.concat([2, 3])`、つまり実コードが
+ほぼ必ず使う形を拒みます。初稿には bare element の形しか無かったので、
+反対方向に間違った signature を pass させました。union の片側しか
+持たない case は、その 2 つを区別できません。
