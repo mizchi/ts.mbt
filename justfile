@@ -245,6 +245,16 @@ verify-real-world *ARGS:
 # interaction between them. Needs `verify-real-world` to have populated
 # the cache first.
 #
+# A SECOND table runs the same combinations over
+# `fixtures/pass-lattice/lowerings.ts` — one of every TypeScript-only
+# lowering — and observes VALUES rather than stdout: own keys,
+# `JSON.stringify`, spread, `for…in`. The 9 MB target cannot ask either
+# question (published `.js` has no `#private` fields, no enums, no
+# namespaces, and stdout never shows an extra own property), which is why
+# this harness ran the guilty combination on every run while bare
+# `--bundle` leaked mtsc's private-field brand. Re-introducing that bug
+# fails the second table and names the leaked brands.
+#
 #   just verify-pass-lattice
 #   just verify-pass-lattice --only fold+minify --keep
 verify-pass-lattice *ARGS:

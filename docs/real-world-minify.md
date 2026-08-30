@@ -1492,3 +1492,57 @@ bookkeeping で、これは「誰も計測していない仕事」ではなく�
 `mangle` と `peephole` が 30.4% で、どちらも本物の仕事です。
 **CLI 側（読み込み・字句・構文解析）が合計 27.6%** で、これは
 「optimizer を速くする」問題ではなく parser の問題です。
+
+## pass lattice の穴を塞ぐ: lowering を値で観測する
+
+`verify-pass-lattice` は 16 通りの flag 組み合わせを 9 MB の
+`typescript.js` に流し、**毎回「15/15 identical」と言い続けながら**、素の
+`--bundle` が mtsc の private field brand を `JSON.stringify` /
+`Object.keys` / spread / `for…in` に漏らしているのを見逃していました
+（#79）。しかも**その組み合わせ（表の 1 行目）を毎回走らせて**います。
+
+理由は独立に 2 つあります。
+
+1. **target が published `.js`** です。`typescript.js` には `#private`
+   field も `enum` も `namespace` も parameter property もありません——
+   つまり **TypeScript 固有の lowering が 1 つも走らない**。漏れるものが
+   無かった。
+2. 仮にそういう field があっても、**観測が `tsc` の stdout だけ**です。
+   内部オブジェクトに own enumerable property が 1 つ増えても stdout には
+   出ません。問いが答えに届いていなかった。
+
+reference leg 自体は独立（baseline は**元の** `typescript.js`）なので、
+これは self-comparison ではなく **coverage gap** です。
+
+### 2 つ目の表
+
+`fixtures/pass-lattice/lowerings.ts` を同じ 15 通りに流します。中身は
+TypeScript 固有 lowering を 1 つずつ——`#private` field（instance と
+static）、parameter property、accessor、`enum`、`const enum`、
+`namespace`（入れ子含む）、abstract/override——そして観測は**値**です:
+own keys、`JSON.stringify`、object spread、`for…in`。brand の漏れや
+field の消失が実際に変えるのはそこだからです。
+
+baseline は **言語そのもの**: Node が
+`--experimental-transform-types` でこの `.ts` を直接実行した結果。
+mtsc の別の出力ではありません。
+
+意図的に**実ライブラリではありません**。9 MB の target が担うのは
+「誰も思いつかなかった形」で、欠けていたのは lowering と
+**答えが届く問い**でした。専用ファイルなら 1 回の安い compile で全
+lowering を覆えます——ライブラリだと、そのライブラリが偶然使っている
+ものしか覆えません。
+
+### 検出力の確認
+
+歴史的バグ（per-module path が `lower_private_fields` を通らない）を
+mutation で戻すと、2 つ目の表が落ち、**漏れた brand を名前で指します**:
+
+```
+[DIFF] bundle   2883 bytes  boxKeys: "" -> "__private_brand__2__value";
+  counterForIn: "" -> "__private_brand__0__count,__private_brand__0__label";
+  counterJson: "{}" -> "{\"__private_brand__0__count\":2,…}" (+2 more)
+```
+
+15 通り × 25 観測で「differs」だけでは動けないので、差分は**動いた field
+を名指し**します。
