@@ -1739,3 +1739,125 @@ backstop を無効化すると `Ghost: Ghost, real: real` が出て test が落�
 `export function $constructor` が同居）で値を落とす bug も出ました。
 名前だけを見る filter では両方消えます。型宣言があること **かつ**
 同名の runtime binding が無いこと、の両方を要求するようにしました。
+
+## corpus は entry を間違えていないか（`--app`）
+
+ここまでの 9 row は全部 library の **package entry**——公開 API 全部を
+export する barrel——をコンパイルしています。これは 2 つの問いに対して
+構造的に不利な形です。
+
+- **tree-shaking に削るものが無い。** barrel の export は定義上全部
+  live なので、`--treeshake` が落とせるのは「どの export からも
+  到達しないもの」だけ。まともに作られた library ではほぼ何も無い。
+- **property 名が全部 API 境界にある。** library の object 形は
+  そのまま wire format なので、mangler が予約するのは**正しい**。
+  つまり package entry の予約集計は「pass に何ができるか」を何も
+  言っていない。
+
+だから application 側を測ります。`--app` で
+`fixtures/type-aware-corpus/app-entries/<name>.app.ts` を checkout の
+root に stage して、それを entry にします。usage は各 library の
+**README から写す**という制約を付けました（immer と excalidraw だけ
+例外、理由は fixture の header と `app-entries/README.md`）。自分で
+書いた entry は pass が発火するように書いた entry になるので、
+compiler にお世辞を言う harness になります。それは数字が無いより悪い。
+
+### 結果: bundle は 10 倍動いて、型の効きは動かない
+
+| target | package aware | app aware | package phase 合計 | app phase 合計 |
+| --- | --- | --- | --- | --- |
+| hono | 20,817 | 21,755 | 0 | 0 |
+| valibot | 86,982 | **8,056** (−91%) | 0 | 0 |
+| typebox | 119,686 | 114,303 | 0 | **288** |
+| immer | 20,335 | 18,405 | 0 | 0 |
+| neverthrow | 5,156 | 5,594 | 0 | 0 |
+| ts-pattern | 8,567 | 9,370 | 0 | 0 |
+| superstruct | 10,404 | **4,296** (−59%) | 29 | 26 |
+| excalidraw | 279,800 | **121,114** (−57%) | 920 | 715 |
+| remeda | 28,533 | **3,402** (−88%) | 26 | 26 |
+| **合計** | | | **975** | **1,029** |
+
+tree-shaking は劇的に効きます（remeda −88%、valibot −91%）。
+型読み 6 phase の取り分は corpus 全体で **975 → 1,029 byte**、
+54 byte 動いただけです。
+
+つまり **entry を変えても答えは変わりません**。「library の名前が
+公開されているから測れていないのだ」という仮説は、これで数字付きで
+否定されました。動いたのは 2 つだけで、どちらも小さい:
+
+- typebox の `predicate-inline` が 0 → 288。package entry では guard が
+  namespace object 経由で全部外に出るので inline しても declaration が
+  消えない。app entry では call だけが言及なので消える。
+- excalidraw の `as-const-inline` が 920 → 715。bundle が 57% 小さく
+  なった分だけ site が減った。率では上がっています。
+
+leg delta 側では excalidraw の LOSS (−296, −0.11%) が NEUTRAL (−3) に
+なり、typebox の WIN が +247 → +535 に増えます。ただしこれは
+double-pass artifact を含む数字なので、信用すべきは上の phase 列です。
+
+### property 名の候補数は 1 つも増えなかった
+
+仮説の後半——「app の object 形は private だから mangler が動ける」——
+は完全に外れです。`--explain-mangle` の census:
+
+| target | package (distinct / 候補) | app (distinct / 候補) |
+| --- | --- | --- |
+| typebox | 418 / **0** | 426 / **0** |
+| excalidraw | 909 / **0** | 509 / **0** |
+| valibot | 147 / **0** | 45 / **0** |
+| remeda | 96 / **0** | 34 / **0** |
+| immer | 115 / **0** | 119 / **0** |
+| ts-pattern | 83 / **0** | 89 / **0** |
+| superstruct | 54 / **0** | 45 / **0** |
+| hono | 182 / 1 | 192 / 1 |
+| neverthrow | 42 / 1 | 46 / 1 |
+
+**候補数は 9 target 全部で完全に同じ**です。excalidraw では bundle から
+property 名が 400 個消えて（909 → 509）、候補は 1 個も増えていません。
+
+理由は ts-pattern の `--explain-mangle` を読めば分かります。予約の
+出どころは export surface ではなく **library の内部事情**でした:
+
+- `[x27] a linker-synthesized namespace object's keys` — ts-pattern 自身の
+  `export * as P from './patterns.ts'` です。app が `P.select` / `P.not` /
+  `P.when` を使うので、`P` の key は残るしかない。
+- `pattern` / `value` / `key` が `leaves the bundle untyped` — library
+  内部の binding。app が何を export するかとは無関係。
+- `literal key handed straight to a sink` (20) — 同じ。
+
+`docs/type-aware-measurement.md` が別方向から何度も辿り着いた結論と
+同じところに着きます: **予約集合は大きいのではなく網羅的**で、
+そして予約は**正しい**。entry を変えても正しさは変わりません。
+
+### 副産物: 素の `mtsc --bundle` が間違った binding を返していた
+
+typebox の app entry が `Type.Number is not a function` で落ちました。
+最適化 flag なしの `mtsc app.ts --bundle` です。
+
+```ts
+// index.ts
+import * as Type from "./typebox.ts";
+export default Type;
+// other.ts（別 module）
+export const Type = (input) => ...;
+```
+
+phase 1 は衝突を解いて namespace object を `Type$185` に rename します。
+その名前は `namespace_local_renames` に入ります。ところが
+`resolve_export` の fallback は `rename_per_module` **だけ**を読んで
+いました——そこに namespace local の entry は無いので、source の
+綴りである `Type` がそのまま返る。そして `Type` は今
+`other.ts` の arrow に bind されている。
+
+**free variable ではなく、間違った binding です。** bundle は読み込め、
+そして違う関数を呼ぶ。`--verify` は名前が解決するので検出しません。
+
+これで「1 箇所に書いた事実を、2 番目の consumer が不完全に再導出する」
+族が通算 8 件目です。修正は fallback で先に
+`namespace_local_renames` を引くだけ。`export { NS }` /
+`export { NS as Alias }` の綴りも同じ経路なので同時に直り、両方に
+unit test を付けました。
+
+この bug は package entry では出ません——barrel 自身を entry にすると
+`export default` を誰も import しないからです。**app entry を測ると
+決めたことの、最初の払いがこれでした。**

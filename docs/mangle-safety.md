@@ -525,3 +525,41 @@ just verify-checker-soundness
 なく caller の env に足して抜けるときに外す形にしています。`full_snapshot`
 は `vars` しか運ばないので copy すると `declared` slot が落ち、推論が悪化
 して conformance に false positive が 1 件出ました。
+
+## case52: 素の `--bundle` が間違った binding を返していた
+
+corpus に 1 件足しました。mangle の bug ではありません——`mtsc --bundle`
+が、最適化 flag 無しで**間違った関数を呼ぶ bundle** を出していました。
+
+```ts
+// barrel.ts
+import * as Type from "./shapes";
+export * from "./helpers";   // helpers.ts は top-level に `Type` を宣言している
+export default Type;
+// index.ts（consumer）
+import Type from "./barrel";
+Type.Number(7);              // TypeError: Type.Number is not a function
+```
+
+linker の phase 1 は衝突を解いて namespace object を `Type$N` に rename
+し、その名前を `namespace_local_renames` に記録します。`resolve_export`
+の fallback は `rename_per_module` **だけ**を読んでいました。そこに
+namespace local の entry は存在しないので、source の綴り `Type` が
+そのまま返り、`helpers.ts` の arrow に bind されます。
+
+**free variable ではなく間違った binding** です。bundle は読み込めて、
+違う関数を呼ぶ。だから `--verify` は検出しません——名前は全部解決する。
+`export { NS }` / `export { NS as Alias }` も同じ fallback を通るので
+同時に壊れていました（case は両方観測します）。
+
+case が `mtscArgs` を持たないのはそのためです。baseline leg が
+問題の path そのものです。fix を戻すと case は落ちます:
+
+```
+[REGR] case52-namespace-default-export        fail (expected pass)
+       baseline: {"error":"TypeError: Type.Number is not a function"}
+```
+
+この bug は library の package entry では出ません——barrel 自身の
+`export default` を誰も import しないからです。`measure-type-aware --app`
+（application entry を測る）を入れて最初に出てきたのがこれでした。

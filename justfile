@@ -196,9 +196,19 @@ verify-rule-equivalence *ARGS:
 # target's driver, or the row is not evidence. Needs network on the
 # first run; shares the `verify-real-world` checkouts where it can.
 #
+# `--app` compiles an APPLICATION that consumes each library instead of
+# the library's own package entry, which is the only way to ask two of
+# these questions honestly: a barrel's exports are all live, so
+# tree-shaking has nothing to remove, and a library's property names ARE
+# its wire format, so the mangler is right to reserve them. The usage in
+# each app entry is copied from that library's own README — see
+# `fixtures/type-aware-corpus/app-entries/README.md`.
+#
 #   just measure-type-aware
+#   just measure-type-aware --app
 #   just measure-type-aware --only hono --verbose
 #   just measure-type-aware --update        # re-record expected.json
+#   just measure-type-aware --app --update  # re-record expected.app.json
 measure-type-aware *ARGS:
     moon build --target native --release
     node scripts/measure_type_aware.mjs {{ ARGS }}

@@ -618,6 +618,45 @@ product surfaces now.
   eight targets pay 25 bytes or less where reserving every callable cost
   up to +70%. See
   [`docs/type-aware-measurement.md`](./docs/type-aware-measurement.md).
+  Every one of those rows compiles a library's PACKAGE entry, which is
+  structurally unfair to two of the questions: a barrel's exports are
+  all live, so tree-shaking has nothing to remove, and a library's
+  object shapes ARE its wire format, so the mangler is right to reserve
+  every name. `--app` compiles an APPLICATION that consumes each
+  library instead, with the usage copied from that library's own README
+  rather than chosen — an entry written by the person measuring is an
+  entry written to make the passes fire. The answer is that the entry
+  does not matter: tree-shaking moves enormously (remeda 28,533 ->
+  3,402, valibot 86,982 -> 8,056, excalidraw 279,800 -> 121,114) and
+  the six type-reading phases move 54 bytes across the whole corpus,
+  975 -> 1,029. Two rows shift and both are small — typebox's
+  `predicate-inline` 0 -> 288 (a package entry's guards all leave
+  through a namespace object, so inlining never deletes the
+  declaration) and excalidraw's `as-const-inline` 920 -> 715 (fewer
+  sites in a 57%-smaller bundle, a higher rate). The property-name
+  census settles the other half flatly: the candidate count is
+  IDENTICAL on all nine targets, and excalidraw sheds 400 property
+  names (909 -> 509) without gaining one candidate. Reading
+  `--explain-mangle` says why — the reservations were never the export
+  surface. ts-pattern's are its own `export * as P` namespace keys
+  (x27), its untyped internal `pattern` / `value` / `key` bindings, and
+  literal keys handed to sinks: library internals, which an
+  application's entry cannot change. Same conclusion this document
+  reaches from four other directions — the reserved set is not large,
+  it is exhaustive, and it is right. What the exercise DID buy was a
+  bug, in the plainest path there is: `mtsc app.ts --bundle` with no
+  optimization flag returned the WRONG BINDING for a default-exported
+  namespace object. typebox's `src/index.ts` does `import * as Type
+  from './typebox.ts'; export default Type`, another module declares a
+  top-level `const Type`, phase 1 renamed the namespace object to
+  `Type$185` — into `namespace_local_renames` — and `resolve_export`'s
+  fallback read only `rename_per_module`, which has no entry for a
+  namespace local, so the consumer's import stayed spelled `Type` and
+  bound to the unrelated arrow. `Type.Number is not a function`. Eighth
+  time a fact written in one place was re-derived incompletely by a
+  second consumer, and `--verify` detects none of this class: every
+  name resolves, it just resolves to the wrong thing. The package entry
+  cannot reach it, because nothing imports a barrel's own default.
   Every harness above is a differential: it needs a second thing to
   compare against, so it only covers inputs somebody arranged.
   `verify.mbt` (`mtsc --verify`) is the one total check — it re-parses the

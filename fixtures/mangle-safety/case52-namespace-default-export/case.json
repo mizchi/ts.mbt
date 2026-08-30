@@ -1,0 +1,11 @@
+{
+  "origin": "ts.mbt — found by measuring an APPLICATION entry instead of a library's package entry (`measure-type-aware --app`). typebox's app entry threw `Type.Number is not a function` under plain `mtsc --bundle`.",
+  "what": "typebox's `src/index.ts` does `import * as Type from './typebox.ts'; export default Type`, and another module declares a top-level `const Type`. Phase 1 of the linker mints a collision-free name for the synthesized namespace object and records it in `namespace_local_renames` — a DIFFERENT table from `rename_per_module`. `resolve_export`'s fallback, reached whenever `find_import_source` reports the exported local is not itself an import (which it does for a namespace alias, since it only knows about default and named imports), read only `rename_per_module`, which has no entry for a namespace local at all. So it handed back the SOURCE spelling, and the consumer's `Type.Number()` stayed bound to the unrelated arrow. Eighth instance of a fact written down in one place and re-derived incompletely by a second consumer. This is a wrong BINDING rather than a missing one, so `--verify` detects nothing: every name in the bundle resolves, it just resolves to the wrong thing — the bundle loads and calls a different function. `export { NS }` and `export { NS as Alias }` go through the same fallback and were broken identically; both spellings are observed here. It reproduces with NO optimization flag, hence the empty `mtscArgs`: the baseline leg is the plain path. A library's package entry cannot reach it, because nothing imports a barrel's own default export.",
+  "mtscArgs": [],
+  "exports": [
+    "viaDefault",
+    "viaNamed",
+    "viaCollision"
+  ],
+  "expectStatus": "pass"
+}

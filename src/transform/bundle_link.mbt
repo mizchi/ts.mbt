@@ -1001,6 +1001,29 @@ fn resolve_export_with_visited(
             visited,
           )
         None => {
+          // `find_import_source` knows about default and named
+          // imports and nothing else, so a local that is an
+          // `import * as ns` alias arrives here looking like an
+          // ordinary declaration. It is not one: its final name was
+          // minted into `namespace_local_renames` by phase 1, and
+          // `rename_per_module` has no entry for it at all — so
+          // reading only the latter hands back the SOURCE spelling.
+          //
+          // That is a wrong binding rather than a missing one, which
+          // is why it stayed hidden. typebox's `src/index.ts` does
+          // `import * as Type from './typebox.ts'; export default
+          // Type`, another module declares a top-level `const Type`,
+          // phase 1 renamed the namespace object to `Type$185` to
+          // resolve the collision, and a consumer's `import Type
+          // from 'typebox'` was left spelled `Type` — now bound to
+          // the unrelated declaration. `Type.Number is not a
+          // function` under plain `mtsc --bundle`, with no
+          // optimization flag involved.
+          let ns_locals = namespace_local_renames.get(module_path).unwrap_or({})
+          match ns_locals.get(local_) {
+            Some(final_name) => return Some(final_name)
+            None => ()
+          }
           let renames = rename_per_module.get(module_path).unwrap_or({})
           return Some(renames.get(local_).unwrap_or(local_))
         }

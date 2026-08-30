@@ -50,10 +50,22 @@ each one was needed.
 | `deps` | npm packages the bundle leaves external, installed into `<leg-dir>/exec/`. NOT into the leg directory itself — that is the checkout's parent, and mtsc walks up looking for `node_modules`, so it would start inlining them |
 | `shims` | module specifiers Node cannot resolve but a bundler can, mapped to files in `<name>.shims/`. Rewritten in the copy that is EXECUTED, identically for every leg; the byte counts come from the untouched leg outputs |
 | `execReplace` | literal string substitutions on the executed copy, for build-time globals a bundler would have replaced (`import.meta.env`) |
+| `appEntry` | the `app-entries/*.app.ts` fixture `--app` compiles instead of `entry`. See [`app-entries/README.md`](./app-entries/README.md) |
+| `appDriver` | an `--app` driver for a target the shared one cannot serve. Excalidraw only |
 
-## `expected.json`
+## `app-entries/`
 
-The regression gate. Absolute byte counts move with every emitter
+`--app` compiles an application that consumes each library rather than
+the library's package entry. A barrel's exports are all live, so
+tree-shaking has nothing to remove, and a library's property names *are*
+its wire format, so the mangler is right to reserve them — neither
+question can be answered from a package entry. The usage in each app
+entry is copied from that library's own README, for the reason set out
+in [`app-entries/README.md`](./app-entries/README.md).
+
+## `expected.json` / `expected.app.json`
+
+The regression gate — one snapshot per entry mode. Absolute byte counts move with every emitter
 change, so what is pinned per target is the **verdict** (WIN / NEUTRAL /
 LOSS) plus the delta with a tolerance of `max(64, 0.5% of aware)`. A
 target may not silently go from WIN to NEUTRAL, and a win may not
@@ -62,3 +74,7 @@ quietly erode; the byte counts themselves are free to drift.
 `status` is pinned too, which is how a `blocked` target announces
 itself the day it starts working: the status changes, and the gate
 fails until the baseline is re-recorded with the new measurement.
+
+`--app` records `expected.app.json` by exactly the same rule. The two
+files are independent: a change may legitimately move one and not the
+other, which is itself information.

@@ -45,7 +45,14 @@
 // all is reported `size-only` with the reason, because a byte count
 // nobody can execute is not evidence.
 //
+// Every row compiles a library's PACKAGE entry by default. `--app`
+// compiles an APPLICATION that consumes the library instead, from
+// `fixtures/type-aware-corpus/app-entries/`, and keeps its own
+// `expected.app.json`. See the block above `stageAppEntry` for why the
+// distinction matters and where the usage in each app entry comes from.
+//
 //   node scripts/measure_type_aware.mjs
+//   node scripts/measure_type_aware.mjs --app
 //   node scripts/measure_type_aware.mjs --only hono --verbose
 //   node scripts/measure_type_aware.mjs --update      # re-record expected.json
 //   node scripts/measure_type_aware.mjs --keep        # keep the leg outputs
@@ -59,7 +66,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const WORK = path.join(ROOT, "_build", "type-aware");
 const FIXTURES = path.join(ROOT, "fixtures", "type-aware-corpus");
-const EXPECTED = path.join(FIXTURES, "expected.json");
+const APP_ENTRIES = path.join(FIXTURES, "app-entries");
 
 // Flags shared by `aware` and `blind`.
 //
@@ -100,6 +107,7 @@ const CORPUS = [
     entry: "src/index.ts",
     reuse: ["_build/real-world/hono/hono"],
     driver: "hono.driver.mjs",
+    appEntry: "hono.app.ts",
   },
   {
     name: "valibot",
@@ -107,6 +115,7 @@ const CORPUS = [
     entry: "library/src/index.ts",
     reuse: ["_build/real-world/valibot/valibot"],
     driver: "valibot.driver.mjs",
+    appEntry: "valibot.app.ts",
   },
   {
     name: "typebox",
@@ -133,6 +142,7 @@ const CORPUS = [
     // an order that produced the wrong value instead of throwing would
     // still build a schema, just not the right one.
     driver: "typebox.driver.mjs",
+    appEntry: "typebox.app.ts",
   },
   {
     name: "immer",
@@ -151,6 +161,7 @@ const CORPUS = [
     // through the object path and still load cleanly; the values have
     // to be observed, not just the absence of a throw.
     driver: "immer.driver.mjs",
+    appEntry: "immer.app.ts",
   },
   // These two were BLOCKED by the export-surface blowup that
   // `surface_should_walk` in `export_surface.mbt` now bounds:
@@ -163,12 +174,14 @@ const CORPUS = [
     repo: "https://github.com/supermacro/neverthrow",
     entry: "src/index.ts",
     driver: "neverthrow.driver.mjs",
+    appEntry: "neverthrow.app.ts",
   },
   {
     name: "ts-pattern",
     repo: "https://github.com/gvergnaud/ts-pattern",
     entry: "src/index.ts",
     driver: "ts-pattern.driver.mjs",
+    appEntry: "ts-pattern.app.ts",
   },
   {
     name: "superstruct",
@@ -182,6 +195,7 @@ const CORPUS = [
     // subclass, so only `StructError` is reserved and the cost is
     // +25 bytes. Reserving every callable instead cost +31% here.
     driver: "superstruct.driver.mjs",
+    appEntry: "superstruct.app.ts",
   },
   // superstruct was BLOCKED, and was blamed on the wrong thing twice:
   // first on the export-surface blowup, then — after one gdb sample
@@ -265,6 +279,11 @@ const CORPUS = [
     // `import.meta.env` is vite's build-time substitution. The driver
     // sets the global this maps it to.
     execReplace: [["import.meta.env", "globalThis.__EXCALIDRAW_ENV__"]],
+    appEntry: "excalidraw.app.ts",
+    // The one app entry with its own driver: the `import.meta.env`
+    // global has to be set before the bundle is evaluated, which the
+    // shared driver's static import cannot do.
+    appDriver: "excalidraw.driver.mjs",
   },
   {
     name: "remeda",
@@ -287,6 +306,7 @@ const CORPUS = [
     // fold that changed evaluation order shows up as call counts rather
     // than as a wrong answer.
     driver: "remeda.driver.mjs",
+    appEntry: "remeda.app.ts",
   },
 ];
 
@@ -308,6 +328,7 @@ let keep = false;
 let update = false;
 let legTimeout = 600_000;
 let phases = false;
+let appMode = false;
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
   if (a === "--only") only = args[++i];
@@ -316,11 +337,14 @@ for (let i = 0; i < args.length; i++) {
   else if (a === "--update") update = true;
   else if (a === "--timeout") legTimeout = Number(args[++i]) * 1000;
   else if (a === "--phases") phases = true;
+  else if (a === "--app") appMode = true;
   else {
     console.error(`unknown argument: ${a}`);
     process.exit(2);
   }
 }
+
+const EXPECTED = path.join(FIXTURES, appMode ? "expected.app.json" : "expected.json");
 
 const MTSC = findMtsc();
 fs.mkdirSync(WORK, { recursive: true });
@@ -510,6 +534,68 @@ function resolveCheckout(t) {
   return { dir, cloned: true };
 }
 
+// ---------------------------------------------------------------------
+// App entries (`--app`)
+// ---------------------------------------------------------------------
+//
+// Every row above compiles a library's PACKAGE entry — the barrel that
+// exports its whole public API. That is the wrong shape for two of the
+// questions this harness asks, and the difference is not small:
+//
+//   * Tree-shaking has nothing to remove. A barrel's exports are all
+//     live by definition, so `--treeshake` can only drop what no export
+//     reaches, which in a well-built library is almost nothing.
+//   * Every property name is on the API boundary. A library's object
+//     shapes ARE its wire format, so the mangler is right to reserve
+//     them, and the reserved-set census on the package entries is
+//     therefore uninformative about what the pass could do.
+//
+// An application is the other case: it consumes a slice of the library
+// and its own object shapes are private. `--app` compiles one, per
+// target, and the contrast is what the row is for.
+//
+// The usage in each `app-entries/*.app.ts` is copied from that library's
+// OWN README (or, for immer, its docs site — its readme carries no
+// TypeScript block). That constraint is the whole point: an entry I
+// designed would be an entry designed to make the passes fire, and a
+// harness that flatters the compiler is worse than no harness. Where the
+// README's example throws or is async, it is wrapped, and nothing else
+// is changed.
+//
+// The fixture is staged INTO the checkout, at the root, so its imports
+// are relative paths into the library's own sources — `./src/index.ts`.
+// Compiling it from `fixtures/` instead would resolve the library as a
+// bare specifier through `node_modules`, which is the published `.js`,
+// which is the measurement this harness exists to avoid.
+function stageAppEntry(checkout, t) {
+  if (!t.appEntry) return { ok: false, why: "no app entry for this target" };
+  const fx = path.join(APP_ENTRIES, t.appEntry);
+  if (!fs.existsSync(fx)) {
+    return { ok: false, why: `app entry fixture ${t.appEntry} is missing` };
+  }
+  const rel = `mtsc-app-entry.${t.name}.ts`;
+  fs.copyFileSync(fx, path.join(checkout, rel));
+  return { ok: true, rel };
+}
+
+// The leg directory. `--app` gets its own so the two modes cannot
+// overwrite each other's bundles — the `.observed` and `.stderr` files a
+// failure leaves behind are the only record of it.
+const legDir = (t) => path.join(WORK, appMode ? `${t.name}-app` : t.name);
+
+// The driver.
+//
+// A package entry needs one written per target: it exports the whole
+// API and there is no generic way to exercise that. An app entry has
+// already done the exercising and exports scalars, so one shared driver
+// prints what it computed. A target may still name its own with
+// `appDriver` when the bundle needs something set up before it is
+// evaluated.
+function driverFor(t) {
+  if (!appMode) return t.driver ? path.join(FIXTURES, t.driver) : null;
+  return path.join(APP_ENTRIES, t.appDriver ?? "driver.mjs");
+}
+
 // Source files the target spans.
 //
 // The entry's own directory is the right answer for a single-package
@@ -539,14 +625,27 @@ function measure(t) {
     results.push({ name: t.name, status: "blocked", why: t.blocked });
     return;
   }
+  if (appMode && !t.appEntry) {
+    results.push({ name: t.name, status: "skip", why: "no app entry for this target" });
+    return;
+  }
   const { dir: checkout, why } = resolveCheckout(t);
   if (!checkout) {
     results.push({ name: t.name, status: "skip", why });
     return;
   }
-  const dir = path.join(WORK, t.name);
+  const dir = legDir(t);
   fs.mkdirSync(dir, { recursive: true });
-  const entry = path.join(checkout, t.entry);
+  let entryRel = t.entry;
+  if (appMode) {
+    const staged = stageAppEntry(checkout, t);
+    if (!staged.ok) {
+      results.push({ name: t.name, status: "skip", why: staged.why });
+      return;
+    }
+    entryRel = staged.rel;
+  }
+  const entry = path.join(checkout, entryRel);
   const files = countSources(checkout, t);
 
   const unopt = compile(entry, path.join(dir, "unopt.mjs"), ["--bundle"], dir);
@@ -574,9 +673,10 @@ function measure(t) {
   // The part of the gap that is not explained by the extra pass.
   const adjusted = secondPass === null ? null : delta + secondPass;
 
+  const driverSrc = driverFor(t);
   const row = {
     name: t.name,
-    status: t.driver ? "measured" : "size-only",
+    status: driverSrc ? "measured" : "size-only",
     why: t.sizeOnlyWhy,
     files,
     unopt: unopt.size,
@@ -589,11 +689,10 @@ function measure(t) {
   };
 
   const installed = installDeps(execDir(dir), t.deps);
-  if (t.driver && !installed.ok) {
+  if (driverSrc && !installed.ok) {
     row.status = "size-only";
     row.why = installed.why;
-  } else if (t.driver) {
-    const driverSrc = path.join(FIXTURES, t.driver);
+  } else if (driverSrc) {
     const ref = observe(dir, driverSrc, "unopt", t);
     if (!ref.ok) {
       row.status = "size-only";
@@ -610,7 +709,9 @@ function measure(t) {
           fs.writeFileSync(path.join(dir, `${leg}.observed`), got.out);
           fs.writeFileSync(path.join(dir, "reference.observed"), ref.out);
           row.status = "broken";
-          row.why = `${leg} observations differ (see _build/type-aware/${t.name}/{reference,${leg}}.observed)`;
+          row.why = `${leg} observations differ (see ${
+            path.relative(ROOT, dir)
+          }/{reference,${leg}}.observed)`;
           break;
         }
       }
@@ -650,9 +751,15 @@ if (phases) {
     // silently skipped hono and valibot from this table.
     const { dir: checkout } = resolveCheckout(t);
     if (!checkout) continue;
-    const dir = path.join(WORK, t.name);
+    const dir = legDir(t);
     fs.mkdirSync(dir, { recursive: true });
-    const entry = path.join(checkout, t.entry);
+    let entryRel = t.entry;
+    if (appMode) {
+      const staged = stageAppEntry(checkout, t);
+      if (!staged.ok) continue;
+      entryRel = staged.rel;
+    }
+    const entry = path.join(checkout, entryRel);
     if (!fs.existsSync(entry)) continue;
     const base = compile(entry, path.join(dir, "phase-base.mjs"), ["--bundle", ...OPT_FLAGS], dir);
     if (!base.ok) {
@@ -695,7 +802,12 @@ function verdictOf(row) {
 }
 
 console.log("\ntype-aware minify measurement");
-console.log("  optimizing TypeScript SOURCE vs the same code with types erased\n");
+console.log("  optimizing TypeScript SOURCE vs the same code with types erased");
+console.log(
+  appMode
+    ? "  entry: an APPLICATION that consumes each library (`--app`)\n"
+    : "  entry: each library's PACKAGE entry — `--app` measures an application instead\n",
+);
 
 const pad = (s, n) => String(s).padEnd(n);
 const padl = (s, n) => String(s).padStart(n);

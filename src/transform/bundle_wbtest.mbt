@@ -2379,6 +2379,70 @@ test "link: `export * as ns from` synthesizes namespace object for named import 
 }
 
 ///|
+/// `import * as N; export default N` where another module declares a
+/// top-level `N`.
+///
+/// Phase 1 mints a collision-free name for the namespace object into
+/// `namespace_local_renames`, which is a DIFFERENT table from
+/// `rename_per_module`. `resolve_export`'s fallback read only the
+/// latter, so a consumer's `import N from "./index"` was left spelled
+/// `N` — now bound to the unrelated declaration. A wrong binding, not a
+/// missing one, which is why nothing caught it: the bundle loads and
+/// then calls the wrong function.
+///
+/// This is typebox's `src/index.ts` exactly (`import * as Type from
+/// './typebox.ts'; export default Type`), where a second module declares
+/// `const Type`, and it broke under plain `mtsc --bundle` with no
+/// optimization flag involved.
+test "link: a default-exported namespace object keeps its minted name" {
+  let files = vfs([
+    ("inner.ts", "export const Number = () => \"inner\";\n"),
+    ("other.ts", "export const Type = (s: string) => \"other-\" + s;\n"),
+    (
+      "index.ts", "import * as Type from \"./inner\";\nexport * from \"./other\";\nexport default Type;\n",
+    ),
+    (
+      "entry.ts", "import Type from \"./index\";\nexport const got = Type.Number();\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      // The namespace object was renamed, so the read must be too. A
+      // bare `Type.Number()` resolves to `other.ts`'s arrow.
+      assert_true(out.js.contains("Type$"))
+      assert_false(out.js.contains("= Type.Number()"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+/// The named-export spelling of the same thing: `export { N }` and
+/// `export { N as Alias }` where `N` is a namespace-import alias.
+test "link: a named-exported namespace object keeps its minted name" {
+  let files = vfs([
+    ("inner.ts", "export const Number = () => \"inner\";\n"),
+    (
+      "other.ts", "export const NS = (s: string) => \"other-\" + s;\nexport const Alias = (s: string) => \"alias-\" + s;\n",
+    ),
+    (
+      "index.ts", "import * as NS from \"./inner\";\nexport * from \"./other\";\nexport { NS };\nexport { NS as Alias };\n",
+    ),
+    (
+      "entry.ts", "import { NS, Alias } from \"./index\";\nexport const a = NS.Number();\nexport const b = Alias.Number();\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_true(out.js.contains("NS$"))
+      assert_false(out.js.contains("= NS.Number()"))
+      assert_false(out.js.contains("= Alias.Number()"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "link: multi-level wildcard barrel chain resolves to original declaration" {
   // c.ts → b.ts (export * from "./c") → barrel.ts (export * from "./b") → entry.ts
   // Transitive wildcard re-exports through two barrel hops must still resolve.
