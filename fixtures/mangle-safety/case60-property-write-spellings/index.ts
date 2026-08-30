@@ -137,35 +137,12 @@ const bag: { slot: PayloadReadThrough | undefined; counter: number } = {
   counter: 0,
 };
 
-// ---- H4: a `#private` field's value. ---------------------------------
-// `surface_escape_class` put the value escape INSIDE the
-// `is_internal_marker_prop` filter. That filter answers "may this NAME
-// be reserved" — no, because no consumer can spell
-// `__private_brand__0__slot` — and says nothing about the value, which
-// is an ordinary value that leaves with the instance. The identical
-// class with a PUBLIC field was fine, which is the tell.
-class PayloadPrivate {
-  tag: string;
-  constructor(tag: string) {
-    this.tag = tag;
-  }
-  readPrivate(k: string): string {
-    return this.tag + ":" + k;
-  }
-}
-
-class PrivateHolder {
-  #slot: PayloadPrivate | undefined;
-  constructor() {
-    this.#slot = undefined;
-  }
-  load(): void {
-    this.#slot = new PayloadPrivate("private");
-  }
-  get inner(): PayloadPrivate {
-    return this.#slot!;
-  }
-}
+// ---- H4 lives in case61. ---------------------------------------------
+// The `#private` field's value escape was the fourth hole, and it cannot
+// be covered here: the unindexed write spellings above leave `this.slot`
+// unresolvable, which widens to `this`, and widening escapes every
+// this-write — the private one included. The two holes mask each other,
+// so H4 has its own fixture where nothing else reads a field off `this`.
 
 // ---- The control. ----------------------------------------------------
 // The spelling that always worked, on its own payload class so it cannot
@@ -191,13 +168,9 @@ class PlainAssign {
   }
 }
 
-const privateHolder = new PrivateHolder();
-privateHolder.load();
-
 export const coalesce: LazyCoalesce = new LazyCoalesce();
 export const or: LazyOr = new LazyOr();
 export const literalKey: LiteralKeyWrite = new LiteralKeyWrite();
-export const priv: PrivateHolder = privateHolder;
 export const plain: PlainAssign = new PlainAssign();
 
 export function fillBag(): PayloadReadThrough {

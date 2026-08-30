@@ -11,7 +11,6 @@ export default async (mod) => ({
   coalesce: mod.coalesce.inner.readCoalesce("k"),
   or: mod.or.inner.readOr("k"),
   literalKey: mod.literalKey.inner.readLiteralKey("k"),
-  priv: mod.priv.inner.readPrivate("k"),
   plain: mod.plain.inner.readPlain("k"),
   readThrough: mod.fillBag().readThrough("k"),
   bagCount: mod.bagCount(),
