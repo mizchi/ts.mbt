@@ -135,6 +135,22 @@ pub(all) struct SwitchFoldEntry {
 }
 
 ///|
+/// The names any arm the fold could substitute reads — the value half of
+/// the scope narrowing described at the top of `call_inline.mbt`. Every
+/// arm, not the selected one: the table is narrowed on entering a scope,
+/// before any call site has picked an arm.
+impl SubstitutedValue for SwitchFoldEntry with fn free_names(self) {
+  let out : Map[String, Bool] = {}
+  for k in self.arms.keys() {
+    match self.arms.get(k) {
+      Some(e) => collect_var_refs_expr(e, out)
+      None => ()
+    }
+  }
+  out
+}
+
+///|
 pub fn build_switch_fold_table(
   block : @ast.TsBlock,
   // `--explain-mangle`: why the table came out empty. Same reason

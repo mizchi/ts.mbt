@@ -773,6 +773,41 @@ product surfaces now.
   left the outer annotation visible. `fixtures/mangle-safety/case43-table-shadowing`
   runs all five against Node, pairing each shadowed read with an
   unshadowed one so the fix cannot be "switch the pass off".
+  All five of those are about the table's KEY, and there is a SECOND
+  half that nothing asked for a long time: dropping the entry whose key
+  a scope re-binds says nothing about the names the substituted VALUE
+  reads, and those get re-resolved wherever the value lands.
+  `const base = Number(process.argv.length); const f = () => base;
+  function g() { const other = 99; return f() + other * 0 }` printed 99
+  where the answer is 2, under the full shipping flag set. The mangler
+  runs BEFORE the inline phase and gave `base` and `other` the same
+  short name `a` — legitimately, since at mangle time `g`'s body does
+  not mention `base`, so shadowing it is free — and then the inliner
+  spliced a body whose `a` is the outer one into a scope where `a` is
+  99. No crash and no free variable, so `--verify` cannot see it, and
+  the better the mangler does its job the more often it fires. Four
+  tables substitute a value that can carry free variables and none
+  checked: `call_inline`, `as_const_inline` (both halves),
+  `predicate_inline`, `switch_fold`; `const_enum_inline` and
+  `type_fold` substitute literals and are safe by construction. The
+  fix is in the shared helper, and the obligation is a TRAIT rather
+  than an optional predicate — a table whose value type cannot answer
+  does not compile, where a defaulted "mentions nothing" would fail
+  open and the next table added would be the fifth. Free names come
+  from `collect_var_refs_expr`, the mangler's own walker, which has no
+  fail-open catch-all because the mangler's correctness depends on its
+  completeness. Two of the four could be demonstrated end to end;
+  `as_const_inline` and `predicate_inline` run BEFORE the mangler, so
+  the mangler cleans up after them and no witness could be produced —
+  they are covered by construction and by a unit test at the pass
+  boundary, and are NOT claimed to be broken.
+  `fixtures/mangle-safety/case55-inlined-value-free-variable` pins it
+  under Node and fails when the value half is mutated off. It costs
+  nothing: `typescript.js` byte-identical, the nine type-aware targets
+  −76 bytes net (typebox +327 and excalidraw +150 against ts-pattern
+  −345, immer −192, hono −16, because fewer inlines leave the
+  single-use binding inliner and treeshake a better shape), and the
+  `inline` phase 397 -> 351 ms.
   A 3400-seed campaign then found the escape analysis missing two of
   the six ways JS spells an assignment. `sg_record_write_into` was
   called from the four that go through a member expression and from

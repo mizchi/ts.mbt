@@ -142,6 +142,17 @@ pub(all) struct PredicateEntry {
 }
 
 ///|
+/// The names the inlined predicate body reads — the value half of the
+/// scope narrowing described at the top of `call_inline.mbt`. The
+/// parameter is substituted away, so naming it here only makes the pass
+/// more conservative.
+impl SubstitutedValue for PredicateEntry with fn free_names(self) {
+  let out : Map[String, Bool] = {}
+  collect_var_refs_expr(self.body_expr, out)
+  out
+}
+
+///|
 /// A body this big is not inlined into more than one call site.
 ///
 /// typebox is what set this number. `IsExtendsTrueLike` reads

@@ -316,3 +316,38 @@ test "call_inline: impure arguments need the body's order to be exact" {
   )
   assert_true(pureShort.contains("p || q"))
 }
+
+///|
+/// The names the substituted BODY reads have to mean the same thing at
+/// the call site. `case43` covers the table's KEY being shadowed; this is
+/// the value's own free variables, which nothing checked.
+///
+/// Pinned as a unit test as well as `case55`, because two of the four
+/// tables that share the narrowing (`as_const_inline`, `predicate_inline`)
+/// run BEFORE the mangler, so the mangler cleans up after them and no
+/// end-to-end witness could be produced for those two. A test at the
+/// pass boundary does not depend on what the mangler happens to do.
+test "call_inline: an inlined body is not captured by the destination scope" {
+  // `k` in the body is the OUTER `k`. The call site re-binds it.
+  let shadowed = call_inline_one(
+    "let k = f();\nconst get = () => k;\nfunction g() { let k = 99; return get() + k; }\nconsole.log(g());\n",
+  )
+  // The body must not be spliced into a scope where `k` is 99. Assert on
+  // the SPLICE, not on the callee's name surviving: the single-use
+  // binding inliner may substitute the arrow as a value, which keeps the
+  // call a call and is fine.
+  assert_false(shadowed.contains("return k + k"))
+  // A parameter is the spelling no block-level check can see.
+  let param = call_inline_one(
+    "let k = f();\nconst get = () => k;\nfunction g(k) { return get() + k; }\nconsole.log(g(1));\n",
+  )
+  assert_false(param.contains("return k + k"))
+  // And the unshadowed call still inlines, so the fix is not "decline
+  // everywhere". `m` folds to its literal on the way, which is why the
+  // expected text is `k + 99` and not `k + m`.
+  let plain = call_inline_one(
+    "let k = f();\nconst get = () => k;\nfunction g() { let m = 99; return get() + m; }\nconsole.log(g());\n",
+  )
+  assert_true(plain.contains("return k + 99"))
+  assert_false(plain.contains("get() + 99"))
+}

@@ -40,6 +40,31 @@ priv struct AsConstCandidate {
 }
 
 ///|
+/// The names the substituted element reads. `const T = [outer, 2]` and
+/// a `T[0]` read inside a scope that re-binds `outer` is the same
+/// capture the scope narrowing in `call_inline.mbt` describes; this is
+/// how this table answers it. The shapes are literals, so the walk is
+/// over a handful of elements and the table is small — no precomputed
+/// field, unlike `TrivialFn`.
+impl SubstitutedValue for AsConstCandidate with fn free_names(self) {
+  let out : Map[String, Bool] = {}
+  match self.shape {
+    ArrShape(items) =>
+      for e in items {
+        collect_var_refs_expr(e, out)
+      }
+    ObjShape(fields) =>
+      for k in fields.keys() {
+        match fields.get(k) {
+          Some(e) => collect_var_refs_expr(e, out)
+          None => ()
+        }
+      }
+  }
+  out
+}
+
+///|
 /// Both name tables the rewrite walker resolves against, carried as one
 /// value so that adding the second one did not mean touching eighty
 /// call sites — and, more to the point, so that a scope boundary cannot

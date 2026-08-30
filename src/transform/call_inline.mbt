@@ -40,6 +40,11 @@
 priv struct TrivialFn {
   params : Array[String]
   body : @ast.TsExpr
+  /// Every name the body reads, precomputed. The scope narrowing asks
+  /// this per scope the walk enters, and the table has hundreds of
+  /// entries on a real bundle, so recomputing it there would be a walk
+  /// of every body per scope.
+  free : Map[String, Bool]
   /// Substituting the arguments reproduces the call's evaluation
   /// EXACTLY: every parameter is read once, in argument order, and
   /// unconditionally. When that holds the arguments do not have to be
@@ -162,9 +167,12 @@ fn trivial_fn_of(own_name : String, rhs : @ast.TsExpr) -> TrivialFn? {
       return None
     }
   }
+  let free : Map[String, Bool] = {}
+  collect_var_refs_expr(body, free)
   Some({
     params: names,
     body,
+    free,
     order_exact: params_read_in_argument_order(body, names),
   })
 }
@@ -478,8 +486,71 @@ fn expr_contains_function(expr : @ast.TsExpr) -> Bool {
 // for an inner declaration. One implementation of scope narrowing, used
 // by every table that resolves names, is the point.
 
+// There is a SECOND half to the same question, and for a long time
+// nothing asked it. Dropping the entry whose KEY a scope re-binds keeps
+// the walk from resolving the wrong callee. It says nothing about the
+// names the substituted VALUE reads — and those get re-resolved in the
+// destination scope, which is a different scope from the one they were
+// written in:
+//
+//   const base = Number(process.argv.length);   // 2
+//   const f = () => base;
+//   function g() { const other = 99; return f() + other * 0 }
+//   console.log(g());                           // 2, and mtsc said 99
+//
+// under plain `--bundle --treeshake --fold --minify --mangle`. The
+// mangler runs BEFORE the inline phase and gave `base` and `other` the
+// same short name `a` — legitimately, because at mangle time `g`'s body
+// does not mention `base`, so shadowing it is free. Then the inliner
+// spliced `f`'s body, whose `a` is the OUTER one, into a scope where
+// `a` is 99. A wrong VALUE, no crash and no free variable, so `--verify`
+// cannot see it; and the mangler's name reuse is what makes the
+// collision ordinary rather than exotic — the better it does its job,
+// the more often this fires.
+//
+// So an entry also dies when its value reads a name this scope re-binds.
+// FOUR tables substitute a value that can carry free variables —
+// `call_inline`, `as_const_inline` (both halves), `predicate_inline`,
+// `switch_fold` — and none of them checked. `const_enum_inline` and
+// `type_fold` substitute literals and are safe by construction.
+//
+// The obligation is a TRAIT rather than an optional predicate on
+// purpose: a table whose value type cannot answer does not compile,
+// where a defaulted "mentions nothing" would fail open and the next
+// table added would join the four.
+
 ///|
-fn[T] narrow_trivial_fns(
+/// A value a name-keyed table substitutes into a call or read site.
+///
+/// `free_names` is every name the value READS. It may over-report —
+/// a name bound inside the value itself costs a declined rewrite and
+/// nothing else — but it must not under-report, so implementations go
+/// through `collect_var_refs_expr`, the mangler's own walker, whose
+/// completeness the mangler's correctness already depends on.
+trait SubstitutedValue {
+  fn free_names(Self) -> Map[String, Bool]
+}
+
+///|
+/// `collect_var_refs_expr` over one expression, as a table value.
+pub impl SubstitutedValue for @ast.TsExpr with fn free_names(self) {
+  let out : Map[String, Bool] = {}
+  collect_var_refs_expr(self, out)
+  out
+}
+
+///|
+/// A trivial function's body. The parameters are substituted away at
+/// the call site, so a parameter name is not a free reference — but
+/// over-reporting only declines a rewrite, and the parameters of a
+/// mangled function are exactly the short names most likely to collide,
+/// so reporting them keeps the answer conservative for free.
+impl SubstitutedValue for TrivialFn with fn free_names(self) {
+  self.free
+}
+
+///|
+fn[T : SubstitutedValue] narrow_trivial_fns(
   tbl : Map[String, T],
   shadowed : Array[String],
 ) -> Map[String, T] {
@@ -487,6 +558,28 @@ fn[T] narrow_trivial_fns(
   for n in shadowed {
     if tbl.contains(n) {
       drop.push(n)
+    }
+  }
+  // The value half. Scanning every entry is only worth it when this
+  // scope binds something at all, and `shadowed` is the small side, so
+  // the lookup goes name-into-value-set rather than the other way.
+  if shadowed.length() > 0 {
+    for k in tbl.keys() {
+      if drop.contains(k) {
+        continue
+      }
+      match tbl.get(k) {
+        Some(v) => {
+          let free = v.free_names()
+          for n in shadowed {
+            if free.contains(n) {
+              drop.push(k)
+              break
+            }
+          }
+        }
+        None => ()
+      }
     }
   }
   if drop.is_empty() {
@@ -508,7 +601,7 @@ fn[T] narrow_trivial_fns(
 ///|
 /// Narrow by what a nested block's own statement list declares. Nested
 /// blocks inside it narrow themselves when the walk reaches them.
-fn[T] narrow_for_block(
+fn[T : SubstitutedValue] narrow_for_block(
   tbl : Map[String, T],
   block : @ast.TsBlock,
 ) -> Map[String, T] {
@@ -593,7 +686,7 @@ fn narrow_for_func(
 }
 
 ///|
-fn[T] narrow_for_params(
+fn[T : SubstitutedValue] narrow_for_params(
   tbl : Map[String, T],
   params : Array[@ast.TsParam],
 ) -> Map[String, T] {
@@ -608,7 +701,7 @@ fn[T] narrow_for_params(
 ///|
 /// A class method's parameter list is a `(name, type)` pair list rather
 /// than a `TsParam` list.
-fn[T] narrow_for_named_params(
+fn[T : SubstitutedValue] narrow_for_named_params(
   tbl : Map[String, T],
   params : Array[(String, @ast.TsType)],
 ) -> Map[String, T] {
@@ -642,7 +735,7 @@ fn collect_param_bound_names(
 
 ///|
 /// Narrow by a single binding: a loop variable, a catch parameter.
-fn[T] narrow_for_binding(
+fn[T : SubstitutedValue] narrow_for_binding(
   tbl : Map[String, T],
   b : @ast.TsBinding,
 ) -> Map[String, T] {

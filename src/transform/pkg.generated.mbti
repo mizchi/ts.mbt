@@ -526,3 +526,5 @@ pub type ScopeId = Int
 pub type SymbolId = Int
 
 // Traits
+trait SubstitutedValue
+pub impl SubstitutedValue for @ast.TsExpr

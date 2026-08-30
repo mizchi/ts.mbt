@@ -665,3 +665,64 @@ mangler が top-level binding と後続 parameter に同じ短名を配る必要
 coverage の形をしただけの何かなので、出荷せず削除しました。
 `case54` は偶然この bug も捕まえますが（`tap` が mangle 後に衝突する）、
 それは運であって coverage ではない、というのが unit test がある理由です。
+
+## case55: inline した VALUE の自由変数が、着地先の scope で解決し直される
+
+`case43` は「表の KEY が shadow される」側を押さえます。これは**もう半分**
+で、長らく誰も聞いていませんでした。KEY が re-bind された entry を落として
+も、**代入される VALUE が読む名前**については何も言っていません。そして
+その名前は、値が splice された先で解決し直されます。
+
+```ts
+const base = Number(process.argv.length);   // 2
+const f = () => base;
+function g() { const other = 99; return f() + other * 0 }
+console.log(g());
+```
+
+`--bundle --treeshake --fold --minify --mangle` で **mtsc は 99**、
+答えは **2** です。
+
+**mangler は inline phase より前に走り**、`base` と `other` に同じ短名 `a`
+を配ります——mangle 時点で `g` の body は `base` を言及しないので、shadow
+して構わないからです。その後 inliner が `f` の body（その `a` は**外側**）
+を、`a` が 99 の scope に splice する。crash も free variable も出ないので
+`--verify` は見えません。そして **mangler が仕事をするほど衝突は増えます**。
+
+自由変数を持ち得る値を代入する表は 4 つあり、どれも確認していませんでした:
+
+| pass | 代入する値 |
+| --- | --- |
+| `call_inline` | 関数 body の式 |
+| `as_const_inline` | 配列 / object の要素（shapes と scalars の両方） |
+| `predicate_inline` | 型 guard の body |
+| `switch_fold` | 一致した arm の式 |
+
+`const_enum_inline` と `type_fold` はリテラルを代入するので構造上安全です。
+
+修正は**共有 helper 側**に置きました。1 つの規則が複数箇所に書かれて 1
+箇所だけ直る、をこのパイプラインで 7 回やっているので。義務は
+**trait (`SubstitutedValue`)** で表現しています——値型が答えられない表は
+コンパイルが通りません。既定値付きの optional predicate にすると
+「何も言及しない」で fail open し、次に追加される表が 5 つ目になります。
+
+自由名の収集は `collect_var_refs_expr`、**mangler 自身の walker** を使い
+ます。mangler の正しさがその網羅性に依存しているので、catch-all で fail
+open する余地がない唯一の name walker です。
+
+再現できたのは 2 つ（`call_inline` と、`switch_fold` が作る形——ただし
+bisect すると代入しているのは `call_inline` 側）。`as_const_inline` と
+`predicate_inline` は **mangler より前に走る**ので mangler が後始末をし、
+witness は作れませんでした。修正は構造上この 2 つも覆いますが、
+**「壊れている」とは書きません**——示していないので。その 2 つのために
+pass 境界の unit test（`call_inline_wbtest.mbt`）を足しています。mangler
+が何をするかに依存しない位置だからです。
+
+`case55` は mutation self-check を通ります: 値側の判定を落とすと
+`[REGR] case55 fail`。
+
+**バイト代**: 9 MB の `typescript.js` は byte 完全一致。type-aware corpus
+9 target の合計は **−76 bytes**（typebox +327、excalidraw +150 に対し
+ts-pattern −345、immer −192、hono −16）。inline を減らすと後続の
+single-use binding inliner と treeshake が別の形を見て、しばしば得をする
+ためです。`inline` phase の時間も 397 → 351 ms で悪化していません。
