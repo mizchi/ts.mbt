@@ -196,3 +196,50 @@ test "emit: a void initializer with a pure operand is still dropped" {
   let merged = emit_min_one("let a = void 0;\nlet b = void 0;\n")
   assert_false(merged.contains("void"), msg="lost the saving: \{merged}")
 }
+
+// ---------------------------------------------------------------
+// The no-initializer marker must never reach the output
+// ---------------------------------------------------------------
+//
+// `Var("__ts_no_init__")` is what the parser synthesises for `let x;` /
+// `var x;` so the checker can tell "no initializer" from "assigned
+// undefined". It is not an expression: nothing declares that name, so
+// emitting it is a `ReferenceError` the moment the line runs.
+//
+// `omit_declaration_init` drops it, and every declaration emit calls
+// that — except the one inside a `for` head, which wrote `= <init>`
+// unconditionally. So `for (var u; l < n.length; l++)`, ordinary
+// JavaScript out of preact's own source, came out as
+// `for (var u = __ts_no_init__; …)` under plain `mtsc --bundle`, with no
+// optimization flag and on input that never saw a type.
+
+///|
+test "emit: a for-head declaration with no initializer emits none" {
+  let pretty = fn(src : String) -> String raise {
+    let block = @parser.parse_block_from_source(src)
+    let e = Emitter::new(pretty=true)
+    for s in block.stmts {
+      emit_stmt(e, s)
+    }
+    e.to_string()
+  }
+  for
+    src in [
+      "for (var u; u < n; u++) { f(u); }\n", "for (let k; k < n; k++) { f(k); }\n",
+    ] {
+    let min = emit_min_one(src)
+    let pre = pretty(src)
+    assert_false(min.contains("__ts_no_init__"))
+    assert_false(pre.contains("__ts_no_init__"))
+    // The binding still has to be there — the fix is dropping the
+    // initializer, not the declaration.
+    assert_true(min.contains("var u;") || min.contains("let k;"))
+  }
+  // A real initializer in a for head is untouched.
+  let kept = emit_min_one("for (let i = 0; i < n; i++) { f(i); }\n")
+  assert_true(kept.contains("let i=0"))
+  // `= undefined` in a for head is the OPTIMIZATION half of the same
+  // helper: dropped when minifying, kept when pretty-printing.
+  let undef = emit_min_one("for (let i = undefined; i < n; i++) { f(i); }\n")
+  assert_false(undef.contains("undefined"))
+}

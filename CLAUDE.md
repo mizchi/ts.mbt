@@ -888,7 +888,48 @@ product surfaces now.
   as `case43`), and an unshadowed control that must still reach the
   import so the fix cannot be "stop substituting" — and fails under
   mutation. `@sprawlens/viz` now goes 875,544 -> 357,712 bytes (59%)
-  and renders an identical DOM optimized and not. It costs
+  and renders an identical DOM optimized and not.
+  It is the corpus's tenth target and its first real APPLICATION —
+  `packages/viz/src/main.tsx` mounts a preact app, exports NOTHING, and
+  spans 162 TypeScript sources across four workspace packages — and it
+  answers the question the other nine could not. The type-reading phases
+  are worth +10,419 bytes (2.81%), +2,491 gzipped there, against
+  typebox's +216 and zero on six of the nine libraries: the whole
+  library side of the corpus adds up to under twelve bytes. Feeding
+  `.ts` is what buys it — the erased leg is 380,833 against the typed
+  leg's 370,414 — which is exactly the difference `verify-real-world`
+  cannot see, because published `.js` makes the answer zero by
+  construction. For the property mangler the answer is still NO (743
+  distinct property names, 0 candidates, the same suppression), and the
+  REASON is the finding: on a library `--explain-mangle` names the
+  export surface and the wire format, which are correct and unfixable,
+  while here every cause reads "binding X crosses the bundle boundary
+  and carries no closed type annotation" — `readSearch`, `parsers`,
+  `url`, `onPopState`, `node`, `cell`, `edge`, `id`. An application's
+  boundary is not its exports; it is the DOM and framework APIs it hands
+  objects to, which is a boundary a type annotation can narrow.
+  Getting it to run cost four bugs, none of them reachable by a
+  library-shaped target: tsconfig `jsx` / `jsxImportSource` /
+  `jsxFactory` were never read; `BundleOptions.jsx` was ignored by
+  `load_module_graph`, so `--jsx-import-source` was dead in the bundle
+  path and a preact app compiled to `react/jsx-runtime`; the linker
+  capture above; and `for (var u; …)` — a declaration with no
+  initializer, in ordinary JavaScript out of preact's own source — came
+  out as `for (var u = __ts_no_init__; …)`, which throws a
+  `ReferenceError` the moment the loop runs. `omit_declaration_init`
+  says in its own doc comment that the marker "has to be dropped in
+  every mode", and the block-statement emit, the declarator-group emit
+  and the multi-decl for-head emit all call it; the single-declaration
+  for-head arm wrote `= <init>` unconditionally. Eighth time one rule
+  was written in several places and applied in one, so the three kinds
+  now share one path.
+  Two harness defects came with it. `countSources` counted only `*.ts`,
+  which is every library in the corpus and 26 of viz's 126 files. And
+  `--only X --update` REPLACED `expected.json` with a single row,
+  silently deleting the nine recorded baselines — a regression check
+  whose baseline a convenience flag can erase is not a regression check.
+  `--update` merges now and reports how many rows it carried over.
+  The linker fix itself costs
   nothing: `typescript.js` byte-identical, the nine type-aware targets
   −76 bytes net (typebox +327 and excalidraw +150 against ts-pattern
   −345, immer −192, hono −16, because fewer inlines leave the

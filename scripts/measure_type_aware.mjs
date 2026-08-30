@@ -286,6 +286,59 @@ const CORPUS = [
     // shared driver's static import cannot do.
     appDriver: "excalidraw.driver.mjs",
   },
+  // The corpus's first real APPLICATION, and the reason it exists.
+  //
+  // Every other row compiles a library's package entry. Excalidraw was
+  // added as "the UI application" and is still a library: an element
+  // package with an export surface. This is
+  // `packages/viz/src/main.tsx` — it mounts a preact app and exports
+  // NOTHING, over 265 TypeScript files in four workspace packages.
+  //
+  // The hypothesis it was added to test: mtsc preserves the type
+  // surface, so an application, having no ABI to preserve, should
+  // optimize better than a library. For the property mangler the answer
+  // is NO — 743 distinct property names, 0 candidates, the same
+  // suppression as every library — but the REASON is the finding. On a
+  // library `--explain-mangle` names the export surface and the wire
+  // format, which are correct and unfixable. Here, with zero exports,
+  // every cause reads "binding X crosses the bundle boundary and carries
+  // no closed type annotation": `readSearch`, `parsers`, `url`,
+  // `onPopState`, `node`, `cell`, `edge`, `id`. An application's
+  // boundary is not its exports — it is the DOM and framework APIs it
+  // hands objects to (`render`, `history.replaceState`, `fetch`,
+  // `addEventListener`). A different question, and a more tractable one.
+  //
+  // Three bugs were fixed to get it to run at all, every one invisible
+  // to a library-shaped target: tsconfig `jsx` / `jsxImportSource` were
+  // never read, `BundleOptions.jsx` was ignored by `load_module_graph`
+  // (so `--jsx-import-source` was dead and a preact app compiled to
+  // `react/jsx-runtime`), and the linker rewrote an aliased import into
+  // a scope that shadowed the target name — `ReferenceError: Cannot
+  // access 'parentFileOf' before initialization` under plain
+  // `mtsc --bundle`. See `case57-aliased-import-shadowed-target`.
+  {
+    name: "sprawlens",
+    repo: "https://github.com/mizchi/sprawlens",
+    entry: "packages/viz/src/main.tsx",
+    sourceRoots: [
+      "packages/viz/src",
+      "packages/layout/src",
+      "packages/schema/src",
+      "packages/agent/src",
+      "packages/contracts/src",
+    ],
+    // A pnpm workspace with no tsconfig `paths` — see `stageFiles`.
+    stageFiles: { "tsconfig.base.json": "sprawlens.tsconfig.base.json" },
+    // What the bundle leaves external. `linkedom` is the driver's, not
+    // the bundle's: the app needs a document to render into.
+    deps: [
+      "preact@10.29.2",
+      "preact-render-to-string@6.5.13",
+      "picomatch@4.0.2",
+      "linkedom@0.18.11",
+    ],
+    driver: "sprawlens.driver.mjs",
+  },
   {
     name: "remeda",
     repo: "https://github.com/remeda/remeda",
@@ -594,6 +647,39 @@ function stageAppEntry(checkout, t) {
   return { ok: true, rel };
 }
 
+// Config files a target needs staged INTO its checkout before mtsc can
+// resolve its imports.
+//
+// `stageAppEntry` above copies one entry file; this copies whatever a
+// target names, at the paths it names. sprawlens is the case that needs
+// it: a pnpm workspace whose packages import each other by bare
+// specifier (`@sprawlens/schema`) and resolve through workspace
+// symlinks, with NO tsconfig `paths` anywhere. mtsc reads `paths`, so
+// without a config it leaves every sibling package external and the
+// bundle is a shell.
+//
+// One file does it — `tsconfig.base.json`, which every package extends —
+// so the staged copy carries `baseUrl` + `paths` + `jsx` and each
+// package's own config still contributes its `jsxImportSource`.
+//
+// It REPLACES the checked-out file rather than merging into it, which is
+// the honest trade: merging depends on the upstream file's shape and
+// breaks silently when upstream changes it, while replacing depends only
+// on what mtsc reads from tsconfig today (`paths`, `baseUrl`, `jsx*`).
+// If mtsc learns to read more, this fixture has to grow with it.
+function stageFiles(checkout, t) {
+  for (const [rel, fixture] of Object.entries(t.stageFiles ?? {})) {
+    const src = path.join(FIXTURES, fixture);
+    if (!fs.existsSync(src)) {
+      return { ok: false, why: `staged file fixture ${fixture} is missing` };
+    }
+    const dest = path.join(checkout, rel);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.copyFileSync(src, dest);
+  }
+  return { ok: true };
+}
+
 // The leg directory. `--app` gets its own so the two modes cannot
 // overwrite each other's bundles — the `.observed` and `.stderr` files a
 // failure leaves behind are the only record of it.
@@ -627,7 +713,12 @@ function countSources(checkout, t) {
     "bash",
     [
       "-c",
-      `find ${roots.join(" ")} -name '*.ts' ! -name '*.test.ts' ! -name '*.spec.ts' 2>/dev/null | wc -l`,
+      // `.tsx` as well as `.ts`. Every library target in the corpus is
+      // `.ts`-only, so this went unnoticed until a UI application
+      // arrived: sprawlens/viz is 126 files and 100 of them are `.tsx`,
+      // and reporting the `.ts` count next to an 875 KB bundle invites
+      // exactly the wrong conclusion.
+      `find ${roots.join(" ")} \\( -name '*.ts' -o -name '*.tsx' \\) ! -name '*.test.ts' ! -name '*.test.tsx' ! -name '*.spec.ts' ! -name '*.bench.ts' 2>/dev/null | wc -l`,
     ],
     { encoding: "utf8", timeout: 60_000 },
   );
@@ -648,6 +739,11 @@ function measure(t) {
   const { dir: checkout, why } = resolveCheckout(t);
   if (!checkout) {
     results.push({ name: t.name, status: "skip", why });
+    return;
+  }
+  const staged_configs = stageFiles(checkout, t);
+  if (!staged_configs.ok) {
+    results.push({ name: t.name, status: "skip", why: staged_configs.why });
     return;
   }
   const dir = legDir(t);
@@ -896,8 +992,29 @@ for (const row of results) {
 
 if (update) {
   fs.mkdirSync(FIXTURES, { recursive: true });
-  fs.writeFileSync(EXPECTED, JSON.stringify(snapshot, null, 2) + "\n");
-  console.log(`  recorded ${path.relative(ROOT, EXPECTED)}\n`);
+  // MERGE, never replace.
+  //
+  // `--only X --update` used to write a file containing X and nothing
+  // else, silently deleting the nine recorded rows that are the entire
+  // point of the baseline. A regression check whose baseline the
+  // convenience flag can erase is not a regression check, and nothing
+  // would have said so until the next full run reported "no recorded
+  // measurement" for everything.
+  //
+  // With `--only`, rows for other targets are carried over untouched.
+  // Without it, every target ran, so there is nothing to carry.
+  const prior =
+    only && fs.existsSync(EXPECTED)
+      ? JSON.parse(fs.readFileSync(EXPECTED, "utf8"))
+      : {};
+  const merged = { ...prior, ...snapshot };
+  fs.writeFileSync(EXPECTED, JSON.stringify(merged, null, 2) + "\n");
+  const kept = Object.keys(merged).length - Object.keys(snapshot).length;
+  console.log(
+    `  recorded ${path.relative(ROOT, EXPECTED)}` +
+      (kept > 0 ? ` (${Object.keys(snapshot).length} updated, ${kept} carried over)` : "") +
+      "\n",
+  );
   process.exit(0);
 }
 

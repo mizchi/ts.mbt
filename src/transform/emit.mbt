@@ -1752,38 +1752,51 @@ fn emit_stmt_for_head(e : Emitter, stmt : @ast.TsStmt) -> Unit {
     true => return
     false => ()
   }
+  // The initializer goes through `omit_declaration_init`, the same way
+  // every other declaration emit does.
+  //
+  // It did not, and `for (var u; l < n.__k.length; l++)` — ordinary
+  // JavaScript, out of preact's own source — came out as
+  // `for (var u = __ts_no_init__; …)`. That name is the marker the
+  // parser synthesises for a declaration with no initializer; nothing
+  // declares it, so the loop throws `ReferenceError: __ts_no_init__ is
+  // not defined` the moment it runs, under plain `mtsc --bundle` with no
+  // optimization flag and on JS input that never saw a type.
+  //
+  // `omit_declaration_init` says so in its own doc comment ("It has to
+  // be dropped in every mode") and the block-statement emit, the
+  // declarator-group emit and the multi-decl for-head emit all call it.
+  // This one arm wrote `= <init>` unconditionally. Eighth time in this
+  // pipeline that one rule was written in several places and applied in
+  // one, so the three kinds below share a single path rather than
+  // repeating the check three times.
+  //
+  // `Const` cannot carry the marker at all (the parser rejects a `const`
+  // with no initializer), and dropping a `= undefined` from one is safe
+  // for the reason `try_emit_multi_decl_for_head` records: minify mode
+  // downgrades `const` to `let`, and pretty mode does not drop it.
+  fn emit_for_head_decl(
+    kind : String,
+    b : @ast.TsBinding,
+    init : @ast.TsExpr,
+  ) -> Unit {
+    e.word(kind)
+    e.sep_after_word(binding_leading_byte(b))
+    emit_binding(e, b)
+    if omit_declaration_init(e, init) {
+      return
+    }
+    e.space()
+    e.write("=")
+    e.space()
+    emit_expr(e, init, declarator_init_prec)
+  }
+
   match stmt {
-    Var(b, _, init) => {
-      e.word("var")
-      e.sep_after_word(binding_leading_byte(b))
-      emit_binding(e, b)
-      e.space()
-      e.write("=")
-      e.space()
-      emit_expr(e, init, declarator_init_prec)
-    }
-    Let(b, _, init) => {
-      e.word("let")
-      e.sep_after_word(binding_leading_byte(b))
-      emit_binding(e, b)
-      e.space()
-      e.write("=")
-      e.space()
-      emit_expr(e, init, declarator_init_prec)
-    }
-    Const(b, _, init) => {
-      if e.pretty {
-        e.word("const")
-      } else {
-        e.word("let")
-      }
-      e.sep_after_word(binding_leading_byte(b))
-      emit_binding(e, b)
-      e.space()
-      e.write("=")
-      e.space()
-      emit_expr(e, init, declarator_init_prec)
-    }
+    Var(b, _, init) => emit_for_head_decl("var", b, init)
+    Let(b, _, init) => emit_for_head_decl("let", b, init)
+    Const(b, _, init) =>
+      emit_for_head_decl(if e.pretty { "const" } else { "let" }, b, init)
     Expr(ex) => emit_expr(e, ex, 0)
     Assign(name, ex) => {
       e.write(name)

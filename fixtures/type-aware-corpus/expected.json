@@ -52,5 +52,11 @@
     "verdict": "NEUTRAL",
     "delta": 26,
     "aware": 28533
+  },
+  "sprawlens": {
+    "status": "measured",
+    "verdict": "WIN",
+    "delta": 10419,
+    "aware": 370414
   }
 }

@@ -1861,3 +1861,87 @@ unit test を付けました。
 この bug は package entry では出ません——barrel 自身を entry にすると
 `export default` を誰も import しないからです。**app entry を測ると
 決めたことの、最初の払いがこれでした。**
+
+## 10 番目の target: 本物のアプリケーション（sprawlens/viz）
+
+ここまでの 9 行は全部**ライブラリの package entry** です。excalidraw は
+「UI アプリケーション」として足しましたが、あれも element package という
+**ライブラリ**でした——export surface があります。
+
+`@sprawlens/viz`（https://github.com/mizchi/sprawlens）は本物です:
+`packages/viz/src/main.tsx` が preact アプリを mount し、**export はゼロ**、
+4 つの workspace package にまたがる **162 の TypeScript source**。
+
+### 答え: 型情報はアプリで初めて効きました
+
+| target | delta | of aware | gz delta | verdict |
+| --- | --- | --- | --- | --- |
+| **sprawlens（app）** | **+10,419** | **2.81%** | **+2,491** | **WIN** |
+| typebox | +216 | 0.25% | +83 | WIN |
+| hono | +46 | 0.22% | +6 | NEUTRAL |
+| superstruct | +28 | 0.27% | -6 | NEUTRAL |
+| remeda | +26 | 0.09% | +5 | NEUTRAL |
+| valibot / immer / neverthrow / ts-pattern | 0 | 0.00% | 0 | NEUTRAL |
+| excalidraw | -304 | -0.11% | -109 | LOSS |
+
+ライブラリ 9 個の合計が 12 byte 未満のところ、アプリ 1 つで **10,419 byte、
+2.81%**。gzip 後でも **+2,491**。これがこの corpus で初めて出た「型を読む
+phase が実際に効いている」という数字です。
+
+`.ts` のまま食わせることが条件だという点も同時に確認できています——
+`blind` leg（型を消した同じコード）は 380,833 byte で、`aware` leg の
+370,414 byte より 10 KB 大きい。published `.js` を食わせる
+`verify-real-world` ではこの差は構造上ゼロです。
+
+### property mangler については答えは NO、ただし理由が違う
+
+`--explain-mangle` は **743 個の property 名、candidate 0** ——
+ライブラリと同じ抑制です。しかし**原因が全く違い、そこが発見**です。
+
+ライブラリでは原因が export surface と wire format（正しく、直せない）。
+export ゼロのこのアプリでは、原因が全部こうです:
+
+```
+* binding `readSearch` crosses the bundle boundary and carries no closed
+  type annotation, so every name on it is assumed reachable
+* binding `parsers` …
+* binding `url` …  `onPopState` …  `node` …  `cell` …  `edge` …  `id` …
+```
+
+**アプリの境界は export ではありません。オブジェクトを渡す DOM /
+framework API です**——`render(<App/>, root)`、`history.replaceState`、
+`fetch`、`addEventListener`。ライブラリの ABI と違い、これは型注釈で
+狭められる可能性がある種類の境界です。
+
+### 動かすまでに 4 つのバグ
+
+どれも**ライブラリ形の target では原理的に出ない**ものでした。
+
+| # | 何が起きたか | 出る flag |
+| --- | --- | --- |
+| 1 | tsconfig の `jsx` / `jsxImportSource` / `jsxFactory` を読んでいない | 既定 |
+| 2 | `BundleOptions.jsx` が `load_module_graph` に無視され、`--jsx-import-source` が bundle path で死んでいた（preact アプリが `react/jsx-runtime` を出す） | **素の `--bundle`** |
+| 3 | linker が alias された import を、代入先の名前が shadow されている scope に書き換える（`ReferenceError: Cannot access 'parentFileOf' before initialization`） | **素の `--bundle`** |
+| 4 | `for (var u; …)` の初期化子なし宣言が `for (var u = __ts_no_init__; …)` になる | **素の `--bundle`** |
+
+4 は preact 自身の source（**ただの JavaScript**）で踏みます。
+`omit_declaration_init` は「どのモードでも落とさなければならない」と
+自分の doc comment に書いており、block 文の emit、declarator group の
+emit、multi-decl for-head の emit は全部それを呼ぶのに、**for head の
+単一宣言の arm だけが無条件に `= <init>` を書いていました**。
+1 つの規則が複数箇所に書かれて 1 箇所だけ適用、このパイプラインで 8 度目。
+
+### harness 側で直したもの
+
+* `countSources` が `*.ts` だけを数えていた。ライブラリは全部 `.ts` なので
+  気づかなかったが、viz は 126 file のうち 100 が `.tsx` で、875 KB の
+  bundle の隣に `.ts` の数を出すのは誤解を招きます。
+* `--only X --update` が **他の 9 行を消していた**。convenience flag が
+  baseline を消せる regression check は regression check ではありません。
+  `--only` 付きの `--update` は merge するようにし、いくつ更新して
+  いくつ持ち越したかを表示します。
+* `stageFiles` hook。sprawlens は pnpm workspace で tsconfig `paths` が
+  どこにも無く（package 間は workspace symlink で解決）、mtsc は `paths`
+  を読むので、置かないと兄弟 package が全部 external になり bundle が
+  殻になります。全 package が extends する `tsconfig.base.json` の 1
+  ファイルで足ります。

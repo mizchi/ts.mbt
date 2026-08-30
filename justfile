@@ -207,6 +207,11 @@ verify-rule-equivalence *ARGS:
 #   just measure-type-aware
 #   just measure-type-aware --app
 #   just measure-type-aware --only hono --verbose
+#
+# The `sprawlens` row is the corpus's first real APPLICATION — a preact
+# app that mounts and exports nothing — and it is the only row where the
+# type-reading phases move real bytes: +10,419 (2.81%), +2,491 gzipped,
+# against under twelve bytes across all nine libraries combined.
 #   just measure-type-aware --update        # re-record expected.json
 #   just measure-type-aware --app --update  # re-record expected.app.json
 measure-type-aware *ARGS:
