@@ -413,18 +413,18 @@ test "class methods and enum index signatures work at runtime" {
   }
   // Index-signature accessors convert enum values in both directions.
   let table = flagTable()
-  match table.op_get("primary") {
+  match table["primary"] {
     Some(R) => ()
-    _ => abort("expected op_get to convert the raw flag string to the enum")
+    _ => abort("expected the index read to convert the raw flag string to the enum")
   }
-  match table.op_get("missing") {
+  match table["missing"] {
     None => ()
-    Some(_) => abort("expected op_get on a missing key to be None")
+    Some(_) => abort("expected an index read on a missing key to be None")
   }
-  table.op_set("extra", A)
-  match table.op_get("extra") {
+  table["extra"] = A
+  match table["extra"] {
     Some(A) => ()
-    _ => abort("expected op_set to write the raw string back")
+    _ => abort("expected the index write to store the raw string back")
   }
 }
 EOF
