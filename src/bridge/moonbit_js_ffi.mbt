@@ -2105,6 +2105,24 @@ fn ffi_index_signature_accessor_decls(
   }
   let key_name = ffi_struct_field_type_name(state, key_type)
   let value_name = ffi_struct_field_type_name(state, value_type)
+  // `#alias("_[_]")` goes on its own line immediately before the PUBLIC
+  // declaration. Prefixing the whole rendered string would not do: the
+  // converted-return shape is `extern … \n\n pub fn …`, so the attribute
+  // would land on the private extern and the operator would not resolve.
+  fn attach_alias(decl : String, attr : String) -> String {
+    let out : Array[String] = []
+    let mut placed = false
+    for line_view in decl.split("\n") {
+      let line = line_view.to_owned()
+      if !placed &&
+        (line.has_prefix("pub extern ") || line.has_prefix("pub fn ")) {
+        out.push(attr)
+        placed = true
+      }
+      out.push(line)
+    }
+    out.join("\n")
+  }
   // Avoid double-wrapping when the value type is already an Option (e.g.
   // `[k: string]: string | undefined`). The accessor semantics — `None` for
   // missing keys — fold the explicit-undefined case into the same outer
@@ -2114,22 +2132,25 @@ fn ffi_index_signature_accessor_decls(
   } else {
     value_name + "?"
   }
-  let getter = match
-    ffi_converted_return_extern_pair(
-      state,
-      ffi_to_snake_case(type_name) + "_op_get",
-      "\{type_name}::op_get",
-      "self : \{type_name}, key : \{key_name}",
-      "this_ : \{type_name}, key : \{key_name}",
-      ["self", "key"],
-      getter_return,
-      "\n  #| (self, key) => self[key]",
-    ) {
-    Some(pair) => pair
-    None =>
-      "pub extern \"js\" fn \{type_name}::op_get(self : \{type_name}, key : \{key_name}) -> \{getter_return} =\n" +
-      "  #| (self, key) => { const v = self[key]; return v === undefined ? null : v; }"
-  }
+  let getter = attach_alias(
+    match
+      ffi_converted_return_extern_pair(
+        state,
+        ffi_to_snake_case(type_name) + "_index_get",
+        "\{type_name}::index_get",
+        "self : \{type_name}, key : \{key_name}",
+        "this_ : \{type_name}, key : \{key_name}",
+        ["self", "key"],
+        getter_return,
+        "\n  #| (self, key) => self[key]",
+      ) {
+      Some(pair) => pair
+      None =>
+        "pub extern \"js\" fn \{type_name}::index_get(self : \{type_name}, key : \{key_name}) -> \{getter_return} =\n" +
+        "  #| (self, key) => { const v = self[key]; return v === undefined ? null : v; }"
+    },
+    "#alias(\"_[_]\")",
+  )
   let setter = match ffi_rendered_generated_enum_info(state, value_name) {
     // Enum-typed values cross as MoonBit tag ints unless converted —
     // write the raw string / number via the package's `_to_js` helper.
@@ -2140,14 +2161,17 @@ fn ffi_index_signature_accessor_decls(
         ffi_enum_to_js_name(enum_name)
       }
       let raw_value_type = if is_optional { raw_type + "?" } else { raw_type }
-      let extern_name = "_\{ffi_to_snake_case(type_name)}_op_set_ret_conv_js"
+      let extern_name = "_\{ffi_to_snake_case(type_name)}_index_set_ret_conv_js"
       let extern_decl = "extern \"js\" fn \{extern_name}(this_ : \{type_name}, key : \{key_name}, value : \{raw_value_type}) -> Unit =\n  #| (self, key, value) => { self[key] = value; }"
-      let wrapper_decl = "pub fn \{type_name}::op_set(self : \{type_name}, key : \{key_name}, value : \{value_name}) -> Unit {\n  \{extern_name}(self, key, \{to_js_name}(value))\n}"
-      extern_decl + "\n\n" + wrapper_decl
+      let wrapper_decl = "pub fn \{type_name}::index_set(self : \{type_name}, key : \{key_name}, value : \{value_name}) -> Unit {\n  \{extern_name}(self, key, \{to_js_name}(value))\n}"
+      attach_alias(extern_decl + "\n\n" + wrapper_decl, "#alias(\"_[_]=_\")")
     }
     None =>
-      "pub extern \"js\" fn \{type_name}::op_set(self : \{type_name}, key : \{key_name}, value : \{value_name}) -> Unit =\n" +
-      "  #| (self, key, value) => { self[key] = value; }"
+      attach_alias(
+        "pub extern \"js\" fn \{type_name}::index_set(self : \{type_name}, key : \{key_name}, value : \{value_name}) -> Unit =\n" +
+        "  #| (self, key, value) => { self[key] = value; }",
+        "#alias(\"_[_]=_\")",
+      )
   }
   Some([getter, setter])
 }

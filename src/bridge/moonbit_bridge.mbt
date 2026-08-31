@@ -720,36 +720,65 @@ fn collect_bridge_struct_decls(bridge_mbt : String) -> Array[BridgeStructDecl] {
 
 ///|
 /// Collect the public-interface form of each index-signature accessor
-/// (`op_get` / `op_set`) emitted into `bridge.mbt`, keyed by the struct's
-/// type name. The FFI side renders these as
-/// `pub extern "js" fn Foo::op_get(...) -> V? = #| <js body>`; the `.mbti`
-/// form drops the `extern "js"` keyword and the trailing JS body so the
-/// generated contract advertises that `Foo` supports `foo[key]` indexing
-/// instead of presenting a bare, seemingly field-less struct.
+/// (`index_get` / `index_set`) emitted into `bridge.mbt`, keyed by the
+/// struct's type name. The FFI side renders these as
+/// `#alias("_[_]")` + `pub extern "js" fn Foo::index_get(...) -> V? = #| <js
+/// body>`; the `.mbti` form drops the `extern "js"` keyword and the trailing
+/// JS body so the generated contract advertises that `Foo` supports
+/// `foo[key]` indexing instead of presenting a bare, seemingly field-less
+/// struct.
+///
+/// The `#alias(...)` line is carried through, and it is not decoration: it
+/// is what makes `foo[key]` resolve. Emitting the signature without it
+/// would advertise a method called `index_get` and silently drop the
+/// operator from the published interface. `moon info` writes the attribute
+/// on its own line above the signature, and this matches that.
+///
+/// The accessors were `op_get` / `op_set` until newer MoonBit deprecated
+/// declaring the operator under those reserved names. Matching on the name
+/// is why this had to move in lockstep with the emitter.
 fn collect_bridge_index_accessor_mbti(
   bridge_mbt : String,
 ) -> Map[String, Array[String]] {
   let marker = "pub extern \"js\" fn "
+  let plain_marker = "pub fn "
   let result : Map[String, Array[String]] = {}
+  let mut pending_alias = ""
   for line_view in bridge_mbt.split("\n") {
     let trimmed = line_view.to_owned().trim().to_owned()
-    if !trimmed.has_prefix(marker) {
+    // Remember an attribute line so it can be attached to the declaration
+    // it precedes; anything else clears it, so an attribute never drifts
+    // onto an unrelated signature further down the file.
+    if trimmed.has_prefix("#alias(") {
+      pending_alias = trimmed
       continue
     }
-    if !(trimmed.contains("::op_get(") || trimmed.contains("::op_set(")) {
+    let alias = pending_alias
+    pending_alias = ""
+    // The enum-valued setter is a plain `pub fn` wrapper over a private
+    // extern rather than an extern itself, so both forms are accepted.
+    let used_marker = if trimmed.has_prefix(marker) {
+      marker
+    } else if trimmed.has_prefix(plain_marker) {
+      plain_marker
+    } else {
       continue
     }
-    let rest = trimmed[marker.length():].to_owned()
+    if !(trimmed.contains("::index_get(") || trimmed.contains("::index_set(")) {
+      continue
+    }
+    let rest = trimmed[used_marker.length():].to_owned()
     let name = match rest.find("::") {
       Some(idx) => rest[:idx].to_owned()
       None => continue
     }
-    // Drop the trailing ` =` that precedes the multi-line `#|` JS body.
+    // Drop the trailing ` =` that precedes the multi-line `#|` JS body, or
+    // the ` {` that opens a wrapper body.
     let mut sig = rest.trim().to_owned()
-    if sig.has_suffix("=") {
+    if sig.has_suffix("=") || sig.has_suffix("{") {
       sig = sig[:sig.length() - 1].to_owned().trim().to_owned()
     }
-    let mbti_line = "pub fn \{sig}"
+    let mbti_line = if alias == "" { "pub fn \{sig}" } else { alias + "\npub fn \{sig}" }
     let entry = result.get(name).unwrap_or([])
     if !entry.contains(mbti_line) {
       entry.push(mbti_line)
