@@ -53,6 +53,35 @@ jobs:
         run: bash scripts/patch_async_dep.sh
 
       - name: Moon fmt check
+        # Reported, not enforced, for the same reason `--deny-warn` is left
+        # to local `just check` below: the formatter's output depends on the
+        # toolchain version, and `latest` is the only stable URL on
+        # `cli.moonbitlang.com`, so CI's formatter drifts away from every
+        # contributor's pinned one.
+        #
+        # This is not a hypothetical. CI's formatter wants a trailing comma
+        # in three files nobody has touched since June —
+        # `src/bridge/oracle.mbt`, `moonbit_js_ffi.mbt` and
+        # `tagged_union_lowering.mbt` (`Some({ name: type_alias.name, cases })`
+        # at tagged_union_lowering.mbt:800) — and moon 0.1.20260819 REMOVES
+        # that comma again on the next local `moon fmt`. The two formatters
+        # actively disagree, so no state of the source satisfies both: adding
+        # the commas is not a fix that can hold, it just moves which side is
+        # red. Verified by adding the comma and re-running the local
+        # formatter, which reverted it.
+        #
+        # A hard-failing check here costs the thing a check is for. It was
+        # red on every pull request for a reason unrelated to any of them,
+        # which means it stopped being able to say anything about them —
+        # and a signal that is always red is a signal people learn to merge
+        # past. Reporting it keeps the drift visible without that.
+        #
+        # The alternative is pinning CI's MoonBit to the version
+        # contributors run. That is the stronger fix and deliberately not
+        # taken here: the two steps around this one exist to keep tracking
+        # `latest` so real toolchain breakage surfaces early, and pinning
+        # would trade that away for a formatting check.
+        continue-on-error: true
         run: moon fmt --check
 
       - name: Moon check
