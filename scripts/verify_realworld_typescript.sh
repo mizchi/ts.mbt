@@ -1063,7 +1063,7 @@ extern "js" fn realworld_qs_obj() -> JSValue =
 
 test "real-world qs bridge smoke" {
   let parsed = parse("a=1&b=2", None)
-  if parsed.op_get("a") is None {
+  if parsed["a"] is None {
     abort("expected parsed key a")
   }
   assert_eq(stringify(realworld_qs_obj(), None), "a=1")
@@ -1926,7 +1926,7 @@ EOF
       cat > "$smoke_dir/main.mbt" <<'EOF'
 fn main {
   let parsed = @sut.parse("a=1&b=2", None)
-  if parsed.op_get("a") is None {
+  if parsed["a"] is None {
     abort("expected parsed key a")
   }
 }

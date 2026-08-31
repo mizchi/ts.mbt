@@ -1090,19 +1090,26 @@ test "bridge: bridge top-level fn parser keeps function-typed parameters intact"
 
 ///|
 test "bridge mbti: index-signature accessors are exposed in the interface" {
-  // `.mbt` carries the struct plus its `op_get` / `op_set` externs; the
-  // `.mbti` only had a `declare pub type` placeholder. The exposer must
+  // `.mbt` carries the struct plus its `index_get` / `index_set` externs;
+  // the `.mbti` only had a `declare pub type` placeholder. The exposer must
   // surface the public accessor signatures so the generated contract shows
   // that the record supports `dict[key]` indexing.
+  //
+  // The `#alias(...)` line has to come through with each signature. It is
+  // what makes `dict[key]` resolve, so an interface carrying the signature
+  // without it would advertise a method named `index_get` and silently drop
+  // the operator — which is the whole reason the accessors are exposed here.
   let bridge_mbt =
     #|#warnings("-9")
     #|pub(all) struct Dict {
     #|}
     #|
-    #|pub extern "js" fn Dict::op_get(self : Dict, key : String) -> Double? =
+    #|#alias("_[_]")
+    #|pub extern "js" fn Dict::index_get(self : Dict, key : String) -> Double? =
     #|  #| (self, key) => { const v = self[key]; return v === undefined ? null : v; }
     #|
-    #|pub extern "js" fn Dict::op_set(self : Dict, key : String, value : Double) -> Unit =
+    #|#alias("_[_]=_")
+    #|pub extern "js" fn Dict::index_set(self : Dict, key : String, value : Double) -> Unit =
     #|  #| (self, key, value) => { self[key] = value; }
   let bridge_mbti =
     #|///|
@@ -1112,12 +1119,12 @@ test "bridge mbti: index-signature accessors are exposed in the interface" {
   assert_true(exposed.contains("pub(all) struct Dict {"))
   assert_true(
     exposed.contains(
-      "pub fn Dict::op_get(self : Dict, key : String) -> Double?",
+      "#alias(\"_[_]\")\npub fn Dict::index_get(self : Dict, key : String) -> Double?",
     ),
   )
   assert_true(
     exposed.contains(
-      "pub fn Dict::op_set(self : Dict, key : String, value : Double) -> Unit",
+      "#alias(\"_[_]=_\")\npub fn Dict::index_set(self : Dict, key : String, value : Double) -> Unit",
     ),
   )
   // The JS body and the `extern "js"` keyword must not leak into the
