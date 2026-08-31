@@ -12,6 +12,7 @@ export default async (mod) => ({
   or: mod.or.inner.readOr("k"),
   literalKey: mod.literalKey.inner.readLiteralKey("k"),
   plain: mod.plain.inner.readPlain("k"),
+  computed: mod.computed.slot.readComputed("k"),
   readThrough: mod.fillBag().readThrough("k"),
   bagCount: mod.bagCount(),
 });

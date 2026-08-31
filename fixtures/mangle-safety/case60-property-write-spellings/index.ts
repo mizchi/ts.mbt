@@ -137,6 +137,34 @@ const bag: { slot: PayloadReadThrough | undefined; counter: number } = {
   counter: 0,
 };
 
+// ---- H2b: a computed write under a key we CANNOT spell. -------------
+// `NAME[k] = value` where `k` is not a literal. No name can be reserved
+// for it — we do not know which one it is — but the VALUE still leaves
+// inside the object, so it goes under the `@@computed:` sentinel
+// `is_opaque_object_key` already existed for, and the consumers withhold
+// only the NAME. That arm was written from reasoning rather than from a
+// witness, which given the rest of this file's history is not good
+// enough: reverting it throws
+// `TypeError: … .readComputed is not a function` here.
+class PayloadComputed {
+  tag: string;
+  constructor(tag: string) {
+    this.tag = tag;
+  }
+  readComputed(k: string): string {
+    return this.tag + ":" + k;
+  }
+}
+
+const computedBag: Record<string, unknown> = {};
+
+// The key comes back from a call, so no pass can fold it to a literal.
+function pickSlotKey(): string {
+  return "slot";
+}
+
+computedBag[pickSlotKey()] = new PayloadComputed("computed");
+
 // ---- H4 lives in case61. ---------------------------------------------
 // The `#private` field's value escape was the fourth hole, and it cannot
 // be covered here: the unindexed write spellings above leave `this.slot`
@@ -172,6 +200,7 @@ export const coalesce: LazyCoalesce = new LazyCoalesce();
 export const or: LazyOr = new LazyOr();
 export const literalKey: LiteralKeyWrite = new LiteralKeyWrite();
 export const plain: PlainAssign = new PlainAssign();
+export const computed: Record<string, unknown> = computedBag;
 
 export function fillBag(): PayloadReadThrough {
   bag.counter = bag.counter + 1;

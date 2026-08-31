@@ -1058,6 +1058,35 @@ scope-narrowing bug がそれで数千 seed を生き延びました。ここで
 観測できない）。そちらは `just verify-dce-coverage`（marker が消えている
 ことを assert する）と type-aware corpus の byte 差が見ます。
 
+### 5 つ目: 綴れない computed key（reasoning だけで書いていた arm）
+
+`NAME[k] = value` で `k` が literal でない場合、名前は予約できません
+——どれなのか分からないので——が、**値はオブジェクトの中に入って出て
+いきます**。この file に既にある `@@computed:` sentinel
+（`is_opaque_object_key`）に記録して、consumer 側は名前の予約だけを
+withhold する、という arm を足しました。
+
+これは **witness 無しで、reasoning だけで書いた**箇所でした。この文書の
+残りの履歴を踏まえるとそれは不十分なので、後から確認しました:
+
+```ts
+class Payload { readComputed(k: string): string { … } }
+const holder: Record<string, unknown> = {};
+function pickSlotKey(): string { return "slot" }   // call 経由なので畳めない
+holder[pickSlotKey()] = new Payload("computed");
+export const out = holder;
+```
+
+| leg | 結果 |
+| --- | --- |
+| Node が同じ TypeScript を実行（oracle） | `computed:k` |
+| 修正前の `mtsc --bundle` | `TypeError: mod.out.slot.readComputed is not a function` |
+| 修正後の `mtsc --bundle` / 全 flag | `computed:k` |
+
+つまり arm は**効いていました**——同じ族の 5 つ目です。`case60` に
+6 番目の holder として入れたので、これも comment ではなく witness で
+押さえられています。
+
 ### 修正の効果と代償（実測）
 
 soundness 側を広げた修正なので byte を払うのが普通ですが、**10 target

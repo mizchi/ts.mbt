@@ -6,6 +6,7 @@
     "or",
     "literalKey",
     "plain",
+    "computed",
     "fillBag",
     "bagCount"
   ],
@@ -14,7 +15,8 @@
     "readOr",
     "readLiteralKey",
     "readThrough",
-    "readPlain"
+    "readPlain",
+    "readComputed"
   ],
   "expectStatus": "pass"
 }
