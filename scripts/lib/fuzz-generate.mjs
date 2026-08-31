@@ -275,6 +275,19 @@ export class Generator {
       for (const fn of group.names) this.shadowFnNames.push(fn);
     }
 
+    // The export-surface group: a payload class reached ONLY through a
+    // property write, in each of the spellings JavaScript has for one.
+    // Only meaningful in the export shape, where the holder is observed.
+    this.lazyExports = [];
+    if (this.shape === "export") {
+      const lazyCount = this.int(0, 3);
+      for (let i = 0; i < lazyCount; i++) {
+        const group = this.lazyHolderGroup(i);
+        decls.push({ k: "raw", text: group.text });
+        for (const name of group.exports) this.lazyExports.push(name);
+      }
+    }
+
     const body = this.statements(this.int(3, 7), 3, { inFunction: false, loopDepth: 0 });
 
     const program = {
@@ -329,6 +342,96 @@ export class Generator {
   /// an inner `const` (a block declares it), a parameter (no block
   /// declares it — the case a block-level check cannot see), a `catch`
   /// binding, and a loop variable.
+  /// The export-surface group: a payload class whose only route to a
+  /// consumer is a PROPERTY WRITE, in each spelling JavaScript has.
+  ///
+  /// "`NAME.prop = value`" is four spellings, and `index_prop_assigns`
+  /// indexed one of them. The other three never put the written value on
+  /// the export surface, so `mtsc entry.ts --bundle` — no optimization
+  /// flag — deleted the payload's methods, and a consumer calling one got
+  /// `TypeError: … is not a function`. The witness was hono's
+  /// `#req ??= new HonoRequest(…)`.
+  ///
+  /// Three reasons this grammar could not reach any of it:
+  ///
+  ///   * `mutableTarget()` has no `this.<field>` arm, so a compound write
+  ///     to a class field — the way real code spells a lazily-created
+  ///     member — was ungeneratable;
+  ///   * its index arm targets `arr` with a NUMERIC literal, never
+  ///     `obj["p"]`;
+  ///   * a class instance was never written into a property whose holder
+  ///     is then observed, so the export-surface route was never taken.
+  ///
+  /// The observation needs no runner change. `encode` walks an exported
+  /// instance's own enumerable fields and reports the inner object's
+  /// prototype members, so a payload whose method was deleted differs on
+  /// `protoMembers`. The payload class is NOT exported: exporting it would
+  /// put its members on the surface directly and the write would stop
+  /// being the only route.
+  ///
+  /// Detection comes from the REFERENCE leg. The deletion happens in every
+  /// mtsc leg, so the mangled-vs-unmangled comparison agrees — the
+  /// self-comparison trap this file's history keeps recording.
+  ///
+  /// The `#private` spelling is deliberately absent: `Object.keys` cannot
+  /// see a private field, so this observation cannot reach it whatever the
+  /// compiler does. It is covered by
+  /// `fixtures/mangle-safety/case61-private-field-value-escape`.
+  lazyHolderGroup(index) {
+    const tag = `lz${index}`;
+    const payload = `${tag}Payload`;
+    const method = `${tag}Read`;
+    const spelling = this.int(0, 5);
+    // The payload's method is never named inside this program, so the
+    // static access collector cannot pin it.
+    const payloadDecl =
+      `class ${payload} {\n` +
+      `  tag: string;\n` +
+      `  constructor(t: string) { this.tag = t; }\n` +
+      `  ${method}(k: number): string { return this.tag + ":" + k; }\n` +
+      `}\n`;
+    // The read-through form is a module-level object rather than a class:
+    // `surface_lookup_member` resolved the literal's own entry and
+    // stopped, so the recorded write was never followed. The increment is
+    // load-bearing too — a write that READS the key it writes is what
+    // made the fixed walk fail to terminate.
+    if (spelling === 4) {
+      const bag = `${tag}Bag`;
+      return {
+        text:
+          payloadDecl +
+          `const ${bag}: { slot: ${payload} | undefined; hits: number } = ` +
+          `{ slot: undefined, hits: 0 };\n` +
+          `${bag}.hits = ${bag}.hits + 1;\n` +
+          `${bag}.slot = new ${payload}("${tag}");\n` +
+          `export const ${tag}Out = ${bag}.slot;\n`,
+        exports: [`${tag}Out`],
+      };
+    }
+    const holder = `${tag}Holder`;
+    const write = [
+      `    this.slot ??= new ${payload}("${tag}");`,
+      `    this.slot ||= new ${payload}("${tag}");`,
+      `    this["slot"] = new ${payload}("${tag}");`,
+      // The spelling that always worked. Without it, "the fix works" and
+      // "the pass is off" would look the same from out here.
+      `    this.slot = new ${payload}("${tag}");`,
+    ][spelling];
+    return {
+      text:
+        payloadDecl +
+        `class ${holder} {\n` +
+        `  slot: ${payload} | undefined;\n` +
+        `  constructor() { this.slot = undefined; }\n` +
+        `  fill(): void {\n${write}\n  }\n` +
+        `}\n` +
+        `const ${tag}Inst = new ${holder}();\n` +
+        `${tag}Inst.fill();\n` +
+        `export const ${tag}Out = ${tag}Inst;\n`,
+      exports: [`${tag}Out`],
+    };
+  }
+
   shadowGroup(index) {
     const tag = `s${index}`;
     const shadow = this.int(0, 4);
@@ -467,6 +570,9 @@ export class Generator {
   /// these names are the package ABI and must survive mangling.
   exportList(decls) {
     const candidates = decls.filter((d) => d.k === "class" || d.k === "func").map((d) => d.name);
+    // The lazy-holder group emits its own `export const`, so those names
+    // are already exported by the declaration and must NOT be repeated
+    // here — a duplicate export clause is a syntax error.
     if (candidates.length === 0) return this.shadowFnNames.slice();
     const count = this.int(1, candidates.length + 1);
     // Every group reader is exported unconditionally. In the "export"
