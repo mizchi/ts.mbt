@@ -1128,6 +1128,30 @@ product surfaces now.
   (`console.log` being its only sink) lives in
   `fixtures/mangle-safety/case45-class-escapes-external`, where a real
   external import receives the instance and calls the method back.
+  The four export-surface holes above are the newest entry in the same
+  ledger, and the reason they survived thousands of seeds is three gaps
+  in the grammar: `mutableTarget()` has no `this.<field>` arm, so
+  `this.slot ??= new Payload()` — hono's real `#req ??=`, and the way
+  ordinary code writes a lazily-created member — was ungeneratable; its
+  index arm targets `arr` with a NUMERIC literal, never `obj["p"]`; and a
+  class instance was never written into a property whose holder is then
+  observed, so the export-surface route was never taken. `lazyHolderGroup`
+  emits a payload class whose ONLY route to a consumer is one property
+  write, rotating over `??=`, `||=`, `this["slot"] =`, a read-through
+  object (carrying the self-referential increment that made the fixed
+  walk hang), and plain `=` as the control — without which "fixed" and
+  "switched off" look alike from outside. It needed NO runner change:
+  `encode` already walks an exported instance's own fields and reports the
+  inner object's prototype members, and the payload is deliberately NOT
+  exported, since exporting it would put its members on the surface
+  directly and the write would stop being the only route. Detection comes
+  from the REFERENCE leg, the deletion being present in every mtsc leg.
+  Proven the only way that counts — against the compiler with the fix
+  reverted it reports at SEED 0, shrunk 107 nodes to 6 and correctly
+  attributed as a lowering rather than a mangling bug — and 700 seeds are
+  clean with the fix in. The `#private` spelling is deliberately absent:
+  `Object.keys` cannot see a private field, so this observation cannot
+  reach it whatever the compiler does, and `case61` covers it.
   That protocol list then turned out to stop one step short of the
   ITERATION protocol, and its own comment is where it stopped: it said
   a spread obtains an iterator through `Symbol.iterator`, a computed key

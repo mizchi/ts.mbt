@@ -890,3 +890,75 @@ trace を oracle に入れて campaign が seed 2 で止まらなくなった直
 は通してしまいます。
 
 200 seed / 400 比較で mismatch 0、既知 finding も 0 になりました。
+
+## property 書き込みの 4 つの綴り: 生成器が届いていなかった場所
+
+#73 で見つけた export surface の 4 つの穴は `mtsc --bundle`（最適化
+flag 無し）に入っていて、**数千 seed の campaign が 1 つも見つけて
+いませんでした**。文法が届いていなかった理由は 3 つです。
+
+* `mutableTarget()` に `this.<field>` の arm が無い。つまり class の
+  field への compound write —— `this.slot ??= new Payload()`、hono の
+  実物の `#req ??=` の綴りで、実コードが lazy member を書く形 ——
+  は**生成不可能**でした。
+* index の arm は `arr` を数値 literal で引くだけで、`obj["p"]` は
+  一度も出ません。
+* class の instance が、**観測される holder の property に書き込まれる**
+  ことが無い。だから export surface の経路自体が通りませんでした。
+
+`lazyHolderGroup` は「consumer への唯一の経路が 1 回の property write」
+である payload class を出し、綴りを 5 つ回します:
+
+| 綴り | 600 export seed 中 |
+| --- | --- |
+| `this.slot ??= new P()` | 125 |
+| `this.slot \|\|= new P()` | 110 |
+| `this["slot"] = new P()` | 126 |
+| `bag.slot = new P()` して読み返す | 100 |
+| `this.slot = new P()`（control） | 102 |
+
+control を入れているのは、それが無いと「修正が効いている」と
+「pass が切れている」が外から同じに見えるからです。read-through 形には
+**自己参照の increment** も入れてあります——key を書く write がその key を
+READ する形で、修正後の walk が停止しなくなった原因そのものです。
+
+### runner は変えていない
+
+`encode` は export された instance の own enumerable field を辿り、
+内側の object の prototype member を報告します。だから **holder を
+export するだけ**で、payload の method が消えたことが差として出ます。
+payload class は**意図的に export しません**——export したら member が
+直接 surface に乗り、write が唯一の経路でなくなります（`case60` の
+draft 2 で実際にやった間違いです）。
+
+検出は **reference leg** から来ます。この削除は mtsc の全 leg で起きる
+ので mangled と unmangled は一致します——この repo が何度も記録している
+self-comparison の罠です。
+
+### 検出力の確認（これが本題）
+
+生成器に形を足しただけでは何も言えません。getter の回が
+「600 比較で 0 件 → 209 比較で 21 件」になったのは綴りが正しくなった
+後で、それまでは形があっても届いていませんでした。なので**修正を
+revert した compiler に対して campaign を回します**:
+
+```
+[LOWERING BUG (unmangled side is wrong)] seed 0 (export)
+    shrunk 107 -> 6 nodes in 154 probes
+    original  ["slot",["object",1,[["tag","lz0"]],["lz0Read"]]]
+    our bundle["slot",["object",1,[["tag","lz0"]],[]          ]]
+```
+
+**seed 0**、つまり最初の 1 つで出ました。107 node が 6 node に縮み、
+しかも lowering bug（unmangled 側が間違い）として正しく分類されて
+います——削除は `--bundle` 自体で起きるので、mangling bug ではありません。
+
+修正入りの compiler では **700 seed / 700 比較で mismatch 0**、
+700 件すべてが original と照合済みです。
+
+### 入れていない綴り
+
+`#private` field は**生成しません**。`Object.keys` は private field を
+見られないので、compiler が何をしようとこの観測では届きません。
+`fixtures/mangle-safety/case61-private-field-value-escape` が担当します。
+ここで「covered」と書くのは coverage-shaped です。
