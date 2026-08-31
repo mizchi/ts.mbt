@@ -1,0 +1,14 @@
+{
+  "origin": "ts.mbt — #80, after #79 made private fields lower to native `#x` syntax and the mangler was then declining the real names",
+  "what": "`#private` names are class-scoped by language rule, so renaming them needs no escape analysis and no proof — and the property mangler skipped them all, which after the native lowering left hono carrying `#notFoundHandler` verbatim. The candidate check now runs before the reserved set, because the reserved set answers a question that cannot apply to a `#` name, and the mint keeps the `#` so the member stays private. Worth -1,876 bytes on hono, and this case checks the four ways a private must stay invisible plus the `#x in obj` brand check.",
+  "mtscArgs": [
+    "--treeshake",
+    "--fold",
+    "--minify",
+    "--mangle-properties"
+  ],
+  "exports": [
+    "report"
+  ],
+  "expectStatus": "pass"
+}

@@ -44,13 +44,36 @@ pub fn collect_externally_visible_props(
   block : @ast.TsBlock,
   external_bindings : Map[String, Bool],
   type_env? : Map[String, @ast.TsType] = {},
+  // Forwarded to `escape_breakdown`: which bindings the LINKER created
+  // as namespace objects, so their keys are reserved by fact instead of
+  // by a shape that a library's ordinary dispatch table also has.
+  synthesized_namespaces? : Map[String, Bool]? = None,
 ) -> Array[String] {
   // A merge over `escape_breakdown`, which computes the same reserved
   // set in pieces and keeps the reason for each. Deliberately not a
   // second implementation: `--explain-mangle` has to describe the
   // decision this function makes, not a re-derivation of it that can
   // drift.
-  let b = escape_breakdown(block, external_bindings, type_env~)
+  merge_escape_breakdown(
+    escape_breakdown(
+      block,
+      external_bindings,
+      type_env~,
+      synthesized_namespaces~,
+    ),
+  )
+}
+
+///|
+/// The merge half of `collect_externally_visible_props`, split out so a
+/// caller that ALREADY has the breakdown does not pay for a second
+/// analysis.
+///
+/// That caller is `--explain-mangle`: it needs the breakdown to print
+/// the per-reason report and the merged set to drive the mangler, and it
+/// was computing the breakdown twice — 2,165 ms each on the 9 MB
+/// TypeScript bundle, which is 25% of that compile paid twice over.
+pub fn merge_escape_breakdown(b : EscapeBreakdown) -> Array[String] {
   let reserved : Map[String, Bool] = {}
   for
     group in [
@@ -75,6 +98,53 @@ pub fn collect_externally_visible_props(
     out.push(k)
   }
   out
+}
+
+///|
+/// Class members that must survive `class_method_dce` because something
+/// outside the bundle can reach them.
+///
+/// Two disjoint sources, and keeping them apart is the whole point:
+///
+///   * the members of any class whose VALUE reaches `External`
+///     observability — the class object or an instance crossed the
+///     bundle boundary, so the holder can invoke anything on it;
+///   * the protocol methods something invokes WITHOUT NAMING them — a
+///     known sink (`toJSON` for `JSON.stringify`, `toString`/`valueOf`
+///     for string coercion) or a language construct (`then` for
+///     `await`, `next` for `for…of` and spread). No amount of scanning
+///     our own source finds these, because a library defines them and
+///     never calls them.
+///
+/// This is NOT `collect_externally_visible_props`. That function answers
+/// "may this name be renamed" and is right to be broader: it marks a
+/// class observed when an instance appears anywhere in an escaping
+/// subtree, because a rename has to be consistent everywhere the name
+/// occurs. Deletion is a stronger claim and needs the narrower fact —
+/// feeding the broader set here reserved every method of every class
+/// touched by a sink, `console.log(new C().live())` included, and turned
+/// the pass off in all but name.
+pub fn class_members_reachable_off_bundle(
+  block : @ast.TsBlock,
+  external_bindings : Map[String, Bool],
+) -> Array[String] {
+  let out : Map[String, Bool] = {}
+  // `external_class_member_names`, not `escape_breakdown`: the latter
+  // goes on to build the whole reserved set, which took 40 seconds on
+  // the 9 MB TypeScript bundle for a result this function throws 99% of
+  // away — and `class_method_dce` runs whether or not property mangling
+  // is on, so plain `mtsc --bundle` paid it.
+  for n in external_class_member_names(block, external_bindings) {
+    out[n] = true
+  }
+  for n in implicitly_invoked_protocol_methods {
+    out[n] = true
+  }
+  let names : Array[String] = []
+  for k in out.keys() {
+    names.push(k)
+  }
+  names
 }
 
 ///|
@@ -199,7 +269,7 @@ fn is_internal_marker_prop(name : String) -> Bool {
 pub fn external_import_bindings(
   external_imports : Array[@ast.TsImportDecl],
 ) -> Map[String, Bool] {
-  let out : Map[String, Bool] = {}
+  let out = imported_bindings(external_imports)
   // Implicit globals — names that JS / browser / Node provide for
   // free. Property accesses on these all live in someone else's
   // ABI, so they're external by definition. Without this list,
@@ -208,6 +278,21 @@ pub fn external_import_bindings(
   for n in known_global_bindings {
     out[n] = true
   }
+  out
+}
+
+///|
+/// Just the `import` half of `external_import_bindings`, with no
+/// implicit globals. A consumer that already carries its own curated
+/// catalog of which GLOBALS matter to it wants this one: unioning in
+/// every global would answer a question it has already answered more
+/// precisely. `tag_rewrite.mbt` is that consumer — `Math.max(s.r)`
+/// hands off a number, not the tagged object, and its own sink
+/// catalog says so.
+pub fn imported_bindings(
+  external_imports : Array[@ast.TsImportDecl],
+) -> Map[String, Bool] {
+  let out : Map[String, Bool] = {}
   for imp in external_imports {
     match imp.default_binding {
       Some(n) => out[n] = true
@@ -382,7 +467,7 @@ fn untracked_index_receiver(recv : @ast.TsExpr) -> Bool {
     // Same for the other pseudo-names that parse as identifiers.
     Var("this") | Var("super") | Var("globalThis") | Var("arguments") => false
     Var(_) => true
-    NonNull(inner) | As(inner, _) | Satisfies(inner, _) =>
+    NonNull(inner) | As(inner, _) | Satisfies(inner, _) | PureCall(inner) =>
       untracked_index_receiver(inner)
     _ => false
   }
@@ -752,6 +837,9 @@ fn collect_props_on_external_expr(
     | As(inner, _)
     | Satisfies(inner, _)
     | NonNull(inner)
+    // `/* @__PURE__ */ f(o)` hands `o` to `f` exactly as `f(o)` does;
+    // the annotation is a claim about effects, not a scope.
+    | PureCall(inner)
     | OptionalChain(inner) =>
       collect_props_on_external_expr(
         inner, externals, out, numeric_names, literal_idx_names,
@@ -975,7 +1063,8 @@ fn is_external_chain(expr : @ast.TsExpr, externals : Map[String, Bool]) -> Bool 
     NonNull(inner)
     | OptionalChain(inner)
     | As(inner, _)
-    | Satisfies(inner, _) => is_external_chain(inner, externals)
+    | Satisfies(inner, _)
+    | PureCall(inner) => is_external_chain(inner, externals)
     _ => false
   }
 }
@@ -1152,6 +1241,7 @@ fn collect_reflection_sinks_expr(
     | As(inner, _)
     | Satisfies(inner, _)
     | NonNull(inner)
+    | PureCall(inner)
     | OptionalChain(inner) => collect_reflection_sinks_expr(inner, out)
     Yield(Some(inner)) => collect_reflection_sinks_expr(inner, out)
     Cond(c, t, e) => {
@@ -1279,6 +1369,7 @@ fn collect_object_literal_keys(
     | Satisfies(inner, _)
     | NonNull(inner)
     | TypeArgs(_, inner)
+    | PureCall(inner)
     | Await(inner) => collect_object_literal_keys(inner, out)
     Cond(_, t, e) => {
       collect_object_literal_keys(t, out)

@@ -401,7 +401,19 @@ test "bundle: constructor parameter properties become this.x = x" {
 }
 
 ///|
-test "bundle: private fields strip the `#` after brand mangling" {
+/// This used to assert that plain `mtsc --bundle` emits the BRAND
+/// (`__private_brand__0__count`) and no `#count`, which is what it did —
+/// and that was a bug, not a contract. A brand is an ordinary own
+/// ENUMERABLE property, so `JSON.stringify(new Counter())` printed
+/// `{"__private_brand__0__count":0}` where Node prints `{}`.
+/// `lower_private_fields` ran only in the merged path, which is gated on
+/// `--mangle`/`--treeshake`/`--fold`, so every harness that exercises
+/// this path exercised it WITH flags and nothing noticed.
+///
+/// The invariant worth pinning is the one the emit has to satisfy: the
+/// reference is native `#` syntax AND the class body declares it, so the
+/// private name has an enclosing class.
+test "bundle: private fields lower to native `#` syntax, declaration and all" {
   let files = vfs([
     (
       "entry.ts", "class Counter {\n  #count = 0;\n  inc() { this.#count++; return this.#count; }\n  get value() { return this.#count; }\n}\nconst c = new Counter();\n",
@@ -409,14 +421,13 @@ test "bundle: private fields strip the `#` after brand mangling" {
   ])
   match bundle_modules(files, "entry.ts", BundleOptions::default()) {
     Ok(out) => {
-      // The brand prefix is fine, but `#` must not appear in the
-      // emitted identifier — it isn't a legal JS ident char outside
-      // the native `#field` syntax.
+      // `#` is not a legal identifier character outside the native
+      // `#field` syntax, so a brand must never grow one.
       assert_false(out.js.contains("__#"))
-      assert_false(out.js.contains("#count"))
-      // Brand'd field is still namespaced so external access
-      // doesn't collide with public fields.
-      assert_true(out.js.contains("__private_brand__"))
+      assert_false(out.js.contains("__private_brand__"))
+      assert_true(out.js.contains("this.#count"))
+      // The declaration, without which `this.#count` is a SyntaxError.
+      assert_true(out.js.contains("#count;"))
     }
     Err(e) => fail("bundle error: \{e}")
   }
@@ -792,12 +803,18 @@ test "parser: private field reference inside template literal stays mangled" {
   ])
   let opts = BundleOptions::default()
   match bundle_modules(files, "entry.ts", opts) {
-    Ok(out) =>
-      // After lowering, `#index` should be mangled to a brand-
-      // suffixed identifier everywhere — INCLUDING inside the
-      // template-literal interpolation. Output must not contain
-      // a `#index` token outside of a class body.
-      assert_false(out.js.contains("this.#index"))
+    Ok(out) => {
+      // The regression was the template-literal sub-parser losing
+      // `current_class_brand`, which put a raw `#index` OUTSIDE the
+      // class body. The assertion used to be "no `this.#index` in the
+      // output" — which held only because plain `--bundle` never
+      // lowered the brand back. Now it does, and `this.#index` inside
+      // the class body is exactly right; what must hold is that the
+      // enclosing class declares it.
+      assert_true(out.js.contains("this.#index"))
+      assert_true(out.js.contains("#index;"))
+      assert_false(out.js.contains("__private_brand__"))
+    }
     Err(e) => fail("bundle error: \{e}")
   }
 }
@@ -1272,6 +1289,125 @@ test "as-const: literal array indexed read inlines to the element" {
 }
 
 ///|
+test "as-const: an inner binding of the same name is not the candidate" {
+  // The pass resolved names against one top-level table with no scope
+  // narrowing anywhere in its walker, so a shadowing declaration — or a
+  // PARAMETER, which no block declares — got the outer constant's
+  // value. A wrong value, not a crash, under plain `--bundle --fold`.
+  let src =
+    #|const S = ["ok", "warn"];
+    #|const O = { k: 1 };
+    #|export function inner() { const S = ["x", "y"]; return S[0]; }
+    #|export function obj() { const O = { k: 99 }; return O.k; }
+    #|export function param(S: string[]) { return S[0]; }
+    #|export function loop(xs: string[][]) { let r = ""; for (const S of xs) { r += S[0]; } return r; }
+    #|export const outer = S[0];
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default().with_treeshake(true).with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // The outer read still inlines — the fix narrows the table, it
+      // does not switch the pass off.
+      assert_true(
+        out.js.contains("\"ok\""),
+        msg="the outer read stopped inlining: \{out.js}",
+      )
+      // Every shadowed read must still go through its own binding.
+      let inlined_into_inner = out.js.contains("return \"ok\"") ||
+        out.js.contains("return 1")
+      assert_false(
+        inlined_into_inner,
+        msg="a shadowed read took the outer constant's value: \{out.js}",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "name tables: a parameter of the same name is not the table entry" {
+  // The same bug in four more passes, found by auditing every table
+  // that resolves a NAME after `as_const_inline` turned one up. A
+  // parameter is the sharpest form: no block declares it, so a
+  // narrowing that only looks at block bindings cannot see it.
+  //
+  // `fixtures/mangle-safety/case43-table-shadowing` runs all of these
+  // against Node with an independent reference leg; this pins the emit
+  // so a regression names the pass.
+  let src =
+    #|const enum Arch { X64 = 1 }
+    #|function isNeg(v: number): v is number { return !v; }
+    #|function dispatch(k: "a" | "b"): number { switch (k) { case "a": return 1; case "b": return 2; } }
+    #|export function archParam(Arch: { X64: number }) { return Arch.X64; }
+    #|export function predParam(isNeg: (n: number) => boolean, v: number) { return isNeg(v); }
+    #|export function swParam(dispatch: (k: "a") => number) { return dispatch("a"); }
+    #|export const archOuter = Arch.X64;
+    #|export const predOuter = isNeg(0);
+    #|export const swOuter = dispatch("b");
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+    .with_treeshake(true)
+    .with_fold(true)
+    .with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // Each parameter read must still be a read of the parameter.
+      assert_true(
+        out.js.contains("Arch.X64") || out.js.contains("Arch[\"X64\"]"),
+        msg="const-enum table substituted over a parameter named Arch: \{out.js}",
+      )
+      assert_true(
+        out.js.contains("isNeg(v)"),
+        msg="predicate table substituted over a parameter named isNeg: \{out.js}",
+      )
+      assert_true(
+        out.js.contains("dispatch(\"a\")"),
+        msg="switch-fold table substituted over a parameter named dispatch: \{out.js}",
+      )
+      // And the unshadowed reads must still be optimized, or the fix
+      // would just be "switch the passes off".
+      assert_false(
+        out.js.contains("Arch.X64;") || out.js.contains("=Arch.X64"),
+        msg="the top-level const-enum read stopped inlining: \{out.js}",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "type-fold: an inner binding with no useful type hides the outer one" {
+  // `TypeScope` already had `hide` for exactly this, and the parameter
+  // path used it; the DECLARATION path did nothing when the type was
+  // not useful, so the outer annotation stayed visible and
+  // `typeof s === "string"` folded to `!0` on the parameter's type.
+  let src =
+    #|export function f(s: string) {
+    #|  { const s = 5 as unknown; return typeof s === "string"; }
+    #|}
+    #|export function g(s: string) { return typeof s === "string"; }
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+    .with_treeshake(true)
+    .with_fold(true)
+    .with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // `f` must keep the runtime check; `g` may fold it away.
+      assert_true(
+        out.js.contains("typeof"),
+        msg="folded the shadowed check on the outer parameter's type: \{out.js}",
+      )
+      assert_true(
+        out.js.contains("return!0") || out.js.contains("return !0"),
+        msg="the unshadowed check stopped folding: \{out.js}",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "as-const: literal object property read inlines to the value" {
   let files = vfs([
     (
@@ -1545,6 +1681,460 @@ test "tag-rewrite: discriminated union string tags become integers" {
 }
 
 ///|
+/// `class-method-dce` already had a decline report, and on the
+/// type-aware corpus it says the same thing for every target: SUPPRESSED
+/// by a computed member read whose key is not provably numeric —
+/// `points[i]`, `elements[index]`, `value[index]`. Probing the shapes
+/// one at a time found exactly one that failed, and it was not the one
+/// the shapes suggested: `arr.map((v, index) => arr[index])` failed
+/// because the RECEIVER `pts` is captured by the arrow, and the closure
+/// guard in `container_vars` / `numeric_vars` refused to promote a
+/// captured binding. The guard's premise is a WRITE from a frame the
+/// pass does not follow — and no frame may write a `const`. Exempting
+/// `const` clears every spelling below.
+///
+/// The `for`-counter spelling was already proven and is kept as the
+/// control: if it ever stops dropping, the failure is in the numeric
+/// inference rather than in the closure guard.
+test "class-method-dce: a const captured by a callback still proves out" {
+  let head = "class Widget { live(): number { return 1; } dead(): number { return 2; } }\n" +
+    "const w = new Widget();\n" +
+    "const pts = [1, 2, 3];\n"
+  let opts = BundleOptions::default()
+    .with_treeshake(true)
+    .with_fold(true)
+    .with_explain(true)
+  // Control: a `for` counter, never captured.
+  let with_counter = head +
+    "let total = 0;\n" +
+    "for (let i = 0; i < pts.length; i++) total += pts[i];\n" +
+    "process.stdout.write(String(w.live() + total) + \"\\n\");\n"
+  match bundle_modules(vfs([("entry.ts", with_counter)]), "entry.ts", opts) {
+    Ok(out) => {
+      assert_false(out.js.contains("dead"))
+      assert_true(explain_text(out).contains("Widget.dead"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+  // The same read through a callback parameter, which captures `pts`.
+  let with_callback = head +
+    "const doubled = pts.map((v, index) => pts[index] * v);\n" +
+    "process.stdout.write(String(w.live() + doubled[0]) + \"\\n\");\n"
+  match bundle_modules(vfs([("entry.ts", with_callback)]), "entry.ts", opts) {
+    Ok(out) => {
+      assert_false(out.js.contains("dead"))
+      assert_true(explain_text(out).contains("Widget.dead"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+  // A `let` captured by a closure keeps the guard: a nested frame
+  // really can write it, and the pass does not follow that write.
+  let mutable_capture = head +
+    "let arr: any = pts;\n" +
+    "const read = (k: any) => arr[k];\n" +
+    "process.stdout.write(String(w.live() + read(0)) + \"\\n\");\n"
+  match bundle_modules(vfs([("entry.ts", mutable_capture)]), "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("dead"))
+      assert_true(explain_text(out).contains("SUPPRESSED"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+/// TypeScript accepts a VALUE-form import of a type — `import { T }`
+/// rather than `import type { T }` — and it has to be erased. Node's
+/// transform mode cannot compile it (it keeps the import, and the
+/// runtime module has no such export), which is why
+/// `fixtures/mangle-safety/case18-export-type` had no reference leg at
+/// all and its every assertion was mtsc against mtsc. The fixture uses
+/// `import type` now and the erasure is pinned here, where the question
+/// actually belongs: it is about compilation, not about mangling.
+test "erase: a value-form import of a type leaves no runtime import" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "import { Shape } from \"./types\";\n" +
+      "const s: Shape = { side: 2 };\n" +
+      "export const area = s.side * s.side;\n",
+    ),
+    ("types.ts", "export type Shape = { side: number };\n"),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_false(out.js.contains("Shape"))
+      assert_false(out.js.contains("./types"))
+      assert_true(out.js.contains("side: 2"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+/// The legacy `module X { … }` spelling of an internal module lowers the
+/// same way `namespace X { … }` does. Node's transform mode rejects the
+/// keyword outright ("`module` keyword is not supported"), which cost
+/// `fixtures/mangle-safety/case10-module` its reference leg; that
+/// fixture says `namespace` now — it already covered `namespace`
+/// separately, so the keyword was the only unique thing in it — and the
+/// keyword is pinned here.
+test "erase: the legacy `module` keyword lowers like `namespace`" {
+  let body = "  const msg = \"hi\";\n" +
+    "  export function get(): string { return msg; }\n" +
+    "}\n" +
+    "export const out = Inner.get();\n"
+  let as_module = bundle_modules(
+    vfs([("entry.ts", "module Inner {\n" + body)]),
+    "entry.ts",
+    BundleOptions::default(),
+  )
+  let as_namespace = bundle_modules(
+    vfs([("entry.ts", "namespace Inner {\n" + body)]),
+    "entry.ts",
+    BundleOptions::default(),
+  )
+  match (as_module, as_namespace) {
+    (Ok(m), Ok(n)) => {
+      assert_eq(m.js, n.js)
+      assert_true(m.js.contains("Inner.get"))
+    }
+    (Err(e), _) => fail("bundle error (module): \{e}")
+    (_, Err(e)) => fail("bundle error (namespace): \{e}")
+  }
+}
+
+///|
+/// Reflection that no analysis can see through is the one blocker the
+/// author, not the compiler, has to act on — so it is a warning rather
+/// than a `--explain-mangle` line. It is reported only when it actually
+/// COST something: reflection in a bundle whose every method is
+/// reachable anyway lost nothing, and a warning naming a loss that did
+/// not happen is a warning people learn to ignore. zod is the real
+/// example of that second case — eight `Reflect.ownKeys` calls, and its
+/// own report says "nothing would have been dropped anyway".
+test "reflection warning: reported only when it costs a method" {
+  let opts = BundleOptions::default().with_treeshake(true).with_fold(true)
+  let head = "class Widget {\n" +
+    "  live(): number { return 1; }\n" +
+    "  dead(): number { return 2; }\n" +
+    "}\n" +
+    "const w = new Widget();\n"
+  // Reflection, a class, and a method nothing reaches: all three.
+  let costly = head +
+    "const names = Reflect.ownKeys(Object.getPrototypeOf(w));\n" +
+    "export const out = w.live() + names.length;\n"
+  match bundle_modules(vfs([("entry.ts", costly)]), "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.reflection_warnings.length() >= 2)
+      assert_true(out.reflection_warnings[0].contains("Reflect.ownKeys"))
+      let mut said_cost = false
+      for r in out.reflection_warnings {
+        if r.contains("cost:") && r.contains("Widget.dead") {
+          said_cost = true
+        }
+      }
+      assert_true(said_cost)
+      // And the method really did survive, which is what the warning
+      // is about.
+      assert_true(out.js.contains("dead"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+  // Reflection with no class in the bundle: nothing to lose.
+  let no_class = "const o = { a: 1, b: 2 };\n" +
+    "export const out = Reflect.ownKeys(o).length;\n"
+  match bundle_modules(vfs([("entry.ts", no_class)]), "entry.ts", opts) {
+    Ok(out) => assert_eq(out.reflection_warnings.length(), 0)
+    Err(e) => fail("bundle error: \{e}")
+  }
+  // A class, but every method reachable: the reflection cost nothing.
+  let no_cost = "class Widget {\n" +
+    "  live(): number { return 1; }\n" +
+    "}\n" +
+    "const w = new Widget();\n" +
+    "const names = Reflect.ownKeys(Object.getPrototypeOf(w));\n" +
+    "export const out = w.live() + names.length;\n"
+  match bundle_modules(vfs([("entry.ts", no_cost)]), "entry.ts", opts) {
+    Ok(out) => assert_eq(out.reflection_warnings.length(), 0)
+    Err(e) => fail("bundle error: \{e}")
+  }
+  // An unprovable computed key is NOT reflection: it is the compiler's
+  // problem to improve, and naming it here would blame the author for
+  // something they cannot fix.
+  let computed_key = head +
+    "const k: string = process.argv[2] ?? \"dead\";\n" +
+    "const bag: any = w;\n" +
+    "export const out = w.live() + (bag[k] === undefined ? 0 : 1);\n"
+  match bundle_modules(vfs([("entry.ts", computed_key)]), "entry.ts", opts) {
+    Ok(out) => {
+      assert_eq(out.reflection_warnings.length(), 0)
+      // Still suppressed — just not by reflection.
+      assert_true(out.js.contains("dead"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+/// Joins `out.explain` so a test can assert on the report as a whole.
+fn explain_text(out : BundleOutput) -> String {
+  let b = StringBuilder::new()
+  for line in out.explain {
+    b.write_string(line)
+    b.write_string("\n")
+  }
+  b.to_string()
+}
+
+///|
+/// `switch-fold` moved zero bytes on all ten type-aware corpus targets.
+/// The byte count cannot say whether no bundle declares a literal-union
+/// dispatcher or whether one of the later gates refused them, so the
+/// pass reports both counts and the rejecting reason.
+test "switch-fold: the decline report separates absent from refused" {
+  let dispatchers = "function ok(k: \"x\" | \"y\", n: number): number {\n" +
+    "  switch (k) {\n" +
+    "    case \"x\": return n + 1;\n" +
+    "    case \"y\": return n + 2;\n" +
+    "  }\n" +
+    "}\n" +
+    // Same entry shape, but an arm with two statements — a gate, not a
+    // missing shape.
+    "function loose(k: \"a\" | \"b\"): number {\n" +
+    "  switch (k) {\n" +
+    "    case \"a\": { const t = 1; return t; }\n" +
+    "    case \"b\": return 2;\n" +
+    "  }\n" +
+    "}\n" +
+    "export const out = ok(\"x\", 5) + loose(\"a\");\n"
+  let opts = BundleOptions::default().with_fold(true).with_explain(true)
+  match bundle_modules(vfs([("entry.ts", dispatchers)]), "entry.ts", opts) {
+    Ok(out) => {
+      let text = explain_text(out)
+      assert_true(
+        text.contains(
+          "2 function(s) take a closed string-literal union as their first parameter; 1 became specializable",
+        ),
+      )
+      assert_true(text.contains("an arm is not exactly one `return EXPR`"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+  // A bundle with no dispatcher shape at all says so, rather than
+  // reporting a gate that never ran.
+  match
+    bundle_modules(
+      vfs([("entry.ts", "export const out = 1 + 2;\n")]),
+      "entry.ts",
+      opts,
+    ) {
+    Ok(out) =>
+      assert_true(
+        explain_text(out).contains(
+          "no function in the bundle takes a closed string-literal union as its first parameter",
+        ),
+      )
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+/// `type-fold`'s report counts its OWN candidate shapes before and
+/// after the pass rather than re-deriving the decision, so a "0 decided"
+/// answer cannot be an artifact of a second implementation.
+test "type-fold: the decline report counts candidates and decisions" {
+  let src = "function check(s: string, n: number | null): number {\n" +
+    "  let t = 0;\n" +
+    "  if (typeof s === \"string\") t += 1;\n" +
+    "  if (n === null) t += 2;\n" +
+    "  return t;\n" +
+    "}\n" +
+    "export const out = check(\"a\", null);\n"
+  let opts = BundleOptions::default().with_fold(true).with_explain(true)
+  match bundle_modules(vfs([("entry.ts", src)]), "entry.ts", opts) {
+    Ok(out) => {
+      let text = explain_text(out)
+      // `typeof s === "string"` is decided by the annotation; `n === null`
+      // is not, because `number | null` admits both.
+      assert_true(text.contains("2 candidate check(s); 1 decided"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+  match
+    bundle_modules(
+      vfs([("entry.ts", "export const out = 1 + 2;\n")]),
+      "entry.ts",
+      opts,
+    ) {
+    Ok(out) =>
+      assert_true(
+        explain_text(out).contains("The shape this phase decides is absent"),
+      )
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+/// A caller that cannot answer the boundary question gets a pass that
+/// declines, not one that renumbers. The argument is positional and has
+/// no default on purpose: a labelled default would fail OPEN here,
+/// since an empty `externals` means FEWER sinks rather than fewer
+/// candidates, and a fail-open default on a wrapper node has already
+/// cost this pipeline two soundness bugs.
+test "tag-rewrite: no boundary facts means no rewrite" {
+  let src = "type Shape = { kind: \"circle\", r: number } | { kind: \"square\", side: number };\n" +
+    "const c: Shape = { kind: \"circle\", r: 3 };\n" +
+    "const n = c.kind === \"circle\" ? 1 : 2;\n"
+  let block = @parser.parse_module_block_from_source(src).block
+  let aliases = @parser.parse_module_from_source_with_const_values(src, {}).type_aliases
+  let declined : Array[String] = []
+  let kept = tag_rewrite_block(block, aliases, None, explain=Some(declined))
+  // Nothing was rewritten, and the pass said why.
+  assert_eq(kept.stmts.length(), block.stmts.length())
+  assert_eq(declined.length(), 1)
+  assert_true(declined[0].contains("no bundle-boundary facts"))
+  // The same block WITH the facts does fire, so the decline above is
+  // the missing argument and not a property of this program.
+  let fired = tag_rewrite_block(
+    block,
+    aliases,
+    Some({ exported: {}, externals: {} }),
+  )
+  let mut renumbered = false
+  for s in fired.stmts {
+    if s is Const(_, _, ObjectLit(entries)) {
+      for e in entries {
+        if e.0 == "kind" && e.1 is IntLit(_) {
+          renumbered = true
+        }
+      }
+    }
+  }
+  assert_true(renumbered)
+}
+
+///|
+/// The pass rewrites a property's VALUE, so the export surface is an
+/// escape route with no trace inside the bundle at all: a consumer
+/// holding the exported object compares `c.kind === "circle"` and gets
+/// `false`. Demonstrated end-to-end before the gate existed — the
+/// bundle's own escape-sink scan cannot see the consumer's comparison.
+test "tag-rewrite: an exported value keeps its string tags" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "type Shape = { kind: \"circle\", r: number } | { kind: \"square\", side: number };\n" +
+      "export function area(s: Shape): number {\n" +
+      "  switch (s.kind) {\n" +
+      "    case \"circle\": return s.r * s.r;\n" +
+      "    case \"square\": return s.side * s.side;\n" +
+      "  }\n" +
+      "  return 0;\n" +
+      "}\n" +
+      "export const c: Shape = { kind: \"circle\", r: 3 };\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("\"circle\""))
+      assert_true(out.js.contains("\"square\""))
+      assert_false(out.js.contains("kind: 0"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+/// `type Shape = Circle | Square` is how real code declares a union;
+/// an inline object literal per variant is the exception. Every one of
+/// the ten type-aware corpus targets rejected every union it had at
+/// this step, and `--explain-mangle` named the shape.
+test "tag-rewrite: a union of named interfaces is a candidate" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "interface Circle { kind: \"circle\"; r: number }\n" +
+      "interface Square { kind: \"square\"; side: number }\n" +
+      "type Shape = Circle | Square;\n" +
+      "function area(s: Shape): number {\n" +
+      "  switch (s.kind) {\n" +
+      "    case \"circle\": return s.r * s.r;\n" +
+      "    case \"square\": return s.side * s.side;\n" +
+      "  }\n" +
+      "  return 0;\n" +
+      "}\n" +
+      "const c: Shape = { kind: \"circle\", r: 3 };\n" +
+      "const out = area(c);\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_false(out.js.contains("\"circle\""))
+      assert_true(out.js.contains("case 0:"))
+      assert_true(out.js.contains("kind: 0"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+/// The discriminant is often declared once on a shared base rather
+/// than repeated on each variant, so the shape table follows
+/// `extends`.
+test "tag-rewrite: a discriminant inherited through extends counts" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "interface Base { tag: \"base\" }\n" +
+      "interface Leaf extends Base { n: number }\n" +
+      "interface Other { tag: \"other\"; s: string }\n" +
+      "type Node2 = Leaf | Other;\n" +
+      "function pick(x: Node2): number {\n" +
+      "  return x.tag === \"base\" ? x.n : x.s.length;\n" +
+      "}\n" +
+      "const a: Node2 = { tag: \"base\", n: 1 };\n" +
+      "const out = pick(a);\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_false(out.js.contains("\"base\""))
+      assert_true(out.js.contains("tag: 0"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+/// A call through an imported binding hands the value to code the pass
+/// cannot read, which is the same escape as a known sink. Only the
+/// IMPORTED names count here, not every implicit global: the pass has
+/// its own catalog for those, and `Math.max(s.r)` hands off a number
+/// rather than the tagged object.
+test "tag-rewrite: a hand-off through an imported callee aborts it" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "import { inspect } from \"node:util\";\n" +
+      "type Shape = { kind: \"circle\", r: number } | { kind: \"square\", side: number };\n" +
+      "const c: Shape = { kind: \"circle\", r: 3 };\n" +
+      "const seen = inspect(c);\n" +
+      "const n = c.kind === \"circle\" ? 1 : 2;\n" +
+      "globalThis.sink = [seen, n];\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_true(out.js.contains("\"circle\""))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "tag-rewrite: skipped when console.log mentions the bundle" {
   let files = vfs([
     (
@@ -1784,6 +2374,70 @@ test "link: `export * as ns from` synthesizes namespace object for named import 
       // `check` must appear in the bundle — either inlined or via the
       // synthesized namespace object.
       assert_true(out.js.contains("check"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+/// `import * as N; export default N` where another module declares a
+/// top-level `N`.
+///
+/// Phase 1 mints a collision-free name for the namespace object into
+/// `namespace_local_renames`, which is a DIFFERENT table from
+/// `rename_per_module`. `resolve_export`'s fallback read only the
+/// latter, so a consumer's `import N from "./index"` was left spelled
+/// `N` — now bound to the unrelated declaration. A wrong binding, not a
+/// missing one, which is why nothing caught it: the bundle loads and
+/// then calls the wrong function.
+///
+/// This is typebox's `src/index.ts` exactly (`import * as Type from
+/// './typebox.ts'; export default Type`), where a second module declares
+/// `const Type`, and it broke under plain `mtsc --bundle` with no
+/// optimization flag involved.
+test "link: a default-exported namespace object keeps its minted name" {
+  let files = vfs([
+    ("inner.ts", "export const Number = () => \"inner\";\n"),
+    ("other.ts", "export const Type = (s: string) => \"other-\" + s;\n"),
+    (
+      "index.ts", "import * as Type from \"./inner\";\nexport * from \"./other\";\nexport default Type;\n",
+    ),
+    (
+      "entry.ts", "import Type from \"./index\";\nexport const got = Type.Number();\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      // The namespace object was renamed, so the read must be too. A
+      // bare `Type.Number()` resolves to `other.ts`'s arrow.
+      assert_true(out.js.contains("Type$"))
+      assert_false(out.js.contains("= Type.Number()"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+/// The named-export spelling of the same thing: `export { N }` and
+/// `export { N as Alias }` where `N` is a namespace-import alias.
+test "link: a named-exported namespace object keeps its minted name" {
+  let files = vfs([
+    ("inner.ts", "export const Number = () => \"inner\";\n"),
+    (
+      "other.ts", "export const NS = (s: string) => \"other-\" + s;\nexport const Alias = (s: string) => \"alias-\" + s;\n",
+    ),
+    (
+      "index.ts", "import * as NS from \"./inner\";\nexport * from \"./other\";\nexport { NS };\nexport { NS as Alias };\n",
+    ),
+    (
+      "entry.ts", "import { NS, Alias } from \"./index\";\nexport const a = NS.Number();\nexport const b = Alias.Number();\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_true(out.js.contains("NS$"))
+      assert_false(out.js.contains("= NS.Number()"))
+      assert_false(out.js.contains("= Alias.Number()"))
+    }
     Err(e) => fail("bundle error: \{e}")
   }
 }
@@ -2959,7 +3613,17 @@ test "bundle: fold + treeshake + mangle keeps the export surface" {
   match bundle_modules(files, "entry.ts", opts) {
     Ok(out) => {
       // The export clause survives, and so does the code behind it.
-      assert_true(out.js.contains("as run"))
+      //
+      // Checked as "`run` is exported", not as the alias SPELLING. It
+      // used to assert `as run`, which was incidental: `run` is three
+      // characters and referenced nowhere, so renaming it would save
+      // two bytes and pay five for `export{X as run}`. The bundler now
+      // prices that and keeps the name, making the clause `export{run}`
+      // — the surface this test is about is unchanged either way.
+      assert_true(
+        out.js.contains("as run") || out.js.contains("{run}"),
+        msg="`run` is not exported: \{out.js}",
+      )
       assert_true(out.js.contains("*3") || out.js.contains("* 3"))
       // The unreachable helper is still dropped — the fix restores the
       // roots, it does not disable the pass.
@@ -3217,6 +3881,1267 @@ test "link: the namespace object cannot name a binding the bundle lacks" {
         obj.contains("Ghost"),
         msg="named a binding the bundle never declares: \{obj}",
       )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class_method_dce: a method called from ANOTHER module survives" {
+  // The pass asks bundle-wide questions — which member names does
+  // anything access, does anything read a member under a computed key —
+  // and the per-module emit path (no `--treeshake` / `--fold` /
+  // `--mangle`) rewrote one module at a time. Handing it that module
+  // reinterpreted "bundle" as "this module": nothing in `state.ts`
+  // accesses `addPoint` by name, so every method went, and the bundle
+  // then called `p.addPoint(…)` on an object without one.
+  //
+  // Found on Excalidraw's laser-pointer package, where it deleted
+  // `addPoint` / `close` / `getStrokeOutline` from `LaserPointer` and
+  // left `shape.ts`'s calls to all three standing. It reproduces with
+  // one flag and five lines, which is the part worth pinning: this is
+  // `mtsc entry.ts --bundle`, the plainest command the README shows.
+  let files = vfs([
+    (
+      "state.ts",
+      (
+        #|export class Pointer {
+        #|  addPoint(p: number) { return p + 1; }
+        #|  close() { return 0; }
+        #|  reallyUnused() { return -1; }
+        #|}
+      ),
+    ),
+    (
+      "entry.ts",
+      (
+        #|import { Pointer } from "./state";
+        #|const p = new Pointer();
+        #|console.log(p.addPoint(1), p.close());
+      ),
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_true(
+        out.js.contains("addPoint"),
+        msg="deleted a method the next module calls: \{out.js}",
+      )
+      assert_true(out.js.contains("close"), msg="deleted `close`: \{out.js}")
+      // The other half of the invariant: a method nothing anywhere
+      // names is still dropped, so the fix widened the analysis rather
+      // than turning the pass off.
+      assert_false(
+        out.js.contains("reallyUnused"),
+        msg="the pass stopped working: \{out.js}",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "predicate-inline: an effectful argument is not duplicated" {
+  // The substitution copies the argument once per reference to the
+  // parameter, and nothing checked that copying it was safe:
+  // `isOne(bump())` became `bump() === 1 && bump() !== 2 && bump() > 0`
+  // and the counter came back 3. `fixtures/mangle-safety/
+  // case41-predicate-argument` runs the shapes; this pins the emit.
+  let src =
+    #|let calls = 0;
+    #|function bump(): number {
+    #|  calls = calls + 1;
+    #|  return 1;
+    #|}
+    #|function isOne(x: number): x is 1 {
+    #|  return x === 1 && x !== 2 && x > 0;
+    #|}
+    #|export const r = isOne(bump());
+    #|console.log(r, calls);
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default().with_treeshake(true).with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      // One evaluation of the argument, so the call has to survive.
+      assert_true(
+        out.js.contains("isOne(bump())"),
+        msg="duplicated an effectful argument: \{out.js}",
+      )
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "predicate-inline: a multi-caller guard is not copied everywhere" {
+  // A body that costs more than `PREDICATE_INLINE_MAX_COST` is inlined
+  // only when there is one caller AND the declaration can then be
+  // deleted. typebox's guards are five-term conjunctions with several
+  // callers each, and inlining them added 5.9 KB — the whole of its
+  // -2.98% against the types-erased leg.
+  let src =
+    #|function isBig(v: { kind: string; n: number; tag: string }): v is { kind: string; n: number; tag: string } {
+    #|  return typeof v.kind === "string" && v.n > 0 && v.tag !== "" && v.kind !== "no";
+    #|}
+    #|export function a(v: { kind: string; n: number; tag: string }) {
+    #|  return isBig(v) ? 1 : 0;
+    #|}
+    #|export function b(v: { kind: string; n: number; tag: string }) {
+    #|  return isBig(v) ? 2 : 0;
+    #|}
+    #|export function c(v: { kind: string; n: number; tag: string }) {
+    #|  return isBig(v) ? 3 : 0;
+    #|}
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default().with_treeshake(true).with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // Three copies of the body would mean three `typeof` reads.
+      let typeofs = out.js.split("typeof ").collect().length() - 1
+      assert_true(
+        typeofs <= 1,
+        msg="copied the guard body to every call site (\{typeofs} copies): \{out.js}",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "predicate-inline: a trivial guard with one caller still inlines" {
+  // The other half: the gate must not turn the pass off. One caller,
+  // body below the cost budget, not exported — the declaration goes.
+  let src =
+    #|function isSet(v: { flag: boolean }): v is { flag: boolean } {
+    #|  return v.flag;
+    #|}
+    #|export const answer = isSet({ flag: true }) ? "y" : "n";
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default().with_treeshake(true).with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      assert_false(
+        out.js.contains("isSet"),
+        msg="the guard survived, so the pass did not fire: \{out.js}",
+      )
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "predicate-inline: a guard held by a namespace object is not copied" {
+  // What `removable` is supposed to mean, and for a while did not.
+  //
+  // It asked one question — "is the name in the entry's export list?" —
+  // and typebox's guards answer no while being exported all the same:
+  // they leave through a namespace object the linker synthesizes, so
+  // the declaration is referenced by that object literal and survives
+  // every deletion pass. The bodies got copied on the strength of a
+  // declaration that was never going away, and the phase cost typebox
+  // 261 bytes with a trivial-body budget of 2 nodes already in place.
+  //
+  // The invariant a call count cannot see: a CALL is the only mention
+  // inlining rewrites, so the declaration only dies when calls are the
+  // only mentions there are.
+  let src =
+    #|function isSet(v: { flag: boolean }): v is { flag: boolean } {
+    #|  return v.flag;
+    #|}
+    #|const held = { isSet };
+    #|export function a(v: { flag: boolean }) { return isSet(v) ? 1 : 0; }
+    #|export function b(v: { flag: boolean }) { return isSet(v) ? 2 : 0; }
+    #|export const table = held;
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default().with_treeshake(true).with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // `held` keeps the declaration alive, so a copy at each call site
+      // is pure cost: the body must still be behind the one `isSet`.
+      let flag_reads = out.js.split(".flag").collect().length() - 1
+      assert_true(
+        flag_reads <= 1,
+        msg="copied the body into the call sites while the declaration stayed (\{flag_reads} reads): \{out.js}",
+      )
+      assert_true(
+        out.js.contains("isSet"),
+        msg="the declaration was deleted while `held` still references it: \{out.js}",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "if_return: a valueless guard clause becomes a short-circuit" {
+  // terser's `if_return`, the half mtsc did not have: the ternary form
+  // (`if (c) return a; return b` -> `return c ? a : b`) was already
+  // here, but a guard with nothing to return had no rewrite and shipped
+  // `if(c)return;` — 12 bytes for what `c||` says in 4.
+  let src =
+    #|export function one(c: boolean, g: { p: () => void }) { if (c) { return; } g.p(); }
+    #|export function two(c: boolean, g: { p: () => void }) { if (c) { return; } g.p(); g.p(); }
+    #|export function nested(a: boolean, b: boolean, g: { p: () => void }) { if (a) return; if (b) return; g.p(); }
+    #|export function bare(c: boolean) { if (c) { return; } }
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+    .with_treeshake(true)
+    .with_fold(true)
+    .with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(
+        out.js.contains("c||g.p()"),
+        msg="single-statement tail did not short-circuit: \{out.js}",
+      )
+      assert_true(
+        out.js.contains("c||(g.p(),g.p())"),
+        msg="multi-statement tail did not sequence: \{out.js}",
+      )
+      // Nested guards collapse inner-first, and the reassociation in
+      // peephole is what keeps it from shipping as `a||(b||g.p())`.
+      assert_true(
+        out.js.contains("a||b||g.p()"),
+        msg="nested guards did not chain: \{out.js}",
+      )
+      // A guard with a pure condition and nothing after it is the
+      // fall-through spelled out; it should be gone entirely.
+      assert_false(
+        out.js.contains("if(c)return}"),
+        msg="a trailing pure guard survived: \{out.js}",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "if_return: a tail with a lexical declaration is left alone" {
+  // The block form (`if (!c) { tail }`) re-scopes anything the tail
+  // declares, and a closure created BEFORE the guard can read it:
+  // `function h() { return x }` with `let x` in the tail becomes a free
+  // variable. `var` hoists past a block and is fine.
+  let src =
+    #|export function f(c: boolean, sink: (n: number) => void) {
+    #|  function h() { return x; }
+    #|  if (c) return;
+    #|  let x = 7;
+    #|  sink(h());
+    #|}
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+    .with_treeshake(true)
+    .with_fold(true)
+    .with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      assert_true(
+        out.js.contains("if(c)return"),
+        msg="rewrote a tail that declares `let` a closure already reads: \{out.js}",
+      )
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "iife: a side-effect-only wrapper is spliced away" {
+  let src =
+    #|const out: string[] = [];
+    #|(function () { out.push("a"); out.push("b"); })();
+    #|(() => { out.push("c"); })();
+    #|(function () { out.push("t" + typeof this); })();
+    #|(function () { out.push("n" + arguments.length); })();
+    #|(async function () { out.push("z"); })();
+    #|export const result = out;
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+    .with_treeshake(true)
+    .with_fold(true)
+    .with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(
+        out.js.contains("out.push(\"a\");out.push(\"b\")") ||
+        out.js.contains("out.push(\"a\");\nout.push(\"b\")"),
+        msg="the function-form wrapper survived: \{out.js}",
+      )
+      // `this`, `arguments` and `async` all mean the wrapper was
+      // providing something the splice would take away.
+      assert_true(
+        out.js.contains("typeof this"),
+        msg="`this` body was spliced: \{out.js}",
+      )
+      let kept_wrappers = out.js.split("arguments.length").collect().length() -
+        1
+      assert_true(
+        kept_wrappers == 1,
+        msg="`arguments` body was spliced: \{out.js}",
+      )
+      assert_true(
+        out.js.contains("async"),
+        msg="an async wrapper was spliced: \{out.js}",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "sequences: a loop body collapses to one statement and loses braces" {
+  let src =
+    #|export function f() { let i = 0; while (true) { i++; if (i > 2) return i; } }
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+    .with_treeshake(true)
+    .with_fold(true)
+    .with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      // The comma is free; the two braces are the whole win.
+      assert_true(
+        out.js.contains("for(;;)if(i++,i>2)return i"),
+        msg="loop body kept its braces: \{out.js}",
+      )
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "typeofs: an inlined `typeof undefined` check is a constant" {
+  // `fold` has this rule, but `fold-2` runs BEFORE peephole and it is
+  // peephole that rewrites `typeof x === \"undefined\"` to
+  // `x === void 0` — so an inlined `f(undefined)` shipped as
+  // `void 0 === void 0`, 14 bytes for a constant.
+  let src =
+    #|export function f(x: unknown) { return typeof x === "undefined"; }
+    #|export function g(x: unknown) { return typeof x !== "undefined"; }
+    #|export const a = f(undefined);
+    #|export const b = g(undefined);
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+    .with_treeshake(true)
+    .with_fold(true)
+    .with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_false(
+        out.js.contains("void 0===void 0"),
+        msg="the constant comparison survived: \{out.js}",
+      )
+      assert_false(
+        out.js.contains("void 0!==void 0"),
+        msg="the negated constant comparison survived: \{out.js}",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "object method shorthand survives the mangler" {
+  // `{ p() {…} }` is stored as `("p", FuncExpr { name: "p" })` and the
+  // emitter reconstructs the shorthand from `f.name == key`.
+  // `rename_function_expr` dropped the name of every non-self-
+  // referencing function expression — correct for
+  // `exports = function isExtglob()`, wrong here, where the name IS the
+  // key. It re-emitted as `p: function () {…}`, and peephole then made
+  // a `this`-free one an arrow: `p:()=>{…}`, three bytes more.
+  let src =
+    #|const o = { p() { console.log("x"); }, q() { return this; } };
+    #|export const used = o;
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default().with_minify(true).with_mangle(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(
+        out.js.contains("p(){"),
+        msg="method shorthand was expanded by the mangler: \{out.js}",
+      )
+      assert_false(
+        out.js.contains("p:()=>"),
+        msg="a method became an arrow, which is longer AND rebinds `this`: \{out.js}",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class method: a destructured parameter survives the class lift" {
+  // `TsClassMethodDecl.params` is `(String, TsType)` — no slot for a
+  // pattern — so the lift collapsed `{ a, b }` to the first name it
+  // bound. `m({ a, b })` became `m(a)` (a ReferenceError) and
+  // `n({ a: { b } })` became `n(b)`, which silently returns the argument
+  // object instead of throwing. Every class method with a destructured
+  // parameter, under plain `--bundle`.
+  //
+  // Found by the output verifier on Excalidraw's `StoreDelta.load({ id,
+  // elements: { added, removed, updated }, … })`, which reported
+  // `added` / `removed` / `updated` as free variables.
+  let src =
+    #|export class C {
+    #|  flat({ a, b }: { a: number; b: number }) { return a + b; }
+    #|  nested({ a: { b } }: { a: { b: number } }) { return b; }
+    #|  renamed({ a: x }: { a: number }) { return x; }
+    #|  mixed(head: number, { a }: { a: number }) { return head + a; }
+    #|  withDefault({ a }: { a: number } = { a: 5 }) { return a; }
+    #|  arrayPattern([p, q]: number[]) { return p + q; }
+    #|  static stat({ a }: { a: number }) { return a; }
+    #|}
+  let files = vfs([("entry.ts", src)])
+  for
+    opts in [
+      BundleOptions::default(),
+      BundleOptions::default().with_treeshake(true).with_fold(true),
+    ] {
+    match bundle_modules(files, "entry.ts", opts) {
+      Ok(out) => {
+        // Every bound name has to be declared somewhere in the method.
+        for name in ["a", "b", "x", "p", "q"] {
+          assert_true(
+            out.js.contains(name),
+            msg="lost the binding `\{name}`: \{out.js}",
+          )
+        }
+        // The pattern moved into the body, so the parameter list holds a
+        // synthesized name and the body holds a destructuring `const`.
+        assert_true(
+          out.js.contains("const {a, b}") || out.js.contains("const{a,b}"),
+          msg="the flat pattern did not reach the body: \{out.js}",
+        )
+        // Arity is preserved: `mixed` still takes two parameters.
+        assert_true(
+          out.js.contains("mixed(head,") || out.js.contains("mixed(head, "),
+          msg="changed the arity of a method: \{out.js}",
+        )
+      }
+      Err(e) => fail("bundle error: \{e}")
+    }
+  }
+}
+
+///|
+test "verify: a dangling reference is reported, a clean bundle is not" {
+  // The verifier re-parses emitted JS, so it can be tested on text.
+  let dangling = verify_emitted_bundle(
+    "const m = new Map([[\"z\", CODES.Z]]);\nconsole.log(m);\n",
+  )
+  assert_true(
+    dangling.length() == 1,
+    msg="expected one violation, got \{dangling}",
+  )
+  assert_true(dangling[0].name == "CODES", msg="wrong name: \{dangling}")
+  // Host globals, imports and `let x;`'s parser sentinel must not be
+  // reported — a verifier that cries wolf gets switched off.
+  let clean = verify_emitted_bundle(
+    (
+      #|import { join } from "node:path";
+      #|let pending;
+      #|const CODES = { Z: "KeyZ" };
+      #|console.log(Math.max(1, 2), JSON.stringify(CODES), join("a", "b"), pending);
+      #|
+    ),
+  )
+  assert_true(clean.length() == 0, msg="false positive: \{clean}")
+}
+
+///|
+test "bundle: two unresolved imports from one module both survive" {
+  // `external_imports` was deduplicated on the module SPECIFIER, so the
+  // second `import { … } from "pkg"` was dropped whole — every binding
+  // it introduced became a free variable in the bundle. Excalidraw's
+  // `points-on-curve` import is the case that surfaced it: `simplify`
+  // was called and never declared.
+  let files = vfs([
+    (
+      "entry.ts", "import { curveToBezier } from \"pkg\";\nimport { simplify } from \"pkg\";\nexport const run = () => simplify(curveToBezier([]));\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_allow_unresolved_imports(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("curveToBezier"))
+      assert_true(out.js.contains("simplify"))
+      // Both bindings must be IMPORTED, not merely referenced.
+      let import_lines = out.js.split("\n").filter(l => l.has_prefix("import "))
+      let joined = import_lines.map(l => l.to_string()).join(" | ")
+      assert_true(joined.contains("simplify"))
+      assert_true(joined.contains("curveToBezier"))
+      // And the verifier, which is the check that would have caught the
+      // original bug, must agree.
+      @test.assert_eq(verify_emitted_bundle(out.js).length(), 0)
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: a repeated unresolved specifier is not imported twice" {
+  // The other direction of the same key change: the dedup still has to
+  // fire per BINDING, or the same local name is declared twice and the
+  // bundle is not valid ESM.
+  let files = vfs([
+    (
+      "entry.ts", "import { same } from \"pkg\";\nimport { same } from \"pkg\";\nexport const run = () => same();\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_allow_unresolved_imports(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      let n = out.js.split("\n").filter(l => l.has_prefix("import ")).length()
+      @test.assert_eq(n, 1)
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: a type-only external import never reaches the output" {
+  // `import { type Point } from "pkg"` is TypeScript syntax; emitting it
+  // verbatim makes the bundle stop being JavaScript. Node rejects it at
+  // parse time and the verifier — which parses as TypeScript — cannot.
+  let files = vfs([
+    (
+      "entry.ts", "import type { Point } from \"pkg\";\nimport { type Vec, add } from \"pkg\";\nexport const run = (p: Point, v: Vec) => add(p, v);\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_allow_unresolved_imports(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_false(out.js.contains("import type"))
+      assert_false(out.js.contains("type Vec"))
+      assert_true(out.js.contains("add"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: a const enum read from another module is substituted" {
+  // A `const enum` emits no runtime binding — every `E.Member` is meant
+  // to become a literal. The per-module inline covered each module's own
+  // enums and had been taken for the whole job, so a cross-module read
+  // had nothing for the linker to point at and had never been
+  // substituted either: it survived into the bundle as a free variable
+  // and immer threw `ArchType is not defined` at load.
+  let files = vfs([
+    (
+      "kinds.ts", "export const enum ArchType { Object = 0, Array = 1, Map = 2 }\n",
+    ),
+    (
+      "entry.ts", "import { ArchType } from \"./kinds\";\nexport const pick = (x: unknown) => Array.isArray(x) ? ArchType.Array : ArchType.Object;\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_false(out.js.contains("ArchType"))
+      assert_true(out.js.contains("1"))
+      @test.assert_eq(verify_emitted_bundle(out.js).length(), 0)
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: a cross-module const enum resolves through alias and re-export" {
+  // `export { E } from "./x"` and `import { E as F }` both have to keep
+  // working, because that is how a package's `index.ts` exposes one.
+  let files = vfs([
+    ("kinds.ts", "export const enum Level { Low = \"low\", High = \"high\" }\n"),
+    ("index.ts", "export { Level } from \"./kinds\";\n"),
+    (
+      "entry.ts", "import { Level as L } from \"./index\";\nexport const top = () => L.High;\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_false(out.js.contains("Level"))
+      assert_true(out.js.contains("\"high\""))
+      @test.assert_eq(verify_emitted_bundle(out.js).length(), 0)
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: a namespace import reaches a cross-module const enum" {
+  // `import * as K` reads it as `K.ArchType.Map`, a two-level access.
+  // The synthesized namespace object carries the module's RUNTIME
+  // exports, and a const enum has none, so the flattening pass that
+  // handles ordinary namespace members would drop this one.
+  let files = vfs([
+    (
+      "kinds.ts", "export const enum ArchType { Object = 0, Array = 1, Map = 2 }\n",
+    ),
+    (
+      "entry.ts", "import * as K from \"./kinds\";\nexport const pick = () => K.ArchType.Map;\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_false(out.js.contains("ArchType"))
+      assert_true(out.js.contains("2"))
+      @test.assert_eq(verify_emitted_bundle(out.js).length(), 0)
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: a declared const enum is left to the host" {
+  // `declare const enum E` describes something the host provides, so the
+  // values written down are not necessarily the ones in effect. The
+  // reference stays, and the verifier is expected to flag it — that is
+  // the honest outcome, not a substitution guessed from a declaration.
+  let files = vfs([
+    ("kinds.ts", "export declare const enum Host { A = 1 }\n"),
+    (
+      "entry.ts", "import { Host } from \"./kinds\";\nexport const v = () => Host.A;\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => assert_true(out.js.contains("Host"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: dependencies are ordered by source position, not by kind" {
+  // ESM evaluates a module graph depth-first over the module-request
+  // declarations IN SOURCE ORDER, and a flat concatenated bundle gets
+  // one chance to reproduce that. Reading `import_decls` then
+  // `reexport_specs` says "every import, then every re-export", which
+  // is a different order for any file that mixes the two — and a barrel
+  // is exactly such a file. typebox's `src/index.ts` has five
+  // `export * from './type/…'` above one `import * as Type from
+  // './typebox.ts'`, so the traversal descended the wrong subtree first
+  // and `types/record.ts` was emitted after a top-level
+  // `new RegExp(IntegerKey)` that reads it: `Cannot access 'IntegerKey'
+  // before initialization` at load.
+  let files = vfs([
+    (
+      "entry.ts", "export * from \"./first\";\nimport { second } from \"./second\";\nexport const out = second;\n",
+    ),
+    ("first.ts", "export const first = 1;\n"),
+    ("second.ts", "export const second = 2;\n"),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) =>
+      // `first.ts` is requested by the FIRST declaration in the source,
+      // so it must be initialized first.
+      @test.assert_eq(out.modules, ["first.ts", "second.ts", "entry.ts"])
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: a cycle initializes in the order the source requests" {
+  // The shape that made the ordering observable rather than cosmetic. On
+  // an acyclic graph any topological order runs; here `reader.ts` reads
+  // `PATTERN` at its own top level, so the module that declares it has
+  // to be initialized first, and only the source order says which that
+  // is. `holder.ts` imports back from `reader.ts` to close the cycle,
+  // which is what stops the ordering from being forced.
+  //
+  // The traversal is post-order, so the module requested FIRST is the
+  // one whose subtree is entered first and therefore the one that
+  // finishes LAST. Entering `reader.ts` first means its own request for
+  // `holder.ts` completes before it does, which is what puts `PATTERN`
+  // in place. Entering `holder.ts` first inverts that and `reader.ts`
+  // top level runs against an uninitialized `PATTERN` — which real ESM
+  // would also throw on, so this is not mtsc being conservative.
+  //
+  // The first declaration here is a RE-EXPORT and the second an import,
+  // so an imports-then-re-exports walk gets it exactly backwards.
+  let files = vfs([
+    (
+      "entry.ts", "export * from \"./reader\";\nimport { PATTERN } from \"./holder\";\nexport const p = PATTERN;\n",
+    ),
+    (
+      "holder.ts", "import { helper } from \"./reader\";\nexport const PATTERN = \"^p$\";\nexport const viaHelper = () => helper();\n",
+    ),
+    (
+      "reader.ts", "import { PATTERN } from \"./holder\";\nconst compiled = new RegExp(PATTERN);\nexport const read = compiled.source;\nexport const helper = () => 1;\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      let holder = out.modules.search("holder.ts").unwrap()
+      let reader = out.modules.search("reader.ts").unwrap()
+      assert_true(holder < reader)
+      @test.assert_eq(verify_emitted_bundle(out.js).length(), 0)
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: a type-only request does not order its module" {
+  // `import type { X } from "y"` erases completely, so it is not a
+  // module request at runtime and must not decide where `y` is
+  // initialized — ordering by it would place a module ESM never
+  // evaluates at that point.
+  let files = vfs([
+    (
+      "entry.ts", "import type { T } from \"./types\";\nimport { real } from \"./real\";\nexport const out: T = real;\n",
+    ),
+    ("types.ts", "export type T = number;\nexport const alsoValue = 0;\n"),
+    (
+      "real.ts", "import { alsoValue } from \"./types\";\nexport const real = alsoValue + 1;\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) =>
+      // `types.ts` is reached through `real.ts`, not through the erased
+      // `import type`, so it lands where the surviving request puts it.
+      @test.assert_eq(out.modules, ["types.ts", "real.ts", "entry.ts"])
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+/// `BundleOptions.jsx` has to actually be used.
+///
+/// Its own comment says "base JSX config for every module; per-file
+/// `@jsxImportSource` overrides it", and `load_module_graph` read
+/// `JsxConfig::default()` instead — so the field was dead in the bundle
+/// path and `mtsc --bundle --jsx-import-source preact` emitted
+/// `react/jsx-runtime`. The flag was parsed, reached `BundleOptions`,
+/// and was ignored; a preact application could not be bundled into
+/// anything that runs. Nothing caught it because React is the only JSX
+/// target in the corpus, and there the default is right by accident.
+test "bundle: BundleOptions.jsx picks the runtime, and a pragma still wins" {
+  let files = vfs([("entry.tsx", "export const A = () => <div>x</div>;\n")])
+  let opts = {
+    ..BundleOptions::default(),
+    jsx: JsxConfig::default().with_import_source("preact"),
+  }
+  match bundle_modules(files, "entry.tsx", opts) {
+    Ok(out) => {
+      assert_true(
+        out.js.contains("from \"preact/jsx-runtime\""),
+        msg="expected preact's runtime, got: \{out.js}",
+      )
+      // With the opening quote: `"preact/jsx-runtime"` CONTAINS
+      // `react/jsx-runtime` as a substring, so the bare form passes
+      // whichever runtime was emitted and proves nothing.
+      assert_false(out.js.contains("\"react/jsx-runtime\""))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+  // A file-level pragma is the highest precedence of the three, so it
+  // has to survive the config now being threaded rather than defaulted.
+  let pragma_files = vfs([
+    (
+      "entry.tsx", "/** @jsxImportSource solid-js */\nexport const A = () => <div>x</div>;\n",
+    ),
+  ])
+  match bundle_modules(pragma_files, "entry.tsx", opts) {
+    Ok(out) =>
+      assert_true(
+        out.js.contains("from \"solid-js/jsx-runtime\""),
+        msg="expected the pragma to win, got: \{out.js}",
+      )
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: the JSX runtime import is emitted" {
+  // The automatic runtime turns `<div/>` into a call to an IMPORTED
+  // `jsx` / `jsxs` / `Fragment`. `emit.mbt`'s single-file path writes
+  // that import; this one threw the ref list away, so every `.tsx`
+  // bundle came out with those three names free — under plain
+  // `mtsc entry.tsx --bundle`, no optimization flag involved.
+  let files = vfs([
+    (
+      "entry.tsx", "export const A = () => <div><span>x</span></div>;\nexport const B = () => <>frag</>;\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.tsx", BundleOptions::default()) {
+    Ok(out) => {
+      assert_true(
+        out.js.contains("from \"react/jsx-runtime\""),
+        msg="expected the runtime import, got: \{out.js}",
+      )
+      assert_true(out.js.contains("jsx"))
+      assert_true(out.js.contains("Fragment"))
+      @test.assert_eq(verify_emitted_bundle(out.js).length(), 0)
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: the JSX runtime import is deduplicated across modules" {
+  // Two modules each needing `jsx` must not declare it twice. The import
+  // goes through `record_external_import` precisely so the per-binding
+  // dedup and the linker's external-name table apply to it.
+  let files = vfs([
+    ("a.tsx", "export const A = () => <div>a</div>;\n"),
+    ("b.tsx", "export const B = () => <div>b</div>;\n"),
+    (
+      "entry.tsx", "import { A } from \"./a\";\nimport { B } from \"./b\";\nexport const both = () => <div>{A()}{B()}</div>;\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.tsx", BundleOptions::default()) {
+    Ok(out) => {
+      let jsx_imports = out.js
+        .split("\n")
+        .filter(l => {
+          l.has_prefix("import ") && l.to_string().contains("jsx-runtime")
+        })
+        .length()
+      // One statement per distinct binding set is fine; what must not
+      // happen is the same NAME imported twice.
+      let jsx_named = out.js
+        .split("\n")
+        .filter(l => {
+          l.has_prefix("import ") &&
+          l.to_string().contains("jsx-runtime") &&
+          l.to_string().contains("{ jsx ")
+        })
+        .length()
+      assert_true(jsx_imports >= 1)
+      assert_true(jsx_named <= 1)
+      @test.assert_eq(verify_emitted_bundle(out.js).length(), 0)
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: a CommonJS dependency is kept external, not inlined" {
+  // Inlining one produces a bundle that cannot load: `module.exports =
+  // …` lands verbatim in an ES module where `module` is undefined, and
+  // the default import is left a free variable. `import React, {
+  // useState } from "react"` against a resolved `react/index.js` did
+  // exactly this — eleven free variables in Excalidraw's bundle.
+  let files = vfs([
+    (
+      "node_modules/mylib/index.js", "'use strict';\nfunction helper(x) { return x + 1; }\nmodule.exports = { helper: helper };\n",
+    ),
+    (
+      "entry.ts", "import mylib, { helper } from \"mylib\";\nexport const go = () => helper(1) + mylib.helper(2);\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_aliases({
+    "mylib": "node_modules/mylib/index.js",
+  })
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // The dependency is NOT concatenated…
+      assert_false(
+        out.js.contains("module.exports"),
+        msg="the CJS body was inlined: \{out.js}",
+      )
+      // …and the import survives so the host resolves it.
+      assert_true(
+        out.js.contains("from \"mylib\""),
+        msg="the import was dropped: \{out.js}",
+      )
+      @test.assert_eq(verify_emitted_bundle(out.js).length(), 0)
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: a UMD dependency counts as CommonJS" {
+  // The marker sits inside the factory, not at the top level, so a
+  // top-level-only scan would miss it. `es6-promise-pool` is the shape
+  // this is about.
+  let files = vfs([
+    (
+      "node_modules/umd/index.js", "(function (root, factory) {\n  if (typeof module === \"object\" && module.exports) { module.exports = factory(); }\n  else { root.Umd = factory(); }\n})(this, function () { return { v: 1 }; });\n",
+    ),
+    ("entry.ts", "import Umd from \"umd\";\nexport const go = () => Umd.v;\n"),
+  ])
+  let opts = BundleOptions::default().with_aliases({
+    "umd": "node_modules/umd/index.js",
+  })
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("from \"umd\""))
+      assert_false(out.js.contains("root.Umd"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: an ESM dependency reached by a bare specifier still inlines" {
+  // The check must not turn bare-specifier inlining off wholesale. A
+  // file with `import` / `export` is a module and cannot also be CJS.
+  let files = vfs([
+    ("node_modules/esm/index.js", "export const helper = (x) => x + 1;\n"),
+    (
+      "entry.ts", "import { helper } from \"esm\";\nexport const go = () => helper(1);\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_aliases({
+    "esm": "node_modules/esm/index.js",
+  })
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(
+        out.js.contains("helper = (x) => x + 1"),
+        msg="the ESM dependency was not inlined: \{out.js}",
+      )
+      assert_false(out.js.contains("from \"esm\""))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: a namespace import of an empty module still gets an object" {
+  // `import * as ns from "./m"` where `m` exports nothing. The property
+  // table came out empty and was therefore not recorded, so the phase-3
+  // synthesizer never learned the namespace existed and no
+  // `const ns = {}` was emitted — a bare reference to `ns` had nothing
+  // to resolve to. The re-export path one screen below already said
+  // "always record even when empty"; this path did not.
+  //
+  // Excalidraw's `defaultCommandPaletteItems.ts` is literally
+  // `export {};` and its namespace is passed as a value.
+  let files = vfs([
+    ("empty.ts", "export {};\n"),
+    (
+      "entry.ts", "import * as none from \"./empty\";\nexport const use = () => ({ none });\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_true(
+        out.js.contains("none = {}"),
+        msg="expected a synthesized empty namespace, got: \{out.js}",
+      )
+      @test.assert_eq(verify_emitted_bundle(out.js).length(), 0)
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: a namespace import re-exported by name survives" {
+  // `import * as Pattern from "./pat"; export { Pattern, Pattern as P };`
+  // dropped BOTH spellings. The namespace object is only synthesized
+  // when the namespace escapes, the escape test looks for a reference in
+  // the module BLOCK, and an export specifier is metadata — not a block
+  // reference. ts-pattern's whole public `P` surface was missing while
+  // its corpus row still reported NEUTRAL, because the driver had been
+  // written around the bug.
+  let files = vfs([
+    (
+      "pat.ts", "export const any = () => \"any\";\nexport const num = () => \"num\";\n",
+    ),
+    (
+      "entry.ts", "import * as Pattern from \"./pat\";\nexport { Pattern, Pattern as P };\nexport const other = () => 1;\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_true(
+        out.js.contains("Pattern = {"),
+        msg="the namespace object was not synthesized: \{out.js}",
+      )
+      assert_true(out.js.contains("Pattern as P"), msg="got: \{out.js}")
+      @test.assert_eq(verify_emitted_bundle(out.js).length(), 0)
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: an `export type` name stays out of the namespace object" {
+  // The other half, and the reason the fix above first produced
+  // `let ns = { Pattern: ns, … }` and a TDZ error. `export type { X }`
+  // re-exporting a type IMPORTED from elsewhere is invisible to a check
+  // derived from the module's own aliases and interfaces, which is what
+  // the linker used — so the parser records what the module SAID.
+  let files = vfs([
+    ("t.ts", "export type Thing = { a: number };\n"),
+    (
+      "pat.ts", "import { Thing } from \"./t\";\nexport type { Thing };\nexport const real = () => 1;\n",
+    ),
+    ("entry.ts", "import * as NS from \"./pat\";\nexport { NS };\n"),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_true(out.js.contains("real: real"), msg="got: \{out.js}")
+      assert_false(
+        out.js.contains("Thing:"),
+        msg="a type-only export reached the namespace object: \{out.js}",
+      )
+      @test.assert_eq(verify_emitted_bundle(out.js).length(), 0)
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "mangle: an object ASSIGNED into an observed binding keeps its keys" {
+  // JS has six ways to assign and only the four that go through a
+  // member expression recorded the written value, so the escape
+  // analysis had nothing to reserve for a plain `=` to a variable:
+  //
+  //     let v: any = 1;
+  //     v = { ...obj, g14: 100 };
+  //     console.log([v]);
+  //
+  // dropped `g14` AND `obj`'s own `p`, while the identical program
+  // spelled `bag.beta = { ...obj, g14: 100 }` kept both. The
+  // difference was not a judgement about escape; it was which arm of
+  // the walker the statement landed in. Found by `fuzz-mangle`.
+  let files = vfs([
+    (
+      "entry.ts",
+      "const obj = { p: 0 };\n" +
+      "let v: any = 1;\n" +
+      "v = { ...obj, g14: 100 };\n" +
+      "console.log([v]);\n",
+    ),
+  ])
+  let opts = BundleOptions::default()
+    .with_mangle(true)
+    .with_mangle_properties(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("g14"), msg="got: \{out.js}")
+      assert_true(out.js.contains("p: 0"), msg="got: \{out.js}")
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "mangle: a COMPOUND property write keeps the written object's keys" {
+  // `bag.beta &&= { … }`. The plain-`=` spelling went through
+  // `PropAssignExpr` and recorded the write; the compound spelling
+  // recorded nothing at all, so the fuzzer's
+  // `bag.beta &&= { ...obj, g14: a }` had `g14` deleted and `obj`
+  // emptied while `console.log([bag])` printed them both.
+  let files = vfs([
+    (
+      "entry.ts",
+      "const obj = { p: 0 };\n" +
+      "const bag: any = { beta: 1 };\n" +
+      "bag.beta &&= { ...obj, g14: 100 };\n" +
+      "console.log([bag]);\n",
+    ),
+  ])
+  let opts = BundleOptions::default()
+    .with_mangle(true)
+    .with_mangle_properties(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("g14"), msg="got: \{out.js}")
+      assert_true(out.js.contains("p: 0"), msg="got: \{out.js}")
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "mangle: an object assigned into an UNOBSERVED binding still drops" {
+  // The other half of the two tests above: the fix must reserve
+  // because the value escapes, not because it gave up on the
+  // question. Nothing here reaches a sink, so the dead key goes.
+  let files = vfs([
+    (
+      "entry.ts",
+      "const obj = { p: 0 };\n" +
+      "let v: any = 1;\n" +
+      "v = { ...obj, g14: 100 };\n" +
+      "console.log(1);\n",
+    ),
+  ])
+  let opts = BundleOptions::default()
+    .with_mangle(true)
+    .with_mangle_properties(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_false(out.js.contains("g14"), msg="got: \{out.js}")
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class-method-dce: a class handed off the bundle keeps every method" {
+  // The pass's `keep` was the export surface and nothing else, so it had
+  // no notion of a class VALUE crossing the bundle boundary. `Widget` is
+  // not exported and nothing here names `render`; the only caller is the
+  // host that received the instance. Both methods have to stay, because
+  // the bundle cannot know which one the host picks.
+  //
+  // Spelled with a local `const` on purpose. `collect_immediate_sources`
+  // answered `Unknown` for `new C()`, so the backward propagation
+  // stopped at `w` and never reached `Widget`, while the inline
+  // `register(new Widget())` DID reach it because the sink seeder walks
+  // the expression itself. One program, two spellings, two answers — and
+  // the spelling that lost is the one real code uses.
+  let files = vfs([
+    (
+      "entry.ts",
+      "import { register, runAll } from \"host\";\n" +
+      "class Widget {\n" +
+      "  render() { return \"r\"; }\n" +
+      "  neverNamedHere() { return \"n\"; }\n" +
+      "}\n" +
+      "const w = new Widget();\n" +
+      "register(w);\n" +
+      "export const results = runAll();\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_allow_unresolved_imports(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("render"), msg="got: \{out.js}")
+      assert_true(out.js.contains("neverNamedHere"), msg="got: \{out.js}")
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class-method-dce: the inline `new` spelling reaches its class too" {
+  // The spelling that already worked, kept as a pair for the one above:
+  // a fix that made the local-`const` case pass by breaking this one
+  // would look identical in the test count.
+  let files = vfs([
+    (
+      "entry.ts",
+      "import { register, runAll } from \"host\";\n" +
+      "class Widget {\n" +
+      "  render() { return \"r\"; }\n" +
+      "}\n" +
+      "register(new Widget());\n" +
+      "export const results = runAll();\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_allow_unresolved_imports(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_true(out.js.contains("render"), msg="got: \{out.js}")
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class-method-dce: a KNOWN sink does not pin every method" {
+  // The other direction, and the reason the fix is `External`
+  // observability rather than the property mangler's reserved set.
+  // `console.log` and `JSON.stringify` have known semantics: they
+  // observe property NAMES (so those must not be renamed) but invoke
+  // nothing except `toJSON`. Feeding the pass the mangler's set instead
+  // reserved everything any sink touched and turned it off in all but
+  // name.
+  //
+  // So `toJSON` stays — nothing here calls it — and
+  // `notAProtocolMethod` on the same class goes.
+  let files = vfs([
+    (
+      "entry.ts",
+      "class Payload {\n" +
+      "  toJSON() { return { tag: \"p\" }; }\n" +
+      "  notAProtocolMethod() { return \"dead\"; }\n" +
+      "}\n" +
+      "const p = new Payload();\n" +
+      "export const serialized = JSON.stringify(p);\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_true(out.js.contains("toJSON"), msg="got: \{out.js}")
+      assert_false(
+        out.js.contains("notAProtocolMethod"),
+        msg="a known sink pinned a non-protocol method: \{out.js}",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class-method-dce: an unescaped class still loses its dead method" {
+  // The control. Nothing crosses the boundary and only `live` is called,
+  // so `deadWeight` goes — otherwise every assertion above would be
+  // satisfied by a pass that does nothing.
+  let files = vfs([
+    (
+      "entry.ts",
+      "class Local {\n" +
+      "  live() { return 1; }\n" +
+      "  deadWeight() { return 2; }\n" +
+      "}\n" +
+      "const l = new Local();\n" +
+      "export const v = l.live();\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_true(out.js.contains("live"), msg="got: \{out.js}")
+      assert_false(out.js.contains("deadWeight"), msg="got: \{out.js}")
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+/// The cheap early exit must not change what the pass does.
+///
+/// `class_method_dce_block` now computes the statically-accessed set
+/// first and returns immediately when no declared method is missing from
+/// it, skipping the symbol graph and the numeric inference — 711 ms of
+/// the 1,136 ms the pass cost on the 9 MB TypeScript bundle, where the
+/// report already said "nothing would have been dropped anyway".
+///
+/// The exit is sound because both sets it uses are SUBSETS of the real
+/// accessed set, so "nothing unreached" cannot become "something
+/// unreached" once the expensive analysis adds names. These two cases
+/// pin the boundary from both sides: one where the exit fires and the
+/// pass must leave everything alone, and one where it must NOT fire
+/// because there is a method to drop.
+test "class_method_dce: the cheap exit fires only when nothing is droppable" {
+  // Every method is read statically, so the early exit fires and both
+  // survive. If the exit were wrong in the permissive direction, `beta`
+  // would go.
+  let all_used =
+    #|class Pair {
+    #|  alpha() { return "A"; }
+    #|  beta() { return "B"; }
+    #|}
+    #|const p = new Pair();
+    #|console.log(p.alpha() + p.beta());
+  match
+    bundle_modules(
+      vfs([("entry.ts", all_used)]),
+      "entry.ts",
+      BundleOptions::default(),
+    ) {
+    Ok(out) => {
+      assert_true(out.js.contains("alpha"))
+      assert_true(out.js.contains("beta"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+  // `beta` is never read anywhere, so the exit must NOT fire and the
+  // pass must run and delete it. A too-eager exit shows up here as
+  // `beta` surviving — which is also how a "fix" that simply disabled
+  // the pass would show up.
+  let one_dead =
+    #|class Pair {
+    #|  alpha() { return "A"; }
+    #|  beta() { return "B"; }
+    #|}
+    #|const p = new Pair();
+    #|console.log(p.alpha());
+  match
+    bundle_modules(
+      vfs([("entry.ts", one_dead)]),
+      "entry.ts",
+      BundleOptions::default(),
+    ) {
+    Ok(out) => {
+      assert_true(out.js.contains("alpha"))
+      assert_false(out.js.contains("beta"))
     }
     Err(e) => fail("bundle error: \{e}")
   }

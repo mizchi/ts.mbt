@@ -37,6 +37,29 @@ import { pathToFileURL } from "node:url";
 // constant-folding bug produces. Every value is encoded as a tagged
 // tuple instead, and the comparison is on the encoded form.
 
+// Does the observer reflect on a value's PROTOTYPE?
+//
+// It should when the observation point is the export surface: a consumer
+// of a library bundle holds the class and can call any method on it, so
+// a method that vanished is a real difference and `functionMembers` is
+// what catches it.
+//
+// It should NOT when the observation point is a `console.log` the
+// program itself performed. No known sink can see a prototype method:
+// `console.log`, `util.inspect`, `JSON.stringify`, `String(x)` and
+// `Object.keys` all print `C {}` whether or not `C.prototype.m` exists.
+// Reflecting there reaches PAST the program's own sinks and reports a
+// difference nothing in the program can observe — which is what it did
+// for `class C { m() {} } console.log(new C())`, six times in an
+// 8000-comparison sweep.
+//
+// The real hazard this used to stand in for — a class handed to a callee
+// the bundle cannot see — is not reachable in the sink shape at all,
+// since `console.log` is its only sink. It lives in the mangle-safety
+// corpus instead (`case45-class-escapes-external`), where an actual
+// external import receives the class and calls the method back.
+let REFLECT_PROTOTYPES = true;
+
 function encode(value, seen = new Map()) {
   if (value === undefined) return ["undefined"];
   if (value === null) return ["null"];
@@ -55,7 +78,9 @@ function encode(value, seen = new Map()) {
   // on its prototype. `name` is excluded on purpose: renaming a local
   // binding changes `Function.name` and no minifier preserves it, so
   // including it would report every successful mangle as a failure.
-  if (type === "function") return ["function", functionMembers(value)];
+  if (type === "function") {
+    return ["function", REFLECT_PROTOTYPES ? functionMembers(value) : []];
+  }
 
   if (seen.has(value)) return ["reference", seen.get(value)];
   const id = seen.size;
@@ -87,7 +112,7 @@ function encode(value, seen = new Map()) {
   // The constructor's name is realm-independent.
   const proto = Object.getPrototypeOf(value);
   const protoIsPlain = !proto || proto.constructor?.name === "Object";
-  const protoMembers = protoIsPlain
+  const protoMembers = protoIsPlain || !REFLECT_PROTOTYPES
     ? []
     : Object.getOwnPropertyNames(proto)
         .filter((key) => key !== "constructor")
@@ -118,7 +143,13 @@ function runScript(source, timeoutMs) {
   const sandbox = {
     console: {
       log(...args) {
-        logs.push(encode(args));
+        // A `console.log` the program performed: see REFLECT_PROTOTYPES.
+        REFLECT_PROTOTYPES = false;
+        try {
+          logs.push(encode(args));
+        } finally {
+          REFLECT_PROTOTYPES = true;
+        }
       },
     },
     // `structuredClone` is a host API, not a JS intrinsic: a fresh `vm`
@@ -208,7 +239,13 @@ async function observeReference(sourcePath, timeoutMs, kind) {
   const logs = [];
   const realLog = console.log;
   console.log = (...args) => {
-    logs.push(encode(args));
+    // Same observation point as the compiled legs', so the same rule.
+    REFLECT_PROTOTYPES = false;
+    try {
+      logs.push(encode(args));
+    } finally {
+      REFLECT_PROTOTYPES = true;
+    }
   };
   try {
     const namespace = await withTimeout(import(pathToFileURL(sourcePath).href), timeoutMs);

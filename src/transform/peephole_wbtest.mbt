@@ -13,6 +13,20 @@ fn peep_one(src : String) -> String raise {
 }
 
 ///|
+/// Fold then peephole, which is the order `bundle.mbt` uses. Needed
+/// wherever a peephole result depends on something fold produced — the
+/// declarator joining, for instance.
+fn fold_then_peep(src : String) -> String raise {
+  let block = @parser.parse_block_from_source(src)
+  let out = peephole_block(fold_block(block))
+  let e = Emitter::new(pretty=false)
+  for s in out.stmts {
+    emit_stmt(e, s)
+  }
+  e.to_string()
+}
+
+///|
 fn minify_one(src : String) -> String raise {
   let block = @parser.parse_block_from_source(src)
   let folded = peephole_block(block)
@@ -866,12 +880,25 @@ test "peephole: x == null ? fallback : x → x ?? fallback" {
 }
 
 ///|
-test "peephole: Array.from(x) folds to [...x]" {
-  let out = peep_one("const r = Array.from(items);")
-  assert_true(out.contains("[..."), msg="expected spread array, got: \{out}")
+test "peephole: Array.from(x) folds only when x is provably iterable" {
+  // `Array.from` accepts an array-LIKE; a spread needs an ITERABLE.
+  // `Array.from({ length: 256 })` is 256 `undefined`s and
+  // `[...{ length: 256 }]` throws, which is how typebox's bundle died on
+  // load. A bare `items` proves nothing, so the call stays.
+  let kept = peep_one("const r = Array.from(items);")
+  assert_true(
+    kept.contains("Array.from"),
+    msg="an unprovable receiver must keep the call, got: \{kept}",
+  )
+  // A string literal and a `new Set(…)` name their own type.
+  let folded = peep_one("const r = Array.from(new Set(xs));")
+  assert_true(
+    folded.contains("[..."),
+    msg="expected spread array, got: \{folded}",
+  )
   assert_false(
-    out.contains("Array.from"),
-    msg="expected no Array.from, got: \{out}",
+    folded.contains("Array.from"),
+    msg="expected no Array.from, got: \{folded}",
   )
 }
 
@@ -980,10 +1007,12 @@ test "peephole: new Object() folds to {}" {
 }
 
 ///|
-test "peephole: [].concat(a, b) folds to [...a,...b]" {
+test "peephole: [].concat(a, b) is left alone for non-literal arguments" {
+  // `concat` APPENDS a non-array as a single element, so
+  // `[].concat(undefined)` is `[undefined]` while `[...undefined]`
+  // throws. Only array literals are provably spreadable.
   let out = minify_one("const r = [].concat(a, b);")
-  assert_true(out.contains("[..."), msg="expected spread array, got: \{out}")
-  assert_false(out.contains("concat"), msg="expected no concat, got: \{out}")
+  assert_true(out.contains("concat"), msg="expected concat kept, got: \{out}")
 }
 
 ///|
@@ -1118,10 +1147,20 @@ test "peephole: fn.call(null, a, b) → fn(a, b) strips null-this call" {
 }
 
 ///|
-test "peephole: fn.apply(null, args) → fn(...args) strips null-this apply" {
-  let out = minify_one("const r = fn.apply(null, args);")
-  assert_false(out.contains(".apply("), msg="expected no .apply, got: \{out}")
-  assert_true(out.contains("...args"), msg="expected spread, got: \{out}")
+test "peephole: fn.apply(null, args) needs a provably iterable args list" {
+  // `apply` takes an array-LIKE, and also `null` / `undefined` meaning
+  // "no arguments": `f.apply(null, undefined)` calls `f()` where
+  // `f(...undefined)` throws. A bare `args` is not a proof.
+  let kept = minify_one("const r = fn.apply(null, args);")
+  assert_true(
+    kept.contains(".apply("),
+    msg="an unprovable args list must keep .apply, got: \{kept}",
+  )
+  let folded = minify_one("const r = fn.apply(null, [a, b]);")
+  assert_false(
+    folded.contains(".apply("),
+    msg="expected no .apply, got: \{folded}",
+  )
 }
 
 ///|
@@ -1326,10 +1365,12 @@ test "peephole: +new Date() → Date.now()" {
 }
 
 ///|
-test "peephole: arr.slice(0) → [...arr]" {
+test "peephole: arr.slice(0) is left alone" {
+  // `slice` is a method on Array AND on String, and they return
+  // different kinds of thing: `"ab".slice(0)` is `"ab"`, `[..."ab"]` is
+  // `["a", "b"]`. Nothing here proves the receiver is an array.
   let out = minify_one("const r = arr.slice(0);")
-  assert_false(out.contains("slice"), msg="expected no .slice, got: \{out}")
-  assert_true(out.contains("...arr"), msg="expected spread, got: \{out}")
+  assert_true(out.contains("slice"), msg="expected .slice kept, got: \{out}")
 }
 
 ///|
@@ -1520,15 +1561,17 @@ test "peephole: (0, fn)(args) indirect call → fn(args)" {
 }
 
 ///|
-test "peephole: Array.prototype.METHOD.call(arr, ...) → arr.METHOD(...)" {
+test "peephole: Array.prototype.METHOD.call(x, …) is left alone" {
+  // Two ways apart, and the rewrite was on the wrong side of both. The
+  // `.call` form names the built-in explicitly and reaches strings,
+  // `arguments` and `{ length: 2, 0: "a", 1: "b" }`, none of which have
+  // the method; and where the receiver DOES have a same-named method,
+  // the rewrite calls that one instead of the built-in. `slice` was
+  // already excluded here — it was the one instance somebody had hit.
   let out = minify_one("Array.prototype.forEach.call(arr, fn);")
-  assert_false(
-    out.contains("Array.prototype"),
-    msg="expected no Array.prototype, got: \{out}",
-  )
   assert_true(
-    out.contains("arr.forEach("),
-    msg="expected arr.forEach(), got: \{out}",
+    out.contains("Array.prototype"),
+    msg="expected Array.prototype kept, got: \{out}",
   )
 }
 
@@ -1844,4 +1887,133 @@ test "peephole: a comparison result compared to false still folds" {
 test "peephole: a negation compared to true still folds" {
   let out = minify_one("const r = !flag === true;\n")
   assert_false(out.contains("==="), msg="missed the saving: \{out}")
+}
+
+///|
+test "peephole: `x += 1` in expression position becomes PRE-increment" {
+  // `x += 1` evaluates to the NEW value; `x++` evaluates to the OLD
+  // one. Four sites in `peep_expr` produced the post-fix form, so
+  //
+  //     while (--brake > 0 && ((arr[0] += 1) ? keep : (trace.push(4), 10)))
+  //
+  // with `arr[0]` at 0 tested `1` and took the first branch, while the
+  // compiled `arr[0]++` tested `0` and ran a `trace.push` the source
+  // never runs. `++x` and `x++` are the same three bytes.
+  for
+    src in [
+      "const r = (n += 1) ? a : b;\n", "const r = (o.p += 1) ? a : b;\n", "const r = (arr[i] += 1) ? a : b;\n",
+    ] {
+    let out = peep_one(src)
+    assert_true(out.contains("++"), msg="no increment for `\{src}`: \{out}")
+    assert_false(
+      out.contains("]++") || out.contains("p++") || out.contains("n++"),
+      msg="post-increment in expression position for `\{src}`: \{out}",
+    )
+  }
+}
+
+///|
+test "peephole: `x += 1` as a STATEMENT stays post-increment" {
+  // In statement position the value is discarded, so the two spellings
+  // are interchangeable and post-fix is the conventional one. The
+  // normalization lives in `peep_stmt`'s `Expr` arm because `peep_expr`
+  // cannot know whether its caller uses the value.
+  let out = peep_one("n += 1;\n")
+  assert_true(out.contains("n++"), msg="got: \{out}")
+  let dec = peep_one("n -= 1;\n")
+  assert_true(dec.contains("n--"), msg="got: \{dec}")
+}
+
+///|
+test "peephole: `return void f()` keeps the call" {
+  // Ninth site of the same rule as `fold.mbt`'s `Return` arm. Here
+  // there is nowhere to put the effect, so the fold simply declines.
+  let out = peep_one("function f() { return void g(); }\n")
+  assert_true(out.contains("g()"), msg="got: \{out}")
+}
+
+///|
+test "peephole: `return void 0` still drops, the operand being pure" {
+  let out = peep_one("function f() { return void 0; }\n")
+  assert_false(out.contains("void"), msg="got: \{out}")
+}
+
+///|
+test "peephole: a switch with an impure scrutinee is not lowered to ifs" {
+  // The if-else chain tests the scrutinee once per named case, where
+  // the switch evaluates it once. `switch ((trace.push(2), k))` with
+  // two named cases pushed `2` twice.
+  let out = peep_one(
+    "function f() { switch ((eff(), k)) { case 0: return 1; case 1: return 2; default: ; } }\n",
+  )
+  assert_true(out.contains("switch"), msg="got: \{out}")
+}
+
+///|
+test "peephole: a switch with a pure scrutinee still lowers to ifs" {
+  // The paired half — re-evaluating a bare variable is free, so the
+  // rewrite must still fire.
+  let out = peep_one(
+    "function f() { switch (k) { case 0: return 1; case 1: return 2; default: ; } }\n",
+  )
+  assert_false(out.contains("switch"), msg="got: \{out}")
+}
+
+///|
+/// A block-body arrow assigned to a name STAYS an arrow.
+///
+/// `peep_decl_rhs` used to convert it to a `FuncExpr` so the emitter
+/// would print `function f(…){…}`, on two grounds that were both wrong:
+/// that the function form is never longer (false once the declarations
+/// join under one `let`), and that hoisting avoids a TDZ problem in
+/// bundles (a hazard that cannot exist for an input that was already an
+/// arrow — ESM would reject the same code unbundled).
+///
+/// It was turning 642 of excalidraw's 1,403 source arrows into
+/// `function`, which is why mtsc emitted 516 `function` keywords where
+/// terser emitted 102. Removing it: -2,925 bytes across nine real
+/// bundles, no target worse.
+///
+/// The two directions this must NOT do are checked alongside, because
+/// both are unsound rather than merely expensive: a function expression
+/// has a dynamic `this` and an arrow's is lexical, so neither conversion
+/// is a spelling choice.
+test "peephole: a block-body arrow is not rewritten to a function" {
+  // Two statements, so nothing folds it to a concise arrow first.
+  // Asserted as "no `function` appeared" rather than by the exact
+  // spelling of the arrow: how the emitter parenthesizes a single
+  // parameter is a separate rule with its own tests, and pinning it here
+  // would make this test fail for an unrelated reason.
+  let out = minify_one(
+    "const f = (a) => { sink(a); return a + 1; };\nsink(f(1));\n",
+  )
+  assert_true(out.contains("=>"))
+  assert_false(out.contains("function"))
+  // Several in a row share one `let`, which is where the bytes are.
+  //
+  // Through FOLD as well as peephole, because the declarator joining
+  // that makes the arrow form cheaper lives in `fold.mbt` — and it
+  // skips `FuncExpr`-initialised declarations by design, which is
+  // exactly why the conversion cost bytes: it moved these out of
+  // join's reach.
+  let many = fold_then_peep(
+    "const f = (a) => { sink(a); return a + 1; };\nconst g = (b) => { sink(b); return b + 2; };\nconst h = (c) => { sink(c); return c + 3; };\nsink(f(1) + g(2) + h(3));\n",
+  )
+  assert_false(many.contains("function"))
+  // One `let` for the three arrows, not three.
+  let lets = many.split("let ").length() - 1
+  assert_eq(lets, 1)
+  // `this` in the body was always excluded, and still is: an arrow's
+  // `this` is lexical, so the conversion would have changed meaning.
+  // With the conversion gone it stays an arrow for that reason too.
+  let with_this = minify_one(
+    "const f = (a) => { sink(this.x); return a; };\nsink(f(1));\n",
+  )
+  assert_true(with_this.contains("=>"))
+  // The opposite direction is the unsound one and must not happen
+  // either: a named `function` expression keeps its form.
+  let named = minify_one(
+    "const f = function (a) { sink(this.x); return a; };\nsink(f(1));\n",
+  )
+  assert_true(named.contains("function"))
 }

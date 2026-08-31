@@ -1,4 +1,10 @@
-module InternalModule {
+// `namespace`, not the legacy `module` keyword. The two lower
+// identically, and the block below already covers `namespace`, so the
+// keyword was the only unique thing here — while Node's transform mode
+// rejects it outright ("`module` keyword is not supported"), which cost
+// this case its reference leg and so its only independent oracle. The
+// keyword's parse is pinned in `bundle_wbtest.mbt` instead.
+namespace InternalModule {
   const internalMessage = "Hello from internal module";
 
   export function getInternalMessage(): string {

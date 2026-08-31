@@ -52,6 +52,9 @@ fn link_module_graph(
   // global form (entries are only present when a rename actually
   // happened — unchanged names stay implicit).
   let taken : Map[String, Bool] = {}
+  // Filled by `synthesize_namespace_bindings_for` below and returned, so
+  // the property mangler can recognise these bindings by fact.
+  let synthesized_namespace_names : Map[String, Bool] = {}
   // Pre-reserve JS globals so a module's local binding (typically a
   // synthesized namespace object — `export * as Symbol from "…"` →
   // `const Symbol = {…}`) doesn't TDZ-shadow the runtime global at
@@ -185,6 +188,122 @@ fn link_module_graph(
   // place the object is BUILT, an entry whose value has no runtime
   // binding cannot be emitted, whichever path put it there. Fail-closed
   // by construction rather than by enumeration.
+  // ---- Phase 1.5: make every SUBSTITUTED target name unshadowable ----
+  //
+  // Phase 2 records `subs[local_alias] = resolved` and phase 3 rewrites
+  // `Var(local_alias)` to `Var(resolved)` inside the importing module.
+  // The walker tracks shadowing of the name it REPLACES — an inner scope
+  // that re-binds `local_alias` keeps its own binding — and it cannot
+  // track shadowing of the name it SUBSTITUTES, because that name is not
+  // in the map it narrows.
+  //
+  // So a target name the importing module happens to declare in a nested
+  // scope captures the reference. `@sprawlens/viz`'s `App.tsx`:
+  //
+  //   import { parentFileOf as contractParentFileOf } from "@sprawlens/schema";
+  //   const moduleOfId = (id) => currentModuleIdOf()(contractParentFileOf(id));
+  //   ...
+  //   const parentFileOf = (id) => symbolMetaRef.current.get(id)?.fileId ?? …;
+  //
+  // Both inside one component body, and correct as written: the aliased
+  // import and the local `const` are different names. `contractParentFileOf`
+  // appears ZERO times in the bundle — every use became `parentFileOf`,
+  // which at that point resolves to the local `const` and is in TDZ when
+  // the arrow runs. `ReferenceError: Cannot access 'parentFileOf' before
+  // initialization`, under plain `mtsc --bundle`, no optimization flag.
+  //
+  // Seventh instance of the scope-narrowing family and the last place it
+  // had not been asked: `call_inline`, `as_const_inline`,
+  // `const_enum_inline`, `predicate_inline`, `switch_fold` and
+  // `type_fold` all resolve a table by name and narrow; the LINKER
+  // resolves an import by name and did not.
+  //
+  // The fix is not a scope walk at the rewrite site. A walk has to model
+  // every binder form, and the cost of missing one is this bug returning
+  // silently. Instead: when the substituted name differs from the name it
+  // replaces, force the exporting binding to a MINTED name. `name$N` is
+  // not a name source code declares, so no scope can shadow it and no
+  // analysis is needed to know that. `taken` already guarantees the mint
+  // is unique at the top level.
+  //
+  // Only bindings imported under a different alias are touched, and with
+  // `--mangle` on the names are replaced anyway, so the corpus is
+  // byte-identical.
+  let minted_unique : Map[String, Bool] = {}
+  for path, node in modules {
+    for entry in rename_per_module.get(path).unwrap_or({}) {
+      minted_unique[entry.1] = true
+    }
+    ignore(node)
+  }
+  // final name -> (declaring module, its original local name), so a
+  // target name can be traced back to the binding that has to move.
+  let owner_of_final : Map[String, (String, String)] = {}
+  for path, node in modules {
+    let renames = rename_per_module.get(path).unwrap_or({})
+    for name in collect_top_level_decl_names(node.block) {
+      owner_of_final[renames.get(name).unwrap_or(name)] = (path, name)
+    }
+  }
+  for path in order {
+    let m = match modules.get(path) {
+      Some(node) => node
+      None => continue
+    }
+    for imp in m.import_decls {
+      if imp.type_only || imp.side_effect_only {
+        continue
+      }
+      let dep_path = match m.resolved_imports.get(imp.module_spec) {
+        Some(p) => p
+        None => continue
+      }
+      let pairs : Array[(String, String)] = []
+      match imp.default_binding {
+        Some(alias) => pairs.push(("default", alias))
+        None => ()
+      }
+      for nb in imp.named_bindings {
+        pairs.push((nb.0, nb.1))
+      }
+      for pair in pairs {
+        let resolved = match
+          resolve_export(
+            modules,
+            rename_per_module,
+            namespace_local_renames,
+            dep_path,
+            pair.0,
+          ) {
+          Some(r) => r
+          None => continue
+        }
+        // Same name in and out: phase 3 substitutes nothing, so the
+        // importing module's own scopes decide, exactly as in the source.
+        if resolved == pair.1 {
+          continue
+        }
+        if minted_unique.contains(resolved) {
+          continue
+        }
+        let (owner_path, owner_local) = match owner_of_final.get(resolved) {
+          Some(o) => o
+          // Not a top-level binding of any module — a synthesized
+          // namespace object or a CJS var, both of which already carry a
+          // minted name or are handled by their own tables.
+          None => continue
+        }
+        let fresh = mint_unique_name(resolved, taken, suffix_counter)
+        suffix_counter = suffix_counter + 1
+        taken[fresh] = true
+        minted_unique[fresh] = true
+        let owner_renames = rename_per_module.get(owner_path).unwrap_or({})
+        owner_renames[owner_local] = fresh
+        rename_per_module[owner_path] = owner_renames
+        owner_of_final[fresh] = (owner_path, owner_local)
+      }
+    }
+  }
   let runtime_bindings : Map[String, Bool] = {}
   for path, node in modules {
     let decls : Map[String, Bool] = {}
@@ -327,9 +446,19 @@ fn link_module_graph(
             props,
             {},
           )
-          if !props.is_empty() {
-            namespace_subs[ns_local] = props
-          }
+          // Record even when EMPTY, for the same reason the re-export
+          // path below says so: the phase-3 synthesizer only knows about
+          // namespaces that appear here, so skipping an empty one means
+          // no `const ns = {}` is emitted and a bare reference to `ns`
+          // has nothing to resolve to.
+          //
+          // A module can be empty and still be imported this way.
+          // Excalidraw's `defaultCommandPaletteItems.ts` is literally
+          // `export {};` and `CommandPalette.tsx` passes the namespace
+          // as a value — so the bundle carried a free `defaultItems`.
+          // The lesson had already been learned on the re-export path
+          // and not on this one.
+          namespace_subs[ns_local] = props
         }
         None => ()
       }
@@ -440,6 +569,20 @@ fn link_module_graph(
     let local_decl_names : Map[String, Bool] = {}
     collect_local_decl_names_in_block(m.block, local_decl_names)
     let forced_escape : Map[String, Bool] = {}
+    // A namespace this module EXPORTS BY NAME — `import * as Pattern
+    // from "./patterns"; export { Pattern, Pattern as P };` — escapes,
+    // and `block_references_var` cannot see it: an export specifier is
+    // module metadata, not a reference in the block. So the object was
+    // never synthesized, `Pattern` resolved to nothing, and BOTH
+    // spellings vanished from the bundle's export list. ts-pattern's
+    // whole public `Pattern` / `P` surface was missing.
+    //
+    // `export * as ns from "…"` was already forced, a few lines down,
+    // for exactly this reason. The by-name form is the same fact stated
+    // differently.
+    for spec in m.export_specs {
+      forced_escape[spec.local_name] = true
+    }
     let filtered_ns_subs : Map[String, Map[String, String]] = {}
     for entry in ns_subs {
       let original_ns = entry.0
@@ -505,7 +648,7 @@ fn link_module_graph(
       }
     }
     let synthesized = synthesize_namespace_bindings_for(
-      escaping_namespaces, ns_subs, ns_locals, runtime_bindings,
+      escaping_namespaces, ns_subs, ns_locals, runtime_bindings, synthesized_namespace_names,
     )
     // Synthesize `const localAlias = cjsVar.importedName;` for each
     // named import from a CJS-wrapped module (which has no export_specs).
@@ -552,7 +695,11 @@ fn link_module_graph(
     }
     modules[path] = { ..m, block: final_block }
   }
-  { locals: rename_per_module, namespaces: namespace_local_renames }
+  {
+    locals: rename_per_module,
+    namespaces: namespace_local_renames,
+    synthesized_namespaces: synthesized_namespace_names,
+  }
 }
 
 ///|
@@ -563,6 +710,13 @@ fn link_module_graph(
 pub(all) struct LinkRenames {
   locals : Map[String, Map[String, String]]
   namespaces : Map[String, Map[String, String]]
+  // Binding names the linker SYNTHESIZED as namespace objects
+  // (`export * as ns from "…"` becomes `const ns = { exp1: resolved1,
+  // … }`). Their keys have to survive property mangling, and the
+  // mangler used to identify them by shape — which also matched a
+  // library's ordinary `const table = { fnA, fnB, … }`. A fact, not a
+  // guess.
+  synthesized_namespaces : Map[String, Bool]
 }
 
 ///|
@@ -812,6 +966,16 @@ fn type_only_export_names(node : ModuleNode) -> Map[String, Bool] {
   let runtime : Map[String, Bool] = {}
   collect_local_decl_names_in_block(node.block, runtime)
   let out : Map[String, Bool] = {}
+  // What the module SAID is type-only. Deriving it from the module's own
+  // `type_aliases` / `interfaces` below only finds a type DECLARED here;
+  // `export type { Pattern }` re-exporting a type imported from
+  // elsewhere is invisible to that, and ts-pattern's `patterns.ts` does
+  // exactly that.
+  for entry in node.type_only_exports {
+    if !runtime.contains(entry.0) {
+      out[entry.0] = true
+    }
+  }
   for ta in node.type_aliases {
     if !runtime.contains(ta.name) {
       out[ta.name] = true
@@ -835,6 +999,15 @@ fn synthesize_namespace_bindings_for(
   ns_subs : Map[String, Map[String, String]],
   ns_locals : Map[String, String],
   runtime_bindings : Map[String, Bool],
+  // The binding names this call creates, recorded for the consumer that
+  // has to recognise them later. The property mangler was guessing —
+  // "a `const` whose initializer is an object literal of bare `Var`s" —
+  // and that guess also matches every `const handlers = { onClick,
+  // onBlur }` and every dispatch table a library writes. On typebox it
+  // reserved 300 of the 340 names in one section of the escape report,
+  // for two actual namespace objects. The linker knows which bindings it
+  // made; there is no reason for anyone downstream to infer it.
+  synthesized : Map[String, Bool],
 ) -> Array[@ast.TsStmt] {
   let out : Array[@ast.TsStmt] = []
   for ns_local in escaping_namespaces {
@@ -854,6 +1027,7 @@ fn synthesize_namespace_bindings_for(
       }
       lit_entries.push((p.0, @ast.TsExpr::Var(p.1)))
     }
+    synthesized[binding_name] = true
     out.push(
       @ast.TsStmt::Const(
         @ast.TsBinding::Ident(binding_name),
@@ -943,6 +1117,29 @@ fn resolve_export_with_visited(
             visited,
           )
         None => {
+          // `find_import_source` knows about default and named
+          // imports and nothing else, so a local that is an
+          // `import * as ns` alias arrives here looking like an
+          // ordinary declaration. It is not one: its final name was
+          // minted into `namespace_local_renames` by phase 1, and
+          // `rename_per_module` has no entry for it at all — so
+          // reading only the latter hands back the SOURCE spelling.
+          //
+          // That is a wrong binding rather than a missing one, which
+          // is why it stayed hidden. typebox's `src/index.ts` does
+          // `import * as Type from './typebox.ts'; export default
+          // Type`, another module declares a top-level `const Type`,
+          // phase 1 renamed the namespace object to `Type$185` to
+          // resolve the collision, and a consumer's `import Type
+          // from 'typebox'` was left spelled `Type` — now bound to
+          // the unrelated declaration. `Type.Number is not a
+          // function` under plain `mtsc --bundle`, with no
+          // optimization flag involved.
+          let ns_locals = namespace_local_renames.get(module_path).unwrap_or({})
+          match ns_locals.get(local_) {
+            Some(final_name) => return Some(final_name)
+            None => ()
+          }
           let renames = rename_per_module.get(module_path).unwrap_or({})
           return Some(renames.get(local_).unwrap_or(local_))
         }
@@ -1581,6 +1778,8 @@ fn substitute_var_names_in_expr(
     Spread(inner) => Spread(substitute_var_names_in_expr(inner, map, ns))
     Await(inner) => Await(substitute_var_names_in_expr(inner, map, ns))
     NonNull(inner) => NonNull(substitute_var_names_in_expr(inner, map, ns))
+    TypeArgs(tys, inner) =>
+      TypeArgs(tys, substitute_var_names_in_expr(inner, map, ns))
     OptionalChain(inner) =>
       OptionalChain(substitute_var_names_in_expr(inner, map, ns))
     PureCall(inner) => PureCall(substitute_var_names_in_expr(inner, map, ns))
@@ -2275,7 +2474,8 @@ fn collect_local_decl_names_in_expr(
     | YieldStar(v)
     | Spread(v)
     | UnaryOp(_, v) => collect_local_decl_names_in_expr(v, out)
-    As(v, _) | Satisfies(v, _) => collect_local_decl_names_in_expr(v, out)
+    As(v, _) | Satisfies(v, _) | TypeArgs(_, v) =>
+      collect_local_decl_names_in_expr(v, out)
     Yield(opt) =>
       match opt {
         Some(v) => collect_local_decl_names_in_expr(v, out)

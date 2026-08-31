@@ -1756,39 +1756,65 @@ fn array_prototype_member(elem : @ast.TsType, field : String) -> @ast.TsType? {
     @ast.TsType::Func([elem, @ast.TsType::Number, arr_t], ret)
   }
   let cb_bool = cb(@ast.TsType::Boolean)
+  // An OPTIONAL parameter, spelled the way the arity check already reads
+  // optionality: `required_arity_from_types` treats a parameter whose
+  // type accepts `undefined` as omittable, because the parser widens
+  // `x?: T` to `T | undefined`. So the table just has to say so.
+  //
+  // It did not, and every entry here declared its optional parameters as
+  // required: `arr.sort()` was rejected with "expected 1 argument(s), got
+  // 0", `arr.slice()` and `arr.join()` the same, and the ones with a REST
+  // parameter had the opposite problem — `push` declared exactly one
+  // slot, so `arr.push(a, b)` was "too many". `.sort()` with no
+  // comparator is about as ordinary as JavaScript gets, and this rejects
+  // it under the default (checking) path.
+  let opt = fn(t) { narrow_union(t, @ast.TsType::Undefined) }
+  let opt_num = opt(@ast.TsType::Number)
+  // A rest parameter. `required_arity_from_types` never raises the
+  // required count for one and the arity cap is lifted to unbounded, so
+  // this is how a variadic builtin says "any number, including none".
+  let rest = fn(t) { @ast.TsType::Rest(@ast.TsType::Array(t)) }
   match field {
     // Properties
     "length" => Some(@ast.TsType::Number)
     // Numeric index access falls through to the element type.
     "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" => Some(elem)
     // Mutating methods
-    "push" => Some(@ast.TsType::Func([elem], @ast.TsType::Number))
+    "push" => Some(@ast.TsType::Func([rest(elem)], @ast.TsType::Number))
     "pop" => Some(@ast.TsType::Func([], nullable_elem))
     "shift" => Some(@ast.TsType::Func([], nullable_elem))
-    "unshift" => Some(@ast.TsType::Func([elem], @ast.TsType::Number))
+    "unshift" => Some(@ast.TsType::Func([rest(elem)], @ast.TsType::Number))
     "reverse" => Some(@ast.TsType::Func([], arr_t))
     "sort" =>
       Some(
         @ast.TsType::Func(
-          [@ast.TsType::Func([elem, elem], @ast.TsType::Number)],
+          [opt(@ast.TsType::Func([elem, elem], @ast.TsType::Number))],
           arr_t,
         ),
       )
-    "fill" => Some(@ast.TsType::Func([elem], arr_t))
+    "fill" => Some(@ast.TsType::Func([elem, opt_num, opt_num], arr_t))
+    "splice" =>
+      Some(@ast.TsType::Func([@ast.TsType::Number, opt_num, rest(elem)], arr_t))
     // Non-mutating producers
-    "concat" => Some(@ast.TsType::Func([arr_t], arr_t))
-    "slice" =>
-      Some(@ast.TsType::Func([@ast.TsType::Number, @ast.TsType::Number], arr_t))
-    "flat" => Some(@ast.TsType::Func([], arr_t))
+    // `concat(...items: (T | T[])[])`. Both halves of the union are
+    // load-bearing and only one of them was ever expressed: the old
+    // signature was `Func([arr_t], arr_t)`, which refused
+    // `a.concat(9)`; writing it as `rest(elem)` refuses `a.concat(b)`,
+    // which is the form nearly all real code uses. A rest parameter
+    // whose element type is the union accepts both, in any mix and any
+    // count.
+    "concat" =>
+      Some(@ast.TsType::Func([rest(narrow_union(elem, arr_t))], arr_t))
+    "slice" => Some(@ast.TsType::Func([opt_num, opt_num], arr_t))
+    "flat" => Some(@ast.TsType::Func([opt_num], arr_t))
     "join" =>
-      Some(@ast.TsType::Func([@ast.TsType::String_], @ast.TsType::String_))
+      Some(@ast.TsType::Func([opt(@ast.TsType::String_)], @ast.TsType::String_))
     "toString" => Some(@ast.TsType::Func([], @ast.TsType::String_))
     // Search / predicate
-    "indexOf" =>
-      Some(@ast.TsType::Func([elem, @ast.TsType::Number], @ast.TsType::Number))
+    "indexOf" => Some(@ast.TsType::Func([elem, opt_num], @ast.TsType::Number))
     "lastIndexOf" =>
-      Some(@ast.TsType::Func([elem, @ast.TsType::Number], @ast.TsType::Number))
-    "includes" => Some(@ast.TsType::Func([elem], @ast.TsType::Boolean))
+      Some(@ast.TsType::Func([elem, opt_num], @ast.TsType::Number))
+    "includes" => Some(@ast.TsType::Func([elem, opt_num], @ast.TsType::Boolean))
     "every" => Some(@ast.TsType::Func([cb_bool], @ast.TsType::Boolean))
     "some" => Some(@ast.TsType::Func([cb_bool], @ast.TsType::Boolean))
     // Iteration protocol views: `values()` yields the elements (for-of12
@@ -16018,6 +16044,30 @@ fn check_undefined_name(env : ExprEnv, ctx : CheckCtx, name : String) -> Unit {
     return
   }
   if is_pseudo_value_keyword(name) || is_lib_global_value(name) {
+    return
+  }
+  // A private-field BRAND is not a value reference at all.
+  //
+  // The parser lowers a `#x` token in expression position to
+  // `Var("__private_brand__N__x")`, and the one place a `#x` legitimately
+  // appears as an operand is the ergonomic brand check —
+  // `#x in obj`, standard since ES2022 and the idiomatic way to write a
+  // class type guard:
+  //
+  //   static isRouter(v: unknown): boolean { return #path in (v as Router) }
+  //
+  // Resolving that as a name produced `cannot find name
+  // __private_brand__0__path` and rejected the whole file. Nothing
+  // declares a brand as a binding — it names a class MEMBER — so there is
+  // no environment entry to find and no diagnostic to give.
+  //
+  // Scoped to the brand prefix rather than to `in`'s left operand
+  // because the prefix is what makes it unambiguous: `mangle_private_name`
+  // is the only thing that produces it, and it produces it only for a
+  // `#`-prefixed source token. Whether the brand names a member that
+  // exists on the receiver is a different question, and it is the one
+  // `#x in obj` is asking at runtime.
+  if name.has_prefix("__private_brand__") {
     return
   }
   if env.lookup(name) is Some(_) {

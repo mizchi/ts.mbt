@@ -1294,3 +1294,255 @@ corpus の 148 件は「思いついた状況」の集合です。生成器
 そして 7 の副産物として、6 の修正で出力が 2,236,316 → 3,581,914 bytes に
 増えました。差の **1.35 MB は削除されていた function 宣言**です。
 「よく縮んだ」は「正しく縮んだ」でもありません。
+
+## profile の取り直し（2 回目）
+
+同じ計測をもう一度回したら、また**残っている最大の項目が「無駄」でした**。
+9 MB の `typescript.js`、shipping flag（`--treeshake --fold --minify
+--mangle`）:
+
+```
+      1270 ms   16.5%  class-method-dce-reach
+       898 ms   11.6%  cli: parse (recursive descent)
+       864 ms   11.2%  class-method-dce
+       794 ms   10.3%  mangle
+       ...
+      7679 ms  total
+```
+
+`class-method-dce` + `class-method-dce-reach` で **27.8%**。そして
+`--disable-phase class-method-dce` の出力は **byte 完全一致**（3,523,263）
+です。`--explain-mangle` はこう言います:
+
+```
+SUPPRESSED — a sink in the bundle can observe a member name the pass
+cannot spell out, so every class keeps every method.
+  [x1] `all[name]` reads a member under a computed key that is neither
+       provably numeric nor an entry of a keyed container
+       (0 of 821 bindings named `name` are provably numeric)
+nothing would have been dropped anyway.
+```
+
+**5,000 行中の 1 箇所** `all[name]` で抑制され、しかも抑制されなくても
+落ちるものが無い。2.1 秒がそれに払われていました。
+
+### 直し 1: 到達性解析を thunk にする（−1,270 ms）
+
+`class_members_reachable_off_bundle` は full observability 解析で、
+抑制判定より**前**に無条件で走っていました。抑制されるなら結果は読まれ
+ません。`off_bundle` を値ではなく **thunk** で渡し、実際に読む場所で
+force します。
+
+`None` は今も「呼び出し側が答えられない」を意味するので fail-closed の
+性質は変わりません——**存在確認は先、計算は後**になっただけです。
+
+### 直し 2: graph を作る前に「落とすものが無い」を確かめる（−711 ms）
+
+pass の内部に sub-phase 計測を通したら、費用の内訳はこうでした:
+
+| step | ms |
+| --- | --- |
+| `dce: symbol graph` | 485 |
+| `dce: numeric inference` | 226 |
+| `dce: static accesses` | **31** |
+| `dce: container facts` | 18 |
+
+graph と numeric inference は「**computed key がメソッドを名指しし得るか**」
+＝ 落とすのが**安全か**を決めるためだけに存在します。**落とすものが無い
+なら聞く必要がありません。** そして落とすものの有無は静的アクセス集合
+（31 ms）と export surface だけで分かります——どちらも本物の accessed 集合の
+**部分集合**なので、「未到達なし」が後から「未到達あり」になることはない。
+
+早期脱出を入れて 1,136 ms → 表から消滅。
+
+### 直し 3: `escape_breakdown` を 2 回計算していた（`--explain-mangle`）
+
+最大の項目は `bundle: link + escape + emit` で、これは**残差**
+（bundle 呼び出し全体 − 計測済み phase）です。**compile 中で最大の費用が
+「不明」として報告されていた**ので phase を足しました:
+
+```
+      2165 ms   25.0%  escape analysis
+      1744 ms   20.1%  bundle: link + escape + emit   ← 残差（link + emit）
+```
+
+そして `--explain-mangle` は per-reason の breakdown と merge 済み集合の
+両方を必要とし、**それぞれのために解析を 1 回ずつ**呼んでいました。
+merge を `merge_escape_breakdown` として切り出し、1 回計算して 2 用途に
+使うようにしました。
+
+### 結果
+
+| 構成 | before | after |
+| --- | --- | --- |
+| `--mangle` | 7,760 ms | **5,190 ms** (−33%) |
+| `+ --mangle-properties` | 11,800 ms | **8,230 ms** (−30%) |
+| excalidraw（95 file, TS source） | 2,400 ms | **2,050 ms** (−15%) |
+
+出力は全構成で byte 完全一致。real-world harness 自身の表示も
+`typescript ... in 7s` → `in 4s`、`checker.ts ... in 2s` → `in 1s`。
+
+excalidraw で `class-method-dce` は 106 ms 残ります——そこでは早期脱出が
+発火しない、つまり**落とすものが実際にある**ということで、脱出が選択的に
+効いている証拠です。`bundle_wbtest.mbt` の境界 test が両側を pin します:
+全メソッドが静的に読まれる場合は両方残る、1 つが未到達なら pass が走って
+消える（後者は「pass を切る」修正でも落ちます）。
+
+### 残っていた 2 つの残差を phase にする
+
+残差は**引き算**であって計測ではありません。「一番大きい項目が不明」の
+まま最適化を続けることはできないので、両方に phase を足しました。
+結果として片方は**本物の無駄**で、もう片方は**自分の計測ミス**でした。
+
+#### `cli: module graph walk`（316 ms）→ sibling `.d.ts` scan だった
+
+このラベルは「import を辿る walk」を指していますが、実際に払っていたのは
+別のものでした。`node_modules/typescript/lib/typescript.js` の隣には
+`.d.ts` が **98 file / 3.2 MB** あり、ambient 宣言として program に入れる
+ために全部読み、そして**全部 full parse** していました。
+
+parse の成果物は `type_props` だけで、それを読むのは
+`--reserve-typed-props` だけです。**main loop には既にその gate があり、
+ambient scan には無かった。** 同じ条件を 2 箇所に書いて 1 箇所にしか
+適用していない——このパイプラインで 4 度目です。
+
+read は無条件のままにしました。`files[ambient]` に入れること自体が
+checker のための ambient 宣言の投入で、それが scan の目的です（`case03`）。
+
+4.72 s → 4.51 s。そして残差だったものは `cli: ambient .d.ts scan`
+という 1 行（約 195 ms）になり、top-10 から出ました。
+
+#### `cli: import edge walk` 358 ms → **重複した span**（自分のミス）
+
+excalidraw では edge walk が 338〜358 ms と出て、**最大の項目**に見えました。
+それは間違いです。`edge_micros` は素の wall-clock bracket で、その内側で
+`resolve_micros` が sub-span を積んでいた——**span が重なっていた**ので、
+module resolution の時間が 2 回数えられていました。
+
+`resolve_before_edges` を取って差分を引き、全 row を disjoint にすると
+edge walk は **7 ms** になり、top-10 から消えました。
+
+重なった span は「小さな誤差」ではありません。**発見のように読める
+間違った数字**であり、この調査を実際に間違った関数に向かわせました。
+そして正しい答えは既に `main.mbt` の comment に書いてありました——
+「module resolution が最大の phase であって parsing ではない」。
+
+#### 本命は module resolution だった: 331 ms → 118 ms
+
+disjoint にした表の最大項目は `cli: resolve module paths`（331 ms, 22.1%）
+でした。これを 2 つに割ると:
+
+| | ms |
+| --- | --- |
+| `cli: resolve relative paths` | 53 |
+| `cli: resolve bare specifiers` | **272** |
+
+相対 path の算術は既に cache 済みで、`node_modules` を歩く側は
+**cache が 1 つも無かった**（`module_resolver.mbt` に Map が 0 個）。
+
+**最初の修正は 0 ms でした。** 答え（mode, importer, specifier）を key に
+memo を張ったところ 272 → 277 ms。理由は記録しておく価値があります:
+key に importer を含める**必要がある**（nested `node_modules` は同じ
+specifier を 2 通りに解決しうる）ので、`clsx` を import する 68 file は
+68 個の別 key になり、何も共有しない。繰り返しは実在したのに memo からは
+見えなかった。**importer をまたいで繰り返すのは「問い」ではなく「作業」
+です。**
+
+作業の側を memo しました——`@fs.kind`、file の text read、`@fs.realpath`。
+効いたのは text read です。`resolve_tsconfig_specifier` は
+「bare specifier × importer」ごとに走り、config を毎回 disk から読み直して
+いました。しかも **1 階層あたり 2 回**（`paths` 用と `extends` 用）で、
+excalidraw は 2 階層の `extends` chain です。
+
+272 ms → **71 ms**。excalidraw 全体で 1,536 → 1,405 ms（−8.5%）、
+出力は byte 完全一致。
+
+#### `bundle: link + escape + emit`（1,744 ms）→ 分解して 5.1%
+
+escape analysis は前回分離済みだったので、残りに `bundle: link` と
+`bundle: emit` を足しました。9 MB の `typescript.js` で:
+
+| row | ms |
+| --- | --- |
+| `bundle: emit` | 231 |
+| `bundle: link` | 51 |
+| `observed-names` | 48 |
+| `bundle: unattributed` | **247** |
+
+残差は 1,744 ms / 20.1% から **247 ms / 5.1%** になり、最大項目ではなく
+6 番目になりました。残っているのは statement の連結と phase 間の
+bookkeeping で、これは「誰も計測していない仕事」ではなく「安い仕事」です
+——それが分かっているのが phase を足した意味です。
+
+#### 現在の表（`typescript.js`, 9 MB, shipping flag）
+
+```
+       806 ms   17.1%  mangle
+       629 ms   13.3%  peephole
+       541 ms   11.5%  cli: parse (recursive descent)
+       397 ms    8.4%  inline
+       387 ms    8.2%  cli: read + decode files
+       247 ms    5.1%  bundle: unattributed
+       231 ms    4.7%  bundle: emit
+       207 ms    4.4%  cli: tokenize
+       199 ms    4.2%  cli: ambient .d.ts scan
+       165 ms    3.5%  export-surface
+```
+
+`mangle` と `peephole` が 30.4% で、どちらも本物の仕事です。
+**CLI 側（読み込み・字句・構文解析）が合計 27.6%** で、これは
+「optimizer を速くする」問題ではなく parser の問題です。
+
+## pass lattice の穴を塞ぐ: lowering を値で観測する
+
+`verify-pass-lattice` は 16 通りの flag 組み合わせを 9 MB の
+`typescript.js` に流し、**毎回「15/15 identical」と言い続けながら**、素の
+`--bundle` が mtsc の private field brand を `JSON.stringify` /
+`Object.keys` / spread / `for…in` に漏らしているのを見逃していました
+（#79）。しかも**その組み合わせ（表の 1 行目）を毎回走らせて**います。
+
+理由は独立に 2 つあります。
+
+1. **target が published `.js`** です。`typescript.js` には `#private`
+   field も `enum` も `namespace` も parameter property もありません——
+   つまり **TypeScript 固有の lowering が 1 つも走らない**。漏れるものが
+   無かった。
+2. 仮にそういう field があっても、**観測が `tsc` の stdout だけ**です。
+   内部オブジェクトに own enumerable property が 1 つ増えても stdout には
+   出ません。問いが答えに届いていなかった。
+
+reference leg 自体は独立（baseline は**元の** `typescript.js`）なので、
+これは self-comparison ではなく **coverage gap** です。
+
+### 2 つ目の表
+
+`fixtures/pass-lattice/lowerings.ts` を同じ 15 通りに流します。中身は
+TypeScript 固有 lowering を 1 つずつ——`#private` field（instance と
+static）、parameter property、accessor、`enum`、`const enum`、
+`namespace`（入れ子含む）、abstract/override——そして観測は**値**です:
+own keys、`JSON.stringify`、object spread、`for…in`。brand の漏れや
+field の消失が実際に変えるのはそこだからです。
+
+baseline は **言語そのもの**: Node が
+`--experimental-transform-types` でこの `.ts` を直接実行した結果。
+mtsc の別の出力ではありません。
+
+意図的に**実ライブラリではありません**。9 MB の target が担うのは
+「誰も思いつかなかった形」で、欠けていたのは lowering と
+**答えが届く問い**でした。専用ファイルなら 1 回の安い compile で全
+lowering を覆えます——ライブラリだと、そのライブラリが偶然使っている
+ものしか覆えません。
+
+### 検出力の確認
+
+歴史的バグ（per-module path が `lower_private_fields` を通らない）を
+mutation で戻すと、2 つ目の表が落ち、**漏れた brand を名前で指します**:
+
+```
+[DIFF] bundle   2883 bytes  boxKeys: "" -> "__private_brand__2__value";
+  counterForIn: "" -> "__private_brand__0__count,__private_brand__0__label";
+  counterJson: "{}" -> "{\"__private_brand__0__count\":2,…}" (+2 more)
+```
+
+15 通り × 25 観測で「differs」だけでは動けないので、差分は**動いた field
+を名指し**します。

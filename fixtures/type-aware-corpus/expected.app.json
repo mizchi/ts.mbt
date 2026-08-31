@@ -1,0 +1,56 @@
+{
+  "hono": {
+    "status": "measured",
+    "verdict": "NEUTRAL",
+    "delta": 52,
+    "aware": 21755
+  },
+  "valibot": {
+    "status": "measured",
+    "verdict": "NEUTRAL",
+    "delta": 0,
+    "aware": 8056
+  },
+  "typebox": {
+    "status": "measured",
+    "verdict": "WIN",
+    "delta": 535,
+    "aware": 114303
+  },
+  "immer": {
+    "status": "measured",
+    "verdict": "NEUTRAL",
+    "delta": 0,
+    "aware": 18405
+  },
+  "neverthrow": {
+    "status": "measured",
+    "verdict": "NEUTRAL",
+    "delta": 0,
+    "aware": 5594
+  },
+  "ts-pattern": {
+    "status": "measured",
+    "verdict": "NEUTRAL",
+    "delta": 0,
+    "aware": 9370
+  },
+  "superstruct": {
+    "status": "measured",
+    "verdict": "NEUTRAL",
+    "delta": 26,
+    "aware": 4296
+  },
+  "excalidraw": {
+    "status": "measured",
+    "verdict": "NEUTRAL",
+    "delta": -3,
+    "aware": 121114
+  },
+  "remeda": {
+    "status": "measured",
+    "verdict": "NEUTRAL",
+    "delta": 26,
+    "aware": 3402
+  }
+}

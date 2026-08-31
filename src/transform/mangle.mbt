@@ -61,6 +61,11 @@ pub(all) struct ManglerConfig {
   // dynamic-key flows. Has no effect unless `mangle_properties` is
   // also `true`.
   mangle_properties_shape_color : Bool
+  // `--explain-mangle`: where `build_property_rename_map` writes its
+  // candidate census. A field rather than a parameter because every
+  // caller between here and `bundle.mbt` already threads this config
+  // and none of them has any business knowing about a diagnostic.
+  census : Array[String]?
 }
 
 ///|
@@ -71,7 +76,16 @@ pub fn ManglerConfig::default() -> ManglerConfig {
     mangle_properties: false,
     reserved_properties: [],
     mangle_properties_shape_color: false,
+    census: None,
   }
+}
+
+///|
+pub fn ManglerConfig::with_census(
+  self : ManglerConfig,
+  out : Array[String]?,
+) -> ManglerConfig {
+  { ..self, census: out }
 }
 
 ///|
@@ -163,8 +177,22 @@ let mangler_builtin_reserved : Array[String] = [
   "do", "switch", "case", "default", "break", "continue", "throw", "try", "catch",
   "finally", "new", "delete", "typeof", "instanceof", "void", "in", "of", "yield",
   "await", "async", "import", "export", "from", "as", "extends", "super", "static",
-  "public", "private", "protected", "readonly", "implements", "interface", "type",
-  "namespace", "module", "declare", "abstract", "with", "debugger", "enum",
+  "public", "private", "protected", "implements", "interface", "module", "with",
+  "debugger", "enum",
+  // NOT here, on purpose: `type`, `namespace`, `declare`, `abstract`,
+  // `readonly`. They are TypeScript CONTEXTUAL keywords and perfectly
+  // legal JavaScript variable names, in strict mode too — unlike
+  // `interface` / `implements` / `private` / `protected` / `public` /
+  // `static`, which are reserved in strict mode and a module is strict.
+  //
+  // Listing them cost real bytes, because this set is consulted for two
+  // different questions at once (`ScopeFrame::bind`): which names the
+  // pool may not GENERATE, and which existing bindings may not be
+  // RENAMED. The first is what the list is for; the second is a pure
+  // cost for a name nothing looks up at runtime. typebox declares
+  // `function a6(type, a = {})` all over its bundle — 824 occurrences
+  // of a four-character parameter name in a bundle whose length-3 names
+  // are not even exhausted, against terser's four.
 ]
 
 ///|
@@ -203,6 +231,24 @@ let mangler_builtin_reserved_properties : Array[String] = [
    "isInteger", "isFinite", "isNaN", "isSafeInteger", "parseFloat", "parseInt", "EPSILON",
   "MAX_SAFE_INTEGER", "MIN_SAFE_INTEGER", "MAX_VALUE", "MIN_VALUE", "POSITIVE_INFINITY",
   "NEGATIVE_INFINITY", "NaN",
+  // Property descriptor. `Object.defineProperty(o, "p", { … })` hands
+  // the runtime an object it reads BY NAME, so every key of a
+  // descriptor is somebody else's ABI — the clearest possible case for
+  // this list, and three of the six were missing.
+  //
+  // `get`, `set` and `value` were here already, but incidentally:
+  // `get`/`set` under Map/Set and `value` under the iterator protocol.
+  // Nothing named the descriptor, so the three flags nobody else needed
+  // were absent, and the DEAD-PROPERTY pass dropped them as unread keys
+  // — not the mangler renaming them, which is why `value` surviving
+  // made the shape look safe. `{ value: 1, enumerable: true }` became
+  // `{ value: 1 }`, and since every `defineProperty` default is
+  // `false`, dropping a `true` flag inverts it: `Object.keys` stopped
+  // seeing the property, `writable: true` made an assignment throw in
+  // the module's strict mode, and `configurable: true` made `delete`
+  // throw. Dropping a `false` flag is harmless, which is what made two
+  // of the three probes pass at first.
+   "enumerable", "configurable", "writable",
   // Object statics (the ones not already covered above)
    "assign", "create", "defineProperty", "defineProperties", "freeze", "fromEntries",
   "getOwnPropertyDescriptor", "getOwnPropertyDescriptors", "getOwnPropertyNames",
@@ -227,7 +273,14 @@ let mangler_builtin_reserved_properties : Array[String] = [
    "parse", "stringify", "toJSON",
   // Map / Set
    "size", "has", "get", "set", "delete", "clear", "add",
-  // Iterator protocol
+  // Iterator protocol. `next` / `return` / `throw` also live in
+  // `implicitly_invoked_protocol_methods`, which is the SUBSET the
+  // language invokes without naming — this list is about renaming a
+  // name that belongs to somebody else's ABI, that one is about
+  // deleting a method nothing appears to call. Both facts were here
+  // and `class_method_dce` consulted neither, so a class whose only
+  // caller was `[...x]` lost its `next` and the spread threw. Keep the
+  // two in step: a protocol added there belongs here too.
    "next", "return", "throw", "done", "value",
   // Symbol well-knowns (the property access forms)
    "iterator", "asyncIterator",
@@ -586,15 +639,47 @@ fn collect_props_in_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit {
 fn build_property_rename_map(
   block : @ast.TsBlock,
   reserved : Map[String, Bool],
+  // `--explain-mangle` census. Two narrowings of the RESERVED side were
+  // implemented and measured at exactly zero bytes before anyone counted
+  // this side of the subtraction: how many property names the mangler
+  // even considers. A reserved-set experiment is meaningless if the
+  // candidate set is empty.
+  census? : Array[String]? = None,
 ) -> Map[String, String] {
   let names : Map[String, Bool] = {}
   collect_property_names(block, names)
+  let mut n_reserved = 0
+  let mut n_sentinel = 0
   // Filter to mangleable names, then sort so the mapping is stable
   // across iteration orders.
   let candidates : Array[String] = []
+  let mut n_private_kept = 0
   for entry in names {
     let n = entry.0
+    // A `#private` name is the one property class that needs NO proof.
+    // It is class-scoped by language rule: no consumer, no reflection,
+    // no serialization and no computed access can name it, so nothing
+    // outside the class body can observe the rename. That is why this
+    // runs BEFORE the reserved check — the reserved set answers "can
+    // something outside see this name", and for a `#` name the answer is
+    // no whatever the escape analysis concluded. Six of nine measured
+    // targets reserve the wildcard, so leaving privates behind the check
+    // would keep them un-mangled exactly where the pass is otherwise
+    // inert.
+    //
+    // The old skip gave two reasons and only the second was real: there
+    // is "nothing to hide" (true, and irrelevant — this is about BYTES,
+    // and hono's `#notFoundHandler` is 16 characters), and renaming
+    // would "drop the `#`, turning a private field back into an ordinary
+    // visible property" (true of a bare mint, so the mint below keeps
+    // the prefix).
+    if is_private_member_name(n) {
+      n_private_kept = n_private_kept + 1
+      candidates.push(n)
+      continue
+    }
     if reserved.contains(n) {
+      n_reserved = n_reserved + 1
       continue
     }
     // Internal parser sentinels (`@@spread:N`, `@@computed:N`,
@@ -605,28 +690,66 @@ fn build_property_rename_map(
     // misses it, producing invalid output like
     // `{a:[a]:42}` for `{[s]: 42}`.
     if n.has_prefix("@@") {
-      continue
-    }
-    // A `#private` name is already unreachable from outside its class
-    // body, so there is nothing to hide — and renaming it would drop
-    // the `#`, turning a private field back into an ordinary visible
-    // property. `private_fields.mbt` puts these here.
-    if is_private_member_name(n) {
+      n_sentinel = n_sentinel + 1
       continue
     }
     candidates.push(n)
   }
   candidates.sort()
+  match census {
+    Some(out) => {
+      out.push(
+        "\{names.size()} distinct property name(s) in the bundle; \{candidates.length()} are candidates.",
+      )
+      out.push(
+        "dropped: \{n_reserved} reserved, \{n_sentinel} parser sentinel; kept \{n_private_kept} `#private` (class-scoped, no proof needed).",
+      )
+      // How much a rename can possibly save. A name already one or two
+      // characters long is renamed to another one- or two-character
+      // name, so the saving is zero or one byte PER OCCURRENCE — the
+      // same arithmetic the export-alias rule needed.
+      let mut short_names = 0
+      let mut total_len = 0
+      for c in candidates {
+        if c.length() <= 2 {
+          short_names = short_names + 1
+        }
+        total_len = total_len + c.length()
+      }
+      if candidates.length() > 0 {
+        let avg = total_len / candidates.length()
+        out.push(
+          "candidate length: \{avg} chars on average, \{short_names} already <= 2 chars.",
+        )
+        let show = if candidates.length() < 12 {
+          candidates.length()
+        } else {
+          12
+        }
+        let sample : Array[String] = []
+        for i in 0..<show {
+          sample.push(candidates[i])
+        }
+        out.push("e.g. \{sample.join(", ")}")
+      }
+    }
+    None => ()
+  }
   let map : Map[String, String] = {}
   let mut counter = 0
   for n in candidates {
+    let private_ = is_private_member_name(n)
     let mut candidate = next_short_name(counter)
     counter = counter + 1
-    while reserved.contains(candidate) {
+    // A private mint keeps the `#`, so it lands in the private
+    // namespace: `#a` can never equal a reserved public name, and can
+    // never collide with a public `a` on the same class either — they
+    // are different members in JavaScript.
+    while !private_ && reserved.contains(candidate) {
       candidate = next_short_name(counter)
       counter = counter + 1
     }
-    map[n] = candidate
+    map[n] = if private_ { "#" + candidate } else { candidate }
   }
   map
 }
@@ -1982,21 +2105,34 @@ fn mangle_block_impl(
   // class declared later in the source — common pattern in
   // drizzle-orm's circular sql<->column refs) resolve to the
   // same rename as the eventual declaration site.
-  for s in block.stmts {
-    match s {
-      Let(@ast.TsBinding::Ident(name), _, _)
-      | Const(@ast.TsBinding::Ident(name), _, _)
-      | Var(@ast.TsBinding::Ident(name), _, _) =>
-        if !root.renames.contains(name) {
-          let _ = root.bind(name, reserved)
-        }
-      NativeClassStmt(decl, _) =>
-        if decl.name != "" && !root.renames.contains(decl.name) {
-          let _ = root.bind(decl.name, reserved)
-        }
-      _ => ()
+  //
+  // A multi-declarator group (`let a = 1, b = 2;`) is a `Block` in this
+  // AST, not two sibling `Let`s, so it needs the same recursion
+  // `rename_block_inline_in`'s prebind does. Without it the group's
+  // names are invisible here, an earlier statement's reference to one of
+  // them resolves to nothing and keeps its original spelling, and then
+  // the declaration is renamed underneath it: `mtsc --mangle` turned
+  // `function f(t){return isArray(t)?1:2} let isArray=Array.isArray,
+  // isMap=…` into a call to an `isArray` that no longer exists.
+  fn prebind_top_level(stmts : Array[@ast.TsStmt]) -> Unit {
+    for s in stmts {
+      match s {
+        Let(b, _, _) | Const(b, _, _) | Var(b, _, _) =>
+          prebind_decl_names(b, root, reserved)
+        NativeClassStmt(decl, _) =>
+          if decl.name != "" && !root.renames.contains(decl.name) {
+            let _ = root.bind(decl.name, reserved)
+          }
+        Block(b) =>
+          if is_synthetic_multi_decl_block(b) {
+            prebind_top_level(b.stmts)
+          }
+        _ => ()
+      }
     }
   }
+
+  prebind_top_level(block.stmts)
   // Identifier-mangling pass first (so any synthesized identifiers
   // can't collide with property names we're about to rename).
   let new_stmts : Array[@ast.TsStmt] = []
@@ -2019,7 +2155,7 @@ fn mangle_block_impl(
     let prop_map = if cfg.mangle_properties_shape_color {
       build_property_rename_map_colored(renamed, prop_reserved)
     } else {
-      build_property_rename_map(renamed, prop_reserved)
+      build_property_rename_map(renamed, prop_reserved, census=cfg.census)
     }
     rename_properties_in_block(renamed, prop_map)
   } else {
@@ -2041,7 +2177,88 @@ fn collect_top_level_decls(
       Var(b, _, _) | Let(b, _, _) | Const(b, _, _) =>
         collect_binding_names(b, out)
       NativeClassStmt(decl, _) => if decl.name != "" { out[decl.name] = true }
+      // `let a = 1, b = 2;` is a `Block` of `Let`s, and its binders are
+      // top-level all the same. Missing them here left them out of the
+      // reserved set under `preserve_top_level`, so a nested scope was
+      // free to mint the same short name and shadow them.
+      Block(b) =>
+        if is_synthetic_multi_decl_block(b) {
+          collect_top_level_decls(b, out)
+        }
       _ => ()
+    }
+  }
+}
+
+///|
+/// Every name a binding introduces, in the order the pattern writes
+/// them.
+///
+/// `collect_binding_names` answers the same question into a `Map`, which
+/// is fine for a membership test and not for prebinding: the short names
+/// are handed out in iteration order, so a hash order would make the
+/// output depend on the run. Traversal order also matches what the
+/// `Ident` case has always done — statement order — so a pattern and a
+/// plain declaration get names the same way.
+fn binding_names_in_order(binding : @ast.TsBinding) -> Array[String] {
+  let out : Array[String] = []
+  collect_binding_names_ordered(binding, out)
+  out
+}
+
+///|
+fn collect_binding_names_ordered(
+  binding : @ast.TsBinding,
+  out : Array[String],
+) -> Unit {
+  match binding {
+    Ident(n) => out.push(n)
+    Array(ab) => {
+      for elem in ab.items {
+        match elem {
+          Some(be) => collect_binding_names_ordered(be.binding, out)
+          None => ()
+        }
+      }
+      match ab.rest {
+        Some(r) => collect_binding_names_ordered(r, out)
+        None => ()
+      }
+    }
+    Object(ob) => {
+      for p in ob.props {
+        collect_binding_names_ordered(p.binding, out)
+      }
+      match ob.rest {
+        Some(n) => out.push(n)
+        None => ()
+      }
+    }
+    Target(_) => ()
+  }
+}
+
+///|
+/// Pre-bind every name a `let` / `const` declaration introduces, so a
+/// reference that PRECEDES it in source order resolves to the same
+/// rename as the declaration.
+///
+/// The two prebind passes used to match `Let(Ident(name), …)` only, so a
+/// DESTRUCTURING declaration was invisible to them: `const bump = () => {
+/// setValue(1) }; const [value, setValue] = useState(0);` renamed the
+/// declaration and left the earlier closure calling the old name.
+/// `useState` makes that shape ubiquitous in React code — four of
+/// Excalidraw's components hit it under plain `mtsc --mangle`.
+///
+/// Same bug as the multi-declarator group, one binding form over.
+fn prebind_decl_names(
+  binding : @ast.TsBinding,
+  scope : ScopeFrame,
+  reserved : Map[String, Bool],
+) -> Unit {
+  for n in binding_names_in_order(binding) {
+    if !scope.renames.contains(n) {
+      let _ = scope.bind(n, reserved)
     }
   }
 }
@@ -2425,31 +2642,20 @@ fn rename_stmt(
 }
 
 ///|
-/// Rename `block` using the given scope without spawning a new
-/// frame. Callers that need a fresh block-scope frame should
-/// allocate it via `ScopeFrame::child(scope)` and pass that to
-/// `rename_block_inline_in` directly — this helper is kept for the
-/// rare callers where the caller already represents the scope they
-/// want the body to inhabit (e.g. the function-body root frame).
+/// Is this `Block` a multi-declarator group (`let a = 1, b = 2;`) rather
+/// than a real block statement?
+///
+/// The question the mangler is really asking is "will the emitter print
+/// braces around this?", because that — not the node's constructor — is
+/// what decides whether the binders end up in the enclosing scope or in
+/// a scope of their own. So defer to the emitter's own predicate instead
+/// of re-deriving the shape check here: two copies of this rule drifted
+/// once already (this one accepted a real `{ let x = 1; let y = 2; }`
+/// that `block_is_inline_decl_group` rejects on `stmt_positions`), and a
+/// mangler that disagrees with the emitter about scope boundaries
+/// renames across them.
 fn is_synthetic_multi_decl_block(b : @ast.TsBlock) -> Bool {
-  if b.stmts.length() < 2 {
-    return false
-  }
-  let kind = match b.stmts[0] {
-    Let(_, _, _) => "let"
-    Const(_, _, _) => "const"
-    Var(_, _, _) => "var"
-    _ => return false
-  }
-  for s in b.stmts {
-    match s {
-      Let(_, _, _) => if kind != "let" { return false }
-      Const(_, _, _) => if kind != "const" { return false }
-      Var(_, _, _) => if kind != "var" { return false }
-      _ => return false
-    }
-  }
-  true
+  block_is_inline_decl_group(b)
 }
 
 ///|
@@ -2491,11 +2697,9 @@ fn rename_block_inline_in(
   fn prebind_stmts(stmts : Array[@ast.TsStmt]) -> Unit {
     for s in stmts {
       match s {
-        Let(@ast.TsBinding::Ident(name), _, _)
-        | Const(@ast.TsBinding::Ident(name), _, _) =>
-          if !scope.renames.contains(name) {
-            let _ = scope.bind(name, reserved)
-          }
+        // `var` names are NOT prebound here — see the note below; they
+        // hoist to the enclosing function frame instead.
+        Let(b, _, _) | Const(b, _, _) => prebind_decl_names(b, scope, reserved)
         NativeClassStmt(decl, _) =>
           if decl.name != "" && !scope.renames.contains(decl.name) {
             let _ = scope.bind(decl.name, reserved)
@@ -2675,7 +2879,7 @@ fn rename_expr(expr : @ast.TsExpr, scope : ScopeFrame) -> @ast.TsExpr {
     ObjectLit(entries) => {
       let out : Array[(String, @ast.TsExpr)] = []
       for ent in entries {
-        out.push((ent.0, rename_expr(ent.1, scope)))
+        out.push((ent.0, rename_object_entry_value(ent.0, ent.1, scope)))
       }
       ObjectLit(out)
     }
@@ -2999,6 +3203,84 @@ fn rename_class_decl_idents(
     decorators: new_decorators,
     is_declare: false,
   }
+}
+
+///|
+/// Rename an object-literal property VALUE, keeping a method shorthand
+/// a method shorthand.
+///
+/// `{ p() { … } }` is stored as `("p", FuncExpr { name: "p", … })` and
+/// the emitter reconstructs the shorthand by checking `f.name == key`.
+/// `rename_function_expr` drops the name of any function expression that
+/// does not reference itself — right for `exports = function isExtglob()`,
+/// wrong here, because the name is not a binding at all: it IS the key.
+/// Losing it fell back to `p: function () {…}`, and peephole then made a
+/// `this`-free one an arrow, so `p(){…}` shipped as `p:()=>{…}`. Three
+/// bytes per method, under plain `--mangle`, on any object literal with a
+/// method — and the reason the terser-parity `if_return` case looked 11
+/// bytes behind when the rule itself is worth 8.
+///
+/// Keeping the name is also the safer half: emitted as the shorthand it
+/// binds nothing, whereas `p: function p() {…}` makes `p` a self-binding
+/// inside the body that shadows whatever `p` the body meant.
+fn rename_object_entry_value(
+  key : String,
+  value : @ast.TsExpr,
+  scope : ScopeFrame,
+) -> @ast.TsExpr {
+  match value {
+    FuncExpr(f) if is_method_shorthand_worth_keeping(key, f) => {
+      let renamed = rename_function_expr(f, scope)
+      FuncExpr({ ..renamed, name: key })
+    }
+    _ => rename_expr(value, scope)
+  }
+}
+
+///|
+fn is_method_shorthand_worth_keeping(key : String, f : @ast.TsFunc) -> Bool {
+  f.name == key && key != "" && !object_method_prefers_arrow(f)
+}
+
+///|
+/// Would this object-literal method be SHORTER as a concise arrow?
+///
+/// Two spellings, and which one wins depends entirely on the body:
+///
+///     p(a) { return a }      14 bytes
+///     p: a => a               6 bytes
+///     p() { f(); g() }        4 + body
+///     p: () => { f(); g() }   7 + body
+///
+/// so a single-`return` body wants the arrow and everything else wants
+/// the shorthand. Keeping the name unconditionally cost 7 bytes on the
+/// terser-parity `collapse_vars` case, which is how this got noticed —
+/// the first version of the shorthand fix traded one loss for another.
+///
+/// The arrow only materialises if `peep_expr` can build it, so this
+/// mirrors its safety conditions: an arrow reads `this` and `arguments`
+/// from the enclosing scope, and there is no arrow spelling of a
+/// generator. When they do not hold the conversion will not happen and
+/// the shorthand is both shorter and correct, so the answer is no.
+fn object_method_prefers_arrow(f : @ast.TsFunc) -> Bool {
+  if f.is_generator {
+    return false
+  }
+  if !(f.body.stmts is [Return(Some(_))]) {
+    return false
+  }
+  if block_references_name(f.body, "this") ||
+    block_references_name(f.body, "arguments") {
+    return false
+  }
+  // A parameter default is evaluated in the callee's scope, so it reads
+  // `this` exactly as a body reference would.
+  for e in param_subexprs(f.params) {
+    if expr_references_name(e, "this") || expr_references_name(e, "arguments") {
+      return false
+    }
+  }
+  true
 }
 
 ///|
@@ -3356,6 +3638,31 @@ fn rename_properties_in_expr(
   prop_map : Map[String, String],
 ) -> @ast.TsExpr {
   match expr {
+    // `#x in obj` — the ergonomic brand check, standard since ES2022 and
+    // the idiomatic way to write a class type guard. The parser lowers
+    // the `#x` token in that position to a bare `Var`, so it is not a
+    // property position and this walker used to leave it alone: the class
+    // body's `this.#path` was renamed and the `in` operand was not, so
+    // plain `mtsc --bundle` emitted
+    // `__private_brand__0__path in v` — a reference to nothing, throwing
+    // `ReferenceError` — and with `--mangle-properties` the same shape
+    // left `#path` behind while the declaration became `#a`.
+    //
+    // Gated on the name being a private member or a private brand,
+    // because neither can be an ordinary variable: `#x` is not a legal
+    // identifier and the brand prefix is minted only by
+    // `mangle_private_name`. Without the gate this arm would rewrite
+    // `someVar in obj` whenever `someVar` collided with a mangled
+    // property name.
+    BinOp(@ast.TsBinOp::In, @ast.TsExpr::Var(n), rhs) if is_private_member_name(
+        n,
+      ) ||
+      private_brand_member(n) is Some(_) =>
+      BinOp(
+        @ast.TsBinOp::In,
+        @ast.TsExpr::Var(rename_prop_key(n, prop_map)),
+        rename_properties_in_expr(rhs, prop_map),
+      )
     PropAccess(recv, name) =>
       PropAccess(
         rename_properties_in_expr(recv, prop_map),
@@ -3408,7 +3715,19 @@ fn rename_properties_in_expr(
         } else {
           rename_prop_key(ent.0, prop_map)
         }
-        out.push((new_key, rename_properties_in_expr(ent.1, prop_map)))
+        let new_value = rename_properties_in_expr(ent.1, prop_map)
+        // A method shorthand is keyed twice — once as the property key,
+        // once as `FuncExpr.name`, which is how the emitter recognises
+        // it (see `rename_object_entry_value`). Renaming the key alone
+        // desynchronises the pair and the method re-emits as
+        // `newkey: function oldname () {…}`, which is longer and makes
+        // `oldname` a self-binding inside the body.
+        let synced = match new_value {
+          FuncExpr(f) if f.name == ent.0 && ent.0 != "" =>
+            @ast.TsExpr::FuncExpr({ ..f, name: new_key })
+          _ => new_value
+        }
+        out.push((new_key, synced))
       }
       ObjectLit(out)
     }

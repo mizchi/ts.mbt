@@ -88,6 +88,9 @@ pub(all) struct BundleOptions {
   // import instead of failing. Set by the CLI, which has already
   // asked the real filesystem; in-memory callers stay strict.
   allow_unresolved_imports : Bool
+  // Phases the caller switched off, by the name `timer.phase` records.
+  // See `with_disabled_phases`.
+  disabled_phases : Map[String, Bool]
   // Measure wall time per pipeline phase into `BundleOutput.timings`.
   // Off by default: with it off `PhaseTimer` records nothing and the
   // instrumentation is one branch per phase.
@@ -117,6 +120,7 @@ pub fn BundleOptions::default() -> BundleOptions {
     extra_reserved_props: [],
     explain: false,
     allow_unresolved_imports: false,
+    disabled_phases: {},
     timing: false,
     parsed_blocks: {},
   }
@@ -136,6 +140,34 @@ pub fn BundleOptions::with_timing(
   t : Bool,
 ) -> BundleOptions {
   { ..self, timing: t }
+}
+
+///|
+/// Turn a named pipeline phase off, for attribution.
+///
+/// `--timing` says how long each phase takes; nothing said how many
+/// BYTES each one is responsible for, and "the mechanism is
+/// unidentified" sat in the known-unfixed table for two rows because of
+/// it. A twenty-pass pipeline gives a guess nothing to stand on: the
+/// only way to attribute a size delta to a phase is to run without it.
+///
+/// Names are the ones `timer.phase` already uses, so `--timing` output
+/// doubles as the list of what can be switched off.
+pub fn BundleOptions::with_disabled_phases(
+  self : BundleOptions,
+  names : Map[String, Bool],
+) -> BundleOptions {
+  { ..self, disabled_phases: names }
+}
+
+///|
+/// Is this phase enabled? Every gated call site asks by the same name
+/// `timer.phase` records it under.
+pub fn BundleOptions::phase_enabled(
+  self : BundleOptions,
+  name : String,
+) -> Bool {
+  !self.disabled_phases.contains(name)
 }
 
 ///|
@@ -234,6 +266,22 @@ pub fn BundleOptions::with_treeshake(
 }
 
 ///|
+/// Collapse repeats, keeping first-seen order. The per-module emit path
+/// runs the class-method scan once per file over one bundle-wide scope,
+/// so a single `Reflect.ownKeys` call is reported once per module.
+fn dedup_reflection_warnings(lines : Array[String]) -> Array[String] {
+  let seen : Map[String, Bool] = {}
+  let out : Array[String] = []
+  for l in lines {
+    if !seen.contains(l) {
+      seen[l] = true
+      out.push(l)
+    }
+  }
+  out
+}
+
+///|
 pub(all) struct BundleOutput {
   // The concatenated JavaScript output.
   js : String
@@ -247,6 +295,15 @@ pub(all) struct BundleOutput {
   // limited to impure-getter detection; future passes can append
   // here. Empty when nothing is amiss.
   warnings : Array[String]
+  // Reflection in the input that no optimization can see through:
+  // `Reflect.ownKeys` and friends enumerate NON-enumerable properties,
+  // which is exactly what a class prototype method is, so one call
+  // anywhere keeps every method of every class in the bundle. Kept
+  // separate from `warnings` because it is not a lint: it is the
+  // compiler reporting that the author's own code, not a missing
+  // analysis, is what stopped an optimization. Empty when the bundle
+  // contains none.
+  reflection_warnings : Array[String]
   // `--explain-mangle` output: why each minify decision went the way it
   // did. Empty unless `BundleOptions.explain` was set.
   explain : Array[String]
@@ -297,6 +354,21 @@ priv struct ModuleNode {
   // The class lowering drops the annotation, so a whole-program pass
   // needs it carried alongside. See `TsModuleBlock.class_fields`.
   class_fields : Array[(String, @ast.TsType)]
+  // Specifiers this module requests at runtime, in source order —
+  // imports and re-exports interleaved as they appear. See
+  // `TsModuleBlock.module_request_order` and `topological_order`.
+  module_request_order : Array[String]
+  // Names this module exports with `export type { X }` — no runtime
+  // value. See `TsModuleBlock.type_only_exports`.
+  type_only_exports : Map[String, Bool]
+  // `const enum` declarations this module made. A const enum produces
+  // NO runtime binding — every `E.Member` is meant to become a literal —
+  // so a consumer in another module has nothing to link against and the
+  // reference has to be substituted instead. `load_module_graph` can
+  // only substitute the uses it can see, which are this module's; the
+  // cross-module half needs the declarations carried on the node. See
+  // `inline_imported_const_enums`.
+  const_enums : Array[@ast.TsEnumDecl]
   // For CJS-wrapped modules (esbuild-style `((module)=>{...})({get exports(){return X;}, ...})`),
   // the top-level variable that holds the module's exports after the wrapper runs.
   // Named imports from such a module that can't be resolved via export_specs fall
@@ -309,14 +381,41 @@ priv struct ModuleNode {
 // ---------------------------------------------------------------------------
 
 ///|
-/// Resolve `specifier` relative to `from_path`. Only `./` / `../` /
+/// Does this specifier name a file relative to the importer, rather than
+/// a package?
+///
+/// The obvious spelling of this test is `has_prefix("./") ||
+/// has_prefix("../")`, and it is wrong for two specifiers that are as
+/// relative as any: `"."` and `".."`. Both are FALSE under that test, so
+/// they fall through to bare-specifier handling and the directory they
+/// name is left external.
+///
+/// `import { x } from "."` is how a package's own modules reach their
+/// barrel — Excalidraw's element package writes it, and Node then failed
+/// the bundle with `ERR_UNSUPPORTED_DIR_IMPORT` because the import
+/// survived verbatim into the output.
+///
+/// A shared predicate rather than the test inlined at each site, because
+/// the loader tests this four times (import / re-export, each with a
+/// type-only guard and a resolve branch) and the two loops are mirror
+/// images. Every bug this pass has had in that shape came from one copy
+/// being updated and its mirror not.
+pub fn is_relative_specifier(specifier : String) -> Bool {
+  specifier == "." ||
+  specifier == ".." ||
+  specifier.has_prefix("./") ||
+  specifier.has_prefix("../")
+}
+
+///|
+/// Resolve `specifier` relative to `from_path`. Only relative and
 /// rooted (`/`) specifiers are handled here; bare specifiers (e.g.
 /// `react`) fall through to the caller's external resolver.
 fn resolve_relative(from_path : String, specifier : String) -> String? {
   if specifier.has_prefix("/") {
     return Some(normalize_path(specifier))
   }
-  if !specifier.has_prefix("./") && !specifier.has_prefix("../") {
+  if !is_relative_specifier(specifier) {
     return None
   }
   let dir = dirname(from_path)
@@ -382,7 +481,10 @@ fn resolve_with_extensions(
     }
   }
   for ext in exts {
-    let cand = base + "/index" + ext
+    // `base` is empty when a flat VFS resolves `from "."` — the
+    // importer has no directory component, so the directory the
+    // specifier names is the root itself. `"/index.ts"` is not it.
+    let cand = if base == "" { "index" + ext } else { base + "/index" + ext }
     if files.contains(cand) {
       return cand
     }
@@ -452,6 +554,7 @@ pub fn bundle_modules(
       opts.aliases,
       opts.allow_unresolved_imports,
       opts.parsed_blocks,
+      opts.jsx,
     ) {
     Ok(_) => ()
     Err(e) => return Err(e)
@@ -464,6 +567,36 @@ pub fn bundle_modules(
     @bench.monotonic_clock_end(graph_started),
   )
   let order = topological_order(modules, entry)
+  // Substitute the const-enum members each module reads through its
+  // IMPORTS. `load_module_graph` already inlined each module's own
+  // enums, which had been taken for the whole job — but a const enum
+  // emits no runtime binding, so a cross-module read has nothing for the
+  // linker to point at and had never been substituted either. It just
+  // survived into the bundle as a free variable.
+  //
+  // This runs before the linker for that reason: by the time the linker
+  // is rewriting imported references, `ArchType.Array` should already be
+  // `1` and there should be no `ArchType` left to resolve.
+  for path in order {
+    let m = match modules.get(path) {
+      Some(node) => node
+      None => continue
+    }
+    if m.import_decls.length() == 0 {
+      continue
+    }
+    let table = imported_const_enum_table(
+      m.import_decls,
+      m.resolved_imports,
+      p => modules.get(p).map(n => n.const_enums),
+      p => modules.get(p).map(n => n.export_specs),
+      p => modules.get(p).map(n => n.reexport_specs),
+      (from, spec) => modules.get(from).bind(n => n.resolved_imports.get(spec)),
+    )
+    if table.size() > 0 {
+      modules[path] = { ..m, block: inline_const_enums(m.block, table) }
+    }
+  }
   // Lift IIFE-lowered classes to native `class Name { … }` syntax on
   // each module individually BEFORE the linker pass. The parser emits
   // computed-key temp vars (`let __class_key_0 = expr`) inside the
@@ -487,7 +620,9 @@ pub fn bundle_modules(
   // into one binding and `import { HonoBase } from "./hono-base"`
   // (which re-exports `Hono as HonoBase`) leaves `HonoBase` as a
   // free variable in the consumer.
-  let link_renames = link_module_graph(modules, order, external_imports)
+  let link_renames = timer.phase("bundle: link", () => {
+    link_module_graph(modules, order, external_imports)
+  })
   // Names the bundle will export. Used three times below: as the members
   // class-method DCE must keep (a consumer calls them even when nothing
   // inside the bundle does), as treeshake roots (nothing inside the
@@ -518,6 +653,8 @@ pub fn bundle_modules(
   let sources_content : Array[String] = []
   let module_paths : Array[String] = []
   let warnings : Array[String] = []
+  // Reflection the passes met, for `BundleOutput.reflection_warnings`.
+  let reflection_warnings : Array[String] = []
   // `--explain-mangle` output, gathered per section and concatenated in
   // a fixed reading order at the end. The passes run in pipeline order,
   // which is not the order a person wants to read the answer in: the
@@ -528,6 +665,14 @@ pub fn bundle_modules(
   let explain_params : Array[String] = []
   let explain_fields : Array[String] = []
   let explain_tags : Array[String] = []
+  // `tag-rewrite`, the type-driven tag renumbering, is a different pass
+  // from `discriminant_ints` above: it reads declared unions, runs early,
+  // and does not need `--mangle-properties`. Its section is separate for
+  // the same reason — one of them saying "nothing declined" tells you
+  // nothing about the other.
+  let explain_type_tags : Array[String] = []
+  let explain_dispatchers : Array[String] = []
+  let explain_type_checks : Array[String] = []
   let explain_methods : Array[String] = []
   // Set when the escape analysis reserved the wildcard. Every later
   // section then declines everything, and saying so once beats
@@ -655,36 +800,105 @@ pub fn bundle_modules(
       stmt_positions: combined_positions,
     }
     // Type-predicate inline.
-    timer.phase("predicate-inline", () => {
-      let predicates = build_predicate_table(combined)
-      if !predicates.entries.is_empty() {
-        combined = inline_predicates(combined, predicates)
-      }
-    })
+    if opts.phase_enabled("predicate-inline") {
+      timer.phase("predicate-inline", () => {
+        let predicates = build_predicate_table(combined, exported=export_roots)
+        if !predicates.entries.is_empty() {
+          combined = inline_predicates(combined, predicates)
+        }
+      })
+    }
     // Literal-union switch folding. Specializes `dispatch("x", n)`
     // when `dispatch` is a `switch (k) { case ...: return ... }`
     // function whose first param is a closed string-literal union.
-    timer.phase("switch-fold", () => {
-      let sw = build_switch_fold_table(combined)
-      if !sw.entries.is_empty() {
-        combined = switch_fold(combined, sw)
+    let switch_fold_declines : Array[String] = []
+    if opts.phase_enabled("switch-fold") {
+      timer.phase("switch-fold", () => {
+        let sw = build_switch_fold_table(
+          combined,
+          explain=if opts.explain { Some(switch_fold_declines) } else { None },
+        )
+        if !sw.entries.is_empty() {
+          combined = switch_fold(combined, sw)
+        }
+      })
+    }
+    if opts.explain {
+      explain_dispatchers.push("")
+      explain_dispatchers.push(
+        "literal-union dispatchers: why a call was not specialized",
+      )
+      explain_dispatchers.push("")
+      if switch_fold_declines.length() == 0 {
+        explain_dispatchers.push("  nothing declined.")
       }
-    })
+      for line in switch_fold_declines {
+        explain_dispatchers.push("  * " + line)
+      }
+    }
     // `as const` (and equivalent) array/object inline at use sites.
     // Replaces `NAME[i]` / `NAME.k` with the underlying literal value
     // when NAME is a top-level `const` of all-literal-element shape
     // and every reference is a safe static read.
-    combined = timer.phase("as-const-inline", () => {
-      as_const_inline_block(combined)
-    })
+    combined = if opts.phase_enabled("as-const-inline") {
+      timer.phase("as-const-inline", () => as_const_inline_block(combined))
+    } else {
+      combined
+    }
+    // Scalar `const` propagation (terser's `reduce_vars`). Shares
+    // `as_const_inline`'s walker but is its own phase: different
+    // candidates, a different disqualification rule, and `--phases`
+    // can only price a phase that corresponds to one rule. Runs before
+    // `fold` because the point is to put a literal where `fold` can
+    // reach it — `K * 2` folds to nothing, `5 * 2` folds to `10`.
+    combined = if opts.phase_enabled("const-scalar-inline") {
+      timer.phase("const-scalar-inline", () => {
+        const_scalar_inline_block(combined)
+      })
+    } else {
+      combined
+    }
     // Discriminant-tag string -> number rewrite. Gated on
     // a bundle-wide no-escape-sink scan; for each closed
     // string-literal discriminated union whose `K` property is
     // never observed outside switch heads and `===`/`!==`
     // comparisons, swap the string tags for small integers.
-    combined = timer.phase("tag-rewrite", () => {
-      tag_rewrite_block(combined, combined_type_aliases)
-    })
+    //
+    // It also needs both escape routes that leave no trace in the
+    // bundle's own statements: the export surface (a consumer holding an
+    // exported value, or building one for an exported signature, can
+    // compare its tag against the original string) and a hand-off
+    // through an imported callee.
+    let tag_rewrite_declines : Array[String] = []
+    combined = if opts.phase_enabled("tag-rewrite") {
+      timer.phase("tag-rewrite", () => {
+        tag_rewrite_block(
+          combined,
+          combined_type_aliases,
+          Some({
+            exported: export_roots,
+            externals: imported_bindings(external_imports),
+          }),
+          interfaces=combined_interfaces,
+          explain=if opts.explain { Some(tag_rewrite_declines) } else { None },
+        )
+      })
+    } else {
+      combined
+    }
+    if opts.explain {
+      explain_type_tags.push("")
+      explain_type_tags.push(
+        "typed discriminant tags: why a union kept its strings",
+      )
+      explain_type_tags.push("")
+      if tag_rewrite_declines.length() == 0 {
+        explain_type_tags.push("  nothing declined.")
+      }
+      for line in tag_rewrite_declines {
+        explain_type_tags.push("  * " + line)
+      }
+    }
     // Lift the IIFE-lowered class shape back to native
     // `class Name { … }` syntax. Smaller emit, plus
     // `class_method_dce_block` then operates on the structured
@@ -716,18 +930,48 @@ pub fn bundle_modules(
     })
     // Class-method DCE: drop methods on native class declarations
     // that nothing in the bundle accesses by name — except the ones
-    // the export surface reaches, which the consumer calls. Gated on
-    // the absence of reflection / dynamic-key access in the bundle.
+    // the export surface reaches, which the consumer calls, and the
+    // ones something OFF the bundle can invoke. Gated on the absence
+    // of reflection / dynamic-key access in the bundle.
+    //
+    // The off-bundle set is computed whether or not property mangling
+    // is on: this pass DELETES on the strength of it, so the analysis
+    // is a correctness prerequisite rather than an optimization's.
+    // `mtsc entry.ts --bundle` with no other flag ran this pass and
+    // deleted every method of a class it had handed to `console.log`.
     let method_dce_reasons : Array[String] = []
-    combined = timer.phase("class-method-dce", () => {
-      class_method_dce_block(
-        combined,
-        keep=export_surface,
-        class_fields=combined_class_fields,
-        type_aliases=combined_type_aliases,
-        explain=if opts.explain { Some(method_dce_reasons) } else { None },
-      )
-    })
+    combined = if opts.phase_enabled("class-method-dce") {
+      // Passed as a THUNK so the analysis runs only if the pass gets far
+      // enough to read it. On the 9 MB TypeScript bundle the sniff scan
+      // blocks the pass, and this was 1,270 ms of a 7,679 ms compile
+      // spent on an answer nobody looked at — the output is
+      // byte-identical with the whole phase disabled. The timer stays
+      // inside the closure, so the phase reports the time it actually
+      // spent, which is zero when it is never forced.
+      let dce_scope_for_reach = combined
+      let off_bundle = () => {
+        timer.phase("class-method-dce-reach", () => {
+          class_members_reachable_off_bundle(
+            dce_scope_for_reach,
+            external_import_bindings(external_imports),
+          )
+        })
+      }
+      timer.phase("class-method-dce", () => {
+        class_method_dce_block(
+          combined,
+          Some(off_bundle),
+          keep=export_surface,
+          class_fields=combined_class_fields,
+          type_aliases=combined_type_aliases,
+          explain=if opts.explain { Some(method_dce_reasons) } else { None },
+          reflection=Some(reflection_warnings),
+          timer~,
+        )
+      })
+    } else {
+      combined
+    }
     if opts.explain {
       explain_methods.push("")
       explain_methods.push("unused class methods: what was dropped and why not")
@@ -741,9 +985,61 @@ pub fn bundle_modules(
     // type annotation. Runs BEFORE the regular fold so the
     // resulting `BoolLit(true/false)` feeds into dead-branch
     // elimination.
-    combined = timer.phase("type-fold", () => {
-      type_fold_block(combined, type_aliases=combined_type_aliases)
-    })
+    let type_fold_sites_before = if opts.explain &&
+      opts.phase_enabled("type-fold") {
+      count_type_fold_sites(combined)
+    } else {
+      0
+    }
+    combined = if opts.phase_enabled("type-fold") {
+      timer.phase("type-fold", () => {
+        type_fold_block(combined, type_aliases=combined_type_aliases)
+      })
+    } else {
+      combined
+    }
+    if opts.explain {
+      explain_type_checks.push("")
+      explain_type_checks.push(
+        "type-driven checks: how many the annotations decided",
+      )
+      explain_type_checks.push("")
+      if !opts.phase_enabled("type-fold") {
+        explain_type_checks.push("  the phase is disabled.")
+      } else if type_fold_sites_before == 0 {
+        explain_type_checks.push(
+          "  no candidate at all: the bundle contains no `typeof x === \"…\"`, `x === null`, `x === undefined` or `x + \"\"` on a bare binding. The shape this phase decides is absent.",
+        )
+      } else {
+        // Counted, not re-derived: the pass reports how many of its own
+        // candidate shapes survived it, so a "0 folded" answer cannot be
+        // an artifact of a second implementation of the decision.
+        let after = count_type_fold_sites(combined)
+        let folded = type_fold_sites_before - after
+        explain_type_checks.push(
+          "  \{type_fold_sites_before} candidate check(s); \{folded} decided by an annotation in scope.",
+        )
+        // Which shapes they were. A total made mostly of `x === null`
+        // is a pass with nothing to do rather than a lookup that
+        // fails: that check is decidable only when the annotation
+        // EXCLUDES null, and code writes it exactly when it does not.
+        let by_kind = count_type_fold_sites_by_kind(combined)
+        let kinds = by_kind.keys().to_array()
+        kinds.sort()
+        let parts : Array[String] = []
+        for k in kinds {
+          parts.push("\{k} x\{by_kind.get(k).unwrap_or(0)}")
+        }
+        if parts.length() > 0 {
+          explain_type_checks.push("  still standing: \{parts.join(", ")}.")
+        }
+        if folded == 0 {
+          explain_type_checks.push(
+            "  every one was left alone: the binding had no type in scope, or the type it had does not settle the check.",
+          )
+        }
+      }
+    }
     // Order: fold -> treeshake -> mangle -> inline -> peephole.
     // Fold turns dead `if (false)` branches into nothing and
     // identity arithmetic into a single operand; treeshake then
@@ -778,10 +1074,16 @@ pub fn bundle_modules(
       // the proof needs (is `f` ever used as a VALUE rather than called?)
       // is decided from the merged block itself.
       let param_declines : Array[String] = []
-      combined = drop_unused_params_block(
-        combined,
-        plan_unused_params(combined, keep=export_roots, declines=param_declines),
-      )
+      combined = timer.phase("drop-unused-params", () => {
+        drop_unused_params_block(
+          combined,
+          plan_unused_params(
+            combined,
+            keep=export_roots,
+            declines=param_declines,
+          ),
+        )
+      })
       if opts.explain {
         explain_params.push("")
         explain_params.push(
@@ -850,19 +1152,40 @@ pub fn bundle_modules(
         let type_env = build_type_env(
           combined_interfaces, combined_type_aliases,
         )
+        // The linker's own record of which bindings it synthesized as
+        // namespace objects, instead of the structural guess the escape
+        // analysis falls back on. The guess — "a `const` initialized to
+        // an object literal of bare `Var`s" — also matches every
+        // `const handlers = { onClick, onBlur }` and every dispatch
+        // table a library writes: on typebox it reserved 300 of the 340
+        // names in one section of the report, for two real namespaces.
+        let synthesized_namespaces = Some(link_renames.synthesized_namespaces)
+        // Computed ONCE and used twice. `--explain-mangle` needs the
+        // per-reason breakdown for its report and the merged set to
+        // drive the mangler, and it used to call the analysis for each
+        // — 2,165 ms apiece on the 9 MB TypeScript bundle, 25% of that
+        // compile paid twice over.
+        //
+        // Timed, too: this was the largest number in `--timing` and it
+        // was sitting inside the "link + escape + emit" residual, which
+        // is just the difference between the whole bundle call and the
+        // instrumented phases. The biggest cost in the compile was
+        // being reported as unattributed; a residual is a place to
+        // look, not an answer.
+        let breakdown = timer.phase("escape analysis", () => {
+          escape_breakdown(
+            combined,
+            externals,
+            type_env~,
+            synthesized_namespaces~,
+          )
+        })
         if opts.explain {
-          for
-            line in format_escape_explanation(
-              escape_breakdown(combined, externals, type_env~),
-            ) {
+          for line in format_escape_explanation(breakdown) {
             explain_escape.push(line)
           }
         }
-        let escapes = collect_externally_visible_props(
-          combined,
-          externals,
-          type_env~,
-        )
+        let escapes = merge_escape_breakdown(breakdown)
         let mut wildcard = false
         for n in escapes {
           if n == "*" {
@@ -976,7 +1299,9 @@ pub fn bundle_modules(
       // visible in the source, so pay for the ones actually observed and
       // mangle the rest. See `observed_names.mbt`, including what it
       // does NOT catch.
-      let (observed_names, observed_all_ctors) = observed_class_names(combined)
+      let (observed_names, observed_all_ctors) = timer.phase("observed-names", () => {
+        observed_class_names(combined)
+      })
       // Only names that are CONSTRUCTORS. `observed_class_names` reports
       // the identifier on the left of a `.name` read without judging
       // what it holds, and the first version reserved all of them on the
@@ -992,7 +1317,9 @@ pub fn bundle_modules(
       // ordinary property and constrains nothing.
       if observed_names.length() > 0 {
         let ctors : Map[String, Bool] = {}
-        constructor_like_top_level(combined, ctors)
+        timer.phase("observed-names: ctor set", () => {
+          constructor_like_top_level(combined, ctors)
+        })
         for n in observed_names {
           if ctors.contains(n) {
             external_reserved.push(n)
@@ -1013,13 +1340,59 @@ pub fn bundle_modules(
         // the same set. The hierarchy is what actually narrows it.
         let (observing, unconstrained) = classes_observing_own_name(combined)
         if unconstrained {
-          // The read is outside any top-level class body, so `this` is
-          // unconstrained and the hierarchy says nothing. Fall back to
-          // every callable — expensive, and the only sound answer here.
-          let ctors : Map[String, Bool] = {}
-          constructor_like_top_level(combined, ctors)
-          for n in ctors.keys() {
-            external_reserved.push(n)
+          // Before paying for every callable, ask the narrow question:
+          // is every `.constructor.name` read just compared against a
+          // string literal? Then the observation is a boolean, and only
+          // the literals need reserving. See
+          // `ctor_name_comparison_literals`.
+          //
+          // The read has to be looked for in the INLINED form. typebox's
+          // site is `IsEqual(proto.constructor.name, "Object")` with
+          // `IsEqual = (l, r) => l === r`, and `inline_block` is the pass
+          // that turns that into a comparison — it runs after the
+          // mangler, so the analysis has to normalize its own copy.
+          // `keep` is every top-level name, so the copy inlines calls
+          // without deleting declarations.
+          let keep_all : Map[String, Bool] = {}
+          for n in collect_top_level_decl_names(combined) {
+            keep_all[n] = true
+          }
+          // Timed: this is a whole extra inline pass over the bundle,
+          // run only to decide a reserved set. On 9 MB it is not free,
+          // and it sat inside the bundle residual where nothing said so.
+          let normalized = timer.phase("observed-names: inline probe", () => {
+            inline_block(combined, keep=keep_all)
+          })
+          match ctor_name_comparison_literals(normalized) {
+            Some(lits) => {
+              // Reserving the literal covers both directions: a class
+              // already called that keeps its name, and no class can be
+              // renamed TO it, because a reserved name is withheld from
+              // the generated pool.
+              for lit in lits {
+                external_reserved.push(lit)
+              }
+              if opts.explain {
+                explain_escape.push("")
+                explain_escape.push(
+                  "  `.constructor.name` is only compared against string literals (" +
+                  lits.length().to_string() +
+                  "), so every callable stays manglable",
+                )
+              }
+            }
+            None => {
+              // The read is outside any top-level class body and in a
+              // position that observes the name itself, so `this` is
+              // unconstrained and the hierarchy says nothing. Fall back
+              // to every callable — expensive, and the only sound answer
+              // here.
+              let ctors : Map[String, Bool] = {}
+              constructor_like_top_level(combined, ctors)
+              for n in ctors.keys() {
+                external_reserved.push(n)
+              }
+            }
           }
         } else {
           for n in observing.keys() {
@@ -1027,7 +1400,50 @@ pub fn bundle_modules(
           }
         }
       }
+      // Renaming a binding the bundle EXPORTS BY NAME is not free: the
+      // export clause then needs an alias. `export{o}` becomes
+      // `export{a as o}`, so the rename costs `len(new) + 4` there and
+      // saves `len(orig) - len(new)` at each site. Nobody had priced
+      // it, and `compare-terser`'s one remaining LOSS was exactly this:
+      //
+      //   mtsc:   let a={key:1};console.log(a.key);export{a as o}   47
+      //   terser: const o={key:1};console.log(o.key);export{o};     45
+      //
+      // `o` became `a` — the same length, saving nothing — and paid
+      // five bytes for the alias. (The loss was reported under the
+      // `computed_props` label, and that rule is ported and firing;
+      // the harness names the case, not the cause.)
+      //
+      // Scoped to the case that needs no cost model at all: a
+      // SINGLE-CHARACTER export name. The shortest name the mangler can
+      // produce is one character, so renaming such a binding saves
+      // exactly nothing at every site and still pays `len(new) + 4` for
+      // the alias. It is a loss for any bundle, any reference count, any
+      // name the mangler picks.
+      //
+      // The general rule was implemented and measured and does NOT hold
+      // up, so it is not here. `(len(orig) - 1) * sites < 5` — the
+      // optimistic bound, taking `len(new) == 1` on both sides, with
+      // `sites` from `count_name_references` plus the declaration — gave
+      // valibot -54, immer -40, zod -63, excalidraw -231, superstruct
+      // -36 and ts-pattern -3, against remeda +291, typebox +267 and
+      // neverthrow +37: a net LOSS of about 168 bytes across the ten
+      // targets. Break-even (`<=`) was worse still, costing hono 8
+      // bytes where the strict form left it identical. Something the
+      // arithmetic does not model dominates on the targets that
+      // regressed — the reserved names are also withheld from the
+      // generated pool, and `count_name_references` can only undercount
+      // — and a byte optimization that measures worse overall is not
+      // one. The numbers are in the task note so the next attempt
+      // starts from them rather than from the formula.
+      for name in export_roots.keys() {
+        if name.length() == 1 {
+          external_reserved.push(name)
+        }
+      }
+      let prop_census : Array[String] = []
       let mangler_cfg = ManglerConfig::default()
+        .with_census(if opts.explain { Some(prop_census) } else { None })
         .with_mangle_properties(effective_mangle_props)
         .with_mangle_properties_shape_color(opts.mangle_properties_shape_color)
         .with_reserved_properties(extra_reserved)
@@ -1040,6 +1456,16 @@ pub fn bundle_modules(
         mangle_block_with_renames(combined, mangler_cfg)
       })
       combined = mangled_block
+      if opts.explain && prop_census.length() > 0 {
+        explain_escape.push("")
+        explain_escape.push(
+          "property mangling: what the mangler had to work with",
+        )
+        explain_escape.push("")
+        for line in prop_census {
+          explain_escape.push("  " + line)
+        }
+      }
       // Carry the mangle pass's rename map forward so the
       // entry-export emit at the bottom can write the right short
       // name for `export default app` even after `app` was
@@ -1091,8 +1517,42 @@ pub fn bundle_modules(
           })
         }
       }
+      // Second inline pass, after fold-2 and treeshake-2.
+      //
+      // `inline` decides "is this binding used exactly once" and "does
+      // this call have a callee it may expand" on the block as it stands
+      // when the pass runs. Folding and the second treeshake then DELETE
+      // references — a dead `if (false)` branch, a folded comparison —
+      // so a binding that had two uses can have one afterwards, and a
+      // pass that ran earlier cannot know. terser runs its whole
+      // compressor twice (`passes: 2`) for the same reason.
+      //
+      // −520 bytes across the nine type-aware targets and not one of
+      // them larger: excalidraw −420, hono −40, valibot −16, immer −14,
+      // remeda −12, ts-pattern −12, typebox −3, superstruct −3.
+      //
+      // What this is NOT is the pool effect. The hypothesis it was
+      // measured against was that mangling BEFORE inlining is what costs
+      // bytes, since a declaration deleted afterwards recovers only its
+      // own bytes and never frees a one-character slot. Moving `inline`
+      // ahead of `mangle` was implemented and measured and is a net LOSS
+      // (+243 bytes: immer +204 and ts-pattern +331 against gains of
+      // 8–183 elsewhere), and the reason is that the reorder is VACUOUS
+      // — typebox goes from 990 top-level functions to 989. The inliner
+      // is not deleting those declarations in either order, so there is
+      // no pool effect to recover; the gates that refuse them (see
+      // `call_inline.mbt`) have nothing to do with pass order.
+      combined = timer.phase("inline-2", () => {
+        inline_block(combined, keep=live_roots)
+      })
       combined = timer.phase("peephole", () => peephole_block(combined))
     }
+    // The emit, bracketed. It was the last thing inside the
+    // `bundle: link + escape + emit` residual, and a residual names the
+    // work nobody measured — not the work that is cheap. On 9 MB of
+    // `typescript.js` the two halves are very different sizes, and
+    // there was no way to know which without asking.
+    let emit_started = @bench.monotonic_clock_start()
     let has_combined_positions = combined.stmt_positions.length() ==
       combined.stmts.length()
     // In minify mode without source-maps, use the merged-decl emitter so
@@ -1144,6 +1604,7 @@ pub fn bundle_modules(
       }
       emit_entry_exports(e, entry_exports, mangle_export_renames, declared)
     }
+    timer.record("bundle: emit", @bench.monotonic_clock_end(emit_started))
   } else {
     // The per-module emit keeps each module's statements separate, but
     // the export surface spans the whole graph — an exported class can
@@ -1165,6 +1626,44 @@ pub fn bundle_modules(
         export_roots,
       ) {
       export_surface[n] = true
+    }
+    // The same concatenation, lifted, for `class_method_dce_block` to
+    // ANALYSE while it rewrites one module at a time.
+    //
+    // Every question that pass asks is bundle-wide — "which member
+    // names does anything access", "does anything read a member under a
+    // computed key" — and handing it one module answered both about
+    // that module. A class in Excalidraw's `state.ts` lost `addPoint`,
+    // `close` and `getStrokeOutline` because the calls are in
+    // `shape.ts`, and the bundle then called `laserPointer.addPoint(…)`
+    // on an object without one. It reproduces in five lines and one
+    // flag: `mtsc entry.ts --bundle` on a class whose methods are
+    // called from the importing module deleted EVERY method.
+    //
+    // Lifted, because the pass matches on `NativeClassStmt`: the
+    // unlifted concatenation would look like a bundle with no classes
+    // and no accesses. Costs one extra lift of the graph per compile.
+    let dce_scope = iife_class_lift_block({
+      stmts: all_stmts,
+      stmt_positions: [],
+    })
+    // Over the same bundle-wide scope, and MEMOIZED rather than hoisted:
+    // it is loop-invariant, so computing it per module would be one full
+    // escape analysis per file — and passing it as a thunk means a
+    // bundle whose sniff scan blocks the pass pays for none at all.
+    let dce_off_bundle_memo : Ref[Array[String]?] = Ref::new(None)
+    let dce_off_bundle = () => {
+      match dce_off_bundle_memo.val {
+        Some(v) => v
+        None => {
+          let v = class_members_reachable_off_bundle(
+            dce_scope,
+            external_import_bindings(external_imports),
+          )
+          dce_off_bundle_memo.val = Some(v)
+          v
+        }
+      }
     }
     for i, path in order {
       let m = match modules.get(path) {
@@ -1215,11 +1714,37 @@ pub fn bundle_modules(
           None => ()
         }
       }
+      // `__private_brand__N__x` -> `#x`, on this path too.
+      //
+      // It only ran in the merged path, which is gated on
+      // `--mangle`/`--treeshake`/`--fold`, so plain `mtsc entry.ts
+      // --bundle` emitted the brand verbatim — and a brand is an
+      // ordinary own ENUMERABLE property, so
+      // `class C { #secret = 7 }` printed
+      // `{"__private_brand__0__secret":7}` through `JSON.stringify`
+      // and showed up in `Object.keys`, where Node gives `{}` and
+      // `[]`. Adding any optimization flag fixed it, which is what
+      // kept it hidden: every harness that runs this path runs it with
+      // flags. Third time a pass has been missing from the per-module
+      // emit path — `class_method_dce_block` was the first two.
+      //
+      // Per-module scope is the right scope: a `#x` reference is legal
+      // only inside the class body that declares it, and the one other
+      // place mtsc emits one (an accessor lowered out to
+      // `Object.defineProperty(C.prototype, KEY, …)`) sits next to that
+      // class in the same module. `lower_private_fields`'s own
+      // statement-count guard sees both.
       let lifted_block = class_method_dce_block(
-        iife_class_lift_block(m.block),
+        lower_private_fields(iife_class_lift_block(m.block)),
+        Some(dce_off_bundle),
         keep=export_surface,
+        scope=Some(dce_scope),
         class_fields=all_class_fields,
         type_aliases=all_type_aliases,
+        // This path runs the pass once per MODULE over the same
+        // bundle-wide scope, so the same reflection call is met once per
+        // file. `dedup_reflection_warnings` collapses that at the end.
+        reflection=Some(reflection_warnings),
       )
       for j, stmt in lifted_block.stmts {
         if opts.with_sourcemap && j < lifted_block.stmt_positions.length() {
@@ -1260,7 +1785,8 @@ pub fn bundle_modules(
     explain.push("mtsc --explain-mangle")
     for
       section in [
-        explain_escape, explain_params, explain_methods, explain_fields, explain_tags,
+        explain_escape, explain_params, explain_methods, explain_fields, explain_dispatchers,
+        explain_type_checks, explain_type_tags, explain_tags,
       ] {
       for line in section {
         explain.push(line)
@@ -1272,6 +1798,7 @@ pub fn bundle_modules(
     sourcemap: sm_json,
     modules: module_paths,
     warnings,
+    reflection_warnings: dedup_reflection_warnings(reflection_warnings),
     explain,
     timings: timer.entries,
   })
@@ -1323,6 +1850,108 @@ fn detect_cjs_exports_var(block : @ast.TsBlock) -> String? {
 }
 
 ///|
+/// Record an import the bundle keeps verbatim, deduplicated by BINDING
+/// rather than by statement.
+///
+/// The dedup key used to be `module_spec + ":" + default_binding`, which
+/// does not mention the named bindings at all. So the second statement
+/// for a specifier was discarded whole:
+///
+///   // a.ts
+///   import { pointsOnBezierCurves } from "points-on-curve";
+///   // b.ts
+///   import { simplify } from "points-on-curve";   // dropped entirely
+///
+/// and every call to `simplify` in the bundle became a free variable.
+/// Excalidraw calls it from four places; `mtsc --verify` is what
+/// reported it (`docs/type-aware-dce.md`, B1). This is the same shape as
+/// the module-graph walk that deduplicated on the import SPECIFIER: a
+/// key that answers a narrower question than the one being asked.
+///
+/// Emitting a second `import { simplify } from "points-on-curve"` next
+/// to the first is valid ESM as long as the LOCAL names differ, which is
+/// what the per-binding key guarantees. Merging into the earlier
+/// statement would save a line and would have to rebuild it in place;
+/// the risk is not worth the bytes, and `--minify` output has one import
+/// clause per statement either way.
+fn record_external_import(
+  external_imports : Array[@ast.TsImportDecl],
+  external_seen : Map[String, Bool],
+  imp : @ast.TsImportDecl,
+) -> Unit {
+  // `import type { X } from "…"` contributes nothing at runtime.
+  if imp.type_only {
+    return
+  }
+  let binds_nothing = imp.default_binding is None &&
+    imp.namespace_binding is None &&
+    imp.named_bindings.length() == 0
+  // `import "./x.css"` binds nothing, so one per specifier is right and
+  // a second copy would duplicate a side effect.
+  if imp.side_effect_only || binds_nothing {
+    let key = "effect:" + imp.module_spec
+    if not(external_seen.contains(key)) {
+      external_seen[key] = true
+      external_imports.push(imp)
+    }
+    return
+  }
+  fn claim(local : String) -> Bool {
+    let key = imp.module_spec + ":bind:" + local
+    if external_seen.contains(key) {
+      false
+    } else {
+      external_seen[key] = true
+      true
+    }
+  }
+
+  let default_binding = match imp.default_binding {
+    Some(n) => if claim("default:" + n) { Some(n) } else { None }
+    None => None
+  }
+  let namespace_binding = match imp.namespace_binding {
+    Some(n) => if claim("ns:" + n) { Some(n) } else { None }
+    None => None
+  }
+  let named_bindings : Array[(String, String)] = []
+  let named_type_only : Array[Bool] = []
+  for i, pair in imp.named_bindings {
+    // A `type` specifier introduces no runtime binding, and emitting one
+    // is worse than dropping it: `import { type Point } from "…"` is
+    // TypeScript syntax, so the bundle stops being JavaScript. Before
+    // the per-binding key below, such specifiers were discarded by luck
+    // — the statement carrying them lost the specifier-level dedup — and
+    // fixing the dedup surfaced them in Excalidraw's output.
+    //
+    // Worth noting for `verify.mbt`: it re-parses with the TypeScript
+    // parser, so it accepts `type` specifiers and CANNOT catch this
+    // class. Node is the oracle that does.
+    let is_type_only = i < imp.named_type_only.length() &&
+      imp.named_type_only[i]
+    if is_type_only {
+      continue
+    }
+    if claim(pair.1) {
+      named_bindings.push(pair)
+      named_type_only.push(false)
+    }
+  }
+  if default_binding is None &&
+    namespace_binding is None &&
+    named_bindings.length() == 0 {
+    return
+  }
+  external_imports.push({
+    ..imp,
+    default_binding,
+    namespace_binding,
+    named_bindings,
+    named_type_only,
+  })
+}
+
+///|
 fn load_module_graph(
   files : Map[String, String],
   path : String,
@@ -1339,6 +1968,19 @@ fn load_module_graph(
   // Parses the caller already did, keyed like `files`. See
   // `BundleOptions.parsed_blocks`.
   parsed : Map[String, @ast.TsModuleBlock],
+  // `BundleOptions.jsx` — the base every module's own pragmas refine.
+  //
+  // Threaded rather than defaulted because it was DEFAULTED, and that
+  // made `BundleOptions.jsx` dead in the bundle path: the field's own
+  // comment says "base JSX config for every module; per-file
+  // `@jsxImportSource` overrides it" and the code below read
+  // `JsxConfig::default()` instead. So `mtsc --bundle
+  // --jsx-import-source preact` emitted `react/jsx-runtime` — the flag
+  // existed, was parsed, reached `BundleOptions`, and was ignored. A
+  // preact application therefore could not be bundled into anything that
+  // runs, and nothing noticed because the only JSX target in the corpus
+  // is React, where the default is right by accident.
+  base_jsx : JsxConfig,
 ) -> Result[Unit, String] {
   if modules.contains(path) {
     return Ok(())
@@ -1361,8 +2003,43 @@ fn load_module_graph(
   }
   // Reuse the per-file JSX pragma extractor so each module honors
   // its own `/** @jsxImportSource ... */` etc.
-  let jsx_cfg = extract_jsx_pragmas(source, JsxConfig::default())
-  let (lowered_jsx, _refs) = lower_block_with_runtime_imports(jsx_cfg, mb.block)
+  let jsx_cfg = extract_jsx_pragmas(source, base_jsx)
+  let (lowered_jsx, runtime_refs) = lower_block_with_runtime_imports(
+    jsx_cfg,
+    mb.block,
+  )
+  // The automatic runtime turns `<div/>` into a call to an IMPORTED
+  // `jsx` / `jsxs` / `Fragment`, so the import has to be emitted or the
+  // names resolve to nothing. The single-file path in `emit.mbt` writes
+  // it; this one discarded the ref list, so every `.tsx` bundle came out
+  // with `jsx`, `jsxs` and `Fragment` free — under plain `mtsc
+  // entry.tsx --bundle`, no optimization flag involved. Excalidraw is
+  // the target that surfaced it, through `--verify`.
+  //
+  // Routing it through `record_external_import` rather than emitting it
+  // here is the point: that is where external imports are deduplicated
+  // per binding and where `link_module_graph` learns which top-level
+  // names come from outside the bundle. A hand-written emit would have
+  // to reproduce both, and the mangler would rename `jsx` out from under
+  // the import if it did not.
+  if jsx_cfg.runtime == "automatic" && runtime_refs.length() > 0 {
+    let named : Array[(String, String)] = []
+    let named_type_only : Array[Bool] = []
+    for name in runtime_refs {
+      named.push((name, name))
+      named_type_only.push(false)
+    }
+    record_external_import(external_imports, external_seen, {
+      module_spec: jsx_cfg.import_source + "/jsx-runtime",
+      default_binding: None,
+      namespace_binding: None,
+      named_bindings: named,
+      named_type_only,
+      side_effect_only: false,
+      type_only: false,
+      attributes: [],
+    })
+  }
   // Splice in the runtime form of every `enum` declaration. The
   // parser collects enums on a side list and leaves an `Empty`
   // placeholder in the runtime block — without this step, every
@@ -1410,6 +2087,9 @@ fn load_module_graph(
     class_fields: mb.class_fields,
     export_specs: mb.exports,
     reexport_specs: mb.reexports,
+    const_enums: module_const_enums(mb.enums),
+    module_request_order: mb.module_request_order,
+    type_only_exports: mb.type_only_exports,
     cjs_exports_var: detect_cjs_exports_var(lowered),
   }
   // Walk imports, recurse into relative paths, accumulate bare ones.
@@ -1431,23 +2111,14 @@ fn load_module_graph(
         // specifier is treated: keep the import verbatim rather than
         // failing the bundle over a module the caller never had.
         if allow_unresolved && !files.contains(dep_path) {
-          let key = imp.module_spec +
-            ":" +
-            (match imp.default_binding {
-              Some(s) => s
-              None => ""
-            })
-          if !external_seen.contains(key) {
-            external_seen[key] = true
-            external_imports.push(imp)
-          }
+          record_external_import(external_imports, external_seen, imp)
           continue
         }
         resolved[imp.module_spec] = dep_path
         match
           load_module_graph(
             files, dep_path, modules, external_imports, external_seen, aliases, allow_unresolved,
-            parsed,
+            parsed, base_jsx,
           ) {
           Ok(_) => ()
           Err(e) => return Err(e)
@@ -1462,11 +2133,18 @@ fn load_module_graph(
         match aliases.get(imp.module_spec) {
           Some(disk) => {
             let dep_path = resolve_with_extensions(files, disk)
+            // A CommonJS module cannot be concatenated into an ES bundle
+            // — see `module_is_commonjs`. Keep the import verbatim and
+            // let the host resolve it.
+            if dep_is_commonjs(files, dep_path, parsed) {
+              record_external_import(external_imports, external_seen, imp)
+              continue
+            }
             resolved[imp.module_spec] = dep_path
             match
               load_module_graph(
                 files, dep_path, modules, external_imports, external_seen, aliases,
-                allow_unresolved, parsed,
+                allow_unresolved, parsed, base_jsx,
               ) {
               Ok(_) => ()
               Err(e) => return Err(e)
@@ -1475,26 +2153,21 @@ fn load_module_graph(
           None =>
             if files.contains(imp.module_spec) {
               let dep_path = resolve_with_extensions(files, imp.module_spec)
+              if dep_is_commonjs(files, dep_path, parsed) {
+                record_external_import(external_imports, external_seen, imp)
+                continue
+              }
               resolved[imp.module_spec] = dep_path
               match
                 load_module_graph(
                   files, dep_path, modules, external_imports, external_seen, aliases,
-                  allow_unresolved, parsed,
+                  allow_unresolved, parsed, base_jsx,
                 ) {
                 Ok(_) => ()
                 Err(e) => return Err(e)
               }
             } else {
-              let key = imp.module_spec +
-                ":" +
-                (match imp.default_binding {
-                  Some(s) => s
-                  None => ""
-                })
-              if !external_seen.contains(key) {
-                external_seen[key] = true
-                external_imports.push(imp)
-              }
+              record_external_import(external_imports, external_seen, imp)
             }
         }
     }
@@ -1523,7 +2196,7 @@ fn load_module_graph(
         match
           load_module_graph(
             files, dep_path, modules, external_imports, external_seen, aliases, allow_unresolved,
-            parsed,
+            parsed, base_jsx,
           ) {
           Ok(_) => ()
           Err(e) => return Err(e)
@@ -1536,7 +2209,7 @@ fn load_module_graph(
             match
               load_module_graph(
                 files, dep_path, modules, external_imports, external_seen, aliases,
-                allow_unresolved, parsed,
+                allow_unresolved, parsed, base_jsx,
               ) {
               Ok(_) => ()
               Err(e) => return Err(e)
@@ -1549,7 +2222,7 @@ fn load_module_graph(
               match
                 load_module_graph(
                   files, dep_path, modules, external_imports, external_seen, aliases,
-                  allow_unresolved, parsed,
+                  allow_unresolved, parsed, base_jsx,
                 ) {
                 Ok(_) => ()
                 Err(e) => return Err(e)
@@ -1574,6 +2247,9 @@ fn load_module_graph(
     class_fields: mb.class_fields,
     export_specs: mb.exports,
     reexport_specs: mb.reexports,
+    const_enums: module_const_enums(mb.enums),
+    module_request_order: mb.module_request_order,
+    type_only_exports: mb.type_only_exports,
     cjs_exports_var,
   }
   Ok(())
@@ -1583,6 +2259,39 @@ fn load_module_graph(
 /// Build a depth-first dependency order for the entry module: deepest
 /// dependency emits first, the entry emits last. Cycles short-circuit
 /// at the first repeat to keep emit terminating.
+/// The specifiers `node` requests at runtime, in source order.
+///
+/// The parser records this as one interleaved list because `import_decls`
+/// and `reexport_specs` are two arrays and cannot: reading them in turn
+/// says "every import, then every re-export", which is a different order
+/// from the source whenever a file mixes the two. typebox's `src/index.ts`
+/// is a barrel that does — five `export * from` above one `import * as` —
+/// and the traversal went down the wrong subtree first.
+///
+/// Falls back to the two-array reading for a `ModuleNode` built from a
+/// block that predates the field (a hand-constructed test fixture, an
+/// injected module), so the order is never empty when requests exist.
+fn module_request_specs(node : ModuleNode) -> Array[String] {
+  if node.module_request_order.length() > 0 {
+    return node.module_request_order
+  }
+  let out : Array[String] = []
+  for imp in node.import_decls {
+    if imp.type_only {
+      continue
+    }
+    out.push(imp.module_spec)
+  }
+  for re in node.reexport_specs {
+    if re.type_only {
+      continue
+    }
+    out.push(re.module_spec)
+  }
+  out
+}
+
+///|
 fn topological_order(
   modules : Map[String, ModuleNode],
   entry : String,
@@ -1601,9 +2310,32 @@ fn topological_order(
     stack[path] = true
     match modules.get(path) {
       Some(node) =>
-        for entry_ in node.resolved_imports {
-          let (_, dep) = entry_
-          visit(dep)
+        // Visit dependencies in the SOURCE ORDER of this module's
+        // module-request declarations, not in `resolved_imports` map
+        // order. That map is keyed by specifier and its iteration order
+        // is not the source's, which is invisible on an acyclic graph
+        // and decides evaluation order on a cyclic one.
+        //
+        // ESM evaluates a cycle by depth-first post-order from the
+        // entry, in declaration order, and a flat concatenated bundle
+        // has exactly one chance to reproduce that. typebox has such a
+        // cycle: `indexed/from_object.ts` reads `IntegerKey` from
+        // `types/record.ts` in a TOP-LEVEL `new RegExp(IntegerKey)`.
+        // Node puts `record.ts` at 204 and `from_object.ts` at 261; the
+        // map walk emitted them at 328 and 217, and the bundle threw
+        // `Cannot access 'IntegerKey' before initialization` at load.
+        //
+        // `type_only` imports are skipped for the same reason
+        // `load_module_graph` skips them: after erasure there is no
+        // module request, so visiting one would order a module that ESM
+        // never evaluates at that point.
+        for spec in module_request_specs(node) {
+          match node.resolved_imports.get(spec) {
+            Some(dep) => visit(dep)
+            // A bare / external specifier, or one the caller allowed to
+            // go unresolved. Nothing to order.
+            None => ()
+          }
         }
       None => ()
     }
@@ -1918,4 +2650,70 @@ fn strip_super_proto_stmt(s : @ast.TsStmt) -> @ast.TsStmt {
       )
     _ => s
   }
+}
+
+///|
+/// Is this module CommonJS (or a UMD wrapper), rather than something that
+/// can be concatenated into an ESM bundle?
+///
+/// Inlining one produces a bundle that cannot load. `module.exports = …`
+/// lands verbatim in an ES module, where `module` is not defined, so it
+/// throws before anything else can go wrong; the importer's default
+/// binding is left a free variable, because nothing declares it; and a
+/// NAMED import resolves by luck when the CJS module happens to declare a
+/// same-named internal function, which is worse than failing — rename the
+/// export (`module.exports = { helper: internalName }`) and the reference
+/// silently points at nothing. `import React, { useState } from "react"`
+/// against a resolved `react/index.js` produced exactly this, and the
+/// same hazard is already recorded for `es6-promise-pool`'s UMD build.
+///
+/// The test: ESM syntax settles it — a file with `import` / `export` is a
+/// module, and the two systems cannot be mixed. Otherwise, a file that
+/// references `module`, `exports` or `require` as a VALUE is CommonJS.
+/// That reads through a UMD wrapper, where the marker sits inside the
+/// factory rather than at the top level, and it uses
+/// `collect_var_refs_in_block` — the walk treeshaking relies on — rather
+/// than a fresh partial one.
+///
+/// A false positive costs an inline, not a miscompile: the import is kept
+/// verbatim and the host resolves it, which is what a bundler does with
+/// any external. So the check is allowed to be blunt.
+fn module_is_commonjs(mb : @ast.TsModuleBlock) -> Bool {
+  if mb.imports.length() > 0 ||
+    mb.exports.length() > 0 ||
+    mb.reexports.length() > 0 {
+    return false
+  }
+  let refs : Map[String, Bool] = {}
+  collect_var_refs_in_block(mb.block, refs)
+  refs.contains("module") ||
+  refs.contains("exports") ||
+  refs.contains("require")
+}
+
+///|
+/// Parse `dep_path` once, cache it in `parsed` so the recursive load
+/// reuses it, and answer whether it is CommonJS. A parse failure is not
+/// this function's business — answer "not CommonJS" and let the recursion
+/// report it.
+fn dep_is_commonjs(
+  files : Map[String, String],
+  dep_path : String,
+  parsed : Map[String, @ast.TsModuleBlock],
+) -> Bool {
+  match parsed.get(dep_path) {
+    Some(mb) => return module_is_commonjs(mb)
+    None => ()
+  }
+  let source = match files.get(dep_path) {
+    Some(s) => s
+    None => return false
+  }
+  let mb = try @parser.Parser::from_source(source).parse_module_block() catch {
+    _ => return false
+  } noraise {
+    b => b
+  }
+  parsed[dep_path] = mb
+  module_is_commonjs(mb)
 }

@@ -169,7 +169,10 @@ pub fn infer_container_symbols(
       }
       // Without an annotation, a closure holding the binding could
       // write anything into it from a frame this pass does not follow.
-      if sym.captured_by_closure {
+      // A `const` is exempt for the reason spelled out in
+      // `numeric_vars.mbt`: no frame may write one, so its defs are the
+      // whole story and the walk below already checks them.
+      if sym.captured_by_closure && !(sym.kind is Const) {
         continue
       }
       if sym.defs.length() == 0 {
@@ -246,7 +249,7 @@ fn is_expr_container(
     Cond(_, t, e) =>
       is_expr_container(t, name_container, facts) &&
       is_expr_container(e, name_container, facts)
-    Await(inner) | NonNull(inner) =>
+    Await(inner) | NonNull(inner) | TypeArgs(_, inner) | PureCall(inner) =>
       is_expr_container(inner, name_container, facts)
     // `Promise.all` / `Promise.allSettled` resolve to an array, always.
     // Declined if the bundle declares its own `Promise`.

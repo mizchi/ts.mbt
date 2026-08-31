@@ -106,6 +106,92 @@ pub fn build_enum_inline_table(
 }
 
 ///|
+/// Scope narrowing for a table whose keys are DOTTED PATHS.
+///
+/// `narrow_trivial_fns` matches whole keys, but the entries here are
+/// `"E.M"` and `"ns.E.M"` — only the first segment is a name the scope
+/// chain resolves. So a scope that re-binds `E` has to drop every
+/// `E.*` entry:
+///
+///     const enum E { A = 1 }
+///     function f() { const E = { A: 99 }; return E.A; }
+///     function g(E: { A: number }) { return E.A; }
+///
+/// `f()` returned 1 instead of 99 and `g({ A: 7 })` returned 1 instead
+/// of 7 — under plain `--bundle`, with no optimization flag at all.
+/// Wrong values, not crashes.
+fn narrow_const_enum_table(
+  tbl : Map[String, @ast.TsExpr],
+  shadowed : Array[String],
+) -> Map[String, @ast.TsExpr] {
+  if shadowed.is_empty() || tbl.is_empty() {
+    return tbl
+  }
+  let out : Map[String, @ast.TsExpr] = {}
+  let mut dropped = false
+  for k, v in tbl {
+    let head = match k.find(".") {
+      Some(i) => k.substring(start=0, end=i)
+      None => k
+    }
+    if shadowed.contains(head) {
+      dropped = true
+      continue
+    }
+    out[k] = v
+  }
+  if dropped {
+    out
+  } else {
+    tbl
+  }
+}
+
+///|
+fn narrow_const_enums_for_block(
+  tbl : Map[String, @ast.TsExpr],
+  block : @ast.TsBlock,
+) -> Map[String, @ast.TsExpr] {
+  let names : Array[String] = []
+  collect_block_bound_names(block, names)
+  narrow_const_enum_table(tbl, names)
+}
+
+///|
+fn narrow_const_enums_for_params(
+  tbl : Map[String, @ast.TsExpr],
+  params : Array[@ast.TsParam],
+) -> Map[String, @ast.TsExpr] {
+  let names : Array[String] = []
+  collect_param_bound_names(params, names)
+  narrow_const_enum_table(tbl, names)
+}
+
+///|
+fn narrow_const_enums_for_named_params(
+  tbl : Map[String, @ast.TsExpr],
+  params : Array[(String, @ast.TsType)],
+) -> Map[String, @ast.TsExpr] {
+  let names : Array[String] = []
+  for pr in params {
+    if pr.0 != "" {
+      names.push(pr.0)
+    }
+  }
+  narrow_const_enum_table(tbl, names)
+}
+
+///|
+fn narrow_const_enums_for_binding(
+  tbl : Map[String, @ast.TsExpr],
+  b : @ast.TsBinding,
+) -> Map[String, @ast.TsExpr] {
+  let names : Array[String] = []
+  collect_binding_bound_names(b, names)
+  narrow_const_enum_table(tbl, names)
+}
+
+///|
 /// Walk `block` substituting every `PropAccess(Var(E), M)` and
 /// `IndexAccess(Var(E), StringLit(M))` use whose `E.M` lookup hits
 /// the const-enum table. Returns a fresh block.
@@ -175,29 +261,38 @@ fn inline_const_enums_stmt(
         inline_const_enums_expr(c, table),
         inline_const_enums_block(body, table),
       )
-    For(init, cond, update, body) =>
+    For(init, cond, update, body) => {
+      let inner = match init {
+        Some(s) => {
+          let names : Array[String] = []
+          collect_stmt_bound_names(s, names)
+          narrow_const_enum_table(table, names)
+        }
+        None => table
+      }
       For(
         match init {
           Some(s) => Some(inline_const_enums_stmt(s, table))
           None => None
         },
         match cond {
-          Some(e) => Some(inline_const_enums_expr(e, table))
+          Some(e) => Some(inline_const_enums_expr(e, inner))
           None => None
         },
         match update {
-          Some(s) => Some(inline_const_enums_stmt(s, table))
+          Some(s) => Some(inline_const_enums_stmt(s, inner))
           None => None
         },
-        inline_const_enums_block(body, table),
+        inline_const_enums_block(body, inner),
       )
+    }
     ForOf(k, b, t, iter, body) =>
       ForOf(
         k,
         b,
         t,
         inline_const_enums_expr(iter, table),
-        inline_const_enums_block(body, table),
+        inline_const_enums_block(body, narrow_const_enums_for_binding(table, b)),
       )
     ForAwaitOf(k, b, t, iter, body) =>
       ForAwaitOf(
@@ -205,7 +300,7 @@ fn inline_const_enums_stmt(
         b,
         t,
         inline_const_enums_expr(iter, table),
-        inline_const_enums_block(body, table),
+        inline_const_enums_block(body, narrow_const_enums_for_binding(table, b)),
       )
     ForIn(k, b, t, iter, body) =>
       ForIn(
@@ -213,7 +308,7 @@ fn inline_const_enums_stmt(
         b,
         t,
         inline_const_enums_expr(iter, table),
-        inline_const_enums_block(body, table),
+        inline_const_enums_block(body, narrow_const_enums_for_binding(table, b)),
       )
     Switch(e, cases) => {
       let new_cases : Array[@ast.TsSwitchCase] = []
@@ -228,12 +323,16 @@ fn inline_const_enums_stmt(
       }
       Switch(inline_const_enums_expr(e, table), new_cases)
     }
-    Try(b, bnd, cb, fb) =>
+    Try(b, bnd, cb, fb) => {
+      let catch_table = match bnd {
+        Some(binding) => narrow_const_enums_for_binding(table, binding)
+        None => table
+      }
       Try(
         inline_const_enums_block(b, table),
         bnd,
         match cb {
-          Some(blk) => Some(inline_const_enums_block(blk, table))
+          Some(blk) => Some(inline_const_enums_block(blk, catch_table))
           None => None
         },
         match fb {
@@ -241,17 +340,26 @@ fn inline_const_enums_stmt(
           None => None
         },
       )
+    }
     Label(name, inner) => Label(name, inline_const_enums_stmt(inner, table))
     Block(b) => Block(inline_const_enums_block(b, table))
     NativeClassStmt(decl, ctor) => {
       let new_ctor = match ctor {
-        Some(f) => Some({ ..f, body: inline_const_enums_block(f.body, table) })
+        Some(f) =>
+          Some({
+            ..f,
+            body: inline_const_enums_block(
+              f.body,
+              narrow_const_enums_for_params(table, f.params),
+            ),
+          })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
       for m in decl.methods {
+        let method_table = narrow_const_enums_for_named_params(table, m.params)
         let new_body = match m.body {
-          Some(b) => Some(inline_const_enums_block(b, table))
+          Some(b) => Some(inline_const_enums_block(b, method_table))
           None => None
         }
         new_methods.push({ ..m, body: new_body })
@@ -282,6 +390,9 @@ fn inline_const_enums_block(
   block : @ast.TsBlock,
   table : Map[String, @ast.TsExpr],
 ) -> @ast.TsBlock {
+  // Every nested block is a scope; the top-level entry
+  // (`inline_const_enums`) walks statements directly.
+  let table = narrow_const_enums_for_block(table, block)
   let stmts : Array[@ast.TsStmt] = []
   for s in block.stmts {
     stmts.push(inline_const_enums_stmt(s, table))
@@ -295,6 +406,23 @@ fn inline_const_enums_expr(
   table : Map[String, @ast.TsExpr],
 ) -> @ast.TsExpr {
   match expr {
+    // `import * as K` then `K.ArchType.Array` — a two-level access, so
+    // the table carries the namespace-qualified path as its key. The
+    // namespace object is synthesized for the module's runtime exports,
+    // and a const enum has none, so leaving this to the flattening pass
+    // that handles ordinary namespace members drops the reference.
+    PropAccess(PropAccess(Var(ns), enum_name), member_) =>
+      match table.get(ns + "." + enum_name + "." + member_) {
+        Some(v) => v
+        None =>
+          PropAccess(
+            inline_const_enums_expr(
+              PropAccess(@ast.TsExpr::Var(ns), enum_name),
+              table,
+            ),
+            member_,
+          )
+      }
     PropAccess(Var(enum_name), member_) =>
       match table.get(enum_name + "." + member_) {
         Some(v) => v
@@ -410,6 +538,9 @@ fn inline_const_enums_expr(
         inline_const_enums_expr(v, table),
       )
     ArrowFunc(params, ret, body, is_async) => {
+      // A parameter named after the enum is the case no block-level
+      // check can see: `function g(E: { A: number }) { return E.A }`.
+      let table = narrow_const_enums_for_params(table, params)
       let new_body = match body {
         ArrowExpr(e) =>
           @ast.TsArrowBody::ArrowExpr(inline_const_enums_expr(e, table))
@@ -419,6 +550,12 @@ fn inline_const_enums_expr(
       ArrowFunc(params, ret, new_body, is_async)
     }
     FuncExpr(f) => {
+      let table = narrow_const_enums_for_params(table, f.params)
+      let table = if f.name == "" {
+        table
+      } else {
+        narrow_const_enum_table(table, [f.name])
+      }
       let new_body = inline_const_enums_block(f.body, table)
       FuncExpr({ ..f, body: new_body })
     }
@@ -451,6 +588,8 @@ fn inline_const_enums_expr(
     As(inner, ty) => As(inline_const_enums_expr(inner, table), ty)
     Satisfies(inner, ty) => Satisfies(inline_const_enums_expr(inner, table), ty)
     NonNull(inner) => NonNull(inline_const_enums_expr(inner, table))
+    TypeArgs(tys, inner) => TypeArgs(tys, inline_const_enums_expr(inner, table))
+    PureCall(inner) => PureCall(inline_const_enums_expr(inner, table))
     OptionalChain(inner) => OptionalChain(inline_const_enums_expr(inner, table))
     NativeClassExpr(decl, ctor) => {
       let new_ctor = match ctor {
@@ -485,4 +624,291 @@ fn inline_const_enums_expr(
     }
     _ => expr
   }
+}
+
+///|
+/// The `const enum` declarations from one module's enum list — the ones
+/// that produce no runtime binding and therefore MUST be substituted
+/// wherever they are read, including from another module.
+///
+/// `is_declare` decls are excluded for the usual reason: `declare const
+/// enum E` describes something the host provides, and the values may not
+/// be the ones written down.
+pub fn module_const_enums(
+  enums : Array[@ast.TsEnumDecl],
+) -> Array[@ast.TsEnumDecl] {
+  let out : Array[@ast.TsEnumDecl] = []
+  for d in enums {
+    if d.is_const && !d.is_declare {
+      out.push(d)
+    }
+  }
+  out
+}
+
+///|
+/// Substitution table for the const-enum members a module reads through
+/// its IMPORTS, keyed by the local name the importing module uses.
+///
+/// The per-module inline in `load_module_graph` covers a module's own
+/// const enums, which was quietly taken to be all of them — a bundle-wide
+/// contract ("no `E.Member` reference survives") checked against one
+/// module's declarations. It isn't: a const enum emits nothing, so
+/// `import { ArchType } from "./kinds"` leaves the consumer with a
+/// reference the linker has no binding to point at and the inliner never
+/// saw. immer's bundle threw `ArchType is not defined` at load.
+///
+/// `resolve_exported_const_enum` follows `export { X as Y }` and
+/// `export … from "…"` chains, so an enum re-exported through an
+/// `index.ts` resolves the same way a normal binding would.
+///
+/// A namespace import (`import * as K`, then `K.ArchType.Array`) is a
+/// two-level access, so its entries are keyed on the whole path
+/// (`K.ArchType.Array`) and matched by the corresponding arm in
+/// `inline_const_enums_expr`. It has to be handled here rather than left
+/// to the pass that flattens namespace members, because the synthesized
+/// namespace object carries the module's runtime exports and a const enum
+/// has none.
+pub fn imported_const_enum_table(
+  imports : Array[@ast.TsImportDecl],
+  resolved_imports : Map[String, String],
+  const_enums_of : (String) -> Array[@ast.TsEnumDecl]?,
+  export_specs_of : (String) -> Array[@ast.TsExportSpec]?,
+  reexport_specs_of : (String) -> Array[@ast.TsReExportSpec]?,
+  resolve_spec : (String, String) -> String?,
+) -> Map[String, @ast.TsExpr] {
+  let out : Map[String, @ast.TsExpr] = {}
+  for imp in imports {
+    if imp.type_only {
+      continue
+    }
+    let dep = match resolved_imports.get(imp.module_spec) {
+      Some(p) => p
+      None => continue
+    }
+    // `import * as K from "./kinds"` reaches every const enum the dep
+    // exports, under `K.<EnumName>.<Member>`.
+    match imp.namespace_binding {
+      Some(ns) =>
+        for
+          pair in collect_exported_const_enums(
+            dep,
+            const_enums_of,
+            export_specs_of,
+            reexport_specs_of,
+            resolve_spec,
+            {},
+          ) {
+          let renamed : @ast.TsEnumDecl = { ..pair.1, name: pair.0 }
+          let table = build_const_enum_table([renamed])
+          for entry in table {
+            out[ns + "." + entry.0] = entry.1
+          }
+        }
+      None => ()
+    }
+    for i, pair in imp.named_bindings {
+      // `import { type E }` introduces nothing to substitute.
+      if i < imp.named_type_only.length() && imp.named_type_only[i] {
+        continue
+      }
+      let imported = pair.0
+      let local = pair.1
+      match
+        resolve_exported_const_enum(
+          dep,
+          imported,
+          const_enums_of,
+          export_specs_of,
+          reexport_specs_of,
+          resolve_spec,
+          {},
+        ) {
+        Some(decl) => {
+          // Re-key the decl's members under the local name so
+          // `import { ArchType as A }` substitutes `A.Array` too.
+          let renamed : @ast.TsEnumDecl = { ..decl, name: local }
+          let table = build_const_enum_table([renamed])
+          for entry in table {
+            out[entry.0] = entry.1
+          }
+        }
+        None => ()
+      }
+    }
+  }
+  out
+}
+
+///|
+/// Find the `const enum` a module exports under `name`, following
+/// `export { local as name }` within the module and `export … from "…"`
+/// out of it. `seen` breaks re-export cycles.
+fn resolve_exported_const_enum(
+  path : String,
+  name : String,
+  const_enums_of : (String) -> Array[@ast.TsEnumDecl]?,
+  export_specs_of : (String) -> Array[@ast.TsExportSpec]?,
+  reexport_specs_of : (String) -> Array[@ast.TsReExportSpec]?,
+  resolve_spec : (String, String) -> String?,
+  seen : Map[String, Bool],
+) -> @ast.TsEnumDecl? {
+  let key = path + "#" + name
+  if seen.contains(key) {
+    return None
+  }
+  seen[key] = true
+  // Declared here under this name (`export const enum E`).
+  match const_enums_of(path) {
+    Some(decls) => {
+      for d in decls {
+        if d.name == name {
+          return Some(d)
+        }
+      }
+      // Declared here under a different name and aliased on the way out
+      // (`const enum E … export { E as F }`).
+      match export_specs_of(path) {
+        Some(specs) =>
+          for spec in specs {
+            if spec.export_name == name {
+              for d in decls {
+                if d.name == spec.local_name {
+                  return Some(d)
+                }
+              }
+            }
+          }
+        None => ()
+      }
+    }
+    None => return None
+  }
+  // Re-exported from somewhere else.
+  match reexport_specs_of(path) {
+    Some(specs) =>
+      for spec in specs {
+        if spec.type_only {
+          continue
+        }
+        let next = match resolve_spec(path, spec.module_spec) {
+          Some(p) => p
+          None => continue
+        }
+        let upstream_name = match spec.kind {
+          Named(pairs) => {
+            let mut found : String? = None
+            for pair in pairs {
+              if pair.1 == name {
+                found = Some(pair.0)
+              }
+            }
+            match found {
+              Some(n) => n
+              // This `export { … } from` does not carry `name`.
+              None => continue
+            }
+          }
+          // `export * from "…"` forwards every name unchanged.
+          All => name
+          // `export * as ns from "…"` exposes `name` only as a member of
+          // the namespace object, which this pass does not model.
+          Namespace(_) => continue
+        }
+        match
+          resolve_exported_const_enum(
+            next, upstream_name, const_enums_of, export_specs_of, reexport_specs_of,
+            resolve_spec, seen,
+          ) {
+          Some(d) => return Some(d)
+          None => ()
+        }
+      }
+    None => ()
+  }
+  None
+}
+
+///|
+/// Every const enum a module exposes, paired with the name it exposes it
+/// under. Used for `import * as ns`, which reaches all of them at once
+/// and so cannot resolve one name at a time the way a named import does.
+///
+/// Walks the same three routes as `resolve_exported_const_enum`: declared
+/// here, aliased out via `export { E as F }`, or forwarded from another
+/// module. `seen` breaks re-export cycles.
+fn collect_exported_const_enums(
+  path : String,
+  const_enums_of : (String) -> Array[@ast.TsEnumDecl]?,
+  export_specs_of : (String) -> Array[@ast.TsExportSpec]?,
+  reexport_specs_of : (String) -> Array[@ast.TsReExportSpec]?,
+  resolve_spec : (String, String) -> String?,
+  seen : Map[String, Bool],
+) -> Array[(String, @ast.TsEnumDecl)] {
+  let out : Array[(String, @ast.TsEnumDecl)] = []
+  if seen.contains(path) {
+    return out
+  }
+  seen[path] = true
+  let own = match const_enums_of(path) {
+    Some(decls) => decls
+    None => return out
+  }
+  // Aliases first, so `export { E as F }` decides the exposed name and a
+  // decl that is only reachable under its alias is not also exposed
+  // under its local one.
+  let aliased : Map[String, Bool] = {}
+  match export_specs_of(path) {
+    Some(specs) =>
+      for spec in specs {
+        for d in own {
+          if d.name == spec.local_name {
+            aliased[d.name] = true
+            out.push((spec.export_name, d))
+          }
+        }
+      }
+    None => ()
+  }
+  for d in own {
+    if !aliased.contains(d.name) {
+      out.push((d.name, d))
+    }
+  }
+  match reexport_specs_of(path) {
+    Some(specs) =>
+      for spec in specs {
+        if spec.type_only {
+          continue
+        }
+        let next = match resolve_spec(path, spec.module_spec) {
+          Some(p) => p
+          None => continue
+        }
+        let upstream = collect_exported_const_enums(
+          next, const_enums_of, export_specs_of, reexport_specs_of, resolve_spec,
+          seen,
+        )
+        match spec.kind {
+          // `export { A as B } from "…"` forwards only the listed names.
+          Named(pairs) =>
+            for pair in pairs {
+              for up in upstream {
+                if up.0 == pair.0 {
+                  out.push((pair.1, up.1))
+                }
+              }
+            }
+          All =>
+            for up in upstream {
+              out.push(up)
+            }
+          // `export * as ns from "…"` puts them a level deeper than this
+          // pass models. Left alone rather than exposed at the wrong path.
+          Namespace(_) => ()
+        }
+      }
+    None => ()
+  }
+  out
 }

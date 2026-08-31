@@ -1,0 +1,22 @@
+{
+  "//": "Staged over sprawlens' own tsconfig.base.json by measure_type_aware.mjs (see `stageFiles`). sprawlens' packages import each other by bare specifier and resolve through pnpm workspace symlinks, with no tsconfig `paths` anywhere; mtsc reads `paths`, so without this every sibling package stays external and the bundle is a shell. Every package extends this file, so one copy covers the whole graph, and each package's own config still contributes its `jsxImportSource`. Replaces rather than merges: merging depends on the upstream file's shape, replacing depends only on what mtsc reads from tsconfig (`paths`, `baseUrl`, `jsx*`).",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@sprawlens/agent": ["packages/agent/src/index.ts"],
+      "@sprawlens/contracts": ["packages/contracts/src/index.ts"],
+      "@sprawlens/layout": ["packages/layout/src/index.ts"],
+      "@sprawlens/schema": ["packages/schema/src/index.ts"],
+      "@sprawlens/viz/headless": ["packages/viz/src/headless/renderAtlasSvg.ts"]
+    }
+  }
+}

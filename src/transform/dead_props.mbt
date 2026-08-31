@@ -261,6 +261,51 @@ fn collect_read_property_names_expr(
       out[k] = true
       collect_read_property_names_expr(r, out)
     }
+    // `<expr>.constructor.name === "lit"` — the ONE position in which a
+    // `.constructor.name` read constrains nothing but the literal it is
+    // compared against.
+    //
+    // The generic arm below would classify the receiver and set
+    // `NAME_OF_CTOR`, which makes `--mangle` reserve every callable in
+    // the bundle (typebox: +24.9%, and from a single site). Here the
+    // observation is a boolean, and it changes only if some class whose
+    // name reaches this site gains or loses the name `"lit"`. Reserving
+    // `"lit"` covers both directions, because a reserved name is also
+    // withheld from the generated pool.
+    //
+    // Recognising it HERE rather than in `observed_names.mbt` is what
+    // makes the narrowing fail-closed: any read this arm does not match
+    // falls through to the generic path and still reserves everything.
+    // A missed shape costs bytes, never correctness — the opposite
+    // direction from the sentinel channel itself.
+    BinOp(op, l, r) if binop_is_equality(op) &&
+      (
+        (
+          ctor_name_read_receiver(l) is Some(_) &&
+          r is @ast.TsExpr::StringLit(_)
+        ) ||
+        (
+          ctor_name_read_receiver(r) is Some(_) &&
+          l is @ast.TsExpr::StringLit(_)
+        )
+      ) => {
+      let (read_side, lit) = match (ctor_name_read_receiver(l), r) {
+        (Some(recv), @ast.TsExpr::StringLit(s)) => (recv, s)
+        _ =>
+          match (ctor_name_read_receiver(r), l) {
+            (Some(recv), @ast.TsExpr::StringLit(s)) => (recv, s)
+            // Unreachable: the guard established one of the two.
+            _ => return
+          }
+      }
+      // The property names really are read, so record them — dropping
+      // them would let dead-property elimination delete `constructor`.
+      out["name"] = true
+      out["constructor"] = true
+      out[NAME_OF_CTOR_EQ_PREFIX + lit] = true
+      // Everything under the receiver still needs the ordinary scan.
+      collect_read_property_names_expr(read_side, out)
+    }
     BinOp(_, l, r) => {
       collect_read_property_names_expr(l, out)
       collect_read_property_names_expr(r, out)
@@ -272,7 +317,16 @@ fn collect_read_property_names_expr(
     | As(inner, _)
     | Satisfies(inner, _)
     | NonNull(inner)
-    | OptionalChain(inner) => collect_read_property_names_expr(inner, out)
+    | OptionalChain(inner)
+    // `f<T>(x)` is a `TypeArgs` wrapper around the call, and a property
+    // read that only happens inside one was invisible here: the pass
+    // concluded nothing reads `o.p` in
+    // `id<number>(o.p)` and deleted the key, so the call got
+    // `undefined`. See the note on `TypeArgs` in `src/ast/types.mbt`.
+    | TypeArgs(_, inner)
+    // A `/* @__PURE__ */` wrapper is transparent here too: the read
+    // inside it is a read.
+    | PureCall(inner) => collect_read_property_names_expr(inner, out)
     Yield(Some(inner)) => collect_read_property_names_expr(inner, out)
     Cond(c, t, e) => {
       collect_read_property_names_expr(c, out)
@@ -796,6 +850,10 @@ fn drop_dead_props_expr(
     NonNull(inner) => NonNull(drop_dead_props_expr(inner, reserved, read_props))
     OptionalChain(inner) =>
       OptionalChain(drop_dead_props_expr(inner, reserved, read_props))
+    TypeArgs(tys, inner) =>
+      TypeArgs(tys, drop_dead_props_expr(inner, reserved, read_props))
+    PureCall(inner) =>
+      PureCall(drop_dead_props_expr(inner, reserved, read_props))
     NativeClassExpr(decl, ctor) => {
       let new_ctor = match ctor {
         Some(f) =>

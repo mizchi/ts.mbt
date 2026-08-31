@@ -1,0 +1,16 @@
+{
+  "origin": "ts.mbt — found while opening `tag-rewrite`'s union-discovery gate, and demonstrated end-to-end with a separate consumer module",
+  "what": "`tag_rewrite` had no notion of the bundle boundary at all: it renumbered a discriminated union's string tags on the strength of a bundle-wide escape-sink scan, and an exported value is an escape with no trace inside the bundle to scan for. `export const c: Shape = { kind: \"circle\" }` compiled to `{ kind: 0 }` under plain `--bundle --fold`, so a consumer's `c.kind === \"circle\"` was false. The mirrored case is worse-looking and just as real: with only `export function area(s: Shape)` crossing, the CONSUMER builds `{ kind: \"circle\" }` and the bundle compares it against `0`. The gate is deliberately NOT `exported_surface_props` — that set answers the property mangler's question, \"may this NAME be renamed\", and follows a called function's body, so `export const out = area(shapes[0])` would reserve `kind` even though the consumer only ever sees a number. Rewriting a value needs the narrower fact: an exported declaration's own value (a function's returns, not the closure) plus the type names in its signature. The same split `class_method_dce` needed against `collect_externally_visible_props`. The other half of this — that the pass still fires on an internal-only union, so the fix cannot be \"switch the pass off\" — is not observable by running the program, and lives in `bundle_wbtest.mbt` instead. The first draft of this case could not detect the bug at all: it observed `unitCircle.kind === \"circle\"` computed inside the bundle, and a comparison rewritten alongside the literal stays true — while a plain `.kind` read elsewhere closed the prop-uses gate and made the pass decline for an unrelated reason. Every observation here is an exported OBJECT, and with the gate mutated off the case reports `{\"kind\":0,\"r\":1}` against the baseline's `{\"kind\":\"circle\",\"r\":1}`.",
+  "mtscArgs": [
+    "--treeshake",
+    "--fold"
+  ],
+  "exports": [
+    "unitCircle",
+    "area",
+    "makeSquare",
+    "built",
+    "areaOfUnit"
+  ],
+  "expectStatus": "pass"
+}

@@ -64,6 +64,17 @@ pub(all) struct SymbolGraph {
   // wildcard when their return value reaches an observation
   // point because the callee can't be statically identified.
   funcs : Map[SymbolId, FuncInfo]
+  // Names referenced but resolving to no binding, with one scope they
+  // were seen in. Globals live here too (`console`, `Math`), so this is
+  // raw material rather than an error list — `verify.mbt` subtracts the
+  // host's names and reports whatever is left.
+  //
+  // The walk used to drop these on the floor: `sg_record_use`'s `None`
+  // arm read "global / runtime built-in / typo. Nothing to record". The
+  // typo is exactly what a verifier wants, and a deleted-but-still-
+  // referenced binding IS a typo by then. `CODES is not defined` on the
+  // Excalidraw bundle was detectable here without running anything.
+  unresolved : Map[String, ScopeId]
 }
 
 ///|
@@ -286,6 +297,7 @@ pub fn build_symbol_graph_with_sinks(
     flow_edges: [],
     external_bindings: {},
     funcs: {},
+    unresolved: {},
   }
   // Module scope (id 0).
   let module_scope = sg_new_scope(g, None, Module)
@@ -519,21 +531,8 @@ fn is_multi_decl_wrapper(block : @ast.TsBlock) -> Bool {
   if block.stmts.length() < 2 {
     return false
   }
-  let kind = match block.stmts[0] {
-    Var(_, _, _) => 0
-    Let(_, _, _) => 1
-    Const(_, _, _) => 2
-    _ => return false
-  }
-  for s in block.stmts {
-    match s {
-      Var(_, _, _) => if kind != 0 { return false }
-      Let(_, _, _) => if kind != 1 { return false }
-      Const(_, _, _) => if kind != 2 { return false }
-      _ => return false
-    }
-  }
-  true
+  // See `is_multi_decl_block` in `inline.mbt`: one rule, one place.
+  block_is_inline_decl_group(block)
 }
 
 ///|
@@ -573,6 +572,48 @@ fn sg_record_binding_type(
     }
     _ => ()
   }
+}
+
+///|
+/// Declare every binding a parameter introduces, and hand back one
+/// representative SymbolId for the parameter position.
+///
+/// Both param-declaration sites used to do `sg_declare(g, scope,
+/// p.name, …)` and nothing else. For a DESTRUCTURING parameter,
+/// `p.name` holds the first identifier the pattern binds, so
+///
+///   ({ alpha, beta }) => alpha + beta
+///   ({ elements: a, type, bounds: c }) => …
+///
+/// declared `alpha` / `a` and left `beta`, `type` and `c` undeclared.
+/// Every use of those resolved to nothing, and `sg_record_use` drops an
+/// unresolved use — so as far as the graph was concerned those bindings
+/// were never read. That is fail-OPEN for everything built on it: the
+/// property mangler's escape analysis, the sink catalog, the
+/// keyed-container inference. A binding whose reads are invisible looks
+/// unobserved, and an unobserved property is a renamable one.
+///
+/// Found by `mtsc --verify` reporting `type` as a free variable on
+/// Excalidraw's `j6 = ({ elements: a, elementsMap: b, bounds: c, type,
+/// … }) => …` (`docs/type-aware-dce.md`, B4).
+///
+/// `FuncInfo.params` wants one id per parameter POSITION so
+/// `FuncArg(fid, i)` can land on it, and a pattern has no single
+/// binding to be. The first name keeps the previous behaviour for that
+/// mapping; what changes is that the rest are now declared too.
+fn sg_declare_param(
+  g : SymbolGraph,
+  scope : ScopeId,
+  p : @ast.TsParam,
+) -> SymbolId {
+  let representative = sg_declare(g, scope, p.name, Param, false)
+  match p.binding {
+    Some(@ast.TsBinding::Object(_) as b)
+    | Some(@ast.TsBinding::Array(_) as b) =>
+      sg_declare_binding(g, b, scope, Param, {})
+    _ => ()
+  }
+  representative
 }
 
 ///|
@@ -635,10 +676,10 @@ fn sg_visit_stmt(w : SgWalker, stmt : @ast.TsStmt) -> Unit {
           w.g.symbols[id].reassigned = true
           w.g.symbols[id].reassign_rhs.push(rhs)
           // `obj = { ...bag }` has the same hole one level up: the
-          // literal used to be the end of the trail.
-          for src in expr_flow_sources(w, rhs) {
-            w.g.flow_edges.push({ from: src, to: SymVal(id) })
-          }
+          // literal used to be the end of the trail. Its OWN keys were
+          // still missing until `sg_record_written_value` took over —
+          // see that function.
+          sg_record_written_value(w, id, rhs)
         }
         None => ()
       }
@@ -648,6 +689,12 @@ fn sg_visit_stmt(w : SgWalker, stmt : @ast.TsStmt) -> Unit {
       sg_visit_expr(w, rhs)
       match sg_lookup(w.g, w.current_scope, name) {
         Some(id) => {
+          // `v ||= { g14: 1 }` and `v &&= { g14: 1 }` can leave the rhs
+          // in `v`, so the rhs's keys are observable through `v`. The
+          // arithmetic compounds cannot, but recording them anyway only
+          // over-reserves, and guessing which is which per operator is
+          // how this arm came to record nothing at all.
+          sg_record_written_value(w, id, rhs)
           w.g.symbols[id].reassigned = true
           // `x += expr` evaluates to the new value of `x` =
           // `x <op> expr`; arithmetic ops always produce a number,
@@ -796,6 +843,19 @@ fn sg_visit_stmt(w : SgWalker, stmt : @ast.TsStmt) -> Unit {
             Some(b) => sg_declare_binding(w.g, b, w.current_scope, Catch, {})
             None => ()
           }
+          // The catch body's own declarations, which this arm used to
+          // skip. It opens the scope and walks the statements by hand
+          // instead of going through `sg_visit_block_in_new_scope`, and
+          // the pre-pass that declares a block's bindings lives there —
+          // so `catch (e) { const y = 1; return y; }` left `y`
+          // undeclared, and every reference to it was recorded as
+          // unresolved.
+          //
+          // Same shape as the pattern-parameter hole: harmless to the
+          // mangler, which has its own walk, and enough to make the
+          // output verifier report free variables on well-formed
+          // bundles — six of Excalidraw's eight were this.
+          sg_declare_block_bindings(w.g, cb, w.current_scope, {})
           for s in cb.stmts {
             sg_visit_stmt(w, s)
           }
@@ -877,6 +937,90 @@ fn sg_visit_block_in_new_scope(
 }
 
 ///|
+/// Walk an arrow function's parameters and body.
+///
+/// `self_id` is the binding the arrow is assigned to, when there is one.
+/// It matters more than it looks: `g.funcs` is what tells the
+/// observability analysis "the return paths of this function are all
+/// visible", and a function missing from it is treated as opaque —
+/// `seed_from_expr` marks it `External`, which is the wildcard, which
+/// suppresses property mangling for the whole bundle.
+///
+/// So an arrow used to poison the analysis for a reason that had nothing
+/// to do with what it does: the graph indexed return expressions under
+/// the FuncExpr's internal name, an arrow has none, and the arm here set
+/// `enclosing_func = None` with a comment saying so. neverthrow's single
+/// wildcard cause was `export const createNeverThrowError = (…) => …`,
+/// thrown at two call sites — a function whose body is right there in
+/// the bundle.
+///
+/// Soundness rests on the return set being COMPLETE, which is checked
+/// where the information is complete rather than here: `flow_analysis`
+/// falls back to `External` when the binding turns out to be reassigned,
+/// because then the arrow is not the only thing the name can hold.
+fn sg_visit_arrow(
+  w : SgWalker,
+  params : Array[@ast.TsParam],
+  body : @ast.TsArrowBody,
+  self_id : SymbolId?,
+) -> Unit {
+  let outer_scope = w.current_scope
+  let outer_func = w.enclosing_func
+  w.in_closure_depth = w.in_closure_depth + 1
+  w.current_scope = sg_new_scope(w.g, Some(outer_scope), Function)
+  w.enclosing_func = self_id
+  let param_ids : Array[SymbolId] = []
+  for p in params {
+    let pid = sg_declare_param(w.g, w.current_scope, p)
+    match p.type_ {
+      @ast.TsType::Any => ()
+      ty => w.g.symbols[pid].ts_type = ty
+    }
+    param_ids.push(pid)
+  }
+  match self_id {
+    Some(fid) => w.g.funcs[fid] = { params: param_ids, returns: [] }
+    None => ()
+  }
+  match body {
+    ArrowExpr(e) => {
+      sg_visit_expr(w, e)
+      // An expression body IS the return, and there is no `Return`
+      // statement for the walker's `Return` arm to pick up. Recording it
+      // here is not an optimization: an empty `returns` on a registered
+      // function would say "this function returns nothing observable",
+      // which under-reserves.
+      match self_id {
+        Some(fid) => {
+          let srcs = expr_immediate_sources(w, e)
+          for src in srcs {
+            w.g.flow_edges.push({ from: src, to: FuncReturn(fid) })
+          }
+          w.g.symbols[fid].written_values.push(e)
+          match w.g.funcs.get(fid) {
+            Some(info) =>
+              for src in srcs {
+                info.returns.push(src)
+              }
+            None => ()
+          }
+        }
+        None => ()
+      }
+    }
+    ArrowBlock(b) => {
+      sg_declare_block_bindings(w.g, b, w.current_scope, {})
+      for s in b.stmts {
+        sg_visit_stmt(w, s)
+      }
+    }
+  }
+  w.current_scope = outer_scope
+  w.enclosing_func = outer_func
+  w.in_closure_depth = w.in_closure_depth - 1
+}
+
+///|
 fn sg_visit_decl(w : SgWalker, b : @ast.TsBinding, init : @ast.TsExpr) -> Unit {
   // Walk the initializer expression. Use `enclosing_def` to add
   // RHS->LHS flow edges.
@@ -886,7 +1030,15 @@ fn sg_visit_decl(w : SgWalker, b : @ast.TsBinding, init : @ast.TsExpr) -> Unit {
       w.g.symbols[id].defs.push({ init: Some(init) })
       let prev = w.enclosing_def
       w.enclosing_def = Some(id)
-      sg_visit_expr(w, init)
+      // `const f = (x) => …` — the declared name is the arrow's
+      // identity, so its return paths can be recorded. Only a DIRECT
+      // initializer qualifies; an arrow nested inside the initializer
+      // belongs to no name.
+      match init {
+        @ast.TsExpr::ArrowFunc(params, _, body, _) =>
+          sg_visit_arrow(w, params, body, Some(id))
+        _ => sg_visit_expr(w, init)
+      }
       w.enclosing_def = prev
       // Direct RHS sources flow to the LHS binding.
       for src in expr_immediate_sources(w, init) {
@@ -1083,6 +1235,7 @@ fn is_external_chain_for_sink(
     NonNull(inner)
     | OptionalChain(inner)
     | As(inner, _)
+    | TypeArgs(_, inner)
     | Satisfies(inner, _) => is_external_chain_for_sink(inner, externals)
     _ => false
   }
@@ -1168,9 +1321,7 @@ fn sg_visit_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
         Some(id) => {
           w.g.symbols[id].reassigned = true
           w.g.symbols[id].reassign_rhs.push(rhs)
-          for src in expr_immediate_sources(w, rhs) {
-            w.g.flow_edges.push({ from: src, to: SymVal(id) })
-          }
+          sg_record_written_value(w, id, rhs)
         }
         None => ()
       }
@@ -1180,6 +1331,12 @@ fn sg_visit_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
     CompoundAssignExpr(target, _, rhs) => {
       sg_visit_expr(w, target)
       sg_visit_expr(w, rhs)
+      // `bag.beta &&= { ...obj, g14: 1 }`. The plain-`=` spelling of
+      // this went through `PropAssignExpr` and recorded the write; the
+      // compound spelling recorded nothing, so the fuzzer's
+      // `bag.beta &&= { ...obj, g14: a }` had `g14` deleted and `obj`
+      // emptied while `console.log([bag])` printed them.
+      sg_record_write_into(w, target, rhs)
     }
     PropAssignExpr(target, prop, rhs) => {
       match target {
@@ -1207,6 +1364,7 @@ fn sg_visit_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
     | Satisfies(inner, _)
     | NonNull(inner)
     | OptionalChain(inner)
+    | TypeArgs(_, inner)
     | PureCall(inner) => sg_visit_expr(w, inner)
     Yield(Some(inner)) => sg_visit_expr(w, inner)
     Yield(None) => ()
@@ -1231,34 +1389,12 @@ fn sg_visit_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
       sg_visit_expr(w, k)
       sg_visit_expr(w, v)
     }
-    ArrowFunc(params, _, body, _is_async) => {
-      let outer_scope = w.current_scope
-      let outer_func = w.enclosing_func
-      w.in_closure_depth = w.in_closure_depth + 1
-      w.current_scope = sg_new_scope(w.g, Some(outer_scope), Function)
-      // Arrow has no own SymbolId for the function value itself;
-      // returns / throws don't add func-return edges.
-      w.enclosing_func = None
-      for p in params {
-        let pid = sg_declare(w.g, w.current_scope, p.name, Param, false)
-        match p.type_ {
-          @ast.TsType::Any => ()
-          ty => w.g.symbols[pid].ts_type = ty
-        }
-      }
-      match body {
-        ArrowExpr(e) => sg_visit_expr(w, e)
-        ArrowBlock(b) => {
-          sg_declare_block_bindings(w.g, b, w.current_scope, {})
-          for s in b.stmts {
-            sg_visit_stmt(w, s)
-          }
-        }
-      }
-      w.current_scope = outer_scope
-      w.enclosing_func = outer_func
-      w.in_closure_depth = w.in_closure_depth - 1
-    }
+    // An arrow reached as a bare expression has no binding to identify
+    // it by, so its returns cannot be recorded. `sg_visit_decl` calls
+    // `sg_visit_arrow` directly with the declared name when the arrow IS
+    // an initializer, which is the case that matters.
+    ArrowFunc(params, _, body, _is_async) =>
+      sg_visit_arrow(w, params, body, None)
     FuncExpr(f) => sg_visit_function_body(w, f)
     DynamicImport(spec, opts) => {
       sg_visit_expr(w, spec)
@@ -1358,7 +1494,7 @@ fn sg_visit_function_body(w : SgWalker, f : @ast.TsFunc) -> Unit {
   // `FuncArg(fid, i)` → param symbol on the backward walk.
   let param_ids : Array[SymbolId] = []
   for p in f.params {
-    let pid = sg_declare(w.g, w.current_scope, p.name, Param, false)
+    let pid = sg_declare_param(w.g, w.current_scope, p)
     match p.type_ {
       @ast.TsType::Any => ()
       ty => w.g.symbols[pid].ts_type = ty
@@ -1400,9 +1536,14 @@ fn sg_record_use(w : SgWalker, name : String, context : UseContext) -> Unit {
         }
       }
     }
-    // Unresolved name — global / runtime built-in / typo. Nothing
-    // to record (we don't track unbound references).
-    None => ()
+    // Unresolved: a host global, a runtime built-in, or a binding
+    // some pass deleted while leaving this reference behind. The three
+    // are indistinguishable here — the caller has the host's name list
+    // — so record it and let `verify_block` decide.
+    None =>
+      if not(w.g.unresolved.contains(name)) {
+        w.g.unresolved[name] = w.current_scope
+      }
   }
 }
 
@@ -1465,9 +1606,22 @@ fn collect_flow_sources(
       collect_flow_sources(w, t, out)
       collect_flow_sources(w, e, out)
     }
-    As(inner, _) | Satisfies(inner, _) | NonNull(inner) =>
+    As(inner, _) | Satisfies(inner, _) | NonNull(inner) | TypeArgs(_, inner) =>
       collect_flow_sources(w, inner, out)
     _ => collect_immediate_sources(w, expr, out)
+  }
+}
+
+///|
+/// Peel the type-only wrappers that carry no runtime value, so a
+/// question about the expression that actually runs is asked of it.
+/// `TypeArgs` is the one that has cost this pipeline two soundness bugs
+/// by defaulting to fail-open, so it is peeled here explicitly.
+fn strip_expr_wrappers(e : @ast.TsExpr) -> @ast.TsExpr {
+  match e {
+    As(inner, _) | Satisfies(inner, _) | NonNull(inner) | TypeArgs(_, inner) =>
+      strip_expr_wrappers(inner)
+    _ => e
   }
 }
 
@@ -1498,18 +1652,44 @@ fn sg_record_write_into(
   val : @ast.TsExpr,
 ) -> Unit {
   match sg_assign_target_root(w, target) {
-    Some(id) => {
-      for src in expr_flow_sources(w, val) {
-        w.g.flow_edges.push({ from: src, to: SymVal(id) })
-      }
-      // The edge covers what the value REFERS to. An object literal
-      // written here also introduces keys of its own — `g7` in
-      // `obj.q = { ...bag, g7: v }` names nothing else in the bundle,
-      // so nothing else can keep it alive.
-      w.g.symbols[id].written_values.push(val)
-    }
+    Some(id) => sg_record_written_value(w, id, val)
     None => ()
   }
+}
+
+///|
+/// The same recording, for a write whose target is a plain binding
+/// rather than a member expression.
+///
+/// JS has six ways to assign, and only the four that go through a
+/// member expression recorded anything here. `v = { g14: 100 }` and
+/// `v ||= { g14: 100 }` recorded a `reassign_rhs` (for the numeric-vars
+/// pass) and, for plain `=`, a flow edge — but never the written value,
+/// so `collect_direct_props` had nothing to reserve and
+///
+///     let v: any = 1;
+///     v = { ...obj, g14: 100 };
+///     console.log([v]);
+///
+/// dropped `g14` AND `obj`'s own `p`, while the identical program
+/// written as `bag.beta = { ...obj, g14: 100 }` kept both. The
+/// difference was not a judgement about escape; it was which arm of the
+/// walker the statement happened to land in. `v` is not a member
+/// expression, so `sg_assign_target_root` cannot be the entry point and
+/// the recording is factored out here.
+fn sg_record_written_value(
+  w : SgWalker,
+  id : SymbolId,
+  val : @ast.TsExpr,
+) -> Unit {
+  for src in expr_flow_sources(w, val) {
+    w.g.flow_edges.push({ from: src, to: SymVal(id) })
+  }
+  // The edge covers what the value REFERS to. An object literal
+  // written here also introduces keys of its own — `g7` in
+  // `obj.q = { ...bag, g7: v }` names nothing else in the bundle,
+  // so nothing else can keep it alive.
+  w.g.symbols[id].written_values.push(val)
 }
 
 ///|
@@ -1523,6 +1703,7 @@ fn sg_assign_target_root(w : SgWalker, target : @ast.TsExpr) -> SymbolId? {
     @ast.TsExpr::As(inner, _)
     | @ast.TsExpr::Satisfies(inner, _)
     | @ast.TsExpr::NonNull(inner)
+    | @ast.TsExpr::TypeArgs(_, inner)
     | @ast.TsExpr::OptionalChain(inner) => sg_assign_target_root(w, inner)
     _ => None
   }
@@ -1581,7 +1762,33 @@ fn collect_immediate_sources(
         _ => out.push(Unknown)
       }
     MethodCall(_, _, _) => out.push(Unknown)
-    New(_, _) | NewExpr(_, _) => out.push(Unknown)
+    // An instance's identity comes from its class. `const w = new C()`
+    // makes `w` a value of `C`, so an observation of `w` is an
+    // observation of `C`'s members — which is exactly what
+    // `reserved_props_from_observability`'s `ClassDecl` arm already
+    // assumes for the direct case.
+    //
+    // Without this edge the backward propagation stopped at `w`:
+    // `register(w)`, an external callee receiving the instance, never
+    // reached `C`, while the inline `register(new C())` did, because the
+    // sink seeder walks the expression itself. One program, two
+    // spellings, two answers — and the spelling that lost is the one
+    // real code uses. It surfaced as `class_method_dce` deleting the
+    // methods of a class the host holds.
+    New(name, _) =>
+      match sg_lookup(w.g, w.current_scope, name) {
+        Some(id) => out.push(SymVal(id))
+        None => out.push(Unknown)
+      }
+    NewExpr(callee, _) =>
+      match strip_expr_wrappers(callee) {
+        @ast.TsExpr::Var(n) =>
+          match sg_lookup(w.g, w.current_scope, n) {
+            Some(id) => out.push(SymVal(id))
+            None => out.push(Unknown)
+          }
+        _ => out.push(Unknown)
+      }
     NumberLit(_) | IntLit(_) | BigIntLit(_) => out.push(Literal(LitNumeric))
     StringLit(_) | TemplateLiteral(_, _) => out.push(Literal(LitString))
     BoolLit(_) => out.push(Literal(LitBool))
@@ -1645,6 +1852,7 @@ fn collect_immediate_sources(
     | NonNull(inner)
     | OptionalChain(inner)
     | PureCall(inner)
+    | TypeArgs(_, inner)
     | Await(inner) => collect_immediate_sources(w, inner, out)
     Yield(_) | YieldStar(_) => out.push(Unknown)
     PropAccess(_, _) | IndexAccess(_, _) =>

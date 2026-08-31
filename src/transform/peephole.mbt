@@ -134,12 +134,28 @@ pub fn peephole_block(block : @ast.TsBlock) -> @ast.TsBlock {
   let has_positions = block.stmt_positions.length() == block.stmts.length()
   for i, s in block.stmts {
     match peep_block_level(peep_stmt(s, ctx)) {
-      Some(kept) => {
-        stmts.push(kept)
-        if has_positions {
-          positions.push(block.stmt_positions[i])
+      Some(kept) =>
+        // The top level has its own driver: `peep_block` handles every
+        // NESTED block and this loop handles the outermost one. A
+        // statement-level rewrite therefore has to be wired into both,
+        // and the IIFE splice below is the one that matters most here —
+        // a bundle's side-effect wrappers are at the top level almost
+        // by definition.
+        match iife_splice_stmts(kept) {
+          Some(spliced) =>
+            for sp in spliced {
+              stmts.push(sp)
+              if has_positions {
+                positions.push(block.stmt_positions[i])
+              }
+            }
+          None => {
+            stmts.push(kept)
+            if has_positions {
+              positions.push(block.stmt_positions[i])
+            }
+          }
         }
-      }
       None => ()
     }
   }
@@ -332,15 +348,35 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
       // redundant. Saves the 5 chars `void `.
       match ep {
         @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, inner) => Expr(inner)
+        // `++x;` → `x++;`. `peep_expr` produces the PRE-fix form
+        // because it cannot know whether its caller uses the value, and
+        // for `x += 1` the value is the incremented one. Here it is
+        // discarded, so the two are interchangeable and post-fix is the
+        // conventional spelling. Same three bytes either way.
+        @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::PreInc, t) =>
+          Expr(@ast.TsExpr::UnaryOp(@ast.TsUnaryOp::PostInc, t))
+        @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::PreDec, t) =>
+          Expr(@ast.TsExpr::UnaryOp(@ast.TsUnaryOp::PostDec, t))
         _ => Expr(ep)
       }
     }
     Return(Some(e)) => {
       let ep = peep_expr(e, ctx)
       // `return undefined` / `return void 0` → `return` (saves bytes).
+      //
+      // `void EXPR` is `undefined` whatever `EXPR` is, and `EXPR` still
+      // runs — so this may only drop a PURE operand. `fold.mbt`'s
+      // `Return` arm had the identical bug; this is the ninth site of
+      // the one rule. `peep_stmt` returns ONE statement, so there is
+      // nowhere to put the effect: an impure operand simply keeps
+      // `return void EXPR`, which is already what the source said.
+      // `fold.mbt` builds a statement list and can do better there,
+      // splitting it into `EXPR; return;` and then stripping the
+      // trailing bare return.
       match ep {
         Var("undefined") if !ctx.undefined_shadowed => Return(None)
-        UnaryOp(@ast.TsUnaryOp::Void, _) => Return(None)
+        UnaryOp(@ast.TsUnaryOp::Void, inner) if is_pure_value(inner) =>
+          Return(None)
         _ => Return(Some(ep))
       }
     }
@@ -459,14 +495,15 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
       // terser's `loops`: `for(;;)` is shorter than any spelling of an
       // always-true `while` condition, and `while (!0)` is what the
       // BoolLit rewrite above turns `while (true)` into.
-      let body_p = peep_block(body, ctx)
+      let body_p = collapse_loop_body(peep_block(body, ctx))
       if expr_is_always_truthy(cp) {
         For(None, None, None, body_p)
       } else {
         While(cp, body_p)
       }
     }
-    DoWhile(c, body) => DoWhile(peep_expr(c, ctx), peep_block(body, ctx))
+    DoWhile(c, body) =>
+      DoWhile(peep_expr(c, ctx), collapse_loop_body(peep_block(body, ctx)))
     With(c, body) => With(peep_expr(c, ctx), peep_block(body, ctx))
     For(init, cond, update, body) =>
       For(
@@ -482,14 +519,32 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
           Some(s) => Some(peep_stmt(s, ctx))
           None => None
         },
-        peep_block(body, ctx),
+        collapse_loop_body(peep_block(body, ctx)),
       )
     ForOf(k, b, t, iter, body) =>
-      ForOf(k, b, t, peep_expr(iter, ctx), peep_block(body, ctx))
+      ForOf(
+        k,
+        b,
+        t,
+        peep_expr(iter, ctx),
+        collapse_loop_body(peep_block(body, ctx)),
+      )
     ForAwaitOf(k, b, t, iter, body) =>
-      ForAwaitOf(k, b, t, peep_expr(iter, ctx), peep_block(body, ctx))
+      ForAwaitOf(
+        k,
+        b,
+        t,
+        peep_expr(iter, ctx),
+        collapse_loop_body(peep_block(body, ctx)),
+      )
     ForIn(k, b, t, iter, body) =>
-      ForIn(k, b, t, peep_expr(iter, ctx), peep_block(body, ctx))
+      ForIn(
+        k,
+        b,
+        t,
+        peep_expr(iter, ctx),
+        collapse_loop_body(peep_block(body, ctx)),
+      )
     Switch(e, cases) => {
       let new_cases : Array[@ast.TsSwitchCase] = []
       for c in cases {
@@ -614,8 +669,31 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
           // Check all named cases end with a terminator and have no
           // internal bare breaks (a bare break inside a case targets the
           // switch; lifting to if would make it a SyntaxError).
+          //
+          // The chain also tests the SCRUTINEE once per named case,
+          // where the switch evaluates it once. That is only equivalent
+          // when re-evaluating it is free, and nothing here asked:
+          //
+          //     switch ((trace.push(2), obj?.gamma)) {
+          //     case 0: return a; case 1: return y--; default: ; }
+          //
+          // became two `if`s and pushed `2` twice. Same argument applies
+          // to a value that could change between reads, which purity
+          // also rules out. The single-case arms above spell `ep` exactly
+          // once and so need no such gate — this is the only arm that
+          // duplicates it.
+          let named_count = {
+            let mut n = 0
+            for c in final_cases {
+              if c.test_expr is Some(_) {
+                n = n + 1
+              }
+            }
+            n
+          }
           let all_non_fall_through = {
-            let mut ok = final_cases.length() > 1
+            let mut ok = final_cases.length() > 1 &&
+              (named_count <= 1 || is_pure_value(ep))
             for c in final_cases {
               match c.test_expr {
                 Some(_) => {
@@ -1048,12 +1126,35 @@ fn stmt_uses_super(s : @ast.TsStmt) -> Bool {
 // Peephole a declaration RHS with special handling for named function bindings.
 // Goals:
 //   1. `let f = function(){}` must NOT become an arrow — keep FuncExpr so
-//      try_emit_function_decl can hoist it as `function f(){}`.
-//   2. `let f = (...) => { block }` (block-body arrow) also converts to FuncExpr
-//      for the same hoisting reason; block arrows are never shorter than the
-//      equivalent function expression, and hoisting avoids TDZ issues in bundles.
-//   3. `let f = x => x+1` and `let f = (x) => { return x+1; }` stay arrows
-//      after peep_expr folds them to concise form (smaller, no hoisting needed).
+//      try_emit_function_decl can hoist it as `function f(){}`. Converting
+//      it would also be unsound: a function expression's `this` is dynamic
+//      and an arrow's is lexical.
+//   2. `let f = x => x+1` and `let f = (x) => { return x+1; }` stay arrows
+//      after peep_expr folds them to concise form.
+//   3. A BLOCK-body arrow stays an arrow too. It used to be converted to a
+//      FuncExpr so the emitter would print `function f(…){…}`, on two
+//      stated grounds, and both were wrong.
+//
+//      "Block arrows are never shorter than the equivalent function
+//      expression" is false once the declarations JOIN. A lone
+//      declaration is a wash — `function f(a,b){B}` and
+//      `let f=(a,b)=>{B}` are the same length, and the arrow wins 2 for a
+//      single simple parameter — but a run of them shares one `let`,
+//      while function declarations each pay `function ` in full.
+//      Measured across nine real bundles: -2,925 bytes, no target worse,
+//      excalidraw alone -2,629 (381 sites, ~6.9 bytes each). It was
+//      turning 642 of excalidraw's 1,403 source arrows into `function`,
+//      which is why mtsc emitted 516 `function` keywords where terser
+//      emitted 102.
+//
+//      "Hoisting avoids TDZ issues in bundles" describes a hazard that
+//      cannot exist here: the input is already an ARROW, so nothing in the
+//      original module could legally call it before its declaration, and
+//      the bundler orders modules the way ESM evaluates them. The one
+//      case hoisting would rescue is an import CYCLE that calls across
+//      during initialization — which ESM itself rejects for a `const`
+//      arrow, so the conversion was making code work that does not work
+//      unbundled. Removing it restores ESM's behaviour.
 
 ///|
 fn peep_decl_rhs(
@@ -1075,34 +1176,7 @@ fn peep_decl_rhs(
       _ => ()
     }
   }
-  let result = peep_expr(rhs, ctx)
-  if name != "" {
-    match result {
-      // Block-body arrow after peephole: convert to FuncExpr for hoisting.
-      // Concise arrows (ArrowExpr body) were either already concise or folded
-      // from `{return expr}` — those stay arrows.
-      @ast.TsExpr::ArrowFunc(
-        params,
-        ret,
-        @ast.TsArrowBody::ArrowBlock(blk),
-        is_async
-      ) if !(block_uses_super(blk) || block_uses_this(blk)) =>
-        @ast.TsExpr::FuncExpr({
-          name: "",
-          type_params: [],
-          type_param_bounds: [],
-          const_type_params: [],
-          params,
-          return_type: ret,
-          body: blk,
-          is_generator: false,
-          is_async,
-        })
-      _ => result
-    }
-  } else {
-    result
-  }
+  peep_expr(rhs, ctx)
 }
 
 ///|
@@ -1456,6 +1530,128 @@ fn block_redeclares_label(block : @ast.TsBlock, name : String) -> Bool {
 }
 
 ///|
+/// terser's `sequences`, in the one position where it pays for itself:
+/// a loop body of leading expression statements plus one final
+/// statement collapses to a single statement, and a single-statement
+/// loop body needs no braces.
+///
+///     for (;;) { i++; if (i > 2) return i; }
+///     for (;;) if (i++, i > 2) return i;
+///
+/// The comma itself is free — `a;b` and `a,b` are the same length — so
+/// the entire win is the two braces, which is why this only fires when
+/// the merge leaves EXACTLY one statement. Evaluation order is
+/// unchanged: a comma expression evaluates left to right and discards
+/// every value but the last, which is what a run of expression
+/// statements does.
+///
+/// Only expression statements are absorbed, so nothing here can move a
+/// declaration into or out of a scope.
+fn collapse_loop_body(b : @ast.TsBlock) -> @ast.TsBlock {
+  let n = b.stmts.length()
+  if n < 2 {
+    return b
+  }
+  for i in 0..<(n - 1) {
+    if !(b.stmts[i] is Expr(_)) {
+      return b
+    }
+  }
+  let mut lead = match b.stmts[0] {
+    Expr(e) => e
+    _ => return b
+  }
+  for i in 1..<(n - 1) {
+    match b.stmts[i] {
+      Expr(e) => lead = @ast.TsExpr::Seq(lead, e)
+      _ => return b
+    }
+  }
+  let merged : @ast.TsStmt = match b.stmts[n - 1] {
+    Expr(e) => Expr(Seq(lead, e))
+    Return(Some(e)) => Return(Some(Seq(lead, e)))
+    Throw(e) => Throw(Seq(lead, e))
+    If(cond, t, e) => If(Seq(lead, cond), t, e)
+    Switch(disc, cases) => Switch(Seq(lead, disc), cases)
+    // `Return(None)`, `Break`, `Continue` carry no expression to merge
+    // into, and a declaration cannot be brace-less anyway.
+    _ => return b
+  }
+  { stmts: [merged], stmt_positions: [] }
+}
+
+///|
+/// The statements a side-effect-only IIFE can be replaced by, or `None`
+/// when it cannot.
+///
+///     (function () { globalThis.__sink = 1; })();
+///     globalThis.__sink = 1;
+///
+/// terser calls its version of this `negate_iife`; the byte win here is
+/// the wrapper itself — 13 bytes for `(function(){})()`, 8 for the arrow
+/// form — not the negation.
+///
+/// The conditions are all about what the wrapper was providing:
+///
+///   * A SCOPE. Any declaration in the body is scoped by the wrapper,
+///     and splicing it out moves the binding into the enclosing scope,
+///     where it can collide with a binding already there (a SyntaxError
+///     for `let`, silent aliasing for `var`). So the body has to be
+///     expression statements and nothing else — which also rules out
+///     `return`, whose value would now have nowhere to go.
+///   * A `this` / `arguments` BINDING, for the `function` form. Called
+///     as `f()`, `this` inside is `undefined` in a module and the body's
+///     `arguments` is its own; spliced out, both mean something else.
+///     An arrow never had either — it reads them from the same
+///     enclosing function the splice lands in — so the arrow form needs
+///     no such check.
+///   * A call BOUNDARY, for `async` / generator wrappers: those do not
+///     run their body to completion at the call site at all.
+fn iife_splice_stmts(stmt : @ast.TsStmt) -> Array[@ast.TsStmt]? {
+  let (body, needs_this_check) = match stmt {
+    Expr(CallExpr(FuncExpr(f), args)) =>
+      if args.is_empty() &&
+        f.params.is_empty() &&
+        !f.is_async &&
+        !f.is_generator {
+        (f.body, true)
+      } else {
+        return None
+      }
+    Expr(CallExpr(ArrowFunc(params, _, body, is_async), args)) =>
+      if args.is_empty() && params.is_empty() && !is_async {
+        match body {
+          @ast.TsArrowBody::ArrowBlock(b) => (b, false)
+          // `(() => sideEffect())()` — the concise form has no
+          // statements to check at all.
+          @ast.TsArrowBody::ArrowExpr(e) => return Some([@ast.TsStmt::Expr(e)])
+        }
+      } else {
+        return None
+      }
+    _ => return None
+  }
+  for s in body.stmts {
+    if !(s is Expr(_)) {
+      return None
+    }
+  }
+  if needs_this_check &&
+    (
+      block_uses_this(body) ||
+      block_uses_super(body) ||
+      block_references_name(body, "arguments")
+    ) {
+    return None
+  }
+  let out : Array[@ast.TsStmt] = []
+  for s in body.stmts {
+    out.push(s)
+  }
+  Some(out)
+}
+
+///|
 fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
   let stmts : Array[@ast.TsStmt] = []
   // A function declaration after the terminator is NOT unreachable —
@@ -1487,6 +1683,16 @@ fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
     let ps = match peep_block_level(ps) {
       Some(replacement) => replacement
       None => continue
+    }
+    // `(function () { sideEffect(); })();` → `sideEffect();`
+    match iife_splice_stmts(ps) {
+      Some(spliced) => {
+        for s in spliced {
+          stmts.push(s)
+        }
+        continue
+      }
+      None => ()
     }
     // `if (c) { …; return; } else { stmts }` → `if (c) { …; return; }` +
     // `stmts` spliced inline. Saves the `else ` keyword (5 bytes) and the
@@ -1744,13 +1950,13 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       match rhs_p {
         BinOp(op, @ast.TsExpr::Var(other), value) =>
           if other == name {
-            match (compound_for_binop(op), value) {
-              (Some(AddAssign), @ast.TsExpr::IntLit(1)) =>
-                return UnaryOp(@ast.TsUnaryOp::PostInc, Var(name))
-              (Some(SubAssign), @ast.TsExpr::IntLit(1)) =>
-                return UnaryOp(@ast.TsUnaryOp::PostDec, Var(name))
-              (Some(cop), _) => return CompoundAssignExpr(Var(name), cop, value)
-              _ => ()
+            match compound_for_binop(op) {
+              Some(cop) =>
+                match compound_step_value(cop, value, Var(name)) {
+                  Some(e) => return e
+                  None => return CompoundAssignExpr(Var(name), cop, value)
+                }
+              None => ()
             }
           }
         _ => ()
@@ -1763,6 +1969,26 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       // `x === null || x === void 0` → `x == null`  (saves ~13 bytes)
       // `x !== null && x !== void 0` → `x != null`
       match op {
+        // `a || (b || c)` → `(a || b) || c`. `||` and `&&` are
+        // left-associative, so the emitter has to parenthesize a
+        // right-nested one and the parens are 2 bytes for nothing.
+        // Short-circuit order is identical in both spellings: the
+        // operands are still evaluated left to right, and each still
+        // stops the chain on the same value.
+        //
+        // `fold_guard_return` produces exactly this shape — nested
+        // guard clauses collapse inner-first, so `if (a) return;
+        // if (b) return; g()` arrives here as `a || (b || g())`.
+        Or if rp is BinOp(Or, _, _) =>
+          match rp {
+            BinOp(_, rl, rr) => BinOp(Or, BinOp(Or, lp, rl), rr)
+            _ => BinOp(op, lp, rp)
+          }
+        And if rp is BinOp(And, _, _) =>
+          match rp {
+            BinOp(_, rl, rr) => BinOp(And, BinOp(And, lp, rl), rr)
+            _ => BinOp(op, lp, rp)
+          }
         Or =>
           match fold_null_undef_or(lp, rp) {
             Some(e) => e
@@ -1805,6 +2031,23 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
               StringLit("undefined"),
               UnaryOp(@ast.TsUnaryOp::Typeof, @ast.TsExpr::Var(_)),
             ) => BinOp(op, lp, rp)
+            // `typeof void 0 === "undefined"` → `!0`. The rule below
+            // rewrites the whole comparison to `x === void 0`, and when
+            // `x` is itself `void 0` the result is a 14-byte constant
+            // that nothing after this pass will fold: `fold` DOES have
+            // this rule (`both_literal_undefined`), but `fold-2` runs
+            // BEFORE peephole, and it is peephole that creates the
+            // shape. `f(undefined)` inlined into a body of
+            // `typeof x === "undefined"` shipped as
+            // `void 0 === void 0` for exactly that reason.
+            (
+              UnaryOp(@ast.TsUnaryOp::Typeof, @ast.TsExpr::UnaryOp(Void, _)),
+              StringLit("undefined"),
+            )
+            | (
+              StringLit("undefined"),
+              UnaryOp(@ast.TsUnaryOp::Typeof, @ast.TsExpr::UnaryOp(Void, _)),
+            ) => UnaryOp(@ast.TsUnaryOp::Not, IntLit(0))
             (UnaryOp(@ast.TsUnaryOp::Typeof, x), StringLit("undefined"))
             | (StringLit("undefined"), UnaryOp(@ast.TsUnaryOp::Typeof, x)) =>
               BinOp(
@@ -1812,6 +2055,11 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
                 x,
                 UnaryOp(@ast.TsUnaryOp::Void, IntLit(0)),
               )
+            // The same constant, arrived at from the other direction:
+            // an inline substituted `void 0` into a comparison that was
+            // already `x === void 0`.
+            (UnaryOp(Void, a), UnaryOp(Void, b)) if is_pure_value(a) &&
+              is_pure_value(b) => UnaryOp(@ast.TsUnaryOp::Not, IntLit(0))
             // `x === true` / `x === !0` → `x`  (saves 7 bytes)
             // `x === false` / `x === !1` → `!x`  (saves 6 bytes)
             //
@@ -1855,6 +2103,15 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
               StringLit("undefined"),
               UnaryOp(@ast.TsUnaryOp::Typeof, @ast.TsExpr::Var(_)),
             ) => BinOp(op, lp, rp)
+            // The `!==` mirror of the `===` constant above.
+            (
+              UnaryOp(@ast.TsUnaryOp::Typeof, @ast.TsExpr::UnaryOp(Void, _)),
+              StringLit("undefined"),
+            )
+            | (
+              StringLit("undefined"),
+              UnaryOp(@ast.TsUnaryOp::Typeof, @ast.TsExpr::UnaryOp(Void, _)),
+            ) => UnaryOp(@ast.TsUnaryOp::Not, IntLit(1))
             (UnaryOp(@ast.TsUnaryOp::Typeof, x), StringLit("undefined"))
             | (StringLit("undefined"), UnaryOp(@ast.TsUnaryOp::Typeof, x)) =>
               BinOp(
@@ -1862,6 +2119,8 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
                 x,
                 UnaryOp(@ast.TsUnaryOp::Void, IntLit(0)),
               )
+            (UnaryOp(Void, a), UnaryOp(Void, b)) if is_pure_value(a) &&
+              is_pure_value(b) => UnaryOp(@ast.TsUnaryOp::Not, IntLit(1))
             // `x !== true` / `x !== !0` → `!x`  (saves 6 bytes)
             // `x !== false` / `x !== !1` → `x`  (saves 7 bytes)
             //
@@ -2235,19 +2494,47 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
           _ => ()
         }
       }
-      // `Math.pow(x, y)` → `x**y` (saves up to 8 bytes)
+      // `Math.pow(x, y)` → `x**y` (saves up to 8 bytes).
+      //
+      // These two agree on every value but one pair: `Math.pow` coerces
+      // with ToNumber, which THROWS on a BigInt, while `**` computes.
+      // `Math.pow(10n, 10n)` is a TypeError and `10n ** 10n` is
+      // 10000000000. A mixed pair throws either way, so proving that
+      // ONE operand cannot be a BigInt is enough — which a non-BigInt
+      // literal on either side does, and that covers the common
+      // `Math.pow(x, 2)`. Found by
+      // `scripts/verify_rule_equivalence.mjs`.
       if m == "pow" && new_args.length() == 2 {
         match recv_p {
           Var("Math") =>
-            return BinOp(@ast.TsBinOp::Pow, new_args[0], new_args[1])
+            if is_definitely_not_bigint(new_args[0]) ||
+              is_definitely_not_bigint(new_args[1]) {
+              return BinOp(@ast.TsBinOp::Pow, new_args[0], new_args[1])
+            }
           _ => ()
         }
       }
       // `Array.from(x)` → `[...x]` (saves ~6 bytes; single-arg only —
       // two-arg form has a map function and must be left alone).
+      //
+      // Gated on the receiver being provably ITERABLE, which is not the
+      // same set `Array.from` accepts: it also takes an array-LIKE, an
+      // object with `length` and index properties and no
+      // `Symbol.iterator`. `Array.from({ length: 256 })` is 256
+      // `undefined`s; `[...{ length: 256 }]` throws. typebox's
+      // `hash.ts` does exactly that and the bundle died on load.
+      //
+      // The `Array.prototype.slice.call` rewrite three lines below had
+      // already been removed for this same reason, which is the part
+      // worth noticing: the knowledge was adjacent and the rule shipped
+      // anyway, because nothing asked this rule the question. It is in
+      // `scripts/verify_rule_equivalence.mjs` now.
       if m == "from" && new_args.length() == 1 {
         match recv_p {
-          Var("Array") => return ArrayLit([Spread(new_args[0])])
+          Var("Array") =>
+            if is_definitely_iterable(new_args[0]) {
+              return ArrayLit([Spread(new_args[0])])
+            }
           _ => ()
         }
       }
@@ -2272,31 +2559,24 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         // `scripts/verify_rule_equivalence.mjs`.
         ignore(recv_p)
       }
-      // `Array.prototype.METHOD.call(arr, arg1, arg2, ...)` → `arr.METHOD(arg1, arg2, ...)`.
-      // TypeScript's `__spreadArray` helper and some polyfills call Array
-      // prototype methods indirectly. The `.call` form is safe to collapse
-      // when the first argument (the `this` receiver) is a plain array or
-      // a var — the method semantics are the same. Only fold when the
-      // receiver is `Array.prototype.METHOD` (not e.g. `[].METHOD`).
-      // Saves ~22 bytes for methods like forEach, map, filter, reduce, etc.
-      if m == "call" && new_args.length() >= 1 {
-        match recv_p {
-          PropAccess(
-            PropAccess(@ast.TsExpr::Var("Array"), "prototype"),
-            method_name
-          ) if method_name != "slice" => {
-            // Rewrite to `new_args[0].method_name(new_args[1..])`.
-            let rest : Array[@ast.TsExpr] = []
-            for ii, a in new_args {
-              if ii > 0 {
-                rest.push(a)
-              }
-            }
-            return MethodCall(new_args[0], method_name, rest)
-          }
-          _ => ()
-        }
-      }
+      // (removed) `Array.prototype.METHOD.call(x, …)` -> `x.METHOD(…)`.
+      //
+      // The old comment said this is safe "when the first argument is a
+      // plain array or a var", and a var is not a proof of anything.
+      // Two ways apart, and the rewrite is on the wrong side of both:
+      //
+      //   * The `.call` form names the built-in EXPLICITLY and works on
+      //     anything array-like or iterable — a string, `arguments`, a
+      //     NodeList, `{ length: 2, 0: "a", 1: "b" }`. The direct call
+      //     needs the receiver to HAVE that method, so all of those
+      //     become `TypeError: x.indexOf is not a function`.
+      //   * Where the receiver DOES have a same-named method, the
+      //     rewrite calls that one instead of the built-in — the same
+      //     mistake as the removed `x.hasOwnProperty(k)` rewrite below.
+      //
+      // Which is why `slice` was already excluded here: it was the one
+      // instance somebody had hit. Found for the whole family by
+      // `scripts/verify_rule_equivalence.mjs`.
       // `Object.prototype.hasOwnProperty.call(obj, key)` → `Object.hasOwn(obj, key)`
       // ES2022+; saves ~22 bytes and is the modern idiom.
       // Also handles the shorter `{}.hasOwnProperty.call(obj, key)` form.
@@ -2365,13 +2645,20 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
           _ => ()
         }
       }
-      // `[].concat(a, b, …)` → `[...a, ...b, …]` (array spread).
+      // `[].concat([a], [b], …)` → `[a, b, …]` (array spread).
       // TypeScript's `__spreadArray` helper or manual concatenation emits this.
-      // Safe because `concat` on a fresh `[]` never mutates anything and
-      // spread is semantically equivalent for iterable arrays.
+      //
+      // Every argument must be an array LITERAL, and the reason is that
+      // `concat` and spread disagree about non-arrays in the loudest
+      // possible way: `concat` APPENDS a non-array as one element, so
+      // `[].concat(undefined)` is `[undefined]` and `[].concat(1)` is
+      // `[1]`, while `[...undefined]` and `[...1]` both throw. The old
+      // code spread anything that was not a literal. Found by
+      // `scripts/verify_rule_equivalence.mjs`.
       if m == "concat" && new_args.length() >= 1 {
+        let all_array_lits = new_args.iter().all(fn(a) { a is ArrayLit(_) })
         match recv_p {
-          ArrayLit([]) => {
+          ArrayLit([]) if all_array_lits => {
             let items : Array[@ast.TsExpr] = []
             for a in new_args {
               match a {
@@ -2412,7 +2699,14 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         }
       }
       // `fn.apply(null, argsArray)` → `fn(...argsArray)` (saves ~7 bytes).
-      // Only fold the single-arg form where the array arg is known.
+      //
+      // The args list must be provably iterable, and `apply` accepts
+      // more than that: an array-LIKE, and also `null` / `undefined`,
+      // which mean "no arguments". `f.apply(null, undefined)` calls `f()`
+      // and `f(...undefined)` throws. The comment used to say "only fold
+      // the single-arg form where the array arg is known" — the arity was
+      // checked and the "known" was not. Found by
+      // `scripts/verify_rule_equivalence.mjs`.
       if m == "apply" && new_args.length() == 2 {
         let is_null_this = match new_args[0] {
           @ast.TsExpr::NullLit => true
@@ -2420,18 +2714,22 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
           @ast.TsExpr::Var("undefined") if !ctx.undefined_shadowed => true
           _ => false
         }
-        if is_null_this {
+        if is_null_this && is_definitely_iterable(new_args[1]) {
           return CallExpr(recv_p, [Spread(new_args[1])])
         }
       }
-      // `arr.slice(0)` → `[...arr]` (saves ~5 bytes; shallow copy of array).
-      // Only the single-arg form with literal 0 (from-start copy); multi-arg
-      // and non-zero-start forms can't be simplified to a spread.
-      if m == "slice" &&
-        new_args.length() == 1 &&
-        exprs_eq(new_args[0], @ast.TsExpr::IntLit(0)) {
-        return ArrayLit([Spread(recv_p)])
-      }
+      // (removed) `x.slice(0)` -> `[...x]`.
+      //
+      // `slice` is a method on Array AND on String, and the two return
+      // different kinds of thing: `"ab".slice(0)` is the string `"ab"`,
+      // `[..."ab"]` is `["a", "b"]`. It also reaches array-likes through
+      // `.call`, where a spread throws. The old comment reasoned only
+      // about "shallow copy of array" — which is correct about arrays and
+      // says nothing about why the receiver must be one. Found by
+      // `scripts/verify_rule_equivalence.mjs`.
+      //
+      // An `ArrayLit` receiver would be provable, and pointless:
+      // `[...[1, 2]]` is longer than `[1, 2].slice(0)` is worth.
       // (removed) `x.toString()` -> `"" + x`. Three ways apart:
       //
       //   * `undefined.toString()` throws; `"" + undefined` is
@@ -2520,14 +2818,12 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
     CompoundAssignExpr(t, op, v) => {
       let tp = peep_expr(t, ctx)
       let vp = peep_expr(v, ctx)
-      // `expr += 1` → `expr++` and `expr -= 1` → `expr--` in expression
-      // position. Saves 2 bytes vs the compound-assign form.
-      match (op, vp) {
-        (AddAssign, @ast.TsExpr::IntLit(1)) =>
-          UnaryOp(@ast.TsUnaryOp::PostInc, tp)
-        (SubAssign, @ast.TsExpr::IntLit(1)) =>
-          UnaryOp(@ast.TsUnaryOp::PostDec, tp)
-        _ => CompoundAssignExpr(tp, op, vp)
+      // `expr += 1` → `++expr` and `expr -= 1` → `--expr` in expression
+      // position. See `compound_step_value` for why it is the PRE-fix
+      // form.
+      match compound_step_value(op, vp, tp) {
+        Some(e) => e
+        None => CompoundAssignExpr(tp, op, vp)
       }
     }
     AssignPattern(b, v) => AssignPattern(b, peep_expr(v, ctx))
@@ -2541,14 +2837,13 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
           Var(tn),
           BinOp(op, @ast.TsExpr::PropAccess(@ast.TsExpr::Var(rn), rp), rhs),
         ) if tn == rn && p == rp =>
-          match (compound_for_binop(op), rhs) {
-            (Some(AddAssign), @ast.TsExpr::IntLit(1)) =>
-              UnaryOp(@ast.TsUnaryOp::PostInc, PropAccess(Var(tn), p))
-            (Some(SubAssign), @ast.TsExpr::IntLit(1)) =>
-              UnaryOp(@ast.TsUnaryOp::PostDec, PropAccess(Var(tn), p))
-            (Some(cop), _) =>
-              CompoundAssignExpr(PropAccess(Var(tn), p), cop, rhs)
-            _ =>
+          match compound_for_binop(op) {
+            Some(cop) =>
+              match compound_step_value(cop, rhs, PropAccess(Var(tn), p)) {
+                Some(e) => e
+                None => CompoundAssignExpr(PropAccess(Var(tn), p), cop, rhs)
+              }
+            None =>
               PropAssignExpr(
                 Var(tn),
                 p,
@@ -2574,14 +2869,15 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
             rhs
           ),
         ) if tn == rn && ik == rk =>
-          match (compound_for_binop(op), rhs) {
-            (Some(AddAssign), @ast.TsExpr::IntLit(1)) =>
-              UnaryOp(@ast.TsUnaryOp::PostInc, IndexAccess(Var(tn), Var(ik)))
-            (Some(SubAssign), @ast.TsExpr::IntLit(1)) =>
-              UnaryOp(@ast.TsUnaryOp::PostDec, IndexAccess(Var(tn), Var(ik)))
-            (Some(cop), _) =>
-              CompoundAssignExpr(IndexAccess(Var(tn), Var(ik)), cop, rhs)
-            _ =>
+          match compound_for_binop(op) {
+            Some(cop) =>
+              match
+                compound_step_value(cop, rhs, IndexAccess(Var(tn), Var(ik))) {
+                Some(e) => e
+                None =>
+                  CompoundAssignExpr(IndexAccess(Var(tn), Var(ik)), cop, rhs)
+              }
+            None =>
               IndexAssignExpr(
                 Var(tn),
                 Var(ik),
@@ -2747,6 +3043,39 @@ fn compound_for_binop(op : @ast.TsBinOp) -> @ast.TsCompoundOp? {
     And => Some(AndAssign)
     Or => Some(OrAssign)
     Coalesce => Some(CoalesceAssign)
+    _ => None
+  }
+}
+
+///|
+/// `target += 1` / `target -= 1` as an increment, for a position where
+/// the expression's VALUE is used. `None` when the operator or the
+/// operand is not a step of one.
+///
+/// The operator has to be the PRE-fix form and four sites had it as
+/// post-fix. `x += 1` evaluates to the NEW value; `x++` evaluates to
+/// the OLD one. So
+///
+///     while (--brake > 0 && ((arr[0] += 1) ? keep : (trace.push(4), 10)))
+///
+/// with `arr[0]` at 0 tests `1` and takes the first branch, while the
+/// compiled `arr[0]++` tests `0` and ran a `trace.push` the source
+/// never runs. `++x` and `x++` are the same three bytes, so this was
+/// never a trade — just the wrong operator, written out four times.
+///
+/// The statement-position rewrites in `peep_stmt` are a different rule
+/// and correctly use the post-fix form: there the value is discarded,
+/// and `x++` is what a JS author would write.
+fn compound_step_value(
+  op : @ast.TsCompoundOp,
+  rhs : @ast.TsExpr,
+  target : @ast.TsExpr,
+) -> @ast.TsExpr? {
+  match (op, rhs) {
+    (AddAssign, @ast.TsExpr::IntLit(1)) =>
+      Some(UnaryOp(@ast.TsUnaryOp::PreInc, target))
+    (SubAssign, @ast.TsExpr::IntLit(1)) =>
+      Some(UnaryOp(@ast.TsUnaryOp::PreDec, target))
     _ => None
   }
 }
@@ -2966,6 +3295,67 @@ fn is_bool_expr(e : @ast.TsExpr) -> Bool {
       }
     @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Not, _) => true
     @ast.TsExpr::BoolLit(_) => true
+    _ => false
+  }
+}
+
+///|
+/// Is `expr` something a spread can consume — i.e. does it certainly
+/// have a `Symbol.iterator`?
+///
+/// This is the guard on every rewrite that replaces a built-in with a
+/// spread, and it exists because those built-ins accept a WIDER set.
+/// `Array.from`, `Array.prototype.slice.call` and `Function.prototype
+/// .apply` all take an array-LIKE — an object with `length` and index
+/// properties — where a spread throws. Three separate rewrites shipped
+/// on the assumption that array-like and iterable are the same set;
+/// they are not, and `{ length: n }` is the common way to say so.
+///
+/// The answer here is syntactic, so it is deliberately narrow: no
+/// expression whose type we cannot read off its own shape qualifies. A
+/// `Var` never does, however obviously an array it looks in context.
+fn is_definitely_iterable(expr : @ast.TsExpr) -> Bool {
+  match expr {
+    // Literals whose iterability is part of the syntax.
+    ArrayLit(_) | StringLit(_) | TemplateLiteral(_, _) => true
+    // `new Set(…)` / `new Map(…)` / `new Array(…)` — the constructor
+    // names the result's type. (A user-shadowed `Set` would break this,
+    // and shadowing a global built-in constructor is already outside
+    // what every other rule in this file assumes.)
+    New("Set", _) | New("Map", _) | New("Array", _) => true
+    // A parenthesized or type-annotated wrapper is transparent here.
+    // Missing this is how a wrapper node costs a rewrite (see the
+    // `TypeArgs` and `PureCall` families), so peel rather than default.
+    TypeArgs(_, inner) | As(inner, _) | Satisfies(inner, _) | NonNull(inner) =>
+      is_definitely_iterable(inner)
+    _ => false
+  }
+}
+
+///|
+/// Can `expr` be ruled out as a BigInt from its shape alone?
+///
+/// Only `Math.pow` -> `**` needs this, and it needs surprisingly little:
+/// the two agree everywhere except when BOTH operands are BigInts
+/// (`Math.pow` coerces with ToNumber, which throws; `**` computes). A
+/// mixed pair throws either way. So one non-BigInt operand licenses the
+/// rewrite, and a plain number literal on either side is enough — which
+/// is the shape `Math.pow(x, 2)` already has.
+fn is_definitely_not_bigint(expr : @ast.TsExpr) -> Bool {
+  match expr {
+    IntLit(_) | NumberLit(_) | StringLit(_) | TemplateLiteral(_, _) => true
+    BoolLit(_) => true
+    NullLit => true
+    ArrayLit(_) | ObjectLit(_) => true
+    // `-x` / `+x` / `~x` / `!x`: the first three already ToNumber their
+    // operand, so a BigInt has thrown before this expression's value
+    // exists; `!x` is a boolean.
+    UnaryOp(Neg, _)
+    | UnaryOp(Plus, _)
+    | UnaryOp(BitwiseNot, _)
+    | UnaryOp(Not, _) => true
+    TypeArgs(_, inner) | As(inner, _) | Satisfies(inner, _) | NonNull(inner) =>
+      is_definitely_not_bigint(inner)
     _ => false
   }
 }

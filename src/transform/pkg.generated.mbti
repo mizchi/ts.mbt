@@ -19,13 +19,15 @@ pub fn as_const_inline_block(@ast.TsBlock) -> @ast.TsBlock
 
 pub fn auto_reserve_from_module(@ast.TsModuleBlock, @ast.TsModule, ManglerConfig) -> ManglerConfig
 
+pub fn binop_is_equality(@ast.TsBinOp) -> Bool
+
 pub fn build_const_enum_table(Array[@ast.TsEnumDecl]) -> Map[String, @ast.TsExpr]
 
 pub fn build_enum_inline_table(Array[@ast.TsEnumDecl], include_non_const? : Bool) -> Map[String, @ast.TsExpr]
 
-pub fn build_predicate_table(@ast.TsBlock) -> PredicateTable
+pub fn build_predicate_table(@ast.TsBlock, exported? : Map[String, Bool]) -> PredicateTable
 
-pub fn build_switch_fold_table(@ast.TsBlock) -> SwitchFoldTable
+pub fn build_switch_fold_table(@ast.TsBlock, explain? : Array[String]?) -> SwitchFoldTable
 
 pub fn build_symbol_graph(@ast.TsBlock, Map[String, Bool]) -> SymbolGraph
 
@@ -37,13 +39,29 @@ pub fn bundle_modules(Map[String, String], String, BundleOptions) -> Result[Bund
 
 pub fn class_member_names(@ast.TsBlock) -> Map[String, Array[String]]
 
-pub fn class_method_dce_block(@ast.TsBlock, keep? : Map[String, Bool], class_fields? : Array[(String, @ast.TsType)], type_aliases? : Array[@ast.TsTypeAlias], explain? : Array[String]?) -> @ast.TsBlock
+pub fn class_members_reachable_off_bundle(@ast.TsBlock, Map[String, Bool]) -> Array[String]
 
-pub fn collect_externally_visible_props(@ast.TsBlock, Map[String, Bool], type_env? : Map[String, @ast.TsType]) -> Array[String]
+pub fn class_method_dce_block(@ast.TsBlock, (() -> Array[String])?, keep? : Map[String, Bool], scope? : @ast.TsBlock?, class_fields? : Array[(String, @ast.TsType)], type_aliases? : Array[@ast.TsTypeAlias], explain? : Array[String]?, reflection? : Array[String]?, timer? : PhaseTimer) -> @ast.TsBlock
+
+pub fn classes_observing_own_name(@ast.TsBlock) -> (Map[String, Bool], Bool)
+
+pub fn collect_externally_visible_props(@ast.TsBlock, Map[String, Bool], type_env? : Map[String, @ast.TsType], synthesized_namespaces? : Map[String, Bool]?) -> Array[String]
 
 pub fn collect_sinks(@ast.TsBlock, Map[String, Bool]) -> Array[Sink]
 
+pub fn const_scalar_inline_block(@ast.TsBlock) -> @ast.TsBlock
+
+pub fn constructor_like_top_level(@ast.TsBlock, Map[String, Bool]) -> Unit
+
 pub fn container_name_set(SymbolGraph, Map[Int, Bool]) -> Map[String, Bool]
+
+pub fn count_type_fold_sites(@ast.TsBlock) -> Int
+
+pub fn count_type_fold_sites_by_kind(@ast.TsBlock) -> Map[String, Int]
+
+pub fn ctor_name_comparison_literals(@ast.TsBlock) -> Array[String]?
+
+pub fn ctor_name_read_receiver(@ast.TsExpr) -> @ast.TsExpr?
 
 pub fn drop_dead_properties_block(@ast.TsBlock, Map[String, Bool]) -> @ast.TsBlock
 
@@ -53,11 +71,13 @@ pub fn emit_entry_dts(@ast.TsModule, Array[String], Map[String, String]) -> Stri
 
 pub fn entry_export_property_names(@ast.TsModule, Array[String]) -> Array[String]
 
-pub fn escape_breakdown(@ast.TsBlock, Map[String, Bool], type_env? : Map[String, @ast.TsType]) -> EscapeBreakdown
+pub fn escape_breakdown(@ast.TsBlock, Map[String, Bool], type_env? : Map[String, @ast.TsType], synthesized_namespaces? : Map[String, Bool]?) -> EscapeBreakdown
 
 pub fn explain_dead_fields(@ast.TsBlock, Map[String, Bool]) -> Array[String]
 
 pub fn exported_surface_props(@ast.TsBlock, Map[String, Bool]) -> Array[String]
+
+pub fn external_class_member_names(@ast.TsBlock, Map[String, Bool]) -> Array[String]
 
 pub fn external_import_bindings(Array[@ast.TsImportDecl]) -> Map[String, Bool]
 
@@ -68,6 +88,12 @@ pub fn fold_block(@ast.TsBlock) -> @ast.TsBlock
 pub fn format_escape_explanation(EscapeBreakdown) -> Array[String]
 
 pub fn iife_class_lift_block(@ast.TsBlock) -> @ast.TsBlock
+
+pub let implicitly_invoked_protocol_methods : Array[String]
+
+pub fn imported_bindings(Array[@ast.TsImportDecl]) -> Map[String, Bool]
+
+pub fn imported_const_enum_table(Array[@ast.TsImportDecl], Map[String, String], (String) -> Array[@ast.TsEnumDecl]?, (String) -> Array[@ast.TsExportSpec]?, (String) -> Array[@ast.TsReExportSpec]?, (String, String) -> String?) -> Map[String, @ast.TsExpr]
 
 pub fn infer_container_symbols(SymbolGraph, ContainerFacts) -> Map[Int, Bool]
 
@@ -83,7 +109,11 @@ pub fn is_index_numeric_with_graph(@ast.TsExpr, SymbolGraph, Map[Int, Bool]) -> 
 
 pub fn is_index_numeric_with_names(@ast.TsExpr, Map[String, Bool]) -> Bool
 
+pub fn is_name_observation_key(String) -> Bool
+
 pub fn is_private_member_name(String) -> Bool
+
+pub fn is_relative_specifier(String) -> Bool
 
 pub fn lookup_symbol_in_scope(SymbolGraph, Int, String) -> Int?
 
@@ -107,7 +137,15 @@ pub fn mangle_block_with_renames(@ast.TsBlock, ManglerConfig) -> (@ast.TsBlock, 
 
 pub fn mangle_source_with_auto_reserve(String, ManglerConfig) -> Result[String, String]
 
+pub fn merge_escape_breakdown(EscapeBreakdown) -> Array[String]
+
+pub fn module_const_enums(Array[@ast.TsEnumDecl]) -> Array[@ast.TsEnumDecl]
+
+pub fn numeric_name_census(SymbolGraph, Map[Int, Bool]) -> Map[String, (Int, Int)]
+
 pub fn numeric_name_set(SymbolGraph, Map[Int, Bool]) -> Map[String, Bool]
+
+pub fn observed_class_names(@ast.TsBlock) -> (Array[String], Bool)
 
 pub fn peephole_block(@ast.TsBlock) -> @ast.TsBlock
 
@@ -117,13 +155,13 @@ pub fn plan_unused_params(@ast.TsBlock, keep? : Map[String, Bool], declines? : A
 
 pub fn reserve_props_from_sink(Sink, Int, SymbolGraph, Map[String, Bool], Map[String, Bool]) -> Unit
 
-pub fn reserved_props_from_observability(SymbolGraph, Map[Int, Observability], type_env? : Map[String, @ast.TsType], class_members? : Map[String, Array[String]]) -> Map[String, Bool]
+pub fn reserved_props_from_observability(SymbolGraph, Map[Int, Observability], type_env? : Map[String, @ast.TsType], class_members? : Map[String, Array[String]], provenance? : Map[String, Array[String]]?, synthesized_namespaces? : Map[String, Bool]?) -> Map[String, Bool]
 
 pub fn string_name_set(SymbolGraph) -> Map[String, Bool]
 
 pub fn switch_fold(@ast.TsBlock, SwitchFoldTable) -> @ast.TsBlock
 
-pub fn tag_rewrite_block(@ast.TsBlock, Array[@ast.TsTypeAlias]) -> @ast.TsBlock
+pub fn tag_rewrite_block(@ast.TsBlock, Array[@ast.TsTypeAlias], TagRewriteBoundary?, interfaces? : Array[@ast.TsInterface], explain? : Array[String]?) -> @ast.TsBlock
 
 pub fn transform_source(String) -> Result[String, String]
 
@@ -140,6 +178,8 @@ pub fn type_fold_block(@ast.TsBlock, type_aliases? : Array[@ast.TsTypeAlias]) ->
 pub fn type_is_keyed_container(@ast.TsType, Map[String, Bool], Map[String, @ast.TsType]) -> Bool
 
 pub fn undeclared_referenced_names(@ast.TsBlock) -> Map[String, Bool]
+
+pub fn verify_emitted_bundle(String, externals? : Map[String, Bool]) -> Array[Violation]
 
 pub fn vlq_encode(Int) -> String
 
@@ -169,12 +209,15 @@ pub(all) struct BundleOptions {
   extra_reserved_props : Array[String]
   explain : Bool
   allow_unresolved_imports : Bool
+  disabled_phases : Map[String, Bool]
   timing : Bool
   parsed_blocks : Map[String, @ast.TsModuleBlock]
 }
 pub fn BundleOptions::default() -> Self
+pub fn BundleOptions::phase_enabled(Self, String) -> Bool
 pub fn BundleOptions::with_aliases(Self, Map[String, String]) -> Self
 pub fn BundleOptions::with_allow_unresolved_imports(Self, Bool) -> Self
+pub fn BundleOptions::with_disabled_phases(Self, Map[String, Bool]) -> Self
 pub fn BundleOptions::with_explain(Self, Bool) -> Self
 pub fn BundleOptions::with_extra_reserved_props(Self, Array[String]) -> Self
 pub fn BundleOptions::with_fold(Self, Bool) -> Self
@@ -192,6 +235,7 @@ pub(all) struct BundleOutput {
   sourcemap : String?
   modules : Array[String]
   warnings : Array[String]
+  reflection_warnings : Array[String]
   explain : Array[String]
   timings : Array[(String, Double)]
 }
@@ -220,7 +264,9 @@ pub(all) struct EscapeBreakdown {
   host_shaped : Array[String]
   value_tree : Array[String]
   in_probe : Array[String]
+  external_class_members : Array[String]
   wildcard_reasons : Array[String]
+  obs_attribution : Array[String]
 }
 
 pub(all) struct FlowEdge {
@@ -254,6 +300,7 @@ pub(all) struct JsxConfig {
   dev : Bool
   pragma_jsx : String
   pragma_jsx_frag : String
+  synthesized_helpers : Map[String, Bool]
 }
 pub fn JsxConfig::default() -> Self
 pub fn JsxConfig::with_dev(Self, Bool) -> Self
@@ -271,6 +318,7 @@ pub fn LineIndex::position(Self, Int) -> Position
 pub(all) struct LinkRenames {
   locals : Map[String, Map[String, String]]
   namespaces : Map[String, Map[String, String]]
+  synthesized_namespaces : Map[String, Bool]
 }
 
 pub(all) enum LiteralKind {
@@ -288,8 +336,10 @@ pub(all) struct ManglerConfig {
   mangle_properties : Bool
   reserved_properties : Array[String]
   mangle_properties_shape_color : Bool
+  census : Array[String]?
 }
 pub fn ManglerConfig::default() -> Self
+pub fn ManglerConfig::with_census(Self, Array[String]?) -> Self
 pub fn ManglerConfig::with_mangle_properties(Self, Bool) -> Self
 pub fn ManglerConfig::with_mangle_properties_shape_color(Self, Bool) -> Self
 pub fn ManglerConfig::with_preserve_top_level(Self, Bool) -> Self
@@ -323,6 +373,10 @@ pub fn Position::new(Int, Int) -> Self
 pub(all) struct PredicateEntry {
   param_name : String
   body_expr : @ast.TsExpr
+  param_refs : Int
+  body_cost : Int
+  call_sites : Int
+  removable : Bool
 }
 
 pub(all) struct PredicateTable {
@@ -413,6 +467,7 @@ pub(all) struct SymbolGraph {
   flow_edges : Array[FlowEdge]
   external_bindings : Map[Int, Bool]
   funcs : Map[Int, FuncInfo]
+  unresolved : Map[String, Int]
 }
 
 pub(all) enum SymbolKind {
@@ -427,6 +482,11 @@ pub(all) enum SymbolKind {
   Catch
   ClassDecl
 } derive(Eq, @debug.Debug)
+
+pub(all) struct TagRewriteBoundary {
+  exported : Map[String, Bool]
+  externals : Map[String, Bool]
+}
 
 pub(all) struct TransformOutput {
   js : String
@@ -454,9 +514,17 @@ pub(all) enum UseContext {
   IndexAssignRHS
 } derive(@debug.Debug)
 
+pub(all) struct Violation {
+  kind : String
+  name : String
+  detail : String
+} derive(Show)
+
 // Type aliases
 pub type ScopeId = Int
 
 pub type SymbolId = Int
 
 // Traits
+trait SubstitutedValue
+pub impl SubstitutedValue for @ast.TsExpr

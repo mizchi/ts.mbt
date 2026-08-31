@@ -1003,3 +1003,182 @@ test "mangle: a catch pattern's default is reserved in its scope" {
     Err(e) => fail("\{e}")
   }
 }
+
+///|
+test "mangle: a multi-declarator group's names are pre-bound at the top level" {
+  // `let a = 1, b = 2;` is a `Block` of `Let`s in this AST, not two
+  // sibling statements. `rename_block_inline_in`'s prebind recursed into
+  // that wrapper; `mangle_block_impl`'s top-level one did not — so the
+  // group's names were invisible to a reference that PRECEDED the
+  // declaration. That reference resolved to nothing and kept its
+  // original spelling while the declaration was renamed underneath it,
+  // which is a `ReferenceError` under plain `--mangle`.
+  let cfg = ManglerConfig::default().with_preserve_top_level(false)
+  let src = "function f(t) { return isArray(t); }\nlet isArray = Array.isArray, isMap = (t) => t instanceof Map;\nconsole.log(f([]), isMap(new Map()));"
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      // Nothing may still be spelled `isArray` — neither the use nor
+      // the declaration.
+      assert_false(js.contains("isArray(") && js.contains("= Array.isArray"))
+      assert_false(js.contains("isMap"))
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+test "mangle: a real block of declarations still gets its own scope" {
+  // The other half of the same predicate: a genuine `{ let x; let y; }`
+  // has exactly the shape of a declarator group and must NOT be treated
+  // as transparent, or the inner binders land in the enclosing scope and
+  // the post-block references resolve to them.
+  let cfg = ManglerConfig::default().with_preserve_top_level(false)
+  let src = "let x = 1, y = 9;\n{ let x = 2; let y = 3; }\nconsole.log(x, y);"
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      // Whatever the outer pair is named, the trailing `console.log`
+      // must name the SAME two bindings as the first declaration — i.e.
+      // the inner block introduced two fresh names.
+      let first = js.contains("let a = 1, b = 9")
+      assert_true(first)
+      assert_true(js.contains("console.log(a, b)"))
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+test "mangle: a destructuring declaration's names are pre-bound" {
+  // The two prebind passes matched `Let(Ident(name), …)` only, so a
+  // DESTRUCTURING declaration was invisible to them and a reference that
+  // preceded it kept the old spelling while the declaration was renamed.
+  // `useState` makes the shape ubiquitous: four of Excalidraw's
+  // components hit it under plain `mtsc --mangle`.
+  //
+  // Same bug as the multi-declarator group, one binding form over.
+  let cfg = ManglerConfig::default().with_preserve_top_level(false)
+  let src = "function C() {\n  const bump = () => { setValue(1); };\n  const [value, setValue] = useState(0);\n  return value + (bump(), 0);\n}\nconsole.log(C());"
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      // Nothing may still be spelled `setValue` — neither the use nor
+      // the binder.
+      assert_false(js.contains("setValue"), msg="got: \{js}")
+      assert_false(js.contains("value"), msg="got: \{js}")
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+test "mangle: an object-pattern declaration's names are pre-bound too" {
+  let cfg = ManglerConfig::default().with_preserve_top_level(false)
+  let src = "function C() {\n  const early = () => helper();\n  const { helper, ...restOfIt } = deps();\n  return early() + restOfIt;\n}\nconsole.log(C());"
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      // The property KEY `helper:` stays — keys are only renamed under
+      // `--mangle-properties`. What must be gone is the BINDING, and the
+      // earlier `early` closure must call the renamed one.
+      assert_false(js.contains("=> helper()"), msg="got: \{js}")
+      assert_true(js.contains("helper: "), msg="the key should survive: \{js}")
+      assert_false(js.contains("restOfIt"), msg="got: \{js}")
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+test "the mangler's built-in list covers every implicitly-invoked protocol" {
+  // Two lists hold overlapping facts: this one says "do not RENAME a
+  // name the host reads", and `implicitly_invoked_protocol_methods` says
+  // "do not DELETE a method the language calls without naming it". The
+  // second is a subset of the first, and it got out of step once
+  // already: `next` was here and not there, so `class_method_dce`
+  // deleted the `next` of a class whose only caller was `[...x]`.
+  //
+  // Checked rather than commented, because the failure is a bundle that
+  // throws at runtime and nothing else in the suite compares the two.
+  let reserved : Map[String, Bool] = {}
+  for n in mangler_builtin_reserved_properties {
+    reserved[n] = true
+  }
+  for n in implicitly_invoked_protocol_methods {
+    assert_true(
+      reserved.contains(n),
+      msg="`\{n}` is invoked implicitly but the mangler may rename it",
+    )
+  }
+}
+
+///|
+test "escape: a property READ seeds the chain root, over-approximating depth" {
+  // What the analysis does today, pinned so a precision change has a
+  // baseline to move.
+  //
+  // `console.log(c.liveField)` logs the NUMBER 1. No property name of
+  // `c` is observable through it — and yet both of `C`'s fields land in
+  // the escape set, because `seed_from_expr` walks a property chain up
+  // to its ROOT. It has to: `c.liveField` has no symbol of its own,
+  // only `c` does, so the root is the one handle the observation can be
+  // attached to, and attaching it there over-approximates the depth.
+  //
+  // Sound (it reserves a superset) and imprecise (it reserves names
+  // nothing can see). It is why `verify_dce_coverage`'s
+  // `unused-class-field` row is a known MISS. Getting it right needs
+  // access-path-sensitive observability, or a depth on the
+  // `Observability` lattice — not a patch, because loosening the
+  // reserved set is the direction that breaks silently.
+  //
+  // When that lands, this test flips: `deadmark_field` becomes
+  // manglable and the assertion below should be inverted rather than
+  // deleted, so the change is visible here and not only in a byte
+  // count.
+  let files = vfs([
+    (
+      "entry.ts",
+      "class C {\n" +
+      "  liveField = 1;\n" +
+      "  deadmark_field = 2;\n" +
+      "}\n" +
+      "const c = new C();\n" +
+      "export const v = c.liveField;\n" +
+      "console.log(c.liveField);\n",
+    ),
+  ])
+  let opts = BundleOptions::default()
+    .with_mangle(true)
+    .with_mangle_properties(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      assert_true(
+        out.js.contains("deadmark_field"),
+        msg="the chain-root imprecision is gone — invert this assertion and clear the dce-coverage MISS: \{out.js}",
+      )
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "the descriptor flags a `defineProperty` reads are all reserved" {
+  // Every `Object.defineProperty` default is `false`, so dropping a
+  // `true` flag INVERTS it — silently for `enumerable`, and into a
+  // throw for `writable` and `configurable`, because a module body is
+  // strict-mode code.
+  //
+  // The dead-property pass was deleting them as unread keys, not the
+  // mangler renaming them: `get` / `set` / `value` were already in the
+  // list incidentally (under Map/Set and the iterator protocol), so
+  // `value` surviving made the shape look safe while the three flags
+  // nobody else had needed were absent. Checked as a list membership
+  // because that is the fact that was wrong; the corpus case
+  // `case48-property-descriptor` checks the behaviour under Node.
+  let reserved : Map[String, Bool] = {}
+  for n in mangler_builtin_reserved_properties {
+    reserved[n] = true
+  }
+  for n in ["enumerable", "configurable", "writable", "get", "set", "value"] {
+    assert_true(
+      reserved.contains(n),
+      msg="`\{n}` is read off a property descriptor by the runtime and is not reserved",
+    )
+  }
+}

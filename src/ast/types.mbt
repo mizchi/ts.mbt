@@ -157,6 +157,21 @@ pub(all) enum TsExpr {
   // report supplying type arguments to a non-generic callee (TS2558). Kept
   // as a wrapper so the pervasive `Call` / `New` / `MethodCall` match sites
   // stay unchanged.
+  //
+  // WARNING, and it has already cost one release-blocking bug: every
+  // walker over expressions MUST have an arm for this. A pass that
+  // matches `Call` / `New` / `MethodCall` and ends in `_ => ()` does not
+  // "fall through to the inner call" — it sees NOTHING, and the entire
+  // subtree becomes invisible to that analysis. Missing it in
+  // `treeshake.mbt` deleted the declaration of a binding whose only use
+  // was inside `new Map<K, V>([[…, CODES.Z]])`, leaving the reference
+  // standing: `ReferenceError: CODES is not defined` on Excalidraw's
+  // `packages/common/src/keys.ts`. Missing it in `dead_props.mbt` made a
+  // property read invisible and the key was deleted. Nineteen files
+  // peeled `As` / `NonNull` and not this.
+  //
+  // `fixtures/mangle-safety/case40-type-arguments` runs the shapes end
+  // to end, which is the only check that covers a pass nobody audited.
   TypeArgs(Array[TsType], TsExpr)
 
   // function (expression)
@@ -1049,6 +1064,43 @@ pub(all) struct TsModuleBlock {
   // "does every class that declares `f` type it as X", never "what
   // does class C declare".
   class_fields : Array[(String, TsType)]
+  // Every specifier this module REQUESTS at runtime, in the order the
+  // declarations appear in the source — `import … from` and
+  // `export … from` interleaved, which `imports` and `reexports` cannot
+  // express because they are two arrays.
+  //
+  // ESM evaluates a module graph in depth-first post-order over exactly
+  // this sequence, and a flat concatenated bundle gets one chance to
+  // reproduce that. On an acyclic graph any topological order works and
+  // this list is redundant; on a cyclic one it decides which module is
+  // initialized first. typebox's `src/index.ts` is a barrel with five
+  // `export * from './type/…'` above one `import * as Type from
+  // './typebox.ts'`, and walking the imports first sent the traversal
+  // down the wrong subtree — `types/record.ts` landed after a top-level
+  // `new RegExp(IntegerKey)` that reads it, and the bundle threw
+  // `Cannot access 'IntegerKey' before initialization` at load.
+  //
+  // Type-only requests are omitted: `import type { X } from "y"` erases
+  // completely, so it is not a request at runtime and ordering `y` by it
+  // would order a module ESM never evaluates at that point.
+  module_request_order : Array[String]
+  // Names this module exports with `export type { X }` (or a
+  // per-specifier `export { type X }`). They have no runtime value, so a
+  // consumer must not put them in a synthesized namespace object or
+  // re-emit them as a value export.
+  //
+  // `TsExportSpec` cannot carry the flag the way `TsReExportSpec` does:
+  // the struct is constructed in 85 places, and a required third field
+  // would touch every one. A set alongside them says the same thing.
+  //
+  // Deriving it instead from the module's own `type_aliases` and
+  // `interfaces` — which is what the bundler did — only finds a type
+  // DECLARED here. `export type { Pattern }` re-exporting a type that
+  // was imported from elsewhere is invisible to that, and ts-pattern's
+  // `patterns.ts` does exactly that: the synthesized namespace object
+  // got a `Pattern: <itself>` entry and the bundle died with
+  // `Cannot access 'aE' before initialization`.
+  type_only_exports : Map[String, Bool]
   // True when the module uses `export = <expr>` (CJS export assignment).
   // An `import X = require(...)` of such a module binds the ASSIGNED
   // entity, not a namespace object -- the bridge export resolution
@@ -1087,3 +1139,26 @@ pub(all) struct TypedFunc {
 pub(all) struct TypedModule {
   funcs : Array[TypedFunc]
 } derive(Debug)
+
+///|
+/// The single `stmt_positions` entry that marks a `TsBlock` as the
+/// spelling of a multi-declarator declaration (`let a = 1, b = 2`)
+/// rather than a real, scope-bearing block.
+///
+/// The distinction is not derivable from the contents — `{ let a = 1;
+/// let b = 2; }` and `let a = 1, b = 2` hold the same statements — so
+/// it has to be recorded by the producer. It used to be recorded as
+/// "`stmt_positions` is empty", which every rewrite that rebuilds a
+/// block erases: `merge_consecutive_decls` shrinks the statement list
+/// without shrinking the positions array, the length mismatch makes the
+/// next pass drop the positions altogether, and a REAL block then reads
+/// as a declarator group. Its braces came off and two `case` arms of one
+/// `switch` ended up declaring the same mangled name.
+///
+/// An explicit marker also fixes the failure DIRECTION. A pass that
+/// drops positions now yields "real block", which keeps braces that were
+/// not needed — bytes, not a duplicate declaration.
+///
+/// Real positions are source byte offsets, so a negative value cannot
+/// collide with one.
+pub const DECL_GROUP_POSITION : Int = -1

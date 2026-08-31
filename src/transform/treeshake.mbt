@@ -423,11 +423,17 @@ fn is_pure_init(expr : @ast.TsExpr, pure_calls : Map[String, Bool]) -> Bool {
       true
     }
     // TypeScript cast / non-null / optional-chain wrappers don't
-    // introduce side effects on their own.
+    // introduce side effects on their own. `TypeArgs` is the same kind
+    // of wrapper — `f<T>(x)` parses as `TypeArgs([T], Call(f, [x]))` —
+    // and NOT peeling it here made every such initializer read as
+    // impure, which is only a lost opportunity. Peeling it in
+    // `collect_var_refs_in_expr` is the one that matters; see the note
+    // there.
     As(inner, _)
     | Satisfies(inner, _)
     | NonNull(inner)
-    | OptionalChain(inner) => is_pure_init(inner, pure_calls)
+    | OptionalChain(inner)
+    | TypeArgs(_, inner) => is_pure_init(inner, pure_calls)
     // Spread of a pure value is itself pure (used in array literals).
     Spread(inner) => is_pure_init(inner, pure_calls)
     _ => false
@@ -712,10 +718,30 @@ fn collect_var_refs_in_expr(
       for e in exprs {
         collect_var_refs_in_expr(e, out)
       }
+    // Wrappers a value-level pass has to see through. `TypeArgs` is one
+    // of them, and missing it here was not a lost opportunity — it was a
+    // deleted live binding.
+    //
+    // `f<T>(x)` / `new C<T>(x)` / `o.m<T>(x)` parse as
+    // `TypeArgs([T], <the call>)`, a wrapper kept so the pervasive
+    // `Call` / `New` / `MethodCall` match sites did not have to change.
+    // The cost of that choice is exactly this: a walker with a catch-all
+    // arm does not fall through to the inner call, it silently sees
+    // NOTHING. Every name referenced anywhere inside such a call was
+    // invisible to liveness, so treeshake deleted its declaration and
+    // left the reference standing:
+    //
+    //   const CODES = { Z: "KeyZ" };
+    //   const map = new Map<string, string>([["z", CODES.Z]]);
+    //
+    // became `new Map([["z", CODES.Z]])` with no `CODES` — a
+    // ReferenceError at module load. Found on Excalidraw's
+    // `packages/common/src/keys.ts`, which writes exactly that.
     As(inner, _)
     | Satisfies(inner, _)
     | NonNull(inner)
-    | OptionalChain(inner) => collect_var_refs_in_expr(inner, out)
+    | OptionalChain(inner)
+    | TypeArgs(_, inner) => collect_var_refs_in_expr(inner, out)
     NativeClassExpr(decl, ctor_body) => {
       collect_var_refs_in_class_decl(decl, out)
       match ctor_body {
@@ -803,6 +829,12 @@ fn collect_var_refs_in_binding(
 /// as standalone statements).
 fn is_pure_multi_decl_block(block : @ast.TsBlock) -> Bool {
   if block.stmts.length() < 2 {
+    return false
+  }
+  // The "is this a declarator group at all" half is one shared rule;
+  // see `is_multi_decl_block` in `inline.mbt`. What stays local is the
+  // PURITY half below, which is this pass's own proof obligation.
+  if !block_is_inline_decl_group(block) {
     return false
   }
   let mut kind = ""

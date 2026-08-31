@@ -46,7 +46,8 @@ allowlist です。同じ名前が両方に載る／片方だけに載るのが�
 | class method DCE | method 名が bundle 内で read されず、export surface からも到達しない。加えて bundle が「名前を書けない member 観測」をしない —— computed key の **read** は key が数値（`numeric_vars.mbt`）か receiver が keyed container（`container_vars.mbt`）と証明できるときだけ許す（write / `delete` / own-enumerable 列挙は観測にならないので gate ではない） | 実装済 (`class_method_dce.mbt`) |
 | tree-shaking | 宣言が live root から到達不能、かつ initializer が純粋 | 実装済 (`treeshake.mbt`) |
 | **inferred-purity DCE** | **callee が「自分の scope 外に書かない・impure を呼ばない」を推移的に満たす** | **実装済（下記）** |
-| `as const` / const enum inline | binding が never mutated かつ never escape、access が静的 | 実装済 (`as_const_inline.mbt`, `const_enum_inline.mbt`) |
+| `as const` / const enum inline | binding が never mutated かつ never escape、access が静的。**加えて、read 位置の scope でその名前が shadow されていない** | 実装済 (`as_const_inline.mbt`, `const_enum_inline.mbt`) |
+| scalar `const` 伝播 | top-level `const NAME = <primitive literal>`、write が無く、read 位置で shadow されていない。加えて置換が byte で払える（`refs×(len-1) ≤ 4+len`） | 実装済 (`const_scalar_inline.mbt`) |
 | 型駆動 fold | `x` の静的型が単一 primitive で、narrowing に依存しない | 実装済 (`type_fold.mbt`) |
 | type predicate inline | `x is T` 注釈があり body が単一 `return expr` | 実装済 (`predicate_inline.mbt`) |
 | **未使用 parameter 削除** | **関数が export surface に無く、参照が全部 callee 位置、`arguments` を読まず、param が全部素の識別子、落とす引数式が純粋、末尾の連続分だけ** | **実装済（下記）** |
@@ -644,6 +645,102 @@ hono の app bundle はこれら全部を直しても通りません（`req[cach
   `Named` 解決を入れて corpus に case36 を足したときに出ました ——
   最適化を 1 つ通せるようにすると、その先で止まっていた別 pass の
   bug が初めて観測できるようになる、という順序です。
+- **`delete obj['q']` が `delete 1` になっていました。**
+  `as_const_inline` の disqualification scan は `UnaryOp(_, inner)` の
+  汎用 arm で `delete` の operand に降り、そこで
+  `IndexAccess(Var(obj), StringLit("q"))` を**安全な keyed read**と
+  読みます。candidate は生き残り、read は古い値に畳まれ、delete 自身も
+  literal に書き換えられて no-op になる。`--bundle --fold` で
+  `undefined undefined` が `1 1` になります。`delete` の operand は
+  read ではなく mutation です。fuzzer の新しい oracle（[mangle-fuzzing.md](./mangle-fuzzing.md)）が
+  見つけました。
+- **値が分かっている条件を、実行ごと捨てていた箇所が 7 つ。**
+  `is_js_truthy` / `is_js_falsy` は「boolean 文脈で何に coerce するか」
+  に答えるのに、呼び出し側は「捨てて良い」として使っていました。
+  食い違う形はちょうど 2 つ: object / array literal は**中身が何であれ**
+  truthy（中身は実行される）、`void EXPR` は `EXPR` が何であれ falsy。
+  8 site を並べたプログラムで **8 個の効果のうち 7 個が消えました**。
+  生き残った 1 つが `if` 文で、そこには**すでに guard とコメントが
+  入っていました**（「fuzzer の効果トレースが見つけた」）。ternary /
+  `!` / `&&` / `||` / dead-loop 3 種 / `Boolean(…)` には入っていない。
+  この repo で 7 回目の「同じ規則を複数箇所に書いて 1 箇所だけ直した」
+  です。`keep_effects` 1 つを全 site から呼ぶ形にしました。
+
+  corpus case にはできません: **mtsc の checker 自身が condition /
+  logical operand / unary 位置の literal を拒否します**。つまりこの bug
+  は型検査を切った入力——published `.js`、`verify-real-world-minify` の
+  経路——でしか届きません。test は `fold_wbtest.mbt` にあり、「純粋な
+  条件は今も畳まれる」対を必ず付けています。
+- **同じ `as_const_inline` に、もっと悪い穴が残っていました: scope を
+  一切見ていませんでした。** 名前を 1 つの top-level table で解決して
+  walker に渡すだけで、narrowing がどこにもありません。
+
+  ```ts
+  const S = ["ok", "warn"];
+  function f() { const S = ["x", "y"]; return S[0]; }
+  function h(S: string[]) { return S[0]; }
+  ```
+
+  `f()` と `h(["param"])` がどちらも `"ok"` になります。**free
+  variable でも crash でもなく、値が違う**。`--bundle --fold` だけで
+  再現し、内側の宣言と同じくらい **parameter** でも起きます（parameter
+  は block が宣言しないので、block だけ見る narrowing では届きません）。
+
+  `call_inline.mbt` は同じ問題を解いていて、file 冒頭にその理由まで
+  書いてあります（「table は名前で引くのに、あらゆる scope に持ち込ま
+  れる」）。それを必要とする 2 つ目の pass には入っていませんでした。
+  narrowing helper を generic にして共有し、walker が運ぶ table を 1 つ
+  の struct にまとめました —— scope 境界で片方だけ narrow して片方を
+  忘れる、という形を型で潰すためです。
+
+  この class の bug は `--verify` では見つかりません（名前はすべて
+  解決します）。出力を**実行して**比べる harness が要る理由であり、
+  「その pass には test があるから corpus が覆っている」と考えては
+  いけない理由です。見つかった経緯も記録しておく価値があります:
+  terser の rule を移植するために walker を読んだから、です。
+- **同じ形が他に 4 つありました。** 1 件見つかったので、**名前で
+  table を引く pass を全部 audit しました**。narrowing を持っていたのは
+  `call_inline.mbt` だけです。
+
+  | pass | table の key | 壊れる例 | 必要な flag |
+  | --- | --- | --- | --- |
+  | `as_const_inline` | binding 名 | 内側の `const S` / parameter `S` | `--bundle --fold` |
+  | `const_enum_inline` | `"E.M"` / `"ns.E.M"` | 内側の `const E` / parameter `E` | **`--bundle` のみ** |
+  | `predicate_inline` | 述語の名前 | 局所 `function isNeg` / parameter `isNeg` | `--fold --minify` |
+  | `switch_fold` | dispatcher の名前 | parameter `dispatch` | `--fold --minify` |
+  | `type_fold` | binding 名 → 型 | 内側の `const s`（有用な型が無い場合） | `--fold --minify` |
+
+  5 件すべて**値が違う**結果になり、crash も free variable も出ません。
+  `--verify` は 1 件も検出できません。
+
+  `const_enum_inline` の table は key が dotted path なので、narrowing
+  は**先頭 segment**で判定します（`E` が shadow されたら `E.*` を全部
+  落とす）。`type_fold` は `TypeScope` という層構造をすでに持っていて、
+  parameter 側は `hide` を呼んでいました —— **宣言側だけが呼んでいな
+  かった**ので、有用な型が無い内側の宣言に対して外側の annotation が
+  見え続けていました。「同じ規則を 2 箇所に書いて片方だけ直す」の、
+  この repo で 6 回目です。
+
+  corpus case は
+  [`fixtures/mangle-safety/case43-table-shadowing`](../fixtures/mangle-safety)
+  で、5 pass 分を 1 file に入れて Node の独立 reference leg と比べます。
+  各 pass について「shadow された read は内側を使う」と「shadow されて
+  いない read は今も最適化される」を対にしてあるので、修正が
+  「pass を止める」形になっていないことも検査します。
+
+  **この case を追加した直後、reference leg が使えていませんでした。**
+  Node の type stripping は既定が strip-only mode で、`enum` を構文
+  エラーにします。case43 には `const enum` があるので reference は
+  `unavailable` になり、harness は自分の 2 つの出力を互いに比べる形に
+  落ちていました —— このファイルが疑うべきだと言っている、まさにその
+  leg agreement です。`pass` と表示されつつ、note に
+  「reference run unavailable」と書いてありました。
+
+  `--experimental-transform-types` に切り替えると Node は enum も
+  変換して実行します。実装は Node のものなので leg の独立性は保たれ
+  ます。unavailable は corpus 全体で 5 → 3 件になりました（残りは
+  `module` keyword と、型を値位置で import している 2 件で、どちらも
+  transform mode でも Node が拒否します）。
 - **`JSON.stringify` を effect-free 扱いにしています。** `toJSON` と
   getter に到達するので厳密には getter の純粋性に依存します。purity
   pass は impure getter を warning として別途報告しており、実運用の

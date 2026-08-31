@@ -6,6 +6,7 @@ import {
 }
 
 // Values
+pub const DECL_GROUP_POSITION : Int = -1
 
 // Errors
 
@@ -326,6 +327,8 @@ pub(all) struct TsModuleBlock {
   type_aliases : Array[TsTypeAlias]
   interfaces : Array[TsInterface]
   class_fields : Array[(String, TsType)]
+  module_request_order : Array[String]
+  type_only_exports : Map[String, Bool]
   has_export_equals : Bool
 } derive(@debug.Debug)
 pub impl Show for TsModuleBlock

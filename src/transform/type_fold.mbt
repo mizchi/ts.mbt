@@ -89,6 +89,83 @@ fn TypeScope::get(self : TypeScope, name : String) -> @ast.TsType? {
 }
 
 ///|
+/// How many expressions in the block have a shape this pass could
+/// decide: `typeof x <op> "lit"`, `x <op> null`, `x <op> undefined`,
+/// `x + ""`. Counted syntactically, with `x` a bare `Var` — exactly the
+/// arms `type_fold_expr` matches on.
+///
+/// Counting before and after the pass is what `--explain-mangle`
+/// reports, and it is deliberately NOT a second implementation of the
+/// decision: the same rule written twice and fixed once is the most
+/// frequent bug in this pipeline. The count says how many candidates
+/// there were and how many survived; it does not re-derive why.
+pub fn count_type_fold_sites(block : @ast.TsBlock) -> Int {
+  let n = Ref::new(0)
+  for s in block.stmts {
+    count_tf_sites_stmt(s, n, None)
+  }
+  n.val
+}
+
+///|
+/// The same count, split by which of the four shapes each site is.
+/// `0 decided` out of a large total is only actionable with this
+/// breakdown: `x === null` is decidable ONLY when the annotation
+/// excludes null, and real code writes that check exactly when it does
+/// not — so a corpus made mostly of null checks is a pass with nothing
+/// to do rather than a lookup that is failing.
+pub fn count_type_fold_sites_by_kind(block : @ast.TsBlock) -> Map[String, Int] {
+  let n = Ref::new(0)
+  let kinds : Map[String, Int] = {}
+  for s in block.stmts {
+    count_tf_sites_stmt(s, n, Some(kinds))
+  }
+  kinds
+}
+
+///|
+/// Which of the four shapes this node is, or `None` when it is not a
+/// site at all. The single place that answers "is this a candidate" is
+/// still `expr_is_type_fold_site`, which delegates here.
+fn type_fold_site_kind(expr : @ast.TsExpr) -> String? {
+  match expr {
+    BinOp(op, l, r) => {
+      let is_eq_op = match op {
+        BinEq | BinNe | AbstractEq | AbstractNe => true
+        _ => false
+      }
+      if is_eq_op {
+        match (l, r) {
+          (
+            @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Typeof, _),
+            @ast.TsExpr::StringLit(_),
+          )
+          | (
+            @ast.TsExpr::StringLit(_),
+            @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Typeof, _),
+          ) => return Some("typeof x === \"…\"")
+          (@ast.TsExpr::Var(_), @ast.TsExpr::NullLit)
+          | (@ast.TsExpr::NullLit, @ast.TsExpr::Var(_)) =>
+            return Some("x === null")
+          (@ast.TsExpr::Var(_), @ast.TsExpr::Var("undefined"))
+          | (@ast.TsExpr::Var("undefined"), @ast.TsExpr::Var(_)) =>
+            return Some("x === undefined")
+          _ => ()
+        }
+      }
+      match (op, l, r) {
+        (Add, @ast.TsExpr::Var(_), @ast.TsExpr::StringLit(""))
+        | (Add, @ast.TsExpr::StringLit(""), @ast.TsExpr::Var(_)) =>
+          return Some("x + \"\"")
+        _ => ()
+      }
+      None
+    }
+    _ => None
+  }
+}
+
+///|
 pub fn type_fold_block(
   block : @ast.TsBlock,
   type_aliases? : Array[@ast.TsTypeAlias] = [],
@@ -288,37 +365,227 @@ fn stmt_needs_type_fold(stmt : @ast.TsStmt) -> Bool {
 }
 
 ///|
+/// The counting twin of the pre-scan above. Separate rather than shared
+/// because the pre-scan short-circuits, and short-circuiting is its
+/// whole point: it exists so a bundle with no candidate skips the full
+/// walk. The SHAPE test is shared (`expr_is_type_fold_site`); only the
+/// traversal is written twice, and a traversal arm missed here
+/// understates a diagnostic instead of making a decision wrong.
+fn count_tf_sites_block(
+  block : @ast.TsBlock,
+  n : Ref[Int],
+  kinds : Map[String, Int]?,
+) -> Unit {
+  for s in block.stmts {
+    count_tf_sites_stmt(s, n, kinds)
+  }
+}
+
+///|
+fn count_tf_sites_stmt(
+  stmt : @ast.TsStmt,
+  n : Ref[Int],
+  kinds : Map[String, Int]?,
+) -> Unit {
+  match stmt {
+    Var(_, _, e)
+    | Let(_, _, e)
+    | Const(_, _, e)
+    | Expr(e)
+    | Assign(_, e)
+    | CompoundAssign(_, _, e)
+    | Throw(e) => count_tf_sites_expr(e, n, kinds)
+    Return(Some(e)) => count_tf_sites_expr(e, n, kinds)
+    IndexAssign(t, idx, v) => {
+      count_tf_sites_expr(t, n, kinds)
+      count_tf_sites_expr(idx, n, kinds)
+      count_tf_sites_expr(v, n, kinds)
+    }
+    PropAssign(t, _, v) => {
+      count_tf_sites_expr(t, n, kinds)
+      count_tf_sites_expr(v, n, kinds)
+    }
+    If(c, t, e) => {
+      count_tf_sites_expr(c, n, kinds)
+      count_tf_sites_block(t, n, kinds)
+      match e {
+        Some(b) => count_tf_sites_block(b, n, kinds)
+        None => ()
+      }
+    }
+    While(c, body) | DoWhile(c, body) | With(c, body) => {
+      count_tf_sites_expr(c, n, kinds)
+      count_tf_sites_block(body, n, kinds)
+    }
+    For(init, cond, update, body) => {
+      match init {
+        Some(s) => count_tf_sites_stmt(s, n, kinds)
+        None => ()
+      }
+      match cond {
+        Some(e) => count_tf_sites_expr(e, n, kinds)
+        None => ()
+      }
+      match update {
+        Some(s) => count_tf_sites_stmt(s, n, kinds)
+        None => ()
+      }
+      count_tf_sites_block(body, n, kinds)
+    }
+    ForOf(_, _, _, iter, body)
+    | ForAwaitOf(_, _, _, iter, body)
+    | ForIn(_, _, _, iter, body) => {
+      count_tf_sites_expr(iter, n, kinds)
+      count_tf_sites_block(body, n, kinds)
+    }
+    Switch(e, cases) => {
+      count_tf_sites_expr(e, n, kinds)
+      for c in cases {
+        match c.test_expr {
+          Some(te) => count_tf_sites_expr(te, n, kinds)
+          None => ()
+        }
+        count_tf_sites_block(c.body, n, kinds)
+      }
+    }
+    Try(b, _, cb, fb) => {
+      count_tf_sites_block(b, n, kinds)
+      match cb {
+        Some(blk) => count_tf_sites_block(blk, n, kinds)
+        None => ()
+      }
+      match fb {
+        Some(blk) => count_tf_sites_block(blk, n, kinds)
+        None => ()
+      }
+    }
+    Label(_, inner) => count_tf_sites_stmt(inner, n, kinds)
+    Block(b) => count_tf_sites_block(b, n, kinds)
+    NativeClassStmt(decl, ctor_body) => {
+      match decl.base_expr {
+        Some(b) => count_tf_sites_expr(b, n, kinds)
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) => count_tf_sites_block(b, n, kinds)
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        count_tf_sites_expr(sf.1, n, kinds)
+      }
+      match ctor_body {
+        Some(f) => count_tf_sites_block(f.body, n, kinds)
+        None => ()
+      }
+    }
+    _ => ()
+  }
+}
+
+///|
+fn count_tf_sites_expr(
+  expr : @ast.TsExpr,
+  n : Ref[Int],
+  kinds : Map[String, Int]?,
+) -> Unit {
+  match type_fold_site_kind(expr) {
+    Some(k) => {
+      n.val = n.val + 1
+      match kinds {
+        Some(m) => m[k] = m.get(k).unwrap_or(0) + 1
+        None => ()
+      }
+    }
+    None => ()
+  }
+  match expr {
+    BinOp(_, l, r) | Seq(l, r) => {
+      count_tf_sites_expr(l, n, kinds)
+      count_tf_sites_expr(r, n, kinds)
+    }
+    UnaryOp(_, i)
+    | Spread(i)
+    | Await(i)
+    | NonNull(i)
+    | OptionalChain(i)
+    | PureCall(i)
+    | TypeArgs(_, i)
+    | YieldStar(i) => count_tf_sites_expr(i, n, kinds)
+    Cond(c, t, e) => {
+      count_tf_sites_expr(c, n, kinds)
+      count_tf_sites_expr(t, n, kinds)
+      count_tf_sites_expr(e, n, kinds)
+    }
+    PropAccess(recv, _) => count_tf_sites_expr(recv, n, kinds)
+    IndexAccess(recv, idx) => {
+      count_tf_sites_expr(recv, n, kinds)
+      count_tf_sites_expr(idx, n, kinds)
+    }
+    Call(_, args) | New(_, args) =>
+      for a in args {
+        count_tf_sites_expr(a, n, kinds)
+      }
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      count_tf_sites_expr(callee, n, kinds)
+      for a in args {
+        count_tf_sites_expr(a, n, kinds)
+      }
+    }
+    MethodCall(recv, _, args) => {
+      count_tf_sites_expr(recv, n, kinds)
+      for a in args {
+        count_tf_sites_expr(a, n, kinds)
+      }
+    }
+    ArrayLit(items) =>
+      for i in items {
+        count_tf_sites_expr(i, n, kinds)
+      }
+    ObjectLit(entries) =>
+      for ent in entries {
+        count_tf_sites_expr(ent.1, n, kinds)
+      }
+    ArrowFunc(_, _, body, _) =>
+      match body {
+        ArrowExpr(e) => count_tf_sites_expr(e, n, kinds)
+        ArrowBlock(b) => count_tf_sites_block(b, n, kinds)
+      }
+    FuncExpr(f) => count_tf_sites_block(f.body, n, kinds)
+    AssignExpr(_, v) | AssignPattern(_, v) | PropAssignExpr(_, _, v) =>
+      count_tf_sites_expr(v, n, kinds)
+    CompoundAssignExpr(t, _, v) => {
+      count_tf_sites_expr(t, n, kinds)
+      count_tf_sites_expr(v, n, kinds)
+    }
+    IndexAssignExpr(recv, idx, v) => {
+      count_tf_sites_expr(recv, n, kinds)
+      count_tf_sites_expr(idx, n, kinds)
+      count_tf_sites_expr(v, n, kinds)
+    }
+    Yield(Some(i)) => count_tf_sites_expr(i, n, kinds)
+    _ => ()
+  }
+}
+
+///|
+/// Whether THIS expression node — not its children — is one of the
+/// shapes `type_fold_expr` can decide. One definition, used by the
+/// cheap pre-scan below and by `count_type_fold_sites`: the same rule
+/// written in two places and fixed in one is the most frequent bug in
+/// this pipeline.
+fn expr_is_type_fold_site(expr : @ast.TsExpr) -> Bool {
+  type_fold_site_kind(expr) is Some(_)
+}
+
+///|
 fn expr_needs_type_fold(expr : @ast.TsExpr) -> Bool {
   match expr {
     // `typeof x === "lit"` — discriminant we can fold.
-    BinOp(op, l, r) => {
-      let is_eq_op = match op {
-        BinEq | BinNe | AbstractEq | AbstractNe => true
-        _ => false
-      }
-      if is_eq_op {
-        match (l, r) {
-          (
-            @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Typeof, _),
-            @ast.TsExpr::StringLit(_),
-          )
-          | (
-            @ast.TsExpr::StringLit(_),
-            @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Typeof, _),
-          ) => return true
-          // `x === null` / `x === undefined`.
-          (@ast.TsExpr::Var(_), @ast.TsExpr::NullLit)
-          | (@ast.TsExpr::NullLit, @ast.TsExpr::Var(_)) => return true
-          (@ast.TsExpr::Var(_), @ast.TsExpr::Var("undefined"))
-          | (@ast.TsExpr::Var("undefined"), @ast.TsExpr::Var(_)) => return true
-          _ => ()
-        }
-      }
-      // `x + ""` / `"" + x` — foldable when x is string-typed.
-      match (op, l, r) {
-        (Add, @ast.TsExpr::Var(_), @ast.TsExpr::StringLit(""))
-        | (Add, @ast.TsExpr::StringLit(""), @ast.TsExpr::Var(_)) => return true
-        _ => ()
+    BinOp(_, l, r) => {
+      if expr_is_type_fold_site(expr) {
+        return true
       }
       expr_needs_type_fold(l) || expr_needs_type_fold(r)
     }
@@ -328,6 +595,7 @@ fn expr_needs_type_fold(expr : @ast.TsExpr) -> Bool {
     | NonNull(inner)
     | OptionalChain(inner)
     | PureCall(inner)
+    | TypeArgs(_, inner)
     | YieldStar(inner) => expr_needs_type_fold(inner)
     Cond(c, t, e) =>
       expr_needs_type_fold(c) ||
@@ -468,7 +736,20 @@ fn type_fold_stmt(
             infer_type_from_literal(new_init)
           }
           match effective_type {
-            @ast.TsType::Any => ()
+            // No useful type for this binding — but it IS a binding,
+            // so the name must read as unknown from here on rather
+            // than falling through to whatever an OUTER binding of the
+            // same name was annotated as. `hide` is what the parameter
+            // path already does (see `TypeScope`'s comment); the
+            // declaration path let the outer type stay visible, so
+            //
+            //     function f(s: string) {
+            //       { const s = 5 as unknown; return typeof s === "string"; }
+            //     }
+            //
+            // folded to `!0` on the strength of the PARAMETER's type.
+            // A wrong value, not a crash.
+            @ast.TsType::Any => scope.hide(name)
             ty => scope.set(name, ty)
           }
         }
@@ -847,6 +1128,7 @@ fn type_fold_expr(
     As(inner, ty) => As(type_fold_expr(inner, scope, aliases), ty)
     Satisfies(inner, ty) => Satisfies(type_fold_expr(inner, scope, aliases), ty)
     NonNull(inner) => NonNull(type_fold_expr(inner, scope, aliases))
+    TypeArgs(tys, inner) => TypeArgs(tys, type_fold_expr(inner, scope, aliases))
     OptionalChain(inner) => OptionalChain(type_fold_expr(inner, scope, aliases))
     PureCall(inner) => PureCall(type_fold_expr(inner, scope, aliases))
     NativeClassExpr(decl, ctor) => {

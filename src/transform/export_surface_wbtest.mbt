@@ -382,3 +382,61 @@ test "export surface: a class reached from many sites is still fully reserved" {
     "innerKey",
   ])
 }
+
+///|
+test "export surface: a write that reads the key it writes terminates" {
+  // `ledger.n = ledger.n + 1` — an increment, and the plainest
+  // self-referential property write there is.
+  //
+  // Escaping a property READ has to escape the recorded WRITES into that
+  // key as well: resolving `bag.p` against the object literal's own
+  // entry and stopping was how `mtsc --bundle` came to delete the methods
+  // of a class that only reaches a consumer through such a field. But the
+  // write can mention the key it writes, and walking it then re-enters
+  // the same question one level deeper. Five lines of TypeScript did not
+  // terminate, and `fixtures/mangle-safety/case36-annotated-boundary`
+  // (which has exactly this increment) hung the whole corpus.
+  //
+  // The memo that stops it is keyed on `(receiver, key)` and lives beside
+  // the one for named bodies, whose doc comment describes this same
+  // failure mode — it was already in this file, and the fix above simply
+  // did not use it.
+  // The increment is what threatens termination; `box` is what makes the
+  // test able to fail for the RIGHT reason. Reading `ledger.box` publishes
+  // the value stored at that key, and the literal's own entry for it is
+  // `null` — so `inner` is on the surface only if the recorded WRITE is
+  // followed, which is the fix under test. Asserting on the increment's
+  // own key instead would have asserted nothing: the first draft of this
+  // test expected `pendingCount` to be reserved and got `[]`, correctly,
+  // because reading a key publishes its VALUE and not its name.
+  let names = surface_props_of(
+    (
+      #|const ledger = { counter: 0, box: null };
+      #|function bump(v) {
+      #|  ledger.counter = ledger.counter + 1;
+      #|  ledger.box = { inner: v };
+      #|  return ledger.box;
+      #|}
+    ),
+    ["bump"],
+  )
+  assert_names(names, ["inner"])
+}
+
+///|
+test "export surface: a two-object write cycle terminates" {
+  // The mutual form of the same hazard: neither write mentions its own
+  // key, so a memo keyed on the KEY alone would not catch it — `a.toB`
+  // escapes `b`, whose `b.toA` escapes `a`, back to `a.toB`.
+  let names = surface_props_of(
+    (
+      #|const a = { toB: null, aOwn: 1 };
+      #|const b = { toA: null, bOwn: 2 };
+      #|a.toB = b;
+      #|b.toA = a;
+      #|function reach() { return a.toB; }
+    ),
+    ["reach"],
+  )
+  assert_names(names, ["toB", "aOwn", "toA", "bOwn"])
+}

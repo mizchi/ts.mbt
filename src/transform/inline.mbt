@@ -147,21 +147,26 @@ fn is_multi_decl_block(block : @ast.TsBlock) -> Bool {
   if block.stmts.length() < 2 {
     return false
   }
-  let kind = match block.stmts[0] {
-    Var(_, _, _) => 0
-    Let(_, _, _) => 1
-    Const(_, _, _) => 2
-    _ => return false
-  }
-  for s in block.stmts {
-    match s {
-      Var(_, _, _) => if kind != 0 { return false }
-      Let(_, _, _) => if kind != 1 { return false }
-      Const(_, _, _) => if kind != 2 { return false }
-      _ => return false
-    }
-  }
-  true
+  // Delegated, not re-derived. This question had FOUR independent
+  // implementations in this package — here, `symbol_graph.mbt`,
+  // `treeshake.mbt` and `emit.mbt` — and each of the first three said in
+  // its comment that it mirrored the emitter's rule while omitting the
+  // one condition that makes the rule sound: the marker that separates
+  // `let a = 1, b = 2` from a REAL block.
+  //
+  // Omitting it here is what shipped a duplicate declaration:
+  //
+  //     switch (n) {
+  //       case 1: { { let v1 = …; let v2 = …; } } break;
+  //       default: const { [k]: v3 } = bag;
+  //     }
+  //
+  // The inner block is all-declarations, so this predicate said "group",
+  // the pass spliced its bindings into the switch's scope, and the
+  // mangler had already given `v1` and `v3` the same name — correctly,
+  // since they were in different scopes when it looked. Output that Node
+  // refuses to parse, under `--minify --mangle`.
+  block_is_inline_decl_group(block)
 }
 
 ///|
@@ -486,7 +491,9 @@ fn inline_into_expr(
     As(inner, ty) => As(inline_into_expr(inner, tbl), ty)
     Satisfies(inner, ty) => Satisfies(inline_into_expr(inner, tbl), ty)
     NonNull(inner) => NonNull(inline_into_expr(inner, tbl))
+    PureCall(inner) => PureCall(inline_into_expr(inner, tbl))
     OptionalChain(inner) => OptionalChain(inline_into_expr(inner, tbl))
+    TypeArgs(tys, inner) => TypeArgs(tys, inline_into_expr(inner, tbl))
     NativeClassExpr(decl, ctor) => {
       let new_ctor = match ctor {
         Some(f) =>
@@ -990,7 +997,9 @@ fn substitute_expr(
     As(inner, ty) => As(substitute_expr(inner, name, rhs), ty)
     Satisfies(inner, ty) => Satisfies(substitute_expr(inner, name, rhs), ty)
     NonNull(inner) => NonNull(substitute_expr(inner, name, rhs))
+    PureCall(inner) => PureCall(substitute_expr(inner, name, rhs))
     OptionalChain(inner) => OptionalChain(substitute_expr(inner, name, rhs))
+    TypeArgs(tys, inner) => TypeArgs(tys, substitute_expr(inner, name, rhs))
     NativeClassExpr(decl, ctor) => {
       let new_base = match decl.base_expr {
         Some(b) => Some(substitute_expr(b, name, rhs))
@@ -1447,6 +1456,14 @@ fn count_var_uses_expr(
     | As(inner, _)
     | Satisfies(inner, _)
     | NonNull(inner)
+    | TypeArgs(_, inner)
+    // `/* @__PURE__ */ immer.produce` is a `PureCall` wrapper, and this
+    // counter had no arm for it — so a binding used fourteen times
+    // through such annotations counted as used once, the inliner
+    // substituted its initializer into the first use and deleted the
+    // declaration. immer's bundle ended up with thirteen references to
+    // a binding that no longer existed.
+    | PureCall(inner)
     | OptionalChain(inner) => {
       let (l2, n2) = count_var_uses_expr(inner, name, 0, 0, inside_func)
       l = l + l2
@@ -1828,6 +1845,8 @@ fn collect_reassigned_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit 
     | As(inner, _)
     | Satisfies(inner, _)
     | NonNull(inner)
+    | TypeArgs(_, inner)
+    | PureCall(inner)
     | OptionalChain(inner) => collect_reassigned_expr(inner, out)
     Yield(Some(inner)) => collect_reassigned_expr(inner, out)
     Seq(a, b) => {
@@ -2128,6 +2147,8 @@ fn collect_captured_expr(
     | As(inner, _)
     | Satisfies(inner, _)
     | NonNull(inner)
+    | TypeArgs(_, inner)
+    | PureCall(inner)
     | OptionalChain(inner) => collect_captured_expr(inner, out, inside_func)
     Yield(Some(inner)) => collect_captured_expr(inner, out, inside_func)
     Cond(c, t, e) => {
@@ -2271,6 +2292,8 @@ fn collect_var_refs_in_expr_local(
     | As(inner, _)
     | Satisfies(inner, _)
     | NonNull(inner)
+    | TypeArgs(_, inner)
+    | PureCall(inner)
     | OptionalChain(inner) => collect_var_refs_in_expr_local(inner, out)
     Yield(Some(inner)) => collect_var_refs_in_expr_local(inner, out)
     Cond(c, t, e) => {

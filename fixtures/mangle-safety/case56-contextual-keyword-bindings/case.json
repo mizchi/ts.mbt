@@ -1,0 +1,13 @@
+{
+  "origin": "ts.mbt — found while measuring typebox's remaining gap against terser by identifier-length distribution",
+  "what": "The mangler's built-in reserved list blocked RENAMING bindings named after TypeScript contextual keywords (`type`, `namespace`, `declare`, `abstract`, `readonly`), which are legal JavaScript variable names. The list exists to keep the generated pool away from globals and reserved words; using it for the rename decision as well cost 824 four-character occurrences of `type` on typebox. This case checks that renaming them is safe: declared, read, closed over, shadowed by a parameter, nested, and exported, with object keys of the same spelling that must not move.",
+  "mtscArgs": [
+    "--treeshake",
+    "--fold",
+    "--minify"
+  ],
+  "exports": [
+    "report"
+  ],
+  "expectStatus": "pass"
+}

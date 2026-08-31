@@ -116,49 +116,74 @@ pub fn lower_private_fields(block : @ast.TsBlock) -> @ast.TsBlock {
   //     the bottom of this function.
   //
   // All three are recorded in `fixtures/fuzz-findings/README.md`.
+  //
+  // Both facts are gathered per TOP-LEVEL STATEMENT, because the second
+  // gate below is a statement-level question.
+  let declares_per_stmt : Array[Map[String, Bool]] = []
+  let mentions_per_stmt : Array[Map[String, Bool]] = []
   let declarable : Map[String, Bool] = {}
-  for s in block.stmts {
-    match s {
+  let mentioned_anywhere : Map[String, Bool] = {}
+  for st in block.stmts {
+    let d : Map[String, Bool] = {}
+    match st {
       @ast.TsStmt::NativeClassStmt(decl, ctor) =>
-        collect_declarable_members(decl, ctor, declarable)
+        collect_declarable_members(decl, ctor, d)
       @ast.TsStmt::Let(_, _, @ast.TsExpr::NativeClassExpr(decl, ctor))
       | @ast.TsStmt::Const(_, _, @ast.TsExpr::NativeClassExpr(decl, ctor))
       | @ast.TsStmt::Var(_, _, @ast.TsExpr::NativeClassExpr(decl, ctor)) =>
-        collect_declarable_members(decl, ctor, declarable)
+        collect_declarable_members(decl, ctor, d)
       _ => ()
     }
+    for n in d.keys() {
+      declarable[n] = true
+    }
+    declares_per_stmt.push(d)
+    let m : Map[String, Bool] = {}
+    collect_property_names({ stmts: [st], stmt_positions: [] }, m)
+    for n in m.keys() {
+      mentioned_anywhere[n] = true
+    }
+    mentions_per_stmt.push(m)
   }
   if declarable.is_empty() {
     return block
   }
-  // One more thing has to hold: the brand must not be mentioned by any
-  // OTHER top-level statement. `#x` is scoped to the class body, so a
-  // reference from anywhere else cannot be spelled `#x` — and mtsc
-  // itself produces such references. hono's `Context` has an accessor
-  // lowered to
+  // One more thing has to hold: every statement that mentions the brand
+  // must be a class node that DECLARES it. `#x` is scoped to the class
+  // body, so a mention from anywhere else cannot be spelled `#x` — and
+  // mtsc itself produces such mentions. hono's `HonoRequest` has a
+  // COMPUTED-key accessor (`get [GET_MATCH_RESULT]() { return
+  // this.#matchResult }`) which the class lowering hoists out to
   //
-  //   Object.defineProperty(Context.prototype, KEY, {
+  //   Object.defineProperty(HonoRequest.prototype, KEY, {
   //     get: function () { return this.#matchResult }, … });
   //
-  // emitted as a statement of its own, next to the class. Renaming the
-  // brand gave that getter a `#matchResult` with no enclosing class —
-  // "Private field '#matchResult' must be declared in an enclosing
-  // class", and the whole bundle stopped loading.
+  // a statement of its own. Renaming the brand gave that getter a
+  // `#matchResult` with no enclosing class — "Private field
+  // '#matchResult' must be declared in an enclosing class", and the
+  // whole bundle stopped loading.
   //
-  // Counting the statements that mention each name is one scan and
-  // exact at statement granularity: a brand mentioned by exactly one
-  // top-level statement is confined to the class node that declares it.
-  let stmt_count : Map[String, Int] = {}
-  for st in block.stmts {
-    let one : Map[String, Bool] = {}
-    collect_property_names({ stmts: [st], stmt_positions: [] }, one)
-    for n in one.keys() {
-      stmt_count[n] = stmt_count.get(n).unwrap_or(0) + 1
-    }
-  }
+  // This used to be spelled "mentioned by exactly one top-level
+  // statement", which is a strictly stronger condition and blocked a
+  // shape it had no business blocking: TWO classes each declaring the
+  // same private name. The parser numbers brands per module, so hono's
+  // `Context.#path` and `Hono.#path` are both
+  // `__private_brand__0__path`, and after linking that brand appears in
+  // two statements — both of them class nodes that declare it. Each `#x`
+  // is scoped to its own class body, so renaming both is exactly right,
+  // and the old count refused. That refusal was hono's whole remaining
+  // brand set: five of its six surviving brands were this, not the
+  // accessor.
   let map : Map[String, String] = {}
   for n in declarable.keys() {
-    if stmt_count.get(n).unwrap_or(0) != 1 {
+    let mut confined = true
+    for i in 0..<block.stmts.length() {
+      if mentions_per_stmt[i].contains(n) && !declares_per_stmt[i].contains(n) {
+        confined = false
+        break
+      }
+    }
+    if !confined {
       continue
     }
     match private_brand_member(n) {
@@ -170,7 +195,7 @@ pub fn lower_private_fields(block : @ast.TsBlock) -> @ast.TsBlock {
         // `#matchResult` while the class writes
         // `__private_brand__N__matchResult`. Renaming the brand to the
         // same text is what put a `#` name outside a class body.
-        if stmt_count.contains("#" + member) {
+        if mentioned_anywhere.contains("#" + member) {
           continue
         }
         map[n] = "#" + member

@@ -1,0 +1,16 @@
+{
+  "origin": "ts.mbt — the enabling half of `case53-ctor-name-compared-to-literal`, from the terser head-to-head that put mtsc +51.6% on typebox.",
+  "what": "`try_inline_trivial_call` refused to substitute an IMPURE argument. The requirement is there to stop duplicating, dropping or reordering an argument's effects, and all three are decided by the BODY: when it reads every parameter exactly once, in argument order, and unconditionally, the substituted expression performs the same operations in the same sequence as the call. `params_read_in_argument_order` decides that, as an ALLOWLIST over expression forms — an unrecognised node declines the relaxation rather than claiming an order nobody checked. Since the getter fix `is_pure_value` calls every property read impure, so before this a one-line `IsEqual(l, r) => l === r` was never inlined at any call site reading a property; typebox has 160 such sites and one of them is the `.constructor.name` read that cost 24.9% of the bundle. Every observation here is an ORDER rather than a result, because a case checking only the result passes with the gate removed: `l || r` computes the same boolean whether or not the right operand's effect ran. `--minify` is in mtscArgs because `inline_block` is gated on it.",
+  "mtscArgs": ["--minify", "--fold", "--treeshake"],
+  "exports": [
+    "eq",
+    "added",
+    "picked",
+    "shortCircuited",
+    "coalesced",
+    "chosen",
+    "swappedOrder",
+    "dropped"
+  ],
+  "expectStatus": "pass"
+}

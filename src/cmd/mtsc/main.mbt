@@ -56,6 +56,18 @@ priv struct MtscOptions {
   // etc). Getters in JS are conventionally pure; an impure one
   // is almost always a bug. Off by default to keep output quiet.
   mut warn_impure_getters : Bool
+  // Report reflection in the input that no optimization can see
+  // through — `Reflect.ownKeys` and friends enumerate NON-enumerable
+  // properties, which is exactly what a class prototype method is, so
+  // one call anywhere keeps every method of every class in the bundle.
+  //
+  // On by default, unlike `--warn-impure-getters`, because the author
+  // is the only one who can act on it and should not have to know a
+  // flag exists to find out. Suppressed when the JS itself is going to
+  // stdout: there the diagnostic would land inside the program.
+  // `--warn-reflection` forces it on even then, `--no-warn-reflection`
+  // off.
+  mut warn_reflection : Bool?
   // Bare specifiers the user wants left as `import … from "<spec>"`
   // in the emitted bundle. Anything not on this list is resolved
   // through node_modules / tsconfig paths and inlined when found.
@@ -66,6 +78,12 @@ priv struct MtscOptions {
   // did instead of only doing it. Implies the mangle passes, since a
   // decision has to be made before it can be explained.
   mut explain_mangle : Bool
+  // `--verify`: re-parse the emitted bundle and report any name it
+  // reads that nothing declares. See `docs/type-aware-dce.md` (E1).
+  mut verify : Bool
+  // `--disable-phase <name>`: run without a named pipeline phase, so a
+  // size delta can be attributed to it. `--timing` names every phase.
+  disabled_phases : Map[String, Bool]
   mut mangle_properties_shape_color : Bool
   // `--no-check`: skip type-checking. The gate exists because a type
   // error usually means the program is wrong, but it also makes the
@@ -103,10 +121,13 @@ fn mtsc_options_new() -> MtscOptions {
     reserve_entry_exports: false,
     dts: false,
     warn_impure_getters: false,
+    warn_reflection: None,
     externals: {},
     mangle: false,
     mangle_properties: false,
     explain_mangle: false,
+    verify: false,
+    disabled_phases: {},
     mangle_properties_shape_color: false,
     no_check: false,
     timing: false,
@@ -159,10 +180,20 @@ fn mtsc_print_usage() -> Unit {
     "  --mangle-properties       Also rename non-reserved property keys (implies --bundle)",
   )
   println(
+    "  --warn-reflection         Report reflection that blocks an optimization (default on when -o is given)",
+  )
+  println("  --no-warn-reflection      Silence the reflection report")
+  println(
     "  --explain-mangle          Report why each minify decision went the way it did",
   )
   println(
     "  --mangle-properties-shape-color  Use shape-coloring property rename (opt-in, experimental)",
+  )
+  println(
+    "  --verify                  Re-parse the emitted bundle and report any name nothing declares",
+  )
+  println(
+    "  --disable-phase <name>    Run without a named pipeline phase, to attribute bytes to it (repeatable; --timing lists the names)",
   )
   println(
     "  --no-check                Skip type-checking entirely (non-TypeScript input; the check is ~95% of a large compile)",
@@ -213,6 +244,8 @@ fn mtsc_parse_args(argv : Array[String]) -> Result[MtscOptions, String] {
         opts.bundle = true
       }
       "--warn-impure-getters" => opts.warn_impure_getters = true
+      "--warn-reflection" => opts.warn_reflection = Some(true)
+      "--no-warn-reflection" => opts.warn_reflection = Some(false)
       "--external" => {
         if i + 1 >= argv.length() {
           return Err("missing value for --external")
@@ -245,6 +278,20 @@ fn mtsc_parse_args(argv : Array[String]) -> Result[MtscOptions, String] {
         opts.mangle_properties = true
         opts.explain_mangle = true
         opts.bundle = true
+      }
+      "--verify" => opts.verify = true
+      "--disable-phase" => {
+        if i + 1 >= argv.length() {
+          return Err("missing value for --disable-phase")
+        }
+        for raw in argv[i + 1].split(",") {
+          let name = raw.to_owned().trim().to_owned()
+          if name != "" {
+            opts.disabled_phases[name] = true
+          }
+        }
+        i = i + 2
+        continue
       }
       "--no-check" => opts.no_check = true
       "--timing" => {
@@ -294,8 +341,47 @@ fn mtsc_parse_args(argv : Array[String]) -> Result[MtscOptions, String] {
 }
 
 ///|
-fn mtsc_build_jsx_config(opts : MtscOptions) -> @transform.JsxConfig {
+async fn mtsc_build_jsx_config(
+  opts : MtscOptions,
+  entry_path : String,
+) -> @transform.JsxConfig {
   let mut cfg = @transform.JsxConfig::default()
+  // tsconfig first, then the CLI flags, then (inside the transform) the
+  // per-file pragmas — increasing precedence, matching what TypeScript
+  // does with the same three sources.
+  //
+  // mtsc read `paths` out of tsconfig and nothing else, so a preact /
+  // solid / vue-JSX application compiled to
+  // `import { jsx } from "react/jsx-runtime"` and could not run at all.
+  // The `/** @jsxImportSource preact */` pragma was the only form
+  // supported, and no application uses it — the setting goes in
+  // tsconfig, per package, and in a monorepo it is inherited through
+  // `extends` (sprawlens: `jsx` in the base config, `jsxImportSource`
+  // in the package's own).
+  match @parser.tsconfig_compiler_option(entry_path, "jsx") {
+    Some(jsx) =>
+      // `preserve` and `react-native` leave JSX in the output, which
+      // this pipeline cannot do — it always lowers — so they map to the
+      // automatic runtime rather than being honoured.
+      match jsx {
+        "react" => cfg = cfg.with_runtime("classic")
+        "react-jsxdev" => cfg = cfg.with_runtime("automatic").with_dev(true)
+        _ => cfg = cfg.with_runtime("automatic")
+      }
+    None => ()
+  }
+  match @parser.tsconfig_compiler_option(entry_path, "jsxImportSource") {
+    Some(src) => cfg = cfg.with_import_source(src)
+    None => ()
+  }
+  match @parser.tsconfig_compiler_option(entry_path, "jsxFactory") {
+    Some(f) => cfg = cfg.with_pragma_jsx(f)
+    None => ()
+  }
+  match @parser.tsconfig_compiler_option(entry_path, "jsxFragmentFactory") {
+    Some(f) => cfg = cfg.with_pragma_jsx_frag(f)
+    None => ()
+  }
   match opts.jsx_runtime {
     Some(r) => cfg = cfg.with_runtime(r)
     None => ()
@@ -401,6 +487,21 @@ fn mtsc_basename(path : String) -> String {
 }
 
 ///|
+/// A specifier the loader resolves against the filesystem itself, rather
+/// than handing to package resolution: relative (`./x`, `../x`, `.`,
+/// `..`) or rooted (`/x`).
+///
+/// One predicate for all four test sites in the graph walk. The import
+/// loop and the re-export loop are mirror images of each other and each
+/// tests this twice — once to decide whether a type-only edge is worth
+/// following, once to pick the resolve branch — so an inlined test is
+/// four copies that have to agree. `.` and `..` were missing from all
+/// four; see `@transform.is_relative_specifier`.
+fn mtsc_is_local_specifier(spec : String) -> Bool {
+  @transform.is_relative_specifier(spec) || spec.has_prefix("/")
+}
+
+///|
 fn mtsc_join_path(dir : String, child : String) -> String {
   if dir == "" {
     child
@@ -468,6 +569,49 @@ fn mtsc_empty_module() -> @ast.TsModule {
 }
 
 ///|
+/// Does this path name a file the JavaScript pipeline cannot parse and
+/// has no business parsing — a stylesheet, an image, a font, a media
+/// file? Bundlers resolve these through loaders; a JS-only bundle has
+/// nothing to emit for them.
+///
+/// An extension list rather than "anything not .ts/.tsx/.js": a resolved
+/// path with an unfamiliar extension is more likely a module the
+/// resolver mis-resolved than an asset, and silently emptying that would
+/// turn a resolution bug into missing code rather than an error.
+fn is_non_js_asset_path(path : String) -> Bool {
+  for
+    ext in [
+      ".css", ".scss", ".sass", ".less", ".styl", ".svg", ".png", ".jpg", ".jpeg",
+      ".gif", ".webp", ".avif", ".ico", ".bmp", ".woff", ".woff2", ".ttf", ".otf",
+      ".eot", ".mp3", ".mp4", ".wav", ".ogg", ".webm", ".pdf", ".wasm",
+    ] {
+    if path.has_suffix(ext) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+/// Is this asset path a STYLESHEET whose import is going to be read as a
+/// value?
+///
+/// The caller only has the resolved path at this point, not the import
+/// declaration that reached it, so this answers the narrower question it
+/// can: is it a stylesheet at all. The side-effect form is by far the
+/// common one and is handled correctly, so warning on every stylesheet
+/// would be noise — which is why the caller pairs this with the
+/// value-form check it can make.
+fn is_stylesheet_path(path : String) -> Bool {
+  for ext in [".css", ".scss", ".sass", ".less", ".styl"] {
+    if path.has_suffix(ext) {
+      return true
+    }
+  }
+  false
+}
+
+///|
 /// Walk imports starting from `entry_path` and read every reachable
 /// file from disk into `files`. Only relative imports (`./x`, `../y`)
 /// and rooted paths are followed — bare specifiers (`react`, `@scope/x`)
@@ -508,6 +652,25 @@ async fn mtsc_load_bundle_files(
   let mut parse_micros = 0.0
   let mut read_micros = 0.0
   let mut resolve_micros = 0.0
+  // The sibling `.d.ts` scan, separately. It was inside the
+  // "module graph walk" residual, and it is not a walk at all: next to
+  // `node_modules/typescript/lib/typescript.js` there are 98 `.d.ts`
+  // files totalling 3.2 MB, and this read and fully parsed every one of
+  // them. That is what a residual hides.
+  let mut ambient_micros = 0.0
+  // The import / re-export edge walk, which is what the "module graph
+  // walk" residual is actually named after. On a 95-file target it was
+  // 310 ms with no ambient `.d.ts` in sight, so the label had to be
+  // checked rather than believed.
+  let mut edge_micros = 0.0
+  // Bare-specifier resolution (`react`, `roughjs/bin/math`), separately
+  // from the relative path math above it. Both are "module resolution",
+  // and they are not the same cost: one is arithmetic over a cached
+  // directory listing, the other walks `node_modules` and reads
+  // `package.json` `exports` / `typesVersions`. Once `cli: resolve
+  // module paths` became the largest row on a 95-file target there was
+  // no way to act on it without knowing which half it was.
+  let mut bare_micros = 0.0
   // Time every `mtsc_resolve_existing` call, cache hits included, so the
   // row measures what resolution costs the compile rather than what it
   // costs on a miss.
@@ -578,10 +741,78 @@ async fn mtsc_load_bundle_files(
       continue
     }
     let read_started = @bench.monotonic_clock_start()
-    let source = @fs.read_file(resolved).text() catch {
-      e => return Err("read error \{resolved}: \{e}")
+    // Decide BEFORE reading. A `.woff2` is binary and decoding it as
+    // UTF-8 fails outright (`utf8.Malformed`), so an asset has to be
+    // recognised by its path, not by its contents — and skipping the
+    // read also keeps megabytes of fonts and images out of the compile.
+    let asset = is_non_js_asset_path(resolved)
+    let raw_source = if asset {
+      ""
+    } else {
+      @fs.read_file(resolved).text() catch {
+        e => return Err("read error \{resolved}: \{e}")
+      }
     }
     read_micros = read_micros + @bench.monotonic_clock_end(read_started)
+    // A `.json` import is a module whose default export is the parsed
+    // document. Handing the file to the TypeScript parser instead is a
+    // syntax error on the first key — `Expected Semicolon, got Colon` —
+    // and it takes the whole compile with it. Excalidraw's `i18n.ts`
+    // does `import percentages from "./locales/percentages.json"`, which
+    // is enough to stop its 1 MB element package from bundling at all.
+    //
+    // JSON is a subset of the expression grammar, so the document can
+    // become a module by wrapping it rather than by teaching the parser
+    // a second grammar: `export default <document>;` parses as the
+    // object / array / scalar literal it already is.
+    //
+    // Default export only. That is what an ESM JSON module offers, and
+    // it is what every import of one in the corpus uses;
+    // `resolveJsonModule`'s named imports of top-level keys would need
+    // one `export const` per key and are not synthesized here.
+    //
+    // One semantic difference is worth naming: a `"__proto__"` key in an
+    // object literal sets the prototype instead of becoming an own
+    // property, where `JSON.parse` makes it an own property. A document
+    // with that key is mis-modelled.
+    // An asset import is not JavaScript and has no JavaScript to
+    // contribute. `import "./ContextMenu.scss"` is a side effect a CSS
+    // pipeline resolves, and handing the stylesheet to the TypeScript
+    // parser is `Expected type, got Star` on the first `*` selector.
+    // Excalidraw reaches one from its element package and the whole
+    // compile stops there.
+    //
+    // Synthesize an empty module instead. The side-effect form then
+    // contributes nothing, which is correct for a JS-only bundle.
+    //
+    // The VALUE form (`import styles from "./x.module.css"`) still gets
+    // `{}`, and that is not a fix: it is not the class-name map a
+    // CSS-modules pipeline would build, so a bundle that reads
+    // `styles.foo` sees `undefined`. The import site reports it — the
+    // warning lives at the enqueue below, which is where the import
+    // DECLARATION is in scope and the value form can be told from the
+    // side-effect one — and the reason for not synthesizing something
+    // is worth stating.
+    //
+    // Scanning the stylesheet for class selectors and handing back an
+    // identity map (`{ foo: "foo" }`) was the obvious alternative. It
+    // trades a value that fails LOUDLY — `undefined.length` throws,
+    // `${styles.foo}` renders "undefined" — for one that fails SILENTLY:
+    // a plausible class name that matches no rule, because mtsc emits no
+    // CSS either. Unstyled UI and no error is the worse outcome.
+    //
+    // And there is no evidence it matters. All 76 of Excalidraw's
+    // stylesheet imports are the side-effect form, which is handled
+    // correctly; the corpus has no value-form CSS import at all. So the
+    // honest move is to say what cannot be done rather than to guess,
+    // and to leave the guess for a caller who actually has a pipeline.
+    let source = if asset {
+      "export default {};\n"
+    } else if resolved.has_suffix(".json") {
+      "export default " + raw_source + ";\n"
+    } else {
+      raw_source
+    }
     files[resolved] = source
     // The extension-less form is also keyed, so the bundler can look up
     // the specifier a module actually spelled (`./sub` -> `/dir/sub`).
@@ -634,6 +865,17 @@ async fn mtsc_load_bundle_files(
         type_props[n] = true
       }
     }
+    // Bracketed, minus the resolution accumulated inside it. The first
+    // version of this span was a plain wall-clock bracket while
+    // `resolve_micros` accumulated sub-spans INSIDE it, so the two
+    // OVERLAPPED: the edge walk read 358 ms and looked like the largest
+    // item on a 95-file target, when almost all of it was the module
+    // resolution already reported on its own row. An overlapping span
+    // is not a small error — it is a wrong number that reads like a
+    // finding, and it sent this investigation at the wrong function.
+    // Every row here is now disjoint, so they sum.
+    let edges_started = @bench.monotonic_clock_start()
+    let resolve_before_edges = resolve_micros + bare_micros
     for imp in mb.imports {
       // A type-only import contributes no runtime code, so the bundler
       // skips it — but the CHECKER needs the module that declares the
@@ -642,13 +884,30 @@ async fn mtsc_load_bundle_files(
       // edge relative type-only imports; a bare one would drag a whole
       // package's declarations in, so those stay skipped.
       let spec = imp.module_spec
-      if imp.type_only &&
-        !(spec.has_prefix("./") ||
-        spec.has_prefix("../") ||
-        spec.has_prefix("/")) {
+      if imp.type_only && !mtsc_is_local_specifier(spec) {
         continue
       }
-      if spec.has_prefix("./") || spec.has_prefix("../") || spec.has_prefix("/") {
+      if mtsc_is_local_specifier(spec) {
+        // A stylesheet imported for its VALUE — `import styles from
+        // "./x.module.css"` — is the one asset form mtsc cannot model:
+        // the synthesized module hands back `{}`, so every `styles.foo`
+        // is `undefined` and the failure is silent. Say so here rather
+        // than guessing a class-name map; the note at the asset stub
+        // above says why guessing is worse.
+        //
+        // The side-effect form (`import "./x.scss"`) is correct and
+        // stays silent — all 76 of Excalidraw's stylesheet imports are
+        // that form, which is why this cannot warn on every stylesheet.
+        if is_stylesheet_path(spec) &&
+          (
+            imp.default_binding is Some(_) ||
+            imp.namespace_binding is Some(_) ||
+            imp.named_bindings.length() > 0
+          ) {
+          println(
+            "mtsc: \{resolved} imports `\{spec}` for its value, but mtsc has no CSS pipeline — the import yields `{}`, so every class-name lookup on it is `undefined`",
+          )
+        }
         let combined = if spec.has_prefix("/") {
           mtsc_normalize(spec)
         } else {
@@ -668,7 +927,10 @@ async fn mtsc_load_bundle_files(
       if aliases.contains(spec) {
         continue
       }
-      match @parser.resolve_runtime_module_specifier(resolved, spec) {
+      let bare_started = @bench.monotonic_clock_start()
+      let bare = @parser.resolve_runtime_module_specifier(resolved, spec)
+      bare_micros = bare_micros + @bench.monotonic_clock_end(bare_started)
+      match bare {
         Some(found) => {
           aliases[spec] = found
           edges.push({
@@ -686,13 +948,10 @@ async fn mtsc_load_bundle_files(
     for re in mb.reexports {
       // Same reasoning as the type-only import above.
       let spec = re.module_spec
-      if re.type_only &&
-        !(spec.has_prefix("./") ||
-        spec.has_prefix("../") ||
-        spec.has_prefix("/")) {
+      if re.type_only && !mtsc_is_local_specifier(spec) {
         continue
       }
-      if spec.has_prefix("./") || spec.has_prefix("../") || spec.has_prefix("/") {
+      if mtsc_is_local_specifier(spec) {
         let combined = if spec.has_prefix("/") {
           mtsc_normalize(spec)
         } else {
@@ -712,7 +971,10 @@ async fn mtsc_load_bundle_files(
       if aliases.contains(spec) {
         continue
       }
-      match @parser.resolve_runtime_module_specifier(resolved, spec) {
+      let bare_started = @bench.monotonic_clock_start()
+      let bare = @parser.resolve_runtime_module_specifier(resolved, spec)
+      bare_micros = bare_micros + @bench.monotonic_clock_end(bare_started)
+      match bare {
         Some(found) => {
           aliases[spec] = found
           edges.push({
@@ -725,6 +987,9 @@ async fn mtsc_load_bundle_files(
         None => ()
       }
     }
+    edge_micros = edge_micros +
+      @bench.monotonic_clock_end(edges_started) -
+      (resolve_micros + bare_micros - resolve_before_edges)
   }
   // Ambient declaration files (`declare const MyGlobal: …`) belong to the
   // program even though nothing imports them — that is the whole point of
@@ -732,6 +997,7 @@ async fn mtsc_load_bundle_files(
   // `include`; with no tsconfig to read, take the `.d.ts` files sitting in
   // the entry's own directory, which is where the `env.d.ts` /
   // `globals.d.ts` convention puts them.
+  let ambient_started = @bench.monotonic_clock_start()
   for ambient in mtsc_sibling_declaration_files(entry_path) {
     if files.contains(ambient) {
       continue
@@ -742,23 +1008,42 @@ async fn mtsc_load_bundle_files(
       _ => continue
     }
     files[ambient] = source
-    let parsed = try @parser.Parser::from_source(source).parse_module() catch {
-      e => Err(e)
-    } noraise {
-      m => Ok(m)
-    }
-    match parsed {
-      Ok(module_) =>
-        for n in @transform.type_declared_property_names(module_) {
-          type_props[n] = true
-        }
-      Err(_) => ()
+    // The PARSE is only here to harvest `type_props`, and only
+    // `--reserve-typed-props` reads that — the same gate the main loop
+    // already applies to its own second parse, which this scan never
+    // got. Next to `typescript.js` that is 98 files and 3.2 MB parsed
+    // to fill a map nobody was going to look at. Fourth time in this
+    // pipeline that a condition was applied in one place and not in the
+    // second consumer.
+    //
+    // The READ stays unconditional: `files[ambient]` is what puts an
+    // ambient declaration into the program for the checker, which is
+    // the point of the scan (`case03`).
+    if want_type_props {
+      let parsed = try
+        @parser.Parser::from_source(source).parse_module()
+      catch {
+        e => Err(e)
+      } noraise {
+        m => Ok(m)
+      }
+      match parsed {
+        Ok(module_) =>
+          for n in @transform.type_declared_property_names(module_) {
+            type_props[n] = true
+          }
+        Err(_) => ()
+      }
     }
   }
+  ambient_micros = ambient_micros + @bench.monotonic_clock_end(ambient_started)
   parse_split.push(tokenize_micros)
   parse_split.push(parse_micros)
   parse_split.push(read_micros)
   parse_split.push(resolve_micros)
+  parse_split.push(ambient_micros)
+  parse_split.push(edge_micros)
+  parse_split.push(bare_micros)
   Ok(())
 }
 
@@ -1115,7 +1400,7 @@ async fn main {
     )
     return
   }
-  let jsx_cfg = mtsc_build_jsx_config(opts)
+  let jsx_cfg = mtsc_build_jsx_config(opts, input_path)
   let output_path = match opts.out {
     Some(p) => p
     None => "output.js"
@@ -1158,20 +1443,25 @@ async fn main {
     // Report the lexer and the recursive descent separately, and keep
     // the remainder (disk reads, path resolution) as its own row.
     let load_total = @bench.monotonic_clock_end(load_started)
-    if parse_split.length() == 4 {
+    if parse_split.length() == 7 {
       cli_timer.record("cli: tokenize", parse_split[0])
       cli_timer.record("cli: parse (recursive descent)", parse_split[1])
       cli_timer.record("cli: read + decode files", parse_split[2])
-      cli_timer.record("cli: resolve module paths", parse_split[3])
-      // Whatever the four measured spans do not account for: queue
-      // bookkeeping, the import walk, the sibling `.d.ts` scan.
-      let rest = load_total -
-        parse_split[0] -
-        parse_split[1] -
-        parse_split[2] -
-        parse_split[3]
+      cli_timer.record("cli: resolve relative paths", parse_split[3])
+      cli_timer.record("cli: ambient .d.ts scan", parse_split[4])
+      cli_timer.record("cli: import edge walk", parse_split[5])
+      cli_timer.record("cli: resolve bare specifiers", parse_split[6])
+      // Whatever the measured spans do not account for: queue
+      // bookkeeping, mostly. The sibling `.d.ts` scan used to be in
+      // here and was most of it — on `typescript.js` it read and parsed
+      // 98 files and 3.2 MB. A residual is a place to look, not an
+      // answer, and this one was labelled after the wrong thing.
+      let mut rest = load_total
+      for span in parse_split {
+        rest = rest - span
+      }
       if rest > 0.0 {
-        cli_timer.record("cli: module graph walk", rest)
+        cli_timer.record("cli: load, unattributed", rest)
       }
     } else {
       cli_timer.record("cli: read + parse files", load_total)
@@ -1231,6 +1521,8 @@ async fn main {
           type_aliases: [],
           interfaces: [],
           class_fields: [],
+          module_request_order: [],
+          type_only_exports: {},
           has_export_equals: false,
         })
         let module_ = (try
@@ -1295,6 +1587,7 @@ async fn main {
       // there, so the bundler doesn't need to fail over them a second
       // time — it keeps them verbatim.
       .with_allow_unresolved_imports(true)
+      .with_disabled_phases(opts.disabled_phases)
       .with_timing(opts.timing)
       // Hand the loader's parses over rather than have the bundler
       // repeat them.
@@ -1315,13 +1608,47 @@ async fn main {
         println("mtsc: " + w)
       }
     }
+    // Reflection that stopped an optimization. Default on, except when
+    // the JS is going to stdout and the line would land in the program.
+    let want_reflection = match opts.warn_reflection {
+      Some(v) => v
+      None => opts.out is Some(_)
+    }
+    if want_reflection && out.reflection_warnings.length() > 0 {
+      println(
+        "mtsc: warning: reflection keeps every class method. These enumerate NON-enumerable",
+      )
+      println(
+        "mtsc:          properties, which is exactly what a class prototype method is, so no",
+      )
+      println("mtsc:          analysis can see through them:")
+      for r in out.reflection_warnings {
+        println("mtsc:   " + r)
+      }
+    }
     for line in out.explain {
       println(line)
     }
+    // Verify the OUTPUT. Deliberately after every pass and from the
+    // emitted TEXT: a check that shares the pipeline's in-memory state
+    // can share its bugs.
+    if opts.verify {
+      let violations = @transform.verify_emitted_bundle(out.js)
+      for v in violations {
+        println("mtsc: verify: \{v.detail}")
+      }
+      if violations.length() > 0 {
+        println("mtsc: verify: \{violations.length()} violation(s)")
+      } else {
+        println("mtsc: verify: ok")
+      }
+    }
     if opts.timing {
       // The bundle's own phases, then the difference — what
-      // `bundle_modules` spent outside any instrumented pass (linking,
-      // escape analysis, emit).
+      // `bundle_modules` spent outside any instrumented pass. Linking,
+      // escape analysis and the emit all used to be in here and all
+      // now have rows of their own; what is left is the statement
+      // concatenation and the per-pass bookkeeping between phases.
       let mut inner = 0.0
       for t in out.timings {
         cli_timer.record(t.0, t.1)
@@ -1329,7 +1656,7 @@ async fn main {
       }
       let unattributed = bundle_micros - inner
       if unattributed > 0.0 {
-        cli_timer.record("bundle: link + escape + emit", unattributed)
+        cli_timer.record("bundle: unattributed", unattributed)
       }
       for line in cli_timer.report() {
         println(line)
@@ -1388,6 +1715,8 @@ async fn main {
             type_aliases: [],
             interfaces: [],
             class_fields: [],
+            module_request_order: [],
+            type_only_exports: {},
             has_export_equals: false,
           })
           let entry_module = (try

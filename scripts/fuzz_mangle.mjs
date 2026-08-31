@@ -15,6 +15,16 @@
 // bundles came from the same source and differ only in whether names
 // were renamed.
 //
+// That comparison alone is not enough, and the reason is worth stating
+// where it cannot be missed: two mtsc outputs agreeing with each other
+// is CONSISTENCY, not correctness. A pass that is wrong before mangling
+// is wrong identically in both legs, and every seed reports
+// "equivalent". Five such bugs — passes resolving a name against a
+// bundle-wide table with no scope narrowing — lived through thousands
+// of seeds and were eventually found by reading the passes' source.
+// So the ORIGINAL program, executed by Node with no compiler of ours
+// involved, is the third leg and the actual oracle.
+//
 // The shape is Terser's `ufuzz` by way of
 // https://github.com/oxc-project/oxc/pull/25594 — deterministic seeds,
 // bounded loops, a shared call budget, tagged value encoding, batched
@@ -34,6 +44,7 @@
 //                                [--shape sink|export|both]
 //                                [--no-mangle] [--no-shrink]
 //                                [--shrink-steps N] [--keep-going N]
+//                                [--no-reference]
 //                                [--timeout-ms N] [--batch-size N]
 //                                [--save-dir PATH] [--quiet]
 //
@@ -95,6 +106,12 @@ const options = {
   shrinkSteps: 400,
   keepGoing: 1,
   allowKnown: true,
+  // Compare against the ORIGINAL program, not just the two compiled
+  // legs against each other. On by default: leg agreement is
+  // consistency, not correctness (see the campaign loop). `--no-reference`
+  // is the cheap mode — one fewer child process and one fewer module
+  // evaluation per batch.
+  useReference: true,
   timeoutMs: 1000,
   batchSize: 40,
   saveDir: path.join(ROOT, "_build", "fuzz-mangle"),
@@ -115,6 +132,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (arg === "--batch-size") options.batchSize = Number(argv[++i]);
   else if (arg === "--save-dir") options.saveDir = path.resolve(argv[++i]);
   else if (arg === "--no-known") options.allowKnown = false;
+  else if (arg === "--no-reference") options.useReference = false;
   else if (arg === "--quiet") options.quiet = true;
   else if (arg === "--help" || arg === "-h") {
     printHelp();
@@ -172,6 +190,7 @@ Options:
   --no-shrink         report the failing program as generated
   --shrink-steps N    shrink test budget per failure (default 400)
   --keep-going N      collect N failures before stopping (default 1)
+  --no-reference      skip the original-program leg (legs only, cheaper)
   --timeout-ms N      per-program execution timeout (default 1000)
   --batch-size N      programs per Node process (default 40)
   --save-dir PATH     artifacts (default _build/fuzz-mangle)
@@ -292,22 +311,56 @@ function runBatch(cases, shape) {
 /// compiler of ours is involved, so this is the arbiter for "was the
 /// generated program ever going to work".
 function runReference(sourcePath, kind) {
+  return runReferenceBatch([{ sourcePath }], kind)[0];
+}
+
+/// The same thing for a whole batch, in one child process.
+///
+/// This exists because the reference is now consulted for EVERY program
+/// rather than only for the ones where the two compiled outputs already
+/// disagreed — see `runReferenceBatch`'s caller. One child per program
+/// would have doubled the campaign's process count.
+function runReferenceBatch(entries, kind) {
+  if (entries.length === 0) return [];
   const request = {
     shape: "reference",
     timeoutMs: options.timeoutMs,
-    cases: [{ baselinePath: sourcePath, kind }],
+    cases: entries.map((entry) => ({ baselinePath: entry.sourcePath, kind })),
   };
-  const result = spawnSync(process.execPath, [RUNNER], {
-    input: JSON.stringify(request),
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-  });
-  if (result.status !== 0) return { status: "threw", name: "HarnessError", message: firstLine(result.stderr) };
-  try {
-    return JSON.parse(result.stdout)[0].baseline;
-  } catch {
-    return { status: "threw", name: "HarnessError", message: "unparseable reference output" };
+  // `--experimental-transform-types`, not the strip-only mode Node
+  // enables by default for `.ts`. Strip-only refuses `enum` outright,
+  // and the generator emits `const enum` on purpose — it is the shape
+  // `const_enum_inline` gets wrong under plain `--bundle`, before any
+  // optimization flag. Under strip-only every one of those seeds came
+  // back "original threw SyntaxError", the oracle could not adjudicate
+  // them, and the campaign lost 15% of its coverage on precisely the
+  // pass most worth watching. Transform mode is still Node's own
+  // implementation, so the leg stays independent of ours.
+  const result = spawnSync(
+    process.execPath,
+    ["--experimental-transform-types", "--no-warnings", RUNNER],
+    {
+      input: JSON.stringify(request),
+      encoding: "utf8",
+      maxBuffer: 256 * 1024 * 1024,
+    },
+  );
+  const harness = (message) => ({ status: "threw", name: "HarnessError", message });
+  if (result.status !== 0) {
+    return entries.map(() => harness(firstLine(result.stderr, result.stdout)));
   }
+  let parsed;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    return entries.map(() => harness("unparseable reference output"));
+  }
+  if (!Array.isArray(parsed) || parsed.length !== entries.length) {
+    return entries.map(() =>
+      harness(`reference returned ${parsed?.length} results for ${entries.length} cases`),
+    );
+  }
+  return parsed.map((row) => row?.baseline ?? harness("reference row missing baseline"));
 }
 
 /// A baseline that did not complete tells us nothing about mangling, so
@@ -432,7 +485,16 @@ function attribute(built, shape) {
   const base = JSON.stringify(compiled.baseline);
   const cand = JSON.stringify(compiled.candidate);
   if (ref === base && ref === cand) return { verdict: "equivalent" };
-  const kind = ref === base ? "mangle" : ref === cand ? "lowering" : "both";
+  // `lowering` means "the shared pipeline is wrong, not the rename", and
+  // there are two ways to see that. `ref === cand` is the original one:
+  // mangling happened to UNDO the damage. `base === cand` is the other:
+  // mangling changed nothing, so both compiled legs carry the same wrong
+  // answer — which is the shape the agreeing-programs check in the
+  // campaign loop reports, and it has to be classified the same way here
+  // or the shrinker's oracle (which requires the same `kind`) rejects
+  // every reduction and the artifact stays at full size.
+  const kind =
+    ref === base ? "mangle" : ref === cand || base === cand ? "lowering" : "both";
   // `baseline` / `candidate` name the two sides of the reported diff:
   // what SHOULD have happened, and what did.
   // `baseline` / `candidate` name the two sides of the reported diff:
@@ -662,6 +724,14 @@ const summary = {
   brokenBaseline: 0,
   uncompilable: 0,
   harness: 0,
+  // How many agreeing programs the ORIGINAL-program leg actually
+  // adjudicated. Reported because a leg that silently answers nothing
+  // looks exactly like a leg that finds nothing — which is the bug this
+  // leg exists to catch, and it would be embarrassing to reproduce it
+  // here. `agreedUnusable` counts the ones where the original itself did
+  // not complete, so the two numbers account for every agreeing program.
+  adjudicated: 0,
+  agreedUnusable: 0,
   // mismatches split by which side the reference says is wrong.
   byKind: {},
 };
@@ -669,6 +739,8 @@ const summary = {
 // is high is not testing what it claims to, and the reason is the only
 // way to tell a deliberately-throwing program from a generator defect.
 const skipReasons = new Map();
+// Why the ORIGINAL program could not adjudicate an agreeing pair.
+const unusableReasons = new Map();
 const failures = [];
 const compileErrors = [];
 // signature -> { count, seed, kind, shape }
@@ -701,11 +773,93 @@ outer: for (const shape of shapes) {
     if (batch.length === 0) continue;
 
     const outcomes = runBatch(batch, shape);
+    // The two compiled legs agreeing is NOT the same as being right.
+    //
+    // This harness compared mtsc-with-mangling against
+    // mtsc-without-mangling and called agreement a pass, which makes a
+    // pass that is wrong in BOTH legs invisible by construction — and
+    // that is not hypothetical. `as_const_inline` and
+    // `const_enum_inline` each resolved a name against a bundle-wide
+    // table with no scope narrowing, so
+    //
+    //     const enum E { A = 1 }
+    //     function f() { const E = { A: 99 }; return E.A; }
+    //
+    // returned 1 instead of 99 under plain `--bundle` — before any
+    // mangling. Both legs produced the same wrong answer, every seed
+    // reported "equivalent", and five such bugs were eventually found by
+    // reading the passes' source instead.
+    //
+    // So the original program is now the oracle for every program, not
+    // just for the ones where the legs already disagreed. Batched,
+    // because this runs on the success path.
+    const agreed = [];
+    const agreedIndices = [];
+    if (options.useReference) {
+      for (let i = 0; i < batch.length; i++) {
+        if (outcomes[i].verdict === "equivalent") {
+          agreed.push(batch[i]);
+          agreedIndices.push(i);
+        }
+      }
+    }
+    const agreedReference = runReferenceBatch(agreed, shape === "export" ? "module" : "sink");
+    for (let k = 0; k < agreedIndices.length; k++) {
+      // A reference that does not complete says the generated program
+      // was never going to test anything; it is not evidence against
+      // the compiler. The compiled legs completed and agreed, so
+      // there is nothing to report either way.
+      const reference = agreedReference[k];
+      if (reference.status !== "completed") {
+        // The compiled legs ran and agreed, but the ORIGINAL did not
+        // finish, so there is nothing to hold them against. Tallied
+        // rather than dropped: this is the oracle's blind spot, and a
+        // blind spot that grows is a leg quietly going inert.
+        summary.agreedUnusable += 1;
+        const reason =
+          reference.status === "threw"
+            ? `original threw ${reference.name}: ${truncate(reference.message, 60)}`
+            : `original ${reference.status}`;
+        unusableReasons.set(reason, (unusableReasons.get(reason) ?? 0) + 1);
+        continue;
+      }
+      summary.adjudicated += 1;
+      const compiled = outcomes[agreedIndices[k]];
+      if (JSON.stringify(reference) === JSON.stringify(compiled.baseline)) continue;
+      // Both legs, same wrong answer. `attribute` calls this
+      // `lowering`: the shared pipeline is at fault, not the rename.
+      outcomes[agreedIndices[k]] = {
+        verdict: "equivalent-but-wrong",
+        reference,
+        baseline: compiled.baseline,
+      };
+    }
     for (let i = 0; i < batch.length; i++) {
       const entry = batch[i];
       const outcome = outcomes[i];
       if (outcome.verdict === "equivalent") {
         summary.checked += 1;
+        continue;
+      }
+      if (outcome.verdict === "equivalent-but-wrong") {
+        summary.checked += 1;
+        summary.byKind.lowering = (summary.byKind.lowering ?? 0) + 1;
+        summary.mismatched += 1;
+        recordFailure({
+          kind: "lowering",
+          seed: entry.seed,
+          shape,
+          program: entry.program,
+          entry,
+          outcome: {
+            verdict: "mismatch",
+            kind: "lowering",
+            reference: outcome.reference,
+            baseline: outcome.reference,
+            candidate: outcome.baseline,
+          },
+        });
+        if (newFamilyCount() >= options.keepGoing) break outer;
         continue;
       }
       if (outcome.verdict === "skipped") {
@@ -785,6 +939,10 @@ console.log(
     `${summary.mismatched} mismatch(es), ` +
     `${summary.brokenBaseline} broken baseline(s), ` +
     `${summary.uncompilable} did not compile` +
+    (options.useReference
+      ? `; ${summary.adjudicated} checked against the original` +
+        (summary.agreedUnusable > 0 ? ` (${summary.agreedUnusable} unusable)` : "")
+      : "; original-program leg OFF") +
     (summary.harness > 0 ? `, ${summary.harness} harness errors` : ""),
 );
 
@@ -813,6 +971,9 @@ if (families.size > 0) {
 // Ranked, because one dominant reason is usually one generator defect.
 for (const [reason, count] of [...skipReasons].sort((l, r) => r[1] - l[1]).slice(0, 6)) {
   console.log(`  [skip] ${count}x ${reason}`);
+}
+for (const [reason, count] of [...unusableReasons].sort((l, r) => r[1] - l[1]).slice(0, 6)) {
+  console.log(`  [no-oracle] ${count}x ${reason}`);
 }
 
 for (const error of compileErrors) {

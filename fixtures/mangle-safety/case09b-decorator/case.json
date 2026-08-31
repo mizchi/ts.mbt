@@ -1,0 +1,10 @@
+{
+  "origin": "packelyze fixtures/case09-complex, split out so the rest of it can have an oracle",
+  "what": "A TypeScript-legacy property decorator. `reference: false` on purpose and not as an oversight: Node's transform mode rejects the `@log` token, so there is no way to run the original TypeScript for comparison. What remains is baseline-vs-mangled, which can only catch an unsafe RENAME — it cannot catch a pass that was already wrong before mangling. Anything about decorators beyond renaming needs a unit test, not this case.",
+  "reference": false,
+  "mtscArgs": [],
+  "exports": [
+    "DecoratorTest"
+  ],
+  "expectStatus": "pass"
+}

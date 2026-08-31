@@ -196,9 +196,24 @@ verify-rule-equivalence *ARGS:
 # target's driver, or the row is not evidence. Needs network on the
 # first run; shares the `verify-real-world` checkouts where it can.
 #
+# `--app` compiles an APPLICATION that consumes each library instead of
+# the library's own package entry, which is the only way to ask two of
+# these questions honestly: a barrel's exports are all live, so
+# tree-shaking has nothing to remove, and a library's property names ARE
+# its wire format, so the mangler is right to reserve them. The usage in
+# each app entry is copied from that library's own README — see
+# `fixtures/type-aware-corpus/app-entries/README.md`.
+#
 #   just measure-type-aware
+#   just measure-type-aware --app
 #   just measure-type-aware --only hono --verbose
+#
+# The `sprawlens` row is the corpus's first real APPLICATION — a preact
+# app that mounts and exports nothing — and it is the only row where the
+# type-reading phases move real bytes: +10,419 (2.81%), +2,491 gzipped,
+# against under twelve bytes across all nine libraries combined.
 #   just measure-type-aware --update        # re-record expected.json
+#   just measure-type-aware --app --update  # re-record expected.app.json
 measure-type-aware *ARGS:
     moon build --target native --release
     node scripts/measure_type_aware.mjs {{ ARGS }}
@@ -229,6 +244,16 @@ verify-real-world *ARGS:
 # — a combination that breaks while each of its parts passes is an
 # interaction between them. Needs `verify-real-world` to have populated
 # the cache first.
+#
+# A SECOND table runs the same combinations over
+# `fixtures/pass-lattice/lowerings.ts` — one of every TypeScript-only
+# lowering — and observes VALUES rather than stdout: own keys,
+# `JSON.stringify`, spread, `for…in`. The 9 MB target cannot ask either
+# question (published `.js` has no `#private` fields, no enums, no
+# namespaces, and stdout never shows an extra own property), which is why
+# this harness ran the guilty combination on every run while bare
+# `--bundle` leaked mtsc's private-field brand. Re-introducing that bug
+# fails the second table and names the leaked brands.
 #
 #   just verify-pass-lattice
 #   just verify-pass-lattice --only fold+minify --keep
@@ -265,3 +290,36 @@ bench-pipeline *ARGS:
 # Regenerate the machine-derived mangle-safety cases
 gen-mangle-cases:
     node scripts/generate_mangle_cases.mjs
+
+# mtsc against terser on REAL bundles, not hand-written cases.
+#
+# `compare-terser` asks "is the rule we thought of missing?" over 34
+# cases, and it stood at 32 win / 0 loss while mtsc was 51% behind terser
+# on a real library. This asks the blunt question: same input (each
+# type-aware target's unoptimized bundle), terser's compress+mangle
+# against mtsc's full pipeline, raw AND gzipped.
+#
+# GZIP is the number that matters — nobody ships unzipped JS, and the
+# two metrics disagree: mtsc has been smaller raw and larger gzipped on
+# the same target.
+#
+# `--rules` asks TERSER to price its own compress rules, by running it
+# once per rule with that rule off. That is the ceiling for porting each
+# one, measured before writing any of it — and it corrected a ranking
+# that had been made by counting occurrences instead of bytes.
+#
+# Needs `just measure-type-aware` to have run once (it writes the shared
+# unoptimized bundles).
+#
+#   just compare-terser-bundles
+#   just compare-terser-bundles --rules
+#   just compare-terser-bundles --names
+#   just compare-terser-bundles --only typebox
+#
+# `--names` reports the identifier-length distribution in VARIABLE
+# positions on both sides, and names the long identifiers mtsc keeps and
+# terser renamed away. On typebox that was 46% of the byte gap, all in
+# one name the mangler had been refusing to touch.
+compare-terser-bundles *ARGS:
+    moon build --target native --release
+    node scripts/compare_terser_bundles.mjs {{ ARGS }}

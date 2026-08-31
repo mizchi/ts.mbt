@@ -570,11 +570,20 @@ fn emit_module_exports(
 /// `undefined` / `void 0` is the optimization: `let x;` initialises to
 /// `undefined` anyway, so the initializer is inert and worth its bytes
 /// only in pretty output.
+///
+/// "Inert" is about the VALUE, and `void EXPR` is undefined whatever
+/// `EXPR` is — so the operand has to be pure before this may drop it.
+/// It did not check, and `let unused = void trace.push(1);` emitted as
+/// `let unused;` under plain `--minify`: the `push` never ran. Found by
+/// the fuzzer's original-program leg, and the eighth place in this
+/// pipeline where "evaluates to a known value" was read as "may be
+/// discarded" — see `keep_effects` in `fold.mbt` for the other seven.
 fn omit_declaration_init(e : Emitter, init : @ast.TsExpr) -> Bool {
   match init {
     @ast.TsExpr::Var("__ts_no_init__") => true
-    @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _)
-    | @ast.TsExpr::Var("undefined") => !e.pretty
+    @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, inner) =>
+      !e.pretty && is_pure_value(inner)
+    @ast.TsExpr::Var("undefined") => !e.pretty
     _ => false
   }
 }
@@ -667,13 +676,13 @@ fn emit_block(e : Emitter, block : @ast.TsBlock) -> Unit {
                 | @ast.TsStmt::Let(b, _, init)
                 | @ast.TsStmt::Const(b, _, init) => {
                   emit_binding(e, b)
-                  let is_undef_init = match init {
-                    @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _) => true
-                    @ast.TsExpr::Var("undefined") | Var("__ts_no_init__") =>
-                      true
-                    _ => false
-                  }
-                  if !is_undef_init {
+                  // `omit_declaration_init`, not a copy of it. Two
+                  // inline copies lived here and both dropped a
+                  // `void EXPR` initializer whatever `EXPR` was, so
+                  // `let unused = void trace.push(1)` lost the push —
+                  // the same bug the shared helper had, surviving in
+                  // the two places that did not call it.
+                  if !omit_declaration_init(e, init) {
                     e.space()
                     e.write("=")
                     e.space()
@@ -778,13 +787,13 @@ fn emit_stmts_merged(e : Emitter, stmts : Array[@ast.TsStmt]) -> Unit {
                 | @ast.TsStmt::Let(b, _, init)
                 | @ast.TsStmt::Const(b, _, init) => {
                   emit_binding(e, b)
-                  let is_undef_init = match init {
-                    @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _) => true
-                    @ast.TsExpr::Var("undefined") | Var("__ts_no_init__") =>
-                      true
-                    _ => false
-                  }
-                  if !is_undef_init {
+                  // `omit_declaration_init`, not a copy of it. Two
+                  // inline copies lived here and both dropped a
+                  // `void EXPR` initializer whatever `EXPR` was, so
+                  // `let unused = void trace.push(1)` lost the push —
+                  // the same bug the shared helper had, surviving in
+                  // the two places that did not call it.
+                  if !omit_declaration_init(e, init) {
                     e.space()
                     e.write("=")
                     e.space()
@@ -1415,17 +1424,43 @@ fn expr_leading_byte(expr : @ast.TsExpr) -> Char {
     ArrayLit(_) => '['
     StringLit(_) => '"'
     TemplateLiteral(_, _) | TaggedTemplate(_, _, _, _) => '`'
-    NumberLit(_) | IntLit(_) => '0'
-    BigIntLit(_) => '0'
+    // A NEGATIVE numeric literal emits a leading `-`, not a digit.
+    // Answering `'0'` here is what let `x - -3` come out as `x--3`,
+    // which lexes as a decrement and does not parse. The AST shape says
+    // "literal"; the emitted TEXT says `-`, and every caller of this
+    // function is asking about the text.
+    //
+    // `--fold` is what makes this reachable: it turns
+    // `UnaryOp(Neg, IntLit(3))` — which the `UnaryOp` arm below reports
+    // correctly — into `IntLit(-3)`. Found by `just fuzz-mangle` at seed
+    // 484.
+    //
+    // Negative zero is included even though the emitter may print it as
+    // `0`: over-reporting costs one space, under-reporting costs a
+    // SyntaxError.
+    NumberLit(v) => if v < 0.0 || 1.0 / v < 0.0 { '-' } else { '0' }
+    IntLit(v) => if v < 0 { '-' } else { '0' }
+    BigIntLit(v) => if v.has_prefix("-") { '-' } else { '0' }
     // In minify mode `BoolLit` emits as `!0`/`!1`; in pretty mode as `true`/`false`.
     BoolLit(_) => '!'
     NullLit => '?'
-    UnaryOp(op, _) =>
+    UnaryOp(op, inner) =>
       match op {
         Not => '!'
         BitwiseNot => '~'
         Neg => '-'
         Plus => '+'
+        // `++x` / `--x` emit the operator first, so the leading byte is
+        // `+` / `-`. The `_ => '?'` this used to fall into is why
+        // `c + ++a` emitted `c+++a`, which lexes as `c++ + a` —
+        // `Invalid left-hand side expression in postfix operation`.
+        // Caught by `just fuzz-mangle` at seed 73, in the same run that
+        // confirmed the negative-literal fix, and against a comment of
+        // mine claiming these could not reach the caller.
+        PreInc => '+'
+        PreDec => '-'
+        // `x++` / `x--` emit the OPERAND first.
+        PostInc | PostDec => expr_leading_byte(inner)
         _ => '?'
       }
     Call(_, _) | New(_, _) | Var(_) => '?'
@@ -1567,9 +1602,14 @@ fn block_is_inline_decl_group(block : @ast.TsBlock) -> Bool {
   if block.stmts.length() == 0 {
     return false
   }
-  // A real block carries its statements' positions; a declarator group
-  // never has any.
-  if block.stmt_positions.length() != 0 {
+  // A declarator group carries the marker and nothing else. Anything
+  // else — real positions, a stale array, or none at all — is a real
+  // block, which is the safe answer: keeping braces costs bytes, while
+  // dropping them from a real block merges two scopes.
+  if not(
+      block.stmt_positions.length() == 1 &&
+      block.stmt_positions[0] == @ast.DECL_GROUP_POSITION,
+    ) {
     return false
   }
   let kind = match block.stmts[0] {
@@ -1712,38 +1752,51 @@ fn emit_stmt_for_head(e : Emitter, stmt : @ast.TsStmt) -> Unit {
     true => return
     false => ()
   }
+  // The initializer goes through `omit_declaration_init`, the same way
+  // every other declaration emit does.
+  //
+  // It did not, and `for (var u; l < n.__k.length; l++)` — ordinary
+  // JavaScript, out of preact's own source — came out as
+  // `for (var u = __ts_no_init__; …)`. That name is the marker the
+  // parser synthesises for a declaration with no initializer; nothing
+  // declares it, so the loop throws `ReferenceError: __ts_no_init__ is
+  // not defined` the moment it runs, under plain `mtsc --bundle` with no
+  // optimization flag and on JS input that never saw a type.
+  //
+  // `omit_declaration_init` says so in its own doc comment ("It has to
+  // be dropped in every mode") and the block-statement emit, the
+  // declarator-group emit and the multi-decl for-head emit all call it.
+  // This one arm wrote `= <init>` unconditionally. Eighth time in this
+  // pipeline that one rule was written in several places and applied in
+  // one, so the three kinds below share a single path rather than
+  // repeating the check three times.
+  //
+  // `Const` cannot carry the marker at all (the parser rejects a `const`
+  // with no initializer), and dropping a `= undefined` from one is safe
+  // for the reason `try_emit_multi_decl_for_head` records: minify mode
+  // downgrades `const` to `let`, and pretty mode does not drop it.
+  fn emit_for_head_decl(
+    kind : String,
+    b : @ast.TsBinding,
+    init : @ast.TsExpr,
+  ) -> Unit {
+    e.word(kind)
+    e.sep_after_word(binding_leading_byte(b))
+    emit_binding(e, b)
+    if omit_declaration_init(e, init) {
+      return
+    }
+    e.space()
+    e.write("=")
+    e.space()
+    emit_expr(e, init, declarator_init_prec)
+  }
+
   match stmt {
-    Var(b, _, init) => {
-      e.word("var")
-      e.sep_after_word(binding_leading_byte(b))
-      emit_binding(e, b)
-      e.space()
-      e.write("=")
-      e.space()
-      emit_expr(e, init, declarator_init_prec)
-    }
-    Let(b, _, init) => {
-      e.word("let")
-      e.sep_after_word(binding_leading_byte(b))
-      emit_binding(e, b)
-      e.space()
-      e.write("=")
-      e.space()
-      emit_expr(e, init, declarator_init_prec)
-    }
-    Const(b, _, init) => {
-      if e.pretty {
-        e.word("const")
-      } else {
-        e.word("let")
-      }
-      e.sep_after_word(binding_leading_byte(b))
-      emit_binding(e, b)
-      e.space()
-      e.write("=")
-      e.space()
-      emit_expr(e, init, declarator_init_prec)
-    }
+    Var(b, _, init) => emit_for_head_decl("var", b, init)
+    Let(b, _, init) => emit_for_head_decl("let", b, init)
+    Const(b, _, init) =>
+      emit_for_head_decl(if e.pretty { "const" } else { "let" }, b, init)
     Expr(ex) => emit_expr(e, ex, 0)
     Assign(name, ex) => {
       e.write(name)
@@ -3722,17 +3775,22 @@ fn binop_str(op : @ast.TsBinOp) -> String {
 /// increment on the empty string, a SyntaxError. Same for
 /// `- -x` / `< <x` / `> >x`.
 fn right_needs_token_separator(op : @ast.TsBinOp, right : @ast.TsExpr) -> Bool {
-  let right_leader = match right {
-    UnaryOp(o, _) =>
-      match o {
-        Plus | PreInc => '+'
-        Neg | PreDec => '-'
-        Not => '!'
-        BitwiseNot => '~'
-        _ => '?'
-      }
-    _ => '?'
-  }
+  // The question is about TOKENS: would the operator and the first
+  // character of the right operand lex as one? So the leader comes from
+  // `expr_leading_byte`, which answers for the emitted text.
+  //
+  // This used to carry its own `UnaryOp`-only table, which is the same
+  // information stated a second time and missing the case that matters:
+  // a negative numeric literal leads with `-` and was reported as a
+  // digit, so `x - -3` emitted `x--3`.
+  //
+  // `expr_leading_byte` has to know about `++x` / `--x` for this to be
+  // right, and it did not: switching to it without checking dropped the
+  // `PreInc` / `PreDec` rows the old table had, and `c + ++a` came out
+  // as `c+++a`. One fuzz run found it. Consolidating two copies of a
+  // rule is only an improvement when the surviving copy is the complete
+  // one.
+  let right_leader = expr_leading_byte(right)
   match op {
     Add => right_leader == '+'
     Sub => right_leader == '-'

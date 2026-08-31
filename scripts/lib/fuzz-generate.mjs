@@ -98,6 +98,10 @@ export class Generator {
     this.staticMembers = new Map();
     this.funcNames = [];
     this.typeNames = [];
+    // Reader functions the name-resolution group declared. Exported in
+    // the "export" shape so the observation reaches them from outside
+    // the module, the same way it reaches the generated classes.
+    this.shadowFnNames = [];
   }
 
   // --- RNG helpers ------------------------------------------------
@@ -169,6 +173,71 @@ export class Generator {
     for (let i = 0; i < classCount; i++) {
       decls.push(this.classDecl(`C${i}`));
     }
+    // One long-lived instance per class that has a getter, so a getter
+    // read can be spelled off a BINDING.
+    //
+    // `new C().g` was never affected by the bug this exists to catch:
+    // `is_pure_value(New(...))` is false, so the read was impure by way
+    // of its receiver and nothing dropped it. The bug needed a receiver
+    // that IS pure — a plain variable — which is also how real code
+    // reads a getter. Emitting only the `new` form is why 300 seeds
+    // reported nothing with the bug present.
+    // A generator, and a class whose `[Symbol.iterator]` is one.
+    //
+    // Generators are the synchronous half of "code the LANGUAGE calls
+    // without naming it": `[...g()]` and `for…of` obtain an iterator and
+    // then call `next` — and `return` on an early exit — BY NAME.
+    // `class_method_dce` deleted the `next` of a class whose only caller
+    // was a spread, and the mangler's built-in reserved list had the
+    // protocol all along while the DCE pass consulted neither.
+    //
+    // Async is deliberately NOT here. The observation is synchronous, so
+    // an `async` function's effects land after it and both legs would
+    // agree on an empty trace — coverage-shaped and proving nothing.
+    // Covering `await` ordering needs an observation that awaits, which
+    // is a change to the runner, not the generator.
+    this.generatorReaders = [];
+    if (this.chance(0.45)) {
+      const tag = `gen${this.nextEffect}`;
+      const a = this.freshEffect();
+      const b = this.freshEffect();
+      decls.push({
+        k: "raw",
+        text:
+          `function* ${tag}(): Generator<number, void, unknown> {\n` +
+          `  trace.push(${a});\n` +
+          `  yield 1;\n` +
+          `  trace.push(${b});\n` +
+          `  yield 2;\n` +
+          `}\n` +
+          // A hand-rolled iterator class: `[Symbol.iterator]` is a
+          // computed key the pass cannot drop, and `next` is a plain
+          // name it could and did.
+          `class ${tag}Iter {\n` +
+          `  private i = 0;\n` +
+          `  [Symbol.iterator]() { return this; }\n` +
+          `  next(): { value: number; done: boolean } {\n` +
+          `    this.i += 1;\n` +
+          `    return this.i <= 2 ? { value: this.i, done: false } : { value: 0, done: true };\n` +
+          `  }\n` +
+          `}\n` +
+          `function ${tag}Spread() { return [...${tag}()]; }\n` +
+          `function ${tag}IterSpread() { return [...new ${tag}Iter()]; }\n`,
+      });
+      this.generatorReaders.push(`${tag}Spread()`, `${tag}IterSpread()`);
+      this.shadowFnNames.push(`${tag}Spread`, `${tag}IterSpread`);
+    }
+    this.getterInstances = [];
+    for (const decl of decls) {
+      if (decl.k !== "class") continue;
+      const getter = `${decl.name.toLowerCase()}g`;
+      if (!(decl.members ?? []).some((m) => m.k === "getter" && m.name === getter)) {
+        continue;
+      }
+      const inst = `${decl.name.toLowerCase()}Inst`;
+      decls.push({ k: "raw", text: `const ${inst} = new ${decl.name}();\n` });
+      this.getterInstances.push({ inst, getter });
+    }
 
     // Functions, with the shared call budget guard printed for them.
     const funcCount = this.int(1, 3);
@@ -195,6 +264,30 @@ export class Generator {
       }
     }
 
+    // The name-resolution group. One raw decl per shape so the shrinker
+    // can drop the ones that are not implicated.
+    const shadowReaders = [];
+    const groupCount = this.int(0, 3);
+    for (let i = 0; i < groupCount; i++) {
+      const group = this.shadowGroup(i);
+      decls.push({ k: "raw", text: group.text });
+      for (const reader of group.readers) shadowReaders.push(reader);
+      for (const fn of group.names) this.shadowFnNames.push(fn);
+    }
+
+    // The export-surface group: a payload class reached ONLY through a
+    // property write, in each of the spellings JavaScript has for one.
+    // Only meaningful in the export shape, where the holder is observed.
+    this.lazyExports = [];
+    if (this.shape === "export") {
+      const lazyCount = this.int(0, 3);
+      for (let i = 0; i < lazyCount; i++) {
+        const group = this.lazyHolderGroup(i);
+        decls.push({ k: "raw", text: group.text });
+        for (const name of group.exports) this.lazyExports.push(name);
+      }
+    }
+
     const body = this.statements(this.int(3, 7), 3, { inFunction: false, loopDepth: 0 });
 
     const program = {
@@ -207,24 +300,315 @@ export class Generator {
       exports: [],
     };
     program.observe = this.observations();
+    // The group's readers have to be OBSERVED or the whole thing is dead
+    // code: treeshake deletes it, and a pass that would have rewritten it
+    // wrongly never gets the chance. `raw` for the same reason the decls
+    // are — these are calls with a fixed shape, not grammar.
+    for (const reader of shadowReaders) {
+      program.observe.push({ k: "raw", text: reader });
+    }
+    // The generator readers, observed the same way: `[...g()]` returns
+    // the yielded values AND appends to `trace`, so a dropped `next` or
+    // a dropped `yield` shows in both halves of the comparison.
+    for (const reader of this.generatorReaders ?? []) {
+      program.observe.push({ k: "raw", text: reader });
+    }
     if (this.shape === "export") program.exports = this.exportList(decls);
     return program;
+  }
+
+  /// The name-resolution group: declarations the optimizer rewrites BY
+  /// NAME, each read once through the name it declares and once through a
+  /// scope that re-binds that name.
+  ///
+  /// The rest of this generator aims at the property mangler. These six
+  /// passes are a different question — they key a bundle-wide table on an
+  /// identifier and substitute at every mention of it — and the grammar
+  /// had no shape that reached any of them, nor any shadowing at all:
+  /// `freshVar` hands out `v0`, `v1`, … so two bindings never share a
+  /// name. Five of the six were wrong for exactly that reason, and all
+  /// five were found by reading their source rather than by fuzzing.
+  ///
+  /// Each shape gets:
+  ///
+  ///   * an outer declaration the pass wants to rewrite;
+  ///   * `shadowed`, a reader whose scope re-binds the name, which must
+  ///     read the INNER binding;
+  ///   * `direct`, a reader that does not shadow, which must still be
+  ///     optimized — otherwise "narrow the table" and "switch the pass
+  ///     off" would look the same from out here.
+  ///
+  /// The shadowing forms rotate over the four that behave differently:
+  /// an inner `const` (a block declares it), a parameter (no block
+  /// declares it — the case a block-level check cannot see), a `catch`
+  /// binding, and a loop variable.
+  /// The export-surface group: a payload class whose only route to a
+  /// consumer is a PROPERTY WRITE, in each spelling JavaScript has.
+  ///
+  /// "`NAME.prop = value`" is four spellings, and `index_prop_assigns`
+  /// indexed one of them. The other three never put the written value on
+  /// the export surface, so `mtsc entry.ts --bundle` — no optimization
+  /// flag — deleted the payload's methods, and a consumer calling one got
+  /// `TypeError: … is not a function`. The witness was hono's
+  /// `#req ??= new HonoRequest(…)`.
+  ///
+  /// Three reasons this grammar could not reach any of it:
+  ///
+  ///   * `mutableTarget()` has no `this.<field>` arm, so a compound write
+  ///     to a class field — the way real code spells a lazily-created
+  ///     member — was ungeneratable;
+  ///   * its index arm targets `arr` with a NUMERIC literal, never
+  ///     `obj["p"]`;
+  ///   * a class instance was never written into a property whose holder
+  ///     is then observed, so the export-surface route was never taken.
+  ///
+  /// The observation needs no runner change. `encode` walks an exported
+  /// instance's own enumerable fields and reports the inner object's
+  /// prototype members, so a payload whose method was deleted differs on
+  /// `protoMembers`. The payload class is NOT exported: exporting it would
+  /// put its members on the surface directly and the write would stop
+  /// being the only route.
+  ///
+  /// Detection comes from the REFERENCE leg. The deletion happens in every
+  /// mtsc leg, so the mangled-vs-unmangled comparison agrees — the
+  /// self-comparison trap this file's history keeps recording.
+  ///
+  /// The `#private` spelling is deliberately absent: `Object.keys` cannot
+  /// see a private field, so this observation cannot reach it whatever the
+  /// compiler does. It is covered by
+  /// `fixtures/mangle-safety/case61-private-field-value-escape`.
+  lazyHolderGroup(index) {
+    const tag = `lz${index}`;
+    const payload = `${tag}Payload`;
+    const method = `${tag}Read`;
+    const spelling = this.int(0, 5);
+    // The payload's method is never named inside this program, so the
+    // static access collector cannot pin it.
+    const payloadDecl =
+      `class ${payload} {\n` +
+      `  tag: string;\n` +
+      `  constructor(t: string) { this.tag = t; }\n` +
+      `  ${method}(k: number): string { return this.tag + ":" + k; }\n` +
+      `}\n`;
+    // The read-through form is a module-level object rather than a class:
+    // `surface_lookup_member` resolved the literal's own entry and
+    // stopped, so the recorded write was never followed. The increment is
+    // load-bearing too — a write that READS the key it writes is what
+    // made the fixed walk fail to terminate.
+    if (spelling === 4) {
+      const bag = `${tag}Bag`;
+      return {
+        text:
+          payloadDecl +
+          `const ${bag}: { slot: ${payload} | undefined; hits: number } = ` +
+          `{ slot: undefined, hits: 0 };\n` +
+          `${bag}.hits = ${bag}.hits + 1;\n` +
+          `${bag}.slot = new ${payload}("${tag}");\n` +
+          `export const ${tag}Out = ${bag}.slot;\n`,
+        exports: [`${tag}Out`],
+      };
+    }
+    const holder = `${tag}Holder`;
+    const write = [
+      `    this.slot ??= new ${payload}("${tag}");`,
+      `    this.slot ||= new ${payload}("${tag}");`,
+      `    this["slot"] = new ${payload}("${tag}");`,
+      // The spelling that always worked. Without it, "the fix works" and
+      // "the pass is off" would look the same from out here.
+      `    this.slot = new ${payload}("${tag}");`,
+    ][spelling];
+    return {
+      text:
+        payloadDecl +
+        `class ${holder} {\n` +
+        `  slot: ${payload} | undefined;\n` +
+        `  constructor() { this.slot = undefined; }\n` +
+        `  fill(): void {\n${write}\n  }\n` +
+        `}\n` +
+        `const ${tag}Inst = new ${holder}();\n` +
+        `${tag}Inst.fill();\n` +
+        `export const ${tag}Out = ${tag}Inst;\n`,
+      exports: [`${tag}Out`],
+    };
+  }
+
+  shadowGroup(index) {
+    const tag = `s${index}`;
+    const shadow = this.int(0, 4);
+    /// Wrap `body` in a scope that re-binds `name` with `init`.
+    const shadowed = (name, init, body) => {
+      switch (shadow) {
+        case 0:
+          return `function ${tag}Shadowed() {\n  const ${name} = ${init};\n  return ${body};\n}\n`;
+        case 1:
+          return `function ${tag}Shadowed(${name}: any) {\n  return ${body};\n}\n`;
+        case 2:
+          return (
+            `function ${tag}Shadowed() {\n` +
+            `  try { throw ${init}; } catch (${name}) { return ${body}; }\n` +
+            `}\n`
+          );
+        default:
+          return (
+            `function ${tag}Shadowed() {\n` +
+            `  for (const ${name} of [${init}]) { return ${body}; }\n` +
+            `  return 0;\n` +
+            `}\n`
+          );
+      }
+    };
+    /// The argument the shadowed reader needs when the shadow is a
+    /// parameter, and nothing otherwise.
+    const shadowArg = (init) => (shadow === 1 ? init : "");
+
+    switch (this.int(0, 6)) {
+      // as_const_inline: `NAME[i]` folds to the element.
+      case 0: {
+        const name = `${tag}Arr`;
+        return {
+          text:
+            `const ${name} = ['out0', 'out1'];\n` +
+            shadowed(name, `['in0', 'in1']`, `${name}[0]`) +
+            `function ${tag}Direct() { return ${name}[1]; }\n`,
+          readers: [`${tag}Shadowed(${shadowArg(`['in0', 'in1']`)})`, `${tag}Direct()`],
+          names: [`${tag}Shadowed`, `${tag}Direct`],
+        };
+      }
+      // as_const_inline, object form: `NAME.k` folds to the value.
+      case 1: {
+        const name = `${tag}Obj`;
+        return {
+          text:
+            `const ${name} = { k: 11 };\n` +
+            shadowed(name, `{ k: 99 }`, `${name}.k`) +
+            `function ${tag}Direct() { return ${name}.k; }\n`,
+          readers: [`${tag}Shadowed(${shadowArg(`{ k: 99 }`)})`, `${tag}Direct()`],
+          names: [`${tag}Shadowed`, `${tag}Direct`],
+        };
+      }
+      // const_scalar_inline: the literal is substituted at every read.
+      case 2: {
+        const name = `${tag}K`;
+        return {
+          text:
+            `const ${name} = 5;\n` +
+            shadowed(name, `9`, `${name} * 2`) +
+            `function ${tag}Direct() { return ${name} * 2; }\n`,
+          readers: [`${tag}Shadowed(${shadowArg("9")})`, `${tag}Direct()`],
+          names: [`${tag}Shadowed`, `${tag}Direct`],
+        };
+      }
+      // const_enum_inline: `E.M` folds to the member's value. This one
+      // is rewritten under plain `--bundle`, before any optimization
+      // flag, so it is the shape most worth generating.
+      case 3: {
+        const name = `${tag}E`;
+        return {
+          text:
+            `const enum ${name} { M = 3 }\n` +
+            shadowed(name, `{ M: 77 }`, `${name}.M`) +
+            `function ${tag}Direct() { return ${name}.M; }\n`,
+          readers: [`${tag}Shadowed(${shadowArg("{ M: 77 }")})`, `${tag}Direct()`],
+          names: [`${tag}Shadowed`, `${tag}Direct`],
+        };
+      }
+      // predicate_inline: a `x is T` guard's body is substituted at the
+      // call site. The shadow has to be CALLABLE, so the parameter form
+      // takes a function and the others declare one.
+      case 4: {
+        const name = `${tag}Guard`;
+        const inner =
+          shadow === 1
+            ? `function ${tag}Shadowed(${name}: (n: number) => boolean) { return ${name}(4); }\n`
+            : shadow === 0
+              ? `function ${tag}Shadowed() {\n  const ${name} = (n: number) => n === 4;\n  return ${name}(4);\n}\n`
+              : shadow === 2
+                ? `function ${tag}Shadowed() {\n  try { throw (n: number) => n === 4; } catch (${name}: any) { return ${name}(4); }\n}\n`
+                : `function ${tag}Shadowed() {\n  for (const ${name} of [(n: number) => n === 4]) { return ${name}(4); }\n  return false;\n}\n`;
+        return {
+          text:
+            `function ${name}(v: number): v is number { return !v; }\n` +
+            inner +
+            `function ${tag}Direct() { return ${name}(0); }\n`,
+          readers: [
+            `${tag}Shadowed(${shadow === 1 ? `(n: number) => n === 4` : ""})`,
+            `${tag}Direct()`,
+          ],
+          names: [`${tag}Shadowed`, `${tag}Direct`],
+        };
+      }
+      // switch_fold: a literal-union dispatcher is specialized per
+      // argument. Same callability requirement as the guard.
+      default: {
+        const name = `${tag}Dispatch`;
+        const inner =
+          shadow === 1
+            ? `function ${tag}Shadowed(${name}: (k: 'a') => number) { return ${name}('a'); }\n`
+            : shadow === 0
+              ? `function ${tag}Shadowed() {\n  const ${name} = (k: 'a') => 42;\n  return ${name}('a');\n}\n`
+              : shadow === 2
+                ? `function ${tag}Shadowed() {\n  try { throw (k: 'a') => 42; } catch (${name}: any) { return ${name}('a'); }\n}\n`
+                : `function ${tag}Shadowed() {\n  for (const ${name} of [(k: 'a') => 42]) { return ${name}('a'); }\n  return 0;\n}\n`;
+        return {
+          text:
+            `function ${name}(k: 'a' | 'b'): number {\n` +
+            `  switch (k) { case 'a': return 1; case 'b': return 2; }\n` +
+            `}\n` +
+            inner +
+            `function ${tag}Direct() { return ${name}('b'); }\n`,
+          readers: [
+            `${tag}Shadowed(${shadow === 1 ? `(k: 'a') => 42` : ""})`,
+            `${tag}Direct()`,
+          ],
+          names: [`${tag}Shadowed`, `${tag}Direct`],
+        };
+      }
+    }
   }
 
   /// What the module exports. Only relevant to the "export" shape, where
   /// these names are the package ABI and must survive mangling.
   exportList(decls) {
     const candidates = decls.filter((d) => d.k === "class" || d.k === "func").map((d) => d.name);
-    if (candidates.length === 0) return [];
+    // The lazy-holder group emits its own `export const`, so those names
+    // are already exported by the declaration and must NOT be repeated
+    // here — a duplicate export clause is a syntax error.
+    if (candidates.length === 0) return this.shadowFnNames.slice();
     const count = this.int(1, candidates.length + 1);
-    return candidates.slice(0, count);
+    // Every group reader is exported unconditionally. In the "export"
+    // shape the epilogue is just `export const __trace = trace`, so a
+    // reader that is not exported is unreachable and gets deleted —
+    // which would make the group generate itself and prove nothing.
+    return [...candidates.slice(0, count), ...this.shadowFnNames];
   }
 
   classDecl(name) {
+    // `extends`, when there is something to extend.
+    //
+    // The generator emitted no inheritance at all, and three passes read
+    // the class hierarchy: `class_method_dce`'s narrowing,
+    // `observed_names`' hierarchy narrowing, and the private-field
+    // remap. Seventeen hand-written probes found the hierarchy sound, so
+    // this is here to KEEP it sound rather than to break it — but a
+    // subclass changes the answer to "which members does an instance
+    // carry" and "which name does `this.constructor` produce", and
+    // neither was ever generated.
+    //
+    // No explicit constructor is emitted, so no `super()` call is
+    // needed: field initializers are legal in a derived class as long as
+    // the class declares no constructor of its own.
+    const base = this.classNames.length > 0 && this.chance(0.4)
+      ? this.pick(this.classNames)
+      : undefined;
     this.classNames.push(name);
     const members = [];
-    const instance = [];
-    const statics = [];
+    // Inherited instance members are reachable off an instance of this
+    // class, so the expression grammar has to know about them —
+    // otherwise a subclass looks like it carries nothing and the
+    // observation never reads through the chain. Statics are inherited
+    // too (`Sub.make()` resolves to `Base.make`).
+    const instance = base ? (this.instanceMembers.get(base) ?? []).slice() : [];
+    const statics = base ? (this.staticMembers.get(base) ?? []).slice() : [];
     this.instanceMembers.set(name, instance);
     this.staticMembers.set(name, statics);
     const fieldCount = this.int(1, 3);
@@ -265,15 +649,55 @@ export class Generator {
       members.push({
         k: "getter",
         name: prop,
-        // A getter that announces itself is how "the mangler renamed the
-        // property so the getter never ran" becomes visible.
-        entryId: this.chance(0.7) ? this.freshEffect() : undefined,
+        // A getter that announces itself is how "the getter never ran"
+        // becomes visible, and that is the ONLY thing a getter is here
+        // to detect — so it always announces. It used to do so 70% of
+        // the time, and a silent getter is indistinguishable from a
+        // field: the read can be dropped and nothing in the observation
+        // moves. `is_pure_value` called a property read pure whenever
+        // its receiver was, so four fold rules dropped getter bodies
+        // outright, and 8000 comparisons never reported it.
+        entryId: this.freshEffect(),
         body: [{ k: "return", expr: this.expr(1) }],
         static: false,
       });
       instance.push({ prop, callable: false });
     }
-    return { k: "class", name, members };
+    // An OVERRIDE that calls up the chain. This is the one shape where
+    // the mangler has to rename two declarations in lockstep — the base
+    // method and the override — plus the `super.m()` reference, and get
+    // dynamic dispatch right afterwards.
+    if (base) {
+      const inherited = (this.instanceMembers.get(base) ?? []).filter(
+        (m) => m.callable && !m.prop.startsWith(name.toLowerCase()),
+      );
+      if (inherited.length > 0 && this.chance(0.6)) {
+        const target = this.pick(inherited).prop;
+        members.push({
+          k: "method",
+          name: target,
+          params: ["q0"],
+          entryId: this.freshEffect(),
+          body: [
+            {
+              k: "return",
+              expr: {
+                k: "bin",
+                op: "+",
+                left: { k: "lit", value: "1" },
+                right: {
+                  k: "call",
+                  callee: { k: "member", obj: { k: "raw", text: "super" }, prop: target },
+                  args: [{ k: "lit", value: "0" }],
+                },
+              },
+            },
+          ],
+          static: false,
+        });
+      }
+    }
+    return { k: "class", name, members, extends: base };
   }
 
   // --- Observation ------------------------------------------------
@@ -536,8 +960,60 @@ export class Generator {
     return { k: "block", body: [{ k: "decl", kind: "let", name, init: call }, guarded] };
   }
 
+  /// A property read whose VALUE IS THROWN AWAY.
+  ///
+  /// This is the position four fold rules dropped a getter's body from,
+  /// and the generator could not reach it. `expr(3)` almost never
+  /// bottoms out at a bare member read — it wraps one in a binary op, an
+  /// assignment or a call, all of which USE the value, and a used value
+  /// keeps the read alive. 300 seeds with the bug present reported
+  /// nothing.
+  ///
+  /// So the discarded position is emitted directly, in the four
+  /// spellings that were wrong: the bare statement, `void EXPR`, the
+  /// left of a discarded comma, and an array literal whose `.length` is
+  /// taken. `expr(3)` covers reads whose value is used; this covers the
+  /// reads whose value is not, and only the second kind is droppable.
+  discardedReadStmt() {
+    // Prefer a getter: it is the only member whose read has an effect,
+    // so it is the only one that can show the read was dropped. Falls
+    // back to the prelude's plain object, which at least exercises the
+    // rule on a shape whose purity really is provable.
+    let read = { k: "member", obj: { k: "var", name: "bag" }, prop: this.pick(BAG_PROPS) };
+    const instances = this.getterInstances ?? [];
+    if (instances.length > 0) {
+      const { inst, getter } = this.pick(instances);
+      read = { k: "member", obj: { k: "var", name: inst }, prop: getter };
+    }
+    switch (this.int(0, 4)) {
+      case 0:
+        return { k: "expr", expr: read };
+      case 1:
+        return { k: "expr", expr: { k: "unary", op: "void", arg: read } };
+      case 2:
+        return {
+          k: "expr",
+          expr: { k: "seq", left: read, right: { k: "lit", value: "9" } },
+        };
+      default:
+        return {
+          k: "decl",
+          kind: "let",
+          name: this.freshVar(),
+          init: {
+            k: "member",
+            obj: { k: "array", items: [read, { k: "lit", value: "1" }] },
+            prop: "length",
+          },
+        };
+    }
+  }
+
   simpleStmt() {
-    const roll = this.int(0, 10);
+    const roll = this.int(0, 11);
+    if (roll === 10) {
+      return this.discardedReadStmt();
+    }
     if (roll < 2) {
       const name = this.freshVar();
       return { k: "decl", kind: "let", name, init: this.expr(2) };
@@ -692,7 +1168,21 @@ export class Generator {
         const receiver = onStatic
           ? { k: "var", name: className }
           : { k: "new", callee: { k: "var", name: className }, args: [] };
-        if (members.length === 0) return receiver;
+        // With no member to read, the receiver itself is the value —
+        // and a BARE CONSTRUCTOR is the one value in this grammar whose
+        // string coercion is its own source text. `bag.gamma += C1`
+        // makes a string containing `class C1 { c1f0 = true; }`,
+        // minification legitimately reformats that, and the harness
+        // reported a mismatch about nothing. (`encode` already refuses
+        // to record a function's source for exactly this reason; by the
+        // time `+=` has run it is an ordinary string and the observer
+        // cannot tell.) An instance coerces to `[object Object]`, which
+        // is stable, so fall back to that. Class values still reach
+        // sinks — through `new C()`, and through the exported class in
+        // the `export` shape.
+        if (members.length === 0) {
+          return { k: "new", callee: { k: "var", name: className }, args: [] };
+        }
         const member = this.pick(members);
         const target = { k: "member", obj: receiver, prop: member.prop };
         // A method reference has to be called to produce a value.

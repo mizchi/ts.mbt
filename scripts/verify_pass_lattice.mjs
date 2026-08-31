@@ -37,6 +37,45 @@ const APP = path.join(ROOT, "_build/real-world/typescript/tsapp.cjs");
 const OUTDIR = path.join(ROOT, "_build/tsbisect");
 
 const VARIANTS = [
+// A gap worth knowing about, because this harness looks like it should
+// have caught the private-field leak and did not.
+//
+// `lower_private_fields` ran only in the merged pipeline, so bare
+// `--bundle` — the FIRST combination below — emitted mtsc's internal
+// `__private_brand__N__x` verbatim, and a brand is an ordinary own
+// enumerable property, visible to `JSON.stringify` / `Object.keys` /
+// spread / `for-in`. This lattice ran that combination on every run and
+// reported "behave identically" every time, for two independent reasons:
+//
+//   1. The target is a PUBLISHED `.js` bundle. `typescript.js` has no
+//      `#private` fields, no enums, no namespaces, no parameter
+//      properties — so no TypeScript-only lowering is exercised at all,
+//      and there was nothing to leak.
+//   2. Even with such a field present, the only observation is whether
+//      `tsc`'s stdout matches. An extra enumerable property on an
+//      internal object does not reach stdout, so the question could not
+//      see the answer.
+//
+// The reference leg is genuinely independent (the baseline is the
+// ORIGINAL `typescript.js`), which makes this a coverage gap rather than
+// a self-comparison.
+//
+// CLOSED by a second phase below: `fixtures/pass-lattice/lowerings.ts`
+// runs the same fifteen combinations over a file that contains one of
+// each TypeScript-only lowering — `#private` fields (instance and
+// static), parameter properties, accessors, `enum`, `const enum`,
+// `namespace`, abstract/override — and observes VALUES rather than
+// stdout: own keys, `JSON.stringify`, object spread and `for…in`, which
+// is what a leaked brand or a dropped field actually changes. Its
+// baseline is Node running the TypeScript directly through
+// `--experimental-transform-types`, so the reference is the language and
+// not another mtsc output.
+//
+// It is deliberately NOT a real library. The 9 MB target covers "a shape
+// nobody thought of"; what was missing was the lowerings and a question
+// the answer can reach, and a purpose-built file covers every lowering
+// in one cheap compile instead of whichever ones a given library
+// happens to use.
   { name: "bundle", flags: ["--bundle"] },
   { name: "treeshake", flags: ["--bundle", "--treeshake"] },
   { name: "fold", flags: ["--bundle", "--fold"] },
@@ -145,11 +184,112 @@ if (!keep) {
   for (const b of built) fs.rmSync(b.out, { force: true });
 }
 
+// ---------------------------------------------------------------------
+// Phase 2: the TypeScript-only lowerings, observed by value.
+// ---------------------------------------------------------------------
+//
+// See the header. Same fifteen combinations, a different input and a
+// different question.
+const LOWERINGS = path.join(ROOT, "fixtures/pass-lattice/lowerings.ts");
+const LOWDIR = path.join(OUTDIR, "lowerings");
+
+function observeReport(mod) {
+  // The driver is written to disk next to the bundle so a relative
+  // import resolves; printing a stable JSON of `report` is the whole
+  // observation.
+  const drv = path.join(path.dirname(mod), `drive-${path.basename(mod)}`);
+  fs.writeFileSync(
+    drv,
+    `const m = await import("./${path.basename(mod)}");\n` +
+      `console.log(JSON.stringify(m.report, Object.keys(m.report).sort()));\n`,
+  );
+  const r = spawnSync("node", [drv], { encoding: "utf8", maxBuffer: 1 << 26 });
+  fs.rmSync(drv, { force: true });
+  if (r.status !== 0) return { ok: false, why: shortError(r.stderr || "") };
+  return { ok: true, out: r.stdout };
+}
+
+console.log("\n  TypeScript-only lowerings, observed by value\n");
+fs.mkdirSync(LOWDIR, { recursive: true });
+
+// The baseline is the LANGUAGE: Node running the TypeScript directly.
+const refDrv = path.join(LOWDIR, "reference.mjs");
+fs.writeFileSync(
+  refDrv,
+  `const m = await import(${JSON.stringify(LOWERINGS)});\n` +
+    `console.log(JSON.stringify(m.report, Object.keys(m.report).sort()));\n`,
+);
+const refRun = spawnSync("node", ["--experimental-transform-types", refDrv], {
+  encoding: "utf8",
+  maxBuffer: 1 << 26,
+});
+fs.rmSync(refDrv, { force: true });
+if (refRun.status !== 0) {
+  console.error(`  reference leg failed: ${shortError(refRun.stderr || "")}`);
+  process.exit(2);
+}
+const refOut = refRun.stdout;
+
+let lowFailures = 0;
+for (const v of chosen) {
+  const out = path.join(LOWDIR, `${v.name}.mjs`);
+  const c = spawnSync(MTSC, [LOWERINGS, "--no-check", ...v.flags, "--out", out], {
+    encoding: "utf8",
+    timeout: 300_000,
+  });
+  if (c.status !== 0 || !fs.existsSync(out) || fs.statSync(out).size === 0) {
+    console.log(`  [FAIL] ${v.name.padEnd(24)} compile failed: exit ${c.status}`);
+    lowFailures += 1;
+    continue;
+  }
+  const bytes = fs.statSync(out).size;
+  const tag = `${String(bytes).padStart(6)} bytes`;
+  const got = observeReport(out);
+  if (!got.ok) {
+    console.log(`  [FAIL] ${v.name.padEnd(24)} ${tag}  ${got.why}`);
+    lowFailures += 1;
+  } else if (got.out !== refOut) {
+    // Name the fields that moved: with fifteen combinations and
+    // twenty-five observations, "differs" is not enough to act on.
+    let detail = "observations differ";
+    try {
+      const a = JSON.parse(refOut);
+      const b2 = JSON.parse(got.out);
+      const moved = Object.keys(a).filter(
+        (k) => JSON.stringify(a[k]) !== JSON.stringify(b2[k]),
+      );
+      if (moved.length) {
+        detail =
+          moved
+            .slice(0, 3)
+            .map((k) => `${k}: ${JSON.stringify(a[k])} -> ${JSON.stringify(b2[k])}`)
+            .join("; ") + (moved.length > 3 ? ` (+${moved.length - 3} more)` : "");
+      }
+    } catch {
+      /* keep the generic message */
+    }
+    console.log(`  [DIFF] ${v.name.padEnd(24)} ${tag}  ${detail}`);
+    lowFailures += 1;
+  } else {
+    console.log(`  [ok  ] ${v.name.padEnd(24)} ${tag}  every lowering observed identically`);
+  }
+  if (!keep) fs.rmSync(out, { force: true });
+}
+
+console.log(
+  `\n  ${chosen.length - lowFailures}/${chosen.length} pass-combinations lower TypeScript identically`,
+);
+failures += lowFailures;
+
 if (failures > 0) {
   console.error(
-    `\n  ${failures} combination(s) miscompile the TypeScript compiler.\n` +
+    `\n  ${failures} combination(s) failed.\n` +
       "  The pattern names the pass: a combination that fails while each of\n" +
-      "  its parts passes is an interaction between them.",
+      "  its parts passes is an interaction between them. A failure in the\n" +
+      "  first table miscompiles the TypeScript compiler; one in the second\n" +
+      "  gets a TypeScript-only lowering wrong, and the named fields say\n" +
+      "  which — a `__private_brand__` in `counterKeys` is the brand leak,\n" +
+      "  a changed `levelObjectKeys` is the enum, and so on.",
   );
   process.exit(1);
 }

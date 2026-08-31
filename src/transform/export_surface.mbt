@@ -82,7 +82,11 @@ pub fn exported_surface_props(
     match w.prop_assigns.get(name) {
       Some(assigns) =>
         for entry in assigns {
-          if !is_internal_marker_prop(entry.0) {
+          // The NAME is withheld for an mtsc marker (no consumer can
+          // reference it) and for the `@@computed:` sentinel (it is not a
+          // name at all). The VALUE escapes either way — see
+          // `surface_escape_class`, where that split was got wrong.
+          if !is_internal_marker_prop(entry.0) && !is_opaque_object_key(entry.0) {
             w.reserved[entry.0] = true
           }
           surface_escape_expr(w, entry.1, 1)
@@ -232,6 +236,29 @@ fn index_top_level_decls(w : SurfaceWalk, block : @ast.TsBlock) -> Unit {
 /// `Object.defineProperty(NAME, "prop", { get: … })` sites anywhere in
 /// the block, nested function bodies included — a namespace's members
 /// are assigned inside an IIFE, so a top-level-only scan misses them.
+///
+/// "`NAME.prop = value`" is FOUR spellings, and for a long time this
+/// indexed one of them. The others each made `mtsc entry.ts --bundle`,
+/// with no optimization flag, delete a method a consumer goes on to call:
+///
+///   * `NAME.prop ??= value` (also `||=`, `&&=`) — a `CompoundAssignExpr`
+///     through a `PropAccess`, and by far the most common way real code
+///     builds a lazily-created object. hono memoizes `#req`,
+///     `#matchResult` and `#path` exactly this way, and a consumer's
+///     `c.req.param("id")` threw `TypeError: c.req.param is not a
+///     function`.
+///   * `NAME["prop"] = value` — an `IndexAssign` / `IndexAssignExpr` with
+///     a string-literal key, which is `NAME.prop = value` written
+///     differently.
+///   * `NAME[k] = value` for a key we cannot spell. The NAME is unknown,
+///     so nothing may be reserved for it, but the VALUE still leaves
+///     inside the object; it is recorded under the `@@computed:` sentinel
+///     that `is_opaque_object_key` already exists to recognise.
+///
+/// A compound assignment stores `old <op> value` rather than `value`, so
+/// recording `value` is an over-approximation for the arithmetic
+/// operators — which is the direction this set must err in, and for the
+/// three logical operators it is exact.
 fn index_prop_assigns(w : SurfaceWalk, block : @ast.TsBlock) -> Unit {
   fn record(name : String, prop : String, value : @ast.TsExpr) -> Unit {
     match w.prop_assigns.get(name) {
@@ -240,9 +267,31 @@ fn index_prop_assigns(w : SurfaceWalk, block : @ast.TsBlock) -> Unit {
     }
   }
 
+  // The write target, for every spelling that reaches one property of a
+  // named binding. `None` means the target is not a property of a plain
+  // `Var`, which is the only shape `prop_assigns` is keyed by.
+  fn target(t : @ast.TsExpr) -> (String, String)? {
+    match t {
+      @ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), prop) => Some((n, prop))
+      @ast.TsExpr::IndexAccess(
+        @ast.TsExpr::Var(n),
+        @ast.TsExpr::StringLit(prop)
+      ) => Some((n, prop))
+      // A key we cannot name. The value escapes; the name cannot be
+      // reserved, and `@@computed:` is how this file already says that.
+      @ast.TsExpr::IndexAccess(@ast.TsExpr::Var(n), _) =>
+        Some((n, "@@computed:"))
+      _ => None
+    }
+  }
+
   for stmt in block.stmts {
     match stmt {
       PropAssign(@ast.TsExpr::Var(n), prop, value) => record(n, prop, value)
+      IndexAssign(@ast.TsExpr::Var(n), @ast.TsExpr::StringLit(prop), value) =>
+        record(n, prop, value)
+      IndexAssign(@ast.TsExpr::Var(n), _, value) =>
+        record(n, "@@computed:", value)
       _ => ()
     }
     // Nested statement blocks (the namespace lowering wraps its two
@@ -289,6 +338,18 @@ fn index_prop_assigns(w : SurfaceWalk, block : @ast.TsBlock) -> Unit {
       @ast.TsExpr::ArrowFunc(_, _, ArrowBlock(b), _) => index_prop_assigns(w, b)
       @ast.TsExpr::PropAssignExpr(@ast.TsExpr::Var(n), prop, value) =>
         record(n, prop, value)
+      // `NAME["prop"] = value` / `NAME[k] = value`, expression form.
+      @ast.TsExpr::IndexAssignExpr(t, k, value) =>
+        match target(@ast.TsExpr::IndexAccess(t, k)) {
+          Some(tp) => record(tp.0, tp.1, value)
+          None => ()
+        }
+      // `NAME.prop ??= value` and the rest of the compound operators.
+      @ast.TsExpr::CompoundAssignExpr(t, _, value) =>
+        match target(t) {
+          Some(tp) => record(tp.0, tp.1, value)
+          None => ()
+        }
       // `store.set(k, v)`, `list.push(v)`, `seen.add(v)` — the value
       // goes into a container the bundle owns, and comes back out of
       // `get` / an index / an iteration. The key argument of `set` is
@@ -420,11 +481,21 @@ fn surface_escape_class(
   // there in `Object.keys` and `JSON.stringify` output. Real `#x`
   // fields are desugared to `__private_brand__…` markers, which the
   // marker check does catch.
+  // Note where the escape sits: OUTSIDE the marker filter, as it is in
+  // the top-level `prop_assigns` loop. It used to be inside, and the two
+  // questions are different — the filter answers "may this NAME be
+  // reserved" (no: no consumer can spell `__private_brand__0__req`),
+  // while the value written there is an ordinary value that leaves with
+  // the instance. So `this.#cached = new Req(r)` in an exported class
+  // never reached `Req`, and `mtsc --bundle` with no optimization flag
+  // deleted `Req`'s methods; the same class with a PUBLIC `cached` field
+  // was fine. Ninth time one rule was written in two places and applied
+  // in one.
   for entry in class_this_writes(decl, w.class_ctors.get(decl.name)) {
-    if !is_internal_marker_prop(entry.0) {
+    if !is_internal_marker_prop(entry.0) && !is_opaque_object_key(entry.0) {
       w.reserved[entry.0] = true
-      surface_escape_expr(w, entry.1, depth + 1)
     }
+    surface_escape_expr(w, entry.1, depth + 1)
   }
   for base in decl.base_names {
     surface_enqueue(w, base)
@@ -524,10 +595,16 @@ fn surface_escape_expr(
     //     through (`.filter(…)`), so it escapes as well.
     Call(name, args) => {
       match w.funcs.get(name) {
-        Some(f) =>
+        Some(f) => {
           if surface_should_walk(w, "fn:" + name, depth + 1) {
             surface_escape_func_body(w, f.params, f.body, depth + 1)
           }
+          // An argument the callee hands straight back leaves with the
+          // call's result. Not memoized with the body walk above: the
+          // arguments differ per call site, so skipping this on a repeat
+          // visit would lose the second caller's literal.
+          surface_escape_returned_args(w, f, args, depth)
+        }
         None => surface_enqueue(w, name)
       }
       surface_escape_callback_args(w, args, depth)
@@ -575,16 +652,9 @@ fn surface_escape_expr(
     // internal, only the value is ABI. Resolve the value precisely
     // when `obj` is a known object literal; otherwise widen to the
     // whole object, since we can't tell which part left.
-    PropAccess(obj, key) =>
-      match surface_lookup_member(w, obj, key) {
-        Some(value) => surface_escape_expr(w, value, depth + 1)
-        None => surface_escape_expr(w, obj, depth + 1)
-      }
+    PropAccess(obj, key) => surface_escape_member(w, obj, key, depth)
     IndexAccess(obj, @ast.TsExpr::StringLit(key)) =>
-      match surface_lookup_member(w, obj, key) {
-        Some(value) => surface_escape_expr(w, value, depth + 1)
-        None => surface_escape_expr(w, obj, depth + 1)
-      }
+      surface_escape_member(w, obj, key, depth)
     IndexAccess(obj, _) => surface_escape_expr(w, obj, depth + 1)
     Cond(_, t, e) => {
       surface_escape_expr(w, t, depth + 1)
@@ -680,6 +750,149 @@ fn surface_escape_callback_args(
         surface_escape_expr(w, a, depth + 1)
       _ => ()
     }
+  }
+}
+
+///|
+/// Arguments that leave through the call's RETURN value.
+///
+/// `function identity(v) { return v }` publishes its argument: the
+/// object the caller built is the very value the call hands back, so
+/// when the call's result escapes, the literal's keys are ABI.
+///
+/// Nothing covered that. The walk escaped the callee's returns — for
+/// `return v` that is `Var("v")`, a parameter, which resolves to no
+/// top-level binding and stops there — and it escaped arguments only
+/// when they were callbacks. So
+///
+///   export const v = identify({ type: "X", payload: { x: "D" } });
+///
+/// lost `payload` and `x`: nothing inside the bundle reads them and
+/// nothing had reserved them. `case08-typeargs` is exactly that shape
+/// and had been passing for an unrelated reason — the pass that deletes
+/// the keys did not descend into the `TypeArgs` wrapper around the
+/// call, so the keys survived by accident. Fixing the wrapper exposed
+/// this.
+///
+/// A parameter counts as returned when any return expression MENTIONS
+/// it, not only when it is returned bare: `return { wrapped: v }` and
+/// `return v.rows` both hand a piece of the caller's object out, and
+/// deciding which piece would need the shape this pass is computing.
+/// Widening to the whole argument costs a few reserved names.
+fn surface_escape_returned_args(
+  w : SurfaceWalk,
+  f : @ast.TsFunc,
+  args : Array[@ast.TsExpr],
+  depth : Int,
+) -> Unit {
+  let returns : Array[@ast.TsExpr] = []
+  collect_own_returns_block(f.body, returns)
+  if returns.length() == 0 {
+    return
+  }
+  let mentioned : Map[String, Bool] = {}
+  for r in returns {
+    collect_var_refs_in_expr(r, mentioned)
+  }
+  for i, p in f.params {
+    if i >= args.length() {
+      break
+    }
+    // A destructured parameter has no single name to look for; its keys
+    // are already reserved by `surface_reserve_binding_keys`, and what
+    // it forwards is covered by the names bound inside it.
+    if p.name != "" && mentioned.contains(p.name) {
+      surface_escape_expr(w, args[i], depth + 1)
+    }
+  }
+}
+
+///|
+/// `obj.key` leaves the bundle: escape everything that key can hold.
+///
+/// The literal's own entry is one source of it and was treated as the
+/// only one:
+///
+///     const bag: { p: Req | undefined } = { p: undefined };
+///     export function get(r: string) { bag.p = new Req(r); return bag.p }
+///
+/// resolved `bag.p` to the literal's `undefined`, escaped that, and
+/// stopped — so `Req` was never reached and `mtsc --bundle` deleted its
+/// methods out from under the consumer holding the returned instance.
+/// `return bag` was fine, because widening to the whole object routes
+/// through the `prop_assigns` loop. A hit in the literal is a NECESSARY
+/// source, not a sufficient one; the recorded writes are the rest of it.
+///
+/// Both are escaped rather than one being preferred, because there is no
+/// order here to reason about: a write can precede or follow any read,
+/// and this set only has to contain what may leave.
+fn surface_escape_member(
+  w : SurfaceWalk,
+  obj : @ast.TsExpr,
+  key : String,
+  depth : Int,
+) -> Unit {
+  // Only an EXACT hit counts as having resolved the key. An opaque write
+  // escapes its value — it may well be this key — but it does not answer
+  // where the key comes from, and treating it as an answer would skip the
+  // widening below: `{ ...base }` gives `surface_lookup_member` nothing
+  // for a key that arrives through the spread, and `base` would then
+  // never escape at all.
+  let mut resolved = false
+  match surface_lookup_member(w, obj, key) {
+    Some(value) => {
+      resolved = true
+      surface_escape_expr(w, value, depth + 1)
+    }
+    None => ()
+  }
+  match obj {
+    @ast.TsExpr::Var(n) =>
+      match w.prop_assigns.get(n) {
+        Some(assigns) => {
+          // Memoized on `(receiver, key)`, the same way named bodies are,
+          // and for the same reason `surface_should_walk` exists: the
+          // recorded write can READ the key it writes, which is what an
+          // increment is, and the plainest possible form of it —
+          //
+          //     const ledger = { n: 0 };
+          //     export function bump() { ledger.n = ledger.n + 1; … }
+          //
+          // — did not terminate. Walking `ledger.n` escapes the write
+          // `ledger.n + 1`, whose left operand is `ledger.n` again. The
+          // memo's depth keying keeps the conservative direction: a
+          // shallower arrival re-walks, a deeper one (which is what a
+          // cycle is) stops.
+          //
+          // `resolved` is still set from the entry scan, before the memo
+          // can decline — otherwise a second arrival would fall through
+          // to the widening below and reserve the whole object, turning a
+          // cycle into an over-reservation instead of a hang.
+          let mut has_key = false
+          for entry in assigns {
+            if entry.0 == key {
+              has_key = true
+            }
+          }
+          if has_key {
+            resolved = true
+          }
+          if surface_should_walk(w, "member:" + n + "." + key, depth) {
+            for entry in assigns {
+              if entry.0 == key || is_opaque_object_key(entry.0) {
+                surface_escape_expr(w, entry.1, depth + 1)
+              }
+            }
+          }
+        }
+        None => ()
+      }
+    _ => ()
+  }
+  // Nothing named this key: widen to the whole object, since we cannot
+  // tell which part left.
+  if !resolved {
+    surface_escape_expr(w, obj, depth + 1)
   }
 }
 

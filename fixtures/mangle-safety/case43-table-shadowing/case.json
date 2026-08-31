@@ -1,0 +1,12 @@
+{
+  "origin": "ts.mbt — found while porting terser's `reduce_vars`, by reading `as_const_inline.mbt`'s walker to reuse it",
+  "what": "Five passes resolved a name against one bundle-wide table with no scope narrowing anywhere in their walkers. A shadowing declaration, and a PARAMETER of the same name (which no block declares, so a block-level check cannot see it), both took the outer entry's value. `as_const_inline` and `const_enum_inline` are wrong under plain `--bundle` with no optimization flag. Every case is a wrong VALUE, so `--verify` sees nothing: the names all resolve.",
+  "mtscArgs": [
+    "--treeshake",
+    "--fold"
+  ],
+  "exports": [
+    "report"
+  ],
+  "expectStatus": "pass"
+}

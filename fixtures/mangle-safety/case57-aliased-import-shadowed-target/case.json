@@ -1,0 +1,13 @@
+{
+  "origin": "ts.mbt — found by bundling @sprawlens/viz, a 265-file preact application, which threw `Cannot access 'parentFileOf' before initialization` under plain `mtsc --bundle`",
+  "what": "The linker rewrites an imported reference to the exporting module's local name without checking whether that name is shadowed at the reference site. The rewrite walker narrows on the name it REPLACES and cannot narrow on the name it SUBSTITUTES. Seventh instance of the scope-narrowing family and the last place it had not been asked. Two failure modes: a TDZ ReferenceError when the shadowing declaration has not run yet, and a silently wrong value when it has.",
+  "mtscArgs": [
+    "--treeshake",
+    "--fold",
+    "--minify"
+  ],
+  "exports": [
+    "report"
+  ],
+  "expectStatus": "pass"
+}

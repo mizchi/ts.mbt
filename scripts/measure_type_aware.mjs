@@ -45,28 +45,53 @@
 // all is reported `size-only` with the reason, because a byte count
 // nobody can execute is not evidence.
 //
+// Every row compiles a library's PACKAGE entry by default. `--app`
+// compiles an APPLICATION that consumes the library instead, from
+// `fixtures/type-aware-corpus/app-entries/`, and keeps its own
+// `expected.app.json`. See the block above `stageAppEntry` for why the
+// distinction matters and where the usage in each app entry comes from.
+//
 //   node scripts/measure_type_aware.mjs
+//   node scripts/measure_type_aware.mjs --app
 //   node scripts/measure_type_aware.mjs --only hono --verbose
 //   node scripts/measure_type_aware.mjs --update      # re-record expected.json
 //   node scripts/measure_type_aware.mjs --keep        # keep the leg outputs
+//   node scripts/measure_type_aware.mjs --phases      # per-phase byte attribution
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import zlib from "node:zlib";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const WORK = path.join(ROOT, "_build", "type-aware");
 const FIXTURES = path.join(ROOT, "fixtures", "type-aware-corpus");
-const EXPECTED = path.join(FIXTURES, "expected.json");
+const APP_ENTRIES = path.join(FIXTURES, "app-entries");
 
-// Flags shared by `aware` and `blind`. Deliberately WITHOUT
-// `--mangle-properties`: on every library measured here the property
-// mangler is inert (the fail-closed callee-provenance scan finds calls
-// it cannot prove bundle-internal, so it reserves everything), which
-// means adding it changes no byte on either leg and only lengthens the
-// run. `docs/type-aware-measurement.md` records that result.
-const OPT_FLAGS = ["--treeshake", "--fold", "--minify", "--mangle"];
+// Flags shared by `aware` and `blind`.
+//
+// `--mangle-properties` was deliberately absent for a long time, because
+// the property mangler was inert on every library here: the observability
+// analysis reserved the WILDCARD, so no user-declared property name was
+// renamed and the flag changed no byte on either leg.
+//
+// The cause turned out to be narrower than "the analysis is
+// fail-closed". A `const f = (…) => …` had no entry in the graph's
+// function table — arrows were indexed by a FuncExpr's internal name and
+// have none — so a call to one was treated as opaque and marked
+// `External`, which IS the wildcard. One such arrow poisons the whole
+// bundle, and neverthrow's only cause was a single
+// `export const createNeverThrowError`. With arrows given their
+// declared name as an identity, the flag moves real bytes (hono
+// -2107, -9.4%), so it belongs in the measured set.
+const OPT_FLAGS = [
+  "--treeshake",
+  "--fold",
+  "--minify",
+  "--mangle",
+  "--mangle-properties",
+];
 
 // The corpus. `entry` is relative to the checkout root.
 //
@@ -83,6 +108,7 @@ const CORPUS = [
     entry: "src/index.ts",
     reuse: ["_build/real-world/hono/hono"],
     driver: "hono.driver.mjs",
+    appEntry: "hono.app.ts",
   },
   {
     name: "valibot",
@@ -90,33 +116,53 @@ const CORPUS = [
     entry: "library/src/index.ts",
     reuse: ["_build/real-world/valibot/valibot"],
     driver: "valibot.driver.mjs",
+    appEntry: "valibot.app.ts",
   },
   {
     name: "typebox",
     repo: "https://github.com/sinclairzx81/typebox",
     entry: "src/index.ts",
-    // The `TTypeArray is not defined` failure this row used to carry was
-    // the type-only namespace entry, and it is fixed. typebox now gets
-    // further and stops on a different bug: `Cannot access 'IntegerKey'
-    // before initialization` — a `const` used by a later top-level
-    // statement that the linker ordered ahead of its declaration. A TDZ
-    // ordering problem, unrelated to types, and its own fix.
+    // Was size-only through two separate unloadable-bundle bugs, and
+    // both are worth the note because neither was about types:
     //
-    // Sizes stay comparable (both legs carry the same defect), but
-    // nothing executes them, so the row is size-only.
-    driver: null,
-    sizeOnlyWhy: "bundle throws on load: TDZ, `IntegerKey` used before its declaration is ordered",
+    //   * `Array.from({ length: 256 }).map(…)` in `system/hashing/hash.ts`
+    //     compiled to `[...{ length: 256 }].map(…)`. `Array.from` takes
+    //     an array-LIKE and a spread needs an ITERABLE — a rewrite that
+    //     had never been asked the question, now in
+    //     `scripts/verify_rule_equivalence.mjs` along with the rest of
+    //     the built-in-method family.
+    //   * `types/record.ts` was initialized AFTER
+    //     `indexed/from_object.ts`, whose top level does
+    //     `new RegExp(IntegerKey)`. The module order did not match ESM's
+    //     because dependencies were walked imports-then-re-exports
+    //     rather than in source order, and `src/index.ts` is a barrel
+    //     that puts five `export * from` above one `import * as`.
+    //
+    // The driver reads `Record(Integer(), …)`'s emitted
+    // `patternProperties` back out, because `IntegerKey` is a string:
+    // an order that produced the wrong value instead of throwing would
+    // still build a schema, just not the right one.
+    driver: "typebox.driver.mjs",
+    appEntry: "typebox.app.ts",
   },
   {
     name: "immer",
     repo: "https://github.com/immerjs/immer",
     entry: "src/immer.ts",
-    // Same shape of problem, different cause: `export const enum
-    // ArchType` is referenced across module boundaries but never
-    // emitted or inlined, so the bundle throws `ArchType is not
-    // defined`.
-    driver: null,
-    sizeOnlyWhy: "bundle throws on load: cross-module `const enum ArchType` neither emitted nor inlined",
+    // Was size-only, for a reason worth keeping in view: `export const
+    // enum ArchType` is declared in one module and read from several
+    // others, a const enum emits no runtime binding, and the
+    // cross-module reads were neither linked nor substituted — so the
+    // bundle threw `ArchType is not defined` at load. The per-module
+    // inline had been taken for the whole job.
+    //
+    // The driver exercises all four `ArchType` dispatch paths on
+    // purpose. `ArchType` picks which proxy implementation handles a
+    // draft, so substituting a wrong literal would route an Array
+    // through the object path and still load cleanly; the values have
+    // to be observed, not just the absence of a throw.
+    driver: "immer.driver.mjs",
+    appEntry: "immer.app.ts",
   },
   // These two were BLOCKED by the export-surface blowup that
   // `surface_should_walk` in `export_surface.mbt` now bounds:
@@ -129,12 +175,14 @@ const CORPUS = [
     repo: "https://github.com/supermacro/neverthrow",
     entry: "src/index.ts",
     driver: "neverthrow.driver.mjs",
+    appEntry: "neverthrow.app.ts",
   },
   {
     name: "ts-pattern",
     repo: "https://github.com/gvergnaud/ts-pattern",
     entry: "src/index.ts",
     driver: "ts-pattern.driver.mjs",
+    appEntry: "ts-pattern.app.ts",
   },
   {
     name: "superstruct",
@@ -148,34 +196,171 @@ const CORPUS = [
     // subclass, so only `StructError` is reserved and the cost is
     // +25 bytes. Reserving every callable instead cost +31% here.
     driver: "superstruct.driver.mjs",
+    appEntry: "superstruct.app.ts",
   },
-  // zod and superstruct were both BLOCKED, and both were blamed on the
-  // wrong thing twice: first on the export-surface blowup, then — after
-  // one gdb sample landed in `parse_conditional_type_tail` — on a parser
-  // blowup over recursive conditional types. Neither was it. Both write
+  // superstruct was BLOCKED, and was blamed on the wrong thing twice:
+  // first on the export-surface blowup, then — after one gdb sample
+  // landed in `parse_conditional_type_tail` — on a parser blowup over
+  // recursive conditional types. Neither was it. It writes
   // `.js`-suffixed relative specifiers, which the module-graph walk
   // failed to recognise as already-loaded, so it re-read and re-parsed
-  // every repeat visit and re-pushed its imports: 2^depth on a diamond
-  // graph. The sample landed in the parser because the parser was being
-  // re-entered exponentially. With the dedup guard in
-  // `mtsc_load_bundle_files`, zod went from not finishing in eighteen
-  // minutes to 227 ms and superstruct to 15 ms. `just verify-graph-walk`
-  // is the gate.
+  // every repeat visit and re-pushed its own imports: 2^depth on a
+  // diamond graph. The sample landed in the parser because the parser
+  // was being re-entered exponentially. With the dedup guard in
+  // `mtsc_load_bundle_files` superstruct went from not finishing to
+  // 15 ms. `just verify-graph-walk` is the gate, and it generates the
+  // diamond shape itself rather than relying on a cloned package.
+  //
+  // zod USED to be the loud case here — 133 files, `.js` specifiers 65
+  // times, eighteen minutes without finishing a parse, then 227 ms —
+  // and it is no longer in the corpus. It cannot answer the question
+  // this harness asks. Its bundle contains eight `Reflect.ownKeys`
+  // calls, two `Object.getOwnPropertyDescriptors` and two
+  // `Object.getOwnPropertyDescriptor`, which enumerate non-enumerable
+  // properties — exactly what a class prototype method is — so
+  // class-method DCE is suppressed on zod by construction and no amount
+  // of type information changes the answer. It is worth being precise
+  // about what that costs, because it is easy to overstate: zod's
+  // report also says "nothing would have been dropped anyway", so the
+  // reflection is not what makes zod a NEUTRAL. Every declared method
+  // is reachable. Keeping it measured a permanent zero for a permanent
+  // reason, at the price of the slowest run in the corpus. The four
+  // bugs it found are all covered elsewhere — `verify-graph-walk` for
+  // the walk, and fixtures for the erased-`as` arrow parens, the
+  // type-only namespace entries and the merged interface-and-function
+  // case.
+  // The corpus's only UI application, and its first monorepo: the
+  // element package's imports reach five sibling workspace packages
+  // through tsconfig `paths` declared in a config it only reaches by
+  // `extends`. Five things had to be fixed before it bundled at all —
+  // `.json` imports, `.scss` imports, the binary read that decoded a
+  // `.woff2` as UTF-8, `extends`-inherited `paths`, and `from "."` —
+  // and every one of them was a hole no library-shaped target had
+  // exposed. `docs/type-aware-measurement.md` records them.
   {
-    name: "zod",
-    repo: "https://github.com/colinhacks/zod",
-    entry: "packages/zod/src/index.ts",
-    // Took four fixes to get here from BLOCKED, and it found every one:
-    // the module-graph dedup (18 min -> 230 ms), the arrow body's parens
-    // through an erased `as`, the type-only namespace entries, and the
-    // merged interface-and-function case.
-    driver: "zod.driver.mjs",
+    name: "excalidraw",
+    repo: "https://github.com/excalidraw/excalidraw",
+    entry: "packages/element/src/index.ts",
+    // The bundle spans six workspace packages, reached through
+    // tsconfig `paths`; the element package alone is 52 of the 95 files.
+    sourceRoots: [
+      "packages/element/src",
+      "packages/common/src",
+      "packages/math/src",
+      "packages/utils/src",
+      "packages/laser-pointer/src",
+      "packages/fractional-indexing/src",
+    ],
+    driver: "excalidraw.driver.mjs",
+    // The bundle keeps its npm dependencies external, so the driver
+    // needs them on disk. Installed into the leg directory, NOT into
+    // the checkout: a `node_modules` next to the sources would make
+    // mtsc resolve and inline these packages instead of leaving them
+    // external, which is a different measurement.
+    deps: [
+      "roughjs@4.6.6",
+      "points-on-curve@1.0.1",
+      "perfect-freehand@1.2.3",
+      "nanoid@5.1.6",
+      "tinycolor2@1.6.0",
+      "lodash.throttle@4.1.1",
+      "es6-promise-pool@2.5.0",
+      "@braintree/sanitize-url@7.1.2",
+    ],
+    // Node cannot load `roughjs/bin/*` at all — extension-less ESM with
+    // no `exports` map, which is to say a bundler-only build. The shims
+    // hand back the real roughjs through the rollup bundle it publishes
+    // as `module`; see `fixtures/type-aware-corpus/excalidraw.shims/`.
+    shims: {
+      "roughjs/bin/rough": "rough.mjs",
+      "roughjs/bin/generator": "generator.mjs",
+      "roughjs/bin/math": "math.mjs",
+      "points-on-curve/lib/curve-to-bezier": "curve-to-bezier.mjs",
+    },
+    // `import.meta.env` is vite's build-time substitution. The driver
+    // sets the global this maps it to.
+    execReplace: [["import.meta.env", "globalThis.__EXCALIDRAW_ENV__"]],
+    appEntry: "excalidraw.app.ts",
+    // The one app entry with its own driver: the `import.meta.env`
+    // global has to be set before the bundle is evaluated, which the
+    // shared driver's static import cannot do.
+    appDriver: "excalidraw.driver.mjs",
+  },
+  // The corpus's first real APPLICATION, and the reason it exists.
+  //
+  // Every other row compiles a library's package entry. Excalidraw was
+  // added as "the UI application" and is still a library: an element
+  // package with an export surface. This is
+  // `packages/viz/src/main.tsx` — it mounts a preact app and exports
+  // NOTHING, over 265 TypeScript files in four workspace packages.
+  //
+  // The hypothesis it was added to test: mtsc preserves the type
+  // surface, so an application, having no ABI to preserve, should
+  // optimize better than a library. For the property mangler the answer
+  // is NO — 743 distinct property names, 0 candidates, the same
+  // suppression as every library — but the REASON is the finding. On a
+  // library `--explain-mangle` names the export surface and the wire
+  // format, which are correct and unfixable. Here, with zero exports,
+  // every cause reads "binding X crosses the bundle boundary and carries
+  // no closed type annotation": `readSearch`, `parsers`, `url`,
+  // `onPopState`, `node`, `cell`, `edge`, `id`. An application's
+  // boundary is not its exports — it is the DOM and framework APIs it
+  // hands objects to (`render`, `history.replaceState`, `fetch`,
+  // `addEventListener`). A different question, and a more tractable one.
+  //
+  // Three bugs were fixed to get it to run at all, every one invisible
+  // to a library-shaped target: tsconfig `jsx` / `jsxImportSource` were
+  // never read, `BundleOptions.jsx` was ignored by `load_module_graph`
+  // (so `--jsx-import-source` was dead and a preact app compiled to
+  // `react/jsx-runtime`), and the linker rewrote an aliased import into
+  // a scope that shadowed the target name — `ReferenceError: Cannot
+  // access 'parentFileOf' before initialization` under plain
+  // `mtsc --bundle`. See `case57-aliased-import-shadowed-target`.
+  {
+    name: "sprawlens",
+    repo: "https://github.com/mizchi/sprawlens",
+    entry: "packages/viz/src/main.tsx",
+    sourceRoots: [
+      "packages/viz/src",
+      "packages/layout/src",
+      "packages/schema/src",
+      "packages/agent/src",
+      "packages/contracts/src",
+    ],
+    // A pnpm workspace with no tsconfig `paths` — see `stageFiles`.
+    stageFiles: { "tsconfig.base.json": "sprawlens.tsconfig.base.json" },
+    // What the bundle leaves external. `linkedom` is the driver's, not
+    // the bundle's: the app needs a document to render into.
+    deps: [
+      "preact@10.29.2",
+      "preact-render-to-string@6.5.13",
+      "picomatch@4.0.2",
+      "linkedom@0.18.11",
+    ],
+    driver: "sprawlens.driver.mjs",
   },
   {
     name: "remeda",
     repo: "https://github.com/remeda/remeda",
     entry: "packages/remeda/src/index.ts",
-    blocked: 'parse error in setPath.ts: Expected Semicolon, got Extends',
+    // Was BLOCKED, and not on a pass — on the PARSER. `setPath.ts`
+    // writes a conditional type whose check type is a union laid out one
+    // member per line, and the leading `|` took its own branch in
+    // `parse_type` that built the union and returned, skipping the
+    // `extends` tail. `T | string extends …` parsed fine; the bug needed
+    // the decoration, not the union. One unparseable file blocked the
+    // whole package.
+    //
+    // Worth measuring for the calling convention: nearly every function
+    // has a data-first and a data-last form dispatched at runtime by
+    // `purry` on `arguments.length`, which is an arity-sensitive
+    // indirection through a shared helper — the shape an unused-parameter
+    // pass or a single-use inliner can break with nothing looking wrong.
+    // The driver also counts upstream calls through a lazy `take`, so a
+    // fold that changed evaluation order shows up as call counts rather
+    // than as a wrong answer.
+    driver: "remeda.driver.mjs",
+    appEntry: "remeda.app.ts",
   },
 ];
 
@@ -196,6 +381,8 @@ let verbose = false;
 let keep = false;
 let update = false;
 let legTimeout = 600_000;
+let phases = false;
+let appMode = false;
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
   if (a === "--only") only = args[++i];
@@ -203,17 +390,66 @@ for (let i = 0; i < args.length; i++) {
   else if (a === "--keep") keep = true;
   else if (a === "--update") update = true;
   else if (a === "--timeout") legTimeout = Number(args[++i]) * 1000;
+  else if (a === "--phases") phases = true;
+  else if (a === "--app") appMode = true;
   else {
     console.error(`unknown argument: ${a}`);
     process.exit(2);
   }
 }
 
+const EXPECTED = path.join(FIXTURES, appMode ? "expected.app.json" : "expected.json");
+
 const MTSC = findMtsc();
 fs.mkdirSync(WORK, { recursive: true });
 
+// The six phases that read type tables. `--phases` compiles the aware
+// leg once per phase with that phase switched off and reports the
+// difference, which answers "what is the type information worth" WITHOUT
+// a control.
+//
+// It exists because the leg delta could not answer it. On Excalidraw the
+// leg delta says the aware leg is 1,139 bytes BEHIND after the
+// double-pass adjustment, and the per-phase table says the six phases
+// SAVE 2,380 bytes there and cost nothing — four of the six are
+// completely inert. Both are true: the residual is not a pass, it is the
+// leg construction. `blind`'s input is not "the same code with types
+// erased", it is the same code after a round-trip through mtsc's own
+// emitter, and that round-trip is itself an optimization the aware leg
+// never gets. The `aware2` control prices a SECOND pass on
+// already-optimized output, which is a different thing — on Excalidraw
+// it comes out negative (a second pass GROWS the bundle by 843 bytes),
+// so subtracting it makes the gap look worse rather than fairer.
+//
+// So this is the number to trust for "does knowing the types pay": it is
+// a direct measurement of the phases in question, on the same input, with
+// nothing to adjust.
+const TYPE_READING_PHASES = [
+  "predicate-inline",
+  "switch-fold",
+  "as-const-inline",
+  "tag-rewrite",
+  "class-method-dce",
+  "type-fold",
+];
+
 function bytes(n) {
   return n.toLocaleString("en-US");
+}
+
+// Gzipped size, because that is what ships.
+//
+// Added after `compare_terser_bundles.mjs` showed the two metrics
+// DISAGREE: mtsc was smaller than terser in raw bytes on five of nine
+// targets and on only one gzipped, and remeda was -388 raw / +152
+// gzipped. A saving that gzip would have made anyway is not a saving,
+// so a delta worth acting on has to survive compression.
+function gzipBytes(file) {
+  try {
+    return zlib.gzipSync(fs.readFileSync(file), { level: 9 }).length;
+  } catch {
+    return null;
+  }
 }
 
 function pct(part, whole) {
@@ -244,24 +480,106 @@ function compile(input, output, flags, cwd) {
   return { ok: true, seconds, size: fs.statSync(output).size };
 }
 
+// Where a leg's bundle is EXECUTED: a subdirectory of the leg
+// directory, holding the copy of the bundle, the driver, the shims and
+// the `node_modules` the driver needs.
+//
+// Its own subdirectory rather than the leg directory itself, and the
+// reason is not tidiness. mtsc resolves a bare specifier by walking up
+// from the importing file looking for `node_modules`, and the leg
+// directory is the checkout's PARENT — so installing there put
+// `es6-promise-pool` on mtsc's search path and it INLINED the UMD
+// wrapper instead of leaving the import external. The measurement grew
+// 88 KB and the bundle then threw `Cannot set properties of undefined
+// (setting 'PromisePool')`, because a UMD factory assigned to a `root`
+// that does not exist in ESM. `exec/` is not an ancestor of the
+// checkout, so nothing mtsc does can see it.
+const execDir = (dir) => path.join(dir, "exec");
+
+// The npm packages a target's bundle leaves external, installed so the
+// driver can resolve them.
+function installDeps(dir, deps) {
+  if (!deps?.length) return { ok: true };
+  fs.mkdirSync(dir, { recursive: true });
+  const marker = path.join(dir, "node_modules", ".type-aware-deps");
+  const want = deps.slice().sort().join(" ");
+  if (fs.existsSync(marker) && fs.readFileSync(marker, "utf8") === want) {
+    return { ok: true };
+  }
+  fs.writeFileSync(
+    path.join(dir, "package.json"),
+    JSON.stringify({ name: "type-aware-leg", private: true, type: "module" }) + "\n",
+  );
+  const r = spawnSync("npm", ["install", "--no-save", "--no-audit", "--no-fund", "--silent", ...deps], {
+    encoding: "utf8",
+    timeout: 600_000,
+    cwd: dir,
+  });
+  if (r.status !== 0) {
+    return { ok: false, why: `npm install failed: ${(r.stderr || "").trim().split("\n")[0] || `exit ${r.status}`}` };
+  }
+  fs.writeFileSync(marker, want);
+  return { ok: true };
+}
+
+// Turn the leg's output into something Node can load, WITHOUT touching
+// the file the byte count came from.
+//
+// Both rewrites stand in for a step vite performs and Node has no
+// equivalent of: filling in an extension-less deep subpath (which for
+// roughjs also means routing around a `bin/` tree Node cannot load at
+// all), and substituting `import.meta.env`. They are applied to every
+// leg identically, so a difference between legs is still ours.
+function prepareForExecution(dir, target, t) {
+  let src = fs.readFileSync(target, "utf8");
+  for (const [spec, file] of Object.entries(t.shims ?? {})) {
+    const quoted = new RegExp(`(["'])${spec.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}(\\.js)?\\1`, "g");
+    src = src.replace(quoted, `"./shims/${file}"`);
+  }
+  for (const [find, replace] of t.execReplace ?? []) {
+    src = src.split(find).join(replace);
+  }
+  fs.writeFileSync(target, src);
+  if (t.shims) {
+    fs.cpSync(path.join(FIXTURES, `${t.name}.shims`), path.join(dir, "shims"), {
+      recursive: true,
+    });
+  }
+}
+
 // Run one leg's output through the target's driver and return its
 // stdout, or null with a reason.
 //
 // The driver is copied next to the bundle rather than run from
 // `fixtures/`: it imports `./target.mjs`, and a bare specifier resolves
 // against the importing FILE, not the working directory.
-function observe(dir, driverSrc, leg) {
-  const driver = path.join(dir, "driver.mjs");
+function observe(dir, driverSrc, leg, t) {
+  const exec = execDir(dir);
+  fs.mkdirSync(exec, { recursive: true });
+  const driver = path.join(exec, "driver.mjs");
   fs.copyFileSync(driverSrc, driver);
-  fs.copyFileSync(path.join(dir, `${leg}.mjs`), path.join(dir, "target.mjs"));
+  const target = path.join(exec, "target.mjs");
+  fs.copyFileSync(path.join(dir, `${leg}.mjs`), target);
+  prepareForExecution(exec, target, t);
   const r = spawnSync("node", [driver], {
     encoding: "utf8",
     maxBuffer: 1 << 28,
     timeout: 180_000,
-    cwd: dir,
+    cwd: exec,
   });
   if (r.status !== 0) {
-    return { ok: false, why: (r.stderr || "").split("\n").find((l) => l.trim()) || `exit ${r.status}` };
+    // Node prints a source-location banner before the message, so the
+    // first non-empty line is `foo.mjs:123` and says nothing. Take the
+    // first line that carries a diagnostic, and keep the whole stderr on
+    // disk for the ones that need reading.
+    const lines = (r.stderr || "").split("\n").filter((l) => l.trim());
+    const msg =
+      lines.find((l) => /^\s*(\w*Error|Uncaught|SyntaxError|TypeError)\b/.test(l.trim())) ||
+      lines.find((l) => /error/i.test(l)) ||
+      lines[0] ||
+      `exit ${r.status}`;
+    fs.writeFileSync(path.join(dir, `${leg}.stderr`), r.stderr || "");
+    return { ok: false, why: msg.trim().slice(0, 200) };
   }
   return { ok: true, out: r.stdout };
 }
@@ -285,11 +603,123 @@ function resolveCheckout(t) {
   return { dir, cloned: true };
 }
 
-function countSources(checkout, entry) {
-  const srcRoot = path.join(checkout, path.dirname(entry));
+// ---------------------------------------------------------------------
+// App entries (`--app`)
+// ---------------------------------------------------------------------
+//
+// Every row above compiles a library's PACKAGE entry — the barrel that
+// exports its whole public API. That is the wrong shape for two of the
+// questions this harness asks, and the difference is not small:
+//
+//   * Tree-shaking has nothing to remove. A barrel's exports are all
+//     live by definition, so `--treeshake` can only drop what no export
+//     reaches, which in a well-built library is almost nothing.
+//   * Every property name is on the API boundary. A library's object
+//     shapes ARE its wire format, so the mangler is right to reserve
+//     them, and the reserved-set census on the package entries is
+//     therefore uninformative about what the pass could do.
+//
+// An application is the other case: it consumes a slice of the library
+// and its own object shapes are private. `--app` compiles one, per
+// target, and the contrast is what the row is for.
+//
+// The usage in each `app-entries/*.app.ts` is copied from that library's
+// OWN README (or, for immer, its docs site — its readme carries no
+// TypeScript block). That constraint is the whole point: an entry I
+// designed would be an entry designed to make the passes fire, and a
+// harness that flatters the compiler is worse than no harness. Where the
+// README's example throws or is async, it is wrapped, and nothing else
+// is changed.
+//
+// The fixture is staged INTO the checkout, at the root, so its imports
+// are relative paths into the library's own sources — `./src/index.ts`.
+// Compiling it from `fixtures/` instead would resolve the library as a
+// bare specifier through `node_modules`, which is the published `.js`,
+// which is the measurement this harness exists to avoid.
+function stageAppEntry(checkout, t) {
+  if (!t.appEntry) return { ok: false, why: "no app entry for this target" };
+  const fx = path.join(APP_ENTRIES, t.appEntry);
+  if (!fs.existsSync(fx)) {
+    return { ok: false, why: `app entry fixture ${t.appEntry} is missing` };
+  }
+  const rel = `mtsc-app-entry.${t.name}.ts`;
+  fs.copyFileSync(fx, path.join(checkout, rel));
+  return { ok: true, rel };
+}
+
+// Config files a target needs staged INTO its checkout before mtsc can
+// resolve its imports.
+//
+// `stageAppEntry` above copies one entry file; this copies whatever a
+// target names, at the paths it names. sprawlens is the case that needs
+// it: a pnpm workspace whose packages import each other by bare
+// specifier (`@sprawlens/schema`) and resolve through workspace
+// symlinks, with NO tsconfig `paths` anywhere. mtsc reads `paths`, so
+// without a config it leaves every sibling package external and the
+// bundle is a shell.
+//
+// One file does it — `tsconfig.base.json`, which every package extends —
+// so the staged copy carries `baseUrl` + `paths` + `jsx` and each
+// package's own config still contributes its `jsxImportSource`.
+//
+// It REPLACES the checked-out file rather than merging into it, which is
+// the honest trade: merging depends on the upstream file's shape and
+// breaks silently when upstream changes it, while replacing depends only
+// on what mtsc reads from tsconfig today (`paths`, `baseUrl`, `jsx*`).
+// If mtsc learns to read more, this fixture has to grow with it.
+function stageFiles(checkout, t) {
+  for (const [rel, fixture] of Object.entries(t.stageFiles ?? {})) {
+    const src = path.join(FIXTURES, fixture);
+    if (!fs.existsSync(src)) {
+      return { ok: false, why: `staged file fixture ${fixture} is missing` };
+    }
+    const dest = path.join(checkout, rel);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.copyFileSync(src, dest);
+  }
+  return { ok: true };
+}
+
+// The leg directory. `--app` gets its own so the two modes cannot
+// overwrite each other's bundles — the `.observed` and `.stderr` files a
+// failure leaves behind are the only record of it.
+const legDir = (t) => path.join(WORK, appMode ? `${t.name}-app` : t.name);
+
+// The driver.
+//
+// A package entry needs one written per target: it exports the whole
+// API and there is no generic way to exercise that. An app entry has
+// already done the exercising and exports scalars, so one shared driver
+// prints what it computed. A target may still name its own with
+// `appDriver` when the bundle needs something set up before it is
+// evaluated.
+function driverFor(t) {
+  if (!appMode) return t.driver ? path.join(FIXTURES, t.driver) : null;
+  return path.join(APP_ENTRIES, t.appDriver ?? "driver.mjs");
+}
+
+// Source files the target spans.
+//
+// The entry's own directory is the right answer for a single-package
+// library, and wrong for a monorepo: Excalidraw's element package is 52
+// files, but the bundle reaches 95 across six workspace packages, and
+// reporting 52 next to a 780 KB bundle invites the wrong conclusion. A
+// target that spans packages names its roots.
+function countSources(checkout, t) {
+  const roots = (t.sourceRoots ?? [path.dirname(t.entry)]).map((r) =>
+    JSON.stringify(path.join(checkout, r)),
+  );
   const r = spawnSync(
     "bash",
-    ["-c", `find ${JSON.stringify(srcRoot)} -name '*.ts' ! -name '*.test.ts' ! -name '*.spec.ts' | wc -l`],
+    [
+      "-c",
+      // `.tsx` as well as `.ts`. Every library target in the corpus is
+      // `.ts`-only, so this went unnoticed until a UI application
+      // arrived: sprawlens/viz is 126 files and 100 of them are `.tsx`,
+      // and reporting the `.ts` count next to an 875 KB bundle invites
+      // exactly the wrong conclusion.
+      `find ${roots.join(" ")} \\( -name '*.ts' -o -name '*.tsx' \\) ! -name '*.test.ts' ! -name '*.test.tsx' ! -name '*.spec.ts' ! -name '*.bench.ts' 2>/dev/null | wc -l`,
+    ],
     { encoding: "utf8", timeout: 60_000 },
   );
   return Number((r.stdout || "0").trim()) || 0;
@@ -302,15 +732,33 @@ function measure(t) {
     results.push({ name: t.name, status: "blocked", why: t.blocked });
     return;
   }
+  if (appMode && !t.appEntry) {
+    results.push({ name: t.name, status: "skip", why: "no app entry for this target" });
+    return;
+  }
   const { dir: checkout, why } = resolveCheckout(t);
   if (!checkout) {
     results.push({ name: t.name, status: "skip", why });
     return;
   }
-  const dir = path.join(WORK, t.name);
+  const staged_configs = stageFiles(checkout, t);
+  if (!staged_configs.ok) {
+    results.push({ name: t.name, status: "skip", why: staged_configs.why });
+    return;
+  }
+  const dir = legDir(t);
   fs.mkdirSync(dir, { recursive: true });
-  const entry = path.join(checkout, t.entry);
-  const files = countSources(checkout, t.entry);
+  let entryRel = t.entry;
+  if (appMode) {
+    const staged = stageAppEntry(checkout, t);
+    if (!staged.ok) {
+      results.push({ name: t.name, status: "skip", why: staged.why });
+      return;
+    }
+    entryRel = staged.rel;
+  }
+  const entry = path.join(checkout, entryRel);
+  const files = countSources(checkout, t);
 
   const unopt = compile(entry, path.join(dir, "unopt.mjs"), ["--bundle"], dir);
   if (!unopt.ok) {
@@ -337,29 +785,35 @@ function measure(t) {
   // The part of the gap that is not explained by the extra pass.
   const adjusted = secondPass === null ? null : delta + secondPass;
 
+  const driverSrc = driverFor(t);
   const row = {
     name: t.name,
-    status: t.driver ? "measured" : "size-only",
+    status: driverSrc ? "measured" : "size-only",
     why: t.sizeOnlyWhy,
     files,
     unopt: unopt.size,
     aware: aware.size,
     blind: blind.size,
     delta,
+    awareGz: gzipBytes(path.join(dir, "aware.mjs")),
+    blindGz: gzipBytes(path.join(dir, "blind.mjs")),
     secondPass,
     adjusted,
     seconds: aware.seconds,
   };
 
-  if (t.driver) {
-    const driverSrc = path.join(FIXTURES, t.driver);
-    const ref = observe(dir, driverSrc, "unopt");
+  const installed = installDeps(execDir(dir), t.deps);
+  if (driverSrc && !installed.ok) {
+    row.status = "size-only";
+    row.why = installed.why;
+  } else if (driverSrc) {
+    const ref = observe(dir, driverSrc, "unopt", t);
     if (!ref.ok) {
       row.status = "size-only";
       row.why = `unoptimized bundle does not run: ${ref.why}`;
     } else {
       for (const leg of ["aware", "blind"]) {
-        const got = observe(dir, driverSrc, leg);
+        const got = observe(dir, driverSrc, leg, t);
         if (!got.ok) {
           row.status = "broken";
           row.why = `${leg} does not run: ${got.why}`;
@@ -369,13 +823,15 @@ function measure(t) {
           fs.writeFileSync(path.join(dir, `${leg}.observed`), got.out);
           fs.writeFileSync(path.join(dir, "reference.observed"), ref.out);
           row.status = "broken";
-          row.why = `${leg} observations differ (see _build/type-aware/${t.name}/{reference,${leg}}.observed)`;
+          row.why = `${leg} observations differ (see ${
+            path.relative(ROOT, dir)
+          }/{reference,${leg}}.observed)`;
           break;
         }
       }
     }
-    fs.rmSync(path.join(dir, "target.mjs"), { force: true });
-    fs.rmSync(path.join(dir, "driver.mjs"), { force: true });
+    fs.rmSync(path.join(execDir(dir), "target.mjs"), { force: true });
+    fs.rmSync(path.join(execDir(dir), "driver.mjs"), { force: true });
   }
 
   results.push(row);
@@ -387,6 +843,61 @@ function measure(t) {
 for (const t of CORPUS) {
   if (only && t.name !== only) continue;
   measure(t);
+}
+
+// ---------------------------------------------------------------------
+// Per-phase attribution (`--phases`)
+// ---------------------------------------------------------------------
+
+if (phases) {
+  console.log("\n  what each type-reading phase is worth\n");
+  console.log(
+    "  a positive number is bytes SAVED by the phase (the bundle grows when it is off)\n",
+  );
+  const header = ["target".padEnd(12), ...TYPE_READING_PHASES.map((p) => p.padStart(17))];
+  console.log("  " + header.join(""));
+  for (const t of CORPUS) {
+    if (only && t.name !== only) continue;
+    const row = results.find((r) => r.name === t.name);
+    if (!row || row.status === "blocked") continue;
+    // `resolveCheckout` rather than `WORK/<name>/<name>`: a `reuse`
+    // target lives under `_build/real-world/…`, and guessing the layout
+    // silently skipped hono and valibot from this table.
+    const { dir: checkout } = resolveCheckout(t);
+    if (!checkout) continue;
+    const dir = legDir(t);
+    fs.mkdirSync(dir, { recursive: true });
+    let entryRel = t.entry;
+    if (appMode) {
+      const staged = stageAppEntry(checkout, t);
+      if (!staged.ok) continue;
+      entryRel = staged.rel;
+    }
+    const entry = path.join(checkout, entryRel);
+    if (!fs.existsSync(entry)) continue;
+    const base = compile(entry, path.join(dir, "phase-base.mjs"), ["--bundle", ...OPT_FLAGS], dir);
+    if (!base.ok) {
+      console.log("  " + t.name.padEnd(12) + "  (baseline failed: " + base.why + ")");
+      continue;
+    }
+    const cells = [];
+    for (const ph of TYPE_READING_PHASES) {
+      const off = compile(
+        entry,
+        path.join(dir, "phase-off.mjs"),
+        ["--bundle", ...OPT_FLAGS, "--disable-phase", ph],
+        dir,
+      );
+      cells.push(off.ok ? bytes(off.size - base.size).padStart(17) : "—".padStart(17));
+    }
+    console.log("  " + t.name.padEnd(12) + cells.join(""));
+    if (!keep) {
+      for (const f of ["phase-base.mjs", "phase-off.mjs"]) {
+        fs.rmSync(path.join(dir, f), { force: true });
+      }
+    }
+  }
+  console.log("");
 }
 
 // ---------------------------------------------------------------------
@@ -405,22 +916,30 @@ function verdictOf(row) {
 }
 
 console.log("\ntype-aware minify measurement");
-console.log("  optimizing TypeScript SOURCE vs the same code with types erased\n");
+console.log("  optimizing TypeScript SOURCE vs the same code with types erased");
+console.log(
+  appMode
+    ? "  entry: an APPLICATION that consumes each library (`--app`)\n"
+    : "  entry: each library's PACKAGE entry — `--app` measures an application instead\n",
+);
 
 const pad = (s, n) => String(s).padEnd(n);
 const padl = (s, n) => String(s).padStart(n);
 
 console.log(
-  `  ${pad("target", 12)} ${padl("files", 5)} ${padl("unopt", 10)} ${padl("aware", 9)} ${padl("blind", 9)} ${padl("delta", 8)} ${padl("of aware", 9)}  verdict`,
+  `  ${pad("target", 12)} ${padl("files", 5)} ${padl("unopt", 10)} ${padl("aware", 9)} ${padl("blind", 9)} ${padl("delta", 8)} ${padl("of aware", 9)} ${padl("gz delta", 9)}  verdict`,
 );
 for (const row of results) {
   if (row.status === "blocked" || row.status === "skip") {
-    console.log(`  ${pad(row.name, 12)} ${padl("-", 5)} ${padl("-", 10)} ${padl("-", 9)} ${padl("-", 9)} ${padl("-", 8)} ${padl("-", 9)}  ${row.status === "skip" ? "SKIP" : "BLOCKED"}`);
+    console.log(`  ${pad(row.name, 12)} ${padl("-", 5)} ${padl("-", 10)} ${padl("-", 9)} ${padl("-", 9)} ${padl("-", 8)} ${padl("-", 9)} ${padl("-", 9)}  ${row.status === "skip" ? "SKIP" : "BLOCKED"}`);
     continue;
   }
+  const gzDelta =
+    row.awareGz != null && row.blindGz != null ? row.blindGz - row.awareGz : null;
   console.log(
     `  ${pad(row.name, 12)} ${padl(row.files, 5)} ${padl(bytes(row.unopt), 10)} ${padl(bytes(row.aware), 9)} ${padl(bytes(row.blind), 9)} ` +
-      `${padl((row.delta > 0 ? "+" : "") + bytes(row.delta), 8)} ${padl(pct(row.delta, row.aware), 9)}  ${verdictOf(row)}`,
+      `${padl((row.delta > 0 ? "+" : "") + bytes(row.delta), 8)} ${padl(pct(row.delta, row.aware), 9)} ` +
+      `${padl(gzDelta == null ? "-" : (gzDelta > 0 ? "+" : "") + bytes(gzDelta), 9)}  ${verdictOf(row)}`,
   );
 }
 
@@ -473,8 +992,29 @@ for (const row of results) {
 
 if (update) {
   fs.mkdirSync(FIXTURES, { recursive: true });
-  fs.writeFileSync(EXPECTED, JSON.stringify(snapshot, null, 2) + "\n");
-  console.log(`  recorded ${path.relative(ROOT, EXPECTED)}\n`);
+  // MERGE, never replace.
+  //
+  // `--only X --update` used to write a file containing X and nothing
+  // else, silently deleting the nine recorded rows that are the entire
+  // point of the baseline. A regression check whose baseline the
+  // convenience flag can erase is not a regression check, and nothing
+  // would have said so until the next full run reported "no recorded
+  // measurement" for everything.
+  //
+  // With `--only`, rows for other targets are carried over untouched.
+  // Without it, every target ran, so there is nothing to carry.
+  const prior =
+    only && fs.existsSync(EXPECTED)
+      ? JSON.parse(fs.readFileSync(EXPECTED, "utf8"))
+      : {};
+  const merged = { ...prior, ...snapshot };
+  fs.writeFileSync(EXPECTED, JSON.stringify(merged, null, 2) + "\n");
+  const kept = Object.keys(merged).length - Object.keys(snapshot).length;
+  console.log(
+    `  recorded ${path.relative(ROOT, EXPECTED)}` +
+      (kept > 0 ? ` (${Object.keys(snapshot).length} updated, ${kept} carried over)` : "") +
+      "\n",
+  );
   process.exit(0);
 }
 

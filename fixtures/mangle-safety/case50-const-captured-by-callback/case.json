@@ -1,0 +1,19 @@
+{
+  "origin": "ts.mbt — found while chasing why class-method DCE is SUPPRESSED on every type-aware corpus target",
+  "what": "`numeric_vars` and `container_vars` both skipped any binding marked `captured_by_closure`, with the stated reason that a nested function could write an arbitrary value into it. That premise is false for a `const`: modules are strict, so an assignment throws rather than landing a non-numeric value, and the set of values the binding can hold is exactly its defs — which the walk already checks. Until it was exempted, the commonest array idiom in JavaScript, `arr.map((v, i) => arr[i])`, left `arr` unprovable as a keyed container AND `i` unprovable as numeric, and since the class-method-DCE suppression is a bundle-wide wildcard, one such read kept every method of every class. A `for` counter, a `while` counter, a `for…of` binding and an annotated parameter were all already proven — the difference was capture, not the shape of the index. This case pins the behaviour that has to hold once the pass is allowed to delete: a method called only through a callback survives, one called only through an unfoldable computed key survives, and `toJSON` survives because `JSON.stringify` invokes it by a name nothing in the bundle spells. Note on `expectKeep`: `area` is deliberately not listed. It is called only from inside the bundle, so the mangler may rename it — the corpus's mutation self-check catches that mistake, and it did. What has to hold for `area` is that it still RUNS, which the behavioural comparison covers. `perimeter` and `toJSON` are different: one is reached through a string the bundle cannot fold and the other through a protocol, so renaming either is observable.",
+  "mtscArgs": [
+    "--treeshake",
+    "--fold"
+  ],
+  "exports": [
+    "areaList",
+    "dynamicResult",
+    "json",
+    "total"
+  ],
+  "expectKeep": [
+    "perimeter",
+    "toJSON"
+  ],
+  "expectStatus": "pass"
+}

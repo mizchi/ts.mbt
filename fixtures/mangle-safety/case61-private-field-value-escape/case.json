@@ -1,0 +1,12 @@
+{
+  "origin": "ts.mbt — #73, split out of case60 because the two holes mask each other",
+  "what": "`surface_escape_class` put the value escape INSIDE the `is_internal_marker_prop` filter. That filter answers \"may this NAME be reserved\" — no, because no consumer can spell `__private_brand__0__slot` — and says nothing about the value, which is an ordinary object that leaves with the instance. So `mtsc entry.ts --bundle` with no optimization flag deleted the payload's method, while the identical class with a PUBLIC field was fine; the top-level `prop_assigns` loop sixty lines above had the escape on the correct side. Kept separate from case60: there the unindexed write spellings leave `this.slot` unresolvable, which widens to `this` and escapes every this-write including the private one, so neither hole could be attributed. The payload is handed out through a consumer-supplied callback because a getter returning the field widens to `this` and masks the hole the same way.",
+  "exports": [
+    "PrivateHolder",
+    "priv"
+  ],
+  "expectKeep": [
+    "readPrivate"
+  ],
+  "expectStatus": "pass"
+}

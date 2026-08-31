@@ -64,11 +64,68 @@
 // syntactic access set says "unused" and the method would be
 // deleted. `keep` carries the names the export-surface analysis
 // found reachable from the entry's exports; they are never dropped.
+//
+// EVERY question this pass asks is bundle-wide, and the word matters.
+// `scope` exists because one caller rewrites a bundle ONE MODULE AT A
+// TIME, and passing that module as `block` silently reinterpreted
+// "bundle" as "this module": a class in `state.ts` whose methods are
+// called from `shape.ts` had every one of them deleted, because
+// nothing in `state.ts` accessed them by name and the reflection sinks
+// that would have gated the pass were all in other modules. The
+// resulting bundle called `laserPointer.addPoint(…)` on an object with
+// no `addPoint`.
+//
+// So: `block` is what gets REWRITTEN, `scope` is what gets ANALYSED.
+//
+// The export surface is only HALF of "the bundle's own consumer", and
+// for an application bundle it is the half that does not apply. A class
+// whose constructor or instance is handed to a function this bundle
+// does not own has left: whoever received it can call anything on it,
+// and no amount of scanning our own source will predict which name.
+//
+//     class C { m() {} }
+//     console.log(new C());
+//
+// deleted `m` under plain `mtsc entry.ts --bundle`, no optimization
+// flag. And the general form is not a corner case: `JSON.stringify`
+// calls `toJSON`, `String(x)` calls `toString`, `await x` calls `then`
+// — protocol methods every library defines and none of them calls
+// itself, so the syntactic access set says "unused" about all of them.
+//
+// `off_bundle` is the answer, from
+// `class_members_reachable_off_bundle`. It has NO default, and that is
+// deliberate: `scope` above shows what an innocent-looking default
+// costs, so a caller that cannot supply it gets a pass that declines to
+// run rather than one that quietly deletes reachable methods.
+//
+// It arrives as a THUNK rather than a value, and that is a performance
+// fact rather than a design preference. Computing it is a full
+// observability analysis — 1,270 ms of the 7,679 ms mtsc spends on the
+// 9 MB TypeScript compiler, 16.5% — and on that bundle the pass is
+// BLOCKED by the sniff scan below, so the answer was thrown away
+// unused: byte-identical output with the phase disabled entirely. The
+// thunk is forced only where the result is actually read, which is
+// after `blocked` is known. `None` still means "the caller cannot
+// answer", so the fail-closed property is unchanged: the presence check
+// happens up front, the work does not.
+//
+// It is NOT the property mangler's reserved set. That set answers "may
+// this NAME be renamed" and is right to be broader; deletion is the
+// stronger claim and needs the narrower fact. See
+// `class_members_reachable_off_bundle`.
 
 ///|
 pub fn class_method_dce_block(
   block : @ast.TsBlock,
+  // Members something outside the bundle can invoke, from
+  // `class_members_reachable_off_bundle`, as a THUNK. `None` means the
+  // caller cannot answer and the pass does nothing; `Some(f)` is forced
+  // only if the result is read — see the note above.
+  off_bundle : (() -> Array[String])?,
   keep? : Map[String, Bool] = {},
+  // The whole bundle, when `block` is one module of it. Defaults to
+  // `block`, which is right for a caller that hands over everything.
+  scope? : @ast.TsBlock? = None,
   // `(field name, declared type)` for every runtime class in the
   // bundle. Needed because the class lowering drops the annotation —
   // a field with an initializer becomes a constructor assignment, so
@@ -82,7 +139,40 @@ pub fn class_method_dce_block(
   // gate the pass.
   type_aliases? : Array[@ast.TsTypeAlias] = [],
   explain? : Array[String]? = None,
+  // Reflection the scan met, deduplicated with a count, for the
+  // compiler to warn about. Unlike `explain` this is not a debugging
+  // aid: `Reflect.ownKeys` in one file keeps every method of every
+  // class in the bundle, and the author is the only one who can do
+  // something about it, so they should not have to pass a flag to
+  // find out. Filled whether or not the pass ends up blocked — a
+  // reflection sink that co-occurs with an unprovable computed key is
+  // still a reflection sink the author would want to know about.
+  reflection? : Array[String]? = None,
+  // Sub-phase attribution. This pass is 18% of the compile on the 9 MB
+  // TypeScript bundle and was one opaque number; the internal steps
+  // have very different costs and only a measurement says which.
+  // Defaults to disabled, so it costs one branch per step.
+  timer? : PhaseTimer = PhaseTimer::disabled(),
 ) -> @ast.TsBlock {
+  // 0. The off-bundle question, before anything else. An unanswered one
+  //    means no method may be dropped. Only the PRESENCE of an answer is
+  //    checked here — forcing it is deferred to the one place that reads
+  //    it, below, because on a bundle where the sniff scan blocks the
+  //    pass the answer is never needed and computing it is 16.5% of the
+  //    compile.
+  let off_bundle_fn = match off_bundle {
+    None => {
+      match explain {
+        Some(out) =>
+          out.push(
+            "declined — the caller supplied no off-bundle reachability, so nothing outside could be ruled out.",
+          )
+        None => ()
+      }
+      return block
+    }
+    Some(f) => f
+  }
   // 1. Cheap exit when neither shape of class is present: no
   //    NativeClassStmt/Expr AND no IIFE-lowered class. (The IIFE
   //    pattern is `let X = function () { … return X; }();`.)
@@ -94,33 +184,93 @@ pub fn class_method_dce_block(
     }
     return block
   }
+  // Everything from here to the rewrite reads `analysed`, never
+  // `block`. The two differ only for the per-module caller.
+  let (analysed, iife_classes_in_scope) = match scope {
+    Some(b) => (b, collect_iife_class_names(b))
+    None => (block, iife_classes)
+  }
+  // 1b. Cheap "nothing to do" exit, BEFORE the expensive analysis.
+  //
+  //     `accessed` starts from two sets that are cheap and are both
+  //     SUBSETS of the real one: property names read statically
+  //     anywhere in the bundle, and the export surface. If no declared
+  //     method is missing from those, then no method can be dropped
+  //     however the expensive analysis turns out — adding names to
+  //     `accessed` can only shrink the unreached set further.
+  //
+  //     It is worth the check because of the cost ratio. On the 9 MB
+  //     TypeScript bundle the static-access walk is 31 ms and the
+  //     symbol graph plus numeric inference below are 711 ms of the
+  //     1,136 ms this pass spends. Both of those exist only to decide
+  //     whether a COMPUTED key could name a method, which is a question
+  //     about whether a drop is SAFE — and there is no point asking it
+  //     when there is nothing to drop.
+  //
+  //     `--explain-mangle` loses the sink ranking on such a bundle, and
+  //     that is the right trade: the ranking explains why a drop was
+  //     refused, and here nothing was going to be dropped. The note
+  //     below says so.
+  let accessed : Map[String, Bool] = {}
+  timer.phase("dce: static accesses", () => {
+    collect_static_accesses_block_skipping_iife(
+      analysed, iife_classes_in_scope, accessed,
+    )
+  })
+  for name in keep.keys() {
+    accessed[name] = true
+  }
+  if unreached_class_methods(block, accessed).is_empty() {
+    match explain {
+      Some(out) =>
+        out.push(
+          "nothing to do — every declared method is read somewhere static or is on the export surface, so the reachability analysis was skipped.",
+        )
+      None => ()
+    }
+    return block
+  }
   // 2. Bundle-wide reflection / dynamic-access scan. Any hit aborts.
   //    The two name sets are what let the scan tell a harmless
   //    dynamic read from a fatal one: `arr[i]` reads an integer
   //    slot, `map[k]` reads an entry of a keyed container, and
   //    `obj[k]` on anything else could name any member at all.
-  let graph = build_symbol_graph(block, {})
-  let class_names = declared_class_names(block)
+  let graph = timer.phase("dce: symbol graph", () => {
+    build_symbol_graph(analysed, {})
+  })
+  let class_names = declared_class_names(analysed)
   let alias_bodies : Map[String, @ast.TsType] = {}
   for ta in type_aliases {
     alias_bodies[ta.name] = ta.type_
   }
-  let container_facts = {
-    class_names,
-    this_fields: class_field_containers(
-      block, class_fields, class_names, alias_bodies,
-    ),
-    strings: string_name_set(graph),
-    aliases: alias_bodies,
-  }
+  let container_facts = timer.phase("dce: container facts", () => {
+    (
+      {
+        class_names,
+        this_fields: class_field_containers(
+          analysed, class_fields, class_names, alias_bodies,
+        ),
+        strings: string_name_set(graph),
+        aliases: alias_bodies,
+      } : ContainerFacts)
+  })
+  let numeric_syms = timer.phase("dce: numeric inference", () => {
+    infer_numeric_symbols(graph)
+  })
   let facts = {
-    numeric: numeric_name_set(graph, infer_numeric_symbols(graph)),
+    numeric: numeric_name_set(graph, numeric_syms),
+    numeric_census: if explain is Some(_) {
+      numeric_name_census(graph, numeric_syms)
+    } else {
+      {}
+    },
     keyed_containers: container_name_set(
       graph,
       infer_container_symbols(graph, container_facts),
     ),
     this_fields: container_facts.this_fields,
     reasons: [],
+    reflection: [],
   }
   // Deliberately not `block_has_method_sniff`, which stops at the
   // first sink: scanning every top-level statement collects a
@@ -128,21 +278,35 @@ pub fn class_method_dce_block(
   // report can rank the blocking patterns. The scan still
   // short-circuits inside a statement.
   let mut blocked = false
-  for s in block.stmts {
-    if stmt_has_method_sniff(s, facts) {
-      blocked = true
+  timer.phase("dce: sniff scan", () => {
+    for s in analysed.stmts {
+      if stmt_has_method_sniff(s, facts) {
+        blocked = true
+      }
     }
-  }
+  })
   // 3. Collect the set of statically-accessed property names. Any
   //    `e.NAME` or `e["NAME"]` adds NAME, except names assigned
   //    inside an IIFE class body as `ClassName.prototype.NAME = …`
   //    — those are definitions, not uses, and counting them would
   //    defeat the DCE on the IIFE-lowered form.
-  let accessed : Map[String, Bool] = {}
-  collect_static_accesses_block_skipping_iife(block, iife_classes, accessed)
-  // Externally visible members count as accesses.
-  for name in keep.keys() {
-    accessed[name] = true
+  // Externally visible members count as accesses — both halves of
+  // "externally visible": the export surface, which a library consumer
+  // calls by name (folded in above, before the early exit), and
+  // off-bundle reachability, which is an application handing a class
+  // value to somebody who can call anything on it.
+  // Forced here, and only when something downstream reads it: the
+  // rewrite (which does not run when `blocked`), the `--explain-mangle`
+  // report, or the reflection warning's cost line — and that last one
+  // is itself gated on the scan having met reflection.
+  let reflection_cost_wanted = match reflection {
+    Some(_) => blocked && facts.reflection.length() > 0
+    None => false
+  }
+  if !blocked || explain is Some(_) || reflection_cost_wanted {
+    for name in off_bundle_fn() {
+      accessed[name] = true
+    }
   }
   // 3b. Own-enumerable enumeration downgrade. `Object.keys(x)` and
   //     friends cannot see a native class's prototype methods (they
@@ -162,6 +326,46 @@ pub fn class_method_dce_block(
   //    `accessed` set the rewrite uses, whether or not the scan
   //    cleared — so when the pass is off the report still says what
   //    it would have cost.
+  // 4b. Reflection worth telling the author about. Gated on the pass
+  //     having been BLOCKED and on the block actually costing
+  //     something: reflection in a bundle whose every method is
+  //     reachable anyway cost nothing, and a warning that names a loss
+  //     that did not happen is a warning people learn to ignore.
+  match reflection {
+    Some(out) =>
+      if blocked && facts.reflection.length() > 0 {
+        let unreached = unreached_class_methods(block, accessed)
+        if unreached.length() > 0 {
+          // Deduplicated with a count. The scan short-circuits inside a
+          // statement, so the count is a lower bound on the occurrences
+          // rather than an exact tally — enough to rank them, not
+          // enough to quote as a total.
+          let seen : Map[String, Int] = {}
+          let order : Array[String] = []
+          for r in facts.reflection {
+            if !seen.contains(r) {
+              order.push(r)
+            }
+            seen[r] = seen.get(r).unwrap_or(0) + 1
+          }
+          for r in order {
+            let n = seen.get(r).unwrap_or(0)
+            out.push(if n > 1 { "\{r} (x\{n} or more)" } else { r })
+          }
+          // Only the whole-bundle caller can quote a total. The
+          // per-module path (`scope` supplied) sees one file's methods
+          // per call, so it reports the constructs and leaves the
+          // arithmetic alone rather than emitting one partial total per
+          // module.
+          if scope is None {
+            out.push(
+              "cost: \{unreached.length()} unreached method(s) kept, including `\{unreached[0]}`",
+            )
+          }
+        }
+      }
+    None => ()
+  }
   match explain {
     Some(out) => report_method_dce(block, accessed, facts, blocked, out)
     None => ()
@@ -224,16 +428,15 @@ fn rank_sink_reasons(reasons : Array[String]) -> Array[String] {
 }
 
 ///|
-/// Fill `out` with the `--explain-mangle` section for this pass:
-/// which methods went (or would have gone), and — when the scan
-/// found a sink — the construct that turned the pass off.
-fn report_method_dce(
+/// `Class.method` for every declared method nothing in the bundle
+/// accesses by name — what the pass drops, or what a sink cost. One
+/// definition, read by the `--explain-mangle` report and by the
+/// reflection warning: the warning claims a COST, and a cost computed
+/// separately from the report is a cost that can disagree with it.
+fn unreached_class_methods(
   block : @ast.TsBlock,
   accessed : Map[String, Bool],
-  facts : SniffFacts,
-  blocked : Bool,
-  out : Array[String],
-) -> Unit {
+) -> Array[String] {
   let unreached : Array[String] = []
   for s in block.stmts {
     match s {
@@ -246,6 +449,21 @@ fn report_method_dce(
       _ => ()
     }
   }
+  unreached
+}
+
+///|
+/// Fill `out` with the `--explain-mangle` section for this pass:
+/// which methods went (or would have gone), and — when the scan
+/// found a sink — the construct that turned the pass off.
+fn report_method_dce(
+  block : @ast.TsBlock,
+  accessed : Map[String, Bool],
+  facts : SniffFacts,
+  blocked : Bool,
+  out : Array[String],
+) -> Unit {
+  let unreached = unreached_class_methods(block, accessed)
   if blocked {
     out.push(
       "SUPPRESSED — a sink in the bundle can observe a member name the " +
@@ -286,6 +504,13 @@ fn report_method_dce(
 struct SniffFacts {
   /// Bindings that provably hold a number (`numeric_vars.mbt`).
   numeric : Map[String, Bool]
+  /// `name -> (bindings carrying it, how many are provably numeric)`.
+  /// Diagnostic only. `numeric` above is all-or-nothing per name, which
+  /// is sound and, on a bundle of any size, the thing that actually
+  /// blocks this pass: one unprovable `i` anywhere disqualifies every
+  /// `arr[i]`. The census says how close the name came, which separates
+  /// "one polluting declaration" from "genuinely ambiguous".
+  numeric_census : Map[String, (Int, Int)]
   /// Bindings whose declared type is a keyed container rather than an
   /// object with members — an array, a tuple, a string, a `Record`.
   keyed_containers : Map[String, Bool]
@@ -299,6 +524,15 @@ struct SniffFacts {
   /// itself, which is why the explanation cannot drift from the
   /// decision.
   reasons : Array[String]
+  /// The subset of `reasons` that is REFLECTION: a construct that
+  /// names or enumerates properties the compiler can never spell out,
+  /// so no amount of type information or analysis will ever clear it.
+  /// Separate because the two subsets want opposite responses — an
+  /// unprovable computed key is the compiler's problem to improve,
+  /// while `Reflect.ownKeys` is a fact about the source that only the
+  /// author can change. This one is worth telling the author about,
+  /// and the other is not.
+  reflection : Array[String]
 }
 
 ///|
@@ -337,6 +571,22 @@ fn describe_index_operand(e : @ast.TsExpr) -> String {
       describe_index_operand(inner) + "[" + describe_index_operand(k) + "]"
     NonNull(inner) | OptionalChain(inner) => describe_index_operand(inner)
     _ => "…"
+  }
+}
+
+///|
+/// When the key is a bare name, how many of the bundle's bindings by
+/// that name are provably numeric. `40 of 41` says the name is one bad
+/// declaration away from clearing the gate; `2 of 30` says it is not.
+fn index_name_census_note(idx : @ast.TsExpr, facts : SniffFacts) -> String {
+  match idx {
+    Var(n) =>
+      match facts.numeric_census.get(n) {
+        Some((total, ok)) if total > 0 && ok < total =>
+          " (\{ok} of \{total} bindings named `\{n}` are provably numeric)"
+        _ => ""
+      }
+    _ => ""
   }
 }
 
@@ -754,6 +1004,7 @@ fn expr_has_native_class(expr : @ast.TsExpr) -> Bool {
     | NonNull(inner)
     | OptionalChain(inner)
     | PureCall(inner)
+    | TypeArgs(_, inner)
     | YieldStar(inner) => expr_has_native_class(inner)
     Cond(c, t, e) =>
       expr_has_native_class(c) ||
@@ -988,6 +1239,7 @@ fn expr_has_method_sniff(expr : @ast.TsExpr, facts : SniffFacts) -> Bool {
     MethodCall(@ast.TsExpr::Var(recv), m, args) => {
       let recv_is_reflective = recv == "Object" || recv == "Reflect"
       if recv_is_reflective && method_sniff_methods.contains(m) {
+        facts.reflection.push("`\{recv}.\{m}(...)`")
         facts.reasons.push(
           "`" +
           recv +
@@ -1039,7 +1291,8 @@ fn expr_has_method_sniff(expr : @ast.TsExpr, facts : SniffFacts) -> Bool {
           describe_index_read(recv, idx) +
           "` reads a member under a computed key that is neither " +
           "provably numeric nor an entry of a keyed container, so any " +
-          "method could be the one it names",
+          "method could be the one it names" +
+          index_name_census_note(idx, facts),
         )
         return true
       }
@@ -1059,6 +1312,7 @@ fn expr_has_method_sniff(expr : @ast.TsExpr, facts : SniffFacts) -> Bool {
       // through — be conservative when seeing them by name.
       if name == "Object" || name == "Reflect" {
         // `Object(x)` / `Reflect(x)` — let's just play safe.
+        facts.reflection.push("a bare `\{name}(...)` call")
         facts.reasons.push(
           "a bare `" + name + "(...)` call, which could be any reflection op",
         )
@@ -1108,6 +1362,7 @@ fn expr_has_method_sniff(expr : @ast.TsExpr, facts : SniffFacts) -> Bool {
     | NonNull(inner)
     | OptionalChain(inner)
     | PureCall(inner)
+    | TypeArgs(_, inner)
     | YieldStar(inner) => expr_has_method_sniff(inner, facts)
     Cond(c, t, e) =>
       expr_has_method_sniff(c, facts) ||
@@ -1379,6 +1634,7 @@ fn collect_static_accesses_expr(
     | NonNull(inner)
     | OptionalChain(inner)
     | PureCall(inner)
+    | TypeArgs(_, inner)
     | YieldStar(inner) => collect_static_accesses_expr(inner, out)
     Cond(c, t, e) => {
       collect_static_accesses_expr(c, out)
@@ -1839,6 +2095,7 @@ fn dce_expr(expr : @ast.TsExpr, accessed : Map[String, Bool]) -> @ast.TsExpr {
     NonNull(inner) => NonNull(dce_expr(inner, accessed))
     OptionalChain(inner) => OptionalChain(dce_expr(inner, accessed))
     PureCall(inner) => PureCall(dce_expr(inner, accessed))
+    TypeArgs(tys, inner) => TypeArgs(tys, dce_expr(inner, accessed))
     _ => expr
   }
 }

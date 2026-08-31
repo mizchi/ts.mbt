@@ -106,3 +106,140 @@ test "emit: an arrow body that cannot start with `{` gets no parens" {
     }
   }
 }
+
+///|
+test "emit: a binary operator never merges with its right operand's leader" {
+  // Token adjacency, which is a SyntaxError rather than a wrong value.
+  // Two ways this was broken, both found by `just fuzz-mangle` in
+  // consecutive runs:
+  //
+  //   * `expr_leading_byte` answered `'0'` for a NEGATIVE numeric
+  //     literal, so `x - -3` emitted `x--3` — a decrement. `--fold` is
+  //     what makes it reachable: it turns `UnaryOp(Neg, IntLit(3))`,
+  //     which was reported correctly, into `IntLit(-3)`.
+  //   * consolidating the separator rule onto `expr_leading_byte`
+  //     dropped the `PreInc` / `PreDec` rows the old duplicate table
+  //     had, so `c + ++a` emitted `c+++a` — `c++ + a`.
+  //
+  // Every shape, so a third round has somewhere to fail.
+  // The invariant is that the MERGED token never appears — not that a
+  // particular spelling does. `c + +3` legitimately folds to `c+3`,
+  // because unary `+` on a positive literal is identity and `c+3` is
+  // fine; asserting a `+ +3` spelling would be over-specification that
+  // fights the folder.
+  let cases = [
+    "c + ++a", "c - --a", "c + +a", "c - -a", "c - -3", "c + +3", "c - -0", "c - -1.5",
+    "c - -a - -b",
+  ]
+  for expr in cases {
+    let src = "const r = \{expr};"
+    let block = @parser.parse_block_from_source(src)
+    let folded = fold_block(block)
+    let e = Emitter::new(pretty=false)
+    emit_block(e, folded)
+    let out = e.to_string()
+    assert_false(out.contains("c++"), msg="`\{expr}` produced `c++`: \{out}")
+    assert_false(out.contains("c--"), msg="`\{expr}` produced `c--`: \{out}")
+    assert_false(out.contains("a++"), msg="`\{expr}` produced `a++`: \{out}")
+    assert_false(out.contains("a--"), msg="`\{expr}` produced `a--`: \{out}")
+  }
+}
+
+///|
+test "emit: a postfix operand needs no separator" {
+  // The other direction — `x++` emits the OPERAND first, so its leading
+  // byte is the operand's and no space is owed. Over-separating is only
+  // bytes, but the rule should still say the right thing.
+  for src in ["const r = c + a++;", "const r = c - a--;"] {
+    let block = @parser.parse_block_from_source(src)
+    let e = Emitter::new(pretty=false)
+    emit_block(e, fold_block(block))
+    let out = e.to_string()
+    assert_false(out.contains("+ a++"), msg="expected no space, got: \{out}")
+    assert_false(out.contains("- a--"), msg="expected no space, got: \{out}")
+  }
+}
+
+// ---------------------------------------------------------------
+// A `void` initializer whose operand does something
+// ---------------------------------------------------------------
+//
+// `let x;` initialises to `undefined`, so `let x = void 0` may drop its
+// initializer in minify mode. `void EXPR` is undefined whatever `EXPR`
+// is — which makes the VALUE inert and says nothing about the operand.
+// `let unused = void trace.push(1)` emitted as `let unused;` and the
+// `push` never ran, under plain `--minify`.
+//
+// Three copies of the decision existed: `omit_declaration_init` and two
+// inline duplicates in the merged-declarator paths. All three had the
+// bug; fixing the helper alone left the merged paths wrong, which is
+// what `--treeshake --minify` reached.
+
+///|
+test "emit: a void initializer with an effectful operand is kept" {
+  let single = emit_min_one("let unused = void sink(1);\n")
+  assert_true(single.contains("sink(1)"), msg="dropped the operand: \{single}")
+  // The merged-declarator path is a different writer, and it had its
+  // own copy. Two declarations in a row is what triggers the merge.
+  let merged = emit_min_one("let a = void sink(1);\nlet b = void sink(2);\n")
+  assert_true(
+    merged.contains("sink(1)") && merged.contains("sink(2)"),
+    msg="the merged writer dropped an operand: \{merged}",
+  )
+}
+
+///|
+test "emit: a void initializer with a pure operand is still dropped" {
+  // The other half — the byte saving has to survive the fix.
+  let single = emit_min_one("let a = void 0;\n")
+  assert_false(single.contains("void"), msg="lost the saving: \{single}")
+  let merged = emit_min_one("let a = void 0;\nlet b = void 0;\n")
+  assert_false(merged.contains("void"), msg="lost the saving: \{merged}")
+}
+
+// ---------------------------------------------------------------
+// The no-initializer marker must never reach the output
+// ---------------------------------------------------------------
+//
+// `Var("__ts_no_init__")` is what the parser synthesises for `let x;` /
+// `var x;` so the checker can tell "no initializer" from "assigned
+// undefined". It is not an expression: nothing declares that name, so
+// emitting it is a `ReferenceError` the moment the line runs.
+//
+// `omit_declaration_init` drops it, and every declaration emit calls
+// that — except the one inside a `for` head, which wrote `= <init>`
+// unconditionally. So `for (var u; l < n.length; l++)`, ordinary
+// JavaScript out of preact's own source, came out as
+// `for (var u = __ts_no_init__; …)` under plain `mtsc --bundle`, with no
+// optimization flag and on input that never saw a type.
+
+///|
+test "emit: a for-head declaration with no initializer emits none" {
+  let pretty = fn(src : String) -> String raise {
+    let block = @parser.parse_block_from_source(src)
+    let e = Emitter::new(pretty=true)
+    for s in block.stmts {
+      emit_stmt(e, s)
+    }
+    e.to_string()
+  }
+  for
+    src in [
+      "for (var u; u < n; u++) { f(u); }\n", "for (let k; k < n; k++) { f(k); }\n",
+    ] {
+    let min = emit_min_one(src)
+    let pre = pretty(src)
+    assert_false(min.contains("__ts_no_init__"))
+    assert_false(pre.contains("__ts_no_init__"))
+    // The binding still has to be there — the fix is dropping the
+    // initializer, not the declaration.
+    assert_true(min.contains("var u;") || min.contains("let k;"))
+  }
+  // A real initializer in a for head is untouched.
+  let kept = emit_min_one("for (let i = 0; i < n; i++) { f(i); }\n")
+  assert_true(kept.contains("let i=0"))
+  // `= undefined` in a for head is the OPTIMIZATION half of the same
+  // helper: dropped when minifying, kept when pretty-printing.
+  let undef = emit_min_one("for (let i = undefined; i < n; i++) { f(i); }\n")
+  assert_false(undef.contains("undefined"))
+}

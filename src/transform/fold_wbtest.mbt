@@ -968,49 +968,124 @@ test "fold: undefined ?? x folds to x (nullish LHS)" {
 }
 
 ///|
-test "fold: x ^ x → 0 (same-var XOR)" {
+// The bitwise identity / annihilator family, and the reason these six
+// tests read as the inverse of what they used to.
+//
+// Each of them named a rule from a minifier changelog ("AND with
+// all-bits-set is the identity") and asserted the rewrite on a BARE
+// VARIABLE — which is the one operand for which the rule is not true.
+// These operators coerce, and an identity rewrite hands the operand
+// back uncoerced, so with `n = "alpha"`:
+//
+//   n & -1   is 0     and folded to "alpha"
+//   n | n    is 0     and folded to "alpha"
+//   n - n    is NaN   and folded to 0
+//
+// and with `n = 5n`, `n ^ n` is `0n` while `n & 0` throws. The fuzzer
+// found the first of these through a `switch`: `switch ("alpha" & -1)`
+// selects `case 0`, and folding the scrutinee to `"alpha"` ran the
+// `default` instead. Each test now pins BOTH halves — no fold on an
+// operand of unknown type, and the fold still firing where the type is
+// established — so the fix cannot be mistaken for switching the rules
+// off.
+
+///|
+test "fold: x ^ x is NOT 0 for an operand of unknown type" {
+  // `"alpha" ^ "alpha"` is 0, but `5n ^ 5n` is `0n` and a Symbol
+  // throws, so the un-typed operand keeps its operator.
   let out = fold_one("const r = n ^ n;\n")
-  assert_true(out.contains("0"))
-  assert_false(out.contains("^"))
+  assert_true(out.contains("^"))
 }
 
 ///|
-test "fold: x - x → 0 (same-var subtraction)" {
+test "fold: x - x is NOT 0 for an operand of unknown type" {
+  // `"a" - "a"` is NaN, not 0.
   let out = fold_one("const r = n - n;\n")
-  assert_true(out.contains("0"))
-  assert_false(out.contains("- n"))
+  assert_true(out.contains("-"))
 }
 
 ///|
-test "fold: x | x → x (bitwise-OR idempotency)" {
+test "fold: x | x is NOT x for an operand of unknown type" {
   let out = fold_one("const r = n | n;\n")
-  assert_false(out.contains("|"))
+  assert_true(out.contains("|"))
 }
 
 ///|
-test "fold: x & x → x (bitwise-AND idempotency)" {
+test "fold: x & x is NOT x for an operand of unknown type" {
   let out = fold_one("const r = n & n;\n")
-  assert_false(out.contains("&"))
+  assert_true(out.contains("&"))
 }
 
 ///|
-test "fold: x & -1 → x (AND with all-bits identity)" {
+test "fold: x & -1 is NOT x for an operand of unknown type" {
   let out = fold_one("const r = n & -1;\n")
-  assert_false(out.contains("&"))
+  assert_true(out.contains("&"))
+  assert_true(out.contains("-1"))
+}
+
+///|
+test "fold: x & -1 → x when the operand is already an int32" {
+  // A bitwise result IS an int32, so `ToInt32` on it is the identity
+  // and the rule holds. This is the half that keeps the fix honest.
+  let out = fold_one("const r = (a | b) & -1;\n")
+  assert_true(out.contains("a | b"))
   assert_false(out.contains("-1"))
 }
 
 ///|
-test "fold: x | -1 → -1 (OR with all-bits annihilator, pure)" {
-  let out = fold_one("const r = n | -1;\n")
+test "fold: x | -1 → -1 for an operand ToNumber accepts" {
+  // The annihilator does not need the operand's value, only that
+  // coercing it yields a Number rather than a BigInt or a throw. A
+  // string literal qualifies.
+  let out = fold_one("const r = \"alpha\" | -1;\n")
   assert_false(out.contains("|"))
   assert_true(out.contains("-1"))
 }
 
 ///|
-test "fold: ~~x → x (double bitwise-NOT identity, pure)" {
+test "fold: x | -1 is NOT -1 for an operand of unknown type" {
+  // `5n | -1` throws; folding it to `-1` would swallow the TypeError.
+  let out = fold_one("const r = n | -1;\n")
+  assert_true(out.contains("|"))
+}
+
+///|
+/// `~~x` is NOT an identity — it is an int32 truncation. This test used
+/// to assert the opposite, and it sat directly below the `x | -1` test
+/// that gets the same question right: the earlier bitwise round fixed
+/// the BINARY operators and stopped at the unary ones, leaving a test
+/// that pinned the unsound rewrite in place. `~~1.5` is `1`,
+/// `~~"alpha"` is `0`, `~~true` is `1`.
+test "fold: ~~x is NOT x for an operand of unknown type" {
   let out = fold_one("const r = ~~n;\n")
+  assert_true(out.contains("~"))
+}
+
+///|
+/// The rewrite still fires where it is sound: a bitwise result is an
+/// int32 already, so the round trip through `~~` cannot change it.
+test "fold: ~~(x | 0) → x | 0, because that operand IS an int32" {
+  let out = fold_one("const r = ~~(n | 0);\n")
   assert_false(out.contains("~"))
+  assert_true(out.contains("|"))
+}
+
+///|
+/// `-(-x)` had the same defect: gated on purity, which says nothing
+/// about the ToNumeric each unary minus applies. The fuzzer found it at
+/// seed 480 in the export shape, as `- (- 'alpha')` folding to
+/// `'alpha'` where JS gives `NaN`.
+test "fold: -(-x) is NOT x for an operand of unknown type" {
+  let out = fold_one("const r = - (- n);\n")
+  assert_true(out.contains("-"))
+  assert_false(out.contains("const r = n"))
+}
+
+///|
+/// And it still fires on a number.
+test "fold: -(-x) → x when the operand is number-annotated" {
+  let out = fold_one("const r = - (- num);\n")
+  assert_true(out.contains("num"))
 }
 
 ///|
@@ -1065,10 +1140,19 @@ test "fold: if(c){x=e1}else{x=e2} lifts to x=c?e1:e2" {
 }
 
 ///|
-test "fold: x ** 0 folds to 1 for pure x" {
-  let out = fold_one("const y = x ** 0;\n")
+test "fold: x ** 0 folds to 1 for an operand ToNumber accepts" {
+  // Every Number — NaN and Infinity included — to the 0 power is 1.
+  let out = fold_one("const y = \"abc\" ** 0;\n")
   assert_true(out.contains("const y = 1;"))
   assert_false(out.contains("**"))
+}
+
+///|
+test "fold: x ** 0 is NOT 1 for an operand of unknown type" {
+  // `5n ** 0` and `Symbol() ** 0` both throw, and a minifier must not
+  // turn a TypeError into a value.
+  let out = fold_one("const y = x ** 0;\n")
+  assert_true(out.contains("**"))
 }
 
 ///|
@@ -1795,4 +1879,160 @@ test "fold: a pure truthy condition is still dropped entirely" {
   let out = fold_one("if (1) { sink(1); }\n")
   assert_false(out.contains("if"), msg="kept the if: \{out}")
   assert_true(out.contains("sink(1)"), msg="lost the branch: \{out}")
+}
+
+///|
+test "fold: an array-literal method fold bails on a spread element" {
+  // `[...array].reverse()` parses as a ONE-element `ArrayLit` whose
+  // element is a `Spread`. Reversing one element is a no-op, so the fold
+  // returned `[...array]` — remeda's `reverse` compiled to a shallow
+  // copy and `reverse([1, 2, 3])` gave `[1, 2, 3]`.
+  //
+  // The `is_pure_value` guard the fold already carried did not help: a
+  // spread of a variable IS pure, and purity was never the question.
+  // Position was. Every fold in `fold_array_method` reads `items`
+  // positionally, so the gate is one check for the whole family.
+  let block = @parser.parse_block_from_source(
+    "const r = [...arr].reverse(); const n = [...arr].length; const f = [...arr][0];",
+  )
+  let folded = fold_block(block)
+  let e = Emitter::new(pretty=false)
+  emit_block(e, folded)
+  let out = e.to_string()
+  assert_true(
+    out.contains("reverse"),
+    msg="reverse must survive a spread receiver, got: \{out}",
+  )
+  assert_true(
+    out.contains(".length"),
+    msg="length must survive a spread receiver, got: \{out}",
+  )
+  assert_false(
+    out.contains("=...arr") || out.contains("= ...arr"),
+    msg="an index fold must not emit a bare spread, got: \{out}",
+  )
+}
+
+///|
+test "fold: array-literal method folds still fire without a spread" {
+  // The gate must not turn the folds off wholesale — these are the cases
+  // they exist for.
+  let block = @parser.parse_block_from_source(
+    "const r = [1, 2, 3].reverse(); const n = [1, 2, 3].length; const f = [7, 8][1];",
+  )
+  let folded = fold_block(block)
+  let e = Emitter::new(pretty=false)
+  emit_block(e, folded)
+  let out = e.to_string()
+  assert_false(out.contains("reverse"), msg="expected folded, got: \{out}")
+  assert_false(out.contains(".length"), msg="expected folded, got: \{out}")
+  assert_true(out.contains("3,2,1"), msg="expected [3,2,1], got: \{out}")
+}
+
+///|
+test "fold: a condition whose value is known still runs" {
+  // `is_js_truthy` / `is_js_falsy` say what an expression COERCES to.
+  // Seven fold sites read that as "safe to discard", which is a
+  // different claim for exactly two shapes: an object or array literal
+  // is truthy whatever is inside it, and `void EXPR` is falsy whatever
+  // `EXPR` is. Both still have to be evaluated.
+  //
+  // `fold_stmt_into`'s `If` arm already guarded this and said so in a
+  // comment; the six siblings below did not, and a program exercising
+  // all seven lost seven of its eight calls under `--bundle --fold`.
+  //
+  // Reachable only with type-checking off — mtsc's own checker rejects
+  // a literal in condition, logical-operand and unary position — which
+  // is the published-`.js` path that `verify-real-world-minify` uses,
+  // and is why there is no corpus case: the corpus type-checks its
+  // sources. The fuzzer is the ongoing guard; this pins each site.
+  let cases = [
+    // (source, what must survive)
+    ("const r = { g: f() } ? 1 : 2;\n", "f()"),
+    ("const r = [f()] ? 1 : 2;\n", "f()"),
+    ("const r = (void f()) ? 1 : 2;\n", "f()"),
+    ("const r = !{ g: f() };\n", "f()"),
+    ("const r = { g: f() } && 0;\n", "f()"),
+    ("const r = (void f()) || 0;\n", "f()"),
+    ("const r = Boolean({ g: f() });\n", "f()"),
+    ("const r = Boolean(void f());\n", "f()"),
+    ("while (void f()) { g(); }\n", "f()"),
+    ("do { g(); } while (void f());\n", "f()"),
+    ("for (let i = 0; void f(); i++) { g(); }\n", "f()"),
+  ]
+  for c in cases {
+    let out = fold_one(c.0)
+    assert_true(
+      out.contains(c.1),
+      msg="dropped the condition's call\n      source: \{c.0}      folded: \{out}",
+    )
+  }
+}
+
+///|
+test "fold: a PURE condition whose value is known is still dropped" {
+  // The other half. The fix must not turn every proven condition into a
+  // kept expression, or the folds stop paying for themselves.
+  let ternary = fold_one("const r = { g: 1 } ? 1 : 2;\n")
+  assert_true(ternary.contains("const r = 1;"), msg="lost the fold: \{ternary}")
+  let logical = fold_one("const r = { g: 1 } && 7;\n")
+  assert_true(logical.contains("const r = 7;"), msg="lost the fold: \{logical}")
+  let negation = fold_one("const r = ![1];\n")
+  assert_true(negation.contains("false"), msg="lost the fold: \{negation}")
+  let dead_loop = fold_one("while (void 0) { g(); }\n")
+  assert_false(dead_loop.contains("g()"), msg="kept a dead loop: \{dead_loop}")
+}
+
+///|
+test "fold: `return void f()` keeps the call" {
+  // `void EXPR` is `undefined` whatever `EXPR` is — and `EXPR` still
+  // runs. The `Return` arm read the first half as licence to discard
+  // the second, so the whole function body vanished and `f` was then
+  // tree-shaken. The fuzzer found it through a recursive
+  // `return void f0(a, z)`: the recursion disappeared, the call-budget
+  // counter never ran down, and every call returned `undefined` where
+  // the source eventually returned `0`. Eighth site of this one rule.
+  let out = fold_one("function f() { return void g(); }\n")
+  assert_true(out.contains("g()"), msg="got: \{out}")
+}
+
+///|
+test "fold: `return void 0` still drops, the operand being pure" {
+  // The paired half — the fix must not be "stop folding `return void`".
+  let out = fold_one("function f() { return void 0; }\n")
+  assert_false(out.contains("void"), msg="got: \{out}")
+}
+
+///|
+test "fold: a property read is not free — a getter may be behind it" {
+  // `is_pure_value(PropAccess(recv, _))` was `is_pure_value(recv)`:
+  // pure whenever the RECEIVER was, which is a statement about
+  // evaluating `recv`, not about reading a property off it. Reading an
+  // accessor runs its body, and four different rules dropped it — a
+  // discarded expression statement, `void EXPR`, the left of a
+  // discarded comma, and the array-literal `.length` fold.
+  //
+  // `h.p` with `h` a plain variable is the shape that mattered;
+  // `new C().p` never was, because `is_pure_value(New(...))` is false
+  // and the read was impure by way of its receiver. That is also why
+  // the fuzz generator could not reach the bug: it only spelled the
+  // `new` form.
+  for
+    src in [
+      "h.p;\n", "void h.p;\n", "const n = (h.p, 9);\n", "const n = [h.p, 1].length;\n",
+    ] {
+    let out = fold_one(src)
+    assert_true(
+      out.contains("h.p"),
+      msg="the read was dropped from `\{src}`: \{out}",
+    )
+  }
+}
+
+///|
+test "fold: the array-length fold still fires on genuinely pure elements" {
+  // The paired half — the fix must not be "stop folding `.length`".
+  let out = fold_one("const n = [1, 2, 3].length;\n")
+  assert_true(out.contains("3"), msg="got: \{out}")
+  assert_false(out.contains("length"), msg="got: \{out}")
 }

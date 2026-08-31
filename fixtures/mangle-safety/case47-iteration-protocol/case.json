@@ -1,0 +1,20 @@
+{
+  "origin": "ts.mbt — found by probing async/generator shapes the fuzz generator never emitted",
+  "what": "`class_method_dce` deleted `next` from a class whose only consumer was `[...new Range()]`, so the spread threw `is not a function or its return value is not iterable`. The implicit-protocol list had `toJSON` / `toString` / `valueOf` / `then` and stopped one step short of the iteration protocol — its own comment said `Symbol.iterator` is a computed key the pass could not drop, without noticing that the object it returns has a `next` the pass could and did. The mangler's `mangler_builtin_reserved_properties` had `next` / `return` / `throw` / `done` / `value` all along, so RENAMING was never at risk; only deletion was, because the DCE pass reads a different set. A unit test now cross-checks the two lists so they cannot drift again. `return` is here because `for…of` calls it on an early exit, which this case triggers with a `break`.",
+  "mtscArgs": [
+    "--treeshake",
+    "--fold"
+  ],
+  "exports": [
+    "values",
+    "first",
+    "generated",
+    "liveValue",
+    "effects"
+  ],
+  "expectKeep": [
+    "next",
+    "return"
+  ],
+  "expectStatus": "pass"
+}

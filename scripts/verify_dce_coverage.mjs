@@ -275,6 +275,14 @@ console.log(new C().live());`,
 console.log(new C().get());`,
     absent: ["deadmark_field"],
     present: [],
+    why:
+      "not the dead-field pass being absent: `seed_from_expr` seeds the chain ROOT, " +
+      "so `console.log(new C().get())` marks C observed and --explain-mangle says " +
+      "`deadmark_field` is in the escape set. A property step has no symbol of its own " +
+      "— only the root does — so the observation is attached there and over-approximates " +
+      "the depth. Sound, imprecise. Fixing it needs access-path-sensitive observability " +
+      "(or a depth on the lattice), not a patch: loosening the reserved set is the " +
+      "direction that breaks silently.",
   },
   {
     name: "unused-static-method",
@@ -504,6 +512,13 @@ for (const testCase of CASES) {
   console.log(
     `  [${mark}]${tag} ${testCase.name.padEnd(30)} ${result.verdict === "PASS" ? "" : result.detail}`,
   );
+  // A MISS with no explanation gets re-investigated. When the case
+  // knows WHY the pass declines, say so on the same line — the point of
+  // carrying a known gap in the table is that nobody has to rediscover
+  // it.
+  if (result.verdict === "MISS" && testCase.why) {
+    console.log(`         why: ${testCase.why}`);
+  }
   if (verbose && result.code) console.log(`         ${result.code.replace(/\n/g, "\n         ")}`);
 }
 

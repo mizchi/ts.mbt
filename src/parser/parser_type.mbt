@@ -1507,6 +1507,12 @@ fn Parser::parse_type_operand(self : Parser) -> @ast.TsType raise ParseError {
 fn Parser::parse_intersection_type(
   self : Parser,
 ) -> @ast.TsType raise ParseError {
+  // A leading `&` is decoration TS allows so a multi-line intersection
+  // can put every member on its own line with an aligned operator. It
+  // says nothing about the type, so consume it and carry on — handling
+  // it in `parse_type` instead meant a second code path that forgot
+  // what the first one did next.
+  let _ = self.match_(Amp)
   let first = self.parse_type_operand()
   // Fast path: most types are not intersections — avoid allocating the
   // operand `Array` until we actually see a `&`.
@@ -1793,22 +1799,23 @@ fn Parser::parse_conditional_type_tail(
 ///|
 /// Parse full type including union/intersection
 fn Parser::parse_type(self : Parser) -> @ast.TsType raise ParseError {
-  if self.check(Pipe) {
-    let _ = self.advance()
-    let items : Array[@ast.TsType] = [self.parse_intersection_type()]
-    while self.match_(Pipe) {
-      items.push(self.parse_intersection_type())
-    }
-    return Union(items)
-  }
-  if self.check(Amp) {
-    let _ = self.advance()
-    let items : Array[@ast.TsType] = [self.parse_type_operand()]
-    while self.match_(Amp) {
-      items.push(self.parse_type_operand())
-    }
-    return Intersection(items)
-  }
+  // The leading `|` (and the `&` handled one level down) is decoration,
+  // not a different grammar: TS allows it so a union can be written one
+  // member per line. It used to get its own branch here that built the
+  // union and RETURNED — skipping the `extends` tail below, so a
+  // conditional type whose check type was written that way lost its
+  // condition. remeda's `setPath.ts` is
+  //
+  //     type Paths<T, Prefix …> =
+  //       | Prefix
+  //       | (T extends object ? … : …) extends infer Path
+  //       ? Readonly<Path>
+  //       : never;
+  //
+  // and mtsc could not parse the file at all, which blocked the whole
+  // package. `T | string extends …` parsed fine, which is why it went
+  // unnoticed: the bug needed the decoration, not the union.
+  let _ = self.match_(Pipe)
   let base = self.parse_intersection_type()
   // Fast path: the common case is a non-union, non-conditional type
   // (`number`, `Foo<T>`, `T[]`, ...). Avoid the union-`Array` allocation
@@ -2212,6 +2219,20 @@ fn Parser::try_skip_type_args(self : Parser) -> Bool {
   // only balanced. An unbalanced closer, or a `;` outside a `{…}`, means
   // the `<` was a comparison and the scan has already left the
   // expression it started in.
+  //
+  // "Balanced" has two halves and this scan only checked one of them.
+  // The closer guards below catch a `}`/`)`/`]` this scan never
+  // opened; the counts also have to be zero at the point `depth`
+  // reaches 0, or the `>` that closed the candidate list was itself
+  // nested inside a bracket the scan opened and never closed — the
+  // same "the scan has left its expression" error, in the other
+  // direction. `a < (b > (c))` is the minimal case: the scan consumes
+  // `< ( b >`, stops at depth 0 with `parens == 1`, and the caller
+  // sees the following `(` and commits to `a<(b>(c)` as a generic
+  // call, leaving a stray `)` behind ("Expected Semicolon, got
+  // RParen"; wrapped in parens it reads "Expected RParen, got
+  // RParen"). Found by the mangle fuzzer, which produced
+  // `(structuredClone(obj) < ({ ...bag } > (obj.q -= false)))`.
   let mut braces = 0
   let mut parens = 0
   let mut brackets = 0
@@ -2305,5 +2326,5 @@ fn Parser::try_skip_type_args(self : Parser) -> Bool {
       }
     }
   }
-  depth <= 0
+  depth <= 0 && braces == 0 && parens == 0 && brackets == 0
 }

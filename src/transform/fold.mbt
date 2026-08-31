@@ -59,6 +59,153 @@ fn single_return_expr(block : @ast.TsBlock) -> @ast.TsExpr? {
 }
 
 ///|
+/// `Some(())` when `block` is exactly a valueless `return` — either
+/// `{ return; }` or the braceless `return;` the parser stores as a
+/// one-statement block.
+fn is_bare_return_block(block : @ast.TsBlock) -> Bool {
+  block.stmts.length() == 1 && block.stmts[0] is Return(None)
+}
+
+///|
+/// terser's `if_return`, the guard-clause half: a valueless early return
+/// followed by the rest of the function.
+///
+///     function f(c, g) { if (c) { return; } g.p(); }
+///     function f(c, g) { c || g.p(); }
+///
+/// `if (c) return;` costs 12 bytes to say what `c ||` says in 4. The
+/// ternary half of the rule (`if (c) return a; return b` →
+/// `return c ? a : b`) was already here; this is the case where the
+/// early return carries no value, so there is nothing to build a
+/// ternary out of.
+///
+/// Only valid where falling off the end of the statement list means
+/// "return undefined", which is why this lives in `fold_func_body`
+/// and takes a function BODY. In a loop body or a `try` block the same
+/// rewrite would change which statements run after it.
+///
+/// Two forms, and the guard that picks between them is scoping, not
+/// size: `c || (a, b)` needs the tail to be expressions, and wrapping
+/// the tail in a block instead would put any `let` / `const` / class /
+/// function declaration in it into a NEW scope. A closure created
+/// before the guard can read those:
+///
+///     function f(c) { function h() { return x; } if (c) return; let x = 1; h(); }
+///
+/// so `if (!c) { let x = 1; h(); }` makes `h`'s `x` a free variable.
+/// `var` would survive (it hoists to the function), but the
+/// distinction is not worth the bytes: a tail with any declaration in
+/// it is left alone.
+fn fold_guard_return(block : @ast.TsBlock) -> @ast.TsBlock {
+  let n = block.stmts.length()
+  for i in 0..<n {
+    let cond = match block.stmts[i] {
+      If(c, then_b, None) if is_bare_return_block(then_b) => c
+      _ => continue
+    }
+    let raw_tail : Array[@ast.TsStmt] = []
+    for j in (i + 1)..<n {
+      raw_tail.push(block.stmts[j])
+    }
+    // The tail is itself a function tail, so a guard inside it is the
+    // same rewrite. Collapsing inner-first is what turns
+    // `if (a) return; if (b) return; g()` into `a || b || g()` instead
+    // of stopping at `if (!a) { b || g() }` — and it is why the `||`
+    // form applies at all here, since the recursion is what makes the
+    // inner tail a single expression statement.
+    let tail = fold_guard_return({ stmts: raw_tail, stmt_positions: [] }).stmts
+    let replacement : @ast.TsStmt? = if tail.is_empty() {
+      // `if (c) return;` with nothing after it: the return is the
+      // fall-through, so only `c` itself can still matter.
+      if is_pure_value(cond) {
+        None
+      } else {
+        Some(@ast.TsStmt::Expr(cond))
+      }
+    } else if tail_is_all_expressions(tail) {
+      let mut seq = match tail[0] {
+        Expr(e) => e
+        _ => continue
+      }
+      for j in 1..<tail.length() {
+        match tail[j] {
+          Expr(e) => seq = @ast.TsExpr::Seq(seq, e)
+          _ => continue
+        }
+      }
+      Some(@ast.TsStmt::Expr(fold_expr(BinOp(Or, cond, seq))))
+    } else if tail_declares_lexically(tail) {
+      continue
+    } else {
+      Some(
+        @ast.TsStmt::If(
+          fold_expr(UnaryOp(Not, cond)),
+          { stmts: tail, stmt_positions: [] },
+          None,
+        ),
+      )
+    }
+    let stmts : Array[@ast.TsStmt] = []
+    let pos : Array[Int] = []
+    let has_positions = block.stmt_positions.length() == n
+    for j in 0..<i {
+      stmts.push(block.stmts[j])
+      if has_positions {
+        pos.push(block.stmt_positions[j])
+      }
+    }
+    match replacement {
+      Some(s) => {
+        stmts.push(s)
+        if has_positions {
+          pos.push(block.stmt_positions[i])
+        }
+      }
+      None => ()
+    }
+    return { stmts, stmt_positions: pos }
+  }
+  block
+}
+
+///|
+fn tail_is_all_expressions(tail : Array[@ast.TsStmt]) -> Bool {
+  for s in tail {
+    if !(s is Expr(_)) {
+      return false
+    }
+  }
+  true
+}
+
+///|
+/// Does the tail hold a declaration that a surrounding block would
+/// re-scope? `var` hoists past a block and is safe; everything else
+/// binds where it is written.
+fn tail_declares_lexically(tail : Array[@ast.TsStmt]) -> Bool {
+  for s in tail {
+    if stmt_declares_lexically(s) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn stmt_declares_lexically(stmt : @ast.TsStmt) -> Bool {
+  match stmt {
+    Let(_, _, _) | Const(_, _, _) | NativeClassStmt(_, _) => true
+    // The parser lowers `function f() {}` to `var f = function f() {}`,
+    // which hoists in the source and would stop hoisting inside a new
+    // block. Every other `var` is safe: the binding hoists to the
+    // function either way.
+    Var(_, _, FuncExpr(_)) => true
+    Label(_, inner) => stmt_declares_lexically(inner)
+    _ => false
+  }
+}
+
+///|
 /// Returns `true` when `stmt` unconditionally exits the current
 /// function/block (return / throw / break / continue). Used by
 /// the else-hoist optimization: when an `if` branch always exits,
@@ -129,11 +276,11 @@ fn fold_func_body(block : @ast.TsBlock) -> @ast.TsBlock {
   // Loop until the block stops shrinking so multi-level
   // `if(c1)return e1; if(c2)return e2; return e3;` collapses
   // in one pass rather than requiring re-folding from the outside.
-  let mut cur = fold_func_body_once(block)
+  let mut cur = fold_guard_return(fold_func_body_once(block))
   let mut prev_len = block.stmts.length()
   while cur.stmts.length() < prev_len {
     prev_len = cur.stmts.length()
-    cur = fold_func_body_once(cur)
+    cur = fold_guard_return(fold_func_body_once(cur))
   }
   cur
 }
@@ -377,24 +524,30 @@ fn stmt_has_unlabeled_break_or_continue(stmt : @ast.TsStmt) -> Bool {
 /// parsed as `Block([Let, Let, …])`): 2+ statements all of the same
 /// declaration kind. Used to decide whether to unbox vs keep braces.
 fn is_fold_multi_decl_block(block : @ast.TsBlock) -> Bool {
+  // Two statements minimum: unboxing a single declaration buys nothing
+  // and `merge_consecutive_decls` never produces a group of one.
   if block.stmts.length() < 2 {
     return false
   }
-  let kind = match block.stmts[0] {
-    @ast.TsStmt::Var(_, _, _) => 0
-    @ast.TsStmt::Let(_, _, _) => 1
-    @ast.TsStmt::Const(_, _, _) => 2
-    _ => return false
-  }
-  for s in block.stmts {
-    match s {
-      @ast.TsStmt::Var(_, _, _) => if kind != 0 { return false }
-      @ast.TsStmt::Let(_, _, _) => if kind != 1 { return false }
-      @ast.TsStmt::Const(_, _, _) => if kind != 2 { return false }
-      _ => return false
-    }
-  }
-  true
+  // Everything else is `block_is_inline_decl_group`'s question, and it
+  // has to be asked with `block_is_inline_decl_group`'s rules.
+  //
+  // This function used to answer it on its own and omitted the
+  // `stmt_positions` check — the one that separates the parser's (and
+  // `merge_consecutive_decls`'s) spelling of `let a = 1, b = 2` from a
+  // REAL block. So fold unboxed real block scopes:
+  //
+  //     function f() {
+  //       { const x = (log.push(1), 1); const y = (log.push(2), 2); }
+  //       const x = 3;
+  //       return x;
+  //     }
+  //
+  // became `const x = …, y = …, x = 3;` under plain `--bundle --fold`,
+  // which does not parse. The emitter's copy of the predicate carries a
+  // comment spelling out that exact hazard, three hundred lines from
+  // here, and this copy did not have the check.
+  block_is_inline_decl_group(block)
 }
 
 ///|
@@ -457,7 +610,14 @@ fn merge_consecutive_decls(stmts : Array[@ast.TsStmt]) -> Array[@ast.TsStmt] {
         if run.length() == 1 {
           out.push(run[0])
         } else {
-          out.push(@ast.TsStmt::Block({ stmts: run, stmt_positions: [] }))
+          // Marked, not position-less: this IS a declarator group, and
+          // the marker is what says so to the emitter and the mangler.
+          out.push(
+            @ast.TsStmt::Block({
+              stmts: run,
+              stmt_positions: [@ast.DECL_GROUP_POSITION],
+            }),
+          )
         }
         i = j
       }
@@ -757,19 +917,42 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
       // `return undefined;` / `return void 0;` → `return;`.
       // Saves the expression bytes; `fold_func_body` then strips the
       // trailing bare `return;` from the body entirely.
-      let normalized : @ast.TsStmt = match ef {
-        Var("undefined") | UnaryOp(@ast.TsUnaryOp::Void, _) =>
-          @ast.TsStmt::Return(None)
-        _ => @ast.TsStmt::Return(Some(ef))
+      //
+      // `void EXPR` is `undefined` whatever `EXPR` is — and `EXPR`
+      // still runs. This arm read the first half as licence to discard
+      // the second, so `return void f();` compiled to a function with
+      // no body and `f` was then tree-shaken away. The fuzzer found it
+      // through a recursive `return void f0(a, z)`: the recursion
+      // vanished, the call-budget counter never ran down, and every
+      // call returned `undefined` where the source eventually returned
+      // `0`. Eighth site of this one rule (`keep_effects` covers the
+      // seven in `fold_binop` and the statement folds); here the
+      // effect becomes a statement of its own, because a `return` has
+      // nowhere to put a `Seq`.
+      match ef {
+        Var("undefined") => out.push(@ast.TsStmt::Return(None))
+        UnaryOp(@ast.TsUnaryOp::Void, inner) =>
+          if is_pure_value(inner) {
+            out.push(@ast.TsStmt::Return(None))
+          } else {
+            out.push(@ast.TsStmt::Expr(inner))
+            out.push(@ast.TsStmt::Return(None))
+          }
+        _ => out.push(@ast.TsStmt::Return(Some(ef)))
       }
-      out.push(normalized)
     }
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => out.push(stmt)
     Throw(e) => out.push(Throw(fold_expr(e)))
     While(c, body) => {
       let cf = strip_double_negation(fold_expr(c))
-      // `while (0)` / `while ("")` / `while (false)` → dead loop.
-      if !is_js_falsy(cf) {
+      // `while (0)` / `while ("")` / `while (false)` → dead loop. The
+      // condition is still evaluated once before the loop gives up, so
+      // `while (void f()) {}` has to keep calling `f`.
+      if is_js_falsy(cf) {
+        if !is_pure_value(cf) {
+          out.push(Expr(cf))
+        }
+      } else {
         out.push(While(cf, fold_block(body)))
       }
     }
@@ -783,6 +966,11 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
       if is_js_falsy(cf) && !block_has_unlabeled_break_or_continue(body_f) {
         for s in body_f.stmts {
           out.push(s)
+        }
+        // A `do…while` evaluates its condition AFTER the body, so the
+        // effect goes last.
+        if !is_pure_value(cf) {
+          out.push(Expr(cf))
         }
       } else {
         out.push(DoWhile(cf, body_f))
@@ -815,6 +1003,15 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
       if cond_always_false {
         match init_f {
           Some(s) => out.push(s)
+          None => ()
+        }
+        // And the condition, which runs once after the initializer
+        // before the loop gives up. `for (; void f(); )` has to keep
+        // calling `f` — the initializer was already spelled out here as
+        // the thing that "may have side effects", and the condition is
+        // the same thing one line down.
+        match cond_f {
+          Some(c) => if !is_pure_value(c) { out.push(Expr(c)) }
           None => ()
         }
         return
@@ -1026,8 +1223,9 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       let inner_f = fold_expr(inner)
       match (op, inner_f) {
         (Not, BoolLit(b)) => BoolLit(!b)
-        (Not, _) if is_js_truthy(inner_f) => BoolLit(false)
-        (Not, _) if is_js_falsy(inner_f) => BoolLit(true)
+        (Not, _) if is_js_truthy(inner_f) =>
+          keep_effects(inner_f, BoolLit(false))
+        (Not, _) if is_js_falsy(inner_f) => keep_effects(inner_f, BoolLit(true))
         // `!(a === b)` → `a !== b` etc. (saves 2 bytes vs `!(...)`).
         //
         // The same rewrite lives in `peephole.mbt`, and it was gated
@@ -1062,9 +1260,14 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
         (Neg, IntLit(n)) if n != 0 => IntLit(-n)
         (Neg, NumberLit(n)) if n != 0.0 => NumberLit(-n)
         (BitwiseNot, IntLit(n)) => IntLit(-(n + 1))
-        // `~~x` → `x` when x is a pure integer literal (double bitwise-not = identity).
+        // `~~x` → `x`. The comment used to say "when x is a pure integer
+        // literal" and the guard checked PURITY, which is a different
+        // question. `~~` is an int32 truncation, not an identity:
+        // `~~1.5` is `1`, `~~"alpha"` is `0`, `~~true` is `1`. Only an
+        // expression already known to BE an int32 survives the round
+        // trip — the same gate the bitwise identities need.
         (BitwiseNot, UnaryOp(@ast.TsUnaryOp::BitwiseNot, inner_inner)) =>
-          if is_pure_value(inner_inner) {
+          if is_int32_valued(inner_inner) {
             inner_inner
           } else {
             UnaryOp(op, inner_f)
@@ -1073,20 +1276,29 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
         // `+true` → 1, `+false` → 0, `+null` → 0 (JS numeric coercion).
         (Plus, BoolLit(b)) => IntLit(if b { 1 } else { 0 })
         (Plus, NullLit) => IntLit(0)
-        // `-(-x)` → `x` when x is pure (double negation cancels).
+        // `-(-x)` → `x`. Purity was the wrong question here too, and the
+        // fuzzer found it: unary minus applies ToNumeric, so
+        // `-(-"alpha")` is `NaN` and this rule handed back `"alpha"` —
+        // a wrong VALUE from `--bundle --fold` with nothing else on.
+        // Identity only when `x` is already a number, so ToNumeric is
+        // the identity on it. (`-(-0)` is `0` and `-(-(-0))` is `-0`,
+        // so the zero sign survives; that part was never the problem.)
         (Neg, UnaryOp(@ast.TsUnaryOp::Neg, inner_inner)) =>
-          if is_pure_value(inner_inner) {
+          if is_number_valued(inner_inner) && is_pure_value(inner_inner) {
             inner_inner
           } else {
             UnaryOp(op, inner_f)
           }
-        // `-(a - b)` → `b - a` when both sides are pure.
-        (Neg, BinOp(Sub, a, b)) =>
-          if is_pure_value(a) && is_pure_value(b) {
-            BinOp(Sub, b, a)
-          } else {
-            UnaryOp(op, inner_f)
-          }
+        // `-(a - b)` → `b - a` was DELETED, not gated. The two differ at
+        // zero: `-(1 - 1)` is `-0` and `1 - 1` is `0`, and this file
+        // already says why that matters a few lines up — `Object.is`,
+        // `1 / x` and `Math.sign` all tell them apart, and the
+        // rule-equivalence harness's own encoder does too. Proving
+        // `a - b != 0` is not something this rewrite can do, and there
+        // is no cheaper gate, so there is nothing to keep. Same author,
+        // same file, careful about `-0` for `(Neg, IntLit(n))` and not
+        // here: the sign of zero needs checking at every arithmetic
+        // rewrite, not once.
         // `void PURE_EXPR` → `void 0` — the argument is evaluated for
         // side effects only; since it's pure, replace with the standard
         // `void 0` idiom (saves bytes on complex pure expressions).
@@ -1118,9 +1330,9 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
     Cond(c, t, e) => {
       let cf = fold_expr(c)
       if is_js_truthy(cf) {
-        fold_expr(t)
+        keep_effects(cf, fold_expr(t))
       } else if is_js_falsy(cf) {
-        fold_expr(e)
+        keep_effects(cf, fold_expr(e))
       } else {
         // `!!x ? a : b` → `x ? a : b` — double negation doesn't change
         // truthiness; stripping it saves 2 bytes and clarifies intent.
@@ -1278,9 +1490,9 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
             }
           "Boolean" =>
             if is_js_truthy(arg) {
-              BoolLit(true)
+              keep_effects(arg, BoolLit(true))
             } else if is_js_falsy(arg) {
-              BoolLit(false)
+              keep_effects(arg, BoolLit(false))
             } else {
               // `Boolean(x)` → `!!x` for non-literal args.
               // `!!` is always shorter (3 bytes vs 9+ for "Boolean(…)")
@@ -1486,9 +1698,7 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
         // this fold just was not asking it.
         //
         // Found by `just fuzz-mangle`, shrunk to six nodes.
-        (ArrayLit(items), "length") if items
-          .iter()
-          .all(fn(it) { !(it is Spread(_)) && is_pure_value(it) }) =>
+        (ArrayLit(items), "length") if array_literal_is_countable(items) =>
           IntLit(items.length())
         // Well-known Math / Number constants.
         (Var("Math"), "PI") => NumberLit(3.141592653589793)
@@ -1531,7 +1741,13 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       let idx_f = fold_expr(idx)
       // `[a,b,c][1]` → `b` only when all other items are pure.
       match (recv_f, idx_f) {
-        (ArrayLit(items), IntLit(i)) =>
+        // The `!(it is Spread(_))` half is not incidental: an element's
+        // POSITION is what this fold reads, and a spread is one node
+        // standing for an unknown number of values. `[...a][0]` is not
+        // `...a`. The `.length` fold above learned this from the fuzzer
+        // and the lesson stopped there; `fold_array_method` had the same
+        // hole and remeda's `[...array].reverse()` fell in it.
+        (ArrayLit(items), IntLit(i)) if no_spread_elements(items) =>
           if i >= 0 && i < items.length() {
             let mut all_others_pure = true
             for j, item in items {
@@ -1749,6 +1965,7 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
     As(inner, ty) => As(fold_expr(inner), ty)
     Satisfies(inner, ty) => Satisfies(fold_expr(inner), ty)
     NonNull(inner) => NonNull(fold_expr(inner))
+    TypeArgs(tys, inner) => TypeArgs(tys, fold_expr(inner))
     OptionalChain(inner) => {
       let inner_f = fold_expr(inner)
       // `recv?.prop` / `recv?.method(...)` / `recv?.[idx]` — when
@@ -2531,6 +2748,32 @@ fn fold_string_method(
 }
 
 ///|
+/// Does every element of this array literal occupy exactly one position?
+///
+/// A `Spread` does not: it is one AST node standing for however many
+/// values the spread expression yields at runtime, which the syntax does
+/// not say. Any fold that reads an element's POSITION — a length, an
+/// index, an order, a `join` separator count — is wrong in its presence,
+/// and `is_pure_value` does not stand in for this check because a spread
+/// of a variable is perfectly pure.
+fn no_spread_elements(items : Array[@ast.TsExpr]) -> Bool {
+  for item in items {
+    if item is Spread(_) {
+      return false
+    }
+  }
+  true
+}
+
+///|
+/// `no_spread_elements` plus "every element is safe to drop", which is
+/// what `[…].length` needs: the fold discards the elements, so a side
+/// effect in one of them would go with it.
+fn array_literal_is_countable(items : Array[@ast.TsExpr]) -> Bool {
+  no_spread_elements(items) && items.iter().all(fn(it) { is_pure_value(it) })
+}
+
+///|
 /// Fold Array-literal method calls with constant arguments.
 fn fold_array_method(
   recv : @ast.TsExpr,
@@ -2540,6 +2783,25 @@ fn fold_array_method(
   let items = match recv {
     ArrayLit(items) => items
     _ => return None
+  }
+  // Every fold below reasons about `items` POSITIONALLY — its length, its
+  // order, which element sits where. A `Spread` element breaks all of
+  // that at once: it is one node standing for however many values the
+  // spread expression yields at runtime, which the syntax does not say.
+  //
+  // remeda's `reverse` is `return [...array].reverse()`. That parses as a
+  // one-element `ArrayLit`, reversing one element is a no-op, and the
+  // fold happily returned `[...array]` — `reverse` compiled to a
+  // shallow copy, and `reverse([1, 2, 3])` gave `[1, 2, 3]`. The
+  // `is_pure_value` guards each fold already carries did not catch it,
+  // because a spread of a variable IS pure; purity was never the
+  // question. `[...a].length` -> `1` and `[...a].indexOf(x)` were wrong
+  // the same way.
+  //
+  // An `ArrayHole` (`[1, , 3]`) is a real position, so it does not need
+  // this gate — the folds that care about its VALUE check for a literal.
+  if !no_spread_elements(items) {
+    return None
   }
   match method_ {
     "length" if args.length() == 0 => Some(IntLit(items.length()))
@@ -3031,10 +3293,109 @@ fn strip_trailing_break(block : @ast.TsBlock) -> Array[@ast.TsStmt] {
 }
 
 ///|
-/// Is this expression's value certainly a number? Delegates to the same
-/// classifier the relational-negation gate uses.
+/// Is this expression's value certainly a Number? Delegates to the same
+/// classifier the relational-negation gate uses, minus the one case
+/// where the two questions differ.
+///
+/// `cmp_kind` calls a BigInt literal `CmpNum`, and for its own purpose
+/// that is right: relational comparison is the one place the spec lets
+/// a BigInt and a Number mix, and it never goes through NaN, so
+/// `!(5n < 3)` really is `5n >= 3`. Arithmetic is the opposite —
+/// `5n - 0`, `5n * 1` and `5n / 1` all throw "Cannot mix BigInt and
+/// other types" — so every identity rule gated on this predicate was
+/// folding a TypeError away into a value. A BigInt is not a Number,
+/// which is what the name asks, so the exclusion belongs here rather
+/// than at each of the seven call sites.
 fn is_number_valued(e : @ast.TsExpr) -> Bool {
+  if strip_type_wrappers(e) is BigIntLit(_) {
+    return false
+  }
   cmp_kind(e) is CmpNum
+}
+
+///|
+/// Peel the type-only wrappers that carry no runtime value, so a
+/// value-shape question is asked of the expression that actually runs.
+fn strip_type_wrappers(e : @ast.TsExpr) -> @ast.TsExpr {
+  match e {
+    As(inner, _) | Satisfies(inner, _) | NonNull(inner) | TypeArgs(_, inner) =>
+      strip_type_wrappers(inner)
+    _ => e
+  }
+}
+
+///|
+/// Is this expression's value ALREADY an int32, so that `ToInt32` on it
+/// is the identity?
+///
+/// This is the gate an identity rewrite over a bitwise operator needs,
+/// and none of them had it. `x & -1` was rewritten to `x` on the
+/// reasoning that `-1` is all-bits-set — true of the AND, but the
+/// operator also coerces, and the rewrite hands back the UNCOERCED
+/// operand. So `"alpha" & -1` is `0` and compiled to `"alpha"`;
+/// `1.5 & -1` is `1` and compiled to `1.5`. The mangle fuzzer found it
+/// through a switch: `switch ("alpha" & -1)` selects `case 0`, and
+/// folding the scrutinee to `"alpha"` selected the `default` instead,
+/// so a statement that must not run did.
+fn is_int32_valued(e : @ast.TsExpr) -> Bool {
+  match strip_type_wrappers(e) {
+    // A bitwise or shift operator's result is an int32 by definition.
+    BinOp(BitAnd, _, _)
+    | BinOp(BitOr, _, _)
+    | BinOp(BitXor, _, _)
+    | BinOp(Shl, _, _)
+    | BinOp(Shr, _, _)
+    | BinOp(UShr, _, _)
+    | UnaryOp(@ast.TsUnaryOp::BitwiseNot, _) => true
+    // An integer literal, as long as it really fits — `2 ** 32 & -1` is
+    // `0`, not `2 ** 32`.
+    IntLit(n) => n >= -2147483648 && n <= 2147483647
+    _ => false
+  }
+}
+
+///|
+/// Will `ToNumber` on this expression succeed and produce a Number?
+///
+/// The annihilator rewrites over the coercing operators (`x & 0` → `0`,
+/// `x | -1` → `-1`, `x ** 0` → `1`) do not care what the operand's
+/// value is — every Number, string, boolean, `null` and `undefined`
+/// coerces to something the identity swallows. Two types are not like
+/// that: a BigInt coerces to a BigInt, so the result's TYPE is wrong
+/// (`5n ^ 5n` is `0n`, not `0`), and in a mixed expression it throws
+/// outright; a Symbol always throws. Folding either into a value
+/// replaces a TypeError with a result, which is the one direction a
+/// minifier must never go.
+fn is_number_coercible(e : @ast.TsExpr) -> Bool {
+  match strip_type_wrappers(e) {
+    IntLit(_) | NumberLit(_) | BoolLit(_) | StringLit(_) | NullLit => true
+    // A tag-less template literal is a string.
+    TemplateLiteral(_, _) => true
+    // `void x` is `undefined`; `typeof x` is a string; `!x` is a
+    // boolean; `~x` is an int32. None can be a BigInt or a Symbol.
+    UnaryOp(@ast.TsUnaryOp::Void, _)
+    | UnaryOp(@ast.TsUnaryOp::Typeof, _)
+    | UnaryOp(@ast.TsUnaryOp::Not, _)
+    | UnaryOp(@ast.TsUnaryOp::BitwiseNot, _) => true
+    // Bitwise and shift results are int32; comparisons are booleans.
+    BinOp(BitAnd, _, _)
+    | BinOp(BitOr, _, _)
+    | BinOp(BitXor, _, _)
+    | BinOp(Shl, _, _)
+    | BinOp(Shr, _, _)
+    | BinOp(UShr, _, _)
+    | BinOp(BinEq, _, _)
+    | BinOp(BinNe, _, _)
+    | BinOp(AbstractEq, _, _)
+    | BinOp(AbstractNe, _, _)
+    | BinOp(BinLt, _, _)
+    | BinOp(BinLe, _, _)
+    | BinOp(BinGt, _, _)
+    | BinOp(BinGe, _, _)
+    | BinOp(Instanceof, _, _)
+    | BinOp(In, _, _) => true
+    _ => false
+  }
 }
 
 ///|
@@ -3067,7 +3428,7 @@ fn is_number_never_negzero(e : @ast.TsExpr) -> Bool {
     | BinOp(In, _, _) => true
     IntLit(n) => n > 0
     NumberLit(n) => n > 0.0
-    As(inner, _) | Satisfies(inner, _) | NonNull(inner) =>
+    As(inner, _) | Satisfies(inner, _) | NonNull(inner) | TypeArgs(_, inner) =>
       is_number_never_negzero(inner)
     _ => false
   }
@@ -3116,21 +3477,39 @@ fn fold_binop(
     // `&&`/`||` never evaluates the right side when the left side
     // is already determinate — so `r` is unreachable regardless of
     // its purity, and the fold is always safe.
+    // The two arms that YIELD `l` keep its effects already.
     (And, _, _) if is_js_falsy(l) => l
-    (And, _, _) if is_js_truthy(l) => r
+    (And, _, _) if is_js_truthy(l) => keep_effects(l, r)
     (Or, _, _) if is_js_truthy(l) => l
-    (Or, _, _) if is_js_falsy(l) => r
+    (Or, _, _) if is_js_falsy(l) => keep_effects(l, r)
     // `x && x` → `x` and `x || x` → `x` for same-var operands.
     // Both operators always evaluate to `x` regardless of its value.
     (And, Var(ln), Var(rn)) | (Or, Var(ln), Var(rn)) if ln == rn => Var(ln)
-    // Bitwise idempotency: `x | x → x`, `x & x → x`, `x ^ x → 0`.
-    // String equality on Var names is sufficient since we only match
-    // bare `Var` nodes (no side-effecting sub-expressions).
-    (BitOr, Var(ln), Var(rn)) | (BitAnd, Var(ln), Var(rn)) if ln == rn =>
-      Var(ln)
-    (BitXor, Var(ln), Var(rn)) if ln == rn => IntLit(0)
-    // `x - x → 0` when x is a bare variable (pure, no double evaluation).
-    (Sub, Var(ln), Var(rn)) if ln == rn => IntLit(0)
+    // The self-operand rules — `x | x → x`, `x & x → x`, `x ^ x → 0`,
+    // `x - x → 0` — used to be gated on nothing but "both sides are the
+    // same bare `Var`", which establishes purity and rules out double
+    // evaluation. It does not establish the arithmetic, and the
+    // arithmetic is what these rules claim:
+    //
+    //   * `x | x → x` and `x & x → x` hand the operand back uncoerced,
+    //     so they need it to be an int32 already. A variable holding
+    //     `"alpha"` makes both `0`.
+    //   * `x ^ x → 0` and `x - x → 0` do not need the value, but they
+    //     do need a type: `"alpha" - "alpha"` is `NaN`, `5n ^ 5n` is
+    //     `0n`, `5n - 5n` is `0n`, and a Symbol throws.
+    //
+    // A bare `Var` satisfies none of those — nothing at this point knows
+    // what it holds — and the only expressions that would satisfy them
+    // are not bare `Var`s, so every one of these rules is unsatisfiable
+    // once it is gated correctly. They are deleted rather than left
+    // standing with a guard that can never pass: `x & x` and `x | x`
+    // occur in hand-written JS about as often as they occur in
+    // minifier changelogs, and a dead pattern reads like a live one to
+    // the next person auditing this table.
+    //
+    // `x && x → x` and `x || x → x`, just above, are a different rule
+    // and stay: those operators do not coerce, so returning the operand
+    // really is what they do, whatever its type.
     // Null coalescing: `null ?? x` and `undefined ?? x` → `x`.
     // A non-nullish left operand (any literal that isn't null/undefined)
     // short-circuits to that literal.
@@ -3369,20 +3748,37 @@ fn fold_binop(
     (Shr, IntLit(a), IntLit(b)) => IntLit(a >> b)
     (UShr, IntLit(a), IntLit(b)) =>
       IntLit((a.reinterpret_as_uint() >> b).reinterpret_as_int())
-    // `x & 0` → `0` (annihilator). Safe to fold only when the other operand
-    // is pure — we can't drop a call with side effects.
-    (BitAnd, _, IntLit(0)) if is_pure_value(l) => IntLit(0)
-    (BitAnd, IntLit(0), _) if is_pure_value(r) => IntLit(0)
-    // `x & -1` → `x` (AND with all-bits-set is identity, since -1 = 0xFFFFFFFF in 32-bit).
-    (BitAnd, _, IntLit(-1)) => l
-    (BitAnd, IntLit(-1), _) if is_pure_value(l) => r
-    // `x | -1` → `-1` (OR with all-bits-set is annihilator).
-    (BitOr, _, IntLit(-1)) if is_pure_value(l) => IntLit(-1)
-    (BitOr, IntLit(-1), _) if is_pure_value(r) => IntLit(-1)
-    // `x ** 0` → `1` for any pure x (JS spec: every value including NaN
-    // and Infinity raised to the 0 power equals 1).
+    // The bitwise annihilators and identities. Every one of these needs
+    // TWO facts, and for a long time each had only the first:
+    //
+    //   * the operand is pure, so dropping (or keeping) it does not
+    //     lose an effect; and
+    //   * the operand's TYPE makes the arithmetic claim true. These
+    //     operators coerce, so "AND with all-bits-set is the identity"
+    //     is a statement about int32s, not about JS values.
+    //
+    // `x & 0` → `0` (annihilator): any operand `ToNumber` accepts lands
+    // on 0, so `is_number_coercible` is enough — it only has to rule out
+    // the BigInt whose answer would be `0n` and the Symbol that throws.
+    (BitAnd, _, IntLit(0)) if is_pure_value(l) && is_number_coercible(l) =>
+      IntLit(0)
+    (BitAnd, IntLit(0), _) if is_pure_value(r) && is_number_coercible(r) =>
+      IntLit(0)
+    // `x & -1` → `x` (identity): here the operand's value is handed
+    // back, so it has to be an int32 already. `"alpha" & -1` is `0` and
+    // `1.5 & -1` is `1` — neither is the operand.
+    (BitAnd, _, IntLit(-1)) if is_int32_valued(l) => l
+    (BitAnd, IntLit(-1), _) if is_int32_valued(r) => r
+    // `x | -1` → `-1` (annihilator), same gate as `x & 0`.
+    (BitOr, _, IntLit(-1)) if is_pure_value(l) && is_number_coercible(l) =>
+      IntLit(-1)
+    (BitOr, IntLit(-1), _) if is_pure_value(r) && is_number_coercible(r) =>
+      IntLit(-1)
+    // `x ** 0` → `1`. Every Number — NaN and Infinity included — raised
+    // to the 0 power is 1, but `5n ** 0` and `Symbol() ** 0` both throw
+    // "Cannot mix BigInt and other types" / "Cannot convert a Symbol".
     (Pow, _, IntLit(0)) | (Pow, _, NumberLit(0.0)) =>
-      if is_pure_value(l) {
+      if is_pure_value(l) && is_number_coercible(l) {
         IntLit(1)
       } else {
         BinOp(op, l, r)
@@ -3468,7 +3864,37 @@ fn is_pure_value(expr : @ast.TsExpr) -> Bool {
       }
       true
     }
-    PropAccess(recv, _) => is_pure_value(recv)
+    // A property READ runs arbitrary code when the property is a
+    // getter, and nothing here can rule that out: `h.p` is a getter
+    // call or a field load depending on a declaration this predicate
+    // cannot see.
+    //
+    // This used to be `is_pure_value(recv)` — pure whenever the
+    // RECEIVER was — which is a statement about evaluating `h`, not
+    // about reading `.p` off it. So with
+    //
+    //     class Holder { get p() { trace.push(1); return 5; } }
+    //     const h = new Holder();
+    //
+    // four separate shapes dropped the getter's body under
+    // `--bundle --treeshake --fold`: the bare statement `h.p;`, the
+    // array-literal fold `[h.p, 1].length`, the discarded comma
+    // `(h.p, 9)`, and `void h.p;`. A getter that counts, memoizes,
+    // logs, or lazily initializes — the reasons getters exist — simply
+    // stopped running.
+    //
+    // The whole class was uncovered: the fuzz generator emits no
+    // accessor at all, and the rule-equivalence domain has an object
+    // with a poisoned `valueOf` (the coercion hazard) but none with a
+    // getter (the read hazard).
+    //
+    // The cost of the sound answer, measured before taking it: +845
+    // bytes on TypeScript's 3.5 MB output (0.02%), +3 on react, 255
+    // FEWER on checker.ts, and nothing at all on hono, valibot or the
+    // terser corpus. Too small to justify a type-driven exception for
+    // "this receiver's declared shape has no accessor", which is where
+    // this would have to go next if it ever mattered.
+    PropAccess(_, _) => false
     // `/* @__PURE__ */ f(...)` — the user asserted purity, so treat
     // the call as having no observable side effects.
     PureCall(_) => true
@@ -3486,6 +3912,7 @@ fn is_pure_value(expr : @ast.TsExpr) -> Bool {
     As(inner, _)
     | Satisfies(inner, _)
     | NonNull(inner)
+    | TypeArgs(_, inner)
     | OptionalChain(inner) => is_pure_value(inner)
     // Spread of a pure value is itself pure (e.g. inside an array literal).
     Spread(inner) => is_pure_value(inner)
@@ -3501,6 +3928,32 @@ fn strip_double_negation(expr : @ast.TsExpr) -> @ast.TsExpr {
   match expr {
     UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, inner)) => inner
     _ => expr
+  }
+}
+
+///|
+/// Replace an expression whose VALUE is statically known with `value`,
+/// keeping whatever the original still has to evaluate.
+///
+/// `is_js_truthy` / `is_js_falsy` answer "what does this coerce to",
+/// and every caller used the answer as "this may be discarded". Those
+/// are different questions for exactly two shapes, and both occur:
+///
+///   * an object or array literal is truthy WHATEVER is inside it, and
+///     the contents still run — `{ g: f() } ? a : b` must call `f`;
+///   * `void EXPR` is falsy whatever `EXPR` is — `void f() || a` must
+///     call `f`.
+///
+/// `fold_stmt_into`'s `If` arm already had this guard, with a comment
+/// crediting the fuzzer's effect trace for finding it. Six sibling
+/// sites did not: the ternary, `!`, `&&`, `||`, the dead-loop drops,
+/// and `Boolean(…)`. A program exercising all seven lost seven of its
+/// eight effects. One rule, written once, applied at each.
+fn keep_effects(original : @ast.TsExpr, value : @ast.TsExpr) -> @ast.TsExpr {
+  if is_pure_value(original) {
+    value
+  } else {
+    Seq(original, value)
   }
 }
 
@@ -3571,7 +4024,8 @@ fn can_be_nullish(expr : @ast.TsExpr) -> Bool {
     // Tag-less template literals always produce a string, never null/undefined.
     TemplateLiteral(_, _) => false
     // TypeScript casts are transparent — delegate to the inner expression.
-    As(inner, _) | Satisfies(inner, _) => can_be_nullish(inner)
+    As(inner, _) | Satisfies(inner, _) | TypeArgs(_, inner) =>
+      can_be_nullish(inner)
     // `x!` asserts the value is non-null/undefined by definition.
     NonNull(_) => false
     _ => true

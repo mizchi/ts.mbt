@@ -2437,6 +2437,10 @@ fn Parser::parse_export_decl_for_module(
       } else {
         for item in items {
           let (local_name, export_name) = item
+          // `export type { X }` with no `from`: a type-only export of a
+          // local or imported name. It has no runtime value.
+          self.collected_type_only_exports[local_name] = true
+          self.collected_type_only_exports[export_name] = true
           exports.push({ local_name, export_name })
         }
       }
@@ -3848,6 +3852,11 @@ fn Parser::parse_module_block_with_const_values(
   let imports : Array[@ast.TsImportDecl] = []
   let exports : Array[@ast.TsExportSpec] = []
   let reexports : Array[@ast.TsReExportSpec] = []
+  // The specifiers this module requests at runtime, appended as the
+  // statements are parsed — so `import … from` and `export … from` end
+  // up interleaved in source order, which the two arrays above cannot
+  // express. See `TsModuleBlock.module_request_order`.
+  let module_request_order : Array[String] = []
   let enums : Array[@ast.TsEnumDecl] = []
   let const_values : Map[String, @ast.TsExpr] = {}
   for entry in seeded_const_values {
@@ -3858,7 +3867,11 @@ fn Parser::parse_module_block_with_const_values(
       self.skip_decorator()
     }
     if self.check(Import) {
-      imports.push(self.parse_import_decl())
+      let imp = self.parse_import_decl()
+      if !imp.type_only {
+        module_request_order.push(imp.module_spec)
+      }
+      imports.push(imp)
       continue
     }
     if self.check(Export) {
@@ -3915,6 +3928,9 @@ fn Parser::parse_module_block_with_const_values(
         }
       }
       for spec in reexport_specs {
+        if !spec.type_only {
+          module_request_order.push(spec.module_spec)
+        }
         reexports.push(spec)
       }
       continue
@@ -4069,6 +4085,8 @@ fn Parser::parse_module_block_with_const_values(
       type_aliases: self.collected_type_aliases,
       interfaces: self.collected_interfaces,
       class_fields: self.collected_class_fields,
+      module_request_order,
+      type_only_exports: self.collected_type_only_exports,
       has_export_equals: self.collected_export_equals,
     },
     const_values,

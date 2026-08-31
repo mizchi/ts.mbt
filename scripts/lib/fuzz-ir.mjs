@@ -91,6 +91,9 @@ function isIdentName(name) {
 
 export function printExpr(node) {
   switch (node.k) {
+    // Verbatim expression text; see the `raw` declaration arm.
+    case "raw":
+      return node.text;
     case "lit":
       return node.value;
     case "var":
@@ -169,8 +172,33 @@ export function printStmt(node, depth = 0) {
       // literal — as it is in every JS engine, which made these look
       // like mtsc parser bugs until Node rejected them too. Same for a
       // leading `function` or `class`, which would be declarations.
-      const needsParens = /^[{]/.test(text) || /^(function|class)\b/.test(text);
-      return needsParens ? `${p}(${text});\n` : `${p}${text};\n`;
+      // Parens alone are not enough, because a leading `{` can also be
+      // nested INSIDE them and something downstream may re-print the
+      // program with the parens gone. Node 22's
+      // `--experimental-transform-types` — the reference leg — does
+      // exactly that. Given
+      //
+      //     (({ ...obj, g: 1 } ? 1 : 2), (a--));
+      //
+      // it emits `{ ...obj, g: 1 } ? 1 : 2, a--;`, so the `{` opens a
+      // block and the `...obj` inside is read as a rest parameter of the
+      // module wrapper: "Rest parameter must be last formal parameter",
+      // on a program that is valid as written. Reproducible in four
+      // lines on Node v22.22.2, and nothing to do with mtsc, which
+      // compiles it correctly. It cost 23 of 6019 seeds their oracle,
+      // was reported as `[no-oracle] original threw SyntaxError`, and
+      // reads exactly like a generator defect.
+      //
+      // `void` is what survives that re-printing. A leading `0,` does
+      // NOT: SWC drops a constant first operand of a discarded comma
+      // and puts the `{` right back at the front. `void` is a unary
+      // operator rather than a discardable operand, so it stays, and
+      // for an expression statement whose value is already thrown away
+      // it changes nothing. All three legs still run the same source.
+      const bare = text.replace(/^\(+/, "");
+      if (/^[{]/.test(bare)) return `${p}void (${text});\n`;
+      if (/^(function|class)\b/.test(bare)) return `${p}(${text});\n`;
+      return `${p}${text};\n`;
     }
     case "decl": {
       const type = node.type ? `: ${node.type}` : "";
@@ -319,7 +347,7 @@ function printDecl(decl) {
     }
     case "class":
       return (
-        `class ${decl.name} {\n` +
+        `class ${decl.name}${decl.extends ? ` extends ${decl.extends}` : ""} {\n` +
         decl.members.map((m) => printClassMember(m, 1)).join("") +
         `}\n`
       );
@@ -331,6 +359,20 @@ function printDecl(decl) {
       );
     case "alias":
       return `type ${decl.name} = ${decl.body};\n`;
+    // Verbatim TypeScript, emitted as one atom.
+    //
+    // Used by the name-resolution group (`shadowGroup` in
+    // `fuzz-generate.mjs`), whose shapes are `const enum`, a type-guard
+    // signature, a literal-union `switch` dispatcher and so on — six
+    // constructs that the expression grammar has no nodes for and that
+    // would each need a printer arm to gain nothing, since the group's
+    // whole point is a fixed shape with a fresh NAME.
+    //
+    // The cost is real and bounded: the shrinker cannot reduce inside a
+    // raw node, only drop it. Each shape is therefore its own raw decl,
+    // so a reduction can drop five of six and leave the one that fails.
+    case "raw":
+      return decl.text;
     default:
       throw new Error(`fuzz-ir: cannot print declaration ${decl.k}`);
   }

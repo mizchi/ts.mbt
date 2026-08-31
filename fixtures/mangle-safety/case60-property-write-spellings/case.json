@@ -1,0 +1,22 @@
+{
+  "origin": "ts.mbt — #73, found while measuring the ceiling of the class-method-DCE suppression rather than by any harness",
+  "what": "`index_prop_assigns` recorded `NAME.prop = value` and none of the other three spellings, so a compound property assignment (`??=`/`||=`/`&&=`), a literal-key computed write (`NAME[\"prop\"] = v`) and a non-literal one all failed to put their VALUE on the export surface. Two more holes in the same walk: a property READ off an internal object resolved against the object literal's own entry and stopped there, treating a necessary source as a sufficient one; and `surface_escape_class` put the value escape inside the `is_internal_marker_prop` filter, so a `#private` field's value never escaped while the identical public field did. Each one made `mtsc entry.ts --bundle`, with NO optimization flag, delete a method a consumer goes on to call — the witness was hono's `#req ??= new HonoRequest(…)` and a consumer's `c.req.param(\"id\")` throwing. `param` is called only from `driver.mjs`, outside the bundle, so the export surface is the only thing that can keep it; the deletion happened in every mtsc leg, so the detection comes from the reference leg rather than from comparing two mtsc outputs. `bag.counter = bag.counter + 1` is also here: fixing the read meant walking the recorded writes, and a write that reads the key it writes made the walk fail to terminate. H4 (the `#private` field's value escape) lives in `case61` instead: here the unindexed write spellings leave `this.slot` unresolvable, which widens to `this` and escapes every this-write including the private one, so the two holes mask each other and neither could be attributed. Each holder has its OWN payload class with its OWN method name: with one shared payload class the case passed even with the fix reverted, because `prop_assigns` is keyed by receiver NAME and `this` is the union of every class in the bundle, so the control holder's working `this.slot = new Payload(...)` kept the shared method for all six.",
+  "exports": [
+    "coalesce",
+    "or",
+    "literalKey",
+    "plain",
+    "computed",
+    "fillBag",
+    "bagCount"
+  ],
+  "expectKeep": [
+    "readCoalesce",
+    "readOr",
+    "readLiteralKey",
+    "readThrough",
+    "readPlain",
+    "readComputed"
+  ],
+  "expectStatus": "pass"
+}

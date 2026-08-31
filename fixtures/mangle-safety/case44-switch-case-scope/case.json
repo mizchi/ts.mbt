@@ -1,0 +1,14 @@
+{
+  "origin": "ts.mbt — found by the fuzzer once the original program became its oracle (seed 2577)",
+  "what": "`stmt_positions` being empty was used as the marker for 'this Block is really `let a = 1, b = 2`', and four passes re-derived that test independently with only the emitter checking positions at all. A real all-declaration block therefore got spliced into its parent: under `--minify --mangle` two switch cases ended up declaring the same mangled name, and under plain `--bundle --fold` a block-scoped `const` collided with one in the enclosing scope. Both produce output Node refuses to parse. The marker is now an explicit `DECL_GROUP_POSITION` sentinel, so a pass that drops positions fails toward KEEPING braces — bytes, not a duplicate declaration.",
+  "mtscArgs": [
+    "--treeshake",
+    "--fold"
+  ],
+  "exports": [
+    "report",
+    "shadowed",
+    "sum"
+  ],
+  "expectStatus": "pass"
+}

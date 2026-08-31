@@ -1549,7 +1549,10 @@ fn Parser::merge_decl_stmts(
   if stmts.length() == 1 {
     stmts[0]
   } else {
-    Block({ stmts, stmt_positions: [] })
+    // `DECL_GROUP_POSITION` marks this as `let a = 1, b = 2` rather than
+    // a real block. See the constant's comment: recording it as "no
+    // positions" let every later rebuild erase the distinction.
+    Block({ stmts, stmt_positions: [@ast.DECL_GROUP_POSITION] })
   }
 }
 

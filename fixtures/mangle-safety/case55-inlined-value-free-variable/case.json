@@ -1,0 +1,13 @@
+{
+  "origin": "ts.mbt — found while pricing #87 (inline a statement-bodied single-call function), by reading what `call_inline` already accepts",
+  "what": "Four passes substitute a VALUE into a call or read site and none checked whether the names that value reads still mean the same thing there. `case43` covers the table's KEY being shadowed; this is the value's own free variables. The mangler runs before the inline phase and legitimately reuses one short name for an outer binding and an inner one, so the collision is the ordinary shape of mangled code — a wrong VALUE under the full shipping flag set, with no crash and no free variable.",
+  "mtscArgs": [
+    "--treeshake",
+    "--fold",
+    "--minify"
+  ],
+  "exports": [
+    "report"
+  ],
+  "expectStatus": "pass"
+}
