@@ -1130,3 +1130,76 @@ byte が動かない理由はこの文書と CLAUDE.md が別の 4 方向から�
 予約集合は「大きい」のではなく**網羅的**なので、予約経路を 1 つ増やして
 も減らしても byte は動きません。DCE coverage も 31 eliminated /
 0 broken で不変——過剰予約に振れていないことの確認です。
+
+## 却下: `--verify` に「宣言された member の到達可能性」を足す案
+
+この 5 つの穴（case60 / case61）はどれも `--verify` に見えません。
+名前は全部解決するので、free variable も crash も出ないからです。
+そこで「名前解決ではなく**宣言された member が出力に在るか**を検証する」
+案を検討しました。**実装せず却下**します。理由は測って出しました。
+
+### 判定の中心は誤検出率
+
+`verify.mbt` は意図的に fail-quiet です——狼少年になった verifier は
+切られるので。そして `class_method_dce` は**正しく**到達不能メソッドを
+削除します。素朴な「宣言されたのに無い」チェックは、その正しい削除を
+全部拾います。
+
+corpus 10 target で測ると `--bundle` で 46 クラスを比較して誤検出は
+**実質 0**（1 件は hono が `Node` という名前のクラスを 2 つ持つことに
+よる、測定側の同名マージ artifact。バンドルに出るのは reg-exp router の
+`Node` で、trie router の方は丸ごと tree-shake されています）。
+
+**これは「チェックが精密」の証拠ではありませんでした。** #73 で分かって
+いる通り、この corpus では `class_method_dce` が 8/10 で早期脱出し、
+hono と excalidraw では suppressed です。0 は「パスが発火していない」の
+0 でした。削除が実際に起きる場所で確かめる必要があります:
+
+```ts
+class Widget {
+  live(): number { return 1 }
+  deadNeverCalled(): number { return 2 }   // 誰も呼ばない・export もしない
+}
+export const out: number = new Widget().live();
+```
+
+```
+FLAGGED: Widget.deadNeverCalled  (a CORRECT deletion)
+```
+
+`verify-dce-coverage` が「消えること」を assert しているメソッドを
+flag します。つまり素朴形は**使えません**。
+
+### 抑えるには検証対象と同じ解析が必要になる
+
+正しい削除と誤った削除を分ける情報は「consumer から到達できるか」——
+すなわち **export surface / off-bundle reachability そのもの**です。
+それは今回バグっていた当の解析なので、verifier がそれを使えば
+**検証される側とコードを共有**します。`--verify` の価値は
+「passes と何も共有しない第二の目」であることなので、それを失うと
+残るのは名前解決チェックだけです。
+
+### では何が見るのか（既にあるもの）
+
+この種のバグを見られるのは、外部 oracle を持つ実行差分だけです:
+
+* `case60` / `case61` — payload の method を**バンドルの外**（`driver.mjs`）
+  から呼び、Node が同じ TypeScript を走らせた結果と比較。5 つの穴は
+  mtsc の全 leg で起きるので、mtsc 同士の比較では一致してしまいます。
+* `case.json` の `expectKeep` — 「外から見える」と人間が宣言した名前に
+  ついて、まさにこの「宣言されたのに無い」チェックを行っています。
+  健全に成立する唯一の場所が、人間が外部可視性を宣言した名前の上、
+  というのがこの案の答えです。
+* `just fuzz-mangle` の `lazyHolderGroup` — 同じ形を seed から生成。
+
+### 測定側で 2 つバグを踏んだ（記録）
+
+1. 除外パターンを**絶対パス**に当てていた。corpus は全て `_build/` 配下
+   なので、リポジトリ自身のビルド出力を除外するつもりのパターンが
+   ソース 100% を捨て、`declared-but-absent 0` を返しました。探していた
+   答えとそっくりの形です。`compared` 列を併記していたから
+   「0 classes」で気づけました。**測定値と一緒に「何を測ったか」を出す。**
+2. `--mangle` は**クラス名も rename** します。メソッド名（property）が
+   rename されないことは考慮したのに、クラス名を見落とし、
+   `shipping-no-propmangle` 行は全 target `0 classes` = 無情報でした。
+   名前で突き合わせるなら mangle 前か rename map が必要です。
