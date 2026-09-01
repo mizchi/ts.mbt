@@ -2155,9 +2155,24 @@ need parser-wide changes).
 
 ## TS Checker Conformance (current state, 2026-09-01 — TypeScript 7)
 
-State: whole-corpus **TP 2346 / MISS 388 / FP 0 / PFLEGAL 0 / TN 1750**
+State: whole-corpus **TP 2373 / MISS 361 / FP 0 / PFLEGAL 0 / TN 1750**
 (classified 4484, NOTRUN 14) via
 `scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0`.
+Three batches this round: BU +9, BV +14, BW +13, for **+36 TP at FP 0**.
+
+One instrumentation note, because it looks like a contradiction and is
+not. `moon test` prints a SECOND accuracy line from
+`parser_typescript_wbtest.mbt` — `precision=411/414
+(false-positives=3)` — while the gate above says FP 0. Both are right:
+that harness is a loose catastrophe net (20% cap) over a pinned 31-directory
+subset, it decides "clean" from the presence of a **TS6-era**
+`.errors.txt`, and unlike the gate it counts multi-file cases and files
+tsgo never ran. The three are `assertionTypePredicates2` (multi-`@filename`,
+which TS7 does error on) plus `classWithStaticFieldInParameter{Initializer,
+BindingPattern}.3` (both NOTRUN under TS7), and all three are batch BE's
+TS2373 parameter-scope diagnostic, not this round's. Checked rather than
+assumed — the first explanation offered ("TS6/TS7 divergence") was measured
+and came back ZERO files, which is why the real cause is written down here.
 
 **The MISSes are ranked now, and the strategy doc was wrong.**
 `scripts/checker_miss_buckets.mjs` (`just checker-miss-buckets`) classifies
@@ -2178,6 +2193,93 @@ in June:
   rule.** No assignability, no flow narrowing, no generic instantiation.
 - **91 of them have baseline codes that are ALL TS1xxx**, i.e. not one type
   judgement is needed anywhere in the file.
+
+Batch BW (2026-09-01): TP 2360 -> 2373, MISS 374 -> 361, FP / PFLEGAL 0.
+Thirteen more files, and the batch's own boundary probes are the substance
+of it — every rule below has its LEGAL neighbour recorded next to it,
+because "fires on the corpus file" and "does not fire on the legal
+spelling" are two different claims and only the second one is what keeps
+the gate at zero.
+
+- **TS1051 / TS1052 / TS1053 / TS1094 / TS1095** — the `set` accessor
+  family (5 files): a parameter with an initializer, an optional
+  parameter, a rest parameter, a return-type annotation, and (for BOTH
+  accessor kinds) a type-parameter list. `set F(v: number)`,
+  `get F(): number` and `set F(v,)` are the legal neighbours and stay
+  silent.
+- **TS1016 / TS1047** — parameter-list rules (3 files), recorded in
+  `parse_params`, the ONE site every parameter list goes through, so a
+  method, a plain function, a constructor and an arrow are covered by
+  construction rather than by four copies. Two legal neighbours matter
+  here and a naive reading gets both wrong: a DEFAULT does not make a
+  parameter optional for TS1016 (`f(a = 1, b)` is legal tsc) and a REST
+  after an optional is fine (`f(a?, ...b)`).
+- **TS1064** — an `async` function's return annotation (2 of 4 files).
+  The rule is nearly syntactic — tsc requires the GLOBAL `Promise<T>`, so
+  even `PromiseLike<void>` and a `Promise` SUBCLASS are errors — but a
+  type ALIAS to `Promise<void>` is legal, and the alias and the subclass
+  are the same named-annotation node at parse time. Every named
+  annotation therefore abstains, which costs the two
+  `asyncQualifiedReturnType` files (`X.MyPromise<void>` stays a MISS) and
+  is the right direction for a 0-FP gate. Deciding those two needs the
+  declaration table (a name declared in-file as a class or interface
+  cannot be an alias) and is filed, not built.
+- **TS1013** — a rest element with a trailing comma (1 file), binding
+  patterns only. The PARAMETER form is deliberately not implemented:
+  `declare function f(...a,)` is ACCEPTED by tsc in an ambient
+  declaration, and the parser cannot express that exemption (see the
+  TS1212 note below for the same blocker). The binding-pattern form has
+  no ambient spelling, so it needs no exemption.
+- **TS1097** — an empty `extends` / `implements` list (2 files). Tested as
+  "the body `{` opens immediately" rather than as "the collected name list
+  came back empty", because an empty list is ALSO what the collector
+  returns for a legal form it cannot spell (`interface I extends
+  import("m").T`), and blaming the author for a gap in the collector is a
+  false positive by construction.
+
+The round's one false positive is the reason the async rule has an
+`is_generator` parameter: `types.asyncGenerators.es2018.1.ts` is
+TS7-ACCEPTED, an `async function*` returns `AsyncGenerator<Y, R, N>` rather
+than a promise, and the rule does not apply to it at all. Caught by the
+gate on the first run, before the batch landed.
+
+Batch BV (2026-09-01): TP 2346 -> 2360, MISS 388 -> 374, FP / PFLEGAL 0.
+Fourteen files, two clusters, and one instructive failure in the middle.
+
+- **Constructor cluster** (6 files): `static` / `async` / `override` on a
+  constructor is TS1089, a type-parameter list is TS1092 (an EMPTY one,
+  `constructor<>()`, is additionally TS1098 — so the check has to ask
+  whether a list was WRITTEN, not whether it produced names), and a
+  return-type annotation is TS1093 for every annotation including `void`.
+  Accessibility modifiers are deliberately absent from the list: tsc
+  accepts `private constructor()`, the singleton idiom. `abstract` and
+  `readonly` are errors too but under their own codes (TS1242 / TS1024)
+  and are left alone — a check that reports the wrong rule is worse than
+  no check.
+- **Index-signature cluster** (8 files): TS1017 (rest parameter), TS1019
+  (question mark), TS1021 (no value annotation), TS1096 (not exactly one
+  parameter), TS1268 (parameter type not `string` / `number` / `symbol` /
+  template literal).
+
+The instructive part: the first draft wrote the index-signature rules
+INLINE in the type-literal member parser and won **2 of the 8** files.
+A type literal (`type R = { … }`) and an interface body are parsed by two
+near-duplicate member loops in different files, so `{ [k: any]: V }` was
+checked and the identical `interface I { [k: any]: V }` was not — the same
+family this file has recorded ten times, caught here by the corpus rather
+than by reading. The rules are three shared helpers now
+(`record_index_signature_shape_misuse` /
+`_key_misuse` / `_missing_annotation`) called from both loops, and the
+unit test asserts every shape in BOTH spellings so a future edit cannot
+regress one and still pass.
+
+TS1268 is decided by a DENYLIST of the primitives tsc rejects rather than
+by the complement of the four it accepts, and the reason is a genuine
+ambiguity rather than caution: `type K = string; { [k: K]: V }` is LEGAL
+and `{ [k: RegExp]: V }` is TS1268, and both are the same named-type node
+here. Abstaining on every named type costs `RegExp` (a MISS) and keeps the
+alias (no FP). Unions abstain too (`{ [k: string | number]: V }` is
+legal), and a literal key is a different rule entirely (TS1337).
 
 Batch BU (2026-09-01): TP 2337 -> 2346, MISS 397 -> 388, FP / PFLEGAL 0.
 Nine files, three rules, and the first one was a BUG before it was a recall

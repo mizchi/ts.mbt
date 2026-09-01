@@ -32,7 +32,7 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2346 / MISS 388 / FP 0 /
+  is a soundness bug, and there are none (TP 2373 / MISS 361 / FP 0 /
   PFLEGAL 0 / TN 1750). The asymmetry is deliberate: we model a subset of
   TS, so a MISS is expected and an FP never is.
   That gate says how many we miss and nothing about WHICH, so "MISS 388"
@@ -45,8 +45,9 @@ product surfaces now.
   were exhausted and that only large type-machinery features remained, and
   that was measured against the **TS6** oracle — under TS7, **128 of the
   388 missing files are flippable by a pure-grammar (TS1xxx) rule** and 91
-  of them need no type judgement anywhere. The first such batch was +9 TP
-  at FP 0, and its largest item was a BUG rather than a missing feature:
+  of them need no type judgement anywhere. Three batches have taken **+36
+  TP at FP 0** so far, and the largest item in the first was a BUG rather
+  than a missing feature:
   `eval`/`arguments` as an assignment target was checked at two of the four
   spellings JavaScript has for writing a binding (`=`, `+=`, `++x`, `x++`),
   so `"use strict"; eval++` parsed clean — tenth instance in this repo of
@@ -59,6 +60,20 @@ product surfaces now.
   --deny-warn` cannot gate anything here, since the tree carries 450+
   pre-existing warnings — plain `moon check` reporting `0 errors` is the
   check.
+  Two lessons repeat across the batches and are worth stating once. First,
+  a rule's LEGAL neighbour is the thing to test: "fires on the corpus file"
+  and "stays silent on the legal spelling" are separate claims, and only
+  the second keeps the gate at zero — `f(a = 1, b)` (legal) next to
+  `f(a?, b)` (TS1016), `set F(v,)` (legal) next to `set F(a = 1)`
+  (TS1052), a type ALIAS to `Promise<void>` (legal) next to a `Promise`
+  SUBCLASS (TS1064), `type K = string` as an index key (legal) next to
+  `RegExp` (TS1268). Where a legal and an illegal form are the SAME node at
+  parse time, the check abstains and takes the MISS. Second, an error CODE
+  is not a difficulty class: the ~15-file decorator cluster looks like
+  cheap TS1xxx grammar and is mostly decorator-signature ASSIGNABILITY
+  (TS1240/1241/1270/1329), so the bucket ranking had to be read by opening
+  the files — the same "a label stood in for the objective" mistake this
+  file records for `computed_props`, `loops`, `typeofs` and `sequences`.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

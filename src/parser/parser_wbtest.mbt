@@ -7687,3 +7687,205 @@ test "parser: a `@ts-ignore` in the file suppresses the `with` diagnostic" {
     }
   }
 }
+
+///|
+test "parser: constructor grammar rules and their legal neighbours" {
+  // Each rule was probed against tsc, and so was the legal spelling next
+  // to it — an accessibility modifier on a constructor is the singleton
+  // idiom and must stay silent, which is what separates this from a check
+  // that merely happens to fire on the corpus files.
+  let flagged = [
+    "class C { static constructor() {} }", "class C { async constructor() {} }",
+    "class C { override constructor() {} }", "class C { constructor<T>() {} }", "class C { constructor<>() {} }",
+    "class C { constructor(): number {} }",
+  ]
+  for src in flagged {
+    let m = Parser::from_source(src).parse_module() catch {
+      e => fail("expected `\{src}` to parse: \{e}")
+    }
+    if m.grammar_misuses
+      .filter(fn(g) { g.contains("constructor declaration") })
+      .length() ==
+      0 {
+      fail("expected a constructor grammar misuse for `\{src}`")
+    }
+  }
+  let legal = [
+    "class C { constructor() {} }", "class C { private constructor() {} }", "class C { protected constructor() {} }",
+    "class C { public constructor(readonly x: number) {} }",
+  ]
+  for src in legal {
+    let m = Parser::from_source(src).parse_module() catch {
+      e => fail("expected `\{src}` to parse: \{e}")
+    }
+    for gm in m.grammar_misuses {
+      if gm.contains("constructor declaration") {
+        fail("`\{src}` is legal TypeScript: \{gm}")
+      }
+    }
+  }
+}
+
+///|
+test "parser: index-signature grammar rules reach both member parsers" {
+  // A type literal and an interface body are parsed by two near-duplicate
+  // member loops. The first draft of these rules was written inline at one
+  // of them and won 2 of 8 corpus files; each shape is checked here in
+  // BOTH spellings so a future edit cannot regress one and pass.
+  let bad = [
+    "[]: number", "[a, b]: number", "[...a]", "[a?]", "[a: boolean]", "[a: any]",
+  ]
+  for member in bad {
+    for src in ["interface I { \{member} }", "type R = { \{member} };"] {
+      let m = Parser::from_source(src).parse_module() catch {
+        e => fail("expected `\{src}` to parse: \{e}")
+      }
+      if m.grammar_misuses
+        .filter(fn(g) { g.contains("index signature") })
+        .length() ==
+        0 {
+        fail("expected an index-signature misuse for `\{src}`")
+      }
+    }
+  }
+  // The legal bracket-headed members. A mapped type and a computed key are
+  // the two that a token-shape test can most easily get wrong.
+  let good = [
+    "type M<T> = { [K in keyof T]: T[K] };", "type R = { [k: string]: number };",
+    "type R = { [k: number]: number };", "type R = { [k: symbol]: number };", "interface I { [k: string]: number }",
+    "type R = { readonly [k: string]: number };", "type K = string; type R = { [k: K]: number };",
+    "type R = { [k: string | number]: number };",
+  ]
+  for src in good {
+    let m = Parser::from_source(src).parse_module() catch {
+      e => fail("expected `\{src}` to parse: \{e}")
+    }
+    for gm in m.grammar_misuses {
+      if gm.contains("index signature") {
+        fail("`\{src}` is legal TypeScript: \{gm}")
+      }
+    }
+  }
+}
+
+///|
+test "parser: parameter-list and accessor grammar rules" {
+  // TS1016 / TS1047 live in `parse_params`, the one site every parameter
+  // list goes through, so a method, a function and an arrow are all
+  // covered by construction. The legal neighbours are the point: a
+  // DEFAULT does not make a parameter optional for TS1016
+  // (`f(a = 1, b)` is legal), and a REST after an optional is fine.
+  let flagged = [
+    ("class C { F(A?, B) {} }", "optional parameter"),
+    ("function f(a?: number, b: number) {}", "optional parameter"),
+    ("class C { foo(...bar?) {} }", "rest parameter cannot be optional"),
+    ("const f = (...arg?) => 102;", "rest parameter cannot be optional"),
+    ("class C { set F(a = 1) {} }", "initializer"),
+    ("class C { set F(a?: number) {} }", "optional parameter"),
+    ("class C { set F(...a) {} }", "rest parameter"),
+    ("class C { set F(v): number {} }", "return type annotation"),
+    ("class C { set F<T>(v) {} }", "type parameters"),
+    ("class C { get F<T>() { return 1; } }", "type parameters"),
+  ]
+  for entry in flagged {
+    let (src, needle) = entry
+    let m = Parser::from_source(src).parse_module() catch {
+      e => fail("expected `\{src}` to parse: \{e}")
+    }
+    if m.grammar_misuses.filter(fn(g) { g.contains(needle) }).length() == 0 {
+      fail("expected `\{needle}` for `\{src}`, got \{m.grammar_misuses}")
+    }
+  }
+  let legal = [
+    "function f(a = 1, b: number) {}", "function f(a?: number, ...b: number[]) {}",
+    "function f(a?: number, b?: number) {}", "class C { set F(v: number) {} }", "class C { get F(): number { return 1; } }",
+  ]
+  for src in legal {
+    let m = Parser::from_source(src).parse_module() catch {
+      e => fail("expected `\{src}` to parse: \{e}")
+    }
+    for gm in m.grammar_misuses {
+      if gm.contains("optional parameter") ||
+        gm.contains("rest parameter") ||
+        gm.contains("initializer") ||
+        gm.contains("type parameters") {
+        fail("`\{src}` is legal TypeScript: \{gm}")
+      }
+    }
+  }
+}
+
+///|
+test "parser: an async return annotation must be the global Promise" {
+  // The abstention is the interesting half. A type ALIAS to `Promise<void>`
+  // is legal and a Promise SUBCLASS is not, and both are the same named
+  // annotation at parse time — so every named annotation stays silent,
+  // which costs two corpus files and keeps the alias from false-flagging.
+  // An async GENERATOR is exempt outright: it returns `AsyncGenerator`,
+  // and forgetting that was this round's only false positive.
+  let flagged = [
+    "async function f(): void {}", "async function f(): any {}", "async function f(): number { return 1; }",
+    "async function f(): {} {}", "class C { async m(): void {} }",
+  ]
+  for src in flagged {
+    let m = Parser::from_source(src).parse_module() catch {
+      e => fail("expected `\{src}` to parse: \{e}")
+    }
+    if m.grammar_misuses
+      .filter(fn(g) { g.contains("global `Promise<T>`") })
+      .length() ==
+      0 {
+      fail("expected an async return-type misuse for `\{src}`")
+    }
+  }
+  let legal = [
+    "async function f(): Promise<void> {}", "async function f() {}", "type P = Promise<void>;\nasync function f(): P {}",
+    "class C { async m(): Promise<void> {} }", "async function* g(): AsyncGenerator<number> { yield 1; }",
+    "function f(): void {}",
+  ]
+  for src in legal {
+    let m = Parser::from_source(src).parse_module() catch {
+      e => fail("expected `\{src}` to parse: \{e}")
+    }
+    for gm in m.grammar_misuses {
+      if gm.contains("global `Promise<T>`") {
+        fail("`\{src}` is legal TypeScript: \{gm}")
+      }
+    }
+  }
+}
+
+///|
+test "parser: empty heritage lists and rest-element trailing commas" {
+  let flagged = [
+    ("interface I extends { }", "`extends` list cannot be empty"),
+    ("class C implements { }", "`implements` list cannot be empty"),
+    ("const [...a] = [];\nconst [...b,] = [];", "trailing comma"),
+    ("const o: any = {};\nconst {...b,} = o;", "trailing comma"),
+  ]
+  for entry in flagged {
+    let (src, needle) = entry
+    let m = Parser::from_source(src).parse_module() catch {
+      e => fail("expected `\{src}` to parse: \{e}")
+    }
+    if m.grammar_misuses.filter(fn(g) { g.contains(needle) }).length() == 0 {
+      fail("expected `\{needle}` for `\{src}`, got \{m.grammar_misuses}")
+    }
+  }
+  // A trailing comma after a NON-rest element is legal, and an `extends`
+  // clause that names something must stay silent.
+  let legal = [
+    "const [e,] = [] as any;", "interface A { x: number }\ninterface I extends A { }",
+    "declare class A {}\nclass C extends A { }",
+  ]
+  for src in legal {
+    let m = Parser::from_source(src).parse_module() catch {
+      e => fail("expected `\{src}` to parse: \{e}")
+    }
+    for gm in m.grammar_misuses {
+      if gm.contains("trailing comma") || gm.contains("cannot be empty") {
+        fail("`\{src}` is legal TypeScript: \{gm}")
+      }
+    }
+  }
+}
