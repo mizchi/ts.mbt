@@ -32,7 +32,7 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2373 / MISS 361 / FP 0 /
+  is a soundness bug, and there are none (TP 2383 / MISS 351 / FP 0 /
   PFLEGAL 0 / TN 1750). The asymmetry is deliberate: we model a subset of
   TS, so a MISS is expected and an FP never is.
   That gate says how many we miss and nothing about WHICH, so "MISS 388"
@@ -45,9 +45,10 @@ product surfaces now.
   were exhausted and that only large type-machinery features remained, and
   that was measured against the **TS6** oracle — under TS7, **128 of the
   388 missing files are flippable by a pure-grammar (TS1xxx) rule** and 91
-  of them need no type judgement anywhere. Three batches have taken **+36
-  TP at FP 0** so far, and the largest item in the first was a BUG rather
-  than a missing feature:
+  of them need no type judgement anywhere. Four batches have taken **+46
+  TP at FP 0** so far, and two of their items were BUGS rather than
+  missing features — one of them a rule the repo had already written and
+  applied to every declaration kind except namespaces. The first:
   `eval`/`arguments` as an assignment target was checked at two of the four
   spellings JavaScript has for writing a binding (`=`, `+=`, `++x`, `x++`),
   so `"use strict"; eval++` parsed clean — tenth instance in this repo of

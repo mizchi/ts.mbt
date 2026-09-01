@@ -7889,3 +7889,75 @@ test "parser: empty heritage lists and rest-element trailing commas" {
     }
   }
 }
+
+///|
+test "parser: a computed member key must be a literal or unique symbol" {
+  // TS1169 / TS1170. Checked in BOTH member parsers (an interface body and
+  // a type literal are two near-duplicate loops in two files), because the
+  // index-signature rules in the same place won 2 of 8 corpus files when
+  // written at only one of them.
+  let bad = ["[\"\" + \"\"](): void", "[foo()](): void", "[a = 0]"]
+  for member in bad {
+    for src in ["interface I { \{member} }", "var v: { \{member} };"] {
+      let m = Parser::from_source(src).parse_module() catch {
+        e => fail("expected `\{src}` to parse: \{e}")
+      }
+      if m.grammar_misuses
+        .filter(fn(g) { g.contains("computed property name") })
+        .length() ==
+        0 {
+        fail("expected a computed-key misuse for `\{src}`")
+      }
+    }
+  }
+  // The legal keys. A parenthesised reference is the one the "call" half of
+  // the test could most easily mistake for a call, so it is here on
+  // purpose; a CLASS and an OBJECT LITERAL take an arbitrary expression and
+  // must stay silent whatever the key looks like.
+  let good = [
+    "declare const e: unique symbol;\ninterface I { [e]: number }", "interface I { [\"lit\"]: number }",
+    "interface I { [1]: number }", "interface I { [Symbol.iterator](): number }",
+    "declare const e: unique symbol;\ninterface I { [(e)]: number }", "declare const enum E { A = \"a\" }\ninterface I { [E.A]: number }",
+    "class C { [\"\" + \"\"]() {} }", "const o = { [\"\" + \"\"]() {} };",
+  ]
+  for src in good {
+    let m = Parser::from_source(src).parse_module() catch {
+      e => fail("expected `\{src}` to parse: \{e}")
+    }
+    for gm in m.grammar_misuses {
+      if gm.contains("computed property name") {
+        fail("`\{src}` is legal TypeScript: \{gm}")
+      }
+    }
+  }
+}
+
+///|
+test "parser: an enum member is expected after a comma" {
+  // TS1132. A TRAILING comma is legal and cannot reach the check, because
+  // the separator after a parsed member is consumed at the bottom of the
+  // member loop — that asymmetry is the whole rule, so both directions are
+  // pinned here.
+  for src in ["enum E { , }", "enum E { A,, B }"] {
+    let m = Parser::from_source(src).parse_module() catch {
+      e => fail("expected `\{src}` to parse: \{e}")
+    }
+    if m.grammar_misuses.filter(fn(g) { g.contains("enum member") }).length() ==
+      0 {
+      fail("expected an enum-member misuse for `\{src}`")
+    }
+  }
+  for
+    src in [
+      "enum E { A, }", "enum E { }", "enum E { A }", "enum E { A = 1, B = 2 }",
+    ] {
+    let m = Parser::from_source(src).parse_module() catch {
+      e => fail("expected `\{src}` to parse: \{e}")
+    }
+    for gm in m.grammar_misuses {
+      if gm.contains("enum member") {
+        fail("`\{src}` is legal TypeScript: \{gm}")
+      }
+    }
+  }
+}

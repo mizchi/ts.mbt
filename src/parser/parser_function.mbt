@@ -1591,6 +1591,7 @@ pub fn Parser::parse_interface(
           continue
         }
         self.record_index_signature_shape_misuse()
+        self.record_computed_member_key_misuse("an interface")
         // TS2304: a computed member key that is a single bare identifier
         // (`[e]: number` / `[e](): T`) references the value namespace --
         // record it for the checker's undeclared-name resolution. Dotted

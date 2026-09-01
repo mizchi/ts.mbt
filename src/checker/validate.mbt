@@ -231,6 +231,31 @@ pub fn check_dts_top_level_modifiers(
       flag("class", c.name)
     }
   }
+  // A top-level `namespace N { … }` / `module N { … }` needs the modifier
+  // just as much as a function or a class does, and this walk covered
+  // every OTHER declaration kind while skipping namespaces entirely —
+  // three conformance files (`parserModuleDeclaration{1,2,4}.d`) sat as
+  // MISSes against a check that already existed. Same shape as the bug
+  // family recorded in TODO.md: a rule applied to some of the forms it
+  // names.
+  //
+  // Probed against tsc rather than assumed: `namespace M { }` in a .d.ts is
+  // TS1046, `declare namespace M { }` and `export namespace M { }` are
+  // clean, and the rule holds even in a .d.ts that is itself a module
+  // (an `import` in the file does not exempt it). A namespace NESTED in an
+  // ambient one (`declare namespace M { namespace M1 { } }`) is clean, and
+  // `module_.namespaces` holds only the top level, so nesting cannot reach
+  // this loop.
+  //
+  // `<global>` is the parser's name for a `declare global { … }` block,
+  // which is ambient by construction; a quoted specifier
+  // (`declare module "m"`) arrives through `module_augmentations` and its
+  // members are already exempted by name above.
+  for ns in module_.namespaces {
+    if !ns.is_declare && ns.name != "<global>" {
+      flag("namespace", ns.name)
+    }
+  }
   for stmt in module_.top_level_stmts {
     match stmt {
       Var(Ident(n), _, _) | Let(Ident(n), _, _) | Const(Ident(n), _, _) =>

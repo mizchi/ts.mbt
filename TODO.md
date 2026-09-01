@@ -2155,10 +2155,11 @@ need parser-wide changes).
 
 ## TS Checker Conformance (current state, 2026-09-01 — TypeScript 7)
 
-State: whole-corpus **TP 2373 / MISS 361 / FP 0 / PFLEGAL 0 / TN 1750**
+State: whole-corpus **TP 2383 / MISS 351 / FP 0 / PFLEGAL 0 / TN 1750**
 (classified 4484, NOTRUN 14) via
 `scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0`.
-Three batches this round: BU +9, BV +14, BW +13, for **+36 TP at FP 0**.
+Four batches this round: BU +9, BV +14, BW +13, BX +10, for **+46 TP at
+FP 0**.
 
 One instrumentation note, because it looks like a contradiction and is
 not. `moon test` prints a SECOND accuracy line from
@@ -2193,6 +2194,86 @@ in June:
   rule.** No assignability, no flow narrowing, no generic instantiation.
 - **91 of them have baseline codes that are ALL TS1xxx**, i.e. not one type
   judgement is needed anywhere in the file.
+
+Batch BX (2026-09-01): TP 2373 -> 2383, MISS 361 -> 351, FP / PFLEGAL 0.
+Ten files, and one of them was a gap in a check that already existed.
+
+- **TS1169 / TS1170** — a computed property name in an interface (1169) or
+  a type literal (1170) must refer to a literal type or a `unique symbol`
+  (7 files). A denylist of three token shapes at bracket depth 0: an
+  assignment (`[a = 0]`), a binary operator (`["" + ""]`), and a call's `(`
+  that is not the first token. That last condition is what separates
+  `[foo<T>()]` from `[(e)]`, a parenthesised reference, which is legal.
+  Every legal key was probed and none matches — a string or number
+  literal, a bare identifier over a `unique symbol`, a dotted const-enum
+  reference, a template literal, a well-known symbol. The rule is
+  interface / type-literal ONLY: a CLASS computed key and an OBJECT
+  LITERAL computed key both take an arbitrary expression
+  (`class C { ["" + ""]() {} }` is clean tsc), so it is deliberately not
+  recorded from the class member parser.
+- **TS1046 for namespaces** (2 of 3 files). `check_dts_top_level_modifiers`
+  already existed and already flagged functions, enums, classes, variables
+  and executable statements — and skipped NAMESPACES, so
+  `parserModuleDeclaration{2,4}.d` sat as MISSes against a check written
+  for exactly them. Eleventh instance of a rule applied to some of the
+  forms it names.
+
+  Opening it exposed a TWELFTH instance in the same family, one layer
+  down, and this one was a false positive aimed at the PRODUCT rather than
+  a missing diagnostic: `export namespace X { }` recorded no
+  `<export-value>` marker, while every other exported declaration kind
+  (function, enum, class, variable) does. So an exported namespace read as
+  un-exported and TS1046 flagged it — and `export namespace` is ordinary
+  @types shape, which is the bridge's primary input. The conformance gate
+  could not see it (the corpus has almost no `.d.ts` files); the UNIT TEST
+  written for the new namespace arm did, on its second assertion. Fixed
+  where the model says it belongs — an exported namespace IS an exported
+  value — rather than with a namespace-only marker, and measured: the
+  oracle is byte-identical at TP 2383 / FP 0, so widening that channel had
+  no blast radius on the corpus.
+
+  Two premises were checked rather than assumed while fixing it, because
+  the comment written first asserted one of them. `module_.namespaces` does
+  hold ONLY the top level (`namespace M { namespace M1 { } }` in a .d.ts
+  reports one issue, not two), so an ambient outer namespace exempts its
+  children for free. And the failing assertion was identified by RUNNING
+  each form through the real `.d.ts` path — `declare` 0, `export` 1,
+  bare 1, `declare global` 0 — not by counting characters in the failure
+  span, which had pointed at the wrong line. `parserModuleDeclaration1.d` (`module "Foo" { }`) stays
+  a MISS: a QUOTED specifier arrives through `module_augmentations`, which
+  carries no `declare` flag, so telling `module "Foo" {}` from
+  `declare module "Foo" {}` needs a new channel for one file.
+- **TS1132** — an enum member is expected after a comma (1 file). A
+  TRAILING comma is legal and cannot reach the check, because the
+  separator after a parsed member is consumed at the bottom of the member
+  loop and the next iteration sees `}`; a comma reaching the TOP of the
+  loop never had a member before it. Only the comma: `enum E { A; B }` is
+  TS1357, a different rule.
+
+Measured while chasing a suspected regression in this batch, and worth
+recording because it is NOT one: `tscheck` on
+`typescript/src/compiler/checker.ts` (54,434 lines) splits **268 ms parse /
+45,392 ms check** in a release build — the checker spends 170x the parser's
+time on one file, and the full `moon test` sweep of `typescript/src` in a
+DEBUG build is what makes the checker whitebox test run for tens of
+minutes.
+
+That it is not a regression from this round was settled by A/B rather than
+by argument: the pre-batch commit built in a git worktree gives **45,327 ms
+on checker.ts against 44,243 ms** for the current tree — identical within
+noise. Two hypotheses were offered before that measurement and both were
+wrong. A quadratic in `record_suppressible_grammar_misuse`, whose
+`grammar_misuses.contains(…)` scan runs per recorded misuse: checker.ts
+records ZERO grammar misuses. And the 64-token lookahead the computed-key
+rule adds per bracket-headed member: `peek_at` is O(1) and the whole parse
+half is 268 ms. The checker's own cost on large single files is unmeasured
+beyond this data point and is a separate question from conformance recall.
+
+DEFERRED from this batch, with the reason: **TS1063** (`export =` inside a
+namespace, 1 file) needs a namespace-depth counter the parser does not
+have. **TS1338** (`infer` outside an `extends` clause, 2 files) needs
+conditional-type context tracking, and both target files are large and
+dominated by TS2322 / TS2344 anyway.
 
 Batch BW (2026-09-01): TP 2360 -> 2373, MISS 374 -> 361, FP / PFLEGAL 0.
 Thirteen more files, and the batch's own boundary probes are the substance

@@ -620,6 +620,76 @@ fn index_signature_key_type_rejected(t : @ast.TsType) -> Bool {
 }
 
 ///|
+/// TS1169 / TS1170: a computed property name in an INTERFACE (1169) or a
+/// TYPE LITERAL (1170) must refer to an expression whose type is a literal
+/// type or a `unique symbol`. Recorded for the key expressions that
+/// definitely are neither.
+///
+/// The cursor must sit just after the opening `[`. The test is a DENYLIST
+/// of three token shapes at bracket depth 0, so an unrecognised key
+/// abstains:
+///
+///   an assignment operator     `[a = 0]`        TS1169
+///   a binary operator          `["" + ""]`      TS1169 / TS1170
+///   a call's `(`, not first    `[foo<T>()]`     TS1169
+///
+/// Every legal spelling was probed and none matches: a string or number
+/// literal key (`["lit"]`, `[1]`), a bare identifier (`[e]` over a
+/// `unique symbol`), a dotted reference (`[E.A]` over a const enum), a
+/// template literal, and a well-known symbol key (consumed earlier). The
+/// "not first" condition on `(` is what keeps a parenthesised reference
+/// (`[(e)]`) out of it while still catching a call.
+///
+/// The rule is interface / type-literal ONLY. A CLASS computed key and an
+/// OBJECT LITERAL computed key are both legal with an arbitrary
+/// expression (`class C { ["" + ""]() {} }` is clean tsc), which is why
+/// this is not recorded from the class member parser.
+fn Parser::record_computed_member_key_misuse(
+  self : Parser,
+  container : String,
+) -> Unit {
+  let mut i = 0
+  let mut depth = 0
+  let mut flagged = false
+  // 64 tokens is well past any real computed key; a runaway scan abstains
+  // rather than guessing.
+  while i < 64 {
+    let k = self.peek_at(i).kind
+    match k {
+      Eof => break
+      RBracket => if depth == 0 { break } else { depth -= 1 }
+      RParen | RBrace => depth -= 1
+      LBracket | LBrace => depth += 1
+      LParen => {
+        // A call's argument list. At depth 0 and not the first token this
+        // is `f(…)`; first means `( … )`, a parenthesised reference.
+        if depth == 0 && i > 0 {
+          flagged = true
+        }
+        depth += 1
+      }
+      Eq
+      | Plus
+      | Minus
+      | Star
+      | StarStar
+      | Slash
+      | Percent
+      | Caret
+      | Amp
+      | Pipe => if depth == 0 { flagged = true }
+      _ => ()
+    }
+    i += 1
+  }
+  if flagged {
+    self.record_suppressible_grammar_misuse(
+      "a computed property name in \{container} must refer to an expression whose type is a literal type or a `unique symbol` type",
+    )
+  }
+}
+
+///|
 /// Record the malformed index-signature parameter lists, given a cursor
 /// positioned just after the opening `[` of a bracket-headed type member.
 ///
@@ -793,6 +863,7 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
             }
             if !is_index_sig {
               self.record_index_signature_shape_misuse()
+              self.record_computed_member_key_misuse("a type literal")
               // TS2304: a computed key in a *type* literal (`{ [e]: number }`,
               // `{ [e](): T }`) references the value namespace. Record the
               // bare-identifier shape so the checker can flag a provably
