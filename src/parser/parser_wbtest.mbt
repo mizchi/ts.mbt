@@ -7584,3 +7584,106 @@ test "parser: a genuinely balanced type-arg list still commits" {
     }
   }
 }
+
+///|
+test "parser: all four assignment-target spellings of `eval` are recorded" {
+  // TS1100. JavaScript writes to a binding four ways, and the rule had
+  // been written at two of them (`=` and the compound operators) with
+  // nothing at either update — so `"use strict"; eval++` parsed clean and
+  // four conformance cases stayed MISS. This pins each spelling
+  // separately, because a test over one of them passes while three are
+  // broken; that is how the gap lasted.
+  for
+    src in [
+      "eval = 1;", "eval += 1;", "eval++;", "++eval;", "eval--;", "--eval;", "arguments = 1;",
+      "arguments++;",
+    ] {
+    let m = Parser::from_source(src).parse_module() catch {
+      e => fail("expected `\{src}` to parse: \{e}")
+    }
+    if m.strict_mode_misuses.length() == 0 {
+      fail("expected `\{src}` to record a strict-mode misuse")
+    }
+  }
+}
+
+///|
+test "parser: a property or call named `eval` is not an assignment target" {
+  // The other direction. tsc accepts every one of these (probed), and a
+  // check that fires here would false-flag ordinary code: `obj.eval` is a
+  // property name, not a binding, and `eval(...)` only reads it.
+  for
+    src in [
+      "obj.eval = 1;", "obj.arguments = 1;", "eval(\"x\");", "const o = { eval: 1 };",
+    ] {
+    let m = Parser::from_source(src).parse_module() catch {
+      e => fail("expected `\{src}` to parse: \{e}")
+    }
+    if m.strict_mode_misuses.length() != 0 {
+      fail("`\{src}` must not record a strict-mode misuse")
+    }
+  }
+}
+
+///|
+test "parser: `with` and duplicate labels are recorded, legal labels are not" {
+  // TS1101 is unconditional — TypeScript rejects `with` in every
+  // configuration, so no strict-mode gate applies. TS1114 rides
+  // `self.labels`, which is already scoped the way the rule is: the two
+  // legal spellings below are TS7-ACCEPTED conformance files
+  // (parser_duplicateLabel4 and parser_duplicateLabel3), and they are what
+  // makes the check false-positive-free rather than merely untested.
+  let flagged = [
+    "var x = 1;\nwith (x) { }", "target: target: while (true) { }", "target: while (true) { target: while (true) { } }",
+  ]
+  for src in flagged {
+    let m = Parser::from_source(src).parse_module() catch {
+      e => fail("expected `\{src}` to parse: \{e}")
+    }
+    let mut found = false
+    for gm in m.grammar_misuses {
+      if gm.has_prefix("`with`") || gm.has_prefix("duplicate label") {
+        found = true
+      }
+    }
+    if !found {
+      fail("expected a grammar misuse for `\{src}`")
+    }
+  }
+  let legal = [
+    "target: while (true) { }\ntarget: while (true) { }", "target: while (true) { function f() { target: while (true) { } } }",
+  ]
+  for src in legal {
+    let m = Parser::from_source(src).parse_module() catch {
+      e => fail("expected `\{src}` to parse: \{e}")
+    }
+    for gm in m.grammar_misuses {
+      if gm.has_prefix("duplicate label") {
+        fail(
+          "`\{src}` is legal TypeScript and must not record a duplicate label",
+        )
+      }
+    }
+  }
+}
+
+///|
+test "parser: a `@ts-ignore` in the file suppresses the `with` diagnostic" {
+  // `topLevelVarHoistingCommonJS.ts` is TS7-ACCEPTED and its `with (_)` is
+  // preceded by `// @ts-ignore`. Recording the diagnostic unconditionally
+  // made it the corpus's only false positive. Our issues carry no line
+  // positions, so file granularity is the only sound reading — the same
+  // choice the TS2465 / TS1166 family already makes.
+  let src =
+    #|var x = 1;
+    #|// @ts-ignore
+    #|with (x) { }
+  let m = Parser::from_source(src).parse_module() catch {
+    e => fail("expected the source to parse: \{e}")
+  }
+  for gm in m.grammar_misuses {
+    if gm.has_prefix("`with`") {
+      fail("a `@ts-ignore` file must not record the `with` diagnostic")
+    }
+  }
+}

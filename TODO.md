@@ -2153,7 +2153,106 @@ resolver would be a deep refactor); `Parser::peek/check` +
 copies a Token and refcounts its payload; a tag-int fast path would
 need parser-wide changes).
 
-## TS Checker Conformance (current state, 2026-07-17 — TypeScript 7)
+## TS Checker Conformance (current state, 2026-09-01 — TypeScript 7)
+
+State: whole-corpus **TP 2346 / MISS 388 / FP 0 / PFLEGAL 0 / TN 1750**
+(classified 4484, NOTRUN 14) via
+`scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0`.
+
+**The MISSes are ranked now, and the strategy doc was wrong.**
+`scripts/checker_miss_buckets.mjs` (`just checker-miss-buckets`) classifies
+every single-file case in parallel, caches the per-file verdict, and buckets
+the MISSes by the error codes in the submodule's baselines. Its totals are
+cross-checked against the oracle — a miner that disagrees with the gate is a
+broken miner, and that had to be visible rather than assumed. The verdict
+(errors / accepts) comes from the vendored TS7 manifests; only the bucket
+LABEL comes from the TS6-era baselines, which is an approximation and is
+documented as one. A MISS with no baseline file lands in `NOBASE` rather
+than being dropped.
+
+The answer contradicts `docs/checker-priority.md`, whose conclusion —
+"増分的な sound recall win は枯渇" — was measured against the **TS6** oracle
+in June:
+
+- **128 of the 388 MISS files are flippable by a pure-grammar (TS1xxx)
+  rule.** No assignability, no flow narrowing, no generic instantiation.
+- **91 of them have baseline codes that are ALL TS1xxx**, i.e. not one type
+  judgement is needed anywhere in the file.
+
+Batch BU (2026-09-01): TP 2337 -> 2346, MISS 397 -> 388, FP / PFLEGAL 0.
+Nine files, three rules, and the first one was a BUG before it was a recall
+item:
+
+- **TS1100** (`eval` / `arguments` as an assignment target, 4 files).
+  JavaScript spells that target four ways — `eval = 1`, `eval += 1`,
+  `++eval`, `eval++` — and the rule had been written twice, at the two
+  assignment spellings, with nothing at either update. `"use strict";
+  eval++` parsed clean. Tenth instance in this repo of one rule written in
+  several places and applied in some, so the fix is one helper
+  (`record_assign_target_strict_misuse`) called from all four rather than a
+  third and fourth copy. The strict gate came off as well: tsc reports
+  TS1100 for `eval = 1` in a plain script with no prologue and no flag
+  (probed), and the oracle errors on both `-negative` files, so the gate was
+  silencing half the corpus cases on top of the missing spellings. Ambient
+  declarations are the one exemption tsc makes
+  (`declare function f(eval: number)` is clean) and are unreachable from an
+  assignment position; BINDING positions keep their own gate.
+- **TS1101** (`with` statement, 3 files — including
+  `arrowFunctionContexts`, which the bucket labels could not name because it
+  has no TS6 `.errors.txt`). Unconditional: TypeScript rejects `with` in
+  every configuration.
+- **TS1114** (duplicate label, 2 files). `self.labels` was already scoped
+  exactly the way the rule is — pushed on entering the labelled statement,
+  popped on leaving, and saved/cleared/restored at every function-body parse
+  site — so the check is one `contains`. The two TS7-ACCEPTED neighbours
+  prove it rather than merely not-contradict it: sequential labels
+  (`duplicateLabel4`) and a re-use inside a nested function
+  (`duplicateLabel3`) both stay clean.
+
+The `with` rule found the one false positive in the round, and it is worth
+recording because it is a general constraint on every grammar check added
+from here: `topLevelVarHoistingCommonJS.ts` is TS7-ACCEPTED and its
+`with (_)` is preceded by `// @ts-ignore`. Our issues carry no line
+positions, so file granularity is the only FP-safe reading — the same choice
+the TS2465 / TS1166 family already made — and both new statement-level rules
+go through `record_suppressible_grammar_misuse`.
+
+Two tooling defects came with the round, both of the "my own harness was
+lying to me" kind this file keeps recording. The oracle preferred the
+RELEASE binary unconditionally and printed nothing about its choice, while
+`just verify-checker-soundness` builds DEBUG — so a release binary left from
+an earlier session silently won, and six target files "did not change"
+because the harness was running code from before the change. It picks the
+newer build now and prints which. CI never saw it: a fresh checkout has
+neither binary until the recipe builds one, which is exactly why it
+survived. And `moon check --deny-warn` cannot be used as a gate here at all
+(451+ pre-existing warnings); plain `moon check` with `0 errors` is the
+check.
+
+DEFERRED with the reason, not attempted: **TS1212 / TS1213** (reserved word
+as a binding name). All nine strict-reserved words are TS1212 even in a
+sloppy script (probed), and the existing gate at
+`parse_binding_pattern` covers only three (`interface` / `let` / `yield`);
+adding the other six would win 2 files (`parser642331`, `parser642331_1`).
+It is NOT worth it yet, for a product reason rather than a corpus one:
+`declare function f(static: number)` is clean in tsc and
+`function f(static: number)` is TS1212, so the rule needs an ambient
+exemption the parser cannot currently express (`in_ambient_module` is a
+whole-parse mode; there is no per-declaration flag), and getting it wrong
+false-flags npm `.d.ts` files — the bridge's primary input. Two files
+against a new FP channel in the product is the wrong trade. The corpus
+itself carries no counter-example: the one accepted file matching a
+reserved-word binding (`parserSyntaxWalker.generated.ts`) has all its
+matches inside comments.
+
+Also deferred: **TS1115** (`continue` to a non-iteration label, 1 file).
+Needs iteration-ness per label, which `self.labels` does not carry, and
+adding a parallel stack means mirroring the save/clear/restore at 12+ parse
+sites — the exact shape of the bug family above. The right implementation is
+a post-parse AST walk over `Label(name, body)` / `Continue(Some(name))`,
+which is ~40 lines for one file; worth doing after the cheaper buckets.
+
+## TS Checker Conformance (2026-07-17 — TypeScript 7, superseded above)
 
 react joined the real-world gate as the 21st package (2026-07-18):
 `package|react|react|` resolves types through @types/react, the bridge

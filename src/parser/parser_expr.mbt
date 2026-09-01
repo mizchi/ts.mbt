@@ -344,6 +344,40 @@ fn Parser::record_comma_operand_implicit_any(
 }
 
 ///|
+/// TS1100 ("Invalid use of 'eval' / 'arguments' in strict mode"): neither
+/// name may be the target of an assignment or an update. JavaScript spells
+/// that target four ways — `eval = 1`, `eval += 1`, `++eval` and `eval++` —
+/// and the rule had been written twice, at the two assignment spellings,
+/// with nothing at either update. So `"use strict"; eval++` parsed clean.
+/// One helper, called from all four, rather than a third and fourth copy.
+///
+/// Unconditional, which is what tsc does: `eval = 1` in a plain script with
+/// no `"use strict"` prologue and no compiler flag still reports TS1100
+/// (probed against tsc 6.0.3; the TS7 oracle errors on all four
+/// `parserStrictMode*` cases, two of which have no prologue). The strict
+/// gate that used to wrap the two assignment spellings was therefore
+/// silencing half the corpus cases on top of the missing spellings.
+///
+/// Ambient declarations are the one exemption tsc makes —
+/// `declare function f(eval: number)` is clean while
+/// `function f(eval: number)` is TS1100 — and it is unreachable from here:
+/// an ambient declaration has no statement to assign in. BINDING positions
+/// can reach it, and those keep their own strict gate in
+/// `parser_binding.mbt`.
+fn Parser::record_assign_target_strict_misuse(
+  self : Parser,
+  target : @ast.TsExpr,
+) -> Unit {
+  match target {
+    Var(name) =>
+      if name == "eval" || name == "arguments" {
+        self.strict_mode_misuses.push(name)
+      }
+    _ => ()
+  }
+}
+
+///|
 // / assignmentexpression
 fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
   if (self.check(LBracket) || self.check(LBrace)) &&
@@ -360,29 +394,22 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
   } else {
     wrapped
   }
-  // Strict-mode `eval` / `arguments` as a *compound* assignment target
-  // (`eval += 1`). The simple-assignment arm below records the `=` case;
-  // this non-consuming peek covers the compound operators, then parsing
-  // continues through the per-operator branches unchanged.
-  match left {
-    Var(strict_target) =>
-      if (self.in_strict || self.directive_strict) &&
-        (strict_target == "eval" || strict_target == "arguments") &&
-        self.peek_is_compound_assign_op() {
-        self.strict_mode_misuses.push(strict_target)
-      }
-    _ => ()
+  // `eval` / `arguments` as a *compound* assignment target (`eval += 1`).
+  // This non-consuming peek covers the compound operators, then parsing
+  // continues through the per-operator branches unchanged; the simple-`=`
+  // arm below and the two update sites in `parse_unary` / `parse_postfix`
+  // cover the other three spellings. See
+  // `record_assign_target_strict_misuse`.
+  if self.peek_is_compound_assign_op() {
+    self.record_assign_target_strict_misuse(left)
   }
   if self.check(Eq) {
     return match left {
       Var(name) => {
-        // In strict mode, `eval` / `arguments` are not valid assignment
-        // targets (TS1100 family). Recorded -- not raised -- so the file
-        // still parses and the checker reports the diagnostic.
-        if (self.in_strict || self.directive_strict) &&
-          (name == "eval" || name == "arguments") {
-          self.strict_mode_misuses.push(name)
-        }
+        // `eval` / `arguments` are not valid assignment targets (TS1100).
+        // Recorded -- not raised -- so the file still parses and the
+        // checker reports the diagnostic.
+        self.record_assign_target_strict_misuse(left)
         let _ = self.advance()
         let right = self.parse_assignment()
         AssignExpr(name, right)
@@ -886,7 +913,16 @@ fn Parser::parse_unary(self : Parser) -> @ast.TsExpr raise ParseError {
   }
   if prefix is Some(op) {
     let _ = self.advance()
-    return UnaryOp(op, self.parse_unary())
+    let operand = self.parse_unary()
+    // `++eval` / `--eval`: an update writes its operand, so it is an
+    // assignment target for TS1100 (see
+    // `record_assign_target_strict_misuse`). The other prefix operators
+    // only read theirs.
+    match op {
+      PreInc | PreDec => self.record_assign_target_strict_misuse(operand)
+      _ => ()
+    }
+    return UnaryOp(op, operand)
   }
   if self.peek().kind is Yield {
     let _ = self.advance()
@@ -967,6 +1003,9 @@ fn Parser::parse_postfix(self : Parser) -> @ast.TsExpr raise ParseError {
       _ => break
     }
     let _ = self.advance()
+    // `eval++` / `eval--`: only PostInc / PostDec reach here, and both write
+    // their operand — see `record_assign_target_strict_misuse`.
+    self.record_assign_target_strict_misuse(expr)
     expr = UnaryOp(op, expr)
   }
   expr

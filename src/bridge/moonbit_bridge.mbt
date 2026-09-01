@@ -778,7 +778,11 @@ fn collect_bridge_index_accessor_mbti(
     if sig.has_suffix("=") || sig.has_suffix("{") {
       sig = sig[:sig.length() - 1].to_owned().trim().to_owned()
     }
-    let mbti_line = if alias == "" { "pub fn \{sig}" } else { alias + "\npub fn \{sig}" }
+    let mbti_line = if alias == "" {
+      "pub fn \{sig}"
+    } else {
+      alias + "\npub fn \{sig}"
+    }
     let entry = result.get(name).unwrap_or([])
     if !entry.contains(mbti_line) {
       entry.push(mbti_line)

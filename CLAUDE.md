@@ -28,6 +28,37 @@ product surfaces now.
   table (`Exclude` / `Extract` / `NonNullable` / `Awaited` / `ReturnType` /
   `Parameters`), and module-level validation
   (`unresolved_type_references`, `check_module`).
+  Its correctness gate is a differential against **TypeScript 7**:
+  `just verify-checker-soundness` runs every single-file conformance case
+  through `tscheck` and compares against vendored tsgo baseline manifests,
+  with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
+  is a soundness bug, and there are none (TP 2346 / MISS 388 / FP 0 /
+  PFLEGAL 0 / TN 1750). The asymmetry is deliberate: we model a subset of
+  TS, so a MISS is expected and an FP never is.
+  That gate says how many we miss and nothing about WHICH, so "MISS 388"
+  could rank no work at all — a baseline NAME list says that TS7 errored,
+  not what it said. `just checker-miss-buckets` reads the codes out of the
+  submodule baselines and buckets the misses by them, cross-checking its
+  totals against the gate because a miner that disagrees with the gate is a
+  broken miner. Its first run retired a strategy document:
+  `docs/checker-priority.md` concluded that incremental sound recall wins
+  were exhausted and that only large type-machinery features remained, and
+  that was measured against the **TS6** oracle — under TS7, **128 of the
+  388 missing files are flippable by a pure-grammar (TS1xxx) rule** and 91
+  of them need no type judgement anywhere. The first such batch was +9 TP
+  at FP 0, and its largest item was a BUG rather than a missing feature:
+  `eval`/`arguments` as an assignment target was checked at two of the four
+  spellings JavaScript has for writing a binding (`=`, `+=`, `++x`, `x++`),
+  so `"use strict"; eval++` parsed clean — tenth instance in this repo of
+  one rule written in several places and applied in some. Two harness
+  defects came with it, both of the kind this file keeps recording: the
+  oracle silently preferred a stale RELEASE binary while
+  `verify-checker-soundness` builds DEBUG, so six target files "did not
+  change" because the run was measuring code from before the change (it
+  picks the newer build now, and prints which); and `moon check
+  --deny-warn` cannot gate anything here, since the tree carries 450+
+  pre-existing warnings — plain `moon check` reporting `0 errors` is the
+  check.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
