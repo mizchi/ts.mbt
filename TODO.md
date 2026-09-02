@@ -2153,7 +2153,289 @@ resolver would be a deep refactor); `Parser::peek/check` +
 copies a Token and refcounts its payload; a tag-int fast path would
 need parser-wide changes).
 
-## TS Checker Conformance (current state, 2026-07-17 — TypeScript 7)
+## TS Checker Conformance (current state, 2026-09-01 — TypeScript 7)
+
+State: whole-corpus **TP 2383 / MISS 351 / FP 0 / PFLEGAL 0 / TN 1750**
+(classified 4484, NOTRUN 14) via
+`scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0`.
+Four batches this round: BU +9, BV +14, BW +13, BX +10, for **+46 TP at
+FP 0**.
+
+One instrumentation note, because it looks like a contradiction and is
+not. `moon test` prints a SECOND accuracy line from
+`parser_typescript_wbtest.mbt` — `precision=411/414
+(false-positives=3)` — while the gate above says FP 0. Both are right:
+that harness is a loose catastrophe net (20% cap) over a pinned 31-directory
+subset, it decides "clean" from the presence of a **TS6-era**
+`.errors.txt`, and unlike the gate it counts multi-file cases and files
+tsgo never ran. The three are `assertionTypePredicates2` (multi-`@filename`,
+which TS7 does error on) plus `classWithStaticFieldInParameter{Initializer,
+BindingPattern}.3` (both NOTRUN under TS7), and all three are batch BE's
+TS2373 parameter-scope diagnostic, not this round's. Checked rather than
+assumed — the first explanation offered ("TS6/TS7 divergence") was measured
+and came back ZERO files, which is why the real cause is written down here.
+
+**The MISSes are ranked now, and the strategy doc was wrong.**
+`scripts/checker_miss_buckets.mjs` (`just checker-miss-buckets`) classifies
+every single-file case in parallel, caches the per-file verdict, and buckets
+the MISSes by the error codes in the submodule's baselines. Its totals are
+cross-checked against the oracle — a miner that disagrees with the gate is a
+broken miner, and that had to be visible rather than assumed. The verdict
+(errors / accepts) comes from the vendored TS7 manifests; only the bucket
+LABEL comes from the TS6-era baselines, which is an approximation and is
+documented as one. A MISS with no baseline file lands in `NOBASE` rather
+than being dropped.
+
+The answer contradicts `docs/checker-priority.md`, whose conclusion —
+"増分的な sound recall win は枯渇" — was measured against the **TS6** oracle
+in June:
+
+- **128 of the 388 MISS files are flippable by a pure-grammar (TS1xxx)
+  rule.** No assignability, no flow narrowing, no generic instantiation.
+- **91 of them have baseline codes that are ALL TS1xxx**, i.e. not one type
+  judgement is needed anywhere in the file.
+
+Batch BX (2026-09-01): TP 2373 -> 2383, MISS 361 -> 351, FP / PFLEGAL 0.
+Ten files, and one of them was a gap in a check that already existed.
+
+- **TS1169 / TS1170** — a computed property name in an interface (1169) or
+  a type literal (1170) must refer to a literal type or a `unique symbol`
+  (7 files). A denylist of three token shapes at bracket depth 0: an
+  assignment (`[a = 0]`), a binary operator (`["" + ""]`), and a call's `(`
+  that is not the first token. That last condition is what separates
+  `[foo<T>()]` from `[(e)]`, a parenthesised reference, which is legal.
+  Every legal key was probed and none matches — a string or number
+  literal, a bare identifier over a `unique symbol`, a dotted const-enum
+  reference, a template literal, a well-known symbol. The rule is
+  interface / type-literal ONLY: a CLASS computed key and an OBJECT
+  LITERAL computed key both take an arbitrary expression
+  (`class C { ["" + ""]() {} }` is clean tsc), so it is deliberately not
+  recorded from the class member parser.
+- **TS1046 for namespaces** (2 of 3 files). `check_dts_top_level_modifiers`
+  already existed and already flagged functions, enums, classes, variables
+  and executable statements — and skipped NAMESPACES, so
+  `parserModuleDeclaration{2,4}.d` sat as MISSes against a check written
+  for exactly them. Eleventh instance of a rule applied to some of the
+  forms it names.
+
+  Opening it exposed a TWELFTH instance in the same family, one layer
+  down, and this one was a false positive aimed at the PRODUCT rather than
+  a missing diagnostic: `export namespace X { }` recorded no
+  `<export-value>` marker, while every other exported declaration kind
+  (function, enum, class, variable) does. So an exported namespace read as
+  un-exported and TS1046 flagged it — and `export namespace` is ordinary
+  @types shape, which is the bridge's primary input. The conformance gate
+  could not see it (the corpus has almost no `.d.ts` files); the UNIT TEST
+  written for the new namespace arm did, on its second assertion. Fixed
+  where the model says it belongs — an exported namespace IS an exported
+  value — rather than with a namespace-only marker, and measured: the
+  oracle is byte-identical at TP 2383 / FP 0, so widening that channel had
+  no blast radius on the corpus.
+
+  Two premises were checked rather than assumed while fixing it, because
+  the comment written first asserted one of them. `module_.namespaces` does
+  hold ONLY the top level (`namespace M { namespace M1 { } }` in a .d.ts
+  reports one issue, not two), so an ambient outer namespace exempts its
+  children for free. And the failing assertion was identified by RUNNING
+  each form through the real `.d.ts` path — `declare` 0, `export` 1,
+  bare 1, `declare global` 0 — not by counting characters in the failure
+  span, which had pointed at the wrong line. `parserModuleDeclaration1.d` (`module "Foo" { }`) stays
+  a MISS: a QUOTED specifier arrives through `module_augmentations`, which
+  carries no `declare` flag, so telling `module "Foo" {}` from
+  `declare module "Foo" {}` needs a new channel for one file.
+- **TS1132** — an enum member is expected after a comma (1 file). A
+  TRAILING comma is legal and cannot reach the check, because the
+  separator after a parsed member is consumed at the bottom of the member
+  loop and the next iteration sees `}`; a comma reaching the TOP of the
+  loop never had a member before it. Only the comma: `enum E { A; B }` is
+  TS1357, a different rule.
+
+Measured while chasing a suspected regression in this batch, and worth
+recording because it is NOT one: `tscheck` on
+`typescript/src/compiler/checker.ts` (54,434 lines) splits **268 ms parse /
+45,392 ms check** in a release build — the checker spends 170x the parser's
+time on one file, and the full `moon test` sweep of `typescript/src` in a
+DEBUG build is what makes the checker whitebox test run for tens of
+minutes.
+
+That it is not a regression from this round was settled by A/B rather than
+by argument: the pre-batch commit built in a git worktree gives **45,327 ms
+on checker.ts against 44,243 ms** for the current tree — identical within
+noise. Two hypotheses were offered before that measurement and both were
+wrong. A quadratic in `record_suppressible_grammar_misuse`, whose
+`grammar_misuses.contains(…)` scan runs per recorded misuse: checker.ts
+records ZERO grammar misuses. And the 64-token lookahead the computed-key
+rule adds per bracket-headed member: `peek_at` is O(1) and the whole parse
+half is 268 ms. The checker's own cost on large single files is unmeasured
+beyond this data point and is a separate question from conformance recall.
+
+DEFERRED from this batch, with the reason: **TS1063** (`export =` inside a
+namespace, 1 file) needs a namespace-depth counter the parser does not
+have. **TS1338** (`infer` outside an `extends` clause, 2 files) needs
+conditional-type context tracking, and both target files are large and
+dominated by TS2322 / TS2344 anyway.
+
+Batch BW (2026-09-01): TP 2360 -> 2373, MISS 374 -> 361, FP / PFLEGAL 0.
+Thirteen more files, and the batch's own boundary probes are the substance
+of it — every rule below has its LEGAL neighbour recorded next to it,
+because "fires on the corpus file" and "does not fire on the legal
+spelling" are two different claims and only the second one is what keeps
+the gate at zero.
+
+- **TS1051 / TS1052 / TS1053 / TS1094 / TS1095** — the `set` accessor
+  family (5 files): a parameter with an initializer, an optional
+  parameter, a rest parameter, a return-type annotation, and (for BOTH
+  accessor kinds) a type-parameter list. `set F(v: number)`,
+  `get F(): number` and `set F(v,)` are the legal neighbours and stay
+  silent.
+- **TS1016 / TS1047** — parameter-list rules (3 files), recorded in
+  `parse_params`, the ONE site every parameter list goes through, so a
+  method, a plain function, a constructor and an arrow are covered by
+  construction rather than by four copies. Two legal neighbours matter
+  here and a naive reading gets both wrong: a DEFAULT does not make a
+  parameter optional for TS1016 (`f(a = 1, b)` is legal tsc) and a REST
+  after an optional is fine (`f(a?, ...b)`).
+- **TS1064** — an `async` function's return annotation (2 of 4 files).
+  The rule is nearly syntactic — tsc requires the GLOBAL `Promise<T>`, so
+  even `PromiseLike<void>` and a `Promise` SUBCLASS are errors — but a
+  type ALIAS to `Promise<void>` is legal, and the alias and the subclass
+  are the same named-annotation node at parse time. Every named
+  annotation therefore abstains, which costs the two
+  `asyncQualifiedReturnType` files (`X.MyPromise<void>` stays a MISS) and
+  is the right direction for a 0-FP gate. Deciding those two needs the
+  declaration table (a name declared in-file as a class or interface
+  cannot be an alias) and is filed, not built.
+- **TS1013** — a rest element with a trailing comma (1 file), binding
+  patterns only. The PARAMETER form is deliberately not implemented:
+  `declare function f(...a,)` is ACCEPTED by tsc in an ambient
+  declaration, and the parser cannot express that exemption (see the
+  TS1212 note below for the same blocker). The binding-pattern form has
+  no ambient spelling, so it needs no exemption.
+- **TS1097** — an empty `extends` / `implements` list (2 files). Tested as
+  "the body `{` opens immediately" rather than as "the collected name list
+  came back empty", because an empty list is ALSO what the collector
+  returns for a legal form it cannot spell (`interface I extends
+  import("m").T`), and blaming the author for a gap in the collector is a
+  false positive by construction.
+
+The round's one false positive is the reason the async rule has an
+`is_generator` parameter: `types.asyncGenerators.es2018.1.ts` is
+TS7-ACCEPTED, an `async function*` returns `AsyncGenerator<Y, R, N>` rather
+than a promise, and the rule does not apply to it at all. Caught by the
+gate on the first run, before the batch landed.
+
+Batch BV (2026-09-01): TP 2346 -> 2360, MISS 388 -> 374, FP / PFLEGAL 0.
+Fourteen files, two clusters, and one instructive failure in the middle.
+
+- **Constructor cluster** (6 files): `static` / `async` / `override` on a
+  constructor is TS1089, a type-parameter list is TS1092 (an EMPTY one,
+  `constructor<>()`, is additionally TS1098 — so the check has to ask
+  whether a list was WRITTEN, not whether it produced names), and a
+  return-type annotation is TS1093 for every annotation including `void`.
+  Accessibility modifiers are deliberately absent from the list: tsc
+  accepts `private constructor()`, the singleton idiom. `abstract` and
+  `readonly` are errors too but under their own codes (TS1242 / TS1024)
+  and are left alone — a check that reports the wrong rule is worse than
+  no check.
+- **Index-signature cluster** (8 files): TS1017 (rest parameter), TS1019
+  (question mark), TS1021 (no value annotation), TS1096 (not exactly one
+  parameter), TS1268 (parameter type not `string` / `number` / `symbol` /
+  template literal).
+
+The instructive part: the first draft wrote the index-signature rules
+INLINE in the type-literal member parser and won **2 of the 8** files.
+A type literal (`type R = { … }`) and an interface body are parsed by two
+near-duplicate member loops in different files, so `{ [k: any]: V }` was
+checked and the identical `interface I { [k: any]: V }` was not — the same
+family this file has recorded ten times, caught here by the corpus rather
+than by reading. The rules are three shared helpers now
+(`record_index_signature_shape_misuse` /
+`_key_misuse` / `_missing_annotation`) called from both loops, and the
+unit test asserts every shape in BOTH spellings so a future edit cannot
+regress one and still pass.
+
+TS1268 is decided by a DENYLIST of the primitives tsc rejects rather than
+by the complement of the four it accepts, and the reason is a genuine
+ambiguity rather than caution: `type K = string; { [k: K]: V }` is LEGAL
+and `{ [k: RegExp]: V }` is TS1268, and both are the same named-type node
+here. Abstaining on every named type costs `RegExp` (a MISS) and keeps the
+alias (no FP). Unions abstain too (`{ [k: string | number]: V }` is
+legal), and a literal key is a different rule entirely (TS1337).
+
+Batch BU (2026-09-01): TP 2337 -> 2346, MISS 397 -> 388, FP / PFLEGAL 0.
+Nine files, three rules, and the first one was a BUG before it was a recall
+item:
+
+- **TS1100** (`eval` / `arguments` as an assignment target, 4 files).
+  JavaScript spells that target four ways — `eval = 1`, `eval += 1`,
+  `++eval`, `eval++` — and the rule had been written twice, at the two
+  assignment spellings, with nothing at either update. `"use strict";
+  eval++` parsed clean. Tenth instance in this repo of one rule written in
+  several places and applied in some, so the fix is one helper
+  (`record_assign_target_strict_misuse`) called from all four rather than a
+  third and fourth copy. The strict gate came off as well: tsc reports
+  TS1100 for `eval = 1` in a plain script with no prologue and no flag
+  (probed), and the oracle errors on both `-negative` files, so the gate was
+  silencing half the corpus cases on top of the missing spellings. Ambient
+  declarations are the one exemption tsc makes
+  (`declare function f(eval: number)` is clean) and are unreachable from an
+  assignment position; BINDING positions keep their own gate.
+- **TS1101** (`with` statement, 3 files — including
+  `arrowFunctionContexts`, which the bucket labels could not name because it
+  has no TS6 `.errors.txt`). Unconditional: TypeScript rejects `with` in
+  every configuration.
+- **TS1114** (duplicate label, 2 files). `self.labels` was already scoped
+  exactly the way the rule is — pushed on entering the labelled statement,
+  popped on leaving, and saved/cleared/restored at every function-body parse
+  site — so the check is one `contains`. The two TS7-ACCEPTED neighbours
+  prove it rather than merely not-contradict it: sequential labels
+  (`duplicateLabel4`) and a re-use inside a nested function
+  (`duplicateLabel3`) both stay clean.
+
+The `with` rule found the one false positive in the round, and it is worth
+recording because it is a general constraint on every grammar check added
+from here: `topLevelVarHoistingCommonJS.ts` is TS7-ACCEPTED and its
+`with (_)` is preceded by `// @ts-ignore`. Our issues carry no line
+positions, so file granularity is the only FP-safe reading — the same choice
+the TS2465 / TS1166 family already made — and both new statement-level rules
+go through `record_suppressible_grammar_misuse`.
+
+Two tooling defects came with the round, both of the "my own harness was
+lying to me" kind this file keeps recording. The oracle preferred the
+RELEASE binary unconditionally and printed nothing about its choice, while
+`just verify-checker-soundness` builds DEBUG — so a release binary left from
+an earlier session silently won, and six target files "did not change"
+because the harness was running code from before the change. It picks the
+newer build now and prints which. CI never saw it: a fresh checkout has
+neither binary until the recipe builds one, which is exactly why it
+survived. And `moon check --deny-warn` cannot be used as a gate here at all
+(451+ pre-existing warnings); plain `moon check` with `0 errors` is the
+check.
+
+DEFERRED with the reason, not attempted: **TS1212 / TS1213** (reserved word
+as a binding name). All nine strict-reserved words are TS1212 even in a
+sloppy script (probed), and the existing gate at
+`parse_binding_pattern` covers only three (`interface` / `let` / `yield`);
+adding the other six would win 2 files (`parser642331`, `parser642331_1`).
+It is NOT worth it yet, for a product reason rather than a corpus one:
+`declare function f(static: number)` is clean in tsc and
+`function f(static: number)` is TS1212, so the rule needs an ambient
+exemption the parser cannot currently express (`in_ambient_module` is a
+whole-parse mode; there is no per-declaration flag), and getting it wrong
+false-flags npm `.d.ts` files — the bridge's primary input. Two files
+against a new FP channel in the product is the wrong trade. The corpus
+itself carries no counter-example: the one accepted file matching a
+reserved-word binding (`parserSyntaxWalker.generated.ts`) has all its
+matches inside comments.
+
+Also deferred: **TS1115** (`continue` to a non-iteration label, 1 file).
+Needs iteration-ness per label, which `self.labels` does not carry, and
+adding a parallel stack means mirroring the save/clear/restore at 12+ parse
+sites — the exact shape of the bug family above. The right implementation is
+a post-parse AST walk over `Label(name, body)` / `Continue(Some(name))`,
+which is ~40 lines for one file; worth doing after the cheaper buckets.
+
+## TS Checker Conformance (2026-07-17 — TypeScript 7, superseded above)
 
 react joined the real-world gate as the 21st package (2026-07-18):
 `package|react|react|` resolves types through @types/react, the bridge

@@ -269,6 +269,73 @@ fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
 }
 
 ///|
+/// TS1064: the return type of an `async` function or method must be the
+/// GLOBAL `Promise<T>`. Recorded for a return annotation TypeScript
+/// definitely rejects.
+///
+/// A DENYLIST, for the same reason `index_signature_key_type_rejected` is
+/// one, and with a sharper edge here. Every one of these was probed:
+///
+///   async f(): Promise<void>          legal
+///   async f(): void / any / number    TS1064
+///   async f(): {}                     TS1064
+///   type P = Promise<void>;
+///     async f(): P                    LEGAL  (the alias resolves)
+///   class MyPromise<T> extends Promise<T> {}
+///     async f(): MyPromise<void>      TS1064 (a subclass is not enough)
+///   async f(): PromiseLike<void>      TS1064
+///
+/// The alias and the subclass are the SAME named-annotation node at parse
+/// time, and one is legal while the other is not, so every named
+/// annotation abstains. That costs the two `asyncQualifiedReturnType`
+/// files (`X.MyPromise<void>` stays a MISS) and keeps the alias silent,
+/// which is the right direction for a 0-FP gate. Deciding those two needs
+/// the declaration table — a name declared in-file as a CLASS or INTERFACE
+/// cannot be an alias — and is filed rather than built.
+///
+/// An async GENERATOR is exempt and the exemption is load-bearing: it
+/// returns `AsyncGenerator<Y, R, N>`, not a promise, so the rule does not
+/// apply at all. The corpus said so — `types.asyncGenerators.es2018.1.ts`
+/// is TS7-ACCEPTED and was the round's only false positive until
+/// `is_generator` came in.
+fn Parser::record_async_return_type_misuse(
+  self : Parser,
+  is_async : Bool,
+  is_generator : Bool,
+  had_annotation : Bool,
+  return_type : @ast.TsType,
+) -> Unit {
+  if !is_async || is_generator || !had_annotation {
+    return
+  }
+  let rejected = match return_type {
+    Void
+    | Any
+    | Unknown
+    | Never
+    | Null
+    | Undefined
+    | NonPrimitiveObject
+    | Number
+    | Int
+    | String_
+    | Boolean
+    | BigInt
+    | Symbol
+    | Object(_)
+    | Array(_)
+    | Tuple(_)
+    | Func(_, _) => true
+    _ => false
+  }
+  if rejected {
+    self.record_suppressible_grammar_misuse(
+      "the return type of an `async` function or method must be the global `Promise<T>` type",
+    )
+  }
+}
+
+///|
 // / parameter
 fn Parser::parse_params(self : Parser) -> Array[@ast.TsParam] raise ParseError {
   let params : Array[@ast.TsParam] = []
@@ -279,6 +346,41 @@ fn Parser::parse_params(self : Parser) -> Array[@ast.TsParam] raise ParseError {
         break
       }
       params.push(self.parse_param())
+    }
+  }
+  // Parameter-list grammar rules, recorded here because this is the ONE
+  // site every parameter list goes through — a method, a plain function, a
+  // constructor and an arrow all land in it, so the rules cannot come to
+  // hold for some spellings and not others.
+  //
+  // Neither has an exemption; both were probed against tsc across the
+  // declaration kinds that usually need one, and an ambient
+  // `declare function f(...a?: any[])` is TS1047 and
+  // `declare function f(a?: number, b: number)` is TS1016 just the same.
+  for i, p in params {
+    // TS1047: `foo(...bar?)`.
+    if p.is_rest && p.is_optional {
+      self.record_suppressible_grammar_misuse(
+        "a rest parameter cannot be optional",
+      )
+    }
+    // TS1016: a REQUIRED parameter after an optional one. Required means
+    // neither `?`, nor an initializer, nor a rest: `f(a = 1, b)` is legal
+    // (a default does not make the parameter optional for this rule) and so
+    // is `f(a?, ...b)` — both probed, and both are what a naive "not
+    // optional" test would false-flag.
+    if i > 0 && !p.is_optional && p.default is None && !p.is_rest {
+      let mut saw_optional = false
+      for j in 0..<i {
+        if params[j].is_optional {
+          saw_optional = true
+        }
+      }
+      if saw_optional {
+        self.record_suppressible_grammar_misuse(
+          "a required parameter cannot follow an optional parameter",
+        )
+      }
     }
   }
   // Check for duplicate parameter names
@@ -357,6 +459,9 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
     Any // type Any
   }
   self.restore_local_type_param_bounds(local_type_param_bound_len)
+  self.record_async_return_type_misuse(
+    is_async, is_generator, had_return_annotation, return_type,
+  )
   // TS7010 (noImplicitAny): a *bodiless* signature (overload / ambient)
   // without a return-type annotation implicitly returns `any` -- there is
   // no body to infer from. Implementations infer and stay silent.
@@ -1110,6 +1215,14 @@ fn Parser::parse_extends_clause_until_body(
     return (names, args_per_name)
   }
   let _ = self.advance() // consume extends
+  // TS1097: `interface I extends { }` — the list cannot be empty. Same
+  // "the body opens immediately" test as the `implements` clause; see
+  // `parse_implements_names`. A `{` here is an error under every spelling
+  // (`extends { }` is TS1097, `extends {a: number}` is TS1005), so the
+  // test cannot fire on legal input.
+  if self.check(LBrace) {
+    self.record_suppressible_grammar_misuse("an `extends` list cannot be empty")
+  }
   let mut paren_depth = 0
   let mut bracket_depth = 0
   let mut angle_depth = 0
@@ -1455,6 +1568,7 @@ pub fn Parser::parse_interface(
           let _ = self.advance() // consume index name (ignored)
           let _ = self.expect(Colon)
           let key_type = self.parse_type()
+          self.record_index_signature_key_misuse(key_type)
           let _ = self.expect(RBracket)
           // Optional `?` is not meaningful on index signatures; consume to be
           // forgiving but ignore.
@@ -1463,6 +1577,7 @@ pub fn Parser::parse_interface(
             let _ = self.advance()
             self.parse_type()
           } else {
+            self.record_index_signature_missing_annotation()
             @ast.TsType::Any
           }
           // Stash on a dedicated index_signatures channel so bridge passes
@@ -1475,6 +1590,8 @@ pub fn Parser::parse_interface(
           }
           continue
         }
+        self.record_index_signature_shape_misuse()
+        self.record_computed_member_key_misuse("an interface")
         // TS2304: a computed member key that is a single bare identifier
         // (`[e]: number` / `[e](): T`) references the value namespace --
         // record it for the checker's undeclared-name resolution. Dotted

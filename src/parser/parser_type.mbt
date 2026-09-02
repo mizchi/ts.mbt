@@ -586,6 +586,173 @@ fn Parser::try_parse_simple_object_type(self : Parser) -> @ast.TsType? {
 }
 
 ///|
+/// True for an index-signature parameter type TypeScript definitely
+/// rejects (TS1268). Legal keys are `string`, `number`, `symbol` and a
+/// template literal type.
+///
+/// A DENYLIST rather than the complement of that four-element allowlist,
+/// because the shapes that matter are the ones this must abstain on. Each
+/// was probed against tsc:
+///
+///   type K = string; { [k: K]: V }        legal    (alias to `string`)
+///   { [k: string | number]: V }           legal    (union)
+///   { [k: RegExp]: V }                    TS1268
+///
+/// The alias and `RegExp` are the same `Named` node here, so no predicate
+/// over the syntax can separate them without resolving the alias — which
+/// the parser cannot do. Abstaining on `Named` costs `RegExp` (a MISS) and
+/// keeps the alias (no FP), which is the correct direction for a 0-FP
+/// gate. Unions, literal types (`{ [k: "lit"]: V }` is TS1337, a different
+/// rule) and everything else likewise abstain.
+fn index_signature_key_type_rejected(t : @ast.TsType) -> Bool {
+  match t {
+    Boolean
+    | Any
+    | Unknown
+    | Never
+    | Void
+    | Undefined
+    | Null
+    | NonPrimitiveObject
+    | BigInt => true
+    _ => false
+  }
+}
+
+///|
+/// TS1169 / TS1170: a computed property name in an INTERFACE (1169) or a
+/// TYPE LITERAL (1170) must refer to an expression whose type is a literal
+/// type or a `unique symbol`. Recorded for the key expressions that
+/// definitely are neither.
+///
+/// The cursor must sit just after the opening `[`. The test is a DENYLIST
+/// of three token shapes at bracket depth 0, so an unrecognised key
+/// abstains:
+///
+///   an assignment operator     `[a = 0]`        TS1169
+///   a binary operator          `["" + ""]`      TS1169 / TS1170
+///   a call's `(`, not first    `[foo<T>()]`     TS1169
+///
+/// Every legal spelling was probed and none matches: a string or number
+/// literal key (`["lit"]`, `[1]`), a bare identifier (`[e]` over a
+/// `unique symbol`), a dotted reference (`[E.A]` over a const enum), a
+/// template literal, and a well-known symbol key (consumed earlier). The
+/// "not first" condition on `(` is what keeps a parenthesised reference
+/// (`[(e)]`) out of it while still catching a call.
+///
+/// The rule is interface / type-literal ONLY. A CLASS computed key and an
+/// OBJECT LITERAL computed key are both legal with an arbitrary
+/// expression (`class C { ["" + ""]() {} }` is clean tsc), which is why
+/// this is not recorded from the class member parser.
+fn Parser::record_computed_member_key_misuse(
+  self : Parser,
+  container : String,
+) -> Unit {
+  let mut i = 0
+  let mut depth = 0
+  let mut flagged = false
+  // 64 tokens is well past any real computed key; a runaway scan abstains
+  // rather than guessing.
+  while i < 64 {
+    let k = self.peek_at(i).kind
+    match k {
+      Eof => break
+      RBracket => if depth == 0 { break } else { depth -= 1 }
+      RParen | RBrace => depth -= 1
+      LBracket | LBrace => depth += 1
+      LParen => {
+        // A call's argument list. At depth 0 and not the first token this
+        // is `f(…)`; first means `( … )`, a parenthesised reference.
+        if depth == 0 && i > 0 {
+          flagged = true
+        }
+        depth += 1
+      }
+      Eq
+      | Plus
+      | Minus
+      | Star
+      | StarStar
+      | Slash
+      | Percent
+      | Caret
+      | Amp
+      | Pipe => if depth == 0 { flagged = true }
+      _ => ()
+    }
+    i += 1
+  }
+  if flagged {
+    self.record_suppressible_grammar_misuse(
+      "a computed property name in \{container} must refer to an expression whose type is a literal type or a `unique symbol` type",
+    )
+  }
+}
+
+///|
+/// Record the malformed index-signature parameter lists, given a cursor
+/// positioned just after the opening `[` of a bracket-headed type member.
+///
+/// Called from BOTH member parsers — the type-literal one in this file and
+/// the interface one in `parser_function.mbt`. They are near-duplicates of
+/// each other, and writing the rule inline at one of them is how it would
+/// come to hold for `{ [k: any]: V }` and not for the identical
+/// `interface I { [k: any]: V }`; the first draft of this batch did exactly
+/// that and won 2 of 8 target files.
+///
+/// Only shapes no legal spelling produces are recorded. The ones that must
+/// ABSTAIN were each probed against tsc: a mapped type
+/// (`[K in keyof T]`, recognised by the `in` follower), a computed key
+/// (`[e]` over a `unique symbol`), and a well-known-symbol key, all legal.
+fn Parser::record_index_signature_shape_misuse(self : Parser) -> Unit {
+  match (self.peek().kind, self.peek_at(1).kind) {
+    // `[]: number` and `[a, b]: number` — TS1096.
+    (RBracket, _) | (Ident(_), Comma) =>
+      self.record_suppressible_grammar_misuse(
+        "an index signature must have exactly one parameter",
+      )
+    // `[...a]` — TS1017.
+    (Ellipsis, _) =>
+      self.record_suppressible_grammar_misuse(
+        "an index signature cannot have a rest parameter",
+      )
+    // `[a?]` / `[a?: string]` — TS1019.
+    (Ident(_), Question) =>
+      self.record_suppressible_grammar_misuse(
+        "an index signature parameter cannot have a question mark",
+      )
+    _ => ()
+  }
+}
+
+///|
+/// TS1268 for a canonical `[ident: Type]` head whose key type TypeScript
+/// rejects. See `index_signature_key_type_rejected` for why the decision is
+/// a denylist, and `record_index_signature_shape_misuse` for why this is a
+/// shared function rather than two copies.
+fn Parser::record_index_signature_key_misuse(
+  self : Parser,
+  key_type : @ast.TsType,
+) -> Unit {
+  if index_signature_key_type_rejected(key_type) {
+    self.record_suppressible_grammar_misuse(
+      "an index signature parameter type must be `string`, `number`, `symbol` or a template literal type",
+    )
+  }
+}
+
+///|
+/// TS1021: `interface I { [a: string] }` — a canonical index-signature head
+/// with no value annotation. No legal spelling produces it: a mapped type
+/// never reaches these arms, and an optional index signature
+/// (`[k: string]?: V`) is itself a tsc syntax error.
+fn Parser::record_index_signature_missing_annotation(self : Parser) -> Unit {
+  self.record_suppressible_grammar_misuse(
+    "an index signature must have a type annotation",
+  )
+}
+
+///|
 /// The standard well-known symbols of `SymbolConstructor`. Mirrors the
 /// checker's `is_well_known_symbol_name`; the parser needs its own copy
 /// (package boundary) to decide which `[Symbol.x]` type-literal keys are
@@ -695,6 +862,8 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
               _ => false
             }
             if !is_index_sig {
+              self.record_index_signature_shape_misuse()
+              self.record_computed_member_key_misuse("a type literal")
               // TS2304: a computed key in a *type* literal (`{ [e]: number }`,
               // `{ [e](): T }`) references the value namespace. Record the
               // bare-identifier shape so the checker can flag a provably
@@ -713,6 +882,7 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
             let _ = self.advance() // index name
             let _ = self.expect(Colon)
             let key_type = self.parse_type()
+            self.record_index_signature_key_misuse(key_type)
             let _ = self.expect(RBracket)
             let _ = self.match_(Question)
             // Consume the value type to advance the cursor, but record the
@@ -726,6 +896,8 @@ fn Parser::try_parse_object_type_with_members(self : Parser) -> @ast.TsType? {
             if self.check(Colon) {
               let _ = self.advance()
               let _ = self.parse_type()
+            } else {
+              self.record_index_signature_missing_annotation()
             }
             fields.push((key_type, @ast.TsType::Any))
             let _ = self.match_(Semicolon) || self.match_(Comma)

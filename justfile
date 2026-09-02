@@ -115,6 +115,16 @@ bridge-quality:
 checker-conformance-oracle *ARGS:
     bash scripts/checker_conformance_oracle.sh {{ ARGS }}
 
+# Rank the conformance MISSes by TypeScript error code, so the next batch
+# can be chosen instead of guessed. The oracle above gates on FP and prints
+# "MISS 388", which ranks nothing — a baseline NAME list says that TS7
+# errored, not what it said. This reads the codes out of the submodule
+# baselines and buckets by them. `--code TS2322` lists one bucket's files;
+# `--refresh` recomputes the cached per-file classification (minutes),
+# re-bucketing from the cache is instant. Opt-in (not part of `ci`).
+checker-miss-buckets *ARGS:
+    node scripts/checker_miss_buckets.mjs {{ ARGS }}
+
 # Soundness gate: build the native binary and fail if the checker reports
 # more conformance false positives than the current budget. The oracle
 # script skips cleanly when the `typescript` submodule isn't populated, so

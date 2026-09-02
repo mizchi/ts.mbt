@@ -11111,8 +11111,24 @@ test "expr_check: strict-mode eval/arguments misuse (TS1100 family)" {
   // Conformance @alwaysStrict directives arm the recording too.
   assert_true(issues("// @alwaysStrict: true\nvar arguments;") > 0)
   assert_true(issues("// @strict: true\neval = 1;") > 0)
-  // Non-strict code accepts these names.
-  @test.assert_eq(issues("eval = 1;"), 0)
+  // An ASSIGNMENT target flags with no prologue and no directive, because
+  // that is what TypeScript does: `eval = 1;` in a plain script with no
+  // compiler flag is TS1100 + TS2630 (probed against tsc 6.0.3), and the
+  // TS7 oracle errors on `parserStrictMode3-negative.ts`, which is exactly
+  // this source. This line previously asserted 0 under the comment
+  // "Non-strict code accepts these names" — a false statement about
+  // TypeScript that was pinning our own gate rather than the language, and
+  // it silenced two of the four `parserStrictMode*` conformance cases.
+  assert_true(issues("eval = 1;") > 0)
+  assert_true(issues("eval++;") > 0)
+  // A BINDING name is deliberately still gated on strict mode, even though
+  // tsc flags `function f(eval) {}` too. The difference is that a binding
+  // position is reachable from an AMBIENT declaration, where tsc does NOT
+  // flag it (`declare function f(eval: number)` is clean), and the parser
+  // has no per-declaration ambient flag to express that exemption with —
+  // `in_ambient_module` is a whole-parse mode. Ungating without it would
+  // false-flag npm `.d.ts` files, which are the bridge's primary input, to
+  // win two conformance files. Recorded as the reason these two stay 0.
   @test.assert_eq(issues("function f(eval) {}"), 0)
   @test.assert_eq(issues("// @alwaysStrict: false\nfunction f(eval) {}"), 0)
 }

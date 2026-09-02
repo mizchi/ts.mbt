@@ -312,7 +312,16 @@ fn Parser::parse_binding_array(
       let rest_binding = self.parse_binding_pattern()
       rest = Some(rest_binding)
       if self.match_(Comma) {
-        // trailing comma after rest
+        // TS1013: a rest element may not be followed by a trailing comma.
+        // No legal spelling produces it — `const [e,] = xs` (a trailing
+        // comma after a NON-rest element) is fine and does not reach this
+        // arm, which is the neighbour that had to be probed. Unlike the
+        // parameter-list form (`declare function f(...a,)`, which tsc
+        // ACCEPTS in an ambient declaration), the binding-pattern form has
+        // no ambient exemption.
+        self.record_suppressible_grammar_misuse(
+          "a rest element may not have a trailing comma",
+        )
       }
       break
     }
@@ -405,7 +414,10 @@ fn Parser::parse_binding_object(
         let name = self.parse_binding_ident()
         rest = Some(name)
         if self.match_(Comma) {
-          // trailing comma
+          // TS1013, object form (`const {...b,} = o`). See the array arm.
+          self.record_suppressible_grammar_misuse(
+            "a rest element may not have a trailing comma",
+          )
         }
         break
       }

@@ -212,3 +212,28 @@ test "validate_module: lib.d.ts ambient type aliases resolve (PropertyKey)" {
   }
   assert_eq(unresolved_type_references(module_), [])
 }
+
+///|
+test "validate: a .d.ts top-level namespace needs declare or export" {
+  // The walk covered functions, enums, classes and variables and skipped
+  // NAMESPACES entirely, so three conformance files sat as MISSes against a
+  // check that already existed. Probed against tsc: a bare `namespace` is
+  // TS1046 in a .d.ts, `declare` and `export` are both clean, and a
+  // namespace nested inside an ambient one is clean (only the top level
+  // reaches `module_.namespaces`).
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_dts_top_level_modifiers(parse_module_or_empty(src)) {
+      if i.message.contains("declare` or `export") {
+        n += 1
+      }
+    }
+    n
+  }
+  assert_true(issues("namespace M { }") > 0)
+  assert_true(issues("namespace M {\n  declare namespace M1 { }\n}") > 0)
+  @test.assert_eq(issues("declare namespace M { }"), 0)
+  @test.assert_eq(issues("export namespace M { }"), 0)
+  @test.assert_eq(issues("declare namespace M {\n  namespace M1 { }\n}"), 0)
+  @test.assert_eq(issues("declare global { }"), 0)
+}

@@ -38,11 +38,30 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-TSCHECK="_build/native/release/build/cmd/tscheck/tscheck.exe"
-if [ ! -x "$TSCHECK" ]; then
-  TSCHECK="_build/native/debug/build/cmd/tscheck/tscheck.exe"
+# Pick the NEWER of the two builds, and say which one. This used to prefer
+# release unconditionally and print nothing, which is a trap rather than a
+# preference: `just verify-checker-soundness` runs `moon build --target
+# native` (debug), so a release binary left over from an earlier session
+# silently won and the run measured code nobody had just built. Cost a real
+# debugging detour — six target files "did not change" because the harness
+# was running a binary from before the change. CI never sees it (a fresh
+# checkout has neither binary until the recipe builds one), which is exactly
+# why it survived.
+TSCHECK_RELEASE="_build/native/release/build/cmd/tscheck/tscheck.exe"
+TSCHECK_DEBUG="_build/native/debug/build/cmd/tscheck/tscheck.exe"
+TSCHECK=""
+if [ -x "$TSCHECK_RELEASE" ] && [ -x "$TSCHECK_DEBUG" ]; then
+  if [ "$TSCHECK_DEBUG" -nt "$TSCHECK_RELEASE" ]; then
+    TSCHECK="$TSCHECK_DEBUG"
+  else
+    TSCHECK="$TSCHECK_RELEASE"
+  fi
+elif [ -x "$TSCHECK_RELEASE" ]; then
+  TSCHECK="$TSCHECK_RELEASE"
+elif [ -x "$TSCHECK_DEBUG" ]; then
+  TSCHECK="$TSCHECK_DEBUG"
 fi
-if [ ! -x "$TSCHECK" ]; then
+if [ -z "$TSCHECK" ]; then
   echo "tscheck binary not found — run \`moon build --target native\`" >&2
   exit 1
 fi
@@ -112,6 +131,7 @@ done < <(find "$ROOT" -name "*.ts")
 total=$((tp + miss + fp + tn + pflegal))
 echo "=== Checker vs TypeScript 7 conformance results ==="
 echo "Corpus root   : $ROOT"
+echo "Binary        : $TSCHECK"
 echo "Classified    : $total   (NOTRUN excluded: $notrun)"
 echo "TP  err+flag  : $tp   (of which via parse rejection: $tp_parse)"
 echo "MISS err+quiet: $miss   (expected — checker models a subset of TS)"

@@ -39,6 +39,54 @@ fn Parser::is_namespace_decl_start(self : Parser) -> Bool {
 }
 
 ///|
+/// Record an always-error grammar misuse, unless the file carries an
+/// `@ts-ignore` / `@ts-expect-error` suppression comment somewhere.
+///
+/// `@ts-ignore` suppresses the diagnostic on the FOLLOWING line only, and
+/// our issues carry no line positions, so file granularity is the only
+/// false-positive-safe reading — the same choice the TS2465 / TS1166 family
+/// already makes. The marker is pushed at parser construction, before any
+/// statement is parsed, so it is always visible here.
+///
+/// This is not hypothetical caution: `topLevelVarHoistingCommonJS.ts` is a
+/// TS7-ACCEPTED file whose `with (_)` block is preceded by `// @ts-ignore`,
+/// and recording the `with` diagnostic unconditionally made it the corpus's
+/// only false positive.
+fn Parser::record_suppressible_grammar_misuse(
+  self : Parser,
+  message : String,
+) -> Unit {
+  if self.grammar_misuses.contains("<ts-suppression-present>") {
+    return
+  }
+  self.grammar_misuses.push(message)
+}
+
+///|
+/// Push a label onto the active-label stack, recording TS1114 ("Duplicate
+/// label") when one of that name is already active.
+///
+/// `self.labels` is already scoped exactly the way the rule is, which is why
+/// no new state is needed: it is pushed on entering a labelled statement and
+/// popped on leaving it, so two SEQUENTIAL labels of one name never collide
+/// (parser_duplicateLabel4 — legal), and every function-body parse site
+/// saves, clears and restores the whole stack, so a name re-used inside a
+/// nested function does not collide either (parser_duplicateLabel3 — legal).
+/// Both of those are TS7-ACCEPTED files, which is what makes this check
+/// false-positive-free rather than merely untested.
+///
+/// A function rather than two copies of the test: labels are entered at two
+/// sites (a plain identifier and the non-strict `yield:` spelling), and a
+/// rule written at one of two spellings is how `eval++` went unchecked for
+/// as long as it did.
+fn Parser::enter_label(self : Parser, name : String) -> Unit {
+  if self.labels.contains(name) {
+    self.record_suppressible_grammar_misuse("duplicate label `\{name}`")
+  }
+  self.labels.push(name)
+}
+
+///|
 // / statement
 pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
   let tok = self.peek()
@@ -295,7 +343,7 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
       }
       let _ = self.expect(Colon)
       // Add label to context for break/continue validation
-      self.labels.push(name)
+      self.enter_label(name)
       // statement
       let stmt = self.parse_stmt_no_lexical(false)
       // Remove label from context
@@ -307,7 +355,7 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
       let _ = self.advance()
       let name = "yield"
       let _ = self.expect(Colon)
-      self.labels.push(name)
+      self.enter_label(name)
       let stmt = self.parse_stmt_no_lexical(false)
       let _ = self.labels.pop()
       Label(name, stmt)
@@ -739,6 +787,14 @@ fn Parser::parse_switch(self : Parser) -> @ast.TsStmt raise ParseError {
 ///|
 fn Parser::parse_with(self : Parser) -> @ast.TsStmt raise ParseError {
   let _ = self.expect(With)
+  // TS1101 ("'with' statements are not allowed in strict mode"). Recorded
+  // unconditionally, not gated on strict mode: TypeScript rejects `with`
+  // in every configuration — a plain non-strict script gets TS1101 plus
+  // TS2410 ("the 'with' statement is not supported"), so there is no
+  // reading of any input under which the construct is accepted and the
+  // check cannot cost precision. Recorded rather than raised, so the file
+  // still parses and the checker surfaces the diagnostic.
+  self.record_suppressible_grammar_misuse("`with` statements are not allowed")
   let obj_expr = self.parse_parenthesized_expr()
   let body = self.parse_block_or_stmt_no_lexical()
   With(obj_expr, body)

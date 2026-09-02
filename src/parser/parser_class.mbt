@@ -1216,6 +1216,19 @@ fn class_key_expr(key : ClassKey) -> @ast.TsExpr {
 // skipped). The leading `implements` keyword must already be consumed.
 fn Parser::parse_implements_names(self : Parser) -> Array[String] {
   let names : Array[String] = []
+  // TS1097: `class C extends A implements { }` — the list cannot be empty.
+  // Tested as "the class body opens immediately" rather than as
+  // "`names` came back empty", because an empty result is also what this
+  // collector returns for a legal form it cannot spell (an `import("m").T`
+  // reference, say), and blaming the author for a gap in the collector
+  // would be a false positive. Recorded here, not at the two call sites,
+  // so the rule cannot hold for a class declaration and not a class
+  // expression.
+  if self.check(LBrace) {
+    self.record_suppressible_grammar_misuse(
+      "an `implements` list cannot be empty",
+    )
+  }
   // Always consume up to the class body `{` (matching the previous
   // skip-to-`{` behaviour), collecting the head reference of each
   // comma-separated entry. `expect_name` is true at the start of an entry
@@ -2239,6 +2252,11 @@ fn Parser::parse_class_body(
     let mut local_type_param_bound_len = self.local_type_param_bounds.length()
     let mut method_type_param_names : Array[String] = []
     let mut method_type_param_bounds : Array[(String, @ast.TsType)] = []
+    // Whether a type-parameter LIST was written, as opposed to whether it
+    // produced any names: `constructor<>()` parses to zero names and is
+    // still TS1092 (plus TS1098 for the empty list), so the count cannot
+    // answer the question. Read by the constructor grammar checks below.
+    let had_type_param_list = self.check(Lt)
     if self.check(Lt) {
       let (names, type_param_bounds) = self.parse_type_param_names_and_bounds()
       method_type_param_names = names
@@ -2316,6 +2334,102 @@ fn Parser::parse_class_body(
         self.parse_type()
       } else {
         Any
+      }
+      // Grammar rules that are always errors on a CONSTRUCTOR, whatever the
+      // surrounding types say — decided from declaration shape alone, so
+      // they carry no false-positive risk on resolvable input. Each was
+      // probed against tsc rather than assumed:
+      //
+      //   static / async / override constructor()  TS1089
+      //   constructor<T>() / constructor<>()       TS1092 (+TS1098)
+      //   constructor(): T                         TS1093, for every T
+      //                                            including `void`
+      //
+      // Accessibility modifiers are deliberately NOT in the list: tsc
+      // accepts `private constructor()` (the singleton idiom),
+      // `protected` and `public`. `abstract` and `readonly` are errors too
+      // but under their own codes (TS1242 / TS1024) and are left alone
+      // here — a check that reports the wrong rule is worse than no check.
+      if is_constructor_method {
+        if is_static {
+          self.record_suppressible_grammar_misuse(
+            "`static` modifier cannot appear on a constructor declaration",
+          )
+        }
+        if is_async_method {
+          self.record_suppressible_grammar_misuse(
+            "`async` modifier cannot appear on a constructor declaration",
+          )
+        }
+        if saw_override_modifier {
+          self.record_suppressible_grammar_misuse(
+            "`override` modifier cannot appear on a constructor declaration",
+          )
+        }
+        if had_type_param_list {
+          self.record_suppressible_grammar_misuse(
+            "type parameters cannot appear on a constructor declaration",
+          )
+        }
+        if had_return_annotation {
+          self.record_suppressible_grammar_misuse(
+            "a type annotation cannot appear on a constructor declaration",
+          )
+        }
+      }
+      // TS1064 for an `async` METHOD, the second of the two spellings an
+      // async callable has (`parse_function` covers the first). Recorded
+      // through the same helper rather than a second copy of the denylist.
+      self.record_async_return_type_misuse(
+        is_async_method, is_generator, had_return_annotation, return_type,
+      )
+      // Accessor grammar rules, same shape of argument as the constructor
+      // block above: decided from the declaration alone, each probed
+      // against tsc, and each with its legal neighbour probed too so the
+      // check is known not to fire on it.
+      //
+      //   set F(a = 1)      TS1052   vs.  set F(v)          legal
+      //   set F(a?)         TS1051   vs.  set F(v: number)  legal
+      //   set F(...a)       TS1053   vs.  set F(v,)         legal
+      //   set F(v): number  TS1095   vs.  get F(): number   legal
+      //   get/set F<T>()    TS1094
+      //
+      // TS1094 applies to BOTH accessor kinds; the other four are `set`
+      // only, because a getter takes no parameters and its return
+      // annotation is the normal way to type it.
+      match accessor_kind {
+        Some(kind) => {
+          if had_type_param_list {
+            self.record_suppressible_grammar_misuse(
+              "an accessor cannot have type parameters",
+            )
+          }
+          if kind == "set" {
+            if had_return_annotation {
+              self.record_suppressible_grammar_misuse(
+                "a `set` accessor cannot have a return type annotation",
+              )
+            }
+            for p in params {
+              if not(p.default is None) {
+                self.record_suppressible_grammar_misuse(
+                  "a `set` accessor parameter cannot have an initializer",
+                )
+              }
+              if p.is_optional {
+                self.record_suppressible_grammar_misuse(
+                  "a `set` accessor cannot have an optional parameter",
+                )
+              }
+              if p.is_rest {
+                self.record_suppressible_grammar_misuse(
+                  "a `set` accessor cannot have a rest parameter",
+                )
+              }
+            }
+          }
+        }
+        None => ()
       }
       let consumed_semi = self.match_(Semicolon)
       // A real `{ ... }` body marks an *implementation* (vs. a bodyless

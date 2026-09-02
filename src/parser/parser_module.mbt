@@ -384,6 +384,18 @@ fn Parser::parse_enum_decl_after_enum_keyword(
   let _ = self.expect(LBrace)
   let members : Array[@ast.TsEnumMember] = []
   while !self.check(RBrace) && !self.check(Eof) {
+    // TS1132 ("Enum member expected"): a comma reaching the TOP of this
+    // loop had no member before it — a leading `enum E { , }` or a doubled
+    // `enum E { A,, B }`. A TRAILING comma is legal and cannot arrive here,
+    // because the separator after a parsed member is consumed at the bottom
+    // of the loop and the next iteration sees `}`. Both probed against tsc,
+    // along with `enum E { }` and `enum E { A }`, which stay clean.
+    //
+    // Only the comma. `enum E { A; B }` is TS1357, a different rule, and a
+    // check that reports the wrong one is worse than no check.
+    if self.check(Comma) {
+      self.record_suppressible_grammar_misuse("an enum member is expected here")
+    }
     if self.match_(Comma) || self.match_(Semicolon) {
       continue
     }
@@ -3260,7 +3272,19 @@ fn Parser::parse_export_stmt(
           None => ()
         }
         match namespace_ {
-          Some(namespace_) => namespaces.push(namespace_)
+          Some(namespace_) => {
+            // An exported namespace IS an exported value, and every OTHER
+            // exported declaration kind records this marker (function,
+            // enum, class, variable) while namespaces did not — so
+            // `export namespace M { }` in a .d.ts read as un-exported and
+            // TS1046 flagged it, which tsc does not. Found by the unit
+            // test for the namespace arm of that check, not by the
+            // conformance gate: the corpus has few `.d.ts` files, while
+            // `export namespace` is ordinary @types shape, so this was a
+            // false positive aimed at the product path.
+            self.grammar_misuses.push("<export-value>" + namespace_.name)
+            namespaces.push(namespace_)
+          }
           None => ()
         }
       }
