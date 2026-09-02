@@ -21883,25 +21883,50 @@ fn check_misplaced_type_predicates(module_ : @ast.TsModule) -> Array[ExprIssue] 
 /// `checkTypeNameIsReserved` in tsc — the exact reserved set is `any`,
 /// `unknown`, `never`, `number`, `bigint`, `boolean`, `string`, `symbol`,
 /// `void`, `object` (note `bool` is NOT reserved).
+/// The predefined-type keywords, which no class (TS2414), interface
+/// (TS2427) or type alias (TS2457) may be named. One list, because the
+/// three rules are one rule about one set of names.
+fn is_predefined_type_name(name : String) -> Bool {
+  match name {
+    "any"
+    | "unknown"
+    | "never"
+    | "number"
+    | "bigint"
+    | "boolean"
+    | "string"
+    | "symbol"
+    | "void"
+    | "object" => true
+    _ => false
+  }
+}
+
+///|
 fn check_reserved_class_names(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   for cls in module_.classes {
-    match cls.name {
-      "any"
-      | "unknown"
-      | "never"
-      | "number"
-      | "bigint"
-      | "boolean"
-      | "string"
-      | "symbol"
-      | "void"
-      | "object" =>
-        issues.push({
-          path: "class \{cls.name}",
-          message: "class name cannot be `\{cls.name}`",
-        })
-      _ => ()
+    if is_predefined_type_name(cls.name) {
+      issues.push({
+        path: "class \{cls.name}",
+        message: "class name cannot be `\{cls.name}`",
+      })
+    }
+  }
+  // TS2427 ("Interface name cannot be 'X'"). The class list above and the
+  // type-alias rule below both existed; interfaces had no check at all, and
+  // the reason it looked partly covered is an accident rather than a rule:
+  // `number` / `boolean` / `string` / `void` have dedicated LEXER token
+  // kinds, so `interface string {}` cannot be parsed as a name and is
+  // rejected outright, while `any`, `unknown`, `never`, `bigint`, `symbol`
+  // and `object` arrive as ordinary identifiers and sailed through
+  // (`symbolType20`). Sharing the list is what makes the three consistent.
+  for iface in module_.interfaces {
+    if is_predefined_type_name(iface.name) {
+      issues.push({
+        path: "interface \{iface.name}",
+        message: "interface name cannot be `\{iface.name}`",
+      })
     }
   }
   issues
@@ -23823,25 +23848,17 @@ fn check_class_extends_function(module_ : @ast.TsModule) -> Array[ExprIssue] {
 }
 
 ///|
+/// TS2457. Shares `is_predefined_type_name` with the class (TS2414) and
+/// interface (TS2427) rules — the ten-name list had been written out twice
+/// and the interface case, which needs the same list, had no check at all.
 fn check_reserved_type_alias_names(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   for ta in module_.type_aliases {
-    match ta.name {
-      "any"
-      | "unknown"
-      | "never"
-      | "number"
-      | "bigint"
-      | "boolean"
-      | "string"
-      | "symbol"
-      | "void"
-      | "object" =>
-        issues.push({
-          path: "type \{ta.name}",
-          message: "type alias name cannot be `\{ta.name}`",
-        })
-      _ => ()
+    if is_predefined_type_name(ta.name) {
+      issues.push({
+        path: "type \{ta.name}",
+        message: "type alias name cannot be `\{ta.name}`",
+      })
     }
   }
   issues

@@ -15212,3 +15212,154 @@ test "expr_check: duplicate top-level declarations (TS2451 / TS2300)" {
     @test.assert_eq(dups(src), 0)
   }
 }
+
+///|
+/// `using` / `await using` positional grammar (TS1155 / TS1156 / TS1493 /
+/// TS1494 / TS1547 / TS1548), object-literal getters (TS2378), reserved
+/// interface names (TS2427) and a `void`-annotated generator (TS2505).
+///
+/// Four of these extended a check that already existed and covered some of
+/// what it named: `is_disallowed_lexical_stmt_start` rejected `let` /
+/// `const` / `class` / `function` in a single-statement position and had no
+/// `using` arm; `check_getter_returns_value` read `module_.classes` only;
+/// the ten predefined-type names were written out for classes and for type
+/// aliases and not for interfaces; and the async return-type helper already
+/// took `is_generator` as an exemption.
+test "expr_check: using-declaration grammar, objlit getters, reserved names" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  let d = "declare const d: Disposable; "
+  // A single-statement position rejects the declaration outright, so these
+  // assert a PARSE failure rather than an issue count — `parse_module_or_empty`
+  // yields an empty module, which is why they are checked by a separate
+  // predicate below rather than by `issues`.
+  let rejects = fn(src : String) -> Bool {
+    (try? @parser.Parser::from_source(src).parse_module()) is Err(_)
+  }
+  assert_true(rejects(d + "if (true) using x = d;"))
+  assert_true(rejects(d + "while (true) using x = d;"))
+  assert_true(rejects(d + "lbl: using x = d;"))
+  // A plain identifier REFERENCE named `using` in the same position is
+  // legal JavaScript and must still parse.
+  assert_true(not(rejects("declare const using: any; if (true) using;")))
+  assert_true(
+    not(
+      rejects("declare const using: {foo(): void}; while (false) using.foo();"),
+    ),
+  )
+  // The recorded-diagnostic half.
+  assert_true(issues("using x;") > 0)
+  assert_true(issues(d + "declare const o: any; for (using x in o) {}") > 0)
+  assert_true(issues(d + "switch (1) { case 1: using x = d; }") > 0)
+  @test.assert_eq(issues(d + "{ using x = d; }"), 0)
+  @test.assert_eq(issues(d + "using x = d;"), 0)
+  @test.assert_eq(
+    issues(d + "declare const o: Disposable[]; for (using x of o) {}"),
+    0,
+  )
+  @test.assert_eq(issues(d + "switch (1) { case 1: { using x = d; } }"), 0)
+  // TS2378 for an OBJECT-LITERAL getter, and every abstention.
+  let getter = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("`get` accessor must return a value") {
+        n += 1
+      }
+    }
+    n
+  }
+  assert_true(getter("var v = { get Foo() { } };") > 0)
+  assert_true(getter("var v = { get Foo(): number { } };") > 0)
+  assert_true(getter("class C { get F() { } }") > 0)
+  for
+    src in [
+      "var v = { get Foo() { return 1; } };",
+      // An annotation that accepts `undefined` makes falling off the end
+      // well-typed; a MISSING annotation is stored as `Any` and must not be
+      // read as one, which is why the parser passes `had_annotation`.
+       "var v = { get Foo(): any { } };", "var v = { get Foo(): void { } };", "var v = { get Foo() { throw 1; } };",
+      "var v = { set Foo(x: number) { } };", "var v = { Foo() { } };", "class C { get F() { return 1 } }",
+    ] {
+    @test.assert_eq(getter(src), 0)
+  }
+  // TS2427: every predefined-type name, shared with the class and
+  // type-alias rules. `number` / `boolean` / `string` / `void` have their
+  // own lexer token kinds and are rejected at parse time instead, which is
+  // what made the coverage look partial.
+  for n in ["any", "unknown", "never", "bigint", "symbol", "object"] {
+    assert_true(issues("interface \{n} { }") > 0)
+  }
+  @test.assert_eq(issues("interface Foo { }"), 0)
+  // TS2505, and the generator annotations that stay legal.
+  assert_true(issues("function* g3(): void { }") > 0)
+  assert_true(issues("class C { *m(): void { } }") > 0)
+  @test.assert_eq(issues("function* g(): Generator<number> { yield 1 }"), 0)
+  @test.assert_eq(issues("function* g() { yield 1 }"), 0)
+  @test.assert_eq(issues("async function f(): Promise<void> { }"), 0)
+  @test.assert_eq(issues("function f(): void { }"), 0)
+}
+
+///|
+/// Duplicate names inside ONE destructuring pattern (TS2451), a `var` in a
+/// `for…of` body colliding with the head's block-scoped binding (TS2481),
+/// and a `for…of` head whose iterable is the loop variable itself (TS7022).
+///
+/// `destructuringSameNames.ts` in the conformance corpus is the
+/// legal-neighbour list for the first rule, written by the TypeScript team:
+/// `let { foo, foo: bar }` binds two DISTINCT names, and every
+/// assignment-pattern repeat is legal because an assignment target is not a
+/// declaration. Those are asserted here rather than paraphrased.
+///
+/// The TS7022 case also records a mistake made while writing it: without a
+/// `no_implicit_any` gate the rule reported four TS7-ACCEPTED files —
+/// `for (var of of of) { }` and `for (var of in of) { }` bind a variable
+/// named `of` and iterate one named `of`, a real self-reference that tsc
+/// stays silent about under `@strict: false`. Every other
+/// `<noimplicitany>` recorder in the parser gates on that flag.
+test "expr_check: pattern duplicates, for-head var collision, self-iterable" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // TS2451 — the error half of destructuringSameNames.ts.
+  for
+    src in [
+      "let { foo1, foo1 } = { foo1: 10 };", "let { foo2, bar2: foo2 } = { foo2: 20, bar2: 220 };",
+      "let { bar3: foo3, foo3 } = { foo3: 30, bar3: 330 };", "const { foo4, foo4 } = { foo4: 40 };",
+      "let [blah1, blah1] = [111, 222];", "const [blah2, blah2] = [333, 444];", "for (let [v, v] of [[]]) {}",
+      // Nested: two different properties binding one name.
+       "let { a: { x }, b: { x } } = { a: {x:1}, b: {x:2} };",
+      // Every declarator of a group is checked, not just the first.
+       "let { p } = { p: 1 }, [q, q] = [1, 2];",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // TS2481 and TS7022.
+  assert_true(issues("for (let v of []) { var v; }") > 0)
+  assert_true(issues("for (let v of []) { var v = 0; }") > 0)
+  assert_true(issues("// @noImplicitAny: true\nfor (var v of v) { }") > 0)
+  assert_true(
+    issues("// @noImplicitAny: true\nlet v = [1]; for (let v of v) { v; }") > 0,
+  )
+  // --- silent: the legal half of destructuringSameNames.ts, plus the
+  // shapes each rule must not reach.
+  for
+    src in [
+      "let { foo, foo: bar } = { foo: 1 };", "let foo: any, bar: any; ({ foo, foo } = { foo: 2 });",
+      "let foo: any, bar: any; ({ foo, foo: bar } = { foo: 3 });", "let foo: any, bar: any; ({ foo: bar, foo: bar } = { foo: 5 });",
+      "let foo: any; [foo, foo] = [111, 1111];",
+      // `var` merges.
+       "var [a, a] = [1, 2];", "var { z, z } = { z: 1 };", "const [a, b] = [1, 2];",
+      // TS2481: a different name, and a `var` in a NESTED block, which is a
+      // different scope and deliberately falls through.
+       "for (let v of []) { var w; }", "for (let v of []) { { var v; } }",
+      // TS7022: an annotation breaks the cycle, and an unrelated iterable is
+      // not a cycle at all.
+       "declare const arr: number[]; for (var v of arr) { }", "// @noImplicitAny: true\ndeclare const v: any; for (var q: any of v) { }",
+      // Without noImplicitAny tsc says nothing, which is what
+      // parserForOfStatement18/19 rely on.
+       "// @strict: false\nfor (var of of of) { }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}

@@ -2155,11 +2155,87 @@ need parser-wide changes).
 
 ## TS Checker Conformance (current state, 2026-09-02 — TypeScript 7)
 
-State: whole-corpus **TP 2391 / MISS 343 / FP 0 / PFLEGAL 0 / TN 1750**
+State: whole-corpus **TP 2407 / MISS 327 / FP 0 / PFLEGAL 0 / TN 1750**
 (classified 4484, NOTRUN 14) via
 `scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0`.
-Seven batches: BU +9, BV +14, BW +13, BX +10, BY +7, BZ +1, CA +0, for
-**+54 TP at FP 0**. CA's zero is deliberate and explained in its own
+Nine batches: BU +9, BV +14, BW +13, BX +10, BY +7, BZ +1, CA +0, CB +10,
+CC +6, for **+70 TP at FP 0**.
+
+### Batches CB / CC (2026-09-02): the goal changed, so the ranking did
+
+Everything above was ranked by cost AND real-world frequency, and on that
+basis `parser/ecmascript5` — the largest and cheapest cluster at 49 files —
+was explicitly the WRONG one to take, because its files are
+`parserErrorRecovery_ParameterList6`-style broken syntax nobody writes.
+With the objective restated as a corpus number, corpus count IS the
+objective and that judgement inverts. Both are recorded so neither reads as
+a mistake: they answer different questions.
+
+**CB (+10): the `using` declaration family, plus three one-site rules.**
+`is_disallowed_lexical_stmt_start` rejects `let` / `const` / `class` /
+`function` / `async function` in a single-statement position and had NO
+`using` arm — which is TS1156 exactly ("'using' declarations can only be
+declared inside a block"). Seventeenth instance; `using` reached the parser
+after that check was written. Both spellings gate on the same look-ahead
+the statement parser uses, so a plain identifier reference named `using`
+(`if (c) using;`) is untouched. With it: TS1155 (must be initialized —
+visible only because `parse_var_decl_list_from` substitutes the
+`__ts_no_init__` sentinel, so `init` has no `None` case), TS1493/1494 (a
+`using` head in `for…in`, keyed on `is_in` because `for (using x of …)` in
+the same branch is legal) and TS1547/1548 (a `case` clause body, checked by
+peeking at the statement about to be parsed rather than by carrying a flag —
+a clause body is a statement LIST, so where we stand answers the
+enclosing-block question, and `case 1: { using x = d; }` reaches
+`parse_block` instead).
+
+Three more, each an existing check that covered some of what it named:
+`check_getter_returns_value` read `module_.classes` only, so TS2378 missed
+`var v = { get Foo() { } }` — the object-literal spelling its own doc
+comment names (`parserAccessors3`, `parserES3Accessors3`). Restricted to an
+EMPTY body, which is why none of that check's abstentions (a `throw`, a
+loop, a bare `return`) need repeating, and shared between the two
+object-literal accessor parse paths because TS1054/TS1049 are written out
+at both. The ten predefined-type names were written out for classes AND for
+type aliases and not for interfaces (TS2427) — and the coverage LOOKED
+partial for a reason that is not a rule: `number` / `boolean` / `string` /
+`void` have dedicated lexer token kinds so `interface string {}` cannot be
+parsed at all, while `any` / `unknown` / `never` / `bigint` / `symbol` /
+`object` arrive as ordinary identifiers and sailed through. And TS2505 (a
+`void`-annotated generator) went into the async return-type helper, which
+already took `is_generator` as its exemption — same question, does the
+declared return type contradict the function's KIND.
+
+**CC (+6): duplicate names in one destructuring pattern, and two for-head
+rules.** TS2451 for `let { foo, foo }` / `let [v, v]`, placed in
+`parse_var_decl_item` so every declarator of a group passes it, plus the
+for-of head. `destructuringSameNames.ts` is the legal-neighbour list
+written by the TypeScript team and is asserted verbatim: `let { foo, foo:
+bar }` binds two DISTINCT names, and every assignment-pattern repeat
+(`({ foo, foo } = …)`, `[foo, foo] = …`) is legal because an assignment
+target is not a declaration — those parse as expressions and never reach a
+binding parser, so they are excluded structurally rather than by a test.
+`var` merges, so the caller has to say which keyword it parsed and
+`is_block_scoped` has no default. Also TS2481
+(`for (let v of []) { var v }`, reading only the body's own flat `var`
+statements so a nested block falls through) and TS7022 for the DIRECT
+self-iterable (`for (var v of v)`), the indirect inference-cycle cases
+(`for-of33`/`34`/`35`) abstaining.
+
+**One false positive of my own, and it is the twentieth instance of the
+family this document catalogues.** The TS7022 rule shipped without a
+`no_implicit_any` gate and reported four TS7-ACCEPTED files:
+`for (var of of of) { }` and `for (var of in of) { }`
+(`parserForOfStatement18`/`19` and their ES5 twins) bind a variable named
+`of` and iterate one named `of` — a genuine self-reference that tsc stays
+silent about under `@strict: false`. Every other `<noimplicitany>` recorder
+in the parser gates on that flag. Caught by the oracle, not by reasoning,
+which is the argument for running it per batch rather than per round.
+
+And the stale-binary trap landed a third time, in the opposite direction:
+after the gate fix only the RELEASE binary was rebuilt, so a debug probe
+reported the FP as still present and a test assertion written from that
+probe was wrong. Rebuilt, all 26 assertions of the new test match the
+checker. CA's zero is deliberate and explained in its own
 section — the diagnostic it adds is one the conformance suite does not
 exercise and real code hits constantly.
 

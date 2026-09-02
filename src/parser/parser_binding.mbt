@@ -254,6 +254,147 @@ fn Parser::binding_first_name(
 }
 
 ///|
+/// TS2451 ("Cannot redeclare block-scoped variable 'X'") for two elements
+/// of ONE destructuring pattern that bind the same name —
+/// `let { foo, foo }`, `const { a, b: a }`, `let [v, v]`.
+///
+/// `is_block_scoped` is required and has no default: `var [a, a] = …`
+/// legally merges, so the caller has to say which keyword it parsed. Batch
+/// CA's top-level rule made the same distinction for flat declarations and
+/// deliberately let patterns fall through; this is that omission, closed at
+/// the one place a pattern's whole name set is known.
+///
+/// `destructuringSameNames.ts` is the legal-neighbour list, written into
+/// the corpus:
+///   - `let { foo, foo: bar }` binds `foo` and `bar` — DISTINCT, legal;
+///   - every ASSIGNMENT-pattern repeat (`({ foo, foo } = …)`,
+///     `[foo, foo] = …`) is legal, because an assignment target is not a
+///     declaration. Those parse as expressions and never reach a binding
+///     parser, so they are excluded structurally rather than by a test.
+///
+/// `collect_binding_names` already flattens nested patterns and rest
+/// elements, so `let { a: { x }, b: { x } }` — two different properties
+/// binding one name — is caught without a second walk.
+fn Parser::record_pattern_duplicate_bindings(
+  self : Parser,
+  binding : @ast.TsBinding,
+  is_block_scoped : Bool,
+) -> Unit {
+  if not(is_block_scoped) {
+    return
+  }
+  match binding {
+    @ast.TsBinding::Array(_) | @ast.TsBinding::Object(_) => ()
+    // A plain `let x` binds one name; repeats across STATEMENTS are batch
+    // CA's rule, not this one.
+    _ => return
+  }
+  let names : Array[String] = []
+  self.collect_binding_names(binding, names)
+  let seen : Map[String, Unit] = {}
+  let reported : Map[String, Unit] = {}
+  for n in names {
+    if seen.contains(n) && not(reported.contains(n)) {
+      reported[n] = ()
+      self.grammar_misuses.push("cannot redeclare block-scoped variable `\{n}`")
+    }
+    seen[n] = ()
+  }
+}
+
+///|
+/// Two rules about a `for…of` / `for…in` HEAD binding, both keyed on the
+/// loop variable's own name and needing no type inference:
+///
+///   - TS7022 ("'X' implicitly has type 'any' because it does not have a
+///     type annotation and is referenced directly or indirectly in its own
+///     initializer"): `for (var v of v)`, `let v = [1]; for (let v of v)`.
+///     Only the DIRECT form is claimed — the head binds `v` and the
+///     iterable expression mentions `v`, so the type of `v` is inferred
+///     from `v`. The INDIRECT cases in the corpus (`for-of33` / `-34` /
+///     `-35`, where a class's un-annotated `next()` returns the loop
+///     variable) need an inference-cycle detector and abstain here.
+///     Requires no annotation on the head: `for (var v: any of v)` is
+///     legal, which is what `var_type` is read for.
+///
+///   - TS2481 ("Cannot initialize outer scoped variable 'X' in the same
+///     scope as block scoped declaration 'X'"): `for (let v of []) { var v }`.
+///     A `var` in the body hoists to the enclosing function while the head's
+///     `let` owns the loop scope, so the two collide. Only a `let`/`const`
+///     head qualifies, and only the body's own flat `var` statements are
+///     read — a nested block or function is a different scope and falls
+///     through, losing a finding rather than inventing one.
+fn Parser::record_for_head_binding_misuses(
+  self : Parser,
+  kind : @ast.TsForOfKind,
+  binding : @ast.TsBinding,
+  var_type : @ast.TsType,
+  iterable : @ast.TsExpr,
+  body : @ast.TsBlock,
+) -> Unit {
+  let names : Array[String] = []
+  self.collect_binding_names(binding, names)
+  if names.length() == 0 {
+    return
+  }
+  // TS7022: the head's own name read in the iterable, with no annotation
+  // to break the cycle.
+  //
+  // `no_implicit_any` is REQUIRED here, and leaving it out was a false
+  // positive on four TS7-ACCEPTED files: `for (var of of of) { }` and
+  // `for (var of in of) { }` (parserForOfStatement18/19 and their ES5
+  // twins) bind a variable named `of` and iterate a variable named `of`,
+  // which is a genuine self-reference — but those files set
+  // `@strict: false`, so tsc reports nothing. Every other
+  // `<noimplicitany>` recorder in the parser gates on this flag; omitting
+  // it here made this the twentieth instance in the repo of a rule applied
+  // at some of its sites, and the first one written by the same pass that
+  // was cataloguing them.
+  if self.no_implicit_any && var_type is Any {
+    let mentioned : Array[String] = []
+    collect_iterable_var_names(iterable, mentioned)
+    for n in names {
+      if mentioned.contains(n) {
+        self.grammar_misuses.push(
+          "<noimplicitany>`\{n}` implicitly has type `any` because it does not have a type annotation and is referenced in its own initializer",
+        )
+        break
+      }
+    }
+  }
+  // TS2481: a body-level `var` of the head's name.
+  if kind is (@ast.TsForOfKind::Let | @ast.TsForOfKind::Const) {
+    for st in body.stmts {
+      match st {
+        @ast.TsStmt::Var(@ast.TsBinding::Ident(vn), _, _) =>
+          if names.contains(vn) {
+            self.grammar_misuses.push(
+              "cannot initialize outer scoped variable `\{vn}` in the same scope as block scoped declaration `\{vn}`",
+            )
+            break
+          }
+        _ => ()
+      }
+    }
+  }
+}
+
+///|
+/// Bare `Var` names read by a `for…of` / `for…in` iterable expression, for
+/// the TS7022 self-reference test above. Deliberately shallow: only the
+/// spellings in which the loop variable's own name can be the thing being
+/// iterated. A name reached through a call or a property is not the
+/// iterable itself, so widening this would claim a cycle that is not one.
+fn collect_iterable_var_names(e : @ast.TsExpr, out : Array[String]) -> Unit {
+  match e {
+    Var(n) => out.push(n)
+    As(inner, _) | Satisfies(inner, _) | NonNull(inner) | PureCall(inner) =>
+      collect_iterable_var_names(inner, out)
+    _ => ()
+  }
+}
+
+///|
 /// Collect all bound names from a binding pattern
 fn Parser::collect_binding_names(
   self : Parser,

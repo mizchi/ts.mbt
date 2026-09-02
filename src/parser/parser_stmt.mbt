@@ -63,6 +63,50 @@ fn Parser::record_suppressible_grammar_misuse(
 }
 
 ///|
+/// TS2378 ("A 'get' accessor must return a value") for an OBJECT-LITERAL
+/// getter with an empty body — `var v = { get Foo() { } }`.
+///
+/// `check_getter_returns_value` in the checker already answers this for
+/// CLASS getters, with a careful set of abstentions (a `throw`, a loop, a
+/// bare `return;`, a return annotation that accepts `undefined`). It reads
+/// `module_.classes` and nothing else, so the object-literal spelling was
+/// never covered — and its own doc comment names the `parserAccessors`
+/// cluster, two of whose files (`parserAccessors3`, `parserES3Accessors3`)
+/// are exactly `var v = { get Foo() { } }`.
+///
+/// Restricted here to the EMPTY body, which is why none of those
+/// abstentions need repeating: a body with no statements has no `throw`, no
+/// loop and no `return` of either kind. A non-empty object-literal getter
+/// abstains rather than duplicating the checker's flow logic — that
+/// duplication is the mistake this batch keeps finding. The two accessor
+/// parse paths share this helper for the same reason: TS1054 / TS1049 are
+/// written out at both of them.
+///
+/// `had_annotation` is required because the parser stores a MISSING return
+/// annotation as `Any`, which is indistinguishable from an explicit
+/// `: any` once in the AST — and an explicit `: any` / `: void` /
+/// `: undefined` / `: unknown` makes falling off the end well-typed, so tsc
+/// raises nothing there.
+fn Parser::record_objlit_getter_returns(
+  self : Parser,
+  is_getter : Bool,
+  had_annotation : Bool,
+  return_type : @ast.TsType,
+  body : @ast.TsBlock,
+) -> Unit {
+  if not(is_getter) || body.stmts.length() > 0 {
+    return
+  }
+  if had_annotation {
+    match return_type {
+      Any | Unknown | Void | Undefined | Null => return
+      _ => ()
+    }
+  }
+  self.grammar_misuses.push("a `get` accessor must return a value")
+}
+
+///|
 /// Push a label onto the active-label stack, recording TS1114 ("Duplicate
 /// label") when one of that name is already active.
 ///
@@ -438,6 +482,16 @@ fn Parser::parse_var_like(
             _ => ()
           }
           match init {
+            // TS1155: "'using' declarations must be initialized." There is
+            // nothing to dispose without an initializer, so unlike `let`
+            // the declarator is not optional. `parse_var_decl_list_from`
+            // substitutes the `__ts_no_init__` sentinel for a declarator
+            // the source left bare, which is how the absence is visible
+            // here at all — `Var(b, _, init)` has no `None` case.
+            Var("__ts_no_init__") =>
+              self.grammar_misuses.push(
+                "'\{using_kw}' declarations must be initialized",
+              )
             ObjectLit(entries) => {
               let mut keys_plain = true
               for e in entries {
@@ -772,6 +826,24 @@ fn Parser::parse_switch(self : Parser) -> @ast.TsStmt raise ParseError {
     let case_stmt_positions : Array[Int] = []
     while !self.check(Case) && !self.check(Default) && !self.check(RBrace) {
       case_stmt_positions.push(self.peek().pos)
+      // TS1547 / TS1548: "'using' / 'await using' declarations are not
+      // allowed in 'case' or 'default' clauses unless contained within a
+      // block." The clause bodies of one `switch` share a scope, so a
+      // disposable bound in one clause would outlive it. Checked by
+      // peeking at the statement about to be parsed rather than by
+      // carrying a flag: a clause body is a statement LIST, so the
+      // enclosing-block question is answered by where we are standing,
+      // and `case 1: { using x = d; }` reaches `parse_block` instead and
+      // is correctly untouched.
+      if self.is_using_declaration_start() {
+        self.grammar_misuses.push(
+          "`using` declarations are not allowed in `case` or `default` clauses unless contained within a block",
+        )
+      } else if self.is_await_using_declaration_start() {
+        self.grammar_misuses.push(
+          "`await using` declarations are not allowed in `case` or `default` clauses unless contained within a block",
+        )
+      }
       stmts.push(self.parse_stmt())
     }
     cases.push({
@@ -888,6 +960,13 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
         "'\{using_kw}' declarations may not have binding patterns",
       )
     }
+    // TS2451 for a duplicate name inside a for-head destructuring pattern
+    // (`for (let [v, v] of …)`). A `var` head merges and is exempt, the
+    // same distinction the declaration site makes.
+    self.record_pattern_duplicate_bindings(
+      binding,
+      kind is (@ast.TsForOfKind::Let | @ast.TsForOfKind::Const),
+    )
     // TS2480: `for (let let of ...)` / `for (const let in ...)`.
     match (kind, binding) {
       (
@@ -906,6 +985,18 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
       if is_await && is_in {
         raise ParseError("for-await-of requires 'of'")
       }
+      // TS1493 / TS1494: "The left-hand side of a 'for...in' statement
+      // cannot be a 'using' / 'await using' declaration." A disposable
+      // binding needs a scope that ends deterministically, and `for...in`
+      // does not give one — `for (using x of …)`, twenty lines below in
+      // the same branch, IS legal, which is why this keys on `is_in` and
+      // not on the `using` head alone. The sibling TS1492 (a binding
+      // pattern in a `using` head) was already recorded above.
+      if is_in && using_declaration {
+        self.grammar_misuses.push(
+          "the left-hand side of a `for...in` statement cannot be a `\{using_kw}` declaration",
+        )
+      }
       let _ = self.advance() // of/in
       let iterable = self.parse_expr()
       let _ = self.expect(RParen)
@@ -914,6 +1005,9 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
       self.in_iteration = true
       let body = self.parse_block_or_stmt_no_lexical()
       self.in_iteration = prev_iteration
+      self.record_for_head_binding_misuses(
+        kind, binding, var_type, iterable, body,
+      )
       // Preserve the explicit type annotation on the loop binding when
       // present; `parse_var_decl_type` returns `Any` otherwise.
       if is_in {
@@ -1572,6 +1666,21 @@ fn Parser::is_disallowed_lexical_stmt_start(
   match self.peek().kind {
     Let => !self.is_let_identifier_expr_start()
     Const | Class => true
+    // TS1156: "'using' / 'await using' declarations can only be declared
+    // inside a block." A `using` declaration is lexical exactly like
+    // `let` / `const`, so `if (c) using x = d;` is not legal TypeScript.
+    // The arm was missing because `using` was added to the parser after
+    // this check was written — the same omission shape as the `let` /
+    // `const` arms above, which is why it lives here rather than in a
+    // second predicate.
+    //
+    // Both spellings are gated on the same look-ahead the statement
+    // parser uses, so a plain identifier REFERENCE named `using`
+    // (`if (c) using;`, `while (c) using.foo();`) is untouched — that is
+    // legal JavaScript and the reason this cannot be a bare token test.
+    Ident("using") => self.is_using_declaration_start()
+    Ident("await") if self.peek_at(1).kind is Ident("using") =>
+      self.is_await_using_declaration_start()
     Function =>
       if self.peek_at(1).kind == Star {
         true
@@ -1636,6 +1745,14 @@ fn Parser::parse_var_decl_item(
   type_ : @ast.TsType,
   kind : VarKind,
 ) -> @ast.TsStmt raise ParseError {
+  // TS2451 for a duplicate name inside ONE destructuring pattern. Placed
+  // here rather than at `parse_var_like`'s first declarator because every
+  // declarator of a group — `let { a, a } = x, [b, b] = y` — passes through
+  // this one function with its `kind`, so no declarator can be missed.
+  self.record_pattern_duplicate_bindings(
+    binding,
+    kind is (VarKind::Let | VarKind::Const),
+  )
   let init_opt = if self.match_(Eq) {
     Some(self.parse_assignment())
   } else {

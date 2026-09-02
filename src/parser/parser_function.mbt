@@ -305,6 +305,23 @@ fn Parser::record_async_return_type_misuse(
   had_annotation : Bool,
   return_type : @ast.TsType,
 ) -> Unit {
+  // TS2505: "A generator cannot have a 'void' type annotation." Same
+  // question as the async rule below — does the declared return type
+  // contradict the function's KIND — so it lives in the same helper rather
+  // than in a second one; `is_generator` was already a parameter here, as
+  // the async rule's exemption.
+  //
+  // Only `void` is flagged. A generator's annotation is legally
+  // `Generator<…>` / `Iterator<…>` / `any` / a type parameter, and telling
+  // an arbitrary wrong annotation from a legal one needs the full
+  // assignability machinery; `void` is the one spelling tsc singles out
+  // with its own code, and it can never be right (a generator's call
+  // returns an object).
+  if is_generator && had_annotation && return_type is Void {
+    self.record_suppressible_grammar_misuse(
+      "a generator cannot have a `void` type annotation",
+    )
+  }
   if !is_async || is_generator || !had_annotation {
     return
   }

@@ -3599,7 +3599,8 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
                 "a `set` accessor must have exactly one parameter",
               )
             }
-            let return_type = if self.check(Colon) {
+            let had_return_annotation = self.check(Colon)
+            let return_type = if had_return_annotation {
               let _ = self.advance()
               self.parse_type()
             } else {
@@ -3609,6 +3610,9 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
             self.in_function = true
             let body = self.parse_block()
             self.in_function = prev_function
+            self.record_objlit_getter_returns(
+              is_getter, had_return_annotation, return_type, body,
+            )
             @ast.TsExpr::FuncExpr(@ast.TsFunc::{
               name: func_name,
               type_params: [],
@@ -3968,7 +3972,8 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
                 "a `set` accessor must have exactly one parameter",
               )
             }
-            let return_type = if self.check(Colon) {
+            let had_return_annotation = self.check(Colon)
+            let return_type = if had_return_annotation {
               let _ = self.advance()
               self.parse_type()
             } else {
@@ -3978,6 +3983,9 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
             self.in_function = true
             let body = self.parse_block()
             self.in_function = prev_function
+            self.record_objlit_getter_returns(
+              is_getter, had_return_annotation, return_type, body,
+            )
             @ast.TsExpr::FuncExpr(@ast.TsFunc::{
               name: func_name,
               type_params: [],
