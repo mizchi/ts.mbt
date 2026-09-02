@@ -10,6 +10,20 @@
 // the TypeScript submodule's own `.errors.txt` baseline and groups by code,
 // so the output is a ranked list of buckets with example files.
 //
+// Read the ranking with two cautions, both learned by getting them wrong:
+//
+//   1. The unit that flips is a FILE, not a (file, code) pair — flagging ANY
+//      error in a file turns MISS into TP. So the report leads with `solo`
+//      (files where this code is the only lever, i.e. the guaranteed yield)
+//      and ends with a greedy cover, rather than with the raw per-code count
+//      that inflates every code a multi-code file touches.
+//
+//   2. A code is not a difficulty class, and a corpus COUNT is not
+//      real-world frequency. `symbolProperty*` spans seven codes and is one
+//      feature, so a code-keyed cover cannot see it; and the largest,
+//      cheapest cluster (`parser/ecmascript5`, 49 files) is error-recovery
+//      syntax nobody writes. Ranking still ends with opening the files.
+//
 // One caveat, stated because it changes how the numbers should be read: the
 // verdict (errors / accepts) comes from the vendored **TS7** manifests, while
 // the error CODES come from the submodule's TS6-era baselines. TS7 is a
@@ -44,13 +58,22 @@ const opt = (name, dflt) => {
   return i >= 0 && argv[i + 1] ? argv[i + 1] : dflt;
 };
 
+// Pick the NEWER of the two builds, not release unconditionally.
+// `moon build --target native` produces DEBUG, so a stale release binary
+// left over from an earlier `--release` run silently measures code from
+// before the change you are trying to evaluate. That cost half a batch in
+// the previous round when `checker_conformance_oracle.sh` had the same bug;
+// this is the second consumer of the same rule, so it says which it picked.
 function tscheckBin() {
-  for (const mode of ["release", "debug"]) {
-    const p = path.join(ROOT, `_build/native/${mode}/build/cmd/tscheck/tscheck.exe`);
-    if (fs.existsSync(p)) return p;
+  const found = ["release", "debug"]
+    .map((mode) => path.join(ROOT, `_build/native/${mode}/build/cmd/tscheck/tscheck.exe`))
+    .filter((p) => fs.existsSync(p));
+  if (found.length === 0) {
+    console.error("tscheck binary not found — run `moon build --target native`");
+    process.exit(1);
   }
-  console.error("tscheck binary not found — run `moon build --target native`");
-  process.exit(1);
+  found.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+  return found[0];
 }
 
 function readSet(file) {
@@ -77,6 +100,7 @@ function conformanceFiles(subdir) {
 // miner, and that has to be visible rather than assumed.
 async function classify(files, ran, errs) {
   const bin = tscheckBin();
+  console.log(`Binary        : ${path.relative(ROOT, bin)}`);
   const rows = [];
   const workers = Math.max(1, os.cpus().length);
   let next = 0;
@@ -187,19 +211,78 @@ for (const [base, rel] of missRows) {
   }
 }
 
+// A file flips MISS -> TP as soon as we flag ANY error in it, so the unit
+// that ranks work is the FILE and not the (file, code) pair. The bucket
+// table above double-counts: a file carrying five codes appears in five
+// rows, which inflates every code it touches and makes a broad diagnostic
+// look like a big win when four cheaper levers sit in the same files.
+//
+// Two file-level numbers say what the bucket count cannot:
+//   solo  — files where this code is the ONLY lever. Implementing exactly
+//           this check is the only way those files flip, so `solo` is the
+//           GUARANTEED yield and the honest floor.
+//   total — files where the code appears at all. Its upper bound, most of
+//           which some other code in the same file may already claim.
+// The gap between them is the double counting, made visible.
+const fileCodes = new Map();
+for (const [base, rel] of missRows) {
+  const codes = baselineCodes(base);
+  fileCodes.set(rel, new Set(codes.length ? codes : ["NOBASE"]));
+}
+
 const only = opt("--code", "");
 if (only) {
   const files = buckets.get(only) ?? [];
   console.log(`\n--- ${only}: ${files.length} MISS files ---`);
-  for (const f of files) console.log(`  ${f}`);
+  for (const f of files) {
+    const others = [...fileCodes.get(f)].filter((c) => c !== only);
+    const co = others.length ? `  [also ${others.sort().join(" ")}]` : "  [solo]";
+    console.log(`  ${f}${co}`);
+  }
 } else {
   const limit = Number(opt("--limit", "25"));
-  const ranked = [...buckets.entries()].sort((a, b) => b[1].length - a[1].length);
-  console.log(`\n--- top ${limit} buckets (a file with N codes counts in N) ---`);
-  console.log("count  code      example");
-  for (const [code, files] of ranked.slice(0, limit)) {
-    console.log(`${String(files.length).padStart(5)}  ${code.padEnd(9)} ${path.basename(files[0])}`);
+  const solo = new Map();
+  for (const [, codes] of fileCodes) {
+    if (codes.size !== 1) continue;
+    const c = [...codes][0];
+    solo.set(c, (solo.get(c) ?? 0) + 1);
   }
-  const tail = ranked.slice(limit).reduce((n, [, f]) => n + f.length, 0);
-  if (tail) console.log(`${String(tail).padStart(5)}  (${ranked.length - limit} more codes)`);
+  const ranked = [...buckets.entries()].sort(
+    (a, b) => (solo.get(b[0]) ?? 0) - (solo.get(a[0]) ?? 0) || b[1].length - a[1].length,
+  );
+  console.log(`\n--- top ${limit} codes by SOLO files (guaranteed yield) ---`);
+  console.log(" solo  total  code      example");
+  for (const [code, files] of ranked.slice(0, limit)) {
+    const s = solo.get(code) ?? 0;
+    console.log(
+      `${String(s).padStart(5)}  ${String(files.length).padStart(5)}  ${code.padEnd(9)} ${path.basename(files[0])}`,
+    );
+  }
+
+  // Greedy cover: how many files does the best n-rule set flip? This is the
+  // question "which batch should I write" actually asks, and neither count
+  // above answers it — a code with a big `total` can add nothing once the
+  // codes ahead of it have claimed its files.
+  const remaining = new Map([...fileCodes].map(([f, c]) => [f, c]));
+  const picked = [];
+  for (let round = 0; round < 12 && remaining.size; round++) {
+    const gain = new Map();
+    for (const [, codes] of remaining) {
+      for (const c of codes) gain.set(c, (gain.get(c) ?? 0) + 1);
+    }
+    const best = [...gain.entries()].sort((a, b) => b[1] - a[1])[0];
+    if (!best || best[1] === 0) break;
+    picked.push(best);
+    for (const [f, codes] of [...remaining]) if (codes.has(best[0])) remaining.delete(f);
+  }
+  console.log(`\n--- greedy cover of ${missRows.length} MISS files ---`);
+  let acc = 0;
+  for (const [code, n] of picked) {
+    acc += n;
+    console.log(
+      `  +${String(n).padStart(3)}  ${code.padEnd(9)} cumulative ${String(acc).padStart(3)}` +
+        ` (${((acc / missRows.length) * 100).toFixed(1)}%)`,
+    );
+  }
+  console.log(`  ${remaining.size} files need something outside the top ${picked.length}`);
 }

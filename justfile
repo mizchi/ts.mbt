@@ -115,13 +115,18 @@ bridge-quality:
 checker-conformance-oracle *ARGS:
     bash scripts/checker_conformance_oracle.sh {{ ARGS }}
 
-# Rank the conformance MISSes by TypeScript error code, so the next batch
-# can be chosen instead of guessed. The oracle above gates on FP and prints
-# "MISS 388", which ranks nothing — a baseline NAME list says that TS7
-# errored, not what it said. This reads the codes out of the submodule
-# baselines and buckets by them. `--code TS2322` lists one bucket's files;
-# `--refresh` recomputes the cached per-file classification (minutes),
-# re-bucketing from the cache is instant. Opt-in (not part of `ci`).
+# Rank the conformance MISSes so the next batch can be chosen instead of
+# guessed. The oracle above gates on FP and prints "MISS 344", which ranks
+# nothing — a baseline NAME list says that TS7 errored, not what it said.
+# This reads the codes out of the submodule baselines and reports, per code,
+# `solo` (files where it is the ONLY lever, so the guaranteed yield) beside
+# `total`, then a greedy cover of the whole MISS set. Read both with the
+# caveats in the script header: the unit that flips is a FILE not a
+# (file, code) pair, a code is not a difficulty class, and a corpus count is
+# not real-world frequency. `--code TS2322` lists one bucket's files with
+# each file's other codes; `--refresh` recomputes the cached per-file
+# classification (minutes), re-bucketing from the cache is instant.
+# Opt-in (not part of `ci`).
 checker-miss-buckets *ARGS:
     node scripts/checker_miss_buckets.mjs {{ ARGS }}
 

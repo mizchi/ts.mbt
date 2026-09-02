@@ -32,7 +32,7 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2383 / MISS 351 / FP 0 /
+  is a soundness bug, and there are none (TP 2390 / MISS 344 / FP 0 /
   PFLEGAL 0 / TN 1750). The asymmetry is deliberate: we model a subset of
   TS, so a MISS is expected and an FP never is.
   That gate says how many we miss and nothing about WHICH, so "MISS 388"
@@ -45,8 +45,8 @@ product surfaces now.
   were exhausted and that only large type-machinery features remained, and
   that was measured against the **TS6** oracle — under TS7, **128 of the
   388 missing files are flippable by a pure-grammar (TS1xxx) rule** and 91
-  of them need no type judgement anywhere. Four batches have taken **+46
-  TP at FP 0** so far, and two of their items were BUGS rather than
+  of them need no type judgement anywhere. Five batches have taken **+53
+  TP at FP 0** so far, and most of their items were BUGS rather than
   missing features — one of them a rule the repo had already written and
   applied to every declaration kind except namespaces. The first:
   `eval`/`arguments` as an assignment target was checked at two of the four
@@ -75,6 +75,49 @@ product surfaces now.
   (TS1240/1241/1270/1329), so the bucket ranking had to be read by opening
   the files — the same "a label stood in for the objective" mistake this
   file records for `computed_props`, `loops`, `typeofs` and `sequences`.
+  Batch BY made the ranking itself the object of study, and every step
+  contradicted the step before it. The bucket table counts (file, code)
+  pairs where the thing that flips is a FILE, so a file with five codes
+  inflates all five; `solo` (this code is the only lever) is the honest
+  yield, and the best twelve rules cover 33% of the misses. The four
+  biggest buckets — TS2322 / TS2345 / TS2339 / TS2304, also the four
+  errors real TypeScript users see most — turn out not to need machinery
+  at all: `const x: string = 1`, `f(1)` against `f(a: string)`, `o.b` on
+  `{a: 1}` and a bare `nonexistent;` are ALL already flagged, so the
+  strategy doc is wrong a second way and something specific defeats an
+  existing check in those files. And a CODE-keyed cover cannot see a
+  FEATURE cluster: `symbolProperty*` spans seven codes and is one
+  feature. Grouping by conformance directory shows `parser/ecmascript5`
+  at 49 files, the largest and cheapest cluster — and the wrong one to
+  take, because its files are `parserErrorRecovery_ParameterList6`-style
+  broken syntax nobody writes. Corpus count is not real-world frequency;
+  treating it as one is the same substitution. What that batch's rules
+  actually cost is recorded in TODO.md, including four REJECTED with
+  evidence — among them `override` on a computed name, which is FP 0 on
+  the corpus and unsound on legal code, because a `const` string key is
+  late-bindable and `class D extends B { override [prop]() {} }` is
+  legal when `B` declares it. "FP 0 on the corpus" is not soundness.
+  Two of the batch's findings were predicted by this file in writing.
+  `TypeArgs` hid `super<T>(0)` from a walker that saw `super(0)` — the
+  third wrapper-node fail-open soundness bug, exactly the third the
+  `PureCall` entry below says to expect. And the family count is at
+  fifteen: TS2335 existed with its helper, message and FP argument and
+  read only `constructor_body` of the eight places a class body holds
+  code (13th); the modifier-order rule exists for class members and
+  `skip_param_modifiers` silently discards `override` (14th); and five
+  parser diagnostic channels were dead inside every namespace because
+  `if outer_modules.length() == 0` is correct for exactly ONE of the
+  seven things it wrapped — a compiler-option file header — and was
+  inherited by the rest (15th, and a variation: not one rule written
+  twice, but one item's condition applied to six that do not share it).
+  TS2466 turned out to be keeping a SECOND hand-written `super` walker
+  that was a strict subset of the first, missing ten node kinds
+  including `Call(_, args)`, so `[f(super.m())]` walked past it; it was
+  deleted and delegated rather than patched arm by arm, since patching
+  arms is what produces a pair. The expected yield of the namespace fix
+  was large and the measured yield is ONE file, because most earlier
+  rules route through `grammar_misuses`, which a workaround already
+  re-drained — the value there is the bug class, not the count.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

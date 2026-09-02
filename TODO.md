@@ -2153,13 +2153,195 @@ resolver would be a deep refactor); `Parser::peek/check` +
 copies a Token and refcounts its payload; a tag-int fast path would
 need parser-wide changes).
 
-## TS Checker Conformance (current state, 2026-09-01 — TypeScript 7)
+## TS Checker Conformance (current state, 2026-09-02 — TypeScript 7)
 
-State: whole-corpus **TP 2383 / MISS 351 / FP 0 / PFLEGAL 0 / TN 1750**
+State: whole-corpus **TP 2390 / MISS 344 / FP 0 / PFLEGAL 0 / TN 1750**
 (classified 4484, NOTRUN 14) via
 `scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0`.
-Four batches this round: BU +9, BV +14, BW +13, BX +10, for **+46 TP at
-FP 0**.
+Five batches: BU +9, BV +14, BW +13, BX +10, BY +7, for **+53 TP at FP 0**.
+
+### Batch BY (2026-09-02): rank by MACHINERY, not by code
+
+The ranking the miner shipped with was by error CODE, and a code is not a
+difficulty class — this document already records that mistake for
+`computed_props`, `loops`, `typeofs` and `sequences`. Two refinements, both
+cheap, and each changed what the list said to work on.
+
+**1. Rank by FILE, not by (file, code).** A file flips MISS -> TP as soon as
+we flag ANY error in it, so the bucket table double-counts: a file carrying
+five codes inflates all five. `checker_miss_buckets.mjs` now prints `solo`
+(files where this code is the ONLY lever — the guaranteed yield) beside
+`total`, plus a greedy cover answering the question a batch actually asks.
+The head is TS2322 30 total / 15 solo, TS2345 20/10, TS2339 18/7,
+TS2304 15/4, and the best twelve rules together reach only 33% of the
+MISSes — the tail is genuinely long.
+
+**2. Those four buckets are NOT missing machinery.** Probing the simplest
+spelling of each settled it in one command: `const x: string = 1`,
+`f(1)` against `f(a: string)`, `o.b` on `{a: 1}`, and a bare
+`nonexistent;` are ALL already flagged, at six assignment sites, three call
+sites and four property sites. So `docs/checker-priority.md`'s "only large
+type-machinery features remain" is wrong a second way — the machinery
+exists and something specific defeats it in those files.
+
+**3. Re-bucketing by FEATURE beat re-bucketing by code.** `symbolProperty*`
+spans TS2403 / TS2420 / TS2353 / TS2454 / TS2464 / TS2320 / TS2554 — seven
+codes, one feature, invisible to a code-keyed cover. Grouping the 351 MISS
+files by conformance directory gives `parser/ecmascript5` 49,
+`statements/VariableStatements` 20, `classes/members` 16,
+`decorators/class` 15, `es6/Symbols` 15, `es6/destructuring` 12,
+`es6/for-ofStatements` 12.
+
+**And the two axes conflict, which is worth stating rather than smoothing
+over.** `parser/ecmascript5` is the biggest cluster AND the cheapest class
+(grammar), but its files are `parserErrorRecovery_ParameterList6`-style
+broken syntax nobody writes — high corpus count, near-zero real-world
+frequency. Using the corpus count as a proxy for "what users hit" is the
+same label-for-objective substitution recorded above. The batch was picked
+from the intersection instead: declaration-level rules (no type inference)
+over constructs real code contains.
+
+The legal-neighbour probe ran BEFORE any implementation, mechanically,
+against all 1750 TS7-accepted files. It rejected more than it approved:
+
+| rule | TN files that TS7 ACCEPTS | verdict |
+|---|---|---|
+| decorator on `#private` | **7** (`esDecorators-*`) | REJECTED |
+| private setter, no getter | 1 (`privateNameSetterExprReturnValue`) | REJECTED |
+| decorator on a static block | 0 | implemented |
+| decorator on `import X = …` | 0 | implemented |
+| `override` + computed name | 0 | REJECTED anyway — see below |
+| `super` with type arguments | 0 | implemented |
+
+Landed (+7 TP, attributed by diffing the miner's per-file verdicts —
+6 files flipped, 0 regressions, then +1 more after the `TypeArgs` fix):
+
+- **TS2335 / TS2337 — `super` at every class body site (4 files).** The
+  check EXISTED, with its helper, its message and its FP-safety argument,
+  and read only `decl.constructor_body`. A class body holds code in eight
+  places; `super.foo()` in an ordinary METHOD of a heritage-free class
+  parsed clean. **Thirteenth instance** of one rule applied to some of the
+  sites it names. Fixed as one function over the whole `TsClassDecl` that
+  enumerates every body-bearing field, so a new field is a visible omission
+  in one place. `implements` is deliberately not heritage here (it brings no
+  base constructor), which is why the condition is `base_names` /
+  `base_expr` and not the parser's `class_decl_no_heritage`. TS2337 reuses
+  the same walker through a `SuperRefKind` parameter rather than a second
+  copy — see the TS2466 entry for why that mattered.
+- **TS1206 — decorator on a static block / on `import X = …` (2 files).**
+- **`TypeArgs` hid `super<T>(0)` (1 file).** `parserSuperExpression2` did
+  not flip with the rest, and the reason is the one CLAUDE.md predicted in
+  writing: "twice that a wrapper node's fail-open default has cost a
+  soundness bug, and the reason to expect a third." This is the third.
+  `super(0)` fired, `super<T>(0)` reached `_ => false`. A sweep of every
+  checker walker that peels a value-preserving wrapper found two more gaps
+  (below) and no others.
+- **Five parser diagnostic channels were dead inside a namespace.**
+  `namespace N { eval = 1 }` and `namespace N { @dec var z }` recorded
+  their diagnostic and had it dropped. Cause: `parameter_property_misuses`,
+  `strict_mode_misuses`, `invalid_decorator_uses`,
+  `param_optional_initializer_misuses` and
+  `interface_member_modifier_misuses` sat inside an
+  `if outer_modules.length() == 0` block. That guard is correct for exactly
+  ONE thing it wrapped — `deprecated_compiler_options`, a file header — and
+  was inherited by the rest; a later workaround re-drained
+  `grammar_misuses` from namespaces instead of fixing it. Fifteenth
+  instance, with a twist: not one rule written twice, but one item's
+  correct condition applied to six that do not share it. Now one
+  `parser_channel_issues(module_)` called for every module.
+
+  **Correction to my own reasoning while doing this**: I expected a large
+  yield, on the theory that every rule from batches BU–BX was disabled
+  inside namespaces. Measured, it is **+1 file** on the corpus, because
+  most of those rules route through `grammar_misuses`, which the workaround
+  already covered. The value is the bug class, not the count — the same
+  shape as BX's export-namespace finding, which the corpus also could
+  barely see.
+- **TS2466 had a SECOND hand-written `super` walker**, and it was a strict
+  subset of the shared one: no arm for `Spread`, `PureCall`, `TypeArgs`,
+  `Await`, `As`, `Satisfies`, `Cond`, any of the three assignment forms,
+  `New`/`NewExpr`, or `Call(_, args)`. That last one is reachable —
+  `[f(super.m())]`, `super` in an ordinary named call's argument. Deleted
+  and delegated rather than patched arm by arm, since patching is what
+  produces the pair.
+- **`collect_expr_value_names` lost bindings under three wrappers.** It
+  answers "which names are DECLARED", so a missing arm makes a later
+  reference read as undeclared — the FALSE-POSITIVE direction, the one with
+  a zero budget. `f<T>(function g() {…})` hid `g`.
+
+REJECTED with evidence, not deferred for lack of time:
+
+- **TS4127 (`override` on a computed name, 2 files).** Flagging every
+  `override [k]()` is FP 0 on the corpus and UNSOUND on legal code.
+  `overrideLateBindableName1`'s own baseline names only `Base3` — with
+  `const prop = "foo"`, `class D extends B { override [prop]() {} }` is
+  legal when `B` declares `[prop]`, because a `const` string is
+  late-bindable. Our `class_key_name` folds only literal EXPRESSIONS, so
+  `[prop]` and `[dynamicLet]` are the same `"<computed>"` node; separating
+  them needs declaration resolution. "FP 0 on the corpus" is not soundness,
+  which is the whole reason this is written down.
+- **TS1029 on a parameter property (1 file).** The modifier-order rule
+  already exists for class MEMBERS, including its `override` arm;
+  `skip_param_modifiers` consumes `override` and discards it. Fourteenth
+  instance — but the right fix is to unify the two, not to write the order
+  out a third time, and unifying widens the member rule (it would newly
+  reject `static declare`, `abstract` orderings) and so needs its own FP
+  measurement. Filed rather than half-done.
+- **TS1206 on a `#private` member (2 files).** Legal under standard ES
+  decorators — 7 TS7-accepted files rely on it. The parser DOES know the
+  mode (`experimental_decorators`), so a gated rule is ~5 lines, but it
+  reads a corpus DIRECTIVE and real code sets the flag in tsconfig, which
+  the parser does not read. Real-world value ≈ 0.
+- **TS2806 (private accessor with no getter, 1 file).** Not a declaration
+  rule at all: the error is at the USE, and `this.#x += 2` (reads) versus
+  `this.#x = v` (does not) is the distinction. Same family as the
+  `x += 1` -> `x++` bug recorded above.
+- **`typeOfThisInStaticMembers9` stays a MISS by design.** Its errors are
+  `function`-expression and class-expression boundaries inside a DERIVED
+  class, where a sibling arrow on the same class is legal. The walker
+  refuses to descend into either, which is what keeps the 11 TS7-accepted
+  object-literal-`super` files clean; separating the boundaries needs a
+  per-boundary rule rather than a mention test.
+
+One tooling fix: `checker_miss_buckets.mjs` had the same stale-binary trap
+`checker_conformance_oracle.sh` had last round — it preferred RELEASE
+unconditionally while `moon build --target native` produces DEBUG. It picks
+the newer build now and prints which, like the oracle.
+
+### Ranked next: TS2420 never checks whether a member is PRESENT
+
+Found by applying batch BY's own method (probe the simplest spelling) to the
+next two buckets down. `check_class_implements` exists and checks the TYPE of
+members that are there; it does not check that they are there at all:
+
+| source | tscheck |
+|---|---|
+| `interface I { a: number } class C implements I { }` | **0 issues** |
+| `interface I { a: number } class C implements I { a: string = "x" }` | 1 |
+| `interface I { m(): void } class C implements I { }` | **0 issues** |
+| `interface I { m(a: number): void } class C implements I { m() {} }` | **0 issues** |
+
+"This class does not implement everything its interface declares" is one of
+the errors real TypeScript code produces most, and far more often than a
+member with the wrong type — so this scores high on BOTH axes, unlike the
+49-file `parser/ecmascript5` cluster. TS2420 is 5 files / 3 solo on the
+corpus, and TS2739 / TS2740 ("Type X is missing the following properties")
+are the same question asked of a value.
+
+It is NOT a grammar rule, and the legal-neighbour surface is real — probed,
+not assumed: 3 TS7-ACCEPTED files (`mixinAbstractClasses`,
+`mixinAbstractClassesReturnTypeInference`, `accessorsOverrideProperty9`)
+carry both `abstract class … implements` and `class … extends … implements`.
+A presence check has to satisfy, at minimum: a member supplied by the base
+chain, an `abstract` member, an optional interface member, a parameter
+property, an accessor pair, declaration merging on the interface, a class
+index signature, and abstention on a generic or out-of-module interface.
+Same shape as everything in batch BY (a check covering some of what it
+names) but a full batch of work rather than an arm.
+
+`TS2430` (interface incorrectly extends, 6 files / 2 solo) was probed at the
+same time and is FINE at the simple spellings — wrong property type, wrong
+method type and optional-vs-required all fire. Its MISSes are elsewhere.
 
 One instrumentation note, because it looks like a contradiction and is
 not. `moon test` prints a SECOND accuracy line from

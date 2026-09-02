@@ -14864,3 +14864,198 @@ test "expr_check: a defaulted parameter is omittable on every callable form" {
     assert_true(!i.message.contains("argument(s), got 0"))
   }
 }
+
+///|
+/// TS2335 / TS2337 — the `super` reference rules, at every place a class
+/// body can hold code. The check existed and read ONLY
+/// `constructor_body`, so `super.foo()` in an ordinary method of a
+/// heritage-free class parsed clean while the identical reference in the
+/// constructor was flagged. Each firing case is paired with the legal
+/// neighbour that must stay silent, because "fires on the bad shape" and
+/// "silent on the good one" are separate claims and only the second keeps
+/// the conformance gate at FP 0.
+test "expr_check: super outside a derived class (TS2335 / TS2337)" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("`super` can only be referenced") ||
+        i.message.contains("super calls are not permitted") {
+        n += 1
+      }
+    }
+    n
+  }
+  // --- TS2335: no base, `super` anywhere in the class's own body.
+  assert_true(issues("class C { private foo() { super.foo(); } }") > 0)
+  assert_true(issues("class C { private foo() { super.foo = 1 } }") > 0)
+  assert_true(issues("class C { static { super.x; } }") > 0)
+  assert_true(issues("class C { y = super.x; }") > 0)
+  assert_true(issues("class C { static y = super.x; }") > 0)
+  assert_true(issues("class C { constructor() { super(); } }") > 0)
+  // A computed-key method body (`superSymbolIndexedAccess4`), and the
+  // `super[k]()` spelling rather than `super.k()`.
+  assert_true(
+    issues("var s = Symbol(); class B { [s]() { return super[s](); } }") > 0,
+  )
+  // `implements` is not heritage: it brings no base constructor, so
+  // `super` is still an error. This is why the rule reads `base_names` /
+  // `base_expr` and not the parser's `class_decl_no_heritage`.
+  assert_true(
+    issues("interface I {} class C implements I { m() { super.x } }") > 0,
+  )
+  // An explicitly-instantiated `super<T>(0)` is wrapped in a `TypeArgs`
+  // node. Without an arm for it the reference reached the walker's
+  // `_ => false` catch-all and vanished — the third time a wrapper node's
+  // fail-open default has hidden a finding in this repo.
+  assert_true(issues("class C { M() { super<number>(0); } }") > 0)
+  // --- TS2337: derived class, base-constructor call outside the ctor.
+  assert_true(issues("class B {} class D extends B { m() { super(); } }") > 0)
+  assert_true(
+    issues("class B { static f = 1 } class D extends B { static c = super(); }") >
+    0,
+  )
+  // --- Legal neighbours. Each of these is valid TypeScript.
+  @test.assert_eq(
+    issues("class B { m(){} } class D extends B { m() { super.m(); } }"),
+    0,
+  )
+  @test.assert_eq(
+    issues("class B {} class D extends B { constructor() { super(); } }"),
+    0,
+  )
+  @test.assert_eq(
+    issues("class B { f = 1 } class D extends B { y = super.f; }"),
+    0,
+  )
+  // A nested class that DOES extend, inside a method of one that does not.
+  // The walker's `_ => false` on a class statement is load-bearing here.
+  @test.assert_eq(
+    issues(
+      "class B { m(){} } class C { k() { class I extends B { m() { super.m(); } } } }",
+    ),
+    0,
+  )
+  // An object-literal method reaches `super` through its own home object.
+  // 11 files TypeScript 7 ACCEPTS use this shape, so the walker must not
+  // descend into an object literal.
+  @test.assert_eq(
+    issues(
+      "class C { m() { const o = { toString() { return super.toString(); } }; return o; } }",
+    ),
+    0,
+  )
+  @test.assert_eq(issues("class C { m() { return 1 } }"), 0)
+}
+
+///|
+/// Parser diagnostic channels are facts about the MODULE, not the file, so
+/// a nested namespace body's entries must surface too. Five of them used to
+/// sit inside the `outer_modules.length() == 0` guard, which is correct for
+/// exactly one thing it wrapped (the compiler-option file header) and was
+/// inherited by everything else in the same `if`. Each case below is
+/// asserted at top level AND inside a namespace: the top-level half is what
+/// makes the namespace half meaningful, since a rule that never fires would
+/// pass the namespace assertion trivially.
+test "expr_check: parser channels survive a namespace body" {
+  let count = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // Each pair is (top level, same code inside a namespace). Both halves are
+  // asserted: without the top-level one, a rule that stopped firing
+  // altogether would still satisfy the namespace assertion vacuously.
+  let pairs = [
+    // strict_mode_misuses (TS1100)
+    ("eval = 1;", "namespace N { eval = 1; }"),
+    ("eval++;", "namespace N { eval++; }"),
+    // invalid_decorator_uses (TS1206)
+    (
+      "declare function d<T>(t:T):T; @d var z=1;", "declare function d<T>(t:T):T; namespace N { @d var z=1; }",
+    ),
+    // parameter_property_misuses (TS2369)
+    (
+      "function f(public x: number) {}", "namespace N { function f(public x: number) {} }",
+    ),
+    // param_optional_initializer_misuses (TS1015)
+    (
+      "function f(a?: number = 1) {}", "namespace N { function f(a?: number = 1) {} }",
+    ),
+    // interface_member_modifier_misuses (TS1070)
+    (
+      "interface I { private x: number }", "namespace N { interface I { private x: number } }",
+    ),
+  ]
+  for pair in pairs {
+    assert_true(count(pair.0) > 0)
+    assert_true(count(pair.1) > 0)
+  }
+}
+
+///|
+/// TS1206 at two positions that carried no check: a decorator on a static
+/// initialization block, and one on an `import X = M.Y` alias inside a
+/// namespace. Both were probed against the whole TS7-accepted corpus first
+/// — zero files TypeScript 7 accepts decorate either — which is why neither
+/// needs a decorator-mode gate.
+///
+/// A decorator on a `#private` member is deliberately NOT checked. It is an
+/// error only under legacy `experimentalDecorators`; under standard ES
+/// decorators it is legal, and seven files TS7 accepts rely on that. The
+/// parser does know the mode, so the rule is cheap — but it would apply
+/// only to a corpus directive, since real code sets the flag in tsconfig,
+/// which the parser does not read.
+test "expr_check: decorators are not valid on a static block or import=" {
+  let decos = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("decorators are not valid here") {
+        n += 1
+      }
+    }
+    n
+  }
+  assert_true(
+    decos("declare function d<T>(t:T):T; class C { @d static { } }") > 0,
+  )
+  assert_true(
+    decos(
+      "declare function d<T>(t:T):T; namespace M1 { export var X: number; } namespace M2 { @d import X = M1.X; }",
+    ) >
+    0,
+  )
+  // Legal neighbours: an undecorated static block, and a decorator in a
+  // position that does take one.
+  @test.assert_eq(decos("class C { static { } }"), 0)
+  @test.assert_eq(
+    decos("declare function d<T>(t:T):T; class C { @d m() {} }"),
+    0,
+  )
+}
+
+///|
+/// TS2466 shares the `super` walker now instead of keeping a second,
+/// hand-written copy that was a strict subset of it — no arm for `Spread`,
+/// `PureCall`, `TypeArgs`, `Await`, `As`, `Cond`, any assignment form,
+/// `New`, or `Call(_, args)`. That last one is the reachable gap: `super`
+/// in the argument of an ordinary named call inside a computed key.
+test "expr_check: super in a computed key, through the shared walker" {
+  let issues = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("super") {
+        n += 1
+      }
+    }
+    n
+  }
+  // The shape the old subset walker already caught.
+  assert_true(
+    issues("class B { m(){} } class D extends B { [super.m()]() {} }") > 0,
+  )
+  // The shape it could not: `super` inside a named call's argument.
+  assert_true(
+    issues(
+      "declare function f(x: any): string; class B { m(){} } class D extends B { [f(super.m())]() {} }",
+    ) >
+    0,
+  )
+}

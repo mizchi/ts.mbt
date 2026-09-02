@@ -554,12 +554,20 @@ fn collect_expr_value_names(
       collect_expr_value_names(l, out)
       collect_expr_value_names(r, out)
     }
+    // `TypeArgs` / `PureCall` / `Satisfies` are value-preserving wrappers
+    // that were missing here. This collector answers "which names are
+    // DECLARED", so a missing arm loses a binding and a later reference to
+    // it reads as an undeclared name — the false-positive direction, which
+    // is the one with a zero budget. `f<T>(function g() {…})` hid `g`.
     UnaryOp(_, e)
     | Spread(e)
     | Await(e)
     | NonNull(e)
     | OptionalChain(e)
     | As(e, _)
+    | Satisfies(e, _)
+    | PureCall(e)
+    | TypeArgs(_, e)
     | PropAccess(e, _) => collect_expr_value_names(e, out)
     Cond(c, t, e) => {
       collect_expr_value_names(c, out)
@@ -21256,44 +21264,23 @@ fn ts2683_walk_stmts(
 }
 
 ///|
-/// Direct `super` reference inside a computed-key expression (member
-/// access / call receivers only — computed keys can't contain nested
-/// callables that would rebind it meaningfully for TS2466's purposes).
+/// Direct `super` reference inside a computed-key expression, for TS2466
+/// ("'super' cannot be referenced in a computed property name").
+///
+/// This was a second, hand-written `super` walker and a strict SUBSET of
+/// `expr_mentions_super` — it had no arm for `Spread`, `PureCall`,
+/// `TypeArgs`, `Await`, `As`, `Satisfies`, `Cond`, any of the three
+/// assignment forms, `New` / `NewExpr`, or `Call(_, args)`, so `[f(super.x)]`
+/// (`super` in the argument of an ordinary named call) walked straight into
+/// the `_ => false` catch-all. Delegating removes the duplicate rather than
+/// patching arms into it, which is the mistake that produced the pair.
+///
+/// `AnyRef` is right here: TS2466 is about a REFERENCE, not a base-constructor
+/// call. And the shared walker's refusal to descend into a nested function,
+/// class expression, or object literal is exactly the abstention this check's
+/// original comment described wanting.
 fn computed_key_mentions_super(e : @ast.TsExpr) -> Bool {
-  match e {
-    Var("super") => true
-    // `super(…)` calls (`[(super(), "prop")]` — computedPropertyNames27).
-    Call("super", _) => true
-    Seq(a, b) =>
-      computed_key_mentions_super(a) || computed_key_mentions_super(b)
-    PropAccess(a, _) | UnaryOp(_, a) | NonNull(a) | OptionalChain(a) =>
-      computed_key_mentions_super(a)
-    MethodCall(r, _, args) => {
-      if computed_key_mentions_super(r) {
-        return true
-      }
-      for a in args {
-        if computed_key_mentions_super(a) {
-          return true
-        }
-      }
-      false
-    }
-    CallExpr(c, args) => {
-      if computed_key_mentions_super(c) {
-        return true
-      }
-      for a in args {
-        if computed_key_mentions_super(a) {
-          return true
-        }
-      }
-      false
-    }
-    BinOp(_, a, b) | IndexAccess(a, b) =>
-      computed_key_mentions_super(a) || computed_key_mentions_super(b)
-    _ => false
-  }
+  expr_mentions_super(e, AnyRef)
 }
 
 ///|
@@ -25661,11 +25648,20 @@ fn check_globalthis_blockscoped(module_ : @ast.TsModule) -> Array[ExprIssue] {
         walk_expr(b)
         walk_expr(c)
       }
+      // `Satisfies` / `PureCall` / `TypeArgs` belong with the other
+      // value-preserving wrappers: `f<T>(globalThis.x)` reads `globalThis.x`
+      // exactly as the unwrapped form does. Missing arms here lose a finding
+      // rather than inventing one, but the wrapper list is meant to be
+      // complete in one place — the `TypeArgs` entry in
+      // `expr_mentions_super` explains why.
       UnaryOp(_, x)
       | Spread(x)
       | Await(x)
       | AssignExpr(_, x)
       | As(x, _)
+      | Satisfies(x, _)
+      | PureCall(x)
+      | TypeArgs(_, x)
       | NonNull(x)
       | OptionalChain(x) => walk_expr(x)
       Call(_, args) | New(_, args) =>
@@ -26330,6 +26326,115 @@ fn collect_type_dup_issues(
 }
 
 ///|
+/// Parser diagnostic channels that are facts about the MODULE the parser was
+/// looking at, not about the file. Every one of them is drained here, for
+/// every module, nested namespace bodies included.
+///
+/// This exists because these five loops used to sit inside the
+/// `outer_modules.length() == 0` block in `check_module_function_bodies_
+/// layered`. That guard is correct for exactly one of the things it wrapped
+/// — `deprecated_compiler_options`, which really is a file header — and was
+/// silently inherited by everything else in the same `if`. A namespace body
+/// is parsed by its own sub-parser with its own channel arrays, so
+/// `namespace N { "use strict"; eval = 1 }` and `namespace N { @dec var z }`
+/// recorded their diagnostic and then had it dropped on the floor, while the
+/// identical code at top level was flagged.
+///
+/// `grammar_misuses` is deliberately NOT here: its loop is entangled with
+/// `<…>` marker entries that other checks consume, and the parent already
+/// re-drains a nested body's plain entries after the recursion. Merging the
+/// two is a separate change with its own false-positive surface.
+///
+/// No double-counting: each `@ast.TsModule` owns its arrays, and the
+/// recursion visits every namespace exactly once.
+fn parser_channel_issues(module_ : @ast.TsModule) -> Array[ExprIssue] {
+  let all : Array[ExprIssue] = []
+  // TS2369: a parameter property (`public` / `private` / `protected` /
+  // `readonly` on a parameter) is only allowed in a constructor
+  // implementation. The parser records each one it saw outside a
+  // constructor parameter list; surface one diagnostic per occurrence.
+  // These positions are never valid TS, so this is false-positive-free.
+  for pname in module_.parameter_property_misuses {
+    all.push({
+      path: "parameter `\{pname}`",
+      message: "a parameter property is only allowed in a constructor implementation",
+    })
+  }
+  // TS1100 family: `eval` / `arguments` used as a binding identifier or an
+  // assignment target in strict-mode code (a `"use strict"` prologue, a
+  // class body, or a conformance-header `@alwaysStrict: true` / `@strict:
+  // true` directive). The parser records each occurrence; the construct is
+  // always an error in the strict variant, so it is false-positive-free.
+  for sname in module_.strict_mode_misuses {
+    all.push({
+      path: "strict `\{sname}`",
+      message: "invalid use of `\{sname}` in strict mode",
+    })
+  }
+  // TS1206 ("Decorators are not valid here"): a decorator group parsed
+  // ahead of a declaration that cannot take one (enum / function /
+  // interface / variable / import / static block). The parser records one
+  // entry per orphaned group; the position is never valid TS, so it is
+  // false-positive-free.
+  for dpos in module_.invalid_decorator_uses {
+    all.push({
+      path: "decorator (\{dpos})",
+      message: "decorators are not valid here",
+    })
+  }
+  // TS1015: a parameter cannot have both an optional marker (`x?`) and an
+  // initializer (`x = e`). The parser records each offending parameter; this
+  // position is never valid TS, so it is false-positive-free.
+  for pname in module_.param_optional_initializer_misuses {
+    all.push({
+      path: "parameter `\{pname}`",
+      message: "parameter cannot have question mark and initializer",
+    })
+  }
+  // Interface / type-literal member misuses recorded by the parser, never
+  // valid TS so false-positive-free:
+  //   - `<param-init>…` -> TS2371: a parameter initializer is only allowed in
+  //     an implementation signature (an interface method / call signature has
+  //     no body).
+  //   - otherwise        -> TS1070: an accessibility modifier
+  //     (`private` / `public` / `protected`) cannot appear on a type member.
+  for member in module_.interface_member_modifier_misuses {
+    if member.has_prefix("<param-init>") {
+      let m = member.substring(start="<param-init>".length())
+      all.push({
+        path: "member `\{m}`",
+        message: "a parameter initializer is only allowed in an implementation signature",
+      })
+    } else if member.has_prefix("<const-typeparam>") {
+      let m = member.substring(start="<const-typeparam>".length())
+      all.push({
+        path: "type parameter `\{m}`",
+        message: "`const` modifier can only appear on a type parameter of a function, method or class",
+      })
+    } else if member == "<tuple-required-after-optional>" {
+      all.push({
+        path: "tuple type",
+        message: "a required element cannot follow an optional element",
+      })
+    } else if member == "<object-member-no-separator>" {
+      all.push({ path: "object type", message: "`;` expected" })
+    } else if member.has_prefix("<generic-noarg-required>") ||
+      member.has_prefix("<generic-min-arity>") ||
+      member.has_prefix("<type-param-name>") {
+      // Consumed by the TS2314 arity check in `check_module`, not a
+      // diagnostic of its own -- skip it here.
+      ()
+    } else {
+      all.push({
+        path: "member `\{member}`",
+        message: "accessibility modifier cannot appear on a type member",
+      })
+    }
+  }
+  all
+}
+
+///|
 /// Body of `check_module_function_bodies` parameterized by the chain of
 /// enclosing ancestor modules. When `outer_modules` is empty this is the
 /// public entry point: the module is ingested at bare names, which
@@ -26942,6 +27047,12 @@ fn check_module_function_bodies_layered(
   for issue in check_prototype_static_member_assign(module_) {
     all.push(issue)
   }
+  // Per-module parser channels — drained for a nested namespace body too,
+  // which is why this sits OUTSIDE the file-scoped guard below. See
+  // `parser_channel_issues`.
+  for issue in parser_channel_issues(module_) {
+    all.push(issue)
+  }
   // TS5107: deprecated compiler-option directives (`// @target: es5`, …).
   // These live only in the top-level module header, so emit once per file.
   if outer_modules.length() == 0 {
@@ -26960,28 +27071,6 @@ fn check_module_function_bodies_layered(
           message: "option `\{opt}` has been removed",
         })
       }
-    }
-    // TS2369: a parameter property (`public` / `private` / `protected` /
-    // `readonly` on a parameter) is only allowed in a constructor
-    // implementation. The parser records each one it saw outside a
-    // constructor parameter list; surface one diagnostic per occurrence.
-    // These positions are never valid TS, so this is false-positive-free.
-    for pname in module_.parameter_property_misuses {
-      all.push({
-        path: "parameter `\{pname}`",
-        message: "a parameter property is only allowed in a constructor implementation",
-      })
-    }
-    // TS1100 family: `eval` / `arguments` used as a binding identifier or an
-    // assignment target in strict-mode code (a `"use strict"` prologue, a
-    // class body, or a conformance-header `@alwaysStrict: true` / `@strict:
-    // true` directive). The parser records each occurrence; the construct is
-    // always an error in the strict variant, so it is false-positive-free.
-    for sname in module_.strict_mode_misuses {
-      all.push({
-        path: "strict `\{sname}`",
-        message: "invalid use of `\{sname}` in strict mode",
-      })
     }
     // Always-error grammar misuses recorded during lexing / parsing
     // (TS1127 invalid characters, TS1160 unterminated template literals,
@@ -27270,66 +27359,6 @@ fn check_module_function_bodies_layered(
         }
       } else {
         all.push({ path: "grammar", message: gm })
-      }
-    }
-    // TS1206 ("Decorators are not valid here"): a decorator group parsed
-    // ahead of a declaration that cannot take one (enum / function /
-    // interface / variable / import). The parser records one entry per
-    // orphaned group; the position is never valid TS, so it is
-    // false-positive-free.
-    for dpos in module_.invalid_decorator_uses {
-      all.push({
-        path: "decorator (\{dpos})",
-        message: "decorators are not valid here",
-      })
-    }
-    // TS1015: a parameter cannot have both an optional marker (`x?`) and an
-    // initializer (`x = e`). The parser records each offending parameter; this
-    // position is never valid TS, so it is false-positive-free.
-    for pname in module_.param_optional_initializer_misuses {
-      all.push({
-        path: "parameter `\{pname}`",
-        message: "parameter cannot have question mark and initializer",
-      })
-    }
-    // Interface / type-literal member misuses recorded by the parser, never
-    // valid TS so false-positive-free:
-    //   - `<param-init>…` -> TS2371: a parameter initializer is only allowed in
-    //     an implementation signature (an interface method / call signature has
-    //     no body).
-    //   - otherwise        -> TS1070: an accessibility modifier
-    //     (`private` / `public` / `protected`) cannot appear on a type member.
-    for member in module_.interface_member_modifier_misuses {
-      if member.has_prefix("<param-init>") {
-        let m = member.substring(start="<param-init>".length())
-        all.push({
-          path: "member `\{m}`",
-          message: "a parameter initializer is only allowed in an implementation signature",
-        })
-      } else if member.has_prefix("<const-typeparam>") {
-        let m = member.substring(start="<const-typeparam>".length())
-        all.push({
-          path: "type parameter `\{m}`",
-          message: "`const` modifier can only appear on a type parameter of a function, method or class",
-        })
-      } else if member == "<tuple-required-after-optional>" {
-        all.push({
-          path: "tuple type",
-          message: "a required element cannot follow an optional element",
-        })
-      } else if member == "<object-member-no-separator>" {
-        all.push({ path: "object type", message: "`;` expected" })
-      } else if member.has_prefix("<generic-noarg-required>") ||
-        member.has_prefix("<generic-min-arity>") ||
-        member.has_prefix("<type-param-name>") {
-        // Consumed by the TS2314 arity check in `check_module`, not a
-        // diagnostic of its own -- skip it here.
-        ()
-      } else {
-        all.push({
-          path: "member `\{member}`",
-          message: "accessibility modifier cannot appear on a type member",
-        })
       }
     }
     // TS2313: a type parameter with a circular constraint (`T extends T`, or an
@@ -28289,88 +28318,193 @@ fn check_native_class_property_initializers(
 ///     reports these under `useDefineForClassFields`, so we gate on that
 ///     flag to stay false-positive-free.
 ///
+/// What counts as a hit for the `super` walkers below.
+///
+///   - `AnyRef`   — any mention of `super`: a `super(…)` call, `super.x`,
+///                  `super[k]`, `super.m(…)`. This is TS2335's question
+///                  ("is `super` referenced at all in a class with no base").
+///   - `CallOnly` — only a `super(…)` CALL. This is TS2337's question
+///                  ("is the base constructor invoked from somewhere that is
+///                  not the constructor"), where `super.m()` is perfectly
+///                  legal in any method of a derived class.
+///
+/// One walker answers both. Writing a second copy for the call-only question
+/// is what produced the bug this batch fixes — see
+/// `class_mentions_super_outside` — so the variation is a parameter.
+priv enum SuperRefKind {
+  AnyRef
+  CallOnly
+} derive(Eq)
+
+///|
 /// Whether `expr` references `super` (a `super(...)` call, `super.x`, or
-/// `super.m(...)`). Used by the TS2335 check below.
-fn expr_mentions_super(expr : @ast.TsExpr) -> Bool {
+/// `super.m(...)`), or only a `super(…)` call when `kind` is `CallOnly`.
+///
+/// Deliberately does NOT descend into a nested function expression, class
+/// expression, object literal, or arrow. Each of those rebinds (or legally
+/// inherits) `super` on its own terms — an object-literal method may use
+/// `super.x` through its home object, and an arrow inherits the enclosing
+/// method's `super` legally — so descending would flag legal code. 11 files
+/// TypeScript 7 ACCEPTS use object-literal `super`, which is what that
+/// abstention buys. The cost is a MISS on
+/// `typeOfThisInStaticMembers9`-style cases, where the error is precisely
+/// that a `function` expression boundary was crossed and a sibling arrow on
+/// the same class is legal; separating those needs a per-boundary rule
+/// rather than a mention test.
+fn expr_mentions_super(expr : @ast.TsExpr, kind : SuperRefKind) -> Bool {
+  // `kind` is threaded through the recursion in exactly ONE place. Passing
+  // it by hand at each of the thirty-odd recursive positions is how a
+  // walker ends up answering the wrong question in one arm.
+  let rec = fn(e) { expr_mentions_super(e, kind) }
   match expr {
-    Var("super") => true
-    Call("super", _) => true
-    PropAccess(inner, _) => expr_mentions_super(inner)
-    IndexAccess(a, b) => expr_mentions_super(a) || expr_mentions_super(b)
+    // A bare `super` (as in `super.x`, reached through the arms below) is a
+    // reference but not a call, so it is a hit only for `AnyRef`.
+    Var("super") => kind == AnyRef
+    Call("super", _) | CallExpr(@ast.TsExpr::Var("super"), _) => true
+    PropAccess(inner, _) => rec(inner)
+    IndexAccess(a, b) => rec(a) || rec(b)
     CallExpr(callee, args) | NewExpr(callee, args) =>
-      expr_mentions_super(callee) ||
-      args.iter().any(fn(a) { expr_mentions_super(a) })
-    Call(_, args) | New(_, args) =>
-      args.iter().any(fn(a) { expr_mentions_super(a) })
-    MethodCall(recv, _, args) =>
-      expr_mentions_super(recv) ||
-      args.iter().any(fn(a) { expr_mentions_super(a) })
-    BinOp(_, a, b) | Seq(a, b) =>
-      expr_mentions_super(a) || expr_mentions_super(b)
+      rec(callee) || args.iter().any(fn(a) { rec(a) })
+    Call(_, args) | New(_, args) => args.iter().any(fn(a) { rec(a) })
+    MethodCall(recv, _, args) => rec(recv) || args.iter().any(fn(a) { rec(a) })
+    BinOp(_, a, b) | Seq(a, b) => rec(a) || rec(b)
+    // `TypeArgs` wraps an explicitly-instantiated call (`super<T>(0)`,
+    // `f<T>(x)`) and is invisible in the emitted JS. It has to be peeled
+    // here: without this arm `super<T>(0)` reached the `_ => false`
+    // catch-all and the reference disappeared, which is the THIRD time a
+    // wrapper node's fail-open default has hidden a real finding in this
+    // repo — see the `TypeArgs`/`PureCall` liveness bugs in CLAUDE.md,
+    // which predicted exactly this. Any new wrapper variant belongs here.
     UnaryOp(_, a)
     | Spread(a)
     | PureCall(a)
+    | TypeArgs(_, a)
     | Await(a)
     | NonNull(a)
     | OptionalChain(a)
     | As(a, _)
-    | Satisfies(a, _) => expr_mentions_super(a)
-    Cond(a, b, c) =>
-      expr_mentions_super(a) || expr_mentions_super(b) || expr_mentions_super(c)
-    AssignExpr(_, v) => expr_mentions_super(v)
-    PropAssignExpr(r, _, v) => expr_mentions_super(r) || expr_mentions_super(v)
-    CompoundAssignExpr(t, _, v) =>
-      expr_mentions_super(t) || expr_mentions_super(v)
+    | Satisfies(a, _) => rec(a)
+    Cond(a, b, c) => rec(a) || rec(b) || rec(c)
+    AssignExpr(_, v) => rec(v)
+    PropAssignExpr(r, _, v) => rec(r) || rec(v)
+    CompoundAssignExpr(t, _, v) => rec(t) || rec(v)
     _ => false
   }
 }
 
 ///|
-fn block_mentions_super(block : @ast.TsBlock) -> Bool {
-  block.stmts.iter().any(fn(s) { stmt_mentions_super(s) })
+fn block_mentions_super(block : @ast.TsBlock, kind : SuperRefKind) -> Bool {
+  block.stmts.iter().any(fn(s) { stmt_mentions_super(s, kind) })
 }
 
 ///|
-fn stmt_mentions_super(stmt : @ast.TsStmt) -> Bool {
+/// The `_ => false` catch-all is what keeps a nested `class` STATEMENT out
+/// of the walk: its `super` belongs to that class, not to the one being
+/// checked. That is load-bearing rather than incidental — a nested derived
+/// class inside a method of a non-derived class is legal code.
+fn stmt_mentions_super(stmt : @ast.TsStmt, kind : SuperRefKind) -> Bool {
+  let rec = fn(e) { expr_mentions_super(e, kind) }
+  let recb = fn(b) { block_mentions_super(b, kind) }
   match stmt {
-    Expr(e) | Throw(e) => expr_mentions_super(e)
+    Expr(e) | Throw(e) => rec(e)
     Return(opt) =>
       match opt {
-        Some(e) => expr_mentions_super(e)
+        Some(e) => rec(e)
         None => false
       }
-    Var(_, _, e) | Let(_, _, e) | Const(_, _, e) => expr_mentions_super(e)
-    PropAssign(r, _, v) => expr_mentions_super(r) || expr_mentions_super(v)
-    Block(b) => block_mentions_super(b)
+    Var(_, _, e) | Let(_, _, e) | Const(_, _, e) => rec(e)
+    PropAssign(r, _, v) => rec(r) || rec(v)
+    Block(b) => recb(b)
     If(c, t, e) =>
-      expr_mentions_super(c) ||
-      block_mentions_super(t) ||
+      rec(c) ||
+      recb(t) ||
       (match e {
-        Some(eb) => block_mentions_super(eb)
+        Some(eb) => recb(eb)
         None => false
       })
-    While(c, b) | DoWhile(c, b) =>
-      expr_mentions_super(c) || block_mentions_super(b)
-    For(_, _, _, b) => block_mentions_super(b)
+    While(c, b) | DoWhile(c, b) => rec(c) || recb(b)
+    For(_, _, _, b) => recb(b)
     ForOf(_, _, _, it, b)
     | ForAwaitOf(_, _, _, it, b)
-    | ForIn(_, _, _, it, b) =>
-      expr_mentions_super(it) || block_mentions_super(b)
+    | ForIn(_, _, _, it, b) => rec(it) || recb(b)
     Try(b, _, c, f) =>
-      block_mentions_super(b) ||
+      recb(b) ||
       (match c {
-        Some(cb) => block_mentions_super(cb)
+        Some(cb) => recb(cb)
         None => false
       }) ||
       (match f {
-        Some(fb) => block_mentions_super(fb)
+        Some(fb) => recb(fb)
         None => false
       })
-    Switch(e, cases) =>
-      expr_mentions_super(e) ||
-      cases.iter().any(fn(cse) { block_mentions_super(cse.body) })
+    Switch(e, cases) => rec(e) || cases.iter().any(fn(cse) { recb(cse.body) })
     _ => false
   }
+}
+
+///|
+/// Every place a class body can hold executable code, EXCEPT the
+/// constructor body — the one site TS2335 had been checking on its own.
+///
+/// This exists as one function over the whole `TsClassDecl` because the bug
+/// it fixes was precisely a per-site enumeration that stopped at one site:
+/// `super.foo()` in an ordinary METHOD of a class with no base parsed clean,
+/// while the identical reference in the constructor was flagged. Listing the
+/// fields here means a new body-bearing field on `TsClassDecl` is a visible
+/// omission in one place rather than a silent hole in each caller.
+///
+/// The fields, and why each carries code:
+///   - `methods[].body`           method / accessor bodies
+///   - `methods[].key_expr`       computed member key (`[expr]() {}`)
+///   - `methods[].param_defaults` `m(x = <expr>)`
+///   - `static_blocks`            `static { … }`
+///   - `static_field_inits`       `static x = <expr>`
+///   - `instance_field_inits`     `x = <expr>`
+///   - `computed_field_keys`      `[expr] = 1`
+///   - `constructor_param_defaults` `constructor(x = <expr>)`
+fn class_mentions_super_outside_ctor(
+  decl : @ast.TsClassDecl,
+  kind : SuperRefKind,
+) -> Bool {
+  for m in decl.methods {
+    if m.body is Some(b) && block_mentions_super(b, kind) {
+      return true
+    }
+    if m.key_expr is Some(k) && expr_mentions_super(k, kind) {
+      return true
+    }
+    for d in m.param_defaults {
+      if d is Some(e) && expr_mentions_super(e, kind) {
+        return true
+      }
+    }
+  }
+  for b in decl.static_blocks {
+    if block_mentions_super(b, kind) {
+      return true
+    }
+  }
+  for entry in decl.static_field_inits {
+    if expr_mentions_super(entry.1, kind) {
+      return true
+    }
+  }
+  for entry in decl.instance_field_inits {
+    if expr_mentions_super(entry.1, kind) {
+      return true
+    }
+  }
+  for k in decl.computed_field_keys {
+    if expr_mentions_super(k, kind) {
+      return true
+    }
+  }
+  for d in decl.constructor_param_defaults {
+    if d is Some(e) && expr_mentions_super(e, kind) {
+      return true
+    }
+  }
+  false
 }
 
 ///|
@@ -28466,22 +28600,40 @@ fn check_class_member_structure(
       }
     }
     // --- TS2335: `super` can only be referenced in a derived class. A class
-    // with no base (`base_names` empty and no expression-base) whose
-    // constructor body references `super` (`super()`, `super.x`,
-    // `super.m()`) is an error. Derived classes carry a base name (or the
-    // `<expr-base>` sentinel with `base_expr` set), so this is
+    // with no base (`base_names` empty and no expression-base) that
+    // references `super` (`super()`, `super.x`, `super[k]`, `super.m()`)
+    // anywhere in its own body is an error. Derived classes carry a base
+    // name (or the `<expr-base>` sentinel with `base_expr` set), so this is
     // false-positive-free.
-    if decl.base_names.length() == 0 && decl.base_expr is None {
-      match decl.constructor_body {
-        Some(body) =>
-          if block_mentions_super(body) {
-            issues.push({
-              path: "class \{decl.name}",
-              message: "`super` can only be referenced in a derived class",
-            })
-          }
-        None => ()
+    //
+    // `implements` is deliberately NOT heritage for this rule: a class that
+    // only implements an interface still has no base constructor and no
+    // `super`, so `class C implements I { m() { super.x } }` is an error
+    // too. That is why the condition is `base_names` / `base_expr` rather
+    // than the parser's `class_decl_no_heritage`, which also requires an
+    // empty `implements` list.
+    let is_derived = decl.base_names.length() > 0 || decl.base_expr is Some(_)
+    if not(is_derived) {
+      let in_ctor = decl.constructor_body is Some(body) &&
+        block_mentions_super(body, AnyRef)
+      if in_ctor || class_mentions_super_outside_ctor(decl, AnyRef) {
+        issues.push({
+          path: "class \{decl.name}",
+          message: "`super` can only be referenced in a derived class",
+        })
       }
+    } else if class_mentions_super_outside_ctor(decl, CallOnly) {
+      // --- TS2337: "Super calls are not permitted outside constructors or
+      // in nested functions inside constructors." In a DERIVED class,
+      // `super.m()` is legal in any method but `super(…)` — invoking the
+      // base constructor — is legal only in the constructor body. Restricted
+      // to `CallOnly` so the legal property/method form is untouched, and to
+      // the derived branch because a non-derived class is already reported
+      // above with the more specific TS2335.
+      issues.push({
+        path: "class \{decl.name}",
+        message: "super calls are not permitted outside constructors",
+      })
     }
     // --- TS2506: a class directly references itself in its own base
     // expression (`class C extends C {}`, `class D<T> extends D<T> {}`).

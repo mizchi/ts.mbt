@@ -2030,6 +2030,15 @@ fn Parser::parse_class_body(
             has_modifier = true
             // Check for static initialization block: static { ... }
             if self.check(LBrace) {
+              // TS1206: "Decorators are not valid here." A static
+              // initialization block is not a class ELEMENT a decorator can
+              // apply to, in either decorator mode (classStaticBlock19).
+              // Probed against the whole TS7-accepted corpus: not one file
+              // TypeScript 7 accepts decorates a static block, so this needs
+              // no mode gate.
+              if member_decorated {
+                self.invalid_decorator_uses.push("static block")
+              }
               let block = self.parse_block()
               elements.push(StaticBlock(block))
               // TS2448: a top-level class's static block executes at class
