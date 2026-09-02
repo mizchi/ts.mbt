@@ -23273,6 +23273,115 @@ fn check_namespace_or_enum_member_access(
 }
 
 ///|
+/// Every member name reachable through a class's base chain, plus whether
+/// the chain could be resolved AT ALL.
+///
+/// `resolvable == false` means "this analysis cannot see the whole base
+/// chain", and every caller must treat that as a reason to DECLINE rather
+/// than as "no inherited members". Both consumers ask a question whose wrong
+/// answer is a false positive — "no base declares this `override`" (TS4113)
+/// and "no base supplies this interface member" (TS2420) — so an
+/// unresolvable chain has to abstain, never fall through.
+priv struct BaseChainMembers {
+  instance : Map[String, Unit]
+  static_ : Map[String, Unit]
+  abstract_ : Map[String, Unit]
+  resolvable : Bool
+}
+
+///|
+/// Walk `cls`'s base chain collecting member names. Declines (`resolvable:
+/// false`) on a generic base, an expression-shaped base, more than one base,
+/// a base that is not declared in this module, or a lowered-class interface
+/// that itself extends something — in each case the chain continues into
+/// members this pass cannot enumerate.
+///
+/// A class with NO heritage resolves successfully with empty sets: nothing is
+/// inherited, which is a fact rather than an absence of information.
+///
+/// Extracted from `check_override_modifiers`, which was the only caller.
+/// `check_class_implements` needs exactly this fact to lift its
+/// missing-member abstention, and a second copy of a walk whose failure mode
+/// is a false positive is the last thing this file needs — see the two
+/// `super` walkers that had drifted apart.
+fn resolve_base_chain_members(
+  cls : @ast.TsClassDecl,
+  class_by_name : Map[String, @ast.TsClassDecl],
+  iface_by_name : Map[String, @ast.TsInterface],
+) -> BaseChainMembers {
+  let instance : Map[String, Unit] = {}
+  let static_ : Map[String, Unit] = {}
+  let abstract_ : Map[String, Unit] = {}
+  if cls.base_names.length() == 0 && cls.base_expr is None {
+    return { instance, static_, abstract_, resolvable: true }
+  }
+  if cls.base_expr is Some(_) || cls.base_names.length() != 1 {
+    return { instance, static_, abstract_, resolvable: false }
+  }
+  let mut resolvable = true
+  let mut cursor : String? = Some(cls.base_names[0])
+  let visited : Map[String, Unit] = {}
+  while cursor is Some(bn) {
+    if visited.contains(bn) {
+      break
+    }
+    visited[bn] = ()
+    let mut next : String? = None
+    match class_by_name.get(bn) {
+      Some(b) => {
+        if b.type_params.length() > 0 {
+          resolvable = false
+          break
+        }
+        for an in b.abstract_members {
+          abstract_[an] = ()
+        }
+        for m in b.methods {
+          if m.name != "<computed>" {
+            if m.is_static {
+              static_[m.name] = ()
+            } else {
+              instance[m.name] = ()
+            }
+          }
+        }
+        for pr in b.properties {
+          if pr.name != "<computed>" {
+            if pr.is_static {
+              static_[pr.name] = ()
+            } else {
+              instance[pr.name] = ()
+            }
+          }
+        }
+        if b.base_expr is Some(_) || b.base_names.length() > 1 {
+          resolvable = false
+          break
+        }
+        if b.base_names.length() == 1 {
+          next = Some(b.base_names[0])
+        }
+      }
+      None =>
+        match iface_by_name.get(bn) {
+          // The parser lowers member-only classes to interfaces.
+          Some(bi) => {
+            for f in bi.fields {
+              instance[f.0] = ()
+            }
+            if bi.extends_names.length() > 0 {
+              resolvable = false
+            }
+          }
+          None => resolvable = false
+        }
+    }
+    cursor = next
+  }
+  { instance, static_, abstract_, resolvable }
+}
+
+///|
 /// TS4112 / TS4113 / TS4114 -- the `override` modifier family:
 ///   - TS4112: an `override` member in a class with NO heritage clause.
 ///   - TS4113: an `override` member that no (fully resolvable, in-module,
@@ -23322,73 +23431,11 @@ fn check_override_modifiers(module_ : @ast.TsModule) -> Array[ExprIssue] {
     }
     // Resolve the transitive base member set. Bail (conservatively) when
     // any base is generic, expression-shaped, or not declared in-module.
-    guard cls.base_names.length() == 1 && cls.base_expr is None else {
-      continue
-    }
-    let base_instance : Map[String, Unit] = {}
-    let base_static : Map[String, Unit] = {}
-    let base_abstract : Map[String, Unit] = {}
-    let mut resolvable = true
-    let mut cursor : String? = Some(cls.base_names[0])
-    let visited : Map[String, Unit] = {}
-    while cursor is Some(bn) {
-      if visited.contains(bn) {
-        break
-      }
-      visited[bn] = ()
-      let mut next : String? = None
-      match class_by_name.get(bn) {
-        Some(b) => {
-          if b.type_params.length() > 0 {
-            resolvable = false
-            break
-          }
-          for an in b.abstract_members {
-            base_abstract[an] = ()
-          }
-          for m in b.methods {
-            if m.name != "<computed>" {
-              if m.is_static {
-                base_static[m.name] = ()
-              } else {
-                base_instance[m.name] = ()
-              }
-            }
-          }
-          for pr in b.properties {
-            if pr.name != "<computed>" {
-              if pr.is_static {
-                base_static[pr.name] = ()
-              } else {
-                base_instance[pr.name] = ()
-              }
-            }
-          }
-          if b.base_expr is Some(_) || b.base_names.length() > 1 {
-            resolvable = false
-            break
-          }
-          if b.base_names.length() == 1 {
-            next = Some(b.base_names[0])
-          }
-        }
-        None =>
-          match iface_by_name.get(bn) {
-            // The parser lowers member-only classes to interfaces.
-            Some(bi) => {
-              for f in bi.fields {
-                base_instance[f.0] = ()
-              }
-              if bi.extends_names.length() > 0 {
-                resolvable = false
-              }
-            }
-            None => resolvable = false
-          }
-      }
-      cursor = next
-    }
-    if !resolvable {
+    let chain = resolve_base_chain_members(cls, class_by_name, iface_by_name)
+    let base_instance = chain.instance
+    let base_static = chain.static_
+    let base_abstract = chain.abstract_
+    if not(chain.resolvable) {
       continue
     }
     // TS4113: overrides that no base declares.
@@ -28999,22 +29046,56 @@ fn cast_shape_fields(
 ///|
 /// TS2420 ("Class incorrectly implements interface"): a (non-generic) class
 /// whose `implements` clause names a (non-generic, locally declared)
-/// interface must satisfy that interface. We report only the two reliably-
-/// decidable shapes, so the check is false-positive-free:
+/// interface must satisfy that interface. Three reliably-decidable shapes:
 ///   - a member the interface declares is implemented as `private` /
 ///     `protected` (a non-public member can never satisfy a public interface
 ///     requirement);
 ///   - a public data property whose type is definitely not assignable to the
-///     interface's same-named member (`member_override_incompatible`).
-/// A *missing* member is deliberately not flagged (it may be inherited from a
-/// base class we don't fully thread here), and interface methods / generic
-/// shapes are left to the conservative `member_override_incompatible`, which
-/// declines anything it can't decide soundly.
+///     interface's same-named member (`member_override_incompatible`);
+///   - a required member the class does not declare ANYWHERE and no base in
+///     a fully-resolved base chain supplies.
+///
+/// That third one — the commonest form of this error in real code, and by a
+/// wide margin — used to abstain with the reason "it may be inherited from a
+/// base class we don't fully thread here". `resolve_base_chain_members`
+/// threads it now, and declines outright when it cannot, so the abstention
+/// is narrowed to the cases that actually earn it rather than applied to all
+/// of them.
+///
+/// What still abstains, each because a member could arrive from somewhere
+/// this pass does not enumerate:
+///   - an `abstract` class (a subclass may supply the member; and zero
+///     baselines in the TypeScript corpus raise TS2420 on one);
+///   - a class with an instance index signature;
+///   - an unresolvable base chain — a generic, expression-shaped, multiple,
+///     or out-of-module base;
+///   - an OPTIONAL interface member. Optionality arrives as `T | undefined`
+///     in the field type, so a required `T | undefined` member abstains too,
+///     which is the safe direction;
+///   - a computed member name on either side.
+/// Inherited interface requirements (`interface I extends J`) are not
+/// collected, so a member `J` declares is simply not checked. That loses a
+/// finding; it cannot invent one.
+///
+/// Routes a member can legally arrive by, all of which suppress the
+/// diagnostic: an instance field, a method, an accessor, a parameter
+/// property, an `abstract` member, an instance field initializer, the base
+/// chain, and a same-named interface merged into the class.
 fn check_class_implements(
   module_ : @ast.TsModule,
   resolver : Resolver,
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
+  let class_by_name : Map[String, @ast.TsClassDecl] = {}
+  for c in module_.classes {
+    class_by_name[c.name] = c
+  }
+  let iface_by_name : Map[String, @ast.TsInterface] = {}
+  for i in module_.interfaces {
+    if i.type_params.length() == 0 {
+      iface_by_name[i.name] = i
+    }
+  }
   for cls in module_.classes {
     if cls.implements_names.length() == 0 || cls.type_params.length() > 0 {
       continue
@@ -29033,6 +29114,62 @@ fn check_class_implements(
         cls_props[p.name] = p.type_
       }
     }
+    // Every name this class supplies by any route, for the missing-member
+    // arm below. Deliberately over-inclusive: a name that lands here only
+    // suppresses a diagnostic, so a route counted twice costs nothing and a
+    // route missed would be a false positive.
+    let chain = resolve_base_chain_members(cls, class_by_name, iface_by_name)
+    let supplied : Map[String, Unit] = {}
+    for p in cls.properties {
+      if !p.is_static {
+        supplied[p.name] = ()
+      }
+    }
+    for m in cls.methods {
+      if !m.is_static {
+        supplied[m.name] = ()
+      }
+    }
+    for kv in accessors {
+      supplied[kv.0] = ()
+    }
+    for n in cls.abstract_members {
+      supplied[n] = ()
+    }
+    for entry in cls.instance_field_inits {
+      supplied[entry.0] = ()
+    }
+    // A parameter property (`constructor(public a: T)`) materializes a field,
+    // and the parser does put it in `cls.properties` — but a plain
+    // constructor parameter is counted here too rather than telling them
+    // apart. Over-counting only declines a diagnostic.
+    match cls.constructor_params {
+      Some(ps) =>
+        for p in ps {
+          supplied[p.0] = ()
+        }
+      None => ()
+    }
+    for kv in chain.instance {
+      supplied[kv.0] = ()
+    }
+    // Class / interface declaration merging: `class C implements I {}` next
+    // to `interface C { a: number }` is legal TypeScript, and the interface
+    // supplies `a` to `C`'s instance type. `resolver.interfaces` is keyed by
+    // name and already merges same-name interface declarations, so one
+    // lookup covers however many `interface C` blocks the file has. Missing
+    // this route would false-flag correct code — `.d.ts` files pair a class
+    // with a same-named interface routinely, and this pass runs on them.
+    match resolver.interfaces.get(cls.name) {
+      Some(self_iface) =>
+        for f in self_iface.fields {
+          supplied[f.0] = ()
+        }
+      None => ()
+    }
+    let can_check_missing = chain.resolvable &&
+      not(cls.is_abstract) &&
+      cls.index_signatures.length() == 0
     for iname in cls.implements_names {
       let iface = match resolver.interfaces.get(iname) {
         Some(i) => i
@@ -29068,8 +29205,23 @@ fn check_class_implements(
                 message: "incorrectly implements interface `\{iname}`: property `\{mname}` of type `\{type_display(ctype)}` is not assignable to `\{type_display(f.1)}`",
               })
               reported = true
+              continue
             }
           None => ()
+        }
+        // Required member the class does not supply by any route. An
+        // optional member arrives as `T | undefined`, and a computed name
+        // cannot be compared, so both abstain.
+        if can_check_missing &&
+          mname != "<computed>" &&
+          not(mname.has_prefix("#")) &&
+          not(type_has_undefined(f.1)) &&
+          not(supplied.contains(mname)) {
+          issues.push({
+            path: "class \{cls.name}",
+            message: "incorrectly implements interface `\{iname}`: member `\{mname}` is missing",
+          })
+          reported = true
         }
       }
     }

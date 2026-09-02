@@ -15059,3 +15059,98 @@ test "expr_check: super in a computed key, through the shared walker" {
     0,
   )
 }
+
+///|
+/// TS2420's missing-member arm. `check_class_implements` used to abstain on
+/// a member the class does not declare, with the stated reason that it might
+/// come from a base class the pass did not thread — a documented abstention
+/// rather than an oversight. `resolve_base_chain_members` threads it, so the
+/// abstention is now narrowed to the cases that earn it.
+///
+/// The FIRE cases are one class of thing; the SILENT cases are the whole
+/// point. Every route by which a member can legally arrive gets a case,
+/// because a route this pass cannot see is a false positive on correct code
+/// — and unlike a MISS, an FP has a zero budget.
+test "expr_check: class implements — a required member must be present" {
+  let missing = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("is missing") {
+        n += 1
+      }
+    }
+    n
+  }
+  // --- fires
+  assert_true(missing("interface I { a: number } class C implements I { }") > 0)
+  assert_true(missing("interface I { m(): void } class C implements I { }") > 0)
+  // A resolvable base that does not supply it.
+  assert_true(
+    missing(
+      "class B { b: number = 1 } interface I { a: number } class C extends B implements I { }",
+    ) >
+    0,
+  )
+  // A STATIC member does not satisfy an instance requirement.
+  assert_true(
+    missing(
+      "interface I { a: number } class C implements I { static a: number = 1 }",
+    ) >
+    0,
+  )
+  // --- silent: every legal route the member can arrive by
+  let cases = [
+    // declared directly
+    "interface I { a: number } class C implements I { a: number = 1 }",
+    // a method
+     "interface I { m(): void } class C implements I { m() {} }",
+    // an accessor pair
+     "interface I { a: number } class C implements I { get a(): number { return 1 } }",
+    // a parameter property
+     "interface I { a: number } class C implements I { constructor(public a: number) {} }",
+    // the immediate base supplies it
+     "class B { a: number = 1 } interface I { a: number } class C extends B implements I { }",
+    // a GRANDPARENT supplies it — the walk has to be transitive
+     "class A { a: number = 1 } class B extends A { } interface I { a: number } class C extends B implements I { }",
+    // a base METHOD supplies it
+     "class B { m() {} } interface I { m(): void } class C extends B implements I { }",
+    // optional interface member
+     "interface I { a?: number } class C implements I { }",
+    // abstract class — a subclass may supply it, and no baseline in the
+    // TypeScript corpus raises TS2420 on an abstract class
+     "interface I { a: number } abstract class C implements I { }",
+    // an instance index signature on the class
+     "interface I { a: number } class C implements I { [k: string]: number }",
+    // an unresolvable base chain: generic base
+     "class B<T> { x: T? } interface I { a: number } class C extends B<number> implements I { }",
+    // an unresolvable base chain: base not declared in this module
+     "interface I { a: number } class C extends Missing implements I { }",
+    // a generic interface abstains
+     "interface I<T> { a: T } class C implements I<number> { }",
+    // an interface that is not declared here at all
+     "class C implements NotDeclared { }",
+    // class / interface declaration merging supplies it — legal TypeScript,
+    // and the shape `.d.ts` files use routinely
+     "interface I { a: number } class C implements I { } interface C { a: number }",
+    // --- The four remaining shapes below are not invented: they are the
+    // TS7-ACCEPTED conformance files that carry `class … implements`, found
+    // by scanning the accepted corpus rather than by imagining cases. Two of
+    // them were absent from the list above until that scan ran.
+    //
+    // symbolProperty23: a well-known-symbol key, which the class and the
+    // interface must agree on the spelling of (`@@toPrimitive`).
+     "interface I { [Symbol.toPrimitive]: () => boolean } class C implements I { [Symbol.toPrimitive]() { return true } }",
+    // ExportClassWhichExtendsInterfaceWithInaccessibleType: parameter
+    // properties supplying two members, inside a namespace.
+     "namespace A { interface P { x: number; y: number; f(p: P): number } export class P2 implements P { constructor(public x: number, public y: number) {} f(p: P) { return 1 } } }",
+    // assignmentCompatWithObjectMembers3: required member present, optional
+    // member absent, in one interface.
+     "class S implements S2 { foo: string = \"\" } interface S2 { foo: string; bar?: string }",
+    // everyTypeWithInitializer / throwStatements: the plain declared case
+    // under `@strict: false`.
+     "// @strict: false\ninterface I { id: number } class C implements I { id: number }",
+  ]
+  for src in cases {
+    @test.assert_eq(missing(src), 0)
+  }
+}

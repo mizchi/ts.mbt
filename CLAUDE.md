@@ -32,7 +32,7 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2390 / MISS 344 / FP 0 /
+  is a soundness bug, and there are none (TP 2391 / MISS 343 / FP 0 /
   PFLEGAL 0 / TN 1750). The asymmetry is deliberate: we model a subset of
   TS, so a MISS is expected and an FP never is.
   That gate says how many we miss and nothing about WHICH, so "MISS 388"
@@ -45,7 +45,7 @@ product surfaces now.
   were exhausted and that only large type-machinery features remained, and
   that was measured against the **TS6** oracle — under TS7, **128 of the
   388 missing files are flippable by a pure-grammar (TS1xxx) rule** and 91
-  of them need no type judgement anywhere. Five batches have taken **+53
+  of them need no type judgement anywhere. Six batches have taken **+54
   TP at FP 0** so far, and most of their items were BUGS rather than
   missing features — one of them a rule the repo had already written and
   applied to every declaration kind except namespaces. The first:
@@ -118,6 +118,34 @@ product surfaces now.
   was large and the measured yield is ONE file, because most earlier
   rules route through `grammar_misuses`, which a workaround already
   re-drained — the value there is the bug class, not the count.
+  Batch BZ then took `check_class_implements`, which checks the TYPE of
+  an interface member the class declares and never checked that the
+  class declares it at all — `interface I { a: number }
+  class C implements I { }` was silent. That is NOT the
+  applied-in-some-places family, and the correction matters: the doc
+  comment stated the abstention and its blocker in writing ("it may be
+  inherited from a base class we don't fully thread here"), so the work
+  was removing the blocker, and the walk to remove it already existed
+  inside `check_override_modifiers` and was extracted rather than
+  copied. The batch is worth exactly **+1** corpus file against an
+  estimate of 5, and the gap is the same lesson as the decorator
+  cluster with the axis swapped: an error CODE is not a yield class
+  either. Four of the five TS2420 MISSes raise that code for unrelated
+  reasons — private incompatibility through interface merging, overload
+  assignability, a numeric indexer — and only opening the files showed
+  it. The reason to ship it is what the corpus cannot show: forgetting
+  to implement a member you just added to an interface is what a person
+  does, and a conformance suite written to exercise the type system
+  contains almost none of it. Its whole cost was the legal-neighbour
+  surface, and SCANNING the accepted corpus beat imagining cases —
+  exactly 9 TS7-accepted files carry `class … implements`, and two of
+  their shapes (a well-known-symbol key, a namespace-scoped parameter
+  property) were missing from the case list written from first
+  principles. A third route came from re-reading rather than probing:
+  class/interface declaration merging, where `interface C { a: number }`
+  beside `class C implements I {}` supplies the member — the shape every
+  `.d.ts` uses, so missing it would have false-flagged the bridge's own
+  primary input.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

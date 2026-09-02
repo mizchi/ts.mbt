@@ -2155,10 +2155,11 @@ need parser-wide changes).
 
 ## TS Checker Conformance (current state, 2026-09-02 — TypeScript 7)
 
-State: whole-corpus **TP 2390 / MISS 344 / FP 0 / PFLEGAL 0 / TN 1750**
+State: whole-corpus **TP 2391 / MISS 343 / FP 0 / PFLEGAL 0 / TN 1750**
 (classified 4484, NOTRUN 14) via
 `scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0`.
-Five batches: BU +9, BV +14, BW +13, BX +10, BY +7, for **+53 TP at FP 0**.
+Six batches: BU +9, BV +14, BW +13, BX +10, BY +7, BZ +1, for **+54 TP at
+FP 0**.
 
 ### Batch BY (2026-09-02): rank by MACHINERY, not by code
 
@@ -2308,11 +2309,32 @@ One tooling fix: `checker_miss_buckets.mjs` had the same stale-binary trap
 unconditionally while `moon build --target native` produces DEBUG. It picks
 the newer build now and prints which, like the oracle.
 
-### Ranked next: TS2420 never checks whether a member is PRESENT
+### Batch BZ (2026-09-02): TS2420 never checked whether a member is PRESENT
+
+TP 2390 -> 2391, MISS 344 -> 343, FP 0 / PFLEGAL 0 / TN 1750.
+
+**Read that +1 before reading anything else, because the estimate was 5.**
+The TS2420 bucket holds 5 MISS files and the batch was sized from that
+number. Only ONE of them is the missing-member form (`symbolProperty25`);
+the other four raise TS2420 for unrelated reasons — private-member
+incompatibility through interface merging (`mergedInterfacesWithInherited
+Privates`, `…2`), overload assignability
+(`stringLiteralTypeIsSubtypeOfString`), a numeric indexer
+(`subtypingWithNumericIndexer5`). This document already records "an error
+CODE is not a difficulty class" for `computed_props` and the decorator
+cluster; this is the same mistake made about YIELD instead of difficulty,
+and the fix is the same — open the files.
+
+The reason to ship it anyway is the reason the corpus cannot show: adding a
+member to an interface and forgetting to implement it is what a person
+actually does, and the conformance suite has almost no cases of it because
+it was written to exercise the type system, not to reproduce everyday
+mistakes. Same shape as batch BY's namespace-channel fix, which was also
+worth one corpus file and a whole class of product-facing bug.
 
 Found by applying batch BY's own method (probe the simplest spelling) to the
-next two buckets down. `check_class_implements` exists and checks the TYPE of
-members that are there; it does not check that they are there at all:
+next two buckets down. `check_class_implements` checks the TYPE of members
+that are there; it did not check that they are there at all:
 
 | source | tscheck |
 |---|---|
@@ -2321,27 +2343,65 @@ members that are there; it does not check that they are there at all:
 | `interface I { m(): void } class C implements I { }` | **0 issues** |
 | `interface I { m(a: number): void } class C implements I { m() {} }` | **0 issues** |
 
-"This class does not implement everything its interface declares" is one of
-the errors real TypeScript code produces most, and far more often than a
-member with the wrong type — so this scores high on BOTH axes, unlike the
-49-file `parser/ecmascript5` cluster. TS2420 is 5 files / 3 solo on the
-corpus, and TS2739 / TS2740 ("Type X is missing the following properties")
-are the same question asked of a value.
+This one is NOT the "rule applied to some of the sites it names" family, and
+saying so corrects a characterisation made before the code was read. The doc
+comment stated the abstention and its reason in writing: "a *missing* member
+is deliberately not flagged (it may be inherited from a base class we don't
+fully thread here)". A documented abstention with a stated blocker, not an
+oversight. The work was to remove the blocker.
 
-It is NOT a grammar rule, and the legal-neighbour surface is real — probed,
-not assumed: 3 TS7-ACCEPTED files (`mixinAbstractClasses`,
-`mixinAbstractClassesReturnTypeInference`, `accessorsOverrideProperty9`)
-carry both `abstract class … implements` and `class … extends … implements`.
-A presence check has to satisfy, at minimum: a member supplied by the base
-chain, an `abstract` member, an optional interface member, a parameter
-property, an accessor pair, declaration merging on the interface, a class
-index signature, and abstention on a generic or out-of-module interface.
-Same shape as everything in batch BY (a check covering some of what it
-names) but a full batch of work rather than an arm.
+`resolve_base_chain_members` does that. The walk already existed inside
+`check_override_modifiers` — generic base, expression base, multiple bases,
+out-of-module base and a lowered-class interface that extends something all
+set `resolvable = false` — so it was extracted rather than rewritten. Both
+consumers ask a question whose wrong answer is a false positive ("no base
+declares this `override`" / "no base supplies this interface member"), so
+`resolvable == false` must abstain in both, and a second copy of such a walk
+is the last thing this file needs: the two `super` walkers that had drifted
+apart were fixed in the same session.
+
+The legal-neighbour surface is where the work was, and scanning the accepted
+corpus beat imagining cases. Exactly 9 TS7-ACCEPTED single-file cases carry
+`class … implements`, and every one is accounted for:
+
+| file | why it stays silent |
+|---|---|
+| `mixinAbstractClasses` | `abstract` class (and implements it anyway) |
+| `mixinAbstractClassesReturnTypeInference` | same |
+| `accessorsOverrideProperty9` | `abstract class MixedClass … implements` |
+| `symbolProperty23` | well-known-symbol key, `@@toPrimitive` on both sides |
+| `ExportClassWhichExtendsInterfaceWithInaccessibleType` | parameter properties, inside a namespace |
+| `parserSyntaxWalker.generated` | `implements` only inside comments |
+| `everyTypeWithInitializer` | member declared |
+| `throwStatements` | member declared |
+| `assignmentCompatWithObjectMembers3` | required present, other member optional |
+
+Two of those shapes — the symbol key and the namespace-scoped parameter
+property — were absent from the case list written from first principles, and
+only the scan produced them. A third route was found by re-reading rather
+than probing: **class / interface declaration merging**. `class C implements
+I {}` beside `interface C { a: number }` is legal and the interface supplies
+the member; `.d.ts` files pair a class with a same-named interface routinely,
+and this pass runs on them, so missing it would have false-flagged correct
+bridge input. `check_class_interface_merge_modifiers` in the same file shows
+the repo already knew the shape.
+
+Abstains, each because a member could arrive from somewhere not enumerated:
+an `abstract` class (a subclass may supply it — and zero baselines in the
+whole TypeScript corpus raise TS2420 on an abstract class), a class with an
+instance index signature, an unresolvable base chain, an OPTIONAL interface
+member (optionality arrives as `T | undefined`, so a required
+`T | undefined` abstains too — the safe direction), and a computed name.
+Inherited interface requirements (`interface I extends J`) are not
+collected, which loses a finding and cannot invent one. A STATIC member does
+not satisfy an instance requirement, and that fires.
 
 `TS2430` (interface incorrectly extends, 6 files / 2 solo) was probed at the
 same time and is FINE at the simple spellings — wrong property type, wrong
 method type and optional-vs-required all fire. Its MISSes are elsewhere.
+`TS2739` / `TS2740` ("Type X is missing the following properties") are the
+same presence question asked of a VALUE rather than a class, and are
+untouched.
 
 One instrumentation note, because it looks like a contradiction and is
 not. `moon test` prints a SECOND accuracy line from
