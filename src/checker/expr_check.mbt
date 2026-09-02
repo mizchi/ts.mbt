@@ -23585,34 +23585,90 @@ fn check_overload_void_return(module_ : @ast.TsModule) -> Array[ExprIssue] {
 }
 
 ///|
-/// TS2300 ("Duplicate identifier 'X'"): a function declaration and a
-/// `var` / `let` / `const` binding of the same name occupy one value
-/// declaration space (`function fn() {}` + `var fn;`). `var`+`var`
-/// merges and function overloads legally repeat a name, so only the
-/// function-vs-binding pair is flagged. Flat: the layered walker calls
-/// this per namespace body.
+/// Duplicate declarations in one module's TOP-LEVEL value space:
+///
+///   - TS2300 ("Duplicate identifier 'X'"): a function declaration and a
+///     `var` / `let` / `const` binding of the same name (`function fn() {}`
+///     + `var fn;`), or two `class X` declarations.
+///   - TS2451 ("Cannot redeclare block-scoped variable 'X'"): a second
+///     `let` / `const` of a name already bound by `let` / `const`, and a
+///     `let`/`const` paired with a `var` in either order.
+///
+/// The block-scoped half used to be absent, and the function's own comment
+/// showed how: it justified excluding `var`+`var` (which merges) and
+/// function overloads (which legally repeat a name), then excluded
+/// `let`+`let` without saying so. Neither stated reason reaches it — a
+/// second `let` is not a merge and not an overload — so `let x; let x` and
+/// `const x = 1; const x = 2` parsed clean while `let x; function x() {}`
+/// was flagged, from the same loop over the same statement list.
+///
+/// No scope walking, deliberately. Only `module_.top_level_stmts` is read,
+/// and only its flat `Ident` binding forms, so `{ let x } { let x }` never
+/// reaches the check (an inner `let` sits inside a `Block` statement this
+/// match does not descend into), a destructuring pattern falls through, and
+/// a `for` head is a different statement. The layered walker calls this per
+/// namespace body, so a namespace's bindings are compared only against each
+/// other. Each omission costs a finding and cannot invent one — which is the
+/// right direction, and the reason not to reach for the scope walk whose
+/// missing binder forms this repo has paid for seven times.
+///
+/// `var`+`var` stays legal, and function overloads still legally repeat a
+/// name. TS2393 ("Duplicate function implementation") is deliberately NOT
+/// attempted: `TsFunc.body` is not optional, so an overload SIGNATURE and an
+/// implementation are indistinguishable here — the neighbouring
+/// `check_overload_void_return` has to guess "the last declaration is the
+/// implementation" for the same reason.
 fn check_function_var_duplicates(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
+  let flagged : Map[String, Unit] = {}
+  let report = fn(n : String) {
+    if not(flagged.contains(n)) {
+      flagged[n] = ()
+      issues.push({
+        path: "declare `\{n}`",
+        message: "duplicate identifier `\{n}`",
+      })
+    }
+  }
   let func_names : Map[String, Unit] = {}
   for f in module_.funcs {
     func_names[f.name] = ()
   }
-  if func_names.size() == 0 {
-    return issues
-  }
-  let flagged : Map[String, Unit] = {}
+  // Names already bound at top level, split by declaration kind: a `var`
+  // may be re-declared by another `var` and nothing else.
+  let block_scoped : Map[String, Unit] = {}
+  let var_scoped : Map[String, Unit] = {}
   for stmt in module_.top_level_stmts {
     match stmt {
-      Var(Ident(n), _, _) | Let(Ident(n), _, _) | Const(Ident(n), _, _) =>
-        if func_names.contains(n) && !flagged.contains(n) {
-          flagged[n] = ()
-          issues.push({
-            path: "declare `\{n}`",
-            message: "duplicate identifier `\{n}`",
-          })
+      Let(Ident(n), _, _) | Const(Ident(n), _, _) => {
+        if func_names.contains(n) ||
+          block_scoped.contains(n) ||
+          var_scoped.contains(n) {
+          report(n)
         }
+        block_scoped[n] = ()
+      }
+      Var(Ident(n), _, _) => {
+        // A `var` after a `let`/`const` of the same name is TS2451 as well;
+        // after another `var` it is a legal merge.
+        if func_names.contains(n) || block_scoped.contains(n) {
+          report(n)
+        }
+        var_scoped[n] = ()
+      }
       _ => ()
     }
+  }
+  // TS2300: two `class X` declarations. A class merges with a same-named
+  // INTERFACE and with a same-named NAMESPACE, and both of those live in
+  // their own module lists, so a repeat inside `classes` is always the
+  // illegal form.
+  let class_seen : Map[String, Unit] = {}
+  for c in module_.classes {
+    if class_seen.contains(c.name) {
+      report(c.name)
+    }
+    class_seen[c.name] = ()
   }
   issues
 }

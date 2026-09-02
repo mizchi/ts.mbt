@@ -2158,8 +2158,10 @@ need parser-wide changes).
 State: whole-corpus **TP 2391 / MISS 343 / FP 0 / PFLEGAL 0 / TN 1750**
 (classified 4484, NOTRUN 14) via
 `scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0`.
-Six batches: BU +9, BV +14, BW +13, BX +10, BY +7, BZ +1, for **+54 TP at
-FP 0**.
+Seven batches: BU +9, BV +14, BW +13, BX +10, BY +7, BZ +1, CA +0, for
+**+54 TP at FP 0**. CA's zero is deliberate and explained in its own
+section — the diagnostic it adds is one the conformance suite does not
+exercise and real code hits constantly.
 
 ### Batch BY (2026-09-02): rank by MACHINERY, not by code
 
@@ -2399,9 +2401,72 @@ not satisfy an instance requirement, and that fires.
 `TS2430` (interface incorrectly extends, 6 files / 2 solo) was probed at the
 same time and is FINE at the simple spellings — wrong property type, wrong
 method type and optional-vs-required all fire. Its MISSes are elsewhere.
-`TS2739` / `TS2740` ("Type X is missing the following properties") are the
-same presence question asked of a VALUE rather than a class, and are
-untouched.
+
+`TS2739` / `TS2740` ("Type X is missing the following properties") is the
+same presence question asked of a VALUE, and needs NO work: it already
+fires at all five sites probed — a variable initializer, a call argument, a
+return, a type-literal target, and a fully-empty object literal — with the
+optional-property and all-properties-present neighbours correctly silent.
+Class-side presence was the only missing half.
+
+### Batch CA (2026-09-02): the duplicate-declaration family was absent
+
+**Zero corpus files, and the reason is stated below rather than discovered
+afterwards.** TP / MISS / FP / TN all unchanged at 2391 / 343 / 0 / 1750.
+
+Probing the next codes down found not a gap but a hole:
+
+| source | before |
+|---|---|
+| `let x; let x` (TS2451) | **0 issues** |
+| `const x = 1; const x = 2` | **0 issues** |
+| `let x = 1; var x = 2` (either order) | **0 issues** |
+| `class C {} class C {}` (TS2300) | **0 issues** |
+| `let x = 1; function x() {}` | 1 issue |
+
+Sixteenth instance of the family, and this one is visible in the check's own
+doc comment. `check_function_var_duplicates` walks `module_.top_level_stmts`
+matching `Var(Ident(n)) | Let(Ident(n)) | Const(Ident(n))` and compares the
+name against `module_.funcs` AND NOTHING ELSE — the loop, the pattern and
+the message were all already there, and the declarations were never compared
+against each other. The comment says "only the function-vs-binding pair is
+flagged" and gives two reasons: `var`+`var` merges, and function overloads
+legally repeat a name. **Neither reason reaches `let`+`let`** — a second
+`let` is not a merge and not an overload — so the comment justifies
+excluding two shapes and then excludes a third silently.
+
+Deliberately NO scope walk. Only the flat `Ident` forms of
+`top_level_stmts` are read, so `{ let x } { let x }` never reaches the check
+(an inner `let` sits inside a `Block` statement the match does not descend
+into), a destructuring pattern falls through, and a `for` head is a
+different statement; the layered walker already calls this per namespace
+body. Every omission loses a finding and cannot invent one, which is the
+right direction and the reason not to reach for the binder-form walk this
+repo has paid for seven times.
+
+The corpus yield is 0 because all four in-bucket files are outside that
+stated scope, checked by opening them rather than assumed:
+`destructuringSameNames` is `let { foo, foo: bar }` (a duplicate inside one
+destructuring pattern), `for-of52` is `for (let [v, v] of [[]])` (an array
+pattern in a `for` head), `autoAccessor11` is class auto-accessor members,
+`localTypes4` is local TYPE declarations inside functions.
+
+Shipped anyway, and the standard applied is the repo's own. #84 / #87 / #95
+were rejected because measurement showed they did not achieve their stated
+purpose. This one does — 7 firing spellings, 11 legal neighbours silent, all
+probed against the real checker — and what the number says is that the
+conformance suite does not contain the shape, exactly as with batch BX's
+export-namespace false positive (corpus byte-identical, real product bug)
+and batch BY's namespace channels (+1). Before this, `mtsc` type-checking
+ACCEPTED `let x; let x`, a program tsc rejects.
+
+TS2393 ("Duplicate function implementation") is NOT attempted, with a
+mechanical reason: `TsFunc.body` is not optional, so an overload SIGNATURE
+and an implementation are indistinguishable from `module_.funcs` — the
+neighbouring `check_overload_void_return` has to guess "the last
+declaration is the implementation" for the same reason. TS2394 ("overload
+signature not compatible with its implementation") is absent entirely and
+blocked on the same fact.
 
 One instrumentation note, because it looks like a contradiction and is
 not. `moon test` prints a SECOND accuracy line from

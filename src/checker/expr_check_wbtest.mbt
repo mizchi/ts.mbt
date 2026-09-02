@@ -15154,3 +15154,61 @@ test "expr_check: class implements — a required member must be present" {
     @test.assert_eq(missing(src), 0)
   }
 }
+
+///|
+/// TS2451 / TS2300 — duplicate top-level declarations. The
+/// function-vs-binding pair was already flagged; the binding-vs-binding
+/// pair, which is the shape a person actually writes, was not, and the
+/// check's own comment justified excluding `var`+`var` and overloads while
+/// excluding `let`+`let` silently.
+///
+/// The silent half of this test is where the risk is. The check reads only
+/// the flat `Ident` binding forms of `module_.top_level_stmts`, with no
+/// scope walk, so each case below documents a shape that must NOT reach it.
+test "expr_check: duplicate top-level declarations (TS2451 / TS2300)" {
+  let dups = fn(src : String) -> Int {
+    let mut n = 0
+    for i in check_module_function_bodies_permissive(parse_module_or_empty(src)) {
+      if i.message.contains("duplicate identifier") {
+        n += 1
+      }
+    }
+    n
+  }
+  // --- fires
+  assert_true(dups("let x: number; let x: number;") > 0)
+  assert_true(dups("const x = 1; const x = 2;") > 0)
+  assert_true(dups("let x = 1; const x = 2;") > 0)
+  // A `var` paired with a block-scoped binding, in both orders.
+  assert_true(dups("let x = 1; var x = 2;") > 0)
+  assert_true(dups("var x = 1; let x = 2;") > 0)
+  // Two class declarations.
+  assert_true(dups("class C {} class C {}") > 0)
+  // The pair that already worked, kept so a refactor cannot lose it.
+  assert_true(dups("let x = 1; function x() {}") > 0)
+  // --- silent
+  let legal = [
+    // `var` + `var` merges.
+    "var x: number; var x: number;",
+    // Disjoint blocks. An inner `let` lives inside a `Block` statement the
+    // match does not descend into, which is what makes the scope-walk-free
+    // design safe rather than lucky.
+     "{ let x = 1; } { let x = 2; }",
+    // A function body's binding is a different scope, and the layered
+    // walker calls this per namespace body for the same reason.
+     "let x = 1; function g() { let x = 2; }", "let x = 1; namespace N { export const x = 2; }",
+    // A class merges with a same-named interface and with a same-named
+    // namespace; both live in their own module lists.
+     "class C {} interface C { a: number }", "class C {} namespace C { export const z = 1 }",
+    "interface X { a: number } let X = 1;", "function q() {} namespace q { export const z = 1 }",
+    // Function overloads legally repeat a name, and TS2393 is not attempted.
+     "function f(a: string): void; function f(a: number): void; function f(a: any): void {}",
+    // A destructuring pattern is not an `Ident` binding and falls through.
+     "const { a } = { a: 1 }; const { a: b } = { a: 2 };",
+    // Distinct names.
+     "let x = 1; let y = 2;",
+  ]
+  for src in legal {
+    @test.assert_eq(dups(src), 0)
+  }
+}

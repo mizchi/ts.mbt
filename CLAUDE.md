@@ -146,6 +146,30 @@ product surfaces now.
   beside `class C implements I {}` supplies the member — the shape every
   `.d.ts` uses, so missing it would have false-flagged the bridge's own
   primary input.
+  Batch CA is the sixteenth instance and buys **zero** corpus files on
+  purpose. `let x; let x`, `const x = 1; const x = 2`,
+  `let x = 1; var x = 2` and `class C {} class C {}` were ALL silent while
+  `let x = 1; function x() {}` was flagged — from the same loop, over the
+  same statement list, in `check_function_var_duplicates`, which compared
+  each top-level binding's name against `module_.funcs` and never against
+  the other bindings. Its own comment is where the omission shows: it
+  justifies excluding `var`+`var` (a merge) and function overloads (which
+  legally repeat a name) and then excludes `let`+`let`, which is neither.
+  No scope walk was added — only the flat `Ident` forms of
+  `top_level_stmts` are read, so a nested block, a destructuring pattern
+  and a `for` head all fall through, each losing a finding rather than
+  inventing one. The four files in the bucket are outside that stated
+  scope (a duplicate inside one destructuring pattern, an array pattern in
+  a `for` head, class auto-accessors, local TYPE declarations), which is
+  why the count is 0; the reason to ship is that `mtsc` type-checking
+  accepted `let x; let x`, a program tsc rejects. The standard applied is
+  the repo's own: the rejections recorded above were changes measurement
+  showed did NOT achieve their purpose, and this one does — 7 firing
+  spellings against 11 silent legal neighbours. TS2393 and TS2394 are
+  blocked on one mechanical fact and say so: `TsFunc.body` is not
+  optional, so an overload SIGNATURE and an implementation cannot be told
+  apart, which is also why `check_overload_void_return` has to guess that
+  the last declaration is the implementation.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
