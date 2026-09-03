@@ -15973,3 +15973,104 @@ test "expr_check: an object type with a call signature IS callable (strict)" {
   assert_true(not_callable("declare var o: { a: number };\nvar r = o();"))
   assert_true(not_callable("declare var b: { new(): number };\nvar r = b();"))
 }
+
+///|
+/// Batch CM: TS2583 (a lib-era global under an older `lib`), TS2708 (a
+/// non-instantiated namespace used as a value), TS2350 (`new` over a
+/// call-signature-only type), TS2448 (a destructuring default reading a
+/// binding declared later in the same pattern), TS18038 / TS1107 (class
+/// static blocks), TS1200, TS1002 and TS2432.
+///
+/// Every "silent" entry was checked against the local TypeScript compiler
+/// with `scripts/tsc_probe.mjs`. That is how the `import a = A` false
+/// positive was diagnosed — an alias to an instantiated namespace IS a
+/// runtime value, which `namespace_is_instantiated` did not know.
+test "expr_check: lib era, namespace values, new over a call signature (batch CM)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // TS2583: `SharedArrayBuffer` / `Atomics` come with
+      // lib.es2017.sharedmemory.
+      "// @lib: es5\nvar foge = new SharedArrayBuffer(1024);",
+      // TS2708: a namespace whose body declares nothing at runtime, in
+      // both the ambient and the ordinary spelling, and through a
+      // type-only nested namespace.
+       "namespace M { export interface Point { x: number } }\nvar m = M;", "declare namespace M { interface Point { x: number } }\nvar m = M;",
+      // TS2350: `new` over a call signature that returns a value, and over
+      // the two lib functions that are not constructors.
+       "declare var cf: { (): string };\nvar r = new cf();", "new Symbol();", "new BigInt(1);",
+      // TS2448: a default reading a binding declared at or after its own
+      // position, in both pattern kinds.
+       "const { e = f, f = f } = {} as any;", "const [a = b, b = 1] = [] as any;",
+      // TS18038: `for await` inside a class static block — the enclosing
+      // function does not rescue it.
+       "const nums = [1];\nclass C { static { for await (const n of nums) { } } }",
+      "const nums = [1];\nasync function foo() { class C { static { for await (const n of nums) { } } } }",
+      // TS1200: a line break before an expression arrow's `=>`.
+       "var f1 = ()\n  => { };",
+      // TS1002: a string literal reaching a raw line terminator.
+       "var bad = \"unclosed\nvar y = 1;",
+      // TS2432: two merged declarations both omitting the first
+      // initializer.
+       "enum E { A }\nenum E { B = 0 }\nenum E { C }",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- silent: the LEGAL neighbour of each rule above
+  for
+    src in [
+      // TS2583: the lib that declares it, and a user declaration.
+      "// @lib: es2017\nvar foge = new SharedArrayBuffer(1024);", "// @lib: es5\ndeclare var SharedArrayBuffer: any;\nvar foge = new SharedArrayBuffer(1024);",
+      // A type-only namespace nested inside another is NOT covered, and
+      // the reason is a lowering artifact rather than a judgement:
+      // `export namespace inA { … }` records a VALUE for `inA` (the
+      // namespace object `parser_namespace_lower` synthesizes), so the
+      // outer namespace reads as instantiated whatever its nested body
+      // holds. tsc reports TS2708 there; `importStatementsInterfaces`
+      // stays a MISS for it.
+       "namespace A { export namespace inA { export interface P { x: number } } }\nvar a = A;",
+      // TS2708: an INSTANTIATED namespace is a value; so is one whose only
+      // member is an `import` alias, because an alias to an instantiated
+      // namespace emits `var a = A` (exportImportAlias — the one false
+      // positive this rule shipped before measurement); and declaration
+      // merging with a class gives the name a value meaning the namespace
+      // body alone does not show.
+       "namespace M { export var v = 1; }\nvar m = M;", "namespace A { export var x = 1; }\nnamespace C { export import a = A; }\nvar z = C.a.x;",
+      "namespace M { export interface Point { x: number } }\nclass M { }\nvar m = M;",
+      // A local binding shadowing a type-only namespace name.
+       "namespace M { export interface P { x: number } }\nfunction f() { const M = 1; return M; }",
+      // TS2350: a construct signature, a void-returning call signature
+      // (tsc reports TS7009 there, not this), and an ordinary class.
+       "declare var cf: { (): string; new(): string };\nvar r = new cf();", "declare var vf: { (): void };\nvar r = new vf();",
+      "class C { }\nvar c = new C();",
+      // An old-style JavaScript constructor is a function declaration and
+      // is excluded by name, not by inference.
+       "// @strict: false\nfunction Point(x: number) { }\nvar p = new Point(1);",
+      // A user-declared `Symbol` is not the lib function.
+       "declare var Symbol: any;\nvar s = new Symbol();",
+      // TS2448: a default reading an EARLIER binding, an outer binding,
+      // and one inside a closure that runs after the pattern is bound.
+       "const { a = 1, c = a, d = a } = {} as any;", "const outerF = 1;\nconst { e = outerF } = {} as any;",
+      "const { e = () => f, f = 1 } = {} as any;",
+      // TS1107: a label declared INSIDE the static block still resolves,
+      // and so do the unlabelled forms.
+       "function foo(v: number) { class C { static { outer: break outer; loop: while (v) { if (v === 1) break loop; if (v === 2) continue loop; if (v === 3) break; if (v === 4) continue; } switch (v) { default: break; } } } }",
+      // TS18038: `for await` in an async function, outside any static
+      // block.
+       "const nums = [1];\nasync function foo() { for await (const n of nums) { } }",
+      // TS1200: a line break AFTER the arrow is fine, and a TYPE-position
+      // arrow may break before it.
+       "var f2 = (x: string) =>\n  x;", "type F = ()\n  => void;\nvar f: F;",
+      // TS1002: an escaped newline, a line continuation, and the other
+      // quote.
+       "var ok = \"a\\nb\";", "var ok3 = 'x';",
+      // TS2432: only ONE declaration omits the first initializer, and a
+      // single declaration never merges.
+       "enum E { A = 0 }\nenum E { B }\nenum E { C = 5 }", "enum E { A }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}

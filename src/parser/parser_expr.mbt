@@ -3,6 +3,25 @@
 // ============================================
 
 ///|
+/// Consume an arrow function's `=>`, recording TS1200 ("Line terminator
+/// not permitted before arrow") when a newline precedes the token.
+///
+/// The restriction is real and one-sided: `var f = ()\n => {}` is an
+/// error, while a newline AFTER the arrow is fine and a newline before a
+/// TYPE-position arrow (`type F = ()\n => void`) is legal too — probed
+/// against tsc, which is why `parser_type`'s arrow sites are left alone.
+///
+/// It exists as a helper rather than a check at the reporting site because
+/// expression parsing consumes this token in EIGHT places, and a rule
+/// written at one of eight is the shape this repo keeps finding.
+fn Parser::expect_arrow(self : Parser) -> Unit raise ParseError {
+  if self.peek().has_newline_before {
+    self.grammar_misuses.push("line terminator not permitted before arrow")
+  }
+  let _ = self.expect(Arrow)
+}
+
+///|
 // / expression (prefer)
 pub fn Parser::parse_expr(self : Parser) -> @ast.TsExpr raise ParseError {
   self.parse_comma()
@@ -663,7 +682,7 @@ fn Parser::parse_single_param_arrow(
   self : Parser,
   name : String,
 ) -> @ast.TsExpr raise ParseError {
-  let _ = self.expect(Arrow)
+  self.expect_arrow()
   let body = if self.check(LBrace) {
     let prev_function = self.in_function
     let prev_iteration = self.in_iteration
@@ -2527,7 +2546,7 @@ fn Parser::parse_generic_arrow_function(
   } else {
     @ast.TsType::Any
   }
-  let _ = self.expect(Arrow)
+  self.expect_arrow()
   let body = if self.check(LBrace) {
     let prev_function = self.in_function
     let prev_iteration = self.in_iteration
@@ -2855,7 +2874,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
         self.parse_async_arrow_function()
       } else if self.peek_at(1).kind == Arrow {
         let _ = self.advance()
-        let _ = self.expect(Arrow)
+        self.expect_arrow()
         let body = if self.check(LBrace) {
           // Save and set function context for arrow block body
           let prev_function = self.in_function
@@ -2963,7 +2982,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
             } else {
               @ast.TsType::Any
             }
-            let _ = self.expect(Arrow)
+            self.expect_arrow()
             // : blockexpression
             let body = if self.check(LBrace) {
               // Save and set function context for arrow block body
@@ -3018,7 +3037,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
           } else {
             @ast.TsType::Any
           }
-          let _ = self.expect(Arrow)
+          self.expect_arrow()
           // : blockexpression
           let body = if self.check(LBrace) {
             // Save and set function context for arrow block body
@@ -3073,7 +3092,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
         } else {
           @ast.TsType::Any
         }
-        let _ = self.expect(Arrow)
+        self.expect_arrow()
         // : blockexpression
         let body = if self.check(LBrace) {
           // Save and set function context for arrow block body
@@ -4228,7 +4247,7 @@ fn Parser::parse_async_arrow_function(
           "`await` cannot be used as a parameter name in an async context",
         )
       }
-      let _ = self.expect(Arrow)
+      self.expect_arrow()
       let prev_async = self.in_async
       self.in_async = true
       let body = if self.check(LBrace) {
@@ -4305,7 +4324,7 @@ fn Parser::parse_async_arrow_function(
   } else {
     @ast.TsType::Any
   }
-  let _ = self.expect(Arrow)
+  self.expect_arrow()
   let prev_async = self.in_async
   self.in_async = true
   let body = if self.check(LBrace) {

@@ -376,6 +376,9 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
   if lexer.unterminated_regex {
     grammar_misuses.push("unterminated regular expression literal")
   }
+  if lexer.unterminated_string {
+    grammar_misuses.push("unterminated string literal")
+  }
   for _i in 0..<lexer.empty_radix_literal_count {
     grammar_misuses.push("hexadecimal digit expected")
   }

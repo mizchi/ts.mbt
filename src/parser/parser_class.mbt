@@ -2052,7 +2052,24 @@ fn Parser::parse_class_body(
               }
               let prev_static_block = self.in_static_block
               self.in_static_block = true
+              // TS1107 ("Jump target cannot cross function boundary"): a
+              // static block IS a function boundary, so a label declared
+              // outside it is not a jump target inside it. Fourteen sites
+              // in three files already save / clear / restore
+              // `self.labels` around a function body and this fifteenth
+              // one did not, so `label: while (v) { class C { static {
+              // break label } } }` found the outer label and stayed
+              // silent (classStaticBlock8). Labels declared INSIDE the
+              // block still resolve, which is what that file's second
+              // class checks.
+              let saved_labels : Array[String] = []
+              while self.labels.length() > 0 {
+                saved_labels.push(self.labels.pop().unwrap())
+              }
               let block = self.parse_block()
+              while saved_labels.length() > 0 {
+                self.labels.push(saved_labels.pop().unwrap())
+              }
               self.in_static_block = prev_static_block
               elements.push(StaticBlock(block))
               // TS2448: a top-level class's static block executes at class

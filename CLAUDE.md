@@ -32,7 +32,7 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2468 / MISS 266 / FP 0 /
+  is a soundness bug, and there are none (TP 2479 / MISS 255 / FP 0 /
   PFLEGAL 0 / TN 1750). That gate compares against vendored TS7 name
   lists, so it says nothing about WHAT a rejected file's error was, and
   nothing at all about a hand-written legal neighbour. A real compiler
@@ -56,8 +56,8 @@ product surfaces now.
   were exhausted and that only large type-machinery features remained, and
   that was measured against the **TS6** oracle — under TS7, **128 of the
   388 missing files are flippable by a pure-grammar (TS1xxx) rule** and 91
-  of them need no type judgement anywhere. Seventeen batches have taken
-  **+131 TP at FP 0** so far, and most of their items were BUGS rather than
+  of them need no type judgement anywhere. Eighteen batches have taken
+  **+142 TP at FP 0** so far, and most of their items were BUGS rather than
   missing features — one of them a rule the repo had already written and
   applied to every declaration kind except namespaces. The first:
   `eval`/`arguments` as an assignment target was checked at two of the four
@@ -348,6 +348,68 @@ product surfaces now.
   passing FEWER arguments than parameters is legal and they come out
   `undefined`, which `contextuallyTypedIife` states in a section headed
   "missing arguments". Too many is still TS2554.
+  Batch CM is +11 across nine small rules, and its two most useful
+  findings are about the PARSER. The ranking came from re-asking the
+  question with the CL probe: every remaining MISS file run through the
+  real compiler under its own harness header, grouped by the codes it
+  actually produced. That is why the rules are small — the top of the
+  list is deep type machinery and the long tail is 67 codes with exactly
+  ONE file each, mostly grammar. TS2583 (`SharedArrayBuffer` / `Atomics`
+  under a pre-es2017 `lib`) is batch CH's TS2591 with a different
+  allowlist question; TS2350 is TS2348's mirror, with `Void` / `Any` /
+  `Unknown` abstaining and a top-level function DECLARATION excluded by
+  NAME rather than by inference, because an old-style JavaScript
+  constructor is exactly the `Func` shape and `new Point(1)` is how such
+  code is meant to be used; TS1002 is batch CJ's unterminated regex in
+  the sibling scanner, where the catch-all arm consumed `\n` and a
+  string silently swallowed the rest of the file; TS2432, TS2448 and
+  TS18038 are declaration- or flag-shaped and needed no type
+  information. TS1200 went in as `Parser::expect_arrow` because
+  expression parsing consumes `=>` at EIGHT sites, and the restriction
+  had to be probed rather than assumed: a break AFTER the arrow is
+  legal, and so is one before a TYPE-position arrow, so `parser_type` is
+  untouched. TS2448 was written for BOTH pattern kinds at once —
+  `const [a = b, b = 1] = xs` is the same error and was a MISS before
+  the generalization.
+  The parser findings are two more of the same family. `export import a
+  = A` inside a namespace body pushed a TYPE alias and no value, while
+  the plain `import a = A` spelling has always pushed both — an
+  import-equals alias binds a value as well as a type, so the exported
+  spelling was missing half of itself, and that is what made TS2708
+  false-positive on `exportImportAlias`. And a class STATIC BLOCK is the
+  fifteenth of fifteen sites that must save / clear / restore
+  `self.labels` around a function body, and the only one that did not,
+  so `label: while (v) { class C { static { break label } } }` found the
+  outer label (TS1107).
+  TS2708 also cost a false start worth recording, because it is a
+  property of this parser rather than a judgement about TypeScript:
+  `parser_namespace_lower` lowers EVERY namespace — instantiated or not
+  — to `var N = N || {}`, so at script top level the module env and
+  `globals` both bind the name whatever the body holds, and the first
+  draft fired only inside a function, where the env holds real locals.
+  `ctx.script_top_level` tells the two apart. The same artifact is why a
+  type-only namespace NESTED in another is not covered:
+  `export namespace inA { … }` records a value for `inA`.
+  TS1002 shipped the batch's one PFLEGAL and the corpus named the file:
+  U+2028 / U+2029 are line terminators for the grammar and were once
+  illegal inside a string literal, but ES2019 made them legal —
+  `allowUnescapedParagraphAndLineSeparatorsInStringLiteral` is
+  TS7-ACCEPTED. They stay in `scan_regex`'s break, where a regex still
+  may not cross one, and are out of `scan_string`'s.
+  Two REJECTIONS carry more information than the rules. Wiring
+  `unresolved_type_references` into the conformance path is the
+  highest-yield-looking gap on the whole list — the function has existed
+  for years and is wired into `check_module` ONLY, so `type T =
+  Undeclared` is silent while `var q: Undeclared` fires — and it
+  produces FORTY-PLUS false positives, because `check_type` carries one
+  flat list of type-parameter names that models a declaration's own
+  parameters and NOT the binders inside a type (a call signature's own
+  `<T>`, an `infer A`, a mapped type's key). And TS6133 for an unused
+  `#private` member is deferred on the FAIL DIRECTION rather than the
+  effort: every formulation needs a complete walk over the class body or
+  a complete reference-recording channel, and a missed read makes the
+  member look unused, which is a false positive — the one direction the
+  budget does not allow.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

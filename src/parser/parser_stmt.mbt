@@ -1168,6 +1168,16 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
   if self.check(Ident("await")) {
     let _ = self.advance()
     is_await = true
+    // TS18038 ("'for await' loops cannot be used inside a class static
+    // block"): a static block is not an async context, and unlike the
+    // TS2852 / TS18054 `using` family this one needs no other condition —
+    // `classStaticBlock23` puts the same loop inside an `async function`
+    // to show that the enclosing function does not rescue it.
+    if self.in_static_block {
+      self.grammar_misuses.push(
+        "`for await` loops cannot be used inside a class static block",
+      )
+    }
   }
   let _ = self.expect(LParen)
 

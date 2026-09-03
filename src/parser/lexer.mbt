@@ -175,6 +175,12 @@ pub struct Lexer {
   // closing `/`. Distinct from `invalid_radix_digit_count` and friends
   // because a regex cannot span a line at all.
   mut unterminated_regex : Bool
+  // TS1002: a string literal that reaches a raw line terminator or the end
+  // of the file before its closing quote. The scanner's catch-all arm
+  // consumed ANY character including `\n`, so an unterminated string
+  // swallowed the rest of the file silently — the same shape as the
+  // unterminated-regex case below.
+  mut unterminated_string : Bool
   // TS1125: a radix prefix with no digits after it — `0x`, `0b`, `0o`.
   // The existing `invalid_radix_digit_count` answers a different
   // question ("a digit outside this radix"), so `0x` alone slipped
@@ -274,6 +280,7 @@ pub fn Lexer::new(src : String) -> Lexer {
     unterminated_template: false,
     unterminated_block_comment: false,
     unterminated_regex: false,
+    unterminated_string: false,
     empty_radix_literal_count: 0,
     escaped_keyword_count: 0,
     unbalanced_regex_group_count: 0,
@@ -1260,7 +1267,27 @@ fn Lexer::scan_string(self : Lexer, quote : Char) -> TokenKind {
   buf.write_string(self.src[start:self.pos].to_owned())
   while true {
     match self.peek() {
-      None => break // (errorsimplehandle)
+      None => {
+        // TS1002: end of file before the closing quote.
+        self.unterminated_string = true
+        break
+      }
+      // TS1002: a RAW line terminator ends a string literal
+      // unterminated. An escaped one (`\` then a newline) is a line
+      // continuation and is handled in the escape arm below, so this only
+      // sees the illegal form.
+      //
+      // U+2028 / U+2029 are deliberately NOT here. They are line
+      // terminators for the grammar and were once illegal in a string
+      // literal, but ES2019 made them legal — and the corpus says so by
+      // name: `allowUnescapedParagraphAndLineSeparatorsInStringLiteral`
+      // is TS7-ACCEPTED and was the one PFLEGAL this rule shipped before
+      // measurement. (`scan_regex`'s line-terminator break DOES include
+      // them, because a regex literal still may not cross one.)
+      Some('\n') | Some('\r') => {
+        self.unterminated_string = true
+        break
+      }
       Some(c) =>
         if c == quote {
           let _ = self.advance()

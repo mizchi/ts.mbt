@@ -2158,10 +2158,160 @@ need parser-wide changes).
 State: whole-corpus **TP 2457 / MISS 277 / FP 0 / PFLEGAL 0 / TN 1750**
 (classified 4484, NOTRUN 14) via
 `scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0`.
-Seventeen batches: BU +9, BV +14, BW +13, BX +10, BY +7, BZ +1, CA +0,
+Eighteen batches: BU +9, BV +14, BW +13, BX +10, BY +7, BZ +1, CA +0,
 CB +10, CC +6, CD +4, CE +6, CF/CG +19, CH +7, CI +5, CJ +6, CK +3,
-CL +11, for **+131 TP at FP 0** (TP 2468 / MISS 266 / FP 0 / PFLEGAL 0 /
-TN 1750).
+CL +11, CM +11, for **+142 TP at FP 0** (TP 2479 / MISS 255 / FP 0 /
+PFLEGAL 0 / TN 1750).
+
+### Batch CM (2026-09-03): nine rules, and two things the parser hides
+
++11 files (TP 2468 -> 2479, MISS 266 -> 255, FP 0, PFLEGAL 0). Nine small
+rules, and the two most useful findings are about the PARSER rather than
+the checker.
+
+**Where the ranking came from.** `checker_miss_buckets.mjs` reads codes
+out of the submodule's TS6-era baselines, which is an approximation and no
+answer at all for a file with no baseline. With `scripts/tsc_probe.mjs`
+from batch CL there is a better source, so every remaining MISS file was
+run through the real compiler under its own harness header and grouped by
+the codes it actually produced. That ranking is what this batch worked
+from, and it is the reason the rules are so small: the top of the list is
+deep type machinery, and the long tail is 67 codes with exactly one file
+each — mostly grammar.
+
+**TS2583** (2 files) — `SharedArrayBuffer` and `Atomics` arrive with
+`lib.es2017.sharedmemory`, so under an older `lib` they are not declared.
+Same shape as batch CH's TS2591 for the `@types/node` names, same reason
+for leaving the generated allowlist alone: `is_lib_global_value` answers
+"could the platform have provided this", and only name resolution asks
+"with THIS lib, did it".
+
+**TS2350** (2 files) — the mirror of batch CL's TS2348. A
+call-signature-only type has no construct signature, so `new` over it is
+legal in exactly the case the message names, a signature returning
+`void`. Provenance is the same argument: `Func` and the `<call>` sentinel
+come from a written signature. The return type is what could be wrong, so
+`Any` / `Unknown` / `Void` / a `Named` reference all abstain. A top-level
+function DECLARATION is excluded by name rather than by inference,
+because an old-style JavaScript constructor
+(`function Point(x) { this.x = x }`) is exactly that shape and
+`new Point(1)` is how such code is meant to be used. `new Symbol()` and
+`new BigInt()` get their own arm: they are the two lib functions people
+actually get wrong (both throw at runtime) and their types are not
+modelled here.
+
+**TS2708** (1 file) — a namespace whose body declares nothing that exists
+at runtime is erased, so its name has no value meaning. Two things had to
+be got right, and both were wrong first:
+
+- The check has to sit ABOVE every resolution return in
+  `check_undefined_name`, and the reason is a property of THIS parser:
+  `parser_namespace_lower` lowers every namespace — instantiated or not —
+  to `var N = N || {}`, so at script top level the module env and
+  `globals` both bind the name whatever the body holds. The first draft
+  fired only inside a function, which is where the env holds real locals.
+  `ctx.script_top_level` (batch CL) is what tells the two apart.
+- An `import a = A` alias COUNTS as a runtime declaration when the
+  aliased namespace is instantiated. Missing that shipped a false
+  positive on `exportImportAlias` (TS7-ACCEPTED), and the corpus caught
+  it — see the parser finding below.
+
+A type-only namespace NESTED in another is not covered, for the same
+lowering reason: `export namespace inA { … }` records a value for `inA`.
+`importStatementsInterfaces` stays a MISS.
+
+**TS2448** (1 file) — a destructuring default may read a binding declared
+EARLIER in the same pattern and not one at or after its own position.
+Decided from declaration order alone: no types, no flow analysis. Written
+for BOTH pattern kinds, because `const [a = b, b = 1] = xs` is TS2448
+just as much as the object form — probed, and it was a MISS before the
+generalization. The nested-closure form (`{ e = () => f, f = 1 }`) is
+legal in tsc and silent here, so that abstention happens to be exactly
+right rather than merely safe.
+
+**TS18038 + TS1107** (2 files) — both class static blocks, and the second
+is the label family again. `for await` inside a static block needs no
+other condition: `classStaticBlock23` puts the same loop inside an
+`async function` to show the enclosing function does not rescue it. And a
+static block IS a function boundary, so a label declared outside it is
+not a jump target inside it — batch CF's note says fourteen sites in
+three files save / clear / restore `self.labels` around a function body,
+and this fifteenth one did not, so
+`label: while (v) { class C { static { break label } } }` found the outer
+label. Clearing them makes the existing "Undefined label" parse rejection
+fire, and the corpus file's second class (labels declared INSIDE the
+block) is what checks the restore.
+
+**TS1200** (1 file) — a line break before an expression arrow's `=>`. The
+restriction is one-sided and was probed rather than assumed: a break
+AFTER the arrow is fine, and a TYPE-position arrow may break before it,
+which is why `parser_type`'s arrow sites are untouched. It went in as
+`Parser::expect_arrow` because expression parsing consumes that token in
+EIGHT places.
+
+**TS1002** (1 file) — a string literal reaching a raw line terminator or
+EOF. The scanner's catch-all arm consumed ANY character including `\n`,
+so an unterminated string silently swallowed the rest of the file — the
+same shape as batch CJ's unterminated regex, in the sibling scanner.
+
+**TS2432** (1 file) — in a merged enum, only one declaration may omit the
+initializer for its first element. Declaration shape only, and
+`is_computed` is what distinguishes "no initializer at all" from "an
+initializer we did not fully parse". The grouping key is the namespace
+PATH plus the enum name, because the corpus case is three separate
+`namespace M` blocks each holding `export enum E1`.
+
+**The parser findings.** Two rules were recorded as values at ONE of the
+two places their syntax can appear:
+
+- `export import a = A` inside a namespace body pushed a type alias and
+  no VALUE, while the plain `import a = A` spelling in
+  `parse_module_block` has always pushed both. An import-equals alias
+  binds a value as well as a type, so the exported spelling was simply
+  missing half of itself — twenty-fifth instance of the family, and the
+  thing that made TS2708 false-positive.
+- The label-stack clearing above is the same shape at the fifteenth of
+  fifteen sites.
+
+**REJECTED with measurement: wiring `unresolved_type_references` into the
+conformance path.** It is the highest-yield-looking gap on the list —
+`type T = Undeclared` and `type T<X> = X extends Undeclared ? … : …` are
+both silent while `var q: Undeclared` fires, because an ambient VALUE
+declaration reaches the expression checker by another route, and the
+function is wired into `check_module` only. Wiring it in produced
+FORTY-PLUS false positives, and their shape says why it has to stay
+where it is: `check_type` carries one flat `local` list of
+type-parameter names, which models a declaration's own parameters and NOT
+the binders that appear inside a type — a call or construct signature's
+own `<T>`, an `infer A`, a mapped type's key. So
+`objectTypesIdentityWithGenericCallSignatures*`, `inferTypes*`,
+`thisTypeIn*` and `mappedTypes*` all report their own bound parameters as
+undeclared. The narrow version (report only when the type provably
+contains no binder) was not attempted: the whole TS2304 solo set is four
+files, two of them these type positions, and "provably no binder" is
+another guess about the completeness of a list.
+
+**Also measured and not taken:**
+
+- **The permissive filter is not the blocker.** Running the whole corpus
+  with it OFF flags 8 of the 277 MISS files at a cost of 49 false
+  positives — recorded in batch CL and repeated here because it is the
+  fact that decides where to look.
+- **TS6133** (an unused `#private` member, 2 files) is deferred on the
+  FAIL DIRECTION rather than the effort. Every formulation needs either a
+  complete AST walker over the class body or a complete
+  reference-recording channel in the parser, and a missed read makes the
+  member look unused — that is a false positive, the one direction the
+  budget does not allow. The reference mangling happens at four-plus
+  sites and sub-parsers carry their own `grammar_misuses` array, so
+  "complete" is not something the current shape can promise.
+- **TS2403 for two CLASS types** (`var x: C; var x: D`) is silent because
+  `structural_named_key` expands a class to its FIELDS and not its
+  methods, so `C` and `D extends C { foo() {} }` produce the same key.
+  Including methods would need a private/protected abstention (private
+  members are nominal, so such a class is identical to no object type),
+  and it is worth 1 of the 5 TS2403 files — the other four need `typeof`,
+  spread and enum-assignability reasoning.
 
 ### Batch CL (2026-09-03): a real compiler as the legal-neighbour oracle
 

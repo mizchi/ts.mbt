@@ -3377,6 +3377,17 @@ fn Parser::parse_export_stmt(
       type_param_bounds: [],
       type_: @ast.TsType::Any,
     })
+    // An import-equals alias binds a VALUE as well as a type when its
+    // target is instantiated (`export import a = A` emits `var a = A`),
+    // and this path recorded only the type. The plain, non-`export`
+    // spelling in `parse_module_block` has always recorded the value, so
+    // `import a = A` was a value at one of the two places it can appear
+    // and not the other — which made `namespace C { export import a = A }`
+    // read as a namespace with nothing at runtime, and shipped a TS2708
+    // false positive on `exportImportAlias` (TS7-ACCEPTED) before the
+    // corpus caught it. The type is `Any` here for the same reason it is
+    // there: the target is not resolved at parse time.
+    values.push({ name, type_: @ast.TsType::Any })
     self.skip_until_semicolon()
     return
   }
