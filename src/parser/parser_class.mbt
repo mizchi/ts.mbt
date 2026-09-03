@@ -1920,6 +1920,13 @@ fn Parser::parse_class_body(
   // Class body is implicitly strict mode
   let prev_strict = self.in_strict
   self.in_strict = true
+  // TS1207: which get/set accessors carried a decorator, keyed
+  // `<static>:<kind>:<name>`. Decorating BOTH halves of a get/set pair is
+  // an error — one descriptor covers both, so two decorators would be
+  // applied to the same thing. Accumulated per class BODY (this function
+  // is the one place a class's members are parsed, so there is no second
+  // site to forget) and decided at the end.
+  let decorated_accessors : Array[String] = []
   let mut ctor : @ast.TsFunc? = None
   // Count constructor *implementations* (a `constructor(...) { ... }` with a
   // real body). Two or more is TS2392 ("Multiple constructor implementations
@@ -2289,6 +2296,15 @@ fn Parser::parse_class_body(
         self.invalid_decorator_uses.push("class member")
       }
     }
+    if member_decorated {
+      match accessor_kind {
+        Some(kind) =>
+          decorated_accessors.push(
+            (if is_static { "s:" } else { "i:" }) + kind + ":" + method_name,
+          )
+        None => ()
+      }
+    }
     // TS1031: `declare` may modify a class FIELD and nothing else, so any
     // member whose name is followed by a call signature is an error. The
     // rule was written for the constructor alone
@@ -2532,6 +2548,23 @@ fn Parser::parse_class_body(
       // overload signature). Used below to count constructor implementations
       // for TS2392.
       let has_body_block = not(consumed_semi) && self.check(LBrace)
+      // TS1249: a decorator can only decorate a method IMPLEMENTATION,
+      // not an overload signature. A bodiless method in an ambient
+      // (`declare class`) or abstract position is not an overload — it is
+      // the whole declaration — and legacy decorators accept those
+      // (decoratorInAmbientContext), so both are excluded. `constructor`
+      // is excluded because a decorated constructor is TS1206, a
+      // different rule that already fires above.
+      if member_decorated &&
+        not(has_body_block) &&
+        not(is_abstract_member) &&
+        not(has_declare) &&
+        not(self.in_ambient_module) &&
+        method_name != "constructor" {
+        self.grammar_misuses.push(
+          "a decorator can only decorate a method implementation, not an overload",
+        )
+      }
       // (Method-level TS7010 is intentionally not recorded: a bodiless
       // method with no implementation at all already reports TS2391, and
       // tsc does not flag an overload signature whose implementation
@@ -2764,6 +2797,41 @@ fn Parser::parse_class_body(
     }
   }
   let _ = self.expect(RBrace)
+  // TS1207: a name whose GETTER and SETTER are both decorated. Checked
+  // here, where the whole body has been seen, and keyed on static-ness
+  // because the static and instance sides are separate members.
+  //
+  // Two gates, and the second is a limitation rather than a rule.
+  //
+  // LEGACY decorators only: under STANDARD ES decorators each accessor
+  // gets its own decorator application, so decorating both halves is
+  // legal. Seven corpus false positives in `esDecorators/` said so, and
+  // every probe written for this rule had carried
+  // `@experimentalDecorators: true`, so none of them could see it — the
+  // same gate direction as TS1206 for a `#private` member.
+  //
+  // And class DECLARATIONS only. Inside a class EXPRESSION body the
+  // decorator-mode flag is not reliable: `(class E { @dec get x() {…}
+  // @dec set x(v) {…} })` with NO directive fires while the identical
+  // class declaration stays silent, so some parser on that path carries
+  // the `true` default instead of the header-derived value. That is a
+  // pre-existing inconsistency affecting every decorator-mode-gated
+  // rule, not something this one should paper over, so the class
+  // expression is skipped and the inconsistency is recorded in TODO.md.
+  // It costs nothing here — `decoratorOnClassAccessor7` is six class
+  // declarations.
+  let ts1207_applies = self.experimental_decorators &&
+    not(self.in_class_expr_body)
+  for entry in (if ts1207_applies { decorated_accessors } else { [] }) {
+    if entry.contains(":get:") {
+      let counterpart = entry.replace(old=":get:", new=":set:")
+      if decorated_accessors.contains(counterpart) {
+        self.grammar_misuses.push(
+          "decorators cannot be applied to multiple get / set accessors of the same name",
+        )
+      }
+    }
+  }
   self.in_strict = prev_strict
   let mut overload_static_mix = false
   for name in ov_instance.keys() {

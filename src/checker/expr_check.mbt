@@ -95,6 +95,10 @@ priv struct Resolver {
   // shared-memory surface (`Atomics.waitAsync`) is missing (TS2550).
   mut lib_lacks_es2017 : Bool
   mut lib_lacks_es2024 : Bool
+  // `@noPropertyAccessFromIndexSignature`: dot access to an
+  // index-signature member is TS4111 only when this is on. Default off,
+  // matching the compiler.
+  mut no_property_access_from_index_signature : Bool
 }
 
 ///|
@@ -175,6 +179,7 @@ fn Resolver::empty() -> Resolver {
     no_implicit_any: false,
     lib_lacks_es2017: false,
     lib_lacks_es2024: false,
+    no_property_access_from_index_signature: false,
   }
 }
 
@@ -18256,6 +18261,7 @@ fn check_call_args_in_expr(
       check_member_accessibility(env, ctx, recv, prop)
       check_super_abstract_access(ctx, recv, prop)
       check_namespace_or_enum_member_access(env, ctx, recv, prop)
+      check_dot_access_to_index_signature(env, ctx, recv, prop)
       // TS2339 on a `Window & typeof globalThis` receiver (`declare let
       // win: Window & typeof globalThis; win.hi`): the property must be a
       // declared module value or a known lib / window global. Errors
@@ -23988,6 +23994,67 @@ fn check_static_index_write(
 }
 
 ///|
+/// TS4111 ("Property 'foo' comes from an index signature, so it must be
+/// accessed with ['foo']") — only under
+/// `@noPropertyAccessFromIndexSignature`, which is off by default in the
+/// compiler and so off by default here.
+///
+/// Decided from the interface's DECLARATION: the receiver resolves to a
+/// named interface that declares a string index signature, and `prop` is
+/// not one of its own fields. Two exclusions keep it sound, and both were
+/// probed rather than reasoned:
+///
+///   - `Object.prototype` members (`b.toString`) come from the prototype
+///     and not the index signature, so they stay legal;
+///   - a member the interface declares (`c.foo` where `C` has both a
+///     `foo` and an index signature) is a real property access.
+///
+/// Bracket access never reaches here — this arm is the DOT form — which
+/// is the whole point of the diagnostic. Inherited members abstain
+/// entirely: only the interface's own `fields` are consulted, so a name
+/// declared on a BASE would otherwise be reported, and that is a
+/// false-positive direction — so an interface with any `extends` is
+/// skipped.
+fn check_dot_access_to_index_signature(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  recv : @ast.TsExpr,
+  prop : String,
+) -> Unit {
+  if not(ctx.resolver.no_property_access_from_index_signature) {
+    return
+  }
+  if object_prototype_member(prop) is Some(_) {
+    return
+  }
+  let recv_ty = prune_nullish(ctx.resolver, infer_expr(env, ctx.resolver, recv))
+  guard recv_ty is Named(iface_name) else { return }
+  guard ctx.resolver.interfaces.get(iface_name) is Some(iface) else { return }
+  if iface.extends_names.length() > 0 {
+    return
+  }
+  let mut has_string_index = false
+  for sig in iface.index_signatures {
+    if sig.0 is String_ {
+      has_string_index = true
+    }
+  }
+  if not(has_string_index) {
+    return
+  }
+  for f in iface.fields {
+    if f.0 == prop {
+      return
+    }
+  }
+  record_unfiltered(
+    ctx,
+    "PropAccess `.\{prop}`",
+    "property `\{prop}` comes from an index signature, so it must be accessed with brackets",
+  )
+}
+
+///|
 /// TS2339 on qualified namespace / enum member access:
 ///   - `A.y` where the runtime namespace `A` *declares* `y` but never
 ///     exports it ("Property 'y' does not exist on type 'typeof A'").
@@ -27425,6 +27492,9 @@ fn check_module_function_bodies_layered(
     if gm == "<lib-lacks-es2024>" {
       resolver.lib_lacks_es2024 = true
     }
+    if gm == "<nopropertyaccessfromindexsignature-on>" {
+      resolver.no_property_access_from_index_signature = true
+    }
   }
   // Brand-keyed private declarations recorded by the parser (own layer plus
   // the outermost root -- namespace bodies re-parse with a fresh parser, so
@@ -28240,6 +28310,14 @@ fn check_module_function_bodies_layered(
         continue
       }
       if gm == "<noimplicitoverride-on>" {
+        continue
+      }
+      // Marker, not an error: the @noPropertyAccessFromIndexSignature
+      // directive flag, consumed by TS4111. Every marker needs an entry
+      // here or it becomes a diagnostic verbatim — this one shipped as a
+      // report on its own first draft, which is a false positive on every
+      // file carrying the option.
+      if gm == "<nopropertyaccessfromindexsignature-on>" {
         continue
       }
       // Marker, not an error: the @allowUnreachableCode directive flag,

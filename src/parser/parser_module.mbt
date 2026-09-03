@@ -308,8 +308,66 @@ fn Parser::scan_skipped_enum_initializer(
     Some(e) => {
       self.record_enum_string_arith(e)
       self.record_enum_await_yield(e)
+      self.record_const_enum_nonconstant(e)
     }
     None => ()
+  }
+}
+
+///|
+/// TS2474 ("const enum member initializers must be constant expressions")
+/// for the one shape that is decidable without evaluating anything: a
+/// CALL. A call result is never a constant enum expression, whatever it
+/// returns.
+///
+/// Everything else abstains, and the boundary was probed rather than
+/// reasoned. Legal in a `const enum`, all confirmed against the real
+/// compiler: arithmetic on literals (`199 * 2`), a shift (`1 << 4`), a
+/// unary minus, a reference to another member of the same enum (bare `a`
+/// or dotted `D.a`), and a reference to an outer `const` — which is why a
+/// bare identifier and a property access must NOT fire, and why
+/// `constEnum2`'s own `g = CONST` line is not among the two tsc reports.
+/// `"x".length` IS TS2474 and stays a MISS: it is a property access, and
+/// telling it apart from `D.a` needs resolution this does not do.
+fn Parser::record_const_enum_nonconstant(
+  self : Parser,
+  e : @ast.TsExpr,
+) -> Unit {
+  if not(self.in_const_enum) {
+    return
+  }
+  if expr_contains_call(e) {
+    self.grammar_misuses.push(
+      "const enum member initializers must be constant expressions",
+    )
+  }
+}
+
+///|
+/// True when `e` invokes something anywhere inside it. A missing arm
+/// loses a finding rather than inventing one, which is the right
+/// direction for TS2474.
+fn expr_contains_call(e : @ast.TsExpr) -> Bool {
+  match e {
+    Call(_, _)
+    | CallExpr(_, _)
+    | MethodCall(_, _, _)
+    | New(_, _)
+    | NewExpr(_, _) => true
+    BinOp(_, a, b) | Seq(a, b) | IndexAccess(a, b) =>
+      expr_contains_call(a) || expr_contains_call(b)
+    UnaryOp(_, a)
+    | As(a, _)
+    | Satisfies(a, _)
+    | PureCall(a)
+    | TypeArgs(_, a)
+    | NonNull(a)
+    | Await(a)
+    | YieldStar(a) => expr_contains_call(a)
+    Cond(c, a, b) =>
+      expr_contains_call(c) || expr_contains_call(a) || expr_contains_call(b)
+    PropAccess(r, _) => expr_contains_call(r)
+    _ => false
   }
 }
 
@@ -429,6 +487,12 @@ fn Parser::parse_enum_decl_after_enum_keyword(
   self.record_reserved_binding_name(name)
   let _ = self.expect(LBrace)
   let members : Array[@ast.TsEnumMember] = []
+  // TS2474 applies to a `const enum` and not to a plain one — the same
+  // initializer is legal in the latter — so the flag rides for the body.
+  // Saved and restored rather than cleared: enums do not nest, but the
+  // idiom is what keeps the next nesting construct from breaking it.
+  let prev_const_enum = self.in_const_enum
+  self.in_const_enum = is_const
   while !self.check(RBrace) && !self.check(Eof) {
     // TS1132 ("Enum member expected"): a comma reaching the TOP of this
     // loop had no member before it — a leading `enum E { , }` or a doubled
@@ -457,6 +521,7 @@ fn Parser::parse_enum_decl_after_enum_keyword(
     }
   }
   let _ = self.expect(RBrace)
+  self.in_const_enum = prev_const_enum
   self.consume_semicolon()
   { name, members, is_const, is_declare }
 }

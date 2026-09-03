@@ -37,6 +37,10 @@ pub struct Parser {
   // relies on), and a class inside an `async` function leaves `in_async`
   // true. Read by the `await using` rules (TS18054).
   mut in_static_block : Bool
+  // True while parsing the members of a `const enum`. TS2474 restricts
+  // those initializers to constant expressions, and a plain `enum`
+  // accepts the same initializer, so the flag is the whole difference.
+  mut in_const_enum : Bool
   labels : Array[String] // for labeled break/continue validation
   src : String
   allow_jsx : Bool
@@ -291,6 +295,7 @@ pub fn Parser::new_with_strict_and_jsx(
     in_switch: false,
     in_ambient_module: false,
     in_static_block: false,
+    in_const_enum: false,
     labels: [],
     src: "",
     allow_jsx,
@@ -424,6 +429,13 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
   if detect_no_implicit_override(head) {
     grammar_misuses.push("<noimplicitoverride-on>")
   }
+  // TS4111 fires only under `@noPropertyAccessFromIndexSignature: true`:
+  // reaching an index-signature member with dot notation is legal
+  // TypeScript by default and an error only when the option asks for the
+  // bracket form.
+  if detect_no_property_access_from_index_signature(head) {
+    grammar_misuses.push("<nopropertyaccessfromindexsignature-on>")
+  }
   // TS2318 evidence: lib-set directives that provably remove global types
   // the checker requires. `@noLib: true` removes ALL of them (every ran
   // conformance case carrying it errors — parser509698); an explicit
@@ -497,6 +509,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     in_switch: false,
     in_ambient_module: false,
     in_static_block: false,
+    in_const_enum: false,
     labels: [],
     src,
     allow_jsx,
@@ -985,6 +998,15 @@ fn detect_no_implicit_any(head : String) -> Bool {
 fn detect_no_implicit_override(head : String) -> Bool {
   head.contains("@noImplicitOverride: true") ||
   head.contains("@noImplicitOverride:true")
+}
+
+///|
+/// True when the conformance header enables
+/// `@noPropertyAccessFromIndexSignature`. `head` is the case-preserved
+/// leading window.
+fn detect_no_property_access_from_index_signature(head : String) -> Bool {
+  head.contains("@noPropertyAccessFromIndexSignature: true") ||
+  head.contains("@noPropertyAccessFromIndexSignature:true")
 }
 
 ///|

@@ -16101,3 +16101,84 @@ test "expr_check: lib era, namespace values, new over a call signature (batch CM
     @test.assert_eq(issues(src), 0)
   }
 }
+
+///|
+/// Batch CO: TS4111, TS1207, TS1249 and TS2474 — four one-file rules from
+/// the long tail of the compiler-probed ranking.
+///
+/// Every entry below, firing and silent alike, was checked against the
+/// local TypeScript compiler with `scripts/tsc_probe.mjs`. Two of the four
+/// have boundaries that could not have been reasoned out: a `const enum`
+/// accepts `1 << 4` and a reference to an outer `const` while rejecting a
+/// call, and TS1249's ambient form is where tsc 6.0.3 and the TS7 oracle
+/// DISAGREE — `decoratorInAmbientContext` is TS7-accepted, so the ambient
+/// and abstract exclusions are what keep this at FP 0.
+test "expr_check: index-signature dot access, decorator placement, const enums (batch CO)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // TS4111: dot access to an index-signature member, with and without
+      // a declared member of another name alongside it.
+      "// @noPropertyAccessFromIndexSignature: true\ninterface B { [k: string]: string }\ndeclare const b: B;\nb.foo;",
+      "// @noPropertyAccessFromIndexSignature: true\ninterface C { foo: string; [k: string]: string }\ndeclare const c: C;\nc.bar;",
+      // TS1207: both halves of one get/set pair decorated.
+       "// @experimentalDecorators: true\ndeclare function d1(t: any, k: string, x: any): any;\nclass E { @d1 get x() { return 0; } @d1 set x(v: number) { } }",
+      // TS1249: a decorator on a bodiless overload signature.
+       "// @experimentalDecorators: true\ndeclare function dec(t: any, k: string, x: any): any;\nclass C {\n  @dec\n  method()\n  method() { }\n}",
+      // TS2474: a call in a `const enum` member initializer.
+       "const enum D { a = 10, b = Math.floor(1.5) }",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- silent: the LEGAL neighbour of each rule above
+  for
+    src in [
+      // TS4111 is OFF by default, which is how the compiler behaves.
+      "interface B { [k: string]: string }\ndeclare const b: B;\nb.foo;",
+      // A declared member, the bracket form, and an `Object.prototype`
+      // member reached by dot — the last comes from the prototype and not
+      // from the index signature.
+       "// @noPropertyAccessFromIndexSignature: true\ninterface A { foo: string }\ndeclare const a: A;\na.foo;",
+      "// @noPropertyAccessFromIndexSignature: true\ninterface C { foo: string; [k: string]: string }\ndeclare const c: C;\nc.foo;\nc[\"bar\"];",
+      "// @noPropertyAccessFromIndexSignature: true\ninterface B { [k: string]: string }\ndeclare const b: B;\nb.toString();",
+      // TS1207: ONE half decorated, two different names, and the static /
+      // instance split — all four are separate members.
+       "// @experimentalDecorators: true\ndeclare function d1(t: any, k: string, x: any): any;\nclass A { @d1 get x() { return 0; } set x(v: number) { } }",
+      "// @experimentalDecorators: true\ndeclare function d1(t: any, k: string, x: any): any;\nclass B { get x() { return 0; } @d1 set x(v: number) { } }",
+      "// @experimentalDecorators: true\ndeclare function d1(t: any, k: string, x: any): any;\nclass E2 { @d1 get y() { return 0; } @d1 set z(v: number) { } }",
+      "// @experimentalDecorators: true\ndeclare function d1(t: any, k: string, x: any): any;\nclass F2 { @d1 static get w() { return 0; } @d1 set w(v: number) { } }",
+      // Under STANDARD ES decorators each accessor gets its own decorator
+      // application, so decorating both halves is legal — seven corpus
+      // false positives in `esDecorators/` said so, and every probe first
+      // written for this rule carried `@experimentalDecorators: true`, so
+      // none of them could see it.
+       "declare var dec: any;\nclass E { @dec get x() { return 1; } @dec set x(v: number) { } }",
+      // A class EXPRESSION is skipped, and that is a limitation rather
+      // than a rule: with NO directive the expression form fires while
+      // the identical declaration stays silent, so the decorator-mode
+      // flag is not reliable on that parse path. Recorded in TODO.md.
+       "declare var dec: any;\n(class E { @dec get x() { return 1; } @dec set x(v: number) { } });",
+      // TS1249: a decorated IMPLEMENTATION is the whole point of the
+      // diagnostic; an ambient or abstract bodiless member is not an
+      // overload, and `decoratorInAmbientContext` is TS7-ACCEPTED even
+      // though tsc 6.0.3 reports it.
+       "// @experimentalDecorators: true\ndeclare function dec(t: any, k: string, x: any): any;\nclass C { @dec method() { } }",
+      "// @experimentalDecorators: true\ndeclare function dec(t: any, k: string, x: any): any;\ndeclare class E { @dec m(): void; }",
+      "// @experimentalDecorators: true\ndeclare function dec(t: any, k: string, x: any): any;\nabstract class F { @dec abstract g(): void; }",
+      // TS2474: everything a `const enum` initializer may legally be —
+      // arithmetic on literals, a shift, a unary minus, a bare reference
+      // to another member and a dotted one.
+       "const enum D { a = 10, b = 199 * 2, c = a - 1, d = 1 << 4, e = -5, f = D.a }",
+      // A reference to an outer `const` is a constant enum expression;
+      // `constEnum2`'s own `g = CONST` line is not among tsc's reports.
+       "const CONST = 9000 % 2;\nconst enum D { g = CONST }",
+      // The same call in a PLAIN enum is legal — the `const` is the whole
+      // difference.
+       "enum D { a = 10, b = Math.floor(1.5) }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}

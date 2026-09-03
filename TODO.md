@@ -2158,10 +2158,76 @@ need parser-wide changes).
 State: whole-corpus **TP 2457 / MISS 277 / FP 0 / PFLEGAL 0 / TN 1750**
 (classified 4484, NOTRUN 14) via
 `scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0`.
-Nineteen batches: BU +9, BV +14, BW +13, BX +10, BY +7, BZ +1, CA +0,
+Twenty batches: BU +9, BV +14, BW +13, BX +10, BY +7, BZ +1, CA +0,
 CB +10, CC +6, CD +4, CE +6, CF/CG +19, CH +7, CI +5, CJ +6, CK +3,
-CL +11, CM +11, CN +1, for **+143 TP at FP 0** (TP 2480 / MISS 254 /
-FP 0 / PFLEGAL 0 / TN 1750).
+CL +11, CM +11, CN +1, CO +4, for **+147 TP at FP 0**
+(TP 2484 / MISS 250 / FP 0 / PFLEGAL 0 / TN 1750) — the MISS <= 250
+target, met on the line.
+
+### Batch CO (2026-09-03): four one-file rules — MISS 250, the target
+
++4 files (TP 2480 -> 2484, MISS 254 -> 250, FP 0, PFLEGAL 0, TN 1750).
+The goal set for this line of work — TypeScript compatibility at
+MISS <= 250 — is met, on the line rather than under it.
+
+All four came out of the long tail the compiler-probed ranking exposed:
+67 error codes with exactly one MISS file each, mostly grammar. None
+needed type machinery.
+
+**TS4111** — dot access to an index-signature member under
+`@noPropertyAccessFromIndexSignature`. Decided from the interface's
+declaration: a string index signature, and `prop` not among its own
+fields. Two exclusions, both probed: `Object.prototype` members
+(`b.toString`) come from the prototype rather than the signature, and a
+declared member alongside a signature (`c.foo` where `C` has both) is a
+real property access. An interface with any `extends` abstains, since
+only its own `fields` are read and a base's member would otherwise be
+reported — a false-positive direction. Its first draft DID ship a false
+positive, of a kind specific to this parser: the flag marker landed in
+`grammar_misuses` and every non-marker entry there becomes a diagnostic
+verbatim, so `<nopropertyaccessfromindexsignature-on>` was reported as
+an error on every file carrying the option. Every marker needs an
+explicit skip entry.
+
+**TS1207** — decorators on both halves of one get/set pair. Two gates,
+and the second is a limitation rather than a rule:
+
+- LEGACY decorators only. Under standard ES decorators each accessor
+  gets its own decorator application, so decorating both halves is
+  legal — **seven corpus false positives** in `esDecorators/` said so.
+  Every probe written for the rule had carried
+  `@experimentalDecorators: true`, so not one of them could see it. Same
+  gate direction as batch CK's TS1206.
+- Class DECLARATIONS only. Inside a class EXPRESSION body the
+  decorator-mode flag is not reliable: `(class E { @dec get x() {…} @dec
+  set x(v) {…} })` with NO directive fires while the identical
+  declaration stays silent, so some parser on that path carries
+  `experimental_decorators`' `true` default instead of the
+  header-derived value. That is a pre-existing inconsistency affecting
+  every decorator-mode-gated rule, so the expression form is skipped
+  rather than papered over. It costs nothing here —
+  `decoratorOnClassAccessor7` is six class declarations. **Filed:** find
+  which constructor supplies the default on that path and thread the
+  header value through it.
+
+**TS1249** — a decorator on a bodiless overload signature. Ambient
+(`declare class`) and abstract members are excluded, and that exclusion
+is where tsc 6.0.3 and the TS7 oracle DISAGREE: 6.0.3 reports TS1249 for
+both, and `decoratorInAmbientContext` is TS7-ACCEPTED. Widening the rule
+to match the local compiler would have shipped a false positive, so the
+probe's answer was the wrong one to follow here — which is the caveat
+`scripts/tsc_probe.mjs` states in its own header, now with an instance.
+
+**TS2474** — a CALL in a `const enum` member initializer. A call result
+is never a constant enum expression, whatever it returns. Everything else
+abstains, and the boundary was entirely probed: legal in a `const enum`
+are arithmetic on literals, a shift, a unary minus, a reference to
+another member of the same enum (bare or dotted), and a reference to an
+outer `const` — which is why a bare identifier and a property access
+must not fire, and why `constEnum2`'s own `g = CONST` line is not among
+tsc's two reports. `"x".length` IS TS2474 and stays a MISS: telling it
+apart from `D.a` needs resolution this does not do. The same call in a
+plain `enum` is legal, so the `const` is the whole difference.
 
 ### Batch CN (2026-09-03): one rule, and a check whose gate was wrong
 

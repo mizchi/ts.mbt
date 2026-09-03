@@ -32,7 +32,7 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2480 / MISS 254 / FP 0 /
+  is a soundness bug, and there are none (TP 2484 / MISS 250 / FP 0 /
   PFLEGAL 0 / TN 1750). That gate compares against vendored TS7 name
   lists, so it says nothing about WHAT a rejected file's error was, and
   nothing at all about a hand-written legal neighbour. A real compiler
@@ -56,8 +56,8 @@ product surfaces now.
   were exhausted and that only large type-machinery features remained, and
   that was measured against the **TS6** oracle — under TS7, **128 of the
   388 missing files are flippable by a pure-grammar (TS1xxx) rule** and 91
-  of them need no type judgement anywhere. Nineteen batches have taken
-  **+143 TP at FP 0** so far, and most of their items were BUGS rather than
+  of them need no type judgement anywhere. Twenty batches have taken
+  **+147 TP at FP 0** so far, and most of their items were BUGS rather than
   missing features — one of them a rule the repo had already written and
   applied to every declaration kind except namespaces. The first:
   `eval`/`arguments` as an assignment target was checked at two of the four
@@ -447,6 +447,35 @@ product surfaces now.
   `implements A?.B`" as the thing it skips — with the asymmetry that
   keeps it sound: `extends A?.B` is legal, since an `extends` clause
   takes an expression.
+  Batch CO is +4 and takes MISS to 250, the target. All four came from
+  the long tail the compiler-probed ranking exposed — 67 codes with
+  exactly ONE miss file each — and none needed type machinery: dot
+  access to an index-signature member under
+  `noPropertyAccessFromIndexSignature`, decorators on both halves of a
+  get/set pair, a decorator on a bodiless overload, and a CALL in a
+  `const enum` initializer. Three of the four cost a false positive
+  first, and the three are different failure modes worth separating.
+  TS4111's was specific to THIS parser: the flag marker went into
+  `grammar_misuses`, where every non-marker entry becomes a diagnostic
+  verbatim, so the option's own marker was reported as an error on every
+  file carrying it — a marker needs an explicit skip entry or it IS a
+  finding. TS1207's was the legal neighbour again, and at scale: seven
+  corpus files in `esDecorators/` say that decorating both halves of a
+  pair is legal under STANDARD ES decorators, and every probe written
+  for the rule had carried `@experimentalDecorators: true`, so not one
+  of them could see it. And TS1249's is the one place the new probe
+  actively MISLEADS: tsc 6.0.3 reports it for an ambient or abstract
+  bodiless member, `decoratorInAmbientContext` is TS7-ACCEPTED, and
+  following the local compiler there would have shipped a false
+  positive — the caveat `tsc_probe.mjs` states in its own header, now
+  with an instance. TS1207 also turned up a pre-existing inconsistency
+  it declines to paper over: inside a class EXPRESSION body the
+  decorator-mode flag is not reliable, since
+  `(class E { @dec get x() {…} @dec set x(v) {…} })` with NO directive
+  fires while the identical declaration stays silent, so some parser on
+  that path carries `experimental_decorators`' `true` default instead of
+  the header value. Every decorator-mode-gated rule is wrong there; the
+  expression form is skipped and the fix is filed.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
