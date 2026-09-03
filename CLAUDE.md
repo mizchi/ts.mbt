@@ -32,7 +32,7 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2443 / MISS 291 / FP 0 /
+  is a soundness bug, and there are none (TP 2448 / MISS 286 / FP 0 /
   PFLEGAL 0 / TN 1750). The asymmetry is deliberate: we model a subset of
   TS, so a MISS is expected and an FP never is.
   That gate says how many we miss and nothing about WHICH, so "MISS 388"
@@ -45,8 +45,8 @@ product surfaces now.
   were exhausted and that only large type-machinery features remained, and
   that was measured against the **TS6** oracle — under TS7, **128 of the
   388 missing files are flippable by a pure-grammar (TS1xxx) rule** and 91
-  of them need no type judgement anywhere. Thirteen batches have taken
-  **+106 TP at FP 0** so far, and most of their items were BUGS rather than
+  of them need no type judgement anywhere. Fourteen batches have taken
+  **+111 TP at FP 0** so far, and most of their items were BUGS rather than
   missing features — one of them a rule the repo had already written and
   applied to every declaration kind except namespaces. The first:
   `eval`/`arguments` as an assignment target was checked at two of the four
@@ -231,6 +231,19 @@ product surfaces now.
   present, since `destructuringSameNames` contains illegal spellings too
   and was a TP whichever half fired; the unit suite caught it, because an
   earlier batch had written those three legal shapes down as cases.
+  Batch CI is +5 off one rule and one design decision. `++this`,
+  `++await 42`, `++1` and the `++(++y)` that ASI makes of
+  `x \n ++ \n ++ \n y` are all rejected by tsc and none was flagged; the
+  check rides on `record_assign_target_strict_misuse`, the function batch
+  BU built for the four write spellings, so there is no fifth place to
+  forget. It is a DENYLIST rather than the complementary allowlist on
+  purpose: "anything that is not `Var` / `PropAccess` / `IndexAccess`" is
+  the correct rule and the wrong implementation, because a target can
+  arrive wrapped in nodes that say nothing about writability (`TypeArgs`,
+  `As`, `Satisfies`, `PureCall`) and this file already records three
+  soundness bugs paid for a wrapper node whose default arm failed open. A
+  denylist fails the other way, costing a MISS rather than a false
+  positive.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

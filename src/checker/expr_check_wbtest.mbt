@@ -11228,9 +11228,13 @@ test "expr_check: always-error grammar misuses (TS1127/TS1160/TS2480/TS1359/TS10
   // TS1029: modifier order on class members.
   assert_true(issues("class C { static public x: number; }") > 0)
   assert_true(issues("class C { override static m() {} }") > 0)
+  // The base is declared FIRST: a class binding is block-scoped and its
+  // heritage clause runs at declaration time, so `class D extends B` above
+  // `class B` is TS2449 for a reason that has nothing to do with modifier
+  // order. This case is about the order of `public static override`.
   @test.assert_eq(
     issues(
-      "class D extends B { public static override m() {} }\nclass B { static m() {} }",
+      "class B { static m() {} }\nclass D extends B { public static override m() {} }",
     ),
     0,
   )
@@ -15617,6 +15621,60 @@ test "expr_check: node globals and overload implementations" {
        "function other<T>() {\n  function foo5<V>(x: T): string;\n  function foo5<V>(x: number): number;\n  function foo5<V>(x: any): any { return null; }\n  var r = foo5(1);\n}",
       // An ambient declaration asserts the implementation is elsewhere.
        "declare function foo(): void;\nfunction bar() { }", "function bar() { }\nfunction baz() { }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch CI: TS2357 / TS1109 — the operand of an assignment or an update
+/// operator must be a place a value can be written to.
+///
+/// The rule rides on `record_assign_target_strict_misuse`, which is
+/// already called at all four spellings JavaScript has for writing a
+/// binding (`=`, `+=`, `++x`, `x++`), so there is no fifth place to
+/// forget. It is a DENYLIST rather than the complementary allowlist on
+/// purpose: "anything that is not `Var` / `PropAccess` / `IndexAccess`"
+/// is the correct rule and the wrong implementation, because a target can
+/// arrive wrapped in nodes that say nothing about writability (`TypeArgs`,
+/// `As`, `Satisfies`, a `PureCall` marker) and this repo has already paid
+/// three soundness bugs for a wrapper node whose default arm failed open.
+/// A denylist fails the other way — an unlisted shape costs a MISS.
+///
+/// `x \n ++ \n ++ \n y` is in the firing list because ASI turns it into
+/// `x; ++(++y)`, whose outer operand is an update expression
+/// (parserS7.9_A5.7_T1). The neighbours that matter are the ones a
+/// program actually contains: `++(x)` (the parser strips the parens, so
+/// the shape reaching the check is a bare `Var`), `this.x = 1` (a
+/// property access on `this` is a place, unlike `this` itself), and
+/// `o["k"]++`.
+test "expr_check: assignment and update operands must be references" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  assert_true(issues("++this;") > 0)
+  assert_true(issues("async function f() { ++await 42; }") > 0)
+  assert_true(issues("async function f() { --await 42; }") > 0)
+  assert_true(issues("var x=0, y=0;\nx\n++\n++\ny") > 0)
+  assert_true(issues("++1;") > 0)
+  // --- silent
+  for
+    src in [
+      // The three writable forms, at each of the four spellings.
+      "var x = 1; ++x;", "var o = {a:1}; ++o.a;", "var a = [1]; ++a[0];", "var x = 1; x++;",
+      "var x = 1; x += 1;", "var o = {a:1}; o.a += 1;", "var o: any = {}; o[\"k\"]++;",
+      "for (var i = 0; i < 3; i++) { }",
+      // Parenthesized: legal, and the parens are gone by the time the
+      // check sees it, so this pins that the bare form is not flagged.
+       "var x = 1; ++(x);",
+      // A property access on `this` IS a place; `this` alone is not.
+       "class C { x: number = 0\n  m() { this.x = 1; } }",
+      // `await x++` is legal — the update is the operand of `await`, not
+      // the other way round.
+       "async function f() { var x = 42; await x++; }",
+      // The other unary operators only READ their operand.
+       "var x = 1; var y = -x; var z = !x;",
     ] {
     @test.assert_eq(issues(src), 0)
   }

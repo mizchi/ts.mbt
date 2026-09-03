@@ -375,6 +375,57 @@ fn Parser::record_assign_target_strict_misuse(
       }
     _ => ()
   }
+  self.record_invalid_assign_target(target)
+}
+
+///|
+/// TS2357 / TS1109: the operand of an assignment or an update operator has
+/// to be something a value can be WRITTEN to — a variable, a property
+/// access, or an element access. `++await 42`, `++this` and the `++ ++ y`
+/// that `x \n ++ \n ++ \n y` becomes after ASI are all rejected by tsc.
+///
+/// This is a DENYLIST rather than the complementary allowlist, and
+/// deliberately so. The allowlist reading — "flag anything that is not
+/// `Var` / `PropAccess` / `IndexAccess`" — is the correct rule and the
+/// wrong implementation, because a target can arrive wrapped in nodes that
+/// say nothing about writability (`TypeArgs`, `As`, `Satisfies`, a
+/// `PureCall` marker), and this repo has already paid three soundness bugs
+/// for a wrapper node whose default arm failed open. A denylist fails the
+/// other way: a shape nobody listed goes unflagged, which costs a MISS.
+///
+/// It rides on `record_assign_target_strict_misuse` so it reaches all four
+/// spellings JavaScript has for writing a binding (`=`, `+=`, `++x`,
+/// `x++`) without adding a fifth place to forget.
+fn Parser::record_invalid_assign_target(
+  self : Parser,
+  target : @ast.TsExpr,
+) -> Unit {
+  let invalid = match target {
+    // `this` is a binding the language never lets you write to. It is
+    // spelled as an ordinary `Var`, so it needs its own arm.
+    Var("this") => true
+    // An operator's RESULT is a value, not a place.
+    Await(_) | Yield(_) | YieldStar(_) | UnaryOp(_, _) | BinOp(_, _, _) => true
+    // A literal, likewise.
+    NumberLit(_)
+    | IntLit(_)
+    | BigIntLit(_)
+    | BoolLit(_)
+    | StringLit(_)
+    | NullLit
+    | ArrayLit(_)
+    | ObjectLit(_) => true
+    // A call's result is a value. (Destructuring patterns arrive as
+    // `AssignPattern` / `Target`, not as `ArrayLit` / `ObjectLit`, which
+    // is why the two literal forms above can be listed.)
+    Call(_, _) | CallExpr(_, _) | MethodCall(_, _, _) | New(_, _) => true
+    _ => false
+  }
+  if invalid {
+    self.record_suppressible_grammar_misuse(
+      "the operand of an assignment or an increment / decrement operator must be a variable or a property access",
+    )
+  }
 }
 
 ///|

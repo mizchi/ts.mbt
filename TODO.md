@@ -2155,11 +2155,39 @@ need parser-wide changes).
 
 ## TS Checker Conformance (current state, 2026-09-02 — TypeScript 7)
 
-State: whole-corpus **TP 2443 / MISS 291 / FP 0 / PFLEGAL 0 / TN 1750**
+State: whole-corpus **TP 2448 / MISS 286 / FP 0 / PFLEGAL 0 / TN 1750**
 (classified 4484, NOTRUN 14) via
 `scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0`.
-Thirteen batches: BU +9, BV +14, BW +13, BX +10, BY +7, BZ +1, CA +0,
-CB +10, CC +6, CD +4, CE +6, CF/CG +19, CH +7, for **+106 TP at FP 0**.
+Fourteen batches: BU +9, BV +14, BW +13, BX +10, BY +7, BZ +1, CA +0,
+CB +10, CC +6, CD +4, CE +6, CF/CG +19, CH +7, CI +5, for **+111 TP at
+FP 0**.
+
+### Batch CI (2026-09-03): the operand of an update must be a reference
+
+TS2357 / TS1109, +5 files off one rule. `++this`, `++await 42`,
+`--await 42`, `++1` and the `++(++y)` that ASI produces from
+`x \n ++ \n ++ \n y` (`parserS7.9_A5.7_T1`) are all rejected by tsc,
+and none was flagged.
+
+It rides on `record_assign_target_strict_misuse`, which is already called
+at all four spellings JavaScript has for writing a binding (`=`, `+=`,
+`++x`, `x++`) — the function batch BU built when `eval++` turned out to be
+checked at two of the four. So there is no fifth place to forget.
+
+It is a DENYLIST rather than the complementary allowlist, and that is the
+one design decision worth recording. "Flag anything that is not `Var` /
+`PropAccess` / `IndexAccess`" is the correct RULE and the wrong
+implementation: a target can arrive wrapped in nodes that say nothing
+about writability (`TypeArgs`, `As`, `Satisfies`, a `PureCall` marker),
+and CLAUDE.md already records three soundness bugs paid for a wrapper
+node whose default arm failed open. A denylist fails the other way — an
+unlisted shape costs a MISS, not a false positive.
+
+The neighbours that needed pinning are the ones a program actually
+contains: `++(x)` (the parser strips the parens, so what reaches the check
+is a bare `Var`), `this.x = 1` (a property access on `this` is a place,
+unlike `this` itself), `o["k"]++`, `await x++` (the update is the operand
+of `await`, not the reverse), and the read-only unary operators.
 
 ### Batch CH (2026-09-03): TS2591 and TS2391, +7 files
 
