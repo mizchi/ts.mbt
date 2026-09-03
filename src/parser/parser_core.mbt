@@ -213,6 +213,11 @@ pub struct Parser {
   // Member names that carried an `override` modifier while parsing class
   // bodies ("i:"/"s:" prefixed for instance/static). Drained per class
   // into `<override-member:...>` sentinels for TS4112/4113/4114.
+  // TS6133: how many times each `#private` NAME is declared in this
+  // file (a get/set pair counts twice — two declarations of one member).
+  // Compared against the number of `PrivateIdent` tokens carrying it,
+  // which is an exact upper bound on declarations + reads.
+  private_decl_counts : Map[String, Int]
   override_member_names : Array[String]
   // Token-position → "JSDoc `/* @__PURE__ */` annotation seen
   // just before this token". The lexer populates this when it
@@ -337,6 +342,7 @@ pub fn Parser::new_with_strict_and_jsx(
     interface_member_modifier_misuses: [],
     collected_class_dups: [],
     quoted_member_names: [],
+    private_decl_counts: {},
     override_member_names: [],
     pure_marker_positions: {},
     internal_marker_positions: {},
@@ -581,6 +587,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     interface_member_modifier_misuses: [],
     collected_class_dups: [],
     quoted_member_names: [],
+    private_decl_counts: {},
     override_member_names: [],
     pure_marker_positions: lexer.pure_marker_positions,
     internal_marker_positions: lexer.internal_marker_positions,
@@ -1050,6 +1057,14 @@ fn detect_no_property_access_from_index_signature(head : String) -> Bool {
 /// the case-preserved leading window.
 fn detect_import_helpers(head : String) -> Bool {
   head.contains("@importHelpers: true") || head.contains("@importHelpers:true")
+}
+
+///|
+/// True when the conformance header enables `@noUnusedLocals`. Default
+/// OFF, matching the compiler. `head` is the case-preserved window.
+fn detect_no_unused_locals(head : String) -> Bool {
+  head.contains("@noUnusedLocals: true") ||
+  head.contains("@noUnusedLocals:true")
 }
 
 ///|

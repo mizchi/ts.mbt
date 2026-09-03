@@ -2155,14 +2155,43 @@ need parser-wide changes).
 
 ## TS Checker Conformance (current state, 2026-09-03 — TypeScript 7)
 
-State: whole-corpus **TP 2512 / MISS 222 / FP 0 / PFLEGAL 0 / TN 1750**
+State: whole-corpus **TP 2515 / MISS 219 / FP 0 / PFLEGAL 0 / TN 1750**
 (classified 4484, NOTRUN 14) via
 `scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0`.
 Twenty-one batches: BU +9, BV +14, BW +13, BX +10, BY +7, BZ +1, CA +0,
 CB +10, CC +6, CD +4, CE +6, CF/CG +19, CH +7, CI +5, CJ +6, CK +3,
-CL +11, CM +11, CN +1, CO +4, CP/CQ +28, for **+175 TP at FP 0**. The
-MISS <= 250 target was met at CO; the current goal is MISS <= 200, which
-needs **22 more files**.
+CL +11, CM +11, CN +1, CO +4, CP/CQ +28, CR +3, for **+178 TP at FP 0**.
+The MISS <= 250 target was met at CO; the current goal is MISS <= 200,
+which needs **19 more files**.
+
+### Batch CR (2026-09-03): one fact, recorded at some of its sites
+
++3 files (TP 2512 -> 2515, MISS 222 -> 219, FP 0, PFLEGAL 0),
+checker whitebox 641/641.
+
+- **TS2307 through a re-export.** The check reads `import_module_specs`,
+  filled by the IMPORT parsers only, so `export * as ns from './nope'`
+  had nothing to report. Routing the eight `expect_from()` sites through
+  one `expect_from_spec` fixed half of it — and
+  `export { a } from './nope'` still did not report, because this parser
+  consumes `from` in TWO ways: a mandatory `expect_from` and an optional
+  `match_(From) || match_ident("from")` (since `export { a }` with no
+  `from` is legal). Six more sites use the optional spelling. Both
+  helpers record through a single `record_module_spec`.
+- **An import TYPE's specifier**, a third route, which that arm consumed
+  and discarded. Zero corpus files: `importTypeAmbientMissing`'s only
+  top-level declaration is a `declare module`, so the whole check is
+  suppressed by the ambient-module-bundle gate. Shipped anyway, proven
+  in isolation, because a typo in `import("...")` is a real mistake.
+- **TS6133 for an unused `#private`**, where a COUNTING argument
+  replaces the walk an earlier note deferred on its fail direction. A
+  private name is class-scoped, so every read spells `#name`; the number
+  of `PrivateIdent` tokens carrying it is therefore an exact upper bound
+  on declarations + reads, and not exceeding the recorded declaration
+  count means nothing reads it. A missed read is impossible and an extra
+  occurrence only silences. File-level on purpose:
+  `privateNameUnused` declares `#unused` four times across three classes
+  and reads it never, and a `#x in v` brand check is a read.
 
 ### Batch CQ (2026-09-03): four rules the compiler had to settle
 

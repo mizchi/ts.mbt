@@ -1890,6 +1890,54 @@ fn Parser::inject_instance_field_assigns(
 }
 
 ///|
+/// TS6133 ("'#unused' is declared but its value is never read") for a
+/// `#private` class member, under `@noUnusedLocals`.
+///
+/// Decided by COUNTING, which is what makes it sound in the one
+/// direction that matters. A private name is class-scoped, so every read
+/// of it must spell `#name` — therefore the number of `PrivateIdent`
+/// tokens carrying that name is an exact upper bound on
+/// declarations + reads, and when it does not EXCEED the declaration
+/// count the class parsers recorded, nothing reads it. A read this
+/// misses is impossible; an extra occurrence (a second class declaring
+/// the same name) only makes it quieter. That fail direction is the
+/// whole reason this is not the reference-recording walk an earlier note
+/// deferred: a missed read there makes a used member look unused, which
+/// is a false positive.
+///
+/// File-level rather than per-class, deliberately. `privateNameUnused`
+/// declares `#unused` FOUR times across three classes (a field, a
+/// method, and a get/set pair, which is two declarations of one member)
+/// and reads it never — 4 occurrences against 4 declarations. Its
+/// `#used` has the same four declarations plus three reads, so 7 against
+/// 4 and silent. A `#x in v` brand check IS a read to tsc and is one
+/// more occurrence, which is exactly why
+/// `privateNameInInExpressionUnused` reports its `#unused` and not its
+/// `#brand`.
+fn Parser::record_unused_private_members(self : Parser, head : String) -> Unit {
+  if not(detect_no_unused_locals(head)) {
+    return
+  }
+  if self.private_decl_counts.size() == 0 {
+    return
+  }
+  let occurrences : Map[String, Int] = {}
+  for tok in self.tokens {
+    if tok.kind is PrivateIdent(n) {
+      occurrences[n] = occurrences.get(n).unwrap_or(0) + 1
+    }
+  }
+  for entry in self.private_decl_counts {
+    let (name, decls) = entry
+    if occurrences.get(name).unwrap_or(0) <= decls {
+      self.grammar_misuses.push(
+        "`#\{name}` is declared but its value is never read",
+      )
+    }
+  }
+}
+
+///|
 /// TS2803 ("Cannot assign to private method") and TS2806 ("Private
 /// accessor was defined without a getter"), decided over the class
 /// body's TOKEN range — for a class EXPRESSION only.
@@ -2448,6 +2496,14 @@ fn Parser::parse_class_body(
     // one. A private METHOD is not writable; a private accessor with a
     // setter and no getter is not readable.
     if key_is_private_name && raw_private_name != "" {
+      // TS6133 support: one entry per private member DECLARATION. A
+      // get/set pair is two declarations of one member, which is what
+      // makes the count comparison in `record_unused_private_members`
+      // come out right.
+      self.private_decl_counts[raw_private_name] = self.private_decl_counts
+        .get(raw_private_name)
+        .unwrap_or(0) +
+        1
       match accessor_kind {
         Some("get") => private_getters.push(raw_private_name)
         Some("set") => private_setters.push(raw_private_name)

@@ -16446,3 +16446,51 @@ test "expr_check: reserved-word identifiers, implicit-any members, private acces
     @test.assert_eq(issues(src), 0)
   }
 }
+
+///|
+/// Batch CR: three rules that are all one shape — a fact the parser
+/// already had, recorded at some of the places that produce it.
+test "expr_check: re-export specifiers, import types, unused privates (batch CR)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // TS2307 through a RE-EXPORT. `import_module_specs` was filled by
+      // the import parsers only, so these reached the check with nothing
+      // to say even though the specifier was right there. All eight
+      // `… from "spec"` sites go through `expect_from_spec` now.
+      "// @target: es2015\nexport * as ns from './nonexistent';", "// @target: es2015\nexport * from './nonexistent';",
+      "// @target: es2015\nexport { a } from './nonexistent';",
+      // And through an import TYPE, whose specifier this arm consumed
+      // and discarded.
+       "// @target: es2015\nconst x: import(\"nope\") = 1;",
+      // TS6133: a `#private` nobody reads, under @noUnusedLocals.
+       "// @noUnusedLocals: true\n// @target: es2015\nclass B { #v = 1; }",
+      // Only the unused one is reported when a sibling IS read.
+       "// @noUnusedLocals: true\n// @target: es2015\nclass A { #u = 1; m() { return this.#u } }\nclass B { #v = 1; }",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // An ambient module declaration in the file is what makes the
+      // correctly-spelled specifier resolvable, and that exemption is
+      // what keeps the import-type rule from firing on real code.
+      "// @target: es2015\ndeclare module \"foo\" { interface P { x: number } export = P }\nconst y: import(\"foo\") = { x: 0 };",
+      // TS6133 needs the flag; the default is off, matching tsc.
+       "// @target: es2015\nclass B { #v = 1; }",
+      // A private that IS read, in each of the ways a read can be
+      // spelled — a method body and a brand check. A `#x in v` is a read
+      // to tsc, which is exactly why counting occurrences works.
+       "// @noUnusedLocals: true\n// @target: es2015\nclass A { #u = 1; m() { return this.#u } }",
+      "// @noUnusedLocals: true\n// @target: esnext\nclass D { #brand: undefined; is(v: any) { return #brand in v } }",
+      // A get/set pair is TWO declarations of one member, so the count
+      // comparison has to allow for it: read once, it is used.
+       "// @noUnusedLocals: true\n// @target: es2015\nclass C { get #p() { return 1 } set #p(v: number) { } m() { return this.#p } }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}

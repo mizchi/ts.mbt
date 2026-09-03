@@ -28379,11 +28379,22 @@ fn check_module_function_bodies_layered(
           None => false
         })
       }
+      // `import_module_specs` now carries every `… from "spec"` form, not
+      // only the ones an `import` statement writes: the specifier is
+      // recorded by `Parser::expect_from_spec`, the one helper all eight
+      // of those sites go through. Before that, a RE-EXPORT
+      // (`export * as ns from './nonexistent'`) reached this check with
+      // nothing to say — the same rule holding for some of the forms it
+      // names. Deduplicated because one specifier can now arrive from two
+      // routes and a doubled diagnostic is noise.
+      let reported : Map[String, Unit] = {}
       for spec in module_.import_module_specs {
         if spec != "tslib" &&
           !is_ambient_module_bundle &&
           !is_node_builtin_spec(spec) &&
-          !ambient_specs.contains(spec) {
+          !ambient_specs.contains(spec) &&
+          !reported.contains(spec) {
+          reported[spec] = ()
           all.push({
             path: "import `\{spec}`",
             message: "cannot find module `\{spec}`",

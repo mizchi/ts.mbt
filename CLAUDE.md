@@ -32,7 +32,7 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2512 / MISS 222 / FP 0 /
+  is a soundness bug, and there are none (TP 2515 / MISS 219 / FP 0 /
   PFLEGAL 0 / TN 1750). That gate compares against vendored TS7 name
   lists, so it says nothing about WHAT a rejected file's error was, and
   nothing at all about a hand-written legal neighbour. A real compiler
@@ -56,8 +56,8 @@ product surfaces now.
   were exhausted and that only large type-machinery features remained, and
   that was measured against the **TS6** oracle — under TS7, **128 of the
   388 missing files are flippable by a pure-grammar (TS1xxx) rule** and 91
-  of them need no type judgement anywhere. Twenty-two batches have taken
-  **+175 TP at FP 0** so far, and most of their items were BUGS rather than
+  of them need no type judgement anywhere. Twenty-three batches have taken
+  **+178 TP at FP 0** so far, and most of their items were BUGS rather than
   missing features — one of them a rule the repo had already written and
   applied to every declaration kind except namespaces. The first:
   `eval`/`arguments` as an assignment target was checked at two of the four
@@ -603,6 +603,41 @@ product surfaces now.
   real TS7008s under a flag that defaults ON, so the assertion was
   measuring the implicit-any hole rather than the ASI behaviour it is
   named for.
+  Batch CR is +3 and is the family in its purest form yet, twice over in
+  one rule. TS2307 reads `import_module_specs`, and that list was filled
+  by the IMPORT parsers only — so `export * as ns from './nonexistent'`
+  reached the check with nothing to say even though the specifier was
+  sitting right there. Routing the eight `expect_from()` sites through
+  one `expect_from_spec` helper fixed half of them, and
+  `export { a } from './nope'` STILL did not report: this parser consumes
+  `from` in TWO ways, a mandatory `expect_from` and an optional
+  `match_(From) || match_ident("from")` (because `export { a }` with no
+  `from` is legal), and the first fix covered one of the two. Six more
+  sites use the optional spelling; both helpers now record through a
+  single `record_module_spec`, which is the only place that writes the
+  list. An import TYPE's specifier was a third route — that arm consumed
+  and discarded it — and buys no corpus file, because
+  `importTypeAmbientMissing`'s only top-level declaration is a
+  `declare module`, so the whole check is suppressed by the
+  ambient-module-bundle gate; it ships anyway, proven in isolation,
+  because a typo in `import("...")` is an error a person makes.
+  TS6133 for an unused `#private` is the other rule, and it is the one
+  place a COUNTING argument replaces a walk. An earlier note deferred it
+  on the fail direction: every formulation needs a complete walk or a
+  complete reference channel, and a missed read makes a used member look
+  unused, which is a false positive. Counting inverts that. A private
+  name is class-scoped, so every read must spell `#name`, which makes
+  the number of `PrivateIdent` tokens carrying it an exact upper bound on
+  declarations + reads; when that does not exceed the declaration count
+  the class parsers recorded, nothing reads it. A read this misses is
+  impossible, and an extra occurrence only makes it quieter. It is
+  file-level rather than per-class deliberately —
+  `privateNameUnused` declares `#unused` four times across three classes
+  (a get/set pair being two declarations of one member) and reads it
+  never, while its `#used` has the same four declarations plus three
+  reads — and a `#x in v` brand check IS a read to tsc, which is exactly
+  why `privateNameInInExpressionUnused` reports its `#unused` and not
+  its `#brand`.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

@@ -10,6 +10,61 @@ fn Parser::match_ident(self : Parser, name : String) -> Bool {
 }
 
 ///|
+/// `from "spec"` — consume the keyword, take the specifier, and RECORD it.
+///
+/// The recording is what this exists for. `import_module_specs` is the
+/// list the TS2307 check reads, and it used to be filled by the import
+/// parsers only, so `export * as ns from './nonexistent'` and the other
+/// re-export forms reached that check with nothing to say. There are
+/// EIGHT `from`-with-specifier sites across the import, export and
+/// module-block parsers, all of them `expect_from()` followed by
+/// `expect_str_literal()`, so they all go through here instead — a push
+/// per site is how the asymmetry arose, and one helper is why it cannot
+/// come back.
+///
+/// `multi_file_source` still suppresses it: a `@filename:` test is
+/// several files concatenated, where a specifier really does resolve.
+/// A side-effect `import "spec"` has no `from` and keeps its own push.
+fn Parser::expect_from_spec(self : Parser) -> String raise ParseError {
+  self.expect_from()
+  let spec = self.expect_str_literal()
+  self.record_module_spec(spec)
+  spec
+}
+
+///|
+/// The OPTIONAL-`from` spelling: `export { a }` and
+/// `export { a } from "spec"` are both legal, so these sites test for the
+/// keyword instead of demanding it. `None` when there is no `from`.
+///
+/// This exists because covering `expect_from` alone was not enough, and
+/// the way it was not enough is the family this repo keeps recording:
+/// there are TWO ways this parser consumes `from`, and the first fix
+/// covered one — so `export * as ns from './nope'` reported and
+/// `export { a } from './nope'` did not. Both spellings record through
+/// `record_module_spec`, which is the single place that writes the list.
+fn Parser::try_from_spec(self : Parser) -> String? raise ParseError {
+  if self.match_(From) || self.match_ident("from") {
+    let spec = self.expect_str_literal()
+    self.record_module_spec(spec)
+    Some(spec)
+  } else {
+    None
+  }
+}
+
+///|
+/// The one place a module specifier enters `import_module_specs`, the
+/// list the TS2307 check reads. `multi_file_source` suppresses it: a
+/// `@filename:` test is several files concatenated, where a specifier
+/// really does resolve.
+fn Parser::record_module_spec(self : Parser, spec : String) -> Unit {
+  if !self.multi_file_source {
+    self.import_module_specs.push(spec)
+  }
+}
+
+///|
 fn Parser::expect_from(self : Parser) -> Unit raise ParseError {
   if self.match_(From) || self.match_ident("from") {
     return
@@ -2396,8 +2451,7 @@ fn Parser::parse_import_decl(
     if self.match_(Comma) {
       // continue to namespace/named
     } else {
-      self.expect_from()
-      let module_spec = self.expect_str_literal()
+      let module_spec = self.expect_from_spec()
       let attributes = self.parse_import_attributes()
       self.consume_semicolon()
       return {
@@ -2427,8 +2481,7 @@ fn Parser::parse_import_decl(
     }
     let _ = self.expect(RBrace)
   }
-  self.expect_from()
-  let module_spec = self.expect_str_literal()
+  let module_spec = self.expect_from_spec()
   let attributes = self.parse_import_attributes()
   self.consume_semicolon()
   {
@@ -2576,15 +2629,13 @@ fn Parser::parse_export_decl_for_module(
     if self.match_(Star) {
       if self.match_(As) || self.match_ident("as") {
         let name = self.parse_binding_ident()
-        self.expect_from()
-        let module_spec = self.expect_str_literal()
+        let module_spec = self.expect_from_spec()
         reexports.push({
           module_spec,
           kind: @ast.TsReExportKind::Namespace(name),
           type_only: true,
         })
-      } else if self.match_(From) || self.match_ident("from") {
-        let module_spec = self.expect_str_literal()
+      } else if self.try_from_spec() is Some(module_spec) {
         reexports.push({
           module_spec,
           kind: @ast.TsReExportKind::All,
@@ -2597,8 +2648,7 @@ fn Parser::parse_export_decl_for_module(
     if self.match_(LBrace) {
       let items = self.parse_named_exports()
       let _ = self.expect(RBrace)
-      if self.match_(From) || self.match_ident("from") {
-        let module_spec = self.expect_str_literal()
+      if self.try_from_spec() is Some(module_spec) {
         reexports.push({
           module_spec,
           kind: @ast.TsReExportKind::Named(items),
@@ -2717,8 +2767,7 @@ fn Parser::parse_export_decl_for_module(
   if self.match_(Star) {
     if self.match_(As) || self.match_ident("as") {
       let name = self.parse_binding_ident()
-      self.expect_from()
-      let module_spec = self.expect_str_literal()
+      let module_spec = self.expect_from_spec()
       reexports.push({
         module_spec,
         kind: @ast.TsReExportKind::Namespace(name),
@@ -2727,8 +2776,7 @@ fn Parser::parse_export_decl_for_module(
       self.consume_semicolon()
       return (stmts, exports, reexports)
     }
-    self.expect_from()
-    let module_spec = self.expect_str_literal()
+    let module_spec = self.expect_from_spec()
     reexports.push({
       module_spec,
       kind: @ast.TsReExportKind::All,
@@ -2740,8 +2788,7 @@ fn Parser::parse_export_decl_for_module(
   if self.match_(LBrace) {
     let items = self.parse_named_exports()
     let _ = self.expect(RBrace)
-    if self.match_(From) || self.match_ident("from") {
-      let module_spec = self.expect_str_literal()
+    if self.try_from_spec() is Some(module_spec) {
       reexports.push({
         module_spec,
         kind: @ast.TsReExportKind::Named(items),
@@ -3049,11 +3096,8 @@ fn Parser::parse_import_stmt(self : Parser) -> Unit raise ParseError {
       if self.match_(Comma) {
         // continue to namespace/named
       } else {
-        self.expect_from()
-        let default_spec = self.expect_str_literal()
-        if !self.multi_file_source {
-          self.import_module_specs.push(default_spec)
-        }
+        let default_spec = self.expect_from_spec()
+        let _ = default_spec
         self.skip_import_attributes()
         self.consume_semicolon()
         return
@@ -3071,11 +3115,8 @@ fn Parser::parse_import_stmt(self : Parser) -> Unit raise ParseError {
     self.parse_import_specifiers()
     let _ = self.expect(RBrace)
   }
-  self.expect_from()
-  let tail_spec = self.expect_str_literal()
-  if !self.multi_file_source {
-    self.import_module_specs.push(tail_spec)
-  }
+  let tail_spec = self.expect_from_spec()
+  let _ = tail_spec
   self.skip_import_attributes()
   self.consume_semicolon()
 }
@@ -3184,18 +3225,14 @@ fn Parser::parse_export_stmt(
   }
   if self.match_(Type) || self.match_ident("type") {
     if self.match_(Star) {
-      if self.match_(From) || self.match_ident("from") {
-        let _ = self.expect_str_literal()
-      }
+      let _ = self.try_from_spec()
       self.consume_semicolon()
       return
     }
     if self.match_(LBrace) {
       let _ = self.parse_named_exports()
       let _ = self.expect(RBrace)
-      if self.match_(From) || self.match_ident("from") {
-        let _ = self.expect_str_literal()
-      }
+      let _ = self.try_from_spec()
       self.consume_semicolon()
       return
     }
@@ -3416,8 +3453,7 @@ fn Parser::parse_export_stmt(
     if self.match_(As) || self.match_ident("as") {
       let _ = self.parse_binding_ident()
     }
-    self.expect_from()
-    let _ = self.expect_str_literal()
+    let _ = self.expect_from_spec()
     self.consume_semicolon()
     return
   }
@@ -3427,9 +3463,7 @@ fn Parser::parse_export_stmt(
     self.grammar_misuses.push("<module-syntax>")
     self.parse_import_specifiers()
     let _ = self.expect(RBrace)
-    if self.match_(From) || self.match_ident("from") {
-      let _ = self.expect_str_literal()
-    }
+    let _ = self.try_from_spec()
     self.consume_semicolon()
     return
   }
@@ -3883,6 +3917,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
   // Shared leading window for the directive detectors below (one slice
   // instead of one per detector).
   let module_head = source_head(self.src)
+  self.record_unused_private_members(module_head)
   {
     funcs,
     interfaces,
