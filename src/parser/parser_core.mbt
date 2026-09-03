@@ -370,6 +370,21 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
   if lexer.unterminated_template {
     grammar_misuses.push("unterminated template literal")
   }
+  if lexer.unterminated_block_comment {
+    grammar_misuses.push("`*/` expected")
+  }
+  if lexer.unterminated_regex {
+    grammar_misuses.push("unterminated regular expression literal")
+  }
+  for _i in 0..<lexer.empty_radix_literal_count {
+    grammar_misuses.push("hexadecimal digit expected")
+  }
+  for _i in 0..<lexer.escaped_keyword_count {
+    grammar_misuses.push("keywords cannot contain escape characters")
+  }
+  for _i in 0..<lexer.unbalanced_regex_group_count {
+    grammar_misuses.push("`)` expected in a regular expression literal")
+  }
   // Whole-source directive markers, collected in one pass (each used to
   // be its own full-source scan — two of them via lowered copies).
   let (has_ts_suppression, noimplicitthis_off, has_filename_directive) = scan_source_directive_flags(

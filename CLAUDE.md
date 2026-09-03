@@ -32,7 +32,7 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2448 / MISS 286 / FP 0 /
+  is a soundness bug, and there are none (TP 2454 / MISS 280 / FP 0 /
   PFLEGAL 0 / TN 1750). The asymmetry is deliberate: we model a subset of
   TS, so a MISS is expected and an FP never is.
   That gate says how many we miss and nothing about WHICH, so "MISS 388"
@@ -45,8 +45,8 @@ product surfaces now.
   were exhausted and that only large type-machinery features remained, and
   that was measured against the **TS6** oracle — under TS7, **128 of the
   388 missing files are flippable by a pure-grammar (TS1xxx) rule** and 91
-  of them need no type judgement anywhere. Fourteen batches have taken
-  **+111 TP at FP 0** so far, and most of their items were BUGS rather than
+  of them need no type judgement anywhere. Fifteen batches have taken
+  **+117 TP at FP 0** so far, and most of their items were BUGS rather than
   missing features — one of them a rule the repo had already written and
   applied to every declaration kind except namespaces. The first:
   `eval`/`arguments` as an assignment target was checked at two of the four
@@ -244,6 +244,25 @@ product surfaces now.
   soundness bugs paid for a wrapper node whose default arm failed open. A
   denylist fails the other way, costing a MISS rather than a false
   positive.
+  Batch CJ is +6 and entirely in the LEXER: six rules that were each a
+  missing case in a loop which already had an exit for the well-formed
+  shape — end of file inside a block comment (TS1010), a radix prefix
+  with no digits at all (TS1125, three arms and the rule in none of them,
+  because `invalid_radix_digit_count` answers the different question "a
+  digit outside this radix"), a keyword spelled with a unicode escape
+  (TS1260 — the escape decodes to a legal identifier, so `\u0076ar x = 1`
+  scanned as the `var` KEYWORD), a regex crossing a line (TS1161, without
+  which `/ b;` scanned to EOF and swallowed the file), and unbalanced
+  regex groups (TS1005). The sixth has the only judgement in it: `¬`
+  (U+00AC) parsed clean because non-ASCII goes to the identifier scanner,
+  which over-approximates ID_Continue as "any code unit >= 0x80" so that
+  `変数` and `π` scan as one token. That approximation is right, and
+  without a Unicode table "not an identifier character" is what cannot be
+  decided in general — so TS1127 covers the one block where the answer is
+  knowable (U+00A1..U+00BF plus `×` and `÷`) and excludes the three code
+  points in it that ARE ID_Start (`ª`, `µ`, `º`) plus the non-breaking
+  space and soft hyphen. Everything from U+00C0 up keeps the permissive
+  treatment, so `café` still scans as an identifier.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

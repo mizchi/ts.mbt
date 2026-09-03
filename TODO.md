@@ -2155,12 +2155,55 @@ need parser-wide changes).
 
 ## TS Checker Conformance (current state, 2026-09-02 — TypeScript 7)
 
-State: whole-corpus **TP 2448 / MISS 286 / FP 0 / PFLEGAL 0 / TN 1750**
+State: whole-corpus **TP 2454 / MISS 280 / FP 0 / PFLEGAL 0 / TN 1750**
 (classified 4484, NOTRUN 14) via
 `scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0`.
-Fourteen batches: BU +9, BV +14, BW +13, BX +10, BY +7, BZ +1, CA +0,
-CB +10, CC +6, CD +4, CE +6, CF/CG +19, CH +7, CI +5, for **+111 TP at
-FP 0**.
+Fifteen batches: BU +9, BV +14, BW +13, BX +10, BY +7, BZ +1, CA +0,
+CB +10, CC +6, CD +4, CE +6, CF/CG +19, CH +7, CI +5, CJ +6, for
+**+117 TP at FP 0**.
+
+### Batch CJ (2026-09-03): six scanner-level rules, +6 files
+
+Every one of them was a missing case in a loop that already had an exit
+for the well-formed shape, and the whole batch lives in `lexer.mbt` plus
+five lines of wiring in `parser_core.mbt`, where the existing lexer
+counters already become diagnostics.
+
+- **TS1010** ("`*/` expected"): the block-comment skip's `None => break`
+  was end-of-file INSIDE a comment and said nothing about it.
+- **TS1125** ("Hexadecimal digit expected") for a radix prefix with no
+  digits. Three arms — hex, binary, octal — each of which silently
+  substituted 0, so the rule existed in none of them. The reason it fell
+  through a check that looks like it covers it:
+  `invalid_radix_digit_count` answers "a digit outside this radix"
+  (`0b2`), which is a different question from "no digits at all" (`0b`).
+- **TS1260** ("Keywords cannot contain escape characters"). Only the
+  escape path of the identifier scanner can produce one, and the escape
+  decodes to a perfectly legal identifier, so nothing downstream had a
+  reason to object: `\u0076ar x = 1` scanned as the `var` KEYWORD and
+  parsed clean. Keyed on what `classify_ident_or_keyword` returns rather
+  than on a name list, so the two cannot drift apart.
+- **TS1161** ("Unterminated regular expression literal"): a regex may not
+  span a line, and the scanner had no line-terminator case, so `/ b;`
+  scanned to end of file and swallowed the rest of it. The newline is
+  deliberately not consumed, so the following statements still tokenize.
+- **TS1005** ("`)` expected") for unbalanced groups in a regex, counted
+  outside a character class only — `/[(]/` is a perfectly good regex.
+- **TS1127** ("Invalid character"), narrowed to the Latin-1 symbols and
+  punctuation.
+
+The last one carries the only real judgement in the batch. Non-ASCII goes
+to the identifier scanner, which over-approximates ID_Continue as "any
+code unit >= 0x80" so that `変数` and `π` scan as ONE token — that is
+correct, and it is why `¬` (U+00AC, category Sm) parsed clean
+(`parserErrorRecovery_Block2`). Without a Unicode table, "not an
+identifier character" is exactly what cannot be decided here in general,
+so the rule covers the one block where the answer is knowable
+(U+00A1..U+00BF plus `×` and `÷`) and excludes the code points in it that
+ARE ID_Start — `ª` (U+00AA), `µ` (U+00B5) and `º` (U+00BA) — along with
+the non-breaking space and the soft hyphen, which are not errors either.
+Everything from U+00C0 up keeps the permissive treatment, so `café` and
+`naïve` still scan as identifiers.
 
 ### Batch CI (2026-09-03): the operand of an update must be a reference
 

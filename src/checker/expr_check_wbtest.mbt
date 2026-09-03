@@ -15679,3 +15679,73 @@ test "expr_check: assignment and update operands must be references" {
     @test.assert_eq(issues(src), 0)
   }
 }
+
+///|
+/// Batch CJ: six SCANNER-level rules, all of them a missing case in a
+/// loop that already had an exit for the well-formed shape.
+///
+/// - TS1010 `*/` expected: the block-comment skip's `None => break` was
+///   end-of-file inside a comment and said nothing about it.
+/// - TS1125 a radix prefix with no digits (`0x`, `0b`, `0o`). Three arms
+///   — hex, binary, octal — each of which silently substituted 0, so the
+///   rule existed in none of them. `invalid_radix_digit_count` answers a
+///   different question ("a digit outside this radix"), which is why `0x`
+///   alone fell between the two.
+/// - TS1260 keywords cannot contain escape characters. Only the escape
+///   path of the identifier scanner can produce one, and the escape
+///   decodes to a legal identifier, so nothing downstream had a reason to
+///   object: `var x = 1` scanned as the `var` KEYWORD.
+/// - TS1161 a regular-expression literal may not span a line. Without
+///   that, `/ b;` scanned to end of file and swallowed the rest of it.
+/// - TS1005 `)` expected: unbalanced groups in a regex, counted outside a
+///   character class only, since `/[(]/` is a perfectly good regex.
+/// - TS1127 invalid character, narrowed to the Latin-1 symbols and
+///   punctuation.
+///
+/// The last one is the one with a real judgement in it. Non-ASCII goes to
+/// the identifier scanner, which over-approximates ID_Continue as "any
+/// code unit >= 0x80" so that `変数` and `π` scan as one token — correct,
+/// and the reason `¬` (U+00AC) parsed clean. Without a Unicode table,
+/// "not an identifier character" is exactly what cannot be decided in
+/// general, so the rule covers one block where the answer is knowable and
+/// excludes the three code points in it that ARE ID_Start: `ª`, `µ`, `º`.
+/// Everything from U+00C0 up keeps the permissive treatment.
+test "expr_check: scanner-level grammar rules" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  assert_true(issues("var x = 1;\n/*CHECK#1/\n") > 0)
+  assert_true(issues("var n = 0x;") > 0)
+  assert_true(issues("var n = 0b;") > 0)
+  assert_true(issues("var n = 0o;") > 0)
+  assert_true(issues("\\u0076ar x = \"hello\";") > 0)
+  assert_true(issues("/ b;") > 0)
+  assert_true(issues("var x = /fo(o/;") > 0)
+  assert_true(issues("function f() {\n    \u{AC}\n    return;\n}") > 0)
+  // --- silent
+  for
+    src in [
+      // A comment that closes, and the JSDoc form that goes through the
+      // structured parser.
+      "var x = 1;\n/* ok */\nvar y = 2;", "/** @param a x */\nfunction f(a: number) { return a; }",
+      // Every radix with digits, and the BigInt suffix.
+       "var n = 0xff;", "var n = 0b1010;", "var n = 0o777;", "var n = 0xffn;",
+      // An escape in an IDENTIFIER is legal; only a keyword may not.
+       "var \\u0078 = 1;",
+      // Regexes: balanced, a paren inside a character class, an escaped
+      // paren, a slash inside a class, and nesting.
+       "var r = /fo(o)/;", "var r = /[(]/;", "var r = /\\(a/;", "var r = /[/]/;",
+      "var r = /((a)(b))/;",
+      // A `/` that is division, not a regex.
+       "var a = 4, b = 2; var c = a / b;",
+      // Unicode identifiers must keep scanning as one token.
+       "var \u{5909}\u{6570} = 1; var \u{3C0} = 3;", "var caf\u{E9} = 1; var na\u{EF}ve = 2;",
+      // The three Latin-1 code points that ARE ID_Start.
+       "var \u{B5}s = 1; var \u{BA} = 2; var \u{AA} = 3;",
+      // A symbol inside a string or a comment is not source at all.
+       "var s = \"\u{AC} \u{B1} \u{D7}\";", "// \u{AC} \u{B1} \u{D7}\nvar x = 1;",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
