@@ -14591,9 +14591,13 @@ test "expr_check: for-in patterns, lib eras, import-eq roots (batch BO)" {
     ) >
     0,
   )
+  // `export {}` makes the file a module, which is what a top-level
+  // `await using` requires (TS2853). Without it this case is an error for
+  // a SECOND reason, and the assertion here is about the target check
+  // alone: an esnext target must not trigger TS2854.
   @test.assert_eq(
     issues(
-      "// @target: esnext\n// @lib: esnext\nawait using d1 = { async [Symbol.asyncDispose]() {} };",
+      "// @target: esnext\n// @lib: esnext\nexport {};\nawait using d1 = { async [Symbol.asyncDispose]() {} };",
     ),
     0,
   )
@@ -15359,6 +15363,260 @@ test "expr_check: pattern duplicates, for-head var collision, self-iterable" {
       // Without noImplicitAny tsc says nothing, which is what
       // parserForOfStatement18/19 rely on.
        "// @strict: false\nfor (var of of of) { }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// TS2449 (a class whose `extends` names a class declared later), TS5061
+/// (an ambient module pattern with more than one `*`) and TS1117 (an object
+/// literal with two properties of one name).
+///
+/// The TS2449 exemption is the interesting one and was found by probing,
+/// not by reasoning: an AMBIENT `declare class` emits nothing and asserts
+/// the binding exists at runtime from elsewhere, so declaration order in a
+/// `.d.ts` carries no runtime meaning and there is no temporal dead zone.
+/// Without that exemption `class C1 extends C2 {} declare class C2 {}` —
+/// ordinary @types layout — was flagged.
+test "expr_check: forward class base, module pattern, objlit duplicate key" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  assert_true(issues("class C1 extends C2 { } class C2 { }") > 0)
+  // Transitive: two independent forward references.
+  assert_true(
+    issues("class A extends B {} class B extends C {} class C {}") > 0,
+  )
+  assert_true(issues("declare module \"a*b*c\" { }") > 0)
+  assert_true(issues("var x = { a: 0, a: 1 };") > 0)
+  assert_true(issues("var a = 1; var x = { a, a: 2 };") > 0)
+  assert_true(
+    issues("var x = { get p() { return 1 }, get p() { return 2 } };") > 0,
+  )
+  assert_true(issues("var x = { \"k\": 1, \"k\": 2 };") > 0)
+  // --- silent
+  for
+    src in [
+      "class C2 { } class C1 extends C2 { }",
+      // An ambient base has no TDZ, in either direction.
+       "class C1 extends C2 {} declare class C2 { }", "declare class D1 extends D2 {} class D2 { }",
+      // An interface is a type: erased, no runtime binding, no order.
+       "class C1 implements I { } interface I { }",
+      // A base this pass cannot see the declaration of abstains.
+       "declare const Base: any; class C1 extends Base { }",
+      // One `*` is the legal wildcard form; none is an ordinary specifier.
+       "declare module \"foo/*\" { }", "declare module \"foo\" { }",
+      // A get/set PAIR is one property, not two.
+       "var x = { get p() { return 1 }, set p(v: number) { } };",
+      // A spread may legally supply a key another entry also writes.
+       "var o = {a:1}; var x = { ...o, a: 2 };", "var x = { a: 1, b: 2 };", "var k1 = \"a\"; var k2 = \"b\"; var x = { [k1]: 1, [k2]: 2 };",
+      // The COVER GRAMMAR: a `{ … }` followed by `=` was an object
+      // destructuring PATTERN, where duplicate names are legal. This
+      // shipped as a false positive in the first version of TS1117 and
+      // the CORPUS could not see it — `destructuringSameNames` also
+      // contains illegal spellings, so the file was a TP either way.
+       "let foo: any, bar: any; ({ foo, foo } = { foo: 2 });", "let foo: any, bar: any; ({ foo, foo: bar } = { foo: 3 });",
+      "let foo: any, bar: any; ({ foo: bar, foo: bar } = { foo: 5 });", "var x = { m() {}, n() {} };",
+      "var x = { a: { b: 1 }, c: { b: 2 } };",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch CE, four rules that were each one missing condition next to a rule
+/// the repo already had:
+///
+/// - TS1048 `a rest parameter cannot have an initializer` — the 21st
+///   instance of this repo's recurring family, and the closest yet: TS1047
+///   (`a rest parameter cannot be optional`) sits on the adjacent line and
+///   asks about `?` where this asks about `=`.
+/// - TS1434 `unexpected keyword or identifier` for a repeated `static`.
+/// - TS1196 a catch clause annotation must be `any` or `unknown`. The
+///   annotation was already parsed here — and discarded — so only the
+///   comparison was missing.
+/// - TS1368 `class constructor may not be a generator`.
+///
+/// The legal neighbours matter more than the firing cases: `...a: number[]`
+/// against `...a = []`, one `static` against two, `catch (e: any)` and
+/// `catch (e)` against `catch (e: string)`, and `*gen()` against
+/// `*constructor()` — a generator is illegal only at that one name.
+test "expr_check: rest initializer, repeated static, catch annotation, generator ctor" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  assert_true(issues("function f(...a = []) { }") > 0)
+  assert_true(issues("const g = (...a: number[] = []) => a;") > 0)
+  assert_true(issues("class C { static static Foo() { } }") > 0)
+  assert_true(issues("class C { static static Foo: number; }") > 0)
+  assert_true(issues("class C { static static [x: string]: string; }") > 0)
+  assert_true(issues("try { } catch (e: string) { }") > 0)
+  assert_true(issues("try { } catch (e: number) { }") > 0)
+  assert_true(issues("class C { *constructor() { } }") > 0)
+  // --- silent
+  for
+    src in [
+      // A rest parameter is legal; only an initializer on one is not.
+      "function f(...a: number[]) { return a; }", "function f(a = 1) { return a; }",
+      // One `static` is the modifier; two is the error.
+       "class C { static Foo() { } }", "class C { static readonly Foo: number = 1; }",
+      "class C { static [x: string]: string; }",
+      // `any` and `unknown` are the two annotations TS allows, and none at
+      // all is the common spelling.
+       "try { } catch (e: any) { }", "try { } catch (e: unknown) { }", "try { } catch (e) { }",
+      // A generator is illegal at `constructor` and legal at every other
+      // member name.
+       "class C { constructor() { } }", "class C { *gen() { } }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batches CF and CG. Ten grammar rules and one shared context helper.
+///
+/// The `await using` half is worth stating: `record_await_using_context`
+/// is ONE function called from all THREE declaration sites (a statement, a
+/// block-statement, a for-head), because the TS2854 marker it replaced was
+/// written at exactly one of them — so `{ await using d = null }` inside a
+/// block, which is how the `awaitUsingDeclarations` tests are written,
+/// could never reach it.
+///
+/// Three of these rules were corpus FALSE POSITIVES first, and all three
+/// exemptions are in the silent list below rather than in the firing one:
+/// `for await (async of x)` and `for ((async) of x)` are both legal (the
+/// TS1106 restriction is a LOOKAHEAD rule, so writing `await` or a paren
+/// removes the thing it guards against), and `export type R = number`
+/// makes a file a module — which is why the `<module-syntax>` marker now
+/// sits at the `export` keyword in all three export parsers instead of on
+/// the export forms that bind a value.
+test "expr_check: quoted module name, strict reserved words, await using context" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  // TS1035 / TS1046: a quoted module name outside a `declare` context.
+  assert_true(issues("module \"Foo\" { }") > 0)
+  // TS1213: a strict-mode reserved word as a binding. A class body is
+  // automatically strict, which is what makes the first case an error.
+  assert_true(issues("class C { constructor (static) { } }") > 0)
+  assert_true(issues("class D { m(implements) { } }") > 0)
+  assert_true(issues("\"use strict\"; var public = 1;") > 0)
+  // TS1029: an accessibility modifier must precede `override`.
+  assert_true(
+    issues(
+      "class B { foo = 1 } class S extends B { constructor (override public foo: number) { super(); } }",
+    ) >
+    0,
+  )
+  // TS1031: `declare` may modify a field, never a method.
+  assert_true(issues("class C { declare Foo() { } }") > 0)
+  // TS1115: `continue` needs an ITERATION label, and this one is live.
+  assert_true(issues("target:\n  continue target;") > 0)
+  // TS1106.
+  assert_true(issues("var async; for (async of [1, 2]) {}") > 0)
+  // TS1063 / TS1319: module-only export forms inside a namespace.
+  assert_true(issues("namespace M { export = A; }") > 0)
+  assert_true(issues("namespace Foo { export default foo; }") > 0)
+  // TS1155 in a C-style for head.
+  assert_true(issues("for (using of;;) break;") > 0)
+  // TS2852 / TS18054 / TS2853: the three `await using` contexts.
+  assert_true(issues("function f() { await using x = null; }") > 0)
+  assert_true(issues("class C { static { await using x = null; } }") > 0)
+  assert_true(issues("await using x = null;") > 0)
+  // --- silent
+  for
+    src in [
+      // An ambient external module is exactly what a quoted name declares.
+      "declare module \"Foo\" { }", "declare module \"foo/*\" { }", "namespace M { }",
+      // Outside strict mode the reserved words are ordinary identifiers.
+       "var public = 1;", "var implements = 1; var package = 2;",
+      // The legal modifier order.
+       "class B { foo = 1 } class S extends B { constructor (public override foo: number) { super(); } }",
+      // `declare` on a field, and a member NAMED `declare`.
+       "class C { declare Foo: number; }", "class C { declare() { } }",
+      // `continue` to a loop label, through a label chain, and `break` to
+      // a non-loop label — which is legal and is the whole reason the two
+      // questions cannot share one answer.
+       "target: while (1) { continue target; }", "outer: inner: while (1) { continue outer; }",
+      "target: for (;;) { continue target; }", "target: { break target; }",
+      // The three TS1106 exemptions, all of them former false positives.
+       "var async; for (async in [1, 2]) {}", "var async; for ((async) of [1, 2]);",
+      "async function foo(x: any) { var async; for await (async of x) {} }",
+      // An initialized `using` in a C-style for head is legal.
+       "for (using of = null;;) break;",
+      // `await using` where it belongs, and `export type` as the only
+      // module syntax — the third former false positive.
+       "export {}; async function f() { await using x = null; }", "export {}; await using x = null;",
+      "export type R = number;\nawait using r = null;", "using r1 = null;\nexport type R1 = typeof r1;\nawait using r2 = null;",
+      // A nested `async function` must not turn the rest of an enclosing
+      // async body non-async.
+       "export {};\nasync function o() { async function i() { } await using x = null; }",
+      // The module-only export forms, in a module.
+       "export default 1;", "namespace M { export const a = 1; }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch CH: TS2591 (a Node global with no `@types/node`) and TS2391 (an
+/// overload signature with no implementation).
+///
+/// TS2591 is the one rule in these batches a working TypeScript programmer
+/// hits regularly: `module`, `require`, `process`, `__dirname` and friends
+/// are NOT in the default `lib` set — they come from `@types/node` — and
+/// they sat in the generated lib-global allowlist, so a `.ts` file using
+/// CommonJS without those types installed was accepted in silence. The
+/// allowlist itself is unchanged: its other consumers ask "could the
+/// platform have provided this name", and for those the conservative
+/// answer is still yes.
+///
+/// TS2391 is answered by LOOKAHEAD from the signature, not by carrying a
+/// pending run across statements. The first version did carry one and was
+/// a corpus FALSE POSITIVE on `recursiveTypesUsedAsFunctionParameters`, a
+/// TS7-ACCEPTED file: the run was flushed whenever `parse_stmt` saw a
+/// non-function statement, which includes the statements inside a nested
+/// function BODY, so a legal three-signature set inside another function
+/// was reported the moment the implementation's own `return null;` was
+/// parsed. That case is in the silent list below. Two declaration arms
+/// needed the hook — `parse_stmt`'s and the module loop's own — which is
+/// why `function data(): string; function next(): string;` stayed silent
+/// while the same pair without return annotations was reported.
+test "expr_check: node globals and overload implementations" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  assert_true(issues("module.exports = 1;") > 0)
+  assert_true(issues("var c = require(\"./config\");") > 0)
+  assert_true(issues("console.log(process.env.HOME);") > 0)
+  assert_true(issues("console.log(__dirname);") > 0)
+  assert_true(issues("function foo();\nfunction bar() { }") > 0)
+  assert_true(issues("{\n  function foo();\n  function bar() { }\n}") > 0)
+  assert_true(issues("namespace M {\n  function foo();\n}") > 0)
+  assert_true(issues("function data(): string;\nfunction next(): string;") > 0)
+  assert_true(issues("function foo();\nvar x = 1;") > 0)
+  // --- silent
+  for
+    src in [
+      // A declaration of the name resolves it, whichever form it takes —
+      // the node check runs only after every lookup has had its say.
+      "declare var module: any; module.exports = 1;", "declare function require(s: string): any; var c = require(\"./x\");",
+      "declare const process: { env: any }; console.log(process.env.HOME);", "namespace module { export const a = 1; } console.log(module.a);",
+      // Overload sets: several signatures above one implementation.
+       "function f(a: string): void;\nfunction f(a: number): void;\nfunction f(a: any): void { }",
+      "function f(): void;\nfunction f() { }\nfunction g(): void;\nfunction g() { }",
+      "async function f(a: string): Promise<void>;\nasync function f(a: any): Promise<void> { }",
+      // A set NESTED in another function — the false positive the
+      // pending-run version produced, and the reason the check is a
+      // lookahead.
+       "function other<T>() {\n  function foo5<V>(x: T): string;\n  function foo5<V>(x: number): number;\n  function foo5<V>(x: any): any { return null; }\n  var r = foo5(1);\n}",
+      // An ambient declaration asserts the implementation is elsewhere.
+       "declare function foo(): void;\nfunction bar() { }", "function bar() { }\nfunction baz() { }",
     ] {
     @test.assert_eq(issues(src), 0)
   }

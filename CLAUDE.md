@@ -32,7 +32,7 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2407 / MISS 327 / FP 0 /
+  is a soundness bug, and there are none (TP 2443 / MISS 291 / FP 0 /
   PFLEGAL 0 / TN 1750). The asymmetry is deliberate: we model a subset of
   TS, so a MISS is expected and an FP never is.
   That gate says how many we miss and nothing about WHICH, so "MISS 388"
@@ -45,8 +45,8 @@ product surfaces now.
   were exhausted and that only large type-machinery features remained, and
   that was measured against the **TS6** oracle — under TS7, **128 of the
   388 missing files are flippable by a pure-grammar (TS1xxx) rule** and 91
-  of them need no type judgement anywhere. Nine batches have taken **+70
-  TP at FP 0** so far, and most of their items were BUGS rather than
+  of them need no type judgement anywhere. Thirteen batches have taken
+  **+106 TP at FP 0** so far, and most of their items were BUGS rather than
   missing features — one of them a rule the repo had already written and
   applied to every declaration kind except namespaces. The first:
   `eval`/`arguments` as an assignment target was checked at two of the four
@@ -170,6 +170,67 @@ product surfaces now.
   optional, so an overload SIGNATURE and an implementation cannot be told
   apart, which is also why `check_overload_void_return` has to guess that
   the last declaration is the implementation.
+  Batches CF and CG are ten more grammar rules for **+19 files**, and they
+  are where the BY ranking INVERTS — under "MISS <= 250" the corpus COUNT
+  is the objective, so `parser/ecmascript5`, which BY correctly rejected
+  as broken syntax nobody writes, becomes the largest and cheapest
+  cluster. The family count reached 22 (`parse_binding_ident` reserved
+  `let` and `yield` in strict mode and not the other seven, so
+  `class C { constructor(static) {} }` parsed clean in an automatically
+  strict body) and 23 (`await using` has THREE declaration sites — a
+  statement, a block-statement, a for-head — and the pre-existing TS2854
+  marker was at one, so `{ await using d = null }` inside a block, which
+  is how every `awaitUsingDeclarations` test is written, could never reach
+  it; one helper is now called from all three). Where a per-call-site fix
+  would have meant threading a new field through fourteen save / clear /
+  restore sites, the fact went into the DATA instead: TS1115 needs to know
+  whether a label is on an iteration statement, and the kind is encoded in
+  the label-stack entry so it rides along through an opaque copy.
+  **Three of the ten were corpus FALSE POSITIVES first**, and all three
+  are the legal-neighbour lesson again. TS1106 is a LOOKAHEAD restriction
+  rather than a semantic one — it exists so `for (async of …)` cannot be
+  read as the start of `for await (… of …)` — so `for await (async of x)`
+  and `for ((async) of x)` are both legal, and the AST cannot tell the
+  parenthesized form from the bare one because the binding parser strips
+  parens, so the TOKEN is what gets checked. And `export type R = number`
+  makes a file a module: the module-syntax evidence set had been built
+  from the export shapes that bind a VALUE, so
+  `usingDeclarationsDeclarationEmit.2` — TS7-ACCEPTED, two `export type`
+  aliases and nothing else — read as a script and its top-level
+  `await using` was flagged. The marker now sits at the `export` KEYWORD
+  in all three export parsers rather than on the forms that happen to need
+  it, because a marker written at the form is a marker written at one of
+  them.
+  Batch CH is +7 and contains the one rule here a working TypeScript
+  programmer hits regularly: `module`, `require`, `process`, `__dirname`
+  and six siblings are NOT in the default `lib` set — they come from
+  `@types/node` — and all nine sat in the generated lib-global allowlist,
+  so a `.ts` file using CommonJS with those types missing was accepted in
+  silence (TS2591). The allowlist itself is unchanged, because its seven
+  other consumers ask "could the platform have provided this name" and for
+  those the conservative answer is still yes; only `check_undefined_name`
+  splits the two questions, and only after every declaration lookup has
+  run. It also half-retires a blocker this file records: `TsFunc.body`
+  being non-optional really does block TS2393 / TS2394, but
+  `last_function_bodiless` already carries the fact at PARSE time, so
+  TS2391's pairing question was always answerable there. The way to get it
+  wrong is recorded too, because it cost a false positive: a pending run
+  of signature names carried across statements gets flushed by
+  `parse_stmt`'s view of "the next statement is not a function", which
+  includes the statements inside a nested function BODY — so a legal
+  three-signature set inside another function was reported the moment the
+  implementation's own `return null;` was parsed. A lookahead from the
+  signature needs no scope model, where a scope-saved field would have had
+  to be threaded through every save/restore site around a function body.
+  The same round produced the clearest case yet for pairing a rule with
+  its legal neighbour in a TEST rather than trusting the corpus: batch
+  CD's TS1117 had shipped a false positive, because `{ … }` in expression
+  position is a COVER GRAMMAR — an object literal only until an `=`
+  follows, at which point it was an object destructuring PATTERN and
+  duplicate names in it are legal. The oracle reported FP 0 with the bug
+  present, since `destructuringSameNames` contains illegal spellings too
+  and was a TP whichever half fired; the unit suite caught it, because an
+  earlier batch had written those three legal shapes down as cases.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

@@ -755,6 +755,21 @@ fn Parser::parse_namespace_decl_with_mode(
       "module declaration names may only use ' or \" quoted strings",
     )
   }
+  // TS1035 ("only ambient modules can use quoted names") and, for a
+  // `.d.ts` file, its TS1046 twin ("top-level declarations in a `.d.ts`
+  // file must start with `declare` or `export`"). A QUOTED module name
+  // declares an ambient EXTERNAL module, which only a `declare` context
+  // may do.
+  //
+  // The condition is exact rather than approximate: every declare-context
+  // caller tests `name == "module" && peek_at(1) is Str(_)` and routes
+  // that to `parse_ambient_external_module_decl*` BEFORE reaching here, so
+  // a quoted name arriving at THIS function is by construction a
+  // non-ambient one. `parserModuleDeclaration1` and its `.d.ts` twin are
+  // the same two lines of source and TS7 rejects both.
+  if keyword == "module" && self.peek().kind is Str(_) {
+    self.grammar_misuses.push("only ambient modules can use quoted names")
+  }
   let name = if self.is_qualified_type_name_part(0) {
     Some(self.parse_binding_ident())
   } else {
@@ -850,6 +865,27 @@ fn Parser::parse_namespace_decl_with_mode(
           }
         } noraise {
           module_ => module_
+        }
+      }
+      // TS1063 and TS1319: `export = X` and `export default X` are module
+      // forms, and a NAMESPACE is not a module — neither is legal inside
+      // one (`parserExportAssignment5`, `parserExportAssignment9`). The
+      // body was parsed by a fresh `Parser`, which cannot know it is a
+      // namespace body, so it leaves a sentinel and the decision is made
+      // here where the context is known. An ambient EXTERNAL module
+      // (`declare module "spec" { export = X }`) legitimately uses
+      // `export =` and never reaches this function: every declare-context
+      // caller routes a quoted name to
+      // `parse_ambient_external_module_decl*` first.
+      for misuse in module_.grammar_misuses {
+        if misuse.has_prefix("<export-eq>") {
+          self.grammar_misuses.push(
+            "an export assignment cannot be used in a namespace",
+          )
+        } else if misuse.has_prefix("<export-default>") {
+          self.grammar_misuses.push(
+            "a default export can only be used in an ECMAScript-style module",
+          )
         }
       }
       let next_namespace : @ast.TsNamespaceDecl = {
@@ -2383,6 +2419,17 @@ fn Parser::parse_export_decl_for_module(
   let exports : Array[@ast.TsExportSpec] = []
   let reexports : Array[@ast.TsReExportSpec] = []
   let _ = self.expect(Export)
+  // Marker, not an error: an `export` of ANY kind makes the file a
+  // module. It goes here, at the keyword, rather than on the forms that
+  // happen to need it — the evidence set was assembled from the export
+  // shapes that bind a VALUE (`<export-value>` / `<export-default>` /
+  // `<export-eq>`), so a file whose only module syntax is `export type R
+  // = number` read as a script. That made `usingDeclarationsDeclarationEmit.2`
+  // — TS7-ACCEPTED, two `export type` aliases and nothing else — a false
+  // positive of the TS2853 rule below, and it was found that way rather
+  // than by reading. There are three `export` statement parsers; a marker
+  // written at the form is a marker written at one of them.
+  self.grammar_misuses.push("<module-syntax>")
   if self.match_(As) || self.match_ident("as") {
     if self.match_ident("namespace") {
       let _ = self.parse_binding_ident()
@@ -2531,6 +2578,13 @@ fn Parser::parse_export_decl_for_module(
       return (stmts, exports, reexports)
     }
     let expr = self.parse_expr()
+    // Marker, not an error: `export default` is legal in a module and
+    // TS1319 inside a NAMESPACE, and only the enclosing namespace parser
+    // knows which this is. The payload matches the ambient-side parser's
+    // convention (`<export-default>expr:`) so the TS2528 multiple-defaults
+    // count treats both paths alike — this RUNTIME path recorded nothing
+    // at all, and a namespace body is parsed runtime-first.
+    self.grammar_misuses.push("<export-default>expr:")
     let local_name = match expr {
       @ast.TsExpr::Var(name) => name
       _ => {
@@ -2828,6 +2882,17 @@ fn Parser::parse_export_enum_decl_for_module_block(
     return None
   }
   let _ = self.expect(Export)
+  // Marker, not an error: an `export` of ANY kind makes the file a
+  // module. It goes here, at the keyword, rather than on the forms that
+  // happen to need it — the evidence set was assembled from the export
+  // shapes that bind a VALUE (`<export-value>` / `<export-default>` /
+  // `<export-eq>`), so a file whose only module syntax is `export type R
+  // = number` read as a script. That made `usingDeclarationsDeclarationEmit.2`
+  // — TS7-ACCEPTED, two `export type` aliases and nothing else — a false
+  // positive of the TS2853 rule below, and it was found that way rather
+  // than by reading. There are three `export` statement parsers; a marker
+  // written at the form is a marker written at one of them.
+  self.grammar_misuses.push("<module-syntax>")
   if is_declare {
     let _ = self.advance()
   }
@@ -2987,6 +3052,17 @@ fn Parser::parse_export_stmt(
   top_level_stmts : Array[@ast.TsStmt],
 ) -> Unit raise ParseError {
   let _ = self.expect(Export)
+  // Marker, not an error: an `export` of ANY kind makes the file a
+  // module. It goes here, at the keyword, rather than on the forms that
+  // happen to need it — the evidence set was assembled from the export
+  // shapes that bind a VALUE (`<export-value>` / `<export-default>` /
+  // `<export-eq>`), so a file whose only module syntax is `export type R
+  // = number` read as a script. That made `usingDeclarationsDeclarationEmit.2`
+  // — TS7-ACCEPTED, two `export type` aliases and nothing else — a false
+  // positive of the TS2853 rule below, and it was found that way rather
+  // than by reading. There are three `export` statement parsers; a marker
+  // written at the form is a marker written at one of them.
+  self.grammar_misuses.push("<module-syntax>")
   if self.match_(As) || self.match_ident("as") {
     if self.match_ident("namespace") {
       let _ = self.parse_binding_ident()
@@ -3405,7 +3481,14 @@ fn Parser::parse_module_with_seeded_const_values_internal(
       }
     }
     if self.check(Function) {
-      funcs.push(self.parse_function())
+      let func = self.parse_function()
+      // TS2391, second site. The module's own top-level loop parses a
+      // function declaration here rather than through `parse_stmt`, which
+      // is why `function data(): string; function next(): string;`
+      // (parserModuleDeclaration10) stayed silent while the same pair
+      // without return annotations was reported: two arms, one rule.
+      self.note_function_declaration(func.name, self.last_function_bodiless)
+      funcs.push(func)
     } else if (match self.peek().kind {
         Ident("async") =>
           match self.peek_at(1).kind {
@@ -3428,6 +3511,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
       self.in_async = true
       let func = self.parse_function()
       self.in_async = prev_async
+      self.note_function_declaration(func.name, self.last_function_bodiless)
       funcs.push(func)
     } else if self.check(Interface) {
       interfaces.push(self.parse_interface())
@@ -3514,6 +3598,24 @@ fn Parser::parse_module_with_seeded_const_values_internal(
                 // declaration file" behavior) so existing flows that
                 // don't consult the augmentation list still see the
                 // members.
+                // TS5061: "Pattern 'X' can have at most one '*'
+                // character." A quoted ambient module name may be a
+                // WILDCARD pattern (`declare module "foo/*"`), and the
+                // pattern language allows exactly one `*`. Two or more is
+                // never legal, and a name with none is an ordinary
+                // specifier, so counting is the whole rule
+                // (`ambientDeclarationsPatterns_tooManyAsterisks`).
+                let mut asterisks = 0
+                for ch in spec {
+                  if ch == '*' {
+                    asterisks += 1
+                  }
+                }
+                if asterisks > 1 {
+                  self.grammar_misuses.push(
+                    "pattern `\{spec}` can have at most one `*` character",
+                  )
+                }
                 module_augmentations.push((spec, module_))
                 append_module_decls(
                   module_, funcs, interfaces, type_aliases, imports, values, classes,

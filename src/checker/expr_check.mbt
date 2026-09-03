@@ -16051,7 +16051,23 @@ fn check_undefined_name(env : ExprEnv, ctx : CheckCtx, name : String) -> Unit {
   if !is_ascii_ident_start_name(name) {
     return
   }
-  if is_pseudo_value_keyword(name) || is_lib_global_value(name) {
+  // TS2591 ("Cannot find name 'X'. Do you need to install type definitions
+  // for node?"): `module`, `require`, `process` and friends are NOT part of
+  // the default `lib` set — they come from `@types/node` — but they sat in
+  // the generated lib-global allowlist, so a `.ts` file using CommonJS or a
+  // Node global without those types installed was accepted silently. That
+  // is one of the errors a TypeScript user is most likely to actually hit.
+  //
+  // The allowlist itself is left alone: its seven other consumers ask
+  // "could the platform have provided this name" (the TS2454
+  // used-before-assigned exemption, for one), and for those the
+  // conservative answer is still yes. Only the name-resolution check
+  // distinguishes them, and only after every declaration lookup below has
+  // had its say — so `declare var process`, `module X { }`, an import, or
+  // a local binding all still resolve.
+  let node_only = is_node_only_global_value(name)
+  if is_pseudo_value_keyword(name) ||
+    (is_lib_global_value(name) && not(node_only)) {
     return
   }
   // A private-field BRAND is not a value reference at all.
@@ -16096,10 +16112,42 @@ fn check_undefined_name(env : ExprEnv, ctx : CheckCtx, name : String) -> Unit {
   if ctx.in_scope_type_params.contains(name) {
     return
   }
-  record(ctx, "use `\{name}`", "cannot find name `\{name}`")
+  if node_only {
+    record(
+      ctx,
+      "use `\{name}`",
+      "cannot find name `\{name}` — do you need to install type definitions for node?",
+    )
+  } else {
+    record(ctx, "use `\{name}`", "cannot find name `\{name}`")
+  }
 }
 
 ///|
+/// Names that only `@types/node` declares, never the default `lib` set.
+///
+/// Kept as its own predicate rather than removed from the generated
+/// lib-global allowlist: `is_lib_global_value` answers "could the platform
+/// have provided this name", which for its other consumers is still yes.
+/// This one answers "would tsc, with no `@types/node` installed, reject a
+/// reference to it", which is a different question with a different answer.
+fn is_node_only_global_value(name : String) -> Bool {
+  match name {
+    "module"
+    | "require"
+    | "exports"
+    | "process"
+    | "Buffer"
+    | "__dirname"
+    | "__filename"
+    | "setImmediate"
+    | "clearImmediate" => true
+    // `global` is deliberately absent: `declare global { }` is standard
+    // TypeScript, and the augmentation block's name reaches enough walks
+    // that treating the identifier as undeclared is not worth one file.
+    _ => false
+  }
+}
 
 ///|
 /// TS2558 ("Expected N type arguments, but got M") for explicit type arguments
@@ -21964,6 +22012,46 @@ fn check_type_param_as_base(module_ : @ast.TsModule) -> Array[ExprIssue] {
       }
     }
   }
+  // TS2449 ("Class 'X' used before its declaration"): a class whose
+  // `extends` clause names a class declared LATER in the same module. A
+  // class binding is block-scoped and its heritage clause is evaluated at
+  // declaration time, so the later name is still in its temporal dead zone
+  // — unlike a function declaration, which hoists.
+  //
+  // Only a base that IS a class in this module counts. An interface base,
+  // an out-of-module name, and an expression-shaped base are all left
+  // alone: the first is a type (erased, no TDZ), and for the other two this
+  // pass cannot see the declaration order at all. Declaration merging
+  // cannot rescue it either, since a merged interface adds members and not
+  // a runtime binding.
+  // An AMBIENT class on either side is exempt. `declare class C {}` emits
+  // nothing and asserts that the binding exists at runtime from somewhere
+  // else, so there is no temporal dead zone to fall into — declaration
+  // ORDER inside a `.d.ts` carries no runtime meaning at all. Probed:
+  // `class C1 extends C2 {} declare class C2 {}` fired before this
+  // exemption was added, and that shape is ordinary @types layout.
+  let class_index : Map[String, Int] = {}
+  for i, c in module_.classes {
+    // A repeated name is a different error (TS2300, batch CA); keep the
+    // FIRST index so a later duplicate cannot make an earlier `extends`
+    // look forward-referencing.
+    if not(class_index.contains(c.name)) && not(c.is_declare) {
+      class_index[c.name] = i
+    }
+  }
+  for i, cls in module_.classes {
+    if cls.is_declare {
+      continue
+    }
+    for base in cls.base_names {
+      if class_index.get(base) is Some(j) && j > i {
+        issues.push({
+          path: "class \{cls.name}",
+          message: "class `\{base}` used before its declaration",
+        })
+      }
+    }
+  }
   issues
 }
 
@@ -27299,6 +27387,7 @@ fn check_module_function_bodies_layered(
     // in a plain script stays legal.
     let mut has_module_syntax = module_.imports.length() > 0
     let mut top_await_name = false
+    let mut top_await_using = false
     for gm in module_.grammar_misuses {
       if gm == "<module-syntax>" ||
         gm.has_prefix("<export-value>") ||
@@ -27309,11 +27398,25 @@ fn check_module_function_bodies_layered(
       if gm == "<top-await-name>" || gm == "<export-value>await" {
         top_await_name = true
       }
+      if gm == "<top-level-await-using>" {
+        top_await_using = true
+      }
     }
     if has_module_syntax && top_await_name {
       all.push({
         path: "top-level `await`",
         message: "`await` is a reserved word at the top-level of a module",
+      })
+    }
+    // TS2853, the mirror image of TS1262 above and off the same evidence:
+    // a top-level `await using` is legal only in a MODULE, so a file with
+    // no imports and no exports cannot have one
+    // (`awaitUsingDeclarations.13`, `awaitUsingDeclarationsInForOf.4` —
+    // tsc's own message suggests adding an empty `export {}`).
+    if top_await_using && not(has_module_syntax) {
+      all.push({
+        path: "top-level `await using`",
+        message: "`await using` statements are only allowed at the top level of a file when that file is a module",
       })
     }
     // TS2448: a top-level class's static block reading / writing a

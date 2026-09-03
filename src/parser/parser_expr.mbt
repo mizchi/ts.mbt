@@ -4035,6 +4035,21 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
         }
       }
       let _ = self.expect(RBrace)
+      // A `{ … }` in expression position is a COVER GRAMMAR: it is an
+      // object literal unless an `=` follows, in which case it was an
+      // object destructuring PATTERN all along and duplicate names in it
+      // are perfectly legal (`({ foo, foo } = { foo: 2 })` —
+      // destructuringSameNames, a TS7-ACCEPTED file). TS1117 must not
+      // reach that form.
+      //
+      // Found by the unit suite, not by the corpus: `destructuringSameNames`
+      // also contains genuinely illegal spellings, so the file was already
+      // a TP and the oracle could not see that half of it was being
+      // reported for the wrong reason. The three legal shapes were in
+      // `expr_check_wbtest.mbt` from an earlier batch and are what failed.
+      if not(self.check(Eq)) {
+        self.record_objlit_duplicate_keys(fields)
+      }
       ObjectLit(fields)
     }
     Function => {

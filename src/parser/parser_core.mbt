@@ -30,6 +30,13 @@ pub struct Parser {
   // sources (`.js` / `.ts`) flip this off so the declarations emit
   // a real binding.
   mut in_ambient_module : Bool
+  // True while parsing a class STATIC BLOCK body. A static block is
+  // neither a function nor module top level, and `in_function` /
+  // `in_async` cannot say so: a top-level class's static block leaves
+  // `in_function` false (which is what the TS2448 `<sb-read:>` walk
+  // relies on), and a class inside an `async` function leaves `in_async`
+  // true. Read by the `await using` rules (TS18054).
+  mut in_static_block : Bool
   labels : Array[String] // for labeled break/continue validation
   src : String
   allow_jsx : Bool
@@ -283,6 +290,7 @@ pub fn Parser::new_with_strict_and_jsx(
     in_iteration: false,
     in_switch: false,
     in_ambient_module: false,
+    in_static_block: false,
     labels: [],
     src: "",
     allow_jsx,
@@ -470,6 +478,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     in_iteration: false,
     in_switch: false,
     in_ambient_module: false,
+    in_static_block: false,
     labels: [],
     src,
     allow_jsx,

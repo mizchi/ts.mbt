@@ -1,4 +1,27 @@
 ///|
+/// The words ES reserves only in STRICT mode, minus the two this parser
+/// already spells as their own token kinds (`let` and `yield`, handled in
+/// their own arms below) and minus `eval` / `arguments`, which are not
+/// reserved words at all — they are ordinary identifiers strict mode
+/// forbids as a binding target, and the caller tests them separately.
+///
+/// TS1213 ("identifier expected — `X` is a reserved word in strict mode").
+/// The rule was already here for `let` and `yield`, at two of the nine
+/// spellings the language has, which is why `class C { constructor(static)
+/// {} }` parsed clean: a class body is automatically strict
+/// (`parser_class.mbt` sets `in_strict`), and `static` arrives through the
+/// plain `Ident(_)` arm next to `eval` / `arguments`.
+fn is_strict_reserved_word(name : String) -> Bool {
+  name == "implements" ||
+  name == "interface" ||
+  name == "package" ||
+  name == "private" ||
+  name == "protected" ||
+  name == "public" ||
+  name == "static"
+}
+
+///|
 // /
 fn Parser::parse_binding_ident(self : Parser) -> String raise ParseError {
   match self.peek().kind {
@@ -9,7 +32,7 @@ fn Parser::parse_binding_ident(self : Parser) -> String raise ParseError {
           // identifiers (TS1100 family). Recorded -- not raised -- so the
           // file still parses and the checker reports the diagnostic.
           if (self.in_strict || self.directive_strict) &&
-            (n == "eval" || n == "arguments") {
+            (n == "eval" || n == "arguments" || is_strict_reserved_word(n)) {
             self.strict_mode_misuses.push(n)
           }
           n

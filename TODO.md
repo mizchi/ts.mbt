@@ -2155,11 +2155,213 @@ need parser-wide changes).
 
 ## TS Checker Conformance (current state, 2026-09-02 — TypeScript 7)
 
-State: whole-corpus **TP 2407 / MISS 327 / FP 0 / PFLEGAL 0 / TN 1750**
+State: whole-corpus **TP 2443 / MISS 291 / FP 0 / PFLEGAL 0 / TN 1750**
 (classified 4484, NOTRUN 14) via
 `scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0`.
-Nine batches: BU +9, BV +14, BW +13, BX +10, BY +7, BZ +1, CA +0, CB +10,
-CC +6, for **+70 TP at FP 0**.
+Thirteen batches: BU +9, BV +14, BW +13, BX +10, BY +7, BZ +1, CA +0,
+CB +10, CC +6, CD +4, CE +6, CF/CG +19, CH +7, for **+106 TP at FP 0**.
+
+### Batch CH (2026-09-03): TS2591 and TS2391, +7 files
+
+**TS2591** ("Cannot find name 'X'. Do you need to install type definitions
+for node?") is the one rule in this whole run that a working TypeScript
+programmer hits regularly. `module`, `require`, `exports`, `process`,
+`Buffer`, `__dirname`, `__filename`, `setImmediate` and `clearImmediate`
+are NOT part of the default `lib` set — they come from `@types/node` — and
+all nine sat in the generated lib-global allowlist, so a `.ts` file using
+CommonJS or a Node global with those types missing was accepted in silence.
+
+The allowlist is deliberately left alone. Its seven other consumers ask
+"could the platform have provided this name" (the TS2454
+used-before-assigned exemption, among them), and for those the
+conservative answer is still yes; only `check_undefined_name`
+distinguishes the two questions, and it does so only after every
+declaration lookup has had its say, so `declare var process`,
+`namespace module { }`, an import or a local binding all still resolve.
+`global` is excluded on purpose: `declare global { }` is standard
+TypeScript and its identifier reaches enough walks that treating it as
+undeclared is not worth one file.
+
+**TS2391** ("Function implementation is missing or not immediately
+following the declaration") is answered by LOOKAHEAD from the signature —
+after a bodyless `function f`, the next declaration must be a function
+named `f` — and NOT by carrying a pending run of signature names across
+statements. That distinction cost a corpus false positive to learn. The
+first version kept the run on the parser and flushed it whenever
+`parse_stmt` saw a statement that was not a function declaration, which
+includes the statements inside a nested function BODY, because
+`parse_function` parses the body through the same funnel. So the legal
+three-signature set inside `function other<T …>()` in
+`recursiveTypesUsedAsFunctionParameters` — a TS7-ACCEPTED file — was
+reported the moment the implementation's own `return null;` was parsed. A
+scope-saved field would have had to be threaded through every save /
+restore site around a function body; the lookahead needs no scope model at
+all.
+
+This also settles half of what this file records as blocked. `TsFunc.body`
+being non-optional is a real blocker for anything DOWNSTREAM of the parse,
+and TS2393 / TS2394 stay blocked on it — but `last_function_bodiless`
+already carries the fact at parse time, so the PAIRING question was always
+answerable there. Two declaration arms needed the hook and only one had it
+at first: `parse_stmt`'s, and the module loop's own `if self.check(Function)`,
+which is why `function data(): string; function next(): string;` stayed
+silent while the same pair without return annotations was reported.
+
+### Batches CF + CG (2026-09-02): ten grammar rules, +19 files
+
+Under the goal "MISS <= 250" the ranking from batch BY INVERTS, and that is
+worth stating rather than quietly reversing: BY concluded that
+`parser/ecmascript5` was the wrong cluster to take, because its 49 files
+are `parserErrorRecovery_ParameterList6`-shaped broken syntax nobody
+writes. That judgement was correct under the earlier objective, which
+weighted real-world encounter frequency. When the corpus COUNT is the
+objective, corpus count is what to rank by, and that directory is the
+largest and cheapest cluster in the MISS set. Both readings are recorded
+here so neither looks like a mistake.
+
+The rules, each one condition next to a rule that already existed:
+
+- **TS1035 / TS1046** — a QUOTED module name declares an ambient external
+  module, which only a `declare` context may do. The condition is exact
+  rather than approximate: every declare-context caller tests
+  `name == "module" && peek_at(1) is Str(_)` and routes that to
+  `parse_ambient_external_module_decl*` BEFORE reaching
+  `parse_namespace_decl_with_mode`, so a quoted name arriving there is by
+  construction non-ambient.
+- **TS1213** — a strict-mode reserved word as a binding identifier. The
+  22nd instance of this repo's recurring family: the rule was already in
+  `parse_binding_ident` for `let` and `yield`, at two of the nine
+  spellings the language has, so `class C { constructor(static) {} }`
+  parsed clean even though a class body is automatically strict.
+- **TS1029** — an accessibility modifier must precede `override`. The rule
+  exists for class MEMBERS; parameter properties never got it, because
+  `skip_param_modifiers` consumed `override` only to discard it.
+- **TS1031** — `declare` may modify a class FIELD and nothing else. Written
+  for the constructor alone and stopped there.
+- **TS1115** — `continue` needs a label on an ITERATION statement, and the
+  existing check only asked whether the label EXISTS; its own comment said
+  so ("should be an iteration label for continue"). The kind is encoded in
+  the label-stack ENTRY rather than kept in a second array, because
+  fourteen sites in three files save, clear and restore `self.labels`
+  around a function body and a parallel field would have to be threaded
+  through every one — which is the same shape as the family above. A
+  prefix rides along through an opaque copy for free.
+- **TS1106** — `for (async of x)`. See the false positives below.
+- **TS1063 / TS1319** — `export =` and `export default` inside a namespace.
+  A namespace body is parsed by a fresh `Parser` that cannot know it is a
+  namespace body, so it leaves a sentinel and the enclosing parser decides.
+- **TS1155** — a `using` in a C-style for head must be initialized. What is
+  LEGAL here came from the baseline rather than from reasoning:
+  `for (using of = null;;)` and `for (using of: null = null;;)` are both
+  fine, and `usingDeclarationsInForOf.4` errors on its third line alone.
+- **TS2852 / TS18054 / TS2853** — where an `await using` is allowed. There
+  are THREE declaration sites (a statement, a block-statement, a for-head)
+  and the pre-existing TS2854 marker was written at one of them, so
+  `{ await using d = null }` inside a block — how every
+  `awaitUsingDeclarations` test is written — could never reach it. One
+  `record_await_using_context` helper is now called from all three. A class
+  static block needed a new `in_static_block` flag because neither
+  `in_function` nor `in_async` can say so: a top-level class's static block
+  leaves `in_function` false, and a class inside an `async` function leaves
+  `in_async` true.
+
+**Three of the ten were corpus FALSE POSITIVES first, and all three are
+about a rule's legal neighbour.** TS1106 is a LOOKAHEAD restriction, not a
+semantic one — it exists so `for (async of …)` cannot be read as the start
+of `for await (… of …)` — so `for await (async of x)` and
+`for ((async) of x)` are both legal, and the AST cannot tell the second
+from the first because the binding parser strips parens (the token is
+checked instead). And `export type R = number` makes a file a module: the
+module-syntax evidence set had been assembled from the export shapes that
+bind a VALUE, so `usingDeclarationsDeclarationEmit.2` — TS7-ACCEPTED, two
+`export type` aliases and nothing else — read as a script. The marker now
+sits at the `export` keyword in all THREE export parsers rather than on
+the forms that happen to need it, because a marker written at the form is
+a marker written at one of them.
+
+Two fixes came along that are not conformance rules. The statement-level
+`async function` arm cleared `in_async` to `false` instead of restoring it,
+so an enclosing async body went non-async the moment it declared a nested
+`async function`; `parse_function` reads that flag to learn whether the
+function it is parsing is async and saves/restores it around the body
+itself, so the site only has to hand it the answer. And the RUNTIME export
+parser recorded no `<export-default>` marker at all, so the TS2528
+multiple-defaults count could not see a default export in a `.ts` file.
+
+### Batch CE (2026-09-02): TS1048, TS1434, TS1196, TS1368
+
+Six files, four rules, each of which was one missing condition:
+
+- **TS1048** ("A rest parameter cannot have an initializer") — the 21st
+  instance of the family and the closest yet: TS1047 ("a rest parameter
+  cannot be optional") sits on the adjacent line and asks about `?` where
+  this asks about `=`.
+- **TS1434** ("Unexpected keyword or identifier") for a repeated `static`.
+- **TS1196** — a catch clause annotation must be `any` or `unknown`. The
+  annotation was already parsed here, and discarded; only the comparison
+  was missing.
+- **TS1368** ("Class constructor may not be a generator") — legal at every
+  other member name, which is what the test pins.
+
+### Batch CD (2026-09-02): TS2449, TS5061, TS1117
+
+Four files, three rules, each self-contained:
+
+- **TS2449** ("Class 'X' used before its declaration"): a class whose
+  `extends` clause names a class declared LATER in the module. A class
+  binding is block-scoped and its heritage clause runs at declaration time,
+  so the later name is still in its temporal dead zone — unlike a function
+  declaration, which hoists. An AMBIENT class on either side is exempt, and
+  that exemption was found by probing rather than by reasoning:
+  `class C1 extends C2 {} declare class C2 {}` is ordinary @types layout
+  and fired before it was added, because a `declare class` emits nothing and
+  asserts the binding exists from elsewhere — declaration order in a `.d.ts`
+  carries no runtime meaning. An interface base is also exempt (a type, no
+  runtime binding), and an out-of-module or expression base abstains because
+  the order is not visible.
+- **TS5061** ("Pattern 'X' can have at most one '*' character") for a quoted
+  ambient module name. Counting is the whole rule: one `*` is the legal
+  wildcard form, none is an ordinary specifier.
+- **TS1117** ("An object literal cannot have multiple properties with the
+  same name"), at the single site where the field list is complete. Three
+  shapes are legal rather than abstained-from: a `get x` / `set x` PAIR
+  (the parser keys them `@@get:x` / `@@set:x`, so comparing prefixed keys
+  gives that for free), a SPREAD (which may legally supply a key another
+  entry overrides — `{ ...o, a: 1 }`), and a computed key.
+
+  A FOURTH was missing and shipped as a false positive: `{ … }` in
+  expression position is a COVER GRAMMAR, an object literal only until an
+  `=` follows, at which point it was an object destructuring PATTERN all
+  along and duplicate names in it are legal. `({ foo, foo } = { foo: 2 })`
+  was reported. Two things about how it was found are worth keeping. The
+  ORACLE could not see it: `destructuringSameNames` contains illegal
+  spellings too, so the file was a TP whichever half fired, and the run
+  reported FP 0 with the bug present. The UNIT SUITE caught it, because an
+  earlier batch had written those three legal shapes down as cases — which
+  is the argument for pairing every rule with its legal neighbour in a
+  test rather than trusting the corpus count. Gating on `not(self.check(Eq))`
+  at the call site costs nothing: TP 2443 / MISS 291 / FP 0 before and
+  after.
+
+`symbolProperty36` (`{ [Symbol.isConcatSpreadable]: 0,
+[Symbol.isConcatSpreadable]: 1 }`) is left a MISS on purpose and the reason
+is written into the code: the object-literal parser stores a computed key as
+`@@computed:<index>`, so two of them never compare equal, and only the CLASS
+key path resolves a well-known symbol to a stable `@@<name>`. Giving object
+literals the same naming would change keys the mangler and the
+dead-property pass read — too much blast radius for one file.
+
+**TS2403 was the biggest bucket (12 files) and is not worth 12.** Its
+simple spelling already works (`var x: number; var x: string;`), so the
+files were opened. `unionTypeEquivalence` needs TYPE IDENTITY rather than
+assignability — `var x: C; var x: C | D;` errors even when `D extends C`,
+and the same file's `var y: string|number; var y: number|string` and its
+`typeof`-aliased `z1` pair must stay silent, so it needs order-insensitive
+identity plus `typeof` resolution for ONE file. The other eleven need real
+inference of an un-annotated second declarator (`var t: this; var t = …`,
+`var x: never; var x = []`, spread inference, generic signature
+comparison). Third time this session that a code count promised a batch and
+delivered one file; the fix is the same as the first two — open the files.
 
 ### Batches CB / CC (2026-09-02): the goal changed, so the ranking did
 

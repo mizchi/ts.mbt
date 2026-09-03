@@ -2026,6 +2026,17 @@ fn Parser::parse_class_body(
             if is_async_method || saw_override_modifier || is_readonly_field {
               modifier_order_misuse = true
             }
+            // TS1434 ("Unexpected keyword or identifier"): a SECOND
+            // `static` on one member — `static static Foo() {}`,
+            // `static static Foo;`, `static static [x: string]: string`
+            // (parserMemberFunctionDeclaration2, parserMemberVariable
+            // Declaration2, parserIndexMemberDeclaration10). tsc reports
+            // this as a stray identifier rather than a duplicate modifier,
+            // but the condition is exactly "already seen", the same shape
+            // as the TS1028 accessibility check twenty lines below.
+            if is_static {
+              self.grammar_misuses.push("unexpected keyword or identifier")
+            }
             is_static = true
             has_modifier = true
             // Check for static initialization block: static { ... }
@@ -2039,7 +2050,10 @@ fn Parser::parse_class_body(
               if member_decorated {
                 self.invalid_decorator_uses.push("static block")
               }
+              let prev_static_block = self.in_static_block
+              self.in_static_block = true
               let block = self.parse_block()
+              self.in_static_block = prev_static_block
               elements.push(StaticBlock(block))
               // TS2448: a top-level class's static block executes at class
               // definition time, so its immediate reads / writes of a
@@ -2221,14 +2235,23 @@ fn Parser::parse_class_body(
         self.invalid_decorator_uses.push("constructor")
       }
     }
-    // TS1031: `declare` cannot modify a constructor implementation
-    // (`class C { declare constructor() {} }` —
-    // parserConstructorDeclaration4).
-    if has_declare &&
-      method_name == "constructor" &&
-      (self.check(LParen) || self.check(Lt)) {
+    // TS1031: `declare` may modify a class FIELD and nothing else, so any
+    // member whose name is followed by a call signature is an error. The
+    // rule was written for the constructor alone
+    // (`parserConstructorDeclaration4`) and stopped there, leaving
+    // `class C { declare Foo() { } }` silent
+    // (`parserMemberFunctionDeclaration5`).
+    //
+    // A field is unreachable from here: at this point the cursor sits
+    // immediately after the member name, so `declare x: (a: number) =>
+    // void` reads `Colon` and only a method reads `LParen` / `Lt`.
+    if has_declare && (self.check(LParen) || self.check(Lt)) {
       self.grammar_misuses.push(
-        "`declare` modifier cannot appear on a constructor",
+        if method_name == "constructor" {
+          "`declare` modifier cannot appear on a constructor"
+        } else {
+          "`declare` modifier cannot appear on a class method"
+        },
       )
     }
     if method_name != "<computed>" {
@@ -2368,6 +2391,16 @@ fn Parser::parse_class_body(
         if is_async_method {
           self.record_suppressible_grammar_misuse(
             "`async` modifier cannot appear on a constructor declaration",
+          )
+        }
+        // TS1368: "Class constructor may not be a generator."
+        // `*constructor() {}` (constructorNameInGenerator). The `*` sits in
+        // the same modifier position as `async`, which is already rejected
+        // one line above; this is the fourth member of that list rather
+        // than a new rule.
+        if is_generator {
+          self.record_suppressible_grammar_misuse(
+            "class constructor may not be a generator",
           )
         }
         if saw_override_modifier {

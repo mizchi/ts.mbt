@@ -88,6 +88,12 @@ fn Parser::skip_param_modifiers(self : Parser) -> (Bool, Bool, String) {
   let mut saw_readonly = false
   let mut visibility = "public"
   let mut has_modifier = true
+  // TS1029: modifier ORDER. An accessibility modifier must precede
+  // `override`, so `override public foo` is an error and `public override
+  // foo` is not. The rule already existed for class MEMBERS; parameter
+  // properties never got it, because `skip_param_modifiers` consumed
+  // `override` only to discard it (`override11`).
+  let mut saw_override = false
   while has_modifier {
     has_modifier = false
     match self.peek().kind {
@@ -114,6 +120,13 @@ fn Parser::skip_param_modifiers(self : Parser) -> (Bool, Bool, String) {
             // other four (public/private/protected/readonly) are.
             if name != "override" {
               saw_property_modifier = true
+              if saw_override {
+                self.grammar_misuses.push(
+                  "`\{name}` modifier must precede `override` modifier",
+                )
+              }
+            } else {
+              saw_override = true
             }
             if name == "readonly" {
               saw_readonly = true
@@ -379,6 +392,17 @@ fn Parser::parse_params(self : Parser) -> Array[@ast.TsParam] raise ParseError {
     if p.is_rest && p.is_optional {
       self.record_suppressible_grammar_misuse(
         "a rest parameter cannot be optional",
+      )
+    }
+    // TS1048: `foo(...bar = 0)`. The other half of the same restriction —
+    // a rest parameter is always present as an array, so neither an
+    // optional marker nor a default can mean anything. Written here
+    // because it was NOT written here: TS1047 sat alone for as long as it
+    // did, which is the twenty-first instance in this repo of one rule
+    // landing at some of its spellings (parserParameterList10).
+    if p.is_rest && p.default is Some(_) {
+      self.record_suppressible_grammar_misuse(
+        "a rest parameter cannot have an initializer",
       )
     }
     // TS1016: a REQUIRED parameter after an optional one. Required means
