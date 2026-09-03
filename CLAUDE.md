@@ -1920,7 +1920,15 @@ typescript.mbt/
 # Check for errors
 moon check --deny-warn
 
-# Run tests
+# Run tests. Takes about an hour, and most of that is NOT tests: the
+# `*_bench_wbtest.mbt` files use the `(it : @bench.T)` signature, whose
+# `it.bench(fn() { … })` runs its body many times to get a timing, and
+# `moon test` executes those loops too. The checker's bench alone is
+# 20-30 minutes of CPU in one process at 100%, which is indistinguishable
+# from a hang — this was mistaken for one twice, once correctly (an
+# O(n^2) rule, see batch CP) and once not. To tell them apart, run the
+# one file: `moon test --target native src/checker/expr_check_wbtest.mbt`
+# is ~10 seconds, so if THAT hangs the problem is real.
 moon test --target native
 
 # Run parser microbenchmarks
