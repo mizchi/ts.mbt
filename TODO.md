@@ -2153,16 +2153,116 @@ resolver would be a deep refactor); `Parser::peek/check` +
 copies a Token and refcounts its payload; a tag-int fast path would
 need parser-wide changes).
 
-## TS Checker Conformance (current state, 2026-09-02 — TypeScript 7)
+## TS Checker Conformance (current state, 2026-09-03 — TypeScript 7)
 
-State: whole-corpus **TP 2457 / MISS 277 / FP 0 / PFLEGAL 0 / TN 1750**
+State: whole-corpus **TP 2512 / MISS 222 / FP 0 / PFLEGAL 0 / TN 1750**
 (classified 4484, NOTRUN 14) via
 `scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0`.
-Twenty batches: BU +9, BV +14, BW +13, BX +10, BY +7, BZ +1, CA +0,
+Twenty-one batches: BU +9, BV +14, BW +13, BX +10, BY +7, BZ +1, CA +0,
 CB +10, CC +6, CD +4, CE +6, CF/CG +19, CH +7, CI +5, CJ +6, CK +3,
-CL +11, CM +11, CN +1, CO +4, for **+147 TP at FP 0**
-(TP 2484 / MISS 250 / FP 0 / PFLEGAL 0 / TN 1750) — the MISS <= 250
-target, met on the line.
+CL +11, CM +11, CN +1, CO +4, CP/CQ +28, for **+175 TP at FP 0**. The
+MISS <= 250 target was met at CO; the current goal is MISS <= 200, which
+needs **22 more files**.
+
+### Batch CQ (2026-09-03): four rules the compiler had to settle
+
+Verified together with CP: **+28 files** for the pair (TP 2484 -> 2512,
+MISS 250 -> 222, FP 0, PFLEGAL 0, TN 1750), checker whitebox 640/640.
+
+- **TS1212** (`yield` / `let` as an identifier reference). The message
+  names strict mode and tsc applies it regardless — `yield;`,
+  `console.log(yield)`, `var yield = 1`, a parameter named `yield` and a
+  bare `let` are all reported at **es5** in a sloppy script. So the rule
+  is not gated on strictness or on the target, which is the opposite of
+  what the message says and of what batch CF assumed when it reserved
+  these names in `parse_binding_ident` for strict mode only. Recorded at
+  the two identifier-REFERENCE arms; every property position
+  (`{ yield: 1 }`, `o.let`, `interface I { let: string }`,
+  `enum E { yield }`, `class C { yield() {} }`) is legal and each is
+  parsed elsewhere, which is what keeps the rule off them.
+- **TS7008** (a class member with no annotation and no initializer under
+  `noImplicitAny`). Recorded in the parser because the annotation is the
+  deciding fact and the AST cannot carry it — a missing annotation and an
+  explicit `: any` are both `Any`. `q = 1` infers, `r: number` is TS2564
+  instead, a `#private` and a `static` member error like a plain one, and
+  an ambient class is exempt for free: `declare class` is parsed by
+  `parse_declare_class` and never reaches `parse_class_body`.
+- **TS2803** (assigning to a private method) and **TS2806** (reading a
+  private accessor that has only a setter). Decided over the class body's
+  TOKEN range rather than by walking member bodies: a body is an
+  arbitrary expression tree, and every access to `#x` must spell `#x`, so
+  a token scan is complete by construction where a walker missing one arm
+  loses findings silently. A `.` before the `PrivateIdent` is what
+  distinguishes an ACCESS from the member's own declaration and from a
+  `#x in v` brand check; what follows decides the direction, and a
+  compound assignment counts as both — which is why `this.#x += 2` is a
+  READ of a setter-only accessor, the corpus shape. Probed: writing a
+  set-only accessor is legal, writing a GET-only one is TS2540 (a
+  different code, not raised), and writing a plain private field is fine.
+
+### Batch CP (2026-09-03): thirteen rules, one rejection, one perf bug
+
+CP alone was +19 (TP 2484 -> 2503, MISS 250 -> 231, FP 0). Its rules and
+findings follow; the pair's combined numbers are above.
+
+**Ranking.** `--miss-list` was added to the oracle so the MISS paths come
+out of the same loop that classifies them — a second script deciding what
+a MISS is can disagree with the gate — and `scripts/checker_miss_rank.mjs`
+probes every one of them with the real compiler and groups by code. It
+ranks by `solo` (files where a code is the only lever) rather than by
+(file, code) pairs, since the thing that flips is a FILE.
+
+The ranking's first result was a CORRECTION to this document. CLAUDE.md
+recorded that TS2322 / TS2345 / TS2339 / TS2304 — the four biggest
+buckets — "turn out not to need machinery at all", because their basic
+forms are already flagged. Opening the files says the opposite: their
+basic forms are already TPs, which is exactly why they are NOT in the
+miss list, and what remains under those codes is `for (foo().x of ['a'])`
+assigning a string into a property, a well-known-symbol accessor pair,
+`Intl.NumberFormat` option types and union normalization. There is no
+systemic lever at the top of the table; the work is the tail.
+
+**Ten grammar / lexer / flag rules.** TS1489, TS17006, TS5076, TS1186
+(two sites), TS1347, TS17013, TS1036, TS2354, TS18016, TS2390. Each is
+described at its site with the probed boundary; the ones worth naming
+here are the two that are the applied-in-some-places family (TS1186's two
+parsers, TS2390's counter that only ever compared against 2) and TS1036,
+which is the INVERSE — `Empty` looks like a missing arm and is a
+deliberate abstention, because six legal lowerings produce it.
+
+**Three structural rules.** TS2390, the computed half of TS4113, TS2493.
+
+**TS4113: a recorded rejection, now with a condition.** Batch BY refused
+`override` on a computed key as unsound and was right. This ships the
+decidable part — a base chain that declares NOTHING cannot declare the
+resolved key either — and getting that claim to be TRUE took two fixes:
+`resolve_base_chain_members` consulted a merged interface only when no
+class of the name existed (which is never, for a merge), and a computed
+key in the BASE now sets `has_opaque` so the walk withdraws the claim
+rather than reading an unnameable member as an absent one.
+
+**REJECTED (again): wiring `unresolved_type_references` into the
+conformance path.** Four causes batch CL named are real and are fixed
+(the `__tsmbt_infer` marker read as a type; an `infer` name unresolved in
+the branches; a forty-name hand list where the generated
+`is_lib_global_type` registry exists; `imported_binding_names` ignored by
+`module_declared_name_set` despite its own comment naming the consumer).
+None is the blocker. An interface or object-type call / construct
+signature's own type parameters are not preserved anywhere `check_type`
+can read them, so `interface I { <U>(x: U): U }` reports `U` through arms
+the walk has always had — the binder is lost by the PARSER. Adding scope
+arms for `GenericFunc` and the mapped types made it worse: those nodes
+were previously skipped, and walking them turned silent MISSes into
+reports of their own parameters.
+
+**The perf bug.** TS5076 reads the token range its `parse_or` frame
+consumed, because parens are stripped. `parse_or` runs once per
+expression at that level, nested, so an unconditional scan is O(n^2) in
+tokens: a 9 MB file went from seconds to 180+, and the checker whitebox
+binary sat at 100% CPU for 36 minutes. Gated on the frame having consumed
+a `??`. The oracle's wall time (58 s over 4,484 files) is the check.
+
+### Batch CO (2026-09-03): four one-file rules — MISS 250, the target
 
 ### Batch CO (2026-09-03): four one-file rules — MISS 250, the target
 

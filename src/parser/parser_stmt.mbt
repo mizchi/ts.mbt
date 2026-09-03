@@ -571,6 +571,20 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
     }
     Semicolon => {
       let _ = self.advance()
+      // TS1036 evidence: a bare `;` is an EMPTY STATEMENT, and a statement
+      // of any kind is illegal in an ambient (`.d.ts`) file — at top level
+      // and inside a `declare namespace` body alike. The `;` that
+      // separates interface or class members is not a statement and never
+      // reaches here.
+      //
+      // Recorded as a marker rather than added to the statement-kind list
+      // in `check_dts_top_level_modifiers`, because the `Empty` this arm
+      // returns is indistinguishable there from the `Empty` that an
+      // `interface`, a `type` alias, a bodiless `declare function` and a
+      // skipped namespace all lower to — putting `Empty` in that list
+      // would fire on nearly every real `.d.ts`. Only the `.d.ts` channel
+      // consumes the marker, so it is inert in a `.ts` file.
+      self.grammar_misuses.push("<empty-stmt>")
       Empty
     }
     LBrace => {
@@ -2010,8 +2024,16 @@ fn Parser::parse_var_decl_type(self : Parser) -> @ast.TsType raise ParseError {
   }
   if self.check(Colon) {
     let _ = self.advance()
+    // Whether the declarator carried an ANNOTATION, which the returned
+    // type cannot say: a missing annotation and an explicit `: any` are
+    // both `Any`. TS2493 needs the difference — `var [i]: any = []` is
+    // legal and `var [c] = []` is not. A "result of the last call" field
+    // in the shape of `last_function_bodiless`, read at the top of
+    // `parse_var_decl_item`, which is always the next thing to run.
+    self.last_var_decl_annotated = true
     self.parse_type()
   } else {
+    self.last_var_decl_annotated = false
     Any
   }
 }
@@ -2063,6 +2085,11 @@ fn Parser::parse_var_decl_item(
     binding,
     kind is (VarKind::Let | VarKind::Const),
   )
+  // Read BEFORE the initializer is parsed: an initializer can contain a
+  // function body with its own declarations, whose `parse_var_decl_type`
+  // would overwrite the flag. Reading it here means a nested declaration
+  // cannot make this one look annotated.
+  let annotated = self.last_var_decl_annotated
   let init_opt = if self.match_(Eq) {
     Some(self.parse_assignment())
   } else {
@@ -2091,10 +2118,74 @@ fn Parser::parse_var_decl_item(
       }
     }
   }
+  if not(annotated) {
+    self.record_tuple_index_out_of_range(binding, init)
+  }
   match kind {
     Var => @ast.TsStmt::Var(binding, type_, init)
     Let => @ast.TsStmt::Let(binding, type_, init)
     Const => @ast.TsStmt::Const(binding, type_, init)
+  }
+}
+
+///|
+/// TS2493 ("Tuple type '[]' of length '0' has no element at index '0'"):
+/// an array binding pattern destructuring more positions than the array
+/// LITERAL it is initialized from actually has.
+///
+/// Decidable with no inference because both sides are written out. Every
+/// boundary was probed:
+///
+///   - a position with a DEFAULT is legal (`var [a = 1] = []`), so those
+///     are skipped;
+///   - a rest element does NOT save the positions before it
+///     (`var [d, ...r] = []` still reports index 0), but contributes no
+///     position of its own (`var [...r] = []` is legal);
+///   - an ELISION counts as a position (`var [, h] = [1]` reports
+///     index 1);
+///   - a SPREAD in the literal makes its length unknown, so
+///     `var [g] = [...xs]` abstains;
+///   - `as const` still errors, and our parser drops that wrapper, so the
+///     literal is seen and the answer comes out right; `[] as any[]`
+///     wraps in `As(...)`, which is not an `ArrayLit`, so it abstains;
+///   - nesting is real (`var [[b]] = [[]]` reports at the inner level),
+///     so the walk recurses through matching positions.
+///
+/// The annotation case is handled by the caller: `var [i]: any = []` is
+/// legal, and the annotation is the only thing that distinguishes it.
+/// Anything other than an array literal on the right abstains, which
+/// costs a MISS rather than inventing a finding.
+fn Parser::record_tuple_index_out_of_range(
+  self : Parser,
+  binding : @ast.TsBinding,
+  init : @ast.TsExpr,
+) -> Unit {
+  guard binding is Array(ab) else { return }
+  guard init is ArrayLit(items) else { return }
+  for it in items {
+    if it is Spread(_) {
+      return
+    }
+  }
+  for i, elem in ab.items {
+    if i >= items.length() {
+      // A default supplies the missing element; without one the index
+      // does not exist in the tuple.
+      let has_default = match elem {
+        Some(e) => e.default is Some(_)
+        None => false
+      }
+      if not(has_default) {
+        self.grammar_misuses.push(
+          "tuple type of length \{items.length()} has no element at index \{i}",
+        )
+      }
+      continue
+    }
+    match elem {
+      Some(e) => self.record_tuple_index_out_of_range(e.binding, items[i])
+      None => ()
+    }
   }
 }
 

@@ -32,7 +32,7 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2484 / MISS 250 / FP 0 /
+  is a soundness bug, and there are none (TP 2512 / MISS 222 / FP 0 /
   PFLEGAL 0 / TN 1750). That gate compares against vendored TS7 name
   lists, so it says nothing about WHAT a rejected file's error was, and
   nothing at all about a hand-written legal neighbour. A real compiler
@@ -56,8 +56,8 @@ product surfaces now.
   were exhausted and that only large type-machinery features remained, and
   that was measured against the **TS6** oracle — under TS7, **128 of the
   388 missing files are flippable by a pure-grammar (TS1xxx) rule** and 91
-  of them need no type judgement anywhere. Twenty batches have taken
-  **+147 TP at FP 0** so far, and most of their items were BUGS rather than
+  of them need no type judgement anywhere. Twenty-two batches have taken
+  **+175 TP at FP 0** so far, and most of their items were BUGS rather than
   missing features — one of them a rule the repo had already written and
   applied to every declaration kind except namespaces. The first:
   `eval`/`arguments` as an assignment target was checked at two of the four
@@ -476,6 +476,133 @@ product surfaces now.
   that path carries `experimental_decorators`' `true` default instead of
   the header value. Every decorator-mode-gated rule is wrong there; the
   expression form is skipped and the fix is filed.
+  Batches CP and CQ are **+28** together for seventeen rules, and CP's two most useful outputs
+  are a REJECTION with a measured cause and a performance bug I wrote
+  myself. Ten of the rules are grammar or lexer or flag-shaped and needed
+  no type information: TS1489 (a leading-zero literal an `8` or `9` makes
+  decimal — the other exit of the branch that already recorded the legacy
+  octal), TS17006 (a unary expression as the left operand of `**`, where
+  `++t ** 2` is legal because an UpdateExpression is), TS5076 (`??` mixed
+  with `||` or `&&`), TS1186 (a rest element with an initializer, at BOTH
+  of its sites), TS1347 (a `"use strict"` prologue with a non-simple
+  parameter list), TS17013 (`new.target` outside any function), TS1036 (a
+  bare `;` in a `.d.ts`), TS2354 (`@importHelpers` with a `using`),
+  TS18016 (a `#private` name with no enclosing class body) and TS2390
+  (constructor signatures with no implementation). Three needed a
+  structural fact instead.
+  Four of them are the applied-in-some-places family again, and one is
+  its inverse. TS1186's two spellings land in different parsers, and the
+  abstention comment in `parse_assignment_binding_array` named the
+  blocker in writing — `[...x = a] = a` parses as an EXPRESSION, so the
+  array-literal arm of `parse_assignment` is where it had to go, while
+  `var [...z = a] = a` really is the binding parser's. TS2390 is the
+  mirror image of a rule that already existed: `ctor_impl_count` had
+  counted constructor implementations for years and only ever been
+  compared against 2, so two implementations were reported and ZERO were
+  not. TS4113's recording sat inside `if method_name != "<computed>"`,
+  a guard that is right for the three lists it wraps — accessibility and
+  abstractness are looked up by NAME — and wrong for the fourth, which
+  only asks whether a member carried `override`. And
+  `resolve_base_chain_members` consulted a merged interface ONLY when no
+  class of that name existed, which is never, since a merge has both
+  halves. The inverse case is TS1036: `Empty` looked like a missing arm
+  in the ambient-statement list and is a deliberate abstention, because
+  an `interface`, a `type` alias, a bodiless `declare function` and a
+  skipped namespace all lower to the same `Empty` — putting it in that
+  list would fire on nearly every real `.d.ts`, so the parser marks the
+  real `;` instead.
+  TS4113 is also where a recorded REJECTION became a rule with a
+  condition. Batch BY refused `override` on a computed name as unsound,
+  and was right: a `const` string key is late-bindable, so
+  `override [prop]()` is LEGAL when the base declares what `prop`
+  resolves to. What IS decidable without resolving the key is a base
+  chain that declares NOTHING AT ALL — and getting that claim to be true
+  rather than merely unobserved took two fixes, the merged-interface fold
+  above and a `has_opaque` flag, because a computed key in the BASE is a
+  member the walk cannot name. The first draft fired on
+  `interface M { m(): void }` beside `class M {}`, which tsc does report
+  — and would have fired identically had M declared `foo`, where it is
+  legal. "It agrees with tsc on this file" is not soundness either.
+  The REJECTION is `unresolved_type_references`, which this file called
+  the highest-yield-looking gap on the list, and the cause is now
+  measured rather than guessed. Four of the things batch CL blamed are
+  real and are FIXED: the `__tsmbt_infer` marker was reported as a type,
+  an `infer` name was unresolved in the conditional's branches, `note`
+  consulted a forty-name hand list where the GENERATED
+  `is_lib_global_type` registry exists, and `module_declared_name_set`
+  ignored `imported_binding_names` — whose own doc comment names
+  unresolved-reference checks as its consumer. None of that is the
+  blocker. An interface or object-type CALL / CONSTRUCT signature's own
+  type parameters are not preserved anywhere `check_type` can read them,
+  so `interface I { <U>(x: U): U }` reports `U` through the `Object` /
+  `Func` arms the walk has always had: the binder is lost by the PARSER.
+  Adding scope arms for `GenericFunc` and the mapped types was tried and
+  made it worse — those nodes were previously SKIPPED, and walking them
+  turned silent MISSes into reports of their own parameters, which is the
+  general lesson: a walk arm added to a skipped node converts a MISS into
+  a candidate false positive, the one direction the budget forbids.
+  The performance bug is worth as much as any rule. TS5076 has to
+  distinguish `(a && b) ?? c` from `a && b ?? c`, and the parser strips
+  parens, so the check reads the TOKEN range the expression consumed —
+  the same reasoning batch CF's TS1106 records. But `parse_or` runs once
+  per expression at that precedence level, for every expression in the
+  file, nested, so scanning unconditionally is O(n^2) in the token count.
+  It took a 9 MB file from seconds to over 180, and the checker whitebox
+  binary sat at 100% CPU for 36 minutes before anyone looked at `ps`.
+  Gating the scan on the frame having actually consumed a `??` makes the
+  cost proportional to the nullish expressions instead of to the file;
+  the oracle's own wall time (58 s over 4,484 files) is the check that it
+  is gone. A rule that reads a span is a rule with a cost model, and the
+  span-reading idiom this file recommends does not come with one.
+  Two more probe findings, both of which would have been wrong if
+  reasoned about. `"use strict"` with a non-simple parameter list is an
+  error only from **es2016** up — below that TypeScript downlevels the
+  parameter, so the EMITTED list is simple — and a file with no
+  `@target:` at all is left alone even though tsc 6.0.3 reports it,
+  because that says what the local compiler's default target is and
+  nothing about TS7's. And `abstract class C { constructor(); }` IS
+  TS2390, which "abstract members have no bodies" suggests it should not
+  be; only an ambient class is exempt, and the parser routes
+  `declare class` through a different function entirely, so that
+  exemption needs no code.
+  Batch CQ is the other nine files, and three of its four rules were
+  wrong in their first form for three different reasons. TS1212's message
+  names strict mode and tsc applies it REGARDLESS — `yield;`,
+  `console.log(yield)`, `var yield = 1`, a parameter named `yield` and a
+  bare `let` are all reported at es5 in a sloppy script — so batch CF's
+  assumption that these are strict-mode-only reservations was too narrow;
+  the rule sits at the two identifier-REFERENCE arms, and every property
+  position (`{ yield: 1 }`, `o.let`, `interface I { let: string }`,
+  `enum E { yield }`, `class C { yield() {} }`) is legal and parsed
+  elsewhere, which is what keeps it off them. TS2803 and TS2806 turned
+  out to EXIST already, and probing them is what explained the two
+  corpus MISSes: those checks read `module_.classes`, so they cannot see
+  `const C = class { … }`, which is the shape both files use — so the new
+  code is gated to the class EXPRESSION and a declaration is left
+  entirely to the older rules rather than reported twice. Second time
+  after batch CN that writing a rule turned up the rule already there,
+  and the same resolution: probe the old one, do not keep a second.
+  TS7008 shipped TWO false positives and the boundary is exact: a member
+  with no annotation and no initializer takes its type from an assignment
+  in the CONSTRUCTOR or a STATIC BLOCK, and NOT from one in a method
+  body. `classStaticBlockUseBeforeDef1` is `static x;` plus
+  `static { this.x = 1 }`. Telling those regions apart in a flat token
+  scan needs brace tracking, so any `.name =` in the body withdraws the
+  report — which loses `class B { q; m() { this.q = 1 } }` and is the
+  MISS that buys FP 0. Its diagnostic also had to be taught to print
+  `#u` rather than `__private_brand__4__u`: `class_key_name` returns the
+  MANGLED name, and a diagnostic naming a brand is one nobody can act
+  on. The private rules read the class body's TOKEN range rather than
+  walking member bodies, for the reason the perf note above cuts both
+  ways: a body is an arbitrary expression tree and a walker missing one
+  arm loses findings silently, while every access to `#x` must spell
+  `#x`, so a scan is complete by construction — and here the span is one
+  class body, not one expression per frame, so it carries no quadratic
+  term. And a fifth test was found asserting a gap: the TS1128 ASI case
+  (`class C { var\n public }`) expected silence, and both of those are
+  real TS7008s under a flag that defaults ON, so the assertion was
+  measuring the implicit-any hole rather than the ASI behaviour it is
+  named for.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

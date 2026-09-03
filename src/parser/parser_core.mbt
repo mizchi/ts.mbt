@@ -37,6 +37,11 @@ pub struct Parser {
   // relies on), and a class inside an `async` function leaves `in_async`
   // true. Read by the `await using` rules (TS18054).
   mut in_static_block : Bool
+  // Whether the declarator just parsed by `parse_var_decl_type` carried
+  // a type ANNOTATION. The returned type cannot say: a missing
+  // annotation and an explicit `: any` are both `Any`, and TS2493 needs
+  // to tell them apart. Read at the top of `parse_var_decl_item`.
+  mut last_var_decl_annotated : Bool
   // True while parsing the members of a `const enum`. TS2474 restricts
   // those initializers to constant expressions, and a plain `enum`
   // accepts the same initializer, so the flag is the whole difference.
@@ -295,6 +300,7 @@ pub fn Parser::new_with_strict_and_jsx(
     in_switch: false,
     in_ambient_module: false,
     in_static_block: false,
+    last_var_decl_annotated: false,
     in_const_enum: false,
     labels: [],
     src: "",
@@ -424,6 +430,9 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
   for _i in 0..<lexer.legacy_octal_literal_count {
     grammar_misuses.push("octal literals are not allowed")
   }
+  for _i in 0..<lexer.leading_zero_decimal_count {
+    grammar_misuses.push("decimals with leading zeros are not allowed")
+  }
   // Module-scoped flag marker for the override checks (TS4114 fires only
   // under `@noImplicitOverride: true`); TS4112/TS4113 are unconditional.
   if detect_no_implicit_override(head) {
@@ -482,11 +491,37 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
       }
     None => ()
   }
+  // TS1346 / TS1347 evidence: a `"use strict"` prologue in a function with
+  // a non-simple parameter list is an error only from es2016 up. Below
+  // that TypeScript downlevels the default / rest / pattern parameter, so
+  // the EMITTED list is simple and the directive is fine — probed at es5,
+  // es2015 (both accepted) and es2016 (both codes).
+  //
+  // A file with NO `@target:` is deliberately left OFF even though tsc
+  // 6.0.3 reports both codes for one, because that says the local
+  // compiler's default target is es2016 or later and says nothing about
+  // TS7's. Guessing wrong there fires on every directive-less file in the
+  // corpus, so the abstention costs a MISS where the guess could cost a
+  // false positive.
+  match detect_target_list(head_lower) {
+    Some(targets) =>
+      if target_list_reaches_year(targets, 2016) {
+        grammar_misuses.push("<target-reaches-es2016>")
+      }
+    None => ()
+  }
   // Decorator-mode marker so checker-side decorator signature rules can
   // pick the runtime invocation arity (legacy = 1 arg, standard = 2).
   let experimental_decorators = detect_experimental_decorators(head_lower)
   if experimental_decorators {
     grammar_misuses.push("<experimental-decorators>")
+  }
+  // TS2354 evidence: `@importHelpers: true` makes an emit helper an
+  // IMPORT from `tslib`, which the single-file checker can never resolve.
+  // Only the conformance header spelling sets this, so real-world code
+  // (where the option lives in a tsconfig) cannot reach the diagnostic.
+  if detect_import_helpers(head) {
+    grammar_misuses.push("<import-helpers>")
   }
   // Marker for the TS2695 comma-operator check, which tsc disables under
   // `@allowUnreachableCode: true`.
@@ -509,6 +544,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     in_switch: false,
     in_ambient_module: false,
     in_static_block: false,
+    last_var_decl_annotated: false,
     in_const_enum: false,
     labels: [],
     src,
@@ -1010,6 +1046,13 @@ fn detect_no_property_access_from_index_signature(head : String) -> Bool {
 }
 
 ///|
+/// True when the conformance header enables `@importHelpers`. `head` is
+/// the case-preserved leading window.
+fn detect_import_helpers(head : String) -> Bool {
+  head.contains("@importHelpers: true") || head.contains("@importHelpers:true")
+}
+
+///|
 /// True when the conformance header enables `@allowUnreachableCode`.
 /// tsc gates the TS2695 comma-operator check on this flag being off.
 /// `head` is the case-preserved leading window.
@@ -1127,15 +1170,27 @@ fn lib_list_grants_year(libs : String, year : Int) -> Bool {
 }
 
 ///|
-fn target_list_reaches_es2017(targets : String) -> Bool {
+/// True when any token of the `@target:` list names ES-`year` or later.
+///
+/// The harness runs a comma list once per entry and the file counts as
+/// erroring if ANY run errors, so a rule that fires at HIGH targets asks
+/// this (does some run reach the year) and a rule that fires at LOW ones
+/// asks `target_list_has_below_year`. Parameterised because it was
+/// written out twice at 2017 before a third year needed it.
+fn target_list_reaches_year(targets : String, year : Int) -> Bool {
   for tok in targets.split(",") {
     let t = tok.to_string().trim().to_owned()
     match es_token_year(t) {
-      Some(y) => if y >= 2017 { return true }
+      Some(y) => if y >= year { return true }
       None => ()
     }
   }
   false
+}
+
+///|
+fn target_list_reaches_es2017(targets : String) -> Bool {
+  target_list_reaches_year(targets, 2017)
 }
 
 ///|

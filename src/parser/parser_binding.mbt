@@ -475,6 +475,18 @@ fn Parser::parse_binding_array(
     if self.match_(Ellipsis) {
       let rest_binding = self.parse_binding_pattern()
       rest = Some(rest_binding)
+      // TS1186, binding-declaration spelling: `var [...z = a] = a`. The
+      // initializer is consumed so the rest of the pattern still parses —
+      // this arm never handled `Eq`, so leaving it would turn a recorded
+      // diagnostic into a parse failure on the closing bracket. The
+      // destructuring-ASSIGNMENT spelling (`[...x = a] = a`) is the second
+      // site and never reaches any pattern parser; see
+      // `record_rest_element_initializer`.
+      if self.check(Eq) {
+        let _ = self.advance()
+        let _ = self.parse_assignment()
+        self.grammar_misuses.push("a rest element cannot have an initializer")
+      }
       if self.match_(Comma) {
         // TS1013: a rest element may not be followed by a trailing comma.
         // No legal spelling produces it — `const [e,] = xs` (a trailing
@@ -711,17 +723,16 @@ fn Parser::parse_assignment_binding_array(
     if self.match_(Ellipsis) {
       let rest_binding = self.parse_assignment_binding_pattern()
       rest = Some(rest_binding)
-      // TS1186 ("A rest element cannot have an initializer") is NOT
-      // recorded here, and the reason is worth writing down rather than
-      // re-derived: `[...x = a] = a` never reaches this parser.
-      // `parse_assignment_binding_pattern` tries
+      // TS1186 is not recorded here, and the reason is the one this
+      // comment has always given: `[...x = a] = a` never reaches this
+      // parser. `parse_assignment_binding_pattern` tries
       // `parse_assignment_target_expr` first, and for that source it
       // SUCCEEDS — the whole bracketed form parses as an expression — so
-      // the array-pattern path is skipped. Two attempts at the obvious
-      // sites (here, and a scan of the built pattern in
-      // `parse_assignment`) both stayed silent because neither is where
-      // the shape lands. One corpus file (restElementWithInitializer2),
-      // so it is left a MISS instead of a third guess at the AST shape.
+      // the array-pattern path is skipped. That is now handled where the
+      // shape actually lands, in `record_rest_element_initializer`, called
+      // from the object/array-literal arm of `parse_assignment`. The
+      // binding-DECLARATION spelling (`var [...z = a] = a`) is the other
+      // site and is checked in `parse_binding_array`.
       if self.match_(Comma) {
         // trailing comma after rest
       }

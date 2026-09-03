@@ -10361,9 +10361,16 @@ test "expr_check: statement in class body (TS1128)" {
   // ASI: a keyword on its own line is a standalone member (`var` then `public`
   // are two fields), which TS accepts -> silent (the parserClassDeclaration26
   // regression).
+  //
+  // `@noImplicitAny: false` is what makes this test about TS1128 alone.
+  // Two fields with neither an annotation nor an initializer ARE TS7008
+  // under the flag — tsc reports both — and the flag defaults to ON for
+  // a directive-less file, so without this the assertion was measuring
+  // the implicit-any gap rather than the ASI behaviour it is named for.
   @test.assert_eq(
     issues(
       (
+        #|// @noImplicitAny: false
         #|class C {
         #|  var
         #|  public
@@ -14246,10 +14253,14 @@ test "expr_check: TS7 lexical clusters (batch BF)" {
   // TS1121: legacy octal integer literals; modern radix forms stay
   // legal.
   assert_true(issues("var o = 01;") > 0)
-  @test.assert_eq(
-    issues("var a = 0o777;\nvar b = 0;\nvar c = 0.5;\nvar d = 08.5;"),
-    0,
-  )
+  @test.assert_eq(issues("var a = 0o777;\nvar b = 0;\nvar c = 0.5;"), 0)
+  // `08.5` was in the silent list above until batch CP added TS1489, and
+  // it belongs here: tsc reports "decimals with leading zeros are not
+  // allowed" for it, exactly as for `08`. Node ACCEPTS `08.5` as `8.5`,
+  // so this is TypeScript being stricter than JavaScript — the same way
+  // it is for the legacy octal on the line above — and the old
+  // assertion was pinning the gap rather than the behaviour.
+  assert_true(issues("var d = 08.5;") > 0)
 }
 
 ///|
@@ -16178,6 +16189,259 @@ test "expr_check: index-signature dot access, decorator placement, const enums (
       // The same call in a PLAIN enum is legal — the `const` is the whole
       // difference.
        "enum D { a = 10, b = Math.floor(1.5) }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch CP: nine grammar / lexer / flag rules, each paired with the legal
+/// spelling it must stay silent on. Every boundary here was probed against
+/// the real compiler (`scripts/tsc_probe.mjs`) rather than reasoned about,
+/// and three of them are only correct because of what the probe said:
+/// `++t ** 2` is legal where `-t ** 2` is not, `a?` is not a non-simple
+/// parameter, and the `"use strict"` rule needs target >= es2016.
+test "expr_check: exponent LHS, nullish mixing, rest initializers, use strict (batch CP)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // TS1489: a leading-zero literal that an 8 or 9 makes decimal.
+      "var x = 09;", "var y = 019;",
+      // TS17006: a unary expression as the left operand of `**`, in both
+      // the direct and the nested-right-operand position.
+       "-1 ** 2;", "1 ** -2 ** 3;", "!1 ** 2;", "typeof 1 ** 2;",
+      // TS5076: `??` mixed with `||` or `&&` without parentheses, in
+      // either order.
+       "declare const a: any;\ndeclare const b: any;\ndeclare const c: any;\na ?? b || c;",
+      "declare const a: any;\ndeclare const b: any;\ndeclare const c: any;\na || b ?? c;",
+      "declare const a: any;\ndeclare const b: any;\ndeclare const c: any;\na ?? b && c;",
+      "declare const a: any;\ndeclare const b: any;\ndeclare const c: any;\na && b ?? c;",
+      // TS1186: a rest element with an initializer, in BOTH spellings —
+      // the destructuring-assignment form (which never reaches a pattern
+      // parser) and the binding-declaration form.
+       "declare var a: number[];\nvar x: number[];\n[...x = a] = a;", "declare var a: number[];\nvar [...z = a] = a;",
+      // TS1347: a `"use strict"` prologue with a non-simple parameter
+      // list, at es2016. All three kinds of non-simple parameter, plus a
+      // prologue that another directive precedes.
+       "// @target: es2016\nfunction f(a = 1) { \"use strict\"; }", "// @target: es2016\nfunction f(...r: any[]) { \"use strict\"; }",
+      "// @target: es2016\nfunction f({ p }: any) { \"use strict\"; }", "// @target: es2016\nfunction f(a = 1) { \"foo\"; \"use strict\"; }",
+      // TS17013: `new.target` outside any function.
+       "// @target: es2015\nconst a = new.target;",
+      // TS18016: a `#private` name with no enclosing class body — the
+      // decorator on a class is parsed before its body, so this is the
+      // corpus shape.
+       "// @target: esnext\ndeclare let dec: any;\n@dec((x: any) => x.#foo)\nclass A { #foo = 3; }",
+      // TS2354: `@importHelpers` with a `using` declaration, whose helper
+      // can never resolve in a single-file check.
+       "// @importHelpers: true\n// @target: es2022\nusing a = null;",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- stays silent (the legal neighbours)
+  for
+    src in [
+      // TS1489 stops at the leading zero that IS a legal literal, and at
+      // the legacy-octal spellings, which are a different code the lexer
+      // already had.
+      "var a = 0;", "var b = 0.5;", "var c = 0o7;", "var d = 0x9;",
+      // TS17006: every parenthesized spelling is legal, the RIGHT operand
+      // may be unary, and an UpdateExpression LHS (`++t`, `--t`) is
+      // explicitly allowed by the grammar where a UnaryExpression is not.
+       "-(1 ** 2);", "(-1) ** 2;", "2 ** -3;", "-(2 ** 3);", "var t = 1;\n++t ** 2;",
+      "var u = 1;\n--u ** 2;",
+      // TS5076: parentheses on either side make it legal, and an
+      // unmixed chain of one operator always was.
+       "declare const a: any;\ndeclare const b: any;\ndeclare const c: any;\na ?? (b || c);",
+      "declare const a: any;\ndeclare const b: any;\ndeclare const c: any;\n(a ?? b) || c;",
+      "declare const a: any;\ndeclare const b: any;\ndeclare const c: any;\n(a || b) ?? c;",
+      "declare const a: any;\ndeclare const b: any;\ndeclare const c: any;\na ?? b ?? c;",
+      "declare const a: any;\ndeclare const b: any;\ndeclare const c: any;\na || b || c;",
+      // Two logical expressions of DIFFERENT operators in one statement
+      // list are not a mix — the span is one logical-OR expression, so it
+      // cannot straddle a statement or a comma.
+       "declare const a: any;\ndeclare const b: any;\ndeclare const c: any;\nvar p = a ?? b;\nvar q = b || c;",
+      // TS1186: a rest element with no initializer, a NON-rest element
+      // with one, and an initializer on the whole pattern.
+       "declare var a: number[];\nvar x: number[];\n[...x] = a;", "declare var a: number[];\nvar y = [1, 2];\n[y[0] = 5] = a;",
+      "function f([...r] = []) { }",
+      // TS1347 below es2016, where TypeScript downlevels the parameter so
+      // the emitted list is simple. es2015 and es5 both probed clean.
+       "// @target: es2015\nfunction f(a = 1) { \"use strict\"; }", "// @target: es5\nfunction f(...r: any[]) { \"use strict\"; }",
+      // At es2016 a SIMPLE list is fine, an optional marker does not make
+      // a list non-simple (`?` erases), and a `"use strict"` that a
+      // non-directive statement precedes is not a prologue directive.
+       "// @target: es2016\nfunction f(a: number) { \"use strict\"; }", "// @target: es2016\nfunction f(a?: number) { \"use strict\"; }",
+      "// @target: es2016\nfunction f(a = 1) { \"foo\"; var c = 1; \"use strict\"; }",
+      // A file with no `@target:` at all abstains: tsc 6.0.3 reports it,
+      // which says what the LOCAL compiler's default target is and
+      // nothing about TS7's.
+       "function f(a = 1) { \"use strict\"; }",
+      // TS17013 is legal in a function declaration, a function
+      // expression, a constructor, and an arrow nested in one of those.
+       "// @target: es2015\nfunction f() { return new.target; }", "// @target: es2015\nvar g = function () { return new.target; };",
+      "// @target: es2015\nclass C { constructor() { var t = new.target; } }", "// @target: es2015\nfunction h() { return () => new.target; }",
+      // TS18016: every `#private` inside a class body, including the
+      // static side, an `in` brand check, a class expression, a computed
+      // key's body, and an ambient declaration.
+       "// @target: esnext\nclass C { #x = 1; m() { return this.#x } static #s = 2; static t() { return C.#s } }",
+      "// @target: esnext\nclass D { #y = 1; has(o: any) { return #y in o } }", "// @target: esnext\nconst E = class { #z = 1; m() { return this.#z } };",
+      "// @target: esnext\ndeclare class F { #w: number }",
+      // A decorator on a MEMBER sits inside the class body, so a private
+      // name there resolves — the legal half of the corpus file.
+       "// @target: esnext\ndeclare let dec: any;\nclass A { #foo = 3;\n  @dec(this, (x: A) => x.#foo)\n  m() { } }",
+      // TS2354 needs both halves: the flag without a `using`, and a
+      // `using` without the flag.
+       "// @importHelpers: true\n// @target: es2022\nexport { };", "// @target: es2022\n// @lib: esnext\nusing a = null;",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch CP, second half: rules that needed a structural fact rather than
+/// a grammar one. Two of them are refinements of things already in the
+/// tree — a constructor counter that only ever compared against 2, and an
+/// `override` rule batch BY rejected outright — so the legal neighbours
+/// here are the cases that made those the right calls at the time.
+test "expr_check: constructor signatures, computed override, tuple index (batch CP2)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // TS2390: constructor overload signatures with no implementation.
+      "class C { constructor(); }", "class C { constructor(); foo() { } }",
+      // An ABSTRACT class is not exempt — probed, and the opposite of
+      // what "abstract members have no bodies" suggests.
+       "abstract class C { constructor(); }",
+      // TS4113: `override` on a computed key whose base chain declares
+      // nothing at all, which is decidable without resolving the key.
+       "// @target: esnext\nconst foo = \"f\";\nclass A { }\nclass B extends A { override [foo]() { } }",
+      // TS2493: more destructured positions than the array literal has,
+      // in every kind the probe confirmed — plain, an elision counting as
+      // a position, a rest not saving the positions before it, and a
+      // nested pattern.
+       "var [c] = [];", "var [a, b] = [1];", "var [, h] = [1];", "var [d, ...r] = [];",
+      "var [[b]] = [[]];", "let [d] = [];", "const [e] = [];",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // TS2390: an implementation is present, in the plain and the
+      // overload-set spellings. An AMBIENT class needs none, and the
+      // parser routes `declare class` through a different function
+      // entirely, so the sentinel is unreachable there by construction.
+      "class D { constructor() { } }", "class B { constructor(a: number); constructor(a: string); constructor(a: any) { } }",
+      "declare class A { constructor(); }", "class E { foo() { } }",
+      // TS4113: the case batch BY was right to protect. A `const` string
+      // key is late-bindable, so `override [prop]()` is LEGAL when the
+      // base declares the key it resolves to — and the rule must abstain
+      // whenever the base declares anything at all, since it does not
+      // resolve the key.
+       "// @target: esnext\nconst prop = \"foo\";\nclass Base { [prop]() { } }\nclass Der extends Base { override [prop]() { } }",
+      "// @target: esnext\nconst prop = \"foo\";\nclass WithField { x = 1 }\nclass Der extends WithField { override [prop]() { } }",
+      // A merged interface supplies members, so the base does not count
+      // as declaring nothing. tsc DOES report this one (`[prop]` is
+      // `"foo"` and M declares only `m`), so it is a MISS here rather
+      // than a neighbour we must stay silent on — but it has to be a
+      // miss for the right reason: the first draft fired, because the
+      // chain walk consulted a merged interface only when no class of
+      // the name existed. Had M declared `foo`, the same firing would
+      // have been a false positive.
+       "// @target: esnext\nconst prop = \"foo\";\ninterface M { m(): void }\nclass M { }\nclass Der extends M { override [prop]() { } }",
+      // TS2493: a default supplies the missing element; a rest alone
+      // takes no position; a spread makes the length unknown; a
+      // non-literal right side is not decidable; and an explicit
+      // annotation is what makes the empty literal legal.
+       "var [a = 1] = [];", "var [...r] = [];", "var xs = [1, 2];\nvar [g] = [...xs];",
+      "declare var arr: number[];\nvar [f] = arr;", "var [i]: any = [];", "var [j] = [1, 2, 3];",
+      "var [f] = [undefined];", "var [e] = [] as any[];",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// Batch CQ: four rules whose boundary the real compiler had to settle,
+/// because reasoning about them gives the wrong answer twice. TS1212 is
+/// NOT gated on strict mode or on the target even though its message
+/// names strict mode; TS7008 fires on a private and a static member alike
+/// but not on an ambient one; and a write to a set-only private accessor
+/// is legal while a READ of one is the error.
+test "expr_check: reserved-word identifiers, implicit-any members, private access (batch CQ)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // TS1212: `yield` / `let` in an identifier-REFERENCE position, at
+      // any target — probed at es5 and es6, sloppy script and all.
+      "// @target: es6\nyield;", "// @target: es6\nyield(foo);", "// @target: es6\nlet",
+      "// @target: es5\nyield;",
+      // TS7008: a class member with neither an annotation nor an
+      // initializer, under noImplicitAny. Plain, private and static.
+       "// @noImplicitAny: true\nclass A { p; }", "// @noImplicitAny: true\nclass B { #prop; }",
+      "// @noImplicitAny: true\nclass F { static #u; }",
+      // TS2803 / TS2806. Both already existed for class DECLARATIONS;
+      // what was missing is the class EXPRESSION, which is the shape
+      // both corpus files use (`const C = class { … }`) and which the
+      // existing checks structurally cannot see, since they read
+      // `module_.classes`. The declaration forms are here too, so a
+      // regression in EITHER implementation shows up.
+       "// @target: es2015\nclass A { #m() { } n() { this.#m = 1; } }", "// @target: es2015\nconst A2 = class { #m() { } n() { this.#m = 1; } };",
+      "// @target: es2015\nconst A3 = class { #m() { } n() { this.#m += 1; } };",
+      "// @target: es2015\nconst D = class { set #s(v: number) { } n() { return this.#s; } };",
+      // A compound assignment READS the old value, which is what makes
+      // this TS2806 rather than a legal write — the corpus shape.
+       "// @target: es2015\nconst E = class { set #s(v: number) { } n() { this.#s += 2; } };",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- stays silent
+  for
+    src in [
+      // TS1212 covers reference positions only. Every PROPERTY position
+      // is legal and each is parsed elsewhere: an object key, a property
+      // access, an interface member, an enum member, a class member.
+      "// @target: es5\nvar o = { yield: 1, let: 2 };", "// @target: es5\ndeclare const o: any;\nvar a = o.yield;\nvar b = o.let;",
+      "// @target: es5\ninterface I { yield: number; let: string }", "// @target: es5\nenum E { yield, let }",
+      "// @target: es5\nclass C { yield() { } }",
+      // The `yield` OPERATOR inside a generator is not an identifier.
+       "// @target: es6\nfunction* g() { yield 1; }", "// @target: es6\nvar o = { *m() { yield 2; } };",
+      // TS7008: an initializer infers the type, an annotation supplies
+      // it, and an AMBIENT class needs neither — `declare class` is
+      // parsed by a different function, so that exemption needs no gate.
+       "// @noImplicitAny: true\nclass B { q = 1; }", "// @noImplicitAny: true\nclass D { #s = 1; }",
+      "// @noImplicitAny: true\ndeclare class E { #t; }",
+      // Without the flag there is nothing to report.
+       "// @noImplicitAny: false\nclass A { p; }",
+      // An assignment in the CONSTRUCTOR supplies the type, and so does
+      // one in a STATIC BLOCK — `classStaticBlockUseBeforeDef1` shipped
+      // as a false positive on the first draft. Distinguishing those
+      // regions from a method body would need brace tracking, so ANY
+      // `.name =` in the body withdraws the report: the method-body case
+      // below is the MISS that buys it.
+       "// @noImplicitAny: true\nclass A2 { p; constructor() { this.p = 1; } }",
+      "// @noImplicitAny: true\n// @target: esnext\nclass A3 { static r; static { this.r = 1; } }",
+      "// @noImplicitAny: true\nclass A4 { q; m() { this.q = 1; } }",
+      // TS2803 / TS2806: a private FIELD is writable and readable; a
+      // set-only accessor may be WRITTEN (only reading it is the error);
+      // a get/set PAIR is readable; and a `#x in v` brand check is
+      // neither a read of an accessor nor a write.
+       "// @target: es2015\nconst A = class { #f = 1; n() { this.#f = 2; return this.#f; } };",
+      "// @target: es2015\nconst B = class { set #s(v: number) { } n() { this.#s = 1; } };",
+      "// @target: es2015\nconst C = class { get #p() { return 1 } set #p(v: number) { } n() { return this.#p; } };",
+      "// @target: esnext\nconst D = class { #brand: undefined; is(v: any) { return #brand in v } };",
+      // The member's own declaration is not an access — no `.` precedes
+      // it — so a private method declared and never touched is silent.
+       "// @target: es2015\nconst E = class { #m() { } };",
     ] {
     @test.assert_eq(issues(src), 0)
   }

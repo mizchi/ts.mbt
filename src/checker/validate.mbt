@@ -287,6 +287,19 @@ pub fn check_dts_top_level_modifiers(
       _ => ()
     }
   }
+  // TS1036 for the EMPTY statement (`;`), which the match above cannot
+  // see: the parser lowers an interface, a type alias, a bodiless
+  // `declare function` and a skipped namespace to the same `Empty`, so
+  // the statement kind is not evidence. The parser marks the real `;`
+  // instead. Only this `.d.ts`-only channel reads the marker.
+  for gm in module_.grammar_misuses {
+    if gm == "<empty-stmt>" {
+      issues.push({
+        path: "ambient statement",
+        message: "statements are not allowed in ambient contexts",
+      })
+    }
+  }
   issues
 }
 
@@ -348,6 +361,13 @@ fn module_declared_names(module_ : @ast.TsModule) -> Array[String] {
 /// referenced name (O(n^2) over the module surface).
 fn module_declared_name_set(module_ : @ast.TsModule) -> Map[String, Unit] {
   let set : Map[String, Unit] = {}
+  // A name this module IMPORTS is declared as far as this file can tell —
+  // the target is in another module, which a single-file walk cannot
+  // read. Without these, `import { T } from "./t"; type U = T` reports
+  // `T`, which is a false positive and not a subset limitation.
+  for n in module_.imported_binding_names {
+    set[n] = ()
+  }
   for iface in module_.interfaces {
     set[iface.name] = ()
   }
@@ -487,6 +507,61 @@ fn collect_typeof_bases(type_ : @ast.TsType, acc : Array[String]) -> Unit {
 }
 
 ///|
+/// Collect the names `infer` binds anywhere inside a conditional type's
+/// `extends` clause, so the branches can resolve them. Recurses through
+/// every composite form an `infer` can be nested in; a form not covered
+/// here loses a BINDING, which turns into a false positive on the name,
+/// so the arms are deliberately the same set `check_type` walks.
+fn collect_infer_binders(type_ : @ast.TsType, out : Array[String]) -> Unit {
+  match type_ {
+    Applied("__tsmbt_infer", args) => {
+      if args.length() > 0 && args[0] is Named(n) {
+        out.push(n)
+      }
+      if args.length() > 1 {
+        collect_infer_binders(args[1], out)
+      }
+    }
+    Applied(_, args) =>
+      for a in args {
+        collect_infer_binders(a, out)
+      }
+    Array(inner) | Rest(inner) | Keyof(inner) =>
+      collect_infer_binders(inner, out)
+    Tuple(items) | Union(items) | Intersection(items) =>
+      for it in items {
+        collect_infer_binders(it, out)
+      }
+    Object(fields) =>
+      for f in fields {
+        collect_infer_binders(f.1, out)
+      }
+    Func(params, ret) => {
+      for p in params {
+        collect_infer_binders(p, out)
+      }
+      collect_infer_binders(ret, out)
+    }
+    Constructor(params, ret, _) => {
+      for p in params {
+        collect_infer_binders(p, out)
+      }
+      collect_infer_binders(ret, out)
+    }
+    GenericFunc(_, _, inner) => collect_infer_binders(inner, out)
+    IndexedAccess(base, key) => {
+      collect_infer_binders(base, out)
+      collect_infer_binders(key, out)
+    }
+    TemplateLiteralType(_, parts) =>
+      for pt in parts {
+        collect_infer_binders(pt, out)
+      }
+    _ => ()
+  }
+}
+
+///|
 fn check_type(
   type_ : @ast.TsType,
   declared : Map[String, Unit],
@@ -503,7 +578,16 @@ fn check_type(
   }
 
   fn note(name : String) -> Unit {
-    if not(in_scope(name)) && not(is_well_known_type_name(name)) {
+    // `is_well_known_type_name` is a hand-written list of about forty
+    // staples, which is the right oracle for the bridge surface this walk
+    // was built for and much too small for arbitrary source: every DOM
+    // and lib type outside it would read as undeclared.
+    // `is_lib_global_type` is the GENERATED registry and is the correct
+    // question here. The hand list stays as a superset for the few names
+    // it carries that the registry may not.
+    if not(in_scope(name)) &&
+      not(is_well_known_type_name(name)) &&
+      not(is_lib_global_type(name)) {
       if not(acc_set.contains(name)) {
         acc_set[name] = ()
         acc.push(name)
@@ -511,14 +595,49 @@ fn check_type(
     }
   }
 
+  // A type can introduce type-parameter BINDERS of its own, and `local`
+  // models only the enclosing declaration's parameters. Every binder form
+  // below extends it for the sub-types the binder scopes over; without
+  // that, wiring this walk into the conformance path produced 40+ false
+  // positives (batch CL rejected it for exactly this), because the bound
+  // name reads as an undeclared type reference at its every use.
+  fn extended(names : Array[String]) -> Array[String] {
+    let out : Array[String] = []
+    for n in local {
+      out.push(n)
+    }
+    for n in names {
+      out.push(n)
+    }
+    out
+  }
+
   match type_ {
     Named(name) => note(name)
+    // `infer A` is parsed as this marker (see `infer_marker_name`). The
+    // marker name is not a type, and `A` is a BINDER rather than a
+    // reference — noting either is a false positive. Only the optional
+    // constraint (`infer A extends Date`) is a real reference.
+    Applied("__tsmbt_infer", args) =>
+      if args.length() > 1 {
+        check_type(args[1], declared, local, acc, acc_set)
+      }
     Applied(name, args) => {
       note(name)
       for a in args {
         check_type(a, declared, local, acc, acc_set)
       }
     }
+    // `GenericFunc`, `MappedType` and `MappedTypeRemap` are deliberately
+    // NOT walked, and that is a correction to a first draft which walked
+    // all three with their binder names added to the scope. Every one of
+    // them regressed a test that had been passing: `interface I { <U>(x:
+    // U): U }`, `declare var a: { new <T>(x: T): T }` and a mapped type
+    // with an `as` remap all reported their OWN bound parameter. So the
+    // binder is not in the field this walk would read it from, and
+    // walking a node that was previously SKIPPED converts a silent MISS
+    // into a false positive — the one direction the budget forbids.
+    // Skipping them is sound and costs recall inside those forms only.
     Array(inner) => check_type(inner, declared, local, acc, acc_set)
     Tuple(items) =>
       for it in items {
@@ -546,8 +665,19 @@ fn check_type(
     Conditional(check_t, extends, t_branch, f_branch) => {
       check_type(check_t, declared, local, acc, acc_set)
       check_type(extends, declared, local, acc, acc_set)
-      check_type(t_branch, declared, local, acc, acc_set)
-      check_type(f_branch, declared, local, acc, acc_set)
+      // Names bound by `infer` in the extends clause are in scope in the
+      // branches — the true branch is where they are meant to be used.
+      // Both branches get them: an `infer` name is not a reference in the
+      // false branch either, so leaving it out would report it there.
+      let bound : Array[String] = []
+      collect_infer_binders(extends, bound)
+      let branch_scope = if bound.length() == 0 {
+        local
+      } else {
+        extended(bound)
+      }
+      check_type(t_branch, declared, branch_scope, acc, acc_set)
+      check_type(f_branch, declared, branch_scope, acc, acc_set)
     }
     IndexedAccess(base, key) => {
       check_type(base, declared, local, acc, acc_set)

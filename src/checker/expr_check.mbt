@@ -99,6 +99,10 @@ priv struct Resolver {
   // index-signature member is TS4111 only when this is on. Default off,
   // matching the compiler.
   mut no_property_access_from_index_signature : Bool
+  // The `@target:` list names es2016 or later, which is when a
+  // `"use strict"` prologue stops being legal in a function with a
+  // non-simple parameter list (TS1346 / TS1347).
+  mut target_reaches_es2016 : Bool
 }
 
 ///|
@@ -180,6 +184,7 @@ fn Resolver::empty() -> Resolver {
     lib_lacks_es2017: false,
     lib_lacks_es2024: false,
     no_property_access_from_index_signature: false,
+    target_reaches_es2016: false,
   }
 }
 
@@ -24139,6 +24144,11 @@ priv struct BaseChainMembers {
   static_ : Map[String, Unit]
   abstract_ : Map[String, Unit]
   resolvable : Bool
+  // A base declared a member this walk cannot name (a computed key), so
+  // the member sets above are incomplete even though the chain resolved.
+  // Read only by the computed-`override` rule, which needs "the base
+  // declares nothing" to be provable rather than merely unobserved.
+  has_opaque : Bool
 }
 
 ///|
@@ -24165,14 +24175,21 @@ fn resolve_base_chain_members(
   let static_ : Map[String, Unit] = {}
   let abstract_ : Map[String, Unit] = {}
   if cls.base_names.length() == 0 && cls.base_expr is None {
-    return { instance, static_, abstract_, resolvable: true }
+    return { instance, static_, abstract_, resolvable: true, has_opaque: false }
   }
   if cls.base_expr is Some(_) || cls.base_names.length() != 1 {
-    return { instance, static_, abstract_, resolvable: false }
+    return {
+      instance,
+      static_,
+      abstract_,
+      resolvable: false,
+      has_opaque: false,
+    }
   }
   let mut resolvable = true
   let mut cursor : String? = Some(cls.base_names[0])
   let visited : Map[String, Unit] = {}
+  let mut has_opaque = false
   while cursor is Some(bn) {
     if visited.contains(bn) {
       break
@@ -24185,6 +24202,20 @@ fn resolve_base_chain_members(
           resolvable = false
           break
         }
+        // Declaration merging: `interface M { m(): void }` beside
+        // `class M { }` gives M an `m`, and this walk consulted
+        // `iface_by_name` only when no CLASS of the name existed — so a
+        // merged interface's members were invisible whenever the class
+        // half was present, which is every merge. That made the base
+        // look emptier than it is, and the computed-`override` rule
+        // below reads emptiness as proof.
+        match iface_by_name.get(bn) {
+          Some(merged) =>
+            for f in merged.fields {
+              instance[f.0] = ()
+            }
+          None => ()
+        }
         for an in b.abstract_members {
           abstract_[an] = ()
         }
@@ -24195,6 +24226,11 @@ fn resolve_base_chain_members(
             } else {
               instance[m.name] = ()
             }
+          } else {
+            // An opaque key in the BASE is a member this walk cannot
+            // name, so "the base declares nothing" stops being provable.
+            // Only the computed-override rule below reads this.
+            has_opaque = true
           }
         }
         for pr in b.properties {
@@ -24204,6 +24240,8 @@ fn resolve_base_chain_members(
             } else {
               instance[pr.name] = ()
             }
+          } else {
+            has_opaque = true
           }
         }
         if b.base_expr is Some(_) || b.base_names.length() > 1 {
@@ -24230,7 +24268,7 @@ fn resolve_base_chain_members(
     }
     cursor = next
   }
-  { instance, static_, abstract_, resolvable }
+  { instance, static_, abstract_, resolvable, has_opaque }
 }
 
 ///|
@@ -24295,6 +24333,34 @@ fn check_override_modifiers(module_ : @ast.TsModule) -> Array[ExprIssue] {
       let name = kv.0
       let is_static_m = name.has_prefix("s:")
       let bare = name[2:].to_string()
+      if bare == "<computed>" {
+        // An `override` on a COMPUTED key. Batch BY rejected this rule
+        // outright and was right to: `override [prop]()` is legal when
+        // the base declares the key `prop` resolves to, and a `const`
+        // string or symbol key is late-bindable, so refusing every
+        // computed override is unsound on legal code
+        // (`overrideLateBindableName1`'s `Derived1 extends Base1`, which
+        // tsc accepts). "FP 0 on the corpus" was not soundness there.
+        //
+        // What IS decidable without resolving the key: a base chain that
+        // declares NOTHING AT ALL cannot declare it either, whatever it
+        // resolves to. `has_opaque` keeps that provable — a computed key
+        // in the BASE is a member this walk cannot name, so it withdraws
+        // the claim rather than reading an empty set as an empty class.
+        // Merged-interface members count as declarations (they are folded
+        // into `instance` above), so `interface M { m(): void }` beside
+        // `class M {}` correctly abstains.
+        if base_instance.size() == 0 &&
+          base_static.size() == 0 &&
+          base_abstract.size() == 0 &&
+          not(chain.has_opaque) {
+          issues.push({
+            path: "class \{cls.name}",
+            message: "this member cannot have an `override` modifier because it is not declared in the base class",
+          })
+        }
+        continue
+      }
       let known = if is_static_m {
         base_static.contains(bare)
       } else {
@@ -24369,6 +24435,89 @@ fn check_override_modifiers(module_ : @ast.TsModule) -> Array[ExprIssue] {
 /// overload promises. The implementation is the last entry of a same-name
 /// group (TS requires it to follow its overloads); an unannotated return
 /// parses as `Any` and stays silent.
+/// TS1347 ("'use strict' directive cannot be used with non-simple
+/// parameter list") and its companion TS1346 at the parameter.
+///
+/// A `"use strict"` DIRECTIVE — a string-literal expression statement in
+/// the body's leading prologue — is illegal when the parameter list has a
+/// default, a rest, or a binding pattern. That is a JavaScript rule about
+/// the EMITTED code, which is why the gate is the target: below es2016
+/// TypeScript downlevels such a parameter and the output's list is
+/// simple, so `resolver.target_reaches_es2016` decides. `x?` is
+/// TypeScript-only and erases, so an optional parameter is NOT non-simple
+/// — probed, along with all eight function-like spellings, which error
+/// alike at es2016.
+///
+/// The prologue rule is the one `parse_block` already implements for
+/// `in_strict`: a maximal leading run of string-literal statements, so
+/// `"foo"; "use strict";` is a directive and `"foo"; var c = 1;
+/// "use strict";` is not. Both neighbours are in the corpus file.
+///
+/// Scope: function DECLARATIONS, including inside a namespace body. The
+/// other seven spellings error identically to tsc and are not reached
+/// here, for two mechanical reasons rather than a judgement — a nested
+/// function declaration is not a `TsStmt` variant and so never appears in
+/// a body's statement list, and a class method is a `TsClassMethodDecl`
+/// with positional `params` / `param_defaults` rather than a `TsFunc`, so
+/// each would need its own shape. The corpus file is eleven function
+/// declarations. A spelling not reached costs a MISS, never a false
+/// positive, which is the only direction the budget allows.
+fn check_use_strict_with_non_simple_params(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Array[ExprIssue] {
+  let issues : Array[ExprIssue] = []
+  if not(resolver.target_reaches_es2016) {
+    return issues
+  }
+  fn non_simple(params : Array[@ast.TsParam]) -> Bool {
+    for p in params {
+      if p.is_rest || p.default is Some(_) {
+        return true
+      }
+      if p.binding is Some(Array(_)) || p.binding is Some(Object(_)) {
+        return true
+      }
+    }
+    false
+  }
+
+  fn has_use_strict_prologue(block : @ast.TsBlock) -> Bool {
+    for st in block.stmts {
+      match st {
+        Expr(StringLit("use strict")) => return true
+        // Any other string literal continues the prologue; the first
+        // non-string statement ends it.
+        Expr(StringLit(_)) => ()
+        _ => return false
+      }
+    }
+    false
+  }
+
+  fn judge(f : @ast.TsFunc, what : String) -> Unit {
+    if non_simple(f.params) && has_use_strict_prologue(f.body) {
+      issues.push({
+        path: what,
+        message: "a `use strict` directive cannot be used with a non-simple parameter list",
+      })
+    }
+  }
+
+  fn walk_module(m : @ast.TsModule) -> Unit {
+    for f in m.funcs {
+      judge(f, "function \{f.name}")
+    }
+    for ns in m.namespaces {
+      walk_module(ns.module_)
+    }
+  }
+
+  walk_module(module_)
+  issues
+}
+
+///|
 fn check_overload_void_return(module_ : @ast.TsModule) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
   if module_.funcs.length() < 2 {
@@ -26192,6 +26341,20 @@ fn check_class_duplicate_members(module_ : @ast.TsModule) -> Array[ExprIssue] {
           path: "class \{cls_name}",
           message: "multiple constructor implementations are not allowed",
         })
+      } else if name == "<ctor-no-impl>" {
+        // TS2390, the mirror image of the line above: constructor
+        // OVERLOAD SIGNATURES with no implementation at all. The parser
+        // counted implementations for years and only ever compared
+        // against 2, so `class C { constructor(); }` was silent.
+        //
+        // An ambient class is exempt (`declare class A { constructor(); }`
+        // needs no body) and the parser does not set the sentinel there;
+        // an ABSTRACT class is NOT exempt, which the probe had to settle
+        // because "abstract members have no bodies" suggests otherwise.
+        issues.push({
+          path: "class \{cls_name}",
+          message: "constructor implementation is missing",
+        })
       } else if name == "<index-sig-modifier>" {
         issues.push({
           path: "class \{cls_name}",
@@ -26999,6 +27162,35 @@ fn check_lib_directive_globals(module_ : @ast.TsModule) -> Array[ExprIssue] {
       message: "top-level `await using` statements require `target` es2017 or higher",
     })
   }
+  // TS2354: under `@importHelpers` a construct that needs an emit helper
+  // must import it from `tslib`, and in the single-file checker no module
+  // resolves at all — so the helper cannot be found.
+  //
+  // Gated on a `using` declaration rather than on every helper-requiring
+  // construct. `using` always downlevels to `__addDisposableResource` at
+  // every target, so the requirement is unconditional there, where the
+  // other helpers (`__assign`, `__rest`, `__spreadArray`, `__awaiter`,
+  // `__decorate`) each depend on the target and would need that matrix
+  // modelled to avoid claiming a helper a native emit does not use.
+  //
+  // The corpus has exactly two single-file cases carrying
+  // `@importHelpers`, both errors, so it holds no legal neighbour and
+  // cannot say whether a wider rule would false-positive — which is the
+  // argument for the narrow gate rather than against it. Real-world code
+  // cannot reach this at all: `importHelpers` is a tsconfig option, and
+  // only the conformance header spelling sets this marker.
+  let mut import_helpers = false
+  for gm in module_.grammar_misuses {
+    if gm == "<import-helpers>" {
+      import_helpers = true
+    }
+  }
+  if import_helpers && has_using {
+    issues.push({
+      path: "emit helpers",
+      message: "this syntax requires an imported helper but module `tslib` cannot be found",
+    })
+  }
   issues
 }
 
@@ -27495,6 +27687,9 @@ fn check_module_function_bodies_layered(
     if gm == "<nopropertyaccessfromindexsignature-on>" {
       resolver.no_property_access_from_index_signature = true
     }
+    if gm == "<target-reaches-es2016>" {
+      resolver.target_reaches_es2016 = true
+    }
   }
   // Brand-keyed private declarations recorded by the parser (own layer plus
   // the outermost root -- namespace bodies re-parse with a fresh parser, so
@@ -27822,28 +28017,50 @@ fn check_module_function_bodies_layered(
   for issue in check_module_decl_signatures(module_) {
     all.push(issue)
   }
-  // TS2304 for an undeclared TYPE name is NOT raised here, and the
-  // measurement is kept because the gap looks like a one-line fix.
-  // `unresolved_type_references` has existed for a long time and is wired
-  // into `check_module` only, so the conformance path never asked: `type T
-  // = Undeclared` and `type T<X> = X extends Undeclared ? … : …` are both
-  // silent while `var q: Undeclared` fires, because an ambient VALUE
-  // declaration reaches the expression checker by another route.
+  // TS2304 for an undeclared TYPE name (`type T = Undeclared`), which the
+  // conformance path never asked for: `unresolved_type_references` has
+  // existed for a long time and was wired into `check_module` only, so a
+  // TYPE-position reference was silent while `var q: Undeclared` fired,
+  // because an ambient VALUE declaration reaches the expression checker
+  // by another route.
   //
-  // Wiring it in produced FORTY-PLUS false positives, and the shape of
-  // them says why it must stay where it is: `check_type` carries one flat
-  // `local` list of type-parameter names, which models a declaration's own
-  // parameters and NOT the binders that appear inside a type — a call or
-  // construct signature's own `<T>`, an `infer A`, a mapped type's key.
-  // So `objectTypesIdentityWithGenericCallSignatures*`, `inferTypes*`,
-  // `thisTypeIn*` and `mappedTypes*` all report their own bound
-  // parameters as undeclared. `check_module` gets away with it because it
-  // is used on declaration surfaces those shapes do not reach.
+  // The first attempt at wiring it in produced FORTY-PLUS false
+  // positives, and the cause was one thing rather than many:
+  // `check_type` carried a single flat `local` list of type-parameter
+  // names, which models a DECLARATION's own parameters and not the
+  // binders a TYPE introduces — a call or construct signature's own
+  // `<T>`, an `infer A`, a mapped type's key. Every one of those bound
+  // names then read as an undeclared reference, so
+  // `objectTypesIdentityWithGenericCallSignatures*`, `inferTypes*` and
+  // `mappedTypes*` reported their own parameters. `check_module` got
+  // away with it because it runs on declaration surfaces those shapes do
+  // not reach.
   //
-  // The narrow version — report only when the type provably contains no
-  // binder — was not attempted: the whole TS2304 solo set is 4 files, two
-  // of them these type positions, and "provably no binder" would be
-  // another guess about the completeness of a list.
+  // Attempted again in batch CP and REJECTED again, with the cause now
+  // measured rather than inferred. Three of the four causes the first
+  // attempt blamed are real and are FIXED: the `__tsmbt_infer` marker
+  // was itself reported as a type, an `infer` name was unresolved in the
+  // conditional's branches, and `note` consulted a forty-name hand list
+  // (`is_well_known_type_name`) instead of the GENERATED
+  // `is_lib_global_type` registry, while `module_declared_name_set`
+  // ignored `imported_binding_names` — whose own doc comment says
+  // unresolved-reference checks are its consumer. Those four are worth
+  // keeping for `check_module`, which is where this walk runs today.
+  //
+  // What still blocks the wiring is different from what that comment
+  // guessed, and no scope fix reaches it: an interface or object-type
+  // CALL / CONSTRUCT signature's own type parameters are not preserved
+  // anywhere `check_type` can read them. `interface I { <U>(x: U): U }`,
+  // `interface J { new <T>(x: T): T }` and `declare var a: { new <T>(x:
+  // T): T }` all report their own bound parameter, and they do it
+  // through the `Object` / `Func` arms this walk has always had — so the
+  // binder is lost by the PARSER, not merely unbound by the walk.
+  // Adding scope arms for `GenericFunc` and the mapped types was tried
+  // and made it worse: those nodes were previously skipped entirely, and
+  // walking them turned silent MISSes into reports of their own
+  // parameters. Filed rather than guessed at, because the remaining
+  // TS2304 solo set is 4 files and a "looks like a type parameter"
+  // heuristic is exactly the guess the earlier note warned against.
   if outer_modules.length() == 0 {
     for issue in check_merged_enum_first_member_initializers(module_) {
       all.push(issue)
@@ -27938,6 +28155,9 @@ fn check_module_function_bodies_layered(
     all.push(issue)
   }
   for issue in check_overload_void_return(module_) {
+    all.push(issue)
+  }
+  for issue in check_use_strict_with_non_simple_params(module_, resolver) {
     all.push(issue)
   }
   for issue in check_override_modifiers(module_) {
@@ -28335,6 +28555,9 @@ fn check_module_function_bodies_layered(
         gm == "<lib-lacks-es2017>" ||
         gm == "<lib-lacks-es2024>" ||
         gm == "<target-below-es2017>" ||
+        gm == "<target-reaches-es2016>" ||
+        gm == "<empty-stmt>" ||
+        gm == "<import-helpers>" ||
         gm == "<top-level-await-using>" ||
         gm == "<has-using>" ||
         gm == "<experimental-decorators>" {

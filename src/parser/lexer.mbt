@@ -160,6 +160,11 @@ pub struct Lexer {
   mut unicode_escape_overflow_count : Int
   // TS1121: a legacy octal integer literal (`01`) — banned in TS.
   mut legacy_octal_literal_count : Int
+  // TS1489: a leading-zero literal that is NOT a legacy octal because an
+  // `8` or `9` appears in it (`09`, `019`). The two are the same branch
+  // below and only the octal half was recorded; this is the other exit.
+  // Target-independent — probed at es5 and esnext alike.
+  mut leading_zero_decimal_count : Int
   // Absolute source positions of invalid `\u` / `\x` escapes inside
   // TEMPLATE literals. Tagged templates accept invalid escapes (ES2018)
   // and taggedness is a parse-time fact, so the lexer only records —
@@ -276,6 +281,7 @@ pub fn Lexer::new(src : String) -> Lexer {
     invalid_unicode_escape_count: 0,
     unicode_escape_overflow_count: 0,
     legacy_octal_literal_count: 0,
+    leading_zero_decimal_count: 0,
     template_invalid_escape_positions: [],
     unterminated_template: false,
     unterminated_block_comment: false,
@@ -739,6 +745,12 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
           }
           return LegacyOctal(octal_value)
         } else {
+          // TS1489: the same leading zero, but an `8` or `9` makes it a
+          // DECIMAL rather than a legacy octal (`09`, `019`), which
+          // TypeScript rejects at every target. This branch already
+          // computed which of the two it is for the value; only the octal
+          // half recorded anything.
+          self.leading_zero_decimal_count = self.leading_zero_decimal_count + 1
           return Int(value)
         }
       }

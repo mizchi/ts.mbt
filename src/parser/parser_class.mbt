@@ -1455,13 +1455,7 @@ fn Parser::parse_class_method_key(self : Parser) -> ClassKey raise ParseError {
   }
   let name = match self.advance().kind {
     Ident(n) => n
-    PrivateIdent(n) => {
-      let private_name = "#" + n
-      match self.current_class_brand {
-        Some(brand) => mangle_private_name(private_name, brand)
-        None => private_name
-      }
-    }
+    PrivateIdent(n) => self.resolve_private_name(n)
     Str(s) => {
       // Quotedness is erased from the returned key; record it so
       // strict-property-initialization can exempt literal-named fields
@@ -1896,6 +1890,125 @@ fn Parser::inject_instance_field_assigns(
 }
 
 ///|
+/// TS2803 ("Cannot assign to private method") and TS2806 ("Private
+/// accessor was defined without a getter"), decided over the class
+/// body's TOKEN range — for a class EXPRESSION only.
+///
+/// Both diagnostics ALREADY EXIST in the checker, and probing them is
+/// what showed why the two corpus files were still MISSes: those checks
+/// read `module_.classes`, so they cannot see `const C = class { … }`,
+/// which is the shape BOTH files use. So this is not a second copy of a
+/// rule — `self.in_class_expr_body` restricts it to the case the
+/// existing ones structurally cannot reach, and a class DECLARATION is
+/// left entirely to them rather than reported twice.
+///
+/// A token scan rather than an AST walk, deliberately: a member body is
+/// an arbitrary expression tree, and every access to `#x` must spell
+/// `#x`, so scanning tokens is complete by construction where a walker
+/// missing one arm would lose findings silently.
+///
+/// A `PrivateIdent` counts as an ACCESS only when a `.` precedes it,
+/// which excludes both spellings that are not accesses: the member's own
+/// declaration (`#x = 1`) and the brand check (`#x in v`). What follows
+/// then decides the direction — a plain `=` is a write, a compound
+/// assignment is both (it reads the old value, which is what makes
+/// `this.#x += 2` a READ of a setter-only accessor), and `++` / `--`
+/// likewise. Anything else is a read.
+///
+/// Both boundaries were probed. Writing to a set-only accessor is legal
+/// and stays silent; writing to a GET-only one is TS2540, a different
+/// code, not raised here; and writing to a plain private FIELD is of
+/// course fine.
+fn Parser::record_private_member_misuse(
+  self : Parser,
+  body_start : Int,
+  methods : Array[String],
+  getters : Array[String],
+  setters : Array[String],
+  implicit_any : Array[(String, String)],
+) -> Unit {
+  // TS7008's other half. A member with no annotation and no initializer
+  // gets its type from an assignment in the CONSTRUCTOR (instance side)
+  // or a STATIC BLOCK (static side) — probed, and a method-body
+  // assignment does NOT count. Telling those regions apart from a flat
+  // token scan would need brace tracking, so any `.name =` in the body
+  // withdraws the report: that loses `class B { q; m() { this.q = 1 } }`
+  // (a MISS) and keeps `classStaticBlockUseBeforeDef1`, which shipped as
+  // a false positive on the first draft, silent.
+  let written : Map[String, Unit] = {}
+  for i in body_start..<self.pos {
+    let name = match self.tokens[i].kind {
+      Ident(n) => n
+      PrivateIdent(n) => "#" + n
+      _ => continue
+    }
+    if i == 0 || not(self.tokens[i - 1].kind is Dot) {
+      continue
+    }
+    if i + 1 < self.tokens.length() && self.tokens[i + 1].kind is Eq {
+      written[name] = ()
+    }
+  }
+  for entry in implicit_any {
+    let (shown, _) = entry
+    if not(written.contains(shown)) {
+      self.grammar_misuses.push(
+        "member `\{shown}` implicitly has an `any` type",
+      )
+    }
+  }
+  if not(self.in_class_expr_body) {
+    return
+  }
+  if methods.length() == 0 && setters.length() == 0 {
+    return
+  }
+  for i in body_start..<self.pos {
+    guard self.tokens[i].kind is PrivateIdent(name) else { continue }
+    if i == 0 || not(self.tokens[i - 1].kind is Dot) {
+      continue
+    }
+    let next = if i + 1 < self.tokens.length() {
+      self.tokens[i + 1].kind
+    } else {
+      Eof
+    }
+    let is_plain_write = next is Eq
+    let is_read_write = match next {
+      PlusEq
+      | MinusEq
+      | StarEq
+      | SlashEq
+      | PercentEq
+      | AmpEq
+      | PipeEq
+      | CaretEq
+      | LtLtEq
+      | GtGtEq
+      | GtGtGtEq
+      | StarStarEq
+      | AmpAmpEq
+      | PipePipeEq
+      | QuestionQuestionEq
+      | PlusPlus
+      | MinusMinus => true
+      _ => false
+    }
+    let reads = not(is_plain_write)
+    if (is_plain_write || is_read_write) && methods.contains(name) {
+      self.grammar_misuses.push(
+        "cannot assign to private method `#\{name}` — private methods are not writable",
+      )
+    }
+    if reads && setters.contains(name) && not(getters.contains(name)) {
+      self.grammar_misuses.push(
+        "private accessor `#\{name}` was defined without a getter",
+      )
+    }
+  }
+}
+
+///|
 fn Parser::parse_class_body(
   self : Parser,
   class_type_params : Array[String],
@@ -1905,6 +2018,7 @@ fn Parser::parse_class_body(
   Array[String],
   Array[String],
   Array[String],
+  Int,
   Int,
   Bool,
   Bool,
@@ -1917,9 +2031,25 @@ fn Parser::parse_class_body(
   Array[(Bool, String)],
 ) raise ParseError {
   let _ = self.expect(LBrace)
+  // First token INSIDE the body. TS2803 / TS2806 are decided from this
+  // token range rather than from an AST walk: a member's body is an
+  // arbitrary expression tree, and a walker that misses one arm loses a
+  // finding silently, while a token scan is complete by construction —
+  // every access to `#x` spells `#x`.
+  let body_token_start = self.pos
   // Class body is implicitly strict mode
   let prev_strict = self.in_strict
   self.in_strict = true
+  // TS2803 / TS2806: which `#private` names this class declares as a
+  // METHOD, and which as a SET-only accessor. Raw names (no brand), to
+  // match the `PrivateIdent` tokens the scan below reads.
+  let private_method_names : Array[String] = []
+  let private_getters : Array[String] = []
+  let private_setters : Array[String] = []
+  // TS7008 candidates: (spelling to report, key as the token scan sees
+  // it). Held until the body has been scanned, because an assignment in
+  // the class body can supply the type.
+  let implicit_any_candidates : Array[(String, String)] = []
   // TS1207: which get/set accessors carried a decorator, keyed
   // `<static>:<kind>:<name>`. Decorating BOTH halves of a get/set pair is
   // an error — one descriptor covers both, so two decorators would be
@@ -1932,6 +2062,9 @@ fn Parser::parse_class_body(
   // real body). Two or more is TS2392 ("Multiple constructor implementations
   // are not allowed").
   let mut ctor_impl_count = 0
+  // Constructor OVERLOAD SIGNATURES — bodiless `constructor(...)`
+  // declarations. Paired with `ctor_impl_count` for TS2390 below.
+  let mut ctor_sig_count = 0
   // Set when an accessibility modifier (`public` / `private` / `protected`)
   // was written on an index signature -- always TS1071.
   let mut index_sig_modifier_misuse = false
@@ -2259,6 +2392,12 @@ fn Parser::parse_class_body(
     // parsed, because `parse_class_method_key` mangles it to a brand and
     // the `#` is gone by the time the decorator check below runs.
     let key_is_private_name = self.peek().kind is PrivateIdent(_)
+    // The RAW `#private` name, captured before the key parse mangles it
+    // to a brand. Empty when the member is not a private one.
+    let raw_private_name = match self.peek().kind {
+      PrivateIdent(n) => n
+      _ => ""
+    }
     let key = self.parse_class_method_key()
     let method_name = class_key_name(key)
     // TS1206: decorators are not valid on a constructor
@@ -2305,6 +2444,22 @@ fn Parser::parse_class_body(
         None => ()
       }
     }
+    // TS2803 / TS2806 support: classify this member if it is a private
+    // one. A private METHOD is not writable; a private accessor with a
+    // setter and no getter is not readable.
+    if key_is_private_name && raw_private_name != "" {
+      match accessor_kind {
+        Some("get") => private_getters.push(raw_private_name)
+        Some("set") => private_setters.push(raw_private_name)
+        Some(_) => ()
+        None =>
+          // A method, not a field: a field's key is followed by `:`, `=`,
+          // `?`, `!` or a terminator, never by a call signature.
+          if self.check(LParen) || self.check(Lt) {
+            private_method_names.push(raw_private_name)
+          }
+      }
+    }
     // TS1031: `declare` may modify a class FIELD and nothing else, so any
     // member whose name is followed by a call signature is an error. The
     // rule was written for the constructor alone
@@ -2333,21 +2488,32 @@ fn Parser::parse_class_body(
       if is_abstract_member {
         abstract_members.push(method_name)
       }
-      // TS4112/4113/4114 support: which members carried an `override`
-      // modifier (checked against the base chain, and -- under
-      // noImplicitOverride -- required on genuine overrides). Marker
-      // format matches other per-class sentinels; instance and static
-      // sides are distinguished.
-      if saw_override_modifier {
-        self.override_member_names.push(
-          (if is_static { "s:" } else { "i:" }) + method_name,
-        )
-      }
-      if has_declare {
-        self.override_member_names.push(
-          "<decl>" + (if is_static { "s:" } else { "i:" }) + method_name,
-        )
-      }
+    }
+    // TS4112/4113/4114 support: which members carried an `override`
+    // modifier (checked against the base chain, and -- under
+    // noImplicitOverride -- required on genuine overrides). Marker
+    // format matches other per-class sentinels; instance and static
+    // sides are distinguished.
+    //
+    // OUTSIDE the `!= "<computed>"` guard above, deliberately. That guard
+    // is right for the three lists it wraps — accessibility and
+    // abstractness are looked up BY NAME, and an opaque key has none —
+    // and it was inherited by this recording, which asks a different
+    // question: did a member carry `override` at all. So
+    // `class B extends A { override [foo]() {} }` recorded nothing and
+    // TS4113 could not fire. The checker decides what a `<computed>`
+    // entry may conclude; it is deliberately narrow, because
+    // `override [prop]()` IS legal when the base declares the key that
+    // `prop` resolves to (`overrideLateBindableName1`).
+    if saw_override_modifier {
+      self.override_member_names.push(
+        (if is_static { "s:" } else { "i:" }) + method_name,
+      )
+    }
+    if has_declare {
+      self.override_member_names.push(
+        "<decl>" + (if is_static { "s:" } else { "i:" }) + method_name,
+      )
     }
     let is_optional = self.match_(Question)
     let has_definite_assertion = self.match_(Bang)
@@ -2696,6 +2862,14 @@ fn Parser::parse_class_body(
       if accessor_kind is None && key is Name("constructor") && !is_static {
         if has_body_block {
           ctor_impl_count += 1
+        } else {
+          // TS2390 support: a BODILESS constructor is an overload
+          // signature (or an ambient declaration). This counter existed
+          // only for implementations, and only the `>= 2` case was ever
+          // read — so `class C { constructor(); }`, a signature set with
+          // no implementation at all, was silent while its mirror image
+          // (two implementations, TS2392) was reported.
+          ctor_sig_count += 1
         }
         ctor = Some(func)
         // Materialize TS "parameter properties" (`constructor(readonly x:
@@ -2756,6 +2930,7 @@ fn Parser::parse_class_body(
       }
     } else {
       self.restore_local_type_param_bounds(local_type_param_bound_len)
+      let had_annotation = self.check(Colon)
       let field_type = if self.match_(Colon) {
         self.parse_type()
       } else {
@@ -2780,6 +2955,37 @@ fn Parser::parse_class_body(
         None
       }
       let _ = self.match_(Semicolon)
+      // TS7008 evidence: a field with NEITHER a type annotation NOR an
+      // initializer has no source of a type, so under `noImplicitAny` it
+      // is an implicit `any` member. Recorded here rather than decided in
+      // the checker because the annotation is what distinguishes it and
+      // the AST cannot: a missing annotation and an explicit `: any` are
+      // both `Any`.
+      //
+      // Every neighbour probed: `q = 1` (an initializer infers the type)
+      // and `r: number` are clean — `r` is TS2564, a different rule —
+      // while a `#private` name and the STATIC side both error like a
+      // plain one. An ambient class is exempt and needs no gate here,
+      // because `declare class` is parsed by `parse_declare_class` and
+      // never reaches this function.
+      if self.no_implicit_any &&
+        not(self.in_ambient_module) &&
+        not(had_annotation) &&
+        init is None &&
+        not(has_declare) {
+        // The SOURCE spelling, not the brand: `class_key_name` returns
+        // the mangled `__private_brand__N__u` for a private member, and
+        // a diagnostic naming that is a diagnostic nobody can act on.
+        let shown = if key_is_private_name && raw_private_name != "" {
+          "#" + raw_private_name
+        } else {
+          class_key_name(key)
+        }
+        // Deferred, not reported here: an assignment elsewhere in the
+        // class body can supply the type, and the body has not been read
+        // yet. `record_private_member_misuse` decides, after its scan.
+        implicit_any_candidates.push((shown, class_key_name(key)))
+      }
       // A `declare` field (`class C { declare x: T }`) is ambiently
       // typed and emits no runtime code, so TS never applies strict
       // property initialization (TS2564) to it. Fold it into the
@@ -2797,6 +3003,9 @@ fn Parser::parse_class_body(
     }
   }
   let _ = self.expect(RBrace)
+  self.record_private_member_misuse(
+    body_token_start, private_method_names, private_getters, private_setters, implicit_any_candidates,
+  )
   // TS1207: a name whose GETTER and SETTER are both decorated. Checked
   // here, where the whole body has been seen, and keyed on static-ness
   // because the static and instance sides are separate members.
@@ -2874,8 +3083,8 @@ fn Parser::parse_class_body(
   }
   (
     ctor, elements, private_members, protected_members, abstract_members, ctor_impl_count,
-    index_sig_modifier_misuse, abstract_member_with_body, overload_static_mix, overload_missing_impl,
-    overload_accessibility_mix, modifier_order_misuse, class_body_statement_misuse,
+    ctor_sig_count, index_sig_modifier_misuse, abstract_member_with_body, overload_static_mix,
+    overload_missing_impl, overload_accessibility_mix, modifier_order_misuse, class_body_statement_misuse,
     static_index_type_param_ref, index_naked_params,
   )
 }
@@ -2977,6 +3186,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     protected_members,
     abstract_members,
     ctor_impl_count,
+    ctor_sig_count,
     index_sig_modifier_misuse,
     abstract_member_with_body,
     overload_static_mix,
@@ -3025,6 +3235,13 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   }
   if ctor_impl_count >= 2 {
     expr_class_sentinels.push("<multiple-ctor-impl>")
+  }
+  // TS2390: constructor signatures with no implementation. An AMBIENT
+  // class needs none (`declare class A { constructor(); }` is legal), but
+  // an ABSTRACT one does — probed, and the opposite of what "abstract
+  // members have no bodies" suggests.
+  if ctor_sig_count > 0 && ctor_impl_count == 0 {
+    expr_class_sentinels.push("<ctor-no-impl>")
   }
   if index_sig_modifier_misuse {
     expr_class_sentinels.push("<index-sig-modifier>")
@@ -3781,6 +3998,7 @@ fn Parser::parse_class_decl_with_abstract(
     protected_members,
     abstract_members,
     ctor_impl_count,
+    ctor_sig_count,
     index_sig_modifier_misuse,
     abstract_member_with_body,
     overload_static_mix,
@@ -3823,6 +4041,9 @@ fn Parser::parse_class_decl_with_abstract(
         }
       None => ()
     }
+  }
+  if ctor_sig_count > 0 && ctor_impl_count == 0 {
+    runtime_decl.duplicate_member_names.push("<ctor-no-impl>")
   }
   if ctor_impl_count >= 2 {
     runtime_decl.duplicate_member_names.push("<multiple-ctor-impl>")
