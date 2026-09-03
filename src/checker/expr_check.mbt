@@ -27968,12 +27968,7 @@ fn check_module_function_bodies_layered(
     }
   }
   for
-    issue in check_class_member_structure(
-      module_,
-      resolver,
-      strict_root.use_define_for_class_fields,
-      outer_object_names,
-    ) {
+    issue in check_class_member_structure(module_, resolver, outer_object_names) {
     all.push(issue)
   }
   // TS2803: assignment to a private method (`#method`). Run per-module so
@@ -29477,7 +29472,6 @@ fn class_mentions_super_outside_ctor(
 fn check_class_member_structure(
   module_ : @ast.TsModule,
   resolver : Resolver,
-  use_define_for_class_fields : Bool,
   outer_object_names : Map[String, Unit],
 ) -> Array[ExprIssue] {
   let issues : Array[ExprIssue] = []
@@ -29693,7 +29687,33 @@ fn check_class_member_structure(
     // --- property <-> accessor override against the direct base class. ---
     // Skip when the (auto-)accessor / property override target is the
     // subclass itself rather than concrete inherited state.
-    if use_define_for_class_fields && decl.base_names.length() > 0 {
+    //
+    // TWO DEFECTS ARE RECORDED HERE RATHER THAN FIXED, both found by
+    // probing this pair against the real compiler and both worth more
+    // than the file they cost.
+    //
+    // 1. The `use_define_for_class_fields` gate was WRONG and is GONE.
+    //    tsc reports TS2610 / TS2611 whatever that flag says — probed
+    //    with it explicitly `false`, which still errors — because the
+    //    flag changes how a field is EMITTED and not whether changing an
+    //    inherited member's kind is legal. Removing it widened the
+    //    population this pair judges, so it was measured on its own:
+    //    TP 2480 / MISS 254 / FP 0, byte for byte the same as with the
+    //    gate. It buys nothing on the corpus and it is correct, which is
+    //    why it is kept and why the number is written down here.
+    //
+    // 2. An AMBIENT class's accessors are invisible to
+    //    `class_instance_accessor_names`, because the parser upserts a
+    //    `declare class`'s `get x(): T` into `properties` without a
+    //    `methods` entry carrying `accessor: "get"`. That is
+    //    simultaneously a MISS and a latent FALSE POSITIVE:
+    //    `declare class A { get x(): string } class B extends A { x = 1 }`
+    //    is TS2610 and stays silent (propertyOverridesAccessors4), while
+    //    `class B extends A { get x() { … } }` — legal, an accessor
+    //    overriding an accessor — reads as an accessor over a FIELD and
+    //    is reported. The corpus has no file of the second shape, which
+    //    is why FP 0 never caught it.
+    if decl.base_names.length() > 0 {
       let base = match resolver.classes.get(decl.base_names[0]) {
         Some(b) => Some(b)
         None =>
@@ -29717,12 +29737,16 @@ fn check_class_member_structure(
           let this_accessors = class_instance_accessor_names(decl)
           let this_fields = class_instance_field_names(decl, this_accessors)
           // TS2610: this declares a data property that the base declared
-          // as an accessor.
+          // as an accessor. (The two messages here were SWAPPED relative
+          // to their conditions — each described the other loop's
+          // situation. The detection was right and the text was not,
+          // which is the kind of thing only a probe against a real
+          // compiler shows.)
           for name, _ in this_fields {
             if base_accessors.contains(name) {
               issues.push({
                 path: "class \{decl.name}",
-                message: "`\{name}` is defined as a property but overridden as an accessor",
+                message: "`\{name}` is defined as an accessor in the base class but is overridden here as a property",
               })
             }
           }
@@ -29732,7 +29756,7 @@ fn check_class_member_structure(
             if base_fields.contains(name) {
               issues.push({
                 path: "class \{decl.name}",
-                message: "`\{name}` is defined as an accessor but overridden as a property",
+                message: "`\{name}` is defined as a property in the base class but is overridden here as an accessor",
               })
             }
           }

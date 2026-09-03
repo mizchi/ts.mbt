@@ -32,7 +32,7 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2479 / MISS 255 / FP 0 /
+  is a soundness bug, and there are none (TP 2480 / MISS 254 / FP 0 /
   PFLEGAL 0 / TN 1750). That gate compares against vendored TS7 name
   lists, so it says nothing about WHAT a rejected file's error was, and
   nothing at all about a hand-written legal neighbour. A real compiler
@@ -56,8 +56,8 @@ product surfaces now.
   were exhausted and that only large type-machinery features remained, and
   that was measured against the **TS6** oracle — under TS7, **128 of the
   388 missing files are flippable by a pure-grammar (TS1xxx) rule** and 91
-  of them need no type judgement anywhere. Eighteen batches have taken
-  **+142 TP at FP 0** so far, and most of their items were BUGS rather than
+  of them need no type judgement anywhere. Nineteen batches have taken
+  **+143 TP at FP 0** so far, and most of their items were BUGS rather than
   missing features — one of them a rule the repo had already written and
   applied to every declaration kind except namespaces. The first:
   `eval`/`arguments` as an assignment target was checked at two of the four
@@ -410,6 +410,34 @@ product surfaces now.
   a complete reference-recording channel, and a missed read makes the
   member look unused, which is a false positive — the one direction the
   budget does not allow.
+  Batch CN is +1 and is mostly about what the probe finds in code that
+  is ALREADY there. Writing a TS2610 / TS2611 rule turned up an existing
+  one, so the new implementation was deleted and the old one probed —
+  which produced three findings. Its two MESSAGES were swapped relative
+  to their conditions (the loop for "base accessor, derived property"
+  said the opposite), so detection was right and the text was not. Its
+  `useDefineForClassFields` gate was WRONG: tsc reports both codes with
+  that flag explicitly `false`, because the flag changes how a field is
+  EMITTED and not whether changing an inherited member's kind is legal.
+  Removing the gate widens the judged population, so it was measured
+  alone — TP 2480 / MISS 254 / FP 0, identical to keeping it — and a
+  unit test had pinned the wrong behaviour with the confusion stated in
+  its own comment ("the property flows through the setter -- allowed"),
+  the third test in this repo found asserting the bug. And an AMBIENT
+  class's accessors are invisible to the pair, because the parser
+  upserts a `declare class`'s `get x(): T` into `properties` with no
+  `methods` entry carrying `accessor: "get"` — one defect producing a
+  MISS and a latent FALSE POSITIVE at once
+  (`declare class A { get x(): string } class B extends A { x = 1 }` is
+  TS2610 and silent; the legal accessor-over-accessor form IS reported),
+  and the corpus has no file of the second shape, which is why FP 0
+  never caught it. Recorded rather than fixed: the change is in the
+  parser and moves what the bridge generator sees. The rule that DID
+  ship, TS2500, was again a diagnostic the code had already located —
+  `parse_implements_names`'s comment names "the `?.` of an invalid
+  `implements A?.B`" as the thing it skips — with the asymmetry that
+  keeps it sound: `extends A?.B` is legal, since an `extends` clause
+  takes an expression.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

@@ -2158,10 +2158,60 @@ need parser-wide changes).
 State: whole-corpus **TP 2457 / MISS 277 / FP 0 / PFLEGAL 0 / TN 1750**
 (classified 4484, NOTRUN 14) via
 `scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0`.
-Eighteen batches: BU +9, BV +14, BW +13, BX +10, BY +7, BZ +1, CA +0,
+Nineteen batches: BU +9, BV +14, BW +13, BX +10, BY +7, BZ +1, CA +0,
 CB +10, CC +6, CD +4, CE +6, CF/CG +19, CH +7, CI +5, CJ +6, CK +3,
-CL +11, CM +11, for **+142 TP at FP 0** (TP 2479 / MISS 255 / FP 0 /
-PFLEGAL 0 / TN 1750).
+CL +11, CM +11, CN +1, for **+143 TP at FP 0** (TP 2480 / MISS 254 /
+FP 0 / PFLEGAL 0 / TN 1750).
+
+### Batch CN (2026-09-03): one rule, and a check whose gate was wrong
+
++1 file (TP 2479 -> 2480, MISS 255 -> 254, FP 0, PFLEGAL 0). A small
+batch, and the interesting part is what probing an EXISTING pair of
+checks against the real compiler turned up.
+
+**TS2500** — `class C implements A?.B {}` is not a qualified name. The
+diagnostic went where `parse_implements_names` already resyncs, and its
+own comment had named the shape it was skipping ("the `?.` of an invalid
+`implements A?.B`") — only the report was missing. Note the asymmetry,
+which is why nothing was added on the `extends` side:
+`class C1 extends A?.B {}` is LEGAL, because an `extends` clause takes an
+EXPRESSION, and `classExtendingOptionalChain` says so by accepting the
+first half of its own file.
+
+**The TS2610 / TS2611 pair had three problems, and finding them started
+from writing a duplicate.** The intended rule — a derived class may not
+change an inherited member's kind between a data property and an
+accessor — turned out to exist already, so the new implementation was
+deleted. Probing the existing one is what paid:
+
+- **The two messages were SWAPPED** relative to their conditions: the
+  loop that fires when the base has an ACCESSOR and the derived class a
+  property said "defined as a property but overridden as an accessor",
+  and vice versa. Detection was right, the text was not. Fixed.
+- **The `useDefineForClassFields` gate was WRONG and is gone.** tsc
+  reports both codes whatever that flag says — probed with it explicitly
+  `false`, which still errors — because the flag changes how a field is
+  EMITTED and not whether changing an inherited member's kind is legal.
+  Removing it widens the population the pair judges, so it was measured
+  on its own: TP 2480 / MISS 254 / FP 0, identical to keeping it. It buys
+  nothing on the corpus and it is correct, so it is kept and the number
+  is written down at the site. A UNIT TEST had pinned the wrong
+  behaviour, with the confusion stated in its own comment ("the property
+  flows through the setter -- allowed") — that is an emit fact, not a
+  legality one. Third time a test has been found asserting the bug.
+- **An AMBIENT class's accessors are invisible to the pair**, and that is
+  recorded rather than fixed. The parser upserts a `declare class`'s
+  `get x(): T` into `properties` without a `methods` entry carrying
+  `accessor: "get"`, so `class_instance_accessor_names` cannot see it.
+  That is simultaneously a MISS and a latent FALSE POSITIVE:
+  `declare class A { get x(): string }` + `class B extends A { x = 1 }`
+  is TS2610 and stays silent (`propertyOverridesAccessors4`), while
+  `class B extends A { get x() { … } }` — legal, an accessor overriding
+  an accessor — reads as an accessor over a FIELD and IS reported. The
+  corpus contains no file of the second shape, which is exactly why
+  FP 0 never caught it. The fix is in the parser and would move what the
+  bridge generator and `.d.ts` emitter see, so it wants its own change
+  rather than a corner of a grammar batch.
 
 ### Batch CM (2026-09-03): nine rules, and two things the parser hides
 

@@ -10037,17 +10037,36 @@ test "expr_check: base accessor overridden by derived property (TS2610)" {
   let issues = fn(src : String) -> Int {
     check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
   }
-  // Under useDefineForClassFields, a base accessor overridden by a data
-  // property is an error.
+  // A base accessor overridden by a data property is an error, and it is
+  // an error with `useDefineForClassFields` either way.
+  //
+  // This test used to assert the opposite for the flag-off case, with the
+  // reason written in: "the property flows through the setter --
+  // allowed". That is a statement about how the field is EMITTED, and it
+  // is not what decides legality — probed against the real compiler with
+  // the flag explicitly `false`, which still reports TS2610. The check's
+  // gate on the flag is gone, and removing it was measured on its own:
+  // TP 2480 / MISS 254 / FP 0, identical to keeping it.
   assert_true(
     issues(
       "// @useDefineForClassFields: true\nclass A { get x() { return 1 } } class B extends A { x = 2; }",
     ) >
     0,
   )
-  // Without the flag the property flows through the setter -- allowed.
+  assert_true(
+    issues("class A { get x() { return 1 } } class B extends A { x = 2; }") > 0,
+  )
+  assert_true(
+    issues(
+      "// @useDefineForClassFields: false\nclass A { get x() { return 1 } } class B extends A { x = 2; }",
+    ) >
+    0,
+  )
+  // An accessor overriding an accessor is legal in both settings.
   @test.assert_eq(
-    issues("class A { get x() { return 1 } } class B extends A { x = 2; }"),
+    issues(
+      "class A { get x() { return 1 } set x(v: number) { } } class B extends A { get x() { return 2 } set x(v: number) { } }",
+    ),
     0,
   )
 }
@@ -16016,6 +16035,8 @@ test "expr_check: lib era, namespace values, new over a call signature (batch CM
       // TS2432: two merged declarations both omitting the first
       // initializer.
        "enum E { A }\nenum E { B = 0 }\nenum E { C }",
+      // TS2500: an `implements` entry is not a qualified name.
+       "namespace A { export class B { } }\nclass C implements A?.B { }",
     ] {
     assert_true(issues(src) > 0)
   }
@@ -16070,6 +16091,12 @@ test "expr_check: lib era, namespace values, new over a call signature (batch CM
       // TS2432: only ONE declaration omits the first initializer, and a
       // single declaration never merges.
        "enum E { A = 0 }\nenum E { B }\nenum E { C = 5 }", "enum E { A }",
+      // TS2500: an `extends` clause takes an EXPRESSION, so `extends
+      // A?.B` is LEGAL — `classExtendingOptionalChain` accepts the first
+      // half of its own file — and a genuine qualified name or a generic
+      // reference is fine on the `implements` side.
+       "namespace A { export class B { } }\nclass C1 extends A?.B { }", "namespace A { export interface B { x: number } }\nclass C implements A.B { x = 1; }",
+      "interface I<T> { x: T }\nclass C implements I<number> { x = 1; }",
     ] {
     @test.assert_eq(issues(src), 0)
   }

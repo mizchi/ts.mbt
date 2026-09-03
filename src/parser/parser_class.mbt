@@ -1239,6 +1239,20 @@ fn Parser::parse_implements_names(self : Parser) -> Array[String] {
   let mut expect_name = true
   let mut angle = 0
   while !self.check(LBrace) && !self.check(Eof) {
+    // TS2500 ("A class can only implement an identifier/qualified-name
+    // with optional type arguments"): `implements A?.B` is not a
+    // qualified name. The collector's own comment above already named
+    // this shape as the thing it skips — the diagnostic was simply never
+    // written. Note the asymmetry, which is why this belongs here and
+    // not at the `extends` clause: `class C1 extends A?.B {}` is LEGAL
+    // (an `extends` clause takes an EXPRESSION), and
+    // `classExtendingOptionalChain` says so by accepting the first half
+    // of the same file.
+    if self.peek().kind is Question && angle == 0 && self.peek_at(1).kind is Dot {
+      self.grammar_misuses.push(
+        "a class can only implement an identifier / qualified-name with optional type arguments",
+      )
+    }
     match self.peek().kind {
       Lt => {
         angle += 1
