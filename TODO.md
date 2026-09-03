@@ -2158,9 +2158,148 @@ need parser-wide changes).
 State: whole-corpus **TP 2457 / MISS 277 / FP 0 / PFLEGAL 0 / TN 1750**
 (classified 4484, NOTRUN 14) via
 `scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0`.
-Sixteen batches: BU +9, BV +14, BW +13, BX +10, BY +7, BZ +1, CA +0,
-CB +10, CC +6, CD +4, CE +6, CF/CG +19, CH +7, CI +5, CJ +6, CK +3, for
-**+120 TP at FP 0**.
+Seventeen batches: BU +9, BV +14, BW +13, BX +10, BY +7, BZ +1, CA +0,
+CB +10, CC +6, CD +4, CE +6, CF/CG +19, CH +7, CI +5, CJ +6, CK +3,
+CL +11, for **+131 TP at FP 0** (TP 2468 / MISS 266 / FP 0 / PFLEGAL 0 /
+TN 1750).
+
+### Batch CL (2026-09-03): a real compiler as the legal-neighbour oracle
+
++11 files, and the batch's most durable output is not a rule. Every
+"legal neighbour" claim in this repo has so far been an argument;
+`node_modules/typescript` holds a real compiler (6.0.3), so
+`scripts/tsc_probe.mjs` now runs it over a file the way the conformance
+harness would — reading the `// @option:` header — and prints its
+diagnostics. It replaces reasoning with a measurement for the two
+questions the vendored baselines cannot answer: what TS7 actually SAID
+about a file, and what it says about a hand-written neighbour that no
+baseline covers. Three of the batch's rules were wrong on their first
+draft and the probe is how each was diagnosed. Read its answers with one
+caveat, stated in its header: 6.0.3 is not tsgo, so a disagreement with
+the TS7 verdict is possible and is itself information — `symbolProperty37`
+is in the TS7 error set and 6.0.3 accepts it, which is why
+`member_name_duplicates` was left alone (its comment claims duplicate
+well-known-symbol interface members merge legally, and against a real
+compiler that claim still holds).
+
+**First, the measurement that decided the strategy.** Running every
+conformance case with the checker in STRICT mode — the permissive filter
+entirely off — flags **8 of the 277 MISS files**, at a cost of 49 false
+positives. So the suppression is not what is holding recall back: at most
+8 files were behind it, five of them for good reasons (a lib signature's
+optional arguments, `toFixed()` with no argument, a `using a = null`
+diagnostic that is not the error TS reports). The other 269 files are ones
+where the checker computes nothing at all, which is the same conclusion
+`docs/checker-priority.md` reached, now with a number instead of an
+impression.
+
+**TS2348, three files, and a latent false positive underneath.** Calling
+a class without `new` (`Tools.NullLogger()`) needs no inference at all —
+a class's static side never carries a call signature, and neither
+declaration-merging route can add one — so it is exempt from the
+permissive "not callable" suppression for the same reason the
+construct-signature-only case is. Carving that subset out exposed what
+the filter had been hiding: `is_definitely_not_callable` had an
+unconditional `Object(_) => true` arm, so `declare var q: { (): number };
+q()` — an object type whose entire purpose is a call signature — was "not
+callable". Nobody could see it, because the family was dropped wholesale.
+The arm now asks for a `<call>` member. That fix is asserted through the
+STRICT entry point, since in permissive mode the wrong answer and the
+right one both look silent.
+
+**TS2467 / TS2302, four files, and the same applied-in-some-places
+family.** `check_static_uses_class_type_params` read a static member's
+return type and parameters, which is where a signature carries types and
+not where code does: `static bar() { var obj = { [foo<T>()]() {} } }` is
+what real code looks like (computedPropertyNames34), and a static
+member's computed KEY is a third position the signature scan cannot see.
+Both now use the same predicate the two existing positions use, lifted
+over statements. TS2467 is new and cheap because the offending set is the
+class's OWN type parameters and nothing else — a type parameter of an
+enclosing generic FUNCTION is legal in the same position, and that falls
+out of reading `decl.type_params` instead of the ambient in-scope set.
+
+**TS1117 on a well-known-symbol object-literal key, one file, and a
+blocker that was written down and wrong.** `record_objlit_duplicate_keys`
+skipped every `@@`-prefixed key, and its doc comment recorded
+`symbolProperty36` as a deliberate MISS with a reason: only the CLASS key
+path resolves a well-known symbol to a stable `@@<name>`, and renaming
+the object-literal key would move keys the mangler and the dead-property
+pass read. True of the approach it considered, and beside the point — the
+parser wraps a computed entry's VALUE as `ComputedProp(key_expr, value)`,
+so the key expression was already in hand and nothing had to be renamed.
+Second time (after batch BZ) that a stated abstention's own comment named
+the thing to remove.
+
+**TS2449 in a class's own computed key, one file.** The class binding is
+in its temporal dead zone while the body's computed keys are evaluated,
+so a member key may not name its own class. TS2449 already existed for a
+forward-referencing `extends`; this is the second position the same dead
+zone covers. What keeps it narrow is the legal set, and all of it was
+probed rather than reasoned: a static field INITIALIZER (`static q =
+C.p`) runs after the binding is initialized, a method body later still,
+and another class's name is not this class's dead zone.
+
+**TS2454's lib-global exemption, one file, and a comment that was right
+about a scope it did not check.** The exemption's own text says "a
+TOP-LEVEL redeclaration of a runtime-provided lib global merges with the
+platform value", and the code applied it at every scope. Inside a
+namespace or a function, `var Symbol: SymbolConstructor` declares an
+ordinary uninitialized local, and tsc reports TS2454 for all three of
+`namespace M { … }`, `namespace M { var Object … }` and
+`function f() { … }` — probed, not assumed. `CheckCtx` carries
+`script_top_level` now, produced by the same `outer_modules.length() == 0`
+root test the module-level checks already use.
+
+**Two rules were WRONG in their first form, both caught by the corpus,
+and both are the legal-neighbour lesson.**
+
+- **TS2466 for object-literal computed keys is REJECTED**, with the
+  measurement kept in the code so it is not re-attempted. The rule exists
+  for CLASS member keys, so extending it to object-literal keys reads
+  like the same family — and it is not: an object-literal computed key
+  may legally mention `super`, and three TS7-ACCEPTED corpus files say so
+  (`computedPropertyNames25` / `28` / `31`). It cost **6 false positives
+  for 2 true ones**. What makes `computedPropertyNames30` an error is not
+  a rule anything here can model: `28` is the same program with the
+  object literal directly in the constructor instead of inside an arrow,
+  and tsc accepts it. Modelling a distinction one file draws is fitting
+  the corpus, so `30` stays a MISS.
+- **IIFE arity is one-directional.** Checking a function literal's
+  parameter count looked like the same kind of exact fact as a function
+  declaration's — the parameter list is right there in the source — and
+  checking BOTH directions cost **4 false positives for 1 true one**,
+  because TypeScript has a rule that reasoning missed: an IIFE's
+  parameters are contextually typed, so passing FEWER arguments than
+  parameters is legal and they come out `undefined`.
+  `contextuallyTypedIife` says so in a section headed "missing
+  arguments" — `((x, y, z) => 42)()` is accepted. Too many is still
+  TS2554, which is what `parserNoASIOnCallAfterFunctionExpression1`
+  needs.
+
+**Recorded, not attempted:**
+
+- **TS7008** (a class member with no annotation and no initializer under
+  `noImplicitAny`) is missing for PUBLIC members too, so it is not the
+  usual family — it is simply absent. It stays absent because the parser
+  cannot distinguish an implicit `any` from a written `: any` on a class
+  property: `type_` is `Any` either way, and `class C { x: any }` is
+  legal. `has_initializer` shows the shape of the fix (one more parser-set
+  flag), and it touches every `TsClassPropertyDecl` construction site, so
+  it is not worth one file.
+- **Class EXPRESSIONS reach no class-level check at all.**
+  `const C = class<T> { static x: T }` is silent where the declaration
+  form fires. Ceiling measured before deciding: exactly **8** of the 266
+  MISS files contain a class expression and one of those already flips
+  via its declaration form, so it is ~7 files against giving every
+  class-level rule a new population to be wrong about.
+- **TS4127** (`override` on a dynamic name) is worth 2 files and batch BY
+  rejected it as unsound. The probe now says exactly where the line is:
+  `const prop = "foo"` keeps a literal type, so the key is late-bindable
+  and `override [prop]()` is LEGAL (BY was right), while `let prop =
+  "foo"` widens to `string` and is TS4127. A rule keyed on the
+  declaration form of the key's binding would be sound; it is filed
+  rather than guessed.
 
 ### Batch CK (2026-09-03): enum initializers, and one wrong attribution
 

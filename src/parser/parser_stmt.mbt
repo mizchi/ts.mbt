@@ -99,18 +99,26 @@ fn Parser::record_suppressible_grammar_misuse(
 ///   - a SPREAD entry, whose key is a sentinel rather than a name, and
 ///     which may legally supply a key another entry also writes
 ///     (`{ ...o, a: 1 }` is the standard override idiom);
-///   - a COMPUTED key, which the object-literal parser stores as
+///   - a COMPUTED key whose expression we cannot spell, stored as
 ///     `@@computed:<index>`. Those can never compare equal to each other
-///     because the index differs per entry, so they cost nothing here — but
-///     that is also why `{ [Symbol.isConcatSpreadable]: 0,
-///     [Symbol.isConcatSpreadable]: 1 }` (`symbolProperty36`) is NOT
-///     caught: only the CLASS key path resolves a well-known symbol to a
-///     stable `@@<name>`, and giving object literals the same naming would
-///     change keys the mangler and the dead-property pass read. Left as a
-///     MISS deliberately rather than paid for with that blast radius.
+///     because the index differs per entry, so they cost nothing here.
 /// Any key beginning with `<` or `@@` other than the accessor prefixes is
 /// therefore skipped, which is the same sentinel convention
 /// `parse_var_like`'s TS2850 check already reads.
+///
+/// A WELL-KNOWN-SYMBOL computed key is the exception, and it is the one
+/// this comment used to record as a deliberate MISS: `{
+/// [Symbol.isConcatSpreadable]: 0, [Symbol.isConcatSpreadable]: 1 }`
+/// (`symbolProperty36`) IS a duplicate, because `Symbol.isConcatSpreadable`
+/// names one specific symbol. The blocker written down here was that only
+/// the CLASS key path resolves such a key to a stable `@@<name>`, and
+/// renaming the object-literal key would move keys the mangler and the
+/// dead-property pass read. That was true of the approach and beside the
+/// point: the parser wraps a computed entry's VALUE as
+/// `ComputedProp(key_expr, value)`, so the key expression is already here
+/// and nothing has to be renamed to compare it. Arbitrary key expressions
+/// stay opaque — two calls to the same function may well produce two
+/// different symbols — so only the `Symbol.<wk>` shape gets a name.
 fn Parser::record_objlit_duplicate_keys(
   self : Parser,
   fields : Array[(String, @ast.TsExpr)],
@@ -118,7 +126,10 @@ fn Parser::record_objlit_duplicate_keys(
   let seen : Map[String, Unit] = {}
   let reported : Map[String, Unit] = {}
   for f in fields {
-    let k = f.0
+    let k = match (f.0.has_prefix("@@computed:"), f.1) {
+      (true, ComputedProp(PropAccess(Var("Symbol"), wk), _)) => "@@wk:" + wk
+      _ => f.0
+    }
     // Sentinel keys (spread, computed, and anything else the parser cannot
     // spell) are not comparable names. The accessor prefixes ARE, and they
     // distinguish a getter from a setter of the same name, which is why
@@ -127,7 +138,8 @@ fn Parser::record_objlit_duplicate_keys(
       (
         k.has_prefix("@@") &&
         not(k.has_prefix("@@get:")) &&
-        not(k.has_prefix("@@set:"))
+        not(k.has_prefix("@@set:")) &&
+        not(k.has_prefix("@@wk:"))
       ) {
       continue
     }

@@ -4043,6 +4043,16 @@ priv struct CheckCtx {
   // (`var s: string; ({ [s]() {} })` is accepted), so flagging it would be a
   // false positive. Undefined-name (TS2304) checking still runs.
   mut in_computed_key : Bool
+  // True only for the walk over a SCRIPT's own top-level statements.
+  // A few rules are correct at that one scope and nowhere else: the
+  // TS2454 exemption for a `var` redeclaring a runtime-provided lib
+  // global merges with the platform binding at script top level and
+  // declares an ordinary uninitialized local anywhere else
+  // (`namespace M { var Symbol: SymbolConstructor; … }` is TS2454 —
+  // symbolProperty55 — and so is the same line inside a function).
+  // The producing test is `outer_modules.length() == 0`, the same root
+  // test the module-level checks use.
+  script_top_level : Bool
 }
 
 ///|
@@ -5679,15 +5689,122 @@ fn is_definitely_not_callable(ty : @ast.TsType) -> Bool {
     | Void
     | Null
     | Undefined
-    | Object(_)
     | Struct(_, _)
     | Array(_)
     | Tuple(_)
     | TemplateLiteralType(_, _) => true
+    // An object type is callable exactly when it declares a CALL
+    // signature. The arm used to be an unconditional `Object(_) => true`,
+    // which makes `declare var q: { (): number }; q()` — legal, and the
+    // whole point of a call signature — "not callable". Nothing noticed
+    // because the permissive filter drops this family wholesale, so the
+    // unsoundness was invisible until the construct-only subset below was
+    // carved out of that filter.
+    Object(fields) => !object_type_has_call_signature(fields)
     // TS2348: a construct-signature-only value (`new () => T`,
     // `{ new(): T }`) must be invoked with `new`; a bare call is never
     // legal. `NewExpr` callees don't route through this predicate.
     Constructor(_, _, _) => true
+    _ => false
+  }
+}
+
+///|
+/// True when an object type's member list carries a call signature — the
+/// parser records one under the `<call>` sentinel key.
+fn object_type_has_call_signature(
+  fields : Array[(@ast.TsType, @ast.TsType)],
+) -> Bool {
+  for f in fields {
+    if f.0 is Literal("<call>") {
+      return true
+    }
+  }
+  false
+}
+
+///|
+/// TS2348 for the commonest spelling of it: calling a CLASS without
+/// `new` (`Tools.NullLogger()`). This needs no type inference at all,
+/// only the declaration — a class's static side never carries a call
+/// signature, and neither declaration-merging route can add one
+/// (`namespace C {}` adds static PROPERTIES, `interface C {}` adds
+/// INSTANCE members, and TypeScript has no syntax for a call signature on
+/// `typeof C`). So it is exempt from the permissive "not callable"
+/// suppression for the same reason the construct-only case is: the
+/// premise there is an inference we might have got wrong, and there is no
+/// inference here.
+///
+/// What can go wrong is the NAME rather than the type, so the guards are
+/// all about resolution. `classes` is keyed by the QUALIFIED name (the
+/// resolver ingests a namespace body under a `Ns.` prefix), so the dotted
+/// form looks the class up under the full path and additionally requires
+/// the receiver path to be a namespace we know declares it — without
+/// that, `obj.NullLogger()` on an unrelated object with a same-named
+/// method would be flagged. The bare form checks that nothing nearer — a
+/// local binding, a top-level function — owns the name.
+fn check_class_called_without_new(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  name : String,
+  namespace_ : String?,
+) -> Unit {
+  let key = match namespace_ {
+    Some(ns) => ns + "." + name
+    None => name
+  }
+  if ctx.resolver.classes.get(key) is None {
+    return
+  }
+  match namespace_ {
+    Some(ns) =>
+      match ctx.resolver.namespace_value_decls.get(ns) {
+        Some(decls) => if decls.get(name) is None { return }
+        None => return
+      }
+    None =>
+      if env.lookup(name) is Some(_) ||
+        ctx.resolver.signatures.get(name) is Some(_) {
+        return
+      }
+  }
+  record_unfiltered(
+    ctx,
+    "call `\{key}`",
+    "`typeof \{name}` is not callable: did you mean to include `new`?",
+  )
+}
+
+///|
+/// TS2348 ("Value of type `T` is not callable. Did you mean to include
+/// `new`?"): the callee carries a CONSTRUCT signature and no call
+/// signature, so the only legal invocation is `new`.
+///
+/// Unlike the rest of the "not callable" family this is reliable enough to
+/// report in permissive mode, and the reason is provenance rather than
+/// caution: both accepted shapes can only come from a written annotation.
+/// `Constructor(..)` is what `new () => T` parses to, and the `<new>`
+/// sentinel is what a written `new(...)` member of an object type parses
+/// to — neither is ever produced by inference. So the premise the
+/// permissive filter exists for ("we may have inferred the callee's type
+/// wrong") does not hold here, while the broader
+/// `is_definitely_not_callable` cases — a bare `Object` with no signature
+/// at all, a primitive — genuinely can be an inference artifact and stay
+/// suppressed.
+fn is_construct_only_callee(ty : @ast.TsType) -> Bool {
+  match ty {
+    Constructor(_, _, _) => true
+    Object(fields) => {
+      if object_type_has_call_signature(fields) {
+        return false
+      }
+      for f in fields {
+        if f.0 is Literal("<new>") {
+          return true
+        }
+      }
+      false
+    }
     _ => false
   }
 }
@@ -12200,6 +12317,7 @@ fn check_arrow_with_context(
   // tracking, so clone it minus the parameter names for the body walk.
   let inner_ctx : CheckCtx = {
     path_prefix: ctx.path_prefix,
+    script_top_level: ctx.script_top_level,
     return_type: unwrap_async_return(is_async, formal_ret),
     yield_type: @ast.TsType::Any,
     widen_generator_return: false,
@@ -12346,6 +12464,7 @@ fn check_funcexpr_with_context(
   }
   let inner_ctx : CheckCtx = {
     path_prefix: ctx.path_prefix,
+    script_top_level: ctx.script_top_level,
     return_type: body_return,
     yield_type: @ast.TsType::Any,
     widen_generator_return: false,
@@ -15060,7 +15179,7 @@ fn check_ident_binding_decl(
       if is_checkable(declared) &&
         !type_accepts_undefined(declared) &&
         ctx.strict_property_init &&
-        !is_lib_global_value_name(name) &&
+        !(ctx.script_top_level && is_lib_global_value_name(name)) &&
         !ctx.resolver.name_assigned_in_static_block(name) {
         ctx.unassigned[name] = block_scoped
       }
@@ -16577,6 +16696,7 @@ fn check_call_args_in_expr(
     Call(name, args) => {
       // TS2304: calling a name declared nowhere and not a standard global.
       check_undefined_name(env, ctx, name)
+      check_class_called_without_new(env, ctx, name, None)
       // TS2345 for the `BigInt` builtin (`(string | number | bigint |
       // boolean)`): nullish literals report under strictNullChecks;
       // symbols and object literals always. Skipped when the module
@@ -16757,7 +16877,13 @@ fn check_call_args_in_expr(
               if ctx.resolver.signatures.get(name) is None {
                 check_union_callee_arity(ctx, other, args, "call `\{name}`")
               }
-              if is_definitely_not_callable(other) {
+              if is_construct_only_callee(other) {
+                record_unfiltered(
+                  ctx,
+                  "call `\{name}`",
+                  "`\{type_display(other)}` is not callable: did you mean to include `new`?",
+                )
+              } else if is_definitely_not_callable(other) {
                 record(
                   ctx,
                   "call `\{name}`",
@@ -16798,6 +16924,58 @@ fn check_call_args_in_expr(
       // source-level distinction between `x?: T` and `x: T | undefined`.
       let raw_callee_ty = infer_expr(env, ctx.resolver, callee)
       let callee_ty = ctx.resolver.unwrap(raw_callee_ty)
+      // TS2554 for an IMMEDIATELY-INVOKED function literal, in ONE
+      // direction only: too many arguments.
+      //
+      // Arity diagnostics are suppressed in permissive mode because a lib
+      // signature's optional / rest parameters are not modelled
+      // accurately, and `arity_reliable` is set only for a direct call to
+      // a function DECLARATION. A literal callee looked like the same kind
+      // of fact — its parameter list is right here in the source — and
+      // checking BOTH directions cost 4 false positives for 1 true one,
+      // because TypeScript has a rule this reasoning missed: an IIFE's
+      // parameters are contextually typed, so passing FEWER arguments than
+      // parameters is legal and they come out `undefined`.
+      // `contextuallyTypedIife` says so in a section headed "missing
+      // arguments" — `((x, y, z) => 42)()` is TS7-accepted.
+      //
+      // Too many is still an error, which is what
+      // `var x = function () { }\n(<any>window).foo;` needs: no ASI there,
+      // so it is a call of the function expression with one argument
+      // (parserNoASIOnCallAfterFunctionExpression1). A rest parameter
+      // lifts the bound to unbounded and abstains.
+      let literal_params = match callee {
+        FuncExpr(f) => Some(f.params)
+        ArrowFunc(ps, _, _, _) => Some(ps)
+        _ => None
+      }
+      match literal_params {
+        Some(ps) => {
+          let mut has_rest = false
+          for p in ps {
+            if p.is_rest {
+              has_rest = true
+            }
+          }
+          if not(has_rest) && args.length() > ps.length() {
+            let mut spread = false
+            for a in args {
+              if a is Spread(_) {
+                spread = true
+              }
+            }
+            // A spread argument expands to an unknown count.
+            if not(spread) {
+              record_unfiltered(
+                ctx,
+                "call",
+                "expected \{ps.length()} argument(s), got \{args.length()}",
+              )
+            }
+          }
+        }
+        None => ()
+      }
       match callee_ty {
         Func(params, _) => check_arguments(env, params, args, ctx, "call")
         // A union callee whose members share one identical call signature is
@@ -16842,7 +17020,13 @@ fn check_call_args_in_expr(
             TemplateLiteral(_, _) | StringLit(_) =>
               record_unfiltered(ctx, "call", "`string` is not callable")
             _ =>
-              if is_definitely_not_callable(other) {
+              if is_construct_only_callee(other) {
+                record_unfiltered(
+                  ctx,
+                  "call",
+                  "`\{type_display(other)}` is not callable: did you mean to include `new`?",
+                )
+              } else if is_definitely_not_callable(other) {
                 record(ctx, "call", "`\{type_display(other)}` is not callable")
               }
           }
@@ -16856,6 +17040,14 @@ fn check_call_args_in_expr(
       check_private_name_access(ctx, meth)
       check_member_accessibility(env, ctx, receiver, meth)
       check_super_abstract_access(ctx, receiver, meth)
+      // TS2348: `Namespace.Klass()` — a class reached through its
+      // namespace and called without `new` (forgottenNew). The receiver
+      // path is reconstructed dotted so a nested `N.M.Klass()` resolves
+      // under the same key the resolver ingested it as.
+      match new_callee_class_name(receiver) {
+        Some(ns) => check_class_called_without_new(env, ctx, meth, Some(ns))
+        None => ()
+      }
       // TS2550: es2017+/es2024+ static surface used under an older lib
       // (parser-marker evidence): `Object.values` / `Object.entries`
       // arrived in es2017 (useObjectValuesAndEntries2/3), `Atomics.waitAsync`
@@ -17725,6 +17917,23 @@ fn check_call_args_in_expr(
       check_call_args_in_expr(env, key, ctx)
       ctx.in_computed_key = saved
       check_computed_key_type(env, key, ctx)
+      // TS2466 is deliberately NOT raised here, and the measurement is
+      // worth keeping because the shape looks like an obvious gap. The
+      // rule exists for CLASS member keys
+      // (`check_this_in_computed_keys`), so extending it to
+      // OBJECT-LITERAL keys — which is where `computedPropertyNames30`
+      // puts its `[(super(), "prop")]` — reads like the same
+      // applied-in-some-places family this repo keeps finding. It is not:
+      // an object-literal computed key may legally mention `super`, and
+      // the corpus says so in three files, `computedPropertyNames25` /
+      // `28` / `31`, all TS7-ACCEPTED. Adding it cost 6 false positives
+      // for 2 true ones.
+      //
+      // What makes `30` an error is not a rule anything here can model:
+      // `28` is the SAME program with the object literal directly in the
+      // constructor instead of inside an arrow, and tsc accepts it.
+      // Modelling a distinction that one file draws would be fitting the
+      // corpus, so `30` stays a MISS.
       check_call_args_in_expr(env, value, ctx)
     }
     PropAccess(recv, prop) => {
@@ -19228,6 +19437,7 @@ fn check_function_body_with(
   }
   let ctx : CheckCtx = {
     path_prefix: "function " + func.name,
+    script_top_level: false,
     return_type: effective_return,
     yield_type,
     widen_generator_return: generator_treturn,
@@ -21312,6 +21522,152 @@ fn ts2683_walk_stmts(
 }
 
 ///|
+/// TS2467 ("A computed property name cannot reference a type parameter
+/// from its containing type"): a class's own type parameters are not in
+/// scope in a member's computed KEY, because the key is evaluated when the
+/// class is defined rather than when it is instantiated.
+///
+/// The offending set is the class's OWN type parameters and nothing else,
+/// which is what makes this cheap and sound: a type parameter of an
+/// enclosing generic FUNCTION is legal in the same position (a function is
+/// not a containing type), and a method's own type parameters are not in
+/// scope in its key either way. Both fall out of using `decl.type_params`
+/// rather than the ambient in-scope set.
+fn check_computed_key_type_param(
+  decl : @ast.TsClassDecl,
+  key : @ast.TsExpr,
+  issues : Array[ExprIssue],
+) -> Unit {
+  if expr_type_positions_reference_any(key, decl.type_params) {
+    issues.push({
+      path: "class \{decl.name}",
+      message: "a computed property name cannot reference a type parameter from its containing type",
+    })
+  }
+  // TS2449 ("Class 'X' used before its declaration"): the class binding is
+  // still in its temporal dead zone while the body's computed keys are
+  // evaluated, so a member key may not name its own class
+  // (`class C { static p = 10; [C.p]() {} }` —
+  // computedPropertyNamesWithStaticProperty). TS2449 already existed for a
+  // forward-referencing `extends` clause; this is the second position the
+  // same dead zone covers.
+  //
+  // The positions that are LEGAL are what keeps this narrow, and all were
+  // probed against tsc: a static field INITIALIZER (`static q = C.p`) runs
+  // after the binding is initialized, a method body runs later still, and
+  // another class's name is not this class's dead zone. Nested functions
+  // inside the key are not descended into — `[(() => C.p)()]` is an error
+  // in tsc and stays a MISS here rather than risk a parameter of the same
+  // name reading as the class.
+  if decl.name != "" && expr_mentions_var_outside_fn(key, decl.name) {
+    issues.push({
+      path: "class \{decl.name}",
+      message: "class `\{decl.name}` used before its declaration",
+    })
+  }
+}
+
+///|
+/// True when `e` reads the identifier `name` somewhere that evaluates in
+/// the CURRENT lexical scope — nested functions, arrows and class bodies
+/// are not descended into, since they may rebind the name and are
+/// evaluated later. Mirrors `expr_uses_this_outside_fn`, which asks the
+/// same question about `this`.
+fn expr_mentions_var_outside_fn(e : @ast.TsExpr, name : String) -> Bool {
+  fn go(x : @ast.TsExpr) -> Bool {
+    expr_mentions_var_outside_fn(x, name)
+  }
+
+  match e {
+    Var(n) => n == name
+    // Rebinding / deferred scopes — see the abstention above.
+    ArrowFunc(_, _, _, _) | FuncExpr(_) | NativeClassExpr(_, _) => false
+    PropAccess(r, _) => go(r)
+    PropAssignExpr(r, _, v) => go(r) || go(v)
+    BinOp(_, a, b) | Seq(a, b) | IndexAccess(a, b) | ComputedProp(a, b) =>
+      go(a) || go(b)
+    Cond(a, b, c) | IndexAssignExpr(a, b, c) => go(a) || go(b) || go(c)
+    UnaryOp(_, x)
+    | Spread(x)
+    | Await(x)
+    | YieldStar(x)
+    | AssignExpr(_, x)
+    | As(x, _)
+    | Satisfies(x, _)
+    | PureCall(x)
+    | TypeArgs(_, x)
+    | NonNull(x)
+    | OptionalChain(x) => go(x)
+    Yield(inner) =>
+      match inner {
+        Some(x) => go(x)
+        None => false
+      }
+    Call(cn, args) => {
+      if cn == name {
+        return true
+      }
+      for a in args {
+        if go(a) {
+          return true
+        }
+      }
+      false
+    }
+    New(cn, args) => {
+      if cn == name {
+        return true
+      }
+      for a in args {
+        if go(a) {
+          return true
+        }
+      }
+      false
+    }
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      if go(callee) {
+        return true
+      }
+      for a in args {
+        if go(a) {
+          return true
+        }
+      }
+      false
+    }
+    MethodCall(r, _, args) => {
+      if go(r) {
+        return true
+      }
+      for a in args {
+        if go(a) {
+          return true
+        }
+      }
+      false
+    }
+    ArrayLit(items) => {
+      for it in items {
+        if go(it) {
+          return true
+        }
+      }
+      false
+    }
+    ObjectLit(entries) => {
+      for en in entries {
+        if go(en.1) {
+          return true
+        }
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+///|
 /// Direct `super` reference inside a computed-key expression, for TS2466
 /// ("'super' cannot be referenced in a computed property name").
 ///
@@ -21360,6 +21716,7 @@ fn check_this_in_computed_keys(
           message: "`super` cannot be referenced in a computed property name",
         })
       }
+      check_computed_key_type_param(decl, ke, issues)
       // TS1166: a computed class-property key must have a simple literal
       // (or unique symbol) type. A CALL through a declared-`any` callee
       // never does (`declare var f: any; class C2 { accessor [f()] = 1 }`
@@ -21391,6 +21748,7 @@ fn check_this_in_computed_keys(
               message: "`super` cannot be referenced in a computed property name",
             })
           }
+          check_computed_key_type_param(decl, ke, issues)
         }
         None => ()
       }
@@ -26891,6 +27249,7 @@ fn check_module_function_bodies_layered(
     }
     let field_ctx : CheckCtx = {
       path_prefix: "function \{cls.name}.<field-init>",
+      script_top_level: false,
       return_type: @ast.TsType::Void,
       yield_type: @ast.TsType::Any,
       widen_generator_return: false,
@@ -26959,6 +27318,7 @@ fn check_module_function_bodies_layered(
     }
     let key_ctx : CheckCtx = {
       path_prefix: "function \{cls.name}.<member-key>",
+      script_top_level: false,
       return_type: @ast.TsType::Void,
       yield_type: @ast.TsType::Any,
       widen_generator_return: false,
@@ -26998,6 +27358,7 @@ fn check_module_function_bodies_layered(
   if module_.top_level_stmts.length() > 0 {
     let top_ctx : CheckCtx = {
       path_prefix: "top-level",
+      script_top_level: outer_modules.length() == 0,
       return_type: @ast.TsType::Void,
       yield_type: @ast.TsType::Any,
       widen_generator_return: false,
@@ -30647,6 +31008,202 @@ fn check_module_decl_signatures(module_ : @ast.TsModule) -> Array[ExprIssue] {
 }
 
 ///|
+/// True when a TYPE position inside `e` references one of `names`. The
+/// type positions an expression can hold are the explicit type arguments
+/// of a generic call (`foo<T>()`), an `as` / `satisfies` target, and an
+/// arrow's parameter / return annotations.
+///
+/// Deliberately does NOT descend into a nested function or arrow body, or
+/// into a class expression: those introduce their own type-parameter
+/// scopes, and reading a `T` there without modelling the shadowing would
+/// be a guess. That abstention costs a MISS and invents nothing, which is
+/// the right direction for a recall check — the wrapper-arm list follows
+/// `check_globalthis_blockscoped`, whose comment says why the list is
+/// meant to be complete in one place.
+fn expr_type_positions_reference_any(
+  e : @ast.TsExpr,
+  names : Array[String],
+) -> Bool {
+  if names.length() == 0 {
+    return false
+  }
+  match e {
+    TypeArgs(targs, inner) => {
+      for t in targs {
+        if type_references_any(t, names) {
+          return true
+        }
+      }
+      expr_type_positions_reference_any(inner, names)
+    }
+    As(x, t) | Satisfies(x, t) =>
+      type_references_any(t, names) ||
+      expr_type_positions_reference_any(x, names)
+    // Own type-parameter scope — see the abstention above.
+    ArrowFunc(_, _, _, _) | FuncExpr(_) | NativeClassExpr(_, _) => false
+    PropAccess(r, _) => expr_type_positions_reference_any(r, names)
+    PropAssignExpr(r, _, v) =>
+      expr_type_positions_reference_any(r, names) ||
+      expr_type_positions_reference_any(v, names)
+    BinOp(_, a, b) | Seq(a, b) | IndexAccess(a, b) | ComputedProp(a, b) =>
+      expr_type_positions_reference_any(a, names) ||
+      expr_type_positions_reference_any(b, names)
+    Cond(a, b, c) | IndexAssignExpr(a, b, c) =>
+      expr_type_positions_reference_any(a, names) ||
+      expr_type_positions_reference_any(b, names) ||
+      expr_type_positions_reference_any(c, names)
+    UnaryOp(_, x)
+    | Spread(x)
+    | Await(x)
+    | YieldStar(x)
+    | AssignExpr(_, x)
+    | PureCall(x)
+    | NonNull(x)
+    | OptionalChain(x) => expr_type_positions_reference_any(x, names)
+    Yield(inner) =>
+      match inner {
+        Some(x) => expr_type_positions_reference_any(x, names)
+        None => false
+      }
+    Call(_, args) | New(_, args) => {
+      for a in args {
+        if expr_type_positions_reference_any(a, names) {
+          return true
+        }
+      }
+      false
+    }
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      if expr_type_positions_reference_any(callee, names) {
+        return true
+      }
+      for a in args {
+        if expr_type_positions_reference_any(a, names) {
+          return true
+        }
+      }
+      false
+    }
+    MethodCall(r, _, args) => {
+      if expr_type_positions_reference_any(r, names) {
+        return true
+      }
+      for a in args {
+        if expr_type_positions_reference_any(a, names) {
+          return true
+        }
+      }
+      false
+    }
+    ArrayLit(items) => {
+      for it in items {
+        if expr_type_positions_reference_any(it, names) {
+          return true
+        }
+      }
+      false
+    }
+    ObjectLit(entries) => {
+      for en in entries {
+        if expr_type_positions_reference_any(en.1, names) {
+          return true
+        }
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+///|
+/// `expr_type_positions_reference_any` lifted over a statement / block, so
+/// a static method's BODY can be scanned for the same references its
+/// signature is scanned for.
+fn block_type_positions_reference_any(
+  block : @ast.TsBlock,
+  names : Array[String],
+) -> Bool {
+  for s in block.stmts {
+    if stmt_type_positions_reference_any(s, names) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn stmt_type_positions_reference_any(
+  stmt : @ast.TsStmt,
+  names : Array[String],
+) -> Bool {
+  fn ex(e : @ast.TsExpr) -> Bool {
+    expr_type_positions_reference_any(e, names)
+  }
+
+  fn blk(b : @ast.TsBlock) -> Bool {
+    block_type_positions_reference_any(b, names)
+  }
+
+  fn opt_blk(b : @ast.TsBlock?) -> Bool {
+    match b {
+      Some(x) => blk(x)
+      None => false
+    }
+  }
+
+  match stmt {
+    Var(_, t, init) | Let(_, t, init) | Const(_, t, init) =>
+      type_references_any(t, names) || ex(init)
+    Assign(_, v) | CompoundAssign(_, _, v) | Throw(v) | Expr(v) => ex(v)
+    IndexAssign(a, b, c) => ex(a) || ex(b) || ex(c)
+    PropAssign(o, _, v) => ex(o) || ex(v)
+    Return(v) =>
+      match v {
+        Some(x) => ex(x)
+        None => false
+      }
+    Try(body, _, catch_, finally_) =>
+      blk(body) || opt_blk(catch_) || opt_blk(finally_)
+    If(c, then_, else_) => ex(c) || blk(then_) || opt_blk(else_)
+    While(c, body) | DoWhile(c, body) | With(c, body) => ex(c) || blk(body)
+    For(init, cond, update, body) =>
+      (match init {
+        Some(s) => stmt_type_positions_reference_any(s, names)
+        None => false
+      }) ||
+      (match cond {
+        Some(c) => ex(c)
+        None => false
+      }) ||
+      (match update {
+        Some(s) => stmt_type_positions_reference_any(s, names)
+        None => false
+      }) ||
+      blk(body)
+    ForOf(_, _, t, it, body)
+    | ForAwaitOf(_, _, t, it, body)
+    | ForIn(_, _, t, it, body) =>
+      type_references_any(t, names) || ex(it) || blk(body)
+    Switch(disc, cases) => {
+      if ex(disc) {
+        return true
+      }
+      for c in cases {
+        if blk(c.body) {
+          return true
+        }
+      }
+      false
+    }
+    Label(_, inner) => stmt_type_positions_reference_any(inner, names)
+    Block(b) => blk(b)
+    // A nested class declaration opens its own type-parameter scope; see
+    // the abstention on `expr_type_positions_reference_any`.
+    _ => false
+  }
+}
+
+///|
 /// TS2302: a `static` member (property or method) cannot reference any of
 /// the enclosing class's type parameters. Class TPs are an instance-side
 /// notion; the static side doesn't carry a binding for them. Walks every
@@ -30698,7 +31255,38 @@ fn check_static_uses_class_type_params(
         break
       }
     }
-    let _ = flagged
+    if flagged {
+      continue
+    }
+    // The member's BODY is a static position too, and this check used to
+    // read only the signature — the return type and the parameters. A
+    // static method body is where real code puts the reference
+    // (`static bar() { var obj = { [foo<T>()]() {} } }`,
+    // computedPropertyNames34), and a computed KEY is a third position the
+    // signature scan cannot see. Both are the same question the two
+    // existing positions ask, so they use the same predicate rather than
+    // a new one.
+    match m.key_expr {
+      Some(ke) =>
+        if expr_type_positions_reference_any(ke, class_tps_minus_method) {
+          issues.push({
+            path,
+            message: "static members cannot reference class type parameters",
+          })
+          continue
+        }
+      None => ()
+    }
+    match m.body {
+      Some(b) =>
+        if block_type_positions_reference_any(b, class_tps_minus_method) {
+          issues.push({
+            path,
+            message: "static members cannot reference class type parameters",
+          })
+        }
+      None => ()
+    }
   }
 }
 

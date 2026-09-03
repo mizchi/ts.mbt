@@ -32,8 +32,19 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2457 / MISS 277 / FP 0 /
-  PFLEGAL 0 / TN 1750). The asymmetry is deliberate: we model a subset of
+  is a soundness bug, and there are none (TP 2468 / MISS 266 / FP 0 /
+  PFLEGAL 0 / TN 1750). That gate compares against vendored TS7 name
+  lists, so it says nothing about WHAT a rejected file's error was, and
+  nothing at all about a hand-written legal neighbour. A real compiler
+  answers both: `node_modules/typescript` is 6.0.3, and
+  `scripts/tsc_probe.mjs` runs it over a file the way the harness would
+  (reading the `// @option:` header). Batch CL diagnosed three wrong
+  rules with it and left one alone because of it — `symbolProperty37` is
+  in the TS7 error set and 6.0.3 accepts it, so
+  `member_name_duplicates`'s claim that duplicate well-known-symbol
+  interface members merge legally still holds and the code was not
+  touched. 6.0.3 is not tsgo, so a disagreement is information rather
+  than a verdict. The asymmetry is deliberate: we model a subset of
   TS, so a MISS is expected and an FP never is.
   That gate says how many we miss and nothing about WHICH, so "MISS 388"
   could rank no work at all — a baseline NAME list says that TS7 errored,
@@ -45,8 +56,8 @@ product surfaces now.
   were exhausted and that only large type-machinery features remained, and
   that was measured against the **TS6** oracle — under TS7, **128 of the
   388 missing files are flippable by a pure-grammar (TS1xxx) rule** and 91
-  of them need no type judgement anywhere. Sixteen batches have taken
-  **+120 TP at FP 0** so far, and most of their items were BUGS rather than
+  of them need no type judgement anywhere. Seventeen batches have taken
+  **+131 TP at FP 0** so far, and most of their items were BUGS rather than
   missing features — one of them a rule the repo had already written and
   applied to every declaration kind except namespaces. The first:
   `eval`/`arguments` as an assignment target was checked at two of the four
@@ -278,6 +289,65 @@ product surfaces now.
   of it — the same substitution as the `computed_props` label and the
   decorator-bucket ranking, reading a two-feature file's error as
   belonging to whichever feature caught the eye first.
+  Batch CL is +11 and its most durable output is the ORACLE rather than
+  any rule, because it settled two questions the gate cannot reach. The
+  first was strategic and had been guesswork: running the whole corpus
+  with the permissive filter entirely OFF flags **8 of the 277 MISS
+  files** at a cost of 49 false positives, so the suppression was never
+  the thing holding recall back — five of those eight are suppressed for
+  good reasons and the other 269 files are ones where the checker
+  computes nothing at all. The second was per-rule: every
+  legal-neighbour claim in this file had been an argument, and
+  `scripts/tsc_probe.mjs` makes it a measurement by running the real
+  6.0.3 compiler in `node_modules` over a probe file under its own
+  `// @option:` header. It earned itself back three times over — `const
+  prop = "foo"` versus `let prop = "foo"` is exactly where TS4127's line
+  falls (so batch BY's rejection was right, and the rule is now filed
+  with its condition rather than its verdict); `namespace M { var Symbol
+  … }` is TS2454 while the same line at script top level is not; and
+  `symbolProperty37` is in the TS7 error set yet 6.0.3 ACCEPTS it, which
+  is why `member_name_duplicates` was left exactly as it was.
+  The rules themselves are three more instances of the same two
+  families. TS2348 for a class called without `new` needs no inference
+  (a class's static side cannot carry a call signature, and neither
+  declaration-merging route can add one), and carving it out of the
+  "not callable" suppression exposed what that filter had been hiding
+  for however long: `is_definitely_not_callable` had an unconditional
+  `Object(_) => true` arm, so `declare var q: { (): number }; q()` — an
+  object type whose entire purpose is a call signature — was "not
+  callable", invisibly, because the family was dropped wholesale. That
+  fix has to be asserted through the STRICT entry point, since in
+  permissive mode the wrong answer and the right one both look silent.
+  `check_static_uses_class_type_params` read a static member's return
+  type and parameters, which is where a SIGNATURE carries types and not
+  where code does — a static method's BODY and its computed KEY are two
+  more positions, and the body is the one real code uses. And
+  `record_objlit_duplicate_keys`'s doc comment recorded
+  `symbolProperty36` as a deliberate MISS with a blocker (only the class
+  key path resolves a well-known symbol to a stable `@@<name>`, and
+  renaming the object-literal key would move keys the mangler reads) —
+  true of the approach it considered and beside the point, since the
+  parser already wraps a computed entry's VALUE as
+  `ComputedProp(key_expr, value)` and the key expression was in hand.
+  Second time after batch BZ that a stated abstention's own comment
+  named the thing to remove.
+  Two of the batch's rules were WRONG in their first form and the corpus
+  caught both, which is the legal-neighbour lesson twice more. TS2466
+  exists for CLASS member keys, so extending it to OBJECT-LITERAL keys
+  reads like the applied-in-some-places family and is not: an
+  object-literal computed key may legally mention `super`, three
+  TS7-ACCEPTED files say so, and it cost 6 false positives for 2 true
+  ones. `computedPropertyNames28` is `30` with the object literal
+  directly in the constructor instead of inside an arrow, and tsc
+  accepts it — modelling a distinction ONE file draws is fitting the
+  corpus, so `30` stays a MISS and the reason lives at the site. And IIFE
+  arity is one-DIRECTIONAL: a literal callee's parameter list is right
+  there in the source, which looked like the same exact fact a function
+  declaration gives, and checking both directions cost 4 false positives
+  for 1 true one because an IIFE's parameters are contextually typed —
+  passing FEWER arguments than parameters is legal and they come out
+  `undefined`, which `contextuallyTypedIife` states in a section headed
+  "missing arguments". Too many is still TS2554.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

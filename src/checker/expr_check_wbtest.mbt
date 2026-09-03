@@ -15833,3 +15833,143 @@ test "expr_check: enum initializer suspends, legacy decorator on a private membe
     @test.assert_eq(issues(src), 0)
   }
 }
+
+///|
+/// Batch CL: TS2348 (a class / construct-signature-only value called
+/// without `new`), TS2467, TS2302 in a static member's body and computed
+/// key, TS1117 on a well-known-symbol object-literal key, TS2449 in a
+/// class's own computed key, TS2454's lib-global exemption narrowed to
+/// script top level, and one-directional IIFE arity.
+///
+/// Every "silent" entry below was checked against the locally installed
+/// TypeScript compiler with `scripts/tsc_probe.mjs` rather than reasoned
+/// about, which is how the batch's three corpus false positives were
+/// found before they shipped and how two more were diagnosed after.
+test "expr_check: not-callable, computed keys and scoped exemptions (batch CL)" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  for
+    src in [
+      // TS2348: a class called without `new`, bare and namespace-qualified
+      // (forgottenNew) and through a nested namespace.
+      "class C { }\nvar r = C();", "namespace Tools { export class NullLogger { } }\nvar logger = Tools.NullLogger();",
+      "namespace N { export namespace M { export class K { } } }\nvar bad = N.M.K();",
+      // TS2348: a construct-signature-only annotation, both spellings.
+       "declare var b: { new(): number };\nvar r = b();", "declare var k: new () => number;\nvar r = k();",
+      // TS2467: the class's own type parameter in a member's computed key.
+       "declare function foo<T>(): string;\nclass C<T> { [foo<T>()]() { } }",
+      // TS2302: the class type parameter reached from a static member's
+      // BODY and from its computed KEY, neither of which the signature
+      // scan could see.
+       "declare function foo<T>(): string;\nclass C<T> { static bar() { var obj = { [foo<T>()]() { } }; return obj; } }",
+      "declare function foo<T>(): string;\nclass C<T> { static [foo<T>()]() { } }",
+      // TS1117: a repeated well-known-symbol key in an object literal.
+       "var x = { [Symbol.isConcatSpreadable]: 0, [Symbol.isConcatSpreadable]: 1 };",
+      // TS2449: the class's own name in one of its computed keys.
+       "class C { static p = 10; [C.p]() { } }",
+      // TS2454: a lib-global name redeclared inside a namespace or a
+      // function is an ordinary uninitialized local, not the platform
+      // binding.
+       "namespace M { var Symbol: SymbolConstructor; var y = Symbol.iterator; }",
+      "namespace M { var Object: ObjectConstructor; var y = Object.keys; }", "function f() { var Symbol: SymbolConstructor; var y = Symbol.iterator; }",
+      // TS2554: too many arguments to an immediately-invoked literal.
+       "var bad = (function (p: number) { return p; })(1, 2);",
+      // The no-ASI form. `parserNoASIOnCallAfterFunctionExpression1`
+      // spells it `(<any>window).foo`, which cannot be used HERE:
+      // `parse_module_or_empty` goes through `Parser::from_source`,
+      // which defaults `allow_jsx` to true, so `<any>` scans as JSX and
+      // the cast never forms. The corpus file covers that spelling; this
+      // asserts the rule.
+       "var x = function () { }\n(1);",
+    ] {
+    assert_true(issues(src) > 0)
+  }
+  // --- silent: the LEGAL neighbour of each rule above
+  for
+    src in [
+      // A call signature makes an object type callable — the
+      // `is_definitely_not_callable` `Object(_)` arm used to say
+      // otherwise, invisibly, because the permissive filter dropped the
+      // whole family.
+      "declare var q: { (): number };\nvar r = q();", "declare var q: { (): number; new(): string };\nvar a = q();\nvar b = new q();",
+      // A class constructed correctly, and one reached through a
+      // namespace.
+       "class C { }\nvar ok = new C();", "namespace Tools { export class NullLogger { } }\nvar ok = new Tools.NullLogger();",
+      // A local binding shadowing a class name is what the callee means.
+       "class Foo { }\nfunction shadow() { const Foo = () => 1; return Foo(); }",
+      // A same-named METHOD on an unrelated object is not that class.
+       "namespace N { export class Handler { } }\ndeclare var obj: { Handler(): number };\nvar ok = obj.Handler();",
+      // Declaration merging adds members and static properties, never a
+      // call signature.
+       "class C { }\ninterface C { z: number }\nnamespace C { export var w = 1; }\nvar ok = new C();",
+      // TS2467: a concrete type argument, and a type parameter belonging
+      // to an enclosing FUNCTION rather than a containing type.
+       "declare function foo<T>(): string;\nclass C<T> { [foo<string>()]() { } }",
+      "declare function foo<T>(): string;\nfunction g<T>() { class C { [foo<T>()]() { } }\n  return C; }",
+      // TS2302: a static method's OWN type parameter shadows the class's,
+      // and an instance method's body may use the class's freely.
+       "class C<T> { static bar<T>(x: T): T { return x; } }", "declare function foo<T>(): string;\nclass C<T> { bar() { var obj = { [foo<T>()]() { } }; return obj; } }",
+      // TS1117: distinct well-known symbols, an opaque key expression
+      // that may evaluate to two different symbols, and a getter/setter
+      // PAIR on one key.
+       "var x = { [Symbol.iterator]: 0, [Symbol.isConcatSpreadable]: 1 };", "declare function k(): string;\nvar x = { [k()]: 0, [k()]: 1 };",
+      "var x = { get [Symbol.toPrimitive]() { return 1; }, set [Symbol.toPrimitive](v: number) { } };",
+      // TS2449: a static field INITIALIZER runs after the binding is
+      // initialized, a method body later still, and another class's name
+      // is not this class's dead zone.
+       "class C { static p = 10; static q = C.p; }", "class C { static p = 10; m() { return C.p; } }",
+      "class Outer { static p = 1; }\nclass C { [Outer.p]() { } }",
+      // TS2454: at SCRIPT top level a `var` of a lib-global name merges
+      // with the platform binding, and an initialized one is assigned
+      // wherever it sits.
+       "var Symbol: SymbolConstructor;\nvar y = Symbol.iterator;", "namespace M { var Symbol: SymbolConstructor = globalThis.Symbol; var y = Symbol.iterator; }",
+      // TS2554: an IIFE's parameters are contextually typed, so FEWER
+      // arguments than parameters is legal and they come out
+      // `undefined` — `contextuallyTypedIife` has a section headed
+      // "missing arguments" saying so. Checking that direction cost four
+      // corpus false positives.
+       "var a = ((x: number, y: number, z: number) => 42)();", "var b = (function (x: number, u: number) { return x; })(42);",
+      "var c = ((p: number, q?: number) => p)(1);", "var d = ((...r: number[]) => r.length)(1, 2, 3);",
+      "var e = ((p: number = 5) => p)();", "var f = (function () { return 1; })();",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}
+
+///|
+/// The `is_definitely_not_callable` fix has to be asserted through the
+/// STRICT entry point. In permissive mode the whole "is not callable"
+/// family is suppressed, so `{ (): number }` being called would look
+/// silent whether or not the predicate is wrong — which is exactly how
+/// the bug survived: an unconditional `Object(_) => true` arm called
+/// every object type non-callable, including one whose entire purpose is
+/// a call signature, and no run could see it.
+test "expr_check: an object type with a call signature IS callable (strict)" {
+  let strict_issues = fn(src : String) -> Array[String] {
+    let out : Array[String] = []
+    for iss in check_module_function_bodies(parse_module_or_empty(src)) {
+      out.push(iss.message)
+    }
+    out
+  }
+  fn not_callable(src : String) -> Bool {
+    let mut hit = false
+    for m in strict_issues(src) {
+      if m.contains("is not callable") {
+        hit = true
+      }
+    }
+    hit
+  }
+
+  // Legal: a call signature, alone and beside a construct signature.
+  assert_false(not_callable("declare var q: { (): number };\nvar r = q();"))
+  assert_false(
+    not_callable("declare var q: { (): number; new(): string };\nvar a = q();"),
+  )
+  // Still reported: no call signature at all, and construct-only.
+  assert_true(not_callable("declare var o: { a: number };\nvar r = o();"))
+  assert_true(not_callable("declare var b: { new(): number };\nvar r = b();"))
+}
