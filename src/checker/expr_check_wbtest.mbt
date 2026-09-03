@@ -15749,3 +15749,87 @@ test "expr_check: scanner-level grammar rules" {
     @test.assert_eq(issues(src), 0)
   }
 }
+
+///|
+/// Batch CK: `await` / `yield` in an enum member initializer (TS1308 /
+/// TS1163), and a legacy decorator on a `#private` class member (TS1206).
+///
+/// The enum rule needs its own check rather than the generic
+/// await-outside-async one, and the corpus file shows why: its enum sits
+/// inside an `async function*`, so `in_async` and `in_generator` are both
+/// true and both operators are legal THERE. An enum member initializer is
+/// a constant-expression position evaluated at compile time, so nothing
+/// that suspends may appear in one whatever the enclosing function is.
+///
+/// The decorator rule cost two false positives before it was right, and
+/// the mistake is one this repo keeps recording. The file that suggested
+/// it, `autoAccessorExperimentalDecorators`, combines TWO features —
+/// `accessor` and `#private` — and gating on either looked equally
+/// plausible. Its baseline errors on exactly the two PRIVATE members, and
+/// `@dec accessor prop` under `experimentalDecorators` is accepted by TS7
+/// (`decoratorOnClassProperty13`, and `static accessor y = 1` in
+/// `legacyDecorators-contextualTypes`), so the private name was doing all
+/// the work and the auto-accessor none of it. Both legal spellings are in
+/// the silent list.
+///
+/// Note the gate direction: `#private` is rejected by LEGACY decorators
+/// and supported by standard ES ones, so it points the opposite way from
+/// the `abstract` / `declare` rule next to it.
+test "expr_check: enum initializer suspends, legacy decorator on a private member" {
+  let issues = fn(src : String) -> Int {
+    check_module_function_bodies_permissive(parse_module_or_empty(src)).length()
+  }
+  // --- fires
+  assert_true(
+    issues(
+      "// @strict: false\nasync function* t(x: Promise<number>) { enum E { foo = await x } }",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "// @strict: false\nasync function* t(x: Promise<number>) { enum E { baz = yield 1 } }",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "// @experimentalDecorators: true\ndeclare function dec<T>(t: T): T;\nclass A { @dec #foo = 1; }",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "// @experimentalDecorators: true\ndeclare function dec<T>(t: T): T;\nclass A { @dec #bar(): void { } }",
+    ) >
+    0,
+  )
+  assert_true(
+    issues(
+      "// @experimentalDecorators: true\ndeclare var dec: any;\nclass C { @dec accessor #a: any; }",
+    ) >
+    0,
+  )
+  // --- silent
+  for
+    src in [
+      // Ordinary enum initializers, including a non-literal one.
+      "enum E { a = 1, b = 2 }", "declare const k: number;\nenum E { a = k }", "enum E { a = \"x\" }",
+      // The operators are legal everywhere an enum is not.
+       "// @strict: false\nasync function f(x: Promise<number>) { var v = await x; return v; }",
+      // Under STANDARD ES decorators a private member is fine — the gate
+      // points the other way from the `abstract` / `declare` rule.
+       "declare function dec<T>(t: T): T;\nclass A { @dec #foo = 1; }", "declare var dec: any;\nclass C { @dec accessor a: any; }",
+      // Both former false positives: a decorated AUTO-ACCESSOR under
+      // legacy decorators is accepted by TS7.
+       "// @experimentalDecorators: true\ndeclare var dec: any;\nclass C { @dec accessor prop: any; }",
+      "// @experimentalDecorators: true\ndeclare var dec: any;\nclass C { @dec static accessor y: any = 1; }",
+      // An ordinary decorated field and method under legacy decorators.
+       "// @experimentalDecorators: true\ndeclare var dec: any;\nclass C { @dec a: any; }",
+      "// @experimentalDecorators: true\ndeclare var dec: any;\nclass C { @dec m() { } }",
+      // Undecorated private members and accessors.
+       "class A { #foo = 1\n  m() { return this.#foo } }", "class C { accessor a: any = 1; }",
+    ] {
+    @test.assert_eq(issues(src), 0)
+  }
+}

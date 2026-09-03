@@ -711,6 +711,17 @@ fn Parser::parse_assignment_binding_array(
     if self.match_(Ellipsis) {
       let rest_binding = self.parse_assignment_binding_pattern()
       rest = Some(rest_binding)
+      // TS1186 ("A rest element cannot have an initializer") is NOT
+      // recorded here, and the reason is worth writing down rather than
+      // re-derived: `[...x = a] = a` never reaches this parser.
+      // `parse_assignment_binding_pattern` tries
+      // `parse_assignment_target_expr` first, and for that source it
+      // SUCCEEDS — the whole bracketed form parses as an expression — so
+      // the array-pattern path is skipped. Two attempts at the obvious
+      // sites (here, and a scan of the built pattern in
+      // `parse_assignment`) both stayed silent because neither is where
+      // the shape lands. One corpus file (restElementWithInitializer2),
+      // so it is left a MISS instead of a third guess at the AST shape.
       if self.match_(Comma) {
         // trailing comma after rest
       }

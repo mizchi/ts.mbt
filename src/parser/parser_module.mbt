@@ -305,8 +305,54 @@ fn Parser::scan_skipped_enum_initializer(
   }
   self.pos = start_pos
   match parsed {
-    Some(e) => self.record_enum_string_arith(e)
+    Some(e) => {
+      self.record_enum_string_arith(e)
+      self.record_enum_await_yield(e)
+    }
     None => ()
+  }
+}
+
+///|
+/// TS1308 / TS1163: an `await` or `yield` expression in an ENUM member
+/// initializer.
+///
+/// The generic checks cannot catch these, and the corpus file
+/// (`enums/awaitAndYield`) shows exactly why: its enum sits inside an
+/// `async function*`, so `in_async` and `in_generator` are both true and
+/// both operators are legal *there*. An enum member initializer is a
+/// constant-expression position evaluated at compile time — no operator
+/// that suspends may appear in one, whatever the enclosing function is.
+///
+/// A shallow walk over the value-carrying operand positions: `await` and
+/// `yield` cannot hide behind a function boundary, because a nested
+/// function's body is its own initializer-free scope.
+fn Parser::record_enum_await_yield(self : Parser, e : @ast.TsExpr) -> Unit {
+  match e {
+    Await(_) =>
+      self.grammar_misuses.push(
+        "`await` expressions cannot be used in an enum member initializer",
+      )
+    Yield(_) =>
+      self.grammar_misuses.push(
+        "`yield` expressions cannot be used in an enum member initializer",
+      )
+    YieldStar(_) =>
+      self.grammar_misuses.push(
+        "`yield` expressions cannot be used in an enum member initializer",
+      )
+    BinOp(_, a, b) | Seq(a, b) => {
+      self.record_enum_await_yield(a)
+      self.record_enum_await_yield(b)
+    }
+    UnaryOp(_, a) | As(a, _) | Satisfies(a, _) | PureCall(a) | TypeArgs(_, a) =>
+      self.record_enum_await_yield(a)
+    Cond(c, a, b) => {
+      self.record_enum_await_yield(c)
+      self.record_enum_await_yield(a)
+      self.record_enum_await_yield(b)
+    }
+    _ => ()
   }
 }
 

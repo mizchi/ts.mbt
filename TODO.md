@@ -2155,12 +2155,57 @@ need parser-wide changes).
 
 ## TS Checker Conformance (current state, 2026-09-02 — TypeScript 7)
 
-State: whole-corpus **TP 2454 / MISS 280 / FP 0 / PFLEGAL 0 / TN 1750**
+State: whole-corpus **TP 2457 / MISS 277 / FP 0 / PFLEGAL 0 / TN 1750**
 (classified 4484, NOTRUN 14) via
 `scripts/checker_conformance_oracle.sh --max-fp 0 --max-legal-parsefail 0`.
-Fifteen batches: BU +9, BV +14, BW +13, BX +10, BY +7, BZ +1, CA +0,
-CB +10, CC +6, CD +4, CE +6, CF/CG +19, CH +7, CI +5, CJ +6, for
-**+117 TP at FP 0**.
+Sixteen batches: BU +9, BV +14, BW +13, BX +10, BY +7, BZ +1, CA +0,
+CB +10, CC +6, CD +4, CE +6, CF/CG +19, CH +7, CI +5, CJ +6, CK +3, for
+**+120 TP at FP 0**.
+
+### Batch CK (2026-09-03): enum initializers, and one wrong attribution
+
++3 files, two rules, and a mistake worth more than the files.
+
+**TS1308 / TS1163** — `await` / `yield` in an ENUM member initializer.
+The generic await-outside-async check cannot catch these, and the corpus
+file says why in its own shape: `enums/awaitAndYield` puts its enum
+inside an `async function*`, so `in_async` and `in_generator` are both
+true and both operators are legal *there*. An enum member initializer is
+a constant-expression position evaluated at compile time, so nothing that
+suspends may appear in one whatever the enclosing function is. It hooks
+into `scan_skipped_enum_initializer`, which already speculatively parses
+the initializer for the string-arithmetic rule and truncates every side
+channel afterwards.
+
+**TS1206** — a LEGACY decorator on a `#private` class member. Note the
+gate direction: `#private` is rejected by legacy decorators and supported
+by standard ES ones, so it points the OPPOSITE way from the `abstract` /
+`declare` rule immediately above it.
+
+**That rule cost two corpus false positives before it was right, and the
+mistake is one already recorded here twice.** The file that suggested it,
+`autoAccessorExperimentalDecorators`, combines TWO features — `accessor`
+and `#private` — and gating on either looked equally plausible from the
+error code alone. Gating on `accessor` flagged
+`decoratorOnClassProperty13` (`@dec accessor prop`) and
+`legacyDecorators-contextualTypes` (`static accessor y = 1`), both
+TS7-ACCEPTED. The baseline settles it: the file errors on exactly lines
+12 and 15, `accessor #a` and `static accessor #b`. The private name was
+doing all the work and the auto-accessor none of it. Same substitution as
+the `computed_props` terser label and the decorator-bucket ranking:
+reading a two-feature file's error as belonging to the feature that
+caught the eye first. Dropping the `accessor` half cost nothing — TP 2457
+either way.
+
+**TS1186 is left a MISS on purpose**, with the reason in the code rather
+than re-derived later: `[...x = a] = a` never reaches the array-PATTERN
+parser, because `parse_assignment_binding_pattern` tries
+`parse_assignment_target_expr` first and for that source it SUCCEEDS —
+the whole bracketed form parses as an expression. Two attempts at the
+obvious sites (the rest arm of the pattern parser, and a scan of the
+built pattern in `parse_assignment`) both stayed silent because neither
+is where the shape lands. One corpus file, so it was not worth a third
+guess at the AST shape.
 
 ### Batch CJ (2026-09-03): six scanner-level rules, +6 files
 

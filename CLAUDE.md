@@ -32,7 +32,7 @@ product surfaces now.
   `just verify-checker-soundness` runs every single-file conformance case
   through `tscheck` and compares against vendored tsgo baseline manifests,
   with the budget that matters set to zero — a file TS7 ACCEPTS that we flag
-  is a soundness bug, and there are none (TP 2454 / MISS 280 / FP 0 /
+  is a soundness bug, and there are none (TP 2457 / MISS 277 / FP 0 /
   PFLEGAL 0 / TN 1750). The asymmetry is deliberate: we model a subset of
   TS, so a MISS is expected and an FP never is.
   That gate says how many we miss and nothing about WHICH, so "MISS 388"
@@ -45,8 +45,8 @@ product surfaces now.
   were exhausted and that only large type-machinery features remained, and
   that was measured against the **TS6** oracle — under TS7, **128 of the
   388 missing files are flippable by a pure-grammar (TS1xxx) rule** and 91
-  of them need no type judgement anywhere. Fifteen batches have taken
-  **+117 TP at FP 0** so far, and most of their items were BUGS rather than
+  of them need no type judgement anywhere. Sixteen batches have taken
+  **+120 TP at FP 0** so far, and most of their items were BUGS rather than
   missing features — one of them a rule the repo had already written and
   applied to every declaration kind except namespaces. The first:
   `eval`/`arguments` as an assignment target was checked at two of the four
@@ -263,6 +263,21 @@ product surfaces now.
   points in it that ARE ID_Start (`ª`, `µ`, `º`) plus the non-breaking
   space and soft hyphen. Everything from U+00C0 up keeps the permissive
   treatment, so `café` still scans as an identifier.
+  Batch CK is +3 and its mistake is worth more than its files. `await` /
+  `yield` in an ENUM member initializer needed its own rule because the
+  corpus file puts the enum inside an `async function*`, where both
+  operators are legal — an enum initializer is a constant-expression
+  position, so nothing that suspends belongs in one whatever the
+  enclosing function is. The other rule, a legacy decorator on a
+  `#private` member, cost TWO corpus false positives first:
+  `autoAccessorExperimentalDecorators` combines `accessor` and
+  `#private`, gating on `accessor` looked equally plausible, and it
+  flagged `@dec accessor prop` and `static accessor y = 1`, both
+  TS7-ACCEPTED. The baseline errors on exactly the two PRIVATE members,
+  so the private name was doing all the work and the auto-accessor none
+  of it — the same substitution as the `computed_props` label and the
+  decorator-bucket ranking, reading a two-feature file's error as
+  belonging to whichever feature caught the eye first.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

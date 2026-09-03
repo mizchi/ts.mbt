@@ -2217,6 +2217,10 @@ fn Parser::parse_class_body(
       _ => ()
     }
     let is_generator = self.match_(Star)
+    // Whether the member name is a `#private` one. Read before the key is
+    // parsed, because `parse_class_method_key` mangles it to a brand and
+    // the `#` is gone by the time the decorator check below runs.
+    let key_is_private_name = self.peek().kind is PrivateIdent(_)
     let key = self.parse_class_method_key()
     let method_name = class_key_name(key)
     // TS1206: decorators are not valid on a constructor
@@ -2233,6 +2237,25 @@ fn Parser::parse_class_body(
       } else if method_name == "constructor" &&
         (self.check(LParen) || self.check(Lt)) {
         self.invalid_decorator_uses.push("constructor")
+      } else if self.experimental_decorators && key_is_private_name {
+        // TS1206, and the mirror image of the `abstract` / `declare` case
+        // above: a `#private` member is something only LEGACY decorators
+        // reject, so the gate points the other way here
+        // (privateNamesAndDecorators, and the two private members of
+        // autoAccessorExperimentalDecorators).
+        //
+        // `accessor` was in this condition and was WRONG — two corpus
+        // false positives said so. `@dec accessor prop` under
+        // experimentalDecorators is accepted by TS7
+        // (decoratorOnClassProperty13, and `static accessor y = 1` in
+        // legacyDecorators-contextualTypes). The file that suggested the
+        // rule, autoAccessorExperimentalDecorators, combines TWO features
+        // and its baseline errors only on lines 12 and 15 — `accessor #a`
+        // and `static accessor #b`. The private name was doing all the
+        // work and the auto-accessor none of it: attributing the error to
+        // the wrong half of a two-feature file is the same mistake this
+        // repo records for `computed_props` and the decorator bucket.
+        self.invalid_decorator_uses.push("class member")
       }
     }
     // TS1031: `declare` may modify a class FIELD and nothing else, so any
