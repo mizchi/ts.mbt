@@ -3377,17 +3377,21 @@ fn Parser::parse_export_stmt(
       type_param_bounds: [],
       type_: @ast.TsType::Any,
     })
-    // An import-equals alias binds a VALUE as well as a type when its
-    // target is instantiated (`export import a = A` emits `var a = A`),
-    // and this path recorded only the type. The plain, non-`export`
-    // spelling in `parse_module_block` has always recorded the value, so
-    // `import a = A` was a value at one of the two places it can appear
-    // and not the other — which made `namespace C { export import a = A }`
-    // read as a namespace with nothing at runtime, and shipped a TS2708
-    // false positive on `exportImportAlias` (TS7-ACCEPTED) before the
-    // corpus caught it. The type is `Any` here for the same reason it is
-    // there: the target is not resolved at parse time.
-    values.push({ name, type_: @ast.TsType::Any })
+    // An import-equals alias is NOT recorded as a value here, and the
+    // asymmetry with `parse_module_block`'s plain `import a = A` (which
+    // does record one) is deliberate rather than an oversight.
+    //
+    // Recording one was tried, to give TS2708 the fact that
+    // `namespace C { export import a = A }` has something at runtime
+    // when `A` is instantiated. The corpus accepted it and the full test
+    // suite did not: the bridge emitter reads `values` to decide what to
+    // import, and `export import JSX = JSXInternal` where `JSXInternal`
+    // holds only an interface is a TYPE-ONLY alias that must produce no
+    // import at all (`type-only-export-import-entry.d.ts`). Whether the
+    // alias binds a value depends on the TARGET, which is not resolved
+    // at parse time, so neither answer is right for both consumers.
+    // `namespace_is_instantiated` gets the fact from `type_aliases`
+    // instead, where this path already records it.
     self.skip_until_semicolon()
     return
   }

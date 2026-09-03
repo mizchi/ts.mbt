@@ -371,12 +371,21 @@ product surfaces now.
   untouched. TS2448 was written for BOTH pattern kinds at once —
   `const [a = b, b = 1] = xs` is the same error and was a MISS before
   the generalization.
-  The parser findings are two more of the same family. `export import a
-  = A` inside a namespace body pushed a TYPE alias and no value, while
-  the plain `import a = A` spelling has always pushed both — an
-  import-equals alias binds a value as well as a type, so the exported
-  spelling was missing half of itself, and that is what made TS2708
-  false-positive on `exportImportAlias`. And a class STATIC BLOCK is the
+  The parser findings are two more of the same family, and the first one
+  is where the CORPUS said yes and only the full SUITE said no.
+  `export import a = A` inside a namespace body records a TYPE alias and
+  no value, while the plain `import a = A` spelling records both, and
+  that asymmetry is what made TS2708 false-positive on
+  `exportImportAlias`. Recording the value there too passed the
+  conformance oracle at FP 0 and broke the bridge: the emitter reads
+  `values` to decide what to IMPORT, and `export import JSX =
+  JSXInternal` over an interface-only namespace is a type-only alias that
+  must produce no import at all. Whether the alias binds a value depends
+  on the TARGET, which is not resolved at parse time, so neither answer
+  serves both consumers — the parser stays as it was and
+  `namespace_is_instantiated` reads the fact off `type_aliases`, which
+  over-abstains for a namespace of real `export type` aliases and so
+  costs a MISS rather than inventing a finding. And a class STATIC BLOCK is the
   fifteenth of fifteen sites that must save / clear / restore
   `self.labels` around a function body, and the only one that did not,
   so `label: while (v) { class C { static { break label } } }` found the

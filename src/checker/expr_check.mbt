@@ -121,12 +121,23 @@ priv struct Resolver {
 /// TARGET is instantiated is a second lookup this does not do, so any
 /// alias abstains — which costs `importStatementsInterfaces` as a MISS
 /// and cannot invent a finding.
+///
+/// The alias arrives as a `type_aliases` entry, which is where the export
+/// parser records it, so ANY type alias in the body makes this abstain.
+/// That over-abstains for a namespace holding only real
+/// (`export type T = string`) aliases — a MISS, not a false positive.
+/// The alternative was recording the alias as a VALUE at the parse site,
+/// and the full test suite rejected it: the bridge emitter reads `values`
+/// to decide what to import, and a type-only alias
+/// (`export import JSX = JSXInternal` over an interface-only namespace)
+/// must produce no import at all.
 fn namespace_is_instantiated(m : @ast.TsModule) -> Bool {
   if m.funcs.length() > 0 ||
     m.values.length() > 0 ||
     m.enums.length() > 0 ||
     m.classes.length() > 0 ||
-    m.imports.length() > 0 {
+    m.imports.length() > 0 ||
+    m.type_aliases.length() > 0 {
     return true
   }
   for stmt in m.top_level_stmts {

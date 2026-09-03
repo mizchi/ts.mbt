@@ -2314,12 +2314,22 @@ PATH plus the enum name, because the corpus case is three separate
 **The parser findings.** Two rules were recorded as values at ONE of the
 two places their syntax can appear:
 
-- `export import a = A` inside a namespace body pushed a type alias and
+- `export import a = A` inside a namespace body records a type alias and
   no VALUE, while the plain `import a = A` spelling in
-  `parse_module_block` has always pushed both. An import-equals alias
-  binds a value as well as a type, so the exported spelling was simply
-  missing half of itself — twenty-fifth instance of the family, and the
-  thing that made TS2708 false-positive.
+  `parse_module_block` records both. That asymmetry is what made TS2708
+  false-positive, and the obvious repair — record the value here too —
+  was tried, passed the conformance oracle, and was REVERTED by the full
+  test suite. The bridge emitter reads `values` to decide what to import,
+  and `export import JSX = JSXInternal` over an interface-only namespace
+  is a type-only alias that must produce no import at all
+  (`type-only-export-import-entry.d.ts`). Whether the alias binds a value
+  depends on the TARGET, which is not resolved at parse time, so neither
+  answer is right for both consumers: the parser stays as it was and
+  `namespace_is_instantiated` takes the fact from `type_aliases`, where
+  the export path already records it. That over-abstains for a namespace
+  holding only real `export type` aliases — a MISS, not a false positive.
+  Worth stating plainly: the corpus said yes and only the suite said no,
+  which is the argument for running both.
 - The label-stack clearing above is the same shape at the fifteenth of
   fifteen sites.
 
